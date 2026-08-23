@@ -89,26 +89,10 @@ function makeConfig(overrides: Record<string, unknown> = {}): Config {
   return {
     telegram: { botToken: "" },
     discord: { botToken: "", guildId: "" },
-    whatsapp: { sessionPath: "/tmp/wa", allowedNumbers: [] },
     web: { port: 3000 },
     dashboard: { enabled: false, port: 9090 },
     websocketDashboard: { authToken: "secret" },
     memory: { dbPath: "/tmp/memory" },
-    matrix: {
-      homeserver: "",
-      accessToken: "",
-      userId: "",
-      allowOpenAccess: false,
-      allowedUserIds: [],
-      allowedRoomIds: [],
-    },
-    irc: {
-      server: "",
-      nick: "bot",
-      channels: ["#test"],
-      allowedUsers: [],
-      allowOpenAccess: false,
-    },
     teams: {
       appId: "",
       appPassword: "",

@@ -15,6 +15,7 @@ import {
   autoTieringSweep,
 } from "./agentdb-tiering.js";
 import type { NormalizedScore } from "../../types/index.js";
+import { TextIndex } from "../text-index.js";
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -86,6 +87,7 @@ function makeTieringCtx(
     sqliteInitFailed: false,
     sqliteStatements: new Map(),
     entries,
+    textIndex: new TextIndex(),
     config: {
       dbPath: "/tmp/test",
       dimensions: 4,

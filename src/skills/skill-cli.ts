@@ -15,6 +15,7 @@ import { readSkillConfig, writeSkillConfig, setSkillEnabled } from "./skill-conf
 import { parseFrontmatter } from "./frontmatter-parser.js";
 import { fetchRegistry, searchRegistry } from "./skill-registry-client.js";
 import { isValidSkillName, installSkillFromRepo } from "./skill-installer.js";
+import { readPin, recordPinnedCommit } from "./skill-pin.js";
 // ---------------------------------------------------------------------------
 // Public entry point
 // ---------------------------------------------------------------------------
@@ -364,6 +365,7 @@ async function updateSkillDir(skillDir: string, name: string): Promise<boolean> 
   }
 
   console.log(`Updating "${name}"...`);
+  const previousSha = await readPin(skillDir).then((p) => p?.pinnedSha ?? null);
   const result = await execFileNoThrow("git", ["-C", skillDir, "pull"], 60_000);
   if (result.exitCode !== 0) {
     console.error(`  Failed to update "${name}": ${result.stderr || result.stdout}`);
@@ -372,5 +374,16 @@ async function updateSkillDir(skillDir: string, name: string): Promise<boolean> 
 
   const output = result.stdout.trim();
   console.log(`  ${output.includes("Already up to date") ? "Already up to date." : "Updated."}`);
+
+  // Re-pin and surface the exact code transition — this repo's entry point
+  // executes with full process privileges on next load.
+  try {
+    const newSha = await recordPinnedCommit(skillDir);
+    if (newSha && previousSha && newSha !== previousSha) {
+      console.log(`  Code changed: ${previousSha.slice(0, 9)} -> ${newSha.slice(0, 9)} (re-pinned)`);
+    } else if (newSha && !previousSha) {
+      console.log(`  Pinned at ${newSha.slice(0, 9)}`);
+    }
+  } catch { /* re-pinning is best-effort */ }
   return true;
 }

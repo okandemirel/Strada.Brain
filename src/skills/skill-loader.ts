@@ -17,6 +17,7 @@ import { parseFrontmatter } from "./frontmatter-parser.js";
 import { getLoggerSafe } from "../utils/logger.js";
 import type { SkillManifest, SkillEntry } from "./types.js";
 import type { ITool } from "../agents/tools/tool.interface.js";
+import { describePinDrift } from "./skill-pin.js";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -182,6 +183,13 @@ export async function loadSkillTools(skill: DiscoveredSkill): Promise<ITool[]> {
     logger.warn(`Skill "${skill.manifest.name}" has no entry point (index.ts/index.js)`);
     return [];
   }
+
+  // Drift check: a git-managed skill whose HEAD moved past its recorded pin is
+  // code that changed outside any recorded update — say so BEFORE executing it.
+  try {
+    const drift = await describePinDrift(skill.path, skill.manifest.name);
+    if (drift) logger.warn(drift);
+  } catch { /* pin checks must never block loading */ }
 
   // Dynamic ESM import with nonce to bust cache
   const entryUrl = pathToFileURL(entryPath);

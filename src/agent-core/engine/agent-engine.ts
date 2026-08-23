@@ -82,8 +82,9 @@ export class AgentEngine {
     providerName: string,
     usage: ProviderResponse["usage"] | undefined,
     onUsage?: (usage: TaskUsageEvent) => void,
+    modelId?: string,
   ): void {
-    recordProviderUsage(this.deps, providerName, usage, onUsage);
+    recordProviderUsage(this.deps, providerName, usage, onUsage, modelId);
   }
 
   recordExecutionTrace(params: RecordExecutionTraceParams): void {

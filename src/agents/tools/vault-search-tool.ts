@@ -4,6 +4,7 @@ import type { VaultRegistry } from '../../vault/vault-registry.js';
 import type { IVault, VaultFile, VaultHit, VaultQuery } from '../../vault/vault.interface.js';
 import type { ToolContext, ToolExecutionResult } from './tool.interface.js';
 import { sanitizeRetrievalContent } from '../orchestrator-text-utils.js';
+import { estimateTextTokens } from "../../common/token-estimator.js";
 
 type VaultSearchMode = 'semantic' | 'fts' | 'hybrid';
 
@@ -230,7 +231,7 @@ export class VaultSearchTool {
     merged.sort((a, b) => b.score - a.score);
     const capped = merged.slice(0, topK);
 
-    const tokensUsed = capped.reduce((acc, h) => acc + estimateTokens(h.content), 0);
+    const tokensUsed = capped.reduce((acc, h) => acc + estimateTextTokens(h.content), 0);
     const truncated = merged.length > capped.length || perVault.some((p) => p.status === "fulfilled" && p.value.result.truncated);
 
     const payload: VaultSearchResultPayload = {
@@ -310,9 +311,6 @@ function projectHit(hit: VaultHit, vaultId: string, mode: VaultSearchMode): Vaul
 }
 
 /** Cheap token estimate: 4 chars/token heuristic, matches chunker.ts budgeting. */
-function estimateTokens(text: string): number {
-  return Math.max(1, Math.ceil(text.length / 4));
-}
 
 function coercePositiveInteger(v: unknown): number | undefined {
   if (typeof v !== 'number' || !Number.isFinite(v)) return undefined;

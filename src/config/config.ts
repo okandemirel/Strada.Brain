@@ -104,28 +104,6 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
       allowedUserIds: rawConfig.allowedSlackUserIds,
     },
 
-    whatsapp: {
-      sessionPath: rawConfig.whatsappSessionPath,
-      allowedNumbers: rawConfig.whatsappAllowedNumbers ?? [],
-    },
-
-    matrix: {
-      homeserver: rawConfig.matrixHomeserver,
-      accessToken: rawConfig.matrixAccessToken,
-      userId: rawConfig.matrixUserId,
-      allowedUserIds: rawConfig.matrixAllowedUserIds ?? [],
-      allowedRoomIds: rawConfig.matrixAllowedRoomIds ?? [],
-      allowOpenAccess: rawConfig.matrixAllowOpenAccess,
-    },
-
-    irc: {
-      server: rawConfig.ircServer,
-      nick: rawConfig.ircNick,
-      channels: rawConfig.ircChannels ?? [],
-      allowedUsers: rawConfig.ircAllowedUsers ?? [],
-      allowOpenAccess: rawConfig.ircAllowOpenAccess,
-    },
-
     teams: {
       appId: rawConfig.teamsAppId,
       appPassword: rawConfig.teamsAppPassword,
@@ -752,19 +730,6 @@ interface EnvVars {
   slackSocketMode: string | undefined;
   allowedSlackWorkspaces: string | undefined;
   allowedSlackUserIds: string | undefined;
-  whatsappSessionPath: string | undefined;
-  whatsappAllowedNumbers: string | undefined;
-  matrixHomeserver: string | undefined;
-  matrixAccessToken: string | undefined;
-  matrixUserId: string | undefined;
-  matrixAllowedUserIds: string | undefined;
-  matrixAllowedRoomIds: string | undefined;
-  matrixAllowOpenAccess: string | undefined;
-  ircServer: string | undefined;
-  ircNick: string | undefined;
-  ircChannels: string | undefined;
-  ircAllowedUsers: string | undefined;
-  ircAllowOpenAccess: string | undefined;
   teamsAppId: string | undefined;
   teamsAppPassword: string | undefined;
   teamsAppType: string | undefined;
@@ -1153,19 +1118,6 @@ function loadFromEnv(env: Record<string, string | undefined>): EnvVars {
     slackSocketMode: env["SLACK_SOCKET_MODE"],
     allowedSlackWorkspaces: env["ALLOWED_SLACK_WORKSPACES"],
     allowedSlackUserIds: env["ALLOWED_SLACK_USER_IDS"],
-    whatsappSessionPath: env["WHATSAPP_SESSION_PATH"],
-    whatsappAllowedNumbers: env["WHATSAPP_ALLOWED_NUMBERS"],
-    matrixHomeserver: env["MATRIX_HOMESERVER"],
-    matrixAccessToken: env["MATRIX_ACCESS_TOKEN"],
-    matrixUserId: env["MATRIX_USER_ID"],
-    matrixAllowedUserIds: env["MATRIX_ALLOWED_USER_IDS"],
-    matrixAllowedRoomIds: env["MATRIX_ALLOWED_ROOM_IDS"],
-    matrixAllowOpenAccess: env["MATRIX_ALLOW_OPEN_ACCESS"],
-    ircServer: env["IRC_SERVER"],
-    ircNick: env["IRC_NICK"],
-    ircChannels: env["IRC_CHANNELS"],
-    ircAllowedUsers: env["IRC_ALLOWED_USERS"],
-    ircAllowOpenAccess: env["IRC_ALLOW_OPEN_ACCESS"],
     teamsAppId: env["TEAMS_APP_ID"],
     teamsAppPassword: env["TEAMS_APP_PASSWORD"],
     teamsAppType: env["TEAMS_APP_TYPE"],

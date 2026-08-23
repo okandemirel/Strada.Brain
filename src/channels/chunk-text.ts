@@ -2,7 +2,7 @@
  * Shared, newline-aware text chunker for channels that must respect a provider
  * message-length limit.
  *
- * Several channels (Discord, Matrix, Teams, WhatsApp) historically either
+ * Several channels (Discord, Teams) historically either
  * truncated long messages (dropping content) or sent them unbounded (rejected by
  * the provider). This helper splits a long message into chunks that each stay
  * within `max`, preferring paragraph/line/word boundaries and hard-splitting any

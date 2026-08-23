@@ -11,9 +11,6 @@ export interface RootLaunchOptions {
   readonly telegram?: boolean;
   readonly discord?: boolean;
   readonly slack?: boolean;
-  readonly whatsapp?: boolean;
-  readonly matrix?: boolean;
-  readonly irc?: boolean;
   readonly teams?: boolean;
 }
 

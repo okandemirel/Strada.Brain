@@ -71,6 +71,7 @@ export function capRollingSummary(summary: string): string {
 }
 
 import type { ConversationMessage } from "./providers/provider-core.interface.js";
+import { createTokenBuckets, type TokenBuckets } from "../common/token-estimator.js";
 
 // =============================================================================
 // TYPES — broader than provider-core's ConversationMessage to support summaries
@@ -124,41 +125,44 @@ export interface CompactionResult {
 // TOKEN ESTIMATION — delegates to CJK-aware heuristic from rag.interface
 // =============================================================================
 
-function contentBlockChars(block: ContentBlock): number {
+function contentBlockIntoBuckets(block: ContentBlock, buckets: TokenBuckets): void {
   switch (block.type) {
-    case "text": return block.text.length;
-    case "tool_use": return block.name.length + JSON.stringify(block.input).length;
+    case "text": buckets.addText(block.text); return;
+    case "tool_use": buckets.addText(block.name + JSON.stringify(block.input)); return;
     case "tool_result": {
-      if (typeof block.content === "string") return block.content.length;
-      let sum = 0;
-      for (const b of block.content) sum += contentBlockChars(b);
-      return sum;
+      if (typeof block.content === "string") { buckets.addText(block.content); return; }
+      for (const b of block.content) contentBlockIntoBuckets(b as ContentBlock, buckets);
+      return;
     }
   }
 }
 
-/** Character count for a single message (used for per-message cost in stage 4). */
-function messageChars(msg: CompactableMessage): number {
-  if (typeof msg.content === "string") return msg.content.length;
-  let sum = 0;
-  for (const block of msg.content) sum += contentBlockChars(block as ContentBlock);
-  return sum;
+/** Accumulate a single message's characters into the shared token buckets. */
+function messageIntoBuckets(msg: CompactableMessage, buckets: TokenBuckets): void {
+  if (typeof msg.content === "string") {
+    buckets.addText(msg.content);
+    return;
+  }
+  for (const block of msg.content) contentBlockIntoBuckets(block as ContentBlock, buckets);
 }
 
 /**
  * Estimate tokens for a message array.
- * Uses a direct chars/4 heuristic rather than allocating a synthetic string —
- * this runs on every PAOR iteration so memory efficiency matters.
+ *
+ * Delegates to the SHARED estimator (src/common/token-estimator.ts) — the old
+ * flat chars/4 under-counted CJK and symbol-dense tool-JSON text, firing
+ * compaction late on exactly the heaviest sessions. Still zero-allocation:
+ * characters are classified through bucket accumulation, never re-stringified.
  */
 export function estimateTokens(
   messages: readonly CompactableMessage[],
   systemPromptChars = 0,
 ): number {
   if (messages.length === 0 && systemPromptChars === 0) return 0;
-  let totalChars = systemPromptChars;
-  for (const msg of messages) totalChars += messageChars(msg);
-  if (totalChars === 0) return 0;
-  return Math.ceil(totalChars / 4);
+  const buckets = createTokenBuckets();
+  buckets.addLatinChars(systemPromptChars); // system prompt is English — plain char count is its latin share
+  for (const msg of messages) messageIntoBuckets(msg, buckets);
+  return buckets.totalTokens();
 }
 
 // =============================================================================
@@ -407,7 +411,7 @@ function stage4HardTruncation(messages: readonly CompactableMessage[], maxTokens
 
   const kept: CompactableMessage[] = [];
   for (let i = rest.length - 1; i >= 0; i--) {
-    const cost = Math.ceil(messageChars(rest[i]!) / 4);
+    const cost = estimateTokens([rest[i]!]);
     if (cost > budget) continue; // skip oversized messages, keep smaller ones
     kept.unshift(rest[i]!);
     budget -= cost;

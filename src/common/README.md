@@ -22,7 +22,7 @@ Centralized numeric limits, thresholds, and default values grouped by domain.
 - `SECURITY_CONFIG` — read-only default false, max path depth 100, 1-hour secret pattern refresh
 - `LOGGING_CONFIG` — info level, 10 MB max file size, 3 file rotation
 - `TIMEOUTS` — provider API 2 min, channel connect 30s, shutdown 10s, health check 5s
-- `CHANNEL_DEFAULTS` — default type web, supported: web/telegram/discord/whatsapp/cli/slack/matrix/irc/teams
+- `CHANNEL_DEFAULTS` — default type web, supported: web/telegram/discord/cli/slack/teams
 - `RETRY_CONFIG` — max 3 retries, 1s base delay, 30s max delay, 6 retryable error codes
 - Backward-compatibility aliases exported for commonly used values
 

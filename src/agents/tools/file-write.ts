@@ -1,6 +1,7 @@
-import { writeFile, mkdir, stat } from "node:fs/promises";
+import { mkdir, stat, open, realpath } from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
 import { sameNameElsewhere } from "./nearby-names.js";
-import { dirname, extname } from "node:path";
+import { dirname, extname, sep } from "node:path";
 import { validatePath } from "../../security/path-guard.js";
 import {
   generateUnityGuid,
@@ -77,9 +78,9 @@ export class FileWriteTool implements ITool {
       // Asked before the write, because afterwards every path exists.
       const isNewFile = !(await pathExists(pathCheck.fullPath));
       await mkdir(dirname(pathCheck.fullPath), { recursive: true });
-      await writeFile(pathCheck.fullPath, content, "utf-8");
+      await writeFileInsideRoot(context.projectPath, pathCheck.fullPath, content);
 
-      // Generate .meta file for new Unity assets (atomic: wx flag prevents overwriting existing)
+      // Generate .meta file for new Unity assets (atomic: ex flag prevents overwriting existing)
       let metaGenerated = false;
       if (shouldGenerateMeta(pathCheck.fullPath, context.projectPath)) {
         const metaPath = metaPathFor(pathCheck.fullPath);
@@ -87,7 +88,7 @@ export class FileWriteTool implements ITool {
           const guid = generateUnityGuid();
           const ext = extname(relPath);
           const metaContent = generateMetaContent(guid, ext);
-          await writeFile(metaPath, metaContent, { encoding: "utf-8", flag: "wx" });
+          await writeFileInsideRoot(context.projectPath, metaPath, metaContent, { exclusive: true });
           metaGenerated = true;
         } catch (e) {
           if ((e as NodeJS.ErrnoException).code !== "EEXIST") {
@@ -111,8 +112,9 @@ export class FileWriteTool implements ITool {
         content: `File written: ${relPath} (${lineCount} lines, ${byteLength} bytes)${metaMsg}${twinMsg}`,
         metadata: { path: relPath, lineCount, byteLength, metaGenerated },
       };
-    } catch {
-      return { content: "Error: could not write file", isError: true };
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException | undefined)?.code;
+      return { content: `Error: could not write file${code ? ` (${code})` : ""}`, isError: true };
     }
   }
 }
@@ -124,5 +126,42 @@ async function pathExists(fullPath: string): Promise<boolean> {
     return true;
   } catch {
     return false;
+  }
+}
+
+/** O_NOFOLLOW where the platform has it (absent on Windows → 0, harmless there). */
+const NOFOLLOW_FLAG = typeof fsConstants.O_NOFOLLOW === "number" ? fsConstants.O_NOFOLLOW : 0;
+
+/**
+ * TOCTOU-contained write (measured 2026-08-23): `validatePath` resolves symlinks
+ * at CHECK time, but a plain writeFile follows whatever sits at the path at WRITE
+ * time — a symlink swapped in between escapes the project root. Two defenses:
+ *   1. The parent directory is re-derived via realpath AFTER mkdir and must still
+ *      sit inside the (real) project root — closes intermediate-component swaps.
+ *   2. The file itself is opened with O_NOFOLLOW, so a swapped final component
+ *      fails with ELOOP instead of being written through.
+ * Exported for direct testing: the race it defends against cannot be staged
+ * through execute() deterministically, because validatePath runs first.
+ */
+export async function writeFileInsideRoot(
+  rootPath: string,
+  targetPath: string,
+  content: string,
+  opts?: { exclusive?: boolean },
+): Promise<void> {
+  const [realParent, realRoot] = await Promise.all([
+    realpath(dirname(targetPath)),
+    realpath(rootPath),
+  ]);
+  if (!(realParent === realRoot || realParent.startsWith(realRoot + sep))) {
+    throw new Error("parent directory escaped the project root");
+  }
+  const flags = fsConstants.O_WRONLY | fsConstants.O_CREAT | NOFOLLOW_FLAG
+    | (opts?.exclusive ? fsConstants.O_EXCL : fsConstants.O_TRUNC);
+  const handle = await open(targetPath, flags, 0o644);
+  try {
+    await handle.writeFile(content, "utf-8");
+  } finally {
+    await handle.close();
   }
 }

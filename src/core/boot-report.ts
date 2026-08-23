@@ -121,9 +121,6 @@ export function buildCapabilitySnapshot(options: CapabilitySnapshotOptions): Cap
     options.config.telegram.botToken
       || options.config.discord.botToken
       || options.config.slack.botToken
-      || (options.config.whatsapp.allowedNumbers?.length ?? 0) > 0
-      || options.config.matrix.accessToken
-      || options.config.irc.server
       || options.config.teams.appId,
   );
   const stradaMcpRuntime = options.stradaMcpRuntime;

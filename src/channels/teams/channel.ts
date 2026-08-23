@@ -47,6 +47,27 @@ type FeedbackReactionCallback = (
   source?: "reaction" | "button",
 ) => void;
 
+/** The minimal structural shape of the optional `botbuilder` package that connect() consumes. */
+interface BotbuilderModule {
+  CloudAdapter: new (auth: unknown) => unknown;
+  ConfigurationBotFrameworkAuthentication: new (config: Record<string, string | undefined>) => unknown;
+  TurnContext: unknown;
+}
+
+/**
+ * Load the optional `botbuilder` dependency. It ships as an optionalDependency, so a
+ * platform where its native/transitive install failed must surface an ACTIONABLE error
+ * ("reinstall / pick another channel"), not a raw MODULE_NOT_FOUND stack that kills boot
+ * with no hint (measured 2026-08-23: bare dynamic import crashed bootstrap-stages).
+ */
+async function importBotbuilder(): Promise<BotbuilderModule> {
+  const mod = (await import("botbuilder" as string)) as Partial<BotbuilderModule> | undefined;
+  if (!mod?.CloudAdapter || !mod.ConfigurationBotFrameworkAuthentication || !mod.TurnContext) {
+    throw new Error("botbuilder package loaded but is missing expected exports");
+  }
+  return mod as BotbuilderModule;
+}
+
 export class TeamsChannel implements IChannelAdapter {
   readonly name = "teams";
 
@@ -99,8 +120,20 @@ export class TeamsChannel implements IChannelAdapter {
 
   async connect(): Promise<void> {
     const logger = getLogger();
-    const { CloudAdapter, ConfigurationBotFrameworkAuthentication, TurnContext } =
-      await import("botbuilder" as string);
+    let botbuilder: BotbuilderModule;
+    try {
+      botbuilder = await importBotbuilder();
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      logger.error("Teams channel cannot start: the optional 'botbuilder' dependency failed to load", { detail });
+      throw new Error(
+        "Teams channel requires the optional 'botbuilder' package, which failed to load. "
+        + "Reinstall with optional dependencies enabled (`npm install`), or start a different channel "
+        + `(\`strada start --channel web|telegram|discord|slack|cli\`). Original error: ${detail}`,
+        { cause: err instanceof Error ? err : undefined },
+      );
+    }
+    const { CloudAdapter, ConfigurationBotFrameworkAuthentication, TurnContext } = botbuilder;
 
     // Single-tenant bots are issued tokens scoped to their home tenant, so the
     // adapter must be told the tenancy + tenant id or proactive

@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>Unity / Strada.Core Projeleri icin Yapay Zeka Destekli Gelistirme Ajani</strong><br/>
-  Web paneline, Telegram, Discord, Slack, WhatsApp veya terminalinize baglanan otonom bir kodlama ajani &mdash; kod tabaninizi okur, kod yazar, derlemeleri calistirir, hatalarindan ogrenir ve 7/24 daemon dongusu ile otonom olarak calisir. Artik coklu ajan orkestrasyonu, gorev delegasyonu, bellek konsolidasyonu, onay kapili dagitim alt sistemi, LLM goruntu destegiyle medya paylasimi, SOUL.md uzerinden yapilandirilabilir kisilik sistemi, control-plane clarification review, gorev bilinclii dinamik gecis ile akilli coklu saglayici yonlendirme, guven tabanli konsensus dogrulamasi, OODA akil yurutme dongusune sahip otonom Agent Core ve Strada.MCP entegrasyonu ile.
+  Web paneline, Telegram, Discord, Slack veya terminalinize baglanan otonom bir kodlama ajani &mdash; kod tabaninizi okur, kod yazar, derlemeleri calistirir, hatalarindan ogrenir ve 7/24 daemon dongusu ile otonom olarak calisir. Artik coklu ajan orkestrasyonu, gorev delegasyonu, bellek konsolidasyonu, onay kapili dagitim alt sistemi, LLM goruntu destegiyle medya paylasimi, SOUL.md uzerinden yapilandirilabilir kisilik sistemi, control-plane clarification review, gorev bilinclii dinamik gecis ile akilli coklu saglayici yonlendirme, guven tabanli konsensus dogrulamasi, OODA akil yurutme dongusune sahip otonom Agent Core ve Strada.MCP entegrasyonu ile.
 </p>
 
 > Ceviri notu: Guncel calisma zamani davranisi, ortam degiskeni varsayilanlari ve guvenlik semantigi icin kanonik kaynak [README.md](README.md) dosyasidir. Bu dosya onun cevirisidir.
@@ -90,7 +90,7 @@ git clone https://github.com/okandemirel/Strada.Brain.git Strada.Brain
 `./strada install-command`, gelecekte acilacak terminallerin `strada` komutunu dogrudan gormesi icin shell profilinizi de otomatik gunceller; ayrica PATH export yazmaniz gerekmez.
 Windows'ta checkout icinden `.\strada.ps1` kullanilir. `install-command`, `strada.cmd` ve `strada.ps1` dosyalarini `%LOCALAPPDATA%\Strada\bin` altina yazar ve kullanici PATH'ini gunceller.
 
-Kullanici-local komutu kaldirmak icin daha sonra `strada uninstall` (veya checkout icinden `./strada uninstall` / `.\strada.ps1 uninstall`) calistirin. `--purge-config` eklerseniz aktif runtime root altindaki `.env`, `.strada-memory`, `.whatsapp-session`, loglar ve `HEARTBEAT.md` gibi Strada runtime dosyalari temizlenir. Source checkout kullaniyorsaniz ayni `--purge-config` secenegi `node_modules/`, `dist/`, `web-portal/node_modules` ve `web-portal/dist` gibi uretilen artefact'lari da siler; boylece checkout'u gercek bir sifir-kurulum durumuna dondurup tekrar test edebilirsiniz. Repository checkout'unun kendisi otomatik olarak silinmez.
+Kullanici-local komutu kaldirmak icin daha sonra `strada uninstall` (veya checkout icinden `./strada uninstall` / `.\strada.ps1 uninstall`) calistirin. `--purge-config` eklerseniz aktif runtime root altindaki `.env`, `.strada-memory`, loglar ve `HEARTBEAT.md` gibi Strada runtime dosyalari temizlenir. Source checkout kullaniyorsaniz ayni `--purge-config` secenegi `node_modules/`, `dist/`, `web-portal/node_modules` ve `web-portal/dist` gibi uretilen artefact'lari da siler; boylece checkout'u gercek bir sifir-kurulum durumuna dondurup tekrar test edebilirsiniz. Repository checkout'unun kendisi otomatik olarak silinmez.
 
 Eger bir gun `npm` komutunu manuel calistirmaniz gerekirse bunu `package.json` dosyasinin bulundugu repo kokunden yapin. `ENOENT ... /Strada/package.json` benzeri bir hata gorurseniz bir ust klasordesiniz; once `cd Strada.Brain` yapin veya komutu `cd Strada.Brain && ...` ile calistirin.
 
@@ -191,7 +191,7 @@ strada
 ./strada start --channel telegram
 ./strada start --channel discord
 ./strada start --channel slack
-./strada start --channel whatsapp
+./strada start --channel teams
 
 # Otomatik yeniden baslatma destekli her zaman acik denetcisi
 ./strada supervise --channel web
@@ -453,8 +453,7 @@ Detayli referans: [docs/vault.tr.md](docs/vault.tr.md) (Ingilizce: [docs/vault.m
 ```
 +-----------------------------------------------------------------+
 |  Sohbet Kanallari + Web Portali (4 mod, shadcn/ui + Magic UI)    |
-|  Web | Telegram | Discord | Slack | WhatsApp | CLI | Matrix     |
-|  IRC | Teams                                                     |
+|  Web | Telegram | Discord | Slack | CLI | Teams                 |
 +------------------------------+----------------------------------+
                                |
                     IChannelAdapter arayuzu
@@ -466,7 +465,7 @@ Detayli referans: [docs/vault.tr.md](docs/vault.tr.md) (Ingilizce: [docs/vault.m
 +-------+--------------+-------------+-----------+----------------+
         |              |             |           |
 +-------v------+ +-----v------+ +---v--------+ +v-----------------+
-| AI Saglayici | | 30+ Arac   | | Baglam     | | Ogrenme Sistemi  |
+| AI Saglayici | | 40+ Arac   | | Baglam     | | Ogrenme Sistemi  |
 | Claude (brnc)| | Dosya I/O  | | AgentDB    | | TypedEventBus    |
 | OpenAI, Kimi | | Git islem  | | (SQLite +  | | Hibrit agirlik.  |
 | DeepSeek,Qwen| | Kabuk cali | |  HNSW)     | | Icgudu yasam     |
@@ -475,9 +474,9 @@ Detayli referans: [docs/vault.tr.md](docs/vault.tr.md) (Ingilizce: [docs/vault.m
 +--------------+ +------+-----+ +---+--------+ +--+---------------+
                         |           |              |
                 +-------v-----------v--------------v------+
-                |  Goal Decomposer + Goal Executor        |
-                |  DAG-based decomposition, wave-based    |
-                |  parallel execution, failure budgets    |
+                |  Goal Decomposer + Supervisor           |
+                |  Dispatcher: DAG decomposition, wave-   |
+                |  based parallel execution, failure      |
                 +---------+------------------+------------+
                           |                  |
           +---------------v------+  +--------v--------------------+
@@ -839,31 +838,6 @@ Strada bariz sonraki adimlari kullaniciya geri paslamaz. Bir saglayici eksik ana
 | `ALLOWED_SLACK_USER_IDS` | Virgule ayrilmis kullanici kimlikleri (**bos ise herkese acik**) |
 | `ALLOWED_SLACK_WORKSPACES` | Virgule ayrilmis calisma alani kimlikleri (**bos ise herkese acik**) |
 
-**WhatsApp:**
-| Degisken | Aciklama |
-|----------|----------|
-| `WHATSAPP_SESSION_PATH` | Oturum dosyalari icin dizin (varsayilan: `.whatsapp-session`) |
-| `WHATSAPP_ALLOWED_NUMBERS` | Virgule ayrilmis telefon numaralari (opsiyonel; bos ise herkese acik) |
-
-**Matrix:**
-| Degisken | Aciklama |
-|----------|----------|
-| `MATRIX_HOMESERVER` | Matrix homeserver URL'si |
-| `MATRIX_ACCESS_TOKEN` | Bot erisim token'i |
-| `MATRIX_USER_ID` | Bot kullanici kimligi |
-| `MATRIX_ALLOWED_USER_IDS` | Bota konusabilecek virgule ayrilmis Matrix kullanici kimlikleri |
-| `MATRIX_ALLOWED_ROOM_IDS` | Mesaj iletebilecek virgule ayrilmis Matrix oda kimlikleri |
-| `MATRIX_ALLOW_OPEN_ACCESS` | Kullanici/oda izin listeleri olmadan Matrix trafikine izin vermek icin `true` ayarlayin |
-
-**IRC:**
-| Degisken | Aciklama |
-|----------|----------|
-| `IRC_SERVER` | IRC sunucu ana bilgisayar adi |
-| `IRC_NICK` | Bot nick'i |
-| `IRC_CHANNELS` | Katilacak virgule ayrilmis kanallar |
-| `IRC_ALLOWED_USERS` | Botu tetikleyebilecek virgule ayrilmis IRC nickleri |
-| `IRC_ALLOW_OPEN_ACCESS` | Kullanici izin listesi olmadan IRC trafikine izin vermek icin `true` ayarlayin |
-
 **Teams:**
 | Degisken | Aciklama |
 |----------|----------|
@@ -905,7 +879,6 @@ Strada bariz sonraki adimlari kullaniciya geri paslamaz. Bir saglayici eksik ana
 | `SOUL_FILE_TELEGRAM` | (ayarsiz) | Telegram icin kanal bazli kisilik gecikmesi |
 | `SOUL_FILE_DISCORD` | (ayarsiz) | Discord icin kanal bazli kisilik gecikmesi |
 | `SOUL_FILE_SLACK` | (ayarsiz) | Slack icin kanal bazli kisilik gecikmesi |
-| `SOUL_FILE_WHATSAPP` | (ayarsiz) | WhatsApp icin kanal bazli kisilik gecikmesi |
 | `READ_ONLY_MODE` | `false` | Tum yazma islemlerini engelle |
 | `LOG_LEVEL` | `info` | `error`, `warn`, `info` veya `debug` |
 
@@ -1049,29 +1022,26 @@ RAG (Retrieval-Augmented Generation) boru hatti, anlamsal arama icin C# kaynak k
 
 ## Kanal Yetenekleri
 
-| Yetenek | Web | Telegram | Discord | Slack | WhatsApp | CLI |
-|---------|-----|----------|---------|-------|----------|-----|
-| Metin mesajlasma | Evet | Evet | Evet | Evet | Evet | Evet |
-| Medya ekleri | Evet (base64) | Evet (foto/belge/video/ses) | Evet (herhangi ek) | Evet (dosya indirme) | Evet (resim/video/ses/belge) | Hayir |
-| Goruntu (resim->LLM) | Evet | Evet | Evet | Evet | Evet | Hayir |
-| Akis (yerinde duzenleme) | Evet | Evet | Evet | Evet | Evet | Evet |
-| Yazma gostergesi | Evet | Evet | Evet | Islevsiz | Evet | Hayir |
-| Onay diyaloglari | Evet (modal) | Evet (satirici klavye) | Evet (butonlar) | Evet (Block Kit) | Evet (numarali yanit) | Evet (readline) |
-| Konu destegi | Hayir | Hayir | Evet | Evet | Hayir | Hayir |
-| Hiz sinirlamasi (giden) | Evet (oturum basina) | Hayir | Evet (token bucket) | Evet (4 katmanli kayar pencere) | Satirici kisitlama | Hayir |
+| Yetenek | Web | Telegram | Discord | Slack | CLI |
+|---------|-----|----------|---------|-------|-----|
+| Metin mesajlasma | Evet | Evet | Evet | Evet | Evet |
+| Medya ekleri | Evet (base64) | Evet (foto/belge/video/ses) | Evet (herhangi ek) | Evet (dosya indirme) | Hayir |
+| Goruntu (resim->LLM) | Evet | Evet | Evet | Evet | Hayir |
+| Akis (yerinde duzenleme) | Evet | Evet | Evet | Evet | Evet |
+| Yazma gostergesi | Evet | Evet | Evet | Islevsiz | Hayir |
+| Onay diyaloglari | Evet (modal) | Evet (satirici klavye) | Evet (butonlar) | Evet (Block Kit) | Evet (readline) |
+| Konu destegi | Hayir | Hayir | Evet | Evet | Hayir |
+| Hiz sinirlamasi (giden) | Evet (oturum basina) | Hayir | Evet (token bucket) | Evet (4 katmanli kayar pencere) | Hayir |
 
 ### Akis
 
-Tum kanallar yerinde duzenleme akisi uygular. Ajanin yaniti, LLM urettikce asama asama gorunur. Guncellemeler, hiz sinirlarini asmamak icin platforma gore kisitlanir (WhatsApp/Discord: 1/sn, Slack: 2/sn).
+Tum kanallar yerinde duzenleme akisi uygular. Ajanin yaniti, LLM urettikce asama asama gorunur. Guncellemeler, hiz sinirlarini asmamak icin platforma gore kisitlanir (Discord: 1/sn, Slack: 2/sn).
 
 ### Kimlik Dogrulama
 
 - **Telegram**: Varsayilan olarak tumu reddeder. `ALLOWED_TELEGRAM_USER_IDS` ayarlanmalidir.
 - **Discord**: Varsayilan olarak tumu reddeder. `ALLOWED_DISCORD_USER_IDS` veya `ALLOWED_DISCORD_ROLE_IDS` ayarlanmalidir.
 - **Slack**: **Varsayilan olarak herkese aciktir.** `ALLOWED_SLACK_USER_IDS` bos ise, herhangi bir Slack kullanicisi bota erisebilir. Uretim ortami icin izin listesini ayarlayin.
-- **WhatsApp**: Varsayilan olarak herkese aciktir. `WHATSAPP_ALLOWED_NUMBERS` ayarlanirsa adaptor yalnizca bu izin listesindeki numaralari kabul eder.
-- **Matrix**: Varsayilan olarak tumu reddeder. Izin listelerini ayarlayin veya `MATRIX_ALLOW_OPEN_ACCESS=true` yapin.
-- **IRC**: Varsayilan olarak tumu reddeder. `IRC_ALLOWED_USERS` veya `IRC_ALLOW_OPEN_ACCESS=true` ayarlayin.
 - **Teams**: Varsayilan olarak tumu reddeder. `TEAMS_ALLOWED_USER_IDS` veya `TEAMS_ALLOW_OPEN_ACCESS=true` ayarlayin.
 
 ---
@@ -1217,7 +1187,7 @@ src/
     autonomy/           # Hata kurtarma, gorev planlama, oz-dogrulama
     context/            # Sistem istemi (Strada.Core bilgi tabani)
     providers/          # Claude, OpenAI, Ollama, DeepSeek, Kimi, Qwen, MiniMax, Groq, + dahasi
-    tools/              # 30+ arac uygulamasi ve control-plane etkilesim donusleri (ask_user, show_plan, switch_personality, ...)
+    tools/              # 40+ arac uygulamasi ve control-plane etkilesim donusleri (ask_user, show_plan, switch_personality, ...)
     soul/               # SOUL.md kisilik yukleyici, sicak yeniden yukleme ve kanal bazli gecikmeler ile
     plugins/            # Harici eklenti yukleyici
     multi/
@@ -1233,7 +1203,7 @@ src/
     telegram/           # Grammy tabanli bot
     discord/            # discord.js bot, slash komutlari ile
     slack/              # Slack Bolt (soket modu) Block Kit ile
-    whatsapp/           # Baileys tabanli istemci, oturum yonetimi ile
+    teams/              # Bot Framework (CloudAdapter) kanali
     web/                # Yerel HTTP + WebSocket web kanali
     cli/                # Readline REPL
   web-portal/           # React + Vite sohbet arayuzu (koyu/acik tema, dosya yukleme, akis, panel sekme, yan panel)

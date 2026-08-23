@@ -58,6 +58,7 @@ import type { AgentRunEventBus } from "../events/event-bus.js";
 import { guardedSleep } from "../events/heartbeat-guard.js";
 import type { ModelGateway } from "../model/model-gateway.js";
 import type { ModelCallResult } from "../model/model-gateway.js";
+import { estimateCost } from "../../budget/cost-model.js";
 import type { ProviderResponse, TokenUsage } from "../../agents/providers/provider-core.interface.js";
 import type { TaskProgressSignal } from "../../tasks/types.js";
 import type { WorkerUsageEvent } from "../../agents/supervisor/supervisor-types.js";
@@ -121,15 +122,18 @@ function trimMode(mode: RunnerMode): "interactive" | "background" {
   return mode === "interactive" ? "interactive" : "background";
 }
 
-/** Provider `TokenUsage` (totalTokens, no cost) → control-plane `Budget` usage (carries cost). */
-function toBudgetUsage(usage: TokenUsage | undefined): BudgetTokenUsage {
+/** Provider `TokenUsage` → control-plane `Budget` usage, with the turn's estimated USD cost.
+ * The cost is an ESTIMATE (flat per-provider rate table) whose only consumer is the run-local
+ * Budget gate seeded from the unified budget manager's remaining headroom — it never persists
+ * anything (billing/recording stays with port.recordProviderUsage), so there is no double-count.
+ * A provider with unknown/zero rates (e.g. ollama) simply gates on tokens alone. */
+function toBudgetUsage(usage: TokenUsage | undefined, providerName: string): BudgetTokenUsage {
+  const inputTokens = usage?.inputTokens ?? 0;
+  const outputTokens = usage?.outputTokens ?? 0;
   return {
-    inputTokens: usage?.inputTokens ?? 0,
-    outputTokens: usage?.outputTokens ?? 0,
-    // Provider usage carries no per-turn cost on this interface; cost gating is driven by the
-    // provider-usage recorder (port.recordProviderUsage). Budget cost stays uncharged here so it
-    // is never double-counted — tokens are the live gate.
-    costUsd: 0,
+    inputTokens,
+    outputTokens,
+    costUsd: estimateCost(inputTokens, outputTokens, providerName),
   };
 }
 
@@ -446,9 +450,9 @@ export class V2AgentRunner implements AgentRunner {
 
           // ══ Accounting (gauntlet #8,#9): budget.debit + execution trace ══════════════════
           if (outcome.kind !== "threw") {
-            budget.debit(toBudgetUsage(outcome.response.usage));
+            budget.debit(toBudgetUsage(outcome.response.usage, prepared.currentAssignment.providerName));
             usageTotal = mergeUsage(usageTotal, prepared.currentAssignment.providerName, outcome.response.usage);
-            port.recordProviderUsage(prepared.currentAssignment.providerName, outcome.response.usage);
+            port.recordProviderUsage(prepared.currentAssignment.providerName, outcome.response.usage, prepared.currentAssignment.modelId);
             port.recordExecutionTrace(this.traceParams(request, prepared, state, setup));
           }
 

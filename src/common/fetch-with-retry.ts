@@ -36,10 +36,9 @@ const providerSemaphores = new Map<string, ConcurrencySemaphore>();
 
 /**
  * Queue-based semaphore limiting concurrent in-flight operations. When the limit is
- * reached, acquire() queues until a running operation releases. Mirrors the
- * Semaphore in src/goals/goal-executor.ts but exposes explicit acquire()/release()
- * so a permit can be held across BOTH the fetch AND the streamed body consumption
- * (the body is read by the CALLER after fetchWithRetry returns).
+ * reached, acquire() queues until a running operation releases. Exposes explicit
+ * acquire()/release() so a permit can be held across BOTH the fetch AND the streamed
+ * body consumption (the body is read by the CALLER after fetchWithRetry returns).
  */
 class ConcurrencySemaphore {
   private running = 0;

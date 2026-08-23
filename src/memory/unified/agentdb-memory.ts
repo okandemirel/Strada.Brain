@@ -222,6 +222,7 @@ export class AgentDBMemory implements IUnifiedMemory {
       get hnswStore() { return self.hnswStore; },
       get writeMutex() { return self.writeMutex; },
       get decayConfig() { return self.decayConfig; },
+      get textIndex() { return self.textIndex; },
       promoteEntry: self.promoteEntry.bind(self),
       demoteEntry: self.demoteEntry.bind(self),
       // Wire through the class method so vi.spyOn intercepts calls
@@ -414,7 +415,11 @@ export class AgentDBMemory implements IUnifiedMemory {
     this.tieringParams = { intervalMs, promotionThreshold, demotionTimeoutDays };
     this.tieringTimer = setInterval(
       () => this.autoTieringSweep(promotionThreshold, demotionTimeoutDays)
-        .catch(e => getLoggerSafe().error("[AgentDBMemory] Auto-tiering sweep failed", { error: String(e) })),
+        .catch(e => getLoggerSafe().error("[AgentDBMemory] Auto-tiering sweep failed", { error: String(e) }))
+        // Expired-entry cleanup rides the same cadence: nothing else scheduled it,
+        // so expired Ephemeral rows used to accumulate forever (Map + SQLite + HNSW).
+        .then(() => this.cleanupExpired())
+        .catch(e => getLoggerSafe().error("[AgentDBMemory] Expired-entry cleanup failed", { error: String(e) })),
       intervalMs,
     );
     this.tieringTimer.unref();
@@ -961,6 +966,9 @@ export class AgentDBMemory implements IUnifiedMemory {
 
     for (const [id, entry] of this.entries) {
       if (entry.tier === MemoryTier.Ephemeral && entry.expiresAt && entry.expiresAt < now) {
+        // Mirror the removal in the TF-IDF index — extractTerms needs the content
+        // before it leaves this.entries, else df/docCount drift forever (leak fix).
+        this.textIndex.removeDocument(extractTerms(entry.content));
         this.entries.delete(id);
         if (this.hnswStore) {
           const store = this.hnswStore;
@@ -1002,6 +1010,9 @@ export class AgentDBMemory implements IUnifiedMemory {
     try {
       const existed = this.entries.has(id as string);
       if (existed) {
+        // Mirror the removal in the TF-IDF index before the entry leaves this.entries.
+        const entry = this.entries.get(id as string);
+        if (entry) this.textIndex.removeDocument(extractTerms(entry.content));
         this.entries.delete(id as string);
         if (this.hnswStore) {
           const store = this.hnswStore;

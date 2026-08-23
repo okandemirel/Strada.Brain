@@ -1,6 +1,6 @@
 # Strada.Brain
 
-AI-powered Unity development assistant for Strada.Core framework projects. Multi-channel (Web, Telegram, Discord, Slack, WhatsApp, CLI, Matrix, IRC, Teams), multi-provider (OpenAI, Anthropic, Google, Groq, Ollama, OpenRouter), with autonomous learning and memory.
+AI-powered Unity development assistant for Strada.Core framework projects. Multi-channel (Web, Telegram, Discord, Slack, CLI, Teams), multi-provider (OpenAI, Anthropic, Google, Groq, Ollama, OpenRouter), with autonomous learning and memory.
 
 ## Build & Test
 
@@ -21,9 +21,9 @@ npm run doctor             # Diagnose setup issues
 ## Architecture Overview
 
 - Entry: `src/index.ts` (Commander CLI) → `src/core/bootstrap.ts`
-- Agent loop: `src/agents/` — Orchestrator (~5K lines) + 16 helper modules (reflection, intervention pipeline, end-turn, session, consensus, tool execution, loop shared, autonomy tracker, etc.)
+- Agent loop: `src/agents/` — Orchestrator (~5K lines) + ~30 helper modules (reflection, intervention pipeline, end-turn, session, consensus, tool execution, loop shared, autonomy tracker, etc.)
 - Shared agent utils: `src/agent-core/`
-- 9 channel adapters: `src/channels/{web,telegram,discord,slack,whatsapp,cli,matrix,irc,teams}/`
+- 6 channel adapters: `src/channels/{web,telegram,discord,slack,cli,teams}/`
 - Config: `src/config/` — Zod-validated, 90+ env vars
 - Memory: `src/memory/` — AgentDB (SQLite + HNSW vectors), 3-tier auto-tiering
 - Learning: `src/learning/` — event-driven pipeline, instinct lifecycle

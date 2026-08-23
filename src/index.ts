@@ -36,6 +36,7 @@ import { createContainer } from "./core/di-container.js";
 import { shouldEnableDaemonMode } from "./core/daemon-mode.js";
 import { SetupWizard, buildSetupAccessUrl, buildSetupReadyUrl } from "./core/setup-wizard.js";
 import { AppError, setupGlobalErrorHandlers } from "./common/errors.js";
+import { acquireRuntimeLock } from "./core/runtime-lock.js";
 import {
   getSafeCurrentWorkingDirectory,
   initializeRuntimeEnvironment,
@@ -96,9 +97,6 @@ program
   .option("--telegram", "Start the Telegram channel directly")
   .option("--discord", "Start the Discord channel directly")
   .option("--slack", "Start the Slack channel directly")
-  .option("--whatsapp", "Start the WhatsApp channel directly")
-  .option("--matrix", "Start the Matrix channel directly")
-  .option("--irc", "Start the IRC channel directly")
   .option("--teams", "Start the Teams channel directly")
   .command("start")
   .description("Start Strada Brain")
@@ -547,6 +545,22 @@ async function startApp(
 
     const postSetupBootstrap = activeWizard?.getPendingPostSetupBootstrap();
 
+    // Single-instance gate: one install gets exactly one live runtime. Must run
+    // BEFORE bootstrap touches the SQLite stores — a second runtime's writes
+    // (daemon trigger firing, budget entries) would double-apply.
+    const lock = await acquireRuntimeLock({
+      installRoot: runtimePaths.installRoot,
+      channelType,
+      logger,
+    });
+    if (!lock.acquired) {
+      console.error(
+        `Strada is already running for this install (PID ${lock.holder.pid}, channel ${lock.holder.channel || "unknown"}, started ${lock.holder.startedAtIso || "at an unknown time"}).`,
+      );
+      console.error("Use `strada restart` to replace it or `strada kill` to stop it first.");
+      process.exit(1);
+    }
+
     // Bootstrap the application
     const effectiveDaemonMode = shouldEnableDaemonMode(channelType, daemonMode);
     const { bootstrap } = await import("./core/bootstrap.js");
@@ -586,8 +600,9 @@ async function startApp(
     container.registerInstance("Logger", logger);
     container.registerInstance("Config", config);
 
-    // Setup graceful shutdown
-    setupShutdownHandlers(app.shutdown);
+    // Setup graceful shutdown — release the runtime lock after the app drains,
+    // so the very next start never sees a stale lock from a graceful exit.
+    setupShutdownHandlers(app.shutdown, lock.release);
 
     // Keep process alive
     await new Promise(() => {
@@ -879,7 +894,7 @@ function isValidChannelType(type: string): type is SupportedChannelType {
   return (CHANNEL_DEFAULTS.SUPPORTED_TYPES as readonly string[]).includes(type);
 }
 
-function setupShutdownHandlers(shutdown: () => Promise<void>): void {
+function setupShutdownHandlers(shutdown: () => Promise<void>, afterShutdown?: () => Promise<void>): void {
   let isShuttingDown = false;
 
   const handleShutdown = async (signal: string): Promise<void> => {
@@ -893,26 +908,47 @@ function setupShutdownHandlers(shutdown: () => Promise<void>): void {
 
     try {
       await shutdown();
-      console.log("Shutdown complete.");
-      process.exit(0);
     } catch (error) {
       console.error("Error during shutdown:", error);
       process.exit(1);
     }
+    try {
+      await afterShutdown?.();
+    } catch {
+      // Lock cleanup is best-effort; a stale lock self-heals on next start.
+    }
+    console.log("Shutdown complete.");
+    process.exit(0);
   };
 
   process.on("SIGTERM", () => void handleShutdown("SIGTERM"));
   process.on("SIGINT", () => void handleShutdown("SIGINT"));
   process.on("SIGHUP", () => void handleShutdown("SIGHUP"));
 
-  // Handle uncaught errors
+  // Handle fatal errors. The policy split (measured against long autonomous builds:
+  // a multi-hour GDD-to-game run must not die to one stray rejected promise):
+  //  - uncaughtException: process state may be corrupt → full graceful shutdown.
+  //  - unhandledRejection: log-and-continue, with a storm guard as the runaway backstop.
   process.on("uncaughtException", (error) => {
     console.error("Uncaught exception:", error);
     void handleShutdown("uncaughtException");
   });
 
+  const REJECTION_WINDOW_MS = 60_000;
+  const MAX_REJECTIONS_PER_WINDOW = 20;
+  let recentRejections: number[] = [];
+
   process.on("unhandledRejection", (reason) => {
-    console.error("Unhandled rejection:", reason);
-    void handleShutdown("unhandledRejection");
+    const now = Date.now();
+    recentRejections = recentRejections.filter((timestamp) => now - timestamp < REJECTION_WINDOW_MS);
+    recentRejections.push(now);
+    console.error(
+      `Unhandled rejection (${recentRejections.length} in the last ${REJECTION_WINDOW_MS / 1000}s):`,
+      reason,
+    );
+    if (recentRejections.length >= MAX_REJECTIONS_PER_WINDOW) {
+      console.error("Unhandled-rejection storm detected — shutting down before the log floods.");
+      void handleShutdown("unhandled-rejection-storm");
+    }
   });
 }

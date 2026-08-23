@@ -641,6 +641,7 @@ export function recordProviderUsage(
   providerName: string,
   usage: ProviderResponse["usage"] | undefined,
   onUsage?: (usage: TaskUsageEvent) => void,
+  modelId?: string,
 ): void {
   const inputTokens = usage?.inputTokens ?? 0;
   const outputTokens = usage?.outputTokens ?? 0;
@@ -648,8 +649,11 @@ export function recordProviderUsage(
   ctx.rateLimiter?.recordTokenUsage(inputTokens, outputTokens, providerName);
   onUsage?.({
     provider: providerName,
+    model: modelId,
     inputTokens,
     outputTokens,
+    cacheCreationInputTokens: usage?.cacheCreationInputTokens,
+    cacheReadInputTokens: usage?.cacheReadInputTokens,
   });
 }
 

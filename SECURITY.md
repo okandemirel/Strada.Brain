@@ -69,7 +69,7 @@ Implementation: `src/security/secret-sanitizer.ts`, `src/agents/orchestrator.ts`
 
 When `READ_ONLY_MODE=true`, all write tools are removed from the agent's tool set entirely -- not just blocked at execution time, but filtered out before the LLM sees them. The system prompt is augmented to inform the agent that write operations are unavailable.
 
-Blocked tools include: `file_write`, `file_edit`, `file_delete`, `file_rename`, `git_commit`, `git_push`, `git_branch`, `git_reset`, `git_merge`, `git_rebase`, `shell_exec`, `strada_create_module`, `strada_create_component`, `dotnet_add_package`, and others.
+Blocked tools include: `file_write`, `file_edit`, `file_delete`, `file_rename`, `git_commit`, `git_push`, `git_branch`, `git_stash`, `shell_exec`, `strada_create_module`, `strada_create_component`, `dotnet_build`, `dotnet_test`, and others.
 
 Allowed tools: `file_read`, `file_search`, `file_list`, `git_status`, `git_log`, `git_diff`, `code_search`, `memory_search`, `analyze_project`, and others.
 
@@ -80,7 +80,7 @@ Implementation: `src/security/read-only-guard.ts`
 Write operations can require explicit user approval before execution. The DM (Diff/Merge) policy supports four approval levels:
 
 - **always**: every write operation requires confirmation.
-- **destructive_only**: only high-risk operations require confirmation (file_delete, shell_exec, git_push, git_reset, etc.).
+- **destructive_only**: only high-risk operations require confirmation (file_delete, shell_exec, git_push, etc.).
 - **smart**: confirmation triggered when changes exceed thresholds (file count, line count).
 - **never**: no confirmation required.
 
@@ -232,7 +232,7 @@ Security-related environment variables:
 | `ALLOWED_SLACK_WORKSPACES` | Comma-separated Slack workspace IDs | (empty = allow all) |
 | `ALLOWED_DISCORD_USER_IDS` | Comma-separated Discord user IDs | (empty = deny all) |
 | `ALLOWED_DISCORD_ROLE_IDS` | Comma-separated Discord role IDs | (empty) |
-| `JWT_SECRET` | Secret for JWT signing (required for web channel) | (none) |
+| `JWT_SECRET` | Secret for JWT signing (optional; required before enabling internal system auth / JWT-session flows) | (none) |
 | `REQUIRE_MFA` | Require MFA for authentication | `false` |
 | `REQUIRE_EDIT_CONFIRMATION` | Require user approval for write operations | `true` |
 | `READ_ONLY_MODE` | Disable all write tools | `false` |

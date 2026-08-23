@@ -9,7 +9,6 @@ import { truncateDiff, formatDiffStats } from "./diff-generator.js";
 
 const CHANNEL_LIMITS = {
   telegram: { maxLength: 3500, maxLines: 50, batchMaxLines: 30 },
-  whatsapp: { maxLength: 1500, maxLines: 40, batchMaxLines: 20 },
   cli: { maxLength: Infinity, maxLines: 100, batchMaxLines: 100 },
 };
 
@@ -27,7 +26,7 @@ const ANSI = {
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-export type ChannelType = "telegram" | "whatsapp" | "cli";
+export type ChannelType = "telegram" | "cli";
 
 export interface FormatOptions {
   maxLength?: number;
@@ -63,23 +62,7 @@ const FORMATTERS: Record<ChannelType, FormatterConfig> = {
     statsFormat: stats => "`" + escapeMarkdownV2(stats) + "`",
     separator: "\n\n─────────────\n\n",
   },
-  
-  whatsapp: {
-    escape: t => t,
-    codeBlock: text => "```\n" + text + "\n```",
-    bold: text => `*${text}*`,
-    italic: text => `_${text}_`,
-    filePrefix: diff => {
-      let prefix = `📄 *${diff.newPath}*`;
-      if (diff.isNew) prefix += " _(new)_";
-      else if (diff.isDeleted) prefix += " _(deleted)_";
-      else if (diff.isRename) prefix += " _(renamed)_";
-      return prefix;
-    },
-    statsFormat: stats => `_${stats}_`,
-    separator: "\n\n",
-  },
-  
+
   cli: {
     escape: t => t,
     codeBlock: text => colorizeDiff(text),
@@ -112,20 +95,6 @@ export function formatDiffForTelegram(diff: FileDiff, options?: FormatOptions): 
  */
 export function formatBatchDiffForTelegram(batchDiff: BatchDiff, options?: FormatOptions): string {
   return formatBatchDiffForChannel(batchDiff, "telegram", options);
-}
-
-/**
- * Format a diff for WhatsApp
- */
-export function formatDiffForWhatsApp(diff: FileDiff, options?: FormatOptions): string {
-  return formatDiffForChannel(diff, "whatsapp", options);
-}
-
-/**
- * Format a batch diff for WhatsApp
- */
-export function formatBatchDiffForWhatsApp(batchDiff: BatchDiff, options?: FormatOptions): string {
-  return formatBatchDiffForChannel(batchDiff, "whatsapp", options);
 }
 
 /**
@@ -189,11 +158,6 @@ export function formatBatchDiffForChannel(
     ? `${fmt.bold}📋 Changes Summary${ANSI.reset}\n${fileText} · ${fmt.italic(batchDiff.summary)}${ANSI.reset}\n${ANSI.dim}${"─".repeat(60)}${ANSI.reset}\n\n`
     : `*📋 ${channel === "telegram" ? "Changes Summary" : fileText + " Changed"}*\n${fileText} · ${fmt.statsFormat(batchDiff.summary)}\n\n`;
 
-  // WhatsApp: show compact list for multiple files
-  if (channel === "whatsapp" && batchDiff.files.length > 1) {
-    return formatWhatsAppBatch(batchDiff, fmt, maxLength, options);
-  }
-
   // Format each file
   const fileDiffs: string[] = [];
   let currentLength = formatted.length;
@@ -218,29 +182,6 @@ export function formatBatchDiffForChannel(
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function formatWhatsAppBatch(
-  batchDiff: BatchDiff,
-  _fmt: FormatterConfig,
-  maxLength: number,
-  options?: FormatOptions
-): string {
-  const fileList = batchDiff.files.map(f => {
-    const prefix = f.isNew ? "➕" : f.isDeleted ? "🗑️" : f.isRename ? "📋" : "📝";
-    return `${prefix} ${f.newPath} (${formatDiffStats(f.stats)})`;
-  });
-
-  let formatted = `*📋 ${batchDiff.files.length} Files Changed*\n_${batchDiff.summary}_\n\n`;
-  formatted += fileList.join("\n");
-
-  // Show first file diff if room
-  if (batchDiff.files[0] && formatted.length < maxLength - 500) {
-    formatted += "\n\n*First file:*\n";
-    formatted += formatDiffForChannel(batchDiff.files[0], "whatsapp", { ...options, maxLines: 20 });
-  }
-
-  return formatted;
-}
-
 export function formatCompactSummary(
   batchDiff: BatchDiff,
   channel: ChannelType
@@ -252,8 +193,6 @@ export function formatCompactSummary(
   switch (channel) {
     case "telegram":
       return `📊 *${fileText}* · \`+${additions}/-${deletions}\``;
-    case "whatsapp":
-      return `📊 *${fileText}* · _+${additions}/-${deletions}_`;
     case "cli":
       return `${ANSI.bold}📊 ${fileText}${ANSI.reset} · ${ANSI.green}+${additions}${ANSI.reset} ${ANSI.red}-${deletions}${ANSI.reset}`;
   }

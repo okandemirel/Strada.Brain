@@ -51,9 +51,6 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     telegram: { allowedUserIds: [] },
     discord: { allowedUserIds: [], allowedRoleIds: [] },
     slack: { socketMode: true },
-    whatsapp: { sessionPath: ".wwebjs_auth", allowedNumbers: [] },
-    matrix: { allowedUserIds: [], allowedRoomIds: [], allowOpenAccess: false },
-    irc: { nick: "strada", channels: [], allowedUsers: [], allowOpenAccess: false },
     teams: { allowedUserIds: [], allowOpenAccess: false },
     security: {
       requireEditConfirmation: true,

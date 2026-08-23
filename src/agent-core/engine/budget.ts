@@ -21,6 +21,14 @@ import { getLogger } from "../../utils/logger.js";
 /** 1b/1c seed default for the task-scope silence ceiling ratio (mirrors orchestrator's local). */
 const PHASE1B_MIN_INACTIVITY_OVER_STREAM_RATIO = 2;
 
+/** Structural slice of the unified budget snapshot the cost-cap resolution reads (cycle-safe: no import from src/budget). */
+export interface BudgetSnapshotLike {
+  global: {
+    daily: { usedUsd: number; limitUsd: number };
+    monthly: { usedUsd: number; limitUsd: number };
+  };
+}
+
 /** The dependency slice the budget/limit functions read (grows only with this module). */
 export interface BudgetDeps {
   /** LAZY GETTER — the unified budget manager is set AFTER construction (setter-backed). */
@@ -28,6 +36,8 @@ export interface BudgetDeps {
     getConfig?: () => { interactiveTokenBudget?: number | null } | undefined;
     /** Subscribe to runtime budget-config changes (mid-task /token raise); returns unsubscribe. */
     onConfigUpdated?: (listener: () => void) => () => void;
+    /** Remaining global headroom source — consumed by {@link resolveLiveCostCapUsd}. */
+    getSnapshot?: () => BudgetSnapshotLike | undefined;
   } | null;
   readonly taskConfig: TaskConfig;
   readonly maxIterations?: number;
@@ -62,6 +72,24 @@ export function resolveLiveOutputTokenCap(deps: BudgetDeps): number {
   return live === -1 ? Number.POSITIVE_INFINITY : live;
 }
 
+/**
+ * The USD headroom this run may still spend, resolved from the unified budget manager's GLOBAL
+ * daily/monthly limits at seed time. This is the pre-call enforcement the post-hoc usage recorder
+ * alone could not give: the control-plane Budget debits every turn's estimated cost against this
+ * cap (v2 runner accounting), and the verdict gate stops the run ("budget-exhausted") before
+ * further spend once it reaches 0. No manager, no snapshot, or no configured limit → Infinity
+ * (unbounded — the historical behavior for users who opted out of cost ceilings).
+ */
+export function resolveLiveCostCapUsd(deps: BudgetDeps): number {
+  const snapshot = deps.unifiedBudgetManager()?.getSnapshot?.();
+  if (!snapshot) return Number.POSITIVE_INFINITY;
+  const headrooms = [snapshot.global.daily, snapshot.global.monthly]
+    .filter((usage) => usage.limitUsd > 0)
+    .map((usage) => usage.limitUsd - usage.usedUsd);
+  if (headrooms.length === 0) return Number.POSITIVE_INFINITY;
+  return Math.max(0, Math.min(...headrooms));
+}
+
 /** Phase 1b — build the PolicySeed the control plane resolves the run's clock/budget from. */
 export function buildPolicySeed(deps: BudgetDeps): PolicySeed {
   return {
@@ -71,7 +99,7 @@ export function buildPolicySeed(deps: BudgetDeps): PolicySeed {
     taskInactivityMs: DEFAULT_TASK_INACTIVITY_TIMEOUT_MS,
     minInactivityOverStreamRatio: PHASE1B_MIN_INACTIVITY_OVER_STREAM_RATIO,
     outputTokenCap: resolveLiveOutputTokenCap(deps),
-    costCapUsd: Number.POSITIVE_INFINITY,
+    costCapUsd: resolveLiveCostCapUsd(deps),
     // taskHardMs omitted → resolver uses Infinity (v1 has no wall-clock task ceiling). The
     // 3h27m-runaway bound stays the iteration limit + loopDetectionBlocked guard in 1b.
   };

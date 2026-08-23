@@ -38,6 +38,47 @@ export function estimateCost(
   return (inputTokens * costs.input + outputTokens * costs.output) / 1_000_000;
 }
 
+/** Usage shape carrying the cached share of the prompt (subset of inputTokens — see TokenUsage invariants). */
+export interface CacheableTokenUsage {
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly cacheCreationInputTokens?: number;
+  readonly cacheReadInputTokens?: number;
+}
+
+/**
+ * Cache-rate multipliers applied to the INPUT rate. Measured economics:
+ * Anthropic bills a cache WRITE at ~1.25x and a cache READ at ~0.1x of input;
+ * OpenAI bills cached prompt tokens at ~0.5x (no write premium). Providers not
+ * listed bill all input uniformly (write/read multiplier 1) — with them, this
+ * function degrades to estimateCost split across the token buckets.
+ */
+const CACHE_RATE_MULTIPLIERS: Record<string, { write: number; read: number }> = {
+  claude: { write: 1.25, read: 0.1 },
+  openai: { write: 1.0, read: 0.5 },
+};
+
+/**
+ * Cache-aware cost estimate. TokenUsage's invariant is
+ * `cacheCreation + cacheRead <= inputTokens` (the cached share is INCLUDED in
+ * inputTokens), so the uncached remainder is what gets the plain input rate —
+ * otherwise cache-heavy turns are billed twice (measured 2026-08-23: a
+ * cache-heavy Claude session overstated cost ~4x under flat pricing).
+ */
+export function estimateCostWithCache(usage: CacheableTokenUsage, provider: string): number {
+  const rates = PROVIDER_COSTS[provider] ?? DEFAULT_COST;
+  const mult = CACHE_RATE_MULTIPLIERS[provider] ?? { write: 1, read: 1 };
+  const cacheWrite = Math.max(0, usage.cacheCreationInputTokens ?? 0);
+  const cacheRead = Math.max(0, usage.cacheReadInputTokens ?? 0);
+  const plainInput = Math.max(0, usage.inputTokens - cacheWrite - cacheRead);
+  return (
+    plainInput * rates.input
+    + cacheWrite * rates.input * mult.write
+    + cacheRead * rates.input * mult.read
+    + usage.outputTokens * rates.output
+  ) / 1_000_000;
+}
+
 /**
  * Return the cost rates for a provider (for display / reporting).
  *

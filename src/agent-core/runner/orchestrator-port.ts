@@ -360,9 +360,14 @@ export interface OrchestratorPort {
 
   /**
    * Success accounting. Threads provider usage into v1's recorder AND forwards to the
-   * request.onUsage sink.
+   * request.onUsage sink. `modelId` is the concrete model of the assignment that served
+   * the turn — the budget DB's per-model attribution depends on it.
    */
-  recordProviderUsage(providerName: string, usage: ProviderResponse["usage"] | undefined): void;
+  recordProviderUsage(
+    providerName: string,
+    usage: ProviderResponse["usage"] | undefined,
+    modelId?: string,
+  ): void;
 
   /** Persist the budget-exceeded checkpoint (gauntlet #9 stop path). */
   saveBudgetExceededCheckpoint(params: BudgetCheckpointParams): Promise<void>;

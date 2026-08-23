@@ -39,7 +39,7 @@ import type { UserProfileStore } from "../../memory/unified/user-profile-store.j
 import type { MonitorLifecycle } from "../../dashboard/monitor-lifecycle.js";
 import type { WorkspaceBus } from "../../dashboard/workspace-bus.js";
 import type { SupervisorBrain } from "../../supervisor/supervisor-brain.js";
-import { estimateCost } from "../../security/rate-limiter.js";
+import { estimateCostWithCache } from "../../budget/cost-model.js";
 import type { UnifiedBudgetManager } from "../../budget/unified-budget-manager.js";
 import { getLogger } from "../../utils/logger.js";
 import { Orchestrator } from "../orchestrator.js";
@@ -652,20 +652,23 @@ export class AgentManager {
       vaultRegistry: this.opts.vaultRegistry,
       vaultWriteHookBudgetMs: this.opts.vaultWriteHookBudgetMs,
       onUsage: (usage) => {
-        const costUsd = estimateCost(usage.inputTokens, usage.outputTokens, usage.provider);
+        // Cache-aware pricing + concrete model attribution (see buildUsageRecorder
+        // in background-executor for the full rationale).
+        const costUsd = estimateCostWithCache(usage, usage.provider);
         if (costUsd <= 0) {
           return;
         }
+        const model = usage.model ?? usage.provider;
         if (this._unifiedBudgetManager) {
           this._unifiedBudgetManager.recordCost(costUsd, "agent", {
-            model: usage.provider,
+            model,
             tokensIn: usage.inputTokens,
             tokensOut: usage.outputTokens,
             agentId,
           });
         }
         this.budgetTracker.recordCost(agentId, costUsd, {
-          model: usage.provider,
+          model,
           tokensIn: usage.inputTokens,
           tokensOut: usage.outputTokens,
         });

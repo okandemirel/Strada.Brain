@@ -176,7 +176,6 @@ const ALLOWED_HOST_PATTERNS = [
   /^files\.slack\.com$/,
   /^cdn\.discordapp\.com$/,
   /^media\.discordapp\.net$/,
-  /^mmg\.whatsapp\.net$/,
 ];
 
 /**

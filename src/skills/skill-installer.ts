@@ -7,6 +7,7 @@ import { homedir } from "node:os";
 import { stat, rm } from "node:fs/promises";
 import { execFileNoThrow } from "../utils/execFileNoThrow.js";
 import { setSkillEnabled } from "./skill-config.js";
+import { recordPinnedCommit } from "./skill-pin.js";
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -35,6 +36,8 @@ export interface InstallResult {
   success: boolean;
   error?: string;
   targetDir?: string;
+  /** The git commit the installed skill was pinned at (git-sourced installs only). */
+  pinnedSha?: string;
 }
 
 /**
@@ -92,8 +95,14 @@ export async function installSkillFromRepo(
     // Non-fatal — warn but continue
   }
 
+  // Pin the cloned commit — the audit anchor for every future update/drift check.
+  let pinnedSha: string | null = null;
+  try {
+    pinnedSha = await recordPinnedCommit(targetDir);
+  } catch { /* pinning is best-effort; install proceeds */ }
+
   // Enable by default
   await setSkillEnabled(name, true);
 
-  return { success: true, targetDir };
+  return { success: true, targetDir, pinnedSha: pinnedSha ?? undefined };
 }

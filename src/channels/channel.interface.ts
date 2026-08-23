@@ -10,7 +10,7 @@ import type { PostSetupBootstrapContext } from "../common/setup-contract.js";
 
 /**
  * Common interface for all messaging channel adapters.
- * Implementations: Telegram (grammy), WhatsApp (baileys), CLI (readline), Discord, Slack
+ * Implementations: Telegram (grammy), CLI (readline), Discord, Slack, Teams, Web
  *
  * Note: Not all channels support all features. Use type guards to check capabilities:
  * - supportsStreaming(channel) - for streaming support

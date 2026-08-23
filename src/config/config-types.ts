@@ -62,19 +62,6 @@ export type EnvVarName =
   | "SLACK_SOCKET_MODE"
   | "ALLOWED_SLACK_WORKSPACES"
   | "ALLOWED_SLACK_USER_IDS"
-  | "WHATSAPP_SESSION_PATH"
-  | "WHATSAPP_ALLOWED_NUMBERS"
-  | "MATRIX_HOMESERVER"
-  | "MATRIX_ACCESS_TOKEN"
-  | "MATRIX_USER_ID"
-  | "MATRIX_ALLOWED_USER_IDS"
-  | "MATRIX_ALLOWED_ROOM_IDS"
-  | "MATRIX_ALLOW_OPEN_ACCESS"
-  | "IRC_SERVER"
-  | "IRC_NICK"
-  | "IRC_CHANNELS"
-  | "IRC_ALLOWED_USERS"
-  | "IRC_ALLOW_OPEN_ACCESS"
   | "TEAMS_APP_ID"
   | "TEAMS_APP_PASSWORD"
   | "TEAMS_APP_TYPE"
@@ -556,31 +543,6 @@ export interface TelegramConfig {
   readonly allowedUserIds: number[];
 }
 
-/** WhatsApp configuration */
-export interface WhatsAppConfig {
-  readonly sessionPath: string;
-  readonly allowedNumbers: string[];
-}
-
-/** Matrix configuration */
-export interface MatrixConfig {
-  readonly homeserver?: string;
-  readonly accessToken?: string;
-  readonly userId?: string;
-  readonly allowedUserIds: string[];
-  readonly allowedRoomIds: string[];
-  readonly allowOpenAccess: boolean;
-}
-
-/** IRC configuration */
-export interface IRCConfig {
-  readonly server?: string;
-  readonly nick: string;
-  readonly channels: string[];
-  readonly allowedUsers: string[];
-  readonly allowOpenAccess: boolean;
-}
-
 /** Microsoft Teams / Bot Framework app tenancy model */
 export type TeamsAppType = "MultiTenant" | "SingleTenant";
 
@@ -801,9 +763,6 @@ export interface Config {
   readonly telegram: TelegramConfig;
   readonly discord: DiscordConfig;
   readonly slack: SlackConfig;
-  readonly whatsapp: WhatsAppConfig;
-  readonly matrix: MatrixConfig;
-  readonly irc: IRCConfig;
   readonly teams: TeamsConfig;
 
   // Security

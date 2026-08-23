@@ -63,7 +63,6 @@ const CHANNEL_LIMITS: Record<string, number> = {
   telegram: 4096,
   discord: 2000,
   slack: 40000,
-  whatsapp: 65536,
   cli: Infinity,
   web: Infinity,
 };

@@ -131,30 +131,6 @@ const PREFIX_RULES: Array<{ prefix: string; descriptor: ConfigDescriptor }> = [
     },
   },
   {
-    prefix: "whatsapp.",
-    descriptor: {
-      category: "Channels",
-      tier: "experimental",
-      description: "Optional WhatsApp channel configuration outside the protected default surface.",
-    },
-  },
-  {
-    prefix: "matrix.",
-    descriptor: {
-      category: "Channels",
-      tier: "experimental",
-      description: "Optional Matrix channel configuration outside the protected default surface.",
-    },
-  },
-  {
-    prefix: "irc.",
-    descriptor: {
-      category: "Channels",
-      tier: "experimental",
-      description: "Optional IRC channel configuration outside the protected default surface.",
-    },
-  },
-  {
     prefix: "teams.",
     descriptor: {
       category: "Channels",

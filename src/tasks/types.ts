@@ -196,6 +196,11 @@ export interface GoalContext {
 
 export interface TaskUsageEvent {
   provider: string;
+  /** The concrete model that served the turn, when the routing layer knows it (falls back to provider at consumers). */
+  model?: string;
   inputTokens: number;
   outputTokens: number;
+  /** Cached share of the prompt — subset of inputTokens (see TokenUsage invariants). */
+  cacheCreationInputTokens?: number;
+  cacheReadInputTokens?: number;
 }

@@ -1,5 +1,8 @@
 # Phase 3: Monitor Mode — Implementation Plan
 
+> **Status note (2026-08-23):** References to `GoalExecutor` below are historical — the wave-based executor was retired and goal-DAG execution is unified into `SupervisorDispatcher` (`src/supervisor/supervisor-dispatcher.ts`). The result shape lives on in `src/goals/execution-result.ts`.
+
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** When the agent executes a goal, a real-time DAG appears in Monitor mode with mandatory review pipeline, activity feed, and intervention controls.

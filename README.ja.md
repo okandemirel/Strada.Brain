@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>Unity / Strada.Core プロジェクト向け AI 開発エージェント</strong><br/>
-  Web ダッシュボード、Telegram、Discord、Slack、WhatsApp、またはターミナルに接続する自律型コーディングエージェント &mdash; コードベースを読み取り、コードを書き、ビルドを実行し、エラーから学習し、24 時間 365 日のデーモンループで自律的に動作します。マルチエージェントオーケストレーション、タスク委任、メモリ統合、承認ゲート付きデプロイメントサブシステム、LLM ビジョンサポート付きメディア共有、SOUL.md による設定可能な性格システム、control-plane clarification review、タスク認識型動的切り替えによるインテリジェントマルチプロバイダールーティング、信頼度ベースのコンセンサス検証、OODA 推論ループを備えた自律型 Agent Core、そして Strada.MCP 統合を搭載。
+  Web ダッシュボード、Telegram、Discord、Slackまたはターミナルに接続する自律型コーディングエージェント &mdash; コードベースを読み取り、コードを書き、ビルドを実行し、エラーから学習し、24 時間 365 日のデーモンループで自律的に動作します。マルチエージェントオーケストレーション、タスク委任、メモリ統合、承認ゲート付きデプロイメントサブシステム、LLM ビジョンサポート付きメディア共有、SOUL.md による設定可能な性格システム、control-plane clarification review、タスク認識型動的切り替えによるインテリジェントマルチプロバイダールーティング、信頼度ベースのコンセンサス検証、OODA 推論ループを備えた自律型 Agent Core、そして Strada.MCP 統合を搭載。
 </p>
 
 > 翻訳注記: 現在のランタイム挙動、環境変数の既定値、セキュリティ意味論の正本は [README.md](README.md) です。このファイルはその翻訳です。
@@ -92,7 +92,7 @@ git clone https://github.com/okandemirel/Strada.Brain.git Strada.Brain
 `./strada install-command` はシェルプロファイルも自動更新するため、次に開くターミナルでは PATH を手で編集せずに `strada` を使えます。
 Windows では checkout から `.\strada.ps1` を使います。`install-command` は `strada.cmd` と `strada.ps1` を `%LOCALAPPDATA%\Strada\bin` に配置し、ユーザー PATH を更新します。
 
-あとで user-local コマンドを削除したい場合は、`strada uninstall`（または checkout から `./strada uninstall` / `.\strada.ps1 uninstall`）を実行してください。`--purge-config` を付けると、`.env`、`.strada-memory`、`.whatsapp-session`、ログ、`HEARTBEAT.md` などの repo-local runtime state も一緒に削除します。リポジトリの checkout 自体は自動では削除されません。
+あとで user-local コマンドを削除したい場合は、`strada uninstall`（または checkout から `./strada uninstall` / `.\strada.ps1 uninstall`）を実行してください。`--purge-config` を付けると、`.env`、`.strada-memory`、ログ、`HEARTBEAT.md` などの repo-local runtime state も一緒に削除します。リポジトリの checkout 自体は自動では削除されません。
 
 `strada-brain` はまだ public npm registry に公開されていないため、`npm install -g strada-brain` は現在 `E404` になります。npm 公開が行われるまでは、上の source checkout 手順を使ってください。
 
@@ -187,7 +187,7 @@ strada start --channel web --daemon
 strada start --channel telegram
 strada start --channel discord
 strada start --channel slack
-strada start --channel whatsapp
+strada start --channel teams
 
 # 自動再起動スーパーバイザー付きで常時実行
 strada supervise --channel web
@@ -464,8 +464,7 @@ Webポータルの`/admin/skills`に**マーケットプレイス**タブがあ�
 ```
 +-----------------------------------------------------------------+
 |  チャットチャネル + Web ポータル（4モード、shadcn/ui + Magic UI） |
-|  Web | Telegram | Discord | Slack | WhatsApp | CLI | Matrix     |
-|  IRC | Teams                                                     |
+|  Web | Telegram | Discord | Slack | CLI | Teams                 |
 +------------------------------+----------------------------------+
                                |
                     IChannelAdapter インターフェース
@@ -477,7 +476,7 @@ Webポータルの`/admin/skills`に**マーケットプレイス**タブがあ�
 +-------+--------------+-------------+-----------+----------------+
         |              |             |           |
 +-------v------+ +-----v------+ +---v--------+ +v-----------------+
-| AI プロバイダー| | 30+ ツール | | コンテキスト| | 学習システム      |
+| AI プロバイダー| | 40+ ツール | | コンテキスト| | 学習システム      |
 | Claude（主要）| | ファイルI/O| | AgentDB    | | TypedEventBus    |
 | OpenAI, Kimi | | Git 操作   | | (SQLite +  | | ハイブリッド加重  |
 | DeepSeek,Qwen| | シェル実行 | |  HNSW)     | | 直感ライフ       |
@@ -486,9 +485,9 @@ Webポータルの`/admin/skills`に**マーケットプレイス**タブがあ�
 +--------------+ +------+-----+ +---+--------+ +--+---------------+
                         |           |              |
                 +-------v-----------v--------------v------+
-                |  Goal Decomposer + Goal Executor        |
-                |  DAG-based decomposition, wave-based    |
-                |  parallel execution, failure budgets    |
+                |  Goal Decomposer + Supervisor           |
+                |  Dispatcher: DAG decomposition, wave-   |
+                |  based parallel execution, failure      |
                 +---------+------------------+------------+
                           |                  |
           +---------------v------+  +--------v--------------------+
@@ -886,31 +885,6 @@ Strada は明らかな次の作業をユーザーに投げ返しません。プ�
 | `ALLOWED_SLACK_USER_IDS` | カンマ区切りのユーザー ID（**空の場合は全ユーザーに開放**） |
 | `ALLOWED_SLACK_WORKSPACES` | カンマ区切りのワークスペース ID（**空の場合は全ワークスペースに開放**） |
 
-**WhatsApp：**
-| 変数 | 説明 |
-|------|------|
-| `WHATSAPP_SESSION_PATH` | セッションファイルのディレクトリ（デフォルト：`.whatsapp-session`） |
-| `WHATSAPP_ALLOWED_NUMBERS` | カンマ区切りの電話番号（任意。空の場合は全員に公開） |
-
-**Matrix：**
-| 変数 | 説明 |
-|------|------|
-| `MATRIX_HOMESERVER` | Matrix ホームサーバー URL |
-| `MATRIX_ACCESS_TOKEN` | ボットアクセストークン |
-| `MATRIX_USER_ID` | ボットユーザー ID |
-| `MATRIX_ALLOWED_USER_IDS` | ボットへの発言を許可するカンマ区切りの Matrix ユーザー ID |
-| `MATRIX_ALLOWED_ROOM_IDS` | メッセージ配信を許可するカンマ区切りのルーム ID |
-| `MATRIX_ALLOW_OPEN_ACCESS` | `true` に設定すると、ユーザー/ルーム許可リストなしで Matrix トラフィックを受け付ける |
-
-**IRC：**
-| 変数 | 説明 |
-|------|------|
-| `IRC_SERVER` | IRC サーバーホスト名 |
-| `IRC_NICK` | ボットのニック |
-| `IRC_CHANNELS` | 参加するカンマ区切りのチャンネル |
-| `IRC_ALLOWED_USERS` | ボットをトリガーできるカンマ区切りの IRC ニックネーム |
-| `IRC_ALLOW_OPEN_ACCESS` | `true` に設定すると、ユーザー許可リストなしで IRC トラフィックを受け付ける |
-
 **Teams：**
 | 変数 | 説明 |
 |------|------|
@@ -952,7 +926,6 @@ Strada は明らかな次の作業をユーザーに投げ返しません。プ�
 | `SOUL_FILE_TELEGRAM` | (未設定) | Telegram 向けのチャネル別性格オーバーライド |
 | `SOUL_FILE_DISCORD` | (未設定) | Discord 向けのチャネル別性格オーバーライド |
 | `SOUL_FILE_SLACK` | (未設定) | Slack 向けのチャネル別性格オーバーライド |
-| `SOUL_FILE_WHATSAPP` | (未設定) | WhatsApp 向けのチャネル別性格オーバーライド |
 | `READ_ONLY_MODE` | `false` | すべての書き込み操作をブロック |
 | `LOG_LEVEL` | `info` | `error`、`warn`、`info`、または `debug` |
 
@@ -1097,29 +1070,26 @@ RAG（検索拡張生成）パイプラインは、C# ソースコードをイ�
 
 ## チャネル機能
 
-| 機能 | Web | Telegram | Discord | Slack | WhatsApp | CLI |
-|------|-----|----------|---------|-------|----------|-----|
-| テキストメッセージ | 対応 | 対応 | 対応 | 対応 | 対応 | 対応 |
-| メディア添付 | 対応（base64） | 対応（写真/ドキュメント/動画/音声） | 対応（任意の添付） | 対応（ファイルダウンロード） | 対応（画像/動画/音声/ドキュメント） | 非対応 |
-| ビジョン（画像→LLM） | 対応 | 対応 | 対応 | 対応 | 対応 | 非対応 |
-| ストリーミング（インプレース編集） | 対応 | 対応 | 対応 | 対応 | 対応 | 対応 |
-| 入力中インジケーター | 対応 | 対応 | 対応 | 非対応 | 対応 | 非対応 |
-| 確認ダイアログ | 対応（モーダル） | 対応（インラインキーボード） | 対応（ボタン） | 対応（Block Kit） | 対応（番号付き返信） | 対応（readline） |
-| スレッドサポート | 非対応 | 非対応 | 対応 | 対応 | 非対応 | 非対応 |
-| レートリミッター（送信側） | 対応（セッション単位） | 非対応 | 対応（トークンバケット） | 対応（4 段階スライディングウィンドウ） | インラインスロットル | 非対応 |
+| 機能 | Web | Telegram | Discord | Slack | CLI |
+|------|-----|----------|---------|-------|-----|
+| テキストメッセージ | 対応 | 対応 | 対応 | 対応 | 対応 |
+| メディア添付 | 対応（base64） | 対応（写真/ドキュメント/動画/音声） | 対応（任意の添付） | 対応（ファイルダウンロード） | 非対応 |
+| ビジョン（画像→LLM） | 対応 | 対応 | 対応 | 対応 | 非対応 |
+| ストリーミング（インプレース編集） | 対応 | 対応 | 対応 | 対応 | 対応 |
+| 入力中インジケーター | 対応 | 対応 | 対応 | 非対応 | 非対応 |
+| 確認ダイアログ | 対応（モーダル） | 対応（インラインキーボード） | 対応（ボタン） | 対応（Block Kit） | 対応（readline） |
+| スレッドサポート | 非対応 | 非対応 | 対応 | 対応 | 非対応 |
+| レートリミッター（送信側） | 対応（セッション単位） | 非対応 | 対応（トークンバケット） | 対応（4 段階スライディングウィンドウ） | 非対応 |
 
 ### ストリーミング
 
-すべてのチャネルでインプレース編集によるストリーミングを実装しています。LLM が生成するにつれて、エージェントの応答がプログレッシブに表示されます。レート制限を回避するため、プラットフォームごとに更新頻度が制御されています（WhatsApp/Discord：1 回/秒、Slack：2 回/秒）。
+すべてのチャネルでインプレース編集によるストリーミングを実装しています。LLM が生成するにつれて、エージェントの応答がプログレッシブに表示されます。レート制限を回避するため、プラットフォームごとに更新頻度が制御されています（Discord：1 回/秒、Slack：2 回/秒）。
 
 ### 認証
 
 - **Telegram**：デフォルトで全拒否。`ALLOWED_TELEGRAM_USER_IDS` の設定が必要。
 - **Discord**：デフォルトで全拒否。`ALLOWED_DISCORD_USER_IDS` または `ALLOWED_DISCORD_ROLE_IDS` の設定が必要。
 - **Slack**：**デフォルトで全開放。** `ALLOWED_SLACK_USER_IDS` が空の場合、すべての Slack ユーザーがボットにアクセス可能。本番環境では許可リストを設定してください。
-- **WhatsApp**：デフォルトで公開です。`WHATSAPP_ALLOWED_NUMBERS` を設定した場合のみ、アダプターは受信メッセージをその許可リストに制限します。
-- **Matrix**：デフォルトで全拒否。許可リストを設定するか `MATRIX_ALLOW_OPEN_ACCESS=true` を使用してください。
-- **IRC**：デフォルトで全拒否。`IRC_ALLOWED_USERS` を設定するか `IRC_ALLOW_OPEN_ACCESS=true` を使用してください。
 - **Teams**：デフォルトで全拒否。`TEAMS_ALLOWED_USER_IDS` を設定するか `TEAMS_ALLOW_OPEN_ACCESS=true` を使用してください。
 
 ---
@@ -1265,7 +1235,7 @@ src/
     autonomy/           # エラーリカバリ、タスク計画、自己検証
     context/            # システムプロンプト（Strada.Core ナレッジベース）
     providers/          # Claude, OpenAI, Ollama, DeepSeek, Kimi, Qwen, MiniMax, Groq, + その他
-    tools/              # 30+ ツール実装（ask_user, show_plan, switch_personality 等）
+    tools/              # 40+ ツール実装（ask_user, show_plan, switch_personality 等）
     soul/               # SOUL.md 性格ローダー（ホットリロードとチャネル別オーバーライド付き）
     plugins/            # 外部プラグインローダー
     multi/
@@ -1281,7 +1251,7 @@ src/
     telegram/           # Grammy ベースのボット
     discord/            # discord.js ボット（スラッシュコマンド付き）
     slack/              # Slack Bolt（ソケットモード）+ Block Kit
-    whatsapp/           # Baileys ベースのクライアント（セッション管理付き）
+    teams/              # Bot Framework (CloudAdapter) チャネル
     web/                # Express + WebSocket Web チャネル
     cli/                # Readline REPL
   web-portal/           # React + Vite チャット UI（ダーク/ライトテーマ、ファイルアップロード、ストリーミング、ダッシュボードタブ、サイドパネル）

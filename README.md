@@ -87,7 +87,7 @@ If you skip `./strada install-command`, keep using `./Strada.Brain/strada ...` f
 
 On macOS/Linux, `./strada install-command` updates your shell profile automatically so future terminals pick up the `strada` command without a manual PATH edit. On Windows, `.\strada.ps1 install-command` installs `strada.cmd` and `strada.ps1` into `%LOCALAPPDATA%\Strada\bin` and updates the user PATH.
 
-To remove the user-local command later, run `strada uninstall` (or `./strada uninstall` / `.\strada.ps1 uninstall` from the checkout). Add `--purge-config` to also remove Strada runtime state such as `.env`, `.strada-memory`, `.whatsapp-session`, logs, and `HEARTBEAT.md` under the active runtime root. On source checkouts, the same `--purge-config` flag also removes generated artifacts like `node_modules/`, `dist/`, `web-portal/node_modules`, and `web-portal/dist` so you can rerun the checkout from a true zero-install state. The repository checkout itself is never deleted automatically.
+To remove the user-local command later, run `strada uninstall` (or `./strada uninstall` / `.\strada.ps1 uninstall` from the checkout). Add `--purge-config` to also remove Strada runtime state such as `.env`, `.strada-memory`, logs, and `HEARTBEAT.md` under the active runtime root. On source checkouts, the same `--purge-config` flag also removes generated artifacts like `node_modules/`, `dist/`, `web-portal/node_modules`, and `web-portal/dist` so you can rerun the checkout from a true zero-install state. The repository checkout itself is never deleted automatically.
 
 If you ever run `npm` manually, do it from the repository root, the folder that contains `package.json`. If you see an error like `ENOENT ... /Strada/package.json`, you are one directory too high; either `cd Strada.Brain` first or prefix the command with `cd Strada.Brain && ...`.
 
@@ -461,7 +461,7 @@ See **[docs/vault.md](docs/vault.md)** for the full reference (architecture, que
 +-------+--------------+-------------+-----------+----------------+
         |              |             |           |
 +-------v------+ +-----v------+ +---v--------+ +v-----------------+
-| AI Providers | | 30+ Tools  | | Context    | | Learning System  |
+| AI Providers | | 40+ Tools  | | Context    | | Learning System  |
 | Claude (prim)| | File I/O   | | AgentDB    | | TypedEventBus    |
 | OpenAI, Kimi | | Git ops    | | (SQLite +  | | Hybrid weighted  |
 | DeepSeek,Qwen| | Shell exec | |  HNSW)     | | Instinct life-   |
@@ -470,9 +470,10 @@ See **[docs/vault.md](docs/vault.md)** for the full reference (architecture, que
 +--------------+ +------+-----+ +---+--------+ +--+---------------+
                         |           |              |
                 +-------v-----------v--------------v------+
-                |  Goal Decomposer + Goal Executor        |
-                |  DAG-based decomposition, wave-based    |
-                |  parallel execution, failure budgets    |
+                |  Goal Decomposer + Supervisor           |
+                |  Dispatcher: DAG decomposition, wave-   |
+                |  based parallel execution, failure      |
+                |  budgets                                |
                 +---------+------------------+------------+
                           |                  |
           +---------------v------+  +--------v--------------------+
@@ -881,31 +882,6 @@ That same learning path now materializes runtime self-improvement artifacts. Rep
 | `ALLOWED_SLACK_USER_IDS` | Comma-separated user IDs (**open to all if empty**) |
 | `ALLOWED_SLACK_WORKSPACES` | Comma-separated workspace IDs (**open to all if empty**) |
 
-**WhatsApp:**
-| Variable | Description |
-|----------|-------------|
-| `WHATSAPP_SESSION_PATH` | Directory for session files (default: `.whatsapp-session`) |
-| `WHATSAPP_ALLOWED_NUMBERS` | Comma-separated phone numbers (optional; empty means open access) |
-
-**Matrix:**
-| Variable | Description |
-|----------|-------------|
-| `MATRIX_HOMESERVER` | Matrix homeserver URL |
-| `MATRIX_ACCESS_TOKEN` | Bot access token |
-| `MATRIX_USER_ID` | Bot user ID |
-| `MATRIX_ALLOWED_USER_IDS` | Comma-separated Matrix user IDs allowed to talk to the bot |
-| `MATRIX_ALLOWED_ROOM_IDS` | Comma-separated Matrix room IDs allowed to deliver messages |
-| `MATRIX_ALLOW_OPEN_ACCESS` | Set to `true` to allow inbound Matrix traffic without user/room allowlists |
-
-**IRC:**
-| Variable | Description |
-|----------|-------------|
-| `IRC_SERVER` | IRC server hostname |
-| `IRC_NICK` | Bot nick |
-| `IRC_CHANNELS` | Comma-separated channels to join |
-| `IRC_ALLOWED_USERS` | Comma-separated IRC nicknames allowed to trigger the bot |
-| `IRC_ALLOW_OPEN_ACCESS` | Set to `true` to allow inbound IRC traffic without a user allowlist |
-
 **Teams:**
 | Variable | Description |
 |----------|-------------|
@@ -947,7 +923,6 @@ That same learning path now materializes runtime self-improvement artifacts. Rep
 | `SOUL_FILE_TELEGRAM` | (unset) | Per-channel personality override for Telegram |
 | `SOUL_FILE_DISCORD` | (unset) | Per-channel personality override for Discord |
 | `SOUL_FILE_SLACK` | (unset) | Per-channel personality override for Slack |
-| `SOUL_FILE_WHATSAPP` | (unset) | Per-channel personality override for WhatsApp |
 | `READ_ONLY_MODE` | `false` | Block all write operations |
 | `LOG_LEVEL` | `info` | `error`, `warn`, `info`, or `debug` |
 
@@ -1092,29 +1067,26 @@ The RAG (Retrieval-Augmented Generation) pipeline indexes your C# source code fo
 
 ## Channel Capabilities
 
-| Capability | Web | Telegram | Discord | Slack | WhatsApp | CLI |
-|------------|-----|----------|---------|-------|----------|-----|
-| Text messaging | Yes | Yes | Yes | Yes | Yes | Yes |
-| Media attachments | Yes (base64) | Yes (photo/doc/video/voice) | Yes (any attachment) | Yes (file download) | Yes (image/video/audio/doc) | No |
-| Vision (image→LLM) | Yes | Yes | Yes | Yes | Yes | No |
-| Streaming (edit-in-place) | Yes | Yes | Yes | Yes | Yes | Yes |
-| Typing indicator | Yes | Yes | Yes | No-op | Yes | No |
-| Confirmation dialogs | Yes (modal) | Yes (inline keyboard) | Yes (buttons) | Yes (Block Kit) | Yes (numbered reply) | Yes (readline) |
-| Thread support | No | No | Yes | Yes | No | No |
-| Rate limiter (outbound) | Yes (per-session) | No | Yes (token bucket) | Yes (4-tier sliding window) | Inline throttle | No |
+| Capability | Web | Telegram | Discord | Slack | CLI |
+|------------|-----|----------|---------|-------|-----|
+| Text messaging | Yes | Yes | Yes | Yes | Yes |
+| Media attachments | Yes (base64) | Yes (photo/doc/video/voice) | Yes (any attachment) | Yes (file download) | No |
+| Vision (image→LLM) | Yes | Yes | Yes | Yes | No |
+| Streaming (edit-in-place) | Yes | Yes | Yes | Yes | Yes |
+| Typing indicator | Yes | Yes | Yes | No-op | No |
+| Confirmation dialogs | Yes (modal) | Yes (inline keyboard) | Yes (buttons) | Yes (Block Kit) | Yes (readline) |
+| Thread support | No | No | Yes | Yes | No |
+| Rate limiter (outbound) | Yes (per-session) | No | Yes (token bucket) | Yes (4-tier sliding window) | No |
 
 ### Streaming
 
-All channels implement edit-in-place streaming. The agent's response appears progressively as the LLM generates it. Updates are throttled per platform to avoid rate limits (WhatsApp/Discord: 1/sec, Slack: 2/sec).
+All channels implement edit-in-place streaming. The agent's response appears progressively as the LLM generates it. Updates are throttled per platform to avoid rate limits (Discord: 1/sec, Slack: 2/sec).
 
 ### Authentication
 
 - **Telegram**: Deny-all by default. Must set `ALLOWED_TELEGRAM_USER_IDS`.
 - **Discord**: Deny-all by default. Must set `ALLOWED_DISCORD_USER_IDS` or `ALLOWED_DISCORD_ROLE_IDS`.
 - **Slack**: **Open by default.** If `ALLOWED_SLACK_USER_IDS` is empty, any Slack user can access the bot. Set the allowlist for production.
-- **WhatsApp**: Open by default. If `WHATSAPP_ALLOWED_NUMBERS` is set, the adapter restricts inbound messages to that allowlist.
-- **Matrix**: Deny-all by default. Set allowlists or `MATRIX_ALLOW_OPEN_ACCESS=true`.
-- **IRC**: Deny-all by default. Set `IRC_ALLOWED_USERS` or `IRC_ALLOW_OPEN_ACCESS=true`.
 - **Teams**: Deny-all by default. Set `TEAMS_ALLOWED_USER_IDS` or `TEAMS_ALLOW_OPEN_ACCESS=true`.
 
 ---
@@ -1128,7 +1100,7 @@ Platform-specific allowlists checked at message arrival (before any processing).
 Per-user sliding window (minute/hour) + global daily/monthly token and USD budget caps.
 
 ### Layer 3: Path Guard
-Every file operation resolves symlinks and validates the path stays within the project root. 30+ sensitive patterns are blocked (`.env`, `.git/credentials`, SSH keys, certificates, `node_modules/`).
+Every file operation resolves symlinks and validates the path stays within the project root. 26 sensitive patterns are blocked (`.env`, `.git/credentials`, SSH keys, certificates, `node_modules/`).
 
 ### Layer 4: Media Security
 All media attachments are validated before processing: MIME allowlist (image/video/audio/document), per-type size limits (20MB image, 50MB video, 25MB audio, 10MB document), magic bytes verification (JPEG, PNG, GIF, WebP, MP4, PDF), and SSRF protection on download URLs (blocks private IPs, metadata endpoints, rejects redirects).
@@ -1275,7 +1247,7 @@ src/
     autonomy/           # Error recovery, task planning, self-verification
     context/            # System prompt (Strada.Core knowledge base)
     providers/          # Claude, OpenAI, Ollama, DeepSeek, Kimi, Qwen, MiniMax, Groq, + more
-    tools/              # 30+ tool implementations plus control-plane interaction turns (ask_user, show_plan, switch_personality, ...)
+    tools/              # 40+ tool implementations plus control-plane interaction turns (ask_user, show_plan, switch_personality, ...)
     soul/               # SOUL.md personality loader with hot-reload and per-channel overrides
     plugins/            # External plugin loader
     multi/
@@ -1291,7 +1263,7 @@ src/
     telegram/           # Grammy-based bot
     discord/            # discord.js bot with slash commands
     slack/              # Slack Bolt (socket mode) with Block Kit
-    whatsapp/           # Baileys-based client with session management
+    teams/              # Bot Framework (CloudAdapter) channel
     web/                # Local HTTP + WebSocket web channel
     cli/                # Readline REPL
   web-portal/           # React + Vite chat UI (dark/light theme, file upload, streaming, dashboard tab, side panel)

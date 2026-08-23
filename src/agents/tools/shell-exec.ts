@@ -69,6 +69,18 @@ const INJECTION_PATTERNS: [RegExp, string][] = [
   // Encoding-based bypass attempts
   [/\bbase64\s.*\|\s*(sh|bash|zsh)\b/i, "base64-decoded shell execution"],
   [/\bprintf\s.*\|\s*(sh|bash|zsh)\b/i, "printf-to-shell execution"],
+
+  // Interpreter-side execution escapes (measured bypass class 2026-08-23):
+  // a denylist on command NAMES is not enough when the invoked program can
+  // itself spawn processes or scripts.
+  [/\bawk\b[^|;&]*\bsystem\s*\(/i, "awk system() call"],
+  [/\bperl\b[^|;&]*\bsystem\s*\(|\bperl\b[^|;&]*\bexec\s*\(/i, "perl system()/exec() call"],
+  [/\bfind\b[^|;&]*\s-(exec|execdir|ok|okdir)\b/i, "find -exec/-ok process execution"],
+  [/\bxargs\b(?:\s+-[a-zA-Z]+)*\s+(?:-[a-zA-Z]+\s+)*(sh|bash|zsh|ksh|dash)\b/i, "xargs invoking a shell"],
+  [/(?:^|[;&|(]\s*)env\s+(?:-[a-zA-Z]+\s+)*(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*(sh|bash|zsh|ksh|dash)\b/i, "env launching a shell"],
+  [/(?:^|[;&|(]\s*)(?:\/bin\/)?(sh|bash|zsh|ksh|dash)\s+-c\b/i, "nested shell -c invocation"],
+  [/\bgit\b[^|;&]*core\.fsmonitor\b/i, "git core.fsmonitor injection"],
+  [/(?:^|[;&|(]\s*)sudo\b/, "privilege escalation via sudo"],
 ];
 
 export class ShellExecTool implements ITool {
@@ -76,8 +88,10 @@ export class ShellExecTool implements ITool {
   readonly description =
     "Execute a shell command in the project directory. Use this to run builds (dotnet build), " +
     "tests (dotnet test), git commands, and other development tools. " +
-    "Commands run with a timeout and output is captured. " +
-    "Dangerous commands (rm -rf /, shutdown, etc.) are blocked.";
+    "Commands run with a timeout and output is captured, using the platform shell " +
+    "(bash on macOS/Linux, cmd.exe on Windows). " +
+    "Dangerous commands (rm -rf /, shutdown, etc.) and process-execution escapes " +
+    "(find -exec, awk system(), xargs-to-shell, nested sh -c, sudo) are blocked.";
 
   readonly inputSchema = {
     type: "object",
@@ -194,9 +208,10 @@ export class ShellExecTool implements ITool {
       // Default-deny environment: the command is model-authored, so it must
       // not inherit this process's credentials. See shell-env-policy.ts.
       const { env: childEnv } = buildShellEnv(process.env);
+      const shell = resolvePlatformShell();
       const result = await runProcess({
-        command: "/bin/bash",
-        args: ["-c", command],
+        command: shell.command,
+        args: [...shell.args, command],
         cwd,
         timeoutMs,
         env: childEnv,
@@ -257,6 +272,18 @@ function formatResult(command: string, result: { stdout: string; stderr: string;
     parts.push("(no output)");
   }
   return parts.join("\n");
+}
+
+/**
+ * Platform-appropriate shell. The old hardcoded `/bin/bash` made every
+ * shell_exec call fail with ENOENT on Windows (measured 2026-08-23). Commands
+ * are authored for the platform's own shell, so run through that shell.
+ */
+function resolvePlatformShell(): { command: string; args: string[] } {
+  if (process.platform === "win32") {
+    return { command: process.env["COMSPEC"] ?? "cmd.exe", args: ["/d", "/s", "/c"] };
+  }
+  return { command: "/bin/bash", args: ["-c"] };
 }
 
 function checkCommandSafety(command: string): { safe: boolean; reason?: string } {

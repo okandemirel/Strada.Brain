@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>面向 Unity / Strada.Core 项目的 AI 驱动开发代理</strong><br/>
-  一个连接到 Web 仪表板、Telegram、Discord、Slack、WhatsApp 或终端的自主编码代理 &mdash; 读取您的代码库、编写代码、运行构建、从错误中学习，并通过 24/7 守护进程循环实现自主运行。现已支持多代理编排、任务委派、记忆整合、带审批门控的部署子系统、支持 LLM 视觉识别的媒体共享、通过 SOUL.md 实现的可配置个性系统、control-plane clarification review、支持任务感知动态切换的智能多提供商路由、基于置信度的共识验证、带 OODA 推理循环的自主 Agent Core，以及 Strada.MCP 集成。
+  一个连接到 Web 仪表板、Telegram、Discord、Slack 或终端的自主编码代理 &mdash; 读取您的代码库、编写代码、运行构建、从错误中学习，并通过 24/7 守护进程循环实现自主运行。现已支持多代理编排、任务委派、记忆整合、带审批门控的部署子系统、支持 LLM 视觉识别的媒体共享、通过 SOUL.md 实现的可配置个性系统、control-plane clarification review、支持任务感知动态切换的智能多提供商路由、基于置信度的共识验证、带 OODA 推理循环的自主 Agent Core，以及 Strada.MCP 集成。
 </p>
 
 > 翻译说明：当前运行时行为、环境变量默认值和安全语义的正本是 [README.md](README.md)。本文件是其翻译版本。
@@ -92,7 +92,7 @@ git clone https://github.com/okandemirel/Strada.Brain.git Strada.Brain
 `./strada install-command` 还会自动更新你的 shell profile，这样以后新开的终端无需手动编辑 PATH 就能直接使用 `strada`。
 在 Windows 上，请在 checkout 中使用 `.\strada.ps1`。`install-command` 会把 `strada.cmd` 和 `strada.ps1` 写入 `%LOCALAPPDATA%\Strada\bin`，并更新用户 PATH。
 
-如果之后你想移除 user-local 命令，请运行 `strada uninstall`（或者在 checkout 里运行 `./strada uninstall` / `.\strada.ps1 uninstall`）。如果再加上 `--purge-config`，Strada 还会删除 `.env`、`.strada-memory`、`.whatsapp-session`、日志以及 `HEARTBEAT.md` 等 repo-local runtime state。仓库 checkout 本身永远不会被自动删除。
+如果之后你想移除 user-local 命令，请运行 `strada uninstall`（或者在 checkout 里运行 `./strada uninstall` / `.\strada.ps1 uninstall`）。如果再加上 `--purge-config`，Strada 还会删除 `.env`、`.strada-memory`、日志以及 `HEARTBEAT.md` 等 repo-local runtime state。仓库 checkout 本身永远不会被自动删除。
 
 `strada-brain` 目前还没有发布到 public npm registry，所以 `npm install -g strada-brain` 现在会返回 `E404`。在 npm 公共发布出现之前，请使用上面的源码 checkout 流程。
 
@@ -187,7 +187,7 @@ strada start --channel web --daemon
 strada start --channel telegram
 strada start --channel discord
 strada start --channel slack
-strada start --channel whatsapp
+strada start --channel teams
 
 # 带自动重启的始终监督
 strada supervise --channel web
@@ -392,8 +392,7 @@ Web 门户在 `/admin/skills` 提供**市场**标签页，可以浏览、搜索�
 ```
 +-----------------------------------------------------------------+
 |  聊天频道 + Web 门户（4 模式，shadcn/ui + Magic UI）              |
-|  Web | Telegram | Discord | Slack | WhatsApp | CLI | Matrix     |
-|  IRC | Teams                                                     |
+|  Web | Telegram | Discord | Slack | CLI | Teams                 |
 +------------------------------+----------------------------------+
                                |
                     IChannelAdapter 接口
@@ -405,7 +404,7 @@ Web 门户在 `/admin/skills` 提供**市场**标签页，可以浏览、搜索�
 +-------+--------------+-------------+-----------+----------------+
         |              |             |           |
 +-------v------+ +-----v------+ +---v--------+ +v-----------------+
-| AI 提供商    | | 30+ 工具   | | 上下文来源 | | 学习系统         |
+| AI 提供商    | | 40+ 工具   | | 上下文来源 | | 学习系统         |
 | Claude（主要）| | 文件 I/O   | | AgentDB    | | TypedEventBus    |
 | OpenAI, Kimi | | Git 操作   | | （SQLite + | | 混合加权         |
 | DeepSeek,Qwen| | Shell 执行 | |  HNSW）    | | 本能生命周期     |
@@ -414,9 +413,9 @@ Web 门户在 `/admin/skills` 提供**市场**标签页，可以浏览、搜索�
 +--------------+ +------+-----+ +---+--------+ +--+---------------+
                         |           |              |
                 +-------v-----------v--------------v------+
-                |  Goal Decomposer + Goal Executor        |
-                |  DAG-based decomposition, wave-based    |
-                |  parallel execution, failure budgets    |
+                |  Goal Decomposer + Supervisor           |
+                |  Dispatcher: DAG decomposition, wave-   |
+                |  based parallel execution, failure      |
                 +---------+------------------+------------+
                           |                  |
           +---------------v------+  +--------v--------------------+
@@ -869,31 +868,6 @@ Strada 不会把明显的下一步再丢回给用户。如果某个 provider 返
 | `ALLOWED_SLACK_USER_IDS` | 以逗号分隔的用户 ID（**为空则对所有人开放**） |
 | `ALLOWED_SLACK_WORKSPACES` | 以逗号分隔的工作区 ID（**为空则对所有人开放**） |
 
-**WhatsApp：**
-| 变量 | 说明 |
-|------|------|
-| `WHATSAPP_SESSION_PATH` | 会话文件目录（默认：`.whatsapp-session`） |
-| `WHATSAPP_ALLOWED_NUMBERS` | 以逗号分隔的电话号码（可选；为空时开放访问） |
-
-**Matrix：**
-| 变量 | 说明 |
-|------|------|
-| `MATRIX_HOMESERVER` | Matrix 主服务器 URL |
-| `MATRIX_ACCESS_TOKEN` | 机器人访问令牌 |
-| `MATRIX_USER_ID` | 机器人用户 ID |
-| `MATRIX_ALLOWED_USER_IDS` | 允许与机器人对话的 Matrix 用户 ID（逗号分隔） |
-| `MATRIX_ALLOWED_ROOM_IDS` | 允许投递消息的 Matrix 房间 ID（逗号分隔） |
-| `MATRIX_ALLOW_OPEN_ACCESS` | 设置为 `true` 时无需用户/房间白名单即可接收 Matrix 流量 |
-
-**IRC：**
-| 变量 | 说明 |
-|------|------|
-| `IRC_SERVER` | IRC 服务器主机名 |
-| `IRC_NICK` | 机器人昵称 |
-| `IRC_CHANNELS` | 要加入的频道（逗号分隔） |
-| `IRC_ALLOWED_USERS` | 允许触发机器人的 IRC 昵称（逗号分隔） |
-| `IRC_ALLOW_OPEN_ACCESS` | 设置为 `true` 时无需用户白名单即可接收 IRC 流量 |
-
 **Teams：**
 | 变量 | 说明 |
 |------|------|
@@ -935,7 +909,6 @@ Strada 不会把明显的下一步再丢回给用户。如果某个 provider 返
 | `SOUL_FILE_TELEGRAM` | (未设置) | Telegram 的频道级个性覆盖 |
 | `SOUL_FILE_DISCORD` | (未设置) | Discord 的频道级个性覆盖 |
 | `SOUL_FILE_SLACK` | (未设置) | Slack 的频道级个性覆盖 |
-| `SOUL_FILE_WHATSAPP` | (未设置) | WhatsApp 的频道级个性覆盖 |
 | `READ_ONLY_MODE` | `false` | 阻止所有写入操作 |
 | `LOG_LEVEL` | `info` | `error`、`warn`、`info` 或 `debug` |
 
@@ -1079,29 +1052,26 @@ RAG（检索增强生成）管道对您的 C# 源代码进行索引以支持语�
 
 ## 频道功能
 
-| 功能 | Web | Telegram | Discord | Slack | WhatsApp | CLI |
-|------|-----|----------|---------|-------|----------|-----|
-| 文本消息 | 是 | 是 | 是 | 是 | 是 | 是 |
-| 媒体附件 | 是（base64） | 是（照片/文档/视频/语音） | 是（任意附件） | 是（文件下载） | 是（图片/视频/音频/文档） | 否 |
-| 视觉（图片→LLM） | 是 | 是 | 是 | 是 | 是 | 否 |
-| 流式传输（就地编辑） | 是 | 是 | 是 | 是 | 是 | 是 |
-| 输入指示器 | 是 | 是 | 是 | 无操作 | 是 | 否 |
-| 确认对话框 | 是（模态框） | 是（内联键盘） | 是（按钮） | 是（Block Kit） | 是（编号回复） | 是（readline） |
-| 主题支持 | 否 | 否 | 是 | 是 | 否 | 否 |
-| 速率限制（出站） | 是（每会话） | 否 | 是（令牌桶） | 是（4 层滑动窗口） | 内联节流 | 否 |
+| 功能 | Web | Telegram | Discord | Slack | CLI |
+|------|-----|----------|---------|-------|-----|
+| 文本消息 | 是 | 是 | 是 | 是 | 是 |
+| 媒体附件 | 是（base64） | 是（照片/文档/视频/语音） | 是（任意附件） | 是（文件下载） | 否 |
+| 视觉（图片→LLM） | 是 | 是 | 是 | 是 | 否 |
+| 流式传输（就地编辑） | 是 | 是 | 是 | 是 | 是 |
+| 输入指示器 | 是 | 是 | 是 | 无操作 | 否 |
+| 确认对话框 | 是（模态框） | 是（内联键盘） | 是（按钮） | 是（Block Kit） | 是（readline） |
+| 主题支持 | 否 | 否 | 是 | 是 | 否 |
+| 速率限制（出站） | 是（每会话） | 否 | 是（令牌桶） | 是（4 层滑动窗口） | 否 |
 
 ### 流式传输
 
-所有频道都实现了就地编辑流式传输。代理的响应随 LLM 生成而逐步显示。更新按平台限流以避免速率限制（WhatsApp/Discord：1 次/秒，Slack：2 次/秒）。
+所有频道都实现了就地编辑流式传输。代理的响应随 LLM 生成而逐步显示。更新按平台限流以避免速率限制（Discord：1 次/秒，Slack：2 次/秒）。
 
 ### 身份验证
 
 - **Telegram**：默认拒绝所有。必须设置 `ALLOWED_TELEGRAM_USER_IDS`。
 - **Discord**：默认拒绝所有。必须设置 `ALLOWED_DISCORD_USER_IDS` 或 `ALLOWED_DISCORD_ROLE_IDS`。
 - **Slack**：**默认对所有人开放。** 如果 `ALLOWED_SLACK_USER_IDS` 为空，任何 Slack 用户都可以访问机器人。请为生产环境设置允许列表。
-- **WhatsApp**：默认开放访问。只有在设置 `WHATSAPP_ALLOWED_NUMBERS` 时，适配器才会将入站消息限制到该允许列表。
-- **Matrix**：默认拒绝所有。设置白名单或 `MATRIX_ALLOW_OPEN_ACCESS=true`。
-- **IRC**：默认拒绝所有。设置 `IRC_ALLOWED_USERS` 或 `IRC_ALLOW_OPEN_ACCESS=true`。
 - **Teams**：默认拒绝所有。设置 `TEAMS_ALLOWED_USER_IDS` 或 `TEAMS_ALLOW_OPEN_ACCESS=true`。
 
 ---
@@ -1261,7 +1231,7 @@ src/
     autonomy/           # 错误恢复、任务规划、自我验证
     context/            # 系统提示（Strada.Core 知识库）
     providers/          # Claude、OpenAI、Ollama、DeepSeek、Kimi、Qwen、MiniMax、Groq 等
-    tools/              # 30+ 工具实现以及 control-plane 交互回合（ask_user, show_plan, switch_personality 等）
+    tools/              # 40+ 工具实现以及 control-plane 交互回合（ask_user, show_plan, switch_personality 等）
     soul/               # SOUL.md 个性加载器，支持热重载和按频道覆盖
     plugins/            # 外部插件加载器
     multi/
@@ -1277,7 +1247,7 @@ src/
     telegram/           # 基于 Grammy 的机器人
     discord/            # discord.js 机器人，支持斜杠命令
     slack/              # Slack Bolt（Socket 模式），支持 Block Kit
-    whatsapp/           # 基于 Baileys 的客户端，带会话管理
+    teams/              # Bot Framework (CloudAdapter) 频道
     web/                # Express + WebSocket Web 频道
     cli/                # Readline REPL
   web-portal/           # React + Vite 聊天 UI（暗/亮主题、文件上传、流式传输、仪表板标签页、侧面板）

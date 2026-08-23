@@ -1,4 +1,4 @@
-import { FileWriteTool } from "./file-write.js";
+import { FileWriteTool, writeFileInsideRoot } from "./file-write.js";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -100,5 +100,59 @@ describe("FileWriteTool", () => {
     // Verify by reading the file back
     const written = readFileSync(join(tempDir, "bytes-check.txt"), "utf-8");
     expect(Buffer.byteLength(written, "utf-8")).toBe(expectedBytes);
+  });
+});
+
+describe("FileWriteTool TOCTOU containment", () => {
+  // Measured 2026-08-23: validatePath resolved symlinks at CHECK time; the write
+  // followed whatever sat at the path at WRITE time, so a symlink swapped in
+  // between (the race) escaped the project root. The static-symlink case is
+  // already caught by validatePath — this exercises the writer's own defenses.
+  it("refuses to write through a symlink at the target path (ELOOP), leaving the target untouched", async () => {
+    const { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync, readFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+
+    const root = mkdtempSync(join(tmpdir(), "strada-toc-"));
+    try {
+      const outside = join(root, "outside.txt");
+      writeFileSync(outside, "original", "utf-8");
+
+      const project = join(root, "project");
+      mkdirSync(project, { recursive: true });
+      const linkPath = join(project, "Assets.cs");
+      symlinkSync(outside, linkPath);
+
+      await expect(writeFileInsideRoot(project, linkPath, "class X {}"))
+        .rejects.toMatchObject({ code: "ELOOP" });
+      expect(readFileSync(outside, "utf-8")).toBe("original");
+
+      // A plain (non-symlink) target inside the root still writes fine.
+      await writeFileInsideRoot(project, join(project, "Ok.cs"), "class Ok {}");
+      expect(readFileSync(join(project, "Ok.cs"), "utf-8")).toBe("class Ok {}");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses when the parent directory is swapped to a real directory outside the root", async () => {
+    const { mkdtempSync, mkdirSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+
+    const root = mkdtempSync(join(tmpdir(), "strada-toc2-"));
+    try {
+      const outsideDir = join(root, "outside-dir");
+      mkdirSync(outsideDir, { recursive: true });
+      const project = join(root, "project");
+      mkdirSync(join(project, "sub"), { recursive: true });
+
+      // The path LOOKS inside the project but its parent resolves outside.
+      await expect(
+        writeFileInsideRoot(join(project, "sub"), join(root, "project", "sub", "..", "..", "outside-dir", "x.txt"), "no"),
+      ).rejects.toThrow(/escaped the project root/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

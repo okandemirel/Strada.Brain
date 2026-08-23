@@ -140,25 +140,6 @@ export const configSchema = z
     allowedSlackWorkspaces: commaSeparatedList,
     allowedSlackUserIds: commaSeparatedList,
 
-    // WhatsApp
-    whatsappSessionPath: z.string().default(".whatsapp-session"),
-    whatsappAllowedNumbers: commaSeparatedList,
-
-    // Matrix
-    matrixHomeserver: z.string().optional(),
-    matrixAccessToken: z.string().optional(),
-    matrixUserId: z.string().optional(),
-    matrixAllowedUserIds: commaSeparatedList,
-    matrixAllowedRoomIds: commaSeparatedList,
-    matrixAllowOpenAccess: boolFromString(false),
-
-    // IRC
-    ircServer: z.string().optional(),
-    ircNick: z.string().default("strada-brain"),
-    ircChannels: commaSeparatedList,
-    ircAllowedUsers: commaSeparatedList,
-    ircAllowOpenAccess: boolFromString(false),
-
     // Teams
     teamsAppId: z.string().optional(),
     teamsAppPassword: z.string().optional(),

@@ -7,7 +7,7 @@ export interface StreamingBufferOptions {
   onFinalize?: (text: string) => Promise<void>;
   /**
    * If true, `unref()` the throttle timer so a pending deferred flush never
-   * keeps the Node event loop alive (matches WhatsApp's original behavior).
+   * keeps the Node event loop alive.
    */
   unref?: boolean;
 }

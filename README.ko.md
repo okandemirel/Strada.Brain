@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>Unity / Strada.Core 프로젝트를 위한 AI 기반 개발 에이전트</strong><br/>
-  웹 대시보드, Telegram, Discord, Slack, WhatsApp 또는 터미널에 연결되는 자율 코딩 에이전트 &mdash; 코드베이스를 읽고, 코드를 작성하고, 빌드를 실행하고, 실수로부터 학습하며, 24/7 데몬 루프로 자율 운영됩니다. 멀티 에이전트 오케스트레이션, 작업 위임, 메모리 통합, 승인 게이트가 포함된 배포 하위 시스템, LLM 비전 지원을 포함한 미디어 공유, SOUL.md를 통한 구성 가능한 성격 시스템, control-plane clarification review, 작업 인식 동적 전환이 포함된 지능형 멀티 공급자 라우팅, 신뢰도 기반 합의 검증, OODA 추론 루프를 갖춘 자율 Agent Core, 그리고 Strada.MCP 통합을 탑재했습니다.
+  웹 대시보드, Telegram, Discord, Slack 또는 터미널에 연결되는 자율 코딩 에이전트 &mdash; 코드베이스를 읽고, 코드를 작성하고, 빌드를 실행하고, 실수로부터 학습하며, 24/7 데몬 루프로 자율 운영됩니다. 멀티 에이전트 오케스트레이션, 작업 위임, 메모리 통합, 승인 게이트가 포함된 배포 하위 시스템, LLM 비전 지원을 포함한 미디어 공유, SOUL.md를 통한 구성 가능한 성격 시스템, control-plane clarification review, 작업 인식 동적 전환이 포함된 지능형 멀티 공급자 라우팅, 신뢰도 기반 합의 검증, OODA 추론 루프를 갖춘 자율 Agent Core, 그리고 Strada.MCP 통합을 탑재했습니다.
 </p>
 
 > 번역 참고: 현재 런타임 동작, 환경 변수 기본값, 보안 의미론의 정본은 [README.md](README.md)입니다. 이 파일은 그 문서의 번역본입니다.
@@ -92,7 +92,7 @@ git clone https://github.com/okandemirel/Strada.Brain.git Strada.Brain
 `./strada install-command` 는 셸 프로필도 자동으로 갱신하므로 다음에 여는 터미널에서는 PATH 를 수동으로 고치지 않아도 `strada` 를 바로 찾을 수 있습니다.
 Windows 에서는 checkout 안에서 `.\strada.ps1` 를 사용합니다. `install-command` 는 `strada.cmd` 와 `strada.ps1` 를 `%LOCALAPPDATA%\Strada\bin` 에 설치하고 사용자 PATH 를 갱신합니다.
 
-나중에 user-local 명령을 제거하려면 `strada uninstall`(또는 checkout 안에서 `./strada uninstall` / `.\strada.ps1 uninstall`)을 실행하세요. `--purge-config` 를 붙이면 `.env`, `.strada-memory`, `.whatsapp-session`, 로그, `HEARTBEAT.md` 같은 repo-local runtime state 도 함께 지웁니다. 저장소 checkout 자체는 자동으로 삭제되지 않습니다.
+나중에 user-local 명령을 제거하려면 `strada uninstall`(또는 checkout 안에서 `./strada uninstall` / `.\strada.ps1 uninstall`)을 실행하세요. `--purge-config` 를 붙이면 `.env`, `.strada-memory`, 로그, `HEARTBEAT.md` 같은 repo-local runtime state 도 함께 지웁니다. 저장소 checkout 자체는 자동으로 삭제되지 않습니다.
 
 `strada-brain` 패키지는 아직 public npm registry 에 배포되지 않았습니다. 그래서 `npm install -g strada-brain` 은 현재 `E404` 를 반환합니다. npm 배포가 생기기 전까지는 위의 source checkout 흐름을 사용해야 합니다.
 
@@ -187,7 +187,7 @@ strada start --channel web --daemon
 strada start --channel telegram
 strada start --channel discord
 strada start --channel slack
-strada start --channel whatsapp
+strada start --channel teams
 
 # 자동 재시작 감시자 포함
 strada supervise --channel web
@@ -443,8 +443,7 @@ npm start
 ```
 +-----------------------------------------------------------------+
 |  채팅 채널 + 웹 포털 (4모드, shadcn/ui + Magic UI)               |
-|  Web | Telegram | Discord | Slack | WhatsApp | CLI | Matrix     |
-|  IRC | Teams                                                     |
+|  Web | Telegram | Discord | Slack | CLI | Teams                 |
 +------------------------------+----------------------------------+
                                |
                     IChannelAdapter 인터페이스
@@ -456,7 +455,7 @@ npm start
 +-------+--------------+-------------+-----------+----------------+
         |              |             |           |
 +-------v------+ +-----v------+ +---v--------+ +v-----------------+
-| AI 공급자    | | 30+ 도구   | | 컨텍스트   | | 학습 시스템      |
+| AI 공급자    | | 40+ 도구   | | 컨텍스트   | | 학습 시스템      |
 | Claude (주요)| | 파일 I/O   | | AgentDB    | | TypedEventBus    |
 | OpenAI, Kimi | | Git 작업   | | (SQLite +  | | 하이브리드 가중  |
 | DeepSeek,Qwen| | 셸 실행    | |  HNSW)     | | 본능 라이프       |
@@ -465,9 +464,9 @@ npm start
 +--------------+ +------+-----+ +---+--------+ +--+---------------+
                         |           |              |
                 +-------v-----------v--------------v------+
-                |  Goal Decomposer + Goal Executor        |
-                |  DAG-based decomposition, wave-based    |
-                |  parallel execution, failure budgets    |
+                |  Goal Decomposer + Supervisor           |
+                |  Dispatcher: DAG decomposition, wave-   |
+                |  based parallel execution, failure      |
                 +---------+------------------+------------+
                           |                  |
           +---------------v------+  +--------v--------------------+
@@ -863,31 +862,6 @@ Strada는 명백한 다음 단계를 사용자에게 다시 넘기지 않습니�
 | `ALLOWED_SLACK_USER_IDS` | 쉼표로 구분된 사용자 ID (**비어 있으면 모든 사용자에게 개방**) |
 | `ALLOWED_SLACK_WORKSPACES` | 쉼표로 구분된 워크스페이스 ID (**비어 있으면 모든 워크스페이스에 개방**) |
 
-**WhatsApp:**
-| 변수 | 설명 |
-|------|------|
-| `WHATSAPP_SESSION_PATH` | 세션 파일 디렉터리 (기본값: `.whatsapp-session`) |
-| `WHATSAPP_ALLOWED_NUMBERS` | 쉼표로 구분된 전화번호 (선택 사항; 비어 있으면 전체 허용) |
-
-**Matrix:**
-| 변수 | 설명 |
-|------|------|
-| `MATRIX_HOMESERVER` | Matrix 홈서버 URL |
-| `MATRIX_ACCESS_TOKEN` | 봇 액세스 토큰 |
-| `MATRIX_USER_ID` | 봇 사용자 ID |
-| `MATRIX_ALLOWED_USER_IDS` | 봇과 대화할 수 있는 쉼표로 구분된 Matrix 사용자 ID |
-| `MATRIX_ALLOWED_ROOM_IDS` | 메시지 전달이 허용된 쉼표로 구분된 Matrix 방 ID |
-| `MATRIX_ALLOW_OPEN_ACCESS` | `true`로 설정하면 사용자/방 허용 목록 없이 수신 Matrix 트래픽 허용 |
-
-**IRC:**
-| 변수 | 설명 |
-|------|------|
-| `IRC_SERVER` | IRC 서버 호스트명 |
-| `IRC_NICK` | 봇 닉네임 |
-| `IRC_CHANNELS` | 참가할 쉼표로 구분된 채널 |
-| `IRC_ALLOWED_USERS` | 봇을 트리거할 수 있는 쉼표로 구분된 IRC 닉네임 |
-| `IRC_ALLOW_OPEN_ACCESS` | `true`로 설정하면 사용자 허용 목록 없이 수신 IRC 트래픽 허용 |
-
 **Teams:**
 | 변수 | 설명 |
 |------|------|
@@ -929,7 +903,6 @@ Strada는 명백한 다음 단계를 사용자에게 다시 넘기지 않습니�
 | `SOUL_FILE_TELEGRAM` | (미설정) | Telegram용 채널별 성격 재정의 |
 | `SOUL_FILE_DISCORD` | (미설정) | Discord용 채널별 성격 재정의 |
 | `SOUL_FILE_SLACK` | (미설정) | Slack용 채널별 성격 재정의 |
-| `SOUL_FILE_WHATSAPP` | (미설정) | WhatsApp용 채널별 성격 재정의 |
 | `READ_ONLY_MODE` | `false` | 모든 쓰기 작업 차단 |
 | `LOG_LEVEL` | `info` | `error`, `warn`, `info` 또는 `debug` |
 
@@ -1074,31 +1047,28 @@ RAG (검색 증강 생성) 파이프라인은 C# 소스 코드를 인덱싱하�
 
 ## 채널 기능
 
-| 기능 | Web | Telegram | Discord | Slack | WhatsApp | CLI |
-|------|-----|----------|---------|-------|----------|-----|
-| 텍스트 메시징 | 지원 | 지원 | 지원 | 지원 | 지원 | 지원 |
-| 미디어 첨부 | 지원 (base64) | 지원 (사진/문서/동영상/음성) | 지원 (모든 첨부) | 지원 (파일 다운로드) | 지원 (이미지/동영상/오디오/문서) | 미지원 |
-| 비전 (이미지→LLM) | 지원 | 지원 | 지원 | 지원 | 지원 | 미지원 |
-| 스트리밍 (인플레이스 편집) | 지원 | 지원 | 지원 | 지원 | 지원 | 지원 |
-| 입력 중 표시기 | 지원 | 지원 | 지원 | 미작동 | 지원 | 미지원 |
-| 확인 대화상자 | 지원 (모달) | 지원 (인라인 키보드) | 지원 (버튼) | 지원 (Block Kit) | 지원 (번호 답장) | 지원 (readline) |
-| 스레드 지원 | 미지원 | 미지원 | 지원 | 지원 | 미지원 | 미지원 |
-| 속도 제한기 (아웃바운드) | 지원 (세션별) | 미지원 | 지원 (토큰 버킷) | 지원 (4단계 슬라이딩 윈도우) | 인라인 스로틀 | 미지원 |
+| 기능 | Web | Telegram | Discord | Slack | CLI |
+|------|-----|----------|---------|-------|-----|
+| 텍스트 메시징 | 지원 | 지원 | 지원 | 지원 | 지원 |
+| 미디어 첨부 | 지원 (base64) | 지원 (사진/문서/동영상/음성) | 지원 (모든 첨부) | 지원 (파일 다운로드) | 미지원 |
+| 비전 (이미지→LLM) | 지원 | 지원 | 지원 | 지원 | 미지원 |
+| 스트리밍 (인플레이스 편집) | 지원 | 지원 | 지원 | 지원 | 지원 |
+| 입력 중 표시기 | 지원 | 지원 | 지원 | 미작동 | 미지원 |
+| 확인 대화상자 | 지원 (모달) | 지원 (인라인 키보드) | 지원 (버튼) | 지원 (Block Kit) | 지원 (readline) |
+| 스레드 지원 | 미지원 | 미지원 | 지원 | 지원 | 미지원 |
+| 속도 제한기 (아웃바운드) | 지원 (세션별) | 미지원 | 지원 (토큰 버킷) | 지원 (4단계 슬라이딩 윈도우) | 미지원 |
 
-(Matrix, IRC, Teams 채널도 지원됩니다. 구성 변수 상세는 위의 채팅 채널 구성 섹션을 참조하세요.)
+(Teams 채널도 지원됩니다. 구성 변수 상세는 위의 채팅 채널 구성 섹션을 참조하세요.)
 
 ### 스트리밍
 
-모든 채널에서 인플레이스 편집 스트리밍을 구현합니다. LLM이 생성하는 대로 에이전트의 응답이 점진적으로 표시됩니다. 속도 제한을 피하기 위해 플랫폼별로 업데이트 빈도가 조절됩니다 (WhatsApp/Discord: 1회/초, Slack: 2회/초).
+모든 채널에서 인플레이스 편집 스트리밍을 구현합니다. LLM이 생성하는 대로 에이전트의 응답이 점진적으로 표시됩니다. 속도 제한을 피하기 위해 플랫폼별로 업데이트 빈도가 조절됩니다 (Discord: 1회/초, Slack: 2회/초).
 
 ### 인증
 
 - **Telegram**: 기본적으로 전체 거부. `ALLOWED_TELEGRAM_USER_IDS` 설정 필수.
 - **Discord**: 기본적으로 전체 거부. `ALLOWED_DISCORD_USER_IDS` 또는 `ALLOWED_DISCORD_ROLE_IDS` 설정 필수.
 - **Slack**: **기본적으로 전체 개방.** `ALLOWED_SLACK_USER_IDS`가 비어 있으면 모든 Slack 사용자가 봇에 접근 가능. 프로덕션에서는 허용 목록을 설정하세요.
-- **WhatsApp**: 기본적으로 전체 허용입니다. `WHATSAPP_ALLOWED_NUMBERS`를 설정한 경우에만 어댑터가 수신 메시지를 그 허용 목록으로 제한합니다.
-- **Matrix**: 기본적으로 전체 거부. 허용 목록을 설정하거나 `MATRIX_ALLOW_OPEN_ACCESS=true`로 설정하세요.
-- **IRC**: 기본적으로 전체 거부. `IRC_ALLOWED_USERS`를 설정하거나 `IRC_ALLOW_OPEN_ACCESS=true`로 설정하세요.
 - **Teams**: 기본적으로 전체 거부. `TEAMS_ALLOWED_USER_IDS`를 설정하거나 `TEAMS_ALLOW_OPEN_ACCESS=true`로 설정하세요.
 
 ---
@@ -1259,7 +1229,7 @@ src/
     autonomy/           # 오류 복구, 작업 계획, 자체 검증
     context/            # 시스템 프롬프트 (Strada.Core 지식 베이스)
     providers/          # Claude, OpenAI, Ollama, DeepSeek, Kimi, Qwen, MiniMax, Groq, + 기타
-    tools/              # 30+ 도구 구현 및 컨트롤 플레인 상호작용 턴 (ask_user, show_plan, switch_personality 등)
+    tools/              # 40+ 도구 구현 및 컨트롤 플레인 상호작용 턴 (ask_user, show_plan, switch_personality 등)
     soul/               # SOUL.md 성격 로더 (핫 리로드 및 채널별 재정의 포함)
     plugins/            # 외부 플러그인 로더
     multi/
@@ -1275,7 +1245,7 @@ src/
     telegram/           # Grammy 기반 봇
     discord/            # discord.js 봇 (슬래시 명령 포함)
     slack/              # Slack Bolt (소켓 모드) + Block Kit
-    whatsapp/           # Baileys 기반 클라이언트 (세션 관리 포함)
+    teams/              # Bot Framework (CloudAdapter) 채널
     web/                # 로컬 HTTP + WebSocket 웹 채널
     cli/                # Readline REPL
   web-portal/           # React + Vite 채팅 UI (다크/라이트 테마, 파일 업로드, 스트리밍, 대시보드 탭, 사이드 패널)

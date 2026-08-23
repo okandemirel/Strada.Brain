@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>Agent de D&eacute;veloppement Propuls&eacute; par l'IA pour les Projets Unity / Strada.Core</strong><br/>
-  Un agent de programmation autonome qui se connecte &agrave; un tableau de bord web, Telegram, Discord, Slack, WhatsApp, ou votre terminal &mdash; lit votre base de code, &eacute;crit du code, lance les builds, apprend de ses erreurs et fonctionne de mani&egrave;re autonome avec une boucle daemon 24/7. D&eacute;sormais avec orchestration multi-agent, d&eacute;l&eacute;gation de t&acirc;ches, consolidation de m&eacute;moire, un sous-syst&egrave;me de d&eacute;ploiement avec portes d'approbation, partage de m&eacute;dias avec support de vision LLM, un syst&egrave;me de personnalit&eacute; configurable via SOUL.md, control-plane clarification review, un routage intelligent multi-fournisseur avec commutation dynamique selon la t&acirc;che, une v&eacute;rification par consensus bas&eacute;e sur la confiance, un Agent Core autonome avec boucle de raisonnement OODA, et l'int&eacute;gration Strada.MCP.
+  Un agent de programmation autonome qui se connecte &agrave; un tableau de bord web, Telegram, Discord, Slack ou votre terminal &mdash; lit votre base de code, &eacute;crit du code, lance les builds, apprend de ses erreurs et fonctionne de mani&egrave;re autonome avec une boucle daemon 24/7. D&eacute;sormais avec orchestration multi-agent, d&eacute;l&eacute;gation de t&acirc;ches, consolidation de m&eacute;moire, un sous-syst&egrave;me de d&eacute;ploiement avec portes d'approbation, partage de m&eacute;dias avec support de vision LLM, un syst&egrave;me de personnalit&eacute; configurable via SOUL.md, control-plane clarification review, un routage intelligent multi-fournisseur avec commutation dynamique selon la t&acirc;che, une v&eacute;rification par consensus bas&eacute;e sur la confiance, un Agent Core autonome avec boucle de raisonnement OODA, et l'int&eacute;gration Strada.MCP.
 </p>
 
 > Note de traduction : pour le comportement runtime actuel, les valeurs par d&eacute;faut des variables d'environnement et la s&eacute;mantique de s&eacute;curit&eacute;, la source canonique est [README.md](README.md). Ce fichier en est une traduction.
@@ -92,7 +92,7 @@ Si vous sautez `./strada install-command`, continuez a utiliser `./Strada.Brain/
 `./strada install-command` met aussi a jour automatiquement votre profil shell afin que les prochains terminaux trouvent `strada` sans modification manuelle du PATH.
 Sous Windows, utilisez `.\strada.ps1` depuis le checkout. `install-command` ecrit `strada.cmd` et `strada.ps1` dans `%LOCALAPPDATA%\Strada\bin` et met a jour le PATH utilisateur.
 
-Si vous voulez supprimer plus tard la commande user-local, lancez `strada uninstall` (ou `./strada uninstall` / `.\strada.ps1 uninstall` depuis le checkout). Avec `--purge-config`, Strada supprime aussi les fichiers runtime locaux au repo comme `.env`, `.strada-memory`, `.whatsapp-session`, les logs et `HEARTBEAT.md`. Le checkout du depot lui-meme n'est jamais efface automatiquement.
+Si vous voulez supprimer plus tard la commande user-local, lancez `strada uninstall` (ou `./strada uninstall` / `.\strada.ps1 uninstall` depuis le checkout). Avec `--purge-config`, Strada supprime aussi les fichiers runtime locaux au repo comme `.env`, `.strada-memory`, les logs et `HEARTBEAT.md`. Le checkout du depot lui-meme n'est jamais efface automatiquement.
 
 `strada-brain` n'est pas encore publi&eacute; sur le registre npm public. `npm install -g strada-brain` renverra donc `E404` pour le moment. En attendant une publication npm, utilisez le flux source ci-dessus.
 
@@ -187,7 +187,7 @@ strada start --channel web --daemon
 strada start --channel telegram
 strada start --channel discord
 strada start --channel slack
-strada start --channel whatsapp
+strada start --channel teams
 
 # Superviseur toujours actif avec red&eacute;marrage automatique
 strada supervise --channel web
@@ -442,8 +442,7 @@ Documentation complete : [`docs/vault.fr.md`](docs/vault.fr.md) (version anglais
 ```
 +-----------------------------------------------------------------+
 |  Chat Channels + Portail Web (4 modes, shadcn/ui + Magic UI)     |
-|  Web | Telegram | Discord | Slack | WhatsApp | CLI | Matrix     |
-|  IRC | Teams                                                     |
+|  Web | Telegram | Discord | Slack | CLI | Teams                 |
 +------------------------------+----------------------------------+
                                |
                     IChannelAdapter interface
@@ -455,7 +454,7 @@ Documentation complete : [`docs/vault.fr.md`](docs/vault.fr.md) (version anglais
 +-------+--------------+-------------+-----------+----------------+
         |              |             |           |
 +-------v------+ +-----v------+ +---v--------+ +v-----------------+
-| AI Providers | | 30+ Tools  | | Context    | | Learning System  |
+| AI Providers | | 40+ Tools  | | Context    | | Learning System  |
 | Claude (prim)| | File I/O   | | AgentDB    | | TypedEventBus    |
 | OpenAI, Kimi | | Git ops    | | (SQLite +  | | Hybrid weighted  |
 | DeepSeek,Qwen| | Shell exec | |  HNSW)     | | Instinct life-   |
@@ -464,9 +463,9 @@ Documentation complete : [`docs/vault.fr.md`](docs/vault.fr.md) (version anglais
 +--------------+ +------+-----+ +---+--------+ +--+---------------+
                         |           |              |
                 +-------v-----------v--------------v------+
-                |  Goal Decomposer + Goal Executor        |
-                |  DAG-based decomposition, wave-based    |
-                |  parallel execution, failure budgets    |
+                |  Goal Decomposer + Supervisor           |
+                |  Dispatcher: DAG decomposition, wave-   |
+                |  based parallel execution, failure      |
                 +---------+------------------+------------+
                           |                  |
           +---------------v------+  +--------v--------------------+
@@ -869,31 +868,6 @@ Strada ne renvoie pas les prochaines etapes evidentes a l'utilisateur. Si un fou
 | `ALLOWED_SLACK_USER_IDS` | IDs utilisateur s&eacute;par&eacute;s par des virgules (**ouvert &agrave; tous si vide**) |
 | `ALLOWED_SLACK_WORKSPACES` | IDs d'espace de travail s&eacute;par&eacute;s par des virgules (**ouvert &agrave; tous si vide**) |
 
-**WhatsApp :**
-| Variable | Description |
-|----------|-------------|
-| `WHATSAPP_SESSION_PATH` | R&eacute;pertoire pour les fichiers de session (d&eacute;faut : `.whatsapp-session`) |
-| `WHATSAPP_ALLOWED_NUMBERS` | Num&eacute;ros de t&eacute;l&eacute;phone s&eacute;par&eacute;s par des virgules (optionnel ; vide = acc&egrave;s ouvert) |
-
-**Matrix :**
-| Variable | Description |
-|----------|-------------|
-| `MATRIX_HOMESERVER` | URL du homeserver Matrix |
-| `MATRIX_ACCESS_TOKEN` | Token d'acc&egrave;s du bot |
-| `MATRIX_USER_ID` | ID utilisateur du bot |
-| `MATRIX_ALLOWED_USER_IDS` | IDs utilisateur Matrix autoris&eacute;s &agrave; parler au bot, s&eacute;par&eacute;s par des virgules |
-| `MATRIX_ALLOWED_ROOM_IDS` | IDs de salon Matrix autoris&eacute;s &agrave; recevoir des messages, s&eacute;par&eacute;s par des virgules |
-| `MATRIX_ALLOW_OPEN_ACCESS` | D&eacute;finir &agrave; `true` pour autoriser le trafic Matrix entrant sans listes d'autorisation |
-
-**IRC :**
-| Variable | Description |
-|----------|-------------|
-| `IRC_SERVER` | Nom d'h&ocirc;te du serveur IRC |
-| `IRC_NICK` | Pseudo du bot |
-| `IRC_CHANNELS` | Canaux &agrave; rejoindre, s&eacute;par&eacute;s par des virgules |
-| `IRC_ALLOWED_USERS` | Pseudos IRC autoris&eacute;s &agrave; d&eacute;clencher le bot, s&eacute;par&eacute;s par des virgules |
-| `IRC_ALLOW_OPEN_ACCESS` | D&eacute;finir &agrave; `true` pour autoriser le trafic IRC entrant sans liste d'autorisation |
-
 **Teams :**
 | Variable | Description |
 |----------|-------------|
@@ -935,7 +909,6 @@ Strada ne renvoie pas les prochaines etapes evidentes a l'utilisateur. Si un fou
 | `SOUL_FILE_TELEGRAM` | (non d&eacute;fini) | Remplacement de personnalit&eacute; par canal pour Telegram |
 | `SOUL_FILE_DISCORD` | (non d&eacute;fini) | Remplacement de personnalit&eacute; par canal pour Discord |
 | `SOUL_FILE_SLACK` | (non d&eacute;fini) | Remplacement de personnalit&eacute; par canal pour Slack |
-| `SOUL_FILE_WHATSAPP` | (non d&eacute;fini) | Remplacement de personnalit&eacute; par canal pour WhatsApp |
 | `READ_ONLY_MODE` | `false` | Bloque toutes les op&eacute;rations d'&eacute;criture |
 | `LOG_LEVEL` | `info` | `error`, `warn`, `info`, ou `debug` |
 
@@ -1080,29 +1053,26 @@ Le pipeline RAG (Retrieval-Augmented Generation) indexe votre code source C# pou
 
 ## Capacit&eacute;s des Canaux
 
-| Capacit&eacute; | Web | Telegram | Discord | Slack | WhatsApp | CLI |
-|----------|-----|----------|---------|-------|----------|-----|
-| Messagerie texte | Oui | Oui | Oui | Oui | Oui | Oui |
-| Pi&egrave;ces jointes m&eacute;dias | Oui (base64) | Oui (photo/doc/vid&eacute;o/voix) | Oui (toute pi&egrave;ce jointe) | Oui (t&eacute;l&eacute;chargement de fichier) | Oui (image/vid&eacute;o/audio/doc) | Non |
-| Vision (image→LLM) | Oui | Oui | Oui | Oui | Oui | Non |
-| Streaming (&eacute;dition en place) | Oui | Oui | Oui | Oui | Oui | Oui |
-| Indicateur de saisie | Oui | Oui | Oui | No-op | Oui | Non |
-| Dialogues de confirmation | Oui (modal) | Oui (clavier inline) | Oui (boutons) | Oui (Block Kit) | Oui (r&eacute;ponse num&eacute;rot&eacute;e) | Oui (readline) |
-| Support des fils | Non | Non | Oui | Oui | Non | Non |
-| Limiteur de d&eacute;bit (sortant) | Oui (par session) | Non | Oui (token bucket) | Oui (fen&ecirc;tre glissante 4 niveaux) | Limitation en ligne | Non |
+| Capacit&eacute; | Web | Telegram | Discord | Slack | CLI |
+|----------|-----|----------|---------|-------|-----|
+| Messagerie texte | Oui | Oui | Oui | Oui | Oui |
+| Pi&egrave;ces jointes m&eacute;dias | Oui (base64) | Oui (photo/doc/vid&eacute;o/voix) | Oui (toute pi&egrave;ce jointe) | Oui (t&eacute;l&eacute;chargement de fichier) | Non |
+| Vision (image→LLM) | Oui | Oui | Oui | Oui | Non |
+| Streaming (&eacute;dition en place) | Oui | Oui | Oui | Oui | Oui |
+| Indicateur de saisie | Oui | Oui | Oui | No-op | Non |
+| Dialogues de confirmation | Oui (modal) | Oui (clavier inline) | Oui (boutons) | Oui (Block Kit) | Oui (readline) |
+| Support des fils | Non | Non | Oui | Oui | Non |
+| Limiteur de d&eacute;bit (sortant) | Oui (par session) | Non | Oui (token bucket) | Oui (fen&ecirc;tre glissante 4 niveaux) | Non |
 
 ### Streaming
 
-Tous les canaux impl&eacute;mentent le streaming par &eacute;dition en place. La r&eacute;ponse de l'agent appara&icirc;t progressivement au fur et &agrave; mesure que le LLM la g&eacute;n&egrave;re. Les mises &agrave; jour sont limit&eacute;es par plateforme pour &eacute;viter les limites de d&eacute;bit (WhatsApp/Discord : 1/s, Slack : 2/s).
+Tous les canaux impl&eacute;mentent le streaming par &eacute;dition en place. La r&eacute;ponse de l'agent appara&icirc;t progressivement au fur et &agrave; mesure que le LLM la g&eacute;n&egrave;re. Les mises &agrave; jour sont limit&eacute;es par plateforme pour &eacute;viter les limites de d&eacute;bit (Discord : 1/s, Slack : 2/s).
 
 ### Authentification
 
 - **Telegram** : Refus par d&eacute;faut. Vous devez d&eacute;finir `ALLOWED_TELEGRAM_USER_IDS`.
 - **Discord** : Refus par d&eacute;faut. Vous devez d&eacute;finir `ALLOWED_DISCORD_USER_IDS` ou `ALLOWED_DISCORD_ROLE_IDS`.
 - **Slack** : **Ouvert par d&eacute;faut.** Si `ALLOWED_SLACK_USER_IDS` est vide, tout utilisateur Slack peut acc&eacute;der au bot. D&eacute;finissez la liste d'autorisation pour la production.
-- **WhatsApp** : Ouvert par d&eacute;faut. Si `WHATSAPP_ALLOWED_NUMBERS` est d&eacute;fini, l'adaptateur limite les messages entrants &agrave; cette liste d'autorisation.
-- **Matrix** : Refus par d&eacute;faut. D&eacute;finissez les listes d'autorisation ou `MATRIX_ALLOW_OPEN_ACCESS=true`.
-- **IRC** : Refus par d&eacute;faut. D&eacute;finissez `IRC_ALLOWED_USERS` ou `IRC_ALLOW_OPEN_ACCESS=true`.
 - **Teams** : Refus par d&eacute;faut. D&eacute;finissez `TEAMS_ALLOWED_USER_IDS` ou `TEAMS_ALLOW_OPEN_ACCESS=true`.
 
 ---
@@ -1262,7 +1232,7 @@ src/
     autonomy/           # R&eacute;cup&eacute;ration d'erreurs, planification de t&acirc;ches, auto-v&eacute;rification
     context/            # Prompt syst&egrave;me (base de connaissances Strada.Core)
     providers/          # Claude, OpenAI, Ollama, DeepSeek, Kimi, Qwen, MiniMax, Groq, + autres
-    tools/              # 30+ impl&eacute;mentations d'outils plus les tours d'interaction control-plane (ask_user, show_plan, switch_personality, ...)
+    tools/              # 40+ impl&eacute;mentations d'outils plus les tours d'interaction control-plane (ask_user, show_plan, switch_personality, ...)
     soul/               # Chargeur de personnalit&eacute; SOUL.md avec rechargement &agrave; chaud et remplacements par canal
     plugins/            # Chargeur de plugins externes
     multi/
@@ -1278,7 +1248,7 @@ src/
     telegram/           # Bot bas&eacute; sur Grammy
     discord/            # Bot discord.js avec commandes slash
     slack/              # Slack Bolt (mode socket) avec Block Kit
-    whatsapp/           # Client bas&eacute; sur Baileys avec gestion de sessions
+    teams/              # Canal Bot Framework (CloudAdapter)
     web/                # Canal web Express + WebSocket
     cli/                # REPL Readline
   web-portal/           # Interface de chat React + Vite (th&egrave;me sombre/clair, upload de fichiers, streaming, onglet tableau de bord, panneau lat&eacute;ral)

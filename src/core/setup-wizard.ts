@@ -234,7 +234,6 @@ const PROVIDER_ID_TO_ENV_KEY: Record<string, typeof PROVIDER_ENV_KEYS[number] | 
 const CHANNEL_ENV_KEYS = [
   "TELEGRAM_BOT_TOKEN", "ALLOWED_TELEGRAM_USER_IDS",
   "DISCORD_BOT_TOKEN", "SLACK_BOT_TOKEN", "SLACK_APP_TOKEN",
-  "WHATSAPP_SESSION_PATH", "WHATSAPP_ALLOWED_NUMBERS",
 ] as const;
 
 const KNOWN_CHANNELS = new Set(["web", "telegram", "discord", "slack", "cli"]);
@@ -1370,12 +1369,6 @@ export class SetupWizard {
     // Validate LANGUAGE_PREFERENCE if provided
     if (config.LANGUAGE_PREFERENCE && !KNOWN_LANGUAGES.has(String(config.LANGUAGE_PREFERENCE))) {
       this.json(res, 400, { success: false, error: "Invalid LANGUAGE_PREFERENCE value" });
-      return;
-    }
-
-    // Validate WHATSAPP_SESSION_PATH — must not contain directory traversal
-    if (config.WHATSAPP_SESSION_PATH && String(config.WHATSAPP_SESSION_PATH).includes("..")) {
-      this.json(res, 400, { success: false, error: "WHATSAPP_SESSION_PATH must not contain '..'" });
       return;
     }
 

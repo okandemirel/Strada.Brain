@@ -144,4 +144,27 @@ describe("ShellExecTool", () => {
     const result = await tool.execute({ command: "echo fast" }, ctx);
     expect(result.content).toMatch(/Duration: \d+ms/);
   });
+
+  // Measured bypass class 2026-08-23: each of these ran a process despite the
+  // old name-based denylist, because the EXECUTED PROGRAM (not the command
+  // line) spawned the payload.
+  it.each([
+    ["awk 'BEGIN { system(\"touch /tmp/pwned\") }' /etc/passwd", "awk system()"],
+    ["find . -name '*.cs' -exec rm {} +", "find -exec"],
+    ["find . -execdir sh -c ';' \\;", "find -exec"],
+    ["cat list | xargs sh -c", "xargs invoking a shell"],
+    ["env FOO=bar sh -c 'id'", "env launching a shell"],
+    ["git -c core.fsmonitor=/tmp/evil.sh status", "git core.fsmonitor injection"],
+    ["sudo cat /etc/shadow", "privilege escalation via sudo"],
+  ])("blocks %s", async (command, reason) => {
+    const result = await tool.execute({ command }, ctx);
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain(reason);
+  });
+
+  it("blocks nested sh -c invocation", async () => {
+    const result = await tool.execute({ command: "echo hi; sh -c 'whoami'" }, ctx);
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain("nested shell -c");
+  });
 });

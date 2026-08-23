@@ -2,8 +2,6 @@ import { describe, it, expect } from "vitest";
 import {
   formatDiffForTelegram,
   formatBatchDiffForTelegram,
-  formatDiffForWhatsApp,
-  formatBatchDiffForWhatsApp,
   formatDiffForCLI,
   formatBatchDiffForCLI,
   formatCompactSummary,
@@ -162,44 +160,6 @@ describe("diff-formatter", () => {
     });
   });
 
-  describe("formatDiffForWhatsApp", () => {
-    it("should format with limited markdown", () => {
-      const result = formatDiffForWhatsApp(mockFileDiff);
-
-      expect(result).toContain("📄 *src/test.ts*");
-      expect(result).toContain("```"); // No language specifier
-      expect(result).not.toContain("```diff"); // WhatsApp doesn't need diff marker
-    });
-
-    it("should use shorter labels", () => {
-      const result = formatDiffForWhatsApp(mockNewFileDiff);
-
-      expect(result).toContain("_(new)_");
-    });
-  });
-
-  describe("formatBatchDiffForWhatsApp", () => {
-    it("should show compact file list for batches", () => {
-      const result = formatBatchDiffForWhatsApp(mockBatchDiff);
-
-      expect(result).toContain("*📋 2 Files Changed*");
-      expect(result).toContain("📝 src/test.ts");
-      expect(result).toContain("➕ src/new.ts");
-    });
-
-    it("should show full diff for single file", () => {
-      const singleFileBatch: BatchDiff = {
-        files: [mockFileDiff],
-        totalStats: mockFileDiff.stats,
-        summary: "1 changed",
-      };
-
-      const result = formatBatchDiffForWhatsApp(singleFileBatch);
-
-      expect(result).toContain("```");
-    });
-  });
-
   describe("formatDiffForCLI", () => {
     it("should include ANSI colors", () => {
       const result = formatDiffForCLI(mockFileDiff);
@@ -267,13 +227,6 @@ describe("diff-formatter", () => {
       expect(result).toContain("`+4/-1`");
     });
 
-    it("should format for whatsapp", () => {
-      const result = formatCompactSummary(mockBatchDiff, "whatsapp");
-
-      expect(result).toContain("📊 *2 files*");
-      expect(result).toContain("_+4/-1_");
-    });
-
     it("should format for cli", () => {
       const result = formatCompactSummary(mockBatchDiff, "cli");
 
@@ -303,13 +256,6 @@ describe("diff-formatter", () => {
       expect(result).toContain("```diff");
     });
 
-    it("should route to whatsapp formatter", () => {
-      const result = formatDiffForChannel(mockFileDiff, "whatsapp");
-
-      expect(result).toContain("📄 *");
-      expect(result).not.toContain("```diff");
-    });
-
     it("should route to cli formatter", () => {
       const result = formatDiffForChannel(mockFileDiff, "cli");
 
@@ -320,11 +266,9 @@ describe("diff-formatter", () => {
   describe("formatBatchDiffForChannel", () => {
     it("should route to appropriate formatter", () => {
       const tg = formatBatchDiffForChannel(mockBatchDiff, "telegram");
-      const wa = formatBatchDiffForChannel(mockBatchDiff, "whatsapp");
       const cli = formatBatchDiffForChannel(mockBatchDiff, "cli");
 
       expect(tg).toContain("*📋 Changes Summary*");
-      expect(wa).toContain("*📋 2 Files Changed*");
       expect(cli).toContain("\x1b[");
     });
   });

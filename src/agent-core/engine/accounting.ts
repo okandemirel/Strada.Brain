@@ -97,8 +97,9 @@ export function recordProviderUsage(
   providerName: string,
   usage: ProviderResponse["usage"] | undefined,
   onUsage?: (usage: TaskUsageEvent) => void,
+  modelId?: string,
 ): void {
-  recordProviderUsageHelper(deps.getSupervisorRoutingContext(), providerName, usage, onUsage);
+  recordProviderUsageHelper(deps.getSupervisorRoutingContext(), providerName, usage, onUsage, modelId);
 }
 
 export function recordExecutionTrace(deps: AccountingDeps, params: RecordExecutionTraceParams): void {

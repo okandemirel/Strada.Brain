@@ -13,7 +13,7 @@ import {
   prepareSafeVaultWritePath,
   resolveSafeVaultReadPath,
 } from './path-policy.js';
-import { getExtractorFor } from './symbol-extractor/index.js';
+import { getExtractorFor, type ExtractOutput } from './symbol-extractor/index.js';
 import { buildCanvas } from './canvas-generator.js';
 import { runPpr } from './ppr.js';
 import { getLoggerSafe } from '../utils/logger.js';
@@ -309,18 +309,60 @@ export class UnityProjectVault implements IVault {
     // would lose the file's vectors if embedding then fails transiently.
     const oldHnswIds = this.store.listHnswIdsForPath(relPath);
 
-    this.store.deleteFile(relPath);
-    this.store.upsertFile({
-      path: relPath, blobHash: hash, mtimeMs: fileInfo.mtimeMs, size: fileInfo.size,
+    // Phase-2 extraction BEFORE the SQL transaction (the extractor is async,
+    // SQLite is sync). Best-effort — an extractor failure must not block indexing.
+    // phase2-review M2: cap content size to prevent extractor DoS via huge files.
+    const EXTRACT_MAX_BYTES = 2 * 1024 * 1024;
+    const extractor = getExtractorFor(lang);
+    let extracted: ExtractOutput | null = null;
+    if (extractor && body.length <= EXTRACT_MAX_BYTES) {
+      try {
+        extracted = await extractor.extract({
+          path: relPath, content: body,
+          lang: lang as 'typescript' | 'csharp' | 'markdown',
+        });
+      } catch (err) {
+        getLoggerSafe().warn(`[vault ${this.id}] symbol extraction failed for ${relPath}`, { err });
+      }
+    } else if (extractor) {
+      getLoggerSafe().debug(`[vault ${this.id}] skipping symbol extraction for ${relPath} (${body.length} bytes > cap)`);
+    }
+
+    // ATOMIC SQL reindex (crash-safety fix, measured 2026-08-23): the old sequence
+    // ran deleteFile → upsertFile(new hash) → per-chunk upserts as SEPARATE
+    // transactions, so a crash mid-loop left the file row marked current with
+    // missing chunks — and the hash short-circuit then skipped re-indexing it
+    // FOREVER. One transaction covers delete + file + chunks + symbols/edges/
+    // wikilinks/frontmatter/tags. The file row is written with a PROVISIONAL empty
+    // hash and only commits the real hash AFTER vectors are durable, so a crash at
+    // ANY point before that forces a clean redo next sync instead of silently
+    // skipping a half-indexed file.
+    const fileFields = {
+      path: relPath, blobHash: '', mtimeMs: fileInfo.mtimeMs, size: fileInfo.size,
       lang, kind: lang === 'markdown' ? 'doc' : lang === 'json' ? 'config' : 'source',
       indexedAt: Date.now(),
-    });
+    } as const;
     const chunks = chunkFile({ path: relPath, content: body, lang });
-    for (const c of chunks) this.store.upsertChunk(c);
-    
+    const txn = this.store.runReindexTxn({
+      path: relPath,
+      file: fileFields,
+      chunks,
+      symbols: extracted?.symbols ?? [],
+      edges: extracted?.edges ?? [],
+      wikilinks: extracted?.wikilinks ?? [],
+      frontmatter: extracted?.frontmatter ?? null,
+      tags: extracted?.tags ?? null,
+    });
+    if (!txn.ok) {
+      getLoggerSafe().warn(`[vault ${this.id}] reindex SQL txn failed for ${relPath}`, { error: txn.error });
+      this.invalidateEdgesCache();
+      return false;
+    }
+
     // Embed the NEW vectors first; only remove the OLD ones after success.
-    // Embedding is best-effort — on failure we keep the prior vectors and
-    // reset the stored hash so the next sync re-attempts embedding.
+    // Embedding is best-effort — on failure we roll back any partial new vectors
+    // and LEAVE the provisional empty hash so the next sync redoes the whole file
+    // instead of short-circuiting on an up-to-date-but-vector-less row.
     const newHnswIds: number[] = [];
     let embedOk = false;
     try {
@@ -346,53 +388,21 @@ export class UnityProjectVault implements IVault {
           error: embedErrMsg,
         });
       }
-      // Roll back any vectors inserted before the failure.
+      // Roll back any vectors inserted before the failure. The provisional empty
+      // hash is already committed — nothing further to reset.
       for (const id of newHnswIds) {
         try { this.adapter.remove(id); } catch { /* per-id best effort */ }
       }
-      // Reset the stored hash so the next sync re-embeds instead of
-      // short-circuiting on the (now vector-less) up-to-date hash.
-      const f = this.store.getFile(relPath);
-      if (f) this.store.upsertFile({ ...f, blobHash: '' });
     }
     if (embedOk) {
       for (const id of oldHnswIds) {
         try { this.adapter.remove(id); } catch { /* best effort */ }
       }
+      // Commit the real hash ONLY now: SQL rows AND vectors are both durable, so
+      // the unchanged-hash short-circuit can never skip an incomplete reindex.
+      this.store.upsertFile({ ...fileFields, blobHash: hash, indexedAt: Date.now() });
     }
 
-    // Phase 2: symbol + edge + wikilink extraction. Best-effort — must not block indexing.
-    // phase2-review M2: cap content size to prevent extractor DoS via huge files.
-    const EXTRACT_MAX_BYTES = 2 * 1024 * 1024;
-    const extractor = getExtractorFor(lang);
-    if (extractor && body.length <= EXTRACT_MAX_BYTES) {
-      try {
-        const out = await extractor.extract({
-          path: relPath, content: body,
-          lang: lang as 'typescript' | 'csharp' | 'markdown',
-        });
-        for (const s of out.symbols) this.store.upsertSymbol(s);
-        for (const e of out.edges) this.store.upsertEdge(e);
-        for (const w of out.wikilinks) this.store.upsertWikilink(w);
-        // Frontmatter + tags extraction for markdown files.
-        if (out.frontmatter) {
-          this.store.deleteFrontmatterByPath(relPath);
-          for (const [key, value] of Object.entries(out.frontmatter)) {
-            this.store.upsertFrontmatter(relPath, key, value);
-          }
-        }
-        if (out.tags) {
-          this.store.deleteTagsByPath(relPath);
-          for (const tag of out.tags) {
-            this.store.upsertTag(relPath, tag);
-          }
-        }
-      } catch (err) {
-        getLoggerSafe().warn(`[vault ${this.id}] symbol extraction failed for ${relPath}`, { err });
-      }
-    } else if (extractor) {
-      getLoggerSafe().debug(`[vault ${this.id}] skipping symbol extraction for ${relPath} (${body.length} bytes > cap)`);
-    }
     this.invalidateEdgesCache();
     return true;
   }

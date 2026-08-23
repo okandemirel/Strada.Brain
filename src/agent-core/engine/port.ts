@@ -229,9 +229,9 @@ export function createAgentCorePort(
           taskRunId: params.taskRunId,
           reason: params.reason,
         }),
-      recordProviderUsage: (providerName, usage) => {
+      recordProviderUsage: (providerName, usage, modelId) => {
         const c = ctx();
-        engine.recordProviderUsage(providerName, usage, c.onUsage); // CURRY onUsage
+        engine.recordProviderUsage(providerName, usage, c.onUsage, modelId); // CURRY onUsage
         c.cumulativeOutputTokens += usage?.outputTokens ?? 0; // 3.3: feed the interactive budget gate (output-only)
       },
       saveBudgetExceededCheckpoint: (params) => deps.saveBudgetExceededCheckpoint(params),

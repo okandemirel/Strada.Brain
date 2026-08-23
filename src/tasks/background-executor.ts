@@ -17,6 +17,7 @@ import type {
   Task,
   TaskProgressSignal,
   TaskProgressUpdate,
+  TaskUsageEvent,
 } from "./types.js";
 import { getTaskConversationKey, TaskStatus } from "./types.js";
 import type { ITaskManager, IOrchestrator, SupervisorAdmissionDecision } from "./orchestrator-contract.js";
@@ -30,7 +31,7 @@ import type { IChannelAdapter } from "../channels/channel.interface.js";
 import { sanitizeSecrets } from "../security/secret-sanitizer.js";
 import type { IEventEmitter, LearningEventMap } from "../core/event-bus.js";
 import type { DaemonEventMap } from "../daemon/daemon-events.js";
-import { estimateCost } from "../security/rate-limiter.js";
+import { estimateCostWithCache } from "../budget/cost-model.js";
 import type { BudgetTracker } from "../daemon/budget/budget-tracker.js";
 import type { UnifiedBudgetManager } from "../budget/unified-budget-manager.js";
 import { getLogger } from "../utils/logger.js";
@@ -1360,20 +1361,25 @@ export class BackgroundExecutor {
     }
   }
 
-  private buildUsageRecorder(task: Task): ((usage: { provider: string; inputTokens: number; outputTokens: number }) => void) | undefined {
+  private buildUsageRecorder(task: Task): ((usage: TaskUsageEvent) => void) | undefined {
     if (!this._unifiedBudgetManager && !this.daemonBudgetTracker) {
       return undefined;
     }
 
     return (usage) => {
-      const costUsd = estimateCost(usage.inputTokens, usage.outputTokens, usage.provider);
+      // Cache-aware pricing: the cached share of the prompt is billed at a
+      // fraction of the input rate (Anthropic reads 0.1x, OpenAI 0.5x), and
+      // `model` is the CONCRETE model id when routing knows it — attributing
+      // spend to the provider name made per-model costs wrong by construction.
+      const costUsd = estimateCostWithCache(usage, usage.provider);
       if (costUsd <= 0) {
         return;
       }
+      const model = usage.model ?? usage.provider;
       if (this._unifiedBudgetManager) {
         const source = task.origin === "daemon" ? "daemon" : "chat";
         this._unifiedBudgetManager.recordCost(costUsd, source, {
-          model: usage.provider,
+          model,
           tokensIn: usage.inputTokens,
           tokensOut: usage.outputTokens,
           triggerName: task.triggerName,
@@ -1381,7 +1387,7 @@ export class BackgroundExecutor {
         return;
       }
       this.daemonBudgetTracker?.recordCost(costUsd, {
-        model: usage.provider,
+        model,
         tokensIn: usage.inputTokens,
         tokensOut: usage.outputTokens,
         triggerName: task.triggerName,

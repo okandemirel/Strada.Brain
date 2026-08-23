@@ -45,9 +45,16 @@ be reached without tokens, by design (see the integrity rules and
 | Slack | Yes | unit-mock (1 test file) | No | Confirmation honors `req.options`. |
 | Telegram | Yes | unit-mock (1 test file) | No | 429 retry, per-chat serialize, MarkdownV2 escape. **Open:** dead diff-confirmation subsystem (delete-or-wire). |
 | Teams | Yes | unit-mock (1 test file) | **No — requires manual runbook** | Async/proactive delivery + single-tenant auth fixed but **only verifiable on a real Azure tenant**: see [`deployment/teams-verification.md`](deployment/teams-verification.md). Do NOT assume async delivery works until that runbook passes. |
-| WhatsApp | Yes | unit-mock (1 test file) | No | Reconnect/dedup/chunk. **Open:** LID-format JID mapping (skipped). |
-| Matrix | Yes | unit-mock (1 test file) | No | Chunk/retry/sync-health/attachments. |
-| IRC | Yes | unit-mock (1 test file) | No | Case-insensitive allowlist. **Open:** interactivity (skipped). |
+
+> **Note (2026-08-23):** WhatsApp, Matrix and IRC adapters were **removed** in
+> commit `3a141290` ("remove the three adapters that cannot start"). The rows
+> below are kept for history only — do not treat those channels as available.
+>
+> | Channel (REMOVED) | Was implemented? | Test level | Live-verified? | Notes |
+> |---|---|---|---|---|
+> | WhatsApp | Removed 2026-08-15 | unit-mock | No | Reconnect/dedup/chunk. LID-format JID mapping never done. |
+> | Matrix | Removed 2026-08-15 | unit-mock | No | Chunk/retry/sync-health/attachments. |
+> | IRC | Removed 2026-08-15 | unit-mock | No | Case-insensitive allowlist; interactivity never done. |
 
 **Must NOT be assumed to work:** any channel's real platform delivery,
 especially **Teams async (delayed) delivery and single-tenant auth**, which have

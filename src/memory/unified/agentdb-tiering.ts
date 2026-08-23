@@ -10,6 +10,7 @@ import { MemoryTier } from "./unified-memory.interface.js";
 import type { HNSWVectorStore } from "../../rag/hnsw/hnsw-vector-store.js";
 import type { MemoryId, NormalizedScore } from "../../types/index.js";
 import { getLogger } from "../../utils/logger.js";
+import { type TextIndex, extractTerms } from "../text-index.js";
 
 function getLoggerSafe() {
   try { return getLogger(); } catch { return console; }
@@ -30,6 +31,8 @@ export interface AgentDBTieringContext extends AgentDBSqliteContext {
   readonly hnswStore: HNSWVectorStore | undefined;
   readonly writeMutex: HnswWriteMutex;
   readonly decayConfig: MemoryDecayConfig | null;
+  /** TF-IDF index — eviction MUST mirror its Map/SQLite/HNSW removal here, else df/docCount drift and every IDF score silently skews (leak fix, measured 2026-08-23). */
+  readonly textIndex: TextIndex;
   promoteEntry(id: MemoryId, newTier: MemoryTier): Promise<import("../../types/index.js").Result<import("../memory.interface.js").MemoryEntry, Error>>;
   demoteEntry(id: MemoryId, newTier: MemoryTier): Promise<import("../../types/index.js").Result<import("../memory.interface.js").MemoryEntry, Error>>;
   /** Optional override so callers (e.g. the class) can intercept calls for test spying. */
@@ -98,6 +101,9 @@ export async function enforceTierLimits(ctx: AgentDBTieringContext, tier: Memory
       });
     }
     for (const entry of toRemove) {
+      // Mirror the removal in the TF-IDF index BEFORE dropping the entry —
+      // extractTerms needs the content that is about to leave ctx.entries.
+      ctx.textIndex.removeDocument(extractTerms(entry.content));
       ctx.entries.delete(entry.id as string);
       removePersistedEntry(ctx, entry.id as string);
     }

@@ -1,5 +1,8 @@
 # Progress-Aware Gate Assessment (PAGA)
 
+> **Status note (2026-08-23):** References to `GoalExecutor` below are historical — the wave-based executor was retired and goal-DAG execution is unified into `SupervisorDispatcher` (`src/supervisor/supervisor-dispatcher.ts`). The result shape lives on in `src/goals/execution-result.ts`.
+
+
 **Date**: 2026-03-24
 **Status**: Approved
 **Scope**: Background task loop — gate decision intelligence

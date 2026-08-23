@@ -251,6 +251,7 @@ import { ModelGateway } from "../agent-core/model/model-gateway.js";
 import type { SilentStreamPort } from "../agent-core/model/model-gateway.js";
 import type { AgentRunSetupInput } from "../agent-core/runner/orchestrator-port.js";
 import type { AgentEvent } from "../agent-core/events/agent-event.js";
+import { estimateTextTokens } from "../common/token-estimator.js";
 
 
 /** Self-improvement tools bypass phase-based write filtering — they have their own guards. */
@@ -1758,8 +1759,9 @@ export class Orchestrator {
     providerName: string,
     usage: ProviderResponse["usage"] | undefined,
     onUsage?: (usage: TaskUsageEvent) => void,
+    modelId?: string,
   ): void {
-    this.engine.recordProviderUsage(providerName, usage, onUsage);
+    this.engine.recordProviderUsage(providerName, usage, onUsage, modelId);
   }
 
 
@@ -1875,6 +1877,7 @@ export class Orchestrator {
         params.strategy.synthesizer.providerName,
         synthesisResponse.usage,
         params.usageHandler,
+        params.strategy.synthesizer.modelId,
       );
       const synthesizedText = this.stripInternalDecisionMarkers(synthesisResponse.text).trim();
       const visibleText = synthesizedText
@@ -1928,7 +1931,7 @@ export class Orchestrator {
   async synthesizeGoalExecutionResult(params: {
     prompt: string;
     goalTree: GoalTree;
-    executionResult: import("../goals/goal-executor.js").ExecutionResult;
+    executionResult: import("../goals/execution-result.js").ExecutionResult;
     chatId: string;
     conversationId?: string;
     userId?: string;
@@ -2030,6 +2033,7 @@ export class Orchestrator {
         strategy.synthesizer.providerName,
         synthesisResponse.usage,
         params.onUsage,
+        strategy.synthesizer.modelId,
       );
       this.recordPhaseOutcome({
         chatId: params.chatId,
@@ -3464,7 +3468,7 @@ export class Orchestrator {
         stage: result.stageApplied,
         originalTokens: result.originalTokens,
         finalTokens: result.finalTokens,
-        systemPromptEstimate: systemPrompt ? Math.ceil(systemPrompt.length / 4) : 0,
+        systemPromptEstimate: systemPrompt ? estimateTextTokens(systemPrompt) : 0,
       });
     }
   }
