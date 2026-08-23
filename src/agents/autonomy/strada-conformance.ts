@@ -962,6 +962,68 @@ export class StradaConformanceGuard {
    * may be CLAIMED. It never goes quiet, and it costs no extra turn — it is read
    * once, where a run would otherwise report success.
    */
+  /**
+   * Why this run should look at what the user already owns, if it should.
+   *
+   * The first version of this gate keyed on art being ORIGINATED — a sprite
+   * written out, a mesh generated — on the theory that the moment to ask "does
+   * the user already have one of these" is just before making one.
+   *
+   * Run 52 showed that theory is half the problem. The agent originated no art
+   * at all: it wrote fifteen C# files, seven assembly definitions, six
+   * ScriptableObjects, a scene, and zero sprites, zero prefabs, zero meshes.
+   * Then it played the game and captured sixty identical frames. The gate never
+   * fired, because nothing triggered it, and both the silence and the empty
+   * scene looked correct.
+   *
+   * So there are two ways to arrive here and only one was covered. The second —
+   * a game that has been assembled and run and has nothing in it to draw — is
+   * the one that actually happened, and it is the one [STRADA NOTHING DRAWN]
+   * reports the symptom of without ever naming the cause.
+   */
+  private assetsUnsourcedReason(): string | null {
+    if (this.searchedOwnedAssets) return null;
+
+    if (this.authoredArtFiles.size > 0) {
+      const made = [...this.authoredArtFiles];
+      return (
+        `this run originated ${made.length} art file(s) without ever asking what the user ` +
+        `already owns: ${made.slice(0, 5).join(", ")}` +
+        (made.length > 5 ? `, and ${made.length - 5} more` : "")
+      );
+    }
+
+    // Only once the game has been assembled AND run. Before that the missing art
+    // is not yet a finding — a project mid-build is allowed to have nothing in
+    // it, and the gates for "not assembled" and "never run" say that better.
+    if (!this.wroteProjectCode || !this.attemptedPlaymodeVerification) return null;
+    if (this.projectVisualAssetCount() > 0) return null;
+
+    return (
+      "this game has been assembled and played, and contains no art whatsoever — " +
+      "no sprite, no mesh, no prefab — so there is nothing in it to draw"
+    );
+  }
+
+  /**
+   * Art the project can actually render: source images and meshes, plus the
+   * prefabs that place them.
+   *
+   * Counted under Assets/ only. The framework packages under Packages/ ship
+   * their own art, and counting it would let a project with an empty Assets/
+   * folder claim it has something to show.
+   */
+  private projectVisualAssetCount(): number {
+    const projectPath = this.opts?.projectPath;
+    if (!projectPath) return 1; // Unknown project: never accuse it of being empty.
+
+    const assets = joinPath(projectPath, "Assets");
+    if (!existsSync(assets)) return 0;
+    return walkFiles(assets, 4000).filter(
+      (f) => isArtSourceFile(f) || f.toLowerCase().endsWith(".prefab"),
+    ).length;
+  }
+
   unmetDeliveryConditions(): readonly string[] {
     const unmet: string[] = [];
     const notDrawn = this.nothingDrawnReason();
@@ -1185,31 +1247,24 @@ export class StradaConformanceGuard {
     // Before the outcome gates, because this one is cheapest to clear and the
     // only one whose window closes: once the art exists, the question of whether
     // the user already had it has stopped being worth asking.
-    if (
-      this.authoredArtFiles.size > 0 &&
-      !this.searchedOwnedAssets &&
-      this.assetsUnsourcedRaised < ASSETS_UNSOURCED_GATE_LIMIT
-    ) {
+    const unsourced = this.assetsUnsourcedReason();
+    if (unsourced !== null && this.assetsUnsourcedRaised < ASSETS_UNSOURCED_GATE_LIMIT) {
       if (this.assetsUnsourcedRaisedAtCall !== this.toolCallsSeen) {
         this.assetsUnsourcedRaised += 1;
         this.assetsUnsourcedRaisedAtCall = this.toolCallsSeen;
       }
-      const made = [...this.authoredArtFiles];
       const lastAsk = this.assetsUnsourcedRaised === ASSETS_UNSOURCED_GATE_LIMIT;
       return (
-        `[STRADA ASSETS UNSOURCED] This run originated ${made.length} art file(s) without ever ` +
-        `asking what the user already owns: ${made.slice(0, 5).join(", ")}` +
-        (made.length > 5 ? `, and ${made.length - 5} more` : "") +
-        ". Run unity_my_assets first — it searches the Asset Store packages already downloaded " +
-        "on this machine, needs no Editor, no login and no network, and reports what is inside " +
-        "each package rather than only its name. A model the user bought beats one that has to " +
-        "be drawn, and the design here asks for dimensional stages: measured on this project, " +
-        "25 sprites and zero meshes shipped while an owned 3D vehicle package with two .fbx " +
-        "meshes sat unread on disk." +
+        `[STRADA ASSETS UNSOURCED] ${unsourced}. ` +
+        "Run unity_my_assets — it searches the Asset Store packages already downloaded on this " +
+        "machine, needs no Editor, no login and no network, and reports what is inside each " +
+        "package rather than only its name. A model the user bought beats one that has to be " +
+        "made, and measured on this project an owned 3D vehicle package holding two .fbx meshes " +
+        "sat unread on disk while the scene shipped empty." +
         (lastAsk
           ? " This is the last time this is asked. If the tool is not among the ones you have, " +
-            "this project's Strada.MCP submodule predates it — say so rather than silently " +
-            "making everything from scratch."
+            "this project's Strada.MCP submodule predates it — say so rather than shipping a " +
+            "scene with nothing in it."
           : "")
       );
     }

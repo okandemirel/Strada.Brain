@@ -74,6 +74,12 @@ function assembled(): string {
   const scenes = join(root, "Assets", "Scenes");
   mkdirSync(scenes, { recursive: true });
   writeFileSync(join(scenes, "Main.unity"), "  _gameConfig: {fileID: 11400000, guid: abc}");
+
+  // Art, so [STRADA ASSETS UNSOURCED] — which speaks before the drawing gate —
+  // has nothing to say and the drawing gate is the one whose budget gets spent.
+  const art = join(root, "Assets", "Art");
+  mkdirSync(art, { recursive: true });
+  writeFileSync(join(art, "tile.png"), "pixels");
   return root;
 }
 

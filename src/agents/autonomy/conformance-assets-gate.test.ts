@@ -15,7 +15,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import os from "node:os";
 import { StradaConformanceGuard } from "./strada-conformance.js";
@@ -149,5 +149,128 @@ describe("clearing the gate", () => {
 
     drew(guard, "/p/Assets/Art/b.png");
     expect(guard.getPrompt() ?? "").toContain("last time this is asked");
+  });
+});
+
+/**
+ * The way it actually happened.
+ *
+ * The gate above keys on art being ORIGINATED, on the theory that the moment to
+ * ask "does the user already have one of these" is just before making one. Run
+ * 52 showed that is half the problem: the agent originated no art at all. It
+ * wrote fifteen C# files, seven assembly definitions, six ScriptableObjects and
+ * a scene — and zero sprites, zero prefabs, zero meshes. Then it played the game
+ * and captured sixty identical frames.
+ *
+ * The gate never fired, because nothing triggered it. The silence and the empty
+ * scene both looked correct. [STRADA NOTHING DRAWN] reported the symptom without
+ * ever naming the cause.
+ */
+
+/**
+ * A project with game code, a scene and a config asset, plus whatever art is
+ * passed in.
+ *
+ * The code sits under Assets/Scripts rather than Assets/Modules on purpose:
+ * nothing obliges an agent to use the Modules layout, and putting it there would
+ * put [STRADA MODULE INCOMPLETE] in front of the gate under test.
+ */
+function playedProject(art: readonly string[] = []): string {
+  const root = mkdtempSync(join(os.tmpdir(), "assets-empty-"));
+  const scripts = join(root, "Assets", "Scripts");
+  mkdirSync(scripts, { recursive: true });
+  writeFileSync(join(scripts, "Board.cs"), "public class Board {}");
+  writeFileSync(join(scripts, "GameConfig.asset"), "%YAML 1.1");
+  const scenes = join(root, "Assets", "Scenes");
+  mkdirSync(scenes, { recursive: true });
+  writeFileSync(join(scenes, "Main.unity"), "  _gameConfig: {fileID: 11400000, guid: abc}");
+  for (const file of art) {
+    const full = join(root, "Assets", "Art", file);
+    mkdirSync(join(root, "Assets", "Art"), { recursive: true });
+    writeFileSync(full, "x");
+  }
+  return root;
+}
+
+/** A run that wrote game code into that project and then played the game. */
+function ranTheGame(root: string): StradaConformanceGuard {
+  const guard = new StradaConformanceGuard(deps, { projectPath: root, enabled: true });
+  guard.trackToolCall(
+    "file_write",
+    { path: join(root, "Assets", "Scripts", "Board.cs") },
+    false,
+  );
+  guard.trackToolCall("unity_playmode_verify", { captureFrames: 60 }, false);
+  return guard;
+}
+
+describe("a game that was played and has nothing in it to draw", () => {
+  it("is stopped, and the gate names the cause rather than the symptom", () => {
+    const prompt = ranTheGame(playedProject()).getPrompt() ?? "";
+
+    expect(prompt).toContain(GATE);
+    expect(prompt).toContain("contains no art whatsoever");
+    expect(prompt).toContain("unity_my_assets");
+  });
+
+  it("says nothing once the project has art of any kind", () => {
+    for (const art of ["tile.png", "ship.fbx"]) {
+      const prompt = ranTheGame(playedProject([art])).getPrompt() ?? "";
+      expect(prompt).not.toContain(GATE);
+    }
+  });
+
+  it("counts a prefab as something to draw, via the gate that then takes over", () => {
+    // A prefab of primitives and materials renders perfectly well, so it counts.
+    // It cannot be observed here directly: a prefab in the project hands the
+    // turn to a later gate. What that gate says is the evidence — [STRADA NO
+    // CAMERA] complains about the missing camera precisely BECAUSE it considers
+    // the prefab drawable content, which is the judgement under test.
+    const prompt = ranTheGame(playedProject(["Ship.prefab"])).getPrompt() ?? "";
+
+    expect(prompt).not.toContain(GATE);
+    expect(prompt).toContain("already carries a renderer");
+  });
+
+  it("does not count art that belongs to the framework packages", () => {
+    // Packages/ ships its own sprites and meshes. Counting those would let a
+    // project with an empty Assets/ folder claim it has something to show.
+    const root = playedProject();
+    const packaged = join(root, "Packages", "Submodules", "Strada.Modules", "Art");
+    mkdirSync(packaged, { recursive: true });
+    writeFileSync(join(packaged, "icon.png"), "x");
+
+    expect(ranTheGame(root).getPrompt() ?? "").toContain(GATE);
+  });
+
+  it("says nothing before the game has ever been run", () => {
+    // A project mid-build is allowed to have nothing in it yet, and the gates
+    // for "not assembled" and "never run" say that better.
+    const root = playedProject();
+    const guard = new StradaConformanceGuard(deps, { projectPath: root, enabled: true });
+    guard.trackToolCall(
+      "file_write",
+      { path: join(root, "Assets", "Scripts", "Board.cs") },
+      false,
+    );
+
+    expect(guard.getPrompt() ?? "").not.toContain(GATE);
+  });
+
+  it("says nothing to a run that wrote no game code", () => {
+    const root = playedProject();
+    const guard = new StradaConformanceGuard(deps, { projectPath: root, enabled: true });
+    guard.trackToolCall("unity_playmode_verify", { captureFrames: 60 }, false);
+
+    expect(guard.getPrompt() ?? "").not.toContain(GATE);
+  });
+
+  it("is cleared by looking, exactly as the other reason is", () => {
+    const guard = ranTheGame(playedProject());
+    expect(guard.getPrompt() ?? "").toContain(GATE);
+
+    guard.trackToolCall("unity_my_assets", { query: "3d cube" }, false);
+
+    expect(guard.getPrompt() ?? "").not.toContain(GATE);
   });
 });

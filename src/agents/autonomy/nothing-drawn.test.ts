@@ -40,6 +40,14 @@ function project(frames: string[]): { root: string; configPath: string } {
   mkdirSync(scenes, { recursive: true });
   writeFileSync(join(scenes, 'Main.unity'), '  _gameConfig: {fileID: 11400000, guid: abc}');
 
+  // Art in the project, because [STRADA ASSETS UNSOURCED] speaks before this
+  // gate does — deliberately, since "there is nothing in it to draw" is the
+  // cause and "the frames are identical" is the symptom. A fixture with no art
+  // at all would test the cause gate while claiming to test this one.
+  const art = join(root, 'Assets', 'Art');
+  mkdirSync(art, { recursive: true });
+  writeFileSync(join(art, 'tile.png'), 'pixels');
+
   if (frames.length > 0) {
     const rec = join(root, 'Recordings');
     mkdirSync(rec, { recursive: true });
