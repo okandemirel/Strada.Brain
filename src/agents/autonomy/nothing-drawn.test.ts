@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import os from 'node:os';
 import { StradaConformanceGuard } from './strada-conformance.js';
@@ -23,7 +23,7 @@ const deps = {
   warnings: [],
 } as const;
 
-function project(frames: string[]): { root: string; configPath: string } {
+function project(frames: string[], renderers = 0): { root: string; configPath: string } {
   const root = mkdtempSync(join(os.tmpdir(), 'nothing-drawn-'));
   const moduleRoot = join(root, 'Assets', 'Modules', 'BoardModule');
   const scripts = join(moduleRoot, 'Scripts');
@@ -55,6 +55,14 @@ function project(frames: string[]): { root: string; configPath: string } {
       writeFileSync(join(rec, `frame_${String(i).padStart(5, '0')}.png`), content);
     });
   }
+  if (renderers > 0) {
+    let body = '';
+    for (let i = 0; i < renderers; i++) {
+      body += `--- !u!1 &${i + 10}\nGameObject:\n  m_Name: Cube${i}\n`;
+      body += `--- !u!212 &${i + 500}\nMeshRenderer:\n  m_GameObject: {fileID: ${i + 10}}\n`;
+    }
+    writeFileSync(join(scenes, 'Main.unity'), body);
+  }
   return { root, configPath };
 }
 
@@ -83,8 +91,19 @@ describe('a game that has never been seen to draw', () => {
     expect(promptFor(root, configPath)).toContain('[STRADA NOTHING DRAWN]');
   });
 
-  it('stays quiet once the frames differ from each other', () => {
+  it('objects when differing frames come from a scene with no playfield renderers', () => {
+    // Measured 2026-08-24 (PixelFlow): sixty frames differed ONLY by the HUD
+    // progress bar filling over an empty sky, and the old digests>1 rule read
+    // that as drawing. Differing frames require a playfield to exist.
     const { root, configPath } = project(['a-frame', 'b-frame', 'c-frame']);
+
+    const prompt = promptFor(root, configPath);
+    expect(prompt).toContain('[STRADA NOTHING DRAWN]');
+    expect(prompt).toContain('HUD chrome');
+  });
+
+  it('stays quiet when differing frames come from a scene with a playfield', () => {
+    const { root, configPath } = project(['a-frame', 'b-frame', 'c-frame'], 8);
 
     expect(promptFor(root, configPath)).not.toContain('[STRADA NOTHING DRAWN]');
   });
@@ -111,5 +130,22 @@ describe('a game that has never been seen to draw', () => {
     guard.trackToolCall('file_write', { path: configPath }, false);
 
     expect(guard.getPrompt() ?? '').not.toContain('[STRADA NOTHING DRAWN]');
+  });
+});
+
+describe('nothingDrawn — differing frames are not proof of drawing', () => {
+  it('the scene census counts renderers a playfield needs', async () => {
+    const { countSceneRenderersImpl, MIN_PLAYFIELD_RENDERERS } = await import('./strada-conformance.js');
+    const root = mkdtempSync(join(os.tmpdir(), 'strada-hudonly-'));
+    try {
+      const scenes = join(root, 'Assets', 'Scenes');
+      mkdirSync(scenes, { recursive: true });
+      writeFileSync(join(scenes, 'Main.unity'), '--- !u!1 &1\nGameObject:\n  m_Name: Boot\n');
+      const census = countSceneRenderersImpl(root);
+      expect(census.renderers).toBe(0);
+      expect(census.renderers).toBeLessThan(MIN_PLAYFIELD_RENDERERS);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

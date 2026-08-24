@@ -1,4 +1,5 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { assessSpecScope } from "./spec-scope.js";
 import { createHash } from "node:crypto";
 import { getLogger } from "../../utils/logger.js";
 import { join as joinPath, resolve as resolvePath } from "node:path";
@@ -638,6 +639,38 @@ export class StradaConformanceGuard {
    * 54 and reported green throughout. Tests prove the simulation; only a frame
    * proves the game, and nothing here had ever asked for one.
    */
+  /**
+   * The design document is the checklist. Measured 2026-08-24 (PixelFlow):
+   * the GDD schedules sixteen elements in a literal table; runs delivered a
+   * subset and called it done because no gate compared code against spec.
+   * Fires only after real code exists (module roots touched) so early boots
+   * are not nagged.
+   */
+  private specScopePrompt(): string | null {
+    if (this.touchedModuleRoots.size === 0) return null;
+    const projectPath = this.opts?.projectPath;
+    if (!projectPath) return null;
+    if (!existsSync(joinPath(projectPath, "Assets"))) return null;
+    try {
+      const report = assessSpecScope(projectPath);
+      if (report.scheduled === 0 || report.missing.length === 0) return null;
+      const names = report.missing
+        .slice(0, 8)
+        .map((m) => `${m.name} (${m.unlock})`)
+        .join(", ");
+      const rest = report.missing.length > 8 ? ` — and ${report.missing.length - 8} more` : "";
+      return (
+        `[STRADA SPEC SCOPE] The design document schedules ${report.scheduled} elements; ` +
+        `${report.missing.length} have no implementation in this project: ${names}${rest}. ` +
+        `The spec is the contract — a delivery that omits scheduled elements is partial, ` +
+        `not done. Implement each in the sim module with its R-rule interactions and a ` +
+        `level that showcases it.`
+      );
+    } catch {
+      return null;
+    }
+  }
+
   private nothingDrawnReason(): string | null {
     if (this.touchedModuleRoots.size === 0) return null;
     // A game that was never run cannot have frames, and the gate for that says
@@ -659,11 +692,35 @@ export class StradaConformanceGuard {
       } catch {
         // An unreadable frame proves nothing either way.
       }
-      if (digests.size > 1) return null;
     }
     if (digests.size === 0) return null;
-    return `all ${frames.length} captured frames are identical`;
+    if (digests.size === 1) return `all ${frames.length} captured frames are identical`;
+
+    // Frames DIFFERING is no longer proof of drawing. Measured 2026-08-24
+    // (PixelFlow): sixty frames differed ONLY by the HUD progress bar filling
+    // over an empty sky — digests.size>1 passed the old rule, the delivery
+    // report said "the scene renders the simulation", and the playfield held
+    // zero cubes, zero pigs, zero tray. Differing frames must ALSO come from a
+    // scene that instantiates playfield renderers; a HUD alone does not count.
+    const census = countSceneRenderersImpl(projectPath);
+    if (census.renderers < MIN_PLAYFIELD_RENDERERS) {
+      return (
+        `frames differ only by HUD chrome — the scene instantiates ` +
+        `${census.gameObjects} GameObject(s) and ${census.renderers} renderer(s) ` +
+        `across ${census.scenes} scene(s); a playfield (board cubes, tray, ` +
+        `conveyor, pigs) was never added to what the camera sees`
+      );
+    }
+    return null;
   }
+
+  /**
+   * Census of renderers across the project's scenes (build-included first).
+   *
+   * Counts MeshRenderer/SpriteRenderer occurrences and top-level GameObjects
+   * in scene YAML. Cheap text census, not a Unity import — enough to tell a
+   * playfield from a skybox with a progress bar on it.
+   */
 
   private danglingAssetReferences(): string[] {
     if (this.touchedModuleRoots.size === 0) return [];
@@ -1280,6 +1337,7 @@ export class StradaConformanceGuard {
       }
       const lastAsk = this.nothingDrawnRaised === NOTHING_DRAWN_GATE_LIMIT;
       return (
+        this.specScopePrompt() ??
         `[STRADA NOTHING DRAWN] This game has never been observed to render: ${notDrawn}. ` +
         "A passing suite proves the simulation, not the picture — measured on this project, 54 " +
         "tests went green while all 120 captured frames were the same empty sky. Run " +
@@ -1349,4 +1407,33 @@ function isInsideFrameworkPath(filePath: string, deps?: StradaDepsStatus): boole
 
   if (frameworkPaths.length === 0) return false;
   return frameworkPaths.some((fp) => normalized.includes(fp));
+}
+
+/** A believable playfield instantiates at least this many renderers. */
+export const MIN_PLAYFIELD_RENDERERS = 6;
+
+/** Text census of renderers across a project's scenes. Exported for tests. */
+export function countSceneRenderersImpl(projectPath: string): {
+  scenes: number;
+  gameObjects: number;
+  renderers: number;
+} {
+  const scenesDir = joinPath(projectPath, "Assets", "Scenes");
+  const files = existsSync(scenesDir)
+    ? walkFiles(scenesDir).filter((f) => f.endsWith(".unity"))
+    : [];
+  let gameObjects = 0;
+  let renderers = 0;
+  let scenes = 0;
+  for (const scene of files.slice(0, 6)) {
+    try {
+      const body = readFileSync(scene, "utf8");
+      scenes += 1;
+      gameObjects += (body.match(/^--- !u!1 &/gm) ?? []).length;
+      renderers += (body.match(/^--- !u!(?:212|23) &/gm) ?? []).length;
+    } catch {
+      // Unreadable scene: not evidence of anything.
+    }
+  }
+  return { scenes, gameObjects, renderers };
 }
