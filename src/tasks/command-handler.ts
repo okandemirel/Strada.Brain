@@ -62,6 +62,16 @@ interface OrchestratorRef {
     reason?: string;
     checkpoint?: PendingTaskCheckpoint;
   }>;
+  /**
+   * Resubmit a blocked task's original prompt as a fresh run. Used when /retry
+   * finds no checkpoint — measured 2026-08-24: a supervisor task that blocked
+   * BEFORE its goal tree existed (decomposition hit a provider outage) had no
+   * checkpoint, so the operational retry knob was a dead end.
+   */
+  resubmitBlockedTask(
+    taskId: string,
+    options?: { userId?: string },
+  ): Promise<{ status: "submitted" | "not_found" | "error"; reason?: string }>;
 }
 
 interface WatchableVault extends IVault {
@@ -1362,10 +1372,31 @@ export class CommandHandler {
     }
 
     if (!cp) {
+      // No checkpoint (e.g. the task blocked before its goal tree existed).
+      // Fall back to resubmitting the most recent blocked task's own prompt.
+      const blocked = this.taskManager
+        .listTasks(chatId, 10)
+        .find((t) => t.status === TaskStatus.blocked);
+      if (!blocked) {
+        await this.channel.sendText(
+          chatId,
+          "No pending checkpoint found. Use /tasks to see recent activity.",
+        );
+        return;
+      }
       await this.channel.sendText(
         chatId,
-        "No pending checkpoint found. Use /tasks to see recent activity.",
+        `No checkpoint stored — resubmitting blocked task \`${blocked.id}\` from its original prompt.`,
       );
+      const result = this.orchestratorRef
+        ? await this.orchestratorRef.resubmitBlockedTask(blocked.id, { userId })
+        : { status: "error" as const, reason: "no orchestrator wired" };
+      if (result.status !== "submitted") {
+        await this.channel.sendText(
+          chatId,
+          `Resubmit failed: ${result.reason ?? "unknown reason"}`,
+        );
+      }
       return;
     }
 

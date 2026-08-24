@@ -1,4 +1,5 @@
 import { failureTarget } from "./orchestrator-tool-execution.js";
+import type { ChannelType } from "../channels/channel-messages.interface.js";
 import type {
   IAIProvider,
   ConversationMessage,
@@ -108,7 +109,7 @@ import {
   createReadOnlyToolStub,
   getReadOnlySystemPrompt,
 } from "../security/read-only-guard.js";
-import type { TaskProgressSignal, TaskUsageEvent } from "../tasks/types.js";
+import type { TaskId, TaskProgressSignal, TaskUsageEvent } from "../tasks/types.js";
 import type { UnifiedBudgetManager } from "../budget/unified-budget-manager.js";
 import type { TaskCheckpointStore, PendingTaskCheckpoint } from "../tasks/task-checkpoint-store.js";
 import { buildTaskProgressSummary, type ProgressLanguage } from "../tasks/progress-signals.js";
@@ -2207,6 +2208,42 @@ export class Orchestrator {
    * userId, the two must match or the call returns `user_mismatch`. Legacy
    * checkpoints (no userId) remain resumable for back-compat.
    */
+
+  /**
+   * /retry fallback for tasks that blocked BEFORE a checkpoint existed —
+   * measured 2026-08-24: decomposition itself hit a provider outage, the task
+   * blocked with nodes:0 and no goal tree, and no retry path could reach it.
+   * Marks the old row failed, then re-runs its original prompt as a fresh
+   * user message (fire-and-forget: returns once submitted).
+   */
+  async resubmitBlockedTask(
+    taskIdRaw: string,
+    _options?: { userId?: string },
+  ): Promise<{ status: "submitted" | "not_found" | "error"; reason?: string }> {
+    try {
+      const taskId = taskIdRaw as TaskId;
+      const blocked = this.taskManager?.getStatus(taskId);
+      if (!blocked || blocked.status !== "blocked") {
+        return { status: "not_found", reason: `task ${taskIdRaw} is not blocked` };
+      }
+      const prompt = blocked.prompt?.trim();
+      if (!prompt) {
+        return { status: "error", reason: "blocked task has no prompt to resubmit" };
+      }
+      this.taskManager?.fail(taskId, "superseded by /retry resubmission");
+      void this.handleMessage({
+        channelType: blocked.channelType as ChannelType,
+        chatId: blocked.chatId,
+        userId: blocked.userId ?? "",
+        text: prompt,
+        timestamp: new Date(),
+      });
+      return { status: "submitted" };
+    } catch (e) {
+      return { status: "error", reason: e instanceof Error ? e.message : String(e) };
+    }
+  }
+
   async continueFromCheckpoint(
     chatId: string,
     options?: { taskId?: string; userId?: string },
