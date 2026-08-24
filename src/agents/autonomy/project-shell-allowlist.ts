@@ -64,6 +64,14 @@ const RULES: readonly AllowlistRule[] = [
     },
   },
   {
+    name: "read-only file inspection (hash/stat/file/wc)",
+    matches(command, projectRoot) {
+      if (!/(^|[;&|(]\s*)(md5|md5sum|shasum|sha256sum|sha1sum|file|stat|wc)\s/.test(command)) return false;
+      // Hashing/inspecting outside the project could probe secrets — stay in.
+      return pathsStayInRoot(command, projectRoot);
+    },
+  },
+  {
     name: "git inspection + in-project integration (merge/checkout, no force, no push)",
     matches(command, projectRoot) {
       if (!/(^|[;&|(]\s*)git\s+/.test(command)) return false;

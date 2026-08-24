@@ -53,6 +53,13 @@ describe("project-scoped shell allowlist — canonical build/test/run pre-approv
     }
   });
 
+  it("pre-approves read-only hashing inside the project (frame evidence checks)", () => {
+    expect(matchProjectScopedAllowlist("md5 -q Recordings/frame_00000.png", root)?.rule)
+      .toContain("read-only file inspection");
+    expect(matchProjectScopedAllowlist("sha256sum Assets/Scenes/Main.unity", root)).not.toBeNull();
+    expect(matchProjectScopedAllowlist("md5 /Users/dev/.ssh/id_ed25519", root)).toBeNull();
+  });
+
   it("never approves destructive commands regardless of shape", () => {
     expect(matchProjectScopedAllowlist("rm -rf / && git status", root)).toBeNull();
   });
