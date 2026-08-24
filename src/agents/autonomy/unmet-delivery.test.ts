@@ -49,8 +49,11 @@ function project(): string {
  * budget passes without ever having reached it — which is exactly how the first
  * version of the test below passed while proving nothing.
  */
-function assembled(): string {
+const RENDERERS = 6;
+
+function assembled(renderers = 6): string {
   const root = project();
+  void RENDERERS;
   const moduleRoot = join(root, "Assets", "Modules", "BoardModule");
   writeFileSync(
     join(moduleRoot, "Scripts", "BoardModuleConfig.cs"),
@@ -73,7 +76,12 @@ function assembled(): string {
   }
   const scenes = join(root, "Assets", "Scenes");
   mkdirSync(scenes, { recursive: true });
-  writeFileSync(join(scenes, "Main.unity"), "  _gameConfig: {fileID: 11400000, guid: abc}");
+  let sceneBody = "  _gameConfig: {fileID: 11400000, guid: abc}";
+  for (let i = 0; i < RENDERERS; i++) {
+    sceneBody += `\n--- !u!1 &${i + 10}\nGameObject:\n  m_Name: Cube${i}`;
+    sceneBody += `\n--- !u!212 &${i + 500}\nMeshRenderer:\n  m_GameObject: {fileID: ${i + 10}}`;
+  }
+  writeFileSync(join(scenes, "Main.unity"), sceneBody);
 
   // Art, so [STRADA ASSETS UNSOURCED] — which speaks before the drawing gate —
   // has nothing to say and the drawing gate is the one whose budget gets spent.
@@ -117,11 +125,22 @@ describe("what blocks delivery", () => {
     expect(runThatPlayed(root).unmetDeliveryConditions()).toHaveLength(1);
   });
 
-  it("says nothing once the frames actually differ", () => {
-    const root = project();
+  it("says nothing once the frames actually differ AND a playfield exists", () => {
+    const root = assembled();
     framesOf(root, ["one", "two", "three"]);
 
     expect(runThatPlayed(root).unmetDeliveryConditions()).toEqual([]);
+  });
+
+  it("still objects when differing frames ride on a scene with no playfield", () => {
+    // Measured 2026-08-24: HUD progress-bar variation alone satisfied the old
+    // differing-frames rule while the playfield never existed.
+    const root = project();
+    framesOf(root, ["one", "two", "three"]);
+
+    expect(runThatPlayed(root).unmetDeliveryConditions()).toEqual([
+      expect.stringContaining("frames differ only by HUD chrome"),
+    ]);
   });
 });
 
