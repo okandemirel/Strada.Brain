@@ -178,6 +178,8 @@ export class GoalDecomposer {
   constructor(
     private readonly provider: IAIProvider | undefined,
     private readonly maxDepth: number = 3,
+    /** Backoff between patient retry rounds on transient provider outages. Injectable for tests. */
+    private readonly outageBackoffMs: readonly number[] = [0, 15_000, 30_000, 45_000],
   ) {}
 
   private decompositionContext: DecompositionContext | undefined;
@@ -410,11 +412,10 @@ export class GoalDecomposer {
       // and the whole mission idled for five hours. Provider-capacity blinks are
       // transient by nature — retry here on the SLOW clock before giving up.
       let response: Awaited<ReturnType<typeof streamOrChatText>> | undefined;
-      const DECOMPOSITION_ROUNDS = 4;
-      const DECOMPOSITION_BACKOFF_MS = [0, 15_000, 30_000, 45_000];
-      for (let round = 0; round < DECOMPOSITION_ROUNDS; round++) {
-        if (DECOMPOSITION_BACKOFF_MS[round]! > 0) {
-          await new Promise((r) => setTimeout(r, DECOMPOSITION_BACKOFF_MS[round]));
+      const rounds = Math.max(1, this.outageBackoffMs.length);
+      for (let round = 0; round < rounds; round++) {
+        if ((this.outageBackoffMs[round] ?? 0) > 0) {
+          await new Promise((r) => setTimeout(r, this.outageBackoffMs[round]));
         }
         try {
           response = await streamOrChatText(this.provider, systemPrompt, userMessage);
@@ -424,11 +425,11 @@ export class GoalDecomposer {
           const transient = /providers failed|503|500|502|504|network|timeout|ECONN/i.test(msg);
           const { getLoggerSafe } = await import("../utils/logger.js");
           getLoggerSafe().warn(
-            `Goal decomposition attempt ${round + 1}/${DECOMPOSITION_ROUNDS} failed` +
-              (transient && round < DECOMPOSITION_ROUNDS - 1 ? "; retrying on the slow clock" : ""),
+            `Goal decomposition attempt ${round + 1}/${rounds} failed` +
+              (transient && round < rounds - 1 ? "; retrying on the slow clock" : ""),
             { error: msg.slice(0, 200) },
           );
-          if (!transient || round === DECOMPOSITION_ROUNDS - 1) throw err;
+          if (!transient || round === rounds - 1) throw err;
         }
       }
       if (!response) {

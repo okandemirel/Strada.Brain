@@ -366,10 +366,14 @@ describe("GoalDecomposer", () => {
         }),
       };
 
-      const decomposer = new GoalDecomposer(provider, 3);
+      // Zero backoff for tests; the PATIENCE contract is that a transient
+      // outage is retried on the slow clock (4 rounds by default) before the
+      // error propagates — so the mock must observe ALL of them.
+      const decomposer = new GoalDecomposer(provider, 3, [0, 0, 0, 0]);
       await expect(
         decomposer.decomposeProactive("test-session", "Build something complex that needs decomposition"),
       ).rejects.toBeInstanceOf(GoalDecompositionProviderError);
+      expect(provider.chatStream).toHaveBeenCalledTimes(4);
     });
 
     it("throws GoalDecompositionProviderError when all providers failed", async () => {
@@ -382,10 +386,11 @@ describe("GoalDecomposer", () => {
         }),
       };
 
-      const decomposer = new GoalDecomposer(provider, 3);
+      const decomposer = new GoalDecomposer(provider, 3, [0, 0, 0, 0]);
       await expect(
         decomposer.decomposeProactive("test-session", "Build something complex that needs decomposition"),
       ).rejects.toBeInstanceOf(GoalDecompositionProviderError);
+      expect((provider.chatStream as ReturnType<typeof vi.fn>).mock.calls.length).toBe(4);
     });
 
     it("throws GoalDecompositionProviderError on a rate-limited (HTTP 429) outage", async () => {
