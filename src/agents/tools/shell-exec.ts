@@ -46,7 +46,7 @@ const DANGEROUS_PIPE_PATTERNS = [
  */
 const INJECTION_PATTERNS: [RegExp, string][] = [
   // Command substitution
-  [/\$\(/, "command substitution $()"],
+  [/\$\(/, "command substitution $() — split into separate plain commands and run them one by one"],
   [/`[^`]+`/, "command substitution via backticks"],
 
   // Inline script execution via interpreters
