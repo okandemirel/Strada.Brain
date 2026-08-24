@@ -1426,6 +1426,18 @@ export class BackgroundExecutor {
    */
   private scheduleMissionKeepAlive(task: Task, reason: string): boolean {
     if (!this.taskManager || task.origin !== "user") return false;
+    // An ask_user block is a QUESTION awaiting a person, not a failure to
+    // retry. Auto-resubmitting would re-ask the same question into the void
+    // (measured 2026-08-24): deliver it to the channel and wait.
+    if (/ask_user/i.test(reason)) {
+      try {
+        this.taskManager.appendTaskNotice(
+          task.id,
+          "Paused on a question for you. Reply here with your answer and the work continues from that exact point.",
+        );
+      } catch { /* visibility best-effort */ }
+      return false;
+    }
     const key = `${task.chatId}:${task.prompt.length}:${task.prompt.slice(0, 64)}`;
     const attempt = this.missionRetries.get(key) ?? 0;
     const budgetExceeded = this._unifiedBudgetManager?.isGlobalExceeded() ?? false;
