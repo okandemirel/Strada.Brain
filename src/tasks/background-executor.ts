@@ -235,6 +235,18 @@ export class BackgroundExecutor {
   private _unifiedBudgetManager?: UnifiedBudgetManager;
 
   constructor(opts: BackgroundExecutorOptions) {
+    // Stuck-task reaper: an executing task with no progress signal for an hour
+    // is wedged (bridge flap, dead provider, lost lease). Reap it so the queue
+    // advances; user-origin missions resubmit via mission keep-alive. Measured
+    // 2026-08-24: a task sat 'executing' for 1h+ while the queue starved.
+    const reaper = setInterval(() => {
+      try {
+        this.reapStuckTasks();
+      } catch {
+        // The reaper must never become the crash it guards against.
+      }
+    }, 5 * 60_000);
+    reaper.unref?.();
     this.orchestrator = opts.orchestrator;
     this.concurrencyLimit = opts.concurrencyLimit ?? 3;
     // Enforce the ordering invariant: the per-task inactivity window must be at least
@@ -1424,6 +1436,31 @@ export class BackgroundExecutor {
    * a visible report naming the blocker, never a silent row.
    * Returns true when a retry was scheduled (caller must NOT also fail()).
    */
+  /** Executing tasks whose last progress is older than this are considered wedged. */
+  private static readonly STUCK_TASK_MS = 60 * 60_000;
+
+  private reapStuckTasks(): void {
+    if (!this.taskManager) return;
+    const stuck = (this.taskManager.listStuckExecuting?.(BackgroundExecutor.STUCK_TASK_MS) ?? []) as ReadonlyArray<
+      import("./types.js").Task
+    >;
+    for (const task of stuck) {
+      const reason = `no progress signal for ${Math.round(BackgroundExecutor.STUCK_TASK_MS / 60_000)} minutes`;
+      getLoggerSafe().warn("Reaping stuck executing task", { taskId: task.id, reason });
+      // Queue continuation first: if more work for this chat is already
+      // waiting, do not resubmit — the pending task IS the continuation.
+      const hasPending = (this.taskManager.listTasks(task.chatId, 10) ?? []).some(
+        (t) => t.status === "pending",
+      );
+      try {
+        this.taskManager.fail(task.id, `Reaped: ${reason}.`);
+      } catch { /* already settled */ }
+      if (!hasPending) {
+        this.scheduleMissionKeepAlive(task, reason);
+      }
+    }
+  }
+
   private scheduleMissionKeepAlive(task: Task, reason: string): boolean {
     if (!this.taskManager || task.origin !== "user") return false;
     // An ask_user block is a QUESTION awaiting a person, not a failure to

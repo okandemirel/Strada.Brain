@@ -196,6 +196,12 @@ export class TaskStorage {
 
   // ─── Queries ────────────────────────────────────────────────────────────────
 
+  listExecuting(): Task[] {
+    this.ensureConnection();
+    const rows = this.getStmt("listExecuting").all() as TaskRow[];
+    return rows.map((r) => this.rowToTask(r, this.getProgress(r.id)));
+  }
+
   listByChatId(chatId: string, limit = 10): Task[] {
     this.ensureConnection();
     const rows = this.getStmt("listByChatId").all(chatId, limit) as TaskRow[];
@@ -370,6 +376,7 @@ export class TaskStorage {
       updateBlocked: `UPDATE tasks SET result = ?, status = ?, updated_at = ?, completed_at = ? WHERE id = ?`,
       updateGoalRoot: `UPDATE tasks SET goal_root_id = ?, updated_at = ? WHERE id = ?`,
       listByChatId: `SELECT * FROM tasks WHERE chat_id = ? ORDER BY created_at DESC LIMIT ?`,
+      listExecuting: `SELECT * FROM tasks WHERE status = 'executing' ORDER BY updated_at ASC`,
       listActiveByChatId: `SELECT * FROM tasks WHERE chat_id = ? AND status IN ('pending', 'planning', 'executing', 'paused', 'waiting_for_input') ORDER BY created_at DESC`,
       listRecoverable: `SELECT * FROM tasks WHERE status IN ('blocked', 'failed', 'cancelled') ORDER BY updated_at DESC, created_at DESC LIMIT ?`,
       loadIncomplete: `SELECT * FROM tasks WHERE status IN ('pending', 'planning', 'executing', 'paused', 'waiting_for_input') ORDER BY updated_at DESC, created_at DESC`,

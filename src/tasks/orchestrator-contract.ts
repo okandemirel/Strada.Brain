@@ -38,6 +38,10 @@ export interface ITaskManager {
   retryGoalRoot(goalRootId: string, nodeId?: string): unknown;
   /** Resubmit a finished/blocked task's original prompt (mission keep-alive). */
   retryTask(taskId: string): unknown;
+  /** Executing tasks with no progress signal since the cutoff (stuck-task reaper). */
+  listStuckExecuting(olderThanMs: number): unknown[];
+  /** Recent tasks for a chat (queue-continuation checks). */
+  listTasks(chatId: string, limit: number): Array<{ id: string; status: string; chatId: string; prompt: string }>;
   /**
    * Plan a stalled goal again from scratch with the failure reasons as input.
    * Replaying the same tree cannot get past an obstacle the plan itself has.

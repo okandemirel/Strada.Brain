@@ -382,6 +382,14 @@ export class TaskManager extends EventEmitter {
     return this.storage.listByChatId(chatId, limit);
   }
 
+  /** Executing tasks whose last progress signal is older than the cutoff. */
+  listStuckExecuting(olderThanMs: number): Task[] {
+    const cutoff = Date.now() - olderThanMs;
+    return this.storage
+      .listExecuting()
+      .filter((t) => t.updatedAt < cutoff);
+  }
+
   /**
    * List only active tasks for a chat.
    */
