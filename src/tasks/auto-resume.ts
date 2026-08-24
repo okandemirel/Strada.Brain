@@ -71,3 +71,53 @@ export function decideAutoResume(
     reason: `${state.replans} fresh plans produced nothing new either; the obstacle is not the plan, so a person can look`,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Mission keep-alive — the LAST stop is a report, not silence.
+// ---------------------------------------------------------------------------
+
+/**
+ * How many automatic mission-level retries (full resubmission of the original
+ * prompt) may run before the failure is escalated to the person. Only two
+ * stops are legitimate per product contract: the TIME window and the BUDGET.
+ * Everything else keeps feeding back in.
+ */
+export const MAX_MISSION_RETRIES = 10;
+
+/** Backoff between mission retries: 30s doubling, capped at 10 minutes. */
+export function missionRetryBackoffMs(attempt: number): number {
+  return Math.min(30_000 * 2 ** Math.max(0, attempt), 600_000);
+}
+
+export interface MissionKeepAliveDecision {
+  readonly action: "retry" | "report";
+  readonly attempt: number;
+  readonly backoffMs: number;
+  /** Why, when action === "report" — this text reaches the channel verbatim. */
+  readonly reportReason?: string;
+}
+
+/** Pure decision for whether an exhausted-looking failure keeps going or escalates. */
+export function decideMissionKeepAlive(
+  attempt: number,
+  opts: { budgetExceeded: boolean },
+): MissionKeepAliveDecision {
+  if (opts.budgetExceeded) {
+    return {
+      action: "report",
+      attempt,
+      backoffMs: 0,
+      reportReason: `Budget limit reached after ${attempt} automatic retries — stopping is the contract, not a crash.`,
+    };
+  }
+  if (attempt >= MAX_MISSION_RETRIES) {
+    return {
+      action: "report",
+      attempt,
+      backoffMs: 0,
+      reportReason:
+        `Persistently failing after ${MAX_MISSION_RETRIES} automatic retries. Last blocker: this needs a human decision before work can continue.`,
+    };
+  }
+  return { action: "retry", attempt, backoffMs: missionRetryBackoffMs(attempt) };
+}

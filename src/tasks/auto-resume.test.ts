@@ -13,7 +13,7 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
-import { decideAutoResume, MAX_AUTO_RESUMES, MAX_AUTO_REPLANS } from "./auto-resume.js";
+import { decideAutoResume, MAX_AUTO_RESUMES, MAX_AUTO_REPLANS , decideMissionKeepAlive } from "./auto-resume.js";
 
 describe("picking a blocked goal back up", () => {
   it("retries the first block even when nothing succeeded", () => {
@@ -127,5 +127,32 @@ describe("picking a blocked goal back up", () => {
 
     expect(body).toContain("attempts: replanning ? state.attempts : state.attempts + 1");
     expect(body).toContain("replans: replanning ? state.replans + 1 : state.replans");
+  });
+});
+
+describe("mission keep-alive — only time and budget may stop a mission", () => {
+  it("keeps retrying with capped exponential backoff under the cap", () => {
+    const d = decideMissionKeepAlive(0, { budgetExceeded: false });
+    expect(d.action).toBe("retry");
+    expect(d.backoffMs).toBe(30_000);
+    expect(decideMissionKeepAlive(3, { budgetExceeded: false }).backoffMs).toBe(240_000);
+    expect(decideMissionKeepAlive(9, { budgetExceeded: false }).action).toBe("retry");
+  });
+
+  it("caps the backoff at ten minutes", () => {
+    // attempt 8 stays under the retry cap but its raw 30s*2^8 overflows the cap.
+    expect(decideMissionKeepAlive(8, { budgetExceeded: false }).backoffMs).toBe(600_000);
+  });
+
+  it("escalates to a visible report once retries are spent", () => {
+    const d = decideMissionKeepAlive(10, { budgetExceeded: false });
+    expect(d.action).toBe("report");
+    expect(d.reportReason).toMatch(/needs a human/i);
+  });
+
+  it("stops immediately on budget — and says so honestly", () => {
+    const d = decideMissionKeepAlive(1, { budgetExceeded: true });
+    expect(d.action).toBe("report");
+    expect(d.reportReason).toMatch(/budget/i);
   });
 });

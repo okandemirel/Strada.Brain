@@ -36,6 +36,8 @@ export interface ITaskManager {
    * calls it too, so a run does not stop just because nobody is watching.
    */
   retryGoalRoot(goalRootId: string, nodeId?: string): unknown;
+  /** Resubmit a finished/blocked task's original prompt (mission keep-alive). */
+  retryTask(taskId: string): unknown;
   /**
    * Plan a stalled goal again from scratch with the failure reasons as input.
    * Replaying the same tree cannot get past an obstacle the plan itself has.

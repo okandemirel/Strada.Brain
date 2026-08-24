@@ -404,7 +404,36 @@ export class GoalDecomposer {
       // clears → a slow reasoning stream is allowed to COMPLETE. The accumulating onChunk
       // collects chunk text; we parse the final response.text exactly as before (the
       // streamed text and the response.text are identical), so output is behavior-identical.
-      const response = await streamOrChatText(this.provider, systemPrompt, userMessage);
+      //
+      // PATIENCE (measured 2026-08-24, PixelFlow overnight): an upstream 503 storm
+      // exhausted the chain's 3 fast retries in ~3 seconds, the decomposition threw,
+      // and the whole mission idled for five hours. Provider-capacity blinks are
+      // transient by nature — retry here on the SLOW clock before giving up.
+      let response: Awaited<ReturnType<typeof streamOrChatText>> | undefined;
+      const DECOMPOSITION_ROUNDS = 4;
+      const DECOMPOSITION_BACKOFF_MS = [0, 15_000, 30_000, 45_000];
+      for (let round = 0; round < DECOMPOSITION_ROUNDS; round++) {
+        if (DECOMPOSITION_BACKOFF_MS[round]! > 0) {
+          await new Promise((r) => setTimeout(r, DECOMPOSITION_BACKOFF_MS[round]));
+        }
+        try {
+          response = await streamOrChatText(this.provider, systemPrompt, userMessage);
+          break;
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          const transient = /providers failed|503|500|502|504|network|timeout|ECONN/i.test(msg);
+          const { getLoggerSafe } = await import("../utils/logger.js");
+          getLoggerSafe().warn(
+            `Goal decomposition attempt ${round + 1}/${DECOMPOSITION_ROUNDS} failed` +
+              (transient && round < DECOMPOSITION_ROUNDS - 1 ? "; retrying on the slow clock" : ""),
+            { error: msg.slice(0, 200) },
+          );
+          if (!transient || round === DECOMPOSITION_ROUNDS - 1) throw err;
+        }
+      }
+      if (!response) {
+        return null;
+      }
 
       const parsed = parseLLMOutput(response.text);
       if (!parsed) {

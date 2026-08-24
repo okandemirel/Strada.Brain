@@ -22,6 +22,15 @@ import type {
 import { getTaskConversationKey, TaskStatus } from "./types.js";
 import type { ITaskManager, IOrchestrator, SupervisorAdmissionDecision } from "./orchestrator-contract.js";
 import { resolveConversationScope } from "../agents/orchestrator-text-utils.js";
+function getLoggerSafe() {
+  try {
+    // Lazy require-free import chain: use the shared logger.
+    return getLogger();
+  } catch {
+    return console;
+  }
+}
+
 import type { GoalDecomposer } from "../goals/goal-decomposer.js";
 import type { GoalNode, GoalTree } from "../goals/types.js";
 import type { GoalStorage } from "../goals/goal-storage.js";
@@ -36,7 +45,7 @@ import type { BudgetTracker } from "../daemon/budget/budget-tracker.js";
 import type { UnifiedBudgetManager } from "../budget/unified-budget-manager.js";
 import { getLogger } from "../utils/logger.js";
 import { summariseNodeOutcomes } from "./node-outcome-summary.js";
-import { decideAutoResume, type AutoResumeState } from "./auto-resume.js";
+import { decideAutoResume, type AutoResumeState , decideMissionKeepAlive } from "./auto-resume.js";
 import { WorkspaceLeaseManager } from "../agents/multi/workspace-lease-manager.js";
 import type { WorkerRunRequest, WorkerRunResult } from "../agents/supervisor/supervisor-types.js";
 import {
@@ -1200,6 +1209,11 @@ export class BackgroundExecutor {
           );
           return;
         }
+        // Mission keep-alive BEFORE terminal fail: only budget/cap may stop a
+        // user-origin mission; provider blinks and node failures feed back in.
+        if (this.scheduleMissionKeepAlive(task, supervisorResult.output || "supervisor run failed")) {
+          return;
+        }
         requestFailed = true;
         this.taskManager.fail(task.id, supervisorResult.output);
         return;
@@ -1399,6 +1413,66 @@ export class BackgroundExecutor {
   /** Automatic resumes spent per goal root, with the progress each round reached. */
   private readonly autoResumeState = new Map<string, AutoResumeState>();
 
+  /** Mission-level retries spent per chat+prompt chain (survives tree-less failures). */
+  private readonly missionRetries = new Map<string, number>();
+
+  /**
+   * Mission keep-alive: a failed supervisor run on a USER-origin mission is
+   * resubmitted automatically on an exponential backoff until it succeeds,
+   * the budget runs out, or the retry cap is hit — whichever comes first.
+   * Every state change is announced on the channel; the final escalation is
+   * a visible report naming the blocker, never a silent row.
+   * Returns true when a retry was scheduled (caller must NOT also fail()).
+   */
+  private scheduleMissionKeepAlive(task: Task, reason: string): boolean {
+    if (!this.taskManager || task.origin !== "user") return false;
+    const key = `${task.chatId}:${task.prompt.length}:${task.prompt.slice(0, 64)}`;
+    const attempt = this.missionRetries.get(key) ?? 0;
+    const budgetExceeded = this._unifiedBudgetManager?.isGlobalExceeded() ?? false;
+    const decision = decideMissionKeepAlive(attempt, { budgetExceeded });
+
+    if (decision.action === "report") {
+      this.missionRetries.delete(key);
+      try {
+        this.taskManager.appendTaskNotice(
+          task.id,
+          `MISSION STOPPED — needs you. ${decision.reportReason} Last blocker: ${reason.slice(0, 200)}`,
+        );
+      } catch { /* visibility best-effort */ }
+      return false;
+    }
+
+    const seconds = Math.round(decision.backoffMs / 1000);
+    this.missionRetries.set(key, decision.attempt + 1);
+    try {
+      this.taskManager.block(
+        task.id,
+        `Transient failure — ${reason.slice(0, 160)}. Auto-retry ${decision.attempt + 1}/${10} in ~${seconds}s.`,
+      );
+    } catch { /* block-marking is cosmetic here */ }
+    const timer = setTimeout(() => {
+      const retried = (() => {
+        try {
+          return this.taskManager?.retryTask(task.id);
+        } catch {
+          return null;
+        }
+      })();
+      if (!retried) {
+        this.missionRetries.delete(key);
+        getLoggerSafe().warn("Mission keep-alive could not resubmit — escalated to report", { taskId: task.id });
+        try {
+          this.taskManager?.appendTaskNotice(task.id, `Auto-resubmit failed after backoff. Last blocker: ${reason.slice(0, 200)}`);
+        } catch { /* best effort */ }
+      }
+    }, decision.backoffMs);
+    timer.unref?.();
+    getLoggerSafe().info("Mission keep-alive scheduled", {
+      taskId: task.id, attempt: decision.attempt + 1, backoffMs: decision.backoffMs, reason: reason.slice(0, 120),
+    });
+    return true;
+  }
+
   /**
    * Pick a partially-finished goal tree back up instead of leaving it blocked.
    *
@@ -1429,15 +1503,17 @@ export class BackgroundExecutor {
         reason: decision.reason,
       });
       this.autoResumeState.delete(rootId);
-      // The log line above is invisible to whoever is waiting on the channel.
-      // Measured 2026-08-23 (PixelFlow run): a chat task sat 'blocked' in
-      // silence while the log explained itself to nobody. Say it where the
-      // person is, with the way back in.
+      // Tree-level retries are spent — escalate to MISSION level, which keeps
+      // feeding the original prompt back in on the slow clock until success,
+      // budget, or cap. The channel hears every step either way.
+      if (this.scheduleMissionKeepAlive(task, decision.reason)) {
+        return;
+      }
       try {
         this.taskManager.appendTaskNotice(
           task.id,
-          `Goal is paused after ${state.attempts} automatic resume(s) and ${state.replans} replan(s): ${decision.reason}. ` +
-            `Send a follow-up message (e.g. "continue" or instructions fixing the blocker) and I will pick the goal back up.`,
+          `Goal stopped after ${state.attempts} resume(s) and ${state.replans} replan(s): ${decision.reason}. ` +
+            `This needs you — send instructions fixing the blocker.`,
         );
       } catch {
         // Visibility is best-effort; the task stays blocked either way.
