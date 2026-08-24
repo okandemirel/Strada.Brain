@@ -40,6 +40,19 @@ describe("project-scoped shell allowlist — canonical build/test/run pre-approv
     expect(matchProjectScopedAllowlist("git log --oneline -5", root)).not.toBeNull();
   });
 
+  it("pre-approves in-project git merge/checkout integration", () => {
+    expect(
+      matchProjectScopedAllowlist('git checkout main && git merge --no-ff milestone/core-sim-green', root)?.rule,
+    ).toContain("integration");
+    expect(matchProjectScopedAllowlist("git branch -f main b9abc94", root)).toBeNull(); // -f main blocked
+  });
+
+  it("still refuses push/pull/clean/reset --hard even with benign suffixes", () => {
+    for (const cmd of ["git push origin main", "git pull && git status", "git clean -fd", "git reset --hard HEAD"]) {
+      expect(matchProjectScopedAllowlist(cmd, root)).toBeNull();
+    }
+  });
+
   it("never approves destructive commands regardless of shape", () => {
     expect(matchProjectScopedAllowlist("rm -rf / && git status", root)).toBeNull();
   });

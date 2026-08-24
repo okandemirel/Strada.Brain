@@ -64,9 +64,18 @@ const RULES: readonly AllowlistRule[] = [
     },
   },
   {
-    name: "read-only git inspection",
+    name: "git inspection + in-project integration (merge/checkout, no force, no push)",
     matches(command, projectRoot) {
-      if (!/(^|[;&|(]\s*)git\s+(status|log|diff|show|branch)\b/.test(command)) return false;
+      if (!/(^|[;&|(]\s*)git\s+/.test(command)) return false;
+      // History-rewriting and remote operations are refused wherever they
+      // appear in the chain — including mid-command flag forms like
+      // `git branch -f main <sha>` (measured in review 2026-08-24).
+      const destructiveGit =
+        /\b(push|pull\b|fetch\b|remote\b|clean\b|rebase\b)\b/.test(command)
+        || /--force\b/.test(command)
+        || /git\s+[^|;&]*\s-f\s/.test(command)
+        || /reset\s+--hard/.test(command);
+      if (destructiveGit) return false;
       return pathsStayInRoot(command, projectRoot);
     },
   },
