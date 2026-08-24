@@ -51,6 +51,7 @@ import {
   buildIdentitySection,
   buildCrashNotificationSection,
 } from "./context/strada-knowledge.js";
+import { matchProjectScopedAllowlist } from "./autonomy/project-shell-allowlist.js";
 import { validatePath } from "../security/path-guard.js";
 import { vaultFileRead } from "./tools/file-read.js";
 import { FILE_LIMITS } from "../common/constants.js";
@@ -3956,7 +3957,13 @@ export class Orchestrator {
         if (!command) {
           return { approved: false, reason: "shell command is missing" };
         }
-        if (isDestructiveOperation(toolName, input)) {
+        // Allowlist FIRST: it is a bounded guarantee, not an escape hatch —
+        // Unity batchmode/dotnet build against this project were being killed
+        // here by the destructive-shape heuristic before the reviewer (or the
+        // allowlist override inside it) ever ran. Measured 2026-08-24.
+        const allowlistedShell =
+          matchProjectScopedAllowlist(command, this.projectPath) !== null;
+        if (!allowlistedShell && isDestructiveOperation(toolName, input)) {
           return { approved: false, reason: "shell command looks destructive" };
         }
         // Thread the project root so the deterministic project-scoped allowlist
