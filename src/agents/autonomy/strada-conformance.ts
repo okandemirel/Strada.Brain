@@ -696,22 +696,25 @@ export class StradaConformanceGuard {
     if (digests.size === 0) return null;
     if (digests.size === 1) return `all ${frames.length} captured frames are identical`;
 
-    // Frames DIFFERING is no longer proof of drawing. Measured 2026-08-24
-    // (PixelFlow): sixty frames differed ONLY by the HUD progress bar filling
-    // over an empty sky — digests.size>1 passed the old rule, the delivery
-    // report said "the scene renders the simulation", and the playfield held
-    // zero cubes, zero pigs, zero tray. Differing frames must ALSO come from a
-    // scene that instantiates playfield renderers; a HUD alone does not count.
+    // Two ways a game can fake "drawing", both measured on PixelFlow:
+    //   1. HUD-only variation — sixty frames differed ONLY by the progress bar
+    //      filling over an empty sky (8 distinct of 60 = 13%).
+    //   2. Scene-census gaming — a runtime-construction project keeps the scene
+    //      YAML minimal by design (the playfield spawns from code), so a bare
+    //      renderer census false-flags the architecture itself.
+    // The rule that survives both: sampled frames must differ SUBSTANTIVELY
+    // (>= 25% distinct digests) AND, when the scene is too sparse to explain
+    // that variety, the sparsity is named instead of silently accepted.
+    const sampled = Math.min(frames.length, 60);
+    const distinctRatio = digests.size / sampled;
+    if (distinctRatio >= 0.25) return null;
     const census = countSceneRenderersImpl(projectPath);
-    if (census.renderers < MIN_PLAYFIELD_RENDERERS) {
-      return (
-        `frames differ only by HUD chrome — the scene instantiates ` +
-        `${census.gameObjects} GameObject(s) and ${census.renderers} renderer(s) ` +
-        `across ${census.scenes} scene(s); a playfield (board cubes, tray, ` +
-        `conveyor, pigs) was never added to what the camera sees`
-      );
-    }
-    return null;
+    return (
+      `frames vary too little to prove drawing: ${digests.size}/${sampled} distinct ` +
+      `(${Math.round(distinctRatio * 100)}%); the scene instantiates ` +
+      `${census.gameObjects} GameObject(s) and ${census.renderers} renderer(s) — ` +
+      `a playfield (board cubes, tray, conveyor, pigs) was never added to what the camera sees`
+    );
   }
 
   /**

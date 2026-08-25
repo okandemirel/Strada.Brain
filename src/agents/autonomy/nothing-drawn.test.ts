@@ -91,19 +91,22 @@ describe('a game that has never been seen to draw', () => {
     expect(promptFor(root, configPath)).toContain('[STRADA NOTHING DRAWN]');
   });
 
-  it('objects when differing frames come from a scene with no playfield renderers', () => {
-    // Measured 2026-08-24 (PixelFlow): sixty frames differed ONLY by the HUD
-    // progress bar filling over an empty sky, and the old digests>1 rule read
-    // that as drawing. Differing frames require a playfield to exist.
-    const { root, configPath } = project(['a-frame', 'b-frame', 'c-frame']);
+  it('objects when frame variety is HUD-level (below the distinctiveness bar)', () => {
+    // Measured 2026-08-24 (PixelFlow): sixty frames, only 8 distinct (13%) —
+    // the variety was the progress bar filling over an empty sky. The gate
+    // requires >= 25% distinct digests as evidence of real drawing.
+    const frames = [...Array(10).fill('same-pixels'), 'progress-bar-moved'];
+    const { root, configPath } = project(frames);
 
     const prompt = promptFor(root, configPath);
     expect(prompt).toContain('[STRADA NOTHING DRAWN]');
-    expect(prompt).toContain('HUD chrome');
+    expect(prompt).toContain('vary too little');
   });
 
-  it('stays quiet when differing frames come from a scene with a playfield', () => {
-    const { root, configPath } = project(['a-frame', 'b-frame', 'c-frame'], 8);
+  it('stays quiet when frames differ substantively from a sparse scene', () => {
+    // Runtime-construction architecture: scene YAML stays minimal, the
+    // playfield spawns from code — substantive frame variety is the evidence.
+    const { root, configPath } = project(['a', 'b', 'c', 'd'], 0);
 
     expect(promptFor(root, configPath)).not.toContain('[STRADA NOTHING DRAWN]');
   });

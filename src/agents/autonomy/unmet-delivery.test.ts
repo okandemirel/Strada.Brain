@@ -132,14 +132,15 @@ describe("what blocks delivery", () => {
     expect(runThatPlayed(root).unmetDeliveryConditions()).toEqual([]);
   });
 
-  it("still objects when differing frames ride on a scene with no playfield", () => {
-    // Measured 2026-08-24: HUD progress-bar variation alone satisfied the old
-    // differing-frames rule while the playfield never existed.
-    const root = project();
-    framesOf(root, ["one", "two", "three"]);
+  it("still objects when frame variety is HUD-level", () => {
+    // Measured 2026-08-24: HUD progress-bar variation alone (13% distinct)
+    // satisfied the old differing-frames rule while nothing was drawn.
+    const root = assembled(0);
+    // 2 distinct of 10 = 20% — below the 25% substantive-variety bar.
+    framesOf(root, ["same", "same", "same", "same", "same", "same", "same", "same", "same", "diff"]);
 
     expect(runThatPlayed(root).unmetDeliveryConditions()).toEqual([
-      expect.stringContaining("frames differ only by HUD chrome"),
+      expect.stringContaining("vary too little"),
     ]);
   });
 });
