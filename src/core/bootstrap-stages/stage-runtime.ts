@@ -288,6 +288,7 @@ export async function initializeTaskRuntimeStage(
     daemonEventBus,
     learningEventBus: params.learningEventBus,
     workspaceLeaseManager,
+    projectPath: params.config.unityProjectPath,
   };
   const backgroundExecutor = deps.createBackgroundExecutor?.(backgroundExecutorOptions)
     ?? new BackgroundExecutor(backgroundExecutorOptions);

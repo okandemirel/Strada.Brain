@@ -181,6 +181,8 @@ interface TopLevelAdmissionResult {
 export interface BackgroundExecutorOptions {
   orchestrator: IOrchestrator;
   concurrencyLimit?: number;
+  /** Project root for post-delivery milestone integration (merge to current branch). */
+  projectPath?: string;
   decomposer?: GoalDecomposer;
   goalStorage?: GoalStorage;
   aiProvider?: IAIProvider;
@@ -233,6 +235,7 @@ export class BackgroundExecutor {
   private monitorLifecycle?: MonitorLifecycle;
   private daemonBudgetTracker?: BudgetTracker;
   private _unifiedBudgetManager?: UnifiedBudgetManager;
+  private readonly projectPath?: string;
 
   constructor(opts: BackgroundExecutorOptions) {
     // Stuck-task reaper: an executing task with no progress signal for an hour
@@ -249,6 +252,7 @@ export class BackgroundExecutor {
     reaper.unref?.();
     this.orchestrator = opts.orchestrator;
     this.concurrencyLimit = opts.concurrencyLimit ?? 3;
+    this.projectPath = opts.projectPath;
     // Enforce the ordering invariant: the per-task inactivity window must be at least
     // MIN_INACTIVITY_OVER_STREAM_RATIO× the per-call stream window, so a single long
     // (keepalive-kept-alive) LLM call can never trip the task timer before the stream
@@ -1208,6 +1212,12 @@ export class BackgroundExecutor {
 
         if (supervisorResult.success) {
           this.taskManager.complete(task.id, supervisorResult.output);
+          // Delivery includes INTEGRATION: worktree workers cannot merge to
+          // main (the source worktree owns the ref), so the executor does it
+          // here, at the source root, after a successful run. Measured
+          // 2026-08-24: milestone branches piled up unmerged and the user had
+          // to ask why the system "didn't merge it itself".
+          this.integrateMilestoneBranches(task);
           return;
         }
         if (supervisorResult.partial) {
@@ -1436,6 +1446,46 @@ export class BackgroundExecutor {
    * a visible report naming the blocker, never a silent row.
    * Returns true when a retry was scheduled (caller must NOT also fail()).
    */
+  /**
+   * Merge delivered milestone/feature branches into the current branch at the
+   * source root. Best-effort: a conflicted or non-fast history is left for the
+   * person, with the conflict named in the log — never silently dropped.
+   */
+  private integrateMilestoneBranches(task: Task): void {
+    const root = this.projectPath;
+    if (!root) return;
+    try {
+      const { execFileSync } = require("node:child_process") as typeof import("node:child_process");
+      const run = (args: string[]): string =>
+        execFileSync("git", ["-C", root, ...args], { encoding: "utf8", timeout: 30_000 });
+      const current = run(["rev-parse", "--abbrev-ref", "HEAD"]).trim();
+      const branches = run(["for-each-ref", "--format=%(refname:short)", "refs/heads/"])
+        .split("\n")
+        .map((b) => b.trim())
+        .filter((b) => /^(milestone|feature)\//.test(b) && b !== current);
+      for (const branch of branches) {
+        const merged = run(["merge-base", "--is-ancestor", branch, current]) === "";
+        if (merged) continue;
+        try {
+          run(["merge", "--no-ff", "-X", "ours", branch, "-m", `integrate ${branch} (post-delivery)`]);
+          getLoggerSafe().info("Integrated delivered milestone branch", { branch, task: task.id });
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          getLoggerSafe().warn("Milestone branch needs manual integration (conflict)", {
+            branch, task: task.id, error: msg.slice(0, 200),
+          });
+          try {
+            run(["merge", "--abort"]);
+          } catch { /* nothing to abort */ }
+        }
+      }
+    } catch (e) {
+      getLoggerSafe().debug("Milestone integration skipped", {
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
+
   /** Executing tasks whose last progress is older than this are considered wedged. */
   private static readonly STUCK_TASK_MS = 60 * 60_000;
 
@@ -1467,11 +1517,12 @@ export class BackgroundExecutor {
     // retry. Auto-resubmitting would re-ask the same question into the void
     // (measured 2026-08-24): deliver it to the channel and wait.
     if (/ask_user/i.test(reason)) {
+      const gateAsk = /gate|repeated|health/i.test(reason);
+      const message = gateAsk
+        ? "Paused after repeated failures. Reply with guidance (what to change or try) and the work continues from that point."
+        : "Paused on a question for you. Reply here with your answer and the work continues from that exact point.";
       try {
-        this.taskManager.appendTaskNotice(
-          task.id,
-          "Paused on a question for you. Reply here with your answer and the work continues from that exact point.",
-        );
+        this.taskManager.appendTaskNotice(task.id, message);
       } catch { /* visibility best-effort */ }
       return false;
     }
