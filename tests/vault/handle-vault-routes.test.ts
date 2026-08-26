@@ -154,7 +154,11 @@ describe('handleVaultRoutes', () => {
 describe('VaultRegistry display name', () => {
   it('drops the registered name when the vault is unregistered', () => {
     const registry = new VaultRegistry();
-    registry.register({ id: 'generic:abc', kind: 'unity-project', rootPath: '/x' } as unknown as IVault, 'My Project');
+    registry.register({
+      id: 'generic:abc', kind: 'unity-project', rootPath: '/x',
+      // unregister() best-effort disposes the vault; the fake must satisfy that.
+      dispose: async () => {},
+    } as unknown as IVault, 'My Project');
     expect(registry.getName('generic:abc')).toBe('My Project');
     registry.unregister('generic:abc');
     expect(registry.getName('generic:abc')).toBeUndefined();
