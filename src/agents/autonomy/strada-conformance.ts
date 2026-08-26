@@ -1,5 +1,6 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { assessSpecScope } from "./spec-scope.js";
+import { elementCodeTokens, extractScheduledElements, findDesignDoc } from "./spec-scope.js";
 import { createHash } from "node:crypto";
 import { getLogger } from "../../utils/logger.js";
 import { join as joinPath, resolve as resolvePath } from "node:path";
@@ -296,9 +297,31 @@ const ART_SOURCE_EXT: ReadonlySet<string> = new Set([
  */
 const ASSETS_UNSOURCED_GATE_LIMIT = 2;
 
+/**
+ * Per-element art coverage: does every element the GDD schedules have a real
+ * visual asset, and is that asset bound into a prefab. Asked twice, like the
+ * sibling above — the fix it names is concrete and cheap to attempt.
+ *
+ * This is the gate for the measured "prefab yapısı sözde oluşturulsa bile
+ * sahneler hep boş" failure (PixelFlow, 2026-08-26): code and even prefab
+ * FILES existed while no element had art and nothing rendered. SPEC SCOPE
+ * checks code against the schedule; this checks the schedule against ART.
+ */
+const ELEMENT_ASSET_COVERAGE_GATE_LIMIT = 2;
+
 function isArtSourceFile(filePath: string): boolean {
   const dotIdx = filePath.lastIndexOf(".");
   return dotIdx !== -1 && ART_SOURCE_EXT.has(filePath.slice(dotIdx).toLowerCase());
+}
+
+/** The guid out of a Unity .meta file, or undefined when unreadable/missing. */
+function readGuidFromMeta(metaPath: string): string | undefined {
+  try {
+    const m = /^guid:\s*([0-9a-f]{32})\s*$/m.exec(readFileSync(metaPath, "utf8"));
+    return m?.[1];
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -404,6 +427,8 @@ export class StradaConformanceGuard {
   private readonly authoredArtFiles = new Set<string>();
   private assetsUnsourcedRaised = 0;
   private assetsUnsourcedRaisedAtCall: number | null = null;
+  private elementAssetCoverageRaised = 0;
+  private elementAssetCoverageRaisedAtCall: number | null = null;
   private toolCallsSeen = 0;
   /** Module roots this run wrote C# into, e.g. "Assets/Modules/GameModule". */
   private readonly touchedModuleRoots = new Set<string>();
@@ -1066,6 +1091,83 @@ export class StradaConformanceGuard {
   }
 
   /**
+   * Per-element art coverage against the design document's element schedule.
+   *
+   * For every scheduled element: (1) an art source file under Assets/ whose
+   * name matches the element, (2) a prefab/asset/scene file that references
+   * that art file's guid — the binding chain without which the sprite sits on
+   * disk and draws nothing. Returns the gap list, or null when covered (or
+   * when the run is too early to judge: no code yet, or never run).
+   */
+  private elementAssetCoverageReason(): string | null {
+    if (!this.wroteProjectCode || !this.attemptedPlaymodeVerification) return null;
+    const projectPath = this.opts?.projectPath;
+    if (!projectPath) return null;
+
+    let elements;
+    try {
+      const docPath = findDesignDoc(projectPath);
+      if (!docPath) return null;
+      elements = extractScheduledElements(readFileSync(docPath, "utf8"));
+    } catch {
+      return null;
+    }
+    if (elements.length === 0) return null;
+
+    const assetsRoot = joinPath(projectPath, "Assets");
+    if (!existsSync(assetsRoot)) return elements.length > 0 ? `no Assets/ folder exists, so none of the ${elements.length} scheduled elements has art` : null;
+
+    const norm = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+    const artFiles = walkFiles(assetsRoot, 4000).filter((f) => isArtSourceFile(f));
+    const artNames = artFiles.map((f) => {
+      const base = f.replace(/\\/g, "/").split("/").pop() ?? f;
+      return norm(base.replace(/\.[^.]+$/, ""));
+    });
+
+    // Composable files that can carry a guid reference to the art.
+    const bindTargets = walkFiles(assetsRoot, 4000).filter((f) =>
+      /\.(prefab|asset|unity|mat|controller|playable)$/i.test(f),
+    );
+
+    const missingArt: string[] = [];
+    const unboundArt: string[] = [];
+    for (const el of elements) {
+      const tokens = elementCodeTokens(el.name).map(norm).filter(Boolean);
+      const matchIdx = artNames.findIndex((n) => tokens.some((t) => n.includes(t)));
+      if (matchIdx === -1) {
+        missingArt.push(el.name);
+        continue;
+      }
+      const guid = readGuidFromMeta(`${artFiles[matchIdx]!}.meta`);
+      if (!guid) continue; // Unreadable meta: cannot prove unbound, do not accuse.
+      const referenced = bindTargets.some((file) => {
+        try {
+          return readFileSync(file, "utf8").includes(guid);
+        } catch {
+          return false;
+        }
+      });
+      if (!referenced) unboundArt.push(el.name);
+    }
+
+    if (missingArt.length === 0 && unboundArt.length === 0) return null;
+    const parts: string[] = [];
+    if (missingArt.length > 0) {
+      parts.push(
+        `${missingArt.length} scheduled element(s) have NO art asset at all: ${missingArt.slice(0, 8).join(", ")}` +
+          (missingArt.length > 8 ? ` and ${missingArt.length - 8} more` : ""),
+      );
+    }
+    if (unboundArt.length > 0) {
+      parts.push(
+        `${unboundArt.length} element(s) have art that no prefab/asset/scene references (it draws nothing): ${unboundArt.slice(0, 8).join(", ")}` +
+          (unboundArt.length > 8 ? ` and ${unboundArt.length - 8} more` : ""),
+      );
+    }
+    return parts.join("; ");
+  }
+
+  /**
    * Art the project can actually render: source images and meshes, plus the
    * prefabs that place them.
    *
@@ -1325,6 +1427,36 @@ export class StradaConformanceGuard {
           ? " This is the last time this is asked. If the tool is not among the ones you have, " +
             "this project's Strada.MCP submodule predates it — say so rather than shipping a " +
             "scene with nothing in it."
+          : "")
+      );
+    }
+
+    // Per-element art coverage: a run can clear "assets sourced" and "frames
+    // differ" while its scheduled elements have no sprites at all — measured
+    // (PixelFlow, 2026-08-26): prefab structures existed on paper, scenes
+    // stayed empty, and no gate ever forced the target game's own assets to
+    // exist. SPEC SCOPE checks code against the schedule; this gate checks
+    // the schedule against ART — each element needs a sprite that exists AND
+    // is bound into something that renders it.
+    const coverage = this.elementAssetCoverageReason();
+    if (coverage !== null && this.elementAssetCoverageRaised < ELEMENT_ASSET_COVERAGE_GATE_LIMIT) {
+      if (this.elementAssetCoverageRaisedAtCall !== this.toolCallsSeen) {
+        this.elementAssetCoverageRaised += 1;
+        this.elementAssetCoverageRaisedAtCall = this.toolCallsSeen;
+      }
+      const lastAsk = this.elementAssetCoverageRaised === ELEMENT_ASSET_COVERAGE_GATE_LIMIT;
+      return (
+        `[STRADA ELEMENT ASSETS MISSING] ${coverage}. ` +
+        "The design's element schedule is the contract for what must be VISIBLE, not only " +
+        "implemented. For each named element: first run unity_my_assets for art the user " +
+        "already owns; when nothing fits, generate one with unity_generate_sprite (it writes " +
+        "the PNG and its Sprite .meta with no Editor), then bind the sprite into the element's " +
+        "prefab — a SpriteRenderer's sprite field, a config asset's sprite field, or whatever " +
+        "the module's view layer actually reads. A sprite on disk that nothing references is " +
+        "the same as no sprite." +
+        (lastAsk
+          ? " This is the last time this is asked. If elements still have no bound art when " +
+            "you finish, report the game as partially delivered and say which elements are invisible."
           : "")
       );
     }
