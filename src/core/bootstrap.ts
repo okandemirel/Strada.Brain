@@ -911,7 +911,16 @@ async function bootstrapImpl(
           // own location and survives the chdir.
           const { resolveRuntimePaths } = await import("../common/runtime-paths.js");
           const brainRoot = resolveRuntimePaths({ moduleUrl: import.meta.url }).installRoot;
-          for (const target of frameworkVaultTargets(stradaDeps, brainRoot)) {
+          const selfVaultActive =
+            config.vault?.self?.enabled !== false &&
+            vaultRegistry.list().some((v) => v.id.startsWith("self:"));
+          // SelfVault already curates this repo; a second whole-repo vault would
+          // re-watch dist/benchmarks artifacts (~1.7K fds) and feed generated
+          // .d.ts noise into vault_search.
+          const targets = frameworkVaultTargets(stradaDeps, brainRoot).filter(
+            (t) => t.name !== "Strada.Brain" || !selfVaultActive,
+          );
+          for (const target of targets) {
             if (!existsSync(target.rootPath)) continue;
             const hash = createHash("sha1").update(target.rootPath).digest("hex").slice(0, 8);
             const id = `generic:${hash}`;

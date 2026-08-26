@@ -55,14 +55,19 @@ describe("which codebases get indexed", () => {
   it("is what bootstrap actually registers", () => {
     // The selection is worth nothing unless boot loops over it. Slice the
     // registration block rather than the file: a mention in a comment would
-    // pass while nothing was registered.
+    // pass while nothing was registered. (Window covers target filtering +
+    // registration + the fire-and-forget init; it grew when boot grew a
+    // SelfVault-dedup filter between the call and the loop body.)
     const source = readFileSync("src/core/bootstrap.ts", "utf8");
     const at = source.indexOf("frameworkVaultTargets(");
-    const block = source.slice(at, at + 900);
+    const block = source.slice(at, at + 1500);
 
     expect(at, "bootstrap never asks which codebases to index").toBeGreaterThan(-1);
     expect(block).toContain("vaultRegistry.register(vault, target.name)");
     expect(block, "a vault that is never initialised indexes nothing").toContain("vault.init()");
+    expect(block, "the whole-repo Strada.Brain vault must stay skippable").toContain(
+      't.name !== "Strada.Brain"',
+    );
   });
 
   it("does not register a path that is not on disk", () => {
