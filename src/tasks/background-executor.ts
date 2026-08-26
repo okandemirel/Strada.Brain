@@ -47,6 +47,7 @@ import type { UnifiedBudgetManager } from "../budget/unified-budget-manager.js";
 import { getLogger } from "../utils/logger.js";
 import { summariseNodeOutcomes } from "./node-outcome-summary.js";
 import { decideAutoResume, type AutoResumeState , decideMissionKeepAlive } from "./auto-resume.js";
+import { ProviderHealthRegistry } from "../agents/providers/provider-health.js";
 import { WorkspaceLeaseManager } from "../agents/multi/workspace-lease-manager.js";
 import type { WorkerRunRequest, WorkerRunResult } from "../agents/supervisor/supervisor-types.js";
 import {
@@ -1611,12 +1612,18 @@ export class BackgroundExecutor {
       return false;
     }
 
-    const seconds = Math.round(decision.backoffMs / 1000);
     this.missionRetries.set(key, decision.attempt + 1);
+    // A retry fired into an all-provider cooldown is a guaranteed burn: the
+    // resubmitted task dies in its planning call before doing any work.
+    // Measured overnight 2026-08-27: the keep-alive fed doomed decompositions
+    // every 30–60s for over an hour while both providers sat cooled. When every
+    // tracked provider is cooling, wait out the soonest recovery instead.
+    const cooldownWaitMs = this.allProvidersCoolingDownMs();
+    const effectiveBackoffMs = Math.max(decision.backoffMs, cooldownWaitMs);
     try {
       this.taskManager.block(
         task.id,
-        `Transient failure — ${reason.slice(0, 160)}. Auto-retry ${decision.attempt + 1}/${10} in ~${seconds}s.`,
+        `Transient failure — ${reason.slice(0, 160)}. Auto-retry ${decision.attempt + 1}/${10} in ~${Math.round(effectiveBackoffMs / 1000)}s.`,
       );
     } catch { /* block-marking is cosmetic here */ }
     const timer = setTimeout(() => {
@@ -1634,12 +1641,31 @@ export class BackgroundExecutor {
           this.taskManager?.appendTaskNotice(task.id, `Auto-resubmit failed after backoff. Last blocker: ${reason.slice(0, 200)}`);
         } catch { /* best effort */ }
       }
-    }, decision.backoffMs);
+    }, effectiveBackoffMs);
     timer.unref?.();
     getLoggerSafe().info("Mission keep-alive scheduled", {
-      taskId: task.id, attempt: decision.attempt + 1, backoffMs: decision.backoffMs, reason: reason.slice(0, 120),
+      taskId: task.id, attempt: decision.attempt + 1, backoffMs: effectiveBackoffMs, reason: reason.slice(0, 120),
+      ...(cooldownWaitMs > 0 ? { waitingOutProviderCooldownMs: cooldownWaitMs } : {}),
     });
     return true;
+  }
+
+  /**
+   * Milliseconds until the soonest provider cooldown expiry — but only when
+   * EVERY tracked provider is cooling (a retry has no one to run on). Zero
+   * when anyone is available or nothing is tracked.
+   */
+  private allProvidersCoolingDownMs(): number {
+    try {
+      const entries = [...ProviderHealthRegistry.getInstance().getAllEntries().values()];
+      if (entries.length === 0) return 0;
+      const now = Date.now();
+      const cooling = entries.filter((e) => e.cooldownUntil > now);
+      if (cooling.length < entries.length) return 0;
+      return Math.max(0, Math.min(...cooling.map((e) => e.cooldownUntil)) - now) + 1_000;
+    } catch {
+      return 0;
+    }
   }
 
   /**

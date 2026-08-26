@@ -2071,6 +2071,70 @@ describe("BackgroundExecutor - auto-resume bounds (measured loop of 2026-08-26)"
     );
   });
 
+  it("waits out an all-provider cooldown instead of burning a doomed retry", async () => {
+    // Seed the shared health registry: the only known provider is cooling.
+    // recordOverloaded gives a short, exact cooldown (5 min) — big enough to
+    // dwarf the plain 30s backoff, small enough for fake timers.
+    const { ProviderHealthRegistry } = await import("../agents/providers/provider-health.js");
+    const registry = ProviderHealthRegistry.getInstance();
+    registry.clearProviderState("claude");
+    registry.recordOverloaded("claude", "503 cluster overload");
+    const entry = registry.getEntry("claude");
+    expect(entry && entry.cooldownUntil > Date.now()).toBe(true);
+    const remainingMs = entry!.cooldownUntil - Date.now();
+
+    const orch = createMockOrchestrator();
+    orch.evaluateSupervisorAdmission.mockResolvedValue({
+      path: "supervisor",
+      reason: "eligible",
+      result: {
+        success: false, partial: true, output: "providers down",
+        totalNodes: 0, succeeded: 0, failed: 0, skipped: 0,
+        totalCost: 0, totalDuration: 0, nodeResults: [],
+      },
+    });
+
+    const executor = new BackgroundExecutor({
+      orchestrator: orch as any,
+      decomposer: createMockDecomposer() as any,
+      goalStorage: createMockGoalStorage() as any,
+      daemonEventBus: createMockDaemonEventBus() as any,
+      aiProvider: undefined,
+      channel: undefined,
+    });
+    const taskManager = {
+      updateStatus: vi.fn(), complete: vi.fn(), fail: vi.fn(), block: vi.fn(),
+      appendTaskNotice: vi.fn(),
+      retryGoalRoot: vi.fn(), replanGoalRoot: vi.fn(), retryTask: vi.fn(),
+      getStatus: vi.fn().mockReturnValue(null),
+    };
+    executor.setTaskManager(taskManager as any);
+
+    vi.useFakeTimers();
+    try {
+      const start = Date.now();
+      executor.enqueue(
+        createTestTask(buildTestGoalTree(), { origin: "user" }),
+        new AbortController().signal,
+        vi.fn(),
+      );
+      // Settle the task (microtasks), then confirm the plain 30s backoff does
+      // NOT fire the retry — the cooldown floor holds it.
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.waitFor(() => expect(taskManager.block).toHaveBeenCalled());
+      await vi.advanceTimersByTimeAsync(31_000);
+      expect(taskManager.retryTask).not.toHaveBeenCalled();
+
+      // Past the cooldown (+1s margin), the retry finally goes out.
+      await vi.advanceTimersByTimeAsync(remainingMs);
+      expect(taskManager.retryTask).toHaveBeenCalledTimes(1);
+      void start;
+    } finally {
+      vi.useRealTimers();
+      registry.clearProviderState("claude");
+    }
+  });
+
   it("mission keep-alive catches a partial settle that never formed a goal tree", async () => {
     // Measured 2026-08-26: an all-provider cooldown failed the decomposition
     // call itself; the task settled partial with zero nodes and NO tree — the
