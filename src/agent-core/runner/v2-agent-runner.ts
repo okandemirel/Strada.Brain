@@ -787,6 +787,17 @@ export class V2AgentRunner implements AgentRunner {
         // the epoch bump. The spine-local consecutiveMaxTokens reset (v1's continue-only step) stays here — a port hook
         // cannot touch a spine local. EXACTLY ONCE per boundary.
         await port.onEpochRollover(true, epoch, state);
+        // Rolling crash checkpoint: only budget_exceeded and manual_pause wrote
+        // checkpoints, so a process death mid-epoch lost every tool result
+        // since the last such event while recovery claimed otherwise. One save
+        // per continue-rollover bounds that loss to at most one epoch.
+        await port.saveRollingCheckpoint?.({
+          taskId: request.taskRunId ?? request.chatId,
+          chatId: request.chatId,
+          ...(request.userId ? { userId: request.userId } : {}),
+          lastUserMessage: request.prompt,
+          epoch,
+        });
         consecutiveMaxTokens = 0;
         epoch++;
         await guardedSleep(bus, clock, 0, { type: "epoch.rolled", epoch });

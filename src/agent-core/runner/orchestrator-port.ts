@@ -191,6 +191,15 @@ export interface BudgetCheckpointParams {
   readonly budget: number;
 }
 
+/** Rolling per-epoch crash checkpoint (background continue path only). */
+export interface EpochCheckpointParams {
+  readonly taskId: string;
+  readonly chatId: string;
+  readonly userId?: string;
+  readonly lastUserMessage: string;
+  readonly epoch: number;
+}
+
 export interface DispatchReflectionParams {
   readonly mode: RunnerModeLike;
   readonly agentState: AgentState;
@@ -371,6 +380,18 @@ export interface OrchestratorPort {
 
   /** Persist the budget-exceeded checkpoint (gauntlet #9 stop path). */
   saveBudgetExceededCheckpoint(params: BudgetCheckpointParams): Promise<void>;
+
+  /**
+   * Persist the ROLLING per-epoch checkpoint on the background continue path.
+   *
+   * Only two writers existed before (budget_exceeded, manual_pause), so a hard
+   * exit mid-epoch — provider outage killing the process, OOM, SIGKILL — left
+   * NO checkpoint while startup recovery told the user the task "will continue
+   * from the strongest checkpoint". Calling this at every continue-rollover
+   * bounds crash loss to at most one epoch. Optional: ports without a
+   * checkpoint store may omit it.
+   */
+  saveRollingCheckpoint?(params: EpochCheckpointParams): Promise<void>;
 
   // ════ THE verdict bridge — the health/failure half of VerdictInput ═════════════════
   /**

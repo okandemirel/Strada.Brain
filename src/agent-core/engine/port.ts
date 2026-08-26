@@ -71,6 +71,13 @@ export interface PortDeps extends ToolTurnDeps {
     used: number;
     budget: number;
   }): Promise<void>;
+  saveRollingCheckpoint(params: {
+    taskId: string;
+    chatId: string;
+    userId?: string;
+    lastUserMessage: string;
+    epoch: number;
+  }): Promise<void>;
   withTaskExecutionContext<T>(
     context: { chatId: string; conversationId?: string; userId?: string; identityKey: string; taskRunId: string },
     run: () => Promise<T>,
@@ -235,6 +242,7 @@ export function createAgentCorePort(
         c.cumulativeOutputTokens += usage?.outputTokens ?? 0; // 3.3: feed the interactive budget gate (output-only)
       },
       saveBudgetExceededCheckpoint: (params) => deps.saveBudgetExceededCheckpoint(params),
+      saveRollingCheckpoint: (params) => deps.saveRollingCheckpoint(params),
 
       // ── D. the verdict bridge (ADAPT: record into tracker, RETURN INPUT, no verdict) ─────────
       classifyFailureForVerdict: (params: ClassifyFailureParams): FailureVerdictContribution =>

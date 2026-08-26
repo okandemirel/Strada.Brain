@@ -1209,6 +1209,7 @@ export class Orchestrator {
       maybeCompactSession: (session, providerName, modelId, systemPrompt) =>
         this.maybeCompactSession(session, providerName, modelId, systemPrompt),
       saveBudgetExceededCheckpoint: (params) => this.saveBudgetExceededCheckpoint(params),
+      saveRollingCheckpoint: (params) => this.saveRollingCheckpoint(params),
       withTaskExecutionContext: (context, run) => this.withTaskExecutionContext(context, run),
       portOnEpochRollover: (continued, epoch, agentState, runCtx) =>
         this.portOnEpochRollover(continued, epoch, agentState, runCtx),
@@ -2450,6 +2451,30 @@ export class Orchestrator {
       lastUserMessage: params.lastUserMessage,
       touchedFiles: [],
       budgetState: { used: params.used, budget: params.budget },
+    });
+  }
+
+  /**
+   * Rolling per-epoch crash checkpoint (background continue path). The stage
+   * is `provider_failed` because that is the resume path command-handler
+   * already knows how to replay; the payload's value on a hard crash is its
+   * existence + recency + the original prompt, not rich state.
+   */
+  private async saveRollingCheckpoint(params: {
+    taskId: string;
+    chatId: string;
+    userId?: string;
+    lastUserMessage: string;
+    epoch: number;
+  }): Promise<void> {
+    await this.persistCheckpoint({
+      taskId: params.taskId,
+      chatId: params.chatId,
+      ...(params.userId ? { userId: params.userId } : {}),
+      timestamp: Date.now(),
+      stage: "provider_failed",
+      lastUserMessage: params.lastUserMessage,
+      touchedFiles: [],
     });
   }
 
