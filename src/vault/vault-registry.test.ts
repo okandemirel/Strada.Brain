@@ -122,3 +122,43 @@ describe('VaultRegistry', () => {
     await expect(registry.createAndRegister(dir)).rejects.toThrow('vault factory unavailable');
   });
 });
+
+describe('VaultRegistry disposal', () => {
+  it('unregister disposes the vault instead of leaking its handles', async () => {
+    // Only the dashboard DELETE route disposed explicitly; every other caller
+    // silently leaked watcher fds and SQLite handles for process lifetime.
+    const registry = new VaultRegistry();
+    const vault = createFakeVault({ id: 'leaky', rootPath: '/tmp/vault-leaky' });
+    registry.register(vault);
+
+    registry.unregister('leaky');
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(vault.dispose).toHaveBeenCalledTimes(1);
+    expect(registry.get('leaky')).toBeUndefined();
+  });
+
+  it('disposeAll disposes every vault even when one dispose throws, and always clears state', async () => {
+    // One throwing dispose used to abort the loop: every vault after it leaked
+    // AND the map clears were skipped — the failure mode shutdown exists for.
+    const registry = new VaultRegistry();
+    const first = createFakeVault({ id: 'first', rootPath: '/tmp/v-d1' });
+    const broken = createFakeVault({
+      id: 'broken',
+      rootPath: '/tmp/v-d2',
+      dispose: vi.fn(async () => { throw new Error('dispose exploded'); }),
+    });
+    const last = createFakeVault({ id: 'last', rootPath: '/tmp/v-d3' });
+    registry.register(first);
+    registry.register(broken);
+    registry.register(last);
+
+    await expect(registry.disposeAll()).resolves.toBeUndefined();
+
+    expect(first.dispose).toHaveBeenCalledTimes(1);
+    expect(broken.dispose).toHaveBeenCalledTimes(1);
+    expect(last.dispose).toHaveBeenCalledTimes(1);
+    expect(registry.list()).toEqual([]);
+    expect(registry.ids()).toEqual([]);
+  });
+});

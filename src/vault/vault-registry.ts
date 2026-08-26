@@ -2,6 +2,7 @@ import { realpathSync } from 'node:fs';
 import { isAbsolute, resolve, sep } from 'node:path';
 import type { IVault, VaultId, VaultQuery, VaultQueryResult, VaultHit, VaultStats } from './vault.interface.js';
 import { isVaultRootAllowed, redactPathsInMessage, resolveExistingVaultRoot } from './path-policy.js';
+import { getLoggerSafe } from '../utils/logger.js';
 
 export interface VaultFactory {
   createVault(rootPath: string): IVault | Promise<IVault>;
@@ -126,6 +127,12 @@ export class VaultRegistry {
     this.vaults.delete(id);
     this.initStates.delete(id);
     this.names.delete(id);
+    // Best-effort dispose: the dashboard DELETE route disposed explicitly, but
+    // every other caller silently leaked the vault's watcher fds and SQLite
+    // handles for process lifetime. dispose() is idempotent across the vault
+    // implementations (guarded store.close, null-safe stopWatch), so the
+    // explicit disposes elsewhere stay harmless.
+    if (v) void v.dispose().catch(() => undefined);
   }
   get(id: VaultId): IVault | undefined { return this.vaults.get(id); }
 
@@ -207,7 +214,19 @@ export class VaultRegistry {
   }
 
   async disposeAll(): Promise<void> {
-    for (const v of this.vaults.values()) await v.dispose();
+    // allSettled, not sequential await: one throwing dispose used to abort the
+    // loop, and every vault after it leaked its watcher fds and SQLite handles
+    // while the map clears below were skipped too.
+    const vaults = [...this.vaults.values()];
+    const settled = await Promise.allSettled(vaults.map((v) => v.dispose()));
+    for (const [index, result] of settled.entries()) {
+      if (result.status === 'rejected') {
+        getLoggerSafe().warn('[VaultRegistry] vault dispose failed during shutdown', {
+          vaultId: vaults[index]?.id,
+          err: result.reason instanceof Error ? result.reason.message : String(result.reason),
+        });
+      }
+    }
     this.vaults.clear();
     this.rootRealpathCache.clear();
     this.names.clear();
