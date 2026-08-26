@@ -7,7 +7,6 @@ import {
   isIgnoredVaultPath,
   isPotentiallyIndexableVaultPath,
 } from './path-policy.js';
-
 export interface VaultWatcherOptions {
   root: string;
   debounceMs: number;
@@ -91,10 +90,22 @@ export class VaultWatcher {
       // were, and a plan was still reading a project that had been deleted.
       // A Library or .git folder *inside* a vault is still ignored, which is
       // what the rule was for.
-      ignored: (path) => {
-        const rel = relative(this.opts.root, path).replaceAll('\\', '/');
+      ignored: (absPath, stats) => {
+        const rel = relative(this.opts.root, absPath).replaceAll('\\', '/');
         if (rel === '' || rel.startsWith('..')) return false;
-        return IGNORE_REGEX.test('/' + rel);
+        if (IGNORE_REGEX.test('/' + rel)) return true;
+        if (rootIsFile) return false;
+        // Never hand non-indexable FILES to fs.watch. On macOS every
+        // fs.watch(file) pins one FSEvents fd for the process lifetime —
+        // watching every Recordings frame / .asset / dist artifact of a Unity
+        // project accumulated ~11K fds within minutes of boot and spawn
+        // started failing with EBADF (2026-08-26 incident). chokidar only
+        // consults `ignored` for files it would otherwise register a watcher
+        // for, so filtering here keeps the fd table flat; directories pass
+        // through so traversal continues. The predicate mirrors the drain-time
+        // shouldIngest rejection exactly, so no previously indexed file is lost.
+        if (stats?.isFile() && !isPotentiallyIndexableVaultPath(rel)) return true;
+        return false;
       },
     });
     const computeRel = (absPath: string): string => {
