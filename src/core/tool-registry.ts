@@ -50,6 +50,7 @@ import { ModuleCreateTool } from "../agents/tools/strada/module-create.js";
 import { ComponentCreateTool } from "../agents/tools/strada/component-create.js";
 import { MediatorCreateTool } from "../agents/tools/strada/mediator-create.js";
 import { SystemCreateTool } from "../agents/tools/strada/system-create.js";
+import { SpriteGenerateTool } from "../agents/tools/unity/sprite-generate.js";
 
 // Code quality and search
 import { CodeQualityTool } from "../agents/tools/code-quality.js";
@@ -633,6 +634,13 @@ export class ToolRegistry {
     });
 
     this.register(new SystemCreateTool(), {
+      category: ToolCategories.STRADA,
+      dangerous: true,
+      requiresConfirmation: true,
+      readOnly: false,
+    });
+
+    this.register(new SpriteGenerateTool(), {
       category: ToolCategories.STRADA,
       dangerous: true,
       requiresConfirmation: true,
