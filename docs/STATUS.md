@@ -11,6 +11,34 @@ external service or credentials, it says so and does **not** assume it works.
 
 ---
 
+## Addendum — 2026-08-26 reliability hardening
+
+The matrix below reflects the 2026-06-02 audit. Since then the system ran
+multi-day autonomous coding missions in production, which surfaced (and fixed)
+a class of long-horizon defects the 2026-06-02 suite could not see. All verified
+by unit/integration tests plus live observation:
+
+| Date | Change | Evidence |
+|---|---|---|
+| 2026-08-26 | Vault watchers no longer attach per-file `fs.watch` to non-indexable files (`src/vault/watcher.ts`) — on macOS each pinned an FSEvents fd for process lifetime; a Unity project vault reached ~11.4K fds within minutes of boot and spawn failed with EBADF | `watcher-scope.test.ts`; live fd trace 11,414 → 1,523 |
+| 2026-08-26 | Duplicate whole-repo Strada.Brain framework vault skipped while SelfVault covers the same tree (`src/core/bootstrap.ts`) — removes ~1.7K duplicate watchers + generated `.d.ts` noise from results | same live trace |
+| 2026-08-26 | Lease commit: per-file failure resilience (`failed[]` reported), conflicted agent versions quarantined under `.strada/lease-conflicts/<lease>/` instead of destroyed with the workspace | `workspace-lease-commit.test.ts` |
+| 2026-08-26 | Startup salvage of orphaned workspaces from crashed predecessors (`workspace-lease-manager.ts` constructor) — restores new files, quarantines conflicts, prunes stale worktree registrations; replaces the external watchdog rsync workaround | `workspace-lease-commit.test.ts` (salvage block) |
+| 2026-08-26 | Stuck-task reaper aborts the in-flight execution before marking failed — previously the concurrency slot and chat lock leaked forever, starving later tasks | `background-executor.test.ts` |
+| 2026-08-26 | Graceful shutdown settles in-flight tasks (bounded 10s) BEFORE disposing leases — previously deleted agent cwds mid-run on every restart | same |
+| 2026-08-26 | Daemon queue no longer deferred indefinitely by abandoned `paused` / `waiting_for_input` rows | `task-manager.test.ts` |
+| 2026-08-26 | Rolling checkpoint persisted per background epoch — crash loss bounded to one epoch (previously: no writer for the declared `provider_failed` stage, recovery message over-promised) | spine + orchestrator port |
+| 2026-08-26 | Vault lifecycle races closed: `startWatch` TOCTOU double-check, init idempotence while watching, dashboard DELETE-during-init watcher orphan guard, per-vault vector stores (shared-store `clear()` aliasing), register-before-watch ordering | vault/dashboard/core suites |
+
+Known open items after this round:
+
+- Retrieval consolidation plan ([specs/2026-08-23](specs/2026-08-23-retrieval-consolidation-plan.md)) remains Proposed.
+- SelfVault still watches generated `.d.ts` under `dist/` (legitimately indexable by extension); excluding build outputs would cut ~600 more fds but changes retrieval scope.
+- Deployment degradations below are unchanged: Ollama down ⇒ learning embeddings disabled; provider chain as configured.
+
+---
+
+
 ## How to read the columns
 
 - **Implemented?** Does the code exist and compile/ship?
