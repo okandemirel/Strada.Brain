@@ -269,6 +269,13 @@ export function handleVaultRoutes(
         void (async () => {
           try {
             await initPromise;
+            // A DELETE may have unregistered + disposed this vault while init
+            // was still running (fullIndex swallows per-file errors, so it
+            // resolves even against a closed store). Starting a watcher on the
+            // disposed orphan would pin its fds for process lifetime —
+            // unreachable by any future dispose because the registry no
+            // longer knows it.
+            if (registry.get(id) !== vault) return;
             // Best-effort watcher start; UnityProjectVault exposes startWatch,
             // SelfVault does not, so duck-type the call.
             const maybeWatcher = (vault as unknown as { startWatch?: (ms: number) => Promise<void> });

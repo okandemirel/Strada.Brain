@@ -153,8 +153,11 @@ export async function initVaultsFromBootstrap(input: InitVaultsInput): Promise<v
     vectorStore: input.vectorStore,
   });
   await vault.init();
-  await vault.startWatch(input.config.vault.debounceMs ?? 800);
+  // Register BEFORE startWatch, same reason as SelfVault below: a watcher
+  // start failure must not orphan already-started watchers outside the
+  // registry where nothing can stop them.
   input.vaultRegistry.register(vault);
+  await vault.startWatch(input.config.vault.debounceMs ?? 800);
 }
 
 import { SelfVault } from "../../vault/self-vault.js";
@@ -187,8 +190,11 @@ export async function initSelfVaultFromBootstrap(input: InitSelfVaultInput): Pro
     vectorStore: input.vectorStore,
   });
   await vault.init();
-  await vault.startWatch(input.config.vault?.debounceMs ?? 800);
+  // Register BEFORE startWatch: if any per-root watcher start rejects, the
+  // already-started watchers would otherwise be unreachable — the bootstrap
+  // catch drops this object, leaving their fds pinned for process lifetime.
   input.vaultRegistry.register(vault);
+  await vault.startWatch(input.config.vault?.debounceMs ?? 800);
 }
 
 export interface InitObsidianVaultInput {

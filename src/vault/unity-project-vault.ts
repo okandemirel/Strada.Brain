@@ -71,6 +71,7 @@ export class UnityProjectVault implements IVault {
   protected emitter = new EventEmitter();
   protected dbPath: string;
   protected watcher: IVaultWatcher | null = null;
+  private initialized = false;
   /** Serializes reindexFile()/delete passes — mirrors ObsidianVault.writeLock. */
   protected writeLock = new AsyncLock();
   /**
@@ -95,9 +96,17 @@ export class UnityProjectVault implements IVault {
   }
 
   async init(): Promise<void> {
+    // Idempotent ONLY while a watcher is live: the watcher owns freshness then,
+    // so re-invoking vault_init on a running vault used to re-walk the entire
+    // tree per call — a full disk pass each time on days-long autonomous runs.
+    // Without a watcher nothing maintains freshness, so init() must still
+    // reconcile the index against the disk (files may have been deleted or
+    // added while the vault was offline).
+    if (this.initialized && this.watcher) return;
     await mkdir(join(this.rootPath, '.strada/vault/codebase'), { recursive: true });
     this.store.migrate();
     await this.fullIndex();
+    this.initialized = true;
   }
 
   async sync(): Promise<{ changed: number; durationMs: number }> {
@@ -112,6 +121,9 @@ export class UnityProjectVault implements IVault {
     this.store = new SqliteVaultStore(this.dbPath);
     // Clear stale HNSW state so old hnsw_id pointers don't leak into the new index
     this.adapter.store.clear();
+    // A rebuild deliberately discards the index — init()'s idempotence guard
+    // must not read as "already done" or the fresh store stays empty.
+    this.initialized = false;
     await this.init();
   }
 
@@ -242,6 +254,11 @@ export class UnityProjectVault implements IVault {
     } catch {
       throw new Error('VaultWatcher not available — watcher.ts is not yet implemented (Task 9)');
     }
+    // Re-check after the await: two concurrent startWatch() calls both pass the
+    // guard above inside the import window, and the first watcher instance is
+    // then overwritten — orphaned with live fds, unreachable by stopWatch()
+    // forever. SelfVault defends this exact race with the same double-check.
+    if (this.watcher) return;
     this.watcher = new WatcherCtor({
       root: this.rootPath,
       debounceMs,

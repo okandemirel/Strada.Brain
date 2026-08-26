@@ -88,6 +88,17 @@ describe('UnityProjectVault', () => {
     expect(vault.listFiles().map((f) => f.path)).not.toContain('Assets/Scripts/Enemy.cs');
   });
 
+  it('init skips the full re-index while a watcher maintains freshness', async () => {
+    // Repeated vault_init on a running vault used to re-walk the entire tree
+    // per call — a full disk pass each time on days-long autonomous runs.
+    await vault.init();
+    await vault.startWatch(150);
+    const fullIndex = vi.spyOn(vault as unknown as { fullIndex: () => Promise<void> }, 'fullIndex');
+    await vault.init();
+    await vault.stopWatch();
+    expect(fullIndex).not.toHaveBeenCalled();
+  });
+
   it('reindexes files added after startWatch', async () => {
     await vault.init();
     await vault.startWatch(150);

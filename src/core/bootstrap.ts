@@ -772,16 +772,26 @@ async function bootstrapImpl(
       // with `semantic: true`, which restores HNSW into the RRF fusion exactly
       // as "embeddings only enhance" intends. `add`/`remove` stay functional so
       // the existing index/lifecycle bookkeeping (hnsw_id mapping) is unchanged.
-      let nextId = 1;
-      const vaultStore = new Map<number, { v: Float32Array; payload: unknown }>();
-      const vaultVectorStore = {
-        semantic: false as const,
-        add(v: Float32Array, payload: unknown): number { const id = nextId++; vaultStore.set(id, { v, payload }); return id; },
-        remove(id: number): void { vaultStore.delete(id); },
-        search(_q: Float32Array, _k: number): Array<{ id: number; score: number; payload?: unknown }> {
-          return [];
-        },
-        clear(): void { vaultStore.clear(); nextId = 1; },
+      // One store PER VAULT, not one shared instance: a shared store let any
+      // vault's rebuild() clear() every other vault's vectors and reset the id
+      // counter to 1, so newly issued ids collided with ids persisted in other
+      // vaults' embedding tables — a later remove(id) from vault A deleted
+      // vault B's live entry. Obsidian's rebuild (which never cleared) made the
+      // asymmetry worse: dead vectors accumulated forever. Latent while
+      // semantic:false keeps vectors query-inert; corruption the moment a real
+      // HNSW store lands.
+      const createVaultVectorStore = () => {
+        let nextId = 1;
+        const entries = new Map<number, { v: Float32Array; payload: unknown }>();
+        return {
+          semantic: false as const,
+          add(v: Float32Array, payload: unknown): number { const id = nextId++; entries.set(id, { v, payload }); return id; },
+          remove(id: number): void { entries.delete(id); },
+          search(_q: Float32Array, _k: number): Array<{ id: number; score: number; payload?: unknown }> {
+            return [];
+          },
+          clear(): void { entries.clear(); nextId = 1; },
+        };
       };
       const { UnityProjectVault } = await import("../vault/unity-project-vault.js");
       const runtimeVaultFactory = {
@@ -791,7 +801,7 @@ async function bootstrapImpl(
             id: spec.id,
             rootPath: spec.rootPath,
             embedding: vaultEmbedding,
-            vectorStore: vaultVectorStore,
+            vectorStore: createVaultVectorStore(),
           });
         },
       };
@@ -815,7 +825,7 @@ async function bootstrapImpl(
             config: { vault: config.vault, unityProjectPath: config.unityProjectPath },
             vaultRegistry,
             embedding: vaultEmbedding,
-            vectorStore: vaultVectorStore,
+            vectorStore: createVaultVectorStore(),
           });
         } catch (err) {
           logger.warn("[vault] Unity auto-discovery failed", { err });
@@ -830,7 +840,7 @@ async function bootstrapImpl(
           config: { vault: config.vault },
           vaultRegistry,
           embedding: vaultEmbedding,
-          vectorStore: vaultVectorStore,
+          vectorStore: createVaultVectorStore(),
           repoRoot: process.cwd(),
         });
       } catch (err) {
@@ -843,7 +853,7 @@ async function bootstrapImpl(
           config: { obsidian: config.obsidian },
           vaultRegistry,
           embedding: vaultEmbedding,
-          vectorStore: vaultVectorStore,
+          vectorStore: createVaultVectorStore(),
         });
       } catch (err) {
         logger.warn("[vault] ObsidianVault initialization failed", { err });
@@ -976,7 +986,7 @@ async function bootstrapImpl(
             id: `knowledge:${hash}`,
             rootPath: knowledgeRoot,
             embedding: vaultEmbedding,
-            vectorStore: vaultVectorStore,
+            vectorStore: createVaultVectorStore(),
           });
           vaultRegistry.register(knowledgeVault, "Dev Knowledge");
           devKnowledgeVaultRegistered = true;
