@@ -1070,10 +1070,18 @@ export class BackgroundExecutor {
               });
             }
             if (result.conflicts.length > 0) {
-              // Not silent: the agent's version of these files is about to be
-              // deleted, and the user needs to know their edit won the race.
-              getLogger().warn("Workspace lease had conflicting files — source kept, agent copy discarded", {
+              // Not silent: the agent's version of these files used to be
+              // deleted with the workspace; it is now preserved under
+              // .strada/lease-conflicts so nothing is lost to a race.
+              getLogger().warn("Workspace lease had conflicting files — source kept, agent copy quarantined", {
                 conflicts: result.conflicts.slice(0, 20),
+                quarantinedUnder: result.conflictsQuarantinedUnder,
+              });
+            }
+            if (result.failed.length > 0) {
+              getLogger().warn("Workspace lease commit could not process some files", {
+                count: result.failed.length,
+                failed: result.failed.slice(0, 20),
               });
             }
           })
@@ -1373,8 +1381,15 @@ export class BackgroundExecutor {
               });
             }
             if (result.conflicts.length > 0) {
-              getLogger().warn("Task workspace had conflicting files — project kept, agent copy discarded", {
+              getLogger().warn("Task workspace had conflicting files — project kept, agent copy quarantined", {
                 conflicts: result.conflicts.slice(0, 20),
+                quarantinedUnder: result.conflictsQuarantinedUnder,
+              });
+            }
+            if (result.failed.length > 0) {
+              getLogger().warn("Task workspace commit could not process some files", {
+                count: result.failed.length,
+                failed: result.failed.slice(0, 20),
               });
             }
           })

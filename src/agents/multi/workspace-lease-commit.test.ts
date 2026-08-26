@@ -201,4 +201,61 @@ describe("workspace lease commit", () => {
     expect(result.written).toContain(join("Assets", "Editor", "Tool.cs"));
     expect(existsSync(join(source, "Assets", "Editor", "Tool.cs"))).toBe(true);
   });
+
+  it("keeps committing the remaining files when one file cannot be written", async () => {
+    // The walk used to have no per-file guard: one throw (an editor-locked
+    // asset, a target replaced by a directory mid-run) aborted the whole
+    // commit, and every file after it was silently lost with the workspace.
+    const lease = await manager().acquireLease({ label: "t", forceTempCopy: true });
+    writeFileSync(join(lease.path, "Assets", "Scripts", "Good.cs"), "good", "utf8");
+    writeFileSync(join(lease.path, "Assets", "Scripts", "Blocked.cs"), "blocked", "utf8");
+    // The project side turned Blocked.cs's path into a DIRECTORY while the
+    // agent ran — cpSync(file → existing dir) throws, deterministically.
+    mkdirSync(join(source, "Assets", "Scripts", "Blocked.cs"), { recursive: true });
+
+    const result = await lease.commit();
+    await lease.release();
+
+    expect(result.written).toContain(join("Assets", "Scripts", "Good.cs"));
+    expect(readFileSync(join(source, "Assets", "Scripts", "Good.cs"), "utf8")).toBe("good");
+    expect(result.failed.some((f) => f.startsWith(join("Assets", "Scripts", "Blocked.cs")))).toBe(
+      true,
+    );
+  });
+
+  it("quarantines the agent's version of conflicted files instead of destroying it", async () => {
+    // A conflict means the user's copy wins — but the agent's version used to
+    // be deleted together with the released workspace. Measured in production:
+    // an editor touching one .meta reclassified real agent work as conflict,
+    // and hours of it vanished. The agent side must survive somewhere diffable.
+    const lease = await manager().acquireLease({ label: "t", forceTempCopy: true });
+    writeFileSync(join(lease.path, "Assets", "Scripts", "Existing.cs"), "agent version", "utf8");
+
+    const target = join(source, "Assets", "Scripts", "Existing.cs");
+    writeFileSync(target, "user version", "utf8");
+    const future = new Date(Date.now() + 60_000);
+    utimesSync(target, future, future);
+
+    const result = await lease.commit();
+    await lease.release();
+
+    expect(result.conflicts).toContain(join("Assets", "Scripts", "Existing.cs"));
+    expect(result.conflictsQuarantinedUnder).toBeTruthy();
+    expect(readFileSync(join(result.conflictsQuarantinedUnder!, join("Assets", "Scripts", "Existing.cs")), "utf8")).toBe(
+      "agent version",
+    );
+    expect(readFileSync(target, "utf8")).toBe("user version");
+  });
+
+  it("leaves no quarantine behind when there are no conflicts", async () => {
+    const lease = await manager().acquireLease({ label: "t", forceTempCopy: true });
+    writeFileSync(join(lease.path, "Assets", "Scripts", "Board.cs"), "fresh", "utf8");
+
+    const result = await lease.commit();
+    await lease.release();
+
+    expect(result.conflicts).toEqual([]);
+    expect(result.conflictsQuarantinedUnder).toBeNull();
+    expect(existsSync(join(source, ".strada", "lease-conflicts"))).toBe(false);
+  });
 });

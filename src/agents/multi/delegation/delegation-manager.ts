@@ -649,11 +649,17 @@ export class DelegationManager {
         await Promise.resolve()
           .then(() => workspaceLease!.commit())
           .then((result) => {
-            if (result.written.length > 0 || result.conflicts.length > 0) {
+            if (
+              result.written.length > 0 ||
+              result.conflicts.length > 0 ||
+              result.failed.length > 0
+            ) {
               getLogger().info("Delegated workspace committed", {
                 subAgentId,
                 files: result.written.length,
                 conflicts: result.conflicts.length,
+                failed: result.failed.length,
+                quarantinedUnder: result.conflictsQuarantinedUnder,
               });
             }
           })

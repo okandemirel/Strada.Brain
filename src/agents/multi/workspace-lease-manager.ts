@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, cpSync, rmSync, readdirSync, readFileSync, statSync } from "node:fs";
+import type { Dirent } from "node:fs";
 import { resolve, join, dirname, sep, relative } from "node:path";
 import os from "node:os";
 import { randomUUID } from "node:crypto";
@@ -37,6 +38,22 @@ export interface WorkspaceCommitResult {
    * had fixed.
    */
   readonly removed: string[];
+  /**
+   * Paths that could not be processed at all (locked file, permission error,
+   * target replaced by a directory mid-run…). The walk continues past them —
+   * one unreadable file used to abort the entire commit and every file after
+   * it was lost with no trace — but they are reported so nothing disappears
+   * silently.
+   */
+  readonly failed: string[];
+  /**
+   * Where the agent's side of `conflicts` was preserved, if any of it could be
+   * saved: `<sourceRoot>/.strada/lease-conflicts/<lease>/<rel>`. The source
+   * copy still wins on disk; this is the agent's version kept for inspection
+   * instead of being destroyed together with the released workspace. `null`
+   * when there were no conflicts or none could be written.
+   */
+  readonly conflictsQuarantinedUnder: string | null;
 }
 
 export interface WorkspaceLease {
@@ -270,7 +287,13 @@ export class WorkspaceLeaseManager {
 
     let released = false;
     const lease: WorkspaceLease = {
-      commit: async () => this.commitLease(sourceRoot, workspacePath, leaseSeed, sourceSeed),
+      commit: async () =>
+        this.commitLease(sourceRoot, workspacePath, leaseSeed, sourceSeed, join(
+          sourceRoot,
+          ".strada",
+          "lease-conflicts",
+          id.slice(0, 8),
+        )),
       id,
       kind,
       sourceRoot,
@@ -318,11 +341,16 @@ export class WorkspaceLeaseManager {
       leases.map(async (lease) => {
         try {
           const result = await lease.commit();
-          if (result.written.length > 0 || result.conflicts.length > 0) {
+          if (
+            result.written.length > 0 ||
+            result.conflicts.length > 0 ||
+            result.failed.length > 0
+          ) {
             getLoggerSafe().info("Workspace committed during shutdown", {
               leaseId: lease.id,
               written: result.written.length,
               conflicts: result.conflicts.length,
+              failed: result.failed.length,
             });
           }
         } catch (err) {
@@ -544,14 +572,29 @@ export class WorkspaceLeaseManager {
     workspacePath: string,
     leaseSeed: ReadonlyMap<string, number>,
     sourceSeed: ReadonlyMap<string, number>,
+    quarantineRoot: string | null,
   ): Promise<WorkspaceCommitResult> {
     const written: string[] = [];
     const conflicts: string[] = [];
     const removed: string[] = [];
-    if (!existsSync(workspacePath)) return { written, conflicts, removed };
+    const failed: string[] = [];
+    let conflictsQuarantinedUnder: string | null = null;
+    if (!existsSync(workspacePath)) {
+      return { written, conflicts, removed, failed, conflictsQuarantinedUnder };
+    }
 
     const walk = (dir: string): void => {
-      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      let entries: Dirent[];
+      try {
+        entries = readdirSync(dir, { withFileTypes: true });
+      } catch (err) {
+        // A directory that cannot be listed must not abort the walk — the
+        // remaining files still deserve their chance to travel home.
+        const relDir = relative(workspacePath, dir) || ".";
+        failed.push(`${relDir} (unreadable: ${err instanceof Error ? err.message : String(err)})`);
+        return;
+      }
+      for (const entry of entries) {
         const full = join(dir, entry.name);
         if (!this.shouldCommitEntry(workspacePath, full)) continue;
         if (entry.isDirectory()) {
@@ -561,42 +604,64 @@ export class WorkspaceLeaseManager {
         if (!entry.isFile()) continue;
 
         const rel = relative(workspacePath, full);
-        const target = join(sourceRoot, rel);
 
-        // FIRST question: did the AGENT touch this file? Only its own work may
-        // travel back.
-        //
-        // Comparing the lease against the project instead is the mistake that
-        // made the first version of this destroy user data. A git-worktree
-        // lease — the DEFAULT kind — is seeded from HEAD, not from the working
-        // tree, so every file the user had modified-but-uncommitted differs
-        // from the lease. That read as "the agent changed it" and copied HEAD
-        // over the user's edit. Reproduced: a task whose agent only created an
-        // unrelated Board.cs reported written:[Board.cs, Player.cs] and
-        // reverted Player.cs to its committed contents.
-        const leaseSeeded = leaseSeed.get(rel);
-        if (leaseSeeded !== undefined && statSync(full).mtimeMs === leaseSeeded) {
-          continue; // present at seed time and never written to — not agent work
-        }
+        try {
+          const target = join(sourceRoot, rel);
 
-        // SECOND question: did the USER change it while the agent ran? Their
-        // copy wins, and they are told rather than silently overwritten.
-        if (existsSync(target)) {
-          if (readFileSync(target).equals(readFileSync(full))) continue; // already identical
-          // Compared against the mtime recorded when the lease was taken, not a
-          // wall clock: Date.now() is whole milliseconds while mtimeMs carries
-          // a fraction, so a file written in the same millisecond as the lease
-          // reads as "modified after" — measured at +0.63 ms.
-          const sourceSeeded = sourceSeed.get(rel);
-          if (sourceSeeded === undefined || statSync(target).mtimeMs !== sourceSeeded) {
-            conflicts.push(rel);
-            continue;
+          // FIRST question: did the AGENT touch this file? Only its own work may
+          // travel back.
+          //
+          // Comparing the lease against the project instead is the mistake that
+          // made the first version of this destroy user data. A git-worktree
+          // lease — the DEFAULT kind — is seeded from HEAD, not from the working
+          // tree, so every file the user had modified-but-uncommitted differs
+          // from the lease. That read as "the agent changed it" and copied HEAD
+          // over the user's edit. Reproduced: a task whose agent only created an
+          // unrelated Board.cs reported written:[Board.cs, Player.cs] and
+          // reverted Player.cs to its committed contents.
+          const leaseSeeded = leaseSeed.get(rel);
+          if (leaseSeeded !== undefined && statSync(full).mtimeMs === leaseSeeded) {
+            continue; // present at seed time and never written to — not agent work
           }
-        }
 
-        mkdirSync(dirname(target), { recursive: true });
-        cpSync(full, target, { force: true });
-        written.push(rel);
+          // SECOND question: did the USER change it while the agent ran? Their
+          // copy wins, and they are told rather than silently overwritten.
+          if (existsSync(target)) {
+            if (readFileSync(target).equals(readFileSync(full))) continue; // already identical
+            // Compared against the mtime recorded when the lease was taken, not a
+            // wall clock: Date.now() is whole milliseconds while mtimeMs carries
+            // a fraction, so a file written in the same millisecond as the lease
+            // reads as "modified after" — measured at +0.63 ms.
+            const sourceSeeded = sourceSeed.get(rel);
+            if (sourceSeeded === undefined || statSync(target).mtimeMs !== sourceSeeded) {
+              conflicts.push(rel);
+              // The agent's version used to be destroyed together with the
+              // released workspace — hours of autonomous work lost to a single
+              // .meta touch by the editor. Preserve it under the project's
+              // .strada namespace; best-effort, never blocks the commit.
+              if (quarantineRoot) {
+                try {
+                  const quarantined = join(quarantineRoot, rel);
+                  mkdirSync(dirname(quarantined), { recursive: true });
+                  cpSync(full, quarantined, { force: true });
+                  conflictsQuarantinedUnder ??= quarantineRoot;
+                } catch {
+                  // Quarantine failed; the conflict report still stands.
+                }
+              }
+              continue;
+            }
+          }
+
+          mkdirSync(dirname(target), { recursive: true });
+          cpSync(full, target, { force: true });
+          written.push(rel);
+        } catch (err) {
+          // One locked or half-deleted file must not cost the rest of the
+          // commit — measured in production: a walk that threw on an
+          // editor-locked asset silently dropped every file after it.
+          failed.push(`${rel} (${err instanceof Error ? err.message : String(err)})`);
+        }
       }
     };
 
@@ -606,9 +671,14 @@ export class WorkspaceLeaseManager {
     // unsaid means the project silently diverges from what the agent believes it
     // produced, and the next run inherits that gap.
     for (const [rel] of leaseSeed) {
-      if (existsSync(join(workspacePath, rel))) continue;
-      if (!existsSync(join(sourceRoot, rel))) continue;
-      removed.push(rel);
+      try {
+        if (existsSync(join(workspacePath, rel))) continue;
+        if (!existsSync(join(sourceRoot, rel))) continue;
+        removed.push(rel);
+      } catch {
+        // A seed entry we can no longer stat says nothing useful about the
+        // project — skip it rather than lose the rest of the report.
+      }
     }
     if (removed.length > 0) {
       getLoggerSafe().info("Workspace deletions left in place", {
@@ -616,8 +686,14 @@ export class WorkspaceLeaseManager {
         sample: removed.slice(0, 5),
       });
     }
+    if (failed.length > 0) {
+      getLoggerSafe().warn("Workspace commit skipped files it could not process", {
+        count: failed.length,
+        sample: failed.slice(0, 5),
+      });
+    }
 
-    return { written, conflicts, removed };
+    return { written, conflicts, removed, failed, conflictsQuarantinedUnder };
   }
 
   private async createTempCopy(sourceRoot: string, workspacePath: string): Promise<void> {
