@@ -1996,3 +1996,187 @@ describe("BackgroundExecutor - reaper and shutdown settle in-flight work", () =>
     expect(disposed).toBe(true);
   });
 });
+
+describe("BackgroundExecutor - auto-resume bounds (measured loop of 2026-08-26)", () => {
+  /**
+   * Builds an executor whose supervisor admission always returns the same
+   * partial settlement, plus a task manager mock exposing the resume surface.
+   */
+  function buildResumableExecutor(result: {
+    nodeResults: Array<Record<string, unknown>>;
+  }) {
+    const orch = createMockOrchestrator();
+    orch.evaluateSupervisorAdmission.mockImplementation(async (params: { onGoalDecomposed?: (goalTree: GoalTree) => void; goalTree?: GoalTree }) => {
+      params.onGoalDecomposed?.(params.goalTree ?? buildTestGoalTree());
+      return {
+        path: "supervisor",
+        reason: "eligible",
+        result: {
+          success: false,
+          partial: true,
+          output: "partial",
+          totalNodes: 2,
+          succeeded: 0,
+          failed: 1,
+          skipped: 0,
+          totalCost: 0,
+          totalDuration: 0,
+          nodeResults: result.nodeResults,
+        },
+      };
+    });
+
+    const taskManager = {
+      updateStatus: vi.fn(),
+      complete: vi.fn(),
+      fail: vi.fn(),
+      block: vi.fn(),
+      appendTaskNotice: vi.fn(),
+      retryGoalRoot: vi.fn().mockReturnValue(null),
+      replanGoalRoot: vi.fn().mockReturnValue(null),
+      getStatus: vi.fn().mockReturnValue(null),
+    };
+
+    const executor = new BackgroundExecutor({
+      orchestrator: orch as any,
+      decomposer: createMockDecomposer() as any,
+      goalStorage: createMockGoalStorage() as any,
+      daemonEventBus: createMockDaemonEventBus() as any,
+      aiProvider: undefined,
+      channel: undefined,
+    });
+    executor.setTaskManager(taskManager as any);
+    return { executor, taskManager };
+  }
+
+  it("does NOT auto-resume a goal whose block is a question for a person", async () => {
+    const { executor, taskManager } = buildResumableExecutor({
+      nodeResults: [
+        { nodeId: "n1", status: "failed", provider: "opencode", blockedReason: "blocked:ask_user" },
+      ],
+    });
+
+    executor.enqueue(createTestTask(buildTestGoalTree()), new AbortController().signal, vi.fn());
+
+    await vi.waitFor(() => expect(taskManager.block).toHaveBeenCalled(), { timeout: 5000 });
+    // The settle pipeline finishes before any resume decision; give the
+    // (buggy) loop a beat to fire if it were going to.
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(taskManager.retryGoalRoot).not.toHaveBeenCalled();
+    expect(taskManager.replanGoalRoot).not.toHaveBeenCalled();
+    expect(taskManager.appendTaskNotice).toHaveBeenCalledWith(
+      "task_test123",
+      expect.stringContaining("Paused on a question"),
+    );
+  });
+
+  it("mission keep-alive catches a partial settle that never formed a goal tree", async () => {
+    // Measured 2026-08-26: an all-provider cooldown failed the decomposition
+    // call itself; the task settled partial with zero nodes and NO tree — the
+    // goal-level resume had nothing to grip and the task parked forever.
+    const orch = createMockOrchestrator();
+    orch.evaluateSupervisorAdmission.mockImplementation(async (params: { onGoalDecomposed?: (goalTree: GoalTree) => void }) => {
+      // Deliberately never decompose: the planning LLM call is what failed.
+      void params;
+      return {
+        path: "supervisor",
+        reason: "eligible",
+        result: {
+          success: false,
+          partial: true,
+          output: "An error occurred during task execution. Please try again.",
+          totalNodes: 0,
+          succeeded: 0,
+          failed: 0,
+          skipped: 0,
+          totalCost: 0,
+          totalDuration: 0,
+          nodeResults: [],
+        },
+      };
+    });
+
+    const executor = new BackgroundExecutor({
+      orchestrator: orch as any,
+      decomposer: createMockDecomposer() as any,
+      goalStorage: createMockGoalStorage() as any,
+      daemonEventBus: createMockDaemonEventBus() as any,
+      aiProvider: undefined,
+      channel: undefined,
+    });
+
+    const taskManager = {
+      updateStatus: vi.fn(),
+      complete: vi.fn(),
+      fail: vi.fn(),
+      block: vi.fn(),
+      appendTaskNotice: vi.fn(),
+      retryGoalRoot: vi.fn().mockReturnValue(null),
+      replanGoalRoot: vi.fn().mockReturnValue(null),
+      retryTask: vi.fn().mockReturnValue(null),
+      getStatus: vi.fn().mockReturnValue(null),
+    };
+    executor.setTaskManager(taskManager as any);
+
+    executor.enqueue(
+      createTestTask(buildTestGoalTree(), { origin: "user" }),
+      new AbortController().signal,
+      vi.fn(),
+    );
+
+    await vi.waitFor(() => expect(taskManager.block).toHaveBeenCalled(), { timeout: 5000 });
+    // The goal-level resume must stay silent (no tree), and the mission
+    // keep-alive must have taken over instead (a retry timer was armed).
+    expect(taskManager.retryGoalRoot).not.toHaveBeenCalled();
+    expect(taskManager.replanGoalRoot).not.toHaveBeenCalled();
+    const missionRetries = (executor as unknown as { missionRetries: Map<string, number> }).missionRetries;
+    expect(missionRetries.size).toBe(1);
+    await executor.shutdown();
+  });
+
+  it("keeps the retry budget across replan-minted goal roots in the same lineage", async () => {
+    const { executor, taskManager } = buildResumableExecutor({
+      nodeResults: [
+        { nodeId: "n1", status: "failed", provider: "mock", output: "compile exploded" },
+      ],
+    });
+
+    // The lineage: every settle's task links back to the same root task A,
+    // the way retryGoalRoot/replanGoalRoot chain parentId in production.
+    // (A is returned COMPLETED: an active-looking ancestor would make the
+    // executor's enqueue path treat the new submission as a duplicate.)
+    const rootTaskId = "task_rootA" as any;
+    taskManager.getStatus.mockImplementation((id: string) =>
+      id === rootTaskId
+        ? createTestTask(undefined, { id: rootTaskId, status: TaskStatus.completed })
+        : null,
+    );
+
+    // Settle 1 (root A): first block → resume (retryGoalRoot ×1).
+    executor.enqueue(createTestTask(buildTestGoalTree(), { id: rootTaskId }), new AbortController().signal, vi.fn());
+    await vi.waitFor(() => expect(taskManager.retryGoalRoot).toHaveBeenCalledTimes(1), { timeout: 5000 });
+
+    // Settle 2 (fresh root B, same lineage): no progress → replan (×1).
+    executor.enqueue(createTestTask(buildTestGoalTree(), { id: "task_b" as any, parentId: rootTaskId }), new AbortController().signal, vi.fn());
+    await vi.waitFor(() => expect(taskManager.replanGoalRoot).toHaveBeenCalledTimes(1), { timeout: 5000 });
+
+    // Settle 3 (fresh root C): still nothing → replan (×2, the cap).
+    executor.enqueue(createTestTask(buildTestGoalTree(), { id: "task_c" as any, parentId: rootTaskId }), new AbortController().signal, vi.fn());
+    await vi.waitFor(() => expect(taskManager.replanGoalRoot).toHaveBeenCalledTimes(2), { timeout: 5000 });
+
+    // Settle 4 (fresh root D): budget spent across the LINEAGE — stop.
+    executor.enqueue(createTestTask(buildTestGoalTree(), { id: "task_d" as any, parentId: rootTaskId }), new AbortController().signal, vi.fn());
+    await vi.waitFor(
+      () =>
+        expect(taskManager.appendTaskNotice).toHaveBeenCalledWith(
+          "task_d",
+          expect.stringContaining("Goal stopped"),
+        ),
+      { timeout: 5000 },
+    );
+    await new Promise((r) => setTimeout(r, 50));
+    expect(taskManager.retryGoalRoot).toHaveBeenCalledTimes(1);
+    expect(taskManager.replanGoalRoot).toHaveBeenCalledTimes(2);
+  });
+});

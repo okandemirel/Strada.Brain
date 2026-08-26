@@ -47,6 +47,13 @@ export interface ITaskManager {
    * Replaying the same tree cannot get past an obstacle the plan itself has.
    */
   replanGoalRoot(goalRootId: string, failureReasons?: readonly string[]): unknown;
+  /**
+   * Look up a task by id. The executor walks parentId chains with this to find
+   * the lineage root a retry budget belongs to — retry/replan mint fresh goal
+   * roots, and a budget keyed on the root resets every round (measured
+   * 2026-08-26: one lineage produced 35 blocked tasks at a 23s cadence).
+   */
+  getStatus(id: string): { id: string; parentId?: string } | null;
   hasActiveForegroundTasks(excludedChatIds?: readonly string[]): boolean;
 }
 

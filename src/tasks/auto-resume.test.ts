@@ -98,12 +98,15 @@ describe("picking a blocked goal back up", () => {
   it("is what the block branch actually does", () => {
     const source = readFileSync("src/tasks/background-executor.ts", "utf8");
     const at = source.indexOf("if (supervisorResult.partial) {");
-    const branch = source.slice(at, source.indexOf("}", source.indexOf("return;", at)));
+    const end = source.indexOf("this.autoResumeBlockedGoal(", at);
+    const branch = source.slice(at, end);
 
     expect(at, "the partial branch moved; this test is measuring nothing").toBeGreaterThan(0);
-    expect(branch, "a partially finished goal still stops for good").toContain(
-      "autoResumeBlockedGoal",
-    );
+    expect(end, "a partially finished goal still stops for good").toBeGreaterThan(at);
+    // A planning-stage outage (no tree ever formed) is a mission-level retry,
+    // not a goal-level resume — measured 2026-08-26: a provider-cooldown storm
+    // failed decomposition, settled partial with zero nodes, and parked.
+    expect(branch).toContain("scheduleMissionKeepAlive");
   });
 
   it("hands the failure reasons to the replan, not just the fact of failure", () => {

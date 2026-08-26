@@ -1267,6 +1267,17 @@ export class BackgroundExecutor {
         if (supervisorResult.partial) {
           requestFailed = true;
           this.taskManager.block(task.id, supervisorResult.output);
+          if (!admission.supervisorGoalTree?.rootId) {
+            // No tree ever formed — decomposition itself failed (measured
+            // 2026-08-26: an all-provider cooldown storm failed the planning
+            // LLM call, the task settled partial with zero nodes, and parked
+            // forever: no tree to resume, and this return path never reached
+            // the mission keep-alive). A planning-stage outage is a
+            // mission-level retry, on the slow clock.
+            if (this.scheduleMissionKeepAlive(task, supervisorResult.output || "supervisor run failed before planning")) {
+              return;
+            }
+          }
           this.autoResumeBlockedGoal(
             task,
             admission.supervisorGoalTree,
@@ -1632,6 +1643,22 @@ export class BackgroundExecutor {
   }
 
   /**
+   * The task at the root of a retry/replan lineage. retryGoalRoot and
+   * replanGoalRoot both submit a new task with parentId set, so walking the
+   * parent chain finds the mission the whole lineage belongs to — which is
+   * what the auto-resume budget is actually bounded on.
+   */
+  private lineageRootTaskId(task: Task): string {
+    let current: { id: string; parentId?: string } = task;
+    for (let depth = 0; current.parentId && depth < 50; depth++) {
+      const parent = this.taskManager?.getStatus(current.parentId) ?? null;
+      if (!parent) break;
+      current = parent;
+    }
+    return current.id;
+  }
+
+  /**
    * Pick a partially-finished goal tree back up instead of leaving it blocked.
    *
    * Run 37 stopped here with four of five nodes unfinished and a person asleep.
@@ -1646,7 +1673,36 @@ export class BackgroundExecutor {
   ): void {
     if (!tree?.rootId || !this.taskManager) return;
     const rootId = tree.rootId;
-    const state = this.autoResumeState.get(rootId) ?? {
+
+    // An ask_user block is a QUESTION awaiting a person, and neither replay nor
+    // replan can answer it — the same prompt re-asks the same question into the
+    // void. Worse, a replan mints a FRESH goal root, and the budget below is
+    // keyed on rootId, so each replan resets the 3-resume/2-replan budget: the
+    // loop becomes unbounded. Measured 2026-08-26: 35 blocked tasks at a ~23s
+    // cadence on one goal lineage, burning provider calls until BOTH providers
+    // sat in cooldown. The mission keep-alive has always refused to retry
+    // ask_user for exactly this reason; the goal level now matches it.
+    if (nodeOutcomes.some((outcome) => /ask_user/i.test(outcome))) {
+      getLogger().warn("Goal paused on a question for the user — auto-resume skipped", {
+        goalRootId: rootId,
+      });
+      try {
+        this.taskManager.appendTaskNotice(
+          task.id,
+          "Paused on a question for you. Reply here with your answer and the work continues from that exact point.",
+        );
+      } catch { /* visibility is best-effort */ }
+      return;
+    }
+
+    // The retry budget belongs to the mission's LINEAGE, not one goal tree:
+    // retry/replan submit a new task (parentId-linked) whose decomposition
+    // mints a fresh goal root, so keying the budget on rootId reset it every
+    // round and made the loop unbounded — measured 2026-08-26, one lineage
+    // produced 35 blocked tasks at a ~23s cadence and drove both providers
+    // into cooldown.
+    const budgetKey = this.lineageRootTaskId(task);
+    const state = this.autoResumeState.get(budgetKey) ?? {
       attempts: 0,
       replans: 0,
       previousSucceeded: 0,
@@ -1660,7 +1716,7 @@ export class BackgroundExecutor {
         replans: state.replans,
         reason: decision.reason,
       });
-      this.autoResumeState.delete(rootId);
+      this.autoResumeState.delete(budgetKey);
       // Tree-level retries are spent — escalate to MISSION level, which keeps
       // feeding the original prompt back in on the slow clock until success,
       // budget, or cap. The channel hears every step either way.
@@ -1680,7 +1736,7 @@ export class BackgroundExecutor {
     }
 
     const replanning = decision.action === "replan";
-    this.autoResumeState.set(rootId, {
+    this.autoResumeState.set(budgetKey, {
       attempts: replanning ? state.attempts : state.attempts + 1,
       replans: replanning ? state.replans + 1 : state.replans,
       previousSucceeded: succeeded,
