@@ -28,6 +28,7 @@ npm run doctor             # Diagnose setup issues
 - Memory: `src/memory/` — AgentDB (SQLite + HNSW vectors), 3-tier auto-tiering
 - Learning: `src/learning/` — event-driven pipeline, instinct lifecycle
 - Goals: `src/goals/` — DAG decomposition, wave-based parallel execution
+- Campaigns: `src/campaign/` — "GDD/idea in → finished game out": milestone ladder planning, single GDD approval gate, sprint auto-advance on task events, SQLite persistence with boot resume
 - Security: `src/security/` — input sanitization, autonomy levels, permissions
 - Dashboard: `src/dashboard/` — real-time WebSocket monitoring
 - Web portal: `web-portal/` — React + Vite (separate package.json)

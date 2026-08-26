@@ -58,6 +58,12 @@ export class MessageRouter {
   private readonly maxBurstMessages: number;
   private readonly metrics?: MessageRouterOptions["metrics"];
   private startupNoticeTimer: ReturnType<typeof setTimeout> | null = null;
+  private campaignManager?: import("../campaign/campaign-manager.js").CampaignManager;
+
+  /** Late-set: the campaign layer is constructed after the router's deps. */
+  setCampaignManager(manager: import("../campaign/campaign-manager.js").CampaignManager): void {
+    this.campaignManager = manager;
+  }
 
   dispose(): void {
     // Cancel the one-shot startup-notice reset timer so it can't keep `this`
@@ -138,6 +144,24 @@ export class MessageRouter {
 
       await this.commandHandler.handle(chatId, classification.command, classification.args, msg.userId);
       return;
+    }
+
+    // Campaign layer: GDD/idea intake and the approval gate. Runs before
+    // implicit recovery and task submission — a campaign reply ("evet") or a
+    // freshly shared GDD must never become an ordinary task.
+    if (this.campaignManager) {
+      try {
+        if (await this.campaignManager.tryHandleIncoming(msg)) {
+          await this.flushPendingChat(getTaskConversationKey(chatId, msg.channelType, msg.conversationId));
+          return;
+        }
+      } catch (err) {
+        // Intake must never break normal routing — log and fall through.
+        logger.warn("Campaign intake failed; falling back to task submission", {
+          chatId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
     }
 
     // Implicit recovery intent detection — only fires when there is a pending

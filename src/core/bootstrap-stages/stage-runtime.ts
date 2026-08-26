@@ -376,6 +376,37 @@ export async function initializeTaskRuntimeStage(
     ...(params.metrics ? { metrics: params.metrics } : {}),
   });
 
+  // Campaign layer ("GDD in → finished game out"). Wired best-effort: a
+  // failure here degrades the run to ordinary per-message tasks, it must
+  // never block the boot.
+  let campaignManager: import("../../campaign/index.js").CampaignManager | undefined;
+  try {
+    const { CampaignManager, CampaignPlanner, CampaignStorage } = await import("../../campaign/index.js");
+    const campaignStorage = new CampaignStorage(join(params.config.memory.dbPath, "campaigns.db"));
+    campaignManager = new CampaignManager({
+      storage: campaignStorage,
+      planner: new CampaignPlanner(params.providerManager.getProvider("")),
+      taskManager,
+      messenger: async (chatId, markdown) => {
+        await params.channel.sendMarkdown(chatId, sanitizeSecrets(markdown));
+      },
+      projectRoot: params.config.unityProjectPath,
+    });
+    campaignManager.attachEvents();
+    messageRouter.setCampaignManager(campaignManager);
+    // Re-attach campaigns that were mid-sprint when the process last stopped.
+    void campaignManager.resumeActive().catch((error: unknown) => {
+      params.logger.warn("Campaign resume failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+    params.logger.info("Campaign layer initialized");
+  } catch (error) {
+    params.logger.warn("Campaign layer disabled", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
   const progressReporter = deps.createProgressReporter
     ? deps.createProgressReporter(
         params.channel,
@@ -395,5 +426,6 @@ export async function initializeTaskRuntimeStage(
     commandHandler,
     messageRouter,
     progressReporter,
+    campaignManager,
   };
 }

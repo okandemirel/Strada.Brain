@@ -167,6 +167,8 @@ export interface TaskRuntimeStageResult {
   messageRouter: MessageRouter;
   /** Captured so it can be disposed on shutdown (removes taskManager listeners, clears timers). */
   progressReporter: ProgressReporter;
+  /** Present when the campaign ("GDD in → game out") layer wired successfully. */
+  campaignManager?: import("../../campaign/index.js").CampaignManager;
 }
 
 export interface DaemonTriggerStageResult {

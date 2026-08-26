@@ -1,0 +1,126 @@
+/**
+ * Campaign — the "GDD/idea in, finished game out" layer.
+ *
+ * A campaign is the persistent, restart-surviving envelope around a whole
+ * game build. The goal system decomposes ONE task into a tree; a campaign is
+ * the ladder of such tasks (milestones/sprints) walked in order, plus the two
+ * moments a whole-game run needs that a single task never had:
+ *
+ *   1. Idea mode: no GDD yet — the first task WRITES the GDD, then the run
+ *      stops at exactly one human gate (the approved design) before building.
+ *   2. Sprint-to-sprint drive: when a milestone task lands, the next one is
+ *      submitted automatically. Measured 2026-08-26 (PixelFlow): Sprint B→C
+ *      advanced only because a person hand-carried a 562-char kick prompt
+ *      into the CLI hours later. The campaign is that kick, in code.
+ *
+ * The campaign does NOT re-implement planning/execution/verification — each
+ * milestone is submitted to the ordinary task pipeline (goal DAG, supervisor,
+ * verifier gates) exactly as a hand-typed sprint prompt would be.
+ */
+
+import { z } from "zod";
+
+// =============================================================================
+// STATE
+// =============================================================================
+
+/**
+ * drafting-gdd:      a task is in flight writing docs/<Game>_GDD.md (idea mode only)
+ * awaiting-approval: the single human gate — GDD drafted, waiting for the chat's yes
+ * planning:          building the milestone ladder from the GDD (LLM pass)
+ * executing:         a milestone task is in flight
+ * done / failed / cancelled: terminal
+ */
+export type CampaignState =
+  | "drafting-gdd"
+  | "awaiting-approval"
+  | "planning"
+  | "executing"
+  | "done"
+  | "failed"
+  | "cancelled";
+
+export const ACTIVE_CAMPAIGN_STATES: readonly CampaignState[] = [
+  "drafting-gdd",
+  "awaiting-approval",
+  "planning",
+  "executing",
+];
+
+export type MilestoneStatus = "pending" | "running" | "green" | "failed";
+
+export interface CampaignMilestone {
+  /** Stable id inside the campaign ("m1", "m2", ...). */
+  id: string;
+  /** Human label, e.g. "Sprint A — Foundations & Core Sim". */
+  title: string;
+  /**
+   * The full self-contained sprint kick prompt submitted to the task pipeline
+   * when this milestone starts — the same shape as the hand-carried sprint
+   * prompts that drove PixelFlow (scope, verification demands, commit
+   * discipline, delivery expectations).
+   */
+  prompt: string;
+  status: MilestoneStatus;
+  /** Last task submitted for this milestone (for event correlation/resume). */
+  taskId?: string;
+  /** One retry is automatic; the second failure fails the campaign. */
+  attempts: number;
+  /** Short result excerpt recorded when the milestone landed green. */
+  resultExcerpt?: string;
+}
+
+export interface Campaign {
+  id: string;
+  /** Origin conversation — approval gate and reports are delivered here. */
+  chatId: string;
+  channelType: string;
+  userId: string;
+  conversationId?: string;
+  projectRoot: string;
+  state: CampaignState;
+  /** Raw idea text (idea mode). */
+  ideaText?: string;
+  /** Project-relative path to the GDD once known (drafted or supplied). */
+  gddPath?: string;
+  /** Supplied GDD content (attachment/paste mode), truncated for planning. */
+  gddText?: string;
+  /** Task id of the in-flight GDD draft (drafting-gdd state). */
+  draftTaskId?: string;
+  /** Number of GDD draft rounds (feedback loops at the approval gate). */
+  draftAttempts: number;
+  milestones: CampaignMilestone[];
+  /** Index into milestones of the current/next work item. */
+  currentMilestone: number;
+  createdAt: number;
+  updatedAt: number;
+  lastError?: string;
+}
+
+// =============================================================================
+// PLANNER OUTPUT (external data — Zod-validated)
+// =============================================================================
+
+export const milestonePlanSchema = z.object({
+  title: z.string().min(1).max(200),
+  prompt: z.string().min(40).max(8000),
+});
+
+export const milestoneLadderSchema = z.object({
+  milestones: z.array(milestonePlanSchema).min(2).max(12),
+});
+
+export type MilestoneLadder = z.infer<typeof milestoneLadderSchema>;
+
+// =============================================================================
+// FACTORY
+// =============================================================================
+
+let campaignCounter = 0;
+
+export function generateCampaignId(): string {
+  campaignCounter += 1;
+  return `campaign_${Date.now()}_${campaignCounter.toString(36)}${Math.random()
+    .toString(36)
+    .slice(2, 6)}`;
+}
