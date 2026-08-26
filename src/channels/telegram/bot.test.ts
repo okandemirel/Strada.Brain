@@ -339,8 +339,71 @@ describe("TelegramChannel", () => {
     await expect(promise).resolves.toBe("cancelled");
   });
 
-  it("isHealthy returns bot init state", () => {
+  it("isHealthy reflects polling liveness, not just init state", async () => {
+    // The old isInited()-only check kept reporting healthy for days after a
+    // fatal poll error killed long-polling. Before connect() no poll loop is
+    // running, so the channel must read unhealthy despite isInited() === true.
+    expect(channel.isHealthy()).toBe(false);
+    await channel.connect();
     expect(channel.isHealthy()).toBe(true);
+  });
+
+  describe("polling recovery", () => {
+    const getStartMock = () =>
+      (channel as unknown as { bot: { start: ReturnType<typeof vi.fn> } }).bot.start;
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("restarts long-polling after a fatal 409 conflict", async () => {
+      vi.useFakeTimers();
+      const start = getStartMock();
+      let calls = 0;
+      start.mockImplementation(() => {
+        calls += 1;
+        return calls === 1
+          ? Promise.reject(new Error("409 Conflict: terminated by other getUpdates request"))
+          : new Promise(() => {}); // the restarted poller stays up
+      });
+
+      await channel.connect();
+      // Let the fatal rejection reach the catch handler.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(channel.isHealthy()).toBe(false);
+
+      // The retry backoff (30s initial) fires and polling restarts.
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(start).toHaveBeenCalledTimes(2);
+      expect(channel.isHealthy()).toBe(true);
+    });
+
+    it("does not retry auth-class fatal errors", async () => {
+      vi.useFakeTimers();
+      const start = getStartMock();
+      start.mockRejectedValue(new Error("401 Unauthorized"));
+
+      await channel.connect();
+      // Well past the max backoff: a retry would have fired if one were scheduled.
+      await vi.advanceTimersByTimeAsync(600_000);
+
+      expect(start).toHaveBeenCalledTimes(1);
+      expect(channel.isHealthy()).toBe(false);
+    });
+
+    it("disconnect cancels a scheduled polling retry", async () => {
+      vi.useFakeTimers();
+      const start = getStartMock();
+      start.mockRejectedValue(new Error("409 Conflict"));
+
+      await channel.connect();
+      await vi.advanceTimersByTimeAsync(0);
+      await channel.disconnect();
+      await vi.advanceTimersByTimeAsync(600_000);
+
+      expect(start).toHaveBeenCalledTimes(1);
+      expect(channel.isHealthy()).toBe(false);
+    });
   });
 
   describe("media handling", () => {

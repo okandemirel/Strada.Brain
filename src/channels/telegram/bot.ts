@@ -71,6 +71,17 @@ export class TelegramChannel implements IChannelAdapter {
    * to different chats still run in parallel.
    */
   private readonly sendChains = new Map<string, Promise<void>>();
+  /**
+   * Whether long-polling is actually running. grammY's `isInited()` stays true
+   * forever after the first init, so a fatal poll error (most commonly 409
+   * Conflict — a second poller alive during a restart overlap, or a webhook
+   * set on the token) used to leave the channel dead for the rest of a
+   * multi-day run while isHealthy() kept reporting it fine.
+   */
+  private pollingAlive = false;
+  private pollingRetryTimer: ReturnType<typeof setTimeout> | undefined;
+  private pollingRetryMs = 30_000;
+  private disconnected = false;
 
   constructor(token: string, auth: AuthManager, rateLimitConfig?: Partial<RateLimitConfig>) {
     this.bot = new Bot(token);
@@ -129,21 +140,55 @@ export class TelegramChannel implements IChannelAdapter {
     // from a duplicate poller, or a revoked token) rejects it. bot.catch only
     // covers middleware errors, so without this .catch the rejection would float
     // as an unhandled rejection and the bot would silently stop.
+    this.startPollingWithRecovery();
+  }
+
+  /**
+   * Start long-polling, and RESTART it when a fatal-but-transient poll error
+   * kills it. 409 Conflict is the canonical case: a deploy overlap leaves two
+   * pollers and the loser dies. The old behavior logged the error and left the
+   * channel dead for the rest of the run while isHealthy() stayed true.
+   * Auth-class errors (401/404 — bad token) stay dead: retrying cannot help.
+   */
+  private startPollingWithRecovery(): void {
+    const logger = getLogger();
+    this.pollingAlive = true;
     const startResult = this.bot.start({
       onStart: (info) => {
         logger.info(`Telegram bot started: @${info.username}`);
+        // A successful (re)start proves the conflict/condition cleared.
+        this.pollingRetryMs = 30_000;
       },
       drop_pending_updates: true,
     });
     void Promise.resolve(startResult).catch((err: unknown) => {
+      this.pollingAlive = false;
+      const message = err instanceof Error ? err.message : String(err);
+      const retryable = /\b409\b|conflict/i.test(message);
       logger.error("Telegram long-polling stopped with a fatal error", {
-        error: err instanceof Error ? err.message : String(err),
+        error: message,
+        willRetry: retryable,
       });
+      if (!retryable || this.disconnected) return;
+      const delay = this.pollingRetryMs;
+      this.pollingRetryMs = Math.min(this.pollingRetryMs * 2, 300_000);
+      this.pollingRetryTimer = setTimeout(() => {
+        this.pollingRetryTimer = undefined;
+        // bot.stop() was implied by the fatal error; grammY allows restart.
+        this.startPollingWithRecovery();
+      }, delay);
+      this.pollingRetryTimer.unref?.();
     });
   }
 
   async disconnect(): Promise<void> {
     getLogger().info("Stopping Telegram bot...");
+    this.disconnected = true;
+    if (this.pollingRetryTimer) {
+      clearTimeout(this.pollingRetryTimer);
+      this.pollingRetryTimer = undefined;
+    }
+    this.pollingAlive = false;
     this.bot.stop();
 
     // Clean up pending confirmations
@@ -287,7 +332,10 @@ export class TelegramChannel implements IChannelAdapter {
   }
 
   isHealthy(): boolean {
-    return this.bot.isInited();
+    // isInited() alone stays true forever after the first init — a channel
+    // whose polling died on a 409 reported healthy for days while every
+    // message went unanswered. Polling liveness is the real signal.
+    return this.bot.isInited() && this.pollingAlive;
   }
 
   /**
