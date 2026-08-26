@@ -1896,3 +1896,103 @@ describe("BackgroundExecutor - task inactivity timeout", () => {
   });
 });
 
+
+describe("BackgroundExecutor - reaper and shutdown settle in-flight work", () => {
+  function hangingOnAbort(events: string[]) {
+    return vi.fn(async (
+      _prompt: string,
+      opts: { signal: AbortSignal },
+    ) => new Promise<string>((_, reject) => {
+      opts.signal.addEventListener(
+        "abort",
+        () => {
+          events.push("settled");
+          reject(new Error("aborted"));
+        },
+        { once: true },
+      );
+    }));
+  }
+
+  it("reaping a wedged task frees its concurrency slot and conversation lock", async () => {
+    const events: string[] = [];
+    const runBackgroundTask = hangingOnAbort(events);
+    const executor = new BackgroundExecutor({
+      orchestrator: { runBackgroundTask } as any,
+      concurrencyLimit: 1,
+    });
+    const taskManager = {
+      updateStatus: vi.fn(),
+      complete: vi.fn(),
+      fail: vi.fn(),
+      block: vi.fn(),
+      listStuckExecuting: vi.fn(),
+      listTasks: vi.fn(() => []),
+    };
+    executor.setTaskManager(taskManager as any);
+
+    executor.enqueue(createTestTask(undefined, { id: "task_wedge" as any }), new AbortController().signal, vi.fn());
+    await vi.waitFor(() => expect(runBackgroundTask).toHaveBeenCalledTimes(1), { timeout: 3000 });
+
+    // The reaper sees a wedged row. Before the abort lever existed, fail()
+    // alone flipped the DB row while `running` stayed elevated forever.
+    (taskManager.listStuckExecuting as ReturnType<typeof vi.fn>).mockReturnValue([
+      createTestTask(undefined, { id: "task_wedge" as any, status: TaskStatus.executing }),
+    ]);
+    (executor as unknown as { reapStuckTasks(): void }).reapStuckTasks();
+
+    // With the slot freed, a follow-up task for the SAME chat must start.
+    executor.enqueue(
+      createTestTask(undefined, { id: "task_after" as any }),
+      new AbortController().signal,
+      vi.fn(),
+    );
+    await vi.waitFor(() => expect(runBackgroundTask).toHaveBeenCalledTimes(2), { timeout: 3000 });
+    expect(taskManager.fail).toHaveBeenCalledWith("task_wedge", expect.stringContaining("Reaped"));
+  });
+
+  it("shutdown aborts in-flight executions and settles them BEFORE disposing leases", async () => {
+    const events: string[] = [];
+    const runBackgroundTask = hangingOnAbort(events);
+    let disposed = false;
+    // Full lease lifecycle: every top-level task acquires one via
+    // runWorkerEnvelope, commits it in executeTask's finally, and only
+    // executor.shutdown() may dispose the manager afterwards.
+    const leaseManager = {
+      acquireLease: vi.fn(async () => ({
+        id: "lease-1",
+        kind: "temp-copy" as const,
+        sourceRoot: "/tmp",
+        leaseRoot: "/tmp",
+        path: "/tmp/lease-1",
+        createdAt: Date.now(),
+        commit: async () => {
+          events.push("committed");
+          return { written: [], conflicts: [], removed: [], failed: [], conflictsQuarantinedUnder: null };
+        },
+        release: async () => {},
+      })),
+      dispose: vi.fn(async () => {
+        disposed = true;
+        events.push("disposed");
+      }),
+    };
+    const executor = new BackgroundExecutor({
+      orchestrator: { runBackgroundTask } as any,
+      workspaceLeaseManager: leaseManager as any,
+    });
+    executor.setTaskManager({ updateStatus: vi.fn(), complete: vi.fn(), fail: vi.fn(), block: vi.fn() } as any);
+
+    executor.enqueue(createTestTask(), new AbortController().signal, vi.fn());
+    await vi.waitFor(() => expect(runBackgroundTask).toHaveBeenCalledTimes(1), { timeout: 3000 });
+
+    await executor.shutdown();
+
+    // The workspace commit must land before the manager tears directories
+    // down — the reverse order shredded in-flight work on every restart.
+    expect(events.indexOf("settled")).toBeGreaterThanOrEqual(0);
+    expect(events.indexOf("committed")).toBeGreaterThan(events.indexOf("settled"));
+    expect(events.indexOf("disposed")).toBeGreaterThan(events.indexOf("committed"));
+    expect(disposed).toBe(true);
+  });
+});

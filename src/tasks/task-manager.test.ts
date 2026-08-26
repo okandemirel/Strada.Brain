@@ -152,6 +152,22 @@ describe("TaskManager", () => {
     expect(manager.hasActiveForegroundTasks(["cli-local"])).toBe(true);
   });
 
+  it("does not count parked tasks (paused / waiting_for_input) as active foreground work", () => {
+    // A parked task waits on a person and consumes no execution slot. Counting
+    // it made one abandoned pause defer every daemon-origin task in the queue
+    // for the life of the process.
+    const storage = {
+      loadIncomplete: vi.fn().mockReturnValue([
+        buildTask({ id: "task_paused" as Task["id"], status: TaskStatus.paused }),
+        buildTask({ id: "task_waiting" as Task["id"], status: TaskStatus.waiting_for_input }),
+      ]),
+    } as any;
+    const manager = new TaskManager(storage, {} as any);
+
+    expect(manager.countActiveForegroundTasks()).toBe(0);
+    expect(manager.hasActiveForegroundTasks()).toBe(false);
+  });
+
   it("stores the user-facing summary when structured progress is provided", () => {
     const storage = {
       addProgress: vi.fn(),

@@ -20,6 +20,7 @@ import type {
   TaskUsageEvent,
 } from "./types.js";
 import { getTaskConversationKey, TaskStatus } from "./types.js";
+import { execFileSync } from "node:child_process";
 import type { ITaskManager, IOrchestrator, SupervisorAdmissionDecision } from "./orchestrator-contract.js";
 import { resolveConversationScope } from "../agents/orchestrator-text-utils.js";
 function getLoggerSafe() {
@@ -223,6 +224,16 @@ export class BackgroundExecutor {
   private readonly activeConversations = new Set<string>();
   private readonly pausedConversations = new Set<string>();
   private running = 0;
+  /**
+   * Abort controllers for IN-FLIGHT executions, keyed by task id.
+   *
+   * The reaper and shutdown need a lever that settles the execution itself:
+   * writing `failed` to the DB alone never released the concurrency slot or
+   * the per-chat lock, so one wedged task per chat blacklisted that chat and
+   * N wedged tasks starved the whole queue until process restart. Aborting
+   * here lets executeTask settle and its `.finally` free everything.
+   */
+  private readonly inflight = new Map<string, AbortController>();
   private taskManager: ITaskManager | null = null;
   private readonly orchestrator: IOrchestrator;
   private readonly concurrencyLimit: number;
@@ -293,13 +304,36 @@ export class BackgroundExecutor {
     this.monitorLifecycle = lifecycle;
   }
 
-  /** Shut down the executor: clear queue and release all workspace leases. */
+  /**
+   * Shut down the executor: settle in-flight work, clear the queue, release
+   * all workspace leases.
+   */
   async shutdown(): Promise<void> {
     const logger = getLogger();
     logger.info("[BackgroundExecutor] Shutting down", {
       queueSize: this.queue.length,
       activeConversations: this.activeConversations.size,
     });
+
+    // Abort in-flight executions FIRST and give them a bounded window to
+    // settle. Each executeTask's finally commits its workspace lease — tearing
+    // the leases down while agents still ran deleted their cwd mid-write, and
+    // the later commit found nothing left to commit. Graceful shutdown was a
+    // work-shredder for every task caught running.
+    for (const controller of this.inflight.values()) {
+      if (!controller.signal.aborted) {
+        controller.abort(new Error("shutting down"));
+      }
+    }
+    const settleDeadline = Date.now() + 10_000;
+    while (this.running > 0 && Date.now() < settleDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    if (this.running > 0) {
+      logger.warn("[BackgroundExecutor] In-flight tasks did not settle in time — their leases will be committed as-is", {
+        running: this.running,
+      });
+    }
 
     // Clear pending queue
     this.queue.length = 0;
@@ -835,6 +869,7 @@ export class BackgroundExecutor {
       // genuinely dead provider connection during a single LLM call.)
       const inactivityTimeoutMs = this.taskInactivityTimeoutMs;
       const timeoutController = new AbortController();
+      this.inflight.set(entry.task.id, timeoutController);
       const onExternalAbort = () => timeoutController.abort();
       entry.signal.addEventListener("abort", onExternalAbort, { once: true });
       let inactivityTimer: ReturnType<typeof setTimeout> | undefined;
@@ -886,6 +921,7 @@ export class BackgroundExecutor {
         .finally(() => {
           if (inactivityTimer) clearTimeout(inactivityTimer);
           entry.signal.removeEventListener("abort", onExternalAbort);
+          this.inflight.delete(entry.task.id);
           this.activeConversations.delete(conversationKey);
           this.running--;
           try {
@@ -1470,7 +1506,6 @@ export class BackgroundExecutor {
     const root = this.projectPath;
     if (!root) return;
     try {
-      const { execFileSync } = require("node:child_process") as typeof import("node:child_process");
       const run = (args: string[]): string =>
         execFileSync("git", ["-C", root, ...args], { encoding: "utf8", timeout: 30_000 });
       const current = run(["rev-parse", "--abbrev-ref", "HEAD"]).trim();
@@ -1518,6 +1553,14 @@ export class BackgroundExecutor {
         (t) => t.status === "pending",
       );
       try {
+        // Abort the execution FIRST so the promise settles and its `.finally`
+        // releases the slot + conversation lock. `fail()` alone only flipped
+        // the DB row: the wedged task kept running, `running` stayed elevated
+        // forever, and every later task for that chat was starved.
+        const controller = this.inflight.get(task.id);
+        if (controller && !controller.signal.aborted) {
+          controller.abort(new Error(`Reaped: ${reason}.`));
+        }
         this.taskManager.fail(task.id, `Reaped: ${reason}.`);
       } catch { /* already settled */ }
       if (!hasPending) {

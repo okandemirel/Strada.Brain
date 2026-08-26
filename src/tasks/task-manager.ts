@@ -414,11 +414,23 @@ export class TaskManager extends EventEmitter {
    * Count active user-facing tasks across chats.
    * Daemon-internal tasks are excluded so control-plane observers do not
    * mistake their own background work for a foreground user session.
+   *
+   * `paused` and `waiting_for_input` rows are NOT counted: they are parked on
+   * a person, consuming no execution slot. Counting them made one abandoned
+   * pause (startup recovery mass-pauses interrupted tasks) defer every
+   * daemon-origin task in the queue for the life of the process.
    */
   countActiveForegroundTasks(excludedChatIds: readonly string[] = []): number {
     const excluded = new Set(excludedChatIds);
+    const progressing = new Set<TaskStatus>([
+      TaskStatus.pending,
+      TaskStatus.planning,
+      TaskStatus.executing,
+    ]);
     return this.storage.loadIncomplete().filter((task) =>
-      task.channelType !== "daemon" && !excluded.has(task.chatId)
+      task.channelType !== "daemon" &&
+      !excluded.has(task.chatId) &&
+      progressing.has(task.status)
     ).length;
   }
 
