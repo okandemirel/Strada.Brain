@@ -217,6 +217,23 @@ describe("orchestrator-text-utils", () => {
       expect(out).toContain("[REDACTED]");
     });
 
+    it("does NOT mangle workspace-lease paths (the 'task-' contains 'sk-' collision)", () => {
+      // Measured 2026-08-26: the lease root was redacted out of the path-guard
+      // error whose entire purpose is to name the correct root; the agent
+      // retried blindly until the circuit breaker disabled git_status.
+      const out = sanitizeRetrievalContent(
+        "Path resolves outside the project directory (/var/folders/fd/vvqxld2x6k709xn2svhnkwl40000gn/T/strada-workspaces/task-2b4261e9f03c17f4/Assets)",
+        "unit-test",
+      );
+      expect(out).toContain("strada-workspaces/task-2b4261e9f03c17f4");
+      expect(out).not.toContain("[REDACTED]");
+    });
+
+    it("still redacts a real sk- key at a word boundary", () => {
+      const out = sanitizeRetrievalContent("token is sk-2b4261e9f03c17f4abcd ok", "unit-test");
+      expect(out).not.toContain("sk-2b4261e9f03c17f4abcd");
+    });
+
     it("warns via logger when carriers are detected", () => {
       const warnSpy = vi.fn();
       const originalLogger = (globalThis as { __strada_logger__?: { warn: (...a: unknown[]) => void } }).__strada_logger__;

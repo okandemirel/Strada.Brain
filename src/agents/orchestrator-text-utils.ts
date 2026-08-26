@@ -1,5 +1,10 @@
+// The lookbehind is load-bearing: without it, the substring "sk-" inside an
+// ordinary word matches — measured 2026-08-26: a workspace-lease path like
+// "…/strada-workspaces/task-2b4261e9f03c17f4/Assets" redacted to "ta[REDACTED]",
+// hiding the lease root from the agent in the very error meant to redirect it,
+// which looped until the circuit breaker disabled git_status and shell_exec.
 const API_KEY_PATTERN =
-  /(?:sk-|key-|token-|api[_-]?key[=: ]+|ghp_|gho_|ghu_|ghs_|ghr_|xox[bpas]-|Bearer\s+|AKIA[0-9A-Z]{16}|-----BEGIN\s(?:RSA\s)?PRIVATE\sKEY-----|mongodb(?:\+srv)?:\/\/[^\s]+@)[a-zA-Z0-9_\-.]{10,}/gi;
+  /(?<![A-Za-z0-9])(?:sk-|key-|token-|api[_-]?key[=: ]+|ghp_|gho_|ghu_|ghs_|ghr_|xox[bpas]-|Bearer\s+|AKIA[0-9A-Z]{16}|-----BEGIN\s(?:RSA\s)?PRIVATE\sKEY-----|mongodb(?:\+srv)?:\/\/[^\s]+@)[a-zA-Z0-9_\-.]{10,}/gi;
 const NATURAL_LANGUAGE_AUTONOMOUS_HOURS = 24;
 const NAME_INTRO_RE = /(?:ben\s+|i(?:'|’)m\s+|my name is\s+|ad[ıi]m\s+)([\p{L}]+)/iu;
 const EXPLICIT_USER_NAME_RE = /(?:benim\s+ad[ıi]m|ad[ıi]m|my\s+name\s+is|i(?:'|’)m|call\s+me)\s+(?:şu|su|as)?\s*["“]?([\p{L}\p{N}][\p{L}\p{N}\s._-]{0,39})/iu;

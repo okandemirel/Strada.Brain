@@ -53,6 +53,23 @@ describe("applySecretPatterns — multi-match function redactions (Bug 1)", () =
     expect(content).toContain("MY_SECRET_TOKEN=[REDACTED]");
     expect(content).not.toContain("supersecretvalue1234567890");
   });
+
+  it("does not flag the 'sk-' inside a workspace-lease path segment ('task-<hex>')", () => {
+    const input = "/var/folders/xx/T/strada-workspaces/task-2b4261e9f03c17f4abcd/Assets";
+
+    const { content } = applySecretPatterns(input, DEFAULT_SECRET_PATTERNS, MAX_OUTPUT_LENGTH);
+
+    expect(content).toBe(input);
+  });
+
+  it("still flags a real OpenAI key at a word boundary", () => {
+    const input = "key: sk-2b4261e9f03c17f4abcdefgh";
+
+    const { content } = applySecretPatterns(input, DEFAULT_SECRET_PATTERNS, MAX_OUTPUT_LENGTH);
+
+    expect(content).toContain("[REDACTED_OPENAI_KEY]");
+    expect(content).not.toContain("sk-2b4261e9f03c17f4abcdefgh");
+  });
 });
 
 describe("sanitizeSecretsQuiet vs sanitizeSecrets metric emission (Bug 3)", () => {

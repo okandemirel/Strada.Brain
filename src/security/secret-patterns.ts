@@ -45,8 +45,11 @@ export interface SanitizeResult {
 
 // ─── Pattern Builders ────────────────────────────────────────────────────────
 
+// The (?<![A-Za-z0-9]) lookbehind keeps the prefix from matching inside a
+// longer word: "task-<hex>" lease dirs contain "sk-" and were mangled into
+// "ta[REDACTED]" in logs and tool results alike (measured 2026-08-26).
 const buildKeyPattern = (prefix: string, suffix = ""): RegExp =>
-  new RegExp(`${prefix}[a-zA-Z0-9_${suffix}]{${MIN_KEY_LENGTH},}`, "g");
+  new RegExp(`(?<![A-Za-z0-9])${prefix}[a-zA-Z0-9_${suffix}]{${MIN_KEY_LENGTH},}`, "g");
 
 const buildEnvPattern = (keys: string[]): RegExp =>
   new RegExp(
