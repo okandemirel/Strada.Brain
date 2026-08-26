@@ -224,6 +224,89 @@ export class WorkspaceLeaseManager {
     this.fallbackExcludes = options.additionalExcludes?.length
       ? new Set([...BASE_FALLBACK_COPY_EXCLUDES, ...options.additionalExcludes])
       : BASE_FALLBACK_COPY_EXCLUDES;
+    // At construction there are by definition zero live leases — every
+    // pre-existing entry belongs to a dead process. Snapshot the list now and
+    // salvage in the background; anything acquired later creates NEW dirs that
+    // are not on this list, so a racing acquire can never be swept.
+    const orphans = this.listOrphanedLeases();
+    if (orphans.length > 0) {
+      void this.salvageOrphanedLeases(orphans);
+    }
+  }
+
+  /** Directories under the lease root at construction time (all orphans).
+   *  Only this manager's own `<slug>-<uuid>` naming matches — the lease root
+   *  may also hold workspace roots created by other flows, which must never
+   *  be swept. */
+  private listOrphanedLeases(): string[] {
+    const leaseNamePattern = /-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    try {
+      return readdirSync(this.leaseRoot, { withFileTypes: true })
+        .filter((e) => e.isDirectory() && leaseNamePattern.test(e.name))
+        .map((e) => e.name);
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Recover work stranded by a crashed predecessor.
+   *
+   * SIGKILL / OOM / panic skip release() entirely: measured in production, a
+   * run whose runtime died mid-task left full project copies under the lease
+   * root with hours of agent work inside, recoverable only by hand (an
+   * external watchdog script did the salvage until this existed).
+   *
+   * Without the original seed maps we cannot tell agent edits from seed
+   * content, so every file is treated as candidate work and the commit's own
+   * safety rules decide: missing targets are restored, differing targets are
+   * quarantined rather than overwritten, deletions stay unapplied. Stale git
+   * worktree registrations are pruned once afterwards.
+   */
+  private async salvageOrphanedLeases(orphanNames: readonly string[]): Promise<void> {
+    const logger = getLoggerSafe();
+    let salvaged = 0;
+    let writtenTotal = 0;
+    let conflictsTotal = 0;
+    for (const name of orphanNames) {
+      const orphanPath = join(this.leaseRoot, name);
+      if (!existsSync(orphanPath)) continue; // released concurrently somehow
+      try {
+        const result = await this.commitLease(
+          this.projectRoot,
+          orphanPath,
+          new Map<string, number>(),
+          new Map<string, number>(),
+          join(this.projectRoot, ".strada", "lease-conflicts", `orphan-${name.slice(0, 8)}`),
+        );
+        writtenTotal += result.written.length;
+        conflictsTotal += result.conflicts.length;
+        this.removeDirectory(orphanPath);
+        salvaged += 1;
+      } catch (err) {
+        logger.warn("Orphaned workspace could not be salvaged — left in place", {
+          orphan: name,
+          err,
+        });
+      }
+    }
+    try {
+      await this.commandRunner({
+        command: "git",
+        args: ["worktree", "prune"],
+        cwd: this.projectRoot,
+        timeoutMs: 30_000,
+      });
+    } catch {
+      // Non-git projects have nothing to prune.
+    }
+    if (salvaged > 0 || writtenTotal > 0 || conflictsTotal > 0) {
+      logger.info("Salvaged orphaned workspaces from a previous process", {
+        salvaged,
+        filesWritten: writtenTotal,
+        conflictsQuarantined: conflictsTotal,
+      });
+    }
   }
 
   async acquireLease(request: WorkspaceLeaseRequest = {}): Promise<WorkspaceLease> {

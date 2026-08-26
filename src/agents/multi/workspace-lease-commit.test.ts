@@ -259,3 +259,34 @@ describe("workspace lease commit", () => {
     expect(existsSync(join(source, ".strada", "lease-conflicts"))).toBe(false);
   });
 });
+
+describe("orphaned lease salvage at construction", () => {
+  it("recovers a crashed predecessor's new files, quarantines conflicts, removes the orphan", async () => {
+    // A SIGKILLed process skips release() entirely — measured in production,
+    // full project copies with hours of agent work were stranded under the
+    // lease root until an external script salvaged them by hand.
+    const orphan = join(leaseRoot, "task-deadbeef-cafe-4bad-8fee-1234567890ab");
+    mkdirSync(join(orphan, "Assets", "Scripts"), { recursive: true });
+    writeFileSync(join(orphan, "Assets", "Scripts", "NewWork.cs"), "new agent work", "utf8");
+    writeFileSync(join(source, "Assets", "Scripts", "Existing.cs"), "user evolved this", "utf8");
+    writeFileSync(join(orphan, "Assets", "Scripts", "Existing.cs"), "stale agent copy", "utf8");
+
+    // Construction itself must trigger the salvage (fire-and-forget).
+    const manager2 = manager();
+    await vi.waitFor(() => {
+      expect(existsSync(orphan)).toBe(false);
+    }, { timeout: 5000 });
+
+    expect(readFileSync(join(source, "Assets", "Scripts", "NewWork.cs"), "utf8")).toBe("new agent work");
+    expect(readFileSync(join(source, "Assets", "Scripts", "Existing.cs"), "utf8")).toBe("user evolved this");
+    const conflictDir = join(source, ".strada", "lease-conflicts", `orphan-${"task-deadbeef-cafe-4bad-8fee-1234567890ab".slice(0, 8)}`);
+    expect(readFileSync(join(conflictDir, "Assets", "Scripts", "Existing.cs"), "utf8")).toBe("stale agent copy");
+
+    // The salvaging manager must remain fully usable afterwards.
+    const lease = await manager2.acquireLease({ label: "post-salvage", forceTempCopy: true });
+    writeFileSync(join(lease.path, "Assets", "Scripts", "AfterSalvage.cs"), "ok", "utf8");
+    const result = await lease.commit();
+    await lease.release();
+    expect(result.written).toContain(join("Assets", "Scripts", "AfterSalvage.cs"));
+  });
+});
