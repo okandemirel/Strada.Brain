@@ -1449,11 +1449,12 @@ export class StradaConformanceGuard {
         `[STRADA ELEMENT ASSETS MISSING] ${coverage}. ` +
         "The design's element schedule is the contract for what must be VISIBLE, not only " +
         "implemented. For each named element: first run unity_my_assets for art the user " +
-        "already owns; when nothing fits, generate one with unity_generate_sprite (it writes " +
-        "the PNG and its Sprite .meta with no Editor), then bind the sprite into the element's " +
-        "prefab — a SpriteRenderer's sprite field, a config asset's sprite field, or whatever " +
-        "the module's view layer actually reads. A sprite on disk that nothing references is " +
-        "the same as no sprite." +
+        "already owns; when nothing fits, generate with the tool that matches the element's " +
+        "layer — unity_generate_sprite for pixel-canvas pieces, unity_generate_mesh for " +
+        "dimensional ones (the GDD's 'softly rendered dimensional stages' and 'plump, glossy " +
+        "3D-feel' characters are NOT sprites) — then bind the asset into the element's prefab " +
+        "(a SpriteRenderer's sprite field, a MeshFilter's mesh, a config asset's reference). " +
+        "An asset on disk that nothing references is the same as no asset." +
         (lastAsk
           ? " This is the last time this is asked. If elements still have no bound art when " +
             "you finish, report the game as partially delivered and say which elements are invisible."
