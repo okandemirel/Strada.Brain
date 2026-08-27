@@ -238,6 +238,22 @@ program
   });
 
 program
+  .command("assets-local-setup")
+  .description("Install free open-weights generation models (2D/3D) this device supports")
+  .option("--model <id>", "Install a specific catalog model")
+  .option("--all-supported", "Install every model this device supports")
+  .action(async (opts: { model?: string; allSupported?: boolean }) => {
+    const { runAssetsLocalSetup } = await import("./core/assets-local-setup.js");
+    const exitCode = await runAssetsLocalSetup({
+      ...(opts.model ? { model: opts.model } : {}),
+      allSupported: opts.allSupported === true,
+    });
+    if (exitCode !== 0) {
+      process.exit(exitCode);
+    }
+  });
+
+program
   .command("unity-link")
   .description("Link your Unity account for Asset Store access (one-time sign-in dialog, then fully headless)")
   .action(async () => {

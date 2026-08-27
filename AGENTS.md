@@ -29,6 +29,7 @@ npm run doctor             # Diagnose setup issues
 - Learning: `src/learning/` — event-driven pipeline, instinct lifecycle
 - Goals: `src/goals/` — DAG decomposition, wave-based parallel execution
 - Campaigns: `src/campaign/` — "GDD/idea in → finished game out": milestone ladder planning, single GDD approval gate, sprint auto-advance on task events, SQLite persistence with boot resume
+- Local assets: `src/assets-local/` — free open-weights generation tier: device-gated model catalog (TripoSR 3D, SD1.5/SDXL/FLUX 2D), isolated Python venv runner (subprocess), procedural generators as the always-works floor; cloud providers optional, never required
 - Security: `src/security/` — input sanitization, autonomy levels, permissions
 - Dashboard: `src/dashboard/` — real-time WebSocket monitoring
 - Web portal: `web-portal/` — React + Vite (separate package.json)

@@ -17,7 +17,7 @@
  */
 
 import { mkdirSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { ITool, ToolContext, ToolExecutionResult } from "../tool.interface.js";
 import { validatePath } from "../../../security/path-guard.js";
@@ -553,13 +553,133 @@ export class MeshGenerateTool implements ITool {
         type: "number",
         description: "organic only: iso-surface threshold 0.1–0.9 (default 0.5; higher = slimmer).",
       },
+      provider: {
+        type: "string",
+        enum: ["procedural", "local"],
+        description:
+          "'procedural' = built-in analytic shapes + metaball organic (always works). 'local' = open-weights " +
+          "image-to-3D on this machine (e.g. TripoSR; install via `strada assets-local-setup`).",
+      },
+      prompt: {
+        type: "string",
+        description:
+          "local only: concept prompt for the 2D stage when no image is given — the tool generates a concept " +
+          "image with the local 2D model, then lifts it to 3D.",
+      },
+      image: {
+        type: "string",
+        description:
+          "local only: project-relative path to a source image to lift into 3D (skips the 2D stage).",
+      },
+      model: {
+        type: "string",
+        description: "local only: image-to-3d catalog id (triposr, ...). Default: smallest your device supports.",
+      },
+      model2d: {
+        type: "string",
+        description: "local only: text-to-image catalog id for the concept stage (sd15, sdxl, flux-schnell).",
+      },
     },
     required: ["name", "shape"],
   };
 
+  /**
+   * The open-weights path: lift an image into 3D with a local image-to-3D
+   * model (e.g. TripoSR). With no source image, a concept is drawn first by
+   * the local 2D model — the free 2D→3D pipeline.
+   */
+  private async executeLocal(input: Record<string, unknown>, context: ToolContext): Promise<ToolExecutionResult> {
+    const { LocalModelRunner } = await import("../../../assets-local/local-model-runner.js");
+    const { defaultModelFor, getModelSpec } = await import("../../../assets-local/model-catalog.js");
+    const { mkdtempSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+
+    const rawName = String(input["name"] ?? "").trim();
+    if (!/^[A-Za-z][\w-]{0,40}$/.test(rawName)) {
+      return { content: "Error: name must start with a letter and contain only letters, digits, _ or -", isError: true };
+    }
+    const dirRel = String(input["path"] ?? "Assets/Art/Generated/Meshes");
+    if (!/^Assets([/\\]|$)/i.test(dirRel.replace(/\\/g, "/")) && dirRel !== "Assets") {
+      return { content: "Error: path must be under Assets/", isError: true };
+    }
+
+    const model3d = input["model"] !== undefined ? getModelSpec(String(input["model"])) : defaultModelFor("image-to-3d");
+    if (!model3d) {
+      return {
+        content:
+          "Error: no local image-to-3D model for this device. Run `strada assets-local-setup` to see " +
+          "what your machine supports, or use provider 'procedural'.",
+        isError: true,
+      };
+    }
+    const runner = new LocalModelRunner();
+    if (!runner.isModelInstalled(model3d.id)) {
+      return {
+        content: `Error: ${model3d.label} is not installed. Run \`strada assets-local-setup --model ${model3d.id}\` first.`,
+        isError: true,
+      };
+    }
+
+    // Resolve the source image: given, or drawn by the local 2D model.
+    let imageAbs: string;
+    const scratch = mkdtempSync(join(tmpdir(), "mesh-local-"));
+    if (input["image"] !== undefined) {
+      const rel = String(input["image"]);
+      const imgCheck = await validatePath(context.projectPath, rel);
+      if (!imgCheck.valid) return { content: `Error: ${imgCheck.error ?? "image path invalid"}`, isError: true };
+      imageAbs = imgCheck.fullPath;
+    } else {
+      const model2d = input["model2d"] !== undefined ? getModelSpec(String(input["model2d"])) : defaultModelFor("text-to-image");
+      if (!model2d || !runner.isModelInstalled(model2d.id)) {
+        return {
+          content:
+            `Error: no image given and no local 2D model installed for the concept stage. Pass an image, or run ` +
+            `\`strada assets-local-setup --model ${model2d?.id ?? "sd15"}\`.`,
+          isError: true,
+        };
+      }
+      const prompt =
+        input["prompt"] !== undefined
+          ? String(input["prompt"])
+          : `${rawName.replace(/([A-Z])/g, " $1").toLowerCase()}, casual mobile game character, soft glossy 3d-look, ` +
+            "single object centered on plain background, full body visible";
+      imageAbs = join(scratch, `${rawName}-concept.png`);
+      const drawn = await runner.textToImage(model2d, prompt, imageAbs, {
+        negative: "blurry, watermark, text, multiple objects, cropped",
+        size: 512,
+      });
+      if (!drawn.ok) return { content: `Error: concept stage failed: ${drawn.detail}`, isError: true };
+    }
+
+    const relFile = `${dirRel.replace(/[/\\]+$/, "")}/${rawName}.obj`;
+    const pathCheck = await validatePath(context.projectPath, relFile, { allowMissingParents: true });
+    if (!pathCheck.valid) return { content: `Error: ${pathCheck.error ?? "path validation failed"}`, isError: true };
+    mkdirSync(dirname(pathCheck.fullPath), { recursive: true });
+
+    const lifted = await runner.imageToMesh(model3d, imageAbs, pathCheck.fullPath);
+    if (!lifted.ok) return { content: `Error: image-to-3D failed: ${lifted.detail}`, isError: true };
+
+    const guid = randomUUID().replace(/-/g, "");
+    writeFileSync(`${pathCheck.fullPath}.meta`, modelMeta(guid), "utf8");
+    return {
+      content:
+        `Mesh written by local image-to-3D (${model3d.label}): ${relFile} (+ .meta). ` +
+        "Unity imports it as a model on next refresh. Place it on a child of the element's prefab — an " +
+        "unreferenced mesh draws nothing.",
+    };
+  }
+
   async execute(input: Record<string, unknown>, context: ToolContext): Promise<ToolExecutionResult> {
     if (context.readOnly) {
       return { content: "Error: mesh generation is disabled in read-only mode", isError: true };
+    }
+
+    const provider = String(input["provider"] ?? "procedural");
+    if (provider !== "procedural" && provider !== "local") {
+      return { content: "Error: provider must be 'procedural' or 'local'", isError: true };
+    }
+    if (provider === "local") {
+      return this.executeLocal(input, context);
     }
 
     const rawName = String(input["name"] ?? "").trim();

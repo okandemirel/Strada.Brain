@@ -463,6 +463,25 @@ export class SpriteGenerateTool implements ITool {
         type: "number",
         description: "Square size in pixels, 16–256 (default 64).",
       },
+      provider: {
+        type: "string",
+        enum: ["procedural", "local"],
+        description:
+          "'procedural' = built-in placeholder shapes (always works, offline). 'local' = open-weights " +
+          "diffusion model on this machine (real art quality; install via `strada assets-local-setup`).",
+      },
+      prompt: {
+        type: "string",
+        description: "local only: the diffusion prompt. Default: a flat pixel-art mobile sprite of the name.",
+      },
+      negative: {
+        type: "string",
+        description: "local only: negative prompt (default: blurry, photo, watermark, text, cropped).",
+      },
+      model: {
+        type: "string",
+        description: "local only: catalog model id (sd15, sdxl, flux-schnell). Default: smallest your device supports.",
+      },
     },
     required: ["name"],
   };
@@ -470,6 +489,11 @@ export class SpriteGenerateTool implements ITool {
   async execute(input: Record<string, unknown>, context: ToolContext): Promise<ToolExecutionResult> {
     if (context.readOnly) {
       return { content: "Error: sprite generation is disabled in read-only mode", isError: true };
+    }
+
+    const provider = String(input["provider"] ?? "procedural");
+    if (provider !== "procedural" && provider !== "local") {
+      return { content: "Error: provider must be 'procedural' (built-in shapes) or 'local' (open-weights diffusion on this machine)", isError: true };
     }
 
     const rawName = String(input["name"] ?? "").trim();
@@ -484,6 +508,92 @@ export class SpriteGenerateTool implements ITool {
     if (!/^Assets([/\\]|$)/i.test(dirRel.replace(/\\/g, "/")) && dirRel !== "Assets") {
       return { content: "Error: path must be under Assets/", isError: true };
     }
+
+    if (provider === "local") {
+      return this.executeLocal(input, context, rawName, dirRel);
+    }
+    return this.executeProcedural(input, context, rawName, dirRel);
+  }
+
+  /** The open-weights path: a local diffusion model draws the sprite. */
+  private async executeLocal(
+    input: Record<string, unknown>,
+    context: ToolContext,
+    rawName: string,
+    dirRel: string,
+  ): Promise<ToolExecutionResult> {
+    const { LocalModelRunner } = await import("../../../assets-local/local-model-runner.js");
+    const { defaultModelFor, getModelSpec } = await import("../../../assets-local/model-catalog.js");
+    const { randomUUID } = await import("node:crypto");
+
+    const modelId = input["model"] !== undefined ? String(input["model"]) : undefined;
+    const spec = modelId ? getModelSpec(modelId) : defaultModelFor("text-to-image");
+    if (!spec) {
+      return {
+        content:
+          "Error: no local text-to-image model available for this device. Run `strada assets-local-setup` " +
+          "to see what your machine supports, or use provider 'procedural'.",
+        isError: true,
+      };
+    }
+
+    const runner = new LocalModelRunner();
+    if (!runner.isModelInstalled(spec.id)) {
+      return {
+        content:
+          `Error: ${spec.label} is not installed. Run \`strada assets-local-setup --model ${spec.id}\` first ` +
+          "(or pick provider 'procedural').",
+        isError: true,
+      };
+    }
+
+    const relFile = `${dirRel.replace(/[/\\]+$/, "")}/${rawName}.png`;
+    const pathCheck = await validatePath(context.projectPath, relFile, { allowMissingParents: true });
+    if (!pathCheck.valid) {
+      return { content: `Error: ${pathCheck.error ?? "path validation failed"}`, isError: true };
+    }
+
+    const prompt =
+      input["prompt"] !== undefined
+        ? String(input["prompt"])
+        : `flat pixel-art game sprite of ${rawName.replace(/([A-Z])/g, " $1").toLowerCase()}, single object centered, ` +
+          "clean readable silhouette, mobile casual game style, plain solid background";
+    const negative =
+      input["negative"] !== undefined
+        ? String(input["negative"])
+        : "blurry, photo, watermark, text, multiple objects, cropped, deformed";
+
+    try {
+      mkdirSync(dirname(pathCheck.fullPath), { recursive: true });
+      const result = await runner.textToImage(spec, prompt, pathCheck.fullPath, {
+        negative,
+        size: 512,
+      });
+      if (!result.ok) {
+        return { content: `Error: local diffusion failed: ${result.detail}`, isError: true };
+      }
+      const guid = randomUUID().replace(/-/g, "");
+      writeFileSync(`${pathCheck.fullPath}.meta`, spriteMeta(guid), "utf8");
+      return {
+        content:
+          `Sprite written by local diffusion (${spec.label}): ${relFile} (+ .meta). ` +
+          "Unity imports it as a Sprite on next refresh. Bind it to the element's prefab now — an " +
+          "unreferenced sprite draws nothing.",
+      };
+    } catch (err) {
+      return {
+        content: `Error: local sprite generation failed: ${err instanceof Error ? err.message : String(err)}`,
+        isError: true,
+      };
+    }
+  }
+
+  private async executeProcedural(
+    input: Record<string, unknown>,
+    context: ToolContext,
+    rawName: string,
+    dirRel: string,
+  ): Promise<ToolExecutionResult> {
 
     const sizeRaw = Number(input["size"] ?? 64);
     const size = Number.isFinite(sizeRaw) ? Math.min(256, Math.max(16, Math.round(sizeRaw))) : 64;
