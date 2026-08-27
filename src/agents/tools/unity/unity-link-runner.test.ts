@@ -1,93 +1,120 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, mkdirSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir, homedir } from "node:os";
 import { runUnityLink, CONSENT_SCRIPT } from "./unity-link-runner.js";
 import type { execFile } from "node:child_process";
 
-const VALID_LINK = {
-  refreshToken: "rt-abcdefghij1234567890",
-  identityHost: "https://api.unity.com",
-  packagesHost: "https://packages-v2.unity.com",
-  clientSecret: "packman-secret",
-  linkedAt: 1787865600000,
-};
+const VALID_CODE = "authcode-1234567890abcdef";
 
-/** A spawn stub that "runs Unity" by writing the link output and exiting 0. */
-function fakeSpawnOk(output: unknown = VALID_LINK): typeof execFile {
+/** A CLI-launcher stub: records the invocation; the "editor" itself is simulated by waitForOutputImpl. */
+function fakeCliLauncher(): typeof execFile {
   return ((bin: string, args: string[], _opts: unknown, cb: (e: (Error & { code?: number }) | null) => void) => {
-    const outIdx = args.indexOf("-linkOutput");
-    const outPath = args[outIdx + 1]!;
-    writeFileSync(outPath, JSON.stringify(output));
     setImmediate(() => cb(null));
     return { unref: () => {} } as unknown as ReturnType<typeof execFile>;
   }) as unknown as typeof execFile;
 }
 
-function fakeSpawnFail(code = 1): typeof execFile {
+function fakeCliLauncherFail(): typeof execFile {
   return ((bin: string, args: string[], _opts: unknown, cb: (e: (Error & { code?: number }) | null) => void) => {
-    const err = Object.assign(new Error("exit"), { code });
-    setImmediate(() => cb(err));
+    setImmediate(() => cb(Object.assign(new Error("exit"), { code: 2 })));
     return { unref: () => {} } as unknown as ReturnType<typeof execFile>;
   }) as unknown as typeof execFile;
 }
 
+/** Stub the Node-side token exchange. */
+function stubTokenExchange(): void {
+  vi.stubGlobal("fetch", async () =>
+    new Response(JSON.stringify({ access_token: "at", refresh_token: "rt-refresh-1234567890", expires_in: 3600 }), { status: 200 }),
+  );
+}
+
 describe("runUnityLink", () => {
   let fakeBinDir: string;
-  let fakeBin: string;
+  let fakeCli: string;
   const storePath = join(homedir(), ".strada", "unity-asset-store.json");
   let hadStoreBefore: boolean;
 
   beforeEach(() => {
     fakeBinDir = mkdtempSync(join(tmpdir(), "unity-link-test-"));
-    fakeBin = join(fakeBinDir, "Unity");
-    writeFileSync(fakeBin, "#!/bin/sh\n");
+    fakeCli = join(fakeBinDir, "unity");
+    writeFileSync(fakeCli, "#!/bin/sh\n");
     hadStoreBefore = existsSync(storePath);
   });
 
   afterEach(() => {
     rmSync(fakeBinDir, { recursive: true, force: true });
+    vi.unstubAllGlobals();
   });
 
-  it("reports when the Unity binary does not exist", async () => {
-    const result = await runUnityLink({ unityBin: join(fakeBinDir, "missing-unity") });
+  function outputWriter(content: unknown): (path: string, timeoutMs: number) => Promise<boolean> {
+    return async (path: string) => {
+      writeFileSync(path, JSON.stringify(content));
+      return true;
+    };
+  }
+
+  it("reports when no Unity install can be found", async () => {
+    const result = await runUnityLink({
+      unityCli: join(fakeBinDir, "missing-cli"),
+      unityBin: join(fakeBinDir, "missing-editor"),
+    });
     expect(result.ok).toBe(false);
-    expect(result.detail).toContain("not found");
+    expect(result.detail.toLowerCase()).toContain("unity");
   });
 
-  it("runs the consent flow and stores a validated token file", async () => {
-    const result = await runUnityLink({ unityBin: fakeBin, spawnImpl: fakeSpawnOk() });
+  it("runs the Hub-session flow, exchanges the code in Node, stores the link", async () => {
+    stubTokenExchange();
+    const result = await runUnityLink({
+      unityCli: fakeCli,
+      spawnImpl: fakeCliLauncher(),
+      waitForOutputImpl: outputWriter({ code: VALID_CODE }),
+    });
     expect(result.ok).toBe(true);
     expect(existsSync(storePath)).toBe(true);
 
     const stored = JSON.parse(readFileSync(storePath, "utf8"));
-    expect(stored.refreshToken).toBe(VALID_LINK.refreshToken);
-    expect(stored.packagesHost).toBe(VALID_LINK.packagesHost);
+    expect(stored.refreshToken).toBe("rt-refresh-1234567890");
+    expect(stored.packagesHost).toContain("packages");
     if (!hadStoreBefore) rmSync(storePath, { force: true });
   });
 
-  it("rejects an invalid token file instead of storing it", async () => {
+  it("rejects a malformed authorization-code file instead of exchanging", async () => {
     const result = await runUnityLink({
-      unityBin: fakeBin,
-      spawnImpl: fakeSpawnOk({ refreshToken: "short", identityHost: "not-a-url" }),
+      unityCli: fakeCli,
+      spawnImpl: fakeCliLauncher(),
+      waitForOutputImpl: outputWriter({ code: "short" }),
     });
     expect(result.ok).toBe(false);
-    expect(result.detail).toContain("invalid");
+    expect(result.detail).toContain("authorization code");
   });
 
-  it("surfaces a failing editor run with the log markers", async () => {
-    const result = await runUnityLink({ unityBin: fakeBin, spawnImpl: fakeSpawnFail(2) });
+  it("surfaces an abandoned/failed consent as did-not-complete", async () => {
+    const result = await runUnityLink({
+      unityCli: fakeCli,
+      spawnImpl: fakeCliLauncherFail(),
+      waitForOutputImpl: async () => false,
+    });
     expect(result.ok).toBe(false);
-    expect(result.detail).toContain("exit 2");
+    expect(result.detail).toContain("did not complete");
   });
 });
 
 describe("CONSENT_SCRIPT", () => {
-  it("carries the proven packman flow markers", () => {
+  it("carries the proven packman flow markers (code step only — exchange lives in Node)", () => {
     expect(CONSENT_SCRIPT).toContain('"packman"');
     expect(CONSENT_SCRIPT).toContain("GetAuthorizationCodeAsync");
-    expect(CONSENT_SCRIPT).toContain("/v1/oauth2/token");
-    expect(CONSENT_SCRIPT).toContain("UnityEditor.Connect.UnityConnect");
+    expect(CONSENT_SCRIPT).toContain("UnityEditor.Connect.UnityOAuth");
     expect(CONSENT_SCRIPT).toContain("UNITY-LINK-OK");
+    // The exchange must NOT be in the editor script: UnityConnect's packages
+    // config is empty outside Hub launches (measured on 6000.3.22f1).
+    expect(CONSENT_SCRIPT).not.toContain("/v1/oauth2/token");
+  });
+
+  it("keeps the token exchange in the Node runner with the Hub's config", () => {
+    const source = readFileSync("src/agents/tools/unity/unity-link-runner.ts", "utf8");
+    expect(source).toContain("/v1/oauth2/token");
+    expect(source).toContain("cloudConfig.json");
+    expect(source).toContain("packman_key");
   });
 });
