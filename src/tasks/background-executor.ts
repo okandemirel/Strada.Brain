@@ -1212,7 +1212,8 @@ export class BackgroundExecutor {
       const shouldAttemptSharedPlanning =
         Boolean(task.goalTree) || Boolean(task.forceSharedPlanning) || shouldDecomposeTask;
       const shouldUseTaskWorkspace =
-        shouldAttemptSharedPlanning || (!hasRichInput && shouldDecomposeTask);
+        task.workspacePolicy !== "none" &&
+        (shouldAttemptSharedPlanning || (!hasRichInput && shouldDecomposeTask));
       if (shouldUseTaskWorkspace && this.workspaceLeaseManager) {
         taskWorkspaceLease = await this.workspaceLeaseManager.acquireLease({
           label: `task-${task.id}`,

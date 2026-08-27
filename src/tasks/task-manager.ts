@@ -53,6 +53,7 @@ export class TaskManager extends EventEmitter {
     options?: {
       origin?: TaskOrigin;
       triggerName?: string;
+      workspacePolicy?: "none";
       goalTree?: GoalTree;
       forceSharedPlanning?: boolean;
       userContent?: string | MessageContent[];
@@ -83,6 +84,7 @@ export class TaskManager extends EventEmitter {
       parentId: options?.parentId,
       origin: options?.origin ?? "user",
       triggerName: options?.triggerName,
+      workspacePolicy: options?.workspacePolicy,
       goalTree: options?.goalTree,
       forceSharedPlanning: options?.forceSharedPlanning,
       userContent: options?.userContent,

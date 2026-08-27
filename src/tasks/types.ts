@@ -122,6 +122,13 @@ export interface Task {
   origin?: TaskOrigin;
   /** Trigger name when spawned by daemon heartbeat. */
   triggerName?: string;
+  /**
+   * "none" = run directly against the real project root, no workspace lease.
+   * Lease commits never DELETE files from the source root, so a fix that must
+   * remove something (e.g. a duplicate type left by a salvage merge) is
+   * impossible inside a lease — the real-tree guardian's fix tasks use this.
+   */
+  workspacePolicy?: "none";
   /** Pre-decomposed goal tree for goal tasks (passed from Orchestrator to BackgroundExecutor) */
   goalTree?: GoalTree;
   /** Hint that the request already produced a goal plan and must re-enter shared planning. */

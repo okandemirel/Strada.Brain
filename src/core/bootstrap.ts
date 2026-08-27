@@ -1391,6 +1391,7 @@ async function bootstrapImpl(
     projectScopeFingerprint,
     commandHandler,
     messageRouter,
+    realTreeGuardian,
   } = await initializeTaskRuntimeStage({
     daemonMode: Boolean(options.daemonMode),
     metrics,
@@ -1410,6 +1411,7 @@ async function bootstrapImpl(
     identityManager,
     providerRouter,
     startupNotices,
+    toolRegistry,
   });
   commandHandler.setVaultRegistry(vaultRegistry);
   if (taskStorage) {
@@ -1420,6 +1422,9 @@ async function bootstrapImpl(
   }
   if (autoUpdater) {
     disposables.push("autoUpdater", () => autoUpdater.shutdown());
+  }
+  if (realTreeGuardian) {
+    disposables.push("realTreeGuardian", () => realTreeGuardian.stop());
   }
   if (messageRouter) {
     disposables.push("messageRouter", () => messageRouter.dispose());

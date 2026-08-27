@@ -169,6 +169,8 @@ export interface TaskRuntimeStageResult {
   progressReporter: ProgressReporter;
   /** Present when the campaign ("GDD in → game out") layer wired successfully. */
   campaignManager?: import("../../campaign/index.js").CampaignManager;
+  /** The autonomous detect-and-fix loop for the real project tree. */
+  realTreeGuardian?: import("../../daemon/real-tree-guardian.js").RealTreeGuardian;
 }
 
 export interface DaemonTriggerStageResult {

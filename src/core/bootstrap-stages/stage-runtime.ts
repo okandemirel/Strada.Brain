@@ -247,6 +247,8 @@ export async function initializeTaskRuntimeStage(
     /** Shared in-memory collector. The MessageRouter records one message per
      *  submitted batch here — see the note on MessageRouterOptions.metrics. */
     metrics?: import("../../dashboard/metrics.js").MetricsCollector;
+    /** Tool registry — the real-tree guardian verifies compiles through it. */
+    toolRegistry?: import("../tool-registry.js").ToolRegistry;
   },
   deps: TaskRuntimeStageDeps = {},
 ): Promise<TaskRuntimeStageResult> {
@@ -407,6 +409,42 @@ export async function initializeTaskRuntimeStage(
     });
   }
 
+  // Real-tree guardian: the autonomous detect-and-fix loop for the project the
+  // user actually opens. Measured 2026-08-27: the tree sat red for ~25h
+  // because every verification loop only ever looked at leases.
+  let realTreeGuardian: import("../../daemon/real-tree-guardian.js").RealTreeGuardian | undefined;
+  if (params.toolRegistry && params.config.unityProjectPath) {
+    try {
+      const { RealTreeGuardian } = await import("../../daemon/real-tree-guardian.js");
+      const registry = params.toolRegistry;
+      realTreeGuardian = new RealTreeGuardian({
+        taskManager,
+        projectRoot: params.config.unityProjectPath,
+        verify: async (projectRoot) => {
+          const result = await registry.execute(
+            "unity_verify_change",
+            {},
+            {
+              projectPath: projectRoot,
+              workingDirectory: projectRoot,
+              readOnly: true,
+            } as import("../../agents/tools/tool-core.interface.js").ToolContext,
+          );
+          return { ok: result.isError !== true, detail: String(result.content ?? "") };
+        },
+        messenger: async (chatId, text) => {
+          await params.channel.sendMarkdown(chatId, sanitizeSecrets(text));
+        },
+      });
+      realTreeGuardian.start();
+      params.logger.info("Real-tree guardian started");
+    } catch (error) {
+      params.logger.warn("Real-tree guardian disabled", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   const progressReporter = deps.createProgressReporter
     ? deps.createProgressReporter(
         params.channel,
@@ -427,5 +465,6 @@ export async function initializeTaskRuntimeStage(
     messageRouter,
     progressReporter,
     campaignManager,
+    realTreeGuardian,
   };
 }
