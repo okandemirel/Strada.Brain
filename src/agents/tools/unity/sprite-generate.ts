@@ -556,18 +556,23 @@ export class SpriteGenerateTool implements ITool {
     const prompt =
       input["prompt"] !== undefined
         ? String(input["prompt"])
-        : `flat pixel-art game sprite of ${rawName.replace(/([A-Z])/g, " $1").toLowerCase()}, single object centered, ` +
-          "clean readable silhouette, mobile casual game style, plain solid background";
+        : `flat vector game sprite of ${rawName.replace(/([A-Z])/g, " $1").toLowerCase()}, ` +
+          "mobile casual game character, thick clean outline, solid colors, soft glossy shading, " +
+          "single full-body character centered, isolated on plain white background, studio quality";
     const negative =
       input["negative"] !== undefined
         ? String(input["negative"])
-        : "blurry, photo, watermark, text, multiple objects, cropped, deformed";
+        : "photo, realistic, blurry, watermark, signature, text, logo, dark background, " +
+          "pattern background, scenery, multiple characters, cropped, deformed, extra limbs";
 
     try {
       mkdirSync(dirname(pathCheck.fullPath), { recursive: true });
       const result = await runner.textToImage(spec, prompt, pathCheck.fullPath, {
         negative,
         size: 512,
+        // Sprites are game assets: cut the subject out instead of trusting
+        // the model to honor "white background" (measured: it doesn't).
+        removeBackground: input["keepBackground"] !== true,
       });
       if (!result.ok) {
         return { content: `Error: local diffusion failed: ${result.detail}`, isError: true };

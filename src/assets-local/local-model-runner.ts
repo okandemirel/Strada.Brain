@@ -32,6 +32,7 @@ p.add_argument("--negative", default="")
 p.add_argument("--out", required=True)
 p.add_argument("--steps", type=int, default=0)
 p.add_argument("--size", type=int, default=512)
+p.add_argument("--rmbg", type=int, default=0)
 a = p.parse_args()
 
 import torch
@@ -58,6 +59,14 @@ if device == "mps":
 
 image = pipe(prompt=a.prompt, negative_prompt=a.negative or None,
              num_inference_steps=steps, height=a.size, width=a.size).images[0]
+
+if a.rmbg:
+    # Game sprites need transparency, not a model-guessed background. rembg
+    # (already in the venv for TripoSR) cuts the subject out; without this,
+    # "plain white background" in the prompt is a coin flip the model loses.
+    from rembg import remove
+    image = remove(image)
+
 image.save(a.out)
 print("WROTE", a.out)
 `;
@@ -230,7 +239,7 @@ export class LocalModelRunner {
     spec: LocalModelSpec,
     prompt: string,
     outPath: string,
-    opts: { negative?: string; size?: number; steps?: number } = {},
+    opts: { negative?: string; size?: number; steps?: number; removeBackground?: boolean } = {},
   ): Promise<{ ok: boolean; detail: string }> {
     if (!this.isModelInstalled(spec.id)) {
       return { ok: false, detail: `${spec.label} is not installed — run assets-local-setup first.` };
@@ -246,6 +255,7 @@ export class LocalModelRunner {
       "--out", outPath,
       "--steps", String(opts.steps ?? 0),
       "--size", String(opts.size ?? 512),
+      "--rmbg", opts.removeBackground ? "1" : "0",
     ];
     const run = await this.spawn(venvPython(), args, { timeoutMs: 1_200_000, env: this.envWithWeights() });
     if (run.code !== 0 || !existsSync(outPath)) {
