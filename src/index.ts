@@ -238,6 +238,24 @@ program
   });
 
 program
+  .command("unity-link")
+  .description("Link your Unity account for Asset Store access (one-time sign-in dialog, then fully headless)")
+  .action(async () => {
+    const { runUnityLink } = await import("./agents/tools/unity/unity-link-runner.js");
+    const { isUnityLinked } = await import("./agents/tools/unity/asset-store-cloud.js");
+    if (isUnityLinked()) {
+      console.log("Unity account is already linked. Delete ~/.strada/unity-asset-store.json to re-link.");
+      return;
+    }
+    console.log("Launching Unity sign-in — a browser/dialog will appear once. Complete the sign-in there.");
+    const result = await runUnityLink();
+    console.log(result.detail);
+    if (!result.ok) {
+      process.exit(1);
+    }
+  });
+
+program
   .command("update")
   .description("Check for and apply updates")
   .option("--check", "Only check for updates, do not apply")
