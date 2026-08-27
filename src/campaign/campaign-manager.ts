@@ -37,10 +37,16 @@ export interface CampaignManagerOptions {
   taskManager: TaskManager;
   messenger: CampaignMessenger;
   projectRoot: string;
-  /** Submission budget per milestone (first try + retries) before the campaign fails loudly. */
+  /** Auto-retry budget per milestone before the campaign fails loudly. */
   maxMilestoneAttempts?: number;
   /** GDD revision rounds at the approval gate before cancelling. */
   maxDraftAttempts?: number;
+  /**
+   * GDD→style.json derivation, run at plan time (post-approval). Optional:
+   * without it the campaign still plans, tools just fall back to stock
+   * style defaults.
+   */
+  styleAnalysis?: import("../agents/style/style-analysis.js").StyleAnalysis;
 }
 
 const APPROVE_RE = /^(evet|onay|onaylıyorum|yes|ok|okay|approve[ds]?|lgtm|devam|go ahead|go)[.!\s]*$/i;
@@ -69,6 +75,7 @@ export class CampaignManager {
   private readonly projectRoot: string;
   private readonly maxMilestoneAttempts: number;
   private readonly maxDraftAttempts: number;
+  private readonly styleAnalysis?: import("../agents/style/style-analysis.js").StyleAnalysis;
   private eventsAttached = false;
 
   constructor(options: CampaignManagerOptions) {
@@ -79,6 +86,7 @@ export class CampaignManager {
     this.projectRoot = options.projectRoot;
     this.maxMilestoneAttempts = options.maxMilestoneAttempts ?? 2;
     this.maxDraftAttempts = options.maxDraftAttempts ?? 3;
+    this.styleAnalysis = options.styleAnalysis;
   }
 
   /** Subscribe to task lifecycle events. Idempotent. */
@@ -318,6 +326,27 @@ export class CampaignManager {
       }
       campaign.gddPath = gddPath;
 
+      // Derive the game's style from its own GDD (post-approval — the design
+      // is confirmed, so the profile now means something). Never a universal
+      // preset; a failed analysis degrades to tool defaults, not a failed plan.
+      let styleSummary = "";
+      if (this.styleAnalysis) {
+        try {
+          const { saveStyleProfile } = await import("../agents/style/style-profile.js");
+          const { profile, source } = await this.styleAnalysis.analyze(textForPlanning);
+          saveStyleProfile(this.projectRoot, profile);
+          styleSummary =
+            `\nStyle (${source === "llm" ? "GDD-derived" : "keyword-derived, review it"}): ` +
+            `${profile.family} / ${profile.pipeline}, palette ${profile.palette.slice(0, 4).join(" ")}` +
+            `${profile.outline.width > 0 ? `, outline ×${profile.outline.width}` : ", no outline"}` +
+            ` — stored at style.json.`;
+        } catch (err) {
+          getLoggerSafe().warn("Style analysis failed at plan time — tools will use stock defaults", {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
       const ladder = await this.planner.planMilestones(textForPlanning, gddPath);
       campaign.milestones = ladder.milestones.map((m, i) => ({
         id: `m${i + 1}`,
@@ -333,7 +362,7 @@ export class CampaignManager {
         campaign,
         `Milestone ladder ready (${campaign.milestones.length} sprints):\n${campaign.milestones
           .map((m) => `• ${m.title}`)
-          .join("\n")}\n\nSprint 1 starts now.`,
+          .join("\n")}${styleSummary}\n\nSprint 1 starts now.`,
       );
       this.submitCurrentMilestone(campaign);
     } catch (err) {

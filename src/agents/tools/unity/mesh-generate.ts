@@ -641,8 +641,20 @@ export class MeshGenerateTool implements ITool {
       const prompt =
         input["prompt"] !== undefined
           ? String(input["prompt"])
-          : `${rawName.replace(/([A-Z])/g, " $1").toLowerCase()}, casual mobile game character, soft glossy 3d-look, ` +
-            "single object centered on plain background, full body visible";
+          : await (async () => {
+              let family = "toon-casual";
+              try {
+                const { loadStyleProfile } = await import("../../style/style-profile.js");
+                family = loadStyleProfile(context.projectPath)?.family ?? family;
+              } catch {
+                /* stock default */
+              }
+              const subject = rawName.replace(/([A-Z])/g, " $1").toLowerCase();
+              if (family === "realistic") {
+                return `${subject}, realistic game character, natural materials and proportions, single object centered on plain background, full body visible`;
+              }
+              return `${subject}, casual mobile game character, soft glossy 3d-look, single object centered on plain background, full body visible`;
+            })();
       imageAbs = join(scratch, `${rawName}-concept.png`);
       const drawn = await runner.textToImage(model2d, prompt, imageAbs, {
         negative: "blurry, watermark, text, multiple objects, cropped",

@@ -556,9 +556,35 @@ export class SpriteGenerateTool implements ITool {
     const prompt =
       input["prompt"] !== undefined
         ? String(input["prompt"])
-        : `flat vector game sprite of ${rawName.replace(/([A-Z])/g, " $1").toLowerCase()}, ` +
-          "mobile casual game character, thick clean outline, solid colors, soft glossy shading, " +
-          "single full-body character centered, isolated on plain white background, studio quality";
+        : await (async () => {
+            // The project's style.json (GDD-derived, never universal) steers
+            // the default prompt; without it, the toon-casual stock default.
+            let family = "toon-casual";
+            let notes = "";
+            try {
+              const { loadStyleProfile } = await import("../../style/style-profile.js");
+              const profile = loadStyleProfile(context.projectPath);
+              if (profile) {
+                family = profile.family;
+                notes = profile.notes;
+              }
+            } catch {
+              /* stock defaults */
+            }
+            const subject = rawName.replace(/([A-Z])/g, " $1").toLowerCase();
+            switch (family) {
+              case "realistic":
+                return `realistic game render of ${subject}, detailed natural materials, studio lighting, single full-body centered, isolated on plain background`;
+              case "pixel":
+                return `16-bit pixel-art game sprite of ${subject}, limited palette, crisp pixels, single character centered, plain background`;
+              case "lowpoly":
+                return `low-poly 3d render of ${subject}, flat shaded, clean geometry, single object centered, plain background`;
+              case "painterly":
+                return `hand-painted game art of ${subject}, soft brush strokes, storybook style, single character centered, plain background`;
+              default:
+                return `flat vector game sprite of ${subject}, mobile casual game character, thick clean outline, solid colors, soft glossy shading, single full-body character centered, isolated on plain white background, studio quality${notes ? `; ${notes}` : ""}`;
+            }
+          })();
     const negative =
       input["negative"] !== undefined
         ? String(input["negative"])

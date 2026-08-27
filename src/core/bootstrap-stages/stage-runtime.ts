@@ -385,6 +385,7 @@ export async function initializeTaskRuntimeStage(
   try {
     const { CampaignManager, CampaignPlanner, CampaignStorage } = await import("../../campaign/index.js");
     const campaignStorage = new CampaignStorage(join(params.config.memory.dbPath, "campaigns.db"));
+    const { StyleAnalysis } = await import("../../agents/style/style-analysis.js");
     campaignManager = new CampaignManager({
       storage: campaignStorage,
       planner: new CampaignPlanner(params.providerManager.getProvider("")),
@@ -393,6 +394,7 @@ export async function initializeTaskRuntimeStage(
         await params.channel.sendMarkdown(chatId, sanitizeSecrets(markdown));
       },
       projectRoot: params.config.unityProjectPath,
+      styleAnalysis: new StyleAnalysis(params.providerManager.getProvider("")),
     });
     campaignManager.attachEvents();
     messageRouter.setCampaignManager(campaignManager);
