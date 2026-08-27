@@ -24,7 +24,7 @@
  * token is reported as "re-run the Unity Link step", never as a silent failure.
  */
 
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { getLoggerSafe } from "../../../utils/logger.js";
@@ -183,17 +183,22 @@ export class UnityAssetStoreClient {
       throw new Error(`download-info failed (HTTP ${resp.status}) for ${productId}`);
     }
     const data = (await resp.json()) as Record<string, unknown>;
+    // Verified live shape: {"result":{"download":{"url": "...", ...}}} — but
+    // tolerate flat and single-nested variants too.
+    const nested = data["result"] as Record<string, unknown> | undefined;
+    const dl = (nested?.["download"] ?? data["download"]) as Record<string, unknown> | undefined;
     const urlOut = typeof data["url"] === "string" ? data["url"]
-      : typeof (data["download"] as Record<string, unknown> | undefined)?.["url"] === "string"
-        ? (data["download"] as Record<string, unknown>)["url"] as string
-        : undefined;
+      : typeof dl?.["url"] === "string" ? dl["url"] as string
+      : undefined;
     if (!urlOut) {
       throw new Error(`download-info for ${productId} carried no url`);
     }
     return {
       productId,
       url: urlOut,
-      filename: typeof data["filename"] === "string" ? data["filename"] : undefined,
+      filename: typeof dl?.["filename_safe_package_name"] === "string"
+        ? `${dl["filename_safe_package_name"]}.unitypackage`
+        : typeof data["filename"] === "string" ? data["filename"] : undefined,
     };
   }
 
@@ -229,6 +234,15 @@ export class UnityAssetStoreClient {
       });
       throw new Error("token refresh returned no access_token");
     }
+    // Refresh tokens ROTATE: every refresh response can carry a NEW
+    // refresh_token, and the old one dies server-side. Not persisting the
+    // rotation kills the link on the SECOND refresh (measured live: HTTP 412
+    // ~3h after linking). Store it back whenever one is returned.
+    const rotated = data["refresh_token"];
+    if (typeof rotated === "string" && rotated.length >= 10 && rotated !== this.link.refreshToken) {
+      this.link.refreshToken = rotated;
+      persistUnityLink(this.link);
+    }
     const expiresIn = Number(data["expires_in"] ?? 3600);
     this.accessToken = token;
     this.accessTokenExpiresAt = Date.now() + Math.max(60, expiresIn - 60) * 1000;
@@ -246,4 +260,9 @@ export function createUnityAssetStoreClient(fetchImpl?: FetchLike): UnityAssetSt
 /** Whether the Unity Link step has been completed on this machine. */
 export function isUnityLinked(): boolean {
   return loadUnityLink() !== undefined;
+}
+
+/** Persist the (possibly rotated) link back to disk, mode 600. */
+export function persistUnityLink(link: UnityAssetStoreLink): void {
+  writeFileSync(LINK_FILE, JSON.stringify(link, null, 2), { mode: 0o600 });
 }
