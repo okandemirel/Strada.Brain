@@ -258,11 +258,36 @@ export class PrerenderFramesTool implements ITool {
     const outlineRaw = Number(input["outlineWidth"] ?? 1.0);
     const plumpRaw = Number(input["plumpness"] ?? 1.2);
     const headRaw = Number(input["headScale"] ?? 1.22);
+    // The project's style.json (derived from ITS OWN GDD by style-analysis —
+    // never a universal preset) supplies the defaults; explicit inputs win.
+    let styleProfileDefaults: { bodyColor?: string; outlineWidth?: number; plump?: number; headScale?: number } = {};
+    try {
+      const { loadStyleProfile, familyDefaults } = await import("../../style/style-profile.js");
+      const profile = loadStyleProfile(context.projectPath);
+      if (profile) {
+        const fam = familyDefaults(profile.family);
+        styleProfileDefaults = {
+          bodyColor: profile.palette[0],
+          outlineWidth: profile.outline.width,
+          plump: profile.proportions.plump,
+          headScale: profile.proportions.headScale,
+        };
+        // Family defaults fill any profile gaps.
+        if (styleProfileDefaults.outlineWidth === 0 && fam.outlineWidth !== 0 && profile.family !== "realistic") {
+          styleProfileDefaults.outlineWidth = fam.outlineWidth;
+        }
+      }
+    } catch {
+      /* profile read is best-effort; explicit inputs and stock defaults still work */
+    }
     const style: Required<PrerenderStyle> = {
-      bodyColor: input["bodyColor"] !== undefined ? String(input["bodyColor"]) : "#f89eb8",
-      outlineWidth: Number.isFinite(outlineRaw) ? Math.max(0, Math.min(3, outlineRaw)) : 1.0,
-      plump: [Number.isFinite(plumpRaw) ? Math.min(1.5, Math.max(0.5, plumpRaw)) : 1.2, 0.86, Number.isFinite(plumpRaw) ? Math.min(1.5, Math.max(0.5, plumpRaw)) : 1.2],
-      headScale: Number.isFinite(headRaw) ? Math.min(2, Math.max(0.5, headRaw)) : 1.22,
+      bodyColor: input["bodyColor"] !== undefined ? String(input["bodyColor"]) : (styleProfileDefaults.bodyColor ?? "#f89eb8"),
+      outlineWidth: Number.isFinite(outlineRaw) ? Math.max(0, Math.min(3, outlineRaw)) : (styleProfileDefaults.outlineWidth ?? 1.0),
+      plump: (() => {
+        const p = Number.isFinite(plumpRaw) ? Math.min(1.5, Math.max(0.5, plumpRaw)) : (styleProfileDefaults.plump ?? 1.2);
+        return [p, 0.86, p] as [number, number, number];
+      })(),
+      headScale: Number.isFinite(headRaw) ? Math.min(2, Math.max(0.5, headRaw)) : (styleProfileDefaults.headScale ?? 1.22),
     };
 
     const scriptRel = "Assets/Editor/StradaPrerenderRun.cs";
