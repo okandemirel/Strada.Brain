@@ -2072,9 +2072,9 @@ describe("BackgroundExecutor - auto-resume bounds (measured loop of 2026-08-26)"
   });
 
   it("waits out an all-provider cooldown instead of burning a doomed retry", async () => {
-    // Seed the shared health registry: the only known provider is cooling.
-    // recordOverloaded gives a short, exact cooldown (5 min) — big enough to
-    // dwarf the plain 30s backoff, small enough for fake timers.
+    // Seed the shared health registry the way production showed it overnight:
+    // the live provider cooling AND a stale "chain(...)" alias entry marked
+    // healthy — the alias must NOT read as an escape hatch.
     const { ProviderHealthRegistry } = await import("../agents/providers/provider-health.js");
     const registry = ProviderHealthRegistry.getInstance();
     registry.clearProviderState("claude");
@@ -2082,6 +2082,7 @@ describe("BackgroundExecutor - auto-resume bounds (measured loop of 2026-08-26)"
     const entry = registry.getEntry("claude");
     expect(entry && entry.cooldownUntil > Date.now()).toBe(true);
     const remainingMs = entry!.cooldownUntil - Date.now();
+    registry.recordSuccess("chain(claude→backup)"); // alias entry reads healthy
 
     const orch = createMockOrchestrator();
     orch.evaluateSupervisorAdmission.mockResolvedValue({
@@ -2132,6 +2133,7 @@ describe("BackgroundExecutor - auto-resume bounds (measured loop of 2026-08-26)"
     } finally {
       vi.useRealTimers();
       registry.clearProviderState("claude");
+      registry.clearProviderState("chain(claude→backup)");
     }
   });
 

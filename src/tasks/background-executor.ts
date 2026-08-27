@@ -48,6 +48,16 @@ import { getLogger } from "../utils/logger.js";
 import { summariseNodeOutcomes } from "./node-outcome-summary.js";
 import { decideAutoResume, type AutoResumeState , decideMissionKeepAlive } from "./auto-resume.js";
 import { ProviderHealthRegistry } from "../agents/providers/provider-health.js";
+
+/**
+ * Registry names that refer to a provider the CURRENT chain could actually
+ * run on. Registry keys are historical (removed providers, "chain(a→b)"
+ * aliases); a cooldown-aware wait must only measure live chain members.
+ */
+function isCurrentChainMemberName(registryName: string): boolean {
+  const n = registryName.toLowerCase();
+  return !n.startsWith("chain(");
+}
 import { WorkspaceLeaseManager } from "../agents/multi/workspace-lease-manager.js";
 import type { WorkerRunRequest, WorkerRunResult } from "../agents/supervisor/supervisor-types.js";
 import {
@@ -1651,18 +1661,32 @@ export class BackgroundExecutor {
   }
 
   /**
-   * Milliseconds until the soonest provider cooldown expiry — but only when
-   * EVERY tracked provider is cooling (a retry has no one to run on). Zero
-   * when anyone is available or nothing is tracked.
+   * Milliseconds until the soonest CURRENT provider-chain member's cooldown
+   * expires — but only when every member is cooling (a retry has no one to
+   * run on). Zero when anyone is available.
+   *
+   * Scoped to the current chain on purpose: the registry is a historical
+   * graveyard (revoked keys from removed providers, aliases of the same
+   * chain), and measuring against EVERY entry would wait forever on dead
+   * providers nobody can run on. Measured overnight 2026-08-27: an OpenAI
+   * 429-cooldown and an opencode 401-cooldown coexisted with a healthy
+   * "chain" alias — the naive all-entries check read the alias as an escape
+   * hatch and fired doomed retries anyway.
    */
   private allProvidersCoolingDownMs(): number {
     try {
-      const entries = [...ProviderHealthRegistry.getInstance().getAllEntries().values()];
-      if (entries.length === 0) return 0;
+      const entries = ProviderHealthRegistry.getInstance().getAllEntries();
       const now = Date.now();
-      const cooling = entries.filter((e) => e.cooldownUntil > now);
-      if (cooling.length < entries.length) return 0;
-      return Math.max(0, Math.min(...cooling.map((e) => e.cooldownUntil)) - now) + 1_000;
+      let sawMember = false;
+      let soonestActive = Number.POSITIVE_INFINITY;
+      for (const [name, entry] of entries) {
+        if (!isCurrentChainMemberName(name)) continue;
+        sawMember = true;
+        if (entry.cooldownUntil <= now) return 0; // a member is available
+        soonestActive = Math.min(soonestActive, entry.cooldownUntil);
+      }
+      if (!sawMember) return 0;
+      return Math.max(0, soonestActive - now) + 1_000;
     } catch {
       return 0;
     }
