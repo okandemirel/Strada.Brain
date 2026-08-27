@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import os from "node:os";
 import { BackgroundExecutor } from "./background-executor.js";
 import type { Task } from "./types.js";
 import { TaskStatus } from "./types.js";
@@ -2069,6 +2072,73 @@ describe("BackgroundExecutor - auto-resume bounds (measured loop of 2026-08-26)"
       "task_test123",
       expect.stringContaining("Paused on a question"),
     );
+  });
+
+  it("settles a task whose workspace vanished under it, then keep-alive resubmits", async () => {
+    // Measured 2026-08-27: a Sprint C task flailed for 40+ minutes against a
+    // lease dir that had been deleted — failed tool calls kept resetting the
+    // inactivity reaper, so nothing ever settled it.
+    const wsDir = mkdtempSync(join(os.tmpdir(), "lost-ws-"));
+    const hangingAdmission = vi.fn().mockImplementation(
+      () => new Promise(() => {}), // the run never settles on its own
+    );
+    const decomposer = createMockDecomposer();
+    decomposer.shouldDecompose.mockReturnValue(true);
+
+    vi.useFakeTimers();
+    try {
+      const executor = new BackgroundExecutor({
+        orchestrator: {
+          evaluateSupervisorAdmission: hangingAdmission,
+          tryRouteThroughSupervisor: hangingAdmission,
+          runBackgroundTask: vi.fn().mockResolvedValue("done"),
+          synthesizeGoalExecutionResult: vi.fn().mockResolvedValue("done"),
+        } as any,
+        decomposer: decomposer as any,
+        goalStorage: createMockGoalStorage() as any,
+        daemonEventBus: createMockDaemonEventBus() as any,
+        workspaceLeaseManager: {
+          acquireLease: vi.fn().mockResolvedValue({
+            id: "lease-lost",
+            path: wsDir,
+            commit: vi.fn().mockResolvedValue({ written: [], conflicts: [] }),
+            release: vi.fn().mockResolvedValue(undefined),
+          }),
+        } as any,
+        aiProvider: undefined,
+        channel: undefined,
+      });
+
+      const task = createTestTask(buildTestGoalTree(), { origin: "user" });
+      const taskManager = {
+        updateStatus: vi.fn(), complete: vi.fn(), fail: vi.fn(), block: vi.fn(),
+        appendTaskNotice: vi.fn(),
+        retryGoalRoot: vi.fn(), replanGoalRoot: vi.fn(), retryTask: vi.fn(),
+        getStatus: vi.fn().mockImplementation((id: string) => (id === task.id ? task : null)),
+      };
+      executor.setTaskManager(taskManager as any);
+
+      executor.enqueue(task, new AbortController().signal, vi.fn());
+      // Let the queue run: lease acquired, task in flight.
+      await vi.advanceTimersByTimeAsync(0);
+
+      // The workspace vanishes under the running task.
+      rmSync(wsDir, { recursive: true, force: true });
+
+      // The next reaper tick (5 min) must settle it with the honest cause.
+      await vi.advanceTimersByTimeAsync(5 * 60_000 + 1_000);
+      expect(taskManager.fail).toHaveBeenCalledWith(
+        task.id,
+        expect.stringContaining("workspace directory is gone"),
+      );
+      const missionRetries = (executor as unknown as { missionRetries: Map<string, number> }).missionRetries;
+      expect(missionRetries.size).toBe(1);
+      // No shutdown(): the run under test hangs by design (never-settling
+      // admission), and shutdown would wait on it. The reaper's timers are
+      // unref'd, so abandoning the executor is safe here.
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("waits out an all-provider cooldown instead of burning a doomed retry", async () => {

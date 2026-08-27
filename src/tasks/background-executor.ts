@@ -21,6 +21,7 @@ import type {
 } from "./types.js";
 import { getTaskConversationKey, TaskStatus } from "./types.js";
 import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import type { ITaskManager, IOrchestrator, SupervisorAdmissionDecision } from "./orchestrator-contract.js";
 import { resolveConversationScope } from "../agents/orchestrator-text-utils.js";
 function getLoggerSafe() {
@@ -245,6 +246,15 @@ export class BackgroundExecutor {
    * here lets executeTask settle and its `.finally` free everything.
    */
   private readonly inflight = new Map<string, AbortController>();
+  /**
+   * taskId → live workspace path, recorded at lease acquisition. Failed tool
+   * calls register as "progress", so a task whose workspace directory was
+   * deleted under it never trips the inactivity-based reaper — measured
+   * 2026-08-27: a Sprint C task flailed for 40+ minutes against a lease dir
+   * that no longer existed, every call rejected by the path guard. The
+   * reaper sweeps this map and settles lost workspaces by name.
+   */
+  private readonly inflightWorkspacePaths = new Map<string, string>();
   private taskManager: ITaskManager | null = null;
   private readonly orchestrator: IOrchestrator;
   private readonly concurrencyLimit: number;
@@ -267,6 +277,7 @@ export class BackgroundExecutor {
     const reaper = setInterval(() => {
       try {
         this.reapStuckTasks();
+        this.reapLostWorkspaces();
       } catch {
         // The reaper must never become the crash it guards against.
       }
@@ -933,6 +944,7 @@ export class BackgroundExecutor {
           if (inactivityTimer) clearTimeout(inactivityTimer);
           entry.signal.removeEventListener("abort", onExternalAbort);
           this.inflight.delete(entry.task.id);
+          this.inflightWorkspacePaths.delete(String(entry.task.id));
           this.activeConversations.delete(conversationKey);
           this.running--;
           try {
@@ -1085,6 +1097,9 @@ export class BackgroundExecutor {
       })
       : undefined);
     const shouldReleaseLease = !params.workspaceLease && Boolean(managedWorkspaceLease);
+    if (shouldReleaseLease && managedWorkspaceLease) {
+      this.inflightWorkspacePaths.set(String(params.taskRunId), managedWorkspaceLease.path);
+    }
 
     try {
       return await this.executeWorkerRun(orchestrator, {
@@ -1094,6 +1109,7 @@ export class BackgroundExecutor {
       });
     } finally {
       if (shouldReleaseLease && managedWorkspaceLease) {
+        this.inflightWorkspacePaths.delete(String(params.taskRunId));
         // Commit BEFORE release. release() deletes the lease directory, so
         // skipping this makes the whole lease write-only: the agent edits a
         // temp copy, verifies it, reports success, and the user's project never
@@ -1202,6 +1218,7 @@ export class BackgroundExecutor {
           label: `task-${task.id}`,
           workerId: String(task.id),
         });
+        this.inflightWorkspacePaths.set(String(task.id), taskWorkspaceLease.path);
       }
       const admission = await this.resolveTopLevelAdmission({
         task,
@@ -1555,6 +1572,36 @@ export class BackgroundExecutor {
       getLoggerSafe().debug("Milestone integration skipped", {
         error: e instanceof Error ? e.message : String(e),
       });
+    }
+  }
+
+  /**
+   * Settle tasks whose workspace directory no longer exists. The
+   * inactivity-based reaper cannot catch these: every rejected tool call
+   * still registers as progress, so a task flailing against a deleted lease
+   * looks busy forever (measured 2026-08-27: 40+ minutes of path-guard
+   * rejections on a Sprint C task whose lease dir had vanished). Failing
+   * with the honest cause routes through mission keep-alive, which
+   * resubmits onto a fresh workspace.
+   */
+  private reapLostWorkspaces(): void {
+    if (!this.taskManager) return;
+    for (const [taskId, workspacePath] of [...this.inflightWorkspacePaths]) {
+      if (existsSync(workspacePath)) continue;
+      const reason = `workspace directory is gone: ${workspacePath}`;
+      getLoggerSafe().warn("Reaping task whose workspace vanished", { taskId, workspacePath });
+      this.inflightWorkspacePaths.delete(taskId);
+      try {
+        const controller = this.inflight.get(taskId);
+        if (controller && !controller.signal.aborted) {
+          controller.abort(new Error(`Reaped: ${reason}.`));
+        }
+        this.taskManager.fail(taskId, `Reaped: ${reason}.`);
+      } catch { /* already settled */ }
+      const task = this.taskManager.getStatus(taskId);
+      if (task) {
+        this.scheduleMissionKeepAlive(task as Task, reason);
+      }
     }
   }
 
