@@ -282,6 +282,10 @@ export interface UnityLinkRunnerOptions {
    *  writing the real ~/.strada store from a test overwrites the user's live
    *  refresh token with fixture data and destroys the account link. */
   linkStorePath?: string;
+  /** Test seam: replace the Unity Hub cloud-config read. Without it the test
+   *  reads the REAL Hub config — present on the dev Mac, absent on Linux CI,
+   *  so the suite was green locally and red on CI for a machine-state reason. */
+  hubCloudConfigImpl?: () => { identityHost: string; packagesHost: string; clientSecret: string } | undefined;
 }
 
 const DEFAULT_UNITY_BIN =
@@ -398,7 +402,7 @@ export async function runUnityLink(options: UnityLinkRunnerOptions = {}): Promis
     if (!parsedCode.success) {
       return { ok: false, detail: "Unity link wrote no usable authorization code" };
     }
-    const config = readHubCloudConfig();
+    const config = (options.hubCloudConfigImpl ?? readHubCloudConfig)();
     if (!config) {
       return { ok: false, detail: "Unity Hub cloud config not found (identity/asset_store_api/packman_key) — is the Hub installed and signed in?" };
     }

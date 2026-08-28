@@ -235,9 +235,6 @@ export class PrerenderFramesTool implements ITool {
     if (context.readOnly) {
       return { content: "Error: prerendering is disabled in read-only mode", isError: true };
     }
-    if (!existsSync(DEFAULT_CLI)) {
-      return { content: `Error: Unity CLI not found at ${DEFAULT_CLI} — the Hub-launched editor is required for rendering.`, isError: true };
-    }
 
     const prefabRel = String(input["prefab"] ?? "").trim();
     if (!prefabRel.toLowerCase().endsWith(".prefab")) {
@@ -259,6 +256,13 @@ export class PrerenderFramesTool implements ITool {
     }
     const outCheck = await validatePath(context.projectPath, outRel, { allowMissingParents: true });
     if (!outCheck.valid) return { content: `Error: ${outCheck.error ?? "outDir invalid"}`, isError: true };
+
+    // Environment check AFTER input validation: bad inputs deserve their own
+    // answer on every machine (the old order made validation untestable off
+    // the dev box — the CLI-missing error answered first everywhere else).
+    if (!existsSync(DEFAULT_CLI)) {
+      return { content: `Error: Unity CLI not found at ${DEFAULT_CLI} — the Hub-launched editor is required for rendering.`, isError: true };
+    }
     mkdirSync(outCheck.fullPath, { recursive: true });
 
     const outlineRaw = Number(input["outlineWidth"] ?? 1.0);

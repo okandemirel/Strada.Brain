@@ -65,6 +65,12 @@ describe("runUnityLink", () => {
     expect(result.detail.toLowerCase()).toContain("unity");
   });
 
+  const fakeHubConfig = () => ({
+    identityHost: "https://api.unity.test",
+    packagesHost: "https://packages.unity.test",
+    clientSecret: "hub-secret",
+  });
+
   it("runs the Hub-session flow, exchanges the code in Node, stores the link", async () => {
     stubTokenExchange();
     const result = await runUnityLink({
@@ -72,6 +78,9 @@ describe("runUnityLink", () => {
       spawnImpl: fakeCliLauncher(),
       waitForOutputImpl: outputWriter({ code: VALID_CODE }),
       linkStorePath: storePath,
+      // NEVER the real Hub config: reading it made this test pass only on
+      // machines with the Hub installed (green on the dev Mac, red on CI).
+      hubCloudConfigImpl: fakeHubConfig,
     });
     expect(result.ok).toBe(true);
     expect(existsSync(storePath)).toBe(true);
@@ -87,6 +96,7 @@ describe("runUnityLink", () => {
       unityCli: fakeCli,
       spawnImpl: fakeCliLauncher(),
       waitForOutputImpl: outputWriter({ code: VALID_CODE }),
+      hubCloudConfigImpl: fakeHubConfig,
       // no linkStorePath → would target the real ~/.strada store
     });
     expect(result.ok).toBe(false);
