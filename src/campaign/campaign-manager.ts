@@ -690,6 +690,27 @@ export class CampaignManager {
 
     const status = tip && tip.id !== milestone.taskId ? tip.status : settledStatus;
     const output = tip && tip.id !== milestone.taskId ? (tip.error ?? tip.result ?? "") : settledOutput;
+
+    // A reaped task ("Reaped: no progress…" / "Auto-retry N/M in ~Xs") is one
+    // the executor's keep-alive WILL retry — but its backoff grows past this
+    // grace window (measured live: retry at +120s vs grace 90s), so reacting
+    // now double-submits the sprint. Wait one keep-alive horizon and look
+    // again; if the retry landed, the lineage check above adopts it.
+    const executorWillRetry = /Reaped:|Auto-retry \d+\/\d+/i.test(output);
+    if (executorWillRetry && !milestone.reconcileDeferred) {
+      milestone.reconcileDeferred = true;
+      this.persist(campaign);
+      getLoggerSafe().info("Campaign deferring to the executor's pending keep-alive retry", {
+        id: campaign.id,
+        milestone: milestone.id,
+      });
+      setTimeout(() => {
+        void this.reconcileMilestoneAfterSettle(campaign.id, milestone.id, status, output);
+      }, 11 * 60_000); // just past the keep-alive's max backoff (10 min)
+      return;
+    }
+    milestone.reconcileDeferred = false;
+
     await this.onMilestoneOutcome(campaign, milestone, status, output, { countAttempt: true });
   }
 

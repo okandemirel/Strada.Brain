@@ -68,6 +68,9 @@ export interface CampaignMilestone {
   attempts: number;
   /** Short result excerpt recorded when the milestone landed green. */
   resultExcerpt?: string;
+  /** One-shot flag: a reaped settlement already deferred once to the
+   *  executor's pending keep-alive retry (see reconcileMilestoneAfterSettle). */
+  reconcileDeferred?: boolean;
 }
 
 export interface Campaign {

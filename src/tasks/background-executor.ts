@@ -1708,6 +1708,27 @@ export class BackgroundExecutor {
       );
     } catch { /* block-marking is cosmetic here */ }
     const timer = setTimeout(() => {
+      // Someone else may have already resubmitted this mission while the
+      // backoff ran — the campaign layer reacts to the same settlement on its
+      // own clock, and its grace window can expire before this timer fires
+      // (measured live 2026-08-28 14:13: campaign resubmit at +90s, this
+      // retry at +120s → two tasks writing the same sprint). An ACTIVE task
+      // on this chat with the same prompt root IS the mission continuing;
+      // a second copy only double-writes the repo.
+      const promptRoot = task.prompt.slice(0, 160);
+      const alreadyContinued = (this.taskManager?.listTasks?.(task.chatId, 10) ?? []).some(
+        (t) =>
+          t.id !== task.id &&
+          ["pending", "planning", "executing"].includes(t.status) &&
+          t.prompt.slice(0, 160) === promptRoot,
+      );
+      if (alreadyContinued) {
+        this.missionRetries.delete(key);
+        getLoggerSafe().info("Mission keep-alive retry skipped — the mission was already resubmitted elsewhere", {
+          taskId: task.id,
+        });
+        return;
+      }
       const retried = (() => {
         try {
           return this.taskManager?.retryTask(task.id);
