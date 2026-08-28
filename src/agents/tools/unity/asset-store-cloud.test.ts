@@ -157,11 +157,15 @@ describe("MyAssetsCloudTool", () => {
         { productId: "2", title: "Unrelated Thing" },
       ],
     });
-    const tool = toolWith(new UnityAssetStoreClient(LINK, f));
+    // FIXTURE cache, never this machine's real one: relying on what happened
+    // to be downloaded on the dev Mac made this green locally and red on CI.
+    const tool = new MyAssetsCloudTool(
+      () => new UnityAssetStoreClient(LINK, f),
+      () => ["ARCADE - FREE Racing Car"],
+    );
     const result = await tool.execute({ action: "purchases" }, ctx);
     expect(result.isError).toBeFalsy();
     const text = String(result.content);
-    // The racing car IS in this machine's cache; the unrelated thing is not.
     expect(text).toContain("ARCADE FREE Racing Car");
     expect(text).toContain("ON DISK");
     expect(text).toContain("not downloaded");

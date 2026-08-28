@@ -107,7 +107,13 @@ export class MyAssetsCloudTool implements ITool {
     required: ["action"],
   };
 
-  constructor(private readonly clientFactory?: () => UnityAssetStoreClient) {}
+  constructor(
+    private readonly clientFactory?: () => UnityAssetStoreClient,
+    /** Test seam: replace the REAL download-cache scan. Without it the
+     *  purchases test depended on what happened to be in this machine's
+     *  Unity cache — green on the dev Mac, red on every CI runner. */
+    private readonly cachedNamesImpl?: () => string[],
+  ) {}
 
   async execute(input: Record<string, unknown>, _context: ToolContext): Promise<ToolExecutionResult> {
     const action = String(input["action"] ?? "") as Action;
@@ -146,7 +152,7 @@ export class MyAssetsCloudTool implements ITool {
           if (purchases.length === 0) {
             return { content: offset === 0 ? "The account owns no packages (or the library is private and unread)." : "No more purchases past this offset." };
           }
-          const merged = markDownloaded(purchases, listCachedPackageNames());
+          const merged = markDownloaded(purchases, (this.cachedNamesImpl ?? listCachedPackageNames)());
           return {
             content: merged
               .map(
