@@ -18,7 +18,7 @@
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { randomUUID } from "node:crypto";
+import { reuseOrMintGuid } from "./meta-file-utils.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "../tool.interface.js";
 import { validatePath } from "../../../security/path-guard.js";
 
@@ -590,9 +590,13 @@ export class MeshGenerateTool implements ITool {
    */
   private async executeLocal(input: Record<string, unknown>, context: ToolContext): Promise<ToolExecutionResult> {
     const { LocalModelRunner } = await import("../../../assets-local/local-model-runner.js");
-    const { defaultModelFor, getModelSpec } = await import("../../../assets-local/model-catalog.js");
-    const { mkdtempSync } = await import("node:fs");
+    const { defaultModelFor, supportedModels } = await import("../../../assets-local/model-catalog.js");
+    const { mkdtempSync, rmSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");
+    // Explicit ids go through the DEVICE-GATED list: getModelSpec would hand
+    // back a model this machine cannot run.
+    const gatedSpec = (id: string, kind: "text-to-image" | "image-to-3d") =>
+      supportedModels().find((m) => m.id === id && m.kind === kind);
 
     const rawName = String(input["name"] ?? "").trim();
     if (!/^[A-Za-z][\w-]{0,40}$/.test(rawName)) {
@@ -603,7 +607,7 @@ export class MeshGenerateTool implements ITool {
       return { content: "Error: path must be under Assets/", isError: true };
     }
 
-    const model3d = input["model"] !== undefined ? getModelSpec(String(input["model"])) : defaultModelFor("image-to-3d");
+    const model3d = input["model"] !== undefined ? gatedSpec(String(input["model"]), "image-to-3d") : defaultModelFor("image-to-3d");
     if (!model3d) {
       return {
         content:
@@ -621,15 +625,19 @@ export class MeshGenerateTool implements ITool {
     }
 
     // Resolve the source image: given, or drawn by the local 2D model.
+    // Everything below can REJECT (spawn failure, the 20-minute inference
+    // timeout killing the child) — a thrown error must come back as an
+    // actionable isError, not escape the tool, and the scratch dir must go.
     let imageAbs: string;
     const scratch = mkdtempSync(join(tmpdir(), "mesh-local-"));
+    try {
     if (input["image"] !== undefined) {
       const rel = String(input["image"]);
       const imgCheck = await validatePath(context.projectPath, rel);
       if (!imgCheck.valid) return { content: `Error: ${imgCheck.error ?? "image path invalid"}`, isError: true };
       imageAbs = imgCheck.fullPath;
     } else {
-      const model2d = input["model2d"] !== undefined ? getModelSpec(String(input["model2d"])) : defaultModelFor("text-to-image");
+      const model2d = input["model2d"] !== undefined ? gatedSpec(String(input["model2d"]), "text-to-image") : defaultModelFor("text-to-image");
       if (!model2d || !runner.isModelInstalled(model2d.id)) {
         return {
           content:
@@ -671,7 +679,7 @@ export class MeshGenerateTool implements ITool {
     const lifted = await runner.imageToMesh(model3d, imageAbs, pathCheck.fullPath);
     if (!lifted.ok) return { content: `Error: image-to-3D failed: ${lifted.detail}`, isError: true };
 
-    const guid = randomUUID().replace(/-/g, "");
+    const guid = reuseOrMintGuid(`${pathCheck.fullPath}.meta`);
     writeFileSync(`${pathCheck.fullPath}.meta`, modelMeta(guid), "utf8");
     return {
       content:
@@ -679,6 +687,20 @@ export class MeshGenerateTool implements ITool {
         "Unity imports it as a model on next refresh. Place it on a child of the element's prefab — an " +
         "unreferenced mesh draws nothing.",
     };
+    } catch (err) {
+      return {
+        content:
+          `Error: local mesh generation failed: ${err instanceof Error ? err.message : String(err)}. ` +
+          "Falls back available: provider 'procedural' needs no local model.",
+        isError: true,
+      };
+    } finally {
+      try {
+        rmSync(scratch, { recursive: true, force: true });
+      } catch {
+        // Scratch cleanup is best-effort.
+      }
+    }
   }
 
   async execute(input: Record<string, unknown>, context: ToolContext): Promise<ToolExecutionResult> {
@@ -782,6 +804,29 @@ export class MeshGenerateTool implements ITool {
       }
     }
 
+    // The game's own style profile shapes the silhouette: `plump` squashes
+    // X/Z outward and Y down — the "plump, glossy 3D-feel" the GDD asks for.
+    // Explicit `plump` input wins; no profile = natural proportions.
+    try {
+      const { loadStyleProfile } = await import("../../style/style-profile.js");
+      const plumpInput = Number(input["plump"]);
+      const plump = Number.isFinite(plumpInput)
+        ? Math.min(1.5, Math.max(0.5, plumpInput))
+        : loadStyleProfile(context.projectPath)?.proportions.plump ?? 1.0;
+      if (plump !== 1.0) {
+        for (const v of mesh!.vertices) {
+          v.x *= plump;
+          v.z *= plump;
+          v.y *= 2 - plump;
+        }
+        for (let i = 0; i < mesh!.normals.length; i++) {
+          mesh!.normals[i] = normalize(mesh!.normals[i]!);
+        }
+      }
+    } catch {
+      /* style application is best-effort */
+    }
+
     const relFile = `${dirRel.replace(/[/\\]+$/, "")}/${rawName}.obj`;
     const pathCheck = await validatePath(context.projectPath, relFile, { allowMissingParents: true });
     if (!pathCheck.valid) {
@@ -789,7 +834,9 @@ export class MeshGenerateTool implements ITool {
     }
 
     try {
-      const guid = randomUUID().replace(/-/g, "");
+      // Reuse the existing guid on regeneration — a fresh guid orphans every
+      // prefab/scene binding to the previous version of this mesh.
+      const guid = reuseOrMintGuid(`${pathCheck.fullPath}.meta`);
       mkdirSync(dirname(pathCheck.fullPath), { recursive: true });
       writeFileSync(pathCheck.fullPath, toObj(mesh!, rawName), "utf8");
       writeFileSync(`${pathCheck.fullPath}.meta`, modelMeta(guid), "utf8");

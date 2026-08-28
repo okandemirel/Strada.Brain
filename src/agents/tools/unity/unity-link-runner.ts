@@ -280,8 +280,9 @@ export interface UnityLinkRunnerOptions {
   waitForOutputImpl?: (path: string, timeoutMs: number) => Promise<boolean>;
 }
 
-const DEFAULT_UNITY_BIN = "/Applications/Unity/Hub/Editor/6000.3.22f1/Unity.app/Contents/MacOS/Unity";
-const DEFAULT_UNITY_CLI = "/Users/okan/.unity/bin/unity";
+const DEFAULT_UNITY_BIN =
+  process.env["STRADA_UNITY_BIN"] ?? "/Applications/Unity/Hub/Editor/6000.3.22f1/Unity.app/Contents/MacOS/Unity";
+const DEFAULT_UNITY_CLI = process.env["STRADA_UNITY_CLI"] ?? "/Users/okan/.unity/bin/unity";
 const LINK_STORE = join(homedir(), ".strada", "unity-asset-store.json");
 
 /**
@@ -303,17 +304,17 @@ async function defaultWaitForOutput(outputPath: string, logPath: string, timeout
   return false;
 }
 
-/** Read ProjectVersion from a real project if present, else the default. */
+/** Read ProjectVersion from the configured project if present, else the default. */
 function editorVersion(): string {
-  try {
-    const v = readFileSync(
-      "/Users/okan/Documents/MaxedOutEntertainment/PixelFlow-Clean/ProjectSettings/ProjectVersion.txt",
-      "utf8",
-    );
-    const m = /m_EditorVersion:\s*(\S+)/.exec(v);
-    if (m) return m[1]!;
-  } catch {
-    /* fall through */
+  const projectRoot = process.env["UNITY_PROJECT_PATH"] ?? process.env["STRADA_UNITY_PROJECT"];
+  if (projectRoot) {
+    try {
+      const v = readFileSync(join(projectRoot, "ProjectSettings", "ProjectVersion.txt"), "utf8");
+      const m = /m_EditorVersion:\s*(\S+)/.exec(v);
+      if (m) return m[1]!;
+    } catch {
+      /* fall through */
+    }
   }
   return "6000.3.22f1";
 }
@@ -416,8 +417,16 @@ export async function runUnityLink(options: UnityLinkRunnerOptions = {}): Promis
     return { ok: true, detail: `Unity account linked. Token store: ${LINK_STORE}`, linkFile: LINK_STORE };
   } catch (err) {
     return { ok: false, detail: `Unity link failed: ${err instanceof Error ? err.message : String(err)}` };
+  } finally {
+    // The one-time authorization code must not linger on disk (it was left
+    // world-readable until the NEXT run deleted it). The scratch project
+    // itself stays — Library reuse, see above.
+    try {
+      rmSync(outputPath, { force: true });
+    } catch {
+      /* best-effort */
+    }
   }
-  // No scratch cleanup: the project is persistent (Library reuse — see above).
 }
 
 function resolveUnityBin(): string {

@@ -15,12 +15,14 @@
  */
 
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync, rmSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, writeFileSync, rmSync, readdirSync, statSync } from "node:fs";
+import { join, basename } from "node:path";
 import type { ITool, ToolContext, ToolExecutionResult } from "../tool.interface.js";
 import { validatePath } from "../../../security/path-guard.js";
+import { reuseOrMintGuid } from "./meta-file-utils.js";
+import { spriteMeta } from "./sprite-generate.js";
 
-const DEFAULT_CLI = "/Users/okan/.unity/bin/unity";
+const DEFAULT_CLI = process.env["STRADA_UNITY_CLI"] ?? "/Users/okan/.unity/bin/unity";
 
 export interface PrerenderStyle {
   /** Pastel body color for the toon look (hex). */
@@ -247,7 +249,11 @@ export class PrerenderFramesTool implements ITool {
       return { content: `Error: prefab not found: ${prefabRel}`, isError: true };
     }
 
-    const outRel = String(input["outDir"] ?? "Assets/Art/Prerendered");
+    // Per-prefab default: a shared constant dir + undiscriminated frame names
+    // made a second prefab's run "succeed" instantly on the FIRST prefab's
+    // stale frames.
+    const prefabBase = basename(prefabRel).replace(/\.prefab$/i, "");
+    const outRel = String(input["outDir"] ?? `Assets/Art/Prerendered/${prefabBase}`);
     if (!/^Assets([/\\]|$)/i.test(outRel.replace(/\\/g, "/")) && outRel !== "Assets") {
       return { content: "Error: outDir must be under Assets/", isError: true };
     }
@@ -294,6 +300,7 @@ export class PrerenderFramesTool implements ITool {
     const scriptCheck = await validatePath(context.projectPath, scriptRel, { allowMissingParents: true });
     if (!scriptCheck.valid) return { content: `Error: ${scriptCheck.error ?? "script path invalid"}`, isError: true };
 
+    let succeeded = false;
     try {
       mkdirSync(join(context.projectPath, "Assets", "Editor"), { recursive: true });
       writeFileSync(scriptCheck.fullPath, buildRenderScript(style), "utf8");
@@ -305,14 +312,26 @@ export class PrerenderFramesTool implements ITool {
 
       // `unity open` is fire-and-forget: the CLI returns while the editor is
       // still booting (and deleting the script here once cost a whole run).
-      // The artifact is the signal, not the process.
+      // The artifact is the signal, not the process — but only a FRESH
+      // artifact: pre-existing frames from an earlier run must not read as
+      // this run's success.
+      const launchedAt = Date.now();
+      const listFreshFrames = (): string[] =>
+        existsSync(outCheck.fullPath)
+          ? readdirSync(outCheck.fullPath).filter((f) => {
+              if (!/^frame_\d+\.png$/.test(f)) return false;
+              try {
+                return statSync(join(outCheck.fullPath, f)).mtimeMs >= launchedAt - 2_000;
+              } catch {
+                return false;
+              }
+            })
+          : [];
       const deadline = Date.now() + 30 * 60_000;
       let frames: string[] = [];
       let failDetail = "";
       while (Date.now() < deadline) {
-        frames = existsSync(outCheck.fullPath)
-          ? readdirSync(outCheck.fullPath).filter((f) => /^frame_\d+\.png$/.test(f))
-          : [];
+        frames = listFreshFrames();
         if (frames.length > 0) break;
         if (existsSync(logPath)) {
           const log = (await import("node:fs")).readFileSync(logPath, "utf8");
@@ -330,25 +349,49 @@ export class PrerenderFramesTool implements ITool {
         }
         await new Promise((r) => setTimeout(r, 2000));
       }
+      if (frames.length === 0 && failDetail === "") {
+        // STRADA-RENDER-OK can land in the log a beat before the directory
+        // listing catches up — one final look before declaring failure.
+        frames = listFreshFrames();
+      }
       if (frames.length === 0) {
         return {
           content: `Error: render produced no frames${failDetail ? `: ${failDetail}` : " (timed out waiting — see prerender.log)"}`,
           isError: true,
         };
       }
+      // Sprite .meta per frame: with no editor importing inside a lease, a
+      // meta-less PNG lands as a default Texture instead of a Sprite. Guids
+      // are reused across regenerations so bindings never churn.
+      for (const frame of frames) {
+        const framePath = join(outCheck.fullPath, frame);
+        try {
+          writeFileSync(`${framePath}.meta`, spriteMeta(reuseOrMintGuid(`${framePath}.meta`)), "utf8");
+        } catch {
+          // Meta emission is best-effort per frame.
+        }
+      }
+      succeeded = true;
       return {
         content:
-          `${frames.length} frames rendered to ${outRel}: ${frames.join(", ")}. ` +
+          `${frames.length} frames rendered to ${outRel} (+ sprite .meta each): ${frames.join(", ")}. ` +
           "These are the glossy game-ready angles — use them as the element's view sprites, and animate " +
           "between them for the '2D-animation snappiness' the GDD asks for.",
       };
     } catch (err) {
       return { content: `Error: prerender failed: ${err instanceof Error ? err.message : String(err)}`, isError: true };
     } finally {
-      // The one-shot script never lingers in the user's repo.
+      // NOTHING from the one-shot run lingers in the user's repo: the script,
+      // the outline shader it writes, and — on success — the root-level log.
+      // On failure the log STAYS: the error message points the agent at it.
       try {
         rmSync(scriptCheck.fullPath, { force: true });
         rmSync(`${scriptCheck.fullPath}.meta`, { force: true });
+        rmSync(join(context.projectPath, "Assets", "Editor", "StradaOutline.shader"), { force: true });
+        rmSync(join(context.projectPath, "Assets", "Editor", "StradaOutline.shader.meta"), { force: true });
+        if (succeeded) {
+          rmSync(join(context.projectPath, "prerender.log"), { force: true });
+        }
       } catch {
         /* cleanup best-effort */
       }

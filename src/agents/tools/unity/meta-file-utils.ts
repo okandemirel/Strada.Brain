@@ -4,6 +4,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { access } from "node:fs/promises";
 import { normalize, relative, sep } from "node:path";
 
@@ -13,6 +14,24 @@ import { normalize, relative, sep } from "node:path";
  */
 export function generateUnityGuid(): string {
   return randomUUID().replaceAll("-", "").toLowerCase();
+}
+
+/**
+ * Reuse the guid of an existing .meta, or mint a fresh one.
+ *
+ * Regenerating an asset must NOT change its guid: guids are Unity's identity,
+ * and a fresh one on every write silently orphaned every prefab/scene binding
+ * to the previous version — the asset coverage gate then accused the agent of
+ * never binding art it had bound.
+ */
+export function reuseOrMintGuid(metaFilePath: string): string {
+  try {
+    const match = /guid:\s*([0-9a-f]{32})/i.exec(readFileSync(metaFilePath, "utf8"));
+    if (match) return match[1]!.toLowerCase();
+  } catch {
+    // No existing meta — mint below.
+  }
+  return generateUnityGuid();
 }
 
 /** Get the .meta file path for a given file or directory path. */

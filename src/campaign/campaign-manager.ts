@@ -451,7 +451,11 @@ export class CampaignManager {
         }
       }
 
-      const ladder = await this.planner.planMilestones(textForPlanning, gddPath);
+      const ladder = await this.planner.planMilestones(
+        textForPlanning,
+        gddPath,
+        styleSummary.trim() || undefined,
+      );
       campaign.milestones = ladder.milestones.map((m, i) => ({
         id: `m${i + 1}`,
         title: m.title,

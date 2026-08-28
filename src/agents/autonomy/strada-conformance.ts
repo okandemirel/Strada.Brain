@@ -14,11 +14,15 @@ import { join as joinPath, resolve as resolvePath } from "node:path";
  * ModuleConfig.cs and no .asmdef" and accused a correctly-built module of being
  * incomplete. resolve() is the one operation that is right for both.
  */
-/** Every file under a directory, bounded so a stray Library folder cannot hang a check. */
-function walkFiles(dir: string, budget = 4000): string[] {
+/** Every file under a directory, bounded so a stray Library folder cannot hang a check.
+ *  With `match`, the budget counts MATCHES, not every file seen — an imported
+ *  asset pack must not make generated art invisible by exhausting the budget
+ *  on files nobody asked about. Traversal itself stays hard-capped. */
+function walkFiles(dir: string, budget = 4000, match?: (file: string) => boolean): string[] {
   const out: string[] = [];
   const stack = [dir];
-  while (stack.length > 0 && out.length < budget) {
+  let visited = 0;
+  while (stack.length > 0 && out.length < budget && visited < 60_000) {
     const current = stack.pop()!;
     let entries;
     try {
@@ -27,9 +31,10 @@ function walkFiles(dir: string, budget = 4000): string[] {
       continue;
     }
     for (const entry of entries) {
+      visited++;
       const full = joinPath(current, entry.name);
       if (entry.isDirectory()) stack.push(full);
-      else out.push(full);
+      else if (!match || match(full)) out.push(full);
     }
   }
   return out;
@@ -1118,15 +1123,38 @@ export class StradaConformanceGuard {
     if (!existsSync(assetsRoot)) return elements.length > 0 ? `no Assets/ folder exists, so none of the ${elements.length} scheduled elements has art` : null;
 
     const norm = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]/g, "");
-    const artFiles = walkFiles(assetsRoot, 4000).filter((f) => isArtSourceFile(f));
+    const BIND_TARGET_RE = /\.(prefab|asset|unity|mat|controller|playable)$/i;
+    // ONE budgeted walk, filtered inside so the budget counts relevant files —
+    // an imported Asset Store pack must not hide generated art behind the cap.
+    const relevantFiles = walkFiles(
+      assetsRoot,
+      12_000,
+      (f) => isArtSourceFile(f) || BIND_TARGET_RE.test(f),
+    );
+    const artFiles = relevantFiles.filter((f) => isArtSourceFile(f));
     const artNames = artFiles.map((f) => {
       const base = f.replace(/\\/g, "/").split("/").pop() ?? f;
       return norm(base.replace(/\.[^.]+$/, ""));
     });
+    const bindTargets = relevantFiles.filter((f) => BIND_TARGET_RE.test(f));
 
-    // Composable files that can carry a guid reference to the art.
-    const bindTargets = walkFiles(assetsRoot, 4000).filter((f) =>
-      /\.(prefab|asset|unity|mat|controller|playable)$/i.test(f),
+    // Every guid any bind target references, read ONCE — the old code re-read
+    // every prefab/asset/scene in full for every element (O(elements × files)
+    // of synchronous I/O per turn).
+    const referencedGuids = new Set<string>();
+    for (const file of bindTargets) {
+      try {
+        for (const m of readFileSync(file, "utf8").matchAll(/guid: ([0-9a-f]{32})/gi)) {
+          referencedGuids.add(m[1]!.toLowerCase());
+        }
+      } catch {
+        // Unreadable bind target says nothing.
+      }
+    }
+    const artGuids = new Set(
+      artFiles
+        .map((f) => readGuidFromMeta(`${f}.meta`)?.toLowerCase())
+        .filter((g): g is string => Boolean(g)),
     );
 
     const missingArt: string[] = [];
@@ -1135,19 +1163,32 @@ export class StradaConformanceGuard {
       const tokens = elementCodeTokens(el.name).map(norm).filter(Boolean);
       const matchIdx = artNames.findIndex((n) => tokens.some((t) => n.includes(t)));
       if (matchIdx === -1) {
-        missingArt.push(el.name);
+        // No art file NAMED after the element — but sourced (purchased) art
+        // rarely is: an element "Pig" satisfied by Boar_cub_IP.fbx matches no
+        // token. Before accusing, check whether a prefab/scene NAMED after the
+        // element references ANY art guid: bound art under a different name
+        // is coverage, not a gap.
+        const elementBindTargets = bindTargets.filter((f) => {
+          const base = norm((f.replace(/\\/g, "/").split("/").pop() ?? f).replace(/\.[^.]+$/, ""));
+          return tokens.some((t) => base.includes(t));
+        });
+        const boundViaGuid = elementBindTargets.some((file) => {
+          try {
+            const text = readFileSync(file, "utf8");
+            for (const m of text.matchAll(/guid: ([0-9a-f]{32})/gi)) {
+              if (artGuids.has(m[1]!.toLowerCase())) return true;
+            }
+          } catch {
+            // Unreadable — no evidence either way.
+          }
+          return false;
+        });
+        if (!boundViaGuid) missingArt.push(el.name);
         continue;
       }
       const guid = readGuidFromMeta(`${artFiles[matchIdx]!}.meta`);
       if (!guid) continue; // Unreadable meta: cannot prove unbound, do not accuse.
-      const referenced = bindTargets.some((file) => {
-        try {
-          return readFileSync(file, "utf8").includes(guid);
-        } catch {
-          return false;
-        }
-      });
-      if (!referenced) unboundArt.push(el.name);
+      if (!referencedGuids.has(guid.toLowerCase())) unboundArt.push(el.name);
     }
 
     if (missingArt.length === 0 && unboundArt.length === 0) return null;

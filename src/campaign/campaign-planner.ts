@@ -38,7 +38,7 @@ Rules:
 - 2 to 12 milestones, ordered strictly by dependency: foundations first (project scaffolding, core simulation), then mechanics/elements in the GDD's own groupings, then content (levels), then integration.
 - Each milestone's "prompt" is the COMPLETE kick prompt an agent will execute without you in the room. It must name: its scope (the GDD sections/elements it covers), the architecture pattern to follow (the project's existing module pattern — reference it by name once foundations exist), the verification bar (headless compile green, the relevant PlayMode tests green and UNFILTERED, a captured frame proving something renders), commit discipline (commit per logical unit), and what to produce at the end of the sprint.
 - The FINAL milestone is always integration + delivery: full PlayMode suite green with no filter, the assembled scene actually running the game, and a DELIVERY REPORT summarizing what was built against the GDD.
-- Every element the GDD schedules must end its milestone with a real, BOUND visual: source it with unity_my_assets first, generate it when nothing fits — unity_generate_sprite for pixel-canvas pieces, unity_generate_mesh for dimensional ones (stages, characters) — and bind it into the element's prefab. Code for an element without its visual is a milestone that is not done.
+- Every element the GDD schedules must end its milestone with a real, BOUND visual: source it with unity_my_assets (local cache) or unity_my_assets_cloud (the account's full purchased library) first, generate it when nothing fits — unity_generate_sprite for pixel-canvas pieces, unity_generate_mesh for dimensional ones (stages, characters), unity_prerender_frames to turn a 3D prefab into glossy 2D angle frames (the GDD's prerendered-character pipeline) — and bind it into the element's prefab. Code for an element without its visual is a milestone that is not done.
 - Never plan a milestone whose output is a question for the user, and never re-plan what the GDD already specifies — the design document is the complete instruction.
 - A sprint prompt must be self-contained: it cannot assume a previous sprint's conversation is remembered, only that its commits landed in the repo. Reference the GDD by its project-relative path (given below) rather than restating it.
 - Keep each prompt focused: 150-600 words. Cover the milestone, don't narrate the whole GDD.
@@ -76,13 +76,14 @@ export class CampaignPlanner {
    * — a campaign that cannot plan must not silently degrade into one giant
    * sprint, which is exactly the failure mode the ladder exists to prevent).
    */
-  async planMilestones(gddText: string, gddPath: string): Promise<MilestoneLadder> {
+  async planMilestones(gddText: string, gddPath: string, styleNote?: string): Promise<MilestoneLadder> {
     if (!this.provider) {
       throw new Error("campaign planning requires an LLM provider");
     }
 
     const userMessage =
       `GDD project-relative path: ${gddPath}\n\n` +
+      (styleNote ? `Derived style profile (stored at style.json — generators read it): ${styleNote}\n\n` : "") +
       `<gdd>\n${windowGdd(gddText)}\n</gdd>\n\n` +
       `Produce the milestone ladder for this game.`;
 

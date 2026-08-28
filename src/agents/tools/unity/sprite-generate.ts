@@ -22,7 +22,7 @@
 import { deflateSync } from "node:zlib";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { randomUUID } from "node:crypto";
+import { reuseOrMintGuid } from "./meta-file-utils.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "../tool.interface.js";
 import { validatePath } from "../../../security/path-guard.js";
 
@@ -276,14 +276,24 @@ function renderShape(shape: SpriteShape, size: number, base: Rgb, accent: Rgb): 
   return grid;
 }
 
-/** Outline + top light-band so sprites read as objects, not stains. */
-function finishGrid(grid: Grid, base: Rgb): void {
+/** Outline + top light-band so sprites read as objects, not stains.
+ *  Style-aware: the game's own profile decides whether an outline exists at
+ *  all, its colour, and whether the gloss band is drawn — a "realistic,
+ *  no-outline" GDD must not get outlined toon blobs. */
+function finishGrid(
+  grid: Grid,
+  base: Rgb,
+  styleOpts?: { outlineWidth?: number; outlineColor?: Rgb; gloss?: boolean },
+): void {
   const size = grid.length;
-  const outline = shade(base, 0.5);
+  const outline = styleOpts?.outlineColor ?? shade(base, 0.5);
   const light = shade(base, 1.3);
+  const drawOutline = (styleOpts?.outlineWidth ?? 1) > 0;
+  const drawGloss = styleOpts?.gloss !== false;
 
   // Outline: any transparent pixel touching a filled one becomes outline.
   const copy = grid.map((row) => [...row]);
+  if (drawOutline) {
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       if (copy[y]![x] !== null) continue;
@@ -295,7 +305,9 @@ function finishGrid(grid: Grid, base: Rgb): void {
       if (touches) grid[y]![x] = outline;
     }
   }
+  }
   // Light band across the top quarter of filled pixels.
+  if (drawGloss) {
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       const px = copy[y]?.[x];
@@ -303,6 +315,7 @@ function finishGrid(grid: Grid, base: Rgb): void {
       const isBase = px.r === base.r && px.g === base.g && px.b === base.b;
       if (isBase) grid[y]![x] = light;
     }
+  }
   }
 }
 
@@ -330,7 +343,7 @@ function gridToRgba(grid: Grid): Uint8Array {
 // UNITY .META (Sprite import settings, fresh guid)
 // =============================================================================
 
-function spriteMeta(guid: string): string {
+export function spriteMeta(guid: string): string {
   return `fileFormatVersion: 2
 guid: ${guid}
 TextureImporter:
@@ -523,11 +536,14 @@ export class SpriteGenerateTool implements ITool {
     dirRel: string,
   ): Promise<ToolExecutionResult> {
     const { LocalModelRunner } = await import("../../../assets-local/local-model-runner.js");
-    const { defaultModelFor, getModelSpec } = await import("../../../assets-local/model-catalog.js");
-    const { randomUUID } = await import("node:crypto");
+    const { defaultModelFor, supportedModels } = await import("../../../assets-local/model-catalog.js");
 
     const modelId = input["model"] !== undefined ? String(input["model"]) : undefined;
-    const spec = modelId ? getModelSpec(modelId) : defaultModelFor("text-to-image");
+    // Explicit ids go through the DEVICE-GATED list too: getModelSpec would
+    // hand back a 24GB-bar model on an 8GB machine and swap-thrash the run.
+    const spec = modelId
+      ? supportedModels().find((m) => m.id === modelId && m.kind === "text-to-image")
+      : defaultModelFor("text-to-image");
     if (!spec) {
       return {
         content:
@@ -603,7 +619,7 @@ export class SpriteGenerateTool implements ITool {
       if (!result.ok) {
         return { content: `Error: local diffusion failed: ${result.detail}`, isError: true };
       }
-      const guid = randomUUID().replace(/-/g, "");
+      const guid = reuseOrMintGuid(`${pathCheck.fullPath}.meta`);
       writeFileSync(`${pathCheck.fullPath}.meta`, spriteMeta(guid), "utf8");
       return {
         content:
@@ -629,8 +645,27 @@ export class SpriteGenerateTool implements ITool {
     const sizeRaw = Number(input["size"] ?? 64);
     const size = Number.isFinite(sizeRaw) ? Math.min(256, Math.max(16, Math.round(sizeRaw))) : 64;
 
+    // The game's OWN style profile (GDD-derived style.json), when present,
+    // supplies the palette and outline. Explicit inputs always win; without a
+    // profile the deterministic name-hash colour remains the floor. This is
+    // what "style.json flows through every generator" actually means for the
+    // default (procedural) provider.
+    let profile: import("../../style/style-profile.js").StyleProfile | undefined;
+    try {
+      const { loadStyleProfile } = await import("../../style/style-profile.js");
+      profile = loadStyleProfile(context.projectPath);
+    } catch {
+      /* best-effort — stock behaviour without a profile */
+    }
+    const paletteColor = (() => {
+      if (!profile || profile.palette.length === 0) return undefined;
+      let h = 0;
+      for (const ch of rawName) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+      return parseHexColor(profile.palette[h % profile.palette.length]!);
+    })();
+
     const colorInput = input["color"] !== undefined ? String(input["color"]) : undefined;
-    const base = colorInput ? parseHexColor(colorInput) : colorFromName(rawName);
+    const base = colorInput ? parseHexColor(colorInput) : (paletteColor ?? colorFromName(rawName));
     if (!base) {
       return { content: `Error: color must be #rrggbb, got "${colorInput}"`, isError: true };
     }
@@ -658,9 +693,17 @@ export class SpriteGenerateTool implements ITool {
 
     try {
       const grid = renderShape(shape, size, base, accent);
-      finishGrid(grid, base);
+      finishGrid(grid, base, profile
+        ? {
+            outlineWidth: profile.outline.width,
+            outlineColor: parseHexColor(profile.outline.color) ?? undefined,
+            gloss: profile.shading === "glossy",
+          }
+        : undefined);
       const png = encodePng(size, size, gridToRgba(grid));
-      const guid = randomUUID().replace(/-/g, "");
+      // Reuse the existing guid on regeneration — a fresh guid orphans every
+      // prefab/scene binding to the previous version of this sprite.
+      const guid = reuseOrMintGuid(`${pathCheck.fullPath}.meta`);
       mkdirSync(dirname(pathCheck.fullPath), { recursive: true });
       writeFileSync(pathCheck.fullPath, png);
       writeFileSync(`${pathCheck.fullPath}.meta`, spriteMeta(guid), "utf8");

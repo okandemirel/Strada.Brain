@@ -354,10 +354,19 @@ def marching_cubes(density, level: float = 0.0):
   }
 
   private writeScripts(): void {
-    const t2i = join(SCRIPTS, "txt2img.py");
-    const i2m = join(SCRIPTS, "img2mesh.py");
-    if (!existsSync(t2i)) writeFileSync(t2i, TXT2IMG_SCRIPT, "utf8");
-    if (!existsSync(i2m)) writeFileSync(i2m, IMG2MESH_SCRIPT, "utf8");
+    // Rewrite on CONTENT drift, not just absence: write-once meant an upgrade
+    // never refreshed an installed machine's scripts, so fixes baked into the
+    // embedded source (e.g. fp32-on-MPS black images) never reached it.
+    const refresh = (path: string, content: string): void => {
+      try {
+        if (existsSync(path) && readFileSync(path, "utf8") === content) return;
+      } catch {
+        // Unreadable → rewrite below.
+      }
+      writeFileSync(path, content, "utf8");
+    };
+    refresh(join(SCRIPTS, "txt2img.py"), TXT2IMG_SCRIPT);
+    refresh(join(SCRIPTS, "img2mesh.py"), IMG2MESH_SCRIPT);
   }
 }
 

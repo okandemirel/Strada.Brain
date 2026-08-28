@@ -566,7 +566,10 @@ export class WorkspaceLeaseManager {
     // When the budget still bites, code seeds first: git's byte order is not an
     // importance order. (Stable sort — within a tier, git's order is kept.)
     const seedPriority = (rel: string): number =>
-      /^(?:\.gitmodules$|Assets[/\\]|Packages[/\\]|ProjectSettings[/\\]|src[/\\])/.test(rel) ? 0 : 1;
+      // style.json is tier 0: the GDD-derived style profile is written to the
+      // project root untracked, and every generator reads it from the lease —
+      // dropped past the budget, generation silently falls back to stock.
+      /^(?:\.gitmodules$|style\.json$|Assets[/\\]|Packages[/\\]|ProjectSettings[/\\]|src[/\\])/.test(rel) ? 0 : 1;
     const ordered = entries.length > MAX_UNCOMMITTED_ENTRIES
       ? [...entries].sort((a, b) => seedPriority(a.path) - seedPriority(b.path))
       : entries;

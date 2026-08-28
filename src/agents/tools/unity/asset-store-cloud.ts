@@ -24,10 +24,11 @@
  * token is reported as "re-run the Unity Link step", never as a silent failure.
  */
 
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, chmodSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { getLoggerSafe } from "../../../utils/logger.js";
+import { acquireProjectWriteLock } from "../../../common/project-write-lock.js";
 
 // =============================================================================
 // TYPES
@@ -132,6 +133,9 @@ export class UnityAssetStoreClient {
   constructor(
     private readonly link: UnityAssetStoreLink,
     private readonly fetchImpl: FetchLike = fetch,
+    /** Sync rotation with ~/.strada on refresh. Off for injected (test) links,
+     *  whose fixture token must never be shadowed by the real machine's file. */
+    private readonly syncWithDisk: boolean = fetchImpl === fetch,
   ) {}
 
   /** Store-wide catalog search (kharma, no auth needed). */
@@ -206,55 +210,124 @@ export class UnityAssetStoreClient {
   // TOKEN
   // ===========================================================================
 
+  /** Single-flight guard: N concurrent calls share ONE refresh round-trip. */
+  private refreshInFlight: Promise<string> | undefined;
+
   private async getToken(): Promise<string> {
     if (this.accessToken && Date.now() < this.accessTokenExpiresAt) {
       return this.accessToken;
     }
-    const body =
-      "grant_type=refresh_token" +
-      `&refresh_token=${encodeURIComponent(this.link.refreshToken)}` +
-      "&client_id=packman" +
-      `&client_secret=${encodeURIComponent(this.link.clientSecret)}`;
-    const resp = await this.fetchImpl(`${this.link.identityHost}/v1/oauth2/token`, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body,
-    });
-    if (resp.status === 400 || resp.status === 401 || resp.status === 403) {
-      throw new UnityLinkExpiredError(`token refresh returned HTTP ${resp.status}`);
-    }
-    if (!resp.ok) {
-      throw new Error(`token refresh failed (HTTP ${resp.status})`);
-    }
-    const data = (await resp.json()) as Record<string, unknown>;
-    const token = data["access_token"];
-    if (typeof token !== "string" || token.length === 0) {
-      getLoggerSafe().warn("Unity token refresh returned no access_token", {
-        keys: Object.keys(data).join(","),
+    // Rotation makes a concurrent second refresh fatal: the first response
+    // rotates the refresh token server-side, the second POST then carries a
+    // dead token and kills the link (the exact HTTP-412-after-3h failure the
+    // rotation fix was for). One refresh in flight, everyone awaits it.
+    if (!this.refreshInFlight) {
+      this.refreshInFlight = this.refreshAccessToken().finally(() => {
+        this.refreshInFlight = undefined;
       });
-      throw new Error("token refresh returned no access_token");
     }
-    // Refresh tokens ROTATE: every refresh response can carry a NEW
-    // refresh_token, and the old one dies server-side. Not persisting the
-    // rotation kills the link on the SECOND refresh (measured live: HTTP 412
-    // ~3h after linking). Store it back whenever one is returned.
-    const rotated = data["refresh_token"];
-    if (typeof rotated === "string" && rotated.length >= 10 && rotated !== this.link.refreshToken) {
-      this.link.refreshToken = rotated;
-      persistUnityLink(this.link);
+    return this.refreshInFlight;
+  }
+
+  private async refreshAccessToken(): Promise<string> {
+    // Cross-process guard for the read-rotate-write of the link file: a second
+    // Strada process refreshing in parallel would race the same rotation.
+    const lock = this.syncWithDisk
+      ? await acquireProjectWriteLock(LINK_DIR, { timeoutMs: 30_000 })
+      : null;
+    try {
+      if (this.accessToken && Date.now() < this.accessTokenExpiresAt) {
+        return this.accessToken; // another process refreshed while we waited
+      }
+      // Adopt an on-disk rotation done by another process while we waited.
+      if (this.syncWithDisk) {
+        const onDisk = loadUnityLink();
+        if (onDisk && onDisk.refreshToken !== this.link.refreshToken) {
+          this.link.refreshToken = onDisk.refreshToken;
+        }
+      }
+      const body =
+        "grant_type=refresh_token" +
+        `&refresh_token=${encodeURIComponent(this.link.refreshToken)}` +
+        "&client_id=packman" +
+        `&client_secret=${encodeURIComponent(this.link.clientSecret)}`;
+      const resp = await this.fetchImpl(`${this.link.identityHost}/v1/oauth2/token`, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body,
+      });
+      if (resp.status === 400 || resp.status === 401 || resp.status === 403) {
+        throw new UnityLinkExpiredError(`token refresh returned HTTP ${resp.status}`);
+      }
+      if (!resp.ok) {
+        throw new Error(`token refresh failed (HTTP ${resp.status})`);
+      }
+      const data = (await resp.json()) as Record<string, unknown>;
+      const token = data["access_token"];
+      if (typeof token !== "string" || token.length === 0) {
+        getLoggerSafe().warn("Unity token refresh returned no access_token", {
+          keys: Object.keys(data).join(","),
+        });
+        throw new Error("token refresh returned no access_token");
+      }
+      // Refresh tokens ROTATE: every refresh response can carry a NEW
+      // refresh_token, and the old one dies server-side. Not persisting the
+      // rotation kills the link on the SECOND refresh (measured live: HTTP 412
+      // ~3h after linking). Persist FIRST (atomically), then adopt in memory —
+      // a failed persist must not leave disk holding a dead token silently.
+      const rotated = data["refresh_token"];
+      if (typeof rotated === "string" && rotated.length >= 10 && rotated !== this.link.refreshToken) {
+        if (this.syncWithDisk) {
+          try {
+            persistUnityLink({ ...this.link, refreshToken: rotated });
+          } catch (err) {
+            getLoggerSafe().warn(
+              "Rotated Unity refresh token could not be persisted — the link DIES with this process; re-link will be needed",
+              { error: err instanceof Error ? err.message : String(err) },
+            );
+          }
+        }
+        this.link.refreshToken = rotated;
+      }
+      const expiresIn = Number(data["expires_in"] ?? 3600);
+      this.accessToken = token;
+      this.accessTokenExpiresAt = Date.now() + Math.max(60, expiresIn - 60) * 1000;
+      return token;
+    } finally {
+      lock?.release();
     }
-    const expiresIn = Number(data["expires_in"] ?? 3600);
-    this.accessToken = token;
-    this.accessTokenExpiresAt = Date.now() + Math.max(60, expiresIn - 60) * 1000;
-    return token;
   }
 }
 
+/**
+ * Process-wide client cache. A fresh client per tool call meant a full
+ * refresh-token POST (and a rotation!) on EVERY call — the single-flight
+ * guard only helps within one instance. Cache invalidates when the link file
+ * changes on disk (a re-link). Tests injecting fetchImpl bypass the cache.
+ */
+let cachedClient: { client: UnityAssetStoreClient; linkMtimeMs: number } | undefined;
+
 /** Load the stored link and build a client, or throw a precise instruction. */
 export function createUnityAssetStoreClient(fetchImpl?: FetchLike): UnityAssetStoreClient {
+  if (fetchImpl) {
+    const link = loadUnityLink();
+    if (!link) throw new UnityLinkMissingError();
+    return new UnityAssetStoreClient(link, fetchImpl);
+  }
+  let mtimeMs = 0;
+  try {
+    mtimeMs = statSync(LINK_FILE).mtimeMs;
+  } catch {
+    // Missing file falls through to loadUnityLink's undefined below.
+  }
+  if (cachedClient && cachedClient.linkMtimeMs === mtimeMs) {
+    return cachedClient.client;
+  }
   const link = loadUnityLink();
   if (!link) throw new UnityLinkMissingError();
-  return new UnityAssetStoreClient(link, fetchImpl);
+  const client = new UnityAssetStoreClient(link);
+  cachedClient = { client, linkMtimeMs: mtimeMs };
+  return client;
 }
 
 /** Whether the Unity Link step has been completed on this machine. */
@@ -262,7 +335,17 @@ export function isUnityLinked(): boolean {
   return loadUnityLink() !== undefined;
 }
 
-/** Persist the (possibly rotated) link back to disk, mode 600. */
+/** Persist the (possibly rotated) link back to disk, mode 600, ATOMICALLY.
+ *  A bare write could truncate the only copy of the refresh token on a crash
+ *  or full disk; tmp+rename cannot. chmod fixes a pre-existing file too. */
 export function persistUnityLink(link: UnityAssetStoreLink): void {
-  writeFileSync(LINK_FILE, JSON.stringify(link, null, 2), { mode: 0o600 });
+  mkdirSync(LINK_DIR, { recursive: true });
+  const tmp = `${LINK_FILE}.tmp-${process.pid}`;
+  writeFileSync(tmp, JSON.stringify(link, null, 2), { mode: 0o600 });
+  renameSync(tmp, LINK_FILE);
+  try {
+    chmodSync(LINK_FILE, 0o600);
+  } catch {
+    // Permission fixing is best-effort; the rename already landed the content.
+  }
 }
