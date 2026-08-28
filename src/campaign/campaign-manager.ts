@@ -516,6 +516,20 @@ export class CampaignManager {
     });
   }
 
+  /** Per-campaign settlement serialization — see handleTaskSettled. */
+  private readonly settleChains = new Map<string, Promise<void>>();
+
+  private enqueueSettle(campaignId: string, fn: () => Promise<void>): void {
+    const prev = this.settleChains.get(campaignId) ?? Promise.resolve();
+    const next = prev.then(fn).catch((err: unknown) => {
+      getLoggerSafe().warn("Campaign settlement handler failed", {
+        id: campaignId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+    this.settleChains.set(campaignId, next);
+  }
+
   private async handleTaskSettled(taskId: string, status: TaskStatus, output: string): Promise<void> {
     // Correlate by scanning active campaigns — the active set is tiny
     // (typically one), so this stays cheap. Correlation is by task LINEAGE,
@@ -523,13 +537,29 @@ export class CampaignManager {
     // parentId pointing back, and matching only the original id meant the
     // real continuation proceeded untracked while the campaign judged a
     // stale ancestor.
+    //
+    // Handlers are SERIALIZED per campaign and re-validate against fresh
+    // storage when they actually run: the milestone commit awaits a write
+    // lock, so two settlement events processed concurrently could both read
+    // the same currentMilestone and advance the ladder twice.
     for (const campaign of this.storage.listActive()) {
       if (
         campaign.state === "drafting-gdd" &&
         campaign.draftTaskId &&
         this.taskManager.isInLineage(campaign.draftTaskId as TaskId, taskId as TaskId)
       ) {
-        await this.onDraftSettled(campaign, status, output);
+        this.enqueueSettle(campaign.id, async () => {
+          const fresh = this.storage.get(campaign.id);
+          if (
+            !fresh ||
+            fresh.state !== "drafting-gdd" ||
+            !fresh.draftTaskId ||
+            !this.taskManager.isInLineage(fresh.draftTaskId as TaskId, taskId as TaskId)
+          ) {
+            return; // already handled or moved on
+          }
+          await this.onDraftSettled(fresh, status, output);
+        });
         return;
       }
       if (campaign.state === "executing") {
@@ -538,7 +568,18 @@ export class CampaignManager {
           milestone?.taskId &&
           this.taskManager.isInLineage(milestone.taskId as TaskId, taskId as TaskId)
         ) {
-          await this.onMilestoneSettled(campaign, milestone, status, output);
+          this.enqueueSettle(campaign.id, async () => {
+            const fresh = this.storage.get(campaign.id);
+            if (!fresh || fresh.state !== "executing") return;
+            const freshMilestone = fresh.milestones[fresh.currentMilestone];
+            if (
+              !freshMilestone?.taskId ||
+              !this.taskManager.isInLineage(freshMilestone.taskId as TaskId, taskId as TaskId)
+            ) {
+              return; // the ladder already advanced past this settlement
+            }
+            await this.onMilestoneSettled(fresh, freshMilestone, status, output);
+          });
           return;
         }
       }
@@ -675,7 +716,7 @@ export class CampaignManager {
       // (now preserved on lease-salvage/* branches, but still not on main).
       // That is how a campaign once ended with 282 dirty files and a corrupted
       // next-sprint seed. The envelope commits.
-      const commitNote = this.commitMilestoneWork(campaign, milestone);
+      const commitNote = await this.commitMilestoneWork(campaign, milestone);
       milestone.status = "green";
       milestone.resultExcerpt = output.slice(-500);
       const isLast = campaign.currentMilestone >= campaign.milestones.length - 1;
@@ -760,7 +801,7 @@ export class CampaignManager {
    * defect being fixed is silent accumulation, and a warning in the channel
    * is the opposite of silent.
    */
-  private commitMilestoneWork(campaign: Campaign, milestone: CampaignMilestone): string {
+  private async commitMilestoneWork(campaign: Campaign, milestone: CampaignMilestone): Promise<string> {
     const git = (args: string[], timeoutMs = 120_000): string =>
       execFileSync("git", ["-C", this.projectRoot, ...args], {
         encoding: "utf8",
@@ -772,6 +813,10 @@ export class CampaignManager {
     } catch {
       return "";
     }
+    // Serialize against the other bulk writer (the lease write-back) so the
+    // envelope never commits a tree that is half-way through a copy-back.
+    const { acquireProjectWriteLock } = await import("../common/project-write-lock.js");
+    const lock = await acquireProjectWriteLock(this.projectRoot);
     try {
       // Never stage .strada — it holds lease-conflict quarantines and vault
       // indexes; sweeping them into the user's history is how quarantined
@@ -812,6 +857,8 @@ export class CampaignManager {
         error: message,
       });
       return ` ⚠️ Could not commit the sprint's working tree (${message.slice(0, 120)}) — commit it manually before the next sprint.`;
+    } finally {
+      lock.release();
     }
   }
 

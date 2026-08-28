@@ -269,6 +269,11 @@ export class TaskManager extends EventEmitter {
     return this.storage.findLineageRootId(taskId);
   }
 
+  /** The chat a person most recently talked in — the target for daemon notices. */
+  findLatestUserChat(): { chatId: string; channelType: string } | null {
+    return this.storage.findLatestUserChat();
+  }
+
   retryTask(taskId: TaskId): Task | null {
     const task = this.storage.load(taskId);
     if (!task || ACTIVE_STATUSES.has(task.status) || task.status === TaskStatus.completed) {

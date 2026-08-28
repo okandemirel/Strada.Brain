@@ -448,7 +448,11 @@ export async function initializeTaskRuntimeStage(
           return { ok: result.isError !== true, ran: true, detail };
         },
         messenger: async (chatId, text) => {
-          await params.channel.sendMarkdown(chatId, sanitizeSecrets(text));
+          // Guardian notices need a human. Its own chatId defaults to
+          // "cli-local", which on a non-CLI channel is a chat nobody reads —
+          // route to wherever a person most recently talked instead.
+          const target = taskManager.findLatestUserChat()?.chatId ?? chatId;
+          await params.channel.sendMarkdown(target, sanitizeSecrets(text));
         },
       });
       realTreeGuardian.start();

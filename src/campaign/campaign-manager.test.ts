@@ -316,6 +316,12 @@ describe("CampaignManager", () => {
   });
 
   it("appends a coverage-remediation sprint when the audit finds GDD gaps", async () => {
+    // Isolated fixtures: the beforeEach manager stays subscribed to the shared
+    // emitter, and two managers double-handling one campaign is not a
+    // production shape (exactly one CampaignManager attaches per process).
+    tasks = new FakeTaskManager();
+    storage.close();
+    storage = new CampaignStorage(join(dir, "campaigns-coverage.db"));
     const planner = {
       planMilestones: vi.fn().mockResolvedValue(LADDER),
       auditCoverage: vi

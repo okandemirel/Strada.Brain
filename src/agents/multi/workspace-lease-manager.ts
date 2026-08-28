@@ -748,6 +748,18 @@ export class WorkspaceLeaseManager {
       return { written, conflicts, removed, failed, conflictsQuarantinedUnder };
     }
 
+    // Bulk write into the REAL project: serialize against the other bulk
+    // writer (the campaign envelope commit), including one in another
+    // process. Derived leases (sourceRoot inside the lease root) skip — they
+    // are private scratch space.
+    const lock = sourceRoot === this.projectRoot
+      ? await (await import("../../common/project-write-lock.js")).acquireProjectWriteLock(
+          this.projectRoot,
+          { timeoutMs: 30_000 },
+        )
+      : null;
+    try {
+
     const walk = (dir: string): void => {
       let entries: Dirent[];
       try {
@@ -880,6 +892,9 @@ export class WorkspaceLeaseManager {
     }
 
     return { written, conflicts, removed, failed, conflictsQuarantinedUnder };
+    } finally {
+      lock?.release();
+    }
   }
 
   private async createTempCopy(sourceRoot: string, workspacePath: string): Promise<void> {

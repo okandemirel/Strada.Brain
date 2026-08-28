@@ -254,6 +254,16 @@ export class TaskStorage {
     return this.getStmt("lineageContains").get(rootId, taskId) !== undefined;
   }
 
+  /** The chat a real person most recently talked in — where daemon notices
+   *  that need a human should go. Null when no user-origin task exists yet. */
+  findLatestUserChat(): { chatId: string; channelType: string } | null {
+    this.ensureConnection();
+    const row = this.getStmt("findLatestUserChat").get() as
+      | { chat_id: string; channel_type: string }
+      | undefined;
+    return row ? { chatId: row.chat_id, channelType: row.channel_type } : null;
+  }
+
   /**
    * The root of the retry lineage `taskId` belongs to — the ancestor with no
    * parent (the task itself when it was never a retry). Stable across every
@@ -430,6 +440,7 @@ export class TaskStorage {
         )
         SELECT 1 FROM lineage WHERE id = ? LIMIT 1
       `,
+      findLatestUserChat: `SELECT chat_id, channel_type FROM tasks WHERE origin = 'user' ORDER BY created_at DESC LIMIT 1`,
       findLineageRoot: `
         WITH RECURSIVE up(id, parent_id) AS (
           SELECT id, parent_id FROM tasks WHERE id = ?
