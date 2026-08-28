@@ -1909,6 +1909,24 @@ export class BackgroundExecutor {
       return;
     }
 
+    // A tree-level retry or replan fired into a full provider outage is a
+    // guaranteed burn that also SPENDS the resume/replan budget on nothing:
+    // the resubmitted task dies in its first planning call. Measured live
+    // 2026-08-29 00:59: three fresh tasks in 47 seconds, each instantly
+    // failing on "All providers are in cooldown", replan budget gone before
+    // the cooldown was a minute old. The mission keep-alive already waits out
+    // the soonest provider recovery — hand the mission to it with the budget
+    // intact.
+    const outageWaitMs = this.allProvidersCoolingDownMs();
+    if (outageWaitMs > 0) {
+      getLogger().info("Goal auto-resume deferred — all providers cooling down", {
+        goalRootId: rootId,
+        waitMs: outageWaitMs,
+      });
+      this.scheduleMissionKeepAlive(task, "All providers are in cooldown");
+      return;
+    }
+
     // The retry budget belongs to the mission's LINEAGE, not one goal tree:
     // retry/replan submit a new task (parentId-linked) whose decomposition
     // mints a fresh goal root, so keying the budget on rootId reset it every

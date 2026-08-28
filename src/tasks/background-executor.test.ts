@@ -2207,6 +2207,51 @@ describe("BackgroundExecutor - auto-resume bounds (measured loop of 2026-08-26)"
     }
   });
 
+  it("goal auto-resume defers to keep-alive during a full provider outage instead of spending its budget", async () => {
+    // Measured live 2026-08-29 00:59: three fresh tasks in 47 seconds, each
+    // dying on "All providers are in cooldown", resume+replan budget spent
+    // before the cooldown was a minute old.
+    const { ProviderHealthRegistry } = await import("../agents/providers/provider-health.js");
+    const registry = ProviderHealthRegistry.getInstance();
+    registry.clearProviderState("claude");
+    registry.recordOverloaded("claude", "503 cluster overload");
+    expect(registry.getEntry("claude")!.cooldownUntil).toBeGreaterThan(Date.now());
+
+    const executor = new BackgroundExecutor({
+      orchestrator: createMockOrchestrator() as any,
+      decomposer: createMockDecomposer() as any,
+      goalStorage: createMockGoalStorage() as any,
+      daemonEventBus: createMockDaemonEventBus() as any,
+      aiProvider: undefined,
+      channel: undefined,
+    });
+    const taskManager = {
+      updateStatus: vi.fn(), complete: vi.fn(), fail: vi.fn(), block: vi.fn(),
+      appendTaskNotice: vi.fn(),
+      retryGoalRoot: vi.fn(), replanGoalRoot: vi.fn(), retryTask: vi.fn(),
+      getStatus: vi.fn().mockReturnValue(null),
+    };
+    executor.setTaskManager(taskManager as any);
+
+    try {
+      const task = createTestTask(buildTestGoalTree(), { origin: "user" });
+      (executor as unknown as {
+        autoResumeBlockedGoal(t: unknown, tree: { rootId: string }, s: number, o: readonly string[]): void;
+      }).autoResumeBlockedGoal(task, { rootId: "goal_outage_test" }, 0, ["[node1] failed: provider call failed"]);
+
+      // Neither tree-level lever fires; the mission keep-alive takes it with
+      // the outage as the stated reason (cooldown-aware backoff downstream).
+      expect(taskManager.retryGoalRoot).not.toHaveBeenCalled();
+      expect(taskManager.replanGoalRoot).not.toHaveBeenCalled();
+      expect(taskManager.block).toHaveBeenCalledWith(
+        task.id,
+        expect.stringContaining("All providers are in cooldown"),
+      );
+    } finally {
+      registry.clearProviderState("claude");
+    }
+  });
+
   it("mission keep-alive catches a partial settle that never formed a goal tree", async () => {
     // Measured 2026-08-26: an all-provider cooldown failed the decomposition
     // call itself; the task settled partial with zero nodes and NO tree — the
