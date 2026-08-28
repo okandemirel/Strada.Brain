@@ -525,16 +525,34 @@ export interface BuildProjectContextInput {
   legacyBuildProjectContext?: () => Promise<string>;
 }
 
-export function renderVaultContext(results: Array<{ hits: Array<{ chunk: { path: string; content: string } }> }>): string {
+export function renderVaultContext(
+  results: Array<{ hits: Array<{ chunk: { path: string; content: string } }> }>,
+  maxTotalChars = 48_000,
+): string {
+  // GLOBAL cap, interleaved round-robin: the budget used to be per-vault
+  // (topK 20 × budget 4000 EACH), so four vaults injected ~16k tokens
+  // unconditionally and one noisy vault could dominate the whole section.
+  // Round-robin takes each vault's best hit first, so the cap trims tails,
+  // not whole vaults.
   const lines: string[] = [];
-  for (const r of results) {
-    for (const h of r.hits) {
+  let total = 0;
+  const seenPaths = new Set<string>();
+  const maxHits = Math.max(0, ...results.map((r) => r.hits.length));
+  outer: for (let rank = 0; rank < maxHits; rank++) {
+    for (const r of results) {
+      const h = r.hits[rank];
+      if (!h) continue;
+      if (seenPaths.has(h.chunk.path)) continue; // cross-vault duplicate
+      seenPaths.add(h.chunk.path);
       // sec-H1: vault chunks are user-controlled content being injected into
       // the system prompt. Strip prompt-injection carriers (envelopes,
       // "ignore previous", zero-width, base64 smuggles) before the model sees
       // them. Sanitizer is a no-op on short clean strings.
       const safeContent = sanitizeRetrievalContent(h.chunk.content, "strada-knowledge-vault");
-      lines.push(`\n### ${h.chunk.path}\n\`\`\`\n${safeContent}\n\`\`\``);
+      const block = `\n### ${h.chunk.path}\n\`\`\`\n${safeContent}\n\`\`\``;
+      if (total + block.length > maxTotalChars) break outer;
+      total += block.length;
+      lines.push(block);
     }
   }
   return lines.join('\n');
@@ -557,10 +575,15 @@ export interface VaultProjectContextInput {
 export async function buildVaultProjectContext(input: VaultProjectContextInput): Promise<string> {
   const vaults = input.vaultRegistry.list();
   if (vaults.length === 0) return '';
+  // The context budget is GLOBAL — split it across vaults instead of granting
+  // each the full amount (4 vaults × 4000 tokens was ~16k tokens pinned at
+  // the front of every system prompt).
+  const globalBudget = input.contextBudget ?? 4000;
+  const perVaultBudget = Math.max(800, Math.ceil(globalBudget / vaults.length));
   const settled = await Promise.allSettled(vaults.map((v) => v.query({
     text: input.userMessage,
-    topK: 20,
-    budgetTokens: input.contextBudget ?? 4000,
+    topK: 8,
+    budgetTokens: perVaultBudget,
   })));
   // Visibility (Fix D): a rejected vault query is dropped here so one bad vault
   // never sinks the others. Debug-log each rejection so a future query failure
@@ -578,7 +601,8 @@ export async function buildVaultProjectContext(input: VaultProjectContextInput):
   const results = settled
     .filter((s): s is PromiseFulfilledResult<{ hits: { chunk: { path: string; content: string } }[] }> => s.status === "fulfilled")
     .map((s) => s.value);
-  return renderVaultContext(results);
+  // ~4 chars/token: the render cap enforces the same global budget in chars.
+  return renderVaultContext(results, globalBudget * 4);
 }
 
 /**

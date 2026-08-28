@@ -77,6 +77,7 @@ export interface PortDeps extends ToolTurnDeps {
     userId?: string;
     lastUserMessage: string;
     epoch: number;
+    touchedFiles?: readonly string[];
   }): Promise<void>;
   withTaskExecutionContext<T>(
     context: { chatId: string; conversationId?: string; userId?: string; identityKey: string; taskRunId: string },

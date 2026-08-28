@@ -247,6 +247,13 @@ export class TaskCheckpointStore {
     return row ? this.rowToCheckpoint(row) : null;
   }
 
+  /** Sync twin of loadByTaskId — for the (sync) replay-prompt builder. */
+  loadByTaskIdSync(taskId: string): PendingTaskCheckpoint | null {
+    this.ensureConnection();
+    const row = this.getStmt("loadByTaskId").get(taskId) as CheckpointRow | undefined;
+    return row ? this.rowToCheckpoint(row) : null;
+  }
+
   async clear(taskId: string): Promise<void> {
     this.ensureConnection();
     this.getStmt("clear").run(taskId);

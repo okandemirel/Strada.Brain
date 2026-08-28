@@ -1538,6 +1538,26 @@ async function bootstrapImpl(
   orchestrator.setUnifiedBudgetManager(sharedUnifiedBudgetManager);
   commandHandler.setUnifiedBudgetManager(sharedUnifiedBudgetManager);
   backgroundExecutor.setUnifiedBudgetManager(sharedUnifiedBudgetManager);
+  // Settlement hook for the dev-knowledge completion note: the route-level
+  // call sites fire when a background task is merely SUBMITTED (planner state
+  // empty → real-work gate rejects), so this note type had written exactly 0
+  // times while the verdict notes wrote 213. Settlement carries the real
+  // outcome — files touched, node tallies, failure reasons.
+  if (devKnowledgeNoteWriter) {
+    const writerForHook = devKnowledgeNoteWriter;
+    const { fireDevKnowledgeCompletionNote: fireNote } = await import("../vault/dev-knowledge-writer.js");
+    backgroundExecutor.setDevKnowledgeCompletionHook((p) =>
+      fireNote(writerForHook, {
+        goal: p.goal,
+        success: p.success,
+        reason: p.reason,
+        taskRunId: p.taskRunId,
+        state: { iterationsUsed: p.iterationsUsed, mutationsSinceVerify: 0, errorHistory: [] },
+        steps: p.touchedFiles.map((f) => ({ toolName: "file_write", input: { path: f } })),
+        errorCount: p.errorCount,
+      }),
+    );
+  }
   if (dashboard) {
     dashboard.setUnifiedBudgetManager(sharedUnifiedBudgetManager);
   }

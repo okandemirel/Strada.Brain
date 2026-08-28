@@ -198,6 +198,9 @@ export interface EpochCheckpointParams {
   readonly userId?: string;
   readonly lastUserMessage: string;
   readonly epoch: number;
+  /** Files the epoch's successful mutation steps touched — the checkpoint's
+   *  actual payload (the schema declared it; no writer populated it). */
+  readonly touchedFiles?: readonly string[];
 }
 
 export interface DispatchReflectionParams {

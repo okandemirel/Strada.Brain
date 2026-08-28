@@ -352,6 +352,24 @@ export class TaskManager extends EventEmitter {
         lines.push(`- ${sanitizeSecrets(reason)}`);
       }
     }
+    // The replan preface promises "Completed work still stands; keep it" —
+    // but this submission deliberately carries no goalTree, so the fresh
+    // decomposition could not SEE that work and re-planned it from scratch.
+    // Name what is already done so the new plan builds on it.
+    try {
+      const tree = this.goalStorage?.getTree(goalRootId as GoalNodeId);
+      const done = tree
+        ? [...tree.nodes.values()].filter((n) => n.id !== tree.rootId && n.status === "completed")
+        : [];
+      if (done.length > 0) {
+        lines.push("", "Already COMPLETED in previous rounds (do not re-plan these):");
+        for (const n of done.slice(0, 12)) {
+          lines.push(`- ${n.task}${n.result ? ` → ${n.result.slice(0, 160)}` : ""}`);
+        }
+      }
+    } catch {
+      // Best-effort enrichment.
+    }
 
     return this.submit(task.chatId, task.channelType, lines.join("\n"), {
       origin: task.origin ?? "user",
@@ -665,6 +683,27 @@ export class TaskManager extends EventEmitter {
     }
     if (task.error) {
       lines.push("", `Last known failure:\n${sanitizeSecrets(task.error).slice(0, 800)}`);
+    }
+
+    // The rolling epoch checkpoint knows which files the previous run actually
+    // touched — the one piece of REAL progress that survives a crash. It sat
+    // write-only for months; feed it to the retry so "preserve completed
+    // work" points at concrete files instead of nothing.
+    if (this.checkpointStore) {
+      try {
+        const cp = this.checkpointStore.loadByTaskIdSync(task.id);
+        if (cp && cp.touchedFiles.length > 0) {
+          lines.push(
+            "",
+            `Files the previous run already created/modified (verify before redoing):\n${cp.touchedFiles
+              .slice(0, 40)
+              .map((f) => `- ${f}`)
+              .join("\n")}`,
+          );
+        }
+      } catch {
+        // Checkpoint read is best-effort.
+      }
     }
 
     return lines.join("\n");

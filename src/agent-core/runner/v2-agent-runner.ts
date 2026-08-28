@@ -810,6 +810,16 @@ export class V2AgentRunner implements AgentRunner {
           ...(request.userId ? { userId: request.userId } : {}),
           lastUserMessage: request.prompt,
           epoch,
+          // What the epoch's mutation steps actually touched — the checkpoint
+          // schema always declared touchedFiles and no writer populated it.
+          touchedFiles: [...new Set(
+            state.stepResults
+              .filter((s) =>
+                s.success &&
+                /^(file_write|file_edit|file_create|file_delete|file_rename|unity_generate_|strada_create_)/.test(s.toolName),
+              )
+              .flatMap((s) => Array.from(s.summary.matchAll(/[\w][\w./-]*\.[A-Za-z0-9]{1,10}/g), (m) => m[0])),
+          )].slice(0, 100),
         });
         consecutiveMaxTokens = 0;
         epoch++;

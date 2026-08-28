@@ -1283,6 +1283,21 @@ export class BackgroundExecutor {
           outcomes: summariseNodeOutcomes(supervisorResult.nodeResults),
         });
 
+        try {
+          const touched = [...new Set(
+            supervisorResult.nodeResults.flatMap((n) => n.artifacts.map((a) => a.path)),
+          )];
+          this.devKnowledgeCompletionHook?.({
+            goal: task.prompt,
+            success: supervisorResult.success,
+            reason: supervisorResult.success ? undefined : `nodes failed:${supervisorResult.failed} blocked:${supervisorResult.blocked}`,
+            taskRunId: task.id,
+            touchedFiles: touched,
+            iterationsUsed: supervisorResult.totalNodes,
+            errorCount: supervisorResult.failed + supervisorResult.blocked,
+          });
+        } catch { /* note write is best-effort */ }
+
         if (supervisorResult.success) {
           this.taskManager.complete(task.id, supervisorResult.output);
           // Delivery includes INTEGRATION: worktree workers cannot merge to
@@ -1370,6 +1385,18 @@ export class BackgroundExecutor {
         reason: result.workerResult?.reason ?? "(none)",
         outputLength: result.output?.length ?? 0,
       });
+
+      try {
+        this.devKnowledgeCompletionHook?.({
+          goal: task.prompt,
+          success: result.workerResult ? result.workerResult.status === "completed" : true,
+          reason: result.workerResult?.reason,
+          taskRunId: task.id,
+          touchedFiles: result.workerResult?.touchedFiles ?? [],
+          iterationsUsed: result.workerResult?.toolTrace?.length ?? 0,
+          errorCount: result.workerResult?.status === "completed" ? 0 : 1,
+        });
+      } catch { /* note write is best-effort */ }
 
       if (result.workerResult && result.workerResult.status === "failed") {
         requestFailed = true;
@@ -1528,6 +1555,25 @@ export class BackgroundExecutor {
 
   /** Mission-level retries spent per chat+prompt chain (survives tree-less failures). */
   private readonly missionRetries = new Map<string, number>();
+
+  /** Settlement hook for the dev-knowledge completion note. The route-level
+   *  call sites fire when a background task is merely SUBMITTED (planner
+   *  state empty → real-work gate rejects), so the one useful note type never
+   *  wrote once while the useless verdict notes wrote 213 times. Settlement
+   *  is where the run's real outcome lives. */
+  private devKnowledgeCompletionHook?: (params: {
+    goal: string;
+    success: boolean;
+    reason?: string;
+    taskRunId?: string;
+    touchedFiles: readonly string[];
+    iterationsUsed: number;
+    errorCount: number;
+  }) => void;
+
+  setDevKnowledgeCompletionHook(hook: NonNullable<BackgroundExecutor["devKnowledgeCompletionHook"]>): void {
+    this.devKnowledgeCompletionHook = hook;
+  }
 
   /**
    * Mission keep-alive: a failed supervisor run on a USER-origin mission is

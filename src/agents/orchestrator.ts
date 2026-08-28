@@ -2467,7 +2467,12 @@ export class Orchestrator {
     userId?: string;
     lastUserMessage: string;
     epoch: number;
+    touchedFiles?: readonly string[];
   }): Promise<void> {
+    // Real state, not an empty shell: the checkpoint schema declares
+    // touchedFiles and no writer ever populated it — every retry started
+    // cold while checkpoints sat write-only. The runner supplies what the
+    // epoch's mutation steps actually touched.
     await this.persistCheckpoint({
       taskId: params.taskId,
       chatId: params.chatId,
@@ -2475,7 +2480,7 @@ export class Orchestrator {
       timestamp: Date.now(),
       stage: "provider_failed",
       lastUserMessage: params.lastUserMessage,
-      touchedFiles: [],
+      touchedFiles: [...(params.touchedFiles ?? [])].slice(0, 100),
     });
   }
 
