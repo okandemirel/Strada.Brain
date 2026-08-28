@@ -111,6 +111,29 @@ export function configureProviderConcurrency(cap: number): void {
   }
 }
 
+/**
+ * Optional per-provider REQUEST-RATE floor (min ms between request starts).
+ * The semaphore caps concurrency but not throughput: three permanently
+ * saturated streams for days is a sustained profile a flat-fee subscription
+ * account is not expected to produce. Default 0 = disabled; enable via env
+ * PROVIDER_MIN_REQUEST_INTERVAL_MS for accounts that need gentler pacing.
+ */
+const providerMinRequestIntervalMs = (() => {
+  const raw = Number(process.env["PROVIDER_MIN_REQUEST_INTERVAL_MS"] ?? 0);
+  return Number.isFinite(raw) && raw > 0 ? Math.min(60_000, Math.floor(raw)) : 0;
+})();
+const providerNextAllowedAt = new Map<string, number>();
+
+async function paceProviderStart(name: string): Promise<void> {
+  if (providerMinRequestIntervalMs <= 0) return;
+  const now = Date.now();
+  const next = Math.max(now, providerNextAllowedAt.get(name) ?? 0);
+  providerNextAllowedAt.set(name, next + providerMinRequestIntervalMs);
+  if (next > now) {
+    await new Promise((r) => setTimeout(r, next - now));
+  }
+}
+
 /** Reset limiter state to defaults — test-only helper. */
 export function __resetProviderConcurrency(): void {
   providerMaxConcurrentRequests = DEFAULT_PROVIDER_MAX_CONCURRENT_REQUESTS;
@@ -377,7 +400,24 @@ export async function fetchWithRetry(
   const callerName = opts.callerName ?? DEFAULTS.callerName;
   const semaphore = getProviderSemaphore(callerName);
 
+  const queuedAt = Date.now();
   await semaphore.acquire();
+  const queuedMs = Date.now() - queuedAt;
+  if (queuedMs > 1_000) {
+    // Time spent waiting for a per-provider permit is OUR pacing, not the
+    // endpoint being silent — but it used to be charged against the caller's
+    // first-response deadline: with cap 3 and 4 parallel nodes, the 4th sat in
+    // this queue until the 90s clock fired, was killed as an "unresponsive
+    // endpoint", and fed the auto-demote signal. Restart the caller's stall
+    // budget now that the wait is over (status 0 = local queueing, delayMs 0 =
+    // full budget from this moment).
+    opts.onBackoff?.({ status: 0, delayMs: 0 });
+    getLogger().debug(`${callerName} HTTP call admitted after queueing`, {
+      provider: callerName,
+      queuedMs,
+    });
+  }
+  await paceProviderStart(callerName);
   let permitHeld = true;
   const release = (): void => {
     if (permitHeld) {
