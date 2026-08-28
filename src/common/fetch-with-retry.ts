@@ -608,13 +608,28 @@ async function runFetchLoop(
     // (no further attempts) so the FallbackChain fails over to the next provider and puts
     // this one into a long cooldown ≈ the Retry-After. The PRIMARY gate is the threshold;
     // the body pattern only ENRICHES the human message, it is never the sole gate.
-    if (status === 429 && hasRetryAfter && rawRetryAfterMs > maxRetries * maxDelayMs) {
-      const reset = formatResetDuration(rawRetryAfterMs);
+    // Subscription-style 429s carry the reset in the BODY, not the header —
+    // measured live 2026-08-28: OpenAI Plus returned
+    // {"type":"usage_limit_reached","resets_in_seconds":5640} with NO
+    // Retry-After, so a 94-minute plan reset was retried on the exponential
+    // schedule and hammered the account for the whole window.
+    let effectiveRetryAfterMs = rawRetryAfterMs;
+    let effectiveHasRetryAfter = hasRetryAfter;
+    if (status === 429 && !hasRetryAfter && rateLimit?.body) {
+      const bodyReset = /"resets_in_seconds"\s*:\s*(\d+)/.exec(rateLimit.body);
+      if (bodyReset) {
+        effectiveRetryAfterMs = Number(bodyReset[1]) * 1000;
+        effectiveHasRetryAfter = Number.isFinite(effectiveRetryAfterMs) && effectiveRetryAfterMs > 0;
+      }
+    }
+
+    if (status === 429 && effectiveHasRetryAfter && effectiveRetryAfterMs > maxRetries * maxDelayMs) {
+      const reset = formatResetDuration(effectiveRetryAfterMs);
       const quotaReason = rateLimit ? extractQuotaReason(rateLimit.body) : undefined;
       const detail = quotaReason ? `: ${quotaReason}` : "";
       throw new QuotaExhaustedError(
         callerName,
-        rawRetryAfterMs,
+        effectiveRetryAfterMs,
         `${callerName} ${QUOTA_EXHAUSTED_PHRASE} (resets in ${reset})${detail}`,
       );
     }
