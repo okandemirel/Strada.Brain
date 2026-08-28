@@ -452,6 +452,28 @@ export class StradaMcpRuntime {
     this.unityEditorRouter = unityEditorRouter;
     this.bridgeManager = bridgeManager;
     this.syncBridgeState(false, this.bridgeConfigured ? "disconnected" : "disabled", this.getInitialBridgeReason());
+    // Version skew guard: a vendored copy older than what this Brain expects
+    // is accepted silently, and missing metadata fields (e.g. timeoutMs)
+    // resurrect known regressions like the 30s cap on unity_verify_change.
+    // Warn loudly rather than fail — an old copy still beats no tools.
+    const MIN_EXPECTED_MCP_VERSION = "0.4.0";
+    const versionOk = ((): boolean => {
+      const parse = (v: string): number[] => v.split(".").map((n) => Number.parseInt(n, 10) || 0);
+      const [a, b] = [parse(String(this.source.version ?? "0.0.0")), parse(MIN_EXPECTED_MCP_VERSION)];
+      for (let i = 0; i < 3; i++) {
+        if ((a[i] ?? 0) > (b[i] ?? 0)) return true;
+        if ((a[i] ?? 0) < (b[i] ?? 0)) return false;
+      }
+      return true;
+    })();
+    if (!versionOk) {
+      getLogger().warn("Vendored Strada.MCP is OLDER than this Brain expects — tool metadata/behavior may be stale", {
+        vendoredVersion: this.source.version,
+        expectedAtLeast: MIN_EXPECTED_MCP_VERSION,
+        sourcePath: this.source.path,
+        fix: "update the Strada.MCP submodule in the project",
+      });
+    }
   }
 
   async start(): Promise<void> {
@@ -801,7 +823,31 @@ export class StradaMcpRuntime {
     for (const name of this.registeredTools) {
       this.syncToolMetadata(name);
     }
+    // Availability flips used to be SILENT: bridge-gated tools vanished from
+    // the offered list (tool-registry filters available===false) and nothing
+    // ever said which, or why — in a headless campaign the whole bridge test
+    // path disappeared without a trace. Say it, once per flip.
+    const dropped: string[] = [];
+    for (const name of this.registeredTools) {
+      if (this.metadataMap?.get(name)?.available === false) dropped.push(name);
+    }
+    const signature = dropped.sort().join(",");
+    if (signature !== this.lastUnavailableSignature) {
+      this.lastUnavailableSignature = signature;
+      if (dropped.length > 0) {
+        getLogger().warn("Bridge-gated tools are UNAVAILABLE and hidden from agents", {
+          count: dropped.length,
+          tools: dropped.slice(0, 20).join(", "),
+          reason: this.bridgeUnavailableReason ?? "bridge capability mismatch",
+        });
+      } else {
+        getLogger().info("All bridge-gated tools available again");
+      }
+    }
   }
+
+  /** Last logged set of unavailable tools, to log only on change. */
+  private lastUnavailableSignature = "";
 
   private syncToolMetadata(name: string): void {
     const metadata = this.metadataMap?.get(name);
