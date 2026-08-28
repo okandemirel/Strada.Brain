@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 
 const DEFAULT_MAX_OUTPUT = 16_384;
 
@@ -110,9 +111,23 @@ export function runProcess(opts: RunOptions): Promise<RunResult> {
     });
 
     child.on("error", (err) => {
+      // Node reports a MISSING CWD as "spawn <cmd> ENOENT" — indistinguishable
+      // from a missing binary, and the agent then chases the wrong cause
+      // (observed live: "spawn git ENOENT" while git was on PATH and the real
+      // problem was a vanished lease directory). Name the actual culprit.
+      let message = err.message;
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        try {
+          if (!existsSync(opts.cwd)) {
+            message = `working directory does not exist: ${opts.cwd} (the workspace may have been released) — original: ${err.message}`;
+          }
+        } catch {
+          // Diagnosis is best-effort; the original message still lands.
+        }
+      }
       finish({
         stdout: "",
-        stderr: err.message,
+        stderr: message,
         exitCode: 127,
         timedOut: false,
         durationMs: Date.now() - start,

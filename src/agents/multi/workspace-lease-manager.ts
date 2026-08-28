@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, cpSync, rmSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, cpSync, rmSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import type { Dirent } from "node:fs";
 import { resolve, join, dirname, sep, relative, basename } from "node:path";
 import os from "node:os";
@@ -174,6 +174,7 @@ const BASE_FALLBACK_COPY_EXCLUDES = new Set([
   // exclude, quarantined project mirrors counted against the seeding budget,
   // were copied into every subsequent lease, and travelled back on commit.
   ".strada",
+  ".strada-lease-owner.json",
   "dist",
   "coverage",
   ".cache",
@@ -183,10 +184,31 @@ const DERIVED_COPY_EXCLUDES = new Set([
   ".git",
   "node_modules",
   ".strada",
+  ".strada-lease-owner.json",
   "coverage",
   ".cache",
   ".vite",
 ]);
+
+/** Ownership sidecar written into every lease dir at acquire — the only
+ *  cross-process signal for "this lease belongs to a LIVE process". */
+const LEASE_OWNER_FILE = ".strada-lease-owner.json";
+
+/** True when the pid recorded in a lease's owner sidecar is still running.
+ *  Missing/corrupt sidecar reads as not-alive (old-style orphan heuristic). */
+function leaseOwnerAlive(leasePath: string): boolean {
+  try {
+    const raw = JSON.parse(readFileSync(join(leasePath, LEASE_OWNER_FILE), "utf8")) as {
+      pid?: unknown;
+    };
+    const pid = Number(raw.pid);
+    if (!Number.isInteger(pid) || pid <= 0) return false;
+    process.kill(pid, 0); // throws when the process is gone
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 /** Lease roots already salvaged by SOME manager in this process. Two managers
  *  are constructed against the same root (stage-runtime and stage-agents);
@@ -226,6 +248,20 @@ export class WorkspaceLeaseManager {
       throw new Error(`Project root does not exist: ${this.projectRoot}`);
     }
 
+    // The default lease root is MACHINE-GLOBAL (os.tmpdir()). A test that
+    // constructs a manager without its own leaseRoot lists the RUNNING
+    // daemon's live leases as orphans and deletes them — measured live
+    // 2026-08-28 11:41: a vitest worker salvaged and removed the campaign's
+    // Sprint-1 worktree mid-task. Tests must always pass an isolated root.
+    if (
+      options.leaseRoot === undefined &&
+      (process.env["VITEST"] !== undefined || process.env["NODE_ENV"] === "test")
+    ) {
+      throw new Error(
+        "WorkspaceLeaseManager: tests must pass an explicit leaseRoot — the default is the " +
+          "machine-global production root, and constructing against it salvages (DELETES) live leases.",
+      );
+    }
     this.leaseRoot = resolve(options.leaseRoot ?? DEFAULT_LEASE_ROOT);
     mkdirSync(this.leaseRoot, { recursive: true });
     this.preferGitWorktree = options.preferGitWorktree ?? true;
@@ -257,6 +293,9 @@ export class WorkspaceLeaseManager {
     try {
       return readdirSync(this.leaseRoot, { withFileTypes: true })
         .filter((e) => e.isDirectory() && leaseNamePattern.test(e.name))
+        // The name pattern matches LIVE leases exactly as well as dead ones —
+        // "orphan" is decided by owner liveness, never by naming.
+        .filter((e) => !leaseOwnerAlive(join(this.leaseRoot, e.name)))
         .map((e) => e.name);
     } catch {
       return [];
@@ -285,6 +324,10 @@ export class WorkspaceLeaseManager {
     for (const name of orphanNames) {
       const orphanPath = join(this.leaseRoot, name);
       if (!existsSync(orphanPath)) continue; // released concurrently somehow
+      // Re-verify ownership at the moment of action, not just at snapshot
+      // time: a lease acquired (or a crashed owner restarted) between the
+      // constructor snapshot and this iteration must not be swept.
+      if (leaseOwnerAlive(orphanPath)) continue;
       try {
         // Without the original seed maps, "missing from the project" cannot be
         // told apart from "deleted by the user after the crash" — restoring
@@ -378,6 +421,20 @@ export class WorkspaceLeaseManager {
       releaseImpl = async () => {
         this.removeDirectory(workspacePath);
       };
+    }
+
+    // Ownership sidecar: the lease root is machine-global, so "orphan" can
+    // only be decided by whether the OWNING PROCESS is alive — not by which
+    // process happens to construct a manager. Salvage skips any lease whose
+    // recorded pid still runs.
+    try {
+      writeFileSync(
+        join(workspacePath, LEASE_OWNER_FILE),
+        JSON.stringify({ pid: process.pid, startedAt: createdAt }),
+        "utf8",
+      );
+    } catch {
+      // Best-effort; an unownable lease degrades to the old orphan heuristic.
     }
 
     // Two snapshots, both taken after seeding.

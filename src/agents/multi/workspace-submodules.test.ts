@@ -79,7 +79,7 @@ describe("worktree workspaces carry the project's submodules", () => {
   it("checks out submodules into the new worktree", async () => {
     const root = projectRoot(true);
     const { runner, calls } = recordingRunner();
-    const manager = new WorkspaceLeaseManager({ projectRoot: root, commandRunner: runner });
+    const manager = new WorkspaceLeaseManager({ projectRoot: root, leaseRoot: mkdtempSync(join(os.tmpdir(), "lease-submodule-leases-")), commandRunner: runner });
 
     const lease = await manager.acquireLease({ preferGitWorktree: true });
     expect(lease.kind).toBe("git-worktree");
@@ -99,7 +99,7 @@ describe("worktree workspaces carry the project's submodules", () => {
   it("runs the checkout after the worktree exists, not before", async () => {
     const root = projectRoot(true);
     const { runner, calls } = recordingRunner();
-    const manager = new WorkspaceLeaseManager({ projectRoot: root, commandRunner: runner });
+    const manager = new WorkspaceLeaseManager({ projectRoot: root, leaseRoot: mkdtempSync(join(os.tmpdir(), "lease-submodule-leases-")), commandRunner: runner });
     const lease = await manager.acquireLease({ preferGitWorktree: true });
 
     const addIndex = calls.findIndex((c) => c.args.includes("worktree") && c.args.includes("add"));
@@ -115,7 +115,7 @@ describe("worktree workspaces carry the project's submodules", () => {
     // is a cost paid by every task.
     const root = projectRoot(false);
     const { runner, calls } = recordingRunner();
-    const manager = new WorkspaceLeaseManager({ projectRoot: root, commandRunner: runner });
+    const manager = new WorkspaceLeaseManager({ projectRoot: root, leaseRoot: mkdtempSync(join(os.tmpdir(), "lease-submodule-leases-")), commandRunner: runner });
 
     const lease = await manager.acquireLease({ preferGitWorktree: true });
     expect(submoduleCall(calls)).toBeUndefined();
@@ -127,7 +127,7 @@ describe("worktree workspaces carry the project's submodules", () => {
     // not take the task down with it.
     const root = projectRoot(true);
     const { runner } = recordingRunner((a) => a.includes("submodule"));
-    const manager = new WorkspaceLeaseManager({ projectRoot: root, commandRunner: runner });
+    const manager = new WorkspaceLeaseManager({ projectRoot: root, leaseRoot: mkdtempSync(join(os.tmpdir(), "lease-submodule-leases-")), commandRunner: runner });
 
     const lease = await manager.acquireLease({ preferGitWorktree: true });
     expect(lease.kind).toBe("git-worktree");
