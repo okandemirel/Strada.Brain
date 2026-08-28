@@ -733,6 +733,31 @@ export class CampaignManager {
       status = TaskStatus.failed;
     }
 
+    // VISUAL EVIDENCE GATE: when the sprint's own prompt demands a captured
+    // frame (the planner demands it of every sprint), a completed task with
+    // NO fresh capture since the milestone started is a sim-green/screen-empty
+    // sprint — the exact disease the user found by hand: scenes look right in
+    // reports and draw nothing. One missing-evidence bounce per milestone; the
+    // bounce names the gap so the retry produces the frame instead of prose.
+    if (status === TaskStatus.completed && /captur/i.test(milestone.prompt)) {
+      const evidence = this.freshCaptureEvidence(milestone);
+      if (!evidence.found && !milestone.visualEvidenceBounced) {
+        milestone.visualEvidenceBounced = true;
+        milestone.prompt +=
+          "\n\nVISUAL EVIDENCE MISSING: the previous attempt reported completion but produced no NEW " +
+          "captured frame (Recordings/ or Assets/Art/Prerendered) since this sprint began. A sprint " +
+          "whose game draws nothing is not done. Run unity_playmode_verify with capture:true (or the " +
+          "capture path your work uses), confirm frames render with actual content, and only then report completion.";
+        this.persist(campaign);
+        getLoggerSafe().warn("Milestone completion rejected: no fresh visual evidence", {
+          id: campaign.id,
+          milestone: milestone.id,
+        });
+        this.submitCurrentMilestone(campaign, { countAttempt: false });
+        return;
+      }
+    }
+
     if (status === TaskStatus.completed) {
       // Commit gate: a sprint is not green while its work sits uncommitted in
       // the working tree. No path in the pipeline commits into the REAL repo:
@@ -885,6 +910,49 @@ export class CampaignManager {
     } finally {
       lock.release();
     }
+  }
+
+  /** Newest capture frame under Recordings/ or Assets/Art/Prerendered since
+   *  the milestone's first task was created. Cheap directory scan, bounded. */
+  private freshCaptureEvidence(milestone: CampaignMilestone): { found: boolean } {
+    const sinceMs = (() => {
+      try {
+        const rootId = milestone.taskId ? this.taskManager.findLineageRootId(milestone.taskId as TaskId) : null;
+        const root = rootId ? this.taskManager.getStatus(rootId) : null;
+        return root?.createdAt ?? Date.now() - 6 * 60 * 60_000;
+      } catch {
+        return Date.now() - 6 * 60 * 60_000;
+      }
+    })();
+    const roots = [
+      join(this.projectRoot, "Recordings"),
+      join(this.projectRoot, "Assets", "Art", "Prerendered"),
+    ];
+    let scanned = 0;
+    const stack = roots.filter((r) => existsSync(r));
+    while (stack.length > 0 && scanned < 20_000) {
+      const dir = stack.pop()!;
+      let entries;
+      try {
+        entries = readdirSync(dir, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (const e of entries) {
+        scanned++;
+        const full = join(dir, e.name);
+        if (e.isDirectory()) {
+          stack.push(full);
+        } else if (/\.(png|jpg|mp4)$/i.test(e.name)) {
+          try {
+            if (statSync(full).mtimeMs >= sinceMs) return { found: true };
+          } catch {
+            /* skip */
+          }
+        }
+      }
+    }
+    return { found: false };
   }
 
   /** How many coverage-remediation sprints may be appended before delivering as-is. */

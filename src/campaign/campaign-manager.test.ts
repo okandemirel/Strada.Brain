@@ -355,6 +355,44 @@ describe("CampaignManager", () => {
     await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
   });
 
+  it("bounces a completion once when the sprint demanded a capture and none exists", async () => {
+    const planner = {
+      planMilestones: vi.fn().mockResolvedValue({
+        milestones: [
+          { title: "Sprint A — Visual", prompt: "build it; end with a captured frame proving something renders" },
+          { title: "Sprint B — Next", prompt: "continue the work with more building" },
+        ],
+      }),
+    } as unknown as CampaignPlanner;
+    tasks = new FakeTaskManager();
+    storage.close();
+    storage = new CampaignStorage(join(dir, "campaigns-capture.db"));
+    manager = new CampaignManager({
+      storage,
+      planner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async (chatId, text) => messages.push({ chatId, text }),
+      projectRoot, // no Recordings/ dir → no evidence
+      retryAdoptionGraceMs: 10,
+    });
+    manager.attachEvents();
+
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+
+    settleMilestone("done, everything renders (it says)");
+    // Bounced: resubmitted with the missing-evidence demand, attempts NOT burned.
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    expect(tasks.submitted[1]!.prompt).toContain("VISUAL EVIDENCE MISSING");
+    const fresh = storage.get(campaign.id)!;
+    expect(fresh.milestones[0]!.status).toBe("running");
+    expect(fresh.milestones[0]!.attempts).toBe(1);
+
+    // Second completion stands (one-shot bounce) and the ladder advances.
+    settleMilestone("done again");
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.milestones[0]!.status).toBe("green"));
+  });
+
   it("resumeActive leaves a still-running task alone", async () => {
     manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
     await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));

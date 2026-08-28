@@ -71,6 +71,9 @@ export interface CampaignMilestone {
   /** One-shot flag: a reaped settlement already deferred once to the
    *  executor's pending keep-alive retry (see reconcileMilestoneAfterSettle). */
   reconcileDeferred?: boolean;
+  /** One-shot flag: completion was bounced once for missing capture frames
+   *  (the visual-evidence gate); the second completion stands either way. */
+  visualEvidenceBounced?: boolean;
 }
 
 export interface Campaign {
