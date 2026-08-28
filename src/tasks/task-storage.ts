@@ -196,6 +196,16 @@ export class TaskStorage {
     this.getStmt("touchTask").run(now, id);
   }
 
+  /**
+   * Bump updated_at without a progress row. The stuck-task reaper reads
+   * updated_at as the liveness signal; a heartbeat is activity, not progress
+   * worth rendering, so it must not accumulate empty progress entries.
+   */
+  touch(id: TaskId): void {
+    this.ensureConnection();
+    this.getStmt("touchTask").run(Date.now(), id);
+  }
+
   // ─── Queries ────────────────────────────────────────────────────────────────
 
   listExecuting(): Task[] {

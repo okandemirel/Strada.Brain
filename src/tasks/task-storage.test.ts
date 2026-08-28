@@ -57,6 +57,23 @@ describe("TaskStorage", () => {
     expect(storage.findLineageRootId(root.id)).toBe(root.id);
   });
 
+  it("touch() bumps updated_at without adding a progress row (reaper liveness)", () => {
+    const stale = Date.now() - 90 * 60_000;
+    const task = makeTask(TaskStatus.executing, { createdAt: stale, updatedAt: stale });
+    storage.save(task);
+
+    // Stale executing task is reap-eligible…
+    expect(storage.listExecuting().filter((t) => t.updatedAt < Date.now() - 60 * 60_000).map((t) => t.id))
+      .toContain(task.id);
+
+    storage.touch(task.id);
+
+    // …touched, it no longer is, and no progress entry was fabricated.
+    const after = storage.listExecuting().find((t) => t.id === task.id)!;
+    expect(after.updatedAt).toBeGreaterThan(Date.now() - 60 * 60_000);
+    expect(after.progress).toHaveLength(0);
+  });
+
   it("includes waiting_for_input tasks in active task queries", () => {
     const waitingTask = makeTask(TaskStatus.waiting_for_input);
     storage.save(waitingTask);

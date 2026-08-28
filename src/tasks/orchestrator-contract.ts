@@ -40,6 +40,8 @@ export interface ITaskManager {
   retryTask(taskId: string): unknown;
   /** Executing tasks with no progress signal since the cutoff (stuck-task reaper). */
   listStuckExecuting(olderThanMs: number): unknown[];
+  /** Bump the task's liveness clock without recording a progress entry. */
+  touch?(id: string): void;
   /** Recent tasks for a chat (queue-continuation checks). */
   listTasks(chatId: string, limit: number): Array<{ id: string; status: string; chatId: string; prompt: string }>;
   /**

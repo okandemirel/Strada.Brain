@@ -1,4 +1,5 @@
 import { failureTarget } from "./orchestrator-tool-execution.js";
+import { notifyTaskLiveness } from "./liveness-hub.js";
 import { QuotaExhaustedError } from "../common/fetch-with-retry.js";
 import type { ChannelType } from "../channels/channel-messages.interface.js";
 import type {
@@ -4799,6 +4800,10 @@ export class Orchestrator {
       // a failing tool is still activity, and a task retrying a failure is
       // exactly the case the watchdog must not mistake for silence.
       this.onLiveness?.();
+      // Worker orchestrator instances (agent-manager, delegation-manager) have no
+      // onLiveness of their own; the hub routes their tool activity to whichever
+      // task owns this chatId so the stuck-task reaper sees a wave working.
+      notifyTaskLiveness(chatId);
       this.metrics?.recordToolCall(activeToolCall.name, toolDurationMs, !result.isError, result.isError ? String(result.content).slice(0, 200) : undefined);
       // Log the OUTCOME, not just the attempt.
       //

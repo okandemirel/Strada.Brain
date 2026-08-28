@@ -487,6 +487,11 @@ export class TaskManager extends EventEmitter {
     return this.countActiveForegroundTasks(excludedChatIds) > 0;
   }
 
+  /** Bump the task's liveness clock (updated_at) without recording progress. */
+  touch(taskId: TaskId): void {
+    this.storage.touch(taskId);
+  }
+
   /**
    * Add a progress entry to a task.
    */

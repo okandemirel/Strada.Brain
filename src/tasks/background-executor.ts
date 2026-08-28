@@ -24,6 +24,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import type { ITaskManager, IOrchestrator, SupervisorAdmissionDecision } from "./orchestrator-contract.js";
 import { resolveConversationScope } from "../agents/orchestrator-text-utils.js";
+import { subscribeTaskLiveness } from "../agents/liveness-hub.js";
 function getLoggerSafe() {
   try {
     // Lazy require-free import chain: use the shared logger.
@@ -1170,6 +1171,16 @@ export class BackgroundExecutor {
     taskOrchestrator.setLivenessCallback?.(() =>
       onProgress({ kind: "heartbeat", message: "" } as TaskProgressUpdate),
     );
+    // setLivenessCallback only covers the singleton's own tool path. A wave's
+    // tools run on worker orchestrator instances (agent-manager, delegation)
+    // whose slot is never set; the hub relays their activity by chatId.
+    // Measured 2026-08-29: two campaign tasks reaped at exactly 60min with
+    // zero heartbeats while workers ran tools the whole time.
+    const unsubscribeLiveness = subscribeTaskLiveness(task.chatId, () => {
+      try {
+        this.taskManager?.touch?.(task.id);
+      } catch { /* liveness must never break the run */ }
+    });
     let taskWorkspaceLease: ManagedWorkspaceLease | undefined;
 
     if (!this.taskManager) {
@@ -1443,6 +1454,7 @@ export class BackgroundExecutor {
         this.failGoalExecution(task, task.goalTree, errMsg, 0);
       }
     } finally {
+      unsubscribeLiveness();
       // Commit BEFORE release — release() deletes the lease directory. This is
       // the task-scoped lease, the one a normal CLI request actually takes; the
       // delegated-run lease below has the same pairing. Missing it here made
