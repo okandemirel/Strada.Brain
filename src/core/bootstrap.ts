@@ -172,9 +172,26 @@ export function createSupervisorExecuteNodeBridge(params: {
       (workerResult?.touchedFiles ?? []).map((path) => ({ path, action: "modify" as const }));
     try {
       const goalRootId = context.goalTree ? String(context.goalTree.rootId) : undefined;
+      // Carry the upstream results this node depends on. A wave-3 worker used
+      // to receive its one-line task and NOTHING of what waves 1–2 produced —
+      // preserved completed-node results were written and never read.
+      let nodePrompt = node.task;
+      if (context.goalTree && node.dependsOn.length > 0) {
+        const depLines: string[] = [];
+        for (const depId of node.dependsOn) {
+          const dep = context.goalTree.nodes.get(depId);
+          if (dep?.status === "completed" && dep.result) {
+            depLines.push(`- ${dep.task}\n  Result: ${dep.result.slice(0, 600)}`);
+          }
+        }
+        if (depLines.length > 0) {
+          nodePrompt =
+            `${node.task}\n\n## Completed dependencies (build on these; do not redo them)\n${depLines.join("\n")}`;
+        }
+      }
       const result = await params.backgroundExecutor.runWorkerEnvelope(params.orchestrator, {
         mode: "delegated",
-        prompt: node.task,
+        prompt: nodePrompt,
         chatId: context.chatId,
         channelType: context.channelType ?? params.defaultChannelType ?? "cli",
         conversationId: context.conversationId,

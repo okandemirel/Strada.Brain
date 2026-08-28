@@ -638,13 +638,33 @@ export class TaskManager extends EventEmitter {
       : mode === "replan"
       ? "The previous plan was attempted and then attempted again, and the second round finished nothing the first had not. Do not repeat it. Work out why those steps could not be completed and produce a different plan — a different decomposition, a different order, or smaller steps that sidestep whatever blocked the last one. Completed work still stands; keep it."
       : "Previous background execution failed or stalled. First analyze the failure cause briefly, then continue from the strongest checkpoint instead of restarting blindly.";
-    const lines = [preface, "", `Original request: ${task.prompt}`];
 
-    if (task.result) {
-      lines.push("", `Last known checkpoint:\n${task.result}`);
+    // The TRUE original prompt, from the lineage root — task.prompt on a
+    // retried task IS a replay prompt, so quoting it nested another whole
+    // preface per generation (measured live: +313 chars/gen, the real
+    // instruction at nesting depth 3, and the bloat then polluted vault
+    // retrieval because the query contained the failure boilerplate).
+    let originalPrompt = task.prompt;
+    try {
+      const rootId = this.storage.findLineageRootId(task.id);
+      const root = rootId && rootId !== task.id ? this.storage.load(rootId) : null;
+      if (root?.prompt) originalPrompt = root.prompt;
+    } catch {
+      // Lineage lookup is best-effort; the task's own prompt still works.
+    }
+
+    const lines = [preface, "", `Original request: ${originalPrompt}`];
+
+    // "Last known checkpoint" must be a checkpoint, not machinery noise: the
+    // keep-alive's block message ("Transient failure … Auto-retry 3/10 in
+    // ~120s") was quoted here verbatim and the model was told to continue
+    // from a retry countdown.
+    const result = task.result?.trim();
+    if (result && !/Auto-retry \d+\/\d+ in ~\d+s/.test(result)) {
+      lines.push("", `Last known checkpoint:\n${result.slice(0, 1200)}`);
     }
     if (task.error) {
-      lines.push("", `Last known failure:\n${sanitizeSecrets(task.error)}`);
+      lines.push("", `Last known failure:\n${sanitizeSecrets(task.error).slice(0, 800)}`);
     }
 
     return lines.join("\n");

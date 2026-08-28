@@ -611,11 +611,17 @@ export class SupervisorBrain {
 
   /**
    * Extract non-root nodes from a GoalTree (leaf/child nodes that need execution).
+   *
+   * COMPLETED nodes are excluded: prepareTreeForRetry deliberately preserves
+   * them with their results so a replay resumes instead of restarting — but
+   * this extractor used to return every node regardless of status, so the
+   * "don't redo finished work" contract was cosmetic and each retry re-ran
+   * (and re-billed) the whole wave plan from wave 1.
    */
   private extractLeafNodes(tree: GoalTree): GoalNode[] {
     const nodes: GoalNode[] = [];
     for (const [id, node] of tree.nodes) {
-      if (id !== tree.rootId) {
+      if (id !== tree.rootId && node.status !== "completed") {
         nodes.push(node);
       }
     }

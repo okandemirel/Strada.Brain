@@ -1715,12 +1715,26 @@ export class BackgroundExecutor {
       // retry at +120s → two tasks writing the same sprint). An ACTIVE task
       // on this chat with the same prompt root IS the mission continuing;
       // a second copy only double-writes the repo.
-      const promptRoot = task.prompt.slice(0, 160);
+      // Compare ROOT prompts, not raw prefixes: every replayed task starts
+      // with the same 164-char retry preface, so a prefix compare matched all
+      // retried missions to each other. The lineage root's prompt is the real
+      // mission identity.
+      const rootPromptOf = (t: { id: string; prompt: string }): string => {
+        try {
+          const rootId = (this.taskManager as { findLineageRootId?: (id: string) => string | null })
+            .findLineageRootId?.(t.id);
+          const root = rootId && rootId !== t.id ? this.taskManager?.getStatus?.(rootId) : null;
+          return ((root as { prompt?: string } | null)?.prompt ?? t.prompt).slice(0, 160);
+        } catch {
+          return t.prompt.slice(0, 160);
+        }
+      };
+      const promptRoot = rootPromptOf(task);
       const alreadyContinued = (this.taskManager?.listTasks?.(task.chatId, 10) ?? []).some(
         (t) =>
           t.id !== task.id &&
           ["pending", "planning", "executing"].includes(t.status) &&
-          t.prompt.slice(0, 160) === promptRoot,
+          rootPromptOf(t) === promptRoot,
       );
       if (alreadyContinued) {
         this.missionRetries.delete(key);
