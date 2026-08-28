@@ -147,13 +147,28 @@ export async function initializeAIProvider(
       );
     }
 
-    defaultProviderOrder = preflightResult.passedProviderIds;
-    defaultProvider = buildProviderChain(preflightResult.passedProviderIds, providerCredentials, {
+    // Demote, don't drop: a CONFIGURED provider that failed preflight while
+    // holding usable credentials (e.g. a quota window mid-reset) stays in the
+    // chain at the TAIL. The chain's health gating skips it while cooled and
+    // readmits it the moment its cooldown expires. Excluding it composed a
+    // session that could never use a provider recovering an hour later —
+    // measured live twice today: boots at 16:13 and 20:17 inside an OpenAI
+    // reset window ran whole sessions on the quota-dead fallback while the
+    // configured primary sat recovered.
+    const demotedConfigured = configuredNames
+      .map((n) => n.trim().toLowerCase())
+      .filter((n) => n && !preflightResult.passedProviderIds.includes(n));
+    const chainOrder = [...preflightResult.passedProviderIds, ...demotedConfigured];
+    defaultProviderOrder = chainOrder;
+    defaultProvider = buildProviderChain(chainOrder, providerCredentials, {
       models: config.providerModels,
       baseUrls: baseUrlOverrides,
       attemptTimeoutMs: config.llmProviderFirstResponseTimeoutMs,
     });
-    logger.info("AI provider chain initialized", { chain: preflightResult.passedProviderIds });
+    logger.info("AI provider chain initialized", {
+      chain: chainOrder,
+      ...(demotedConfigured.length > 0 ? { demotedTail: demotedConfigured } : {}),
+    });
 
     // Auto-detect additional providers with valid keys as silent fallbacks
     const additionalNames = detectAvailableProviderNames(apiKeys, config, new Set(configuredNames));
