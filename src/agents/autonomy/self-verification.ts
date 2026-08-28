@@ -45,6 +45,15 @@ export class SelfVerification {
   private pendingTestFiles = new Set<string>();
   private testRunAttempts = 0;
   private static readonly MAX_TEST_RUN_ATTEMPTS = 3;
+  /**
+   * How many times the compile gate has been raised without a clean pass since.
+   * The unity-error and unrun-test gates already carry caps; this one had none,
+   * so a run whose verification tooling could never succeed (bridge down, or
+   * only a forbidden tool on PATH) looped on the same gate until the stuck
+   * reaper killed it an hour later. Cleared by any successful verification.
+   */
+  private buildGateEmissions = 0;
+  private static readonly MAX_BUILD_GATE_EMISSIONS = 10;
 
   /** Reset for new task. */
   reset(): void {
@@ -57,6 +66,7 @@ export class SelfVerification {
     this.unityErrorResolutionAttempts = 0;
     this.pendingTestFiles = new Set();
     this.testRunAttempts = 0;
+    this.buildGateEmissions = 0;
   }
 
   /**
@@ -92,6 +102,7 @@ export class SelfVerification {
         if (ok) {
           this.pendingFiles.clear();
           this.hasCompilableChanges = false;
+          this.buildGateEmissions = 0;
         }
         // A compile is not a test run. unity_verify_change says so itself —
         // "Test assemblies are NOT built by this check" — and measured
@@ -124,7 +135,9 @@ export class SelfVerification {
    * Check if verification is needed before exit. O(1).
    */
   needsVerification(): boolean {
-    return (this.hasCompilableChanges && this.lastBuildOk !== true)
+    return (this.hasCompilableChanges
+        && this.lastBuildOk !== true
+        && this.buildGateEmissions < SelfVerification.MAX_BUILD_GATE_EMISSIONS)
       || this.hasUnresolvedUnityErrors()
       || this.hasUnrunTests();
   }
@@ -242,6 +255,9 @@ export class SelfVerification {
    * Only called when needsVerification() is true (rare path).
    */
   getPrompt(): string {
+    if (this.hasCompilableChanges && this.lastBuildOk !== true) {
+      this.buildGateEmissions++;
+    }
     const files = [...this.pendingFiles];
     const shown = files.slice(0, 8);
     const rest = files.length - shown.length;

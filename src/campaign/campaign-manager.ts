@@ -9,6 +9,7 @@
  */
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { getLoggerSafe } from "../utils/logger.js";
 import type { IncomingMessage } from "../channels/channel-messages.interface.js";
@@ -41,6 +42,8 @@ export interface CampaignManagerOptions {
   maxMilestoneAttempts?: number;
   /** GDD revision rounds at the approval gate before cancelling. */
   maxDraftAttempts?: number;
+  /** Grace before reacting to a bad settlement (tests shrink it). */
+  retryAdoptionGraceMs?: number;
   /**
    * GDD→style.json derivation, run at plan time (post-approval). Optional:
    * without it the campaign still plans, tools just fall back to stock
@@ -50,6 +53,20 @@ export interface CampaignManagerOptions {
 }
 
 const APPROVE_RE = /^(evet|onay|onaylıyorum|yes|ok|okay|approve[ds]?|lgtm|devam|go ahead|go)[.!\s]*$/i;
+
+/** "kampanya devam" / "campaign resume" — revive the newest failed/cancelled campaign on this chat. */
+const REVIVE_RE = /^(kampanya(yı)?\s+(devam( et(tir)?)?|sürdür)|campaign\s+(resume|retry|continue)|resume\s+campaign)\b/i;
+
+/**
+ * How long a settled-badly milestone waits before the campaign reacts. The
+ * executor's own keep-alive handles transient failures by blocking the task
+ * and scheduling a retry under a NEW task id ~30s later; reacting to the
+ * block instantly made the campaign double-submit the same sprint and burn
+ * its attempt budget on failures that were never real. After this window the
+ * lineage is re-read: a newer active task is adopted, a newer terminal one is
+ * judged on its own outcome.
+ */
+const RETRY_ADOPTION_GRACE_MS = 90_000;
 
 const GDD_DRAFT_PROMPT = (idea: string, revisionNote?: string) =>
   `You are writing the game design document for a game that will then be built autonomously by this same system.
@@ -75,6 +92,7 @@ export class CampaignManager {
   private readonly projectRoot: string;
   private readonly maxMilestoneAttempts: number;
   private readonly maxDraftAttempts: number;
+  private readonly retryAdoptionGraceMs: number;
   private readonly styleAnalysis?: import("../agents/style/style-analysis.js").StyleAnalysis;
   private eventsAttached = false;
 
@@ -86,6 +104,7 @@ export class CampaignManager {
     this.projectRoot = options.projectRoot;
     this.maxMilestoneAttempts = options.maxMilestoneAttempts ?? 2;
     this.maxDraftAttempts = options.maxDraftAttempts ?? 3;
+    this.retryAdoptionGraceMs = options.retryAdoptionGraceMs ?? RETRY_ADOPTION_GRACE_MS;
     this.styleAnalysis = options.styleAnalysis;
   }
 
@@ -140,6 +159,7 @@ export class CampaignManager {
    */
   async tryHandleIncoming(msg: IncomingMessage): Promise<boolean> {
     if (await this.tryHandleApproval(msg.chatId, msg.text)) return true;
+    if (await this.tryHandleRevive(msg.chatId, msg.text)) return true;
 
     const intent = detectCampaignIntent(msg);
     if (!intent) return false;
@@ -219,6 +239,46 @@ export class CampaignManager {
     return true;
   }
 
+  /**
+   * "kampanya devam" — revive the newest failed/cancelled campaign on this
+   * chat. A campaign used to be unrevivable the moment it went `failed`
+   * (absent from listActive, no command, no code path); two graceful restarts
+   * were enough to get there. Revival resets the current milestone's attempt
+   * budget and resubmits it — everything already green stays green.
+   */
+  async tryHandleRevive(chatId: string, text: string): Promise<boolean> {
+    if (!REVIVE_RE.test(text.trim())) return false;
+    const campaign = this.storage.findLatestRevivable(chatId);
+    if (!campaign) return false;
+    if (this.storage.hasActiveForChat(chatId)) {
+      await this.tell({ chatId }, "A campaign is already active on this chat — the failed one stays parked.");
+      return true;
+    }
+
+    const milestone = campaign.milestones[campaign.currentMilestone];
+    if (!milestone) {
+      // Failed before/during planning — replan from the GDD.
+      campaign.state = "planning";
+      campaign.lastError = undefined;
+      this.persist(campaign);
+      await this.tell(campaign, "Reviving the campaign — replanning the milestone ladder from the GDD.");
+      void this.planAndLaunch(campaign.id);
+      return true;
+    }
+
+    milestone.attempts = 0;
+    milestone.status = "pending";
+    campaign.state = "executing";
+    campaign.lastError = undefined;
+    this.persist(campaign);
+    await this.tell(
+      campaign,
+      `Reviving the campaign at **${milestone.title}** (sprint ${campaign.currentMilestone + 1}/${campaign.milestones.length}) with a fresh attempt budget.`,
+    );
+    this.submitCurrentMilestone(campaign);
+    return true;
+  }
+
   /** Boot: re-attach campaigns that were active when the process stopped. */
   async resumeActive(): Promise<void> {
     for (const campaign of this.storage.listActive()) {
@@ -237,12 +297,45 @@ export class CampaignManager {
     switch (campaign.state) {
       case "drafting-gdd":
       case "executing": {
-        const taskId =
+        const rootTaskId =
           campaign.state === "drafting-gdd"
             ? campaign.draftTaskId
             : campaign.milestones[campaign.currentMilestone]?.taskId;
-        const task = taskId ? this.taskManager.getStatus(taskId as TaskId) : null;
-        if (task && ACTIVE_STATUSES.has(task.status)) return; // still in flight
+        // Follow the retry lineage, not the single id the campaign last saw:
+        // retries/resumes mint new task ids with parentId pointing back.
+        const task = rootTaskId
+          ? this.taskManager.findLatestLineageTask(rootTaskId as TaskId)
+          : null;
+
+        if (task && task.status === TaskStatus.paused) {
+          // Startup recovery marks interrupted user-origin tasks `paused` —
+          // an ACTIVE status nothing would ever resume. Bailing here as
+          // "still in flight" wedged the campaign forever; resume it instead.
+          const resumed = this.taskManager.resumeTask(task.id);
+          if (resumed) {
+            this.adoptTask(campaign, resumed.id);
+            getLoggerSafe().info("Campaign resumed paused task after restart", {
+              id: campaign.id,
+              pausedTask: task.id,
+              resumedTask: resumed.id,
+            });
+            return;
+          }
+          // fall through to resubmission when resume was refused
+        } else if (task && ACTIVE_STATUSES.has(task.status)) {
+          this.adoptTask(campaign, task.id);
+          return; // genuinely still in flight — track the live id
+        } else if (task && task.status === TaskStatus.completed && campaign.state === "executing") {
+          // Landed while we were down; the settlement event is gone. Judge it.
+          const milestone = campaign.milestones[campaign.currentMilestone];
+          if (milestone) {
+            await this.onMilestoneOutcome(campaign, milestone, task.status, task.result ?? "", {
+              countAttempt: false,
+            });
+            return;
+          }
+        }
+
         // The process died mid-task; the settlement events will never come.
         getLoggerSafe().info("Campaign resuming after restart", {
           id: campaign.id,
@@ -251,7 +344,8 @@ export class CampaignManager {
         if (campaign.state === "drafting-gdd") {
           this.submitDraft(campaign);
         } else {
-          this.submitCurrentMilestone(campaign);
+          // A restart is not the milestone's fault — do not burn its budget.
+          this.submitCurrentMilestone(campaign, { countAttempt: false });
         }
         return;
       }
@@ -373,7 +467,20 @@ export class CampaignManager {
     }
   }
 
-  private submitCurrentMilestone(campaign: Campaign): void {
+  /** Re-point the current work item at the lineage's live task id. */
+  private adoptTask(campaign: Campaign, taskId: string): void {
+    if (campaign.state === "drafting-gdd") {
+      if (campaign.draftTaskId === taskId) return;
+      campaign.draftTaskId = taskId;
+    } else {
+      const milestone = campaign.milestones[campaign.currentMilestone];
+      if (!milestone || milestone.taskId === taskId) return;
+      milestone.taskId = taskId;
+    }
+    this.persist(campaign);
+  }
+
+  private submitCurrentMilestone(campaign: Campaign, opts?: { countAttempt?: boolean }): void {
     const milestone = campaign.milestones[campaign.currentMilestone];
     if (!milestone) {
       campaign.state = "done";
@@ -381,7 +488,9 @@ export class CampaignManager {
       return;
     }
     milestone.status = "running";
-    milestone.attempts += 1;
+    if (opts?.countAttempt !== false) {
+      milestone.attempts += 1;
+    }
     campaign.state = "executing";
     const task = this.taskManager.submit(campaign.chatId, campaign.channelType, milestone.prompt, {
       userId: campaign.userId,
@@ -399,15 +508,26 @@ export class CampaignManager {
 
   private async handleTaskSettled(taskId: string, status: TaskStatus, output: string): Promise<void> {
     // Correlate by scanning active campaigns — the active set is tiny
-    // (typically one), so this stays cheap.
+    // (typically one), so this stays cheap. Correlation is by task LINEAGE,
+    // not a single id: every retry/resume path mints a new task id with
+    // parentId pointing back, and matching only the original id meant the
+    // real continuation proceeded untracked while the campaign judged a
+    // stale ancestor.
     for (const campaign of this.storage.listActive()) {
-      if (campaign.state === "drafting-gdd" && campaign.draftTaskId === taskId) {
+      if (
+        campaign.state === "drafting-gdd" &&
+        campaign.draftTaskId &&
+        this.taskManager.isInLineage(campaign.draftTaskId as TaskId, taskId as TaskId)
+      ) {
         await this.onDraftSettled(campaign, status, output);
         return;
       }
       if (campaign.state === "executing") {
         const milestone = campaign.milestones[campaign.currentMilestone];
-        if (milestone?.taskId === taskId) {
+        if (
+          milestone?.taskId &&
+          this.taskManager.isInLineage(milestone.taskId as TaskId, taskId as TaskId)
+        ) {
           await this.onMilestoneSettled(campaign, milestone, status, output);
           return;
         }
@@ -454,20 +574,119 @@ export class CampaignManager {
     output: string,
   ): Promise<void> {
     if (status === TaskStatus.completed) {
+      await this.onMilestoneOutcome(campaign, milestone, status, output, { countAttempt: true });
+      return;
+    }
+
+    // A block/failure may be the executor's own keep-alive parking the task
+    // while it schedules a retry under a new id. React after a grace window,
+    // against whatever the lineage says by then — not against this snapshot.
+    const campaignId = campaign.id;
+    const milestoneId = milestone.id;
+    setTimeout(() => {
+      void this.reconcileMilestoneAfterSettle(campaignId, milestoneId, status, output);
+    }, this.retryAdoptionGraceMs);
+  }
+
+  /**
+   * Grace-window follow-up to a non-completed settlement: re-read the task
+   * lineage and act on its CURRENT tip. A newer active task means the
+   * executor already retried — adopt it and burn nothing. A newer terminal
+   * task is judged on its own outcome. Only when the lineage truly ended
+   * badly does the campaign spend an attempt of its own.
+   */
+  private async reconcileMilestoneAfterSettle(
+    campaignId: string,
+    milestoneId: string,
+    settledStatus: TaskStatus,
+    settledOutput: string,
+  ): Promise<void> {
+    const campaign = this.storage.get(campaignId);
+    if (!campaign || campaign.state !== "executing") return;
+    const milestone = campaign.milestones[campaign.currentMilestone];
+    if (!milestone || milestone.id !== milestoneId) return; // ladder moved on
+
+    const tip = milestone.taskId
+      ? this.taskManager.findLatestLineageTask(milestone.taskId as TaskId)
+      : null;
+
+    if (tip && ACTIVE_STATUSES.has(tip.status) && tip.status !== TaskStatus.paused) {
+      this.adoptTask(campaign, tip.id);
+      getLoggerSafe().info("Campaign adopted executor retry instead of resubmitting", {
+        id: campaign.id,
+        milestone: milestone.id,
+        adoptedTask: tip.id,
+      });
+      return;
+    }
+    if (tip && tip.status === TaskStatus.paused) {
+      const resumed = this.taskManager.resumeTask(tip.id);
+      if (resumed) {
+        this.adoptTask(campaign, resumed.id);
+        return;
+      }
+    }
+    if (tip && tip.status === TaskStatus.completed) {
+      await this.onMilestoneOutcome(campaign, milestone, tip.status, tip.result ?? "", {
+        countAttempt: true,
+      });
+      return;
+    }
+
+    const status = tip && tip.id !== milestone.taskId ? tip.status : settledStatus;
+    const output = tip && tip.id !== milestone.taskId ? (tip.error ?? tip.result ?? "") : settledOutput;
+    await this.onMilestoneOutcome(campaign, milestone, status, output, { countAttempt: true });
+  }
+
+  private async onMilestoneOutcome(
+    campaign: Campaign,
+    milestone: CampaignMilestone,
+    status: TaskStatus,
+    output: string,
+    opts: { countAttempt: boolean },
+  ): Promise<void> {
+    if (status === TaskStatus.completed) {
+      // Commit gate: a sprint is not green while its work sits uncommitted in
+      // the working tree. No path in the pipeline commits reliably (the lease
+      // write-back only copies files; the agent's git_commit dies on the
+      // non-interactive confirmation), which is how a campaign once ended with
+      // 282 dirty files and a corrupted next-sprint seed. The envelope commits.
+      const commitNote = this.commitMilestoneWork(campaign, milestone);
       milestone.status = "green";
       milestone.resultExcerpt = output.slice(-500);
       const isLast = campaign.currentMilestone >= campaign.milestones.length - 1;
       if (isLast) {
+        // Coverage gate: "done" is measured against the GDD, not against the
+        // ladder having run out. When scheduled items are missing, a
+        // remediation sprint is appended instead of delivering short.
+        const remediation = await this.buildCoverageRemediation(campaign);
+        if (remediation) {
+          milestone.status = "green";
+          campaign.milestones.push(remediation);
+          campaign.currentMilestone += 1;
+          this.persist(campaign);
+          await this.tell(
+            campaign,
+            `✅ ${milestone.title} — green.${commitNote}\n⚠️ Coverage audit against the GDD found gaps — appending **${remediation.title}** before delivery.`,
+          );
+          const id = campaign.id;
+          setTimeout(() => {
+            const fresh = this.storage.get(id);
+            if (!fresh || fresh.state !== "executing") return;
+            this.submitCurrentMilestone(fresh);
+          }, 0);
+          return;
+        }
         campaign.state = "done";
         this.persist(campaign);
-        await this.tell(campaign, this.buildDeliveryReport(campaign));
+        await this.tell(campaign, `${this.buildDeliveryReport(campaign)}${commitNote}`);
         return;
       }
       campaign.currentMilestone += 1;
       this.persist(campaign);
       await this.tell(
         campaign,
-        `✅ ${milestone.title} — green. Sprint ${campaign.currentMilestone + 1}/${campaign.milestones.length} starts now.`,
+        `✅ ${milestone.title} — green.${commitNote} Sprint ${campaign.currentMilestone + 1}/${campaign.milestones.length} starts now.`,
       );
       // Defer out of the event handler: submit() fires task:created and the
       // next sprint must not re-enter this handler mid-emit.
@@ -486,12 +705,12 @@ export class CampaignManager {
       // person it was told not to need. Nudge with the mandate repeated.
       milestone.prompt +=
         "\n\nREMINDER: this is an autonomous campaign sprint — do not ask the user questions; make the strong choice and continue.";
-      this.submitCurrentMilestone(campaign);
+      this.submitCurrentMilestone(campaign, { countAttempt: opts.countAttempt });
       return;
     }
     if (canRetry) {
       milestone.prompt += `\n\nThe previous attempt ended ${status}: ${output.slice(0, 400)}. Fix the root cause, do not repeat it.`;
-      this.submitCurrentMilestone(campaign);
+      this.submitCurrentMilestone(campaign, { countAttempt: opts.countAttempt });
       return;
     }
 
@@ -501,13 +720,107 @@ export class CampaignManager {
     this.persist(campaign);
     await this.tell(
       campaign,
-      `❌ Campaign stopped: **${milestone.title}** ended ${status} after ${milestone.attempts} attempts.\nCause: ${campaign.lastError}\nThe repo holds everything up to the last green sprint.`,
+      `❌ Campaign stopped: **${milestone.title}** ended ${status} after ${milestone.attempts} attempts.\nCause: ${campaign.lastError}\nReply **kampanya devam** to revive it with a fresh attempt budget.`,
     );
   }
 
   // ===========================================================================
   // INTERNAL — helpers
   // ===========================================================================
+
+  /**
+   * Commit whatever the sprint left in the working tree, as the milestone's
+   * closing commit. Returns a short note for the chat message ("" when the
+   * tree was already clean or the project is not a git repo). Never throws:
+   * a failed commit is reported loudly but does not wedge the ladder — the
+   * defect being fixed is silent accumulation, and a warning in the channel
+   * is the opposite of silent.
+   */
+  private commitMilestoneWork(campaign: Campaign, milestone: CampaignMilestone): string {
+    const git = (args: string[], timeoutMs = 120_000): string =>
+      execFileSync("git", ["-C", this.projectRoot, ...args], {
+        encoding: "utf8",
+        timeout: timeoutMs,
+        maxBuffer: 16 * 1024 * 1024,
+      });
+    try {
+      git(["rev-parse", "--is-inside-work-tree"], 10_000);
+    } catch {
+      return "";
+    }
+    try {
+      const dirty = git(["status", "--porcelain"], 60_000).trim();
+      if (dirty === "") return "";
+      git(["add", "-A"]);
+      git([
+        "commit",
+        "-m",
+        `campaign: ${milestone.title} — milestone green`,
+        "-m",
+        `Campaign ${campaign.id}, sprint ${campaign.currentMilestone + 1}/${campaign.milestones.length}. Working tree committed by the campaign envelope at milestone close.`,
+      ]);
+      const hash = git(["rev-parse", "--short", "HEAD"], 10_000).trim();
+      const fileCount = dirty.split("\n").length;
+      getLoggerSafe().info("Campaign milestone work committed", {
+        id: campaign.id,
+        milestone: milestone.id,
+        hash,
+        files: fileCount,
+      });
+      return ` Committed ${fileCount} file(s) as \`${hash}\`.`;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      getLoggerSafe().warn("Campaign milestone commit failed — tree left dirty", {
+        id: campaign.id,
+        milestone: milestone.id,
+        error: message,
+      });
+      return ` ⚠️ Could not commit the sprint's working tree (${message.slice(0, 120)}) — commit it manually before the next sprint.`;
+    }
+  }
+
+  /** How many coverage-remediation sprints may be appended before delivering as-is. */
+  private static readonly MAX_COVERAGE_ROUNDS = 2;
+
+  /**
+   * Audit the finished ladder against the GDD; return a remediation milestone
+   * when scheduled items are missing, undefined when coverage holds — or when
+   * the audit itself cannot run (no GDD on disk, provider down, round budget
+   * spent). A failed audit never wedges delivery; it is logged and skipped.
+   */
+  private async buildCoverageRemediation(campaign: Campaign): Promise<CampaignMilestone | undefined> {
+    const priorRounds = campaign.milestones.filter((m) => m.id.startsWith("mcov")).length;
+    if (priorRounds >= CampaignManager.MAX_COVERAGE_ROUNDS) return undefined;
+    const gddText =
+      campaign.gddText ?? (campaign.gddPath ? readGddFile(this.projectRoot, campaign.gddPath) : undefined);
+    if (!gddText) return undefined;
+    try {
+      const missing = await this.planner.auditCoverage(gddText, campaign.milestones);
+      if (missing.length === 0) return undefined;
+      const gddRef = campaign.gddPath ?? "the GDD";
+      return {
+        id: `mcov${priorRounds + 1}`,
+        title: `Coverage completion ${priorRounds + 1} — close the GDD gaps`,
+        prompt: [
+          `The build's milestone ladder finished, but auditing it against ${gddRef} found these scheduled items undelivered:`,
+          ...missing.map((item) => `- ${item}`),
+          "",
+          `Implement each item exactly as ${gddRef} specifies it, following the project's existing module pattern.`,
+          "Verification bar per item: headless compile green, the relevant PlayMode tests green and unfiltered, and a bound visual where the item is a game element.",
+          "Commit per logical unit. End with a summary naming each item and the evidence it is done.",
+          "This is an autonomous campaign sprint — do not ask the user questions; make the strong choice and continue.",
+        ].join("\n"),
+        status: "pending",
+        attempts: 0,
+      };
+    } catch (err) {
+      getLoggerSafe().warn("Coverage audit failed — delivering without it", {
+        id: campaign.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return undefined;
+    }
+  }
 
   private buildDeliveryReport(campaign: Campaign): string {
     const lines = [

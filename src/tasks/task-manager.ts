@@ -248,6 +248,27 @@ export class TaskManager extends EventEmitter {
     return this.storage.load(taskId);
   }
 
+  /**
+   * The newest task in the retry/resume lineage rooted at `taskId` (the task
+   * itself when nothing retried it). Long-lived observers such as the campaign
+   * layer track work through this instead of a single task id, because every
+   * retry path mints a new id with `parentId` pointing back.
+   */
+  findLatestLineageTask(taskId: TaskId): Task | null {
+    return this.storage.findLatestDescendant(taskId);
+  }
+
+  /** True when `taskId` is `rootId` itself or a retry/resume descendant of it. */
+  isInLineage(rootId: TaskId, taskId: TaskId): boolean {
+    if (rootId === taskId) return true;
+    return this.storage.lineageContains(rootId, taskId);
+  }
+
+  /** Stable root id of the retry lineage `taskId` belongs to (itself when never retried). */
+  findLineageRootId(taskId: TaskId): TaskId | null {
+    return this.storage.findLineageRootId(taskId);
+  }
+
   retryTask(taskId: TaskId): Task | null {
     const task = this.storage.load(taskId);
     if (!task || ACTIVE_STATUSES.has(task.status) || task.status === TaskStatus.completed) {

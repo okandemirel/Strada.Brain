@@ -15,11 +15,20 @@ import { getLoggerSafe } from "../utils/logger.js";
 import { milestoneLadderSchema } from "./types.js";
 import type { MilestoneLadder } from "./types.js";
 
-/** GDDs run to megabytes; the ladder is shaped by the design's structure, not
- * its prose. First + last chunks keep the intro/pillars and the schedules
- * (element tables live near the end, measured in the PixelFlow GDD). */
-const GDD_HEAD_CHARS = 10_000;
-const GDD_TAIL_CHARS = 6_000;
+/**
+ * GDD windowing. The old 10k-head + 6k-tail window elided the MIDDLE of a
+ * large GDD — which is where the element schedules, level structure, and
+ * system tables actually live (the PixelFlow requirements summary put its
+ * whole element table at 40–60% depth). A ladder planned from a document
+ * whose schedule was cut out cannot cover the game. Now: documents up to
+ * FULL_CHARS go through whole; larger ones keep a big head and tail plus a
+ * structural outline of the middle (every heading and table row), so nothing
+ * the GDD schedules is invisible to the planner.
+ */
+const GDD_FULL_CHARS = 150_000;
+const GDD_HEAD_CHARS = 50_000;
+const GDD_TAIL_CHARS = 30_000;
+const GDD_OUTLINE_CHARS = 20_000;
 
 const PLANNER_SYSTEM = `You are a campaign planner for an autonomous game-development system.
 
@@ -37,11 +46,25 @@ Rules:
 Respond ONLY with JSON:
 {"milestones": [{"title": "Sprint A — ...", "prompt": "..."}, ...]}`;
 
-function windowGdd(gddText: string): string {
-  if (gddText.length <= GDD_HEAD_CHARS + GDD_TAIL_CHARS + 200) return gddText;
+export function windowGdd(gddText: string): string {
+  if (gddText.length <= GDD_FULL_CHARS) return gddText;
   const head = gddText.slice(0, GDD_HEAD_CHARS);
   const tail = gddText.slice(-GDD_TAIL_CHARS);
-  return `${head}\n\n[...${gddText.length - GDD_HEAD_CHARS - GDD_TAIL_CHARS} chars elided...]\n\n${tail}`;
+  const middle = gddText.slice(GDD_HEAD_CHARS, -GDD_TAIL_CHARS);
+  // Structural skeleton of the elided middle: headings and table rows carry
+  // the schedules; prose is what gets dropped.
+  const outline = middle
+    .split("\n")
+    .filter((line) => /^\s*(#{1,6}\s|\|)/.test(line))
+    .join("\n")
+    .slice(0, GDD_OUTLINE_CHARS);
+  return [
+    head,
+    `\n[... middle prose elided; its full structural outline (every heading and table row) follows ...]\n`,
+    outline,
+    `\n[... end of middle outline ...]\n`,
+    tail,
+  ].join("\n");
 }
 
 export class CampaignPlanner {
@@ -63,6 +86,27 @@ export class CampaignPlanner {
       `<gdd>\n${windowGdd(gddText)}\n</gdd>\n\n` +
       `Produce the milestone ladder for this game.`;
 
+    // One transient failure (provider blink, malformed reply) used to fail
+    // the whole campaign terminally at its very first step. One retry.
+    let lastError: unknown;
+    for (let round = 0; round < 2; round++) {
+      try {
+        return await this.planOnce(userMessage);
+      } catch (err) {
+        lastError = err;
+        getLoggerSafe().warn("Campaign planning round failed", {
+          round: round + 1,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error(String(lastError));
+  }
+
+  private async planOnce(userMessage: string): Promise<MilestoneLadder> {
+    if (!this.provider) {
+      throw new Error("campaign planning requires an LLM provider");
+    }
     const response = await streamOrChatText(this.provider, PLANNER_SYSTEM, userMessage);
     const text = response.text ?? "";
     const jsonText = extractJsonObject(text);
@@ -86,7 +130,53 @@ export class CampaignPlanner {
     }
     return validated.data;
   }
+
+  /**
+   * Post-ladder coverage audit: does the finished ladder actually cover what
+   * the GDD schedules? "Done" used to mean nothing more than "the last
+   * milestone's task completed" — the ladder itself was a one-shot guess from
+   * a truncated document, and nothing ever compared it back to the design.
+   * Returns the concrete GDD-scheduled items no milestone delivered (empty
+   * when coverage holds). Throws on provider outage — the CALLER decides that
+   * a failed audit must not wedge delivery.
+   */
+  async auditCoverage(
+    gddText: string,
+    milestones: ReadonlyArray<{ title: string; resultExcerpt?: string }>,
+  ): Promise<string[]> {
+    if (!this.provider) {
+      throw new Error("coverage audit requires an LLM provider");
+    }
+    const ladderSummary = milestones
+      .map((m, i) => `${i + 1}. ${m.title}${m.resultExcerpt ? `\n   Result: ${m.resultExcerpt.slice(0, 300)}` : ""}`)
+      .join("\n");
+    const userMessage =
+      `<gdd>\n${windowGdd(gddText)}\n</gdd>\n\n` +
+      `<completed-ladder>\n${ladderSummary}\n</completed-ladder>\n\n` +
+      `List the concrete items the GDD schedules (mechanics, game elements, blockers, set-pieces, screens, systems) that NO milestone above covered or delivered. Respond ONLY with JSON: {"missing": ["<item>: <one-line what is missing>", ...]} — an empty array when the ladder covers the GDD.`;
+
+    const response = await streamOrChatText(this.provider, COVERAGE_SYSTEM, userMessage);
+    const jsonText = extractJsonObject(response.text ?? "");
+    if (!jsonText) throw new Error("coverage audit returned no JSON object");
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(jsonText);
+    } catch {
+      throw new Error("coverage audit returned malformed JSON");
+    }
+    const validated = coverageResultSchema.safeParse(parsed);
+    if (!validated.success) throw new Error("coverage audit output failed schema validation");
+    return validated.data.missing;
+  }
 }
+
+const COVERAGE_SYSTEM = `You audit whether a completed milestone ladder covers everything its game design document schedules.
+Be strict about scheduled content (element tables, mechanics lists, screens, win/lose rules) and lenient about aspiration (KPIs, live-ops roadmaps, marketing).
+Only report an item as missing when no milestone's scope or result plausibly includes it. Respond ONLY with the requested JSON.`;
+
+const coverageResultSchema = z.object({
+  missing: z.array(z.string().min(1).max(300)).max(30),
+});
 
 /** Tolerant extraction: find the outermost balanced {...} in the reply. */
 function extractJsonObject(text: string): string | undefined {

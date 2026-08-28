@@ -232,7 +232,10 @@ DONE`,
     expect(plan.gate).toContain("REPLAN REQUIRED");
   });
 
-  it("marks build check as not_applicable when buildToolsAvailable is false", () => {
+  it("hard-blocks completion when build tools are unavailable but verification debt is outstanding", () => {
+    // The old behavior collapsed missing tooling to not_applicable, which let
+    // a disconnected Unity bridge delete the build gate and approve unverified
+    // compilable changes (how PixelFlow milestones went green on UNKNOWN).
     const plan = planVerifierPipeline({
       prompt: "fix the level editor",
       draft: "I updated the ArrowLevelEditorWindow.cs file to fix the issue.",
@@ -259,11 +262,59 @@ DONE`,
     });
 
     const buildCheck = plan.checks.find(c => c.name === "build");
-    expect(buildCheck?.status).toBe("not_applicable");
-    expect(buildCheck?.gate).toBeUndefined();
+    expect(buildCheck?.status).toBe("issues");
+    expect(buildCheck?.gate).toContain("VERIFICATION TOOLING UNAVAILABLE");
+    expect(plan.initialDecision).toBe("continue");
+  });
 
-    const targetedCheck = plan.checks.find(c => c.name === "targeted-repro");
-    expect(targetedCheck).toBeUndefined();
+  it("stays not_applicable without verification debt, and lets an honest blocked report through", () => {
+    const base = {
+      prompt: "fix the level editor",
+      state: createState({
+        stepResults: [
+          { toolName: "file_read", success: true, summary: "Read file", timestamp: Date.now() - 300 },
+        ],
+      }),
+      task: IMPLEMENTATION_TASK,
+      conformanceGate: null,
+      logEntries: [],
+      chatId: "test-build-tools-2",
+      taskStartedAtMs: Date.now() - 1000,
+      buildToolsAvailable: false,
+    } as const;
+
+    // No compilable debt → genuinely nothing to verify.
+    const noDebt = planVerifierPipeline({
+      ...base,
+      draft: "Investigated and documented the findings.",
+      verificationState: {
+        pendingFiles: new Set<string>(),
+        touchedFiles: new Set<string>(),
+        hasCompilableChanges: false,
+        lastBuildOk: null,
+        lastVerificationAt: null,
+      },
+      buildVerificationGate: null,
+    });
+    expect(noDebt.checks.find(c => c.name === "build")?.status).toBe("not_applicable");
+
+    // Debt + an honest terminal failure report → recorded as issues, but no
+    // gate: the honest blocked report is the accepted exit.
+    const honest = planVerifierPipeline({
+      ...base,
+      draft: "Blocked: the Unity bridge is down, so the compile could not run. The change to Foo.cs remains unverified.",
+      verificationState: {
+        pendingFiles: new Set(["Assets/Foo.cs"]),
+        touchedFiles: new Set(["Assets/Foo.cs"]),
+        hasCompilableChanges: true,
+        lastBuildOk: false,
+        lastVerificationAt: null,
+      },
+      buildVerificationGate: "[VERIFICATION REQUIRED] Run build",
+    });
+    const honestBuild = honest.checks.find(c => c.name === "build");
+    expect(honestBuild?.status).toBe("issues");
+    expect(honestBuild?.gate).toBeUndefined();
   });
 
   it("exposes buildToolsAvailable on the plan when explicitly set", () => {

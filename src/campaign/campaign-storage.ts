@@ -154,6 +154,16 @@ export class CampaignStorage {
     return rows.map(rowToCampaign);
   }
 
+  /** Newest failed/cancelled campaign on this chat — the "kampanya devam" target. */
+  findLatestRevivable(chatId: string): Campaign | undefined {
+    const row = this.db
+      .prepare(
+        "SELECT * FROM campaigns WHERE chat_id = ? AND state IN ('failed', 'cancelled') ORDER BY updated_at DESC LIMIT 1",
+      )
+      .get(chatId) as CampaignRow | undefined;
+    return row ? rowToCampaign(row) : undefined;
+  }
+
   /** The campaign awaiting an approval reply on this conversation, if any. */
   findAwaitingApproval(chatId: string): Campaign | undefined {
     const row = this.db

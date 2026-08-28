@@ -427,7 +427,13 @@ export class LearningPipeline {
     // Flush immediately to ensure trajectory exists in DB for any follow-up operations
     this.storage.flush();
 
-    if (params.outcome.success && !params.outcome.hadErrors) {
+    // A verdict must name what it measured. The route-level caller reports
+    // success as "routeMessage didn't throw" and fires BEFORE the background
+    // run, with zero steps — which minted 213 byte-identical "Verified Clean
+    // Success, Steps: 0, score=0.88" notes on one campaign (PixelFlow,
+    // 2026-08-27) and reinforced pure noise. An empty-step trajectory carries
+    // no evidence of work; it earns no verdict.
+    if (params.outcome.success && !params.outcome.hadErrors && params.steps.length > 0) {
       this.autoGenerateVerdict(trajectory);
     }
   }

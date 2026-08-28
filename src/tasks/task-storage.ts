@@ -117,6 +117,8 @@ export class TaskStorage {
     configureSqlitePragmas(this.db, "tasks");
     this.db.exec(SCHEMA_SQL);
     this.migrateLegacySchema();
+    // After migration so a legacy table has the column before the index lands.
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_id)");
     this.prepareStatements();
   }
 
@@ -231,6 +233,36 @@ export class TaskStorage {
     const row = this.getStmt("findLatestByGoalRoot").get(goalRootId) as TaskRow | undefined;
     if (!row) return null;
     return this.rowToTask(row, this.getProgress(row.id));
+  }
+
+  /**
+   * Newest task in the parent_id lineage rooted at `rootId` (the root itself
+   * when nothing ever retried it). Every retry/resume/replan path submits with
+   * `parentId` set, so this is how a long-lived observer (the campaign layer)
+   * follows work across the new task ids those paths mint.
+   */
+  findLatestDescendant(rootId: TaskId): Task | null {
+    this.ensureConnection();
+    const row = this.getStmt("findLatestDescendant").get(rootId) as TaskRow | undefined;
+    if (!row) return null;
+    return this.rowToTask(row, this.getProgress(row.id));
+  }
+
+  /** True when `taskId` is `rootId` or a parent_id descendant of it. */
+  lineageContains(rootId: TaskId, taskId: TaskId): boolean {
+    this.ensureConnection();
+    return this.getStmt("lineageContains").get(rootId, taskId) !== undefined;
+  }
+
+  /**
+   * The root of the retry lineage `taskId` belongs to — the ancestor with no
+   * parent (the task itself when it was never a retry). Stable across every
+   * retry round, which is what makes it usable as a retry-budget key.
+   */
+  findLineageRootId(taskId: TaskId): TaskId | null {
+    this.ensureConnection();
+    const row = this.getStmt("findLineageRoot").get(taskId) as { id: string } | undefined;
+    return row ? (row.id as TaskId) : null;
   }
 
   // ─── Private ────────────────────────────────────────────────────────────────
@@ -381,6 +413,31 @@ export class TaskStorage {
       listRecoverable: `SELECT * FROM tasks WHERE status IN ('blocked', 'failed', 'cancelled') ORDER BY updated_at DESC, created_at DESC LIMIT ?`,
       loadIncomplete: `SELECT * FROM tasks WHERE status IN ('pending', 'planning', 'executing', 'paused', 'waiting_for_input') ORDER BY updated_at DESC, created_at DESC`,
       findLatestByGoalRoot: `SELECT * FROM tasks WHERE goal_root_id = ? ORDER BY updated_at DESC, created_at DESC LIMIT 1`,
+      findLatestDescendant: `
+        WITH RECURSIVE lineage(id) AS (
+          SELECT id FROM tasks WHERE id = ?
+          UNION
+          SELECT t.id FROM tasks t JOIN lineage l ON t.parent_id = l.id
+        )
+        SELECT * FROM tasks WHERE id IN (SELECT id FROM lineage)
+        ORDER BY created_at DESC, updated_at DESC LIMIT 1
+      `,
+      lineageContains: `
+        WITH RECURSIVE lineage(id) AS (
+          SELECT id FROM tasks WHERE id = ?
+          UNION
+          SELECT t.id FROM tasks t JOIN lineage l ON t.parent_id = l.id
+        )
+        SELECT 1 FROM lineage WHERE id = ? LIMIT 1
+      `,
+      findLineageRoot: `
+        WITH RECURSIVE up(id, parent_id) AS (
+          SELECT id, parent_id FROM tasks WHERE id = ?
+          UNION
+          SELECT t.id, t.parent_id FROM tasks t JOIN up u ON t.id = u.parent_id
+        )
+        SELECT id FROM up WHERE parent_id IS NULL LIMIT 1
+      `,
       insertProgress: `INSERT INTO task_progress (task_id, timestamp, message) VALUES (?, ?, ?)`,
       touchTask: `UPDATE tasks SET updated_at = ? WHERE id = ?`,
       getProgress: `SELECT * FROM task_progress WHERE task_id = ? ORDER BY timestamp ASC`,

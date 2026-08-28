@@ -1654,7 +1654,13 @@ export class BackgroundExecutor {
       } catch { /* visibility best-effort */ }
       return false;
     }
-    const key = `${task.chatId}:${task.prompt.length}:${task.prompt.slice(0, 64)}`;
+    // Key on the retry lineage's ROOT id, which is stable across rounds. The
+    // old key hashed the prompt — but every retry resubmits with a replay
+    // preface prepended, so the key changed each round, the attempt counter
+    // reset to 0 forever, and the backoff never grew past its floor. Measured
+    // 2026-08-27 (PixelFlow): a fresh full decomposition every 30–60s for
+    // twenty minutes, sixteen plan files deep, cap never reached.
+    const key = `mission:${this.lineageRootTaskId(task)}`;
     const attempt = this.missionRetries.get(key) ?? 0;
     const budgetExceeded = this._unifiedBudgetManager?.isGlobalExceeded() ?? false;
     const decision = decideMissionKeepAlive(attempt, { budgetExceeded });

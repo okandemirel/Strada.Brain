@@ -87,13 +87,17 @@ export function planVerifierPipeline(params: {
 
   const checks: VerifierCheck[] = [];
   const buildCheck = params.buildToolsAvailable === false
-    ? { name: "build" as const, status: "not_applicable" as const, summary: "Build tools unavailable in this environment." }
+    ? buildUnavailableBuildToolsCheck(params.buildVerificationGate, evidence)
     : buildBuildVerifierCheck(params.buildVerificationGate);
   if (buildCheck) {
     checks.push(buildCheck);
   }
 
-  const targetedCheck = params.buildToolsAvailable === false
+  // Missing tooling used to skip this check entirely, which let a draft claim
+  // completion over unreproduced failures precisely when nothing could have
+  // verified it. Keep it active; the honest terminal failure report remains the
+  // one accepted way out when the tooling truly cannot come back.
+  const targetedCheck = params.buildToolsAvailable === false && evidence.hasTerminalFailureReport
     ? null
     : buildTargetedReproVerifierCheck(evidence);
   if (targetedCheck) {
@@ -336,6 +340,53 @@ export function isTerminalFailureReport(text: string | null | undefined): boolea
   const claimsSuccess = successPatterns.some((pattern) => pattern.test(normalized));
   const keepsWorking = continuationPatterns.some((pattern) => pattern.test(normalized));
   return mentionsFailure && !claimsSuccess && !keepsWorking;
+}
+
+/**
+ * Build tools are unavailable but the run still owes a verification pass.
+ *
+ * This used to collapse to `not_applicable`, which meant a disconnected Unity
+ * bridge silently deleted the build gate: compilable changes sailed through to
+ * "approve" unverified, milestones went green on drafts nobody compiled, and the
+ * acceptance record said UNKNOWN. Absence of the tool is not absence of the
+ * debt. With debt outstanding this check now hard-blocks; the only accepted
+ * exits are restoring the tooling or an honest terminal failure report.
+ */
+function buildUnavailableBuildToolsCheck(
+  gate: string | null,
+  evidence: VerifierPipelineEvidence,
+): VerifierCheck {
+  if (gate === null) {
+    return {
+      name: "build",
+      status: "not_applicable",
+      summary: "Build tools unavailable, and no compilable verification debt is outstanding.",
+    };
+  }
+  if (evidence.hasTerminalFailureReport) {
+    return {
+      name: "build",
+      status: "issues",
+      summary: "Compilable changes are unverified (build tools unavailable); the draft honestly reports the blockage.",
+    };
+  }
+  return {
+    name: "build",
+    status: "issues",
+    summary: "Compilable changes exist but the build/verification tooling is unavailable — completion cannot be verified.",
+    gate: [
+      "[VERIFICATION TOOLING UNAVAILABLE] You changed compilable code, but the build/verification tools",
+      "(Unity bridge, compile/test runners) are not available in this environment.",
+      "",
+      "You may NOT declare this work complete unverified. Do one of the following:",
+      "1. Restore the verification path — reconnect the Unity bridge / bring the compile-status,",
+      "   PlayMode-test, or equivalent verification tool back, then run it and report its result.",
+      "2. If the tooling genuinely cannot be restored from here, STOP and report the task as blocked:",
+      "   state plainly which changes remain unverified and why verification was impossible.",
+      "",
+      "Do not restate completion without one of these. An unverified draft is not a deliverable.",
+    ].join("\n"),
+  };
 }
 
 function buildBuildVerifierCheck(gate: string | null): VerifierCheck | null {

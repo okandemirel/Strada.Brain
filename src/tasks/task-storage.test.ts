@@ -38,6 +38,25 @@ describe("TaskStorage", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
+  it("walks retry lineages: latest descendant, containment, stable root", () => {
+    const root = makeTask(TaskStatus.failed, { createdAt: 1000, updatedAt: 1000 });
+    const retry1 = makeTask(TaskStatus.failed, { parentId: root.id, createdAt: 2000, updatedAt: 2000 });
+    const retry2 = makeTask(TaskStatus.executing, { parentId: retry1.id, createdAt: 3000, updatedAt: 3000 });
+    const unrelated = makeTask(TaskStatus.executing, { createdAt: 4000, updatedAt: 4000 });
+    for (const t of [root, retry1, retry2, unrelated]) storage.save(t);
+
+    expect(storage.findLatestDescendant(root.id)?.id).toBe(retry2.id);
+    expect(storage.findLatestDescendant(unrelated.id)?.id).toBe(unrelated.id);
+
+    expect(storage.lineageContains(root.id, retry2.id)).toBe(true);
+    expect(storage.lineageContains(root.id, root.id)).toBe(true);
+    expect(storage.lineageContains(root.id, unrelated.id)).toBe(false);
+    expect(storage.lineageContains(retry1.id, root.id)).toBe(false); // no upward match
+
+    expect(storage.findLineageRootId(retry2.id)).toBe(root.id);
+    expect(storage.findLineageRootId(root.id)).toBe(root.id);
+  });
+
   it("includes waiting_for_input tasks in active task queries", () => {
     const waitingTask = makeTask(TaskStatus.waiting_for_input);
     storage.save(waitingTask);

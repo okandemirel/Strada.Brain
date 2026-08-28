@@ -342,7 +342,7 @@ describe("Autonomy Blocker Scenario — Game .cs File Editing", () => {
       ).not.toBeNull();
     });
 
-    it("C# editing without dotnet_build does not produce blocking gate", () => {
+    it("C# editing without build tools hard-blocks instead of silently passing", () => {
       const selfVerification = new SelfVerification();
 
       // Agent edits game C# files — no dotnet_build available
@@ -378,17 +378,14 @@ describe("Autonomy Blocker Scenario — Game .cs File Editing", () => {
         buildToolsAvailable: false, // no dotnet_build in tool list
       });
 
-      // Build check should be not_applicable
+      // Compilable changes with outstanding verification debt and no tooling
+      // must HARD-BLOCK. The old contract here (not_applicable, no gates) was
+      // the false pass that let unverified milestones go green when the Unity
+      // bridge was down.
       const buildCheck = plan.checks.find(c => c.name === "build");
-      expect(buildCheck?.status).toBe("not_applicable");
-
-      // Targeted-repro check should be skipped entirely
-      const targetedCheck = plan.checks.find(c => c.name === "targeted-repro");
-      expect(targetedCheck).toBeUndefined();
-
-      // No gating checks should block
-      const gatingChecks = plan.checks.filter(c => c.gate);
-      expect(gatingChecks).toHaveLength(0);
+      expect(buildCheck?.status).toBe("issues");
+      expect(buildCheck?.gate).toContain("VERIFICATION TOOLING UNAVAILABLE");
+      expect(plan.initialDecision).toBe("continue");
 
       // buildToolsAvailable should be exposed on the plan
       expect(plan.buildToolsAvailable).toBe(false);
