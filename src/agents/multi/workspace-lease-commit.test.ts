@@ -261,10 +261,14 @@ describe("workspace lease commit", () => {
 });
 
 describe("orphaned lease salvage at construction", () => {
-  it("recovers a crashed predecessor's new files, quarantines conflicts, removes the orphan", async () => {
+  it("quarantines a crashed predecessor's work without writing into the project, removes the orphan", async () => {
     // A SIGKILLed process skips release() entirely — measured in production,
     // full project copies with hours of agent work were stranded under the
     // lease root until an external script salvaged them by hand.
+    //
+    // Salvage runs with NO seed maps, so it cannot tell agent work from files
+    // the user deliberately deleted after the crash. Restoring "missing"
+    // files resurrected deletions; the contract is now quarantine-only.
     const orphan = join(leaseRoot, "task-deadbeef-cafe-4bad-8fee-1234567890ab");
     mkdirSync(join(orphan, "Assets", "Scripts"), { recursive: true });
     writeFileSync(join(orphan, "Assets", "Scripts", "NewWork.cs"), "new agent work", "utf8");
@@ -277,9 +281,13 @@ describe("orphaned lease salvage at construction", () => {
       expect(existsSync(orphan)).toBe(false);
     }, { timeout: 5000 });
 
-    expect(readFileSync(join(source, "Assets", "Scripts", "NewWork.cs"), "utf8")).toBe("new agent work");
+    // Nothing was written into the project: the missing file was NOT restored,
+    // the user's evolved file was untouched.
+    expect(existsSync(join(source, "Assets", "Scripts", "NewWork.cs"))).toBe(false);
     expect(readFileSync(join(source, "Assets", "Scripts", "Existing.cs"), "utf8")).toBe("user evolved this");
+    // Both non-identical files were preserved in quarantine for review.
     const conflictDir = join(source, ".strada", "lease-conflicts", `orphan-${"task-deadbeef-cafe-4bad-8fee-1234567890ab".slice(0, 8)}`);
+    expect(readFileSync(join(conflictDir, "Assets", "Scripts", "NewWork.cs"), "utf8")).toBe("new agent work");
     expect(readFileSync(join(conflictDir, "Assets", "Scripts", "Existing.cs"), "utf8")).toBe("stale agent copy");
 
     // The salvaging manager must remain fully usable afterwards.

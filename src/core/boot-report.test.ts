@@ -284,7 +284,7 @@ describe("boot report", () => {
       });
 
       expect(warnings).toContain(
-        "RAG enabled but no embedding provider available — using hash fallback embeddings",
+        "RAG enabled but no embedding provider available — using hash fallback embeddings (retrieval is non-semantic)",
       );
     });
 
@@ -300,7 +300,7 @@ describe("boot report", () => {
       });
 
       expect(warnings).not.toContain(
-        "RAG enabled but no embedding provider available — using hash fallback embeddings",
+        "RAG enabled but no embedding provider available — using hash fallback embeddings (retrieval is non-semantic)",
       );
     });
 
@@ -360,7 +360,7 @@ describe("boot report", () => {
         "Streaming enabled but primary provider may not support it — will fall back to non-streaming",
       );
       expect(report.startupNotices).toContain(
-        "RAG enabled but no embedding provider available — using hash fallback embeddings",
+        "RAG enabled but no embedding provider available — using hash fallback embeddings (retrieval is non-semantic)",
       );
     });
   });

@@ -30,6 +30,12 @@ by unit/integration tests plus live observation:
 | 2026-08-26 | Rolling checkpoint persisted per background epoch — crash loss bounded to one epoch (previously: no writer for the declared `provider_failed` stage, recovery message over-promised) | spine + orchestrator port |
 | 2026-08-26 | Vault lifecycle races closed: `startWatch` TOCTOU double-check, init idempotence while watching, dashboard DELETE-during-init watcher orphan guard, per-vault vector stores (shared-store `clear()` aliasing), register-before-watch ordering | vault/dashboard/core suites |
 
+> **Deployment-fact corrections (2026-08-28):** the column notes below citing
+> this deployment's `.env` are stale on three points. Current reality:
+> `PROVIDER_CHAIN="openai,opencode"` (not `openai` alone), **no** `KIMI_API_KEY`
+> is present (it was removed, not "possibly expired"), and `DEFAULT_CHANNEL="web"`.
+> Reason about degradation from the live `.env`, not from the 2026-06-02 rows.
+
 Known open items after this round:
 
 - Retrieval consolidation plan ([specs/2026-08-23](specs/2026-08-23-retrieval-consolidation-plan.md)) remains Proposed.

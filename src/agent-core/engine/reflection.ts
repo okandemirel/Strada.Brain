@@ -422,7 +422,14 @@ export async function portDispatchEndTurn(
   switch (action.flow) {
     case "done": {
       const safe = await emitVisibleBoundary(deps, chatId, runCtx.session, action.visibleText);
-      return { agentState: action.newState, finalText: safe.text };
+      return {
+        agentState: action.newState,
+        finalText: safe.text,
+        // Thread an explicit failed settlement (terminal_failure boundary)
+        // through to the spine — otherwise the run defaults to "completed"
+        // and an honest failure report reads as success downstream.
+        ...(action.status === "failed" ? { terminalStatus: "failed" as const } : {}),
+      };
     }
     case "blocked": {
       const safe = await emitVisibleBoundary(deps, chatId, runCtx.session, action.visibleText);

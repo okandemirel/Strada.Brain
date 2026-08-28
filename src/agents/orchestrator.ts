@@ -4709,10 +4709,17 @@ export class Orchestrator {
             activeToolCall.name,
             activeToolCall.input,
           );
-          if (!confirmed) {
+          if (confirmed !== "approved") {
+            // Tell the model the truth: an unreachable confirmer (channel
+            // without interactivity, or a timed-out web prompt with no client
+            // attached) is not a human refusal, and the old "cancelled by
+            // user" text was both false and non-retryable guidance.
             return {
               toolCallId: activeToolCall.id,
-              content: "Operation cancelled by user.",
+              content:
+                confirmed === "denied"
+                  ? "Operation cancelled by user."
+                  : "Confirmation unavailable: no interactive user could be reached to approve this operation. It was NOT rejected — ask again when a user is present, or proceed another way.",
               isError: false,
             };
           }
@@ -4914,7 +4921,7 @@ export class Orchestrator {
     userId: string | undefined,
     toolName: string,
     input: Record<string, unknown>,
-  ): Promise<boolean> {
+  ): Promise<import("./orchestrator-write-gate.js").WriteConfirmationOutcome> {
     return requestWriteConfirmationHelper(this.channel, chatId, userId, toolName, input);
   }
 

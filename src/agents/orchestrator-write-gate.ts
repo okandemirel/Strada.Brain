@@ -10,6 +10,9 @@ import { supportsInteractivity } from "../channels/channel-core.interface.js";
 
 // ─── Functions ────────────────────────────────────────────────────────────────
 
+/** Tri-state so callers can tell a human "No" from "no human was reachable". */
+export type WriteConfirmationOutcome = "approved" | "denied" | "unavailable";
+
 export async function requestWriteConfirmation(
   // Typed as the minimal IChannelSender: the gate relies entirely on the
   // runtime `supportsInteractivity` guard below to widen to the interactive
@@ -20,9 +23,9 @@ export async function requestWriteConfirmation(
   userId: string | undefined,
   toolName: string,
   input: Record<string, unknown>,
-): Promise<boolean> {
+): Promise<WriteConfirmationOutcome> {
   if (!supportsInteractivity(channel)) {
-    return false;
+    return "unavailable";
   }
 
   let question: string;
@@ -68,5 +71,10 @@ export async function requestWriteConfirmation(
     details,
   });
 
-  return response === "Yes";
+  if (response === "Yes") return "approved";
+  // A confirmation that timed out (e.g. the web portal tab was closed, so no
+  // client ever saw the question) is NOT a human saying no — reporting it as
+  // "cancelled by user" was a lie that also read as non-retryable guidance.
+  if (response === "timeout") return "unavailable";
+  return "denied";
 }

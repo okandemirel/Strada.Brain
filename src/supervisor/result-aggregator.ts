@@ -144,6 +144,22 @@ export class ResultAggregator {
             output: `Verification rejected: ${verdict.issues?.join(", ") ?? "no details"}`,
           };
         }
+      } else if (verdict.verdict === "flag_issues" && (verdict.issues?.length ?? 0) > 0) {
+        // Flags used to be dropped on the floor: the node stayed "ok" and the
+        // issues reached nobody — including the "no verifier available" and
+        // "verifier returned prose" cases, which thereby passed as verified.
+        // The node still passes, but the flags travel with its output so
+        // synthesis and any later review see what was never established.
+        const idx = updatedResults.findIndex((result) => result.nodeId === node.nodeId);
+        if (idx !== -1) {
+          const flagged = updatedResults[idx]!;
+          updatedResults[idx] = {
+            ...flagged,
+            output:
+              `${flagged.output}\n\n[VERIFIER FLAGS — unresolved; this node was NOT positively verified]\n` +
+              verdict.issues!.map((issue) => `- ${issue}`).join("\n"),
+          };
+        }
       }
     }
 

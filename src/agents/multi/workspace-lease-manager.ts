@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, cpSync, rmSync, readdirSync, readFileSync, statSync } from "node:fs";
 import type { Dirent } from "node:fs";
-import { resolve, join, dirname, sep, relative } from "node:path";
+import { resolve, join, dirname, sep, relative, basename } from "node:path";
 import os from "node:os";
 import { randomUUID } from "node:crypto";
 import { runProcess } from "../../utils/process-runner.js";
@@ -170,6 +170,10 @@ const BASE_FALLBACK_COPY_EXCLUDES = new Set([
   ".git",
   "node_modules",
   ".strada-memory",
+  // .strada holds lease-conflict quarantines and vault indexes. Without this
+  // exclude, quarantined project mirrors counted against the seeding budget,
+  // were copied into every subsequent lease, and travelled back on commit.
+  ".strada",
   "dist",
   "coverage",
   ".cache",
@@ -178,10 +182,17 @@ const BASE_FALLBACK_COPY_EXCLUDES = new Set([
 const DERIVED_COPY_EXCLUDES = new Set([
   ".git",
   "node_modules",
+  ".strada",
   "coverage",
   ".cache",
   ".vite",
 ]);
+
+/** Lease roots already salvaged by SOME manager in this process. Two managers
+ *  are constructed against the same root (stage-runtime and stage-agents);
+ *  without this, the second lists the first's LIVE leases as orphans and both
+ *  run commitLease + removeDirectory on the same paths concurrently. */
+const SALVAGED_LEASE_ROOTS = new Set<string>();
 
 function slugifySegment(value: string): string {
   const normalized = value.trim().toLowerCase();
@@ -228,9 +239,12 @@ export class WorkspaceLeaseManager {
     // pre-existing entry belongs to a dead process. Snapshot the list now and
     // salvage in the background; anything acquired later creates NEW dirs that
     // are not on this list, so a racing acquire can never be swept.
-    const orphans = this.listOrphanedLeases();
-    if (orphans.length > 0) {
-      void this.salvageOrphanedLeases(orphans);
+    if (!SALVAGED_LEASE_ROOTS.has(this.leaseRoot)) {
+      SALVAGED_LEASE_ROOTS.add(this.leaseRoot);
+      const orphans = this.listOrphanedLeases();
+      if (orphans.length > 0) {
+        void this.salvageOrphanedLeases(orphans);
+      }
     }
   }
 
@@ -272,12 +286,18 @@ export class WorkspaceLeaseManager {
       const orphanPath = join(this.leaseRoot, name);
       if (!existsSync(orphanPath)) continue; // released concurrently somehow
       try {
+        // Without the original seed maps, "missing from the project" cannot be
+        // told apart from "deleted by the user after the crash" — restoring
+        // such files resurrected deliberate deletions. Salvage therefore never
+        // writes into the project: everything non-identical goes to quarantine
+        // for a person to review.
         const result = await this.commitLease(
           this.projectRoot,
           orphanPath,
           new Map<string, number>(),
           new Map<string, number>(),
           join(this.projectRoot, ".strada", "lease-conflicts", `orphan-${name.slice(0, 8)}`),
+          { quarantineOnly: true },
         );
         writtenTotal += result.written.length;
         conflictsTotal += result.conflicts.length;
@@ -533,8 +553,24 @@ export class WorkspaceLeaseManager {
       return;
     }
 
-    const entries = parsePorcelainZ(result.stdout);
-    const applied = entries.slice(0, MAX_UNCOMMITTED_ENTRIES);
+    // Filter through the SAME excludes the seed/commit walks use, BEFORE the
+    // budget is applied. Unfiltered, an untracked Unity Library/ (thousands of
+    // cache paths, byte-sorted ahead of Packages/) spent the whole budget and
+    // the truncation dropped .gitmodules, both submodules and ProjectSettings —
+    // the workspace was seeded with cache and none of the project's code.
+    const entries = parsePorcelainZ(result.stdout).filter(({ path: rel }) => {
+      const firstSegment = rel.split(/[/\\]/, 1)[0];
+      if (!firstSegment) return true;
+      return !this.fallbackExcludes.has(firstSegment) && !DERIVED_COPY_EXCLUDES.has(firstSegment);
+    });
+    // When the budget still bites, code seeds first: git's byte order is not an
+    // importance order. (Stable sort — within a tier, git's order is kept.)
+    const seedPriority = (rel: string): number =>
+      /^(?:\.gitmodules$|Assets[/\\]|Packages[/\\]|ProjectSettings[/\\]|src[/\\])/.test(rel) ? 0 : 1;
+    const ordered = entries.length > MAX_UNCOMMITTED_ENTRIES
+      ? [...entries].sort((a, b) => seedPriority(a.path) - seedPriority(b.path))
+      : entries;
+    const applied = ordered.slice(0, MAX_UNCOMMITTED_ENTRIES);
     if (entries.length > applied.length) {
       // Never silently truncate: a partially seeded workspace that looks whole
       // is worse than one the log says is partial.
@@ -626,7 +662,52 @@ export class WorkspaceLeaseManager {
     }
   }
 
+  /**
+   * Keep commits the agent made inside the worktree reachable.
+   *
+   * A worktree is created --detach, so "commit per logical unit" prompts
+   * produce commits on a detached HEAD that become unreachable the moment the
+   * worktree is removed — a sprint's whole commit history silently garbage-
+   * collectable. The objects already live in the shared store; a branch in the
+   * source repo is all it takes to keep them. Best-effort, never blocks removal.
+   */
+  private async preserveLeaseCommits(workspacePath: string): Promise<void> {
+    try {
+      const unique = await this.commandRunner({
+        command: "git",
+        args: ["-C", workspacePath, "rev-list", "--count", "HEAD", "--not", "--all"],
+        cwd: workspacePath,
+        timeoutMs: this.worktreeTimeoutMs,
+      });
+      if (unique.exitCode !== 0 || Number(unique.stdout.trim() || "0") === 0) return;
+      const head = await this.commandRunner({
+        command: "git",
+        args: ["-C", workspacePath, "rev-parse", "HEAD"],
+        cwd: workspacePath,
+        timeoutMs: this.worktreeTimeoutMs,
+      });
+      const sha = head.stdout.trim();
+      if (head.exitCode !== 0 || !sha) return;
+      const branch = `lease-salvage/${basename(workspacePath)}`;
+      const result = await this.commandRunner({
+        command: "git",
+        args: ["-C", this.projectRoot, "branch", "--force", branch, sha],
+        cwd: this.projectRoot,
+        timeoutMs: this.worktreeTimeoutMs,
+      });
+      if (result.exitCode === 0) {
+        getLoggerSafe().info("Preserved lease commits on a salvage branch", {
+          branch,
+          commits: unique.stdout.trim(),
+        });
+      }
+    } catch {
+      // Preservation is best-effort; removal proceeds regardless.
+    }
+  }
+
   private async removeGitWorktree(workspacePath: string): Promise<void> {
+    await this.preserveLeaseCommits(workspacePath);
     const result = await this.commandRunner({
       command: "git",
       args: ["-C", this.projectRoot, "worktree", "remove", "--force", workspacePath],
@@ -656,6 +737,7 @@ export class WorkspaceLeaseManager {
     leaseSeed: ReadonlyMap<string, number>,
     sourceSeed: ReadonlyMap<string, number>,
     quarantineRoot: string | null,
+    opts?: { quarantineOnly?: boolean },
   ): Promise<WorkspaceCommitResult> {
     const written: string[] = [];
     const conflicts: string[] = [];
@@ -705,6 +787,27 @@ export class WorkspaceLeaseManager {
           const leaseSeeded = leaseSeed.get(rel);
           if (leaseSeeded !== undefined && statSync(full).mtimeMs === leaseSeeded) {
             continue; // present at seed time and never written to — not agent work
+          }
+
+          // Quarantine-only mode (orphan salvage): nothing is written into the
+          // project — non-identical files land in quarantine for review.
+          if (opts?.quarantineOnly) {
+            const salvageTarget = join(sourceRoot, rel);
+            if (existsSync(salvageTarget) && readFileSync(salvageTarget).equals(readFileSync(full))) {
+              continue;
+            }
+            conflicts.push(rel);
+            if (quarantineRoot) {
+              try {
+                const quarantined = join(quarantineRoot, rel);
+                mkdirSync(dirname(quarantined), { recursive: true });
+                cpSync(full, quarantined, { force: true });
+                conflictsQuarantinedUnder ??= quarantineRoot;
+              } catch {
+                // Quarantine failed; the conflict report still stands.
+              }
+            }
+            continue;
           }
 
           // SECOND question: did the USER change it while the agent ran? Their

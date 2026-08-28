@@ -62,10 +62,10 @@ export function parseSupervisorVerificationVerdict(
     }
   }
 
-  if (/\bapprove(?:d)?\b/i.test(trimmed) && !/\breject(?:ed)?\b/i.test(trimmed)) {
-    return { verdict: "approve", verifierProvider };
-  }
-
+  // No free-text approve arm. "I cannot approve this without a build" contains
+  // the word "approve" and no "reject" — the old substring test read that as
+  // an approval. A verifier that did not answer in the requested JSON did not
+  // render a verdict; its prose is a flag, never a pass.
   return {
     verdict: "flag_issues",
     issues: [trimmed.slice(0, 240)],

@@ -118,8 +118,8 @@ export function shouldSynthesize(
 
 export type EndTurnLoopAction =
   | { flow: "continue"; newState: AgentState }
-  | { flow: "done"; visibleText: string; newState: AgentState; status?: "blocked" | "completed" }
-  | { flow: "blocked"; visibleText: string; status?: "blocked" | "completed" };
+  | { flow: "done"; visibleText: string; newState: AgentState; status?: "blocked" | "completed" | "failed" }
+  | { flow: "blocked"; visibleText: string; status?: "blocked" | "completed" | "failed" };
 
 // ─── Context interfaces ────────────────────────────────────────────────────────
 
@@ -463,7 +463,10 @@ export async function handleBgEndTurn(
       flow: "done",
       visibleText: surfacedText,
       newState: agentState,
-      status: rawBoundary.kind === "plan_review" ? "blocked" : "completed",
+      // terminal_failure = an honest "could not do it" report; it must settle
+      // the task as failed, not completed (the false-green chain the campaign
+      // audit traced).
+      status: rawBoundary.kind === "plan_review" ? "blocked" : "failed",
     };
   }
 

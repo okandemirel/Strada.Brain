@@ -189,6 +189,21 @@ export class CampaignStorage {
     return row !== undefined;
   }
 
+  /**
+   * A non-terminal campaign on this PROJECT, whatever chat it came from. The
+   * per-chat guard let a web chat and the CLI each start a build against the
+   * same repo — two ladders writing over each other.
+   */
+  hasActiveForProject(projectRoot: string): boolean {
+    const placeholders = ACTIVE_CAMPAIGN_STATES.map(() => "?").join(", ");
+    const row = this.db
+      .prepare(
+        `SELECT 1 FROM campaigns WHERE project_root = ? AND state IN (${placeholders}) LIMIT 1`,
+      )
+      .get(projectRoot, ...ACTIVE_CAMPAIGN_STATES);
+    return row !== undefined;
+  }
+
   close(): void {
     this.db.close();
   }

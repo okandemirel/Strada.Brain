@@ -686,6 +686,12 @@ export class V2AgentRunner implements AgentRunner {
             }
             if (refl.terminal || postDispatchVerdict.decision === "done") {
               terminalReason = refl.reason ?? "done";
+              // A terminal_failure boundary settles the dispatch with reason
+              // "failed"; without this the run's default "completed" made an
+              // honest failure report indistinguishable from success.
+              if (refl.reason === "failed") {
+                terminalStatus = "failed";
+              }
               emit({ type: "run.ending", reason: terminalReason });
               break epochLoop;
             }
@@ -747,6 +753,13 @@ export class V2AgentRunner implements AgentRunner {
             if (endPc) emit(endPc);
             emit({ type: "step.completed", step: stepNo, phase: state.phase });
             continue;
+          }
+          if (end.terminalStatus) {
+            // The end-turn handler settled the turn as a failure (an honest
+            // terminal_failure report) — carry it instead of the default
+            // "completed" so the task boundary records what actually happened.
+            terminalStatus = end.terminalStatus;
+            terminalReason = end.terminalStatus === "failed" ? "terminal-failure" : terminalReason;
           }
           emit({ type: "step.completed", step: stepNo, phase: state.phase });
           emit({ type: "run.ending", reason: "end_turn" });

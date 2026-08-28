@@ -19,6 +19,7 @@ import { ACTIVE_STATUSES, TaskStatus } from "../tasks/types.js";
 import type { CampaignPlanner } from "./campaign-planner.js";
 import type { CampaignStorage } from "./campaign-storage.js";
 import { detectCampaignIntent } from "./campaign-intake.js";
+import { isTerminalFailureReport } from "../agents/autonomy/verifier-pipeline.js";
 import type { Campaign, CampaignMilestone } from "./types.js";
 import { generateCampaignId } from "./types.js";
 
@@ -164,6 +165,15 @@ export class CampaignManager {
     const intent = detectCampaignIntent(msg);
     if (!intent) return false;
     if (this.storage.hasActiveForChat(msg.chatId)) return false; // one build per chat
+    if (this.storage.hasActiveForProject(this.projectRoot)) {
+      // Another chat is already building this project — a second concurrent
+      // ladder against the same repo is never what anyone wants.
+      await this.tell(
+        { chatId: msg.chatId },
+        "A campaign is already building this project from another conversation — not starting a second one against the same repo.",
+      );
+      return true;
+    }
 
     const ctx: CampaignContext = {
       chatId: msg.chatId,
@@ -250,8 +260,8 @@ export class CampaignManager {
     if (!REVIVE_RE.test(text.trim())) return false;
     const campaign = this.storage.findLatestRevivable(chatId);
     if (!campaign) return false;
-    if (this.storage.hasActiveForChat(chatId)) {
-      await this.tell({ chatId }, "A campaign is already active on this chat — the failed one stays parked.");
+    if (this.storage.hasActiveForChat(chatId) || this.storage.hasActiveForProject(this.projectRoot)) {
+      await this.tell({ chatId }, "A campaign is already active for this project — the failed one stays parked.");
       return true;
     }
 
@@ -645,12 +655,26 @@ export class CampaignManager {
     output: string,
     opts: { countAttempt: boolean },
   ): Promise<void> {
+    // Defense in depth against the false-green chain: a task can settle
+    // "completed" while its result is an honest terminal failure report
+    // ("blocked: the bridge is down, nothing was verified"). That is not a
+    // green sprint — route it through the retry/fail path on its own text.
+    if (status === TaskStatus.completed && isTerminalFailureReport(output)) {
+      getLoggerSafe().warn("Milestone task completed with a terminal failure report — treating as failed", {
+        id: campaign.id,
+        milestone: milestone.id,
+      });
+      status = TaskStatus.failed;
+    }
+
     if (status === TaskStatus.completed) {
       // Commit gate: a sprint is not green while its work sits uncommitted in
-      // the working tree. No path in the pipeline commits reliably (the lease
-      // write-back only copies files; the agent's git_commit dies on the
-      // non-interactive confirmation), which is how a campaign once ended with
-      // 282 dirty files and a corrupted next-sprint seed. The envelope commits.
+      // the working tree. No path in the pipeline commits into the REAL repo:
+      // the lease write-back only copies files, and the agent's own git_commit
+      // runs inside a detached worktree whose commits die with the worktree
+      // (now preserved on lease-salvage/* branches, but still not on main).
+      // That is how a campaign once ended with 282 dirty files and a corrupted
+      // next-sprint seed. The envelope commits.
       const commitNote = this.commitMilestoneWork(campaign, milestone);
       milestone.status = "green";
       milestone.resultExcerpt = output.slice(-500);
@@ -749,9 +773,21 @@ export class CampaignManager {
       return "";
     }
     try {
-      const dirty = git(["status", "--porcelain"], 60_000).trim();
+      // Never stage .strada — it holds lease-conflict quarantines and vault
+      // indexes; sweeping them into the user's history is how quarantined
+      // project mirrors ended up committed. It is excluded from both the
+      // dirtiness check and the add, or a .strada-only change would produce
+      // an empty commit attempt.
+      const dirty = git(["status", "--porcelain"], 60_000)
+        .split("\n")
+        .filter((line) => {
+          const path = line.slice(3).replace(/^"/, "");
+          return line.trim() !== "" && !path.startsWith(".strada/") && !path.startsWith(".strada\\");
+        })
+        .join("\n")
+        .trim();
       if (dirty === "") return "";
-      git(["add", "-A"]);
+      git(["add", "-A", "--", ".", ":(exclude).strada"]);
       git([
         "commit",
         "-m",

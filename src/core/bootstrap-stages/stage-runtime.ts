@@ -423,6 +423,12 @@ export async function initializeTaskRuntimeStage(
         taskManager,
         projectRoot: params.config.unityProjectPath,
         verify: async (projectRoot) => {
+          // A missing/unreachable verifier is NOT a red tree. Treating registry
+          // "tool not found" or bridge errors as compile failures fed agents
+          // infrastructure noise as if it were CS errors, in an endless loop.
+          if (!registry.getAvailableToolNames().includes("unity_verify_change")) {
+            return { ok: true, ran: false, detail: "unity_verify_change is not registered — verification skipped" };
+          }
           const result = await registry.execute(
             "unity_verify_change",
             {},
@@ -432,7 +438,14 @@ export async function initializeTaskRuntimeStage(
               readOnly: true,
             } as import("../../agents/tools/tool-core.interface.js").ToolContext,
           );
-          return { ok: result.isError !== true, detail: String(result.content ?? "") };
+          const detail = String(result.content ?? "");
+          const infrastructureFailure =
+            result.isError === true &&
+            /tool '.*' not found|unavailable|bridge.*(disconnect|not connected)|ECONN|timed?\s?out/i.test(detail);
+          if (infrastructureFailure) {
+            return { ok: true, ran: false, detail };
+          }
+          return { ok: result.isError !== true, ran: true, detail };
         },
         messenger: async (chatId, text) => {
           await params.channel.sendMarkdown(chatId, sanitizeSecrets(text));

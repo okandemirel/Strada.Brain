@@ -248,6 +248,10 @@ export interface EndTurnDispatchResult {
    *  genuine end_turn into a continuation (verifier partial-closure/replan) — the handler already
    *  re-pushed the continuation gate onto the session; the spine continues instead of breaking. */
   readonly continueRun?: boolean;
+  /** Set when the handler settled the turn as something other than a clean completion —
+   *  a terminal_failure boundary (an honest "could not do it" report) settles "failed" so the
+   *  task boundary can tell it apart from success. Absent = keep the spine's default. */
+  readonly terminalStatus?: "failed" | "blocked";
 }
 
 export interface PlanPhaseParams {

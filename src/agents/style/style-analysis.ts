@@ -55,10 +55,13 @@ export class StyleAnalysis {
   async analyze(gddText: string): Promise<{ profile: StyleProfile; source: "llm" | "keyword-fallback" }> {
     if (this.provider) {
       try {
+        // Same windowing as campaign planning: a hard head-slice cut the GDD
+        // mid-document, and art direction typically lives mid-document.
+        const { windowGdd } = await import("../../campaign/campaign-planner.js");
         const response = await streamOrChatText(
           this.provider,
           ANALYSIS_SYSTEM,
-          `<gdd>\n${gddText.slice(0, 16_000)}\n</gdd>\n\nExtract the style profile.`,
+          `<gdd>\n${windowGdd(gddText)}\n</gdd>\n\nExtract the style profile.`,
         );
         const jsonText = extractJsonObject(response.text ?? "");
         if (jsonText) {

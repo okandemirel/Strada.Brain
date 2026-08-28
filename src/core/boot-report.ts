@@ -471,13 +471,19 @@ export function collectConfigWarnings(
     );
   }
 
-  // RAG enabled but no embedding provider available
+  // No embedding provider available while something semantic depends on one.
+  // The old gate checked rag.enabled ONLY, so a vault-enabled deployment ran
+  // its retrieval on non-semantic hash vectors with no warning ever printed.
   if (
-    options.config.rag.enabled &&
+    (options.config.rag.enabled || options.config.vault?.enabled) &&
     options.embeddingStatus?.usingHashFallback === true
   ) {
+    const dependents = [
+      options.config.rag.enabled ? "RAG" : null,
+      options.config.vault?.enabled ? "vault" : null,
+    ].filter(Boolean).join(" + ");
     warnings.push(
-      "RAG enabled but no embedding provider available — using hash fallback embeddings",
+      `${dependents} enabled but no embedding provider available — using hash fallback embeddings (retrieval is non-semantic)`,
     );
   }
 

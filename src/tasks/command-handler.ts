@@ -515,8 +515,9 @@ export class CommandHandler {
       return;
     }
 
-    // Unconditional confirmation. Channels without interactivity return false
-    // from the gate → we decline rather than silently running unconfirmed.
+    // Unconditional confirmation. Channels without interactivity return
+    // "unavailable" from the gate → we decline rather than silently running
+    // unconfirmed.
     const confirmed = await requestWriteConfirmation(
       this.channel,
       chatId,
@@ -524,7 +525,7 @@ export class CommandHandler {
       "shell_exec",
       { command },
     );
-    if (!confirmed) {
+    if (confirmed !== "approved") {
       await this.channel.sendText(chatId, `Command cancelled: \`${command.slice(0, 100)}\``);
       return;
     }

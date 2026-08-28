@@ -56,8 +56,8 @@ import { shouldDeferRawBoundaryForDirectTarget } from "./prompt-targets.js";
 
 export type ReflectionLoopAction =
   | { flow: "continue"; newState: AgentState }
-  | { flow: "done"; visibleText: string; newState: AgentState; status?: "blocked" | "completed" }
-  | { flow: "blocked"; visibleText: string; status?: "blocked" | "completed" };
+  | { flow: "done"; visibleText: string; newState: AgentState; status?: "blocked" | "completed" | "failed" }
+  | { flow: "blocked"; visibleText: string; status?: "blocked" | "completed" | "failed" };
 
 // ─── Context interfaces ────────────────────────────────────────────────────────
 
@@ -192,7 +192,7 @@ type BgReflectionCompletionEvaluation =
   | {
     readonly kind: "done";
     readonly visibleText: string;
-    readonly status?: "blocked" | "completed";
+    readonly status?: "blocked" | "completed" | "failed";
     readonly approved?: boolean;
   }
   | {
@@ -408,7 +408,11 @@ async function evaluateBgReflectionCompletion(
     return {
       kind: "done",
       visibleText: ctx.formatBoundaryVisibleText(rawBoundary) ?? rawBoundary.visibleText ?? "",
-      status: rawBoundary.kind === "plan_review" ? "blocked" : "completed",
+      // A terminal_failure boundary is the agent honestly reporting it could
+      // not do the work. Settling it as "completed" made an honest failure
+      // indistinguishable from success at the task boundary — the campaign
+      // greened milestones on "I could not compile this" reports.
+      status: rawBoundary.kind === "plan_review" ? "blocked" : "failed",
     };
   }
 

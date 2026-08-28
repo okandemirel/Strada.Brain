@@ -34,7 +34,7 @@ export type StepErrorCategory =
 
 const TIMEOUT_RE = /\btimed?\s*out\b|\bTimeout\b|\bDeadlineExceeded\b|stalled after \d+ms|operation was aborted/i;
 const NETWORK_RE = /\bECONNREFUSED\b|\bECONNRESET\b|\bENOTFOUND\b|\bfetch failed\b|\bDNS\b|\bsocket hang up\b/i;
-const TOOL_UNAVAIL_RE = /\bunavailable\b|bridge.*(disconnect|unavailable)|Tool execution failed/i;
+const TOOL_UNAVAIL_RE = /\bunavailable\b|bridge.*(?:disconnect|unavailable)|Tool execution failed/i;
 export const BUILD_FAILURE_RE = /\b(?:build|compile|typecheck|lint)\b.*\b(?:fail|error)\w*\b|\b(?:fail|error)\w*\b.*\b(?:build|compile|typecheck|lint)\b|\bCS\d{4}\b|\bMSB\d{4}\b/i;
 export const TEST_FAILURE_RE = /\btest\w*.*fail\w*\b|\bassert\w*.*fail\w*\b|\bexpect\b.*\breceived\b/i;
 const VALIDATION_RE = /\bvalidation\b|\bschema\b.*\berror\b|\bInvalid argument\b/i;
@@ -50,6 +50,13 @@ const NON_BLOCKING_TOOL_FAILURE_RE = new RegExp(
   [TIMEOUT_RE.source, NETWORK_RE.source, TOOL_UNAVAIL_RE.source, String.raw`\bInvalid argument\b`, String.raw`\bstatus[:\s]+52[24]\b`, String.raw`\bHTTP\s+52[24]\b`].join("|"),
   "i",
 );
+
+/** Narrow "the tool could not run at all" signals for mutation/verification
+ *  tools. Deliberately tighter than NON_BLOCKING_TOOL_FAILURE_RE: the generic
+ *  "Tool execution failed" wrapper and a stray \bunavailable\b in compiler
+ *  output must NOT exempt a verification that actually ran and failed. */
+const VERIFY_TOOL_CANNOT_RUN_RE =
+  /tool '[^']*' (?:is currently )?unavailable|\bcurrently unavailable\b|\bnot found\b|bridge.*(?:disconnect|unavailable|not connected)|\bECONNREFUSED\b|\bECONNRESET\b/i;
 
 /**
  * Classify a failed step's error category from its summary text.
@@ -152,12 +159,20 @@ function isBlockingStepFailure(step: AgentState["stepResults"][number]): boolean
     return false;
   }
 
-  if (NON_BLOCKING_TOOL_FAILURE_RE.test(step.summary)) {
-    return false;
+  // Mutation/verification failures are judged BEFORE the broad non-blocking
+  // regex runs. The old order let a failed unity_verify_change be laundered
+  // non-blocking by the generic "Tool execution failed" wrapper text or by
+  // \bunavailable\b appearing in ordinary compiler prose — a DONE then sailed
+  // past a failed verification. Only genuine CANNOT-RUN signals (tool missing,
+  // bridge down, connection refused) exempt these tools: that case is the
+  // verifier pipeline's tooling-unavailable hard block's to arbitrate, not a
+  // reason to spin the reflection loop.
+  if (MUTATION_TOOLS.has(step.toolName) || isVerificationToolName(step.toolName)) {
+    return !VERIFY_TOOL_CANNOT_RUN_RE.test(step.summary);
   }
 
-  if (MUTATION_TOOLS.has(step.toolName) || isVerificationToolName(step.toolName)) {
-    return true;
+  if (NON_BLOCKING_TOOL_FAILURE_RE.test(step.summary)) {
+    return false;
   }
 
   const BLOCKING_CATEGORIES: ReadonlySet<StepErrorCategory> = new Set(["build_failure", "test_failure", "validation", "auth", "plan_rejected"]);
