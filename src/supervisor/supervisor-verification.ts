@@ -1,6 +1,7 @@
 import type { IAIProvider } from "../agents/providers/provider.interface.js";
 import { streamOrChatText } from "../agents/providers/provider.interface.js";
 import { canonicalizeProviderName } from "../agents/providers/provider-identity.js";
+import { ProviderHealthRegistry } from "../agents/providers/provider-health.js";
 import type {
   NodeResult,
   SupervisorContext,
@@ -105,6 +106,7 @@ function chooseVerificationProvider(
     listExecutionCandidates?(identityKey?: string): Array<{ name: string; defaultModel: string }>;
     listAvailable(): Array<{ name: string; defaultModel: string }>;
     getProviderByName(name: string, model?: string): IAIProvider | null;
+    getPrimaryProviderByName?(name: string, model?: string): IAIProvider | null;
   },
   originalProviderName: string,
   identityKey?: string,
@@ -122,7 +124,19 @@ function chooseVerificationProvider(
       continue;
     }
     seen.add(canonicalName);
-    const provider = providerManager.getProviderByName(canonicalName, candidate.defaultModel);
+    // Credential-listed is not usable: a quota-dead provider passes
+    // listAvailable() and used to be picked here — then materialized as a
+    // resilient CHAIN that silently answered on the worker's own provider
+    // while the verdict was stamped with the dead one's name. A false
+    // cross-provider audit trail over what was actually self-review.
+    if (!ProviderHealthRegistry.getInstance().isAvailable(canonicalName)) {
+      continue;
+    }
+    // BARE provider, never a chain: cross-provider verification that can fall
+    // over to a sibling is not cross-provider verification.
+    const provider =
+      providerManager.getPrimaryProviderByName?.(canonicalName, candidate.defaultModel) ??
+      providerManager.getProviderByName(canonicalName, candidate.defaultModel);
     if (provider) {
       return {
         providerName: canonicalName,
@@ -145,7 +159,9 @@ export function createSupervisorNodeVerifier(providerManager: {
     if (!reviewer) {
       return {
         verdict: "flag_issues" as const,
-        issues: ["No cross-provider verifier available"],
+        issues: [
+          "verification_skipped: no HEALTHY cross-provider verifier (every other provider is in cooldown or unconfigured) — this node was NOT independently verified",
+        ],
         verifierProvider: canonicalizeProviderName(node.provider) ?? node.provider,
       };
     }

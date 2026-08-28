@@ -1,4 +1,5 @@
 import { failureTarget } from "./orchestrator-tool-execution.js";
+import { QuotaExhaustedError } from "../common/fetch-with-retry.js";
 import type { ChannelType } from "../channels/channel-messages.interface.js";
 import type {
   IAIProvider,
@@ -3757,6 +3758,13 @@ export class Orchestrator {
           const detail = err instanceof Error ? err.message : String(err);
           recordProviderHealthFailure(ProviderHealthRegistry.getInstance(), provider.name, detail, {
             isSingleProvider: isSingleProviderChain(provider),
+            // Keep the STRUCTURED Retry-After: flattened to a string it was
+            // recorded as NaN and an announced multi-day quota reset became
+            // the 8h default cooldown.
+            retryAfterMs:
+              err instanceof QuotaExhaustedError && Number.isFinite(err.retryAfterMs)
+                ? err.retryAfterMs
+                : undefined,
           });
           getLogger().warn("Provider refused; not retrying it without streaming", {
             chatId,

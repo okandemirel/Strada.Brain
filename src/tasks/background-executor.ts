@@ -1673,6 +1673,23 @@ export class BackgroundExecutor {
           `MISSION STOPPED — needs you. ${decision.reportReason} Last blocker: ${reason.slice(0, 200)}`,
         );
       } catch { /* visibility best-effort */ }
+      // A BUDGET stop is a rolling-window condition, not a terminal one: the
+      // 24h window drains and the money is back — but the stop used to be
+      // one-shot, so a multi-day campaign that tripped the wall at hour 30
+      // stayed stopped forever. Re-check hourly and resume when it clears.
+      if (budgetExceeded) {
+        const rearm = setTimeout(() => {
+          try {
+            if (this._unifiedBudgetManager?.isGlobalExceeded() ?? false) {
+              this.scheduleMissionKeepAlive(task, reason); // still walled — re-checks again
+              return;
+            }
+            getLoggerSafe().info("Budget window drained — resuming stopped mission", { taskId: task.id });
+            this.taskManager?.retryTask(task.id);
+          } catch { /* best-effort re-arm */ }
+        }, 60 * 60_000);
+        rearm.unref?.();
+      }
       return false;
     }
 

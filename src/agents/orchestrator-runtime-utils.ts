@@ -12,6 +12,9 @@ import { QUOTA_EXHAUSTED_PHRASE } from "../common/fetch-with-retry.js";
  * QUOTA_HARD_STOP_RE so the two classifiers never diverge on the same "usage quota exhausted" input.
  */
 const QUOTA_HARD_STOP_RE = new RegExp(QUOTA_EXHAUSTED_PHRASE, "i");
+/** Mirrors fallback-chain's isCredentialRejection: 401 always; 403 only when
+ *  it is NOT quota-flavored (that case is the quota branch below). */
+const CREDENTIAL_REJECTION_RE = /\b401\b|\bunauthorized\b|\binvalid[_ ]?(?:api[_ ]?key|token)\b/i;
 
 const MAX_TOOL_RESULT_LENGTH = 8192;
 const REFLECTION_DECISION_RE = /\*\*\s*(DONE_WITH_SUGGESTIONS|DONE|REPLAN|CONTINUE)\s*\*\*/;
@@ -313,20 +316,25 @@ export function recordProviderHealthFailure(
     recordOverloaded(name: string, error: string): void;
     recordOverloadedShort?(name: string, error: string): void;
     recordQuotaHardStop?(name: string, retryAfterMs: number, error: string): void;
+    recordCredentialRejected?(name: string, error: string): void;
   },
   providerName: string,
   errorMsg: string,
-  options?: { isSingleProvider?: boolean },
+  options?: { isSingleProvider?: boolean; retryAfterMs?: number },
 ): void {
   const single = options?.isSingleProvider ?? false;
-  // HARD QUOTA STOP first: a QuotaExhaustedError that surfaced on a direct (non-chain)
-  // provider call would be flattened to a plain Error here, matching neither 403+quota nor
-  // 529/503 and falling through to a short generic cooldown. Route it to the same long
-  // hard-stop cooldown fallback-chain.ts uses so the two classifiers don't diverge. No
-  // structured Retry-After survives the flattening, so pass NaN — recordQuotaHardStop falls
-  // back to its default quota cooldown (and isAvailable() auto-recovers when it expires).
+  // HARD QUOTA STOP first, and with the STRUCTURED Retry-After when the caller
+  // still has it: flattening the QuotaExhaustedError to a string used to drop
+  // retryAfterMs as NaN, so a provider announcing "resets in ~3d" got the 8h
+  // default cooldown (measured on disk: delta exactly 28,800,000ms) and
+  // rejoined the pool three times a day for the whole block.
   if (registry.recordQuotaHardStop && QUOTA_HARD_STOP_RE.test(errorMsg)) {
-    registry.recordQuotaHardStop(providerName, Number.NaN, errorMsg);
+    registry.recordQuotaHardStop(providerName, options?.retryAfterMs ?? Number.NaN, errorMsg);
+  } else if (CREDENTIAL_REJECTION_RE.test(errorMsg) && registry.recordCredentialRejected) {
+    // Mirrors fallback-chain's isCredentialRejection: a 401/invalid-key must
+    // land on the session bench, not the ≤10min generic escalating one
+    // (measured: kimi's dead key re-probed every 8 minutes).
+    registry.recordCredentialRejected(providerName, errorMsg);
   } else if (/\b403\b/.test(errorMsg) && QUOTA_LIMIT_RE.test(errorMsg)) {
     if (single && registry.recordQuotaExhaustedShort && !QUOTA_CYCLE_EXHAUSTED_RE.test(errorMsg)) {
       registry.recordQuotaExhaustedShort(providerName, errorMsg);

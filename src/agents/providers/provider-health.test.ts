@@ -378,16 +378,22 @@ describe("ProviderHealthRegistry — recordQuotaHardStop", () => {
     expect(registry.isAvailable("opencode")).toBe(false);
   });
 
-  it("caps a days-out Retry-After at the max quota cooldown (default 24h)", () => {
+  it("caps an absurd Retry-After at the max quota cooldown (default 7d)", () => {
+    // 7d, not 24h: providers announce week-scale resets ("resets in ~3d",
+    // measured live), and a 24h cap re-admitted the dead provider daily.
     const registry = new ProviderHealthRegistry();
     const now = 1_000_000;
     vi.spyOn(Date, "now").mockReturnValue(now);
 
-    const threeDaysMs = 3 * 24 * 60 * 60 * 1000;
-    registry.recordQuotaHardStop("opencode", threeDaysMs, "usage quota exhausted (resets in ~3d)");
+    const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
+    registry.recordQuotaHardStop("opencode", thirtyDaysMs, "usage quota exhausted (resets in ~30d)");
 
     const entry = registry.getEntry("opencode")!;
-    expect(entry.cooldownUntil).toBe(now + 24 * 60 * 60 * 1000); // capped at 24h
+    expect(entry.cooldownUntil).toBe(now + 7 * 24 * 60 * 60 * 1000); // capped at 7d
+
+    // And a ~3d announced reset is honored VERBATIM, no longer truncated.
+    registry.recordQuotaHardStop("kimi", 3 * 24 * 60 * 60 * 1000, "usage quota exhausted (resets in ~3d)");
+    expect(registry.getEntry("kimi")!.cooldownUntil).toBe(now + 3 * 24 * 60 * 60 * 1000);
   });
 
   it("falls back to the default quota cooldown when Retry-After is NaN", () => {

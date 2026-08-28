@@ -229,11 +229,30 @@ export async function setupAgentCoreRun(
     // pin" warn below could never fire and a bogus pin silently ran the default chain under the
     // pinned name (trio security catch); (b) a pin must be the bare provider, consistent with
     // buildTaskAwareProvider's hard-pin branch (never a chain that could fall over to a sibling).
-    const fixedProvider = fixedProviderName
+    let fixedProvider = fixedProviderName
       ? (deps.providerManager as {
           getPrimaryProviderByName?: (name: string, model?: string) => IAIProvider | null;
         }).getPrimaryProviderByName?.(fixedProviderName, fixedModelId) ?? null
       : null;
+    // A pin is BARE by design (no chain) — which also means a pin to a
+    // provider sitting in a quota/credential cooldown has no fallback at all:
+    // the node burns its attempts against a dead endpoint and dies (measured:
+    // 4 nodes pinned to a quota-exhausted provider). Health-check the pin at
+    // materialization and drop it to the chain when the provider is cooled.
+    if (fixedProvider && fixedProviderName) {
+      try {
+        const { ProviderHealthRegistry } = await import("../../agents/providers/provider-health.js");
+        if (!ProviderHealthRegistry.getInstance().isAvailable(fixedProviderName)) {
+          getLogger().warn("Provider pin dropped: pinned provider is in cooldown — using the fallback chain", {
+            assignedProvider: fixedProviderName,
+            chatId,
+          });
+          fixedProvider = null;
+        }
+      } catch {
+        // Health lookup is best-effort; an unavailable registry keeps the pin.
+      }
+    }
     if (request.assignedProvider && fixedProviderName && !fixedProvider) {
       getLogger().warn("Delegated worker provider pin could not be materialized; using fallback provider", {
         assignedProvider: request.assignedProvider,

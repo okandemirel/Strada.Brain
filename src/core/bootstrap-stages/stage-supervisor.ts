@@ -8,6 +8,7 @@ import { ProviderAssigner } from "../../supervisor/provider-assigner.js";
 import type { ProviderDescriptor as SupervisorProviderDescriptor } from "../../supervisor/provider-assigner.js";
 import { SupervisorBrain } from "../../supervisor/supervisor-brain.js";
 import { createSupervisorNodeVerifier } from "../../supervisor/supervisor-verification.js";
+import { ProviderHealthRegistry } from "../../agents/providers/provider-health.js";
 import { getBaselineProfile } from "../../agents/providers/provider-behavioral-profiles.js";
 
 // =============================================================================
@@ -207,6 +208,18 @@ export function initializeSupervisorStage(
       : undefined;
     params.goalDecomposer.setDecompositionContext({
       providerCount: descriptors.length,
+      // Health-filtered at decomposition time: the static count planned for
+      // parallelism while a provider sat in a multi-day quota cooldown.
+      liveProviderCount: () => {
+        try {
+          const live = descriptors.filter((d) =>
+            ProviderHealthRegistry.getInstance().isAvailable(d.name),
+          ).length;
+          return Math.max(1, live);
+        } catch {
+          return descriptors.length;
+        }
+      },
       maxTotalNodes: descriptors.length <= 1 ? 8 : 12,
       contextWindow,
       providerStrengths,

@@ -22,6 +22,18 @@ export const PROVIDER_COSTS: Record<string, { input: number; output: number }> =
 export const DEFAULT_COST = { input: 2.0, output: 10.0 };
 
 /**
+ * Zero out a provider's metered rates for FLAT-FEE (subscription) auth.
+ *
+ * Billing a ChatGPT subscription at API-key rates fabricated dollars: every
+ * debit site charged phantom spend, `isGlobalExceeded()` measured it, and the
+ * daemon's daily budget wall went quiet on money nobody paid. Called once at
+ * bootstrap when the auth mode says the account is flat-fee.
+ */
+export function markProviderFlatFee(provider: string): void {
+  PROVIDER_COSTS[provider] = { input: 0, output: 0 };
+}
+
+/**
  * Estimate cost in USD for a given token usage.
  *
  * @param inputTokens  Number of input (prompt) tokens consumed.

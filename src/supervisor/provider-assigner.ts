@@ -155,16 +155,26 @@ export class ProviderAssigner {
   assignNodes(nodes: TaggedGoalNode[], diversityCap: number = DEFAULT_DIVERSITY_CAP): TaggedGoalNode[] {
     if (nodes.length === 0) return [];
 
-    const maxPerProvider = Math.max(1, Math.ceil(nodes.length * diversityCap));
-
-    // Track how many nodes each provider has been assigned
-    const assignmentCounts = new Map<string, number>();
-
     // Pre-compute ranked providers for each node
     const nodeRankings = nodes.map((node) => ({
       node,
       ranked: this.getRankedProviders(node),
     }));
+
+    // Diversity is a preference, not a law of physics: with ONE healthy
+    // provider the cap FORCED the overflow nodes onto whatever else ranked —
+    // measured live: 4 of 11 nodes pinned to a quota-dead provider, each
+    // burning its attempts and dying. One healthy provider ⇒ no cap.
+    const distinctRankedProviders = new Set(
+      nodeRankings.flatMap(({ ranked }) => ranked.map((r) => r.providerName)),
+    );
+    const maxPerProvider =
+      distinctRankedProviders.size <= 1
+        ? nodes.length
+        : Math.max(1, Math.ceil(nodes.length * diversityCap));
+
+    // Track how many nodes each provider has been assigned
+    const assignmentCounts = new Map<string, number>();
 
     // Build dependency adjacency for affinity scoring
     const depEdges = this.buildDependencyEdges(nodes);

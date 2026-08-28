@@ -57,6 +57,9 @@ export interface DecompositionContext {
    * prose typed after an incident while execution worked from the source.
    */
   readonly frameworkKnowledge?: () => string | null;
+  /** Live healthy-provider count, consulted at decomposition time (falls back
+   *  to the static providerCount when absent). */
+  readonly liveProviderCount?: () => number;
 }
 
 function buildProactivePrompt(ctx?: DecompositionContext): string {
@@ -64,7 +67,10 @@ function buildProactivePrompt(ctx?: DecompositionContext): string {
   const frameworkHint = frameworkSection
     ? `\n\nThe frameworks below were read from their own source at startup. Plan against what they actually provide, not against what a similar framework would:\n\n${frameworkSection}`
     : "";
-  const providerCount = ctx?.providerCount ?? 1;
+  // LIVE count when the wiring provides one: the static bootstrap count told
+  // the planner "2 providers — parallelize" while one sat in a multi-day
+  // quota cooldown, shaping plans for parallelism the fleet could not deliver.
+  const providerCount = ctx?.liveProviderCount?.() ?? ctx?.providerCount ?? 1;
   const maxNodes = ctx?.maxTotalNodes ?? 12;
   const budgetHint = ctx?.remainingBudgetUsd != null && ctx.remainingBudgetUsd > 0
     ? `\n- Remaining daily budget is ~$${ctx.remainingBudgetUsd.toFixed(2)} — prefer fewer, focused goals to conserve tokens`

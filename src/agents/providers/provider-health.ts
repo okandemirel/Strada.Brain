@@ -83,7 +83,10 @@ const SINGLE_PROVIDER_QUOTA_COOLDOWN_MS = 15 * 60 * 1000; // 15 minutes (when no
  * day/week-scale quota block for the rest of the session, bounded enough to self-heal.
  */
 function resolveMaxQuotaCooldownMs(): number {
-  return parseEnvIntMs("PROVIDER_HEALTH_MAX_QUOTA_COOLDOWN_MS", 24 * 60 * 60 * 1000, 1); // 24h, must be > 0
+  // 7d default (was 24h): providers state week-scale quota resets ("resets in
+  // ~3d", measured live 2026-08-28), and a 24h cap re-admitted the dead
+  // provider ~3×/day for the whole block — each re-entry burning node attempts.
+  return parseEnvIntMs("PROVIDER_HEALTH_MAX_QUOTA_COOLDOWN_MS", 7 * 24 * 60 * 60 * 1000, 1);
 }
 
 /**
