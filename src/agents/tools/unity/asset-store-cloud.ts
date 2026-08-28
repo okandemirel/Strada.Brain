@@ -339,6 +339,15 @@ export function isUnityLinked(): boolean {
  *  A bare write could truncate the only copy of the refresh token on a crash
  *  or full disk; tmp+rename cannot. chmod fixes a pre-existing file too. */
 export function persistUnityLink(link: UnityAssetStoreLink): void {
+  // Tests must NEVER write the machine's real link store. Before the
+  // syncWithDisk gating, a unit test's token rotation overwrote the user's
+  // live refresh token with the fixture value — killing the account link —
+  // and left a link file on CI machines that flips later "not linked" tests.
+  if (process.env["VITEST"] !== undefined || process.env["NODE_ENV"] === "test") {
+    throw new Error(
+      "persistUnityLink refused under test: writing the REAL ~/.strada link store from a test destroys the user's Unity link.",
+    );
+  }
   mkdirSync(LINK_DIR, { recursive: true });
   const tmp = `${LINK_FILE}.tmp-${process.pid}`;
   writeFileSync(tmp, JSON.stringify(link, null, 2), { mode: 0o600 });

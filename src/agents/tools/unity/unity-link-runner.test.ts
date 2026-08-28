@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir, homedir } from "node:os";
+import { tmpdir } from "node:os";
 import { runUnityLink, CONSENT_SCRIPT } from "./unity-link-runner.js";
 import type { execFile } from "node:child_process";
 
@@ -32,14 +32,16 @@ function stubTokenExchange(): void {
 describe("runUnityLink", () => {
   let fakeBinDir: string;
   let fakeCli: string;
-  const storePath = join(homedir(), ".strada", "unity-asset-store.json");
-  let hadStoreBefore: boolean;
+  // NEVER the real ~/.strada store: this test used to overwrite the user's
+  // live refresh token with the fixture below and leave it there — silently
+  // destroying the account link on every full-suite run.
+  let storePath: string;
 
   beforeEach(() => {
     fakeBinDir = mkdtempSync(join(tmpdir(), "unity-link-test-"));
     fakeCli = join(fakeBinDir, "unity");
     writeFileSync(fakeCli, "#!/bin/sh\n");
-    hadStoreBefore = existsSync(storePath);
+    storePath = join(fakeBinDir, "unity-asset-store.json");
   });
 
   afterEach(() => {
@@ -69,6 +71,7 @@ describe("runUnityLink", () => {
       unityCli: fakeCli,
       spawnImpl: fakeCliLauncher(),
       waitForOutputImpl: outputWriter({ code: VALID_CODE }),
+      linkStorePath: storePath,
     });
     expect(result.ok).toBe(true);
     expect(existsSync(storePath)).toBe(true);
@@ -76,7 +79,18 @@ describe("runUnityLink", () => {
     const stored = JSON.parse(readFileSync(storePath, "utf8"));
     expect(stored.refreshToken).toBe("rt-refresh-1234567890");
     expect(stored.packagesHost).toContain("packages");
-    if (!hadStoreBefore) rmSync(storePath, { force: true });
+  });
+
+  it("refuses to write the REAL link store under test", async () => {
+    stubTokenExchange();
+    const result = await runUnityLink({
+      unityCli: fakeCli,
+      spawnImpl: fakeCliLauncher(),
+      waitForOutputImpl: outputWriter({ code: VALID_CODE }),
+      // no linkStorePath → would target the real ~/.strada store
+    });
+    expect(result.ok).toBe(false);
+    expect(result.detail).toContain("refused under test");
   });
 
   it("rejects a malformed authorization-code file instead of exchanging", async () => {

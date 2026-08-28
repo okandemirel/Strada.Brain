@@ -20,7 +20,7 @@
 
 import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, chmodSync, readdirSync } from "node:fs";
 import { execFile } from "node:child_process";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 import { z } from "zod";
 import { getLoggerSafe } from "../../../utils/logger.js";
@@ -278,6 +278,10 @@ export interface UnityLinkRunnerOptions {
   spawnImpl?: typeof execFile;
   /** Test seam: replace the wait-for-output polling. */
   waitForOutputImpl?: (path: string, timeoutMs: number) => Promise<boolean>;
+  /** Test seam: where to write the resulting link. Tests MUST set this —
+   *  writing the real ~/.strada store from a test overwrites the user's live
+   *  refresh token with fixture data and destroys the account link. */
+  linkStorePath?: string;
 }
 
 const DEFAULT_UNITY_BIN =
@@ -410,11 +414,21 @@ export async function runUnityLink(options: UnityLinkRunnerOptions = {}): Promis
       return { ok: false, detail: `token exchange produced an invalid link: ${z.prettifyError(parsed.error).slice(0, 200)}` };
     }
 
-    mkdirSync(join(homedir(), ".strada"), { recursive: true });
-    writeFileSync(LINK_STORE, JSON.stringify(parsed.data, null, 2), { mode: 0o600 });
-    chmodSync(LINK_STORE, 0o600);
-    getLoggerSafe().info("Unity account linked for Asset Store access", { linkFile: LINK_STORE });
-    return { ok: true, detail: `Unity account linked. Token store: ${LINK_STORE}`, linkFile: LINK_STORE };
+    const linkStore = options.linkStorePath ?? LINK_STORE;
+    if (
+      linkStore === LINK_STORE &&
+      (process.env["VITEST"] !== undefined || process.env["NODE_ENV"] === "test")
+    ) {
+      // Measured live 2026-08-28: the "stores the link" unit test overwrote
+      // the user's REAL link store with fixture data and left it there —
+      // silently killing the account link on every full-suite run.
+      return { ok: false, detail: "refused under test: pass linkStorePath — writing the real ~/.strada store from a test destroys the user's Unity link" };
+    }
+    mkdirSync(dirname(linkStore), { recursive: true });
+    writeFileSync(linkStore, JSON.stringify(parsed.data, null, 2), { mode: 0o600 });
+    chmodSync(linkStore, 0o600);
+    getLoggerSafe().info("Unity account linked for Asset Store access", { linkFile: linkStore });
+    return { ok: true, detail: `Unity account linked. Token store: ${linkStore}`, linkFile: linkStore };
   } catch (err) {
     return { ok: false, detail: `Unity link failed: ${err instanceof Error ? err.message : String(err)}` };
   } finally {
