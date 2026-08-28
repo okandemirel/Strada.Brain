@@ -696,7 +696,12 @@ export class CampaignManager {
     // grace window (measured live: retry at +120s vs grace 90s), so reacting
     // now double-submits the sprint. Wait one keep-alive horizon and look
     // again; if the retry landed, the lineage check above adopts it.
-    const executorWillRetry = /Reaped:|Auto-retry \d+\/\d+/i.test(output);
+    // Provider-fleet outages join the defer set: an "all providers in
+    // cooldown" block has a KNOWN expiry the keep-alive waits out — burning a
+    // campaign attempt on it killed the campaign twice in four minutes
+    // (measured live 2026-08-28 20:04-20:08).
+    const executorWillRetry =
+      /Reaped:|Auto-retry \d+\/\d+|provider_unavailable|All providers (failed|are in cooldown)/i.test(output);
     if (executorWillRetry && !milestone.reconcileDeferred) {
       milestone.reconcileDeferred = true;
       this.persist(campaign);

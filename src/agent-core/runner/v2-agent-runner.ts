@@ -371,7 +371,14 @@ export class V2AgentRunner implements AgentRunner {
             const yielded = await this.handleYield(bus, clock, io, emit, gate);
             if (yielded === "blocked") {
               terminalStatus = "blocked";
-              terminalReason = terminalReason ?? "blocked:ask_user";
+              // Same distinction as the provider-failure yield below: a gate
+              // that asks because the FLEET is down is answered by waiting,
+              // not by a human.
+              const gateReason = String((gate as { reason?: unknown }).reason ?? "");
+              terminalReason = terminalReason ?? (
+                /provider|cooldown|quota|unavailable|rate.?limit/i.test(gateReason)
+                  ? "blocked:provider_unavailable"
+                  : "blocked:ask_user");
               break epochLoop;
             }
             continue; // a fresh gate tick after the user-facing pause
@@ -501,7 +508,16 @@ export class V2AgentRunner implements AgentRunner {
             const yielded = await this.handleYield(bus, clock, io, emit, failVerdict, action.backoffMs);
             if (yielded === "blocked") {
               terminalStatus = "blocked";
-              terminalReason = terminalReason ?? "blocked:ask_user";
+              // A provider outage is NOT a question for a human. Tagging every
+              // blocked yield ask_user made the mission keep-alive refuse to
+              // retry (by design for real questions), and the campaign burned
+              // both attempts in minutes — measured live 2026-08-28 20:06-20:08
+              // during an all-providers cooldown whose expiry was KNOWN.
+              const verdictReason = String((failVerdict as { reason?: unknown }).reason ?? "");
+              terminalReason = terminalReason ?? (
+                /provider|cooldown|quota|unavailable|rate.?limit/i.test(verdictReason)
+                  ? "blocked:provider_unavailable"
+                  : "blocked:ask_user");
               break epochLoop;
             }
             emit({ type: "step.completed", step: stepNo, phase: state.phase });

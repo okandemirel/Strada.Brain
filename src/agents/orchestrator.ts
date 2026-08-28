@@ -2600,6 +2600,11 @@ export class Orchestrator {
       }
       // ask_user terminals (gate or failure yielded "blocked").
       if (reason.includes("ask_user")) return "provider_ask_user";
+      // A fleet outage with a known expiry: same localized escalation text,
+      // but the TAG is no longer ask_user, so the mission keep-alive retries
+      // (and waits out the cooldown) instead of parking the sprint on a
+      // question no human needs to answer.
+      if (reason.includes("provider_unavailable")) return "provider_ask_user";
       // persistent provider failure / max_tokens runaway / epoch-budget exhaustion → stuck.
       if (
         reason === "provider-failure" ||
