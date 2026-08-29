@@ -309,6 +309,49 @@ export class BackgroundExecutor {
    */
   setTaskManager(manager: ITaskManager): void {
     this.taskManager = manager;
+    this.scheduleKeepAliveRearm();
+  }
+
+  /**
+   * Re-arm mission keep-alives that died with the previous process.
+   *
+   * The keep-alive is a setTimeout: a task blocked with "Auto-retry N/10 in
+   * ~Xs" holds a PROMISE whose timer lives only in that process. Measured
+   * 2026-08-29: a mission blocked at 01:01 on an 8-hour provider cooldown was
+   * never resumed after the 01:05 restart — the new process had no timer, and
+   * only the campaign layer's own revive path saved the mission. Standalone
+   * missions have no such second chance.
+   *
+   * Delayed 90s so startup recovery (campaign resume, queue replay) claims its
+   * tasks first; the keep-alive's fire-time dedup skips any mission that is
+   * already continuing under a fresh task id.
+   */
+  private scheduleKeepAliveRearm(): void {
+    const timer = setTimeout(() => {
+      try {
+        const manager = this.taskManager as (ITaskManager & {
+          listRecoverableTasks?: (limit?: number) => Array<Task>;
+        }) | null;
+        const candidates = manager?.listRecoverableTasks?.(50) ?? [];
+        const seenLineages = new Set<string>();
+        for (const task of candidates) {
+          if (task.status !== "blocked" || task.origin !== "user") continue;
+          const result = String((task as { result?: unknown }).result ?? "");
+          if (!/Auto-retry \d+\/\d+ in ~\d+s/.test(result)) continue;
+          const lineage = this.lineageRootTaskId(task);
+          if (seenLineages.has(lineage)) continue;
+          seenLineages.add(lineage);
+          getLoggerSafe().info("Re-arming keep-alive orphaned by restart", {
+            taskId: task.id,
+            lineageRoot: lineage,
+          });
+          this.scheduleMissionKeepAlive(task, "keep-alive re-armed after restart");
+        }
+      } catch {
+        // Recovery is best-effort; a failure here must not affect boot.
+      }
+    }, 90_000);
+    timer.unref?.();
   }
 
   setDaemonBudgetTracker(tracker: BudgetTracker): void {

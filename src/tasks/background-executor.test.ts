@@ -2207,6 +2207,62 @@ describe("BackgroundExecutor - auto-resume bounds (measured loop of 2026-08-26)"
     }
   });
 
+  it("re-arms keep-alives orphaned by a restart (blocked Auto-retry tasks, 90s after boot)", async () => {
+    // Measured 2026-08-29: a mission blocked at 01:01 with "Auto-retry 2/10"
+    // was never resumed after the 01:05 restart — its timer died with the
+    // process and the new one had no memory of the promise.
+    const executor = new BackgroundExecutor({
+      orchestrator: createMockOrchestrator() as any,
+      decomposer: createMockDecomposer() as any,
+      goalStorage: createMockGoalStorage() as any,
+      daemonEventBus: createMockDaemonEventBus() as any,
+      aiProvider: undefined,
+      channel: undefined,
+    });
+    const parked = createTestTask(undefined, {
+      id: "task_parked" as any,
+      status: TaskStatus.blocked,
+      origin: "user",
+      result: "Transient failure — All providers are in cooldown. Auto-retry 2/10 in ~465s.",
+    });
+    const askUser = createTestTask(undefined, {
+      id: "task_question" as any,
+      status: TaskStatus.blocked,
+      origin: "user",
+      result: "Paused on a question for you.",
+    });
+    const taskManager = {
+      updateStatus: vi.fn(), complete: vi.fn(), fail: vi.fn(), block: vi.fn(),
+      appendTaskNotice: vi.fn(),
+      retryGoalRoot: vi.fn(), replanGoalRoot: vi.fn(), retryTask: vi.fn(),
+      getStatus: vi.fn().mockReturnValue(null),
+      listRecoverableTasks: vi.fn().mockReturnValue([parked, askUser]),
+      listTasks: vi.fn().mockReturnValue([]),
+    };
+
+    vi.useFakeTimers();
+    try {
+      executor.setTaskManager(taskManager as any);
+      // Before the 90s boot-settle delay: nothing touched.
+      await vi.advanceTimersByTimeAsync(89_000);
+      expect(taskManager.block).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      // The parked Auto-retry mission is re-armed…
+      expect(taskManager.block).toHaveBeenCalledWith(
+        "task_parked",
+        expect.stringContaining("Auto-retry"),
+      );
+      // …the ask_user one is left for the person (no retry promise on it).
+      expect(taskManager.block).not.toHaveBeenCalledWith(
+        "task_question",
+        expect.anything(),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("goal auto-resume defers to keep-alive during a full provider outage instead of spending its budget", async () => {
     // Measured live 2026-08-29 00:59: three fresh tasks in 47 seconds, each
     // dying on "All providers are in cooldown", resume+replan budget spent
