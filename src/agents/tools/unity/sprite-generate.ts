@@ -20,7 +20,7 @@
  */
 
 import { deflateSync } from "node:zlib";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { dirname } from "node:path";
 import { reuseOrMintGuid } from "./meta-file-utils.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "../tool.interface.js";
@@ -609,6 +609,11 @@ export class SpriteGenerateTool implements ITool {
 
     try {
       mkdirSync(dirname(pathCheck.fullPath), { recursive: true });
+      // Meta BEFORE art: if the pair is ever torn, a meta without art is
+      // cleaned up (here, and by Unity); art without meta gets a random guid
+      // and imports as a plain Texture — the binding-churn failure class.
+      const guid = reuseOrMintGuid(`${pathCheck.fullPath}.meta`);
+      writeFileSync(`${pathCheck.fullPath}.meta`, spriteMeta(guid), "utf8");
       const result = await runner.textToImage(spec, prompt, pathCheck.fullPath, {
         negative,
         size: 512,
@@ -617,10 +622,9 @@ export class SpriteGenerateTool implements ITool {
         removeBackground: input["keepBackground"] !== true,
       });
       if (!result.ok) {
+        try { rmSync(`${pathCheck.fullPath}.meta`, { force: true }); } catch { /* orphan meta cleanup */ }
         return { content: `Error: local diffusion failed: ${result.detail}`, isError: true };
       }
-      const guid = reuseOrMintGuid(`${pathCheck.fullPath}.meta`);
-      writeFileSync(`${pathCheck.fullPath}.meta`, spriteMeta(guid), "utf8");
       return {
         content:
           `Sprite written by local diffusion (${spec.label}): ${relFile} (+ .meta). ` +
@@ -705,8 +709,8 @@ export class SpriteGenerateTool implements ITool {
       // prefab/scene binding to the previous version of this sprite.
       const guid = reuseOrMintGuid(`${pathCheck.fullPath}.meta`);
       mkdirSync(dirname(pathCheck.fullPath), { recursive: true });
-      writeFileSync(pathCheck.fullPath, png);
       writeFileSync(`${pathCheck.fullPath}.meta`, spriteMeta(guid), "utf8");
+      writeFileSync(pathCheck.fullPath, png);
       return {
         content:
           `Sprite written: ${relFile} (+ .meta, guid ${guid.slice(0, 8)}…, shape ${shape}, ${size}px). ` +

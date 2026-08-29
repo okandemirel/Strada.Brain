@@ -301,6 +301,7 @@ const LINK_STORE = join(homedir(), ".strada", "unity-asset-store.json");
 async function defaultWaitForOutput(outputPath: string, logPath: string, timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
+    // (torn-write guard lives at the JSON.parse consumer)
     if (existsSync(outputPath)) return true;
     if (existsSync(logPath)) {
       const log = readFileSync(logPath, "utf8");
@@ -398,7 +399,23 @@ export async function runUnityLink(options: UnityLinkRunnerOptions = {}): Promis
 
     // The editor only delivers the authorization CODE; the exchange happens
     // here with the Hub's own config (see readHubCloudConfig).
-    const parsedCode = codeSchema.safeParse(JSON.parse(readFileSync(outputPath, "utf8")));
+    // The C# side writes with a non-atomic WriteAllText and the wait above
+    // returns on bare existence — a torn read here used to throw, hit the
+    // outer catch, and the finally deleted the ONE-TIME code. Re-read briefly
+    // until the JSON is whole.
+    let codeRaw: unknown;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        codeRaw = JSON.parse(readFileSync(outputPath, "utf8"));
+        break;
+      } catch (parseErr) {
+        if (attempt >= 5) {
+          return { ok: false, detail: `Unity link output never became valid JSON: ${parseErr instanceof Error ? parseErr.message : String(parseErr)}` };
+        }
+        await new Promise((r) => setTimeout(r, 400));
+      }
+    }
+    const parsedCode = codeSchema.safeParse(codeRaw);
     if (!parsedCode.success) {
       return { ok: false, detail: "Unity link wrote no usable authorization code" };
     }

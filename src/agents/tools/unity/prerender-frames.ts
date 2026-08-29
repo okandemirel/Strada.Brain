@@ -316,7 +316,13 @@ export class PrerenderFramesTool implements ITool {
       const unityArgs = `-batchmode -executeMethod StradaPrerenderRun.Run -prefab "${prefabRel}" -outDir "${outCheck.fullPath}" -logFile "${join(context.projectPath, "prerender.log")}"`;
       const logPath = join(context.projectPath, "prerender.log");
       if (existsSync(logPath)) rmSync(logPath, { force: true });
-      execFile(DEFAULT_CLI, ["open", context.projectPath, "--args", unityArgs], { timeout: 60_000 }, () => undefined).unref?.();
+      let launchError = "";
+      execFile(DEFAULT_CLI, ["open", context.projectPath, "--args", unityArgs], { timeout: 60_000 }, (err) => {
+        // The CLI's own failure (ENOENT/EACCES/timeout) used to be discarded
+        // by an empty callback — surfaced only 30 minutes later as a generic
+        // "no frames". Record it so the poll loop can stop immediately.
+        if (err) launchError = err.message;
+      }).unref?.();
 
       // `unity open` is fire-and-forget: the CLI returns while the editor is
       // still booting (and deleting the script here once cost a whole run).
@@ -354,6 +360,10 @@ export class PrerenderFramesTool implements ITool {
           lastCount = frames.length;
           if (renderDone || stablePolls >= 2) break;
         }
+        if (launchError) {
+          failDetail = `Unity CLI launch failed: ${launchError.slice(0, 200)}`;
+          break;
+        }
         try {
           if (existsSync(logPath)) {
             const log = readFileSync(logPath, "utf8");
@@ -384,6 +394,13 @@ export class PrerenderFramesTool implements ITool {
         frames = listFreshFrames();
       }
       if (frames.length === 0) {
+        // Timeout/failure must not leave a batchmode editor squatting on the
+        // project's Library lock — the next run would race it forever. Our
+        // executeMethod name is unique, so the match cannot hit a person's
+        // interactive editor session.
+        try {
+          execFile("pkill", ["-f", "StradaPrerenderRun"], { timeout: 10_000 }, () => undefined).unref?.();
+        } catch { /* best-effort reaping */ }
         return {
           content: `Error: render produced no frames${failDetail ? `: ${failDetail}` : " (timed out waiting — see prerender.log)"}`,
           isError: true,

@@ -684,11 +684,15 @@ export class MeshGenerateTool implements ITool {
     if (!pathCheck.valid) return { content: `Error: ${pathCheck.error ?? "path validation failed"}`, isError: true };
     mkdirSync(dirname(pathCheck.fullPath), { recursive: true });
 
-    const lifted = await runner.imageToMesh(model3d, imageAbs, pathCheck.fullPath);
-    if (!lifted.ok) return { content: `Error: image-to-3D failed: ${lifted.detail}`, isError: true };
-
+    // Meta BEFORE art — see sprite-generate: torn pairs must fail toward an
+    // orphan meta (cleaned), never meta-less art (random-guid Texture import).
     const guid = reuseOrMintGuid(`${pathCheck.fullPath}.meta`);
     writeFileSync(`${pathCheck.fullPath}.meta`, modelMeta(guid), "utf8");
+    const lifted = await runner.imageToMesh(model3d, imageAbs, pathCheck.fullPath);
+    if (!lifted.ok) {
+      try { rmSync(`${pathCheck.fullPath}.meta`, { force: true }); } catch { /* orphan meta cleanup */ }
+      return { content: `Error: image-to-3D failed: ${lifted.detail}`, isError: true };
+    }
     return {
       content:
         `Mesh written by local image-to-3D (${model3d.label}): ${relFile} (+ .meta). ` +
@@ -851,8 +855,8 @@ export class MeshGenerateTool implements ITool {
       // prefab/scene binding to the previous version of this mesh.
       const guid = reuseOrMintGuid(`${pathCheck.fullPath}.meta`);
       mkdirSync(dirname(pathCheck.fullPath), { recursive: true });
-      writeFileSync(pathCheck.fullPath, toObj(mesh!, rawName), "utf8");
       writeFileSync(`${pathCheck.fullPath}.meta`, modelMeta(guid), "utf8");
+      writeFileSync(pathCheck.fullPath, toObj(mesh!, rawName), "utf8");
       return {
         content:
           `Mesh written: ${relFile} (+ .meta, guid ${guid.slice(0, 8)}…, ${mesh!.vertices.length} verts, ` +

@@ -166,6 +166,14 @@ export class UnityAssetStoreClient {
       throw new Error(`purchases failed (HTTP ${resp.status})`);
     }
     const data = (await resp.json()) as Array<Record<string, unknown>> | { results?: Array<Record<string, unknown>> };
+    // An unrecognized envelope must not read as "owns nothing" — the agent
+    // would then generate placeholder art the user already owns. Distinguish
+    // "empty library" (results: []) from "shape we don't understand".
+    if (!Array.isArray(data) && !Array.isArray((data as { results?: unknown }).results)) {
+      throw new Error(
+        `purchases returned an unrecognized payload shape (keys: ${Object.keys(data as object).slice(0, 8).join(",")}) — treat as an API change, not an empty library`,
+      );
+    }
     const rows = Array.isArray(data) ? data : (data.results ?? []);
     return rows.map((r) => ({
       productId: String(r["productId"] ?? r["id"] ?? ""),
