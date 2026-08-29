@@ -4,7 +4,7 @@
  * Measured 2026-08-26 (PixelFlow, stated by the user): prefab structures get
  * created while scenes stay empty, and no gate ever forces the production of
  * assets that belong to the target game. The conformance layer can SAY "check
- * unity_my_assets before making art" — but until now nothing in the toolchain
+ * unity_my_assets_cloud before making art" — but until now nothing in the toolchain
  * could MAKE any. The art that does exist in that project came from ad-hoc
  * editor scripts the agent happened to improvise.
  *
@@ -15,7 +15,7 @@
  *
  * The output is deliberately placeholder-grade: readable silhouettes with a
  * darker outline and a light band, distinct per element. Sourced art from
- * unity_my_assets stays the preferred option; this is the floor every GDD
+ * unity_my_assets_cloud stays the preferred option; this is the floor every GDD
  * element can always reach.
  */
 
@@ -444,7 +444,7 @@ export class SpriteGenerateTool implements ITool {
   readonly description =
     "Generate a placeholder-grade sprite for a game element and write it into the project " +
     "as a Unity Sprite (PNG + import .meta, no Editor needed). Use when a GDD element has no " +
-    "art and unity_my_assets turned up nothing the user already owns. Distinct shapes and " +
+    "art and unity_my_assets_cloud turned up nothing the user already owns. Distinct shapes and " +
     "colours per element keep captured frames honest — a scene full of generated sprites still " +
     "proves what renders and what does not.";
 

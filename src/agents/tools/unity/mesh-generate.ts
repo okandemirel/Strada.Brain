@@ -12,7 +12,7 @@
  * natively; the written .meta pins the guid so references don't churn). No
  * Editor, no bridge, no deps. Placeholder-grade like the sprite tool: the
  * soft low-poly look comes from the shapes themselves (rounded box, sphere,
- * capsule), and sourced art from unity_my_assets stays the preferred option
+ * capsule), and sourced art from unity_my_assets_cloud stays the preferred option
  * whenever a package fits.
  */
 
@@ -288,12 +288,20 @@ function makeField(fields: readonly OrganicField[]): (p: Vec3) => number {
   };
 }
 
-/** Field gradient via central differences — the glossy smooth-shading normals. */
+/**
+ * Field gradient via central differences — the glossy smooth-shading normals.
+ *
+ * NEGATED: the Wyvill potential DECREASES outward (max at each blob centre),
+ * so the raw gradient points INTO the surface. Shipping it as the vertex
+ * normal — and letting emitTriangle agree with it — rendered every organic
+ * mesh inside-out (backface-culled/black-lit in Unity). The outward surface
+ * normal is minus the gradient.
+ */
 function fieldNormal(field: (p: Vec3) => number, p: Vec3, h: number): Vec3 {
   const gx = field({ x: p.x + h, y: p.y, z: p.z }) - field({ x: p.x - h, y: p.y, z: p.z });
   const gy = field({ x: p.x, y: p.y + h, z: p.z }) - field({ x: p.x, y: p.y - h, z: p.z });
   const gz = field({ x: p.x, y: p.y, z: p.z + h }) - field({ x: p.x, y: p.y, z: p.z - h });
-  return normalize({ x: gx, y: gy, z: gz });
+  return normalize({ x: -gx, y: -gy, z: -gz });
 }
 
 /**
@@ -504,7 +512,7 @@ export class MeshGenerateTool implements ITool {
     "Generate a placeholder-grade low-poly 3D mesh (OBJ + import .meta, no Editor needed) for a " +
     "game element that needs DIMENSION — a stage prop, a 'plump glossy' character body, a rounded " +
     "block. The GDD's two-layer style needs pixel sprites for puzzles (unity_generate_sprite) and " +
-    "meshes for dimensional elements. Use when unity_my_assets has nothing the user already owns. " +
+    "meshes for dimensional elements. Use when unity_my_assets_cloud has nothing the user already owns. " +
     "Compose characters in the prefab: a capsule body mesh + sphere head mesh as child objects.";
 
   readonly inputSchema = {
@@ -819,8 +827,13 @@ export class MeshGenerateTool implements ITool {
           v.z *= plump;
           v.y *= 2 - plump;
         }
+        // Non-uniform scale transforms normals by the INVERSE-TRANSPOSE —
+        // dividing each axis by its scale factor, then renormalizing. The old
+        // loop only renormalized already-unit normals (a no-op), so plumped
+        // meshes lit as though unsquashed.
         for (let i = 0; i < mesh!.normals.length; i++) {
-          mesh!.normals[i] = normalize(mesh!.normals[i]!);
+          const n = mesh!.normals[i]!;
+          mesh!.normals[i] = normalize({ x: n.x / plump, y: n.y / (2 - plump), z: n.z / plump });
         }
       }
     } catch {

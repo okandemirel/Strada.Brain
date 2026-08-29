@@ -4,7 +4,7 @@
  * Measured on PixelFlow: 25 sprites and zero meshes shipped for a design whose
  * own words are "softly rendered dimensional stages", while three Asset Store
  * packages the user had already downloaded sat on disk — one of them a vehicle
- * package containing two .fbx meshes. The tool that finds them, unity_my_assets,
+ * package containing two .fbx meshes. The tool that finds them, unity_my_assets_cloud,
  * was registered, advertised to the model in every phase, and described as
  * "use this BEFORE generating or importing any art". Across a 2 MB run log it
  * was called zero times.
@@ -51,7 +51,7 @@ describe("a run that makes art without asking what the user owns", () => {
     const prompt = guard.getPrompt() ?? "";
     expect(prompt).toContain(GATE);
     expect(prompt).toContain("Assets/Art/tile.png");
-    expect(prompt).toContain("unity_my_assets");
+    expect(prompt).toContain("unity_my_assets_cloud");
   });
 
   it("counts every art file, and does not list them all", () => {
@@ -111,14 +111,14 @@ describe("clearing the gate", () => {
 
     // The honest answer "you own nothing that fits" clears it too: the rule
     // asks that the question was put, not that it was answered favourably.
-    guard.trackToolCall("unity_my_assets", { query: "pixel tileset" }, false);
+    guard.trackToolCall("unity_my_assets_cloud", { query: "pixel tileset" }, false);
 
     expect(guard.getPrompt() ?? "").not.toContain(GATE);
   });
 
   it("is cleared by a lookup made before the art, not only after", () => {
     const guard = guardFor();
-    guard.trackToolCall("unity_my_assets", {}, false);
+    guard.trackToolCall("unity_my_assets_cloud", {}, false);
     drew(guard, "/p/Assets/Art/tile.png");
 
     expect(guard.getPrompt() ?? "").not.toContain(GATE);
@@ -210,7 +210,7 @@ describe("a game that was played and has nothing in it to draw", () => {
 
     expect(prompt).toContain(GATE);
     expect(prompt).toContain("contains no art whatsoever");
-    expect(prompt).toContain("unity_my_assets");
+    expect(prompt).toContain("unity_my_assets_cloud");
   });
 
   it("says nothing once the project has art of any kind", () => {
@@ -269,7 +269,7 @@ describe("a game that was played and has nothing in it to draw", () => {
     const guard = ranTheGame(playedProject());
     expect(guard.getPrompt() ?? "").toContain(GATE);
 
-    guard.trackToolCall("unity_my_assets", { query: "3d cube" }, false);
+    guard.trackToolCall("unity_my_assets_cloud", { query: "3d cube" }, false);
 
     expect(guard.getPrompt() ?? "").not.toContain(GATE);
   });

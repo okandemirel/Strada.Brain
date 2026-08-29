@@ -43,7 +43,7 @@ const GDD = [
 /**
  * A project that satisfies every gate ordered BEFORE the coverage gate:
  * assembled (config asset + wired scene), tested (a real test assembly),
- * assets sourced (unity_my_assets called in the guard), no dangling refs.
+ * assets sourced (unity_my_assets_cloud called in the guard), no dangling refs.
  */
 function assembledProject(): { root: string; codePath: string; configGuid: string } {
   const root = mkdtempSync(join(os.tmpdir(), "coverage-gate-"));
@@ -106,7 +106,7 @@ function guardFor(root: string): StradaConformanceGuard {
 /** Drive the guard to the phase where the coverage gate is allowed to speak. */
 function runToPlayedPhase(guard: StradaConformanceGuard, codePath: string): void {
   guard.trackToolCall("file_write", { path: codePath }, false);
-  guard.trackToolCall("unity_my_assets", { query: "rocket sprite" }, false);
+  guard.trackToolCall("unity_my_assets_cloud", { query: "rocket sprite" }, false);
   guard.trackToolCall("unity_playmode_verify", {}, false);
 }
 

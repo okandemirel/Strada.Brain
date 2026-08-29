@@ -15,7 +15,7 @@
  */
 
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync, rmSync, readdirSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync, rmSync, readdirSync, statSync, readFileSync } from "node:fs";
 import { join, basename } from "node:path";
 import type { ITool, ToolContext, ToolExecutionResult } from "../tool.interface.js";
 import { validatePath } from "../../../security/path-guard.js";
@@ -215,7 +215,7 @@ export class PrerenderFramesTool implements ITool {
     "Render glossy game-ready 2D frames of any prefab (the casual-game prerendered pipeline): " +
     "3-point-lit scene, game-style stylization (chibi proportions, pastel toon-glossy material, " +
     "inverted-hull outline), captured at 6 angles synchronously. Use after importing/sourcing a " +
-    "rigged model (e.g. from unity_my_assets packages) — the realistic-to-cartoon transform is " +
+    "rigged model (e.g. from unity_my_assets_cloud packages) — the realistic-to-cartoon transform is " +
     "built in. Writes frame_XXX.png under the output dir.";
 
   readonly inputSchema = {
@@ -265,9 +265,13 @@ export class PrerenderFramesTool implements ITool {
     }
     mkdirSync(outCheck.fullPath, { recursive: true });
 
-    const outlineRaw = Number(input["outlineWidth"] ?? 1.0);
-    const plumpRaw = Number(input["plumpness"] ?? 1.2);
-    const headRaw = Number(input["headScale"] ?? 1.22);
+    // `?? 1.0` here silently defeated the style profile: an ABSENT input
+    // became a finite number, so the profile branch below was unreachable and
+    // every project got the stock chibi/toon defaults regardless of its GDD.
+    // Absent must stay NaN so the profile (then the stock default) can win.
+    const outlineRaw = Number(input["outlineWidth"]);
+    const plumpRaw = Number(input["plumpness"]);
+    const headRaw = Number(input["headScale"]);
     // The project's style.json (derived from ITS OWN GDD by style-analysis —
     // never a universal preset) supplies the defaults; explicit inputs win.
     let styleProfileDefaults: { bodyColor?: string; outlineWidth?: number; plump?: number; headScale?: number } = {};
@@ -334,22 +338,43 @@ export class PrerenderFramesTool implements ITool {
       const deadline = Date.now() + 30 * 60_000;
       let frames: string[] = [];
       let failDetail = "";
+      let renderDone = false;
+      let stablePolls = 0;
+      let lastCount = -1;
       while (Date.now() < deadline) {
         frames = listFreshFrames();
-        if (frames.length > 0) break;
-        if (existsSync(logPath)) {
-          const log = (await import("node:fs")).readFileSync(logPath, "utf8");
-          if (log.includes("STRADA-RENDER-FAIL")) {
-            const m = /STRADA-RENDER-FAIL: ([^\n]+)/.exec(log);
-            failDetail = m?.[1] ?? "render script failed";
-            break;
+        // Do NOT stop on the first frame: the editor is still writing the
+        // rest of the arc, and the finally below deletes the outline shader
+        // the remaining renders need — which shipped partial sets whose late
+        // frames landed meta-less and re-guided. Proceed only on the script's
+        // own OK marker, or when the frame count has been stable for two
+        // consecutive polls (marker lost / log rotated).
+        if (frames.length > 0) {
+          stablePolls = frames.length === lastCount ? stablePolls + 1 : 0;
+          lastCount = frames.length;
+          if (renderDone || stablePolls >= 2) break;
+        }
+        try {
+          if (existsSync(logPath)) {
+            const log = readFileSync(logPath, "utf8");
+            if (log.includes("STRADA-RENDER-FAIL")) {
+              const m = /STRADA-RENDER-FAIL: ([^\n]+)/.exec(log);
+              failDetail = m?.[1] ?? "render script failed";
+              break;
+            }
+            if (log.includes("STRADA-RENDER-OK")) {
+              renderDone = true;
+              if (frames.length > 0) break;
+            }
+            if (/error CS\d+/.test(log)) {
+              const m = /(error CS\d+[^\n]*)/.exec(log);
+              failDetail = `script compile error: ${m?.[1] ?? "unknown"}`;
+              break;
+            }
           }
-          if (log.includes("STRADA-RENDER-OK")) break;
-          if (/error CS\d+/.test(log)) {
-            const m = /(error CS\d+[^\n]*)/.exec(log);
-            failDetail = `script compile error: ${m?.[1] ?? "unknown"}`;
-            break;
-          }
+        } catch {
+          // The editor can rotate/replace the log between the existence check
+          // and the read; a transient ENOENT is not a render failure.
         }
         await new Promise((r) => setTimeout(r, 2000));
       }

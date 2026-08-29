@@ -275,7 +275,7 @@ const PLAYMODE_VERIFICATION_TOOLS: ReadonlySet<string> = new Set([
 
 /** Tools that answer what art the user already owns, before any is made. */
 const OWNED_ASSET_SEARCH_TOOLS: ReadonlySet<string> = new Set([
-  "unity_my_assets",
+  "unity_my_assets_cloud",
 ]);
 
 /**
@@ -1459,7 +1459,7 @@ export class StradaConformanceGuard {
       const lastAsk = this.assetsUnsourcedRaised === ASSETS_UNSOURCED_GATE_LIMIT;
       return (
         `[STRADA ASSETS UNSOURCED] ${unsourced}. ` +
-        "Run unity_my_assets — it searches the Asset Store packages already downloaded on this " +
+        "Run unity_my_assets_cloud — it searches the Asset Store packages already downloaded on this " +
         "machine, needs no Editor, no login and no network, and reports what is inside each " +
         "package rather than only its name. A model the user bought beats one that has to be " +
         "made, and measured on this project an owned 3D vehicle package holding two .fbx meshes " +
@@ -1489,7 +1489,7 @@ export class StradaConformanceGuard {
       return (
         `[STRADA ELEMENT ASSETS MISSING] ${coverage}. ` +
         "The design's element schedule is the contract for what must be VISIBLE, not only " +
-        "implemented. For each named element: first run unity_my_assets for art the user " +
+        "implemented. For each named element: first run unity_my_assets_cloud for art the user " +
         "already owns; when nothing fits, generate with the tool that matches the element's " +
         "layer — unity_generate_sprite for pixel-canvas pieces, unity_generate_mesh for " +
         "dimensional ones (the GDD's 'softly rendered dimensional stages' and 'plump, glossy " +

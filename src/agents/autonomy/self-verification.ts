@@ -45,6 +45,8 @@ export class SelfVerification {
   private pendingTestFiles = new Set<string>();
   private testRunAttempts = 0;
   private static readonly MAX_TEST_RUN_ATTEMPTS = 3;
+  /** A test run REPORTED failures and no later run has passed. */
+  private failingTestRun = false;
   /**
    * How many times the compile gate has been raised without a clean pass since.
    * The unity-error and unrun-test gates already carry caps; this one had none,
@@ -96,7 +98,15 @@ export class SelfVerification {
 
       // Track build results — O(1)
       if (isVerificationTool(executedTool.toolName, executedTool.input)) {
-        const ok = !executedTool.isError;
+        // Defense against a success-shaped failure: pass/fail must not rest
+        // solely on the tool's isError flag — a result body saying "N of M
+        // tests failed" IS a failure whatever the flag says (the false-green
+        // class measured across this pipeline).
+        const bodyText = typeof result.content === "string" ? result.content : "";
+        const bodyReportsFailure =
+          runsTests(executedTool.toolName, executedTool.input) &&
+          /\b\d+ of \d+ tests? failed|PlayMode verification FAILED/i.test(bodyText);
+        const ok = !executedTool.isError && !bodyReportsFailure;
         this.lastBuildOk = ok;
         this.lastVerificationAt = Date.now();
         if (ok) {
@@ -113,6 +123,13 @@ export class SelfVerification {
           this.testRunAttempts++;
           if (ok) {
             this.pendingTestFiles.clear();
+            this.failingTestRun = false;
+          } else {
+            // A failing test run must leave an OPEN gate. Before this flag, a
+            // clean compile cleared hasCompilableChanges, a later red PlayMode
+            // run set lastBuildOk=false — and needsVerification() saw nothing:
+            // the run could declare DONE over a failing suite.
+            this.failingTestRun = true;
           }
         }
       }
@@ -139,7 +156,18 @@ export class SelfVerification {
         && this.lastBuildOk !== true
         && this.buildGateEmissions < SelfVerification.MAX_BUILD_GATE_EMISSIONS)
       || this.hasUnresolvedUnityErrors()
-      || this.hasUnrunTests();
+      || this.hasUnrunTests()
+      || this.hasFailingTestRun();
+  }
+
+  /**
+   * The last test run reported failures and nothing has passed since —
+   * capped like the unrun-test gate so an honest failure report can still
+   * end the run.
+   */
+  private hasFailingTestRun(): boolean {
+    return this.failingTestRun
+      && this.testRunAttempts < SelfVerification.MAX_TEST_RUN_ATTEMPTS;
   }
 
   /**
@@ -279,6 +307,14 @@ export class SelfVerification {
         ...[...this.pendingTestFiles].slice(0, 5).map(f => `  - ${f}`),
         `A clean compile does not run tests — unity_verify_change says so itself.`,
         `Run unity_playmode_verify. A test that has never run is not evidence of anything.`,
+      );
+    }
+
+    if (this.hasFailingTestRun()) {
+      lines.push(
+        ``,
+        `[TESTS FAILING] The last test run reported failures and no later run has passed.`,
+        `Fix the failing tests and re-run unity_playmode_verify until green — a failing suite is not DONE.`,
       );
     }
 

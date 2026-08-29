@@ -47,6 +47,34 @@ describe("SelfVerification", () => {
     expect(verifier.getState().touchedFiles.has("Assets/Gameplay/TestSystem.cs")).toBe(true);
   });
 
+  it("a failing test run keeps the gate open after a clean compile (and a red body beats a green flag)", () => {
+    const verifier = new SelfVerification();
+
+    verifier.track("file_write", { path: "Assets/Gameplay/Board.cs" }, {
+      toolCallId: "tc-w", content: "written", isError: false,
+    });
+    // Clean headless compile clears the compilable-changes gate…
+    verifier.track("unity_verify_change", {}, {
+      toolCallId: "tc-c", content: "compile green", isError: false,
+    });
+    expect(verifier.needsVerification()).toBe(false);
+
+    // …then a PlayMode run whose BODY reports failures (success-shaped flag)
+    // must reopen the gate: measured class — a run declared DONE over a
+    // failing suite because nothing tracked the red result.
+    verifier.track("unity_playmode_verify", {}, {
+      toolCallId: "tc-t", content: "PlayMode verification FAILED: 5 of 95 tests failed", isError: false,
+    });
+    expect(verifier.needsVerification()).toBe(true);
+    expect(verifier.getPrompt()).toContain("[TESTS FAILING]");
+
+    // A later green run closes it.
+    verifier.track("unity_playmode_verify", {}, {
+      toolCallId: "tc-t2", content: "All 95 tests passed", isError: false,
+    });
+    expect(verifier.needsVerification()).toBe(false);
+  });
+
   it("tracks nested batch_execute mutations and verification results", () => {
     const verifier = new SelfVerification();
 

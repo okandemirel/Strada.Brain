@@ -24,7 +24,7 @@
  * token is reported as "re-run the Unity Link step", never as a silent failure.
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, chmodSync, statSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, chmodSync, statSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { getLoggerSafe } from "../../../utils/logger.js";
@@ -141,7 +141,7 @@ export class UnityAssetStoreClient {
   /** Store-wide catalog search (kharma, no auth needed). */
   async searchStore(query: string, rows = 10): Promise<StoreCatalogHit[]> {
     const url = `${KHARMA_BASE}/api/en-US/search/results.json?q=${encodeURIComponent(query)}&page=1&rows=${Math.min(50, Math.max(1, rows))}`;
-    const resp = await this.fetchImpl(url);
+    const resp = await this.fetchImpl(url, { signal: AbortSignal.timeout(60_000) });
     if (!resp.ok) {
       throw new Error(`Asset Store search failed (HTTP ${resp.status})`);
     }
@@ -158,7 +158,7 @@ export class UnityAssetStoreClient {
   async listPurchases(limit = 50, offset = 0): Promise<PurchasedPackage[]> {
     const token = await this.getToken();
     const url = `${this.link.packagesHost}/-/api/purchases?limit=${Math.min(200, Math.max(1, limit))}&offset=${Math.max(0, offset)}`;
-    const resp = await this.fetchImpl(url, { headers: { Authorization: `Bearer ${token}` } });
+    const resp = await this.fetchImpl(url, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(60_000) });
     if (resp.status === 401 || resp.status === 403) {
       throw new UnityLinkExpiredError(`purchases returned HTTP ${resp.status}`);
     }
@@ -179,7 +179,7 @@ export class UnityAssetStoreClient {
   async getDownloadInfo(productId: string): Promise<DownloadInfo> {
     const token = await this.getToken();
     const url = `${this.link.packagesHost}/-/api/legacy-package-download-info/${encodeURIComponent(productId)}`;
-    const resp = await this.fetchImpl(url, { headers: { Authorization: `Bearer ${token}` } });
+    const resp = await this.fetchImpl(url, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(60_000) });
     if (resp.status === 401 || resp.status === 403) {
       throw new UnityLinkExpiredError(`download-info returned HTTP ${resp.status}`);
     }
@@ -251,12 +251,19 @@ export class UnityAssetStoreClient {
         `&refresh_token=${encodeURIComponent(this.link.refreshToken)}` +
         "&client_id=packman" +
         `&client_secret=${encodeURIComponent(this.link.clientSecret)}`;
+      // Timeout matters doubly here: this call runs while HOLDING the
+      // cross-process link write lock — a hung identity host would pin the
+      // lock past the 30s acquire timeout and reinstate the concurrent-
+      // rotation race the lock closes.
       const resp = await this.fetchImpl(`${this.link.identityHost}/v1/oauth2/token`, {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body,
+        signal: AbortSignal.timeout(60_000),
       });
-      if (resp.status === 400 || resp.status === 401 || resp.status === 403) {
+      // 412 is the measured rotation-death signal (stale refresh token after
+      // an unpersisted rotation) — actionable, same as 400/401/403.
+      if (resp.status === 400 || resp.status === 401 || resp.status === 403 || resp.status === 412) {
         throw new UnityLinkExpiredError(`token refresh returned HTTP ${resp.status}`);
       }
       if (!resp.ok) {
@@ -350,11 +357,27 @@ export function persistUnityLink(link: UnityAssetStoreLink): void {
   }
   mkdirSync(LINK_DIR, { recursive: true });
   const tmp = `${LINK_FILE}.tmp-${process.pid}`;
-  writeFileSync(tmp, JSON.stringify(link, null, 2), { mode: 0o600 });
-  renameSync(tmp, LINK_FILE);
+  try {
+    writeFileSync(tmp, JSON.stringify(link, null, 2), { mode: 0o600 });
+    renameSync(tmp, LINK_FILE);
+  } catch (err) {
+    try {
+      rmSync(tmp, { force: true });
+    } catch { /* tmp cleanup is best-effort */ }
+    throw err;
+  }
   try {
     chmodSync(LINK_FILE, 0o600);
   } catch {
     // Permission fixing is best-effort; the rename already landed the content.
+  }
+  // Our own persist changed the link file's mtime. The process-wide client
+  // cache keys on that mtime, so without re-stamping it here every rotation
+  // invalidated the cache, the next call built a fresh client, refreshed and
+  // rotated AGAIN — the per-call-rotation loop the cache exists to prevent.
+  if (cachedClient) {
+    try {
+      cachedClient.linkMtimeMs = statSync(LINK_FILE).mtimeMs;
+    } catch { /* next call falls back to a clean rebuild */ }
   }
 }
