@@ -74,6 +74,11 @@ export interface CampaignMilestone {
   /** One-shot flag: completion was bounced once for missing capture frames
    *  (the visual-evidence gate); the second completion stands either way. */
   visualEvidenceBounced?: boolean;
+  /**
+   * One-shot no-work bounce: a completion with a clean tree and no commits
+   * since the sprint began is rejected once; the second stands either way.
+   */
+  noWorkBounced?: boolean;
 }
 
 export interface Campaign {

@@ -46,6 +46,8 @@ export interface CampaignManagerOptions {
   maxDraftAttempts?: number;
   /** Grace before reacting to a bad settlement (tests shrink it). */
   retryAdoptionGraceMs?: number;
+  /** Delay before acting on a COMPLETED settle (lets the lease write-back land). */
+  completedSettleDelayMs?: number;
   /**
    * GDD→style.json derivation, run at plan time (post-approval). Optional:
    * without it the campaign still plans, tools just fall back to stock
@@ -95,6 +97,7 @@ export class CampaignManager {
   private readonly maxMilestoneAttempts: number;
   private readonly maxDraftAttempts: number;
   private readonly retryAdoptionGraceMs: number;
+  private readonly completedSettleDelayMs: number;
   private readonly styleAnalysis?: import("../agents/style/style-analysis.js").StyleAnalysis;
   private eventsAttached = false;
 
@@ -107,6 +110,7 @@ export class CampaignManager {
     this.maxMilestoneAttempts = options.maxMilestoneAttempts ?? 2;
     this.maxDraftAttempts = options.maxDraftAttempts ?? 3;
     this.retryAdoptionGraceMs = options.retryAdoptionGraceMs ?? RETRY_ADOPTION_GRACE_MS;
+    this.completedSettleDelayMs = options.completedSettleDelayMs ?? 5_000;
     this.styleAnalysis = options.styleAnalysis;
   }
 
@@ -285,6 +289,11 @@ export class CampaignManager {
   private async reviveAtCurrentMilestone(campaign: Campaign, milestone: CampaignMilestone): Promise<void> {
     milestone.attempts = 0;
     milestone.status = "pending";
+    // Fresh budget = fresh gates: a revived campaign must be able to bounce
+    // on missing evidence again, or revival quietly weakens the acceptance
+    // bar for the rest of the run.
+    milestone.visualEvidenceBounced = false;
+    milestone.noWorkBounced = false;
     campaign.state = "executing";
     campaign.lastError = undefined;
     campaign.autoReviveAt = undefined;
@@ -569,10 +578,26 @@ export class CampaignManager {
       milestone.attempts += 1;
     }
     campaign.state = "executing";
-    const task = this.taskManager.submit(campaign.chatId, campaign.channelType, milestone.prompt, {
-      userId: campaign.userId,
-      conversationId: campaign.conversationId,
-    });
+    // Attempt N+1 must know what attempt N ACHIEVED, not only how it died.
+    // Audited 2026-08-29: the resubmit carried only the milestone prompt plus
+    // a 400-char failure tail — files written, sub-goals done and commits made
+    // were all invisible, so every retry re-derived the sprint from scratch.
+    // parentId makes the retry a real lineage descendant (adoption, lineage
+    // queries and checkpoint lookup all key on it); the progress block is
+    // appended to the SUBMITTED prompt only, never persisted into
+    // milestone.prompt, so it cannot accumulate.
+    const prevTaskId = milestone.taskId as TaskId | undefined;
+    const priorProgress = prevTaskId ? this.taskManager.priorProgressSummary?.(prevTaskId) ?? "" : "";
+    const task = this.taskManager.submit(
+      campaign.chatId,
+      campaign.channelType,
+      priorProgress ? `${milestone.prompt}${priorProgress}` : milestone.prompt,
+      {
+        userId: campaign.userId,
+        conversationId: campaign.conversationId,
+        parentId: prevTaskId,
+      },
+    );
     milestone.taskId = task.id;
     this.persist(campaign);
     getLoggerSafe().info("Campaign milestone submitted", {
@@ -692,6 +717,15 @@ export class CampaignManager {
     output: string,
   ): Promise<void> {
     if (status === TaskStatus.completed) {
+      // The executor commits the task's lease back to the project root in a
+      // finally that runs AFTER complete() — audited 2026-08-29: this handler
+      // could scan for capture evidence and cut the envelope commit against a
+      // project root the sprint's files had not reached yet. A short delay
+      // orders us behind the write-back (both sides also serialize on the
+      // project write lock).
+      if (this.completedSettleDelayMs > 0) {
+        await new Promise((r) => setTimeout(r, this.completedSettleDelayMs));
+      }
       await this.onMilestoneOutcome(campaign, milestone, status, output, { countAttempt: true });
       return;
     }
@@ -835,6 +869,25 @@ export class CampaignManager {
       // That is how a campaign once ended with 282 dirty files and a corrupted
       // next-sprint seed. The envelope commits.
       const commitNote = await this.commitMilestoneWork(campaign, milestone);
+      // NO-WORK GATE: green with a clean tree AND no commits since the sprint
+      // began is a sprint that changed nothing — audited 2026-08-29: the green
+      // stamp sat unconditionally beside the commit call, so an empty sprint
+      // went green silently. One bounce per milestone, like the visual gate.
+      if (commitNote === "" && !milestone.noWorkBounced && !this.repoChangedSince(milestone)) {
+        milestone.noWorkBounced = true;
+        milestone.prompt +=
+          "\n\nNO WORK DETECTED: the previous attempt reported completion but left the repository " +
+          "untouched — no dirty files to commit and no new commits since this sprint began. A sprint " +
+          "that changes nothing is not done. Do the sprint's work in the actual project tree and only " +
+          "then report completion.";
+        this.persist(campaign);
+        getLoggerSafe().warn("Milestone completion rejected: repository unchanged", {
+          id: campaign.id,
+          milestone: milestone.id,
+        });
+        this.submitCurrentMilestone(campaign, { countAttempt: false });
+        return;
+      }
       milestone.status = "green";
       milestone.resultExcerpt = output.slice(-500);
       const isLast = campaign.currentMilestone >= campaign.milestones.length - 1;
@@ -885,14 +938,28 @@ export class CampaignManager {
     const canRetry = milestone.attempts < this.maxMilestoneAttempts;
     if (canRetry && status === TaskStatus.blocked) {
       // Autonomous campaign context: a block is usually the agent asking a
-      // person it was told not to need. Nudge with the mandate repeated.
-      milestone.prompt +=
+      // person it was told not to need. Nudge with the mandate repeated —
+      // once; a re-blocked milestone must not accumulate copies.
+      const reminder =
         "\n\nREMINDER: this is an autonomous campaign sprint — do not ask the user questions; make the strong choice and continue.";
+      if (!milestone.prompt.includes(reminder)) milestone.prompt += reminder;
       this.submitCurrentMilestone(campaign, { countAttempt: opts.countAttempt });
       return;
     }
     if (canRetry) {
-      milestone.prompt += `\n\nThe previous attempt ended ${status}: ${output.slice(0, 400)}. Fix the root cause, do not repeat it.`;
+      // The failure tail is retry CONTEXT, not history: keep exactly one, and
+      // strip retry-machinery noise ("Reaped: …", "Auto-retry n/m in ~Xs")
+      // that names the executor's plumbing instead of the sprint's problem.
+      const cleaned = output
+        .replace(/Reaped:[^.]*\./g, "")
+        .replace(/Auto-retry \d+\/\d+ in ~\d+s\.?/g, "")
+        .replace(/Transient failure —\s*/g, "")
+        .trim();
+      milestone.prompt = milestone.prompt.replace(
+        /\n\nThe previous attempt ended [\s\S]*?Fix the root cause, do not repeat it\./g,
+        "",
+      );
+      milestone.prompt += `\n\nThe previous attempt ended ${status}: ${(cleaned || output).slice(0, 400)}. Fix the root cause, do not repeat it.`;
       this.submitCurrentMilestone(campaign, { countAttempt: opts.countAttempt });
       return;
     }
@@ -1000,6 +1067,33 @@ export class CampaignManager {
 
   /** Newest capture frame under Recordings/ or Assets/Art/Prerendered since
    *  the milestone's first task was created. Cheap directory scan, bounded. */
+  /** Did the project repo gain any commit since this milestone's lineage began? */
+  private repoChangedSince(milestone: CampaignMilestone): boolean {
+    try {
+      const rootId = milestone.taskId ? this.taskManager.findLineageRootId(milestone.taskId as TaskId) : null;
+      const root = rootId ? this.taskManager.getStatus(rootId) : null;
+      const sinceMs = root?.createdAt;
+      // Unknown start time must not veto a green — the gate only fires on a
+      // DEMONSTRABLY unchanged repo.
+      if (!sinceMs) return true;
+      // Compare the newest commit's timestamp instead of rev-list --since:
+      // approxidate parsing is second-granular and inclusive, which read a
+      // pre-sprint baseline commit in the same second as fresh work.
+      const headTime = Number(
+        execFileSync("git", ["-C", this.projectRoot, "log", "-1", "--format=%ct", "HEAD"], {
+          encoding: "utf8",
+          timeout: 20_000,
+        }).trim(),
+      );
+      if (!Number.isFinite(headTime)) return true;
+      return headTime * 1000 >= sinceMs;
+    } catch {
+      // Unknowable repo state must not veto a green — the gate exists to catch
+      // a demonstrably unchanged repo, not to punish a missing git binary.
+      return true;
+    }
+  }
+
   private freshCaptureEvidence(milestone: CampaignMilestone): { found: boolean } {
     const sinceMs = (() => {
       try {

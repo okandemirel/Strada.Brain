@@ -493,6 +493,38 @@ export class TaskManager extends EventEmitter {
   }
 
   /**
+   * Compact "what the previous run already achieved" block for a follow-up
+   * submission (campaign milestone retries). Mirrors buildReplayPrompt's
+   * checkpoint section: without it, attempt N+1 saw only attempt N's failure
+   * text and re-derived the whole sprint from scratch (audited 2026-08-29).
+   * Returns "" when nothing usable is known.
+   */
+  priorProgressSummary(taskId: TaskId): string {
+    try {
+      const latest = this.findLatestLineageTask(taskId) ?? this.getStatus(taskId);
+      if (!latest) return "";
+      const checkpoint = this.checkpointStore?.loadByTaskIdSync?.(latest.id);
+      const touched = (checkpoint?.touchedFiles ?? []).slice(0, 30);
+      const resultTail = (latest.result ?? "")
+        .replace(/Reaped:[^.]*\./g, "")
+        .replace(/Auto-retry \d+\/\d+ in ~\d+s\.?/g, "")
+        .trim()
+        .slice(-400);
+      if (touched.length === 0 && !resultTail) return "";
+      const lines: string[] = ["\n\nPREVIOUS ATTEMPT PROGRESS (verify before redoing any of it):"];
+      if (touched.length > 0) {
+        lines.push(`Files the previous attempt already created/modified:\n${touched.map((f) => `- ${f}`).join("\n")}`);
+      }
+      if (resultTail) {
+        lines.push(`Its final report ended with:\n${resultTail}`);
+      }
+      return lines.join("\n");
+    } catch {
+      return "";
+    }
+  }
+
+  /**
    * Add a progress entry to a task.
    */
   addProgress(taskId: TaskId, message: TaskProgressUpdate): void {

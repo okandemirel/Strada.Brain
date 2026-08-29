@@ -23,13 +23,21 @@ class FakeTaskManager extends EventEmitter {
     const id = `task_${this.counter}`;
     this.submitted.push({ chatId, prompt });
     this.statuses.set(id, TaskStatus.executing);
+    this.createdAts.set(id, Date.now());
     return { id, chatId, status: TaskStatus.executing } as unknown as Task;
   }
+
+  private createdAts = new Map<string, number>();
 
   getStatus(taskId: string): Task | null {
     const status = this.statuses.get(taskId);
     return status
-      ? ({ id: taskId, status, result: this.results.get(taskId) } as unknown as Task)
+      ? ({
+          id: taskId,
+          status,
+          result: this.results.get(taskId),
+          createdAt: this.createdAts.get(taskId) ?? Date.now(),
+        } as unknown as Task)
       : null;
   }
 
@@ -62,6 +70,17 @@ class FakeTaskManager extends EventEmitter {
       if (this.isInLineage(rootId, parent) || parent === rootId) latest = child;
     }
     return this.getStatus(latest);
+  }
+
+  priorProgressSummary(taskId: string): string {
+    return this.progressBlocks.get(taskId) ?? "";
+  }
+  progressBlocks = new Map<string, string>();
+
+  findLineageRootId(taskId: string): string {
+    let current = taskId;
+    while (this.parents.has(current)) current = this.parents.get(current)!;
+    return current;
   }
 
   resumeTask(taskId: string): Task | null {
@@ -123,6 +142,7 @@ describe("CampaignManager", () => {
       },
       projectRoot,
       retryAdoptionGraceMs: 10,
+      completedSettleDelayMs: 0,
     });
     manager.attachEvents();
   });
@@ -279,6 +299,71 @@ describe("CampaignManager", () => {
     });
   });
 
+  it("a milestone retry carries the previous attempt's progress without persisting it", async () => {
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+
+    tasks.progressBlocks.set(
+      "task_1",
+      "\n\nPREVIOUS ATTEMPT PROGRESS (verify before redoing any of it):\n- Assets/Scripts/Board.cs",
+    );
+    tasks.emit("task:failed", "task_1", "compile exploded");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+
+    // The SUBMITTED prompt carries the progress block…
+    expect(tasks.submitted[1]!.prompt).toContain("PREVIOUS ATTEMPT PROGRESS");
+    expect(tasks.submitted[1]!.prompt).toContain("Assets/Scripts/Board.cs");
+    // …but the persisted milestone prompt does not (no accumulation).
+    const fresh = storage.get(campaign.id)!;
+    expect(fresh.milestones[0]!.prompt).not.toContain("PREVIOUS ATTEMPT PROGRESS");
+  });
+
+  it("strips retry-machinery noise from the failure tail and keeps only one tail", async () => {
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+
+    // (Reaped/Auto-retry wording is settlement-deferred by design, so the
+    // noise strip is exercised with the non-deferring machinery preface.)
+    tasks.emit(
+      "task:failed",
+      "task_1",
+      "Transient failure — worker crashed mid-epoch. Board.cs does not compile",
+    );
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    const prompt1 = storage.get(campaign.id)!.milestones[0]!.prompt;
+    expect(prompt1).toContain("Board.cs does not compile");
+    expect(prompt1).not.toContain("Transient failure —");
+  });
+
+  it("rejects a completion that left the repository untouched (one no-work bounce)", async () => {
+    const { execFileSync } = await import("node:child_process");
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-C", projectRoot, ...args], { encoding: "utf8" });
+    git("init", "-q");
+    git("config", "user.email", "t@t");
+    git("config", "user.name", "t");
+    git("add", "-A");
+    git("commit", "-qm", "baseline");
+    // Commit timestamps are second-granular; the sprint must start strictly
+    // after the baseline's second for "unchanged since sprint start" to hold.
+    await new Promise((r) => setTimeout(r, 1100));
+
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+
+    // Completion with a clean tree and no commits since the sprint began.
+    settleMilestone("sprint A done (allegedly)");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    const bounced = storage.get(campaign.id)!;
+    expect(bounced.milestones[0]!.status).toBe("running");
+    expect(bounced.milestones[0]!.prompt).toContain("NO WORK DETECTED");
+    expect(bounced.milestones[0]!.attempts).toBe(1); // bounce burned no attempt
+
+    // Second completion stands either way (one bounce per milestone).
+    settleMilestone("sprint A done again");
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.milestones[0]!.status).toBe("green"));
+  });
+
   it("a stop during a full provider outage arms self-revival and revives when the chain recovers", async () => {
     // Measured 2026-08-29 (00:58 and 12:27): "failed on quota" meant failed
     // until a person typed "kampanya devam" — hours of operator attention for
@@ -375,6 +460,7 @@ describe("CampaignManager", () => {
       messenger: async (chatId, text) => messages.push({ chatId, text }),
       projectRoot,
       retryAdoptionGraceMs: 10,
+      completedSettleDelayMs: 0,
     });
     manager.attachEvents();
 
@@ -413,6 +499,7 @@ describe("CampaignManager", () => {
       messenger: async (chatId, text) => messages.push({ chatId, text }),
       projectRoot, // no Recordings/ dir → no evidence
       retryAdoptionGraceMs: 10,
+      completedSettleDelayMs: 0,
     });
     manager.attachEvents();
 
