@@ -367,6 +367,27 @@ describe("CampaignManager", () => {
     await vi.waitFor(() => expect(storage.get(campaign.id)!.milestones[0]!.status).toBe("green"));
   });
 
+  it("doubled settle emissions cannot consume the deferral and burn an attempt", async () => {
+    // Measured 2026-08-29 19:04: one handler logged the defer, the second
+    // (same second, doubled task:blocked emission) consumed the one-shot flag
+    // and submitted attempt 2 into a 68-minute quota wall.
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+
+    const parkText = "Transient failure — All providers are in cooldown. Auto-retry 2/10 in ~4105s.";
+    tasks.emit("task:blocked", "task_1", parkText);
+    tasks.emit("task:blocked", "task_1", parkText);
+
+    // Both settles defer (grace 10ms + settle chain) — no resubmission, no
+    // attempt burn, campaign still executing on the parked lineage.
+    await new Promise((r) => setTimeout(r, 250));
+    expect(tasks.submitted).toHaveLength(1);
+    const fresh = storage.get(campaign.id)!;
+    expect(fresh.state).toBe("executing");
+    expect(fresh.milestones[0]!.attempts).toBe(1);
+    expect(fresh.milestones[0]!.reconcileDeferredSince).toBeGreaterThan(0);
+  });
+
   it("a stop during a full provider outage arms self-revival and revives when the chain recovers", async () => {
     // Measured 2026-08-29 (00:58 and 12:27): "failed on quota" meant failed
     // until a person typed "kampanya devam" — hours of operator attention for

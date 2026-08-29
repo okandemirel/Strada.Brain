@@ -815,19 +815,37 @@ export class CampaignManager {
     // (measured live 2026-08-28 20:04-20:08).
     const executorWillRetry =
       /Reaped:|Auto-retry \d+\/\d+|provider_unavailable|All providers (failed|are in cooldown)/i.test(output);
-    if (executorWillRetry && !milestone.reconcileDeferred) {
-      milestone.reconcileDeferred = true;
-      this.persist(campaign);
-      getLoggerSafe().info("Campaign deferring to the executor's pending keep-alive retry", {
-        id: campaign.id,
-        milestone: milestone.id,
-      });
-      setTimeout(() => {
-        void this.reconcileMilestoneAfterSettle(campaign.id, milestone.id, status, output);
-      }, 11 * 60_000); // just past the keep-alive's max backoff (10 min)
-      return;
+    // Deferral is TIME-bounded, not one-shot. The old boolean was consumed by
+    // the second of a doubled settle emission (measured 2026-08-29 19:04: one
+    // handler logged the defer, the next burned attempt 2 within the same
+    // second) — and its fixed 11-minute re-check undershot a quota cooldown's
+    // 68-minute keep-alive floor, so the re-check itself counted an attempt
+    // against a task that was still honestly parked. Defer for as long as the
+    // tip keeps naming a pending retry, re-checking just past the promised
+    // horizon, bounded by 24h so a wedged lineage still surfaces.
+    if (executorWillRetry) {
+      const deferSince = milestone.reconcileDeferredSince ?? Date.now();
+      if (Date.now() - deferSince < 24 * 60 * 60_000) {
+        const promised = /Auto-retry \d+\/\d+ in ~(\d+)s/.exec(output);
+        const waitMs = Math.min(
+          Math.max((promised ? Number(promised[1]) : 600) * 1000 + 60_000, 60_000),
+          12 * 60 * 60_000,
+        );
+        milestone.reconcileDeferredSince = deferSince;
+        this.persist(campaign);
+        getLoggerSafe().info("Campaign deferring to the executor's pending keep-alive retry", {
+          id: campaign.id,
+          milestone: milestone.id,
+          recheckInMs: waitMs,
+        });
+        const timer = setTimeout(() => {
+          void this.reconcileMilestoneAfterSettle(campaign.id, milestone.id, status, output);
+        }, waitMs);
+        timer.unref?.();
+        return;
+      }
     }
-    milestone.reconcileDeferred = false;
+    milestone.reconcileDeferredSince = undefined;
 
     await this.onMilestoneOutcome(campaign, milestone, status, output, { countAttempt: true });
   }
