@@ -31,6 +31,7 @@ import {
   preflightResponseProviders,
 } from "./response-provider-preflight.js";
 import { AppError } from "../common/errors.js";
+import { setLiveChainMemberNames } from "../tasks/background-executor.js";
 import type { EmbeddingResolutionResult, ProviderInitResult } from "./bootstrap-stages.js";
 import type { IAIProvider } from "../agents/providers/provider.interface.js";
 import type * as winston from "winston";
@@ -160,6 +161,9 @@ export async function initializeAIProvider(
       .filter((n) => n && !preflightResult.passedProviderIds.includes(n));
     const chainOrder = [...preflightResult.passedProviderIds, ...demotedConfigured];
     defaultProviderOrder = chainOrder;
+    // Cooldown-aware waits must measure exactly these members — a stale
+    // registry entry for a de-configured provider must not read as capacity.
+    setLiveChainMemberNames(chainOrder);
     defaultProvider = buildProviderChain(chainOrder, providerCredentials, {
       models: config.providerModels,
       baseUrls: baseUrlOverrides,

@@ -55,10 +55,32 @@ import { ProviderHealthRegistry } from "../agents/providers/provider-health.js";
  * Registry names that refer to a provider the CURRENT chain could actually
  * run on. Registry keys are historical (removed providers, "chain(a→b)"
  * aliases); a cooldown-aware wait must only measure live chain members.
+ *
+ * Bootstrap declares the live members after preflight composes the chain.
+ * Excluding only "chain(" aliases was not enough: a de-configured provider's
+ * old entry ("kimi", cooldownUntil 0) read as an available member, so a full
+ * outage of the REAL chain measured as "someone is free" and the keep-alive
+ * fired plain exponential retries into a 7.7h quota wall (measured live
+ * 2026-08-29 12:27–12:35, Auto-retry 1→5 while both chain members cooled).
  */
+const liveChainMemberNames = new Set<string>();
+
+/** Called by bootstrap once the provider chain's final order is known. */
+export function setLiveChainMemberNames(names: readonly string[]): void {
+  liveChainMemberNames.clear();
+  for (const name of names) {
+    const n = name.trim().toLowerCase();
+    if (n) liveChainMemberNames.add(n);
+  }
+}
+
 function isCurrentChainMemberName(registryName: string): boolean {
   const n = registryName.toLowerCase();
-  return !n.startsWith("chain(");
+  if (n.startsWith("chain(")) return false;
+  // Until bootstrap declares the chain, keep the permissive legacy reading —
+  // a wrongly-empty set must fail toward "retry sooner", never "wait longer".
+  if (liveChainMemberNames.size === 0) return true;
+  return liveChainMemberNames.has(n);
 }
 import { WorkspaceLeaseManager } from "../agents/multi/workspace-lease-manager.js";
 import type { WorkerRunRequest, WorkerRunResult } from "../agents/supervisor/supervisor-types.js";

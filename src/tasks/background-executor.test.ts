@@ -2207,6 +2207,66 @@ describe("BackgroundExecutor - auto-resume bounds (measured loop of 2026-08-26)"
     }
   });
 
+  it("a stale registry entry for a de-configured provider does not read as available capacity", async () => {
+    // Measured live 2026-08-29 12:27: chain = openai,opencode, both cooling
+    // 7.7h — but the registry still held "kimi" (cooldownUntil 0) from an old
+    // configuration, so the outage measured as "someone is free" and the
+    // keep-alive fired plain exponential retries into the quota wall.
+    const { ProviderHealthRegistry } = await import("../agents/providers/provider-health.js");
+    const { setLiveChainMemberNames } = await import("./background-executor.js");
+    const registry = ProviderHealthRegistry.getInstance();
+    registry.clearProviderState("claude");
+    registry.clearProviderState("kimi");
+    registry.recordOverloaded("claude", "503 cluster overload");
+    registry.recordSuccess("kimi"); // stale healthy entry, NOT in the chain
+    setLiveChainMemberNames(["claude"]);
+
+    const orch = createMockOrchestrator();
+    orch.evaluateSupervisorAdmission.mockResolvedValue({
+      path: "supervisor",
+      reason: "eligible",
+      result: {
+        success: false, partial: true, output: "providers down",
+        totalNodes: 0, succeeded: 0, failed: 0, skipped: 0,
+        totalCost: 0, totalDuration: 0, nodeResults: [],
+      },
+    });
+    const executor = new BackgroundExecutor({
+      orchestrator: orch as any,
+      decomposer: createMockDecomposer() as any,
+      goalStorage: createMockGoalStorage() as any,
+      daemonEventBus: createMockDaemonEventBus() as any,
+      aiProvider: undefined,
+      channel: undefined,
+    });
+    const taskManager = {
+      updateStatus: vi.fn(), complete: vi.fn(), fail: vi.fn(), block: vi.fn(),
+      appendTaskNotice: vi.fn(),
+      retryGoalRoot: vi.fn(), replanGoalRoot: vi.fn(), retryTask: vi.fn(),
+      getStatus: vi.fn().mockReturnValue(null),
+    };
+    executor.setTaskManager(taskManager as any);
+
+    vi.useFakeTimers();
+    try {
+      executor.enqueue(
+        createTestTask(buildTestGoalTree(), { origin: "user" }),
+        new AbortController().signal,
+        vi.fn(),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.waitFor(() => expect(taskManager.block).toHaveBeenCalled());
+      // The stale "kimi" entry must not shrink the wait to the plain 30s backoff.
+      await vi.advanceTimersByTimeAsync(31_000);
+      expect(taskManager.retryTask).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+      setLiveChainMemberNames([]);
+      registry.clearProviderState("claude");
+      registry.clearProviderState("kimi");
+    }
+  });
+
   it("re-arms keep-alives orphaned by a restart (blocked Auto-retry tasks, 90s after boot)", async () => {
     // Measured 2026-08-29: a mission blocked at 01:01 with "Auto-retry 2/10"
     // was never resumed after the 01:05 restart — its timer died with the
