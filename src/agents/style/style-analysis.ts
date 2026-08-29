@@ -57,11 +57,14 @@ export class StyleAnalysis {
       try {
         // Same windowing as campaign planning: a hard head-slice cut the GDD
         // mid-document, and art direction typically lives mid-document.
-        const { windowGdd } = await import("../../campaign/campaign-planner.js");
+        const { windowGdd, GDD_AUDIT_FULL_CHARS } = await import("../../campaign/campaign-planner.js");
         const response = await streamOrChatText(
           this.provider,
           ANALYSIS_SYSTEM,
-          `<gdd>\n${windowGdd(gddText)}\n</gdd>\n\nExtract the style profile.`,
+          // The analysis runs once and needs exactly the mid-document PROSE
+          // (palette words, mood, reference games) the planner's tight window
+          // drops — use the audit-sized window.
+          `<gdd>\n${windowGdd(gddText, GDD_AUDIT_FULL_CHARS)}\n</gdd>\n\nExtract the style profile.`,
         );
         const jsonText = extractJsonObject(response.text ?? "");
         if (jsonText) {

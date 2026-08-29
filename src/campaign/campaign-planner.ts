@@ -10,8 +10,8 @@
 
 import { z } from "zod";
 import type { IAIProvider } from "../agents/providers/provider.interface.js";
-import { streamOrChatText } from "../agents/providers/provider.interface.js";
 import { getLoggerSafe } from "../utils/logger.js";
+import { streamOrChatText } from "../agents/providers/provider.interface.js";
 import { milestoneLadderSchema } from "./types.js";
 import type { MilestoneLadder } from "./types.js";
 
@@ -46,26 +46,59 @@ Rules:
 Respond ONLY with JSON:
 {"milestones": [{"title": "Sprint A — ...", "prompt": "..."}, ...]}`;
 
-export function windowGdd(gddText: string): string {
-  if (gddText.length <= GDD_FULL_CHARS) return gddText;
+export function windowGdd(gddText: string, fullThreshold: number = GDD_FULL_CHARS): string {
+  if (gddText.length <= fullThreshold) return gddText;
   const head = gddText.slice(0, GDD_HEAD_CHARS);
   const tail = gddText.slice(-GDD_TAIL_CHARS);
   const middle = gddText.slice(GDD_HEAD_CHARS, -GDD_TAIL_CHARS);
-  // Structural skeleton of the elided middle: headings and table rows carry
-  // the schedules; prose is what gets dropped.
-  const outline = middle
+  // Structural skeleton of the elided middle. The old filter kept ONLY ATX
+  // headings and pipe rows — a .docx/.pdf-converted GDD (the dominant intake
+  // path) has neither, so a 150k+ converted document lost its entire middle
+  // (element schedules, level ladders, art direction) under a marker claiming
+  // the outline was present. Structure now includes list items, numbered
+  // schedules and short definition lines; when even that matches almost
+  // nothing, fall back to sampling the middle so SOMETHING of it survives.
+  const structural = middle
     .split("\n")
-    .filter((line) => /^\s*(#{1,6}\s|\|)/.test(line))
-    .join("\n")
-    .slice(0, GDD_OUTLINE_CHARS);
+    .filter((line) =>
+      /^\s*(#{1,6}\s|\||[-*•]\s|\d{1,3}[.)]\s)/.test(line) ||
+      (/^\s*[A-ZĞÜŞİÖÇ][^:\n]{2,60}:\s+\S/.test(line) && line.length <= 160),
+    )
+    .join("\n");
+  let outline = structural.slice(0, GDD_OUTLINE_CHARS);
+  let markerNote = "its structural outline (headings, tables, lists, schedules) follows";
+  if (structural.length < middle.length * 0.02) {
+    // Structure-less middle (converted document): take evenly-spaced samples
+    // instead of pretending an outline exists.
+    const sampleCount = 10;
+    const sampleLen = Math.floor(GDD_OUTLINE_CHARS / sampleCount);
+    const stride = Math.floor(middle.length / sampleCount);
+    outline = Array.from({ length: sampleCount }, (_, i) =>
+      middle.slice(i * stride, i * stride + sampleLen),
+    ).join("\n[...]\n");
+    markerNote = "the document has no markdown structure; evenly-spaced samples of the middle follow";
+  }
+  getLoggerSafe().warn("GDD windowed for planning — middle content reduced", {
+    totalChars: gddText.length,
+    middleChars: middle.length,
+    outlineChars: outline.length,
+    structural: structural.length >= middle.length * 0.02,
+  });
   return [
     head,
-    `\n[... middle prose elided; its full structural outline (every heading and table row) follows ...]\n`,
+    `\n[... middle elided (${middle.length} chars); ${markerNote} ...]\n`,
     outline,
-    `\n[... end of middle outline ...]\n`,
+    `\n[... end of middle extract ...]\n`,
     tail,
   ].join("\n");
 }
+
+/**
+ * The coverage audit must NOT share the planner's blind spot: it runs once,
+ * so it can afford a far larger window — windowing loss the planner suffered
+ * is exactly what the audit exists to catch.
+ */
+export const GDD_AUDIT_FULL_CHARS = 400_000;
 
 export class CampaignPlanner {
   constructor(private readonly provider: IAIProvider | undefined) {}
@@ -156,7 +189,7 @@ export class CampaignPlanner {
       .map((m, i) => `${i + 1}. ${m.title}${m.resultExcerpt ? `\n   Result: ${m.resultExcerpt.slice(0, 300)}` : ""}`)
       .join("\n");
     const userMessage =
-      `<gdd>\n${windowGdd(gddText)}\n</gdd>\n\n` +
+      `<gdd>\n${windowGdd(gddText, GDD_AUDIT_FULL_CHARS)}\n</gdd>\n\n` +
       `<completed-ladder>\n${ladderSummary}\n</completed-ladder>\n\n` +
       `List the concrete items the GDD schedules (mechanics, game elements, blockers, set-pieces, screens, systems) that NO milestone above covered or delivered. Respond ONLY with JSON: {"missing": ["<item>: <one-line what is missing>", ...]} — an empty array when the ladder covers the GDD.`;
 
@@ -170,8 +203,25 @@ export class CampaignPlanner {
       throw new Error("coverage audit returned malformed JSON");
     }
     const validated = coverageResultSchema.safeParse(parsed);
-    if (!validated.success) throw new Error("coverage audit output failed schema validation");
-    return validated.data.missing;
+    if (validated.success) return validated.data.missing;
+    // FAIL-OPEN INVERSION GUARD: a GDD with 31+ uncovered items used to fail
+    // the schema, which skipped the audit entirely — the WORSE the build, the
+    // MORE likely delivery proceeded unchecked. Clamp instead of reject.
+    const raw = (parsed as { missing?: unknown }).missing;
+    if (Array.isArray(raw)) {
+      const clamped = raw
+        .filter((x): x is string => typeof x === "string" && x.trim().length > 0)
+        .slice(0, 30)
+        .map((x) => x.slice(0, 300));
+      if (clamped.length > 0 || raw.length === 0) {
+        getLoggerSafe().warn("Coverage audit output clamped to schema bounds", {
+          rawCount: raw.length,
+          kept: clamped.length,
+        });
+        return clamped;
+      }
+    }
+    throw new Error("coverage audit output failed schema validation");
   }
 }
 

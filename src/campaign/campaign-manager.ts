@@ -502,6 +502,21 @@ export class CampaignManager {
         throw new Error(`GDD not readable at ${gddPath} — cannot plan the ladder`);
       }
       campaign.gddPath = gddPath;
+      // Every sprint prompt references the GDD by this path instead of
+      // restating it — a dangling pointer means agents building with no
+      // design at all. Audited 2026-08-29: the fallback path was handed out
+      // with no existence check. Materialize the text we planned from.
+      try {
+        const absGdd = join(this.projectRoot, gddPath);
+        if (!existsSync(absGdd) && campaign.gddText) {
+          mkdirSync(join(this.projectRoot, "docs"), { recursive: true });
+          writeFileSync(absGdd, campaign.gddText, "utf8");
+          getLoggerSafe().warn("GDD file was missing at its referenced path — materialized from campaign text", {
+            id: campaign.id,
+            gddPath,
+          });
+        }
+      } catch { /* best-effort; planning proceeds on in-memory text */ }
 
       // Derive the game's style from its own GDD (post-approval — the design
       // is confirmed, so the profile now means something). Never a universal
@@ -1218,6 +1233,10 @@ export class CampaignManager {
         id: campaign.id,
         error: err instanceof Error ? err.message : String(err),
       });
+      // The skip must reach the person, not only the log — a silently
+      // unaudited delivery reads exactly like an audited one.
+      campaign.lastError = `coverage audit could not run: ${(err instanceof Error ? err.message : String(err)).slice(0, 160)}`;
+      this.persist(campaign);
       return undefined;
     }
   }
@@ -1229,6 +1248,9 @@ export class CampaignManager {
       ``,
       ...campaign.milestones.map((m) => `• ${m.status === "green" ? "✅" : "❌"} ${m.title}`),
     ];
+    if (campaign.lastError?.startsWith("coverage audit could not run")) {
+      lines.push("", `⚠️ ${campaign.lastError} — delivered WITHOUT the GDD-coverage check.`);
+    }
     return lines.join("\n");
   }
 
