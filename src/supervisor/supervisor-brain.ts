@@ -599,7 +599,16 @@ export class SupervisorBrain {
         summary: abort.canvasSummary,
         tone: "error",
       }));
-      return this.makePartialResult([], "An error occurred during task execution. Please try again.");
+      // Name the actual cause. The generic "An error occurred during task
+      // execution" swallowed "All providers are in cooldown" — downstream,
+      // the campaign's reconcile defers on provider-outage wording and the
+      // keep-alive classifies it, so the generic text made a quota outage
+      // count as a failed milestone attempt (measured 2026-08-29 12:36:
+      // Sprint 3 stopped "after 2 attempts" that were both the same quota
+      // wall). Sliced defensively; sanitizeToolResult-level redaction is not
+      // needed for provider-chain error strings.
+      const cause = (err instanceof Error ? err.message : String(err)).slice(0, 300);
+      return this.makePartialResult([], `Task execution failed: ${cause}`);
     } finally {
       this.activeAbortControllers.delete(internalController);
     }
