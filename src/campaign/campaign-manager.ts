@@ -10,6 +10,7 @@
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { getLoggerSafe } from "../utils/logger.js";
 import { allProvidersCoolingDownMs } from "../agents/providers/provider-outage.js";
@@ -1109,6 +1110,7 @@ export class CampaignManager {
       join(this.projectRoot, "Assets", "Art", "Prerendered"),
     ];
     let scanned = 0;
+    const freshFiles: Array<{ path: string; size: number }> = [];
     const stack = roots.filter((r) => existsSync(r));
     while (stack.length > 0 && scanned < 20_000) {
       const dir = stack.pop()!;
@@ -1125,14 +1127,32 @@ export class CampaignManager {
           stack.push(full);
         } else if (/\.(png|jpg|mp4)$/i.test(e.name)) {
           try {
-            if (statSync(full).mtimeMs >= sinceMs) return { found: true };
+            const st = statSync(full);
+            if (st.mtimeMs >= sinceMs) freshFiles.push({ path: full, size: st.size });
           } catch {
             /* skip */
           }
         }
       }
     }
-    return { found: false };
+    // CONTENT CHECK — a recent file is not yet evidence. Audited 2026-08-29:
+    // any fresh png passed, so a black/empty capture (or one file copied N
+    // times) satisfied the gate. Tiny files are no evidence; when several
+    // frames exist they must not all be byte-identical (an unchanging screen
+    // "capture" is the sim-green disease this gate exists to catch).
+    const meaningful = freshFiles.filter((f) => f.size > 1024);
+    if (meaningful.length === 0) return { found: false };
+    if (meaningful.length >= 2) {
+      try {
+        const digests = new Set(
+          meaningful.slice(0, 12).map((f) => createHash("sha1").update(readFileSync(f.path)).digest("hex")),
+        );
+        if (digests.size === 1) return { found: false };
+      } catch {
+        /* hash pass is best-effort; recency+size already held */
+      }
+    }
+    return { found: true };
   }
 
   /** How many coverage-remediation sprints may be appended before delivering as-is. */

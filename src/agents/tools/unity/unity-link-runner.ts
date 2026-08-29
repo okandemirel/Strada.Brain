@@ -450,11 +450,20 @@ export async function runUnityLink(options: UnityLinkRunnerOptions = {}): Promis
 function resolveUnityBin(): string {
   const editorsDir = "/Applications/Unity/Hub/Editor";
   try {
+    // Numeric-aware ordering: a plain lexicographic sort put 6000.3.9f1
+    // above 6000.3.22f1 and launched the older editor.
     const versions = readdirSync(editorsDir, { withFileTypes: true })
       .filter((e) => e.isDirectory())
       .map((e) => e.name)
-      .sort()
-      .reverse();
+      .sort((a, b) => {
+        const pa = a.split(/[.f]/).map((x) => Number(x) || 0);
+        const pb = b.split(/[.f]/).map((x) => Number(x) || 0);
+        for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+          const d = (pb[i] ?? 0) - (pa[i] ?? 0);
+          if (d !== 0) return d;
+        }
+        return 0;
+      });
     if (versions.length > 0) {
       return join(editorsDir, versions[0]!, "Unity.app", "Contents", "MacOS", "Unity");
     }

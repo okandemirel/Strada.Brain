@@ -519,6 +519,31 @@ describe("CampaignManager", () => {
     await vi.waitFor(() => expect(storage.get(campaign.id)!.milestones[0]!.status).toBe("green"));
   });
 
+  it("capture evidence demands meaningful, non-identical frames", async () => {
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    const milestone = storage.get(campaign.id)!.milestones[0]!;
+    milestone.taskId = "task_1";
+    const gate = (m: unknown) =>
+      (manager as unknown as { freshCaptureEvidence(x: unknown): { found: boolean } }).freshCaptureEvidence(m);
+
+    const rec = join(projectRoot, "Recordings");
+    mkdirSync(rec, { recursive: true });
+
+    // A tiny file is not evidence.
+    writeFileSync(join(rec, "frame_000.png"), Buffer.alloc(300, 7));
+    expect(gate(milestone).found).toBe(false);
+
+    // Several byte-identical "frames" are not evidence (unchanging screen).
+    writeFileSync(join(rec, "frame_000.png"), Buffer.alloc(4096, 7));
+    writeFileSync(join(rec, "frame_001.png"), Buffer.alloc(4096, 7));
+    expect(gate(milestone).found).toBe(false);
+
+    // Distinct meaningful frames pass.
+    writeFileSync(join(rec, "frame_001.png"), Buffer.alloc(4096, 9));
+    expect(gate(milestone).found).toBe(true);
+  });
+
   it("resumeActive leaves a still-running task alone", async () => {
     manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
     await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));

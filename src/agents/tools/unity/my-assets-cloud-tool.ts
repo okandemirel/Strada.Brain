@@ -71,7 +71,13 @@ export function markDownloaded(
     ...p,
     downloadedLocally: normalizedCache.some((c) => {
       const title = normalizeTitle(p.title);
-      return title.length > 0 && (c.includes(title) || title.includes(c));
+      // Bare bidirectional substring flagged false ON DISK matches (a cached
+      // "pig" marked every pig package downloaded) — require equality, or a
+      // containment where the shorter side is a distinctive name (>= 6 chars).
+      if (title.length === 0 || c.length === 0) return false;
+      if (c === title) return true;
+      const shorter = Math.min(c.length, title.length);
+      return shorter >= 6 && (c.includes(title) || title.includes(c));
     }),
   }));
 }
