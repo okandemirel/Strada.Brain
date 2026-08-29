@@ -828,6 +828,30 @@ export class CampaignManager {
     // "completed" while its result is an honest terminal failure report
     // ("blocked: the bridge is down, nothing was verified"). That is not a
     // green sprint — route it through the retry/fail path on its own text.
+    // MECHANICAL TEST GATE: the settle carries a verdict derived from what
+    // the test tools actually printed (Task.verification) — when the latest
+    // lineage task's last observed test run was RED, "completed" is not
+    // green whatever the report's prose says. Audited 2026-08-29: the
+    // campaign judged green from wording alone.
+    if (status === TaskStatus.completed) {
+      try {
+        const latest = milestone.taskId
+          ? this.taskManager.findLatestLineageTask(milestone.taskId as TaskId)
+          : null;
+        const verdict = (latest as { verification?: { testsGreen?: boolean; detail: string } } | null)
+          ?.verification;
+        if (verdict?.testsGreen === false) {
+          getLoggerSafe().warn("Milestone completion rejected: last test run was red", {
+            id: campaign.id,
+            milestone: milestone.id,
+            detail: verdict.detail,
+          });
+          status = TaskStatus.failed;
+          output = `Tests were RED at completion: ${verdict.detail}. ${output}`.slice(0, 2000);
+        }
+      } catch { /* verdict read is best-effort; other gates still apply */ }
+    }
+
     if (status === TaskStatus.completed && isTerminalFailureReport(output)) {
       getLoggerSafe().warn("Milestone task completed with a terminal failure report — treating as failed", {
         id: campaign.id,

@@ -29,6 +29,8 @@ class FakeTaskManager extends EventEmitter {
 
   private createdAts = new Map<string, number>();
 
+  verifications = new Map<string, { testsGreen?: boolean; detail: string }>();
+
   getStatus(taskId: string): Task | null {
     const status = this.statuses.get(taskId);
     return status
@@ -37,6 +39,7 @@ class FakeTaskManager extends EventEmitter {
           status,
           result: this.results.get(taskId),
           createdAt: this.createdAts.get(taskId) ?? Date.now(),
+          verification: this.verifications.get(taskId),
         } as unknown as Task)
       : null;
   }
@@ -516,6 +519,28 @@ describe("CampaignManager", () => {
 
     // Second completion stands (one-shot bounce) and the ladder advances.
     settleMilestone("done again");
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.milestones[0]!.status).toBe("green"));
+  });
+
+  it("a completion whose last test run was red is not green (mechanical test gate)", async () => {
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+
+    tasks.verifications.set("task_1", {
+      testsGreen: false,
+      detail: "PlayMode verification FAILED: 5 of 95 tests failed",
+    });
+    settleMilestone("sprint A complete, everything works great");
+
+    // Routed to the retry path with the red run named — not green.
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    const fresh = storage.get(campaign.id)!;
+    expect(fresh.milestones[0]!.status).not.toBe("green");
+    expect(tasks.submitted[1]!.prompt).toContain("Tests were RED at completion");
+
+    // A green-verdict completion passes.
+    tasks.verifications.set("task_2", { testsGreen: true, detail: "All 95 tests passed" });
+    settleMilestone("sprint A complete for real");
     await vi.waitFor(() => expect(storage.get(campaign.id)!.milestones[0]!.status).toBe("green"));
   });
 

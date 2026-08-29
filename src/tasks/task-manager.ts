@@ -492,6 +492,13 @@ export class TaskManager extends EventEmitter {
     this.storage.touch(taskId);
   }
 
+  /** Persist the mechanical test verdict derived from a run's tool evidence. */
+  setVerification(taskId: TaskId, verdict: import("./test-verdict.js").TaskTestVerdict): void {
+    try {
+      this.storage.setVerification(taskId, JSON.stringify(verdict));
+    } catch { /* verdict carriage is best-effort; the run outcome stands */ }
+  }
+
   /**
    * Compact "what the previous run already achieved" block for a follow-up
    * submission (campaign milestone retries). Mirrors buildReplayPrompt's

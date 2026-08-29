@@ -70,6 +70,7 @@ interface TaskRow {
   status: string;
   prompt: string;
   result: string | null;
+  verification_json?: string | null;
   error: string | null;
   origin: string | null;
   trigger_name: string | null;
@@ -187,6 +188,12 @@ export class TaskStorage {
   updateGoalRoot(id: TaskId, goalRootId: string): void {
     this.ensureConnection();
     this.getStmt("updateGoalRoot").run(goalRootId, Date.now(), id);
+  }
+
+  /** Persist the mechanical test verdict derived at settle time. */
+  setVerification(id: TaskId, verdictJson: string): void {
+    this.ensureConnection();
+    this.db!.prepare("UPDATE tasks SET verification_json = ? WHERE id = ?").run(verdictJson, id);
   }
 
   addProgress(id: TaskId, message: string): void {
@@ -315,6 +322,7 @@ export class TaskStorage {
       forceSharedPlanning: row.force_shared_planning === 1,
       userContent: this.parseUserContent(row.user_content_json),
       attachments: this.parseAttachments(row.attachments_json),
+      verification: this.parseVerification(row.verification_json),
     };
   }
 
@@ -332,11 +340,25 @@ export class TaskStorage {
       ["force_shared_planning", "INTEGER NOT NULL DEFAULT 0"],
       ["user_content_json", "TEXT"],
       ["attachments_json", "TEXT"],
+      ["verification_json", "TEXT"],
     ];
     const missingColumns = migratableColumns.filter(([name]) => !knownColumns.has(name));
 
     for (const [name, definition] of missingColumns) {
       this.db.exec(`ALTER TABLE tasks ADD COLUMN ${name} ${definition}`);
+    }
+  }
+
+  private parseVerification(raw: string | null | undefined): import("./test-verdict.js").TaskTestVerdict | undefined {
+    if (!raw) return undefined;
+    try {
+      const parsed = JSON.parse(raw) as { testsGreen?: unknown; detail?: unknown };
+      return {
+        testsGreen: typeof parsed.testsGreen === "boolean" ? parsed.testsGreen : undefined,
+        detail: typeof parsed.detail === "string" ? parsed.detail : "",
+      };
+    } catch {
+      return undefined;
     }
   }
 

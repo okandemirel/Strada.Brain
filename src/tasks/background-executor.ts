@@ -25,6 +25,7 @@ import { existsSync } from "node:fs";
 import type { ITaskManager, IOrchestrator, SupervisorAdmissionDecision } from "./orchestrator-contract.js";
 import { resolveConversationScope } from "../agents/orchestrator-text-utils.js";
 import { subscribeTaskLiveness } from "../agents/liveness-hub.js";
+import { deriveTestVerdict } from "./test-verdict.js";
 function getLoggerSafe() {
   try {
     // Lazy require-free import chain: use the shared logger.
@@ -1332,6 +1333,20 @@ export class BackgroundExecutor {
         });
 
         try {
+          // Mechanical test verdict from what the tools actually printed —
+          // rides on the Task row so settle-side consumers (campaign green
+          // gate) stop judging prose.
+          const verdict = deriveTestVerdict(
+            supervisorResult.nodeResults.flatMap((n) =>
+              n.toolResults.map((tr) => ({ content: String(tr.content ?? ""), isError: tr.isError })),
+            ),
+          );
+          if (verdict.testsGreen !== undefined) {
+            (this.taskManager as { setVerification?: (id: string, v: typeof verdict) => void })
+              .setVerification?.(task.id, verdict);
+          }
+        } catch { /* verdict carriage is best-effort */ }
+        try {
           const touched = [...new Set(
             supervisorResult.nodeResults.flatMap((n) => n.artifacts.map((a) => a.path)),
           )];
@@ -1434,6 +1449,15 @@ export class BackgroundExecutor {
         outputLength: result.output?.length ?? 0,
       });
 
+      try {
+        const verdict = deriveTestVerdict(
+          (result.workerResult?.toolTrace ?? []).map((t) => ({ content: t.summary, isError: !t.success })),
+        );
+        if (verdict.testsGreen !== undefined) {
+          (this.taskManager as { setVerification?: (id: string, v: typeof verdict) => void })
+            .setVerification?.(task.id, verdict);
+        }
+      } catch { /* verdict carriage is best-effort */ }
       try {
         this.devKnowledgeCompletionHook?.({
           goal: task.prompt,

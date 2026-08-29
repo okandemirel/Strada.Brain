@@ -112,6 +112,8 @@ export interface Task {
   status: TaskStatus;
   prompt: string;
   result?: string;
+  /** Mechanical test verdict derived from tool evidence at settle (see test-verdict.ts). */
+  verification?: import("./test-verdict.js").TaskTestVerdict;
   error?: string;
   progress: ProgressEntry[];
   createdAt: number;
