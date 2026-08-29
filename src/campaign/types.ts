@@ -101,6 +101,11 @@ export interface Campaign {
   createdAt: number;
   updatedAt: number;
   lastError?: string;
+  /**
+   * When set on a `failed` campaign: the self-revival appointment (epoch ms).
+   * Armed when the stop was a full provider outage; cleared on any revive.
+   */
+  autoReviveAt?: number;
 }
 
 // =============================================================================

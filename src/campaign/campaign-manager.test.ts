@@ -279,6 +279,45 @@ describe("CampaignManager", () => {
     });
   });
 
+  it("a stop during a full provider outage arms self-revival and revives when the chain recovers", async () => {
+    // Measured 2026-08-29 (00:58 and 12:27): "failed on quota" meant failed
+    // until a person typed "kampanya devam" — hours of operator attention for
+    // a scheduled, known-duration wait.
+    const { ProviderHealthRegistry } = await import("../agents/providers/provider-health.js");
+    const { setLiveChainMemberNames } = await import("../agents/providers/provider-outage.js");
+    const registry = ProviderHealthRegistry.getInstance();
+    registry.clearProviderState("claude");
+    registry.recordOverloaded("claude", "quota wall");
+    setLiveChainMemberNames(["claude"]);
+
+    try {
+      const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+      await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+      // Non-outage wording (reconcile must not defer) while the chain cools —
+      // the stop-time health check is what must detect the outage.
+      tasks.emit("task:failed", "task_1", "2 fresh plans produced nothing new");
+      await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+      tasks.emit("task:failed", "task_2", "2 fresh plans produced nothing new");
+
+      await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"));
+      const parked = storage.get(campaign.id)!;
+      expect(parked.autoReviveAt).toBeGreaterThan(Date.now());
+      expect(messages.at(-1)!.text).toContain("Self-revival armed");
+
+      // The chain recovers; the (privately re-scheduled, short) appointment fires.
+      registry.clearProviderState("claude");
+      (manager as unknown as { scheduleAutoRevive(id: string, ms: number): void })
+        .scheduleAutoRevive(campaign.id, 20);
+      await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("executing"));
+      const revived = storage.get(campaign.id)!;
+      expect(revived.autoReviveAt).toBeUndefined();
+      expect(tasks.submitted.length).toBeGreaterThanOrEqual(3);
+    } finally {
+      setLiveChainMemberNames([]);
+      registry.clearProviderState("claude");
+    }
+  });
+
   it("'kampanya devam' revives a failed campaign with a fresh attempt budget", async () => {
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
     await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));

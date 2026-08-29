@@ -12,6 +12,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSy
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { getLoggerSafe } from "../utils/logger.js";
+import { allProvidersCoolingDownMs } from "../agents/providers/provider-outage.js";
 import type { IncomingMessage } from "../channels/channel-messages.interface.js";
 import type { TaskManager } from "../tasks/task-manager.js";
 import type { TaskId } from "../tasks/types.js";
@@ -276,17 +277,68 @@ export class CampaignManager {
       return true;
     }
 
+    await this.reviveAtCurrentMilestone(campaign, milestone);
+    return true;
+  }
+
+  /** Reset the current milestone's budget and resubmit it (revive core). */
+  private async reviveAtCurrentMilestone(campaign: Campaign, milestone: CampaignMilestone): Promise<void> {
     milestone.attempts = 0;
     milestone.status = "pending";
     campaign.state = "executing";
     campaign.lastError = undefined;
+    campaign.autoReviveAt = undefined;
     this.persist(campaign);
     await this.tell(
       campaign,
       `Reviving the campaign at **${milestone.title}** (sprint ${campaign.currentMilestone + 1}/${campaign.milestones.length}) with a fresh attempt budget.`,
     );
     this.submitCurrentMilestone(campaign);
-    return true;
+  }
+
+  /**
+   * A campaign stopped by a full provider outage revives itself when the
+   * chain recovers. Before this, "failed on quota" meant failed until a
+   * person typed "kampanya devam" — measured twice on 2026-08-29 (00:58 and
+   * 12:27 quota walls), each costing hours of an operator's attention for
+   * what is a scheduled, known-duration wait.
+   */
+  private scheduleAutoRevive(campaignId: string, delayMs: number): void {
+    const timer = setTimeout(() => {
+      void (async () => {
+        try {
+          const fresh = this.storage.get(campaignId);
+          if (!fresh || fresh.state !== "failed" || !fresh.autoReviveAt) return;
+          const stillCooling = allProvidersCoolingDownMs();
+          if (stillCooling > 0) {
+            // Horizon moved (another quota hit while parked) — follow it.
+            fresh.autoReviveAt = Date.now() + stillCooling + 60_000;
+            this.persist(fresh);
+            this.scheduleAutoRevive(campaignId, stillCooling + 60_000);
+            return;
+          }
+          if (
+            this.storage.hasActiveForChat(fresh.chatId) ||
+            this.storage.hasActiveForProject(this.projectRoot)
+          ) {
+            return; // someone else already continued the work
+          }
+          const milestone = fresh.milestones[fresh.currentMilestone];
+          if (!milestone) return;
+          getLoggerSafe().info("Campaign self-revival — provider chain recovered", {
+            id: fresh.id,
+            milestone: milestone.id,
+          });
+          await this.reviveAtCurrentMilestone(fresh, milestone);
+        } catch (err) {
+          getLoggerSafe().warn("Campaign self-revival failed", {
+            id: campaignId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      })();
+    }, delayMs);
+    timer.unref?.();
   }
 
   /** Boot: re-attach campaigns that were active when the process stopped. */
@@ -300,6 +352,17 @@ export class CampaignManager {
           error: err instanceof Error ? err.message : String(err),
         });
       }
+    }
+    // Self-revival appointments are setTimeout-backed and die with the
+    // process — re-arm them from the persisted timestamps (overdue ones fire
+    // on a short delay so boot recovery settles first).
+    for (const campaign of this.storage.listAwaitingAutoRevive()) {
+      const dueInMs = Math.max((campaign.autoReviveAt ?? 0) - Date.now(), 120_000);
+      getLoggerSafe().info("Re-arming campaign self-revival after restart", {
+        id: campaign.id,
+        dueInMs,
+      });
+      this.scheduleAutoRevive(campaign.id, dueInMs);
     }
   }
 
@@ -837,6 +900,24 @@ export class CampaignManager {
     milestone.status = "failed";
     campaign.state = "failed";
     campaign.lastError = `${milestone.title} ${status} after ${milestone.attempts} attempts: ${output.slice(0, 200)}`;
+
+    // A stop caused by a full provider outage is a scheduled wait, not a
+    // defeat — park with a self-revival at the chain's recovery horizon.
+    const outageWaitMs = allProvidersCoolingDownMs();
+    if (outageWaitMs > 0 || /provider|cooldown|quota/i.test(output)) {
+      const delayMs = Math.max(outageWaitMs, 60_000) + 60_000;
+      campaign.autoReviveAt = Date.now() + delayMs;
+      this.persist(campaign);
+      this.scheduleAutoRevive(campaign.id, delayMs);
+      await this.tell(
+        campaign,
+        `⏸️ Campaign paused by a provider outage at **${milestone.title}**.\n` +
+          `Cause: ${campaign.lastError}\n` +
+          `Self-revival armed for ${new Date(campaign.autoReviveAt).toLocaleTimeString()} (when the provider chain recovers). Reply **kampanya devam** to revive sooner.`,
+      );
+      return;
+    }
+
     this.persist(campaign);
     await this.tell(
       campaign,

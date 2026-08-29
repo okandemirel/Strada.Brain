@@ -55,6 +55,7 @@ interface CampaignRow {
   created_at: number;
   updated_at: number;
   last_error: string | null;
+  auto_revive_at: number | null;
 }
 
 function rowToCampaign(row: CampaignRow): Campaign {
@@ -85,6 +86,7 @@ function rowToCampaign(row: CampaignRow): Campaign {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     lastError: row.last_error ?? undefined,
+    autoReviveAt: row.auto_revive_at ?? undefined,
   };
 }
 
@@ -96,6 +98,11 @@ export class CampaignStorage {
     this.db = new Database(dbPath);
     configureSqlitePragmas(this.db, "tasks");
     this.db.exec(SCHEMA_SQL);
+    try {
+      this.db.exec("ALTER TABLE campaigns ADD COLUMN auto_revive_at INTEGER");
+    } catch {
+      // Column already exists — migration is idempotent.
+    }
   }
 
   save(campaign: Campaign): void {
@@ -104,8 +111,9 @@ export class CampaignStorage {
         `INSERT INTO campaigns (
           id, chat_id, channel_type, user_id, conversation_id, project_root,
           state, idea_text, gdd_path, gdd_text, draft_task_id, draft_attempts,
-          milestones_json, current_milestone, created_at, updated_at, last_error
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          milestones_json, current_milestone, created_at, updated_at, last_error,
+          auto_revive_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           state = excluded.state,
           gdd_path = excluded.gdd_path,
@@ -115,7 +123,8 @@ export class CampaignStorage {
           milestones_json = excluded.milestones_json,
           current_milestone = excluded.current_milestone,
           updated_at = excluded.updated_at,
-          last_error = excluded.last_error`,
+          last_error = excluded.last_error,
+          auto_revive_at = excluded.auto_revive_at`,
       )
       .run(
         campaign.id,
@@ -135,6 +144,7 @@ export class CampaignStorage {
         campaign.createdAt,
         campaign.updatedAt,
         campaign.lastError ?? null,
+        campaign.autoReviveAt ?? null,
       );
   }
 
@@ -152,6 +162,14 @@ export class CampaignStorage {
       .prepare(`SELECT * FROM campaigns WHERE state IN (${placeholders}) ORDER BY created_at ASC`)
       .all(...ACTIVE_CAMPAIGN_STATES) as CampaignRow[];
     return rows.map(rowToCampaign);
+  }
+
+  /** Failed campaigns holding a self-revival appointment (boot re-arm). */
+  listAwaitingAutoRevive(): Campaign[] {
+    const rows = this.db
+      .prepare("SELECT * FROM campaigns WHERE state = 'failed' ORDER BY updated_at DESC")
+      .all() as CampaignRow[];
+    return rows.map(rowToCampaign).filter((c) => typeof c.autoReviveAt === "number");
   }
 
   /** Newest failed/cancelled campaign on this chat — the "kampanya devam" target. */
