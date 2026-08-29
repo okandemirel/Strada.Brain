@@ -329,18 +329,50 @@ export class BackgroundExecutor {
         }) | null;
         const candidates = manager?.listRecoverableTasks?.(50) ?? [];
         const seenLineages = new Set<string>();
-        for (const task of candidates) {
+        // Dedupe by the mission's PROMPT identity too, not only lineage id:
+        // every campaign revive minted a fresh lineage for the same sprint,
+        // and re-arming all of them with the same cooldown floor made them
+        // fire in the same tick — each passed the alreadyContinued check
+        // before the others had submitted (measured 2026-08-29 20:11:33,
+        // three duplicate sprint missions). One re-arm per prompt root,
+        // newest lineage wins, staggered so survivors can see each other.
+        const seenPromptRoots = new Set<string>();
+        const sorted = [...candidates].sort(
+          (a, b) => ((b as { updatedAt?: number }).updatedAt ?? 0) - ((a as { updatedAt?: number }).updatedAt ?? 0),
+        );
+        let rearmIndex = 0;
+        for (const task of sorted) {
           if (task.status !== "blocked" || task.origin !== "user") continue;
           const result = String((task as { result?: unknown }).result ?? "");
           if (!/Auto-retry \d+\/\d+ in ~\d+s/.test(result)) continue;
           const lineage = this.lineageRootTaskId(task);
           if (seenLineages.has(lineage)) continue;
           seenLineages.add(lineage);
+          const root = this.taskManager?.getStatus(lineage) as { prompt?: string } | null;
+          const promptRoot = (root?.prompt ?? task.prompt).slice(0, 160);
+          if (seenPromptRoots.has(promptRoot)) {
+            getLoggerSafe().info("Keep-alive re-arm skipped — same mission already re-armed under a newer lineage", {
+              taskId: task.id,
+            });
+            continue;
+          }
+          seenPromptRoots.add(promptRoot);
           getLoggerSafe().info("Re-arming keep-alive orphaned by restart", {
             taskId: task.id,
             lineageRoot: lineage,
+            staggerMs: rearmIndex * 45_000,
           });
-          this.scheduleMissionKeepAlive(task, "keep-alive re-armed after restart");
+          const staggerMs = rearmIndex * 45_000;
+          rearmIndex += 1;
+          if (staggerMs === 0) {
+            this.scheduleMissionKeepAlive(task, "keep-alive re-armed after restart");
+          } else {
+            const t = setTimeout(
+              () => this.scheduleMissionKeepAlive(task, "keep-alive re-armed after restart"),
+              staggerMs,
+            );
+            t.unref?.();
+          }
         }
       } catch {
         // Recovery is best-effort; a failure here must not affect boot.

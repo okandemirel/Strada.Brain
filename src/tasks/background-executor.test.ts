@@ -2267,6 +2267,50 @@ describe("BackgroundExecutor - auto-resume bounds (measured loop of 2026-08-26)"
     }
   });
 
+  it("re-arm keeps ONE keep-alive per mission prompt across duplicate lineages", async () => {
+    // Measured 2026-08-29 20:11:33: every campaign revive had minted a fresh
+    // lineage for the same sprint; re-arming all of them with one cooldown
+    // floor fired three duplicate missions in the same tick.
+    const executor = new BackgroundExecutor({
+      orchestrator: createMockOrchestrator() as any,
+      decomposer: createMockDecomposer() as any,
+      goalStorage: createMockGoalStorage() as any,
+      daemonEventBus: createMockDaemonEventBus() as any,
+      aiProvider: undefined,
+      channel: undefined,
+    });
+    const mk = (id: string, updatedAt: number) =>
+      createTestTask(undefined, {
+        id: id as any,
+        status: TaskStatus.blocked,
+        origin: "user",
+        prompt: "Sprint 3 — build the blockers and boosters per the GDD",
+        updatedAt,
+        result: "Transient failure — All providers are in cooldown. Auto-retry 1/10 in ~600s.",
+      });
+    const newer = mk("task_newer", 2000);
+    const older = mk("task_older", 1000);
+    const taskManager = {
+      updateStatus: vi.fn(), complete: vi.fn(), fail: vi.fn(), block: vi.fn(),
+      appendTaskNotice: vi.fn(),
+      retryGoalRoot: vi.fn(), replanGoalRoot: vi.fn(), retryTask: vi.fn(),
+      getStatus: vi.fn((id: string) => (id === "task_newer" ? newer : id === "task_older" ? older : null)),
+      listRecoverableTasks: vi.fn().mockReturnValue([older, newer]),
+      listTasks: vi.fn().mockReturnValue([]),
+    };
+
+    vi.useFakeTimers();
+    try {
+      executor.setTaskManager(taskManager as any);
+      await vi.advanceTimersByTimeAsync(91_000);
+      // Exactly ONE mission re-armed (the newer lineage), so exactly one block.
+      expect(taskManager.block).toHaveBeenCalledTimes(1);
+      expect(taskManager.block).toHaveBeenCalledWith("task_newer", expect.stringContaining("Auto-retry"));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("re-arms keep-alives orphaned by a restart (blocked Auto-retry tasks, 90s after boot)", async () => {
     // Measured 2026-08-29: a mission blocked at 01:01 with "Auto-retry 2/10"
     // was never resumed after the 01:05 restart — its timer died with the
