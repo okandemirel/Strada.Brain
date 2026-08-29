@@ -37,6 +37,7 @@ import { ProviderManager } from "../../providers/provider-manager.js";
 import { Orchestrator } from "../../orchestrator.js";
 import { getProviderIntelligenceSnapshot, type ProviderWorkload, type ModelIntelligenceLookup } from "../../providers/provider-knowledge.js";
 import { ProviderHealthRegistry } from "../../providers/provider-health.js";
+import { isCurrentChainMemberName } from "../../providers/provider-outage.js";
 import { WorkspaceLeaseManager } from "../workspace-lease-manager.js";
 import {
   selectAgentRunner,
@@ -281,10 +282,15 @@ export class DelegationManager {
 
     // Health gate: prevent thundering herd against overloaded providers
     const healthRegistry = ProviderHealthRegistry.getInstance();
-    const allEntries = healthRegistry.getAllEntries();
-    if (allEntries.size > 0) {
+    // Measure only live chain members: a stale entry for a de-configured
+    // provider or a healthy "chain(...)" alias defeated the every(down)
+    // reduction — the exact hazard provider-outage.ts documents.
+    const memberEntries = [...healthRegistry.getAllEntries()]
+      .filter(([name]) => isCurrentChainMemberName(name))
+      .map(([, e]) => e);
+    if (memberEntries.length > 0) {
       const now = Date.now();
-      const allDown = [...allEntries.values()].every(
+      const allDown = memberEntries.every(
         (e) => e.status === "down" && now < e.cooldownUntil,
       );
       if (allDown) {

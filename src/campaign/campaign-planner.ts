@@ -99,6 +99,10 @@ export class CampaignPlanner {
           round: round + 1,
           error: err instanceof Error ? err.message : String(err),
         });
+        // A second round into a fully-cooling chain is a guaranteed burn —
+        // the caller parks the campaign with a self-revival appointment.
+        const { allProvidersCoolingDownMs } = await import("../agents/providers/provider-outage.js");
+        if (allProvidersCoolingDownMs() > 0) break;
       }
     }
     throw lastError instanceof Error ? lastError : new Error(String(lastError));

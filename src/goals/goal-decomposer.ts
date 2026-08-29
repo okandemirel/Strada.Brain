@@ -222,14 +222,18 @@ export class GoalDecomposer {
       return this.buildSingleNodeTree(sessionId, taskDescription);
     }
 
-    // Skip LLM decomposition if provider is overloaded — use single-node fallback
-    const providerName = this.provider.name;
-    if (providerName) {
-      const { ProviderHealthRegistry } = await import("../agents/providers/provider-health.js");
-      const healthRegistry = ProviderHealthRegistry.getInstance();
-      if (!healthRegistry.isAvailable(providerName)) {
+    // Skip LLM decomposition when the chain has no live capacity — use the
+    // single-node fallback. The old check asked isAvailable(provider.name),
+    // but the injected provider is the COMPOSED chain whose "chain(a→b)"
+    // alias entry stays healthy while every real member cools (the alias
+    // hazard provider-outage.ts documents) — the gate never fired. Measured
+    // 2026-08-29 12:27: four decomposition rounds burned into a 7.7h quota
+    // wall this gate existed to prevent.
+    {
+      const { allProvidersCoolingDownMs } = await import("../agents/providers/provider-outage.js");
+      if (allProvidersCoolingDownMs() > 0) {
         const { getLoggerSafe } = await import("../utils/logger.js");
-        getLoggerSafe().info("Skipping goal decomposition — provider is in cooldown", { provider: providerName });
+        getLoggerSafe().info("Skipping goal decomposition — all live chain members are cooling down");
         return this.buildSingleNodeTree(sessionId, taskDescription);
       }
     }
@@ -429,6 +433,22 @@ export class GoalDecomposer {
           break;
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
+          // A full-chain cooldown is NOT transient on this ladder's clock: the
+          // terminal chain error reads "All providers failed or unavailable.
+          // All providers are in cooldown." — the regex below matches its
+          // "providers failed" and scored an hours-long quota wall as a blink
+          // (measured 2026-08-29: 4/4 rounds burned). Quota errors and a
+          // cooling chain abort the ladder; the caller's keep-alive owns the
+          // long wait.
+          const { QuotaExhaustedError } = await import("../common/fetch-with-retry.js");
+          const { allProvidersCoolingDownMs } = await import("../agents/providers/provider-outage.js");
+          if (err instanceof QuotaExhaustedError || allProvidersCoolingDownMs() > 0) {
+            const { getLoggerSafe } = await import("../utils/logger.js");
+            getLoggerSafe().warn("Goal decomposition aborted — chain quota/cooldown, ladder would burn", {
+              error: msg.slice(0, 200),
+            });
+            throw err;
+          }
           const transient = /providers failed|503|500|502|504|network|timeout|ECONN/i.test(msg);
           const { getLoggerSafe } = await import("../utils/logger.js");
           getLoggerSafe().warn(

@@ -715,8 +715,19 @@ export class SupervisorDispatcher {
           return this.makeCancelledResult(node, "Cancelled: control-plane abort");
         }
 
-        // On first attempt, retry if transient
+        // On first attempt, retry if transient — but never into a fully
+        // cooling chain: the chain's terminal error carries "rate limit"/
+        // "429" fragments that read as transient, and a wave multiplies the
+        // doomed extra call across every node (measured 2026-08-29).
         if (attempt === 0 && isTransientError(err)) {
+          const { allProvidersCoolingDownMs } = await import("../agents/providers/provider-outage.js");
+          if (allProvidersCoolingDownMs() > 0) {
+            return this.makeResult(
+              node,
+              "failed",
+              `All providers are in cooldown: ${(err instanceof Error ? err.message : String(err)).slice(0, 160)}`,
+            );
+          }
           // 2s backoff before retry
           await this.delay(2000);
           continue;

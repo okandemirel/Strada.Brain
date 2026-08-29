@@ -443,35 +443,32 @@ describe("GoalDecomposer", () => {
         }),
       ]);
 
-      // Mock ProviderHealthRegistry to report provider as unavailable
-      const mockIsAvailable = vi.fn().mockReturnValue(false);
-      vi.doMock("../agents/providers/provider-health.js", () => ({
-        ProviderHealthRegistry: {
-          getInstance: () => ({
-            isAvailable: mockIsAvailable,
-          }),
-        },
-      }));
+      // The gate reads the LIVE-CHAIN outage measurement (the provider's own
+      // name is the "chain(...)" alias in production, which stays healthy
+      // while every member cools — the old isAvailable(name) check was inert).
+      const { ProviderHealthRegistry } = await import("../agents/providers/provider-health.js");
+      const { setLiveChainMemberNames } = await import("../agents/providers/provider-outage.js");
+      const registry = ProviderHealthRegistry.getInstance();
+      registry.clearProviderState("gd-cooling");
+      registry.recordOverloaded("gd-cooling", "quota wall");
+      setLiveChainMemberNames(["gd-cooling"]);
 
-      // Re-import to pick up the mock
-      const { GoalDecomposer: MockedGoalDecomposer } = await import("./goal-decomposer.js");
+      try {
+        const decomposer = new GoalDecomposer(provider, 3);
+        const tree = await decomposer.decomposeProactive("test-session", "Build a complex auth system with multiple steps");
 
-      const decomposer = new MockedGoalDecomposer(provider, 3);
-      const tree = await decomposer.decomposeProactive("test-session", "Build a complex auth system with multiple steps");
+        // Should fall back to single-node tree (root + 1 child)
+        expect(tree.nodes.size).toBe(2);
+        const childNodes = Array.from(tree.nodes.values()).filter((node) => node.depth === 1);
+        expect(childNodes).toHaveLength(1);
+        expect(childNodes[0]?.task).toBe("Build a complex auth system with multiple steps");
 
-      // Should fall back to single-node tree (root + 1 child)
-      expect(tree.nodes.size).toBe(2);
-      const childNodes = Array.from(tree.nodes.values()).filter((node) => node.depth === 1);
-      expect(childNodes).toHaveLength(1);
-      expect(childNodes[0]?.task).toBe("Build a complex auth system with multiple steps");
-
-      // LLM should NOT have been called
-      expect(provider.chat).not.toHaveBeenCalled();
-
-      // Health registry should have been consulted with the provider name
-      expect(mockIsAvailable).toHaveBeenCalledWith("mock");
-
-      vi.doUnmock("../agents/providers/provider-health.js");
+        // LLM should NOT have been called
+        expect(provider.chat).not.toHaveBeenCalled();
+      } finally {
+        setLiveChainMemberNames([]);
+        registry.clearProviderState("gd-cooling");
+      }
     });
 
     it("proceeds with LLM decomposition when provider is healthy", async () => {
