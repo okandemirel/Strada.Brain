@@ -337,6 +337,12 @@ export class BackgroundExecutor {
         // three duplicate sprint missions). One re-arm per prompt root,
         // newest lineage wins, staggered so survivors can see each other.
         const seenPromptRoots = new Set<string>();
+        // One re-arm per CHAT: replay-prefaced lineage roots defeat the
+        // prompt-root compare (measured 2026-08-30 10:07 — three "distinct"
+        // roots were the same sprint under different retry prefaces). A chat
+        // is a serialized conversation; more than one re-armed mission per
+        // chat is definitionally duplicate work.
+        const seenChats = new Set<string>();
         const sorted = [...candidates].sort(
           (a, b) => ((b as { updatedAt?: number }).updatedAt ?? 0) - ((a as { updatedAt?: number }).updatedAt ?? 0),
         );
@@ -350,6 +356,12 @@ export class BackgroundExecutor {
           seenLineages.add(lineage);
           const root = this.taskManager?.getStatus(lineage) as { prompt?: string } | null;
           const promptRoot = (root?.prompt ?? task.prompt).slice(0, 160);
+          if (seenChats.has(task.chatId)) {
+            getLoggerSafe().info("Keep-alive re-arm skipped — chat already has a re-armed mission", {
+              taskId: task.id,
+            });
+            continue;
+          }
           if (seenPromptRoots.has(promptRoot)) {
             getLoggerSafe().info("Keep-alive re-arm skipped — same mission already re-armed under a newer lineage", {
               taskId: task.id,
@@ -357,6 +369,7 @@ export class BackgroundExecutor {
             continue;
           }
           seenPromptRoots.add(promptRoot);
+          seenChats.add(task.chatId);
           getLoggerSafe().info("Re-arming keep-alive orphaned by restart", {
             taskId: task.id,
             lineageRoot: lineage,
