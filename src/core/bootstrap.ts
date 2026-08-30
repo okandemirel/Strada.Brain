@@ -1603,8 +1603,9 @@ async function bootstrapImpl(
         const { AgentCore } = await import("../agent-core/agent-core.js");
         const { ObservationEngine } = await import("../agent-core/observation-engine.js");
         const { PriorityScorer } = await import("../agent-core/priority-scorer.js");
-        const { TriggerObserver, UserActivityObserver, GitStateObserver } =
+        const { TriggerObserver, UserActivityObserver, GitStateObserver, BuildStateObserver } =
           await import("../agent-core/observers/index.js");
+        const { getLatestGlobalBuildState } = await import("../agents/autonomy/self-verification.js");
 
         const observationEngine = new ObservationEngine();
 
@@ -1612,7 +1613,9 @@ async function bootstrapImpl(
         observationEngine.register(new TriggerObserver(triggerRegistry));
         observationEngine.register(new UserActivityObserver(daemonConfig.heartbeat.intervalMs * 5));
         observationEngine.register(new GitStateObserver(config.unityProjectPath));
-        // BuildStateObserver needs a SelfVerification reference — skip for now (wired per-task)
+        // Build health flows through the process-wide publication every
+        // SelfVerification instance writes on each tracked verification tool.
+        observationEngine.register(new BuildStateObserver({ getState: getLatestGlobalBuildState }));
 
         observationEngine.start();
 

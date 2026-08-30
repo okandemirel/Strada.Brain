@@ -32,6 +32,27 @@ export interface VerificationState {
 
 // ─── Verifier ───────────────────────────────────────────────────────────────────
 
+/**
+ * Process-wide latest build/verification state, published by every
+ * SelfVerification instance on each tracked verification tool. Lets the
+ * OODA BuildStateObserver (daemon layer) see build health without holding a
+ * reference to any per-run instance — the missing link that kept the
+ * observer unwired ("needs a SelfVerification reference — skip for now").
+ */
+const globalBuildState = {
+  pendingFiles: new Set<string>() as ReadonlySet<string>,
+  hasCompilableChanges: false,
+  lastBuildOk: null as boolean | null,
+};
+
+export function getLatestGlobalBuildState(): {
+  pendingFiles: ReadonlySet<string>;
+  hasCompilableChanges: boolean;
+  lastBuildOk: boolean | null;
+} {
+  return globalBuildState;
+}
+
 export class SelfVerification {
   private pendingFiles = new Set<string>();
   private touchedFiles = new Set<string>();
@@ -98,6 +119,7 @@ export class SelfVerification {
 
       // Track build results — O(1)
       if (isVerificationTool(executedTool.toolName, executedTool.input)) {
+        // (published below once ok is settled)
         // Defense against a success-shaped failure: pass/fail must not rest
         // solely on the tool's isError flag — a result body saying "N of M
         // tests failed" IS a failure whatever the flag says (the false-green
@@ -109,6 +131,9 @@ export class SelfVerification {
         const ok = !executedTool.isError && !bodyReportsFailure;
         this.lastBuildOk = ok;
         this.lastVerificationAt = Date.now();
+        globalBuildState.lastBuildOk = ok;
+        globalBuildState.hasCompilableChanges = this.hasCompilableChanges;
+        globalBuildState.pendingFiles = new Set(this.pendingFiles);
         if (ok) {
           this.pendingFiles.clear();
           this.hasCompilableChanges = false;

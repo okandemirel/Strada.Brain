@@ -146,6 +146,8 @@ export class ProviderRouter {
       modelIntelligence?: ModelIntelligenceLookup;
       trajectoryPhaseSignalRetriever?: TrajectoryPhaseSignalRetriever;
       dynamicProfiles?: DynamicBehavioralProfileStore;
+      /** ROUTING_PHASE_SWITCHING — audited 2026-08-30 as a dead flag; now wired. */
+      phaseSwitching?: boolean;
     } = {},
   ) {
     this.weights = ROUTING_PRESETS[preset];
@@ -153,7 +155,10 @@ export class ProviderRouter {
     this.modelIntelligence = options.modelIntelligence;
     this.trajectoryPhaseSignalRetriever = options.trajectoryPhaseSignalRetriever;
     this.dynamicProfiles = options.dynamicProfiles;
+    this.phaseSwitching = options.phaseSwitching ?? true;
   }
+
+  private readonly phaseSwitching: boolean;
 
   /**
    * Attach a TierRouter instance for delegation-aware tier resolution.
@@ -224,9 +229,9 @@ export class ProviderRouter {
       options.projectWorldFingerprint,
     );
 
-    // Phase-aware weight adjustment
+    // Phase-aware weight adjustment (ROUTING_PHASE_SWITCHING)
     let weights = this.weights;
-    if (phase === "reflecting") {
+    if (this.phaseSwitching && phase === "reflecting") {
       weights = {
         ...weights,
         diversityWeight: Math.min(weights.diversityWeight + 0.4, 1.0),

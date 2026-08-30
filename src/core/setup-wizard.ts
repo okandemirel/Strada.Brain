@@ -472,8 +472,14 @@ export function buildSetupEnvLines(
     }
   }
 
-  const daemonEnabled = config.STRADA_DAEMON_ENABLED === "true";
-  lines.push("", "# Daemon Mode", `STRADA_DAEMON_ENABLED=${daemonEnabled}`);
+  // Background autonomy (heartbeat, triggers, OODA, consolidation) is
+  // DEFAULT-ON — not a mode. Only an explicit opt-out is written; writing
+  // "false" for everyone who never chose it would silently disable the
+  // product's core loop under the default-on semantics.
+  const daemonEnabled = config.STRADA_DAEMON_ENABLED !== "false";
+  if (!daemonEnabled) {
+    lines.push("", "# Background autonomy (opt-out)", "STRADA_DAEMON_ENABLED=false");
+  }
   if (daemonEnabled) {
     const budget = Number(config.STRADA_DAEMON_DAILY_BUDGET);
     const safeBudget = Number.isFinite(budget) && budget >= 0.5 && budget <= 10 ? budget : 1.0;

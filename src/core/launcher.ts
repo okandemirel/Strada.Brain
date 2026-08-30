@@ -123,11 +123,6 @@ export function buildLauncherMenu(context: LauncherMenuContext): readonly Launch
   }
 
   appendEntry({
-    label: "Run configured default channel in daemon mode",
-    detail: "Keeps Strada active with background monitoring and triggers",
-    action: { kind: "start", channelType: context.defaultChannel, daemonMode: true },
-  });
-  appendEntry({
     label: "Open setup / reconfigure",
     detail: "Launch the setup chooser again",
     action: { kind: "setup" },

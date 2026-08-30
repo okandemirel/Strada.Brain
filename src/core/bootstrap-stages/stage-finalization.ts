@@ -93,6 +93,7 @@ export async function initializeRuntimeIntelligenceStage(
         dynamicProfiles,
       },
     ) ?? new ProviderRouter(params.providerManager, params.config.routing.preset, {
+      phaseSwitching: params.config.routing.phaseSwitching,
       modelIntelligence,
       trajectoryPhaseSignalRetriever,
       dynamicProfiles,

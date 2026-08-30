@@ -35,7 +35,7 @@ Strada.Brain is an AI agent you talk to through a chat channel. You describe wha
 
 It has persistent memory backed by SQLite + HNSW vectors (with a configured embedding provider; without one the index degrades to lexical hash vectors), learns from past errors using hybrid weighted confidence scoring, decomposes complex goals into DAG execution scheduled in dependency waves (nodes serialize while a workspace lease is held — the default for decomposed tasks), automatically synthesizes multi-tool chains with saga rollback, and can run as a 24/7 daemon with proactive triggers. It supports multi-agent orchestration with per-channel session isolation, hierarchical task delegation across agent tiers, automatic memory consolidation, a runtime self-improvement loop designed to materialize reusable `skill` / `workflow` / `knowledge_patch` artifacts in shadow mode (the intake/attribution half is live; artifact production has not yet fired in production — see docs/STATUS.md §5), a deployment subsystem with human-in-the-loop approval gates and circuit breaker protection, and a modern glassmorphism web portal with Magic UI components (shadcn/ui + 21st.dev) featuring animated metrics, blur transitions, and a persistent notification center.
 
-New in this release: Strada.Brain now features an **Agent Core** -- an autonomous OODA reasoning engine that observes the environment (currently: git state, user activity, and due triggers — file-watch and build-result observers exist but are not yet wired), reasons about priorities, and takes action proactively. The OODA loop runs only in daemon mode (`--daemon`); plain CLI sessions never start it. The **multi-provider routing** system dynamically selects the best AI provider for each task type (planning, code generation, debugging, review) with configurable presets (budget/balanced/performance). A **confidence-based consensus** system automatically consults a second provider when the agent's confidence is low on critical operations; today the second opinion is recorded and logged (advisory) — it does not yet veto or replace the primary output. All features gracefully degrade -- with a single provider, the system works identically to before with zero overhead.
+New in this release: Strada.Brain now features an **Agent Core** -- an autonomous OODA reasoning engine that observes the environment (currently: git state, user activity, and due triggers — file-watch and build-result observers exist but are not yet wired), reasons about priorities, and takes action proactively. Background autonomy (the OODA loop, heartbeat, triggers, memory consolidation) is ON BY DEFAULT on every channel; opt out with `STRADA_DAEMON_ENABLED=false`. The **multi-provider routing** system dynamically selects the best AI provider for each task type (planning, code generation, debugging, review) with configurable presets (budget/balanced/performance). A **confidence-based consensus** system automatically consults a second provider when the agent's confidence is low on critical operations; today the second opinion is recorded and logged (advisory) — it does not yet veto or replace the primary output. All features gracefully degrade -- with a single provider, the system works identically to before with zero overhead.
 
 **This is not a library or an API.** It is a standalone application you run. It connects to your chat platform, reads your Unity project on disk, and operates autonomously within the boundaries you configure.
 
@@ -160,7 +160,7 @@ If RAG is enabled without a usable embedding provider, the wizard now lets you c
 
 After the first successful setup, running `./strada` with no subcommand becomes your smart launcher:
 - first use: opens setup automatically if config is missing
-- later uses: shows a terminal launcher so you can choose web, CLI, daemon mode, setup, or doctor
+- later uses: shows a terminal launcher so you can choose web, CLI, setup, or doctor (background autonomy runs by default on all of them)
 
 After setup, run a readiness check before you start the agent:
 
@@ -209,7 +209,7 @@ JWT_SECRET=<generate with: openssl rand -hex 64>
 # Bare command after `./strada install-command`
 strada
 
-# Start your configured default channel directly in daemon mode
+# Background autonomy is on by default; --daemon just forces it past an env opt-out
 ./strada --daemon
 
 # Start with default web channel
@@ -244,7 +244,7 @@ node strada.js            # Universal Node.js entry point (works on any OS witho
 .\strada.ps1 uninstall    # Windows source-checkout bare-command uninstall
 strada uninstall --purge-config # Also remove Strada runtime state and source-checkout generated artifacts for a zero-install rerun
 strada                    # Smart launcher after install-command
-strada --daemon           # Start the configured default channel in daemon mode
+strada --daemon           # Force background autonomy on (it is already the default)
 strada --web              # Open the web channel, or continue web-first setup on a fresh machine
 strada --terminal         # Open the terminal channel, or force terminal setup on a fresh machine
 ./strada setup --web      # Launch the browser wizard directly
@@ -731,7 +731,7 @@ An opt-in deployment system with human-in-the-loop approval gates and circuit br
 
 ### Agent Core (Autonomous OODA Loop)
 
-When daemon mode is active, the Agent Core runs a continuous observe-orient-decide-act loop:
+The Agent Core runs a continuous observe-orient-decide-act loop (on by default; `STRADA_DAEMON_ENABLED=false` disables it):
 
 - **Observe**: Collects environment state from the registered observer set. The default daemon wiring currently uses trigger, user-activity, and git-state observers; build/test observers are wired only when those runtime signals are available.
 - **Orient**: Scores observations using learning-informed priority (PriorityScorer with instinct integration)
@@ -763,7 +763,7 @@ Strada.Brain detects an installed [Strada.MCP](https://github.com/okandemirel/St
 
 ---
 
-## Daemon Mode
+## Background Autonomy (default-on)
 
 The daemon provides 24/7 autonomous operation with a heartbeat-driven trigger system. When daemon mode is active, the **Agent Core OODA loop** runs within daemon ticks, observing the environment and proactively taking action between user interactions. The `/autonomous on` command now propagates to the DaemonSecurityPolicy, enabling fully autonomous operation without per-action approval prompts.
 
@@ -1180,7 +1180,7 @@ docker-compose up -d
 
 The `docker-compose.yml` includes the application, monitoring stack, and nginx reverse proxy.
 
-### Daemon Mode
+### Background Autonomy (default-on)
 
 ```bash
 # 24/7 autonomous operation with heartbeat loop and proactive triggers
