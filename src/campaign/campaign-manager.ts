@@ -825,10 +825,27 @@ export class CampaignManager {
     // horizon, bounded by 24h so a wedged lineage still surfaces.
     if (executorWillRetry) {
       const deferSince = milestone.reconcileDeferredSince ?? Date.now();
-      if (Date.now() - deferSince < 24 * 60 * 60_000) {
-        const promised = /Auto-retry \d+\/\d+ in ~(\d+)s/.exec(output);
+      const promised = /Auto-retry \d+\/\d+ in ~(\d+)s/.exec(output);
+      const promisedMs = (promised ? Number(promised[1]) : 600) * 1000;
+      // TRUST BUT VERIFY THE PROMISE: the tip's text says a retry is coming,
+      // but a keep-alive whose budget hit 10/10 (or whose timer died with a
+      // restart) never delivers — measured live 2026-08-30 15:33-15:55: zero
+      // active tasks while reconcile re-deferred every cycle to a retry that
+      // no longer existed. When the promised horizon (plus slack) passed and
+      // the lineage tip is still this same terminal task, the promise is
+      // dead: judge the outcome instead of waiting for a ghost.
+      const tipUpdatedAt = (tip as { updatedAt?: number } | null)?.updatedAt;
+      const promiseDead =
+        tipUpdatedAt !== undefined && Date.now() > tipUpdatedAt + promisedMs + 5 * 60_000;
+      if (promiseDead) {
+        getLoggerSafe().warn("Deferred retry never arrived — judging the milestone outcome", {
+          id: campaign.id,
+          milestone: milestone.id,
+          promisedMs,
+        });
+      } else if (Date.now() - deferSince < 24 * 60 * 60_000) {
         const waitMs = Math.min(
-          Math.max((promised ? Number(promised[1]) : 600) * 1000 + 60_000, 60_000),
+          Math.max(promisedMs + 60_000, 60_000),
           12 * 60 * 60_000,
         );
         milestone.reconcileDeferredSince = deferSince;

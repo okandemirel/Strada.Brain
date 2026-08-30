@@ -28,6 +28,7 @@ class FakeTaskManager extends EventEmitter {
   }
 
   private createdAts = new Map<string, number>();
+  updatedAts = new Map<string, number>();
 
   verifications = new Map<string, { testsGreen?: boolean; detail: string }>();
 
@@ -39,6 +40,7 @@ class FakeTaskManager extends EventEmitter {
           status,
           result: this.results.get(taskId),
           createdAt: this.createdAts.get(taskId) ?? Date.now(),
+          updatedAt: this.updatedAts.get(taskId) ?? Date.now(),
           verification: this.verifications.get(taskId),
         } as unknown as Task)
       : null;
@@ -365,6 +367,25 @@ describe("CampaignManager", () => {
     // Second completion stands either way (one bounce per milestone).
     settleMilestone("sprint A done again");
     await vi.waitFor(() => expect(storage.get(campaign.id)!.milestones[0]!.status).toBe("green"));
+  });
+
+  it("a dead retry promise stops the deferral loop (ghost keep-alive)", async () => {
+    // Measured live 2026-08-30 15:33-15:55: keep-alive budget exhausted, no
+    // task active anywhere, yet reconcile re-deferred every cycle to a retry
+    // that no longer existed — the campaign idled behind a ghost promise.
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+
+    // Tip promises a 1s retry but its updatedAt is 10 minutes old: promise dead.
+    tasks.updatedAts.set("task_1", Date.now() - 10 * 60_000);
+    tasks.emit(
+      "task:blocked",
+      "task_1",
+      "Transient failure — worker crashed. Auto-retry 1/10 in ~1s.",
+    );
+    // Not deferred: the outcome is judged and the retry branch resubmits.
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    expect(storage.get(campaign.id)!.milestones[0]!.status).toBe("running");
   });
 
   it("doubled settle emissions cannot consume the deferral and burn an attempt", async () => {
