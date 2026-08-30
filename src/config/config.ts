@@ -332,7 +332,13 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
         autoApproveTools: rawConfig.daemonAutoApproveTools,
       },
       budget: {
-        dailyBudgetUsd: rawConfig.daemonDailyBudget,
+        // The daemon has NO independent budget envelope: unless a dedicated
+        // sub-limit is explicitly set, it takes its share of the SYSTEM's
+        // daily budget (STRADA_BUDGET_DAILY_USD) — one wallet, accounted by
+        // the UnifiedBudgetManager like every other spender.
+        dailyBudgetUsd:
+          rawConfig.daemonDailyBudget ??
+          (rawConfig.stradaBudgetDailyUsd > 0 ? rawConfig.stradaBudgetDailyUsd : undefined),
         warnPct: rawConfig.daemonBudgetWarnPct,
       },
       backoff: {

@@ -1566,12 +1566,13 @@ async function bootstrapImpl(
   if (options.daemonMode) {
     const daemonConfig = config.daemon;
 
+    // No budget set anywhere (neither system nor daemon-specific): the
+    // daemon still runs — the UnifiedBudgetManager's guards are the wallet;
+    // a missing cap means "share whatever the system allows", not "off".
     if (!daemonConfig.budget.dailyBudgetUsd) {
-      const notice =
-        "Daemon disabled: STRADA_DAEMON_DAILY_BUDGET is not set, so autonomous background execution is unavailable.";
-      startupNotices.push(notice);
-      logger.warn(notice);
-    } else {
+      logger.info("Daemon budget: sharing the system budget (no dedicated cap set)");
+    }
+    {
       // daemonEventBus is guaranteed defined when daemonMode is true
       const daemonBus = daemonEventBus!;
       const {

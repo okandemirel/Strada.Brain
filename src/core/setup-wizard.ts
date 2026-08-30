@@ -480,14 +480,9 @@ export function buildSetupEnvLines(
   if (!daemonEnabled) {
     lines.push("", "# Background autonomy (opt-out)", "STRADA_DAEMON_ENABLED=false");
   }
-  if (daemonEnabled) {
-    const budget = Number(config.STRADA_DAEMON_DAILY_BUDGET);
-    const safeBudget = Number.isFinite(budget) && budget >= 0.5 && budget <= 10 ? budget : 1.0;
-    lines.push(
-      `STRADA_DAEMON_DAILY_BUDGET=${safeBudget}`,
-      "STRADA_DAEMON_HEARTBEAT_INTERVAL=30000",
-    );
-  }
+  // No dedicated daemon budget/interval is written: background autonomy
+  // shares the system budget (STRADA_BUDGET_DAILY_USD) and the default
+  // cadence. Power users can still set the STRADA_DAEMON_* overrides by hand.
 
   const autonomyEnabled = config.AUTONOMOUS_DEFAULT_ENABLED === "true";
   lines.push("", "# Autonomy", `AUTONOMOUS_DEFAULT_ENABLED=${autonomyEnabled}`);
