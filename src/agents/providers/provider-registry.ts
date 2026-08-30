@@ -38,6 +38,7 @@ const PROVIDER_CLASS_MAP: Record<string, OpenAICompatibleProviderConstructor> = 
   together: TogetherProvider,
   fireworks: FireworksProvider,
   opencode: OpencodeProvider,
+  opencode2: OpencodeProvider,
   openrouter: OpenRouterProvider,
 };
 
@@ -105,6 +106,11 @@ export const PROVIDER_PRESETS: Record<
     // still exists per live GET /models. OpencodeProvider also strips any stray prefix.
     defaultModel: "qwen3.6-plus",
     label: "OpenCode (Zen/Go)",
+  },
+  opencode2: {
+    baseUrl: "https://opencode.ai/zen/v1",
+    defaultModel: "qwen3.6-plus",
+    label: "OpenCode #2 (Zen)",
   },
   openrouter: {
     baseUrl: "https://openrouter.ai/api/v1",

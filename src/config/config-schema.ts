@@ -116,6 +116,7 @@ export const configSchema = z
     fireworksApiKey: z.string().optional(),
     geminiApiKey: z.string().optional(),
     opencodeApiKey: z.string().optional(),
+    opencode2ApiKey: z.string().optional(),
     opencodeBaseUrl: z.string().optional(),
     opencodeDefaultModel: z.string().optional(),
     openrouterApiKey: z.string().optional(),

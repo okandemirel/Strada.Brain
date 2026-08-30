@@ -77,6 +77,7 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
     fireworksApiKey: rawConfig.fireworksApiKey,
     geminiApiKey: rawConfig.geminiApiKey,
     opencodeApiKey: rawConfig.opencodeApiKey,
+    opencode2ApiKey: rawConfig.opencode2ApiKey,
     opencodeBaseUrl: rawConfig.opencodeBaseUrl,
     opencodeDefaultModel: rawConfig.opencodeDefaultModel,
     openrouterApiKey: rawConfig.openrouterApiKey,
@@ -997,6 +998,7 @@ interface EnvVars {
   stradaSupervisorDiversityCap: string | undefined;
   // OpenCode (Zen/Go)
   opencodeApiKey: string | undefined;
+  opencode2ApiKey: string | undefined;
   opencodeBaseUrl: string | undefined;
   opencodeDefaultModel: string | undefined;
   // OpenRouter
@@ -1108,6 +1110,7 @@ function loadFromEnv(env: Record<string, string | undefined>): EnvVars {
     fireworksApiKey: env["FIREWORKS_API_KEY"],
     geminiApiKey: env["GEMINI_API_KEY"],
     opencodeApiKey: env["OPENCODE_API_KEY"],
+    opencode2ApiKey: env["OPENCODE2_API_KEY"],
     opencodeBaseUrl: env["OPENCODE_BASE_URL"],
     opencodeDefaultModel: env["OPENCODE_DEFAULT_MODEL"],
     openrouterApiKey: env["OPENROUTER_API_KEY"],
@@ -1467,6 +1470,10 @@ export function loadConfig(envOverride?: Record<string, string | undefined>): Co
   if (config.opencodeDefaultModel && !providerModels["opencode"]) {
     providerModels["opencode"] = config.opencodeDefaultModel;
   }
+  // opencode2 shares the same model/base-URL configuration as opencode.
+  if (providerModels["opencode"] && !providerModels["opencode2"]) {
+    providerModels["opencode2"] = providerModels["opencode"];
+  }
 
   // Per-provider base-URL overrides. OpenCode's base URL is the only one driven
   // by an env var today (OPENCODE_BASE_URL); when unset, createProvider falls
@@ -1474,6 +1481,7 @@ export function loadConfig(envOverride?: Record<string, string | undefined>): Co
   const providerBaseUrls: Record<string, string> = {};
   if (config.opencodeBaseUrl) {
     providerBaseUrls["opencode"] = config.opencodeBaseUrl;
+    providerBaseUrls["opencode2"] = config.opencodeBaseUrl;
   }
 
   // `anthropic` and `claude` are aliases for one provider, but the env var is
@@ -1598,6 +1606,10 @@ export function getProviderCredentialMap(config: Config): Record<string, string 
     fireworks: config.fireworksApiKey,
     gemini: config.geminiApiKey,
     opencode: config.opencodeApiKey,
+    // Second OpenCode account: a DISTINCT provider so the supervisor's
+    // node assigner can distribute wave work across both accounts in
+    // parallel (and health/cooldowns track per account).
+    opencode2: config.opencode2ApiKey,
     openrouter: config.openrouterApiKey,
   };
 }
