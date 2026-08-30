@@ -11,6 +11,56 @@ external service or credentials, it says so and does **not** assume it works.
 
 ---
 
+## Addendum — 2026-08-30 README claim audit
+
+A ruthless code-and-live-evidence audit of the README's ten headline claims
+(this deployment: CLI channel, no `--daemon`, no embedding provider):
+
+| Claim | Verdict | Anchor evidence |
+|---|---|---|
+| Agent Core OODA loop (proactive) | vestigial here; observation-surface claim was overstated (git/user/triggers only; build+file observers unwired) | `bootstrap.ts` daemon gate; 0 init log hits ever |
+| PAOR phases | **works-live, enforced** (v2 spine is the production default) | `agent-state.ts` throws on illegal transitions |
+| Task-aware routing + presets | **works-live** (`ROUTING_PHASE_SWITCHING` is a no-op flag) | live "ProviderRouter initialized" each boot |
+| Confidence consensus | degraded — advisory only: logs disagreement, never alters output | `orchestrator-consensus.ts` |
+| Learns from mistakes | **inert in production**: 35,006 observations → 0 learned instincts / 0 error patterns / 0 runtime artifacts in 19 days; only the 5 boot seeds exist | `learning.db` counts |
+| Parallel DAG execution | degraded — serialized whenever a workspace lease is held, which is every decomposed task | `supervisor-brain.ts` lease ⇒ maxParallelNodes 1 |
+| Deployment subsystem | unit-proven only; off by default and daemon-gated — never initialized here | 0 log hits |
+| Skill ecosystem + git registry | **works-live** (8 skills load; registry reachable; honest gating) | boot log each start |
+| Memory consolidation + HNSW | HNSW live but hash-fallback vectors (no embedding provider); consolidation never ran (0 log rows) | `agentdb` files + `consolidation_log` |
+| 24/7 daemon + proactive triggers | not running here (CLI); engine real; this repo's HEARTBEAT.md defines a single cron trigger | `heartbeat-loop.ts`; 0 log hits |
+
+README was corrected the same day to match (observation surface, advisory
+consensus, artifact-production status, lease serialization, hash-vector
+caveat, stale v1-default note, dead flag). The two highest-value gaps to
+CLOSE rather than document: learning's production half (0 artifacts from 35k
+observations) and consensus being advisory-only.
+
+## Addendum — 2026-08-28/30 campaign-autonomy hardening
+
+The PixelFlow campaign (GDD → milestone ladder → autonomous sprints) ran
+continuously across these two days as the live proving ground: Sprints 1–2
+delivered green (453-file and 12-file envelope commits `69bb0c1`/`3fd5258`,
+1110 verification frames), Sprint 3 in flight. The run surfaced — and closed,
+each with a mutation-verified test — the following defect classes:
+
+| Date | Change | Evidence |
+|---|---|---|
+| 2026-08-29 | Liveness hub: worker-orchestrator tool activity now reaches the stuck-task reaper's clock — every wave-decomposed task was reaped at exactly 60min with zero heartbeats (`6d8582dc`) | `liveness-hub.test.ts`; live: pre-fix reaps at 60:00, post-fix 106min uninterrupted run |
+| 2026-08-29 | Goal auto-resume defers to keep-alive during a full provider outage instead of burning replan budget (`d1704b5b`); keep-alives orphaned by restart re-armed at boot (`2b70f0d7`); stale registry entries no longer read as capacity (`35b7f46a`) | `background-executor.test.ts`; live: honest ~7.6h cooldown floor observed |
+| 2026-08-29 | Supervisor abort names its cause — the generic "An error occurred" swallowed "All providers are in cooldown" and turned quota outages into counted milestone failures (`5f102940`) | live: reconcile deferral observed on the next outage |
+| 2026-08-29 | Campaign self-revival: a quota-wall stop parks with a persisted `autoReviveAt` and revives itself when the chain recovers; boot re-arms appointments (`e572b7fc`) | `campaign-manager.test.ts`; live 2026-08-29 20:12:33 — first fully unmanned revival |
+| 2026-08-29 | Provider-call gating: 4 retry ladders (goal decomposition, campaign planning, per-node dispatcher retry, delegation herd gate) stop dialing a fully-cooling chain (`879e1e6b`) | `goal-decomposer.test.ts` + live |
+| 2026-08-29 | Campaign honesty: retries carry the previous attempt's progress (lineage + checkpoint files); an empty sprint cannot go green (no-work gate); capture evidence must be meaningful and non-identical; completed settles wait for the lease write-back (`2765248e`, `9c64bd24`) | `campaign-manager.test.ts` |
+| 2026-08-29 | Mechanical test verdict rides the Task row (`verification_json`); campaign green reads the verdict, not the agent's prose — "N of M tests failed, but complete" no longer passes (`18f02d71`) | `test-verdict.test.ts`, mutation-verified campaign gate |
+| 2026-08-29 | Unity asset chain: organic meshes were generated inside-out (negated field gradient); token rotation self-triggered every call; prerender stopped on the first frame and deleted the shader mid-render; style profile was dead code; owned-asset gate named a nonexistent tool; failing PlayMode leaves an open in-run gate (`9643e7b6`, `5de6d0b9`) | unity tool suites |
+| 2026-08-29 | GDD fidelity: windowing is format-agnostic (a .docx/.pdf-converted GDD no longer loses its entire middle silently); the coverage audit uses a 400k window so it cannot share the planner's blind spot; audit output clamps instead of failing open; a skipped audit is stamped on the delivery report (`e777c357`) | `campaign-planner.test.ts` (first tests on the truncation layer) |
+| 2026-08-29/30 | Settle deferral is time-bounded (doubled emissions can no longer burn attempts); boot re-arm keeps one keep-alive per mission/chat (duplicate sprint missions eliminated) (`46675095`, `779ce09c`, `5501b38b`) | executor + campaign suites |
+| 2026-08-30 | Provider resilience: opencode fallback pinned to the zen free tier (`laguna-s-2.1-free`, live tool-call-verified) so an OpenAI quota window no longer halts the campaign | live probe 2026-08-30 |
+
+Honest residuals, same doctrine as below: the full GDD→delivered-game arc has
+**not yet completed once** (2/7 sprints green at time of writing); one agent
+plateau required an operator note; suite count now 8797.
+
 ## Addendum — 2026-08-26 reliability hardening
 
 The matrix below reflects the 2026-06-02 audit. Since then the system ran

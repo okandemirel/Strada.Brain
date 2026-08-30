@@ -12,7 +12,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/TypeScript-5.7-blue?style=flat-square&logo=typescript" alt="TypeScript">
   <img src="https://img.shields.io/badge/Node.js-%3E%3D20-green?style=flat-square&logo=node.js" alt="Node.js">
-  <img src="https://img.shields.io/badge/tests-4527%2B-brightgreen?style=flat-square" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-8700%2B-brightgreen?style=flat-square" alt="Tests">
   <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="License">
 </p>
 
@@ -33,11 +33,36 @@
 
 Strada.Brain is an AI agent you talk to through a chat channel. You describe what you want -- "create a new ECS system for player movement" or "find all components that use health" -- and the agent reads your C# project, writes the code, runs `dotnet build`, fixes errors automatically, and sends you the result.
 
-It has persistent memory backed by SQLite + HNSW vectors, learns from past errors using hybrid weighted confidence scoring, decomposes complex goals into parallel DAG execution, automatically synthesizes multi-tool chains with saga rollback, and can run as a 24/7 daemon with proactive triggers. It supports multi-agent orchestration with per-channel session isolation, hierarchical task delegation across agent tiers, automatic memory consolidation, a runtime self-improvement loop that materializes reusable `skill` / `workflow` / `knowledge_patch` artifacts in shadow mode before promoting them to active guidance, a deployment subsystem with human-in-the-loop approval gates and circuit breaker protection, and a modern glassmorphism web portal with Magic UI components (shadcn/ui + 21st.dev) featuring animated metrics, blur transitions, and a persistent notification center.
+It has persistent memory backed by SQLite + HNSW vectors (with a configured embedding provider; without one the index degrades to lexical hash vectors), learns from past errors using hybrid weighted confidence scoring, decomposes complex goals into DAG execution scheduled in dependency waves (nodes serialize while a workspace lease is held — the default for decomposed tasks), automatically synthesizes multi-tool chains with saga rollback, and can run as a 24/7 daemon with proactive triggers. It supports multi-agent orchestration with per-channel session isolation, hierarchical task delegation across agent tiers, automatic memory consolidation, a runtime self-improvement loop designed to materialize reusable `skill` / `workflow` / `knowledge_patch` artifacts in shadow mode (the intake/attribution half is live; artifact production has not yet fired in production — see docs/STATUS.md §5), a deployment subsystem with human-in-the-loop approval gates and circuit breaker protection, and a modern glassmorphism web portal with Magic UI components (shadcn/ui + 21st.dev) featuring animated metrics, blur transitions, and a persistent notification center.
 
-New in this release: Strada.Brain now features an **Agent Core** -- an autonomous OODA reasoning engine that observes the environment (file changes, git state, build results), reasons about priorities using learned patterns, and takes action proactively. The **multi-provider routing** system dynamically selects the best AI provider for each task type (planning, code generation, debugging, review) with configurable presets (budget/balanced/performance). A **confidence-based consensus** system automatically consults a second provider when the agent's confidence is low, preventing errors on critical operations. All features gracefully degrade -- with a single provider, the system works identically to before with zero overhead.
+New in this release: Strada.Brain now features an **Agent Core** -- an autonomous OODA reasoning engine that observes the environment (currently: git state, user activity, and due triggers — file-watch and build-result observers exist but are not yet wired), reasons about priorities, and takes action proactively. The OODA loop runs only in daemon mode (`--daemon`); plain CLI sessions never start it. The **multi-provider routing** system dynamically selects the best AI provider for each task type (planning, code generation, debugging, review) with configurable presets (budget/balanced/performance). A **confidence-based consensus** system automatically consults a second provider when the agent's confidence is low on critical operations; today the second opinion is recorded and logged (advisory) — it does not yet veto or replace the primary output. All features gracefully degrade -- with a single provider, the system works identically to before with zero overhead.
 
 **This is not a library or an API.** It is a standalone application you run. It connects to your chat platform, reads your Unity project on disk, and operates autonomously within the boundaries you configure.
+
+## Campaign Mode — GDD in, game out
+
+The campaign layer is the system's flagship loop: hand it a **game design
+document** (or just an idea — it drafts the GDD and stops at one approval
+gate) and it plans the **milestone ladder** and walks it sprint by sprint,
+restart-surviving and unmanned:
+
+- Each sprint is a self-contained task through the ordinary pipeline (goal
+  DAG, supervisor, verifier gates); the next sprint auto-submits when the
+  previous lands.
+- **Green is mechanical, not self-reported**: a sprint passes only with a
+  test verdict derived from what the test tools actually printed, fresh
+  non-identical capture frames when the sprint demands visuals, and a
+  repository that actually changed. An envelope commit closes every sprint.
+- **Outages are scheduled waits, not failures**: a full provider quota wall
+  parks the campaign with a persisted self-revival appointment and it
+  resumes by itself when the chain recovers (live-verified).
+- A GDD-coverage audit gates delivery; skipped audits are declared on the
+  delivery report, never silent.
+
+Status and evidence for every claim in this README live in
+[`docs/STATUS.md`](docs/STATUS.md) — the honest verification matrix. Where a
+feature is only unit-proven or degraded in a given deployment, that document
+says so.
 
 ---
 
@@ -444,7 +469,7 @@ See **[docs/vault.md](docs/vault.md)** for the full reference (architecture, que
 
 ## Architecture
 
-> **Agent Core v2 (in progress, behind default-off flags):** the reactive `Orchestrator (PAOR Agent Loop)` shown below is being migrated onto a unified control plane in `src/agent-core/control/` — one `RunClock` / `Budget` / `FailureLedger` / typed `CancelReason`, replacing v1's scattered 5 timeouts + 3 failure counters — reached through an `AgentRunner` seam (`src/agent-core/runner/`). It is a strangler-fig rewrite that preserves v1's incident-hardening; **every flag defaults off, so current behavior is byte-identical to v1.** See [`src/agent-core/README.md`](src/agent-core/README.md) and [`plans/agent-core-v2/`](plans/agent-core-v2/).
+> **Agent Core v2 (in progress, behind default-off flags):** the reactive `Orchestrator (PAOR Agent Loop)` shown below is being migrated onto a unified control plane in `src/agent-core/control/` — one `RunClock` / `Budget` / `FailureLedger` / typed `CancelReason`, replacing v1's scattered 5 timeouts + 3 failure counters — reached through an `AgentRunner` seam (`src/agent-core/runner/`). It is a strangler-fig rewrite that preserves v1's incident-hardening; **the v2 spine is now the production default** (`v2-all-routes+full-control-plane`, see `src/agent-core/runner/flags.ts`), with v1 reachable by flag for comparison. See [`src/agent-core/README.md`](src/agent-core/README.md) and [`plans/agent-core-v2/`](plans/agent-core-v2/).
 
 ```
 +-----------------------------------------------------------------+
@@ -509,7 +534,7 @@ See **[docs/vault.md](docs/vault.md)** for the full reference (architecture, que
 ### How the Agent Loop Works
 
 1. **Message arrives** from a chat channel (text, images, video, audio, or documents)
-2. **Memory retrieval** -- AgentDB hybrid search (70% semantic HNSW + 30% TF-IDF) finds the most relevant past conversations
+2. **Memory retrieval** -- AgentDB hybrid search (70% HNSW + 30% TF-IDF; HNSW is semantic only when an embedding provider is configured, lexical hash otherwise) finds the most relevant past conversations
 3. **RAG retrieval** -- semantic search over your C# codebase (HNSW vectors, top 6 results)
 4. **Instinct retrieval** -- proactively queries learned patterns relevant to the task (semantic + keyword matching)
 5. **Identity context** -- injects persistent agent identity (UUID, boot count, uptime, crash recovery state)
@@ -931,7 +956,7 @@ That same learning path now materializes runtime self-improvement artifacts. Rep
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ROUTING_PRESET` | `balanced` | Routing preset: `budget`, `balanced`, or `performance` |
-| `ROUTING_PHASE_SWITCHING` | `true` | Enable PAOR phase switching across providers |
+| `ROUTING_PHASE_SWITCHING` | `true` | Reserved — phase-aware routing weights are currently always on; this flag has no runtime reader yet |
 | `CONSENSUS_MODE` | `auto` | Consensus mode: `auto`, `critical-only`, `always`, or `disabled` |
 | `CONSENSUS_THRESHOLD` | `0.5` | Confidence threshold for triggering consensus |
 | `CONSENSUS_MAX_PROVIDERS` | `3` | Maximum providers to consult for consensus |
