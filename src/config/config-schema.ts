@@ -117,6 +117,7 @@ export const configSchema = z
     geminiApiKey: z.string().optional(),
     opencodeApiKey: z.string().optional(),
     opencode2ApiKey: z.string().optional(),
+    opencode3ApiKey: z.string().optional(),
     opencodeBaseUrl: z.string().optional(),
     opencodeDefaultModel: z.string().optional(),
     openrouterApiKey: z.string().optional(),

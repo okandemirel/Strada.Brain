@@ -39,6 +39,7 @@ const PROVIDER_CLASS_MAP: Record<string, OpenAICompatibleProviderConstructor> = 
   fireworks: FireworksProvider,
   opencode: OpencodeProvider,
   opencode2: OpencodeProvider,
+  opencode3: OpencodeProvider,
   openrouter: OpenRouterProvider,
 };
 
@@ -111,6 +112,11 @@ export const PROVIDER_PRESETS: Record<
     baseUrl: "https://opencode.ai/zen/v1",
     defaultModel: "qwen3.6-plus",
     label: "OpenCode #2 (Zen)",
+  },
+  opencode3: {
+    baseUrl: "https://opencode.ai/zen/v1",
+    defaultModel: "qwen3.6-plus",
+    label: "OpenCode #3 (Zen)",
   },
   openrouter: {
     baseUrl: "https://openrouter.ai/api/v1",

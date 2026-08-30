@@ -47,6 +47,7 @@ export type EnvVarName =
   | "GEMINI_API_KEY"
   | "OPENCODE_API_KEY"
   | "OPENCODE2_API_KEY"
+  | "OPENCODE3_API_KEY"
   | "OPENCODE_BASE_URL"
   | "OPENCODE_DEFAULT_MODEL"
   | "OPENROUTER_API_KEY"
@@ -746,6 +747,7 @@ export interface Config {
   readonly geminiApiKey?: string;
   readonly opencodeApiKey?: string;
   readonly opencode2ApiKey?: string;
+  readonly opencode3ApiKey?: string;
   readonly opencodeBaseUrl?: string;
   readonly opencodeDefaultModel?: string;
   readonly openrouterApiKey?: string;
