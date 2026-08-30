@@ -4043,6 +4043,32 @@ export class Orchestrator {
         if (!path) {
           return { approved: false, reason: "target path is missing" };
         }
+        // HARD framework-paths wall (conformanceFrameworkPathsOnly): compilable
+        // game code must live in the Strada module layout. This is the single
+        // choke point both direct writes and batch_execute operations pass
+        // through, so a loose Assets/Scripts/*.cs cannot arrive by either
+        // path. Editor/Tests/Plugins tooling and non-code assets stay free.
+        if (
+          this.conformanceFrameworkPathsOnly !== false &&
+          toolName !== "file_delete" &&
+          toolName !== "file_delete_directory"
+        ) {
+          const normalized = path.replace(/\\/g, "/").replace(/^\.\//, "");
+          const isLooseGameCode =
+            /\.cs$/i.test(normalized) &&
+            /^assets\//i.test(normalized) &&
+            !/^assets\/(modules|editor|tests|plugins)\//i.test(normalized);
+          if (isLooseGameCode) {
+            return {
+              approved: false,
+              reason:
+                "Strada conformance (frameworkPathsOnly): compilable game code belongs under " +
+                "Assets/Modules/<Name>Module/ (the Strada.Core module pattern — config + DI + " +
+                "systems), Assets/Editor/, Assets/Tests/ or Assets/Plugins/. Do not write loose " +
+                "scripts elsewhere under Assets/; create or extend the owning module instead.",
+            };
+          }
+        }
         return { approved: true };
       }
       case "batch_execute": {

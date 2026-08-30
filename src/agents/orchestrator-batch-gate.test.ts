@@ -84,7 +84,7 @@ describe("a batch is judged like the calls it contains", () => {
   it("approves a batch whose writes would each be approved directly", async () => {
     const result = await review(orch, "batch_execute", {
       operations: [
-        { tool: "file_write", input: { path: "Assets/A.cs", content: "// a" } },
+        { tool: "file_write", input: { path: "Assets/Modules/AModule/A.cs", content: "// a" } },
         { tool: "file_read", input: { path: "Assets/B.cs" } },
       ],
     });
@@ -111,7 +111,7 @@ describe("a batch is judged like the calls it contains", () => {
     // before a refused write leaves the project half-changed.
     const result = await review(orch, "batch_execute", {
       operations: [
-        { tool: "file_write", input: { path: "Assets/Good.cs", content: "// fine" } },
+        { tool: "file_write", input: { path: "Assets/Modules/GoodModule/Good.cs", content: "// fine" } },
         { tool: "file_delete", input: {} },
       ],
     });

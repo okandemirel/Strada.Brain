@@ -70,7 +70,7 @@ const run = (toolName: string, phase?: AgentPhase) =>
     }
   ).executeToolCalls(
     "chat1",
-    [{ id: "tc1", name: toolName, input: { path: "Assets/A.cs", content: "// x" } }],
+    [{ id: "tc1", name: toolName, input: { path: "Assets/Modules/AModule/A.cs", content: "// x" } }],
     phase === undefined
       ? { mode: "background" }
       : { mode: "background", agentState: { ...createInitialState("t"), phase } },
