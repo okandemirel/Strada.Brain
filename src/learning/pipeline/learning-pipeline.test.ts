@@ -413,6 +413,32 @@ describe("LearningPipeline", () => {
       expect(errorFix).not.toBeNull();
     });
 
+    it("junk triggers (JSON metrics, code listings, symbol soup) are refused", async () => {
+      // Measured 2026-08-30: 75 created instincts, every trigger a raw output
+      // fragment ('"compileErrors": 0', '  41 | ...') — noise, not knowledge.
+      for (const trigger of [
+        '"compileErrors": 0',
+        "  41 |             if (spec == null) throw new ArgumentNullException(nameof(spec));",
+        "x==1;;;",
+      ]) {
+        const created = await pipeline.considerInstinctCreation({
+          type: "correction",
+          triggerPattern: trigger,
+          action: "some correction",
+          toolName: "unity_verify_change",
+        });
+        expect(created, trigger).toBeNull();
+      }
+      // A real condition still creates.
+      const good = await pipeline.considerInstinctCreation({
+        type: "correction",
+        triggerPattern: "CS0246: The type or namespace name could not be found in BoardModule",
+        action: "Add the missing using directive for the module namespace",
+        toolName: "unity_verify_change",
+      });
+      expect(good).not.toBeNull();
+    });
+
     it("should not create duplicate instincts", async () => {
       const uniqueTrigger = `CS0246: The type or namespace name 'Test${Date.now()}' could not be found. This is a detailed error message with specific information about the missing type.`;
       const params = {

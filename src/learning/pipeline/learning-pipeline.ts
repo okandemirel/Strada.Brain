@@ -567,6 +567,7 @@ export class LearningPipeline {
     scopeType?: ScopeType;
     confidence?: number;
   }): Promise<Instinct | null> {
+    if (!this.isMeaningfulTrigger(params.triggerPattern)) return null;
     // Check for similar existing instincts (use similarity threshold, not confidence)
     const similar = await this.patternMatcher.findSimilarInstincts(params.triggerPattern);
     // Check raw similarity (relevance), not confidence-weighted score
@@ -1047,10 +1048,33 @@ export class LearningPipeline {
   }
 
   private extractTriggerPattern(output: string): string {
-    const relevantLines = output.split("\n").filter(l =>
-      /error|Error|failed|Exception/i.test(l)
-    );
-    return relevantLines.join(" ").slice(0, 500);
+    // Whole-word signals only, with line-number/pipe prefixes stripped: the
+    // old substring test passed JSON metrics ('"compileErrors": 0') and code
+    // listings ('  41 | ... ArgumentNullException...') as "error lines" —
+    // measured 2026-08-30: 75 instincts created, every trigger a raw output
+    // fragment no future task could match and no reader could learn from.
+    const relevantLines = output
+      .split("\n")
+      .map((l) => l.replace(/^\s*\d+\s*\|\s?/, "").trim())
+      .filter((l) => /\b(error|failed|exception|cannot|missing|invalid)\b/i.test(l))
+      .filter((l) => !/^"[\w.]+"\s*:/.test(l) && !/^[\w.]+\s*:\s*\d+\s*,?\s*$/.test(l));
+    return [...new Set(relevantLines)].join(" ").slice(0, 500);
+  }
+
+  /**
+   * A trigger worth remembering names a CONDITION, not a fragment of output.
+   * Gate applied at creation so the instinct store holds knowledge, not noise.
+   */
+  private isMeaningfulTrigger(trigger: string): boolean {
+    const s = trigger.trim();
+    if (s.length < 12) return false;
+    // JSON metric fragment: quoted key, or a bare numeric metric line —
+    // narrow on purpose so error codes ("CS1061: 'Board'…") stay eligible.
+    if (/^"[\w.]+"\s*:/.test(s)) return false;
+    if (/^[\w.]+\s*:\s*\d+\s*,?\s*$/.test(s)) return false;
+    if (/^\s*\d+\s*\|/.test(s)) return false; // code-listing line
+    const letters = (s.match(/[a-zA-Z]/g) ?? []).length;
+    return letters / s.length >= 0.5;
   }
 
   /**
