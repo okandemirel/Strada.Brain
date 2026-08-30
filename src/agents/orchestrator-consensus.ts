@@ -8,7 +8,7 @@ import type {
   PhaseOutcomeStatus,
 } from "../agent-core/routing/routing-types.js";
 import type { SupervisorAssignment } from "./orchestrator-supervisor-routing.js";
-import { getLogger } from "../utils/logger.js";
+import { getLoggerSafe } from "../utils/logger.js";
 
 export interface ConsensusVerificationParams {
   consensusManager: ConsensusManager;
@@ -55,9 +55,14 @@ export interface ConsensusVerificationParams {
  *
  * Non-fatal: any error inside is caught and silently swallowed by the caller.
  */
+export interface ConsensusVerdict {
+  agreed: boolean;
+  reasoning?: string;
+}
+
 export async function runConsensusVerification(
   params: ConsensusVerificationParams,
-): Promise<void> {
+): Promise<ConsensusVerdict | undefined> {
   const {
     consensusManager,
     availableProviderCount,
@@ -123,7 +128,7 @@ export async function runConsensusVerification(
   });
 
   if (!consensusResult.agreed) {
-    const logger = getLogger();
+    const logger = getLoggerSafe();
     const label = logLabel ? `Consensus disagreement (${logLabel})` : "Consensus disagreement";
     logger.warn(label, {
       chatId,
@@ -131,4 +136,8 @@ export async function runConsensusVerification(
       reasoning: consensusResult.reasoning?.slice(0, 200),
     });
   }
+  // Actionable, not advisory: the caller injects a disagreement into the
+  // session so the next iteration must address the objection (audited
+  // 2026-08-30: the second opinion was recorded and then changed nothing).
+  return { agreed: consensusResult.agreed, reasoning: consensusResult.reasoning };
 }

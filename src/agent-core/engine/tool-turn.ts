@@ -244,7 +244,7 @@ export async function portExecuteToolTurn(
 
     // STEP D — consensus (non-fatal; gated on the managers existing).
     if (deps.consensusManager && deps.confidenceEstimator && deps.providerRouter) {
-      await runConsensusIfAvailable({
+      const consensusVerdict = await runConsensusIfAvailable({
         consensusManager: deps.consensusManager,
         confidenceEstimator: deps.confidenceEstimator,
         providerManager: deps.providerManager,
@@ -264,7 +264,21 @@ export async function portExecuteToolTurn(
         recordPhaseOutcome: (p) => recordPhaseOutcome(deps, p),
       }).catch(() => {
         /* non-fatal */
+        return undefined;
       });
+      // ACTIONABLE disagreement: the tools already ran (this hook is post-
+      // execution), so the lever is the NEXT iteration — put the reviewer's
+      // objection in front of the model as a message it must address, instead
+      // of a warn-log nobody reads (audited 2026-08-30: advisory-only).
+      if (consensusVerdict && !consensusVerdict.agreed) {
+        (session as { messages: ConversationMessage[] }).messages.push({
+          role: "user",
+          content:
+            "[CONSENSUS REVIEWER OBJECTION] A second model reviewed the last critical step and disagreed: " +
+            `${(consensusVerdict.reasoning ?? "no reasoning returned").slice(0, 600)}\n` +
+            "Address this objection explicitly before proceeding: re-verify the result, and correct course if the objection holds.",
+        });
+      }
     }
 
     // STEP E — record step results + PAOR transition (the REAL transition; returns new state).

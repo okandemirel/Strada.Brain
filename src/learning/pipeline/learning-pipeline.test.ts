@@ -380,6 +380,39 @@ describe("LearningPipeline", () => {
       }
     });
 
+    it("DEFAULT config can actually create auto-derived instincts (regression: 35k obs → 0 instincts)", async () => {
+      // calculateInitialConfidence caps everything at MAX_INITIAL (0.5); with
+      // the old minConfidenceForCreation of 0.6 every auto-derived instinct
+      // was rejected deterministically — 19 days of production produced zero.
+      // This pins the invariant: gate <= cap, so the canonical classes CREATE.
+      const { LEARNING_DEFAULTS } = await import("../../common/constants.js");
+      const { CONFIDENCE_THRESHOLDS } = await import("../types.js");
+      expect(LEARNING_DEFAULTS.minConfidenceForCreation).toBeLessThanOrEqual(
+        CONFIDENCE_THRESHOLDS.MAX_INITIAL,
+      );
+
+      const defaultsPipeline = new LearningPipeline(storage, {
+        enabled: true,
+        minConfidenceForCreation: LEARNING_DEFAULTS.minConfidenceForCreation,
+      });
+      // The weakest real class: a short workflow trigger (0.55 pre-cap → 0.5).
+      const workflow = await defaultsPipeline.considerInstinctCreation({
+        type: "workflow_pattern",
+        triggerPattern: "file_read->file_edit->unity_verify_change",
+        action: JSON.stringify({ description: "Common workflow: read, edit, verify" }),
+      });
+      expect(workflow).not.toBeNull();
+      expect(workflow!.status).toBe("proposed");
+
+      const errorFix = await defaultsPipeline.considerInstinctCreation({
+        type: "error_fix",
+        triggerPattern: "CS1061: 'Board' does not contain a definition for 'Explode'",
+        action: "Add the Explode method to Board via strada_create_component",
+        toolName: "unity_verify_change",
+      });
+      expect(errorFix).not.toBeNull();
+    });
+
     it("should not create duplicate instincts", async () => {
       const uniqueTrigger = `CS0246: The type or namespace name 'Test${Date.now()}' could not be found. This is a detailed error message with specific information about the missing type.`;
       const params = {

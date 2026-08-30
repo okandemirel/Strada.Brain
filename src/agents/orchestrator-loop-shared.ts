@@ -229,8 +229,8 @@ export interface ConsensusContext {
  */
 export async function runConsensusIfAvailable(
   ctx: ConsensusContext,
-): Promise<void> {
-  if (!ctx.consensusManager || !ctx.confidenceEstimator) return;
+): Promise<import("./orchestrator-consensus.js").ConsensusVerdict | undefined> {
+  if (!ctx.consensusManager || !ctx.confidenceEstimator) return undefined;
 
   try {
     const taskClass = ctx.taskClassifier.classify(ctx.prompt);
@@ -239,7 +239,7 @@ export async function runConsensusIfAvailable(
       taskClass.criticality !== "critical" &&
       taskClass.type !== "destructive-operation"
     ) {
-      return;
+      return undefined;
     }
     const confidence = ctx.confidenceEstimator.estimate({
       task: taskClass,
@@ -248,7 +248,7 @@ export async function runConsensusIfAvailable(
       agentState: ctx.agentState,
       responseLength: ctx.responseText.length,
     });
-    await runConsensusVerification({
+    return await runConsensusVerification({
       consensusManager: ctx.consensusManager,
       availableProviderCount: ctx.providerManager.listAvailable().length,
       taskClass,
@@ -273,6 +273,7 @@ export async function runConsensusIfAvailable(
   } catch (err) {
     getLoggerSafe().warn("Consensus verification failed", { error: err instanceof Error ? err.message : String(err) });
   }
+  return undefined;
 }
 
 // =============================================================================

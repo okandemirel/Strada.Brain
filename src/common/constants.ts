@@ -140,8 +140,16 @@ export const LEARNING_DEFAULTS = {
   detectionIntervalMs: 5 * 60 * 1000,
   /** Pattern evolution interval (1 hour) */
   evolutionIntervalMs: 60 * 60 * 1000,
-  /** Minimum confidence for pattern creation */
-  minConfidenceForCreation: 0.6,
+  /**
+   * Minimum confidence for pattern creation. MUST stay at or below
+   * CONFIDENCE_THRESHOLDS.MAX_INITIAL (0.5): calculateInitialConfidence caps
+   * every auto-derived instinct at that Beta(1,1) prior, so a gate above it
+   * rejects EVERYTHING — measured 2026-08-30: 35,006 observations produced
+   * zero instincts in 19 days because 0.5 < 0.6 always. Creation is not
+   * activation: instincts start "proposed", rank by confidence, and only
+   * reach guidance-grade at ACTIVE (0.7) through reinforcement.
+   */
+  minConfidenceForCreation: 0.4,
   /** Maximum number of instincts to store */
   maxInstincts: 1000,
 } as const;
