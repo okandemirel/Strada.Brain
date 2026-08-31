@@ -698,7 +698,7 @@ export class TaskManager extends EventEmitter {
     const preface = mode === "resume"
       ? "Previous background execution was interrupted. Resume from the strongest checkpoint, preserve completed work, and only redo what is necessary."
       : mode === "replan"
-      ? "The previous plan was attempted and then attempted again, and the second round finished nothing the first had not. Do not repeat it. Work out why those steps could not be completed and produce a different plan — a different decomposition, a different order, or smaller steps that sidestep whatever blocked the last one. Completed work still stands; keep it."
+      ? "The previous plan was attempted and then attempted again, and the second round finished nothing the first had not. Do not repeat it — and do NOT plan an audit: no step of the new plan may be 'audit/extract/review previous work' (measured: such plans deliver nothing). Produce a different DOING plan — a different decomposition, a different order, or smaller steps that sidestep whatever blocked the last one, every step an implementation or verification of the ORIGINAL task's requirements. Completed work still stands; keep it."
       : "Previous background execution failed or stalled. CONTINUE THE WORK — do not audit, reconstruct or re-verify previous attempts (measured: retries whose preface said 'analyze the failure' spent whole runs producing forensic audits and zero deliverables). One glance at the checkpoint below to see what already exists, then pick the first unmet requirement of the ORIGINAL task and implement it.";
 
     // The TRUE original prompt, from the lineage root — task.prompt on a
