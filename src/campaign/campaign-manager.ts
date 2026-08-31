@@ -1034,7 +1034,7 @@ export class CampaignManager {
         /\n\nThe previous attempt ended [\s\S]*?Fix the root cause, do not repeat it\./g,
         "",
       );
-      milestone.prompt += `\n\nThe previous attempt ended ${status}: ${(cleaned || output).slice(0, 400)}. Fix the root cause, do not repeat it.`;
+      milestone.prompt += `\n\nThe previous attempt ended ${status}: ${(cleaned || output).slice(0, 400)}. Fix the root cause, do not repeat it — and do NOT spend this attempt auditing prior attempts: continue the sprint's actual work from the first unmet requirement.`;
       this.submitCurrentMilestone(campaign, { countAttempt: opts.countAttempt });
       return;
     }
