@@ -39,8 +39,24 @@ export function isCurrentChainMemberName(registryName: string): boolean {
  */
 export function allProvidersCoolingDownMs(): number {
   try {
-    const entries = ProviderHealthRegistry.getInstance().getAllEntries();
+    const registry = ProviderHealthRegistry.getInstance();
+    const entries = registry.getAllEntries();
     const now = Date.now();
+
+    // A DECLARED chain member with no health entry has never failed — it is
+    // available capacity. Measured live 2026-08-31: openai+opencode were
+    // cooling while opencode2/opencode3 (fresh accounts, never dialed, hence
+    // no entry) sat unused, and the outage measure — which only walked
+    // registry ENTRIES — reported a full outage, parking the campaign with
+    // two working providers in the chain.
+    if (liveChainMemberNames.size > 0) {
+      const seen = new Set<string>();
+      for (const [name] of entries) seen.add(name.toLowerCase());
+      for (const member of liveChainMemberNames) {
+        if (!seen.has(member)) return 0;
+      }
+    }
+
     let sawMember = false;
     let soonestActive = Number.POSITIVE_INFINITY;
     for (const [name, entry] of entries) {
