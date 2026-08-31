@@ -50,6 +50,13 @@ export interface CampaignManagerOptions {
   /** Delay before acting on a COMPLETED settle (lets the lease write-back land). */
   completedSettleDelayMs?: number;
   /**
+   * How long one milestone may run before the campaign forces a
+   * scope-narrowing escalation (default 6h). Bounces and deferrals do not
+   * burn attempts by design, so without this a sprint can spin forever —
+   * measured 2026-08-31: m6 ran 22h at attempts=1.
+   */
+  milestoneTimeBoxMs?: number;
+  /**
    * GDD→style.json derivation, run at plan time (post-approval). Optional:
    * without it the campaign still plans, tools just fall back to stock
    * style defaults.
@@ -99,6 +106,7 @@ export class CampaignManager {
   private readonly maxDraftAttempts: number;
   private readonly retryAdoptionGraceMs: number;
   private readonly completedSettleDelayMs: number;
+  private readonly milestoneTimeBoxMs: number;
   private readonly styleAnalysis?: import("../agents/style/style-analysis.js").StyleAnalysis;
   private eventsAttached = false;
 
@@ -112,6 +120,7 @@ export class CampaignManager {
     this.maxDraftAttempts = options.maxDraftAttempts ?? 3;
     this.retryAdoptionGraceMs = options.retryAdoptionGraceMs ?? RETRY_ADOPTION_GRACE_MS;
     this.completedSettleDelayMs = options.completedSettleDelayMs ?? 5_000;
+    this.milestoneTimeBoxMs = options.milestoneTimeBoxMs ?? 6 * 60 * 60_000;
     this.styleAnalysis = options.styleAnalysis;
   }
 
@@ -295,6 +304,8 @@ export class CampaignManager {
     // bar for the rest of the run.
     milestone.visualEvidenceBounced = false;
     milestone.noWorkBounced = false;
+    milestone.startedAtMs = undefined;
+    milestone.timeBoxEscalations = 0;
     campaign.state = "executing";
     campaign.lastError = undefined;
     campaign.autoReviveAt = undefined;
@@ -590,6 +601,7 @@ export class CampaignManager {
       return;
     }
     milestone.status = "running";
+    milestone.startedAtMs ??= Date.now();
     if (opts?.countAttempt !== false) {
       milestone.attempts += 1;
     }
@@ -1007,6 +1019,37 @@ export class CampaignManager {
         if (!fresh || fresh.state !== "executing") return;
         this.submitCurrentMilestone(fresh);
       }, 0);
+      return;
+    }
+
+    // TIME-BOX: bounces and deferrals deliberately do not burn attempts, so a
+    // sprint that keeps almost-finishing can spin indefinitely (measured
+    // 2026-08-31: m6 ran 22h at attempts=1). Past the box, force the scope
+    // down instead of letting it run: deliver the smallest complete
+    // increment. Two escalations, then the milestone is judged terminally.
+    const elapsedMs = milestone.startedAtMs ? Date.now() - milestone.startedAtMs : 0;
+    const escalations = milestone.timeBoxEscalations ?? 0;
+    if (elapsedMs > this.milestoneTimeBoxMs && escalations < 2) {
+      milestone.timeBoxEscalations = escalations + 1;
+      milestone.startedAtMs = Date.now();
+      milestone.prompt +=
+        `\n\nTIME BOX (${Math.round(elapsedMs / 3_600_000)}h elapsed, escalation ${escalations + 1}/2): this sprint has run far past its budget ` +
+        "without landing green. NARROW THE SCOPE NOW: pick the single highest-value unmet requirement, " +
+        "implement it end-to-end (code + bound visual + passing test), commit it, and report precisely what " +
+        "remains for a follow-up sprint. A smaller delivered increment beats another broad attempt.";
+      this.persist(campaign);
+      getLoggerSafe().warn("Milestone time-box exceeded — forcing scope narrowing", {
+        id: campaign.id,
+        milestone: milestone.id,
+        elapsedMs,
+        escalation: escalations + 1,
+      });
+      await this.tell(
+        campaign,
+        `⏱️ **${milestone.title}** has run ${Math.round(elapsedMs / 3_600_000)}h without landing green — ` +
+          `narrowing scope (escalation ${escalations + 1}/2): the next attempt must deliver the smallest complete increment.`,
+      );
+      this.submitCurrentMilestone(campaign, { countAttempt: false });
       return;
     }
 

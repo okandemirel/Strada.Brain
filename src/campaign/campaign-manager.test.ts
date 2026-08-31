@@ -148,6 +148,7 @@ describe("CampaignManager", () => {
       projectRoot,
       retryAdoptionGraceMs: 10,
       completedSettleDelayMs: 0,
+      milestoneTimeBoxMs: 60 * 60_000,
     });
     manager.attachEvents();
   });
@@ -369,6 +370,28 @@ describe("CampaignManager", () => {
     await vi.waitFor(() => expect(storage.get(campaign.id)!.milestones[0]!.status).toBe("green"));
   });
 
+  it("time-box forces scope narrowing when a sprint spins past its budget", async () => {
+    // Measured 2026-08-31: m6 ran 22h at attempts=1 because bounces and
+    // deferrals deliberately never burn attempts — nothing bounded the run.
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+
+    // Backdate the clock past the box, then settle badly.
+    const stored = storage.get(campaign.id)!;
+    stored.milestones[0]!.startedAtMs = Date.now() - 3 * 60 * 60_000;
+    storage.save(stored);
+
+    tasks.emit("task:failed", "task_1", "compile still red");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+
+    const fresh = storage.get(campaign.id)!;
+    expect(tasks.submitted[1]!.prompt).toContain("TIME BOX");
+    expect(tasks.submitted[1]!.prompt).toContain("NARROW THE SCOPE");
+    expect(fresh.milestones[0]!.timeBoxEscalations).toBe(1);
+    expect(fresh.milestones[0]!.attempts).toBe(1); // escalation burns no attempt
+    expect(messages.some((m) => m.text.includes("narrowing scope"))).toBe(true);
+  });
+
   it("a dead retry promise stops the deferral loop (ghost keep-alive)", async () => {
     // Measured live 2026-08-30 15:33-15:55: keep-alive budget exhausted, no
     // task active anywhere, yet reconcile re-deferred every cycle to a retry
@@ -506,6 +529,7 @@ describe("CampaignManager", () => {
       projectRoot,
       retryAdoptionGraceMs: 10,
       completedSettleDelayMs: 0,
+      milestoneTimeBoxMs: 60 * 60_000,
     });
     manager.attachEvents();
 
@@ -545,6 +569,7 @@ describe("CampaignManager", () => {
       projectRoot, // no Recordings/ dir → no evidence
       retryAdoptionGraceMs: 10,
       completedSettleDelayMs: 0,
+      milestoneTimeBoxMs: 60 * 60_000,
     });
     manager.attachEvents();
 

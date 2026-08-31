@@ -86,6 +86,10 @@ export interface CampaignMilestone {
    * since the sprint began is rejected once; the second stands either way.
    */
   noWorkBounced?: boolean;
+  /** When this milestone's current run began (epoch ms) — the time-box clock. */
+  startedAtMs?: number;
+  /** How many times the time-box has forced a scope-narrowing escalation. */
+  timeBoxEscalations?: number;
 }
 
 export interface Campaign {
