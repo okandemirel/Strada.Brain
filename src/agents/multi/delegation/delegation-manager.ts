@@ -75,6 +75,13 @@ export interface DelegationManagerOptions {
    *  MUST be threaded into every sub-agent/candidate provider, or opencode silently
    *  falls back to its Zen preset default and hits the wrong (uncredited) endpoint. */
   readonly providerBaseUrls?: Record<string, string>;
+  /**
+   * Per-provider model overrides (config.providerModels). Without them a
+   * delegated sub-agent fell back to PROVIDER_PRESETS' default — measured
+   * 2026-08-31: every opencode alias ran the PAID qwen3.6-plus while the
+   * deployment was pinned to a free tier, producing CreditsErrors.
+   */
+  readonly providerModels?: Record<string, string>;
   /** Per-attempt first-response timeout (ms) for sub-agent provider chains — without
    *  it the sub-agent ProviderManager runs with attemptTimeoutMs=0 (unbounded), so a
    *  dead tier provider never fails over fast. Threaded from llmProviderFirstResponseTimeoutMs. */
@@ -400,7 +407,7 @@ export class DelegationManager {
     const providerManager = new ProviderManager(
       provider,
       this.opts.providerCredentials ?? {},
-      undefined, // modelOverrides
+      this.opts.providerModels, // modelOverrides — sub-agent chains keep the deployment's pinned models
       this.opts.preferencesDbPath,
       [], // defaultProviderOrder
       this.opts.providerBaseUrls?.["ollama"], // ollamaBaseUrl (threaded via the providerBaseUrls merge in stage-agents)
@@ -827,6 +834,11 @@ export class DelegationManager {
       }
     }
 
+    // The deployment's configured model for this provider wins over any
+    // preset: presets carry PAID defaults, and a tier spec without an
+    // explicit model must not silently upgrade the account's plan.
+    const configuredModel = this.opts.providerModels?.[name];
+    if (configuredModel) return configuredModel;
     if (name === "claude" || name === "anthropic") {
       return "claude-sonnet-4-6-20250514";
     }

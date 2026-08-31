@@ -226,6 +226,7 @@ export async function initializeMultiAgentDelegationStage(
         ...params.config.providerBaseUrls,
         ...(params.config.ollamaBaseUrl ? { ollama: params.config.ollamaBaseUrl } : {}),
       },
+      providerModels: params.config.providerModels,
       providerResponseTimeoutMs: params.config.llmProviderFirstResponseTimeoutMs,
       preferencesDbPath: params.config.memory.dbPath,
       verifiedLocalProviders: params.providerManager.isAvailable("ollama") ? ["ollama"] : [],

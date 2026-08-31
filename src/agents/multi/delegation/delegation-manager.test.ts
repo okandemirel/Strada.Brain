@@ -775,6 +775,30 @@ describe("DelegationManager", () => {
     });
   });
 
+  describe("configured model overrides", () => {
+    it("a tier without an explicit model uses the deployment's configured model, not the paid preset", async () => {
+      // Measured 2026-08-31: opencode aliases fell back to PROVIDER_PRESETS'
+      // qwen3.6-plus (paid) while the deployment was pinned to a free tier —
+      // six CreditsErrors before the fallback chain absorbed it.
+      const cfg: DelegationConfig = {
+        ...TEST_CONFIG,
+        tiers: { ...TEST_TIER_MAP, cheap: "opencode" },
+      };
+      const mgr = new DelegationManager(
+        buildManagerOpts({
+          delegationLog,
+          config: cfg,
+          providerModels: { opencode: "nemotron-3.5-lightning-free" },
+          apiKeys: { opencode: "sk-test" },
+        }) as never,
+      );
+      const resolved = (
+        mgr as unknown as { getDefaultModelForProvider(name: string): string }
+      ).getDefaultModelForProvider("opencode");
+      expect(resolved).toBe("nemotron-3.5-lightning-free");
+    });
+  });
+
   describe("dynamic tier fallback", () => {
     it("falls back to a viable configured provider when the tier spec is unavailable", async () => {
       const fallbackConfig: DelegationConfig = {
