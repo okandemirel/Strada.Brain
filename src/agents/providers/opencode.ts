@@ -87,8 +87,17 @@ export class OpencodeProvider extends OpenAIProvider {
     apiKey: string,
     model = "qwen3.6-plus",
     baseUrl = OPENCODE_ZEN_BASE_URL,
+    /**
+     * Registry name of THIS instance ("opencode", "opencode2", …). Provider
+     * health, cooldowns and routing all key on `provider.name`, so a
+     * hardcoded label collapsed every account into one entry — measured
+     * 2026-08-31: account #1's 8h quota cooldown suppressed the two fresh
+     * accounts that shared the label, and the chain reported a full outage
+     * while two working accounts sat idle.
+     */
+    label = "OpenCode (Zen/Go)",
   ) {
-    super(apiKey, OpencodeProvider.toBareModelId(model), baseUrl, "OpenCode (Zen/Go)");
+    super(apiKey, OpencodeProvider.toBareModelId(model), baseUrl, label);
   }
 
   /**

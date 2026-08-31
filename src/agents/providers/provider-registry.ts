@@ -25,6 +25,8 @@ type OpenAICompatibleProviderConstructor = new (
   apiKey: string,
   model?: string,
   baseUrl?: string,
+  /** Instance label = registry name; keeps sibling accounts distinct in health/routing. */
+  label?: string,
 ) => OpenAIProvider;
 
 const PROVIDER_CLASS_MAP: Record<string, OpenAICompatibleProviderConstructor> = {
@@ -247,7 +249,10 @@ export function createProvider(config: ProviderConfig): IAIProvider {
   // Use dedicated class if available, otherwise fall back to generic OpenAIProvider
   const ProviderClass = PROVIDER_CLASS_MAP[name];
   if (ProviderClass) {
-    return new ProviderClass(config.apiKey, model, baseUrl);
+    // Pass the REGISTRY name as the instance label: health/cooldown/routing
+    // key on provider.name, so sibling accounts of the same vendor
+    // (opencode/opencode2/…) must not collapse into one identity.
+    return new ProviderClass(config.apiKey, model, baseUrl, preset?.label ?? name);
   }
 
   return new OpenAIProvider(config.apiKey, model, baseUrl, preset?.label ?? name);

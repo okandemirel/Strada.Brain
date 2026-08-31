@@ -33,3 +33,17 @@ describe("allProvidersCoolingDownMs", () => {
     expect(allProvidersCoolingDownMs()).toBe(0);
   });
 });
+
+describe("sibling accounts keep distinct identities", () => {
+  it("createProvider labels each registry name separately (opencode vs opencode2)", async () => {
+    // Measured 2026-08-31: OpencodeProvider hardcoded its label, so all three
+    // accounts shared one health identity — account #1's 8h quota cooldown
+    // suppressed two fresh accounts and the chain called a full outage.
+    const { createProvider } = await import("./provider-registry.js");
+    const a = createProvider({ name: "opencode", apiKey: "sk-a" });
+    const b = createProvider({ name: "opencode2", apiKey: "sk-b" });
+    const c = createProvider({ name: "opencode3", apiKey: "sk-c" });
+    expect(a.name).not.toBe(b.name);
+    expect(b.name).not.toBe(c.name);
+  });
+});
