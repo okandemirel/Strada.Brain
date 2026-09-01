@@ -161,6 +161,10 @@ describe("CampaignManager", () => {
   const settleMilestone = (result: string) => {
     const last = tasks.submitted.length;
     const taskId = `task_${last}`;
+    // The delivery gate requires the FINAL milestone to carry an observed
+    // green test verdict; give every settle one so ladder tests exercise the
+    // walk rather than the gate (the gate has its own test).
+    tasks.verifications.set(taskId, { testsGreen: true, detail: "All 42 tests passed" });
     tasks.emit("task:completed", taskId, result);
   };
 
@@ -303,6 +307,26 @@ describe("CampaignManager", () => {
       const fresh = storage.get(campaign.id)!;
       expect(fresh.milestones[0]!.taskId).not.toBe("task_1");
     });
+  });
+
+  it("refuses delivery when the FINAL sprint never ran its tests (one bounce)", async () => {
+    // Audited 2026-09-01: "full unfiltered suite" was only prose in the
+    // planner prompt — a final sprint whose task printed no test result
+    // carried no verdict and delivery was declared anyway.
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+
+    // Final sprint completes with NO observed test verdict.
+    tasks.emit("task:completed", "task_3", "everything works, shipping it");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+
+    expect(storage.get(campaign.id)!.state).toBe("executing");
+    expect(tasks.submitted[3]!.prompt).toContain("DELIVERY VERIFICATION REQUIRED");
+    expect(messages.some((m) => m.text.includes("Campaign delivery"))).toBe(false);
   });
 
   it("a milestone retry carries the previous attempt's progress without persisting it", async () => {
@@ -594,7 +618,15 @@ describe("CampaignManager", () => {
     expect(tasks.submitted[3]!.prompt).toContain("Dragon boss");
     expect(storage.get(campaign.id)!.state).toBe("executing");
 
-    settleMilestone("dragon implemented"); // remediation lands → audit clean → done
+    // The remediation sprint now inherits the visual-evidence gate (its bar
+    // demands a captured frame), so a first completion with no frames on disk
+    // bounces once — the gap-closing sprint is exactly the one that must not
+    // be allowed to go green blind.
+    settleMilestone("dragon implemented");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(5));
+    expect(tasks.submitted[4]!.prompt).toContain("VISUAL EVIDENCE MISSING");
+
+    settleMilestone("dragon implemented, frames captured");
     await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
   });
 
@@ -646,7 +678,7 @@ describe("CampaignManager", () => {
       testsGreen: false,
       detail: "PlayMode verification FAILED: 5 of 95 tests failed",
     });
-    settleMilestone("sprint A complete, everything works great");
+    tasks.emit("task:completed", "task_1", "sprint A complete, everything works great");
 
     // Routed to the retry path with the red run named — not green.
     await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
@@ -656,7 +688,7 @@ describe("CampaignManager", () => {
 
     // A green-verdict completion passes.
     tasks.verifications.set("task_2", { testsGreen: true, detail: "All 95 tests passed" });
-    settleMilestone("sprint A complete for real");
+    tasks.emit("task:completed", "task_2", "sprint A complete for real");
     await vi.waitFor(() => expect(storage.get(campaign.id)!.milestones[0]!.status).toBe("green"));
   });
 

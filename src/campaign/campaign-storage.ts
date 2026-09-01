@@ -56,6 +56,7 @@ interface CampaignRow {
   updated_at: number;
   last_error: string | null;
   auto_revive_at: number | null;
+  coverage_audit_note?: string | null;
 }
 
 function rowToCampaign(row: CampaignRow): Campaign {
@@ -87,6 +88,7 @@ function rowToCampaign(row: CampaignRow): Campaign {
     updatedAt: row.updated_at,
     lastError: row.last_error ?? undefined,
     autoReviveAt: row.auto_revive_at ?? undefined,
+    coverageAuditNote: row.coverage_audit_note ?? undefined,
   };
 }
 
@@ -103,6 +105,11 @@ export class CampaignStorage {
     } catch {
       // Column already exists — migration is idempotent.
     }
+    try {
+      this.db.exec("ALTER TABLE campaigns ADD COLUMN coverage_audit_note TEXT");
+    } catch {
+      // Column already exists — migration is idempotent.
+    }
   }
 
   save(campaign: Campaign): void {
@@ -112,8 +119,8 @@ export class CampaignStorage {
           id, chat_id, channel_type, user_id, conversation_id, project_root,
           state, idea_text, gdd_path, gdd_text, draft_task_id, draft_attempts,
           milestones_json, current_milestone, created_at, updated_at, last_error,
-          auto_revive_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          auto_revive_at, coverage_audit_note
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           state = excluded.state,
           gdd_path = excluded.gdd_path,
@@ -124,7 +131,8 @@ export class CampaignStorage {
           current_milestone = excluded.current_milestone,
           updated_at = excluded.updated_at,
           last_error = excluded.last_error,
-          auto_revive_at = excluded.auto_revive_at`,
+          auto_revive_at = excluded.auto_revive_at,
+          coverage_audit_note = excluded.coverage_audit_note`,
       )
       .run(
         campaign.id,
@@ -145,6 +153,7 @@ export class CampaignStorage {
         campaign.updatedAt,
         campaign.lastError ?? null,
         campaign.autoReviveAt ?? null,
+        campaign.coverageAuditNote ?? null,
       );
   }
 

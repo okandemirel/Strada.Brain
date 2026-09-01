@@ -68,6 +68,10 @@ export interface CampaignMilestone {
   attempts: number;
   /** Short result excerpt recorded when the milestone landed green. */
   resultExcerpt?: string;
+  /** Commit hash + file count from the envelope commit that closed it. */
+  commitNote?: string;
+  /** The mechanical test verdict observed when it landed green, if any. */
+  testVerdict?: string;
   /** One-shot flag: a reaped settlement already deferred once to the
    *  executor's pending keep-alive retry (see reconcileMilestoneAfterSettle). */
   reconcileDeferred?: boolean;
@@ -86,6 +90,8 @@ export interface CampaignMilestone {
    * since the sprint began is rejected once; the second stands either way.
    */
   noWorkBounced?: boolean;
+  /** One-shot bounce: the FINAL milestone landed green with no observed test run. */
+  deliveryVerificationBounced?: boolean;
   /** When this milestone's current run began (epoch ms) — the time-box clock. */
   startedAtMs?: number;
   /** How many times the time-box has forced a scope-narrowing escalation. */
@@ -122,6 +128,12 @@ export interface Campaign {
    * Armed when the stop was a full provider outage; cleared on any revive.
    */
   autoReviveAt?: number;
+  /**
+   * Set when the GDD-coverage audit did NOT run clean (skipped, budget spent,
+   * or errored). Rendered in the delivery report so an unaudited delivery
+   * cannot read like an audited one.
+   */
+  coverageAuditNote?: string;
 }
 
 // =============================================================================

@@ -596,8 +596,22 @@ export class CampaignManager {
   private submitCurrentMilestone(campaign: Campaign, opts?: { countAttempt?: boolean }): void {
     const milestone = campaign.milestones[campaign.currentMilestone];
     if (!milestone) {
-      campaign.state = "done";
+      // NEVER a silent delivery. A missing milestone here means the ladder is
+      // empty or the index ran past its end — a corrupt milestones_json (the
+      // storage parser degrades to []) or a bad resume, not a finished game.
+      // Flipping to "done" here made a live 7-sprint campaign vanish with no
+      // message, no report and no revival path (audited 2026-09-01).
+      campaign.state = "failed";
+      campaign.lastError =
+        `Ladder is unusable: milestone index ${campaign.currentMilestone} of ${campaign.milestones.length}. ` +
+        "The plan may have been lost or corrupted; reply **kampanya devam** to replan from the GDD.";
       this.persist(campaign);
+      getLoggerSafe().error("Campaign ladder unusable — refusing to declare delivery", {
+        id: campaign.id,
+        currentMilestone: campaign.currentMilestone,
+        milestones: campaign.milestones.length,
+      });
+      void this.tell(campaign, `❌ Campaign halted: ${campaign.lastError}`);
       return;
     }
     milestone.status = "running";
@@ -1025,7 +1039,41 @@ export class CampaignManager {
       }
       milestone.status = "green";
       milestone.resultExcerpt = output.slice(-500);
+      milestone.commitNote = commitNote.trim() || undefined;
+      try {
+        const tip = milestone.taskId
+          ? this.taskManager.findLatestLineageTask(milestone.taskId as TaskId)
+          : null;
+        const verdict = (tip as { verification?: { testsGreen?: boolean; detail: string } } | null)?.verification;
+        milestone.testVerdict = verdict?.testsGreen === true ? verdict.detail : undefined;
+      } catch { /* evidence capture is best-effort */ }
+      // Persist the green BEFORE the coverage audit: that await is a
+      // 400k-window LLM call lasting minutes, and storage said "running" the
+      // whole time — a crash re-ran the entire green path (second commit,
+      // second billable audit) and a concurrent reconcile could enter it too.
+      this.persist(campaign);
       const isLast = campaign.currentMilestone >= campaign.milestones.length - 1;
+      if (isLast && !milestone.testVerdict && !milestone.deliveryVerificationBounced) {
+        // DELIVERY GATE: "the whole game runs" was only ever a sentence in the
+        // planner's prompt — nothing in code required the final sprint to
+        // have RUN the suite. A milestone whose task printed no recognizable
+        // test result carries no verdict at all and sailed through
+        // (audited 2026-09-01). One bounce, then the ladder proceeds so an
+        // honest report can still be delivered.
+        milestone.deliveryVerificationBounced = true;
+        milestone.prompt +=
+          "\n\nDELIVERY VERIFICATION REQUIRED: this is the final sprint, and no test run was observed in the " +
+          "last attempt. Run the FULL PlayMode suite UNFILTERED against the assembled scene, capture a frame of " +
+          "the running game, and report the suite's actual pass/fail counts. Delivery is not declared on a sprint " +
+          "whose tests were never seen to run.";
+        this.persist(campaign);
+        getLoggerSafe().warn("Delivery blocked: final milestone has no observed test verdict", {
+          id: campaign.id,
+          milestone: milestone.id,
+        });
+        this.submitCurrentMilestone(campaign, { countAttempt: false });
+        return;
+      }
       if (isLast) {
         // Coverage gate: "done" is measured against the GDD, not against the
         // ladder having run out. When scheduled items are missing, a
@@ -1320,13 +1368,31 @@ export class CampaignManager {
    */
   private async buildCoverageRemediation(campaign: Campaign): Promise<CampaignMilestone | undefined> {
     const priorRounds = campaign.milestones.filter((m) => m.id.startsWith("mcov")).length;
-    if (priorRounds >= CampaignManager.MAX_COVERAGE_ROUNDS) return undefined;
+    // Every non-clean outcome is RECORDED, not collapsed into "undefined":
+    // a skipped audit read exactly like a passing one in the delivery report
+    // (audited 2026-09-01 — the round-budget and missing-GDD skips were
+    // silent, and the doctrine comment below only covered the throw).
+    if (priorRounds >= CampaignManager.MAX_COVERAGE_ROUNDS) {
+      campaign.coverageAuditNote =
+        `coverage audit stopped after ${CampaignManager.MAX_COVERAGE_ROUNDS} remediation rounds — ` +
+        "the last rounds reported gaps that were not re-audited";
+      this.persist(campaign);
+      return undefined;
+    }
     const gddText =
       campaign.gddText ?? (campaign.gddPath ? readGddFile(this.projectRoot, campaign.gddPath) : undefined);
-    if (!gddText) return undefined;
+    if (!gddText) {
+      campaign.coverageAuditNote = `coverage audit skipped — the GDD text could not be read (${campaign.gddPath ?? "no path"})`;
+      this.persist(campaign);
+      return undefined;
+    }
     try {
       const missing = await this.planner.auditCoverage(gddText, campaign.milestones);
-      if (missing.length === 0) return undefined;
+      if (missing.length === 0) {
+        campaign.coverageAuditNote = undefined; // genuinely audited clean
+        this.persist(campaign);
+        return undefined;
+      }
       const gddRef = campaign.gddPath ?? "the GDD";
       return {
         id: `mcov${priorRounds + 1}`,
@@ -1336,7 +1402,7 @@ export class CampaignManager {
           ...missing.map((item) => `- ${item}`),
           "",
           `Implement each item exactly as ${gddRef} specifies it, following the project's existing module pattern.`,
-          "Verification bar per item: headless compile green, the relevant PlayMode tests green and unfiltered, and a bound visual where the item is a game element.",
+          "Verification bar per item: headless compile green, the relevant PlayMode tests green and unfiltered, and a captured frame proving the bound visual renders (the project's style.json holds the derived art direction — generators read it).",
           "Commit per logical unit. End with a summary naming each item and the evidence it is done.",
           "This is an autonomous campaign sprint — do not ask the user questions; make the strong choice and continue.",
         ].join("\n"),
@@ -1350,23 +1416,62 @@ export class CampaignManager {
       });
       // The skip must reach the person, not only the log — a silently
       // unaudited delivery reads exactly like an audited one.
-      campaign.lastError = `coverage audit could not run: ${(err instanceof Error ? err.message : String(err)).slice(0, 160)}`;
+      campaign.coverageAuditNote = `coverage audit could not run: ${(err instanceof Error ? err.message : String(err)).slice(0, 160)}`;
       this.persist(campaign);
       return undefined;
     }
   }
 
   private buildDeliveryReport(campaign: Campaign): string {
+    // EVIDENCE, not stored booleans. The report used to render only
+    // milestone.status — while the manager held commit hashes, capture
+    // counts, test verdicts and every bounce/escalation and threw them away
+    // (audited 2026-09-01). A green reached by spending its evidence bounce
+    // must not read like a clean one.
+    const caveats: string[] = [];
     const lines = [
       `🏁 **Campaign delivery — game build complete**`,
       `GDD: \`${campaign.gddPath ?? "n/a"}\``,
       ``,
-      ...campaign.milestones.map((m) => `• ${m.status === "green" ? "✅" : "❌"} ${m.title}`),
     ];
-    if (campaign.lastError?.startsWith("coverage audit could not run")) {
-      lines.push("", `⚠️ ${campaign.lastError} — delivered WITHOUT the GDD-coverage check.`);
+    for (const m of campaign.milestones) {
+      const marks: string[] = [];
+      if (m.commitNote) marks.push(m.commitNote.replace(/^\s*/, ""));
+      if (m.testVerdict) marks.push(`tests: ${m.testVerdict.slice(0, 80)}`);
+      if (m.visualEvidenceBounced) { marks.push("visual-evidence bounce spent"); caveats.push(`${m.title}: needed a second attempt to produce a captured frame`); }
+      if (m.noWorkBounced) { marks.push("no-work bounce spent"); caveats.push(`${m.title}: an attempt left the repository untouched`); }
+      if ((m.timeBoxEscalations ?? 0) > 0) { marks.push(`scope narrowed ×${m.timeBoxEscalations}`); caveats.push(`${m.title}: ran past its time box and was narrowed to a smaller increment — remaining scope is in its final report`); }
+      if (m.attempts > 1) marks.push(`${m.attempts} attempts`);
+      lines.push(`• ${m.status === "green" ? "✅" : "❌"} ${m.title}${marks.length > 0 ? ` — ${marks.join("; ")}` : ""}`);
+    }
+    const frames = this.countCaptureFiles();
+    lines.push("", `Captured frames on disk: ${frames}`);
+    if (campaign.coverageAuditNote) {
+      lines.push("", `⚠️ ${campaign.coverageAuditNote} — delivered WITHOUT a clean GDD-coverage check.`);
+    }
+    if (caveats.length > 0) {
+      lines.push("", "**How these greens were reached:**", ...caveats.map((c) => `- ${c}`));
     }
     return lines.join("\n");
+  }
+
+  /** Total capture artifacts under the project's recording roots. */
+  private countCaptureFiles(): number {
+    let count = 0;
+    const stack = [join(this.projectRoot, "Recordings"), join(this.projectRoot, "Assets", "Art", "Prerendered")]
+      .filter((r) => existsSync(r));
+    let scanned = 0;
+    while (stack.length > 0 && scanned < 20_000) {
+      const dir = stack.pop()!;
+      let entries;
+      try { entries = readdirSync(dir, { withFileTypes: true }); } catch { continue; }
+      for (const e of entries) {
+        scanned++;
+        if (e.isDirectory()) stack.push(join(dir, e.name));
+        else if (/\.(png|jpg|mp4)$/i.test(e.name)) count++;
+      }
+    }
+    return count;
   }
 
   /** Newest *GDD*.md under docs/ by mtime — the file the draft just wrote. */
