@@ -9,7 +9,7 @@ import type { ProviderDescriptor as SupervisorProviderDescriptor } from "../../s
 import { SupervisorBrain } from "../../supervisor/supervisor-brain.js";
 import { createSupervisorNodeVerifier } from "../../supervisor/supervisor-verification.js";
 import { ProviderHealthRegistry } from "../../agents/providers/provider-health.js";
-import { getBaselineProfile } from "../../agents/providers/provider-behavioral-profiles.js";
+import { getBaselineProfile, STATIC_BASELINE_PROFILES, BehavioralDimension } from "../../agents/providers/provider-behavioral-profiles.js";
 
 // =============================================================================
 // STAGE RESULT
@@ -54,7 +54,8 @@ const BASELINE_SCORES: Record<CapabilityTag, number> = {
  * format.  Uses provider capabilities (vision, thinking, context window) to
  * adjust scores above the baseline when available.
  */
-function buildProviderDescriptors(providerManager: ProviderManager): SupervisorProviderDescriptor[] {
+export function buildProviderDescriptors(providerManager: ProviderManager): SupervisorProviderDescriptor[] {
+  // (behavioral profiles imported at module scope below)
   const available = providerManager.listAvailable();
   return available.map((entry) => {
     const capabilities = providerManager.getProviderCapabilities(entry.name, entry.defaultModel);
@@ -88,6 +89,28 @@ function buildProviderDescriptors(providerManager: ProviderManager): SupervisorP
       if (capabilities.toolCalling) {
         scores["code-gen"] = 0.7;
       }
+    }
+
+    // BEHAVIORAL PROFILES: the binary flags above say what a provider CAN do,
+    // not what it is GOOD at — every tool-calling model scored identically, so
+    // the supervisor distributed nodes by availability rather than strength.
+    // The 12-dimension profiles (claude: planning/review, openai:
+    // implementation/debugging, …) already exist for the router; map them onto
+    // the supervisor's tags so the hardest node goes to the strongest model.
+    const behavioral = STATIC_BASELINE_PROFILES.get(entry.name.toLowerCase());
+    if (behavioral) {
+      const d = behavioral.scores;
+      const lift = (tag: CapabilityTag, value: number): void => {
+        scores[tag] = Math.max(scores[tag], value);
+      };
+      lift("reasoning", (d[BehavioralDimension.complexReasoning] + d[BehavioralDimension.deepPlanning]) / 2);
+      lift("code-gen", (d[BehavioralDimension.codeRefactoring] + d[BehavioralDimension.fastExecution]) / 2);
+      lift("tool-use", d[BehavioralDimension.toolCallReliability]);
+      lift("speed", d[BehavioralDimension.fastExecution]);
+      lift("cost", d[BehavioralDimension.costEfficiency]);
+      lift("long-context", d[BehavioralDimension.contextManagement]);
+      lift("quality", (d[BehavioralDimension.deepPlanning] + d[BehavioralDimension.errorRecovery]) / 2);
+      lift("creative", d[BehavioralDimension.intentUnderstanding]);
     }
 
     return {
