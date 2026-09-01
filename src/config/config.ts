@@ -58,6 +58,28 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
 
   // Transform to structured config
   const rawConfig = result.data;
+
+  // CAPACITY = usable provider accounts. Wave width and sub-agent fan-out
+  // scale off this instead of a hand-set constant, so adding an account
+  // widens parallelism automatically (measured 2026-09-01: three accounts
+  // were configured while the wave cap sat at its default 4).
+  const providerAccountCount = [
+    rawConfig.anthropicApiKey,
+    rawConfig.openaiApiKey || rawConfig.openaiSubscriptionAccessToken,
+    rawConfig.deepseekApiKey,
+    rawConfig.qwenApiKey,
+    rawConfig.kimiApiKey,
+    rawConfig.minimaxApiKey,
+    rawConfig.groqApiKey,
+    rawConfig.mistralApiKey,
+    rawConfig.togetherApiKey,
+    rawConfig.fireworksApiKey,
+    rawConfig.geminiApiKey,
+    rawConfig.opencodeApiKey,
+    rawConfig.opencode2ApiKey,
+    rawConfig.opencode3ApiKey,
+    rawConfig.openrouterApiKey,
+  ].filter((key) => typeof key === "string" && key.length > 0).length;
   const config: Config = {
     anthropicApiKey: rawConfig.anthropicApiKey,
     anthropicAuthMode: rawConfig.anthropicAuthMode,
@@ -410,7 +432,12 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
     delegation: {
       enabled: rawConfig.taskDelegationEnabled,
       maxDepth: rawConfig.agentMaxDelegationDepth,
-      maxConcurrentPerParent: rawConfig.agentMaxConcurrentDelegations,
+      // Same capacity scaling for sub-agent fan-out (swarm width): one
+      // concurrent delegation per account, floor 3, explicit env wins.
+      maxConcurrentPerParent: Math.max(
+        rawConfig.agentMaxConcurrentDelegations,
+        Math.min(10, providerAccountCount * 2),
+      ),
       tiers: {
         local: rawConfig.delegationTierLocal,
         cheap: rawConfig.delegationTierCheap,
@@ -476,7 +503,15 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
     supervisor: {
       enabled: rawConfig.stradaSupervisorEnabled,
       complexityThreshold: rawConfig.stradaSupervisorComplexityThreshold,
-      maxParallelNodes: rawConfig.stradaSupervisorMaxParallelNodes,
+      // Parallelism SCALES WITH CAPACITY: an explicit
+      // SUPERVISOR_MAX_PARALLEL_NODES still wins, but by default the wave
+      // width follows the number of usable provider accounts in the chain
+      // (3 nodes per account, floor 4). Adding a fourth account must widen
+      // the waves without anyone editing a cap.
+      maxParallelNodes: Math.max(
+        rawConfig.stradaSupervisorMaxParallelNodes,
+        Math.min(16, providerAccountCount * 3),
+      ),
       nodeTimeoutMs: rawConfig.stradaSupervisorNodeTimeoutMs,
       verificationMode: rawConfig.stradaSupervisorVerificationMode,
       verificationBudgetPct: rawConfig.stradaSupervisorVerificationBudgetPct,

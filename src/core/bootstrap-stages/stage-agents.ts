@@ -243,16 +243,26 @@ export async function initializeMultiAgentDelegationStage(
     delegationManager = deps.createDelegationManager?.(delegationManagerOptions)
       ?? new DelegationManager(delegationManagerOptions);
 
+    const { createSwarmTool } = await import("../../agents/multi/delegation/swarm-tool.js");
     const createDelegationToolsFn = deps.createDelegationTools ?? createDelegationTools;
-    agentManager.setDelegationFactory((parentAgentId, depth) =>
-      createDelegationToolsFn(
+    agentManager.setDelegationFactory((parentAgentId, depth) => [
+      ...createDelegationToolsFn(
         delegationTypes,
         delegationManager!,
         parentAgentId,
         depth,
         params.config.delegation.maxDepth,
       ),
-    );
+      // Fan-out surface: one call runs a list of INDEPENDENT subtasks across
+      // the whole account pool instead of one sub-agent at a time.
+      ...createSwarmTool(
+        delegationTypes,
+        delegationManager!,
+        parentAgentId,
+        depth,
+        params.config.delegation.maxDepth,
+      ),
+    ]);
 
     const rootDelegationAgentId = createAgentId();
     const rootDelegationTools = createDelegationToolsFn(
@@ -263,6 +273,15 @@ export async function initializeMultiAgentDelegationStage(
       params.config.delegation.maxDepth,
     );
     for (const tool of rootDelegationTools) {
+      params.orchestrator.addTool(tool);
+    }
+    for (const tool of createSwarmTool(
+      delegationTypes,
+      delegationManager,
+      rootDelegationAgentId,
+      0,
+      params.config.delegation.maxDepth,
+    )) {
       params.orchestrator.addTool(tool);
     }
 
