@@ -485,6 +485,31 @@ describe("CampaignManager", () => {
     }
   });
 
+  it("a BLOCKED outage settle also resubmits without charging an attempt", async () => {
+    // Measured 2026-09-02 02:36: the outage surfaced as
+    // `blocked:provider_unavailable`, and the blocked-nudge branch (which
+    // runs first) charged attempts 1→2 → "blocked after 2 attempts".
+    const { ProviderHealthRegistry } = await import("../agents/providers/provider-health.js");
+    const { setLiveChainMemberNames } = await import("../agents/providers/provider-outage.js");
+    const registry = ProviderHealthRegistry.getInstance();
+    registry.clearProviderState("cm-cool2");
+    registry.recordOverloaded("cm-cool2", "quota wall");
+    setLiveChainMemberNames(["cm-cool2"]);
+
+    try {
+      const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+      await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+      tasks.updatedAts.set("task_1", Date.now() - 30 * 60_000);
+      tasks.emit("task:blocked", "task_1", "Blocked:\n[goal_1] blocked:provider_unavailable. Auto-retry 2/10 in ~30s.");
+      await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+
+      expect(storage.get(campaign.id)!.milestones[0]!.attempts).toBe(1); // not charged
+    } finally {
+      setLiveChainMemberNames([]);
+      registry.clearProviderState("cm-cool2");
+    }
+  });
+
   it("a dead retry promise stops the deferral loop (ghost keep-alive)", async () => {
     // Measured live 2026-08-30 15:33-15:55: keep-alive budget exhausted, no
     // task active anywhere, yet reconcile re-deferred every cycle to a retry

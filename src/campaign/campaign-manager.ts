@@ -1160,20 +1160,14 @@ export class CampaignManager {
     if (await this.escalateIfPastTimeBox(campaign, milestone)) return;
 
     const canRetry = milestone.attempts < this.maxMilestoneAttempts;
-    if (canRetry && status === TaskStatus.blocked) {
-      // Autonomous campaign context: a block is usually the agent asking a
-      // person it was told not to need. Nudge with the mandate repeated —
-      // once; a re-blocked milestone must not accumulate copies.
-      const reminder =
-        "\n\nREMINDER: this is an autonomous campaign sprint — do not ask the user questions; make the strong choice and continue.";
-      if (!milestone.prompt.includes(reminder)) milestone.prompt += reminder;
-      this.submitCurrentMilestone(campaign, { countAttempt: opts.countAttempt });
-      return;
-    }
     // An outage-caused settle is not the sprint's failure: the run never got
     // to work. Charging it an attempt (measured 2026-09-01 16:16: attempts
     // 1→2 during a four-account quota wall) spends the milestone's budget on
     // the provider's downtime and pushes a healthy sprint toward a stop.
+    // Checked BEFORE the blocked-nudge branch: an outage surfaces as
+    // `blocked:provider_unavailable`, and that branch charged it (measured
+    // 2026-09-02 02:36: m7 "blocked after 2 attempts" while all four
+    // accounts were on quota walls).
     const outageCaused =
       /provider|cooldown|quota|rate.?limit/i.test(output) && allProvidersCoolingDownMs() > 0;
     if (canRetry && outageCaused) {
@@ -1182,6 +1176,16 @@ export class CampaignManager {
         milestone: milestone.id,
       });
       this.submitCurrentMilestone(campaign, { countAttempt: false });
+      return;
+    }
+    if (canRetry && status === TaskStatus.blocked) {
+      // Autonomous campaign context: a block is usually the agent asking a
+      // person it was told not to need. Nudge with the mandate repeated —
+      // once; a re-blocked milestone must not accumulate copies.
+      const reminder =
+        "\n\nREMINDER: this is an autonomous campaign sprint — do not ask the user questions; make the strong choice and continue.";
+      if (!milestone.prompt.includes(reminder)) milestone.prompt += reminder;
+      this.submitCurrentMilestone(campaign, { countAttempt: opts.countAttempt });
       return;
     }
 
