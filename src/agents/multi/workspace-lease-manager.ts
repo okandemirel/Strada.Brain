@@ -236,6 +236,7 @@ export class WorkspaceLeaseManager {
   private readonly worktreeTimeoutMs: number;
   private readonly submoduleTimeoutMs: number;
   private readonly fallbackExcludes: Set<string>;
+  private readonly configuredHeavyExcludes: Set<string>;
   private readonly activeLeases = new Map<string, WorkspaceLease>();
 
   constructor(options: WorkspaceLeaseManagerOptions) {
@@ -271,6 +272,10 @@ export class WorkspaceLeaseManager {
     this.fallbackExcludes = options.additionalExcludes?.length
       ? new Set([...BASE_FALLBACK_COPY_EXCLUDES, ...options.additionalExcludes])
       : BASE_FALLBACK_COPY_EXCLUDES;
+    // Operator-configured heavy directories ONLY (Library/Temp/Logs/…). A
+    // derived lease still carries build outputs like dist/ — those are the
+    // agent's product — so the base fallback set must not leak in here.
+    this.configuredHeavyExcludes = new Set(options.additionalExcludes ?? []);
     // At construction there are by definition zero live leases — every
     // pre-existing entry belongs to a dead process. Snapshot the list now and
     // salvage in the background; anything acquired later creates NEW dirs that
@@ -449,7 +454,11 @@ export class WorkspaceLeaseManager {
     const lease: WorkspaceLease = {
       commit: async () =>
         this.commitLease(sourceRoot, workspacePath, leaseSeed, sourceSeed, join(
-          sourceRoot,
+          // ALWAYS the project, never the source: a lease derived from another
+          // lease quarantined its conflicts inside the PARENT workspace, which
+          // release() then deleted — the losing writer's work vanished with
+          // the very directory meant to preserve it (audited 2026-09-01).
+          this.projectRoot,
           ".strada",
           "lease-conflicts",
           id.slice(0, 8),
@@ -808,16 +817,16 @@ export class WorkspaceLeaseManager {
       return { written, conflicts, removed, failed, conflictsQuarantinedUnder };
     }
 
-    // Bulk write into the REAL project: serialize against the other bulk
-    // writer (the campaign envelope commit), including one in another
-    // process. Derived leases (sourceRoot inside the lease root) skip — they
-    // are private scratch space.
-    const lock = sourceRoot === this.projectRoot
-      ? await (await import("../../common/project-write-lock.js")).acquireProjectWriteLock(
-          this.projectRoot,
-          { timeoutMs: 30_000 },
-        )
-      : null;
+    // Bulk write into ANY shared target: serialize against the other bulk
+    // writers (the campaign envelope commit, sibling leases), including ones
+    // in another process. The lock is keyed on the write TARGET — keying it
+    // on the project root alone meant a lease derived from another lease
+    // committed with no lock at all, so two siblings could interleave their
+    // bulk writes into the same tree (audited 2026-09-01).
+    const lock = await (await import("../../common/project-write-lock.js")).acquireProjectWriteLock(
+      sourceRoot,
+      { timeoutMs: 30_000 },
+    );
     try {
 
     const walk = (dir: string): void => {
@@ -1019,7 +1028,12 @@ export class WorkspaceLeaseManager {
     }
 
     if (sourceRoot !== this.projectRoot) {
-      return !DERIVED_COPY_EXCLUDES.has(firstSegment);
+      // The operator's heavy-directory excludes (Library, Temp, Logs, Builds,
+      // obj…) apply here too: a derived copy that carries a multi-GB Unity
+      // Library is minutes of blocking cpSync and tens of GB under tmp
+      // (audited 2026-09-01 — the derived branch consulted only its own small
+      // set, so the configured excludes were silently ignored).
+      return !DERIVED_COPY_EXCLUDES.has(firstSegment) && !this.configuredHeavyExcludes.has(firstSegment);
     }
 
     return !this.fallbackExcludes.has(firstSegment);
