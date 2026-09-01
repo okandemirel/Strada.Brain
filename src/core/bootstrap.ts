@@ -209,14 +209,18 @@ export function createSupervisorExecuteNodeBridge(params: {
         attachments: context.attachments,
         userContent: context.userContent,
         onUsage: context.onUsage,
-        // PER-NODE CHILD LEASE (parallelism): passing the SHARED lease made
-        // every node write the same worktree, which is why the supervisor
-        // clamped maxParallelNodes to 1 whenever a lease existed — the DAG's
-        // whole point (waves) was disabled on the production path. Leaving
-        // workspaceLease undefined makes runWorkerEnvelope acquire, commit and
-        // release its OWN lease per node, seeded from the parent's current
-        // state; commits serialize on the project write lock.
-        workspaceSourceRoot: context.workspaceLease?.path,
+        // Nodes share the task's lease. Per-node CHILD leases were tried
+        // 2026-09-01 to unlock wave parallelism and reverted the same day:
+        // a lease derived from another lease is a temp copy, so (a) it has no
+        // .git — every git_* tool and the "commit per logical unit" rule fail
+        // inside a node, (b) commitLease takes the project write lock only
+        // when sourceRoot === projectRoot, so node commits took NO lock, and
+        // a sibling that touched the same file had its work quarantined into
+        // the PARENT lease's .strada — deleted with the parent on release.
+        // Wave parallelism needs per-node leases that are real worktrees off
+        // the project root plus lock-covered commits; until that exists the
+        // shared lease (and the supervisor's clamp) is the correct trade.
+        workspaceLease: context.workspaceLease,
         signal: signal ?? context.signal ?? AbortSignal.timeout(300_000),
         ...(goalRootId ? { goalContext: { rootId: goalRootId, nodeId: String(node.id) } } : {}),
         onProgress: (update) => {

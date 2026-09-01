@@ -80,6 +80,18 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
     rawConfig.opencode3ApiKey,
     rawConfig.openrouterApiKey,
   ].filter((key) => typeof key === "string" && key.length > 0).length;
+
+  // The raw record still carries the env strings, so an operator-set value is
+  // distinguishable from the schema's prefault.
+  const rawRecord = (raw ?? {}) as Record<string, unknown>;
+  const explicitInt = (key: string): number | undefined => {
+    const value = rawRecord[key];
+    if (typeof value !== "string" || value.trim() === "") return undefined;
+    const parsed = Number.parseInt(value, 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+  };
+  const explicitParallelNodes = explicitInt("stradaSupervisorMaxParallelNodes");
+  const explicitDelegationConcurrency = explicitInt("agentMaxConcurrentDelegations");
   const config: Config = {
     anthropicApiKey: rawConfig.anthropicApiKey,
     anthropicAuthMode: rawConfig.anthropicAuthMode,
@@ -434,10 +446,7 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
       maxDepth: rawConfig.agentMaxDelegationDepth,
       // Same capacity scaling for sub-agent fan-out (swarm width): one
       // concurrent delegation per account, floor 3, explicit env wins.
-      maxConcurrentPerParent: Math.max(
-        rawConfig.agentMaxConcurrentDelegations,
-        Math.min(10, providerAccountCount * 2),
-      ),
+      maxConcurrentPerParent: explicitDelegationConcurrency ?? Math.min(10, Math.max(3, providerAccountCount * 2)),
       tiers: {
         local: rawConfig.delegationTierLocal,
         cheap: rawConfig.delegationTierCheap,
@@ -508,10 +517,12 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
       // width follows the number of usable provider accounts in the chain
       // (3 nodes per account, floor 4). Adding a fourth account must widen
       // the waves without anyone editing a cap.
-      maxParallelNodes: Math.max(
-        rawConfig.stradaSupervisorMaxParallelNodes,
-        Math.min(16, providerAccountCount * 3),
-      ),
+      // Derived width applies ONLY when the operator set nothing: a prefault
+      // is indistinguishable from an explicit value, so Math.max made
+      // SUPERVISOR_MAX_PARALLEL_NODES=2 read as 15 — parallelism could be
+      // raised but never lowered, killing the one mitigation every
+      // parallelism risk depends on (audited 2026-09-01).
+      maxParallelNodes: explicitParallelNodes ?? Math.min(16, Math.max(4, providerAccountCount * 3)),
       nodeTimeoutMs: rawConfig.stradaSupervisorNodeTimeoutMs,
       verificationMode: rawConfig.stradaSupervisorVerificationMode,
       verificationBudgetPct: rawConfig.stradaSupervisorVerificationBudgetPct,

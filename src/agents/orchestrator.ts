@@ -4447,6 +4447,13 @@ export class Orchestrator {
     if (name === "create_skill") {
       return false;
     }
+    // Unity verification is declared read-only (it reports, it does not edit),
+    // but it DRIVES one editor/one project: two concurrent calls restart each
+    // other's compile and read each other's console, so both verdicts describe
+    // code neither call compiled. Serial regardless of the read-only flag.
+    if (name.startsWith("unity_verify") || name.startsWith("unity_compile") || name.startsWith("unity_playmode")) {
+      return false;
+    }
     // Require a POSITIVE read-only classification from the flattened metadata cache (which already
     // merges registration + intrinsic metadata with a WRITE_OPERATIONS fallback). Unknown → serial.
     return this.toolMetadataByName.get(name)?.readOnly === true;

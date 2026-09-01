@@ -66,13 +66,15 @@ export class SwarmTool implements ITool {
     private readonly delegationManager: DelegationManager,
     private readonly parentAgentId: AgentId,
     private readonly depth: number,
+    /** Pool width — the manager's own per-parent concurrency limit. */
+    private readonly maxConcurrent: number = 3,
   ) {}
 
-  async execute(input: Record<string, unknown>, _context: ToolContext): Promise<ToolExecutionResult> {
+  async execute(input: Record<string, unknown>, context: ToolContext): Promise<ToolExecutionResult> {
     const rawTasks = Array.isArray(input["tasks"]) ? (input["tasks"] as SwarmTaskSpec[]) : [];
-    const tasks = rawTasks
-      .filter((t) => t && typeof t.task === "string" && t.task.trim().length > 0)
-      .slice(0, 12);
+    const accepted = rawTasks.filter((t) => t && typeof t.task === "string" && t.task.trim().length > 0);
+    const tasks = accepted.slice(0, 12);
+    const dropped = accepted.length - tasks.length;
 
     if (tasks.length < 2) {
       return {
@@ -83,19 +85,45 @@ export class SwarmTool implements ITool {
     }
 
     const defaultType = this.types[0]?.name ?? "general";
-    const settled = await Promise.allSettled(
-      tasks.map((spec) =>
-        this.delegationManager.delegate({
-          parentAgentId: this.parentAgentId,
-          type: (this.types.find((t) => t.name === spec.type)?.name ?? defaultType),
-          task: spec.context ? `${spec.task}\n\nContext: ${spec.context}` : spec.task,
-          depth: this.depth,
-          mode: "sync",
-        } as never),
-      ),
-    );
+
+    // BOUNDED POOL, not a burst. delegate() rejects (it does not queue) past
+    // the parent's concurrency limit, so firing every task in one tick
+    // returned "N of M subtasks failed — max concurrent delegations
+    // exceeded": the overflow was DROPPED, not deferred (audited
+    // 2026-09-01). Run a worker pool at the manager's own width instead.
+    const width = Math.max(1, this.maxConcurrent);
+    const results: Array<PromiseSettledResult<unknown>> = new Array(tasks.length);
+    let next = 0;
+    const runner = async (): Promise<void> => {
+      for (;;) {
+        const index = next++;
+        const spec = tasks[index];
+        if (!spec) return;
+        try {
+          const value = await this.delegationManager.delegate({
+            parentAgentId: this.parentAgentId,
+            type: this.types.find((t) => t.name === spec.type)?.name ?? defaultType,
+            task: spec.context ? `${spec.task}\n\nContext: ${spec.context}` : spec.task,
+            depth: this.depth,
+            mode: "sync",
+            // The sub-agent inherits the caller's authorized paths; without
+            // it a swarm member is refused files the user explicitly named.
+            toolContext: context,
+          } as never);
+          results[index] = { status: "fulfilled", value };
+        } catch (reason) {
+          results[index] = { status: "rejected", reason };
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(width, tasks.length) }, () => runner()));
+    const settled = results;
 
     const lines: string[] = [`Swarm of ${tasks.length} sub-agents finished.`];
+    if (dropped > 0) {
+      // Silently discarding tasks 13+ let a caller believe work was done.
+      lines.push(`NOTE: ${dropped} task(s) beyond the limit of 12 were NOT run — resubmit them in another swarm.`);
+    }
     let failures = 0;
     settled.forEach((outcome, i) => {
       const label = tasks[i]!.task.slice(0, 80);
@@ -125,7 +153,8 @@ export function createSwarmTool(
   parentAgentId: AgentId,
   currentDepth: number,
   maxDepth: number,
+  maxConcurrent = 3,
 ): SwarmTool[] {
   if (currentDepth >= maxDepth || types.length === 0) return [];
-  return [new SwarmTool(types, delegationManager, parentAgentId, currentDepth + 1)];
+  return [new SwarmTool(types, delegationManager, parentAgentId, currentDepth + 1, maxConcurrent)];
 }

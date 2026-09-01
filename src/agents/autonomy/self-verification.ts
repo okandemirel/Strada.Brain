@@ -39,18 +39,42 @@ export interface VerificationState {
  * reference to any per-run instance — the missing link that kept the
  * observer unwired ("needs a SelfVerification reference — skip for now").
  */
-const globalBuildState = {
-  pendingFiles: new Set<string>() as ReadonlySet<string>,
-  hasCompilableChanges: false,
-  lastBuildOk: null as boolean | null,
-};
+interface PublishedBuildState {
+  pendingFiles: ReadonlySet<string>;
+  hasCompilableChanges: boolean;
+  lastBuildOk: boolean | null;
+  at: number;
+}
 
+/**
+ * Keyed per verifier instance: a single shared object was last-writer-wins
+ * across concurrent workers, so the OODA observer could report a FAILING
+ * build while listing a DIFFERENT (healthy) worker's files and drive
+ * replanning against a workspace that compiled fine (audited 2026-09-01).
+ */
+const publishedBuildStates = new Map<string, PublishedBuildState>();
+let publishSeq = 0;
+
+/** Any currently-failing build wins; otherwise the most recent clean one. */
 export function getLatestGlobalBuildState(): {
   pendingFiles: ReadonlySet<string>;
   hasCompilableChanges: boolean;
   lastBuildOk: boolean | null;
 } {
-  return globalBuildState;
+  let failing: PublishedBuildState | undefined;
+  let newest: PublishedBuildState | undefined;
+  for (const state of publishedBuildStates.values()) {
+    if (state.lastBuildOk === false && (!failing || state.at > failing.at)) failing = state;
+    if (!newest || state.at > newest.at) newest = state;
+  }
+  const chosen = failing ?? newest;
+  return chosen
+    ? {
+        pendingFiles: chosen.pendingFiles,
+        hasCompilableChanges: chosen.hasCompilableChanges,
+        lastBuildOk: chosen.lastBuildOk,
+      }
+    : { pendingFiles: new Set<string>(), hasCompilableChanges: false, lastBuildOk: null };
 }
 
 export class SelfVerification {
@@ -70,6 +94,8 @@ export class SelfVerification {
   private failingTestRun = false;
   /** True once a compilable file changed after the last successful verification. */
   private dirtySinceLastVerify = false;
+  /** Identity of this verifier in the process-wide build-state publication. */
+  private readonly publishKey = `sv-${++publishSeq}`;
   /**
    * How many times the compile gate has been raised without a clean pass since.
    * The unity-error and unrun-test gates already carry caps; this one had none,
@@ -134,9 +160,17 @@ export class SelfVerification {
         const ok = !executedTool.isError && !bodyReportsFailure;
         this.lastBuildOk = ok;
         this.lastVerificationAt = Date.now();
-        globalBuildState.lastBuildOk = ok;
-        globalBuildState.hasCompilableChanges = this.hasCompilableChanges;
-        globalBuildState.pendingFiles = new Set(this.pendingFiles);
+        publishedBuildStates.set(this.publishKey, {
+          lastBuildOk: ok,
+          hasCompilableChanges: this.hasCompilableChanges,
+          pendingFiles: new Set(this.pendingFiles),
+          at: Date.now(),
+        });
+        // Bound the map: a long-lived daemon runs thousands of verifiers.
+        if (publishedBuildStates.size > 64) {
+          const oldest = [...publishedBuildStates.entries()].sort((a, b) => a[1].at - b[1].at)[0];
+          if (oldest) publishedBuildStates.delete(oldest[0]);
+        }
         if (ok) {
           this.pendingFiles.clear();
           this.hasCompilableChanges = false;

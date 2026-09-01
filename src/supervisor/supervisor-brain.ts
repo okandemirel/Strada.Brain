@@ -429,11 +429,12 @@ export class SupervisorBrain {
         executeNode: (node: TaggedGoalNode, nodeSignal: AbortSignal) =>
           executeNodeFn(node, dispatchContext, nodeSignal),
         config: {
-          // Nodes now take PER-NODE child leases (see the execute-node bridge),
-          // so a shared parent lease no longer forces serialization — the wave
-          // scheduler finally runs waves. Measured 2026-09-01: ~15 tool ops/h
-          // on a serialized sprint that had already run 30h.
-          maxParallelNodes: this.config.maxParallelNodes,
+          // A SHARED lease means one worktree: concurrent nodes would write
+          // the same files with no lock and no usable conflict recovery, so
+          // they serialize. Wave parallelism is available where each worker
+          // owns a real worktree — the delegation path (swarm_tasks) — not
+          // here. See the execute-node bridge for the full rationale.
+          maxParallelNodes: context.workspaceLease ? 1 : this.config.maxParallelNodes,
           nodeTimeoutMs: this.calculateAdaptiveTimeout(
             assignedNodes.length,
             planningTask.length,

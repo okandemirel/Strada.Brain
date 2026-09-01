@@ -261,6 +261,7 @@ export async function initializeMultiAgentDelegationStage(
         parentAgentId,
         depth,
         params.config.delegation.maxDepth,
+        params.config.delegation.maxConcurrentPerParent,
       ),
     ]);
 
@@ -281,6 +282,7 @@ export async function initializeMultiAgentDelegationStage(
       rootDelegationAgentId,
       0,
       params.config.delegation.maxDepth,
+      params.config.delegation.maxConcurrentPerParent,
     )) {
       params.orchestrator.addTool(tool);
     }
