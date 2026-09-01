@@ -906,7 +906,43 @@ export class CampaignManager {
   private async escalateIfPastTimeBox(campaign: Campaign, milestone: CampaignMilestone): Promise<boolean> {
     const elapsedMs = milestone.startedAtMs ? Date.now() - milestone.startedAtMs : 0;
     const escalations = milestone.timeBoxEscalations ?? 0;
-    if (elapsedMs <= this.milestoneTimeBoxMs || escalations >= 2) return false;
+    if (elapsedMs <= this.milestoneTimeBoxMs) return false;
+    if (escalations >= 2) {
+      // Past the second narrowing the box used to switch OFF — the sprint
+      // could run unbounded again (measured 2026-09-01: m6 at 33h with
+      // escalations=2). A third overrun is a failed attempt: retry while
+      // attempts remain, otherwise stop loudly so a person decides.
+      const tipId = milestone.taskId
+        ? this.taskManager.findLatestLineageTask(milestone.taskId as TaskId)?.id
+        : undefined;
+      if (tipId) {
+        try { this.taskManager.cancel(tipId as TaskId); } catch { /* already settled */ }
+      }
+      const hours = Math.round(elapsedMs / 3_600_000);
+      if (milestone.attempts < this.maxMilestoneAttempts) {
+        milestone.startedAtMs = Date.now();
+        milestone.prompt +=
+          `\n\nTIME BOX EXHAUSTED (${hours}h after two scope narrowings): this attempt is charged. ` +
+          "Deliver ONLY the single smallest verifiable increment and stop.";
+        this.persist(campaign);
+        await this.tell(
+          campaign,
+          `⏱️ **${milestone.title}** overran its time box a third time (${hours}h) — attempt charged, ` +
+            `retrying with the narrowest scope (${milestone.attempts + 1}/${this.maxMilestoneAttempts}).`,
+        );
+        this.submitCurrentMilestone(campaign);
+        return true;
+      }
+      campaign.state = "failed";
+      campaign.lastError = `${milestone.title} overran its time box after two narrowings and ${milestone.attempts} attempts`;
+      this.persist(campaign);
+      await this.tell(
+        campaign,
+        `❌ Campaign stopped: **${milestone.title}** ran ${hours}h past two scope narrowings and ` +
+          `${milestone.attempts} attempts without landing green. Reply **kampanya devam** to retry, or narrow the GDD.`,
+      );
+      return true;
+    }
 
     milestone.timeBoxEscalations = escalations + 1;
     milestone.startedAtMs = Date.now();

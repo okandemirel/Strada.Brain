@@ -309,6 +309,26 @@ describe("CampaignManager", () => {
     });
   });
 
+  it("a third time-box overrun charges an attempt instead of running unbounded", async () => {
+    // Measured 2026-09-01: after escalation 2/2 the box switched off and m6
+    // ran 33h. The third overrun must be a charged, narrowest-scope retry.
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    const stored = storage.get(campaign.id)!;
+    stored.milestones[0]!.timeBoxEscalations = 2;
+    stored.milestones[0]!.startedAtMs = Date.now() - 7 * 60 * 60_000; // past a 6h box
+    storage.save(stored);
+
+    // A blocked settle drives reconcile → escalateIfPastTimeBox.
+    tasks.emit("task:blocked", "task_1", "Transient failure — provider hiccup");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+
+    const after = storage.get(campaign.id)!;
+    expect(after.state).toBe("executing");
+    expect(after.milestones[0]!.attempts).toBe(2); // charged
+    expect(tasks.submitted[1]!.prompt).toContain("TIME BOX EXHAUSTED");
+  });
+
   it("refuses delivery when the FINAL sprint never ran its tests (one bounce)", async () => {
     // Audited 2026-09-01: "full unfiltered suite" was only prose in the
     // planner prompt — a final sprint whose task printed no test result
