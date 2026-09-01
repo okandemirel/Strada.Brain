@@ -1086,6 +1086,21 @@ export class CampaignManager {
       this.submitCurrentMilestone(campaign, { countAttempt: opts.countAttempt });
       return;
     }
+    // An outage-caused settle is not the sprint's failure: the run never got
+    // to work. Charging it an attempt (measured 2026-09-01 16:16: attempts
+    // 1→2 during a four-account quota wall) spends the milestone's budget on
+    // the provider's downtime and pushes a healthy sprint toward a stop.
+    const outageCaused =
+      /provider|cooldown|quota|rate.?limit/i.test(output) && allProvidersCoolingDownMs() > 0;
+    if (canRetry && outageCaused) {
+      getLoggerSafe().info("Milestone resubmitted without charging an attempt — provider outage", {
+        id: campaign.id,
+        milestone: milestone.id,
+      });
+      this.submitCurrentMilestone(campaign, { countAttempt: false });
+      return;
+    }
+
     if (canRetry) {
       // The failure tail is retry CONTEXT, not history: keep exactly one, and
       // strip retry-machinery noise ("Reaped: …", "Auto-retry n/m in ~Xs")

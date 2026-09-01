@@ -413,6 +413,34 @@ describe("CampaignManager", () => {
     expect(tasks.submitted[1]!.prompt).toContain("NARROW THE SCOPE");
   });
 
+  it("an outage-caused settle resubmits WITHOUT charging an attempt", async () => {
+    // Measured 2026-09-01 16:16: a four-account quota wall drove attempts
+    // 1→2 — the milestone's budget spent on provider downtime, not on work.
+    const { ProviderHealthRegistry } = await import("../agents/providers/provider-health.js");
+    const { setLiveChainMemberNames } = await import("../agents/providers/provider-outage.js");
+    const registry = ProviderHealthRegistry.getInstance();
+    registry.clearProviderState("cm-cool");
+    registry.recordOverloaded("cm-cool", "quota wall");
+    setLiveChainMemberNames(["cm-cool"]);
+
+    try {
+      const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+      await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+      expect(storage.get(campaign.id)!.milestones[0]!.attempts).toBe(1);
+
+      // Dead promise (tip idle past its horizon) so reconcile judges the
+      // outcome instead of deferring — the live 16:16 path.
+      tasks.updatedAts.set("task_1", Date.now() - 30 * 60_000);
+      tasks.emit("task:failed", "task_1", "Task execution failed: All providers are in cooldown. Auto-retry 1/10 in ~30s.");
+      await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+
+      expect(storage.get(campaign.id)!.milestones[0]!.attempts).toBe(1); // not charged
+    } finally {
+      setLiveChainMemberNames([]);
+      registry.clearProviderState("cm-cool");
+    }
+  });
+
   it("a dead retry promise stops the deferral loop (ghost keep-alive)", async () => {
     // Measured live 2026-08-30 15:33-15:55: keep-alive budget exhausted, no
     // task active anywhere, yet reconcile re-deferred every cycle to a retry
