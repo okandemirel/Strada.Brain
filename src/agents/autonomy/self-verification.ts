@@ -68,6 +68,8 @@ export class SelfVerification {
   private static readonly MAX_TEST_RUN_ATTEMPTS = 3;
   /** A test run REPORTED failures and no later run has passed. */
   private failingTestRun = false;
+  /** True once a compilable file changed after the last successful verification. */
+  private dirtySinceLastVerify = false;
   /**
    * How many times the compile gate has been raised without a clean pass since.
    * The unity-error and unrun-test gates already carry caps; this one had none,
@@ -110,6 +112,7 @@ export class SelfVerification {
           const dotIdx = file.lastIndexOf(".");
           if (dotIdx !== -1 && COMPILABLE_EXT.has(file.slice(dotIdx))) {
             this.hasCompilableChanges = true;
+            this.dirtySinceLastVerify = true;
           }
           if (looksLikeTestFile(file)) {
             this.pendingTestFiles.add(file);
@@ -138,6 +141,7 @@ export class SelfVerification {
           this.pendingFiles.clear();
           this.hasCompilableChanges = false;
           this.buildGateEmissions = 0;
+          this.dirtySinceLastVerify = false;
         }
         // A compile is not a test run. unity_verify_change says so itself —
         // "Test assemblies are NOT built by this check" — and measured
@@ -203,6 +207,16 @@ export class SelfVerification {
   private hasUnrunTests(): boolean {
     return this.pendingTestFiles.size > 0
       && this.testRunAttempts < SelfVerification.MAX_TEST_RUN_ATTEMPTS;
+  }
+
+  /**
+   * True when a verification would re-compile a tree nothing has touched
+   * since the last clean compile — minutes of headless Unity for a
+   * guaranteed-identical answer (measured 2026-09-01: 11 compiles in 2h on
+   * an edit→compile→edit rhythm). Consumers surface this as guidance.
+   */
+  isRedundantVerification(): boolean {
+    return this.lastBuildOk === true && !this.dirtySinceLastVerify;
   }
 
   /** Check if there are unresolved Unity console errors. */
@@ -280,6 +294,7 @@ export class SelfVerification {
       const dotIdx = file.lastIndexOf(".");
       if (dotIdx !== -1 && COMPILABLE_EXT.has(file.slice(dotIdx))) {
         this.hasCompilableChanges = true;
+        this.dirtySinceLastVerify = true;
       }
     }
 
@@ -356,7 +371,7 @@ export class SelfVerification {
     } else {
       lines.push(
         hasCsFiles
-          ? `\nUse unity_verify_change to verify compilation and check the Unity console — it compiles headlessly and needs no bridge. Do not use dotnet_build: a Unity project has no .sln until the Editor has been opened once.`
+          ? `\nUse unity_verify_change to verify compilation and check the Unity console — it compiles headlessly and needs no bridge. Do not use dotnet_build: a Unity project has no .sln until the Editor has been opened once.\nBATCH IT: a headless compile costs minutes, so finish the whole logical unit (all files of the change) BEFORE verifying — do not compile after each individual edit. Measured 2026-09-01: an edit→compile→edit→compile rhythm produced ~11 compiles in two hours and ~15 tool operations an hour.`
           : `\nRun the most relevant verification tool or command before declaring the task complete.`,
       );
     }

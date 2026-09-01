@@ -317,7 +317,7 @@ describe("SupervisorBrain", () => {
     expect(executeNode).toHaveBeenCalledTimes(1);
   });
 
-  it("serializes supervisor node execution when a shared workspace lease is present", async () => {
+  it("runs independent nodes in PARALLEL even with a workspace lease (per-node child leases)", async () => {
     const decomposer = {
       shouldDecompose: vi.fn().mockReturnValue(true),
       decomposeProactive: vi.fn().mockResolvedValue(
@@ -373,8 +373,13 @@ describe("SupervisorBrain", () => {
       },
     });
 
+    // Both independent nodes start before the first one finishes: the wave
+    // scheduler is live again. Serializing here was a lease-sharing artifact
+    // (the bridge now gives each node its own child lease), and it cost the
+    // DAG its whole point — measured 2026-09-01: ~15 tool ops/h on a
+    // serialized sprint.
     await vi.waitFor(() => {
-      expect(executeNode).toHaveBeenCalledTimes(1);
+      expect(executeNode).toHaveBeenCalledTimes(2);
     });
 
     releaseFirstNode?.();

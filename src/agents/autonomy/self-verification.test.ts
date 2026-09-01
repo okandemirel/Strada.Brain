@@ -75,6 +75,24 @@ describe("SelfVerification", () => {
     expect(verifier.needsVerification()).toBe(false);
   });
 
+  it("flags a redundant re-compile when nothing changed since the last clean verify", () => {
+    const verifier = new SelfVerification();
+    verifier.track("file_write", { path: "Assets/Modules/BoardModule/Board.cs" }, {
+      toolCallId: "w", content: "written", isError: false,
+    });
+    verifier.track("unity_verify_change", {}, {
+      toolCallId: "v", content: "compile green", isError: false,
+    });
+    // Nothing touched since: another compile would burn minutes for an
+    // identical answer.
+    expect(verifier.isRedundantVerification()).toBe(true);
+
+    verifier.track("file_edit", { path: "Assets/Modules/BoardModule/Board.cs" }, {
+      toolCallId: "w2", content: "edited", isError: false,
+    });
+    expect(verifier.isRedundantVerification()).toBe(false);
+  });
+
   it("tracks nested batch_execute mutations and verification results", () => {
     const verifier = new SelfVerification();
 

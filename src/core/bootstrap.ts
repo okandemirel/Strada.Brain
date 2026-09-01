@@ -209,7 +209,14 @@ export function createSupervisorExecuteNodeBridge(params: {
         attachments: context.attachments,
         userContent: context.userContent,
         onUsage: context.onUsage,
-        workspaceLease: context.workspaceLease,
+        // PER-NODE CHILD LEASE (parallelism): passing the SHARED lease made
+        // every node write the same worktree, which is why the supervisor
+        // clamped maxParallelNodes to 1 whenever a lease existed — the DAG's
+        // whole point (waves) was disabled on the production path. Leaving
+        // workspaceLease undefined makes runWorkerEnvelope acquire, commit and
+        // release its OWN lease per node, seeded from the parent's current
+        // state; commits serialize on the project write lock.
+        workspaceSourceRoot: context.workspaceLease?.path,
         signal: signal ?? context.signal ?? AbortSignal.timeout(300_000),
         ...(goalRootId ? { goalContext: { rootId: goalRootId, nodeId: String(node.id) } } : {}),
         onProgress: (update) => {

@@ -429,7 +429,11 @@ export class SupervisorBrain {
         executeNode: (node: TaggedGoalNode, nodeSignal: AbortSignal) =>
           executeNodeFn(node, dispatchContext, nodeSignal),
         config: {
-          maxParallelNodes: context.workspaceLease ? 1 : this.config.maxParallelNodes,
+          // Nodes now take PER-NODE child leases (see the execute-node bridge),
+          // so a shared parent lease no longer forces serialization — the wave
+          // scheduler finally runs waves. Measured 2026-09-01: ~15 tool ops/h
+          // on a serialized sprint that had already run 30h.
+          maxParallelNodes: this.config.maxParallelNodes,
           nodeTimeoutMs: this.calculateAdaptiveTimeout(
             assignedNodes.length,
             planningTask.length,

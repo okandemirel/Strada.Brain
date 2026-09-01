@@ -58,10 +58,10 @@ describe("createSupervisorExecuteNodeBridge", () => {
         assignedProvider: "claude",
         assignedModel: "sonnet",
         userContent: expect.any(Array),
-        workspaceLease: expect.objectContaining({
-          id: "lease-parent",
-          path: "/tmp/parent-workspace",
-        }),
+        // Per-node CHILD lease: the bridge seeds from the parent's path
+        // instead of handing the shared lease down, which is what let the
+        // supervisor clamp parallelism to 1 (2026-09-01).
+        workspaceSourceRoot: "/tmp/parent-workspace",
         signal: expect.any(AbortSignal),
         supervisorMode: "off",
       }),
