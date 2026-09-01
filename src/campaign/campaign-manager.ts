@@ -791,6 +791,9 @@ export class CampaignManager {
       : null;
 
     if (tip && ACTIVE_STATUSES.has(tip.status) && tip.status !== TaskStatus.paused) {
+      // The box binds the adoption path too: adopting forever is precisely
+      // how a sprint spends a day without an outcome.
+      if (await this.escalateIfPastTimeBox(campaign, milestone)) return;
       this.adoptTask(campaign, tip.id);
       getLoggerSafe().info("Campaign adopted executor retry instead of resubmitting", {
         id: campaign.id,
@@ -877,6 +880,51 @@ export class CampaignManager {
     milestone.reconcileDeferredSince = undefined;
 
     await this.onMilestoneOutcome(campaign, milestone, status, output, { countAttempt: true });
+  }
+
+  /**
+   * Time-box check usable from BOTH the outcome path and the
+   * adoption/deferral path. A sprint that keeps being adopted or deferred
+   * never reaches an outcome — which is exactly the runaway case the box
+   * exists for (measured 2026-09-01: m6 ran 7h+ at escalations=0 because
+   * every settle was adopted). Returns true when it escalated.
+   */
+  private async escalateIfPastTimeBox(campaign: Campaign, milestone: CampaignMilestone): Promise<boolean> {
+    const elapsedMs = milestone.startedAtMs ? Date.now() - milestone.startedAtMs : 0;
+    const escalations = milestone.timeBoxEscalations ?? 0;
+    if (elapsedMs <= this.milestoneTimeBoxMs || escalations >= 2) return false;
+
+    milestone.timeBoxEscalations = escalations + 1;
+    milestone.startedAtMs = Date.now();
+    milestone.prompt +=
+      `\n\nTIME BOX (${Math.round(elapsedMs / 3_600_000)}h elapsed, escalation ${escalations + 1}/2): this sprint has run far past its budget ` +
+      "without landing green. NARROW THE SCOPE NOW: pick the single highest-value unmet requirement, " +
+      "implement it end-to-end (code + bound visual + passing test), commit it, and report precisely what " +
+      "remains for a follow-up sprint. A smaller delivered increment beats another broad attempt.";
+    this.persist(campaign);
+    getLoggerSafe().warn("Milestone time-box exceeded — forcing scope narrowing", {
+      id: campaign.id,
+      milestone: milestone.id,
+      elapsedMs,
+      escalation: escalations + 1,
+    });
+    await this.tell(
+      campaign,
+      `⏱️ **${milestone.title}** has run ${Math.round(elapsedMs / 3_600_000)}h without landing green — ` +
+        `narrowing scope (escalation ${escalations + 1}/2): the next attempt must deliver the smallest complete increment.`,
+    );
+    // Stop the runaway lineage before starting the narrowed one, or the two
+    // write the same repo in parallel.
+    const tipId = milestone.taskId
+      ? this.taskManager.findLatestLineageTask(milestone.taskId as TaskId)?.id
+      : undefined;
+    if (tipId) {
+      try {
+        this.taskManager.cancel(tipId as TaskId);
+      } catch { /* already settled */ }
+    }
+    this.submitCurrentMilestone(campaign, { countAttempt: false });
+    return true;
   }
 
   private async onMilestoneOutcome(
@@ -1024,34 +1072,8 @@ export class CampaignManager {
 
     // TIME-BOX: bounces and deferrals deliberately do not burn attempts, so a
     // sprint that keeps almost-finishing can spin indefinitely (measured
-    // 2026-08-31: m6 ran 22h at attempts=1). Past the box, force the scope
-    // down instead of letting it run: deliver the smallest complete
-    // increment. Two escalations, then the milestone is judged terminally.
-    const elapsedMs = milestone.startedAtMs ? Date.now() - milestone.startedAtMs : 0;
-    const escalations = milestone.timeBoxEscalations ?? 0;
-    if (elapsedMs > this.milestoneTimeBoxMs && escalations < 2) {
-      milestone.timeBoxEscalations = escalations + 1;
-      milestone.startedAtMs = Date.now();
-      milestone.prompt +=
-        `\n\nTIME BOX (${Math.round(elapsedMs / 3_600_000)}h elapsed, escalation ${escalations + 1}/2): this sprint has run far past its budget ` +
-        "without landing green. NARROW THE SCOPE NOW: pick the single highest-value unmet requirement, " +
-        "implement it end-to-end (code + bound visual + passing test), commit it, and report precisely what " +
-        "remains for a follow-up sprint. A smaller delivered increment beats another broad attempt.";
-      this.persist(campaign);
-      getLoggerSafe().warn("Milestone time-box exceeded — forcing scope narrowing", {
-        id: campaign.id,
-        milestone: milestone.id,
-        elapsedMs,
-        escalation: escalations + 1,
-      });
-      await this.tell(
-        campaign,
-        `⏱️ **${milestone.title}** has run ${Math.round(elapsedMs / 3_600_000)}h without landing green — ` +
-          `narrowing scope (escalation ${escalations + 1}/2): the next attempt must deliver the smallest complete increment.`,
-      );
-      this.submitCurrentMilestone(campaign, { countAttempt: false });
-      return;
-    }
+    // 2026-08-31: m6 ran 22h at attempts=1).
+    if (await this.escalateIfPastTimeBox(campaign, milestone)) return;
 
     const canRetry = milestone.attempts < this.maxMilestoneAttempts;
     if (canRetry && status === TaskStatus.blocked) {

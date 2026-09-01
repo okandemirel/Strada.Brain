@@ -392,6 +392,27 @@ describe("CampaignManager", () => {
     expect(messages.some((m) => m.text.includes("narrowing scope"))).toBe(true);
   });
 
+  it("the time-box binds the ADOPTION path too (a sprint cannot spin forever unadjudicated)", async () => {
+    // Measured 2026-09-01: m6 ran 7h+ with timeBoxEscalations=0 because every
+    // settle was adopted as an executor retry and never reached an outcome.
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+
+    const stored = storage.get(campaign.id)!;
+    stored.milestones[0]!.startedAtMs = Date.now() - 4 * 60 * 60_000;
+    storage.save(stored);
+
+    // Executor mints a live retry under a new id: the adoption path.
+    const retryId = tasks.addRetry("task_1", TaskStatus.executing);
+    tasks.emit("task:blocked", "task_1", "Reaped: no progress signal for 60 minutes.");
+    void retryId;
+
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    const fresh = storage.get(campaign.id)!;
+    expect(fresh.milestones[0]!.timeBoxEscalations).toBe(1);
+    expect(tasks.submitted[1]!.prompt).toContain("NARROW THE SCOPE");
+  });
+
   it("a dead retry promise stops the deferral loop (ghost keep-alive)", async () => {
     // Measured live 2026-08-30 15:33-15:55: keep-alive budget exhausted, no
     // task active anywhere, yet reconcile re-deferred every cycle to a retry
