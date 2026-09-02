@@ -1,5 +1,10 @@
 import { describe, it, expect, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { InstinctRetriever } from "./instinct-retriever.js";
+import { MetricsRecorder } from "../metrics/metrics-recorder.js";
+import { MetricsStorage } from "../metrics/metrics-storage.js";
 import type { PatternMatcher } from "../learning/matching/pattern-matcher.js";
 import type { LearningStorage } from "../learning/storage/learning-storage.js";
 import type { Instinct, PatternMatch } from "../learning/types.js";
@@ -789,5 +794,116 @@ describe("InstinctRetriever", () => {
 
       expect(onOutcome).not.toHaveBeenCalled();
     });
+  });
+});
+
+// audited 2026-09-02: the retrieval table's scopeFiltered column was written as
+// a literal 0 by its only caller, so every row claimed "nothing was dropped by
+// scope" no matter how many same-pattern candidates the scope filter discarded.
+describe("InstinctRetriever retrieval metrics", () => {
+  function withRecorder(matches: PatternMatch[]) {
+    const tempDir = mkdtempSync(join(tmpdir(), "instinct-retrieval-metrics-"));
+    const storage = new MetricsStorage(join(tempDir, "metrics.db"));
+    storage.initialize();
+    const matcher = {
+      findSimilarInstincts: vi.fn().mockReturnValue(matches),
+    } as unknown as PatternMatcher;
+    const retriever = new InstinctRetriever(matcher, {
+      metricsRecorder: new MetricsRecorder(storage),
+    });
+    const cleanup = () => {
+      storage.close();
+      rmSync(tempDir, { recursive: true, force: true });
+    };
+    return { retriever, storage, cleanup };
+  }
+
+  it("records the candidates the scope filter actually dropped, not 0", async () => {
+    const globalInstinct = createMockInstinct({
+      id: "instinct_scope_global" as Instinct["id"],
+      triggerPattern: "null pointer error",
+      scopeType: "global",
+      action: "global: add a null guard",
+    });
+    const userInstinct = createMockInstinct({
+      id: "instinct_scope_user" as Instinct["id"],
+      triggerPattern: "null pointer error",
+      scopeType: "user",
+      action: "user: add a null guard",
+    });
+    const otherInstinct = createMockInstinct({
+      id: "instinct_scope_other" as Instinct["id"],
+      triggerPattern: "timeout error",
+      scopeType: "project",
+      action: "raise the timeout",
+    });
+
+    const { retriever, storage, cleanup } = withRecorder([
+      createMockMatch(globalInstinct, 0.9),
+      createMockMatch(userInstinct, 0.7),
+      createMockMatch(otherInstinct, 0.6),
+    ]);
+
+    try {
+      const result = await retriever.getInsightsForTask("null pointer");
+      // The user-scoped duplicate outranks the global one: exactly one
+      // candidate is dropped by scope priority.
+      expect(result.insights).toHaveLength(2);
+
+      const rows = storage.getRetrievalMetrics();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        instinctsScanned: 3,
+        scopeFiltered: 1,
+        insightsReturned: 2,
+      });
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("does not count a deprecated candidate as scope-filtered", async () => {
+    const active = createMockInstinct({
+      id: "instinct_active_row" as Instinct["id"],
+      triggerPattern: "active pattern",
+      action: "do the active thing",
+    });
+    const deprecated = createMockInstinct({
+      id: "instinct_deprecated_row" as Instinct["id"],
+      triggerPattern: "deprecated pattern",
+      status: "deprecated",
+      action: "do the deprecated thing",
+    });
+
+    const { retriever, storage, cleanup } = withRecorder([
+      createMockMatch(active, 0.9),
+      createMockMatch(deprecated, 0.8),
+    ]);
+
+    try {
+      await retriever.getInsightsForTask("anything");
+      const rows = storage.getRetrievalMetrics();
+      expect(rows[0]).toMatchObject({
+        instinctsScanned: 2,
+        scopeFiltered: 0,
+        insightsReturned: 1,
+      });
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("records zeros when there was genuinely nothing to drop", async () => {
+    const { retriever, storage, cleanup } = withRecorder([]);
+    try {
+      await retriever.getInsightsForTask("nothing matches");
+      expect(storage.getRetrievalMetrics()[0]).toMatchObject({
+        instinctsScanned: 0,
+        scopeFiltered: 0,
+        insightsReturned: 0,
+      });
+    } finally {
+      cleanup();
+    }
   });
 });

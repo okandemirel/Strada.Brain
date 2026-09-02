@@ -38,6 +38,19 @@ export interface InsightResult {
   readonly matchedInstinctIds: string[];
 }
 
+/**
+ * Ranked matches plus the counts the retrieval metric row is built from, so the
+ * row names what it measured instead of carrying a hard-coded 0.
+ */
+interface RankedMatches {
+  /** The matches that survived ranking, capped at maxResults. */
+  readonly matches: PatternMatch[];
+  /** Candidates the matcher handed to ranking, before any of it dropped them. */
+  readonly candidatesScanned: number;
+  /** Candidates dropped because a higher-or-equal-scope duplicate of the same trigger pattern won. */
+  readonly scopeFiltered: number;
+}
+
 export class InstinctRetriever {
   private readonly scopeContext?: ScopeContext;
   private readonly storage?: LearningStorage;
@@ -64,7 +77,8 @@ export class InstinctRetriever {
   async getInsightsForTask(taskDescription: string, maxInsights: number = 5): Promise<InsightResult> {
     const retrievalStart = Date.now();
 
-    const finalMatches = await this.findAndRankMatches(taskDescription, maxInsights);
+    const ranked = await this.findAndRankMatches(taskDescription, maxInsights);
+    const finalMatches = ranked.matches;
 
     const insights: string[] = [];
     const matchedInstinctIds: string[] = [];
@@ -106,10 +120,17 @@ export class InstinctRetriever {
     // Record retrieval metrics if recorder available
     if (this.metricsRecorder) {
       try {
+        // audited 2026-09-02: scopeFiltered was the literal 0 — every row
+        // claimed the scope filter dropped nothing, whatever it dropped — and
+        // instinctsScanned counted the SURVIVORS, so scanned/filtered/returned
+        // could not be read as one row. Both now name what they measured:
+        // scanned = candidates the matcher handed to ranking, scopeFiltered =
+        // those ranking discarded because a same-trigger-pattern candidate of
+        // higher-or-equal scope priority won.
         this.metricsRecorder.recordRetrievalMetrics({
           retrievalTimeMs: Date.now() - retrievalStart,
-          instinctsScanned: finalMatches.length,
-          scopeFiltered: 0,
+          instinctsScanned: ranked.candidatesScanned,
+          scopeFiltered: ranked.scopeFiltered,
           insightsReturned: insights.length,
         });
       } catch {
@@ -140,14 +161,17 @@ export class InstinctRetriever {
   }
 
   async getMatchedInstincts(taskDescription: string, maxInstincts: number = 5): Promise<Instinct[]> {
-    const matches = await this.findAndRankMatches(taskDescription, maxInstincts);
+    const { matches } = await this.findAndRankMatches(taskDescription, maxInstincts);
 
     return matches
       .map(m => m.instinct)
       .filter((inst): inst is Instinct => inst !== undefined);
   }
 
-  private async findAndRankMatches(taskDescription: string, maxResults: number): Promise<PatternMatch[]> {
+  private async findAndRankMatches(
+    taskDescription: string,
+    maxResults: number,
+  ): Promise<RankedMatches> {
     const findOptions: {
       minSimilarity: number;
       maxResults: number;
@@ -165,7 +189,7 @@ export class InstinctRetriever {
     return this.filterDedupAndBoost(matches, maxResults);
   }
 
-  private filterDedupAndBoost(matches: PatternMatch[], maxResults: number): PatternMatch[] {
+  private filterDedupAndBoost(matches: PatternMatch[], maxResults: number): RankedMatches {
     const filtered = matches.filter(m => !m.instinct || m.instinct.status !== "deprecated");
 
     const scopePriority: Record<string, number> = { user: 3, project: 2, global: 1 };
@@ -187,7 +211,14 @@ export class InstinctRetriever {
     );
 
     boosted.sort((a, b) => b.confidence - a.confidence);
-    return boosted.slice(0, maxResults);
+    return {
+      matches: boosted.slice(0, maxResults),
+      candidatesScanned: matches.length,
+      // Exactly the candidates the scope-priority dedup above discarded: a
+      // deprecated drop or the maxResults cap is NOT a scope filter and must
+      // not be reported as one (audited 2026-09-02).
+      scopeFiltered: filtered.length - byPattern.size,
+    };
   }
 
   private formatInsight(match: PatternMatch): string | null {
