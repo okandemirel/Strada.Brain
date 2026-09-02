@@ -47,6 +47,31 @@ export function ftsText(content: string): string {
   return split === content ? content : `${content}\n${split}`;
 }
 
+const UNRESOLVED_MARKER = '::unresolved::';
+const IDENTIFIER = /^[A-Za-z_$][\w$]*$/;
+
+/**
+ * The bare identifier an unresolved edge target names, or null when there is
+ * nothing an "exactly one symbol carries this name" rule may honestly match:
+ *   'typescript::unresolved::helper'            → 'helper'
+ *   'typescript::unresolved::./a.js#helper'     → 'helper'   (named import)
+ *   'csharp::unresolved::UnityEngine.UI'        → 'UI'       (last segment)
+ *   'typescript::unresolved::./a.js'            → null       (bare module path)
+ *   'csharp::unresolved::IFoo<T>'               → null       (not an identifier)
+ *   'typescript::src/a.ts::helper'              → null       (already a symbol id)
+ */
+export function unresolvedTailName(toSymbol: string): string | null {
+  const at = toSymbol.indexOf(UNRESOLVED_MARKER);
+  if (at < 0) return null;
+  let tail = toSymbol.slice(at + UNRESOLVED_MARKER.length);
+  const hash = tail.lastIndexOf('#');
+  if (hash >= 0) tail = tail.slice(hash + 1);
+  else if (tail.includes('/')) return null;
+  const dot = tail.lastIndexOf('.');
+  if (dot >= 0) tail = tail.slice(dot + 1);
+  return IDENTIFIER.test(tail) ? tail : null;
+}
+
 export class SqliteVaultStore {
   private db: Database.Database;
 
@@ -71,6 +96,10 @@ export class SqliteVaultStore {
   private _stmtFindCallers: Database.Statement | null = null;
   private _stmtListEdgesAll: Database.Statement | null = null;
   private _stmtDeleteEdgesByPath: Database.Statement | null = null;
+  private _stmtSymbolNamesByPath: Database.Statement | null = null;
+  private _stmtSymbolIdsNamed: Database.Statement | null = null;
+  private _stmtLinkEdgesByName: Database.Statement | null = null;
+  private _stmtUnlinkEdgesByName: Database.Statement | null = null;
   private _stmtUpsertWikilink: Database.Statement | null = null;
   private _stmtUpsertWikilinkResolved: Database.Statement | null = null;
   private _stmtListWikilinksAll: Database.Statement | null = null;
@@ -104,6 +133,17 @@ export class SqliteVaultStore {
     if (!wikilinkCols.some((c) => c.name === 'original_target')) {
       this.db.prepare('ALTER TABLE vault_wikilinks ADD COLUMN original_target TEXT').run();
     }
+    // Derived edge-link columns (audited 2026-09-02): pre-existing databases
+    // were created without them, and the indexes must follow the ALTERs.
+    const edgeCols = this.db.prepare('PRAGMA table_info(vault_edges)').all() as { name: string }[];
+    if (!edgeCols.some((c) => c.name === 'to_name')) {
+      this.db.prepare('ALTER TABLE vault_edges ADD COLUMN to_name TEXT').run();
+    }
+    if (!edgeCols.some((c) => c.name === 'resolved_to')) {
+      this.db.prepare('ALTER TABLE vault_edges ADD COLUMN resolved_to TEXT').run();
+    }
+    this.db.prepare('CREATE INDEX IF NOT EXISTS idx_edges_to_name ON vault_edges(to_name)').run();
+    this.db.prepare('CREATE INDEX IF NOT EXISTS idx_edges_resolved_to ON vault_edges(resolved_to)').run();
     // Prepare cached statements now that tables exist.
     this._stmtUpsertFile = this.db.prepare(`
       INSERT INTO vault_files (path, blob_hash, mtime_ms, size, lang, kind, indexed_at)
@@ -152,17 +192,24 @@ export class SqliteVaultStore {
     this._stmtFindSymbolsByName = this.db.prepare('SELECT * FROM vault_symbols WHERE name = ? ORDER BY path LIMIT ?');
     this._stmtDeleteSymbolsByPath = this.db.prepare('DELETE FROM vault_symbols WHERE path = ?');
     this._stmtUpsertEdge = this.db.prepare(`
-      INSERT INTO vault_edges (from_symbol, to_symbol, kind, at_line)
-      VALUES (@fromSymbol, @toSymbol, @kind, @atLine)
+      INSERT INTO vault_edges (from_symbol, to_symbol, kind, at_line, to_name)
+      VALUES (@fromSymbol, @toSymbol, @kind, @atLine, @toName)
       ON CONFLICT(from_symbol, to_symbol, kind, at_line) DO NOTHING
     `);
-    this._stmtFindCallers = this.db.prepare('SELECT * FROM vault_edges WHERE to_symbol = ?');
+    // A caller is found through the derived link OR a raw target that already
+    // is the symbol id; before the link existed only the second form could
+    // match, and no extractor ever emitted it (audited 2026-09-02).
+    this._stmtFindCallers = this.db.prepare('SELECT * FROM vault_edges WHERE resolved_to = ? OR to_symbol = ?');
     this._stmtListEdgesAll = this.db.prepare('SELECT * FROM vault_edges');
     this._stmtDeleteEdgesByPath = this.db.prepare(`
       DELETE FROM vault_edges
       WHERE from_symbol IN (SELECT symbol_id FROM vault_symbols WHERE path = ?)
          OR to_symbol   IN (SELECT symbol_id FROM vault_symbols WHERE path = ?)
     `);
+    this._stmtSymbolNamesByPath = this.db.prepare('SELECT DISTINCT name FROM vault_symbols WHERE path = ?');
+    this._stmtSymbolIdsNamed = this.db.prepare('SELECT symbol_id FROM vault_symbols WHERE name = ? LIMIT 2');
+    this._stmtLinkEdgesByName = this.db.prepare('UPDATE vault_edges SET resolved_to = ? WHERE to_name = ?');
+    this._stmtUnlinkEdgesByName = this.db.prepare('UPDATE vault_edges SET resolved_to = NULL WHERE to_name = ? AND resolved_to IS NOT NULL');
     this._stmtUpsertWikilink = this.db.prepare(`
       INSERT INTO vault_wikilinks (from_note, target, resolved)
       VALUES (@fromNote, @target, @resolved)
@@ -212,6 +259,50 @@ export class SqliteVaultStore {
     this._stmtFindPathsByTag = this.db.prepare('SELECT path FROM vault_tags WHERE tag = ?');
 
     this.rebuildFtsIfStale();
+    this.linkLegacyEdgesIfStale();
+  }
+
+  /**
+   * Re-derives the edge link for one identifier: exactly one indexed symbol
+   * carrying `name` claims every edge whose target names it; absence or
+   * ambiguity clears the link so nothing is invented (audited 2026-09-02 —
+   * this rule did not exist, so no edge ever pointed at a real symbol).
+   * Must run inside the caller's transaction.
+   */
+  private relinkName(name: string): void {
+    if (!IDENTIFIER.test(name)) return; // '<module>', '<anon>' — never a link target
+    const rows = this._stmtSymbolIdsNamed!.all(name) as { symbol_id: string }[];
+    if (rows.length === 1) this._stmtLinkEdgesByName!.run(rows[0]!.symbol_id, name);
+    else this._stmtUnlinkEdgesByName!.run(name);
+  }
+
+  /**
+   * One-time backfill for databases indexed before the link columns existed:
+   * fills to_name from the raw to_symbol and derives resolved_to for every
+   * name. Without this a user whose files do not change would keep an
+   * unlinked graph forever — the same failure as rebuildFtsIfStale guards.
+   */
+  private linkLegacyEdgesIfStale(): void {
+    const EDGE_LINK_VERSION = '1';
+    if (this.getMeta('edge_link_version') === EDGE_LINK_VERSION) return;
+    const backfill = this.db.transaction(() => {
+      const targets = this.db.prepare(
+        'SELECT DISTINCT to_symbol FROM vault_edges WHERE to_name IS NULL',
+      ).all() as { to_symbol: string }[];
+      const setName = this.db.prepare('UPDATE vault_edges SET to_name = ? WHERE to_symbol = ?');
+      for (const t of targets) {
+        const name = unresolvedTailName(t.to_symbol);
+        if (name) setName.run(name, t.to_symbol);
+      }
+      const names = this.db.prepare(
+        'SELECT DISTINCT to_name FROM vault_edges WHERE to_name IS NOT NULL',
+      ).all() as { to_name: string }[];
+      for (const n of names) this.relinkName(n.to_name);
+      this.db.prepare(
+        'INSERT INTO vault_meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
+      ).run('edge_link_version', EDGE_LINK_VERSION);
+    });
+    backfill();
   }
 
   /**
@@ -274,6 +365,10 @@ export class SqliteVaultStore {
   deleteFile(path: string): void {
     // Fix 1 (TOCTOU): SELECT chunk_ids inside the transaction so it sees the same snapshot as the writes.
     const txn = this.db.transaction(() => {
+      // Names this file defined: other files' edges linked to them must fall
+      // back to unresolved (or to the one remaining symbol of that name) once
+      // the symbols are gone — the raw edge row stays with its caller.
+      const goneNames = this.symbolNamesForPath(path);
       // Phase 2: edges have a non-FK to_symbol — drop edges originating in OR pointing AT this
       // file's symbols before removing the symbols themselves, so other files' edges can't
       // orphan-reference a removed target (phase2-review C2).
@@ -283,8 +378,14 @@ export class SqliteVaultStore {
       const chunkIds = this._stmtDeleteChunksByPath!.all(path) as { chunk_id: string }[];
       for (const { chunk_id } of chunkIds) this._stmtDeleteFts!.run(chunk_id);
       this._stmtDeleteFile!.run(path);
+      for (const name of goneNames) this.relinkName(name);
     });
     txn();
+  }
+
+  private symbolNamesForPath(path: string): string[] {
+    const rows = this._stmtSymbolNamesByPath!.all(path) as { name: string }[];
+    return rows.map((r) => r.name);
   }
 
   upsertChunk(c: VaultChunk): void {
@@ -345,7 +446,13 @@ export class SqliteVaultStore {
     };
   }
 
-  upsertSymbol(s: VaultSymbol): void { this._stmtUpsertSymbol!.run(s); }
+  upsertSymbol(s: VaultSymbol): void {
+    const txn = this.db.transaction(() => {
+      this._stmtUpsertSymbol!.run(s);
+      this.relinkName(s.name);
+    });
+    txn();
+  }
 
   listSymbolsForPath(path: string): VaultSymbol[] {
     const rows = this._stmtListSymbolsByPath!.all(path) as Record<string, unknown>[];
@@ -357,10 +464,17 @@ export class SqliteVaultStore {
     return rows.map(this.mapSymbol);
   }
 
-  upsertEdge(e: VaultEdge): void { this._stmtUpsertEdge!.run(e); }
+  upsertEdge(e: VaultEdge): void {
+    const toName = unresolvedTailName(e.toSymbol);
+    const txn = this.db.transaction(() => {
+      this._stmtUpsertEdge!.run({ ...e, toName });
+      if (toName) this.relinkName(toName);
+    });
+    txn();
+  }
 
   findCallersOf(symbolId: string): VaultEdge[] {
-    const rows = this._stmtFindCallers!.all(symbolId) as Record<string, unknown>[];
+    const rows = this._stmtFindCallers!.all(symbolId, symbolId) as Record<string, unknown>[];
     return rows.map(this.mapEdge);
   }
 
@@ -423,7 +537,9 @@ export class SqliteVaultStore {
 
   private mapEdge = (row: Record<string, unknown>): VaultEdge => ({
     fromSymbol: row['from_symbol'] as string,
-    toSymbol: row['to_symbol'] as string,
+    // The linked symbol id when the target resolved, else the raw
+    // '<lang>::unresolved::<name>' — self-describing either way.
+    toSymbol: (row['resolved_to'] as string | null) ?? (row['to_symbol'] as string),
     kind: row['kind'] as VaultEdge['kind'],
     atLine: row['at_line'] as number,
   });
@@ -510,6 +626,14 @@ export class SqliteVaultStore {
   }): { ok: true } | { ok: false; error: string } {
     try {
       const txn = this.db.transaction(() => {
+        // Names whose link must be re-derived once this transaction lands:
+        // symbols this file USED to define (their callers may now be
+        // unresolved, or fall to a sole survivor), symbols it defines NOW
+        // (their pre-existing callers can link), and the identifiers its new
+        // edges name (a callee indexed earlier can be found). One rule for all
+        // three, so indexing order never matters (audited 2026-09-02).
+        const relink = new Set<string>(this.symbolNamesForPath(input.path));
+        for (const s of input.symbols) relink.add(s.name);
         // 1) Drop the file row (and cascade chunks/symbols/edges/wikilinks via deleteFile).
         //    Inlined to avoid nested transactions (better-sqlite3 supports nesting but we
         //    keep it explicit here for clarity).
@@ -532,10 +656,15 @@ export class SqliteVaultStore {
 
         // 4) Symbols, edges, wikilinks.
         for (const s of input.symbols) this._stmtUpsertSymbol!.run(s);
-        for (const e of input.edges) this._stmtUpsertEdge!.run(e);
+        for (const e of input.edges) {
+          const toName = unresolvedTailName(e.toSymbol);
+          this._stmtUpsertEdge!.run({ ...e, toName });
+          if (toName) relink.add(toName);
+        }
         for (const w of input.wikilinks) {
           this._stmtUpsertWikilink!.run({ ...w, resolved: w.resolved ? 1 : 0 });
         }
+        for (const name of relink) this.relinkName(name);
 
         // 5) Frontmatter & tags (full-replace semantics).
         if (input.frontmatter) {
