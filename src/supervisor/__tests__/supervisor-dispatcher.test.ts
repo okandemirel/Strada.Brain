@@ -70,8 +70,63 @@ describe("SupervisorDispatcher", () => {
       config: { maxParallelNodes: 4, nodeTimeoutMs: 5000, maxFailureBudget: 3 },
     });
     const results = await dispatcher.dispatch(nodes);
+    // The budget stops LAUNCHES after 3 failures; the nodes already in flight
+    // (at most the wave width, 4) still settle. Overshoot is bounded by width.
     const failed = results.filter(r => r.status === "failed");
-    expect(failed.length).toBeLessThanOrEqual(3);
+    expect(failed.length).toBeLessThanOrEqual(4);
+    expect(executeNode.mock.calls.length).toBeLessThanOrEqual(4);
+    expect(results.filter(r => r.status === "skipped").length).toBeGreaterThanOrEqual(1);
+    expect(results).toHaveLength(5);
+  });
+
+  // audited 2026-09-02: the failure budget reserved a permit per IN-FLIGHT node and
+  // made the dispatch loop wait for one to free up, so a wave could never run wider
+  // than maxFailureBudget (3 by default) no matter what maxParallelNodes said. The
+  // budget is documented as "stop after N failures", not a second semaphore.
+  it("wave width is bounded by maxParallelNodes, not by the failure budget", async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const executeNode = vi.fn().mockImplementation(async (node: TaggedGoalNode) => {
+      inFlight++;
+      peak = Math.max(peak, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      inFlight--;
+      return makeOkResult(node.id, node.assignedProvider!);
+    });
+
+    const nodes = Array.from({ length: 12 }, (_, i) =>
+      makeAssignedNode(`N${i}`, `Task ${i}`, "claude"));
+
+    const dispatcher = new SupervisorDispatcher({
+      executeNode,
+      config: { maxParallelNodes: 12, nodeTimeoutMs: 5000, maxFailureBudget: 3 },
+    });
+    const results = await dispatcher.dispatch(nodes);
+
+    expect(results).toHaveLength(12);
+    expect(results.every((r) => r.status === "ok")).toBe(true);
+    expect(peak).toBe(12);
+  });
+
+  it("stops launching nodes once the failure budget is spent", async () => {
+    const executeNode = vi.fn().mockImplementation(async (node: TaggedGoalNode) => ({
+      ...makeOkResult(node.id), status: "failed" as const, output: "boom",
+    }));
+
+    const nodes = Array.from({ length: 5 }, (_, i) =>
+      makeAssignedNode(`N${i}`, `Task ${i}`, "claude"));
+
+    const dispatcher = new SupervisorDispatcher({
+      executeNode,
+      config: { maxParallelNodes: 1, nodeTimeoutMs: 5000, maxFailureBudget: 3 },
+    });
+    const results = await dispatcher.dispatch(nodes);
+
+    expect(executeNode).toHaveBeenCalledTimes(3);
+    expect(results.filter((r) => r.status === "failed")).toHaveLength(3);
+    const skipped = results.filter((r) => r.status === "skipped");
+    expect(skipped).toHaveLength(2);
+    expect(skipped.every((r) => r.output === "Skipped: budget exhausted")).toBe(true);
   });
 
   it("does not skip nodes just because the failure budget is lower than node count", async () => {

@@ -96,11 +96,20 @@ class Semaphore {
   }
 }
 
-/** Tracks failure budget slots across running nodes. */
+/**
+ * Counts failures against the configured budget.
+ *
+ * audited 2026-09-02: this used to reserve a permit per IN-FLIGHT node and make
+ * the dispatch loop wait for one to come back, so a wave could never run wider
+ * than `maxFailureBudget` (3 by default) — a silent second semaphore that capped
+ * the account-scaled `maxParallelNodes` at 3 and named nothing. The design spec
+ * defines the budget as "stop after N failures, abort the rest", so it now gates
+ * on failures actually consumed: nodes already in flight when the budget is
+ * spent still finish (overshoot bounded by the wave width), and nothing new
+ * launches after it.
+ */
 class FailureBudget {
   private consumed = 0;
-  private inFlight = 0;
-  private readonly waiters = new Set<() => void>();
 
   constructor(private readonly limit: number) {}
 
@@ -108,57 +117,13 @@ class FailureBudget {
     return this.consumed >= this.limit;
   }
 
-  async acquire(signal?: AbortSignal): Promise<boolean> {
-    while (true) {
-      if (this.exhausted()) {
-        return false;
-      }
-
-      if ((this.consumed + this.inFlight) < this.limit) {
-        this.inFlight++;
-        return true;
-      }
-
-      await new Promise<void>((resolve) => {
-        const wake = () => {
-          this.waiters.delete(wake);
-          if (signal) {
-            signal.removeEventListener("abort", wake);
-          }
-          resolve();
-        };
-
-        this.waiters.add(wake);
-        if (signal) {
-          signal.addEventListener("abort", wake, { once: true });
-        }
-      });
-
-      if (signal?.aborted) {
-        return false;
-      }
-    }
-  }
-
-  succeed(): void {
-    if (this.inFlight > 0) {
-      this.inFlight--;
-    }
-    this.notify();
+  /** True when a node may launch: the budget is not yet spent. Never waits. */
+  acquire(): boolean {
+    return !this.exhausted();
   }
 
   fail(): void {
-    if (this.inFlight > 0) {
-      this.inFlight--;
-    }
     this.consumed++;
-    this.notify();
-  }
-
-  private notify(): void {
-    for (const wake of [...this.waiters]) {
-      wake();
-    }
   }
 }
 
@@ -431,10 +396,9 @@ export class SupervisorDispatcher {
    * Execute all nodes in wave order. Nodes within a wave run in parallel
    * up to maxParallelNodes concurrency. Returns collected NodeResults.
    *
-   * Uses a budget-semaphore pattern: a secondary semaphore tracks available
-   * failure budget. Each launched node acquires a "budget permit". On success,
-   * the permit is returned. On failure, it is consumed. Once all budget permits
-   * are gone, remaining nodes cannot launch and are skipped.
+   * Concurrency is bounded by `maxParallelNodes` alone. The failure budget is a
+   * counter of failures, checked before every launch: once `maxFailureBudget`
+   * failures have been recorded, remaining nodes are skipped instead of run.
    */
   async dispatch(
     nodes: TaggedGoalNode[],
@@ -537,20 +501,7 @@ export class SupervisorDispatcher {
           continue;
         }
 
-        let reservedBudget: boolean;
-        try {
-          reservedBudget = await budget.acquire(signal);
-        } catch (acquireError) {
-          this.emitActivity(
-            `Budget acquire failed for node ${String(node.id)}: ${String(acquireError)}`,
-            String(node.id),
-            "supervisor_node_failed",
-          );
-          skippedNodeIds.add(node.id as string);
-          results.push(this.emitSkippedNode(node, "Skipped: budget acquire failed"));
-          continue;
-        }
-        if (!reservedBudget) {
+        if (!budget.acquire()) {
           budgetExhausted = true;
           skippedNodeIds.add(node.id as string);
           results.push(this.emitSkippedNode(node, "Skipped: budget exhausted"));
@@ -561,7 +512,6 @@ export class SupervisorDispatcher {
 
         if (budgetExhausted || signal?.aborted || budget.exhausted()) {
           concurrency.release();
-          budget.succeed();
           // Same split as the pre-budget guard: a control-plane abort cancels (benign,
           // excluded from the failure gate); budget exhaustion skips (and propagates).
           if (signal?.aborted) {
@@ -596,7 +546,6 @@ export class SupervisorDispatcher {
                 nextAction: "skip",
               });
             } else {
-              budget.succeed();
               const workspaceStatus = result.status === "ok" ? "completed" : "skipped";
               const narrativeStatus = result.status === "ok" ? "done" : "skipped";
               this.emitNodeWorkspaceStatus(
