@@ -36,6 +36,7 @@ import {
 import { recordExecutionTrace, recordPhaseOutcome } from "./accounting.js";
 import type { EngineRunContext } from "./engine-deps.js";
 import type { SetupDeps } from "./setup.js";
+import { instinctScopeKey } from "./instinct-scope.js";
 
 /** v1 parity: the PAOR reflection cadence on the agent-core route (orchestrator const copy). */
 const REFLECT_INTERVAL_AGENT_CORE = 3;
@@ -346,9 +347,11 @@ export async function portExecuteToolTurn(
       ...(isInteractiveTurn
         ? {
             onNewInstinctIds: (ids: string[]) => {
-              const current = deps.currentSessionInstinctIds.get(chatId) ?? [];
+              // audited 2026-09-02: same run scope the prologue stashed under.
+              const key = instinctScopeKey(chatId, deps.getTaskExecutionContext()?.taskRunId);
+              const current = deps.currentSessionInstinctIds.get(key) ?? [];
               const merged = [...new Set([...current, ...ids])].slice(0, 200);
-              deps.currentSessionInstinctIds.set(chatId, merged);
+              deps.currentSessionInstinctIds.set(key, merged);
               deps.propagateInstinctIdsToChannel(chatId, merged);
             },
           }

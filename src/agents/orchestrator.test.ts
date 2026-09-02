@@ -32,6 +32,7 @@ import type { WorkerRunResult, WorkspaceLease } from "./supervisor/supervisor-ty
 import type { Attachment } from "../channels/channel.interface.js";
 import type { MessageContent } from "./providers/provider.interface.js";
 import type { GoalContext } from "../tasks/types.js";
+import { instinctScopeKey } from "../agent-core/engine/instinct-scope.js";
 
 const mockLogRingBuffer: Array<{
   timestamp: string;
@@ -9319,12 +9320,15 @@ describe("Orchestrator — #22 in-run trajectory-credit trigger (production orde
     const h = harness(orch);
     const chatId = "chat-credit-on";
 
-    // setupAgentCoreRun populates the participating set for THIS run.
-    h.currentSessionInstinctIds.set(chatId, [planning.id, toolMatched.id]);
-
     // Fire the in-run recorder UNDER the run's own minted taskRunId (T2), exactly as the terminal
     // hook does (it runs inside withTaskExecutionContext, BEFORE the set is cleared).
     const runTaskRunId = "taskrun_T2_real_run";
+    // setupAgentCoreRun populates the participating set for THIS run — keyed by the
+    // run scope since 2026-09-02 (siblings on one chatId used to overwrite it).
+    h.currentSessionInstinctIds.set(instinctScopeKey(chatId, runTaskRunId), [
+      planning.id,
+      toolMatched.id,
+    ]);
     await h.withTaskExecutionContext({ chatId, taskRunId: runTaskRunId }, async () => {
       h.recordInRunTrajectoryCredit({
         chatId,
@@ -9359,10 +9363,10 @@ describe("Orchestrator — #22 in-run trajectory-credit trigger (production orde
     const h = harness(orch);
     const chatId = "chat-order";
 
-    h.currentSessionInstinctIds.set(chatId, [planning.id]);
+    h.currentSessionInstinctIds.set(instinctScopeKey(chatId, "taskrun_order"), [planning.id]);
     await h.withTaskExecutionContext({ chatId, taskRunId: "taskrun_order" }, async () => {
       // Simulate the WRONG order (delete before record) — the exact early-fire defect class.
-      h.currentSessionInstinctIds.delete(chatId);
+      h.currentSessionInstinctIds.delete(instinctScopeKey(chatId, "taskrun_order"));
       h.recordInRunTrajectoryCredit({
         chatId,
         sessionId: chatId,
@@ -9388,7 +9392,7 @@ describe("Orchestrator — #22 in-run trajectory-credit trigger (production orde
     const h = harness(orch);
     const chatId = "chat-credit-off";
 
-    h.currentSessionInstinctIds.set(chatId, [planning.id]);
+    h.currentSessionInstinctIds.set(instinctScopeKey(chatId, "taskrun_off"), [planning.id]);
     await h.withTaskExecutionContext({ chatId, taskRunId: "taskrun_off" }, async () => {
       h.recordInRunTrajectoryCredit({
         chatId,
@@ -9413,7 +9417,7 @@ describe("Orchestrator — #22 in-run trajectory-credit trigger (production orde
     const h = harness(orch);
     const chatId = "chat-fail";
 
-    h.currentSessionInstinctIds.set(chatId, [planning.id]);
+    h.currentSessionInstinctIds.set(instinctScopeKey(chatId, "taskrun_fail"), [planning.id]);
     await h.withTaskExecutionContext({ chatId, taskRunId: "taskrun_fail" }, async () => {
       h.recordInRunTrajectoryCredit({
         chatId,
