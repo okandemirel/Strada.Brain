@@ -232,6 +232,8 @@ export class VaultSearchTool {
     const merged: VaultSearchHit[] = [];
     const searched: string[] = [];
     const failed: Array<{ id: string; reason: string }> = [];
+    let rawHits = 0;
+    let semanticScored = 0;
     perVault.forEach((s, index) => {
       if (s.status === "rejected") {
         const id = targetVaults[index]?.id ?? `#${index}`;
@@ -243,6 +245,8 @@ export class VaultSearchTool {
       const { vaultId: vid, result } = s.value;
       searched.push(vid);
       for (const hit of result.hits) {
+        rawHits++;
+        if (hit.scores.hnsw !== null && hit.scores.hnsw !== undefined) semanticScored++;
         const projected = projectHit(hit, vid, mode);
         if (projected) merged.push(projected);
       }
@@ -268,6 +272,25 @@ export class VaultSearchTool {
           `vault_search failed: no vault was searched for "${query}" — every target rejected the query: ` +
           formatFailed(failed),
         isError: true,
+        metadata: { executionTimeMs: Date.now() - started, itemsAffected: 0 },
+      };
+    }
+
+    // Audited 2026-09-02: every shipped vault store is `semantic: false`, so no
+    // hit ever carries an hnsw score and mode='semantic' dropped all of them,
+    // answering "no vault hits" for a corpus that hybrid/fts found. A channel
+    // that is switched off must say so instead of reporting an empty index.
+    if (mode === 'semantic' && semanticScored === 0) {
+      const evidence = rawHits > 0
+        ? `${rawHits} hit(s) came back from [${searched.join(', ')}] and none carried a semantic (hnsw) score, so the vector backend is not wired in this build`
+        : `no hit from [${searched.join(', ')}] carried a semantic (hnsw) score, which cannot be told apart from a disabled vector backend`;
+      const lines = [
+        `semantic retrieval unavailable for "${query}": ${evidence}. Re-run with mode='hybrid' or 'fts'.`,
+      ];
+      if (failed.length) lines.push(`(not searched — query failed: ${formatFailed(failed)})`);
+      if (hint) lines.push(`(${hint})`);
+      return {
+        content: lines.join('\n'),
         metadata: { executionTimeMs: Date.now() - started, itemsAffected: 0 },
       };
     }

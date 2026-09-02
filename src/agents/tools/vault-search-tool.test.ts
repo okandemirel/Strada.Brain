@@ -180,3 +180,52 @@ describe('VaultSearchTool when a vault query throws', () => {
     expect(result.content).toContain('failed=[project: store closed]');
   });
 });
+
+/**
+ * Audited 2026-09-02: every vault store the shipped bootstrap wires is
+ * `semantic: false`, so no hit ever carries an hnsw score. mode='semantic'
+ * then dropped every hit and answered "no vault hits" for a corpus that
+ * hybrid and fts both found.
+ */
+describe("VaultSearchTool mode='semantic' without a vector backend", () => {
+  const tool = new VaultSearchTool();
+
+  function vaultWithScores(id: string, scores: { fts: number | null; hnsw: number | null; rrf: number }) {
+    return {
+      id,
+      kind: 'unity-project',
+      rootPath: '/project',
+      query: vi.fn().mockResolvedValue({
+        hits: [{
+          chunk: { path: 'Assets/EntitySpawnSystem.cs', startLine: 1, endLine: 9, content: 'class EntitySpawnSystem {}' },
+          scores,
+        }],
+        budgetUsed: 10,
+        truncated: false,
+      }),
+    } as never;
+  }
+
+  it('says the semantic channel is unavailable instead of reporting an empty index', async () => {
+    const vault = vaultWithScores('project', { fts: 3.2, hnsw: null, rrf: 0.016 });
+    const ctx = makeContext([vault], 'project');
+
+    const semantic = await tool.execute({ query: 'entity spawn system', mode: 'semantic' }, ctx);
+    const hybrid = await tool.execute({ query: 'entity spawn system', mode: 'hybrid' }, ctx);
+
+    expect(semantic.content).toMatch(/semantic retrieval unavailable/u);
+    expect(semantic.content).not.toMatch(/no vault hits/u);
+    expect(semantic.content).toContain("mode='hybrid'");
+    expect(hybrid.content).toContain('1 hit(s)');
+  });
+
+  it('still returns semantic hits when a vault does score them', async () => {
+    const vault = vaultWithScores('project', { fts: null, hnsw: 0.91, rrf: 0.016 });
+    const ctx = makeContext([vault], 'project');
+
+    const result = await tool.execute({ query: 'entity spawn system', mode: 'semantic' }, ctx);
+
+    expect(result.content).toContain('1 hit(s)');
+    expect(result.content).toContain('source=semantic');
+  });
+});
