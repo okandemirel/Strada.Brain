@@ -9,7 +9,9 @@
  */
 
 import type { Config } from "../config/config.js";
-import type { ITool, ToolContext, ToolExecutionResult } from "../agents/tools/tool.interface.js";
+import { getToolMetadata, type ITool, type ToolContext, type ToolExecutionResult } from "../agents/tools/tool.interface.js";
+import { looksLikeWriteTool } from "../agents/autonomy/constants.js";
+import { WRITE_OPERATIONS } from "../common/constants.js";
 import type { IMemoryManager } from "../memory/memory.interface.js";
 import type { IRAGPipeline } from "../rag/rag.interface.js";
 import type { MetricsCollector } from "../dashboard/metrics.js";
@@ -122,6 +124,31 @@ export interface ToolRegistryOptions {
   onDegraded?: (notice: string) => void;
 }
 
+/**
+ * Registration metadata for a tool Strada did not write (plugin, skill).
+ *
+ * These were force-registered `readOnly: true`, and because registry metadata
+ * outranks the orchestrator's own heuristic (`metadata ?? existing ?? intrinsic
+ * ?? looksLikeWriteTool`), a plugin `write_asmdef` {path, content} wrote files
+ * with no confirmation, stayed offered in write-disabled phases, and ran in the
+ * PARALLEL dispatch group — the exact failure the heuristic was built for, with
+ * the guard bypassed one layer earlier. Honor the tool's own `isReadOnly` when
+ * it declares one; otherwise classify by name and shape. Audited 2026-09-02.
+ */
+export function classifyRuntimeToolMetadata(tool: ITool, category: ToolCategory): Partial<ToolMetadata> {
+  const intrinsic = getToolMetadata(tool);
+  const isWrite =
+    typeof intrinsic?.isReadOnly === "boolean"
+      ? !intrinsic.isReadOnly
+      : WRITE_OPERATIONS.has(tool.name) || looksLikeWriteTool(tool.name, tool);
+  return {
+    category,
+    dangerous: isWrite,
+    requiresConfirmation: isWrite,
+    readOnly: !isWrite,
+  };
+}
+
 export class ToolRegistry {
   private readonly tools = new Map<string, ITool>();
   private readonly metadata = new Map<string, ToolMetadata>();
@@ -221,7 +248,7 @@ export class ToolRegistry {
       try {
         const pluginTools = await this.pluginLoader.loadAll();
         for (const tool of pluginTools) {
-          this.register(tool, { category: "code", dangerous: false, readOnly: true });
+          this.register(tool, classifyRuntimeToolMetadata(tool, "code"));
         }
         logger.info(`Loaded ${pluginTools.length} plugin tools`);
       } catch (error) {

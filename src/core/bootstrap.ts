@@ -24,7 +24,7 @@ import { HashEmbeddingProvider } from "../rag/embeddings/hash-embeddings.js";
 import { RAGPipeline } from "../rag/rag-pipeline.js";
 import { FileVectorStore } from "../rag/vector-store.js";
 import { type DIContainer, createContainer } from "./di-container.js";
-import { ToolRegistry } from "./tool-registry.js";
+import { ToolRegistry, classifyRuntimeToolMetadata } from "./tool-registry.js";
 import { checkStradaDeps } from "../config/strada-deps.js";
 import type { FrameworkKnowledgeStore } from "../intelligence/framework/framework-knowledge-store.js";
 import type { FrameworkSyncPipeline } from "../intelligence/framework/framework-sync-pipeline.js";
@@ -1138,7 +1138,10 @@ async function bootstrapImpl(
     (tools) => {
       for (const tool of tools) {
         try {
-          toolRegistry.register(tool, { category: "custom", dangerous: false, readOnly: true });
+          // Skill tools (including agent-authored ones via create_skill) were
+          // stamped readOnly:true, bypassing the write heuristic. Classify
+          // instead of asserting (audited 2026-09-02).
+          toolRegistry.register(tool, classifyRuntimeToolMetadata(tool, "custom"));
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           // Only a duplicate-name collision is expected/benign here; anything
