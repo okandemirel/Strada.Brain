@@ -369,6 +369,10 @@ export class ProviderHealthRegistry {
       ? now + Math.min(baseCooldownMs * Math.pow(2, episodes), MAX_ADAPTIVE_COOLDOWN_MS)
       : now + baseCooldownMs;
 
+    // Bump the episode BEFORE setEntry: setEntry is what persists, and the
+    // count written must be the one this cooldown was sized from plus one —
+    // otherwise the file is always an episode behind (audited 2026-09-02).
+    if (escalate) this.downEpisodes.set(normalized, episodes + 1);
     this.setEntry(normalized, {
       status: "down",
       consecutiveFailures: this.nextFailureCount(normalized),
@@ -376,7 +380,6 @@ export class ProviderHealthRegistry {
       lastError: error.slice(0, 200),
       cooldownUntil,
     });
-    if (escalate) this.downEpisodes.set(normalized, episodes + 1);
   }
 
   private nextFailureCount(normalizedName: string): number {
@@ -550,6 +553,10 @@ export class ProviderHealthRegistry {
         entries: Array.from(this.entries.entries()),
         thinkingDisabled: Array.from(this.thinkingDisabledProviders),
         thinkingCounters: Array.from(this.thinkingReEnableCounters.entries()),
+        // audited 2026-09-02: the escalation counter that sizes the NEXT down
+        // cooldown was in-memory only, so every restart put a chronic offender
+        // back on the base cooldown while its consecutiveFailures survived.
+        downEpisodes: Array.from(this.downEpisodes.entries()),
       };
       writeFileSync(path, JSON.stringify(data, null, 2));
     } catch {
@@ -600,12 +607,18 @@ export class ProviderHealthRegistry {
         entries?: Array<[string, ProviderHealthEntry]>;
         thinkingDisabled?: string[];
         thinkingCounters?: Array<[string, number]>;
+        downEpisodes?: Array<[string, number]>;
       };
       if (raw.entries) {
         for (const [k, v] of raw.entries) {
           // Re-key: files written before names were canonicalized hold the
           // display name, and a cooldown nobody can look up is a cooldown lost.
           this.entries.set(this.norm(k), v);
+        }
+      }
+      if (raw.downEpisodes) {
+        for (const [k, v] of raw.downEpisodes) {
+          if (Number.isFinite(v) && v > 0) this.downEpisodes.set(this.norm(k), v);
         }
       }
       if (raw.thinkingDisabled) {

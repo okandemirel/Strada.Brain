@@ -17,7 +17,7 @@
 import { mkdtempSync, existsSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ProviderHealthRegistry } from "./provider-health.js";
 
@@ -79,5 +79,36 @@ describe("health that outlives the process", () => {
     second.load(file);
 
     expect(second.isAvailable("opencode")).toBe(true);
+  });
+
+  // audited 2026-09-02: save() wrote entries/thinkingDisabled/thinkingCounters but not
+  // downEpisodes, so a provider that had escalated to the 10-minute ceiling came back
+  // after a restart at the base cooldown — consecutiveFailures survived, the episode
+  // count that sizes the NEXT cooldown did not, and the two halves of one record
+  // disagreed after every boot.
+  it("hands the down-episode escalation to the next process", () => {
+    const file = pathIn();
+    const first = new ProviderHealthRegistry({ degradedThreshold: 2, downThreshold: 3, degradedCooldownMs: 30_000, downCooldownMs: 120_000 });
+    first.load(file);
+    let time = 1_000_000;
+    const spy = vi.spyOn(Date, "now").mockImplementation(() => time);
+    try {
+      for (let i = 0; i < 3; i++) first.recordFailure("Kimi (Moonshot)", "err"); // episode 1 → 120s
+      time += 120_001;
+      first.recordFailure("Kimi (Moonshot)", "err"); // past downThreshold: episode 2 → 240s
+      expect(first.getDownEpisodes("kimi")).toBe(2);
+      expect(first.getEntry("kimi")!.cooldownUntil).toBe(time + 240_000);
+
+      const second = new ProviderHealthRegistry({ degradedThreshold: 2, downThreshold: 3, degradedCooldownMs: 30_000, downCooldownMs: 120_000 });
+      second.load(file);
+      expect(second.getDownEpisodes("kimi")).toBe(2);
+      expect(second.getEntry("kimi")!.consecutiveFailures).toBe(first.getEntry("kimi")!.consecutiveFailures);
+
+      time += 240_001;
+      second.recordFailure("kimi", "err"); // already past downThreshold → next episode
+      expect(second.getEntry("kimi")!.cooldownUntil).toBe(time + 480_000); // 120s × 2^2, not the base
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
