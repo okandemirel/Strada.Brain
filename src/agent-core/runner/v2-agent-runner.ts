@@ -383,7 +383,14 @@ export class V2AgentRunner implements AgentRunner {
                   : "blocked:ask_user");
               break epochLoop;
             }
-            continue; // a fresh gate tick after the user-facing pause
+            // audited 2026-09-02: this arm used to `continue` back to the gate. The ask_user
+            // verdict is derived from the health tracker, which changes ONLY when a call is
+            // made (recordSuccess / recordFailure), so re-looping re-derived the identical
+            // verdict every iteration: no model call, one visible ask_user per iteration, a
+            // frozen 30s sleep each, until the iteration budget ran out and the run was
+            // reported "completed" / max-iterations. Fall through and TAKE the step — the
+            // same shape as retry/pause below; the step's outcome is the only thing that can
+            // change the verdict.
           }
           if (gate.decision === "retry" || gate.decision === "pause") {
             // A pending failure/stall asks for a backoff before THIS step. Back off (emitting the

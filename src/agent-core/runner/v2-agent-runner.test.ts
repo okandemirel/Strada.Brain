@@ -672,8 +672,9 @@ describe("V2AgentRunner — abort (verdict stop)", () => {
   });
 
   it("interactive ask_user (health) → emits ask_user, continues, does NOT block", async () => {
-    // First gate asks; once asked, the same health keeps asking → eventually hits the iteration
-    // limit and falls through to the terminal. We only assert it did NOT yield "blocked".
+    // First gate asks; the gate then TAKES the step (audited 2026-09-02 — it used to re-loop
+    // to the gate and spin). With this always-asking health every gate asks once and steps
+    // once. We only assert it did NOT yield "blocked".
     const handles = mkPlane({ health: { shouldAskUser: () => true } });
     const gateway = new ModelGateway(scriptedStream([mkResponse({ stopReason: "end_turn" })]));
     const port = mkPort(mkProvider(), { iterationLimit: 2 });
@@ -923,5 +924,44 @@ describe("V2AgentRunner — Phase 1c streaming liveness re-arm (no false task-in
     // Without the re-arm, the spine's frozen per-call scope committed its full ~80ms/call → the
     // accumulator crossed the 100ms ceiling (this is the bug the fix prevents).
     expect(runClock().accumulatedSilentMs()).toBeGreaterThanOrEqual(100);
+  });
+});
+
+describe("V2AgentRunner — interactive gate ask_user takes the step (audited 2026-09-02)", () => {
+  it("3 consecutive failures → ask_user → the run still calls the provider and recovers on call #4", async () => {
+    // The gate's ask_user verdict is derived from the health tracker, which changes ONLY when a
+    // call is made (recordSuccess / recordFailure). Re-looping to the gate re-derived the same
+    // verdict forever: no model call, one visible ask_user per iteration, until max-iterations.
+    // Mirrors the real tracker's ASK_USER_CONSECUTIVE=3 with a stateful fake.
+    const health: HealthCore = mkHealth({
+      shouldAskUser: () => health.consecutive >= 3,
+      backoffMs: () => 1000,
+    });
+    const handles = mkPlane({ healthCore: health });
+    const provider = mkProvider();
+    const gateway = new ModelGateway(
+      scriptedStream([
+        new Error("boom"),
+        new Error("boom"),
+        new Error("boom"),
+        mkResponse({ text: "the plan", stopReason: "end_turn" }), // PLANNING → EXECUTING
+        mkResponse({ text: "all done", stopReason: "end_turn" }), // end_turn terminal
+      ]),
+    );
+    const port = mkPort(provider, { iterationLimit: 10, onClassifyFailure: () => health.recordFailure() });
+    port.spies.recordHealthSuccess.mockImplementation(() => health.recordSuccess());
+    const runner = mkRunner(handles.plane, gateway, port, handles.clock);
+
+    const result = await drive(handles.clock, runner.run(mkRequest(), mkIO("interactive")));
+
+    // The provider recovered on call #4 — the run MUST have taken that call and finished normally.
+    expect(port.spies.dispatchEndTurn).toHaveBeenCalledTimes(1);
+    expect(result.status).toBe("completed");
+    expect(result.reason).not.toBe("max-iterations");
+    // At most one ask per site (the failure site + the gate before the retried step) — not one
+    // per remaining iteration.
+    const asks = handles.events().filter((e) => e.type === "ask_user");
+    expect(asks.length).toBeLessThanOrEqual(2);
+    expect(port.spies.classifyFailureForVerdict).toHaveBeenCalledTimes(3);
   });
 });
