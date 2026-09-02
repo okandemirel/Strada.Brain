@@ -87,10 +87,16 @@ export class FileDeleteTool implements ITool {
         };
       }
     } catch (error) {
-      // Non-fatal: the delete proceeds, but the result must not read as if
-      // the reference check passed.
-      const reason = error instanceof Error ? error.message : String(error);
-      checkNote = ` (reference check did not run: ${reason})`;
+      // Was: swallowed and proceeded, so a check that never ran read exactly
+      // like a check that passed. A delete on an unverified verdict is refused
+      // and says why. Audited 2026-09-02.
+      const msg = error instanceof Error ? error.message : String(error);
+      return {
+        content:
+          `Error: the asset-reference safety check for ${relPath} could not run (${msg}); ` +
+          "not deleting on an unverified verdict.",
+        isError: true,
+      };
     }
 
     try {

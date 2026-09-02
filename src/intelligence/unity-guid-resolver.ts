@@ -7,7 +7,7 @@
 
 import { readFile, readdir, stat, realpath } from "node:fs/promises";
 import { join, relative, extname, resolve } from "node:path";
-import { getLogger } from "../utils/logger.js";
+import { getLoggerSafe } from "../utils/logger.js";
 import { UNITY_EXCLUDED_DIRS } from "../agents/tools/unity/meta-file-utils.js";
 
 // ─── Types ─────────────────────────────────────────────────────────────────
@@ -35,7 +35,20 @@ export interface SafetyCheckResult {
    * means "no reference found under these", nothing more. Audited 2026-09-02.
    */
   scannedRoots: string[];
+  /**
+   * Reasons the walk stopped early (depth cap, unreadable directory, result
+   * cap). Non-empty means the verdict is unverified; `safe` is then false.
+   * Audited 2026-09-02.
+   */
+  scanIncomplete?: string[];
 }
+
+/**
+ * Deepest directory level under a scan root the walk will enter. Was 10,
+ * silently ignoring anything deeper; now high enough for third-party asset
+ * packs, and hitting it is reported rather than swallowed. Audited 2026-09-02.
+ */
+export const GUID_SCAN_MAX_DEPTH = 25;
 
 /**
  * Roots that can hold GUID references to an asset. Unity keeps build-list
@@ -85,6 +98,11 @@ export interface GuidScanResult {
   references: GuidReference[];
   /** Project-relative roots that existed and were walked. */
   scannedRoots: string[];
+  /**
+   * Places the walk stopped early, one line each. Empty means every
+   * directory under every scanned root was read. Audited 2026-09-02.
+   */
+  incomplete: string[];
 }
 
 /**
@@ -96,18 +114,20 @@ export interface GuidScanResult {
 export async function scanGuidReferences(
   projectPath: string,
   targetGuid: string,
-  maxDepth = 10,
+  maxDepth = GUID_SCAN_MAX_DEPTH,
   maxResults = 100,
 ): Promise<GuidScanResult> {
   const references: GuidReference[] = [];
   const scannedRoots: string[] = [];
+  const incomplete: string[] = [];
 
   // Resolve to real path to prevent symlink escapes
   let resolvedProject: string;
   try {
     resolvedProject = await realpath(resolve(projectPath));
-  } catch {
-    return { references, scannedRoots };
+  } catch (err) {
+    incomplete.push(`project path could not be resolved: ${(err as NodeJS.ErrnoException).code ?? "error"}`);
+    return { references, scannedRoots, incomplete };
   }
 
   // Was: `join(resolvedProject, "Assets")` alone, so ProjectSettings/ and
@@ -121,10 +141,10 @@ export async function scanGuidReferences(
       continue; // Root absent in this project
     }
     scannedRoots.push(rootName);
-    await scanDirectory(rootPath, resolvedProject, targetGuid, references, 0, maxDepth, maxResults);
+    await scanDirectory(rootPath, resolvedProject, targetGuid, references, 0, maxDepth, maxResults, incomplete);
   }
 
-  return { references, scannedRoots };
+  return { references, scannedRoots, incomplete };
 }
 
 /**
@@ -134,7 +154,7 @@ export async function scanGuidReferences(
 export async function findGuidReferences(
   projectPath: string,
   targetGuid: string,
-  maxDepth = 10,
+  maxDepth = GUID_SCAN_MAX_DEPTH,
   maxResults = 100,
 ): Promise<GuidReference[]> {
   return (await scanGuidReferences(projectPath, targetGuid, maxDepth, maxResults)).references;
@@ -148,13 +168,26 @@ async function scanDirectory(
   depth: number,
   maxDepth: number,
   maxResults: number,
+  incomplete: string[],
 ): Promise<void> {
-  if (depth > maxDepth || references.length >= maxResults) return;
+  // Was: three silent `return`s (depth cap, readdir failure, result cap) that
+  // left the caller unable to tell "searched everything" from "stopped early".
+  // Each early exit now records why. Audited 2026-09-02.
+  const relDir = relative(projectPath, dirPath).replace(/\\/g, "/");
+  if (depth > maxDepth) {
+    incomplete.push(`depth cap ${maxDepth} reached; not read: ${relDir}/`);
+    return;
+  }
+  if (references.length >= maxResults) {
+    incomplete.push(`result cap ${maxResults} reached before ${relDir}/`);
+    return;
+  }
 
   let entries;
   try {
     entries = await readdir(dirPath, { withFileTypes: true });
-  } catch {
+  } catch (err) {
+    incomplete.push(`unreadable directory ${relDir}/ (${(err as NodeJS.ErrnoException).code ?? "error"})`);
     return;
   }
 
@@ -163,9 +196,17 @@ async function scanDirectory(
 
     if (entry.isDirectory()) {
       if (UNITY_EXCLUDED_DIRS.has(entry.name)) continue;
-      if (references.length >= maxResults) return;
-      await scanDirectory(fullPath, projectPath, targetGuid, references, depth + 1, maxDepth, maxResults);
-    } else if (references.length < maxResults && SEARCHABLE_EXTENSIONS.has(extname(entry.name).toLowerCase())) {
+      if (references.length >= maxResults) {
+        incomplete.push(`result cap ${maxResults} reached before ${relDir}/${entry.name}/`);
+        return;
+      }
+      await scanDirectory(fullPath, projectPath, targetGuid, references, depth + 1, maxDepth, maxResults, incomplete);
+    } else if (references.length >= maxResults) {
+      if (SEARCHABLE_EXTENSIONS.has(extname(entry.name).toLowerCase())) {
+        incomplete.push(`result cap ${maxResults} reached before ${relDir}/${entry.name}`);
+        return;
+      }
+    } else if (SEARCHABLE_EXTENSIONS.has(extname(entry.name).toLowerCase())) {
       try {
         const content = await readFile(fullPath, "utf-8");
         const relPath = relative(projectPath, fullPath);
@@ -184,8 +225,8 @@ async function scanDirectory(
             }
           }
         }
-      } catch {
-        // Skip unreadable files
+      } catch (err) {
+        incomplete.push(`unreadable file ${relDir}/${entry.name} (${(err as NodeJS.ErrnoException).code ?? "error"})`);
       }
     }
   }
@@ -204,7 +245,9 @@ export async function checkSafeToDelete(
   projectPath: string,
   filePath: string,
 ): Promise<SafetyCheckResult> {
-  const logger = getLogger();
+  // getLoggerSafe: getLogger() throws "Logger not initialized" before boot
+  // and the caller swallowed that, silently skipping the whole check. Audited 2026-09-02.
+  const logger = getLoggerSafe();
   const metaPath = join(projectPath, filePath + ".meta");
 
   // Extract GUID from the file's .meta
@@ -216,7 +259,7 @@ export async function checkSafeToDelete(
 
   // Was: maxResults=6, which capped the reported count at 5 external refs and
   // dropped the "... and N more" line for 20 referrers. Audited 2026-09-02.
-  const { references, scannedRoots } = await scanGuidReferences(projectPath, guid, 10, 100);
+  const { references, scannedRoots, incomplete } = await scanGuidReferences(projectPath, guid, GUID_SCAN_MAX_DEPTH, 100);
 
   // Filter out self-references (the file's own .meta). Normalize separators
   // before comparing: `ref.filePath` comes from `path.relative()` (native
@@ -232,26 +275,59 @@ export async function checkSafeToDelete(
     return refPath !== selfPath && refPath !== selfMetaPath;
   });
 
+  const scanNote =
+    incomplete.length > 0
+      ? `\nReference scan did not finish (${incomplete.length} stop(s)):\n` +
+        incomplete.slice(0, 5).map((r) => `  ${r}`).join("\n") +
+        (incomplete.length > 5 ? `\n  ... and ${incomplete.length - 5} more` : "")
+      : "";
+
   if (externalRefs.length > 0) {
     const refList = externalRefs
       .slice(0, 5)
       .map((r) => `  ${r.filePath}:${r.lineNumber}`)
       .join("\n");
     const extra = externalRefs.length > 5 ? `\n  ... and ${externalRefs.length - 5} more` : "";
+    const countWord = incomplete.length > 0 ? `at least ${externalRefs.length}` : `${externalRefs.length}`;
 
     const warning =
-      `WARNING: ${filePath} (GUID: ${guid}) is referenced by ${externalRefs.length} file(s):\n` +
+      `WARNING: ${filePath} (GUID: ${guid}) is referenced by ${countWord} file(s):\n` +
       refList +
       extra +
-      "\nDeleting this file may break asset references.";
+      "\nDeleting this file may break asset references." +
+      scanNote;
 
     logger.warn("GUID safety check: file has references", {
       filePath,
       guid,
       referenceCount: externalRefs.length,
+      scanIncomplete: incomplete.length,
     });
 
-    return { safe: false, guid, references: externalRefs, warning, scannedRoots };
+    return {
+      safe: false,
+      guid,
+      references: externalRefs,
+      warning,
+      scannedRoots,
+      ...(incomplete.length > 0 ? { scanIncomplete: incomplete } : {}),
+    };
+  }
+
+  if (incomplete.length > 0) {
+    // Was: `safe: true` here too — an unfinished scan read exactly like a
+    // clean one and the caller unlinked on it. Audited 2026-09-02.
+    const warning =
+      `WARNING: ${filePath} (GUID: ${guid}) — no reference found in the part of ` +
+      `${scannedRoots.join("/, ")}/ that was read, but the scan did not finish, ` +
+      `so this is not a verified all-clear. Not deleting on an unverified verdict.` +
+      scanNote;
+    logger.warn("GUID safety check: scan incomplete, refusing to call delete safe", {
+      filePath,
+      guid,
+      scanIncomplete: incomplete.length,
+    });
+    return { safe: false, guid, references: [], warning, scannedRoots, scanIncomplete: incomplete };
   }
 
   return { safe: true, guid, references: [], scannedRoots };

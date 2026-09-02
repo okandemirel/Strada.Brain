@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeAll, beforeEach, afterEach } from "vitest";
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, rm, chmod } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { checkSafeToDelete } from "./unity-guid-resolver.js";
+import { checkSafeToDelete, scanGuidReferences, GUID_SCAN_MAX_DEPTH } from "./unity-guid-resolver.js";
 import { createLogger } from "../utils/logger.js";
 
 /**
@@ -136,5 +136,102 @@ describe("checkSafeToDelete scan roots (audited 2026-09-02)", () => {
     expect(res.references).toHaveLength(20);
     expect(res.warning).toContain("referenced by 20 file(s)");
     expect(res.warning).toContain("and 15 more");
+  });
+});
+
+/**
+ * Audited 2026-09-02: the walk aborted silently on the depth cap, on a readdir
+ * failure and on the result cap, and every abort was indistinguishable from
+ * "no references exist" — `safe: true` for a scan that never finished.
+ */
+describe("checkSafeToDelete never reports an unfinished scan as safe (audited 2026-09-02)", () => {
+  let root: string;
+
+  beforeAll(() => {
+    try {
+      createLogger("error", "/tmp/strada-unity-guid-resolver-test.log");
+    } catch {
+      /* already initialized */
+    }
+  });
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), "guid-incomplete-"));
+    await mkdir(join(root, "Assets"), { recursive: true });
+  });
+
+  afterEach(async () => {
+    // Restore permissions so rm can clean up the chmod-000 fixture.
+    try {
+      await chmod(join(root, "Assets", "Locked"), 0o755);
+    } catch {
+      /* fixture not present in this test */
+    }
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("a reference below the depth cap blocks the delete and names the cap", async () => {
+    const guid = "f".repeat(32);
+    await writeFile(join(root, "Assets", "Rock.mat"), "%YAML 1.1\n");
+    await writeFile(join(root, "Assets", "Rock.mat.meta"), `guid: ${guid}\n`);
+    // GUID_SCAN_MAX_DEPTH + 1 directories under Assets/: the walk cannot reach it.
+    const segments = Array.from({ length: GUID_SCAN_MAX_DEPTH + 1 }, (_, i) => `d${i}`);
+    const deep = join(root, "Assets", ...segments);
+    await mkdir(deep, { recursive: true });
+    await writeFile(join(deep, "Deep.prefab"), `m_Materials:\n  - {guid: ${guid}}\n`);
+
+    const res = await checkSafeToDelete(root, "Assets/Rock.mat");
+
+    expect(res.safe).toBe(false);
+    expect(res.scanIncomplete).toBeDefined();
+    expect(res.scanIncomplete!.join("\n")).toMatch(/depth/i);
+    expect(res.warning).toContain("did not finish");
+    expect(res.warning).toMatch(/depth/i);
+    expect(res.warning).toContain("Assets/d0/");
+  });
+
+  it("an unreadable directory blocks the delete and names the directory", async () => {
+    if (typeof process.getuid === "function" && process.getuid() === 0) return; // root ignores chmod
+    if (process.platform === "win32") return; // chmod 000 has no readdir effect on Windows
+    const guid = "1".repeat(32);
+    await writeFile(join(root, "Assets", "Rock.mat"), "%YAML 1.1\n");
+    await writeFile(join(root, "Assets", "Rock.mat.meta"), `guid: ${guid}\n`);
+    await mkdir(join(root, "Assets", "Locked"), { recursive: true });
+    await writeFile(join(root, "Assets", "Locked", "Hidden.prefab"), `m_Materials:\n  - {guid: ${guid}}\n`);
+    await chmod(join(root, "Assets", "Locked"), 0o000);
+
+    const res = await checkSafeToDelete(root, "Assets/Rock.mat");
+
+    expect(res.safe).toBe(false);
+    expect(res.references).toHaveLength(0);
+    expect(res.warning).toContain("did not finish");
+    expect(res.warning).toContain("Assets/Locked");
+  });
+
+  it("a scan that hit the result cap says 'at least' instead of a hard count", async () => {
+    const guid = "2".repeat(32);
+    await writeFile(join(root, "Assets", "Rock.mat"), "%YAML 1.1\n");
+    await writeFile(join(root, "Assets", "Rock.mat.meta"), `guid: ${guid}\n`);
+    for (let i = 0; i < 4; i++) {
+      await writeFile(join(root, "Assets", `P${i}.prefab`), `m_Materials:\n  - {guid: ${guid}}\n`);
+    }
+
+    const scan = await scanGuidReferences(root, guid, GUID_SCAN_MAX_DEPTH, 3);
+
+    expect(scan.references).toHaveLength(3);
+    expect(scan.incomplete.join("\n")).toMatch(/result cap/i);
+  });
+
+  it("a complete scan with no references stays safe and reports an empty incomplete list", async () => {
+    const guid = "3".repeat(32);
+    await writeFile(join(root, "Assets", "Rock.mat"), "%YAML 1.1\n");
+    await writeFile(join(root, "Assets", "Rock.mat.meta"), `guid: ${guid}\n`);
+    await mkdir(join(root, "Assets", "Sub"), { recursive: true });
+    await writeFile(join(root, "Assets", "Sub", "Other.prefab"), `m_Materials:\n  - {guid: ${"4".repeat(32)}}\n`);
+
+    const res = await checkSafeToDelete(root, "Assets/Rock.mat");
+
+    expect(res.safe).toBe(true);
+    expect(res.scanIncomplete ?? []).toEqual([]);
   });
 });
