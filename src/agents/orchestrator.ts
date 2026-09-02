@@ -55,7 +55,7 @@ import {
 } from "./context/strada-knowledge.js";
 import { matchProjectScopedAllowlist } from "./autonomy/project-shell-allowlist.js";
 import { validatePath } from "../security/path-guard.js";
-import { vaultFileRead } from "./tools/file-read.js";
+import { vaultFileRead, isVaultInsideProject, MAX_SYMBOL_LEN } from "./tools/file-read.js";
 import { FILE_LIMITS } from "../common/constants.js";
 import type { FrameworkPromptGenerator } from "../intelligence/framework/framework-prompt-generator.js";
 import type { IdentityState } from "../identity/identity-state.js";
@@ -4742,11 +4742,18 @@ export class Orchestrator {
     if (activeToolCall.name === "file_read" && this.vaultRegistry && toolContext.projectPath) {
       const input = activeToolCall.input as Record<string, unknown>;
       const rawPath = input["path"];
-      if (typeof rawPath === "string") {
+      const rawSymbol = input["symbol"];
+      // audited 2026-09-02: this interceptor re-implemented FileReadTool's vault
+      // read without its two guards — the sec-M3 symbol cap and the sec-H2
+      // cross-vault containment check — so on every vault hit both were dead.
+      // An over-long symbol or a vault rooted outside the session project now
+      // falls through to the tool, which applies the guards itself.
+      const symbolWithinCap = !(typeof rawSymbol === "string" && rawSymbol.length > MAX_SYMBOL_LEN);
+      if (typeof rawPath === "string" && symbolWithinCap) {
         const pathCheck = await validatePath(toolContext.projectPath, rawPath);
         if (pathCheck.valid) {
           const vault = this.vaultRegistry.resolveVaultForPath(pathCheck.fullPath, toolContext.projectPath);
-          if (vault) {
+          if (vault && isVaultInsideProject(vault, toolContext.projectPath)) {
             const vaultRel = pathRelative(vault.rootPath, pathCheck.fullPath).replaceAll("\\", "/");
             const intercepted = await vaultFileRead({
               vault,
