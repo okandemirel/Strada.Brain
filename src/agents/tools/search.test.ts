@@ -103,6 +103,29 @@ describe("GrepSearchTool", () => {
     const result = await tool.execute({ pattern: "anything" }, ctx);
     expect(result.content).toContain("No matches");
   });
+
+  // Audited 2026-09-02: the match cap stopped the file scan and the result
+  // read "Found 20 match(es):" — byte-identical to a genuine 20-match result.
+  // A count that hit the cap must say the scan stopped and how far it got.
+  it("says the scan stopped when the match cap is reached", async () => {
+    const files = Array.from({ length: 60 }, (_, i) => `Caller${i}.cs`);
+    vi.mocked(glob).mockResolvedValue(files as any);
+    vi.mocked(readFile).mockResolvedValue(
+      "EventBus.Publish(a);\nEventBus.Publish(b);\nEventBus.Publish(c);",
+    );
+    const result = await tool.execute({ pattern: "EventBus\\.Publish" }, ctx);
+    expect(result.content).toContain("Found 20 match(es)");
+    expect(result.content).toMatch(/limit reached/i);
+    expect(result.content).toMatch(/scanning stopped after 7 of 60 files/);
+  });
+
+  it("reports an exact count as exact when the cap is not reached", async () => {
+    vi.mocked(glob).mockResolvedValue(["a.cs", "b.cs"] as any);
+    vi.mocked(readFile).mockResolvedValue("x\nEventBus.Publish(a);");
+    const result = await tool.execute({ pattern: "EventBus\\.Publish" }, ctx);
+    expect(result.content).toContain("Found 2 match(es)");
+    expect(result.content).not.toMatch(/limit reached/i);
+  });
 });
 
 describe("ListDirectoryTool", () => {
