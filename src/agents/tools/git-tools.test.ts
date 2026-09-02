@@ -9,6 +9,7 @@ import {
   GitLogTool,
   GitCommitTool,
   GitBranchTool,
+  GitBranchListTool,
   GitPushTool,
   GitStashTool,
 } from "./git-tools.js";
@@ -193,6 +194,39 @@ describe("GitCommitTool", () => {
     await writeFile(join(tempDir, "padded.txt"), "content\n");
     const result = await tool.execute({ message: "add padded", files: ["  padded.txt  "] }, ctx);
     expect(result.isError).toBeUndefined();
+  });
+});
+
+/**
+ * Branch LISTING is a read: it runs `git branch -a --format=…` and touches
+ * nothing. Classifying the whole git_branch tool as a write (d9053f66 — correct
+ * for create/checkout) took listing away with it: in a write-disabled phase the
+ * agent can no longer see which branch it is on, and in an approving phase every
+ * `git_branch action:list` goes to the human approval queue.
+ */
+describe("GitBranchListTool (audited 2026-09-02)", () => {
+  const tool = new GitBranchListTool();
+
+  it("lists branches with no write context at all", async () => {
+    const result = await tool.execute({}, { ...ctx, readOnly: true });
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toMatch(/main|master/);
+  });
+
+  it("shows a branch created after it was registered", async () => {
+    git("branch feature/listed");
+    const result = await tool.execute({}, { ...ctx, readOnly: true });
+    expect(result.content).toContain("feature/listed");
+  });
+
+  it("takes no branch name and cannot check anything out", async () => {
+    git("branch feature/not-taken");
+    const before = execSync("git rev-parse --abbrev-ref HEAD", { cwd: tempDir })
+      .toString().trim();
+    await tool.execute({ action: "checkout", name: "feature/not-taken" }, ctx);
+    const after = execSync("git rev-parse --abbrev-ref HEAD", { cwd: tempDir })
+      .toString().trim();
+    expect(after).toBe(before);
   });
 });
 

@@ -103,8 +103,28 @@ describe("ToolRegistry", () => {
 
     it("is in the name-based WRITE_OPERATIONS allowlist so every policy layer agrees", () => {
       // The interaction policy's plan-review write block keys on this set by
-      // NAME, independent of registry metadata; both sources must agree.
+      // NAME, independent of registry metadata; both sources must agree. It is
+      // also the first test in isParallelSafeToolCall, so membership here is
+      // what keeps a checkout out of the leading parallel group.
       expect(WRITE_OPERATIONS.has("git_branch")).toBe(true);
+    });
+
+    it("offers branch LISTING as its own read-only tool (audited 2026-09-02)", async () => {
+      // Classifying the whole tool as a write was right for create/checkout and
+      // wrong for list: `git branch -a --format=…` touches nothing, yet listing
+      // vanished from write-disabled phases and every list went to the approval
+      // queue. The read half is registered separately instead.
+      const r = new ToolRegistry();
+      await r.initialize({ shellEnabled: false } as unknown as Parameters<ToolRegistry["initialize"]>[0]);
+      const meta = r.getMetadata("git_branch_list");
+      expect(meta, "git_branch_list is registered").toBeDefined();
+      expect(meta!.readOnly).toBe(true);
+      expect(meta!.dangerous).toBe(false);
+      expect(meta!.requiresConfirmation).toBeFalsy();
+      expect(r.getReadOnlyTools().some((t) => t.name === "git_branch_list")).toBe(true);
+      // …and it must not be dragged into the write allowlist with its sibling,
+      // which would put it right back in the approval queue.
+      expect(WRITE_OPERATIONS.has("git_branch_list")).toBe(false);
     });
   });
 

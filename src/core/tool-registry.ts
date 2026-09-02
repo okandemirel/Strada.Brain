@@ -70,6 +70,7 @@ import {
   GitLogTool,
   GitCommitTool,
   GitBranchTool,
+  GitBranchListTool,
   GitPushTool,
   GitStashTool,
 } from "../agents/tools/git-tools.js";
@@ -759,6 +760,16 @@ export class ToolRegistry {
       readOnly: false,
     });
 
+    // …but LISTING branches is a read. Classifying the whole tool as a write
+    // (correct for create/checkout) also took listing out of write-disabled
+    // phases and sent every `action: "list"` to the approval queue, so the read
+    // half is registered on its own name (audited 2026-09-02).
+    this.register(new GitBranchListTool(), {
+      category: ToolCategories.GIT,
+      dangerous: false,
+      readOnly: true,
+    });
+
     this.register(new GitPushTool(), {
       category: ToolCategories.GIT,
       dangerous: true,
@@ -991,6 +1002,7 @@ export const GitTools = {
   LOG: "git_log",
   COMMIT: "git_commit",
   BRANCH: "git_branch",
+  BRANCH_LIST: "git_branch_list",
   PUSH: "git_push",
   STASH: "git_stash",
 } as const;

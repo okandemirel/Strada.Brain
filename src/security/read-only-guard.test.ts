@@ -10,6 +10,31 @@ import {
   READ_TOOLS,
 } from "./read-only-guard.js";
 
+describe("branch listing in a write-disabled phase (audited 2026-09-02)", () => {
+  it("keeps git_branch_list available while git_branch stays blocked", () => {
+    // The orchestrator drops a tool from a read-only run at registration time
+    // via this same check, so a blocked name is a tool the agent never sees.
+    // Listing branches is a read; taking one is not.
+    const list = checkReadOnlyBlock("git_branch_list", true);
+    expect(list.allowed, "branch listing survives a write-disabled phase").toBe(true);
+
+    const branch = checkReadOnlyBlock("git_branch", true);
+    expect(branch.allowed).toBe(false);
+  });
+
+  it("points the blocked git_branch at the tool that can still answer", () => {
+    // The old suggestion sent the agent to git_status, which names the current
+    // branch and no other — it cannot answer "which branches exist?".
+    const branch = checkReadOnlyBlock("git_branch", true);
+    expect(branch.suggestion).toContain("git_branch_list");
+  });
+
+  it("classifies git_branch_list as a read tool, not merely an unlisted one", () => {
+    expect(READ_TOOLS.has("git_branch_list")).toBe(true);
+    expect(WRITE_TOOLS.has("git_branch_list")).toBe(false);
+  });
+});
+
 describe("checkReadOnlyBlock", () => {
   it("should allow all tools when read-only mode is disabled", () => {
     const result = checkReadOnlyBlock("file_write", false);

@@ -55,6 +55,11 @@ const READ_TOOLS: ReadonlySet<string> = new Set([
   "code_find_references",
   "code_find_usages",
   "git_status",
+  // Listing branches runs `git branch -a --format=…` and changes nothing.
+  // git_branch is a write (it checks out), but its read half is a separate
+  // tool so a write-disabled run can still see the branches (audited
+  // 2026-09-02).
+  "git_branch_list",
   "git_log",
   "git_diff",
   "git_show",
@@ -75,7 +80,7 @@ const SUGGESTIONS: Record<string, string> = {
   file_delete_directory: "Directory deletion is not available in read-only mode.",
   git_commit: "Use 'git_status' or 'git_diff' to review changes instead.",
   git_push: "Use 'git_log' to view commit history instead.",
-  git_branch: "Use 'git_status' to see current branch information.",
+  git_branch: "Use 'git_branch_list' to list branches, or 'git_status' for the current one; creating or switching branches is disabled in read-only mode.",
   git_stash: "Stashing is not available in read-only mode.",
   shell_exec: "Shell commands are disabled in read-only mode. Use built-in read tools instead.",
   dotnet_build: "Builds write bin/ and obj/ and are disabled in read-only mode. Use 'analyze_project' or 'code_search' instead.",

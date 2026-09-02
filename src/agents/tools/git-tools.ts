@@ -282,6 +282,52 @@ export class GitCommitTool implements ITool {
 
 // ─── git_branch ───────────────────────────────────────────────────────────────
 
+/**
+ * The one command both branch tools run to answer "which branches exist?".
+ * Shared so the read tool and the read half of git_branch cannot drift apart.
+ */
+async function listBranches(projectPath: string): Promise<ToolExecutionResult> {
+  const result = await runGit(
+    ["branch", "-a", "--format=%(refname:short) %(objectname:short) %(subject)"],
+    projectPath,
+  );
+  if (result.exitCode !== 0) {
+    return { content: `Error: ${result.stderr}`, isError: true };
+  }
+  return { content: result.stdout || "No branches found." };
+}
+
+/**
+ * Branch listing, split out as its own read-only tool (audited 2026-09-02).
+ *
+ * git_branch is correctly classified as a write — `git checkout [-b]` rewrites
+ * the working tree — but that classification also removed LISTING from
+ * write-disabled phases and sent every `action: "list"` to the human approval
+ * queue. Listing runs one `git branch -a --format=…` and changes nothing, so it
+ * lives here, where the read-only guard and the parallel dispatcher can both
+ * see that it is a read.
+ */
+export class GitBranchListTool implements ITool {
+  readonly name = "git_branch_list";
+  readonly description =
+    "List local and remote branches. Read-only: it cannot create or switch branches — " +
+    "use 'git_branch' for that.";
+
+  readonly inputSchema = {
+    type: "object",
+    properties: {},
+    required: [],
+  };
+
+  async execute(
+    _input: Record<string, unknown>,
+    context: ToolContext,
+  ): Promise<ToolExecutionResult> {
+    return listBranches(context.projectPath);
+  }
+}
+
+
 export class GitBranchTool implements ITool {
   readonly name = "git_branch";
   readonly description =
@@ -311,13 +357,11 @@ export class GitBranchTool implements ITool {
     const name = String(input["name"] ?? "").trim();
 
     switch (action) {
-      case "list": {
-        const result = await runGit(["branch", "-a", "--format=%(refname:short) %(objectname:short) %(subject)"], context.projectPath);
-        if (result.exitCode !== 0) {
-          return { content: `Error: ${result.stderr}`, isError: true };
-        }
-        return { content: result.stdout || "No branches found." };
-      }
+      case "list":
+        // Kept working here for callers that already ask for it, but the
+        // read-only path agents should reach for is git_branch_list — this
+        // tool is gated as a write (audited 2026-09-02).
+        return listBranches(context.projectPath);
       case "create": {
         if (!name) return { content: "Error: branch name is required", isError: true };
         if (context.readOnly) return { content: "Error: branch creation disabled in read-only mode", isError: true };
