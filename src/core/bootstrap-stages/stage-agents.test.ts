@@ -250,6 +250,44 @@ describe("initializeMemoryConsolidationStage — consolidation disabled", () => 
     expect(result.consolidationEngine).toBe(fakeEngine);
     expect(heartbeatLoop.setConsolidationEngine).toHaveBeenCalledWith(fakeEngine, expect.objectContaining({ idleMinutes: 30 }));
   });
+
+  it("hands the engine the memory's HNSW write mutex so Phase 3 serializes against storeEntry (audited 2026-09-02)", async () => {
+    // getConsolidationInternals deliberately returns hnswWriteMutex and the
+    // engine accepts it, but the options literal dropped it — so every
+    // production engine ran hnsw.remove/upsert bare while a concurrent
+    // storeEntry (or the mutex-held compaction rebuild) wrote the same
+    // non-thread-safe index.
+    const hnswWriteMutex = { withLock: vi.fn(async (fn: () => Promise<void>) => fn()) };
+    let engineOptions: { hnswWriteMutex?: unknown } | undefined;
+
+    await initializeMemoryConsolidationStage(
+      {
+        config: makeConfig({
+          memory: {
+            consolidation: { enabled: true, threshold: 0.85, idleMinutes: 30 },
+            unified: { dimensions: 384 },
+            dbPath: "/tmp/test-mem",
+            decay: { exemptDomains: [] },
+          } as Config["memory"],
+        }),
+        logger: createMockLogger(),
+        memoryManager: {} as unknown as Parameters<typeof initializeMemoryConsolidationStage>[0]["memoryManager"],
+        providerManager: { getProvider: vi.fn(() => ({ chat: vi.fn(), name: "test" })) } as unknown as Parameters<typeof initializeMemoryConsolidationStage>[0]["providerManager"],
+        heartbeatLoop: { setConsolidationEngine: vi.fn() },
+        daemonContext: {} as unknown as Parameters<typeof initializeMemoryConsolidationStage>[0]["daemonContext"],
+      },
+      {
+        isAgentDbAdapter: async () => true,
+        getConsolidationInternals: () => ({ sqliteDb: {}, entries: [], hnswStore: {}, hnswWriteMutex }),
+        createMemoryConsolidationEngine: (options: unknown) => {
+          engineOptions = options as { hnswWriteMutex?: unknown };
+          return Promise.resolve({ getStats: vi.fn() });
+        },
+      } as unknown as Parameters<typeof initializeMemoryConsolidationStage>[1],
+    );
+
+    expect(engineOptions?.hnswWriteMutex).toBe(hnswWriteMutex);
+  });
 });
 
 // =============================================================================

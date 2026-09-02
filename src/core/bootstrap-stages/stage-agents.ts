@@ -383,6 +383,11 @@ export async function initializeMemoryConsolidationStage(
       // The engine must mirror its entries-Map mutations in the TF-IDF index
       // or df/docCount drift for the rest of the process (audited 2026-09-02).
       textIndex: internals.textIndex,
+      // The memory's HNSW write mutex. getConsolidationInternals returns it
+      // for exactly this purpose, but this literal dropped it, so every
+      // production engine had hnswMutex === null and Phase 3 ran remove/upsert
+      // bare against storeEntry's mutex-held writes (audited 2026-09-02).
+      hnswWriteMutex: internals.hnswWriteMutex,
       config: { ...params.config.memory.consolidation, minAgeMs: 3600000 },
       generateEmbedding,
       summarizeWithLLM,

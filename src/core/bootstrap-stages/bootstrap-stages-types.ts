@@ -455,6 +455,8 @@ export interface MemoryConsolidationStageDeps {
     hnswStore?: unknown;
     /** TF-IDF index the engine mirrors its Map mutations into (audited 2026-09-02). */
     textIndex?: unknown;
+    /** The memory's HNSW write serializer; the engine's Phase 3 runs inside it. */
+    hnswWriteMutex?: unknown;
   };
   createMemoryConsolidationEngine?: (
     options: unknown,
