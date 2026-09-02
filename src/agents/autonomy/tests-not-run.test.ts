@@ -48,6 +48,39 @@ describe("a compile is not a test run", () => {
     expect(sv.getPrompt()).not.toContain("TESTS NOT RUN");
   });
 
+  /**
+   * Audited 2026-09-02: getPrompt() emitted "[VERIFICATION REQUIRED] You
+   * modified compilable files without verifying:" unconditionally — with zero
+   * bullets under it once a clean compile had emptied pendingFiles — above the
+   * real [TESTS NOT RUN] / [TESTS FAILING] sections. The headline named a
+   * measurement that did not happen and steered the run toward re-running the
+   * compile that had just passed.
+   */
+  it("does not claim unverified compilable files once the compile has passed", () => {
+    const sv = new SelfVerification();
+    write(sv, "Assets/Modules/ScoringModule/Scripts/ScoringService.cs");
+    write(sv, "Assets/Modules/ScoringModule/Tests/Runtime/ScoringServiceTests.cs");
+    verified(sv, "unity_verify_change");
+
+    const prompt = sv.getPrompt();
+    expect(prompt).toContain("TESTS NOT RUN");
+    expect(prompt).not.toContain("[VERIFICATION REQUIRED]");
+    expect(prompt).not.toContain("without verifying");
+  });
+
+  it("does not claim unverified compilable files on the failing-tests path either", () => {
+    const sv = new SelfVerification();
+    write(sv, "Assets/Modules/ScoringModule/Scripts/ScoringService.cs");
+    verified(sv, "unity_verify_change");
+    sv.track("unity_playmode_verify", {}, {
+      content: "PlayMode verification FAILED: 5 of 95 tests failed", isError: false,
+    });
+
+    const prompt = sv.getPrompt();
+    expect(prompt).toContain("TESTS FAILING");
+    expect(prompt).not.toContain("[VERIFICATION REQUIRED]");
+  });
+
   it("counts a shell test runner as a test run", () => {
     const sv = new SelfVerification();
     write(sv, "src/agents/thing.test.ts");

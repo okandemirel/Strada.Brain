@@ -423,7 +423,13 @@ export class SelfVerification {
    * Only called when needsVerification() is true (rare path).
    */
   getPrompt(): string {
-    if (this.hasCompilableChanges && this.lastBuildOk !== true) {
+    // The headline names a measurement — compilable files with no clean pass
+    // since — so it is emitted only when that is what the state says. Audited
+    // 2026-09-02: it was unconditional, and after a clean compile it stood over
+    // zero bullets above the real [TESTS NOT RUN] section, contradicting
+    // lastBuildOk=true and steering the run to recompile what had just passed.
+    const buildGateOpen = this.hasCompilableChanges && this.lastBuildOk !== true;
+    if (buildGateOpen) {
       this.buildGateEmissions++;
     }
     const files = [...this.pendingFiles];
@@ -434,15 +440,18 @@ export class SelfVerification {
       return dotIdx !== -1 && COMPILABLE_EXT.has(f.slice(dotIdx));
     });
 
-    const lines: string[] = [
-      `[VERIFICATION REQUIRED] You modified compilable files without verifying:`,
-      ...shown.map(f => `  - ${f}`),
-    ];
-    if (rest > 0) lines.push(`  ... and ${rest} more`);
+    const lines: string[] = [];
+    if (buildGateOpen) {
+      lines.push(
+        `[VERIFICATION REQUIRED] You modified compilable files without verifying:`,
+        ...shown.map(f => `  - ${f}`),
+      );
+      if (rest > 0) lines.push(`  ... and ${rest} more`);
+    }
 
     if (this.hasUnrunTests()) {
       lines.push(
-        ``,
+        ...(lines.length > 0 ? [``] : []),
         `[TESTS NOT RUN] You changed test files and no tool has run them:`,
         ...[...this.pendingTestFiles].slice(0, 5).map(f => `  - ${f}`),
         `A clean compile does not run tests — unity_verify_change says so itself.`,
@@ -452,7 +461,7 @@ export class SelfVerification {
 
     if (this.hasFailingTestRun()) {
       lines.push(
-        ``,
+        ...(lines.length > 0 ? [``] : []),
         `[TESTS FAILING] The last test run reported failures and no later run has passed.`,
         `Fix the failing tests and re-run unity_playmode_verify until green — a failing suite is not DONE.`,
       );
@@ -468,7 +477,7 @@ export class SelfVerification {
         lines.push(`  ... and ${this.unityConsoleErrors.length - 5} more`);
       }
       lines.push(`Fix these errors and run unity_verify_change again. Do NOT declare DONE until Unity console is clean.`);
-    } else {
+    } else if (buildGateOpen) {
       lines.push(
         hasCsFiles
           ? `\nUse unity_verify_change to verify compilation and check the Unity console — it compiles headlessly and needs no bridge. Do not use dotnet_build: a Unity project has no .sln until the Editor has been opened once.\nBATCH IT: a headless compile costs minutes, so finish the whole logical unit (all files of the change) BEFORE verifying — do not compile after each individual edit. Measured 2026-09-01: an edit→compile→edit→compile rhythm produced ~11 compiles in two hours and ~15 tool operations an hour.`
