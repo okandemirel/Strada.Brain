@@ -4,9 +4,52 @@ import { ObservationEngine } from "./observation-engine.js";
 import { PriorityScorer } from "./priority-scorer.js";
 import { createObservation } from "./observation-types.js";
 import { parseReasoningResponse, buildReasoningPrompt } from "./reasoning-prompt.js";
+import { BuildStateObserver } from "./observers/build-state-observer.js";
 import { createLogger } from "../utils/logger.js";
 
 createLogger("error", "/dev/null");
+
+describe("AgentCore — an aborted tick must not destroy the batch it collected (audited 2026-09-02)", () => {
+  it("provider throws after a latching observer reported the broken build → the observation comes back on a later tick", async () => {
+    vi.useFakeTimers();
+    try {
+      // The REAL engine + the REAL BuildStateObserver: collect() latches lastReportedState, so a
+      // still-broken build is reported exactly once. If the tick that consumed it then aborts,
+      // nothing re-queues it and the agent stays silent about the broken build.
+      const engine = new ObservationEngine();
+      engine.register(
+        new BuildStateObserver({
+          getState: () => ({ pendingFiles: new Set(["Player.cs"]), hasCompilableChanges: true, lastBuildOk: false }),
+        }),
+      );
+      const scorer = new PriorityScorer();
+      const provider = { chat: vi.fn().mockRejectedValue(new Error("provider outage")) };
+      const taskManager = { submit: vi.fn().mockReturnValue({ id: "task_mock01" }), listTasks: vi.fn().mockReturnValue([]), getStatus: vi.fn().mockReturnValue(null) };
+      const channel = { sendText: vi.fn() };
+      const budget = { getUsage: () => ({ usedUsd: 1, limitUsd: 10, pct: 0.1 }) };
+      const core = new AgentCore(engine, scorer, provider as any, taskManager as any, channel as any, budget, undefined, { minReasoningIntervalMs: 0, minObservationPriority: 30, budgetFloorPct: 10 });
+
+      await core.tick(); // tick 1: the build observation reached the LLM call, which threw
+      expect(provider.chat).toHaveBeenCalledTimes(1);
+      expect(taskManager.submit).not.toHaveBeenCalled();
+
+      // The provider recovers; the build is STILL broken (observer stays latched → returns []).
+      provider.chat.mockResolvedValue({
+        text: '```json\n{"action":"execute","goal":"Fix the build","reasoning":"build is red"}\n```',
+        toolCalls: [],
+        stopReason: "end_turn",
+      });
+      vi.advanceTimersByTime(61_000); // past the engine's dedup window and the re-queue delay
+      await core.tick();
+
+      // The unacted observation was put back, so the recovered provider sees it and acts.
+      expect(provider.chat).toHaveBeenCalledTimes(2);
+      expect(taskManager.submit).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
 
 describe("AgentCore", () => {
   it("skips tick when no observations", async () => {

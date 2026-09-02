@@ -22,6 +22,14 @@ import type { ProviderRouter } from "./routing/provider-router.js";
 import { TaskClassifier } from "./routing/task-classifier.js";
 
 const FOREGROUND_DECISION_DEFER_MINUTES = 5;
+/**
+ * audited 2026-09-02: ObservationEngine.collect() is destructive (it drains injections and
+ * advances every one-shot observer's latch), so a tick that collects and then aborts before
+ * acting would lose the batch for good — a broken build reported once stayed unreported until
+ * the build turned green and broke again. An unacted batch is re-queued via defer(); one
+ * minute clears the engine's 60s dedup window so the re-queued item is not suppressed.
+ */
+const UNACTED_BATCH_RECHECK_MINUTES = 1;
 
 export class AgentCore {
   static readonly AGENT_CHAT_ID = "agent-core";
@@ -67,6 +75,9 @@ export class AgentCore {
     if (this.tickInFlight) return;
     this.tickInFlight = true;
 
+    // The collected batch, hoisted so the catch can put it back if no ACT arm consumed it.
+    let batch: AgentObservation[] = [];
+    let consumed = false;
     try {
       // Rate limit (respect runtime override if set)
       const effectiveIntervalMs = this.runtimeOverrides.reasoningIntervalMs ?? this.config.minReasoningIntervalMs;
@@ -86,6 +97,7 @@ export class AgentCore {
       // 1. OBSERVE
       const observations = this.observationEngine.collect();
       if (observations.length === 0) return;
+      batch = observations;
 
       // 2. ORIENT — score and rank
       const ranked = await this.priorityScorer.scoreAll(observations);
@@ -279,10 +291,15 @@ export class AgentCore {
           // Intentionally idle
           break;
       }
+      // Every ACT arm above ran to completion on this batch (an LLM "wait" is a decision too).
+      consumed = true;
     } catch (error) {
       this.logger.error("AgentCore tick error", {
         error: error instanceof Error ? error.message : String(error),
       });
+      if (!consumed && batch.length > 0) {
+        this.requeueUnacted(batch, "tick-error", UNACTED_BATCH_RECHECK_MINUTES);
+      }
     } finally {
       this.tickInFlight = false;
     }
@@ -291,6 +308,26 @@ export class AgentCore {
   /** Check if a tick is currently in progress */
   isTickInFlight(): boolean {
     return this.tickInFlight;
+  }
+
+  /**
+   * Put a batch that no ACT arm consumed back into the engine. Only actionable observations are
+   * re-queued (informational ones — "Build succeeded", user idle — carry nothing to act on).
+   * Deferred, not injected: defer() re-surfaces past the engine's dedup window, whereas inject()
+   * would be suppressed as a duplicate on the very next collect.
+   */
+  private requeueUnacted(batch: readonly AgentObservation[], cause: string, recheckMinutes: number): void {
+    const actionable = batch.filter((o) => o.actionable);
+    for (const obs of actionable) {
+      this.observationEngine.defer(obs, recheckMinutes);
+    }
+    this.logger.info("AgentCore: re-queued unacted observations", {
+      cause,
+      requeued: actionable.length,
+      dropped: batch.length - actionable.length,
+      recheckMinutes,
+      topObservation: batch[0]?.summary.slice(0, 120),
+    });
   }
 
   private deferHumanVisibleDecision(
