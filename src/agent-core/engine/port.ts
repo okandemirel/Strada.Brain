@@ -57,6 +57,13 @@ import type {
 
 /** The shell residue the port assembly injects (the engine facade methods are called directly). */
 export interface PortDeps extends ToolTurnDeps {
+  /**
+   * audited 2026-09-02: settle the goal tree this run decomposed. Interactive
+   * trees were upserted 'executing' at decomposition and never given a terminal
+   * status, so pruneOldTrees could never reclaim them and getInterruptedTrees
+   * reported finished turns as interrupted work.
+   */
+  settleGoalTree(conversationScope: string, status: TerminalStatus): void;
   buildTaskAwareProvider(
     primaryName: string,
     task?: TaskClassification,
@@ -379,6 +386,16 @@ export function createAgentCorePort(
           success: !cancelled && state.phase === AgentPhase.COMPLETE,
           stepResults: state.stepResults,
         });
+        // audited 2026-09-02: the tree decomposed by THIS run (goalsDecomposed
+        // is the once-per-run guard above) gets the run's real terminal status;
+        // a benign cancel settles failed, as the metric above does. Trees a
+        // "resume" reply placed in activeGoalTrees are not this run's to settle.
+        if (c.goalsDecomposed) {
+          deps.settleGoalTree(
+            c.conversationScope ?? c.chatId,
+            cancelled ? "failed" : (terminalStatus ?? "completed"),
+          );
+        }
         // GAP1 teardown — symmetric to v1's runAgentLoop finally (:6232-6234): clear the per-session
         // instinct IDs so a later, unrelated emitToolResult on this chatId cannot mis-attribute to a
         // prior run's instincts, and prevent the Map growing unbounded. Runs from the spine's finally

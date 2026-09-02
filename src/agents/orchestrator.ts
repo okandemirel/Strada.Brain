@@ -1197,6 +1197,7 @@ export class Orchestrator {
       getTaskExecutionContext: () => this.getTaskExecutionContext(),
       propagateInstinctIdsToChannel: (chatId, instinctIds) =>
         this.propagateInstinctIdsToChannel(chatId, instinctIds),
+      settleGoalTree: (conversationScope, status) => this.settleGoalTree(conversationScope, status),
       // Step 8 (tool turn): the RCE-sensitive tool-execution primitives + batch classifier stay in
       // the shell → injected as callbacks (the turn orchestrates; it does not re-home the write gate).
       executeToolCalls: (chatId, toolCalls, options) => this.executeToolCalls(chatId, toolCalls, options),
@@ -2188,6 +2189,28 @@ export class Orchestrator {
 
   setGoalStorage(storage: GoalStorage): void {
     this.goalStorage = storage;
+  }
+
+  /**
+   * Write the run's terminal status onto the goal tree active for its scope.
+   *
+   * audited 2026-09-02: runProactiveGoalDecomposition upserts 'executing' and,
+   * until now, nothing on the interactive path ever wrote a terminal status —
+   * updateTreeStatus had callers only in task-manager and background-executor.
+   * Best-effort like the upsert: a failed write is logged, never thrown.
+   */
+  private settleGoalTree(conversationScope: string, status: "completed" | "failed" | "blocked"): void {
+    const tree = this.activeGoalTrees.get(conversationScope);
+    if (!tree || !this.goalStorage) return;
+    try {
+      this.goalStorage.updateTreeStatus(tree.rootId, status);
+    } catch (err) {
+      getLogger().warn("Could not settle the goal tree", {
+        rootId: tree.rootId,
+        status,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   /**
