@@ -1239,3 +1239,57 @@ describe("HeartbeatLoop — the legacy daemon:budget_warning re-arms when usage 
     }
   });
 });
+
+describe("HeartbeatLoop — the budget warning has a dead band, so a flapping pct notifies once (audited 2026-09-02)", () => {
+  it("emits one warning while pct oscillates 0.79 <-> 0.81 around warnPct 0.8", async () => {
+    vi.useFakeTimers();
+    const registry = new TriggerRegistry();
+    const taskManager = makeTaskManager();
+    const eventBus = makeEventBus();
+    const config = makeDaemonConfig(); // warnPct 0.8
+    let pct = 0.81;
+    const budgetTracker = {
+      isExceeded: vi.fn(() => pct >= 1),
+      isWarning: vi.fn(() => pct >= 0.8),
+      getUsage: vi.fn(() => ({ usedUsd: pct * 10, limitUsd: 10, pct })),
+      recordCost: vi.fn(),
+      resetBudget: vi.fn(),
+    };
+    const loop = new HeartbeatLoop(
+      registry, taskManager as any, budgetTracker as any, makeSecurityPolicy() as any,
+      makeApprovalQueue() as any, makeStorage() as any, makeIdentityManager() as any, eventBus,
+      config, makeLogger() as any,
+    );
+    registry.register(makeTrigger("idle", { shouldFire: false })); // the warning check runs per trigger
+    const warnings = () => (eventBus.emit as any).mock.calls.filter((c: unknown[]) => c[0] === "daemon:budget_warning");
+    try {
+      loop.start();
+
+      await loop.tick(); // 0.81 -> first (and only legitimate) warning
+      expect(warnings()).toHaveLength(1);
+
+      // The sliding window drifts either side of the threshold for the rest of
+      // the day. Each dip below 0.8 used to re-arm the latch, so every climb
+      // back over it pushed another medium-urgency notification.
+      for (const next of [0.79, 0.81, 0.79, 0.81, 0.795, 0.805]) {
+        pct = next;
+        await loop.tick();
+      }
+      expect(warnings()).toHaveLength(1);
+
+      // A real recovery clears the dead band (warnPct - 0.05 = 0.75)...
+      pct = 0.70;
+      await loop.tick();
+      expect(warnings()).toHaveLength(1);
+
+      // ...and the next genuine crossing is announced.
+      pct = 0.82;
+      await loop.tick();
+      expect(warnings()).toHaveLength(2);
+      expect(warnings()[1]![1]).toMatchObject({ pct: 0.82, limitUsd: 10 });
+    } finally {
+      loop.stop();
+      vi.useRealTimers();
+    }
+  });
+});
