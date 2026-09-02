@@ -81,3 +81,40 @@ describe("a document the user named", () => {
     expect(result.content).not.toContain("you named this path");
   });
 });
+
+/**
+ * Naming a path relaxes CONFINEMENT, never the sensitive-file blocklist.
+ *
+ * Audited 2026-09-02: a user pasting an error line that mentioned
+ * <project>/.env turned that path into an authorized read, and the tool
+ * returned the file body under "Read on your authority". The blocklist is a
+ * separate guarantee from confinement and must hold regardless of who named
+ * the path.
+ */
+describe("a sensitive file the user happened to name", () => {
+  it("stays refused inside the project even when its path was pasted", async () => {
+    const { project } = setup();
+    const envPath = join(project, ".env");
+    writeFileSync(envPath, "ANTHROPIC_API_KEY=sk-ant-TOTALLY-SECRET\nDB_PASSWORD=hunter2\n");
+
+    const result = await tool.execute({ path: envPath }, ctx(project, [envPath]));
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain("sensitive");
+    expect(result.content).not.toContain("TOTALLY-SECRET");
+    expect(result.content).not.toContain("hunter2");
+  });
+
+  it("stays refused outside the project even when its path was pasted", async () => {
+    const { project } = setup();
+    const sshDir = mkdtempSync(join(os.tmpdir(), "authz-ssh-"));
+    const keyPath = join(sshDir, "id_rsa");
+    writeFileSync(keyPath, "-----BEGIN OPENSSH PRIVATE KEY-----\nPRIVATEKEYBODY\n");
+
+    const result = await tool.execute({ path: keyPath }, ctx(project, [keyPath]));
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain("sensitive");
+    expect(result.content).not.toContain("PRIVATEKEYBODY");
+  });
+});
