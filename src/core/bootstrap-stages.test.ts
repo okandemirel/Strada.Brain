@@ -734,7 +734,11 @@ describe("bootstrap-stages", () => {
     expect(result.securityPolicy).toBe(securityPolicy);
     expect(result.heartbeatLoop).toBe(heartbeatLoop);
     expect(result.webhookTriggers.get("hook-1")).toBe(webhookTrigger);
-    expect(logger.info).toHaveBeenCalledWith("Daemon auto-restarting after crash recovery");
+    // The line names what was measured (the flag) and what actually drives the
+    // start (default-on policy) — not a crash-recovery decision the code never makes.
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.stringMatching(/Daemon starting after crash recovery \(it was running before the crash; the start is the default-on boot policy/),
+    );
   });
 
   it("initializes multi-agent delegation and wires daemon context/dashboard state", async () => {
@@ -1201,5 +1205,83 @@ describe("bootstrap-stages", () => {
       expect.objectContaining({ taskManager: expect.objectContaining({ _tag: "task-manager" }) }),
     );
     expect(dashboard.setProviderRouter).toHaveBeenCalled();
+  });
+});
+
+describe("daemon_was_running after a crash (audited 2026-09-02)", () => {
+  // The stored flag has exactly one reader — a log line. start() is
+  // unconditional because daemon autonomy is default-on. The old line claimed
+  // "auto-restarting after crash recovery" and said NOTHING when the flag was
+  // "false" (an explicit /daemon stop before the crash) — the daemon came back
+  // silently. The log must name what was measured and what happens.
+  it("names the default-on start when the daemon was explicitly stopped before the crash", () => {
+    const logger = createMockLogger();
+    const daemonStorage = {
+      initialize: vi.fn(),
+      getDaemonState: vi.fn().mockReturnValue("false"),
+      migrateBudgetSource: vi.fn(),
+      getAllBudgetConfig: vi.fn().mockReturnValue({}),
+      getBudgetConfig: vi.fn(),
+      setBudgetConfig: vi.fn(),
+      sumBudgetSince: vi.fn().mockReturnValue(0),
+      sumBudgetBySource: vi.fn().mockReturnValue({}),
+      sumBudgetForSource: vi.fn().mockReturnValue(0),
+      sumBudgetSinceForAgent: vi.fn().mockReturnValue(0),
+      getDailyHistory: vi.fn().mockReturnValue([]),
+      insertBudgetEntry: vi.fn(),
+      insertBudgetEntryWithSource: vi.fn(),
+      insertBudgetEntryWithAgent: vi.fn(),
+    } as any;
+    const heartbeatLoop = {
+      start: vi.fn(),
+      stop: vi.fn(),
+      isRunning: vi.fn().mockReturnValue(true),
+      getDaemonStatus: vi.fn().mockReturnValue({ running: true }),
+      setUnifiedBudgetManager: vi.fn(),
+    } as any;
+
+    initializeDaemonHeartbeatStage({
+      config: makeConfig({
+        daemon: {
+          budget: { dailyBudgetUsd: 5 },
+          security: { approvalTimeoutMin: 15, autoApproveTools: ["status"] },
+          triggers: {
+            checklistMorningHour: 9,
+            checklistAfternoonHour: 14,
+            checklistEveningHour: 18,
+            defaultDebounceMs: 250,
+            dedupWindowMs: 1000,
+          },
+          heartbeat: { heartbeatFile: "HEARTBEAT.md", intervalMs: 1000 },
+          timezone: "Europe/Istanbul",
+        } as Config["daemon"],
+      }),
+      logger,
+      toolRegistry: { getMetadata: vi.fn().mockReturnValue({ readOnly: true }) } as any,
+      backgroundExecutor: { setDaemonBudgetTracker: vi.fn(), setUnifiedBudgetManager: vi.fn() } as any,
+      taskManager: { _tag: "task-manager" } as any,
+      commandHandler: { setHeartbeatLoop: vi.fn() } as any,
+      daemonEventBus: { _tag: "daemon-event-bus" } as any,
+      identityManager: { recordActivity: vi.fn() } as any,
+      crashContext: { wasCrash: true } as any,
+    }, {
+      createDaemonStorage: vi.fn().mockReturnValue(daemonStorage),
+      createTriggerRegistry: vi.fn().mockReturnValue({ register: vi.fn(), count: vi.fn().mockReturnValue(0) } as any),
+      createBudgetTracker: vi.fn().mockReturnValue({} as any),
+      createApprovalQueue: vi.fn().mockReturnValue({} as any),
+      createSecurityPolicy: vi.fn().mockReturnValue({} as any),
+      readFile: vi.fn().mockReturnValue("# heartbeat"),
+      parseHeartbeatFile: vi.fn().mockReturnValue([]),
+      createWebhookTrigger: vi.fn(),
+      createTriggerDeduplicator: vi.fn().mockReturnValue({ _tag: "deduplicator" } as any),
+      createHeartbeatLoop: vi.fn().mockReturnValue(heartbeatLoop),
+    });
+
+    // The daemon does start (default-on policy) — and the log says so, naming the stop.
+    expect(heartbeatLoop.start).toHaveBeenCalled();
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.stringMatching(/explicitly stopped before the crash.*default-on/),
+    );
+    expect(logger.info).not.toHaveBeenCalledWith(expect.stringMatching(/auto-restarting/));
   });
 });

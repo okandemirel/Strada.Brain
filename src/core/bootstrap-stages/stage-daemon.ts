@@ -221,10 +221,24 @@ export function initializeDaemonHeartbeatStage(
     deduplicator,
   );
 
+  // `daemon_was_running` gates NOTHING: daemon autonomy is default-on (see
+  // src/core/daemon-mode.ts — the product, not a mode), so start() below runs
+  // unconditionally. The old line claimed "auto-restarting after crash
+  // recovery", naming a decision this code never made, and said nothing at
+  // all when the flag was "false" (an explicit /daemon stop before the crash).
+  // Name what was measured and what actually happens (audited 2026-09-02).
   if (params.crashContext?.wasCrash) {
     const wasDaemonRunning = daemonStorage.getDaemonState("daemon_was_running");
-    if (wasDaemonRunning === "true") {
-      params.logger.info("Daemon auto-restarting after crash recovery");
+    if (wasDaemonRunning === "false") {
+      params.logger.info(
+        "Daemon starting after crash recovery although it was explicitly stopped before the crash: " +
+          "daemon autonomy is default-on and the stored flag does not gate start; use /daemon stop to stop it again",
+      );
+    } else {
+      params.logger.info(
+        "Daemon starting after crash recovery (it was running before the crash; the start is the " +
+          "default-on boot policy, not a crash-recovery decision)",
+      );
     }
   }
 
