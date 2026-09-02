@@ -857,6 +857,62 @@ describe("CampaignManager", () => {
     expect(storage.get(campaign.id)!.milestones[2]!.deliveryVerificationBounced).toBe(true);
   });
 
+  it("a provider outage during PLANNING parks with self-revival and replans when the chain recovers", async () => {
+    // Audited 2026-09-02: planAndLaunch's catch set state=failed with no
+    // autoReviveAt, so a quota wall hit before the ladder existed was dead
+    // until a human typed "kampanya devam" — the planner's own contract
+    // comment promised the caller would park with a self-revival appointment.
+    const { ProviderHealthRegistry } = await import("../agents/providers/provider-health.js");
+    const { setLiveChainMemberNames } = await import("../agents/providers/provider-outage.js");
+    const registry = ProviderHealthRegistry.getInstance();
+    registry.clearProviderState("claude");
+    registry.recordOverloaded("claude", "quota wall");
+    setLiveChainMemberNames(["claude"]);
+
+    tasks = new FakeTaskManager();
+    storage.close();
+    storage = new CampaignStorage(join(dir, "campaigns-plan-outage.db"));
+    const planner = {
+      planMilestones: vi
+        .fn()
+        .mockRejectedValueOnce(new Error("All providers are in cooldown (quota exhausted)"))
+        .mockResolvedValue(LADDER),
+    } as unknown as CampaignPlanner;
+    manager = new CampaignManager({
+      storage,
+      planner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async (chatId, text) => messages.push({ chatId, text }),
+      projectRoot,
+      retryAdoptionGraceMs: 10,
+      completedSettleDelayMs: 0,
+      milestoneTimeBoxMs: 60 * 60_000,
+    });
+    manager.attachEvents();
+
+    try {
+      const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+      await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"));
+      const parked = storage.get(campaign.id)!;
+      expect(parked.autoReviveAt).toBeGreaterThan(Date.now());
+      expect(storage.listAwaitingAutoRevive().map((c) => c.id)).toContain(campaign.id);
+      expect(messages.at(-1)!.text).toContain("Self-revival armed");
+      expect(tasks.submitted).toHaveLength(0);
+
+      // The chain recovers; the appointment fires and must REPLAN (no ladder
+      // exists yet), then start sprint 1.
+      registry.clearProviderState("claude");
+      (manager as unknown as { scheduleAutoRevive(id: string, ms: number): void })
+        .scheduleAutoRevive(campaign.id, 20);
+      await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("executing"));
+      expect(tasks.submitted).toHaveLength(1);
+      expect(storage.get(campaign.id)!.autoReviveAt).toBeUndefined();
+    } finally {
+      setLiveChainMemberNames([]);
+      registry.clearProviderState("claude");
+    }
+  });
+
   it("resumeActive leaves a still-running task alone", async () => {
     manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
     await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));

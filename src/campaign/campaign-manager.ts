@@ -285,6 +285,7 @@ export class CampaignManager {
       // Failed before/during planning — replan from the GDD.
       campaign.state = "planning";
       campaign.lastError = undefined;
+      campaign.autoReviveAt = undefined;
       this.persist(campaign);
       await this.tell(campaign, "Reviving the campaign — replanning the milestone ladder from the GDD.");
       void this.planAndLaunch(campaign.id);
@@ -349,7 +350,21 @@ export class CampaignManager {
             return; // someone else already continued the work
           }
           const milestone = fresh.milestones[fresh.currentMilestone];
-          if (!milestone) return;
+          if (!milestone) {
+            // Failed before the ladder existed (planning outage): replan from
+            // the GDD, as tryHandleRevive does. Returning here silently was
+            // how an armed pre-ladder revival no-oped (audited 2026-09-02).
+            fresh.state = "planning";
+            fresh.lastError = undefined;
+            fresh.autoReviveAt = undefined;
+            this.persist(fresh);
+            getLoggerSafe().info("Campaign self-revival — provider chain recovered, replanning the ladder", {
+              id: fresh.id,
+            });
+            await this.tell(fresh, "Provider chain recovered — replanning the milestone ladder from the GDD.");
+            void this.planAndLaunch(fresh.id);
+            return;
+          }
           getLoggerSafe().info("Campaign self-revival — provider chain recovered", {
             id: fresh.id,
             milestone: milestone.id,
@@ -579,8 +594,32 @@ export class CampaignManager {
     } catch (err) {
       campaign.state = "failed";
       campaign.lastError = err instanceof Error ? err.message : String(err);
+      // A planning failure caused by a full provider outage is a scheduled
+      // wait, not a defeat — park with a self-revival appointment exactly as
+      // the milestone terminal path does. Audited 2026-09-02: this catch
+      // armed nothing, so a quota wall hit before the ladder existed left the
+      // campaign dead until a human typed "kampanya devam" (and that revive
+      // re-entered the same unarmed catch while the wall persisted). The
+      // planner's contract explicitly promised the caller would park.
+      const outageWaitMs = allProvidersCoolingDownMs();
+      if (outageWaitMs > 0 || /cooldown|quota|rate.?limit/i.test(campaign.lastError)) {
+        const delayMs = Math.max(outageWaitMs, 60_000) + 60_000;
+        campaign.autoReviveAt = Date.now() + delayMs;
+        this.persist(campaign);
+        this.scheduleAutoRevive(campaign.id, delayMs);
+        await this.tell(
+          campaign,
+          `⏸️ Campaign paused by a provider outage before the milestone ladder could be planned.\n` +
+            `Cause: ${campaign.lastError}\n` +
+            `Self-revival armed for ${new Date(campaign.autoReviveAt).toLocaleTimeString()} (when the provider chain recovers). Reply **kampanya devam** to revive sooner.`,
+        );
+        return;
+      }
       this.persist(campaign);
-      await this.tell(campaign, `Campaign could not plan the milestone ladder: ${campaign.lastError}`);
+      await this.tell(
+        campaign,
+        `Campaign could not plan the milestone ladder: ${campaign.lastError}\nReply **kampanya devam** to replan from the GDD.`,
+      );
     }
   }
 
