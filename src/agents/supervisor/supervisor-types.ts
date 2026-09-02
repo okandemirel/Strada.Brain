@@ -29,6 +29,13 @@ export type WorkspaceLease = ManagedWorkspaceLease;
 
 export interface WorkerToolTrace {
   readonly toolName: string;
+  /**
+   * The provider's own tool-call id, when the spine had one. Audited
+   * 2026-09-02: without it the supervisor bridge fabricated `trace-N` ids on
+   * NodeResult.toolResults — ids that match nothing in the transcript, so a red
+   * row could not be traced back to the call that produced it.
+   */
+  readonly toolCallId?: string;
   readonly success: boolean;
   readonly summary: string;
   readonly timestamp: number;

@@ -177,10 +177,14 @@ export function createSupervisorExecuteNodeBridge(params: {
     // whose Unity node printed "3 of 40 tests failed" produced NO mechanical
     // verdict and the campaign's red gate never fired (audited 2026-09-02).
     const toNodeToolResults = (
-      workerResult?: { toolTrace?: readonly { summary: string; success: boolean }[] },
+      workerResult?: { toolTrace?: readonly { summary: string; success: boolean; toolCallId?: string }[] },
     ): NodeResult["toolResults"] =>
       (workerResult?.toolTrace ?? []).map((t, i) => ({
-        toolCallId: `trace-${i}`,
+        // audited 2026-09-02: this was ALWAYS `trace-${i}` — a fabricated id
+        // matching nothing in the transcript or the monitor. Use the provider's
+        // real tool-call id; the positional fallback stands only for a trace
+        // row that genuinely carried none.
+        toolCallId: t.toolCallId?.trim() || `trace-${i}`,
         content: t.summary,
         isError: !t.success,
       }));

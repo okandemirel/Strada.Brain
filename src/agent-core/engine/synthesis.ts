@@ -176,6 +176,9 @@ export function buildResultProjection(
     touchedFiles: allTouchedFiles,
     toolTrace: params.toolTrace.map((t) => ({
       toolName: t.toolName,
+      // audited 2026-09-02: dropped here, so every downstream consumer had to
+      // fabricate an id for the row (see WorkerToolTrace.toolCallId).
+      toolCallId: t.toolCallId,
       success: t.success,
       // Was a hard-coded "" — which made the worker-path test verdict
       // structurally impossible (background-executor reads t.summary).
