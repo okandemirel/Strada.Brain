@@ -456,6 +456,40 @@ describe("LearningPipeline", () => {
         expect(second).toBeNull();
       }
     });
+
+    // audited 2026-09-02: the duplicate check consulted every status, so a
+    // deprecated instinct (the wrong fix, already retired) fenced its trigger
+    // off forever and the correct fix for the same error could never be learned.
+    it("a deprecated instinct does not block relearning the same trigger (audited 2026-09-02)", async () => {
+      const trigger = "CS1061: 'BoardView' does not contain a definition for 'Refresh' and no accessible extension method could be found";
+      const wrong = await pipeline.considerInstinctCreation({
+        type: "error_fix",
+        triggerPattern: trigger,
+        action: "Rename the call to Redraw()",
+        toolName: "unity_verify_change",
+      });
+      expect(wrong).not.toBeNull();
+      storage.updateInstinct({ ...wrong!, status: "deprecated", confidence: 0.2 });
+
+      const relearned = await pipeline.considerInstinctCreation({
+        type: "error_fix",
+        triggerPattern: trigger,
+        action: "Add a public Refresh() method to BoardView",
+        toolName: "unity_verify_change",
+      });
+      expect(relearned).not.toBeNull();
+      expect(relearned!.action).toContain("Add a public Refresh()");
+      expect(storage.getInstincts({ status: "proposed" }).map((i) => i.id)).toContain(relearned!.id);
+
+      // A live instinct on the same trigger still deduplicates.
+      const duplicate = await pipeline.considerInstinctCreation({
+        type: "error_fix",
+        triggerPattern: trigger,
+        action: "Yet another fix",
+        toolName: "unity_verify_change",
+      });
+      expect(duplicate).toBeNull();
+    });
   });
 
   describe("runEvolution", () => {
@@ -544,6 +578,54 @@ describe("LearningPipeline", () => {
   });
 
   describe("handleToolResult", () => {
+    // audited 2026-09-02: pendingResolutions was keyed on tool name alone, so
+    // another session's unrelated success "resolved" this session's failure
+    // and minted an error_fix instinct claiming a fix that was never observed.
+    describe("error→resolution pairing is scoped to the session (audited 2026-09-02)", () => {
+      const errorOutput = "error CS0246: The type or namespace name 'BoardView' could not be found. Build FAILED.";
+      function failure(sessionId: string): ToolResultEvent {
+        return { sessionId, toolName: "bash", input: { command: "dotnet build" }, output: errorOutput, success: false, timestamp: Date.now() };
+      }
+      function success(sessionId: string, command: string): ToolResultEvent {
+        return { sessionId, toolName: "bash", input: { command }, output: "Build succeeded.", success: true, timestamp: Date.now() };
+      }
+      function errorFixInstincts() {
+        return storage.getInstincts({ type: "error_fix" });
+      }
+
+      it("another session's success on the same tool does not resolve this session's failure", async () => {
+        await pipeline.handleToolResult(failure("chat-A"));
+        await pipeline.handleToolResult(success("chat-B", "git push origin feature/unrelated-branch"));
+        storage.flush();
+
+        expect(errorFixInstincts()).toHaveLength(0);
+        expect(storage.getInstincts().some((i) => i.action.includes("git push"))).toBe(false);
+
+        // The originating session's own success still records the resolution.
+        await pipeline.handleToolResult(success("chat-A", "dotnet restore && dotnet build"));
+        storage.flush();
+        const created = errorFixInstincts();
+        expect(created).toHaveLength(1);
+        expect(created[0].action).toContain("dotnet restore && dotnet build");
+        expect(created[0].triggerPattern).toContain("CS0246");
+      });
+
+      it("another session's failure does not evict this session's pending error", async () => {
+        await pipeline.handleToolResult(failure("chat-A"));
+        await pipeline.handleToolResult({
+          sessionId: "chat-B", toolName: "bash", input: { command: "curl https://example.invalid" },
+          output: "error: network unreachable — request failed", success: false, timestamp: Date.now(),
+        });
+        await pipeline.handleToolResult(success("chat-A", "dotnet restore && dotnet build"));
+        storage.flush();
+
+        const created = errorFixInstincts();
+        expect(created).toHaveLength(1);
+        expect(created[0].triggerPattern).toContain("CS0246");
+        expect(created[0].triggerPattern).not.toContain("network unreachable");
+      });
+    });
+
     it("should call observeToolUse with event data", async () => {
       const event: ToolResultEvent = {
         sessionId: "session-1",
@@ -1348,6 +1430,145 @@ describe("LearningPipeline", () => {
 
       tinyPipeline.stop();
     });
+
+    // audited 2026-09-02: enforceMaxInstincts had no 'proposed' pass. Every
+    // pipeline-created instinct is proposed at 0.5, so in a real store the cap
+    // freed nothing — or worse, deleted the reinforced active rows first — and
+    // returned silently.
+    describe("proposed rows are evictable and the outcome is reported (audited 2026-09-02)", () => {
+      function proposed(id: string, confidence: number, status: Instinct["status"] = "proposed"): Instinct {
+        return {
+          id: id as any,
+          name: id,
+          type: "error_fix",
+          status,
+          confidence,
+          triggerPattern: `pattern ${id}`,
+          action: `action ${id}`,
+          contextConditions: [],
+          stats: { timesSuggested: 0, timesApplied: 0, timesFailed: 0, successRate: 0, averageExecutionMs: 0 },
+          createdAt: Date.now() as TimestampMs,
+          updatedAt: Date.now() as TimestampMs,
+          sourceTrajectoryIds: [],
+          tags: [],
+        };
+      }
+      function cappedPipeline(maxInstincts: number) {
+        return new LearningPipeline(storage, {
+          enabled: true, maxInstincts, detectionIntervalMs: 1000, evolutionIntervalMs: 5000,
+          minConfidenceForCreation: 0.5, batchSize: 5,
+        });
+      }
+
+      it("evicts the lowest-confidence proposed rows when the store is all proposed", async () => {
+        const p = cappedPipeline(2);
+        for (const [id, c] of [["p1", 0.5], ["p2", 0.45], ["p3", 0.6], ["p4", 0.55], ["p5", 0.5]] as const) {
+          storage.createInstinct(proposed(id, c));
+        }
+        expect(storage.countInstincts()).toBe(5);
+
+        const result = await p.enforceMaxInstincts();
+
+        expect(result).toEqual({ evicted: 3, remainingOverCap: 0 });
+        expect(storage.countInstincts()).toBe(2);
+        expect(storage.getInstinct("p3")).not.toBeNull();
+        expect(storage.getInstinct("p4")).not.toBeNull();
+        expect(storage.getInstinct("p2")).toBeNull();
+        p.stop();
+      });
+
+      it("evicts junk proposed rows before a reinforced active row", async () => {
+        const p = cappedPipeline(2);
+        storage.createInstinct(proposed("user_taught", 0.95, "active"));
+        storage.createInstinct(proposed("junk_a", 0.5));
+        storage.createInstinct(proposed("junk_b", 0.5));
+        storage.createInstinct(proposed("junk_c", 0.5));
+
+        const result = await p.enforceMaxInstincts();
+
+        expect(result).toEqual({ evicted: 2, remainingOverCap: 0 });
+        expect(storage.getInstinct("user_taught")).not.toBeNull();
+        expect(storage.countInstincts()).toBe(2);
+        p.stop();
+      });
+
+      it("names the shortfall when only frozen rows remain over the cap", async () => {
+        const p = cappedPipeline(1);
+        storage.createInstinct(proposed("perm_a", 0.95, "permanent"));
+        storage.createInstinct(proposed("perm_b", 0.9, "permanent"));
+        storage.createInstinct(proposed("junk", 0.5));
+
+        const result = await p.enforceMaxInstincts();
+
+        expect(result).toEqual({ evicted: 1, remainingOverCap: 1 });
+        expect(storage.getInstinct("junk")).toBeNull();
+        expect(storage.countInstincts()).toBe(2);
+        p.stop();
+      });
+    });
+  });
+
+  // audited 2026-09-02: the observations table had no retention path (one row
+  // per tool call, forever), and correction rows written by observeCorrection /
+  // recordAutoResolution were never marked processed even though instinct
+  // creation ran inline — so the startup drain replayed them into junk.
+  describe("observations are bounded and inline-processed rows are marked (audited 2026-09-02)", () => {
+    it("observeCorrection leaves no unprocessed row behind", async () => {
+      await pipeline.observeCorrection({
+        sessionId: "session-1",
+        toolName: "file_edit",
+        originalInput: { path: "test.cs" },
+        originalOutput: "error CS1002: ; expected",
+        correctedOutput: "Fixed content",
+        correction: "Add missing semicolon",
+      });
+      storage.flush();
+      const stats = pipeline.getStats();
+      expect(stats.observationCount).toBe(1);
+      expect(stats.unprocessedObservationCount).toBe(0);
+    });
+
+    it("an auto-resolution leaves no unprocessed row behind", async () => {
+      await pipeline.handleToolResult({
+        sessionId: "s", toolName: "bash", input: { command: "dotnet build" },
+        output: "error CS0246: The type or namespace name 'BoardView' could not be found. Build FAILED.",
+        success: false, timestamp: Date.now(),
+      });
+      await pipeline.handleToolResult({
+        sessionId: "s", toolName: "bash", input: { command: "dotnet restore && dotnet build" },
+        output: "Build succeeded.", success: true, timestamp: Date.now(),
+      });
+      storage.flush();
+      const stats = pipeline.getStats();
+      expect(stats.observationCount).toBe(3); // error, success, correction
+      expect(stats.unprocessedObservationCount).toBe(0);
+    });
+
+    it("the periodic sweep deletes processed observations past retention and keeps the rest", async () => {
+      const retentionPipeline = new LearningPipeline(storage, {
+        enabled: true, detectionIntervalMs: 1000, evolutionIntervalMs: 5000,
+        minConfidenceForCreation: 0.5, batchSize: 5, observationRetentionDays: 7,
+      });
+      const day = 24 * 60 * 60 * 1000;
+      const now = Date.now();
+      const row = (id: string, ageDays: number, processed: boolean) => ({
+        id: id as any, type: "success" as const, sessionId: "s" as any, toolName: "bash" as any,
+        input: {}, output: "ok", success: true, timestamp: (now - ageDays * day) as TimestampMs, processed,
+      });
+      storage.recordObservation(row("old_processed", 10, true));
+      storage.recordObservation(row("old_unprocessed", 10, false));
+      storage.recordObservation(row("recent_processed", 1, true));
+      storage.flush();
+      expect(pipeline.getStats().observationCount).toBe(3);
+
+      await (retentionPipeline as unknown as { runPeriodicExtraction: () => Promise<void> }).runPeriodicExtraction();
+
+      const remaining = storage.getDatabase()!.prepare("SELECT id FROM observations ORDER BY id").all() as { id: string }[];
+      expect(remaining.map((r) => r.id)).toEqual(["old_unprocessed", "recent_processed"]);
+      const result = retentionPipeline.pruneObservations();
+      expect(result).toMatchObject({ deleted: 0, retentionDays: 7 });
+      retentionPipeline.stop();
+    });
   });
 
   describe("runPeriodicExtraction", () => {
@@ -1504,6 +1725,164 @@ describe("learning pipeline v2 integration", () => {
     expect(after!.factorUserValidation).toBeCloseTo(Math.max(initialFactor - 0.2, 0.0), 5);
 
     storage.close();
+  });
+
+  // audited 2026-09-02: thumbs feedback only moved factor_user_validation, a
+  // column nothing reads. Confidence, status, rank and tier were unchanged by
+  // any number of thumbs-downs. Feedback must reach the stored confidence.
+  describe("feedback reaches the confidence the lifecycle reads (audited 2026-09-02)", () => {
+    function makeInstinct(overrides: Partial<Instinct> = {}): Instinct {
+      return {
+        id: `instinct_fbc_${Date.now()}_${Math.random().toString(36).slice(2)}` as any,
+        name: "Feedback Confidence Instinct",
+        type: "error_fix",
+        status: "active",
+        confidence: 0.8,
+        triggerPattern: "feedback confidence trigger",
+        action: "apply the fix",
+        contextConditions: [],
+        stats: { timesSuggested: 10, timesApplied: 8, timesFailed: 2, successRate: 0.8, averageExecutionMs: 0 },
+        createdAt: Date.now() as TimestampMs,
+        updatedAt: Date.now() as TimestampMs,
+        sourceTrajectoryIds: [],
+        tags: [],
+        bayesianAlpha: 5,
+        bayesianBeta: 2,
+        ...overrides,
+      };
+    }
+
+    function stackWithBus() {
+      const storage = new LearningStorage(":memory:");
+      storage.initialize();
+      const eventBus = new TypedEventBus();
+      const pipelineInst = new LearningPipeline(storage, {
+        enabled: true,
+        detectionIntervalMs: 1000,
+        evolutionIntervalMs: 5000,
+        minConfidenceForCreation: 0.5,
+        batchSize: 10,
+      }, undefined, undefined, eventBus);
+      return { storage, eventBus, pipeline: pipelineInst };
+    }
+
+    it("a thumbs_down over the bus lowers the stored confidence and its evidence counters", () => {
+      const { storage, eventBus, pipeline } = stackWithBus();
+      const instinct = makeInstinct();
+      storage.createInstinct(instinct);
+
+      eventBus.emit("feedback:reaction", {
+        type: "thumbs_down",
+        instinctIds: [instinct.id],
+        source: "button",
+        channel: "test",
+        timestamp: Date.now(),
+      });
+
+      const after = storage.getInstinct(instinct.id)!;
+      expect(after.confidence).toBeLessThan(0.8);
+      expect(after.bayesianBeta!).toBeGreaterThan(2);
+      expect(after.confidence).toBeCloseTo(after.bayesianAlpha! / (after.bayesianAlpha! + after.bayesianBeta!), 5);
+      // The factor column still moves, and is not clobbered by the confidence write.
+      expect(after.factorUserValidation).toBeCloseTo(0.3, 5);
+      // Application stats are not fabricated by a reaction.
+      expect(after.stats.timesApplied).toBe(8);
+      expect(after.stats.timesFailed).toBe(2);
+
+      pipeline.stop();
+      storage.close();
+    });
+
+    it("a thumbs_up raises the stored confidence", () => {
+      const { storage, eventBus, pipeline } = stackWithBus();
+      const instinct = makeInstinct({ confidence: 0.6, bayesianAlpha: 3, bayesianBeta: 2 });
+      storage.createInstinct(instinct);
+
+      eventBus.emit("feedback:reaction", {
+        type: "thumbs_up",
+        instinctIds: [instinct.id],
+        source: "button",
+        channel: "test",
+        timestamp: Date.now(),
+      });
+
+      const after = storage.getInstinct(instinct.id)!;
+      expect(after.confidence).toBeGreaterThan(0.6);
+      expect(after.bayesianAlpha!).toBeGreaterThan(3);
+
+      pipeline.stop();
+      storage.close();
+    });
+
+    it("repeated thumbs_down drives a bad instinct into cooling and out of retrieval rank", () => {
+      const { storage, eventBus, pipeline } = stackWithBus();
+      const bad = makeInstinct({ triggerPattern: "shared trigger for ranking", confidence: 0.8, bayesianAlpha: 5, bayesianBeta: 2 });
+      const good = makeInstinct({ triggerPattern: "shared trigger for ranking!", confidence: 0.75, bayesianAlpha: 3, bayesianBeta: 1 });
+      storage.createInstinct(bad);
+      storage.createInstinct(good);
+
+      for (let i = 0; i < 20; i++) {
+        eventBus.emit("feedback:reaction", {
+          type: "thumbs_down",
+          instinctIds: [bad.id],
+          source: "button",
+          channel: "test",
+          timestamp: Date.now(),
+        });
+      }
+
+      const after = storage.getInstinct(bad.id)!;
+      expect(after.confidence).toBeLessThan(0.3);
+      // Lifecycle ran: with 10 observations and confidence < deprecatedThreshold, cooling starts.
+      expect(after.coolingStartedAt).toBeDefined();
+      // Ranking reads the stored confidence, so the thumbs-downed instinct now ranks below the other one.
+      const ranked = storage.getInstincts().sort((a, b) => b.confidence - a.confidence);
+      expect(ranked[0].id).toBe(good.id);
+
+      pipeline.stop();
+      storage.close();
+    });
+
+    it("a permanent instinct is frozen against reactions", () => {
+      const { storage, eventBus, pipeline } = stackWithBus();
+      const frozen = makeInstinct({ status: "permanent", confidence: 0.95, bayesianAlpha: 19, bayesianBeta: 1 });
+      storage.createInstinct(frozen);
+
+      eventBus.emit("feedback:reaction", {
+        type: "thumbs_down",
+        instinctIds: [frozen.id],
+        source: "button",
+        channel: "test",
+        timestamp: Date.now(),
+      });
+
+      const after = storage.getInstinct(frozen.id)!;
+      expect(after.confidence).toBeCloseTo(0.95, 5);
+      expect(after.status).toBe("permanent");
+
+      pipeline.stop();
+      storage.close();
+    });
+
+    it("a task outcome routed from InstinctRetriever.recordOutcome moves the stored confidence", () => {
+      const { storage, pipeline } = stackWithBus();
+      const instinct = makeInstinct({ confidence: 0.8, bayesianAlpha: 5, bayesianBeta: 2 });
+      storage.createInstinct(instinct);
+
+      pipeline.recordInstinctOutcomeEvidence(instinct.id, false);
+      const afterFailure = storage.getInstinct(instinct.id)!;
+      expect(afterFailure.confidence).toBeLessThan(0.8);
+      expect(afterFailure.bayesianBeta!).toBeGreaterThan(2);
+      expect(afterFailure.stats.timesFailed).toBe(2); // informed, not applied
+
+      pipeline.recordInstinctOutcomeEvidence(instinct.id, true);
+      const afterSuccess = storage.getInstinct(instinct.id)!;
+      expect(afterSuccess.confidence).toBeGreaterThan(afterFailure.confidence);
+      expect(afterSuccess.bayesianAlpha!).toBeGreaterThan(5);
+
+      pipeline.stop();
+      storage.close();
+    });
   });
 
   it("teaching -> instinct creation -> retrieval", async () => {

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { LearningStorage } from "../storage/learning-storage.ts";
 import { STRADA_SEEDS, seedStradaConventions } from "./strada-core-seeds.ts";
+import { STRADA_MCP_SEEDS, seedMCPConventions } from "./strada-mcp-seeds.ts";
 
 describe("Strada.Core Seeds", () => {
   let storage: LearningStorage;
@@ -75,5 +76,52 @@ describe("Strada.Core Seeds", () => {
       expect(instinct?.trustLevel).toBe("warn_enabled");
       expect(instinct?.seed).toBe(true);
     }
+  });
+
+  // audited 2026-09-02: seeds were registered with project_path "" which the
+  // default "project+universal" scope filter never matches, so the boot-time
+  // baseline could not be retrieved by InstinctRetriever on any deployment.
+  describe("scoped retrievability (audited 2026-09-02)", () => {
+    const PROJECT = "/Users/someone/UnityProject";
+
+    it("core seeds are returned under the default project+universal scope filter", async () => {
+      await seedStradaConventions(storage);
+
+      const retrieved = storage.getInstinctsForScope({
+        projectPath: PROJECT,
+        scopeFilter: "project+universal",
+      });
+      expect(retrieved.map(i => i.triggerPattern).sort()).toEqual(
+        STRADA_SEEDS.map(s => s.pattern).sort(),
+      );
+
+      const scopes = storage.getInstinctScopes(retrieved[0].id);
+      expect(scopes.some(s => s.projectPath === "*" && s.scopeType === "global")).toBe(true);
+    });
+
+    it("seed-utils seeds (MCP) are returned under the default project+universal scope filter", async () => {
+      await seedMCPConventions(storage);
+
+      const retrieved = storage.getInstinctsForScope({
+        projectPath: PROJECT,
+        scopeFilter: "project+universal",
+      });
+      expect(retrieved.map(i => i.triggerPattern).sort()).toEqual(
+        STRADA_MCP_SEEDS.map(s => s.pattern).sort(),
+      );
+    });
+
+    it("re-seeding repairs seeds that an older build registered under project_path ''", async () => {
+      await seedStradaConventions(storage);
+      // Simulate the pre-fix on-disk state: only a ('' , global) scope row.
+      const db = storage.getDatabase()!;
+      db.prepare("UPDATE instinct_scopes SET project_path = '' WHERE project_path = '*'").run();
+      expect(storage.getInstinctsForScope({ projectPath: PROJECT, scopeFilter: "project+universal" })).toHaveLength(0);
+
+      await seedStradaConventions(storage);
+
+      expect(storage.getStats().instinctCount).toBe(5);
+      expect(storage.getInstinctsForScope({ projectPath: PROJECT, scopeFilter: "project+universal" })).toHaveLength(5);
+    });
   });
 });

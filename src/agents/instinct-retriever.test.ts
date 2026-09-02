@@ -753,4 +753,41 @@ describe("InstinctRetriever", () => {
       expect(result[0].id).toBe("instinct_with_obj");
     });
   });
+
+  // audited 2026-09-02: recordOutcome wrote only factor_consistency, which no
+  // ranking or lifecycle decision reads. The outcome must be handed on so it
+  // reaches the stored confidence.
+  describe("recordOutcome hands the outcome to onOutcome (audited 2026-09-02)", () => {
+    it("calls onOutcome after the factor write, with the instinct id and result", async () => {
+      const calls: string[] = [];
+      const instinct = createMockInstinct({ id: "instinct_outcome" as Instinct["id"] });
+      const mockStorage = {
+        getInstinct: vi.fn().mockReturnValue(instinct),
+        updateInstinctFactor: vi.fn(() => { calls.push("factor"); }),
+      } as unknown as LearningStorage;
+      const mockMatcher = { findSimilarInstincts: vi.fn().mockReturnValue([]) } as unknown as PatternMatcher;
+      const onOutcome = vi.fn((id: string, success: boolean) => { calls.push(`outcome:${id}:${success}`); });
+
+      const retriever = new InstinctRetriever(mockMatcher, { storage: mockStorage, onOutcome });
+      await retriever.recordOutcome("instinct_outcome", false);
+
+      expect(onOutcome).toHaveBeenCalledWith("instinct_outcome", false);
+      expect(calls).toEqual(["factor", "outcome:instinct_outcome:false"]);
+    });
+
+    it("does not call onOutcome for a permanent instinct", async () => {
+      const instinct = createMockInstinct({ id: "instinct_perm" as Instinct["id"], status: "permanent" });
+      const mockStorage = {
+        getInstinct: vi.fn().mockReturnValue(instinct),
+        updateInstinctFactor: vi.fn(),
+      } as unknown as LearningStorage;
+      const mockMatcher = { findSimilarInstincts: vi.fn().mockReturnValue([]) } as unknown as PatternMatcher;
+      const onOutcome = vi.fn();
+
+      const retriever = new InstinctRetriever(mockMatcher, { storage: mockStorage, onOutcome });
+      await retriever.recordOutcome("instinct_perm", true);
+
+      expect(onOutcome).not.toHaveBeenCalled();
+    });
+  });
 });

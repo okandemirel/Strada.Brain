@@ -345,6 +345,23 @@ describe("LearningStorage", () => {
       expect(unprocessed).toHaveLength(0);
     });
 
+    // audited 2026-09-02: no DELETE ever targeted observations; the table grew
+    // one row per tool call for the life of the daemon.
+    it("pruneProcessedObservations deletes only processed rows older than the cutoff and reports the count", () => {
+      const now = Date.now();
+      const mk = (id: string, timestamp: number, processed: boolean): Observation =>
+        ({ ...createTestObservation(), id: id as any, timestamp: timestamp as any, processed });
+      storage.recordObservation(mk("old_done", now - 3000, true));
+      storage.recordObservation(mk("old_pending", now - 3000, false));
+      storage.recordObservation(mk("new_done", now, true));
+
+      const deleted = storage.pruneProcessedObservations(now - 1000);
+
+      expect(deleted).toBe(1);
+      const ids = (storage.getDatabase()!.prepare("SELECT id FROM observations ORDER BY id").all() as { id: string }[]).map((r) => r.id);
+      expect(ids).toEqual(["new_done", "old_pending"]);
+    });
+
     it("getUnprocessedObservations returns only unprocessed rows in ascending timestamp order and respects LIMIT", () => {
       const db = storage.getDatabase()!;
       const now = Date.now();

@@ -7,7 +7,8 @@
 import { randomUUID } from "node:crypto";
 import { sanitizePromptInjection } from "../../agents/orchestrator-text-utils.js";
 import { LearningStorage } from "../storage/learning-storage.js";
-import { ConfidenceScorer, getVerdictScore } from "../scoring/confidence-scorer.js";
+import { ConfidenceScorer, EVIDENCE_WEIGHTS, getVerdictScore } from "../scoring/confidence-scorer.js";
+import { getLoggerSafe } from "../../utils/logger.js";
 import { PatternMatcher } from "../matching/pattern-matcher.js";
 import { RuntimeArtifactManager } from "../runtime-artifact-manager.js";
 import type { ToolResultEvent, FeedbackReactionEvent, IEventBus, LearningEventMap } from "../../core/event-bus.js";
@@ -92,7 +93,7 @@ export class LearningPipeline {
     toolName: string; errorPattern?: string; timestamp: number;
   }> = [];
 
-  /** Tracks pending error resolutions: toolName → error observation data */
+  /** Tracks pending error resolutions: `${sessionId}:${toolName}` → error observation data */
   private pendingResolutions = new Map<string, {
     errorObservation: Observation;
     toolName: string;
@@ -149,7 +150,11 @@ export class LearningPipeline {
     this.patternMatcher = new PatternMatcher(storage);
     this.runtimeArtifacts = new RuntimeArtifactManager(storage);
     this.eventBus = eventBus ?? null;
-    this.feedbackHandler = new FeedbackHandler(storage);
+    // audited 2026-09-02: reactions must reach the stored confidence the
+    // lifecycle, ranking and intervention tier read — not only factor_* columns.
+    this.feedbackHandler = new FeedbackHandler(storage, {
+      onReaction: (instinct, positive) => this.applyReactionEvidence(instinct, positive),
+    });
 
     if (embeddingProvider) {
       this.embeddingQueue = new EmbeddingQueue(embeddingProvider, storage);
@@ -289,7 +294,10 @@ export class LearningPipeline {
       output: params.originalOutput,
       correction: params.correction,
       timestamp: Date.now() as TimestampMs,
-      processed: false,
+      // audited 2026-09-02: instinct creation runs inline right below, so the
+      // row is processed at write time. Left at false it was never marked, and
+      // the startup drain replayed it into a second, different instinct.
+      processed: true,
     };
 
     this.storage.recordObservation(observation);
@@ -328,19 +336,25 @@ export class LearningPipeline {
     // 2. Persist and process in-memory (skip getUnprocessedObservations read-back)
     this.storage.recordObservation(observation);
 
-    // Track error→resolution chains
+    // Track error→resolution chains.
+    // audited 2026-09-02: the map was keyed on tool name alone, so with several
+    // sessions sharing one pipeline, session A's failure was "resolved" by
+    // session B's unrelated success on the same tool — minting an error_fix
+    // instinct whose action was never observed to fix that error — and B's own
+    // failure evicted A's pending entry. Key on session + tool.
+    const resolutionKey = LearningPipeline.resolutionKey(event.sessionId, event.toolName);
     if (!event.success) {
       // Record this as a pending error
-      this.pendingResolutions.set(event.toolName, {
+      this.pendingResolutions.set(resolutionKey, {
         errorObservation: observation,
         toolName: event.toolName,
         errorOutput: event.output,
         timestamp: Date.now(),
       });
-    } else if (this.pendingResolutions.has(event.toolName)) {
-      // Same tool succeeded after a previous failure — auto-record resolution
-      const pending = this.pendingResolutions.get(event.toolName)!;
-      this.pendingResolutions.delete(event.toolName);
+    } else if (this.pendingResolutions.has(resolutionKey)) {
+      // Same tool in the same session succeeded after a previous failure — auto-record resolution
+      const pending = this.pendingResolutions.get(resolutionKey)!;
+      this.pendingResolutions.delete(resolutionKey);
 
       // Only link if the resolution happened within 5 minutes of the error
       const elapsed = Date.now() - pending.timestamp;
@@ -595,8 +609,15 @@ export class LearningPipeline {
     if (!this.isMeaningfulTrigger(params.triggerPattern)) return null;
     // Check for similar existing instincts (use similarity threshold, not confidence)
     const similar = await this.patternMatcher.findSimilarInstincts(params.triggerPattern);
-    // Check raw similarity (relevance), not confidence-weighted score
-    if (similar.some(m => m.relevance > CONFIDENCE_THRESHOLDS.SIMILAR)) return null;
+    // Check raw similarity (relevance), not confidence-weighted score.
+    // audited 2026-09-02: dead instincts (deprecated/evolved) are excluded from
+    // retrieval everywhere else but counted here, so a retired wrong fix
+    // permanently blocked learning the right fix for the same trigger.
+    if (similar.some(m =>
+      m.relevance > CONFIDENCE_THRESHOLDS.SIMILAR &&
+      m.instinct?.status !== "deprecated" &&
+      m.instinct?.status !== "evolved",
+    )) return null;
 
     const initialConfidence = params.confidence ?? this.calculateInitialConfidence(params);
     if (initialConfidence < this.config.minConfidenceForCreation) return null;
@@ -661,6 +682,36 @@ export class LearningPipeline {
     // LIVING VAULT (C): mirror high-confidence instincts as learned-heuristic notes.
     this.noteHighConfidenceInstinct(instinct);
     return instinct;
+  }
+
+  /**
+   * Push a user reaction (thumbs up/down) into the stored posterior and run
+   * the lifecycle state machine on the result. Stats are untouched: a
+   * reaction is not an application.
+   */
+  private applyReactionEvidence(instinct: Instinct, positive: boolean): void {
+    if (instinct.status === "permanent") return;
+    const updated = this.confidenceScorer.applyEvidence(
+      instinct,
+      positive ? EVIDENCE_WEIGHTS.reactionUp : EVIDENCE_WEIGHTS.reactionDown,
+    );
+    this.updateInstinctStatus(updated);
+  }
+
+  /**
+   * Push the outcome of a task an instinct merely informed (retrieved, not
+   * necessarily applied) into the stored posterior. Wired from
+   * InstinctRetriever.recordOutcome so the "P2 action→outcome feedback loop"
+   * changes the number retrieval ranks on. (audited 2026-09-02)
+   */
+  recordInstinctOutcomeEvidence(instinctId: string, success: boolean): void {
+    const instinct = this.storage.getInstinct(instinctId);
+    if (!instinct || instinct.status === "permanent") return;
+    const updated = this.confidenceScorer.applyEvidence(
+      instinct,
+      success ? EVIDENCE_WEIGHTS.outcomeSuccess : EVIDENCE_WEIGHTS.outcomeFailure,
+    );
+    this.updateInstinctStatus(updated);
   }
 
   updateInstinctStatus(instinct: Instinct): void {
@@ -966,22 +1017,68 @@ export class LearningPipeline {
       await this.extractInstinctFromTrajectory(trajectory);
     }
     this.storage.markTrajectoriesProcessed(unprocessed.map(t => t.id));
+
+    this.pruneObservations();
+  }
+
+  /**
+   * Retention sweep: delete processed observations older than
+   * config.observationRetentionDays. Unprocessed rows are kept regardless of
+   * age. Returns what was measured so callers never mistake a no-op for a
+   * sweep. (audited 2026-09-02: the table had no retention path at all.)
+   */
+  pruneObservations(): { deleted: number; olderThanMs: number; retentionDays: number } {
+    const retentionDays = this.config.observationRetentionDays;
+    const olderThanMs = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
+    const deleted = this.storage.pruneProcessedObservations(olderThanMs);
+    return { deleted, olderThanMs, retentionDays };
   }
 
   // ─── Max Instincts Enforcement ──────────────────────────────────────────────
 
-  async enforceMaxInstincts(): Promise<void> {
+  /**
+   * Evict lowest-confidence rows until the store is within maxInstincts.
+   * Order: deprecated → proposed → active. Permanent and evolved rows are never
+   * evicted, so the cap can be unenforceable; the returned counts and the
+   * warning say so instead of returning silently.
+   *
+   * audited 2026-09-02: there was no 'proposed' pass, yet every pipeline-created
+   * instinct is proposed at 0.5 and most never leave that status. In a
+   * proposed-dominated store the cap deleted the few reinforced ACTIVE rows
+   * first, freed nothing else, and returned without a word.
+   */
+  async enforceMaxInstincts(): Promise<{ evicted: number; remainingOverCap: number }> {
     const maxInstincts = this.config?.maxInstincts ?? 1000;
     const count = this.storage.countInstincts();
-    if (count <= maxInstincts) return;
+    if (count <= maxInstincts) return { evicted: 0, remainingOverCap: 0 };
     const overflow = count - maxInstincts;
-    // Delete deprecated first, then active if still over limit
-    const deprecatedBefore = this.storage.countInstincts();
-    this.storage.deleteLowestConfidenceInstincts("deprecated", overflow);
-    const deprecatedAfter = this.storage.countInstincts();
-    const deleted = deprecatedBefore - deprecatedAfter;
-    if (deleted >= overflow) return;
-    this.storage.deleteLowestConfidenceInstincts("active", overflow - deleted);
+
+    let remaining = overflow;
+    const evictedByStatus: Record<string, number> = {};
+    for (const status of ["deprecated", "proposed", "active"] as const) {
+      if (remaining <= 0) break;
+      const before = this.storage.countInstincts();
+      this.storage.deleteLowestConfidenceInstincts(status, remaining);
+      const deleted = before - this.storage.countInstincts();
+      if (deleted > 0) evictedByStatus[status] = deleted;
+      remaining -= deleted;
+    }
+
+    const evicted = overflow - remaining;
+    if (remaining > 0) {
+      try {
+        getLoggerSafe().warn("maxInstincts cap could not be enforced: only permanent/evolved rows remain over the cap", {
+          maxInstincts,
+          countBefore: count,
+          evicted,
+          evictedByStatus,
+          remainingOverCap: remaining,
+        });
+      } catch {
+        // Logger may not be available in test environments
+      }
+    }
+    return { evicted, remainingOverCap: remaining };
   }
 
   // ─── Private Helpers ─────────────────────────────────────────────────────────
@@ -1102,6 +1199,11 @@ export class LearningPipeline {
     return letters / s.length >= 0.5;
   }
 
+  /** A resolution may only be attributed to the session that produced the error. */
+  private static resolutionKey(sessionId: string, toolName: string): string {
+    return `${sessionId}:${toolName}`;
+  }
+
   /**
    * Automatically record a resolution when a tool succeeds after a prior failure.
    * Creates a correction observation and considers instinct creation from the pattern.
@@ -1122,7 +1224,10 @@ export class LearningPipeline {
       output: successObs.output,
       correction,
       timestamp: Date.now() as TimestampMs,
-      processed: false,
+      // audited 2026-09-02: the error->fix instinct is considered inline below;
+      // an unmarked row was replayed by the startup drain into a junk
+      // "Auto-resolved: ..." instinct keyed on the SUCCESS output.
+      processed: true,
     };
 
     this.storage.recordObservation(resolutionObs);

@@ -584,10 +584,10 @@ The learning system observes agent behavior and learns from errors through an ev
 - No timer-based batching -- patterns are detected and stored as they occur
 - The `LearningQueue` uses bounded FIFO with error isolation (learning failures never crash the agent)
 
-**Hybrid weighted confidence scoring:**
-- Confidence = weighted sum across 5 factors: successRate (0.35), pattern strength (0.25), recency (0.20), context match (0.15), verification (0.05)
-- Verdict scores (0.0-1.0) update alpha/beta evidence counters for confidence intervals
-- Alpha/beta parameters are maintained for uncertainty estimation but are not used for primary confidence computation
+**Bayesian confidence scoring:**
+- Confidence = Beta posterior mean alpha / (alpha + beta); this stored value is what lifecycle, ranking and intervention tiers read
+- Verdict scores (0.0-1.0) update alpha/beta as fractional evidence on every observed application
+- Thumbs up/down reactions and the outcomes of tasks an instinct informed also update alpha/beta (at fractional weights), so user feedback changes what gets retrieved
 
 **Instinct lifecycle:**
 - **Proposed** (new) -- below 0.7 confidence
