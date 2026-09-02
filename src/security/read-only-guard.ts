@@ -34,6 +34,13 @@ const WRITE_TOOLS: ReadonlySet<string> = new Set([
   "dotnet_add_package",
   "dotnet_remove_package",
   "dotnet_new",
+  // Audited 2026-09-02: dotnet_build/dotnet_test were listed as READ tools and
+  // promised by the read-only prompt as "read-only verification", while the
+  // tools themselves refuse under context.readOnly (they write bin/, obj/ and
+  // the NuGet cache). The promise and the refusal both stood; the refusal is
+  // the deliberate half, so the guard now blocks them before they are offered.
+  "dotnet_build",
+  "dotnet_test",
   // NOTE: create_skill writes to disk but uses its own read-only check, so it
   // can give a better error message than this list would.
 ]);
@@ -51,8 +58,6 @@ const READ_TOOLS: ReadonlySet<string> = new Set([
   "git_log",
   "git_diff",
   "git_show",
-  "dotnet_build",
-  "dotnet_test",
   "dotnet_list_packages",
   "analyze_project",
   "analyze_code_quality",
@@ -73,6 +78,8 @@ const SUGGESTIONS: Record<string, string> = {
   git_branch: "Use 'git_status' to see current branch information.",
   git_stash: "Stashing is not available in read-only mode.",
   shell_exec: "Shell commands are disabled in read-only mode. Use built-in read tools instead.",
+  dotnet_build: "Builds write bin/ and obj/ and are disabled in read-only mode. Use 'analyze_project' or 'code_search' instead.",
+  dotnet_test: "Test runs write bin/ and obj/ and are disabled in read-only mode. Use 'code_search' to review the tests instead.",
   strada_create_module:
     "Code generation is disabled in read-only mode. Use analysis tools to explore existing modules.",
   strada_create_component:
@@ -145,11 +152,11 @@ You are currently operating in **read-only mode**. The following operations are 
 - Executing shell commands
 - Making git commits or pushing changes
 - Generating new code (modules, components, systems)
+- Running builds and tests (they write bin/ and obj/)
 
 ### Available Operations
 - Reading files and searching code
 - Analyzing project structure
-- Running builds and tests (read-only verification)
 - Searching memory and documentation
 
 ### How to Help in Read-Only Mode

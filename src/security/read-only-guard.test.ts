@@ -29,7 +29,7 @@ describe("checkReadOnlyBlock", () => {
   });
 
   it("should allow read tools in read-only mode", () => {
-    const readTools = ["file_read", "code_search", "git_status", "dotnet_build"];
+    const readTools = ["file_read", "code_search", "git_status", "dotnet_list_packages"];
 
     for (const tool of readTools) {
       const result = checkReadOnlyBlock(tool, true);
@@ -364,8 +364,12 @@ describe("READ_TOOLS set", () => {
     expect(READ_TOOLS.has("code_search")).toBe(true);
     expect(READ_TOOLS.has("git_status")).toBe(true);
     expect(READ_TOOLS.has("git_log")).toBe(true);
-    expect(READ_TOOLS.has("dotnet_build")).toBe(true);
-    expect(READ_TOOLS.has("dotnet_test")).toBe(true);
+    // Audited 2026-09-02: builds and test runs write bin/ and obj/ and the
+    // tools refuse in read-only mode, so they are not read tools.
+    expect(READ_TOOLS.has("dotnet_build")).toBe(false);
+    expect(READ_TOOLS.has("dotnet_test")).toBe(false);
+    expect(WRITE_TOOLS.has("dotnet_build")).toBe(true);
+    expect(WRITE_TOOLS.has("dotnet_test")).toBe(true);
   });
 
   it("should not contain write tools", () => {
