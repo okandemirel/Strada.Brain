@@ -1,9 +1,31 @@
-import { unlink, rename, stat, readdir, rm } from "node:fs/promises";
-import { resolve } from "node:path";
+import { unlink, rename, stat, readdir, rm, realpath } from "node:fs/promises";
+import { isAbsolute, relative, resolve } from "node:path";
 import { validatePath } from "../../security/path-guard.js";
 import { checkSafeToDelete } from "../../intelligence/unity-guid-resolver.js";
 import { metaPathFor, shouldGenerateMeta } from "./unity/meta-file-utils.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.js";
+
+/**
+ * The project-relative form of a path validatePath already accepted.
+ *
+ * validatePath returns the realpath'd full path for an existing file, while the
+ * project root may be given un-realpath'd (macOS /var vs /private/var), so both
+ * spellings of the root are tried. Falls back to the full path only if neither
+ * contains it, which validatePath has already ruled out.
+ */
+async function toProjectRelative(projectPath: string, fullPath: string): Promise<string> {
+  const roots = [resolve(projectPath)];
+  try {
+    roots.push(await realpath(projectPath));
+  } catch {
+    /* an unreadable root already failed validatePath */
+  }
+  for (const root of roots) {
+    const rel = relative(root, fullPath);
+    if (rel && !rel.startsWith("..") && !isAbsolute(rel)) return rel;
+  }
+  return fullPath;
+}
 
 // ─── file_delete ──────────────────────────────────────────────────────────────
 
@@ -43,9 +65,20 @@ export class FileDeleteTool implements ITool {
       return { content: `Error: ${pathCheck.error}`, isError: true };
     }
 
-    // GUID safety check: warn if file is referenced by other assets
+    // GUID safety check: warn if file is referenced by other assets.
+    // Audited 2026-09-02: the check was handed the RAW input. validatePath
+    // accepts an in-project absolute path, but checkSafeToDelete joins its
+    // argument onto the project root, so an absolute path became
+    // <project>/<project>/X.meta, found no GUID, and answered "safe" — a
+    // referenced prefab was deleted with a bare "Deleted:" that read exactly
+    // like a passed check (a "./" prefix likewise made the file's own .meta
+    // count as an external reference). The check now gets the same normalised
+    // project-relative path the delete uses, and a check that could not run
+    // says so in the result instead of vanishing.
+    let checkNote = "";
     try {
-      const safetyCheck = await checkSafeToDelete(context.projectPath, relPath);
+      const checkRel = await toProjectRelative(context.projectPath, pathCheck.fullPath);
+      const safetyCheck = await checkSafeToDelete(context.projectPath, checkRel);
       if (!safetyCheck.safe && safetyCheck.warning) {
         return {
           content: safetyCheck.warning,
@@ -53,8 +86,11 @@ export class FileDeleteTool implements ITool {
           metadata: { guid: safetyCheck.guid, referenceCount: safetyCheck.references.length },
         };
       }
-    } catch {
-      // Non-fatal: proceed with delete if safety check fails
+    } catch (error) {
+      // Non-fatal: the delete proceeds, but the result must not read as if
+      // the reference check passed.
+      const reason = error instanceof Error ? error.message : String(error);
+      checkNote = ` (reference check did not run: ${reason})`;
     }
 
     try {
@@ -70,7 +106,7 @@ export class FileDeleteTool implements ITool {
       }
 
       return {
-        content: `Deleted: ${relPath}`,
+        content: `Deleted: ${relPath}${checkNote}`,
         metadata: { path: relPath },
       };
     } catch (error) {

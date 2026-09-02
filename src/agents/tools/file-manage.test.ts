@@ -1,8 +1,9 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, beforeAll } from "vitest";
 import { mkdtemp, rm, writeFile, mkdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { FileDeleteTool, FileRenameTool, FileDeleteDirectoryTool } from "./file-manage.js";
+import { createLogger } from "../../utils/logger.js";
 import type { ToolContext } from "./tool.interface.js";
 
 let tempDir: string;
@@ -61,6 +62,64 @@ describe("FileDeleteTool", () => {
     const result = await tool.execute({ path: "../../etc/passwd" }, ctx);
     expect(result.isError).toBe(true);
     expect(result.content).toContain("outside");
+  });
+});
+
+/**
+ * The GUID reference check is the only hard block on an irreversible delete.
+ * Audited 2026-09-02: validatePath accepts an in-project ABSOLUTE path, but the
+ * check was handed the raw input, built <project>/<project>/X.prefab.meta,
+ * found nothing, and answered "safe" — so a prefab every scene references was
+ * deleted with a bare "Deleted:" that read exactly like a passed check.
+ */
+describe("FileDeleteTool GUID reference check", () => {
+  const tool = new FileDeleteTool();
+  const guid = "0123456789abcdef0123456789abcdef";
+
+  beforeAll(() => {
+    // checkSafeToDelete logs via getLogger(); initialize once (idempotent).
+    try {
+      createLogger("error", join(tmpdir(), "strada-file-manage-test.log"));
+    } catch {
+      /* already initialized by another suite */
+    }
+  });
+
+  async function referencedPrefab(): Promise<string> {
+    await mkdir(join(tempDir, "Assets", "Prefabs"), { recursive: true });
+    await mkdir(join(tempDir, "Assets", "Scenes"), { recursive: true });
+    const prefab = join(tempDir, "Assets", "Prefabs", "Board.prefab");
+    await writeFile(prefab, "%YAML 1.1\n--- !u!1 &1\nGameObject:\n  m_Name: Board\n");
+    await writeFile(`${prefab}.meta`, `fileFormatVersion: 2\nguid: ${guid}\n`);
+    await writeFile(
+      join(tempDir, "Assets", "Scenes", "Main.unity"),
+      `%YAML 1.1\nPrefabInstance:\n  m_SourcePrefab: {fileID: 100100000, guid: ${guid}, type: 3}\n`,
+    );
+    return prefab;
+  }
+
+  it("blocks a referenced prefab named by relative path (control)", async () => {
+    const prefab = await referencedPrefab();
+    const result = await tool.execute({ path: "Assets/Prefabs/Board.prefab" }, ctx);
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain("referenced by 1 file(s)");
+    await expect(stat(prefab)).resolves.toBeDefined();
+  });
+
+  it("blocks the same referenced prefab named by absolute path", async () => {
+    const prefab = await referencedPrefab();
+    const result = await tool.execute({ path: prefab }, ctx);
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain("referenced by 1 file(s)");
+    await expect(stat(prefab)).resolves.toBeDefined();
+  });
+
+  it("blocks the same referenced prefab named with a ./ prefix", async () => {
+    const prefab = await referencedPrefab();
+    const result = await tool.execute({ path: "./Assets/Prefabs/Board.prefab" }, ctx);
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain("referenced by 1 file(s)");
+    await expect(stat(prefab)).resolves.toBeDefined();
   });
 });
 
