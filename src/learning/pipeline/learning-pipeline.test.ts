@@ -1382,6 +1382,82 @@ describe("LearningPipeline", () => {
 
       tinyPipeline.stop();
     });
+
+    // audited 2026-09-02: enforceMaxInstincts had no 'proposed' pass. Every
+    // pipeline-created instinct is proposed at 0.5, so in a real store the cap
+    // freed nothing — or worse, deleted the reinforced active rows first — and
+    // returned silently.
+    describe("proposed rows are evictable and the outcome is reported (audited 2026-09-02)", () => {
+      function proposed(id: string, confidence: number, status: Instinct["status"] = "proposed"): Instinct {
+        return {
+          id: id as any,
+          name: id,
+          type: "error_fix",
+          status,
+          confidence,
+          triggerPattern: `pattern ${id}`,
+          action: `action ${id}`,
+          contextConditions: [],
+          stats: { timesSuggested: 0, timesApplied: 0, timesFailed: 0, successRate: 0, averageExecutionMs: 0 },
+          createdAt: Date.now() as TimestampMs,
+          updatedAt: Date.now() as TimestampMs,
+          sourceTrajectoryIds: [],
+          tags: [],
+        };
+      }
+      function cappedPipeline(maxInstincts: number) {
+        return new LearningPipeline(storage, {
+          enabled: true, maxInstincts, detectionIntervalMs: 1000, evolutionIntervalMs: 5000,
+          minConfidenceForCreation: 0.5, batchSize: 5,
+        });
+      }
+
+      it("evicts the lowest-confidence proposed rows when the store is all proposed", async () => {
+        const p = cappedPipeline(2);
+        for (const [id, c] of [["p1", 0.5], ["p2", 0.45], ["p3", 0.6], ["p4", 0.55], ["p5", 0.5]] as const) {
+          storage.createInstinct(proposed(id, c));
+        }
+        expect(storage.countInstincts()).toBe(5);
+
+        const result = await p.enforceMaxInstincts();
+
+        expect(result).toEqual({ evicted: 3, remainingOverCap: 0 });
+        expect(storage.countInstincts()).toBe(2);
+        expect(storage.getInstinct("p3")).not.toBeNull();
+        expect(storage.getInstinct("p4")).not.toBeNull();
+        expect(storage.getInstinct("p2")).toBeNull();
+        p.stop();
+      });
+
+      it("evicts junk proposed rows before a reinforced active row", async () => {
+        const p = cappedPipeline(2);
+        storage.createInstinct(proposed("user_taught", 0.95, "active"));
+        storage.createInstinct(proposed("junk_a", 0.5));
+        storage.createInstinct(proposed("junk_b", 0.5));
+        storage.createInstinct(proposed("junk_c", 0.5));
+
+        const result = await p.enforceMaxInstincts();
+
+        expect(result).toEqual({ evicted: 2, remainingOverCap: 0 });
+        expect(storage.getInstinct("user_taught")).not.toBeNull();
+        expect(storage.countInstincts()).toBe(2);
+        p.stop();
+      });
+
+      it("names the shortfall when only frozen rows remain over the cap", async () => {
+        const p = cappedPipeline(1);
+        storage.createInstinct(proposed("perm_a", 0.95, "permanent"));
+        storage.createInstinct(proposed("perm_b", 0.9, "permanent"));
+        storage.createInstinct(proposed("junk", 0.5));
+
+        const result = await p.enforceMaxInstincts();
+
+        expect(result).toEqual({ evicted: 1, remainingOverCap: 1 });
+        expect(storage.getInstinct("junk")).toBeNull();
+        expect(storage.countInstincts()).toBe(2);
+        p.stop();
+      });
+    });
   });
 
   describe("runPeriodicExtraction", () => {

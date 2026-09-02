@@ -8,6 +8,7 @@ import { randomUUID } from "node:crypto";
 import { sanitizePromptInjection } from "../../agents/orchestrator-text-utils.js";
 import { LearningStorage } from "../storage/learning-storage.js";
 import { ConfidenceScorer, EVIDENCE_WEIGHTS, getVerdictScore } from "../scoring/confidence-scorer.js";
+import { getLoggerSafe } from "../../utils/logger.js";
 import { PatternMatcher } from "../matching/pattern-matcher.js";
 import { RuntimeArtifactManager } from "../runtime-artifact-manager.js";
 import type { ToolResultEvent, FeedbackReactionEvent, IEventBus, LearningEventMap } from "../../core/event-bus.js";
@@ -986,18 +987,49 @@ export class LearningPipeline {
 
   // ─── Max Instincts Enforcement ──────────────────────────────────────────────
 
-  async enforceMaxInstincts(): Promise<void> {
+  /**
+   * Evict lowest-confidence rows until the store is within maxInstincts.
+   * Order: deprecated → proposed → active. Permanent and evolved rows are never
+   * evicted, so the cap can be unenforceable; the returned counts and the
+   * warning say so instead of returning silently.
+   *
+   * audited 2026-09-02: there was no 'proposed' pass, yet every pipeline-created
+   * instinct is proposed at 0.5 and most never leave that status. In a
+   * proposed-dominated store the cap deleted the few reinforced ACTIVE rows
+   * first, freed nothing else, and returned without a word.
+   */
+  async enforceMaxInstincts(): Promise<{ evicted: number; remainingOverCap: number }> {
     const maxInstincts = this.config?.maxInstincts ?? 1000;
     const count = this.storage.countInstincts();
-    if (count <= maxInstincts) return;
+    if (count <= maxInstincts) return { evicted: 0, remainingOverCap: 0 };
     const overflow = count - maxInstincts;
-    // Delete deprecated first, then active if still over limit
-    const deprecatedBefore = this.storage.countInstincts();
-    this.storage.deleteLowestConfidenceInstincts("deprecated", overflow);
-    const deprecatedAfter = this.storage.countInstincts();
-    const deleted = deprecatedBefore - deprecatedAfter;
-    if (deleted >= overflow) return;
-    this.storage.deleteLowestConfidenceInstincts("active", overflow - deleted);
+
+    let remaining = overflow;
+    const evictedByStatus: Record<string, number> = {};
+    for (const status of ["deprecated", "proposed", "active"] as const) {
+      if (remaining <= 0) break;
+      const before = this.storage.countInstincts();
+      this.storage.deleteLowestConfidenceInstincts(status, remaining);
+      const deleted = before - this.storage.countInstincts();
+      if (deleted > 0) evictedByStatus[status] = deleted;
+      remaining -= deleted;
+    }
+
+    const evicted = overflow - remaining;
+    if (remaining > 0) {
+      try {
+        getLoggerSafe().warn("maxInstincts cap could not be enforced: only permanent/evolved rows remain over the cap", {
+          maxInstincts,
+          countBefore: count,
+          evicted,
+          evictedByStatus,
+          remainingOverCap: remaining,
+        });
+      } catch {
+        // Logger may not be available in test environments
+      }
+    }
+    return { evicted, remainingOverCap: remaining };
   }
 
   // ─── Private Helpers ─────────────────────────────────────────────────────────
