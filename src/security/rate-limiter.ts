@@ -181,16 +181,22 @@ export class RateLimiter {
 
   /**
    * Record token usage from an API call.
+   *
+   * @param model Concrete model id when the caller knows it. Without it a
+   *   free-tier model ("-free"/":free") is priced at its provider's table rate,
+   *   and the phantom dollars are what the daily/monthly budget wall measures —
+   *   the wall fired on spend nobody was billed for (audited 2026-09-02).
    */
   recordTokenUsage(
     inputTokens: number,
     outputTokens: number,
-    provider: string
+    provider: string,
+    model?: string
   ): void {
     const now = Date.now();
     this.rotatePeriods(now);
 
-    const cost = estimateCost(inputTokens, outputTokens, provider);
+    const cost = estimateCost(inputTokens, outputTokens, provider, model);
 
     // Maintain running aggregates instead of unbounded per-call record arrays.
     this.dailyTokens += inputTokens + outputTokens;
@@ -202,6 +208,8 @@ export class RateLimiter {
       inputTokens,
       outputTokens,
       provider,
+      // Named so a $0 line is readable as "free model" rather than "lost cost".
+      model: model ?? null,
       estimatedCostUsd: cost.toFixed(4),
     });
   }

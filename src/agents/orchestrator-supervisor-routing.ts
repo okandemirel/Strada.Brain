@@ -653,7 +653,10 @@ export function recordProviderUsage(
   const inputTokens = usage?.inputTokens ?? 0;
   const outputTokens = usage?.outputTokens ?? 0;
   ctx.metrics?.recordTokenUsage(inputTokens, outputTokens, providerName);
-  ctx.rateLimiter?.recordTokenUsage(inputTokens, outputTokens, providerName);
+  // audited 2026-09-02: modelId was echoed on the usage event but withheld from
+  // the rate limiter, which is what prices the run. A "-free" model was billed
+  // at the provider's table rate and the budget wall measured money nobody paid.
+  ctx.rateLimiter?.recordTokenUsage(inputTokens, outputTokens, providerName, modelId);
   onUsage?.({
     provider: providerName,
     model: modelId,

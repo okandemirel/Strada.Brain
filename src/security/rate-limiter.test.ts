@@ -217,3 +217,36 @@ describe("estimateCost", () => {
     expect(estimateCost(0, 0, "claude")).toBe(0);
   });
 });
+
+describe("free-tier model pricing (audited 2026-09-02)", () => {
+  it("prices a '-free' model at $0 instead of its provider's table rate", () => {
+    // The live daemon billed hundreds of dollars against models literally named
+    // "-free" because recordTokenUsage never passed the model id to estimateCost.
+    const limiter = new RateLimiter();
+    limiter.recordTokenUsage(1_000_000, 1_000_000, "opencode", "grok-code-free");
+
+    const snap = limiter.getSnapshot();
+    expect(snap.costToday).toBe(0);
+    expect(snap.costThisMonth).toBe(0);
+    // The tokens are still counted — only the price is zero.
+    expect(snap.tokensToday).toBe(2_000_000);
+  });
+
+  it("still prices a PAID model on the same provider at the table rate", () => {
+    const limiter = new RateLimiter();
+    limiter.recordTokenUsage(1_000_000, 1_000_000, "opencode", "qwen3.6-plus");
+    expect(limiter.getSnapshot().costToday).toBeCloseTo(3.6, 5);
+  });
+
+  it("does not spend the daily budget wall on a free model", () => {
+    const limiter = new RateLimiter({ dailyBudgetUsd: 0.001 });
+    limiter.recordTokenUsage(1_000_000, 1_000_000, "openrouter", "z-ai/glm-4.7:free");
+    expect(limiter.checkMessageRate("user1").allowed).toBe(true);
+  });
+
+  it("keeps the provider table rate when no model id is known", () => {
+    const limiter = new RateLimiter();
+    limiter.recordTokenUsage(1_000_000, 0, "claude");
+    expect(limiter.getSnapshot().costToday).toBeCloseTo(3.0, 5);
+  });
+});
