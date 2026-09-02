@@ -113,21 +113,26 @@ export class DelegationLog {
         `INSERT INTO delegation_log (parent_agent_id, sub_agent_id, type, model, tier, depth, status, started_at)
          VALUES (?, ?, ?, ?, ?, ?, 'running', ?)`,
       ),
+      // Every terminal write is guarded on status = 'running'. Without the
+      // guard cancelDelegation's 'cancelled' was overwritten by the aborted
+      // run's own timeout branch, so a shutdown-cancelled delegation was
+      // persisted as a provider timeout (audited 2026-09-02).
       complete: this.db.prepare(
         `UPDATE delegation_log
          SET status = 'completed', duration_ms = ?, cost_usd = ?, result_summary = ?, escalated_from = ?, completed_at = ?
-         WHERE id = ?`,
+         WHERE id = ? AND status = 'running'`,
       ),
       fail: this.db.prepare(
         `UPDATE delegation_log
          SET status = 'failed', result_summary = ?, escalated_from = ?, completed_at = ?
-         WHERE id = ?`,
+         WHERE id = ? AND status = 'running'`,
       ),
       timeout: this.db.prepare(
-        `UPDATE delegation_log SET status = 'timeout', duration_ms = ?, cost_usd = ?, completed_at = ? WHERE id = ?`,
+        `UPDATE delegation_log SET status = 'timeout', duration_ms = ?, cost_usd = ?, completed_at = ?
+         WHERE id = ? AND status = 'running'`,
       ),
       cancel: this.db.prepare(
-        `UPDATE delegation_log SET status = 'cancelled', completed_at = ? WHERE id = ?`,
+        `UPDATE delegation_log SET status = 'cancelled', completed_at = ? WHERE id = ? AND status = 'running'`,
       ),
       history: this.db.prepare(
         `SELECT * FROM delegation_log ORDER BY started_at DESC LIMIT ?`,

@@ -1134,6 +1134,48 @@ describe("DelegationManager", () => {
     }, 5000);
   });
 
+  describe("cancellation is persisted as cancellation, not as a timeout", () => {
+    // Measured 2026-09-02: cancelDelegation wrote status 'cancelled', then the
+    // aborted run unwound into the catch where signal.aborted was true, so it
+    // took the TIMEOUT branch: the row became 'timeout' and delegation:failed
+    // said "Delegation timed out". Every daemon shutdown with an in-flight
+    // sub-agent was recorded as a provider timeout.
+    it("leaves the log row 'cancelled' and names the cancellation in the event", async () => {
+      let rejectExec: (e: Error) => void = () => {};
+      orchestratorHandleMessage = vi.fn().mockImplementation(
+        () => new Promise<void>((_resolve, reject) => {
+          rejectExec = reject;
+        }),
+      );
+
+      const delegatePromise = manager.delegate({
+        type: "code_review",
+        task: "Cancellable task",
+        parentAgentId: PARENT_AGENT_ID,
+        depth: 0,
+        mode: "sync",
+        toolContext: TEST_TOOL_CONTEXT,
+      }).catch(() => {});
+      await new Promise<void>((resolve) => setTimeout(resolve, 20));
+
+      const [active] = manager.getActiveDelegations(PARENT_AGENT_ID);
+      expect(active).toBeDefined();
+      manager.cancelDelegation(active!.subAgentId);
+      rejectExec(new Error("aborted"));
+      await delegatePromise;
+
+      const [row] = delegationLog.getHistory(1);
+      expect(row!.status).toBe("cancelled");
+
+      const emit = vi.mocked(opts.eventBus.emit);
+      const failed = emit.mock.calls.filter(([name]) => name === "delegation:failed");
+      expect(failed).toHaveLength(1);
+      const payload = failed[0]![1] as { reason: string };
+      expect(payload.reason).toMatch(/cancel/i);
+      expect(payload.reason).not.toMatch(/timed out/i);
+    });
+  });
+
   describe("getActiveDelegations", () => {
     it("returns currently running delegations for a parent", async () => {
       expect(manager.getActiveDelegations(PARENT_AGENT_ID)).toHaveLength(0);

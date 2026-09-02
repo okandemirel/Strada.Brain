@@ -119,6 +119,13 @@ interface ActiveDelegation {
   readonly parentAgentId: string;
   readonly type: string;
   readonly startedAt: number;
+  /**
+   * Set by cancelDelegation BEFORE the abort fires. The catch in
+   * executeSingleDelegation only sees `signal.aborted`, which is equally true
+   * for a timeout, so without this flag a cancellation was accounted, logged
+   * and emitted as "Delegation timed out" (audited 2026-09-02).
+   */
+  cancelled: boolean;
 }
 
 interface ResolvedDelegationProviderConfig {
@@ -236,6 +243,7 @@ export class DelegationManager {
     const delegation = this.activeDelegations.get(subAgentId);
     if (!delegation) return;
 
+    delegation.cancelled = true;
     delegation.abortController.abort();
     this.opts.delegationLog.cancel(delegation.logId);
     // Remove the active entry now; the slot is released when the aborted
@@ -442,13 +450,15 @@ export class DelegationManager {
     });
 
     // Track active delegation (concurrency already reserved in prepareRequest)
-    this.activeDelegations.set(subAgentId, {
+    const active: ActiveDelegation = {
       abortController,
       logId,
       parentAgentId: request.parentAgentId,
       type: request.type,
       startedAt: startTime,
-    });
+      cancelled: false,
+    };
+    this.activeDelegations.set(subAgentId, active);
 
     eventBus.emit("delegation:started", {
       parentAgentId: request.parentAgentId,
@@ -494,7 +504,7 @@ export class DelegationManager {
     };
     /** The cost to report: measured when any usage arrived, else the tier
      *  estimate — recorded and logged as an estimate, never silently. */
-    const settleCost = (durationMs: number, outcome: "completed" | "timeout"): number => {
+    const settleCost = (durationMs: number, outcome: "completed" | "timeout" | "cancelled"): number => {
       if (usageEvents > 0) return measuredCostUsd;
       const estimatedCostUsd = this.estimateDelegationCost(tier, durationMs);
       budgetTracker.recordCost(parentAgentId, estimatedCostUsd, {
@@ -665,7 +675,22 @@ export class DelegationManager {
         },
       };
     } catch (error) {
-      if (abortController.signal.aborted) {
+      if (active.cancelled) {
+        // Cancelled (operator/shutdown) — NOT a timeout. The sub-agent still
+        // burned compute until the abort, so it is billed, but the log row
+        // keeps the 'cancelled' status cancelDelegation wrote and the event
+        // names the cancellation. Before this branch existed the aborted
+        // signal routed here as a timeout (audited 2026-09-02).
+        const cancelledMs = Date.now() - startTime;
+        settleCost(cancelledMs, "cancelled");
+        eventBus.emit("delegation:failed", {
+          parentAgentId: request.parentAgentId,
+          subAgentId,
+          type: request.type,
+          reason: "Delegation cancelled",
+          timestamp: Date.now(),
+        });
+      } else if (abortController.signal.aborted) {
         // Timed out — the race rejected via waitForAbort (or a same-tick resolve re-threw).
         // A timed-out delegation still consumed compute: bill it against the parent and
         // persist a TERMINAL 'timeout' status. Previously this lived only in the
