@@ -310,6 +310,24 @@ export class GoalDecomposer {
         if (parentNode.depth + 1 > this.maxDepth) continue;
 
         const remainingSlots = maxTotalNodes - allNodes.size;
+
+        // audited 2026-09-02: with one free slot this still paid for a depth-2
+        // call it could never spend. The sub-prompt asked for "max 1 sub-goals"
+        // and only two answers were possible: two or more children, which the
+        // all-or-nothing cap below discards outright, or a single child that
+        // restates its parent — no decomposition either way. Decide before the
+        // call, not after, and say which parent was left whole and why.
+        if (remainingSlots < 2) {
+          const { getLoggerSafe } = await import("../utils/logger.js");
+          getLoggerSafe().warn("Goal decomposition: sub-goal expansion not attempted — fewer than 2 free slots", {
+            parentTask: flagged.task,
+            remainingSlots,
+            nodeCount: allNodes.size,
+            maxTotalNodes,
+          });
+          continue;
+        }
+
         const subPrompt = buildProactivePrompt({
           ...this.decompositionContext,
           providerCount: this.decompositionContext?.providerCount ?? 1,

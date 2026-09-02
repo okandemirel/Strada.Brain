@@ -95,10 +95,14 @@ describe("depth-2 expansion at the node cap", () => {
     expect(parent?.status).toBe("pending");
   });
 
+  // Cap 9 leaves TWO free slots, so the depth-2 call is worth making and its
+  // result is a real measurement: three children were asked for and returned,
+  // two would have fitted. (At one free slot the call is not made at all — see
+  // the suite below.)
   it("warns, naming the parent, how many children were wanted and how many slots remained", async () => {
     const provider = createMockProvider([DEPTH1_SIX_ONE_FLAGGED, SUB_THREE_WITH_FORWARD_DEP]);
     const decomposer = new GoalDecomposer(provider, 3);
-    decomposer.setDecompositionContext({ providerCount: 1, maxTotalNodes: 8 });
+    decomposer.setDecompositionContext({ providerCount: 1, maxTotalNodes: 9 });
 
     await decomposer.decomposeProactive("s", "Build the whole service with infrastructure, models, controllers, views, tests and docs");
 
@@ -107,8 +111,8 @@ describe("depth-2 expansion at the node cap", () => {
     const meta = capWarn![1] as Record<string, unknown>;
     expect(meta.parentTask).toBe("Setup infrastructure");
     expect(meta.wanted).toBe(3);
-    expect(meta.remainingSlots).toBe(1);
-    expect(meta.maxTotalNodes).toBe(8);
+    expect(meta.remainingSlots).toBe(2);
+    expect(meta.maxTotalNodes).toBe(9);
   });
 
   it("still expands fully when the children fit under the cap", async () => {
@@ -150,5 +154,76 @@ describe("depth-2 expansion at the node cap", () => {
     const meta = capWarn![1] as Record<string, unknown>;
     expect(meta.unexpandedTasks).toEqual(["Part B"]);
     expect(meta.maxTotalNodes).toBe(5);
+  });
+});
+
+/**
+ * audited 2026-09-02: one free slot bought an LLM call that could not buy a
+ * decomposition. With remainingSlots === 1 the sub-prompt literally asked for
+ * "max 1 sub-goals" — a request whose only two outcomes are a discarded answer
+ * (two or more children never fit) or a single child that restates its parent
+ * verbatim. Either way the tokens were spent for nothing, once per flagged
+ * sub-goal, on the live campaign path. The call is now not made, and the skip
+ * says so instead of passing silently.
+ */
+describe("depth-2 expansion with fewer than two free slots", () => {
+  it("does not issue the depth-2 LLM call when only one slot remains", async () => {
+    const provider = createMockProvider([DEPTH1_SIX_ONE_FLAGGED, SUB_THREE_WITH_FORWARD_DEP]);
+    const decomposer = new GoalDecomposer(provider, 3);
+    // root + 6 depth-1 nodes = 7 of 8 → exactly one free slot.
+    decomposer.setDecompositionContext({ providerCount: 1, maxTotalNodes: 8 });
+
+    const tree = await decomposer.decomposeProactive("s", "Build the whole service with infrastructure, models, controllers, views, tests and docs");
+
+    // Exactly one provider call: the depth-1 decomposition. No depth-2 call.
+    expect(provider.chat).toHaveBeenCalledTimes(1);
+    expect([...tree.nodes.values()].filter((n) => n.depth === 2)).toHaveLength(0);
+    expect(tree.nodes.size).toBe(7);
+  });
+
+  it("warns with the slots it actually counted and claims no answer it never asked for", async () => {
+    const provider = createMockProvider([DEPTH1_SIX_ONE_FLAGGED, SUB_THREE_WITH_FORWARD_DEP]);
+    const decomposer = new GoalDecomposer(provider, 3);
+    decomposer.setDecompositionContext({ providerCount: 1, maxTotalNodes: 8 });
+
+    await decomposer.decomposeProactive("s", "Build the whole service with infrastructure, models, controllers, views, tests and docs");
+
+    const skipWarn = warn.mock.calls.find(([msg]) => String(msg).includes("not attempted"));
+    expect(skipWarn).toBeDefined();
+    const meta = skipWarn![1] as Record<string, unknown>;
+    expect(meta.parentTask).toBe("Setup infrastructure");
+    expect(meta.remainingSlots).toBe(1);
+    expect(meta.maxTotalNodes).toBe(8);
+    // Nothing was asked, so nothing may be reported about what came back.
+    expect(meta.wanted).toBeUndefined();
+  });
+
+  it("still issues the depth-2 call as soon as two slots remain", async () => {
+    const provider = createMockProvider([DEPTH1_SIX_ONE_FLAGGED, SUB_THREE_WITH_FORWARD_DEP]);
+    const decomposer = new GoalDecomposer(provider, 3);
+    // root + 6 = 7 of 9 → two free slots: a real (if tight) decomposition.
+    decomposer.setDecompositionContext({ providerCount: 1, maxTotalNodes: 9 });
+
+    await decomposer.decomposeProactive("s", "Build the whole service with infrastructure, models, controllers, views, tests and docs");
+
+    expect(provider.chat).toHaveBeenCalledTimes(2);
+    expect(warn.mock.calls.find(([msg]) => String(msg).includes("not attempted"))).toBeUndefined();
+  });
+
+  it("leaves a two-slot expansion that fits fully intact", async () => {
+    const twoChildren = JSON.stringify({
+      nodes: [
+        { id: "c1", task: "Provision the host", dependsOn: [] },
+        { id: "c2", task: "Install the runtime", dependsOn: ["c1"] },
+      ],
+    });
+    const provider = createMockProvider([DEPTH1_SIX_ONE_FLAGGED, twoChildren]);
+    const decomposer = new GoalDecomposer(provider, 3);
+    decomposer.setDecompositionContext({ providerCount: 1, maxTotalNodes: 9 });
+
+    const tree = await decomposer.decomposeProactive("s", "Build the whole service with infrastructure, models, controllers, views, tests and docs");
+
+    expect([...tree.nodes.values()].filter((n) => n.depth === 2)).toHaveLength(2);
+    expect(tree.nodes.size).toBe(9);
   });
 });
