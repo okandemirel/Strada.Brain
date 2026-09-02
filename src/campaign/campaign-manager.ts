@@ -1496,10 +1496,24 @@ export class CampaignManager {
       `GDD: \`${campaign.gddPath ?? "n/a"}\``,
       ``,
     ];
-    for (const m of campaign.milestones) {
+    for (const [i, m] of campaign.milestones.entries()) {
       const marks: string[] = [];
       if (m.commitNote) marks.push(m.commitNote.replace(/^\s*/, ""));
       if (m.testVerdict) marks.push(`tests: ${m.testVerdict.slice(0, 80)}`);
+      // The delivery gate is one-shot by design; a green reached by spending
+      // it, or a final sprint with no observed test run at all (a revived
+      // gate, a remediation round), must not read like a verified one.
+      // Audited 2026-09-02: this flag was written and never rendered — the
+      // waived sprint showed as a clean ✅ with no mark and no caveat.
+      const isFinal = i === campaign.milestones.length - 1;
+      if (m.deliveryVerificationBounced) marks.push("delivery-verification bounce spent");
+      if (!m.testVerdict && (isFinal || m.deliveryVerificationBounced)) {
+        marks.push("NO observed test run");
+        caveats.push(
+          `${m.title}: went green with NO observed test run — the full suite was never seen to pass` +
+            (m.deliveryVerificationBounced ? " (its one delivery-verification bounce was spent)" : ""),
+        );
+      }
       if (m.visualEvidenceBounced) { marks.push("visual-evidence bounce spent"); caveats.push(`${m.title}: needed a second attempt to produce a captured frame`); }
       if (m.noWorkBounced) { marks.push("no-work bounce spent"); caveats.push(`${m.title}: an attempt left the repository untouched`); }
       if ((m.timeBoxEscalations ?? 0) > 0) { marks.push(`scope narrowed ×${m.timeBoxEscalations}`); caveats.push(`${m.title}: ran past its time box and was narrowed to a smaller increment — remaining scope is in its final report`); }

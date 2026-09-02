@@ -791,6 +791,35 @@ describe("CampaignManager", () => {
     expect(tasks.submitted).toHaveLength(3);
   });
 
+  it("a delivery whose final sprint never ran a test SAYS so in the report", async () => {
+    // Audited 2026-09-02: the delivery gate is one-shot by design, and the
+    // report rendered the waived sprint as a clean green — no "tests:" mark,
+    // no caveat, under "game build complete".
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+
+    // Final sprint completes with no observed test run: one delivery bounce.
+    tasks.emit("task:completed", "task_3", "everything works, shipping it");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+    // The bounce text demands a captured frame, which arms the visual gate:
+    // one visual bounce, then the ladder proceeds.
+    tasks.emit("task:completed", "task_4", "shipping it again");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(5));
+    tasks.emit("task:completed", "task_5", "shipping it, third time");
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+
+    const report = messages.at(-1)!.text;
+    expect(report).toContain("Campaign delivery");
+    expect(report).toContain("Sprint C — Delivery");
+    expect(report).toMatch(/NO observed test run/);
+    expect(report).toContain("How these greens were reached");
+    expect(report).toMatch(/Sprint C — Delivery: .*never seen to pass/);
+  });
+
   it("resumeActive leaves a still-running task alone", async () => {
     manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
     await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
