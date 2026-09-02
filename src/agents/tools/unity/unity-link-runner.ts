@@ -24,6 +24,7 @@ import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 import { z } from "zod";
 import { getLoggerSafe } from "../../../utils/logger.js";
+import { resolveUnityCliPath, unityCliMissingHelp } from "./unity-cli-path.js";
 
 // =============================================================================
 // CONSENT SCRIPT (self-contained C#, mirrors the proven reflection recipe)
@@ -290,7 +291,6 @@ export interface UnityLinkRunnerOptions {
 
 const DEFAULT_UNITY_BIN =
   process.env["STRADA_UNITY_BIN"] ?? "/Applications/Unity/Hub/Editor/6000.3.22f1/Unity.app/Contents/MacOS/Unity";
-const DEFAULT_UNITY_CLI = process.env["STRADA_UNITY_CLI"] ?? "/Users/okan/.unity/bin/unity";
 const LINK_STORE = join(homedir(), ".strada", "unity-asset-store.json");
 
 /**
@@ -329,7 +329,10 @@ function editorVersion(): string {
 }
 
 export async function runUnityLink(options: UnityLinkRunnerOptions = {}): Promise<UnityLinkResult> {
-  const unityCli = options.unityCli ?? (existsSync(DEFAULT_UNITY_CLI) ? DEFAULT_UNITY_CLI : undefined);
+  // Audited 2026-09-02: the default was a hardcoded developer home directory;
+  // it is now the current user's ~/.unity/bin/unity unless STRADA_UNITY_CLI says otherwise.
+  const defaultCli = resolveUnityCliPath();
+  const unityCli = options.unityCli ?? (existsSync(defaultCli) ? defaultCli : undefined);
   const unityBin = options.unityBin ?? resolveUnityBin();
   if (unityCli !== undefined && !existsSync(unityCli)) {
     return { ok: false, detail: `Unity CLI not found at ${unityCli}` };
@@ -383,7 +386,7 @@ export async function runUnityLink(options: UnityLinkRunnerOptions = {}): Promis
         return { ok: false, detail: `Unity CLI could not be launched: ${launchError.message}` };
       }
     } else {
-      return { ok: false, detail: "Unity CLI not found — the Hub session is required for the sign-in dialog." };
+      return { ok: false, detail: `Unity CLI not found at ${defaultCli} — the Hub session is required for the sign-in dialog. ${unityCliMissingHelp()}` };
     }
 
     const gotOutput = options.waitForOutputImpl

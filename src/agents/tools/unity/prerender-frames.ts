@@ -21,8 +21,7 @@ import type { ITool, ToolContext, ToolExecutionResult } from "../tool.interface.
 import { validatePath } from "../../../security/path-guard.js";
 import { reuseOrMintGuid } from "./meta-file-utils.js";
 import { spriteMeta } from "./sprite-generate.js";
-
-const DEFAULT_CLI = process.env["STRADA_UNITY_CLI"] ?? "/Users/okan/.unity/bin/unity";
+import { resolveUnityCliPath, unityCliMissingHelp } from "./unity-cli-path.js";
 
 export interface PrerenderStyle {
   /** Pastel body color for the toon look (hex). */
@@ -260,8 +259,15 @@ export class PrerenderFramesTool implements ITool {
     // Environment check AFTER input validation: bad inputs deserve their own
     // answer on every machine (the old order made validation untestable off
     // the dev box — the CLI-missing error answered first everywhere else).
-    if (!existsSync(DEFAULT_CLI)) {
-      return { content: `Error: Unity CLI not found at ${DEFAULT_CLI} — the Hub-launched editor is required for rendering.`, isError: true };
+    // Audited 2026-09-02: the default was a hardcoded developer home
+    // directory, so every other machine failed here naming a stranger's path.
+    // Resolved per call from the current user's home (or STRADA_UNITY_CLI).
+    const unityCli = resolveUnityCliPath();
+    if (!existsSync(unityCli)) {
+      return {
+        content: `Error: Unity CLI not found at ${unityCli} — the Hub-launched editor is required for rendering. ${unityCliMissingHelp()}`,
+        isError: true,
+      };
     }
     mkdirSync(outCheck.fullPath, { recursive: true });
 
@@ -317,7 +323,7 @@ export class PrerenderFramesTool implements ITool {
       const logPath = join(context.projectPath, "prerender.log");
       if (existsSync(logPath)) rmSync(logPath, { force: true });
       let launchError = "";
-      execFile(DEFAULT_CLI, ["open", context.projectPath, "--args", unityArgs], (err) => {
+      execFile(unityCli, ["open", context.projectPath, "--args", unityArgs], (err) => {
         // Only a binary that could not be spawned is a launch failure.
         // Audited 2026-09-02: this recorded ANY callback error — a nonzero
         // exit of the Hub wrapper, or the 60s execFile timeout SIGTERMing it —

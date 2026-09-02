@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { PrerenderFramesTool, buildRenderScript } from "./prerender-frames.js";
+import { resolveUnityCliPath } from "./unity-cli-path.js";
 import type { ToolContext } from "../tool.interface.js";
 
 function makeContext(projectPath: string, readOnly = false): ToolContext {
@@ -58,6 +59,31 @@ describe("PrerenderFramesTool validation", () => {
   it("rejects non-prefab inputs and missing prefabs", async () => {
     expect((await tool.execute({ prefab: "Assets/X.fbx" }, makeContext(dir))).isError).toBe(true);
     expect((await tool.execute({ prefab: "Assets/Missing.prefab" }, makeContext(dir))).isError).toBe(true);
+  });
+
+  // Audited 2026-09-02: the CLI default was `/Users/okan/.unity/bin/unity`,
+  // so any other account failed with an error naming a stranger's home
+  // directory and no mention of the override.
+  it("looks for the Unity CLI under the current user's home, not a hardcoded one", () => {
+    expect(resolveUnityCliPath({}, "/home/ci")).toBe("/home/ci/.unity/bin/unity");
+    expect(resolveUnityCliPath({ STRADA_UNITY_CLI: "/opt/unity/bin/unity" }, "/home/ci")).toBe("/opt/unity/bin/unity");
+    expect(resolveUnityCliPath({}, "/home/ci")).not.toContain("okan");
+  });
+
+  it("names the path it checked and the override when the CLI is missing", async () => {
+    writeFileSync(join(dir, "Assets", "X.prefab"), "yaml");
+    const saved = process.env["STRADA_UNITY_CLI"];
+    process.env["STRADA_UNITY_CLI"] = join(dir, "no-such-unity");
+    try {
+      const result = await tool.execute({ prefab: "Assets/X.prefab" }, makeContext(dir));
+      expect(result.isError).toBe(true);
+      expect(String(result.content)).toContain(join(dir, "no-such-unity"));
+      expect(String(result.content)).toContain("STRADA_UNITY_CLI");
+      expect(String(result.content)).not.toContain("/Users/okan");
+    } finally {
+      if (saved === undefined) delete process.env["STRADA_UNITY_CLI"];
+      else process.env["STRADA_UNITY_CLI"] = saved;
+    }
   });
 
   it("rejects output outside Assets/", async () => {
