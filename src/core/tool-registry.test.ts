@@ -3,6 +3,7 @@ import { createLogger } from "../utils/logger.js";
 import { ToolRegistry, ToolCategories, type ToolCategory, type ToolMetadata } from "./tool-registry.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "../agents/tools/tool.interface.js";
 import { ValidationError } from "../common/errors.js";
+import { WRITE_OPERATIONS } from "../common/constants.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -76,6 +77,34 @@ describe("ToolRegistry", () => {
       await r.initialize(configWith(false));
       // Disabling shell must not disable the rest of the toolset.
       expect(r.getAvailableToolNames().length).toBeGreaterThan(5);
+    });
+  });
+
+  // ========================================================================
+  // git_branch mutates the working tree — it must classify as a write
+  // ========================================================================
+
+  describe("git_branch write classification (audited 2026-09-02)", () => {
+    it("registers git_branch as a non-read-only, dangerous tool like git_commit", async () => {
+      // git_branch runs `git checkout [-b] <name>`, which rewrites every
+      // tracked file on disk. It was registered readOnly:true, so it stayed
+      // offered in write-disabled phases, skipped the write-confirmation and
+      // plan-review gates, and was dispatched in the PARALLEL group beside
+      // file_read/grep — a checkout mid-read returns a mix of two branches.
+      const r = new ToolRegistry();
+      await r.initialize({ shellEnabled: false } as unknown as Parameters<ToolRegistry["initialize"]>[0]);
+      const meta = r.getMetadata("git_branch");
+      expect(meta).toBeDefined();
+      expect(meta!.readOnly).toBe(false);
+      expect(meta!.dangerous).toBe(true);
+      expect(meta!.requiresConfirmation).toBe(true);
+      expect(r.getReadOnlyTools().some((t) => t.name === "git_branch")).toBe(false);
+    });
+
+    it("is in the name-based WRITE_OPERATIONS allowlist so every policy layer agrees", () => {
+      // The interaction policy's plan-review write block keys on this set by
+      // NAME, independent of registry metadata; both sources must agree.
+      expect(WRITE_OPERATIONS.has("git_branch")).toBe(true);
     });
   });
 

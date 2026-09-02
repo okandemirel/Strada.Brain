@@ -206,6 +206,9 @@ export const WRITE_OPERATIONS = new Set([
   "git_commit",
   "git_push",
   "git_stash",
+  // `git checkout [-b]` rewrites the working tree; it was missing here while
+  // read-only-guard.ts already listed it as a write (audited 2026-09-02).
+  "git_branch",
   "vault_init",
   "vault_sync",
   "vault_write_note",

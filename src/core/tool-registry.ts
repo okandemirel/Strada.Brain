@@ -720,10 +720,16 @@ export class ToolRegistry {
       readOnly: false,
     });
 
+    // git_branch runs `git checkout [-b]`, which rewrites the working tree.
+    // It was registered readOnly:true, so it stayed offered in write-disabled
+    // phases, skipped the write-confirmation/plan-review gates, and ran in the
+    // PARALLEL group beside file reads — a checkout mid-read hands the run a
+    // mix of two branches. Classified like git_commit (audited 2026-09-02).
     this.register(new GitBranchTool(), {
       category: ToolCategories.GIT,
-      dangerous: false,
-      readOnly: true,
+      dangerous: true,
+      requiresConfirmation: true,
+      readOnly: false,
     });
 
     this.register(new GitPushTool(), {
