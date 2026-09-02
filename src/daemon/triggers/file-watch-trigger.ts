@@ -32,6 +32,16 @@ export interface FileEvent {
 /** Default debounce interval in ms */
 const DEFAULT_DEBOUNCE_MS = 500;
 
+/**
+ * Most buffered events kept between fires. Audited 2026-09-02: the buffer had
+ * no cap and onFired() joined every entry into the task prompt, so a Unity
+ * re-import under a watched directory during a skipped-tick stretch became a
+ * multi-megabyte prompt billed to the daemon. Events past the cap are counted
+ * and named in the summary, never silently dropped. (WebhookTrigger caps at
+ * 1000 with an O(1) summary; this summary is O(n), hence the smaller cap.)
+ */
+const MAX_PENDING_EVENTS = 200;
+
 /** Default ignore patterns applied to all file watchers */
 const DEFAULT_IGNORE_PATTERNS = ["**/node_modules/**", "**/.git/**"];
 
@@ -63,6 +73,8 @@ export class FileWatchTrigger implements ITrigger {
   private readonly debounceTimers: Map<string, NodeJS.Timeout> = new Map();
   private readonly debounceMs: number;
   private readonly patternMatcher: ((path: string) => boolean) | null;
+  /** Debounced events that arrived while the buffer was full — reported, not listed. */
+  private overflowCount = 0;
   private disposed = false;
 
   /**
@@ -143,7 +155,12 @@ export class FileWatchTrigger implements ITrigger {
     // Set a new debounce timer
     const timer = setTimeout(() => {
       if (!this.disposed) {
-        this.pendingEvents.push({ path: filePath, event: eventType });
+        if (this.pendingEvents.length < MAX_PENDING_EVENTS) {
+          this.pendingEvents.push({ path: filePath, event: eventType });
+        } else {
+          // Full: count it so the fire summary can state what it did not list.
+          this.overflowCount += 1;
+        }
       }
       this.debounceTimers.delete(filePath);
     }, this.debounceMs);
@@ -181,7 +198,12 @@ export class FileWatchTrigger implements ITrigger {
       .map((e) => `${basename(e.path)} ${eventLabel(e.event)}`)
       .join(", ");
 
-    const summary = `File changes detected: ${count} file${count !== 1 ? "s" : ""} (${details}). Action: ${this.originalAction}`;
+    // Name the overflow rather than hide it: the prompt states what it dropped.
+    const overflow = this.overflowCount > 0
+      ? `; ${this.overflowCount} further change${this.overflowCount !== 1 ? "s" : ""} not listed`
+      : "";
+    this.overflowCount = 0;
+    const summary = `File changes detected: ${count} file${count !== 1 ? "s" : ""} (${details}${overflow}). Action: ${this.originalAction}`;
 
     // Keep every other field (cooldownSeconds included) — rebuilding from
     // three literals dropped the cooldown after the first fire.
@@ -231,5 +253,6 @@ export class FileWatchTrigger implements ITrigger {
 
     // Drain any remaining events
     this.pendingEvents.length = 0;
+    this.overflowCount = 0;
   }
 }
