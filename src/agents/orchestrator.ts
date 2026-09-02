@@ -258,6 +258,11 @@ import type { SilentStreamPort } from "../agent-core/model/model-gateway.js";
 import type { AgentRunSetupInput } from "../agent-core/runner/orchestrator-port.js";
 import type { AgentEvent } from "../agent-core/events/agent-event.js";
 import { estimateTextTokens } from "../common/token-estimator.js";
+import {
+  isUnityEditorExclusiveTool,
+  withUnityEditorLock,
+  logUnityEditorWait,
+} from "./unity-editor-lock.js";
 
 
 /** Self-improvement tools bypass phase-based write filtering — they have their own guards. */
@@ -4627,7 +4632,9 @@ export class Orchestrator {
     // but it DRIVES one editor/one project: two concurrent calls restart each
     // other's compile and read each other's console, so both verdicts describe
     // code neither call compiled. Serial regardless of the read-only flag.
-    if (name.startsWith("unity_verify") || name.startsWith("unity_compile") || name.startsWith("unity_playmode")) {
+    // audited 2026-09-02: one list for the within-turn rule and the cross-task
+    // lock, so the two can no longer disagree about which tools own the editor.
+    if (isUnityEditorExclusiveTool(name)) {
       return false;
     }
     // Require a POSITIVE read-only classification from the flattened metadata cache (which already
@@ -5028,13 +5035,28 @@ export class Orchestrator {
       // a failed revive BLOCKs. The orchestrator's flattened toolMetadataByName carries only
       // `requiresBridge`, so the binding here distinguishes the bridge from in-process.
       let result: ToolExecutionResult;
+      // audited 2026-09-02: the Unity verification tools drive ONE editor on ONE
+      // project. isParallelSafeToolCall only orders them within a single model
+      // turn, so two concurrent tasks/sub-agents could both be in the editor,
+      // each restarting the other's compile and reading the other's console.
+      // The lock is process-wide and QUEUES — the second caller waits and then
+      // runs; it is never refused, and the wait is logged with what it waited
+      // behind. Wrapped here so both the guarded and the plain path hold it.
+      const invokeTool = (): Promise<ToolExecutionResult> =>
+        isUnityEditorExclusiveTool(activeToolCall.name)
+          ? withUnityEditorLock(
+              activeToolCall.name,
+              () => tool.execute(activeToolCall.input, toolContext),
+              (wait) => logUnityEditorWait(activeToolCall.name, chatId, wait),
+            )
+          : tool.execute(activeToolCall.input, toolContext);
       if (this.capabilityRegistry) {
         const capabilityId = capabilityForTool({ requiresBridge: toolMeta?.requiresBridge });
         const guarded = await guardExecute({
           registry: this.capabilityRegistry,
           capabilityId,
           adapter: this.capabilityAdapters?.get(capabilityId),
-          run: () => tool.execute(activeToolCall.input, toolContext),
+          run: invokeTool,
         });
         if (guarded.kind === "blocked") {
           // BLOCKED is non-progress, non-fatal — NOT counted as a tool error (mirrors the available
@@ -5050,7 +5072,7 @@ export class Orchestrator {
         }
         result = guarded.value;
       } else {
-        result = await tool.execute(activeToolCall.input, toolContext);
+        result = await invokeTool();
       }
       const toolDurationMs = Date.now() - toolStart;
       // A tool just ran: whatever else is true, this task is not hung. Fired
