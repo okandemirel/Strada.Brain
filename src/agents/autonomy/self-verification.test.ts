@@ -1,5 +1,23 @@
 import { describe, expect, it } from "vitest";
 import { SelfVerification } from "./self-verification.js";
+import type { WorkerRunResult } from "../supervisor/supervisor-types.js";
+
+/** A completed delegation that touched the given files and reports no issues. */
+function completedWorker(touchedFiles: readonly string[]): WorkerRunResult {
+  return {
+    status: "completed",
+    finalSummary: "done",
+    visibleResponse: "done",
+    provider: "test",
+    catalogVersion: "v",
+    assignmentVersion: 1,
+    touchedFiles,
+    toolTrace: [],
+    verificationResults: [],
+    reviewFindings: [],
+    artifacts: [],
+  };
+}
 
 describe("SelfVerification", () => {
   it("accepts verification-oriented shell commands as a clean verification signal", () => {
@@ -139,5 +157,56 @@ describe("SelfVerification", () => {
     expect(state.pendingFiles.size).toBe(0);
     expect(state.touchedFiles.has("src/runtime/reviewer.ts")).toBe(true);
     expect(verifier.hasTouchedFiles()).toBe(true);
+  });
+
+  /**
+   * Audited 2026-09-02: lastBuildOk was assigned only by a verification, so
+   * after one clean compile it stayed `true` through every later compilable
+   * change — needsVerification() (hasCompilableChanges && lastBuildOk !== true)
+   * read false, the build check reported "clean", and never-compiled files were
+   * approved. Reached by a delegated worker's touchedFiles and by a plain
+   * file_write alike.
+   */
+  describe("a clean compile does not outlive the next compilable change", () => {
+    function cleanlyCompiled(): SelfVerification {
+      const verifier = new SelfVerification();
+      verifier.track("file_write", { path: "Assets/Modules/BoardModule/A.cs" }, {
+        toolCallId: "w", content: "written", isError: false,
+      });
+      verifier.track("unity_verify_change", {}, {
+        toolCallId: "v", content: "compile green", isError: false,
+      });
+      expect(verifier.needsVerification()).toBe(false);
+      return verifier;
+    }
+
+    it("re-arms the gate for files a delegated worker wrote", () => {
+      const verifier = cleanlyCompiled();
+      const touchedFiles = Array.from({ length: 12 }, (_, i) => `Assets/Modules/BoardModule/W${i}.cs`);
+      verifier.ingestWorkerResult(completedWorker(touchedFiles));
+
+      expect(verifier.needsVerification()).toBe(true);
+      expect(verifier.getState().lastBuildOk).not.toBe(true);
+      // The files are named, not just counted: the prompt must say what is unverified.
+      expect(verifier.getState().pendingFiles.has(touchedFiles[0]!)).toBe(true);
+      expect(verifier.getPrompt()).toContain("W0.cs");
+    });
+
+    it("re-arms the gate for a direct edit", () => {
+      const verifier = cleanlyCompiled();
+      verifier.track("file_write", { path: "Assets/Modules/BoardModule/B.cs" }, {
+        toolCallId: "w2", content: "written", isError: false,
+      });
+
+      expect(verifier.needsVerification()).toBe(true);
+      expect(verifier.getState().lastBuildOk).not.toBe(true);
+    });
+
+    it("leaves a non-compilable delegated change alone", () => {
+      const verifier = cleanlyCompiled();
+      verifier.ingestWorkerResult(completedWorker(["docs/notes.md"]));
+
+      expect(verifier.needsVerification()).toBe(false);
+    });
   });
 });

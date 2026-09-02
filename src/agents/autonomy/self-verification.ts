@@ -139,6 +139,11 @@ export class SelfVerification {
           if (dotIdx !== -1 && COMPILABLE_EXT.has(file.slice(dotIdx))) {
             this.hasCompilableChanges = true;
             this.dirtySinceLastVerify = true;
+            // A clean compile describes the tree it compiled, not this one.
+            // Audited 2026-09-02: lastBuildOk stayed `true` across later edits,
+            // so needsVerification() read false and never-compiled files were
+            // approved under a "clean" build check.
+            this.lastBuildOk = null;
           }
           if (looksLikeTestFile(file)) {
             this.pendingTestFiles.add(file);
@@ -329,6 +334,13 @@ export class SelfVerification {
       if (dotIdx !== -1 && COMPILABLE_EXT.has(file.slice(dotIdx))) {
         this.hasCompilableChanges = true;
         this.dirtySinceLastVerify = true;
+        // This run never saw the worker's compile, so the parent's last clean
+        // verdict does not cover these files: they are pending, by name, and
+        // the build state is unknown again (audited 2026-09-02 — the success
+        // branch used to leave lastBuildOk=true and pendingFiles empty, so
+        // twelve delegated .cs files were approved under a "clean" check).
+        this.pendingFiles.add(file);
+        this.lastBuildOk = null;
       }
     }
 
