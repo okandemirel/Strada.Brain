@@ -255,7 +255,11 @@ describe("installSkillFromRepo", () => {
     expect(skillConfigMock.setSkillEnabled).toHaveBeenCalledWith("my-skill", true);
   });
 
-  it("succeeds even when SKILL.md does not exist (non-fatal)", async () => {
+  // audited 2026-09-02: a clone with no SKILL.md used to be recorded as enabled
+  // and reported "installed" — discoverSkills requires SKILL.md, so it could
+  // never load, never appeared in `skill list`, and a retry said "already
+  // installed". Now it is removed and the result names the cause.
+  it("fails, removes the clone and enables nothing when the repo has no SKILL.md", async () => {
     // git --version succeeds
     execMock.execFileNoThrow.mockResolvedValueOnce({
       exitCode: 0,
@@ -278,8 +282,14 @@ describe("installSkillFromRepo", () => {
 
     const result = await installSkillFromRepo("my-skill", "https://github.com/x/y");
 
-    expect(result.success).toBe(true);
-    expect(skillConfigMock.setSkillEnabled).toHaveBeenCalledWith("my-skill", true);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("SKILL.md");
+    expect(result.error).toContain("not a skill");
+    expect(skillConfigMock.setSkillEnabled).not.toHaveBeenCalled();
+    expect(fsMock.rm).toHaveBeenCalledWith(
+      "/mock-home/.strada/skills/my-skill",
+      { recursive: true, force: true },
+    );
   });
 
   // =========================================================================
