@@ -1089,6 +1089,53 @@ describe("DelegationManager", () => {
       const nonDelegateTools = capturedTools.filter((t) => !t.name.startsWith("delegate_"));
       expect(nonDelegateTools.length).toBeGreaterThan(0);
     });
+
+    // The depth rule exists so a sub-agent cannot spawn another generation of
+    // sub-agents. swarm_tasks is a FAN-OUT delegation surface bound to the same
+    // parentAgentId/depth as the delegate_* tools, so leaving it in the handed-down
+    // set gives the sub-agent exactly the recursion the depth rule refuses — it
+    // reached sub-agents only by accident of snapshot ordering (audited 2026-09-02).
+    it("excludes the swarm fan-out tool from the sub-agent, not only delegate_*", async () => {
+      opts = buildManagerOpts({
+        delegationLog,
+        parentTools: [
+          createMockTool("read_file"),
+          createMockTool("delegate_code_review"),
+          createMockTool("swarm_tasks"),
+        ],
+      });
+      manager = new DelegationManager(opts);
+
+      const { Orchestrator } = await import("../../orchestrator.js");
+      let capturedTools: ITool[] = [];
+      (Orchestrator as unknown as ReturnType<typeof vi.fn>).mockImplementationOnce(
+        function (this: Record<string, unknown>, innerOpts: { tools: ITool[]; channel: { sendText: (chatId: string, text: string) => Promise<void> } }) {
+          capturedTools = innerOpts.tools;
+          this._opts = innerOpts;
+          this.handleMessage = vi.fn().mockImplementation(async (msg: Record<string, unknown>) => {
+            await innerOpts.channel.sendText(msg.chatId as string, "Result");
+          });
+          this.seedUserAuthorizedPaths = vi.fn();
+          this.addTool = vi.fn();
+          this.removeTool = vi.fn();
+        },
+      );
+
+      await manager.delegate({
+        type: "code_review",
+        task: "Review at max depth",
+        parentAgentId: PARENT_AGENT_ID,
+        depth: 1,
+        mode: "sync",
+        toolContext: TEST_TOOL_CONTEXT,
+      });
+
+      expect(
+        capturedTools.map((t) => t.name),
+        "the sub-agent was handed a fan-out delegation surface",
+      ).not.toContain("swarm_tasks");
+      expect(capturedTools.map((t) => t.name)).toContain("read_file");
+    });
   });
 
   describe("cancelDelegation", () => {

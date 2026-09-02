@@ -1190,7 +1190,16 @@ export class DelegationManager {
     // has no effect (nested/recursive delegation is intentionally not wired). This is
     // the single place to revisit — call createDelegationTools(..., _currentDepth,
     // maxDepth) here — if nested delegation is ever implemented.
-    return this.opts.parentTools.filter((t) => !t.name.startsWith("delegate_"));
+    //
+    // swarm_* is stripped for the SAME reason and must be named explicitly: it is a
+    // fan-out delegation surface bound to the parent's agent id and depth, so handing
+    // it down gives the sub-agent exactly the next generation the depth rule refuses —
+    // N of them at once. It stayed out of the handed-down set only because
+    // stage-agents snapshots parentTools before the swarm tool is registered; any
+    // reordering there silently re-armed nested fan-out (audited 2026-09-02).
+    return this.opts.parentTools.filter(
+      (t) => !t.name.startsWith("delegate_") && !t.name.startsWith("swarm_"),
+    );
   }
 
   /**
