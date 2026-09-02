@@ -25,12 +25,13 @@ function makeTrigger(
     shouldFire?: boolean;
     state?: TriggerState;
     description?: string;
+    type?: TriggerMetadata["type"];
   } = {},
 ): ITrigger {
   const metadata: TriggerMetadata = {
     name,
     description: opts.description ?? `Trigger: ${name}`,
-    type: "cron",
+    type: opts.type ?? "cron",
   };
   return {
     metadata,
@@ -310,6 +311,35 @@ describe("HeartbeatLoop", () => {
 
     expect(loop.isRunning()).toBe(false);
     expect(trigger.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("an approval-only (deploy) trigger fires without submitting an agent task (audited 2026-09-02)", async () => {
+    // DeployTrigger's whole effect is the approval it enqueues in onFired; its
+    // description is the static label "Deployment readiness detection", not
+    // an instruction. Submitting it spawned a full agent run against that
+    // label on every readiness event, charged to the daemon budget.
+    const deploy = makeTrigger("deploy-readiness", {
+      shouldFire: true,
+      description: "Deployment readiness detection",
+      type: "deploy",
+    });
+    const cron = makeTrigger("nightly", { shouldFire: true });
+    registry.register(deploy);
+    registry.register(cron);
+
+    loop.start();
+    await loop.tick();
+
+    expect(deploy.onFired).toHaveBeenCalledTimes(1);
+    const prompts = taskManager.submit.mock.calls.map((call) => call[2]);
+    expect(prompts).toEqual(["Trigger: nightly"]);
+    expect(storage.insertTriggerFireHistory).toHaveBeenCalledWith(
+      expect.objectContaining({ triggerName: "deploy-readiness", result: "success" }),
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      "Trigger fired (approval-only; no task submitted)",
+      expect.objectContaining({ trigger: "deploy-readiness" }),
+    );
   });
 
   it("skips trigger submission while a foreground task is active and idlePause is enabled", () => {

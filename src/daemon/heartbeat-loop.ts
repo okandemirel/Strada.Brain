@@ -432,6 +432,30 @@ export class HeartbeatLoop {
 
           trigger.onFired(now);
 
+          // Approval-only triggers: DeployTrigger's whole effect is the
+          // approval it enqueued in onFired, and its description is the
+          // static label "Deployment readiness detection", not an instruction.
+          // Audited 2026-09-02: submitting it spawned a full agent run against
+          // that label on every readiness event, charged to the daemon budget.
+          if (trigger.metadata.type === "deploy") {
+            if (this.deduplicator) {
+              this.deduplicator.recordFired(name, trigger.metadata.description, now.getTime(), cooldownMs);
+            }
+            cb.recordSuccess();
+            this.persistCircuitState(name, cb);
+            try {
+              this.storage.insertTriggerFireHistory({
+                triggerName: name,
+                result: "success",
+                timestamp: now.getTime(),
+              });
+            } catch (err) {
+              this.logger.warn("Failed to record trigger fire history", { trigger: name, error: String(err) });
+            }
+            this.logger.info("Trigger fired (approval-only; no task submitted)", { trigger: name });
+            continue;
+          }
+
           // Mark trigger as in-flight BEFORE submission to prevent
           // duplicate fires if the next tick runs before submit returns.
           this.activeTriggerTasks.set(name, "pending" as TaskId);
