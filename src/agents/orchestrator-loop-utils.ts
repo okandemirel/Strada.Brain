@@ -295,6 +295,16 @@ export function recordStepResultsAndCheckReflection(
     });
     consecutiveErrors = tr.isError ? consecutiveErrors + 1 : 0;
   }
+  const isConsequential = (step: StepResult): boolean =>
+    MUTATION_TOOLS.has(step.toolName) || isVerificationToolName(step.toolName);
+  // audited 2026-09-02: stepResults is a 50-entry WINDOW (an unbounded-growth
+  // fix), and the reflection cadence below used to count inside it. Once a
+  // long run saturated the window the count stopped growing and the modulo
+  // either fired every batch or never again. The cadence now runs on this
+  // monotonic counter; states minted before the field existed seed it from
+  // the window they carry.
+  const priorConsequential =
+    agentState.consequentialStepCount ?? agentState.stepResults.filter(isConsequential).length;
   const combinedSteps = [...agentState.stepResults, ...newSteps];
   const MAX_STEP_RESULTS = 50;
   agentState = {
@@ -303,6 +313,7 @@ export function recordStepResultsAndCheckReflection(
       ? combinedSteps.slice(-MAX_STEP_RESULTS)
       : combinedSteps,
     iteration: agentState.iteration + toolCalls.length,
+    consequentialStepCount: priorConsequential + newSteps.filter(isConsequential).length,
     consecutiveErrors,
   };
 
@@ -326,9 +337,7 @@ export function recordStepResultsAndCheckReflection(
   // majority. Count only steps that changed something or verified something.
   // The same two predicates autonomy's behavioural snapshot counts with, so the
   // cadence and the progress assessment agree on what a step of progress is.
-  const consequentialSteps = agentState.stepResults.filter((step) =>
-    MUTATION_TOOLS.has(step.toolName) || isVerificationToolName(step.toolName),
-  ).length;
+  const consequentialSteps = agentState.consequentialStepCount ?? 0;
 
   const shouldReflect =
     persistentFailure ||
