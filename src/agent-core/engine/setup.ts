@@ -48,6 +48,7 @@ import type { SoulLoader } from "../../agents/soul/index.js";
 import type { MonitorLifecycle } from "../../dashboard/monitor-lifecycle.js";
 import type { VaultRegistry } from "../../vault/vault-registry.js";
 import type { SupervisorExecutionStrategy } from "../../agents/orchestrator-supervisor-routing.js";
+import { instinctScopeKey } from "./instinct-scope.js";
 
 /**
  * The dependency slice the run-setup cluster reads. Extends {@link ReflectionDeps} + {@link BudgetDeps}
@@ -350,7 +351,14 @@ export async function setupAgentCoreRun(
         // Non-fatal.
       }
     }
-    deps.currentSessionInstinctIds.set(chatId, matchedInstinctIds);
+    // audited 2026-09-02: scoped to the RUN, not the chat. Every supervisor
+    // wave node runs on the one Orchestrator with the one chatId, so a
+    // chatId-keyed set meant 16 nodes overwrote each other and self-learning
+    // credited the last node's instincts with every node's outcome.
+    deps.currentSessionInstinctIds.set(
+      instinctScopeKey(chatId, deps.getTaskExecutionContext()?.taskRunId),
+      matchedInstinctIds,
+    );
     deps.propagateInstinctIdsToChannel(chatId, matchedInstinctIds);
 
     const lastUserMessage = deps.sessionManager.extractLastUserMessage(session) || queryText;

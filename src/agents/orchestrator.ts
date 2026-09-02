@@ -258,6 +258,7 @@ import type { SilentStreamPort } from "../agent-core/model/model-gateway.js";
 import type { AgentRunSetupInput } from "../agent-core/runner/orchestrator-port.js";
 import type { AgentEvent } from "../agent-core/events/agent-event.js";
 import { estimateTextTokens } from "../common/token-estimator.js";
+import { instinctScopeKey } from "../agent-core/engine/instinct-scope.js";
 import {
   isUnityEditorExclusiveTool,
   withUnityEditorLock,
@@ -3617,7 +3618,11 @@ export class Orchestrator {
     }
     // The run's participating instinct set — read here, BEFORE the caller's
     // currentSessionInstinctIds.delete. Empty ⇒ nothing to credit ⇒ skip (no empty trajectory row).
-    const appliedInstinctIds = this.currentSessionInstinctIds.get(params.chatId) ?? [];
+    // audited 2026-09-02: read this RUN's participating set (see instinctScopeKey).
+    const appliedInstinctIds =
+      this.currentSessionInstinctIds.get(
+        instinctScopeKey(params.chatId, this.getTaskExecutionContext()?.taskRunId),
+      ) ?? [];
     if (appliedInstinctIds.length === 0) {
       return;
     }
@@ -5390,7 +5395,12 @@ export class Orchestrator {
       output: tr.content.slice(0, 500),
       success: !(tr.isError ?? false),
       retryCount: 0,
-      appliedInstinctIds: this.currentSessionInstinctIds.get(chatId) ?? [],
+      // audited 2026-09-02: the instincts THIS run retrieved, not whichever
+      // sibling node on this chatId wrote to the map last.
+      appliedInstinctIds:
+        this.currentSessionInstinctIds.get(
+          instinctScopeKey(chatId, this.getTaskExecutionContext()?.taskRunId),
+        ) ?? [],
       timestamp: Date.now(),
     });
 

@@ -988,12 +988,18 @@ describe("Step 0 — v2 prologue fidelity gaps (behind the route flag; productio
     // Mid-run probe: capture currentSessionInstinctIds WHILE the tool turn runs (it is cleared on
     // teardown). The edit tool's execute resolves during the run, so read the store from inside it.
     let midRunInstinctIds: string[] | undefined;
+    let midRunKeys: string[] = [];
     const editTool = h.tools.find((t) => t.name === "edit_file")!;
     const store = (
       h.orch as unknown as { currentSessionInstinctIds: Map<string, string[]> }
     ).currentSessionInstinctIds;
     (editTool.execute as ReturnType<typeof vi.fn>).mockImplementation(async () => {
-      midRunInstinctIds = store.get("chat-1");
+      // audited 2026-09-02: the set is stored per RUN now (chatId + taskRunId),
+      // so probe by the chat's prefix rather than by the bare chatId.
+      midRunKeys = [...store.keys()];
+      midRunInstinctIds = store.get(
+        midRunKeys.find((k) => k === "chat-1" || k.startsWith("chat-1\u0000")) ?? "",
+      );
       return { content: "edit_file result" };
     });
 
@@ -1002,12 +1008,125 @@ describe("Step 0 — v2 prologue fidelity gaps (behind the route flag; productio
     // (a) the IDs were retrieved and stashed during the run …
     expect(getInsightsForTask).toHaveBeenCalledWith("do the thing");
     expect(midRunInstinctIds).toEqual(["inst-1"]);
+    expect(midRunKeys, "the set was not scoped to the run").toEqual([
+      expect.stringMatching(/^chat-1\u0000.+/),
+    ]);
     // (b) … the SHARED emitToolResult attributed the tool:result to them (the reinforcement signal) …
     const toolResults = events.filter((e) => e.toolName === "edit_file");
     expect(toolResults.length).toBeGreaterThan(0);
     expect(toolResults.every((e) => e.appliedInstinctIds.includes("inst-1"))).toBe(true);
     // (c) … and the per-session store was CLEARED on teardown (no cross-run mis-attribution / leak).
-    expect(store.get("chat-1")).toBeUndefined();
+    expect([...store.keys()]).toEqual([]);
+  });
+
+  it("two concurrent runs on ONE chatId each keep their OWN retrieved instincts", async () => {
+    // audited 2026-09-02: setupAgentCoreRun stashed the retrieved IDs under the
+    // chatId alone. Every supervisor wave node runs on the one Orchestrator with
+    // the one chatId (createSupervisorExecuteNodeBridge), so concurrent nodes
+    // overwrote each other's set: the last node's instincts were credited with
+    // every other node's tool outcomes, and the first node to reach teardown
+    // deleted the set out from under its siblings, whose remaining results then
+    // carried nothing at all. The bridge already stamps a per-node taskRunId;
+    // the set is scoped to it.
+    const provider = mkScriptedProvider();
+    const turns: Record<string, number> = { alpha: 0, beta: 0 };
+    provider.chat.mockImplementation(async (...args: unknown[]) => {
+      const tag = JSON.stringify(args).includes("alpha") ? "alpha" : "beta";
+      const turn = turns[tag]++;
+      if (turn === 0) return resp({ text: "plan", stopReason: "end_turn" });
+      if (turn === 1) {
+        return resp({
+          text: "",
+          stopReason: "tool_use",
+          toolCalls: [{ id: `tc-${tag}`, name: "edit_file", input: { path: `${tag}.cs` } }],
+        });
+      }
+      return resp({ text: "done", stopReason: "end_turn" });
+    });
+
+    // Both runs finish retrieval before either reaches its tool turn — the wave
+    // shape, made deterministic. Each node retrieves a DIFFERENT instinct.
+    let arrived = 0;
+    let openGate!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      openGate = resolve;
+    });
+    const getInsightsForTask = vi.fn(async (prompt: string) => {
+      const tag = prompt.includes("alpha") ? "alpha" : "beta";
+      if (++arrived === 2) openGate();
+      await gate;
+      return { insights: [], matchedInstinctIds: [`inst-${tag}`] };
+    });
+
+    const attributed: Array<{ path: string; ids: string[] }> = [];
+    const eventEmitter = {
+      emit: (evt: string, payload: unknown) => {
+        if (evt !== "tool:result") return;
+        const p = payload as {
+          toolName?: string;
+          input?: { path?: string };
+          appliedInstinctIds?: string[];
+        };
+        if (p.toolName === "edit_file") {
+          attributed.push({ path: p.input?.path ?? "", ids: p.appliedInstinctIds ?? [] });
+        }
+      },
+    };
+
+    const h = buildHarness(
+      provider,
+      undefined,
+      undefined,
+      { instinctRetriever: { getInsightsForTask } },
+      undefined,
+      eventEmitter,
+    );
+    // A second port over the SAME Orchestrator: two nodes of one wave.
+    const secondPort = h.orch.createAgentCorePort();
+    const runnerB = new V2AgentRunner({
+      controlPlane: createControlPlane({
+        clock: h.clock,
+        seed: secondPort.seed,
+        createHealthCore: secondPort.createHealthCore,
+      }),
+      gateway: secondPort.gateway,
+      orchestratorPort: secondPort.port,
+      clock: h.clock,
+    } as V2RunnerDeps);
+
+    await drive(
+      h.clock,
+      Promise.all([
+        h.runner.run(
+          mkRequest({ prompt: "do the alpha thing", taskRunId: "wave:node-alpha" }),
+          mkIO("worker"),
+        ),
+        runnerB.run(
+          mkRequest({ prompt: "do the beta thing", taskRunId: "wave:node-beta" }),
+          mkIO("worker"),
+        ),
+      ]),
+    );
+
+    expect(getInsightsForTask).toHaveBeenCalledTimes(2);
+    const alpha = attributed.filter((a) => a.path === "alpha.cs");
+    const beta = attributed.filter((a) => a.path === "beta.cs");
+    expect(alpha.length, "the alpha node produced no attributed tool result").toBeGreaterThan(0);
+    expect(beta.length, "the beta node produced no attributed tool result").toBeGreaterThan(0);
+    expect(
+      alpha.every((a) => a.ids.length === 1 && a.ids[0] === "inst-alpha"),
+      `alpha's outcome was credited to ${JSON.stringify(alpha)}`,
+    ).toBe(true);
+    expect(
+      beta.every((b) => b.ids.length === 1 && b.ids[0] === "inst-beta"),
+      `beta's outcome was credited to ${JSON.stringify(beta)}`,
+    ).toBe(true);
+
+    // Both nodes tore down their OWN set; nothing of either run is left behind.
+    const store = (
+      h.orch as unknown as { currentSessionInstinctIds: Map<string, string[]> }
+    ).currentSessionInstinctIds;
+    expect([...store.keys()]).toEqual([]);
   });
 });
 

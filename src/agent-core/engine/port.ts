@@ -54,6 +54,7 @@ import type {
   SynthesizedFinal,
   ExecuteToolCallsFn,
 } from "../runner/orchestrator-port.js";
+import { instinctScopeKey } from "./instinct-scope.js";
 
 /** The shell residue the port assembly injects (the engine facade methods are called directly). */
 export interface PortDeps extends ToolTurnDeps {
@@ -423,7 +424,12 @@ export function createAgentCorePort(
         // instinct IDs so a later, unrelated emitToolResult on this chatId cannot mis-attribute to a
         // prior run's instincts, and prevent the Map growing unbounded. Runs from the spine's finally
         // on EVERY exit (happy or throw), exactly once per run.
-        deps.currentSessionInstinctIds.delete(c.chatId);
+        // audited 2026-09-02: this run's set, not the chat's — a sibling wave
+        // node finishing first used to delete the set its siblings were still
+        // being attributed to.
+        deps.currentSessionInstinctIds.delete(
+          instinctScopeKey(c.chatId, deps.getTaskExecutionContext()?.taskRunId),
+        );
         // audited 2026-09-02: the pipeline's per-run credit ledger ends with the run too.
         deps.clearRunInstinctCredits(c.chatId);
         deps.propagateInstinctIdsToChannel(c.chatId, []);
