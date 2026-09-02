@@ -5,7 +5,7 @@
  */
 
 import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.js";
-import { analyzeFile, analyzeProject, formatQualityReport } from "../../intelligence/code-quality.js";
+import { analyzeFile, analyzeProject, formatQualityReport, FileNotAnalyzedError } from "../../intelligence/code-quality.js";
 import { readFile } from "node:fs/promises";
 import { resolve, relative } from "node:path";
 import { validatePath } from "../../security/path-guard.js";
@@ -104,6 +104,11 @@ export class CodeQualityTool implements ITool {
 
       return { content: lines.join("\n") };
     } catch (error) {
+      if (error instanceof FileNotAnalyzedError) {
+        // Was: an unread oversized file printed "Score: 100/100 / No issues
+        // found — code looks clean!". Audited 2026-09-02.
+        return { content: `Not analyzed: ${error.filePath} ${error.reason}`, isError: true };
+      }
       const msg = error instanceof Error ? error.message : "Unknown error";
       return { content: `Failed to analyze file: ${msg}`, isError: true };
     }

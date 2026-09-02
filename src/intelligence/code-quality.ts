@@ -65,8 +65,30 @@ export interface FileMetrics {
   inheritanceDepth: number;
 }
 
+/**
+ * Thrown by `analyzeFile` when the parser did not read the file (over the
+ * 1MB limit). A file that was never parsed has no score; returning one
+ * (100/100, zero issues, zero classes) reported "not analyzed" as "clean".
+ * Audited 2026-09-02.
+ */
+export class FileNotAnalyzedError extends Error {
+  constructor(
+    public readonly filePath: string,
+    public readonly reason: string,
+  ) {
+    super(`${filePath} not analyzed: ${reason}`);
+    this.name = "FileNotAnalyzedError";
+  }
+}
+
+function describeNotParsed(notParsed: NonNullable<CSharpAST["notParsed"]>): string {
+  const mb = (n: number): string => `${(n / (1024 * 1024)).toFixed(2)}MB`;
+  return `exceeds the ${mb(notParsed.limit)} (${notParsed.limit} bytes) parser limit at ${mb(notParsed.contentLength)}; no rules or metrics were computed`;
+}
+
 export interface ProjectQualityReport {
-  overallScore: number; // 0-100
+  /** 0-100 average over analyzed files; null when no file was analyzed (nothing was measured). */
+  overallScore: number | null;
   fileReports: FileQualityReport[];
   summary: QualitySummary;
   topIssues: QualityIssue[];
@@ -82,6 +104,12 @@ export interface QualitySummary {
   categoryBreakdown: Record<string, number>;
   /** Files with lowest scores. */
   worstFiles: Array<{ filePath: string; score: number }>;
+  /**
+   * Files that were found but NOT analyzed (oversized, unreadable), with the
+   * reason. Always reported next to totalFiles so "Files Analyzed" never
+   * stands alone. Audited 2026-09-02.
+   */
+  skippedFiles: Array<{ filePath: string; reason: string }>;
 }
 
 // ═══════════════════════════════════════════
@@ -105,8 +133,6 @@ const THRESHOLDS = {
   moduleSystemLimit: 10,
   /** Inheritance depth warning. */
   deepInheritance: 3,
-  /** Max file size to analyze. */
-  maxFileSize: 1024 * 1024,
 };
 
 /** Reference types that violate ECS component unmanaged constraint. */
@@ -134,6 +160,10 @@ export function analyzeFile(
   filePath: string
 ): FileQualityReport {
   const ast = parseDeep(content, filePath);
+  if (ast.notParsed) {
+    // Was: fell through with an empty AST and scored 100 - 0. Audited 2026-09-02.
+    throw new FileNotAnalyzedError(filePath, describeNotParsed(ast.notParsed));
+  }
   const issues: QualityIssue[] = [];
   const lines = content.split("\n");
   const lineCount = lines.length;
@@ -206,17 +236,23 @@ export async function analyzeProject(
   });
 
   const fileReports: FileQualityReport[] = [];
+  const skippedFiles: Array<{ filePath: string; reason: string }> = [];
 
   for (const filePath of csFiles) {
+    const relPath = relative(projectPath, filePath);
     try {
       const content = await readFile(filePath, "utf-8");
-      if (content.length > THRESHOLDS.maxFileSize) continue;
-
-      const relPath = relative(projectPath, filePath);
+      // Was: `continue` with no counter, so an oversized file vanished from the
+      // report and "Files Analyzed: N" read as the whole project. Audited 2026-09-02.
       const report = analyzeFile(content, relPath);
       fileReports.push(report);
-    } catch {
-      logger.debug(`Failed to analyze: ${filePath}`);
+    } catch (err) {
+      const reason =
+        err instanceof FileNotAnalyzedError
+          ? err.reason
+          : `read/parse failed: ${err instanceof Error ? err.message : String(err)}`;
+      skippedFiles.push({ filePath: relPath, reason });
+      logger.debug(`Not analyzed: ${filePath} — ${reason}`);
     }
   }
 
@@ -231,12 +267,14 @@ export async function analyzeProject(
     categoryBreakdown[issue.category] = (categoryBreakdown[issue.category] ?? 0) + 1;
   }
 
+  // Was: `: 100` when nothing was analyzed — a project of only skipped files
+  // scored perfect. No analyzed files means no score. Audited 2026-09-02.
   const overallScore =
     fileReports.length > 0
       ? Math.round(
           fileReports.reduce((sum, r) => sum + r.score, 0) / fileReports.length
         )
-      : 100;
+      : null;
 
   const worstFiles = fileReports
     .sort((a, b) => a.score - b.score)
@@ -258,6 +296,7 @@ export async function analyzeProject(
       infoCount,
       categoryBreakdown,
       worstFiles,
+      skippedFiles,
     },
     topIssues,
   };
@@ -634,8 +673,20 @@ export function formatQualityReport(report: ProjectQualityReport): string {
 
   lines.push("Code Quality Analysis");
   lines.push("━".repeat(40));
-  lines.push(`Overall Score: ${report.overallScore}/100`);
+  lines.push(
+    report.overallScore === null
+      ? `Overall Score: not measured (${report.summary.totalFiles} files analyzed)`
+      : `Overall Score: ${report.overallScore}/100`
+  );
   lines.push(`Files Analyzed: ${report.summary.totalFiles}`);
+  const skipped = report.summary.skippedFiles ?? [];
+  if (skipped.length > 0) {
+    lines.push(`Files Skipped (not analyzed): ${skipped.length}`);
+    for (const s of skipped.slice(0, 10)) {
+      lines.push(`  ${s.filePath} — ${s.reason}`);
+    }
+    if (skipped.length > 10) lines.push(`  ... and ${skipped.length - 10} more`);
+  }
   lines.push(
     `Issues: ${report.summary.errorCount} errors, ${report.summary.warningCount} warnings, ${report.summary.infoCount} info`
   );

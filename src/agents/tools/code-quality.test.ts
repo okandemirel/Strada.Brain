@@ -99,6 +99,31 @@ public struct BadComp : IComponent {
     expect(result.content).toContain("Files Analyzed:");
   });
 
+  it("reports an oversized file as not analyzed instead of a perfect score (audited 2026-09-02)", async () => {
+    // Over the 1MB parser limit; no numeric literals so the raw-text rules stay
+    // quiet. This used to print "Score: 100/100 / No issues found — code looks clean!".
+    let code = "public class Big\n{\n";
+    for (let i = 0; i < 40; i++) {
+      code += `    public void M${i}(string a, string b, string c, string d, string e, string f, string g) { Log(a); }\n`;
+    }
+    code += "}\n";
+    while (code.length <= 1024 * 1024) code += "// generated filler with no numeric literal\n";
+    await writeFile(join(testDir, "Big.cs"), code);
+
+    const result = await tool.execute({ mode: "file", path: "Big.cs" }, ctx);
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain("Not analyzed");
+    expect(result.content).toContain("Big.cs");
+    expect(result.content).toMatch(/1MB|1048576/);
+    expect(result.content).not.toContain("Score:");
+    expect(result.content).not.toContain("looks clean");
+
+    const project = await tool.execute({ mode: "project" }, ctx);
+    expect(project.content).toContain("Files Skipped (not analyzed): 1");
+    expect(project.content).not.toContain("100/100");
+  });
+
   it("returns error for missing file", async () => {
     const result = await tool.execute(
       { mode: "file", path: "nonexistent.cs" },

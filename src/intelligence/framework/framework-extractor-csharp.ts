@@ -72,6 +72,14 @@ export class CSharpFrameworkExtractor extends FrameworkExtractor {
         logger?.debug(`Skipping ${relative(resolvedPath, filePath)}: ${(err as Error).message}`);
         continue;
       }
+      if (ast.notParsed) {
+        // Was: counted an unread oversized file as parsed with zero symbols,
+        // so fileCount claimed coverage it did not have. Audited 2026-09-02.
+        logger?.warn(
+          `Framework extraction did not parse ${relative(resolvedPath, filePath)}: ${ast.notParsed.reason} (${ast.notParsed.contentLength} > ${ast.notParsed.limit} bytes); its types are absent from the snapshot`
+        );
+        continue;
+      }
       parsed++;
 
       // Collect namespaces

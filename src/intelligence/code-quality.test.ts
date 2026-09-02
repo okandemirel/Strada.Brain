@@ -1,5 +1,14 @@
 import { describe, it, expect } from "vitest";
-import { analyzeFile, formatQualityReport, type ProjectQualityReport } from "./code-quality.js";
+import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  analyzeFile,
+  analyzeProject,
+  formatQualityReport,
+  FileNotAnalyzedError,
+  type ProjectQualityReport,
+} from "./code-quality.js";
 
 vi.mock("../utils/logger.js", () => ({
   getLoggerSafe: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
@@ -190,6 +199,74 @@ public class MetricTest {
   });
 });
 
+describe("oversized files are reported as not analyzed, never as clean (audited 2026-09-02)", () => {
+  // >1MB of a realistic generated shape: one god class, many long methods,
+  // no numeric literals (so the raw-text rules stay quiet) — the exact shape
+  // that used to come back "Score: 100/100, Issues: 0, Classes: 0".
+  const oversized = (() => {
+    let methods = "";
+    for (let i = 0; i < 40; i++) {
+      methods += `    public void Method${i}(string a, string b, string c, string d, string e, string f, string g)\n    {\n`;
+      for (let j = 0; j < 70; j++) methods += `        Log(a + b + c + d + e + f + g);\n`;
+      methods += "    }\n";
+    }
+    let code = `public class GeneratedGodService\n{\n${methods}}\n`;
+    while (code.length <= 1024 * 1024) code += "// generated filler line that carries no numeric literal\n";
+    return code;
+  })();
+
+  it("analyzeFile refuses to score a file the parser did not read", () => {
+    expect(oversized.length).toBeGreaterThan(1024 * 1024);
+    expect(() => analyzeFile(oversized, "Big.cs")).toThrow(FileNotAnalyzedError);
+    try {
+      analyzeFile(oversized, "Big.cs");
+    } catch (err) {
+      expect(err).toBeInstanceOf(FileNotAnalyzedError);
+      expect((err as FileNotAnalyzedError).filePath).toBe("Big.cs");
+      expect((err as FileNotAnalyzedError).message).toMatch(/1MB|1048576/);
+      expect((err as FileNotAnalyzedError).message).toContain("not analyzed");
+    }
+  });
+
+  it("analyzeProject names the skipped files and does not invent a 100 score for zero analyzed files", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "cq-oversized-"));
+    try {
+      await writeFile(join(dir, "Big.cs"), oversized);
+      const report = await analyzeProject(dir);
+      expect(report.summary.totalFiles).toBe(0);
+      expect(report.summary.skippedFiles).toHaveLength(1);
+      expect(report.summary.skippedFiles[0]!.filePath).toBe("Big.cs");
+      expect(report.summary.skippedFiles[0]!.reason).toMatch(/1MB|1048576/);
+      expect(report.overallScore).toBeNull();
+
+      const text = formatQualityReport(report);
+      expect(text).not.toContain("100/100");
+      expect(text).toContain("not measured");
+      expect(text).toContain("Files Skipped (not analyzed): 1");
+      expect(text).toContain("Big.cs");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("analyzeProject still scores the survivors but never lets Files Analyzed stand alone", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "cq-mixed-"));
+    try {
+      await writeFile(join(dir, "Big.cs"), oversized);
+      await writeFile(join(dir, "Small.cs"), "public class Small { public void Run() { } }");
+      const report = await analyzeProject(dir);
+      expect(report.summary.totalFiles).toBe(1);
+      expect(report.summary.skippedFiles.map((s) => s.filePath)).toEqual(["Big.cs"]);
+      expect(typeof report.overallScore).toBe("number");
+      const text = formatQualityReport(report);
+      expect(text).toContain("Files Analyzed: 1");
+      expect(text).toContain("Files Skipped (not analyzed): 1");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("formatQualityReport", () => {
   it("formats a summary correctly", () => {
     const report: ProjectQualityReport = {
@@ -203,6 +280,7 @@ describe("formatQualityReport", () => {
         infoCount: 2,
         categoryBreakdown: { "anti-pattern": 3, "strada-specific": 2 },
         worstFiles: [{ filePath: "Bad.cs", score: 50 }],
+        skippedFiles: [],
       },
       topIssues: [
         {

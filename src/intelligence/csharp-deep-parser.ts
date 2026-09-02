@@ -6,7 +6,8 @@
  * a richer AST for code intelligence.
  */
 
-const MAX_FILE_SIZE = 1024 * 1024; // 1MB
+/** Largest file the deep parser reads. Over this it returns an AST flagged `notParsed`. */
+export const MAX_FILE_SIZE = 1024 * 1024; // 1MB
 
 // ═══════════════════════════════════════════
 // Token types
@@ -171,6 +172,17 @@ export interface CSharpAST {
   namespaces: NamespaceDecl[];
   /** Top-level types (outside any namespace). */
   types: TypeDecl[];
+  /**
+   * Set when the parser did NOT read the content (over MAX_FILE_SIZE). An AST
+   * carrying this is "not measured", not "empty": every AST-derived answer
+   * over it (zero classes, zero issues) is meaningless and callers must
+   * surface the skip rather than score it. Audited 2026-09-02.
+   */
+  notParsed?: {
+    reason: "file-too-large";
+    contentLength: number;
+    limit: number;
+  };
 }
 
 // ═══════════════════════════════════════════
@@ -1343,7 +1355,16 @@ class Parser {
  */
 export function parseDeep(content: string, filePath: string): CSharpAST {
   if (content.length > MAX_FILE_SIZE) {
-    return { filePath, usings: [], namespaces: [], types: [] };
+    // Was: a bare empty AST, indistinguishable from a genuinely empty file, so
+    // an unread 1.2MB file scored 100/100 with "no issues". The skip is now
+    // carried on the AST so consumers can name it. Audited 2026-09-02.
+    return {
+      filePath,
+      usings: [],
+      namespaces: [],
+      types: [],
+      notParsed: { reason: "file-too-large", contentLength: content.length, limit: MAX_FILE_SIZE },
+    };
   }
 
   const tokens = tokenize(content);

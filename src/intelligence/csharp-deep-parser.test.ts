@@ -24,6 +24,21 @@ describe("parseDeep", () => {
     expect(ast.types).toHaveLength(0);
   });
 
+  it("marks an oversized file as not parsed instead of silently returning an empty AST (audited 2026-09-02)", () => {
+    // A 1MB+ file used to come back indistinguishable from a genuinely empty
+    // file, so every AST-derived answer over it read as "clean".
+    const huge = "public class Big { }\n" + "// filler\n".repeat(120_000);
+    expect(huge.length).toBeGreaterThan(1024 * 1024);
+    const ast = parseDeep(huge, "big.cs");
+    expect(ast.notParsed).toBeDefined();
+    expect(ast.notParsed!.reason).toBe("file-too-large");
+    expect(ast.notParsed!.contentLength).toBe(huge.length);
+    expect(ast.notParsed!.limit).toBe(1024 * 1024);
+
+    const small = parseDeep("public class Small { }", "small.cs");
+    expect(small.notParsed).toBeUndefined();
+  });
+
   it("parses using directives", () => {
     const code = `
 using System;
