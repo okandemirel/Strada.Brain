@@ -105,8 +105,25 @@ export class UnityProjectVault implements IVault {
     if (this.initialized && this.watcher) return;
     await mkdir(join(this.rootPath, '.strada/vault/codebase'), { recursive: true });
     this.store.migrate();
+    this.reconcileEmbeddingMode();
     await this.fullIndex();
     this.initialized = true;
+  }
+
+  /**
+   * Names, once per init, whether vectors are being built at all, and forces
+   * a re-embed when an index built lexically meets a real semantic store.
+   * Audited 2026-09-02: the write path embedded every chunk into the
+   * non-semantic placeholder (whose search() returns []) without saying so.
+   */
+  protected reconcileEmbeddingMode(): void {
+    const semantic = this.adapter.isSemantic();
+    const { previous, resetFiles } = this.store.reconcileEmbeddingMode(semantic);
+    if (!semantic) {
+      getLoggerSafe().info(`[vault ${this.id}] vector store is non-semantic: chunks are indexed lexically only (FTS/BM25); no embeddings are computed or stored`);
+    } else if (previous === 'lexical') {
+      getLoggerSafe().info(`[vault ${this.id}] embedding mode changed lexical -> semantic: reset the stored hash of ${resetFiles} file(s) so every chunk is embedded on this index pass`);
+    }
   }
 
   async sync(): Promise<{ changed: number; durationMs: number }> {
@@ -382,7 +399,13 @@ export class UnityProjectVault implements IVault {
     // instead of short-circuiting on an up-to-date-but-vector-less row.
     const newHnswIds: number[] = [];
     let embedOk = false;
-    try {
+    // Gate the WRITE path on the same flag as the read path (audited
+    // 2026-09-02): a non-semantic store can never surface a vector, so
+    // embedding into it only spent provider calls and RSS. The file is fully
+    // indexed lexically; its hash commits below exactly as on embed success.
+    if (!this.adapter.isSemantic()) {
+      embedOk = true;
+    } else try {
       const embeddingMap = await this.adapter.upsertBatch(chunks.map((c) => ({ chunkId: c.chunkId, content: c.content })));
       newHnswIds.push(...Object.values(embeddingMap));
       // Persist chunk_id → hnsw_id mapping for future vector lifecycle management.

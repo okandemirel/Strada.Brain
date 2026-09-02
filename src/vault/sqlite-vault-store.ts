@@ -554,6 +554,30 @@ export class SqliteVaultStore {
     return row?.value ?? null;
   }
 
+  /**
+   * Records whether this index is being built with real vectors ('semantic')
+   * or lexically only ('lexical', the placeholder store). Going lexical →
+   * semantic resets every file's blob hash so the next index pass embeds them:
+   * otherwise the unchanged-hash short-circuit would leave every previously
+   * indexed file without vectors forever, silently (audited 2026-09-02).
+   * @returns the previous mode and how many file rows were reset.
+   */
+  reconcileEmbeddingMode(semantic: boolean): { previous: 'semantic' | 'lexical' | null; resetFiles: number } {
+    const mode = semantic ? 'semantic' : 'lexical';
+    const previous = this.getMeta('embedding_mode') as 'semantic' | 'lexical' | null;
+    let resetFiles = 0;
+    const txn = this.db.transaction(() => {
+      if (previous === 'lexical' && mode === 'semantic') {
+        resetFiles = this.db.prepare("UPDATE vault_files SET blob_hash = ''").run().changes;
+      }
+      this.db.prepare(
+        'INSERT INTO vault_meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
+      ).run('embedding_mode', mode);
+    });
+    txn();
+    return { previous, resetFiles };
+  }
+
   upsertEmbedding(chunkId: string, hnswId: number, dim: number, model: string): void {
     this._stmtUpsertEmbedding!.run({ chunkId, hnswId, dim, model });
   }

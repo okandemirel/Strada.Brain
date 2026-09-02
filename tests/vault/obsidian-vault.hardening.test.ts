@@ -18,6 +18,9 @@ class StubEmbedding implements EmbeddingProvider {
 }
 
 class StubVectorStore implements VectorStore {
+  // Stands in for a REAL backend: the vault only builds vectors for a
+  // semantic store (audited 2026-09-02), and these tests assert that lifecycle.
+  readonly semantic = true;
   private nextId = 1;
   readonly items = new Map<number, unknown>();
   add(_v: Float32Array, payload: unknown) {
