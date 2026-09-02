@@ -1507,6 +1507,84 @@ describe("CampaignManager", () => {
     expect(fresh.milestones[0]!.attempts).toBe(1);
   });
 
+  it("an idea-mode restart before the draft was submitted re-drafts, never plans from another game's GDD", async () => {
+    // Audited 2026-09-02: newCampaign persists state="planning" and submitDraft
+    // flips it to drafting-gdd, so a restart in that window resumed into
+    // planAndLaunch — which picks the NEWEST docs/*GDD*.md by mtime. On a repo
+    // that already holds another game's GDD (docs/Game_GDD.md here), the whole
+    // ladder would be planned for the wrong game and the idea silently lost.
+    tasks = new FakeTaskManager();
+    storage.close();
+    storage = new CampaignStorage(join(dir, "campaigns-idea.db"));
+    const planMilestones = vi.fn().mockResolvedValue(LADDER);
+    manager = new CampaignManager({
+      storage,
+      planner: { planMilestones } as unknown as CampaignPlanner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async (chatId, text) => messages.push({ chatId, text }),
+      projectRoot,
+      retryAdoptionGraceMs: 10,
+      completedSettleDelayMs: 0,
+      milestoneTimeBoxMs: 60 * 60_000,
+    });
+    manager.attachEvents();
+
+    const now = Date.now();
+    storage.save({
+      id: "campaign_idea_1",
+      chatId: "cli-local",
+      channelType: "cli",
+      userId: "u1",
+      projectRoot,
+      state: "planning",
+      ideaText: "a match-3 where pigs fly",
+      draftAttempts: 0,
+      milestones: [],
+      currentMilestone: 0,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    await manager.resumeActive();
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+
+    expect(planMilestones).not.toHaveBeenCalled();
+    expect(tasks.submitted[0]!.prompt).toContain("a match-3 where pigs fly");
+    const fresh = storage.get("campaign_idea_1")!;
+    expect(fresh.state).toBe("drafting-gdd");
+    expect(fresh.gddPath).toBeUndefined(); // the other game's GDD was not adopted
+  });
+
+  it("a draft parked by an outage self-revives by re-drafting, not by planning from an unrelated GDD", async () => {
+    const { ProviderHealthRegistry } = await import("../agents/providers/provider-health.js");
+    const { setLiveChainMemberNames } = await import("../agents/providers/provider-outage.js");
+    const registry = ProviderHealthRegistry.getInstance();
+    registry.clearProviderState("cm-revive-draft");
+    registry.recordOverloaded("cm-revive-draft", "quota wall");
+    setLiveChainMemberNames(["cm-revive-draft"]);
+    try {
+      const campaign = manager.startFromIdea(ctx, "a roguelike about ash");
+      tasks.updatedAts.set("task_1", Date.now() - 30 * 60_000);
+      tasks.emit("task:failed", "task_1", "Task execution failed: All providers are in cooldown.");
+      await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"));
+
+      registry.clearProviderState("cm-revive-draft");
+      (manager as unknown as { scheduleAutoRevive(id: string, ms: number): void })
+        .scheduleAutoRevive(campaign.id, 20);
+
+      await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("drafting-gdd"));
+      expect(tasks.submitted).toHaveLength(2);
+      expect(tasks.submitted[1]!.prompt).toContain("a roguelike about ash");
+      const revived = storage.get(campaign.id)!;
+      expect(revived.gddPath).toBeUndefined(); // docs/Game_GDD.md belongs to another game
+      expect(revived.autoReviveAt).toBeUndefined();
+      expect(revived.draftAttempts).toBe(0); // the outage still charges no round
+    } finally {
+      setLiveChainMemberNames([]);
+      registry.clearProviderState("cm-revive-draft");
+    }
+  });
+
   it("resumeActive leaves a still-running task alone", async () => {
     manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
     await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));

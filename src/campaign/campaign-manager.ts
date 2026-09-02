@@ -290,10 +290,17 @@ export class CampaignManager {
 
     const milestone = campaign.milestones[campaign.currentMilestone];
     if (!milestone) {
-      // Failed before/during planning — replan from the GDD.
-      campaign.state = "planning";
       campaign.lastError = undefined;
       campaign.autoReviveAt = undefined;
+      if (this.isIdeaModeBeforeGdd(campaign)) {
+        // Idea mode, no GDD yet: the draft is the work, not the ladder.
+        this.persist(campaign);
+        await this.tell(campaign, "Reviving the campaign — rewriting the GDD from your idea.");
+        this.submitDraft(campaign);
+        return true;
+      }
+      // Failed before/during planning — replan from the GDD.
+      campaign.state = "planning";
       this.persist(campaign);
       await this.tell(campaign, "Reviving the campaign — replanning the milestone ladder from the GDD.");
       void this.planAndLaunch(campaign.id);
@@ -369,12 +376,23 @@ export class CampaignManager {
           }
           const milestone = fresh.milestones[fresh.currentMilestone];
           if (!milestone) {
+            fresh.lastError = undefined;
+            fresh.autoReviveAt = undefined;
+            if (this.isIdeaModeBeforeGdd(fresh)) {
+              // Parked while drafting (idea mode): re-issue the DRAFT. Planning
+              // here would adopt an unrelated docs GDD (audited 2026-09-02).
+              this.persist(fresh);
+              getLoggerSafe().info("Campaign self-revival — redrafting the GDD from the idea", {
+                id: fresh.id,
+              });
+              await this.tell(fresh, "Provider chain recovered — rewriting the GDD from your idea.");
+              this.submitDraft(fresh);
+              return;
+            }
             // Failed before the ladder existed (planning outage): replan from
             // the GDD, as tryHandleRevive does. Returning here silently was
             // how an armed pre-ladder revival no-oped (audited 2026-09-02).
             fresh.state = "planning";
-            fresh.lastError = undefined;
-            fresh.autoReviveAt = undefined;
             this.persist(fresh);
             getLoggerSafe().info("Campaign self-revival — provider chain recovered, replanning the ladder", {
               id: fresh.id,
@@ -534,6 +552,13 @@ export class CampaignManager {
         // different ladder from the one already announced. Resume the work
         // item instead; this milestone has never been submitted, so its first
         // attempt is charged exactly as a fresh launch charges it.
+        if (this.isIdeaModeBeforeGdd(campaign)) {
+          getLoggerSafe().info("Campaign resuming the GDD draft instead of planning", {
+            id: campaign.id,
+          });
+          this.submitDraft(campaign);
+          return;
+        }
         if (campaign.milestones.length > 0 && campaign.milestones[campaign.currentMilestone]) {
           getLoggerSafe().info("Campaign resuming a persisted ladder instead of replanning", {
             id: campaign.id,
@@ -557,6 +582,18 @@ export class CampaignManager {
   // ===========================================================================
   // INTERNAL — transitions
   // ===========================================================================
+
+  /**
+   * Idea mode with no design document yet: the work to resume is the DRAFT,
+   * not planning. Audited 2026-09-02 — every pre-ladder resume (restart,
+   * "kampanya devam", outage self-revival) funnelled into planAndLaunch,
+   * which adopts the NEWEST docs/*GDD*.md by mtime. On a repo that already
+   * holds another game's GDD that plans a ladder for the wrong game and drops
+   * the idea silently.
+   */
+  private isIdeaModeBeforeGdd(campaign: Campaign): boolean {
+    return !!campaign.ideaText && !campaign.gddPath && !campaign.gddText;
+  }
 
   private newCampaign(
     ctx: CampaignContext,
