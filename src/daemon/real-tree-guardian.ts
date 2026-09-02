@@ -54,6 +54,11 @@ const POST_FIX_QUIET_MS = 10 * 60_000;
 const MAX_FIX_ATTEMPTS_PER_FINGERPRINT = 3;
 /** Back off this long after escalating; a changed error list resets earlier. */
 const ESCALATION_BACKOFF_MS = 6 * 60 * 60_000;
+/**
+ * Consecutive ticks whose verifier could not run before the user is told the
+ * guardian is blind. 4 ticks at the default 15-min cadence is one hour.
+ */
+const BLIND_TICKS_BEFORE_ESCALATION = 4;
 
 const FIX_TASK_PROMPT = (detail: string, projectRoot: string) =>
   `The REAL project tree at ${projectRoot} does not compile. This is the tree the user opens — ` +
@@ -78,6 +83,9 @@ export class RealTreeGuardian {
   private redFingerprint: string | undefined;
   private fixAttempts = 0;
   private escalated = false;
+  /** Consecutive ticks whose verifier could not run (no verdict either way). */
+  private blindStreak = 0;
+  private blindReported = false;
 
   constructor(options: RealTreeGuardianOptions) {
     this.taskManager = options.taskManager;
@@ -134,7 +142,17 @@ export class RealTreeGuardian {
       }
 
       const verdict = await this.verify(this.projectRoot);
-      if (verdict.ran === false) return; // the verifier could not run — no signal
+      if (verdict.ran === false) {
+        // The verifier could not run — no signal about the tree, so no fix.
+        // Audited 2026-09-02: this returned bare, discarding `detail`, so a
+        // guardian whose verifier was permanently unavailable was
+        // indistinguishable from a green tree for days. The absence of a
+        // verdict is itself reported.
+        await this.noteBlindTick(verdict.detail);
+        return;
+      }
+      this.blindStreak = 0;
+      this.blindReported = false;
       if (verdict.ok) {
         this.redFingerprint = undefined;
         this.fixAttempts = 0;
@@ -195,6 +213,31 @@ export class RealTreeGuardian {
       }
     } finally {
       this.tickInFlight = false;
+    }
+  }
+
+  /**
+   * Record a tick whose verifier could not run. Logs the verifier's own
+   * reason on the first blind tick and every BLIND_TICKS_BEFORE_ESCALATION
+   * after, and tells the user once per streak when the guardian has been
+   * blind that long — so "not watching" never reads like "green".
+   */
+  private async noteBlindTick(detail: string): Promise<void> {
+    this.blindStreak += 1;
+    const streak = this.blindStreak;
+    if (streak === 1 || streak % BLIND_TICKS_BEFORE_ESCALATION === 0) {
+      getLoggerSafe().warn("Real-tree guardian could not verify the tree (verifier did not run)", {
+        detail: detail.slice(0, 300),
+        consecutive: streak,
+      });
+    }
+    if (streak >= BLIND_TICKS_BEFORE_ESCALATION && !this.blindReported && this.messenger) {
+      this.blindReported = true;
+      const minutes = Math.round((streak * this.intervalMs) / 60_000);
+      await this.messenger(
+        this.chatId,
+        `⚠️ The real-tree guardian has not been able to verify the project tree for ${streak} consecutive checks (~${minutes} min) — it is NOT watching the tree right now. Reason: ${detail.slice(0, 300)}`,
+      ).catch(() => undefined);
     }
   }
 }
