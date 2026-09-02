@@ -19,6 +19,20 @@ import { join as joinPath, resolve as resolvePath } from "node:path";
  *  asset pack must not make generated art invisible by exhausting the budget
  *  on files nobody asked about. Traversal itself stays hard-capped. */
 function walkFiles(dir: string, budget = 4000, match?: (file: string) => boolean): string[] {
+  return walkFilesWithStatus(dir, budget, match).files;
+}
+
+/**
+ * walkFiles, plus whether the walk stopped before it saw everything. A census
+ * that judges absence — "no asset has this guid", "nothing references this
+ * script" — must know when it did not finish, because a truncated one cannot
+ * tell a missing file from an unread one (audited 2026-09-02).
+ */
+function walkFilesWithStatus(
+  dir: string,
+  budget = 4000,
+  match?: (file: string) => boolean,
+): { files: string[]; truncated: boolean } {
   const out: string[] = [];
   const stack = [dir];
   let visited = 0;
@@ -37,18 +51,30 @@ function walkFiles(dir: string, budget = 4000, match?: (file: string) => boolean
       else if (!match || match(full)) out.push(full);
     }
   }
-  return out;
+  // Every directory's entries are pushed whole, so an empty stack means the
+  // whole tree was seen; anything left on it was never opened.
+  return { files: out, truncated: stack.length > 0 };
 }
 
 /** Does any .asset under Assets point at this script's guid? */
 function anyAssetReferences(assetsRoot: string, guid: string): boolean {
-  for (const file of walkFiles(assetsRoot)) {
-    if (!file.endsWith(".asset")) continue;
+  // Filtered INSIDE the walk so the budget counts .asset files, not every
+  // texture and .meta of an imported pack (audited 2026-09-02: an unfiltered
+  // 4000-file walk never reached the module's own .asset and accused a bound
+  // config of being unbound).
+  const walk = walkFilesWithStatus(assetsRoot, 20_000, (f) => f.endsWith(".asset"));
+  for (const file of walk.files) {
     try {
       if (readFileSync(file, "utf8").includes(guid)) return true;
     } catch {
       // Unreadable asset: cannot prove a reference, keep looking.
     }
+  }
+  if (walk.truncated) {
+    // Not every .asset was read, so "nothing references it" is not known.
+    // Absence of evidence is not evidence: say referenced rather than accuse.
+    debugLog("Asset-reference walk truncated; not accusing", { assetsRoot, guid });
+    return true;
   }
   return false;
 }
@@ -804,10 +830,17 @@ export class StradaConformanceGuard {
     if (!existsSync(assetsRoot)) return [];
 
     const known = new Set<string>();
+    let censusComplete = true;
     for (const base of [assetsRoot, joinPath(projectPath, "Packages")]) {
       if (!existsSync(base)) continue;
-      for (const file of walkFiles(base)) {
-        if (!file.endsWith(".meta")) continue;
+      // Filtered INSIDE the walk so the budget counts .meta files. Audited
+      // 2026-09-02: the unfiltered default 4000-file walk was filled by the
+      // first ~2000 assets of an imported pack, every later .meta went unread,
+      // and a valid reference was accused of dangling — by a gate with no ask
+      // budget, which then hid every real gate behind it for the whole run.
+      const walk = walkFilesWithStatus(base, 60_000, (f) => f.endsWith(".meta"));
+      if (walk.truncated) censusComplete = false;
+      for (const file of walk.files) {
         try {
           const g = /guid:\s*([a-f0-9]{32})/u.exec(readFileSync(file, "utf8"))?.[1];
           if (g) known.add(g);
@@ -817,6 +850,11 @@ export class StradaConformanceGuard {
       }
     }
     if (known.size === 0) return [];
+    if (!censusComplete) {
+      // A truncated census cannot tell a missing guid from an unread one.
+      debugLog("Guid census truncated; not judging dangling references", { projectPath });
+      return [];
+    }
 
     const out: string[] = [];
     for (const moduleRoot of this.touchedModuleRoots) {
@@ -1287,7 +1325,11 @@ export class StradaConformanceGuard {
 
     const assets = joinPath(projectPath, "Assets");
     if (!existsSync(assets)) return 0;
-    return walkFiles(assets, 4000).filter(
+    // Filtered inside the walk (audited 2026-09-02): a code-heavy pack must not
+    // fill the budget before the art is counted and read as "no art at all".
+    return walkFiles(
+      assets,
+      4000,
       (f) => isArtSourceFile(f) || f.toLowerCase().endsWith(".prefab"),
     ).length;
   }

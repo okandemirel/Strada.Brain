@@ -99,6 +99,26 @@ describe("a config that holds prefabs and was never instantiated", () => {
     expect(promptFor(root, configPath) ?? "").not.toContain("[STRADA PREFABS UNBOUND]");
   });
 
+  it("still sees the binding asset behind an imported pack larger than the walk budget", () => {
+    // Audited 2026-09-02: anyAssetReferences() walked Assets/ with the default
+    // 4000-file budget and no match filter. A pack that sorts after Modules/
+    // is walked first (LIFO), fills the budget with textures and .meta files,
+    // and the module's own .asset is never read — a bound config accused of
+    // being unbound.
+    const { root, configPath } = project({ prefabFields: true, assetReferencingIt: true });
+    const textures = join(root, "Assets", "ZZThirdParty", "PolygonPack", "Textures");
+    mkdirSync(textures, { recursive: true });
+    for (let i = 0; i < 3000; i++) {
+      writeFileSync(join(textures, `tex_${i}.png`), "png");
+      writeFileSync(join(textures, `tex_${i}.png.meta`), `guid: ${i.toString(16).padStart(32, "0")}\n`);
+    }
+
+    // The same truncation makes the guid census (checked first) accuse the
+    // binding asset's script reference of dangling, which would mask this
+    // gate's text — so neither false accusation may appear.
+    expect(promptFor(root, configPath) ?? "").not.toMatch(/REFERENCE DANGLING|PREFABS UNBOUND/u);
+  });
+
   it("ignores a config that holds no prefabs", () => {
     // A settings object with no GameObject field cannot leave prefabs unbound,
     // and objecting to it would train the agent to ignore the rule.

@@ -70,6 +70,21 @@ const promptFor = (root: string, configPath: string): string =>
 const REAL = 'a3f1c9d84e2b47e6b0d5c8a1976f3210';
 const MISSING = '6813063e5baa844d7a169fbe5f43269c';
 
+/**
+ * An imported asset pack: `count` textures, each with its .meta, under a
+ * folder that sorts AFTER Modules/ — walkFiles pops directories LIFO, so this
+ * subtree is walked first and eats an unfiltered budget before the module's
+ * own .meta files are ever read.
+ */
+function importedPack(root: string, count: number): void {
+  const textures = join(root, 'Assets', 'ZZThirdParty', 'PolygonPack', 'Textures');
+  mkdirSync(textures, { recursive: true });
+  for (let i = 0; i < count; i++) {
+    writeFileSync(join(textures, `tex_${i}.png`), 'png');
+    writeFileSync(join(textures, `tex_${i}.png.meta`), `fileFormatVersion: 2\nguid: ${i.toString(16).padStart(32, '0')}\n`);
+  }
+}
+
 describe('an asset reference that points at nothing', () => {
   it('objects when a config references a guid no asset has', () => {
     const { root, configPath } = project(MISSING, REAL);
@@ -93,6 +108,18 @@ describe('an asset reference that points at nothing', () => {
     const { root, configPath } = project(REAL, REAL);
 
     expect(promptFor(root, configPath)).not.toContain('0000000000000000f');
+  });
+
+  it('is not fooled by an imported asset pack larger than the walk budget', () => {
+    // Audited 2026-09-02: the guid census walked Assets/ with the default
+    // 4000-file budget and NO match filter, so the first ~2000 assets of any
+    // kind (each with a .meta) filled it and every later .meta was never read.
+    // A perfectly valid reference was then accused of dangling — an unbudgeted,
+    // unclearable gate that hid every real gate behind it.
+    const { root, configPath } = project(REAL, REAL);
+    importedPack(root, 3000);
+
+    expect(promptFor(root, configPath)).not.toContain('[STRADA REFERENCE DANGLING]');
   });
 
   it('says what the dangling reference costs', () => {
