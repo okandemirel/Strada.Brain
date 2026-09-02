@@ -43,7 +43,17 @@ describe("GitStatusTool", () => {
   it("shows clean working tree", async () => {
     const result = await tool.execute({}, ctx);
     expect(result.content).toContain("##");
-    // Status should only have the branch line for clean tree
+    // Audited 2026-09-02: `-b` always prints the branch header, so the
+    // "clean" sentence was unreachable and a clean tree came back as a bare
+    // `## main` line. The header stays, and the verdict is stated.
+    expect(result.content).toContain("Working tree is clean. No changes.");
+  });
+
+  it("does not call a dirty tree clean", async () => {
+    await writeFile(join(tempDir, "file.txt"), "changed\n");
+    const result = await tool.execute({}, ctx);
+    expect(result.content).toContain(" M file.txt");
+    expect(result.content).not.toContain("Working tree is clean");
   });
 
   it("shows modified files", async () => {

@@ -71,8 +71,13 @@ export class GitStatusTool implements ITool {
     if (result.exitCode !== 0) {
       return { content: `Error: ${result.stderr || "git status failed"}`, isError: true };
     }
-    if (!result.stdout.trim()) {
-      return { content: "Working tree is clean. No changes." };
+    // Audited 2026-09-02: `-b` always prints the `## branch` header, so stdout
+    // was never empty on success and "Working tree is clean" was unreachable —
+    // a clean tree came back as a bare header the model had to interpret.
+    // Separate the header from the entries and judge cleanliness on the entries.
+    const [head, ...entries] = result.stdout.split("\n").filter((line) => line.length > 0);
+    if (entries.length === 0) {
+      return { content: `${head ?? ""}\nWorking tree is clean. No changes.`.trimStart() };
     }
     return { content: result.stdout };
   }
