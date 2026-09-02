@@ -161,9 +161,6 @@ export async function initializeAIProvider(
       .filter((n) => n && !preflightResult.passedProviderIds.includes(n));
     const chainOrder = [...preflightResult.passedProviderIds, ...demotedConfigured];
     defaultProviderOrder = chainOrder;
-    // Cooldown-aware waits must measure exactly these members — a stale
-    // registry entry for a de-configured provider must not read as capacity.
-    setLiveChainMemberNames(chainOrder);
     defaultProvider = buildProviderChain(chainOrder, providerCredentials, {
       models: config.providerModels,
       baseUrls: baseUrlOverrides,
@@ -248,6 +245,18 @@ export async function initializeAIProvider(
       chain: preflightResult.passedProviderIds,
     });
   }
+
+  // Cooldown-aware waits must measure exactly the members of the chain that
+  // was actually BUILT — a stale registry entry for a de-configured provider
+  // must not read as capacity, and a live member must not be invisible.
+  // Declared here, after every branch, because the declaration used to sit
+  // inside branch 1 BEFORE its auto-append rebuilt the chain (an appended
+  // healthy kimi was undeclared, so a cooled openai measured as a full outage
+  // and parked the campaign for its whole reset window), and branches 2/3
+  // never declared at all (empty set = every stale key counts as a free
+  // provider, the exact incident provider-outage.ts documents). Audited
+  // 2026-09-02.
+  setLiveChainMemberNames(defaultProviderOrder);
 
   // Run health check (non-blocking — warn only)
   if (defaultProvider.healthCheck) {

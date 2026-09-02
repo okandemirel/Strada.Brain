@@ -96,6 +96,10 @@ import {
   resolveAndCacheEmbeddings,
 } from "./bootstrap-providers.js";
 import { AppError } from "../common/errors.js";
+import {
+  isCurrentChainMemberName,
+  setLiveChainMemberNames,
+} from "../agents/providers/provider-outage.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -368,6 +372,65 @@ describe("bootstrap-providers", () => {
   // ========================================================================
   // isTransientEmbeddingVerificationError
   // ========================================================================
+
+  // ========================================================================
+  // initializeAIProvider — live chain declaration for the outage measure
+  // ========================================================================
+
+  describe("initializeAIProvider — declares the chain the outage measure walks", () => {
+    // provider-outage's declared-member set is process-global; start each
+    // case from the undeclared state so a previous boot cannot leak into it.
+    beforeEach(() => {
+      setLiveChainMemberNames([]);
+    });
+
+    it("declares auto-appended fallbacks, not just the configured chain (audited 2026-09-02)", async () => {
+      // PROVIDER_CHAIN=openai with a KIMI key present: the boot appends kimi
+      // and rebuilds the chain as [openai, kimi]. The declaration used to be
+      // frozen at ["openai"] BEFORE the append, so a cooled openai measured as
+      // a full outage while a healthy kimi sat second in the live chain.
+      const config = makeConfig({ providerChain: "openai" });
+      mockNormalizeProviderNames.mockReturnValue(["openai"]);
+      mockCollectApiKeys.mockReturnValue({ kimi: "kimi-key" });
+      mockPreflightResponseProviders
+        .mockResolvedValueOnce({ passedProviderIds: ["openai"], failures: [] })
+        .mockResolvedValueOnce({ passedProviderIds: ["kimi"], failures: [] });
+
+      const result = await initializeAIProvider(config, logger);
+
+      expect(result.notices.some((n) => /Auto-appended fallback providers: kimi/.test(n))).toBe(true);
+      expect(isCurrentChainMemberName("openai")).toBe(true);
+      expect(isCurrentChainMemberName("kimi")).toBe(true);
+      // Still scoped: a de-configured provider's stale entry is not capacity.
+      expect(isCurrentChainMemberName("gemini")).toBe(false);
+    });
+
+    it("declares the chain on the auto-detect boot path (audited 2026-09-02)", async () => {
+      // No PROVIDER_CHAIN: only the explicit-chain branch ever declared, so
+      // this boot left the set EMPTY and every stale registry key (a "kimi"
+      // healthy entry from a week ago) read as a free provider.
+      const config = makeConfig();
+      mockCollectApiKeys.mockReturnValue({ gemini: "gem-key" });
+      mockPreflightResponseProviders.mockResolvedValue({
+        passedProviderIds: ["gemini"],
+        failures: [],
+      });
+
+      await initializeAIProvider(config, logger);
+
+      expect(isCurrentChainMemberName("gemini")).toBe(true);
+      expect(isCurrentChainMemberName("kimi")).toBe(false);
+    });
+
+    it("declares the chain on the Anthropic-direct boot path (audited 2026-09-02)", async () => {
+      const config = makeConfig({ anthropicApiKey: "sk-ant-123" });
+
+      await initializeAIProvider(config, logger);
+
+      expect(isCurrentChainMemberName("claude")).toBe(true);
+      expect(isCurrentChainMemberName("kimi")).toBe(false);
+    });
+  });
 
   describe("isTransientEmbeddingVerificationError", () => {
     it.each([
