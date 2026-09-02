@@ -169,10 +169,10 @@ export class FileReadTool implements ITool {
           limit: limitProvided ? limit : undefined,
           symbol,
         });
-        if (vaultResult) {
-          vaultHitCount += 1;
-          return vaultResult;
-        }
+        // The hit is counted inside vaultFileRead, where the vault answers,
+        // so the orchestrator's interceptor (which never reaches this tool)
+        // counts the same way.
+        if (vaultResult) return vaultResult;
       }
     }
 
@@ -313,6 +313,12 @@ export async function vaultFileRead(params: {
     (symbol ? `, symbol="${symbol}"` : "") +
     `, source=vault:${vault.id})`;
 
+  // Audited 2026-09-02: the hit counter lived at FileReadTool's call site, but
+  // the orchestrator's vault-first interceptor answers every servable read
+  // through this function before the tool runs — so /api/vaults/stats reported
+  // hits: 0, hitRatePct: 0 for a vault serving most reads. Count the hit here,
+  // where the vault actually answered, for every caller.
+  vaultHitCount += 1;
   return {
     content: `${header}\n${numbered}`,
     metadata: {
