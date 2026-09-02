@@ -1,5 +1,9 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { TaskManager } from "./task-manager.js";
+import { TaskStorage } from "./task-storage.js";
 import { TaskStatus, type Task } from "./types.js";
 import { createLogger } from "../utils/logger.js";
 import type { GoalNode, GoalTree, GoalNodeId } from "../goals/types.js";
@@ -341,5 +345,41 @@ describe("TaskManager", () => {
     manager.recoverOnStartup();
 
     expect(status).toBe(TaskStatus.paused);
+  });
+
+  it("a replay keeps the live orchestrator and workspace policy the task was submitted with", () => {
+    // Audited 2026-09-02: every replay path rebuilt the task from SQLite.
+    // The live orchestrator has no column, so an agent's retried mission ran
+    // as the MAIN agent (wrong memory namespace, wrong budget) with nothing
+    // logged; workspacePolicy was neither persisted nor forwarded, so a
+    // "run against the real root" fix task came back leased on retry.
+    const dir = mkdtempSync(join(tmpdir(), "task-manager-replay-"));
+    const storage = new TaskStorage(join(dir, "tasks.db"));
+    storage.initialize();
+    const executor = { enqueue: vi.fn(), resumeConversation: vi.fn() } as any;
+    const manager = new TaskManager(storage, executor);
+    const agentOrchestrator = { name: "agent-orchestrator" } as any;
+    try {
+      const task = manager.submit("chat-1", "cli", "an agent's own overnight mission", {
+        orchestrator: agentOrchestrator,
+        workspacePolicy: "none",
+      });
+      // The row round-trips through SQLite without the live object graph.
+      expect(storage.load(task.id)?.orchestrator).toBeUndefined();
+
+      manager.block(task.id, "Transient failure — provider blink.");
+      const retry = manager.retryTask(task.id);
+      expect(retry).not.toBeNull();
+
+      const enqueued = executor.enqueue.mock.calls[1]?.[0] as Task;
+      expect(enqueued.id).toBe(retry!.id);
+      expect(enqueued.orchestrator).toBe(agentOrchestrator);
+      expect(enqueued.workspacePolicy).toBe("none");
+      // The retry's own row carries the policy for the round after it.
+      expect(storage.load(retry!.id)?.workspacePolicy).toBe("none");
+    } finally {
+      storage.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

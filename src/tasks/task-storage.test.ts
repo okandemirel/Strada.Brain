@@ -57,6 +57,20 @@ describe("TaskStorage", () => {
     expect(storage.findLineageRootId(root.id)).toBe(root.id);
   });
 
+  it("persists workspacePolicy so a replayed run-against-the-root fix task does not silently take a lease", () => {
+    // Audited 2026-09-02: save() had no column for it and rowToTask never set
+    // it, so every replay of a `workspacePolicy: "none"` task (the guardian's
+    // delete-a-duplicate-type fix) came back leased, and its deletions were
+    // declined into a warning nobody reads.
+    const direct = makeTask(TaskStatus.failed, { workspacePolicy: "none" });
+    const leased = makeTask(TaskStatus.failed);
+    storage.save(direct);
+    storage.save(leased);
+
+    expect(storage.load(direct.id)?.workspacePolicy).toBe("none");
+    expect(storage.load(leased.id)?.workspacePolicy).toBeUndefined();
+  });
+
   it("touch() bumps updated_at without adding a progress row (reaper liveness)", () => {
     const stale = Date.now() - 90 * 60_000;
     const task = makeTask(TaskStatus.executing, { createdAt: stale, updatedAt: stale });

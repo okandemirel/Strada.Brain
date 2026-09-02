@@ -26,6 +26,17 @@ import type { PendingTaskCheckpoint, TaskCheckpointStore } from "./task-checkpoi
 export class TaskManager extends EventEmitter {
   private readonly abortControllers = new Map<TaskId, AbortController>();
   private checkpointStore?: TaskCheckpointStore;
+  /**
+   * The live orchestrator a task was submitted with, for replay. Audited
+   * 2026-09-02: every replay path rebuilt the task from SQLite, which has no
+   * column for a live object graph, so `task.orchestrator` was always
+   * undefined and an agent's retried mission silently ran as the MAIN agent —
+   * wrong memory namespace, wrong budget, nothing logged. The object cannot be
+   * persisted; it is remembered here for the life of the process and handed
+   * to each replay in the lineage (submit re-registers the child).
+   */
+  private readonly liveOrchestrators = new Map<TaskId, IOrchestrator>();
+  private static readonly MAX_LIVE_ORCHESTRATORS = 500;
 
   constructor(
     private readonly storage: TaskStorage,
@@ -93,6 +104,7 @@ export class TaskManager extends EventEmitter {
     };
 
     this.storage.save(task);
+    if (options?.orchestrator) this.rememberOrchestrator(task.id, options.orchestrator);
     logger.info("Task submitted", { taskId: task.id, chatId, promptLength: prompt.length });
     this.emit("task:created", task);
 
@@ -234,7 +246,8 @@ export class TaskManager extends EventEmitter {
       triggerName: task.triggerName,
       conversationId: task.conversationId,
       userId: task.userId,
-      orchestrator: task.orchestrator,
+      orchestrator: this.replayOrchestrator(task),
+      workspacePolicy: task.workspacePolicy,
       userContent: task.userContent,
       attachments: task.attachments,
       parentId: task.id,
@@ -289,7 +302,8 @@ export class TaskManager extends EventEmitter {
       triggerName: task.triggerName,
       conversationId: task.conversationId,
       userId: task.userId,
-      orchestrator: task.orchestrator,
+      orchestrator: this.replayOrchestrator(task),
+      workspacePolicy: task.workspacePolicy,
       userContent: task.userContent,
       attachments: task.attachments,
       parentId: task.id,
@@ -308,7 +322,8 @@ export class TaskManager extends EventEmitter {
         triggerName: task.triggerName,
         conversationId: task.conversationId,
         userId: task.userId,
-        orchestrator: task.orchestrator,
+        orchestrator: this.replayOrchestrator(task),
+        workspacePolicy: task.workspacePolicy,
         userContent: task.userContent,
         attachments: task.attachments,
         parentId: task.id,
@@ -324,7 +339,8 @@ export class TaskManager extends EventEmitter {
       forceSharedPlanning: true,
       userContent: task.userContent,
       attachments: task.attachments,
-      orchestrator: task.orchestrator,
+      orchestrator: this.replayOrchestrator(task),
+      workspacePolicy: task.workspacePolicy,
       conversationId: task.conversationId,
       userId: task.userId,
       parentId: task.id,
@@ -377,7 +393,8 @@ export class TaskManager extends EventEmitter {
       forceSharedPlanning: true,
       userContent: task.userContent,
       attachments: task.attachments,
-      orchestrator: task.orchestrator,
+      orchestrator: this.replayOrchestrator(task),
+      workspacePolicy: task.workspacePolicy,
       conversationId: task.conversationId,
       userId: task.userId,
       parentId: task.id,
@@ -396,7 +413,8 @@ export class TaskManager extends EventEmitter {
         triggerName: task.triggerName,
         conversationId: task.conversationId,
         userId: task.userId,
-        orchestrator: task.orchestrator,
+        orchestrator: this.replayOrchestrator(task),
+        workspacePolicy: task.workspacePolicy,
         userContent: task.userContent,
         attachments: task.attachments,
         parentId: task.id,
@@ -414,7 +432,8 @@ export class TaskManager extends EventEmitter {
       forceSharedPlanning: true,
       userContent: task.userContent,
       attachments: task.attachments,
-      orchestrator: task.orchestrator,
+      orchestrator: this.replayOrchestrator(task),
+      workspacePolicy: task.workspacePolicy,
       conversationId: task.conversationId,
       userId: task.userId,
       parentId: task.id,
@@ -492,6 +511,21 @@ export class TaskManager extends EventEmitter {
     this.storage.touch(taskId);
   }
 
+  /** The orchestrator a replay must run under: the row's (never set — SQLite) or the remembered live one. */
+  private replayOrchestrator(task: Task): IOrchestrator | undefined {
+    return task.orchestrator ?? this.liveOrchestrators.get(task.id);
+  }
+
+  private rememberOrchestrator(taskId: TaskId, orchestrator: IOrchestrator): void {
+    this.liveOrchestrators.set(taskId, orchestrator);
+    // Bounded: a lineage hands its entry to each replayed child, so the oldest
+    // entries belong to long-terminal ancestors nobody replays.
+    if (this.liveOrchestrators.size > TaskManager.MAX_LIVE_ORCHESTRATORS) {
+      const oldest = this.liveOrchestrators.keys().next().value;
+      if (oldest !== undefined) this.liveOrchestrators.delete(oldest);
+    }
+  }
+
   /** Persist the mechanical test verdict derived from a run's tool evidence. */
   setVerification(taskId: TaskId, verdict: import("./test-verdict.js").TaskTestVerdict): void {
     try {
@@ -547,6 +581,7 @@ export class TaskManager extends EventEmitter {
     const sanitizedResult = sanitizeSecrets(stripVisibleProviderArtifacts(result));
     this.storage.updateResult(taskId, sanitizedResult);
     this.abortControllers.delete(taskId);
+    this.liveOrchestrators.delete(taskId); // a completed task is never replayed
     this.emit("task:completed", taskId, sanitizedResult);
     getLogger().info("Task completed", { taskId, resultLength: sanitizedResult.length });
   }
