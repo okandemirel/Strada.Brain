@@ -30,7 +30,7 @@ import { getLogRingBuffer } from "../utils/logger.js";
 import type { MetricsFilter, LifecycleData } from "../metrics/metrics-types.js";
 import { VALID_TASK_TYPES, VALID_COMPLETION_STATUSES } from "../metrics/metrics-types.js";
 import type { TaskType, CompletionStatus } from "../metrics/metrics-types.js";
-import { parseDurationToTimestamp } from "../metrics/parse-duration.js";
+import { parseDurationToTimestamp, DURATION_FORMAT_HINT } from "../metrics/parse-duration.js";
 import type { GoalTree } from "../goals/types.js";
 import { calculateProgress } from "../goals/goal-progress.js";
 import {
@@ -103,11 +103,20 @@ export function handleSystemRoutes(
       sendJsonError(res, 400, "Invalid status parameter");
       return true;
     }
+    // `since` was the one unvalidated param here: an unreadable token parsed
+    // to 0, dropped the WHERE clause, and answered all-time with a 200 while
+    // its siblings type/status 400 on bad input (audited 2026-09-02).
+    const sinceParam = params.get("since");
+    const since = sinceParam ? parseDurationToTimestamp(sinceParam) : undefined;
+    if (sinceParam && since === null) {
+      sendJsonError(res, 400, `Invalid since parameter "${sinceParam}" (expected ${DURATION_FORMAT_HINT})`);
+      return true;
+    }
     const filter: MetricsFilter = {
       ...(params.get("session") && { sessionId: params.get("session")! }),
       ...(type && { taskType: type as TaskType }),
       ...(status && { completionStatus: status as CompletionStatus }),
-      ...(params.get("since") && { since: parseDurationToTimestamp(params.get("since")!) || undefined }),
+      ...(typeof since === "number" && { since }),
     };
     const aggregation = ctx.metricsStorage.getAggregation(filter);
 

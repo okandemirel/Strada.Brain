@@ -18,6 +18,8 @@ import type {
   MetricsFilter,
   MetricsAggregation,
   InstinctLeaderboardEntry,
+  RetrievalMetric,
+  RetrievalAggregation,
 } from "./metrics-types.js";
 
 // ─── Database Schema ─────────────────────────────────────────────────────────
@@ -42,6 +44,17 @@ CREATE TABLE IF NOT EXISTS task_metrics (
 CREATE INDEX IF NOT EXISTS idx_task_metrics_session ON task_metrics(session_id, completed_at DESC);
 CREATE INDEX IF NOT EXISTS idx_task_metrics_type_status ON task_metrics(task_type, completion_status);
 CREATE INDEX IF NOT EXISTS idx_task_metrics_completed ON task_metrics(completed_at DESC);
+
+CREATE TABLE IF NOT EXISTS retrieval_metrics (
+  id TEXT PRIMARY KEY,
+  retrieval_time_ms INTEGER NOT NULL,
+  instincts_scanned INTEGER NOT NULL DEFAULT 0,
+  scope_filtered INTEGER NOT NULL DEFAULT 0,
+  insights_returned INTEGER NOT NULL DEFAULT 0,
+  recorded_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_retrieval_metrics_recorded ON retrieval_metrics(recorded_at DESC);
 `;
 
 // ─── Row Type ────────────────────────────────────────────────────────────────
@@ -71,6 +84,7 @@ export class MetricsStorage {
   // Prepared statement cache
   private stmts: {
     insert?: Database.Statement;
+    insertRetrieval?: Database.Statement;
     instinctLeaderboard?: Database.Statement;
   } = {};
 
@@ -96,6 +110,11 @@ export class MetricsStorage {
        paor_iterations, tool_call_count, instinct_ids, instinct_count,
        started_at, completed_at, duration_ms)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    this.stmts.insertRetrieval = this.db.prepare(`
+      INSERT OR REPLACE INTO retrieval_metrics
+      (id, retrieval_time_ms, instincts_scanned, scope_filtered, insights_returned, recorded_at)
+      VALUES (?, ?, ?, ?, ?, ?)
     `);
     this.stmts.instinctLeaderboard = this.db.prepare(`
       SELECT
@@ -127,6 +146,64 @@ export class MetricsStorage {
       metric.completedAt,
       metric.durationMs,
     );
+  }
+
+  /**
+   * Record one instinct retrieval. Lives in its own table — a retrieval is not
+   * a task, and the task_metrics CHECK rejected the old "simple" task_type so
+   * this telemetry had never landed once (audited 2026-09-02).
+   */
+  recordRetrievalMetric(metric: RetrievalMetric): void {
+    this.ensureConnection();
+    this.stmts.insertRetrieval!.run(
+      metric.id,
+      metric.retrievalTimeMs,
+      metric.instinctsScanned,
+      metric.scopeFiltered,
+      metric.insightsReturned,
+      metric.recordedAt,
+    );
+  }
+
+  /** Most recent retrieval rows (newest first) */
+  getRetrievalMetrics(limit: number = 100): RetrievalMetric[] {
+    this.ensureConnection();
+    const rows = this.db!
+      .prepare(`SELECT * FROM retrieval_metrics ORDER BY recorded_at DESC LIMIT ?`)
+      .all(limit) as Array<{
+        id: string;
+        retrieval_time_ms: number;
+        instincts_scanned: number;
+        scope_filtered: number;
+        insights_returned: number;
+        recorded_at: number;
+      }>;
+    return rows.map((r) => ({
+      id: r.id,
+      retrievalTimeMs: r.retrieval_time_ms,
+      instinctsScanned: r.instincts_scanned,
+      scopeFiltered: r.scope_filtered,
+      insightsReturned: r.insights_returned,
+      recordedAt: r.recorded_at,
+    }));
+  }
+
+  /** Aggregate over retrievals recorded at or after `since` (all time when omitted) */
+  getRetrievalAggregation(since?: number): RetrievalAggregation {
+    this.ensureConnection();
+    const where = since !== undefined ? "WHERE recorded_at >= ?" : "";
+    const params = since !== undefined ? [since] : [];
+    const row = this.db!
+      .prepare(`SELECT COUNT(*) as total, AVG(retrieval_time_ms) as avg_ms,
+        AVG(instincts_scanned) as avg_scanned, AVG(insights_returned) as avg_returned
+        FROM retrieval_metrics ${where}`)
+      .get(...params) as { total: number; avg_ms: number | null; avg_scanned: number | null; avg_returned: number | null };
+    return {
+      retrievals: row.total ?? 0,
+      avgRetrievalTimeMs: row.avg_ms ?? 0,
+      avgInstinctsScanned: row.avg_scanned ?? 0,
+      avgInsightsReturned: row.avg_returned ?? 0,
+    };
   }
 
   /** Query task metrics with flexible filter */

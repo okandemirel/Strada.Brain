@@ -229,6 +229,14 @@ export class UnifiedBudgetManager {
       this.warningEmitted = false;
     }
 
+    // Spend is a SLIDING 24h window, so pct falls on its own without ever
+    // reaching 1.0 — and the only reset above requires the exceeded latch to
+    // have fired first. The warning therefore fired once per process lifetime;
+    // an unattended daemon's second climb to 0.95 was silent until the hard
+    // stop (audited 2026-09-02). Re-arm on every drop below the threshold so
+    // the warning is edge-triggered per crossing.
+    if (pct < config.warnPct) this.warningEmitted = false;
+
     if (pct >= config.warnPct && !this.warningEmitted && !this.exceededEmitted) {
       this.eventBus.emit("budget:warning", { source: "global", pct, usedUsd, limitUsd });
       this.warningEmitted = true;

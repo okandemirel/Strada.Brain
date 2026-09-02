@@ -175,6 +175,34 @@ describe("GET /api/agent-metrics", () => {
     expect((res as MockRes).statusCode).toBe(400);
     expect(responseJson(res)).toMatchObject({ error: expect.any(String) as string });
   });
+
+  it("returns 400 for an unparseable since param instead of silently answering all-time (audited 2026-09-02)", () => {
+    // type/status already 400 on bad input; `since=1w` used to parse to 0,
+    // drop the WHERE clause, and return the full history with a 200.
+    const metricsStorage = { getAggregation: vi.fn(() => ({ totalTasks: 1042 })) };
+    const { handled, res } = route(
+      "/api/agent-metrics?since=1w",
+      "GET",
+      makeCtx({ metricsStorage: metricsStorage as unknown as RouteContext["metricsStorage"] }),
+    );
+    expect(handled).toBe(true);
+    expect((res as MockRes).statusCode).toBe(400);
+    expect(responseJson(res)).toMatchObject({ error: expect.stringContaining("1w") as string });
+    expect(metricsStorage.getAggregation).not.toHaveBeenCalled();
+  });
+
+  it("applies a parseable since window to the aggregation filter", () => {
+    const metricsStorage = { getAggregation: vi.fn(() => ({ totalTasks: 3 })) };
+    const before = Date.now() - 7 * 86_400_000;
+    const { res } = route(
+      "/api/agent-metrics?since=7d",
+      "GET",
+      makeCtx({ metricsStorage: metricsStorage as unknown as RouteContext["metricsStorage"] }),
+    );
+    expect((res as MockRes).statusCode).toBe(200);
+    const filter = metricsStorage.getAggregation.mock.calls[0]?.[0] as { since?: number };
+    expect(filter.since).toBeGreaterThanOrEqual(before);
+  });
 });
 
 // =============================================================================

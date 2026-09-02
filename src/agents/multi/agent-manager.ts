@@ -235,6 +235,22 @@ export class AgentManager {
     this._unifiedBudgetManager = mgr;
   }
 
+  /**
+   * The cap a NEW agent is created with. The portal's "Agent default budget"
+   * (unified subLimits.agentDefaultUsd — DB override, then AGENT_DEFAULT_BUDGET_USD)
+   * was written, echoed back and never read: caps came from the boot-time
+   * config value, so the displayed default and the enforced one diverged
+   * silently after the first portal edit (audited 2026-09-02). The unified
+   * value wins when it is set; the static config is the fallback.
+   */
+  private resolveDefaultAgentCapUsd(): number {
+    const unified = this._unifiedBudgetManager?.getConfig().subLimits.agentDefaultUsd;
+    if (typeof unified === "number" && Number.isFinite(unified) && unified > 0) {
+      return unified;
+    }
+    return this.config.defaultBudgetUsd;
+  }
+
   /** Set the command handler so prefix commands bypass the LLM pipeline */
   setCommandHandler(handler: CommandHandler): void {
     this.commandHandler = handler;
@@ -594,7 +610,7 @@ export class AgentManager {
       status: "active",
       createdAt: now,
       lastActivity: now,
-      budgetCapUsd: this.config.defaultBudgetUsd,
+      budgetCapUsd: this.resolveDefaultAgentCapUsd(),
       memoryEntryCount: 0,
     };
 

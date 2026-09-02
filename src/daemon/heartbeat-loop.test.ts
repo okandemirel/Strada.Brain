@@ -7,6 +7,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { HeartbeatLoop } from "./heartbeat-loop.js";
+import { UnifiedBudgetManager } from "../budget/unified-budget-manager.js";
 import { TriggerRegistry } from "./trigger-registry.js";
 import { CircuitBreaker } from "./resilience/circuit-breaker.js";
 import { TriggerDeduplicator } from "./dedup/trigger-deduplicator.js";
@@ -1054,5 +1055,148 @@ describe("HeartbeatLoop", () => {
         expect.objectContaining({ count: 3 }),
       );
     });
+  });
+});
+
+// =============================================================================
+// Daemon sub-limit enforcement (audited 2026-09-02)
+// =============================================================================
+
+/**
+ * In-memory stand-in for the DaemonStorage budget adapter so a REAL
+ * UnifiedBudgetManager (not a mock) decides whether the daemon may spend.
+ */
+function makeBudgetStorage() {
+  const entries: Array<{ costUsd: number; timestamp: number; source?: string; agentId?: string | null }> = [];
+  const cfg: Record<string, string> = {};
+  const since = (w: number) => entries.filter((e) => e.timestamp >= w);
+  return {
+    entries,
+    insertBudgetEntry: (e: { costUsd: number; timestamp: number; source?: string }) => { entries.push({ ...e }); },
+    insertBudgetEntryWithAgent: (e: { costUsd: number; timestamp: number; agentId: string }) => { entries.push({ ...e }); },
+    insertBudgetEntryWithSource: (e: { costUsd: number; timestamp: number; source: string; agentId?: string | null }) => { entries.push({ ...e }); },
+    sumBudgetSince: (w: number) => since(w).reduce((s, e) => s + e.costUsd, 0),
+    sumBudgetBySource: (w: number) => {
+      const out: Record<string, number> = {};
+      for (const e of since(w)) out[e.source ?? "daemon"] = (out[e.source ?? "daemon"] ?? 0) + e.costUsd;
+      return out;
+    },
+    sumBudgetForSource: (source: string, w: number) =>
+      since(w).filter((e) => (e.source ?? "daemon") === source).reduce((s, e) => s + e.costUsd, 0),
+    sumBudgetSinceForAgent: (w: number, agentId: string) =>
+      since(w).filter((e) => e.agentId === agentId).reduce((s, e) => s + e.costUsd, 0),
+    getDailyHistory: () => [],
+    getBudgetConfig: (k: string) => cfg[k],
+    setBudgetConfig: (k: string, v: string) => { cfg[k] = v; },
+    getAllBudgetConfig: () => ({ ...cfg }),
+  };
+}
+
+describe("HeartbeatLoop — the daemon daily sub-limit gates trigger dispatch", () => {
+  let registry: TriggerRegistry;
+  let taskManager: ReturnType<typeof makeTaskManager>;
+  let eventBus: IEventBus<DaemonEventMap>;
+  let config: DaemonConfig;
+  let loop: HeartbeatLoop;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    registry = new TriggerRegistry();
+    taskManager = makeTaskManager();
+    eventBus = makeEventBus();
+    config = makeDaemonConfig();
+    loop = new HeartbeatLoop(
+      registry, taskManager as any, makeBudgetTracker() as any, makeSecurityPolicy() as any,
+      makeApprovalQueue() as any, makeStorage() as any, makeIdentityManager() as any, eventBus,
+      config, makeLogger() as any,
+    );
+  });
+
+  afterEach(() => {
+    loop.stop();
+    vi.useRealTimers();
+  });
+
+  async function tickWith(mgr: UnifiedBudgetManager): Promise<void> {
+    loop.setUnifiedBudgetManager(mgr);
+    registry.register(makeTrigger("t1", { shouldFire: true }));
+    loop.start();
+    await vi.advanceTimersByTimeAsync(config.heartbeat.intervalMs + 10);
+  }
+
+  it("skips every trigger once daemon spend reaches subLimits.daemonDailyUsd, even with no global limit set", async () => {
+    // Portal scenario: only "Daemon daily sub-limit = $5" is set; global limits stay 0.
+    const storage = makeBudgetStorage();
+    const mgr = new UnifiedBudgetManager(storage, { emit: () => {} }, {});
+    mgr.updateConfig({ subLimits: { daemonDailyUsd: 5, agentDefaultUsd: 5, verificationPct: 0.15 } });
+    mgr.recordCost(6, "daemon", { triggerName: "overnight" });
+    expect(mgr.isGlobalExceeded()).toBe(false); // the global wall is NOT what stops it
+
+    await tickWith(mgr);
+
+    expect(taskManager.submit).not.toHaveBeenCalled();
+    expect(eventBus.emit).toHaveBeenCalledWith(
+      "daemon:budget_exceeded",
+      expect.objectContaining({ source: "unified:daemon-sublimit", usedUsd: 6, limitUsd: 5 }),
+    );
+  });
+
+  it("still dispatches when daemon spend is under the sub-limit", async () => {
+    const storage = makeBudgetStorage();
+    const mgr = new UnifiedBudgetManager(storage, { emit: () => {} }, {});
+    mgr.updateConfig({ subLimits: { daemonDailyUsd: 5, agentDefaultUsd: 5, verificationPct: 0.15 } });
+    mgr.recordCost(1, "daemon", { triggerName: "overnight" });
+    mgr.recordCost(10, "agent", { agentId: "a1" }); // other sources do not count against the daemon
+
+    await tickWith(mgr);
+
+    expect(taskManager.submit).toHaveBeenCalled();
+  });
+});
+
+describe("HeartbeatLoop — the legacy daemon:budget_warning re-arms when usage drops under warnPct (audited 2026-09-02)", () => {
+  it("emits a second warning on a fresh crossing after the sliding window drained", async () => {
+    vi.useFakeTimers();
+    const registry = new TriggerRegistry();
+    const taskManager = makeTaskManager();
+    const eventBus = makeEventBus();
+    const config = makeDaemonConfig(); // warnPct 0.8
+    let pct = 0.85;
+    const budgetTracker = {
+      isExceeded: vi.fn(() => pct >= 1),
+      isWarning: vi.fn(() => pct >= 0.8),
+      getUsage: vi.fn(() => ({ usedUsd: pct * 10, limitUsd: 10, pct })),
+      recordCost: vi.fn(),
+      resetBudget: vi.fn(),
+    };
+    const loop = new HeartbeatLoop(
+      registry, taskManager as any, budgetTracker as any, makeSecurityPolicy() as any,
+      makeApprovalQueue() as any, makeStorage() as any, makeIdentityManager() as any, eventBus,
+      config, makeLogger() as any,
+    );
+    registry.register(makeTrigger("idle", { shouldFire: false })); // the warning check runs per trigger
+    const warnings = () => (eventBus.emit as any).mock.calls.filter((c: unknown[]) => c[0] === "daemon:budget_warning");
+    // scheduleNextTick() re-arms with two chained timeouts, so successive ticks are 2×interval apart.
+    const nextTick = () => vi.advanceTimersByTimeAsync(2 * config.heartbeat.intervalMs + 10);
+    try {
+      loop.start();
+      await vi.advanceTimersByTimeAsync(config.heartbeat.intervalMs + 10); // 0.85 → warning
+      expect(warnings()).toHaveLength(1);
+
+      pct = 0.3; // window drained; never reached 1.0 so no exceeded-recovery reset ran
+      await nextTick();
+      expect(budgetTracker.getUsage).toHaveBeenCalledTimes(2);
+      expect(warnings()).toHaveLength(1);
+
+      pct = 0.95; // fresh crossing — the operator must hear about it
+      await nextTick();
+      expect(warnings()).toHaveLength(2);
+
+      await nextTick(); // still 0.95: edge-triggered
+      expect(warnings()).toHaveLength(2);
+    } finally {
+      loop.stop();
+      vi.useRealTimers();
+    }
   });
 });

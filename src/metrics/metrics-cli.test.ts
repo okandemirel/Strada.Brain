@@ -4,8 +4,22 @@
  * Tests for formatMetricsTable, formatMetricsJson, and runMetricsCommand.
  */
 
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { rmSync } from "node:fs";
+import { join } from "node:path";
 import type { MetricsAggregation } from "./metrics-types.js";
+import { MetricsStorage } from "./metrics-storage.js";
+
+// A real learning.db in a temp dir stands in for the configured memory path.
+const cliDb = await vi.hoisted(async () => {
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  const os = await import("node:os");
+  return { dir: fs.mkdtempSync(path.join(os.tmpdir(), "metrics-cli-since-")) };
+});
+vi.mock("../config/config.js", () => ({
+  loadConfigSafe: () => ({ kind: "ok", value: { memory: { dbPath: cliDb.dir } } }),
+}));
 
 vi.mock("../utils/logger.js", () => ({
   getLoggerSafe: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
@@ -194,5 +208,81 @@ describe("metrics-cli", () => {
       const parsed = JSON.parse(output) as MetricsAggregation;
       expect(parsed).toEqual(MOCK_AGGREGATION);
     });
+  });
+});
+
+// ─── --since must name its window or refuse (audited 2026-09-02) ─────────────
+
+describe("runMetricsCommand --since", () => {
+  const DAY = 86_400_000;
+  let logSpy: ReturnType<typeof vi.spyOn>;
+  let errSpy: ReturnType<typeof vi.spyOn>;
+  let exitSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    // 9 failures 100 days old, 1 success 1 day old — a 7-day window and "all
+    // time" disagree by 10x, so a dropped filter cannot hide.
+    const seed = new MetricsStorage(join(cliDb.dir, "learning.db"));
+    seed.initialize();
+    const now = Date.now();
+    for (let i = 0; i < 9; i++) {
+      seed.recordTaskMetric({
+        id: `metric_old_${i}`, sessionId: "s", taskType: "background", taskDescription: "old",
+        completionStatus: "failure", paorIterations: 1, toolCallCount: 1, instinctIds: [], instinctCount: 0,
+        startedAt: now - 100 * DAY - 1000, completedAt: now - 100 * DAY, durationMs: 1000,
+      });
+    }
+    seed.recordTaskMetric({
+      id: "metric_new", sessionId: "s", taskType: "background", taskDescription: "new",
+      completionStatus: "success", paorIterations: 1, toolCallCount: 1, instinctIds: [], instinctCount: 0,
+      startedAt: now - DAY - 1000, completedAt: now - DAY, durationMs: 1000,
+    });
+    seed.close();
+
+    logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+      throw new Error(`process.exit(${code})`);
+    }) as never);
+  });
+
+  afterEach(() => {
+    logSpy.mockRestore();
+    errSpy.mockRestore();
+    exitSpy.mockRestore();
+    rmSync(cliDb.dir, { recursive: true, force: true });
+  });
+
+  it("refuses an unparseable window, names the bad token, and prints no metrics", async () => {
+    const { runMetricsCommand } = await import("./metrics-cli.js");
+    expect(() => runMetricsCommand({ since: "1w" })).toThrow("process.exit(1)");
+    const stderr = errSpy.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(stderr).toContain('"1w"');
+    expect(stderr).toMatch(/7d/); // the accepted grammar is spelled out
+    const stdout = logSpy.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(stdout).not.toContain("Agent Performance Metrics");
+    expect(stdout).not.toContain("Total Tasks");
+  });
+
+  it("prints the window it measured when the filter is applied, and 'all time' when it is not", async () => {
+    const { runMetricsCommand } = await import("./metrics-cli.js");
+
+    runMetricsCommand({ since: "7d" });
+    const scoped = logSpy.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(scoped).toMatch(/Window:\s+last 7d \(since \d{4}-\d{2}-\d{2}T/);
+    expect(scoped).toMatch(/Total Tasks:\s+1\b/);
+
+    logSpy.mockClear();
+    runMetricsCommand({});
+    const unscoped = logSpy.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(unscoped).toMatch(/Window:\s+all time/);
+    expect(unscoped).toMatch(/Total Tasks:\s+10\b/);
+
+    logSpy.mockClear();
+    runMetricsCommand({ since: "7d", json: true });
+    const parsed = JSON.parse(logSpy.mock.calls.map((c) => String(c[0])).join("\n")) as { totalTasks: number; window: { since: number | null; label: string } };
+    expect(parsed.totalTasks).toBe(1);
+    expect(parsed.window.label).toBe("last 7d");
+    expect(typeof parsed.window.since).toBe("number");
   });
 });

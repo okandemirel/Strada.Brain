@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { loadConfigSafe } from "../config/config.js";
 import { MetricsStorage } from "./metrics-storage.js";
 import type { MetricsAggregation, MetricsFilter } from "./metrics-types.js";
-import { parseDurationToTimestamp } from "./parse-duration.js";
+import { parseDurationToTimestamp, DURATION_FORMAT_HINT } from "./parse-duration.js";
 import { LearningStorage } from "../learning/storage/learning-storage.js";
 import { MS_PER_DAY } from "../learning/types.js";
 import { MigrationRunner } from "../learning/storage/migrations/index.js";
@@ -18,13 +18,44 @@ import { migration001CrossSessionProvenance } from "../learning/storage/migratio
 
 // ─── Formatting ─────────────────────────────────────────────────────────────
 
+/** The time window a metrics report was computed over — so the numbers name what they measured. */
+export interface MetricsWindow {
+  /** Lower bound (ms since epoch) applied to completed_at, or null for all time */
+  readonly since: number | null;
+  /** Human label: "last 7d" or "all time" */
+  readonly label: string;
+}
+
+export const ALL_TIME_WINDOW: MetricsWindow = { since: null, label: "all time" };
+
+/**
+ * Resolve `--since` into a window. Throws with the offending token when it
+ * cannot be read: a dropped filter used to print lifetime numbers under the
+ * same header a scoped run produces (audited 2026-09-02).
+ */
+export function resolveMetricsWindow(since: string | undefined): MetricsWindow {
+  if (!since) return ALL_TIME_WINDOW;
+  const ts = parseDurationToTimestamp(since);
+  if (ts === null) {
+    throw new Error(`Unrecognized --since "${since}" (expected ${DURATION_FORMAT_HINT})`);
+  }
+  return { since: ts, label: `last ${since}` };
+}
+
+function formatWindow(window: MetricsWindow): string {
+  return window.since === null
+    ? window.label
+    : `${window.label} (since ${new Date(window.since).toISOString()})`;
+}
+
 /**
  * Format a MetricsAggregation into a readable ASCII table.
  */
-export function formatMetricsTable(agg: MetricsAggregation): string {
+export function formatMetricsTable(agg: MetricsAggregation, window: MetricsWindow = ALL_TIME_WINDOW): string {
   const lines: string[] = [];
   lines.push("Agent Performance Metrics");
   lines.push("========================");
+  lines.push(`${"Window:".padEnd(24)}${formatWindow(window)}`);
   lines.push(`${"Total Tasks:".padEnd(24)}${agg.totalTasks}`);
   lines.push(
     `${"Completion Rate:".padEnd(24)}${(agg.completionRate * 100).toFixed(1)}%`,
@@ -93,6 +124,16 @@ export function runMetricsCommand(opts: {
   const config = configResult.value;
   const dbPath = join(config.memory.dbPath, "learning.db");
 
+  // Resolve the window BEFORE touching storage: an unreadable --since is
+  // refused with the token echoed, never silently widened to all time.
+  let window: MetricsWindow;
+  try {
+    window = resolveMetricsWindow(opts.since);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
+
   let storage: MetricsStorage | undefined;
   try {
     storage = new MetricsStorage(dbPath);
@@ -100,7 +141,7 @@ export function runMetricsCommand(opts: {
 
     const filter: MetricsFilter = {
       ...(opts.session && { sessionId: opts.session }),
-      ...(opts.since && { since: parseDurationToTimestamp(opts.since) || undefined }),
+      ...(window.since !== null && { since: window.since }),
     };
 
     let enriched: MetricsAggregation = storage.getAggregation(filter);
@@ -151,9 +192,9 @@ export function runMetricsCommand(opts: {
     }
 
     if (opts.json) {
-      console.log(formatMetricsJson(enriched));
+      console.log(JSON.stringify({ ...enriched, window }, null, 2));
     } else {
-      console.log(formatMetricsTable(enriched));
+      console.log(formatMetricsTable(enriched, window));
     }
   } catch (error) {
     console.error(

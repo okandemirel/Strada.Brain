@@ -1,5 +1,21 @@
-import { describe, it, expect } from "vitest";
-import { estimateCost, estimateCostWithCache, getProviderCosts, DEFAULT_COST } from "./cost-model.js";
+import { describe, it, expect, vi } from "vitest";
+
+const warnSpy = vi.fn();
+vi.mock("../utils/logger.js", () => ({
+  getLoggerSafe: () => ({ info: vi.fn(), warn: warnSpy, error: vi.fn(), debug: vi.fn() }),
+  getLogger: () => ({ info: vi.fn(), warn: warnSpy, error: vi.fn(), debug: vi.fn() }),
+}));
+
+import {
+  estimateCost,
+  estimateCostWithCache,
+  getProviderCosts,
+  getUnpricedProvidersSeen,
+  resolveCostRates,
+  DEFAULT_COST,
+  PROVIDER_COSTS,
+} from "./cost-model.js";
+import { PROVIDER_PRESETS } from "../agents/providers/provider-registry.js";
 
 describe("estimateCost", () => {
   it("computes claude cost correctly", () => {
@@ -61,5 +77,36 @@ describe("estimateCostWithCache — the cached share is priced at its own rate",
   it("degrades to uniform input pricing for providers without cache economics", () => {
     const usage = { inputTokens: 1000, outputTokens: 200, cacheReadInputTokens: 400 };
     expect(estimateCostWithCache(usage, "deepseek")).toBeCloseTo(estimateCost(1000, 200, "deepseek"));
+  });
+});
+
+describe("every routable provider is priced, and an unpriced one is loud (audited 2026-09-02)", () => {
+  // Eight registry providers (qwen, minimax, together, fireworks, opencode×3,
+  // openrouter) silently fell to DEFAULT_COST — a 3M-token OpenCode wave on a
+  // "-free" model recorded ~$6 that was never billed.
+  it("has a table entry for every PROVIDER_PRESETS name plus claude", () => {
+    const unpriced = [...Object.keys(PROVIDER_PRESETS), "claude"].filter((name) => !(name in PROVIDER_COSTS));
+    expect(unpriced).toEqual([]);
+  });
+
+  it("prices a model whose id declares itself free at $0, whatever the provider table says", () => {
+    const usage = { inputTokens: 3_000_000, outputTokens: 10_000, model: "nemotron-3.5-lightning-free" };
+    expect(estimateCostWithCache(usage, "opencode2")).toBe(0);
+    expect(resolveCostRates("opencode2", "nemotron-3.5-lightning-free").source).toBe("free-model");
+    expect(resolveCostRates("openrouter", "meta-llama/llama-3.3-70b-instruct:free").source).toBe("free-model");
+    // a non-free model on the same account is billed from the table
+    expect(estimateCostWithCache({ inputTokens: 1_000_000, outputTokens: 0, model: "qwen3.6-plus" }, "opencode2")).toBeCloseTo(0.6);
+  });
+
+  it("names the fallback: an unknown provider's rates carry source=fallback, warn once, and are listed", () => {
+    warnSpy.mockClear();
+    const first = resolveCostRates("brand-new-provider", "some-model");
+    expect(first.source).toBe("fallback");
+    expect(first).toMatchObject(DEFAULT_COST);
+    resolveCostRates("brand-new-provider");
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0]?.[1]).toMatchObject({ provider: "brand-new-provider" });
+    expect(getUnpricedProvidersSeen()).toContain("brand-new-provider");
+    expect(resolveCostRates("claude").source).toBe("table");
   });
 });

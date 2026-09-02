@@ -317,6 +317,24 @@ export class HeartbeatLoop {
         this.lastTick = now;
         return; // Skip all triggers this tick
       }
+      // The portal's "Daemon daily sub-limit" (subLimits.daemonDailyUsd) was
+      // accepted, persisted and displayed but read by nothing on the dispatch
+      // path — isSourceExceeded() had no production caller, so the setting
+      // enforced nothing (audited 2026-09-02). Gate the tick on it here, next
+      // to the global wall, and name the limit that stopped the daemon.
+      if (this.unifiedBudgetManager.isSourceExceeded("daemon")) {
+        const usedUsd = this.unifiedBudgetManager.getSnapshot().breakdown.daemon;
+        const limitUsd = this.unifiedBudgetManager.getConfig().subLimits.daemonDailyUsd;
+        this.eventBus.emit("daemon:budget_exceeded", {
+          source: "unified:daemon-sublimit",
+          usedUsd,
+          limitUsd,
+          timestamp: now.getTime(),
+        } as never);
+        this.logger.info("Daemon daily sub-limit reached — triggers skipped this tick", { usedUsd, limitUsd });
+        this.lastTick = now;
+        return;
+      }
     }
 
     // Sequential evaluation -- prevents budget race conditions
@@ -367,7 +385,15 @@ export class HeartbeatLoop {
         }
       }
 
-      // 4. Check warning threshold
+      // 4. Check warning threshold. Same latch defect as the unified manager
+      // (audited 2026-09-02): the flag was cleared only inside the exceeded-
+      // recovery branches, so once the sliding window drained below warnPct
+      // without a hard stop, no further warning could ever fire — and this
+      // legacy event is the one that drives push notifications. Re-arm on
+      // every drop below the threshold.
+      if (budgetUsage.pct < this.config.budget.warnPct) {
+        this.budgetWarningEmitted = false;
+      }
       if (budgetUsage.pct >= this.config.budget.warnPct && !this.budgetWarningEmitted) {
         this.eventBus.emit("daemon:budget_warning", {
           usedUsd: budgetUsage.usedUsd,
