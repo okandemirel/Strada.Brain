@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, beforeAll } from "vitest";
-import { mkdtemp, rm, writeFile, mkdir, readFile, stat } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, mkdir, readFile, stat, chmod } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { FileDeleteTool, FileRenameTool, FileDeleteDirectoryTool } from "./file-manage.js";
@@ -225,5 +225,96 @@ describe("FileDeleteDirectoryTool", () => {
     const result = await tool.execute({ path: "big" }, ctx);
     expect(result.isError).toBe(true);
     expect(result.content).toContain("limit: 50");
+  });
+});
+
+/**
+ * Audited 2026-09-02: the GUID check is fail-closed — an unfinished scan is
+ * never "safe" — but there was no way past it, so a directory the process
+ * cannot read (EACCES) blocked every Unity-tracked delete under that project
+ * permanently. `force: true` is the caller's explicit "proceed without the
+ * check"; nothing else skips it, and the result never reads like a check
+ * that passed.
+ */
+describe("FileDeleteTool force skips the GUID check only on request (audited 2026-09-02)", () => {
+  const tool = new FileDeleteTool();
+  const guid = "89abcdef89abcdef89abcdef89abcdef";
+  const unreadableSupported =
+    process.platform !== "win32" && !(typeof process.getuid === "function" && process.getuid() === 0);
+
+  /** A tracked asset whose reference scan cannot finish: Assets/Locked is chmod 000. */
+  async function trackedAssetWithUnreadableDir(): Promise<string> {
+    await mkdir(join(tempDir, "Assets", "Locked"), { recursive: true });
+    const mat = join(tempDir, "Assets", "Rock.mat");
+    await writeFile(mat, "%YAML 1.1\n");
+    await writeFile(`${mat}.meta`, `fileFormatVersion: 2\nguid: ${guid}\n`);
+    await writeFile(join(tempDir, "Assets", "Locked", "Hidden.prefab"), `m_Materials:\n  - {guid: ${guid}}\n`);
+    await chmod(join(tempDir, "Assets", "Locked"), 0o000);
+    return mat;
+  }
+
+  afterEach(async () => {
+    try {
+      await chmod(join(tempDir, "Assets", "Locked"), 0o755);
+    } catch {
+      /* fixture not present in this test */
+    }
+  });
+
+  it("without force, an unverified verdict still refuses the delete", async () => {
+    if (!unreadableSupported) return;
+    const mat = await trackedAssetWithUnreadableDir();
+
+    const result = await tool.execute({ path: "Assets/Rock.mat" }, ctx);
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain("did not finish");
+    expect(result.content).toContain("Assets/Locked");
+    // ...and it says how a caller who accepts the risk can proceed.
+    expect(result.content).toContain("force: true");
+    await expect(stat(mat)).resolves.toBeDefined();
+  });
+
+  it("with force, the delete proceeds and the result says the check was skipped on request", async () => {
+    if (!unreadableSupported) return;
+    const mat = await trackedAssetWithUnreadableDir();
+
+    const result = await tool.execute({ path: "Assets/Rock.mat", force: true }, ctx);
+
+    expect(result.isError).toBeUndefined();
+    expect(result.content).toContain("Deleted: Assets/Rock.mat");
+    // A skipped check must never read like a passed one.
+    expect(result.content).toMatch(/SKIPPED on request/);
+    expect(result.content).toContain("force: true");
+    expect(result.content).toMatch(/never scanned|not .*(verified|safe)/i);
+    expect(result.metadata).toMatchObject({ guidCheckSkipped: true });
+    await expect(stat(mat)).rejects.toThrow();
+  });
+
+  it("force is off unless the caller passes exactly true", async () => {
+    if (!unreadableSupported) return;
+    const mat = await trackedAssetWithUnreadableDir();
+
+    // A truthy-but-not-true value must not open the gate.
+    const result = await tool.execute({ path: "Assets/Rock.mat", force: "yes" }, ctx);
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain("did not finish");
+    await expect(stat(mat)).resolves.toBeDefined();
+  });
+
+  it("a delete with no force still reports the check it actually ran", async () => {
+    await mkdir(join(tempDir, "Assets"), { recursive: true });
+    const mat = join(tempDir, "Assets", "Unused.mat");
+    await writeFile(mat, "%YAML 1.1\n");
+    await writeFile(`${mat}.meta`, `fileFormatVersion: 2\nguid: ${"7".repeat(32)}\n`);
+
+    const result = await tool.execute({ path: "Assets/Unused.mat" }, ctx);
+
+    expect(result.isError).toBeUndefined();
+    expect(result.content).toContain("Deleted: Assets/Unused.mat");
+    expect(result.content).not.toMatch(/SKIPPED/);
+    expect(result.metadata).toMatchObject({ guidCheckSkipped: false });
+    await expect(stat(mat)).rejects.toThrow();
   });
 });

@@ -34,6 +34,8 @@ export class FileDeleteTool implements ITool {
   readonly description =
     "Delete a file from the Unity project. " +
     "Only single files can be deleted (not directories). " +
+    "Deletion is blocked when the asset-reference (GUID) check finds referrers " +
+    "or cannot finish; pass force: true to delete without that check. " +
     "Use with caution — this operation cannot be undone.";
 
   readonly inputSchema = {
@@ -42,6 +44,13 @@ export class FileDeleteTool implements ITool {
       path: {
         type: "string",
         description: "Relative path from project root to the file to delete.",
+      },
+      force: {
+        type: "boolean",
+        description:
+          "Delete without running the asset-reference (GUID) check. Use only when the " +
+          "check cannot complete (e.g. an unreadable directory) and you accept that " +
+          "references to this asset were never verified. The result says the check was skipped.",
       },
     },
     required: ["path"],
@@ -75,28 +84,43 @@ export class FileDeleteTool implements ITool {
     // count as an external reference). The check now gets the same normalised
     // project-relative path the delete uses, and a check that could not run
     // says so in the result instead of vanishing.
+    //
+    // Audited 2026-09-02: fail-closed is right, but with no way past it an
+    // unreadable directory (EACCES) or the scan's depth cap blocked every
+    // Unity-tracked delete forever. `force` is the caller's explicit
+    // "proceed without the check" — it is the only thing that skips it, and a
+    // skipped check is never reported as a passed one.
+    const force = input["force"] === true;
     let checkNote = "";
-    try {
-      const checkRel = await toProjectRelative(context.projectPath, pathCheck.fullPath);
-      const safetyCheck = await checkSafeToDelete(context.projectPath, checkRel);
-      if (!safetyCheck.safe && safetyCheck.warning) {
+    if (force) {
+      checkNote =
+        "\nAsset-reference (GUID) check SKIPPED on request (force: true): " +
+        "references to this asset were never scanned, so nothing here says the delete was safe.";
+    } else {
+      try {
+        const checkRel = await toProjectRelative(context.projectPath, pathCheck.fullPath);
+        const safetyCheck = await checkSafeToDelete(context.projectPath, checkRel);
+        if (!safetyCheck.safe && safetyCheck.warning) {
+          return {
+            content:
+              safetyCheck.warning +
+              "\nPass force: true to delete without the asset-reference check.",
+            isError: true,
+            metadata: { guid: safetyCheck.guid, referenceCount: safetyCheck.references.length },
+          };
+        }
+      } catch (error) {
+        // Was: swallowed and proceeded, so a check that never ran read exactly
+        // like a check that passed. A delete on an unverified verdict is refused
+        // and says why. Audited 2026-09-02.
+        const msg = error instanceof Error ? error.message : String(error);
         return {
-          content: safetyCheck.warning,
+          content:
+            `Error: the asset-reference safety check for ${relPath} could not run (${msg}); ` +
+            "not deleting on an unverified verdict. Pass force: true to delete without the check.",
           isError: true,
-          metadata: { guid: safetyCheck.guid, referenceCount: safetyCheck.references.length },
         };
       }
-    } catch (error) {
-      // Was: swallowed and proceeded, so a check that never ran read exactly
-      // like a check that passed. A delete on an unverified verdict is refused
-      // and says why. Audited 2026-09-02.
-      const msg = error instanceof Error ? error.message : String(error);
-      return {
-        content:
-          `Error: the asset-reference safety check for ${relPath} could not run (${msg}); ` +
-          "not deleting on an unverified verdict.",
-        isError: true,
-      };
     }
 
     try {
@@ -113,7 +137,7 @@ export class FileDeleteTool implements ITool {
 
       return {
         content: `Deleted: ${relPath}${checkNote}`,
-        metadata: { path: relPath },
+        metadata: { path: relPath, guidCheckSkipped: force },
       };
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
