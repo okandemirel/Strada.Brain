@@ -59,13 +59,28 @@ CREATE INDEX IF NOT EXISTS idx_symbols_name ON vault_symbols(name);
 
 CREATE TABLE IF NOT EXISTS vault_edges (
   from_symbol TEXT NOT NULL REFERENCES vault_symbols(symbol_id) ON DELETE CASCADE,
+  -- Raw extractor output. Every extractor emits '<lang>::unresolved::<name>'
+  -- here, never a symbol id, so this column alone cannot join the graph.
   to_symbol   TEXT NOT NULL,
   kind        TEXT NOT NULL,
   at_line     INTEGER NOT NULL DEFAULT 0,
+  -- Bare identifier tail of an unresolved to_symbol (NULL when the target is
+  -- a module path, a generic, or already a symbol id). Indexed so a newly
+  -- indexed symbol can claim the edges that name it (audited 2026-09-02).
+  to_name     TEXT,
+  -- Derived link: the symbol_id when EXACTLY ONE indexed symbol carries
+  -- to_name, NULL while the target is absent or ambiguous. Readers surface
+  -- COALESCE(resolved_to, to_symbol). Never extracted, so to_symbol stays raw
+  -- and the link can be recomputed from it at any time.
+  resolved_to TEXT,
   PRIMARY KEY (from_symbol, to_symbol, kind, at_line)
 );
 
 CREATE INDEX IF NOT EXISTS idx_edges_to ON vault_edges(to_symbol);
+
+-- idx_edges_to_name / idx_edges_resolved_to are created in
+-- SqliteVaultStore.migrate() AFTER the additive ALTERs, because a database
+-- built before those columns existed would fail a CREATE INDEX here.
 
 CREATE TABLE IF NOT EXISTS vault_wikilinks (
   from_note       TEXT NOT NULL,

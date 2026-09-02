@@ -12,12 +12,17 @@ import type { EmbeddingProvider, VectorStore } from '../../src/vault/embedding-a
 class StubEmbedding implements EmbeddingProvider {
   readonly model = 'stub';
   readonly dim = 4;
+  shouldFail = false;
   async embed(xs: string[]) {
+    if (this.shouldFail) throw new Error('transient embed failure');
     return xs.map(() => new Float32Array([1, 0, 0, 0]));
   }
 }
 
 class StubVectorStore implements VectorStore {
+  // Stands in for a REAL backend: the vault only builds vectors for a
+  // semantic store (audited 2026-09-02), and these tests assert that lifecycle.
+  readonly semantic = true;
   private nextId = 1;
   readonly items = new Map<number, unknown>();
   add(_v: Float32Array, payload: unknown) {
@@ -327,6 +332,57 @@ describe('ObsidianVault — hardening (P0/P1/P2)', () => {
       expect(moved?.resolved).toBe(true);
       expect(moved?.target).toBe('sub/B.md');
       expect(moved?.originalTarget).toBe('B');
+    });
+  });
+
+  // ─────────────── edge cache vs. deletion (audited 2026-09-02) ───────────────
+  describe('edge cache is invalidated when an indexed file is deleted', () => {
+    it('sync() prune: a deleted caller is no longer reported by findCallers', async () => {
+      mkdirSync(join(dir, 'src'), { recursive: true });
+      writeFileSync(join(dir, 'src/caller.ts'), "import { helper } from './callee.js';\nexport function runIt() { return helper(); }\n");
+      writeFileSync(join(dir, 'src/callee.ts'), 'export function helper() { return 1; }\n');
+      ({ vault, store: vectorStore } = newVault(dir));
+      await vault.init();
+      const calleeSym = 'typescript::src/callee.ts::helper';
+      // Prime the cache through the public API (PPR reads the same cache).
+      await vault.query({ text: 'helper', focusFiles: ['src/caller.ts'] });
+      expect((await vault.findCallers(calleeSym)).some((e) => e.fromSymbol.startsWith('typescript::src/caller.ts::'))).toBe(true);
+
+      rmSync(join(dir, 'src/caller.ts'));
+      expect((await vault.sync()).changed).toBe(1);
+
+      const after = await vault.findCallers(calleeSym);
+      expect(after.filter((e) => e.fromSymbol.startsWith('typescript::src/caller.ts::'))).toEqual([]);
+    });
+  });
+
+  // ─────────────── embed failure must not strand vectors (audited 2026-09-02) ───────────────
+  describe('a transient embed failure drops the now-unreferenced old vectors', () => {
+    it('the retry leaves exactly the new vectors; nothing from before the failure survives', async () => {
+      writeFileSync(join(dir, 'A.md'), '# A\n\nfirst body');
+      const embedding = new StubEmbedding();
+      vectorStore = new StubVectorStore();
+      vault = new ObsidianVault({
+        id: 'obsidian:embed-fail', rootPath: dir, embedding, vectorStore,
+        obsidian: { apiUrl: 'http://127.0.0.1:9', apiKey: 'test' },
+      });
+      await vault.init();
+      const initialIds = [...vectorStore.items.keys()];
+      expect(initialIds.length).toBeGreaterThan(0);
+
+      writeFileSync(join(dir, 'A.md'), '# A\n\na completely different second body');
+      embedding.shouldFail = true;
+      await expect(vault.reindexFile('A.md')).rejects.toThrow('transient embed failure');
+      // The SQL rows that mapped chunk_id -> hnsw_id are gone with the file
+      // row, so keeping the old vectors alive means nothing can ever remove them.
+      expect(initialIds.filter((id) => vectorStore.items.has(id))).toEqual([]);
+      expect(vectorStore.items.size).toBe(0);
+
+      embedding.shouldFail = false;
+      await vault.sync();
+      const finalIds = [...vectorStore.items.keys()];
+      expect(finalIds.length).toBeGreaterThan(0);
+      expect(finalIds.every((id) => id > Math.max(...initialIds))).toBe(true);
     });
   });
 

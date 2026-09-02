@@ -133,6 +133,18 @@ export class ObsidianVault implements IVault {
   async init(): Promise<void> {
     await mkdir(join(this.rootPath, '.strada/vault/codebase'), { recursive: true });
     this.store.migrate();
+    // Same gate as UnityProjectVault (audited 2026-09-02): say once whether
+    // vectors are built, and re-embed a lexically built index when a real
+    // semantic store arrives instead of letting the hash short-circuit skip it.
+    {
+      const semantic = this.adapter.isSemantic();
+      const { previous, resetFiles } = this.store.reconcileEmbeddingMode(semantic);
+      if (!semantic) {
+        getLoggerSafe().info(`[obsidian-vault ${this.id}] vector store is non-semantic: notes are indexed lexically only (FTS/BM25); no embeddings are computed or stored`);
+      } else if (previous === 'lexical') {
+        getLoggerSafe().info(`[obsidian-vault ${this.id}] embedding mode changed lexical -> semantic: reset the stored hash of ${resetFiles} note(s) so every chunk is embedded on this index pass`);
+      }
+    }
 
     // Verify Obsidian API is reachable.
     const healthy = await this.client.healthCheck();
@@ -599,7 +611,10 @@ export class ObsidianVault implements IVault {
     // (Previously `newHnswIds` was only appended per-SQL-success, which
     // left the unprocessed-but-already-in-HNSW tail orphaned on failure.)
     const newHnswIds: number[] = [];
-    try {
+    // Write path gated on the same flag as the read path (audited
+    // 2026-09-02): a non-semantic store can never surface a vector, so
+    // embedding into it only spent provider calls and RSS.
+    if (this.adapter.isSemantic()) try {
       const embeddingMap = await this.adapter.upsertBatch(
         chunks.map((c) => ({ chunkId: c.chunkId, content: c.content })),
       );
@@ -621,10 +636,15 @@ export class ObsidianVault implements IVault {
       for (const id of newHnswIds) {
         try { this.adapter.remove(id); } catch { /* per-id best effort */ }
       }
-      // Drop the file row + chunks so the next sync retries cleanly. The
-      // OLD HNSW vectors are still in the external index but unreferenced
-      // (their SQL rows were just deleted) — a follow-up sync will rebuild
-      // both sides.
+      // The OLD vectors go too (audited 2026-09-02): their chunk rows were
+      // replaced by runReindexTxn, so no SQL row references them and no later
+      // sync could ever remove them — "a follow-up sync will rebuild both
+      // sides" rebuilt only the SQL side and left one stranded vector set per
+      // file per embedding hiccup.
+      for (const id of oldHnswIds) {
+        try { this.adapter.remove(id); } catch { /* per-id best effort */ }
+      }
+      // Drop the file row + chunks so the next sync retries cleanly.
       this.store.deleteFile(relPath);
       this.invalidateEdgesCache();
       throw err;
@@ -776,6 +796,9 @@ export class ObsidianVault implements IVault {
     const hnswIds = this.store.listHnswIdsForPath(canonical);
     for (const hnswId of hnswIds) this.adapter.remove(hnswId);
     this.store.deleteFile(canonical);
+    // Same omission as UnityProjectVault (audited 2026-09-02): the cache kept
+    // serving the deleted file's edges to findCallers/listBacklinks/PPR.
+    this.invalidateEdgesCache();
     return true;
   }
 }

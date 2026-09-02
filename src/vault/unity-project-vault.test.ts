@@ -15,6 +15,10 @@ vi.mock('../utils/logger.js', () => ({
 
 /** In-memory VectorStore that records live ids so we can assert vector lifecycle. */
 class FakeVectorStore implements VectorStore {
+  // Stands in for a REAL backend: the vault only builds vectors for a
+  // semantic store (audited 2026-09-02), and the lifecycle under test is
+  // exactly that of a real backend.
+  readonly semantic = true;
   private next = 0;
   readonly live = new Map<number, { vector: Float32Array; payload: unknown }>();
   add(vector: Float32Array, payload: unknown): number {
@@ -209,7 +213,12 @@ describe("UnityProjectVault reindex vector lifecycle", () => {
     expect(Array.isArray(result.hits)).toBe(true);
   });
 
-  it("keeps prior vectors when re-embedding fails transiently, then rebuilds on retry", async () => {
+  // Audit 2026-09-02: the failure branch logged "keeping prior vectors; will
+  // retry next sync", but runReindexTxn had already replaced the file's chunk
+  // rows, cascading away every chunk_id -> hnsw_id mapping. The retry's
+  // listHnswIdsForPath therefore saw [] and the kept vectors were stranded in
+  // the store forever — one orphan set per file per embedding hiccup.
+  it("a transient embed failure drops the now-unreferenced old vectors and the retry leaves exactly the new ones", async () => {
     // Initial index embedded the note → at least one live vector exists.
     const initialIds = [...store.live.keys()];
     expect(initialIds.length).toBeGreaterThan(0);
@@ -219,24 +228,26 @@ describe("UnityProjectVault reindex vector lifecycle", () => {
     embed.shouldFail = true;
     await vault.reindexFile("note.md");
 
-    // Core guarantee (finding #3): a transient embed failure must NOT remove the
-    // old vectors. The old ids are still live because the new embed threw before
-    // any new vector was added and the old-removal only runs on success.
-    for (const id of initialIds) {
-      expect(store.live.has(id)).toBe(true);
-    }
+    // The old chunk rows are gone, so the old vectors are unreachable from SQL
+    // and must not be kept alive: nothing can ever remove them later.
+    expect(initialIds.filter((id) => store.live.has(id))).toEqual([]);
+    expect(store.live.size).toBe(0);
+    // The provisional empty hash forces the retry (no short-circuit).
+    expect(vault.listFiles().find((f) => f.path === "note.md")?.blobHash).toBe("");
 
-    // Recovery: embedding works again. Because the failed pass reset the stored
-    // hash, this reindex must NOT short-circuit — it re-embeds (new id) and only
-    // then removes the old vectors.
+    // Recovery: embedding works again → fresh vectors, and ONLY fresh vectors.
     embed.shouldFail = false;
-    await vault.reindexFile("note.md");
-
+    expect(await vault.reindexFile("note.md")).toBe(true);
     const finalIds = [...store.live.keys()];
-    // The file is vector-searchable again: a fresh vector (id greater than any
-    // initial id) was created on retry, proving the reset hash forced a
-    // re-embed instead of short-circuiting — i.e. no permanent vector loss.
-    expect(finalIds.some((id) => id > Math.max(...initialIds))).toBe(true);
+    expect(finalIds.length).toBeGreaterThan(0);
+    expect(finalIds.every((id) => id > Math.max(...initialIds))).toBe(true);
+    expect(vault.listFiles().find((f) => f.path === "note.md")?.blobHash).not.toBe("");
+
+    // A later clean reindex reclaims the previous vectors as before (control).
+    await writeFile(join(dir, "note.md"), "# Note\nthird body\n", "utf8");
+    expect(await vault.reindexFile("note.md")).toBe(true);
+    expect(finalIds.filter((id) => store.live.has(id))).toEqual([]);
+    expect(store.live.size).toBe(finalIds.length);
   });
 });
 
@@ -263,8 +274,8 @@ describe("UnityProjectVault embedding-optional retrieval (FTS-carries)", () => {
     const vault = new UnityProjectVault({ id: "nonsem", rootPath: dir, embedding: embed, vectorStore: store });
     try {
       await vault.init();
-      // Indexing IS allowed to embed (upsertBatch). Reset the spy so the query
-      // assertion only measures the query path.
+      // Indexing on a non-semantic store computes no vectors (see (c) below);
+      // clear anyway so this assertion measures only the query path.
       embedSpy.mockClear();
 
       const result = await vault.query({ text: "fox" });
@@ -303,6 +314,54 @@ describe("UnityProjectVault embedding-optional retrieval (FTS-carries)", () => {
       expect(result.hits.length).toBeGreaterThan(0);
     } finally {
       await vault.dispose().catch(() => undefined);
+    }
+  });
+
+  // Audit 2026-09-02: the write path was ungated — every chunk of every vault
+  // was embedded (a paid or local provider call per file) and pushed into a
+  // store whose search() returns [] unconditionally, so nothing ever read a
+  // single vector. The read path was already gated on isSemantic(); the write
+  // path must be gated on the same flag.
+  it("(c) non-semantic store: indexing computes no embeddings and stores no vectors", async () => {
+    const store = new SpyVectorStore(false); // production placeholder
+    const embed = new FakeEmbedding();
+    const embedSpy = vi.spyOn(embed, "embed");
+    const vault = new UnityProjectVault({ id: "nonsem-write", rootPath: dir, embedding: embed, vectorStore: store });
+    try {
+      await vault.init();
+      expect((await vault.stats()).fileCount).toBe(1); // the file IS indexed (lexically)
+      expect(embedSpy).not.toHaveBeenCalled();
+      expect(store.entries.size).toBe(0);
+      // A content change still reindexes without touching the provider.
+      await writeFile(join(dir, "alpha.md"), "# Alpha\nthe quick brown fox, revised\n", "utf8");
+      expect(await vault.reindexFile("alpha.md")).toBe(true);
+      expect(embedSpy).not.toHaveBeenCalled();
+      expect(store.entries.size).toBe(0);
+    } finally {
+      await vault.dispose().catch(() => undefined);
+    }
+  });
+
+  it("(d) switching the same index to a semantic store re-embeds the files that were indexed lexically", async () => {
+    const lexical = new UnityProjectVault({ id: "mode", rootPath: dir, embedding: new FakeEmbedding(), vectorStore: new SpyVectorStore(false) });
+    await lexical.init();
+    await lexical.dispose();
+
+    const store = new SpyVectorStore(true);
+    const embed = new FakeEmbedding();
+    const embedSpy = vi.spyOn(embed, "embed");
+    const semantic = new UnityProjectVault({ id: "mode", rootPath: dir, embedding: embed, vectorStore: store });
+    try {
+      // Same on-disk index, unchanged file content: the hash short-circuit
+      // would silently leave the file without vectors forever unless the
+      // mode change forces a re-embed.
+      await semantic.init();
+      expect(embedSpy).toHaveBeenCalled();
+      expect(store.entries.size).toBeGreaterThan(0);
+      const result = await semantic.query({ text: "fox" });
+      expect(result.hits.some((h) => h.scores.hnsw !== null)).toBe(true);
+    } finally {
+      await semantic.dispose().catch(() => undefined);
     }
   });
 

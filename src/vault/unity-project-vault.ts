@@ -71,7 +71,9 @@ export class UnityProjectVault implements IVault {
   protected emitter = new EventEmitter();
   protected dbPath: string;
   protected watcher: IVaultWatcher | null = null;
-  private initialized = false;
+  /** Protected so subclasses that override init() keep the idempotence guard
+   *  (audited 2026-09-02: SelfVault could not set it and re-walked per call). */
+  protected initialized = false;
   /** Serializes reindexFile()/delete passes — mirrors ObsidianVault.writeLock. */
   protected writeLock = new AsyncLock();
   /**
@@ -105,8 +107,25 @@ export class UnityProjectVault implements IVault {
     if (this.initialized && this.watcher) return;
     await mkdir(join(this.rootPath, '.strada/vault/codebase'), { recursive: true });
     this.store.migrate();
+    this.reconcileEmbeddingMode();
     await this.fullIndex();
     this.initialized = true;
+  }
+
+  /**
+   * Names, once per init, whether vectors are being built at all, and forces
+   * a re-embed when an index built lexically meets a real semantic store.
+   * Audited 2026-09-02: the write path embedded every chunk into the
+   * non-semantic placeholder (whose search() returns []) without saying so.
+   */
+  protected reconcileEmbeddingMode(): void {
+    const semantic = this.adapter.isSemantic();
+    const { previous, resetFiles } = this.store.reconcileEmbeddingMode(semantic);
+    if (!semantic) {
+      getLoggerSafe().info(`[vault ${this.id}] vector store is non-semantic: chunks are indexed lexically only (FTS/BM25); no embeddings are computed or stored`);
+    } else if (previous === 'lexical') {
+      getLoggerSafe().info(`[vault ${this.id}] embedding mode changed lexical -> semantic: reset the stored hash of ${resetFiles} file(s) so every chunk is embedded on this index pass`);
+    }
   }
 
   async sync(): Promise<{ changed: number; durationMs: number }> {
@@ -301,11 +320,13 @@ export class UnityProjectVault implements IVault {
   /**
    * Actual reindex. MUST be called from within the writeLock.
    *
-   * Ordering: snapshot the OLD HNSW ids but keep them live; write the SQL rows
-   * + chunks; embed the NEW vectors; ONLY on embed success remove the OLD
-   * vectors. On embed failure, roll back any partial new vectors and reset the
-   * stored hash so the next sync re-embeds — this prevents a transient
-   * embedding failure from permanently losing a file's vectors.
+   * Ordering: snapshot the OLD HNSW ids (their SQL mapping dies with the chunk
+   * rows in the transaction below); write the SQL rows + chunks; embed the NEW
+   * vectors. On success remove the OLD vectors and commit the real hash. On
+   * failure remove BOTH the partial new vectors and the old ones — nothing in
+   * SQL references them any more — and leave the provisional empty hash so the
+   * next sync re-embeds the file (audited 2026-09-02: keeping the old vectors
+   * stranded them for the life of the store).
    */
   protected async reindexFileInternal(relPath: string): Promise<boolean> {
     const fileInfo = await getIndexableFileInfo(this.rootPath, relPath);
@@ -382,7 +403,13 @@ export class UnityProjectVault implements IVault {
     // instead of short-circuiting on an up-to-date-but-vector-less row.
     const newHnswIds: number[] = [];
     let embedOk = false;
-    try {
+    // Gate the WRITE path on the same flag as the read path (audited
+    // 2026-09-02): a non-semantic store can never surface a vector, so
+    // embedding into it only spent provider calls and RSS. The file is fully
+    // indexed lexically; its hash commits below exactly as on embed success.
+    if (!this.adapter.isSemantic()) {
+      embedOk = true;
+    } else try {
       const embeddingMap = await this.adapter.upsertBatch(chunks.map((c) => ({ chunkId: c.chunkId, content: c.content })));
       newHnswIds.push(...Object.values(embeddingMap));
       // Persist chunk_id → hnsw_id mapping for future vector lifecycle management.
@@ -397,17 +424,27 @@ export class UnityProjectVault implements IVault {
       // can't flood the log with one identical line per file.
       if (nowMs - this.lastEmbedWarnAtMs > UnityProjectVault.EMBED_WARN_WINDOW_MS) {
         this.lastEmbedWarnAtMs = nowMs;
-        getLoggerSafe().warn(`[vault ${this.id}] embedding failed for ${relPath} (and possibly other files), keeping prior vectors; will retry next sync — fix the embedding backend to enable semantic search`, {
+        getLoggerSafe().warn(`[vault ${this.id}] embedding failed for ${relPath} (and possibly other files): the file is indexed lexically and has no vectors until the next sync re-embeds it — fix the embedding backend to restore semantic search`, {
           error: embedErrMsg,
         });
       } else {
-        getLoggerSafe().debug(`[vault ${this.id}] embedding failed for ${relPath}, keeping prior vectors; will retry next sync`, {
+        getLoggerSafe().debug(`[vault ${this.id}] embedding failed for ${relPath}; lexical index kept, vectors rebuilt on next sync`, {
           error: embedErrMsg,
         });
       }
       // Roll back any vectors inserted before the failure. The provisional empty
       // hash is already committed — nothing further to reset.
       for (const id of newHnswIds) {
+        try { this.adapter.remove(id); } catch { /* per-id best effort */ }
+      }
+      // The OLD vectors must go too (audited 2026-09-02): runReindexTxn has
+      // already replaced this file's chunk rows, which cascaded away every
+      // chunk_id -> hnsw_id mapping. "Keeping prior vectors" therefore kept
+      // vectors that no query could reach and no later pass could remove —
+      // listHnswIdsForPath on the retry returned [] — stranding one vector set
+      // per file per embedding hiccup. The retry is still guaranteed by the
+      // provisional empty hash.
+      for (const id of oldHnswIds) {
         try { this.adapter.remove(id); } catch { /* per-id best effort */ }
       }
     }
@@ -443,9 +480,12 @@ export class UnityProjectVault implements IVault {
     return out;
   }
 
-  // Phase2-review I3: cache listEdges for query/PPR/findCallers hot paths, invalidated
-  // whenever reindexFile changes anything. For 50k-edge projects, the full scan per query
-  // was a measurable hit; caching is safe because edge mutations all flow through reindexFile.
+  // Phase2-review I3: cache listEdges for query/PPR/findCallers hot paths. For 50k-edge
+  // projects, the full scan per query was a measurable hit. Edge rows change in exactly
+  // two places — runReindexTxn (via reindexFileInternal) and store.deleteFile (via
+  // deleteIndexedFileInternal, which reindexFileInternal, sync()'s prune loop and
+  // fullIndex all reach) — and BOTH must invalidate (audited 2026-09-02: the delete
+  // path did not).
   private _edgesCache: VaultEdge[] | null = null;
   private getCachedEdges(): VaultEdge[] {
     if (this._edgesCache === null) this._edgesCache = this.store.listEdges();
@@ -555,6 +595,11 @@ export class UnityProjectVault implements IVault {
     const hnswIds = this.store.listHnswIdsForPath(relPath);
     for (const hnswId of hnswIds) this.adapter.remove(hnswId);
     this.store.deleteFile(relPath);
+    // deleteFile drops this file's edges (and unlinks other files' edges that
+    // pointed at its symbols) in SQLite; the cache kept serving them, so
+    // findCallers/PPR named a deleted file until an unrelated reindex
+    // happened to clear it (audited 2026-09-02).
+    this.invalidateEdgesCache();
     return true;
   }
 }

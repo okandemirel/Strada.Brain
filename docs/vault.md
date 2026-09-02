@@ -184,6 +184,8 @@ Writes are atomic (temp file + rename).
 
 `src/vault/ppr.ts` runs when `VaultQuery.focusFiles` is set, re-ranking hybrid results via the edge graph. The damping formula is normalized so the stationary distribution sums to 1. When `focusFiles` is omitted, the RRF-only path is preserved.
 
+The extractors emit every edge target as `<lang>::unresolved::<name>`; the store derives the link (`vault_edges.resolved_to`) inside the reindex/delete transaction: the edge points at the one indexed symbol carrying that name, and stays unresolved while the name is absent or ambiguous. Readers (`listEdges`, `findCallersOf`, PPR, the canvas) see the linked id when one exists and the raw unresolved target otherwise. Databases indexed before this rule are backfilled once on `migrate()` (audited 2026-09-02).
+
 ### SelfVault
 
 `src/vault/self-vault.ts` indexes Strada.Brain's own source automatically. It covers:

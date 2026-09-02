@@ -161,12 +161,22 @@ export class SelfVault extends UnityProjectVault {
 
   // Override init: use curated discovery roots rather than Unity's Assets/Packages layout.
   override async init(): Promise<void> {
+    // Same contract as UnityProjectVault.init() (audited 2026-09-02 — this
+    // override had dropped both halves): idempotent only while a watcher owns
+    // freshness, so a repeated vault_init does not re-walk the tree; and a
+    // startup pass reconciles the index against disk, so a file deleted while
+    // the daemon was down stops being served with a citation to a path that
+    // no longer exists.
+    if (this.initialized && this.watcher) return;
     const { mkdir } = await import('node:fs/promises');
     await mkdir(join(this.rootPath, '.strada/vault/codebase'), { recursive: true });
     this.store.migrate();
+    this.reconcileEmbeddingMode();
 
     const found = await this.discoverFiles();
-    await this.processFiles(found, new Set(), 'init');
+    const before = new Set(this.store.listFiles().map((f) => f.path));
+    await this.processFiles(found, before, 'init');
+    this.initialized = true;
   }
 
   /** Discover files from SELF_INCLUDE_ROOTS. */
@@ -192,7 +202,13 @@ export class SelfVault extends UnityProjectVault {
     return found;
   }
 
-  /** Index discovered files and optionally remove deleted ones. */
+  /**
+   * Index discovered files and remove every previously indexed path that is
+   * no longer on disk. `before` is the index state captured BEFORE the pass;
+   * both init and sync pass the real one (audited 2026-09-02: init passed an
+   * empty set and the prune was gated on phase === 'sync', so offline
+   * deletions were never reconciled).
+   */
   private async processFiles(
     found: VaultFile[],
     before: Set<string>,
@@ -207,12 +223,10 @@ export class SelfVault extends UnityProjectVault {
       }
     }
 
-    if (phase === 'sync') {
-      const present = new Set(found.map((f) => f.path));
-      for (const p of before) {
-        if (!present.has(p) && await this.writeLock.run(async () => this.deleteIndexedFileInternal(p))) {
-          changed.push(p);
-        }
+    const present = new Set(found.map((f) => f.path));
+    for (const p of before) {
+      if (!present.has(p) && await this.writeLock.run(async () => this.deleteIndexedFileInternal(p))) {
+        changed.push(p);
       }
     }
 
