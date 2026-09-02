@@ -399,6 +399,63 @@ describe("FileWatchTrigger", () => {
   // Security: only paths, never file content
   // ===========================================================================
 
+  it("previewFireDescription returns exactly what onFired will publish, without draining (audited 2026-09-02)", () => {
+    const trigger = new FileWatchTrigger(baseDef);
+    eventHandlers["change"]!("/projects/game/Assets/A.cs");
+    eventHandlers["add"]!("/projects/game/Assets/B.cs");
+    vi.advanceTimersByTime(150);
+
+    const preview = trigger.previewFireDescription(new Date());
+    expect(trigger.getPendingEvents()).toHaveLength(2); // not drained
+    expect(trigger.metadata.description).toBe(baseDef.action); // not mutated
+
+    trigger.onFired(new Date());
+    expect(trigger.metadata.description).toBe(preview);
+    expect(preview).toContain("A.cs changed");
+    expect(preview).toContain("B.cs added");
+  });
+
+  it("caps the pending buffer and names what it dropped instead of inlining every event (audited 2026-09-02)", () => {
+    // A Unity re-import or branch switch under a watched dir produces
+    // thousands of events while ticks are skipped (overlap suppression,
+    // budget, idle pause). The buffer had no cap and every entry was joined
+    // into the LLM prompt. Now it holds 200 and the summary states the rest.
+    const trigger = new FileWatchTrigger(baseDef);
+    for (let i = 0; i < 250; i++) {
+      eventHandlers["change"]!(`/projects/game/Assets/File${i}.cs`);
+    }
+    vi.advanceTimersByTime(150);
+
+    expect(trigger.getPendingEvents()).toHaveLength(200);
+    trigger.onFired(new Date());
+    const desc = trigger.metadata.description;
+    expect(desc).toContain("File0.cs changed");
+    expect(desc).not.toContain("File249.cs");
+    expect(desc).toContain("50 further changes not listed");
+    expect(desc).toContain("Action: Analyze changed Unity scripts");
+
+    // The overflow count belongs to that fire only.
+    eventHandlers["change"]!("/projects/game/Assets/Next.cs");
+    vi.advanceTimersByTime(150);
+    trigger.onFired(new Date());
+    expect(trigger.metadata.description).not.toContain("not listed");
+  });
+
+  it("carries the HEARTBEAT.md cooldown into metadata, and keeps it across onFired (audited 2026-09-02)", () => {
+    // `cooldown:` was parsed into def.cooldown but never reached metadata, so
+    // the heartbeat computed cooldownMs=0 and the deduplicator skipped the
+    // cooldown branch — the user's throttle was silently dropped.
+    const trigger = new FileWatchTrigger({ ...baseDef, cooldown: 3600 });
+    expect(trigger.metadata.cooldownSeconds).toBe(3600);
+
+    eventHandlers["change"]!("/projects/game/Assets/Player.cs");
+    vi.advanceTimersByTime(150);
+    trigger.onFired(new Date());
+
+    // onFired rebuilds the description; the cooldown must survive the rebuild.
+    expect(trigger.metadata.cooldownSeconds).toBe(3600);
+  });
+
   it("onFired description contains paths and event types only, never file content", () => {
     const trigger = new FileWatchTrigger(baseDef);
 

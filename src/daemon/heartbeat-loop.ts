@@ -55,6 +55,14 @@ export class HeartbeatLoop {
   private intervalId: ReturnType<typeof setTimeout> | undefined;
   private running = false;
   private lastTick: Date | null = null;
+  /**
+   * Bumped by every start() and stop(). A timer callback captures the
+   * generation it was armed under and refuses to re-arm into a newer one —
+   * audited 2026-09-02: stop()+start() while a tick awaited agentCore.tick()
+   * let the stale callback overwrite the new chain's handle and run a second,
+   * untracked chain (2x ticks, 2x OODA spend) until the next stop.
+   */
+  private generation = 0;
   private readonly activeTriggerTasks = new Map<string, TaskId>();
   private readonly circuitBreakers = new Map<string, CircuitBreaker>();
 
@@ -100,6 +108,7 @@ export class HeartbeatLoop {
   start(): void {
     if (this.running) return;
     this.running = true;
+    this.generation += 1;
 
     // Load persisted circuit breaker states
     const savedStates = this.storage.getAllCircuitStates();
@@ -140,8 +149,19 @@ export class HeartbeatLoop {
     this.scheduleNextTick();
   }
 
-  private scheduleNextTick(): void {
+  /**
+   * Arm the next tick `delayMs` from now (defaults to the configured interval).
+   *
+   * Audited 2026-09-02: this used to arm an intermediate timer for
+   * `intervalMs - elapsed` whose only job was to call scheduleNextTick(),
+   * which then armed ANOTHER full intervalMs — so ticks landed every
+   * 2 * intervalMs while `/daemon status` reported intervalMs, and minute-pinned
+   * crons on the unobserved parity never fired. The compensated delay IS the
+   * schedule; it is passed straight into the one timer.
+   */
+  private scheduleNextTick(delayMs: number = this.config.heartbeat.intervalMs): void {
     const intervalMs = this.config.heartbeat.intervalMs;
+    const armedGeneration = this.generation;
     this.intervalId = setTimeout(async () => {
       const start = Date.now();
       try {
@@ -151,22 +171,30 @@ export class HeartbeatLoop {
           error: err instanceof Error ? err.message : String(err),
         });
       }
-      if (!this.running) return;
+      // A callback from a previous run (stop()+start() happened while it was
+      // awaiting) must not re-arm into the current chain.
+      if (!this.running || armedGeneration !== this.generation) return;
       const elapsed = Date.now() - start;
-      const delay = Math.max(0, intervalMs - elapsed);
-      this.intervalId = setTimeout(() => this.scheduleNextTick(), delay);
-      this.intervalId.unref?.();
-    }, intervalMs);
+      this.scheduleNextTick(Math.max(0, intervalMs - elapsed));
+    }, delayMs);
     this.intervalId.unref?.();
   }
 
   /**
-   * Stop the heartbeat loop. Persists circuit breaker states,
-   * disposes all triggers, and marks daemon as not running.
+   * Pause the heartbeat loop. Persists circuit breaker states and marks the
+   * daemon as not running. Triggers stay registered and armed so a later
+   * start() resumes them.
+   *
+   * Audited 2026-09-02: this used to dispose every trigger, and start() never
+   * rebuilt them — FileWatchTrigger.dispose() closes its chokidar watcher for
+   * good, so `/daemon stop` then `/daemon start` (or the dashboard toggle)
+   * left file-watch triggers permanently dead while status still counted them
+   * as armed. Disposal belongs to process shutdown: see shutdown().
    */
   stop(): void {
     if (!this.running) return;
     this.running = false;
+    this.generation += 1;
 
     if (this.intervalId) {
       clearTimeout(this.intervalId);
@@ -178,16 +206,28 @@ export class HeartbeatLoop {
       this.persistCircuitState(name, cb);
     }
 
-    // Dispose all triggers (fire-and-forget -- stop() is sync)
-    const triggers = this.registry.getAll();
-    if (triggers.length > 0) {
-      void Promise.allSettled(
-        triggers.map((t) => t.dispose?.()),
-      );
-    }
-
     this.storage.setDaemonState("daemon_was_running", "false");
     this.logger.info("Daemon heartbeat stopped");
+  }
+
+  /**
+   * Stop the loop AND release every trigger's resources (file watchers,
+   * buffers). One-way: the loop cannot be restarted in-process afterwards.
+   * Wired to process shutdown, never to the user-facing pause.
+   */
+  async shutdown(): Promise<void> {
+    this.stop();
+    const triggers = this.registry.getAll();
+    if (triggers.length === 0) return;
+    const results = await Promise.allSettled(triggers.map((t) => t.dispose?.()));
+    results.forEach((result, i) => {
+      if (result.status === "rejected") {
+        this.logger.warn("Trigger dispose failed during shutdown", {
+          trigger: triggers[i]?.metadata.name,
+          error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+        });
+      }
+    });
   }
 
   /**
@@ -374,12 +414,18 @@ export class HeartbeatLoop {
       // 6. Evaluate trigger
       try {
         if (trigger.shouldFire(now)) {
-          // Dedup check (TRIG-05) -- before onFired and task submission
+          const cooldownMs = trigger.metadata.cooldownSeconds
+            ? (trigger.metadata.cooldownSeconds * 1000)
+            : 0;
+          // Dedup check (TRIG-05) -- before onFired and task submission.
+          // Hash what THIS fire would publish: description-rewriting triggers
+          // expose it via previewFireDescription, because metadata.description
+          // still holds the PREVIOUS fire's summary here (audited 2026-09-02:
+          // hashing it let a true repeat through and then suppressed the next
+          // genuinely new change set as a "duplicate").
+          const fireContent = trigger.previewFireDescription?.(now) ?? trigger.metadata.description;
           if (this.deduplicator) {
-            const cooldownMs = trigger.metadata.cooldownSeconds
-              ? (trigger.metadata.cooldownSeconds * 1000)
-              : 0;
-            if (this.deduplicator.shouldSuppress(name, trigger.metadata.description, now.getTime(), cooldownMs)) {
+            if (this.deduplicator.shouldSuppress(name, fireContent, now.getTime(), cooldownMs)) {
               const reason = this.deduplicator.getSuppressionReason();
               this.eventBus.emit("daemon:trigger_deduplicated", {
                 triggerName: name,
@@ -405,6 +451,30 @@ export class HeartbeatLoop {
 
           trigger.onFired(now);
 
+          // Approval-only triggers: DeployTrigger's whole effect is the
+          // approval it enqueued in onFired, and its description is the
+          // static label "Deployment readiness detection", not an instruction.
+          // Audited 2026-09-02: submitting it spawned a full agent run against
+          // that label on every readiness event, charged to the daemon budget.
+          if (trigger.metadata.type === "deploy") {
+            if (this.deduplicator) {
+              this.deduplicator.recordFired(name, trigger.metadata.description, now.getTime(), cooldownMs);
+            }
+            cb.recordSuccess();
+            this.persistCircuitState(name, cb);
+            try {
+              this.storage.insertTriggerFireHistory({
+                triggerName: name,
+                result: "success",
+                timestamp: now.getTime(),
+              });
+            } catch (err) {
+              this.logger.warn("Failed to record trigger fire history", { trigger: name, error: String(err) });
+            }
+            this.logger.info("Trigger fired (approval-only; no task submitted)", { trigger: name });
+            continue;
+          }
+
           // Mark trigger as in-flight BEFORE submission to prevent
           // duplicate fires if the next tick runs before submit returns.
           this.activeTriggerTasks.set(name, "pending" as TaskId);
@@ -417,9 +487,10 @@ export class HeartbeatLoop {
             { origin: "daemon", triggerName: name },
           );
 
-          // Record dedup fire
+          // Record dedup fire — with this trigger's own cooldown so another
+          // trigger's cleanup pass cannot evict it early (audited 2026-09-02)
           if (this.deduplicator) {
-            this.deduplicator.recordFired(name, trigger.metadata.description, now.getTime());
+            this.deduplicator.recordFired(name, trigger.metadata.description, now.getTime(), cooldownMs);
           }
 
           // Update with real task ID now that submission succeeded

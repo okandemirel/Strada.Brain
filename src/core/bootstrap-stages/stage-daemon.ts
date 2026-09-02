@@ -97,8 +97,9 @@ export function loadDaemonTriggersStage(
           ) ?? new ChecklistTrigger(def, params.daemonConfig.timezone || undefined);
           break;
         case "webhook": {
-          const webhookTrigger = deps.createWebhookTrigger?.(def.name, def.action)
-            ?? new WebhookTrigger(def.name, def.action);
+          // def.cooldown: the parsed cooldown was dropped at this call site before (audited 2026-09-02)
+          const webhookTrigger = deps.createWebhookTrigger?.(def.name, def.action, def.cooldown)
+            ?? new WebhookTrigger(def.name, def.action, def.cooldown);
           webhookTriggers.set(def.name, webhookTrigger);
           trigger = webhookTrigger;
           break;

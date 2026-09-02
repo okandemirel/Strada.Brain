@@ -9,6 +9,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { HeartbeatLoop } from "./heartbeat-loop.js";
 import { TriggerRegistry } from "./trigger-registry.js";
 import { CircuitBreaker } from "./resilience/circuit-breaker.js";
+import { TriggerDeduplicator } from "./dedup/trigger-deduplicator.js";
 import type { ITrigger, TriggerMetadata, TriggerState, DaemonConfig } from "./daemon-types.js";
 import type { DaemonEventMap } from "./daemon-events.js";
 import type { IEventBus } from "../core/event-bus.js";
@@ -25,12 +26,13 @@ function makeTrigger(
     shouldFire?: boolean;
     state?: TriggerState;
     description?: string;
+    type?: TriggerMetadata["type"];
   } = {},
 ): ITrigger {
   const metadata: TriggerMetadata = {
     name,
     description: opts.description ?? `Trigger: ${name}`,
-    type: "cron",
+    type: opts.type ?? "cron",
   };
   return {
     metadata,
@@ -281,6 +283,122 @@ describe("HeartbeatLoop", () => {
     expect(storage.setDaemonState).toHaveBeenCalledWith("daemon_was_running", "false");
   });
 
+  it("stop() then start() keeps every trigger armed — a pause must not dispose (audited 2026-09-02)", async () => {
+    // /daemon stop -> /daemon start disposed every registered trigger and
+    // never rebuilt them, so file-watch triggers were permanently dead while
+    // status still counted them as armed.
+    const trigger = makeTrigger("watch-1", { shouldFire: true });
+    trigger.dispose = vi.fn(async () => {});
+    registry.register(trigger);
+
+    loop.start();
+    loop.stop();
+    loop.start();
+
+    expect(trigger.dispose).not.toHaveBeenCalled();
+    expect(loop.getDaemonStatus().triggerCount).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(config.heartbeat.intervalMs + 10);
+    expect(taskManager.submit).toHaveBeenCalledTimes(1);
+  });
+
+  it("shutdown() stops the loop and disposes every trigger (process exit path)", async () => {
+    const trigger = makeTrigger("watch-2", { shouldFire: false });
+    trigger.dispose = vi.fn(async () => {});
+    registry.register(trigger);
+
+    loop.start();
+    await loop.shutdown();
+
+    expect(loop.isRunning()).toBe(false);
+    expect(trigger.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("content dedup judges the fire being evaluated, not the previous one (audited 2026-09-02)", async () => {
+    // A description-rewriting trigger (file-watch/webhook/checklist) is hashed
+    // BEFORE onFired rewrites metadata.description, so the hash checked and
+    // stored was always the previous fire's summary: a true repeat slipped
+    // through, and the next genuinely new change set was suppressed as a
+    // "duplicate" with a false history row.
+    const pending: string[] = [];
+    const describePending = () =>
+      `File changes detected: ${pending.map((f) => `${f} changed`).join(", ")}. Action: Review changed files`;
+    const trigger = {
+      metadata: { name: "watch", description: "Review changed files", type: "file-watch" } as TriggerMetadata,
+      shouldFire: vi.fn(() => pending.length > 0),
+      previewFireDescription: vi.fn(() => describePending()),
+      onFired: vi.fn(() => {
+        trigger.metadata = { ...trigger.metadata, description: describePending() };
+        pending.length = 0;
+      }),
+      getNextRun: () => null,
+      getState: vi.fn((): TriggerState => "active"),
+    };
+    registry.register(trigger as unknown as ITrigger);
+    loop = new HeartbeatLoop(
+      registry, taskManager as any, budgetTracker as any, securityPolicy as any, approvalQueue as any,
+      storage as any, identityManager as any, eventBus, config, logger as any,
+      new TriggerDeduplicator(300_000),
+    );
+    loop.start();
+    const t0 = new Date("2026-09-02T10:00:00Z").getTime();
+
+    // t0: X changes -> fires, prompt names X. Its task settles before the next tick.
+    vi.setSystemTime(t0);
+    pending.push("X.cs");
+    await loop.tick();
+    taskManager._setTaskStatus("task_1", "completed");
+
+    // t0+60s: X changes again -> byte-identical summary -> a true duplicate, suppressed.
+    vi.setSystemTime(t0 + 60_000);
+    pending.push("X.cs");
+    await loop.tick();
+
+    // t0+120s: Y changes too -> new content -> must fire, not be called a duplicate.
+    vi.setSystemTime(t0 + 120_000);
+    pending.push("Y.cs");
+    await loop.tick();
+
+    const prompts = taskManager.submit.mock.calls.map((call) => call[2] as string);
+    expect(prompts).toHaveLength(2);
+    expect(prompts[0]).toContain("X.cs changed");
+    expect(prompts[0]).not.toContain("Y.cs");
+    expect(prompts[1]).toContain("Y.cs changed");
+    const dedupRows = (storage.insertTriggerFireHistory as ReturnType<typeof vi.fn>).mock.calls
+      .filter(([row]) => (row as { result: string }).result === "deduplicated");
+    expect(dedupRows).toHaveLength(1);
+    expect((dedupRows[0]![0] as { timestamp: number }).timestamp).toBe(t0 + 60_000);
+  });
+
+  it("an approval-only (deploy) trigger fires without submitting an agent task (audited 2026-09-02)", async () => {
+    // DeployTrigger's whole effect is the approval it enqueues in onFired; its
+    // description is the static label "Deployment readiness detection", not
+    // an instruction. Submitting it spawned a full agent run against that
+    // label on every readiness event, charged to the daemon budget.
+    const deploy = makeTrigger("deploy-readiness", {
+      shouldFire: true,
+      description: "Deployment readiness detection",
+      type: "deploy",
+    });
+    const cron = makeTrigger("nightly", { shouldFire: true });
+    registry.register(deploy);
+    registry.register(cron);
+
+    loop.start();
+    await loop.tick();
+
+    expect(deploy.onFired).toHaveBeenCalledTimes(1);
+    const prompts = taskManager.submit.mock.calls.map((call) => call[2]);
+    expect(prompts).toEqual(["Trigger: nightly"]);
+    expect(storage.insertTriggerFireHistory).toHaveBeenCalledWith(
+      expect.objectContaining({ triggerName: "deploy-readiness", result: "success" }),
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      "Trigger fired (approval-only; no task submitted)",
+      expect.objectContaining({ trigger: "deploy-readiness" }),
+    );
+  });
+
   it("skips trigger submission while a foreground task is active and idlePause is enabled", () => {
     config = makeDaemonConfig({
       heartbeat: {
@@ -330,6 +448,48 @@ describe("HeartbeatLoop", () => {
 
     // shouldFire should have been called (trigger was evaluated)
     expect(trigger.shouldFire).toHaveBeenCalled();
+  });
+
+  it("ticks once per configured interval — N intervals yield N ticks, not N/2 (audited 2026-09-02)", async () => {
+    // The pre-fix loop armed an idle intermediate timer after each tick and
+    // then a fresh full interval, so ticks landed every 2*intervalMs while
+    // status reported intervalMs. Six intervals must produce six ticks.
+    const trigger = makeTrigger("cadence", { shouldFire: false });
+    registry.register(trigger);
+    loop.start();
+
+    const intervalMs = config.heartbeat.intervalMs;
+    await vi.advanceTimersByTimeAsync(intervalMs * 6 + 10);
+
+    const tickEvents = (eventBus.emit as ReturnType<typeof vi.fn>).mock.calls
+      .filter(([event]) => event === "daemon:tick");
+    expect(tickEvents).toHaveLength(6);
+    expect(trigger.shouldFire).toHaveBeenCalledTimes(6);
+  });
+
+  it("stop() then start() during an in-flight tick leaves exactly one timer chain (audited 2026-09-02)", async () => {
+    // The tick blocks inside agentCore.tick() (an LLM call in production).
+    // A restart during that window armed a second chain, and the resuming
+    // stale callback re-armed its own — two chains, 2x ticks and 2x OODA spend.
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    loop.setAgentCore({ tick: vi.fn(() => blocked) } as never);
+    const countTicks = () =>
+      (eventBus.emit as ReturnType<typeof vi.fn>).mock.calls.filter(([event]) => event === "daemon:tick").length;
+
+    loop.start();
+    const intervalMs = config.heartbeat.intervalMs;
+    await vi.advanceTimersByTimeAsync(intervalMs + 10); // first tick, now blocked
+    expect(countTicks()).toBe(1);
+
+    loop.stop();
+    loop.start(); // arms a fresh chain while the old callback is still awaiting
+    release();
+    await vi.advanceTimersByTimeAsync(0); // stale callback resumes here
+
+    const before = countTicks();
+    await vi.advanceTimersByTimeAsync(intervalMs * 6 + 10);
+    expect(countTicks() - before).toBe(6);
   });
 
   it("tick() iterates over registry.getActive() and calls shouldFire(now)", async () => {

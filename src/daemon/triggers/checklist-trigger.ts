@@ -37,10 +37,13 @@ export class ChecklistTrigger implements ITrigger {
    */
   constructor(def: ChecklistTriggerDef, timezone?: string) {
     this.originalAction = def.action;
+    // cooldownSeconds: the parsed HEARTBEAT.md cooldown was dropped here before
+    // (audited 2026-09-02) — only CronTrigger ever received it.
     this._metadata = {
       name: def.name,
       description: def.action,
       type: "checklist",
+      cooldownSeconds: def.cooldown,
     };
 
     this.timezone =
@@ -139,16 +142,28 @@ export class ChecklistTrigger implements ITrigger {
 
     // Build dynamic description
     if (this.dueItems.length > 0) {
-      const itemList = this.dueItems
-        .map((item) => `[${item.priority}] ${item.text}`)
-        .join(", ");
-
-      this._metadata = {
-        name: this._metadata.name,
-        description: `Checklist items due: ${itemList}. Action: ${this.originalAction}`,
-        type: this._metadata.type,
-      };
+      // Spread keeps cooldownSeconds across the rebuild (audited 2026-09-02)
+      this._metadata = { ...this._metadata, description: this.buildSummary() };
     }
+  }
+
+  /**
+   * ITrigger.previewFireDescription -- what onFired would publish for the
+   * items shouldFire() just found due, with no side effects (nothing recorded
+   * as fired, metadata untouched), so content dedup judges this fire
+   * (audited 2026-09-02).
+   */
+  previewFireDescription(_now: Date): string {
+    if (this.dueItems.length === 0) return this._metadata.description;
+    return this.buildSummary();
+  }
+
+  /** Summary of the due items; pure. */
+  private buildSummary(): string {
+    const itemList = this.dueItems
+      .map((item) => `[${item.priority}] ${item.text}`)
+      .join(", ");
+    return `Checklist items due: ${itemList}. Action: ${this.originalAction}`;
   }
 
   /**

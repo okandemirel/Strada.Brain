@@ -30,8 +30,12 @@ export interface DedupStats {
 export class TriggerDeduplicator {
   private readonly globalWindowMs: number;
 
-  /** Per-trigger last-fired timestamps: triggerName -> epoch ms */
-  private readonly lastFired = new Map<string, number>();
+  /**
+   * Per-trigger last-fired records: triggerName -> { epoch ms, that trigger's
+   * own cooldown }. The cooldown travels with the entry so cleanup() can
+   * evict each record on ITS window, never on the calling trigger's.
+   */
+  private readonly lastFired = new Map<string, { ts: number; cooldownMs: number }>();
 
   /** Content hash -> epoch ms for cross-trigger dedup */
   private readonly contentHashes = new Map<string, number>();
@@ -71,8 +75,8 @@ export class TriggerDeduplicator {
 
     // 1. Per-trigger cooldown check
     if (cooldownMs > 0) {
-      const lastTime = this.lastFired.get(triggerName);
-      if (lastTime !== undefined && now - lastTime < cooldownMs) {
+      const last = this.lastFired.get(triggerName);
+      if (last !== undefined && now - last.ts < cooldownMs) {
         this.lastReason = "cooldown";
         this.totalSuppressedCount++;
         this.cooldownCount++;
@@ -83,7 +87,7 @@ export class TriggerDeduplicator {
     // 2. Cross-trigger content dedup check
     if (this.globalWindowMs > 0) {
       const hash = this.hashContent(actionContent);
-      this.lastCheckedHash = hash;
+      this.lastChecked = { content: actionContent, hash };
       const lastContent = this.contentHashes.get(hash);
       if (lastContent !== undefined && now - lastContent < this.globalWindowMs) {
         this.lastReason = "content_duplicate";
@@ -96,18 +100,31 @@ export class TriggerDeduplicator {
     return false;
   }
 
-  /** Cached hash from last shouldSuppress call to avoid double-hashing */
-  private lastCheckedHash: string | null = null;
+  /**
+   * Content + hash from the last shouldSuppress call, so recordFired can skip
+   * re-hashing when handed the SAME content. Audited 2026-09-02: the hash was
+   * reused blindly, so recordFired stored the pre-fire description's hash
+   * even when handed the post-onFired summary — the stored key never
+   * described what actually fired.
+   */
+  private lastChecked: { content: string; hash: string } | null = null;
 
   /**
    * Record that a trigger fired. Call this after successfully processing
    * the trigger action (after shouldSuppress returns false).
    * Reuses the hash computed by shouldSuppress when available.
+   *
+   * @param cooldownMs - This trigger's own cooldown, stored with the record so
+   *   cleanup() keeps it alive for that long (audited 2026-09-02: without it,
+   *   a neighbour firing with a shorter window evicted the record early and
+   *   the long cooldown silently suppressed nothing).
    */
-  recordFired(triggerName: string, actionContent: string, now: number): void {
-    this.lastFired.set(triggerName, now);
-    const hash = this.lastCheckedHash ?? this.hashContent(actionContent);
-    this.lastCheckedHash = null;
+  recordFired(triggerName: string, actionContent: string, now: number, cooldownMs = 0): void {
+    this.lastFired.set(triggerName, { ts: now, cooldownMs });
+    const hash = this.lastChecked?.content === actionContent
+      ? this.lastChecked.hash
+      : this.hashContent(actionContent);
+    this.lastChecked = null;
     this.contentHashes.set(hash, now);
   }
 
@@ -166,9 +183,15 @@ export class TriggerDeduplicator {
     const maxWindow = Math.max(this.globalWindowMs, cooldownMs);
     if (maxWindow <= 0) return;
 
-    // Clean lastFired entries
-    for (const [key, ts] of this.lastFired) {
-      if (now - ts >= maxWindow) {
+    // Clean lastFired entries — each on ITS OWN window. Audited 2026-09-02:
+    // this used the calling trigger's cooldown as the only window for every
+    // entry, so any trigger firing with a shorter one (file-watch/webhook
+    // passed 0) evicted a neighbour's longer cooldown after globalWindowMs.
+    // The calling cooldown stays in as a floor (it can only keep entries
+    // longer, which a record made without a cooldown still relies on).
+    for (const [key, entry] of this.lastFired) {
+      const entryWindow = Math.max(maxWindow, entry.cooldownMs);
+      if (now - entry.ts >= entryWindow) {
         this.lastFired.delete(key);
       }
     }

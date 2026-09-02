@@ -168,6 +168,55 @@ describe("DigestReporter.sendDigest", () => {
     );
   });
 
+  it("a failed send leaves the delta baseline untouched and reports delivered:false (audited 2026-09-02)", async () => {
+    // Digest #1 fails to send (channel throws). The window it covered must
+    // NOT be marked as reported: the baseline stays, so digest #2 re-covers
+    // it, and the event names the failure instead of reading as sent.
+    const eventBus = makeMockEventBus();
+    const failingSender: IChannelSender = {
+      sendText: vi.fn().mockResolvedValue(undefined),
+      sendMarkdown: vi.fn().mockRejectedValue(new Error("403: bot was blocked by the user")),
+    };
+    const metricsStorage = {
+      getAggregation: vi.fn(() => ({ totalTasks: 10, successCount: 10, failureCount: 0, completionRate: 1 })),
+    };
+    const reporter = new DigestReporter(makeDeps({
+      channelSender: failingSender,
+      chatId: "chat-123",
+      channelType: "telegram",
+      eventBus,
+      metricsStorage,
+    }));
+
+    await reporter.sendDigest();
+
+    expect(storage.getDaemonState("digest_last_timestamp")).toBeUndefined();
+    expect(storage.getDaemonState("digest_last_tasks_completed")).toBeUndefined();
+    expect(eventBus.emit).toHaveBeenCalledWith(
+      "daemon:digest_sent",
+      expect.objectContaining({ delivered: false, channelType: "telegram" }),
+    );
+
+    // Digest #2 succeeds at 13 tasks: its delta must count from zero (no
+    // baseline was ever delivered), not "+3 since last digest".
+    metricsStorage.getAggregation.mockReturnValue({ totalTasks: 13, successCount: 13, failureCount: 0, completionRate: 1 });
+    const okSender = makeMockChannelSender();
+    const reporter2 = new DigestReporter(makeDeps({
+      channelSender: okSender,
+      chatId: "chat-123",
+      channelType: "telegram",
+      eventBus,
+      metricsStorage,
+    }));
+    const markdown = await reporter2.sendDigest();
+    expect(markdown).not.toContain("+3 since last digest");
+    expect(storage.getDaemonState("digest_last_tasks_completed")).toBe("13");
+    expect(eventBus.emit).toHaveBeenCalledWith(
+      "daemon:digest_sent",
+      expect.objectContaining({ delivered: true }),
+    );
+  });
+
   it("gracefully handles missing channel (logs warning, skips delivery)", async () => {
     const logger = makeMockLogger();
     const deps = makeDeps({

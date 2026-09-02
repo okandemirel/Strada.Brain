@@ -6,11 +6,18 @@
  * on their readOnly metadata, an auto-approve allowlist, and a hardcoded
  * file-write tool set that always requires approval.
  *
- * This class does NOT execute tools directly. The HeartbeatLoop calls
- * checkPermission() before executing, and if 'queue', calls requestApproval()
- * and skips execution until approved.
+ * This class does NOT execute tools directly.
  *
- * Requirements: SEC-03 (Read-only default), SEC-04 (Write approval)
+ * Audited 2026-09-02: checkPermission() and requestApproval() have NO
+ * production caller. HeartbeatLoop only holds this policy for
+ * setAutonomousOverride(); it submits trigger tasks straight to TaskManager,
+ * and the write gate daemon tasks actually pass through is the orchestrator's
+ * self-managed write review (resolveExecutionPolicy -> reviewSelfManagedWriteOperation),
+ * which does not consult this class or `security.autoApproveTools`. Until a
+ * per-tool dispatch hook wires it in, treat this policy as an unenforced
+ * classification, never as a passed check — the CLI labels it as such.
+ *
+ * Requirements: SEC-03 (Read-only default), SEC-04 (Write approval) — declared here, enforced elsewhere
  */
 
 import type { ApprovalQueue } from "./approval-queue.js";

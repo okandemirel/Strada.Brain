@@ -102,6 +102,42 @@ describe("BudgetTracker", () => {
   });
 
   // =========================================================================
+  // Limit scope (audited 2026-09-02)
+  // =========================================================================
+
+  describe("limit scope", () => {
+    it("a dedicated daemon limit measures daemon-only spend, so chat spend cannot exhaust it", () => {
+      // STRADA_BUDGET_DAILY_USD=50 with a dedicated STRADA_DAEMON_DAILY_BUDGET=5:
+      // $6 of ordinary chat spend lands in the same budget_entries table. The
+      // daemon has spent nothing, so its dedicated cap must read 0%.
+      storage.migrateBudgetSource();
+      storage.insertBudgetEntryWithSource({ costUsd: 6.0, timestamp: Date.now(), source: "chat" });
+
+      const dedicated = new BudgetTracker(storage, { dailyBudgetUsd: 5.0, warnPct: 0.8, limitScope: "daemon" });
+      const usage = dedicated.getUsage();
+      expect(usage.scope).toBe("daemon");
+      expect(usage.usedUsd).toBe(0);
+      expect(usage.pct).toBe(0);
+      expect(dedicated.isExceeded()).toBe(false);
+
+      // Daemon spend does count against the dedicated cap.
+      dedicated.recordCost(5.0);
+      expect(dedicated.getUsage().usedUsd).toBeCloseTo(5.0, 2);
+      expect(dedicated.isExceeded()).toBe(true);
+    });
+
+    it("a system-scoped limit (the shared wallet) measures every source", () => {
+      storage.migrateBudgetSource();
+      storage.insertBudgetEntryWithSource({ costUsd: 6.0, timestamp: Date.now(), source: "chat" });
+
+      const shared = new BudgetTracker(storage, { dailyBudgetUsd: 50, warnPct: 0.8, limitScope: "system" });
+      const usage = shared.getUsage();
+      expect(usage.scope).toBe("system");
+      expect(usage.usedUsd).toBeCloseTo(6.0, 2);
+    });
+  });
+
+  // =========================================================================
   // isExceeded
   // =========================================================================
 

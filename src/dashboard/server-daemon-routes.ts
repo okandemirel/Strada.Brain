@@ -48,12 +48,17 @@ export function handleDaemonRoutes(
     }
 
     try {
-      if (action === "approve") {
-        ctx.daemonApprovalQueue.approve(approvalId, "dashboard");
-      } else {
-        ctx.daemonApprovalQueue.deny(approvalId, "dashboard");
+      const result = action === "approve"
+        ? ctx.daemonApprovalQueue.approve(approvalId, "dashboard")
+        : ctx.daemonApprovalQueue.deny(approvalId, "dashboard");
+      // Audited 2026-09-02: the route answered {status:"approved"} whatever the
+      // entry's state. A decision that did not land (expired, already decided)
+      // is refused with the actual status so the caller sees why.
+      if (!result.applied) {
+        sendJsonError(res, 409, `Approval is ${result.status}, not pending — ${action} not applied`);
+        return true;
       }
-      sendJson(res, { status: action === "approve" ? "approved" : "denied" });
+      sendJson(res, { status: result.status });
     } catch {
       sendJsonError(res, 400, `Failed to ${action} approval`);
     }

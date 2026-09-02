@@ -341,7 +341,8 @@ export function createShutdownHandler(options: ShutdownOptions): () => Promise<v
 
       // Stop heartbeat loop before draining events
       if (options.heartbeatLoop) {
-        await runStep("heartbeatLoop", () => options.heartbeatLoop!.stop());
+        // shutdown() disposes triggers; stop() alone is the resumable pause (audited 2026-09-02).
+        await runStep("heartbeatLoop", () => options.heartbeatLoop!.shutdown());
       }
 
       // Stop chain detection timer before draining events

@@ -243,4 +243,48 @@ describe("ApprovalQueue", () => {
       expect(pending.find((p) => p.id === entry.id)).toBeUndefined();
     });
   });
+
+  // =========================================================================
+  // Decisions only land on live requests (audited 2026-09-02)
+  // =========================================================================
+
+  describe("decide() status guard", () => {
+    it("an expired approval cannot be approved afterwards — the timeout is a gate", () => {
+      vi.useFakeTimers();
+      const now = Date.now();
+      vi.setSystemTime(now);
+      const decided: unknown[] = [];
+      eventBus.on("daemon:approval_decided", (ev) => decided.push(ev));
+
+      const entry = queue.enqueue("deployment", { proposalId: "p-1" }, "deploy-readiness");
+      vi.setSystemTime(now + TIMEOUT_MINUTES * 60 * 1000 + 1);
+      queue.expireStale();
+
+      // Six hours later someone POSTs approve with the stale id.
+      vi.setSystemTime(now + 6 * 60 * 60 * 1000);
+      const result = queue.approve(entry.id, "dashboard");
+
+      expect(result).toEqual({ applied: false, status: "expired" });
+      expect(queue.getById(entry.id)!.status).toBe("expired");
+      expect(decided).toHaveLength(0);
+      // No "approved" audit row was written for an expired request
+      expect(queue.getAuditLog().map((a) => a.decision)).not.toContain("approved");
+    });
+
+    it("a denied approval cannot be flipped to approved", () => {
+      const entry = queue.enqueue("file_delete", { path: "/x" }, "cron");
+      expect(queue.deny(entry.id, "user")).toEqual({ applied: true, status: "denied" });
+
+      const flipped = queue.approve(entry.id, "dashboard");
+      expect(flipped).toEqual({ applied: false, status: "denied" });
+      expect(queue.getById(entry.id)!.status).toBe("denied");
+    });
+
+    it("a pending approval is decided exactly once and reports applied:true", () => {
+      const entry = queue.enqueue("git_push", {}, "cron");
+      expect(queue.approve(entry.id, "user")).toEqual({ applied: true, status: "approved" });
+      expect(queue.approve(entry.id, "user")).toEqual({ applied: false, status: "approved" });
+      expect(queue.approve("does-not-exist")).toEqual({ applied: false, status: "missing" });
+    });
+  });
 });

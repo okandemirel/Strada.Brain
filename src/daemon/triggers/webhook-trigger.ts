@@ -42,12 +42,18 @@ export class WebhookTrigger implements ITrigger {
   private readonly pendingEvents: WebhookEvent[] = [];
   private readonly defaultAction: string;
 
-  constructor(name: string, defaultAction: string) {
+  /**
+   * @param cooldownSeconds Per-trigger cooldown from HEARTBEAT.md. Audited
+   *   2026-09-02: the stage constructed webhooks as (name, action) and the
+   *   parsed cooldown never reached metadata, so it was silently ignored.
+   */
+  constructor(name: string, defaultAction: string, cooldownSeconds?: number) {
     this.defaultAction = defaultAction;
     this._metadata = {
       name,
       description: defaultAction,
       type: "webhook",
+      cooldownSeconds,
     };
   }
 
@@ -93,20 +99,28 @@ export class WebhookTrigger implements ITrigger {
   onFired(_now: Date): void {
     if (this.pendingEvents.length === 0) return;
 
-    const count = this.pendingEvents.length;
-    const first = this.pendingEvents[0]!;
-    const sourceStr = first.source ? ` from ${first.source}` : "";
-
-    const summary = `Webhook received: ${first.action}${sourceStr}. ${count} event(s). Action: ${this.defaultAction}`;
-
-    this._metadata = {
-      name: this._metadata.name,
-      description: summary,
-      type: this._metadata.type,
-    };
+    // Spread keeps cooldownSeconds across the rebuild (audited 2026-09-02)
+    this._metadata = { ...this._metadata, description: this.buildSummary() };
 
     // Drain the buffer
     this.pendingEvents.length = 0;
+  }
+
+  /**
+   * ITrigger.previewFireDescription -- what onFired would publish, with no
+   * side effects, so content dedup judges this fire (audited 2026-09-02).
+   */
+  previewFireDescription(_now: Date): string {
+    if (this.pendingEvents.length === 0) return this._metadata.description;
+    return this.buildSummary();
+  }
+
+  /** O(1) summary of the pending buffer; pure. */
+  private buildSummary(): string {
+    const count = this.pendingEvents.length;
+    const first = this.pendingEvents[0]!;
+    const sourceStr = first.source ? ` from ${first.source}` : "";
+    return `Webhook received: ${first.action}${sourceStr}. ${count} event(s). Action: ${this.defaultAction}`;
   }
 
   /**

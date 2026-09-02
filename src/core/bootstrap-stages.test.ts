@@ -588,6 +588,7 @@ describe("bootstrap-stages", () => {
       count: vi.fn().mockReturnValue(2),
     } as any;
     const webhookTrigger = { _tag: "webhook-trigger" } as any;
+    const createWebhookTrigger = vi.fn().mockReturnValue(webhookTrigger);
 
     const result = loadDaemonTriggersStage({
       daemonConfig: makeConfig({
@@ -609,16 +610,18 @@ describe("bootstrap-stages", () => {
       readFile: vi.fn().mockReturnValue("# heartbeat"),
       parseHeartbeatFile: vi.fn().mockReturnValue([
         { type: "cron", name: "cron-1", action: "Run cron", cron: "0 * * * *" },
-        { type: "webhook", name: "hook-1", action: "Run webhook" },
+        { type: "webhook", name: "hook-1", action: "Run webhook", cooldown: 900 },
         { type: "file-watch", name: "watch-1", action: "Watch", path: "../outside", debounce: 100 },
       ]),
       createCronTrigger: vi.fn().mockReturnValue({ _tag: "cron-trigger" } as any),
-      createWebhookTrigger: vi.fn().mockReturnValue(webhookTrigger),
+      createWebhookTrigger,
       createFileWatchTrigger: vi.fn(),
     });
 
     expect(result.heartbeatPath).toBe("/workspace/HEARTBEAT.md");
     expect(result.webhookTriggers.get("hook-1")).toBe(webhookTrigger);
+    // The parsed cooldown reaches the webhook constructor (audited 2026-09-02)
+    expect(createWebhookTrigger).toHaveBeenCalledWith("hook-1", "Run webhook", 900);
     expect(triggerRegistry.register).toHaveBeenCalledTimes(2);
     expect(logger.warn).toHaveBeenCalledWith(
       "File-watch path outside project root, skipping",

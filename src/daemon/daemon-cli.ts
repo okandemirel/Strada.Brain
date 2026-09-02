@@ -304,8 +304,14 @@ export function registerDaemonCommands(
         ["heartbeat.heartbeatFile", c.heartbeat.heartbeatFile, "STRADA_DAEMON_HEARTBEAT_FILE"],
         ["heartbeat.idlePause", String(c.heartbeat.idlePause), "STRADA_DAEMON_IDLE_PAUSE"],
         ["security.approvalTimeoutMin", String(c.security.approvalTimeoutMin), "STRADA_DAEMON_APPROVAL_TIMEOUT_MINUTES"],
-        ["security.autoApproveTools", c.security.autoApproveTools.join(", ") || "(none)", "STRADA_DAEMON_AUTO_APPROVE_TOOLS"],
-        ["budget.dailyBudgetUsd", c.budget.dailyBudgetUsd !== undefined ? String(c.budget.dailyBudgetUsd) : "unlimited", "STRADA_DAEMON_DAILY_BUDGET"],
+        // Audited 2026-09-02: DaemonSecurityPolicy.checkPermission has no
+        // production caller, so this allowlist is parsed but applied by
+        // nothing — daemon writes are gated by the orchestrator's self-managed
+        // write review instead. Say so, rather than print it as live policy.
+        ["security.autoApproveTools", `${c.security.autoApproveTools.join(", ") || "(none)"} [not enforced]`, "STRADA_DAEMON_AUTO_APPROVE_TOOLS"],
+        // Name what the cap measures: a dedicated daemon sub-limit counts daemon
+        // spend only; the shared-wallet fallback counts every source (audited 2026-09-02).
+        ["budget.dailyBudgetUsd", c.budget.dailyBudgetUsd !== undefined ? `${c.budget.dailyBudgetUsd} (${c.budget.limitScope ?? "system"} spend)` : "unlimited", "STRADA_DAEMON_DAILY_BUDGET"],
         ["budget.warnPct", String(c.budget.warnPct), "STRADA_DAEMON_BUDGET_WARN_PCT"],
         ["backoff.baseCooldownMs", String(c.backoff.baseCooldownMs), "STRADA_DAEMON_BACKOFF_BASE"],
         ["backoff.maxCooldownMs", String(c.backoff.maxCooldownMs), "STRADA_DAEMON_BACKOFF_MAX"],

@@ -29,6 +29,41 @@ describe("TriggerDeduplicator", () => {
     expect(dedup.getSuppressionReason()).toBe("cooldown");
   });
 
+  it("recordFired stores the hash of the content it is given, not of the last checked content (audited 2026-09-02)", () => {
+    // The heartbeat checks the pre-fire description and records the
+    // post-onFired one. The cached hash from shouldSuppress was reused
+    // blindly, so the stored hash never described what actually fired.
+    const now = Date.now();
+    expect(dedup.shouldSuppress("t", "pre-fire description", now, 0)).toBe(false);
+    dedup.recordFired("t", "post-fire summary", now);
+
+    expect(dedup.shouldSuppress("t", "post-fire summary", now + 1_000, 0)).toBe(true);
+    expect(dedup.getSuppressionReason()).toBe("content_duplicate");
+    expect(dedup.shouldSuppress("t", "pre-fire description", now + 1_000, 0)).toBe(false);
+  });
+
+  it("another trigger's cleanup pass cannot evict a longer per-trigger cooldown (audited 2026-09-02)", () => {
+    // `report` (*/5 cron, cooldown 3600s) and `health-check` (cooldown 300s)
+    // share one deduplicator with a 300s global window. Before the fix,
+    // cleanup() used the CALLING trigger's cooldown as the eviction window
+    // for EVERY entry, so health-check's pass at +5min deleted report's
+    // timestamp and report re-fired 10 minutes into a 60-minute cooldown.
+    const t0 = 1_000_000;
+    dedup.recordFired("report", "report-content", t0, 3_600_000);
+    dedup.recordFired("health-check", "health-content", t0, 300_000);
+
+    // health-check evaluates just past its own cooldown — allowed, and its
+    // cleanup pass must leave report's entry alone.
+    expect(dedup.shouldSuppress("health-check", "health-content-2", t0 + 300_001, 300_000)).toBe(false);
+
+    // report at +10min is still 50 minutes inside its cooldown.
+    expect(dedup.shouldSuppress("report", "report-content-2", t0 + 600_000, 3_600_000)).toBe(true);
+    expect(dedup.getSuppressionReason()).toBe("cooldown");
+
+    // ...and is released once its own cooldown has elapsed.
+    expect(dedup.shouldSuppress("report", "report-content-3", t0 + 3_600_001, 3_600_000)).toBe(false);
+  });
+
   it("does not suppress same trigger after cooldown expires", () => {
     const now = Date.now();
     dedup.recordFired("trigger-a", "content-1", now);

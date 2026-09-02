@@ -214,6 +214,25 @@ describe("CircuitBreaker", () => {
     expect(breaker.getState()).toBe("CLOSED");
   });
 
+  it("a success in CLOSED clears the failure streak — failures days apart never add up to a trip (audited 2026-09-02)", () => {
+    // failureThreshold=3 promises CONSECUTIVE failures. Before the fix the
+    // counter only reset via HALF_OPEN, so three transient failures separated
+    // by hundreds of successful fires still tripped the circuit OPEN.
+    for (let round = 0; round < 3; round++) {
+      breaker.recordFailure();
+      for (let i = 0; i < 500; i++) breaker.recordSuccess();
+    }
+    expect(breaker.serialize().consecutiveFailures).toBe(0);
+    expect(breaker.getState()).toBe("CLOSED");
+    expect(breaker.isOpen()).toBe(false);
+
+    // Genuinely consecutive failures still trip at the threshold.
+    breaker.recordFailure();
+    breaker.recordFailure();
+    breaker.recordFailure();
+    expect(breaker.getState()).toBe("OPEN");
+  });
+
   it("partial failures below threshold do not transition to OPEN", () => {
     breaker.recordFailure();
     breaker.recordFailure();

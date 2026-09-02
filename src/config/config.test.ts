@@ -928,6 +928,7 @@ describe("loadConfig", () => {
         },
         budget: {
           dailyBudgetUsd: undefined,
+          limitScope: "system",
           warnPct: 0.8,
         },
         backoff: {
@@ -973,6 +974,8 @@ describe("loadConfig", () => {
       expect(config.daemon.timezone).toBe("America/New_York");
       expect(config.daemon.heartbeat.heartbeatFile).toBe("./custom.md");
       expect(config.daemon.budget.dailyBudgetUsd).toBe(10.5);
+      // A dedicated daemon limit is scoped to daemon spend (audited 2026-09-02)
+      expect(config.daemon.budget.limitScope).toBe("daemon");
       expect(config.daemon.budget.warnPct).toBe(0.9);
       expect(config.daemon.security.approvalTimeoutMin).toBe(60);
       expect(config.daemon.backoff.baseCooldownMs).toBe(30000);
