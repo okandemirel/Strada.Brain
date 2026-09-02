@@ -10,6 +10,7 @@
 
 import { randomUUID } from "node:crypto";
 import { AgentPhase } from "../agents/agent-state.js";
+import { getLoggerSafe } from "../utils/logger.js";
 import type { MetricsStorage } from "./metrics-storage.js";
 import type { CompletionStatus, TaskType } from "./metrics-types.js";
 
@@ -29,6 +30,7 @@ interface PendingTask {
 export class MetricsRecorder {
   private readonly storage: MetricsStorage;
   private readonly pending = new Map<string, PendingTask>();
+  private retrievalWriteFailureLogged = false;
 
   constructor(storage: MetricsStorage) {
     this.storage = storage;
@@ -105,7 +107,14 @@ export class MetricsRecorder {
 
   /**
    * Record retrieval metrics for cross-session instinct retrieval.
-   * Fire-and-forget: errors are silently caught to avoid disrupting retrieval flow.
+   * Fire-and-forget: a failure must not disrupt retrieval — but it is logged,
+   * once per recorder, so a writer that never succeeds is not indistinguishable
+   * from one that always does.
+   *
+   * This used to write a task_metrics row with `taskType: "simple" as TaskType`;
+   * the CHECK constraint rejected it on every call and the bare catch hid it,
+   * so zero retrieval rows ever landed. Retrieval now has its own table with
+   * columns for all four fields (audited 2026-09-02).
    */
   recordRetrievalMetrics(data: {
     retrievalTimeMs: number;
@@ -114,22 +123,21 @@ export class MetricsRecorder {
     insightsReturned: number;
   }): void {
     try {
-      this.storage.recordTaskMetric({
+      this.storage.recordRetrievalMetric({
         id: `retrieval_${randomUUID()}`,
-        sessionId: "retrieval",
-        taskType: "simple" as TaskType,
-        taskDescription: "instinct-retrieval",
-        completionStatus: "success" as CompletionStatus,
-        paorIterations: 0,
-        toolCallCount: 0,
-        instinctIds: [],
-        instinctCount: data.insightsReturned,
-        startedAt: Date.now() - data.retrievalTimeMs,
-        completedAt: Date.now(),
-        durationMs: data.retrievalTimeMs,
+        retrievalTimeMs: data.retrievalTimeMs,
+        instinctsScanned: data.instinctsScanned,
+        scopeFiltered: data.scopeFiltered,
+        insightsReturned: data.insightsReturned,
+        recordedAt: Date.now(),
       });
-    } catch {
-      // Fire-and-forget: retrieval metrics failure must not affect retrieval
+    } catch (error) {
+      if (!this.retrievalWriteFailureLogged) {
+        this.retrievalWriteFailureLogged = true;
+        getLoggerSafe().warn("Retrieval metrics write failed — retrieval telemetry is NOT being recorded", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
   }
 

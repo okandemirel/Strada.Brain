@@ -46,6 +46,37 @@ export interface TaskMetric {
   readonly durationMs: number;
 }
 
+// ─── Retrieval Metric ────────────────────────────────────────────────────────
+
+/**
+ * One cross-session instinct retrieval. Its own row type and table: a retrieval
+ * is not a task, and writing it into task_metrics as a zero-iteration "success"
+ * would inflate EVAL-01 completionRate and EVAL-03 instinctReusePct for every
+ * consumer that aggregates unfiltered (audited 2026-09-02).
+ */
+export interface RetrievalMetric {
+  /** Unique metric ID (retrieval_<uuid>) */
+  readonly id: string;
+  /** Wall-clock time the retrieval took */
+  readonly retrievalTimeMs: number;
+  /** Candidate instincts examined */
+  readonly instinctsScanned: number;
+  /** Candidates dropped by project-scope filtering */
+  readonly scopeFiltered: number;
+  /** Insights actually returned to the caller */
+  readonly insightsReturned: number;
+  /** Unix timestamp (ms) when the retrieval finished */
+  readonly recordedAt: number;
+}
+
+/** Aggregate over retrieval_metrics rows */
+export interface RetrievalAggregation {
+  readonly retrievals: number;
+  readonly avgRetrievalTimeMs: number;
+  readonly avgInstinctsScanned: number;
+  readonly avgInsightsReturned: number;
+}
+
 // ─── Query Types ─────────────────────────────────────────────────────────────
 
 /** Flexible filter for querying metrics (mutable DTO built incrementally) */

@@ -5,13 +5,24 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+
+const warnSpy = vi.fn();
+vi.mock("../utils/logger.js", () => ({
+  getLoggerSafe: () => ({ info: vi.fn(), warn: warnSpy, error: vi.fn(), debug: vi.fn() }),
+  getLogger: () => ({ info: vi.fn(), warn: warnSpy, error: vi.fn(), debug: vi.fn() }),
+}));
+
 import { MetricsRecorder } from "./metrics-recorder.js";
-import type { MetricsStorage } from "./metrics-storage.js";
+import { MetricsStorage } from "./metrics-storage.js";
 import { AgentPhase } from "../agents/agent-state.js";
 
 function createMockStorage(): MetricsStorage {
   return {
     recordTaskMetric: vi.fn(),
+    recordRetrievalMetric: vi.fn(),
     getTaskMetrics: vi.fn().mockReturnValue([]),
     getAggregation: vi.fn(),
     getInstinctLeaderboard: vi.fn(),
@@ -245,5 +256,55 @@ describe("MetricsRecorder", () => {
 
       expect(mockStorage.recordTaskMetric).not.toHaveBeenCalled();
     });
+  });
+});
+
+// ─── Retrieval metrics land, in their own table (audited 2026-09-02) ─────────
+
+describe("MetricsRecorder.recordRetrievalMetrics against a REAL MetricsStorage", () => {
+  let tempDir: string;
+  let storage: MetricsStorage;
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), "metrics-recorder-retrieval-"));
+    storage = new MetricsStorage(join(tempDir, "learning.db"));
+    storage.initialize();
+    warnSpy.mockClear();
+    return () => {
+      storage.close();
+      rmSync(tempDir, { recursive: true, force: true });
+    };
+  });
+
+  it("persists every retrieval field and leaves the task aggregates untouched", () => {
+    // Before: the row went to task_metrics as task_type 'simple', the CHECK
+    // constraint rejected it, the bare catch swallowed it — zero rows ever landed.
+    const recorder = new MetricsRecorder(storage);
+    recorder.recordRetrievalMetrics({
+      retrievalTimeMs: 42,
+      instinctsScanned: 7,
+      scopeFiltered: 2,
+      insightsReturned: 3,
+    });
+
+    const rows = storage.getRetrievalMetrics();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ retrievalTimeMs: 42, instinctsScanned: 7, scopeFiltered: 2, insightsReturned: 3 });
+    expect(rows[0]!.id).toMatch(/^retrieval_/);
+    expect(storage.getRetrievalAggregation()).toMatchObject({ retrievals: 1, avgRetrievalTimeMs: 42, avgInsightsReturned: 3 });
+
+    // A retrieval is not a task: EVAL-01/EVAL-03 must not see it.
+    expect(storage.getTaskMetrics({})).toHaveLength(0);
+    expect(storage.getAggregation({}).totalTasks).toBe(0);
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it("logs a warning (once) when the write fails instead of silently discarding it", () => {
+    storage.close(); // ensureConnection() now throws
+    const recorder = new MetricsRecorder(storage);
+    recorder.recordRetrievalMetrics({ retrievalTimeMs: 1, instinctsScanned: 0, scopeFiltered: 0, insightsReturned: 0 });
+    recorder.recordRetrievalMetrics({ retrievalTimeMs: 1, instinctsScanned: 0, scopeFiltered: 0, insightsReturned: 0 });
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0]?.[0]).toMatch(/NOT being recorded/);
   });
 });
