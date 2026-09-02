@@ -255,6 +255,19 @@ export class WebChannel
     "supervisor:node_start",
     "supervisor:node_complete",
     "supervisor:complete",
+    // Terminal / negative supervisor frames. These were missing, so a reconnect
+    // (heartbeat terminate, laptop sleep, refresh) replayed node_start without
+    // the node_failed that superseded it: SupervisorPanel showed the failed
+    // node as "running", its alert feed empty, and an aborted run with no
+    // summary. A replayed board must never be greener than the live one
+    // (audited 2026-09-02). Toast-only frames (budget:*, workspace:notification)
+    // stay uncached on purpose — replaying them would re-fire stale toasts.
+    "supervisor:node_failed",
+    "supervisor:escalation",
+    "supervisor:wave_done",
+    "supervisor:verify_start",
+    "supervisor:verify_done",
+    "supervisor:aborted",
   ]);
 
   constructor(

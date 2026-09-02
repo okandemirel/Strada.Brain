@@ -1018,6 +1018,56 @@ describe("WebChannel offline final delivery (BUG#7 2b)", () => {
     await channel.disconnect();
   });
 
+  it("replays the supervisor's failure, escalation, wave and abort frames on reconnect — a replayed board is never greener than the live one (audited 2026-09-02)", async () => {
+    const channel = new WebChannel();
+    const firstSocket = createMockSocket();
+    (channel as unknown as { handleWsConnection: (ws: unknown) => void }).handleWsConnection(firstSocket);
+    const connected = firstSocket.getSentMessages().find((m) => m.type === "connected")!;
+    const chatId = String(connected.chatId);
+    const reconnectToken = String(connected.reconnectToken);
+
+    const frame = (type: string, extra: Record<string, unknown> = {}): string =>
+      JSON.stringify({ type, payload: { rootId: "root-S", ...extra }, timestamp: 1 });
+    channel.broadcastRaw(frame("monitor:dag_init", { nodes: [{ id: "n4" }] }));
+    channel.broadcastRaw(frame("supervisor:activated", { taskId: "t1", nodeCount: 5 }));
+    channel.broadcastRaw(frame("supervisor:node_start", { nodeId: "n4", provider: "p" }));
+    // The negative/terminal frames: previously NOT cached, so a reconnect
+    // replayed node_start and left n4 rendering "running" forever, with the
+    // alert list empty and no abort summary.
+    channel.broadcastRaw(frame("supervisor:node_failed", { nodeId: "n4", error: "boom", failureLevel: 2, nextAction: "escalate" }));
+    channel.broadcastRaw(frame("supervisor:escalation", { nodeId: "n4", fromProvider: "a", toProvider: "b", reason: "boom" }));
+    channel.broadcastRaw(frame("supervisor:wave_done", { waveIndex: 0, results: [{ nodeId: "n4", status: "failed" }] }));
+    channel.broadcastRaw(frame("supervisor:verify_start", { nodeId: "n2" }));
+    channel.broadcastRaw(frame("supervisor:verify_done", { nodeId: "n2", verdict: "pass" }));
+    channel.broadcastRaw(frame("supervisor:aborted", { taskId: "t1", reason: "budget" }));
+
+    firstSocket.close();
+
+    const secondSocket = createMockSocket();
+    (channel as unknown as { handleWsConnection: (ws: unknown) => void }).handleWsConnection(secondSocket);
+    secondSocket.emit(
+      "message",
+      Buffer.from(JSON.stringify({ type: "session_init", chatId, reconnectToken })),
+    );
+
+    const replayedTypes = secondSocket.getSentMessages().map((m) => m.type);
+    for (const t of [
+      "supervisor:node_start",
+      "supervisor:node_failed",
+      "supervisor:escalation",
+      "supervisor:wave_done",
+      "supervisor:verify_start",
+      "supervisor:verify_done",
+      "supervisor:aborted",
+    ]) {
+      expect(replayedTypes, `expected ${t} to be replayed`).toContain(t);
+    }
+    // Order within the root is preserved: the failure comes AFTER the start it supersedes.
+    expect(replayedTypes.indexOf("supervisor:node_failed")).toBeGreaterThan(replayedTypes.indexOf("supervisor:node_start"));
+
+    await channel.disconnect();
+  });
+
   it("replays EVERY retained DAG root's board on reconnect (BUG#5 P1 — not just the newest)", async () => {
     const channel = new WebChannel();
     const firstSocket = createMockSocket();
