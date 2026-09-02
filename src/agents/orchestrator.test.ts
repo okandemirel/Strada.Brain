@@ -9106,10 +9106,9 @@ DONE`,
 
       // Access session messages to verify health context was injected
       const sessions = (backgroundOrch as any).sessionManager?.sessions ?? new Map();
-      // The silentStream already pushes a system error message, and our new code
-      // pushes a [Provider Health Report] message after it.
-      // We verify via the mock calls: after the first empty response, session
-      // should have health context injected before the retry.
+      // The silentStream pushes a system error message; the health signal itself reaches
+      // the model through the system prompt (Provider Health Awareness) — no separate
+      // "[Provider Health Report]" message is injected (audited 2026-09-02).
       // Since we can't easily inspect session directly from here, verify the
       // second call was made (i.e. the loop continued past the first failure).
       expect(mockProvider.chat.mock.calls.length).toBeGreaterThanOrEqual(2);

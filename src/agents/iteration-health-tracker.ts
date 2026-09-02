@@ -146,25 +146,9 @@ export class IterationHealthTracker {
     return this.results.length;
   }
 
-  /**
-   * Build a rich health context message for injection into session.messages.
-   * The agent sees this when the provider recovers and can reason about it.
-   */
-  buildSessionHealthContext(providerName: string, failureAction: FailureAction): string {
-    return [
-      `[Provider Health Report]`,
-      `Provider: ${providerName}`,
-      `Status: ${this.getStatusLevel()} | Consecutive failures: ${this.consecutiveFailures} | Failure rate: ${(this.getFailureRate() * 100).toFixed(0)}%`,
-      `Task duration: ${Math.round(this.getTaskDurationMs() / 1000)}s`,
-      `Action: ${failureAction.kind !== "abort" ? `Backing off ${failureAction.backoffMs / 1000}s before retry` : "Aborting — safety limit reached"}`,
-      ``,
-      `When you receive this context after the provider recovers, adapt your approach:`,
-      `- If multiple failures occurred, simplify your current step`,
-      `- Reduce the number of tool calls per iteration`,
-      `- Consider providing a partial result if the task is mostly complete`,
-      `- Skip non-critical analysis or verification steps`,
-    ].join("\n");
-  }
+  // audited 2026-09-02: buildSessionHealthContext ("[Provider Health Report] …") was deleted —
+  // its last callers went with the v1 engine, and the system prompt kept telling the model to
+  // watch for a message nothing produced. buildHealthSummary below is the live signal.
 
   /**
    * Build a short health summary for PAOR prompt injection.

@@ -28,6 +28,23 @@ import {
 } from "../../agents/orchestrator-supervisor-routing.js";
 import { buildPhasePromptSection } from "../../agents/orchestrator-loop-utils.js";
 
+/**
+ * The "Provider Health Awareness" system-prompt section, present only after a failure.
+ *
+ * audited 2026-09-02: the previous text told the model to watch for "[Provider Health Report]"
+ * messages — a string only `IterationHealthTracker.buildSessionHealthContext` produced, whose
+ * every caller was deleted with the v1 engine. The section now names the signals that really
+ * reach the model: this live count, and the reflection prompt's `**PROVIDER HEALTH**` line.
+ */
+export function buildProviderHealthAwareness(
+  health: Pick<IterationHealthTracker, "getTotalFailures" | "getFailureRate">,
+): string | undefined {
+  const failures = health.getTotalFailures();
+  if (failures <= 0) return undefined;
+  const ratePct = (health.getFailureRate() * 100).toFixed(0);
+  return `\n\n## Provider Health Awareness\nThe AI provider has experienced ${failures} failure(s) during this task (current failure rate: ${ratePct}%). This count and the **PROVIDER HEALTH** line in reflection prompts are the health signal you receive; there is no separate health report message. Adapt your approach: use fewer tool calls per step, simplify complex operations, and consider providing partial results if the provider remains unstable. Your goal is to deliver the best possible result despite infrastructure challenges.`;
+}
+
 export interface WorkerToolDefinition {
   name: string;
   description: string;
@@ -105,9 +122,8 @@ export function prepareIteration(
   activePrompt += buildSupervisorRolePromptHelper(deps.getSupervisorRoutingContext(), executionStrategy, currentAssignment);
 
   // Append provider health awareness when failures have occurred during this task.
-  if (params.iterationHealth && params.iterationHealth.getTotalFailures() > 0) {
-    activePrompt += `\n\n## Provider Health Awareness\nThe AI provider has experienced ${params.iterationHealth.getTotalFailures()} failure(s) during this task (current failure rate: ${(params.iterationHealth.getFailureRate() * 100).toFixed(0)}%). If you notice [Provider Health Report] messages in the conversation, this means the provider was temporarily unavailable. Adapt your approach: use fewer tool calls per step, simplify complex operations, and consider providing partial results if the provider remains unstable. Your goal is to deliver the best possible result despite infrastructure challenges.`;
-  }
+  const healthAwareness = params.iterationHealth && buildProviderHealthAwareness(params.iterationHealth);
+  if (healthAwareness) activePrompt += healthAwareness;
 
   return {
     executionStrategy,

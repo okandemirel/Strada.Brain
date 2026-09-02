@@ -498,8 +498,9 @@ export class SessionManager {
    * answer. Unlike {@link sendVisibleAssistantMarkdown} this:
    *   1. Does NOT append the text to {@link Session.messages} — the notice is
    *      operational meta, not task content, and recording it would pollute the
-   *      model's transcript/context (the failure SIGNAL the model needs is pushed
-   *      separately via buildSessionHealthContext at the call sites).
+   *      model's transcript/context (the failure SIGNAL the model needs reaches it
+   *      through the system prompt's "Provider Health Awareness" section and the
+   *      reflection prompt's PROVIDER HEALTH line, both fed by IterationHealthTracker).
    *   2. Routes to {@link SessionManagerDeps.channel.sendSystemMessage} when the
    *      channel implements it (web channel renders it as a distinct pill), and
    *      degrades gracefully to {@link SessionManagerDeps.channel.sendMarkdown}
