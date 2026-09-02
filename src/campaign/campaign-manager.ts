@@ -1387,8 +1387,14 @@ export class CampaignManager {
         .replace(/Auto-retry \d+\/\d+ in ~\d+s\.?/g, "")
         .replace(/Transient failure —\s*/g, "")
         .trim();
+      // The strip must match the tail as APPENDED below. Audited 2026-09-02:
+      // it ended on "do not repeat it." while the append continues "do not
+      // repeat it — and do NOT spend…", so it never matched and every revived
+      // budget stacked another stale tail into the persisted prompt. The
+      // tempered token keeps one match from spanning two tails (rows persisted
+      // before 2026-08-31 still carry the old "do not repeat it." ending).
       milestone.prompt = milestone.prompt.replace(
-        /\n\nThe previous attempt ended [\s\S]*?Fix the root cause, do not repeat it\./g,
+        /\n\nThe previous attempt ended (?:(?!\n\nThe previous attempt ended )[\s\S])*?(?:first unmet requirement\.|Fix the root cause, do not repeat it\.(?! —))/g,
         "",
       );
       milestone.prompt += `\n\nThe previous attempt ended ${status}: ${(cleaned || output).slice(0, 400)}. Fix the root cause, do not repeat it — and do NOT spend this attempt auditing prior attempts: continue the sprint's actual work from the first unmet requirement.`;

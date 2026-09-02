@@ -1115,6 +1115,30 @@ describe("CampaignManager", () => {
     expect(storage.listActive()[0]!.gddPath).toBe("docs/GDD.md");
   });
 
+  it("the failure tail is REPLACED across revives — exactly one tail, the latest", async () => {
+    // Audited 2026-09-02: the strip regex ended on "do not repeat it." but the
+    // appended tail continues "do not repeat it — and do NOT spend…", so the
+    // strip never matched and every revived budget stacked another stale
+    // "The previous attempt ended…" block into the persisted sprint prompt.
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    tasks.emit("task:failed", "task_1", "compile exploded in Board.cs");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    tasks.emit("task:failed", "task_2", "compile exploded in Board.cs again");
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"));
+
+    expect(await manager.tryHandleRevive("cli-local", "kampanya devam")).toBe(true);
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    tasks.emit("task:failed", "task_3", "PlayMode red: 3 of 9 tests failed");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+
+    const prompt = storage.get(campaign.id)!.milestones[0]!.prompt;
+    expect(prompt.match(/The previous attempt ended/g) ?? []).toHaveLength(1);
+    expect(prompt).toContain("PlayMode red: 3 of 9 tests failed");
+    expect(prompt).not.toContain("compile exploded");
+    expect(prompt).toContain("build the foundations"); // the sprint body survives the strip
+  });
+
   it("resumeActive leaves a still-running task alone", async () => {
     manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
     await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
