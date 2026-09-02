@@ -350,7 +350,22 @@ export class BackgroundExecutor {
         for (const task of sorted) {
           if (task.status !== "blocked" || task.origin !== "user") continue;
           const result = String((task as { result?: unknown }).result ?? "");
-          if (!/Auto-retry \d+\/\d+ in ~\d+s/.test(result)) continue;
+          // The attempt count is right there in the text this regex matches.
+          // Audited 2026-09-02: it was used only as a boolean, and missionRetries
+          // is an in-memory Map that died with the process — so every restart
+          // re-armed the mission at attempt 0: a fresh ten-retry budget and the
+          // backoff back at its 30s floor, making MAX_MISSION_RETRIES unenforceable.
+          const marker = /Auto-retry (\d+)\/\d+ in ~\d+s/.exec(result);
+          if (!marker) continue;
+          // An escalated mission is waiting on a PERSON. Re-arming it would
+          // silently withdraw the escalation and overwrite its notice.
+          if (/MISSION STOPPED/.test(result)) {
+            getLoggerSafe().info("Keep-alive re-arm skipped — mission already escalated to a person", {
+              taskId: task.id,
+            });
+            continue;
+          }
+          const persistedAttempt = Number(marker[1]);
           const lineage = this.lineageRootTaskId(task);
           if (seenLineages.has(lineage)) continue;
           seenLineages.add(lineage);
@@ -377,6 +392,10 @@ export class BackgroundExecutor {
           });
           const staggerMs = rearmIndex * 45_000;
           rearmIndex += 1;
+          // Resume the count where the previous process left it, so the
+          // backoff continues from its cap and the tenth retry still escalates.
+          const key = `mission:${lineage}`;
+          this.missionRetries.set(key, Math.max(this.missionRetries.get(key) ?? 0, persistedAttempt));
           if (staggerMs === 0) {
             this.scheduleMissionKeepAlive(task, "keep-alive re-armed after restart");
           } else {

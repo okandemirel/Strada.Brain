@@ -2368,6 +2368,70 @@ describe("BackgroundExecutor - auto-resume bounds (measured loop of 2026-08-26)"
     }
   });
 
+  it("re-arm resumes a mission at its persisted attempt count instead of a fresh ten-retry budget", async () => {
+    // Audited 2026-09-02: missionRetries is an in-memory Map that dies with the
+    // process. The boot re-arm matched "Auto-retry 8/10" only as a boolean, so
+    // scheduleMissionKeepAlive read attempt 0 — a fresh budget of ten and the
+    // backoff back at its 30s floor, on every restart, forever; and a row a
+    // person had already been escalated on ("MISSION STOPPED") was silently
+    // resumed at 1/10 with the escalation notice overwritten.
+    const executor = new BackgroundExecutor({
+      orchestrator: createMockOrchestrator() as any,
+      decomposer: createMockDecomposer() as any,
+      goalStorage: createMockGoalStorage() as any,
+      daemonEventBus: createMockDaemonEventBus() as any,
+      aiProvider: undefined,
+      channel: undefined,
+    });
+    const parked = createTestTask(undefined, {
+      id: "task_parked8" as any, chatId: "chat-a", prompt: "mission A", status: TaskStatus.blocked, origin: "user",
+      result: "Transient failure — worker crashed. Auto-retry 8/10 in ~600s.",
+    });
+    const capped = createTestTask(undefined, {
+      id: "task_capped" as any, chatId: "chat-b", prompt: "mission B", status: TaskStatus.blocked, origin: "user",
+      result: "Transient failure — worker crashed. Auto-retry 10/10 in ~600s.",
+    });
+    const stopped = createTestTask(undefined, {
+      id: "task_stopped" as any, chatId: "chat-c", prompt: "mission C", status: TaskStatus.blocked, origin: "user",
+      result: "Transient failure — worker crashed. Auto-retry 10/10 in ~600s.\n\nMISSION STOPPED — needs you. Persistently failing after 10 automatic retries.",
+    });
+    const taskManager = {
+      updateStatus: vi.fn(), complete: vi.fn(), fail: vi.fn(), block: vi.fn(),
+      appendTaskNotice: vi.fn(),
+      retryGoalRoot: vi.fn(), replanGoalRoot: vi.fn(), retryTask: vi.fn(),
+      getStatus: vi.fn().mockReturnValue(null),
+      listRecoverableTasks: vi.fn().mockReturnValue([parked, capped, stopped]),
+      listTasks: vi.fn().mockReturnValue([]),
+    };
+
+    vi.useFakeTimers();
+    try {
+      executor.setTaskManager(taskManager as any);
+      // 90s boot settle + the 45s re-arm stagger for every candidate.
+      await vi.advanceTimersByTimeAsync(91_000 + 3 * 45_000);
+
+      // 8 retries already spent → the next one is 9/10, at the 600s backoff cap.
+      const parkedBlock = taskManager.block.mock.calls.find((c: unknown[]) => c[0] === "task_parked8");
+      expect(parkedBlock?.[1]).toMatch(/Auto-retry 9\/10 in ~\d+s/);
+      expect(Number(/~(\d+)s/.exec(String(parkedBlock?.[1]))?.[1])).toBeGreaterThanOrEqual(600);
+      const missionRetries = (executor as unknown as { missionRetries: Map<string, number> }).missionRetries;
+      expect(missionRetries.get("mission:task_parked8")).toBe(9);
+
+      // 10 already spent → the cap holds: escalate, never "Auto-retry 1/10".
+      expect(taskManager.block).not.toHaveBeenCalledWith("task_capped", expect.anything());
+      expect(taskManager.appendTaskNotice).toHaveBeenCalledWith(
+        "task_capped",
+        expect.stringContaining("MISSION STOPPED"),
+      );
+
+      // An escalation a person owns is left exactly as it is.
+      expect(taskManager.block).not.toHaveBeenCalledWith("task_stopped", expect.anything());
+      expect(taskManager.appendTaskNotice).not.toHaveBeenCalledWith("task_stopped", expect.anything());
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("goal auto-resume defers to keep-alive during a full provider outage instead of spending its budget", async () => {
     // Measured live 2026-08-29 00:59: three fresh tasks in 47 seconds, each
     // dying on "All providers are in cooldown", resume+replan budget spent
