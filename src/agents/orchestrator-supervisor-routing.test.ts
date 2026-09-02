@@ -1,9 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   getProviderByNameOrFallback,
+  recordProviderUsage,
   resolveSupervisorAssignment,
 } from "./orchestrator-supervisor-routing.js";
 import type { TaskClassification } from "../agent-core/routing/routing-types.js";
+import { RateLimiter } from "../security/rate-limiter.js";
+
+// RateLimiter.recordTokenUsage logs through getLogger(), which throws outside a
+// booted process; the routing module itself does not log.
+vi.mock("../utils/logger.js", () => {
+  const noop = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+  return { getLogger: () => noop, getLoggerSafe: () => noop };
+});
 
 function makeProvider(name: string) {
   return {
@@ -122,5 +131,39 @@ describe("resolveSupervisorAssignment hard-pin fallback", () => {
     expect(assignment.providerName).toBe("openai");
     expect(assignment.provider).toBe(fallbackProvider);
     expect(assignment.reason).toBe("hard-pinned provider unavailable, reusing the current worker");
+  });
+});
+
+describe("recordProviderUsage (audited 2026-09-02)", () => {
+  it("hands the routed model id to the rate limiter, so a free model costs $0", () => {
+    // recordProviderUsage already knew modelId (it echoes it on the usage
+    // event); the rate limiter's budget wall was the one consumer that never
+    // saw it, so a "-free" model was billed at the provider's table rate.
+    const rateLimiter = new RateLimiter();
+    const ctx = { rateLimiter } as any;
+
+    recordProviderUsage(
+      ctx,
+      "opencode",
+      { inputTokens: 1_000_000, outputTokens: 1_000_000, totalTokens: 2_000_000 },
+      undefined,
+      "grok-code-free",
+    );
+
+    const snap = rateLimiter.getSnapshot();
+    expect(snap.tokensToday).toBe(2_000_000);
+    expect(snap.costToday).toBe(0);
+  });
+
+  it("still bills a paid model routed through the same path", () => {
+    const rateLimiter = new RateLimiter();
+    recordProviderUsage(
+      { rateLimiter } as any,
+      "opencode",
+      { inputTokens: 1_000_000, outputTokens: 0, totalTokens: 1_000_000 },
+      undefined,
+      "qwen3.6-plus",
+    );
+    expect(rateLimiter.getSnapshot().costToday).toBeCloseTo(0.6, 5);
   });
 });
