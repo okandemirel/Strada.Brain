@@ -16,7 +16,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import os from "node:os";
 import { StradaConformanceGuard } from "./strada-conformance.js";
@@ -146,6 +146,50 @@ describe("what blocks delivery", () => {
 
     expect(runThatPlayed(root).unmetDeliveryConditions()).toEqual([
       expect.stringContaining("vary too little"),
+    ]);
+  });
+});
+
+/**
+ * Audited 2026-09-02: nothingDrawnReason() walked <project>/Recordings with no
+ * recency filter, so Tuesday's sixty varied frames cleared Wednesday's run —
+ * one that failed its play-mode verify and rendered nothing — and the digests
+ * were taken over an unscoped slice, so an earlier varied set also hid this
+ * run's own sixty identical frames. Frames that predate the guard are not this
+ * run's evidence, and the gate says which window it measured.
+ */
+describe("frames from an earlier run are not this run's evidence", () => {
+  const DAY_MS = 24 * 60 * 60 * 1000;
+
+  function ageFrames(root: string, names: readonly string[]): void {
+    const yesterday = (Date.now() - DAY_MS) / 1000;
+    for (const name of names) utimesSync(join(root, "Recordings", name), yesterday, yesterday);
+  }
+
+  it("reports a run whose only frames predate it, naming the older ones", () => {
+    const root = assembled();
+    const varied = Array.from({ length: 60 }, (_, i) => `frame-${i}`);
+    framesOf(root, varied);
+    ageFrames(root, varied.map((_, i) => `frame_${i}.png`));
+
+    expect(runThatPlayed(root).unmetDeliveryConditions()).toEqual([
+      expect.stringMatching(/no frame has been captured in this run.*60 older frame/u),
+    ]);
+  });
+
+  it("does not let an earlier varied set hide this run's identical frames", () => {
+    const root = assembled();
+    const dir = join(root, "Recordings");
+    mkdirSync(dir, { recursive: true });
+    // Named to sort AHEAD of this run's frame_* files, so an unscoped
+    // first-60 sample would see only the old varied set.
+    const old = Array.from({ length: 60 }, (_, i) => `aaa_old_${i}.png`);
+    old.forEach((name, i) => writeFileSync(join(dir, name), `varied-${i}`));
+    ageFrames(root, old);
+    framesOf(root, Array.from({ length: 60 }, () => "same-pixels"));
+
+    expect(runThatPlayed(root).unmetDeliveryConditions()).toEqual([
+      expect.stringContaining("identical"),
     ]);
   });
 });

@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { assessSpecScope } from "./spec-scope.js";
 import { elementCodeTokens, extractScheduledElements, findDesignDoc } from "./spec-scope.js";
 import { createHash } from "node:crypto";
@@ -448,6 +448,12 @@ export class StradaConformanceGuard {
    * under Assets/Scripts/ exempt from every one of them.
    */
   private wroteProjectCode = false;
+  /**
+   * When this guard came to life. One guard is built per run, so a frame that
+   * predates it was captured by an earlier run and is not this run's evidence
+   * (audited 2026-09-02).
+   */
+  private readonly startedAtMs = Date.now();
 
   constructor(
     private readonly deps?: StradaDepsStatus,
@@ -719,8 +725,27 @@ export class StradaConformanceGuard {
 
     const recordings = joinPath(projectPath, "Recordings");
     if (!existsSync(recordings)) return "no frame has ever been captured";
-    const frames = walkFiles(recordings, 400).filter((f) => f.endsWith(".png"));
-    if (frames.length === 0) return "no frame has ever been captured";
+    const allFrames = walkFiles(recordings, 400, (f) => f.endsWith(".png"));
+    if (allFrames.length === 0) return "no frame has ever been captured";
+    // Only frames captured in THIS run are this run's evidence. Audited
+    // 2026-09-02: with no recency filter, an earlier sprint's varied frames
+    // cleared a run that failed its play-mode verify and drew nothing, and —
+    // sampled ahead of this run's own files — hid sixty identical frames. The
+    // 2s tolerance is for filesystem timestamp granularity, as in
+    // prerender-frames.ts.
+    const frames = allFrames.filter((f) => {
+      try {
+        return statSync(f).mtimeMs >= this.startedAtMs - 2_000;
+      } catch {
+        return false;
+      }
+    });
+    if (frames.length === 0) {
+      return (
+        `no frame has been captured in this run (${allFrames.length} older frame(s) ` +
+        "from an earlier run exist in Recordings/ and do not count)"
+      );
+    }
 
     const digests = new Set<string>();
     for (const frame of frames.slice(0, 60)) {
