@@ -236,6 +236,20 @@ describe("AgentDBMemory", () => {
     });
   });
 
+  describe("getIndexHealth SQLite integrity (audited 2026-09-02)", () => {
+    // The integrity_check verdict from initSqlite used to go nowhere: a
+    // memory.db that failed the check and could not be repaired was opened
+    // and reported isHealthy: true. The verdict must surface as an issue.
+    it("reports a failed integrity check as an issue and isHealthy: false", () => {
+      expect(memory.getIndexHealth().isHealthy).toBe(true); // baseline on a fresh store
+      (memory as any).sqliteIntegrityFailed = true;
+
+      const health = memory.getIndexHealth();
+      expect(health.isHealthy).toBe(false);
+      expect(health.issues.some((i) => i.includes("integrity_check"))).toBe(true);
+    });
+  });
+
   describe("demoteEntry expiry (audited 2026-09-02)", () => {
     // demoteEntry only touched expiresAt when the target tier was Ephemeral.
     // An Ephemeral->Persistent demotion therefore kept the (often already

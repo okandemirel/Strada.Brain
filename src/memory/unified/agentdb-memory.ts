@@ -135,6 +135,8 @@ export class AgentDBMemory implements IUnifiedMemory {
   private tieringParams: { intervalMs: number; promotionThreshold: number; demotionTimeoutDays: number } | null = null;
   private sqliteDb: Database.Database | null = null;
   private sqliteInitFailed = false;
+  /** memory.db failed integrity_check and REINDEX did not repair it (set by initSqlite). */
+  private sqliteIntegrityFailed = false;
   private sqliteStatements: Map<string, Database.Statement> = new Map();
   private decayConfig: MemoryDecayConfig | null = null;
   private userProfileStore: UserProfileStore | null = null;
@@ -175,6 +177,8 @@ export class AgentDBMemory implements IUnifiedMemory {
       set sqliteDb(v) { self.sqliteDb = v; },
       get sqliteInitFailed() { return self.sqliteInitFailed; },
       set sqliteInitFailed(v) { self.sqliteInitFailed = v; },
+      get sqliteIntegrityFailed() { return self.sqliteIntegrityFailed; },
+      set sqliteIntegrityFailed(v: boolean | undefined) { self.sqliteIntegrityFailed = v === true; },
       get sqliteStatements() { return self.sqliteStatements; },
       get entries() { return self.entries; },
     };
@@ -1258,6 +1262,13 @@ export class AgentDBMemory implements IUnifiedMemory {
 
     if (this.sqliteInitFailed) {
       issues.push("SQLite initialization failed — persistence unavailable");
+    }
+
+    // The integrity verdict used to go nowhere (audited 2026-09-02).
+    if (this.sqliteIntegrityFailed) {
+      issues.push(
+        "memory.db failed integrity_check and REINDEX did not repair it — rows may be unreadable or silently missing",
+      );
     }
 
     if (hnswStats.elementCount === 0 && this.entries.size > 0) {

@@ -83,6 +83,13 @@ export interface AgentDBSqliteContext {
   readonly dbPath: string;
   sqliteDb: Database.Database | null;
   sqliteInitFailed: boolean;
+  /**
+   * memory.db failed integrity_check and REINDEX did not repair it. The file
+   * DB is still used (rows are often readable), but the store is NOT healthy
+   * and getIndexHealth must say so. Optional so helper contexts that never
+   * run initSqlite need not declare it (audited 2026-09-02).
+   */
+  sqliteIntegrityFailed?: boolean;
   readonly sqliteStatements: Map<string, Database.Statement>;
   readonly entries: Map<string, UnifiedMemoryEntry>;
 }
@@ -142,8 +149,19 @@ export function initSqlite(ctx: AgentDBSqliteContext): void {
     const sqlitePath = join(ctx.dbPath, "memory.db");
     ctx.sqliteDb = new Database(sqlitePath);
 
-    // Validate and auto-repair on corruption
-    validateAndRepairSqlite(ctx.sqliteDb, "memory");
+    // Validate and auto-repair on corruption. The verdict used to be
+    // discarded, so an unrepairable memory.db was opened and reported
+    // healthy. Record it; do NOT bail to :memory: here — an index-corrupt
+    // file usually still reads every row, and dropping it would be strictly
+    // worse. getIndexHealth surfaces the flag (audited 2026-09-02).
+    const integrityOk = validateAndRepairSqlite(ctx.sqliteDb, "memory");
+    ctx.sqliteIntegrityFailed = integrityOk !== true;
+    if (ctx.sqliteIntegrityFailed) {
+      getLoggerSafe().warn(
+        "[AgentDBMemory] memory.db failed integrity_check and REINDEX did not repair it — continuing on the damaged file; rows may be unreadable and the store reports unhealthy",
+        { path: sqlitePath },
+      );
+    }
 
     // Standardized pragma configuration (16MB cache, 5s busy_timeout)
     configureSqlitePragmas(ctx.sqliteDb, "memory");
