@@ -87,10 +87,23 @@ export async function checkGates(
   // active skills. When activeSkillNames is undefined the dependency is
   // unevaluable, so we must NOT fail it — otherwise every skill declaring
   // `requires.skills` is permanently blocked (no caller passes the set today).
-  if (requires.skills?.length && activeSkillNames) {
-    for (const requiredSkill of requires.skills) {
-      if (!activeSkillNames.has(requiredSkill)) {
-        reasons.push(`Required skill "${requiredSkill}" is not active`);
+  // audited 2026-09-02: not failing was only half the rule. The gate then
+  // disappeared from the result entirely — `passed: true`, nothing in
+  // `reasons`, nothing in `unevaluated` — so a dependency nobody looked at
+  // reported identically to one that was looked at and met. Show, never hide:
+  // an untracked set is reported unevaluated, exactly like an absent config.
+  // An EMPTY set is evidence ("nothing is active"), not absence of it, and is
+  // still measured.
+  if (requires.skills?.length) {
+    if (activeSkillNames === undefined) {
+      unevaluated.push(
+        `Skill dependency gate not evaluated (caller tracks no active skills): ${requires.skills.join(", ")}`,
+      );
+    } else {
+      for (const requiredSkill of requires.skills) {
+        if (!activeSkillNames.has(requiredSkill)) {
+          reasons.push(`Required skill "${requiredSkill}" is not active`);
+        }
       }
     }
   }
