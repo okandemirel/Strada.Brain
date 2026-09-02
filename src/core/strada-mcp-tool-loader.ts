@@ -1101,11 +1101,52 @@ function truncateJsonForError(value: unknown, label: "input" | "schema"): string
   }
 }
 
+/**
+ * The longest a single timed-out call may hold its tool, whatever the tool's
+ * own budget is. Named, not silent: the refusal it produces says when it lifts.
+ */
+const ORPHAN_HOLD_CAP_MS = 600_000;
+
+/**
+ * Tools that drive ONE headless editor against ONE project, so an overlapping
+ * call meets the project's Library lock. Same prefixes the orchestrator uses to
+ * force these serial. Every other tool gets a refusal that claims no such cause
+ * — inventing an editor for a git or file tool is a fabricated reason
+ * (audited 2026-09-02).
+ */
+function drivesHeadlessEditor(toolName: string): boolean {
+  return toolName.startsWith("unity_verify")
+    || toolName.startsWith("unity_compile")
+    || toolName.startsWith("unity_playmode");
+}
+
+function formatAge(ms: number): string {
+  if (ms < 1_000) return `${Math.max(0, Math.round(ms))}ms`;
+  if (ms < 60_000) return `${Math.round(ms / 1_000)}s`;
+  return `${Math.round(ms / 60_000)}min`;
+}
+
 class StradaMcpToolAdapter implements ITool {
   readonly name: string;
   readonly description: string;
   readonly inputSchema: Record<string, unknown>;
   private readonly timeoutMs: number;
+  /**
+   * Calls of THIS tool that lost the timeout race and have not settled since.
+   *
+   * The race abandons the losing leg without cancelling it — no AbortSignal
+   * reaches Strada.MCP — so the underlying work keeps running while "timed out"
+   * reads to the agent as "try again" and the retry overlaps it.
+   *
+   * Keyed per call, not per tool: one adapter serves one tool name, and two
+   * concurrent calls of it are two independent orphans. A settling call deletes
+   * only its own key, so finishing call B can never clear live call A's hold.
+   * Every entry carries an expiry, so a bridge that hangs forever holds the
+   * tool for a bounded window instead of disabling it until restart
+   * (audited 2026-09-02).
+   */
+  private readonly orphanedCalls = new Map<number, { startedAt: number; expiresAt: number }>();
+  private callSeq = 0;
 
   constructor(
     private readonly tool: StradaMcpToolLike,
@@ -1146,15 +1187,51 @@ class StradaMcpToolAdapter implements ITool {
       }
     }
 
+    // A previous call of this tool timed out and has still not returned:
+    // starting another one now would run two of them over the same project.
+    // The hold is a time bound, and the refusal says so rather than implying
+    // the earlier call is known to be alive forever (audited 2026-09-02).
+    const enteredAt = Date.now();
+    for (const [id, orphan] of this.orphanedCalls) {
+      if (orphan.expiresAt <= enteredAt) this.orphanedCalls.delete(id);
+    }
+    let oldest: { startedAt: number; expiresAt: number } | undefined;
+    for (const orphan of this.orphanedCalls.values()) {
+      if (oldest === undefined || orphan.startedAt < oldest.startedAt) oldest = orphan;
+    }
+    if (oldest !== undefined) {
+      const editorNote = drivesHeadlessEditor(this.name)
+        ? " This tool drives a headless editor, so an overlapping call would meet the project's Library lock."
+        : "";
+      return {
+        content:
+          `The previous '${this.name}' call (started ${formatAge(enteredAt - oldest.startedAt)} ago) `
+          + `has not returned yet; retrying now would overlap it. It timed out after ${this.timeoutMs}ms `
+          + "but was not cancelled — the timeout stopped waiting, it did not stop the work."
+          + editorNote
+          + ` Wait for it to finish, or retry after ${formatAge(oldest.expiresAt - enteredAt)}, when this `
+          + "hold expires whether or not the call has returned.",
+        isError: true,
+      };
+    }
+
     // Wrap tool invocation with a timeout so misbehaving bridges cannot hang
     // the orchestrator indefinitely.
     const startedAt = Date.now();
+    const callId = ++this.callSeq;
     let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
     const timeoutPromise = new Promise<never>((_, reject) => {
       timeoutHandle = setTimeout(() => {
+        // Losing the race abandons the leg; it does not cancel it. Remember
+        // this call — and only this call — until it settles or the hold lapses.
+        this.orphanedCalls.set(callId, {
+          startedAt,
+          expiresAt: Date.now() + Math.min(this.timeoutMs, ORPHAN_HOLD_CAP_MS),
+        });
         reject(
           new Error(
-            `StradaMCP tool '${this.name}' timed out after ${this.timeoutMs}ms`,
+            `StradaMCP tool '${this.name}' timed out after ${this.timeoutMs}ms — the underlying call `
+              + "was NOT cancelled and may still be running; a retry before it returns would overlap it",
           ),
         );
       }, this.timeoutMs);
@@ -1174,8 +1251,12 @@ class StradaMcpToolAdapter implements ITool {
         },
       );
       // Defuse losing leg: the rejected promise from the race loser must not
-      // bubble up as an unhandled rejection.
-      exec.catch(() => { /* swallow for race; winner reports via Promise.race */ });
+      // bubble up as an unhandled rejection. However this call ends, it stops
+      // being an orphan — and it clears ONLY its own entry, never a concurrent
+      // call's (audited 2026-09-02).
+      exec
+        .finally(() => { this.orphanedCalls.delete(callId); })
+        .catch(() => { /* swallow for race; winner reports via Promise.race */ });
 
       const result = await Promise.race([exec, timeoutPromise]);
       this.runtime?.refreshIntegrationState();
