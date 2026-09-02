@@ -29,6 +29,23 @@ import { getFrameworkSchemaProvider } from "./framework-schema-provider.js";
 
 export type SnapshotStoredListener = (packageId: FrameworkPackageId) => void;
 
+/**
+ * Directories the framework watcher must never descend into.
+ *
+ * Was: `ignored: ["**\/node_modules/**", "**\/.git/**", ...]`. chokidar 5
+ * matches a string `ignored` entry by exact equality (`matcher === path`),
+ * not as a glob, so none of those patterns ever matched a real path: every
+ * npm install under Strada.MCP/node_modules and every lock-file churn under
+ * Strada.Core/.git reached the handler and re-extracted the package. A
+ * function matcher is what chokidar 5 actually consults. Whole path segments
+ * only — `Runtime/Binding/` and `bin.cs` are not the `bin/` output dir.
+ * Audited 2026-09-02.
+ */
+const WATCH_IGNORED_SEGMENT = /(^|[\\/])(node_modules|\.git|bin|obj)([\\/]|$)/;
+export function isFrameworkWatchIgnored(path: string): boolean {
+  return WATCH_IGNORED_SEGMENT.test(path);
+}
+
 export class FrameworkSyncPipeline {
   private watcher: FSWatcher | null = null;
   private readonly store: FrameworkKnowledgeStore;
@@ -166,12 +183,9 @@ export class FrameworkSyncPipeline {
     const { watch } = await import("chokidar");
 
     this.watcher = watch(watchPaths, {
-      ignored: [
-        "**/node_modules/**",
-        "**/.git/**",
-        "**/bin/**",
-        "**/obj/**",
-      ],
+      // Function matcher: chokidar 5 never glob-matches a string entry.
+      // Audited 2026-09-02.
+      ignored: (path: string) => isFrameworkWatchIgnored(path),
       persistent: true,
       ignoreInitial: true,
     });
