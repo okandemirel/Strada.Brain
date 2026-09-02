@@ -41,7 +41,7 @@ import type { WorkspaceBus } from "../../dashboard/workspace-bus.js";
 import type { SupervisorBrain } from "../../supervisor/supervisor-brain.js";
 import { estimateCostWithCache } from "../../budget/cost-model.js";
 import type { UnifiedBudgetManager } from "../../budget/unified-budget-manager.js";
-import { getLogger } from "../../utils/logger.js";
+import { getLogger, getLoggerSafe } from "../../utils/logger.js";
 import { Orchestrator } from "../orchestrator.js";
 import { AgentDBMemory } from "../../memory/unified/agentdb-memory.js";
 import { AgentRegistry } from "./agent-registry.js";
@@ -364,11 +364,31 @@ export class AgentManager {
     const liveAgent = this.findLiveAgentById(id);
     if (!liveAgent) return;
 
-    // Clean up pending background batches for this agent
+    // Clean up pending background batches for this agent. The buffered
+    // messages were never submitted and never acknowledged; the process and
+    // channel are still alive here, so the user is told which ones were not
+    // started instead of hearing nothing (audited 2026-09-02).
     const batch = this.pendingBackgroundBatches.get(liveAgent.instance.key);
     if (batch) {
       if (batch.timer) clearTimeout(batch.timer);
       this.pendingBackgroundBatches.delete(liveAgent.instance.key);
+      this.reportDroppedBurst("stopAgent", [batch]);
+      if (batch.messages.length > 0) {
+        const chatId = batch.messages[0]!.chatId;
+        const listed = batch.messages.map((m) => `- ${m.text.replace(/\s+/g, " ").slice(0, 120)}`).join("\n");
+        const count = batch.messages.length;
+        try {
+          await this.opts.channel.sendText(
+            chatId,
+            `Agent stopped: ${count} message${count === 1 ? "" : "s"} you sent ${count === 1 ? "was" : "were"} not started. Resend after restarting the agent:\n${listed}`,
+          );
+        } catch (err) {
+          getLoggerSafe().warn("Failed to send the dropped-message notice", {
+            chatId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
     }
 
     this.registry.updateStatus(id, "stopped");
@@ -434,12 +454,19 @@ export class AgentManager {
       this.idleCheckInterval = undefined;
     }
 
-    for (const batch of this.pendingBackgroundBatches.values()) {
+    // Buffered (un-flushed) burst messages are deliberately dropped here, as
+    // in MessageRouter.dispose(): submitting during teardown would create a
+    // task the same shutdown immediately fails, and nothing has been promised
+    // to the user yet. Dropping SILENTLY was the defect — no row, no notice,
+    // no log line; the request left no trace (audited 2026-09-02).
+    const dropped = [...this.pendingBackgroundBatches.values()];
+    for (const batch of dropped) {
       if (batch.timer) {
         clearTimeout(batch.timer);
       }
     }
     this.pendingBackgroundBatches.clear();
+    this.reportDroppedBurst("shutdown", dropped);
 
     // Close all agent resources
     const closePromises: Promise<unknown>[] = [];
@@ -715,6 +742,19 @@ export class AgentManager {
     };
     this.registry.upsert(liveAgent.instance);
     return liveAgent;
+  }
+
+  /** Name every buffered message a teardown throws away — count, chats and a
+   *  text sample — so an operator can see what the user is still waiting on. */
+  private reportDroppedBurst(site: "shutdown" | "stopAgent", batches: readonly PendingBackgroundBatch[]): void {
+    const messages = batches.flatMap((b) => b.messages);
+    if (messages.length === 0) return;
+    getLoggerSafe().warn("Buffered burst messages dropped without being submitted", {
+      site,
+      messages: messages.length,
+      chatIds: [...new Set(messages.map((m) => m.chatId))],
+      sample: messages.slice(0, 5).map((m) => m.text.replace(/\s+/g, " ").slice(0, 120)),
+    });
   }
 
   private bufferBackgroundMessage(msg: IncomingMessage, liveAgent: LiveAgent): void {
