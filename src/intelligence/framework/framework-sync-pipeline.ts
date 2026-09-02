@@ -29,12 +29,36 @@ import { getFrameworkSchemaProvider } from "./framework-schema-provider.js";
 
 export type SnapshotStoredListener = (packageId: FrameworkPackageId) => void;
 
+/**
+ * Directories the framework watcher must never descend into.
+ *
+ * Was: `ignored: ["**\/node_modules/**", "**\/.git/**", ...]`. chokidar 5
+ * matches a string `ignored` entry by exact equality (`matcher === path`),
+ * not as a glob, so none of those patterns ever matched a real path: every
+ * npm install under Strada.MCP/node_modules and every lock-file churn under
+ * Strada.Core/.git reached the handler and re-extracted the package. A
+ * function matcher is what chokidar 5 actually consults. Whole path segments
+ * only — `Runtime/Binding/` and `bin.cs` are not the `bin/` output dir.
+ * Audited 2026-09-02.
+ */
+const WATCH_IGNORED_SEGMENT = /(^|[\\/])(node_modules|\.git|bin|obj)([\\/]|$)/;
+export function isFrameworkWatchIgnored(path: string): boolean {
+  return WATCH_IGNORED_SEGMENT.test(path);
+}
+
 export class FrameworkSyncPipeline {
   private watcher: FSWatcher | null = null;
   private readonly store: FrameworkKnowledgeStore;
   private readonly config: FrameworkSyncConfig;
   private readonly stradaDeps: StradaDepsStatus;
   private readonly snapshotListeners = new Set<SnapshotStoredListener>();
+  // Incremental-sync scheduling state. Audited 2026-09-02: this lived in
+  // startWatcher's closure, where the pending set was cleared only after the
+  // awaits — an edit that landed while a flush was in flight was wiped before
+  // the next flush could see it.
+  private readonly pendingPackages = new Set<FrameworkPackageId>();
+  private debounceTimer: ReturnType<typeof setTimeout> | null = null;
+  private flushChain: Promise<void> = Promise.resolve();
 
   constructor(
     store: FrameworkKnowledgeStore,
@@ -166,41 +190,68 @@ export class FrameworkSyncPipeline {
     const { watch } = await import("chokidar");
 
     this.watcher = watch(watchPaths, {
-      ignored: [
-        "**/node_modules/**",
-        "**/.git/**",
-        "**/bin/**",
-        "**/obj/**",
-      ],
+      // Function matcher: chokidar 5 never glob-matches a string entry.
+      // Audited 2026-09-02.
+      ignored: (path: string) => isFrameworkWatchIgnored(path),
       persistent: true,
       ignoreInitial: true,
     });
 
-    const pendingPackages = new Set<FrameworkPackageId>();
-    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-
     this.watcher.on("change", (filePath: string) => {
-      const pkgId = this.identifyPackage(filePath);
-      if (pkgId) pendingPackages.add(pkgId);
-
-      if (debounceTimer) clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(async () => {
-        for (const pkg of pendingPackages) {
-          try {
-            await this.syncPackage(pkg);
-          } catch (err) {
-            logger.warn(
-              `Incremental sync failed for ${pkg}: ${(err as Error).message}`,
-            );
-          }
-        }
-        pendingPackages.clear();
-      }, this.config.watchDebounceMs);
+      this.handleWatchEvent(filePath);
     });
 
     logger.debug(
       `Framework watcher started for ${watchPaths.length} path(s)`,
     );
+  }
+
+  /**
+   * Mark the owning package pending and (re)arm the debounce.
+   * Exposed so the scheduling can be driven without a real watcher.
+   * Audited 2026-09-02.
+   */
+  handleWatchEvent(filePath: string): void {
+    const pkgId = this.identifyPackage(filePath);
+    if (!pkgId) return;
+    this.pendingPackages.add(pkgId);
+
+    if (this.debounceTimer) clearTimeout(this.debounceTimer);
+    this.debounceTimer = setTimeout(() => {
+      this.debounceTimer = null;
+      // Serialize: a debounce that fires while a flush is still awaiting
+      // queues behind it instead of racing it over the same package.
+      this.flushChain = this.flushChain.then(
+        () => this.flushPendingSync(),
+        () => this.flushPendingSync(),
+      );
+    }, this.config.watchDebounceMs);
+  }
+
+  /**
+   * Sync every package marked pending, once each.
+   *
+   * Was: the debounce callback iterated the live pending set and cleared it
+   * AFTER the awaits, so an edit that landed while a sync was in flight was
+   * swallowed by that trailing clear (re-adding an id already in the set is a
+   * no-op) and the next debounce found nothing to do. The batch is now
+   * drained before the first await, so anything that lands mid-flush stays
+   * pending for the next flush. Audited 2026-09-02.
+   */
+  async flushPendingSync(): Promise<void> {
+    const logger = getLoggerSafe();
+    const batch = [...this.pendingPackages];
+    this.pendingPackages.clear();
+
+    for (const pkg of batch) {
+      try {
+        await this.syncPackage(pkg);
+      } catch (err) {
+        logger.warn(
+          `Incremental sync failed for ${pkg}: ${(err as Error).message}`,
+        );
+      }
+    }
   }
 
   /**
@@ -226,10 +277,17 @@ export class FrameworkSyncPipeline {
 
   /** Stop watcher and clean up */
   async stop(): Promise<void> {
+    if (this.debounceTimer) {
+      clearTimeout(this.debounceTimer);
+      this.debounceTimer = null;
+    }
     if (this.watcher) {
       await this.watcher.close();
       this.watcher = null;
     }
+    // Let an in-flight flush finish so the store is not closed under it.
+    // Audited 2026-09-02.
+    await this.flushChain.catch(() => undefined);
   }
 
   // ─── Private Helpers ────────────────────────────────────────────────────────

@@ -242,3 +242,86 @@ describe("StradaAnalyzer.formatAnalysis", () => {
     expect(output).toContain("C# Files: 0");
   });
 });
+
+/**
+ * Audited 2026-09-02: files over the 1MB parser limit were skipped with a bare
+ * `continue` and unreadable files were swallowed by a bare `catch`, so neither
+ * appeared anywhere in the result. "C# Files: N" then read as the number of
+ * files the analysis covered, and a module living in a skipped file simply did
+ * not exist as far as any consumer could tell.
+ */
+describe("StradaAnalyzer reports the files it did not analyze (audited 2026-09-02)", () => {
+  const analyzer = new StradaAnalyzer("/test/project");
+  const SMALL = `
+namespace Game.Combat
+{
+    public class CombatSystem : SystemBase
+    {
+        public override void OnUpdate(float deltaTime) {}
+    }
+}
+`;
+
+  it("counts and names an oversized file instead of dropping it", async () => {
+    vi.mocked(glob).mockResolvedValue([
+      "/test/project/Huge.cs",
+      "/test/project/Combat.cs",
+    ] as any);
+    vi.mocked(readFile).mockImplementation(async (p: any) =>
+      String(p).endsWith("Huge.cs") ? "x".repeat(1024 * 1024 + 1) : SMALL
+    );
+
+    const result = await analyzer.analyze();
+
+    // The file was still found...
+    expect(result.csFileCount).toBe(2);
+    // ...but only one was measured, and the result says so.
+    expect(result.analyzedFileCount).toBe(1);
+    expect(result.skippedFiles).toHaveLength(1);
+    expect(result.skippedFiles[0]!.filePath).toBe("Huge.cs");
+    expect(result.skippedFiles[0]!.reason).toMatch(/1MB|1048576/);
+    expect(result.systems).toHaveLength(1);
+
+    const output = StradaAnalyzer.formatAnalysis(result);
+    expect(output).toContain("Files Analyzed: 1 of 2");
+    expect(output).toContain("Files Skipped (not analyzed): 1");
+    expect(output).toContain("Huge.cs");
+  });
+
+  it("reports an unreadable file as skipped rather than as analyzed", async () => {
+    vi.mocked(glob).mockResolvedValue([
+      "/test/project/Locked.cs",
+      "/test/project/Combat.cs",
+    ] as any);
+    vi.mocked(readFile).mockImplementation(async (p: any) => {
+      if (String(p).endsWith("Locked.cs")) {
+        throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+      }
+      return SMALL;
+    });
+
+    const result = await analyzer.analyze();
+
+    expect(result.csFileCount).toBe(2);
+    expect(result.analyzedFileCount).toBe(1);
+    expect(result.skippedFiles.map((s) => s.filePath)).toEqual(["Locked.cs"]);
+    expect(result.skippedFiles[0]!.reason).toContain("EACCES");
+
+    const output = StradaAnalyzer.formatAnalysis(result);
+    expect(output).toContain("Files Analyzed: 1 of 2");
+    expect(output).toContain("Locked.cs");
+  });
+
+  it("says nothing about skipped files when every file was analyzed", async () => {
+    vi.mocked(glob).mockResolvedValue(["/test/project/Combat.cs"] as any);
+    vi.mocked(readFile).mockImplementation(async () => SMALL);
+
+    const result = await analyzer.analyze();
+
+    expect(result.skippedFiles).toEqual([]);
+    expect(result.analyzedFileCount).toBe(1);
+    const output = StradaAnalyzer.formatAnalysis(result);
+    expect(output).toContain("Files Analyzed: 1 of 1");
+    expect(output).not.toContain("Skipped");
+  });
+});
