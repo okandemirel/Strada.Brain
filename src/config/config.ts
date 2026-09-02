@@ -63,9 +63,26 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
   // scale off this instead of a hand-set constant, so adding an account
   // widens parallelism automatically (measured 2026-09-01: three accounts
   // were configured while the wave cap sat at its default 4).
+  // Credential-based on purpose (NOT chain-based): the supervisor assigns
+  // nodes across ProviderManager.listAvailable(), which is credential-gated,
+  // and healthy out-of-chain keys are auto-appended to the runtime chain.
+  // Subscription auth IS a usable account — ProviderManager.isAvailable
+  // accepts a Claude subscription token and a ChatGPT auth file — but this
+  // counter only saw raw keys, so two subscription accounts derived the same
+  // width as none (audited 2026-09-02). Predicates mirror the schema gate.
+  const anthropicAccount =
+    rawConfig.anthropicApiKey
+    || (rawConfig.anthropicAuthMode === "claude-subscription" ? rawConfig.anthropicAuthToken : undefined);
+  const openaiAccount =
+    rawConfig.openaiApiKey
+    || (rawConfig.openaiAuthMode === "chatgpt-subscription"
+      || Boolean(rawConfig.openaiSubscriptionAccessToken && rawConfig.openaiSubscriptionAccountId)
+      || Boolean(rawConfig.openaiChatgptAuthFile)
+      ? "[chatgpt-subscription]"
+      : undefined);
   const providerAccountCount = [
-    rawConfig.anthropicApiKey,
-    rawConfig.openaiApiKey || rawConfig.openaiSubscriptionAccessToken,
+    anthropicAccount,
+    openaiAccount,
     rawConfig.deepseekApiKey,
     rawConfig.qwenApiKey,
     rawConfig.kimiApiKey,
@@ -514,7 +531,8 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
       complexityThreshold: rawConfig.stradaSupervisorComplexityThreshold,
       // Parallelism SCALES WITH CAPACITY: an explicit
       // SUPERVISOR_MAX_PARALLEL_NODES still wins, but by default the wave
-      // width follows the number of usable provider accounts in the chain
+      // width follows the number of credentialed provider accounts (key or
+      // subscription; every credentialed provider is assignable at runtime)
       // (3 nodes per account, floor 4). Adding a fourth account must widen
       // the waves without anyone editing a cap.
       // Derived width applies ONLY when the operator set nothing: a prefault

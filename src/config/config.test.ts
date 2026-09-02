@@ -534,6 +534,42 @@ describe("loadConfig", () => {
     );
   });
 
+  it("counts subscription-authenticated accounts toward derived parallelism (audited 2026-09-02)", () => {
+    // Capacity = usable provider accounts. ProviderManager.isAvailable treats a
+    // Claude subscription token and a ChatGPT auth file as usable accounts;
+    // pre-fix the config counter only saw raw API keys (plus the OpenAI access
+    // token), so two subscription accounts derived the same width as none.
+    const twoSubscriptions = loadConfig({
+      UNITY_PROJECT_PATH: "/test/project",
+      ANTHROPIC_AUTH_MODE: "claude-subscription",
+      ANTHROPIC_AUTH_TOKEN: "sub-token",
+      OPENAI_AUTH_MODE: "chatgpt-subscription",
+      OPENAI_CHATGPT_AUTH_FILE: "/test/auth.json",
+    });
+    const twoApiKeys = loadConfig({
+      UNITY_PROJECT_PATH: "/test/project",
+      ANTHROPIC_API_KEY: "sk-a",
+      OPENAI_API_KEY: "sk-o",
+    });
+    // Two accounts either way: 3 nodes per account, 2 delegations per account.
+    expect(twoApiKeys.supervisor.maxParallelNodes).toBe(6);
+    expect(twoApiKeys.delegation.maxConcurrentPerParent).toBe(4);
+    expect(twoSubscriptions.supervisor.maxParallelNodes).toBe(6);
+    expect(twoSubscriptions.delegation.maxConcurrentPerParent).toBe(4);
+  });
+
+  it("does not double-count a provider that has both a key and a subscription (capacity guard)", () => {
+    const config = loadConfig({
+      UNITY_PROJECT_PATH: "/test/project",
+      OPENAI_API_KEY: "sk-o",
+      OPENAI_AUTH_MODE: "chatgpt-subscription",
+      OPENAI_CHATGPT_AUTH_FILE: "/test/auth.json",
+    });
+    // One account -> floor (4 / 3), not two.
+    expect(config.supervisor.maxParallelNodes).toBe(4);
+    expect(config.delegation.maxConcurrentPerParent).toBe(3);
+  });
+
   it("loads channel auth configuration into structured runtime config", () => {
     setEnv({
       ALLOWED_DISCORD_USER_IDS: "user-1,user-2",
