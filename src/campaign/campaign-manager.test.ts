@@ -1040,6 +1040,48 @@ describe("CampaignManager", () => {
     expect(fresh.milestones[0]!.reconcileDeferredSince).toBeGreaterThan(Date.now() - 60_000);
   });
 
+  it("a double-tapped approval plans ONE ladder and starts ONE sprint", async () => {
+    // Audited 2026-09-02: tryHandleApproval awaited the channel round-trip
+    // before any state write, so two concurrent "evet" (double-tap, redelivery,
+    // fire-and-forget web/Discord dispatch) both found the campaign
+    // awaiting-approval: two billable planning passes, the second overwrote
+    // the ladder, and two sprint-1 tasks were submitted (one orphaned).
+    tasks = new FakeTaskManager();
+    storage.close();
+    storage = new CampaignStorage(join(dir, "campaigns-approve.db"));
+    const planMilestones = vi.fn().mockResolvedValue(LADDER);
+    manager = new CampaignManager({
+      storage,
+      planner: { planMilestones } as unknown as CampaignPlanner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async (chatId, text) => {
+        messages.push({ chatId, text });
+        await new Promise((r) => setTimeout(r, 5)); // a real channel round-trip
+      },
+      projectRoot,
+      retryAdoptionGraceMs: 10,
+      completedSettleDelayMs: 0,
+      milestoneTimeBoxMs: 60 * 60_000,
+    });
+    manager.attachEvents();
+
+    const campaign = manager.startFromIdea(ctx, "a match-3 where pigs fly");
+    tasks.emit("task:completed", "task_1", "wrote docs/Game_GDD.md");
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("awaiting-approval"));
+
+    const consumed = await Promise.all([
+      manager.tryHandleApproval("cli-local", "evet"),
+      manager.tryHandleApproval("cli-local", "evet"),
+    ]);
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("executing"));
+    await new Promise((r) => setTimeout(r, 60));
+
+    expect(consumed.filter(Boolean)).toHaveLength(1);
+    expect(planMilestones).toHaveBeenCalledTimes(1);
+    expect(tasks.submitted).toHaveLength(2); // the draft + exactly one sprint 1
+    expect(messages.filter((m) => m.text.includes("Milestone ladder ready"))).toHaveLength(1);
+  });
+
   it("resumeActive leaves a still-running task alone", async () => {
     manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
     await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));

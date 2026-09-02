@@ -236,6 +236,13 @@ export class CampaignManager {
 
     const trimmed = text.trim();
     if (APPROVE_RE.test(trimmed)) {
+      // Claim the gate BEFORE yielding: the channel round-trip below is a real
+      // await, and the router has no per-chat serialization, so a double-tap
+      // or a redelivered "evet" found the campaign still awaiting-approval
+      // and planned the ladder twice — two billable passes, a clobbered
+      // ladder, two sprint-1 tasks (audited 2026-09-02).
+      campaign.state = "planning";
+      this.persist(campaign);
       await this.tell(
         campaign,
         "GDD approved — planning the milestone ladder, then the build starts. First stop after this is the delivery report.",
