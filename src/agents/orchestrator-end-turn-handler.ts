@@ -90,11 +90,14 @@ export function shouldSynthesize(
   agentState: AgentState,
   classification?: TaskClassification,
 ): boolean {
-  // stepResults accumulates across all iterations; approximate "current iteration
-  // had tool use" by checking stepResults.length >= iteration count.
-  const hadToolsThisIteration = agentState.stepResults.length > 0
-    && agentState.stepResults.length >= agentState.iteration;
-  if (hadToolsThisIteration) return true;
+  // audited 2026-09-02: this used to read `stepResults.length >= iteration`
+  // as "had tools this iteration". iteration is the run's tool-call count and
+  // stepResults a 50-entry window, so the test was true for exactly the first
+  // 50 tool calls of a run and false forever after — a long run then surfaced
+  // its raw draft unsynthesized. What the bypass below needs is "this run
+  // used no tools at all", which either counter states directly.
+  const runUsedTools = agentState.iteration > 0 || agentState.stepResults.length > 0;
+  if (runUsedTools) return true;
 
   // Draft contains raw tool output patterns → needs rewriting
   if (RAW_TOOL_OUTPUT_RE.test(draft)) return true;

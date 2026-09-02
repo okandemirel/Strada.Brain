@@ -1683,13 +1683,14 @@ export async function resolveVisibleDraftDecision(
   // conversational/simple-question types, since interactive drafts are user-facing.
   const RAW_TOOL_OUTPUT_RE = /```(?:json|xml|diff|patch)|<tool_result>|^\s*\{"[a-zA-Z]/m;
   const classification = params.strategy.task;
-  const hadToolsThisIteration = params.agentState.stepResults.length > 0
-    && params.agentState.stepResults.length >= params.agentState.iteration;
+  // audited 2026-09-02: same defect as shouldSynthesize — the old
+  // `stepResults.length >= iteration` was a "fewer than 51 tool calls" test.
+  const runUsedTools = params.agentState.iteration > 0 || params.agentState.stepResults.length > 0;
   const isDirectUserFacing =
     (classification?.type === "conversational" || classification?.type === "simple-question")
     && cleanedDraft.length < 2000;
   const needsSynthesis =
-    hadToolsThisIteration
+    runUsedTools
     || RAW_TOOL_OUTPUT_RE.test(cleanedDraft)
     || !isDirectUserFacing;
 
