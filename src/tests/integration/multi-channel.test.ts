@@ -460,7 +460,7 @@ describe("Multi-Channel Flow Integration", () => {
           text: "I'll create that file...",
           toolCalls: [
             createMockToolCall("tool-tg", "file_write", {
-              path: "Assets/TestTG.cs",
+              path: "Assets/Modules/TestModule/TestTG.cs",
               content: "class TestTG {}",
             }),
           ],
@@ -482,7 +482,7 @@ describe("Multi-Channel Flow Integration", () => {
           text: "I'll create that file...",
           toolCalls: [
             createMockToolCall("tool-disc", "file_write", {
-              path: "Assets/TestDiscord.cs",
+              path: "Assets/Modules/TestModule/TestDiscord.cs",
               content: "class TestDiscord {}",
             }),
           ],

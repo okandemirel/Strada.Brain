@@ -627,7 +627,11 @@ export class CampaignManager {
       // re-entered the same unarmed catch while the wall persisted). The
       // planner's contract explicitly promised the caller would park.
       const outageWaitMs = allProvidersCoolingDownMs();
-      if (outageWaitMs > 0 || /cooldown|quota|rate.?limit/i.test(campaign.lastError)) {
+      // Arm ONLY on a measured outage. Arming on the error's wording alone
+      // (review of 6d520d19, 2026-09-02) made a 'quota' message with a chain
+      // that reads available replan every two minutes with no attempt budget
+      // — planning has none — so the loop was unbounded.
+      if (outageWaitMs > 0) {
         const delayMs = Math.max(outageWaitMs, 60_000) + 60_000;
         campaign.autoReviveAt = Date.now() + delayMs;
         this.persist(campaign);
