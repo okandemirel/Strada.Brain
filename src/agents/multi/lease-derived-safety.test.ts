@@ -71,3 +71,10 @@ describe("derived lease safety", () => {
     await lease.release();
   });
 });
+
+describe("test-isolation guard", () => {
+  it("refuses the shared default lease root under vitest", () => {
+    // 2026-09-02 18:09: a test on the default root deleted Sprint 7's live lease.
+    expect(() => new WorkspaceLeaseManager({ projectRoot: tmp("proj-") })).toThrow(/isolated leaseRoot/);
+  });
+});

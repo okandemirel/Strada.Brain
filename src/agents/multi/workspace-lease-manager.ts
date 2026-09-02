@@ -272,6 +272,17 @@ export class WorkspaceLeaseManager {
   private readonly activeLeases = new Map<string, WorkspaceLease>();
 
   constructor(options: WorkspaceLeaseManagerOptions) {
+    // TEST ISOLATION GUARD. A test that builds a manager on the DEFAULT lease
+    // root shares it with the live daemon on this machine, and salvage /
+    // release then delete the daemon's live workspaces — measured twice:
+    // 2026-08-30 (12339242) and again 2026-09-02 18:09 ("workspace directory
+    // is gone" on Sprint 7's lease while parallel fixers ran lease tests).
+    // Under vitest, refuse the shared root outright.
+    if (process.env["VITEST"] && !options.leaseRoot) {
+      throw new Error(
+        "WorkspaceLeaseManager under vitest must be given an isolated leaseRoot — the default root is shared with the live daemon",
+      );
+    }
     if (!options.projectRoot.trim()) {
       throw new Error("projectRoot is required");
     }
