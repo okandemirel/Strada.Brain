@@ -105,6 +105,7 @@ import type { PostSetupBootstrap } from "../common/setup-contract.js";
 // Task system imports
 import { MessageRouter } from "../tasks/index.js";
 import { buildTaskProgressSummary } from "../tasks/progress-signals.js";
+import { estimateCostWithCache } from "../budget/cost-model.js";
 import type { BackgroundExecutor } from "../tasks/background-executor.js";
 import { resolveFlagSetById, PRODUCTION_DEFAULT_FLAG_SET_ID } from "../agent-core/runner/index.js";
 import {
@@ -182,6 +183,17 @@ export function createSupervisorExecuteNodeBridge(params: {
       }));
     const toNodeArtifacts = (workerResult?: { touchedFiles?: readonly string[] }) =>
       (workerResult?.touchedFiles ?? []).map((path) => ({ path, action: "modify" as const }));
+    // audited 2026-09-02: every return path below hardcoded `cost: 0` while the
+    // worker's usage went only to context.onUsage. The supervisor sizes its
+    // verification budget as a pct of node cost, so the budget was always 0 ->
+    // POSITIVE_INFINITY (the cap the config names never applied), and
+    // supervisor:complete reported cost 0 to the dashboard while money was
+    // spent. Accumulate the same usage events the ledger receives.
+    let nodeCost = 0;
+    const onUsage: NonNullable<SupervisorContext["onUsage"]> = (usage) => {
+      nodeCost += estimateCostWithCache(usage, usage.provider);
+      context.onUsage?.(usage);
+    };
     try {
       const goalRootId = context.goalTree ? String(context.goalTree.rootId) : undefined;
       // Carry the upstream results this node depends on. A wave-3 worker used
@@ -220,7 +232,7 @@ export function createSupervisorExecuteNodeBridge(params: {
         assignedModel: node.assignedModel,
         attachments: context.attachments,
         userContent: context.userContent,
-        onUsage: context.onUsage,
+        onUsage,
         // Nodes share the task's lease. Per-node CHILD leases were tried
         // 2026-09-01 to unlock wave parallelism and reverted the same day:
         // a lease derived from another lease is a temp copy, so (a) it has no
@@ -269,7 +281,7 @@ export function createSupervisorExecuteNodeBridge(params: {
           toolResults: toNodeToolResults(result.workerResult),
           provider: result.workerResult.provider ?? node.assignedProvider ?? "unknown",
           model: result.workerResult.model ?? node.assignedModel ?? "unknown",
-          cost: 0,
+          cost: nodeCost,
           duration: Date.now() - startedAt,
         };
       }
@@ -283,7 +295,7 @@ export function createSupervisorExecuteNodeBridge(params: {
           toolResults: toNodeToolResults(result.workerResult),
           provider: result.workerResult.provider ?? node.assignedProvider ?? "unknown",
           model: result.workerResult.model ?? node.assignedModel ?? "unknown",
-          cost: 0,
+          cost: nodeCost,
           duration: Date.now() - startedAt,
         };
       }
@@ -296,7 +308,7 @@ export function createSupervisorExecuteNodeBridge(params: {
         toolResults: toNodeToolResults(result.workerResult),
         provider: result.workerResult?.provider ?? node.assignedProvider ?? "unknown",
         model: result.workerResult?.model ?? node.assignedModel ?? "unknown",
-        cost: 0,
+        cost: nodeCost,
         duration: Date.now() - startedAt,
       };
     } catch (err) {
@@ -308,7 +320,7 @@ export function createSupervisorExecuteNodeBridge(params: {
         toolResults: [],
         provider: node.assignedProvider ?? "unknown",
         model: node.assignedModel ?? "unknown",
-        cost: 0,
+        cost: nodeCost,
         duration: Date.now() - startedAt,
       };
     }

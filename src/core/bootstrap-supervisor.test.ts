@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createSupervisorExecuteNodeBridge, initializeWorkspaceRuntime } from "./bootstrap.js";
+import { estimateCostWithCache } from "../budget/cost-model.js";
 
 describe("createSupervisorExecuteNodeBridge", () => {
   it("carries the worker's tool evidence into NodeResult.toolResults (red run → red verdict)", async () => {
@@ -147,6 +148,67 @@ describe("createSupervisorExecuteNodeBridge", () => {
     // as a DAG node, so the whole goal stays ONE monitor conversation without a stray card.
     expect(envelope.chatId).toBe("parent-chat");
     expect(envelope.conversationId).toBe("parent-conversation");
+  });
+
+  // audited 2026-09-02: every return path hardcoded cost: 0 while usage went only
+  // to context.onUsage, so the supervisor's verification budget (a pct of node
+  // cost) was always 0 -> POSITIVE_INFINITY, the cap the config names never
+  // applied, and supervisor:complete told the dashboard the run cost $0.0000.
+  it("stamps the node's real cost from the usage it forwarded", async () => {
+    const usageA = { provider: "claude", inputTokens: 1000, outputTokens: 500 };
+    const usageB = { provider: "claude", inputTokens: 200, outputTokens: 100, cacheReadInputTokens: 100 };
+    const runWorkerEnvelope = vi.fn().mockImplementation(async (_orch: unknown, params: any) => {
+      params.onUsage?.(usageA);
+      params.onUsage?.(usageB);
+      return {
+        output: "done",
+        workerResult: { status: "completed", finalSummary: "done", touchedFiles: [] },
+      };
+    });
+    const parentOnUsage = vi.fn();
+
+    const bridge = createSupervisorExecuteNodeBridge({
+      backgroundExecutor: { runWorkerEnvelope } as any,
+      orchestrator: {} as any,
+      workspaceBus: { emit: vi.fn() } as any,
+      defaultChannelType: "cli",
+    });
+
+    const result = await bridge(
+      { id: "node-3", task: "Sub-goal C", assignedProvider: "claude" } as any,
+      { chatId: "chat-1", taskRunId: "taskrun_parent", onUsage: parentOnUsage } as any,
+      new AbortController().signal,
+    );
+
+    const expected = estimateCostWithCache(usageA, "claude") + estimateCostWithCache(usageB, "claude");
+    expect(expected).toBeGreaterThan(0);
+    expect(result.status).toBe("ok");
+    expect(result.cost).toBeCloseTo(expected, 10);
+    // The parent's ledger still sees every usage event.
+    expect(parentOnUsage).toHaveBeenCalledTimes(2);
+    expect(parentOnUsage).toHaveBeenNthCalledWith(1, usageA);
+  });
+
+  it("stamps the cost on a failed node too", async () => {
+    const usage = { provider: "deepseek", inputTokens: 5000, outputTokens: 1000 };
+    const runWorkerEnvelope = vi.fn().mockImplementation(async (_orch: unknown, params: any) => {
+      params.onUsage?.(usage);
+      return { output: "boom", workerResult: { status: "failed", reason: "boom" } };
+    });
+    const bridge = createSupervisorExecuteNodeBridge({
+      backgroundExecutor: { runWorkerEnvelope } as any,
+      orchestrator: {} as any,
+      defaultChannelType: "cli",
+    });
+
+    const result = await bridge(
+      { id: "node-4", task: "Sub-goal D" } as any,
+      { chatId: "chat-1", taskRunId: "taskrun_parent" } as any,
+      new AbortController().signal,
+    );
+
+    expect(result.status).toBe("failed");
+    expect(result.cost).toBeCloseTo(estimateCostWithCache(usage, "deepseek"), 10);
   });
 
   it("wires supervisor execution before channel startup completes", () => {
