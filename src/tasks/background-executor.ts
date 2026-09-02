@@ -541,6 +541,20 @@ export class BackgroundExecutor {
     if (!this.taskManager) {
       return false;
     }
+    // A REAPER abort: the reaper already wrote the honest terminal (fail +
+    // the keep-alive's "Auto-retry N/10" marker) before the abort rejected
+    // this run. Audited 2026-09-02: this path then block()ed "The task was
+    // stopped before it finished (Reaped: …)" over that marker — the restart
+    // re-arm no longer matched the row, and the retry prompt quoted reaper
+    // machinery as the "last known checkpoint". The terminal is written; the
+    // run still counts as failed for the monitor.
+    if (this.reapedInflight.delete(String(task.id))) {
+      getLogger().info("Reaped task settled — the reaper's terminal stands, watchdog terminal withheld", {
+        taskId: task.id,
+        reason: abortReason instanceof Error ? abortReason.message : String(abortReason ?? ""),
+      });
+      return true;
+    }
 
     // The combined signal aborted for a reason that is not the user. That is
     // USUALLY the inactivity watchdog, but this branch used to assert it
@@ -1047,6 +1061,9 @@ export class BackgroundExecutor {
           if (inactivityTimer) clearTimeout(inactivityTimer);
           entry.signal.removeEventListener("abort", onExternalAbort);
           this.inflight.delete(entry.task.id);
+          // A reaped run that never reached the watchdog settle (e.g. it
+          // completed on its own after the abort) must not leave a stale mark.
+          this.reapedInflight.delete(String(entry.task.id));
           this.inflightWorkspacePaths.delete(String(entry.task.id));
           this.activeConversations.delete(conversationKey);
           this.running--;
@@ -1693,6 +1710,16 @@ export class BackgroundExecutor {
   /** Mission-level retries spent per chat+prompt chain (survives tree-less failures). */
   private readonly missionRetries = new Map<string, number>();
 
+  /**
+   * Task ids a reaper aborted THIS tick. The reaper writes the honest terminal
+   * (fail + the keep-alive's "Auto-retry N/10" block) synchronously; the
+   * aborted run then rejects on a later microtask and reaches executeTask's
+   * catch, whose watchdog settle used to block() a second, weaker terminal
+   * over the marker (audited 2026-09-02). The settle consumes the entry and
+   * stands down.
+   */
+  private readonly reapedInflight = new Set<string>();
+
   /** Settlement hook for the dev-knowledge completion note. The route-level
    *  call sites fire when a background task is merely SUBMITTED (planner
    *  state empty → real-work gate rejects), so the one useful note type never
@@ -1802,6 +1829,7 @@ export class BackgroundExecutor {
       try {
         const controller = this.inflight.get(taskId);
         if (controller && !controller.signal.aborted) {
+          this.reapedInflight.add(String(taskId));
           controller.abort(new Error(`Reaped: ${reason}.`));
         }
         this.taskManager.fail(taskId, `Reaped: ${reason}.`);
@@ -1836,6 +1864,10 @@ export class BackgroundExecutor {
         // forever, and every later task for that chat was starved.
         const controller = this.inflight.get(task.id);
         if (controller && !controller.signal.aborted) {
+          // Mark BEFORE aborting: the settle path reads this on the microtask
+          // the abort rejection lands on, and must find the reaper's terminal
+          // already written rather than write its own over it.
+          this.reapedInflight.add(String(task.id));
           controller.abort(new Error(`Reaped: ${reason}.`));
         }
         this.taskManager.fail(task.id, `Reaped: ${reason}.`);

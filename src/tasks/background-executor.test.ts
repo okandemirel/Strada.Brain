@@ -1955,6 +1955,52 @@ describe("BackgroundExecutor - reaper and shutdown settle in-flight work", () =>
     expect(taskManager.fail).toHaveBeenCalledWith("task_wedge", expect.stringContaining("Reaped"));
   });
 
+  it("the reaper's keep-alive marker survives the aborted run's own settle (no second, weaker terminal)", async () => {
+    // Audited 2026-09-02: reapStuckTasks aborts, fail()s and — via the mission
+    // keep-alive — block()s "Auto-retry 1/10 in ~30s" in ONE synchronous tick.
+    // The abort rejects the awaited run on a later microtask, and executeTask's
+    // catch then ran settleWatchdogAbortIfHung, whose block() REPLACED the row's
+    // result with "The task was stopped before it finished (Reaped: …)". The
+    // marker the restart re-arm looks for was gone, so a restart inside the
+    // backoff stranded the mission — the failure 2b70f0d7 was written to prevent.
+    const events: string[] = [];
+    const runBackgroundTask = hangingOnAbort(events);
+    const executor = new BackgroundExecutor({
+      orchestrator: { runBackgroundTask } as any,
+      concurrencyLimit: 1,
+    });
+    const task = createTestTask(undefined, { id: "task_reaped" as any, origin: "user" });
+    const taskManager = {
+      updateStatus: vi.fn(), complete: vi.fn(), fail: vi.fn(), block: vi.fn(),
+      appendTaskNotice: vi.fn(), retryTask: vi.fn(),
+      listStuckExecuting: vi.fn(),
+      listTasks: vi.fn(() => []),
+      getStatus: vi.fn(() => null),
+    };
+    executor.setTaskManager(taskManager as any);
+
+    executor.enqueue(task, new AbortController().signal, vi.fn());
+    await vi.waitFor(() => expect(runBackgroundTask).toHaveBeenCalledTimes(1), { timeout: 3000 });
+
+    (taskManager.listStuckExecuting as ReturnType<typeof vi.fn>).mockReturnValue([
+      { ...task, status: TaskStatus.executing },
+    ]);
+    (executor as unknown as { reapStuckTasks(): void }).reapStuckTasks();
+
+    // Let the aborted run's rejection reach executeTask's catch and settle.
+    await vi.waitFor(() => expect(events).toContain("settled"), { timeout: 3000 });
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(taskManager.fail).toHaveBeenCalledWith("task_reaped", expect.stringContaining("Reaped"));
+    const blocks = taskManager.block.mock.calls
+      .filter((c: unknown[]) => c[0] === "task_reaped")
+      .map((c: unknown[]) => String(c[1]));
+    // Exactly ONE terminal on the row, and it is the keep-alive's marker.
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toMatch(/Auto-retry 1\/10 in ~\d+s/);
+    expect(blocks[0]).not.toContain("stopped before it finished");
+  });
+
   it("shutdown aborts in-flight executions and settles them BEFORE disposing leases", async () => {
     const events: string[] = [];
     const runBackgroundTask = hangingOnAbort(events);
