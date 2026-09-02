@@ -62,6 +62,80 @@ describe("SupervisorBrain", () => {
     expect(executeNode).toHaveBeenCalledTimes(2);
   });
 
+  // audited 2026-09-02: a depth-1 node the planner flagged needsFurtherDecomposition
+  // stays "pending" with depth-2 children under it. extractLeafNodes filtered only
+  // the root and completed nodes, so the scaffolding parent was dispatched as a
+  // unit of work in the same wave as the children created to split it — the whole
+  // sub-goal implemented twice. A first attempt (e76d9430) dropped the parent but
+  // left every dependsOn that named it dangling: computeWaves treats a dep that is
+  // not in the dispatched set as "already resolved", so a sibling S1 with
+  // dependsOn:[P] launched in wave 0 next to P's children (reproduced:
+  // start:C1 start:C2 start:S1). The parent's edges must be rewired onto the work
+  // that replaced it — dependents wait for P's leaves, and P's leaves inherit
+  // what P itself waited for.
+  it("dispatches only leaves and rewires a decomposed parent's edges onto its leaves", async () => {
+    const now = Date.now();
+    const nodeMap = new Map<string, GoalNode>();
+    const put = (id: string, parentId: string | null, depth: number, task: string, deps: string[] = []) =>
+      nodeMap.set(id, {
+        id, parentId, task, dependsOn: deps, depth, status: "pending", createdAt: now, updatedAt: now,
+      } as unknown as GoalNode);
+    put("root", null, 0, "Build the game");
+    put("Q", "root", 1, "Set up the project");
+    put("P", "root", 1, "Build the rendering layer", ["Q"]);
+    put("C1", "P", 2, "Create the sprite atlas");
+    put("C2", "P", 2, "Create the camera controller");
+    put("S1", "root", 1, "Write the docs", ["P"]);
+    const tree = {
+      rootId: "root", sessionId: "s1", taskDescription: "Build the game",
+      nodes: nodeMap, createdAt: now,
+    } as unknown as GoalTree;
+
+    const decomposer = {
+      shouldDecompose: vi.fn().mockReturnValue(true),
+      decomposeProactive: vi.fn().mockResolvedValue(tree),
+    };
+    const timeline: string[] = [];
+    const executeNode = vi.fn().mockImplementation(async (node: any) => {
+      timeline.push(`start:${node.id}`);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      timeline.push(`done:${node.id}`);
+      return {
+        nodeId: node.id, status: "ok", output: `Done: ${node.task}`,
+        artifacts: [], toolResults: [], provider: "claude", model: "sonnet", cost: 0.001, duration: 100,
+      } satisfies NodeResult;
+    });
+
+    const brain = new SupervisorBrain({
+      config: DEFAULT_CONFIG,
+      decomposer: decomposer as any,
+      capabilityMatcher: new CapabilityMatcher(),
+      providerAssigner: new ProviderAssigner(PROVIDERS),
+    });
+    brain.setExecuteNode(executeNode);
+
+    const result = await brain.execute("Build the game", { chatId: "test" });
+
+    const executed = executeNode.mock.calls.map((c) => String(c[0].id));
+    expect([...executed].sort()).toEqual(["C1", "C2", "Q", "S1"]);
+    expect(executed).not.toContain("P");
+    expect(result?.totalNodes).toBe(4);
+    expect(result?.success).toBe(true);
+
+    // S1 depended on P; P's work is C1 + C2, so S1 may start only after both finish.
+    const startS1 = timeline.indexOf("start:S1");
+    expect(startS1).toBeGreaterThan(timeline.indexOf("done:C1"));
+    expect(startS1).toBeGreaterThan(timeline.indexOf("done:C2"));
+    // P depended on Q; the leaves that replace P inherit that wait.
+    expect(timeline.indexOf("start:C1")).toBeGreaterThan(timeline.indexOf("done:Q"));
+    expect(timeline.indexOf("start:C2")).toBeGreaterThan(timeline.indexOf("done:Q"));
+
+    // The dispatched S1 names the leaves it waited for, so the execute-node
+    // bridge can carry their results (it reads node.dependsOn against the tree).
+    const dispatchedS1 = executeNode.mock.calls.map((c) => c[0]).find((n: any) => n.id === "S1");
+    expect([...dispatchedS1.dependsOn].sort()).toEqual(["C1", "C2"]);
+  });
+
   it("runs supervisor verification and feeds the outcome back into provider learning", async () => {
     const decomposer = {
       shouldDecompose: vi.fn().mockReturnValue(true),
