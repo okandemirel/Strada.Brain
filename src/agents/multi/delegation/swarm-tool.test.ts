@@ -158,6 +158,46 @@ describe("SwarmTool", () => {
     expect(result.content).toContain("3 task(s) beyond the limit");
   });
 
+  it("names malformed entries it did not run instead of shrinking the swarm silently", async () => {
+    // Measured 2026-09-02: `dropped` was computed from the already-filtered
+    // array, so an entry without a usable `task` string vanished and the
+    // report opened "Swarm of 5 sub-agents finished." for a six-task request.
+    const delegate = vi.fn(async () => delegationResult("ok"));
+    const tool = new SwarmTool(TYPES, managerWith(delegate), "agent-1" as never, 1, 4);
+
+    const result = await tool.execute(
+      {
+        tasks: [
+          { task: "A" },
+          { description: "audit the input module" },
+          { task: "   " },
+          { task: "B" },
+          { task: "C" },
+        ],
+      },
+      {} as never,
+    );
+
+    expect(delegate).toHaveBeenCalledTimes(3);
+    expect(result.content).toContain("Swarm of 3 sub-agents");
+    expect(result.content).toContain("2 of 5 submitted entries were NOT run");
+    expect(result.content).toContain("no usable `task` string");
+  });
+
+  it("still reports the over-limit drop when malformed entries hide it", async () => {
+    // 12 valid + 3 malformed used to print "Swarm of 12" with NO note at all:
+    // the input filter defeated the very cap-note it sits next to.
+    const delegate = vi.fn(async () => delegationResult("ok"));
+    const tool = new SwarmTool(TYPES, managerWith(delegate), "agent-1" as never, 1, 4);
+    const many: Array<Record<string, unknown>> = Array.from({ length: 12 }, (_, i) => ({ task: `T${i}` }));
+    many.push({ task: "" }, { nope: 1 }, { task: 42 });
+
+    const result = await tool.execute({ tasks: many }, {} as never);
+
+    expect(delegate).toHaveBeenCalledTimes(12);
+    expect(result.content).toContain("3 of 15 submitted entries were NOT run");
+  });
+
   it("refuses a single-task swarm and respects the depth rule", async () => {
     const tool = new SwarmTool(TYPES, managerWith(vi.fn()), "agent-1" as never, 1);
     const single = await tool.execute({ tasks: [{ task: "only" }] }, {} as never);

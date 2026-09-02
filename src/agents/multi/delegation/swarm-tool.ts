@@ -75,6 +75,11 @@ export class SwarmTool implements ITool {
     const accepted = rawTasks.filter((t) => t && typeof t.task === "string" && t.task.trim().length > 0);
     const tasks = accepted.slice(0, 12);
     const dropped = accepted.length - tasks.length;
+    // `dropped` was the ONLY drop counter and it was computed from the already
+    // filtered array, so an entry with no usable `task` string vanished: six
+    // submitted tasks reported "Swarm of 5 sub-agents finished." and the caller
+    // marked the batch done with one module unaudited (audited 2026-09-02).
+    const malformed = rawTasks.length - accepted.length;
 
     if (tasks.length < 2) {
       return {
@@ -123,6 +128,12 @@ export class SwarmTool implements ITool {
     if (dropped > 0) {
       // Silently discarding tasks 13+ let a caller believe work was done.
       lines.push(`NOTE: ${dropped} task(s) beyond the limit of 12 were NOT run — resubmit them in another swarm.`);
+    }
+    if (malformed > 0) {
+      lines.push(
+        `NOTE: ${malformed} of ${rawTasks.length} submitted entries were NOT run — they had no usable \`task\` string. ` +
+          "Resubmit them with a non-empty `task`.",
+      );
     }
     let failures = 0;
     settled.forEach((outcome, i) => {
