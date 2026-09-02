@@ -705,6 +705,62 @@ describe("CampaignManager", () => {
     await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
   });
 
+  it("a spent coverage-remediation sprint delivers the built game WITH the unclosed gaps named", async () => {
+    // Audited 2026-09-02: a remediation sprint (mcovN) that exhausted its
+    // attempts after every planned sprint had gone green ended the campaign
+    // with "❌ Campaign stopped" — nothing at all was reported about the game
+    // that was actually built, and the gaps it failed to close were never
+    // named either.
+    tasks = new FakeTaskManager();
+    storage.close();
+    storage = new CampaignStorage(join(dir, "campaigns-partial.db"));
+    const planner = {
+      planMilestones: vi.fn().mockResolvedValue(LADDER),
+      auditCoverage: vi.fn().mockResolvedValue(["Dragon boss: no milestone implemented it"]),
+    } as unknown as CampaignPlanner;
+    manager = new CampaignManager({
+      storage,
+      planner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async (chatId, text) => {
+        if (messengerDownFor?.test(text)) throw new Error("messenger unavailable");
+        messages.push({ chatId, text });
+      },
+      projectRoot,
+      retryAdoptionGraceMs: 10,
+      completedSettleDelayMs: 0,
+      milestoneTimeBoxMs: 60 * 60_000,
+    });
+    manager.attachEvents();
+
+    const campaign = manager.startFromGdd(ctx, "# GDD text", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    settleMilestone("final report"); // audit finds the gap → mcov1 appended
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+
+    // The remediation sprint burns both its attempts without landing green.
+    tasks.emit("task:failed", "task_4", "the boss scene will not compile");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(5));
+    tasks.emit("task:failed", "task_5", "the boss scene will not compile");
+
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+    const delivered = storage.get(campaign.id)!;
+    expect(delivered.milestones.filter((m) => m.status === "green")).toHaveLength(3);
+    expect(delivered.milestones.at(-1)!.status).toBe("failed");
+    expect(delivered.deliveryReported).toBe(true);
+
+    const report = messages.at(-1)!.text;
+    expect(report).toContain("Campaign delivery");
+    expect(report).toContain("Sprint A — Foundations");
+    expect(report).toContain("Dragon boss: no milestone implemented it");
+    expect(report).toMatch(/unclosed/i);
+    expect(report).not.toContain("Campaign stopped");
+  });
+
   it("bounces a completion once when the sprint demanded a capture and none exists", async () => {
     const planner = {
       planMilestones: vi.fn().mockResolvedValue({

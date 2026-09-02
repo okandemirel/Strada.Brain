@@ -1553,6 +1553,34 @@ export class CampaignManager {
       return;
     }
 
+    // PARTIAL DELIVERY: the sprint that ran out of attempts is a
+    // coverage-remediation round (mcovN) and every PLANNED milestone is
+    // green — the game itself was built. Audited 2026-09-02: this stopped
+    // with "❌ Campaign stopped" and reported none of it, and never named the
+    // gaps it failed to close either. Deliver, with the ladder's own ❌ line
+    // and the unclosed gaps rendered by the report (so a re-send after a lost
+    // report carries the same caveats).
+    const plannedMilestones = campaign.milestones.filter((m) => !m.id.startsWith("mcov"));
+    if (
+      milestone.id.startsWith("mcov") &&
+      plannedMilestones.length > 0 &&
+      plannedMilestones.every((m) => m.status === "green")
+    ) {
+      campaign.state = "done";
+      campaign.deliveryReported = false;
+      this.persist(campaign);
+      getLoggerSafe().warn("Delivering with unclosed GDD gaps — remediation sprint spent its attempts", {
+        id: campaign.id,
+        milestone: milestone.id,
+        attempts: milestone.attempts,
+      });
+      if (await this.tell(campaign, this.buildDeliveryReport(campaign))) {
+        campaign.deliveryReported = true;
+        this.persist(campaign);
+      }
+      return;
+    }
+
     this.persist(campaign);
     await this.tell(
       campaign,
@@ -1803,8 +1831,14 @@ export class CampaignManager {
     // (audited 2026-09-01). A green reached by spending its evidence bounce
     // must not read like a clean one.
     const caveats: string[] = [];
+    // A delivery that carries an unfinished sprint says so in its FIRST line.
+    // Audited 2026-09-02: partial delivery (a spent coverage-remediation
+    // round after every planned sprint went green) had no rendering at all.
+    const unfinished = campaign.milestones.filter((m) => m.status !== "green");
     const lines = [
-      `🏁 **Campaign delivery — game build complete**`,
+      unfinished.length === 0
+        ? `🏁 **Campaign delivery — game build complete**`
+        : `🏁 **Campaign delivery — game built, ${unfinished.length} sprint${unfinished.length > 1 ? "s" : ""} did NOT land green**`,
       `GDD: \`${campaign.gddPath ?? "n/a"}\``,
       ``,
     ];
@@ -1839,6 +1873,15 @@ export class CampaignManager {
       if (m.noWorkBounced) { marks.push("no-work bounce spent"); caveats.push(`${m.title}: an attempt left the repository untouched`); }
       if ((m.timeBoxEscalations ?? 0) > 0) { marks.push(`scope narrowed ×${m.timeBoxEscalations}`); caveats.push(`${m.title}: ran past its time box and was narrowed to a smaller increment — remaining scope is in its final report`); }
       if (m.attempts > 1) marks.push(`${m.attempts} attempts`);
+      if (m.status !== "green") {
+        marks.push(`did NOT land green (${m.attempts} attempts)`);
+        const gaps = coverageGapItems(m);
+        caveats.push(
+          gaps.length > 0
+            ? `${m.title}: unclosed — the GDD items it was appended to close are NOT delivered: ${gaps.join("; ")}`
+            : `${m.title}: unclosed — its scope is NOT delivered. Cause: ${campaign.lastError ?? "not recorded"}`,
+        );
+      }
       lines.push(`• ${m.status === "green" ? "✅" : "❌"} ${m.title}${marks.length > 0 ? ` — ${marks.join("; ")}` : ""}`);
     }
     const frames = this.countCaptureFiles();
@@ -1847,7 +1890,13 @@ export class CampaignManager {
       lines.push("", `⚠️ ${campaign.coverageAuditNote} — delivered WITHOUT a clean GDD-coverage check.`);
     }
     if (caveats.length > 0) {
-      lines.push("", "**How these greens were reached:**", ...caveats.map((c) => `- ${c}`));
+      lines.push(
+        "",
+        unfinished.length === 0
+          ? "**How these greens were reached:**"
+          : "**What is unclosed, and how these greens were reached:**",
+        ...caveats.map((c) => `- ${c}`),
+      );
     }
     return lines.join("\n");
   }
@@ -1977,6 +2026,23 @@ export class CampaignManager {
       return false;
     }
   }
+}
+
+/**
+ * The GDD items a coverage-remediation sprint (mcovN) was appended to close,
+ * read back from its own prompt — buildCoverageRemediation writes them there
+ * verbatim as a "- item" block. Empty for every other milestone, and for a
+ * remediation sprint whose list cannot be recovered (the caller then says so
+ * rather than inventing gap names).
+ */
+function coverageGapItems(milestone: CampaignMilestone): string[] {
+  if (!milestone.id.startsWith("mcov")) return [];
+  const items: string[] = [];
+  for (const line of milestone.prompt.split("\n")) {
+    if (line.startsWith("- ")) items.push(line.slice(2).trim());
+    else if (items.length > 0) break; // the block ends at its first non-item line
+  }
+  return items.filter((item) => item.length > 0);
 }
 
 function readGddFile(projectRoot: string, gddPath: string): string | undefined {
