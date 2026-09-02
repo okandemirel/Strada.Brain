@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { UnifiedBudgetManager } from "./unified-budget-manager.js";
 
 // ---------------------------------------------------------------------------
@@ -480,6 +480,50 @@ describe("UnifiedBudgetManager", () => {
       mgr.resetWarningFlags();
       mgr.checkAndEmitEvents();
       expect(bus.events.filter((e) => e.event === "budget:warning")).toHaveLength(2);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Warning latch clears when the sliding window drains (audited 2026-09-02)
+  // -------------------------------------------------------------------------
+
+  describe("warning re-arms after usage drops back under warnPct", () => {
+    it("fires again on a fresh crossing of the threshold, not once per process", () => {
+      vi.useFakeTimers();
+      try {
+        const t0 = new Date("2026-09-01T00:00:00Z").getTime();
+        vi.setSystemTime(t0);
+        const fresh = new UnifiedBudgetManager(storage, bus, {}); // env {} — no STRADA_BUDGET_* bleed
+        fresh.updateConfig({ dailyLimitUsd: 10.0, warnPct: 0.8, monthlyLimitUsd: 0 });
+        bus.events.length = 0;
+        const warnings = () => bus.events.filter((e) => e.event === "budget:warning");
+
+        // Day 1: 0.82 — first warning.
+        fresh.recordCost(8.2, "daemon", {});
+        fresh.checkAndEmitEvents();
+        expect(warnings()).toHaveLength(1);
+
+        // Day 2: the entry ages out of the 24h sliding window; pct falls to 0
+        // without ever having reached 1.0, so no exceeded→recovered reset ran.
+        vi.setSystemTime(t0 + 25 * 60 * 60 * 1000);
+        fresh.checkAndEmitEvents();
+        fresh.recordCost(3.0, "daemon", {});
+        fresh.checkAndEmitEvents();
+        expect(warnings()).toHaveLength(1);
+
+        // Day 4: climbs to 0.95 — the operator must get a second warning.
+        vi.setSystemTime(t0 + 50 * 60 * 60 * 1000);
+        fresh.recordCost(9.5, "daemon", {});
+        fresh.checkAndEmitEvents();
+        expect(warnings()).toHaveLength(2);
+        expect(bus.events.filter((e) => e.event === "budget:exceeded")).toHaveLength(0);
+
+        // Same tick again: still edge-triggered, not level-triggered.
+        fresh.checkAndEmitEvents();
+        expect(warnings()).toHaveLength(2);
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 });

@@ -993,3 +993,50 @@ describe("HeartbeatLoop — the daemon daily sub-limit gates trigger dispatch", 
     expect(taskManager.submit).toHaveBeenCalled();
   });
 });
+
+describe("HeartbeatLoop — the legacy daemon:budget_warning re-arms when usage drops under warnPct (audited 2026-09-02)", () => {
+  it("emits a second warning on a fresh crossing after the sliding window drained", async () => {
+    vi.useFakeTimers();
+    const registry = new TriggerRegistry();
+    const taskManager = makeTaskManager();
+    const eventBus = makeEventBus();
+    const config = makeDaemonConfig(); // warnPct 0.8
+    let pct = 0.85;
+    const budgetTracker = {
+      isExceeded: vi.fn(() => pct >= 1),
+      isWarning: vi.fn(() => pct >= 0.8),
+      getUsage: vi.fn(() => ({ usedUsd: pct * 10, limitUsd: 10, pct })),
+      recordCost: vi.fn(),
+      resetBudget: vi.fn(),
+    };
+    const loop = new HeartbeatLoop(
+      registry, taskManager as any, budgetTracker as any, makeSecurityPolicy() as any,
+      makeApprovalQueue() as any, makeStorage() as any, makeIdentityManager() as any, eventBus,
+      config, makeLogger() as any,
+    );
+    registry.register(makeTrigger("idle", { shouldFire: false })); // the warning check runs per trigger
+    const warnings = () => (eventBus.emit as any).mock.calls.filter((c: unknown[]) => c[0] === "daemon:budget_warning");
+    // scheduleNextTick() re-arms with two chained timeouts, so successive ticks are 2×interval apart.
+    const nextTick = () => vi.advanceTimersByTimeAsync(2 * config.heartbeat.intervalMs + 10);
+    try {
+      loop.start();
+      await vi.advanceTimersByTimeAsync(config.heartbeat.intervalMs + 10); // 0.85 → warning
+      expect(warnings()).toHaveLength(1);
+
+      pct = 0.3; // window drained; never reached 1.0 so no exceeded-recovery reset ran
+      await nextTick();
+      expect(budgetTracker.getUsage).toHaveBeenCalledTimes(2);
+      expect(warnings()).toHaveLength(1);
+
+      pct = 0.95; // fresh crossing — the operator must hear about it
+      await nextTick();
+      expect(warnings()).toHaveLength(2);
+
+      await nextTick(); // still 0.95: edge-triggered
+      expect(warnings()).toHaveLength(2);
+    } finally {
+      loop.stop();
+      vi.useRealTimers();
+    }
+  });
+});
