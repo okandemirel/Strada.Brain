@@ -784,6 +784,78 @@ export class CampaignManager {
       );
       return;
     }
+    // A block/failure may be the executor's own keep-alive parking the task
+    // while it schedules a retry under a new id. Audited 2026-09-02: this
+    // branch reacted instantly — draftAttempts += 1 and a second, lineage-less
+    // draft task — so one transient blip spent a designer revision round and
+    // ran two drafters against docs/ at once; four blips failed the campaign
+    // before a real draft was attempted. Same grace-window reconcile as the
+    // milestone path, on the settle chain.
+    const campaignId = campaign.id;
+    const timer = setTimeout(() => {
+      this.enqueueSettle(campaignId, () => this.reconcileDraftAfterSettle(campaignId, status, output));
+    }, this.retryAdoptionGraceMs);
+    timer.unref?.();
+  }
+
+  /** Draft-lineage counterpart of reconcileMilestoneAfterSettle. */
+  private async reconcileDraftAfterSettle(
+    campaignId: string,
+    settledStatus: TaskStatus,
+    settledOutput: string,
+  ): Promise<void> {
+    const campaign = this.storage.get(campaignId);
+    if (!campaign || campaign.state !== "drafting-gdd" || !campaign.draftTaskId) return;
+    const tip = this.taskManager.findLatestLineageTask(campaign.draftTaskId as TaskId);
+
+    if (tip && ACTIVE_STATUSES.has(tip.status) && tip.status !== TaskStatus.paused) {
+      this.adoptTask(campaign, tip.id);
+      getLoggerSafe().info("Campaign adopted executor retry of the GDD draft instead of redrafting", {
+        id: campaign.id,
+        adoptedTask: tip.id,
+      });
+      return;
+    }
+    if (tip && tip.status === TaskStatus.paused) {
+      const resumed = this.taskManager.resumeTask(tip.id);
+      if (resumed) {
+        this.adoptTask(campaign, resumed.id);
+        return;
+      }
+    }
+    if (tip && tip.status === TaskStatus.completed) {
+      await this.onDraftSettled(campaign, tip.status, tip.result ?? "");
+      return;
+    }
+
+    const status = tip && tip.id !== campaign.draftTaskId ? tip.status : settledStatus;
+    const output = tip && tip.id !== campaign.draftTaskId ? (tip.error ?? tip.result ?? "") : settledOutput;
+
+    // A reaped/auto-retry tip names a retry the executor WILL mint; wait one
+    // promised horizon (trust-but-verify, as the milestone path does) before
+    // judging, so the campaign does not redraft on top of the coming retry.
+    const executorWillRetry =
+      /Reaped:|Auto-retry \d+\/\d+|provider_unavailable|All providers (failed|are in cooldown)/i.test(output);
+    if (executorWillRetry) {
+      const promised = /Auto-retry \d+\/\d+ in ~(\d+)s/.exec(output);
+      const promisedMs = (promised ? Number(promised[1]) : 600) * 1000;
+      const tipUpdatedAt = (tip as { updatedAt?: number } | null)?.updatedAt;
+      const promiseDead =
+        tipUpdatedAt !== undefined && Date.now() > tipUpdatedAt + promisedMs + 5 * 60_000;
+      if (!promiseDead) {
+        const waitMs = Math.min(Math.max(promisedMs + 60_000, 60_000), 12 * 60 * 60_000);
+        getLoggerSafe().info("Campaign deferring GDD draft judgement to the executor's pending retry", {
+          id: campaign.id,
+          recheckInMs: waitMs,
+        });
+        const timer = setTimeout(() => {
+          this.enqueueSettle(campaign.id, () => this.reconcileDraftAfterSettle(campaign.id, status, output));
+        }, waitMs);
+        timer.unref?.();
+        return;
+      }
+    }
+
     if (campaign.draftAttempts >= this.maxDraftAttempts) {
       campaign.state = "failed";
       campaign.lastError = `GDD draft ${status}: ${output.slice(0, 200)}`;
@@ -791,7 +863,17 @@ export class CampaignManager {
       await this.tell(campaign, `GDD drafting ${status} — campaign failed. Cause: ${campaign.lastError}`);
       return;
     }
-    campaign.draftAttempts += 1;
+    // An outage-caused settle is not the draft's failure and must not spend
+    // a revision round (the same counter the designer's feedback spends).
+    const outageCaused =
+      /provider|cooldown|quota|rate.?limit/i.test(output) && allProvidersCoolingDownMs() > 0;
+    if (outageCaused) {
+      getLoggerSafe().info("GDD draft resubmitted without charging a revision round — provider outage", {
+        id: campaign.id,
+      });
+    } else {
+      campaign.draftAttempts += 1;
+    }
     this.submitDraft(campaign, `The previous draft attempt ${status}: ${output.slice(0, 400)}`);
   }
 

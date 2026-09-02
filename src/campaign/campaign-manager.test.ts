@@ -913,6 +913,48 @@ describe("CampaignManager", () => {
     }
   });
 
+  it("a transiently blocked GDD draft is ADOPTED from the executor's retry, not redrafted and charged", async () => {
+    // Audited 2026-09-02: onDraftSettled reacted to a keep-alive block
+    // instantly — draftAttempts += 1 and a second draft task with no lineage,
+    // while the executor's own retry ran untracked. Four blips failed the
+    // campaign before a real draft was attempted; each blip also spent one
+    // of the designer's revision rounds (same counter).
+    const campaign = manager.startFromIdea(ctx, "a match-3 where pigs fly");
+    expect(tasks.submitted).toHaveLength(1);
+
+    const retryId = tasks.addRetry("task_1");
+    tasks.emit("task:blocked", "task_1", "Transient failure — provider hiccup. Auto-retry 1/10 in ~30s.");
+
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.draftTaskId).toBe(retryId));
+    expect(tasks.submitted).toHaveLength(1); // no second drafter
+    expect(storage.get(campaign.id)!.draftAttempts).toBe(0); // no revision round spent
+
+    // The adopted retry lands the GDD → the approval gate opens normally.
+    tasks.emit("task:completed", retryId, "wrote docs/Game_GDD.md");
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("awaiting-approval"));
+  });
+
+  it("an outage-caused draft settle resubmits WITHOUT charging a revision round", async () => {
+    const { ProviderHealthRegistry } = await import("../agents/providers/provider-health.js");
+    const { setLiveChainMemberNames } = await import("../agents/providers/provider-outage.js");
+    const registry = ProviderHealthRegistry.getInstance();
+    registry.clearProviderState("cm-draft");
+    registry.recordOverloaded("cm-draft", "quota wall");
+    setLiveChainMemberNames(["cm-draft"]);
+    try {
+      const campaign = manager.startFromIdea(ctx, "a match-3 where pigs fly");
+      // Dead retry promise (tip idle past its horizon) so the settle is judged.
+      tasks.updatedAts.set("task_1", Date.now() - 30 * 60_000);
+      tasks.emit("task:failed", "task_1", "Task execution failed: All providers are in cooldown. Auto-retry 1/10 in ~30s.");
+      await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+      expect(storage.get(campaign.id)!.draftAttempts).toBe(0);
+      expect(storage.get(campaign.id)!.state).toBe("drafting-gdd");
+    } finally {
+      setLiveChainMemberNames([]);
+      registry.clearProviderState("cm-draft");
+    }
+  });
+
   it("resumeActive leaves a still-running task alone", async () => {
     manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
     await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
