@@ -292,13 +292,12 @@ export class DelegationManager {
     // Measure only live chain members: a stale entry for a de-configured
     // provider or a healthy "chain(...)" alias defeated the every(down)
     // reduction — the exact hazard provider-outage.ts documents.
-    const memberEntries = [...healthRegistry.getAllEntries()]
-      .filter(([name]) => isCurrentChainMemberName(name))
-      .map(([, e]) => e);
-    if (memberEntries.length > 0) {
+    const members = [...healthRegistry.getAllEntries()]
+      .filter(([name]) => isCurrentChainMemberName(name));
+    if (members.length > 0) {
       const now = Date.now();
-      const allDown = memberEntries.every(
-        (e) => e.status === "down" && now < e.cooldownUntil,
+      const allDown = members.every(
+        ([, e]) => e.status === "down" && now < e.cooldownUntil,
       );
       if (allDown) {
         // Only hard-abort when recovery is NOT imminent. When the soonest provider is about
@@ -306,7 +305,14 @@ export class DelegationManager {
         // performs a single bounded wait-for-recovery (the one place the wait lives) instead of
         // failing the whole task on a brief all-cooled blip. The FallbackChain probing guard
         // still prevents a thundering herd of concurrent probes to the recovering provider.
-        const recoveryImminent = healthRegistry.suggestRecoveryWaitMs(now) !== null;
+        //
+        // Scoped to the SAME members as the reduction above. Unscoped, the probe
+        // read every tracked entry, so a de-configured provider (or a "chain(...)"
+        // alias) cooling for 30s made recovery look imminent while the only real
+        // member was quota-dead for hours — the gate then spawned every delegation
+        // into the wall (audited 2026-09-02).
+        const recoveryImminent =
+          healthRegistry.suggestRecoveryWaitMs(now, members.map(([name]) => name)) !== null;
         if (!recoveryImminent) {
           throw new Error("All providers are in cooldown — delegation skipped to prevent thundering herd");
         }

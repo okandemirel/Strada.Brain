@@ -12,6 +12,7 @@ import { DelegationLog } from "./delegation-log.js";
 import { TierRouter } from "./tier-router.js";
 import { createProvider } from "../../providers/provider-registry.js";
 import { ProviderHealthRegistry } from "../../providers/provider-health.js";
+import { setLiveChainMemberNames } from "../../providers/provider-outage.js";
 import type {
   DelegationConfig,
   DelegationRequest,
@@ -1191,6 +1192,42 @@ describe("DelegationManager", () => {
       await expect(manager.delegate(request)).rejects.toThrow(
         "All providers are in cooldown",
       );
+    });
+
+    it("scopes the recovery probe to live chain members, not every tracked entry", async () => {
+      // Audited 2026-09-02: the allDown reduction was scoped to chain members
+      // (879e1e6b) but the recovery probe two lines later still asked the
+      // registry about EVERY tracked entry. A de-configured provider cooling
+      // for 30s made "recovery imminent" true while the only real member was
+      // quota-dead for 8h, so the herd guard waved every delegation through.
+      setLiveChainMemberNames(["deepseek"]);
+      try {
+        for (let i = 0; i < 5; i++) {
+          healthRegistry.recordFailure("deepseek", "HTTP 529 overloaded");
+          healthRegistry.recordFailure("kimi", "HTTP 529 overloaded");
+        }
+        const now = Date.now();
+        Object.assign(healthRegistry.getEntry("deepseek")!, { cooldownUntil: now + 8 * 3_600_000 });
+        Object.assign(healthRegistry.getEntry("kimi")!, { cooldownUntil: now + 30_000 });
+        // What the gate used to ask vs what it means to ask.
+        expect(healthRegistry.suggestRecoveryWaitMs(now)).not.toBeNull();
+        expect(healthRegistry.suggestRecoveryWaitMs(now, ["deepseek"])).toBeNull();
+
+        const request: DelegationRequest = {
+          type: "code_review",
+          task: "Review this code",
+          parentAgentId: PARENT_AGENT_ID,
+          depth: 0,
+          mode: "sync",
+          toolContext: TEST_TOOL_CONTEXT,
+        };
+
+        await expect(manager.delegate(request)).rejects.toThrow(
+          "All providers are in cooldown",
+        );
+      } finally {
+        setLiveChainMemberNames([]);
+      }
     });
 
     it("allows delegation when at least one provider is healthy", async () => {
