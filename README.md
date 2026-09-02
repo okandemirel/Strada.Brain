@@ -1131,7 +1131,7 @@ Every file operation resolves symlinks and validates the path stays within the p
 All media attachments are validated before processing: MIME allowlist (image/video/audio/document), per-type size limits (20MB image, 50MB video, 25MB audio, 10MB document), magic bytes verification (JPEG, PNG, GIF, WebP, MP4, PDF), and SSRF protection on download URLs (blocks private IPs, metadata endpoints, rejects redirects).
 
 ### Layer 5: Secret Sanitizer
-24 regex patterns detect and mask credentials in all tool outputs before they reach the LLM. Covers: OpenAI keys, GitHub tokens, Slack/Discord/Telegram tokens, AWS keys, JWTs, Bearer auth, PEM keys, database URLs, and generic secret patterns.
+26 regex patterns detect and mask credentials. Covers: OpenAI keys, GitHub tokens, Slack/Discord/Telegram tokens, AWS keys, JWTs, Bearer auth, PEM keys, database URLs, and generic secret patterns. Audited 2026-09-02: this claimed 24 patterns covering every tool output. The count was two short, and the reach is task results, memory and learning writes, channel sends, provider errors and dashboard config — not tool results, which get Layer 8's single API-key regex instead. See SECURITY.md section 4.
 
 ### Layer 6: Read-Only Mode
 When `READ_ONLY_MODE=true`, 23 write tools are removed from the agent's tool list entirely -- the LLM cannot even attempt to call them.

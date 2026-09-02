@@ -46,7 +46,16 @@ Implementation: `src/security/path-guard.ts`
 
 ### 4. Secret Sanitizer
 
-All tool output is scrubbed for credentials before being returned to the LLM or displayed to users. Detection uses pattern-matching against known credential formats.
+`sanitizeSecrets()` scrubs credentials by pattern-matching against known formats. Audited 2026-09-02: this section used to promise the scrub on every tool output and cite `sanitizeToolResult` as the place it happens. It does not happen there. The 26-pattern set below runs on **stored and forwarded text**, not on tool results:
+
+- Task results and errors (`src/tasks/task-manager.ts`, `src/tasks/background-executor.ts`)
+- Memory writes (`src/memory/file-memory-manager.ts`, `src/memory/unified/agentdb-memory.ts`)
+- Learning storage (`src/learning/storage/learning-storage.ts`)
+- Channel sends from bootstrap (`src/core/bootstrap-stages/stage-runtime.ts`)
+- Provider error messages (`src/agents/providers/fallback-chain.ts`)
+- Dashboard config masking (`src/dashboard/server.ts`) and `src/common/fetch-with-retry.ts` request bodies
+
+Tool results take a different path — `sanitizeToolResult` (section 7), which applies one API-key regex, not this set. A tool result containing a Stripe `sk_live_…` key, a raw JWT or a `postgres://user:pass@host` URL reaches the model unredacted.
 
 Detected patterns include:
 - OpenAI keys (`sk-`, `sk-proj-`), Anthropic keys (`sk-ant-api03-`), GCP keys (`AIza...`)
@@ -61,9 +70,9 @@ Detected patterns include:
 - Generic `password=`, `api_key=`, `secret=`, `token=` patterns
 - Bare `KEY=VALUE` lines (catches `.env` content)
 
-Output is also capped at 8192 characters to prevent context window flooding.
+Sanitized output is also capped at 8192 characters to prevent context window flooding.
 
-Implementation: `src/security/secret-sanitizer.ts`, `src/agents/orchestrator.ts` (inline `sanitizeToolResult`)
+Implementation: `src/security/secret-patterns.ts`, `src/security/secret-sanitizer.ts`
 
 ### 5. Read-Only Mode
 

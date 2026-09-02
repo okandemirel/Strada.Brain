@@ -18,7 +18,7 @@ Channel Adapters
       └── RateLimiter (rate-limiter.ts)         ← Per-user message throttle + budget caps
 
 Agent / Tool Execution
-  ├── ReadOnlyGuard (read-only-guard.ts)     ← Removes 22 write tools from the LLM's tool list
+  ├── ReadOnlyGuard (read-only-guard.ts)     ← Removes 23 write tools from the LLM's tool list
   ├── PathGuard (path-guard.ts)              ← Symlink-resolving directory traversal prevention + sensitive-file blocklist
   ├── UserAuthorizedPaths (user-authorized-paths.ts) ← Read-only exceptions for files the user named themselves
   ├── DMPolicy (dm-policy.ts)                ← Confirmation flow for destructive/large operations
@@ -118,14 +118,21 @@ Output truncated at 8192 characters. Global singleton via `getGlobalSanitizer()`
 
 ## Read-Only Guard (`read-only-guard.ts`)
 
-When `READ_ONLY_MODE=true`, 22 write tools are blocked:
+When `READ_ONLY_MODE=true`, 23 write tools are blocked:
 - File: `write`, `edit`, `delete`, `rename`, `delete_directory`
 - Git: `commit`, `push`, `branch`, `stash`, `reset`, `checkout`, `merge`, `rebase`
 - Shell: `exec`
 - Strada: `create_module`, `create_component`, `create_mediator`, `create_system`
-- .NET: `add_package`, `remove_package`, `new`
+- .NET: `add_package`, `remove_package`, `new`, `build`, `test`
 
 `filterToolsForReadOnly()` removes these from the tool array before the LLM receives them — the agent cannot even attempt to call them. (`create_skill` writes to disk but carries its own read-only check so it can give a better error.)
+
+Audited 2026-09-02: this section said "22" in three places (here, the
+architecture diagram and the key-files table) and omitted `dotnet_build` /
+`dotnet_test`, which had already moved into `WRITE_TOOLS` because they write
+`bin/`, `obj/` and the NuGet cache. `readme-cites-real-modules.test.ts` now
+reads these counts and this list off disk and compares them to `WRITE_TOOLS`,
+so the prose cannot drift from the set again.
 
 ## DM Policy (`dm-policy.ts`)
 
@@ -160,7 +167,7 @@ Generates diff previews (max 50 lines), sends via channel, waits for user respon
 | `user-authorized-paths.ts` | User-named files readable outside the project |
 | `secret-patterns.ts` | 26-pattern credential masking core (dependency-free) |
 | `secret-sanitizer.ts` | Configurable sanitizer class over `secret-patterns.ts` |
-| `read-only-guard.ts` | Write tool blocking (22 tools) |
+| `read-only-guard.ts` | Write tool blocking (23 tools) |
 | `dm-policy.ts` | Diff/Merge confirmation flow |
 | `browser-security.ts` | URL validation, SSRF prevention |
 | `communication.ts` | TLS hardening, WebSocket security |
