@@ -375,9 +375,27 @@ export function createAgentCorePort(
         const failedVerdict = terminalStatus === "failed" || terminalStatus === "blocked";
         const terminatedByIterationBudget =
           terminalReason === "max-iterations" || terminalReason === "epoch-budget-exhausted";
+        // audited 2026-09-02: terminalStatus "completed" is NOT proof of a completion. The spine
+        // also carries it for runs an arbiter cut short — every graceful ledger stop (token/cost
+        // budget, wall-clock hard timeout, task inactivity, a spent provider-stall budget) and the
+        // interactive max-tokens runaway abort — because flipping the TASK terminal there would
+        // change how background-executor settles a live campaign task. The METRIC is under no such
+        // constraint, and booking a cut-short run COMPLETE is what still let the metrics CLI, the
+        // daemon digest and learning-stats count those runs as completion_status "success". The
+        // pattern is the CLOSED set of stop reasons the spine emits with a "completed" status
+        // (describeCancelReason kinds + the runaway abort) — never an open "not on the happy list",
+        // so a reason this does not recognize is still recorded exactly as it was before.
+        const stoppedShortByArbiter =
+          terminalReason !== undefined &&
+          /^(?:hard-timeout|budget-exhausted|provider-stall|verdict-stop):|^(?:task-inactivity|max-tokens-runaway)$/.test(
+            terminalReason,
+          );
         try {
         engine.recordMetricEnd(c.metricId, {
-          agentPhase: cancelled || failedVerdict ? AgentPhase.FAILED : AgentPhase.COMPLETE,
+          agentPhase:
+            cancelled || failedVerdict || stoppedShortByArbiter
+              ? AgentPhase.FAILED
+              : AgentPhase.COMPLETE,
           iterations: state.iteration,
           toolCallCount: state.stepResults.length,
           hitMaxIterations: terminatedByIterationBudget,

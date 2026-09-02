@@ -558,6 +558,61 @@ describe("V2AgentRunner — REAL port + REAL gateway (provider.chat scripted)", 
     expect(recorded.terminatedByIterationBudget).toBeFalsy();
   });
 
+  /**
+   * audited 2026-09-02: the previous pass keyed the recorded phase on terminalStatus alone, and
+   * terminalStatus "completed" is not proof of a completion — the spine deliberately keeps it for
+   * arbiter stops whose task terminal must stay soft (the interactive max-tokens runaway abort;
+   * every graceful ledger ceiling stop). Those runs were still booked completion_status "success".
+   */
+  it("metric: the INTERACTIVE max-tokens runaway abort is recorded FAILED even though the run's terminal stays 'completed'", async () => {
+    const provider = mkScriptedProvider();
+    provider.chat
+      .mockResolvedValueOnce(resp({ text: "the plan", stopReason: "end_turn" })) // PLANNING→EXECUTING
+      .mockResolvedValue(resp({ text: "truncated…", stopReason: "max_tokens", toolCalls: [] }));
+    const h = buildHarness(provider);
+    const io = mkIO("interactive");
+    const metricSpy = vi.spyOn(
+      (h.orch as unknown as { engine: { recordMetricEnd: (...a: unknown[]) => void } }).engine,
+      "recordMetricEnd",
+    );
+
+    const result = await drive(h.clock, h.runner.run(mkRequest(), io));
+
+    // The run was ABORTED to stop runaway accumulation — and the spine keeps the soft terminal on
+    // the interactive route on purpose (unchanged here; only the recorded metric is corrected).
+    expect(result.reason).toBe("max-tokens-runaway");
+    expect(result.status).toBe("completed");
+    expect(metricSpy).toHaveBeenCalledTimes(1);
+    const recorded = metricSpy.mock.calls[0]![1] as {
+      agentPhase: string;
+      terminatedByIterationBudget?: boolean;
+    };
+    // mapCompletionStatus: FAILED → "failure". COMPLETE would have reported this abort as a success.
+    expect(recorded.agentPhase).toBe("failed");
+    // …and it is NOT laundered through the iteration-budget flag, which would claim a limit the
+    // run never hit and report "partial" instead of naming the abort.
+    expect(recorded.terminatedByIterationBudget).toBe(false);
+  });
+
+  it("metric: a genuinely clean end_turn run is still recorded COMPLETE (the correction does not over-reach)", async () => {
+    const provider = mkScriptedProvider();
+    provider.chat
+      .mockResolvedValueOnce(resp({ text: "the plan", stopReason: "end_turn" }))
+      .mockResolvedValue(resp({ text: "all done", stopReason: "end_turn" }));
+    const h = buildHarness(provider);
+    const metricSpy = vi.spyOn(
+      (h.orch as unknown as { engine: { recordMetricEnd: (...a: unknown[]) => void } }).engine,
+      "recordMetricEnd",
+    );
+
+    const result = await drive(h.clock, h.runner.run(mkRequest(), mkIO("interactive")));
+
+    expect(result.status).toBe("completed");
+    expect(metricSpy).toHaveBeenCalledTimes(1);
+    const recorded = metricSpy.mock.calls[0]![1] as { agentPhase: string };
+    expect(recorded.agentPhase).toBe("complete");
+  });
+
   it("E (P-E): 3 consecutive no-tool max_tokens turns → runaway guard aborts (worker → blocked)", async () => {
     const provider = mkScriptedProvider();
     provider.chat
