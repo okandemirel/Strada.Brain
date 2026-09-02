@@ -270,6 +270,23 @@ describe("GitStashTool", () => {
     expect(result.isError).toBeUndefined();
   });
 
+  // Audited 2026-09-02: a temp-copy workspace lease has no .git, so `git stash
+  // list` exits 128 with empty stdout — and the tool said "No stashes found."
+  it("reports a failed `git stash list` as an error, not as an empty stash list", async () => {
+    const noRepo = await mkdtemp(join(tmpdir(), "not-a-repo-"));
+    try {
+      const result = await tool.execute(
+        { action: "list" },
+        { projectPath: noRepo, workingDirectory: noRepo, readOnly: false },
+      );
+      expect(result.isError).toBe(true);
+      expect(result.content).toMatch(/not a git repository/i);
+      expect(result.content).not.toContain("No stashes found");
+    } finally {
+      await rm(noRepo, { recursive: true, force: true });
+    }
+  });
+
   it("stashes with a message", async () => {
     // Modify a tracked file so there's something to stash
     await writeFile(join(tempDir, "file.txt"), "stash me\n");

@@ -454,6 +454,13 @@ export class GitStashTool implements ITool {
       }
       case "list": {
         const result = await runGit(["stash", "list"], context.projectPath);
+        // Audited 2026-09-02: this was the one action in the switch that
+        // ignored the exit code, so a lease without .git (exit 128, empty
+        // stdout) or a vanished cwd (exit 127) read as "No stashes found." —
+        // a failed check rendered as a clean one.
+        if (result.exitCode !== 0) {
+          return { content: `Error: ${result.stderr || `git stash list failed (exit ${result.exitCode})`}`, isError: true };
+        }
         return { content: result.stdout || "No stashes found." };
       }
       case "drop": {
