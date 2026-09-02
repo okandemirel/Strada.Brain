@@ -202,13 +202,27 @@ const DERIVED_COPY_EXCLUDES = new Set([
  *  cross-process signal for "this lease belongs to a LIVE process". */
 const LEASE_OWNER_FILE = ".strada-lease-owner.json";
 
-/** True when the pid recorded in a lease's owner sidecar is still running.
- *  Missing/corrupt sidecar reads as not-alive (old-style orphan heuristic). */
-function leaseOwnerAlive(leasePath: string): boolean {
+/**
+ * Pre-seed claim: `<leaseRoot>/<lease-name>.claim.json`, a SIBLING of the
+ * workspace directory, written before `git worktree add` / cpSync populate it.
+ *
+ * The in-dir sidecar could only be written after seeding (git refuses to add a
+ * worktree into a non-empty directory), which left the workspace on disk and
+ * unowned for the whole seed — minutes with submodules. Any second process
+ * constructing a manager against the machine-global lease root in that window
+ * read it as an orphan and rm -rf'd the directory the first process was still
+ * writing into (audited 2026-09-02). The claim is retired once the in-dir
+ * sidecar exists, and removed with the workspace by release/salvage.
+ */
+const LEASE_CLAIM_SUFFIX = ".claim.json";
+
+function leaseClaimPath(leasePath: string): string {
+  return `${leasePath}${LEASE_CLAIM_SUFFIX}`;
+}
+
+function ownerFileRecordsLivePid(file: string): boolean {
   try {
-    const raw = JSON.parse(readFileSync(join(leasePath, LEASE_OWNER_FILE), "utf8")) as {
-      pid?: unknown;
-    };
+    const raw = JSON.parse(readFileSync(file, "utf8")) as { pid?: unknown };
     const pid = Number(raw.pid);
     if (!Number.isInteger(pid) || pid <= 0) return false;
     process.kill(pid, 0); // throws when the process is gone
@@ -216,6 +230,16 @@ function leaseOwnerAlive(leasePath: string): boolean {
   } catch {
     return false;
   }
+}
+
+/** True when the pid recorded in a lease's owner sidecar — or, while it is
+ *  still being seeded, its sibling claim file — is still running. Missing or
+ *  corrupt records read as not-alive (old-style orphan heuristic). */
+function leaseOwnerAlive(leasePath: string): boolean {
+  return (
+    ownerFileRecordsLivePid(join(leasePath, LEASE_OWNER_FILE)) ||
+    ownerFileRecordsLivePid(leaseClaimPath(leasePath))
+  );
 }
 
 /** Lease roots already salvaged by SOME manager in this process. Two managers
@@ -381,6 +405,7 @@ export class WorkspaceLeaseManager {
           continue;
         }
         this.removeDirectory(orphanPath);
+        rmSync(leaseClaimPath(orphanPath), { force: true }); // a crashed seed's claim goes with it
         salvaged += 1;
       } catch (err) {
         logger.warn("Orphaned workspace could not be salvaged — left in place", {
@@ -441,40 +466,53 @@ export class WorkspaceLeaseManager {
     let kind: WorkspaceLeaseKind;
     let releaseImpl: () => Promise<void>;
 
-    if (useWorktree) {
-      try {
-        await this.createGitWorktree(workspacePath);
-        kind = "git-worktree";
-        releaseImpl = async () => {
-          await this.removeGitWorktree(workspacePath);
-        };
-      } catch {
+    // Claim ownership BEFORE the directory exists, so there is no instant at
+    // which the workspace is on disk without a live owner (see LEASE_CLAIM_SUFFIX).
+    const ownerRecord = JSON.stringify({ pid: process.pid, startedAt: createdAt });
+    try {
+      writeFileSync(leaseClaimPath(workspacePath), ownerRecord, "utf8");
+    } catch {
+      // Best-effort; an unclaimable lease degrades to the old post-seed sidecar.
+    }
+
+    try {
+      if (useWorktree) {
+        try {
+          await this.createGitWorktree(workspacePath);
+          kind = "git-worktree";
+          releaseImpl = async () => {
+            await this.removeGitWorktree(workspacePath);
+          };
+        } catch {
+          kind = "temp-copy";
+          await this.createTempCopy(sourceRoot, workspacePath);
+          releaseImpl = async () => {
+            this.removeDirectory(workspacePath);
+          };
+        }
+      } else {
         kind = "temp-copy";
         await this.createTempCopy(sourceRoot, workspacePath);
         releaseImpl = async () => {
           this.removeDirectory(workspacePath);
         };
       }
-    } else {
-      kind = "temp-copy";
-      await this.createTempCopy(sourceRoot, workspacePath);
-      releaseImpl = async () => {
-        this.removeDirectory(workspacePath);
-      };
+    } catch (err) {
+      // Seeding failed: the claim must not outlive the attempt, or the next
+      // process could never reclaim whatever the failed seed left behind.
+      rmSync(leaseClaimPath(workspacePath), { force: true });
+      throw err;
     }
 
     // Ownership sidecar: the lease root is machine-global, so "orphan" can
     // only be decided by whether the OWNING PROCESS is alive — not by which
     // process happens to construct a manager. Salvage skips any lease whose
-    // recorded pid still runs.
+    // recorded pid still runs. Once it exists the pre-seed claim is retired.
     try {
-      writeFileSync(
-        join(workspacePath, LEASE_OWNER_FILE),
-        JSON.stringify({ pid: process.pid, startedAt: createdAt }),
-        "utf8",
-      );
+      writeFileSync(join(workspacePath, LEASE_OWNER_FILE), ownerRecord, "utf8");
+      rmSync(leaseClaimPath(workspacePath), { force: true });
     } catch {
-      // Best-effort; an unownable lease degrades to the old orphan heuristic.
+      // Best-effort; an unownable lease keeps its claim file as the signal.
     }
 
     // Two snapshots, both taken after seeding.
@@ -513,6 +551,7 @@ export class WorkspaceLeaseManager {
         released = true;
         this.activeLeases.delete(id);
         await releaseImpl();
+        rmSync(leaseClaimPath(workspacePath), { force: true });
       },
     };
     this.activeLeases.set(id, lease);
