@@ -1759,7 +1759,11 @@ export class CampaignManager {
 
   /**
    * Write a supplied GDD into docs/ so sprint prompts reference a durable,
-   * committable path. Sanitizes the source filename; idempotent per name.
+   * committable path. Sanitizes the source filename; idempotent per CONTENT.
+   * Audited 2026-09-02: this was "idempotent per name" (an existence check),
+   * so a revised GDD.docx re-shared under the same name left docs/GDD.md
+   * holding the previous version — the ladder and the coverage audit used
+   * the new text while every sprint prompt pointed agents at the old file.
    * Returns the project-relative path (undefined when the write failed —
    * planning then falls back to the in-memory text).
    */
@@ -1772,9 +1776,22 @@ export class CampaignManager {
           .replace(/^_+|_+$/g, "") || "Imported_GDD";
       const relPath = `docs/${baseName}.md`;
       const absPath = join(this.projectRoot, relPath);
-      if (!existsSync(absPath)) {
+      let current: string | undefined;
+      try {
+        current = readFileSync(absPath, "utf8");
+      } catch {
+        current = undefined;
+      }
+      if (current !== gddText) {
         mkdirSync(join(this.projectRoot, "docs"), { recursive: true });
         writeFileSync(absPath, gddText, "utf8");
+        if (current !== undefined) {
+          getLoggerSafe().info("Supplied GDD replaced an older document of the same name in docs/", {
+            relPath,
+            previousChars: current.length,
+            chars: gddText.length,
+          });
+        }
       }
       return relPath;
     } catch (err) {

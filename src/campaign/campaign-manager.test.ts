@@ -1,12 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { EventEmitter } from "node:events";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { CampaignManager } from "./campaign-manager.js";
 import { CampaignStorage } from "./campaign-storage.js";
 import type { CampaignPlanner } from "./campaign-planner.js";
 import type { TaskManager } from "../tasks/task-manager.js";
+import type { IncomingMessage } from "../channels/channel-messages.interface.js";
 import type { Task } from "../tasks/types.js";
 import { TaskStatus } from "../tasks/types.js";
 
@@ -1080,6 +1081,38 @@ describe("CampaignManager", () => {
     expect(planMilestones).toHaveBeenCalledTimes(1);
     expect(tasks.submitted).toHaveLength(2); // the draft + exactly one sprint 1
     expect(messages.filter((m) => m.text.includes("Milestone ladder ready"))).toHaveLength(1);
+  });
+
+  it("re-sharing a revised GDD under the same filename rewrites docs/ so sprints build the new design", async () => {
+    // Audited 2026-09-02: persistSuppliedGdd was "idempotent per name" — an
+    // existence check only — so GDD.docx v2 left docs/GDD.md holding v1 while
+    // the ladder was planned from v2 and every sprint prompt pointed agents at
+    // the v1 file. The whole build ran against the superseded design.
+    const v1 = "# GDD v1\n" + "core loop: match three tiles and clear the board. ".repeat(8);
+    const v2 = "# GDD v2 REVISED\n" + "core loop: match FOUR tiles; a dragon boss guards level 5. ".repeat(8);
+    const share = (text: string): IncomingMessage =>
+      ({
+        channelType: "cli",
+        chatId: "cli-local",
+        userId: "u1",
+        text: "",
+        attachments: [{ type: "document", name: "GDD.md", data: Buffer.from(text, "utf8") }],
+        timestamp: new Date(),
+      }) as unknown as IncomingMessage;
+
+    expect(await manager.tryHandleIncoming(share(v1))).toBe(true);
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    expect(readFileSync(join(projectRoot, "docs", "GDD.md"), "utf8")).toBe(v1);
+
+    // The first build ends; the designer revises the document and re-shares it.
+    const first = storage.listActive()[0]!;
+    first.state = "cancelled";
+    storage.save(first);
+
+    expect(await manager.tryHandleIncoming(share(v2))).toBe(true);
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    expect(readFileSync(join(projectRoot, "docs", "GDD.md"), "utf8")).toBe(v2);
+    expect(storage.listActive()[0]!.gddPath).toBe("docs/GDD.md");
   });
 
   it("resumeActive leaves a still-running task alone", async () => {
