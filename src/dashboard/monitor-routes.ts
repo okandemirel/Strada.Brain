@@ -407,6 +407,13 @@ export function handleMonitorRoute(
     }
     void readJsonBody<{ rootId?: string }>(req, res).then((parsed) => {
       if (!parsed) return
+      // Answered 200 'approved' unconditionally even when nothing subscribed to
+      // monitor:gate_response, so the decision was dropped while the client
+      // was told it applied. Measure the consumer, not the emit (audited 2026-09-02).
+      if (workspaceBus.listenerCount('monitor:gate_response') === 0) {
+        jsonResponse(res, 503, { error: 'No gate consumer attached — approve not applied', taskId })
+        return
+      }
       workspaceBus.emit('monitor:gate_response', {
         nodeId: taskId,
         rootId: parsed.rootId ?? '',
@@ -430,6 +437,13 @@ export function handleMonitorRoute(
     }
     void readJsonBody<{ rootId?: string }>(req, res).then((parsed) => {
       if (!parsed) return
+      // Answered 200 'skipped' unconditionally even when nothing subscribed to
+      // monitor:gate_response, so the decision was dropped while the client
+      // was told it applied. Measure the consumer, not the emit (audited 2026-09-02).
+      if (workspaceBus.listenerCount('monitor:gate_response') === 0) {
+        jsonResponse(res, 503, { error: 'No gate consumer attached — skip not applied', taskId })
+        return
+      }
       workspaceBus.emit('monitor:gate_response', {
         nodeId: taskId,
         rootId: parsed.rootId ?? '',

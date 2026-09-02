@@ -2120,7 +2120,13 @@ async function bootstrapImpl(
   // Wire incoming workspace commands from the frontend into the workspace bus
   if (typeof channel.setWorkspaceBusEmitter === "function") {
     channel.setWorkspaceBusEmitter((event: string, payload: unknown) => {
-      workspaceBus.emit(event as keyof import("../dashboard/workspace-events.js").WorkspaceEventMap & string, payload as never);
+      const key = event as keyof import("../dashboard/workspace-events.js").WorkspaceEventMap & string;
+      // Report whether anything is subscribed so the channel's ack can say
+      // "enforced" only when a consumer actually received the command
+      // (audited 2026-09-02: verify:gate_decision had none and was acked as enforced).
+      const delivered = workspaceBus.listenerCount(key) > 0;
+      workspaceBus.emit(key, payload as never);
+      return delivered;
     });
   }
 

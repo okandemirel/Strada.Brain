@@ -200,7 +200,13 @@ export class WebChannel
   private readonly staticDir = resolveStaticDir();
   private readonly identityStore: WebIdentityStore;
   /** Optional emitter for workspace bus events from frontend monitor commands. */
-  private workspaceBusEmitter: ((event: string, payload: unknown) => void) | null = null;
+  /**
+   * Emits a frontend command onto the workspace bus. Returns true only when at
+   * least one consumer was subscribed to that event at emit time, so acks can
+   * report enforcement honestly; a void return means "unknown" (treated as no
+   * consumer). (audited 2026-09-02)
+   */
+  private workspaceBusEmitter: ((event: string, payload: unknown) => boolean | void) | null = null;
   /**
    * Cached monitor state for replaying to reconnecting clients, keyed PER DAG ROOT (episode).
    * The frontend monitor store is multi-root (rootsById, MAX_ROOTS); a single flat snapshot
@@ -268,8 +274,11 @@ export class WebChannel
     this.feedbackReactionCallback = callback;
   }
 
-  /** Register an emitter for workspace bus events from frontend monitor commands. */
-  setWorkspaceBusEmitter(emitter: ((event: string, payload: unknown) => void) | null): void {
+  /**
+   * Register an emitter for workspace bus events from frontend monitor commands.
+   * The emitter should return whether a consumer was subscribed to the event.
+   */
+  setWorkspaceBusEmitter(emitter: ((event: string, payload: unknown) => boolean | void) | null): void {
     this.workspaceBusEmitter = emitter;
   }
 
@@ -1710,13 +1719,26 @@ export class WebChannel
         // resolve the pending gate by taskId and apply it. The wiring of that
         // consumer lives outside this channel; when no consumer is attached the
         // decision is NOT enforced, so we must not pretend it was.
-        const gateForwarded = Boolean(this.workspaceBusEmitter);
+        //
+        // Was `Boolean(this.workspaceBusEmitter)` — that measured "an emitter is
+        // installed" (bootstrap always installs one), not "a consumer received
+        // the verdict", so production acked every approval as enforced while
+        // nothing subscribed to verify:gate_decision. Only an emitter that
+        // reports a subscribed consumer counts as forwarded (audited 2026-09-02).
+        let gateForwarded = false;
         if (this.workspaceBusEmitter) {
-          this.workspaceBusEmitter("verify:gate_decision", {
+          gateForwarded = this.workspaceBusEmitter("verify:gate_decision", {
             type: "verify:gate_decision",
             taskId: safeTaskId,
             verdict,
             note,
+          }) === true;
+        }
+        if (!gateForwarded) {
+          getLoggerSafe().warn("verify:gate_decision has no consumer — verdict NOT enforced", {
+            taskId: safeTaskId,
+            verdict,
+            emitterInstalled: Boolean(this.workspaceBusEmitter),
           });
         }
         this.sendToClient(chatId, {

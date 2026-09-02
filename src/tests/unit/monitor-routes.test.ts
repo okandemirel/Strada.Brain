@@ -328,6 +328,28 @@ describe('handleMonitorRoute', () => {
     expect((received[0] as any).nodeId).toBe('node-2')
   })
 
+  it('POST /api/monitor/task/:id/approve answers 503, not "approved", when nothing consumes gate_response (audited 2026-09-02)', async () => {
+    // A bus exists but no supervisor subscribed to monitor:gate_response — the
+    // approval would be dropped on the floor, so the route must not report it applied.
+    const req = fakeReq('POST', { rootId: 'root-1' })
+    const res = fakeRes()
+    handleMonitorRoute('/api/monitor/task/node-1/approve', 'POST', req, res, undefined, undefined, workspaceBus as any, activityLog)
+    await new Promise((r) => setTimeout(r, 50))
+
+    expect(res._status).toBe(503)
+    expect(JSON.parse(res._body).error).toMatch(/no gate consumer/i)
+  })
+
+  it('POST /api/monitor/task/:id/skip answers 503 when nothing consumes gate_response (audited 2026-09-02)', async () => {
+    const req = fakeReq('POST', { rootId: 'root-1' })
+    const res = fakeRes()
+    handleMonitorRoute('/api/monitor/task/node-2/skip', 'POST', req, res, undefined, undefined, workspaceBus as any, activityLog)
+    await new Promise((r) => setTimeout(r, 50))
+
+    expect(res._status).toBe(503)
+    expect(JSON.parse(res._body).error).toMatch(/no gate consumer/i)
+  })
+
   it('POST /api/monitor/task/:id/approve returns 503 when no workspaceBus', () => {
     const req = fakeReq('POST', {})
     const res = fakeRes()

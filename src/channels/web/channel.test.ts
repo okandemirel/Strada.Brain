@@ -1021,7 +1021,8 @@ describe("WebChannel verify:gate_decision enforcement", () => {
 
   it("forwards an owned gate decision onto the workspace bus and acks it as enforced", async () => {
     const channel = new WebChannel();
-    const emit = vi.fn();
+    // The emitter reports that a consumer actually received the verdict.
+    const emit = vi.fn().mockReturnValue(true);
     channel.setWorkspaceBusEmitter(emit);
     channel.setTaskOwnerResolver((taskId) => (taskId === "task-1" ? "chat-1" : null));
 
@@ -1043,6 +1044,53 @@ describe("WebChannel verify:gate_decision enforcement", () => {
     );
     const ack = socket.getSentMessages().find((m) => m.type === "verify:gate_ack");
     expect(ack).toMatchObject({ accepted: true, supervisorVerdict: "approve", enforced: true });
+  });
+
+  it("does not ack an approve as enforced when the bus has an emitter but no consumer (audited 2026-09-02)", async () => {
+    const channel = new WebChannel();
+    // An emitter is installed (as bootstrap always does) but it reports that
+    // nothing subscribed to verify:gate_decision — the verdict went nowhere.
+    const emit = vi.fn().mockReturnValue(false);
+    channel.setWorkspaceBusEmitter(emit);
+    channel.setTaskOwnerResolver((taskId) => (taskId === "task-1" ? "chat-1" : null));
+
+    const socket = createMockSocket();
+    (channel as unknown as { clients: Map<string, unknown> }).clients.set("chat-1", {
+      ws: socket,
+    });
+
+    await sendGate(channel, "chat-1", {
+      type: "verify:gate_decision",
+      taskId: "task-1",
+      verdict: "approve",
+    });
+
+    expect(emit).toHaveBeenCalledTimes(1);
+    const ack = socket.getSentMessages().find((m) => m.type === "verify:gate_ack");
+    expect(ack).toMatchObject({ accepted: false, supervisorVerdict: "approve", enforced: false });
+  });
+
+  it("treats an emitter that does not report consumer delivery as not enforced (audited 2026-09-02)", async () => {
+    const channel = new WebChannel();
+    // Legacy void emitter: it cannot say whether anyone consumed the verdict,
+    // so the ack must not claim enforcement.
+    const emit = vi.fn();
+    channel.setWorkspaceBusEmitter(emit);
+    channel.setTaskOwnerResolver((taskId) => (taskId === "task-1" ? "chat-1" : null));
+
+    const socket = createMockSocket();
+    (channel as unknown as { clients: Map<string, unknown> }).clients.set("chat-1", {
+      ws: socket,
+    });
+
+    await sendGate(channel, "chat-1", {
+      type: "verify:gate_decision",
+      taskId: "task-1",
+      verdict: "approve",
+    });
+
+    const ack = socket.getSentMessages().find((m) => m.type === "verify:gate_ack");
+    expect(ack).toMatchObject({ accepted: false, enforced: false });
   });
 
   it("does not ack an approve as accepted when no bus consumer is wired (not yet enforced)", async () => {
