@@ -140,7 +140,17 @@ export class HeartbeatLoop {
     this.scheduleNextTick();
   }
 
-  private scheduleNextTick(): void {
+  /**
+   * Arm the next tick `delayMs` from now (defaults to the configured interval).
+   *
+   * Audited 2026-09-02: this used to arm an intermediate timer for
+   * `intervalMs - elapsed` whose only job was to call scheduleNextTick(),
+   * which then armed ANOTHER full intervalMs — so ticks landed every
+   * 2 * intervalMs while `/daemon status` reported intervalMs, and minute-pinned
+   * crons on the unobserved parity never fired. The compensated delay IS the
+   * schedule; it is passed straight into the one timer.
+   */
+  private scheduleNextTick(delayMs: number = this.config.heartbeat.intervalMs): void {
     const intervalMs = this.config.heartbeat.intervalMs;
     this.intervalId = setTimeout(async () => {
       const start = Date.now();
@@ -153,10 +163,8 @@ export class HeartbeatLoop {
       }
       if (!this.running) return;
       const elapsed = Date.now() - start;
-      const delay = Math.max(0, intervalMs - elapsed);
-      this.intervalId = setTimeout(() => this.scheduleNextTick(), delay);
-      this.intervalId.unref?.();
-    }, intervalMs);
+      this.scheduleNextTick(Math.max(0, intervalMs - elapsed));
+    }, delayMs);
     this.intervalId.unref?.();
   }
 

@@ -332,6 +332,23 @@ describe("HeartbeatLoop", () => {
     expect(trigger.shouldFire).toHaveBeenCalled();
   });
 
+  it("ticks once per configured interval — N intervals yield N ticks, not N/2 (audited 2026-09-02)", async () => {
+    // The pre-fix loop armed an idle intermediate timer after each tick and
+    // then a fresh full interval, so ticks landed every 2*intervalMs while
+    // status reported intervalMs. Six intervals must produce six ticks.
+    const trigger = makeTrigger("cadence", { shouldFire: false });
+    registry.register(trigger);
+    loop.start();
+
+    const intervalMs = config.heartbeat.intervalMs;
+    await vi.advanceTimersByTimeAsync(intervalMs * 6 + 10);
+
+    const tickEvents = (eventBus.emit as ReturnType<typeof vi.fn>).mock.calls
+      .filter(([event]) => event === "daemon:tick");
+    expect(tickEvents).toHaveLength(6);
+    expect(trigger.shouldFire).toHaveBeenCalledTimes(6);
+  });
+
   it("tick() iterates over registry.getActive() and calls shouldFire(now)", async () => {
     const t1 = makeTrigger("t1", { shouldFire: false });
     const t2 = makeTrigger("t2", { shouldFire: false });
