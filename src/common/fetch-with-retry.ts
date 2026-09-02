@@ -613,15 +613,27 @@ async function runFetchLoop(
     // {"type":"usage_limit_reached","resets_in_seconds":5640} with NO
     // Retry-After, so a 94-minute plan reset was retried on the exponential
     // schedule and hammered the account for the whole window.
-    let effectiveRetryAfterMs = rawRetryAfterMs;
-    let effectiveHasRetryAfter = hasRetryAfter;
-    if (status === 429 && !hasRetryAfter && rateLimit?.body) {
+    //
+    // Both sources are reconciled, and the LONGER reset drives the gate. What was
+    // wrong (audited 2026-09-02): the body was consulted only when the header was
+    // absent, so `Retry-After: 60` alongside `resets_in_seconds: 580320` (6.7 days)
+    // never hard-stopped — the wrapper burned the whole retry budget, threw a
+    // plain "rate-limited (HTTP 429)", and the FallbackChain filed the account as
+    // a 5-10 minute overload, re-dialing it for the rest of the week. The gate
+    // asks "can this recover inside our budget"; a body-stated multi-day reset
+    // answers no regardless of the header. The short header still sizes the
+    // immediate backoff (`delay` above) when neither source is over the budget.
+    let effectiveRetryAfterMs = hasRetryAfter ? rawRetryAfterMs : 0;
+    if (status === 429 && rateLimit?.body) {
       const bodyReset = /"resets_in_seconds"\s*:\s*(\d+)/.exec(rateLimit.body);
       if (bodyReset) {
-        effectiveRetryAfterMs = Number(bodyReset[1]) * 1000;
-        effectiveHasRetryAfter = Number.isFinite(effectiveRetryAfterMs) && effectiveRetryAfterMs > 0;
+        const bodyResetMs = Number(bodyReset[1]) * 1000;
+        if (Number.isFinite(bodyResetMs) && bodyResetMs > effectiveRetryAfterMs) {
+          effectiveRetryAfterMs = bodyResetMs;
+        }
       }
     }
+    const effectiveHasRetryAfter = effectiveRetryAfterMs > 0;
 
     if (status === 429 && effectiveHasRetryAfter && effectiveRetryAfterMs > maxRetries * maxDelayMs) {
       const reset = formatResetDuration(effectiveRetryAfterMs);

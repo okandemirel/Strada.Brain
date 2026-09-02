@@ -115,3 +115,79 @@ describe("a process the kill cannot reach", () => {
     expect(elapsed, "returned before the backstop could have fired").toBeGreaterThan(5_000);
   }, 40_000);
 });
+
+// Audited 2026-09-02: output past the capture cap kept only the TAIL and said
+// nothing. `dotnet test -v normal` on a mid-size project runs to ~60KB; the
+// failing-test list and the first compile errors are printed BEFORE the summary,
+// so they were exactly what vanished, and shell_exec printed the remainder under
+// `--- stdout ---` as if it were the whole. A verdict formed on evidence that was
+// never seen must at least say so.
+describe("output past the capture cap", () => {
+  // 1000 lines of `LINE nnnn ` + 56 x's + newline = 67 chars each, ~67KB: four
+  // times the default cap, so the head is guaranteed to fall off.
+  const script =
+    'for i in $(seq -f "%04g" 1 1000); do echo "LINE $i $(printf "%56s" | tr " " x)"; done';
+
+  it("marks the dropped head and counts it, instead of presenting the tail as the whole", async () => {
+    const full = await runProcess({
+      command: "/bin/bash",
+      args: ["-c", script],
+      cwd: process.cwd(),
+      timeoutMs: 10_000,
+      maxOutput: 1_000_000,
+    });
+    expect(full.stdoutDropped).toBe(0);
+    expect(full.stdout).toContain("LINE 0001");
+
+    const capped = await runProcess({
+      command: "/bin/bash",
+      args: ["-c", script],
+      cwd: process.cwd(),
+      timeoutMs: 10_000,
+    });
+
+    // The tail survived, the head did not — that part is by design.
+    expect(capped.stdout).toContain("LINE 1000");
+    expect(capped.stdout).not.toContain("LINE 0001");
+
+    // What is NOT by design: pretending nothing happened.
+    expect(capped.stdoutDropped, "the runner did not count what it threw away").toBeGreaterThan(0);
+    const marker = /^\[… (\d+) earlier characters of stdout dropped by the (\d+)-character capture limit; what follows is the TAIL of the output …\]\n/;
+    const m = marker.exec(capped.stdout);
+    expect(m, `stdout does not open with a truncation marker: ${JSON.stringify(capped.stdout.slice(0, 80))}`).not.toBeNull();
+    expect(Number(m![1])).toBe(capped.stdoutDropped);
+    expect(Number(m![2])).toBe(16_384);
+
+    // The count is a measurement, not a guess: kept + dropped == what the
+    // command actually produced.
+    const kept = capped.stdout.length - m![0].length;
+    expect(kept + capped.stdoutDropped).toBe(full.stdout.length);
+    expect(capped.stderrDropped).toBe(0);
+  });
+
+  it("applies the same to stderr", async () => {
+    const result = await runProcess({
+      command: "/bin/bash",
+      args: ["-c", `(${script}) 1>&2`],
+      cwd: process.cwd(),
+      timeoutMs: 10_000,
+    });
+    expect(result.stderrDropped).toBeGreaterThan(0);
+    expect(result.stderr).toMatch(/^\[… \d+ earlier characters of stderr dropped by the 16384-character capture limit/);
+    expect(result.stderr).toContain("LINE 1000");
+    expect(result.stdout).toBe("");
+    expect(result.stdoutDropped).toBe(0);
+  });
+
+  it("leaves output within the cap untouched and unmarked", async () => {
+    const result = await runProcess({
+      command: "/bin/bash",
+      args: ["-c", "echo hello"],
+      cwd: process.cwd(),
+      timeoutMs: 5_000,
+    });
+    expect(result.stdout).toBe("hello\n");
+    expect(result.stdoutDropped).toBe(0);
+    expect(result.stderrDropped).toBe(0);
+  });
+});

@@ -639,3 +639,90 @@ describe("fetchWithRetry — hard quota stop (429 with Retry-After >> retry budg
     expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
 });
+
+// Audited 2026-09-02: the body-carried reset was consulted ONLY when Retry-After
+// was absent. A 429 with `Retry-After: 60` and a body saying the plan resets in
+// 6.7 days therefore never hard-stopped: the wrapper slept 60s three times, threw
+// a plain "rate-limited (HTTP 429)", and the FallbackChain filed it as a 5-10
+// minute overload instead of the multi-day quota stop the provider had stated.
+// The two sources are reconciled: the LONGER reset drives the futility gate.
+describe("fetchWithRetry — a short Retry-After does not hide a long body-carried reset", () => {
+  let fetchSpy: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    vi.useFakeTimers();
+    __resetProviderConcurrency();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+    __resetProviderConcurrency();
+  });
+
+  const opts = { maxRetries: 3, baseDelayMs: 500, maxDelayMs: 60_000, callerName: "OpenAI" };
+
+  it("hard-stops on the body reset when the header alone would fit the retry budget", async () => {
+    // Retry-After 60s is inside the 180000ms budget; resets_in_seconds 580320
+    // (~6.7 days) is not. The body is the authoritative one.
+    fetchSpy.mockResolvedValue(
+      new Response(
+        JSON.stringify({ type: "usage_limit_reached", resets_in_seconds: 580_320 }),
+        { status: 429, headers: { "retry-after": "60", "content-type": "application/json" } },
+      ),
+    );
+
+    const promise = fetchWithRetry("https://example.com/api", { method: "GET" }, opts);
+    let captured: unknown;
+    const assertion = promise.catch((e: unknown) => { captured = e; });
+    await vi.runAllTimersAsync();
+    await assertion;
+
+    expect(captured, "retried through the budget instead of hard-stopping").toBeInstanceOf(QuotaExhaustedError);
+    const err = captured as QuotaExhaustedError;
+    // The cooldown is sized from the reset the provider actually stated, not the header.
+    expect(err.retryAfterMs).toBe(580_320_000);
+    expect(err.message).toMatch(/usage quota exhausted \(resets in ~7d\)/i);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the header when it is the longer of the two", async () => {
+    fetchSpy.mockResolvedValue(
+      new Response(
+        JSON.stringify({ type: "usage_limit_reached", resets_in_seconds: 5_640 }),
+        { status: 429, headers: { "retry-after": "279094" } },
+      ),
+    );
+
+    const promise = fetchWithRetry("https://example.com/api", { method: "GET" }, opts);
+    let captured: unknown;
+    const assertion = promise.catch((e: unknown) => { captured = e; });
+    await vi.runAllTimersAsync();
+    await assertion;
+
+    expect(captured).toBeInstanceOf(QuotaExhaustedError);
+    expect((captured as QuotaExhaustedError).retryAfterMs).toBe(279_094_000);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("still retries when BOTH header and body resets fit inside the budget", async () => {
+    // Neither source says the wait is futile → the transient path is unchanged,
+    // and the short header still sizes the immediate backoff.
+    fetchSpy
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ type: "usage_limit_reached", resets_in_seconds: 30 }),
+          { status: 429, headers: { "retry-after": "1" } },
+        ),
+      )
+      .mockResolvedValueOnce(new Response("ok", { status: 200 }));
+
+    const promise = fetchWithRetry("https://example.com/api", { method: "GET" }, opts);
+    await vi.advanceTimersByTimeAsync(1_100);
+    const response = await promise;
+    expect(response.ok).toBe(true);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+});
