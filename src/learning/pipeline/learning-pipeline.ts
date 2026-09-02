@@ -574,8 +574,15 @@ export class LearningPipeline {
     if (!this.isMeaningfulTrigger(params.triggerPattern)) return null;
     // Check for similar existing instincts (use similarity threshold, not confidence)
     const similar = await this.patternMatcher.findSimilarInstincts(params.triggerPattern);
-    // Check raw similarity (relevance), not confidence-weighted score
-    if (similar.some(m => m.relevance > CONFIDENCE_THRESHOLDS.SIMILAR)) return null;
+    // Check raw similarity (relevance), not confidence-weighted score.
+    // audited 2026-09-02: dead instincts (deprecated/evolved) are excluded from
+    // retrieval everywhere else but counted here, so a retired wrong fix
+    // permanently blocked learning the right fix for the same trigger.
+    if (similar.some(m =>
+      m.relevance > CONFIDENCE_THRESHOLDS.SIMILAR &&
+      m.instinct?.status !== "deprecated" &&
+      m.instinct?.status !== "evolved",
+    )) return null;
 
     const initialConfidence = params.confidence ?? this.calculateInitialConfidence(params);
     if (initialConfidence < this.config.minConfidenceForCreation) return null;

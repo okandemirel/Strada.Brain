@@ -456,6 +456,40 @@ describe("LearningPipeline", () => {
         expect(second).toBeNull();
       }
     });
+
+    // audited 2026-09-02: the duplicate check consulted every status, so a
+    // deprecated instinct (the wrong fix, already retired) fenced its trigger
+    // off forever and the correct fix for the same error could never be learned.
+    it("a deprecated instinct does not block relearning the same trigger (audited 2026-09-02)", async () => {
+      const trigger = "CS1061: 'BoardView' does not contain a definition for 'Refresh' and no accessible extension method could be found";
+      const wrong = await pipeline.considerInstinctCreation({
+        type: "error_fix",
+        triggerPattern: trigger,
+        action: "Rename the call to Redraw()",
+        toolName: "unity_verify_change",
+      });
+      expect(wrong).not.toBeNull();
+      storage.updateInstinct({ ...wrong!, status: "deprecated", confidence: 0.2 });
+
+      const relearned = await pipeline.considerInstinctCreation({
+        type: "error_fix",
+        triggerPattern: trigger,
+        action: "Add a public Refresh() method to BoardView",
+        toolName: "unity_verify_change",
+      });
+      expect(relearned).not.toBeNull();
+      expect(relearned!.action).toContain("Add a public Refresh()");
+      expect(storage.getInstincts({ status: "proposed" }).map((i) => i.id)).toContain(relearned!.id);
+
+      // A live instinct on the same trigger still deduplicates.
+      const duplicate = await pipeline.considerInstinctCreation({
+        type: "error_fix",
+        triggerPattern: trigger,
+        action: "Yet another fix",
+        toolName: "unity_verify_change",
+      });
+      expect(duplicate).toBeNull();
+    });
   });
 
   describe("runEvolution", () => {
