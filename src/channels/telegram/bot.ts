@@ -617,22 +617,39 @@ export class TelegramChannel implements IChannelAdapter {
     const message = ctx.message;
     if (!message) return;
 
+    // Why the file was NOT accepted, when one was present. Every failure path
+    // used to skip the push silently and forward the message as if no file had
+    // been sent — a .docx GDD (not in ALLOWED_DOCUMENT_TYPES), a >10 MB PDF or
+    // a failed download reached the brain as the bare caption, with no reply
+    // and no log, and a caption like "build the game in this GDD" then matched
+    // gdd-from-docs against whatever sat in docs/ (audited 2026-09-02).
+    let rejection: { name: string; reason: string } | null = null;
+    let mediaName: string = mediaType;
+    const DOWNLOAD_FAILED = "download failed (network error, or the file is over Telegram's bot download limit)";
+
     try {
       if (mediaType === "image" && message.photo && message.photo.length > 0) {
         const photo = message.photo[message.photo.length - 1]!;
         const file = await ctx.api.getFile(photo.file_id);
+        mediaName = file.file_path?.split("/").pop() ?? "photo.jpg";
         const fileUrl = `https://api.telegram.org/file/bot${this.bot.token}/${file.file_path}`;
         const downloaded = await downloadMedia(fileUrl);
-        if (downloaded) {
+        if (!downloaded) {
+          rejection = { name: mediaName, reason: DOWNLOAD_FAILED };
+        } else {
           const validation = validateMediaAttachment({
             mimeType: downloaded.mimeType,
             size: downloaded.size,
             type: "image",
           });
-          if (validation.valid && validateMagicBytes(downloaded.data, downloaded.mimeType)) {
+          if (!validation.valid) {
+            rejection = { name: mediaName, reason: validation.reason ?? "invalid image" };
+          } else if (!validateMagicBytes(downloaded.data, downloaded.mimeType)) {
+            rejection = { name: mediaName, reason: "file content does not match its declared type" };
+          } else {
             attachments.push({
               type: "image",
-              name: file.file_path?.split("/").pop() ?? "photo.jpg",
+              name: mediaName,
               mimeType: downloaded.mimeType || "image/jpeg",
               data: downloaded.data,
               size: downloaded.size,
@@ -641,19 +658,24 @@ export class TelegramChannel implements IChannelAdapter {
         }
       } else if (mediaType === "document" && message.document) {
         const doc = message.document;
+        mediaName = doc.file_name ?? "document";
         const file = await ctx.api.getFile(doc.file_id);
         const fileUrl = `https://api.telegram.org/file/bot${this.bot.token}/${file.file_path}`;
         const downloaded = await downloadMedia(fileUrl);
-        if (downloaded) {
+        if (!downloaded) {
+          rejection = { name: mediaName, reason: DOWNLOAD_FAILED };
+        } else {
           const validation = validateMediaAttachment({
             mimeType: doc.mime_type ?? downloaded.mimeType,
             size: downloaded.size,
             type: "document",
           });
-          if (validation.valid) {
+          if (!validation.valid) {
+            rejection = { name: mediaName, reason: validation.reason ?? "invalid document" };
+          } else {
             attachments.push({
               type: "document",
-              name: doc.file_name ?? "document",
+              name: mediaName,
               mimeType: doc.mime_type ?? downloaded.mimeType,
               data: downloaded.data,
               size: downloaded.size,
@@ -663,18 +685,23 @@ export class TelegramChannel implements IChannelAdapter {
       } else if (mediaType === "video" && message.video) {
         const video = message.video;
         const file = await ctx.api.getFile(video.file_id);
+        mediaName = file.file_path?.split("/").pop() ?? "video.mp4";
         const fileUrl = `https://api.telegram.org/file/bot${this.bot.token}/${file.file_path}`;
         const downloaded = await downloadMedia(fileUrl);
-        if (downloaded) {
+        if (!downloaded) {
+          rejection = { name: mediaName, reason: DOWNLOAD_FAILED };
+        } else {
           const validation = validateMediaAttachment({
             mimeType: video.mime_type ?? downloaded.mimeType,
             size: downloaded.size,
             type: "video",
           });
-          if (validation.valid) {
+          if (!validation.valid) {
+            rejection = { name: mediaName, reason: validation.reason ?? "invalid video" };
+          } else {
             attachments.push({
               type: "video",
-              name: file.file_path?.split("/").pop() ?? "video.mp4",
+              name: mediaName,
               mimeType: video.mime_type ?? downloaded.mimeType,
               data: downloaded.data,
               size: downloaded.size,
@@ -686,18 +713,23 @@ export class TelegramChannel implements IChannelAdapter {
         const audio = mediaEnvelope.voice ?? mediaEnvelope.audio;
         if (audio) {
           const file = await ctx.api.getFile(audio.file_id);
+          mediaName = file.file_path?.split("/").pop() ?? "audio.ogg";
           const fileUrl = `https://api.telegram.org/file/bot${this.bot.token}/${file.file_path}`;
           const downloaded = await downloadMedia(fileUrl);
-          if (downloaded) {
+          if (!downloaded) {
+            rejection = { name: mediaName, reason: DOWNLOAD_FAILED };
+          } else {
             const validation = validateMediaAttachment({
               mimeType: downloaded.mimeType,
               size: downloaded.size,
               type: "audio",
             });
-            if (validation.valid) {
+            if (!validation.valid) {
+              rejection = { name: mediaName, reason: validation.reason ?? "invalid audio" };
+            } else {
               attachments.push({
                 type: "audio",
-                name: file.file_path?.split("/").pop() ?? "audio.ogg",
+                name: mediaName,
                 mimeType: downloaded.mimeType,
                 data: downloaded.data,
                 size: downloaded.size,
@@ -707,13 +739,32 @@ export class TelegramChannel implements IChannelAdapter {
         }
       }
     } catch (error) {
-      getLogger().warn("Failed to process media", {
-        type: mediaType,
-        error: error instanceof Error ? error.message : String(error),
-      });
+      const detail = error instanceof Error ? error.message : String(error);
+      getLogger().warn("Failed to process media", { type: mediaType, error: detail });
+      rejection = { name: mediaName, reason: `could not be fetched from Telegram (${detail})` };
     }
 
     const caption = (message as typeof message & TelegramMediaEnvelope).caption ?? "";
+
+    if (attachments.length === 0 && rejection) {
+      // The file the user sent never made it. Say so and stop: forwarding the
+      // bare caption would have the brain act on a request whose subject is
+      // missing, and a blank caption would route an empty message.
+      getLogger().warn("Telegram: attachment rejected — message not forwarded", {
+        chatId: String(ctx.chat?.id ?? ""),
+        mediaType,
+        name: rejection.name,
+        reason: rejection.reason,
+        captionLength: caption.length,
+      });
+      await ctx.reply(
+        `Your ${mediaType} "${rejection.name}" was not accepted: ${rejection.reason}. ` +
+          "It was not sent to the brain" +
+          (caption ? " and neither was your caption" : "") +
+          " — please resend it in a supported format (PDF, TXT or CSV for documents) or paste the text.",
+      );
+      return;
+    }
 
     const msg: IncomingMessage = {
       channelType: "telegram",

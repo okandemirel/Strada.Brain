@@ -12,6 +12,7 @@ import {
   type ServerResponse,
 } from "node:http";
 import { createReadStream } from "node:fs";
+import { stat } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { join, extname, resolve, sep } from "node:path";
 import { randomBytes, timingSafeEqual, randomUUID } from "node:crypto";
@@ -200,7 +201,13 @@ export class WebChannel
   private readonly staticDir = resolveStaticDir();
   private readonly identityStore: WebIdentityStore;
   /** Optional emitter for workspace bus events from frontend monitor commands. */
-  private workspaceBusEmitter: ((event: string, payload: unknown) => void) | null = null;
+  /**
+   * Emits a frontend command onto the workspace bus. Returns true only when at
+   * least one consumer was subscribed to that event at emit time, so acks can
+   * report enforcement honestly; a void return means "unknown" (treated as no
+   * consumer). (audited 2026-09-02)
+   */
+  private workspaceBusEmitter: ((event: string, payload: unknown) => boolean | void) | null = null;
   /**
    * Cached monitor state for replaying to reconnecting clients, keyed PER DAG ROOT (episode).
    * The frontend monitor store is multi-root (rootsById, MAX_ROOTS); a single flat snapshot
@@ -248,6 +255,19 @@ export class WebChannel
     "supervisor:node_start",
     "supervisor:node_complete",
     "supervisor:complete",
+    // Terminal / negative supervisor frames. These were missing, so a reconnect
+    // (heartbeat terminate, laptop sleep, refresh) replayed node_start without
+    // the node_failed that superseded it: SupervisorPanel showed the failed
+    // node as "running", its alert feed empty, and an aborted run with no
+    // summary. A replayed board must never be greener than the live one
+    // (audited 2026-09-02). Toast-only frames (budget:*, workspace:notification)
+    // stay uncached on purpose — replaying them would re-fire stale toasts.
+    "supervisor:node_failed",
+    "supervisor:escalation",
+    "supervisor:wave_done",
+    "supervisor:verify_start",
+    "supervisor:verify_done",
+    "supervisor:aborted",
   ]);
 
   constructor(
@@ -268,8 +288,11 @@ export class WebChannel
     this.feedbackReactionCallback = callback;
   }
 
-  /** Register an emitter for workspace bus events from frontend monitor commands. */
-  setWorkspaceBusEmitter(emitter: ((event: string, payload: unknown) => void) | null): void {
+  /**
+   * Register an emitter for workspace bus events from frontend monitor commands.
+   * The emitter should return whether a consumer was subscribed to the event.
+   */
+  setWorkspaceBusEmitter(emitter: ((event: string, payload: unknown) => boolean | void) | null): void {
     this.workspaceBusEmitter = emitter;
   }
 
@@ -876,26 +899,44 @@ export class WebChannel
         res.end("Forbidden");
         return;
       }
-      try {
-        const stream = createReadStream(candidate);
+      // createReadStream does NOT throw synchronously on ENOENT — it emits
+      // `error` later — so the previous try/catch around it never caught a
+      // missing file: the 200 was already committed, pipeline tore the socket,
+      // and every deep link / refresh on a BrowserRouter route (/setup,
+      // /admin/*) died with ERR_EMPTY_RESPONSE while the SPA fallback below
+      // was unreachable. Probe with stat() BEFORE committing a status so a
+      // missing (or non-file) path falls through as intended (audited 2026-09-02).
+      if (await this.isServableFile(candidate)) {
         const ext = extname(candidate);
         const contentType = MIME_TYPES[ext] ?? "application/octet-stream";
         res.writeHead(200, { ...WebChannel.SECURITY_HEADERS, "Content-Type": contentType });
-        await pipeline(stream, res).catch(() => undefined);
+        await pipeline(createReadStream(candidate), res).catch(() => undefined);
         return;
-      } catch {
-        // File not found — fall through to SPA fallback
       }
+      // Not a file on disk — fall through to SPA fallback
     }
 
     // SPA fallback: serve index.html for all non-file routes (client-side routing)
-    try {
-      const stream = createReadStream(join(this.staticDir, "index.html"));
+    const indexPath = join(this.staticDir, "index.html");
+    if (await this.isServableFile(indexPath)) {
       res.writeHead(200, { ...WebChannel.SECURITY_HEADERS, "Content-Type": "text/html; charset=utf-8" });
-      await pipeline(stream, res).catch(() => undefined);
+      await pipeline(createReadStream(indexPath), res).catch(() => undefined);
+      return;
+    }
+    getLoggerSafe().warn("Web channel: portal index.html missing — cannot serve SPA route", {
+      url: rawSegment,
+      staticDir: this.staticDir,
+    });
+    res.writeHead(404, WebChannel.SECURITY_HEADERS);
+    res.end("Not Found");
+  }
+
+  /** True when `path` exists and is a regular file (the only thing the static branch may stream). */
+  private async isServableFile(path: string): Promise<boolean> {
+    try {
+      return (await stat(path)).isFile();
     } catch {
-      res.writeHead(404, WebChannel.SECURITY_HEADERS);
-      res.end("Not Found");
+      return false;
     }
   }
 
@@ -1710,13 +1751,26 @@ export class WebChannel
         // resolve the pending gate by taskId and apply it. The wiring of that
         // consumer lives outside this channel; when no consumer is attached the
         // decision is NOT enforced, so we must not pretend it was.
-        const gateForwarded = Boolean(this.workspaceBusEmitter);
+        //
+        // Was `Boolean(this.workspaceBusEmitter)` — that measured "an emitter is
+        // installed" (bootstrap always installs one), not "a consumer received
+        // the verdict", so production acked every approval as enforced while
+        // nothing subscribed to verify:gate_decision. Only an emitter that
+        // reports a subscribed consumer counts as forwarded (audited 2026-09-02).
+        let gateForwarded = false;
         if (this.workspaceBusEmitter) {
-          this.workspaceBusEmitter("verify:gate_decision", {
+          gateForwarded = this.workspaceBusEmitter("verify:gate_decision", {
             type: "verify:gate_decision",
             taskId: safeTaskId,
             verdict,
             note,
+          }) === true;
+        }
+        if (!gateForwarded) {
+          getLoggerSafe().warn("verify:gate_decision has no consumer — verdict NOT enforced", {
+            taskId: safeTaskId,
+            verdict,
+            emitterInstalled: Boolean(this.workspaceBusEmitter),
           });
         }
         this.sendToClient(chatId, {

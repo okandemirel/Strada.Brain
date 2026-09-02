@@ -200,11 +200,11 @@ describe("CLIChannel", () => {
 
     await handlers.get("line")?.("a".repeat(MAX_INCOMING_TEXT_LENGTH + 50));
 
-    expect(handler).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: "a".repeat(MAX_INCOMING_TEXT_LENGTH),
-      })
-    );
+    const routed = handler.mock.calls[0]?.[0] as { text: string };
+    expect(routed.text.length).toBeLessThanOrEqual(MAX_INCOMING_TEXT_LENGTH);
+    // The cap must be self-disclosing: the routed text carries the marker (audited 2026-09-02).
+    expect(routed.text).toContain("[TRUNCATED: ");
+    expect(routed.text).toContain(`${MAX_INCOMING_TEXT_LENGTH}-char inbound limit`);
   });
 
   it("handles exit command", async () => {
@@ -278,6 +278,104 @@ describe("CLIChannel", () => {
     expect(handler.mock.calls[1]?.[0]).toEqual(
       expect.objectContaining({ text: "second" }),
     );
+  });
+
+  it("stdin EOF with nothing in flight shuts down immediately", async () => {
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    await channel.connect();
+    const rl = getMockRl()!;
+    const handlers = new Map<string, (input?: string) => void>();
+    rl.on.mockImplementation((event: string, handler: (input?: string) => void) => {
+      handlers.set(event, handler);
+      return rl as never;
+    });
+    await channel.disconnect();
+    await channel.connect();
+
+    handlers.get("close")?.();
+
+    expect(killSpy).toHaveBeenCalledWith(process.pid, "SIGINT");
+    expect(channel.isHealthy()).toBe(false);
+    killSpy.mockRestore();
+  });
+
+  it("stdin EOF defers shutdown until the in-flight message is answered (audited 2026-09-02)", async () => {
+    // `printf 'build it\n' | strada cli`: readline emits 'line' then 'close'
+    // while the handler is still running. The old close handler SIGINTed at
+    // once, killing the run mid-task with exit 0 and no answer.
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    let releaseFirst: (() => void) | undefined;
+    const handler = vi.fn().mockImplementationOnce(() => new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    }));
+    channel.onMessage(handler);
+    await channel.connect();
+    const rl = getMockRl()!;
+    const handlers = new Map<string, (input?: string) => void>();
+    rl.on.mockImplementation((event: string, handler: (input?: string) => void) => {
+      handlers.set(event, handler);
+      return rl as never;
+    });
+    await channel.disconnect();
+    channel.onMessage(handler);
+    await channel.connect();
+
+    handlers.get("line")?.("build it");
+    expect(handler).toHaveBeenCalledTimes(1);
+
+    handlers.get("close")?.();
+
+    // In flight: no SIGINT yet.
+    expect(killSpy).not.toHaveBeenCalled();
+
+    releaseFirst?.();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Drained: now the deferred shutdown fires.
+    expect(killSpy).toHaveBeenCalledWith(process.pid, "SIGINT");
+    expect(channel.isHealthy()).toBe(false);
+    killSpy.mockRestore();
+  });
+
+  it("stdin EOF drains every queued line before shutting down (audited 2026-09-02)", async () => {
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    let releaseFirst: (() => void) | undefined;
+    const handler = vi.fn()
+      .mockImplementationOnce(() => new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      }))
+      .mockResolvedValue(undefined);
+    channel.onMessage(handler);
+    await channel.connect();
+    const rl = getMockRl()!;
+    const handlers = new Map<string, (input?: string) => void>();
+    rl.on.mockImplementation((event: string, handler: (input?: string) => void) => {
+      handlers.set(event, handler);
+      return rl as never;
+    });
+    await channel.disconnect();
+    channel.onMessage(handler);
+    await channel.connect();
+
+    handlers.get("line")?.("add the inventory system");
+    handlers.get("line")?.("add the crafting system");
+    handlers.get("close")?.();
+    expect(killSpy).not.toHaveBeenCalled();
+
+    releaseFirst?.();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(handler).toHaveBeenCalledTimes(2);
+    expect(handler.mock.calls[1]?.[0]).toEqual(
+      expect.objectContaining({ text: "add the crafting system" }),
+    );
+    expect(killSpy).toHaveBeenCalledWith(process.pid, "SIGINT");
+    killSpy.mockRestore();
   });
 
   it("does not route queued input after disconnect", async () => {

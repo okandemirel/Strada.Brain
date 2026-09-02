@@ -340,8 +340,11 @@ export class PrometheusMetrics {
       if (delta !== 0) this.counterHighWater.set(key, current);
     };
 
+    // The collector's recordMessage() carries no outcome and fires at ingress,
+    // so this is a RECEIVED count — labelling it "success" claimed an outcome
+    // nothing measured (audited 2026-09-02).
     advance(snapshot.totalMessages, "messages", (d) =>
-      this.messagesTotal.inc({ status: "success" }, d));
+      this.messagesTotal.inc({ status: "received" }, d));
 
     advance(snapshot.totalTokens.input, "tokens:input", (d) => {
       this.tokensTotal.inc({ type: "input" }, d);
@@ -352,12 +355,19 @@ export class PrometheusMetrics {
       this.tokensTotal.inc({ type: "total" }, d);
     });
 
+    // toolCallCounts is calls-TOTAL (incremented on every call), toolErrorCounts
+    // the failures within it. The whole total used to be fed into the
+    // status="success" series and no status="error" series was ever emitted,
+    // so 30 failed calls out of 100 scraped as 100 successes. Split the delta
+    // by outcome: errors first, then success = calls − errors (audited 2026-09-02).
     for (const [tool, count] of Object.entries(snapshot.toolCallCounts)) {
-      advance(count, `tool:${tool}`, (d) =>
+      const errCount = snapshot.toolErrorCounts[tool] ?? 0;
+      advance(errCount, `toolerr:${tool}`, (d) => {
+        this.toolErrorsTotal.inc({ tool }, d);
+        this.toolCallsTotal.inc({ tool, status: "error" }, d);
+      });
+      advance(count - errCount, `toolok:${tool}`, (d) =>
         this.toolCallsTotal.inc({ tool, status: "success" }, d));
-    }
-    for (const [tool, count] of Object.entries(snapshot.toolErrorCounts)) {
-      advance(count, `toolerr:${tool}`, (d) => this.toolErrorsTotal.inc({ tool }, d));
     }
   }
 

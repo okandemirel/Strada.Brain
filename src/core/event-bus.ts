@@ -299,6 +299,16 @@ export class TypedEventBus<
     this.emitter.emit(event, payload);
   }
 
+  /**
+   * Number of listeners currently subscribed to `event` (0 after shutdown).
+   * Lets an emitter distinguish "delivered to a consumer" from "emitted into
+   * the void" — a control-plane ack must measure the former (audited 2026-09-02).
+   */
+  listenerCount<K extends keyof TMap & string>(event: K): number {
+    if (this.stopped) return 0;
+    return this.emitter.listenerCount(event);
+  }
+
   on<K extends keyof TMap & string>(
     event: K,
     listener: (payload: TMap[K]) => void | Promise<void>,
