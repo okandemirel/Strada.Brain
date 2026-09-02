@@ -286,6 +286,7 @@ export interface RuntimeStateStageDeps {
       scopeContext: ScopeContext;
       storage?: LearningStorage;
       metricsRecorder?: MetricsRecorder;
+      onOutcome?: (instinctId: string, success: boolean) => void;
     },
   ) => InstinctRetriever;
   createTrajectoryReplayRetriever?: (storage: LearningStorage) => TrajectoryReplayRetriever;

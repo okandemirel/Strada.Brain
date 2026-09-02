@@ -120,17 +120,25 @@ export function initializeRuntimeStateStage(
       currentSessionId: `boot-${identityManager?.getState().bootCount ?? 0}`,
     };
 
+    // audited 2026-09-02: task outcomes must reach the stored confidence, not
+    // only factor_consistency; route them through the pipeline's evidence path.
+    const learningPipeline = params.learningResult.pipeline;
+    const onOutcome = learningPipeline
+      ? (instinctId: string, success: boolean) => learningPipeline.recordInstinctOutcomeEvidence(instinctId, success)
+      : undefined;
     instinctRetriever = deps.createInstinctRetriever?.(
       params.learningResult.patternMatcher,
       {
         scopeContext,
         storage: params.learningResult.storage,
         metricsRecorder,
+        onOutcome,
       },
     ) ?? new InstinctRetriever(params.learningResult.patternMatcher, {
       scopeContext,
       storage: params.learningResult.storage,
       metricsRecorder,
+      onOutcome,
     });
   }
 

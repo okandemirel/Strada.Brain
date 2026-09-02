@@ -1506,6 +1506,164 @@ describe("learning pipeline v2 integration", () => {
     storage.close();
   });
 
+  // audited 2026-09-02: thumbs feedback only moved factor_user_validation, a
+  // column nothing reads. Confidence, status, rank and tier were unchanged by
+  // any number of thumbs-downs. Feedback must reach the stored confidence.
+  describe("feedback reaches the confidence the lifecycle reads (audited 2026-09-02)", () => {
+    function makeInstinct(overrides: Partial<Instinct> = {}): Instinct {
+      return {
+        id: `instinct_fbc_${Date.now()}_${Math.random().toString(36).slice(2)}` as any,
+        name: "Feedback Confidence Instinct",
+        type: "error_fix",
+        status: "active",
+        confidence: 0.8,
+        triggerPattern: "feedback confidence trigger",
+        action: "apply the fix",
+        contextConditions: [],
+        stats: { timesSuggested: 10, timesApplied: 8, timesFailed: 2, successRate: 0.8, averageExecutionMs: 0 },
+        createdAt: Date.now() as TimestampMs,
+        updatedAt: Date.now() as TimestampMs,
+        sourceTrajectoryIds: [],
+        tags: [],
+        bayesianAlpha: 5,
+        bayesianBeta: 2,
+        ...overrides,
+      };
+    }
+
+    function stackWithBus() {
+      const storage = new LearningStorage(":memory:");
+      storage.initialize();
+      const eventBus = new TypedEventBus();
+      const pipelineInst = new LearningPipeline(storage, {
+        enabled: true,
+        detectionIntervalMs: 1000,
+        evolutionIntervalMs: 5000,
+        minConfidenceForCreation: 0.5,
+        batchSize: 10,
+      }, undefined, undefined, eventBus);
+      return { storage, eventBus, pipeline: pipelineInst };
+    }
+
+    it("a thumbs_down over the bus lowers the stored confidence and its evidence counters", () => {
+      const { storage, eventBus, pipeline } = stackWithBus();
+      const instinct = makeInstinct();
+      storage.createInstinct(instinct);
+
+      eventBus.emit("feedback:reaction", {
+        type: "thumbs_down",
+        instinctIds: [instinct.id],
+        source: "button",
+        channel: "test",
+        timestamp: Date.now(),
+      });
+
+      const after = storage.getInstinct(instinct.id)!;
+      expect(after.confidence).toBeLessThan(0.8);
+      expect(after.bayesianBeta!).toBeGreaterThan(2);
+      expect(after.confidence).toBeCloseTo(after.bayesianAlpha! / (after.bayesianAlpha! + after.bayesianBeta!), 5);
+      // The factor column still moves, and is not clobbered by the confidence write.
+      expect(after.factorUserValidation).toBeCloseTo(0.3, 5);
+      // Application stats are not fabricated by a reaction.
+      expect(after.stats.timesApplied).toBe(8);
+      expect(after.stats.timesFailed).toBe(2);
+
+      pipeline.stop();
+      storage.close();
+    });
+
+    it("a thumbs_up raises the stored confidence", () => {
+      const { storage, eventBus, pipeline } = stackWithBus();
+      const instinct = makeInstinct({ confidence: 0.6, bayesianAlpha: 3, bayesianBeta: 2 });
+      storage.createInstinct(instinct);
+
+      eventBus.emit("feedback:reaction", {
+        type: "thumbs_up",
+        instinctIds: [instinct.id],
+        source: "button",
+        channel: "test",
+        timestamp: Date.now(),
+      });
+
+      const after = storage.getInstinct(instinct.id)!;
+      expect(after.confidence).toBeGreaterThan(0.6);
+      expect(after.bayesianAlpha!).toBeGreaterThan(3);
+
+      pipeline.stop();
+      storage.close();
+    });
+
+    it("repeated thumbs_down drives a bad instinct into cooling and out of retrieval rank", () => {
+      const { storage, eventBus, pipeline } = stackWithBus();
+      const bad = makeInstinct({ triggerPattern: "shared trigger for ranking", confidence: 0.8, bayesianAlpha: 5, bayesianBeta: 2 });
+      const good = makeInstinct({ triggerPattern: "shared trigger for ranking!", confidence: 0.75, bayesianAlpha: 3, bayesianBeta: 1 });
+      storage.createInstinct(bad);
+      storage.createInstinct(good);
+
+      for (let i = 0; i < 20; i++) {
+        eventBus.emit("feedback:reaction", {
+          type: "thumbs_down",
+          instinctIds: [bad.id],
+          source: "button",
+          channel: "test",
+          timestamp: Date.now(),
+        });
+      }
+
+      const after = storage.getInstinct(bad.id)!;
+      expect(after.confidence).toBeLessThan(0.3);
+      // Lifecycle ran: with 10 observations and confidence < deprecatedThreshold, cooling starts.
+      expect(after.coolingStartedAt).toBeDefined();
+      // Ranking reads the stored confidence, so the thumbs-downed instinct now ranks below the other one.
+      const ranked = storage.getInstincts().sort((a, b) => b.confidence - a.confidence);
+      expect(ranked[0].id).toBe(good.id);
+
+      pipeline.stop();
+      storage.close();
+    });
+
+    it("a permanent instinct is frozen against reactions", () => {
+      const { storage, eventBus, pipeline } = stackWithBus();
+      const frozen = makeInstinct({ status: "permanent", confidence: 0.95, bayesianAlpha: 19, bayesianBeta: 1 });
+      storage.createInstinct(frozen);
+
+      eventBus.emit("feedback:reaction", {
+        type: "thumbs_down",
+        instinctIds: [frozen.id],
+        source: "button",
+        channel: "test",
+        timestamp: Date.now(),
+      });
+
+      const after = storage.getInstinct(frozen.id)!;
+      expect(after.confidence).toBeCloseTo(0.95, 5);
+      expect(after.status).toBe("permanent");
+
+      pipeline.stop();
+      storage.close();
+    });
+
+    it("a task outcome routed from InstinctRetriever.recordOutcome moves the stored confidence", () => {
+      const { storage, pipeline } = stackWithBus();
+      const instinct = makeInstinct({ confidence: 0.8, bayesianAlpha: 5, bayesianBeta: 2 });
+      storage.createInstinct(instinct);
+
+      pipeline.recordInstinctOutcomeEvidence(instinct.id, false);
+      const afterFailure = storage.getInstinct(instinct.id)!;
+      expect(afterFailure.confidence).toBeLessThan(0.8);
+      expect(afterFailure.bayesianBeta!).toBeGreaterThan(2);
+      expect(afterFailure.stats.timesFailed).toBe(2); // informed, not applied
+
+      pipeline.recordInstinctOutcomeEvidence(instinct.id, true);
+      const afterSuccess = storage.getInstinct(instinct.id)!;
+      expect(afterSuccess.confidence).toBeGreaterThan(afterFailure.confidence);
+      expect(afterSuccess.bayesianAlpha!).toBeGreaterThan(5);
+
+      pipeline.stop();
+      storage.close();
+    });
+  });
+
   it("teaching -> instinct creation -> retrieval", async () => {
     const { storage, pipeline } = createFullV2Stack();
 

@@ -21,6 +21,13 @@ export interface InstinctRetrieverOptions {
   readonly storage?: LearningStorage;
   /** Optional metrics recorder for retrieval performance tracking */
   readonly metricsRecorder?: MetricsRecorder;
+  /**
+   * Receives every recordOutcome() so the outcome reaches the stored
+   * confidence (LearningPipeline.recordInstinctOutcomeEvidence). Without it
+   * recordOutcome only moves factor_consistency, which nothing reads.
+   * (audited 2026-09-02)
+   */
+  readonly onOutcome?: (instinctId: string, success: boolean) => void;
 }
 
 /** Result from getInsightsForTask containing both formatted strings and raw IDs */
@@ -35,6 +42,7 @@ export class InstinctRetriever {
   private readonly scopeContext?: ScopeContext;
   private readonly storage?: LearningStorage;
   private readonly metricsRecorder?: MetricsRecorder;
+  private readonly onOutcome?: (instinctId: string, success: boolean) => void;
 
   constructor(
     private readonly matcher: PatternMatcher,
@@ -43,6 +51,7 @@ export class InstinctRetriever {
     this.scopeContext = options?.scopeContext;
     this.storage = options?.storage;
     this.metricsRecorder = options?.metricsRecorder;
+    this.onOutcome = options?.onOutcome;
   }
 
   /**
@@ -108,7 +117,10 @@ export class InstinctRetriever {
   /**
    * Record whether an instinct-informed decision succeeded or failed.
    * Updates the instinct's factorConsistency using an asymmetric delta:
-   *   success → +0.05, failure → -0.10 (P2 action→outcome feedback loop).
+   *   success → +0.05, failure → -0.10 (P2 action→outcome feedback loop),
+   * then hands the outcome to onOutcome so it reaches the stored confidence.
+   * audited 2026-09-02: before the hook the factor column was the only thing
+   * that moved, and no ranking or lifecycle decision reads it.
    */
   async recordOutcome(instinctId: string, success: boolean): Promise<void> {
     if (!this.storage) return;
@@ -117,6 +129,8 @@ export class InstinctRetriever {
 
     const delta = success ? 0.05 : -0.10;
     this.storage.updateInstinctFactor(instinctId, "factor_consistency", delta);
+    // After the factor write, so the pipeline's re-read carries the moved column.
+    this.onOutcome?.(instinctId, success);
   }
 
   async getMatchedInstincts(taskDescription: string, maxInstincts: number = 5): Promise<Instinct[]> {

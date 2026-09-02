@@ -7,7 +7,7 @@
 import { randomUUID } from "node:crypto";
 import { sanitizePromptInjection } from "../../agents/orchestrator-text-utils.js";
 import { LearningStorage } from "../storage/learning-storage.js";
-import { ConfidenceScorer, getVerdictScore } from "../scoring/confidence-scorer.js";
+import { ConfidenceScorer, EVIDENCE_WEIGHTS, getVerdictScore } from "../scoring/confidence-scorer.js";
 import { PatternMatcher } from "../matching/pattern-matcher.js";
 import { RuntimeArtifactManager } from "../runtime-artifact-manager.js";
 import type { ToolResultEvent, FeedbackReactionEvent, IEventBus, LearningEventMap } from "../../core/event-bus.js";
@@ -133,7 +133,11 @@ export class LearningPipeline {
     this.patternMatcher = new PatternMatcher(storage);
     this.runtimeArtifacts = new RuntimeArtifactManager(storage);
     this.eventBus = eventBus ?? null;
-    this.feedbackHandler = new FeedbackHandler(storage);
+    // audited 2026-09-02: reactions must reach the stored confidence the
+    // lifecycle, ranking and intervention tier read — not only factor_* columns.
+    this.feedbackHandler = new FeedbackHandler(storage, {
+      onReaction: (instinct, positive) => this.applyReactionEvidence(instinct, positive),
+    });
 
     if (embeddingProvider) {
       this.embeddingQueue = new EmbeddingQueue(embeddingProvider, storage);
@@ -636,6 +640,36 @@ export class LearningPipeline {
     // LIVING VAULT (C): mirror high-confidence instincts as learned-heuristic notes.
     this.noteHighConfidenceInstinct(instinct);
     return instinct;
+  }
+
+  /**
+   * Push a user reaction (thumbs up/down) into the stored posterior and run
+   * the lifecycle state machine on the result. Stats are untouched: a
+   * reaction is not an application.
+   */
+  private applyReactionEvidence(instinct: Instinct, positive: boolean): void {
+    if (instinct.status === "permanent") return;
+    const updated = this.confidenceScorer.applyEvidence(
+      instinct,
+      positive ? EVIDENCE_WEIGHTS.reactionUp : EVIDENCE_WEIGHTS.reactionDown,
+    );
+    this.updateInstinctStatus(updated);
+  }
+
+  /**
+   * Push the outcome of a task an instinct merely informed (retrieved, not
+   * necessarily applied) into the stored posterior. Wired from
+   * InstinctRetriever.recordOutcome so the "P2 action→outcome feedback loop"
+   * changes the number retrieval ranks on. (audited 2026-09-02)
+   */
+  recordInstinctOutcomeEvidence(instinctId: string, success: boolean): void {
+    const instinct = this.storage.getInstinct(instinctId);
+    if (!instinct || instinct.status === "permanent") return;
+    const updated = this.confidenceScorer.applyEvidence(
+      instinct,
+      success ? EVIDENCE_WEIGHTS.outcomeSuccess : EVIDENCE_WEIGHTS.outcomeFailure,
+    );
+    this.updateInstinctStatus(updated);
   }
 
   updateInstinctStatus(instinct: Instinct): void {

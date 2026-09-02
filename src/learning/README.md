@@ -54,7 +54,7 @@ The manager also records clean / retry / failure / blocker telemetry so promotio
 
 ### ConfidenceScorer (`scoring/confidence-scorer.ts`)
 
-Hybrid weighted confidence scoring with 5 factors: successRate (0.35), pattern (0.25), recency (0.20), context (0.15), verification (0.05). Also provides:
+The stored confidence is the Beta posterior mean alpha / (alpha + beta). Evidence arrives through `updateConfidence()` (observed applications, verdict-weighted) and `applyEvidence()` (thumbs up/down reactions and outcomes of tasks the instinct informed, at the fractional weights in `EVIDENCE_WEIGHTS`). The 5-factor `calculate()` model is diagnostic only — no lifecycle, ranking or intervention decision reads it (audited 2026-09-02). Also provides:
 - **Elo-style rating** (`calculateEloRating()`) for instinct comparison
 - **Wilson score intervals** (`wilsonScoreInterval()`) for statistical validity
 - Alpha/beta evidence counters maintained for confidence intervals (not for primary scoring)

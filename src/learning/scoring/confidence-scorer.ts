@@ -1,11 +1,13 @@
 /**
  * Confidence Scorer
  *
- * Hybrid weighted confidence calculation for instincts.
- * The primary scoring model uses a weighted sum across 5 factors:
- *   successRate (0.40), pattern (0.15), recency (0.20), context (0.15), verification (0.10).
- * Alpha/beta parameters are maintained for evidence tracking and confidence intervals
- * but are NOT used for the primary confidence computation (no Beta posterior).
+ * The confidence every lifecycle, ranking and intervention decision reads is
+ * the STORED Beta posterior mean alpha / (alpha + beta), written by
+ * updateConfidence() (tool outcomes) and applyEvidence() (user reactions and
+ * task outcomes). The 5-factor `calculate()` model is a diagnostic: nothing in
+ * production calls it, so factor_* columns alone never move a decision.
+ * (audited 2026-09-02: the previous header described a weighted 5-factor
+ * model as primary, which no decision path ever consulted.)
  */
 
 import { CONFIDENCE_THRESHOLDS, type Instinct, type InstinctStatus, type InstinctStats, type InterventionTier } from "../types.js";
@@ -50,6 +52,23 @@ const DEFAULT_WEIGHTS: ConfidenceWeights = {
   contextMatch: 0.15,
   verificationScore: 0.1,
 };
+
+// ─── Non-application evidence weights ────────────────────────────────────────────
+//
+// A reaction or task outcome is weaker evidence than an observed application,
+// so it counts as a fraction of one observation. Negative signals weigh twice
+// the positive ones (same 1:2 asymmetry as THUMBS_UP/THUMBS_DOWN factor deltas
+// and the retriever's +0.05/-0.10 consistency deltas).
+export const EVIDENCE_WEIGHTS = {
+  /** Thumbs-up: half an observed success. */
+  reactionUp: { alphaDelta: 0.5, betaDelta: 0 },
+  /** Thumbs-down: one observed failure. */
+  reactionDown: { alphaDelta: 0, betaDelta: 1.0 },
+  /** Task the instinct informed succeeded: a quarter of an observed success. */
+  outcomeSuccess: { alphaDelta: 0.25, betaDelta: 0 },
+  /** Task the instinct informed failed: half an observed failure. */
+  outcomeFailure: { alphaDelta: 0, betaDelta: 0.5 },
+} as const;
 
 // ─── Confidence Scorer Class ────────────────────────────────────────────────────
 
@@ -101,9 +120,9 @@ export class ConfidenceScorer {
    * Update confidence after a success/failure observation.
    *
    * Updates alpha/beta evidence counters and recomputes the posterior mean
-   * (alpha / (alpha + beta)) for storage. The primary confidence score used
-   * for lifecycle decisions comes from the weighted 5-factor model (calculate()),
-   * not from this posterior. Verdict weights (0.9/0.6/0.2) are applied as
+   * (alpha / (alpha + beta)) for storage. That stored posterior IS the
+   * confidence lifecycle decisions read (calculate() has no production
+   * caller). Verdict weights (0.9/0.6/0.2) are applied as
    * fractional evidence updates. A small alpha boost (0–0.15) is added for
    * instincts with 3+ applications and ≥80% success rate to accelerate
    * convergence. Permanent instincts are frozen (returned unchanged).
@@ -179,6 +198,38 @@ export class ConfidenceScorer {
         successRate: newSuccessRate,
       },
       confidence: newConfidence,
+      bayesianAlpha: newAlpha,
+      bayesianBeta: newBeta,
+      updatedAt: Date.now() as import("../../types/index.js").TimestampMs,
+    };
+  }
+
+  /**
+   * Apply evidence that did NOT come from applying the instinct (a user
+   * reaction, or the outcome of a task the instinct merely informed) to the
+   * stored posterior. Stats (timesApplied/timesFailed) are left alone because
+   * no application happened; only alpha/beta and the confidence they produce
+   * move. Permanent instincts are frozen.
+   *
+   * audited 2026-09-02: thumbs up/down and task outcomes previously wrote only
+   * factor_* columns, which nothing reads, so fifty thumbs-downs left
+   * confidence, status, rank and tier untouched.
+   */
+  applyEvidence(instinct: Instinct, evidence: { alphaDelta: number; betaDelta: number }): Instinct {
+    if (instinct.status === "permanent") {
+      return instinct;
+    }
+    let currentAlpha = instinct.bayesianAlpha;
+    let currentBeta = instinct.bayesianBeta;
+    if (currentAlpha === undefined || currentBeta === undefined) {
+      currentAlpha = instinct.stats.timesApplied + this.priorAlpha;
+      currentBeta = instinct.stats.timesFailed + this.priorBeta;
+    }
+    const newAlpha = currentAlpha + Math.max(0, evidence.alphaDelta);
+    const newBeta = currentBeta + Math.max(0, evidence.betaDelta);
+    return {
+      ...instinct,
+      confidence: newAlpha / (newAlpha + newBeta),
       bayesianAlpha: newAlpha,
       bayesianBeta: newBeta,
       updatedAt: Date.now() as import("../../types/index.js").TimestampMs,
