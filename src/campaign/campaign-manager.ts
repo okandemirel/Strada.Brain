@@ -527,6 +527,22 @@ export class CampaignManager {
         return;
       }
       case "planning":
+        // The ladder is persisted BEFORE the announcement round-trip that
+        // precedes the flip to `executing`, so a restart in that window finds
+        // planning + a complete ladder. Audited 2026-09-02: it replanned from
+        // scratch — a second billable planning pass that can also produce a
+        // different ladder from the one already announced. Resume the work
+        // item instead; this milestone has never been submitted, so its first
+        // attempt is charged exactly as a fresh launch charges it.
+        if (campaign.milestones.length > 0 && campaign.milestones[campaign.currentMilestone]) {
+          getLoggerSafe().info("Campaign resuming a persisted ladder instead of replanning", {
+            id: campaign.id,
+            milestones: campaign.milestones.length,
+            currentMilestone: campaign.currentMilestone,
+          });
+          this.submitCurrentMilestone(campaign);
+          return;
+        }
         void this.planAndLaunch(campaign.id);
         return;
       case "awaiting-approval":

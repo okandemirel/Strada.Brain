@@ -1451,6 +1451,62 @@ describe("CampaignManager", () => {
     }
   });
 
+  it("a restart while state='planning' resumes the persisted ladder instead of replanning", async () => {
+    // Audited 2026-09-02: planAndLaunch persists the ladder and only then
+    // awaits the messenger round-trip that announces it; state flips to
+    // executing after that. A restart inside that window found state=planning
+    // with a complete ladder already in storage and threw it away — a second
+    // billable planning pass, and a ladder that can differ from the one the
+    // designer was shown.
+    tasks = new FakeTaskManager();
+    storage.close();
+    storage = new CampaignStorage(join(dir, "campaigns-planning.db"));
+    const planMilestones = vi.fn().mockResolvedValue(LADDER);
+    manager = new CampaignManager({
+      storage,
+      planner: { planMilestones } as unknown as CampaignPlanner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async (chatId, text) => messages.push({ chatId, text }),
+      projectRoot,
+      retryAdoptionGraceMs: 10,
+      completedSettleDelayMs: 0,
+      milestoneTimeBoxMs: 60 * 60_000,
+    });
+    manager.attachEvents();
+
+    const now = Date.now();
+    storage.save({
+      id: "campaign_planning_1",
+      chatId: "cli-local",
+      channelType: "cli",
+      userId: "u1",
+      projectRoot,
+      state: "planning",
+      gddPath: "docs/Game_GDD.md",
+      draftAttempts: 0,
+      milestones: LADDER.milestones.map((m, i) => ({
+        id: `m${i + 1}`,
+        title: m.title,
+        prompt: m.prompt,
+        status: "pending" as const,
+        attempts: 0,
+      })),
+      currentMilestone: 0,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    await manager.resumeActive();
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+
+    expect(planMilestones).not.toHaveBeenCalled();
+    expect(tasks.submitted[0]!.prompt).toContain("foundations");
+    const fresh = storage.get("campaign_planning_1")!;
+    expect(fresh.state).toBe("executing");
+    expect(fresh.milestones).toHaveLength(3);
+    expect(fresh.milestones[0]!.attempts).toBe(1);
+  });
+
   it("resumeActive leaves a still-running task alone", async () => {
     manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
     await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
