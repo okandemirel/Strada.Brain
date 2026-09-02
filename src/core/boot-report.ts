@@ -51,8 +51,19 @@ export interface CapabilitySnapshotOptions {
   backupWired?: boolean;
   stradaMcpRuntime?: StradaMcpRuntimeStatusLike;
   primaryProviderSupportsStreaming?: boolean;
-  /** Whether a SupervisorBrain was actually constructed (undefined = not reported). */
-  supervisorWired?: boolean;
+  /**
+   * Whether a SupervisorBrain was actually constructed.
+   *
+   * - `true` / `false` — a boot measured it.
+   * - `"not-measured"` — the caller never attempts construction at all. The
+   *   doctor reads static config and does not boot, so leaving this undefined
+   *   made every healthy install with the supervisor enabled read as
+   *   "declared-only", i.e. listed under "still need truthfulness work"
+   *   (audited 2026-09-02).
+   * - `undefined` — a boot that did not report. Still declared-only: an
+   *   unreported boot is not the same as a caller that never boots.
+   */
+  supervisorWired?: boolean | "not-measured";
 }
 
 export interface CapabilityHealthSummary {
@@ -356,9 +367,13 @@ export function buildCapabilitySnapshot(options: CapabilitySnapshotOptions): Cap
         ? "Disabled in current config (STRADA_SUPERVISOR_ENABLED=false)."
         : options.supervisorWired === false
           ? "Enabled but NOT constructed this boot — see the startup notices. Complex tasks and campaign milestones run as a single direct worker: no goal DAG, no wave dispatch, no cross-provider node verification."
-          : options.supervisorWired === undefined
-            ? "Enabled in current config; construction was not reported to this snapshot."
-            : "Supervisor Brain constructed; goal decomposition and wave dispatch are online.",
+          : options.supervisorWired === "not-measured"
+            // Names the scope of the check instead of a verdict it never
+            // reached: config was read, construction was not attempted.
+            ? "Enabled in current config. This check reads static config and does not boot, so construction was NOT verified here — the boot report is what measures it."
+            : options.supervisorWired === undefined
+              ? "Enabled in current config; construction was not reported to this snapshot."
+              : "Supervisor Brain constructed; goal decomposition and wave dispatch are online.",
       false,
     ),
     createCapability(

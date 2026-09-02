@@ -386,6 +386,36 @@ describe("supervisor capability (audited 2026-09-02)", () => {
     expect(summarizeBootReport(report)).toMatch(/Supervisor/);
   });
 
+  it("separates 'a boot lost it' from 'nothing measured it' (audited 2026-09-02)", () => {
+    // `doctor` reads static config and never boots, so it never constructs a
+    // supervisor. Reporting that as declared-only put "Supervisor Brain" under
+    // "still need truthfulness work" on every healthy install with the
+    // supervisor enabled. A caller that did not measure says so, and the
+    // capability says what WAS checked instead of implying a failed boot.
+    const notMeasured = buildCapabilitySnapshot({
+      config: makeConfig({ supervisor: { enabled: true } as Config["supervisor"] }),
+      installRoot: process.cwd(),
+      channelType: "doctor",
+      supervisorWired: "not-measured",
+    });
+    const supervisor = notMeasured.find((c) => c.id === "supervisor");
+    expect(supervisor?.status).toBe("active");
+    expect(supervisor?.truth).toBe("wired");
+    // It must not claim the brain was built, and must name the gap.
+    expect(supervisor?.detail).not.toMatch(/constructed;/);
+    expect(supervisor?.detail).toMatch(/not verified|did not boot|not measured/i);
+    expect(summarizeCapabilityHealth(notMeasured).detail).not.toContain("Supervisor Brain");
+
+    // A boot that reports nothing is still declared-only — the unreported case
+    // is not the same as a caller that never boots.
+    const unreported = buildCapabilitySnapshot({
+      config: makeConfig({ supervisor: { enabled: true } as Config["supervisor"] }),
+      installRoot: process.cwd(),
+      channelType: "web",
+    });
+    expect(unreported.find((c) => c.id === "supervisor")?.truth).toBe("declared-only");
+  });
+
   it("reads active when the brain was constructed, inactive when disabled by config", () => {
     const wired = buildBootReport({
       config: makeConfig({ supervisor: { enabled: true } as Config["supervisor"] }),

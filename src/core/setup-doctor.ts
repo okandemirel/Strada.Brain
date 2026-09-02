@@ -319,6 +319,12 @@ export async function collectDoctorReport(options: DoctorOptions = {}): Promise<
       deploymentWired: false,
       alertingWired: false,
       backupWired: false,
+      // The doctor reads static config; it never boots, so it never constructs
+      // a SupervisorBrain. Omitting this left the capability declared-only,
+      // which listed "Supervisor Brain" under "still need truthfulness work" on
+      // every healthy install with the supervisor enabled — a warning about a
+      // check that was never run (audited 2026-09-02).
+      supervisorWired: "not-measured",
     });
     const capabilityHealth = summarizeCapabilityHealth(capabilities);
     checks.push({

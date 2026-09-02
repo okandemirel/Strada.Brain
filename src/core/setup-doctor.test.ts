@@ -250,6 +250,40 @@ describe("setup doctor", () => {
     expect(report.checks.find((check) => check.id === "capability-truth")?.status).toBe("pass");
   });
 
+  it("does not report an enabled Supervisor Brain as a truthfulness gap (audited 2026-09-02)", async () => {
+    // `doctor` reads static config; it never boots, so it never constructs a
+    // SupervisorBrain. Omitting the flag left the snapshot's "construction was
+    // not reported" branch — truth `declared-only` — which the capability
+    // health summary lists under "still need truthfulness work". Every user
+    // with SUPERVISOR_ENABLED=true got that warning on a healthy install.
+    const installRoot = makeBuiltInstallRoot();
+    const report = await collectDoctorReport({
+      installRoot,
+      configRoot: installRoot,
+      configResult: {
+        kind: "ok",
+        value: makeConfig({
+          supervisor: {
+            enabled: true,
+            complexityThreshold: 5,
+            maxParallelNodes: 4,
+            nodeTimeoutMs: 600000,
+            verificationMode: "cross-provider",
+            verificationBudgetPct: 20,
+            triageProvider: "gemini",
+            maxFailureBudget: 3,
+            diversityCap: 2,
+          } as Config["supervisor"],
+        }),
+      },
+    });
+
+    const capabilityTruth = report.checks.find((check) => check.id === "capability-truth");
+    expect(capabilityTruth?.detail ?? "").not.toContain("Supervisor Brain");
+    expect(capabilityTruth?.status).toBe("pass");
+    expect(report.status).toBe("pass");
+  });
+
   it("warns when deployment is enabled without runtime wiring", async () => {
     const installRoot = makeBuiltInstallRoot();
     const report = await collectDoctorReport({
