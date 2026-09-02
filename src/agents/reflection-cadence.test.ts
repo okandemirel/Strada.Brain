@@ -133,3 +133,41 @@ describe("the reflection interval", () => {
     expect(agentState.stepResults).toHaveLength(2);
   });
 });
+
+// audited 2026-09-02: stepResults is a 50-entry window (an unbounded-growth
+// fix), and the cadence counted consequential steps inside that window. Once
+// a long run saturated it, the count stopped growing — pinned at whatever the
+// read/write mix of the last 50 steps happened to be — so the modulo either
+// fired on every batch or never again. The reference run in this file's own
+// docblock had 62 tool executions, above the cliff.
+describe("on a run longer than the step window", () => {
+  it("keeps the cadence going after the window saturates", () => {
+    let s = state();
+    const reflectedAt: number[] = [];
+    for (let batch = 1; batch <= 120; batch++) {
+      const result = run(["file_write"], [ok()], { ...s, phase: AgentPhase.EXECUTING });
+      if (result.shouldReflect) reflectedAt.push(batch);
+      s = result.agentState;
+    }
+    expect(s.stepResults.length, "the window cap changed").toBe(50);
+    const afterSaturation = reflectedAt.filter((b) => b > 50);
+    // 51..120 holds 70 batches of one write each: every third one reflects.
+    expect(afterSaturation, "no cadence reflections after the window filled").toEqual(
+      [51, 54, 57, 60, 63, 66, 69, 72, 75, 78, 81, 84, 87, 90, 93, 96, 99, 102, 105, 108, 111, 114, 117, 120],
+    );
+  });
+
+  it("counts a mixed batch the same before and after saturation", () => {
+    // One write + one read per batch pins the window at 25 consequential
+    // steps (25 % 3 = 1), which silenced the cadence for the rest of the run.
+    let s = state();
+    const reflectedAt: number[] = [];
+    for (let batch = 1; batch <= 120; batch++) {
+      const result = run(["file_write", "file_read"], [ok(), ok()], { ...s, phase: AgentPhase.EXECUTING });
+      if (result.shouldReflect) reflectedAt.push(batch);
+      s = result.agentState;
+    }
+    // consequential count runs 51..120 across these batches: 24 multiples of 3.
+    expect(reflectedAt.filter((b) => b > 50)).toHaveLength(24);
+  });
+});

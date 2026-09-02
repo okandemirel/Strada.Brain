@@ -49,6 +49,64 @@ describe("FallbackChainProvider", () => {
     expect(p2.chat).toHaveBeenCalledTimes(1);
   });
 
+  // audited 2026-09-02: the chain skips a cooled member and answers from a sibling, but
+  // nothing downstream could learn who answered — phase outcomes, behavioral profiles and
+  // cost were all keyed on the router's assigned name. The response must name the server.
+  describe("servedBy names the member that actually answered", () => {
+    it("stamps the sibling that served when the assigned member is in cooldown", async () => {
+      const p1 = { ...createMockProvider({ text: "never" }), name: "openai" };
+      const p2 = { ...createMockProvider({ text: "served" }), name: "opencode2" };
+      const health = ProviderHealthRegistry.getInstance();
+      health.recordQuotaExhausted("openai", "429 quota exhausted"); // the real 8h cooldown
+      expect(health.isAvailable("openai")).toBe(false);
+
+      const chain = new FallbackChainProvider([p1, p2], {
+        attemptMeta: [
+          { provider: "openai", model: "gpt-5" },
+          { provider: "opencode2", model: "oc-large" },
+        ],
+      });
+      const result = await chain.chat("sys", [], []);
+
+      expect(result.text).toBe("served");
+      expect(p1.chat, "the cooled member was called").not.toHaveBeenCalled();
+      expect(result.servedBy).toEqual({ provider: "opencode2", model: "oc-large" });
+    });
+
+    it("falls back to the member's own name when no attempt metadata was supplied", async () => {
+      const p1 = { ...createMockProvider(), name: "a" };
+      (p1.chat as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("API down"));
+      const p2 = { ...createMockProvider({ text: "b-served" }), name: "b" };
+
+      const result = await new FallbackChainProvider([p1, p2]).chat("sys", [], []);
+
+      expect(result.servedBy).toEqual({ provider: "b", model: undefined });
+    });
+
+    it("keeps a nested chain's own stamp instead of naming the inner chain", async () => {
+      const inner1 = { ...createMockProvider(), name: "x" };
+      (inner1.chat as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("down"));
+      const inner2 = { ...createMockProvider({ text: "from-y" }), name: "y" };
+      const inner = new FallbackChainProvider([inner1, inner2]);
+      const outer = new FallbackChainProvider([inner, { ...createMockProvider(), name: "z" }]);
+
+      const result = await outer.chat("sys", [], []);
+
+      expect(result.text).toBe("from-y");
+      expect(result.servedBy?.provider).toBe("y");
+    });
+
+    it("stamps the streaming path the same way", async () => {
+      const p1 = { ...createMockProvider(), name: "a" };
+      (p1.chat as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("down"));
+      const p2 = { ...createMockProvider({ text: "b-stream" }), name: "b" };
+
+      const result = await new FallbackChainProvider([p1, p2]).chatStream("sys", [], [], () => {});
+
+      expect(result.servedBy?.provider).toBe("b");
+    });
+  });
+
   // Audit #6: a benign CONTROL-PLANE cancel (the external/un-composed signal aborted —
   // user cancel / task wind-down) is NOT a provider outage. The chain must NOT poison
   // provider health and must NOT fall over to the next provider (which would fail

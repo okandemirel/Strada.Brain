@@ -53,6 +53,7 @@ import {
   type BuildPhaseOutcomeTelemetryParams,
 } from "./orchestrator-loop-shared.js";
 import { shouldDeferRawBoundaryForDirectTarget } from "./prompt-targets.js";
+import { notDeliveredReport } from "./not-delivered-report.js";
 
 // ─── Localized Fallbacks ─────────────────────────────────────────────────────
 
@@ -89,11 +90,14 @@ export function shouldSynthesize(
   agentState: AgentState,
   classification?: TaskClassification,
 ): boolean {
-  // stepResults accumulates across all iterations; approximate "current iteration
-  // had tool use" by checking stepResults.length >= iteration count.
-  const hadToolsThisIteration = agentState.stepResults.length > 0
-    && agentState.stepResults.length >= agentState.iteration;
-  if (hadToolsThisIteration) return true;
+  // audited 2026-09-02: this used to read `stepResults.length >= iteration`
+  // as "had tools this iteration". iteration is the run's tool-call count and
+  // stepResults a 50-entry window, so the test was true for exactly the first
+  // 50 tool calls of a run and false forever after — a long run then surfaced
+  // its raw draft unsynthesized. What the bypass below needs is "this run
+  // used no tools at all", which either counter states directly.
+  const runUsedTools = agentState.iteration > 0 || agentState.stepResults.length > 0;
+  if (runUsedTools) return true;
 
   // Draft contains raw tool output patterns → needs rewriting
   if (RAW_TOOL_OUTPUT_RE.test(draft)) return true;
@@ -317,40 +321,6 @@ async function runInteractiveLoopRecovery(
 }
 
 // ─── Background end-turn handler ────────────────────────────────────────────────
-
-/**
- * The report a run owes when every verifier approved and the thing asked for
- * still is not there.
- *
- * The conformance gates are asks, and an ask must be able to give up or it turns
- * into a loop. But going quiet was read as satisfied: measured on run 52,
- * [STRADA NOTHING DRAWN] fired three times, fell silent on the fourth, and the
- * run finished with a 123-character success message for a game whose sixty
- * captured frames were identical. The gate's own last words were "say the game
- * does not render rather than reporting it as delivered" — advice with nothing
- * behind it.
- *
- * Returns null when there is nothing outstanding, so the ordinary path is
- * untouched.
- */
-function notDeliveredReport(
-  conformance: StradaConformanceGuard,
-  finalText: string,
-): { text: string; reason: string } | null {
-  const unmet = conformance.unmetDeliveryConditions();
-  if (unmet.length === 0) return null;
-
-  const reason = unmet.join("; ");
-  return {
-    reason,
-    text: (
-      `${finalText}\n\n` +
-      `NOT DELIVERED — ${reason}. ` +
-      "This is the run's own measurement, not a review: the work above is real, " +
-      "but it does not yet add up to the thing that was asked for."
-    ).trim(),
-  };
-}
 
 export async function handleBgEndTurn(
   agentState: AgentState,
@@ -622,6 +592,44 @@ export async function handleBgEndTurn(
     });
   }
 
+  // 5b. Boundary on the synthesized text: plan_review or terminal_failure.
+  //
+  // audited 2026-09-02: only internal_continue was tested here, so a
+  // terminal_failure the second boundary raised — the raw head buried the
+  // blocker under a list, synthesis fronted it as "please sign in to your
+  // account" — fell into the approved path below: status "approved", reason
+  // "the verifier pipeline cleared the task", no status on the action. Same
+  // mapping as the first boundary (2b).
+  if (
+    (finalBoundary.kind === "plan_review" || finalBoundary.kind === "terminal_failure") &&
+    finalBoundary.visibleText
+  ) {
+    const surfacedText = ctx.formatBoundaryVisibleText(finalBoundary) ?? finalBoundary.visibleText;
+    const status = finalBoundary.kind === "plan_review" ? "blocked" : "failed";
+    ctx.appendVisibleAssistantMessage(ctx.session, surfacedText);
+    ctx.recordPhaseOutcome({
+      chatId: ctx.chatId,
+      identityKey: ctx.identityKey,
+      assignment: ctx.currentAssignment,
+      phase: toExecutionPhaseModel(agentState.phase),
+      status,
+      task: ctx.executionStrategy.task,
+      reason: finalBoundary.reason,
+      telemetry: ctx.buildPhaseOutcomeTelemetry({
+        state: agentState,
+        usage: ctx.responseUsage,
+        verifierDecision: "approve",
+        failureReason: finalBoundary.reason,
+      }),
+    });
+    await ctx.persistSessionToMemory(
+      ctx.chatId,
+      ctx.getVisibleTranscript(ctx.session),
+      /* force */ true,
+    );
+    return { flow: "done", visibleText: surfacedText, newState: agentState, status };
+  }
+
   // 6. Approved finish path
   const surfacedFinalText = finalBoundary.visibleText ?? finalText;
   // Blocked rather than failed: nothing went wrong, the work simply stopped
@@ -856,6 +864,9 @@ export async function handleInteractiveEndTurn(
       selfVerification: ctx.selfVerification,
       taskStartedAtMs: ctx.taskStartedAtMs,
       availableToolNames: ctx.currentToolNames,
+      // audited 2026-09-02: the background path feeds this second signal to
+      // the boundary; the interactive path never computed it.
+      terminalFailureReported: isTerminalFailureReport(ctx.responseText),
       usageHandler: ctx.usageHandler,
     }, ctx.interventionDeps);
 
@@ -883,32 +894,40 @@ export async function handleInteractiveEndTurn(
       return { flow: "continue", newState: agentState };
     }
 
-    // 4b. plan_review / blocked / ask_user
+    // 4b. plan_review / blocked / ask_user / terminal_failure
+    //
+    // audited 2026-09-02: terminal_failure was missing from this arm, so an
+    // honest "I could not do it" fell into 4c and was recorded "approved" and
+    // settled completed. The background path maps it to failed (the
+    // false-green chain the campaign audit traced); so does this one now.
     if (
       (visibilityDecision.kind === "plan_review" ||
         visibilityDecision.kind === "blocked" ||
-        visibilityDecision.kind === "ask_user") &&
+        visibilityDecision.kind === "ask_user" ||
+        visibilityDecision.kind === "terminal_failure") &&
       visibilityDecision.visibleText
     ) {
+      const status = visibilityDecision.kind === "terminal_failure" ? "failed" : "blocked";
       ctx.recordPhaseOutcome({
         chatId: ctx.chatId,
         identityKey: ctx.identityKey,
         assignment: ctx.currentAssignment,
         phase: toExecutionPhaseModel(agentState.phase),
-        status: "blocked",
+        status,
         task: ctx.executionStrategy.task,
         reason: visibilityDecision.reason,
         telemetry: ctx.buildPhaseOutcomeTelemetry({
           state: agentState,
           usage: ctx.responseUsage,
           verifierDecision: "approve",
+          ...(status === "failed" ? { failureReason: visibilityDecision.reason } : {}),
         }),
       });
       return {
         flow: "done",
         visibleText: visibilityDecision.visibleText,
         newState: agentState,
-        status: "blocked",
+        status,
       };
     }
 

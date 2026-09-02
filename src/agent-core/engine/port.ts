@@ -57,6 +57,13 @@ import type {
 
 /** The shell residue the port assembly injects (the engine facade methods are called directly). */
 export interface PortDeps extends ToolTurnDeps {
+  /**
+   * audited 2026-09-02: settle the goal tree this run decomposed. Interactive
+   * trees were upserted 'executing' at decomposition and never given a terminal
+   * status, so pruneOldTrees could never reclaim them and getInterruptedTrees
+   * reported finished turns as interrupted work.
+   */
+  settleGoalTree(conversationScope: string, status: TerminalStatus): void;
   buildTaskAwareProvider(
     primaryName: string,
     task?: TaskClassification,
@@ -242,6 +249,14 @@ export function createAgentCorePort(
         engine.recordProviderUsage(providerName, usage, c.onUsage, modelId); // CURRY onUsage
         c.cumulativeOutputTokens += usage?.outputTokens ?? 0; // 3.3: feed the interactive budget gate (output-only)
       },
+      // audited 2026-09-02: every handler context reads runCtx.lastAssignment for its phase
+      // outcomes; stamp the member that served this turn on it so those outcomes are
+      // attributed to the server, not the router's pick. lastAssignment is re-set from
+      // prepareIteration each step, so a stamp never outlives its turn.
+      noteServedBy: (servedBy) => {
+        const c = ctx();
+        if (c.lastAssignment) c.lastAssignment = { ...c.lastAssignment, servedBy };
+      },
       saveBudgetExceededCheckpoint: (params) => deps.saveBudgetExceededCheckpoint(params),
       saveRollingCheckpoint: (params) => deps.saveRollingCheckpoint(params),
 
@@ -379,11 +394,23 @@ export function createAgentCorePort(
           success: !cancelled && state.phase === AgentPhase.COMPLETE,
           stepResults: state.stepResults,
         });
+        // audited 2026-09-02: the tree decomposed by THIS run (goalsDecomposed
+        // is the once-per-run guard above) gets the run's real terminal status;
+        // a benign cancel settles failed, as the metric above does. Trees a
+        // "resume" reply placed in activeGoalTrees are not this run's to settle.
+        if (c.goalsDecomposed) {
+          deps.settleGoalTree(
+            c.conversationScope ?? c.chatId,
+            cancelled ? "failed" : (terminalStatus ?? "completed"),
+          );
+        }
         // GAP1 teardown — symmetric to v1's runAgentLoop finally (:6232-6234): clear the per-session
         // instinct IDs so a later, unrelated emitToolResult on this chatId cannot mis-attribute to a
         // prior run's instincts, and prevent the Map growing unbounded. Runs from the spine's finally
         // on EVERY exit (happy or throw), exactly once per run.
         deps.currentSessionInstinctIds.delete(c.chatId);
+        // audited 2026-09-02: the pipeline's per-run credit ledger ends with the run too.
+        deps.clearRunInstinctCredits(c.chatId);
         deps.propagateInstinctIdsToChannel(c.chatId, []);
         } finally {
           // v1 parity (runBackgroundTask finally :4894-4896): settle the joined worker card WITHOUT

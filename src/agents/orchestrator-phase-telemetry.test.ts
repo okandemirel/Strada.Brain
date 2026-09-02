@@ -99,4 +99,57 @@ describe("orchestrator-phase-telemetry", () => {
       phaseVerdict: expect.any(String),
     });
   });
+
+  // audited 2026-09-02: the assignment names the router's pick; a fallback chain may have
+  // answered from a sibling. Outcomes and traces must be attributed to who actually served,
+  // or the served provider's work raises the assigned provider's behavioral profile.
+  describe("attribution follows the member that served", () => {
+    const task = { type: "implementation" } as any;
+    const base = {
+      providerName: "openai",
+      modelId: "gpt-5",
+      role: "planner" as const,
+      reason: "router pick",
+    };
+
+    it("stamps the served provider and model on the outcome and the trace", () => {
+      const assignment = { ...base, servedBy: { provider: "opencode2", model: "oc-large" } };
+      const outcome = buildPhaseOutcomeRecord({
+        identityKey: "u", assignment, phase: "planning", status: "approved", task, timestampMs: 1,
+      });
+      const trace = buildExecutionTraceRecord({
+        identityKey: "u", assignment, phase: "planning", task, timestampMs: 1,
+      });
+      expect(outcome.provider, "outcome credited to the provider that did not answer").toBe("opencode2");
+      expect(outcome.model).toBe("oc-large");
+      expect(trace.provider).toBe("opencode2");
+      expect(trace.model).toBe("oc-large");
+    });
+
+    it("does not pair a sibling with the assigned model when the sibling's model is unknown", () => {
+      const assignment = { ...base, servedBy: { provider: "opencode2" } };
+      const outcome = buildPhaseOutcomeRecord({
+        identityKey: "u", assignment, phase: "planning", status: "approved", task, timestampMs: 1,
+      });
+      expect(outcome.provider).toBe("opencode2");
+      expect(outcome.model).toBeUndefined();
+    });
+
+    it("keeps the assigned model when the assigned provider itself served without naming one", () => {
+      const assignment = { ...base, servedBy: { provider: "openai" } };
+      const outcome = buildPhaseOutcomeRecord({
+        identityKey: "u", assignment, phase: "planning", status: "approved", task, timestampMs: 1,
+      });
+      expect(outcome.provider).toBe("openai");
+      expect(outcome.model).toBe("gpt-5");
+    });
+
+    it("falls back to the assignment when nothing reported who served", () => {
+      const outcome = buildPhaseOutcomeRecord({
+        identityKey: "u", assignment: base, phase: "planning", status: "approved", task, timestampMs: 1,
+      });
+      expect(outcome.provider).toBe("openai");
+      expect(outcome.model).toBe("gpt-5");
+    });
+  });
 });

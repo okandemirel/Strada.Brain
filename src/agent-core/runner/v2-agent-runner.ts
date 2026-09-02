@@ -63,6 +63,8 @@ import type { ProviderResponse, TokenUsage } from "../../agents/providers/provid
 import type { TaskProgressSignal } from "../../tasks/types.js";
 import type { WorkerUsageEvent } from "../../agents/supervisor/supervisor-types.js";
 import { AgentPhase, createInitialState, type AgentState } from "../../agents/agent-state.js";
+import { resolveServedIdentity } from "../../agents/orchestrator-phase-telemetry.js";
+import type { ProviderServedBy } from "../../agents/providers/provider-core.interface.js";
 import { getLoggerSafe } from "../../utils/logger.js";
 // Free helpers imported directly by the spine (no `this`). The max_tokens continuation gate +
 // pusher are the v1 shared helpers; nothing here closes over the Orchestrator.
@@ -457,10 +459,17 @@ export class V2AgentRunner implements AgentRunner {
 
           // ══ Accounting (gauntlet #8,#9): budget.debit + execution trace ══════════════════
           if (outcome.kind !== "threw") {
-            budget.debit(toBudgetUsage(outcome.response.usage, prepared.currentAssignment.providerName));
-            usageTotal = mergeUsage(usageTotal, prepared.currentAssignment.providerName, outcome.response.usage);
-            port.recordProviderUsage(prepared.currentAssignment.providerName, outcome.response.usage, prepared.currentAssignment.modelId);
-            port.recordExecutionTrace(this.traceParams(request, prepared, state, setup));
+            // audited 2026-09-02: bill and attribute the member that ANSWERED. The
+            // resilient chain skips a cooled pick and serves from a sibling; keying
+            // cost on the pick priced a metered sibling's tokens at the pick's rate
+            // (zero, for a flat-fee subscription) and the phase outcomes credited
+            // the pick with work it never did.
+            const served = resolveServedIdentity(prepared.currentAssignment, outcome.response.servedBy);
+            port.noteServedBy?.(outcome.response.servedBy);
+            budget.debit(toBudgetUsage(outcome.response.usage, served.provider));
+            usageTotal = mergeUsage(usageTotal, served.provider, outcome.response.usage);
+            port.recordProviderUsage(served.provider, outcome.response.usage, served.model);
+            port.recordExecutionTrace(this.traceParams(request, prepared, state, setup, outcome.response.servedBy));
           }
 
           // ══ FAILURE / EMPTY → verdict GATE arbitrates (gauntlet #7,#10,#11) ═══════════════
@@ -1086,11 +1095,13 @@ export class V2AgentRunner implements AgentRunner {
     prepared: PreparedIteration,
     state: AgentState,
     setup: RunSetup,
+    servedBy?: ProviderServedBy,
   ): RecordExecutionTraceParams {
     return {
       chatId: request.chatId,
       identityKey: setup.identityKey,
-      assignment: prepared.currentAssignment,
+      // audited 2026-09-02: the trace names who served, when the chain reported it.
+      assignment: servedBy ? { ...prepared.currentAssignment, servedBy } : prepared.currentAssignment,
       phase: PHASE_TRACE_MAP[state.phase] ?? "executing",
       task: prepared.executionStrategy.task,
       taskRunId: request.taskRunId,

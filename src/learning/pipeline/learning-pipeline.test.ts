@@ -2015,4 +2015,109 @@ describe("learning pipeline v2 integration", () => {
       expect(after.confidence).toBe(planning.confidence);
     });
   });
+
+  describe("per-run instinct credit (audited 2026-09-02)", () => {
+    let storage: LearningStorage;
+    let pipeline: LearningPipeline;
+    let tempDir: string;
+
+    beforeEach(() => {
+      tempDir = mkdtempSync(join(tmpdir(), "pipeline-credit-"));
+      storage = new LearningStorage(join(tempDir, "test.db"));
+      storage.initialize();
+      pipeline = new LearningPipeline(storage, {
+        enabled: true,
+        detectionIntervalMs: 1000,
+        evolutionIntervalMs: 5000,
+        minConfidenceForCreation: 0.5,
+        batchSize: 5,
+      });
+    });
+
+    afterEach(() => {
+      pipeline.stop();
+      storage.close();
+      rmSync(tempDir, { recursive: true, force: true });
+    });
+
+    function seedShaped(id: string): Instinct {
+      return {
+        id: id as any,
+        name: "Seed-shaped",
+        type: "error_fix",
+        status: "active",
+        confidence: 0.5,
+        triggerPattern: "Any tool",
+        action: "Do the thing",
+        contextConditions: [], // every seed / teachExplicit / recordCorrection instinct
+        stats: { timesSuggested: 0, timesApplied: 0, timesFailed: 0, successRate: 0, averageExecutionMs: 0 },
+        createdAt: Date.now() as TimestampMs,
+        updatedAt: Date.now() as TimestampMs,
+        sourceTrajectoryIds: [],
+        tags: [],
+      };
+    }
+    const event = (sessionId: string, toolName: string, ids: string[], success = true): ToolResultEvent => ({
+      sessionId,
+      toolName,
+      input: {},
+      output: success ? "ok" : "boom",
+      success,
+      appliedInstinctIds: ids,
+      timestamp: Date.now(),
+    });
+
+    it("credits an instinct retrieved once for a run ONCE, not once per tool call", async () => {
+      const instinct = seedShaped(`instinct_once_${Date.now()}`);
+      storage.createInstinct(instinct);
+
+      // One run, one retrieval, six heterogeneous tool calls all tagged with the run's set.
+      for (const tool of ["file_read", "shell", "file_edit", "dotnet_build", "shell", "file_read"]) {
+        await pipeline.handleToolResult(event("run-1", tool, [instinct.id]));
+      }
+
+      const after = storage.getInstinct(instinct.id)!;
+      expect(after.stats.timesSuggested, "one retrieval was counted once per tool call").toBe(1);
+      expect(after.stats.timesApplied).toBe(1);
+    });
+
+    it("a run of failing unrelated tool calls cannot deprecate the instinct by volume", async () => {
+      const instinct = seedShaped(`instinct_fail_${Date.now()}`);
+      storage.createInstinct({ ...instinct, confidence: 0.8 });
+
+      for (let i = 0; i < 40; i++) {
+        await pipeline.handleToolResult(event("run-2", "shell", [instinct.id], false));
+      }
+
+      const after = storage.getInstinct(instinct.id)!;
+      expect(after.stats.timesFailed).toBe(1);
+      expect(after.status, "40 failing calls in one run deprecated a healthy instinct").not.toBe("deprecated");
+    });
+
+    it("credits again on the next run once the run's ledger is cleared", async () => {
+      const instinct = seedShaped(`instinct_next_${Date.now()}`);
+      storage.createInstinct(instinct);
+
+      await pipeline.handleToolResult(event("chat-A", "shell", [instinct.id]));
+      await pipeline.handleToolResult(event("chat-A", "shell", [instinct.id]));
+      pipeline.clearRunInstinctCredits("chat-A"); // the run teardown
+      await pipeline.handleToolResult(event("chat-A", "shell", [instinct.id]));
+
+      expect(storage.getInstinct(instinct.id)!.stats.timesApplied).toBe(2);
+    });
+
+    it("a tool_name instinct is credited on its own tool, once per run", async () => {
+      const instinct: Instinct = {
+        ...seedShaped(`instinct_tool_${Date.now()}`),
+        contextConditions: [{ id: "ctx_r" as any, type: "tool_name", value: "file_read", match: "include" }],
+      };
+      storage.createInstinct(instinct);
+
+      await pipeline.handleToolResult(event("run-3", "shell", [instinct.id])); // not its tool
+      await pipeline.handleToolResult(event("run-3", "file_read", [instinct.id]));
+      await pipeline.handleToolResult(event("run-3", "file_read", [instinct.id]));
+
+      expect(storage.getInstinct(instinct.id)!.stats.timesApplied).toBe(1);
+    });
+  });
 });

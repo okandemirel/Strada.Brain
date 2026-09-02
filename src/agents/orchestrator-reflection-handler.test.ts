@@ -67,6 +67,7 @@ function buildMockBgCtx(overrides: Partial<BgReflectionContext> = {}): BgReflect
     selfVerification: buildMockSelfVerification() as unknown as BgReflectionContext["selfVerification"],
     stradaConformance: {
       getPrompt: vi.fn().mockReturnValue(""),
+      unmetDeliveryConditions: vi.fn().mockReturnValue([]),
     } as unknown as BgReflectionContext["stradaConformance"],
     taskStartedAtMs: Date.now(),
     currentToolNames: [],
@@ -129,6 +130,7 @@ function buildMockInteractiveCtx(
     selfVerification: buildMockSelfVerification() as unknown as InteractiveReflectionContext["selfVerification"],
     stradaConformance: {
       getPrompt: vi.fn().mockReturnValue(""),
+      unmetDeliveryConditions: vi.fn().mockReturnValue([]),
     } as unknown as InteractiveReflectionContext["stradaConformance"],
     taskStartedAtMs: Date.now(),
     currentToolNames: [],

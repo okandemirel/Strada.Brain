@@ -21,6 +21,12 @@ export interface AgentState {
   readonly iteration: number;
   readonly plan: string | null;
   readonly stepResults: readonly StepResult[];
+  /**
+   * Monotonic count of mutation/verification steps this run has taken.
+   * audited 2026-09-02: stepResults is a 50-entry window, so the reflection
+   * cadence must not be derived from it — see recordStepResultsAndCheckReflection.
+   */
+  readonly consequentialStepCount?: number;
   readonly failedApproaches: readonly string[];
   readonly reflectionCount: number;
   readonly lastReflection: string | null;
@@ -66,6 +72,7 @@ export function createInitialState(taskDescription: string): AgentState {
     phase: AgentPhase.PLANNING,
     taskDescription,
     iteration: 0,
+    consequentialStepCount: 0,
     plan: null,
     stepResults: [],
     failedApproaches: [],

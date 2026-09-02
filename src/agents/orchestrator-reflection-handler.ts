@@ -51,6 +51,7 @@ import {
   type BuildPhaseOutcomeTelemetryParams,
 } from "./orchestrator-loop-shared.js";
 import { shouldDeferRawBoundaryForDirectTarget } from "./prompt-targets.js";
+import { notDeliveredReport } from "./not-delivered-report.js";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -218,6 +219,42 @@ async function completeBgReflectionDone(
   ctx: BgReflectionContext,
   evaluation: Extract<BgReflectionCompletionEvaluation, { kind: "done" }>,
 ): Promise<ReflectionLoopAction> {
+  // audited 2026-09-02: the end-turn route appends NOT DELIVERED and settles
+  // blocked when a delivery condition is unmet; this route recorded "approved"
+  // and returned no status for the identical state. Same accounting here.
+  const notDelivered =
+    evaluation.approved && evaluation.status === undefined
+      ? notDeliveredReport(ctx.stradaConformance, evaluation.visibleText)
+      : null;
+  if (notDelivered) {
+    ctx.appendVisibleAssistantMessage(ctx.session, notDelivered.text);
+    ctx.recordPhaseOutcome({
+      chatId: ctx.chatId,
+      identityKey: ctx.identityKey,
+      assignment: ctx.currentAssignment,
+      phase: "reflecting",
+      status: "blocked",
+      task: ctx.executionStrategy.task,
+      reason: notDelivered.reason,
+      telemetry: ctx.buildPhaseOutcomeTelemetry({
+        state: agentState,
+        usage: ctx.responseUsage,
+        verifierDecision: "approve",
+        failureReason: notDelivered.reason,
+      }),
+    });
+    await ctx.persistSessionToMemory(
+      ctx.chatId,
+      ctx.getVisibleTranscript(ctx.session),
+      /* force */ true,
+    );
+    return {
+      flow: "done",
+      visibleText: notDelivered.text,
+      newState: agentState,
+      status: "blocked",
+    };
+  }
   if (evaluation.visibleText) {
     ctx.appendVisibleAssistantMessage(ctx.session, evaluation.visibleText);
   }
@@ -513,6 +550,22 @@ async function evaluateBgReflectionCompletion(
         defaultProgressKind: "visibility",
         defaultProgressMessage: "Visibility boundary rejected the draft",
       }),
+    };
+  }
+
+  // audited 2026-09-02: the second boundary tested only internal_continue, so
+  // a terminal_failure raised on the synthesized prose was returned as
+  // approved: true and the run settled completed. Same mapping as the raw
+  // boundary above: plan_review is blocked, terminal_failure is failed.
+  if (
+    (finalBoundary.kind === "plan_review" || finalBoundary.kind === "terminal_failure") &&
+    finalBoundary.visibleText
+  ) {
+    return {
+      kind: "done",
+      visibleText: ctx.formatBoundaryVisibleText(finalBoundary) ?? finalBoundary.visibleText,
+      status: finalBoundary.kind === "plan_review" ? "blocked" : "failed",
+      approved: false,
     };
   }
 
@@ -891,6 +944,8 @@ export async function handleInteractiveReflectionDone(
     selfVerification: ctx.selfVerification,
     taskStartedAtMs: ctx.taskStartedAtMs,
     availableToolNames: ctx.currentToolNames,
+    // audited 2026-09-02: the background route feeds this to the boundary.
+    terminalFailureReported: isTerminalFailureReport(ctx.responseText),
     usageHandler: ctx.usageHandler,
   }, ctx.interventionDeps);
 
@@ -924,12 +979,46 @@ export async function handleInteractiveReflectionDone(
     return { flow: "continue", newState };
   }
 
+  // audited 2026-09-02: terminal_failure was missing from this arm (same as
+  // the interactive end-turn handler), so an honest failure report was
+  // recorded "approved" and settled completed.
   if (
     (visibilityDecision.kind === "plan_review" ||
       visibilityDecision.kind === "blocked" ||
-      visibilityDecision.kind === "ask_user") &&
+      visibilityDecision.kind === "ask_user" ||
+      visibilityDecision.kind === "terminal_failure") &&
     visibilityDecision.visibleText
   ) {
+    const status = visibilityDecision.kind === "terminal_failure" ? "failed" : "blocked";
+    ctx.recordPhaseOutcome({
+      chatId: ctx.chatId,
+      identityKey: ctx.identityKey,
+      assignment: ctx.currentAssignment,
+      phase: "reflecting",
+      status,
+      task: ctx.executionStrategy.task,
+      reason: visibilityDecision.reason,
+      telemetry: ctx.buildPhaseOutcomeTelemetry({
+        state: agentState,
+        usage: ctx.responseUsage,
+        verifierDecision: "approve",
+        ...(status === "failed" ? { failureReason: visibilityDecision.reason } : {}),
+      }),
+    });
+    return {
+      flow: "done",
+      visibleText: visibilityDecision.visibleText,
+      newState: agentState,
+      status,
+    };
+  }
+
+  // Approved path
+  const finalText = visibilityDecision.visibleText?.trim() ?? "";
+  // audited 2026-09-02: same omission as the background route — approved by
+  // every verifier is not the same as delivered.
+  const notDelivered = notDeliveredReport(ctx.stradaConformance, finalText);
+  if (notDelivered) {
     ctx.recordPhaseOutcome({
       chatId: ctx.chatId,
       identityKey: ctx.identityKey,
@@ -937,23 +1026,21 @@ export async function handleInteractiveReflectionDone(
       phase: "reflecting",
       status: "blocked",
       task: ctx.executionStrategy.task,
-      reason: visibilityDecision.reason,
+      reason: notDelivered.reason,
       telemetry: ctx.buildPhaseOutcomeTelemetry({
         state: agentState,
         usage: ctx.responseUsage,
         verifierDecision: "approve",
+        failureReason: notDelivered.reason,
       }),
     });
     return {
       flow: "done",
-      visibleText: visibilityDecision.visibleText,
+      visibleText: notDelivered.text,
       newState: agentState,
       status: "blocked",
     };
   }
-
-  // Approved path
-  const finalText = visibilityDecision.visibleText?.trim() ?? "";
   ctx.recordPhaseOutcome({
     chatId: ctx.chatId,
     identityKey: ctx.identityKey,

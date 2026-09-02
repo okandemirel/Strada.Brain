@@ -802,7 +802,16 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
             attempt: attempted,
           });
         }
-        return response;
+        // audited 2026-09-02: the chain knew who answered (it just recorded that
+        // member's health) but returned a response naming nobody, so every
+        // consumer keyed outcomes and cost on the router's assigned name. A
+        // nested chain's own stamp wins — it names the real member, not the
+        // inner chain.
+        if (response.servedBy) return response;
+        return {
+          ...response,
+          servedBy: { provider: okMeta?.provider ?? provider.name, model: okMeta?.model || undefined },
+        };
       } catch (error) {
         // Unwrap the internal mid-stream marker FIRST so every downstream branch
         // (messages, health/cooldowns, taxonomy) keys on the REAL provider error.

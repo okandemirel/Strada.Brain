@@ -17,7 +17,7 @@ const VAULT_MTIME_TOLERANCE_MS = 1;
 /** Upper bound on how many chunks / symbol matches we pull when resolving a range read. */
 const VAULT_CHUNK_FETCH_LIMIT = 32;
 /** Cap the allowed symbol name length to avoid pathological inputs (sec-M3). */
-const MAX_SYMBOL_LEN = 200;
+export const MAX_SYMBOL_LEN = 200;
 
 /**
  * Module-level counters — process-global, shared across concurrent sessions.
@@ -339,7 +339,7 @@ function toVaultRelative(vault: IVault, absPath: string): string {
  * current project, even when the VaultRegistry also owns a sibling vault
  * (e.g. the SelfVault pointing at the Brain source tree).
  */
-function isVaultInsideProject(vault: IVault, projectPath: string): boolean {
+export function isVaultInsideProject(vault: IVault, projectPath: string): boolean {
   const root = pathResolve(vault.rootPath);
   const project = pathResolve(projectPath);
   if (root === project) return true;

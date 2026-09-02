@@ -41,7 +41,7 @@
  */
 
 import type { IAIProvider } from "../../agents/providers/provider.interface.js";
-import type { MessageContent, ProviderResponse } from "../../agents/providers/provider-core.interface.js";
+import type { MessageContent, ProviderResponse, ProviderServedBy } from "../../agents/providers/provider-core.interface.js";
 import type { Attachment } from "../../channels/channel-messages.interface.js";
 import type { AgentState } from "../../agents/agent-state.js";
 import type { ExecutionJournal } from "../../agents/autonomy/execution-journal.js";
@@ -384,6 +384,14 @@ export interface OrchestratorPort {
     usage: ProviderResponse["usage"] | undefined,
     modelId?: string,
   ): void;
+
+  /**
+   * audited 2026-09-02: tell the port which chain member actually served the turn
+   * (ProviderResponse.servedBy) so every phase outcome and trace built from the
+   * iteration's assignment is attributed to the server, not the router's pick.
+   * Optional: ports without an assignment to annotate may omit it.
+   */
+  noteServedBy?(servedBy: ProviderServedBy | undefined): void;
 
   /** Persist the budget-exceeded checkpoint (gauntlet #9 stop path). */
   saveBudgetExceededCheckpoint(params: BudgetCheckpointParams): Promise<void>;

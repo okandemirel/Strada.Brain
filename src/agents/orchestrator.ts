@@ -13,7 +13,7 @@ import type {
 // Streaming-first single-shot LLM call: a slow reasoning model must not trip the
 // FallbackChain's 90s first-response timer on the blocking chat() path (533b1e9).
 import { streamOrChatText } from "./providers/provider.interface.js";
-import { parseBatchOperations, type BatchOperation } from "./autonomy/batch-write-gate.js";
+import { BATCH_DISPATCH_TOOLS, parseBatchOperations, type BatchOperation } from "./autonomy/batch-write-gate.js";
 import { warrantsSupervisor } from "../goals/tree-shape.js";
 import { DotnetProjectPresence, DOTNET_PROJECT_TOOLS } from "./dotnet-project-presence.js";
 import { extractUserAuthorizedPaths } from "../security/user-authorized-paths.js";
@@ -55,7 +55,7 @@ import {
 } from "./context/strada-knowledge.js";
 import { matchProjectScopedAllowlist } from "./autonomy/project-shell-allowlist.js";
 import { validatePath } from "../security/path-guard.js";
-import { vaultFileRead } from "./tools/file-read.js";
+import { vaultFileRead, isVaultInsideProject, MAX_SYMBOL_LEN } from "./tools/file-read.js";
 import { FILE_LIMITS } from "../common/constants.js";
 import type { FrameworkPromptGenerator } from "../intelligence/framework/framework-prompt-generator.js";
 import type { IdentityState } from "../identity/identity-state.js";
@@ -200,6 +200,7 @@ import {
 import { type MessageKey } from "./resilience-messages.js";
 import {
   buildPhaseOutcomeTelemetry as buildPhaseOutcomeTelemetryModel,
+  resolveServedIdentity,
   toExecutionPhase as toExecutionPhaseModel,
 } from "./orchestrator-phase-telemetry.js";
 import {
@@ -239,7 +240,7 @@ import {
   type ContextBuilderDeps,
 } from "./orchestrator-context-builder.js";
 import type { SupervisorBrain } from "../supervisor/supervisor-brain.js";
-import { requestWriteConfirmation as requestWriteConfirmationHelper } from "./orchestrator-write-gate.js";
+import { requestWriteConfirmation as requestWriteConfirmationHelper, estimateWriteChangeLines } from "./orchestrator-write-gate.js";
 import {
   buildTrajectoryReplayContext as buildTrajectoryReplayContextHelper,
   type TrajectoryReplayDeps,
@@ -820,7 +821,16 @@ export class Orchestrator {
   /** Tracks consecutive ask_user blocks per conversation to break clarification loops. */
   private readonly askUserBlockCounts = new Map<string, number>();
   /** Tracks consecutive errors per tool per chat to auto-disable repeatedly failing tools. */
-  private readonly toolConsecutiveErrors = new Map<string, Map<string, number>>();
+  // audited 2026-09-02: keyed by breaker SCOPE (the task run when one is
+  // active, else the chatId) — every supervisor DAG node shares one chatId,
+  // so a chatId-only key made one node's misses every later node's refusal.
+  // Entries carry the trip time so the refusal can actually be temporary.
+  private readonly toolConsecutiveErrors = new Map<
+    string,
+    Map<string, { count: number; trippedAtMs?: number }>
+  >();
+  /** How long a tripped breaker refuses before admitting one probe call. */
+  private static readonly TOOL_BREAKER_COOLDOWN_MS = 60_000;
   private static readonly MAX_CONSECUTIVE_TOOL_ERRORS = 3;
   /**
    * How many failures on DIFFERENT targets before a tool is presumed broken.
@@ -1188,6 +1198,8 @@ export class Orchestrator {
       getTaskExecutionContext: () => this.getTaskExecutionContext(),
       propagateInstinctIdsToChannel: (chatId, instinctIds) =>
         this.propagateInstinctIdsToChannel(chatId, instinctIds),
+      clearRunInstinctCredits: (chatId) => this.learningPipeline?.clearRunInstinctCredits(chatId),
+      settleGoalTree: (conversationScope, status) => this.settleGoalTree(conversationScope, status),
       // Step 8 (tool turn): the RCE-sensitive tool-execution primitives + batch classifier stay in
       // the shell → injected as callbacks (the turn orchestrates; it does not re-home the write gate).
       executeToolCalls: (chatId, toolCalls, options) => this.executeToolCalls(chatId, toolCalls, options),
@@ -1311,15 +1323,28 @@ export class Orchestrator {
     return undefined;
   }
 
-  /** Update consecutive error counter for a tool in a given chat. Resets on success. */
-  private trackToolError(chatId: string, toolName: string, isError: boolean, target?: string): void {
-    if (!this.toolConsecutiveErrors.has(chatId)) this.toolConsecutiveErrors.set(chatId, new Map());
-    const errs = this.toolConsecutiveErrors.get(chatId)!;
+  /**
+   * The breaker's scope: the active task run when there is one (each
+   * supervisor node runs under its own taskRunId), else the conversation.
+   */
+  private toolBreakerScope(chatId: string): { key: string; label: "run" | "conversation" } {
+    const taskRunId = this.resolveTaskRunId(chatId);
+    return taskRunId
+      ? { key: `${chatId}\u0000${taskRunId}`, label: "run" }
+      : { key: chatId, label: "conversation" };
+  }
+
+  /** Update consecutive error counter for a tool in a breaker scope. Resets on success. */
+  private trackToolError(scope: string, toolName: string, isError: boolean, target?: string): void {
+    if (!this.toolConsecutiveErrors.has(scope)) this.toolConsecutiveErrors.set(scope, new Map());
+    const errs = this.toolConsecutiveErrors.get(scope)!;
     const repeatKey = `${toolName}\u0000${target ?? ""}`;
 
     if (isError) {
-      errs.set(toolName, (errs.get(toolName) ?? 0) + 1);
-      errs.set(repeatKey, (errs.get(repeatKey) ?? 0) + 1);
+      for (const key of [toolName, repeatKey]) {
+        const prev = errs.get(key);
+        errs.set(key, { count: (prev?.count ?? 0) + 1, trippedAtMs: prev?.trippedAtMs });
+      }
     } else {
       // A success clears both: the tool works, and it works on this target.
       errs.delete(toolName);
@@ -1336,15 +1361,44 @@ export class Orchestrator {
    * there is doing its job, and taking file_read away for it leaves the run
    * unable to read anything.
    */
-  private toolIsCircuitBroken(chatId: string, toolName: string, target?: string): number | null {
-    const errs = this.toolConsecutiveErrors.get(chatId);
+  private toolIsCircuitBroken(
+    scope: string,
+    toolName: string,
+    target?: string,
+    nowMs: number = Date.now(),
+  ): { count: number; measured: "same target" | "across targets"; retryAfterMs: number } | null {
+    const errs = this.toolConsecutiveErrors.get(scope);
     if (!errs) return null;
 
-    const repeats = errs.get(`${toolName}\u0000${target ?? ""}`) ?? 0;
-    if (repeats >= Orchestrator.MAX_CONSECUTIVE_TOOL_ERRORS) return repeats;
+    // audited 2026-09-02: this guard runs BEFORE the call that would record a
+    // success, so a tripped counter could never be cleared — "temporarily
+    // disabled" was permanent. After the cooldown, one probe is admitted by
+    // decaying the count to just under the threshold: a failing probe re-trips
+    // with a fresh clock, a passing one clears the counter as before.
+    const cooldown = Orchestrator.TOOL_BREAKER_COOLDOWN_MS;
+    const check = (
+      key: string,
+      threshold: number,
+      measured: "same target" | "across targets",
+    ): { count: number; measured: "same target" | "across targets"; retryAfterMs: number } | null => {
+      const entry = errs.get(key);
+      if (!entry || entry.count < threshold) return null;
+      if (entry.trippedAtMs === undefined) {
+        entry.trippedAtMs = nowMs;
+        return { count: entry.count, measured, retryAfterMs: cooldown };
+      }
+      const elapsed = nowMs - entry.trippedAtMs;
+      if (elapsed < cooldown) {
+        return { count: entry.count, measured, retryAfterMs: cooldown - elapsed };
+      }
+      errs.set(key, { count: threshold - 1 });
+      return null;
+    };
 
-    const anyTarget = errs.get(toolName) ?? 0;
-    return anyTarget >= Orchestrator.MAX_DISTINCT_TOOL_ERRORS ? anyTarget : null;
+    return (
+      check(`${toolName}\u0000${target ?? ""}`, Orchestrator.MAX_CONSECUTIVE_TOOL_ERRORS, "same target") ??
+      check(toolName, Orchestrator.MAX_DISTINCT_TOOL_ERRORS, "across targets")
+    );
   }
 
 
@@ -1442,7 +1496,13 @@ export class Orchestrator {
         [{ role: "user", content: groundingContent }],
         [],
       );
-      this.recordProviderUsage(planningProvider.name, response.usage, params.onUsage);
+      // audited 2026-09-02: bill the member that answered (the name here is the chain's).
+      this.recordProviderUsage(
+        response.servedBy?.provider ?? planningProvider.name,
+        response.usage,
+        params.onUsage,
+        response.servedBy?.model,
+      );
       const groundedContext = this.stripInternalDecisionMarkers(response.text ?? "").trim();
       if (!groundedContext) {
         return null;
@@ -1880,19 +1940,22 @@ export class Orchestrator {
         `${params.systemPrompt}\n\n${SUPERVISOR_SYNTHESIS_SYSTEM_PROMPT}${this.buildSupervisorRolePrompt(params.strategy, params.strategy.synthesizer)}`,
         synthesisRequest,
       );
+      // audited 2026-09-02: attribute and bill the chain member that answered, not the pick.
+      const synthesizerServed = { ...params.strategy.synthesizer, servedBy: synthesisResponse.servedBy };
+      const synthesisBilled = resolveServedIdentity(params.strategy.synthesizer, synthesisResponse.servedBy);
       this.recordExecutionTrace({
         chatId: params.chatId,
         identityKey: params.identityKey,
-        assignment: params.strategy.synthesizer,
+        assignment: synthesizerServed,
         phase: "synthesis",
         source: "synthesis",
         task: params.strategy.task,
       });
       this.recordProviderUsage(
-        params.strategy.synthesizer.providerName,
+        synthesisBilled.provider,
         synthesisResponse.usage,
         params.usageHandler,
-        params.strategy.synthesizer.modelId,
+        synthesisBilled.model,
       );
       const synthesizedText = this.stripInternalDecisionMarkers(synthesisResponse.text).trim();
       const visibleText = synthesizedText
@@ -1906,7 +1969,7 @@ export class Orchestrator {
       this.recordPhaseOutcome({
         chatId: params.chatId,
         identityKey: params.identityKey,
-        assignment: params.strategy.synthesizer,
+        assignment: synthesizerServed,
         phase: "synthesis",
         source: "synthesis",
         status: synthesizedText ? "approved" : "failed",
@@ -2036,24 +2099,27 @@ export class Orchestrator {
         `${soulEnrichedPrompt}\n\n${SUPERVISOR_SYNTHESIS_SYSTEM_PROMPT}${this.buildSupervisorRolePrompt(strategy, strategy.synthesizer)}`,
         synthesisRequest,
       );
+      // audited 2026-09-02: attribute and bill the chain member that answered, not the pick.
+      const goalSynthesizerServed = { ...strategy.synthesizer, servedBy: synthesisResponse.servedBy };
+      const goalSynthesisBilled = resolveServedIdentity(strategy.synthesizer, synthesisResponse.servedBy);
       this.recordExecutionTrace({
         chatId: params.chatId,
         identityKey,
-        assignment: strategy.synthesizer,
+        assignment: goalSynthesizerServed,
         phase: "synthesis",
         source: "synthesis",
         task: strategy.task,
       });
       this.recordProviderUsage(
-        strategy.synthesizer.providerName,
+        goalSynthesisBilled.provider,
         synthesisResponse.usage,
         params.onUsage,
-        strategy.synthesizer.modelId,
+        goalSynthesisBilled.model,
       );
       this.recordPhaseOutcome({
         chatId: params.chatId,
         identityKey,
-        assignment: strategy.synthesizer,
+        assignment: goalSynthesizerServed,
         phase: "synthesis",
         source: "synthesis",
         status: "approved",
@@ -2137,6 +2203,28 @@ export class Orchestrator {
 
   setGoalStorage(storage: GoalStorage): void {
     this.goalStorage = storage;
+  }
+
+  /**
+   * Write the run's terminal status onto the goal tree active for its scope.
+   *
+   * audited 2026-09-02: runProactiveGoalDecomposition upserts 'executing' and,
+   * until now, nothing on the interactive path ever wrote a terminal status —
+   * updateTreeStatus had callers only in task-manager and background-executor.
+   * Best-effort like the upsert: a failed write is logged, never thrown.
+   */
+  private settleGoalTree(conversationScope: string, status: "completed" | "failed" | "blocked"): void {
+    const tree = this.activeGoalTrees.get(conversationScope);
+    if (!tree || !this.goalStorage) return;
+    try {
+      this.goalStorage.updateTreeStatus(tree.rootId, status);
+    } catch (err) {
+      getLogger().warn("Could not settle the goal tree", {
+        rootId: tree.rootId,
+        status,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   /**
@@ -3144,6 +3232,16 @@ export class Orchestrator {
         for (const tree of pendingResumeTrees) {
           const prepared = prepareTreeForResume(tree);
           this.activeGoalTrees.set(tree.sessionId, prepared);
+          // audited 2026-09-02: the reset lived only in memory, so a crash
+          // during the resume re-resumed from the stale rows.
+          try {
+            this.goalStorage?.upsertTree(prepared, "executing");
+          } catch (err) {
+            logger.warn("Could not persist the resumed goal tree", {
+              rootId: tree.rootId,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
         }
         await this.sessionManager.sendVisibleAssistantMarkdown(
           chatId,
@@ -3154,11 +3252,31 @@ export class Orchestrator {
       } else if (normalized === "discard" || normalized === "discard all") {
         this.sessionManager.appendVisibleUserMessage(session, text);
         await this.sessionManager.sendVisibleAssistantMarkdown(chatId, session, resumePrompt);
-        await this.sessionManager.sendVisibleAssistantMarkdown(
-          chatId,
-          session,
-          "Interrupted goal trees discarded.",
-        );
+        // audited 2026-09-02: this branch used to claim "discarded" and write
+        // nothing — the rows stayed 'executing' and the same trees were offered
+        // for resume at every later boot. Delete them, and say what happened
+        // rather than what was intended.
+        let removed = 0;
+        let failed = 0;
+        for (const tree of pendingResumeTrees) {
+          if (!this.goalStorage) break;
+          try {
+            this.goalStorage.deleteTree(tree.rootId);
+            removed += 1;
+          } catch (err) {
+            failed += 1;
+            logger.warn("Could not delete a discarded goal tree", {
+              rootId: tree.rootId,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }
+        const outcome = !this.goalStorage
+          ? `Interrupted goal trees dropped for this session only: no goal storage is attached, so ${pendingResumeTrees.length} tree(s) will be detected again at the next boot.`
+          : failed === 0
+            ? `Interrupted goal trees discarded: ${removed} tree(s) removed from goal storage.`
+            : `Interrupted goal trees partially discarded: ${removed} removed, ${failed} could not be deleted and will be detected again at the next boot.`;
+        await this.sessionManager.sendVisibleAssistantMarkdown(chatId, session, outcome);
         return;
       }
     }
@@ -3994,12 +4112,21 @@ export class Orchestrator {
     input: Record<string, unknown>,
     mode: ToolExecutionMode,
     options: ToolExecutionOptions,
+    // audited 2026-09-02: true on the user_confirm branch, where a human (not
+    // the LLM shell reviewer) is the arbiter of shell commands. The local,
+    // deterministic rules below still apply; only the shell arbitration moves.
+    humanConfirms: boolean = false,
   ): Promise<SelfManagedWriteReview> | SelfManagedWriteReview {
     switch (toolName) {
       case "shell_exec": {
         const command = this.normalizeInteractiveText(input["command"]);
         if (!command) {
           return { approved: false, reason: "shell command is missing" };
+        }
+        if (humanConfirms) {
+          // Destructive-shaped commands reach the confirmation prompt through
+          // isDestructiveOperation (direct call or batch), so the human decides.
+          return { approved: true };
         }
         // Allowlist FIRST: it is a bounded guarantee, not an escape hatch —
         // Unity batchmode/dotnet build against this project were being killed
@@ -4025,6 +4152,11 @@ export class Orchestrator {
             reason: "rename operation is missing a source or destination path",
           };
         }
+        // audited 2026-09-02: this case predates the wall and checked nothing
+        // but presence, so write-to-module + rename-out reached any path the
+        // wall refuses. A rename is a write at its destination.
+        const renameViolation = this.frameworkPathsViolation(newPath);
+        if (renameViolation) return { approved: false, reason: renameViolation };
         return { approved: true };
       }
       case "git_commit": {
@@ -4048,26 +4180,9 @@ export class Orchestrator {
         // choke point both direct writes and batch_execute operations pass
         // through, so a loose Assets/Scripts/*.cs cannot arrive by either
         // path. Editor/Tests/Plugins tooling and non-code assets stay free.
-        if (
-          this.conformanceFrameworkPathsOnly !== false &&
-          toolName !== "file_delete" &&
-          toolName !== "file_delete_directory"
-        ) {
-          const normalized = path.replace(/\\/g, "/").replace(/^\.\//, "");
-          const isLooseGameCode =
-            /\.cs$/i.test(normalized) &&
-            /^assets\//i.test(normalized) &&
-            !/^assets\/(modules|editor|tests|plugins)\//i.test(normalized);
-          if (isLooseGameCode) {
-            return {
-              approved: false,
-              reason:
-                "Strada conformance (frameworkPathsOnly): compilable game code belongs under " +
-                "Assets/Modules/<Name>Module/ (the Strada.Core module pattern — config + DI + " +
-                "systems), Assets/Editor/, Assets/Tests/ or Assets/Plugins/. Do not write loose " +
-                "scripts elsewhere under Assets/; create or extend the owning module instead.",
-            };
-          }
+        if (toolName !== "file_delete" && toolName !== "file_delete_directory") {
+          const violation = this.frameworkPathsViolation(path);
+          if (violation) return { approved: false, reason: violation };
         }
         return { approved: true };
       }
@@ -4082,11 +4197,50 @@ export class Orchestrator {
         if (parsed.kind === "unreviewable") {
           return { approved: false, reason: `batch cannot be reviewed: ${parsed.reason}` };
         }
-        return this.reviewBatchedOperations(chatId, parsed.operations, mode, options);
+        return this.reviewBatchedOperations(chatId, parsed.operations, mode, options, humanConfirms);
       }
       default:
         return { approved: true };
     }
+  }
+
+  /**
+   * The frameworkPathsOnly wall: the refusal reason when `path` would land
+   * compilable game code outside the Strada module layout, else null.
+   * Shared by every write shape (write/create/edit and rename destination).
+   */
+  private frameworkPathsViolation(path: string): string | null {
+    if (this.conformanceFrameworkPathsOnly === false) return null;
+    const normalized = path.replace(/\\/g, "/").replace(/^\.\//, "");
+    const isLooseGameCode =
+      /\.cs$/i.test(normalized) &&
+      /^assets\//i.test(normalized) &&
+      !/^assets\/(modules|editor|tests|plugins)\//i.test(normalized);
+    if (!isLooseGameCode) return null;
+    return (
+      "Strada conformance (frameworkPathsOnly): compilable game code belongs under " +
+      "Assets/Modules/<Name>Module/ (the Strada.Core module pattern — config + DI + " +
+      "systems), Assets/Editor/, Assets/Tests/ or Assets/Plugins/. Do not write loose " +
+      "scripts elsewhere under Assets/; create or extend the owning module instead."
+    );
+  }
+
+  /**
+   * Whether a write needs the human prompt on the user_confirm branch.
+   *
+   * audited 2026-09-02: `batch_execute` is not in DESTRUCTIVE_TOOLS, so a batch
+   * carrying a file_delete or an `rm -rf` shell_exec was judged by the stub
+   * diff alone (1 change, under every threshold) and ran with no prompt. A
+   * batch is as destructive as its most destructive operation.
+   */
+  private isDestructiveForConfirmation(toolName: string, input: Record<string, unknown>): boolean {
+    if (isDestructiveOperation(toolName, input)) return true;
+    if (!BATCH_DISPATCH_TOOLS.has(toolName)) return false;
+    const parsed = parseBatchOperations(input);
+    // An unreadable batch is refused by the review before this is consulted;
+    // if it ever gets here, treat it as destructive rather than waving it on.
+    if (parsed.kind === "unreviewable") return true;
+    return parsed.operations.some((op) => isDestructiveOperation(op.tool, op.input));
   }
 
   /**
@@ -4101,6 +4255,7 @@ export class Orchestrator {
     operations: readonly BatchOperation[],
     mode: ToolExecutionMode,
     options: ToolExecutionOptions,
+    humanConfirms: boolean = false,
   ): Promise<SelfManagedWriteReview> {
     for (const operation of operations) {
       // Reads inside a batch are as free as reads outside one.
@@ -4112,6 +4267,7 @@ export class Orchestrator {
         operation.input,
         mode,
         options,
+        humanConfirms,
       );
       if (!review.approved) {
         return {
@@ -4586,11 +4742,18 @@ export class Orchestrator {
     if (activeToolCall.name === "file_read" && this.vaultRegistry && toolContext.projectPath) {
       const input = activeToolCall.input as Record<string, unknown>;
       const rawPath = input["path"];
-      if (typeof rawPath === "string") {
+      const rawSymbol = input["symbol"];
+      // audited 2026-09-02: this interceptor re-implemented FileReadTool's vault
+      // read without its two guards — the sec-M3 symbol cap and the sec-H2
+      // cross-vault containment check — so on every vault hit both were dead.
+      // An over-long symbol or a vault rooted outside the session project now
+      // falls through to the tool, which applies the guards itself.
+      const symbolWithinCap = !(typeof rawSymbol === "string" && rawSymbol.length > MAX_SYMBOL_LEN);
+      if (typeof rawPath === "string" && symbolWithinCap) {
         const pathCheck = await validatePath(toolContext.projectPath, rawPath);
         if (pathCheck.valid) {
           const vault = this.vaultRegistry.resolveVaultForPath(pathCheck.fullPath, toolContext.projectPath);
-          if (vault) {
+          if (vault && isVaultInsideProject(vault, toolContext.projectPath)) {
             const vaultRel = pathRelative(vault.rootPath, pathCheck.fullPath).replaceAll("\\", "/");
             const intercepted = await vaultFileRead({
               vault,
@@ -4623,15 +4786,23 @@ export class Orchestrator {
     // run for being unreliable. The agent was then left writing C# with no way
     // to find out whether it compiles — which is the state this tool exists to
     // prevent.
-    const toolErrorCount = this.toolIsCircuitBroken(
-      chatId,
-      activeToolCall.name,
-      failureTarget(activeToolCall.input),
-    );
-    if (toolErrorCount !== null && !isVerificationToolName(activeToolCall.name)) {
+    const breakerScope = this.toolBreakerScope(chatId);
+    const breakerTarget = failureTarget(activeToolCall.input);
+    const tripped = this.toolIsCircuitBroken(breakerScope.key, activeToolCall.name, breakerTarget);
+    if (tripped !== null && !isVerificationToolName(activeToolCall.name)) {
+      // audited 2026-09-02: name what was measured — the count, whether it was
+      // one target or many, the scope, and when a retry is admitted. The old
+      // text claimed "temporarily" while the code implemented "forever".
+      const where =
+        tripped.measured === "same target" && breakerTarget
+          ? `on '${breakerTarget}'`
+          : "across different targets";
       return {
         toolCallId: activeToolCall.id,
-        content: `Tool '${activeToolCall.name}' has failed ${toolErrorCount} consecutive times and is temporarily disabled for this conversation. Use a different approach or tool.`,
+        content:
+          `Tool '${activeToolCall.name}' has failed ${tripped.count} consecutive times ${where} ` +
+          `in this ${breakerScope.label} and is temporarily disabled: one retry is admitted after ` +
+          `${Math.ceil(tripped.retryAfterMs / 1000)}s. Use a different approach or tool meanwhile.`,
         isError: true,
       };
     }
@@ -4682,6 +4853,12 @@ export class Orchestrator {
     }
 
     // Intervention Engine: evaluate instincts before tool execution (Learning Pipeline v2)
+    //
+    // audited 2026-09-02: the verdict of this scan was thrown away — `warn`
+    // reached logger.debug and nothing else, so no learned warning ever reached
+    // the model while the scan was still paid on every call. Warn-tier matches
+    // are collected here and appended to the tool result the model reads.
+    const learnedWarnings: string[] = [];
     if (this.interventionEngine && this.instinctRetriever) {
       try {
         const relevantInstincts = await this.instinctRetriever.getMatchedInstincts(
@@ -4694,11 +4871,13 @@ export class Orchestrator {
             relevantInstincts,
           );
 
-          if (intervention.action === 'warn') {
-            logger.debug("Intervention engine: warn for tool", {
-              tool: activeToolCall.name,
-              matches: intervention.matches.length,
-            });
+          for (const match of intervention.matches.filter((m: { tier: string }) => m.tier === 'warn')) {
+            const source = relevantInstincts.find((inst) => inst.id === match.instinctId);
+            if (!source) continue;
+            learnedWarnings.push(`${source.name}: ${source.action}`.slice(0, 300));
+            await this.interventionEngine.logIntervention(
+              match.instinctId, activeToolCall.name, 'warn', 'applied',
+            );
           }
 
           if (intervention.action === 'auto_apply') {
@@ -4723,13 +4902,22 @@ export class Orchestrator {
     });
 
     if (this.isWriteOperation(activeToolCall.name)) {
-      if (executionPolicy.mode === "self_managed") {
+      // audited 2026-09-02: the local review (framework-paths wall, batch
+      // operation review, destructive-shell refusal) used to run ONLY on the
+      // self_managed branch. An ordinary interactive chat resolves every write
+      // to user_confirm, so a loose Assets/Scripts/*.cs edit and a batch of
+      // thirty writes plus a file_delete both ran with no review and, for the
+      // batch, no prompt. The review is a conformance check, not an approval
+      // substitute: it runs on both branches, and the human prompt follows it.
+      if (executionPolicy.mode === "self_managed" || executionPolicy.mode === "user_confirm") {
+        const humanConfirms = executionPolicy.mode === "user_confirm";
         const review = await this.reviewSelfManagedWriteOperation(
           chatId,
           activeToolCall.name,
           activeToolCall.input,
           mode,
           options,
+          humanConfirms,
         );
         if (!review.approved) {
           return this.buildSelfManagedWriteRejection(
@@ -4739,14 +4927,21 @@ export class Orchestrator {
             review.reason ?? "operation did not pass local safety review",
           );
         }
-      } else if (executionPolicy.mode === "user_confirm") {
-        const destructive = isDestructiveOperation(activeToolCall.name, activeToolCall.input);
+      }
+      if (executionPolicy.mode === "user_confirm") {
+        const destructive = this.isDestructiveForConfirmation(activeToolCall.name, activeToolCall.input);
         const sessionUserId = options.userId ?? chatId;
         const prefs = this.dmPolicy.getSessionPrefs(sessionUserId, chatId);
-        const stubDiff = {
+        // audited 2026-09-02: this was a stub with `totalChanges: 1`, so the
+        // SMART line threshold could never fire. Derive the size from the
+        // input; a size that cannot be derived counts as exceeding the
+        // threshold — an unmeasured write must not be reported as one line.
+        const estimate = estimateWriteChangeLines(activeToolCall.name, activeToolCall.input);
+        const totalChanges = estimate.known ? estimate.totalChanges : prefs.smartLineThreshold;
+        const sizedDiff = {
           path: String(activeToolCall.input["path"] ?? ""),
           content: "",
-          stats: { additions: 0, deletions: 0, modifications: 0, totalChanges: 1, hunks: 1 },
+          stats: { additions: 0, deletions: 0, modifications: 0, totalChanges, hunks: 1 },
           oldPath: "",
           newPath: String(activeToolCall.input["path"] ?? ""),
           diff: "",
@@ -4754,7 +4949,7 @@ export class Orchestrator {
           isDeleted: false,
           isRename: false,
         };
-        if (this.dmPolicy.isApprovalRequired(prefs, stubDiff, destructive)) {
+        if (this.dmPolicy.isApprovalRequired(prefs, sizedDiff, destructive)) {
           const confirmed = await this.requestWriteConfirmation(
             chatId,
             options.userId,
@@ -4870,11 +5065,16 @@ export class Orchestrator {
       }
       emitSubstep(result.isError ? "skipped" : "done");
 
-      this.trackToolError(chatId, activeToolCall.name, !!result.isError, failureTarget(activeToolCall.input));
+      this.trackToolError(breakerScope.key, activeToolCall.name, !!result.isError, breakerTarget);
 
+      // audited 2026-09-02: a warn-tier instinct match is shown to the model here,
+      // on the result it reads, instead of dying in a debug log.
+      const content = sanitizeToolResult(result.content);
       return {
         toolCallId: activeToolCall.id,
-        content: sanitizeToolResult(result.content),
+        content: learnedWarnings.length === 0
+          ? content
+          : `${content}\n\n[learned warning for ${activeToolCall.name}]\n${learnedWarnings.map((w) => `- ${w}`).join("\n")}`,
         isError: result.isError,
         metadata: result.metadata,
       };
@@ -4888,7 +5088,7 @@ export class Orchestrator {
       });
       emitSubstep("skipped");
 
-      this.trackToolError(chatId, activeToolCall.name, true, failureTarget(activeToolCall.input));
+      this.trackToolError(breakerScope.key, activeToolCall.name, true, breakerTarget);
 
       return {
         toolCallId: activeToolCall.id,
@@ -4919,6 +5119,11 @@ export class Orchestrator {
    */
   private isWriteOperation(toolName: string): boolean {
     if (WRITE_OPERATIONS.has(toolName)) return true;
+    // audited 2026-09-02: a batch dispatch tool is a write by construction —
+    // it runs whatever operations it carries. Whether its registration
+    // metadata survived the adapter (it does not always) must not decide
+    // whether the batch review at reviewSelfManagedWriteOperation ever runs.
+    if (BATCH_DISPATCH_TOOLS.has(toolName)) return true;
 
     // Registration is where this is decided — see registerTool, which applies the
     // allowlist, the tool's own declaration, and finally its shape. Reading the
@@ -4994,6 +5199,10 @@ export class Orchestrator {
     for (const chatId of expired) {
       this.askUserBlockCounts.delete(chatId);
       this.toolConsecutiveErrors.delete(chatId);
+      // Run-scoped breaker entries hang off the chatId with a NUL separator.
+      for (const key of this.toolConsecutiveErrors.keys()) {
+        if (key.startsWith(`${chatId}\u0000`)) this.toolConsecutiveErrors.delete(key);
+      }
     }
   }
 

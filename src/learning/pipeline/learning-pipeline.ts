@@ -119,6 +119,22 @@ export class LearningPipeline {
   /** Scope promotion threshold (Phase 13): distinct projects needed for universal promotion */
   private promotionThreshold = 3;
 
+  /**
+   * audited 2026-09-02: per-run credit ledger, keyed by the run's sessionId (= chatId).
+   * The orchestrator tags EVERY tool:result of a run with the whole set retrieved
+   * ONCE at run start, so an instinct retrieved once was being credited once per
+   * tool call — 60 calls read as "applied 60x", and 13 failing unrelated calls
+   * deprecated a healthy teaching. An instinct is now credited at most once per
+   * run per tool it governs; the orchestrator clears the run's ledger at teardown
+   * ({@link clearRunInstinctCredits}) alongside currentSessionInstinctIds.
+   */
+  private readonly runCreditedInstinctIds = new Map<string, Set<string>>();
+
+  /** Run teardown: forget which instincts this run already credited. */
+  clearRunInstinctCredits(sessionId: string): void {
+    this.runCreditedInstinctIds.delete(sessionId);
+  }
+
   constructor(
     storage: LearningStorage,
     config: Partial<LearningConfig> = {},
@@ -358,6 +374,15 @@ export class LearningPipeline {
         // Shared with the trajectory-credit disjoint computation (computeTrajectoryCreditIds) so the
         // two stay exact complements by construction (Issue #22 SIBLING A).
         if (!LearningPipeline.isInstinctRelevantToTool(instinct, event.toolName as string)) continue;
+
+        // audited 2026-09-02: once per run, not once per tool call (see runCreditedInstinctIds).
+        let credited = this.runCreditedInstinctIds.get(event.sessionId);
+        if (!credited) {
+          credited = new Set<string>();
+          this.runCreditedInstinctIds.set(event.sessionId, credited);
+        }
+        if (credited.has(instinctId)) continue;
+        credited.add(instinctId);
 
         // Increment coolingFailures for failures on cooling instincts
         let instinctForUpdate = instinct;
