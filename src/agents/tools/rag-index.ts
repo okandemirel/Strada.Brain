@@ -1,8 +1,9 @@
 import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { extname, resolve } from "node:path";
 import { validatePath } from "../../security/path-guard.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.js";
 import type { IRAGPipeline } from "../../rag/rag.interface.js";
+import { isRagIndexableFile, RAG_INDEXABLE_EXTENSIONS } from "../../rag/rag.interface.js";
 
 /**
  * Tool that allows the LLM to trigger RAG indexing.
@@ -56,6 +57,18 @@ export class RAGIndexTool implements ITool {
 
     const absolutePath = resolve(context.projectPath, filePath);
 
+    // indexFile returns 0 both for "unchanged" and for "no chunker for this
+    // extension"; the tool used to report the second as "no changes detected",
+    // a false statement of cause. Name the real reason (audited 2026-09-02).
+    if (!isRagIndexableFile(absolutePath)) {
+      const ext = extname(absolutePath) || "(no extension)";
+      return {
+        content:
+          `Not indexable: ${ext} is not a supported source type for ${filePath} ` +
+          `(RAG indexes ${RAG_INDEXABLE_EXTENSIONS.join(", ")} only)`,
+      };
+    }
+
     let content: string;
     try {
       content = await readFile(absolutePath, "utf-8");
@@ -95,10 +108,18 @@ export class RAGIndexTool implements ITool {
         stats.changedFiles !== undefined ? ` (${stats.changedFiles} changed)` : "";
       const duration = (stats.durationMs / 1000).toFixed(1);
 
+      // totalFiles counts files with an indexable extension that were handed
+      // to the chunker. A zero here means the scan found nothing it could
+      // index — say so rather than let it read as a clean pass (audited 2026-09-02).
+      const emptyNote =
+        stats.totalFiles === 0
+          ? ` — no ${RAG_INDEXABLE_EXTENSIONS.join("/")} sources found under project path`
+          : "";
+
       return {
         content:
           `Indexed project: ${stats.totalFiles} file(s)${changed}, ` +
-          `${stats.totalChunks} chunk(s) in ${duration}s`,
+          `${stats.totalChunks} chunk(s) in ${duration}s${emptyNote}`,
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

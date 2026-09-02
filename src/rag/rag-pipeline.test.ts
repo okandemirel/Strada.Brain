@@ -320,6 +320,40 @@ describe("RAGPipeline", () => {
   // indexFile
   // -------------------------------------------------------------------------
 
+  // -------------------------------------------------------------------------
+  // indexProject
+  // -------------------------------------------------------------------------
+
+  describe("indexProject", () => {
+    it("counts only the files it can actually index, not every file it globbed (audited 2026-09-02)", async () => {
+      const { mkdtemp, writeFile, mkdir, rm } = await import("node:fs/promises");
+      const { tmpdir } = await import("node:os");
+      const { join } = await import("node:path");
+
+      const dir = await mkdtemp(join(tmpdir(), "rag-index-project-"));
+      try {
+        await mkdir(join(dir, "Assets"), { recursive: true });
+        await writeFile(join(dir, "Assets", "Foo.cs"), "public class Foo {}");
+        // Files the C# chunker can never index — they must not inflate totalFiles.
+        await writeFile(join(dir, "a.ts"), "export const a = 1;");
+        await writeFile(join(dir, "README.md"), "# readme");
+        await writeFile(join(dir, "package.json"), "{}");
+        await writeFile(join(dir, "ci.yml"), "on: push");
+
+        mockChunks.push(makeChunk({ id: "foo-1", filePath: join(dir, "Assets", "Foo.cs") }));
+
+        const stats = await pipeline.indexProject(dir);
+
+        expect(stats.totalFiles).toBe(1);
+        expect(stats.changedFiles).toBe(1);
+        expect(stats.totalChunks).toBe(1);
+        expect(stats.errors).toEqual([]);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+  });
+
   describe("indexFile", () => {
     it("skips non-C# files instead of feeding them through the C# chunker", async () => {
       mockChunks.push(makeChunk({ id: "ts-1", filePath: "src/a.ts" }));

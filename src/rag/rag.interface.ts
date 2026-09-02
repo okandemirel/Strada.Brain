@@ -490,6 +490,24 @@ export interface IndexingProgress {
   readonly percentage: Percentage;
 }
 
+/**
+ * File extensions the code RAG pipeline can actually index.
+ *
+ * `chunkCSharpFile` is the only code chunker in the repo, so `.cs` is the
+ * only source type `RAGPipeline.indexFile` accepts. The project glob and the
+ * `rag_index` tool consult this same list so that what is scanned, what is
+ * counted, and what is reported all agree (audited 2026-09-02).
+ */
+export const RAG_INDEXABLE_EXTENSIONS: readonly string[] = [".cs"];
+
+/** True when the code RAG pipeline has a chunker for this file's extension. */
+export function isRagIndexableFile(filePath: string): boolean {
+  const dot = filePath.lastIndexOf(".");
+  const slash = Math.max(filePath.lastIndexOf("/"), filePath.lastIndexOf("\\"));
+  if (dot <= slash) return false;
+  return RAG_INDEXABLE_EXTENSIONS.includes(filePath.slice(dot).toLowerCase());
+}
+
 /** RAG pipeline interface */
 export interface IRAGPipeline {
   /** Initialize the pipeline */

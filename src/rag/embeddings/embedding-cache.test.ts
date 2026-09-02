@@ -276,6 +276,40 @@ describe("CachedEmbeddingProvider", () => {
     expect(result.usage.totalTokens).toBe(0);
   });
 
+  it("a hit is not evicted by a miss in the same embed() call (audited 2026-09-02)", async () => {
+    // Fill a 5-entry cache in LRU order A..E, so A and B sit at the LRU front.
+    const small = new CachedEmbeddingProvider(inner, { maxCacheSize: 5 });
+    const seeds = ["A", "B", "C", "D", "E"];
+    for (const [i, text] of seeds.entries()) {
+      inner.embed.mockResolvedValueOnce(makeEmbedResult([makeEmbedding(i)], 1));
+      await small.embed([text]);
+    }
+    inner.embed.mockClear();
+
+    // 2 hits (A, B — the oldest) + 2 misses (X, Y). At capacity, each miss
+    // evicts the LRU front; unless the hits were refreshed/held, the misses
+    // evict exactly A and B and the result carries undefined vectors.
+    inner.embed.mockResolvedValueOnce(
+      makeEmbedResult([makeEmbedding(88), makeEmbedding(89)], 2),
+    );
+    const result = await small.embed(["A", "B", "X", "Y"]);
+
+    // The provider was asked only for the misses — A and B were hits.
+    expect(inner.embed).toHaveBeenCalledOnce();
+    expect(inner.embed).toHaveBeenCalledWith(["X", "Y"]);
+
+    // Every returned vector is a real vector, and the hits are the cached ones.
+    expect(result.embeddings).toHaveLength(4);
+    for (const vec of result.embeddings) {
+      expect(Array.isArray(vec)).toBe(true);
+      expect(vec.length).toBe(128);
+    }
+    expect(result.embeddings[0]).toEqual(makeEmbedding(0));
+    expect(result.embeddings[1]).toEqual(makeEmbedding(1));
+    expect(result.embeddings[2]).toEqual(makeEmbedding(88));
+    expect(result.embeddings[3]).toEqual(makeEmbedding(89));
+  });
+
   it("throws on a short/misaligned provider batch instead of poisoning the cache", async () => {
     // Two uncached texts, but the provider returns only ONE embedding.
     inner.embed.mockResolvedValue(makeEmbedResult([makeEmbedding(1)]));
