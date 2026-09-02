@@ -972,6 +972,41 @@ describe("CampaignManager", () => {
     expect(messages.at(-1)!.text).toContain("GDD drafted");
   });
 
+  it("finds a GDD the draft wrote in a docs/ subfolder instead of redrafting", async () => {
+    // Audited 2026-09-02: findNewestGddPath was a flat readdirSync(docs), so
+    // docs/design/Ashen_GDD.md was invisible and the campaign redrafted.
+    rmSync(join(projectRoot, "docs", "Game_GDD.md"));
+    mkdirSync(join(projectRoot, "docs", "design"), { recursive: true });
+    writeFileSync(join(projectRoot, "docs", "design", "Ashen_GDD.md"), "# Ashen GDD\n\nElement schedule: ...");
+    const campaign = manager.startFromIdea(ctx, "a roguelike about ash");
+
+    tasks.emit("task:completed", "task_1", "wrote docs/design/Ashen_GDD.md");
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("awaiting-approval"));
+    expect(storage.get(campaign.id)!.gddPath).toBe("docs/design/Ashen_GDD.md");
+    expect(tasks.submitted).toHaveLength(1);
+  });
+
+  it("a draft that keeps completing without a discoverable GDD is bounded by the draft budget", async () => {
+    // Audited 2026-09-02: the no-file branch called submitDraft without ever
+    // touching draftAttempts — full LLM draft tasks forever, no message, no
+    // failure, the one-campaign-per-project slot wedged with no revive path.
+    rmSync(join(projectRoot, "docs", "Game_GDD.md"));
+    const campaign = manager.startFromIdea(ctx, "a puzzle game about nothing");
+
+    for (let n = 1; n <= 3; n++) {
+      tasks.emit("task:completed", `task_${n}`, "I described the GDD in chat");
+      await vi.waitFor(() => expect(tasks.submitted).toHaveLength(n + 1));
+      expect(storage.get(campaign.id)!.draftAttempts).toBe(n);
+      expect(tasks.submitted[n]!.prompt).toContain("never wrote the GDD file");
+    }
+    // The fourth landing without a file exhausts the budget: stop loudly.
+    tasks.emit("task:completed", "task_4", "I described the GDD in chat");
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"));
+    expect(tasks.submitted).toHaveLength(4);
+    expect(storage.get(campaign.id)!.lastError).toMatch(/no \*GDD\*\.md was found under docs\/ \(searched recursively\)/);
+    expect(messages.at(-1)!.text).toContain("kampanya devam");
+  });
+
   it("resumeActive leaves a still-running task alone", async () => {
     manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
     await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));

@@ -11,7 +11,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { join } from "node:path";
+import { join, relative, sep } from "node:path";
 import { getLoggerSafe } from "../utils/logger.js";
 import { allProvidersCoolingDownMs } from "../agents/providers/provider-outage.js";
 import type { IncomingMessage } from "../channels/channel-messages.interface.js";
@@ -772,13 +772,35 @@ export class CampaignManager {
 
   private async onDraftSettled(campaign: Campaign, status: TaskStatus, output: string): Promise<void> {
     if (status === TaskStatus.completed) {
+      // The executor commits the task's lease back to the project root AFTER
+      // complete() — order the docs/ scan behind that write-back, as the
+      // milestone path does, or a correctly written GDD is not there yet.
+      if (this.completedSettleDelayMs > 0) {
+        await new Promise((r) => setTimeout(r, this.completedSettleDelayMs));
+      }
       const gddPath = this.findNewestGddPath();
       if (!gddPath) {
         // The draft "completed" without producing the document — redo it with
-        // the gap named, instead of gating on air.
+        // the gap named, instead of gating on air. This round is CHARGED:
+        // audited 2026-09-02, this branch never touched draftAttempts, so a
+        // draft that kept landing off-pattern spun full LLM tasks forever with
+        // no message, no failure and the project slot wedged unrevivably.
+        const gap =
+          "no *GDD*.md was found under docs/ (searched recursively)";
+        if (campaign.draftAttempts >= this.maxDraftAttempts) {
+          campaign.state = "failed";
+          campaign.lastError = `GDD draft completed ${campaign.draftAttempts + 1} times but ${gap}`;
+          this.persist(campaign);
+          await this.tell(
+            campaign,
+            `GDD drafting failed — ${campaign.lastError}. Share the document, or reply **kampanya devam** to try again.`,
+          );
+          return;
+        }
+        campaign.draftAttempts += 1;
         this.submitDraft(
           campaign,
-          "The previous draft never wrote the GDD file under docs/. Write the file this time.",
+          `The previous draft never wrote the GDD file under docs/ — ${gap}. Write the file this time, as docs/<GameName>_GDD.md.`,
         );
         return;
       }
@@ -1682,15 +1704,44 @@ export class CampaignManager {
     return count;
   }
 
-  /** Newest *GDD*.md under docs/ by mtime — the file the draft just wrote. */
+  /**
+   * Newest *GDD*.md under docs/ by mtime — the file the draft just wrote.
+   * Walks subfolders (bounded depth): audited 2026-09-02, a flat readdir
+   * made docs/design/Ashen_GDD.md invisible and the campaign redrafted.
+   */
   private findNewestGddPath(): string | undefined {
     const docsDir = join(this.projectRoot, "docs");
     if (!existsSync(docsDir)) return undefined;
-    const candidates = readdirSync(docsDir)
-      .filter((f) => /gdd/i.test(f) && f.toLowerCase().endsWith(".md"))
-      .map((f) => ({ f, mtime: statSync(join(docsDir, f)).mtimeMs }))
-      .sort((a, b) => b.mtime - a.mtime);
-    return candidates[0] ? `docs/${candidates[0].f}` : undefined;
+    const candidates: Array<{ rel: string; mtime: number }> = [];
+    const stack: Array<{ dir: string; depth: number }> = [{ dir: docsDir, depth: 0 }];
+    while (stack.length > 0) {
+      const { dir, depth } = stack.pop()!;
+      let entries;
+      try {
+        entries = readdirSync(dir, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (const e of entries) {
+        const full = join(dir, e.name);
+        if (e.isDirectory()) {
+          if (depth < 3 && !e.name.startsWith(".") && e.name !== "node_modules") {
+            stack.push({ dir: full, depth: depth + 1 });
+          }
+        } else if (/gdd/i.test(e.name) && e.name.toLowerCase().endsWith(".md")) {
+          try {
+            candidates.push({
+              rel: relative(this.projectRoot, full).split(sep).join("/"),
+              mtime: statSync(full).mtimeMs,
+            });
+          } catch {
+            /* vanished mid-scan */
+          }
+        }
+      }
+    }
+    candidates.sort((a, b) => b.mtime - a.mtime);
+    return candidates[0]?.rel;
   }
 
   /**
