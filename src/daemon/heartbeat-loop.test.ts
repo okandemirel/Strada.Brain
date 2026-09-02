@@ -400,6 +400,31 @@ describe("HeartbeatLoop", () => {
     );
   });
 
+  it("an approval-only (deploy) fire is still announced and still counts as activity (audited 2026-09-02)", async () => {
+    // The approval-only branch returns before daemon:trigger_fired and before
+    // identityManager.recordActivity(): the fire was written to history but
+    // never reached the dashboard, the notification router or the CLI, and a
+    // daemon that fired all night still looked idle to the identity manager —
+    // which is what gates idle-driven consolidation.
+    const deploy = makeTrigger("deploy-readiness", {
+      shouldFire: true,
+      description: "Deployment readiness detection",
+      type: "deploy",
+    });
+    registry.register(deploy);
+
+    loop.start();
+    await loop.tick();
+
+    const fired = (eventBus.emit as any).mock.calls.filter((c: unknown[]) => c[0] === "daemon:trigger_fired");
+    expect(fired).toHaveLength(1);
+    expect(fired[0]![1]).toMatchObject({ triggerName: "deploy-readiness" });
+    // No task was submitted, so the event must not name one.
+    expect((fired[0]![1] as { taskId?: string }).taskId).toBeUndefined();
+    expect(taskManager.submit).not.toHaveBeenCalled();
+    expect(identityManager.recordActivity).toHaveBeenCalledTimes(1);
+  });
+
   it("skips trigger submission while a foreground task is active and idlePause is enabled", () => {
     config = makeDaemonConfig({
       heartbeat: {
@@ -1152,6 +1177,43 @@ describe("HeartbeatLoop — the daemon daily sub-limit gates trigger dispatch", 
 
     expect(taskManager.submit).toHaveBeenCalled();
   });
+
+  it("emits the sub-limit breach once, not on every tick while spend stays over (audited 2026-09-02)", async () => {
+    // The sub-limit gate returns early each tick, so an unlatched emit
+    // re-announced the same breach every intervalMs for up to 24h — one push
+    // notification per tick until the daily window rolled over.
+    const storage = makeBudgetStorage();
+    const mgr = new UnifiedBudgetManager(storage, { emit: () => {} }, {});
+    mgr.updateConfig({ subLimits: { daemonDailyUsd: 5, agentDefaultUsd: 5, verificationPct: 0.15 } });
+    mgr.recordCost(6, "daemon", { triggerName: "overnight" });
+
+    loop.setUnifiedBudgetManager(mgr);
+    registry.register(makeTrigger("t1", { shouldFire: true }));
+    loop.start();
+
+    await loop.tick();
+    await loop.tick();
+
+    const breaches = () => (eventBus.emit as any).mock.calls.filter(
+      (c: unknown[]) => c[0] === "daemon:budget_exceeded"
+        && (c[1] as { source?: string }).source === "unified:daemon-sublimit",
+    );
+    expect(breaches()).toHaveLength(1);
+    expect(taskManager.submit).not.toHaveBeenCalled();
+
+    // Operator raises the sub-limit in the portal: spend is under again, the
+    // daemon dispatches, and the latch re-arms.
+    mgr.updateConfig({ subLimits: { daemonDailyUsd: 100, agentDefaultUsd: 5, verificationPct: 0.15 } });
+    await loop.tick();
+    expect(breaches()).toHaveLength(1);
+    expect(taskManager.submit).toHaveBeenCalledTimes(1);
+
+    // A fresh breach after the drop must be announced.
+    mgr.updateConfig({ subLimits: { daemonDailyUsd: 5, agentDefaultUsd: 5, verificationPct: 0.15 } });
+    await loop.tick();
+    expect(breaches()).toHaveLength(2);
+    expect(breaches()[1]![1]).toMatchObject({ usedUsd: 6, limitUsd: 5 });
+  });
 });
 
 describe("HeartbeatLoop — the legacy daemon:budget_warning re-arms when usage drops under warnPct (audited 2026-09-02)", () => {
@@ -1196,6 +1258,60 @@ describe("HeartbeatLoop — the legacy daemon:budget_warning re-arms when usage 
 
       await nextTick(); // still 0.95: edge-triggered
       expect(warnings()).toHaveLength(2);
+    } finally {
+      loop.stop();
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("HeartbeatLoop — the budget warning has a dead band, so a flapping pct notifies once (audited 2026-09-02)", () => {
+  it("emits one warning while pct oscillates 0.79 <-> 0.81 around warnPct 0.8", async () => {
+    vi.useFakeTimers();
+    const registry = new TriggerRegistry();
+    const taskManager = makeTaskManager();
+    const eventBus = makeEventBus();
+    const config = makeDaemonConfig(); // warnPct 0.8
+    let pct = 0.81;
+    const budgetTracker = {
+      isExceeded: vi.fn(() => pct >= 1),
+      isWarning: vi.fn(() => pct >= 0.8),
+      getUsage: vi.fn(() => ({ usedUsd: pct * 10, limitUsd: 10, pct })),
+      recordCost: vi.fn(),
+      resetBudget: vi.fn(),
+    };
+    const loop = new HeartbeatLoop(
+      registry, taskManager as any, budgetTracker as any, makeSecurityPolicy() as any,
+      makeApprovalQueue() as any, makeStorage() as any, makeIdentityManager() as any, eventBus,
+      config, makeLogger() as any,
+    );
+    registry.register(makeTrigger("idle", { shouldFire: false })); // the warning check runs per trigger
+    const warnings = () => (eventBus.emit as any).mock.calls.filter((c: unknown[]) => c[0] === "daemon:budget_warning");
+    try {
+      loop.start();
+
+      await loop.tick(); // 0.81 -> first (and only legitimate) warning
+      expect(warnings()).toHaveLength(1);
+
+      // The sliding window drifts either side of the threshold for the rest of
+      // the day. Each dip below 0.8 used to re-arm the latch, so every climb
+      // back over it pushed another medium-urgency notification.
+      for (const next of [0.79, 0.81, 0.79, 0.81, 0.795, 0.805]) {
+        pct = next;
+        await loop.tick();
+      }
+      expect(warnings()).toHaveLength(1);
+
+      // A real recovery clears the dead band (warnPct - 0.05 = 0.75)...
+      pct = 0.70;
+      await loop.tick();
+      expect(warnings()).toHaveLength(1);
+
+      // ...and the next genuine crossing is announced.
+      pct = 0.82;
+      await loop.tick();
+      expect(warnings()).toHaveLength(2);
+      expect(warnings()[1]![1]).toMatchObject({ pct: 0.82, limitUsd: 10 });
     } finally {
       loop.stop();
       vi.useRealTimers();

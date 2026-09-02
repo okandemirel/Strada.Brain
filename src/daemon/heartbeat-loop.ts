@@ -36,6 +36,12 @@ import type { TriggerDeduplicator } from "./dedup/trigger-deduplicator.js";
 import type * as winston from "winston";
 import type { UnifiedBudgetManager } from "../budget/unified-budget-manager.js";
 
+/**
+ * Hysteresis for the daemon:budget_warning latch: once warned, usage must fall
+ * this far below warnPct before a new warning can fire (audited 2026-09-02).
+ */
+const BUDGET_WARN_DEAD_BAND = 0.05;
+
 /** Identity manager interface -- only the subset HeartbeatLoop uses */
 interface IdentityActivity {
   recordActivity(): void;
@@ -69,6 +75,13 @@ export class HeartbeatLoop {
   /** Track budget exceeded/warning state to emit events only once per state change */
   private budgetExceededEmitted = false;
   private budgetWarningEmitted = false;
+  /**
+   * Same latch for the unified daemon sub-limit. Audited 2026-09-02: that emit
+   * was unlatched, and its gate returns before the trigger loop, so the same
+   * breach was re-announced every heartbeat tick (one push per tick, for up to
+   * a whole day) instead of once per crossing.
+   */
+  private daemonSubLimitExceededEmitted = false;
 
   /** Consolidation state (Phase 25) */
   private consolidationEngine?: ConsolidationEngineContract;
@@ -325,16 +338,24 @@ export class HeartbeatLoop {
       if (this.unifiedBudgetManager.isSourceExceeded("daemon")) {
         const usedUsd = this.unifiedBudgetManager.getSnapshot().breakdown.daemon;
         const limitUsd = this.unifiedBudgetManager.getConfig().subLimits.daemonDailyUsd;
-        this.eventBus.emit("daemon:budget_exceeded", {
-          source: "unified:daemon-sublimit",
-          usedUsd,
-          limitUsd,
-          timestamp: now.getTime(),
-        } as never);
+        // Latched like the legacy budget wall (audited 2026-09-02): announce the
+        // crossing once, not once per tick for as long as spend sits over it.
+        if (!this.daemonSubLimitExceededEmitted) {
+          this.eventBus.emit("daemon:budget_exceeded", {
+            source: "unified:daemon-sublimit",
+            usedUsd,
+            limitUsd,
+            timestamp: now.getTime(),
+          } as never);
+          this.daemonSubLimitExceededEmitted = true;
+        }
         this.logger.info("Daemon daily sub-limit reached — triggers skipped this tick", { usedUsd, limitUsd });
         this.lastTick = now;
         return;
       }
+      // Under the sub-limit again (window drained, or the operator raised it) —
+      // re-arm so the next crossing is announced.
+      this.daemonSubLimitExceededEmitted = false;
     }
 
     // Sequential evaluation -- prevents budget race conditions
@@ -390,8 +411,19 @@ export class HeartbeatLoop {
       // recovery branches, so once the sliding window drained below warnPct
       // without a hard stop, no further warning could ever fire — and this
       // legacy event is the one that drives push notifications. Re-arm on
-      // every drop below the threshold.
-      if (budgetUsage.pct < this.config.budget.warnPct) {
+      // a drop below the threshold — but only a real one.
+      //
+      // Audited 2026-09-02: re-arming at exactly warnPct gave the latch no
+      // hysteresis, so a sliding window drifting 0.79 <-> 0.81 pushed a fresh
+      // medium-urgency notification on every crossing. Re-arm only once usage
+      // falls a dead band below the threshold; the notification then marks a
+      // genuine new approach to the limit, not window jitter.
+      // Halve the band rather than let it swallow a very low warnPct: a
+      // negative re-arm point would silently disable re-arming altogether.
+      const warnRearmPct =
+        this.config.budget.warnPct
+        - Math.min(BUDGET_WARN_DEAD_BAND, this.config.budget.warnPct / 2);
+      if (budgetUsage.pct < warnRearmPct) {
         this.budgetWarningEmitted = false;
       }
       if (budgetUsage.pct >= this.config.budget.warnPct && !this.budgetWarningEmitted) {
@@ -497,6 +529,18 @@ export class HeartbeatLoop {
             } catch (err) {
               this.logger.warn("Failed to record trigger fire history", { trigger: name, error: String(err) });
             }
+            // The fire is real even though no task carries it: record it as
+            // daemon activity and announce it, exactly like the submitting
+            // path (audited 2026-09-02 — this branch returned before both, so
+            // the dashboard, the notification router and the CLI never saw
+            // deploy fires, and a daemon firing all night still read as idle
+            // to the identity manager). The event names no task because none
+            // was submitted.
+            this.identityManager?.recordActivity();
+            this.eventBus.emit("daemon:trigger_fired", {
+              triggerName: name,
+              timestamp: now.getTime(),
+            });
             this.logger.info("Trigger fired (approval-only; no task submitted)", { trigger: name });
             continue;
           }

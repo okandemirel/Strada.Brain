@@ -448,6 +448,11 @@ export function parseHeartbeatFile(
   // same name is skipped here, like every other malformation in this file.
   // Audited 2026-09-02: it used to reach TriggerRegistry.register(), which
   // throws, and that throw aborted the whole process at startup.
+  //
+  // Only a section that actually produced a trigger claims its name (audited
+  // 2026-09-02): reserving the slug up front let a malformed section squat on
+  // it, so the corrected section further down was dropped as a "duplicate" of
+  // a trigger that was never registered.
   const seenNames = new Set<string>();
 
   // Skip the first section (content before first ### heading)
@@ -468,7 +473,6 @@ export function parseHeartbeatFile(
       );
       continue;
     }
-    seenNames.add(name);
 
     const sectionLines = lines.slice(1);
 
@@ -516,6 +520,8 @@ export function parseHeartbeatFile(
     }
 
     if (def) {
+      // The section survived its own validation — now it owns the name.
+      seenNames.add(name);
       results.push(def);
     }
   }
