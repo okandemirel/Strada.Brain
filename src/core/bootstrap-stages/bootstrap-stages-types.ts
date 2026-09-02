@@ -452,6 +452,8 @@ export interface MemoryConsolidationStageDeps {
     sqliteDb?: unknown;
     entries: unknown[];
     hnswStore?: unknown;
+    /** TF-IDF index the engine mirrors its Map mutations into (audited 2026-09-02). */
+    textIndex?: unknown;
   };
   createMemoryConsolidationEngine?: (
     options: unknown,

@@ -1229,12 +1229,15 @@ export class AgentDBMemory implements IUnifiedMemory {
     entries: Map<string, UnifiedMemoryEntry>;
     hnswStore: HNSWVectorStore | undefined;
     hnswWriteMutex: HnswWriteMutex;
+    /** TF-IDF index — the engine must mirror its entries-Map mutations here (audited 2026-09-02). */
+    textIndex: TextIndex;
   } {
     return {
       sqliteDb: this.sqliteDb,
       entries: this.entries,
       hnswStore: this.hnswStore,
       hnswWriteMutex: this.writeMutex,
+      textIndex: this.textIndex,
     };
   }
 

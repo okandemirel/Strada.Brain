@@ -10,6 +10,7 @@ import { MemoryConsolidationEngine } from "./consolidation-engine.js";
 import type { ConsolidationEngineOptions } from "./consolidation-engine.js";
 import { MemoryTier } from "./unified-memory.interface.js";
 import type { ConsolidationConfig } from "./consolidation-types.js";
+import { TextIndex, extractTerms } from "../text-index.js";
 
 // ---------------------------------------------------------------------------
 // Test Helpers
@@ -239,6 +240,7 @@ function makeOpts(overrides: Partial<ConsolidationEngineOptions> = {}): Consolid
       remove: vi.fn(async () => {}),
       upsert: vi.fn(async () => {}),
     },
+    textIndex: new TextIndex(),
     config: makeConfig(),
     generateEmbedding: vi.fn(async () => [0.1, 0.2, 0.3, 0.4]),
     summarizeWithLLM: vi.fn(async () => ({
@@ -1279,5 +1281,87 @@ describe("HNSW chunk shape", () => {
     }
     expect(upserted.find((u) => u.id === "o1")!.chunk.content).toBe("original one");
     expect(upserted.find((u) => u.id === "o2")!.chunk.content).toBe("original two");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: TF-IDF index mirroring (audited 2026-09-02)
+// ---------------------------------------------------------------------------
+// The engine received no textIndex, so folding N members into one summary left
+// docCount N-1 too high and df still counting the deleted members' terms —
+// every retrieveTFIDF score skewed for the rest of the process.
+
+describe("TF-IDF index mirroring", () => {
+  function seedIndex(entries: Map<string, unknown>): TextIndex {
+    const idx = new TextIndex();
+    for (const e of entries.values()) idx.addDocument(extractTerms((e as { content: string }).content));
+    return idx;
+  }
+
+  it("processCluster removes member terms and adds summary terms, keeping docCount === entries.size", async () => {
+    const entries = new Map<string, unknown>();
+    entries.set("t1", makeMemEntry("t1", "hydraulic press calibration telemetry", { tier: MemoryTier.Ephemeral }));
+    entries.set("t2", makeMemEntry("t2", "hydraulic press telemetry drift", { tier: MemoryTier.Ephemeral }));
+    entries.set("t3", makeMemEntry("t3", "unrelated cooking recipe", { tier: MemoryTier.Ephemeral }));
+    const textIndex = seedIndex(entries);
+    expect(textIndex.getDocumentCount()).toBe(3);
+    expect(textIndex.serialize().df["telemetry"]).toBe(2);
+
+    const engine = new MemoryConsolidationEngine(makeOpts({ entries, textIndex }));
+    await engine.processCluster({
+      seedId: "t1",
+      memberIds: ["t1", "t2"],
+      avgSimilarity: 0.9,
+      tier: MemoryTier.Ephemeral,
+    });
+
+    expect(entries.size).toBe(2);
+    expect(textIndex.getDocumentCount()).toBe(entries.size);
+    const df = textIndex.serialize().df;
+    // Member-only terms are gone; the summary ("Consolidated summary") is registered.
+    expect(df["telemetry"]).toBeUndefined();
+    expect(df["hydraulic"]).toBeUndefined();
+    expect(df["consolidated"]).toBe(1);
+    expect(df["summary"]).toBe(1);
+    // The untouched entry is still counted exactly once.
+    expect(df["recipe"]).toBe(1);
+  });
+
+  it("undo removes the summary terms and re-registers the restored originals", async () => {
+    const { db, tables } = makeFakeDb();
+    tables.consolidation_log.push({
+      id: "log-t",
+      summary_entry_id: "sum-t",
+      source_entry_ids: JSON.stringify(["r1", "r2"]),
+      status: "completed",
+    });
+    tables.memories.push({ id: "r1", value: JSON.stringify({ type: "note", content: "restored alpha beacon" }), metadata: "{}", embedding: null, created_at: 1 });
+    tables.memories.push({ id: "r2", value: JSON.stringify({ type: "note", content: "restored beta beacon" }), metadata: "{}", embedding: null, created_at: 2 });
+
+    const entries = new Map<string, unknown>();
+    entries.set("sum-t", makeMemEntry("sum-t", "merged beacon summary", { tier: MemoryTier.Ephemeral }));
+    entries.set("other", makeMemEntry("other", "unrelated cooking recipe", { tier: MemoryTier.Ephemeral }));
+    const textIndex = seedIndex(entries);
+    expect(textIndex.getDocumentCount()).toBe(2);
+
+    const engine = new MemoryConsolidationEngine(makeOpts({ sqliteDb: db as any, entries, textIndex }));
+    await engine.undo("log-t");
+
+    expect(entries.size).toBe(3);
+    expect(textIndex.getDocumentCount()).toBe(entries.size);
+    const df = textIndex.serialize().df;
+    expect(df["merged"]).toBeUndefined();
+    expect(df["summary"]).toBeUndefined();
+    expect(df["beacon"]).toBe(2);
+    expect(df["restored"]).toBe(2);
+    expect(df["recipe"]).toBe(1);
+  });
+
+  it("warns at construction when no textIndex is supplied — a skipped mirror must not look like a mirrored one", () => {
+    const logger = makeLogger();
+    const opts = makeOpts({ logger });
+    delete (opts as Partial<ConsolidationEngineOptions>).textIndex;
+    new MemoryConsolidationEngine(opts);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("No TF-IDF index supplied"));
   });
 });

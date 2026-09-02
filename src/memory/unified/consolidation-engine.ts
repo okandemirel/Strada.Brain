@@ -19,6 +19,7 @@ import type {
 } from "./consolidation-types.js";
 import { MemoryTier } from "./unified-memory.interface.js";
 import { toVectorEntry } from "./agentdb-vector.js";
+import { extractTerms } from "../text-index.js";
 
 // =============================================================================
 // TYPES FOR CONSTRUCTOR DEPENDENCIES
@@ -98,12 +99,28 @@ interface HnswWriteMutexContract {
   withLock<T>(fn: () => Promise<T>): Promise<T>;
 }
 
+/**
+ * Minimal TF-IDF index interface (AgentDBMemory's TextIndex).
+ *
+ * Every path that removes an entry from the shared `entries` Map must mirror
+ * the removal here, else df/docCount drift and every IDF score skews
+ * (agentdb-tiering.ts documents the invariant; cleanupExpired, delete and
+ * enforceTierLimits honour it). Consolidation did not receive the index at
+ * all and was the one Map-mutation path that bypassed it (audited 2026-09-02).
+ */
+interface TextIndexContract {
+  addDocument(terms: string[]): void;
+  removeDocument(terms: string[]): void;
+}
+
 /** Constructor options for MemoryConsolidationEngine */
 export interface ConsolidationEngineOptions {
   sqliteDb: Database.Database;
   entries: Map<string, unknown>;
   hnswStore: unknown;
   hnswWriteMutex?: HnswWriteMutexContract;
+  /** TF-IDF index shared with retrieval; see TextIndexContract. */
+  textIndex: TextIndexContract;
   config: ConsolidationConfig;
   generateEmbedding: (text: string) => Promise<number[]>;
   summarizeWithLLM: (contents: string[]) => Promise<SummarizeResult>;
@@ -122,6 +139,7 @@ export class MemoryConsolidationEngine {
   private readonly entries: Map<string, MemoryEntryLike>;
   private readonly hnsw: HnswStoreContract;
   private readonly hnswMutex: HnswWriteMutexContract | null;
+  private readonly textIndex: TextIndexContract | null;
   private readonly config: ConsolidationConfig;
   private readonly generateEmbedding: (text: string) => Promise<number[]>;
   private readonly summarizeWithLLM: (contents: string[]) => Promise<SummarizeResult>;
@@ -151,12 +169,21 @@ export class MemoryConsolidationEngine {
     this.entries = opts.entries as Map<string, MemoryEntryLike>;
     this.hnsw = opts.hnswStore as HnswStoreContract;
     this.hnswMutex = opts.hnswWriteMutex ?? null;
+    // Typed as required, but the bootstrap wiring casts through `unknown`,
+    // so guard at runtime and say so — a missing index must never look like
+    // a mirrored one (audited 2026-09-02).
+    this.textIndex = opts.textIndex ?? null;
     this.config = opts.config;
     this.generateEmbedding = opts.generateEmbedding;
     this.summarizeWithLLM = opts.summarizeWithLLM;
     this.emitter = opts.eventEmitter;
     this.logger = opts.logger;
     this.agentId = opts.agentId;
+    if (!this.textIndex) {
+      this.logger.warn(
+        "[Consolidation] No TF-IDF index supplied — every cycle will drift df/docCount and skew retrieveTFIDF scores until the next restart",
+      );
+    }
     // Always exempt instincts; merge with provided exempt domains
     this.exemptDomains = new Set(["instinct", ...(opts.exemptDomains ?? [])]);
 
@@ -550,11 +577,17 @@ export class MemoryConsolidationEngine {
       await doHnswAndFinalize();
     }
 
-    // Update in-memory entries only after both SQLite and HNSW succeed
+    // Update in-memory entries only after both SQLite and HNSW succeed.
+    // Mirror every Map mutation in the TF-IDF index (remove BEFORE delete —
+    // extractTerms needs the content that is about to leave the map).
+    for (const member of memberEntries) {
+      this.textIndex?.removeDocument(extractTerms(member.content));
+    }
     for (const id of cluster.memberIds) {
       this.entries.delete(id);
     }
     this.entries.set(summaryId, summaryEntry);
+    this.textIndex?.addDocument(extractTerms(summaryEntry.content));
 
     this.logger.debug("[Consolidation] Processed cluster", {
       clusterId: cluster.seedId,
@@ -727,7 +760,12 @@ export class MemoryConsolidationEngine {
       markUndoneStmt.run(logId);
     })();
 
-    // Update in-memory entries: restore originals, remove summary
+    // Update in-memory entries: restore originals, remove summary.
+    // Mirror both in the TF-IDF index (audited 2026-09-02).
+    const summaryInMemory = this.entries.get(summaryEntryId);
+    if (summaryInMemory) {
+      this.textIndex?.removeDocument(extractTerms(summaryInMemory.content));
+    }
     this.entries.delete(summaryEntryId);
 
     // Restore originals to in-memory map by reading from DB
@@ -759,6 +797,7 @@ export class MemoryConsolidationEngine {
           chatId: (parsed.chatId as string) ?? "default",
           version: (parsed.version as number) ?? 1,
         });
+        this.textIndex?.addDocument(extractTerms((parsed.content as string) ?? ""));
       }
     }
 
