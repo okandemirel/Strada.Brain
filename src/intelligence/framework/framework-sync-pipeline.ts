@@ -17,7 +17,7 @@ import type {
   FrameworkPackageId,
   FrameworkPackageConfig,
 } from "./framework-types.js";
-import { FrameworkKnowledgeStore } from "./framework-knowledge-store.js";
+import { FrameworkKnowledgeStore, computeSnapshotFingerprint } from "./framework-knowledge-store.js";
 import { FRAMEWORK_PACKAGE_CONFIGS } from "./framework-package-configs.js";
 import { createExtractor } from "./framework-extractor-factory.js";
 import {
@@ -66,12 +66,19 @@ export class FrameworkSyncPipeline {
         const snapshot = await extractor.extract();
 
         const previous = this.store.getLatestSnapshot(pkgId);
+        // The extraction above already ran; compare its content too. Version
+        // and git HEAD both stay put during an in-place edit, so keying on
+        // them alone discarded a correct fresh snapshot as "unchanged" and
+        // froze every consumer at the first indexed API. Audited 2026-09-02.
+        const fingerprint = computeSnapshotFingerprint(snapshot);
         if (
           previous &&
-          !this.store.needsSync(pkgId, snapshot.version, snapshot.gitHash)
+          !this.store.needsSync(pkgId, snapshot.version, snapshot.gitHash, fingerprint)
         ) {
           logger.debug(
-            `Framework sync: ${pkgConfig.displayName} unchanged, skipping`,
+            `Framework sync: ${pkgConfig.displayName} skipped — version ${snapshot.version ?? "(none)"}, ` +
+              `git HEAD ${snapshot.gitHash ? snapshot.gitHash.slice(0, 12) : "(none)"} and extracted API content ` +
+              `(${snapshot.fileCount} files, fingerprint ${fingerprint.slice(0, 12)}) all match the stored snapshot`,
           );
           continue;
         }

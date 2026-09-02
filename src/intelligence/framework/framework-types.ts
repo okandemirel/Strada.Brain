@@ -147,6 +147,8 @@ export interface FrameworkPackageMetadata {
   readonly lastSyncAt: number;
   readonly lastVersion: string | null;
   readonly lastGitHash: string | null;
+  /** sha256 of the extracted API content at last sync; null for rows written before 2026-09-02. */
+  readonly lastContentHash: string | null;
   readonly syncCount: number;
 }
 

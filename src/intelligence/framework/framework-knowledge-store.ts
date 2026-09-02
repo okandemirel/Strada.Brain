@@ -6,6 +6,7 @@
  */
 
 import Database from "better-sqlite3";
+import { createHash } from "node:crypto";
 import { configureSqlitePragmas } from "../../memory/unified/sqlite-pragmas.js";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
@@ -44,9 +45,48 @@ CREATE TABLE IF NOT EXISTS framework_metadata (
   last_sync_at INTEGER,
   last_version TEXT,
   last_git_hash TEXT,
+  last_content_hash TEXT,
   sync_count INTEGER DEFAULT 0
 );
 `;
+
+/**
+ * Additive migrations for databases created before a column existed.
+ * Each entry is applied only when PRAGMA table_info lacks the column.
+ */
+const COLUMN_MIGRATIONS: ReadonlyArray<{ table: string; column: string; ddl: string }> = [
+  // audited 2026-09-02: needsSync gained a content fingerprint.
+  { table: "framework_metadata", column: "last_content_hash", ddl: "ALTER TABLE framework_metadata ADD COLUMN last_content_hash TEXT" },
+];
+
+/**
+ * Stable fingerprint of a snapshot's extracted API content. Excludes
+ * extraction time and source path (those change without the API changing) so
+ * two extractions of the same code fingerprint identically. This is the
+ * signal `needsSync` was missing: version and git HEAD both stay put during an
+ * in-place edit, so they could never say "changed". Audited 2026-09-02.
+ */
+export function computeSnapshotFingerprint(snapshot: FrameworkAPISnapshot): string {
+  const content = {
+    packageId: snapshot.packageId,
+    packageName: snapshot.packageName,
+    version: snapshot.version,
+    gitHash: snapshot.gitHash,
+    namespaces: snapshot.namespaces,
+    baseClasses: Object.fromEntries(snapshot.baseClasses),
+    attributes: Object.fromEntries(snapshot.attributes),
+    interfaces: snapshot.interfaces,
+    enums: snapshot.enums,
+    classes: snapshot.classes,
+    structs: snapshot.structs,
+    exportedFunctions: snapshot.exportedFunctions,
+    tools: snapshot.tools,
+    resources: snapshot.resources,
+    prompts: snapshot.prompts,
+    fileCount: snapshot.fileCount,
+  };
+  return createHash("sha256").update(JSON.stringify(content)).digest("hex");
+}
 
 // ─── Serialization Helpers ──────────────────────────────────────────────────
 
@@ -109,6 +149,12 @@ export class FrameworkKnowledgeStore {
   /** Create tables and indexes */
   initialize(): void {
     this.db.exec(SCHEMA_SQL);
+    for (const m of COLUMN_MIGRATIONS) {
+      const cols = this.db.prepare(`PRAGMA table_info(${m.table})`).all() as Array<{ name: string }>;
+      if (!cols.some((c) => c.name === m.column)) {
+        this.db.exec(m.ddl);
+      }
+    }
   }
 
   /** Store a new snapshot */
@@ -122,12 +168,13 @@ export class FrameworkKnowledgeStore {
     `);
 
     const upsertMeta = this.prepare(`
-      INSERT INTO framework_metadata (package_id, last_sync_at, last_version, last_git_hash, sync_count)
-      VALUES (?, ?, ?, ?, 1)
+      INSERT INTO framework_metadata (package_id, last_sync_at, last_version, last_git_hash, last_content_hash, sync_count)
+      VALUES (?, ?, ?, ?, ?, 1)
       ON CONFLICT(package_id) DO UPDATE SET
         last_sync_at = excluded.last_sync_at,
         last_version = excluded.last_version,
         last_git_hash = excluded.last_git_hash,
+        last_content_hash = excluded.last_content_hash,
         sync_count = sync_count + 1
     `);
 
@@ -152,6 +199,7 @@ export class FrameworkKnowledgeStore {
         now,
         snapshot.version,
         snapshot.gitHash,
+        computeSnapshotFingerprint(snapshot),
       );
     })();
   }
@@ -196,6 +244,7 @@ export class FrameworkKnowledgeStore {
       last_sync_at: number;
       last_version: string | null;
       last_git_hash: string | null;
+      last_content_hash: string | null;
       sync_count: number;
     } | undefined;
     if (!row) return null;
@@ -204,22 +253,50 @@ export class FrameworkKnowledgeStore {
       lastSyncAt: row.last_sync_at,
       lastVersion: row.last_version,
       lastGitHash: row.last_git_hash,
+      lastContentHash: row.last_content_hash ?? null,
       syncCount: row.sync_count,
     };
   }
 
-  /** Check if a sync is needed based on version/hash changes */
+  /**
+   * Check if a sync is needed.
+   *
+   * Compares git hash, version and — when the caller offers one — the content
+   * fingerprint of the freshly extracted snapshot. Returns true whenever a
+   * compared signal differs, AND whenever nothing could be compared: a
+   * verdict of "unchanged" with no measurement behind it was the defect here
+   * (version and HEAD never move for an in-place edit). Audited 2026-09-02.
+   */
   needsSync(
     packageId: FrameworkPackageId,
     currentVersion: string | null,
     currentGitHash: string | null,
+    currentContentHash?: string | null,
   ): boolean {
     const meta = this.getMetadata(packageId);
     if (!meta) return true;
-    if (currentGitHash && meta.lastGitHash && currentGitHash !== meta.lastGitHash) return true;
-    if (currentVersion && meta.lastVersion && currentVersion !== meta.lastVersion) return true;
     if (!meta.lastSyncAt) return true;
-    return false;
+
+    let compared = 0;
+    if (currentGitHash && meta.lastGitHash) {
+      compared++;
+      if (currentGitHash !== meta.lastGitHash) return true;
+    }
+    if (currentVersion && meta.lastVersion) {
+      compared++;
+      if (currentVersion !== meta.lastVersion) return true;
+    }
+    if (currentContentHash) {
+      // A fingerprint was offered: it is the only signal that sees an
+      // in-place edit. No stored fingerprint (row predates the column) means
+      // nothing to compare against, so the answer is "sync".
+      if (!meta.lastContentHash) return true;
+      compared++;
+      if (currentContentHash !== meta.lastContentHash) return true;
+    }
+
+    // Nothing was compared: do not claim "unchanged".
+    return compared === 0;
   }
 
   /** Prune old snapshots keeping only the N most recent per package */

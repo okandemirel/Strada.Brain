@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { FrameworkKnowledgeStore } from "./framework-knowledge-store.js";
+import Database from "better-sqlite3";
+import { FrameworkKnowledgeStore, computeSnapshotFingerprint } from "./framework-knowledge-store.js";
 import type { FrameworkAPISnapshot, FrameworkPackageId } from "./framework-types.js";
 import { join } from "node:path";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -372,5 +373,70 @@ describe("FrameworkKnowledgeStore", () => {
       store.initialize();
       store.initialize();
     }).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// needsSync must measure content, not only version/hash (audited 2026-09-02)
+// ---------------------------------------------------------------------------
+
+describe("needsSync content fingerprint (audited 2026-09-02)", () => {
+  let tmpDir: string;
+  let store: FrameworkKnowledgeStore;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "fw-store-fp-"));
+    store = new FrameworkKnowledgeStore(join(tmpDir, "fp.db"));
+    store.initialize();
+  });
+
+  afterEach(() => {
+    store.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("returns true when version and hash match but the extracted API content differs", () => {
+    const stored = makeSnapshot({ packageId: "core", version: "1.0.0", gitHash: "abc123" });
+    store.storeSnapshot(stored);
+
+    const edited = makeSnapshot({
+      packageId: "core",
+      version: "1.0.0",
+      gitHash: "abc123",
+      classes: [
+        ...stored.classes,
+        { name: "NetworkSystemBase", namespace: "Strada.Core.ECS", baseTypes: ["SystemBase"], isAbstract: true },
+      ],
+    });
+
+    expect(computeSnapshotFingerprint(edited)).not.toBe(computeSnapshotFingerprint(stored));
+    expect(store.needsSync("core", "1.0.0", "abc123", computeSnapshotFingerprint(edited))).toBe(true);
+    expect(store.needsSync("core", "1.0.0", "abc123", computeSnapshotFingerprint(stored))).toBe(false);
+  });
+
+  it("stores the content fingerprint in metadata and ignores extraction time in it", () => {
+    const a = makeSnapshot({ packageId: "core", extractedAt: new Date("2026-01-01T00:00:00Z") });
+    const b = makeSnapshot({ packageId: "core", extractedAt: new Date("2026-02-01T00:00:00Z"), sourcePath: "/elsewhere" });
+    expect(computeSnapshotFingerprint(a)).toBe(computeSnapshotFingerprint(b));
+
+    store.storeSnapshot(a);
+    expect(store.getMetadata("core")!.lastContentHash).toBe(computeSnapshotFingerprint(a));
+  });
+
+  it("returns true when no signal at all can distinguish the snapshots", () => {
+    store.storeSnapshot(makeSnapshot({ packageId: "core", version: null, gitHash: null }));
+    // No version, no hash, no fingerprint offered: nothing was compared, so
+    // "unchanged" would be a fabricated verdict.
+    expect(store.needsSync("core", null, null)).toBe(true);
+  });
+
+  it("returns true when the stored row predates fingerprints (nothing to compare against)", () => {
+    store.storeSnapshot(makeSnapshot({ packageId: "core", version: "1.0.0", gitHash: "abc123" }));
+    // Simulate a row written before the column existed.
+    const raw = new Database(join(tmpDir, "fp.db"));
+    raw.prepare("UPDATE framework_metadata SET last_content_hash = NULL WHERE package_id = ?").run("core");
+    raw.close();
+    expect(store.getMetadata("core")!.lastContentHash).toBeNull();
+    expect(store.needsSync("core", "1.0.0", "abc123", "anything")).toBe(true);
   });
 });
