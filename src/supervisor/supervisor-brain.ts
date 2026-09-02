@@ -416,18 +416,38 @@ export class SupervisorBrain {
       }));
 
       const dispatchSignal = externalSignal ? AbortSignal.any([externalSignal, internalSignal]) : internalSignal;
-      const dispatchContext: SupervisorContext =
-        context.signal === dispatchSignal
-          ? context
-          : {
-              ...context,
-              signal: dispatchSignal,
-            };
+      // The execute-node bridge carries a node's completed dependencies into
+      // its prompt by reading `context.goalTree`. That tree was never set on
+      // the fresh-decomposition path (the decomposition stayed LOCAL here), and
+      // no path ever wrote a finished node's output back into any tree — so a
+      // wave-2 worker received its one-line task and nothing of what wave 1
+      // returned as prose. Dispatch against a live copy of the decomposed tree
+      // and record each ok node's output before the next wave launches (the
+      // dispatcher awaits the whole wave, so the write is race-free).
+      // Audited 2026-09-02.
+      const liveNodes = new Map(decomposedGoalTree.nodes);
+      const liveGoalTree: GoalTree = { ...decomposedGoalTree, nodes: liveNodes };
+      const dispatchContext: SupervisorContext = {
+        ...context,
+        signal: dispatchSignal,
+        goalTree: liveGoalTree,
+      };
       const executeNodeFn = this.executeNodeFn;
       const dispatcher = new SupervisorDispatcher({
         onLiveness: context.onLiveness,
-        executeNode: (node: TaggedGoalNode, nodeSignal: AbortSignal) =>
-          executeNodeFn(node, dispatchContext, nodeSignal),
+        executeNode: async (node: TaggedGoalNode, nodeSignal: AbortSignal) => {
+          const nodeResult = await executeNodeFn(node, dispatchContext, nodeSignal);
+          const previous = liveNodes.get(node.id);
+          if (previous && nodeResult.status === "ok") {
+            liveNodes.set(node.id, {
+              ...previous,
+              status: "completed",
+              result: nodeResult.output,
+              updatedAt: Date.now(),
+            });
+          }
+          return nodeResult;
+        },
         config: {
           // A SHARED lease means one worktree: concurrent nodes would write
           // the same files with no lock and no usable conflict recovery, so

@@ -211,6 +211,69 @@ describe("createSupervisorExecuteNodeBridge", () => {
     expect(result.cost).toBeCloseTo(estimateCostWithCache(usage, "deepseek"), 10);
   });
 
+  it("hands a wave-2 node what wave 1 produced, on the fresh-decomposition path (audited 2026-09-02)", async () => {
+    // The bridge's dep-carry block was gated on `context.goalTree`, which the
+    // brain never set on the fresh path (it decomposed into a LOCAL tree), and
+    // no node result was ever written back into any tree — so "implement the
+    // enemy state machine" received its one-line task and nothing of the design
+    // the previous wave returned as prose.
+    const { SupervisorBrain } = await import("../supervisor/supervisor-brain.js");
+    const { CapabilityMatcher } = await import("../supervisor/capability-matcher.js");
+    const { ProviderAssigner } = await import("../supervisor/provider-assigner.js");
+
+    const now = Date.now();
+    const nodes = new Map<string, any>([
+      ["root", { id: "root", parentId: null, task: "Build the enemy", dependsOn: [], depth: 0, status: "pending", createdAt: now, updatedAt: now }],
+      ["s1", { id: "s1", parentId: "root", task: "design the enemy state machine", dependsOn: [], depth: 1, status: "pending", createdAt: now, updatedAt: now }],
+      ["s2", { id: "s2", parentId: "root", task: "implement the enemy state machine", dependsOn: ["s1"], depth: 1, status: "pending", createdAt: now, updatedAt: now }],
+    ]);
+    const decomposer = {
+      shouldDecompose: vi.fn().mockReturnValue(true),
+      decomposeProactive: vi.fn().mockResolvedValue({
+        rootId: "root", sessionId: "s", taskDescription: "Build the enemy", nodes, createdAt: now,
+      }),
+    };
+
+    const runWorkerEnvelope = vi.fn().mockImplementation(async (_orch: unknown, envelope: { prompt: string }) => ({
+      output: envelope.prompt.startsWith("design")
+        ? "DESIGN: states Idle→Patrol→Chase→Attack; transitions on player distance"
+        : "implemented",
+      workerResult: { status: "completed", toolTrace: [] },
+    }));
+    const bridge = createSupervisorExecuteNodeBridge({
+      backgroundExecutor: { runWorkerEnvelope } as any,
+      orchestrator: {} as any,
+      workspaceBus: { emit: vi.fn() } as any,
+      defaultChannelType: "cli",
+    });
+
+    const brain = new SupervisorBrain({
+      config: {
+        enabled: true, complexityThreshold: "complex", maxParallelNodes: 4, nodeTimeoutMs: 5000,
+        verificationMode: "disabled", verificationBudgetPct: 15, triageProvider: "groq",
+        maxFailureBudget: 3, diversityCap: 0.6,
+      },
+      decomposer: decomposer as any,
+      capabilityMatcher: new CapabilityMatcher(),
+      providerAssigner: new ProviderAssigner([
+        { name: "claude", model: "sonnet", scores: { reasoning: 0.9, vision: 0.9, "code-gen": 0.9, "tool-use": 0.9, "long-context": 0.9, speed: 0.5, cost: 0.4, quality: 0.9, creative: 0.8 } },
+      ]),
+    });
+    brain.setExecuteNode(bridge);
+
+    const result = await brain.execute("Build the enemy", { chatId: "chat-1" } as any);
+    expect(result?.succeeded).toBe(2);
+
+    const prompts = runWorkerEnvelope.mock.calls.map((c) => c[1].prompt as string);
+    const wave2 = prompts.find((p) => p.startsWith("implement the enemy state machine"));
+    expect(wave2).toBeDefined();
+    expect(wave2).toContain("Completed dependencies");
+    expect(wave2).toContain("Idle→Patrol→Chase→Attack");
+    // The tree-linkage stamp follows the same input: every node names its root.
+    const envelopes = runWorkerEnvelope.mock.calls.map((c) => c[1]);
+    expect(envelopes.every((e) => e.goalContext?.rootId === "root")).toBe(true);
+  });
+
   it("wires supervisor execution before channel startup completes", () => {
     const setWorkspaceBus = vi.fn();
     const setMonitorLifecycle = vi.fn();
