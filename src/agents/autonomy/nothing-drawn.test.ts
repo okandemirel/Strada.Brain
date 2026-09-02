@@ -136,6 +136,61 @@ describe('a game that has never been seen to draw', () => {
   });
 });
 
+/**
+ * Audited 2026-09-02: [STRADA SPEC SCOPE] was reachable only INSIDE the
+ * nothing-drawn branch (`specScopePrompt() ?? "[STRADA NOTHING DRAWN] …"`),
+ * where each SPEC SCOPE ask was charged to the nothing-drawn budget. A
+ * non-rendering game with unimplemented elements heard SPEC SCOPE three times,
+ * then both gates went silent, and the words "this game has never been
+ * observed to render" — with the last-ask instruction — were never emitted
+ * once. And a game whose frames DID vary was never checked against the
+ * schedule at all.
+ */
+describe('SPEC SCOPE does not spend the NOTHING DRAWN budget', () => {
+  const GDD = '| Unlock | Element |\n| --- | --- |\n| L21 | Rocket |\n';
+
+  function withSchedule(frames: string[]): { root: string; configPath: string } {
+    const fixture = project(frames);
+    const docs = join(fixture.root, 'docs');
+    mkdirSync(docs, { recursive: true });
+    writeFileSync(join(docs, 'GDD.md'), GDD);
+    return fixture;
+  }
+
+  /** Every gate tag heard across `turns` turns of work, in order. */
+  function tagsHeard(root: string, configPath: string, turns: number): { tags: string[]; asked: string[] } {
+    const guard = new StradaConformanceGuard(deps, { projectPath: root, enabled: true });
+    guard.trackToolCall('file_write', { path: configPath }, false);
+    guard.trackToolCall('unity_playmode_verify', {}, false);
+    const asked: string[] = [];
+    for (let turn = 0; turn < turns; turn++) {
+      guard.trackToolCall('file_read', { path: configPath }, false);
+      asked.push(guard.getPrompt() ?? '');
+    }
+    return { asked, tags: asked.map((p) => /\[STRADA ([A-Z ]+)\]/u.exec(p)?.[1] ?? '(none)') };
+  }
+
+  it('asks both, each on its own budget, and still delivers the last-ask instruction', () => {
+    const { root, configPath } = withSchedule(Array.from({ length: 12 }, () => 'same-pixels'));
+
+    const { tags, asked } = tagsHeard(root, configPath, 12);
+
+    expect(tags).toContain('SPEC SCOPE');
+    expect(tags.filter((t) => t === 'NOTHING DRAWN')).toHaveLength(3);
+    const lastDrawn = asked.filter((p) => p.includes('NOTHING DRAWN')).at(-1) ?? '';
+    expect(lastDrawn).toContain('rather than reporting it as delivered');
+  });
+
+  it('checks the schedule even when the frames vary', () => {
+    const { root, configPath } = withSchedule(['a', 'b', 'c', 'd']);
+
+    const { tags } = tagsHeard(root, configPath, 8);
+
+    expect(tags).toContain('SPEC SCOPE');
+    expect(tags).not.toContain('NOTHING DRAWN');
+  });
+});
+
 describe('nothingDrawn — differing frames are not proof of drawing', () => {
   it('the scene census counts renderers a playfield needs', async () => {
     const { countSceneRenderersImpl, MIN_PLAYFIELD_RENDERERS } = await import('./strada-conformance.js');
