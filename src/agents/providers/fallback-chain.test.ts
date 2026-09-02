@@ -951,3 +951,67 @@ describe("FallbackChainProvider mid-stream failure handling", () => {
     expect(recordFailure).toHaveBeenCalledWith("broken", expect.stringContaining("stream reset"));
   });
 });
+
+// audited 2026-09-02: the recovery probe recorded EVERY probe error through the
+// generic recordFailure(), so an 8h quota / credential bench that had just expired
+// was replaced by a 30s-degraded → ≤10min escalating cooldown, and the dead
+// provider was re-probed every cooldown expiry for the rest of the block. A probe
+// failure must land on the same cooldown class a real attempt would.
+describe("FallbackChainProvider — recovery probe failures keep their cooldown class", () => {
+  beforeEach(() => {
+    ProviderHealthRegistry.resetInstance();
+  });
+
+  function recoveringChain(probeError: Error): { chain: FallbackChainProvider; p1: IAIProvider; p2: IAIProvider } {
+    const p1 = { ...createMockProvider(), name: "quota-dead" };
+    (p1.chat as ReturnType<typeof vi.fn>).mockRejectedValue(probeError);
+    const p2 = { ...createMockProvider({ text: "from-p2" }), name: "healthy-backup" };
+    const chain = new FallbackChainProvider([p1, p2]);
+    const health = ProviderHealthRegistry.getInstance();
+    // The provider was benched for quota; the bench has just expired → isRecovering.
+    health.recordQuotaExhausted("quota-dead", "HTTP 403: quota exceeded");
+    Object.assign(health.getEntry("quota-dead")!, { cooldownUntil: Date.now() - 1000 });
+    expect(health.isRecovering("quota-dead")).toBe(true);
+    return { chain, p1, p2 };
+  }
+
+  it("a probe answered with 403 quota re-benches the provider for the quota cooldown (8h), not 30s", async () => {
+    const { chain, p1, p2 } = recoveringChain(
+      new Error("HTTP 403: quota exceeded for this billing cycle"),
+    );
+    const result = await chain.chat("sys", [], []);
+    expect(result.text).toBe("from-p2");
+    expect(p1.chat).toHaveBeenCalledTimes(1); // the probe only
+    expect(p2.chat).toHaveBeenCalledTimes(1);
+
+    const entry = ProviderHealthRegistry.getInstance().getEntry("quota-dead")!;
+    expect(entry.status).toBe("down");
+    expect(entry.cooldownUntil - Date.now()).toBeGreaterThan(7 * 60 * 60 * 1000);
+  });
+
+  it("a probe answered with 401 benches the provider for the session (credential class)", async () => {
+    const { chain } = recoveringChain(new Error("HTTP 401: invalid_api_key"));
+    await chain.chat("sys", [], []);
+    const entry = ProviderHealthRegistry.getInstance().getEntry("quota-dead")!;
+    expect(entry.status).toBe("down");
+    expect(entry.cooldownUntil - Date.now()).toBeGreaterThan(7 * 60 * 60 * 1000);
+  });
+
+  it("a probe answered with 429 gets the overload cooldown (minutes), not the 30s degraded one", async () => {
+    const { chain } = recoveringChain(new Error("rate-limited (HTTP 429)"));
+    await chain.chat("sys", [], []);
+    const entry = ProviderHealthRegistry.getInstance().getEntry("quota-dead")!;
+    expect(entry.status).toBe("down");
+    expect(entry.cooldownUntil - Date.now()).toBeGreaterThan(4 * 60 * 1000);
+  });
+
+  it("a probe that fails on a hard quota stop honors the provider's Retry-After", async () => {
+    const { chain } = recoveringChain(
+      new QuotaExhaustedError("quota-dead", 3 * 24 * 60 * 60 * 1000, "usage quota exhausted; resets in ~3d"),
+    );
+    await chain.chat("sys", [], []);
+    const entry = ProviderHealthRegistry.getInstance().getEntry("quota-dead")!;
+    expect(entry.status).toBe("down");
+    expect(entry.cooldownUntil - Date.now()).toBeGreaterThan(2 * 24 * 60 * 60 * 1000);
+  });
+});

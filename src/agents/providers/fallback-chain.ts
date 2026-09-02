@@ -400,6 +400,77 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
    * over. With attemptTimeoutMs <= 0 the attempt runs unbounded (back-compat).
    */
   /**
+   * Route a failed attempt to the health method that matches its CAUSE, so the
+   * provider lands on the cooldown class it earned (quota → hours, dead key →
+   * session bench, overload/429 → minutes, anything else → the generic ladder).
+   *
+   * Shared by the real attempt AND the recovery probe. audited 2026-09-02: the
+   * probe catch called the generic recordFailure() for every error, so an 8h
+   * quota / credential bench that had just expired was overwritten by a
+   * 30s-degraded → ≤10min escalating cooldown, and the quota-dead provider was
+   * re-probed every cooldown expiry for the rest of the block (measured ladder:
+   * 30s, 30s, 30s, 120s, 240s, 480s, 600s…), while allProvidersCoolingDownMs()
+   * read every gap as "a member is available" and fired campaign retries into it.
+   */
+  private recordClassifiedFailure(
+    health: ProviderHealthRegistry,
+    provider: IAIProvider,
+    error: unknown,
+    errorMsg: string,
+  ): void {
+    // HARD QUOTA STOP: a 429 whose Retry-After exceeds our entire retry budget — the
+    // provider cannot recover within our window (e.g. a weekly usage-limit reset days
+    // out). fetch-with-retry already failed FAST (non-retryable QuotaExhaustedError),
+    // so we did NOT burn the retry budget. Put THIS provider into a long cooldown
+    // sized ≈ the Retry-After (capped) so it is skipped for the rest of the session.
+    // This is distinct from a transient 429 (medium overload cooldown below): a quota
+    // stop will not heal in minutes, so a medium cooldown would just re-pick the dead
+    // provider next call.
+    const quotaHardStop = error instanceof QuotaExhaustedError ? error : undefined;
+    const isQuotaHardStop = quotaHardStop !== undefined || QUOTA_HARD_STOP_RE.test(errorMsg);
+
+    // Is this failure caused by rate-limiting (HTTP 429)? Either the timeout fired
+    // mid-429-backoff (RateLimitedError), or the provider's retry wrapper exhausted
+    // its 429 retries and threw a "rate-limited (HTTP 429)" message. A hard quota stop
+    // is handled on its own (long cooldown) branch, NOT as a transient rate-limit.
+    const isRateLimited = !isQuotaHardStop
+      && (error instanceof RateLimitedError || RATE_LIMIT_RE.test(errorMsg));
+
+    // Quota/billing (403) errors get a long cooldown so the provider is skipped for
+    // hours. Overload (529/503) AND rate-limit (429) errors get a medium cooldown to
+    // let the server recover — a 429 is transient throttling, not a billing block, so
+    // it must NOT inherit the multi-hour quota cooldown. Single-provider setups use
+    // shorter cooldowns since there is no fallback.
+    const isSingleProvider = this.providers.length === 1;
+    // A ChatGPT/Codex subscription rejecting its pinned model is a static CONFIG
+    // mismatch, NOT a provider-health problem — recording a failure (or cooldown)
+    // would churn an otherwise-healthy provider for hours. Skip health recording
+    // entirely; the caller's non-retryable classification surfaces the clear,
+    // actionable message and stops the chain from collapsing.
+    if (CODEX_MODEL_UNSUPPORTED_RE.test(errorMsg)) {
+      // intentionally record nothing — provider stays healthy for a corrected model
+    } else if (isQuotaHardStop) {
+      // Size the cooldown from the provider's Retry-After (capped). A single-provider
+      // setup still gets the hard-stop cooldown — there is no sibling to fall over to,
+      // and futilely retrying a days-out quota block helps no one; isAvailable()
+      // auto-recovers once the cooldown expires.
+      health.recordQuotaHardStop(
+        provider.name,
+        quotaHardStop?.retryAfterMs ?? Number.NaN,
+        errorMsg,
+      );
+    } else if (/\b403\b/.test(errorMsg) && QUOTA_LIMIT_RE.test(errorMsg)) {
+      const method = isSingleProvider ? "recordQuotaExhaustedShort" : "recordQuotaExhausted";
+      health[method](provider.name, errorMsg);
+    } else if (OVERLOAD_RE.test(errorMsg) || isRateLimited) {
+      const method = isSingleProvider ? "recordOverloadedShort" : "recordOverloaded";
+      health[method](provider.name, errorMsg);
+    } else {
+      health.recordFailure(provider.name, errorMsg);
+    }
+  }
+
+  /**
    * How long to wait for a recovery probe to answer.
    *
    * This was a flat 15s, and it is the ONLY way out of cooldown — a provider
@@ -636,7 +707,15 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
           logger.info("Provider health probe succeeded (probe-only recovery)", { provider: provider.name });
         } catch (probeErr) {
           const probeMsg = probeErr instanceof Error ? probeErr.message : String(probeErr);
-          health.recordFailure(provider.name, probeMsg);
+          // audited 2026-09-02: this used to be the generic recordFailure() for every
+          // probe error, which replaced an expired 8h quota/credential bench with a
+          // 30s → ≤10min ladder and re-probed the dead provider every expiry. A probe
+          // failure earns the same cooldown class a real attempt would.
+          if (isCredentialRejection(probeErr)) {
+            health.recordCredentialRejected(provider.name, probeMsg);
+          } else {
+            this.recordClassifiedFailure(health, provider, probeErr, probeMsg);
+          }
           logger.warn("Provider health probe failed, skipping", { provider: provider.name, error: sanitizeSecrets(probeMsg) });
           continue;
         } finally {
@@ -755,49 +834,9 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
         // IMMEDIATELY. This is distinct from a transient 429 (medium overload cooldown
         // below): a quota stop will not heal in minutes, so a medium cooldown would just
         // re-pick the dead provider next call.
-        const quotaHardStop = error instanceof QuotaExhaustedError ? error : undefined;
-        const isQuotaHardStop = quotaHardStop !== undefined || QUOTA_HARD_STOP_RE.test(errorMsg);
-
-        // Is this failure caused by rate-limiting (HTTP 429)? Either the timeout fired
-        // mid-429-backoff (RateLimitedError), or the provider's retry wrapper exhausted
-        // its 429 retries and threw a "rate-limited (HTTP 429)" message. A hard quota stop
-        // is handled on its own (long cooldown) branch, NOT as a transient rate-limit.
-        const isRateLimited = !isQuotaHardStop
-          && (error instanceof RateLimitedError || RATE_LIMIT_RE.test(errorMsg));
-
-        // Quota/billing (403) errors get a long cooldown so the provider is skipped for
-        // hours. Overload (529/503) AND rate-limit (429) errors get a medium cooldown to
-        // let the server recover — a 429 is transient throttling, not a billing block, so
-        // it must NOT inherit the multi-hour quota cooldown. Single-provider setups use
-        // shorter cooldowns since there is no fallback.
+        const isQuotaHardStop = error instanceof QuotaExhaustedError || QUOTA_HARD_STOP_RE.test(errorMsg);
         const isSingleProvider = this.providers.length === 1;
-        // A ChatGPT/Codex subscription rejecting its pinned model is a static CONFIG
-        // mismatch, NOT a provider-health problem — recording a failure (or cooldown)
-        // would churn an otherwise-healthy provider for hours. Skip health recording
-        // entirely; the non-retryable classification below surfaces the clear,
-        // actionable message and stops the chain from collapsing.
-        const isCodexModelConfigError = CODEX_MODEL_UNSUPPORTED_RE.test(errorMsg);
-        if (isCodexModelConfigError) {
-          // intentionally record nothing — provider stays healthy for a corrected model
-        } else if (isQuotaHardStop) {
-          // Size the cooldown from the provider's Retry-After (capped). A single-provider
-          // setup still gets the hard-stop cooldown — there is no sibling to fall over to,
-          // and futilely retrying a days-out quota block helps no one; isAvailable()
-          // auto-recovers once the cooldown expires.
-          health.recordQuotaHardStop(
-            provider.name,
-            quotaHardStop?.retryAfterMs ?? Number.NaN,
-            errorMsg,
-          );
-        } else if (/\b403\b/.test(errorMsg) && QUOTA_LIMIT_RE.test(errorMsg)) {
-          const method = isSingleProvider ? "recordQuotaExhaustedShort" : "recordQuotaExhausted";
-          health[method](provider.name, errorMsg);
-        } else if (OVERLOAD_RE.test(errorMsg) || isRateLimited) {
-          const method = isSingleProvider ? "recordOverloadedShort" : "recordOverloaded";
-          health[method](provider.name, errorMsg);
-        } else {
-          health.recordFailure(provider.name, errorMsg);
-        }
+        this.recordClassifiedFailure(health, provider, error, errorMsg);
 
         // Reset thinking success counter on any failure
         health.resetThinkingSuccessCounter(provider.name);
