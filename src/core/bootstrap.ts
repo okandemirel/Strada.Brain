@@ -1608,7 +1608,9 @@ async function bootstrapImpl(
         unifiedBudgetManager: sharedUnifiedBudgetManager,
       });
       heartbeatLoop = activeHeartbeatLoop;
-      disposables.push("heartbeatLoop", () => heartbeatLoop?.stop());
+      // shutdown() (not stop()) — process exit releases trigger resources;
+      // the user-facing pause keeps them armed (audited 2026-09-02).
+      disposables.push("heartbeatLoop", () => heartbeatLoop?.shutdown());
 
       // Agent Core: autonomous OODA reasoning loop (Phase 4)
       try {

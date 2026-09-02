@@ -169,8 +169,15 @@ export class HeartbeatLoop {
   }
 
   /**
-   * Stop the heartbeat loop. Persists circuit breaker states,
-   * disposes all triggers, and marks daemon as not running.
+   * Pause the heartbeat loop. Persists circuit breaker states and marks the
+   * daemon as not running. Triggers stay registered and armed so a later
+   * start() resumes them.
+   *
+   * Audited 2026-09-02: this used to dispose every trigger, and start() never
+   * rebuilt them — FileWatchTrigger.dispose() closes its chokidar watcher for
+   * good, so `/daemon stop` then `/daemon start` (or the dashboard toggle)
+   * left file-watch triggers permanently dead while status still counted them
+   * as armed. Disposal belongs to process shutdown: see shutdown().
    */
   stop(): void {
     if (!this.running) return;
@@ -186,16 +193,28 @@ export class HeartbeatLoop {
       this.persistCircuitState(name, cb);
     }
 
-    // Dispose all triggers (fire-and-forget -- stop() is sync)
-    const triggers = this.registry.getAll();
-    if (triggers.length > 0) {
-      void Promise.allSettled(
-        triggers.map((t) => t.dispose?.()),
-      );
-    }
-
     this.storage.setDaemonState("daemon_was_running", "false");
     this.logger.info("Daemon heartbeat stopped");
+  }
+
+  /**
+   * Stop the loop AND release every trigger's resources (file watchers,
+   * buffers). One-way: the loop cannot be restarted in-process afterwards.
+   * Wired to process shutdown, never to the user-facing pause.
+   */
+  async shutdown(): Promise<void> {
+    this.stop();
+    const triggers = this.registry.getAll();
+    if (triggers.length === 0) return;
+    const results = await Promise.allSettled(triggers.map((t) => t.dispose?.()));
+    results.forEach((result, i) => {
+      if (result.status === "rejected") {
+        this.logger.warn("Trigger dispose failed during shutdown", {
+          trigger: triggers[i]?.metadata.name,
+          error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+        });
+      }
+    });
   }
 
   /**

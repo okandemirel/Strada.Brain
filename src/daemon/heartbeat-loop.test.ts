@@ -281,6 +281,37 @@ describe("HeartbeatLoop", () => {
     expect(storage.setDaemonState).toHaveBeenCalledWith("daemon_was_running", "false");
   });
 
+  it("stop() then start() keeps every trigger armed — a pause must not dispose (audited 2026-09-02)", async () => {
+    // /daemon stop -> /daemon start disposed every registered trigger and
+    // never rebuilt them, so file-watch triggers were permanently dead while
+    // status still counted them as armed.
+    const trigger = makeTrigger("watch-1", { shouldFire: true });
+    trigger.dispose = vi.fn(async () => {});
+    registry.register(trigger);
+
+    loop.start();
+    loop.stop();
+    loop.start();
+
+    expect(trigger.dispose).not.toHaveBeenCalled();
+    expect(loop.getDaemonStatus().triggerCount).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(config.heartbeat.intervalMs + 10);
+    expect(taskManager.submit).toHaveBeenCalledTimes(1);
+  });
+
+  it("shutdown() stops the loop and disposes every trigger (process exit path)", async () => {
+    const trigger = makeTrigger("watch-2", { shouldFire: false });
+    trigger.dispose = vi.fn(async () => {});
+    registry.register(trigger);
+
+    loop.start();
+    await loop.shutdown();
+
+    expect(loop.isRunning()).toBe(false);
+    expect(trigger.dispose).toHaveBeenCalledTimes(1);
+  });
+
   it("skips trigger submission while a foreground task is active and idlePause is enabled", () => {
     config = makeDaemonConfig({
       heartbeat: {
