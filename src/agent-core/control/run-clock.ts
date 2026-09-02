@@ -144,6 +144,11 @@ class CallScopeImpl implements CallScope {
     // Silent contribution = the trailing gap since the last activity (a call that never
     // produced a token contributes its whole duration; a productive call contributes ~0).
     this.onLeave(Math.max(0, this.clock.now() - this.lastActivityAt));
+    // audited 2026-09-02: leave() cleared the timers but left this call's token in the task
+    // token's children set — only cancel() pruned — so every call scope (two or three per
+    // iteration, epochs unbounded) stayed reachable from the task token for the life of the
+    // run. Detach without cancelling: the carried reason (stall/hard-timeout) is preserved.
+    this.token.detach();
   }
 }
 

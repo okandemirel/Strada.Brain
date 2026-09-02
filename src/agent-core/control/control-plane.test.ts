@@ -320,6 +320,30 @@ describe("RunClock", () => {
     expect(rc.silenceCeilingExceeded()).toBe(true); // a fresh call did NOT reset the ceiling
   });
 
+  /* audited 2026-09-02: a left call scope must not stay linked to the task token */
+  it("a left call scope is unlinked from the task token (no per-call token accumulates for the run's life)", () => {
+    const clock = new FakeClock(0);
+    const rc = openRunClock(clock, POLICY({ callFirstResponseMs: 100_000, callStallMs: 100_000, callHardMs: 100_000 }));
+    const children = (rc.taskToken as unknown as { children: Set<unknown> }).children;
+    const scopes: ReturnType<typeof rc.enterCall>[] = [];
+    for (let i = 0; i < 50; i += 1) {
+      const call = rc.enterCall({ firstResponseMs: 100_000, stallMs: 100_000, hardMs: 100_000 });
+      clock.advance(10);
+      call.leave();
+      scopes.push(call);
+    }
+    expect(children.size).toBe(0);
+    // A stalled scope's carried reason survives the detach (failedCallReason semantics untouched).
+    const stalled = rc.enterCall({ firstResponseMs: 100, stallMs: 100, hardMs: 100_000 });
+    clock.advance(101);
+    expect(stalled.token.reason).toEqual({ kind: "provider-stall", scope: "call" });
+    stalled.leave();
+    expect(stalled.token.reason).toEqual({ kind: "provider-stall", scope: "call" });
+    // A late task cancel fans out to nothing that has already left.
+    rc.taskToken.cancel({ kind: "user-cancel" });
+    for (const s of scopes) expect(s.token.reason).toBeNull();
+  });
+
   it("a productive call (steady touches) contributes ~0 silent ms", () => {
     const clock = new FakeClock(0);
     const rc = openRunClock(clock, POLICY({ callFirstResponseMs: 100_000, callStallMs: 100_000, callHardMs: 100_000 }));

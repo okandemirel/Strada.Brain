@@ -31,6 +31,12 @@ export interface CancelToken {
   registerInFlight(label: string, abort: (r: CancelReason) => void): Registration;
   /** Subscribe to cancellation. Fires immediately if already cancelled. Returns an unsubscribe fn. */
   onAbort(cb: (r: CancelReason) => void): () => void;
+  /**
+   * Unlink this token from its parent WITHOUT cancelling it (its reason is untouched, so a
+   * carried cancel-vs-stall reason survives). For a scope that has ended: a finished child
+   * must not stay reachable from the parent for the life of the run.
+   */
+  detach(): void;
 }
 
 class CancelTokenImpl implements CancelToken {
@@ -104,6 +110,10 @@ class CancelTokenImpl implements CancelToken {
     }
     this.abortCbs.clear();
 
+    this.parent?.children.delete(this);
+  }
+
+  detach(): void {
     this.parent?.children.delete(this);
   }
 
