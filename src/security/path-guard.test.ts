@@ -156,3 +156,58 @@ describe("validatePath", () => {
     expect(result.valid).toBe(true);
   });
 });
+
+describe("validatePath blocks every .env variant, not just single-suffix ones", () => {
+  // Audited 2026-09-02: `/\.env\.[a-z]+$/i` required exactly one all-alpha
+  // segment after `.env.`, so `.env.production.local`, `.env.local.bak`,
+  // `.env.dev2`, `.env.staging-eu` — and the two backup names this repo
+  // already pushed a live key in (`.env.bak.191546`, `.env.backup-loglevel`,
+  // see .gitignore) — were all handed to file_read in full. .gitignore was
+  // widened to `.env.*` after that incident; the runtime guard was not.
+  let tempDir: string;
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), "path-guard-env-"));
+    mkdirSync(join(tempDir, "config"), { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  const blocked = [
+    ".env",
+    ".env.local",
+    ".env.production",
+    ".env.production.local",
+    ".env.development.local",
+    ".env.test.local",
+    ".env.local.bak",
+    ".env.dev2",
+    ".env.staging-eu",
+    ".env.bak.191546",
+    ".env.backup-loglevel",
+    ".env.local.example",
+    "config/.env.production.local",
+  ];
+
+  for (const name of blocked) {
+    it(`refuses ${name}`, async () => {
+      writeFileSync(join(tempDir, name), "STRIPE_SECRET_KEY=sk_live_x\n");
+      const result = await validatePath(tempDir, name);
+      expect(result.valid).toBe(false);
+      expect(result.error).toBe("Access to sensitive files is not permitted");
+    });
+  }
+
+  const allowed = ["environment.json", "Assets/Env.cs", ".envrc", "config/EnvSettings.cs", "env.md"];
+
+  for (const name of allowed) {
+    it(`still accepts ${name}`, async () => {
+      mkdirSync(join(tempDir, "Assets"), { recursive: true });
+      writeFileSync(join(tempDir, name), "x");
+      const result = await validatePath(tempDir, name);
+      expect(result.valid).toBe(true);
+    });
+  }
+});

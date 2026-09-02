@@ -6,8 +6,13 @@ import { resolve, sep, normalize, isAbsolute } from "node:path";
  * even if they are within the project directory.
  */
 const BLOCKED_PATTERNS: RegExp[] = [
-  /\.env$/i,
-  /\.env\.[a-z]+$/i,
+  // Audited 2026-09-02: this was `/\.env$/` plus `/\.env\.[a-z]+$/`, which
+  // required exactly one all-alpha suffix — so `.env.production.local`,
+  // `.env.dev2`, `.env.staging-eu` and the two backup names this repo already
+  // pushed a live key in (`.env.bak.191546`, `.env.backup-loglevel`, see
+  // .gitignore) were readable in full. Any chain of dot-separated suffixes
+  // after `.env` is now blocked; `.envrc` / `Env.cs` are still allowed.
+  /\.env(\.[A-Za-z0-9_-]+)*$/i,
   /\.git[/\\]config$/i,
   /\.git[/\\]credentials$/i,
   /credentials\.json$/i,
@@ -211,15 +216,23 @@ export async function validatePath(
       // layered set of scripts made 42 write attempts, 38 were refused with
       // "Parent directory does not exist", and it ended up cramming every type
       // into the one file that happened to sit in an existing directory.
-      if (options.allowMissingParents && foundExistingAncestor) {
-        return { valid: true, fullPath: rawFullPath };
+      //
+      // Audited 2026-09-02: this branch used to `return { valid: true }` right
+      // here, ABOVE the BLOCKED_PATTERNS loop — so `Assets/.env` was refused
+      // while `Assets/Config/.env` (Config not yet created) was accepted and
+      // file_write then mkdir -p'd the chain and put the secret on disk. The
+      // walk proves containment, not harmlessness: fall through to the shared
+      // tail so the blocklist is consulted like every other accepted path. The
+      // missing components cannot be symlinks, so rawFullPath is the right
+      // string to test.
+      if (!(options.allowMissingParents && foundExistingAncestor)) {
+        return {
+          valid: false,
+          fullPath: rawFullPath,
+          error: "Parent directory does not exist",
+        };
       }
-
-      return {
-        valid: false,
-        fullPath: rawFullPath,
-        error: "Parent directory does not exist",
-      };
+      realFullPath = rawFullPath;
     }
   }
 

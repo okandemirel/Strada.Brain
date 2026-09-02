@@ -86,7 +86,7 @@ Write operations can require explicit user approval before execution. The DM (Di
 
 Controlled by `REQUIRE_EDIT_CONFIRMATION`. The confirmation flow shows a diff preview to the user and waits for approval (default timeout: 5 minutes).
 
-Implementation: `src/security/dm-policy.ts`, `src/security/dm-state.ts`
+Implementation: `src/security/dm-policy.ts` (pending-confirmation state is in-memory; there is no persisted operation audit trail)
 
 ### 7. Tool Output Sanitization (Orchestrator)
 
@@ -99,19 +99,13 @@ Beyond the SecretSanitizer, the orchestrator applies an additional pass on every
 
 Implementation: `src/agents/orchestrator.ts`
 
-### 8. Role-Based Access Control (RBAC)
+### 8. Roles (static table only)
 
-A full RBAC system with role hierarchy, permission matrix, and policy engine.
+`src/security/auth-hardened.ts` defines five roles (`superadmin`, `admin`, `developer`, `viewer`, `service`) and a static `ROLE_PERMISSIONS` table consulted by `hasPermission()` / `hasAnyPermission()` / `hasAllPermissions()`. Those helpers have no callers outside `src/security/`.
 
-**Roles** (highest to lowest privilege): `superadmin`, `admin`, `developer`, `viewer`, `service`.
+**Not implemented** (audited 2026-09-02): there is no RBAC policy engine, no ABAC engine, no resource/action permission matrix, no ownership or time/IP conditions and no default-deny authorization. The earlier rbac module under src/security/ was deleted as unused in commit 9d34babb (2026-03-22); nothing in the runtime denies a tool call because of a role. Do not plan a multi-tenant deployment around role-based authorization.
 
-**Permission matrix** maps resource types (file, directory, system, config, shell_command, user, agent, memory, log, api_key) to actions (create, read, update, delete, execute, manage, admin) with minimum role requirements.
-
-**Policy engine**: supports custom policies with conditions based on role, permission, ownership, time window, IP address, and custom functions. Policies are priority-ordered. Default behavior is deny-all with explicit allow policies.
-
-**ABAC engine**: attribute-based access control for fine-grained rules based on subject, resource, action, and environment attributes.
-
-Implementation: `src/security/rbac.ts`, `src/security/auth-hardened.ts`
+Implementation: `src/security/auth-hardened.ts`
 
 ### 9. Multi-Agent Session Isolation
 
@@ -122,7 +116,7 @@ When multi-agent mode is enabled, each agent instance operates in an isolated se
 - **Registry controls**: `AgentRegistry` tracks all active instances with health checks and supports forced shutdown of misbehaving agents.
 - **Delegation depth enforcement**: maximum delegation depth (default: 2) prevents infinite delegation loops that could exhaust resources.
 
-Implementation: `src/multi-agent/agent-manager.ts`, `src/multi-agent/agent-budget-tracker.ts`, `src/delegation/delegation-manager.ts`
+Implementation: `src/agents/multi/agent-manager.ts`, `src/agents/multi/agent-budget-tracker.ts`, `src/agents/multi/delegation/delegation-manager.ts`
 
 ### 10. Deployment Security
 
@@ -167,16 +161,14 @@ Implementation: `src/security/auth-hardened.ts`
 
 ### 14. Input Validation
 
-All inputs are validated using Zod schemas before processing.
+There is no central validation module (the earlier `src/validation/` was deleted as unreachable in commit a219a99c). Validation lives at the point of use:
 
-- **Path safety**: blocks null bytes, path traversal (`..`, `~/`), absolute paths.
-- **Shell commands**: whitelist of allowed base commands (`ls`, `git`, `dotnet`, `npm`, etc.) with dangerous pattern rejection (`;`, `|`, `&`, backticks, `$()`, etc.).
-- **C# identifiers**: validated against strict regex patterns to prevent code injection.
-- **Message inputs**: channel-specific schemas enforce size limits and format requirements.
-- **URL validation**: enforces HTTPS/WSS protocols, blocks private/internal webhook targets.
-- **API keys and tokens**: format validation with character and length constraints.
-
-Implementation: `src/validation/schemas.ts`, `src/validation/index.ts`
+- **Configuration**: `src/config/config-schema.ts` is a Zod schema applied to the loaded config.
+- **Path safety**: `src/security/path-guard.ts` blocks null bytes, traversal out of the project root (symlinks resolved) and sensitive filenames.
+- **Shell commands**: `src/agents/tools/shell-exec.ts` (`checkCommandSafety`) is a denylist, not a whitelist -- it rejects known-destructive commands, dangerous pipes (`| sh`, `| bash`, `> /dev/sd*`) and injection vectors (command substitution, inline interpreters, `core.fsmonitor`). The command string itself is otherwise run as authored and does not pass through the path guard's sensitive-file blocklist.
+- **C# identifiers**: `isValidCSharpIdentifier()` / `isValidCSharpType()` in `src/security/path-guard.ts` prevent code injection in scaffold tools.
+- **URLs for browser tools**: `src/security/browser-security.ts` (`validateUrlWithConfig`) blocks `file://`, `data:`, `javascript:`, private/internal IPs and admin paths.
+- **Message inputs**: per-channel length limits are enforced in each channel adapter when sending (e.g. Discord chunks at 2000 characters); there is no shared inbound message schema.
 
 ### 15. Media Attachment Security
 
@@ -261,5 +253,5 @@ Fresh setup now writes both `MULTI_AGENT_ENABLED=true` and `TASK_DELEGATION_ENAB
 6. **Bind to localhost** -- the web channel binds to `127.0.0.1` by default. Use a reverse proxy (nginx, Caddy) for external access.
 7. **Enable confirmation** -- keep `REQUIRE_EDIT_CONFIRMATION=true` in production so destructive operations require explicit user approval.
 8. **Never commit `.env` files** -- the path guard blocks access to `.env` files, but they should also be in `.gitignore`.
-9. **Monitor logs** -- the security audit logger records authentication failures, suspicious activity, and policy violations. Review these regularly.
-10. **Keep dependencies updated** -- the dependency security scanner (`src/security/dependency-security.ts`) can audit packages for known vulnerabilities.
+9. **Monitor logs** -- authentication failures and brute-force lockouts are written to the application logger (`src/utils/logger.ts`). There is no dedicated security audit logger or alert rule engine; review the application logs directly.
+10. **Keep dependencies updated** -- run `npm run security:audit` (`npm audit --audit-level=high`, also run by `.github/workflows/ci.yml`). There is no in-tree dependency security scanner.
