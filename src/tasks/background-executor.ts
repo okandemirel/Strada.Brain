@@ -15,6 +15,7 @@
 
 import type {
   Task,
+  TaskId,
   TaskProgressSignal,
   TaskProgressUpdate,
   TaskUsageEvent,
@@ -529,6 +530,38 @@ export class BackgroundExecutor {
    * Returns `true` if a watchdog terminal was emitted (so `requestFailed` should be
    * set by the caller); `false` for a genuine cancel (caller stays silent).
    */
+  /**
+   * Persist the settle-time test verdict on the Task row.
+   *
+   * Audited 2026-09-02: when NEITHER path found a test line the settle wrote
+   * NOTHING, so `verification_json` stayed NULL and the campaign report could
+   * not tell "the suite was never run" from "the verdict never reached
+   * storage" — both are an absent row, and only one of them is a finding. A
+   * run that WROTE files and observed no test run now records that as data,
+   * naming the scope it measured (how many files it wrote). A run that wrote
+   * nothing records nothing: there the absence is not a claim about tests.
+   *
+   * The row is deliberately `testsGreen: undefined` — it is the ABSENCE of a
+   * test run, never a pass. The campaign's red gate (testsGreen === false) and
+   * its delivery gate (testsGreen === true) both stay untouched by it, so the
+   * live GDD→sprint→delivery path gets no stricter than the sprint's own scope.
+   */
+  private recordTestVerdict(
+    taskId: TaskId,
+    verdict: ReturnType<typeof deriveTestVerdict>,
+    filesWritten: number,
+  ): void {
+    const row: ReturnType<typeof deriveTestVerdict> | undefined =
+      verdict.testsGreen !== undefined
+        ? verdict
+        : filesWritten > 0
+          ? { testsGreen: undefined, detail: `no test run observed (${filesWritten} file(s) written)` }
+          : undefined;
+    if (!row) return;
+    (this.taskManager as { setVerification?: (id: string, v: typeof row) => void })
+      .setVerification?.(taskId, row);
+  }
+
   private settleWatchdogAbortIfHung(
     task: Task,
     externalSignal: AbortSignal | undefined,
@@ -1422,10 +1455,11 @@ export class BackgroundExecutor {
               n.toolResults.map((tr) => ({ content: String(tr.content ?? ""), isError: tr.isError })),
             ),
           );
-          if (verdict.testsGreen !== undefined) {
-            (this.taskManager as { setVerification?: (id: string, v: typeof verdict) => void })
-              .setVerification?.(task.id, verdict);
-          }
+          this.recordTestVerdict(
+            task.id,
+            verdict,
+            new Set(supervisorResult.nodeResults.flatMap((n) => n.artifacts.map((a) => a.path))).size,
+          );
         } catch { /* verdict carriage is best-effort */ }
         try {
           const touched = [...new Set(
@@ -1534,10 +1568,11 @@ export class BackgroundExecutor {
         const verdict = deriveTestVerdict(
           (result.workerResult?.toolTrace ?? []).map((t) => ({ content: t.summary, isError: !t.success })),
         );
-        if (verdict.testsGreen !== undefined) {
-          (this.taskManager as { setVerification?: (id: string, v: typeof verdict) => void })
-            .setVerification?.(task.id, verdict);
-        }
+        this.recordTestVerdict(
+          task.id,
+          verdict,
+          new Set(result.workerResult?.touchedFiles ?? []).size,
+        );
       } catch { /* verdict carriage is best-effort */ }
       try {
         this.devKnowledgeCompletionHook?.({
