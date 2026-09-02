@@ -709,10 +709,17 @@ export class AgentDBMemory implements IUnifiedMemory {
               "[AgentDBMemory] HNSW index capacity mismatch detected, rebuilding index",
               { error: message, entryId: id as string },
             );
-            const rebuildResult = await this.rebuildIndex();
+            // The rebuild reads this.entries, which does not contain this
+            // entry yet (it is only added after SQLite succeeds). It used to
+            // rebuild without the pending vector and fall through to ok(),
+            // leaving the entry in SQLite/map/TF-IDF but absent from HNSW
+            // until the next rebuild. Pass the pending vector so the rebuilt
+            // index contains it (audited 2026-09-02).
+            const rebuildResult = await this.rebuildIndex([vectorEntry]);
             if (rebuildResult.kind === "err") {
               return err(rebuildResult.error);
             }
+            hnswInserted = true;
           } else {
             throw error;
           }
@@ -1154,17 +1161,26 @@ export class AgentDBMemory implements IUnifiedMemory {
   // HNSW Index Operations
   // ---------------------------------------------------------------------------
 
-  async rebuildIndex(): Promise<Result<void, Error>> {
+  /**
+   * Rebuild the HNSW index from `this.entries`.
+   *
+   * @param pending Vectors that must be part of the rebuilt index but are not
+   *   in `this.entries` yet — storeEntry passes the entry it is in the middle
+   *   of writing when the insert trips index capacity. Without it the rebuild
+   *   silently excluded exactly the entry it was recovering for
+   *   (audited 2026-09-02). `replaceAll` sizes the index to fit them.
+   */
+  async rebuildIndex(pending: VectorEntry[] = []): Promise<Result<void, Error>> {
     try {
       if (!this.hnswStore) return ok(undefined);
 
-      getLoggerSafe().info("[AgentDBMemory] Rebuilding HNSW index");
+      getLoggerSafe().info("[AgentDBMemory] Rebuilding HNSW index", { pending: pending.length });
 
       // Rebuild from all entries, skipping those with mismatched dimensions
       const entries = Array.from(this.entries.values());
       const expectedDimensions = this.config.dimensions;
       let dimensionMismatchCount = 0;
-      const vectorEntries: VectorEntry[] = [];
+      const vectorEntries: VectorEntry[] = [...pending];
       for (const e of entries) {
         if (e.embedding && e.embedding.length !== expectedDimensions) {
           dimensionMismatchCount++;
@@ -1189,7 +1205,7 @@ export class AgentDBMemory implements IUnifiedMemory {
       const store = this.hnswStore;
       await this.writeMutex.withLock(() => store.replaceAll(vectorEntries));
 
-      getLoggerSafe().info("[AgentDBMemory] Index rebuild complete", { count: entries.length });
+      getLoggerSafe().info("[AgentDBMemory] Index rebuild complete", { count: vectorEntries.length });
       return ok(undefined);
     } catch (error) {
       return err(error instanceof Error ? error : new Error(String(error)));

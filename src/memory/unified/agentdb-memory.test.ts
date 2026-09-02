@@ -236,6 +236,57 @@ describe("AgentDBMemory", () => {
     });
   });
 
+  describe("HNSW capacity (audited 2026-09-02)", () => {
+    // The capacity-exceeded branch of storeEntry used to rebuild the index from
+    // this.entries — which does not yet contain the entry being stored — and
+    // then return ok. The entry landed in SQLite, the map and TF-IDF, but not
+    // in HNSW, so the pure-semantic path could not return it until the next
+    // rebuild. The rebuild must include the pending vector.
+    it("an entry that trips index capacity is still inserted into the rebuilt index", async () => {
+      const capDir = mkdtempSync(join(tmpdir(), "agentdb-capacity-test-"));
+      const capMemory = new AgentDBMemory({
+        dbPath: capDir,
+        dimensions: 128,
+        maxEntriesPerTier: {
+          [MemoryTier.Working]: 0,
+          [MemoryTier.Ephemeral]: 0,
+          [MemoryTier.Persistent]: 3, // maxElements = 3
+        },
+        hnswParams: { efConstruction: 50, M: 8, efSearch: 32 },
+        quantizationType: "none",
+        cacheSize: 100,
+        enableAutoTiering: false,
+        ephemeralTtlMs: 60_000,
+      });
+      await capMemory.initialize();
+      try {
+        await capMemory.storeNote("alpha one", ["a"]);
+        await capMemory.storeNote("beta two", ["b"]);
+        await capMemory.storeNote("gamma three", ["c"]);
+        expect(capMemory.getStats().hnswStats?.currentCount).toBe(3);
+
+        // Highest importance in the tier (longest + keyword), so tier eviction
+        // removes one of the three seeds, never this entry.
+        const tripping = await capMemory.storeNote(
+          "important delta four: the entry that trips the HNSW capacity guard",
+          ["d"],
+        );
+        const store = (capMemory as any).hnswStore as { idToIndex: Map<string, number> };
+        expect((capMemory as any).entries.has(tripping.id)).toBe(true); // precondition: survived eviction
+        expect(store.idToIndex.has(tripping.id as string)).toBe(true);
+
+        const hits = await capMemory.retrieveSemantic(
+          "important delta four: the entry that trips the HNSW capacity guard",
+          { limit: 5 },
+        );
+        expect(hits.map((h) => h.entry.id)).toContain(tripping.id);
+      } finally {
+        await capMemory.shutdown();
+        rmSync(capDir, { recursive: true, force: true });
+      }
+    });
+  });
+
   // ---------------------------------------------------------------------------
   // reEmbedHashEntries
   // ---------------------------------------------------------------------------
