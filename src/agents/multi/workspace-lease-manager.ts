@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, cpSync, rmSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, cpSync, rmSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { promises as fsp } from "node:fs";
 import type { Dirent } from "node:fs";
 import { resolve, join, dirname, sep, relative, basename } from "node:path";
 import os from "node:os";
@@ -130,6 +131,61 @@ export interface WorkspaceLeaseManagerOptions {
 }
 
 const DEFAULT_LEASE_ROOT = join(os.tmpdir(), "strada-workspaces");
+
+/**
+ * How many filesystem operations the seed/commit walks keep in flight.
+ *
+ * These walks used to be fully synchronous — one cpSync plus three
+ * stat/compare walks — which on a Unity tree is MINUTES with the event loop
+ * blocked: no timer fires, no socket is read, no stream heartbeat runs, so an
+ * in-flight provider stream looked stalled and the run was attributed to
+ * provider slowness (audited 2026-09-02). Bounded rather than unbounded so a
+ * 100k-file tree cannot exhaust file descriptors.
+ */
+const WALK_CONCURRENCY = 16;
+
+/** Run `worker` over `items` with at most `width` in flight, preserving index. */
+async function mapWithConcurrency<T>(
+  items: readonly T[],
+  width: number,
+  worker: (item: T, index: number) => Promise<void>,
+): Promise<void> {
+  if (items.length === 0) return;
+  let next = 0;
+  const runners = Array.from({ length: Math.min(width, items.length) }, async () => {
+    for (;;) {
+      const index = next++;
+      if (index >= items.length) return;
+      await worker(items[index]!, index);
+    }
+  });
+  await Promise.all(runners);
+}
+
+/** Async existsSync. Absent and unreachable are both "not there" for the walks
+ *  that use it, exactly as existsSync reported them. */
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await fsp.access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Byte-for-byte comparison of two files. Content, not mtime: the seed preserves
+ * timestamps, so an untouched file must not read as modified.
+ *
+ * Read errors PROPAGATE, exactly as the readFileSync pair they replace did —
+ * the commit walk turns them into a reported `failed` entry, and swallowing
+ * them here would report an unreadable file as a clean match instead.
+ */
+async function sameContent(left: string, right: string): Promise<boolean> {
+  const [a, b] = await Promise.all([fsp.readFile(left), fsp.readFile(right)]);
+  return a.equals(b);
+}
+
 const DEFAULT_WORKTREE_TIMEOUT_MS = 30_000;
 const DEFAULT_SUBMODULE_TIMEOUT_MS = 300_000;
 /** Upper bound on uncommitted paths copied into a workspace, so a repo with a
@@ -531,8 +587,8 @@ export class WorkspaceLeaseManager {
     //                is unchanged here was not touched by the agent.
     //   sourceSeed — the project as it stood when the lease was taken, so an
     //                edit the user makes DURING the run is detectable.
-    const leaseSeed = this.snapshotMtimes(workspacePath, workspacePath);
-    const sourceSeed = this.snapshotMtimes(sourceRoot, sourceRoot);
+    const leaseSeed = await this.snapshotMtimes(workspacePath, workspacePath);
+    const sourceSeed = await this.snapshotMtimes(sourceRoot, sourceRoot);
 
     let released = false;
     const lease: WorkspaceLease = {
@@ -915,10 +971,17 @@ export class WorkspaceLeaseManager {
     );
     try {
 
-    const walk = (dir: string): void => {
+    // Two phases, both on awaited fs.promises: list the lease, then process the
+    // files it holds with a bounded number of operations in flight. Was one
+    // synchronous walk doing stat + full-content reads + cpSync per file, which
+    // on a large tree blocked the event loop for the whole commit
+    // (audited 2026-09-02). Per-file results are collected into index slots and
+    // appended in walk order afterwards, so concurrency cannot reorder the report.
+    const files: string[] = [];
+    const walk = async (dir: string): Promise<void> => {
       let entries: Dirent[];
       try {
-        entries = readdirSync(dir, { withFileTypes: true });
+        entries = await fsp.readdir(dir, { withFileTypes: true });
       } catch (err) {
         // A directory that cannot be listed must not abort the walk — the
         // remaining files still deserve their chance to travel home.
@@ -930,11 +993,18 @@ export class WorkspaceLeaseManager {
         const full = join(dir, entry.name);
         if (!this.shouldCommitEntry(workspacePath, full)) continue;
         if (entry.isDirectory()) {
-          walk(full);
+          await walk(full);
           continue;
         }
         if (!entry.isFile()) continue;
+        files.push(full);
+      }
+    };
 
+    type FileOutcome = { written?: string; conflict?: string; failed?: string };
+    const outcomes: Array<FileOutcome | undefined> = [];
+
+    const processFile = async (full: string): Promise<FileOutcome> => {
         const rel = relative(workspacePath, full);
 
         try {
@@ -952,23 +1022,22 @@ export class WorkspaceLeaseManager {
           // unrelated Board.cs reported written:[Board.cs, Player.cs] and
           // reverted Player.cs to its committed contents.
           const leaseSeeded = leaseSeed.get(rel);
-          if (leaseSeeded !== undefined && statSync(full).mtimeMs === leaseSeeded) {
-            continue; // present at seed time and never written to — not agent work
+          if (leaseSeeded !== undefined && (await fsp.stat(full)).mtimeMs === leaseSeeded) {
+            return {}; // present at seed time and never written to — not agent work
           }
 
           // Quarantine-only mode (orphan salvage): nothing is written into the
           // project — non-identical files land in quarantine for review.
           if (opts?.quarantineOnly) {
             const salvageTarget = join(sourceRoot, rel);
-            if (existsSync(salvageTarget) && readFileSync(salvageTarget).equals(readFileSync(full))) {
-              continue;
+            if ((await pathExists(salvageTarget)) && (await sameContent(salvageTarget, full))) {
+              return {};
             }
-            conflicts.push(rel);
             if (quarantineRoot) {
               try {
                 const quarantineTarget = join(quarantineRoot, rel);
-                mkdirSync(dirname(quarantineTarget), { recursive: true });
-                cpSync(full, quarantineTarget, { force: true });
+                await fsp.mkdir(dirname(quarantineTarget), { recursive: true });
+                await fsp.copyFile(full, quarantineTarget);
                 conflictsQuarantinedUnder ??= quarantineRoot;
                 quarantined += 1; // counted only AFTER the copy succeeded
               } catch {
@@ -976,20 +1045,19 @@ export class WorkspaceLeaseManager {
                 // `quarantined` stays short of `conflicts` so the caller knows.
               }
             }
-            continue;
+            return { conflict: rel };
           }
 
           // SECOND question: did the USER change it while the agent ran? Their
           // copy wins, and they are told rather than silently overwritten.
-          if (existsSync(target)) {
-            if (readFileSync(target).equals(readFileSync(full))) continue; // already identical
+          if (await pathExists(target)) {
+            if (await sameContent(target, full)) return {}; // already identical
             // Compared against the mtime recorded when the lease was taken, not a
             // wall clock: Date.now() is whole milliseconds while mtimeMs carries
             // a fraction, so a file written in the same millisecond as the lease
             // reads as "modified after" — measured at +0.63 ms.
             const sourceSeeded = sourceSeed.get(rel);
-            if (sourceSeeded === undefined || statSync(target).mtimeMs !== sourceSeeded) {
-              conflicts.push(rel);
+            if (sourceSeeded === undefined || (await fsp.stat(target)).mtimeMs !== sourceSeeded) {
               // The agent's version used to be destroyed together with the
               // released workspace — hours of autonomous work lost to a single
               // .meta touch by the editor. Preserve it under the project's
@@ -997,45 +1065,58 @@ export class WorkspaceLeaseManager {
               if (quarantineRoot) {
                 try {
                   const quarantineTarget = join(quarantineRoot, rel);
-                  mkdirSync(dirname(quarantineTarget), { recursive: true });
-                  cpSync(full, quarantineTarget, { force: true });
+                  await fsp.mkdir(dirname(quarantineTarget), { recursive: true });
+                  await fsp.copyFile(full, quarantineTarget);
                   conflictsQuarantinedUnder ??= quarantineRoot;
                   quarantined += 1;
                 } catch {
                   // Quarantine failed; the conflict report still stands.
                 }
               }
-              continue;
+              return { conflict: rel };
             }
           }
 
-          mkdirSync(dirname(target), { recursive: true });
-          cpSync(full, target, { force: true });
-          written.push(rel);
+          await fsp.mkdir(dirname(target), { recursive: true });
+          await fsp.copyFile(full, target);
+          return { written: rel };
         } catch (err) {
           // One locked or half-deleted file must not cost the rest of the
           // commit — measured in production: a walk that threw on an
           // editor-locked asset silently dropped every file after it.
-          failed.push(`${rel} (${err instanceof Error ? err.message : String(err)})`);
+          return { failed: `${rel} (${err instanceof Error ? err.message : String(err)})` };
         }
-      }
     };
 
-    walk(workspacePath);
+    await walk(workspacePath);
+    await mapWithConcurrency(files, WALK_CONCURRENCY, async (full, index) => {
+      outcomes[index] = await processFile(full);
+    });
+    for (const outcome of outcomes) {
+      if (!outcome) continue;
+      if (outcome.written !== undefined) written.push(outcome.written);
+      if (outcome.conflict !== undefined) conflicts.push(outcome.conflict);
+      if (outcome.failed !== undefined) failed.push(outcome.failed);
+    }
     // A file the agent removed is a decision it made about the project. We do not
     // act on it — deleting a user's files is not a commit's call — but leaving it
     // unsaid means the project silently diverges from what the agent believes it
     // produced, and the next run inherits that gap.
-    for (const [rel] of leaseSeed) {
+    const seedRels = [...leaseSeed.keys()];
+    const removedFlags: boolean[] = new Array(seedRels.length).fill(false);
+    await mapWithConcurrency(seedRels, WALK_CONCURRENCY, async (rel, index) => {
       try {
-        if (existsSync(join(workspacePath, rel))) continue;
-        if (!existsSync(join(sourceRoot, rel))) continue;
-        removed.push(rel);
+        if (await pathExists(join(workspacePath, rel))) return;
+        if (!(await pathExists(join(sourceRoot, rel)))) return;
+        removedFlags[index] = true;
       } catch {
         // A seed entry we can no longer stat says nothing useful about the
         // project — skip it rather than lose the rest of the report.
       }
-    }
+    });
+    seedRels.forEach((rel, index) => {
+      if (removedFlags[index]) removed.push(rel);
+    });
     if (removed.length > 0) {
       getLoggerSafe().info("Workspace deletions left in place", {
         count: removed.length,
@@ -1055,20 +1136,59 @@ export class WorkspaceLeaseManager {
     }
   }
 
+  /**
+   * Seed a temp-copy lease.
+   *
+   * Was a single cpSync with the same filter. Identical semantics — same
+   * filter, timestamps preserved, symlinks copied as links, existing targets
+   * overwritten, any failure thrown to the caller — but built from awaited
+   * fs.promises calls so the event loop keeps turning while a large tree copies
+   * (audited 2026-09-02).
+   */
   private async createTempCopy(sourceRoot: string, workspacePath: string): Promise<void> {
-    mkdirSync(dirname(workspacePath), { recursive: true });
-    cpSync(sourceRoot, workspacePath, {
-      recursive: true,
-      force: true,
-      preserveTimestamps: true,
-      dereference: false,
-      filter: (source) => this.shouldCopyEntry(sourceRoot, source),
-    });
+    await fsp.mkdir(dirname(workspacePath), { recursive: true });
+    await this.copyTree(sourceRoot, sourceRoot, workspacePath);
+  }
+
+  /** Recursive half of createTempCopy. `source`/`target` are absolute; entries
+   *  the seed filter rejects are skipped together with their whole subtree,
+   *  exactly as cpSync's filter did. */
+  private async copyTree(sourceRoot: string, source: string, target: string): Promise<void> {
+    const stats = await fsp.lstat(source);
+
+    if (stats.isDirectory()) {
+      await fsp.mkdir(target, { recursive: true });
+      const entries = await fsp.readdir(source, { withFileTypes: true });
+      const kept = entries.filter((entry) =>
+        this.shouldCopyEntry(sourceRoot, join(source, entry.name)),
+      );
+      await mapWithConcurrency(kept, WALK_CONCURRENCY, async (entry) => {
+        await this.copyTree(sourceRoot, join(source, entry.name), join(target, entry.name));
+      });
+      return;
+    }
+
+    if (stats.isSymbolicLink()) {
+      // dereference:false — the link travels, not what it points at.
+      const link = await fsp.readlink(source);
+      await fsp.rm(target, { force: true });
+      await fsp.symlink(link, target);
+      return;
+    }
+
+    // Sockets, FIFOs and devices are not project content; cpSync refused them
+    // outright, and skipping keeps a stray one from failing the whole seed.
+    if (!stats.isFile()) return;
+
+    await fsp.copyFile(source, target);
+    // preserveTimestamps: the seed snapshot below compares mtimes, and commit()
+    // treats "mtime unchanged since seed" as "the agent never touched it".
+    await fsp.utimes(target, stats.atime, stats.mtime);
   }
 
   /** Records every seeded file's mtime, so commit() can tell an edit the user
    *  made during the run from a file that merely shares the lease's timestamp. */
-  private snapshotMtimes(root: string, excludeRoot: string): Map<string, number> {
+  private async snapshotMtimes(root: string, excludeRoot: string): Promise<Map<string, number>> {
     const seeded = new Map<string, number>();
     // This walk runs against the LIVE project (sourceSeed), where the editor,
     // a build or the user deletes and locks files while it runs. It used to be
@@ -1078,31 +1198,34 @@ export class WorkspaceLeaseManager {
     // was measured in production. A file missing from the seed is handled
     // conservatively by commit(): absent from leaseSeed reads as agent work,
     // absent from sourceSeed reads as a conflict (audited 2026-09-02).
+    // Awaited fs.promises, bounded at WALK_CONCURRENCY: on a Unity tree this
+    // walk is tens of thousands of stats, and doing them synchronously blocked
+    // the event loop for the whole lease acquisition (audited 2026-09-02).
     const skipped: string[] = [];
-    const walk = (dir: string): void => {
+    const walk = async (dir: string): Promise<void> => {
       let entries: Dirent[];
       try {
-        entries = readdirSync(dir, { withFileTypes: true });
+        entries = await fsp.readdir(dir, { withFileTypes: true });
       } catch (err) {
         skipped.push(`${relative(root, dir) || "."} (${err instanceof Error ? err.message : String(err)})`);
         return;
       }
-      for (const entry of entries) {
+      const kept = entries.filter((entry) => this.shouldCommitEntry(excludeRoot, join(dir, entry.name)));
+      await mapWithConcurrency(kept, WALK_CONCURRENCY, async (entry) => {
         const full = join(dir, entry.name);
-        if (!this.shouldCommitEntry(excludeRoot, full)) continue;
         if (entry.isDirectory()) {
-          walk(full);
-          continue;
+          await walk(full);
+          return;
         }
-        if (!entry.isFile()) continue;
+        if (!entry.isFile()) return;
         try {
-          seeded.set(relative(root, full), statSync(full).mtimeMs);
+          seeded.set(relative(root, full), (await fsp.stat(full)).mtimeMs);
         } catch (err) {
           skipped.push(`${relative(root, full)} (${err instanceof Error ? err.message : String(err)})`);
         }
-      }
+      });
     };
-    if (existsSync(root)) walk(root);
+    if (existsSync(root)) await walk(root);
     if (skipped.length > 0) {
       getLoggerSafe().warn("Seed snapshot skipped entries it could not stat — commit() will treat them conservatively", {
         root,
