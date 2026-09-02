@@ -459,7 +459,10 @@ export async function setupAgentCoreRun(
       // verifierResult / childWorkerResults exactly as they did for runWorkerTask; the
       // result projection reads them back. Interactive stays collector-less (as v1).
       workerCollector: isInteractive ? undefined : { toolTrace: [], childWorkerResults: [] },
-      profileLanguage: undefined,
+      // audited 2026-09-02: hardcoded `undefined` although `profile` (loaded above, carrying the
+      // store's `language`) is in scope — every reader (worker terminal text in synthesizeFinal,
+      // the interactive empty-response fallback) fell back to the daemon default language.
+      profileLanguage: profile?.language,
       joinsParentEpisode,
       workerMonitorScope,
       memoryRefresher,

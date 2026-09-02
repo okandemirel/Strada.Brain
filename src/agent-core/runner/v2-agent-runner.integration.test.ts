@@ -173,6 +173,8 @@ function buildHarness(
   // GAP1: an optional learning event emitter so emitToolResult's tool:result path runs end-to-end
   // (the orchestrator's emitToolResult early-returns when eventEmitter is null).
   eventEmitter?: { emit: (event: string, payload: unknown) => void },
+  // A user-profile store for the prologue's personalization load (loadRunPersonalization).
+  userProfileStore?: unknown,
 ) {
   const clock = new FakeClock(0);
   const channel = mkChannel();
@@ -198,6 +200,7 @@ function buildHarness(
     // GAP1 — inject a learning event emitter so emitToolResult emits tool:result (else it no-ops).
     ...(eventEmitter ? { eventEmitter } : {}),
     ...(taskConfig ? { taskConfig } : {}),
+    ...(userProfileStore ? { userProfileStore } : {}),
     // agentCoreFlagSet OMITTED — the gateway passes runClock=undefined → flag-OFF silentStream.
   } as unknown as ConstructorParameters<typeof Orchestrator>[0]);
 
@@ -565,6 +568,35 @@ describe("V2AgentRunner — REAL port + REAL gateway (provider.chat scripted)", 
     expect(result.status).toBe("blocked");
     expect(result.reason).toBe("max-tokens-runaway");
     expect(provider.chat).toHaveBeenCalledTimes(4); // plan + 3 truncated turns before the abort
+  });
+
+  /* audited 2026-09-02: the run context must carry the loaded profile's language */
+  it("a worker verdict-stop renders its terminal text in the user's PROFILE language, not the daemon default", async () => {
+    const provider = mkScriptedProvider();
+    provider.chat
+      .mockResolvedValueOnce(resp({ text: "the plan", stopReason: "end_turn" })) // PLANNING→EXECUTING
+      .mockResolvedValue(resp({ text: "truncated…", stopReason: "max_tokens", toolCalls: [] })); // truncate forever
+    // A profile store whose only profile speaks Turkish. The daemon default stays "en".
+    const trProfile = { chatId: "chat-1", language: "tr", activePersona: "default", preferences: {}, lastTopics: [], firstSeenAt: 0, lastSeenAt: 0 };
+    const store = {
+      getProfile: vi.fn(() => trProfile),
+      upsertProfile: vi.fn(),
+      touchLastSeen: vi.fn(),
+      isAutonomousMode: vi.fn(() => false),
+      setAutonomousMode: vi.fn(async () => undefined),
+      setActivePersona: vi.fn(),
+      resolveLinkedIdentity: vi.fn(() => null),
+    };
+    const h = buildHarness(provider, undefined, undefined, undefined, undefined, undefined, store);
+    const io = mkIO("worker");
+
+    const result = await drive(h.clock, h.runner.run(mkRequest(), io));
+
+    expect(result.status).toBe("blocked");
+    expect(result.reason).toBe("max-tokens-runaway");
+    expect(store.getProfile).toHaveBeenCalled(); // the prologue really loaded the profile
+    // task_stuck in "tr" (resilience-messages.ts) — the profile language, not the "en" default.
+    expect(result.finalText).toContain("takıldım");
   });
 
   it("GAP4 (verdict-stop fallback): a worker that STOPS on a verdict returns the reason text, NOT a false 'Task completed.'", async () => {
