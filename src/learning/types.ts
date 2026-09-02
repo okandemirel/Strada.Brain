@@ -672,6 +672,12 @@ export interface LearningConfig {
    * (recordTrajectory receives no appliedInstinctIds, so no extra credit fires).
    */
   readonly trajectoryLevelCredit: boolean;
+  /**
+   * Processed observations older than this are deleted by the periodic sweep.
+   * audited 2026-09-02: nothing pruned the observations table; one row per tool
+   * call for the life of the daemon (~1.25 MB/day measured) with no bound.
+   */
+  readonly observationRetentionDays: number;
 }
 
 /** Default learning configuration */
@@ -687,6 +693,7 @@ export const DEFAULT_LEARNING_CONFIG: LearningConfig = {
   minObservationsBeforeLearning: 5,
   autoArchiveThreshold: 0.2 as NormalizedScore,
   trajectoryLevelCredit: false,
+  observationRetentionDays: 30,
 };
 
 // =============================================================================

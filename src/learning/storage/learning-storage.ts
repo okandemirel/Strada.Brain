@@ -1644,6 +1644,20 @@ export class LearningStorage {
     this.db!.prepare(`UPDATE observations SET processed = 1 WHERE id IN (${placeholders})`).run(...ids);
   }
 
+  /**
+   * Delete processed observations with a timestamp before `olderThanMs`.
+   * Unprocessed rows are never touched. Returns the number of rows deleted.
+   * audited 2026-09-02: this was the only table with no retention path.
+   */
+  pruneProcessedObservations(olderThanMs: number): number {
+    this.ensureConnection();
+    this.flush();
+    const result = this.db!.prepare(
+      "DELETE FROM observations WHERE processed = 1 AND timestamp < ?",
+    ).run(olderThanMs);
+    return result.changes;
+  }
+
   // ─── Verdict Operations ──────────────────────────────────────────────────────
 
   /** Record a verdict */

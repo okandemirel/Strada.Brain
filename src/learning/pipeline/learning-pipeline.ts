@@ -278,7 +278,10 @@ export class LearningPipeline {
       output: params.originalOutput,
       correction: params.correction,
       timestamp: Date.now() as TimestampMs,
-      processed: false,
+      // audited 2026-09-02: instinct creation runs inline right below, so the
+      // row is processed at write time. Left at false it was never marked, and
+      // the startup drain replayed it into a second, different instinct.
+      processed: true,
     };
 
     this.storage.recordObservation(observation);
@@ -989,6 +992,21 @@ export class LearningPipeline {
       await this.extractInstinctFromTrajectory(trajectory);
     }
     this.storage.markTrajectoriesProcessed(unprocessed.map(t => t.id));
+
+    this.pruneObservations();
+  }
+
+  /**
+   * Retention sweep: delete processed observations older than
+   * config.observationRetentionDays. Unprocessed rows are kept regardless of
+   * age. Returns what was measured so callers never mistake a no-op for a
+   * sweep. (audited 2026-09-02: the table had no retention path at all.)
+   */
+  pruneObservations(): { deleted: number; olderThanMs: number; retentionDays: number } {
+    const retentionDays = this.config.observationRetentionDays;
+    const olderThanMs = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
+    const deleted = this.storage.pruneProcessedObservations(olderThanMs);
+    return { deleted, olderThanMs, retentionDays };
   }
 
   // ─── Max Instincts Enforcement ──────────────────────────────────────────────
@@ -1181,7 +1199,10 @@ export class LearningPipeline {
       output: successObs.output,
       correction,
       timestamp: Date.now() as TimestampMs,
-      processed: false,
+      // audited 2026-09-02: the error->fix instinct is considered inline below;
+      // an unmarked row was replayed by the startup drain into a junk
+      // "Auto-resolved: ..." instinct keyed on the SUCCESS output.
+      processed: true,
     };
 
     this.storage.recordObservation(resolutionObs);

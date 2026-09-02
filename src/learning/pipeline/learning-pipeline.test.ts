@@ -1508,6 +1508,69 @@ describe("LearningPipeline", () => {
     });
   });
 
+  // audited 2026-09-02: the observations table had no retention path (one row
+  // per tool call, forever), and correction rows written by observeCorrection /
+  // recordAutoResolution were never marked processed even though instinct
+  // creation ran inline — so the startup drain replayed them into junk.
+  describe("observations are bounded and inline-processed rows are marked (audited 2026-09-02)", () => {
+    it("observeCorrection leaves no unprocessed row behind", async () => {
+      await pipeline.observeCorrection({
+        sessionId: "session-1",
+        toolName: "file_edit",
+        originalInput: { path: "test.cs" },
+        originalOutput: "error CS1002: ; expected",
+        correctedOutput: "Fixed content",
+        correction: "Add missing semicolon",
+      });
+      storage.flush();
+      const stats = pipeline.getStats();
+      expect(stats.observationCount).toBe(1);
+      expect(stats.unprocessedObservationCount).toBe(0);
+    });
+
+    it("an auto-resolution leaves no unprocessed row behind", async () => {
+      await pipeline.handleToolResult({
+        sessionId: "s", toolName: "bash", input: { command: "dotnet build" },
+        output: "error CS0246: The type or namespace name 'BoardView' could not be found. Build FAILED.",
+        success: false, timestamp: Date.now(),
+      });
+      await pipeline.handleToolResult({
+        sessionId: "s", toolName: "bash", input: { command: "dotnet restore && dotnet build" },
+        output: "Build succeeded.", success: true, timestamp: Date.now(),
+      });
+      storage.flush();
+      const stats = pipeline.getStats();
+      expect(stats.observationCount).toBe(3); // error, success, correction
+      expect(stats.unprocessedObservationCount).toBe(0);
+    });
+
+    it("the periodic sweep deletes processed observations past retention and keeps the rest", async () => {
+      const retentionPipeline = new LearningPipeline(storage, {
+        enabled: true, detectionIntervalMs: 1000, evolutionIntervalMs: 5000,
+        minConfidenceForCreation: 0.5, batchSize: 5, observationRetentionDays: 7,
+      });
+      const day = 24 * 60 * 60 * 1000;
+      const now = Date.now();
+      const row = (id: string, ageDays: number, processed: boolean) => ({
+        id: id as any, type: "success" as const, sessionId: "s" as any, toolName: "bash" as any,
+        input: {}, output: "ok", success: true, timestamp: (now - ageDays * day) as TimestampMs, processed,
+      });
+      storage.recordObservation(row("old_processed", 10, true));
+      storage.recordObservation(row("old_unprocessed", 10, false));
+      storage.recordObservation(row("recent_processed", 1, true));
+      storage.flush();
+      expect(pipeline.getStats().observationCount).toBe(3);
+
+      await (retentionPipeline as unknown as { runPeriodicExtraction: () => Promise<void> }).runPeriodicExtraction();
+
+      const remaining = storage.getDatabase()!.prepare("SELECT id FROM observations ORDER BY id").all() as { id: string }[];
+      expect(remaining.map((r) => r.id)).toEqual(["old_unprocessed", "recent_processed"]);
+      const result = retentionPipeline.pruneObservations();
+      expect(result).toMatchObject({ deleted: 0, retentionDays: 7 });
+      retentionPipeline.stop();
+    });
+  });
+
   describe("runPeriodicExtraction", () => {
     it("should process unprocessed trajectories when periodic extraction runs", async () => {
       // Record a trajectory with only success steps (no error->fix pair)
