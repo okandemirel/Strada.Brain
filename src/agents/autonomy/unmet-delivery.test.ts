@@ -114,15 +114,21 @@ describe("what blocks delivery", () => {
     const root = project();
     framesOf(root, Array.from({ length: 60 }, () => "same-pixels"));
 
+    // Two separate facts about this project, each named for what it measured:
+    // the frames never varied, and the run produced no scene to play.
     expect(runThatPlayed(root).unmetDeliveryConditions()).toEqual([
       expect.stringContaining("never been observed to render"),
+      expect.stringContaining("not a runnable game"),
     ]);
   });
 
   it("reports a game that was played but captured nothing", () => {
     const root = project();
 
-    expect(runThatPlayed(root).unmetDeliveryConditions()).toHaveLength(1);
+    expect(runThatPlayed(root).unmetDeliveryConditions()).toEqual([
+      expect.stringContaining("no frame has ever been captured"),
+      expect.stringContaining("not a runnable game"),
+    ]);
   });
 
   it("says nothing once the frames actually differ AND a playfield exists", () => {
@@ -146,9 +152,10 @@ describe("what blocks delivery", () => {
 });
 
 describe("what does not block delivery", () => {
-  it("stays silent for a run that never played the game", () => {
-    // The never-run gate says that far better, and saying both would report one
-    // problem twice.
+  it("does not blame the picture for a run that never played the game", () => {
+    // Nothing has been observed to render because nothing was ever started —
+    // saying so would report the never-run problem under the wrong name. What
+    // this run IS owed a claim about is the assembly it never finished.
     const root = project();
     const guard = new StradaConformanceGuard(deps, { projectPath: root, enabled: true });
     guard.trackToolCall(
@@ -157,7 +164,9 @@ describe("what does not block delivery", () => {
       false,
     );
 
-    expect(guard.unmetDeliveryConditions()).toEqual([]);
+    const unmet = guard.unmetDeliveryConditions();
+    expect(unmet.join(" ")).not.toContain("never been observed to render");
+    expect(unmet).toEqual([expect.stringContaining("not a runnable game")]);
   });
 
   it("stays silent for a run that wrote no game code at all", () => {
@@ -190,5 +199,86 @@ describe("the ask budget does not silence it", () => {
 
     // The asking is over. The fact is not.
     expect(guard.unmetDeliveryConditions()).toHaveLength(1);
+  });
+});
+
+/**
+ * A design document that schedules more than this sprint builds.
+ *
+ * The acceptance bar for the rejected 2026-09-02 attempt: it mirrored
+ * elementAssetCoverageReason() into the delivery claim, and that reason
+ * measures the WHOLE GDD element schedule. A sprint asked for the board and
+ * nothing else then could not deliver, because elements planned for later
+ * sprints had no art yet.
+ */
+const GDD_SCHEDULING_MORE = [
+  "# Test Game GDD",
+  "",
+  "## 4.1 Element Schedule",
+  "",
+  "| Unlock | Element | Notes |",
+  "| ------ | ------- | ----- |",
+  "| L21 | Rocket | blasts a row |",
+  "| L36 | Ice Block | freezes a cell |",
+  "| L48 | Colour Bomb | clears a colour |",
+  "",
+].join("\n");
+
+/** A run that wrote module code and never started the game. */
+function runThatNeverPlayed(root: string): StradaConformanceGuard {
+  const guard = new StradaConformanceGuard(deps, { projectPath: root, enabled: true });
+  guard.trackToolCall(
+    "file_write",
+    { path: join(root, "Assets", "Modules", "BoardModule", "Scripts", "Board.cs") },
+    false,
+  );
+  return guard;
+}
+
+describe("a game that was assembled and never started", () => {
+  it("does not count as delivered", () => {
+    const root = assembled();
+    const guard = runThatNeverPlayed(root);
+
+    // The gate must be the one actually asking, or the claim below proves
+    // nothing about it.
+    expect(guard.getPrompt() ?? "").toContain("GAME NEVER RUN");
+
+    expect(guard.unmetDeliveryConditions()).toEqual([
+      expect.stringContaining("never started the game"),
+    ]);
+  });
+
+  it("still reports after the never-run gate has spent every ask", () => {
+    // The measured failure: the ask budget ran out, getPrompt() went quiet, and
+    // the run reported the game delivered because only NOTHING DRAWN was ever
+    // mirrored into the delivery claim.
+    const root = assembled();
+    const guard = runThatNeverPlayed(root);
+
+    for (let i = 0; i < 4; i += 1) {
+      guard.trackToolCall("file_read", { path: join(root, "x.cs") }, false);
+      guard.getPrompt();
+    }
+    expect(guard.getPrompt() ?? "").not.toContain("GAME NEVER RUN");
+
+    expect(guard.unmetDeliveryConditions()).toEqual([
+      expect.stringContaining("never started the game"),
+    ]);
+  });
+});
+
+describe("the delivery claim stays inside the sprint's own scope", () => {
+  it("delivers a sprint that built and ran its own work, though the GDD schedules more", () => {
+    // The rejection bar. Every element in GDD_SCHEDULING_MORE belongs to a
+    // later sprint and has no art in this project; this sprint assembled its
+    // scene, ran the game, and its frames varied. That is a delivery, and a
+    // claim that read the whole schedule would refuse it.
+    const root = assembled();
+    mkdirSync(join(root, "docs"), { recursive: true });
+    writeFileSync(join(root, "docs", "GDD.md"), GDD_SCHEDULING_MORE);
+    framesOf(root, ["one", "two", "three"]);
+
+    expect(runThatPlayed(root).unmetDeliveryConditions()).toEqual([]);
   });
 });

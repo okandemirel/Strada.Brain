@@ -136,6 +136,67 @@ describe('a game that has never been seen to draw', () => {
   });
 });
 
+/**
+ * What counts as "this sprint made something to look at".
+ *
+ * Audited 2026-09-02: the gate's entry condition asked only whether COMPILABLE
+ * code had been written into Assets/. An art-and-scene sprint — the kind that
+ * writes a sprite under Assets/Art and a scene under Assets/Scenes and no C# at
+ * all — wrote nothing compilable, so the gate never applied and the run could
+ * capture sixty identical frames and still report the sprint delivered.
+ */
+describe('a sprint that wrote assets rather than code', () => {
+  /** Only renderables: a sprite and a scene, no .cs anywhere. */
+  function assetOnlyRun(root: string, frames: string[]): StradaConformanceGuard {
+    const art = join(root, 'Assets', 'Art');
+    const scenes = join(root, 'Assets', 'Scenes');
+    mkdirSync(art, { recursive: true });
+    mkdirSync(scenes, { recursive: true });
+    writeFileSync(join(art, 'tile.png'), 'pixels');
+    writeFileSync(join(scenes, 'Main.unity'), '--- !u!1 &1\nGameObject:\n  m_Name: Boot\n');
+    if (frames.length > 0) {
+      const rec = join(root, 'Recordings');
+      mkdirSync(rec, { recursive: true });
+      frames.forEach((c, i) => writeFileSync(join(rec, `frame_${i}.png`), c));
+    }
+
+    const guard = new StradaConformanceGuard(deps, { projectPath: root, enabled: true });
+    // Asked what the user already owns, so [STRADA ASSETS UNSOURCED] — which
+    // speaks before this gate — has nothing to say and the drawing gate is the
+    // one under test.
+    guard.trackToolCall('unity_my_assets_cloud', { query: 'tiles' }, false);
+    guard.trackToolCall('file_write', { path: join(art, 'tile.png') }, false);
+    guard.trackToolCall('file_write', { path: join(scenes, 'Main.unity') }, false);
+    guard.trackToolCall('unity_playmode_verify', { captureFrames: 12 }, false);
+    return guard;
+  }
+
+  it('is held to the drawing gate for the sprite and scene it wrote', () => {
+    const root = mkdtempSync(join(os.tmpdir(), 'asset-only-'));
+    const guard = assetOnlyRun(root, Array.from({ length: 12 }, () => 'same-pixels'));
+
+    expect(guard.getPrompt() ?? '').toContain('[STRADA NOTHING DRAWN]');
+    expect(guard.unmetDeliveryConditions()).toEqual([
+      expect.stringContaining('never been observed to render'),
+    ]);
+  });
+
+  it('stays quiet for a run that wrote nothing renderable and no game code', () => {
+    // A question about the project, or a note written outside Assets/, owes
+    // nobody a rendered frame — widening the gate must not turn it on for
+    // every run that happens to call play mode.
+    const root = mkdtempSync(join(os.tmpdir(), 'no-renderable-'));
+    mkdirSync(join(root, 'docs'), { recursive: true });
+    const guard = new StradaConformanceGuard(deps, { projectPath: root, enabled: true });
+    guard.trackToolCall('file_write', { path: join(root, 'docs', 'notes.md') }, false);
+    guard.trackToolCall('file_write', { path: join(root, 'Tools', 'Helper.cs') }, false);
+    guard.trackToolCall('unity_playmode_verify', { captureFrames: 12 }, false);
+
+    expect(guard.getPrompt() ?? '').not.toContain('[STRADA NOTHING DRAWN]');
+    expect(guard.unmetDeliveryConditions()).toEqual([]);
+  });
+});
+
 describe('nothingDrawn — differing frames are not proof of drawing', () => {
   it('the scene census counts renderers a playfield needs', async () => {
     const { countSceneRenderersImpl, MIN_PLAYFIELD_RENDERERS } = await import('./strada-conformance.js');

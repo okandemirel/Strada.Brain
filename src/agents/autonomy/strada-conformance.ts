@@ -345,6 +345,27 @@ function isArtSourceFile(filePath: string): boolean {
   return dotIdx !== -1 && ART_SOURCE_EXT.has(filePath.slice(dotIdx).toLowerCase());
 }
 
+/**
+ * Files that put something on screen: a scene, a prefab, a material, or a
+ * texture/sprite source.
+ *
+ * Deliberately narrower than ART_SOURCE_EXT — an .mp3 is art and draws nothing
+ * — and deliberately wider than COMPILABLE_EXT. audited 2026-09-02: the
+ * drawing gate applied only to a run that wrote compilable code into Assets/,
+ * so an art-and-scene sprint (a sprite under Assets/Art, a scene under
+ * Assets/Scenes, no C#) was exempt from it entirely and could capture sixty
+ * identical frames and still report itself delivered.
+ */
+const RENDERABLE_EXT: ReadonlySet<string> = new Set([
+  ".prefab", ".unity", ".mat",
+  ".png", ".jpg", ".jpeg", ".tga", ".psd", ".bmp", ".gif", ".exr",
+]);
+
+function isRenderableFile(filePath: string): boolean {
+  const dotIdx = filePath.lastIndexOf(".");
+  return dotIdx !== -1 && RENDERABLE_EXT.has(filePath.slice(dotIdx).toLowerCase());
+}
+
 /** The guid out of a Unity .meta file, or undefined when unreadable/missing. */
 function readGuidFromMeta(metaPath: string): string | undefined {
   try {
@@ -464,6 +485,12 @@ export class StradaConformanceGuard {
   /** Module roots this run wrote C# into, e.g. "Assets/Modules/GameModule". */
   private readonly touchedModuleRoots = new Set<string>();
   /**
+   * Renderables this run wrote under Assets/: scenes, prefabs, materials,
+   * textures. A sprint can produce something to look at without compiling a
+   * line (audited 2026-09-02).
+   */
+  private readonly touchedRenderableFiles = new Set<string>();
+  /**
    * Whether this run wrote compilable code into the project at all.
    *
    * Separate from touchedModuleRoots on purpose. The module rules — is this a
@@ -544,6 +571,10 @@ export class StradaConformanceGuard {
         const filePath = extractFilePath(executedTool.input);
         if (filePath && isInsideAssets(filePath) && isArtSourceFile(filePath)) {
           this.authoredArtFiles.add(filePath.replace(/\\/g, "/"));
+          logGuardWrite(executedTool.toolName, filePath);
+        }
+        if (filePath && isInsideAssets(filePath) && isRenderableFile(filePath)) {
+          this.touchedRenderableFiles.add(filePath.replace(/\\/g, "/"));
           logGuardWrite(executedTool.toolName, filePath);
         }
         if (filePath && isCompilableFile(filePath)) {
@@ -741,7 +772,12 @@ export class StradaConformanceGuard {
     // — the exact exemption wroteProjectCode was introduced to close. The
     // module-SHAPE rules rightly stay on the Modules/ convention; an OUTCOME
     // rule asks only whether game code was written at all.
-    if (!this.wroteProjectCode) return null;
+    //
+    // audited 2026-09-02: "game code" alone still exempted the sprint that
+    // wrote a sprite under Assets/Art and a scene under Assets/Scenes and no
+    // C# — an art-and-scene sprint produces exactly the thing this gate
+    // measures, so its renderable writes bring it into scope too.
+    if (!this.wroteProjectCode && this.touchedRenderableFiles.size === 0) return null;
     // A game that was never run cannot have frames, and the gate for that says
     // so far better. Only ask about the picture once someone has tried to make
     // one.
@@ -1302,10 +1338,41 @@ export class StradaConformanceGuard {
   }
 
   unmetDeliveryConditions(): readonly string[] {
+    // audited 2026-09-02: only NOTHING DRAWN was mirrored here, so GAME NEVER
+    // RUN and GAME NOT ASSEMBLED spent their asks, getPrompt() went quiet, and
+    // the run reported the game delivered and approved.
+    //
+    // Every condition below is scoped to THIS sprint's own artifacts — the
+    // scene it assembled, whether it started the game, whether that scene has a
+    // camera. Deliberately nothing here reads the GDD element schedule: an
+    // earlier attempt mirrored elementAssetCoverageReason(), which measures the
+    // whole schedule, and a sprint that correctly built only its own elements
+    // could no longer deliver because later sprints' elements had no art yet.
     const unmet: string[] = [];
     const notDrawn = this.nothingDrawnReason();
     if (notDrawn !== null) {
       unmet.push(`the game has never been observed to render: ${notDrawn}`);
+    }
+
+    const wiring = this.assessWiring();
+    if (wiring && !wiring.wired) {
+      unmet.push(
+        "this run wrote game code and the project is not a runnable game: " +
+          wiring.problems.map((p) => p.detail).join("; "),
+      );
+    }
+    if (this.wroteProjectCode && wiring?.wired === true && !this.attemptedPlaymodeVerification) {
+      unmet.push(
+        "the scene is assembled and wired but this run never started the game " +
+          "(unity_playmode_verify was never called), so nothing has been shown to run",
+      );
+    }
+
+    const views = this.assessViews();
+    if (views && views.camerslessScenes.length > 0) {
+      unmet.push(
+        `${views.camerslessScenes.join(", ")} holds no Camera, so nothing in it is drawn`,
+      );
     }
     return unmet;
   }
