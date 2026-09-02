@@ -1594,6 +1594,15 @@ export class BackgroundExecutor {
       const errMsg = error instanceof Error ? error.message : String(error);
       const sanitizedErrMsg = sanitizeSecrets(errMsg);
       logger.error("Background task execution error", { taskId: task.id, error: sanitizedErrMsg });
+      // The goal tree of the run that threw is failed FIRST — same order as
+      // the non-throwing supervisor path — so a keep-alive retry never leaves
+      // a tree marked executing in goalStorage with no goal:failed emitted
+      // (review of ecdb7691, 2026-09-02). The retry builds its own tree.
+      if (activeGoalTree) {
+        this.failGoalExecution(task, activeGoalTree, errMsg, 0);
+      } else if (task.goalTree) {
+        this.failGoalExecution(task, task.goalTree, errMsg, 0);
+      }
       // A thrown run ("All providers are in cooldown", a runner throw) is the
       // same transient the supervisor branch feeds back into the keep-alive.
       // Audited 2026-09-02: it went to a bare fail() here, route-independent.
@@ -1602,13 +1611,6 @@ export class BackgroundExecutor {
       }
       requestFailed = true;
       this.taskManager.fail(task.id, sanitizedErrMsg);
-
-      // Emit goal:failed if we have a goal tree context (INT-02 catch path)
-      if (activeGoalTree) {
-        this.failGoalExecution(task, activeGoalTree, errMsg, 0);
-      } else if (task.goalTree) {
-        this.failGoalExecution(task, task.goalTree, errMsg, 0);
-      }
     } finally {
       unsubscribeLiveness();
       // Commit BEFORE release — release() deletes the lease directory. This is

@@ -26,6 +26,9 @@ type Blocked = { taskId: string; message: string };
 function executorWith(): { executor: BackgroundExecutor; blocked: Blocked[] } {
   const blocked: Blocked[] = [];
   const executor = Object.create(BackgroundExecutor.prototype) as BackgroundExecutor;
+  // Prototype-built executor: class fields are not initialised, so the
+  // reaper marker set (read at settle) must be provided here.
+  (executor as unknown as { reapedInflight: Set<string> }).reapedInflight = new Set();
   (executor as unknown as { taskManager: unknown }).taskManager = {
     block: (taskId: string, message: string) => blocked.push({ taskId, message }),
   };
