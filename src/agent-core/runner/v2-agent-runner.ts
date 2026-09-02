@@ -129,14 +129,22 @@ function trimMode(mode: RunnerMode): "interactive" | "background" {
  * The cost is an ESTIMATE (flat per-provider rate table) whose only consumer is the run-local
  * Budget gate seeded from the unified budget manager's remaining headroom — it never persists
  * anything (billing/recording stays with port.recordProviderUsage), so there is no double-count.
- * A provider with unknown/zero rates (e.g. ollama) simply gates on tokens alone. */
-function toBudgetUsage(usage: TokenUsage | undefined, providerName: string): BudgetTokenUsage {
+ * A provider with unknown/zero rates (e.g. ollama) simply gates on tokens alone.
+ * audited 2026-09-02: the model id was not passed, so estimateCost could never apply its
+ * "-free"/":free" → $0 rule and a free-tier model (opencode Zen, OpenRouter :free) was charged
+ * its provider's paid table rate against the run's cost cap — money nobody was billed, spent out
+ * of a live run's headroom. The model the turn was SERVED by is the one that priced it. */
+function toBudgetUsage(
+  usage: TokenUsage | undefined,
+  providerName: string,
+  modelId: string | undefined,
+): BudgetTokenUsage {
   const inputTokens = usage?.inputTokens ?? 0;
   const outputTokens = usage?.outputTokens ?? 0;
   return {
     inputTokens,
     outputTokens,
-    costUsd: estimateCost(inputTokens, outputTokens, providerName),
+    costUsd: estimateCost(inputTokens, outputTokens, providerName, modelId),
   };
 }
 
@@ -483,7 +491,7 @@ export class V2AgentRunner implements AgentRunner {
             // the pick with work it never did.
             const served = resolveServedIdentity(prepared.currentAssignment, outcome.response.servedBy);
             port.noteServedBy?.(outcome.response.servedBy);
-            budget.debit(toBudgetUsage(outcome.response.usage, served.provider));
+            budget.debit(toBudgetUsage(outcome.response.usage, served.provider, served.model));
             usageTotal = mergeUsage(usageTotal, served.provider, outcome.response.usage);
             port.recordProviderUsage(served.provider, outcome.response.usage, served.model);
             port.recordExecutionTrace(this.traceParams(request, prepared, state, setup, outcome.response.servedBy));

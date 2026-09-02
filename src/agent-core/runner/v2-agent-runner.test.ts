@@ -958,6 +958,168 @@ describe("V2AgentRunner — Phase 1c streaming liveness re-arm (no false task-in
   });
 });
 
+describe("V2AgentRunner — a free-tier model costs the run's budget nothing (audited 2026-09-02)", () => {
+  /** A plane over the REAL primitives that hands the test the run's Budget. */
+  function mkBudgetPlane(clock: FakeClock, costCapUsd: number) {
+    let budgetRef: ReturnType<typeof createBudget> | undefined;
+    const plane: ControlPlane = {
+      openRun(mode: RunMode): OpenRunResult {
+        const { policy } = resolveRunBudgetPolicy(mode, { ...SEED, costCapUsd });
+        const budget = createBudget(policy.outputTokenCap, policy.costCapUsd);
+        budgetRef = budget;
+        return {
+          clock: openRunClock(clock, policy),
+          ledger: createFailureLedger(mkHealth(), { pauseRetryBudget: policy.pauseRetryBudget }),
+          budget,
+        };
+      },
+      openBus: (runId: string) => createAgentRunEventBus({ runId, clock }),
+    };
+    return {
+      plane,
+      spentUsd: () => {
+        if (!budgetRef) throw new Error("budget not opened yet");
+        return costCapUsd - budgetRef.remainingCostUsd();
+      },
+    };
+  }
+
+  /** One PLANNING turn + one end_turn turn, both served by `servedBy`, 1k in / 2k out each. */
+  function twoTurnsServedBy(servedBy: { provider: string; model: string }): SilentStreamPort {
+    const usage = { inputTokens: 1000, outputTokens: 2000, totalTokens: 3000 };
+    return scriptedStream([
+      mkResponse({ text: "the plan", stopReason: "end_turn", usage, servedBy }),
+      mkResponse({ text: "all done", stopReason: "end_turn", usage, servedBy }),
+    ]);
+  }
+
+  it("an opencode '-free' model debits $0, while the same provider's paid model debits the table rate", async () => {
+    // opencode is IN the rate table (0.6 in / 3.0 out per 1M), so the free model's $0 can only come
+    // from estimateCost's "-free" rule — which needs the model id. Without it the free run is
+    // charged the paid rate and a live run's cost headroom pays for tokens nobody billed.
+    const CAP = 10;
+
+    const freeClock = new FakeClock(0);
+    const free = mkBudgetPlane(freeClock, CAP);
+    const freeResult = await drive(
+      freeClock,
+      mkRunner(
+        free.plane,
+        new ModelGateway(twoTurnsServedBy({ provider: "opencode", model: "qwen3.6-coder-free" })),
+        mkPort(mkProvider("opencode")),
+        freeClock,
+      ).run(mkRequest(), mkIO("worker")),
+    );
+
+    const paidClock = new FakeClock(0);
+    const paid = mkBudgetPlane(paidClock, CAP);
+    const paidResult = await drive(
+      paidClock,
+      mkRunner(
+        paid.plane,
+        new ModelGateway(twoTurnsServedBy({ provider: "opencode", model: "qwen3.6-plus" })),
+        mkPort(mkProvider("opencode")),
+        paidClock,
+      ).run(mkRequest(), mkIO("worker")),
+    );
+
+    // Both runs did the SAME work — same provider, same token counts, same two turns.
+    expect(freeResult.status).toBe("completed");
+    expect(paidResult.status).toBe("completed");
+    expect(freeResult.usage?.outputTokens).toBe(paidResult.usage?.outputTokens);
+
+    // The free-tier model costs the run's budget nothing…
+    expect(free.spentUsd()).toBe(0);
+    // …and the control proves the assertion bites: the paid model is charged the table rate,
+    // 2 turns × (1000 × $0.6 + 2000 × $3.0) / 1M = $0.0132.
+    expect(paid.spentUsd()).toBeCloseTo(0.0132, 6);
+  });
+});
+
+describe("V2AgentRunner — a provider that only ever stalls reaches a FAILED terminal (audited 2026-09-02)", () => {
+  /**
+   * The spine's own CallScope is auto-left (timers cleared, token never cancelled) the instant
+   * silentStream opens the scope that really runs the call, so `call.token.reason` was
+   * structurally null → callStalled never true → FailureLedger rule 6 (the per-task stall
+   * budget) was dead code. Worse, the rule's exhaustion stopped with `finalize: "graceful"`,
+   * which the spine maps to terminalStatus "completed" — so even once the stall reached the
+   * ledger, a run whose provider never answered once settled as a SUCCESS, and
+   * background-executor complete()d the task on it.
+   */
+  function stallingSilentStream(clock: FakeClock, onStall: () => void): SilentStreamPort {
+    return async (_chatId, _sys, _session, _provider, _tools, _ext, _liveness, runClock) => {
+      const rc = runClock as {
+        enterCall: (l: { firstResponseMs: number; stallMs: number; hardMs: number }) => {
+          leave: () => void;
+        };
+      };
+      // silentStream's OWN scope — this is the one the stall timer fires on.
+      const scope = rc.enterCall({ firstResponseMs: 100, stallMs: 100, hardMs: 100_000 });
+      try {
+        clock.advance(150); // no first token inside the window → provider-stall on THIS scope
+        onStall();
+        throw new Error("stream stalled");
+      } finally {
+        scope.leave();
+      }
+    };
+  }
+
+  /** The real classifier's rule (engine/accounting.ts): callStalled IS the carried reason. */
+  function realStallClassification(port: ReturnType<typeof mkPort>): void {
+    port.spies.classifyFailureForVerdict.mockImplementation(
+      (p: { failedCallReason: { kind?: string } | null }) => ({
+        callStalled: p.failedCallReason?.kind === "provider-stall" || p.failedCallReason?.kind === "hard-timeout",
+        taskCancelReason: null,
+        benign: false,
+      }),
+    );
+  }
+
+  it("the stall is classified from the scope that ran the call, and the run ends FAILED / provider-stall:task", async () => {
+    const clock = new FakeClock(0);
+    const handles = mkPlane({ clock });
+    let stalls = 0;
+    const port = mkPort(mkProvider());
+    realStallClassification(port);
+    const runner = mkRunner(
+      handles.plane,
+      new ModelGateway(stallingSilentStream(clock, () => { stalls += 1; })),
+      port,
+      clock,
+    );
+
+    const result = await drive(clock, runner.run(mkRequest(), mkIO("worker")));
+
+    // 1) Every failure was classified from the scope that actually ran the call.
+    const reasons = port.spies.classifyFailureForVerdict.mock.calls.map(
+      (c) => (c[0] as { failedCallReason: unknown }).failedCallReason,
+    );
+    expect(reasons.length).toBeGreaterThan(0);
+    for (const r of reasons) expect(r).toEqual({ kind: "provider-stall", scope: "call" });
+
+    // 2) Rule 6 is live: pauseRetryBudget(5) re-opens the call five times, the sixth stall stops.
+    expect(stalls).toBe(6);
+
+    // 3) The terminal NAMES the stall and is a FAILURE — not "completed". This is the half the
+    //    earlier attempt got wrong: a graceful stop here settles as a completed task downstream.
+    expect(result.reason).toBe("provider-stall:task");
+    expect(["failed", "blocked"]).toContain(result.status);
+    expect(result.status).toBe("failed");
+
+    // 4) …and the terminal the run persists says the same thing, so the task boundary and the
+    //    metric agree with the result object.
+    expect(port.spies.persistTerminal).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      undefined,
+      "failed",
+      "provider-stall:task",
+    );
+    expect(handles.events().some((e) => e.type === "run.ended" && e.status === "failed")).toBe(true);
+  });
+});
+
 describe("V2AgentRunner — interactive gate ask_user takes the step (audited 2026-09-02)", () => {
   it("3 consecutive failures → ask_user → the run still calls the provider and recovers on call #4", async () => {
     // The gate's ask_user verdict is derived from the health tracker, which changes ONLY when a
