@@ -1,5 +1,3 @@
-import { WRITE_OPERATIONS } from "./constants.js";
-
 export type InteractionGateKind = "plan-review-required";
 
 export interface InteractionGateState {
@@ -52,8 +50,19 @@ export class InteractionPolicyStateMachine {
     return null;
   }
 
-  getWriteBlock(chatId: string, toolName: string): InteractionWriteBlock | null {
-    if (!WRITE_OPERATIONS.has(toolName)) {
+  /**
+   * The gate does not decide what a write is — the caller does.
+   *
+   * Audited 2026-09-02: this used to test the static WRITE_OPERATIONS list, so a
+   * file_write the gate refused went straight through when wrapped in
+   * batch_execute (or issued by a runtime-registered writer) while the user
+   * was still being asked to approve the plan. The orchestrator's
+   * isWriteOperation() already knows registry metadata and tool shape; one
+   * classifier decides for every gate, and this one only asks whether a gate
+   * is parked.
+   */
+  getWriteBlock(chatId: string, isWriteOperation: boolean): InteractionWriteBlock | null {
+    if (isWriteOperation !== true) {
       return null;
     }
     const gate = this.gates.get(chatId);

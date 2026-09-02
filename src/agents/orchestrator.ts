@@ -4005,7 +4005,9 @@ export class Orchestrator {
       isWriteOperation: this.isWriteOperation(toolName),
       requireConfirmation: this.requireConfirmation,
       readOnly: this.readOnly,
-      hasPlanReviewGate: this.interactionPolicy.getWriteBlock(chatId, toolName) !== null,
+      // One classifier for write-ness (audited 2026-09-02): the gate no longer
+      // re-derives it from the static allowlist, which let batch_execute through.
+      hasPlanReviewGate: this.interactionPolicy.getWriteBlock(chatId, this.isWriteOperation(toolName)) !== null,
     });
   }
 
@@ -4834,7 +4836,10 @@ export class Orchestrator {
         return createReadOnlyToolStub(activeToolCall.name, activeToolCall.id);
       }
 
-      const pendingWriteBlock = this.interactionPolicy.getWriteBlock(chatId, activeToolCall.name);
+      const pendingWriteBlock = this.interactionPolicy.getWriteBlock(
+        chatId,
+        this.isWriteOperation(activeToolCall.name),
+      );
       if (pendingWriteBlock) {
         return {
           toolCallId: activeToolCall.id,
