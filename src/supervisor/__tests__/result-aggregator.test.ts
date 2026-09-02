@@ -147,6 +147,28 @@ describe("ResultAggregator", () => {
       expect(verifyFn).not.toHaveBeenCalled();
     });
 
+    // audited 2026-09-02: verify() returned the array untouched when nothing was
+    // verified, and the caller could not tell that apart from a full pass.
+    it("reports zero verified nodes in disabled mode instead of an implicit pass", async () => {
+      const verifyFn = vi.fn();
+      const agg = new ResultAggregator({ mode: "disabled", samplingRate: 0, preferDifferentProvider: true, maxVerificationCost: 15 }, verifyFn);
+      const { results, report } = await agg.verifyWithReport([makeResult("A", "ok"), makeResult("B", "failed")]);
+      expect(results).toHaveLength(2);
+      expect(report).toEqual({ candidates: 1, verified: 0, approved: 0, flagged: 0, rejected: 0, notVerified: 1 });
+    });
+
+    it("counts a 'skipped' verdict as not verified, and flags/rejects as verified", async () => {
+      const verifyFn = vi.fn()
+        .mockResolvedValueOnce({ verdict: "skipped", verifierProvider: "claude", issues: ["not critical"] })
+        .mockResolvedValueOnce({ verdict: "flag_issues", verifierProvider: "deepseek", issues: ["no verifier"] })
+        .mockResolvedValueOnce({ verdict: "reject", verifierProvider: "deepseek", issues: ["broken"] });
+      const agg = new ResultAggregator({ mode: "always", samplingRate: 0, preferDifferentProvider: true, maxVerificationCost: 15 }, verifyFn);
+      const { results, report } = await agg.verifyWithReport([makeResult("A", "ok"), makeResult("B", "ok"), makeResult("C", "ok")]);
+      expect(report).toEqual({ candidates: 3, verified: 2, approved: 0, flagged: 1, rejected: 1, notVerified: 1 });
+      expect(results[0]).toMatchObject({ nodeId: "A", status: "ok", output: "done" }); // skipped: untouched
+      expect(results[2]).toMatchObject({ nodeId: "C", status: "failed" });
+    });
+
     it("verifies all nodes in always mode", async () => {
       const verifyFn = vi.fn().mockResolvedValue({ verdict: "approve", verifierProvider: "deepseek" });
       const agg = new ResultAggregator({ mode: "always", samplingRate: 0, preferDifferentProvider: true, maxVerificationCost: 15 }, verifyFn);

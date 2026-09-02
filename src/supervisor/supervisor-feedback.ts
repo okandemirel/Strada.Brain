@@ -288,21 +288,33 @@ export function buildSupervisorVerificationNarrative(task: string): {
   };
 }
 
+/**
+ * Closing narrative. `verification` is what the verify stage measured; when it
+ * is absent or counted zero nodes the narrative says so. audited 2026-09-02:
+ * this used to promise "the verified result" unconditionally — including runs
+ * where verification was disabled or every node was skipped as non-critical.
+ */
 export function buildSupervisorCompletionNarrative(params: {
   task: string;
   result: SupervisorResult;
+  verification?: { verified: number; candidates: number };
 }): {
   language: SupervisorFeedbackLanguage;
   narrative: string;
   canvasSummary: string;
 } {
   const language = detectSupervisorFeedbackLanguage(params.task);
+  const verified = params.verification?.verified ?? 0;
+  const candidates = params.verification?.candidates ?? 0;
   if (language === "tr") {
+    const verificationClause = verified > 0
+      ? `(${candidates} düğümden ${verified}'i bağımsız doğrulandı)`
+      : "(bağımsız doğrulanan düğüm yok)";
     return {
       language,
       narrative:
         `Aşama: kapanış. Son aksiyon: ${params.result.succeeded}/${params.result.totalNodes} görevi tamamlayıp çıktıları birleştirdim. ` +
-        "Sıradaki adım: doğrulanmış sonucu kullanıcıya teslim ediyorum.",
+        `Sıradaki adım: sonucu kullanıcıya teslim ediyorum ${verificationClause}.`,
       canvasSummary: [
         "Supervisor tamamlandı",
         "",
@@ -313,11 +325,14 @@ export function buildSupervisorCompletionNarrative(params: {
     };
   }
 
+  const verificationClause = verified > 0
+    ? `(${verified} of ${candidates} nodes independently verified)`
+    : "(no node was independently verified)";
   return {
     language,
     narrative:
       `Stage: closure. Last action: I merged the outputs after completing ${params.result.succeeded}/${params.result.totalNodes} tasks. ` +
-      "Next: I'm delivering the verified result to the user.",
+      `Next: I'm delivering the result to the user ${verificationClause}.`,
     canvasSummary: [
       "Supervisor completed",
       "",

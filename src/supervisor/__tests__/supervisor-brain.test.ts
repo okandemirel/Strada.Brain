@@ -173,6 +173,83 @@ describe("SupervisorBrain", () => {
     );
   });
 
+  // audited 2026-09-02: verify_start / the "cross-checking" narrative / verify_done
+  // were emitted unconditionally around aggregator.verify(), which is a no-op when
+  // verification is disabled — and the verdict was derived from "did any ok node
+  // get downgraded", so zero verification read as "approve" and the closing
+  // narrative promised "the verified result". A skipped check must not read
+  // like a passed one.
+  it("emits no verification telemetry and claims no verified result when verification is disabled", async () => {
+    const emitter = { emit: vi.fn() };
+    const decomposer = {
+      shouldDecompose: vi.fn().mockReturnValue(true),
+      decomposeProactive: vi.fn().mockResolvedValue(
+        makeGoalTree([{ id: "root", task: "Build" }, { id: "s1", task: "Sub task" }, { id: "s2", task: "Other" }]),
+      ),
+    };
+    const brain = new SupervisorBrain({
+      config: { ...DEFAULT_CONFIG, verificationMode: "disabled" },
+      decomposer: decomposer as any,
+      capabilityMatcher: new CapabilityMatcher(),
+      providerAssigner: new ProviderAssigner(PROVIDERS),
+      eventEmitter: emitter,
+    });
+    brain.setExecuteNode(vi.fn().mockImplementation(async (node: any) => ({
+      nodeId: node.id, status: "ok", output: "done", artifacts: [], toolResults: [],
+      provider: "claude", model: "sonnet", cost: 0.001, duration: 100,
+    })));
+
+    const result = await brain.execute("Build something complex", { chatId: "test" });
+    expect(result?.success).toBe(true);
+
+    const events = emitter.emit.mock.calls.map((c) => c[0]);
+    expect(events).not.toContain("supervisor:verify_start");
+    expect(events).not.toContain("supervisor:verify_done");
+
+    const narratives = emitter.emit.mock.calls
+      .filter((c) => c[0] === "progress:narrative")
+      .map((c) => String((c[1] as { narrative: string }).narrative));
+    expect(narratives.some((n) => n.includes("cross-checking"))).toBe(false);
+    const closing = narratives.find((n) => n.startsWith("Stage: closure"));
+    expect(closing).toBeDefined();
+    expect(closing).not.toContain("verified result");
+    expect(closing).toContain("no node was independently verified");
+  });
+
+  it("reports flag_issues, not approve, when every verifier verdict was a flag", async () => {
+    const emitter = { emit: vi.fn() };
+    const decomposer = {
+      shouldDecompose: vi.fn().mockReturnValue(true),
+      decomposeProactive: vi.fn().mockResolvedValue(
+        makeGoalTree([{ id: "root", task: "Build" }, { id: "s1", task: "Sub task" }]),
+      ),
+    };
+    const verifyNode = vi.fn().mockResolvedValue({
+      verdict: "flag_issues",
+      issues: ["verification_skipped: no HEALTHY cross-provider verifier — this node was NOT independently verified"],
+      verifierProvider: "claude",
+    });
+    const brain = new SupervisorBrain({
+      config: { ...DEFAULT_CONFIG, verificationMode: "always" },
+      decomposer: decomposer as any,
+      capabilityMatcher: new CapabilityMatcher(),
+      providerAssigner: new ProviderAssigner(PROVIDERS),
+      eventEmitter: emitter,
+      verifyNode,
+    });
+    brain.setExecuteNode(vi.fn().mockResolvedValue({
+      nodeId: "s1", status: "ok", output: "done", artifacts: [], toolResults: [],
+      provider: "claude", model: "sonnet", cost: 0.001, duration: 100,
+    }));
+
+    await brain.execute("Build something complex", { chatId: "test" });
+
+    expect(verifyNode).toHaveBeenCalledTimes(1);
+    const done = emitter.emit.mock.calls.find((c) => c[0] === "supervisor:verify_done");
+    expect(done).toBeDefined();
+    expect((done![1] as { verdict: string }).verdict).toBe("flag_issues");
+  });
+
   it("returns null for non-decomposable tasks", async () => {
     const decomposer = {
       shouldDecompose: vi.fn().mockReturnValue(false),

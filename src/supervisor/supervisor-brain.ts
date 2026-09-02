@@ -509,31 +509,53 @@ export class SupervisorBrain {
           this.config.verificationMode === "critical-only" &&
           !criticalNodeIds.has(String(node.nodeId))
         ) {
+          // Not a verdict: nobody looked. Used to answer "approve" here, so a
+          // run with zero critical nodes reported a clean pass (audited 2026-09-02).
           return Promise.resolve({
-            verdict: "approve" as const,
+            verdict: "skipped" as const,
+            issues: ["not a critical node under critical-only verification"],
             verifierProvider: canonicalizeProviderName(node.provider) ?? node.provider,
           });
         }
         return this.verifyNode!(node, context);
       } : undefined);
 
-      this.emitter?.emit("supervisor:verify_start", { nodeId: "aggregate", verifierProvider: "internal" });
-      const verification = buildSupervisorVerificationNarrative(task);
-      this.emitNarrative(verification.narrative, verification.language);
-      this.emitActivity(verification.narrative, "aggregate", "supervisor_verify_start");
-      this.emitter?.emit("canvas:agent_draw", buildSupervisorCanvasSummaryUpdate({
-        rootId: String(decomposedGoalTree.rootId),
-        summary: verification.canvasSummary,
-        tone: "active",
-      }));
-      await this.reportUpdate(context, verification.markdown);
-      const verifiedResults = await aggregator.verify(results);
+      // audited 2026-09-02: verify_start, the "cross-checking" narrative and
+      // verify_done were emitted around a verify() that is a no-op when the mode
+      // is disabled, no verifier is wired, or no node qualifies — and the verdict
+      // came from "did any ok node get downgraded", so nothing verified read as
+      // "approve". Emit only when a verifier can actually look at something, and
+      // derive the verdict from what it measured.
+      const verificationPlanned =
+        this.config.verificationMode !== "disabled" &&
+        this.verifyNode !== undefined &&
+        results.some((result) =>
+          result.status === "ok" &&
+          (this.config.verificationMode !== "critical-only" || criticalNodeIds.has(String(result.nodeId))),
+        );
+      if (verificationPlanned) {
+        this.emitter?.emit("supervisor:verify_start", { nodeId: "aggregate", verifierProvider: "internal" });
+        const verification = buildSupervisorVerificationNarrative(task);
+        this.emitNarrative(verification.narrative, verification.language);
+        this.emitActivity(verification.narrative, "aggregate", "supervisor_verify_start");
+        this.emitter?.emit("canvas:agent_draw", buildSupervisorCanvasSummaryUpdate({
+          rootId: String(decomposedGoalTree.rootId),
+          summary: verification.canvasSummary,
+          tone: "active",
+        }));
+        await this.reportUpdate(context, verification.markdown);
+      }
+      const { results: verifiedResults, report: verificationReport } =
+        await aggregator.verifyWithReport(results);
       this.recordProviderOutcomes(assignedNodes, verifiedResults);
-      const verificationVerdict = verifiedResults.some((result, index) =>
-        results[index]?.status === "ok" && result.status !== "ok"
-      )
-        ? "reject"
-        : "approve";
+      const verificationVerdict =
+        verificationReport.verified === 0
+          ? "not_verified"
+          : verificationReport.rejected > 0
+            ? "reject"
+            : verificationReport.flagged > 0
+              ? "flag_issues"
+              : "approve";
 
       // Emit per-node monitor:task_update for verification-rejected nodes
       for (let i = 0; i < verifiedResults.length; i++) {
@@ -555,10 +577,16 @@ export class SupervisorBrain {
         }
       }
 
-      this.emitter?.emit("supervisor:verify_done", {
-        nodeId: "aggregate",
-        verdict: verificationVerdict,
-      });
+      if (verificationPlanned) {
+        this.emitter?.emit("supervisor:verify_done", {
+          nodeId: "aggregate",
+          verdict: verificationVerdict,
+          issues: [
+            `${verificationReport.verified} of ${verificationReport.candidates} ok nodes independently verified` +
+            ` (approved ${verificationReport.approved}, flagged ${verificationReport.flagged}, rejected ${verificationReport.rejected})`,
+          ],
+        });
+      }
       const supervisorResult = aggregator.synthesize(verifiedResults);
 
       // Step 13: Emit supervisor:complete
@@ -574,6 +602,10 @@ export class SupervisorBrain {
       const completion = buildSupervisorCompletionNarrative({
         task,
         result: supervisorResult,
+        verification: {
+          verified: verificationReport.verified,
+          candidates: verificationReport.candidates,
+        },
       });
       this.emitNarrative(completion.narrative, completion.language);
       this.emitActivity(completion.narrative, context.chatId, "supervisor_complete");

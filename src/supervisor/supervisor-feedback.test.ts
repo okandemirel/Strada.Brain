@@ -319,6 +319,30 @@ describe("buildSupervisorCompletionNarrative", () => {
     expect(result.language).toBe("tr");
     expect(result.canvasSummary).toContain("Başarılı");
   });
+
+  // audited 2026-09-02: the closing line promised "the verified result" even
+  // when no verifier had looked at a single node.
+  it("names how many nodes were independently verified, and never claims a verified result when none were", () => {
+    const none = buildSupervisorCompletionNarrative({ task: "Build everything", result: englishResult });
+    expect(none.narrative).not.toContain("verified result");
+    expect(none.narrative).toContain("no node was independently verified");
+
+    const zero = buildSupervisorCompletionNarrative({
+      task: "Build everything", result: englishResult, verification: { verified: 0, candidates: 3 },
+    });
+    expect(zero.narrative).toContain("no node was independently verified");
+
+    const some = buildSupervisorCompletionNarrative({
+      task: "Build everything", result: englishResult, verification: { verified: 2, candidates: 3 },
+    });
+    expect(some.narrative).toContain("2 of 3 nodes independently verified");
+
+    const tr = buildSupervisorCompletionNarrative({
+      task: "hata düzelt", result: englishResult, verification: { verified: 0, candidates: 3 },
+    });
+    expect(tr.narrative).not.toContain("doğrulanmış sonucu");
+    expect(tr.narrative).toContain("bağımsız doğrulanan düğüm yok");
+  });
 });
 
 // ---------------------------------------------------------------------------

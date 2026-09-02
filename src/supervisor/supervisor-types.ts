@@ -93,11 +93,32 @@ export interface FileChange {
 // VERIFICATION
 // =============================================================================
 
-/** Verdict from cross-provider verification of a node result */
+/**
+ * Verdict from cross-provider verification of a node result.
+ *
+ * "skipped" means no verifier looked at the node (audited 2026-09-02): the
+ * critical-only wrapper used to answer "approve" for every non-critical node,
+ * so a run in which nothing was verified reported the same verdict as one in
+ * which everything passed. A skip is neither a pass nor a failure and is
+ * counted as "not verified" in the VerificationReport.
+ */
 export interface VerificationVerdict {
-  readonly verdict: "approve" | "flag_issues" | "reject";
+  readonly verdict: "approve" | "flag_issues" | "reject" | "skipped";
   readonly issues?: string[];
   readonly verifierProvider: string;
+}
+
+/** What the verify stage actually measured — so a skipped check never reads like a passed one. */
+export interface VerificationReport {
+  /** Nodes that finished "ok" and were eligible for verification under the active mode. */
+  readonly candidates: number;
+  /** Nodes a verifier actually rendered a verdict on (approve / flag_issues / reject). */
+  readonly verified: number;
+  readonly approved: number;
+  readonly flagged: number;
+  readonly rejected: number;
+  /** Candidates no verifier looked at: mode disabled, no verifier, budget, sampling, or a "skipped" verdict. */
+  readonly notVerified: number;
 }
 
 /** Configuration for the verification subsystem */

@@ -8,6 +8,7 @@
 import type {
   NodeResult,
   VerificationConfig,
+  VerificationReport,
   VerificationVerdict,
   SupervisorResult,
 } from "./supervisor-types.js";
@@ -84,13 +85,36 @@ export class ResultAggregator {
 
   /** Cross-validate results based on verification config mode. */
   async verify(results: NodeResult[]): Promise<NodeResult[]> {
+    return (await this.verifyWithReport(results)).results;
+  }
+
+  /**
+   * Cross-validate results and say what was measured.
+   *
+   * audited 2026-09-02: `verify` returned the array untouched when the mode was
+   * disabled, no verifier was wired, the budget cut a node, or the sampler
+   * skipped it — and the caller derived its verdict from "did any ok node get
+   * downgraded", so zero verification was indistinguishable from a full pass.
+   * The report carries the count of nodes a verifier actually judged.
+   */
+  async verifyWithReport(
+    results: NodeResult[],
+  ): Promise<{ results: NodeResult[]; report: VerificationReport }> {
     const { mode, samplingRate } = this.verificationConfig;
+    const okResults = results.filter((r) => r.status === "ok");
+    const counts = { approved: 0, flagged: 0, rejected: 0 };
 
     if (mode === "disabled" || !this.verifyFn) {
-      return results;
+      return {
+        results,
+        report: {
+          candidates: okResults.length,
+          verified: 0,
+          ...counts,
+          notVerified: okResults.length,
+        },
+      };
     }
-
-    const okResults = results.filter((r) => r.status === "ok");
 
     let toVerify: NodeResult[];
 
@@ -135,6 +159,14 @@ export class ResultAggregator {
       verificationSpend = projectedSpend;
       const verdict = await this.verifyFn(node);
 
+      if (verdict.verdict === "approve") {
+        counts.approved++;
+      } else if (verdict.verdict === "flag_issues") {
+        counts.flagged++;
+      } else if (verdict.verdict === "reject") {
+        counts.rejected++;
+      }
+
       if (verdict.verdict === "reject") {
         const idx = updatedResults.findIndex((result) => result.nodeId === node.nodeId);
         if (idx !== -1) {
@@ -163,7 +195,16 @@ export class ResultAggregator {
       }
     }
 
-    return updatedResults;
+    const verified = counts.approved + counts.flagged + counts.rejected;
+    return {
+      results: updatedResults,
+      report: {
+        candidates: okResults.length,
+        verified,
+        ...counts,
+        notVerified: okResults.length - verified,
+      },
+    };
   }
 
   // ---------------------------------------------------------------------------
