@@ -3,8 +3,10 @@
  *
  * Tracks runtime health status per provider. Failures are recorded with
  * automatic recovery after a configurable cooldown. Consumed by
- * FallbackChainProvider (skip unhealthy), ProviderRouter (scoring penalty),
- * and ProviderAssigner (healthy/nearRateLimit flags).
+ * FallbackChainProvider (skip unhealthy), ProviderRouter (drops cooled
+ * providers from the candidate pool — wired 2026-09-02; the header used to
+ * claim a "scoring penalty" that never existed), and ProviderAssigner
+ * (healthy/nearRateLimit flags).
  *
  * Singleton — shared across the entire process.
  */

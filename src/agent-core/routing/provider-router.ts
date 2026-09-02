@@ -61,6 +61,22 @@ export interface ProviderManagerRef {
   isAvailable(name: string): boolean;
 }
 
+/**
+ * Runtime provider health (ProviderHealthRegistry), structural so the router
+ * stays decoupled. `isAvailable` is false while a provider is in cooldown.
+ *
+ * audited 2026-09-02: provider-health.ts's header named ProviderRouter as a
+ * consumer, but the router only ever filtered on CREDENTIAL presence
+ * (ProviderManager.isAvailable). A provider in an 8h quota cooldown kept
+ * winning resolve() and was stamped into the supervisor assignment while the
+ * chain silently answered from a sibling — usage, phase telemetry and the
+ * router's own phase-reliability learning were credited to a provider that
+ * produced nothing.
+ */
+export interface ProviderHealthRef {
+  isAvailable(name: string): boolean;
+}
+
 /* ------------------------------------------------------------------ */
 /*  TierRouter structural interface (facade — avoids hard coupling)   */
 /* ------------------------------------------------------------------ */
@@ -148,6 +164,8 @@ export class ProviderRouter {
       dynamicProfiles?: DynamicBehavioralProfileStore;
       /** ROUTING_PHASE_SWITCHING — audited 2026-08-30 as a dead flag; now wired. */
       phaseSwitching?: boolean;
+      /** Runtime health: providers in cooldown are dropped from the candidate pool. */
+      providerHealth?: ProviderHealthRef;
     } = {},
   ) {
     this.weights = ROUTING_PRESETS[preset];
@@ -156,9 +174,11 @@ export class ProviderRouter {
     this.trajectoryPhaseSignalRetriever = options.trajectoryPhaseSignalRetriever;
     this.dynamicProfiles = options.dynamicProfiles;
     this.phaseSwitching = options.phaseSwitching ?? true;
+    this.providerHealth = options.providerHealth;
   }
 
   private readonly phaseSwitching: boolean;
+  private readonly providerHealth?: ProviderHealthRef;
 
   /**
    * Attach a TierRouter instance for delegation-aware tier resolution.
@@ -207,14 +227,15 @@ export class ProviderRouter {
       projectWorldFingerprint?: string;
     } = {},
   ): RoutingDecision {
-    const available = this.getAvailableProviders(options);
+    const { pool: available, note: healthNote } = this.getAvailableProviders(options);
+    const withHealthNote = (reason: string): string => (healthNote ? `${reason}; ${healthNote}` : reason);
 
     // Zero overhead: single provider → return immediately
     if (available.length <= 1) {
       const name = available[0]?.name ?? "unknown";
       const decision: RoutingDecision = {
         provider: name,
-        reason: "only available provider",
+        reason: withHealthNote("only available provider"),
         task,
         timestamp: Date.now(),
         identityKey: options.identityKey,
@@ -275,7 +296,7 @@ export class ProviderRouter {
 
     const decision: RoutingDecision = {
       provider: bestProvider,
-      reason: bestReason,
+      reason: withHealthNote(bestReason),
       task,
       timestamp: Date.now(),
       identityKey: options.identityKey,
@@ -313,7 +334,7 @@ export class ProviderRouter {
       projectWorldFingerprint?: string;
     } = {},
   ): string[] {
-    const available = this.getAvailableProviders(options);
+    const { pool: available } = this.getAvailableProviders(options);
     if (available.length <= 1) {
       return available.map((p) => p.name);
     }
@@ -521,7 +542,7 @@ export class ProviderRouter {
   private getAvailableProviders(options: {
     identityKey?: string;
     allowedProviderNames?: readonly string[];
-  }): AvailableProvider[] {
+  }): { pool: AvailableProvider[]; note: string | null } {
     const allowedNames = options.allowedProviderNames
       ? new Set(options.allowedProviderNames.map((name) => name.trim().toLowerCase()).filter(Boolean))
       : null;
@@ -533,12 +554,23 @@ export class ProviderRouter {
       }))
       ?? this.getDefaultAvailableProviders();
 
-    if (!allowedNames) {
-      return base;
-    }
+    const scoped = allowedNames
+      ? base.filter((entry) => allowedNames.has(entry.name.trim().toLowerCase()))
+      : base;
+    const pool = scoped.length > 0 ? scoped : base;
 
-    const filtered = base.filter((entry) => allowedNames.has(entry.name.trim().toLowerCase()));
-    return filtered.length > 0 ? filtered : base;
+    // Health gate (audited 2026-09-02): a provider in cooldown must not win the
+    // route — the chain would skip it and a sibling's work would be credited to
+    // it. When EVERY candidate is cooling the pool is kept whole rather than
+    // routing to nobody, and the decision says so; the chain then measures and
+    // reports the outage itself.
+    if (!this.providerHealth) return { pool, note: null };
+    const live = pool.filter((entry) => this.providerHealth!.isAvailable(entry.name));
+    if (live.length > 0) return { pool: live, note: null };
+    return {
+      pool,
+      note: "every candidate is cooling — health gate not applied, the provider chain will report the outage",
+    };
   }
 
   private getDefaultAvailableProviders(): AvailableProvider[] {
