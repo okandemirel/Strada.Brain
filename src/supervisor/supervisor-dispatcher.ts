@@ -409,6 +409,11 @@ export class SupervisorDispatcher {
 
     // Nodes stuck in a dependency cycle are never scheduled. Record them as
     // FAILED up front so they cannot be mistaken for work that succeeded.
+    // audited 2026-09-02: the reason used to ride in `blockedReason`, which the
+    // aggregator files under "blocked" — documented as "stopped on a question".
+    // A cycle is a planning defect: an all-cycle plan came back partial:true
+    // with zero successes and was replayed as if an answer were pending. The
+    // reason now lives in `output`, so it aggregates as the failure it is.
     const unschedulable = this.findUnschedulableNodes(nodes, waves);
     for (const node of unschedulable) {
       const reason =
@@ -416,8 +421,7 @@ export class SupervisorDispatcher {
       results.push({
         nodeId: node.id,
         status: "failed",
-        output: "",
-        blockedReason: reason,
+        output: reason,
         artifacts: [],
         toolResults: [],
         provider: node.assignedProvider ?? "unassigned",

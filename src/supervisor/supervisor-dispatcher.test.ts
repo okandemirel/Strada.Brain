@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeAll } from "vitest";
 import { createLogger } from "../utils/logger.js";
 import { SupervisorDispatcher } from "./supervisor-dispatcher.js";
+import { ResultAggregator } from "./result-aggregator.js";
 import type { TaggedGoalNode, NodeResult } from "./supervisor-types.js";
 
 function node(id: string, dependsOn: string[] = []): TaggedGoalNode {
@@ -78,7 +79,31 @@ describe("SupervisorDispatcher — dependency cycles are not silent", () => {
     expect(byId.get("c")!.status).toBe("ok");
     expect(byId.get("a")!.status).toBe("failed");
     expect(byId.get("b")!.status).toBe("failed");
-    expect(byId.get("a")!.blockedReason).toMatch(/dependency cycle/i);
+    expect(byId.get("a")!.output).toMatch(/dependency cycle/i);
+    // A cycle is a planning defect, not a question: it must not carry a
+    // blockedReason, which the aggregator files under "stopped on a question".
+    expect(byId.get("a")!.blockedReason).toBeUndefined();
+  });
+
+  // audited 2026-09-02: cycle nodes were pushed as failed + blockedReason, so the
+  // aggregator bucketed them as "blocked" (documented: stopped on a question) and
+  // an all-cycle plan came back partial:true with zero successes — routed to
+  // block/auto-resume, which replays the same unschedulable tree once before it
+  // replans, instead of failing outright so the plan is redone.
+  it("a fully cyclic goal aggregates as a plain failure, not as blocked-on-a-question", async () => {
+    const d = mkDispatcher();
+    const results = await d.dispatch([node("x", ["y"]), node("y", ["x"])]);
+    const agg = new ResultAggregator({
+      mode: "disabled", samplingRate: 0, preferDifferentProvider: true, maxVerificationCost: 0,
+    });
+
+    const verdict = agg.synthesize(results);
+
+    expect(verdict.success).toBe(false);
+    expect(verdict.partial).toBe(false);
+    expect(verdict.blocked).toBe(0);
+    expect(verdict.failed).toBe(2);
+    expect(verdict.output).toMatch(/dependency cycle/i);
   });
 
   it("a fully cyclic goal yields no successes at all", async () => {
