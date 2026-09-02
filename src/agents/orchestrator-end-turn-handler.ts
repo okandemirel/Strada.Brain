@@ -589,6 +589,44 @@ export async function handleBgEndTurn(
     });
   }
 
+  // 5b. Boundary on the synthesized text: plan_review or terminal_failure.
+  //
+  // audited 2026-09-02: only internal_continue was tested here, so a
+  // terminal_failure the second boundary raised — the raw head buried the
+  // blocker under a list, synthesis fronted it as "please sign in to your
+  // account" — fell into the approved path below: status "approved", reason
+  // "the verifier pipeline cleared the task", no status on the action. Same
+  // mapping as the first boundary (2b).
+  if (
+    (finalBoundary.kind === "plan_review" || finalBoundary.kind === "terminal_failure") &&
+    finalBoundary.visibleText
+  ) {
+    const surfacedText = ctx.formatBoundaryVisibleText(finalBoundary) ?? finalBoundary.visibleText;
+    const status = finalBoundary.kind === "plan_review" ? "blocked" : "failed";
+    ctx.appendVisibleAssistantMessage(ctx.session, surfacedText);
+    ctx.recordPhaseOutcome({
+      chatId: ctx.chatId,
+      identityKey: ctx.identityKey,
+      assignment: ctx.currentAssignment,
+      phase: toExecutionPhaseModel(agentState.phase),
+      status,
+      task: ctx.executionStrategy.task,
+      reason: finalBoundary.reason,
+      telemetry: ctx.buildPhaseOutcomeTelemetry({
+        state: agentState,
+        usage: ctx.responseUsage,
+        verifierDecision: "approve",
+        failureReason: finalBoundary.reason,
+      }),
+    });
+    await ctx.persistSessionToMemory(
+      ctx.chatId,
+      ctx.getVisibleTranscript(ctx.session),
+      /* force */ true,
+    );
+    return { flow: "done", visibleText: surfacedText, newState: agentState, status };
+  }
+
   // 6. Approved finish path
   const surfacedFinalText = finalBoundary.visibleText ?? finalText;
   // Blocked rather than failed: nothing went wrong, the work simply stopped

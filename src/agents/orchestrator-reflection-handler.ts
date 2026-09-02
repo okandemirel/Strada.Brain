@@ -553,6 +553,22 @@ async function evaluateBgReflectionCompletion(
     };
   }
 
+  // audited 2026-09-02: the second boundary tested only internal_continue, so
+  // a terminal_failure raised on the synthesized prose was returned as
+  // approved: true and the run settled completed. Same mapping as the raw
+  // boundary above: plan_review is blocked, terminal_failure is failed.
+  if (
+    (finalBoundary.kind === "plan_review" || finalBoundary.kind === "terminal_failure") &&
+    finalBoundary.visibleText
+  ) {
+    return {
+      kind: "done",
+      visibleText: ctx.formatBoundaryVisibleText(finalBoundary) ?? finalBoundary.visibleText,
+      status: finalBoundary.kind === "plan_review" ? "blocked" : "failed",
+      approved: false,
+    };
+  }
+
   return {
     kind: "done",
     visibleText: finalBoundary.visibleText ?? finalText,
