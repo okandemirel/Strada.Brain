@@ -51,6 +51,7 @@ import {
   type BuildPhaseOutcomeTelemetryParams,
 } from "./orchestrator-loop-shared.js";
 import { shouldDeferRawBoundaryForDirectTarget } from "./prompt-targets.js";
+import { notDeliveredReport } from "./not-delivered-report.js";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -218,6 +219,42 @@ async function completeBgReflectionDone(
   ctx: BgReflectionContext,
   evaluation: Extract<BgReflectionCompletionEvaluation, { kind: "done" }>,
 ): Promise<ReflectionLoopAction> {
+  // audited 2026-09-02: the end-turn route appends NOT DELIVERED and settles
+  // blocked when a delivery condition is unmet; this route recorded "approved"
+  // and returned no status for the identical state. Same accounting here.
+  const notDelivered =
+    evaluation.approved && evaluation.status === undefined
+      ? notDeliveredReport(ctx.stradaConformance, evaluation.visibleText)
+      : null;
+  if (notDelivered) {
+    ctx.appendVisibleAssistantMessage(ctx.session, notDelivered.text);
+    ctx.recordPhaseOutcome({
+      chatId: ctx.chatId,
+      identityKey: ctx.identityKey,
+      assignment: ctx.currentAssignment,
+      phase: "reflecting",
+      status: "blocked",
+      task: ctx.executionStrategy.task,
+      reason: notDelivered.reason,
+      telemetry: ctx.buildPhaseOutcomeTelemetry({
+        state: agentState,
+        usage: ctx.responseUsage,
+        verifierDecision: "approve",
+        failureReason: notDelivered.reason,
+      }),
+    });
+    await ctx.persistSessionToMemory(
+      ctx.chatId,
+      ctx.getVisibleTranscript(ctx.session),
+      /* force */ true,
+    );
+    return {
+      flow: "done",
+      visibleText: notDelivered.text,
+      newState: agentState,
+      status: "blocked",
+    };
+  }
   if (evaluation.visibleText) {
     ctx.appendVisibleAssistantMessage(ctx.session, evaluation.visibleText);
   }
@@ -954,6 +991,32 @@ export async function handleInteractiveReflectionDone(
 
   // Approved path
   const finalText = visibilityDecision.visibleText?.trim() ?? "";
+  // audited 2026-09-02: same omission as the background route — approved by
+  // every verifier is not the same as delivered.
+  const notDelivered = notDeliveredReport(ctx.stradaConformance, finalText);
+  if (notDelivered) {
+    ctx.recordPhaseOutcome({
+      chatId: ctx.chatId,
+      identityKey: ctx.identityKey,
+      assignment: ctx.currentAssignment,
+      phase: "reflecting",
+      status: "blocked",
+      task: ctx.executionStrategy.task,
+      reason: notDelivered.reason,
+      telemetry: ctx.buildPhaseOutcomeTelemetry({
+        state: agentState,
+        usage: ctx.responseUsage,
+        verifierDecision: "approve",
+        failureReason: notDelivered.reason,
+      }),
+    });
+    return {
+      flow: "done",
+      visibleText: notDelivered.text,
+      newState: agentState,
+      status: "blocked",
+    };
+  }
   ctx.recordPhaseOutcome({
     chatId: ctx.chatId,
     identityKey: ctx.identityKey,

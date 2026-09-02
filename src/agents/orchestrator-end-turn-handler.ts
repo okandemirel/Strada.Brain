@@ -53,6 +53,7 @@ import {
   type BuildPhaseOutcomeTelemetryParams,
 } from "./orchestrator-loop-shared.js";
 import { shouldDeferRawBoundaryForDirectTarget } from "./prompt-targets.js";
+import { notDeliveredReport } from "./not-delivered-report.js";
 
 // ─── Localized Fallbacks ─────────────────────────────────────────────────────
 
@@ -317,40 +318,6 @@ async function runInteractiveLoopRecovery(
 }
 
 // ─── Background end-turn handler ────────────────────────────────────────────────
-
-/**
- * The report a run owes when every verifier approved and the thing asked for
- * still is not there.
- *
- * The conformance gates are asks, and an ask must be able to give up or it turns
- * into a loop. But going quiet was read as satisfied: measured on run 52,
- * [STRADA NOTHING DRAWN] fired three times, fell silent on the fourth, and the
- * run finished with a 123-character success message for a game whose sixty
- * captured frames were identical. The gate's own last words were "say the game
- * does not render rather than reporting it as delivered" — advice with nothing
- * behind it.
- *
- * Returns null when there is nothing outstanding, so the ordinary path is
- * untouched.
- */
-function notDeliveredReport(
-  conformance: StradaConformanceGuard,
-  finalText: string,
-): { text: string; reason: string } | null {
-  const unmet = conformance.unmetDeliveryConditions();
-  if (unmet.length === 0) return null;
-
-  const reason = unmet.join("; ");
-  return {
-    reason,
-    text: (
-      `${finalText}\n\n` +
-      `NOT DELIVERED — ${reason}. ` +
-      "This is the run's own measurement, not a review: the work above is real, " +
-      "but it does not yet add up to the thing that was asked for."
-    ).trim(),
-  };
-}
 
 export async function handleBgEndTurn(
   agentState: AgentState,
