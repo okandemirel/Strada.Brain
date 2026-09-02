@@ -92,3 +92,34 @@ describe("containment still holds with the option on", () => {
     expect(result.valid).toBe(false);
   });
 });
+
+describe("the sensitive-file blocklist still applies with the option on", () => {
+  // Audited 2026-09-02: the allowMissingParents early return sat ABOVE the
+  // BLOCKED_PATTERNS loop, so `Assets/.env` was refused while
+  // `Assets/Config/.env` (Config not yet created) was accepted, and file_write
+  // then mkdir -p'd the chain and put the secret on disk. Containment was
+  // proven by the walk; the blocklist was simply never consulted.
+  const blocked = [
+    "Assets/Config/.env",
+    "Assets/NewDir/credentials.json",
+    "Assets/NewDir/id_rsa",
+    "Assets/NewDir/deep/server.key",
+    "Assets/NewDir/.ssh/authorized_keys",
+    "NewDir/.npmrc",
+    "Assets/Config/secrets.json",
+    "node_modules/evilpkg/index.js",
+  ];
+
+  for (const rel of blocked) {
+    it(`refuses ${rel} even though its parent does not exist yet`, async () => {
+      const result = await validatePath(project, rel, allow);
+      expect(result.valid).toBe(false);
+      expect(result.error).toBe("Access to sensitive files is not permitted");
+    });
+  }
+
+  it("still accepts a benign deep path", async () => {
+    const result = await validatePath(project, "Assets/Modules/Combat/CombatSystem.cs", allow);
+    expect(result.valid).toBe(true);
+  });
+});
