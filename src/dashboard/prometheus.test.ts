@@ -223,12 +223,15 @@ describe.skipIf(!process.env["LOCAL_SERVER_TESTS"])("PrometheusMetrics", () => {
     // shipped Grafana dashboard therefore charted message, token and tool
     // panels that were flat zero forever.
 
-    it("exports messages recorded on the collector, not just direct calls", async () => {
+    it("exports messages recorded on the collector as status=received — the collector counts ingress, not outcome (audited 2026-09-02)", async () => {
+      // MetricsCollector.recordMessage() takes no outcome and is called before
+      // the turn runs, so labelling it "success" claimed an outcome nobody measured.
       metrics.recordMessage();
       metrics.recordMessage();
 
       const text = await prometheus.getMetrics();
-      expect(text).toContain('strada_messages_total{status="success"} 2');
+      expect(text).toContain('strada_messages_total{status="received"} 2');
+      expect(text).not.toContain('strada_messages_total{status="success"} 2');
     });
 
     it("exports token usage recorded on the collector", async () => {
@@ -247,7 +250,28 @@ describe.skipIf(!process.env["LOCAL_SERVER_TESTS"])("PrometheusMetrics", () => {
 
       const text = await prometheus.getMetrics();
       expect(text).toContain('strada_tool_calls_total{tool="file_read",status="success"} 2');
+      expect(text).toContain('strada_tool_calls_total{tool="shell_exec",status="error"} 1');
+      expect(text).not.toContain('strada_tool_calls_total{tool="shell_exec",status="success"}');
       expect(text).toContain('strada_tool_errors_total{tool="shell_exec"} 1');
+    });
+
+    it("splits the collector's call total into success and error series — failures are not counted as successes (audited 2026-09-02)", async () => {
+      // toolCallCounts is calls-total (every call), toolErrorCounts the failures.
+      // 70 ok + 30 failed used to export {status="success"} 100 and no error series.
+      for (let i = 0; i < 70; i++) metrics.recordToolCall("file_write", 5, true);
+      for (let i = 0; i < 30; i++) metrics.recordToolCall("file_write", 5, false, "EACCES");
+
+      const text = await prometheus.getMetrics();
+      expect(text).toContain('strada_tool_calls_total{tool="file_write",status="success"} 70');
+      expect(text).toContain('strada_tool_calls_total{tool="file_write",status="error"} 30');
+      expect(text).not.toContain('strada_tool_calls_total{tool="file_write",status="success"} 100');
+      expect(text).toContain('strada_tool_errors_total{tool="file_write"} 30');
+
+      // A later scrape after more failures advances only the error series.
+      for (let i = 0; i < 5; i++) metrics.recordToolCall("file_write", 5, false, "EACCES");
+      const again = await prometheus.getMetrics();
+      expect(again).toContain('strada_tool_calls_total{tool="file_write",status="success"} 70');
+      expect(again).toContain('strada_tool_calls_total{tool="file_write",status="error"} 35');
     });
 
     it("advances counters by the delta — repeated scrapes do not double-count", async () => {
@@ -259,7 +283,7 @@ describe.skipIf(!process.env["LOCAL_SERVER_TESTS"])("PrometheusMetrics", () => {
       const text = await prometheus.getMetrics();
       // Still 1: a monotonic counter must not re-add the snapshot total on
       // every scrape.
-      expect(text).toContain('strada_messages_total{status="success"} 1');
+      expect(text).toContain('strada_messages_total{status="received"} 1');
     });
 
     it("observes tool DURATIONS, which the collector used to discard", async () => {
@@ -281,7 +305,7 @@ describe.skipIf(!process.env["LOCAL_SERVER_TESTS"])("PrometheusMetrics", () => {
       metrics.recordMessage();
 
       const text = await prometheus.getMetrics();
-      expect(text).toContain('strada_messages_total{status="success"} 3');
+      expect(text).toContain('strada_messages_total{status="received"} 3');
     });
   });
 
