@@ -944,6 +944,8 @@ export async function handleInteractiveReflectionDone(
     selfVerification: ctx.selfVerification,
     taskStartedAtMs: ctx.taskStartedAtMs,
     availableToolNames: ctx.currentToolNames,
+    // audited 2026-09-02: the background route feeds this to the boundary.
+    terminalFailureReported: isTerminalFailureReport(ctx.responseText),
     usageHandler: ctx.usageHandler,
   }, ctx.interventionDeps);
 
@@ -977,31 +979,37 @@ export async function handleInteractiveReflectionDone(
     return { flow: "continue", newState };
   }
 
+  // audited 2026-09-02: terminal_failure was missing from this arm (same as
+  // the interactive end-turn handler), so an honest failure report was
+  // recorded "approved" and settled completed.
   if (
     (visibilityDecision.kind === "plan_review" ||
       visibilityDecision.kind === "blocked" ||
-      visibilityDecision.kind === "ask_user") &&
+      visibilityDecision.kind === "ask_user" ||
+      visibilityDecision.kind === "terminal_failure") &&
     visibilityDecision.visibleText
   ) {
+    const status = visibilityDecision.kind === "terminal_failure" ? "failed" : "blocked";
     ctx.recordPhaseOutcome({
       chatId: ctx.chatId,
       identityKey: ctx.identityKey,
       assignment: ctx.currentAssignment,
       phase: "reflecting",
-      status: "blocked",
+      status,
       task: ctx.executionStrategy.task,
       reason: visibilityDecision.reason,
       telemetry: ctx.buildPhaseOutcomeTelemetry({
         state: agentState,
         usage: ctx.responseUsage,
         verifierDecision: "approve",
+        ...(status === "failed" ? { failureReason: visibilityDecision.reason } : {}),
       }),
     });
     return {
       flow: "done",
       visibleText: visibilityDecision.visibleText,
       newState: agentState,
-      status: "blocked",
+      status,
     };
   }
 

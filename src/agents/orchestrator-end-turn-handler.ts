@@ -861,6 +861,9 @@ export async function handleInteractiveEndTurn(
       selfVerification: ctx.selfVerification,
       taskStartedAtMs: ctx.taskStartedAtMs,
       availableToolNames: ctx.currentToolNames,
+      // audited 2026-09-02: the background path feeds this second signal to
+      // the boundary; the interactive path never computed it.
+      terminalFailureReported: isTerminalFailureReport(ctx.responseText),
       usageHandler: ctx.usageHandler,
     }, ctx.interventionDeps);
 
@@ -888,32 +891,40 @@ export async function handleInteractiveEndTurn(
       return { flow: "continue", newState: agentState };
     }
 
-    // 4b. plan_review / blocked / ask_user
+    // 4b. plan_review / blocked / ask_user / terminal_failure
+    //
+    // audited 2026-09-02: terminal_failure was missing from this arm, so an
+    // honest "I could not do it" fell into 4c and was recorded "approved" and
+    // settled completed. The background path maps it to failed (the
+    // false-green chain the campaign audit traced); so does this one now.
     if (
       (visibilityDecision.kind === "plan_review" ||
         visibilityDecision.kind === "blocked" ||
-        visibilityDecision.kind === "ask_user") &&
+        visibilityDecision.kind === "ask_user" ||
+        visibilityDecision.kind === "terminal_failure") &&
       visibilityDecision.visibleText
     ) {
+      const status = visibilityDecision.kind === "terminal_failure" ? "failed" : "blocked";
       ctx.recordPhaseOutcome({
         chatId: ctx.chatId,
         identityKey: ctx.identityKey,
         assignment: ctx.currentAssignment,
         phase: toExecutionPhaseModel(agentState.phase),
-        status: "blocked",
+        status,
         task: ctx.executionStrategy.task,
         reason: visibilityDecision.reason,
         telemetry: ctx.buildPhaseOutcomeTelemetry({
           state: agentState,
           usage: ctx.responseUsage,
           verifierDecision: "approve",
+          ...(status === "failed" ? { failureReason: visibilityDecision.reason } : {}),
         }),
       });
       return {
         flow: "done",
         visibleText: visibilityDecision.visibleText,
         newState: agentState,
-        status: "blocked",
+        status,
       };
     }
 
