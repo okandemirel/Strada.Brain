@@ -22,7 +22,7 @@ export interface GuidReference {
 }
 
 export interface SafetyCheckResult {
-  /** Whether it's safe to delete (no references found) */
+  /** Whether it's safe to delete (no references found in the scanned roots) */
   safe: boolean;
   /** GUID of the file being checked */
   guid: string | null;
@@ -30,7 +30,21 @@ export interface SafetyCheckResult {
   references: GuidReference[];
   /** Warning message if not safe */
   warning?: string;
+  /**
+   * Project-relative roots the reference walk actually covered. `safe: true`
+   * means "no reference found under these", nothing more. Audited 2026-09-02.
+   */
+  scannedRoots: string[];
 }
+
+/**
+ * Roots that can hold GUID references to an asset. Unity keeps build-list
+ * scenes in ProjectSettings/EditorBuildSettings.asset and default
+ * materials/shaders in GraphicsSettings/QualitySettings; local packages under
+ * Packages/ (e.g. Packages/Submodules/Strada.Core) ship real asset trees.
+ * The walk used to cover Assets/ only. Audited 2026-09-02.
+ */
+export const GUID_SCAN_ROOTS = ["Assets", "ProjectSettings", "Packages"] as const;
 
 // ─── GUID Extraction ───────────────────────────────────────────────────────
 
@@ -67,9 +81,55 @@ const SEARCHABLE_EXTENSIONS = new Set([
   ".spriteatlas", ".lighting", ".terrainlayer",
 ]);
 
+export interface GuidScanResult {
+  references: GuidReference[];
+  /** Project-relative roots that existed and were walked. */
+  scannedRoots: string[];
+}
+
 /**
- * Find all references to a specific GUID across the project's Assets/ directory.
- * Searches .prefab, .unity, .asset, .mat and other Unity serialized files.
+ * Find all references to a specific GUID across the project's Assets/,
+ * ProjectSettings/ and Packages/ directories, reporting which of those roots
+ * were actually walked. Searches .prefab, .unity, .asset, .mat and other Unity
+ * serialized files.
+ */
+export async function scanGuidReferences(
+  projectPath: string,
+  targetGuid: string,
+  maxDepth = 10,
+  maxResults = 100,
+): Promise<GuidScanResult> {
+  const references: GuidReference[] = [];
+  const scannedRoots: string[] = [];
+
+  // Resolve to real path to prevent symlink escapes
+  let resolvedProject: string;
+  try {
+    resolvedProject = await realpath(resolve(projectPath));
+  } catch {
+    return { references, scannedRoots };
+  }
+
+  // Was: `join(resolvedProject, "Assets")` alone, so ProjectSettings/ and
+  // Packages/ were structurally invisible. Audited 2026-09-02.
+  for (const rootName of GUID_SCAN_ROOTS) {
+    const rootPath = join(resolvedProject, rootName);
+    try {
+      const st = await stat(rootPath);
+      if (!st.isDirectory()) continue;
+    } catch {
+      continue; // Root absent in this project
+    }
+    scannedRoots.push(rootName);
+    await scanDirectory(rootPath, resolvedProject, targetGuid, references, 0, maxDepth, maxResults);
+  }
+
+  return { references, scannedRoots };
+}
+
+/**
+ * Find all references to a specific GUID across the project.
+ * Thin wrapper over `scanGuidReferences` for callers that only want the list.
  */
 export async function findGuidReferences(
   projectPath: string,
@@ -77,25 +137,7 @@ export async function findGuidReferences(
   maxDepth = 10,
   maxResults = 100,
 ): Promise<GuidReference[]> {
-  const references: GuidReference[] = [];
-
-  // Resolve to real path to prevent symlink escapes
-  let resolvedProject: string;
-  try {
-    resolvedProject = await realpath(resolve(projectPath));
-  } catch {
-    return references;
-  }
-
-  const assetsPath = join(resolvedProject, "Assets");
-  try {
-    await stat(assetsPath);
-  } catch {
-    return references; // No Assets/ directory
-  }
-
-  await scanDirectory(assetsPath, resolvedProject, targetGuid, references, 0, maxDepth, maxResults);
-  return references;
+  return (await scanGuidReferences(projectPath, targetGuid, maxDepth, maxResults)).references;
 }
 
 async function scanDirectory(
@@ -169,11 +211,12 @@ export async function checkSafeToDelete(
   const guid = await extractGuid(metaPath);
   if (!guid) {
     // No .meta file or no GUID — safe to delete (not a Unity-tracked asset)
-    return { safe: true, guid: null, references: [] };
+    return { safe: true, guid: null, references: [], scannedRoots: [] };
   }
 
-  // Find references to this GUID (limit to 6 for the warning message)
-  const references = await findGuidReferences(projectPath, guid, 10, 6);
+  // Was: maxResults=6, which capped the reported count at 5 external refs and
+  // dropped the "... and N more" line for 20 referrers. Audited 2026-09-02.
+  const { references, scannedRoots } = await scanGuidReferences(projectPath, guid, 10, 100);
 
   // Filter out self-references (the file's own .meta). Normalize separators
   // before comparing: `ref.filePath` comes from `path.relative()` (native
@@ -208,8 +251,8 @@ export async function checkSafeToDelete(
       referenceCount: externalRefs.length,
     });
 
-    return { safe: false, guid, references: externalRefs, warning };
+    return { safe: false, guid, references: externalRefs, warning, scannedRoots };
   }
 
-  return { safe: true, guid, references: [] };
+  return { safe: true, guid, references: [], scannedRoots };
 }
