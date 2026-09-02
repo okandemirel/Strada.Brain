@@ -97,6 +97,61 @@ describe("ResultAggregator", () => {
       expect(output.partial).toBe(false);
     });
 
+    // audited 2026-09-02: the "All nodes failed" branch fired on succeeded===0 &&
+    // blocked===0 without checking that anything failed, and rendered only the
+    // failed list — so an all-skipped run (SUPERVISOR_MAX_FAILURE_BUDGET=0) said
+    // "All nodes failed:" over an empty list with failed:0, and 3 failed + 1
+    // skipped said "All nodes failed" while listing 3 of 4. The mixed branch
+    // then rendered every skip as the bare word "skipped", erasing the reason
+    // the dispatcher recorded (budget exhausted vs dependency failed).
+    it("does not say 'All nodes failed' when zero nodes failed (all skipped)", () => {
+      const agg = new ResultAggregator({ mode: "disabled", samplingRate: 0, preferDifferentProvider: true, maxVerificationCost: 15 });
+      const results = [
+        makeResult("A", "skipped", "Skipped: budget exhausted"),
+        makeResult("B", "skipped", "Skipped: budget exhausted"),
+        makeResult("C", "skipped", "Skipped: budget exhausted"),
+      ];
+      const output = agg.synthesize(results);
+      expect(output.success).toBe(false);
+      expect(output.partial).toBe(false);
+      expect(output.failed).toBe(0);
+      expect(output.skipped).toBe(3);
+      expect(output.output).not.toContain("All nodes failed");
+      expect(output.output).toContain("No node succeeded: 0 failed, 3 skipped, 0 cancelled");
+      expect(output.output).toContain("[A] Skipped: budget exhausted");
+    });
+
+    it("does not say 'All nodes failed' when some nodes were skipped or cancelled, and names the skip reason", () => {
+      const agg = new ResultAggregator({ mode: "disabled", samplingRate: 0, preferDifferentProvider: true, maxVerificationCost: 15 });
+      const results = [
+        makeResult("A", "failed", "boom A"),
+        makeResult("B", "failed", "boom B"),
+        makeResult("C", "skipped", "Skipped: dependency failed"),
+        { ...makeResult("D", "ok", "cut short"), status: "cancelled" as const },
+      ];
+      const output = agg.synthesize(results);
+      expect(output.success).toBe(false);
+      expect(output.failed).toBe(2);
+      expect(output.skipped).toBe(1);
+      expect(output.output).not.toContain("All nodes failed");
+      expect(output.output).toContain("No node succeeded: 2 failed, 1 skipped, 1 cancelled");
+      expect(output.output).toContain("[A] boom A");
+      expect(output.output).toContain("[C] Skipped: dependency failed");
+    });
+
+    it("keeps the skip reason in a partial result", () => {
+      const agg = new ResultAggregator({ mode: "disabled", samplingRate: 0, preferDifferentProvider: true, maxVerificationCost: 15 });
+      const results = [
+        makeResult("A", "ok", "did A"),
+        makeResult("B", "skipped", "Skipped: budget exhausted"),
+        makeResult("C", "skipped", "Skipped: dependency failed"),
+      ];
+      const output = agg.synthesize(results);
+      expect(output.partial).toBe(true);
+      expect(output.output).toContain("[B] Skipped: budget exhausted");
+      expect(output.output).toContain("[C] Skipped: dependency failed");
+    });
+
     it("treats blocked node results as partial work instead of total failure", () => {
       const agg = new ResultAggregator({ mode: "disabled", samplingRate: 0, preferDifferentProvider: true, maxVerificationCost: 15 });
       const results = [

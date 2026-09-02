@@ -282,8 +282,19 @@ export class ResultAggregator {
       };
     }
 
-    // Total failure: all failed (no successes)
-    if (succeeded.length === 0 && blocked.length === 0) {
+    // Total failure: every node ran and failed. audited 2026-09-02: this fired on
+    // "no successes, nothing blocked" alone, so an all-skipped run (failure
+    // budget 0) said "All nodes failed:" over an EMPTY list with failed:0, and
+    // 3 failed + 1 skipped said "All nodes failed" while listing 3 of 4. Runs
+    // with skipped or cancelled nodes fall through to the sectioned output,
+    // whose headline is built from the actual tallies.
+    if (
+      succeeded.length === 0 &&
+      blocked.length === 0 &&
+      failed.length > 0 &&
+      skipped.length === 0 &&
+      cancelled.length === 0
+    ) {
       const failureDetails = failed
         .map((r) => `[${r.nodeId}] ${r.output}`)
         .join("\n");
@@ -308,8 +319,17 @@ export class ResultAggregator {
       .map((r) => `[${r.nodeId}] ${r.blockedReason ?? r.output}`)
       .join("\n");
     const failureList = failed.map((r) => `[${r.nodeId}] ${r.output}`).join("\n");
-    const skippedList = skipped.map((r) => `[${r.nodeId}] skipped`).join("\n");
+    // Carry the reason the dispatcher recorded ("Skipped: budget exhausted" vs
+    // "Skipped: dependency failed") — it used to render as the bare word
+    // "skipped", so a run the failure budget stopped was indistinguishable from
+    // one whose dependencies collapsed (audited 2026-09-02).
+    const skippedList = skipped.map((r) => `[${r.nodeId}] ${r.output || "skipped"}`).join("\n");
 
+    if (succeeded.length === 0 && blocked.length === 0) {
+      sections.push(
+        `No node succeeded: ${failed.length} failed, ${skipped.length} skipped, ${cancelled.length} cancelled.`,
+      );
+    }
     if (completedWork) {
       sections.push(`Completed:\n${completedWork}`);
     }
