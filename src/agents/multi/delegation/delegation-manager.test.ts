@@ -1176,6 +1176,101 @@ describe("DelegationManager", () => {
     });
   });
 
+  describe("workspace commit verdict reaches the caller", () => {
+    // Measured 2026-09-02: the lease commit ran in the `finally` AFTER
+    // delegationLog.complete / delegation:completed / the return literal, and
+    // its result went to one info log line. A sub-agent whose Board.cs was
+    // quarantined as a conflict (project copy changed while it ran) reported
+    // "I created Board.cs" to the parent with success:true — the project never
+    // got the file and every consumer said it did.
+    function leaseManagerWith(commit: () => Promise<unknown>) {
+      const release = vi.fn().mockResolvedValue(undefined);
+      const acquireLease = vi.fn().mockResolvedValue({
+        id: "lease-1",
+        kind: "temp-copy",
+        sourceRoot: "/test/project",
+        leaseRoot: "/tmp/leases",
+        path: "/tmp/leases/lease-1",
+        createdAt: Date.now(),
+        commit,
+        release,
+      });
+      return { manager: { acquireLease } as never, acquireLease, release };
+    }
+
+    const request = (): DelegationRequest => ({
+      type: "code_review",
+      task: "Create Board.cs",
+      parentAgentId: PARENT_AGENT_ID,
+      depth: 0,
+      mode: "sync",
+      toolContext: TEST_TOOL_CONTEXT,
+    });
+
+    it("tells the parent which files were NOT applied and carries the commit in metadata", async () => {
+      const commit = vi.fn().mockResolvedValue({
+        written: ["Assets/Scripts/Tile.cs"],
+        conflicts: ["Assets/Scripts/Board.cs"],
+        removed: ["Assets/Old.asmdef"],
+        failed: ["Assets/Locked.meta"],
+        conflictsQuarantinedUnder: "/test/project/.strada/lease-conflicts/lease-1",
+      });
+      const lease = leaseManagerWith(commit);
+      manager = new DelegationManager(buildManagerOpts({ delegationLog, workspaceLeaseManager: lease.manager }));
+
+      const result = await manager.delegate(request());
+
+      expect(commit).toHaveBeenCalledTimes(1);
+      expect(lease.release).toHaveBeenCalledTimes(1);
+      expect(result.content).toContain("Sub-agent completed the task successfully.");
+      expect(result.content).toContain("NOT applied to the project");
+      expect(result.content).toContain("Assets/Scripts/Board.cs");
+      expect(result.content).toContain(".strada/lease-conflicts/lease-1");
+      expect(result.content).toContain("Assets/Locked.meta");
+      expect(result.content).toContain("Assets/Old.asmdef");
+      expect(result.metadata.commit).toEqual({
+        written: 1,
+        conflicts: ["Assets/Scripts/Board.cs"],
+        failed: ["Assets/Locked.meta"],
+        removed: ["Assets/Old.asmdef"],
+        quarantinedUnder: "/test/project/.strada/lease-conflicts/lease-1",
+      });
+    });
+
+    it("adds nothing to a clean commit beyond the applied count", async () => {
+      const commit = vi.fn().mockResolvedValue({
+        written: ["Assets/Scripts/Board.cs"],
+        conflicts: [],
+        removed: [],
+        failed: [],
+        conflictsQuarantinedUnder: null,
+      });
+      const lease = leaseManagerWith(commit);
+      manager = new DelegationManager(buildManagerOpts({ delegationLog, workspaceLeaseManager: lease.manager }));
+
+      const result = await manager.delegate(request());
+
+      expect(result.content).not.toContain("NOT applied");
+      expect(result.metadata.commit?.written).toBe(1);
+      expect(result.metadata.commit?.conflicts).toEqual([]);
+    });
+
+    it("fails the delegation when the commit itself throws — the work was discarded", async () => {
+      const commit = vi.fn().mockRejectedValue(new Error("EACCES: project root not writable"));
+      const lease = leaseManagerWith(commit);
+      const localOpts = buildManagerOpts({ delegationLog, workspaceLeaseManager: lease.manager });
+      manager = new DelegationManager(localOpts);
+
+      await expect(manager.delegate(request())).rejects.toThrow(/discarded.*EACCES/);
+
+      expect(lease.release).toHaveBeenCalledTimes(1);
+      const [row] = delegationLog.getHistory(1);
+      expect(row!.status).toBe("failed");
+      const emit = vi.mocked(localOpts.eventBus.emit);
+      expect(emit.mock.calls.some(([name]) => name === "delegation:completed")).toBe(false);
+    });
+  });
+
   describe("getActiveDelegations", () => {
     it("returns currently running delegations for a parent", async () => {
       expect(manager.getActiveDelegations(PARENT_AGENT_ID)).toHaveLength(0);

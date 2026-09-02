@@ -14,7 +14,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { getLogger, getLoggerSafe } from "../../../utils/logger.js";
+import { getLoggerSafe } from "../../../utils/logger.js";
 import { estimateCostWithCache } from "../../../budget/cost-model.js";
 import type { IChannelAdapter, IncomingMessage } from "../../../channels/channel.interface.js";
 import type { IEventBus, LearningEventMap } from "../../../core/event-bus.js";
@@ -39,7 +39,7 @@ import { Orchestrator } from "../../orchestrator.js";
 import { getProviderIntelligenceSnapshot, type ProviderWorkload, type ModelIntelligenceLookup } from "../../providers/provider-knowledge.js";
 import { ProviderHealthRegistry } from "../../providers/provider-health.js";
 import { isCurrentChainMemberName } from "../../providers/provider-outage.js";
-import { WorkspaceLeaseManager } from "../workspace-lease-manager.js";
+import { WorkspaceLeaseManager, type WorkspaceCommitResult } from "../workspace-lease-manager.js";
 import {
   selectAgentRunner,
   toWorkerRunResult,
@@ -377,10 +377,15 @@ export class DelegationManager {
         this.decrementConcurrency(request.parentAgentId);
       }
     } catch (error) {
-      // Do not escalate aborted/cancelled/timed-out delegations
+      // Do not escalate aborted/cancelled/timed-out delegations, nor one whose
+      // sub-agent finished but whose workspace commit failed — that is the
+      // project root, not the model, and a pricier tier would redo the work
+      // only to lose it the same way (audited 2026-09-02).
       if (
         error instanceof Error &&
-        (error.message.includes("aborted") || error.message.includes("timed out"))
+        (error.message.includes("aborted") ||
+          error.message.includes("timed out") ||
+          error.message.startsWith("Delegated workspace commit failed"))
       ) {
         throw error;
       }
@@ -522,6 +527,46 @@ export class DelegationManager {
       return estimatedCostUsd;
     };
 
+    // The workspace commit used to live only in the `finally`, AFTER
+    // delegationLog.complete, delegation:completed and the return literal had
+    // all declared success; its result went to one info line. A sub-agent
+    // whose file was quarantined as a conflict, skipped as unprocessable, or
+    // whose deletion was declined reported "done" to the parent and the
+    // project never received it. Commit ONCE, on the success path before
+    // anything claims success, and let the finally cover the failure paths
+    // (audited 2026-09-02).
+    let commitAttempted = false;
+    let commitOutcome: WorkspaceCommitResult | undefined;
+    let commitError: unknown;
+    const commitWorkspace = async (): Promise<void> => {
+      if (commitAttempted || !workspaceLease) return;
+      commitAttempted = true;
+      try {
+        commitOutcome = await workspaceLease.commit();
+        if (
+          commitOutcome.written.length > 0 ||
+          commitOutcome.conflicts.length > 0 ||
+          commitOutcome.failed.length > 0 ||
+          commitOutcome.removed.length > 0
+        ) {
+          getLoggerSafe().info("Delegated workspace committed", {
+            subAgentId,
+            files: commitOutcome.written.length,
+            conflicts: commitOutcome.conflicts.length,
+            failed: commitOutcome.failed.length,
+            removed: commitOutcome.removed.length,
+            quarantinedUnder: commitOutcome.conflictsQuarantinedUnder,
+          });
+        }
+      } catch (err) {
+        commitError = err;
+        getLoggerSafe().error("Delegated workspace commit failed — sub-agent work discarded", {
+          subAgentId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    };
+
     try {
       workspaceLease = this.opts.workspaceLeaseManager
         ? await this.opts.workspaceLeaseManager.acquireLease({
@@ -635,6 +680,27 @@ export class DelegationManager {
         );
       }
 
+      // Publish the sub-agent's files BEFORE anything records success: a commit
+      // that throws means the work was discarded, which is a failed delegation,
+      // not a completed one.
+      await commitWorkspace();
+      if (commitError !== undefined) {
+        throw new Error(
+          "Delegated workspace commit failed — sub-agent work discarded: " +
+            (commitError instanceof Error ? commitError.message : String(commitError)),
+        );
+      }
+      const commitSummary = commitOutcome
+        ? {
+            written: commitOutcome.written.length,
+            conflicts: [...commitOutcome.conflicts],
+            failed: [...commitOutcome.failed],
+            removed: [...commitOutcome.removed],
+            quarantinedUnder: commitOutcome.conflictsQuarantinedUnder,
+          }
+        : undefined;
+      const commitNote = commitSummary ? describeCommitShortfall(commitSummary) : "";
+
       const durationMs = Date.now() - startTime;
       const costUsd = settleCost(durationMs, "completed");
 
@@ -658,11 +724,12 @@ export class DelegationManager {
         timestamp: Date.now(),
       });
 
+      const content =
+        workerResult?.visibleResponse
+        ?? workerResult?.finalSummary
+        ?? captureChannel.getLastResponse();
       return {
-        content:
-          workerResult?.visibleResponse
-          ?? workerResult?.finalSummary
-          ?? captureChannel.getLastResponse(),
+        content: commitNote ? `${content}\n\n${commitNote}` : content,
         workerResult,
         metadata: {
           model: providerConfig.model,
@@ -672,6 +739,7 @@ export class DelegationManager {
           toolsUsed: [],
           escalated: !!escalatedFrom,
           escalatedFrom,
+          commit: commitSummary,
         },
       };
     } catch (error) {
@@ -727,32 +795,8 @@ export class DelegationManager {
       // background-executor. Without this a delegated sub-agent's file writes
       // go into its lease and are deleted with it — the identical defect, one
       // layer down, and easy to miss because the delegation path has its own
-      // lease lifecycle.
-      if (workspaceLease) {
-        await Promise.resolve()
-          .then(() => workspaceLease!.commit())
-          .then((result) => {
-            if (
-              result.written.length > 0 ||
-              result.conflicts.length > 0 ||
-              result.failed.length > 0
-            ) {
-              getLogger().info("Delegated workspace committed", {
-                subAgentId,
-                files: result.written.length,
-                conflicts: result.conflicts.length,
-                failed: result.failed.length,
-                quarantinedUnder: result.conflictsQuarantinedUnder,
-              });
-            }
-          })
-          .catch((err) => {
-            getLogger().error("Delegated workspace commit failed — sub-agent work discarded", {
-              subAgentId,
-              error: err instanceof Error ? err.message : String(err),
-            });
-          });
-      }
+      // lease lifecycle. A no-op when the success path already committed.
+      await commitWorkspace();
       await workspaceLease?.release().catch(() => {});
       this.cleanup(subAgentId);
     }
@@ -1132,4 +1176,32 @@ export class DelegationManager {
       );
     });
   }
+}
+
+/**
+ * The line appended to a delegation's content when the workspace commit did
+ * NOT apply everything the sub-agent produced. Empty when nothing fell short,
+ * so a clean commit adds nothing to the sub-agent's own report.
+ */
+function describeCommitShortfall(commit: NonNullable<DelegationResult["metadata"]["commit"]>): string {
+  const parts: string[] = [];
+  if (commit.conflicts.length > 0) {
+    const where = commit.quarantinedUnder
+      ? `the sub-agent's version is quarantined under ${commit.quarantinedUnder}`
+      : "the sub-agent's version could NOT be quarantined and is gone";
+    parts.push(
+      `NOT applied to the project (the project copy changed while the sub-agent ran; ${where}): ` +
+        commit.conflicts.join(", "),
+    );
+  }
+  if (commit.failed.length > 0) {
+    parts.push(`NOT applied to the project (could not be processed by the commit): ${commit.failed.join(", ")}`);
+  }
+  if (commit.removed.length > 0) {
+    parts.push(
+      `Deleted in the sub-agent's workspace but LEFT IN PLACE in the project: ${commit.removed.join(", ")}`,
+    );
+  }
+  if (parts.length === 0) return "";
+  return `[Workspace commit: ${commit.written} file(s) applied]\n` + parts.join("\n");
 }
