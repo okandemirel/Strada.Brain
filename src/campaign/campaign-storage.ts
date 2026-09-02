@@ -57,6 +57,7 @@ interface CampaignRow {
   last_error: string | null;
   auto_revive_at: number | null;
   coverage_audit_note?: string | null;
+  draft_deferred_since?: number | null;
 }
 
 function rowToCampaign(row: CampaignRow): Campaign {
@@ -89,6 +90,7 @@ function rowToCampaign(row: CampaignRow): Campaign {
     lastError: row.last_error ?? undefined,
     autoReviveAt: row.auto_revive_at ?? undefined,
     coverageAuditNote: row.coverage_audit_note ?? undefined,
+    draftDeferredSince: row.draft_deferred_since ?? undefined,
   };
 }
 
@@ -110,6 +112,12 @@ export class CampaignStorage {
     } catch {
       // Column already exists — migration is idempotent.
     }
+    try {
+      // Audited 2026-09-02: the draft path's deferral clock (24h bound).
+      this.db.exec("ALTER TABLE campaigns ADD COLUMN draft_deferred_since INTEGER");
+    } catch {
+      // Column already exists — migration is idempotent.
+    }
   }
 
   save(campaign: Campaign): void {
@@ -119,8 +127,8 @@ export class CampaignStorage {
           id, chat_id, channel_type, user_id, conversation_id, project_root,
           state, idea_text, gdd_path, gdd_text, draft_task_id, draft_attempts,
           milestones_json, current_milestone, created_at, updated_at, last_error,
-          auto_revive_at, coverage_audit_note
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          auto_revive_at, coverage_audit_note, draft_deferred_since
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           state = excluded.state,
           gdd_path = excluded.gdd_path,
@@ -132,7 +140,8 @@ export class CampaignStorage {
           updated_at = excluded.updated_at,
           last_error = excluded.last_error,
           auto_revive_at = excluded.auto_revive_at,
-          coverage_audit_note = excluded.coverage_audit_note`,
+          coverage_audit_note = excluded.coverage_audit_note,
+          draft_deferred_since = excluded.draft_deferred_since`,
       )
       .run(
         campaign.id,
@@ -154,6 +163,7 @@ export class CampaignStorage {
         campaign.lastError ?? null,
         campaign.autoReviveAt ?? null,
         campaign.coverageAuditNote ?? null,
+        campaign.draftDeferredSince ?? null,
       );
   }
 

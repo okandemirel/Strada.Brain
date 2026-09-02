@@ -531,6 +531,10 @@ export class CampaignManager {
 
   private submitDraft(campaign: Campaign, revisionNote?: string): void {
     campaign.state = "drafting-gdd";
+    // A new draft attempt gets a new deferral clock, as a new milestone
+    // attempt does (audited 2026-09-02) — otherwise the next reap inherits a
+    // spent bound and is judged instead of deferred.
+    campaign.draftDeferredSince = undefined;
     const task = this.taskManager.submit(
       campaign.chatId,
       campaign.channelType,
@@ -909,8 +913,23 @@ export class CampaignManager {
       const tipUpdatedAt = (tip as { updatedAt?: number } | null)?.updatedAt;
       const promiseDead =
         tipUpdatedAt !== undefined && Date.now() > tipUpdatedAt + promisedMs + 5 * 60_000;
-      if (!promiseDead) {
+      // Deferral is TIME-BOUNDED here exactly as on the milestone path
+      // (reconcileDeferredSince). Audited 2026-09-02: this path had no clock,
+      // so a tip whose updatedAt kept refreshing never read "dead" and the
+      // draft re-deferred every horizon forever — no draft, no failure, no
+      // message, and the one-campaign-per-project slot held.
+      const deferSince = campaign.draftDeferredSince ?? Date.now();
+      const boundSpent = Date.now() - deferSince >= 24 * 60 * 60_000;
+      if (boundSpent) {
+        getLoggerSafe().warn("GDD draft deferral passed its 24h bound — judging the outcome", {
+          id: campaign.id,
+          deferredForMs: Date.now() - deferSince,
+        });
+      }
+      if (!promiseDead && !boundSpent) {
         const waitMs = Math.min(Math.max(promisedMs + 60_000, 60_000), 12 * 60 * 60_000);
+        campaign.draftDeferredSince = deferSince;
+        this.persist(campaign);
         getLoggerSafe().info("Campaign deferring GDD draft judgement to the executor's pending retry", {
           id: campaign.id,
           recheckInMs: waitMs,
@@ -922,6 +941,34 @@ export class CampaignManager {
         return;
       }
     }
+    campaign.draftDeferredSince = undefined;
+
+    // A measured full outage is a scheduled wait, not a draft failure: park
+    // with a self-revival appointment at the chain's recovery horizon, as the
+    // planning and milestone paths do. Audited 2026-09-02: this path answered
+    // the same wall by resubmitting the draft uncharged, so a fresh LLM task
+    // was issued into a chain with no available member every ~11 minutes (the
+    // deferral re-check horizon) with no park and no appointment.
+    const outageWaitMs = allProvidersCoolingDownMs();
+    if (/provider|cooldown|quota|rate.?limit/i.test(output) && outageWaitMs > 0) {
+      const delayMs = Math.max(outageWaitMs, 60_000) + 60_000;
+      campaign.state = "failed";
+      campaign.lastError = `GDD draft ${status} during a full provider outage: ${output.slice(0, 200)}`;
+      campaign.autoReviveAt = Date.now() + delayMs;
+      this.persist(campaign);
+      this.scheduleAutoRevive(campaign.id, delayMs);
+      getLoggerSafe().info("GDD draft parked by a provider outage — no revision round charged", {
+        id: campaign.id,
+        reviveInMs: delayMs,
+      });
+      await this.tell(
+        campaign,
+        `⏸️ Campaign paused by a provider outage while drafting the GDD.\n` +
+          `Cause: ${campaign.lastError}\n` +
+          `Self-revival armed for ${new Date(campaign.autoReviveAt).toLocaleTimeString()} (when the provider chain recovers). Reply **kampanya devam** to revive sooner.`,
+      );
+      return;
+    }
 
     if (campaign.draftAttempts >= this.maxDraftAttempts) {
       campaign.state = "failed";
@@ -930,17 +977,11 @@ export class CampaignManager {
       await this.tell(campaign, `GDD drafting ${status} — campaign failed. Cause: ${campaign.lastError}`);
       return;
     }
-    // An outage-caused settle is not the draft's failure and must not spend
-    // a revision round (the same counter the designer's feedback spends).
-    const outageCaused =
-      /provider|cooldown|quota|rate.?limit/i.test(output) && allProvidersCoolingDownMs() > 0;
-    if (outageCaused) {
-      getLoggerSafe().info("GDD draft resubmitted without charging a revision round — provider outage", {
-        id: campaign.id,
-      });
-    } else {
-      campaign.draftAttempts += 1;
-    }
+    // An outage-caused settle never reaches here — it parked above with a
+    // self-revival appointment, charging no revision round (the same counter
+    // the designer's feedback spends). What is left is the draft's own
+    // failure, and that does spend a round.
+    campaign.draftAttempts += 1;
     this.submitDraft(campaign, `The previous draft attempt ${status}: ${output.slice(0, 400)}`);
   }
 

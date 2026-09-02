@@ -127,6 +127,13 @@ export interface Campaign {
   draftTaskId?: string;
   /** Number of GDD draft rounds (feedback loops at the approval gate). */
   draftAttempts: number;
+  /**
+   * When the draft path first deferred to the executor's pending keep-alive
+   * retry for the current settle cycle (epoch ms) — the draft counterpart of
+   * `CampaignMilestone.reconcileDeferredSince`. Time-bounded deferral;
+   * cleared when an outcome is finally judged or a new draft is issued.
+   */
+  draftDeferredSince?: number;
   milestones: CampaignMilestone[];
   /** Index into milestones of the current/next work item. */
   currentMilestone: number;

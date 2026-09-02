@@ -985,7 +985,13 @@ describe("CampaignManager", () => {
     await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("awaiting-approval"));
   });
 
-  it("an outage-caused draft settle resubmits WITHOUT charging a revision round", async () => {
+  it("an outage-caused draft settle PARKS with self-revival instead of redrafting into the wall", async () => {
+    // Audited 2026-09-02: the draft path answered a measured full outage by
+    // resubmitting the draft uncharged — a fresh LLM task every ~11 minutes
+    // (the deferral re-check horizon) into a chain where no member is
+    // available, with no park and no self-revival appointment. The milestone
+    // and planning paths both park; this one looped. Parking still charges no
+    // revision round — the outage is not the draft's failure.
     const { ProviderHealthRegistry } = await import("../agents/providers/provider-health.js");
     const { setLiveChainMemberNames } = await import("../agents/providers/provider-outage.js");
     const registry = ProviderHealthRegistry.getInstance();
@@ -997,13 +1003,48 @@ describe("CampaignManager", () => {
       // Dead retry promise (tip idle past its horizon) so the settle is judged.
       tasks.updatedAts.set("task_1", Date.now() - 30 * 60_000);
       tasks.emit("task:failed", "task_1", "Task execution failed: All providers are in cooldown. Auto-retry 1/10 in ~30s.");
-      await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
-      expect(storage.get(campaign.id)!.draftAttempts).toBe(0);
-      expect(storage.get(campaign.id)!.state).toBe("drafting-gdd");
+      await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"));
+
+      const parked = storage.get(campaign.id)!;
+      expect(tasks.submitted).toHaveLength(1); // no redraft into the cooling chain
+      expect(parked.draftAttempts).toBe(0); // outage charges no revision round
+      expect(parked.autoReviveAt).toBeGreaterThan(Date.now());
+      expect(messages.at(-1)!.text).toContain("Self-revival armed");
     } finally {
       setLiveChainMemberNames([]);
       registry.clearProviderState("cm-draft");
     }
+  });
+
+  it("draft deferral is time-bounded: a tip that keeps promising a retry cannot defer forever", async () => {
+    // Audited 2026-09-02: reconcileMilestoneAfterSettle bounds its deferral at
+    // 24h (reconcileDeferredSince); the draft counterpart had no clock at all,
+    // so a lineage tip whose updatedAt kept refreshing (the promise never
+    // reads dead) re-deferred every horizon forever — no draft, no failure,
+    // no message, and the one-campaign-per-project slot held.
+    const campaign = manager.startFromIdea(ctx, "a match-3 where pigs fly");
+    expect(tasks.submitted).toHaveLength(1);
+
+    // A live promise: the tip was touched just now, so it is not dead.
+    tasks.updatedAts.set("task_1", Date.now());
+    tasks.emit("task:blocked", "task_1", "Reaped: no progress for 15m. Auto-retry 1/10 in ~600s.");
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.draftDeferredSince).toBeGreaterThan(0));
+    expect(tasks.submitted).toHaveLength(1); // deferred, nothing redrafted
+
+    // 25 hours of exactly this — the tip still promises a retry that never lands.
+    const deferring = storage.get(campaign.id)!;
+    deferring.draftDeferredSince = Date.now() - 25 * 60 * 60_000;
+    storage.save(deferring);
+    tasks.updatedAts.set("task_1", Date.now());
+    tasks.emit("task:blocked", "task_1", "Reaped: no progress for 15m. Auto-retry 1/10 in ~600s.");
+
+    // Past the bound the outcome is judged: the round is charged (no outage
+    // measured here) and a fresh draft is issued with the cause named.
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    const judged = storage.get(campaign.id)!;
+    expect(judged.draftAttempts).toBe(1);
+    expect(judged.draftDeferredSince).toBeUndefined();
+    expect(tasks.submitted[1]!.prompt).toContain("The previous draft attempt");
   });
 
   it("a GDD draft that completed while the process was down is judged on restart, not redrafted", async () => {
