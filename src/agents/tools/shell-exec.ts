@@ -1,3 +1,4 @@
+import { isAbsolute, resolve } from "node:path";
 import { validatePath } from "../../security/path-guard.js";
 import { runProcess } from "../../utils/process-runner.js";
 import { buildShellEnv } from "./shell-env-policy.js";
@@ -190,7 +191,22 @@ export class ShellExecTool implements ITool {
     }
 
     // Resolve and validate working directory using path-guard
-    const relWd = String(input["working_directory"] ?? "");
+    let relWd = String(input["working_directory"] ?? "");
+    // Under a workspace lease `projectPath` is the lease copy, but the agent
+    // knows the project by its REAL path (the GDD, the prompt and every user
+    // message name it). Naming it is not an escape attempt — it is the same
+    // tree — so map the source root onto the lease instead of refusing.
+    // Measured 2026-09-02 on Sprint 7: six shell_exec calls refused with
+    // "working directory must be within the project", each costing the
+    // delivery sprint a turn.
+    const sourceRoot = context.sourceProjectPath;
+    if (relWd && sourceRoot && sourceRoot !== context.projectPath && isAbsolute(relWd)) {
+      const normalizedWd = resolve(relWd);
+      const normalizedSource = resolve(sourceRoot);
+      if (normalizedWd === normalizedSource || normalizedWd.startsWith(`${normalizedSource}/`)) {
+        relWd = normalizedWd.slice(normalizedSource.length).replace(/^\/+/, "") || ".";
+      }
+    }
     let cwd = context.projectPath;
     if (relWd) {
       const pathCheck = await validatePath(context.projectPath, relWd);
