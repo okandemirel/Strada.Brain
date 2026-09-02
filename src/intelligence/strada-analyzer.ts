@@ -124,6 +124,16 @@ export interface SceneInfo {
   rootObjectCount: number;
 }
 
+/**
+ * A C# file the scan found but did NOT analyze, with the reason it was left
+ * out. Audited 2026-09-02: oversized files were skipped with a bare
+ * `continue`, so `csFileCount` read as coverage the analysis did not have.
+ */
+export interface SkippedFileInfo {
+  filePath: string;
+  reason: string;
+}
+
 export interface StradaProjectAnalysis {
   modules: ModuleInfo[];
   systems: SystemInfo[];
@@ -136,7 +146,12 @@ export interface StradaProjectAnalysis {
   asmdefs: AsmdefInfo[];
   prefabs: PrefabInfo[];
   scenes: SceneInfo[];
+  /** C# files the scan found. Not the same as the number analyzed. */
   csFileCount: number;
+  /** C# files actually parsed into the analysis. Audited 2026-09-02. */
+  analyzedFileCount: number;
+  /** Files found but not analyzed, each with its reason. Audited 2026-09-02. */
+  skippedFiles: SkippedFileInfo[];
   analyzedAt: Date;
 }
 
@@ -184,12 +199,21 @@ export class StradaAnalyzer {
     // Pre-compute classes, structs, and namespace lookups once per file
     const cached: ParsedFileCache[] = [];
     const events: EventUsage[] = [];
+    const skippedFiles: SkippedFileInfo[] = [];
     for (const filePath of csFiles) {
+      const relPath = relative(this.projectPath, filePath);
       try {
         const content = await readFile(filePath, "utf-8");
-        if (content.length > MAX_FILE_SIZE) continue;
+        // Was: a bare `continue` with no counter, so an oversized file vanished
+        // from the analysis and "C# Files: N" read as full coverage.
+        // Audited 2026-09-02.
+        if (content.length > MAX_FILE_SIZE) {
+          const reason = `file too large: ${content.length} bytes > ${MAX_FILE_SIZE} (1MB) limit`;
+          skippedFiles.push({ filePath: relPath, reason });
+          logger.debug(`Not analyzed: ${filePath} \u2014 ${reason}`);
+          continue;
+        }
 
-        const relPath = relative(this.projectPath, filePath);
         const ast = parseDeep(content, relPath);
         const classes = getClasses(ast);
         const structs = getStructs(ast);
@@ -200,8 +224,12 @@ export class StradaAnalyzer {
         // Scan for event usage (regex on raw content -- method bodies not in AST)
         const className = classes[0]?.name ?? "unknown";
         this.scanEventUsageFromContent(content, relPath, className, events);
-      } catch {
-        logger.debug(`Failed to parse: ${filePath}`);
+      } catch (err) {
+        // Was: swallowed at debug level only — an unreadable file counted
+        // toward csFileCount as if it had been analyzed. Audited 2026-09-02.
+        const reason = `read/parse failed: ${err instanceof Error ? err.message : String(err)}`;
+        skippedFiles.push({ filePath: relPath, reason });
+        logger.debug(`Not analyzed: ${filePath} \u2014 ${reason}`);
       }
     }
 
@@ -232,6 +260,8 @@ export class StradaAnalyzer {
       prefabs,
       scenes,
       csFileCount: csFiles.length,
+      analyzedFileCount: cached.length,
+      skippedFiles,
       analyzedAt: new Date(),
     };
 
@@ -245,6 +275,9 @@ export class StradaAnalyzer {
       asmdefs: asmdefs.length,
       prefabs: prefabs.length,
       scenes: scenes.length,
+      filesFound: csFiles.length,
+      filesAnalyzed: cached.length,
+      filesSkipped: skippedFiles.length,
     });
 
     return result;
@@ -732,6 +765,20 @@ export class StradaAnalyzer {
     // Summary
     lines.push(`\n${"\u2501".repeat(40)}`);
     lines.push(`C# Files: ${analysis.csFileCount}`);
+    // A file the scan never read must not sit inside the analyzed count.
+    // Audited 2026-09-02.
+    const skippedFiles = analysis.skippedFiles ?? [];
+    const analyzedCount = analysis.analyzedFileCount ?? analysis.csFileCount - skippedFiles.length;
+    lines.push(`Files Analyzed: ${analyzedCount} of ${analysis.csFileCount}`);
+    if (skippedFiles.length > 0) {
+      lines.push(`Files Skipped (not analyzed): ${skippedFiles.length}`);
+      for (const skipped of skippedFiles.slice(0, 10)) {
+        lines.push(`  ${skipped.filePath} \u2014 ${skipped.reason}`);
+      }
+      if (skippedFiles.length > 10) {
+        lines.push(`  ... and ${skippedFiles.length - 10} more`);
+      }
+    }
     lines.push(
       `Analyzed: ${analysis.analyzedAt.toISOString().replace("T", " ").split(".")[0]}`
     );
