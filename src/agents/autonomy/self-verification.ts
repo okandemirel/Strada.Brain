@@ -57,6 +57,12 @@ export interface VerificationState {
   readonly lastVerificationAt: number | null;
   readonly unityConsoleErrors: readonly string[];
   readonly unityErrorResolutionAttempts: number;
+  /**
+   * The compile gate stopped asking (its cap is spent) while compilable
+   * changes are still unverified. The ask budget is spent; the debt is not
+   * (audited 2026-09-02).
+   */
+  readonly buildGateExhausted?: boolean;
 }
 
 // ─── Verifier ───────────────────────────────────────────────────────────────────
@@ -283,6 +289,20 @@ export class SelfVerification {
   }
 
   /**
+   * The compile gate has spent its asks and the debt is still there.
+   *
+   * Audited 2026-09-02: once the cap dropped the gate, the build check read
+   * "clean — no outstanding verification debt" over files nobody compiled.
+   * The cap governs how often the agent is ASKED; this keeps what may be
+   * CLAIMED visible after the asking stops.
+   */
+  buildGateExhausted(): boolean {
+    return this.hasCompilableChanges
+      && this.lastBuildOk !== true
+      && this.buildGateEmissions >= SelfVerification.MAX_BUILD_GATE_EMISSIONS;
+  }
+
+  /**
    * The last test run reported failures and nothing has passed since —
    * capped like the unrun-test gate so an honest failure report can still
    * end the run.
@@ -447,6 +467,16 @@ export class SelfVerification {
         ...shown.map(f => `  - ${f}`),
       );
       if (rest > 0) lines.push(`  ... and ${rest} more`);
+      // The sibling gates say when they are asking for the last time; this one
+      // went silent with the tenth text byte-identical to the first (audited
+      // 2026-09-02), and the silence was then read as a clean build.
+      if (this.buildGateEmissions >= SelfVerification.MAX_BUILD_GATE_EMISSIONS) {
+        lines.push(
+          `This is the last time this is asked (${this.buildGateEmissions}/${SelfVerification.MAX_BUILD_GATE_EMISSIONS}). ` +
+            "If these files still cannot be verified when you finish, report them as unverified — " +
+            "say which files and why verification was impossible — rather than reporting the work as done.",
+        );
+      }
     }
 
     if (this.hasUnrunTests()) {
@@ -498,6 +528,7 @@ export class SelfVerification {
       lastVerificationAt: this.lastVerificationAt,
       unityConsoleErrors: [...this.unityConsoleErrors],
       unityErrorResolutionAttempts: this.unityErrorResolutionAttempts,
+      buildGateExhausted: this.buildGateExhausted(),
     };
   }
 }

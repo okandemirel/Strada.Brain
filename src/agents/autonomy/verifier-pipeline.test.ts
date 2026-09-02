@@ -433,6 +433,37 @@ DONE`,
     expect(plan.gate).not.toContain("Lose condition");
   });
 
+  it("records an exhausted compile gate as unverified debt, not as a clean build", () => {
+    // Audited 2026-09-02: after the ten-ask cap, buildVerificationGate was null
+    // and buildBuildVerifierCheck(null) wrote status "clean" / "No outstanding
+    // build/typecheck verification debt remains." over files nobody compiled.
+    const plan = planVerifierPipeline({
+      prompt: "Implement the board",
+      draft: "Implemented the board.",
+      state: createState(),
+      task: IMPLEMENTATION_TASK,
+      verificationState: {
+        pendingFiles: new Set(["Assets/Game/Board.cs", "Assets/Game/Tray.cs"]),
+        touchedFiles: new Set(["Assets/Game/Board.cs", "Assets/Game/Tray.cs"]),
+        hasCompilableChanges: true,
+        lastBuildOk: null,
+        lastVerificationAt: null,
+        buildGateExhausted: true,
+      },
+      buildVerificationGate: null,
+      conformanceGate: null,
+      logEntries: [],
+      chatId: "chat-exhausted",
+      taskStartedAtMs: Date.now() - 1000,
+    });
+
+    const build = plan.checks.find((check) => check.name === "build");
+    expect(build?.status).toBe("issues");
+    expect(build?.summary).toContain("Board.cs");
+    expect(build?.summary).toContain("Tray.cs");
+    expect(build?.summary).not.toContain("No outstanding");
+  });
+
   /**
    * Audited 2026-09-02: the failure vocabulary included "missing", "requires",
    * "not found", "error" and "failure" — words an ordinary completion report

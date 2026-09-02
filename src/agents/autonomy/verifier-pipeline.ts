@@ -88,7 +88,7 @@ export function planVerifierPipeline(params: {
   const checks: VerifierCheck[] = [];
   const buildCheck = params.buildToolsAvailable === false
     ? buildUnavailableBuildToolsCheck(params.buildVerificationGate, evidence)
-    : buildBuildVerifierCheck(params.buildVerificationGate);
+    : buildBuildVerifierCheck(params.buildVerificationGate, params.verificationState);
   if (buildCheck) {
     checks.push(buildCheck);
   }
@@ -396,13 +396,34 @@ function buildUnavailableBuildToolsCheck(
   };
 }
 
-function buildBuildVerifierCheck(gate: string | null): VerifierCheck | null {
+function buildBuildVerifierCheck(
+  gate: string | null,
+  verificationState: VerificationState,
+): VerifierCheck | null {
   if (gate) {
     return {
       name: "build",
       status: "issues",
       summary: "Compilable changes still require a clean verification pass.",
       gate,
+    };
+  }
+  if (verificationState.buildGateExhausted === true) {
+    // The compile gate spent its asks and stopped; the debt did not go
+    // anywhere. Audited 2026-09-02: this branch used to fall through to
+    // "clean — no outstanding verification debt" over files nobody compiled.
+    // Non-gating on purpose — the cap exists to end a loop the run cannot
+    // break — but the record names the files rather than calling them clean.
+    const pending = [...verificationState.pendingFiles];
+    const shown = pending.slice(0, 8).join(", ");
+    const rest = pending.length > 8 ? ` and ${pending.length - 8} more` : "";
+    return {
+      name: "build",
+      status: "issues",
+      summary:
+        `Compilable changes were never verified: ${pending.length} file(s) still pending ` +
+        `(${shown}${rest}) after the compile gate's ask budget was spent. ` +
+        "The asking stopped; the debt did not.",
     };
   }
   return {

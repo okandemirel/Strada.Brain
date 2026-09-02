@@ -160,6 +160,47 @@ describe("SelfVerification", () => {
   });
 
   /**
+   * Audited 2026-09-02: the compile gate gave up after ten asks, silently —
+   * the tenth text was byte-identical to the first — and once needsVerification()
+   * dropped the gate, the build check reported "clean" over files that were
+   * never compiled. The sibling gates say "this is the last time this is asked";
+   * this one must too, and the exhausted state must stay visible.
+   */
+  describe("the compile gate's cap is not silent, and exhausting it is not a clean build", () => {
+    it("says on the tenth ask that it is the last, and keeps the debt visible afterwards", () => {
+      const verifier = new SelfVerification();
+      verifier.track("file_write", { path: "Assets/Game/Board.cs" }, {
+        toolCallId: "w", content: "written", isError: false,
+      });
+
+      const asks: string[] = [];
+      while (verifier.needsVerification()) asks.push(verifier.getPrompt());
+
+      expect(asks).toHaveLength(10);
+      expect(asks[8]).not.toContain("last time");
+      expect(asks[9]).toContain("last time");
+      expect(asks[9]).toMatch(/report .*unverified/u);
+      expect(verifier.buildGateExhausted()).toBe(true);
+      expect(verifier.getState().buildGateExhausted).toBe(true);
+      expect(verifier.getState().pendingFiles.has("Assets/Game/Board.cs")).toBe(true);
+    });
+
+    it("is not exhausted while the gate is still being asked, nor after a clean pass", () => {
+      const verifier = new SelfVerification();
+      verifier.track("file_write", { path: "Assets/Game/Board.cs" }, {
+        toolCallId: "w", content: "written", isError: false,
+      });
+      verifier.getPrompt();
+      expect(verifier.buildGateExhausted()).toBe(false);
+
+      verifier.track("unity_verify_change", {}, {
+        toolCallId: "v", content: "compile green", isError: false,
+      });
+      expect(verifier.buildGateExhausted()).toBe(false);
+    });
+  });
+
+  /**
    * Audited 2026-09-02: VERIFICATION_SHELL_COMMAND_RE was an unanchored word
    * search over the whole line, so `cp Assets/Scripts/Test.cs …`, `mkdir -p
    * build` and `cat GAME_DESIGN.md | grep test` each cleared the compile gate,
