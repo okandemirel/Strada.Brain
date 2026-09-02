@@ -44,7 +44,15 @@ const RULES: readonly AllowlistRule[] = [
   {
     name: "unity-batchmode (build/test/run the current project headlessly)",
     matches(command, projectRoot) {
-      if (!/Unity\.app\/Contents\/MacOS\/Unity(\s|"|$)/.test(command)) return false;
+      // Audited 2026-09-02: this rule tested four unanchored substrings and
+      // returned true, so it pre-approved the WHOLE line — a chained command, a
+      // prefix ahead of the Unity token, or a -logFile outside the project rode
+      // along on the match, which then suppressed isDestructiveOperation and
+      // overrode a reviewer rejection. It approves ONE Unity invocation, at the
+      // start of the line, whose every path stays inside the project.
+      if (!/^\s*"?\/Applications\/Unity\/[^"\s]*\/Unity\.app\/Contents\/MacOS\/Unity(\s|"|$)/.test(command)) return false;
+      if (/;|&&|\|\||\||`|\n|\$\(|&\s*$/.test(command)) return false;
+      if (/(^|[\s="'])~|\.\.\//.test(command)) return false;
       if (!/-batchmode\b/.test(command)) return false;
       // One of the three bounded purposes: open-and-quit, run tests, run a method.
       if (!/(-quit\b|-runTests\b|-executeMethod\b)/.test(command)) return false;
@@ -52,7 +60,7 @@ const RULES: readonly AllowlistRule[] = [
       const projectArg = /-projectPath\s+"?\$?{?PWD}??"?(?:\s|$)/.exec(command)
         ?? new RegExp(`-projectPath\\s+"?${projectRoot.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&")}"?(?:\\s|$)`).exec(command);
       if (!projectArg) return false;
-      return true;
+      return pathsStayInRoot(command, projectRoot);
     },
   },
   {
