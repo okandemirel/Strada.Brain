@@ -141,6 +141,7 @@ export class DigestReporter {
 
     // 4. Deliver via channel
     let truncated = false;
+    let delivered = false;
     if (this.deps.channelSender && this.chatId) {
       const channelType = this.deps.channelType ?? "web";
       const finalMarkdown = truncateForChannel(markdown, channelType, dashboardUrl);
@@ -148,6 +149,7 @@ export class DigestReporter {
 
       try {
         await this.deps.channelSender.sendMarkdown(this.chatId, finalMarkdown);
+        delivered = true;
       } catch (err) {
         this.deps.logger.error("Failed to send digest", { error: err });
       }
@@ -155,15 +157,28 @@ export class DigestReporter {
       this.deps.logger.warn("No channel available for digest delivery -- skipping");
     }
 
-    // 5. Update delta state
-    this.updateDigestState(snapshot, now);
+    // 5. Update delta state — only for a digest someone actually received.
+    // Audited 2026-09-02: a thrown send (or the no-chat skip) still advanced
+    // the "+N since last digest" baseline and emitted digest_sent, so the
+    // window covered by the lost digest was never attributed to anyone and
+    // the only record said a digest went out. An undelivered digest leaves
+    // the baseline alone so the next one re-covers the same window.
+    if (delivered) {
+      this.updateDigestState(snapshot, now);
+    } else {
+      this.deps.logger.warn("Digest not delivered; delta baseline left unchanged so the next digest re-covers this window", {
+        channelType: this.deps.channelType ?? "none",
+        hasChatId: Boolean(this.chatId),
+      });
+    }
 
-    // 6. Emit event
+    // 6. Emit event — carries `delivered` so a failed send can never be read as a sent digest
     const sectionCount = this.countSections(snapshot);
     this.deps.eventBus.emit("daemon:digest_sent", {
       channelType: this.deps.channelType ?? "none",
       sectionCount,
       truncated,
+      delivered,
       timestamp: now,
     });
 

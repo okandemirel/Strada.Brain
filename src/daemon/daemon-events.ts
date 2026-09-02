@@ -187,6 +187,8 @@ export interface DigestSentEvent {
   readonly channelType: string;
   readonly sectionCount: number;
   readonly truncated: boolean;
+  /** False when the send threw or no chat was bound — the digest was NOT received (audited 2026-09-02). */
+  readonly delivered: boolean;
   readonly timestamp: number;
 }
 
