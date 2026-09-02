@@ -236,6 +236,34 @@ describe("AgentDBMemory", () => {
     });
   });
 
+  describe("demoteEntry expiry (audited 2026-09-02)", () => {
+    // demoteEntry only touched expiresAt when the target tier was Ephemeral.
+    // An Ephemeral->Persistent demotion therefore kept the (often already
+    // past) TTL stamp: cleanupExpired never reaps a Persistent entry, but
+    // retrieveSemantic skips any entry whose expiresAt is past — a ghost that
+    // is counted, stored and indexed but never returned. promoteEntry already
+    // clears the stamp; demoteEntry must mirror it.
+    it("clears expiresAt when demoting Ephemeral -> Persistent", async () => {
+      const stored = await memory.storeNote("ephemeral note that will be demoted", ["demote"], MemoryTier.Ephemeral);
+      const entry = (memory as any).entries.get(stored.id);
+      expect(entry.expiresAt).toBeDefined();
+      // The sweep demotes on staleness; by then the TTL is typically past.
+      entry.expiresAt = Date.now() - 60_000;
+
+      const result = await memory.demoteEntry(stored.id, MemoryTier.Persistent);
+      expect(result.kind).toBe("ok");
+      expect(entry.tier).toBe(MemoryTier.Persistent);
+      expect(entry.expiresAt).toBeUndefined();
+
+      const hits = await memory.retrieveSemantic("ephemeral note that will be demoted", { limit: 5 });
+      expect(hits.map((h) => h.entry.id)).toContain(stored.id);
+
+      // The cleared stamp must also reach SQLite, or a restart resurrects the ghost.
+      const row = (memory as any).sqliteDb.prepare("SELECT value FROM memories WHERE id = ?").get(stored.id as string) as { value: string };
+      expect(JSON.parse(row.value).expiresAt).toBeUndefined();
+    });
+  });
+
   describe("HNSW capacity (audited 2026-09-02)", () => {
     // The capacity-exceeded branch of storeEntry used to rebuild the index from
     // this.entries — which does not yet contain the entry being stored — and

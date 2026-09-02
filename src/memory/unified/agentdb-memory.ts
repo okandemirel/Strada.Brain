@@ -917,12 +917,19 @@ export class AgentDBMemory implements IUnifiedMemory {
 
       entry.tier = newTier;
 
-      // Update expiration for ephemeral
+      // Update expiration: Ephemeral gets a fresh TTL, every other tier has
+      // none. This used to leave the old (often already past) TTL on an
+      // Ephemeral->Persistent demotion; cleanupExpired only reaps Ephemeral
+      // entries but retrieveSemantic skips any past expiresAt, so the entry
+      // became a permanent ghost — stored, indexed, counted, never returned.
+      // Mirrors promoteEntry (audited 2026-09-02).
       if (newTier === MemoryTier.Ephemeral) {
         entry.expiresAt = createBrand(
           Date.now() + this.config.ephemeralTtlMs,
           "TimestampMs" as const,
         );
+      } else {
+        entry.expiresAt = undefined;
       }
 
       sqlitePersistEntry(this.getSqliteCtx(), entry);
