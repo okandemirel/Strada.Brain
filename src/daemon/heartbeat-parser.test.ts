@@ -2,15 +2,12 @@ import { describe, it, expect, vi } from "vitest";
 import { parseHeartbeatFile, parseNaturalTime } from "./heartbeat-parser.js";
 import type { CronTriggerDef, FileWatchTriggerDef, ChecklistTriggerDef, WebhookTriggerDef } from "./daemon-types.js";
 
-// Mock the logger to prevent "Logger not initialized" errors
+// Mock the logger to prevent "Logger not initialized" errors. A single shared
+// stub so tests can assert the parser's "skipping" warnings.
+const loggerStub = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }));
 vi.mock("../utils/logger.js", () => ({
-  getLoggerSafe: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
-  getLogger: () => ({
-    warn: vi.fn(),
-    error: vi.fn(),
-    info: vi.fn(),
-    debug: vi.fn(),
-  }),
+  getLoggerSafe: () => loggerStub,
+  getLogger: () => loggerStub,
 }));
 
 describe("parseHeartbeatFile", () => {
@@ -95,6 +92,29 @@ describe("parseHeartbeatFile", () => {
   // =========================================================================
   // Lenient parsing -- missing fields
   // =========================================================================
+
+  it("skips a section whose heading slugifies to an already-used name, with a warning, instead of aborting boot (audited 2026-09-02)", () => {
+    // "### Nightly Build" and "### nightly-build" both slugify to
+    // nightly-build. Every other malformation in this file is warn+skip; a
+    // duplicate used to reach TriggerRegistry.register(), which throws, and
+    // the throw killed the whole process at startup.
+    loggerStub.warn.mockClear();
+    const content = `### Nightly Build
+- cron: 0 2 * * *
+- action: Build the game
+
+### nightly-build
+- cron: 0 3 * * *
+- action: Build it again
+`;
+    const result = parseHeartbeatFile(content);
+    expect(result).toHaveLength(1);
+    expect(result[0].name).toBe("nightly-build");
+    expect((result[0] as CronTriggerDef).cron).toBe("0 2 * * *");
+    expect(loggerStub.warn).toHaveBeenCalledWith(
+      expect.stringMatching(/trigger 'nightly-build'.*duplicate.*skipping/i),
+    );
+  });
 
   it("skips cron triggers with missing cron field", () => {
     const content = `### Missing cron

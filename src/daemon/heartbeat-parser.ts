@@ -444,6 +444,12 @@ export function parseHeartbeatFile(
   // Split by h3 headings. The first element is content before the first h3 (ignored).
   const sections = content.split(/^### /m);
 
+  // Trigger names already emitted — a later heading that slugifies to the
+  // same name is skipped here, like every other malformation in this file.
+  // Audited 2026-09-02: it used to reach TriggerRegistry.register(), which
+  // throws, and that throw aborted the whole process at startup.
+  const seenNames = new Set<string>();
+
   // Skip the first section (content before first ### heading)
   for (let i = 1; i < sections.length; i++) {
     const section = sections[i]!;
@@ -455,6 +461,14 @@ export function parseHeartbeatFile(
 
     const name = slugify(headingText);
     if (!name) continue;
+
+    if (seenNames.has(name)) {
+      logger?.warn(
+        `HEARTBEAT.md: trigger '${name}' (heading '${headingText}') duplicates an earlier section after slugify, skipping`,
+      );
+      continue;
+    }
+    seenNames.add(name);
 
     const sectionLines = lines.slice(1);
 
