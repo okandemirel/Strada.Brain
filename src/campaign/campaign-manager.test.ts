@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { CampaignManager } from "./campaign-manager.js";
 import { CampaignStorage } from "./campaign-storage.js";
 import type { CampaignPlanner } from "./campaign-planner.js";
+import { GDD_AUDIT_FULL_CHARS } from "./campaign-planner.js";
 import type { TaskManager } from "../tasks/task-manager.js";
 import type { IncomingMessage } from "../channels/channel-messages.interface.js";
 import type { Task } from "../tasks/types.js";
@@ -1137,6 +1138,44 @@ describe("CampaignManager", () => {
     expect(prompt).toContain("PlayMode red: 3 of 9 tests failed");
     expect(prompt).not.toContain("compile exploded");
     expect(prompt).toContain("build the foundations"); // the sprint body survives the strip
+  });
+
+  it("a clean coverage verdict from a WINDOWED audit is caveated, not reported as audited clean", async () => {
+    // Audited 2026-09-02: past the audit threshold the GDD is windowed for
+    // the audit too, and an empty `missing` cleared coverageAuditNote as
+    // "genuinely audited clean" — a verdict that never named its scope.
+    tasks = new FakeTaskManager();
+    storage.close();
+    storage = new CampaignStorage(join(dir, "campaigns-windowed-audit.db"));
+    const planner = {
+      planMilestones: vi.fn().mockResolvedValue(LADDER),
+      auditCoverage: vi.fn().mockResolvedValue([]),
+    } as unknown as CampaignPlanner;
+    manager = new CampaignManager({
+      storage,
+      planner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async (chatId, text) => messages.push({ chatId, text }),
+      projectRoot,
+      retryAdoptionGraceMs: 10,
+      completedSettleDelayMs: 0,
+      milestoneTimeBoxMs: 60 * 60_000,
+    });
+    manager.attachEvents();
+
+    const hugeGdd = "# GDD\n" + "core loop line\n".repeat(Math.ceil(GDD_AUDIT_FULL_CHARS / 15) + 100);
+    expect(hugeGdd.length).toBeGreaterThan(GDD_AUDIT_FULL_CHARS);
+    const campaign = manager.startFromGdd(ctx, hugeGdd, "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    settleMilestone("final report");
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+
+    expect(storage.get(campaign.id)!.coverageAuditNote).toMatch(/WINDOWED GDD/);
+    expect(messages.at(-1)!.text).toContain("WINDOWED GDD");
   });
 
   it("resumeActive leaves a still-running task alone", async () => {

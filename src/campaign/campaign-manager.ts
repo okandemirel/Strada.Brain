@@ -19,6 +19,7 @@ import type { TaskManager } from "../tasks/task-manager.js";
 import type { TaskId } from "../tasks/types.js";
 import { ACTIVE_STATUSES, TaskStatus } from "../tasks/types.js";
 import type { CampaignPlanner } from "./campaign-planner.js";
+import { GDD_AUDIT_FULL_CHARS } from "./campaign-planner.js";
 import type { CampaignStorage } from "./campaign-storage.js";
 import { detectCampaignIntent } from "./campaign-intake.js";
 import { isTerminalFailureReport } from "../agents/autonomy/verifier-pipeline.js";
@@ -1624,7 +1625,16 @@ export class CampaignManager {
     try {
       const missing = await this.planner.auditCoverage(gddText, campaign.milestones);
       if (missing.length === 0) {
-        campaign.coverageAuditNote = undefined; // genuinely audited clean
+        // A clean verdict names its scope. Audited 2026-09-02: past the audit
+        // threshold the GDD is windowed for the audit too, and an empty
+        // `missing` was recorded as "genuinely audited clean" — items living
+        // only in the elided middle were undetectable and the report carried
+        // no caveat.
+        campaign.coverageAuditNote =
+          gddText.length > GDD_AUDIT_FULL_CHARS
+            ? `coverage audit ran on a WINDOWED GDD (${gddText.length} chars; the middle was reduced to an outline) — ` +
+              "its clean verdict covers only what the window contained"
+            : undefined; // genuinely audited clean, against the whole document
         this.persist(campaign);
         return undefined;
       }
