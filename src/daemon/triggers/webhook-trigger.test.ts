@@ -33,6 +33,16 @@ describe("WebhookTrigger", () => {
     expect(trigger.metadata.description).toBe("Process incoming events");
   });
 
+  it("carries the HEARTBEAT.md cooldown into metadata, and keeps it across onFired (audited 2026-09-02)", () => {
+    const throttled = new WebhookTrigger("ci-hook", "Process incoming events", 3600);
+    expect(throttled.metadata.cooldownSeconds).toBe(3600);
+
+    throttled.pushEvent("build finished", "ci");
+    throttled.onFired(new Date());
+
+    expect(throttled.metadata.cooldownSeconds).toBe(3600);
+  });
+
   // ===========================================================================
   // shouldFire / pushEvent
   // ===========================================================================

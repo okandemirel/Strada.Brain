@@ -399,6 +399,21 @@ describe("FileWatchTrigger", () => {
   // Security: only paths, never file content
   // ===========================================================================
 
+  it("carries the HEARTBEAT.md cooldown into metadata, and keeps it across onFired (audited 2026-09-02)", () => {
+    // `cooldown:` was parsed into def.cooldown but never reached metadata, so
+    // the heartbeat computed cooldownMs=0 and the deduplicator skipped the
+    // cooldown branch — the user's throttle was silently dropped.
+    const trigger = new FileWatchTrigger({ ...baseDef, cooldown: 3600 });
+    expect(trigger.metadata.cooldownSeconds).toBe(3600);
+
+    eventHandlers["change"]!("/projects/game/Assets/Player.cs");
+    vi.advanceTimersByTime(150);
+    trigger.onFired(new Date());
+
+    // onFired rebuilds the description; the cooldown must survive the rebuild.
+    expect(trigger.metadata.cooldownSeconds).toBe(3600);
+  });
+
   it("onFired description contains paths and event types only, never file content", () => {
     const trigger = new FileWatchTrigger(baseDef);
 

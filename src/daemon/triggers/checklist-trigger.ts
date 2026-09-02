@@ -37,10 +37,13 @@ export class ChecklistTrigger implements ITrigger {
    */
   constructor(def: ChecklistTriggerDef, timezone?: string) {
     this.originalAction = def.action;
+    // cooldownSeconds: the parsed HEARTBEAT.md cooldown was dropped here before
+    // (audited 2026-09-02) — only CronTrigger ever received it.
     this._metadata = {
       name: def.name,
       description: def.action,
       type: "checklist",
+      cooldownSeconds: def.cooldown,
     };
 
     this.timezone =
@@ -143,10 +146,10 @@ export class ChecklistTrigger implements ITrigger {
         .map((item) => `[${item.priority}] ${item.text}`)
         .join(", ");
 
+      // Spread keeps cooldownSeconds across the rebuild (audited 2026-09-02)
       this._metadata = {
-        name: this._metadata.name,
+        ...this._metadata,
         description: `Checklist items due: ${itemList}. Action: ${this.originalAction}`,
-        type: this._metadata.type,
       };
     }
   }

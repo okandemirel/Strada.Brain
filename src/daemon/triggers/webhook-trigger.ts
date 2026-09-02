@@ -42,12 +42,18 @@ export class WebhookTrigger implements ITrigger {
   private readonly pendingEvents: WebhookEvent[] = [];
   private readonly defaultAction: string;
 
-  constructor(name: string, defaultAction: string) {
+  /**
+   * @param cooldownSeconds Per-trigger cooldown from HEARTBEAT.md. Audited
+   *   2026-09-02: the stage constructed webhooks as (name, action) and the
+   *   parsed cooldown never reached metadata, so it was silently ignored.
+   */
+  constructor(name: string, defaultAction: string, cooldownSeconds?: number) {
     this.defaultAction = defaultAction;
     this._metadata = {
       name,
       description: defaultAction,
       type: "webhook",
+      cooldownSeconds,
     };
   }
 
@@ -99,11 +105,8 @@ export class WebhookTrigger implements ITrigger {
 
     const summary = `Webhook received: ${first.action}${sourceStr}. ${count} event(s). Action: ${this.defaultAction}`;
 
-    this._metadata = {
-      name: this._metadata.name,
-      description: summary,
-      type: this._metadata.type,
-    };
+    // Spread keeps cooldownSeconds across the rebuild (audited 2026-09-02)
+    this._metadata = { ...this._metadata, description: summary };
 
     // Drain the buffer
     this.pendingEvents.length = 0;

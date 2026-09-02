@@ -70,10 +70,14 @@ export class FileWatchTrigger implements ITrigger {
    */
   constructor(def: FileWatchTriggerDef) {
     this.originalAction = def.action;
+    // Audited 2026-09-02: `cooldown:` was parsed into def.cooldown but never
+    // reached metadata, so the heartbeat computed cooldownMs=0 and the user's
+    // throttle was silently dropped. Only CronTrigger was handed it.
     this._metadata = {
       name: def.name,
       description: def.action,
       type: "file-watch",
+      cooldownSeconds: def.cooldown,
     };
 
     this.debounceMs = def.debounce ?? DEFAULT_DEBOUNCE_MS;
@@ -179,11 +183,9 @@ export class FileWatchTrigger implements ITrigger {
 
     const summary = `File changes detected: ${count} file${count !== 1 ? "s" : ""} (${details}). Action: ${this.originalAction}`;
 
-    this._metadata = {
-      name: this._metadata.name,
-      description: summary,
-      type: this._metadata.type,
-    };
+    // Keep every other field (cooldownSeconds included) — rebuilding from
+    // three literals dropped the cooldown after the first fire.
+    this._metadata = { ...this._metadata, description: summary };
 
     // Drain the buffer
     this.pendingEvents.length = 0;

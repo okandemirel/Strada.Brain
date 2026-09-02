@@ -380,7 +380,7 @@ export interface DaemonTriggerStageDeps {
     definition: ConstructorParameters<typeof ChecklistTrigger>[0],
     timezone?: string,
   ) => ITrigger;
-  createWebhookTrigger?: (name: string, action: string) => WebhookTrigger;
+  createWebhookTrigger?: (name: string, action: string, cooldownSeconds?: number) => WebhookTrigger;
 }
 
 export interface DaemonHeartbeatStageDeps extends DaemonTriggerStageDeps {

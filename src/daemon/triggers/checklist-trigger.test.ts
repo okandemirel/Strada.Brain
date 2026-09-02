@@ -40,6 +40,18 @@ describe("ChecklistTrigger", () => {
     };
   }
 
+  it("carries the HEARTBEAT.md cooldown into metadata, and keeps it across onFired (audited 2026-09-02)", () => {
+    vi.setSystemTime(new Date("2026-03-08T10:00:00Z"));
+    const trigger = new ChecklistTrigger(makeDef([makeItem("Rotate keys")], { cooldown: 3600 }), "UTC");
+    expect(trigger.metadata.cooldownSeconds).toBe(3600);
+
+    const now = new Date();
+    expect(trigger.shouldFire(now)).toBe(true);
+    trigger.onFired(now);
+
+    expect(trigger.metadata.cooldownSeconds).toBe(3600);
+  });
+
   // ===========================================================================
   // Metadata
   // ===========================================================================
