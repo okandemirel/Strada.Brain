@@ -71,7 +71,9 @@ export class UnityProjectVault implements IVault {
   protected emitter = new EventEmitter();
   protected dbPath: string;
   protected watcher: IVaultWatcher | null = null;
-  private initialized = false;
+  /** Protected so subclasses that override init() keep the idempotence guard
+   *  (audited 2026-09-02: SelfVault could not set it and re-walked per call). */
+  protected initialized = false;
   /** Serializes reindexFile()/delete passes — mirrors ObsidianVault.writeLock. */
   protected writeLock = new AsyncLock();
   /**

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -77,5 +77,61 @@ describe('SelfVault', () => {
 
     const result = await vault.query({ text: 'watchedAgentNeedle', topK: 5 });
     expect(result.hits.some((hit) => hit.chunk.path === 'AGENTS.md')).toBe(true);
+  });
+
+  // Audit 2026-09-02: SelfVault.init() replaced the base class's init but
+  // dropped two of its guarantees — startup deletion reconciliation (a file
+  // deleted while the daemon was down stayed searchable, citing a path that
+  // no longer exists) and the "already initialized with a live watcher"
+  // guard (every vault_init re-walked the whole tree).
+  describe('init() honours the base-class contract', () => {
+    it('removes files deleted while the vault was offline', async () => {
+      writeFileSync(join(dir, 'src/gone.ts'), 'export const goneUniqueNeedle = 2;');
+      vault = new SelfVault({
+        id: 'self:test', rootPath: dir,
+        embedding: new StubEmb() as never, vectorStore: new StubStore() as never,
+      });
+      await vault.init();
+      expect(vault.listFiles().map((f) => f.path)).toContain('src/gone.ts');
+      await vault.dispose();
+
+      rmSync(join(dir, 'src/gone.ts'));
+      vault = new SelfVault({
+        id: 'self:test', rootPath: dir,
+        embedding: new StubEmb() as never, vectorStore: new StubStore() as never,
+      });
+      await vault.init();
+
+      expect(vault.listFiles().map((f) => f.path)).not.toContain('src/gone.ts');
+      const result = await vault.query({ text: 'goneUniqueNeedle', topK: 5 });
+      expect(result.hits.filter((h) => h.chunk.path === 'src/gone.ts')).toEqual([]);
+    });
+
+    it('is idempotent while a watcher is live: a second init() does not re-walk the tree', async () => {
+      vault = new SelfVault({
+        id: 'self:test', rootPath: dir,
+        embedding: new StubEmb() as never, vectorStore: new StubStore() as never,
+      });
+      await vault.init();
+      await vault.startWatch(100);
+      const reindexSpy = vi.spyOn(vault, 'reindexFile');
+
+      await vault.init();
+
+      expect(reindexSpy).not.toHaveBeenCalled();
+    });
+
+    it('still reconciles on a second init() when no watcher owns freshness', async () => {
+      vault = new SelfVault({
+        id: 'self:test', rootPath: dir,
+        embedding: new StubEmb() as never, vectorStore: new StubStore() as never,
+      });
+      await vault.init();
+      writeFileSync(join(dir, 'src/later.ts'), 'export const later = 4;');
+
+      await vault.init();
+
+      expect(vault.listFiles().map((f) => f.path)).toContain('src/later.ts');
+    });
   });
 });
