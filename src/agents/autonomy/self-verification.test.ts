@@ -93,22 +93,17 @@ describe("SelfVerification", () => {
     expect(verifier.needsVerification()).toBe(false);
   });
 
-  it("flags a redundant re-compile when nothing changed since the last clean verify", () => {
+  it("carries no redundant-verification predicate that nothing consumes", () => {
+    // Audited 2026-09-02: isRedundantVerification() claimed "Consumers surface
+    // this as guidance" and had none — its only reads were in this file — so
+    // the measured 11-compiles-in-2h waste read as mitigated while nothing
+    // mitigated it. Wiring it as-is would have been a hazard (only
+    // .cs/.csproj/... mutations set its flag, so an .asmdef or .shader edit
+    // would read as "a recompile is guaranteed identical"). It was deleted;
+    // this pins the deletion so the false claim cannot quietly return.
     const verifier = new SelfVerification();
-    verifier.track("file_write", { path: "Assets/Modules/BoardModule/Board.cs" }, {
-      toolCallId: "w", content: "written", isError: false,
-    });
-    verifier.track("unity_verify_change", {}, {
-      toolCallId: "v", content: "compile green", isError: false,
-    });
-    // Nothing touched since: another compile would burn minutes for an
-    // identical answer.
-    expect(verifier.isRedundantVerification()).toBe(true);
 
-    verifier.track("file_edit", { path: "Assets/Modules/BoardModule/Board.cs" }, {
-      toolCallId: "w2", content: "edited", isError: false,
-    });
-    expect(verifier.isRedundantVerification()).toBe(false);
+    expect((verifier as unknown as Record<string, unknown>)["isRedundantVerification"]).toBeUndefined();
   });
 
   it("tracks nested batch_execute mutations and verification results", () => {

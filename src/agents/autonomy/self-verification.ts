@@ -141,8 +141,6 @@ export class SelfVerification {
   private static readonly MAX_TEST_RUN_ATTEMPTS = 3;
   /** A test run REPORTED failures and no later run has passed. */
   private failingTestRun = false;
-  /** True once a compilable file changed after the last successful verification. */
-  private dirtySinceLastVerify = false;
   /** Identity of this verifier in the process-wide build-state publication. */
   private readonly publishKey = `sv-${++publishSeq}`;
   /**
@@ -198,7 +196,6 @@ export class SelfVerification {
           const dotIdx = file.lastIndexOf(".");
           if (dotIdx !== -1 && COMPILABLE_EXT.has(file.slice(dotIdx))) {
             this.hasCompilableChanges = true;
-            this.dirtySinceLastVerify = true;
             // A clean compile describes the tree it compiled, not this one.
             // Audited 2026-09-02: lastBuildOk stayed `true` across later edits,
             // so needsVerification() read false and never-compiled files were
@@ -240,7 +237,6 @@ export class SelfVerification {
           this.pendingFiles.clear();
           this.hasCompilableChanges = false;
           this.buildGateEmissions = 0;
-          this.dirtySinceLastVerify = false;
         }
         // A compile is not a test run. unity_verify_change says so itself —
         // "Test assemblies are NOT built by this check" — and measured
@@ -322,15 +318,14 @@ export class SelfVerification {
       && this.testRunAttempts < SelfVerification.MAX_TEST_RUN_ATTEMPTS;
   }
 
-  /**
-   * True when a verification would re-compile a tree nothing has touched
-   * since the last clean compile — minutes of headless Unity for a
-   * guaranteed-identical answer (measured 2026-09-01: 11 compiles in 2h on
-   * an edit→compile→edit rhythm). Consumers surface this as guidance.
-   */
-  isRedundantVerification(): boolean {
-    return this.lastBuildOk === true && !this.dirtySinceLastVerify;
-  }
+  // isRedundantVerification() and its dirtySinceLastVerify flag were deleted
+  // (audited 2026-09-02): the method claimed "Consumers surface this as
+  // guidance" and had no consumer outside its own test, so the measured
+  // 11-compiles-in-2h waste read as mitigated while nothing mitigated it.
+  // Wiring it would have been a hazard — only .cs/.csproj/.sln/.props/.targets
+  // mutations set the flag, so an .asmdef, .shader or .prefab edit would have
+  // read as "a recompile is guaranteed identical". The BATCH IT guidance in
+  // getPrompt() is the mitigation that actually shipped.
 
   /** Check if there are unresolved Unity console errors. */
   hasUnresolvedUnityErrors(): boolean {
@@ -407,7 +402,6 @@ export class SelfVerification {
       const dotIdx = file.lastIndexOf(".");
       if (dotIdx !== -1 && COMPILABLE_EXT.has(file.slice(dotIdx))) {
         this.hasCompilableChanges = true;
-        this.dirtySinceLastVerify = true;
         // This run never saw the worker's compile, so the parent's last clean
         // verdict does not cover these files: they are pending, by name, and
         // the build state is unknown again (audited 2026-09-02 — the success
