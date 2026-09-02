@@ -386,7 +386,11 @@ export class NotificationRouter {
       this.notify({
         level: "low",
         title: `Trigger fired: ${e.triggerName}`,
-        message: `Trigger '${e.triggerName}' fired, task ${e.taskId}`,
+        // Approval-only triggers submit no task; say so instead of printing
+        // "task undefined" (audited 2026-09-02).
+        message: e.taskId
+          ? `Trigger '${e.triggerName}' fired, task ${e.taskId}`
+          : `Trigger '${e.triggerName}' fired; no task submitted (approval-only)`,
         sourceEvent: "daemon:trigger_fired",
         timestamp: e.timestamp,
       });

@@ -529,6 +529,18 @@ export class HeartbeatLoop {
             } catch (err) {
               this.logger.warn("Failed to record trigger fire history", { trigger: name, error: String(err) });
             }
+            // The fire is real even though no task carries it: record it as
+            // daemon activity and announce it, exactly like the submitting
+            // path (audited 2026-09-02 — this branch returned before both, so
+            // the dashboard, the notification router and the CLI never saw
+            // deploy fires, and a daemon firing all night still read as idle
+            // to the identity manager). The event names no task because none
+            // was submitted.
+            this.identityManager?.recordActivity();
+            this.eventBus.emit("daemon:trigger_fired", {
+              triggerName: name,
+              timestamp: now.getTime(),
+            });
             this.logger.info("Trigger fired (approval-only; no task submitted)", { trigger: name });
             continue;
           }

@@ -400,6 +400,31 @@ describe("HeartbeatLoop", () => {
     );
   });
 
+  it("an approval-only (deploy) fire is still announced and still counts as activity (audited 2026-09-02)", async () => {
+    // The approval-only branch returns before daemon:trigger_fired and before
+    // identityManager.recordActivity(): the fire was written to history but
+    // never reached the dashboard, the notification router or the CLI, and a
+    // daemon that fired all night still looked idle to the identity manager —
+    // which is what gates idle-driven consolidation.
+    const deploy = makeTrigger("deploy-readiness", {
+      shouldFire: true,
+      description: "Deployment readiness detection",
+      type: "deploy",
+    });
+    registry.register(deploy);
+
+    loop.start();
+    await loop.tick();
+
+    const fired = (eventBus.emit as any).mock.calls.filter((c: unknown[]) => c[0] === "daemon:trigger_fired");
+    expect(fired).toHaveLength(1);
+    expect(fired[0]![1]).toMatchObject({ triggerName: "deploy-readiness" });
+    // No task was submitted, so the event must not name one.
+    expect((fired[0]![1] as { taskId?: string }).taskId).toBeUndefined();
+    expect(taskManager.submit).not.toHaveBeenCalled();
+    expect(identityManager.recordActivity).toHaveBeenCalledTimes(1);
+  });
+
   it("skips trigger submission while a foreground task is active and idlePause is enabled", () => {
     config = makeDaemonConfig({
       heartbeat: {

@@ -19,10 +19,15 @@ export interface DaemonTickEvent {
   readonly triggerCount: number;
 }
 
-/** Emitted when a trigger fires and submits a task */
+/** Emitted when a trigger fires */
 export interface TriggerFiredEvent {
   readonly triggerName: string;
-  readonly taskId: string;
+  /**
+   * The submitted task. Absent for approval-only triggers (deploy), whose whole
+   * effect is the approval queued in onFired — no agent task is submitted, so
+   * the event names none rather than inventing one (audited 2026-09-02).
+   */
+  readonly taskId?: string;
   readonly timestamp: number;
 }
 
