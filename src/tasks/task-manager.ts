@@ -250,6 +250,8 @@ export class TaskManager extends EventEmitter {
       workspacePolicy: task.workspacePolicy,
       userContent: task.userContent,
       attachments: task.attachments,
+      // audited 2026-09-02: persisted but never forwarded — see replayForcesSharedPlanning.
+      forceSharedPlanning: this.replayForcesSharedPlanning(task),
       parentId: task.id,
     });
   }
@@ -306,6 +308,8 @@ export class TaskManager extends EventEmitter {
       workspacePolicy: task.workspacePolicy,
       userContent: task.userContent,
       attachments: task.attachments,
+      // audited 2026-09-02: persisted but never forwarded — see replayForcesSharedPlanning.
+      forceSharedPlanning: this.replayForcesSharedPlanning(task),
       parentId: task.id,
     });
   }
@@ -326,6 +330,8 @@ export class TaskManager extends EventEmitter {
         workspacePolicy: task.workspacePolicy,
         userContent: task.userContent,
         attachments: task.attachments,
+        // audited 2026-09-02: persisted but never forwarded — see replayForcesSharedPlanning.
+        forceSharedPlanning: this.replayForcesSharedPlanning(task),
         parentId: task.id,
       });
     }
@@ -417,6 +423,8 @@ export class TaskManager extends EventEmitter {
         workspacePolicy: task.workspacePolicy,
         userContent: task.userContent,
         attachments: task.attachments,
+        // audited 2026-09-02: persisted but never forwarded — see replayForcesSharedPlanning.
+        forceSharedPlanning: this.replayForcesSharedPlanning(task),
         parentId: task.id,
       });
     }
@@ -514,6 +522,26 @@ export class TaskManager extends EventEmitter {
   /** The orchestrator a replay must run under: the row's (never set — SQLite) or the remembered live one. */
   private replayOrchestrator(task: Task): IOrchestrator | undefined {
     return task.orchestrator ?? this.liveOrchestrators.get(task.id);
+  }
+
+  /**
+   * Whether the replay must re-enter shared planning, as the original submit
+   * decided.
+   *
+   * Audited 2026-09-02: `forceSharedPlanning` IS persisted (the
+   * force_shared_planning column) and IS read back onto the Task, but no
+   * non-goal replay path forwarded it. reflection.ts sets it when the incoming
+   * message carries images or files — that input can be planned but not
+   * decomposed blind — and BackgroundExecutor gates the shared-planning route
+   * on `goalTree || forceSharedPlanning || shouldDecompose`. So a retried or
+   * resumed screenshot task kept the attachments it was planned FROM and lost
+   * the route that reads them: it re-ran as an ordinary worker.
+   *
+   * The goal-tree replay paths pass `true` outright — a replayed tree is always
+   * re-planned — so this is only for the paths that carry no tree.
+   */
+  private replayForcesSharedPlanning(task: Task): boolean | undefined {
+    return task.forceSharedPlanning ? true : undefined;
   }
 
   private rememberOrchestrator(taskId: TaskId, orchestrator: IOrchestrator): void {

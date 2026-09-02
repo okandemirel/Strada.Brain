@@ -28,4 +28,28 @@ describe("buildResultProjection tool trace", () => {
     expect(proj.toolTrace[0]!.summary).toContain("3 of 40 tests failed");
     expect(proj.toolTrace[1]!.summary).toBe("");
   });
+
+  it("carries the provider's real tool-call id onto the trace row", () => {
+    // Audited 2026-09-02: the projection dropped toolCallId, so the supervisor
+    // bridge had to fabricate `trace-0`, `trace-1`… on the NodeResult rows —
+    // ids that match nothing in the transcript, the provider's tool_use blocks
+    // or the monitor, making a red row impossible to trace back to its call.
+    const deps = { providerManager: {} } as never;
+    const runCtx = {
+      identityKey: "k",
+      selfVerification: { getState: () => ({ touchedFiles: [] }) },
+      workerCollector: undefined,
+      lastAssignment: undefined,
+    } as never;
+    const proj = buildResultProjection(deps, {
+      toolTrace: [
+        { toolName: "unity_playmode_verify", toolCallId: "toolu_01ABC", success: false, resultText: "3 of 40 tests failed" },
+      ],
+      touchedFiles: [],
+      status: "completed",
+      final: { summary: "done" },
+    } as never, runCtx);
+
+    expect(proj.toolTrace[0]!.toolCallId).toBe("toolu_01ABC");
+  });
 });

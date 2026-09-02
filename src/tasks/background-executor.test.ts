@@ -2806,3 +2806,174 @@ describe("BackgroundExecutor - integrateMilestoneBranches", () => {
     }
   });
 });
+
+describe("BackgroundExecutor - settle records 'no test run observed'", () => {
+  // Audited 2026-09-02: when NEITHER path found a test line the settle wrote
+  // NOTHING — verification_json stayed NULL. The campaign report then could not
+  // tell "the suite was never run" from "the verdict never reached storage":
+  // both are an absent row. A task that WROTE files and observed no test run
+  // now says so in data.
+  function makeVerdictTaskManager() {
+    return {
+      updateStatus: vi.fn(), complete: vi.fn(), fail: vi.fn(), block: vi.fn(),
+      setVerification: vi.fn(), appendTaskNotice: vi.fn(), retryTask: vi.fn(),
+      getStatus: vi.fn().mockReturnValue(null),
+      listTasks: vi.fn().mockReturnValue([]),
+    };
+  }
+
+  it("supervisor path: files written, no test line → a row saying no test run was observed", async () => {
+    const orchestrator = {
+      evaluateSupervisorAdmission: vi.fn().mockResolvedValue({
+        path: "supervisor",
+        reason: "eligible",
+        result: {
+          success: true, partial: false, output: "sprint done",
+          totalNodes: 1, succeeded: 1, failed: 0, blocked: 0, skipped: 0,
+          totalCost: 0, totalDuration: 0,
+          nodeResults: [{
+            nodeId: "n1", status: "ok", output: "wrote the board",
+            artifacts: [{ path: "Assets/Board.cs", action: "modify" }],
+            toolResults: [
+              { toolCallId: "toolu_1", content: "wrote Assets/Board.cs", isError: false },
+              { toolCallId: "toolu_2", content: "compile green, 0 errors", isError: false },
+            ],
+          }],
+        },
+      }),
+      synthesizeGoalExecutionResult: vi.fn().mockResolvedValue("sprint done"),
+    };
+    const executor = new BackgroundExecutor({
+      orchestrator: orchestrator as any,
+      decomposer: createMockDecomposer() as any,
+      aiProvider: undefined,
+      channel: undefined,
+    });
+    const taskManager = makeVerdictTaskManager();
+    executor.setTaskManager(taskManager as any);
+
+    executor.enqueue(
+      createTestTask(buildTestGoalTree(), { id: "task_sup_notest" as any }),
+      new AbortController().signal,
+      vi.fn(),
+    );
+
+    await vi.waitFor(() => expect(taskManager.complete).toHaveBeenCalled(), { timeout: 5000 });
+    expect(taskManager.setVerification).toHaveBeenCalledTimes(1);
+    const [id, verdict] = taskManager.setVerification.mock.calls[0]!;
+    expect(id).toBe("task_sup_notest");
+    expect(verdict.testsGreen).toBeUndefined();
+    expect(verdict.detail).toContain("no test run observed");
+    await executor.shutdown();
+  });
+
+  it("direct-worker path: files written, no test line → the same row", async () => {
+    const orchestrator = {
+      evaluateSupervisorAdmission: vi.fn().mockResolvedValue({ path: "direct_worker", reason: "low_complexity" }),
+      runWorkerTask: vi.fn().mockResolvedValue({
+        status: "completed",
+        visibleResponse: "all done, tests are green",
+        finalSummary: "all done, tests are green",
+        provider: "mock",
+        touchedFiles: ["Assets/Player.cs"],
+        toolTrace: [{ toolName: "file_write", success: true, summary: "wrote Assets/Player.cs", timestamp: 0 }],
+        verificationResults: [], reviewFindings: [], artifacts: [],
+      }),
+    };
+    const executor = new BackgroundExecutor({
+      orchestrator: orchestrator as any,
+      decomposer: createMockDecomposer() as any,
+      aiProvider: undefined,
+      channel: undefined,
+    });
+    const taskManager = makeVerdictTaskManager();
+    executor.setTaskManager(taskManager as any);
+
+    executor.enqueue(
+      createTestTask(undefined, { id: "task_worker_notest" as any }),
+      new AbortController().signal,
+      vi.fn(),
+    );
+
+    await vi.waitFor(() => expect(taskManager.complete).toHaveBeenCalled(), { timeout: 5000 });
+    expect(taskManager.setVerification).toHaveBeenCalledTimes(1);
+    const [id, verdict] = taskManager.setVerification.mock.calls[0]!;
+    expect(id).toBe("task_worker_notest");
+    expect(verdict.testsGreen).toBeUndefined();
+    expect(verdict.detail).toContain("no test run observed");
+    await executor.shutdown();
+  });
+
+  it("a run that wrote NO files records nothing — absence there is not a claim about tests", async () => {
+    const orchestrator = {
+      evaluateSupervisorAdmission: vi.fn().mockResolvedValue({ path: "direct_worker", reason: "low_complexity" }),
+      runWorkerTask: vi.fn().mockResolvedValue({
+        status: "completed",
+        visibleResponse: "here is the answer",
+        finalSummary: "here is the answer",
+        provider: "mock",
+        touchedFiles: [],
+        toolTrace: [{ toolName: "file_read", success: true, summary: "read README.md", timestamp: 0 }],
+        verificationResults: [], reviewFindings: [], artifacts: [],
+      }),
+    };
+    const executor = new BackgroundExecutor({
+      orchestrator: orchestrator as any,
+      decomposer: createMockDecomposer() as any,
+      aiProvider: undefined,
+      channel: undefined,
+    });
+    const taskManager = makeVerdictTaskManager();
+    executor.setTaskManager(taskManager as any);
+
+    executor.enqueue(
+      createTestTask(undefined, { id: "task_worker_nofiles" as any }),
+      new AbortController().signal,
+      vi.fn(),
+    );
+
+    await vi.waitFor(() => expect(taskManager.complete).toHaveBeenCalled(), { timeout: 5000 });
+    expect(taskManager.setVerification).not.toHaveBeenCalled();
+    await executor.shutdown();
+  });
+
+  it("a real test line still wins — the 'no run' row never overwrites a verdict", async () => {
+    const orchestrator = {
+      evaluateSupervisorAdmission: vi.fn().mockResolvedValue({ path: "direct_worker", reason: "low_complexity" }),
+      runWorkerTask: vi.fn().mockResolvedValue({
+        status: "completed",
+        visibleResponse: "shipped",
+        finalSummary: "shipped",
+        provider: "mock",
+        touchedFiles: ["Assets/Player.cs"],
+        toolTrace: [{
+          toolName: "unity_playmode_verify",
+          success: true,
+          summary: "PlayMode verification FAILED — 3 of 40 tests failed",
+          timestamp: 0,
+        }],
+        verificationResults: [], reviewFindings: [], artifacts: [],
+      }),
+    };
+    const executor = new BackgroundExecutor({
+      orchestrator: orchestrator as any,
+      decomposer: createMockDecomposer() as any,
+      aiProvider: undefined,
+      channel: undefined,
+    });
+    const taskManager = makeVerdictTaskManager();
+    executor.setTaskManager(taskManager as any);
+
+    executor.enqueue(
+      createTestTask(undefined, { id: "task_worker_red" as any }),
+      new AbortController().signal,
+      vi.fn(),
+    );
+
+    await vi.waitFor(() => expect(taskManager.setVerification).toHaveBeenCalled(), { timeout: 5000 });
+    const [, verdict] = taskManager.setVerification.mock.calls[0]!;
+    expect(verdict.testsGreen).toBe(false);
+    expect(verdict.detail).toContain("3 of 40 tests failed");
+    await executor.shutdown();
+  });
+});

@@ -35,6 +35,39 @@ describe("createSupervisorExecuteNodeBridge", () => {
     expect(deriveTestVerdict(result.toolResults.map((tr) => ({ content: String(tr.content), isError: tr.isError }))).testsGreen).toBe(false);
   });
 
+  it("a NodeResult tool row keeps the provider's real tool-call id", async () => {
+    // Audited 2026-09-02: the bridge fabricated `trace-0`, `trace-1`… because
+    // WorkerToolTrace carried no id. A fabricated id names nothing — it cannot
+    // be matched against the transcript's tool_use blocks or the monitor — so
+    // a red row could not be traced back to the call that produced it. The
+    // fallback stays only for a trace that genuinely had no id.
+    const runWorkerEnvelope = vi.fn().mockResolvedValue({
+      output: "sprint complete",
+      workerResult: {
+        status: "completed",
+        toolTrace: [
+          { toolName: "unity_playmode_verify", toolCallId: "toolu_01XYZ", success: false, summary: "3 of 40 tests failed", timestamp: 0 },
+          { toolName: "file_read", success: true, summary: "read", timestamp: 0 },
+        ],
+      },
+    });
+    const bridge = createSupervisorExecuteNodeBridge({
+      backgroundExecutor: { runWorkerEnvelope } as any,
+      orchestrator: {} as any,
+      workspaceBus: { emit: vi.fn() } as any,
+      defaultChannelType: "cli",
+    });
+
+    const result = await bridge(
+      { id: "node-2", task: "Run the suite" } as any,
+      { chatId: "chat-1", taskRunId: "taskrun_parent" } as any,
+      new AbortController().signal,
+    );
+
+    expect(result.toolResults[0]!.toolCallId).toBe("toolu_01XYZ");
+    expect(result.toolResults[1]!.toolCallId).toBe("trace-1");
+  });
+
   it("derives child workspace context and remaps blocked workers", async () => {
     const runWorkerEnvelope = vi.fn().mockResolvedValue({
       output: "Need user input",

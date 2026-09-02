@@ -382,4 +382,84 @@ describe("TaskManager", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it("a replay keeps the rich-input fields the task was submitted with (attachments, userContent, forceSharedPlanning)", () => {
+    // Audited 2026-09-02: every replay path rebuilds the task from SQLite and
+    // re-submits it field by field. forceSharedPlanning was persisted but NOT
+    // forwarded, so a task submitted with rich input — reflection.ts sets
+    // forceSharedPlanning when the message carries images/files, because that
+    // input can only be planned, not decomposed blind — came back on retry as
+    // an ordinary worker run (background-executor gates shared planning on
+    // `goalTree || forceSharedPlanning || shouldDecompose`). The attachments
+    // and userContent it planned FROM still rode along, so the replay reran
+    // the same screenshot task down a route that never sees the plan.
+    const dir = mkdtempSync(join(tmpdir(), "task-manager-replay-rich-"));
+    const storage = new TaskStorage(join(dir, "tasks.db"));
+    storage.initialize();
+    const executor = { enqueue: vi.fn(), resumeConversation: vi.fn() } as any;
+    const manager = new TaskManager(storage, executor);
+    const attachments = [{
+      type: "image" as const,
+      name: "layout.png",
+      mimeType: "image/png",
+      data: Buffer.from("png-bytes"),
+      size: 9,
+    }];
+    const userContent = [
+      { type: "text" as const, text: "match this layout" },
+      { type: "image" as const, source: { type: "base64" as const, media_type: "image/png", data: "cG5n" } },
+    ];
+    try {
+      const task = manager.submit("chat-1", "cli", "match the attached layout", {
+        attachments,
+        userContent: userContent as any,
+        forceSharedPlanning: true,
+      });
+
+      manager.block(task.id, "Transient failure — provider blink.");
+      const retry = manager.retryTask(task.id);
+      expect(retry).not.toBeNull();
+
+      const enqueued = executor.enqueue.mock.calls[1]?.[0] as Task;
+      expect(enqueued.id).toBe(retry!.id);
+      // The rich input the plan was built FROM survives the round-trip…
+      expect(enqueued.attachments).toHaveLength(1);
+      expect(enqueued.attachments![0]!.name).toBe("layout.png");
+      expect(enqueued.attachments![0]!.mimeType).toBe("image/png");
+      expect(enqueued.attachments![0]!.data?.toString("utf8")).toBe("png-bytes");
+      expect(enqueued.userContent).toEqual(userContent);
+      // …and so does the routing decision that input forced.
+      expect(enqueued.forceSharedPlanning).toBe(true);
+      // The retry's own row carries it for the round after it.
+      expect(storage.load(retry!.id)?.forceSharedPlanning).toBe(true);
+      expect(storage.load(retry!.id)?.attachments).toHaveLength(1);
+    } finally {
+      storage.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("a paused rich-input task keeps forceSharedPlanning across resume too", () => {
+    const dir = mkdtempSync(join(tmpdir(), "task-manager-resume-rich-"));
+    const storage = new TaskStorage(join(dir, "tasks.db"));
+    storage.initialize();
+    const executor = { enqueue: vi.fn(), resumeConversation: vi.fn(), pauseConversation: vi.fn() } as any;
+    const manager = new TaskManager(storage, executor);
+    try {
+      const task = manager.submit("chat-1", "cli", "match the attached layout", {
+        forceSharedPlanning: true,
+      });
+      manager.updateStatus(task.id, TaskStatus.executing);
+      expect(manager.pauseTask(task.id)).toBe(true);
+      const resumed = manager.resumeTask(task.id);
+      expect(resumed).not.toBeNull();
+
+      const enqueued = executor.enqueue.mock.calls[1]?.[0] as Task;
+      expect(enqueued.id).toBe(resumed!.id);
+      expect(enqueued.forceSharedPlanning).toBe(true);
+    } finally {
+      storage.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
