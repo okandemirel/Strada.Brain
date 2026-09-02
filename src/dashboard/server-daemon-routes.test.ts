@@ -81,8 +81,8 @@ describe("handleDaemonRoutes — POST /api/daemon/approvals/:id/(approve|deny)",
     const entry = { id: "e1", toolName: "shell_exec", triggerName: "cron", status: "pending", createdAt: Date.now(), expiresAt: null };
     const queue = {
       getById: vi.fn(() => entry),
-      approve: vi.fn(),
-      deny: vi.fn(),
+      approve: vi.fn(() => ({ applied: true, status: "approved" })),
+      deny: vi.fn(() => ({ applied: true, status: "denied" })),
     };
     const ctx = makeCtx({ daemonApprovalQueue: queue as unknown as RouteContext["daemonApprovalQueue"] });
     const { handled, res } = route("/api/daemon/approvals/e1/approve", "POST", ctx);
@@ -92,9 +92,29 @@ describe("handleDaemonRoutes — POST /api/daemon/approvals/:id/(approve|deny)",
     expect(queue.approve).toHaveBeenCalledWith("e1", "dashboard");
   });
 
+  it("returns 409 naming the actual status when the decision did not land (audited 2026-09-02)", () => {
+    // An expired (auto-denied) entry is still fetchable by id; approving it
+    // must be refused, never answered with { status: "approved" }.
+    const entry = { id: "e9", toolName: "deployment", triggerName: "deploy-readiness", status: "expired", createdAt: 0, expiresAt: 1 };
+    const queue = {
+      getById: vi.fn(() => entry),
+      approve: vi.fn(() => ({ applied: false, status: "expired" })),
+      deny: vi.fn(() => ({ applied: false, status: "expired" })),
+    };
+    const ctx = makeCtx({ daemonApprovalQueue: queue as unknown as RouteContext["daemonApprovalQueue"] });
+    const { handled, res } = route("/api/daemon/approvals/e9/approve", "POST", ctx);
+    expect(handled).toBe(true);
+    expect(res.statusCode).toBe(409);
+    expect(responseJson(res)).toMatchObject({ error: expect.stringContaining("expired") });
+  });
+
   it("denies an existing entry and returns { status: 'denied' }", () => {
     const entry = { id: "e2", toolName: "shell_exec", triggerName: "cron", status: "pending", createdAt: Date.now(), expiresAt: null };
-    const queue = { getById: vi.fn(() => entry), approve: vi.fn(), deny: vi.fn() };
+    const queue = {
+      getById: vi.fn(() => entry),
+      approve: vi.fn(() => ({ applied: true, status: "approved" })),
+      deny: vi.fn(() => ({ applied: true, status: "denied" })),
+    };
     const ctx = makeCtx({ daemonApprovalQueue: queue as unknown as RouteContext["daemonApprovalQueue"] });
     const { handled, res } = route("/api/daemon/approvals/e2/deny", "POST", ctx);
     expect(handled).toBe(true);

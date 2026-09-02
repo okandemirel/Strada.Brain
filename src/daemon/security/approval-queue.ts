@@ -12,9 +12,19 @@
 
 import { randomUUID } from "node:crypto";
 import type { DaemonStorage } from "../daemon-storage.js";
-import type { ApprovalEntry, AuditEntry } from "../daemon-types.js";
+import type { ApprovalEntry, ApprovalStatus, AuditEntry } from "../daemon-types.js";
 import type { IEventBus } from "../../core/event-bus.js";
 import type { DaemonEventMap } from "../daemon-events.js";
+
+/**
+ * Outcome of approve()/deny(). `applied: false` means the decision did NOT
+ * land, and `status` names why: the entry's current status ("expired",
+ * "denied", "approved") or "missing".
+ */
+export interface ApprovalDecisionResult {
+  readonly applied: boolean;
+  readonly status: ApprovalStatus | "missing";
+}
 
 export class ApprovalQueue {
   private readonly storage: DaemonStorage;
@@ -64,17 +74,17 @@ export class ApprovalQueue {
   }
 
   /**
-   * Approve a pending request.
+   * Approve a pending request. Returns whether the decision landed.
    */
-  approve(id: string, decidedBy?: string): void {
-    this.decide(id, "approved", decidedBy);
+  approve(id: string, decidedBy?: string): ApprovalDecisionResult {
+    return this.decide(id, "approved", decidedBy);
   }
 
   /**
-   * Deny a pending request.
+   * Deny a pending request. Returns whether the decision landed.
    */
-  deny(id: string, decidedBy?: string): void {
-    this.decide(id, "denied", decidedBy);
+  deny(id: string, decidedBy?: string): ApprovalDecisionResult {
+    return this.decide(id, "denied", decidedBy);
   }
 
   /**
@@ -126,9 +136,18 @@ export class ApprovalQueue {
   // Private Helpers
   // =========================================================================
 
-  private decide(id: string, decision: "approved" | "denied", decidedBy?: string): void {
+  private decide(id: string, decision: "approved" | "denied", decidedBy?: string): ApprovalDecisionResult {
     const entry = this.storage.getApprovalById(id);
-    if (!entry) return;
+    if (!entry) return { applied: false, status: "missing" };
+
+    // Audited 2026-09-02: there was no status guard and the UPDATE has no
+    // `WHERE status='pending'`, so an entry expireStale() had already
+    // auto-denied (SEC-04 "denied on timeout") — or one a human had denied —
+    // could be flipped to "approved" hours later and drive the deploy bridge
+    // into executor.execute(). A decision only lands on a live request.
+    if (entry.status !== "pending") {
+      return { applied: false, status: entry.status };
+    }
 
     this.storage.updateApprovalDecision(id, decision, decidedBy);
     this.storage.insertAuditEntry({
@@ -146,6 +165,8 @@ export class ApprovalQueue {
       decidedBy,
       timestamp: Date.now(),
     });
+
+    return { applied: true, status: decision };
   }
 
   private summarizeParams(params: Record<string, unknown>): string {
