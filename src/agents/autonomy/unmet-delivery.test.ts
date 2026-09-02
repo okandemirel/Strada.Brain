@@ -150,6 +150,24 @@ describe("what blocks delivery", () => {
   });
 });
 
+describe("where the game's code lives does not matter", () => {
+  it("reports identical frames for a game written outside Assets/Modules/", () => {
+    // Audited 2026-09-02: nothingDrawnReason() keyed on touchedModuleRoots, so a
+    // game under Assets/Scripts/ (or Assets/Game/) — which wroteProjectCode was
+    // introduced to cover — was exempt from the one enforced delivery condition
+    // and could finish approved on 60 identical frames of empty sky.
+    const root = project();
+    framesOf(root, Array.from({ length: 60 }, () => "same-pixels"));
+    const guard = new StradaConformanceGuard(deps, { projectPath: root, enabled: true });
+    guard.trackToolCall("file_write", { path: join(root, "Assets", "Scripts", "Game.cs") }, false);
+    guard.trackToolCall("unity_playmode_verify", { captureFrames: 60 }, false);
+
+    expect(guard.unmetDeliveryConditions()).toContainEqual(
+      expect.stringContaining("never been observed to render"),
+    );
+  });
+});
+
 describe("what does not block delivery", () => {
   it("stays silent about running for a game that is not assembled yet", () => {
     // A play-mode run of an unassembled project has nothing to load, and the

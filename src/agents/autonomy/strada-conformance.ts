@@ -677,7 +677,9 @@ export class StradaConformanceGuard {
    * are not nagged.
    */
   private specScopePrompt(): string | null {
-    if (this.touchedModuleRoots.size === 0) return null;
+    // An outcome rule keys on whether game code was written at all, not on the
+    // Modules/ folder convention (audited 2026-09-02, same as nothingDrawnReason).
+    if (!this.wroteProjectCode) return null;
     const projectPath = this.opts?.projectPath;
     if (!projectPath) return null;
     if (!existsSync(joinPath(projectPath, "Assets"))) return null;
@@ -702,7 +704,12 @@ export class StradaConformanceGuard {
   }
 
   private nothingDrawnReason(): string | null {
-    if (this.touchedModuleRoots.size === 0) return null;
+    // Audited 2026-09-02: this keyed on touchedModuleRoots, so a game written
+    // under Assets/Scripts/ was exempt from the one enforced delivery condition
+    // — the exact exemption wroteProjectCode was introduced to close. The
+    // module-SHAPE rules rightly stay on the Modules/ convention; an OUTCOME
+    // rule asks only whether game code was written at all.
+    if (!this.wroteProjectCode) return null;
     // A game that was never run cannot have frames, and the gate for that says
     // so far better. Only ask about the picture once someone has tried to make
     // one.
