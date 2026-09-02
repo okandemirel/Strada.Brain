@@ -93,7 +93,7 @@ export class LearningPipeline {
     toolName: string; errorPattern?: string; timestamp: number;
   }> = [];
 
-  /** Tracks pending error resolutions: toolName → error observation data */
+  /** Tracks pending error resolutions: `${sessionId}:${toolName}` → error observation data */
   private pendingResolutions = new Map<string, {
     errorObservation: Observation;
     toolName: string;
@@ -317,19 +317,25 @@ export class LearningPipeline {
     // 2. Persist and process in-memory (skip getUnprocessedObservations read-back)
     this.storage.recordObservation(observation);
 
-    // Track error→resolution chains
+    // Track error→resolution chains.
+    // audited 2026-09-02: the map was keyed on tool name alone, so with several
+    // sessions sharing one pipeline, session A's failure was "resolved" by
+    // session B's unrelated success on the same tool — minting an error_fix
+    // instinct whose action was never observed to fix that error — and B's own
+    // failure evicted A's pending entry. Key on session + tool.
+    const resolutionKey = LearningPipeline.resolutionKey(event.sessionId, event.toolName);
     if (!event.success) {
       // Record this as a pending error
-      this.pendingResolutions.set(event.toolName, {
+      this.pendingResolutions.set(resolutionKey, {
         errorObservation: observation,
         toolName: event.toolName,
         errorOutput: event.output,
         timestamp: Date.now(),
       });
-    } else if (this.pendingResolutions.has(event.toolName)) {
-      // Same tool succeeded after a previous failure — auto-record resolution
-      const pending = this.pendingResolutions.get(event.toolName)!;
-      this.pendingResolutions.delete(event.toolName);
+    } else if (this.pendingResolutions.has(resolutionKey)) {
+      // Same tool in the same session succeeded after a previous failure — auto-record resolution
+      const pending = this.pendingResolutions.get(resolutionKey)!;
+      this.pendingResolutions.delete(resolutionKey);
 
       // Only link if the resolution happened within 5 minutes of the error
       const elapsed = Date.now() - pending.timestamp;
@@ -1148,6 +1154,11 @@ export class LearningPipeline {
     if (/^\s*\d+\s*\|/.test(s)) return false; // code-listing line
     const letters = (s.match(/[a-zA-Z]/g) ?? []).length;
     return letters / s.length >= 0.5;
+  }
+
+  /** A resolution may only be attributed to the session that produced the error. */
+  private static resolutionKey(sessionId: string, toolName: string): string {
+    return `${sessionId}:${toolName}`;
   }
 
   /**

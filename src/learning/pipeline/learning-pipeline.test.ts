@@ -578,6 +578,54 @@ describe("LearningPipeline", () => {
   });
 
   describe("handleToolResult", () => {
+    // audited 2026-09-02: pendingResolutions was keyed on tool name alone, so
+    // another session's unrelated success "resolved" this session's failure
+    // and minted an error_fix instinct claiming a fix that was never observed.
+    describe("error→resolution pairing is scoped to the session (audited 2026-09-02)", () => {
+      const errorOutput = "error CS0246: The type or namespace name 'BoardView' could not be found. Build FAILED.";
+      function failure(sessionId: string): ToolResultEvent {
+        return { sessionId, toolName: "bash", input: { command: "dotnet build" }, output: errorOutput, success: false, timestamp: Date.now() };
+      }
+      function success(sessionId: string, command: string): ToolResultEvent {
+        return { sessionId, toolName: "bash", input: { command }, output: "Build succeeded.", success: true, timestamp: Date.now() };
+      }
+      function errorFixInstincts() {
+        return storage.getInstincts({ type: "error_fix" });
+      }
+
+      it("another session's success on the same tool does not resolve this session's failure", async () => {
+        await pipeline.handleToolResult(failure("chat-A"));
+        await pipeline.handleToolResult(success("chat-B", "git push origin feature/unrelated-branch"));
+        storage.flush();
+
+        expect(errorFixInstincts()).toHaveLength(0);
+        expect(storage.getInstincts().some((i) => i.action.includes("git push"))).toBe(false);
+
+        // The originating session's own success still records the resolution.
+        await pipeline.handleToolResult(success("chat-A", "dotnet restore && dotnet build"));
+        storage.flush();
+        const created = errorFixInstincts();
+        expect(created).toHaveLength(1);
+        expect(created[0].action).toContain("dotnet restore && dotnet build");
+        expect(created[0].triggerPattern).toContain("CS0246");
+      });
+
+      it("another session's failure does not evict this session's pending error", async () => {
+        await pipeline.handleToolResult(failure("chat-A"));
+        await pipeline.handleToolResult({
+          sessionId: "chat-B", toolName: "bash", input: { command: "curl https://example.invalid" },
+          output: "error: network unreachable — request failed", success: false, timestamp: Date.now(),
+        });
+        await pipeline.handleToolResult(success("chat-A", "dotnet restore && dotnet build"));
+        storage.flush();
+
+        const created = errorFixInstincts();
+        expect(created).toHaveLength(1);
+        expect(created[0].triggerPattern).toContain("CS0246");
+        expect(created[0].triggerPattern).not.toContain("network unreachable");
+      });
+    });
+
     it("should call observeToolUse with event data", async () => {
       const event: ToolResultEvent = {
         sessionId: "session-1",
