@@ -166,6 +166,34 @@ describe("DelegationLog", () => {
     });
   });
 
+  describe("terminal status is written once", () => {
+    // Measured 2026-09-02: cancelDelegation wrote 'cancelled', then the aborted
+    // run unwound into the timeout branch and the unguarded UPDATE rewrote the
+    // same row as 'timeout' — every shutdown-cancelled delegation was persisted
+    // as a provider timeout. A terminal row must not be re-labelled.
+    it("keeps a cancelled row cancelled when timeout/complete/fail arrive later", () => {
+      const id = log.start({
+        parentAgentId: "agent-1",
+        subAgentId: "sub-1",
+        type: "code_review",
+        model: "deepseek-chat",
+        tier: "cheap",
+        depth: 0,
+      });
+
+      log.cancel(id);
+      log.timeout(id, { durationMs: 55, costUsd: 0.01 });
+      expect(log.getHistory(1)[0]!.status).toBe("cancelled");
+
+      log.complete(id, { durationMs: 1, costUsd: 0, resultSummary: "late" });
+      expect(log.getHistory(1)[0]!.status).toBe("cancelled");
+
+      log.fail(id, "late failure");
+      expect(log.getHistory(1)[0]!.status).toBe("cancelled");
+      expect(log.getHistory(1)[0]!.resultSummary).toBeUndefined();
+    });
+  });
+
   describe("getHistory", () => {
     it("returns records ordered by started_at desc", () => {
       const id1 = log.start({

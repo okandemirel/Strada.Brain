@@ -11,7 +11,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, utimesSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, utimesSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
@@ -260,6 +260,32 @@ describe("workspace lease commit", () => {
   });
 });
 
+describe("seed snapshot resilience", () => {
+  it("acquires a lease when one project directory cannot be stat-walked, instead of failing the delegation", async () => {
+    // Measured 2026-09-02: snapshotMtimes walked the LIVE project with a bare
+    // readdirSync/statSync. One entry that vanished or was locked between the
+    // readdir and its stat threw straight out of acquireLease, so the parent
+    // saw "[Sub-agent failed: EACCES: permission denied, stat '…']" before the
+    // sub-agent ever started. commitLease's walk already guards this case.
+    mkdirSync(join(source, "Assets", "Sealed"), { recursive: true });
+    writeFileSync(join(source, "Assets", "Sealed", "Secret.cs"), "sealed", "utf8");
+    makeGitRepo();
+    // Readable but not searchable: readdirSync lists the children, statSync on
+    // each of them throws EACCES — the deterministic form of the race.
+    chmodSync(join(source, "Assets", "Sealed"), 0o444);
+    try {
+      const lease = await gitManager().acquireLease({ label: "seed-walk" });
+      writeFileSync(join(lease.path, "Assets", "Scripts", "Board.cs"), "namespace PixelFlow { }", "utf8");
+      const result = await lease.commit();
+      await lease.release();
+      expect(result.written).toContain(join("Assets", "Scripts", "Board.cs"));
+      expect(readFileSync(join(source, "Assets", "Scripts", "Board.cs"), "utf8")).toBe("namespace PixelFlow { }");
+    } finally {
+      chmodSync(join(source, "Assets", "Sealed"), 0o755);
+    }
+  });
+});
+
 describe("orphaned lease salvage at construction", () => {
   it("quarantines a crashed predecessor's work without writing into the project, removes the orphan", async () => {
     // A SIGKILLed process skips release() entirely — measured in production,
@@ -296,5 +322,57 @@ describe("orphaned lease salvage at construction", () => {
     const result = await lease.commit();
     await lease.release();
     expect(result.written).toContain(join("Assets", "Scripts", "AfterSalvage.cs"));
+  });
+
+  /** Resolves once salvage has finished its loop (the trailing prune runs after it). */
+  function salvageDone(): { runner: (p: { args: string[] }) => Promise<never>; done: Promise<void> } {
+    let resolve: () => void = () => {};
+    const done = new Promise<void>((r) => { resolve = r; });
+    const runner = async (p: { args: string[] }) => {
+      if (p.args.includes("prune")) resolve();
+      return { stdout: "", stderr: "", exitCode: 0, timedOut: false, durationMs: 1 } as never;
+    };
+    return { runner, done };
+  }
+
+  it("leaves the orphan in place when its work could NOT be quarantined, and reports what it preserved", async () => {
+    // Measured 2026-09-02: with the quarantine destination unwritable, commitLease
+    // still counted every divergent file as a conflict (the cpSync failure was
+    // swallowed), salvage removed the workspace unconditionally, and the log said
+    // {conflictsQuarantined: 2} while zero bytes were preserved anywhere.
+    const orphan = join(leaseRoot, "task-deadbeef-cafe-4bad-8fee-1234567890ab");
+    mkdirSync(join(orphan, "Assets", "Scripts"), { recursive: true });
+    writeFileSync(join(orphan, "Assets", "Scripts", "HoursOfWork.cs"), "HOURS OF AGENT WORK", "utf8");
+    // The quarantine root is a FILE, so mkdirSync under it fails (ENOTDIR) —
+    // the deterministic stand-in for a read-only or full .strada.
+    mkdirSync(join(source, ".strada"), { recursive: true });
+    writeFileSync(join(source, ".strada", "lease-conflicts"), "not a directory", "utf8");
+
+    const { runner, done } = salvageDone();
+    new WorkspaceLeaseManager({ projectRoot: source, leaseRoot, preferGitWorktree: false, commandRunner: runner as never });
+    await done;
+
+    expect(existsSync(join(orphan, "Assets", "Scripts", "HoursOfWork.cs")), "the only copy was deleted").toBe(true);
+    expect(readFileSync(join(orphan, "Assets", "Scripts", "HoursOfWork.cs"), "utf8")).toBe("HOURS OF AGENT WORK");
+    expect(existsSync(join(source, "Assets", "Scripts", "HoursOfWork.cs"))).toBe(false);
+  });
+
+  it("counts only files actually written to quarantine", async () => {
+    const orphan = join(leaseRoot, "task-deadbeef-cafe-4bad-8fee-1234567890ab");
+    mkdirSync(join(orphan, "Assets"), { recursive: true });
+    writeFileSync(join(orphan, "Assets", "A.cs"), "a", "utf8");
+    writeFileSync(join(orphan, "Assets", "B.cs"), "b", "utf8");
+    const quarantine = join(source, ".strada", "lease-conflicts", "orphan-task-dea");
+    // Pre-plant a DIRECTORY where B.cs's quarantine copy must go: cpSync of a
+    // file onto a directory fails, so exactly one of two conflicts is preserved.
+    mkdirSync(join(quarantine, "Assets", "B.cs"), { recursive: true });
+
+    const { runner, done } = salvageDone();
+    new WorkspaceLeaseManager({ projectRoot: source, leaseRoot, preferGitWorktree: false, commandRunner: runner as never });
+    await done;
+
+    expect(readFileSync(join(quarantine, "Assets", "A.cs"), "utf8")).toBe("a");
+    // Partial preservation must not cost the workspace.
+    expect(existsSync(join(orphan, "Assets", "B.cs"))).toBe(true);
   });
 });

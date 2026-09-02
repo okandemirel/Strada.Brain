@@ -14,7 +14,8 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { getLogger } from "../../../utils/logger.js";
+import { getLoggerSafe } from "../../../utils/logger.js";
+import { estimateCostWithCache } from "../../../budget/cost-model.js";
 import type { IChannelAdapter, IncomingMessage } from "../../../channels/channel.interface.js";
 import type { IEventBus, LearningEventMap } from "../../../core/event-bus.js";
 import type { ITool } from "../../tools/tool.interface.js";
@@ -38,7 +39,7 @@ import { Orchestrator } from "../../orchestrator.js";
 import { getProviderIntelligenceSnapshot, type ProviderWorkload, type ModelIntelligenceLookup } from "../../providers/provider-knowledge.js";
 import { ProviderHealthRegistry } from "../../providers/provider-health.js";
 import { isCurrentChainMemberName } from "../../providers/provider-outage.js";
-import { WorkspaceLeaseManager } from "../workspace-lease-manager.js";
+import { WorkspaceLeaseManager, type WorkspaceCommitResult } from "../workspace-lease-manager.js";
 import {
   selectAgentRunner,
   toWorkerRunResult,
@@ -118,7 +119,24 @@ interface ActiveDelegation {
   readonly parentAgentId: string;
   readonly type: string;
   readonly startedAt: number;
+  /**
+   * Set by cancelDelegation BEFORE the abort fires. The catch in
+   * executeSingleDelegation only sees `signal.aborted`, which is equally true
+   * for a timeout, so without this flag a cancellation was accounted, logged
+   * and emitted as "Delegation timed out" (audited 2026-09-02).
+   */
+  cancelled: boolean;
+  /**
+   * Resolves once executeSingleDelegation's finally has finished — i.e. after
+   * the lease commit and release. shutdown() awaits these; before it did, it
+   * aborted and returned while the commits were still running and bootstrap
+   * reached process.exit(0) first (audited 2026-09-02).
+   */
+  readonly settled: Promise<void>;
 }
+
+/** How long shutdown() waits for aborted delegations to commit their leases. */
+const DELEGATION_SHUTDOWN_SETTLE_MS = 10_000;
 
 interface ResolvedDelegationProviderConfig {
   readonly name: string;
@@ -235,6 +253,7 @@ export class DelegationManager {
     const delegation = this.activeDelegations.get(subAgentId);
     if (!delegation) return;
 
+    delegation.cancelled = true;
     delegation.abortController.abort();
     this.opts.delegationLog.cancel(delegation.logId);
     // Remove the active entry now; the slot is released when the aborted
@@ -265,12 +284,60 @@ export class DelegationManager {
   }
 
   /**
-   * Shutdown: cancel all active delegations.
+   * Shutdown: cancel all active delegations, WAIT for their lease commits,
+   * then dispose the delegation lease manager.
+   *
+   * shutdown() used to abort each delegation and return in the same tick.
+   * The commit that publishes a sub-agent's files lives in the aborted run's
+   * finally, so bootstrap walked on to process.exit(0) while those commits
+   * were still waiting on the project write lock; the writes missed the
+   * project and resurfaced only as an orphan quarantine on the next boot.
+   * The lease manager built for delegation was also never disposed — the
+   * only dispose() in the tree belonged to the background executor's own
+   * instance (audited 2026-09-02).
+   *
+   * The wait is bounded; a delegation still committing at the deadline is
+   * counted and named, never silently abandoned.
    */
-  async shutdown(): Promise<void> {
+  async shutdown(settleTimeoutMs: number = DELEGATION_SHUTDOWN_SETTLE_MS): Promise<void> {
+    await this.shutdownAndReport(settleTimeoutMs);
+  }
+
+  /** shutdown() with its measurement: how many were cancelled and how many
+   *  were still committing when the deadline hit (0 when all settled). */
+  async shutdownAndReport(
+    settleTimeoutMs: number = DELEGATION_SHUTDOWN_SETTLE_MS,
+  ): Promise<{ cancelled: number; stillCommitting: number }> {
+    const inFlight = [...this.activeDelegations.values()].map((d) => d.settled);
     for (const [subAgentId] of this.activeDelegations) {
       this.cancelDelegation(subAgentId);
     }
+
+    let stillCommitting = 0;
+    if (inFlight.length > 0) {
+      let deadlineTimer: NodeJS.Timeout | undefined;
+      const deadline = new Promise<"deadline">((resolve) => {
+        deadlineTimer = setTimeout(() => resolve("deadline"), settleTimeoutMs);
+        deadlineTimer.unref?.();
+      });
+      let settledCount = 0;
+      const tracked = inFlight.map((p) => p.then(() => { settledCount++; }));
+      const outcome = await Promise.race([
+        Promise.allSettled(tracked).then(() => "settled" as const),
+        deadline,
+      ]);
+      if (deadlineTimer) clearTimeout(deadlineTimer);
+      if (outcome === "deadline") {
+        stillCommitting = inFlight.length - settledCount;
+        getLoggerSafe().warn(
+          "Delegation shutdown deadline reached with lease commits still running — their workspaces stay on disk for orphan salvage on the next start",
+          { settleTimeoutMs, cancelled: inFlight.length, stillCommitting },
+        );
+      }
+    }
+
+    await this.opts.workspaceLeaseManager?.dispose();
+    return { cancelled: inFlight.length, stillCommitting };
   }
 
   // ===========================================================================
@@ -292,13 +359,12 @@ export class DelegationManager {
     // Measure only live chain members: a stale entry for a de-configured
     // provider or a healthy "chain(...)" alias defeated the every(down)
     // reduction — the exact hazard provider-outage.ts documents.
-    const memberEntries = [...healthRegistry.getAllEntries()]
-      .filter(([name]) => isCurrentChainMemberName(name))
-      .map(([, e]) => e);
-    if (memberEntries.length > 0) {
+    const members = [...healthRegistry.getAllEntries()]
+      .filter(([name]) => isCurrentChainMemberName(name));
+    if (members.length > 0) {
       const now = Date.now();
-      const allDown = memberEntries.every(
-        (e) => e.status === "down" && now < e.cooldownUntil,
+      const allDown = members.every(
+        ([, e]) => e.status === "down" && now < e.cooldownUntil,
       );
       if (allDown) {
         // Only hard-abort when recovery is NOT imminent. When the soonest provider is about
@@ -306,7 +372,14 @@ export class DelegationManager {
         // performs a single bounded wait-for-recovery (the one place the wait lives) instead of
         // failing the whole task on a brief all-cooled blip. The FallbackChain probing guard
         // still prevents a thundering herd of concurrent probes to the recovering provider.
-        const recoveryImminent = healthRegistry.suggestRecoveryWaitMs(now) !== null;
+        //
+        // Scoped to the SAME members as the reduction above. Unscoped, the probe
+        // read every tracked entry, so a de-configured provider (or a "chain(...)"
+        // alias) cooling for 30s made recovery look imminent while the only real
+        // member was quota-dead for hours — the gate then spawned every delegation
+        // into the wall (audited 2026-09-02).
+        const recoveryImminent =
+          healthRegistry.suggestRecoveryWaitMs(now, members.map(([name]) => name)) !== null;
         if (!recoveryImminent) {
           throw new Error("All providers are in cooldown — delegation skipped to prevent thundering herd");
         }
@@ -362,10 +435,15 @@ export class DelegationManager {
         this.decrementConcurrency(request.parentAgentId);
       }
     } catch (error) {
-      // Do not escalate aborted/cancelled/timed-out delegations
+      // Do not escalate aborted/cancelled/timed-out delegations, nor one whose
+      // sub-agent finished but whose workspace commit failed — that is the
+      // project root, not the model, and a pricier tier would redo the work
+      // only to lose it the same way (audited 2026-09-02).
       if (
         error instanceof Error &&
-        (error.message.includes("aborted") || error.message.includes("timed out"))
+        (error.message.includes("aborted") ||
+          error.message.includes("timed out") ||
+          error.message.startsWith("Delegated workspace commit failed"))
       ) {
         throw error;
       }
@@ -435,13 +513,20 @@ export class DelegationManager {
     });
 
     // Track active delegation (concurrency already reserved in prepareRequest)
-    this.activeDelegations.set(subAgentId, {
+    let markSettled: () => void = () => {};
+    const settled = new Promise<void>((resolve) => {
+      markSettled = resolve;
+    });
+    const active: ActiveDelegation = {
       abortController,
       logId,
       parentAgentId: request.parentAgentId,
       type: request.type,
       startedAt: startTime,
-    });
+      cancelled: false,
+      settled,
+    };
+    this.activeDelegations.set(subAgentId, active);
 
     eventBus.emit("delegation:started", {
       parentAgentId: request.parentAgentId,
@@ -456,6 +541,94 @@ export class DelegationManager {
 
     const captureChannel = new CaptureChannel();
     let workspaceLease: Awaited<ReturnType<WorkspaceLeaseManager["acquireLease"]>> | undefined;
+
+    // Real usage accounting. The delegated Orchestrator/runner used to get NO
+    // usage sink, so the only thing ever charged for a sub-agent was
+    // tier x seconds with tokensIn/tokensOut = 0 — a premium run burning 800k
+    // tokens in 25s billed $0.05, and on a flat-fee chain the same guess
+    // charged imaginary money. Every provider turn is billed here exactly the
+    // way AgentManager bills the parent; the tier estimate survives only as a
+    // labelled fallback for a run that reported no usage (audited 2026-09-02).
+    const parentAgentId = request.parentAgentId as AgentId;
+    let usageEvents = 0;
+    let measuredCostUsd = 0;
+    const onUsage = (usage: {
+      provider: string;
+      model?: string;
+      inputTokens: number;
+      outputTokens: number;
+      cacheCreationInputTokens?: number;
+      cacheReadInputTokens?: number;
+    }): void => {
+      usageEvents++;
+      const costUsd = estimateCostWithCache(usage, usage.provider);
+      measuredCostUsd += costUsd;
+      if (costUsd <= 0) return; // flat-fee / local provider: nothing to charge
+      budgetTracker.recordCost(parentAgentId, costUsd, {
+        model: usage.model ?? usage.provider,
+        tokensIn: usage.inputTokens,
+        tokensOut: usage.outputTokens,
+      });
+    };
+    /** The cost to report: measured when any usage arrived, else the tier
+     *  estimate — recorded and logged as an estimate, never silently. */
+    const settleCost = (durationMs: number, outcome: "completed" | "timeout" | "cancelled"): number => {
+      if (usageEvents > 0) return measuredCostUsd;
+      const estimatedCostUsd = this.estimateDelegationCost(tier, durationMs);
+      budgetTracker.recordCost(parentAgentId, estimatedCostUsd, {
+        model: providerConfig.model,
+        tokensIn: 0,
+        tokensOut: 0,
+      });
+      getLoggerSafe().warn("Delegated sub-agent reported no token usage — billing the tier estimate", {
+        subAgentId,
+        tier,
+        outcome,
+        durationMs,
+        estimatedCostUsd,
+      });
+      return estimatedCostUsd;
+    };
+
+    // The workspace commit used to live only in the `finally`, AFTER
+    // delegationLog.complete, delegation:completed and the return literal had
+    // all declared success; its result went to one info line. A sub-agent
+    // whose file was quarantined as a conflict, skipped as unprocessable, or
+    // whose deletion was declined reported "done" to the parent and the
+    // project never received it. Commit ONCE, on the success path before
+    // anything claims success, and let the finally cover the failure paths
+    // (audited 2026-09-02).
+    let commitAttempted = false;
+    let commitOutcome: WorkspaceCommitResult | undefined;
+    let commitError: unknown;
+    const commitWorkspace = async (): Promise<void> => {
+      if (commitAttempted || !workspaceLease) return;
+      commitAttempted = true;
+      try {
+        commitOutcome = await workspaceLease.commit();
+        if (
+          commitOutcome.written.length > 0 ||
+          commitOutcome.conflicts.length > 0 ||
+          commitOutcome.failed.length > 0 ||
+          commitOutcome.removed.length > 0
+        ) {
+          getLoggerSafe().info("Delegated workspace committed", {
+            subAgentId,
+            files: commitOutcome.written.length,
+            conflicts: commitOutcome.conflicts.length,
+            failed: commitOutcome.failed.length,
+            removed: commitOutcome.removed.length,
+            quarantinedUnder: commitOutcome.conflictsQuarantinedUnder,
+          });
+        }
+      } catch (err) {
+        commitError = err;
+        getLoggerSafe().error("Delegated workspace commit failed — sub-agent work discarded", {
+          subAgentId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    };
 
     try {
       workspaceLease = this.opts.workspaceLeaseManager
@@ -481,6 +654,7 @@ export class DelegationManager {
         vaultWriteHookBudgetMs: this.opts.vaultWriteHookBudgetMs,
         maxIterations: typeConfig.maxIterations,
         authorizedPathsStore: this.opts.authorizedPathsStore,
+        onUsage,
       });
       // Carry the user's authorization across the instance boundary, keyed to
       // the delegate's own chat id — a worker cannot authorize itself, so this
@@ -528,6 +702,8 @@ export class DelegationManager {
               channelType: message.channelType,
               userId: message.userId,
               workspaceLease,
+              // The V2 runner reads its sink from the REQUEST, not the Orchestrator.
+              onUsage,
             },
             {
               mode,
@@ -567,16 +743,29 @@ export class DelegationManager {
         );
       }
 
-      const durationMs = Date.now() - startTime;
-      // Estimate cost from tier as a conservative approximation until
-      // real provider token usage tracking is available
-      const costUsd = this.estimateDelegationCost(tier, durationMs);
+      // Publish the sub-agent's files BEFORE anything records success: a commit
+      // that throws means the work was discarded, which is a failed delegation,
+      // not a completed one.
+      await commitWorkspace();
+      if (commitError !== undefined) {
+        throw new Error(
+          "Delegated workspace commit failed — sub-agent work discarded: " +
+            (commitError instanceof Error ? commitError.message : String(commitError)),
+        );
+      }
+      const commitSummary = commitOutcome
+        ? {
+            written: commitOutcome.written.length,
+            conflicts: [...commitOutcome.conflicts],
+            failed: [...commitOutcome.failed],
+            removed: [...commitOutcome.removed],
+            quarantinedUnder: commitOutcome.conflictsQuarantinedUnder,
+          }
+        : undefined;
+      const commitNote = commitSummary ? describeCommitShortfall(commitSummary) : "";
 
-      budgetTracker.recordCost(request.parentAgentId as AgentId, costUsd, {
-        model: providerConfig.model,
-        tokensIn: 0,
-        tokensOut: 0,
-      });
+      const durationMs = Date.now() - startTime;
+      const costUsd = settleCost(durationMs, "completed");
 
       delegationLog.complete(logId, {
         durationMs,
@@ -598,11 +787,12 @@ export class DelegationManager {
         timestamp: Date.now(),
       });
 
+      const content =
+        workerResult?.visibleResponse
+        ?? workerResult?.finalSummary
+        ?? captureChannel.getLastResponse();
       return {
-        content:
-          workerResult?.visibleResponse
-          ?? workerResult?.finalSummary
-          ?? captureChannel.getLastResponse(),
+        content: commitNote ? `${content}\n\n${commitNote}` : content,
         workerResult,
         metadata: {
           model: providerConfig.model,
@@ -612,22 +802,33 @@ export class DelegationManager {
           toolsUsed: [],
           escalated: !!escalatedFrom,
           escalatedFrom,
+          commit: commitSummary,
         },
       };
     } catch (error) {
-      if (abortController.signal.aborted) {
+      if (active.cancelled) {
+        // Cancelled (operator/shutdown) — NOT a timeout. The sub-agent still
+        // burned compute until the abort, so it is billed, but the log row
+        // keeps the 'cancelled' status cancelDelegation wrote and the event
+        // names the cancellation. Before this branch existed the aborted
+        // signal routed here as a timeout (audited 2026-09-02).
+        const cancelledMs = Date.now() - startTime;
+        settleCost(cancelledMs, "cancelled");
+        eventBus.emit("delegation:failed", {
+          parentAgentId: request.parentAgentId,
+          subAgentId,
+          type: request.type,
+          reason: "Delegation cancelled",
+          timestamp: Date.now(),
+        });
+      } else if (abortController.signal.aborted) {
         // Timed out — the race rejected via waitForAbort (or a same-tick resolve re-threw).
         // A timed-out delegation still consumed compute: bill it against the parent and
         // persist a TERMINAL 'timeout' status. Previously this lived only in the
         // post-race branch (unreachable when waitForAbort rejects), so the log row stayed
         // 'running' forever and the parent kept delegating for free.
         const timedOutMs = Date.now() - startTime;
-        const timedOutCostUsd = this.estimateDelegationCost(tier, timedOutMs);
-        budgetTracker.recordCost(request.parentAgentId as AgentId, timedOutCostUsd, {
-          model: providerConfig.model,
-          tokensIn: 0,
-          tokensOut: 0,
-        });
+        const timedOutCostUsd = settleCost(timedOutMs, "timeout");
         delegationLog.timeout(logId, { durationMs: timedOutMs, costUsd: timedOutCostUsd });
         eventBus.emit("delegation:failed", {
           parentAgentId: request.parentAgentId,
@@ -657,34 +858,11 @@ export class DelegationManager {
       // background-executor. Without this a delegated sub-agent's file writes
       // go into its lease and are deleted with it — the identical defect, one
       // layer down, and easy to miss because the delegation path has its own
-      // lease lifecycle.
-      if (workspaceLease) {
-        await Promise.resolve()
-          .then(() => workspaceLease!.commit())
-          .then((result) => {
-            if (
-              result.written.length > 0 ||
-              result.conflicts.length > 0 ||
-              result.failed.length > 0
-            ) {
-              getLogger().info("Delegated workspace committed", {
-                subAgentId,
-                files: result.written.length,
-                conflicts: result.conflicts.length,
-                failed: result.failed.length,
-                quarantinedUnder: result.conflictsQuarantinedUnder,
-              });
-            }
-          })
-          .catch((err) => {
-            getLogger().error("Delegated workspace commit failed — sub-agent work discarded", {
-              subAgentId,
-              error: err instanceof Error ? err.message : String(err),
-            });
-          });
-      }
+      // lease lifecycle. A no-op when the success path already committed.
+      await commitWorkspace();
       await workspaceLease?.release().catch(() => {});
       this.cleanup(subAgentId);
+      markSettled();
     }
   }
 
@@ -1018,6 +1196,9 @@ export class DelegationManager {
   /**
    * Estimate delegation cost by tier as a conservative approximation.
    * Per-second rates assume typical LLM API pricing.
+   *
+   * FALLBACK ONLY — used when a run reported no token usage at all. Measured
+   * usage (see the onUsage sink in executeSingleDelegation) is the norm.
    */
   private estimateDelegationCost(tier: ModelTier, durationMs: number): number {
     const costPerSecond: Record<ModelTier, number> = {
@@ -1059,4 +1240,32 @@ export class DelegationManager {
       );
     });
   }
+}
+
+/**
+ * The line appended to a delegation's content when the workspace commit did
+ * NOT apply everything the sub-agent produced. Empty when nothing fell short,
+ * so a clean commit adds nothing to the sub-agent's own report.
+ */
+function describeCommitShortfall(commit: NonNullable<DelegationResult["metadata"]["commit"]>): string {
+  const parts: string[] = [];
+  if (commit.conflicts.length > 0) {
+    const where = commit.quarantinedUnder
+      ? `the sub-agent's version is quarantined under ${commit.quarantinedUnder}`
+      : "the sub-agent's version could NOT be quarantined and is gone";
+    parts.push(
+      `NOT applied to the project (the project copy changed while the sub-agent ran; ${where}): ` +
+        commit.conflicts.join(", "),
+    );
+  }
+  if (commit.failed.length > 0) {
+    parts.push(`NOT applied to the project (could not be processed by the commit): ${commit.failed.join(", ")}`);
+  }
+  if (commit.removed.length > 0) {
+    parts.push(
+      `Deleted in the sub-agent's workspace but LEFT IN PLACE in the project: ${commit.removed.join(", ")}`,
+    );
+  }
+  if (parts.length === 0) return "";
+  return `[Workspace commit: ${commit.written} file(s) applied]\n` + parts.join("\n");
 }

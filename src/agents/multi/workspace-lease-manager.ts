@@ -54,6 +54,14 @@ export interface WorkspaceCommitResult {
    * when there were no conflicts or none could be written.
    */
   readonly conflictsQuarantinedUnder: string | null;
+  /**
+   * How many of `conflicts` were actually written to quarantine. Salvage used
+   * to read `conflicts.length` as "preserved" and delete the workspace on the
+   * strength of it while the cpSync failures were swallowed (audited
+   * 2026-09-02). `conflicts.length - quarantined` is the number of files that
+   * exist ONLY in the workspace.
+   */
+  readonly quarantined: number;
 }
 
 export interface WorkspaceLease {
@@ -194,13 +202,27 @@ const DERIVED_COPY_EXCLUDES = new Set([
  *  cross-process signal for "this lease belongs to a LIVE process". */
 const LEASE_OWNER_FILE = ".strada-lease-owner.json";
 
-/** True when the pid recorded in a lease's owner sidecar is still running.
- *  Missing/corrupt sidecar reads as not-alive (old-style orphan heuristic). */
-function leaseOwnerAlive(leasePath: string): boolean {
+/**
+ * Pre-seed claim: `<leaseRoot>/<lease-name>.claim.json`, a SIBLING of the
+ * workspace directory, written before `git worktree add` / cpSync populate it.
+ *
+ * The in-dir sidecar could only be written after seeding (git refuses to add a
+ * worktree into a non-empty directory), which left the workspace on disk and
+ * unowned for the whole seed — minutes with submodules. Any second process
+ * constructing a manager against the machine-global lease root in that window
+ * read it as an orphan and rm -rf'd the directory the first process was still
+ * writing into (audited 2026-09-02). The claim is retired once the in-dir
+ * sidecar exists, and removed with the workspace by release/salvage.
+ */
+const LEASE_CLAIM_SUFFIX = ".claim.json";
+
+function leaseClaimPath(leasePath: string): string {
+  return `${leasePath}${LEASE_CLAIM_SUFFIX}`;
+}
+
+function ownerFileRecordsLivePid(file: string): boolean {
   try {
-    const raw = JSON.parse(readFileSync(join(leasePath, LEASE_OWNER_FILE), "utf8")) as {
-      pid?: unknown;
-    };
+    const raw = JSON.parse(readFileSync(file, "utf8")) as { pid?: unknown };
     const pid = Number(raw.pid);
     if (!Number.isInteger(pid) || pid <= 0) return false;
     process.kill(pid, 0); // throws when the process is gone
@@ -208,6 +230,16 @@ function leaseOwnerAlive(leasePath: string): boolean {
   } catch {
     return false;
   }
+}
+
+/** True when the pid recorded in a lease's owner sidecar — or, while it is
+ *  still being seeded, its sibling claim file — is still running. Missing or
+ *  corrupt records read as not-alive (old-style orphan heuristic). */
+function leaseOwnerAlive(leasePath: string): boolean {
+  return (
+    ownerFileRecordsLivePid(join(leasePath, LEASE_OWNER_FILE)) ||
+    ownerFileRecordsLivePid(leaseClaimPath(leasePath))
+  );
 }
 
 /** Lease roots already salvaged by SOME manager in this process. Two managers
@@ -324,8 +356,10 @@ export class WorkspaceLeaseManager {
   private async salvageOrphanedLeases(orphanNames: readonly string[]): Promise<void> {
     const logger = getLoggerSafe();
     let salvaged = 0;
+    let leftInPlace = 0;
     let writtenTotal = 0;
-    let conflictsTotal = 0;
+    let quarantinedTotal = 0;
+    let unpreservedTotal = 0;
     for (const name of orphanNames) {
       const orphanPath = join(this.leaseRoot, name);
       if (!existsSync(orphanPath)) continue; // released concurrently somehow
@@ -348,8 +382,30 @@ export class WorkspaceLeaseManager {
           { quarantineOnly: true },
         );
         writtenTotal += result.written.length;
-        conflictsTotal += result.conflicts.length;
+        quarantinedTotal += result.quarantined;
+        const unpreserved = result.conflicts.length - result.quarantined;
+        unpreservedTotal += unpreserved;
+        // Delete the workspace ONLY when everything divergent in it now exists
+        // somewhere else. removeDirectory used to run unconditionally: an
+        // unwritable quarantine (read-only/full .strada — plausibly the same
+        // fault that killed the predecessor) left conflicts counted but not
+        // copied, and the crashed run's only copy was rm -rf'd while the log
+        // claimed it was quarantined (audited 2026-09-02).
+        if (unpreserved > 0 || result.failed.length > 0) {
+          leftInPlace += 1;
+          logger.warn("Orphaned workspace NOT removed — some of its work could not be preserved", {
+            orphan: name,
+            conflicts: result.conflicts.length,
+            quarantined: result.quarantined,
+            unpreserved,
+            unprocessable: result.failed.length,
+            quarantinedUnder: result.conflictsQuarantinedUnder,
+            path: orphanPath,
+          });
+          continue;
+        }
         this.removeDirectory(orphanPath);
+        rmSync(leaseClaimPath(orphanPath), { force: true }); // a crashed seed's claim goes with it
         salvaged += 1;
       } catch (err) {
         logger.warn("Orphaned workspace could not be salvaged — left in place", {
@@ -368,11 +424,15 @@ export class WorkspaceLeaseManager {
     } catch {
       // Non-git projects have nothing to prune.
     }
-    if (salvaged > 0 || writtenTotal > 0 || conflictsTotal > 0) {
+    if (salvaged > 0 || leftInPlace > 0 || writtenTotal > 0 || quarantinedTotal > 0) {
+      // `conflictsQuarantined` is the count of files WRITTEN to quarantine, not
+      // the number of divergences detected.
       logger.info("Salvaged orphaned workspaces from a previous process", {
         salvaged,
+        leftInPlace,
         filesWritten: writtenTotal,
-        conflictsQuarantined: conflictsTotal,
+        conflictsQuarantined: quarantinedTotal,
+        conflictsUnpreserved: unpreservedTotal,
       });
     }
   }
@@ -406,40 +466,53 @@ export class WorkspaceLeaseManager {
     let kind: WorkspaceLeaseKind;
     let releaseImpl: () => Promise<void>;
 
-    if (useWorktree) {
-      try {
-        await this.createGitWorktree(workspacePath);
-        kind = "git-worktree";
-        releaseImpl = async () => {
-          await this.removeGitWorktree(workspacePath);
-        };
-      } catch {
+    // Claim ownership BEFORE the directory exists, so there is no instant at
+    // which the workspace is on disk without a live owner (see LEASE_CLAIM_SUFFIX).
+    const ownerRecord = JSON.stringify({ pid: process.pid, startedAt: createdAt });
+    try {
+      writeFileSync(leaseClaimPath(workspacePath), ownerRecord, "utf8");
+    } catch {
+      // Best-effort; an unclaimable lease degrades to the old post-seed sidecar.
+    }
+
+    try {
+      if (useWorktree) {
+        try {
+          await this.createGitWorktree(workspacePath);
+          kind = "git-worktree";
+          releaseImpl = async () => {
+            await this.removeGitWorktree(workspacePath);
+          };
+        } catch {
+          kind = "temp-copy";
+          await this.createTempCopy(sourceRoot, workspacePath);
+          releaseImpl = async () => {
+            this.removeDirectory(workspacePath);
+          };
+        }
+      } else {
         kind = "temp-copy";
         await this.createTempCopy(sourceRoot, workspacePath);
         releaseImpl = async () => {
           this.removeDirectory(workspacePath);
         };
       }
-    } else {
-      kind = "temp-copy";
-      await this.createTempCopy(sourceRoot, workspacePath);
-      releaseImpl = async () => {
-        this.removeDirectory(workspacePath);
-      };
+    } catch (err) {
+      // Seeding failed: the claim must not outlive the attempt, or the next
+      // process could never reclaim whatever the failed seed left behind.
+      rmSync(leaseClaimPath(workspacePath), { force: true });
+      throw err;
     }
 
     // Ownership sidecar: the lease root is machine-global, so "orphan" can
     // only be decided by whether the OWNING PROCESS is alive — not by which
     // process happens to construct a manager. Salvage skips any lease whose
-    // recorded pid still runs.
+    // recorded pid still runs. Once it exists the pre-seed claim is retired.
     try {
-      writeFileSync(
-        join(workspacePath, LEASE_OWNER_FILE),
-        JSON.stringify({ pid: process.pid, startedAt: createdAt }),
-        "utf8",
-      );
+      writeFileSync(join(workspacePath, LEASE_OWNER_FILE), ownerRecord, "utf8");
+      rmSync(leaseClaimPath(workspacePath), { force: true });
     } catch {
-      // Best-effort; an unownable lease degrades to the old orphan heuristic.
+      // Best-effort; an unownable lease keeps its claim file as the signal.
     }
 
     // Two snapshots, both taken after seeding.
@@ -478,6 +551,7 @@ export class WorkspaceLeaseManager {
         released = true;
         this.activeLeases.delete(id);
         await releaseImpl();
+        rmSync(leaseClaimPath(workspacePath), { force: true });
       },
     };
     this.activeLeases.set(id, lease);
@@ -813,8 +887,9 @@ export class WorkspaceLeaseManager {
     const removed: string[] = [];
     const failed: string[] = [];
     let conflictsQuarantinedUnder: string | null = null;
+    let quarantined = 0;
     if (!existsSync(workspacePath)) {
-      return { written, conflicts, removed, failed, conflictsQuarantinedUnder };
+      return { written, conflicts, removed, failed, conflictsQuarantinedUnder, quarantined };
     }
 
     // Bulk write into ANY shared target: serialize against the other bulk
@@ -880,12 +955,14 @@ export class WorkspaceLeaseManager {
             conflicts.push(rel);
             if (quarantineRoot) {
               try {
-                const quarantined = join(quarantineRoot, rel);
-                mkdirSync(dirname(quarantined), { recursive: true });
-                cpSync(full, quarantined, { force: true });
+                const quarantineTarget = join(quarantineRoot, rel);
+                mkdirSync(dirname(quarantineTarget), { recursive: true });
+                cpSync(full, quarantineTarget, { force: true });
                 conflictsQuarantinedUnder ??= quarantineRoot;
+                quarantined += 1; // counted only AFTER the copy succeeded
               } catch {
-                // Quarantine failed; the conflict report still stands.
+                // Quarantine failed; the conflict report still stands, and
+                // `quarantined` stays short of `conflicts` so the caller knows.
               }
             }
             continue;
@@ -908,10 +985,11 @@ export class WorkspaceLeaseManager {
               // .strada namespace; best-effort, never blocks the commit.
               if (quarantineRoot) {
                 try {
-                  const quarantined = join(quarantineRoot, rel);
-                  mkdirSync(dirname(quarantined), { recursive: true });
-                  cpSync(full, quarantined, { force: true });
+                  const quarantineTarget = join(quarantineRoot, rel);
+                  mkdirSync(dirname(quarantineTarget), { recursive: true });
+                  cpSync(full, quarantineTarget, { force: true });
                   conflictsQuarantinedUnder ??= quarantineRoot;
+                  quarantined += 1;
                 } catch {
                   // Quarantine failed; the conflict report still stands.
                 }
@@ -960,7 +1038,7 @@ export class WorkspaceLeaseManager {
       });
     }
 
-    return { written, conflicts, removed, failed, conflictsQuarantinedUnder };
+    return { written, conflicts, removed, failed, conflictsQuarantinedUnder, quarantined };
     } finally {
       lock?.release();
     }
@@ -981,15 +1059,46 @@ export class WorkspaceLeaseManager {
    *  made during the run from a file that merely shares the lease's timestamp. */
   private snapshotMtimes(root: string, excludeRoot: string): Map<string, number> {
     const seeded = new Map<string, number>();
+    // This walk runs against the LIVE project (sourceSeed), where the editor,
+    // a build or the user deletes and locks files while it runs. It used to be
+    // bare, so one ENOENT/EACCES between the readdir and its stat threw out of
+    // acquireLease and the delegation died before the sub-agent started —
+    // commitLease's walk one screen down has guarded this exact case since it
+    // was measured in production. A file missing from the seed is handled
+    // conservatively by commit(): absent from leaseSeed reads as agent work,
+    // absent from sourceSeed reads as a conflict (audited 2026-09-02).
+    const skipped: string[] = [];
     const walk = (dir: string): void => {
-      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      let entries: Dirent[];
+      try {
+        entries = readdirSync(dir, { withFileTypes: true });
+      } catch (err) {
+        skipped.push(`${relative(root, dir) || "."} (${err instanceof Error ? err.message : String(err)})`);
+        return;
+      }
+      for (const entry of entries) {
         const full = join(dir, entry.name);
         if (!this.shouldCommitEntry(excludeRoot, full)) continue;
-        if (entry.isDirectory()) walk(full);
-        else if (entry.isFile()) seeded.set(relative(root, full), statSync(full).mtimeMs);
+        if (entry.isDirectory()) {
+          walk(full);
+          continue;
+        }
+        if (!entry.isFile()) continue;
+        try {
+          seeded.set(relative(root, full), statSync(full).mtimeMs);
+        } catch (err) {
+          skipped.push(`${relative(root, full)} (${err instanceof Error ? err.message : String(err)})`);
+        }
       }
     };
     if (existsSync(root)) walk(root);
+    if (skipped.length > 0) {
+      getLoggerSafe().warn("Seed snapshot skipped entries it could not stat — commit() will treat them conservatively", {
+        root,
+        count: skipped.length,
+        sample: skipped.slice(0, 5),
+      });
+    }
     return seeded;
   }
 

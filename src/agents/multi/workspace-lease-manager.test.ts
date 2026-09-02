@@ -201,4 +201,65 @@ describe("WorkspaceLeaseManager", () => {
       workerId: "worker-outside",
     })).rejects.toThrow("Workspace source root must be inside the project root or lease root");
   });
+
+  it("a lease being seeded is owned from the first byte — a second process must not salvage it", async () => {
+    // Measured 2026-09-02: acquireLease created and populated the workspace
+    // (git worktree add + submodules + uncommitted state, up to minutes) and
+    // wrote the owner sidecar only afterwards. A second install/daemon that
+    // constructed a manager against the machine-global lease root in that
+    // window read the sidecar-less dir as an orphan, quarantine-committed the
+    // half-seeded tree and rm -rf'd the workspace the first process was still
+    // writing into.
+    const projectRoot = makeTempDir("workspace-lease-claim-project-");
+    const leaseRoot = makeTempDir("workspace-lease-claim-root-");
+    writeFileSync(join(projectRoot, "README.md"), "hello");
+
+    // Process A's runner: `worktree add` creates the directory, then BLOCKS
+    // until the test releases it — the seeding window, made deterministic.
+    let releaseSeeding: () => void = () => {};
+    const seeding = new Promise<void>((r) => { releaseSeeding = r; });
+    let seededPath = "";
+    const runnerA: WorkspaceCommandRunner = async (params) => {
+      if (params.args.includes("rev-parse")) {
+        return { stdout: "true", stderr: "", exitCode: 0, timedOut: false, durationMs: 1 };
+      }
+      if (params.args.includes("worktree") && params.args.includes("add")) {
+        seededPath = params.args[params.args.length - 2]!;
+        mkdirSync(seededPath, { recursive: true });
+        writeFileSync(join(seededPath, "README.md"), "hello");
+        await seeding;
+      }
+      return { stdout: "", stderr: "", exitCode: 0, timedOut: false, durationMs: 1 };
+    };
+    const managerA = new WorkspaceLeaseManager({ projectRoot, leaseRoot, commandRunner: runnerA });
+    const acquiring = managerA.acquireLease({ workerId: "worker-a" });
+    await vi.waitFor(() => expect(seededPath).not.toBe(""));
+    expect(existsSync(seededPath)).toBe(true);
+
+    // Process B: a FRESH module instance (its own per-process salvaged-roots
+    // set) constructing against the same lease root mid-seed.
+    let pruned: () => void = () => {};
+    const salvageDone = new Promise<void>((r) => { pruned = r; });
+    const runnerB: WorkspaceCommandRunner = async (params) => {
+      if (params.args.includes("prune")) pruned();
+      return { stdout: "", stderr: "", exitCode: 0, timedOut: false, durationMs: 1 };
+    };
+    vi.resetModules();
+    const fresh = await import("./workspace-lease-manager.js");
+    new fresh.WorkspaceLeaseManager({ projectRoot, leaseRoot, commandRunner: runnerB });
+    // Give B's fire-and-forget salvage a chance to run; with nothing to salvage
+    // it never prunes, so bound the wait instead of awaiting it.
+    await Promise.race([salvageDone, new Promise((r) => setTimeout(r, 300))]);
+
+    expect(existsSync(seededPath), "process B salvaged and deleted A's live, half-seeded lease").toBe(true);
+    expect(existsSync(join(projectRoot, ".strada", "lease-conflicts"))).toBe(false);
+
+    releaseSeeding();
+    const lease = await acquiring;
+    expect(lease.path).toBe(seededPath);
+    expect(existsSync(join(lease.path, ".strada-lease-owner.json"))).toBe(true);
+    // The pre-seed claim is retired once the in-dir sidecar exists.
+    expect(existsSync(`${lease.path}.claim.json`)).toBe(false);
+    await lease.release();
+  });
 });

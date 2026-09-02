@@ -27,6 +27,17 @@ import type { TaskUsageEvent } from "../../tasks/types.js";
 let mockUsageEvent: TaskUsageEvent | null = null;
 let mockMemoryTotalEntries = 0;
 
+// Only the SAFE logger is replaced (the shutdown/stop drop notice is the one
+// site that must be observable here); getLogger() keeps its real behaviour.
+const { loggerWarn } = vi.hoisted(() => ({ loggerWarn: vi.fn() }));
+vi.mock("../../utils/logger.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../utils/logger.js")>();
+  return {
+    ...actual,
+    getLoggerSafe: () => ({ info: vi.fn(), warn: loggerWarn, error: vi.fn(), debug: vi.fn() }),
+  };
+});
+
 // =============================================================================
 // MOCKS
 // =============================================================================
@@ -450,6 +461,77 @@ describe("AgentManager", () => {
   // ===========================================================================
   // Budget Enforcement
   // ===========================================================================
+
+  describe("buffered burst messages on shutdown / stop", () => {
+    // Measured 2026-09-02: with messageBurstWindowMs > 0 a routed message is
+    // parked in pendingBackgroundBatches and NOTHING has been said to the user
+    // yet (the notice is sent from flushBackgroundBatch). shutdown() and
+    // stopAgent() cleared the map with no flush, no notice and no log line, so
+    // the request vanished without a trace anywhere. Dropping on shutdown is a
+    // documented decision (see message-router.ts); dropping SILENTLY is not.
+    function bufferingManager() {
+      const m = new AgentManager({
+        config: makeConfig(),
+        registry,
+        budgetTracker,
+        eventBus,
+        providerManager: {} as never,
+        toolRegistry: { getAllTools: () => [] } as never,
+        channel: { sendText, sendMarkdown } as never,
+        projectPath: "/fake/project",
+        readOnly: false,
+        requireConfirmation: false,
+        streamingEnabled: false,
+        stradaDeps: { installed: false, version: undefined },
+        memoryConfig: { dimensions: 768, dbBasePath: tmpDir },
+        messageBurstWindowMs: 60_000, // never flushes inside the test
+        maxBurstMessages: 8,
+      });
+      const submitter = vi.fn();
+      m.setBackgroundTaskSubmitter(submitter);
+      return { m, submitter };
+    }
+
+    it("shutdown names every un-submitted message it drops", async () => {
+      const { m, submitter } = bufferingManager();
+      await m.routeMessage(makeMsg({ text: "build the shop screen" }));
+      await m.routeMessage(makeMsg({ text: "and the inventory panel" }));
+      expect(submitter).not.toHaveBeenCalled();
+      expect(sendText).not.toHaveBeenCalled();
+
+      await m.shutdown();
+
+      expect(submitter).not.toHaveBeenCalled();
+      const drop = loggerWarn.mock.calls.find(([msg]) => /buffered.*dropped/i.test(String(msg)));
+      expect(drop, "the drop was silent").toBeDefined();
+      expect(drop![1]).toEqual(
+        expect.objectContaining({
+          messages: 2,
+          chatIds: ["chat-1"],
+          sample: expect.arrayContaining([expect.stringContaining("build the shop screen")]),
+        }),
+      );
+    });
+
+    it("stopAgent tells the user which buffered messages were not started", async () => {
+      const { m, submitter } = bufferingManager();
+      try {
+        await m.routeMessage(makeMsg({ text: "build the shop screen" }));
+        const agent = m.getAllAgents()[0]!;
+
+        await m.stopAgent(agent.id);
+
+        expect(submitter).not.toHaveBeenCalled();
+        expect(sendText).toHaveBeenCalledWith(
+          "chat-1",
+          expect.stringMatching(/1 message.*not started.*build the shop screen/s),
+        );
+        expect(loggerWarn.mock.calls.some(([msg]) => /buffered.*dropped/i.test(String(msg)))).toBe(true);
+      } finally {
+        await m.shutdown();
+      }
+    });
+  });
 
   describe("budget enforcement", () => {
     it("records per-agent usage from orchestrator token callbacks", async () => {

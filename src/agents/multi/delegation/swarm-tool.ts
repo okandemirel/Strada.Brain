@@ -16,7 +16,7 @@
 import type { ITool, ToolContext, ToolExecutionResult, ToolInputSchema, ToolMetadata } from "../../tools/tool.interface.js";
 import type { AgentId } from "../agent-types.js";
 import type { DelegationManager } from "./delegation-manager.js";
-import type { DelegationTypeConfig } from "./delegation-types.js";
+import type { DelegationResult, DelegationTypeConfig } from "./delegation-types.js";
 
 interface SwarmTaskSpec {
   task: string;
@@ -75,6 +75,11 @@ export class SwarmTool implements ITool {
     const accepted = rawTasks.filter((t) => t && typeof t.task === "string" && t.task.trim().length > 0);
     const tasks = accepted.slice(0, 12);
     const dropped = accepted.length - tasks.length;
+    // `dropped` was the ONLY drop counter and it was computed from the already
+    // filtered array, so an entry with no usable `task` string vanished: six
+    // submitted tasks reported "Swarm of 5 sub-agents finished." and the caller
+    // marked the batch done with one module unaudited (audited 2026-09-02).
+    const malformed = rawTasks.length - accepted.length;
 
     if (tasks.length < 2) {
       return {
@@ -124,15 +129,33 @@ export class SwarmTool implements ITool {
       // Silently discarding tasks 13+ let a caller believe work was done.
       lines.push(`NOTE: ${dropped} task(s) beyond the limit of 12 were NOT run — resubmit them in another swarm.`);
     }
+    if (malformed > 0) {
+      lines.push(
+        `NOTE: ${malformed} of ${rawTasks.length} submitted entries were NOT run — they had no usable \`task\` string. ` +
+          "Resubmit them with a non-empty `task`.",
+      );
+    }
     let failures = 0;
     settled.forEach((outcome, i) => {
       const label = tasks[i]!.task.slice(0, 80);
       if (outcome.status === "fulfilled") {
-        const result = outcome.value as { success?: boolean; output?: string; error?: string };
-        if (result?.success === false) failures++;
-        lines.push(
-          `\n### ${i + 1}. ${label}\n${result?.success === false ? "FAILED: " : ""}${(result?.output ?? result?.error ?? "(no output)").slice(0, 1500)}`,
-        );
+        // delegate() resolves with a DelegationResult — { content, workerResult,
+        // metadata } — never { success, output }. Reading the invented shape
+        // rendered every successful subtask as "(no output)" under a success
+        // banner, so the parent reported the batch complete with zero evidence
+        // of the work (audited 2026-09-02). A failed worker REJECTS (the manager
+        // rethrows it), so a fulfilled value is finished unless the worker
+        // itself says it stopped short.
+        const result = outcome.value as DelegationResult | undefined;
+        const status = result?.workerResult?.status;
+        const notFinished = status !== undefined && status !== "completed";
+        if (notFinished) failures++;
+        const prefix = status === "failed" ? "FAILED: " : status === "blocked" ? "BLOCKED: " : "";
+        const text =
+          result?.content?.trim()
+          || result?.workerResult?.finalSummary?.trim()
+          || "(no output)";
+        lines.push(`\n### ${i + 1}. ${label}\n${prefix}${text.slice(0, 1500)}`);
       } else {
         failures++;
         lines.push(`\n### ${i + 1}. ${label}\nFAILED: ${String(outcome.reason).slice(0, 300)}`);

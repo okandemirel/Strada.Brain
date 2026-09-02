@@ -12,6 +12,8 @@ import { DelegationLog } from "./delegation-log.js";
 import { TierRouter } from "./tier-router.js";
 import { createProvider } from "../../providers/provider-registry.js";
 import { ProviderHealthRegistry } from "../../providers/provider-health.js";
+import { setLiveChainMemberNames } from "../../providers/provider-outage.js";
+import { estimateCostWithCache } from "../../../budget/cost-model.js";
 import type {
   DelegationConfig,
   DelegationRequest,
@@ -461,6 +463,67 @@ describe("DelegationManager", () => {
       expect(budgetTracker.recordCost).toHaveBeenCalledOnce();
       const [agentId] = budgetTracker.recordCost.mock.calls[0]!;
       expect(agentId).toBe(PARENT_AGENT_ID);
+    });
+
+    it("bills the parent for the sub-agent's MEASURED token usage, not a wall-clock guess", async () => {
+      // Audited 2026-09-02: the delegated Orchestrator/runner got no usage
+      // sink, so the only charge was tier x seconds with tokensIn/Out = 0. A
+      // premium sub-agent burning 800k input tokens in 25s was billed $0.05
+      // against a real cost of ~$2.70 by the repo's own rate table; on a
+      // flat-fee chain the same guess charged imaginary money instead.
+      orchestratorHasAgentCore = true;
+      scriptedRunnerRun = vi.fn().mockImplementation(async (request: { onUsage?: (u: unknown) => void }) => {
+        request.onUsage?.({
+          provider: "claude",
+          model: "claude-opus-4-6-20250514",
+          inputTokens: 800_000,
+          outputTokens: 20_000,
+        });
+        return {
+          status: "completed",
+          finalText: "done",
+          finalSummary: "done",
+          provider: "claude",
+          catalogVersion: "claude:opus",
+          assignmentVersion: 0,
+          touchedFiles: [],
+          toolTrace: [],
+          verificationResults: [],
+          reviewFindings: [],
+          artifacts: [],
+        };
+      });
+
+      const request: DelegationRequest = {
+        type: "premium_task",
+        task: "Design the module",
+        parentAgentId: PARENT_AGENT_ID,
+        depth: 0,
+        mode: "sync",
+        toolContext: TEST_TOOL_CONTEXT,
+      };
+
+      const result = await manager.delegate(request);
+
+      const budgetTracker = opts.budgetTracker as unknown as ReturnType<typeof createMockBudgetTracker>;
+      expect(budgetTracker.recordCost).toHaveBeenCalledOnce();
+      const [agentId, costUsd, meta] = budgetTracker.recordCost.mock.calls[0]! as [
+        string,
+        number,
+        { model: string; tokensIn: number; tokensOut: number },
+      ];
+      expect(agentId).toBe(PARENT_AGENT_ID);
+      expect(meta.tokensIn).toBe(800_000);
+      expect(meta.tokensOut).toBe(20_000);
+      expect(meta.model).toBe("claude-opus-4-6-20250514");
+      const measured = estimateCostWithCache({ inputTokens: 800_000, outputTokens: 20_000 }, "claude");
+      expect(costUsd).toBeCloseTo(measured, 6);
+      expect(costUsd).toBeGreaterThan(1); // the wall-clock guess for a sub-second run is ~$0
+      // The figure the parent sees is the one that was measured.
+      expect(result.metadata.costUsd).toBeCloseTo(measured, 6);
+      // Both engine paths carry the sink: the handleMessage path reads it from
+      // the Orchestrator options, the V2 runner from the run request.
+      expect(orchestratorOpts["onUsage"]).toBeTypeOf("function");
     });
   });
 
@@ -1071,6 +1134,143 @@ describe("DelegationManager", () => {
     }, 5000);
   });
 
+  describe("cancellation is persisted as cancellation, not as a timeout", () => {
+    // Measured 2026-09-02: cancelDelegation wrote status 'cancelled', then the
+    // aborted run unwound into the catch where signal.aborted was true, so it
+    // took the TIMEOUT branch: the row became 'timeout' and delegation:failed
+    // said "Delegation timed out". Every daemon shutdown with an in-flight
+    // sub-agent was recorded as a provider timeout.
+    it("leaves the log row 'cancelled' and names the cancellation in the event", async () => {
+      let rejectExec: (e: Error) => void = () => {};
+      orchestratorHandleMessage = vi.fn().mockImplementation(
+        () => new Promise<void>((_resolve, reject) => {
+          rejectExec = reject;
+        }),
+      );
+
+      const delegatePromise = manager.delegate({
+        type: "code_review",
+        task: "Cancellable task",
+        parentAgentId: PARENT_AGENT_ID,
+        depth: 0,
+        mode: "sync",
+        toolContext: TEST_TOOL_CONTEXT,
+      }).catch(() => {});
+      await new Promise<void>((resolve) => setTimeout(resolve, 20));
+
+      const [active] = manager.getActiveDelegations(PARENT_AGENT_ID);
+      expect(active).toBeDefined();
+      manager.cancelDelegation(active!.subAgentId);
+      rejectExec(new Error("aborted"));
+      await delegatePromise;
+
+      const [row] = delegationLog.getHistory(1);
+      expect(row!.status).toBe("cancelled");
+
+      const emit = vi.mocked(opts.eventBus.emit);
+      const failed = emit.mock.calls.filter(([name]) => name === "delegation:failed");
+      expect(failed).toHaveLength(1);
+      const payload = failed[0]![1] as { reason: string };
+      expect(payload.reason).toMatch(/cancel/i);
+      expect(payload.reason).not.toMatch(/timed out/i);
+    });
+  });
+
+  describe("workspace commit verdict reaches the caller", () => {
+    // Measured 2026-09-02: the lease commit ran in the `finally` AFTER
+    // delegationLog.complete / delegation:completed / the return literal, and
+    // its result went to one info log line. A sub-agent whose Board.cs was
+    // quarantined as a conflict (project copy changed while it ran) reported
+    // "I created Board.cs" to the parent with success:true — the project never
+    // got the file and every consumer said it did.
+    function leaseManagerWith(commit: () => Promise<unknown>) {
+      const release = vi.fn().mockResolvedValue(undefined);
+      const acquireLease = vi.fn().mockResolvedValue({
+        id: "lease-1",
+        kind: "temp-copy",
+        sourceRoot: "/test/project",
+        leaseRoot: "/tmp/leases",
+        path: "/tmp/leases/lease-1",
+        createdAt: Date.now(),
+        commit,
+        release,
+      });
+      return { manager: { acquireLease } as never, acquireLease, release };
+    }
+
+    const request = (): DelegationRequest => ({
+      type: "code_review",
+      task: "Create Board.cs",
+      parentAgentId: PARENT_AGENT_ID,
+      depth: 0,
+      mode: "sync",
+      toolContext: TEST_TOOL_CONTEXT,
+    });
+
+    it("tells the parent which files were NOT applied and carries the commit in metadata", async () => {
+      const commit = vi.fn().mockResolvedValue({
+        written: ["Assets/Scripts/Tile.cs"],
+        conflicts: ["Assets/Scripts/Board.cs"],
+        removed: ["Assets/Old.asmdef"],
+        failed: ["Assets/Locked.meta"],
+        conflictsQuarantinedUnder: "/test/project/.strada/lease-conflicts/lease-1",
+      });
+      const lease = leaseManagerWith(commit);
+      manager = new DelegationManager(buildManagerOpts({ delegationLog, workspaceLeaseManager: lease.manager }));
+
+      const result = await manager.delegate(request());
+
+      expect(commit).toHaveBeenCalledTimes(1);
+      expect(lease.release).toHaveBeenCalledTimes(1);
+      expect(result.content).toContain("Sub-agent completed the task successfully.");
+      expect(result.content).toContain("NOT applied to the project");
+      expect(result.content).toContain("Assets/Scripts/Board.cs");
+      expect(result.content).toContain(".strada/lease-conflicts/lease-1");
+      expect(result.content).toContain("Assets/Locked.meta");
+      expect(result.content).toContain("Assets/Old.asmdef");
+      expect(result.metadata.commit).toEqual({
+        written: 1,
+        conflicts: ["Assets/Scripts/Board.cs"],
+        failed: ["Assets/Locked.meta"],
+        removed: ["Assets/Old.asmdef"],
+        quarantinedUnder: "/test/project/.strada/lease-conflicts/lease-1",
+      });
+    });
+
+    it("adds nothing to a clean commit beyond the applied count", async () => {
+      const commit = vi.fn().mockResolvedValue({
+        written: ["Assets/Scripts/Board.cs"],
+        conflicts: [],
+        removed: [],
+        failed: [],
+        conflictsQuarantinedUnder: null,
+      });
+      const lease = leaseManagerWith(commit);
+      manager = new DelegationManager(buildManagerOpts({ delegationLog, workspaceLeaseManager: lease.manager }));
+
+      const result = await manager.delegate(request());
+
+      expect(result.content).not.toContain("NOT applied");
+      expect(result.metadata.commit?.written).toBe(1);
+      expect(result.metadata.commit?.conflicts).toEqual([]);
+    });
+
+    it("fails the delegation when the commit itself throws — the work was discarded", async () => {
+      const commit = vi.fn().mockRejectedValue(new Error("EACCES: project root not writable"));
+      const lease = leaseManagerWith(commit);
+      const localOpts = buildManagerOpts({ delegationLog, workspaceLeaseManager: lease.manager });
+      manager = new DelegationManager(localOpts);
+
+      await expect(manager.delegate(request())).rejects.toThrow(/discarded.*EACCES/);
+
+      expect(lease.release).toHaveBeenCalledTimes(1);
+      const [row] = delegationLog.getHistory(1);
+      expect(row!.status).toBe("failed");
+      const emit = vi.mocked(localOpts.eventBus.emit);
+      expect(emit.mock.calls.some(([name]) => name === "delegation:completed")).toBe(false);
+    });
+  });
+
   describe("getActiveDelegations", () => {
     it("returns currently running delegations for a parent", async () => {
       expect(manager.getActiveDelegations(PARENT_AGENT_ID)).toHaveLength(0);
@@ -1081,6 +1281,105 @@ describe("DelegationManager", () => {
     it("cancels all active delegations", async () => {
       await manager.shutdown();
       expect(manager.getActiveDelegations(PARENT_AGENT_ID)).toHaveLength(0);
+    });
+
+    // Measured 2026-09-02: shutdown() aborted each delegation and RETURNED;
+    // the lease commit lives in the aborted run's finally, which was still
+    // running when bootstrap reached process.exit(0). The sub-agent's writes
+    // missed the project and surfaced only as an orphan quarantine on the
+    // next boot. The delegation lease manager was also never disposed.
+    function slowLeaseManager(commitMs: number) {
+      let commitResolved = false;
+      const release = vi.fn().mockResolvedValue(undefined);
+      const commit = vi.fn(
+        () =>
+          new Promise((resolve) => {
+            const t = setTimeout(() => {
+              commitResolved = true;
+              resolve({ written: ["Assets/Scripts/Board.cs"], conflicts: [], removed: [], failed: [], conflictsQuarantinedUnder: null });
+            }, commitMs);
+            if (typeof t === "object" && "unref" in t) (t as NodeJS.Timeout).unref();
+          }),
+      );
+      const acquireLease = vi.fn().mockResolvedValue({
+        id: "lease-1",
+        kind: "temp-copy",
+        sourceRoot: "/test/project",
+        leaseRoot: "/tmp/leases",
+        path: "/tmp/leases/lease-1",
+        createdAt: Date.now(),
+        commit,
+        release,
+      });
+      const dispose = vi.fn().mockResolvedValue(undefined);
+      return {
+        manager: { acquireLease, dispose } as never,
+        commit,
+        release,
+        dispose,
+        get commitResolved() {
+          return commitResolved;
+        },
+      };
+    }
+
+    function hangOrchestrator(): void {
+      orchestratorHandleMessage = vi.fn().mockImplementation(
+        () => new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, 30000);
+          if (typeof timer === "object" && "unref" in timer) (timer as NodeJS.Timeout).unref();
+        }),
+      );
+    }
+
+    it("waits for in-flight lease commits before returning, then disposes the lease manager", async () => {
+      hangOrchestrator();
+      const lease = slowLeaseManager(60);
+      manager = new DelegationManager(buildManagerOpts({ delegationLog, workspaceLeaseManager: lease.manager }));
+
+      const run = manager.delegate({
+        type: "code_review",
+        task: "Write Board.cs",
+        parentAgentId: PARENT_AGENT_ID,
+        depth: 0,
+        mode: "sync",
+        toolContext: TEST_TOOL_CONTEXT,
+      }).catch(() => {});
+      await new Promise<void>((resolve) => setTimeout(resolve, 20));
+      expect(manager.getActiveDelegations(PARENT_AGENT_ID)).toHaveLength(1);
+
+      await manager.shutdown();
+
+      expect(lease.commit).toHaveBeenCalledTimes(1);
+      expect(lease.commitResolved, "shutdown returned while the commit was still running").toBe(true);
+      expect(lease.release).toHaveBeenCalledTimes(1);
+      expect(lease.dispose).toHaveBeenCalledTimes(1);
+      await run;
+    });
+
+    it("bounds the wait and says how many delegations were still committing", async () => {
+      hangOrchestrator();
+      const lease = slowLeaseManager(10_000);
+      manager = new DelegationManager(buildManagerOpts({ delegationLog, workspaceLeaseManager: lease.manager }));
+
+      const run = manager.delegate({
+        type: "code_review",
+        task: "Write Board.cs",
+        parentAgentId: PARENT_AGENT_ID,
+        depth: 0,
+        mode: "sync",
+        toolContext: TEST_TOOL_CONTEXT,
+      }).catch(() => {});
+      await new Promise<void>((resolve) => setTimeout(resolve, 20));
+
+      const started = Date.now();
+      const outcome = await manager.shutdownAndReport(50);
+
+      expect(Date.now() - started).toBeLessThan(2_000);
+      expect(outcome.stillCommitting).toBe(1);
+      expect(lease.commitResolved).toBe(false);
+      expect(lease.dispose).toHaveBeenCalledTimes(1);
+      void run;
     });
   });
 
@@ -1191,6 +1490,42 @@ describe("DelegationManager", () => {
       await expect(manager.delegate(request)).rejects.toThrow(
         "All providers are in cooldown",
       );
+    });
+
+    it("scopes the recovery probe to live chain members, not every tracked entry", async () => {
+      // Audited 2026-09-02: the allDown reduction was scoped to chain members
+      // (879e1e6b) but the recovery probe two lines later still asked the
+      // registry about EVERY tracked entry. A de-configured provider cooling
+      // for 30s made "recovery imminent" true while the only real member was
+      // quota-dead for 8h, so the herd guard waved every delegation through.
+      setLiveChainMemberNames(["deepseek"]);
+      try {
+        for (let i = 0; i < 5; i++) {
+          healthRegistry.recordFailure("deepseek", "HTTP 529 overloaded");
+          healthRegistry.recordFailure("kimi", "HTTP 529 overloaded");
+        }
+        const now = Date.now();
+        Object.assign(healthRegistry.getEntry("deepseek")!, { cooldownUntil: now + 8 * 3_600_000 });
+        Object.assign(healthRegistry.getEntry("kimi")!, { cooldownUntil: now + 30_000 });
+        // What the gate used to ask vs what it means to ask.
+        expect(healthRegistry.suggestRecoveryWaitMs(now)).not.toBeNull();
+        expect(healthRegistry.suggestRecoveryWaitMs(now, ["deepseek"])).toBeNull();
+
+        const request: DelegationRequest = {
+          type: "code_review",
+          task: "Review this code",
+          parentAgentId: PARENT_AGENT_ID,
+          depth: 0,
+          mode: "sync",
+          toolContext: TEST_TOOL_CONTEXT,
+        };
+
+        await expect(manager.delegate(request)).rejects.toThrow(
+          "All providers are in cooldown",
+        );
+      } finally {
+        setLiveChainMemberNames([]);
+      }
     });
 
     it("allows delegation when at least one provider is healthy", async () => {

@@ -74,6 +74,20 @@ export interface DelegationResult {
     readonly toolsUsed: string[];
     readonly escalated: boolean;
     readonly escalatedFrom?: ModelTier;
+    /**
+     * What the workspace commit actually did with the sub-agent's files.
+     * Absent only when the delegation ran without a workspace lease. Until
+     * this existed the commit's verdict (conflicts quarantined, files the walk
+     * could not process, deletions declined) went to one log line while the
+     * caller received the sub-agent's own "I created X" — audited 2026-09-02.
+     */
+    readonly commit?: {
+      readonly written: number;
+      readonly conflicts: string[];
+      readonly failed: string[];
+      readonly removed: string[];
+      readonly quarantinedUnder: string | null;
+    };
   };
 }
 
