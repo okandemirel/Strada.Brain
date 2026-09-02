@@ -1177,7 +1177,9 @@ describe("HeartbeatLoop — the legacy daemon:budget_warning re-arms when usage 
     registry.register(makeTrigger("idle", { shouldFire: false })); // the warning check runs per trigger
     const warnings = () => (eventBus.emit as any).mock.calls.filter((c: unknown[]) => c[0] === "daemon:budget_warning");
     // scheduleNextTick() re-arms with two chained timeouts, so successive ticks are 2×interval apart.
-    const nextTick = () => vi.advanceTimersByTimeAsync(2 * config.heartbeat.intervalMs + 10);
+    // One tick per call. The 2x advance assumed the half-interval cadence
+    // bug fixed in fix/daemon (976c00df); at the real cadence 2x is two ticks.
+    const nextTick = () => vi.advanceTimersByTimeAsync(config.heartbeat.intervalMs + 10);
     try {
       loop.start();
       await vi.advanceTimersByTimeAsync(config.heartbeat.intervalMs + 10); // 0.85 → warning
