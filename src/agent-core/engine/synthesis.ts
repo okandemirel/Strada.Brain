@@ -177,7 +177,9 @@ export function buildResultProjection(
     toolTrace: params.toolTrace.map((t) => ({
       toolName: t.toolName,
       success: t.success,
-      summary: "",
+      // Was a hard-coded "" — which made the worker-path test verdict
+      // structurally impossible (background-executor reads t.summary).
+      summary: t.resultText ?? "",
       timestamp: 0,
     })),
     verificationResults: toWorkerVerificationResults(runCtx.workerCollector?.verifierResult),

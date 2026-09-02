@@ -168,6 +168,18 @@ export function createSupervisorExecuteNodeBridge(params: {
     let lastNarrativeAt = 0;
     const nodeTaskRunId = `${context.taskRunId?.trim() || `supervisor:${context.chatId}`}:${node.id}`;
     const startedAt = Date.now();
+    // The worker's tool evidence, in the shape deriveTestVerdict reads. Every
+    // production NodeResult carried `toolResults: []`, so a supervised sprint
+    // whose Unity node printed "3 of 40 tests failed" produced NO mechanical
+    // verdict and the campaign's red gate never fired (audited 2026-09-02).
+    const toNodeToolResults = (
+      workerResult?: { toolTrace?: readonly { summary: string; success: boolean }[] },
+    ): NodeResult["toolResults"] =>
+      (workerResult?.toolTrace ?? []).map((t, i) => ({
+        toolCallId: `trace-${i}`,
+        content: t.summary,
+        isError: !t.success,
+      }));
     const toNodeArtifacts = (workerResult?: { touchedFiles?: readonly string[] }) =>
       (workerResult?.touchedFiles ?? []).map((path) => ({ path, action: "modify" as const }));
     try {
@@ -254,7 +266,7 @@ export function createSupervisorExecuteNodeBridge(params: {
           output: result.workerResult.reason ?? result.output ?? "Worker blocked",
           blockedReason: result.workerResult.reason ?? result.output ?? "Worker blocked",
           artifacts: toNodeArtifacts(result.workerResult),
-          toolResults: [],
+          toolResults: toNodeToolResults(result.workerResult),
           provider: result.workerResult.provider ?? node.assignedProvider ?? "unknown",
           model: result.workerResult.model ?? node.assignedModel ?? "unknown",
           cost: 0,
@@ -268,7 +280,7 @@ export function createSupervisorExecuteNodeBridge(params: {
           status: "failed" as const,
           output: result.workerResult.reason ?? result.output ?? "Worker failed",
           artifacts: toNodeArtifacts(result.workerResult),
-          toolResults: [],
+          toolResults: toNodeToolResults(result.workerResult),
           provider: result.workerResult.provider ?? node.assignedProvider ?? "unknown",
           model: result.workerResult.model ?? node.assignedModel ?? "unknown",
           cost: 0,
@@ -281,7 +293,7 @@ export function createSupervisorExecuteNodeBridge(params: {
         status: "ok" as const,
         output: result.output ?? "",
         artifacts: toNodeArtifacts(result.workerResult),
-        toolResults: [],
+        toolResults: toNodeToolResults(result.workerResult),
         provider: result.workerResult?.provider ?? node.assignedProvider ?? "unknown",
         model: result.workerResult?.model ?? node.assignedModel ?? "unknown",
         cost: 0,

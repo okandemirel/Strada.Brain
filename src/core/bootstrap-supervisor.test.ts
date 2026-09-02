@@ -2,6 +2,38 @@ import { describe, expect, it, vi } from "vitest";
 import { createSupervisorExecuteNodeBridge, initializeWorkspaceRuntime } from "./bootstrap.js";
 
 describe("createSupervisorExecuteNodeBridge", () => {
+  it("carries the worker's tool evidence into NodeResult.toolResults (red run → red verdict)", async () => {
+    // Audited 2026-09-02: every production NodeResult had `toolResults: []`,
+    // so deriveTestVerdict read empty evidence and a supervised sprint whose
+    // Unity node printed a failing suite produced NO mechanical verdict.
+    const runWorkerEnvelope = vi.fn().mockResolvedValue({
+      output: "sprint complete",
+      workerResult: {
+        status: "completed",
+        toolTrace: [
+          { toolName: "unity_playmode_verify", success: true, summary: "PlayMode verification FAILED — 3 of 40 tests failed", timestamp: 0 },
+        ],
+      },
+    });
+    const bridge = createSupervisorExecuteNodeBridge({
+      backgroundExecutor: { runWorkerEnvelope } as any,
+      orchestrator: {} as any,
+      workspaceBus: { emit: vi.fn() } as any,
+      defaultChannelType: "cli",
+    });
+
+    const result = await bridge(
+      { id: "node-1", task: "Run the suite", assignedProvider: "claude", assignedModel: "sonnet" } as any,
+      { chatId: "chat-1", taskRunId: "taskrun_parent" } as any,
+      new AbortController().signal,
+    );
+
+    expect(result.toolResults).toHaveLength(1);
+    expect(result.toolResults[0]!.content).toContain("3 of 40 tests failed");
+    const { deriveTestVerdict } = await import("../tasks/test-verdict.js");
+    expect(deriveTestVerdict(result.toolResults.map((tr) => ({ content: String(tr.content), isError: tr.isError }))).testsGreen).toBe(false);
+  });
+
   it("derives child workspace context and remaps blocked workers", async () => {
     const runWorkerEnvelope = vi.fn().mockResolvedValue({
       output: "Need user input",

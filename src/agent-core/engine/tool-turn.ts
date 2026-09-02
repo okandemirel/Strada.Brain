@@ -365,6 +365,11 @@ export async function portExecuteToolTurn(
         success: !(tr?.isError ?? false),
         errorCategory: tr?.isError ? "tool-error" : undefined,
         touchedFiles: touched,
+        // The tool's own words. Without this the projection stamped
+        // summary:"" on every trace entry and deriveTestVerdict — the
+        // mechanical red/green gate — read empty evidence on EVERY run
+        // (audited 2026-09-02: tasks.verification_json was never written).
+        resultText: typeof tr?.content === "string" ? tr.content.slice(0, 4000) : "",
       };
     });
 

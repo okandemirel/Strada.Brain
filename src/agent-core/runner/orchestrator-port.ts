@@ -306,7 +306,7 @@ export interface SynthesizedFinal {
 export interface ResultProjectionParams {
   readonly state: AgentState;
   readonly final: SynthesizedFinal;
-  readonly toolTrace: readonly { toolName: string; toolCallId: string; success: boolean }[];
+  readonly toolTrace: readonly { toolName: string; toolCallId: string; success: boolean; resultText?: string }[];
   readonly touchedFiles: readonly string[];
   readonly status: TerminalStatus;
   readonly reason?: string;

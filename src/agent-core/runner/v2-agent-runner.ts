@@ -307,7 +307,7 @@ export class V2AgentRunner implements AgentRunner {
       await this.intentAck(bus, clock, port, request);
 
       // Accumulators that replace __workerCollector (built BY VALUE at terminal).
-      const toolTrace: { toolName: string; toolCallId: string; success: boolean }[] = [];
+      const toolTrace: { toolName: string; toolCallId: string; success: boolean; resultText?: string }[] = [];
       const touchedFiles = new Set<string>();
       let lastProvider = "unknown";
       let usageTotal: WorkerUsageEvent | undefined;
@@ -619,7 +619,7 @@ export class V2AgentRunner implements AgentRunner {
               }
               const planned = await this.executeTools(setup, outcome.response, state);
               for (const tr of planned.trace) {
-                toolTrace.push({ toolName: tr.toolName, toolCallId: tr.toolCallId, success: tr.success });
+                toolTrace.push({ toolName: tr.toolName, toolCallId: tr.toolCallId, success: tr.success, resultText: tr.resultText });
                 for (const f of tr.touchedFiles ?? []) touchedFiles.add(f);
                 emit({
                   type: "tool.finished",
@@ -725,7 +725,7 @@ export class V2AgentRunner implements AgentRunner {
             }
             const { trace, advancedState, progressSignal } = await this.executeTools(setup, outcome.response, state);
             for (const tr of trace) {
-              toolTrace.push({ toolName: tr.toolName, toolCallId: tr.toolCallId, success: tr.success });
+              toolTrace.push({ toolName: tr.toolName, toolCallId: tr.toolCallId, success: tr.success, resultText: tr.resultText });
               for (const f of tr.touchedFiles ?? []) touchedFiles.add(f);
               // The learning-bridge sink mirrors tool.finished → "tool:result" (wired on the bus).
               emit({
@@ -1131,6 +1131,8 @@ export class V2AgentRunner implements AgentRunner {
       success: boolean;
       errorCategory?: string;
       touchedFiles?: readonly string[];
+      /** The tool's result text (truncated) — the evidence the test verdict reads. */
+      resultText?: string;
     }[];
     advancedState?: AgentState;
     /** v1 parity: the port's localized per-tool-batch progress signal (emitted as `narrative`). */
