@@ -129,11 +129,60 @@ function pptxToText(buffer: Buffer): ExtractedText {
   return slides.length > 0 ? slides.join("\n\n") : null;
 }
 
-/** Excel: cell text lives in one shared-strings table. */
+/** One cell's text: shared-string index, inline string, boolean, or the literal value. */
+function xlsxCellText(attrs: string, inner: string, shared: readonly string[]): string {
+  const type = /\bt="([^"]+)"/u.exec(attrs)?.[1];
+  const value = /<v>([\s\S]*?)<\/v>/u.exec(inner)?.[1] ?? "";
+  if (type === "s") return shared[Number(value)] ?? "";
+  if (type === "inlineStr") return xmlToText(/<is>([\s\S]*?)<\/is>/u.exec(inner)?.[1] ?? "", []);
+  if (type === "b") return value === "1" ? "TRUE" : "FALSE";
+  // n (the default), str, e, d: the literal is the value.
+  return xmlToText(value, []);
+}
+
+/**
+ * Excel: every worksheet's cell grid, rows as lines and cells tab-separated.
+ *
+ * Audited 2026-09-02: this read only `xl/sharedStrings.xml`, which holds the
+ * deduplicated STRING cells and nothing else. A tuning sheet decoded to its
+ * header words with every number gone and no row association, and a
+ * numbers-only workbook (Excel writes no shared-strings part then) returned
+ * null — "not a text document this tool can read". Numbers live inline in the
+ * worksheet parts as `<v>`; strings are `t="s"` pointers into the table.
+ */
 function xlsxToText(buffer: Buffer): ExtractedText {
-  const shared = readZipEntry(buffer, "xl/sharedStrings.xml");
-  if (!shared) return null;
-  return xmlToText(shared.toString("utf8"), ["si"]) || null;
+  const sharedXml = readPart(buffer, "xl/sharedStrings.xml");
+  const shared: string[] = sharedXml
+    ? [...sharedXml.matchAll(/<si\b[^>]*>([\s\S]*?)<\/si>/gu)].map((m) => xmlToText(m[1] ?? "", []))
+    : [];
+
+  const sheets = partsInDocumentOrder(buffer, {
+    listPart: "xl/workbook.xml",
+    relsPart: "xl/_rels/workbook.xml.rels",
+    itemTag: "sheet",
+    relationshipType: "/worksheet",
+    partPattern: /^xl\/worksheets\/sheet\d+\.xml$/u,
+    base: "xl/",
+  });
+
+  const out: string[] = [];
+  sheets.forEach(({ part, name }, index) => {
+    const xml = readPart(buffer, part);
+    if (!xml) return;
+    const rows: string[] = [];
+    for (const row of xml.matchAll(/<row\b[^>]*>([\s\S]*?)<\/row>/gu)) {
+      const cells: string[] = [];
+      for (const cell of (row[1] ?? "").matchAll(/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/gu)) {
+        cells.push(xlsxCellText(cell[1] ?? "", cell[2] ?? "", shared));
+      }
+      const line = cells.join("\t").replace(/\t+$/u, "");
+      if (line.trim()) rows.push(line);
+    }
+    if (rows.length > 0) {
+      out.push(`--- Sheet ${index + 1}${name ? `: ${name}` : ""} ---\n${rows.join("\n")}`);
+    }
+  });
+  return out.length > 0 ? out.join("\n\n") : null;
 }
 
 /** OpenDocument: one content.xml, same idea as Word. */

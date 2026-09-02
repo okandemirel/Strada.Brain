@@ -190,3 +190,60 @@ describe("reading a PowerPoint deck", () => {
     expect(text).not.toContain("Orphaned leftover");
   });
 });
+
+const cell = (ref: string, v: string | number, t?: string): string =>
+  `<c r="${ref}"${t ? ` t="${t}"` : ""}><v>${v}</v></c>`;
+
+/**
+ * Audited 2026-09-02: the reader returned only the shared-string table, so a
+ * tuning sheet came back as its header words with every number gone, and a
+ * numbers-only workbook (no shared-strings part at all) came back as null.
+ */
+describe("reading an Excel workbook", () => {
+  it("keeps the numbers and the row they belong to", () => {
+    const book = zipWithEntries({
+      "xl/workbook.xml":
+        '<workbook><sheets><sheet name="Tuning" sheetId="1" r:id="rId1"/></sheets></workbook>',
+      "xl/_rels/workbook.xml.rels":
+        '<Relationships><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>',
+      "xl/sharedStrings.xml":
+        "<sst><si><t>Ability</t></si><si><t>Damage</t></si><si><t>Cooldown</t></si><si><t>Fireball</t></si><si><t>Frostbolt</t></si></sst>",
+      "xl/worksheets/sheet1.xml":
+        "<worksheet><sheetData>" +
+        `<row r="1">${cell("A1", 0, "s")}${cell("B1", 1, "s")}${cell("C1", 2, "s")}</row>` +
+        `<row r="2">${cell("A2", 3, "s")}${cell("B2", 42)}${cell("C2", 2.5)}</row>` +
+        `<row r="3">${cell("A3", 4, "s")}${cell("B3", 28)}${cell("C3", 2)}</row>` +
+        "</sheetData></worksheet>",
+    });
+
+    const text = extractDocumentText("tuning.xlsx", book) ?? "";
+
+    expect(text).toContain("--- Sheet 1: Tuning ---");
+    expect(text).toContain("Ability\tDamage\tCooldown");
+    expect(text).toContain("Fireball\t42\t2.5");
+    expect(text).toContain("Frostbolt\t28\t2");
+  });
+
+  it("reads a workbook that has no string cells at all", () => {
+    // Excel writes no xl/sharedStrings.xml when every cell is numeric.
+    const book = zipWithEntries({
+      "xl/worksheets/sheet1.xml":
+        `<worksheet><sheetData><row r="1">${cell("A1", 7)}${cell("B1", 9)}</row></sheetData></worksheet>`,
+    });
+
+    const text = extractDocumentText("numbers.xlsx", book);
+
+    expect(text).not.toBeNull();
+    expect(text).toContain("7\t9");
+  });
+
+  it("reads inline strings, which streaming writers emit instead of the shared table", () => {
+    const book = zipWithEntries({
+      "xl/worksheets/sheet1.xml":
+        '<worksheet><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Heal</t></is></c>' +
+        `${cell("B1", 12.75)}</row></sheetData></worksheet>`,
+    });
+
+    expect(extractDocumentText("inline.xlsx", book)).toContain("Heal\t12.75");
+  });
+});
