@@ -33,21 +33,34 @@ export interface SceneWiringReport {
 
 /** Injected so the checks can be tested without a Unity project on disk. */
 export interface SceneWiringIo {
-  listFiles(dir: string): string[];
+  /**
+   * Files under `dir`. With `match`, only matching files are listed and — for
+   * the on-disk walk — the budget counts matches rather than every file seen
+   * (audited 2026-09-02: slicing an unfiltered listing let an imported asset
+   * pack push the project's own .prefab/.cs/.unity files past the cap, and the
+   * gates that read them silently evaluated to "no gate").
+   */
+  listFiles(dir: string, match?: (file: string) => boolean): string[];
   readFile(path: string): string;
   exists(path: string): boolean;
 }
 
 const defaultIo: SceneWiringIo = {
-  listFiles: (dir) => walk(dir),
+  listFiles: (dir, match) => walk(dir, match),
   readFile: (p) => readFileSync(p, "utf-8"),
   exists: (p) => existsSync(p),
 };
 
-function walk(dir: string): string[] {
+/**
+ * Bounded walk. The budget counts files that pass `match`, so an imported
+ * pack of textures cannot exhaust it before the files a rule actually reads;
+ * traversal itself stays hard-capped so a stray Library/ cannot hang a check.
+ */
+function walk(dir: string, match?: (file: string) => boolean, budget = 12_000): string[] {
   const out: string[] = [];
   const stack = [dir];
-  while (stack.length > 0) {
+  let visited = 0;
+  while (stack.length > 0 && out.length < budget && visited < 60_000) {
     const current = stack.pop()!;
     let entries: string[];
     try {
@@ -56,6 +69,7 @@ function walk(dir: string): string[] {
       continue;
     }
     for (const entry of entries) {
+      visited++;
       const full = join(current, entry);
       let isDir = false;
       try {
@@ -64,11 +78,18 @@ function walk(dir: string): string[] {
         continue;
       }
       if (isDir) stack.push(full);
-      else out.push(full);
+      else if (!match || match(full)) out.push(full);
     }
   }
   return out;
 }
+
+/** What each rule reads, so the walk budget is spent on exactly that. */
+const WIRING_FILE_RE = /\.(?:unity|asset)$/iu;
+const isWiringFile = (f: string): boolean => WIRING_FILE_RE.test(f) || f.endsWith("ModuleConfig.cs");
+const RENDER_FILE_RE = /\.(?:prefab|cs|unity)$/iu;
+const isRenderFile = (f: string): boolean => RENDER_FILE_RE.test(f);
+const isSourceFile = (f: string): boolean => f.endsWith(".cs");
 
 /**
  * A serialized object reference that is actually null.
@@ -165,7 +186,7 @@ export function assessSceneWiring(
     };
   }
 
-  const files = io.listFiles(assetsRoot);
+  const files = io.listFiles(assetsRoot, isWiringFile);
   const scenes = files.filter((f) => f.endsWith(".unity"));
   const configClasses = files.filter((f) => f.endsWith("ModuleConfig.cs"));
   const configAssets = files.filter((f) => f.endsWith("ModuleConfig.asset"));
@@ -279,7 +300,13 @@ export function assessViewLayer(
   const assets = join(projectPath, "Assets");
   if (!io.exists(assets)) return null;
 
-  const files = io.listFiles(assets).slice(0, 4000);
+  // Filtered inside the walk, not sliced after it (audited 2026-09-02): the
+  // old `.slice(0, 4000)` of an unfiltered listing kept whatever subtree the
+  // LIFO walk reached first — an imported pack — so no .prefab survived, this
+  // returned null, and NO CAMERA / NOTHING RENDERS were skipped without any
+  // record that they had been skipped rather than satisfied. The post-filter
+  // stays for an injected io that ignores `match`.
+  const files = io.listFiles(assets, isRenderFile).filter(isRenderFile);
   const prefabs = files.filter((f) => f.endsWith(".prefab"));
   const scripts = files.filter((f) => f.endsWith(".cs") && !/[/\\]Tests?[/\\]/u.test(f));
   if (prefabs.length === 0 || scripts.length === 0) return null;
@@ -383,9 +410,10 @@ export function assessFrameworkBypass(
   const assets = join(projectPath, "Assets");
   if (!io.exists(assets)) return [];
 
+  // Same shape as assessViewLayer: budget the .cs files, do not slice a full
+  // listing (audited 2026-09-02).
   const scripts = io
-    .listFiles(assets)
-    .slice(0, 4000)
+    .listFiles(assets, isSourceFile)
     .filter((f) => f.endsWith(".cs") && !/[/\\]Tests?[/\\]/u.test(f));
   if (scripts.length === 0) return [];
 
