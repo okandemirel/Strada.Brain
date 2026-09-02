@@ -8,6 +8,12 @@ import type { SkillRequirements } from "./types.js";
 export interface GateResult {
   passed: boolean;
   reasons: string[];
+  /**
+   * Gates that could not be measured because the caller supplied no evidence
+   * to check against (e.g. `requires.config` with no config object). These are
+   * neither failures nor passes — callers must show them, never hide them.
+   */
+  unevaluated?: string[];
 }
 
 /**
@@ -29,6 +35,7 @@ export async function checkGates(
   }
 
   const reasons: string[] = [];
+  const unevaluated: string[] = [];
 
   // --- binary checks (async) ---
   if (requires.bins && requires.bins.length > 0) {
@@ -56,10 +63,21 @@ export async function checkGates(
   }
 
   // --- config checks (dot-path traversal) ---
-  if (requires.config) {
-    for (const dotPath of requires.config) {
-      if (!resolveDotPath(config, dotPath)) {
-        reasons.push(`Required config key missing: ${dotPath}`);
+  // audited 2026-09-02: with `config` undefined this used to push "Required
+  // config key missing: <path>" for every declared key — a verdict about a
+  // lookup that never ran, permanently gating the skill. An absent config
+  // object is unevaluable, so it is reported as such (same rule the skills
+  // gate below already applies), never as a measured failure.
+  if (requires.config?.length) {
+    if (config === undefined) {
+      unevaluated.push(
+        `Config gate not evaluated (no config object supplied): ${requires.config.join(", ")}`,
+      );
+    } else {
+      for (const dotPath of requires.config) {
+        if (!resolveDotPath(config, dotPath)) {
+          reasons.push(`Required config key missing: ${dotPath}`);
+        }
       }
     }
   }
@@ -77,7 +95,11 @@ export async function checkGates(
     }
   }
 
-  return { passed: reasons.length === 0, reasons };
+  return {
+    passed: reasons.length === 0,
+    reasons,
+    ...(unevaluated.length > 0 ? { unevaluated } : {}),
+  };
 }
 
 /**
