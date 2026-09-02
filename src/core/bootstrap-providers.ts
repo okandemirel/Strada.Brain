@@ -31,6 +31,7 @@ import {
   preflightResponseProviders,
 } from "./response-provider-preflight.js";
 import { AppError } from "../common/errors.js";
+import { markProviderFlatFee } from "../budget/cost-model.js";
 import { setLiveChainMemberNames } from "../tasks/background-executor.js";
 import type { EmbeddingResolutionResult, ProviderInitResult } from "./bootstrap-stages.js";
 import type { IAIProvider } from "../agents/providers/provider.interface.js";
@@ -58,6 +59,33 @@ function detectAvailableProviderNames(
     names.unshift("openai");
   }
   return names;
+}
+
+/**
+ * Zero the metered cost rate of every provider whose auth is a FLAT-FEE
+ * subscription, returning the names marked.
+ *
+ * Billing a ChatGPT subscription at API-key rates fabricated spend that the
+ * budget walls then enforced (the daemon went quiet daily on $10 of imaginary
+ * money). That fix zeroed `openai` only: a Claude subscription — an equally
+ * first-class mode — kept billing {3.0, 15.0}, the table's highest row, so the
+ * same phantom-spend bug stood for the other provider. Audited 2026-09-02.
+ */
+export function applyFlatFeeRates(config: Config, logger: winston.Logger): string[] {
+  const marked: string[] = [];
+  if (config.openaiAuthMode === "chatgpt-subscription") {
+    markProviderFlatFee("openai");
+    marked.push("openai");
+  }
+  if (hasConfiguredAnthropicSubscription(config)) {
+    // ClaudeProvider.name is "claude" in both auth modes; cost keys on it.
+    markProviderFlatFee("claude");
+    marked.push("claude");
+  }
+  for (const name of marked) {
+    logger.info(`${name} metered cost rate zeroed: subscription auth is flat-fee`);
+  }
+  return marked;
 }
 
 export async function initializeAIProvider(

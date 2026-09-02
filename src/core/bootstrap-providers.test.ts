@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { Config } from "../config/config.js";
 import type * as winston from "winston";
 
@@ -94,7 +94,9 @@ import {
   isTransientEmbeddingVerificationError,
   describeEmbeddingConsumers,
   resolveAndCacheEmbeddings,
+  applyFlatFeeRates,
 } from "./bootstrap-providers.js";
+import { PROVIDER_COSTS, estimateCost } from "../budget/cost-model.js";
 import { AppError } from "../common/errors.js";
 import {
   isCurrentChainMemberName,
@@ -429,6 +431,52 @@ describe("bootstrap-providers", () => {
 
       expect(isCurrentChainMemberName("claude")).toBe(true);
       expect(isCurrentChainMemberName("kimi")).toBe(false);
+    });
+  });
+
+  // ========================================================================
+  // applyFlatFeeRates — subscription auth pays no per-token dollars
+  // ========================================================================
+
+  describe("applyFlatFeeRates (audited 2026-09-02)", () => {
+    const savedClaude = { ...PROVIDER_COSTS["claude"]! };
+    const savedOpenai = { ...PROVIDER_COSTS["openai"]! };
+    afterEach(() => {
+      PROVIDER_COSTS["claude"] = { ...savedClaude };
+      PROVIDER_COSTS["openai"] = { ...savedOpenai };
+    });
+
+    it("zeroes the claude rate for a Claude subscription — not only the openai one", () => {
+      // The chatgpt-subscription fix zeroed `openai` only. A claude-subscription
+      // turn kept billing {3.0, 15.0} — the table's highest row — so a night
+      // of subscription work fabricated a $10 wall and silenced the daemon:
+      // the same phantom-spend bug, for the other provider.
+      mockHasConfiguredAnthropicSubscription.mockReturnValue(true);
+      const config = makeConfig({ anthropicAuthMode: "claude-subscription", anthropicAuthToken: "tok" } as Partial<Config>);
+
+      const marked = applyFlatFeeRates(config, logger);
+
+      expect(marked).toContain("claude");
+      expect(estimateCost(40_000, 2_000, "claude")).toBe(0);
+      // Not the metered provider: openai keeps its rate under API-key auth.
+      expect(estimateCost(1_000, 0, "openai")).toBeGreaterThan(0);
+    });
+
+    it("keeps the metered claude rate under API-key auth", () => {
+      mockHasConfiguredAnthropicSubscription.mockReturnValue(false);
+      const config = makeConfig({ anthropicApiKey: "sk-ant" });
+
+      const marked = applyFlatFeeRates(config, logger);
+
+      expect(marked).not.toContain("claude");
+      expect(estimateCost(1_000_000, 0, "claude")).toBe(3.0);
+    });
+
+    it("still zeroes openai for a ChatGPT subscription", () => {
+      const config = makeConfig({ openaiAuthMode: "chatgpt-subscription" } as Partial<Config>);
+
+      expect(applyFlatFeeRates(config, logger)).toContain("openai");
+      expect(estimateCost(1_000_000, 0, "openai")).toBe(0);
     });
   });
 

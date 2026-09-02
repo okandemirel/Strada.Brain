@@ -124,6 +124,7 @@ import {
   initializeAIProvider as _initializeAIProvider,
   resolveAndCacheEmbeddings as _resolveAndCacheEmbeddings,
   isTransientEmbeddingVerificationError as _isTransientEmbeddingVerificationError,
+  applyFlatFeeRates,
 } from "./bootstrap-providers.js";
 import {
   initializeMemory as _initializeMemory,
@@ -1561,14 +1562,11 @@ async function bootstrapImpl(
   // success; close it only on the failure path so a mid-bootstrap throw can't leak
   // the daemon.db SQLite fd.
   disposables.push("daemonStorage", () => sharedDaemonStorage.close());
-  // Flat-fee auth pays no per-token dollars: billing a ChatGPT subscription at
-  // API-key rates fabricated spend that budget walls then enforced (the daemon
-  // went quiet daily on $10 of imaginary money). Zero the metered rate.
-  if (config.openaiAuthMode === "chatgpt-subscription") {
-    const { markProviderFlatFee } = await import("../budget/cost-model.js");
-    markProviderFlatFee("openai");
-    logger.info("OpenAI metered cost rate zeroed: chatgpt-subscription auth is flat-fee");
-  }
+  // Flat-fee auth pays no per-token dollars: billing a subscription at API-key
+  // rates fabricated spend that budget walls then enforced (the daemon went
+  // quiet daily on $10 of imaginary money). This zeroed `openai` only; a Claude
+  // subscription was still billed at the metered rate (audited 2026-09-02).
+  applyFlatFeeRates(config, logger);
   const sharedUnifiedBudgetManager = new UnifiedBudgetManager(
     sharedDaemonStorage,
     daemonEventBus ?? { emit: () => {} },
