@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { AgentPhase, type AgentState } from "../agent-state.js";
 import {
+  isTerminalFailureReport,
   planVerifierPipeline,
 } from "./verifier-pipeline.js";
 
@@ -430,5 +431,57 @@ DONE`,
     expect(plan.gate).toContain("Power-ups");
     expect(plan.gate).toContain("PlayMode test");
     expect(plan.gate).not.toContain("Lose condition");
+  });
+
+  /**
+   * Audited 2026-09-02: the failure vocabulary included "missing", "requires",
+   * "not found", "error" and "failure" — words an ordinary completion report
+   * uses about things it FIXED — while "implemented" was not a success word.
+   * "Done. Implemented … The pig prefab was missing, so I generated one." was
+   * therefore approved as an honest terminal failure report (skipping the
+   * deliverables review and, with build tools unavailable, downgrading the
+   * build gate), and campaign-manager recorded the same sprint as failed.
+   */
+  describe("isTerminalFailureReport reads the run's own outcome, not its vocabulary", () => {
+    it.each([
+      "Done. Implemented ScoreService, BoardView and the level loader. The pig prefab was missing, so I generated one.",
+      "All three systems are implemented and the PlayMode tests pass. I removed a stale reference that caused a compile error.",
+      "Wired the HUD. Nothing is missing now.",
+      "The build requires Unity 2022.3, which the project uses. Shipped the level loader.",
+    ])("does not read a completion draft as a failure report: %s", (draft) => {
+      expect(isTerminalFailureReport(draft)).toBe(false);
+    });
+
+    it.each([
+      "The asset is missing and the task is blocked until the user restores it.",
+      "Unable to run PlayMode: the Unity bridge is down and cannot be restored from here.",
+      "The headless compile timed out three times; manual intervention is needed.",
+    ])("still recognises an honest blocker: %s", (draft) => {
+      expect(isTerminalFailureReport(draft)).toBe(true);
+    });
+
+    it("does not approve a completion draft as an honest failure report", () => {
+      const plan = planVerifierPipeline({
+        prompt: "Implement ScoreService, BoardView, the level loader and PowerUps",
+        draft: "Done. Implemented ScoreService, BoardView and the level loader. The pig prefab was missing, so I generated one.",
+        state: createState(),
+        task: IMPLEMENTATION_TASK,
+        verificationState: {
+          pendingFiles: new Set(),
+          touchedFiles: new Set(["Assets/Scripts/ScoreService.cs"]),
+          hasCompilableChanges: false,
+          lastBuildOk: true,
+          lastVerificationAt: Date.now() - 500,
+        },
+        buildVerificationGate: null,
+        conformanceGate: null,
+        logEntries: [],
+        chatId: "chat-vocab",
+        taskStartedAtMs: Date.now() - 1000,
+      });
+
+      expect(plan.evidence.hasTerminalFailureReport).toBe(false);
+      expect(plan.summary).not.toContain("honest terminal failure report");
+    });
   });
 });

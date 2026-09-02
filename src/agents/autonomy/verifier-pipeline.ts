@@ -297,10 +297,15 @@ export function isTerminalFailureReport(text: string | null | undefined): boolea
   }
 
   const normalized = text.toLowerCase();
+  // Only phrases that describe the RUN'S OWN outcome. Audited 2026-09-02: this
+  // list also held "missing", "requires", "not found", "error" and "failure" —
+  // words an ordinary completion report uses about the things it fixed — so
+  // "Done. Implemented … The pig prefab was missing, so I generated one." was
+  // approved as an honest terminal failure report (skipping the deliverables
+  // review and downgrading the build gate) AND recorded by the campaign as a
+  // failed sprint. One vocabulary miss moved a delivery both wrong ways at once.
   const failurePatterns = [
     /\bfailed\b/,
-    /\bfailure\b/,
-    /\berror\b/,
     /\btimed out\b/,
     /\btimeout\b/,
     /\bmanual\b/,
@@ -310,12 +315,11 @@ export function isTerminalFailureReport(text: string | null | undefined): boolea
     /\bcan'?t\b/,
     /\bcould not\b/,
     /\bcouldn'?t\b/,
-    /\brequires?\b/,
     /\bblocked\b/,
     /\bcorrupted\b/,
-    /\bnot found\b/,
-    /\bmissing\b/,
   ];
+  // "done" is deliberately absent: it is the protocol's completion token and
+  // an honest blocker may end with it.
   const successPatterns = [
     /\bfixed\b/,
     /\bresolved\b/,
@@ -323,6 +327,9 @@ export function isTerminalFailureReport(text: string | null | undefined): boolea
     /\bsucceeded\b/,
     /\bcompleted\b/,
     /\bcomplete\b/,
+    /\bimplemented\b/,
+    /\bdelivered\b/,
+    /\bshipped\b/,
     /\bverified clean\b/,
     /\ball set\b/,
   ];
