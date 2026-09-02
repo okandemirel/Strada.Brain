@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
-import { mkdtempSync, rmSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { Writable } from "node:stream";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
@@ -769,6 +770,101 @@ describe("WebChannel inbound message limits", () => {
 });
 
 describe("WebChannel HTTP surface", () => {
+  /**
+   * A response that is a REAL Writable (the static branch pipes a file stream
+   * into it), recording status, headers and body so the wire result — not just
+   * the buffered writeHead — can be asserted.
+   */
+  function createStreamResponse() {
+    const chunks: Buffer[] = [];
+    const res = new Writable({
+      write(chunk, _enc, cb) {
+        chunks.push(Buffer.from(chunk));
+        cb();
+      },
+    }) as Writable & {
+      statusCode: number;
+      headers: Record<string, string>;
+      writeHead: (code: number, headers: Record<string, string>) => unknown;
+      body: () => string;
+    };
+    res.statusCode = 0;
+    res.headers = {};
+    res.writeHead = (code, headers) => {
+      res.statusCode = code;
+      res.headers = headers;
+      return res;
+    };
+    res.body = () => Buffer.concat(chunks).toString("utf8");
+    return res;
+  }
+
+  async function serve(channel: WebChannel, url: string) {
+    const req = createMockRequest({ method: "GET", url });
+    const res = createStreamResponse();
+    await (channel as unknown as {
+      handleHttp: (req: unknown, res: unknown) => Promise<void>;
+    }).handleHttp(req, res);
+    return res;
+  }
+
+  it("falls back to index.html for a client-side route that has no file on disk (audited 2026-09-02)", async () => {
+    // The portal is a BrowserRouter SPA: a refresh on /admin/dashboard must get
+    // index.html, not a committed 200 whose body stream then fails on ENOENT.
+    const staticDir = mkdtempSync(join(tmpdir(), "strada-web-static-"));
+    try {
+      writeFileSync(join(staticDir, "index.html"), "<!doctype html><title>portal</title>");
+      const channel = new WebChannel();
+      (channel as unknown as { staticDir: string }).staticDir = staticDir;
+
+      const res = await serve(channel, "/admin/dashboard");
+
+      expect(res.statusCode).toBe(200);
+      expect(res.headers["Content-Type"]).toBe("text/html; charset=utf-8");
+      expect(res.body()).toBe("<!doctype html><title>portal</title>");
+      // The stream ran to completion (autoDestroy then flags it destroyed — that is
+      // normal Writable teardown, not the mid-body abort the bug produced).
+      expect(res.writableEnded).toBe(true);
+      expect(res.writableFinished).toBe(true);
+    } finally {
+      rmSync(staticDir, { recursive: true, force: true });
+    }
+  });
+
+  it("still serves a real static asset with its MIME type (audited 2026-09-02)", async () => {
+    const staticDir = mkdtempSync(join(tmpdir(), "strada-web-static-"));
+    try {
+      writeFileSync(join(staticDir, "index.html"), "<!doctype html>");
+      mkdirSync(join(staticDir, "assets"));
+      writeFileSync(join(staticDir, "assets", "app.js"), "console.log(1)");
+      const channel = new WebChannel();
+      (channel as unknown as { staticDir: string }).staticDir = staticDir;
+
+      const res = await serve(channel, "/assets/app.js?v=1");
+
+      expect(res.statusCode).toBe(200);
+      expect(res.headers["Content-Type"]).toBe("application/javascript; charset=utf-8");
+      expect(res.body()).toBe("console.log(1)");
+    } finally {
+      rmSync(staticDir, { recursive: true, force: true });
+    }
+  });
+
+  it("answers 404 when the portal build (index.html) is missing instead of tearing the socket (audited 2026-09-02)", async () => {
+    const staticDir = mkdtempSync(join(tmpdir(), "strada-web-static-"));
+    try {
+      const channel = new WebChannel();
+      (channel as unknown as { staticDir: string }).staticDir = staticDir;
+
+      const res = await serve(channel, "/setup");
+
+      expect(res.statusCode).toBe(404);
+      expect(res.body()).toBe("Not Found");
+    } finally {
+      rmSync(staticDir, { recursive: true, force: true });
+    }
+  });
+
   it("serves /health without requiring the static app or dashboard proxy", async () => {
     const channel = new WebChannel();
     const req = createMockRequest({ method: "GET", url: "/health" });

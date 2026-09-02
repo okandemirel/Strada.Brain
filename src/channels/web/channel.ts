@@ -12,6 +12,7 @@ import {
   type ServerResponse,
 } from "node:http";
 import { createReadStream } from "node:fs";
+import { stat } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { join, extname, resolve, sep } from "node:path";
 import { randomBytes, timingSafeEqual, randomUUID } from "node:crypto";
@@ -885,26 +886,44 @@ export class WebChannel
         res.end("Forbidden");
         return;
       }
-      try {
-        const stream = createReadStream(candidate);
+      // createReadStream does NOT throw synchronously on ENOENT — it emits
+      // `error` later — so the previous try/catch around it never caught a
+      // missing file: the 200 was already committed, pipeline tore the socket,
+      // and every deep link / refresh on a BrowserRouter route (/setup,
+      // /admin/*) died with ERR_EMPTY_RESPONSE while the SPA fallback below
+      // was unreachable. Probe with stat() BEFORE committing a status so a
+      // missing (or non-file) path falls through as intended (audited 2026-09-02).
+      if (await this.isServableFile(candidate)) {
         const ext = extname(candidate);
         const contentType = MIME_TYPES[ext] ?? "application/octet-stream";
         res.writeHead(200, { ...WebChannel.SECURITY_HEADERS, "Content-Type": contentType });
-        await pipeline(stream, res).catch(() => undefined);
+        await pipeline(createReadStream(candidate), res).catch(() => undefined);
         return;
-      } catch {
-        // File not found — fall through to SPA fallback
       }
+      // Not a file on disk — fall through to SPA fallback
     }
 
     // SPA fallback: serve index.html for all non-file routes (client-side routing)
-    try {
-      const stream = createReadStream(join(this.staticDir, "index.html"));
+    const indexPath = join(this.staticDir, "index.html");
+    if (await this.isServableFile(indexPath)) {
       res.writeHead(200, { ...WebChannel.SECURITY_HEADERS, "Content-Type": "text/html; charset=utf-8" });
-      await pipeline(stream, res).catch(() => undefined);
+      await pipeline(createReadStream(indexPath), res).catch(() => undefined);
+      return;
+    }
+    getLoggerSafe().warn("Web channel: portal index.html missing — cannot serve SPA route", {
+      url: rawSegment,
+      staticDir: this.staticDir,
+    });
+    res.writeHead(404, WebChannel.SECURITY_HEADERS);
+    res.end("Not Found");
+  }
+
+  /** True when `path` exists and is a regular file (the only thing the static branch may stream). */
+  private async isServableFile(path: string): Promise<boolean> {
+    try {
+      return (await stat(path)).isFile();
     } catch {
-      res.writeHead(404, WebChannel.SECURITY_HEADERS);
-      res.end("Not Found");
+      return false;
     }
   }
 
