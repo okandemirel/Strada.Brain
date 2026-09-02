@@ -320,18 +320,27 @@ describe("FallbackChainProvider", () => {
     expect(p1.chat).not.toHaveBeenCalled(); // Kimi was skipped
   });
 
-  it("does not extend an existing quota cooldown on repeated failures", async () => {
+  it("does not stack an existing quota cooldown on repeated failures", async () => {
     const health = ProviderHealthRegistry.getInstance();
+    // Frozen clock: the cooldown is "now + 8h", so at one instant a repeated
+    // quota record must land on the SAME expiry — never 8h on top of 8h.
+    // (audited 2026-09-02: a shorter ACTIVE cooldown is replaced, not kept.)
+    const now = Date.now();
+    const spy = vi.spyOn(Date, "now").mockReturnValue(now);
+    try {
+      // Simulate first quota exhaustion
+      health.recordQuotaExhausted("kimi", "403 quota exceeded");
+      const firstCooldown = health.getEntry("kimi")!.cooldownUntil;
+      expect(firstCooldown).toBe(now + 8 * 60 * 60 * 1000);
 
-    // Simulate first quota exhaustion
-    health.recordQuotaExhausted("kimi", "403 quota exceeded");
-    const firstCooldown = health.getEntry("kimi")!.cooldownUntil;
+      // Simulate second quota exhaustion (must NOT stack the cooldown)
+      health.recordQuotaExhausted("kimi", "403 quota exceeded again");
+      const secondCooldown = health.getEntry("kimi")!.cooldownUntil;
 
-    // Simulate second quota exhaustion (should NOT extend the cooldown)
-    health.recordQuotaExhausted("kimi", "403 quota exceeded again");
-    const secondCooldown = health.getEntry("kimi")!.cooldownUntil;
-
-    expect(secondCooldown).toBe(firstCooldown);
+      expect(secondCooldown).toBe(firstCooldown);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("probes recovering provider before sending real traffic", async () => {

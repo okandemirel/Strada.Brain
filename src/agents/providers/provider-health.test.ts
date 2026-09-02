@@ -420,6 +420,59 @@ describe("ProviderHealthRegistry — recordQuotaHardStop", () => {
   });
 });
 
+// audited 2026-09-02: recordQuotaExhausted / recordQuotaExhaustedShort kept ANY active
+// cooldown ("don't extend"), so a 30s degraded cooldown already running when the 403
+// arrived (concurrent call, or the un-gated orchestrator recorder) swallowed the 8h /
+// 15m quota block — the provider read "down" but was readmitted ~30s later. The sibling
+// recordQuotaHardStop takes the max; "never shorten" is the intent, not "never change".
+describe("ProviderHealthRegistry — recordQuotaExhausted never shortens to a transient cooldown", () => {
+  afterEach(() => {
+    ProviderHealthRegistry.resetInstance();
+    vi.restoreAllMocks();
+  });
+
+  it("a 403 quota landing on an active 30s degraded cooldown gets the full 8h", () => {
+    const registry = new ProviderHealthRegistry();
+    const now = 1_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+
+    registry.recordFailure("kimi", "HTTP 500");
+    registry.recordFailure("kimi", "HTTP 500");
+    expect(registry.getEntry("kimi")!.status).toBe("degraded");
+    expect(registry.getEntry("kimi")!.cooldownUntil).toBe(now + 30_000);
+
+    registry.recordQuotaExhausted("kimi", "HTTP 403: quota exceeded");
+    const entry = registry.getEntry("kimi")!;
+    expect(entry.status).toBe("down");
+    expect(entry.cooldownUntil).toBe(now + 8 * 60 * 60 * 1000);
+  });
+
+  it("the single-provider (15m) variant likewise replaces a shorter active cooldown", () => {
+    const registry = new ProviderHealthRegistry();
+    const now = 1_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+
+    registry.recordFailure("kimi", "HTTP 500");
+    registry.recordFailure("kimi", "HTTP 500");
+    registry.recordQuotaExhaustedShort("kimi", "HTTP 403: quota exceeded");
+    expect(registry.getEntry("kimi")!.cooldownUntil).toBe(now + 15 * 60 * 1000);
+  });
+
+  it("still does not shorten an already-longer active cooldown", () => {
+    const registry = new ProviderHealthRegistry();
+    let time = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => time);
+
+    registry.recordQuotaHardStop("kimi", 3 * 24 * 60 * 60 * 1000, "resets in ~3d");
+    const first = registry.getEntry("kimi")!.cooldownUntil;
+    time += 1000;
+    registry.recordQuotaExhausted("kimi", "HTTP 403: quota exceeded");
+    expect(registry.getEntry("kimi")!.cooldownUntil).toBe(first);
+    registry.recordQuotaExhaustedShort("kimi", "HTTP 403: quota exceeded");
+    expect(registry.getEntry("kimi")!.cooldownUntil).toBe(first);
+  });
+});
+
 describe("ProviderHealthRegistry — areAllUnavailable", () => {
   afterEach(() => {
     ProviderHealthRegistry.resetInstance();
