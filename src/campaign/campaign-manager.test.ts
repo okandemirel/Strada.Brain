@@ -130,6 +130,8 @@ describe("CampaignManager", () => {
   let tasks: FakeTaskManager;
   let messages: Array<{ chatId: string; text: string }>;
   let manager: CampaignManager;
+  /** Simulates the messenger being down exactly when the delivery report is sent. */
+  let messengerDownFor: RegExp | undefined;
 
   const ctx = { chatId: "cli-local", channelType: "cli", userId: "u1" };
 
@@ -141,6 +143,7 @@ describe("CampaignManager", () => {
     storage = new CampaignStorage(join(dir, "campaigns.db"));
     tasks = new FakeTaskManager();
     messages = [];
+    messengerDownFor = undefined;
 
     const planner = {
       planMilestones: vi.fn().mockResolvedValue(LADDER),
@@ -151,6 +154,7 @@ describe("CampaignManager", () => {
       planner,
       taskManager: tasks as unknown as TaskManager,
       messenger: async (chatId, text) => {
+        if (messengerDownFor?.test(text)) throw new Error("messenger unavailable");
         messages.push({ chatId, text });
       },
       projectRoot,
@@ -1291,6 +1295,38 @@ describe("CampaignManager", () => {
     const report = messages.at(-1)!.text;
     expect(report).toMatch(/Sprint A — Foundations — .*visual gate NOT run/);
     expect(report).toMatch(/Sprint A — Foundations: no fresh captured frame .*never demanded a capture/);
+  });
+
+  it("a delivery report lost in the crash window is re-sent on the next boot, once", async () => {
+    // Audited 2026-09-02: state=done was persisted BEFORE the report was sent,
+    // and tell() swallows a messenger failure — so a crash or an outbound
+    // failure in that window lost the report permanently: a done campaign is
+    // not active, not revivable and not queryable, and the finished game was
+    // never announced.
+    const campaign = manager.startFromGdd(ctx, "# GDD text", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+
+    messengerDownFor = /Campaign delivery/;
+    settleMilestone("final sprint done, all tests green");
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+    expect(messages.some((m) => m.text.includes("Campaign delivery"))).toBe(false);
+    expect(storage.get(campaign.id)!.deliveryReported).toBe(false);
+
+    // Next boot: the messenger is back and the unreported delivery is re-sent.
+    messengerDownFor = undefined;
+    await manager.resumeActive();
+    await vi.waitFor(() =>
+      expect(messages.filter((m) => m.text.includes("Campaign delivery"))).toHaveLength(1),
+    );
+    expect(storage.get(campaign.id)!.deliveryReported).toBe(true);
+
+    // And only once — a later boot must not re-announce a delivered game.
+    await manager.resumeActive();
+    expect(messages.filter((m) => m.text.includes("Campaign delivery"))).toHaveLength(1);
   });
 
   it("a boot that finds a FAILED tip past its time box escalates instead of silently resubmitting", async () => {

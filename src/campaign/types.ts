@@ -146,6 +146,14 @@ export interface Campaign {
    */
   autoReviveAt?: number;
   /**
+   * True only once the delivery report has actually been handed to the
+   * messenger without error. A `done` campaign whose flag is unset lost its
+   * report to a crash or a messenger failure and is re-reported at boot —
+   * done campaigns are not active, not revivable and not queryable, so
+   * nothing else would ever notice (audited 2026-09-02).
+   */
+  deliveryReported?: boolean;
+  /**
    * Set when the GDD-coverage audit did NOT run clean (skipped, budget spent,
    * or errored). Rendered in the delivery report so an unaudited delivery
    * cannot read like an audited one.

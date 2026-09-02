@@ -411,6 +411,21 @@ export class CampaignManager {
         });
       }
     }
+    // A delivered game whose report never reached the chat is announced now.
+    // The report is rebuilt from the persisted evidence (the same builder the
+    // live path uses), and the flag is set only when it actually lands, so a
+    // still-broken messenger leaves it queued for the next boot instead of
+    // marking a report that nobody received (audited 2026-09-02).
+    for (const campaign of this.storage.listUnreportedDeliveries()) {
+      getLoggerSafe().warn("Delivery report was never sent — re-sending after restart", {
+        id: campaign.id,
+        deliveredAt: campaign.updatedAt,
+      });
+      if (await this.tell(campaign, this.buildDeliveryReport(campaign))) {
+        campaign.deliveryReported = true;
+        this.persist(campaign);
+      }
+    }
     // Self-revival appointments are setTimeout-backed and die with the
     // process — re-arm them from the persisted timestamps (overdue ones fire
     // on a short delay so boot recovery settles first).
@@ -1428,8 +1443,17 @@ export class CampaignManager {
           return;
         }
         campaign.state = "done";
+        // The flag is written only AFTER the report actually leaves. Audited
+        // 2026-09-02: `done` was persisted first and tell() swallows an
+        // outbound failure, so a crash or a messenger error in this window
+        // lost the report for good — a done campaign is not active, not
+        // revivable and not queryable, so nothing ever noticed.
+        campaign.deliveryReported = false;
         this.persist(campaign);
-        await this.tell(campaign, `${this.buildDeliveryReport(campaign)}${commitNote}`);
+        if (await this.tell(campaign, `${this.buildDeliveryReport(campaign)}${commitNote}`)) {
+          campaign.deliveryReported = true;
+          this.persist(campaign);
+        }
         return;
       }
       campaign.currentMilestone += 1;
@@ -1937,14 +1961,20 @@ export class CampaignManager {
     this.storage.save(campaign);
   }
 
-  private async tell(campaign: Pick<Campaign, "chatId"> & Partial<Pick<Campaign, "id">>, markdown: string): Promise<void> {
+  /** Returns whether the message actually reached the channel. */
+  private async tell(
+    campaign: Pick<Campaign, "chatId"> & Partial<Pick<Campaign, "id">>,
+    markdown: string,
+  ): Promise<boolean> {
     try {
       await this.messenger(campaign.chatId, markdown);
+      return true;
     } catch (err) {
       getLoggerSafe().warn("Campaign message delivery failed", {
         id: campaign.id,
         error: err instanceof Error ? err.message : String(err),
       });
+      return false;
     }
   }
 }
