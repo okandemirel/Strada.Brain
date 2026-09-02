@@ -1152,6 +1152,43 @@ describe("HeartbeatLoop — the daemon daily sub-limit gates trigger dispatch", 
 
     expect(taskManager.submit).toHaveBeenCalled();
   });
+
+  it("emits the sub-limit breach once, not on every tick while spend stays over (audited 2026-09-02)", async () => {
+    // The sub-limit gate returns early each tick, so an unlatched emit
+    // re-announced the same breach every intervalMs for up to 24h — one push
+    // notification per tick until the daily window rolled over.
+    const storage = makeBudgetStorage();
+    const mgr = new UnifiedBudgetManager(storage, { emit: () => {} }, {});
+    mgr.updateConfig({ subLimits: { daemonDailyUsd: 5, agentDefaultUsd: 5, verificationPct: 0.15 } });
+    mgr.recordCost(6, "daemon", { triggerName: "overnight" });
+
+    loop.setUnifiedBudgetManager(mgr);
+    registry.register(makeTrigger("t1", { shouldFire: true }));
+    loop.start();
+
+    await loop.tick();
+    await loop.tick();
+
+    const breaches = () => (eventBus.emit as any).mock.calls.filter(
+      (c: unknown[]) => c[0] === "daemon:budget_exceeded"
+        && (c[1] as { source?: string }).source === "unified:daemon-sublimit",
+    );
+    expect(breaches()).toHaveLength(1);
+    expect(taskManager.submit).not.toHaveBeenCalled();
+
+    // Operator raises the sub-limit in the portal: spend is under again, the
+    // daemon dispatches, and the latch re-arms.
+    mgr.updateConfig({ subLimits: { daemonDailyUsd: 100, agentDefaultUsd: 5, verificationPct: 0.15 } });
+    await loop.tick();
+    expect(breaches()).toHaveLength(1);
+    expect(taskManager.submit).toHaveBeenCalledTimes(1);
+
+    // A fresh breach after the drop must be announced.
+    mgr.updateConfig({ subLimits: { daemonDailyUsd: 5, agentDefaultUsd: 5, verificationPct: 0.15 } });
+    await loop.tick();
+    expect(breaches()).toHaveLength(2);
+    expect(breaches()[1]![1]).toMatchObject({ usedUsd: 6, limitUsd: 5 });
+  });
 });
 
 describe("HeartbeatLoop — the legacy daemon:budget_warning re-arms when usage drops under warnPct (audited 2026-09-02)", () => {

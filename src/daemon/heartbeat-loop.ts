@@ -69,6 +69,13 @@ export class HeartbeatLoop {
   /** Track budget exceeded/warning state to emit events only once per state change */
   private budgetExceededEmitted = false;
   private budgetWarningEmitted = false;
+  /**
+   * Same latch for the unified daemon sub-limit. Audited 2026-09-02: that emit
+   * was unlatched, and its gate returns before the trigger loop, so the same
+   * breach was re-announced every heartbeat tick (one push per tick, for up to
+   * a whole day) instead of once per crossing.
+   */
+  private daemonSubLimitExceededEmitted = false;
 
   /** Consolidation state (Phase 25) */
   private consolidationEngine?: ConsolidationEngineContract;
@@ -325,16 +332,24 @@ export class HeartbeatLoop {
       if (this.unifiedBudgetManager.isSourceExceeded("daemon")) {
         const usedUsd = this.unifiedBudgetManager.getSnapshot().breakdown.daemon;
         const limitUsd = this.unifiedBudgetManager.getConfig().subLimits.daemonDailyUsd;
-        this.eventBus.emit("daemon:budget_exceeded", {
-          source: "unified:daemon-sublimit",
-          usedUsd,
-          limitUsd,
-          timestamp: now.getTime(),
-        } as never);
+        // Latched like the legacy budget wall (audited 2026-09-02): announce the
+        // crossing once, not once per tick for as long as spend sits over it.
+        if (!this.daemonSubLimitExceededEmitted) {
+          this.eventBus.emit("daemon:budget_exceeded", {
+            source: "unified:daemon-sublimit",
+            usedUsd,
+            limitUsd,
+            timestamp: now.getTime(),
+          } as never);
+          this.daemonSubLimitExceededEmitted = true;
+        }
         this.logger.info("Daemon daily sub-limit reached — triggers skipped this tick", { usedUsd, limitUsd });
         this.lastTick = now;
         return;
       }
+      // Under the sub-limit again (window drained, or the operator raised it) —
+      // re-arm so the next crossing is announced.
+      this.daemonSubLimitExceededEmitted = false;
     }
 
     // Sequential evaluation -- prevents budget race conditions
