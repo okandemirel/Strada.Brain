@@ -6,8 +6,13 @@ import { resolve, sep, normalize, isAbsolute } from "node:path";
  * even if they are within the project directory.
  */
 const BLOCKED_PATTERNS: RegExp[] = [
-  /\.env$/i,
-  /\.env\.[a-z]+$/i,
+  // Audited 2026-09-02: this was `/\.env$/` plus `/\.env\.[a-z]+$/`, which
+  // required exactly one all-alpha suffix — so `.env.production.local`,
+  // `.env.dev2`, `.env.staging-eu` and the two backup names this repo already
+  // pushed a live key in (`.env.bak.191546`, `.env.backup-loglevel`, see
+  // .gitignore) were readable in full. Any chain of dot-separated suffixes
+  // after `.env` is now blocked; `.envrc` / `Env.cs` are still allowed.
+  /\.env(\.[A-Za-z0-9_-]+)*$/i,
   /\.git[/\\]config$/i,
   /\.git[/\\]credentials$/i,
   /credentials\.json$/i,
