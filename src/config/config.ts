@@ -1463,6 +1463,25 @@ export function loadConfig(envOverride?: Record<string, string | undefined>): Co
 
   const activeEnv = envOverride ?? defaultEnv;
   const raw = loadFromEnv(activeEnv);
+
+  // Resolve the system preset BEFORE validation (env vars override preset
+  // values). The schema's credential gate lets a keyless deployment through
+  // only when `providerChain` contains "ollama", and the `free` preset's
+  // chain IS "ollama" — but the preset used to be read 16 lines after
+  // validateConfig, so `SYSTEM_PRESET=free` with no API key (exactly what
+  // `strada-brain preset set free` writes) could never boot. The gate must
+  // see the chain the run will actually use (audited 2026-09-02).
+  const presetName = activeEnv["SYSTEM_PRESET"];
+  const preset = presetName ? getPreset(presetName) : undefined;
+  if (presetName && !preset) {
+    throw new Error(
+      `Invalid SYSTEM_PRESET "${presetName}". Valid values: free, budget, balanced, performance, premium`,
+    );
+  }
+  if (preset && !activeEnv["PROVIDER_CHAIN"]) {
+    raw.providerChain = preset.providerChain;
+  }
+
   const validation = validateConfig(raw);
 
   if (validation.kind === "invalid") {
@@ -1476,15 +1495,6 @@ export function loadConfig(envOverride?: Record<string, string | undefined>): Co
   const pathResult = validateProjectPath(config.unityProjectPath);
   if (pathResult.kind === "err") {
     throw new Error(pathResult.error);
-  }
-
-  // Apply system preset if configured (env vars override preset values)
-  const presetName = activeEnv["SYSTEM_PRESET"];
-  const preset = presetName ? getPreset(presetName) : undefined;
-  if (presetName && !preset) {
-    throw new Error(
-      `Invalid SYSTEM_PRESET "${presetName}". Valid values: free, budget, balanced, performance, premium`,
-    );
   }
 
   // Parse per-provider model overrides (manual env > preset > defaults)

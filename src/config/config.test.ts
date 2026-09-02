@@ -479,6 +479,41 @@ describe("loadConfig", () => {
     expect(config.rag.baseUrl).toBe("https://generativelanguage.googleapis.com/v1beta/openai");
   });
 
+  it("boots SYSTEM_PRESET=free with no API key: the preset chain is resolved BEFORE the credential gate (audited 2026-09-02)", () => {
+    // `strada-brain preset set free` writes ONLY SYSTEM_PRESET=free into .env
+    // (no PROVIDER_CHAIN). Pre-fix, validateConfig ran before the preset was
+    // read, so the schema's "or use Ollama" escape hatch saw providerChain
+    // undefined and the documented keyless preset could never boot.
+    const config = loadConfig({
+      UNITY_PROJECT_PATH: "/test/project",
+      SYSTEM_PRESET: "free",
+    });
+    expect(config.providerChain).toBe("ollama");
+    // The preset's tier values (ollama:<model>) reach the resolved config too.
+    expect(config.delegation.tiers.local).toMatch(/^ollama/);
+    expect(config.delegation.tiers.premium).toMatch(/^ollama/);
+  });
+
+  it("explicit PROVIDER_CHAIN still wins over the preset chain (preset-before-validation guard)", () => {
+    const config = loadConfig({
+      ANTHROPIC_API_KEY: "sk-test-key-123",
+      UNITY_PROJECT_PATH: "/test/project",
+      SYSTEM_PRESET: "free",
+      PROVIDER_CHAIN: "claude",
+    });
+    expect(config.providerChain).toBe("claude");
+  });
+
+  it("still rejects an unknown SYSTEM_PRESET by name", () => {
+    expect(() =>
+      loadConfig({
+        ANTHROPIC_API_KEY: "sk-test-key-123",
+        UNITY_PROJECT_PATH: "/test/project",
+        SYSTEM_PRESET: "gold",
+      }),
+    ).toThrow('Invalid SYSTEM_PRESET "gold"');
+  });
+
   it("loads channel auth configuration into structured runtime config", () => {
     setEnv({
       ALLOWED_DISCORD_USER_IDS: "user-1,user-2",
