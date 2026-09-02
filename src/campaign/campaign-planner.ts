@@ -48,9 +48,17 @@ Respond ONLY with JSON:
 
 export function windowGdd(gddText: string, fullThreshold: number = GDD_FULL_CHARS): string {
   if (gddText.length <= fullThreshold) return gddText;
-  const head = gddText.slice(0, GDD_HEAD_CHARS);
-  const tail = gddText.slice(-GDD_TAIL_CHARS);
-  const middle = gddText.slice(GDD_HEAD_CHARS, -GDD_TAIL_CHARS);
+  // The slices SCALE with the threshold. Audited 2026-09-02: fullThreshold
+  // gated only the early return while head/tail/outline were fixed module
+  // constants, so past 400k the audit's "far larger window" was byte-for-byte
+  // the planner's window — the one blind spot the audit exists to catch.
+  const scale = Math.max(1, fullThreshold / GDD_FULL_CHARS);
+  const headChars = Math.round(GDD_HEAD_CHARS * scale);
+  const tailChars = Math.round(GDD_TAIL_CHARS * scale);
+  const outlineChars = Math.round(GDD_OUTLINE_CHARS * scale);
+  const head = gddText.slice(0, headChars);
+  const tail = gddText.slice(-tailChars);
+  const middle = gddText.slice(headChars, -tailChars);
   // Structural skeleton of the elided middle. The old filter kept ONLY ATX
   // headings and pipe rows — a .docx/.pdf-converted GDD (the dominant intake
   // path) has neither, so a 150k+ converted document lost its entire middle
@@ -65,13 +73,18 @@ export function windowGdd(gddText: string, fullThreshold: number = GDD_FULL_CHAR
       (/^\s*[A-ZĞÜŞİÖÇ][^:\n]{2,60}:\s+\S/.test(line) && line.length <= 160),
     )
     .join("\n");
-  let outline = structural.slice(0, GDD_OUTLINE_CHARS);
+  let outline = structural.slice(0, outlineChars);
   let markerNote = "its structural outline (headings, tables, lists, schedules) follows";
+  if (structural.length > outlineChars) {
+    // Say so: a marker claiming the outline "follows" while it was cut at
+    // the budget hid the loss from the model reading it.
+    markerNote += ` (outline truncated to ${outlineChars} of ${structural.length} chars)`;
+  }
   if (structural.length < middle.length * 0.02) {
     // Structure-less middle (converted document): take evenly-spaced samples
     // instead of pretending an outline exists.
     const sampleCount = 10;
-    const sampleLen = Math.floor(GDD_OUTLINE_CHARS / sampleCount);
+    const sampleLen = Math.floor(outlineChars / sampleCount);
     const stride = Math.floor(middle.length / sampleCount);
     outline = Array.from({ length: sampleCount }, (_, i) =>
       middle.slice(i * stride, i * stride + sampleLen),

@@ -11,7 +11,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { join } from "node:path";
+import { join, relative, sep } from "node:path";
 import { getLoggerSafe } from "../utils/logger.js";
 import { allProvidersCoolingDownMs } from "../agents/providers/provider-outage.js";
 import type { IncomingMessage } from "../channels/channel-messages.interface.js";
@@ -19,6 +19,7 @@ import type { TaskManager } from "../tasks/task-manager.js";
 import type { TaskId } from "../tasks/types.js";
 import { ACTIVE_STATUSES, TaskStatus } from "../tasks/types.js";
 import type { CampaignPlanner } from "./campaign-planner.js";
+import { GDD_AUDIT_FULL_CHARS } from "./campaign-planner.js";
 import type { CampaignStorage } from "./campaign-storage.js";
 import { detectCampaignIntent } from "./campaign-intake.js";
 import { isTerminalFailureReport } from "../agents/autonomy/verifier-pipeline.js";
@@ -236,6 +237,13 @@ export class CampaignManager {
 
     const trimmed = text.trim();
     if (APPROVE_RE.test(trimmed)) {
+      // Claim the gate BEFORE yielding: the channel round-trip below is a real
+      // await, and the router has no per-chat serialization, so a double-tap
+      // or a redelivered "evet" found the campaign still awaiting-approval
+      // and planned the ladder twice — two billable passes, a clobbered
+      // ladder, two sprint-1 tasks (audited 2026-09-02).
+      campaign.state = "planning";
+      this.persist(campaign);
       await this.tell(
         campaign,
         "GDD approved — planning the milestone ladder, then the build starts. First stop after this is the delivery report.",
@@ -285,6 +293,7 @@ export class CampaignManager {
       // Failed before/during planning — replan from the GDD.
       campaign.state = "planning";
       campaign.lastError = undefined;
+      campaign.autoReviveAt = undefined;
       this.persist(campaign);
       await this.tell(campaign, "Reviving the campaign — replanning the milestone ladder from the GDD.");
       void this.planAndLaunch(campaign.id);
@@ -304,6 +313,10 @@ export class CampaignManager {
     // bar for the rest of the run.
     milestone.visualEvidenceBounced = false;
     milestone.noWorkBounced = false;
+    // The delivery-verification gate is the same one-bounce shape; leaving it
+    // spent meant a revived final sprint could never be bounced for a missing
+    // test run again (audited 2026-09-02: the gate landed after this block).
+    milestone.deliveryVerificationBounced = false;
     milestone.startedAtMs = undefined;
     milestone.timeBoxEscalations = 0;
     campaign.state = "executing";
@@ -345,7 +358,21 @@ export class CampaignManager {
             return; // someone else already continued the work
           }
           const milestone = fresh.milestones[fresh.currentMilestone];
-          if (!milestone) return;
+          if (!milestone) {
+            // Failed before the ladder existed (planning outage): replan from
+            // the GDD, as tryHandleRevive does. Returning here silently was
+            // how an armed pre-ladder revival no-oped (audited 2026-09-02).
+            fresh.state = "planning";
+            fresh.lastError = undefined;
+            fresh.autoReviveAt = undefined;
+            this.persist(fresh);
+            getLoggerSafe().info("Campaign self-revival — provider chain recovered, replanning the ladder", {
+              id: fresh.id,
+            });
+            await this.tell(fresh, "Provider chain recovered — replanning the milestone ladder from the GDD.");
+            void this.planAndLaunch(fresh.id);
+            return;
+          }
           getLoggerSafe().info("Campaign self-revival — provider chain recovered", {
             id: fresh.id,
             milestone: milestone.id,
@@ -419,8 +446,15 @@ export class CampaignManager {
         } else if (task && ACTIVE_STATUSES.has(task.status)) {
           this.adoptTask(campaign, task.id);
           return; // genuinely still in flight — track the live id
-        } else if (task && task.status === TaskStatus.completed && campaign.state === "executing") {
+        } else if (task && task.status === TaskStatus.completed) {
           // Landed while we were down; the settlement event is gone. Judge it.
+          // Audited 2026-09-02: this branch was gated on state === "executing",
+          // so a completed GDD draft fell through to submitDraft — a whole new
+          // draft, no revision note, no attempt charged, gate never opened.
+          if (campaign.state === "drafting-gdd") {
+            await this.onDraftSettled(campaign, task.status, task.result ?? "");
+            return;
+          }
           const milestone = campaign.milestones[campaign.currentMilestone];
           if (milestone) {
             await this.onMilestoneOutcome(campaign, milestone, task.status, task.result ?? "", {
@@ -562,6 +596,16 @@ export class CampaignManager {
         status: "pending",
         attempts: 0,
       }));
+      // The planner is told to demand a captured frame of every sprint; the
+      // visual gate keys on that wording. Name the sprints where it did not,
+      // so a gate that will never run is visible before the ladder starts.
+      const ungated = campaign.milestones.filter((m) => !/captur/i.test(m.prompt)).map((m) => m.id);
+      if (ungated.length > 0) {
+        getLoggerSafe().warn("Planner omitted the captured-frame demand — visual gate will not run for these sprints", {
+          id: campaign.id,
+          milestones: ungated,
+        });
+      }
       campaign.currentMilestone = 0;
       this.persist(campaign);
 
@@ -575,8 +619,32 @@ export class CampaignManager {
     } catch (err) {
       campaign.state = "failed";
       campaign.lastError = err instanceof Error ? err.message : String(err);
+      // A planning failure caused by a full provider outage is a scheduled
+      // wait, not a defeat — park with a self-revival appointment exactly as
+      // the milestone terminal path does. Audited 2026-09-02: this catch
+      // armed nothing, so a quota wall hit before the ladder existed left the
+      // campaign dead until a human typed "kampanya devam" (and that revive
+      // re-entered the same unarmed catch while the wall persisted). The
+      // planner's contract explicitly promised the caller would park.
+      const outageWaitMs = allProvidersCoolingDownMs();
+      if (outageWaitMs > 0 || /cooldown|quota|rate.?limit/i.test(campaign.lastError)) {
+        const delayMs = Math.max(outageWaitMs, 60_000) + 60_000;
+        campaign.autoReviveAt = Date.now() + delayMs;
+        this.persist(campaign);
+        this.scheduleAutoRevive(campaign.id, delayMs);
+        await this.tell(
+          campaign,
+          `⏸️ Campaign paused by a provider outage before the milestone ladder could be planned.\n` +
+            `Cause: ${campaign.lastError}\n` +
+            `Self-revival armed for ${new Date(campaign.autoReviveAt).toLocaleTimeString()} (when the provider chain recovers). Reply **kampanya devam** to revive sooner.`,
+        );
+        return;
+      }
       this.persist(campaign);
-      await this.tell(campaign, `Campaign could not plan the milestone ladder: ${campaign.lastError}`);
+      await this.tell(
+        campaign,
+        `Campaign could not plan the milestone ladder: ${campaign.lastError}\nReply **kampanya devam** to replan from the GDD.`,
+      );
     }
   }
 
@@ -616,6 +684,12 @@ export class CampaignManager {
     }
     milestone.status = "running";
     milestone.startedAtMs ??= Date.now();
+    // A new attempt gets a new deferral clock. Audited 2026-09-02: the clock
+    // was cleared only on the judge path, so revive/bounce/escalation/restart
+    // attempts inherited a stale one — past 24h the deferral was skipped and
+    // the fresh attempt's first keep-alive reap (whose text promises the
+    // executor's own retry) was charged and resubmitted on top of it.
+    milestone.reconcileDeferredSince = undefined;
     if (opts?.countAttempt !== false) {
       milestone.attempts += 1;
     }
@@ -722,13 +796,35 @@ export class CampaignManager {
 
   private async onDraftSettled(campaign: Campaign, status: TaskStatus, output: string): Promise<void> {
     if (status === TaskStatus.completed) {
+      // The executor commits the task's lease back to the project root AFTER
+      // complete() — order the docs/ scan behind that write-back, as the
+      // milestone path does, or a correctly written GDD is not there yet.
+      if (this.completedSettleDelayMs > 0) {
+        await new Promise((r) => setTimeout(r, this.completedSettleDelayMs));
+      }
       const gddPath = this.findNewestGddPath();
       if (!gddPath) {
         // The draft "completed" without producing the document — redo it with
-        // the gap named, instead of gating on air.
+        // the gap named, instead of gating on air. This round is CHARGED:
+        // audited 2026-09-02, this branch never touched draftAttempts, so a
+        // draft that kept landing off-pattern spun full LLM tasks forever with
+        // no message, no failure and the project slot wedged unrevivably.
+        const gap =
+          "no *GDD*.md was found under docs/ (searched recursively)";
+        if (campaign.draftAttempts >= this.maxDraftAttempts) {
+          campaign.state = "failed";
+          campaign.lastError = `GDD draft completed ${campaign.draftAttempts + 1} times but ${gap}`;
+          this.persist(campaign);
+          await this.tell(
+            campaign,
+            `GDD drafting failed — ${campaign.lastError}. Share the document, or reply **kampanya devam** to try again.`,
+          );
+          return;
+        }
+        campaign.draftAttempts += 1;
         this.submitDraft(
           campaign,
-          "The previous draft never wrote the GDD file under docs/. Write the file this time.",
+          `The previous draft never wrote the GDD file under docs/ — ${gap}. Write the file this time, as docs/<GameName>_GDD.md.`,
         );
         return;
       }
@@ -741,6 +837,78 @@ export class CampaignManager {
       );
       return;
     }
+    // A block/failure may be the executor's own keep-alive parking the task
+    // while it schedules a retry under a new id. Audited 2026-09-02: this
+    // branch reacted instantly — draftAttempts += 1 and a second, lineage-less
+    // draft task — so one transient blip spent a designer revision round and
+    // ran two drafters against docs/ at once; four blips failed the campaign
+    // before a real draft was attempted. Same grace-window reconcile as the
+    // milestone path, on the settle chain.
+    const campaignId = campaign.id;
+    const timer = setTimeout(() => {
+      this.enqueueSettle(campaignId, () => this.reconcileDraftAfterSettle(campaignId, status, output));
+    }, this.retryAdoptionGraceMs);
+    timer.unref?.();
+  }
+
+  /** Draft-lineage counterpart of reconcileMilestoneAfterSettle. */
+  private async reconcileDraftAfterSettle(
+    campaignId: string,
+    settledStatus: TaskStatus,
+    settledOutput: string,
+  ): Promise<void> {
+    const campaign = this.storage.get(campaignId);
+    if (!campaign || campaign.state !== "drafting-gdd" || !campaign.draftTaskId) return;
+    const tip = this.taskManager.findLatestLineageTask(campaign.draftTaskId as TaskId);
+
+    if (tip && ACTIVE_STATUSES.has(tip.status) && tip.status !== TaskStatus.paused) {
+      this.adoptTask(campaign, tip.id);
+      getLoggerSafe().info("Campaign adopted executor retry of the GDD draft instead of redrafting", {
+        id: campaign.id,
+        adoptedTask: tip.id,
+      });
+      return;
+    }
+    if (tip && tip.status === TaskStatus.paused) {
+      const resumed = this.taskManager.resumeTask(tip.id);
+      if (resumed) {
+        this.adoptTask(campaign, resumed.id);
+        return;
+      }
+    }
+    if (tip && tip.status === TaskStatus.completed) {
+      await this.onDraftSettled(campaign, tip.status, tip.result ?? "");
+      return;
+    }
+
+    const status = tip && tip.id !== campaign.draftTaskId ? tip.status : settledStatus;
+    const output = tip && tip.id !== campaign.draftTaskId ? (tip.error ?? tip.result ?? "") : settledOutput;
+
+    // A reaped/auto-retry tip names a retry the executor WILL mint; wait one
+    // promised horizon (trust-but-verify, as the milestone path does) before
+    // judging, so the campaign does not redraft on top of the coming retry.
+    const executorWillRetry =
+      /Reaped:|Auto-retry \d+\/\d+|provider_unavailable|All providers (failed|are in cooldown)/i.test(output);
+    if (executorWillRetry) {
+      const promised = /Auto-retry \d+\/\d+ in ~(\d+)s/.exec(output);
+      const promisedMs = (promised ? Number(promised[1]) : 600) * 1000;
+      const tipUpdatedAt = (tip as { updatedAt?: number } | null)?.updatedAt;
+      const promiseDead =
+        tipUpdatedAt !== undefined && Date.now() > tipUpdatedAt + promisedMs + 5 * 60_000;
+      if (!promiseDead) {
+        const waitMs = Math.min(Math.max(promisedMs + 60_000, 60_000), 12 * 60 * 60_000);
+        getLoggerSafe().info("Campaign deferring GDD draft judgement to the executor's pending retry", {
+          id: campaign.id,
+          recheckInMs: waitMs,
+        });
+        const timer = setTimeout(() => {
+          this.enqueueSettle(campaign.id, () => this.reconcileDraftAfterSettle(campaign.id, status, output));
+        }, waitMs);
+        timer.unref?.();
+        return;
+      }
+    }
+
     if (campaign.draftAttempts >= this.maxDraftAttempts) {
       campaign.state = "failed";
       campaign.lastError = `GDD draft ${status}: ${output.slice(0, 200)}`;
@@ -748,7 +916,17 @@ export class CampaignManager {
       await this.tell(campaign, `GDD drafting ${status} — campaign failed. Cause: ${campaign.lastError}`);
       return;
     }
-    campaign.draftAttempts += 1;
+    // An outage-caused settle is not the draft's failure and must not spend
+    // a revision round (the same counter the designer's feedback spends).
+    const outageCaused =
+      /provider|cooldown|quota|rate.?limit/i.test(output) && allProvidersCoolingDownMs() > 0;
+    if (outageCaused) {
+      getLoggerSafe().info("GDD draft resubmitted without charging a revision round — provider outage", {
+        id: campaign.id,
+      });
+    } else {
+      campaign.draftAttempts += 1;
+    }
     this.submitDraft(campaign, `The previous draft attempt ${status}: ${output.slice(0, 400)}`);
   }
 
@@ -777,9 +955,34 @@ export class CampaignManager {
     // against whatever the lineage says by then — not against this snapshot.
     const campaignId = campaign.id;
     const milestoneId = milestone.id;
-    setTimeout(() => {
-      void this.reconcileMilestoneAfterSettle(campaignId, milestoneId, status, output);
-    }, this.retryAdoptionGraceMs);
+    this.scheduleReconcile(campaignId, milestoneId, status, output, this.retryAdoptionGraceMs);
+  }
+
+  /**
+   * Reconcile runs INSIDE the per-campaign settle chain, never from a bare
+   * timer. Audited 2026-09-02: the outcome decision was made from an
+   * un-serialized setTimeout, so two settle emissions for one task (the
+   * task manager has no terminal guard; appendTaskNotice re-emits
+   * task:blocked) scheduled two reconciles that both judged the same
+   * milestone whenever the outcome path crossed a real async boundary
+   * (commit lock, time-box tell, the minutes-long coverage audit) — a second
+   * billable audit, a second delivery report, or a second sprint submitted
+   * against the same repo. The chain re-reads storage when it actually
+   * runs, so the second entrant sees the advanced ladder and no-ops.
+   */
+  private scheduleReconcile(
+    campaignId: string,
+    milestoneId: string,
+    status: TaskStatus,
+    output: string,
+    delayMs: number,
+  ): void {
+    const timer = setTimeout(() => {
+      this.enqueueSettle(campaignId, () =>
+        this.reconcileMilestoneAfterSettle(campaignId, milestoneId, status, output),
+      );
+    }, delayMs);
+    timer.unref?.();
   }
 
   /**
@@ -884,10 +1087,7 @@ export class CampaignManager {
           milestone: milestone.id,
           recheckInMs: waitMs,
         });
-        const timer = setTimeout(() => {
-          void this.reconcileMilestoneAfterSettle(campaign.id, milestone.id, status, output);
-        }, waitMs);
-        timer.unref?.();
+        this.scheduleReconcile(campaign.id, milestone.id, status, output, waitMs);
         return;
       }
     }
@@ -1076,6 +1276,18 @@ export class CampaignManager {
       milestone.status = "green";
       milestone.resultExcerpt = output.slice(-500);
       milestone.commitNote = commitNote.trim() || undefined;
+      // Record what the capture scan saw for EVERY green, not only the gated
+      // ones: the gate above is keyed on planner wording, and a sprint whose
+      // gate never ran must not read like one that passed it in the report
+      // (audited 2026-09-02).
+      try {
+        const captureDemanded = /captur/i.test(milestone.prompt);
+        milestone.visualEvidence = this.freshCaptureEvidence(milestone).found
+          ? "observed"
+          : captureDemanded
+            ? "none-gate-spent"
+            : "none-gate-not-demanded";
+      } catch { /* evidence capture is best-effort */ }
       try {
         const tip = milestone.taskId
           ? this.taskManager.findLatestLineageTask(milestone.taskId as TaskId)
@@ -1085,8 +1297,12 @@ export class CampaignManager {
       } catch { /* evidence capture is best-effort */ }
       // Persist the green BEFORE the coverage audit: that await is a
       // 400k-window LLM call lasting minutes, and storage said "running" the
-      // whole time — a crash re-ran the entire green path (second commit,
-      // second billable audit) and a concurrent reconcile could enter it too.
+      // whole time. What this persist buys is a DURABLE record of the green
+      // (commit note, test verdict) so a crash mid-audit does not lose it; a
+      // restart still re-enters this path and re-runs the audit, which is
+      // right — the audit's result was never recorded. Concurrent re-entry
+      // is prevented by the settle chain (scheduleReconcile), not by this
+      // persist (audited 2026-09-02: the comment used to claim otherwise).
       this.persist(campaign);
       const isLast = campaign.currentMilestone >= campaign.milestones.length - 1;
       if (isLast && !milestone.testVerdict && !milestone.deliveryVerificationBounced) {
@@ -1198,8 +1414,14 @@ export class CampaignManager {
         .replace(/Auto-retry \d+\/\d+ in ~\d+s\.?/g, "")
         .replace(/Transient failure —\s*/g, "")
         .trim();
+      // The strip must match the tail as APPENDED below. Audited 2026-09-02:
+      // it ended on "do not repeat it." while the append continues "do not
+      // repeat it — and do NOT spend…", so it never matched and every revived
+      // budget stacked another stale tail into the persisted prompt. The
+      // tempered token keeps one match from spanning two tails (rows persisted
+      // before 2026-08-31 still carry the old "do not repeat it." ending).
       milestone.prompt = milestone.prompt.replace(
-        /\n\nThe previous attempt ended [\s\S]*?Fix the root cause, do not repeat it\./g,
+        /\n\nThe previous attempt ended (?:(?!\n\nThe previous attempt ended )[\s\S])*?(?:first unmet requirement\.|Fix the root cause, do not repeat it\.(?! —))/g,
         "",
       );
       milestone.prompt += `\n\nThe previous attempt ended ${status}: ${(cleaned || output).slice(0, 400)}. Fix the root cause, do not repeat it — and do NOT spend this attempt auditing prior attempts: continue the sprint's actual work from the first unmet requirement.`;
@@ -1429,7 +1651,16 @@ export class CampaignManager {
     try {
       const missing = await this.planner.auditCoverage(gddText, campaign.milestones);
       if (missing.length === 0) {
-        campaign.coverageAuditNote = undefined; // genuinely audited clean
+        // A clean verdict names its scope. Audited 2026-09-02: past the audit
+        // threshold the GDD is windowed for the audit too, and an empty
+        // `missing` was recorded as "genuinely audited clean" — items living
+        // only in the elided middle were undetectable and the report carried
+        // no caveat.
+        campaign.coverageAuditNote =
+          gddText.length > GDD_AUDIT_FULL_CHARS
+            ? `coverage audit ran on a WINDOWED GDD (${gddText.length} chars; the middle was reduced to an outline) — ` +
+              "its clean verdict covers only what the window contained"
+            : undefined; // genuinely audited clean, against the whole document
         this.persist(campaign);
         return undefined;
       }
@@ -1474,11 +1705,34 @@ export class CampaignManager {
       `GDD: \`${campaign.gddPath ?? "n/a"}\``,
       ``,
     ];
-    for (const m of campaign.milestones) {
+    for (const [i, m] of campaign.milestones.entries()) {
       const marks: string[] = [];
       if (m.commitNote) marks.push(m.commitNote.replace(/^\s*/, ""));
       if (m.testVerdict) marks.push(`tests: ${m.testVerdict.slice(0, 80)}`);
+      // The delivery gate is one-shot by design; a green reached by spending
+      // it, or a final sprint with no observed test run at all (a revived
+      // gate, a remediation round), must not read like a verified one.
+      // Audited 2026-09-02: this flag was written and never rendered — the
+      // waived sprint showed as a clean ✅ with no mark and no caveat.
+      const isFinal = i === campaign.milestones.length - 1;
+      if (m.deliveryVerificationBounced) marks.push("delivery-verification bounce spent");
+      if (!m.testVerdict && (isFinal || m.deliveryVerificationBounced)) {
+        marks.push("NO observed test run");
+        caveats.push(
+          `${m.title}: went green with NO observed test run — the full suite was never seen to pass` +
+            (m.deliveryVerificationBounced ? " (its one delivery-verification bounce was spent)" : ""),
+        );
+      }
       if (m.visualEvidenceBounced) { marks.push("visual-evidence bounce spent"); caveats.push(`${m.title}: needed a second attempt to produce a captured frame`); }
+      if (m.visualEvidence === "observed") marks.push("captured frame observed");
+      if (m.visualEvidence === "none-gate-not-demanded") {
+        marks.push("no captured frame; visual gate NOT run");
+        caveats.push(`${m.title}: no fresh captured frame was observed and the visual gate never ran — the sprint prompt never demanded a capture`);
+      }
+      if (m.visualEvidence === "none-gate-spent") {
+        marks.push("no captured frame after the bounce");
+        caveats.push(`${m.title}: went green after its visual bounce with STILL no fresh captured frame`);
+      }
       if (m.noWorkBounced) { marks.push("no-work bounce spent"); caveats.push(`${m.title}: an attempt left the repository untouched`); }
       if ((m.timeBoxEscalations ?? 0) > 0) { marks.push(`scope narrowed ×${m.timeBoxEscalations}`); caveats.push(`${m.title}: ran past its time box and was narrowed to a smaller increment — remaining scope is in its final report`); }
       if (m.attempts > 1) marks.push(`${m.attempts} attempts`);
@@ -1514,20 +1768,53 @@ export class CampaignManager {
     return count;
   }
 
-  /** Newest *GDD*.md under docs/ by mtime — the file the draft just wrote. */
+  /**
+   * Newest *GDD*.md under docs/ by mtime — the file the draft just wrote.
+   * Walks subfolders (bounded depth): audited 2026-09-02, a flat readdir
+   * made docs/design/Ashen_GDD.md invisible and the campaign redrafted.
+   */
   private findNewestGddPath(): string | undefined {
     const docsDir = join(this.projectRoot, "docs");
     if (!existsSync(docsDir)) return undefined;
-    const candidates = readdirSync(docsDir)
-      .filter((f) => /gdd/i.test(f) && f.toLowerCase().endsWith(".md"))
-      .map((f) => ({ f, mtime: statSync(join(docsDir, f)).mtimeMs }))
-      .sort((a, b) => b.mtime - a.mtime);
-    return candidates[0] ? `docs/${candidates[0].f}` : undefined;
+    const candidates: Array<{ rel: string; mtime: number }> = [];
+    const stack: Array<{ dir: string; depth: number }> = [{ dir: docsDir, depth: 0 }];
+    while (stack.length > 0) {
+      const { dir, depth } = stack.pop()!;
+      let entries;
+      try {
+        entries = readdirSync(dir, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (const e of entries) {
+        const full = join(dir, e.name);
+        if (e.isDirectory()) {
+          if (depth < 3 && !e.name.startsWith(".") && e.name !== "node_modules") {
+            stack.push({ dir: full, depth: depth + 1 });
+          }
+        } else if (/gdd/i.test(e.name) && e.name.toLowerCase().endsWith(".md")) {
+          try {
+            candidates.push({
+              rel: relative(this.projectRoot, full).split(sep).join("/"),
+              mtime: statSync(full).mtimeMs,
+            });
+          } catch {
+            /* vanished mid-scan */
+          }
+        }
+      }
+    }
+    candidates.sort((a, b) => b.mtime - a.mtime);
+    return candidates[0]?.rel;
   }
 
   /**
    * Write a supplied GDD into docs/ so sprint prompts reference a durable,
-   * committable path. Sanitizes the source filename; idempotent per name.
+   * committable path. Sanitizes the source filename; idempotent per CONTENT.
+   * Audited 2026-09-02: this was "idempotent per name" (an existence check),
+   * so a revised GDD.docx re-shared under the same name left docs/GDD.md
+   * holding the previous version — the ladder and the coverage audit used
+   * the new text while every sprint prompt pointed agents at the old file.
    * Returns the project-relative path (undefined when the write failed —
    * planning then falls back to the in-memory text).
    */
@@ -1540,9 +1827,22 @@ export class CampaignManager {
           .replace(/^_+|_+$/g, "") || "Imported_GDD";
       const relPath = `docs/${baseName}.md`;
       const absPath = join(this.projectRoot, relPath);
-      if (!existsSync(absPath)) {
+      let current: string | undefined;
+      try {
+        current = readFileSync(absPath, "utf8");
+      } catch {
+        current = undefined;
+      }
+      if (current !== gddText) {
         mkdirSync(join(this.projectRoot, "docs"), { recursive: true });
         writeFileSync(absPath, gddText, "utf8");
+        if (current !== undefined) {
+          getLoggerSafe().info("Supplied GDD replaced an older document of the same name in docs/", {
+            relPath,
+            previousChars: current.length,
+            chars: gddText.length,
+          });
+        }
       }
       return relPath;
     } catch (err) {

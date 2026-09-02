@@ -1,12 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { EventEmitter } from "node:events";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { CampaignManager } from "./campaign-manager.js";
 import { CampaignStorage } from "./campaign-storage.js";
 import type { CampaignPlanner } from "./campaign-planner.js";
+import { GDD_AUDIT_FULL_CHARS } from "./campaign-planner.js";
 import type { TaskManager } from "../tasks/task-manager.js";
+import type { IncomingMessage } from "../channels/channel-messages.interface.js";
 import type { Task } from "../tasks/types.js";
 import { TaskStatus } from "../tasks/types.js";
 
@@ -760,6 +762,470 @@ describe("CampaignManager", () => {
     // Distinct meaningful frames pass.
     writeFileSync(join(rec, "frame_001.png"), Buffer.alloc(4096, 9));
     expect(gate(milestone).found).toBe(true);
+  });
+
+  it("reconcile judges outcomes INSIDE the per-campaign settle chain: a doubled settle cannot judge the final sprint twice", async () => {
+    // Audited 2026-09-02: reconcileMilestoneAfterSettle ran from a bare
+    // setTimeout outside enqueueSettle. Two settle emissions for one task
+    // (task-manager has no terminal guard; appendTaskNotice re-emits
+    // task:blocked) scheduled two reconciles; when the lineage tip had landed
+    // completed and the outcome path crossed a real async boundary (the
+    // coverage audit on the final sprint), the second reconcile re-entered
+    // the green path: two billable audits and two delivery reports.
+    tasks = new FakeTaskManager();
+    storage.close();
+    storage = new CampaignStorage(join(dir, "campaigns-reconcile.db"));
+    let auditCalls = 0;
+    const planner = {
+      planMilestones: vi.fn().mockResolvedValue(LADDER),
+      auditCoverage: vi.fn(async () => {
+        auditCalls += 1;
+        await new Promise((r) => setTimeout(r, 40));
+        return [];
+      }),
+    } as unknown as CampaignPlanner;
+    manager = new CampaignManager({
+      storage,
+      planner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async (chatId, text) => messages.push({ chatId, text }),
+      projectRoot,
+      retryAdoptionGraceMs: 10,
+      completedSettleDelayMs: 0,
+      milestoneTimeBoxMs: 60 * 60_000,
+    });
+    manager.attachEvents();
+
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+
+    // Final sprint: the executor parks task_3 (emitted twice) and its own
+    // retry lands completed inside the grace window.
+    const retryId = tasks.addRetry("task_3", TaskStatus.completed);
+    tasks.markTerminal(retryId, TaskStatus.completed, "final report via retry");
+    tasks.verifications.set(retryId, { testsGreen: true, detail: "All 42 tests passed" });
+    tasks.emit("task:blocked", "task_3", "Transient failure — worker crashed mid-epoch.");
+    tasks.emit("task:blocked", "task_3", "Transient failure — worker crashed mid-epoch.");
+
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+    await new Promise((r) => setTimeout(r, 120));
+    expect(auditCalls).toBe(1);
+    expect(messages.filter((m) => m.text.includes("Campaign delivery"))).toHaveLength(1);
+    expect(tasks.submitted).toHaveLength(3);
+  });
+
+  it("a delivery whose final sprint never ran a test SAYS so in the report", async () => {
+    // Audited 2026-09-02: the delivery gate is one-shot by design, and the
+    // report rendered the waived sprint as a clean green — no "tests:" mark,
+    // no caveat, under "game build complete".
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+
+    // Final sprint completes with no observed test run: one delivery bounce.
+    tasks.emit("task:completed", "task_3", "everything works, shipping it");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+    // The bounce text demands a captured frame, which arms the visual gate:
+    // one visual bounce, then the ladder proceeds.
+    tasks.emit("task:completed", "task_4", "shipping it again");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(5));
+    tasks.emit("task:completed", "task_5", "shipping it, third time");
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+
+    const report = messages.at(-1)!.text;
+    expect(report).toContain("Campaign delivery");
+    expect(report).toContain("Sprint C — Delivery");
+    expect(report).toMatch(/NO observed test run/);
+    expect(report).toContain("How these greens were reached");
+    expect(report).toMatch(/Sprint C — Delivery: .*never seen to pass/);
+  });
+
+  it("revival restores the delivery-verification gate along with the other evidence gates", async () => {
+    // Audited 2026-09-02: reviveAtCurrentMilestone reset the visual and
+    // no-work bounces ("fresh budget = fresh gates") but not
+    // deliveryVerificationBounced, so a revived final sprint could never be
+    // bounced for a missing test run again.
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+
+    tasks.emit("task:completed", "task_3", "shipping it"); // delivery bounce spent
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+    expect(storage.get(campaign.id)!.milestones[2]!.deliveryVerificationBounced).toBe(true);
+    tasks.emit("task:failed", "task_4", "boom");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(5));
+    tasks.emit("task:failed", "task_5", "boom again");
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"));
+
+    expect(await manager.tryHandleRevive("cli-local", "kampanya devam")).toBe(true);
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(6));
+    const revived = storage.get(campaign.id)!.milestones[2]!;
+    expect(revived.deliveryVerificationBounced).toBe(false);
+    expect(revived.visualEvidenceBounced).toBe(false);
+
+    // The revived sprint completes with no test run: visual bounce first
+    // (its prompt now demands a frame), then the delivery gate must bounce
+    // again instead of declaring delivery.
+    tasks.emit("task:completed", "task_6", "shipping it after revive");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(7));
+    tasks.emit("task:completed", "task_7", "shipping it after revive, again");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(8));
+    expect(storage.get(campaign.id)!.state).toBe("executing");
+    expect(storage.get(campaign.id)!.milestones[2]!.deliveryVerificationBounced).toBe(true);
+  });
+
+  it("a provider outage during PLANNING parks with self-revival and replans when the chain recovers", async () => {
+    // Audited 2026-09-02: planAndLaunch's catch set state=failed with no
+    // autoReviveAt, so a quota wall hit before the ladder existed was dead
+    // until a human typed "kampanya devam" — the planner's own contract
+    // comment promised the caller would park with a self-revival appointment.
+    const { ProviderHealthRegistry } = await import("../agents/providers/provider-health.js");
+    const { setLiveChainMemberNames } = await import("../agents/providers/provider-outage.js");
+    const registry = ProviderHealthRegistry.getInstance();
+    registry.clearProviderState("claude");
+    registry.recordOverloaded("claude", "quota wall");
+    setLiveChainMemberNames(["claude"]);
+
+    tasks = new FakeTaskManager();
+    storage.close();
+    storage = new CampaignStorage(join(dir, "campaigns-plan-outage.db"));
+    const planner = {
+      planMilestones: vi
+        .fn()
+        .mockRejectedValueOnce(new Error("All providers are in cooldown (quota exhausted)"))
+        .mockResolvedValue(LADDER),
+    } as unknown as CampaignPlanner;
+    manager = new CampaignManager({
+      storage,
+      planner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async (chatId, text) => messages.push({ chatId, text }),
+      projectRoot,
+      retryAdoptionGraceMs: 10,
+      completedSettleDelayMs: 0,
+      milestoneTimeBoxMs: 60 * 60_000,
+    });
+    manager.attachEvents();
+
+    try {
+      const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+      await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"));
+      const parked = storage.get(campaign.id)!;
+      expect(parked.autoReviveAt).toBeGreaterThan(Date.now());
+      expect(storage.listAwaitingAutoRevive().map((c) => c.id)).toContain(campaign.id);
+      expect(messages.at(-1)!.text).toContain("Self-revival armed");
+      expect(tasks.submitted).toHaveLength(0);
+
+      // The chain recovers; the appointment fires and must REPLAN (no ladder
+      // exists yet), then start sprint 1.
+      registry.clearProviderState("claude");
+      (manager as unknown as { scheduleAutoRevive(id: string, ms: number): void })
+        .scheduleAutoRevive(campaign.id, 20);
+      await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("executing"));
+      expect(tasks.submitted).toHaveLength(1);
+      expect(storage.get(campaign.id)!.autoReviveAt).toBeUndefined();
+    } finally {
+      setLiveChainMemberNames([]);
+      registry.clearProviderState("claude");
+    }
+  });
+
+  it("a transiently blocked GDD draft is ADOPTED from the executor's retry, not redrafted and charged", async () => {
+    // Audited 2026-09-02: onDraftSettled reacted to a keep-alive block
+    // instantly — draftAttempts += 1 and a second draft task with no lineage,
+    // while the executor's own retry ran untracked. Four blips failed the
+    // campaign before a real draft was attempted; each blip also spent one
+    // of the designer's revision rounds (same counter).
+    const campaign = manager.startFromIdea(ctx, "a match-3 where pigs fly");
+    expect(tasks.submitted).toHaveLength(1);
+
+    const retryId = tasks.addRetry("task_1");
+    tasks.emit("task:blocked", "task_1", "Transient failure — provider hiccup. Auto-retry 1/10 in ~30s.");
+
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.draftTaskId).toBe(retryId));
+    expect(tasks.submitted).toHaveLength(1); // no second drafter
+    expect(storage.get(campaign.id)!.draftAttempts).toBe(0); // no revision round spent
+
+    // The adopted retry lands the GDD → the approval gate opens normally.
+    tasks.emit("task:completed", retryId, "wrote docs/Game_GDD.md");
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("awaiting-approval"));
+  });
+
+  it("an outage-caused draft settle resubmits WITHOUT charging a revision round", async () => {
+    const { ProviderHealthRegistry } = await import("../agents/providers/provider-health.js");
+    const { setLiveChainMemberNames } = await import("../agents/providers/provider-outage.js");
+    const registry = ProviderHealthRegistry.getInstance();
+    registry.clearProviderState("cm-draft");
+    registry.recordOverloaded("cm-draft", "quota wall");
+    setLiveChainMemberNames(["cm-draft"]);
+    try {
+      const campaign = manager.startFromIdea(ctx, "a match-3 where pigs fly");
+      // Dead retry promise (tip idle past its horizon) so the settle is judged.
+      tasks.updatedAts.set("task_1", Date.now() - 30 * 60_000);
+      tasks.emit("task:failed", "task_1", "Task execution failed: All providers are in cooldown. Auto-retry 1/10 in ~30s.");
+      await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+      expect(storage.get(campaign.id)!.draftAttempts).toBe(0);
+      expect(storage.get(campaign.id)!.state).toBe("drafting-gdd");
+    } finally {
+      setLiveChainMemberNames([]);
+      registry.clearProviderState("cm-draft");
+    }
+  });
+
+  it("a GDD draft that completed while the process was down is judged on restart, not redrafted", async () => {
+    // Audited 2026-09-02: resumeOne's "landed while we were down" branch was
+    // gated on state === "executing", so a drafting-gdd campaign whose draft
+    // had completed fell through to submitDraft — a whole new LLM draft, no
+    // revision note, no attempt charged, and the approval gate never opened.
+    const campaign = manager.startFromIdea(ctx, "a match-3 where pigs fly");
+    expect(tasks.submitted).toHaveLength(1);
+    // The draft completed, but its settlement event died with the process.
+    tasks.markTerminal("task_1", TaskStatus.completed, "wrote docs/Game_GDD.md");
+
+    await manager.resumeActive();
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("awaiting-approval"));
+    expect(tasks.submitted).toHaveLength(1); // no redraft
+    expect(storage.get(campaign.id)!.gddPath).toBe("docs/Game_GDD.md");
+    expect(messages.at(-1)!.text).toContain("GDD drafted");
+  });
+
+  it("finds a GDD the draft wrote in a docs/ subfolder instead of redrafting", async () => {
+    // Audited 2026-09-02: findNewestGddPath was a flat readdirSync(docs), so
+    // docs/design/Ashen_GDD.md was invisible and the campaign redrafted.
+    rmSync(join(projectRoot, "docs", "Game_GDD.md"));
+    mkdirSync(join(projectRoot, "docs", "design"), { recursive: true });
+    writeFileSync(join(projectRoot, "docs", "design", "Ashen_GDD.md"), "# Ashen GDD\n\nElement schedule: ...");
+    const campaign = manager.startFromIdea(ctx, "a roguelike about ash");
+
+    tasks.emit("task:completed", "task_1", "wrote docs/design/Ashen_GDD.md");
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("awaiting-approval"));
+    expect(storage.get(campaign.id)!.gddPath).toBe("docs/design/Ashen_GDD.md");
+    expect(tasks.submitted).toHaveLength(1);
+  });
+
+  it("a draft that keeps completing without a discoverable GDD is bounded by the draft budget", async () => {
+    // Audited 2026-09-02: the no-file branch called submitDraft without ever
+    // touching draftAttempts — full LLM draft tasks forever, no message, no
+    // failure, the one-campaign-per-project slot wedged with no revive path.
+    rmSync(join(projectRoot, "docs", "Game_GDD.md"));
+    const campaign = manager.startFromIdea(ctx, "a puzzle game about nothing");
+
+    for (let n = 1; n <= 3; n++) {
+      tasks.emit("task:completed", `task_${n}`, "I described the GDD in chat");
+      await vi.waitFor(() => expect(tasks.submitted).toHaveLength(n + 1));
+      expect(storage.get(campaign.id)!.draftAttempts).toBe(n);
+      expect(tasks.submitted[n]!.prompt).toContain("never wrote the GDD file");
+    }
+    // The fourth landing without a file exhausts the budget: stop loudly.
+    tasks.emit("task:completed", "task_4", "I described the GDD in chat");
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"));
+    expect(tasks.submitted).toHaveLength(4);
+    expect(storage.get(campaign.id)!.lastError).toMatch(/no \*GDD\*\.md was found under docs\/ \(searched recursively\)/);
+    expect(messages.at(-1)!.text).toContain("kampanya devam");
+  });
+
+  it("a fresh attempt starts with a fresh deferral clock: a stale reconcileDeferredSince cannot charge its first reap", async () => {
+    // Audited 2026-09-02: reconcileDeferredSince was cleared only on the
+    // judge path (line ~894); revive, bounces, escalations and restarts all
+    // began a new attempt with the old clock. Past 24h the deferral was
+    // skipped and an ordinary keep-alive reap — whose text promises the
+    // executor's own retry — was charged as a failed attempt and resubmitted.
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    tasks.emit("task:failed", "task_1", "boom");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    tasks.emit("task:failed", "task_2", "boom again");
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"));
+
+    // The parked milestone carries a deferral clock from a long-ago wall.
+    const parked = storage.get(campaign.id)!;
+    parked.milestones[0]!.reconcileDeferredSince = Date.now() - 25 * 60 * 60_000;
+    storage.save(parked);
+
+    expect(await manager.tryHandleRevive("cli-local", "kampanya devam")).toBe(true);
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    expect(storage.get(campaign.id)!.milestones[0]!.attempts).toBe(1);
+
+    // The revived attempt's very first reap: the executor promises a retry.
+    tasks.emit("task:blocked", "task_3", "Reaped: no progress for 15m. Auto-retry 2/10 in ~600s.");
+    await new Promise((r) => setTimeout(r, 250));
+
+    const fresh = storage.get(campaign.id)!;
+    expect(tasks.submitted).toHaveLength(3); // deferred, not resubmitted
+    expect(fresh.state).toBe("executing");
+    expect(fresh.milestones[0]!.attempts).toBe(1); // not charged
+    expect(fresh.milestones[0]!.reconcileDeferredSince).toBeGreaterThan(Date.now() - 60_000);
+  });
+
+  it("a double-tapped approval plans ONE ladder and starts ONE sprint", async () => {
+    // Audited 2026-09-02: tryHandleApproval awaited the channel round-trip
+    // before any state write, so two concurrent "evet" (double-tap, redelivery,
+    // fire-and-forget web/Discord dispatch) both found the campaign
+    // awaiting-approval: two billable planning passes, the second overwrote
+    // the ladder, and two sprint-1 tasks were submitted (one orphaned).
+    tasks = new FakeTaskManager();
+    storage.close();
+    storage = new CampaignStorage(join(dir, "campaigns-approve.db"));
+    const planMilestones = vi.fn().mockResolvedValue(LADDER);
+    manager = new CampaignManager({
+      storage,
+      planner: { planMilestones } as unknown as CampaignPlanner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async (chatId, text) => {
+        messages.push({ chatId, text });
+        await new Promise((r) => setTimeout(r, 5)); // a real channel round-trip
+      },
+      projectRoot,
+      retryAdoptionGraceMs: 10,
+      completedSettleDelayMs: 0,
+      milestoneTimeBoxMs: 60 * 60_000,
+    });
+    manager.attachEvents();
+
+    const campaign = manager.startFromIdea(ctx, "a match-3 where pigs fly");
+    tasks.emit("task:completed", "task_1", "wrote docs/Game_GDD.md");
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("awaiting-approval"));
+
+    const consumed = await Promise.all([
+      manager.tryHandleApproval("cli-local", "evet"),
+      manager.tryHandleApproval("cli-local", "evet"),
+    ]);
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("executing"));
+    await new Promise((r) => setTimeout(r, 60));
+
+    expect(consumed.filter(Boolean)).toHaveLength(1);
+    expect(planMilestones).toHaveBeenCalledTimes(1);
+    expect(tasks.submitted).toHaveLength(2); // the draft + exactly one sprint 1
+    expect(messages.filter((m) => m.text.includes("Milestone ladder ready"))).toHaveLength(1);
+  });
+
+  it("re-sharing a revised GDD under the same filename rewrites docs/ so sprints build the new design", async () => {
+    // Audited 2026-09-02: persistSuppliedGdd was "idempotent per name" — an
+    // existence check only — so GDD.docx v2 left docs/GDD.md holding v1 while
+    // the ladder was planned from v2 and every sprint prompt pointed agents at
+    // the v1 file. The whole build ran against the superseded design.
+    const v1 = "# GDD v1\n" + "core loop: match three tiles and clear the board. ".repeat(8);
+    const v2 = "# GDD v2 REVISED\n" + "core loop: match FOUR tiles; a dragon boss guards level 5. ".repeat(8);
+    const share = (text: string): IncomingMessage =>
+      ({
+        channelType: "cli",
+        chatId: "cli-local",
+        userId: "u1",
+        text: "",
+        attachments: [{ type: "document", name: "GDD.md", data: Buffer.from(text, "utf8") }],
+        timestamp: new Date(),
+      }) as unknown as IncomingMessage;
+
+    expect(await manager.tryHandleIncoming(share(v1))).toBe(true);
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    expect(readFileSync(join(projectRoot, "docs", "GDD.md"), "utf8")).toBe(v1);
+
+    // The first build ends; the designer revises the document and re-shares it.
+    const first = storage.listActive()[0]!;
+    first.state = "cancelled";
+    storage.save(first);
+
+    expect(await manager.tryHandleIncoming(share(v2))).toBe(true);
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    expect(readFileSync(join(projectRoot, "docs", "GDD.md"), "utf8")).toBe(v2);
+    expect(storage.listActive()[0]!.gddPath).toBe("docs/GDD.md");
+  });
+
+  it("the failure tail is REPLACED across revives — exactly one tail, the latest", async () => {
+    // Audited 2026-09-02: the strip regex ended on "do not repeat it." but the
+    // appended tail continues "do not repeat it — and do NOT spend…", so the
+    // strip never matched and every revived budget stacked another stale
+    // "The previous attempt ended…" block into the persisted sprint prompt.
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    tasks.emit("task:failed", "task_1", "compile exploded in Board.cs");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    tasks.emit("task:failed", "task_2", "compile exploded in Board.cs again");
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"));
+
+    expect(await manager.tryHandleRevive("cli-local", "kampanya devam")).toBe(true);
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    tasks.emit("task:failed", "task_3", "PlayMode red: 3 of 9 tests failed");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+
+    const prompt = storage.get(campaign.id)!.milestones[0]!.prompt;
+    expect(prompt.match(/The previous attempt ended/g) ?? []).toHaveLength(1);
+    expect(prompt).toContain("PlayMode red: 3 of 9 tests failed");
+    expect(prompt).not.toContain("compile exploded");
+    expect(prompt).toContain("build the foundations"); // the sprint body survives the strip
+  });
+
+  it("a clean coverage verdict from a WINDOWED audit is caveated, not reported as audited clean", async () => {
+    // Audited 2026-09-02: past the audit threshold the GDD is windowed for
+    // the audit too, and an empty `missing` cleared coverageAuditNote as
+    // "genuinely audited clean" — a verdict that never named its scope.
+    tasks = new FakeTaskManager();
+    storage.close();
+    storage = new CampaignStorage(join(dir, "campaigns-windowed-audit.db"));
+    const planner = {
+      planMilestones: vi.fn().mockResolvedValue(LADDER),
+      auditCoverage: vi.fn().mockResolvedValue([]),
+    } as unknown as CampaignPlanner;
+    manager = new CampaignManager({
+      storage,
+      planner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async (chatId, text) => messages.push({ chatId, text }),
+      projectRoot,
+      retryAdoptionGraceMs: 10,
+      completedSettleDelayMs: 0,
+      milestoneTimeBoxMs: 60 * 60_000,
+    });
+    manager.attachEvents();
+
+    const hugeGdd = "# GDD\n" + "core loop line\n".repeat(Math.ceil(GDD_AUDIT_FULL_CHARS / 15) + 100);
+    expect(hugeGdd.length).toBeGreaterThan(GDD_AUDIT_FULL_CHARS);
+    const campaign = manager.startFromGdd(ctx, hugeGdd, "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    settleMilestone("final report");
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+
+    expect(storage.get(campaign.id)!.coverageAuditNote).toMatch(/WINDOWED GDD/);
+    expect(messages.at(-1)!.text).toContain("WINDOWED GDD");
+  });
+
+  it("a green whose visual gate never ran SAYS so in the delivery report", async () => {
+    // Audited 2026-09-02: the visual-evidence gate runs only when the
+    // planner-authored prompt happens to contain "captur"; nothing validated
+    // that it did, and the report had no mark for it — a sprint whose gate
+    // never ran rendered byte-identically to one that passed it.
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done"); // LADDER prompts never demand a capture; no Recordings/
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    settleMilestone("final report");
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+
+    const done = storage.get(campaign.id)!;
+    expect(done.milestones.map((m) => m.visualEvidence)).toEqual([
+      "none-gate-not-demanded",
+      "none-gate-not-demanded",
+      "none-gate-not-demanded",
+    ]);
+    const report = messages.at(-1)!.text;
+    expect(report).toMatch(/Sprint A — Foundations — .*visual gate NOT run/);
+    expect(report).toMatch(/Sprint A — Foundations: no fresh captured frame .*never demanded a capture/);
   });
 
   it("resumeActive leaves a still-running task alone", async () => {

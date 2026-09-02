@@ -40,4 +40,23 @@ describe("windowGdd", () => {
     const doc = "x".repeat(300_000);
     expect(windowGdd(doc, GDD_AUDIT_FULL_CHARS)).toBe(doc);
   });
+
+  it("past 400k the audit window is genuinely larger than the planner's (slices scale with the threshold)", () => {
+    // Audited 2026-09-02: fullThreshold gated only the early return; the
+    // head/tail/outline slices were module constants, so a 600k GDD gave the
+    // audit byte-for-byte the planner's window — exactly the blind spot the
+    // audit exists to catch.
+    const doc = bigGdd("- Bomb: 3x3 blast, spawns from 4-match", 520_000);
+    expect(doc.length).toBeGreaterThan(GDD_AUDIT_FULL_CHARS);
+    const planner = windowGdd(doc);
+    const audit = windowGdd(doc, GDD_AUDIT_FULL_CHARS);
+    expect(audit).not.toBe(planner);
+    expect(audit.length).toBeGreaterThan(planner.length * 2);
+  });
+
+  it("says when the structural outline itself was truncated instead of claiming it follows", () => {
+    const doc = bigGdd("- Bomb: 3x3 blast, spawns from 4-match"); // 120k of schedule lines > outline budget
+    const windowed = windowGdd(doc);
+    expect(windowed).toMatch(/outline truncated to \d+ of \d+ chars/);
+  });
 });
