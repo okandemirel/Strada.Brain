@@ -818,7 +818,11 @@ export class Orchestrator {
    */
   private workspaceCodeEventQueue: Promise<void> = Promise.resolve();
   private monitorLifecycle: MonitorLifecycle | null = null;
-  /** Tracks consecutive ask_user blocks per conversation to break clarification loops. */
+  /**
+   * Tracks consecutive ask_user blocks to break clarification loops, keyed by
+   * run scope (audited 2026-09-02 — see {@link runScope}): the counter outlives
+   * nothing but the run that earned it.
+   */
   private readonly askUserBlockCounts = new Map<string, number>();
   /** Tracks consecutive errors per tool per chat to auto-disable repeatedly failing tools. */
   // audited 2026-09-02: keyed by breaker SCOPE (the task run when one is
@@ -1324,14 +1328,21 @@ export class Orchestrator {
   }
 
   /**
-   * The breaker's scope: the active task run when there is one (each
-   * supervisor node runs under its own taskRunId), else the conversation.
+   * The scope a per-run counter belongs to: the active task run when there is
+   * one (each supervisor node, and each interactive message, runs under its own
+   * taskRunId), else the conversation. Run-scoped keys hang off the chatId with
+   * a NUL separator so {@link cleanupSessions} can sweep them by conversation.
    */
-  private toolBreakerScope(chatId: string): { key: string; label: "run" | "conversation" } {
+  private runScope(chatId: string): { key: string; label: "run" | "conversation" } {
     const taskRunId = this.resolveTaskRunId(chatId);
     return taskRunId
       ? { key: `${chatId}\u0000${taskRunId}`, label: "run" }
       : { key: chatId, label: "conversation" };
+  }
+
+  /** The breaker's scope. See {@link runScope}. */
+  private toolBreakerScope(chatId: string): { key: string; label: "run" | "conversation" } {
+    return this.runScope(chatId);
   }
 
   /** Update consecutive error counter for a tool in a breaker scope. Resets on success. */
@@ -4684,6 +4695,13 @@ export class Orchestrator {
       return interactiveResolution;
     }
 
+    // audited 2026-09-02: the clarification loop-breaker counts within ONE run.
+    // Keyed by chatId alone it survived the run that earned it — the counter is
+    // only cleared when an ask_user actually reaches the user — so a run that
+    // ended holding two blocks waved the NEXT run's first question through
+    // un-reviewed, and two runs sharing a chatId spent one another's budget.
+    // Same scope as the tool breaker; falls back to the conversation off-run.
+    const askUserScopeKey = this.runScope(chatId).key;
     if (
       mode === "interactive" &&
       activeToolCall.name === "ask_user" &&
@@ -4692,7 +4710,7 @@ export class Orchestrator {
       options.agentState
     ) {
       // Break clarification loops: after 2 consecutive blocks, let ask_user through
-      const blockCount = this.askUserBlockCounts.get(chatId) ?? 0;
+      const blockCount = this.askUserBlockCounts.get(askUserScopeKey) ?? 0;
       const MAX_ASK_USER_BLOCKS = 2;
 
       if (blockCount < MAX_ASK_USER_BLOCKS) {
@@ -4707,7 +4725,7 @@ export class Orchestrator {
           usageHandler: options.onUsage,
         });
         if (clarificationIntervention.kind === "continue") {
-          this.askUserBlockCounts.set(chatId, blockCount + 1);
+          this.askUserBlockCounts.set(askUserScopeKey, blockCount + 1);
           return {
             toolCallId: activeToolCall.id,
             content:
@@ -4729,7 +4747,7 @@ export class Orchestrator {
         });
       }
       // Reset counter when ask_user actually goes through
-      this.askUserBlockCounts.delete(chatId);
+      this.askUserBlockCounts.delete(askUserScopeKey);
     }
 
     const readOnlyCheck = checkReadOnlyBlock(activeToolCall.name, this.readOnly);
@@ -5073,7 +5091,7 @@ export class Orchestrator {
         await this.maybeFireVaultWriteHook(activeToolCall.name, activeToolCall.input);
       }
       if (!result.isError && activeToolCall.name !== "ask_user") {
-        this.askUserBlockCounts.delete(chatId);
+        this.askUserBlockCounts.delete(askUserScopeKey);
       }
       emitSubstep(result.isError ? "skipped" : "done");
 
@@ -5211,9 +5229,15 @@ export class Orchestrator {
     for (const chatId of expired) {
       this.askUserBlockCounts.delete(chatId);
       this.toolConsecutiveErrors.delete(chatId);
-      // Run-scoped breaker entries hang off the chatId with a NUL separator.
+      // Run-scoped entries hang off the chatId with a NUL separator (audited
+      // 2026-09-02: the ask_user counter is run-scoped now too, so it needs the
+      // same sweep or its per-run keys outlive the conversation).
+      const prefix = `${chatId}\u0000`;
       for (const key of this.toolConsecutiveErrors.keys()) {
-        if (key.startsWith(`${chatId}\u0000`)) this.toolConsecutiveErrors.delete(key);
+        if (key.startsWith(prefix)) this.toolConsecutiveErrors.delete(key);
+      }
+      for (const key of this.askUserBlockCounts.keys()) {
+        if (key.startsWith(prefix)) this.askUserBlockCounts.delete(key);
       }
     }
   }
