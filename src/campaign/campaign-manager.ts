@@ -777,9 +777,34 @@ export class CampaignManager {
     // against whatever the lineage says by then — not against this snapshot.
     const campaignId = campaign.id;
     const milestoneId = milestone.id;
-    setTimeout(() => {
-      void this.reconcileMilestoneAfterSettle(campaignId, milestoneId, status, output);
-    }, this.retryAdoptionGraceMs);
+    this.scheduleReconcile(campaignId, milestoneId, status, output, this.retryAdoptionGraceMs);
+  }
+
+  /**
+   * Reconcile runs INSIDE the per-campaign settle chain, never from a bare
+   * timer. Audited 2026-09-02: the outcome decision was made from an
+   * un-serialized setTimeout, so two settle emissions for one task (the
+   * task manager has no terminal guard; appendTaskNotice re-emits
+   * task:blocked) scheduled two reconciles that both judged the same
+   * milestone whenever the outcome path crossed a real async boundary
+   * (commit lock, time-box tell, the minutes-long coverage audit) — a second
+   * billable audit, a second delivery report, or a second sprint submitted
+   * against the same repo. The chain re-reads storage when it actually
+   * runs, so the second entrant sees the advanced ladder and no-ops.
+   */
+  private scheduleReconcile(
+    campaignId: string,
+    milestoneId: string,
+    status: TaskStatus,
+    output: string,
+    delayMs: number,
+  ): void {
+    const timer = setTimeout(() => {
+      this.enqueueSettle(campaignId, () =>
+        this.reconcileMilestoneAfterSettle(campaignId, milestoneId, status, output),
+      );
+    }, delayMs);
+    timer.unref?.();
   }
 
   /**
@@ -884,10 +909,7 @@ export class CampaignManager {
           milestone: milestone.id,
           recheckInMs: waitMs,
         });
-        const timer = setTimeout(() => {
-          void this.reconcileMilestoneAfterSettle(campaign.id, milestone.id, status, output);
-        }, waitMs);
-        timer.unref?.();
+        this.scheduleReconcile(campaign.id, milestone.id, status, output, waitMs);
         return;
       }
     }
@@ -1085,8 +1107,12 @@ export class CampaignManager {
       } catch { /* evidence capture is best-effort */ }
       // Persist the green BEFORE the coverage audit: that await is a
       // 400k-window LLM call lasting minutes, and storage said "running" the
-      // whole time — a crash re-ran the entire green path (second commit,
-      // second billable audit) and a concurrent reconcile could enter it too.
+      // whole time. What this persist buys is a DURABLE record of the green
+      // (commit note, test verdict) so a crash mid-audit does not lose it; a
+      // restart still re-enters this path and re-runs the audit, which is
+      // right — the audit's result was never recorded. Concurrent re-entry
+      // is prevented by the settle chain (scheduleReconcile), not by this
+      // persist (audited 2026-09-02: the comment used to claim otherwise).
       this.persist(campaign);
       const isLast = campaign.currentMilestone >= campaign.milestones.length - 1;
       if (isLast && !milestone.testVerdict && !milestone.deliveryVerificationBounced) {

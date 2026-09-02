@@ -737,6 +737,60 @@ describe("CampaignManager", () => {
     expect(gate(milestone).found).toBe(true);
   });
 
+  it("reconcile judges outcomes INSIDE the per-campaign settle chain: a doubled settle cannot judge the final sprint twice", async () => {
+    // Audited 2026-09-02: reconcileMilestoneAfterSettle ran from a bare
+    // setTimeout outside enqueueSettle. Two settle emissions for one task
+    // (task-manager has no terminal guard; appendTaskNotice re-emits
+    // task:blocked) scheduled two reconciles; when the lineage tip had landed
+    // completed and the outcome path crossed a real async boundary (the
+    // coverage audit on the final sprint), the second reconcile re-entered
+    // the green path: two billable audits and two delivery reports.
+    tasks = new FakeTaskManager();
+    storage.close();
+    storage = new CampaignStorage(join(dir, "campaigns-reconcile.db"));
+    let auditCalls = 0;
+    const planner = {
+      planMilestones: vi.fn().mockResolvedValue(LADDER),
+      auditCoverage: vi.fn(async () => {
+        auditCalls += 1;
+        await new Promise((r) => setTimeout(r, 40));
+        return [];
+      }),
+    } as unknown as CampaignPlanner;
+    manager = new CampaignManager({
+      storage,
+      planner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async (chatId, text) => messages.push({ chatId, text }),
+      projectRoot,
+      retryAdoptionGraceMs: 10,
+      completedSettleDelayMs: 0,
+      milestoneTimeBoxMs: 60 * 60_000,
+    });
+    manager.attachEvents();
+
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+
+    // Final sprint: the executor parks task_3 (emitted twice) and its own
+    // retry lands completed inside the grace window.
+    const retryId = tasks.addRetry("task_3", TaskStatus.completed);
+    tasks.markTerminal(retryId, TaskStatus.completed, "final report via retry");
+    tasks.verifications.set(retryId, { testsGreen: true, detail: "All 42 tests passed" });
+    tasks.emit("task:blocked", "task_3", "Transient failure — worker crashed mid-epoch.");
+    tasks.emit("task:blocked", "task_3", "Transient failure — worker crashed mid-epoch.");
+
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+    await new Promise((r) => setTimeout(r, 120));
+    expect(auditCalls).toBe(1);
+    expect(messages.filter((m) => m.text.includes("Campaign delivery"))).toHaveLength(1);
+    expect(tasks.submitted).toHaveLength(3);
+  });
+
   it("resumeActive leaves a still-running task alone", async () => {
     manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
     await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
