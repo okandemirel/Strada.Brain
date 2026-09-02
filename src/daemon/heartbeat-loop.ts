@@ -401,11 +401,11 @@ export class HeartbeatLoop {
       // 6. Evaluate trigger
       try {
         if (trigger.shouldFire(now)) {
+          const cooldownMs = trigger.metadata.cooldownSeconds
+            ? (trigger.metadata.cooldownSeconds * 1000)
+            : 0;
           // Dedup check (TRIG-05) -- before onFired and task submission
           if (this.deduplicator) {
-            const cooldownMs = trigger.metadata.cooldownSeconds
-              ? (trigger.metadata.cooldownSeconds * 1000)
-              : 0;
             if (this.deduplicator.shouldSuppress(name, trigger.metadata.description, now.getTime(), cooldownMs)) {
               const reason = this.deduplicator.getSuppressionReason();
               this.eventBus.emit("daemon:trigger_deduplicated", {
@@ -444,9 +444,10 @@ export class HeartbeatLoop {
             { origin: "daemon", triggerName: name },
           );
 
-          // Record dedup fire
+          // Record dedup fire — with this trigger's own cooldown so another
+          // trigger's cleanup pass cannot evict it early (audited 2026-09-02)
           if (this.deduplicator) {
-            this.deduplicator.recordFired(name, trigger.metadata.description, now.getTime());
+            this.deduplicator.recordFired(name, trigger.metadata.description, now.getTime(), cooldownMs);
           }
 
           // Update with real task ID now that submission succeeded
