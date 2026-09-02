@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { loadConfig, resetConfigCache, validateConfig, secretPatterns } from "./config.js";
+import { loadConfig, resetConfigCache, validateConfig, secretPatterns, hasRequiredApiKeys } from "./config.js";
 import { realpathSync, statSync } from "node:fs";
 
 vi.mock("node:fs", () => ({
@@ -477,6 +477,97 @@ describe("loadConfig", () => {
     expect(config.rag.provider).toBe("gemini");
     expect(config.rag.model).toBe("gemini-embedding-exp-03-07");
     expect(config.rag.baseUrl).toBe("https://generativelanguage.googleapis.com/v1beta/openai");
+  });
+
+  it("boots SYSTEM_PRESET=free with no API key: the preset chain is resolved BEFORE the credential gate (audited 2026-09-02)", () => {
+    // `strada-brain preset set free` writes ONLY SYSTEM_PRESET=free into .env
+    // (no PROVIDER_CHAIN). Pre-fix, validateConfig ran before the preset was
+    // read, so the schema's "or use Ollama" escape hatch saw providerChain
+    // undefined and the documented keyless preset could never boot.
+    const config = loadConfig({
+      UNITY_PROJECT_PATH: "/test/project",
+      SYSTEM_PRESET: "free",
+    });
+    expect(config.providerChain).toBe("ollama");
+    // The preset's tier values (ollama:<model>) reach the resolved config too.
+    expect(config.delegation.tiers.local).toMatch(/^ollama/);
+    expect(config.delegation.tiers.premium).toMatch(/^ollama/);
+  });
+
+  it("explicit PROVIDER_CHAIN still wins over the preset chain (preset-before-validation guard)", () => {
+    const config = loadConfig({
+      ANTHROPIC_API_KEY: "sk-test-key-123",
+      UNITY_PROJECT_PATH: "/test/project",
+      SYSTEM_PRESET: "free",
+      PROVIDER_CHAIN: "claude",
+    });
+    expect(config.providerChain).toBe("claude");
+  });
+
+  it("still rejects an unknown SYSTEM_PRESET by name", () => {
+    expect(() =>
+      loadConfig({
+        ANTHROPIC_API_KEY: "sk-test-key-123",
+        UNITY_PROJECT_PATH: "/test/project",
+        SYSTEM_PRESET: "gold",
+      }),
+    ).toThrow('Invalid SYSTEM_PRESET "gold"');
+  });
+
+  it("counts a sibling OpenCode account (OPENCODE2/OPENCODE3_API_KEY) as a credential at the boot gate (audited 2026-09-02)", () => {
+    // Every other layer (provider registry, credential map, capacity counter)
+    // treats opencode2/3 as first-class providers; pre-fix the schema's
+    // hasAnyKey list omitted them, so a sibling-only config was refused with
+    // "At least one AI provider API key is required".
+    const only2 = loadConfig({ UNITY_PROJECT_PATH: "/test/project", OPENCODE2_API_KEY: "oc2-key" });
+    expect(only2.opencode2ApiKey).toBe("oc2-key");
+    expect(hasRequiredApiKeys(only2)).toEqual({ valid: true, missing: [] });
+
+    const only3 = loadConfig({ UNITY_PROJECT_PATH: "/test/project", OPENCODE3_API_KEY: "oc3-key" });
+    expect(only3.opencode3ApiKey).toBe("oc3-key");
+    expect(hasRequiredApiKeys(only3)).toEqual({ valid: true, missing: [] });
+  });
+
+  it("still refuses a config with no credential at all (sibling-key guard)", () => {
+    expect(() => loadConfig({ UNITY_PROJECT_PATH: "/test/project" })).toThrow(
+      "At least one AI provider API key is required",
+    );
+  });
+
+  it("counts subscription-authenticated accounts toward derived parallelism (audited 2026-09-02)", () => {
+    // Capacity = usable provider accounts. ProviderManager.isAvailable treats a
+    // Claude subscription token and a ChatGPT auth file as usable accounts;
+    // pre-fix the config counter only saw raw API keys (plus the OpenAI access
+    // token), so two subscription accounts derived the same width as none.
+    const twoSubscriptions = loadConfig({
+      UNITY_PROJECT_PATH: "/test/project",
+      ANTHROPIC_AUTH_MODE: "claude-subscription",
+      ANTHROPIC_AUTH_TOKEN: "sub-token",
+      OPENAI_AUTH_MODE: "chatgpt-subscription",
+      OPENAI_CHATGPT_AUTH_FILE: "/test/auth.json",
+    });
+    const twoApiKeys = loadConfig({
+      UNITY_PROJECT_PATH: "/test/project",
+      ANTHROPIC_API_KEY: "sk-a",
+      OPENAI_API_KEY: "sk-o",
+    });
+    // Two accounts either way: 3 nodes per account, 2 delegations per account.
+    expect(twoApiKeys.supervisor.maxParallelNodes).toBe(6);
+    expect(twoApiKeys.delegation.maxConcurrentPerParent).toBe(4);
+    expect(twoSubscriptions.supervisor.maxParallelNodes).toBe(6);
+    expect(twoSubscriptions.delegation.maxConcurrentPerParent).toBe(4);
+  });
+
+  it("does not double-count a provider that has both a key and a subscription (capacity guard)", () => {
+    const config = loadConfig({
+      UNITY_PROJECT_PATH: "/test/project",
+      OPENAI_API_KEY: "sk-o",
+      OPENAI_AUTH_MODE: "chatgpt-subscription",
+      OPENAI_CHATGPT_AUTH_FILE: "/test/auth.json",
+    });
+    // One account -> floor (4 / 3), not two.
+    expect(config.supervisor.maxParallelNodes).toBe(4);
+    expect(config.delegation.maxConcurrentPerParent).toBe(3);
   });
 
   it("loads channel auth configuration into structured runtime config", () => {
