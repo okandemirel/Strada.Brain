@@ -153,6 +153,22 @@ function isTransientError(err: unknown): boolean {
   return TRANSIENT_PATTERNS.some((p) => lower.includes(p.toLowerCase()));
 }
 
+/**
+ * The dispatcher's own per-node timeout. Distinguished by type, not by text:
+ * its message contains "timeout", which TRANSIENT_PATTERNS matches, and
+ * attempt 0 used to sleep 2s and run the whole node AGAIN — a stuck node burned
+ * two full windows (6h + 6h at the shipped defaults) before it was reported
+ * failed, with the abandoned first run still executing (audited 2026-09-02).
+ * The window is already the whole budget; a second one measures nothing new.
+ */
+class NodeTimeoutError extends Error {
+  readonly perNodeTimeout = true;
+  constructor(message: string) {
+    super(message);
+    this.name = "NodeTimeoutError";
+  }
+}
+
 // =============================================================================
 // DISPATCHER
 // =============================================================================
@@ -688,8 +704,9 @@ export class SupervisorDispatcher {
         // On first attempt, retry if transient — but never into a fully
         // cooling chain: the chain's terminal error carries "rate limit"/
         // "429" fragments that read as transient, and a wave multiplies the
-        // doomed extra call across every node (measured 2026-08-29).
-        if (attempt === 0 && isTransientError(err)) {
+        // doomed extra call across every node (measured 2026-08-29). A
+        // per-node timeout is never transient (audited 2026-09-02).
+        if (attempt === 0 && !(err instanceof NodeTimeoutError) && isTransientError(err)) {
           const { allProvidersCoolingDownMs } = await import("../agents/providers/provider-outage.js");
           if (allProvidersCoolingDownMs() > 0) {
             return this.makeResult(
@@ -738,8 +755,10 @@ export class SupervisorDispatcher {
 
     // Explicit timeout promise: rejects with context-rich error (no silent suppression)
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let timedOut = false;
     const timeoutPromise = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
+        timedOut = true;
         nodeController.abort();
         const elapsed = Date.now() - startedAt;
         reject(
@@ -779,15 +798,27 @@ export class SupervisorDispatcher {
       return result;
     } catch (err) {
       const elapsed = Date.now() - startedAt;
-      const baseMsg = err instanceof Error ? err.message : String(err);
+      // audited 2026-09-02: the controller was aborted BEFORE the reason was
+      // classified, so `signal.aborted` was always true, every error read as
+      // "timeout-or-node-abort" (which contains "timeout") and was retried as
+      // transient — a plain compile error included. Classify first, then abort.
+      // The timer aborts the controller before its own rejection lands, so the
+      // abort leg wins the race on a timeout; `timedOut` names the real cause.
+      const abortedBeforeCatch = nodeController.signal.aborted;
+      const reason = timedOut
+        ? "per-node-timeout"
+        : externalSignal?.aborted
+          ? "external-abort"
+          : abortedBeforeCatch
+            ? "node-abort"
+            : "node-error";
+      const baseMsg = timedOut
+        ? `Tool timeout after ${timeoutMs}ms`
+        : (err instanceof Error ? err.message : String(err));
       // Abort the node controller so in-flight fetch() calls are cancelled
       nodeController.abort();
-      const aborted = nodeController.signal.aborted
-        ? (externalSignal?.aborted ? "external-abort" : "timeout-or-node-abort")
-        : "node-error";
-      throw new Error(
-        `${baseMsg} [node="${nodeLabel}", elapsed=${elapsed}ms, reason=${aborted}]`,
-      );
+      const message = `${baseMsg} [node="${nodeLabel}", elapsed=${elapsed}ms, reason=${reason}]`;
+      throw timedOut ? new NodeTimeoutError(message) : new Error(message);
     } finally {
       if (timer !== undefined) {
         clearTimeout(timer);

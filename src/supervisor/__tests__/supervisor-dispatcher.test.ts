@@ -264,6 +264,48 @@ describe("SupervisorDispatcher", () => {
     expect(results[0].status).toBe("failed");
   });
 
+  // audited 2026-09-02: the per-node timeout surfaced as "... reason=timeout-or-
+  // node-abort", isTransientError substring-matched "timeout", and attempt 0 slept
+  // 2s and ran the whole node AGAIN — a stuck node burned two full windows (up to
+  // 6h + 6h with the shipped defaults) before it was reported failed, with the
+  // abandoned first run still executing in the background.
+  it("does not retry a node that hit its own per-node timeout", async () => {
+    const executeNode = vi.fn().mockImplementation(
+      () => new Promise<NodeResult>((resolve) => setTimeout(() => resolve(makeOkResult("X")), 5000)),
+    );
+    const dispatcher = new SupervisorDispatcher({
+      executeNode,
+      config: { maxParallelNodes: 1, nodeTimeoutMs: 100, maxFailureBudget: 3 },
+    });
+
+    const startedAt = Date.now();
+    const results = await dispatcher.dispatch([makeAssignedNode("X", "Stuck task", "claude")]);
+    const elapsed = Date.now() - startedAt;
+
+    expect(executeNode).toHaveBeenCalledTimes(1);
+    expect(results[0]?.status).toBe("failed");
+    expect(results[0]?.output).toContain("per-node-timeout");
+    expect(results[0]?.output).toContain("Tool timeout after 100ms");
+    expect(elapsed).toBeLessThan(1500); // no 2s transient backoff, no second window
+  });
+
+  it("does not retry a non-transient node error", async () => {
+    // The catch used to abort the node controller BEFORE classifying the error,
+    // so every error read as "timeout-or-node-abort" and was retried as transient.
+    const executeNode = vi.fn().mockRejectedValue(new Error("Compilation failed: syntax error in Player.cs"));
+    const dispatcher = new SupervisorDispatcher({
+      executeNode,
+      config: { maxParallelNodes: 1, nodeTimeoutMs: 5000, maxFailureBudget: 3 },
+    });
+
+    const results = await dispatcher.dispatch([makeAssignedNode("X", "Compile", "claude")]);
+
+    expect(executeNode).toHaveBeenCalledTimes(1);
+    expect(results[0]?.status).toBe("failed");
+    expect(results[0]?.output).toContain("Compilation failed");
+    expect(results[0]?.output).toContain("reason=node-error");
+  });
+
   it("passes an abortable node signal to the executor on timeout", async () => {
     let observedAbort = false;
     const executeNode = vi.fn().mockImplementation(
