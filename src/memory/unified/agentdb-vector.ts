@@ -318,31 +318,46 @@ export async function rebuildHnswIndex(ctx: AgentDBVectorContext): Promise<void>
 // Hash-to-Real embedding migration
 // ---------------------------------------------------------------------------
 
+/** Outcome of one `reEmbedHashEntries` pass. Every count names what it measured. */
+export interface ReEmbedResult {
+  /** Hash-based entries whose real embedding was generated AND persisted. */
+  migrated: number;
+  /** Entries with an embedding that were scanned (0 when the pass could not run). */
+  total: number;
+  /** Entries left as they were: already real, provider failure, or persist failure. */
+  skipped: number;
+  /** Entries the hash-vector detector flagged this pass (migrated + failed). */
+  hashDetected: number;
+}
+
 /**
  * Re-embed all hash-based entries using the current embedding provider.
- * Idempotent: checks the migration marker and returns immediately if already done.
+ *
+ * Idempotent by construction: `isHashBasedEmbedding` filters every entry
+ * before the provider is called, so a clean store costs one cheap pass over
+ * the in-memory map and zero provider calls. The migration marker only
+ * records the last completed pass — it does NOT gate the scan. It used to:
+ * once the first pass wrote `re_embed_complete_v1`, every later call
+ * returned {0,0,0} without looking, so a hash vector written during a
+ * provider outage after that point (generateEmbedding's fallback) was
+ * never repaired and no report said so (audited 2026-09-02).
  */
 export async function reEmbedHashEntries(
   ctx: AgentDBVectorContext,
   hasMigrationMarker: (key: string) => Promise<boolean>,
   setMigrationMarker: (key: string, metadata?: Record<string, unknown>) => Promise<void>,
-): Promise<{ migrated: number; total: number; skipped: number }> {
+): Promise<ReEmbedResult> {
   const MARKER_KEY = "re_embed_complete_v1";
   const BATCH_SIZE = 50;
 
-  // Idempotency check
-  if (await hasMigrationMarker(MARKER_KEY)) {
-    return { migrated: 0, total: 0, skipped: 0 };
-  }
-
   if (!ctx.config.embeddingProvider) {
     getLoggerSafe().warn("[AgentDB] Re-embed skipped — no embedding provider configured");
-    return { migrated: 0, total: 0, skipped: 0 };
+    return { migrated: 0, total: 0, skipped: 0, hashDetected: 0 };
   }
 
   if (!ctx.sqliteDb) {
     getLoggerSafe().warn("[AgentDB] Re-embed skipped — SQLite not available");
-    return { migrated: 0, total: 0, skipped: 0 };
+    return { migrated: 0, total: 0, skipped: 0, hashDetected: 0 };
   }
 
   // Collect all entries that have embeddings
@@ -351,12 +366,14 @@ export async function reEmbedHashEntries(
   );
   const total = allEntries.length;
 
-  getLoggerSafe().info("[AgentDB] Starting hash-to-real embedding migration", {
+  getLoggerSafe().info("[AgentDB] Starting hash-to-real embedding scan", {
     totalEntries: total,
+    previousPassCompleted: await hasMigrationMarker(MARKER_KEY),
   });
 
   let migrated = 0;
   let skipped = 0;
+  let hashDetected = 0;
   let hadPersistFailure = false;
 
   // Process in batches
@@ -373,6 +390,7 @@ export async function reEmbedHashEntries(
         skipped++;
         continue;
       }
+      hashDetected++;
 
       try {
         const newEmbedding = await ctx.config.embeddingProvider!(entry.content) as Vector<number>;
@@ -458,20 +476,22 @@ export async function reEmbedHashEntries(
   }
 
   if (!hadPersistFailure) {
-    await setMigrationMarker(MARKER_KEY, { migrated, total, skipped });
+    await setMigrationMarker(MARKER_KEY, { migrated, total, skipped, hashDetected });
   } else {
     getLoggerSafe().warn("[AgentDB] Re-embed finished with persistence failures; migration marker not set", {
       migrated,
       total,
       skipped,
+      hashDetected,
     });
   }
 
-  getLoggerSafe().info("[AgentDB] Hash-to-real embedding migration complete", {
+  getLoggerSafe().info("[AgentDB] Hash-to-real embedding scan complete", {
     migrated,
     total,
     skipped,
+    hashDetected,
   });
 
-  return { migrated, total, skipped };
+  return { migrated, total, skipped, hashDetected };
 }

@@ -356,15 +356,39 @@ describe("detectAndHandleDimensionMismatch", () => {
 // ---------------------------------------------------------------------------
 
 describe("reEmbedHashEntries", () => {
-  it("should return early if migration marker already exists", async () => {
-    const ctx = makeVectorCtx();
+  // audited 2026-09-02: the marker used to short-circuit the whole scan, so a
+  // hash vector written after the first completed pass (provider outage) was
+  // never repaired. The marker records completion; it must not gate repair.
+  it("re-embeds a hash-based entry even when the migration marker already exists", async () => {
+    const mockProvider = vi.fn(async () => [0.1, -0.2, 0.3, -0.4, 0.5, -0.6, 0.7, -0.8]);
+    const entries = new Map<string, UnifiedMemoryEntry>();
+    entries.set("hash1", makeEntry("hash1", {
+      // all-positive, low-variance: the hash fallback's signature
+      embedding: [0.35, 0.36, 0.35, 0.36, 0.35, 0.36, 0.35, 0.36],
+    }));
+
+    const mockStmt = { run: vi.fn() };
+    const stmts = new Map<string, any>();
+    stmts.set("upsertMemory", mockStmt);
+
+    const ctx = makeVectorCtx({
+      entries,
+      config: makeConfig({ embeddingProvider: mockProvider } as any),
+      sqliteDb: { transaction: vi.fn((fn: any) => () => fn()) } as any,
+      sqliteStatements: stmts,
+    });
+
     const result = await reEmbedHashEntries(
       ctx,
-      async () => true, // marker exists
+      async () => true, // marker exists from an earlier completed pass
       async () => {},
     );
 
-    expect(result).toEqual({ migrated: 0, total: 0, skipped: 0 });
+    expect(mockProvider).toHaveBeenCalledTimes(1);
+    expect(result.migrated).toBe(1);
+    expect(result.total).toBe(1);
+    expect(result.hashDetected).toBe(1);
+    expect(entries.get("hash1")!.embedding).toEqual([0.1, -0.2, 0.3, -0.4, 0.5, -0.6, 0.7, -0.8]);
   });
 
   it("should return early if no embedding provider is configured", async () => {
@@ -378,7 +402,7 @@ describe("reEmbedHashEntries", () => {
       async () => {},
     );
 
-    expect(result).toEqual({ migrated: 0, total: 0, skipped: 0 });
+    expect(result).toEqual({ migrated: 0, total: 0, skipped: 0, hashDetected: 0 });
   });
 
   it("should return early if sqliteDb is not available", async () => {
@@ -393,7 +417,7 @@ describe("reEmbedHashEntries", () => {
       async () => {},
     );
 
-    expect(result).toEqual({ migrated: 0, total: 0, skipped: 0 });
+    expect(result).toEqual({ migrated: 0, total: 0, skipped: 0, hashDetected: 0 });
   });
 
   it("should skip entries that are not hash-based", async () => {

@@ -292,15 +292,62 @@ describe("AgentDBMemory", () => {
   // ---------------------------------------------------------------------------
 
   describe("reEmbedHashEntries", () => {
-    it("should skip when migration marker exists", async () => {
-      // Pre-set the migration marker
-      await memory.setMigrationMarker("re_embed_complete_v1");
+    // audited 2026-09-02: a hash vector written during a provider outage AFTER
+    // the one-shot marker was set was never repaired — every later boot hit
+    // the marker and returned {0,0,0}. The marker records the last completed
+    // pass; the scan itself must run every time it is called.
+    it("repairs a hash vector written after the migration marker was set", async () => {
+      const outageDir = mkdtempSync(join(tmpdir(), "agentdb-outage-test-"));
+      let outage = false;
+      let providerCalls = 0;
+      const realVector = new Array(128).fill(0).map((_, i) => (i % 2 === 0 ? 0.05 : -0.05));
+      const memoryWithProvider = new AgentDBMemory({
+        dbPath: outageDir,
+        dimensions: 128,
+        maxEntriesPerTier: {
+          [MemoryTier.Working]: 10,
+          [MemoryTier.Ephemeral]: 50,
+          [MemoryTier.Persistent]: 100,
+        },
+        hnswParams: { efConstruction: 50, M: 8, efSearch: 32 },
+        quantizationType: "none",
+        cacheSize: 100,
+        enableAutoTiering: false,
+        ephemeralTtlMs: 60_000,
+        embeddingProvider: async (_text: string) => {
+          providerCalls++;
+          if (outage) throw new Error("429 rate limited");
+          return realVector;
+        },
+      });
+      await memoryWithProvider.initialize();
 
-      const result = await memory.reEmbedHashEntries();
+      try {
+        // Boot 1: healthy provider, clean pass, marker written.
+        await memoryWithProvider.reEmbedHashEntries();
+        expect(await memoryWithProvider.hasMigrationMarker("re_embed_complete_v1")).toBe(true);
 
-      expect(result.migrated).toBe(0);
-      expect(result.total).toBe(0);
-      expect(result.skipped).toBe(0);
+        // Mid-session outage: storeNote falls back to a hash vector.
+        outage = true;
+        const poisoned = await memoryWithProvider.storeNote("written during the outage", ["outage"]);
+        const before = (memoryWithProvider as any).entries.get(poisoned.id).embedding as number[];
+        expect((memoryWithProvider as any).isHashBasedEmbedding("written during the outage", before)).toBe(true);
+
+        // Boot 2 (provider healthy again): the repair must still run.
+        outage = false;
+        const callsBefore = providerCalls;
+        const result = await memoryWithProvider.reEmbedHashEntries();
+
+        expect(result.hashDetected).toBe(1);
+        expect(result.migrated).toBe(1);
+        expect(result.total).toBe(1);
+        expect(providerCalls).toBe(callsBefore + 1);
+        const after = (memoryWithProvider as any).entries.get(poisoned.id).embedding as number[];
+        expect((memoryWithProvider as any).isHashBasedEmbedding("written during the outage", after)).toBe(false);
+      } finally {
+        await memoryWithProvider.shutdown();
+        rmSync(outageDir, { recursive: true, force: true });
+      }
     });
 
     it("should return zeros when no embedding provider", async () => {
@@ -413,8 +460,9 @@ describe("AgentDBMemory", () => {
       }
     });
 
-    it("should be idempotent (second call returns zeros)", async () => {
+    it("is idempotent: a second call on a clean store re-scans, finds no hash vectors, calls no provider", async () => {
       const providerDir = mkdtempSync(join(tmpdir(), "agentdb-idem-test-"));
+      let idemCalls = 0;
       const memoryWithProvider = new AgentDBMemory({
         dbPath: providerDir,
         dimensions: 128,
@@ -429,20 +477,24 @@ describe("AgentDBMemory", () => {
         enableAutoTiering: true,
         ephemeralTtlMs: 60_000,
         embeddingProvider: async (_text: string) => {
+          idemCalls++;
           return new Array(128).fill(0).map((_, i) => (i % 2 === 0 ? 0.05 : -0.05));
         },
       });
       await memoryWithProvider.initialize();
 
       try {
-        // First call performs migration
+        await memoryWithProvider.storeNote("real from the start", ["idem"]);
+        // First call performs migration (nothing hash-based to migrate)
         await memoryWithProvider.reEmbedHashEntries();
+        const callsAfterFirst = idemCalls;
 
-        // Second call should be a no-op due to migration marker
+        // Second call re-scans; the scan is cheap and the provider is untouched
         const result2 = await memoryWithProvider.reEmbedHashEntries();
+        expect(result2.total).toBe(1);
+        expect(result2.hashDetected).toBe(0);
         expect(result2.migrated).toBe(0);
-        expect(result2.total).toBe(0);
-        expect(result2.skipped).toBe(0);
+        expect(idemCalls).toBe(callsAfterFirst);
       } finally {
         await memoryWithProvider.shutdown();
         rmSync(providerDir, { recursive: true, force: true });

@@ -69,6 +69,7 @@ import {
   isHashBasedEmbedding,
   detectAndHandleDimensionMismatch,
   reEmbedHashEntries,
+  type ReEmbedResult,
 } from "./agentdb-vector.js";
 
 import {
@@ -1447,7 +1448,7 @@ export class AgentDBMemory implements IUnifiedMemory {
   // Hash-to-Real Embedding Migration (delegates to agentdb-vector)
   // ---------------------------------------------------------------------------
 
-  async reEmbedHashEntries(): Promise<{ migrated: number; total: number; skipped: number }> {
+  async reEmbedHashEntries(): Promise<ReEmbedResult> {
     return reEmbedHashEntries(
       this.getVectorCtx(),
       this.hasMigrationMarker.bind(this),

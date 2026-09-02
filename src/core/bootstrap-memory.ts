@@ -88,7 +88,10 @@ export async function initializeMemory(
 
     agentdb.setDecayConfig(config.memory.decay);
 
-    // Fire-and-forget: migrate hash embeddings to real embeddings
+    // Fire-and-forget: migrate hash embeddings to real embeddings. The scan
+    // runs on every boot (the marker no longer gates it — audited 2026-09-02),
+    // so the log names what was scanned and what was found rather than
+    // staying silent, which read like "nothing to repair".
     const agentdbAny = agentdb as unknown as Record<string, unknown>;
     if (embeddingProvider && typeof agentdbAny.reEmbedHashEntries === "function") {
       (
@@ -96,12 +99,18 @@ export async function initializeMemory(
           migrated: number;
           total: number;
           skipped: number;
+          hashDetected: number;
         }>
       )()
         .then((result) => {
-          if (result.migrated > 0 || result.skipped > 0) {
+          if (result.hashDetected > 0) {
+            const failed = result.hashDetected - result.migrated;
             logger.info(
-              `[Bootstrap] Re-embedded ${result.migrated}/${result.total} hash entries${result.skipped > 0 ? ` (${result.skipped} skipped)` : ""}`,
+              `[Bootstrap] Re-embedded ${result.migrated}/${result.hashDetected} hash entries out of ${result.total} scanned${failed > 0 ? ` (${failed} still hash-based: provider or persist failure)` : ""}`,
+            );
+          } else {
+            logger.info(
+              `[Bootstrap] Embedding scan: ${result.total} entries scanned, 0 hash embeddings found`,
             );
           }
         })
