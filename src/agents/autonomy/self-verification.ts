@@ -55,8 +55,21 @@ interface PublishedBuildState {
 const publishedBuildStates = new Map<string, PublishedBuildState>();
 let publishSeq = 0;
 
-/** Any currently-failing build wins; otherwise the most recent clean one. */
-export function getLatestGlobalBuildState(): {
+/**
+ * How long a failing publication counts as "currently failing".
+ *
+ * Audited 2026-09-02: the failing preference had no recency bound and nothing
+ * unpublished a verifier when its run ended, so one dead worker's red compile
+ * — with its long-gone files — outlived hours of green compiles from every
+ * later worker, and the change-gated observer could never report a recovery
+ * or a NEW failure. A worker still fixing a red build republishes on every
+ * verify, so a failure nobody has re-asserted in this long belongs to a run
+ * that is over.
+ */
+const FAILING_STATE_STALE_MS = 10 * 60_000;
+
+/** Any currently-failing build wins; otherwise the most recent one. */
+export function getLatestGlobalBuildState(nowMs = Date.now()): {
   pendingFiles: ReadonlySet<string>;
   hasCompilableChanges: boolean;
   lastBuildOk: boolean | null;
@@ -64,7 +77,8 @@ export function getLatestGlobalBuildState(): {
   let failing: PublishedBuildState | undefined;
   let newest: PublishedBuildState | undefined;
   for (const state of publishedBuildStates.values()) {
-    if (state.lastBuildOk === false && (!failing || state.at > failing.at)) failing = state;
+    const stillCurrent = nowMs - state.at <= FAILING_STATE_STALE_MS;
+    if (state.lastBuildOk === false && stillCurrent && (!failing || state.at > failing.at)) failing = state;
     if (!newest || state.at > newest.at) newest = state;
   }
   const chosen = failing ?? newest;
@@ -118,6 +132,17 @@ export class SelfVerification {
     this.pendingTestFiles = new Set();
     this.testRunAttempts = 0;
     this.buildGateEmissions = 0;
+    // The published state described the task that just ended, not the next.
+    this.dispose();
+  }
+
+  /**
+   * Retire this verifier's process-wide publication. A run that is over has
+   * no current build state; leaving its last verdict in the map let a dead
+   * failure outrank every live worker (audited 2026-09-02).
+   */
+  dispose(): void {
+    publishedBuildStates.delete(this.publishKey);
   }
 
   /**
