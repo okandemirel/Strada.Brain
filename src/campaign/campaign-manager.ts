@@ -596,6 +596,16 @@ export class CampaignManager {
         status: "pending",
         attempts: 0,
       }));
+      // The planner is told to demand a captured frame of every sprint; the
+      // visual gate keys on that wording. Name the sprints where it did not,
+      // so a gate that will never run is visible before the ladder starts.
+      const ungated = campaign.milestones.filter((m) => !/captur/i.test(m.prompt)).map((m) => m.id);
+      if (ungated.length > 0) {
+        getLoggerSafe().warn("Planner omitted the captured-frame demand — visual gate will not run for these sprints", {
+          id: campaign.id,
+          milestones: ungated,
+        });
+      }
       campaign.currentMilestone = 0;
       this.persist(campaign);
 
@@ -1266,6 +1276,18 @@ export class CampaignManager {
       milestone.status = "green";
       milestone.resultExcerpt = output.slice(-500);
       milestone.commitNote = commitNote.trim() || undefined;
+      // Record what the capture scan saw for EVERY green, not only the gated
+      // ones: the gate above is keyed on planner wording, and a sprint whose
+      // gate never ran must not read like one that passed it in the report
+      // (audited 2026-09-02).
+      try {
+        const captureDemanded = /captur/i.test(milestone.prompt);
+        milestone.visualEvidence = this.freshCaptureEvidence(milestone).found
+          ? "observed"
+          : captureDemanded
+            ? "none-gate-spent"
+            : "none-gate-not-demanded";
+      } catch { /* evidence capture is best-effort */ }
       try {
         const tip = milestone.taskId
           ? this.taskManager.findLatestLineageTask(milestone.taskId as TaskId)
@@ -1698,6 +1720,15 @@ export class CampaignManager {
         );
       }
       if (m.visualEvidenceBounced) { marks.push("visual-evidence bounce spent"); caveats.push(`${m.title}: needed a second attempt to produce a captured frame`); }
+      if (m.visualEvidence === "observed") marks.push("captured frame observed");
+      if (m.visualEvidence === "none-gate-not-demanded") {
+        marks.push("no captured frame; visual gate NOT run");
+        caveats.push(`${m.title}: no fresh captured frame was observed and the visual gate never ran — the sprint prompt never demanded a capture`);
+      }
+      if (m.visualEvidence === "none-gate-spent") {
+        marks.push("no captured frame after the bounce");
+        caveats.push(`${m.title}: went green after its visual bounce with STILL no fresh captured frame`);
+      }
       if (m.noWorkBounced) { marks.push("no-work bounce spent"); caveats.push(`${m.title}: an attempt left the repository untouched`); }
       if ((m.timeBoxEscalations ?? 0) > 0) { marks.push(`scope narrowed ×${m.timeBoxEscalations}`); caveats.push(`${m.title}: ran past its time box and was narrowed to a smaller increment — remaining scope is in its final report`); }
       if (m.attempts > 1) marks.push(`${m.attempts} attempts`);

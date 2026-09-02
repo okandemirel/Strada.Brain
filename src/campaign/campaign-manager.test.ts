@@ -1178,6 +1178,31 @@ describe("CampaignManager", () => {
     expect(messages.at(-1)!.text).toContain("WINDOWED GDD");
   });
 
+  it("a green whose visual gate never ran SAYS so in the delivery report", async () => {
+    // Audited 2026-09-02: the visual-evidence gate runs only when the
+    // planner-authored prompt happens to contain "captur"; nothing validated
+    // that it did, and the report had no mark for it — a sprint whose gate
+    // never ran rendered byte-identically to one that passed it.
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done"); // LADDER prompts never demand a capture; no Recordings/
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    settleMilestone("final report");
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+
+    const done = storage.get(campaign.id)!;
+    expect(done.milestones.map((m) => m.visualEvidence)).toEqual([
+      "none-gate-not-demanded",
+      "none-gate-not-demanded",
+      "none-gate-not-demanded",
+    ]);
+    const report = messages.at(-1)!.text;
+    expect(report).toMatch(/Sprint A — Foundations — .*visual gate NOT run/);
+    expect(report).toMatch(/Sprint A — Foundations: no fresh captured frame .*never demanded a capture/);
+  });
+
   it("resumeActive leaves a still-running task alone", async () => {
     manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
     await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));

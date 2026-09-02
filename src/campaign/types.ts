@@ -86,6 +86,16 @@ export interface CampaignMilestone {
    *  (the visual-evidence gate); the second completion stands either way. */
   visualEvidenceBounced?: boolean;
   /**
+   * What the capture scan found when the milestone went green, and whether
+   * the gate could act on it — the gate only bounces when the sprint prompt
+   * demanded a capture. Audited 2026-09-02: a gate that never ran rendered
+   * identically to one that passed.
+   *   observed                 — a fresh, meaningful captured frame existed
+   *   none-gate-not-demanded   — no frame, and the prompt never demanded one (gate did not run)
+   *   none-gate-spent          — no frame even after the one visual bounce
+   */
+  visualEvidence?: "observed" | "none-gate-not-demanded" | "none-gate-spent";
+  /**
    * One-shot no-work bounce: a completion with a clean tree and no commits
    * since the sprint began is rejected once; the second stands either way.
    */
