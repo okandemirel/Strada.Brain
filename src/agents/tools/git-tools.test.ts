@@ -43,7 +43,17 @@ describe("GitStatusTool", () => {
   it("shows clean working tree", async () => {
     const result = await tool.execute({}, ctx);
     expect(result.content).toContain("##");
-    // Status should only have the branch line for clean tree
+    // Audited 2026-09-02: `-b` always prints the branch header, so the
+    // "clean" sentence was unreachable and a clean tree came back as a bare
+    // `## main` line. The header stays, and the verdict is stated.
+    expect(result.content).toContain("Working tree is clean. No changes.");
+  });
+
+  it("does not call a dirty tree clean", async () => {
+    await writeFile(join(tempDir, "file.txt"), "changed\n");
+    const result = await tool.execute({}, ctx);
+    expect(result.content).toContain(" M file.txt");
+    expect(result.content).not.toContain("Working tree is clean");
   });
 
   it("shows modified files", async () => {
@@ -160,6 +170,30 @@ describe("GitCommitTool", () => {
     expect(result.isError).toBeUndefined();
     expect(result.content).toContain("staged commit");
   });
+
+  // Audited 2026-09-02: `files` was cast to string[] with no runtime check, so
+  // a single path passed as a string was iterated character by character and
+  // spread into `git add -- A s s e t s / ...` — the commit failed with an
+  // error naming neither the cause nor the file, and a hyphen anywhere in the
+  // path produced "file path must not start with '-'" about a path the caller
+  // never wrote. Nothing validates tool input against inputSchema upstream.
+  it("accepts a single file path given as a string", async () => {
+    await mkdir(join(tempDir, "Assets", "Scripts"), { recursive: true });
+    await writeFile(join(tempDir, "Assets", "Scripts", "Player-Controller.cs"), "class P {}\n");
+    const result = await tool.execute(
+      { message: "add controller", files: "Assets/Scripts/Player-Controller.cs" },
+      ctx,
+    );
+    expect(result.isError).toBeUndefined();
+    const log = execSync("git log --oneline -1", { cwd: tempDir }).toString();
+    expect(log).toContain("add controller");
+  });
+
+  it("stages the trimmed path it validated, not the raw one", async () => {
+    await writeFile(join(tempDir, "padded.txt"), "content\n");
+    const result = await tool.execute({ message: "add padded", files: ["  padded.txt  "] }, ctx);
+    expect(result.isError).toBeUndefined();
+  });
 });
 
 describe("GitBranchTool", () => {
@@ -244,6 +278,23 @@ describe("GitStashTool", () => {
     const result = await tool.execute({ action: "list" }, ctx);
     // Either shows stash entries or "No stashes found"
     expect(result.isError).toBeUndefined();
+  });
+
+  // Audited 2026-09-02: a temp-copy workspace lease has no .git, so `git stash
+  // list` exits 128 with empty stdout — and the tool said "No stashes found."
+  it("reports a failed `git stash list` as an error, not as an empty stash list", async () => {
+    const noRepo = await mkdtemp(join(tmpdir(), "not-a-repo-"));
+    try {
+      const result = await tool.execute(
+        { action: "list" },
+        { projectPath: noRepo, workingDirectory: noRepo, readOnly: false },
+      );
+      expect(result.isError).toBe(true);
+      expect(result.content).toMatch(/not a git repository/i);
+      expect(result.content).not.toContain("No stashes found");
+    } finally {
+      await rm(noRepo, { recursive: true, force: true });
+    }
   });
 
   it("stashes with a message", async () => {

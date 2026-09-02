@@ -36,6 +36,18 @@ export interface PathValidationResult {
   error?: string;
 }
 
+/**
+ * Does this absolute path match the sensitive-file blocklist?
+ *
+ * Exposed so a caller that relaxes CONFINEMENT (a file the user named outside
+ * the project) can still honour the blocklist — the two are separate
+ * guarantees, and validatePath only reaches the blocklist for paths that
+ * already passed confinement. Audited 2026-09-02.
+ */
+export function isSensitivePath(absolutePath: string): boolean {
+  return BLOCKED_PATTERNS.some((pattern) => pattern.test(absolutePath));
+}
+
 // Cache resolved project root to avoid repeated realpath() syscalls
 const realRootCache = new Map<string, string>();
 

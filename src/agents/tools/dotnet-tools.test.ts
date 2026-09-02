@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { DotnetBuildTool, DotnetTestTool, parseBuildOutput, parseTestOutput } from "./dotnet-tools.js";
 import type { ToolContext } from "./tool.interface.js";
+import { checkReadOnlyBlock, getReadOnlySystemPrompt } from "../../security/read-only-guard.js";
 
 // The "handles dotnet not installed gracefully" tests previously ran the REAL `dotnet` binary:
 // on a runner WITH dotnet installed (GitHub ubuntu-latest) that meant an actual `dotnet build`
@@ -191,5 +192,35 @@ describe("DotnetTestTool", () => {
     const result = await tool.execute({}, ctx);
     expect(result.content).toBeDefined();
     expect(typeof result.content).toBe("string");
+  });
+});
+
+/**
+ * Audited 2026-09-02: the read-only prompt promised "Running builds and tests
+ * (read-only verification)" and the guard let dotnet_build/dotnet_test through,
+ * while both tools refused with "disabled in read-only mode". A capability the
+ * platform advertises must not be one the tool refuses.
+ */
+describe("read-only contract for dotnet_build and dotnet_test", () => {
+  it("is refused by the guard before the tool has to refuse it", () => {
+    for (const name of ["dotnet_build", "dotnet_test"]) {
+      const verdict = checkReadOnlyBlock(name, true);
+      expect(verdict.allowed).toBe(false);
+      expect(verdict.suggestion).toMatch(/bin\/ and obj\//);
+    }
+  });
+
+  it("is not promised by the read-only system prompt", () => {
+    const prompt = getReadOnlySystemPrompt();
+    expect(prompt).not.toMatch(/Running builds and tests \(read-only verification\)/);
+    expect(prompt).toMatch(/Blocked Operations[\s\S]*Running builds and tests/);
+  });
+
+  it("still refuses at the tool when called directly in read-only mode", async () => {
+    for (const tool of [new DotnetBuildTool(), new DotnetTestTool()]) {
+      const result = await tool.execute({}, { ...ctx, readOnly: true });
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain("read-only");
+    }
   });
 });

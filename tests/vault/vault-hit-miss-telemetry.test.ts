@@ -8,6 +8,7 @@ import {
   FileReadTool,
   getVaultFileReadStats,
   resetVaultFileReadStats,
+  vaultFileRead,
 } from '../../src/agents/tools/file-read.js';
 import type { EmbeddingProvider, VectorStore } from '../../src/vault/embedding-adapter.js';
 import type { ToolContext } from '../../src/agents/tools/tool.interface.js';
@@ -120,6 +121,28 @@ describe('getVaultFileReadStats telemetry', () => {
     expect(stats.hits).toBe(N);
     expect(stats.misses).toBe(0);
     expect(stats.stale).toBe(0);
+  });
+
+  // Audited 2026-09-02: the orchestrator's vault-first interceptor calls
+  // vaultFileRead directly and returns before FileReadTool runs, and the hit
+  // counter sat at the tool's call site — so every served read counted as
+  // nothing and the dashboard reported hitRatePct: 0 for a working vault.
+  it('counts a hit when vaultFileRead answers directly, as the interceptor calls it', async () => {
+    await tool.execute({ path: 'src/a.ts', offset: 1, limit: 5 }, ctx);
+    resetVaultFileReadStats();
+
+    const served = await vaultFileRead({
+      vault,
+      vaultRelPath: 'src/a.ts',
+      absPath: join(fixtureDir, 'src', 'a.ts'),
+      displayPath: 'src/a.ts',
+      offset: 1,
+      limit: 5,
+    });
+
+    expect(served).not.toBeNull();
+    expect(served?.content).toContain('vault-cached');
+    expect(getVaultFileReadStats()).toEqual({ hits: 1, misses: 0, stale: 0 });
   });
 
   it('counts misses once per disk-fallback range read when a registry is attached', async () => {

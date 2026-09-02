@@ -1,5 +1,5 @@
 import { inflateSync, inflateRawSync } from "node:zlib";
-import { readZipEntry, looksLikeZip, docxToText } from "./docx-text.js";
+import { readZipEntry, listZipEntries, looksLikeZip, docxToText } from "./docx-text.js";
 
 /**
  * Readable text out of the formats people actually hand over.
@@ -37,23 +37,152 @@ function xmlToText(xml: string, lineBreakTags: readonly string[]): string {
     .trim();
 }
 
-/** PowerPoint: one XML per slide, numbered. */
+/** One entry of a package, read without letting a corrupt part abort the rest. */
+function readPart(buffer: Buffer, entryName: string): string | null {
+  try {
+    return readZipEntry(buffer, entryName)?.toString("utf8") ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** The number in a part name like `ppt/slides/slide12.xml`, for a fallback sort. */
+function partNumber(name: string): number {
+  return Number(/(\d+)\.xml$/u.exec(name)?.[1] ?? 0);
+}
+
+/**
+ * The parts of an OOXML package in the order the document lists them.
+ *
+ * Audited 2026-09-02: pptxToText probed `slide1.xml, slide2.xml, ...` and
+ * stopped at the first miss. Part names are opaque under OPC — deleting a slide
+ * leaves a hole, rearranging renames nothing — so a deck saved as slide1, 2, 4,
+ * 5 came back as two slides and file_read reported that as the whole document.
+ * Membership and order live in the list part (`presentation.xml` sldIdLst,
+ * `workbook.xml` sheets), resolved through its rels. When the list is missing,
+ * every part in the directory is read in numeric order rather than stopping at
+ * the first gap.
+ */
+function partsInDocumentOrder(
+  buffer: Buffer,
+  spec: {
+    readonly listPart: string;
+    readonly relsPart: string;
+    readonly itemTag: string;
+    readonly relationshipType: string;
+    readonly partPattern: RegExp;
+    readonly base: string;
+  },
+): Array<{ readonly part: string; readonly name: string | null }> {
+  let onDisk: string[];
+  try {
+    onDisk = listZipEntries(buffer).filter((entry) => spec.partPattern.test(entry));
+  } catch {
+    onDisk = [];
+  }
+
+  const list = readPart(buffer, spec.listPart);
+  const rels = readPart(buffer, spec.relsPart);
+  if (list && rels) {
+    const targetById = new Map<string, string>();
+    for (const match of rels.matchAll(/<Relationship\b[^>]*>/gu)) {
+      const tag = match[0];
+      const id = /\bId="([^"]+)"/u.exec(tag)?.[1];
+      const type = /\bType="([^"]+)"/u.exec(tag)?.[1];
+      const target = /\bTarget="([^"]+)"/u.exec(tag)?.[1];
+      if (!id || !target || !type?.endsWith(spec.relationshipType)) continue;
+      targetById.set(id, target.startsWith("/") ? target.slice(1) : `${spec.base}${target}`);
+    }
+
+    const ordered: Array<{ part: string; name: string | null }> = [];
+    for (const match of list.matchAll(new RegExp(`<${spec.itemTag}\\b[^>]*>`, "gu"))) {
+      const tag = match[0];
+      const relId = /\br:id="([^"]+)"/u.exec(tag)?.[1];
+      const part = relId ? targetById.get(relId) : undefined;
+      if (part) ordered.push({ part, name: /\bname="([^"]+)"/u.exec(tag)?.[1] ?? null });
+    }
+    if (ordered.length > 0) return ordered;
+  }
+
+  return onDisk
+    .sort((a, b) => partNumber(a) - partNumber(b))
+    .map((part) => ({ part, name: null }));
+}
+
+/** PowerPoint: one XML per slide, in the order the presentation lists them. */
 function pptxToText(buffer: Buffer): ExtractedText {
   const slides: string[] = [];
-  for (let i = 1; i <= 300; i++) {
-    const xml = readZipEntry(buffer, `ppt/slides/slide${i}.xml`);
-    if (!xml) break;
-    const text = xmlToText(xml.toString("utf8"), ["a:p"]);
-    if (text) slides.push(`--- Slide ${i} ---\n${text}`);
-  }
+  const parts = partsInDocumentOrder(buffer, {
+    listPart: "ppt/presentation.xml",
+    relsPart: "ppt/_rels/presentation.xml.rels",
+    itemTag: "p:sldId",
+    relationshipType: "/slide",
+    partPattern: /^ppt\/slides\/slide\d+\.xml$/u,
+    base: "ppt/",
+  });
+  parts.forEach(({ part }, index) => {
+    const xml = readPart(buffer, part);
+    if (!xml) return;
+    const text = xmlToText(xml, ["a:p"]);
+    if (text) slides.push(`--- Slide ${index + 1} ---\n${text}`);
+  });
   return slides.length > 0 ? slides.join("\n\n") : null;
 }
 
-/** Excel: cell text lives in one shared-strings table. */
+/** One cell's text: shared-string index, inline string, boolean, or the literal value. */
+function xlsxCellText(attrs: string, inner: string, shared: readonly string[]): string {
+  const type = /\bt="([^"]+)"/u.exec(attrs)?.[1];
+  const value = /<v>([\s\S]*?)<\/v>/u.exec(inner)?.[1] ?? "";
+  if (type === "s") return shared[Number(value)] ?? "";
+  if (type === "inlineStr") return xmlToText(/<is>([\s\S]*?)<\/is>/u.exec(inner)?.[1] ?? "", []);
+  if (type === "b") return value === "1" ? "TRUE" : "FALSE";
+  // n (the default), str, e, d: the literal is the value.
+  return xmlToText(value, []);
+}
+
+/**
+ * Excel: every worksheet's cell grid, rows as lines and cells tab-separated.
+ *
+ * Audited 2026-09-02: this read only `xl/sharedStrings.xml`, which holds the
+ * deduplicated STRING cells and nothing else. A tuning sheet decoded to its
+ * header words with every number gone and no row association, and a
+ * numbers-only workbook (Excel writes no shared-strings part then) returned
+ * null — "not a text document this tool can read". Numbers live inline in the
+ * worksheet parts as `<v>`; strings are `t="s"` pointers into the table.
+ */
 function xlsxToText(buffer: Buffer): ExtractedText {
-  const shared = readZipEntry(buffer, "xl/sharedStrings.xml");
-  if (!shared) return null;
-  return xmlToText(shared.toString("utf8"), ["si"]) || null;
+  const sharedXml = readPart(buffer, "xl/sharedStrings.xml");
+  const shared: string[] = sharedXml
+    ? [...sharedXml.matchAll(/<si\b[^>]*>([\s\S]*?)<\/si>/gu)].map((m) => xmlToText(m[1] ?? "", []))
+    : [];
+
+  const sheets = partsInDocumentOrder(buffer, {
+    listPart: "xl/workbook.xml",
+    relsPart: "xl/_rels/workbook.xml.rels",
+    itemTag: "sheet",
+    relationshipType: "/worksheet",
+    partPattern: /^xl\/worksheets\/sheet\d+\.xml$/u,
+    base: "xl/",
+  });
+
+  const out: string[] = [];
+  sheets.forEach(({ part, name }, index) => {
+    const xml = readPart(buffer, part);
+    if (!xml) return;
+    const rows: string[] = [];
+    for (const row of xml.matchAll(/<row\b[^>]*>([\s\S]*?)<\/row>/gu)) {
+      const cells: string[] = [];
+      for (const cell of (row[1] ?? "").matchAll(/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/gu)) {
+        cells.push(xlsxCellText(cell[1] ?? "", cell[2] ?? "", shared));
+      }
+      const line = cells.join("\t").replace(/\t+$/u, "");
+      if (line.trim()) rows.push(line);
+    }
+    if (rows.length > 0) {
+      out.push(`--- Sheet ${index + 1}${name ? `: ${name}` : ""} ---\n${rows.join("\n")}`);
+    }
+  });
+  return out.length > 0 ? out.join("\n\n") : null;
 }
 
 /** OpenDocument: one content.xml, same idea as Word. */

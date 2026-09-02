@@ -22,6 +22,38 @@ export function looksLikeZip(buffer: Buffer): boolean {
   return buffer.length > 4 && buffer.readUInt32LE(0) === SIGNATURE_LOCAL_FILE;
 }
 
+/**
+ * Every entry name in the archive's central directory, in directory order.
+ *
+ * Audited 2026-09-02: readers that probed `slide1, slide2, ...` and stopped at
+ * the first miss silently truncated any package whose part numbers had a gap.
+ * The directory is the only honest list of what the package holds.
+ */
+export function listZipEntries(buffer: Buffer): string[] {
+  let end = -1;
+  for (let i = buffer.length - 22; i >= 0 && i > buffer.length - 22 - 65_535; i--) {
+    if (buffer.readUInt32LE(i) === SIGNATURE_CENTRAL_END) {
+      end = i;
+      break;
+    }
+  }
+  if (end === -1) return [];
+
+  const names: string[] = [];
+  const entryCount = buffer.readUInt16LE(end + 10);
+  let offset = buffer.readUInt32LE(end + 16);
+  for (let i = 0; i < entryCount; i++) {
+    if (offset + 46 > buffer.length) break;
+    if (buffer.readUInt32LE(offset) !== SIGNATURE_CENTRAL_FILE) break;
+    const nameLength = buffer.readUInt16LE(offset + 28);
+    const extraLength = buffer.readUInt16LE(offset + 30);
+    const commentLength = buffer.readUInt16LE(offset + 32);
+    names.push(buffer.subarray(offset + 46, offset + 46 + nameLength).toString("utf8"));
+    offset += 46 + nameLength + extraLength + commentLength;
+  }
+  return names;
+}
+
 /** The raw bytes of one entry, or null when the archive does not hold it. */
 export function readZipEntry(buffer: Buffer, entryName: string): Buffer | null {
   // Find the end-of-central-directory record, scanning back over the comment.

@@ -7,6 +7,15 @@ import { join, resolve, sep } from "node:path";
 import type { ITool, ToolContext, ToolExecutionResult } from "../tool.interface.js";
 import type { DynamicSkillSpec } from "./types.js";
 
+/**
+ * Emit a frontmatter scalar as a double-quoted string the parser reads back
+ * verbatim (it strips one pair of outer quotes and does no escape handling),
+ * so quotes are dropped and newlines folded rather than escaped.
+ */
+function quoteScalar(value: string): string {
+  return `"${value.replace(/"/g, "").replace(/\r?\n/g, " ")}"`;
+}
+
 export class CreateSkillTool implements ITool {
   readonly name = "create_skill";
   readonly description =
@@ -89,14 +98,20 @@ export class CreateSkillTool implements ITool {
       return { content: "Error: skill content exceeds 50,000 character limit.", isError: true };
     }
 
-    // Build SKILL.md content
+    // Build SKILL.md content.
+    // Audited 2026-09-02: `version: 1.0` written bare is read back by the
+    // frontmatter parser as the NUMBER 1, and discoverSkills then skipped the
+    // skill at every future boot ("missing or invalid version") while the
+    // in-session hot-load coerced it and reported success. Quote every free-
+    // text scalar so the parser returns the string that was given; a newline
+    // in one would break the line-based fence, so it is folded to a space.
     const frontmatterLines = [
       "---",
       `name: ${spec.name}`,
-      `version: ${spec.version}`,
-      `description: ${spec.description}`,
+      `version: ${quoteScalar(spec.version)}`,
+      `description: ${quoteScalar(spec.description)}`,
     ];
-    if (spec.author) frontmatterLines.push(`author: ${spec.author}`);
+    if (spec.author) frontmatterLines.push(`author: ${quoteScalar(spec.author)}`);
     if (spec.capabilities?.length) {
       frontmatterLines.push(`capabilities: [${spec.capabilities.join(", ")}]`);
     }
@@ -131,14 +146,37 @@ export class CreateSkillTool implements ITool {
       };
     }
 
-    // Hot-reload: make the skill available in the current session
-    let hotReloaded = false;
+    // Hot-reload: make the skill available in the current session.
+    // Audited 2026-09-02: "hot-loaded and available" was claimed from the mere
+    // absence of a throw, but loadSingle never throws — it returns the entry
+    // already held for that name (a bundled "web-search" collision loads
+    // nothing new), an entry parked as error/gated, or null. Report what the
+    // loader actually holds, and say "available" only for an active entry
+    // loaded from the directory just written.
+    let hotLoadOutcome = "This skill will be discovered automatically in future sessions.";
     if (context.onSkillCreated) {
       try {
-        await context.onSkillCreated(skillsDir);
-        hotReloaded = true;
-      } catch {
-        // Non-fatal — skill is on disk and will load next session
+        const entry = await context.onSkillCreated(skillsDir);
+        if (entry === null) {
+          hotLoadOutcome =
+            "Hot-load did NOT register the skill: the loader could not read the SKILL.md just written. " +
+            "It is on disk and discovery will retry at the next session start.";
+        } else if (resolve(entry.path) !== skillsDir) {
+          hotLoadOutcome =
+            `Hot-load did NOT load this skill: a skill named '${spec.name}' is already loaded from ${entry.path} ` +
+            `(status: ${entry.status}) and the session keeps that one. The new file is on disk only — ` +
+            "choose another name, or remove the existing skill first.";
+        } else if (entry.status === "active") {
+          hotLoadOutcome = "The skill has been hot-loaded and is available in the current session.";
+        } else {
+          hotLoadOutcome =
+            `Hot-load registered the skill with status '${entry.status}'` +
+            `${entry.gateReason ? ` (${entry.gateReason})` : ""} — it is NOT available in this session.`;
+        }
+      } catch (err) {
+        hotLoadOutcome =
+          `Hot-load failed: ${err instanceof Error ? err.message : String(err)}. ` +
+          "The skill is on disk and discovery will retry at the next session start.";
       }
     }
 
@@ -149,9 +187,7 @@ export class CreateSkillTool implements ITool {
     return {
       content:
         `Skill '${spec.name}' created at ${filePath}\n\n` +
-        (hotReloaded
-          ? `The skill has been hot-loaded and is available in the current session.\n\n`
-          : `This skill will be discovered automatically in future sessions.\n\n`) +
+        `${hotLoadOutcome}\n\n` +
         `Skill content preview (first 200 chars):\n${preview}`,
     };
   }

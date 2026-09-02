@@ -1,6 +1,6 @@
-import { readFile, stat } from "node:fs/promises";
+import { readFile, realpath, stat } from "node:fs/promises";
 import { relative as pathRelative, resolve as pathResolve, sep as pathSep } from "node:path";
-import { validatePath } from "../../security/path-guard.js";
+import { isSensitivePath, validatePath } from "../../security/path-guard.js";
 import { extractDocumentText, RICH_DOCUMENT_EXTENSIONS } from "./document-text.js";
 import { isUserAuthorizedPath } from "../../security/user-authorized-paths.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.js";
@@ -121,6 +121,22 @@ export class FileReadTool implements ITool {
       // path, which is narrower than widening confinement for everything.
       const authorized = context.userAuthorizedPaths;
       if (isUserAuthorizedPath(relPath, authorized)) {
+        // Audited 2026-09-02: this branch was taken for EVERY invalid result,
+        // including a blocklist refusal — a user pasting an error line that
+        // mentioned <project>/.env made that file readable, and an id_rsa
+        // path quoted in an ssh warning was read from outside the project.
+        // Naming a path relaxes confinement only; the sensitive-file
+        // blocklist is a separate guarantee and holds regardless of who
+        // named the path. Checked against the real path so a symlink cannot
+        // hide the name.
+        const namedPath = pathResolve(relPath);
+        const realNamedPath = await realpath(namedPath).catch(() => namedPath);
+        if (isSensitivePath(namedPath) || isSensitivePath(realNamedPath)) {
+          return {
+            content: "Error: Access to sensitive files is not permitted (the path was named in your message, but the sensitive-file blocklist is not relaxed by naming a path)",
+            isError: true,
+          };
+        }
         return await readAuthorizedFile(relPath, offset, limit);
       }
       // The same help the ENOENT path gives. Measured 2026-08-21, 15:38: two
@@ -153,10 +169,10 @@ export class FileReadTool implements ITool {
           limit: limitProvided ? limit : undefined,
           symbol,
         });
-        if (vaultResult) {
-          vaultHitCount += 1;
-          return vaultResult;
-        }
+        // The hit is counted inside vaultFileRead, where the vault answers,
+        // so the orchestrator's interceptor (which never reaches this tool)
+        // counts the same way.
+        if (vaultResult) return vaultResult;
       }
     }
 
@@ -297,6 +313,12 @@ export async function vaultFileRead(params: {
     (symbol ? `, symbol="${symbol}"` : "") +
     `, source=vault:${vault.id})`;
 
+  // Audited 2026-09-02: the hit counter lived at FileReadTool's call site, but
+  // the orchestrator's vault-first interceptor answers every servable read
+  // through this function before the tool runs — so /api/vaults/stats reported
+  // hits: 0, hitRatePct: 0 for a vault serving most reads. Count the hit here,
+  // where the vault actually answered, for every caller.
+  vaultHitCount += 1;
   return {
     content: `${header}\n${numbered}`,
     metadata: {

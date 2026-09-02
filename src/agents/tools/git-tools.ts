@@ -71,8 +71,13 @@ export class GitStatusTool implements ITool {
     if (result.exitCode !== 0) {
       return { content: `Error: ${result.stderr || "git status failed"}`, isError: true };
     }
-    if (!result.stdout.trim()) {
-      return { content: "Working tree is clean. No changes." };
+    // Audited 2026-09-02: `-b` always prints the `## branch` header, so stdout
+    // was never empty on success and "Working tree is clean" was unreachable —
+    // a clean tree came back as a bare header the model had to interpret.
+    // Separate the header from the entries and judge cleanliness on the entries.
+    const [head, ...entries] = result.stdout.split("\n").filter((line) => line.length > 0);
+    if (entries.length === 0) {
+      return { content: `${head ?? ""}\nWorking tree is clean. No changes.`.trimStart() };
     }
     return { content: result.stdout };
   }
@@ -228,15 +233,29 @@ export class GitCommitTool implements ITool {
       return { content: "Error: commit message is required", isError: true };
     }
 
-    // Stage files if provided
-    const files = input["files"] as string[] | undefined;
+    // Stage files if provided.
+    // Audited 2026-09-02: `files` was cast to string[] unchecked, so a single
+    // path given as a string (nothing validates tool input against the schema)
+    // was iterated per character and spread into `git add -- A s s e t s / …`,
+    // failing with an error that named neither the cause nor the file. A
+    // string is one path; anything else that is not an array is rejected by
+    // name. The sanitized (trimmed) value is what gets staged.
+    const rawFiles = input["files"];
+    let files: unknown[] | undefined;
+    if (typeof rawFiles === "string") files = [rawFiles];
+    else if (Array.isArray(rawFiles)) files = rawFiles;
+    else if (rawFiles !== undefined && rawFiles !== null) {
+      return { content: "Error: 'files' must be an array of file paths (or a single path string)", isError: true };
+    }
     if (files && files.length > 0) {
       // Validate each file path and use -- to prevent flag injection
+      const staged: string[] = [];
       for (const f of files) {
         const check = sanitizeGitArg(String(f), "file path");
         if (!check.valid) return { content: `Error: ${check.error}`, isError: true };
+        staged.push(check.value);
       }
-      const addResult = await runGit(["add", "--", ...files], context.projectPath);
+      const addResult = await runGit(["add", "--", ...staged], context.projectPath);
       if (addResult.exitCode !== 0) {
         return { content: `Error staging files: ${addResult.stderr}`, isError: true };
       }
@@ -440,6 +459,13 @@ export class GitStashTool implements ITool {
       }
       case "list": {
         const result = await runGit(["stash", "list"], context.projectPath);
+        // Audited 2026-09-02: this was the one action in the switch that
+        // ignored the exit code, so a lease without .git (exit 128, empty
+        // stdout) or a vanished cwd (exit 127) read as "No stashes found." —
+        // a failed check rendered as a clean one.
+        if (result.exitCode !== 0) {
+          return { content: `Error: ${result.stderr || `git stash list failed (exit ${result.exitCode})`}`, isError: true };
+        }
         return { content: result.stdout || "No stashes found." };
       }
       case "drop": {

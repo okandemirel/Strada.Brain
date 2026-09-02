@@ -21,8 +21,7 @@ import type { ITool, ToolContext, ToolExecutionResult } from "../tool.interface.
 import { validatePath } from "../../../security/path-guard.js";
 import { reuseOrMintGuid } from "./meta-file-utils.js";
 import { spriteMeta } from "./sprite-generate.js";
-
-const DEFAULT_CLI = process.env["STRADA_UNITY_CLI"] ?? "/Users/okan/.unity/bin/unity";
+import { resolveUnityCliPath, unityCliMissingHelp } from "./unity-cli-path.js";
 
 export interface PrerenderStyle {
   /** Pastel body color for the toon look (hex). */
@@ -260,8 +259,15 @@ export class PrerenderFramesTool implements ITool {
     // Environment check AFTER input validation: bad inputs deserve their own
     // answer on every machine (the old order made validation untestable off
     // the dev box — the CLI-missing error answered first everywhere else).
-    if (!existsSync(DEFAULT_CLI)) {
-      return { content: `Error: Unity CLI not found at ${DEFAULT_CLI} — the Hub-launched editor is required for rendering.`, isError: true };
+    // Audited 2026-09-02: the default was a hardcoded developer home
+    // directory, so every other machine failed here naming a stranger's path.
+    // Resolved per call from the current user's home (or STRADA_UNITY_CLI).
+    const unityCli = resolveUnityCliPath();
+    if (!existsSync(unityCli)) {
+      return {
+        content: `Error: Unity CLI not found at ${unityCli} — the Hub-launched editor is required for rendering. ${unityCliMissingHelp()}`,
+        isError: true,
+      };
     }
     mkdirSync(outCheck.fullPath, { recursive: true });
 
@@ -317,11 +323,19 @@ export class PrerenderFramesTool implements ITool {
       const logPath = join(context.projectPath, "prerender.log");
       if (existsSync(logPath)) rmSync(logPath, { force: true });
       let launchError = "";
-      execFile(DEFAULT_CLI, ["open", context.projectPath, "--args", unityArgs], { timeout: 60_000 }, (err) => {
-        // The CLI's own failure (ENOENT/EACCES/timeout) used to be discarded
-        // by an empty callback — surfaced only 30 minutes later as a generic
-        // "no frames". Record it so the poll loop can stop immediately.
-        if (err) launchError = err.message;
+      execFile(unityCli, ["open", context.projectPath, "--args", unityArgs], (err) => {
+        // Only a binary that could not be spawned is a launch failure.
+        // Audited 2026-09-02: this recorded ANY callback error — a nonzero
+        // exit of the Hub wrapper, or the 60s execFile timeout SIGTERMing it —
+        // and the poll loop then broke before the batchmode editor could write
+        // a frame, pkill'd the healthy editor mid-arc, and reported "render
+        // produced no frames: Unity CLI launch failed". `unity open` is
+        // fire-and-forget: the wrapper's exit says nothing about the detached
+        // editor (unity-link-runner measured the same rule: bail on ENOENT
+        // only). The timeout is gone for the same reason — killing the wrapper
+        // never stopped the editor, it only manufactured the abort.
+        const code = (err as NodeJS.ErrnoException | null)?.code;
+        if (err && (code === "ENOENT" || code === "EACCES")) launchError = err.message;
       }).unref?.();
 
       // `unity open` is fire-and-forget: the CLI returns while the editor is
@@ -393,7 +407,9 @@ export class PrerenderFramesTool implements ITool {
         // listing catches up — one final look before declaring failure.
         frames = listFreshFrames();
       }
-      if (frames.length === 0) {
+      // A spawn failure means no editor was ever launched, so any frame in the
+      // directory is not this run's — it must not pass as a success envelope.
+      if (frames.length === 0 || launchError) {
         // Timeout/failure must not leave a batchmode editor squatting on the
         // project's Library lock — the next run would race it forever. Our
         // executeMethod name is unique, so the match cannot hit a person's

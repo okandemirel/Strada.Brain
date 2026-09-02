@@ -108,7 +108,9 @@ export class GrepSearchTool implements ITool {
       file_pattern: {
         type: "string",
         description:
-          "Optional glob pattern to filter which files to search (e.g., '**/*.cs'). Default: all code files.",
+          "Optional glob pattern to filter which files to search (e.g., '**/*.cs'). Default: '**/*'. " +
+          `Only text source/asset files are opened (${[...SEARCHABLE_EXTENSIONS].join(", ")}); ` +
+          "files with other extensions are counted and reported as not searched.",
       },
       case_sensitive: {
         type: "boolean",
@@ -153,9 +155,27 @@ export class GrepSearchTool implements ITool {
       });
 
       const results: string[] = [];
+      // Audited 2026-09-02: the cap broke out of the file loop and the result
+      // read "Found 20 match(es):" with no suffix — indistinguishable from a
+      // genuine 20-match result, so an agent enumerating call sites treated
+      // the capped slice as the full set. Glob and vault_search in this repo
+      // both disclose truncation; grep did not. Track whether scanning
+      // stopped and how far it got, and say so in the result.
+      let filesScanned = 0;
+      let capReached = false;
+      let stoppedMidFile = false;
+      // Audited 2026-09-02: files the extension filter dropped were never
+      // counted, so grep_search{file_pattern:"**/*.mat"} answered "No matches
+      // found" about files it never opened — an absence claim indistinguishable
+      // from a genuine miss. Count them and say so.
+      let skippedByExtension = 0;
 
-      for (const file of files) {
-        if (!SEARCHABLE_EXTENSIONS.has(extname(file).toLowerCase())) continue;
+      for (let fileIndex = 0; fileIndex < files.length; fileIndex++) {
+        const file = files[fileIndex]!;
+        if (!SEARCHABLE_EXTENSIONS.has(extname(file).toLowerCase())) {
+          skippedByExtension += 1;
+          continue;
+        }
 
         // Validate each file path to prevent directory traversal
         const pathCheck = await validatePath(context.projectPath, file);
@@ -167,6 +187,7 @@ export class GrepSearchTool implements ITool {
           if (fileStat.size > MAX_GREP_FILE_SIZE) continue;
 
           const content = await readFile(fullPath, "utf-8");
+          filesScanned += 1;
           const lines = content.split("\n");
 
           for (let i = 0; i < lines.length; i++) {
@@ -175,7 +196,13 @@ export class GrepSearchTool implements ITool {
               results.push(`${file}:${i + 1}: ${line.trim()}`);
               regex.lastIndex = 0;
             }
-            if (results.length >= MAX_CONTENT_RESULTS) break;
+            if (results.length >= MAX_CONTENT_RESULTS) {
+              // The cap only makes the count non-exhaustive when something
+              // was left unscanned: lines below this one, or files after it.
+              stoppedMidFile = i < lines.length - 1;
+              capReached = stoppedMidFile || fileIndex < files.length - 1;
+              break;
+            }
           }
         } catch {
           // Skip unreadable files
@@ -184,12 +211,31 @@ export class GrepSearchTool implements ITool {
         if (results.length >= MAX_CONTENT_RESULTS) break;
       }
 
+      const skippedNote = skippedByExtension > 0
+        ? `${skippedByExtension} of ${files.length} file(s) matching '${filePattern}' were NOT searched: ` +
+          `their extension is outside the searchable set (${[...SEARCHABLE_EXTENSIONS].join(", ")}).`
+        : "";
+
       if (results.length === 0) {
-        return { content: `No matches found for pattern: ${pattern}` };
+        if (filesScanned === 0 && skippedByExtension > 0) {
+          return {
+            content: `No files were searched for pattern: ${pattern} — ${skippedNote}`,
+          };
+        }
+        return {
+          content: `No matches found for pattern: ${pattern} in the ${filesScanned} file(s) searched.` +
+            (skippedNote ? `\n${skippedNote}` : ""),
+        };
       }
 
+      const capNote = capReached
+        ? ` (limit reached — scanning stopped after ${filesScanned} of ${files.length} files` +
+          `${stoppedMidFile ? ", mid-file" : ""}; narrow file_pattern or the regex to see the rest)`
+        : "";
+
       return {
-        content: `Found ${results.length} match(es):\n${results.join("\n")}`,
+        content: `Found ${results.length} match(es)${capNote}:\n${results.join("\n")}` +
+          (skippedNote ? `\n(${skippedNote})` : ""),
       };
     } catch {
       return { content: "Error: search failed", isError: true };

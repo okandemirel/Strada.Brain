@@ -29,7 +29,7 @@ import { detectLanguage } from "../dashboard/workspace-routes.js";
 import type { ProviderManager } from "./providers/provider-manager.js";
 import { canonicalizeProviderName } from "./providers/provider-identity.js";
 import { getToolMetadata, type ITool, type ToolContext } from "./tools/tool.interface.js";
-import type { ToolExecutionResult } from "./tools/tool-core.interface.js";
+import type { ToolExecutionResult, SkillHotLoadVerdict } from "./tools/tool-core.interface.js";
 import type {
   IChannelAdapter,
   IncomingMessage,
@@ -914,7 +914,7 @@ export class Orchestrator {
   /** Fired after every tool execution so the task watchdog can see activity. */
   private onLiveness: (() => void) | null = null;
   /** Callback to hot-reload a newly created skill */
-  private onSkillCreated?: (skillPath: string) => Promise<void>;
+  private onSkillCreated?: (skillPath: string) => Promise<SkillHotLoadVerdict | null>;
   private getSkillEntries?: () => readonly SkillEntry[];
 
   constructor(opts: {
@@ -980,7 +980,7 @@ export class Orchestrator {
     loopHardCapReplan?: number;
     loopHardCapBlock?: number;
     progressAssessmentEnabled?: boolean;
-    onSkillCreated?: (skillPath: string) => Promise<void>;
+    onSkillCreated?: (skillPath: string) => Promise<SkillHotLoadVerdict | null>;
     getSkillEntries?: () => readonly SkillEntry[];
     /** Hard cap on iterations for delegated sub-agents (overrides config if lower). */
     maxIterations?: number;
