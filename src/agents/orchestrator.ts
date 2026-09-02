@@ -820,7 +820,16 @@ export class Orchestrator {
   /** Tracks consecutive ask_user blocks per conversation to break clarification loops. */
   private readonly askUserBlockCounts = new Map<string, number>();
   /** Tracks consecutive errors per tool per chat to auto-disable repeatedly failing tools. */
-  private readonly toolConsecutiveErrors = new Map<string, Map<string, number>>();
+  // audited 2026-09-02: keyed by breaker SCOPE (the task run when one is
+  // active, else the chatId) — every supervisor DAG node shares one chatId,
+  // so a chatId-only key made one node's misses every later node's refusal.
+  // Entries carry the trip time so the refusal can actually be temporary.
+  private readonly toolConsecutiveErrors = new Map<
+    string,
+    Map<string, { count: number; trippedAtMs?: number }>
+  >();
+  /** How long a tripped breaker refuses before admitting one probe call. */
+  private static readonly TOOL_BREAKER_COOLDOWN_MS = 60_000;
   private static readonly MAX_CONSECUTIVE_TOOL_ERRORS = 3;
   /**
    * How many failures on DIFFERENT targets before a tool is presumed broken.
@@ -1311,15 +1320,28 @@ export class Orchestrator {
     return undefined;
   }
 
-  /** Update consecutive error counter for a tool in a given chat. Resets on success. */
-  private trackToolError(chatId: string, toolName: string, isError: boolean, target?: string): void {
-    if (!this.toolConsecutiveErrors.has(chatId)) this.toolConsecutiveErrors.set(chatId, new Map());
-    const errs = this.toolConsecutiveErrors.get(chatId)!;
+  /**
+   * The breaker's scope: the active task run when there is one (each
+   * supervisor node runs under its own taskRunId), else the conversation.
+   */
+  private toolBreakerScope(chatId: string): { key: string; label: "run" | "conversation" } {
+    const taskRunId = this.resolveTaskRunId(chatId);
+    return taskRunId
+      ? { key: `${chatId}\u0000${taskRunId}`, label: "run" }
+      : { key: chatId, label: "conversation" };
+  }
+
+  /** Update consecutive error counter for a tool in a breaker scope. Resets on success. */
+  private trackToolError(scope: string, toolName: string, isError: boolean, target?: string): void {
+    if (!this.toolConsecutiveErrors.has(scope)) this.toolConsecutiveErrors.set(scope, new Map());
+    const errs = this.toolConsecutiveErrors.get(scope)!;
     const repeatKey = `${toolName}\u0000${target ?? ""}`;
 
     if (isError) {
-      errs.set(toolName, (errs.get(toolName) ?? 0) + 1);
-      errs.set(repeatKey, (errs.get(repeatKey) ?? 0) + 1);
+      for (const key of [toolName, repeatKey]) {
+        const prev = errs.get(key);
+        errs.set(key, { count: (prev?.count ?? 0) + 1, trippedAtMs: prev?.trippedAtMs });
+      }
     } else {
       // A success clears both: the tool works, and it works on this target.
       errs.delete(toolName);
@@ -1336,15 +1358,44 @@ export class Orchestrator {
    * there is doing its job, and taking file_read away for it leaves the run
    * unable to read anything.
    */
-  private toolIsCircuitBroken(chatId: string, toolName: string, target?: string): number | null {
-    const errs = this.toolConsecutiveErrors.get(chatId);
+  private toolIsCircuitBroken(
+    scope: string,
+    toolName: string,
+    target?: string,
+    nowMs: number = Date.now(),
+  ): { count: number; measured: "same target" | "across targets"; retryAfterMs: number } | null {
+    const errs = this.toolConsecutiveErrors.get(scope);
     if (!errs) return null;
 
-    const repeats = errs.get(`${toolName}\u0000${target ?? ""}`) ?? 0;
-    if (repeats >= Orchestrator.MAX_CONSECUTIVE_TOOL_ERRORS) return repeats;
+    // audited 2026-09-02: this guard runs BEFORE the call that would record a
+    // success, so a tripped counter could never be cleared — "temporarily
+    // disabled" was permanent. After the cooldown, one probe is admitted by
+    // decaying the count to just under the threshold: a failing probe re-trips
+    // with a fresh clock, a passing one clears the counter as before.
+    const cooldown = Orchestrator.TOOL_BREAKER_COOLDOWN_MS;
+    const check = (
+      key: string,
+      threshold: number,
+      measured: "same target" | "across targets",
+    ): { count: number; measured: "same target" | "across targets"; retryAfterMs: number } | null => {
+      const entry = errs.get(key);
+      if (!entry || entry.count < threshold) return null;
+      if (entry.trippedAtMs === undefined) {
+        entry.trippedAtMs = nowMs;
+        return { count: entry.count, measured, retryAfterMs: cooldown };
+      }
+      const elapsed = nowMs - entry.trippedAtMs;
+      if (elapsed < cooldown) {
+        return { count: entry.count, measured, retryAfterMs: cooldown - elapsed };
+      }
+      errs.set(key, { count: threshold - 1 });
+      return null;
+    };
 
-    const anyTarget = errs.get(toolName) ?? 0;
-    return anyTarget >= Orchestrator.MAX_DISTINCT_TOOL_ERRORS ? anyTarget : null;
+    return (
+      check(`${toolName}\u0000${target ?? ""}`, Orchestrator.MAX_CONSECUTIVE_TOOL_ERRORS, "same target") ??
+      check(toolName, Orchestrator.MAX_DISTINCT_TOOL_ERRORS, "across targets")
+    );
   }
 
 
@@ -4661,15 +4712,23 @@ export class Orchestrator {
     // run for being unreliable. The agent was then left writing C# with no way
     // to find out whether it compiles — which is the state this tool exists to
     // prevent.
-    const toolErrorCount = this.toolIsCircuitBroken(
-      chatId,
-      activeToolCall.name,
-      failureTarget(activeToolCall.input),
-    );
-    if (toolErrorCount !== null && !isVerificationToolName(activeToolCall.name)) {
+    const breakerScope = this.toolBreakerScope(chatId);
+    const breakerTarget = failureTarget(activeToolCall.input);
+    const tripped = this.toolIsCircuitBroken(breakerScope.key, activeToolCall.name, breakerTarget);
+    if (tripped !== null && !isVerificationToolName(activeToolCall.name)) {
+      // audited 2026-09-02: name what was measured — the count, whether it was
+      // one target or many, the scope, and when a retry is admitted. The old
+      // text claimed "temporarily" while the code implemented "forever".
+      const where =
+        tripped.measured === "same target" && breakerTarget
+          ? `on '${breakerTarget}'`
+          : "across different targets";
       return {
         toolCallId: activeToolCall.id,
-        content: `Tool '${activeToolCall.name}' has failed ${toolErrorCount} consecutive times and is temporarily disabled for this conversation. Use a different approach or tool.`,
+        content:
+          `Tool '${activeToolCall.name}' has failed ${tripped.count} consecutive times ${where} ` +
+          `in this ${breakerScope.label} and is temporarily disabled: one retry is admitted after ` +
+          `${Math.ceil(tripped.retryAfterMs / 1000)}s. Use a different approach or tool meanwhile.`,
         isError: true,
       };
     }
@@ -4918,7 +4977,7 @@ export class Orchestrator {
       }
       emitSubstep(result.isError ? "skipped" : "done");
 
-      this.trackToolError(chatId, activeToolCall.name, !!result.isError, failureTarget(activeToolCall.input));
+      this.trackToolError(breakerScope.key, activeToolCall.name, !!result.isError, breakerTarget);
 
       return {
         toolCallId: activeToolCall.id,
@@ -4936,7 +4995,7 @@ export class Orchestrator {
       });
       emitSubstep("skipped");
 
-      this.trackToolError(chatId, activeToolCall.name, true, failureTarget(activeToolCall.input));
+      this.trackToolError(breakerScope.key, activeToolCall.name, true, breakerTarget);
 
       return {
         toolCallId: activeToolCall.id,
@@ -5047,6 +5106,10 @@ export class Orchestrator {
     for (const chatId of expired) {
       this.askUserBlockCounts.delete(chatId);
       this.toolConsecutiveErrors.delete(chatId);
+      // Run-scoped breaker entries hang off the chatId with a NUL separator.
+      for (const key of this.toolConsecutiveErrors.keys()) {
+        if (key.startsWith(`${chatId}\u0000`)) this.toolConsecutiveErrors.delete(key);
+      }
     }
   }
 
