@@ -116,6 +116,40 @@ describe("parseHeartbeatFile", () => {
     );
   });
 
+  it("a skipped section does not reserve its slug — the later valid one still parses (audited 2026-09-02)", () => {
+    // The slug was reserved before the section's own validation ran, so a
+    // malformed heading claimed the name and the corrected section below it
+    // was thrown away as a "duplicate": the user's edit had no effect and the
+    // warning blamed a duplicate that does not exist.
+    loggerStub.warn.mockClear();
+    const content = `### Nightly Build
+- type: cron
+- action: Build the game
+
+### nightly-build
+- cron: 0 3 * * *
+- action: Build the game
+
+### Morning Report
+- action: Summarize overnight work
+
+### morning-report
+- cron: 0 9 * * *
+- action: Summarize overnight work
+`;
+    const result = parseHeartbeatFile(content);
+
+    // Section 1 fails cron validation (no cron expression); section 3 has
+    // neither a type nor a cron field. Neither produced a trigger, so neither
+    // owns the name.
+    expect(result.map((r) => r.name)).toEqual(["nightly-build", "morning-report"]);
+    expect((result[0] as CronTriggerDef).cron).toBe("0 3 * * *");
+    expect((result[1] as CronTriggerDef).cron).toBe("0 9 * * *");
+    expect(loggerStub.warn).not.toHaveBeenCalledWith(
+      expect.stringMatching(/duplicate/i),
+    );
+  });
+
   it("skips cron triggers with missing cron field", () => {
     const content = `### Missing cron
 - type: cron
