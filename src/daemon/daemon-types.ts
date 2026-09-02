@@ -133,10 +133,19 @@ export interface DaemonSecurityConfig {
   readonly autoApproveTools: string[];
 }
 
+/**
+ * What `dailyBudgetUsd` is a cap on: "daemon" when it is a dedicated daemon
+ * sub-limit (STRADA_DAEMON_DAILY_BUDGET set), "system" when the daemon shares
+ * the system-wide wallet (the STRADA_BUDGET_DAILY_USD fallback).
+ */
+export type DaemonBudgetScope = "daemon" | "system";
+
 /** Daily LLM budget configuration */
 export interface DaemonBudgetConfig {
   readonly dailyBudgetUsd: number | undefined;
   readonly warnPct: number;
+  /** Defaults to "system" when absent — the shared-wallet reading. */
+  readonly limitScope?: DaemonBudgetScope;
 }
 
 /** Exponential backoff and circuit breaker configuration */

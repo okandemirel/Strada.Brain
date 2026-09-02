@@ -375,6 +375,10 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
         dailyBudgetUsd:
           rawConfig.daemonDailyBudget ??
           (rawConfig.stradaBudgetDailyUsd > 0 ? rawConfig.stradaBudgetDailyUsd : undefined),
+        // Audited 2026-09-02: the tracker must measure the same spend the
+        // limit is scoped to — daemon-only for a dedicated sub-limit, every
+        // source for the shared wallet.
+        limitScope: rawConfig.daemonDailyBudget !== undefined ? "daemon" : "system",
         warnPct: rawConfig.daemonBudgetWarnPct,
       },
       backoff: {
