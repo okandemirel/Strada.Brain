@@ -1302,10 +1302,41 @@ export class StradaConformanceGuard {
   }
 
   unmetDeliveryConditions(): readonly string[] {
+    // audited 2026-09-02: only NOTHING DRAWN was mirrored here, so GAME NEVER
+    // RUN and GAME NOT ASSEMBLED spent their asks, getPrompt() went quiet, and
+    // the run reported the game delivered and approved.
+    //
+    // Every condition below is scoped to THIS sprint's own artifacts — the
+    // scene it assembled, whether it started the game, whether that scene has a
+    // camera. Deliberately nothing here reads the GDD element schedule: an
+    // earlier attempt mirrored elementAssetCoverageReason(), which measures the
+    // whole schedule, and a sprint that correctly built only its own elements
+    // could no longer deliver because later sprints' elements had no art yet.
     const unmet: string[] = [];
     const notDrawn = this.nothingDrawnReason();
     if (notDrawn !== null) {
       unmet.push(`the game has never been observed to render: ${notDrawn}`);
+    }
+
+    const wiring = this.assessWiring();
+    if (wiring && !wiring.wired) {
+      unmet.push(
+        "this run wrote game code and the project is not a runnable game: " +
+          wiring.problems.map((p) => p.detail).join("; "),
+      );
+    }
+    if (this.wroteProjectCode && wiring?.wired === true && !this.attemptedPlaymodeVerification) {
+      unmet.push(
+        "the scene is assembled and wired but this run never started the game " +
+          "(unity_playmode_verify was never called), so nothing has been shown to run",
+      );
+    }
+
+    const views = this.assessViews();
+    if (views && views.camerslessScenes.length > 0) {
+      unmet.push(
+        `${views.camerslessScenes.join(", ")} holds no Camera, so nothing in it is drawn`,
+      );
     }
     return unmet;
   }
