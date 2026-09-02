@@ -472,6 +472,30 @@ export class CampaignManager {
             });
             return;
           }
+        } else if (task && campaign.state === "executing" && !ACTIVE_STATUSES.has(task.status)) {
+          // A terminal NON-completed tip (failed/blocked/cancelled) found at
+          // boot is an outcome, not an interruption. Audited 2026-09-02: it
+          // fell through to the resubmission below with countAttempt:false,
+          // which never consults the time box — so across repeated restarts a
+          // sprint was relaunched forever with attempts frozen. Judge it on
+          // the same path a live settle takes: time box, outage exemption
+          // (an outage still charges nothing), and otherwise a real attempt.
+          const milestone = campaign.milestones[campaign.currentMilestone];
+          if (milestone) {
+            getLoggerSafe().info("Campaign judging a terminal tip found at boot", {
+              id: campaign.id,
+              milestone: milestone.id,
+              status: task.status,
+            });
+            await this.onMilestoneOutcome(
+              campaign,
+              milestone,
+              task.status,
+              task.error ?? task.result ?? "",
+              { countAttempt: true },
+            );
+            return;
+          }
         }
 
         // The process died mid-task; the settlement events will never come.

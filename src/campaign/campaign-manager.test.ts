@@ -1293,6 +1293,72 @@ describe("CampaignManager", () => {
     expect(report).toMatch(/Sprint A — Foundations: no fresh captured frame .*never demanded a capture/);
   });
 
+  it("a boot that finds a FAILED tip past its time box escalates instead of silently resubmitting", async () => {
+    // Audited 2026-09-02: resumeOne judged only a `completed` tip. A failed or
+    // blocked tip fell through to submitCurrentMilestone({countAttempt:false}),
+    // which never consults the time box — so across repeated restarts a sprint
+    // was relaunched forever with attempts frozen and no escalation.
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+
+    // The sprint died with the process after running well past its 1h box.
+    const running = storage.get(campaign.id)!;
+    running.milestones[0]!.startedAtMs = Date.now() - 2 * 60 * 60_000;
+    storage.save(running);
+    tasks.markTerminal("task_1", TaskStatus.failed, "worker died: compile error CS0246");
+
+    await manager.resumeActive();
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+
+    const after = storage.get(campaign.id)!;
+    expect(after.milestones[0]!.timeBoxEscalations).toBe(1);
+    expect(after.milestones[0]!.prompt).toContain("NARROW THE SCOPE NOW");
+    expect(messages.at(-1)!.text).toContain("narrowing scope");
+  });
+
+  it("a boot that finds a FAILED tip charges the attempt, and a spent budget stops the campaign", async () => {
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    expect(storage.get(campaign.id)!.milestones[0]!.attempts).toBe(1);
+
+    tasks.markTerminal("task_1", TaskStatus.failed, "compile error CS0246");
+    await manager.resumeActive();
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    expect(storage.get(campaign.id)!.milestones[0]!.attempts).toBe(2); // charged
+    expect(tasks.submitted[1]!.prompt).toContain("The previous attempt ended failed");
+
+    // A second restart on a second dead tip: the budget is spent, so the
+    // campaign stops loudly instead of relaunching the sprint again.
+    tasks.markTerminal("task_2", TaskStatus.failed, "compile error CS0246 again");
+    await manager.resumeActive();
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"));
+    expect(tasks.submitted).toHaveLength(2);
+    expect(messages.at(-1)!.text).toContain("Campaign stopped");
+  });
+
+  it("a boot during a provider outage resubmits the dead tip WITHOUT charging an attempt", async () => {
+    // The boot path must inherit the outage exemption too: charging the
+    // provider's downtime to the sprint is what pushed healthy sprints to a stop.
+    const { ProviderHealthRegistry } = await import("../agents/providers/provider-health.js");
+    const { setLiveChainMemberNames } = await import("../agents/providers/provider-outage.js");
+    const registry = ProviderHealthRegistry.getInstance();
+    registry.clearProviderState("cm-boot");
+    registry.recordOverloaded("cm-boot", "quota wall");
+    setLiveChainMemberNames(["cm-boot"]);
+    try {
+      const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+      await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+      tasks.markTerminal("task_1", TaskStatus.failed, "All providers are in cooldown");
+
+      await manager.resumeActive();
+      await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+      expect(storage.get(campaign.id)!.milestones[0]!.attempts).toBe(1); // not charged
+    } finally {
+      setLiveChainMemberNames([]);
+      registry.clearProviderState("cm-boot");
+    }
+  });
+
   it("resumeActive leaves a still-running task alone", async () => {
     manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
     await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
