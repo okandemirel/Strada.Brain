@@ -230,6 +230,86 @@ describe("AgentBudgetTracker", () => {
   });
 
   // =========================================================================
+  // reservations — the check-then-act guard
+  // =========================================================================
+
+  describe("reservations", () => {
+    it("makes in-flight work visible to the next caller's cap check", () => {
+      tracker.recordCost(agentA, 9.5);
+      expect(tracker.getAgentCommitment(agentA, 10).committedUsd).toBeCloseTo(9.5, 4);
+
+      tracker.reserve(agentA, 0.4);
+      tracker.reserve(agentA, 0.4);
+
+      const commitment = tracker.getAgentCommitment(agentA, 10);
+      // Spend and reservation stay separately named — a reservation is not spend.
+      expect(commitment.usedUsd).toBeCloseTo(9.5, 4);
+      expect(commitment.reservedUsd).toBeCloseTo(0.8, 4);
+      expect(commitment.committedUsd).toBeCloseTo(10.3, 4);
+    });
+
+    it("keeps one agent's reservations out of another's commitment", () => {
+      tracker.reserve(agentA, 1.0);
+      expect(tracker.getAgentReservedUsd(agentB)).toBe(0);
+    });
+
+    it("release() returns the headroom without charging anything", () => {
+      const id = tracker.reserve(agentA, 1.0);
+      tracker.release(id);
+
+      expect(tracker.getAgentReservedUsd(agentA)).toBe(0);
+      expect(tracker.getAgentUsage(agentA).usedUsd).toBe(0);
+    });
+
+    it("settle() replaces the reservation with the real cost", () => {
+      const id = tracker.reserve(agentA, 1.0);
+      tracker.settle(id, agentA, 0.25, { model: "test-model" });
+
+      expect(tracker.getAgentReservedUsd(agentA)).toBe(0);
+      expect(tracker.getAgentUsage(agentA).usedUsd).toBeCloseTo(0.25, 4);
+    });
+
+    it("settle() does not re-charge costs already streamed in against the reservation", () => {
+      const id = tracker.reserve(agentA, 1.0);
+      // Live per-turn billing while the work runs.
+      tracker.recordCost(agentA, 0.1, { reservationId: id });
+      tracker.recordCost(agentA, 0.15, { reservationId: id });
+      // Each recorded turn shrinks the headroom the estimate still holds.
+      expect(tracker.getAgentReservedUsd(agentA)).toBeCloseTo(0.75, 4);
+
+      tracker.settle(id, agentA, 0.25);
+
+      expect(tracker.getAgentUsage(agentA).usedUsd).toBeCloseTo(0.25, 4);
+      expect(tracker.getAgentReservedUsd(agentA)).toBe(0);
+    });
+
+    it("settle() records the overrun when the real cost beat the estimate", () => {
+      const id = tracker.reserve(agentA, 0.2);
+      tracker.recordCost(agentA, 0.2, { reservationId: id });
+      tracker.settle(id, agentA, 0.9);
+
+      expect(tracker.getAgentUsage(agentA).usedUsd).toBeCloseTo(0.9, 4);
+    });
+
+    it("drops a reservation that outlived the ceiling instead of shrinking the cap forever", () => {
+      vi.useFakeTimers();
+      try {
+        tracker.reserve(agentA, 5.0);
+        expect(tracker.getAgentReservedUsd(agentA)).toBeCloseTo(5.0, 4);
+
+        vi.advanceTimersByTime(61 * 60 * 1000);
+
+        expect(
+          tracker.getAgentReservedUsd(agentA),
+          "a leaked reservation kept holding headroom",
+        ).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  // =========================================================================
   // migrateAgentBudget idempotency
   // =========================================================================
 

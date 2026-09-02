@@ -226,22 +226,23 @@ export class DelegationManager {
    * Synchronous delegation: spawn a sub-agent, wait for result, return it.
    */
   async delegate(request: DelegationRequest): Promise<DelegationResult> {
-    const { typeConfig, effectiveTier } = this.prepareRequest(request);
+    const { typeConfig, effectiveTier, reservationId } = this.prepareRequest(request);
     // The concurrency slot reserved by prepareRequest is released inside
     // executeWithEscalation's per-attempt finally, so no compensation is needed
-    // here (and adding any would double-release).
-    return await this.executeWithEscalation(request, typeConfig, effectiveTier);
+    // here (and adding any would double-release). The budget reservation is
+    // released by executeWithEscalation's outer finally for the same reason.
+    return await this.executeWithEscalation(request, typeConfig, effectiveTier, reservationId);
   }
 
   /**
    * Asynchronous delegation: fire-and-forget, emits events when done.
    */
   async delegateAsync(request: DelegationRequest): Promise<void> {
-    const { typeConfig, effectiveTier } = this.prepareRequest(request);
+    const { typeConfig, effectiveTier, reservationId } = this.prepareRequest(request);
 
     // Events are already emitted inside executeSingleDelegation with correct subAgentId.
     // Only swallow rejection to prevent unhandled promise rejection.
-    this.executeWithEscalation(request, typeConfig, effectiveTier).catch(() => {
+    this.executeWithEscalation(request, typeConfig, effectiveTier, reservationId).catch(() => {
       // Already logged and emitted inside executeSingleDelegation
     });
   }
@@ -351,8 +352,13 @@ export class DelegationManager {
   private prepareRequest(request: DelegationRequest): {
     typeConfig: DelegationTypeConfig;
     effectiveTier: ModelTier;
+    reservationId?: string;
   } {
     const typeConfig = this.resolveTypeConfig(request.type);
+    const effectiveTier = this.opts.tierRouter.getTypeEffectiveTier(
+      request.type,
+      typeConfig.tier,
+    );
 
     // Health gate: prevent thundering herd against overloaded providers
     const healthRegistry = ProviderHealthRegistry.getInstance();
@@ -393,25 +399,54 @@ export class DelegationManager {
     // rejected delegation never reserves a slot.
     const parentAgentId = request.parentAgentId as AgentId;
     const budgetCapUsd = this.opts.getAgentBudgetCap?.(parentAgentId);
-    if (
-      budgetCapUsd !== undefined &&
-      this.opts.budgetTracker.isAgentExceeded(parentAgentId, budgetCapUsd)
-    ) {
-      const usage = this.opts.budgetTracker.getAgentUsage(parentAgentId, budgetCapUsd);
-      throw new Error(
-        `Parent agent budget exceeded ($${usage.usedUsd.toFixed(2)} / $${budgetCapUsd.toFixed(2)}) — delegation rejected before spawn.`,
+    let reservationId: string | undefined;
+    if (budgetCapUsd !== undefined) {
+      if (this.opts.budgetTracker.isAgentExceeded(parentAgentId, budgetCapUsd)) {
+        const usage = this.opts.budgetTracker.getAgentUsage(parentAgentId, budgetCapUsd);
+        throw new Error(
+          `Parent agent budget exceeded ($${usage.usedUsd.toFixed(2)} / $${budgetCapUsd.toFixed(2)}) — delegation rejected before spawn.`,
+        );
+      }
+
+      // The recorded-spend check above is check-then-act: nothing is charged until a
+      // sub-agent settles, so N concurrent delegations (one swarm_tasks fan-out) all
+      // read the SAME pre-spawn total and all passed it — a parent at 95% of its cap
+      // could breach it N times over. Each delegation now RESERVES a pessimistic
+      // estimate that its siblings can see, so the overshoot is bounded by one
+      // delegation instead of the fan-out width (audited 2026-09-02).
+      //
+      // The refusal is on what is ALREADY committed (spent + reserved), not on this
+      // delegation's own estimate, so a single delegation under the cap is admitted
+      // exactly as before — the gate never became stricter than it was.
+      const commitment = this.opts.budgetTracker.getAgentCommitment(parentAgentId, budgetCapUsd);
+      if (commitment.reservedUsd > 0 && commitment.committedUsd >= budgetCapUsd) {
+        throw new Error(
+          `Parent agent budget committed ($${commitment.usedUsd.toFixed(2)} spent + ` +
+            `$${commitment.reservedUsd.toFixed(2)} reserved by delegations already in flight ` +
+            `/ $${budgetCapUsd.toFixed(2)} cap) — delegation rejected before spawn.`,
+        );
+      }
+      // Pessimistic: the tier's cost model over the type's FULL timeout, i.e. the
+      // most this run can cost by the only model available before it starts. It is
+      // an estimate and is labelled as one — it is replaced by the measured cost
+      // when the delegation settles, never left standing as spend.
+      reservationId = this.opts.budgetTracker.reserve(
+        parentAgentId,
+        this.estimateDelegationCost(effectiveTier, typeConfig.timeoutMs),
       );
     }
 
-    // Atomically check + reserve concurrency slot to prevent TOCTOU race
-    this.acquireConcurrencySlot(request.parentAgentId);
+    try {
+      // Atomically check + reserve concurrency slot to prevent TOCTOU race
+      this.acquireConcurrencySlot(request.parentAgentId);
+    } catch (error) {
+      // A delegation refused a slot never runs, so its reservation must not
+      // outlive it and shrink the parent's cap.
+      if (reservationId) this.opts.budgetTracker.release(reservationId);
+      throw error;
+    }
 
-    const effectiveTier = this.opts.tierRouter.getTypeEffectiveTier(
-      request.type,
-      typeConfig.tier,
-    );
-
-    return { typeConfig, effectiveTier };
+    return { typeConfig, effectiveTier, reservationId };
   }
 
   // ===========================================================================
@@ -422,6 +457,24 @@ export class DelegationManager {
     request: DelegationRequest,
     typeConfig: DelegationTypeConfig,
     tier: ModelTier,
+    reservationId?: string,
+  ): Promise<DelegationResult> {
+    try {
+      return await this.runEscalation(request, typeConfig, tier, reservationId);
+    } finally {
+      // Whatever the outcome, the work is no longer in flight, so its headroom
+      // must go back: a reservation that outlives its delegation is a silent cap.
+      // settleCost already replaced it with the measured cost on every path that
+      // reached a settlement; this covers the ones that threw before it.
+      if (reservationId) this.opts.budgetTracker.release(reservationId);
+    }
+  }
+
+  private async runEscalation(
+    request: DelegationRequest,
+    typeConfig: DelegationTypeConfig,
+    tier: ModelTier,
+    reservationId?: string,
   ): Promise<DelegationResult> {
     // Attempt 1 — slot reserved by prepareRequest. The inner finally releases it
     // exactly once whether the attempt returns, throws during execution, or
@@ -430,7 +483,7 @@ export class DelegationManager {
     // needed to compensate.
     try {
       try {
-        return await this.executeSingleDelegation(request, typeConfig, tier);
+        return await this.executeSingleDelegation(request, typeConfig, tier, undefined, reservationId);
       } finally {
         this.decrementConcurrency(request.parentAgentId);
       }
@@ -457,7 +510,7 @@ export class DelegationManager {
       // by its own finally regardless of outcome.
       this.acquireConcurrencySlot(request.parentAgentId);
       try {
-        return await this.executeSingleDelegation(request, typeConfig, nextTier, tier);
+        return await this.executeSingleDelegation(request, typeConfig, nextTier, tier, reservationId);
       } finally {
         this.decrementConcurrency(request.parentAgentId);
       }
@@ -473,6 +526,8 @@ export class DelegationManager {
     typeConfig: DelegationTypeConfig,
     tier: ModelTier,
     escalatedFrom?: ModelTier,
+    /** Budget headroom held for this delegation by prepareRequest, if any. */
+    reservationId?: string,
   ): Promise<DelegationResult> {
     const { delegationLog, eventBus, budgetTracker } = this.opts;
     const subAgentId = randomUUID();
@@ -568,18 +623,28 @@ export class DelegationManager {
         model: usage.model ?? usage.provider,
         tokensIn: usage.inputTokens,
         tokensOut: usage.outputTokens,
+        // Real spend as it lands shrinks the reservation it was reserved
+        // against, so a running delegation is never counted twice.
+        reservationId,
       });
     };
     /** The cost to report: measured when any usage arrived, else the tier
      *  estimate — recorded and logged as an estimate, never silently. */
     const settleCost = (durationMs: number, outcome: "completed" | "timeout" | "cancelled"): number => {
-      if (usageEvents > 0) return measuredCostUsd;
+      if (usageEvents > 0) {
+        // Replace the up-front estimate with what this run actually cost. Every
+        // usage event was already recorded against the reservation, so settle
+        // finds nothing unbilled and charges nothing twice.
+        if (reservationId) budgetTracker.settle(reservationId, parentAgentId, measuredCostUsd);
+        return measuredCostUsd;
+      }
       const estimatedCostUsd = this.estimateDelegationCost(tier, durationMs);
-      budgetTracker.recordCost(parentAgentId, estimatedCostUsd, {
-        model: providerConfig.model,
-        tokensIn: 0,
-        tokensOut: 0,
-      });
+      const recordEstimate = { model: providerConfig.model, tokensIn: 0, tokensOut: 0 };
+      if (reservationId) {
+        budgetTracker.settle(reservationId, parentAgentId, estimatedCostUsd, recordEstimate);
+      } else {
+        budgetTracker.recordCost(parentAgentId, estimatedCostUsd, recordEstimate);
+      }
       getLoggerSafe().warn("Delegated sub-agent reported no token usage — billing the tier estimate", {
         subAgentId,
         tier,
@@ -1190,7 +1255,16 @@ export class DelegationManager {
     // has no effect (nested/recursive delegation is intentionally not wired). This is
     // the single place to revisit — call createDelegationTools(..., _currentDepth,
     // maxDepth) here — if nested delegation is ever implemented.
-    return this.opts.parentTools.filter((t) => !t.name.startsWith("delegate_"));
+    //
+    // swarm_* is stripped for the SAME reason and must be named explicitly: it is a
+    // fan-out delegation surface bound to the parent's agent id and depth, so handing
+    // it down gives the sub-agent exactly the next generation the depth rule refuses —
+    // N of them at once. It stayed out of the handed-down set only because
+    // stage-agents snapshots parentTools before the swarm tool is registered; any
+    // reordering there silently re-armed nested fan-out (audited 2026-09-02).
+    return this.opts.parentTools.filter(
+      (t) => !t.name.startsWith("delegate_") && !t.name.startsWith("swarm_"),
+    );
   }
 
   /**

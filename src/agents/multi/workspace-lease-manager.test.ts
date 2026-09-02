@@ -94,6 +94,44 @@ describe("WorkspaceLeaseManager", () => {
     ]);
   });
 
+  // acquire/commit used to be a full synchronous cpSync plus three synchronous
+  // stat/compare walks. On a Unity tree that is minutes with the event loop
+  // blocked: no timer, no socket read, no stream heartbeat runs, so a provider
+  // stream that was fine got attributed a stall and the run was blamed on
+  // "provider slowness" (audited 2026-09-02). Seeding must yield.
+  it("yields to the event loop while seeding a large temp copy", async () => {
+    const projectRoot = makeTempDir("workspace-lease-yield-");
+    const leaseRoot = makeTempDir("workspace-lease-root-");
+    // A tree big enough that the copy is not a single filesystem call.
+    for (let d = 0; d < 12; d++) {
+      const dir = join(projectRoot, `dir-${d}`);
+      mkdirSync(dir, { recursive: true });
+      for (let f = 0; f < 40; f++) {
+        writeFileSync(join(dir, `file-${f}.txt`), `payload-${d}-${f}`.repeat(64));
+      }
+    }
+
+    const { runner } = createRunner([]);
+    const manager = new WorkspaceLeaseManager({ projectRoot, leaseRoot, commandRunner: runner });
+
+    // A timer armed for the next tick. Node runs timers only between macrotasks,
+    // so it can only fire while the seed is in flight if the seed actually awaits
+    // real I/O — a synchronous cpSync/stat walk leaves it pending until the whole
+    // lease is built.
+    let timerFired = false;
+    const timer = setTimeout(() => { timerFired = true; }, 0);
+
+    const lease = await manager.acquireLease({ label: "big worker", forceTempCopy: true });
+    clearTimeout(timer);
+
+    expect(timerFired, "the event loop was blocked for the whole seed").toBe(true);
+    // Identical semantics: the tree still arrived.
+    expect(readFileSync(join(lease.path, "dir-5", "file-7.txt"), "utf8")).toBe(
+      "payload-5-7".repeat(64),
+    );
+    await lease.release();
+  });
+
   it("falls back to a temp copy when git worktree setup fails", async () => {
     const projectRoot = makeTempDir("workspace-lease-copy-");
     const leaseRoot = makeTempDir("workspace-lease-root-");
