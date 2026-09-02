@@ -333,6 +333,27 @@ describe('ObsidianVault — hardening (P0/P1/P2)', () => {
     });
   });
 
+  // ─────────────── edge cache vs. deletion (audited 2026-09-02) ───────────────
+  describe('edge cache is invalidated when an indexed file is deleted', () => {
+    it('sync() prune: a deleted caller is no longer reported by findCallers', async () => {
+      mkdirSync(join(dir, 'src'), { recursive: true });
+      writeFileSync(join(dir, 'src/caller.ts'), "import { helper } from './callee.js';\nexport function runIt() { return helper(); }\n");
+      writeFileSync(join(dir, 'src/callee.ts'), 'export function helper() { return 1; }\n');
+      ({ vault, store: vectorStore } = newVault(dir));
+      await vault.init();
+      const calleeSym = 'typescript::src/callee.ts::helper';
+      // Prime the cache through the public API (PPR reads the same cache).
+      await vault.query({ text: 'helper', focusFiles: ['src/caller.ts'] });
+      expect((await vault.findCallers(calleeSym)).some((e) => e.fromSymbol.startsWith('typescript::src/caller.ts::'))).toBe(true);
+
+      rmSync(join(dir, 'src/caller.ts'));
+      expect((await vault.sync()).changed).toBe(1);
+
+      const after = await vault.findCallers(calleeSym);
+      expect(after.filter((e) => e.fromSymbol.startsWith('typescript::src/caller.ts::'))).toEqual([]);
+    });
+  });
+
   // ─────────────── deleteNote: incremental index cleanup ───────────────
   describe('deleteNote removes index rows + HNSW vectors without a full sync', () => {
     it('drops the deleted note and its vectors immediately, and a later sync finds nothing to prune', async () => {

@@ -466,9 +466,12 @@ export class UnityProjectVault implements IVault {
     return out;
   }
 
-  // Phase2-review I3: cache listEdges for query/PPR/findCallers hot paths, invalidated
-  // whenever reindexFile changes anything. For 50k-edge projects, the full scan per query
-  // was a measurable hit; caching is safe because edge mutations all flow through reindexFile.
+  // Phase2-review I3: cache listEdges for query/PPR/findCallers hot paths. For 50k-edge
+  // projects, the full scan per query was a measurable hit. Edge rows change in exactly
+  // two places — runReindexTxn (via reindexFileInternal) and store.deleteFile (via
+  // deleteIndexedFileInternal, which reindexFileInternal, sync()'s prune loop and
+  // fullIndex all reach) — and BOTH must invalidate (audited 2026-09-02: the delete
+  // path did not).
   private _edgesCache: VaultEdge[] | null = null;
   private getCachedEdges(): VaultEdge[] {
     if (this._edgesCache === null) this._edgesCache = this.store.listEdges();
@@ -578,6 +581,11 @@ export class UnityProjectVault implements IVault {
     const hnswIds = this.store.listHnswIdsForPath(relPath);
     for (const hnswId of hnswIds) this.adapter.remove(hnswId);
     this.store.deleteFile(relPath);
+    // deleteFile drops this file's edges (and unlinks other files' edges that
+    // pointed at its symbols) in SQLite; the cache kept serving them, so
+    // findCallers/PPR named a deleted file until an unrelated reindex
+    // happened to clear it (audited 2026-09-02).
+    this.invalidateEdgesCache();
     return true;
   }
 }

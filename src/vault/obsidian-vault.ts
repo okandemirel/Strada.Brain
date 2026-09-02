@@ -791,6 +791,9 @@ export class ObsidianVault implements IVault {
     const hnswIds = this.store.listHnswIdsForPath(canonical);
     for (const hnswId of hnswIds) this.adapter.remove(hnswId);
     this.store.deleteFile(canonical);
+    // Same omission as UnityProjectVault (audited 2026-09-02): the cache kept
+    // serving the deleted file's edges to findCallers/listBacklinks/PPR.
+    this.invalidateEdgesCache();
     return true;
   }
 }
