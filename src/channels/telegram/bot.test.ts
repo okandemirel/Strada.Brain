@@ -515,12 +515,16 @@ describe("TelegramChannel", () => {
       expect(replyMock).toHaveBeenCalledWith("Brain is not ready yet. Please try again later.");
     });
 
-    it("sends media message without attachments when download fails", async () => {
+    it("tells the user when a download fails and does not forward the caption as if no file was sent (audited 2026-09-02)", async () => {
+      // Previously the message was routed with text "broken image" and
+      // attachments: undefined — the brain answered a caption about a file it
+      // never received and the user was never told.
       const { downloadMedia: mockDownload } = await import("../../utils/media-processor.js");
       (mockDownload as any).mockResolvedValueOnce(null);
 
       const handler = vi.fn().mockResolvedValue(undefined);
       channel.onMessage(handler);
+      const replyMock = vi.fn().mockResolvedValue(undefined);
 
       const photoHandler = mockHandlers.get("message:photo")!;
       await photoHandler({
@@ -531,19 +535,87 @@ describe("TelegramChannel", () => {
           caption: "broken image",
           date: 1700000000,
         },
-        reply: vi.fn(),
+        reply: replyMock,
         api: {
           getFile: vi.fn().mockResolvedValue({ file_id: "f1", file_path: "photos/p.jpg" }),
           sendChatAction: vi.fn().mockResolvedValue(undefined),
         },
       });
 
-      expect(handler).toHaveBeenCalledWith(
-        expect.objectContaining({
-          text: "broken image",
-          attachments: undefined,
-        })
-      );
+      expect(handler).not.toHaveBeenCalled();
+      expect(replyMock).toHaveBeenCalledTimes(1);
+      const text = String(replyMock.mock.calls[0]?.[0]);
+      expect(text).toContain("p.jpg");
+      expect(text).toMatch(/download/i);
+      expect(text).toMatch(/not (been )?(sent|forwarded)/i);
+    });
+
+    it("tells the user when a document fails validation, naming the reason, and does not build from the caption alone (audited 2026-09-02)", async () => {
+      // A GDD sent as .docx is rejected (ALLOWED_DOCUMENT_TYPES is pdf/txt/csv);
+      // the caption "build this game" used to route alone into campaign intake.
+      const { validateMediaAttachment: mockValidate } = await import("../../utils/media-processor.js");
+      (mockValidate as any).mockReturnValueOnce({
+        valid: false,
+        reason: "Unsupported media type: application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      });
+
+      const handler = vi.fn().mockResolvedValue(undefined);
+      channel.onMessage(handler);
+      const replyMock = vi.fn().mockResolvedValue(undefined);
+
+      const docHandler = mockHandlers.get("message:document")!;
+      await docHandler({
+        chat: { id: 42 },
+        from: { id: 123 },
+        message: {
+          document: {
+            file_id: "doc-1",
+            file_name: "PixelFlow_GDD.docx",
+            mime_type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          },
+          caption: "build this game",
+          date: 1700000000,
+        },
+        reply: replyMock,
+        api: {
+          getFile: vi.fn().mockResolvedValue({ file_id: "doc-1", file_path: "documents/PixelFlow_GDD.docx" }),
+          sendChatAction: vi.fn().mockResolvedValue(undefined),
+        },
+      });
+
+      expect(handler).not.toHaveBeenCalled();
+      expect(replyMock).toHaveBeenCalledTimes(1);
+      const text = String(replyMock.mock.calls[0]?.[0]);
+      expect(text).toContain("PixelFlow_GDD.docx");
+      expect(text).toContain("Unsupported media type");
+    });
+
+    it("tells the user when a photo fails the magic-byte check instead of routing a blank message (audited 2026-09-02)", async () => {
+      const { validateMagicBytes: mockMagic } = await import("../../utils/media-processor.js");
+      (mockMagic as any).mockReturnValueOnce(false);
+
+      const handler = vi.fn().mockResolvedValue(undefined);
+      channel.onMessage(handler);
+      const replyMock = vi.fn().mockResolvedValue(undefined);
+
+      const photoHandler = mockHandlers.get("message:photo")!;
+      await photoHandler({
+        chat: { id: 42 },
+        from: { id: 123 },
+        message: {
+          photo: [{ file_id: "f1", width: 100, height: 100 }],
+          date: 1700000000,
+        },
+        reply: replyMock,
+        api: {
+          getFile: vi.fn().mockResolvedValue({ file_id: "f1", file_path: "photos/p.jpg" }),
+          sendChatAction: vi.fn().mockResolvedValue(undefined),
+        },
+      });
+
+      expect(handler).not.toHaveBeenCalled();
+      expect(replyMock).toHaveBeenCalledTimes(1);
+      expect(String(replyMock.mock.calls[0]?.[0])).toMatch(/content does not match/i);
     });
   });
 });
