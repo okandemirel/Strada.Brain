@@ -29,7 +29,12 @@ export async function seedInstincts(
 ): Promise<void> {
   for (const seed of seeds) {
     const existing = storage.getInstinctByPattern(seed.pattern, "global");
-    if (existing) continue;
+    if (existing) {
+      // Repair rows an older build registered under project_path "" (see below);
+      // INSERT OR IGNORE makes this a no-op once the '*' row exists.
+      storage.addInstinctScopeV2(existing.id, "*", "global");
+      continue;
+    }
 
     const id = `seed_${Date.now()}_${randomBytes(4).toString("hex")}`;
     const now = Date.now();
@@ -53,6 +58,11 @@ export async function seedInstincts(
       scopeType: seed.scope,
     });
 
-    storage.addInstinctScopeV2(id, "", "global");
+    // Register under the universal path '*' — the same sentinel checkScopePromotion
+    // uses — so the default "project+universal" scope filter
+    // (`s.project_path = ? OR s.project_path = '*'`) returns the seed. It was
+    // registered under "" which matched neither branch, so seeds were counted
+    // by getStats() but never retrievable. audited 2026-09-02
+    storage.addInstinctScopeV2(id, "*", "global");
   }
 }

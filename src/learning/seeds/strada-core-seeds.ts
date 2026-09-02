@@ -104,7 +104,12 @@ export async function seedStradaConventions(storage: LearningStorage): Promise<v
   for (const seed of STRADA_SEEDS) {
     // Dedup: skip if a global-scoped instinct with this pattern already exists
     const existing = storage.getInstinctByPattern(seed.pattern, "global");
-    if (existing) continue;
+    if (existing) {
+      // Repair rows an older build registered under project_path "" (see below);
+      // INSERT OR IGNORE makes this a no-op once the '*' row exists.
+      storage.addInstinctScopeV2(existing.id, "*", "global");
+      continue;
+    }
 
     const id = `seed_${Date.now()}_${randomBytes(4).toString("hex")}`;
     const now = Date.now();
@@ -128,7 +133,12 @@ export async function seedStradaConventions(storage: LearningStorage): Promise<v
       scopeType: seed.scope,
     });
 
-    // Register the global scope so getInstinctByPattern('pattern', 'global') finds it
-    storage.addInstinctScopeV2(id, "", "global");
+    // Register the global scope under the universal path '*' so both
+    // getInstinctByPattern('pattern', 'global') (keys on scope_type) and the
+    // default "project+universal" retrieval filter
+    // (`s.project_path = ? OR s.project_path = '*'`) find it. It was registered
+    // under "" which matched neither branch, so seeds were counted by
+    // getStats() but never retrievable. audited 2026-09-02
+    storage.addInstinctScopeV2(id, "*", "global");
   }
 }
