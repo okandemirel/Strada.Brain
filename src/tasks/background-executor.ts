@@ -1552,6 +1552,14 @@ export class BackgroundExecutor {
       } catch { /* note write is best-effort */ }
 
       if (result.workerResult && result.workerResult.status === "failed") {
+        // Mission keep-alive BEFORE terminal fail, exactly as the supervisor
+        // branch does. Audited 2026-09-02: this direct-worker branch went
+        // straight to fail(), so a provider blink on a mission admitted
+        // direct_worker (busy/low_complexity/supervisor_error) killed it dead —
+        // a "failed" row is invisible to both reapers and the restart re-arm.
+        if (this.scheduleMissionKeepAlive(task, result.workerResult.reason ?? result.output ?? "worker failed")) {
+          return;
+        }
         requestFailed = true;
         this.taskManager.fail(
           task.id,
@@ -1586,6 +1594,12 @@ export class BackgroundExecutor {
       const errMsg = error instanceof Error ? error.message : String(error);
       const sanitizedErrMsg = sanitizeSecrets(errMsg);
       logger.error("Background task execution error", { taskId: task.id, error: sanitizedErrMsg });
+      // A thrown run ("All providers are in cooldown", a runner throw) is the
+      // same transient the supervisor branch feeds back into the keep-alive.
+      // Audited 2026-09-02: it went to a bare fail() here, route-independent.
+      if (this.scheduleMissionKeepAlive(task, sanitizedErrMsg)) {
+        return;
+      }
       requestFailed = true;
       this.taskManager.fail(task.id, sanitizedErrMsg);
 

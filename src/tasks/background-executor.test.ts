@@ -2633,6 +2633,108 @@ describe("BackgroundExecutor - auto-resume bounds (measured loop of 2026-08-26)"
   });
 });
 
+describe("BackgroundExecutor - mission keep-alive on the direct-worker route", () => {
+  // Audited 2026-09-02: only the supervisor branch routed a user mission's
+  // failure through scheduleMissionKeepAlive. A mission admitted direct_worker
+  // (busy supervisor, low complexity, supervisor_error…) that hit a provider
+  // blink landed on a bare fail() — status "failed", which neither reaper nor
+  // the restart re-arm can see — so the mission was terminally dead on a
+  // transient, against the contract that only budget/cap may stop it.
+  function makeTaskManager() {
+    return {
+      updateStatus: vi.fn(), complete: vi.fn(), fail: vi.fn(), block: vi.fn(),
+      appendTaskNotice: vi.fn(), retryTask: vi.fn(),
+      getStatus: vi.fn().mockReturnValue(null),
+      listTasks: vi.fn().mockReturnValue([]),
+    };
+  }
+
+  it("a worker that settles 'failed' on a provider blink feeds back into the keep-alive instead of a terminal fail", async () => {
+    const orchestrator = {
+      evaluateSupervisorAdmission: vi.fn().mockResolvedValue({ path: "direct_worker", reason: "busy" }),
+      runWorkerTask: vi.fn().mockResolvedValue({
+        status: "failed",
+        reason: "All providers are in cooldown",
+        visibleResponse: "",
+        provider: "mock",
+        touchedFiles: [], toolTrace: [], verificationResults: [], reviewFindings: [], artifacts: [],
+      }),
+    };
+    const executor = new BackgroundExecutor({
+      orchestrator: orchestrator as any,
+      decomposer: createMockDecomposer() as any,
+      aiProvider: undefined,
+      channel: undefined,
+    });
+    const taskManager = makeTaskManager();
+    executor.setTaskManager(taskManager as any);
+
+    executor.enqueue(createTestTask(undefined, { id: "task_direct_failed" as any, origin: "user" }), new AbortController().signal, vi.fn());
+
+    await vi.waitFor(() => expect(taskManager.block).toHaveBeenCalled(), { timeout: 5000 });
+    expect(taskManager.block).toHaveBeenCalledWith(
+      "task_direct_failed",
+      expect.stringMatching(/All providers are in cooldown.*Auto-retry 1\/10 in ~\d+s/),
+    );
+    expect(taskManager.fail).not.toHaveBeenCalled();
+    const missionRetries = (executor as unknown as { missionRetries: Map<string, number> }).missionRetries;
+    expect(missionRetries.size).toBe(1);
+    await executor.shutdown();
+  });
+
+  it("a run that THROWS on a provider blink feeds back into the keep-alive instead of a terminal fail", async () => {
+    const orchestrator = {
+      evaluateSupervisorAdmission: vi.fn().mockResolvedValue({ path: "direct_worker", reason: "low_complexity" }),
+      runBackgroundTask: vi.fn().mockRejectedValue(
+        new Error("All providers failed or unavailable. All providers are in cooldown."),
+      ),
+    };
+    const executor = new BackgroundExecutor({
+      orchestrator: orchestrator as any,
+      decomposer: createMockDecomposer() as any,
+      aiProvider: undefined,
+      channel: undefined,
+    });
+    const taskManager = makeTaskManager();
+    executor.setTaskManager(taskManager as any);
+
+    executor.enqueue(createTestTask(undefined, { id: "task_direct_threw" as any, origin: "user" }), new AbortController().signal, vi.fn());
+
+    await vi.waitFor(() => expect(taskManager.block).toHaveBeenCalled(), { timeout: 5000 });
+    expect(taskManager.block).toHaveBeenCalledWith(
+      "task_direct_threw",
+      expect.stringMatching(/All providers are in cooldown.*Auto-retry 1\/10 in ~\d+s/),
+    );
+    expect(taskManager.fail).not.toHaveBeenCalled();
+    await executor.shutdown();
+  });
+
+  it("a daemon-origin worker failure still fails terminally (the keep-alive is a user-mission contract)", async () => {
+    const orchestrator = {
+      evaluateSupervisorAdmission: vi.fn().mockResolvedValue({ path: "direct_worker", reason: "busy" }),
+      runWorkerTask: vi.fn().mockResolvedValue({
+        status: "failed", reason: "compile exploded", visibleResponse: "", provider: "mock",
+        touchedFiles: [], toolTrace: [], verificationResults: [], reviewFindings: [], artifacts: [],
+      }),
+    };
+    const executor = new BackgroundExecutor({
+      orchestrator: orchestrator as any,
+      decomposer: createMockDecomposer() as any,
+      aiProvider: undefined,
+      channel: undefined,
+    });
+    const taskManager = makeTaskManager();
+    executor.setTaskManager(taskManager as any);
+
+    executor.enqueue(createTestTask(undefined, { id: "task_daemon_failed" as any, origin: "daemon" }), new AbortController().signal, vi.fn());
+
+    await vi.waitFor(() => expect(taskManager.fail).toHaveBeenCalled(), { timeout: 5000 });
+    expect(taskManager.fail).toHaveBeenCalledWith("task_daemon_failed", expect.stringContaining("compile exploded"));
+    expect(taskManager.block).not.toHaveBeenCalled();
+    await executor.shutdown();
+  });
+});
+
 describe("BackgroundExecutor - integrateMilestoneBranches", () => {
   it("merges every un-merged milestone branch and leaves a conflicting one for the person, loudly", () => {
     // Audited 2026-09-02: `git merge-base --is-ancestor` answers with its exit
