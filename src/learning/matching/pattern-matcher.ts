@@ -89,6 +89,32 @@ export interface EmbedderLike {
   embed(text: string): Promise<{ vector: number[]; dimensions: number }>;
 }
 
+/** The batch-provider shape the adapter needs (IEmbeddingProvider, without importing the RAG module). */
+export interface BatchEmbedderLike {
+  embed(texts: string[]): Promise<{ embeddings: readonly (readonly number[])[] }>;
+}
+
+/**
+ * Adapt a batch embedding provider (IEmbeddingProvider) to the single-text
+ * EmbedderLike this matcher reads.
+ *
+ * Both production matchers (bootstrap's and the pipeline's own) were built
+ * WITHOUT an embedder while the pipeline paid to embed and store a vector for
+ * every instinct it created — the only reader of those vectors is gated on
+ * `this.embedder`, so semantic retrieval never ran and the boot notice implied
+ * it did whenever a provider was present. The shapes differ (batch vs single),
+ * which is why the wiring was never done. Audited 2026-09-02.
+ */
+export function embedderFromProvider(provider: BatchEmbedderLike): EmbedderLike {
+  return {
+    async embed(text: string) {
+      const batch = await provider.embed([text]);
+      const vector = [...(batch.embeddings[0] ?? [])];
+      return { vector, dimensions: vector.length };
+    },
+  };
+}
+
 /** Scope context for cross-session filtered retrieval */
 export interface ScopeContext {
   projectPath: string;

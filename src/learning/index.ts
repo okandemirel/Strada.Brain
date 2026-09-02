@@ -44,7 +44,7 @@ export {
   type RuntimeArtifactMatches,
 } from "./runtime-artifact-manager.js";
 export { ConfidenceScorer, calculateEloRating, wilsonScoreInterval, getVerdictScore } from "./scoring/confidence-scorer.js";
-export { PatternMatcher, extractKeywords, jaccardSimilarity } from "./matching/pattern-matcher.js";
+export { PatternMatcher, embedderFromProvider, extractKeywords, jaccardSimilarity } from "./matching/pattern-matcher.js";
 export { ErrorLearningHooks, type ErrorContext, type ResolutionContext } from "./hooks/error-learning-hooks.js";
 
 // Type exports

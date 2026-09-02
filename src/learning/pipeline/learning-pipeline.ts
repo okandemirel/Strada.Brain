@@ -9,7 +9,7 @@ import { sanitizePromptInjection } from "../../agents/orchestrator-text-utils.js
 import { LearningStorage } from "../storage/learning-storage.js";
 import { ConfidenceScorer, EVIDENCE_WEIGHTS, getVerdictScore } from "../scoring/confidence-scorer.js";
 import { getLoggerSafe } from "../../utils/logger.js";
-import { PatternMatcher } from "../matching/pattern-matcher.js";
+import { PatternMatcher, embedderFromProvider } from "../matching/pattern-matcher.js";
 import { RuntimeArtifactManager } from "../runtime-artifact-manager.js";
 import type { ToolResultEvent, FeedbackReactionEvent, IEventBus, LearningEventMap } from "../../core/event-bus.js";
 import { FeedbackHandler } from "../feedback/feedback-handler.js";
@@ -147,7 +147,13 @@ export class LearningPipeline {
     this.config = { ...DEFAULT_LEARNING_CONFIG, ...config };
     this.bayesianConfig = bayesianConfig ?? DEFAULT_BAYESIAN_CONFIG;
     this.confidenceScorer = new ConfidenceScorer();
-    this.patternMatcher = new PatternMatcher(storage);
+    // The same provider that embeds every created instinct (EmbeddingQueue,
+    // below) must also be what reads those vectors back; this matcher was
+    // built without it, so the stored embeddings were never consulted
+    // (audited 2026-09-02).
+    this.patternMatcher = new PatternMatcher(storage, {
+      embedder: embeddingProvider ? embedderFromProvider(embeddingProvider) : undefined,
+    });
     this.runtimeArtifacts = new RuntimeArtifactManager(storage);
     this.eventBus = eventBus ?? null;
     // audited 2026-09-02: reactions must reach the stored confidence the

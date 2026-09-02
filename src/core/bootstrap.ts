@@ -64,6 +64,7 @@ import {
   LearningPipeline,
   ErrorLearningHooks,
   PatternMatcher,
+  embedderFromProvider,
   ConfidenceScorer,
 } from "../learning/index.js";
 import { TypedEventBus, type IEventBus, type LearningEventMap } from "./event-bus.js";
@@ -2418,7 +2419,13 @@ async function initializeLearning(
     const { InterventionEngine } = await import("../learning/intervention/intervention-engine.js");
     const interventionEngine = new InterventionEngine(learningStorage);
 
-    const patternMatcher = new PatternMatcher(learningStorage, { eventBus });
+    // The retrieval matcher gets the SAME provider the pipeline embeds every
+    // instinct with. Built without it, the stored vectors were never read and
+    // semantic recall silently never ran (audited 2026-09-02).
+    const patternMatcher = new PatternMatcher(learningStorage, {
+      eventBus,
+      embedder: embeddingProvider ? embedderFromProvider(embeddingProvider) : undefined,
+    });
     const confidenceScorer = new ConfidenceScorer({
       confidenceWeights: config.learningPipelineV2.confidenceWeights,
     });

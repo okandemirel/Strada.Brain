@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { PatternMatcher, extractKeywords, jaccardSimilarity, vectorCosineSimilarity } from "./pattern-matcher.ts";
+import { PatternMatcher, embedderFromProvider, extractKeywords, jaccardSimilarity, vectorCosineSimilarity } from "./pattern-matcher.ts";
 import type { LearningStorage } from "../storage/learning-storage.ts";
 import type { Instinct, PatternMatchInput } from "../types.ts";
 import type { EmbedderLike } from "./pattern-matcher.ts";
@@ -283,6 +283,27 @@ describe("PatternMatcher", () => {
       expect(results[0]!.instinct!.id).toBe("instinct-emb-1");
       expect(results[0]!.type).toBe("semantic");
       expect(results[0]!.matchedFields).toContain("embedding");
+    });
+
+    it("finds semantic matches through a BATCH provider via embedderFromProvider (audited 2026-09-02)", async () => {
+      // Production only has IEmbeddingProvider (embed(texts[]) → {embeddings}),
+      // not EmbedderLike; the shape mismatch is why neither production matcher
+      // was ever given an embedder while every instinct was embedded anyway.
+      const embStorage = createStorageWithEmbeddings();
+      const batchProvider = {
+        embed: vi.fn(async (texts: string[]) => ({
+          embeddings: texts.map(() => [0.9, 0.1, 0]),
+          usage: { totalTokens: 1 },
+        })),
+      };
+      const semanticMatcher = new PatternMatcher(embStorage, { embedder: embedderFromProvider(batchProvider) });
+
+      const results = await semanticMatcher.findSimilarInstinctsSemantic("some query");
+
+      expect(batchProvider.embed).toHaveBeenCalledWith(["some query"]);
+      expect(results.length).toBeGreaterThan(0);
+      expect(results[0]!.instinct!.id).toBe("instinct-emb-1");
+      expect(results[0]!.type).toBe("semantic");
     });
 
     it("should skip instincts without embeddings", async () => {

@@ -3,8 +3,9 @@ import { LearningPipeline } from "./learning-pipeline.ts";
 import { LearningStorage } from "../storage/learning-storage.ts";
 import type { Instinct, Trajectory, TrajectoryStep, TrajectoryOutcome } from "../types.ts";
 import { TypedEventBus, type ToolResultEvent } from "../../core/event-bus.ts";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
+import type { PatternMatcher } from "../matching/pattern-matcher.ts";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { ToolName, TimestampMs } from "../../types/index.js";
@@ -2498,5 +2499,76 @@ describe("learning pipeline v2 integration", () => {
 
       expect(storage.getInstinct(instinct.id)!.stats.timesApplied).toBe(1);
     });
+  });
+});
+
+describe("LearningPipeline semantic retrieval wiring (audited 2026-09-02)", () => {
+  // The pipeline received the embedding provider, used it to EMBED every
+  // created instinct (EmbeddingQueue), and then built its own PatternMatcher
+  // without it — so the vectors it paid for were never read back.
+  let storage: LearningStorage;
+  let tempDir: string;
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), "pipeline-embedder-test-"));
+    storage = new LearningStorage(join(tempDir, "test.db"));
+    storage.initialize();
+  });
+
+  afterEach(() => {
+    storage.close();
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("gives its matcher the same provider it embeds instincts with, so stored vectors are read back", async () => {
+    const provider = {
+      name: "fake",
+      dimensions: 3,
+      embed: vi.fn(async (texts: string[]) => ({
+        embeddings: texts.map(() => [1, 0, 0]),
+        usage: { totalTokens: 1 },
+      })),
+    };
+    const pipeline = new LearningPipeline(storage, { enabled: true }, provider as never);
+    try {
+      const instinct: Instinct = {
+        id: `instinct_${randomUUID()}`,
+        name: "Null reference on scene load",
+        type: "error_fix",
+        status: "active",
+        confidence: 0.9,
+        triggerPattern: "NullReferenceException in SceneLoader",
+        action: "guard the loader",
+        contextConditions: [],
+        stats: { timesSuggested: 1, timesApplied: 1, timesFailed: 0, successRate: 1, averageExecutionMs: 0 },
+        createdAt: Date.now() as TimestampMs,
+        updatedAt: Date.now() as TimestampMs,
+        sourceTrajectoryIds: [],
+        tags: [],
+      };
+      storage.createInstinct(instinct);
+      storage.updateInstinctEmbedding(instinct.id, [1, 0, 0]);
+
+      const matcher = (pipeline as unknown as { patternMatcher: PatternMatcher }).patternMatcher;
+      // Lexically unrelated query: only the vector path can find this instinct.
+      const results = await matcher.findSimilarInstinctsSemantic("crash when the level opens");
+
+      expect(provider.embed).toHaveBeenCalledWith(["crash when the level opens"]);
+      expect(results.map((r) => r.instinct?.id)).toContain(instinct.id);
+    } finally {
+      pipeline.stop();
+    }
+  });
+
+  it("is what bootstrap actually supplies to the retrieval matcher", () => {
+    // The live retrieval path (InstinctRetriever) uses bootstrap's matcher,
+    // not the pipeline's. Proving the pipeline wires it says nothing about
+    // that one.
+    const source = readFileSync("src/core/bootstrap.ts", "utf8");
+    const at = source.indexOf("new PatternMatcher(learningStorage, {");
+    expect(at, "bootstrap's matcher construction moved; this measures nothing").toBeGreaterThan(-1);
+    const call = source.slice(at, source.indexOf("});", at));
+    expect(call).toContain("embedder:");
+    expect(call).toContain("embedderFromProvider(embeddingProvider)");
   });
 });
