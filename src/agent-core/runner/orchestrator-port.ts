@@ -551,6 +551,9 @@ export interface OrchestratorPort {
      *  join-settle parity source (v1 read finalStatus, :4884); AgentState.phase never reaches
      *  COMPLETE in production, so it must NOT be derived from the state. */
     terminalStatus?: TerminalStatus,
+    /** The spine's terminal reason ("max-iterations", "epoch-budget-exhausted", a verdict label…)
+     *  so the recorded metric can distinguish a budget-stopped run (partial) from a completion. */
+    terminalReason?: string,
   ): Promise<void>;
 
   /**

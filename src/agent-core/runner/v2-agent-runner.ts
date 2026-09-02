@@ -925,6 +925,7 @@ export class V2AgentRunner implements AgentRunner {
             setup,
             runClock.taskToken.reason ?? undefined,
             ranToTerminal ? terminalStatus : "failed",
+            terminalReason,
           );
         } catch (e) {
           log.warn("[v2-runner] terminal persist failed", { error: e instanceof Error ? e.message : String(e) });

@@ -496,6 +496,61 @@ describe("V2AgentRunner — REAL port + REAL gateway (provider.chat scripted)", 
     expect(h.tools.find((t) => t.name === "edit_file")!.execute).toHaveBeenCalled(); // real tool turn ran
   });
 
+  /* audited 2026-09-02: the recorded terminal metric must carry the run's real terminal status/reason */
+  it("metric: an epoch-budget-exhausted run is recorded as iteration-budget-terminated, not as a completion", async () => {
+    // Same drive as GAP3: one iteration per epoch, two epochs, the provider never ends the turn.
+    const provider = mkScriptedProvider();
+    provider.chat.mockResolvedValue(
+      resp({
+        text: "working",
+        stopReason: "tool_use",
+        toolCalls: [{ id: "tc-1", name: "edit_file", input: { path: "a.cs" } }],
+      }),
+    );
+    const taskConfig = {
+      ...DEFAULT_TASK_CONFIG,
+      backgroundEpochMaxIterations: 1,
+      backgroundMaxEpochs: 2,
+    } as TaskConfig;
+    const h = buildHarness(provider, undefined, undefined, undefined, taskConfig);
+    const io = mkIO("background");
+    const metricSpy = vi.spyOn(
+      (h.orch as unknown as { engine: { recordMetricEnd: (...a: unknown[]) => void } }).engine,
+      "recordMetricEnd",
+    );
+
+    const result = await drive(h.clock, h.runner.run(mkRequest(), io));
+
+    expect(result.reason).toBe("epoch-budget-exhausted");
+    expect(result.status).toBe("blocked");
+    expect(metricSpy).toHaveBeenCalledTimes(1);
+    const recorded = metricSpy.mock.calls[0]![1] as { agentPhase: string; terminatedByIterationBudget?: boolean };
+    // mapCompletionStatus: terminatedByIterationBudget → "partial"; COMPLETE would have been "success".
+    expect(recorded.terminatedByIterationBudget).toBe(true);
+    expect(recorded.agentPhase).not.toBe("complete");
+  });
+
+  it("metric: a run that ends blocked on a verdict (max-tokens runaway) is recorded FAILED, not COMPLETE", async () => {
+    const provider = mkScriptedProvider();
+    provider.chat
+      .mockResolvedValueOnce(resp({ text: "the plan", stopReason: "end_turn" }))
+      .mockResolvedValue(resp({ text: "truncated…", stopReason: "max_tokens", toolCalls: [] }));
+    const h = buildHarness(provider);
+    const io = mkIO("worker");
+    const metricSpy = vi.spyOn(
+      (h.orch as unknown as { engine: { recordMetricEnd: (...a: unknown[]) => void } }).engine,
+      "recordMetricEnd",
+    );
+
+    const result = await drive(h.clock, h.runner.run(mkRequest(), io));
+
+    expect(result.status).toBe("blocked");
+    expect(metricSpy).toHaveBeenCalledTimes(1);
+    const recorded = metricSpy.mock.calls[0]![1] as { agentPhase: string; terminatedByIterationBudget?: boolean };
+    expect(recorded.agentPhase).toBe("failed");
+    expect(recorded.terminatedByIterationBudget).toBeFalsy();
+  });
+
   it("E (P-E): 3 consecutive no-tool max_tokens turns → runaway guard aborts (worker → blocked)", async () => {
     const provider = mkScriptedProvider();
     provider.chat

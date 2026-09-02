@@ -352,20 +352,35 @@ export function createAgentCorePort(
         const text = "Task completed.";
         return { text, summary: text };
       },
-      persistTerminal: async (state: AgentState, _setup, cancelReason?: CancelReason, terminalStatus?: TerminalStatus) => {
+      persistTerminal: async (
+        state: AgentState,
+        _setup,
+        cancelReason?: CancelReason,
+        terminalStatus?: TerminalStatus,
+        terminalReason?: string,
+      ) => {
         const c = ctx();
         // A BENIGN cancel (mid-run user /cancel, daemon winddown, …) must NOT be recorded as a
         // successful completion — that polluted metrics + the learning signal. v1 recorded the
         // terminal phase (its catch transitioned to FAILED on the `signal.aborted` re-throw, so the
-        // finally recorded FAILED, never COMPLETE). Mirror that: a benign cancel records FAILED; every
-        // other terminal (success / verdict-stop / non-cancel) keeps COMPLETE exactly as before.
+        // finally recorded FAILED, never COMPLETE).
         const cancelled = cancelReason !== undefined && isBenign(cancelReason);
+        // audited 2026-09-02: this recorded AgentPhase.COMPLETE for EVERY non-cancel terminal and a
+        // literal hitMaxIterations:false, so a run that ended on a failing verdict, a blocked
+        // milestone, or an exhausted iteration budget was booked as completion_status "success"
+        // (metrics CLI, daemon digest, learning-stats all read it) and "partial" was unreachable.
+        // The spine's real terminal status and reason — already in scope for joinEpisodeEnd
+        // below — now decide the recorded phase and the iteration-budget flag.
+        const failedVerdict = terminalStatus === "failed" || terminalStatus === "blocked";
+        const terminatedByIterationBudget =
+          terminalReason === "max-iterations" || terminalReason === "epoch-budget-exhausted";
         try {
         engine.recordMetricEnd(c.metricId, {
-          agentPhase: cancelled ? AgentPhase.FAILED : AgentPhase.COMPLETE,
+          agentPhase: cancelled || failedVerdict ? AgentPhase.FAILED : AgentPhase.COMPLETE,
           iterations: state.iteration,
           toolCallCount: state.stepResults.length,
-          hitMaxIterations: false,
+          hitMaxIterations: terminatedByIterationBudget,
+          terminatedByIterationBudget,
         });
         // Step 3 / gap #6 — execution-journal continuity (v1 parity: runAgentLoop finally :6061-6062,
         // runBackgroundTask finally :4509-4510). v1 wrote the journal to execution memory + snapshotted
