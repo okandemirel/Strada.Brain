@@ -420,6 +420,68 @@ describe("AgentCore OODA Integration", () => {
     expect(overrides.reasoningIntervalMs).toBe(15000);
   });
 
+  /* audited 2026-09-02: the LLM-set threshold is capped and expires; a dropped batch is deferred */
+  it("adjust priorityThreshold:100 is capped — a failed task outcome (scored 80) still reaches the LLM", async () => {
+    const m = createMocks({
+      chatResponse: { action: "adjust", adjustments: { priorityThreshold: 100 }, reasoning: "go quiet" },
+    });
+    const core = buildCore(m);
+    await core.tick(); // tick 1: the adjust lands
+    expect(m.provider.chat).toHaveBeenCalledTimes(1);
+    expect(core.getRuntimeOverrides().priorityThreshold).toBeLessThanOrEqual(80);
+
+    // A failed daemon task: base 70 + task-outcome severity 5 + actionability 5 = 80 → must not be
+    // silenced by any LLM-set threshold.
+    (m.engine as any).observers.length = 0;
+    m.engine.register({
+      name: "outcome",
+      collect: () => [createObservation("task-outcome", "Agent task failed: Fix build", { priority: 80 })],
+    });
+    m.provider.chat.mockResolvedValue(makeLLMResponse({ action: "wait", reasoning: "noted" }));
+    await core.tick();
+
+    expect(m.provider.chat).toHaveBeenCalledTimes(2);
+  });
+
+  it("an LLM-raised threshold expires, and the actionable batch it dropped comes back instead of being destroyed", async () => {
+    vi.useFakeTimers();
+    try {
+      const m = createMocks({
+        chatResponse: { action: "adjust", adjustments: { priorityThreshold: 100 }, reasoning: "go quiet" },
+      });
+      const core = buildCore(m);
+      await core.tick(); // tick 1: the adjust lands (capped, with an expiry)
+      expect(m.provider.chat).toHaveBeenCalledTimes(1);
+
+      // A ONE-SHOT observer (like the production trigger/git/build observers): the trigger fires once.
+      let fired = false;
+      (m.engine as any).observers.length = 0;
+      m.engine.register({
+        name: "one-shot-trigger",
+        collect: () => {
+          if (fired) return [];
+          fired = true;
+          return [createObservation("trigger", "Nightly cron fired: rebuild assets", { priority: 60 })];
+        },
+      });
+      m.provider.chat.mockResolvedValue(makeLLMResponse({ action: "wait", reasoning: "noted" }));
+
+      await core.tick(); // tick 2: trigger scored 65 < raised threshold → not reasoned about
+      expect(m.provider.chat).toHaveBeenCalledTimes(1);
+      expect(m.engine.getDeferredCount(), "the dropped batch must be deferred, not destroyed").toBe(1);
+
+      vi.advanceTimersByTime(31 * 60_000); // past the override TTL and the defer delay
+      await core.tick(); // tick 3: threshold back to config; the deferred trigger re-surfaces
+
+      expect(m.provider.chat).toHaveBeenCalledTimes(2);
+      const prompt = String(m.provider.chat.mock.calls[1]![1][0].content);
+      expect(prompt).toContain("Nightly cron fired");
+      expect(core.getRuntimeOverrides().priorityThreshold).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   /* 13. P2: no instincts => no recordOutcome calls */
   it("does not call recordOutcome when no instincts were matched", async () => {
     const m = createMocks({ chatResponse: { action: "execute", goal: "Cleanup", reasoning: "housekeeping" } });

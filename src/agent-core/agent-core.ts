@@ -30,6 +30,17 @@ const FOREGROUND_DECISION_DEFER_MINUTES = 5;
  * minute clears the engine's 60s dedup window so the re-queued item is not suppressed.
  */
 const UNACTED_BATCH_RECHECK_MINUTES = 1;
+/**
+ * audited 2026-09-02: the `adjust` action wrote priorityThreshold straight from LLM output
+ * (clamped only to 0-100) with no ceiling and no way back except another `adjust` — one
+ * turn could silence every observation below 100 for the life of the process, and each
+ * silenced batch was drained and destroyed. The override is now capped below the score of a
+ * failed task outcome (70 + 5 severity + 5 actionable = 80), expires, and a dropped
+ * actionable batch is deferred so it is re-evaluated once the threshold has relaxed.
+ */
+const LLM_PRIORITY_THRESHOLD_CEILING = 80;
+const PRIORITY_THRESHOLD_OVERRIDE_TTL_MS = 30 * 60_000;
+const BELOW_THRESHOLD_RECHECK_MINUTES = 5;
 
 export class AgentCore {
   static readonly AGENT_CHAT_ID = "agent-core";
@@ -47,7 +58,13 @@ export class AgentCore {
   /** ProviderManager reference — needed to materialize routing decisions. */
   private readonly providerManagerRef?: { getProviderByName(name: string): IAIProvider | null };
   /** Runtime overrides set by the 'adjust' action */
-  private runtimeOverrides: { priorityThreshold?: number; sourceBoosts: Map<string, number>; reasoningIntervalMs?: number } = { sourceBoosts: new Map() };
+  private runtimeOverrides: {
+    priorityThreshold?: number;
+    /** When the LLM-set priorityThreshold lapses back to config.minObservationPriority. */
+    priorityThresholdExpiresAt?: number;
+    sourceBoosts: Map<string, number>;
+    reasoningIntervalMs?: number;
+  } = { sourceBoosts: new Map() };
 
   constructor(
     private readonly observationEngine: ObservationEngine,
@@ -114,12 +131,20 @@ export class AgentCore {
         ranked.sort((a, b) => b.priority - a.priority);
       }
 
-      const effectivePriorityThreshold = this.runtimeOverrides.priorityThreshold ?? this.config.minObservationPriority;
+      const effectivePriorityThreshold = this.effectivePriorityThreshold();
       if (ranked.length === 0 || ranked[0]!.priority < effectivePriorityThreshold) {
         this.logger.debug("AgentCore: skipping tick — no high-priority observations", {
           count: ranked.length,
           topPriority: ranked[0]?.priority ?? 0,
+          threshold: effectivePriorityThreshold,
         });
+        // The batch was drained from one-shot observers. What the LLM-raised threshold silenced
+        // (would have passed the configured threshold) is kept for a look once the override lapses;
+        // what falls below the configured threshold is the steady state and is not re-queued.
+        const silencedByOverride = ranked.filter((o) => o.priority >= this.config.minObservationPriority);
+        if (silencedByOverride.length > 0) {
+          this.requeueUnacted(silencedByOverride, "below-llm-threshold", BELOW_THRESHOLD_RECHECK_MINUTES);
+        }
         return;
       }
 
@@ -272,7 +297,18 @@ export class AgentCore {
         case "adjust":
           if (decision.adjustments) {
             if (decision.adjustments.priorityThreshold !== undefined) {
-              this.runtimeOverrides.priorityThreshold = decision.adjustments.priorityThreshold;
+              const requested = decision.adjustments.priorityThreshold;
+              const applied = Math.min(requested, LLM_PRIORITY_THRESHOLD_CEILING);
+              this.runtimeOverrides.priorityThreshold = applied;
+              this.runtimeOverrides.priorityThresholdExpiresAt = Date.now() + PRIORITY_THRESHOLD_OVERRIDE_TTL_MS;
+              if (applied !== requested) {
+                this.logger.info("AgentCore: priorityThreshold override clamped", {
+                  requested,
+                  applied,
+                  ceiling: LLM_PRIORITY_THRESHOLD_CEILING,
+                  expiresInMinutes: PRIORITY_THRESHOLD_OVERRIDE_TTL_MS / 60_000,
+                });
+              }
             }
             if (decision.adjustments.sourceBoost) {
               this.runtimeOverrides.sourceBoosts.set(
@@ -308,6 +344,22 @@ export class AgentCore {
   /** Check if a tick is currently in progress */
   isTickInFlight(): boolean {
     return this.tickInFlight;
+  }
+
+  /** The LLM-set threshold while it lasts; config.minObservationPriority once it has expired. */
+  private effectivePriorityThreshold(): number {
+    const { priorityThreshold, priorityThresholdExpiresAt } = this.runtimeOverrides;
+    if (priorityThreshold === undefined) return this.config.minObservationPriority;
+    if (priorityThresholdExpiresAt !== undefined && Date.now() >= priorityThresholdExpiresAt) {
+      this.logger.info("AgentCore: priorityThreshold override expired", {
+        was: priorityThreshold,
+        now: this.config.minObservationPriority,
+      });
+      delete this.runtimeOverrides.priorityThreshold;
+      delete this.runtimeOverrides.priorityThresholdExpiresAt;
+      return this.config.minObservationPriority;
+    }
+    return priorityThreshold;
   }
 
   /**
@@ -396,7 +448,12 @@ export class AgentCore {
   }
 
   /** Get current runtime overrides (for testing/diagnostics) */
-  getRuntimeOverrides(): { priorityThreshold?: number; sourceBoosts: Map<string, number>; reasoningIntervalMs?: number } {
+  getRuntimeOverrides(): {
+    priorityThreshold?: number;
+    priorityThresholdExpiresAt?: number;
+    sourceBoosts: Map<string, number>;
+    reasoningIntervalMs?: number;
+  } {
     return this.runtimeOverrides;
   }
 
