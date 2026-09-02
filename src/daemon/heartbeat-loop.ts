@@ -55,6 +55,14 @@ export class HeartbeatLoop {
   private intervalId: ReturnType<typeof setTimeout> | undefined;
   private running = false;
   private lastTick: Date | null = null;
+  /**
+   * Bumped by every start() and stop(). A timer callback captures the
+   * generation it was armed under and refuses to re-arm into a newer one —
+   * audited 2026-09-02: stop()+start() while a tick awaited agentCore.tick()
+   * let the stale callback overwrite the new chain's handle and run a second,
+   * untracked chain (2x ticks, 2x OODA spend) until the next stop.
+   */
+  private generation = 0;
   private readonly activeTriggerTasks = new Map<string, TaskId>();
   private readonly circuitBreakers = new Map<string, CircuitBreaker>();
 
@@ -100,6 +108,7 @@ export class HeartbeatLoop {
   start(): void {
     if (this.running) return;
     this.running = true;
+    this.generation += 1;
 
     // Load persisted circuit breaker states
     const savedStates = this.storage.getAllCircuitStates();
@@ -152,6 +161,7 @@ export class HeartbeatLoop {
    */
   private scheduleNextTick(delayMs: number = this.config.heartbeat.intervalMs): void {
     const intervalMs = this.config.heartbeat.intervalMs;
+    const armedGeneration = this.generation;
     this.intervalId = setTimeout(async () => {
       const start = Date.now();
       try {
@@ -161,7 +171,9 @@ export class HeartbeatLoop {
           error: err instanceof Error ? err.message : String(err),
         });
       }
-      if (!this.running) return;
+      // A callback from a previous run (stop()+start() happened while it was
+      // awaiting) must not re-arm into the current chain.
+      if (!this.running || armedGeneration !== this.generation) return;
       const elapsed = Date.now() - start;
       this.scheduleNextTick(Math.max(0, intervalMs - elapsed));
     }, delayMs);
@@ -182,6 +194,7 @@ export class HeartbeatLoop {
   stop(): void {
     if (!this.running) return;
     this.running = false;
+    this.generation += 1;
 
     if (this.intervalId) {
       clearTimeout(this.intervalId);

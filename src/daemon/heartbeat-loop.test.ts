@@ -410,6 +410,31 @@ describe("HeartbeatLoop", () => {
     expect(trigger.shouldFire).toHaveBeenCalledTimes(6);
   });
 
+  it("stop() then start() during an in-flight tick leaves exactly one timer chain (audited 2026-09-02)", async () => {
+    // The tick blocks inside agentCore.tick() (an LLM call in production).
+    // A restart during that window armed a second chain, and the resuming
+    // stale callback re-armed its own — two chains, 2x ticks and 2x OODA spend.
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    loop.setAgentCore({ tick: vi.fn(() => blocked) } as never);
+    const countTicks = () =>
+      (eventBus.emit as ReturnType<typeof vi.fn>).mock.calls.filter(([event]) => event === "daemon:tick").length;
+
+    loop.start();
+    const intervalMs = config.heartbeat.intervalMs;
+    await vi.advanceTimersByTimeAsync(intervalMs + 10); // first tick, now blocked
+    expect(countTicks()).toBe(1);
+
+    loop.stop();
+    loop.start(); // arms a fresh chain while the old callback is still awaiting
+    release();
+    await vi.advanceTimersByTimeAsync(0); // stale callback resumes here
+
+    const before = countTicks();
+    await vi.advanceTimersByTimeAsync(intervalMs * 6 + 10);
+    expect(countTicks() - before).toBe(6);
+  });
+
   it("tick() iterates over registry.getActive() and calls shouldFire(now)", async () => {
     const t1 = makeTrigger("t1", { shouldFire: false });
     const t2 = makeTrigger("t2", { shouldFire: false });
