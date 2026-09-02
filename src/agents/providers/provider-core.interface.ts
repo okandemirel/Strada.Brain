@@ -116,12 +116,27 @@ export interface TokenUsage {
   readonly cacheReadInputTokens?: number;
 }
 
+/**
+ * audited 2026-09-02: who actually answered. A FallbackChainProvider silently
+ * skips cooled members and answers from a sibling, while the router's
+ * assignment names only its pick; phase outcomes, behavioral profiles and cost
+ * were all keyed on the pick. `provider` is the canonical member name; `model`
+ * is that member's model when the chain knows it (undefined otherwise — never
+ * the assigned model paired with a different provider).
+ */
+export interface ProviderServedBy {
+  readonly provider: string;
+  readonly model?: string;
+}
+
 /** Provider response */
 export interface ProviderResponse {
   readonly text: string;
   readonly toolCalls: ToolCall[];
   readonly stopReason: StopReason;
   readonly usage: TokenUsage;
+  /** The chain member that served this response (set by FallbackChainProvider). */
+  readonly servedBy?: ProviderServedBy;
   /**
    * Optional resilience metadata. `empty` is an explicit, typed signal that the
    * response produced no usable output (no text, no tool calls) — set by the

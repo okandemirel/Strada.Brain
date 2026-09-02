@@ -4,6 +4,7 @@ import {
   type AgentState,
 } from "./agent-state.js";
 import type { ProviderResponse } from "./providers/provider.interface.js";
+import type { ProviderServedBy } from "./providers/provider-core.interface.js";
 import type {
   ExecutionTrace,
   ExecutionPhase,
@@ -28,6 +29,24 @@ interface TelemetryAssignment {
   role: SupervisorTraceRole;
   reason: string;
   traceSource?: ExecutionTraceSource;
+  servedBy?: ProviderServedBy;
+}
+
+/**
+ * audited 2026-09-02: attribute a turn to the provider that actually answered.
+ * The assignment names the router's pick; a fallback chain may have skipped a
+ * cooled pick and answered from a sibling. When the chain reports who served,
+ * that identity wins. The model follows the same rule: a sibling with an
+ * unknown model is recorded with no model, never paired with the assigned one.
+ */
+export function resolveServedIdentity(
+  assignment: { providerName: string; modelId?: string },
+  servedBy: ProviderServedBy | undefined,
+): { provider: string; model?: string } {
+  if (!servedBy) return { provider: assignment.providerName, model: assignment.modelId };
+  const model = servedBy.model
+    ?? (servedBy.provider === assignment.providerName ? assignment.modelId : undefined);
+  return { provider: servedBy.provider, model };
 }
 
 export function toExecutionPhase(phase: AgentPhase): ExecutionPhase {
@@ -104,9 +123,11 @@ export function buildExecutionTraceRecord(params: {
   chatId?: string;
   taskRunId?: string;
 }): ExecutionTrace {
+  // audited 2026-09-02: attributed to who served, not to the router's pick.
+  const served = resolveServedIdentity(params.assignment, params.assignment.servedBy);
   return {
-    provider: params.assignment.providerName,
-    model: params.assignment.modelId,
+    provider: served.provider,
+    model: served.model,
     role: params.assignment.role,
     phase: params.phase,
     source: params.source ?? resolveExecutionTraceSource(params.assignment),
@@ -132,9 +153,12 @@ export function buildPhaseOutcomeRecord(params: {
   chatId?: string;
   taskRunId?: string;
 }): PhaseOutcome {
+  // audited 2026-09-02: an approved planning turn served by opencode2 was raising
+  // openai's deepPlanning profile because only the assigned name was stamped.
+  const served = resolveServedIdentity(params.assignment, params.assignment.servedBy);
   return {
-    provider: params.assignment.providerName,
-    model: params.assignment.modelId,
+    provider: served.provider,
+    model: served.model,
     role: params.assignment.role,
     phase: params.phase,
     source: params.source ?? resolveExecutionTraceSource(params.assignment),

@@ -200,6 +200,7 @@ import {
 import { type MessageKey } from "./resilience-messages.js";
 import {
   buildPhaseOutcomeTelemetry as buildPhaseOutcomeTelemetryModel,
+  resolveServedIdentity,
   toExecutionPhase as toExecutionPhaseModel,
 } from "./orchestrator-phase-telemetry.js";
 import {
@@ -1495,7 +1496,13 @@ export class Orchestrator {
         [{ role: "user", content: groundingContent }],
         [],
       );
-      this.recordProviderUsage(planningProvider.name, response.usage, params.onUsage);
+      // audited 2026-09-02: bill the member that answered (the name here is the chain's).
+      this.recordProviderUsage(
+        response.servedBy?.provider ?? planningProvider.name,
+        response.usage,
+        params.onUsage,
+        response.servedBy?.model,
+      );
       const groundedContext = this.stripInternalDecisionMarkers(response.text ?? "").trim();
       if (!groundedContext) {
         return null;
@@ -1933,19 +1940,22 @@ export class Orchestrator {
         `${params.systemPrompt}\n\n${SUPERVISOR_SYNTHESIS_SYSTEM_PROMPT}${this.buildSupervisorRolePrompt(params.strategy, params.strategy.synthesizer)}`,
         synthesisRequest,
       );
+      // audited 2026-09-02: attribute and bill the chain member that answered, not the pick.
+      const synthesizerServed = { ...params.strategy.synthesizer, servedBy: synthesisResponse.servedBy };
+      const synthesisBilled = resolveServedIdentity(params.strategy.synthesizer, synthesisResponse.servedBy);
       this.recordExecutionTrace({
         chatId: params.chatId,
         identityKey: params.identityKey,
-        assignment: params.strategy.synthesizer,
+        assignment: synthesizerServed,
         phase: "synthesis",
         source: "synthesis",
         task: params.strategy.task,
       });
       this.recordProviderUsage(
-        params.strategy.synthesizer.providerName,
+        synthesisBilled.provider,
         synthesisResponse.usage,
         params.usageHandler,
-        params.strategy.synthesizer.modelId,
+        synthesisBilled.model,
       );
       const synthesizedText = this.stripInternalDecisionMarkers(synthesisResponse.text).trim();
       const visibleText = synthesizedText
@@ -1959,7 +1969,7 @@ export class Orchestrator {
       this.recordPhaseOutcome({
         chatId: params.chatId,
         identityKey: params.identityKey,
-        assignment: params.strategy.synthesizer,
+        assignment: synthesizerServed,
         phase: "synthesis",
         source: "synthesis",
         status: synthesizedText ? "approved" : "failed",
@@ -2089,24 +2099,27 @@ export class Orchestrator {
         `${soulEnrichedPrompt}\n\n${SUPERVISOR_SYNTHESIS_SYSTEM_PROMPT}${this.buildSupervisorRolePrompt(strategy, strategy.synthesizer)}`,
         synthesisRequest,
       );
+      // audited 2026-09-02: attribute and bill the chain member that answered, not the pick.
+      const goalSynthesizerServed = { ...strategy.synthesizer, servedBy: synthesisResponse.servedBy };
+      const goalSynthesisBilled = resolveServedIdentity(strategy.synthesizer, synthesisResponse.servedBy);
       this.recordExecutionTrace({
         chatId: params.chatId,
         identityKey,
-        assignment: strategy.synthesizer,
+        assignment: goalSynthesizerServed,
         phase: "synthesis",
         source: "synthesis",
         task: strategy.task,
       });
       this.recordProviderUsage(
-        strategy.synthesizer.providerName,
+        goalSynthesisBilled.provider,
         synthesisResponse.usage,
         params.onUsage,
-        strategy.synthesizer.modelId,
+        goalSynthesisBilled.model,
       );
       this.recordPhaseOutcome({
         chatId: params.chatId,
         identityKey,
-        assignment: strategy.synthesizer,
+        assignment: goalSynthesizerServed,
         phase: "synthesis",
         source: "synthesis",
         status: "approved",

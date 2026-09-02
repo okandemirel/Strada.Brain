@@ -1,4 +1,5 @@
 import type { IAIProvider, ProviderResponse } from "./providers/provider.interface.js";
+import type { ProviderServedBy } from "./providers/provider-core.interface.js";
 import type { ProviderManager } from "./providers/provider-manager.js";
 import type { MetricsCollector } from "../dashboard/metrics.js";
 import type { RateLimiter } from "../security/rate-limiter.js";
@@ -30,6 +31,12 @@ export interface SupervisorAssignment {
   traceSource?: ExecutionTraceSource;
   assignmentVersion?: number;
   catalogVersion?: string;
+  /**
+   * audited 2026-09-02: the chain member that actually served the turn this
+   * assignment was used for (from ProviderResponse.servedBy). `providerName`
+   * stays the router's pick; telemetry attributes to this when present.
+   */
+  servedBy?: ProviderServedBy;
 }
 
 export interface SupervisorExecutionStrategy {

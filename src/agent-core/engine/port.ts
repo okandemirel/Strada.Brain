@@ -249,6 +249,14 @@ export function createAgentCorePort(
         engine.recordProviderUsage(providerName, usage, c.onUsage, modelId); // CURRY onUsage
         c.cumulativeOutputTokens += usage?.outputTokens ?? 0; // 3.3: feed the interactive budget gate (output-only)
       },
+      // audited 2026-09-02: every handler context reads runCtx.lastAssignment for its phase
+      // outcomes; stamp the member that served this turn on it so those outcomes are
+      // attributed to the server, not the router's pick. lastAssignment is re-set from
+      // prepareIteration each step, so a stamp never outlives its turn.
+      noteServedBy: (servedBy) => {
+        const c = ctx();
+        if (c.lastAssignment) c.lastAssignment = { ...c.lastAssignment, servedBy };
+      },
       saveBudgetExceededCheckpoint: (params) => deps.saveBudgetExceededCheckpoint(params),
       saveRollingCheckpoint: (params) => deps.saveRollingCheckpoint(params),
 
