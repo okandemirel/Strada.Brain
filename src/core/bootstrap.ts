@@ -1410,6 +1410,11 @@ async function bootstrapImpl(
       const { FrameworkPromptGenerator } = await import("../intelligence/framework/framework-prompt-generator.js");
       const generator = new FrameworkPromptGenerator(store);
       frameworkPromptGenerator = generator;
+      // The generator memoises its section; drop the memo whenever the sync
+      // pipeline stores a newer snapshot (watcher / on-demand sync). Without
+      // this the prompt served the boot snapshot for the whole process.
+      // Audited 2026-09-02.
+      frameworkSyncPipeline?.onSnapshotStored(() => generator.invalidateCache());
       orchestrator.setFrameworkPromptGenerator(generator);
       logger.debug("FrameworkPromptGenerator wired to orchestrator");
     } catch (fwErr) {

@@ -12,6 +12,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FrameworkKnowledgeStore } from "./framework-knowledge-store.js";
 import { FrameworkSyncPipeline } from "./framework-sync-pipeline.js";
+import { initializeFrameworkSchemaProvider, getFrameworkSchemaProvider } from "./framework-schema-provider.js";
+import { FrameworkPromptGenerator } from "./framework-prompt-generator.js";
 import type { FrameworkSyncConfig } from "./framework-types.js";
 import type { StradaDepsStatus } from "../../config/strada-deps.js";
 
@@ -119,5 +121,72 @@ describe("FrameworkSyncPipeline.bootSync re-syncs on content change (audited 202
     // The line must say what was measured, not just "unchanged".
     expect(skipLine).toMatch(/content/i);
     expect(skipLine).toMatch(/version 1\.0\.0/);
+  });
+});
+
+/**
+ * Audited 2026-09-02: FrameworkSchemaProvider and FrameworkPromptGenerator
+ * memoise the boot snapshot and their invalidateCache() had no production
+ * caller, so a snapshot the pipeline stored later was never served — the
+ * watcher path did work no reader ever saw.
+ */
+describe("FrameworkSyncPipeline invalidates snapshot readers after storing (audited 2026-09-02)", () => {
+  let tmp: string;
+  let corePath: string;
+  let store: FrameworkKnowledgeStore;
+
+  beforeEach(() => {
+    tmp = realpathSync(mkdtempSync(join(tmpdir(), "fw-pipeline-inval-")));
+    corePath = join(tmp, "Strada.Core");
+    mkdirSync(join(corePath, "Runtime"), { recursive: true });
+    writeFileSync(join(corePath, "package.json"), JSON.stringify({ name: "com.strada.core", version: "1.0.0" }));
+    writeFileSync(join(corePath, "Runtime", "SystemBase.cs"), CORE_ONE_BASE);
+    store = new FrameworkKnowledgeStore(join(tmp, "fw.db"));
+    store.initialize();
+  });
+
+  afterEach(() => {
+    store.close();
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it("the schema provider singleton serves the newly synced base classes", async () => {
+    const pipeline = new FrameworkSyncPipeline(store, makeConfig(), makeDeps(corePath));
+    await pipeline.bootSync();
+    initializeFrameworkSchemaProvider(store);
+    expect(getFrameworkSchemaProvider()!.getSystemBaseClasses()).toEqual(["SystemBase"]);
+
+    writeFileSync(join(corePath, "Runtime", "SystemBase.cs"), CORE_TWO_BASES);
+    const report = await pipeline.syncPackage("core");
+    expect(report?.driftScore ?? 0).toBeGreaterThan(0);
+
+    // Same singleton the tools read through — no restart, no manual invalidate.
+    expect(getFrameworkSchemaProvider()!.getSystemBaseClasses()).toEqual(["SystemBase", "NetworkSystemBase"]);
+  });
+
+  it("notifies registered listeners so the prompt generator can drop its memo", async () => {
+    const pipeline = new FrameworkSyncPipeline(store, makeConfig(), makeDeps(corePath));
+    await pipeline.bootSync();
+    const generator = new FrameworkPromptGenerator(store);
+    const seen: string[] = [];
+    const unsubscribe = pipeline.onSnapshotStored((pkgId) => {
+      seen.push(pkgId);
+      generator.invalidateCache();
+    });
+
+    const before = generator.buildFrameworkKnowledgeSection();
+    expect(before).toContain("`SystemBase`");
+    expect(before).not.toContain("NetworkSystemBase");
+
+    writeFileSync(join(corePath, "Runtime", "SystemBase.cs"), CORE_TWO_BASES);
+    await pipeline.syncPackage("core");
+
+    expect(seen).toEqual(["core"]);
+    expect(generator.buildFrameworkKnowledgeSection()).toContain("`NetworkSystemBase`");
+
+    unsubscribe();
+    writeFileSync(join(corePath, "Runtime", "SystemBase.cs"), CORE_ONE_BASE);
+    await pipeline.syncPackage("core");
+    expect(seen).toEqual(["core"]);
   });
 });

@@ -25,12 +25,16 @@ import {
   formatFrameworkDriftReport,
 } from "./framework-drift.js";
 import { getLoggerSafe } from "../../utils/logger.js";
+import { getFrameworkSchemaProvider } from "./framework-schema-provider.js";
+
+export type SnapshotStoredListener = (packageId: FrameworkPackageId) => void;
 
 export class FrameworkSyncPipeline {
   private watcher: FSWatcher | null = null;
   private readonly store: FrameworkKnowledgeStore;
   private readonly config: FrameworkSyncConfig;
   private readonly stradaDeps: StradaDepsStatus;
+  private readonly snapshotListeners = new Set<SnapshotStoredListener>();
 
   constructor(
     store: FrameworkKnowledgeStore,
@@ -40,6 +44,41 @@ export class FrameworkSyncPipeline {
     this.store = store;
     this.config = config;
     this.stradaDeps = stradaDeps;
+  }
+
+  /**
+   * Register a listener for "a snapshot was just stored". Readers that memoise
+   * a snapshot (FrameworkPromptGenerator) drop their memo here. Returns an
+   * unsubscribe function.
+   */
+  onSnapshotStored(listener: SnapshotStoredListener): () => void {
+    this.snapshotListeners.add(listener);
+    return () => {
+      this.snapshotListeners.delete(listener);
+    };
+  }
+
+  /**
+   * Store a snapshot and tell every memoising reader about it.
+   *
+   * Was: `store.storeSnapshot` alone. FrameworkSchemaProvider and
+   * FrameworkPromptGenerator memoise on first read and their invalidateCache()
+   * had no production caller, so a snapshot stored after boot (watcher or
+   * on-demand sync) was never served for the life of the process.
+   * Audited 2026-09-02.
+   */
+  private storeAndNotify(snapshot: Parameters<FrameworkKnowledgeStore["storeSnapshot"]>[0]): void {
+    this.store.storeSnapshot(snapshot);
+    getFrameworkSchemaProvider()?.invalidateCache();
+    for (const listener of this.snapshotListeners) {
+      try {
+        listener(snapshot.packageId);
+      } catch (err) {
+        getLoggerSafe().warn(
+          `Framework snapshot listener failed for ${snapshot.packageId}: ${(err as Error).message}`,
+        );
+      }
+    }
   }
 
   /**
@@ -83,7 +122,7 @@ export class FrameworkSyncPipeline {
           continue;
         }
 
-        this.store.storeSnapshot(snapshot);
+        this.storeAndNotify(snapshot);
 
         const driftReport = validateFrameworkDrift(pkgId, snapshot, previous);
         reports.push(driftReport);
@@ -181,7 +220,7 @@ export class FrameworkSyncPipeline {
     const snapshot = await extractor.extract();
     const previous = this.store.getLatestSnapshot(packageId);
 
-    this.store.storeSnapshot(snapshot);
+    this.storeAndNotify(snapshot);
     return validateFrameworkDrift(packageId, snapshot, previous);
   }
 
