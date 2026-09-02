@@ -4846,6 +4846,12 @@ export class Orchestrator {
     }
 
     // Intervention Engine: evaluate instincts before tool execution (Learning Pipeline v2)
+    //
+    // audited 2026-09-02: the verdict of this scan was thrown away — `warn`
+    // reached logger.debug and nothing else, so no learned warning ever reached
+    // the model while the scan was still paid on every call. Warn-tier matches
+    // are collected here and appended to the tool result the model reads.
+    const learnedWarnings: string[] = [];
     if (this.interventionEngine && this.instinctRetriever) {
       try {
         const relevantInstincts = await this.instinctRetriever.getMatchedInstincts(
@@ -4858,11 +4864,13 @@ export class Orchestrator {
             relevantInstincts,
           );
 
-          if (intervention.action === 'warn') {
-            logger.debug("Intervention engine: warn for tool", {
-              tool: activeToolCall.name,
-              matches: intervention.matches.length,
-            });
+          for (const match of intervention.matches.filter((m: { tier: string }) => m.tier === 'warn')) {
+            const source = relevantInstincts.find((inst) => inst.id === match.instinctId);
+            if (!source) continue;
+            learnedWarnings.push(`${source.name}: ${source.action}`.slice(0, 300));
+            await this.interventionEngine.logIntervention(
+              match.instinctId, activeToolCall.name, 'warn', 'applied',
+            );
           }
 
           if (intervention.action === 'auto_apply') {
@@ -5052,9 +5060,14 @@ export class Orchestrator {
 
       this.trackToolError(breakerScope.key, activeToolCall.name, !!result.isError, breakerTarget);
 
+      // audited 2026-09-02: a warn-tier instinct match is shown to the model here,
+      // on the result it reads, instead of dying in a debug log.
+      const content = sanitizeToolResult(result.content);
       return {
         toolCallId: activeToolCall.id,
-        content: sanitizeToolResult(result.content),
+        content: learnedWarnings.length === 0
+          ? content
+          : `${content}\n\n[learned warning for ${activeToolCall.name}]\n${learnedWarnings.map((w) => `- ${w}`).join("\n")}`,
         isError: result.isError,
         metadata: result.metadata,
       };
