@@ -222,4 +222,38 @@ describe("DynamicBehavioralProfileStore — persistence", () => {
   it("prior weight is the documented constant", () => {
     expect(PROFILE_PRIOR_WEIGHT).toBe(4);
   });
+
+  // audited 2026-09-02: initialize() rebuilt stats and lastSeen but never counts, and the
+  // row had no count field to carry it — so after a restart every snapshot / ranking
+  // reported observationCount 0 next to a score that was ~88% observation-driven and a
+  // real prior-run updatedAt. The count is evidence; it has to survive with the score.
+  it("restores observationCount after a restart, alongside the scores it explains", async () => {
+    const rows: ProfileAccumulatorRow[] = [];
+    const persist: ProfilePersist = {
+      load: () => rows,
+      save: (next) => { rows.length = 0; rows.push(...next); },
+    };
+    const store = new DynamicBehavioralProfileStore(persist);
+    for (let i = 0; i < 40; i++) store.ingest(outcome({ status: "approved", timestamp: 1000 + i }));
+    await store.flush();
+    const before = store.getSnapshot("claude", "claude-opus-4-8")!;
+    expect(before.observationCount).toBe(40);
+
+    const restored = new DynamicBehavioralProfileStore(persist);
+    await restored.initialize();
+    const after = restored.getSnapshot("claude", "claude-opus-4-8")!;
+    expect(after.updatedAt).toBe(before.updatedAt);
+    expect(after.observationCount).toBe(40);
+    const ranked = restored.rankModelsForWorkload("implementation").find((r) => r.model === "claude-opus-4-8")!;
+    expect(ranked.observationCount).toBe(40);
+  });
+
+  it("rows written before the count existed still load (count reads as 0, not NaN)", async () => {
+    const legacy: ProfileAccumulatorRow[] = [
+      { key: "claude::claude-opus-4-8", dimension: "toolCallReliability", ema: 0.9, samples: 5, updatedAt: 1 },
+    ];
+    const store = new DynamicBehavioralProfileStore({ load: () => legacy, save: () => {} });
+    await store.initialize();
+    expect(store.getSnapshot("claude", "claude-opus-4-8")!.observationCount).toBe(0);
+  });
 });

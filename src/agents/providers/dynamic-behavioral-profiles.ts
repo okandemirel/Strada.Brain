@@ -197,6 +197,13 @@ export interface ProfileAccumulatorRow {
   readonly ema: number;
   readonly samples: number;
   readonly updatedAt: number;
+  /**
+   * Total outcomes folded into this row's KEY (repeated on every dimension row
+   * of the key). Optional so rows written before it existed still load.
+   * audited 2026-09-02: without it every restart reported observationCount 0
+   * beside scores that were ~88% observation-driven.
+   */
+  readonly observations?: number;
 }
 
 /** Injected persistence boundary (mirrors model-intelligence's CatalogPersist). */
@@ -285,6 +292,11 @@ export class DynamicBehavioralProfileStore {
         });
         if (row.updatedAt > (this.lastSeen.get(row.key) ?? 0)) {
           this.lastSeen.set(row.key, row.updatedAt);
+        }
+        // The count is per key and repeated on each dimension row; take the max.
+        const observations = Number.isFinite(row.observations) ? Math.max(0, row.observations!) : 0;
+        if (observations > (this.counts.get(row.key) ?? 0)) {
+          this.counts.set(row.key, observations);
         }
       }
     } catch {
@@ -480,8 +492,9 @@ export class DynamicBehavioralProfileStore {
     const rows: ProfileAccumulatorRow[] = [];
     for (const [key, byDim] of this.stats) {
       const updatedAt = this.lastSeen.get(key) ?? 0;
+      const observations = this.counts.get(key) ?? 0;
       for (const [dim, stat] of byDim) {
-        rows.push({ key, dimension: dim, ema: stat.ema, samples: stat.samples, updatedAt });
+        rows.push({ key, dimension: dim, ema: stat.ema, samples: stat.samples, updatedAt, observations });
       }
     }
     return rows;

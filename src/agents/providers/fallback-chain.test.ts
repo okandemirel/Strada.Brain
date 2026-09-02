@@ -320,18 +320,27 @@ describe("FallbackChainProvider", () => {
     expect(p1.chat).not.toHaveBeenCalled(); // Kimi was skipped
   });
 
-  it("does not extend an existing quota cooldown on repeated failures", async () => {
+  it("does not stack an existing quota cooldown on repeated failures", async () => {
     const health = ProviderHealthRegistry.getInstance();
+    // Frozen clock: the cooldown is "now + 8h", so at one instant a repeated
+    // quota record must land on the SAME expiry — never 8h on top of 8h.
+    // (audited 2026-09-02: a shorter ACTIVE cooldown is replaced, not kept.)
+    const now = Date.now();
+    const spy = vi.spyOn(Date, "now").mockReturnValue(now);
+    try {
+      // Simulate first quota exhaustion
+      health.recordQuotaExhausted("kimi", "403 quota exceeded");
+      const firstCooldown = health.getEntry("kimi")!.cooldownUntil;
+      expect(firstCooldown).toBe(now + 8 * 60 * 60 * 1000);
 
-    // Simulate first quota exhaustion
-    health.recordQuotaExhausted("kimi", "403 quota exceeded");
-    const firstCooldown = health.getEntry("kimi")!.cooldownUntil;
+      // Simulate second quota exhaustion (must NOT stack the cooldown)
+      health.recordQuotaExhausted("kimi", "403 quota exceeded again");
+      const secondCooldown = health.getEntry("kimi")!.cooldownUntil;
 
-    // Simulate second quota exhaustion (should NOT extend the cooldown)
-    health.recordQuotaExhausted("kimi", "403 quota exceeded again");
-    const secondCooldown = health.getEntry("kimi")!.cooldownUntil;
-
-    expect(secondCooldown).toBe(firstCooldown);
+      expect(secondCooldown).toBe(firstCooldown);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("probes recovering provider before sending real traffic", async () => {
@@ -949,5 +958,122 @@ describe("FallbackChainProvider mid-stream failure handling", () => {
 
     await expect(chain.chatStream("sys", [], [], () => {})).rejects.toThrow(/stream reset by peer/);
     expect(recordFailure).toHaveBeenCalledWith("broken", expect.stringContaining("stream reset"));
+  });
+});
+
+// audited 2026-09-02: the recovery probe recorded EVERY probe error through the
+// generic recordFailure(), so an 8h quota / credential bench that had just expired
+// was replaced by a 30s-degraded → ≤10min escalating cooldown, and the dead
+// provider was re-probed every cooldown expiry for the rest of the block. A probe
+// failure must land on the same cooldown class a real attempt would.
+describe("FallbackChainProvider — recovery probe failures keep their cooldown class", () => {
+  beforeEach(() => {
+    ProviderHealthRegistry.resetInstance();
+  });
+
+  function recoveringChain(probeError: Error): { chain: FallbackChainProvider; p1: IAIProvider; p2: IAIProvider } {
+    const p1 = { ...createMockProvider(), name: "quota-dead" };
+    (p1.chat as ReturnType<typeof vi.fn>).mockRejectedValue(probeError);
+    const p2 = { ...createMockProvider({ text: "from-p2" }), name: "healthy-backup" };
+    const chain = new FallbackChainProvider([p1, p2]);
+    const health = ProviderHealthRegistry.getInstance();
+    // The provider was benched for quota; the bench has just expired → isRecovering.
+    health.recordQuotaExhausted("quota-dead", "HTTP 403: quota exceeded");
+    Object.assign(health.getEntry("quota-dead")!, { cooldownUntil: Date.now() - 1000 });
+    expect(health.isRecovering("quota-dead")).toBe(true);
+    return { chain, p1, p2 };
+  }
+
+  it("a probe answered with 403 quota re-benches the provider for the quota cooldown (8h), not 30s", async () => {
+    const { chain, p1, p2 } = recoveringChain(
+      new Error("HTTP 403: quota exceeded for this billing cycle"),
+    );
+    const result = await chain.chat("sys", [], []);
+    expect(result.text).toBe("from-p2");
+    expect(p1.chat).toHaveBeenCalledTimes(1); // the probe only
+    expect(p2.chat).toHaveBeenCalledTimes(1);
+
+    const entry = ProviderHealthRegistry.getInstance().getEntry("quota-dead")!;
+    expect(entry.status).toBe("down");
+    expect(entry.cooldownUntil - Date.now()).toBeGreaterThan(7 * 60 * 60 * 1000);
+  });
+
+  it("a probe answered with 401 benches the provider for the session (credential class)", async () => {
+    const { chain } = recoveringChain(new Error("HTTP 401: invalid_api_key"));
+    await chain.chat("sys", [], []);
+    const entry = ProviderHealthRegistry.getInstance().getEntry("quota-dead")!;
+    expect(entry.status).toBe("down");
+    expect(entry.cooldownUntil - Date.now()).toBeGreaterThan(7 * 60 * 60 * 1000);
+  });
+
+  it("a probe answered with 429 gets the overload cooldown (minutes), not the 30s degraded one", async () => {
+    const { chain } = recoveringChain(new Error("rate-limited (HTTP 429)"));
+    await chain.chat("sys", [], []);
+    const entry = ProviderHealthRegistry.getInstance().getEntry("quota-dead")!;
+    expect(entry.status).toBe("down");
+    expect(entry.cooldownUntil - Date.now()).toBeGreaterThan(4 * 60 * 1000);
+  });
+
+  // audited 2026-09-02: a probe failure / in-flight probe `continue`d past attempted++
+  // and never touched lastError, so the terminal error read "All providers are in
+  // cooldown. Try again later." with cause undefined — the measured 401s were dropped
+  // and the operator was told to wait when the real fix was a key rotation.
+  it("names the failed probes (and carries the last probe error) instead of blaming a cooldown", async () => {
+    const health = ProviderHealthRegistry.getInstance();
+    const p1 = { ...createMockProvider(), name: "openai" };
+    const p2 = { ...createMockProvider(), name: "opencode" };
+    (p1.chat as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("HTTP 401: invalid_api_key"));
+    (p2.chat as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("HTTP 401: invalid_api_key"));
+    const chain = new FallbackChainProvider([p1, p2]);
+    for (const name of ["openai", "opencode"]) {
+      for (let i = 0; i < 5; i++) health.recordFailure(name, "timeout");
+      Object.assign(health.getEntry(name)!, { cooldownUntil: Date.now() - 1000 });
+      expect(health.isRecovering(name)).toBe(true);
+    }
+
+    let thrown: unknown;
+    try {
+      await chain.chat("sys", [], []);
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    const message = (thrown as Error).message;
+    expect(message).toMatch(/^All providers failed or unavailable\./);
+    expect(message).toMatch(/recovery probe/i);
+    expect(message).toContain("401");
+    expect(message).not.toMatch(/try again later/i);
+    expect(((thrown as Error).cause as Error | undefined)?.message).toContain("401");
+    expect(p1.chat).toHaveBeenCalledTimes(1);
+    expect(p2.chat).toHaveBeenCalledTimes(1);
+  });
+
+  it("says a probe was already in flight when a concurrent call skipped every provider", async () => {
+    const health = ProviderHealthRegistry.getInstance();
+    const p1 = { ...createMockProvider(), name: "solo" };
+    let releaseProbe!: (value: unknown) => void;
+    const gate = new Promise((resolve) => { releaseProbe = resolve; });
+    (p1.chat as ReturnType<typeof vi.fn>).mockImplementation(() => gate);
+    const chain = new FallbackChainProvider([p1]);
+    for (let i = 0; i < 5; i++) health.recordFailure("solo", "timeout");
+    Object.assign(health.getEntry("solo")!, { cooldownUntil: Date.now() - 1000 });
+
+    const first = chain.chat("sys", [], []); // holds the probe guard
+    await new Promise((r) => setImmediate(r));
+    await expect(chain.chat("sys", [], [])).rejects.toThrow(/probe (?:was )?already in flight/i);
+    await expect(chain.chat("sys", [], [])).rejects.not.toThrow(/in cooldown/i);
+
+    releaseProbe({ text: "ok", toolCalls: [], stopReason: "end_turn", usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 } });
+    await expect(first).resolves.toMatchObject({ text: "ok" });
+  });
+
+  it("a probe that fails on a hard quota stop honors the provider's Retry-After", async () => {
+    const { chain } = recoveringChain(
+      new QuotaExhaustedError("quota-dead", 3 * 24 * 60 * 60 * 1000, "usage quota exhausted; resets in ~3d"),
+    );
+    await chain.chat("sys", [], []);
+    const entry = ProviderHealthRegistry.getInstance().getEntry("quota-dead")!;
+    expect(entry.status).toBe("down");
+    expect(entry.cooldownUntil - Date.now()).toBeGreaterThan(2 * 24 * 60 * 60 * 1000);
   });
 });

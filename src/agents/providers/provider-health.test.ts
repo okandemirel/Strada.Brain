@@ -420,6 +420,59 @@ describe("ProviderHealthRegistry — recordQuotaHardStop", () => {
   });
 });
 
+// audited 2026-09-02: recordQuotaExhausted / recordQuotaExhaustedShort kept ANY active
+// cooldown ("don't extend"), so a 30s degraded cooldown already running when the 403
+// arrived (concurrent call, or the un-gated orchestrator recorder) swallowed the 8h /
+// 15m quota block — the provider read "down" but was readmitted ~30s later. The sibling
+// recordQuotaHardStop takes the max; "never shorten" is the intent, not "never change".
+describe("ProviderHealthRegistry — recordQuotaExhausted never shortens to a transient cooldown", () => {
+  afterEach(() => {
+    ProviderHealthRegistry.resetInstance();
+    vi.restoreAllMocks();
+  });
+
+  it("a 403 quota landing on an active 30s degraded cooldown gets the full 8h", () => {
+    const registry = new ProviderHealthRegistry();
+    const now = 1_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+
+    registry.recordFailure("kimi", "HTTP 500");
+    registry.recordFailure("kimi", "HTTP 500");
+    expect(registry.getEntry("kimi")!.status).toBe("degraded");
+    expect(registry.getEntry("kimi")!.cooldownUntil).toBe(now + 30_000);
+
+    registry.recordQuotaExhausted("kimi", "HTTP 403: quota exceeded");
+    const entry = registry.getEntry("kimi")!;
+    expect(entry.status).toBe("down");
+    expect(entry.cooldownUntil).toBe(now + 8 * 60 * 60 * 1000);
+  });
+
+  it("the single-provider (15m) variant likewise replaces a shorter active cooldown", () => {
+    const registry = new ProviderHealthRegistry();
+    const now = 1_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+
+    registry.recordFailure("kimi", "HTTP 500");
+    registry.recordFailure("kimi", "HTTP 500");
+    registry.recordQuotaExhaustedShort("kimi", "HTTP 403: quota exceeded");
+    expect(registry.getEntry("kimi")!.cooldownUntil).toBe(now + 15 * 60 * 1000);
+  });
+
+  it("still does not shorten an already-longer active cooldown", () => {
+    const registry = new ProviderHealthRegistry();
+    let time = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => time);
+
+    registry.recordQuotaHardStop("kimi", 3 * 24 * 60 * 60 * 1000, "resets in ~3d");
+    const first = registry.getEntry("kimi")!.cooldownUntil;
+    time += 1000;
+    registry.recordQuotaExhausted("kimi", "HTTP 403: quota exceeded");
+    expect(registry.getEntry("kimi")!.cooldownUntil).toBe(first);
+    registry.recordQuotaExhaustedShort("kimi", "HTTP 403: quota exceeded");
+    expect(registry.getEntry("kimi")!.cooldownUntil).toBe(first);
+  });
+});
+
 describe("ProviderHealthRegistry — areAllUnavailable", () => {
   afterEach(() => {
     ProviderHealthRegistry.resetInstance();
@@ -472,6 +525,30 @@ describe("ProviderHealthRegistry — areAllUnavailable", () => {
     registry.recordFailure("prov", "err"); // degraded
     expect(registry.areAllUnavailable()).toBe(true);
     time += 30_001; // past degraded cooldown
+    expect(registry.areAllUnavailable()).toBe(false);
+  });
+
+  // audited 2026-09-02: the orchestrator records under the FallbackChainProvider's own
+  // name, "chain(openai→opencode)". A chain-level failure creates that entry and the
+  // next successful turn pins it healthy forever, so with both real members in an 8h
+  // quota cooldown this measure still said "someone is free" and idle consolidation
+  // launched its LLM cycle into the outage (two such aliases were on disk live).
+  it("ignores a healthy chain(...) alias when every real member is in cooldown", () => {
+    const registry = new ProviderHealthRegistry();
+    const alias = "chain(OpenAI→OpenCode (Zen/Go))";
+    registry.recordFailure(alias, "stall"); // creates the alias entry
+    registry.recordSuccess(alias); // ...and pins it healthy
+    expect(registry.isAvailable(alias)).toBe(true);
+
+    registry.recordQuotaExhausted("openai", "HTTP 403 quota");
+    registry.recordQuotaExhausted("opencode", "HTTP 403 quota");
+    expect(registry.areAllUnavailable()).toBe(true);
+  });
+
+  it("returns false when the only entries are chain(...) aliases (nothing was measured)", () => {
+    const registry = new ProviderHealthRegistry();
+    for (let i = 0; i < 5; i++) registry.recordFailure("chain(openai→opencode)", "stall");
+    expect(registry.isAvailable("chain(openai→opencode)")).toBe(false);
     expect(registry.areAllUnavailable()).toBe(false);
   });
 });

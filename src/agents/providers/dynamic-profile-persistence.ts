@@ -26,6 +26,7 @@ interface AccumulatorDbRow {
   ema: number;
   samples: number;
   updated_at: number;
+  observations: number;
 }
 
 export class SqliteDynamicProfilePersistence implements ProfilePersist {
@@ -42,14 +43,23 @@ export class SqliteDynamicProfilePersistence implements ProfilePersist {
         ema REAL NOT NULL,
         samples REAL NOT NULL,
         updated_at INTEGER NOT NULL,
+        observations INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY (key, dimension)
       );
     `);
+    // audited 2026-09-02: databases created before the count column existed
+    // restored scores with observationCount 0. Add the column in place; the
+    // default reads as "not recorded", and the count re-climbs from the next
+    // flush rather than being invented.
+    const columns = this.db.prepare("PRAGMA table_info(dynamic_behavioral_profiles)").all() as Array<{ name: string }>;
+    if (!columns.some((c) => c.name === "observations")) {
+      this.db.exec("ALTER TABLE dynamic_behavioral_profiles ADD COLUMN observations INTEGER NOT NULL DEFAULT 0");
+    }
   }
 
   load(): ProfileAccumulatorRow[] {
     const rows = this.db
-      .prepare("SELECT key, dimension, ema, samples, updated_at FROM dynamic_behavioral_profiles")
+      .prepare("SELECT key, dimension, ema, samples, updated_at, observations FROM dynamic_behavioral_profiles")
       .all() as AccumulatorDbRow[];
     return rows.map((r) => ({
       key: r.key,
@@ -57,17 +67,18 @@ export class SqliteDynamicProfilePersistence implements ProfilePersist {
       ema: r.ema,
       samples: r.samples,
       updatedAt: r.updated_at,
+      observations: r.observations,
     }));
   }
 
   save(rows: ProfileAccumulatorRow[]): void {
     const insert = this.db.prepare(
-      "INSERT OR REPLACE INTO dynamic_behavioral_profiles (key, dimension, ema, samples, updated_at) VALUES (?, ?, ?, ?, ?)",
+      "INSERT OR REPLACE INTO dynamic_behavioral_profiles (key, dimension, ema, samples, updated_at, observations) VALUES (?, ?, ?, ?, ?, ?)",
     );
     const replaceAll = this.db.transaction((next: ProfileAccumulatorRow[]) => {
       this.db.exec("DELETE FROM dynamic_behavioral_profiles");
       for (const row of next) {
-        insert.run(row.key, row.dimension, row.ema, row.samples, row.updatedAt);
+        insert.run(row.key, row.dimension, row.ema, row.samples, row.updatedAt, Math.max(0, Math.floor(row.observations ?? 0)));
       }
     });
     replaceAll(rows);

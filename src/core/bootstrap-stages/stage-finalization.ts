@@ -8,6 +8,7 @@ import type { Orchestrator } from "../../agents/orchestrator.js";
 import type { StradaDepsStatus } from "../../config/strada-deps.js";
 import type { BootReport } from "../../common/capability-contract.js";
 import { ToolRegistry } from "../tool-registry.js";
+import { ProviderHealthRegistry } from "../../agents/providers/provider-health.js";
 import { SoulLoader } from "../../agents/soul/index.js";
 import { resolveRuntimePaths } from "../../common/runtime-paths.js";
 import { buildBootReport, summarizeBootReport } from "../boot-report.js";
@@ -97,6 +98,9 @@ export async function initializeRuntimeIntelligenceStage(
       modelIntelligence,
       trajectoryPhaseSignalRetriever,
       dynamicProfiles,
+      // audited 2026-09-02: the router never consulted runtime health, so a
+      // provider in an 8h quota cooldown kept winning the route.
+      providerHealth: ProviderHealthRegistry.getInstance(),
     });
     params.logger.info("ProviderRouter initialized", { preset: params.config.routing.preset });
   } catch {

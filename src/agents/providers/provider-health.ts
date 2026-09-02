@@ -3,8 +3,10 @@
  *
  * Tracks runtime health status per provider. Failures are recorded with
  * automatic recovery after a configurable cooldown. Consumed by
- * FallbackChainProvider (skip unhealthy), ProviderRouter (scoring penalty),
- * and ProviderAssigner (healthy/nearRateLimit flags).
+ * FallbackChainProvider (skip unhealthy), ProviderRouter (drops cooled
+ * providers from the candidate pool — wired 2026-09-02; the header used to
+ * claim a "scoring penalty" that never existed), and ProviderAssigner
+ * (healthy/nearRateLimit flags).
  *
  * Singleton — shared across the entire process.
  */
@@ -285,9 +287,14 @@ export class ProviderHealthRegistry {
     const normalized = this.norm(providerName);
     const existing = this.entries.get(normalized);
     const now = Date.now();
-    // Don't extend an existing active cooldown — keep the original expiry
+    // Never SHORTEN an active cooldown, but never keep a shorter one either.
+    // audited 2026-09-02: this kept any active cooldown, so a 30s degraded one
+    // already running when the 403 arrived swallowed the 8h quota block — the
+    // provider read "down" and was readmitted 30s later. Same max as
+    // recordQuotaHardStop.
+    const desired = now + QUOTA_COOLDOWN_MS;
     const existingCooldown = existing?.cooldownUntil ?? 0;
-    const cooldownUntil = existingCooldown > now ? existingCooldown : now + QUOTA_COOLDOWN_MS;
+    const cooldownUntil = existingCooldown > desired ? existingCooldown : desired;
 
     this.setEntry(normalized, {
       status: "down",
@@ -308,8 +315,10 @@ export class ProviderHealthRegistry {
     const normalized = this.norm(providerName);
     const existing = this.entries.get(normalized);
     const now = Date.now();
+    // Max, not "keep whatever is active" — see recordQuotaExhausted (audited 2026-09-02).
+    const desired = now + SINGLE_PROVIDER_QUOTA_COOLDOWN_MS;
     const existingCooldown = existing?.cooldownUntil ?? 0;
-    const cooldownUntil = existingCooldown > now ? existingCooldown : now + SINGLE_PROVIDER_QUOTA_COOLDOWN_MS;
+    const cooldownUntil = existingCooldown > desired ? existingCooldown : desired;
 
     this.setEntry(normalized, {
       status: "down",
@@ -360,6 +369,10 @@ export class ProviderHealthRegistry {
       ? now + Math.min(baseCooldownMs * Math.pow(2, episodes), MAX_ADAPTIVE_COOLDOWN_MS)
       : now + baseCooldownMs;
 
+    // Bump the episode BEFORE setEntry: setEntry is what persists, and the
+    // count written must be the one this cooldown was sized from plus one —
+    // otherwise the file is always an episode behind (audited 2026-09-02).
+    if (escalate) this.downEpisodes.set(normalized, episodes + 1);
     this.setEntry(normalized, {
       status: "down",
       consecutiveFailures: this.nextFailureCount(normalized),
@@ -367,7 +380,6 @@ export class ProviderHealthRegistry {
       lastError: error.slice(0, 200),
       cooldownUntil,
     });
-    if (escalate) this.downEpisodes.set(normalized, episodes + 1);
   }
 
   private nextFailureCount(normalizedName: string): number {
@@ -470,13 +482,23 @@ export class ProviderHealthRegistry {
   /**
    * Check if ALL tracked providers are currently unavailable (in cooldown).
    * Returns false when no providers are tracked.
+   *
+   * "chain(...)" entries are the FallbackChainProvider's own alias, not a
+   * provider: the orchestrator records under provider.name, a chain-level
+   * failure creates the entry and the next successful turn pins it healthy
+   * forever. audited 2026-09-02: with both real members on an 8h quota
+   * cooldown the alias alone made this read "someone is free", and idle
+   * consolidation launched its LLM cycle into the outage. Same filter as
+   * provider-outage.ts's allProvidersCoolingDownMs.
    */
   areAllUnavailable(): boolean {
-    if (this.entries.size === 0) return false;
+    let sawMember = false;
     for (const [name] of this.entries) {
+      if (name.startsWith("chain(")) continue;
+      sawMember = true;
       if (this.isAvailable(name)) return false;
     }
-    return true;
+    return sawMember;
   }
 
   /**
@@ -531,6 +553,10 @@ export class ProviderHealthRegistry {
         entries: Array.from(this.entries.entries()),
         thinkingDisabled: Array.from(this.thinkingDisabledProviders),
         thinkingCounters: Array.from(this.thinkingReEnableCounters.entries()),
+        // audited 2026-09-02: the escalation counter that sizes the NEXT down
+        // cooldown was in-memory only, so every restart put a chronic offender
+        // back on the base cooldown while its consecutiveFailures survived.
+        downEpisodes: Array.from(this.downEpisodes.entries()),
       };
       writeFileSync(path, JSON.stringify(data, null, 2));
     } catch {
@@ -581,12 +607,18 @@ export class ProviderHealthRegistry {
         entries?: Array<[string, ProviderHealthEntry]>;
         thinkingDisabled?: string[];
         thinkingCounters?: Array<[string, number]>;
+        downEpisodes?: Array<[string, number]>;
       };
       if (raw.entries) {
         for (const [k, v] of raw.entries) {
           // Re-key: files written before names were canonicalized hold the
           // display name, and a cooldown nobody can look up is a cooldown lost.
           this.entries.set(this.norm(k), v);
+        }
+      }
+      if (raw.downEpisodes) {
+        for (const [k, v] of raw.downEpisodes) {
+          if (Number.isFinite(v) && v > 0) this.downEpisodes.set(this.norm(k), v);
         }
       }
       if (raw.thinkingDisabled) {

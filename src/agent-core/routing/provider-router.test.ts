@@ -1034,3 +1034,57 @@ describe("ProviderRouter — dynamic behavioral profiles (Tier 2)", () => {
     expect(router.getDynamicProfileSnapshots()).toEqual([]);
   });
 });
+
+// audited 2026-09-02: provider-health.ts's header named ProviderRouter as a health
+// consumer, but the router only ever filtered on credential presence. A provider in
+// an 8h quota cooldown kept winning resolve() and was stamped into the supervisor
+// assignment while the chain silently answered from a sibling — usage, phase
+// telemetry and the router's own reliability learning were then credited to a
+// provider that produced nothing.
+describe("ProviderRouter — provider health gate", () => {
+  it("drops a provider in cooldown from the candidate pool", () => {
+    const manager = createMockManager(MULTI_PROVIDERS);
+    // Without health, "performance" + planning picks claude (see the multi-provider suite).
+    const baseline = new ProviderRouter(manager, "performance").resolve(planningTask);
+    expect(baseline.provider).toBe("claude");
+
+    const cooled = new Set(["claude"]);
+    const router = new ProviderRouter(manager, "performance", {
+      providerHealth: { isAvailable: (name) => !cooled.has(name) },
+    });
+    const decision = router.resolve(planningTask);
+    expect(decision.provider).not.toBe("claude");
+    expect(MULTI_PROVIDERS.map((p) => p.name)).toContain(decision.provider);
+  });
+
+  it("collapses to the single live provider when every other one is cooling", () => {
+    const manager = createMockManager(MULTI_PROVIDERS);
+    const router = new ProviderRouter(manager, "performance", {
+      providerHealth: { isAvailable: (name) => name === "ollama" },
+    });
+    const decision = router.resolve(planningTask);
+    expect(decision.provider).toBe("ollama");
+    expect(decision.reason).toBe("only available provider");
+  });
+
+  it("keeps the full pool (and says so) when every candidate is cooling, rather than routing to nobody", () => {
+    const manager = createMockManager(MULTI_PROVIDERS);
+    const router = new ProviderRouter(manager, "performance", {
+      providerHealth: { isAvailable: () => false },
+    });
+    const decision = router.resolve(planningTask);
+    expect(decision.provider).toBe("claude");
+    expect(decision.reason).toMatch(/every candidate is cooling/i);
+  });
+
+  it("applies the health gate inside an explicit allowedProviderNames pool too", () => {
+    const manager = createMockManager(MULTI_PROVIDERS);
+    const router = new ProviderRouter(manager, "performance", {
+      providerHealth: { isAvailable: (name) => name !== "claude" },
+    });
+    const decision = router.resolve(planningTask, undefined, {
+      allowedProviderNames: ["claude", "groq"],
+    });
+    expect(decision.provider).toBe("groq");
+  });
+});
