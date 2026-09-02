@@ -102,6 +102,12 @@ export interface SetupDeps extends ReflectionDeps, BudgetDeps {
   ): Promise<void>;
   getTaskExecutionContext(): { readonly identityKey?: string; readonly taskRunId?: string } | undefined;
   propagateInstinctIdsToChannel(chatId: string, instinctIds: string[]): void;
+  /**
+   * audited 2026-09-02: run teardown for the learning pipeline's per-run credit
+   * ledger — cleared at the same point currentSessionInstinctIds is, so the next
+   * run on this chatId can credit the same instincts again.
+   */
+  clearRunInstinctCredits(chatId: string): void;
 }
 
 export async function computeVaultContext(deps: SetupDeps, userMessage: string): Promise<string> {

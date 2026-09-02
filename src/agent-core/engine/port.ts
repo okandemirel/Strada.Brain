@@ -401,6 +401,8 @@ export function createAgentCorePort(
         // prior run's instincts, and prevent the Map growing unbounded. Runs from the spine's finally
         // on EVERY exit (happy or throw), exactly once per run.
         deps.currentSessionInstinctIds.delete(c.chatId);
+        // audited 2026-09-02: the pipeline's per-run credit ledger ends with the run too.
+        deps.clearRunInstinctCredits(c.chatId);
         deps.propagateInstinctIdsToChannel(c.chatId, []);
         } finally {
           // v1 parity (runBackgroundTask finally :4894-4896): settle the joined worker card WITHOUT
