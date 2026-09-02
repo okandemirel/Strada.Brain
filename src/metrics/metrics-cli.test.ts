@@ -285,4 +285,28 @@ describe("runMetricsCommand --since", () => {
     expect(parsed.window.label).toBe("last 7d");
     expect(typeof parsed.window.since).toBe("number");
   });
+
+  it("accepts a window older than the epoch and says it was clamped", async () => {
+    // audited 2026-09-02: `30000d` is inside the documented grammar, but
+    // now - 30000d is negative, so the parser returned null and the CLI died
+    // with "Unrecognized --since" — a grammar error for a legal token.
+    const { runMetricsCommand } = await import("./metrics-cli.js");
+
+    runMetricsCommand({ since: "30000d" });
+    const stdout = logSpy.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(stdout).toMatch(/Window:\s+last 30000d \(clamped to the epoch\)/);
+    // Clamped means "everything on record", and it is labelled as such — not
+    // silently shortened, and not passed off as an ordinary 30000d window.
+    expect(stdout).toMatch(/Total Tasks:\s+10\b/);
+    const stderr = errSpy.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(stderr).not.toMatch(/Unrecognized/);
+
+    logSpy.mockClear();
+    runMetricsCommand({ since: "30000d", json: true });
+    const parsed = JSON.parse(logSpy.mock.calls.map((c) => String(c[0])).join("\n")) as {
+      window: { since: number | null; label: string };
+    };
+    expect(parsed.window.since).toBe(0);
+    expect(parsed.window.label).toBe("last 30000d (clamped to the epoch)");
+  });
 });

@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { parseDurationToTimestamp, DURATION_FORMAT_HINT } from "./parse-duration.js";
+import { parseDurationToTimestamp, parseDurationWindow, DURATION_FORMAT_HINT } from "./parse-duration.js";
 
 describe("parseDurationToTimestamp", () => {
   afterEach(() => {
@@ -31,6 +31,27 @@ describe("parseDurationToTimestamp", () => {
 
   it("returns null for a duration that overflows instead of a negative timestamp that matches every row", () => {
     expect(parseDurationToTimestamp("999999999999d")).toBeNull();
+  });
+
+  it("clamps a window that reaches past the epoch instead of calling it unreadable", () => {
+    // audited 2026-09-02: `Date.now() - ms < 0` returned null, so a perfectly
+    // well-formed 20000d/30000d window came back as 'Unrecognized --since' —
+    // the grammar-error message for a token the grammar accepts.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-02T12:00:00Z"));
+
+    const window = parseDurationWindow("30000d");
+    expect(window).not.toBeNull();
+    expect(window!.since).toBe(0);
+    expect(window!.clampedToEpoch).toBe(true);
+
+    // A window that fits is not reported as clamped.
+    const fits = parseDurationWindow("7d");
+    expect(fits!.since).toBe(Date.now() - 7 * 86_400_000);
+    expect(fits!.clampedToEpoch).toBe(false);
+
+    // And the plain accessor gives the epoch, never null and never negative.
+    expect(parseDurationToTimestamp("30000d")).toBe(0);
   });
 
   it("publishes the accepted grammar for error messages", () => {

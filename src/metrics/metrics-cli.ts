@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { loadConfigSafe } from "../config/config.js";
 import { MetricsStorage } from "./metrics-storage.js";
 import type { MetricsAggregation, MetricsFilter } from "./metrics-types.js";
-import { parseDurationToTimestamp, DURATION_FORMAT_HINT } from "./parse-duration.js";
+import { parseDurationWindow, DURATION_FORMAT_HINT } from "./parse-duration.js";
 import { LearningStorage } from "../learning/storage/learning-storage.js";
 import { MS_PER_DAY } from "../learning/types.js";
 import { MigrationRunner } from "../learning/storage/migrations/index.js";
@@ -35,11 +35,18 @@ export const ALL_TIME_WINDOW: MetricsWindow = { since: null, label: "all time" }
  */
 export function resolveMetricsWindow(since: string | undefined): MetricsWindow {
   if (!since) return ALL_TIME_WINDOW;
-  const ts = parseDurationToTimestamp(since);
-  if (ts === null) {
+  const window = parseDurationWindow(since);
+  if (window === null) {
     throw new Error(`Unrecognized --since "${since}" (expected ${DURATION_FORMAT_HINT})`);
   }
-  return { since: ts, label: `last ${since}` };
+  // audited 2026-09-02: a window longer than the epoch used to come back null
+  // and be rejected as unreadable, though the grammar accepts it. It is clamped
+  // now — and the label says so, so a clamped window never reads like one that
+  // fit, and never like plain "all time" either.
+  return {
+    since: window.since,
+    label: window.clampedToEpoch ? `last ${since} (clamped to the epoch)` : `last ${since}`,
+  };
 }
 
 function formatWindow(window: MetricsWindow): string {
