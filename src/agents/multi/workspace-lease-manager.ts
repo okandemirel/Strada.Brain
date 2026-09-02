@@ -54,6 +54,14 @@ export interface WorkspaceCommitResult {
    * when there were no conflicts or none could be written.
    */
   readonly conflictsQuarantinedUnder: string | null;
+  /**
+   * How many of `conflicts` were actually written to quarantine. Salvage used
+   * to read `conflicts.length` as "preserved" and delete the workspace on the
+   * strength of it while the cpSync failures were swallowed (audited
+   * 2026-09-02). `conflicts.length - quarantined` is the number of files that
+   * exist ONLY in the workspace.
+   */
+  readonly quarantined: number;
 }
 
 export interface WorkspaceLease {
@@ -324,8 +332,10 @@ export class WorkspaceLeaseManager {
   private async salvageOrphanedLeases(orphanNames: readonly string[]): Promise<void> {
     const logger = getLoggerSafe();
     let salvaged = 0;
+    let leftInPlace = 0;
     let writtenTotal = 0;
-    let conflictsTotal = 0;
+    let quarantinedTotal = 0;
+    let unpreservedTotal = 0;
     for (const name of orphanNames) {
       const orphanPath = join(this.leaseRoot, name);
       if (!existsSync(orphanPath)) continue; // released concurrently somehow
@@ -348,7 +358,28 @@ export class WorkspaceLeaseManager {
           { quarantineOnly: true },
         );
         writtenTotal += result.written.length;
-        conflictsTotal += result.conflicts.length;
+        quarantinedTotal += result.quarantined;
+        const unpreserved = result.conflicts.length - result.quarantined;
+        unpreservedTotal += unpreserved;
+        // Delete the workspace ONLY when everything divergent in it now exists
+        // somewhere else. removeDirectory used to run unconditionally: an
+        // unwritable quarantine (read-only/full .strada — plausibly the same
+        // fault that killed the predecessor) left conflicts counted but not
+        // copied, and the crashed run's only copy was rm -rf'd while the log
+        // claimed it was quarantined (audited 2026-09-02).
+        if (unpreserved > 0 || result.failed.length > 0) {
+          leftInPlace += 1;
+          logger.warn("Orphaned workspace NOT removed — some of its work could not be preserved", {
+            orphan: name,
+            conflicts: result.conflicts.length,
+            quarantined: result.quarantined,
+            unpreserved,
+            unprocessable: result.failed.length,
+            quarantinedUnder: result.conflictsQuarantinedUnder,
+            path: orphanPath,
+          });
+          continue;
+        }
         this.removeDirectory(orphanPath);
         salvaged += 1;
       } catch (err) {
@@ -368,11 +399,15 @@ export class WorkspaceLeaseManager {
     } catch {
       // Non-git projects have nothing to prune.
     }
-    if (salvaged > 0 || writtenTotal > 0 || conflictsTotal > 0) {
+    if (salvaged > 0 || leftInPlace > 0 || writtenTotal > 0 || quarantinedTotal > 0) {
+      // `conflictsQuarantined` is the count of files WRITTEN to quarantine, not
+      // the number of divergences detected.
       logger.info("Salvaged orphaned workspaces from a previous process", {
         salvaged,
+        leftInPlace,
         filesWritten: writtenTotal,
-        conflictsQuarantined: conflictsTotal,
+        conflictsQuarantined: quarantinedTotal,
+        conflictsUnpreserved: unpreservedTotal,
       });
     }
   }
@@ -813,8 +848,9 @@ export class WorkspaceLeaseManager {
     const removed: string[] = [];
     const failed: string[] = [];
     let conflictsQuarantinedUnder: string | null = null;
+    let quarantined = 0;
     if (!existsSync(workspacePath)) {
-      return { written, conflicts, removed, failed, conflictsQuarantinedUnder };
+      return { written, conflicts, removed, failed, conflictsQuarantinedUnder, quarantined };
     }
 
     // Bulk write into ANY shared target: serialize against the other bulk
@@ -880,12 +916,14 @@ export class WorkspaceLeaseManager {
             conflicts.push(rel);
             if (quarantineRoot) {
               try {
-                const quarantined = join(quarantineRoot, rel);
-                mkdirSync(dirname(quarantined), { recursive: true });
-                cpSync(full, quarantined, { force: true });
+                const quarantineTarget = join(quarantineRoot, rel);
+                mkdirSync(dirname(quarantineTarget), { recursive: true });
+                cpSync(full, quarantineTarget, { force: true });
                 conflictsQuarantinedUnder ??= quarantineRoot;
+                quarantined += 1; // counted only AFTER the copy succeeded
               } catch {
-                // Quarantine failed; the conflict report still stands.
+                // Quarantine failed; the conflict report still stands, and
+                // `quarantined` stays short of `conflicts` so the caller knows.
               }
             }
             continue;
@@ -908,10 +946,11 @@ export class WorkspaceLeaseManager {
               // .strada namespace; best-effort, never blocks the commit.
               if (quarantineRoot) {
                 try {
-                  const quarantined = join(quarantineRoot, rel);
-                  mkdirSync(dirname(quarantined), { recursive: true });
-                  cpSync(full, quarantined, { force: true });
+                  const quarantineTarget = join(quarantineRoot, rel);
+                  mkdirSync(dirname(quarantineTarget), { recursive: true });
+                  cpSync(full, quarantineTarget, { force: true });
                   conflictsQuarantinedUnder ??= quarantineRoot;
+                  quarantined += 1;
                 } catch {
                   // Quarantine failed; the conflict report still stands.
                 }
@@ -960,7 +999,7 @@ export class WorkspaceLeaseManager {
       });
     }
 
-    return { written, conflicts, removed, failed, conflictsQuarantinedUnder };
+    return { written, conflicts, removed, failed, conflictsQuarantinedUnder, quarantined };
     } finally {
       lock?.release();
     }

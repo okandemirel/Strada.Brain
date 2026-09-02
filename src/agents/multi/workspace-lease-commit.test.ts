@@ -297,4 +297,56 @@ describe("orphaned lease salvage at construction", () => {
     await lease.release();
     expect(result.written).toContain(join("Assets", "Scripts", "AfterSalvage.cs"));
   });
+
+  /** Resolves once salvage has finished its loop (the trailing prune runs after it). */
+  function salvageDone(): { runner: (p: { args: string[] }) => Promise<never>; done: Promise<void> } {
+    let resolve: () => void = () => {};
+    const done = new Promise<void>((r) => { resolve = r; });
+    const runner = async (p: { args: string[] }) => {
+      if (p.args.includes("prune")) resolve();
+      return { stdout: "", stderr: "", exitCode: 0, timedOut: false, durationMs: 1 } as never;
+    };
+    return { runner, done };
+  }
+
+  it("leaves the orphan in place when its work could NOT be quarantined, and reports what it preserved", async () => {
+    // Measured 2026-09-02: with the quarantine destination unwritable, commitLease
+    // still counted every divergent file as a conflict (the cpSync failure was
+    // swallowed), salvage removed the workspace unconditionally, and the log said
+    // {conflictsQuarantined: 2} while zero bytes were preserved anywhere.
+    const orphan = join(leaseRoot, "task-deadbeef-cafe-4bad-8fee-1234567890ab");
+    mkdirSync(join(orphan, "Assets", "Scripts"), { recursive: true });
+    writeFileSync(join(orphan, "Assets", "Scripts", "HoursOfWork.cs"), "HOURS OF AGENT WORK", "utf8");
+    // The quarantine root is a FILE, so mkdirSync under it fails (ENOTDIR) —
+    // the deterministic stand-in for a read-only or full .strada.
+    mkdirSync(join(source, ".strada"), { recursive: true });
+    writeFileSync(join(source, ".strada", "lease-conflicts"), "not a directory", "utf8");
+
+    const { runner, done } = salvageDone();
+    new WorkspaceLeaseManager({ projectRoot: source, leaseRoot, preferGitWorktree: false, commandRunner: runner as never });
+    await done;
+
+    expect(existsSync(join(orphan, "Assets", "Scripts", "HoursOfWork.cs")), "the only copy was deleted").toBe(true);
+    expect(readFileSync(join(orphan, "Assets", "Scripts", "HoursOfWork.cs"), "utf8")).toBe("HOURS OF AGENT WORK");
+    expect(existsSync(join(source, "Assets", "Scripts", "HoursOfWork.cs"))).toBe(false);
+  });
+
+  it("counts only files actually written to quarantine", async () => {
+    const orphan = join(leaseRoot, "task-deadbeef-cafe-4bad-8fee-1234567890ab");
+    mkdirSync(join(orphan, "Assets"), { recursive: true });
+    writeFileSync(join(orphan, "Assets", "A.cs"), "a", "utf8");
+    writeFileSync(join(orphan, "Assets", "B.cs"), "b", "utf8");
+    const quarantine = join(source, ".strada", "lease-conflicts", "orphan-task-dea");
+    // Pre-plant a DIRECTORY where B.cs's quarantine copy must go: cpSync of a
+    // file onto a directory fails, so exactly one of two conflicts is preserved.
+    mkdirSync(join(quarantine, "Assets", "B.cs"), { recursive: true });
+
+    const { runner, done } = salvageDone();
+    new WorkspaceLeaseManager({ projectRoot: source, leaseRoot, preferGitWorktree: false, commandRunner: runner as never });
+    await done;
+
+    expect(readFileSync(join(quarantine, "Assets", "A.cs"), "utf8")).toBe("a");
+    // Partial preservation must not cost the workspace.
+    expect(existsSync(join(orphan, "Assets", "B.cs"))).toBe(true);
+  });
 });
