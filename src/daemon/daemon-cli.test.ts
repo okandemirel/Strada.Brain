@@ -269,6 +269,20 @@ describe("daemon config", () => {
     expect(stdout).toContain("UTC"); // timezone
     expect(stdout).toContain("15"); // approvalTimeoutMin
   });
+
+  it("labels security.autoApproveTools as unenforced so a dead gate never reads as live (audited 2026-09-02)", async () => {
+    // DaemonSecurityPolicy.checkPermission has no production caller; the
+    // allowlist is parsed but consulted by nothing. Printing it as plain
+    // configuration made a skipped check read like a passed one.
+    const ctx = makeMockContext();
+
+    const { stdout } = await runDaemonCommand(() => ctx, ["config"]);
+
+    const row = stdout.split("\n").find((line) => line.includes("security.autoApproveTools"));
+    expect(row).toBeDefined();
+    expect(row).toContain("file_read");
+    expect(row).toContain("not enforced");
+  });
 });
 
 describe("daemon budget reset", () => {
