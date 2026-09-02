@@ -225,6 +225,52 @@ describe("checkGates", () => {
     expect(result.passed).toBe(true);
   });
 
+  // audited 2026-09-02: not failing the untracked case was only half the rule.
+  // The gate then vanished entirely — `passed: true` with nothing said about a
+  // dependency nobody checked, which reads exactly like a dependency that was
+  // checked and met. Show, never hide: same treatment as the config gate.
+  it("reports the skill gate as NOT EVALUATED (not passed) when active skills are not tracked", async () => {
+    const requires: SkillRequirements = { skills: ["dep-skill", "other-dep"] };
+    const result = await checkGates(requires);
+
+    expect(result.passed).toBe(true);
+    expect(result.reasons).toEqual([]);
+    expect(result.unevaluated).toHaveLength(1);
+    expect(result.unevaluated![0]).toContain("not evaluated");
+    expect(result.unevaluated![0]).toContain("dep-skill");
+    expect(result.unevaluated![0]).toContain("other-dep");
+    // A skipped check must never read like a passed one.
+    expect(result.unevaluated![0]).not.toContain("is not active");
+  });
+
+  it("reports both gates as unevaluated when neither config nor active skills are supplied", async () => {
+    const requires: SkillRequirements = { config: ["llm.apiKey"], skills: ["dep-skill"] };
+    const result = await checkGates(requires);
+
+    expect(result.passed).toBe(true);
+    expect(result.unevaluated).toHaveLength(2);
+    expect(result.unevaluated!.some((u) => u.includes("llm.apiKey"))).toBe(true);
+    expect(result.unevaluated!.some((u) => u.includes("dep-skill"))).toBe(true);
+  });
+
+  it("reports nothing unevaluated once the active-skill set is tracked", async () => {
+    const requires: SkillRequirements = { skills: ["dep-skill"] };
+    const met = await checkGates(requires, undefined, new Set(["dep-skill"]));
+    expect(met.unevaluated ?? []).toEqual([]);
+
+    const unmet = await checkGates(requires, undefined, new Set<string>());
+    expect(unmet.unevaluated ?? []).toEqual([]);
+    expect(unmet.passed).toBe(false);
+  });
+
+  it("evaluates an empty tracked set as a real measurement, not as untracked", async () => {
+    // An empty Set is evidence ("nothing is active"), not absence of evidence.
+    const requires: SkillRequirements = { skills: ["dep-skill"] };
+    const result = await checkGates(requires, undefined, new Set<string>());
+    expect(result.passed).toBe(false);
+    expect(result.reasons[0]).toContain("dep-skill");
+  });
+
   it("fails a skill dependency only when a tracked active-skill set lacks it", async () => {
     const requires: SkillRequirements = { skills: ["dep-skill"] };
     const result = await checkGates(requires, undefined, new Set(["other-skill"]));
