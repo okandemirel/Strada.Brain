@@ -1200,3 +1200,84 @@ describe("getStats", () => {
     expect(stats.perTier[MemoryTier.Persistent]!.pending).toBe(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Tests: HNSW chunk shape (audited 2026-09-02)
+// ---------------------------------------------------------------------------
+// retrieveSemantic resolves a hit via `ctx.entries.get(hit.chunk.id)`, not
+// `hit.id`. The engine used to upsert a chunk with no `id`, so every summary
+// it wrote (and every original it restored on undo) was invisible to the
+// pure-semantic path until the next full index rebuild.
+
+describe("HNSW chunk shape", () => {
+  it("processCluster upserts the summary with chunk.id === entry id and the summary content", async () => {
+    const entries = new Map<string, unknown>();
+    entries.set("c1", makeMemEntry("c1", "chunk A", { tier: MemoryTier.Ephemeral, chatId: "chat-9" }));
+    entries.set("c2", makeMemEntry("c2", "chunk B", { tier: MemoryTier.Ephemeral, chatId: "chat-9" }));
+
+    const hnswStore = {
+      search: vi.fn(async () => []),
+      remove: vi.fn(async () => {}),
+      upsert: vi.fn(async () => {}),
+    };
+    const engine = new MemoryConsolidationEngine(makeOpts({ entries, hnswStore }));
+
+    await engine.processCluster({
+      seedId: "c1",
+      memberIds: ["c1", "c2"],
+      avgSimilarity: 0.9,
+      tier: MemoryTier.Ephemeral,
+    });
+
+    const summaryId = entries.keys().next().value as string;
+    expect(hnswStore.upsert).toHaveBeenCalledTimes(1);
+    const upserted = (hnswStore.upsert.mock.calls[0] as any[])[0] as Array<{ id: string; chunk: { id?: string; content?: string } }>;
+    expect(upserted).toHaveLength(1);
+    expect(upserted[0]!.id).toBe(summaryId);
+    expect(upserted[0]!.chunk.id).toBe(summaryId);
+    expect(upserted[0]!.chunk.content).toBe("Consolidated summary");
+  });
+
+  it("undo re-adds originals with chunk.id === entry id and the restored content", async () => {
+    const { db, tables } = makeFakeDb();
+    tables.consolidation_log.push({
+      id: "log-u",
+      summary_entry_id: "sum-u",
+      source_entry_ids: JSON.stringify(["o1", "o2"]),
+      status: "completed",
+    });
+    tables.memories.push({ id: "o1", value: JSON.stringify({ type: "note", content: "original one", chatId: "chat-u" }), metadata: "{}", embedding: null, created_at: 11 });
+    tables.memories.push({ id: "o2", value: JSON.stringify({ type: "note", content: "original two", chatId: "chat-u" }), metadata: "{}", embedding: null, created_at: 22 });
+
+    // The fake db returns null embeddings by default; hand back a real vector
+    // so the undo path actually reaches the HNSW upsert.
+    const originalPrepare = db.prepare;
+    db.prepare = vi.fn((sql: string) => {
+      const stmt = originalPrepare(sql);
+      if (sql.includes("SELECT embedding FROM memories")) {
+        stmt.get = vi.fn(() => ({ embedding: Buffer.from(new Float32Array([0.5, 0.5, 0.5, 0.5]).buffer) }));
+      }
+      return stmt;
+    }) as any;
+
+    const entries = new Map<string, unknown>();
+    entries.set("sum-u", makeMemEntry("sum-u", "summary", { tier: MemoryTier.Ephemeral }));
+    const hnswStore = {
+      search: vi.fn(async () => []),
+      remove: vi.fn(async () => {}),
+      upsert: vi.fn(async () => {}),
+    };
+    const engine = new MemoryConsolidationEngine(makeOpts({ sqliteDb: db as any, entries, hnswStore }));
+
+    await engine.undo("log-u");
+
+    expect(hnswStore.upsert).toHaveBeenCalledTimes(1);
+    const upserted = (hnswStore.upsert.mock.calls[0] as any[])[0] as Array<{ id: string; chunk: { id?: string; content?: string } }>;
+    expect(upserted.map((u) => u.id).sort()).toEqual(["o1", "o2"]);
+    for (const u of upserted) {
+      expect(u.chunk.id).toBe(u.id);
+    }
+    expect(upserted.find((u) => u.id === "o1")!.chunk.content).toBe("original one");
+    expect(upserted.find((u) => u.id === "o2")!.chunk.content).toBe("original two");
+  });
+});

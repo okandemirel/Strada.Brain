@@ -18,6 +18,7 @@ import type {
   MemoryCluster,
 } from "./consolidation-types.js";
 import { MemoryTier } from "./unified-memory.interface.js";
+import { toVectorEntry } from "./agentdb-vector.js";
 
 // =============================================================================
 // TYPES FOR CONSTRUCTOR DEPENDENCIES
@@ -38,11 +39,18 @@ export type ConsolidationStatus = "pending" | "completed" | "failed" | "undone";
 const STATUS_PENDING: ConsolidationStatus = "pending";
 const STATUS_COMPLETED: ConsolidationStatus = "completed";
 
-/** Minimal HNSW store interface used by the consolidation engine */
+/**
+ * Minimal HNSW store interface used by the consolidation engine.
+ *
+ * `chunk` is typed with a required `id` rather than `unknown`: retrieval
+ * resolves a hit by `entries.get(hit.chunk.id)` (agentdb-retrieval.ts), so a
+ * chunk without one is silently unretrievable. `unknown` let an id-less
+ * literal compile (audited 2026-09-02).
+ */
 interface HnswStoreContract {
   search(queryVector: number[], topK: number): Promise<Array<{ id: string; score: number }>>;
   remove(ids: string[]): Promise<void>;
-  upsert(entries: Array<{ id: string; vector: number[]; chunk: unknown; addedAt: number; accessCount: number }>): Promise<void>;
+  upsert(entries: Array<{ id: string; vector: number[]; chunk: { id: string; content: string }; addedAt: number; accessCount: number }>): Promise<void>;
 }
 
 /** Minimal event emitter interface */
@@ -494,13 +502,21 @@ export class MemoryConsolidationEngine {
     const doHnswAndFinalize = async (): Promise<void> => {
       try {
         await this.hnsw.remove(cluster.memberIds);
-        await this.hnsw.upsert([{
-          id: summaryId,
-          vector: summaryEmbedding,
-          chunk: { filePath: "", content: llmResult.summary, kind: "generic", language: "text" },
-          addedAt: now,
-          accessCount: 0,
-        }]);
+        // Same chunk shape as storeEntry/loadEntries (toVectorEntry): the chunk
+        // MUST carry `id`, because retrieveSemantic resolves hits by
+        // `entries.get(hit.chunk.id)`. An id-less chunk here made every
+        // consolidation summary invisible to semantic search until the next
+        // full index rebuild (audited 2026-09-02).
+        await this.hnsw.upsert([
+          toVectorEntry({
+            id: summaryId,
+            content: llmResult.summary,
+            chatId: summaryEntry.chatId,
+            embedding: summaryEmbedding,
+            createdAt: now,
+            accessCount: 0,
+          }),
+        ]);
         // Transition 'pending' -> 'completed' only after HNSW succeeded.
         markLogCompletedStmt.run(logId);
       } catch (hnswError) {
@@ -754,14 +770,22 @@ export class MemoryConsolidationEngine {
     const doUndoHnsw = async (): Promise<void> => {
       await this.hnsw.remove([summaryEntryId]);
       if (originalEmbeddings.length > 0) {
+        // Restored originals get the same chunk shape as storeEntry
+        // (toVectorEntry, chunk.id set, real content). The previous literal
+        // had no `id` and `content: ""`, so undone originals were as
+        // unretrievable as the summary they replaced (audited 2026-09-02).
         await this.hnsw.upsert(
-          originalEmbeddings.map((oe) => ({
-            id: oe.id,
-            vector: oe.embedding,
-            chunk: { filePath: "", content: "", kind: "generic", language: "text" },
-            addedAt: now,
-            accessCount: 0,
-          })),
+          originalEmbeddings.map((oe) => {
+            const restored = this.entries.get(oe.id);
+            return toVectorEntry({
+              id: oe.id,
+              content: restored?.content ?? "",
+              chatId: restored?.chatId,
+              embedding: oe.embedding,
+              createdAt: restored?.createdAt ?? now,
+              accessCount: restored?.accessCount ?? 0,
+            });
+          }),
         );
       }
     };
