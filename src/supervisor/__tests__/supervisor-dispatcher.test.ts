@@ -129,6 +129,54 @@ describe("SupervisorDispatcher", () => {
     expect(skipped.every((r) => r.output === "Skipped: budget exhausted")).toBe(true);
   });
 
+  // audited 2026-09-02: once the failure budget was spent the wave loop hit
+  // `break`, so every node in a later wave produced no NodeResult and no event
+  // at all. The aggregator's totalNodes = results.length shrank to match, and a
+  // 10-node plan settled as "3 nodes, all failed" — the seven planned-but-never-
+  // attempted sub-goals vanished from the census. Same class findUnschedulableNodes
+  // closed for cycles; the fix: drain the remaining waves as skipped results.
+  it("accounts for every node in later waves after the failure budget is spent", async () => {
+    const executed: string[] = [];
+    const executeNode = vi.fn().mockImplementation(async (node: TaggedGoalNode) => {
+      executed.push(String(node.id));
+      return String(node.id).startsWith("F")
+        ? { ...makeOkResult(String(node.id)), status: "failed" as const, output: "boom" }
+        : makeOkResult(String(node.id));
+    });
+    const emitter = { emit: vi.fn() };
+    const dispatcher = new SupervisorDispatcher({
+      executeNode,
+      eventEmitter: emitter as any,
+      config: { maxParallelNodes: 1, nodeTimeoutMs: 5000, maxFailureBudget: 2 },
+    });
+    // wave 0: S(ok), F1(fail), F2(fail) -> budget spent
+    // wave 1: X depends only on the SUCCEEDED S — genuinely runnable
+    // wave 2: Y depends on X
+    const nodes = [
+      makeAssignedNode("S", "setup", "claude"),
+      makeAssignedNode("F1", "fails", "claude"),
+      makeAssignedNode("F2", "fails", "claude"),
+      makeAssignedNode("X", "after setup", "claude", ["S"]),
+      makeAssignedNode("Y", "after X", "claude", ["X"]),
+    ];
+
+    const results = await dispatcher.dispatch(nodes);
+
+    expect(executed).toEqual(["S", "F1", "F2"]);
+    expect(results.map((r) => String(r.nodeId)).sort()).toEqual(["F1", "F2", "S", "X", "Y"]);
+    const byId = new Map(results.map((r) => [String(r.nodeId), r]));
+    expect(byId.get("X")).toMatchObject({ status: "skipped", output: "Skipped: budget exhausted" });
+    expect(byId.get("Y")).toMatchObject({ status: "skipped", output: "Skipped: budget exhausted" });
+    // Each unattempted node still reaches the monitor as a terminal event.
+    const completed = emitter.emit.mock.calls
+      .filter((c) => c[0] === "supervisor:node_complete")
+      .map((c) => String((c[1] as { nodeId: string }).nodeId));
+    expect(completed).toEqual(expect.arrayContaining(["X", "Y"]));
+    // No wave_start for a wave that never launched.
+    const waveStarts = emitter.emit.mock.calls.filter((c) => c[0] === "supervisor:wave_start");
+    expect(waveStarts).toHaveLength(1);
+  });
+
   it("does not skip nodes just because the failure budget is lower than node count", async () => {
     const executeNode = vi.fn().mockImplementation(async (node: TaggedGoalNode) =>
       makeOkResult(node.id, node.assignedProvider!)

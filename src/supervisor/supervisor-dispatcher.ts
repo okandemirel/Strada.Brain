@@ -451,7 +451,24 @@ export class SupervisorDispatcher {
 
     for (let waveIndex = 0; waveIndex < waves.length; waveIndex++) {
       const wave = waves[waveIndex]!;
-      if (budgetExhausted || signal?.aborted) break;
+      if (signal?.aborted) break;
+      if (budgetExhausted) {
+        // audited 2026-09-02: this used to `break`, so every node in a later
+        // wave produced no NodeResult and no event; the aggregator's
+        // totalNodes (= results.length) shrank to match and a 10-node plan
+        // settled as "3 nodes, all failed" with seven planned sub-goals
+        // unmentioned. Drain the wave as skipped results instead — no
+        // wave_start, nothing launched, every node accounted for.
+        for (const node of wave) {
+          skippedNodeIds.add(node.id as string);
+          const dependencyFailed = node.dependsOn.some((depId) => failedNodeIds.has(depId as string));
+          results.push(this.emitSkippedNode(
+            node,
+            dependencyFailed ? "Skipped: dependency failed" : "Skipped: budget exhausted",
+          ));
+        }
+        continue;
+      }
 
       this.emitter?.emit("supervisor:wave_start", {
         waveIndex,
