@@ -61,6 +61,16 @@ export class InstinctRetriever {
     const matchedInstinctIds: string[] = [];
 
     for (const match of finalMatches) {
+      // audited 2026-09-02: the id used to be pushed BEFORE formatting, so an
+      // instinct whose insight was dropped still landed in
+      // currentSessionInstinctIds and was credited (timesApplied, confidence)
+      // for a run in which the model never saw it. Credit only what was
+      // actually rendered, and keep ids index-aligned with insights — the
+      // memory-refresher zips the two arrays positionally.
+      const formatted = this.formatInsight(match);
+      if (formatted === null) continue;
+      insights.push(formatted);
+
       if (match.instinct) {
         matchedInstinctIds.push(match.instinct.id);
 
@@ -81,10 +91,6 @@ export class InstinctRetriever {
             // Non-blocking: hit count failure should not affect retrieval
           }
         }
-      }
-      const formatted = this.formatInsight(match);
-      if (formatted !== null) {
-        insights.push(formatted);
       }
     }
 
@@ -173,13 +179,26 @@ export class InstinctRetriever {
   private formatInsight(match: PatternMatch): string | null {
     if (!match.instinct?.action) return null;
 
+    // audited 2026-09-02: only the workflow_pattern writers JSON-encode
+    // `action`; seeds, teachExplicit, recordCorrection and
+    // recordAutoResolution store plain prose. This used to `return null` on
+    // parse failure, silently discarding 70% of the live instinct store
+    // (every seed, teaching and correction) before it reached the prompt.
+    // Prose is the instinct's own description, not a malformed record.
     let action: { description?: string; tool?: string; output?: string };
-    try {
-      action = typeof match.instinct.action === 'string'
-        ? JSON.parse(match.instinct.action)
-        : match.instinct.action;
-    } catch {
-      return null;
+    const raw = match.instinct.action;
+    if (typeof raw !== 'string') {
+      action = raw;
+    } else {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        parsed = undefined;
+      }
+      action = parsed !== null && typeof parsed === 'object'
+        ? (parsed as typeof action)
+        : { description: raw.trim() };
     }
 
     const text = action.description
