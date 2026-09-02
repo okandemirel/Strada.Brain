@@ -527,6 +527,30 @@ describe("ProviderHealthRegistry — areAllUnavailable", () => {
     time += 30_001; // past degraded cooldown
     expect(registry.areAllUnavailable()).toBe(false);
   });
+
+  // audited 2026-09-02: the orchestrator records under the FallbackChainProvider's own
+  // name, "chain(openai→opencode)". A chain-level failure creates that entry and the
+  // next successful turn pins it healthy forever, so with both real members in an 8h
+  // quota cooldown this measure still said "someone is free" and idle consolidation
+  // launched its LLM cycle into the outage (two such aliases were on disk live).
+  it("ignores a healthy chain(...) alias when every real member is in cooldown", () => {
+    const registry = new ProviderHealthRegistry();
+    const alias = "chain(OpenAI→OpenCode (Zen/Go))";
+    registry.recordFailure(alias, "stall"); // creates the alias entry
+    registry.recordSuccess(alias); // ...and pins it healthy
+    expect(registry.isAvailable(alias)).toBe(true);
+
+    registry.recordQuotaExhausted("openai", "HTTP 403 quota");
+    registry.recordQuotaExhausted("opencode", "HTTP 403 quota");
+    expect(registry.areAllUnavailable()).toBe(true);
+  });
+
+  it("returns false when the only entries are chain(...) aliases (nothing was measured)", () => {
+    const registry = new ProviderHealthRegistry();
+    for (let i = 0; i < 5; i++) registry.recordFailure("chain(openai→opencode)", "stall");
+    expect(registry.isAvailable("chain(openai→opencode)")).toBe(false);
+    expect(registry.areAllUnavailable()).toBe(false);
+  });
 });
 
 describe("ProviderHealthRegistry — suggestRecoveryWaitMs", () => {

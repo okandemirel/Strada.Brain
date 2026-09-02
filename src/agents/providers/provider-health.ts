@@ -479,13 +479,23 @@ export class ProviderHealthRegistry {
   /**
    * Check if ALL tracked providers are currently unavailable (in cooldown).
    * Returns false when no providers are tracked.
+   *
+   * "chain(...)" entries are the FallbackChainProvider's own alias, not a
+   * provider: the orchestrator records under provider.name, a chain-level
+   * failure creates the entry and the next successful turn pins it healthy
+   * forever. audited 2026-09-02: with both real members on an 8h quota
+   * cooldown the alias alone made this read "someone is free", and idle
+   * consolidation launched its LLM cycle into the outage. Same filter as
+   * provider-outage.ts's allProvidersCoolingDownMs.
    */
   areAllUnavailable(): boolean {
-    if (this.entries.size === 0) return false;
+    let sawMember = false;
     for (const [name] of this.entries) {
+      if (name.startsWith("chain(")) continue;
+      sawMember = true;
       if (this.isAvailable(name)) return false;
     }
-    return true;
+    return sawMember;
   }
 
   /**
