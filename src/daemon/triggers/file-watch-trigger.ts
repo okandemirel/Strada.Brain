@@ -192,7 +192,29 @@ export class FileWatchTrigger implements ITrigger {
   onFired(_now: Date): void {
     if (this.pendingEvents.length === 0) return;
 
-    // Build human-readable summary
+    const summary = this.buildSummary();
+    this.overflowCount = 0;
+
+    // Keep every other field (cooldownSeconds included) — rebuilding from
+    // three literals dropped the cooldown after the first fire.
+    this._metadata = { ...this._metadata, description: summary };
+
+    // Drain the buffer
+    this.pendingEvents.length = 0;
+  }
+
+  /**
+   * ITrigger.previewFireDescription -- what onFired would publish, with no
+   * side effects (buffer, overflow count and metadata untouched). Built by the
+   * same code path as onFired so the dedup hash describes this fire exactly.
+   */
+  previewFireDescription(_now: Date): string {
+    if (this.pendingEvents.length === 0) return this._metadata.description;
+    return this.buildSummary();
+  }
+
+  /** Human-readable summary of the pending buffer; pure. */
+  private buildSummary(): string {
     const count = this.pendingEvents.length;
     const details = this.pendingEvents
       .map((e) => `${basename(e.path)} ${eventLabel(e.event)}`)
@@ -202,15 +224,7 @@ export class FileWatchTrigger implements ITrigger {
     const overflow = this.overflowCount > 0
       ? `; ${this.overflowCount} further change${this.overflowCount !== 1 ? "s" : ""} not listed`
       : "";
-    this.overflowCount = 0;
-    const summary = `File changes detected: ${count} file${count !== 1 ? "s" : ""} (${details}${overflow}). Action: ${this.originalAction}`;
-
-    // Keep every other field (cooldownSeconds included) — rebuilding from
-    // three literals dropped the cooldown after the first fire.
-    this._metadata = { ...this._metadata, description: summary };
-
-    // Drain the buffer
-    this.pendingEvents.length = 0;
+    return `File changes detected: ${count} file${count !== 1 ? "s" : ""} (${details}${overflow}). Action: ${this.originalAction}`;
   }
 
   /**

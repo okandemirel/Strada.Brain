@@ -417,9 +417,15 @@ export class HeartbeatLoop {
           const cooldownMs = trigger.metadata.cooldownSeconds
             ? (trigger.metadata.cooldownSeconds * 1000)
             : 0;
-          // Dedup check (TRIG-05) -- before onFired and task submission
+          // Dedup check (TRIG-05) -- before onFired and task submission.
+          // Hash what THIS fire would publish: description-rewriting triggers
+          // expose it via previewFireDescription, because metadata.description
+          // still holds the PREVIOUS fire's summary here (audited 2026-09-02:
+          // hashing it let a true repeat through and then suppressed the next
+          // genuinely new change set as a "duplicate").
+          const fireContent = trigger.previewFireDescription?.(now) ?? trigger.metadata.description;
           if (this.deduplicator) {
-            if (this.deduplicator.shouldSuppress(name, trigger.metadata.description, now.getTime(), cooldownMs)) {
+            if (this.deduplicator.shouldSuppress(name, fireContent, now.getTime(), cooldownMs)) {
               const reason = this.deduplicator.getSuppressionReason();
               this.eventBus.emit("daemon:trigger_deduplicated", {
                 triggerName: name,

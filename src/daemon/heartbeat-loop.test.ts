@@ -9,6 +9,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { HeartbeatLoop } from "./heartbeat-loop.js";
 import { TriggerRegistry } from "./trigger-registry.js";
 import { CircuitBreaker } from "./resilience/circuit-breaker.js";
+import { TriggerDeduplicator } from "./dedup/trigger-deduplicator.js";
 import type { ITrigger, TriggerMetadata, TriggerState, DaemonConfig } from "./daemon-types.js";
 import type { DaemonEventMap } from "./daemon-events.js";
 import type { IEventBus } from "../core/event-bus.js";
@@ -311,6 +312,62 @@ describe("HeartbeatLoop", () => {
 
     expect(loop.isRunning()).toBe(false);
     expect(trigger.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("content dedup judges the fire being evaluated, not the previous one (audited 2026-09-02)", async () => {
+    // A description-rewriting trigger (file-watch/webhook/checklist) is hashed
+    // BEFORE onFired rewrites metadata.description, so the hash checked and
+    // stored was always the previous fire's summary: a true repeat slipped
+    // through, and the next genuinely new change set was suppressed as a
+    // "duplicate" with a false history row.
+    const pending: string[] = [];
+    const describePending = () =>
+      `File changes detected: ${pending.map((f) => `${f} changed`).join(", ")}. Action: Review changed files`;
+    const trigger = {
+      metadata: { name: "watch", description: "Review changed files", type: "file-watch" } as TriggerMetadata,
+      shouldFire: vi.fn(() => pending.length > 0),
+      previewFireDescription: vi.fn(() => describePending()),
+      onFired: vi.fn(() => {
+        trigger.metadata = { ...trigger.metadata, description: describePending() };
+        pending.length = 0;
+      }),
+      getNextRun: () => null,
+      getState: vi.fn((): TriggerState => "active"),
+    };
+    registry.register(trigger as unknown as ITrigger);
+    loop = new HeartbeatLoop(
+      registry, taskManager as any, budgetTracker as any, securityPolicy as any, approvalQueue as any,
+      storage as any, identityManager as any, eventBus, config, logger as any,
+      new TriggerDeduplicator(300_000),
+    );
+    loop.start();
+    const t0 = new Date("2026-09-02T10:00:00Z").getTime();
+
+    // t0: X changes -> fires, prompt names X. Its task settles before the next tick.
+    vi.setSystemTime(t0);
+    pending.push("X.cs");
+    await loop.tick();
+    taskManager._setTaskStatus("task_1", "completed");
+
+    // t0+60s: X changes again -> byte-identical summary -> a true duplicate, suppressed.
+    vi.setSystemTime(t0 + 60_000);
+    pending.push("X.cs");
+    await loop.tick();
+
+    // t0+120s: Y changes too -> new content -> must fire, not be called a duplicate.
+    vi.setSystemTime(t0 + 120_000);
+    pending.push("Y.cs");
+    await loop.tick();
+
+    const prompts = taskManager.submit.mock.calls.map((call) => call[2] as string);
+    expect(prompts).toHaveLength(2);
+    expect(prompts[0]).toContain("X.cs changed");
+    expect(prompts[0]).not.toContain("Y.cs");
+    expect(prompts[1]).toContain("Y.cs changed");
+    const dedupRows = (storage.insertTriggerFireHistory as ReturnType<typeof vi.fn>).mock.calls
+      .filter(([row]) => (row as { result: string }).result === "deduplicated");
+    expect(dedupRows).toHaveLength(1);
+    expect((dedupRows[0]![0] as { timestamp: number }).timestamp).toBe(t0 + 60_000);
   });
 
   it("an approval-only (deploy) trigger fires without submitting an agent task (audited 2026-09-02)", async () => {

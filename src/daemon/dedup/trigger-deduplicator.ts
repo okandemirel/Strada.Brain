@@ -87,7 +87,7 @@ export class TriggerDeduplicator {
     // 2. Cross-trigger content dedup check
     if (this.globalWindowMs > 0) {
       const hash = this.hashContent(actionContent);
-      this.lastCheckedHash = hash;
+      this.lastChecked = { content: actionContent, hash };
       const lastContent = this.contentHashes.get(hash);
       if (lastContent !== undefined && now - lastContent < this.globalWindowMs) {
         this.lastReason = "content_duplicate";
@@ -100,8 +100,14 @@ export class TriggerDeduplicator {
     return false;
   }
 
-  /** Cached hash from last shouldSuppress call to avoid double-hashing */
-  private lastCheckedHash: string | null = null;
+  /**
+   * Content + hash from the last shouldSuppress call, so recordFired can skip
+   * re-hashing when handed the SAME content. Audited 2026-09-02: the hash was
+   * reused blindly, so recordFired stored the pre-fire description's hash
+   * even when handed the post-onFired summary — the stored key never
+   * described what actually fired.
+   */
+  private lastChecked: { content: string; hash: string } | null = null;
 
   /**
    * Record that a trigger fired. Call this after successfully processing
@@ -115,8 +121,10 @@ export class TriggerDeduplicator {
    */
   recordFired(triggerName: string, actionContent: string, now: number, cooldownMs = 0): void {
     this.lastFired.set(triggerName, { ts: now, cooldownMs });
-    const hash = this.lastCheckedHash ?? this.hashContent(actionContent);
-    this.lastCheckedHash = null;
+    const hash = this.lastChecked?.content === actionContent
+      ? this.lastChecked.hash
+      : this.hashContent(actionContent);
+    this.lastChecked = null;
     this.contentHashes.set(hash, now);
   }
 

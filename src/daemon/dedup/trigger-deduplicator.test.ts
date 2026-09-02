@@ -29,6 +29,19 @@ describe("TriggerDeduplicator", () => {
     expect(dedup.getSuppressionReason()).toBe("cooldown");
   });
 
+  it("recordFired stores the hash of the content it is given, not of the last checked content (audited 2026-09-02)", () => {
+    // The heartbeat checks the pre-fire description and records the
+    // post-onFired one. The cached hash from shouldSuppress was reused
+    // blindly, so the stored hash never described what actually fired.
+    const now = Date.now();
+    expect(dedup.shouldSuppress("t", "pre-fire description", now, 0)).toBe(false);
+    dedup.recordFired("t", "post-fire summary", now);
+
+    expect(dedup.shouldSuppress("t", "post-fire summary", now + 1_000, 0)).toBe(true);
+    expect(dedup.getSuppressionReason()).toBe("content_duplicate");
+    expect(dedup.shouldSuppress("t", "pre-fire description", now + 1_000, 0)).toBe(false);
+  });
+
   it("another trigger's cleanup pass cannot evict a longer per-trigger cooldown (audited 2026-09-02)", () => {
     // `report` (*/5 cron, cooldown 3600s) and `health-check` (cooldown 300s)
     // share one deduplicator with a 300s global window. Before the fix,

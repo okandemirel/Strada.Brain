@@ -44,6 +44,13 @@ export interface ITrigger {
   shouldFire(now: Date): boolean;
   /** Called after successful fire to update internal state */
   onFired(now: Date): void;
+  /**
+   * The description onFired(now) WOULD publish, computed without side effects.
+   * Triggers that rewrite `metadata.description` in onFired implement this so
+   * content dedup can judge the fire being evaluated (audited 2026-09-02:
+   * hashing metadata.description before onFired judged the PREVIOUS fire).
+   */
+  previewFireDescription?(now: Date): string;
   /** Get the next scheduled fire time (for display) */
   getNextRun(): Date | null;
   /** Get current trigger state */

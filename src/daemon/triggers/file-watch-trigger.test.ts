@@ -399,6 +399,22 @@ describe("FileWatchTrigger", () => {
   // Security: only paths, never file content
   // ===========================================================================
 
+  it("previewFireDescription returns exactly what onFired will publish, without draining (audited 2026-09-02)", () => {
+    const trigger = new FileWatchTrigger(baseDef);
+    eventHandlers["change"]!("/projects/game/Assets/A.cs");
+    eventHandlers["add"]!("/projects/game/Assets/B.cs");
+    vi.advanceTimersByTime(150);
+
+    const preview = trigger.previewFireDescription(new Date());
+    expect(trigger.getPendingEvents()).toHaveLength(2); // not drained
+    expect(trigger.metadata.description).toBe(baseDef.action); // not mutated
+
+    trigger.onFired(new Date());
+    expect(trigger.metadata.description).toBe(preview);
+    expect(preview).toContain("A.cs changed");
+    expect(preview).toContain("B.cs added");
+  });
+
   it("caps the pending buffer and names what it dropped instead of inlining every event (audited 2026-09-02)", () => {
     // A Unity re-import or branch switch under a watched dir produces
     // thousands of events while ticks are skipped (overlap suppression,

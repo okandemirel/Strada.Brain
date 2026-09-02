@@ -142,16 +142,28 @@ export class ChecklistTrigger implements ITrigger {
 
     // Build dynamic description
     if (this.dueItems.length > 0) {
-      const itemList = this.dueItems
-        .map((item) => `[${item.priority}] ${item.text}`)
-        .join(", ");
-
       // Spread keeps cooldownSeconds across the rebuild (audited 2026-09-02)
-      this._metadata = {
-        ...this._metadata,
-        description: `Checklist items due: ${itemList}. Action: ${this.originalAction}`,
-      };
+      this._metadata = { ...this._metadata, description: this.buildSummary() };
     }
+  }
+
+  /**
+   * ITrigger.previewFireDescription -- what onFired would publish for the
+   * items shouldFire() just found due, with no side effects (nothing recorded
+   * as fired, metadata untouched), so content dedup judges this fire
+   * (audited 2026-09-02).
+   */
+  previewFireDescription(_now: Date): string {
+    if (this.dueItems.length === 0) return this._metadata.description;
+    return this.buildSummary();
+  }
+
+  /** Summary of the due items; pure. */
+  private buildSummary(): string {
+    const itemList = this.dueItems
+      .map((item) => `[${item.priority}] ${item.text}`)
+      .join(", ");
+    return `Checklist items due: ${itemList}. Action: ${this.originalAction}`;
   }
 
   /**
