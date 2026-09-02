@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Config } from "../config/config.js";
-import { buildBootReport, buildCapabilitySnapshot, collectConfigWarnings, summarizeCapabilityHealth } from "./boot-report.js";
+import { buildBootReport, buildCapabilitySnapshot, collectConfigWarnings, summarizeBootReport, summarizeCapabilityHealth } from "./boot-report.js";
 
 function makeConfig(overrides: Partial<Config> = {}): Config {
   return {
@@ -363,5 +363,48 @@ describe("boot report", () => {
         "RAG enabled but no embedding provider available — using hash fallback embeddings (retrieval is non-semantic)",
       );
     });
+  });
+});
+
+describe("supervisor capability (audited 2026-09-02)", () => {
+  // A Supervisor Brain that failed to boot (goals.db locked, decomposer
+  // missing) left every stage "ready" and no capability to observe it, so the
+  // report printed "Boot report clean" while the goal-DAG planner was absent.
+  it("reads degraded — not clean — when the supervisor is enabled but was not wired", () => {
+    const report = buildBootReport({
+      config: makeConfig({ supervisor: { enabled: true } as Config["supervisor"] }),
+      installRoot: process.cwd(),
+      channelType: "web",
+      channelHealthy: true,
+      supervisorWired: false,
+      startupNotices: [],
+    });
+
+    const supervisor = report.capabilities.find((c) => c.id === "supervisor");
+    expect(supervisor?.status).toBe("degraded");
+    expect(summarizeBootReport(report)).toMatch(/warnings/);
+    expect(summarizeBootReport(report)).toMatch(/Supervisor/);
+  });
+
+  it("reads active when the brain was constructed, inactive when disabled by config", () => {
+    const wired = buildBootReport({
+      config: makeConfig({ supervisor: { enabled: true } as Config["supervisor"] }),
+      installRoot: process.cwd(),
+      channelType: "web",
+      channelHealthy: true,
+      supervisorWired: true,
+      startupNotices: [],
+    });
+    expect(wired.capabilities.find((c) => c.id === "supervisor")?.status).toBe("active");
+
+    const disabled = buildBootReport({
+      config: makeConfig({ supervisor: { enabled: false } as Config["supervisor"] }),
+      installRoot: process.cwd(),
+      channelType: "web",
+      channelHealthy: true,
+      supervisorWired: false,
+      startupNotices: [],
+    });
+    expect(disabled.capabilities.find((c) => c.id === "supervisor")?.status).toBe("inactive");
   });
 });

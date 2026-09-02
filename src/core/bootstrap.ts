@@ -1274,6 +1274,9 @@ async function bootstrapImpl(
     logger,
     providerManager,
     goalDecomposer,
+    // A supervisor that failed to build must reach the boot report, not just
+    // the log — the same sink the tool registry uses (audited 2026-09-02).
+    onDegraded: (notice) => startupNotices.push(notice),
   });
 
   // Agent Core v2: select the active stage by id via the AGENT_CORE_FLAG_SET ops knob, REJECT-AT-
@@ -2099,6 +2102,7 @@ async function bootstrapImpl(
     backupWired: false,
     stradaMcpRuntime: toolRegistry.getStradaMcpRuntimeStatus(),
     primaryProviderSupportsStreaming: primaryProviderStreaming,
+    supervisorWired: Boolean(supervisorBrain),
     startupNotices,
     moduleUrl: import.meta.url,
   });

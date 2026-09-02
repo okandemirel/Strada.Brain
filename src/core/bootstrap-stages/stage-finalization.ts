@@ -279,6 +279,8 @@ export async function finalizeChannelStartupStage(params: {
   backupWired: boolean;
   stradaMcpRuntime?: ReturnType<ToolRegistry["getStradaMcpRuntimeStatus"]>;
   primaryProviderSupportsStreaming?: boolean;
+  /** Whether a SupervisorBrain was actually constructed this boot. */
+  supervisorWired?: boolean;
   startupNotices: string[];
   moduleUrl: string;
 }): Promise<BootReport> {
@@ -302,6 +304,7 @@ export async function finalizeChannelStartupStage(params: {
     backupWired: params.backupWired,
     stradaMcpRuntime: params.stradaMcpRuntime ?? undefined,
     primaryProviderSupportsStreaming: params.primaryProviderSupportsStreaming,
+    supervisorWired: params.supervisorWired,
     startupNotices: params.startupNotices,
   });
 

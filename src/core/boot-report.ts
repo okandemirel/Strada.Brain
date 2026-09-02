@@ -51,6 +51,8 @@ export interface CapabilitySnapshotOptions {
   backupWired?: boolean;
   stradaMcpRuntime?: StradaMcpRuntimeStatusLike;
   primaryProviderSupportsStreaming?: boolean;
+  /** Whether a SupervisorBrain was actually constructed (undefined = not reported). */
+  supervisorWired?: boolean;
 }
 
 export interface CapabilityHealthSummary {
@@ -126,6 +128,7 @@ export function buildCapabilitySnapshot(options: CapabilitySnapshotOptions): Cap
   const stradaMcpRuntime = options.stradaMcpRuntime;
   const stradaMcpInstalled = stradaMcpRuntime?.installed === true;
   const multiAgentEnabled = options.config.agent.enabled;
+  const supervisorEnabled = Boolean(options.config.supervisor?.enabled);
   const delegationEnabled = multiAgentEnabled && options.config.delegation.enabled;
   const delegationBlockedByMultiAgent = !multiAgentEnabled && options.config.delegation.enabled;
   const unityBridgeStatus: CapabilityStatus = !stradaMcpInstalled
@@ -328,6 +331,34 @@ export function buildCapabilitySnapshot(options: CapabilitySnapshotOptions): Cap
       extendedChannelsConfigured
         ? "At least one non-default channel is configured."
         : "Non-default channels remain outside the protected recovery surface.",
+      false,
+    ),
+    // The goal-DAG planner. A brain that failed to build (goals.db locked,
+    // decomposer missing) used to be invisible here: every stage stayed
+    // "ready" and the summary printed "clean" while every complex task and
+    // campaign milestone silently ran as one direct worker (audited 2026-09-02).
+    // Tier "beta", not "production": the protected-surface health summary
+    // fails on any non-active production capability, and a config-disabled
+    // supervisor is a choice, not a truth gap. A DEGRADED entry still turns
+    // the boot summary from "clean" into a warning that names it.
+    createCapability(
+      "supervisor",
+      "Supervisor Brain (goal DAG planning)",
+      "Execution",
+      "beta",
+      !supervisorEnabled
+        ? "inactive"
+        : options.supervisorWired === false
+          ? "degraded"
+          : "active",
+      options.supervisorWired === undefined ? "declared-only" : "wired",
+      !supervisorEnabled
+        ? "Disabled in current config (STRADA_SUPERVISOR_ENABLED=false)."
+        : options.supervisorWired === false
+          ? "Enabled but NOT constructed this boot — see the startup notices. Complex tasks and campaign milestones run as a single direct worker: no goal DAG, no wave dispatch, no cross-provider node verification."
+          : options.supervisorWired === undefined
+            ? "Enabled in current config; construction was not reported to this snapshot."
+            : "Supervisor Brain constructed; goal decomposition and wave dispatch are online.",
       false,
     ),
     createCapability(

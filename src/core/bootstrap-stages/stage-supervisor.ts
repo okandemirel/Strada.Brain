@@ -180,6 +180,13 @@ export function initializeSupervisorStage(
     /** Live framework API, read from Strada.Core / Modules / MCP themselves.
      *  A getter because the generator is wired asynchronously after this runs. */
     getFrameworkKnowledge?: () => string | null;
+    /**
+     * Called when the supervisor was ENABLED but could not be built. The
+     * notice reaches the boot report and the user's first message; a
+     * logger.warn alone left a boot that lost the whole goal-DAG / wave-
+     * dispatch path reading "Boot report clean" (audited 2026-09-02).
+     */
+    onDegraded?: (notice: string) => void;
   },
   deps: SupervisorStageDeps = {},
 ): SupervisorStageResult {
@@ -188,8 +195,14 @@ export function initializeSupervisorStage(
     return { supervisorBrain: undefined };
   }
 
+  const describeLoss = (cause: string): string =>
+    `Supervisor Brain unavailable: ${cause}. Complex tasks and campaign milestones run as a ` +
+    "single direct worker this session — no goal DAG, no wave dispatch, no cross-provider " +
+    "node verification.";
+
   if (!params.goalDecomposer) {
     params.logger.warn("Supervisor Brain requires GoalDecomposer but none available; skipping");
+    params.onDegraded?.(describeLoss("the GoalDecomposer did not initialize (see the goal-context stage warning)"));
     return { supervisorBrain: undefined };
   }
 
@@ -273,9 +286,9 @@ export function initializeSupervisorStage(
 
     return { supervisorBrain };
   } catch (error) {
-    params.logger.warn("Supervisor Brain initialization failed", {
-      error: error instanceof Error ? error.message : String(error),
-    });
+    const detail = error instanceof Error ? error.message : String(error);
+    params.logger.warn("Supervisor Brain initialization failed", { error: detail });
+    params.onDegraded?.(describeLoss(`initialization failed — ${detail}`));
     return { supervisorBrain: undefined };
   }
 }
