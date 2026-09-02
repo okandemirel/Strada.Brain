@@ -38,6 +38,7 @@ import type {
 } from "./agent-runner.js";
 import type {
   AgentRunSetupInput,
+  BudgetCheckpointParams,
   OrchestratorPort,
   PlanPhaseYield,
   PreparedIteration,
@@ -337,6 +338,15 @@ export class V2AgentRunner implements AgentRunner {
       };
 
       // ─── THE UNIFIED LOOP ───────────────────────────────────────────────────────────────
+      // audited 2026-09-02: the budget-exceeded checkpoint was written only at the top-of-iteration
+      // gate; a budget stop surfacing on the reflection or post-dispatch verdict wrote none. One
+      // writer, called from every budget-exhausted stop, at most once per run.
+      let budgetStopSaved = false;
+      const saveBudgetStop = async (): Promise<void> => {
+        if (budgetStopSaved) return;
+        budgetStopSaved = true;
+        await port.saveBudgetExceededCheckpoint(this.budgetCheckpoint(request, budget, touchedFiles));
+      };
       epochLoop: while (epoch < maxEpochs) {
         const iterLimit = isInteractive(mode)
           ? port.getInteractiveIterationLimit()
@@ -351,7 +361,7 @@ export class V2AgentRunner implements AgentRunner {
             terminalReason = describeCancelReason(gate.reason);
             terminalStatus = gate.finalize === "hard" ? "failed" : "completed";
             if (gate.reason.kind === "budget-exhausted") {
-              await port.saveBudgetExceededCheckpoint(this.budgetCheckpoint(request, budget));
+              await saveBudgetStop();
               // 3.3: on the INTERACTIVE token-budget stop, render the SPECIFIC token_budget_exceeded
               // notice (with {used, budget}) instead of the generic provider_abort — v1 parity. The port
               // renders inline (it owns the cumulative-output counter + session); "budget-exhausted:tokens"
@@ -684,6 +694,7 @@ export class V2AgentRunner implements AgentRunner {
               // Terminators win (rule 2/8) over the reflection extend.
               terminalReason = describeCancelReason(reflectionVerdict.reason);
               terminalStatus = reflectionVerdict.finalize === "hard" ? "failed" : "completed";
+              if (reflectionVerdict.reason.kind === "budget-exhausted") await saveBudgetStop();
               emit({ type: "run.ending", reason: terminalReason });
               break epochLoop;
             }
@@ -713,6 +724,7 @@ export class V2AgentRunner implements AgentRunner {
               // A terminator surfacing on the post-dispatch re-verdict still wins (rule 2 > 8).
               terminalReason = describeCancelReason(postDispatchVerdict.reason);
               terminalStatus = postDispatchVerdict.finalize === "hard" ? "failed" : "completed";
+              if (postDispatchVerdict.reason.kind === "budget-exhausted") await saveBudgetStop();
               emit({ type: "run.ending", reason: terminalReason });
               break epochLoop;
             }
@@ -1088,13 +1100,21 @@ export class V2AgentRunner implements AgentRunner {
   private budgetCheckpoint(
     request: AgentRunRequest,
     budget: Budget,
-  ): { taskId: string; chatId: string; lastUserMessage: string; used: number; budget: number } {
+    touchedFiles: ReadonlySet<string>,
+  ): BudgetCheckpointParams {
+    // audited 2026-09-02: this persisted `used: 0` (a literal) against `budget: remaining` — which
+    // is <= 0 at the very stop that triggers it — and the orchestrator wrote touchedFiles: [] on
+    // top of the rolling checkpoint's real file list. The operator's /resume header then read
+    // "Budget: 0 / 0 tokens used", "Touched files: (none)". Persist what the run actually spent,
+    // the cap it was under, and the files it already touched.
     return {
       taskId: request.taskRunId ?? request.chatId,
       chatId: request.chatId,
+      ...(request.userId ? { userId: request.userId } : {}),
       lastUserMessage: request.prompt,
-      used: 0,
-      budget: budget.remainingOutputTokens(),
+      used: budget.spentOutputTokens(),
+      budget: budget.outputTokenCap(),
+      touchedFiles: [...touchedFiles].slice(0, 100),
     };
   }
 

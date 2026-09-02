@@ -37,6 +37,7 @@ import {
 } from "./v2-agent-runner.js";
 import type {
   AgentRunSetupInput,
+  BudgetCheckpointParams,
   OrchestratorPort,
   PreparedIteration,
   ReflectionDispatchResult,
@@ -431,6 +432,36 @@ describe("V2AgentRunner — clean run (PLANNING → EXECUTING → end_turn)", ()
     // The gateway's own events are present, emitted by the gateway (not re-emitted by the spine).
     expect(types).toContain("model.call.started");
     expect(types).toContain("model.call.finished");
+  });
+
+  /* audited 2026-09-02: the budget-exceeded checkpoint must carry what was spent, the cap, and the files touched */
+  it("budget-exhausted stop persists the real spend, the cap, and the touched files (not used:0 / budget:<=0 / [])", async () => {
+    // cap 12: plan(5) → 7 left; tool turn(5) → 2 left, tools run and touch a.cs; tool turn(5) → -3;
+    // the next gate trips budget-exhausted:tokens.
+    const handles = mkPlane({ outputTokenCap: 12 });
+    const toolTurn = mkResponse({
+      text: "editing",
+      stopReason: "tool_use",
+      toolCalls: [{ id: "tc-1", name: "edit_file", input: { path: "a.cs" } }],
+      usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+    });
+    const gateway = new ModelGateway(scriptedStream([mkResponse({ text: "the plan" }), toolTurn, toolTurn]));
+    const port = mkPort(mkProvider(), {
+      toolResults: [{ toolName: "edit_file", toolCallId: "tc-1", success: true, touchedFiles: ["a.cs"] }],
+    });
+    const saveSpy = vi.fn(async () => {});
+    port.saveBudgetExceededCheckpoint = saveSpy;
+    const runner = mkRunner(handles.plane, gateway, port, handles.clock);
+
+    const result = await drive(handles.clock, runner.run(mkRequest({ taskRunId: "task-42", userId: "u-1" }), mkIO("worker")));
+
+    expect(result.reason).toBe("budget-exhausted:tokens");
+    expect(saveSpy).toHaveBeenCalledTimes(1);
+    const cp = saveSpy.mock.calls[0]![0] as BudgetCheckpointParams;
+    expect(cp.used).toBe(15); // three 5-token turns actually spent
+    expect(cp.budget).toBe(12); // the cap, not the (negative) remainder
+    expect(cp.touchedFiles).toContain("a.cs");
+    expect(cp.userId).toBe("u-1");
   });
 
   it("the spine never re-emits model.call.* (exactly one finished PER call, terminates without spinning)", async () => {

@@ -2529,18 +2529,25 @@ export class Orchestrator {
   private async saveBudgetExceededCheckpoint(params: {
     taskId: string;
     chatId: string;
+    userId?: string;
     lastUserMessage: string;
     used: number;
     budget: number;
+    touchedFiles?: readonly string[];
   }): Promise<void> {
+    // audited 2026-09-02: wrote touchedFiles: [] (clobbering the rolling checkpoint's real list
+    // under the same task_id) and a budgetState the runner filled with used:0 / budget:remaining.
+    // The runner now supplies the real values; a non-finite cap (a cost stop with no token cap)
+    // persists no budgetState rather than a number that is not a token budget.
     await this.persistCheckpoint({
       taskId: params.taskId,
       chatId: params.chatId,
+      ...(params.userId ? { userId: params.userId } : {}),
       timestamp: Date.now(),
       stage: "budget_exceeded",
       lastUserMessage: params.lastUserMessage,
-      touchedFiles: [],
-      budgetState: { used: params.used, budget: params.budget },
+      touchedFiles: [...(params.touchedFiles ?? [])].slice(0, 100),
+      ...(Number.isFinite(params.budget) ? { budgetState: { used: params.used, budget: params.budget } } : {}),
     });
   }
 

@@ -186,9 +186,14 @@ export interface RecordExecutionTraceParams {
 export interface BudgetCheckpointParams {
   readonly taskId: string;
   readonly chatId: string;
+  readonly userId?: string;
   readonly lastUserMessage: string;
+  /** OUTPUT tokens actually spent by the run at the stop. */
   readonly used: number;
+  /** The OUTPUT-token cap the run was under (Infinity when it stopped on cost, not tokens). */
   readonly budget: number;
+  /** Files the run already created/modified — the retry must not start cold. */
+  readonly touchedFiles?: readonly string[];
 }
 
 /** Rolling per-epoch crash checkpoint (background continue path only). */

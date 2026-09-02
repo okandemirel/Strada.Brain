@@ -36,6 +36,10 @@ export interface Budget {
    * next tick. Returns true iff the cap actually grew.
    */
   raiseOutputCap(newCap: number): boolean;
+  /** The current OUTPUT-token cap (Infinity when the run has no token cap). */
+  outputTokenCap(): number;
+  /** OUTPUT tokens debited so far — the "used" a budget-stop checkpoint must persist. */
+  spentOutputTokens(): number;
 }
 
 class BudgetImpl implements Budget {
@@ -44,6 +48,8 @@ class BudgetImpl implements Budget {
   private outputCap: number;
   private costRemaining: number;
   private inputSeen = 0;
+  /** Tracked separately from cap-minus-remaining so an Infinity cap still yields a finite spend. */
+  private outputSpent = 0;
 
   constructor(outputCap: number, costCapUsd: number) {
     this.outputRemaining = outputCap;
@@ -66,7 +72,16 @@ class BudgetImpl implements Budget {
   debit(usage: TokenUsage): void {
     this.inputSeen += Math.max(0, usage.inputTokens);
     this.outputRemaining -= Math.max(0, usage.outputTokens);
+    this.outputSpent += Math.max(0, usage.outputTokens);
     this.costRemaining -= Math.max(0, usage.costUsd ?? 0);
+  }
+
+  outputTokenCap(): number {
+    return this.outputCap;
+  }
+
+  spentOutputTokens(): number {
+    return this.outputSpent;
   }
 
   raiseOutputCap(newCap: number): boolean {
