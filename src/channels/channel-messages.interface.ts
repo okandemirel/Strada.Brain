@@ -4,26 +4,52 @@
  * Extracted from the main channel interface for better organization.
  */
 
+import { getLoggerSafe } from "../utils/logger.js";
+
 /**
  * Supported channel types
  */
 export type ChannelType = "telegram" | "cli" | "web" | "discord" | "slack" | "teams";
 
-/** Hard cap for inbound user text across all channels. */
+/** Hard cap for inbound user text across all channels (kept body + marker). */
 export const MAX_INCOMING_TEXT_LENGTH = 16_000;
 
+/** Room reserved inside the cap for the in-band truncation marker. */
+const INBOUND_TRUNCATION_MARKER_RESERVE = 200;
+
+/** How much of an over-cap input survives; the rest of the cap holds the marker. */
+export const INBOUND_TEXT_KEEP_LENGTH = MAX_INCOMING_TEXT_LENGTH - INBOUND_TRUNCATION_MARKER_RESERVE;
+
+/**
+ * Cap inbound text. When the cap bites, the result is SELF-DISCLOSING: the
+ * kept body is followed by a marker naming how many characters were dropped,
+ * and a warn log records it. Previously the tail was dropped with no marker,
+ * no log and no reply — a >16k web/Slack/Teams paste (spec, log, transcript)
+ * reached the agent shortened while the ack implied it landed whole
+ * (audited 2026-09-02).
+ */
 export function limitIncomingText(text: string): string {
   if (text.length <= MAX_INCOMING_TEXT_LENGTH) {
     return text;
   }
-  let out = text.slice(0, MAX_INCOMING_TEXT_LENGTH);
+  let out = text.slice(0, INBOUND_TEXT_KEEP_LENGTH);
   // Avoid splitting a surrogate pair at the cap: if the last code unit is a
   // lone high surrogate (0xD800-0xDBFF), its low surrogate was cut off, so drop it.
   const last = out.charCodeAt(out.length - 1);
   if (last >= 0xd800 && last <= 0xdbff) {
     out = out.slice(0, -1);
   }
-  return out;
+  const dropped = text.length - out.length;
+  getLoggerSafe().warn("Inbound text truncated at the channel cap", {
+    originalChars: text.length,
+    keptChars: out.length,
+    droppedChars: dropped,
+    cap: MAX_INCOMING_TEXT_LENGTH,
+  });
+  return (
+    `${out}\n\n[TRUNCATED: ${dropped} characters dropped by the ${MAX_INCOMING_TEXT_LENGTH}-char inbound limit; ` +
+    "resend the remainder or attach it as a file]"
+  );
 }
 
 /**

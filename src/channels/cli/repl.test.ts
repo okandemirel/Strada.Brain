@@ -200,11 +200,11 @@ describe("CLIChannel", () => {
 
     await handlers.get("line")?.("a".repeat(MAX_INCOMING_TEXT_LENGTH + 50));
 
-    expect(handler).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: "a".repeat(MAX_INCOMING_TEXT_LENGTH),
-      })
-    );
+    const routed = handler.mock.calls[0]?.[0] as { text: string };
+    expect(routed.text.length).toBeLessThanOrEqual(MAX_INCOMING_TEXT_LENGTH);
+    // The cap must be self-disclosing: the routed text carries the marker (audited 2026-09-02).
+    expect(routed.text).toContain("[TRUNCATED: ");
+    expect(routed.text).toContain(`${MAX_INCOMING_TEXT_LENGTH}-char inbound limit`);
   });
 
   it("handles exit command", async () => {

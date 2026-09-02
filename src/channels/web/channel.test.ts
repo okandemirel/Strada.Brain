@@ -681,11 +681,11 @@ describe("WebChannel inbound message limits", () => {
 
     await Promise.resolve();
 
-    expect(handler).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: "b".repeat(MAX_INCOMING_TEXT_LENGTH),
-      }),
-    );
+    const routed = handler.mock.calls[0]?.[0] as { text: string };
+    expect(routed.text.length).toBeLessThanOrEqual(MAX_INCOMING_TEXT_LENGTH);
+    expect(routed.text.startsWith("bbbb")).toBe(true);
+    // The cap must be self-disclosing: the routed text carries the marker (audited 2026-09-02).
+    expect(routed.text).toContain("[TRUNCATED: ");
   });
 
   it("accepts codec-qualified recorder audio and normalizes the MIME type", async () => {
