@@ -28,7 +28,15 @@ export function generateGoalNodeId(): GoalNodeId {
 /** Lifecycle status of a goal node */
 export type GoalStatus = "pending" | "executing" | "completed" | "failed" | "skipped";
 
-/** Review pipeline status (additive; does not replace GoalStatus) */
+/**
+ * Monitor-mode review column state (additive; does not replace GoalStatus).
+ *
+ * audited 2026-09-02: this is HUMAN-driven display state. The only writers of
+ * a value other than "none" are a person dragging a Kanban card or approving
+ * a gate in the web portal (dashboard/workspace-runtime-bridge.ts); no backend
+ * path advances it and nothing gates completion on it. Machine verification of
+ * a node is the supervisor's cross-provider verifier, which acts on `status`.
+ */
 export type ReviewStatus = "none" | "spec_review" | "quality_review" | "review_passed" | "review_stuck";
 
 // =============================================================================
@@ -230,48 +238,10 @@ export function parseLLMOutput(text: string): LLMDecompositionOutput | null {
   }
 }
 
-// =============================================================================
-// REVIEW PIPELINE HELPERS
-// =============================================================================
-
-/**
- * Check whether a goal node is truly done (terminal state).
- * A completed node is only truly done if it has passed review.
- * Failed and skipped nodes are terminal without review.
- * Pending and executing nodes are never done.
- */
-export function isNodeTrulyDone(node: GoalNode): boolean {
-  if (node.status === "completed") {
-    return (node.reviewStatus ?? "none") === "review_passed";
-  }
-  return node.status === "failed" || node.status === "skipped";
-}
-
-/**
- * Compute the next review status given the current status, whether the
- * review step passed, the current iteration count, and the maximum allowed.
- *
- * Transitions:
- *   none          -> spec_review
- *   spec_review   -> quality_review (passed) | spec_review (retry) | review_stuck (max)
- *   quality_review -> review_passed (passed) | quality_review (retry) | review_stuck (max)
- *   review_passed / review_stuck -> unchanged (terminal)
- */
-export function getNextReviewStatus(
-  current: ReviewStatus,
-  passed: boolean,
-  iteration: number,
-  maxIterations: number,
-): ReviewStatus {
-  if (!passed && iteration >= maxIterations) return "review_stuck";
-  switch (current) {
-    case "none":
-      return "spec_review";
-    case "spec_review":
-      return passed ? "quality_review" : "spec_review";
-    case "quality_review":
-      return passed ? "review_passed" : "quality_review";
-    default:
-      return current;
-  }
-}
+// audited 2026-09-02: the "review pipeline helpers" that lived here
+// (`isNodeTrulyDone`, `getNextReviewStatus`) had no production caller — the
+// planned GoalExecutor enforcement was never built and that file is gone. A
+// gate nothing calls reads as enforcement, so the helpers were removed rather
+// than left advertising a check that never ran. Node verification is done by
+// the supervisor's cross-provider verifier (supervisor/result-aggregator.ts),
+// which rewrites `status`, not `reviewStatus`.

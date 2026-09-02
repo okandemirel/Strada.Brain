@@ -88,11 +88,20 @@ export async function installSkillFromRepo(
     return { success: false, error: `Git clone failed: ${result.stderr || result.stdout}` };
   }
 
-  // Validate SKILL.md exists
+  // Validate SKILL.md exists. audited 2026-09-02: this catch used to be a bare
+  // "warn but continue" comment with no warning anywhere — the clone was
+  // recorded as enabled and reported "installed", yet discoverSkills requires
+  // SKILL.md, so it could never load, never appeared in `skill list`, and a
+  // retry said "already installed". A repo without SKILL.md is not a skill:
+  // remove the clone and say so.
   try {
     await stat(join(targetDir, "SKILL.md"));
   } catch {
-    // Non-fatal — warn but continue
+    try { await rm(targetDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    return {
+      success: false,
+      error: `Cloned repository has no SKILL.md at its root — not a skill. Nothing was installed or enabled (${repoUrl}).`,
+    };
   }
 
   // Pin the cloned commit — the audit anchor for every future update/drift check.

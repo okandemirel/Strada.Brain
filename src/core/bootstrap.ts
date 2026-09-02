@@ -1161,6 +1161,10 @@ async function bootstrapImpl(
       }
     },
   );
+  // audited 2026-09-02: `requires.config` gates resolve dot-paths against the
+  // app Config; without this the gate could never be measured and every such
+  // skill was gated with a reason nothing had checked.
+  skillManager.setAppConfig(config as unknown as Record<string, unknown>);
   try {
     await skillManager.loadAll(config.unityProjectPath);
   } catch (skillError) {

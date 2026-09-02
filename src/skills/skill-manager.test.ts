@@ -166,6 +166,58 @@ describe("SkillManager", () => {
       expect(mockLoadSkillTools).not.toHaveBeenCalled();
     });
 
+    // audited 2026-09-02: loadAll never passed an app config to checkGates, so
+    // every `requires.config` skill was gated with a reason nobody measured.
+    it("threads the app config given via setAppConfig into every gate check", async () => {
+      mockDiscoverSkills.mockResolvedValue([
+        makeSkill("cfg-skill", {
+          manifest: {
+            name: "cfg-skill",
+            version: "1.0.0",
+            description: "needs a config key",
+            requires: { config: ["unityProjectPath"] },
+          },
+        }),
+      ]);
+      const appConfig = { unityProjectPath: "/proj" };
+
+      const mgr = new SkillManager();
+      mgr.setAppConfig(appConfig);
+      await mgr.loadAll();
+
+      expect(mockCheckGates).toHaveBeenCalledTimes(1);
+      const call = (mockCheckGates as unknown as { mock: { calls: unknown[][] } }).mock.calls[0]!;
+      expect(call[0]).toEqual({ config: ["unityProjectPath"] });
+      expect(call[1]).toBe(appConfig);
+    });
+
+    it("surfaces an unevaluated gate on the active entry instead of hiding it", async () => {
+      mockDiscoverSkills.mockResolvedValue([
+        makeSkill("cfg-skill", {
+          manifest: {
+            name: "cfg-skill",
+            version: "1.0.0",
+            description: "needs a config key",
+            requires: { config: ["llm.apiKey"] },
+          },
+        }),
+      ]);
+      mockCheckGates.mockResolvedValue({
+        passed: true,
+        reasons: [],
+        unevaluated: ["Config gate not evaluated (no config object supplied): llm.apiKey"],
+      });
+
+      const mgr = new SkillManager();
+      const entries = await mgr.loadAll();
+
+      expect(entries).toHaveLength(1);
+      expect(entries[0]!.status).toBe("active");
+      expect(entries[0]!.gateReason).toContain("not evaluated");
+      expect(entries[0]!.gateReason).toContain("llm.apiKey");
+      expect(mockLoadSkillTools).toHaveBeenCalledTimes(1);
+    });
+
     it("should mark error if loadSkillTools throws", async () => {
       mockDiscoverSkills.mockResolvedValue([makeSkill("broken")]);
       mockLoadSkillTools.mockRejectedValue(new Error("Module not found"));

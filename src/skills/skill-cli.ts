@@ -166,10 +166,14 @@ export function registerSkillCommands(program: Command): void {
         if (config.entries[name]?.enabled === false) {
           status = "disabled";
         } else {
+          // The CLI has no app Config to resolve `requires.config` against, so
+          // that gate comes back unevaluated here — shown, not hidden.
           const gate = await checkGates(skill.manifest.requires);
           if (!gate.passed) {
             status = "gated";
             gateReason = gate.reasons.join("; ");
+          } else if (gate.unevaluated?.length) {
+            gateReason = gate.unevaluated.join("; ");
           }
         }
 
@@ -315,11 +319,18 @@ export function registerSkillCommands(program: Command): void {
       console.log(`Tier: ${skill.tier}`);
       console.log(`Path: ${skill.path}`);
       console.log(`Enabled: ${enabled}`);
-      console.log(`Gates: ${gate.passed ? "passed" : "FAILED"}`);
+      const unevaluatedCount = gate.unevaluated?.length ?? 0;
+      console.log(
+        `Gates: ${gate.passed ? "passed" : "FAILED"}` +
+        (unevaluatedCount > 0 ? ` (${unevaluatedCount} not evaluated)` : ""),
+      );
       if (!gate.passed) {
         for (const reason of gate.reasons) {
           console.log(`  - ${reason}`);
         }
+      }
+      for (const note of gate.unevaluated ?? []) {
+        console.log(`  - ${note}`);
       }
       if (skill.manifest.capabilities?.length) {
         console.log(`Capabilities: ${skill.manifest.capabilities.join(", ")}`);

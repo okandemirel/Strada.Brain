@@ -288,9 +288,19 @@ export class GoalDecomposer {
       const flaggedNodes = llmOutput.nodes.filter(
         (n) => n.needsFurtherDecomposition,
       );
-      for (const flagged of flaggedNodes) {
-        // Enforce total node cap — stop expanding if we're at/near the limit
-        if (allNodes.size >= maxTotalNodes) break;
+      for (const [flaggedIndex, flagged] of flaggedNodes.entries()) {
+        // Enforce total node cap — stop expanding if we're at/near the limit.
+        // audited 2026-09-02: this break was silent; say which sub-goals the
+        // cap left unexpanded so the plan's shape is never a mystery.
+        if (allNodes.size >= maxTotalNodes) {
+          const { getLoggerSafe } = await import("../utils/logger.js");
+          getLoggerSafe().warn("Goal decomposition: flagged sub-goals left unexpanded — node cap reached", {
+            unexpandedTasks: flaggedNodes.slice(flaggedIndex).map((n) => n.task),
+            nodeCount: allNodes.size,
+            maxTotalNodes,
+          });
+          break;
+        }
 
         // Find the GoalNode we created for this flagged LLM node
         const parentNode = depth1Nodes.find(
@@ -327,8 +337,24 @@ export class GoalDecomposer {
             parentNode.id,
             parentNode.depth,
           );
+          // audited 2026-09-02: this used to write children until the cap and
+          // silently drop the rest. buildNodesFromLLM remaps dependsOn over ALL
+          // children, so a survivor could depend on a sibling that never entered
+          // the tree — and the dispatcher treats an unknown dep as satisfied.
+          // Expansion is all-or-nothing: if the children do not fit, the flagged
+          // parent stays a single coherent schedulable node and we say so.
+          const slotsLeft = maxTotalNodes - allNodes.size;
+          if (subNodes.length > slotsLeft) {
+            const { getLoggerSafe } = await import("../utils/logger.js");
+            getLoggerSafe().warn("Goal decomposition: sub-goal expansion skipped — node cap reached", {
+              parentTask: flagged.task,
+              wanted: subNodes.length,
+              remainingSlots: slotsLeft,
+              maxTotalNodes,
+            });
+            continue;
+          }
           for (const subNode of subNodes) {
-            if (allNodes.size >= maxTotalNodes) break;
             allNodes.set(subNode.id, subNode);
           }
         }

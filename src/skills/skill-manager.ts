@@ -31,6 +31,18 @@ export class SkillManager {
   private toolRegistrar?: (tools: ITool[]) => void;
   /** Callback to remove tools by name from the app-level ToolRegistry. */
   private toolRemover?: (toolNames: string[]) => void;
+  /** App-level config that `requires.config` dot-paths are resolved against. */
+  private appConfig?: Record<string, unknown>;
+
+  /**
+   * Provide the app-level Config so `requires.config` gates can actually be
+   * measured. audited 2026-09-02: before this existed, no caller could supply
+   * a config, so every skill declaring `requires.config` was gated forever
+   * with "Required config key missing" — a verdict nothing had checked.
+   */
+  setAppConfig(config: Record<string, unknown> | undefined): void {
+    this.appConfig = config;
+  }
 
   /**
    * Wire the SkillManager to the application's ToolRegistry.
@@ -77,11 +89,11 @@ export class SkillManager {
           continue;
         }
 
-        // Gate check — pass undefined for the config param: SkillConfig holds
-        // per-skill enabled/env entries, not the app-level config key paths
-        // that checkGates expects.  Skill authors who need config-key gating
-        // must rely on the app-level Config object passed at a higher layer.
-        const gateResult = await checkGates(skill.manifest.requires);
+        // Gate check against the app-level Config (via setAppConfig) — NOT the
+        // per-skill SkillConfig, which holds enabled/env entries, not the key
+        // paths checkGates resolves. When no app config was provided the config
+        // gate is reported unevaluated, not failed (see skill-gating.ts).
+        const gateResult = await checkGates(skill.manifest.requires, this.appConfig);
         if (!gateResult.passed) {
           const entry: SkillEntry = {
             manifest: skill.manifest,
@@ -126,11 +138,20 @@ export class SkillManager {
         const plugin = createSkillPlugin(skill, toolsCaptured, registrar);
         this.registry.register(plugin);
 
+        // A gate that could not be measured must stay visible on the active
+        // entry — a skipped check must never read like a passed one.
+        const unevaluated = gateResult.unevaluated?.length
+          ? gateResult.unevaluated.join("; ")
+          : undefined;
+        if (unevaluated) {
+          logger.info(`Skill "${name}" activated with an unevaluated gate: ${unevaluated}`);
+        }
         const entry: SkillEntry = {
           manifest: skill.manifest,
           status: "active",
           tier: skill.tier,
           path: skill.path,
+          ...(unevaluated ? { gateReason: unevaluated } : {}),
           ...(skill.body ? { body: skill.body } : {}),
         };
         this.entries.set(name, entry);
@@ -212,7 +233,7 @@ export class SkillManager {
     const requires = data["requires"] && typeof data["requires"] === "object"
       ? data["requires"] as Parameters<typeof checkGates>[0]
       : undefined;
-    const gateResult = await checkGates(requires);
+    const gateResult = await checkGates(requires, this.appConfig);
     if (!gateResult.passed) {
       const entry: SkillEntry = {
         manifest: manifest as SkillEntry["manifest"],
@@ -251,12 +272,15 @@ export class SkillManager {
 
     const trimmedBody = bodyContent?.trim();
     const status: SkillEntry["status"] = (tools.length > 0 || trimmedBody) ? "active" : "incomplete";
+    const unevaluatedGate = gateResult.unevaluated?.length ? gateResult.unevaluated.join("; ") : undefined;
     const entry: SkillEntry = {
       manifest: manifest as SkillEntry["manifest"],
       status,
       tier: "workspace",
       path: skillPath,
-      ...(tools.length === 0 && !trimmedBody ? { gateReason: "No entry point (index.ts/index.js) — skill has no tools or knowledge" } : {}),
+      ...(tools.length === 0 && !trimmedBody
+        ? { gateReason: "No entry point (index.ts/index.js) — skill has no tools or knowledge" }
+        : unevaluatedGate ? { gateReason: unevaluatedGate } : {}),
       ...(trimmedBody ? { body: trimmedBody } : {}),
     };
     this.entries.set(name, entry);

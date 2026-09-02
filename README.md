@@ -295,7 +295,7 @@ The built-in web portal (`http://localhost:3000`) provides a full AI workspace w
 | Mode | Shortcut | Description |
 |------|----------|-------------|
 | **Chat** | `Alt+1` | Conversational interface with file attachments, voice input, and markdown rendering |
-| **Monitor** | `Alt+2` | Real-time DAG visualization of goal decomposition, task statuses, review pipeline, and intervention controls |
+| **Monitor** | `Alt+2` | Real-time DAG visualization of goal decomposition, task statuses, a human-driven Kanban review column (cards move to review/done by hand — the backend does not gate completion on it), and intervention controls |
 | **Canvas** | `Alt+3` | Visual workspace with tldraw — 9 custom shapes (CodeBlock, UMLClass, APIEndpoint, DataFlow, etc.) auto-generated from agent output |
 | **Code** | `Alt+4` | IDE-like view with Monaco editor (multi-tab, syntax highlighting), file tree explorer, and terminal output |
 

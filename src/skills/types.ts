@@ -34,7 +34,11 @@ export interface SkillEntry {
   status: SkillStatus;
   tier: "workspace" | "managed" | "bundled" | "extra";
   path: string;
-  /** Present when status is "gated" — explains why the skill cannot activate. */
+  /**
+   * Present when status is "gated"/"error" (why the skill cannot activate), or
+   * on an "active" entry when a declared gate could not be evaluated — the
+   * skill runs, but that requirement was never measured.
+   */
   gateReason?: string;
   /** Markdown body content from SKILL.md — knowledge/instructions for the agent. */
   body?: string;

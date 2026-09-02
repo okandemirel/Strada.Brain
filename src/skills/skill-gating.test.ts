@@ -136,12 +136,27 @@ describe("checkGates", () => {
     expect(result.reasons[0]).toContain("llm.apiKey");
   });
 
-  it("fails when config object is undefined", async () => {
-    const requires: SkillRequirements = { config: ["llm.apiKey"] };
+  // audited 2026-09-02: with no config object the gate used to FAIL with
+  // "Required config key missing" — a measurement that never happened. The
+  // unevaluable case is now reported as exactly that, not as a failure.
+  it("reports the config gate as NOT EVALUATED (not failed) when no config object is supplied", async () => {
+    const requires: SkillRequirements = { config: ["llm.apiKey", "vault.enabled"] };
     const result = await checkGates(requires);
 
-    expect(result.passed).toBe(false);
-    expect(result.reasons[0]).toContain("llm.apiKey");
+    expect(result.passed).toBe(true);
+    expect(result.reasons).toEqual([]);
+    expect(result.unevaluated).toHaveLength(1);
+    expect(result.unevaluated![0]).toContain("not evaluated");
+    expect(result.unevaluated![0]).toContain("llm.apiKey");
+    expect(result.unevaluated![0]).toContain("vault.enabled");
+    expect(result.unevaluated![0]).not.toContain("missing");
+  });
+
+  it("does not report anything unevaluated when a config object was supplied", async () => {
+    const requires: SkillRequirements = { config: ["llm.apiKey"] };
+    const result = await checkGates(requires, { llm: { apiKey: "sk-1" } });
+    expect(result.passed).toBe(true);
+    expect(result.unevaluated ?? []).toEqual([]);
   });
 
   it("handles deeply nested config paths", async () => {
