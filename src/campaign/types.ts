@@ -127,6 +127,13 @@ export interface Campaign {
   draftTaskId?: string;
   /** Number of GDD draft rounds (feedback loops at the approval gate). */
   draftAttempts: number;
+  /**
+   * When the draft path first deferred to the executor's pending keep-alive
+   * retry for the current settle cycle (epoch ms) — the draft counterpart of
+   * `CampaignMilestone.reconcileDeferredSince`. Time-bounded deferral;
+   * cleared when an outcome is finally judged or a new draft is issued.
+   */
+  draftDeferredSince?: number;
   milestones: CampaignMilestone[];
   /** Index into milestones of the current/next work item. */
   currentMilestone: number;
@@ -138,6 +145,14 @@ export interface Campaign {
    * Armed when the stop was a full provider outage; cleared on any revive.
    */
   autoReviveAt?: number;
+  /**
+   * True only once the delivery report has actually been handed to the
+   * messenger without error. A `done` campaign whose flag is unset lost its
+   * report to a crash or a messenger failure and is re-reported at boot —
+   * done campaigns are not active, not revivable and not queryable, so
+   * nothing else would ever notice (audited 2026-09-02).
+   */
+  deliveryReported?: boolean;
   /**
    * Set when the GDD-coverage audit did NOT run clean (skipped, budget spent,
    * or errored). Rendered in the delivery report so an unaudited delivery

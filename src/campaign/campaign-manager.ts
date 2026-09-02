@@ -290,10 +290,17 @@ export class CampaignManager {
 
     const milestone = campaign.milestones[campaign.currentMilestone];
     if (!milestone) {
-      // Failed before/during planning — replan from the GDD.
-      campaign.state = "planning";
       campaign.lastError = undefined;
       campaign.autoReviveAt = undefined;
+      if (this.isIdeaModeBeforeGdd(campaign)) {
+        // Idea mode, no GDD yet: the draft is the work, not the ladder.
+        this.persist(campaign);
+        await this.tell(campaign, "Reviving the campaign — rewriting the GDD from your idea.");
+        this.submitDraft(campaign);
+        return true;
+      }
+      // Failed before/during planning — replan from the GDD.
+      campaign.state = "planning";
       this.persist(campaign);
       await this.tell(campaign, "Reviving the campaign — replanning the milestone ladder from the GDD.");
       void this.planAndLaunch(campaign.id);
@@ -369,12 +376,23 @@ export class CampaignManager {
           }
           const milestone = fresh.milestones[fresh.currentMilestone];
           if (!milestone) {
+            fresh.lastError = undefined;
+            fresh.autoReviveAt = undefined;
+            if (this.isIdeaModeBeforeGdd(fresh)) {
+              // Parked while drafting (idea mode): re-issue the DRAFT. Planning
+              // here would adopt an unrelated docs GDD (audited 2026-09-02).
+              this.persist(fresh);
+              getLoggerSafe().info("Campaign self-revival — redrafting the GDD from the idea", {
+                id: fresh.id,
+              });
+              await this.tell(fresh, "Provider chain recovered — rewriting the GDD from your idea.");
+              this.submitDraft(fresh);
+              return;
+            }
             // Failed before the ladder existed (planning outage): replan from
             // the GDD, as tryHandleRevive does. Returning here silently was
             // how an armed pre-ladder revival no-oped (audited 2026-09-02).
             fresh.state = "planning";
-            fresh.lastError = undefined;
-            fresh.autoReviveAt = undefined;
             this.persist(fresh);
             getLoggerSafe().info("Campaign self-revival — provider chain recovered, replanning the ladder", {
               id: fresh.id,
@@ -409,6 +427,21 @@ export class CampaignManager {
           id: campaign.id,
           error: err instanceof Error ? err.message : String(err),
         });
+      }
+    }
+    // A delivered game whose report never reached the chat is announced now.
+    // The report is rebuilt from the persisted evidence (the same builder the
+    // live path uses), and the flag is set only when it actually lands, so a
+    // still-broken messenger leaves it queued for the next boot instead of
+    // marking a report that nobody received (audited 2026-09-02).
+    for (const campaign of this.storage.listUnreportedDeliveries()) {
+      getLoggerSafe().warn("Delivery report was never sent — re-sending after restart", {
+        id: campaign.id,
+        deliveredAt: campaign.updatedAt,
+      });
+      if (await this.tell(campaign, this.buildDeliveryReport(campaign))) {
+        campaign.deliveryReported = true;
+        this.persist(campaign);
       }
     }
     // Self-revival appointments are setTimeout-backed and die with the
@@ -472,6 +505,30 @@ export class CampaignManager {
             });
             return;
           }
+        } else if (task && campaign.state === "executing" && !ACTIVE_STATUSES.has(task.status)) {
+          // A terminal NON-completed tip (failed/blocked/cancelled) found at
+          // boot is an outcome, not an interruption. Audited 2026-09-02: it
+          // fell through to the resubmission below with countAttempt:false,
+          // which never consults the time box — so across repeated restarts a
+          // sprint was relaunched forever with attempts frozen. Judge it on
+          // the same path a live settle takes: time box, outage exemption
+          // (an outage still charges nothing), and otherwise a real attempt.
+          const milestone = campaign.milestones[campaign.currentMilestone];
+          if (milestone) {
+            getLoggerSafe().info("Campaign judging a terminal tip found at boot", {
+              id: campaign.id,
+              milestone: milestone.id,
+              status: task.status,
+            });
+            await this.onMilestoneOutcome(
+              campaign,
+              milestone,
+              task.status,
+              task.error ?? task.result ?? "",
+              { countAttempt: true },
+            );
+            return;
+          }
         }
 
         // The process died mid-task; the settlement events will never come.
@@ -488,6 +545,29 @@ export class CampaignManager {
         return;
       }
       case "planning":
+        // The ladder is persisted BEFORE the announcement round-trip that
+        // precedes the flip to `executing`, so a restart in that window finds
+        // planning + a complete ladder. Audited 2026-09-02: it replanned from
+        // scratch — a second billable planning pass that can also produce a
+        // different ladder from the one already announced. Resume the work
+        // item instead; this milestone has never been submitted, so its first
+        // attempt is charged exactly as a fresh launch charges it.
+        if (this.isIdeaModeBeforeGdd(campaign)) {
+          getLoggerSafe().info("Campaign resuming the GDD draft instead of planning", {
+            id: campaign.id,
+          });
+          this.submitDraft(campaign);
+          return;
+        }
+        if (campaign.milestones.length > 0 && campaign.milestones[campaign.currentMilestone]) {
+          getLoggerSafe().info("Campaign resuming a persisted ladder instead of replanning", {
+            id: campaign.id,
+            milestones: campaign.milestones.length,
+            currentMilestone: campaign.currentMilestone,
+          });
+          this.submitCurrentMilestone(campaign);
+          return;
+        }
         void this.planAndLaunch(campaign.id);
         return;
       case "awaiting-approval":
@@ -502,6 +582,18 @@ export class CampaignManager {
   // ===========================================================================
   // INTERNAL — transitions
   // ===========================================================================
+
+  /**
+   * Idea mode with no design document yet: the work to resume is the DRAFT,
+   * not planning. Audited 2026-09-02 — every pre-ladder resume (restart,
+   * "kampanya devam", outage self-revival) funnelled into planAndLaunch,
+   * which adopts the NEWEST docs/*GDD*.md by mtime. On a repo that already
+   * holds another game's GDD that plans a ladder for the wrong game and drops
+   * the idea silently.
+   */
+  private isIdeaModeBeforeGdd(campaign: Campaign): boolean {
+    return !!campaign.ideaText && !campaign.gddPath && !campaign.gddText;
+  }
 
   private newCampaign(
     ctx: CampaignContext,
@@ -531,6 +623,10 @@ export class CampaignManager {
 
   private submitDraft(campaign: Campaign, revisionNote?: string): void {
     campaign.state = "drafting-gdd";
+    // A new draft attempt gets a new deferral clock, as a new milestone
+    // attempt does (audited 2026-09-02) — otherwise the next reap inherits a
+    // spent bound and is judged instead of deferred.
+    campaign.draftDeferredSince = undefined;
     const task = this.taskManager.submit(
       campaign.chatId,
       campaign.channelType,
@@ -909,8 +1005,23 @@ export class CampaignManager {
       const tipUpdatedAt = (tip as { updatedAt?: number } | null)?.updatedAt;
       const promiseDead =
         tipUpdatedAt !== undefined && Date.now() > tipUpdatedAt + promisedMs + 5 * 60_000;
-      if (!promiseDead) {
+      // Deferral is TIME-BOUNDED here exactly as on the milestone path
+      // (reconcileDeferredSince). Audited 2026-09-02: this path had no clock,
+      // so a tip whose updatedAt kept refreshing never read "dead" and the
+      // draft re-deferred every horizon forever — no draft, no failure, no
+      // message, and the one-campaign-per-project slot held.
+      const deferSince = campaign.draftDeferredSince ?? Date.now();
+      const boundSpent = Date.now() - deferSince >= 24 * 60 * 60_000;
+      if (boundSpent) {
+        getLoggerSafe().warn("GDD draft deferral passed its 24h bound — judging the outcome", {
+          id: campaign.id,
+          deferredForMs: Date.now() - deferSince,
+        });
+      }
+      if (!promiseDead && !boundSpent) {
         const waitMs = Math.min(Math.max(promisedMs + 60_000, 60_000), 12 * 60 * 60_000);
+        campaign.draftDeferredSince = deferSince;
+        this.persist(campaign);
         getLoggerSafe().info("Campaign deferring GDD draft judgement to the executor's pending retry", {
           id: campaign.id,
           recheckInMs: waitMs,
@@ -922,6 +1033,34 @@ export class CampaignManager {
         return;
       }
     }
+    campaign.draftDeferredSince = undefined;
+
+    // A measured full outage is a scheduled wait, not a draft failure: park
+    // with a self-revival appointment at the chain's recovery horizon, as the
+    // planning and milestone paths do. Audited 2026-09-02: this path answered
+    // the same wall by resubmitting the draft uncharged, so a fresh LLM task
+    // was issued into a chain with no available member every ~11 minutes (the
+    // deferral re-check horizon) with no park and no appointment.
+    const outageWaitMs = allProvidersCoolingDownMs();
+    if (/provider|cooldown|quota|rate.?limit/i.test(output) && outageWaitMs > 0) {
+      const delayMs = Math.max(outageWaitMs, 60_000) + 60_000;
+      campaign.state = "failed";
+      campaign.lastError = `GDD draft ${status} during a full provider outage: ${output.slice(0, 200)}`;
+      campaign.autoReviveAt = Date.now() + delayMs;
+      this.persist(campaign);
+      this.scheduleAutoRevive(campaign.id, delayMs);
+      getLoggerSafe().info("GDD draft parked by a provider outage — no revision round charged", {
+        id: campaign.id,
+        reviveInMs: delayMs,
+      });
+      await this.tell(
+        campaign,
+        `⏸️ Campaign paused by a provider outage while drafting the GDD.\n` +
+          `Cause: ${campaign.lastError}\n` +
+          `Self-revival armed for ${new Date(campaign.autoReviveAt).toLocaleTimeString()} (when the provider chain recovers). Reply **kampanya devam** to revive sooner.`,
+      );
+      return;
+    }
 
     if (campaign.draftAttempts >= this.maxDraftAttempts) {
       campaign.state = "failed";
@@ -930,17 +1069,11 @@ export class CampaignManager {
       await this.tell(campaign, `GDD drafting ${status} — campaign failed. Cause: ${campaign.lastError}`);
       return;
     }
-    // An outage-caused settle is not the draft's failure and must not spend
-    // a revision round (the same counter the designer's feedback spends).
-    const outageCaused =
-      /provider|cooldown|quota|rate.?limit/i.test(output) && allProvidersCoolingDownMs() > 0;
-    if (outageCaused) {
-      getLoggerSafe().info("GDD draft resubmitted without charging a revision round — provider outage", {
-        id: campaign.id,
-      });
-    } else {
-      campaign.draftAttempts += 1;
-    }
+    // An outage-caused settle never reaches here — it parked above with a
+    // self-revival appointment, charging no revision round (the same counter
+    // the designer's feedback spends). What is left is the draft's own
+    // failure, and that does spend a round.
+    campaign.draftAttempts += 1;
     this.submitDraft(campaign, `The previous draft attempt ${status}: ${output.slice(0, 400)}`);
   }
 
@@ -1363,8 +1496,17 @@ export class CampaignManager {
           return;
         }
         campaign.state = "done";
+        // The flag is written only AFTER the report actually leaves. Audited
+        // 2026-09-02: `done` was persisted first and tell() swallows an
+        // outbound failure, so a crash or a messenger error in this window
+        // lost the report for good — a done campaign is not active, not
+        // revivable and not queryable, so nothing ever noticed.
+        campaign.deliveryReported = false;
         this.persist(campaign);
-        await this.tell(campaign, `${this.buildDeliveryReport(campaign)}${commitNote}`);
+        if (await this.tell(campaign, `${this.buildDeliveryReport(campaign)}${commitNote}`)) {
+          campaign.deliveryReported = true;
+          this.persist(campaign);
+        }
         return;
       }
       campaign.currentMilestone += 1;
@@ -1461,6 +1603,34 @@ export class CampaignManager {
           `Cause: ${campaign.lastError}\n` +
           `Self-revival armed for ${new Date(campaign.autoReviveAt).toLocaleTimeString()} (when the provider chain recovers). Reply **kampanya devam** to revive sooner.`,
       );
+      return;
+    }
+
+    // PARTIAL DELIVERY: the sprint that ran out of attempts is a
+    // coverage-remediation round (mcovN) and every PLANNED milestone is
+    // green — the game itself was built. Audited 2026-09-02: this stopped
+    // with "❌ Campaign stopped" and reported none of it, and never named the
+    // gaps it failed to close either. Deliver, with the ladder's own ❌ line
+    // and the unclosed gaps rendered by the report (so a re-send after a lost
+    // report carries the same caveats).
+    const plannedMilestones = campaign.milestones.filter((m) => !m.id.startsWith("mcov"));
+    if (
+      milestone.id.startsWith("mcov") &&
+      plannedMilestones.length > 0 &&
+      plannedMilestones.every((m) => m.status === "green")
+    ) {
+      campaign.state = "done";
+      campaign.deliveryReported = false;
+      this.persist(campaign);
+      getLoggerSafe().warn("Delivering with unclosed GDD gaps — remediation sprint spent its attempts", {
+        id: campaign.id,
+        milestone: milestone.id,
+        attempts: milestone.attempts,
+      });
+      if (await this.tell(campaign, this.buildDeliveryReport(campaign))) {
+        campaign.deliveryReported = true;
+        this.persist(campaign);
+      }
       return;
     }
 
@@ -1714,8 +1884,14 @@ export class CampaignManager {
     // (audited 2026-09-01). A green reached by spending its evidence bounce
     // must not read like a clean one.
     const caveats: string[] = [];
+    // A delivery that carries an unfinished sprint says so in its FIRST line.
+    // Audited 2026-09-02: partial delivery (a spent coverage-remediation
+    // round after every planned sprint went green) had no rendering at all.
+    const unfinished = campaign.milestones.filter((m) => m.status !== "green");
     const lines = [
-      `🏁 **Campaign delivery — game build complete**`,
+      unfinished.length === 0
+        ? `🏁 **Campaign delivery — game build complete**`
+        : `🏁 **Campaign delivery — game built, ${unfinished.length} sprint${unfinished.length > 1 ? "s" : ""} did NOT land green**`,
       `GDD: \`${campaign.gddPath ?? "n/a"}\``,
       ``,
     ];
@@ -1750,6 +1926,15 @@ export class CampaignManager {
       if (m.noWorkBounced) { marks.push("no-work bounce spent"); caveats.push(`${m.title}: an attempt left the repository untouched`); }
       if ((m.timeBoxEscalations ?? 0) > 0) { marks.push(`scope narrowed ×${m.timeBoxEscalations}`); caveats.push(`${m.title}: ran past its time box and was narrowed to a smaller increment — remaining scope is in its final report`); }
       if (m.attempts > 1) marks.push(`${m.attempts} attempts`);
+      if (m.status !== "green") {
+        marks.push(`did NOT land green (${m.attempts} attempts)`);
+        const gaps = coverageGapItems(m);
+        caveats.push(
+          gaps.length > 0
+            ? `${m.title}: unclosed — the GDD items it was appended to close are NOT delivered: ${gaps.join("; ")}`
+            : `${m.title}: unclosed — its scope is NOT delivered. Cause: ${campaign.lastError ?? "not recorded"}`,
+        );
+      }
       lines.push(`• ${m.status === "green" ? "✅" : "❌"} ${m.title}${marks.length > 0 ? ` — ${marks.join("; ")}` : ""}`);
     }
     const frames = this.countCaptureFiles();
@@ -1758,7 +1943,13 @@ export class CampaignManager {
       lines.push("", `⚠️ ${campaign.coverageAuditNote} — delivered WITHOUT a clean GDD-coverage check.`);
     }
     if (caveats.length > 0) {
-      lines.push("", "**How these greens were reached:**", ...caveats.map((c) => `- ${c}`));
+      lines.push(
+        "",
+        unfinished.length === 0
+          ? "**How these greens were reached:**"
+          : "**What is unclosed, and how these greens were reached:**",
+        ...caveats.map((c) => `- ${c}`),
+      );
     }
     return lines.join("\n");
   }
@@ -1872,16 +2063,39 @@ export class CampaignManager {
     this.storage.save(campaign);
   }
 
-  private async tell(campaign: Pick<Campaign, "chatId"> & Partial<Pick<Campaign, "id">>, markdown: string): Promise<void> {
+  /** Returns whether the message actually reached the channel. */
+  private async tell(
+    campaign: Pick<Campaign, "chatId"> & Partial<Pick<Campaign, "id">>,
+    markdown: string,
+  ): Promise<boolean> {
     try {
       await this.messenger(campaign.chatId, markdown);
+      return true;
     } catch (err) {
       getLoggerSafe().warn("Campaign message delivery failed", {
         id: campaign.id,
         error: err instanceof Error ? err.message : String(err),
       });
+      return false;
     }
   }
+}
+
+/**
+ * The GDD items a coverage-remediation sprint (mcovN) was appended to close,
+ * read back from its own prompt — buildCoverageRemediation writes them there
+ * verbatim as a "- item" block. Empty for every other milestone, and for a
+ * remediation sprint whose list cannot be recovered (the caller then says so
+ * rather than inventing gap names).
+ */
+function coverageGapItems(milestone: CampaignMilestone): string[] {
+  if (!milestone.id.startsWith("mcov")) return [];
+  const items: string[] = [];
+  for (const line of milestone.prompt.split("\n")) {
+    if (line.startsWith("- ")) items.push(line.slice(2).trim());
+    else if (items.length > 0) break; // the block ends at its first non-item line
+  }
+  return items.filter((item) => item.length > 0);
 }
 
 function readGddFile(projectRoot: string, gddPath: string): string | undefined {
