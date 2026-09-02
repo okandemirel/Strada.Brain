@@ -108,3 +108,75 @@ describe('VaultSearchTool default vault targeting', () => {
     expect((code as { query: ReturnType<typeof vi.fn> }).query).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * Audited 2026-09-02: a vault whose query() rejected was dropped silently while
+ * `searched` still listed it, so "no vault hits ... across [a, b]" read as a
+ * genuine empty index when b was never searched at all.
+ */
+describe('VaultSearchTool when a vault query throws', () => {
+  const tool = new VaultSearchTool();
+
+  function rejectingVault(id: string, reason: string, kind: VaultKind = 'unity-project') {
+    return {
+      id,
+      kind,
+      rootPath: '/project',
+      query: vi.fn().mockRejectedValue(new Error(reason)),
+    } as never;
+  }
+
+  function hittingVault(id: string) {
+    return {
+      id,
+      kind: 'knowledge',
+      rootPath: '/project',
+      query: vi.fn().mockResolvedValue({
+        hits: [{
+          chunk: { path: 'notes/dash.md', startLine: 1, endLine: 3, content: 'dash notes' },
+          scores: { fts: 2.1, hnsw: null, rrf: 0.016 },
+        }],
+        budgetUsed: 10,
+        truncated: false,
+      }),
+    } as never;
+  }
+
+  it('does not list a vault that threw as searched, and names the failure', async () => {
+    const broken = rejectingVault('project', 'SQLITE_BUSY: database is locked');
+    const empty = makeVault('dev-knowledge', 'knowledge');
+    const ctx = makeContext([broken, empty], 'project');
+
+    const result = await tool.execute({ query: 'PlayerController dash' }, ctx);
+
+    expect(result.content).toContain('across [dev-knowledge]');
+    expect(result.content).not.toContain('across [project, dev-knowledge]');
+    expect(result.content).toContain('project: SQLITE_BUSY: database is locked');
+    expect(result.content).toMatch(/not searched/u);
+  });
+
+  it('is an error, not "no hits", when every target vault rejected the query', async () => {
+    const a = rejectingVault('project', 'empty_query');
+    const b = rejectingVault('dev-knowledge', 'empty_query', 'knowledge');
+    const ctx = makeContext([a, b], 'project');
+
+    const result = await tool.execute({ query: '()' }, ctx);
+
+    expect(result.isError).toBe(true);
+    expect(result.content).not.toMatch(/no vault hits/u);
+    expect(result.content).toContain('project: empty_query');
+    expect(result.content).toContain('dev-knowledge: empty_query');
+  });
+
+  it('reports the failed vault next to the surviving hits', async () => {
+    const broken = rejectingVault('project', 'store closed');
+    const ok = hittingVault('dev-knowledge');
+    const ctx = makeContext([broken, ok], 'project');
+
+    const result = await tool.execute({ query: 'PlayerController dash' }, ctx);
+
+    expect(result.content).toContain('1 hit(s)');
+    expect(result.content).toContain('searched=[dev-knowledge]');
+    expect(result.content).toContain('failed=[project: store closed]');
+  });
+});

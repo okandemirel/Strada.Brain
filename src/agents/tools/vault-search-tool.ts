@@ -5,6 +5,7 @@ import type { IVault, VaultFile, VaultHit, VaultQuery } from '../../vault/vault.
 import type { ToolContext, ToolExecutionResult } from './tool.interface.js';
 import { sanitizeRetrievalContent } from '../orchestrator-text-utils.js';
 import { estimateTextTokens } from "../../common/token-estimator.js";
+import { getLoggerSafe } from "../../utils/logger.js";
 
 type VaultSearchMode = 'semantic' | 'fts' | 'hybrid';
 
@@ -22,7 +23,10 @@ interface VaultSearchResultPayload {
   hits: VaultSearchHit[];
   tokensUsed: number;
   truncated: boolean;
+  /** Vault ids whose query completed — the only ones the hits can speak for. */
   searched: string[];
+  /** Vault ids whose query threw, with the reason; they were NOT searched. */
+  failed: Array<{ id: string; reason: string }>;
   hint?: string;
 }
 
@@ -219,15 +223,30 @@ export class VaultSearchTool {
       }),
     );
 
+    // Audited 2026-09-02: a rejected vault query was dropped with a bare
+    // `continue` while `searched` still listed every target, so a vault whose
+    // query threw (escapeFtsQuery on a query like "()" rejects every vault at
+    // once; a store closed mid-query rejects one) was reported as searched and
+    // "no vault hits ... across [...]" read as a genuine empty index. A vault
+    // that was not searched is named as failed, never as searched.
     const merged: VaultSearchHit[] = [];
-    for (const s of perVault) {
-      if (s.status === "rejected") continue;
+    const searched: string[] = [];
+    const failed: Array<{ id: string; reason: string }> = [];
+    perVault.forEach((s, index) => {
+      if (s.status === "rejected") {
+        const id = targetVaults[index]?.id ?? `#${index}`;
+        const reason = s.reason instanceof Error ? s.reason.message : String(s.reason);
+        failed.push({ id, reason });
+        getLoggerSafe().warn('[vault_search] vault query failed', { vaultId: id, reason, query });
+        return;
+      }
       const { vaultId: vid, result } = s.value;
+      searched.push(vid);
       for (const hit of result.hits) {
         const projected = projectHit(hit, vid, mode);
         if (projected) merged.push(projected);
       }
-    }
+    });
     merged.sort((a, b) => b.score - a.score);
     const capped = merged.slice(0, topK);
 
@@ -238,14 +257,27 @@ export class VaultSearchTool {
       hits: capped,
       tokensUsed,
       truncated,
-      searched: targetVaults.map((v) => v.id),
+      searched,
+      failed,
       hint,
     };
 
-    if (!capped.length) {
-      const baseMsg = `no vault hits for "${query}" across [${payload.searched.join(', ')}]`;
+    if (failed.length === targetVaults.length) {
       return {
-        content: hint ? `${baseMsg}\n(${hint})` : baseMsg,
+        content:
+          `vault_search failed: no vault was searched for "${query}" — every target rejected the query: ` +
+          formatFailed(failed),
+        isError: true,
+        metadata: { executionTimeMs: Date.now() - started, itemsAffected: 0 },
+      };
+    }
+
+    if (!capped.length) {
+      const lines = [`no vault hits for "${query}" across [${searched.join(', ')}]`];
+      if (failed.length) lines.push(`(not searched — query failed: ${formatFailed(failed)})`);
+      if (hint) lines.push(`(${hint})`);
+      return {
+        content: lines.join('\n'),
         metadata: { executionTimeMs: Date.now() - started, itemsAffected: 0 },
       };
     }
@@ -325,11 +357,17 @@ function coerceStringArray(v: unknown): string[] | undefined {
   return values.length > 0 ? values : undefined;
 }
 
+/** `[id: reason; id: reason]` — the vaults whose query threw, so the agent can see what the hits do not cover. */
+function formatFailed(failed: ReadonlyArray<{ id: string; reason: string }>): string {
+  return `[${failed.map((f) => `${f.id}: ${f.reason}`).join('; ')}]`;
+}
+
 function formatHitsForAgent(payload: VaultSearchResultPayload): string {
   const header =
     `vault_search: ${payload.hits.length} hit(s), ` +
     `~${payload.tokensUsed} tok, ` +
     `searched=[${payload.searched.join(', ')}]` +
+    (payload.failed.length ? ` failed=${formatFailed(payload.failed)}` : '') +
     (payload.truncated ? ' (truncated)' : '') +
     (payload.hint ? `\n(hint: ${payload.hint})` : '');
   const body = payload.hits
