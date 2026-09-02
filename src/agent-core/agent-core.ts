@@ -231,9 +231,11 @@ export class AgentCore {
               decision.goal,
               { origin: "daemon" as const },
             );
-            if (matchedInstinctIds.length > 0) {
-              this.taskInstinctMap.set(task.id, { instinctIds: matchedInstinctIds, createdAt: Date.now() });
-            }
+            // audited 2026-09-02: tracking was gated on `matchedInstinctIds.length > 0`, so a goal
+            // that matched no instinct (every goal at cold start, and with no retriever wired) was
+            // never followed up — its failure produced no task-outcome observation. Every submitted
+            // task is tracked; an empty instinctIds list makes the instinct-credit loop a no-op.
+            this.taskInstinctMap.set(task.id, { instinctIds: matchedInstinctIds, createdAt: Date.now() });
             // Record action for dedup
             if (ranked[0]) this.priorityScorer.recordAction(ranked[0]);
             this.logger.info("AgentCore: submitted goal", { goal: decision.goal.slice(0, 200) });
@@ -279,9 +281,8 @@ export class AgentCore {
               compoundGoal,
               { origin: "daemon" as const },
             );
-            if (matchedInstinctIds.length > 0) {
-              this.taskInstinctMap.set(task.id, { instinctIds: matchedInstinctIds, createdAt: Date.now() });
-            }
+            // audited 2026-09-02: same unconditional tracking as the execute arm (see above).
+            this.taskInstinctMap.set(task.id, { instinctIds: matchedInstinctIds, createdAt: Date.now() });
             for (const obs of matched) this.priorityScorer.recordAction(obs);
             this.logger.info("AgentCore: submitted batch goal", { goal: compoundGoal.slice(0, 200), batchSize: matched.length });
           }

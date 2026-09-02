@@ -482,6 +482,56 @@ describe("AgentCore OODA Integration", () => {
     }
   });
 
+  /* audited 2026-09-02: outcome follow-up must not depend on an instinct having matched */
+  it("a submitted goal that matched no instinct (no retriever wired) still yields a task-outcome observation when it fails", async () => {
+    const m = createMocks({ chatResponse: { action: "execute", goal: "Fix build", reasoning: "broken" } });
+    m.taskManager.submit.mockReturnValue({ id: "task_noinst01" });
+    const core = buildCore(m); // no instinctRetriever at all
+    await core.tick();
+    expect(m.taskManager.submit).toHaveBeenCalledTimes(1);
+
+    // The task fails. The build observer is one-shot: nothing else will re-raise the condition.
+    m.taskManager.getStatus.mockReturnValue({ id: "task_noinst01", status: "failed", title: "Fix build" });
+    (m.engine as any).observers.length = 0;
+    m.provider.chat.mockResolvedValue(makeLLMResponse({ action: "wait", reasoning: "noted" }));
+
+    await core.tick();
+
+    expect(m.provider.chat, "the failed outcome must reach the LLM as a task-outcome observation").toHaveBeenCalledTimes(2);
+    const prompt = String(m.provider.chat.mock.calls[1]![1][0].content);
+    expect(prompt).toContain("Agent task failed: Fix build");
+    expect(m.taskManager.getStatus).toHaveBeenCalledWith("task_noinst01");
+  });
+
+  it("a batch goal with an empty instinct match is followed up when the task is blocked", async () => {
+    const obs = [
+      createObservation("build", "Build failed", { priority: 80 }),
+      createObservation("git", "3 uncommitted files", { priority: 30 }),
+    ];
+    const m = createMocks({
+      observations: obs,
+      chatResponse: { action: "batch", goal: "Fix and commit", batchObservationIds: obs.map((o) => o.id), reasoning: "both" },
+    });
+    m.taskManager.submit.mockReturnValue({ id: "task_batch01" });
+    const instinctRetriever = {
+      getInsightsForTask: vi.fn().mockResolvedValue({ insights: [], matchedInstinctIds: [] }),
+      recordOutcome: vi.fn().mockResolvedValue(undefined),
+    };
+    const core = buildCore(m, {}, instinctRetriever);
+    await core.tick();
+    expect(m.taskManager.submit).toHaveBeenCalledTimes(1);
+
+    m.taskManager.getStatus.mockReturnValue({ id: "task_batch01", status: "blocked", title: "Fix and commit" });
+    (m.engine as any).observers.length = 0;
+    m.provider.chat.mockResolvedValue(makeLLMResponse({ action: "wait", reasoning: "noted" }));
+    await core.tick();
+
+    expect(m.provider.chat).toHaveBeenCalledTimes(2);
+    expect(String(m.provider.chat.mock.calls[1]![1][0].content)).toContain("Agent task failed: Fix and commit");
+    // No instinct ids => no instinct credit, but the outcome itself is still observed.
+    expect(instinctRetriever.recordOutcome).not.toHaveBeenCalled();
+  });
+
   /* 13. P2: no instincts => no recordOutcome calls */
   it("does not call recordOutcome when no instincts were matched", async () => {
     const m = createMocks({ chatResponse: { action: "execute", goal: "Cleanup", reasoning: "housekeeping" } });
