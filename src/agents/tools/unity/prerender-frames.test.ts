@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -66,4 +66,60 @@ describe("PrerenderFramesTool validation", () => {
     expect(result.isError).toBe(true);
     expect(String(result.content)).toContain("Assets");
   });
+});
+
+/**
+ * `unity open` is fire-and-forget: the Hub takes over and the CLI wrapper
+ * exits on its own schedule, often nonzero. Audited 2026-09-02: any callback
+ * error (nonzero exit, the wrapper's own 60s timeout) was recorded as a launch
+ * failure, the poll loop broke before the batchmode editor could write a frame,
+ * and the tool pkill'd the healthy editor and reported "render produced no
+ * frames: Unity CLI launch failed" — a failure it manufactured itself. The
+ * sibling unity-link-runner bails only on ENOENT; this test pins that rule.
+ */
+describe("PrerenderFramesTool launch semantics", () => {
+  let dir: string;
+  let cliDir: string;
+  const savedCli = process.env["STRADA_UNITY_CLI"];
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "prerender-launch-"));
+    mkdirSync(join(dir, "Assets"), { recursive: true });
+    writeFileSync(join(dir, "Assets", "Boar.prefab"), "yaml");
+    cliDir = mkdtempSync(join(tmpdir(), "prerender-cli-"));
+  });
+
+  afterEach(() => {
+    if (savedCli === undefined) delete process.env["STRADA_UNITY_CLI"];
+    else process.env["STRADA_UNITY_CLI"] = savedCli;
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(cliDir, { recursive: true, force: true });
+  });
+
+  it("keeps waiting for frames when the CLI wrapper exits nonzero after handing off", async () => {
+    // A stand-in for `unity open`: hands off to a detached "editor" that lands
+    // the frames three seconds later, then exits 3 the way the Hub wrapper can.
+    const fakeCli = join(cliDir, "unity");
+    writeFileSync(
+      fakeCli,
+      [
+        "#!/bin/sh",
+        'ARGS="$4"',
+        "OUT=$(printf '%s' \"$ARGS\" | sed -n 's/.*-outDir \"\\([^\"]*\\)\".*/\\1/p')",
+        "LOG=$(printf '%s' \"$ARGS\" | sed -n 's/.*-logFile \"\\([^\"]*\\)\".*/\\1/p')",
+        '( sleep 3; mkdir -p "$OUT"; : > "$OUT/frame_000.png"; : > "$OUT/frame_001.png"; echo STRADA-RENDER-OK > "$LOG" ) >/dev/null 2>&1 &',
+        "exit 3",
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    process.env["STRADA_UNITY_CLI"] = fakeCli;
+    vi.resetModules();
+    const { PrerenderFramesTool: FreshTool } = await import("./prerender-frames.js");
+
+    const result = await new FreshTool().execute({ prefab: "Assets/Boar.prefab" }, makeContext(dir));
+
+    expect(result.isError).toBeUndefined();
+    expect(String(result.content)).toContain("2 frames rendered");
+  }, 30_000);
 });

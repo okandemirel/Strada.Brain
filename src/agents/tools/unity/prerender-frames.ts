@@ -317,11 +317,19 @@ export class PrerenderFramesTool implements ITool {
       const logPath = join(context.projectPath, "prerender.log");
       if (existsSync(logPath)) rmSync(logPath, { force: true });
       let launchError = "";
-      execFile(DEFAULT_CLI, ["open", context.projectPath, "--args", unityArgs], { timeout: 60_000 }, (err) => {
-        // The CLI's own failure (ENOENT/EACCES/timeout) used to be discarded
-        // by an empty callback — surfaced only 30 minutes later as a generic
-        // "no frames". Record it so the poll loop can stop immediately.
-        if (err) launchError = err.message;
+      execFile(DEFAULT_CLI, ["open", context.projectPath, "--args", unityArgs], (err) => {
+        // Only a binary that could not be spawned is a launch failure.
+        // Audited 2026-09-02: this recorded ANY callback error — a nonzero
+        // exit of the Hub wrapper, or the 60s execFile timeout SIGTERMing it —
+        // and the poll loop then broke before the batchmode editor could write
+        // a frame, pkill'd the healthy editor mid-arc, and reported "render
+        // produced no frames: Unity CLI launch failed". `unity open` is
+        // fire-and-forget: the wrapper's exit says nothing about the detached
+        // editor (unity-link-runner measured the same rule: bail on ENOENT
+        // only). The timeout is gone for the same reason — killing the wrapper
+        // never stopped the editor, it only manufactured the abort.
+        const code = (err as NodeJS.ErrnoException | null)?.code;
+        if (err && (code === "ENOENT" || code === "EACCES")) launchError = err.message;
       }).unref?.();
 
       // `unity open` is fire-and-forget: the CLI returns while the editor is
@@ -393,7 +401,9 @@ export class PrerenderFramesTool implements ITool {
         // listing catches up — one final look before declaring failure.
         frames = listFreshFrames();
       }
-      if (frames.length === 0) {
+      // A spawn failure means no editor was ever launched, so any frame in the
+      // directory is not this run's — it must not pass as a success envelope.
+      if (frames.length === 0 || launchError) {
         // Timeout/failure must not leave a batchmode editor squatting on the
         // project's Library lock — the next run would race it forever. Our
         // executeMethod name is unique, so the match cannot hit a person's
