@@ -297,7 +297,7 @@ export function buildSupervisorVerificationNarrative(task: string): {
 export function buildSupervisorCompletionNarrative(params: {
   task: string;
   result: SupervisorResult;
-  verification?: { verified: number; candidates: number };
+  verification?: { verified: number; candidates: number; scopeLabel?: string };
 }): {
   language: SupervisorFeedbackLanguage;
   narrative: string;
@@ -306,9 +306,15 @@ export function buildSupervisorCompletionNarrative(params: {
   const language = detectSupervisorFeedbackLanguage(params.task);
   const verified = params.verification?.verified ?? 0;
   const candidates = params.verification?.candidates ?? 0;
+  // The count was narrowed to the mode's scope (critical-only verifies only
+  // critical nodes), so the sentence must name that scope: "1 of 1 nodes"
+  // beside "3/3 tasks" reads as full coverage of a scope never measured
+  // (audited 2026-09-02).
+  const scopeLabel = params.verification?.scopeLabel ?? "nodes";
+  const scopeLabelTr = scopeLabel === "critical nodes" ? "kritik düğümden" : "düğümden";
   if (language === "tr") {
     const verificationClause = verified > 0
-      ? `(${candidates} düğümden ${verified}'i bağımsız doğrulandı)`
+      ? `(${candidates} ${scopeLabelTr} ${verified}'i bağımsız doğrulandı)`
       : "(bağımsız doğrulanan düğüm yok)";
     return {
       language,
@@ -326,7 +332,7 @@ export function buildSupervisorCompletionNarrative(params: {
   }
 
   const verificationClause = verified > 0
-    ? `(${verified} of ${candidates} nodes independently verified)`
+    ? `(${verified} of ${candidates} ${scopeLabel} independently verified)`
     : "(no node was independently verified)";
   return {
     language,

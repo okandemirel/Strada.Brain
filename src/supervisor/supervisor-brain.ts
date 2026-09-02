@@ -635,6 +635,7 @@ export class SupervisorBrain {
         verification: {
           verified: verificationReport.verified,
           candidates: verificationReport.candidates,
+          scopeLabel: this.config.verificationMode === "critical-only" ? "critical nodes" : "nodes",
         },
       });
       this.emitNarrative(completion.narrative, completion.language);
@@ -740,6 +741,18 @@ export class SupervisorBrain {
       return leaves;
     };
 
+    // Ancestors of a node, for the self-dependency guard below.
+    const isAncestorOf = (candidateId: GoalNodeId, nodeId: GoalNodeId): boolean => {
+      const seen = new Set<string>();
+      let current = tree.nodes.get(nodeId)?.parentId ?? null;
+      while (current !== null && !seen.has(String(current))) {
+        if (String(current) === String(candidateId)) return true;
+        seen.add(String(current));
+        current = tree.nodes.get(current)?.parentId ?? null;
+      }
+      return false;
+    };
+
     // Rewire one node's dependency list: a dep on scaffolding becomes deps on
     // that scaffolding's leaves; a leaf never depends on itself.
     const rewire = (nodeId: GoalNodeId, deps: readonly GoalNodeId[], into: Set<GoalNodeId>): void => {
@@ -748,6 +761,12 @@ export class SupervisorBrain {
           if (depId !== nodeId) into.add(depId);
           continue;
         }
+        // A node that depends on its OWN scaffolding ancestor is saying "after
+        // my parent's work", which for a leaf means its siblings — expanding
+        // it manufactured a C1<->C2 cycle and both nodes were then reported
+        // unschedulable/FAILED (review of 25fa96d0, 2026-09-02). The dep is
+        // already satisfied by the node's own place in that subtree: drop it.
+        if (isAncestorOf(depId, nodeId)) continue;
         for (const leafId of collectLeaves(depId, new Set())) {
           if (leafId !== nodeId) into.add(leafId);
         }

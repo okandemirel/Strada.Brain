@@ -33,8 +33,18 @@ const MAX_TASK_LABEL_LENGTH = 200
 export function goalTreeToDagPayload(goalTree: GoalTree, conversationId?: string): DagPayload {
   const nodes: DagNodeShape[] = []
   const edges: Array<{ source: string; target: string }> = []
+  // A node with children is SCAFFOLDING: the supervisor dispatches its leaves
+  // instead, so it never receives a task_update and stayed pending in the
+  // monitor for the life of the run — a finished run rendered as unfinished
+  // (review of 25fa96d0, 2026-09-02). The census must match the work that is
+  // actually dispatched.
+  const hasChildren = new Set<string>()
+  for (const [, node] of goalTree.nodes) {
+    if (node.parentId !== null) hasChildren.add(String(node.parentId))
+  }
   for (const [id, node] of goalTree.nodes) {
     if (String(id) === String(goalTree.rootId)) continue
+    if (hasChildren.has(String(id))) continue
     const task = node.task.length > MAX_TASK_LABEL_LENGTH
       ? node.task.slice(0, MAX_TASK_LABEL_LENGTH) + '…'
       : node.task

@@ -53,7 +53,7 @@ Implementation: `src/security/path-guard.ts`
 - Learning storage (`src/learning/storage/learning-storage.ts`)
 - Channel sends from bootstrap (`src/core/bootstrap-stages/stage-runtime.ts`)
 - Provider error messages (`src/agents/providers/fallback-chain.ts`)
-- Dashboard config masking (`src/dashboard/server.ts`) and `src/common/fetch-with-retry.ts` request bodies
+- Dashboard config masking (`src/dashboard/server.ts`) and `src/common/fetch-with-retry.ts` response bodies (rate-limit and error responses)
 
 Tool results take a different path — `sanitizeToolResult` (section 7), which applies one API-key regex, not this set. A tool result containing a Stripe `sk_live_…` key, a raw JWT or a `postgres://user:pass@host` URL reaches the model unredacted.
 

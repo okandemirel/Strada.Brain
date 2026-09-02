@@ -1125,7 +1125,7 @@ Platform-specific allowlists checked at message arrival (before any processing).
 Per-user sliding window (minute/hour) + global daily/monthly token and USD budget caps.
 
 ### Layer 3: Path Guard
-Every file operation resolves symlinks and validates the path stays within the project root. 26 sensitive patterns are blocked (`.env`, `.git/credentials`, SSH keys, certificates, `node_modules/`).
+Every file operation resolves symlinks and validates the path stays within the project root. 22 sensitive patterns are blocked (`.env`, `.git/credentials`, SSH keys, certificates, `node_modules/`).
 
 ### Layer 4: Media Security
 All media attachments are validated before processing: MIME allowlist (image/video/audio/document), per-type size limits (20MB image, 50MB video, 25MB audio, 10MB document), magic bytes verification (JPEG, PNG, GIF, WebP, MP4, PDF), and SSRF protection on download URLs (blocks private IPs, metadata endpoints, rejects redirects).

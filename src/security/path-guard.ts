@@ -12,7 +12,16 @@ const BLOCKED_PATTERNS: RegExp[] = [
   // pushed a live key in (`.env.bak.191546`, `.env.backup-loglevel`, see
   // .gitignore) were readable in full. Any chain of dot-separated suffixes
   // after `.env` is now blocked; `.envrc` / `Env.cs` are still allowed.
-  /\.env(\.[A-Za-z0-9_-]+)*$/i,
+  // Two rules, because one regex cannot express both dotenv families without
+  // also swallowing project files. A rejected round-2 attempt anchored on the
+  // basename START, which silently unblocked the whole `<name>.env` family
+  // (prod.env, secrets.env, config/local.env) — a security regression
+  // (audited 2026-09-02).
+  //   (a) a basename that IS .env plus any suffix chain: .env, .env.local,
+  //       .env.production.local, .env.bak.191546
+  /(?:^|[/\\])\.env(\.[A-Za-z0-9_-]+)*$/i,
+  //   (b) a basename ENDING in .env: prod.env, staging.env, local.env
+  /(?:^|[/\\])[^/\\]*\.env$/i,
   /\.git[/\\]config$/i,
   /\.git[/\\]credentials$/i,
   /credentials\.json$/i,
