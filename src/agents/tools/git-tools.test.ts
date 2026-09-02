@@ -160,6 +160,30 @@ describe("GitCommitTool", () => {
     expect(result.isError).toBeUndefined();
     expect(result.content).toContain("staged commit");
   });
+
+  // Audited 2026-09-02: `files` was cast to string[] with no runtime check, so
+  // a single path passed as a string was iterated character by character and
+  // spread into `git add -- A s s e t s / ...` — the commit failed with an
+  // error naming neither the cause nor the file, and a hyphen anywhere in the
+  // path produced "file path must not start with '-'" about a path the caller
+  // never wrote. Nothing validates tool input against inputSchema upstream.
+  it("accepts a single file path given as a string", async () => {
+    await mkdir(join(tempDir, "Assets", "Scripts"), { recursive: true });
+    await writeFile(join(tempDir, "Assets", "Scripts", "Player-Controller.cs"), "class P {}\n");
+    const result = await tool.execute(
+      { message: "add controller", files: "Assets/Scripts/Player-Controller.cs" },
+      ctx,
+    );
+    expect(result.isError).toBeUndefined();
+    const log = execSync("git log --oneline -1", { cwd: tempDir }).toString();
+    expect(log).toContain("add controller");
+  });
+
+  it("stages the trimmed path it validated, not the raw one", async () => {
+    await writeFile(join(tempDir, "padded.txt"), "content\n");
+    const result = await tool.execute({ message: "add padded", files: ["  padded.txt  "] }, ctx);
+    expect(result.isError).toBeUndefined();
+  });
 });
 
 describe("GitBranchTool", () => {

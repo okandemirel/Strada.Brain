@@ -228,15 +228,29 @@ export class GitCommitTool implements ITool {
       return { content: "Error: commit message is required", isError: true };
     }
 
-    // Stage files if provided
-    const files = input["files"] as string[] | undefined;
+    // Stage files if provided.
+    // Audited 2026-09-02: `files` was cast to string[] unchecked, so a single
+    // path given as a string (nothing validates tool input against the schema)
+    // was iterated per character and spread into `git add -- A s s e t s / …`,
+    // failing with an error that named neither the cause nor the file. A
+    // string is one path; anything else that is not an array is rejected by
+    // name. The sanitized (trimmed) value is what gets staged.
+    const rawFiles = input["files"];
+    let files: unknown[] | undefined;
+    if (typeof rawFiles === "string") files = [rawFiles];
+    else if (Array.isArray(rawFiles)) files = rawFiles;
+    else if (rawFiles !== undefined && rawFiles !== null) {
+      return { content: "Error: 'files' must be an array of file paths (or a single path string)", isError: true };
+    }
     if (files && files.length > 0) {
       // Validate each file path and use -- to prevent flag injection
+      const staged: string[] = [];
       for (const f of files) {
         const check = sanitizeGitArg(String(f), "file path");
         if (!check.valid) return { content: `Error: ${check.error}`, isError: true };
+        staged.push(check.value);
       }
-      const addResult = await runGit(["add", "--", ...files], context.projectPath);
+      const addResult = await runGit(["add", "--", ...staged], context.projectPath);
       if (addResult.exitCode !== 0) {
         return { content: `Error staging files: ${addResult.stderr}`, isError: true };
       }
