@@ -3195,6 +3195,16 @@ export class Orchestrator {
         for (const tree of pendingResumeTrees) {
           const prepared = prepareTreeForResume(tree);
           this.activeGoalTrees.set(tree.sessionId, prepared);
+          // audited 2026-09-02: the reset lived only in memory, so a crash
+          // during the resume re-resumed from the stale rows.
+          try {
+            this.goalStorage?.upsertTree(prepared, "executing");
+          } catch (err) {
+            logger.warn("Could not persist the resumed goal tree", {
+              rootId: tree.rootId,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
         }
         await this.sessionManager.sendVisibleAssistantMarkdown(
           chatId,
@@ -3205,11 +3215,31 @@ export class Orchestrator {
       } else if (normalized === "discard" || normalized === "discard all") {
         this.sessionManager.appendVisibleUserMessage(session, text);
         await this.sessionManager.sendVisibleAssistantMarkdown(chatId, session, resumePrompt);
-        await this.sessionManager.sendVisibleAssistantMarkdown(
-          chatId,
-          session,
-          "Interrupted goal trees discarded.",
-        );
+        // audited 2026-09-02: this branch used to claim "discarded" and write
+        // nothing — the rows stayed 'executing' and the same trees were offered
+        // for resume at every later boot. Delete them, and say what happened
+        // rather than what was intended.
+        let removed = 0;
+        let failed = 0;
+        for (const tree of pendingResumeTrees) {
+          if (!this.goalStorage) break;
+          try {
+            this.goalStorage.deleteTree(tree.rootId);
+            removed += 1;
+          } catch (err) {
+            failed += 1;
+            logger.warn("Could not delete a discarded goal tree", {
+              rootId: tree.rootId,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }
+        const outcome = !this.goalStorage
+          ? `Interrupted goal trees dropped for this session only: no goal storage is attached, so ${pendingResumeTrees.length} tree(s) will be detected again at the next boot.`
+          : failed === 0
+            ? `Interrupted goal trees discarded: ${removed} tree(s) removed from goal storage.`
+            : `Interrupted goal trees partially discarded: ${removed} removed, ${failed} could not be deleted and will be detected again at the next boot.`;
+        await this.sessionManager.sendVisibleAssistantMarkdown(chatId, session, outcome);
         return;
       }
     }
