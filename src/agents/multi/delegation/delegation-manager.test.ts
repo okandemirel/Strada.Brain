@@ -14,6 +14,11 @@ import { createProvider } from "../../providers/provider-registry.js";
 import { ProviderHealthRegistry } from "../../providers/provider-health.js";
 import { setLiveChainMemberNames } from "../../providers/provider-outage.js";
 import { estimateCostWithCache } from "../../../budget/cost-model.js";
+import { AgentBudgetTracker } from "../agent-budget-tracker.js";
+import { DaemonStorage } from "../../../daemon/daemon-storage.js";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type {
   DelegationConfig,
   DelegationRequest,
@@ -168,6 +173,11 @@ function createMockEventBus(): IEventBus<LearningEventMap> {
 function createMockBudgetTracker() {
   return {
     recordCost: vi.fn(),
+    reserve: vi.fn().mockReturnValue("mock-reservation"),
+    release: vi.fn(),
+    settle: vi.fn(),
+    getAgentReservedUsd: vi.fn().mockReturnValue(0),
+    getAgentCommitment: vi.fn().mockReturnValue({ usedUsd: 0, reservedUsd: 0, committedUsd: 0, limitUsd: 10 }),
     isAgentExceeded: vi.fn().mockReturnValue(false),
     getAgentUsage: vi.fn().mockReturnValue({ usedUsd: 0, limitUsd: 10, pct: 0 }),
     getGlobalUsage: vi.fn().mockReturnValue({ usedUsd: 0, limitUsd: 100, pct: 0 }),
@@ -632,6 +642,99 @@ describe("DelegationManager", () => {
       const result = await gatedManager.delegate(request);
       expect(result.content).toBe("Sub-agent completed the task successfully.");
       expect(budgetTracker.isAgentExceeded).not.toHaveBeenCalled();
+    });
+  });
+
+  // A parent at 95% of its cap could breach it N times over: every one of N
+  // concurrent swarm delegations read the SAME pre-spawn total (nothing is
+  // charged until a sub-agent settles), so all N passed the same check-then-act
+  // gate. Reserving a pessimistic estimate at prepareRequest closes the window
+  // (audited 2026-09-02). Real AgentBudgetTracker over real storage — the
+  // reservation ledger is the thing under test, so a mock would prove nothing.
+  describe("budget reservations under concurrent delegation", () => {
+    let budgetDir: string;
+    let budgetStorage: DaemonStorage;
+    let liveTracker: AgentBudgetTracker;
+    let releaseWorkers: () => void;
+
+    /** Requests of this type reserve $0.24 (premium tier x its 120s timeout). */
+    const premiumRequest = (task: string): DelegationRequest => ({
+      type: "premium_task",
+      task,
+      parentAgentId: PARENT_AGENT_ID,
+      depth: 0,
+      mode: "sync",
+      toolContext: TEST_TOOL_CONTEXT,
+    });
+
+    beforeEach(() => {
+      budgetDir = mkdtempSync(join(tmpdir(), "delegation-budget-"));
+      budgetStorage = new DaemonStorage(join(budgetDir, "daemon.db"));
+      budgetStorage.initialize();
+      liveTracker = new AgentBudgetTracker(budgetStorage);
+      liveTracker.initialize();
+
+      // Every sub-agent hangs until the test releases it, so all of them are
+      // genuinely in flight when the next delegation asks for the gate. A 4th
+      // spawn releases the gate itself: if the gate under test admits it, the
+      // test must FAIL on the admission, not hang until the vitest timeout.
+      const gate = new Promise<void>((resolve) => { releaseWorkers = resolve; });
+      let spawns = 0;
+      orchestratorHandleMessage = vi.fn().mockImplementation(async (msg: Record<string, unknown>) => {
+        if (++spawns >= 4) releaseWorkers();
+        await gate;
+        const channel = orchestratorOpts.channel as { sendText: (chatId: string, text: string) => Promise<void> };
+        await channel.sendText(msg.chatId as string, "Sub-agent completed the task successfully.");
+      });
+
+      opts = buildManagerOpts({
+        delegationLog,
+        budgetTracker: liveTracker as never,
+        // Concurrency must not be what refuses the extra delegation — the budget must.
+        config: { ...TEST_CONFIG, maxConcurrentPerParent: 12 },
+        getAgentBudgetCap: () => 10,
+      });
+      manager = new DelegationManager(opts);
+    });
+
+    afterEach(() => {
+      releaseWorkers?.();
+      budgetStorage.close();
+      rmSync(budgetDir, { recursive: true, force: true });
+    });
+
+    it("refuses the delegation whose in-flight siblings have already reserved the remaining cap", async () => {
+      // Parent has spent $9.50 of its $10 cap: $0.50 of headroom left.
+      liveTracker.recordCost(PARENT_AGENT_ID, 9.5, { model: "claude-opus-4-6-20250514" });
+
+      const inFlight = [0, 1, 2].map((i) => manager.delegate(premiumRequest(`concurrent-${i}`)));
+      // Let each delegation reach its hung worker so its reservation is live.
+      await Promise.resolve();
+
+      // 3 x $0.24 reserved on top of $9.50 spent is past the $10 cap, so the
+      // fourth must be refused BEFORE spawning — not admitted on the same stale
+      // $9.50 reading its siblings saw.
+      await expect(
+        manager.delegate(premiumRequest("concurrent-4")),
+        "the 4th concurrent delegation was admitted against reservations that already fill the cap",
+      ).rejects.toThrow(/reserved/i);
+
+      releaseWorkers();
+      await Promise.all(inFlight);
+    });
+
+    it("releases the reservation when a delegation settles, so the cap is not permanently shrunk", async () => {
+      liveTracker.recordCost(PARENT_AGENT_ID, 9.5, { model: "claude-opus-4-6-20250514" });
+
+      const inFlight = [0, 1, 2].map((i) => manager.delegate(premiumRequest(`settling-${i}`)));
+      await Promise.resolve();
+      releaseWorkers();
+      await Promise.all(inFlight);
+
+      // Those three cost the tier estimate for their real (millisecond) duration,
+      // which leaves the parent under $10 — so the next delegation must be admitted.
+      expect(liveTracker.getAgentReservedUsd(PARENT_AGENT_ID)).toBe(0);
+      await expect(manager.delegate(premiumRequest("after-settle"))).resolves.toBeDefined();
     });
   });
 
