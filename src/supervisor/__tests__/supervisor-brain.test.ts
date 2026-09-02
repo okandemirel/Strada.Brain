@@ -324,6 +324,64 @@ describe("SupervisorBrain", () => {
     expect((done![1] as { verdict: string }).verdict).toBe("flag_issues");
   });
 
+  // audited 2026-09-02: VerificationReport.candidates is documented as the ok nodes
+  // "eligible for verification under the active mode", but it counted EVERY ok node.
+  // Under critical-only the mode only ever looks at the critical ones, so a run that
+  // verified every node it was supposed to reported "1 of 3 ok nodes independently
+  // verified" — two nodes nobody was ever going to check read as a coverage gap, and
+  // notVerified (candidates - verified) invented two missed checks. The denominator
+  // must be the mode's own scope, and the sentence must name that scope.
+  it("counts only the nodes critical-only mode would verify as verification candidates", async () => {
+    const emitter = { emit: vi.fn() };
+    const goalTree = makeGoalTree([
+      { id: "root", task: "Review release" },
+      { id: "s1", task: "Critical security review" },
+      { id: "s2", task: "Quick lint" },
+      { id: "s3", task: "Rename a local variable" },
+    ]);
+    const decomposer = {
+      shouldDecompose: vi.fn().mockReturnValue(false),
+      decomposeProactive: vi.fn(),
+    };
+    const verifyNode = vi.fn().mockResolvedValue({
+      verdict: "approve",
+      verifierProvider: "deepseek",
+    });
+
+    const brain = new SupervisorBrain({
+      config: { ...DEFAULT_CONFIG, verificationMode: "critical-only" },
+      decomposer: decomposer as any,
+      capabilityMatcher: new CapabilityMatcher(),
+      providerAssigner: new ProviderAssigner(PROVIDERS),
+      eventEmitter: emitter,
+      verifyNode,
+    });
+    brain.setExecuteNode(vi.fn().mockImplementation(async (node: any) => ({
+      nodeId: node.id, status: "ok", output: `Done: ${node.task}`, artifacts: [], toolResults: [],
+      provider: "claude", model: "sonnet", cost: 0.001, duration: 100,
+    })));
+
+    const result = await brain.execute("Review release readiness", { chatId: "test", goalTree });
+
+    // Exactly one node is critical; the other two are outside the mode's scope.
+    expect(result?.totalNodes).toBe(3);
+    expect(verifyNode).toHaveBeenCalledTimes(1);
+    expect(verifyNode).toHaveBeenCalledWith(
+      expect.objectContaining({ nodeId: "s1" }),
+      expect.anything(),
+    );
+
+    const done = emitter.emit.mock.calls.find((c) => c[0] === "supervisor:verify_done");
+    expect(done).toBeDefined();
+    const issue = (done![1] as { issues: string[] }).issues[0]!;
+    // Every critical node was verified: 1 of 1, not 1 of 3.
+    expect(issue).toContain("1 of 1");
+    expect(issue).not.toContain("of 3");
+    // ...and the sentence names the scope it measured, not "ok nodes".
+    expect(issue).toContain("critical nodes");
+    expect((done![1] as { verdict: string }).verdict).toBe("approve");
+  });
+
   it("returns null for non-decomposable tasks", async () => {
     const decomposer = {
       shouldDecompose: vi.fn().mockReturnValue(false),

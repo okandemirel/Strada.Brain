@@ -110,7 +110,15 @@ export interface VerificationVerdict {
 
 /** What the verify stage actually measured — so a skipped check never reads like a passed one. */
 export interface VerificationReport {
-  /** Nodes that finished "ok" and were eligible for verification under the active mode. */
+  /**
+   * Nodes that finished "ok" and were in the active mode's scope — under
+   * "critical-only" that is the critical nodes alone, not every ok node
+   * (audited 2026-09-02: it counted every ok node, so a run that verified all
+   * of its critical nodes still reported most of the plan as unverified).
+   * A node outside the scope is not a skipped check; nothing was ever due on
+   * it. Coverage the mode DID owe and did not deliver — no verifier wired,
+   * budget, sampling, a "skipped" verdict — still shows up as notVerified.
+   */
   readonly candidates: number;
   /** Nodes a verifier actually rendered a verdict on (approve / flag_issues / reject). */
   readonly verified: number;

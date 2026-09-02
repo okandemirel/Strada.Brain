@@ -538,7 +538,15 @@ export class SupervisorBrain {
           });
         }
         return this.verifyNode!(node, context);
-      } : undefined);
+      } : undefined,
+      // audited 2026-09-02: the report's `candidates` counted every ok node even
+      // in critical-only mode, so a run that verified all of its critical nodes
+      // announced "1 of 3 ok nodes independently verified" — two nodes the mode
+      // was never going to look at, counted as unverified. The mode's own scope
+      // is the denominator; the sentence below names which scope it measured.
+      this.config.verificationMode === "critical-only"
+        ? (result: NodeResult) => criticalNodeIds.has(String(result.nodeId))
+        : undefined);
 
       // audited 2026-09-02: verify_start, the "cross-checking" narrative and
       // verify_done were emitted around a verify() that is a no-op when the mode
@@ -602,7 +610,9 @@ export class SupervisorBrain {
           nodeId: "aggregate",
           verdict: verificationVerdict,
           issues: [
-            `${verificationReport.verified} of ${verificationReport.candidates} ok nodes independently verified` +
+            `${verificationReport.verified} of ${verificationReport.candidates}` +
+            ` ${this.config.verificationMode === "critical-only" ? "critical nodes" : "ok nodes"}` +
+            ` independently verified` +
             ` (approved ${verificationReport.approved}, flagged ${verificationReport.flagged}, rejected ${verificationReport.rejected})`,
           ],
         });

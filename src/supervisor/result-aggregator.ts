@@ -34,13 +34,24 @@ export interface CollectedResults {
 export class ResultAggregator {
   private readonly verificationConfig: VerificationConfig;
   private readonly verifyFn?: (node: NodeResult) => Promise<VerificationVerdict>;
+  private readonly inScope?: (node: NodeResult) => boolean;
 
   constructor(
     verificationConfig: VerificationConfig,
     verifyFn?: (node: NodeResult) => Promise<VerificationVerdict>,
+    /**
+     * Which ok nodes the active mode is willing to verify at all (audited
+     * 2026-09-02). Only "critical-only" narrows the scope, and only the caller
+     * knows which nodes are critical — NodeResult carries no capability
+     * profile. Omitted means "every ok node", which is what "always" and
+     * "sampling" mean; sampling's own dice are NOT scope, they are coverage the
+     * report must keep showing as unverified.
+     */
+    inScope?: (node: NodeResult) => boolean,
   ) {
     this.verificationConfig = verificationConfig;
     this.verifyFn = verifyFn;
+    this.inScope = inScope;
   }
 
   // ---------------------------------------------------------------------------
@@ -104,14 +115,23 @@ export class ResultAggregator {
     const okResults = results.filter((r) => r.status === "ok");
     const counts = { approved: 0, flagged: 0, rejected: 0 };
 
+    // audited 2026-09-02: `candidates` is documented as the ok nodes eligible
+    // under the ACTIVE mode, but counted every ok node — so a critical-only run
+    // that verified all of its critical nodes still reported "1 of 3 ok nodes
+    // independently verified", and notVerified (candidates - verified) invented
+    // two missed checks out of nodes the mode was never going to look at. The
+    // denominator is the mode's own scope. A node outside that scope is not a
+    // skipped check: nothing was ever due on it.
+    const candidates = this.inScope ? okResults.filter((r) => this.inScope!(r)) : okResults;
+
     if (mode === "disabled" || !this.verifyFn) {
       return {
         results,
         report: {
-          candidates: okResults.length,
+          candidates: candidates.length,
           verified: 0,
           ...counts,
-          notVerified: okResults.length,
+          notVerified: candidates.length,
         },
       };
     }
@@ -120,19 +140,21 @@ export class ResultAggregator {
 
     switch (mode) {
       case "always":
-        toVerify = okResults;
+        toVerify = candidates;
         break;
 
       case "critical-only":
-        // Verify nodes that have a quality preference (indicated by capabilityProfile on tagged nodes)
-        // Since NodeResult doesn't carry capability profile, verify all ok nodes in critical-only
-        // The caller is responsible for filtering to critical nodes before passing
-        toVerify = okResults;
+        // NodeResult carries no capability profile, so the caller supplies the
+        // criticality predicate as `inScope`; without one this stays "every ok
+        // node", the pre-2026-09-02 behaviour. Sending only in-scope nodes also
+        // stops non-critical nodes from eating the verification budget on their
+        // way to a "skipped" verdict.
+        toVerify = candidates;
         break;
 
       case "sampling": {
         const rate = Math.max(0, Math.min(1, samplingRate));
-        toVerify = okResults.filter(() => Math.random() < rate);
+        toVerify = candidates.filter(() => Math.random() < rate);
         break;
       }
 
@@ -199,10 +221,10 @@ export class ResultAggregator {
     return {
       results: updatedResults,
       report: {
-        candidates: okResults.length,
+        candidates: candidates.length,
         verified,
         ...counts,
-        notVerified: okResults.length - verified,
+        notVerified: candidates.length - verified,
       },
     };
   }
