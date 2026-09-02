@@ -1142,8 +1142,8 @@ Write operations (file writes, git commits, shell execution) can require user co
 ### Layer 8: Tool Output Sanitization
 All tool results are capped at 8192 characters and scrubbed for API key patterns before feeding back to the LLM.
 
-### Layer 9: RBAC (Internal)
-5 roles (superadmin, admin, developer, viewer, service) with a permission matrix covering 9 resource types. Policy engine supports time-based, IP-based, and custom conditions.
+### Layer 9: Roles (Internal, static)
+5 roles (superadmin, admin, developer, viewer, service) with a static permission table in `src/security/auth-hardened.ts`. There is no policy engine and no resource/action matrix; nothing in the runtime denies a tool call because of a role (audited 2026-09-02).
 
 ### Layer 10: Daemon Security
 `DaemonSecurityPolicy` enforces tool-level approval requirements for daemon-triggered operations. Write tools require explicit user approval via the `ApprovalQueue` before execution.
