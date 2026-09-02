@@ -27,6 +27,7 @@ import { type DIContainer, createContainer } from "./di-container.js";
 import { ToolRegistry, classifyRuntimeToolMetadata } from "./tool-registry.js";
 import { checkStradaDeps } from "../config/strada-deps.js";
 import type { FrameworkKnowledgeStore } from "../intelligence/framework/framework-knowledge-store.js";
+import { FrameworkStoreHandoff } from "./framework-store-handoff.js";
 import type { FrameworkSyncPipeline } from "../intelligence/framework/framework-sync-pipeline.js";
 import {
   LEARNING_DEFAULTS,
@@ -529,10 +530,13 @@ async function bootstrapImpl(
 
   let frameworkStore: FrameworkKnowledgeStore | null = null;
   let frameworkSyncPipeline: FrameworkSyncPipeline | null = null;
-  // Callback set after orchestrator is constructed; the IIFE calls it when sync completes.
-  // deferredFrameworkStore buffers the result if the IIFE finishes before the callback is assigned.
-  let onFrameworkStoreReady: ((store: FrameworkKnowledgeStore) => void) | null = null;
-  let deferredFrameworkStore: FrameworkKnowledgeStore | null = null;
+  // The prompt generator is wired only once boot sync has SETTLED. The old
+  // `if (frameworkStore)` gate tested that the store OBJECT existed — assigned
+  // three statements before the slow `await bootSync()` — so on the normal
+  // boot the generator read an unsynced DB, cached `null` for the process
+  // lifetime, and the post-sync callback lived in a branch never taken
+  // (audited 2026-09-02).
+  const frameworkHandoff = new FrameworkStoreHandoff<FrameworkKnowledgeStore>();
 
   if (frameworkSyncConfig.bootSync) {
     void (async () => {
@@ -569,21 +573,21 @@ async function bootstrapImpl(
           packages: syncResult.reports.map((r) => `${r.packageId}:v${r.currentVersion ?? "?"}`).join(", "),
         });
 
-        // Notify the orchestrator (if already constructed) that framework store is ready
-        if (onFrameworkStoreReady && frameworkStore) {
-          (onFrameworkStoreReady as (store: FrameworkKnowledgeStore) => void)(frameworkStore);
-        } else if (frameworkStore) {
-          // IIFE completed before callback was assigned -- buffer the result
-          deferredFrameworkStore = frameworkStore;
-        }
+        // Sync settled: hand the store to the prompt-generator wiring (which
+        // may or may not have registered yet — the handoff orders both cases).
+        frameworkHandoff.settle({ store: frameworkStore });
 
         if (frameworkSyncConfig.watchEnabled) {
           await frameworkSyncPipeline.startWatcher();
         }
       } catch (fwError) {
-        logger.debug("Framework sync skipped", {
-          reason: fwError instanceof Error ? fwError.message : "unknown",
-        });
+        const reason = fwError instanceof Error ? fwError.message : String(fwError);
+        // Was logger.debug("Framework sync skipped") — invisible at LOG_LEVEL=info.
+        logger.warn("Framework knowledge sync failed", { reason });
+        // Settle with whatever store opened: its PERSISTED snapshots (from an
+        // earlier successful sync) are still real knowledge, and the consumer
+        // turns `failure` into a startup notice.
+        frameworkHandoff.settle({ store: frameworkStore, failure: reason });
       }
     })();
   }
@@ -1413,22 +1417,21 @@ async function bootstrapImpl(
       });
     }
   };
-  if (frameworkStore) {
-    // IIFE already completed synchronously (unlikely but possible)
-    await wireFrameworkPromptGenerator(frameworkStore);
-  } else {
-    // Set callback for when the async IIFE completes
-    onFrameworkStoreReady = (store) => {
+  // Runs when boot sync has settled (immediately if it already has) — never
+  // against a store that merely exists mid-sync (audited 2026-09-02).
+  frameworkHandoff.onSettled(({ store, failure }) => {
+    if (failure) {
+      startupNotices.push(
+        `Framework knowledge sync failed: ${failure}. Prompts carry the static Strada contracts ` +
+          "plus whatever snapshot an earlier sync persisted — no fresh class inventory this session.",
+      );
+    }
+    if (store) {
       wireFrameworkPromptGenerator(store).catch((err) => {
         logger.warn("FrameworkPromptGenerator wiring failed", { error: err instanceof Error ? err.message : String(err) });
       });
-    };
-    // If the IIFE already completed before we got here, apply the buffered result
-    if (deferredFrameworkStore) {
-      onFrameworkStoreReady(deferredFrameworkStore);
-      deferredFrameworkStore = null;
     }
-  }
+  });
 
   const { chainManager } = await initializeToolChainStage({
     config,
