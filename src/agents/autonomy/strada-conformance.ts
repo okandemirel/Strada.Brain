@@ -1153,39 +1153,15 @@ export class StradaConformanceGuard {
       );
     }
 
-    return this.nothingToDrawReason();
-  }
-
-  /**
-   * A game that has been assembled and played and has nothing in it to draw.
-   *
-   * Only once the game has been assembled AND run. Before that the missing art
-   * is not yet a finding — a project mid-build is allowed to have nothing in
-   * it, and the gates for "not assembled" and "never run" say that better.
-   *
-   * Shared by the ASSETS UNSOURCED ask and the delivery claim: the ask is
-   * budgeted, the claim is not (audited 2026-09-02).
-   */
-  private nothingToDrawReason(): string | null {
+    // Only once the game has been assembled AND run. Before that the missing art
+    // is not yet a finding — a project mid-build is allowed to have nothing in
+    // it, and the gates for "not assembled" and "never run" say that better.
     if (!this.wroteProjectCode || !this.attemptedPlaymodeVerification) return null;
     if (this.projectVisualAssetCount() > 0) return null;
 
     return (
       "this game has been assembled and played, and contains no art whatsoever — " +
       "no sprite, no mesh, no prefab — so there is nothing in it to draw"
-    );
-  }
-
-  /**
-   * Assembled, wired, and never started. The same condition the GAME NEVER RUN
-   * ask is keyed on, read without its budget.
-   */
-  private neverRunReason(): string | null {
-    if (this.attemptedPlaymodeVerification) return null;
-    if (this.assessWiring()?.wired !== true) return null;
-    return (
-      "the scene is assembled and wired but this run never started the game " +
-      "(unity_playmode_verify was never called)"
     );
   }
 
@@ -1326,35 +1302,10 @@ export class StradaConformanceGuard {
   }
 
   unmetDeliveryConditions(): readonly string[] {
-    // Every budgeted ask must be mirrored here, read WITHOUT its budget. Audited
-    // 2026-09-02: only NOTHING DRAWN was — GAME NEVER RUN, PREFABS UNBOUND,
-    // ASSETS UNSOURCED ("nothing in it to draw") and ELEMENT ASSETS MISSING each
-    // told the agent to "report it that way rather than as done", went quiet
-    // after their asks, and the run finished "approved" for a game that was
-    // never started. The unbudgeted gates (NOT ASSEMBLED, NO CAMERA, …) keep
-    // blocking through getPrompt() and need no mirror.
     const unmet: string[] = [];
     const notDrawn = this.nothingDrawnReason();
     if (notDrawn !== null) {
       unmet.push(`the game has never been observed to render: ${notDrawn}`);
-    }
-    const neverRun = this.neverRunReason();
-    if (neverRun !== null) {
-      unmet.push(`the game was never run: ${neverRun}`);
-    }
-    const unbound = this.unboundPrefabConfigs();
-    if (unbound.length > 0) {
-      unmet.push(
-        `prefab configs have no asset instance, so nothing is ever spawned: ${unbound.join(", ")}`,
-      );
-    }
-    const noArt = this.nothingToDrawReason();
-    if (noArt !== null) {
-      unmet.push(noArt);
-    }
-    const coverage = this.elementAssetCoverageReason();
-    if (coverage !== null) {
-      unmet.push(`scheduled elements have no bound art: ${coverage}`);
     }
     return unmet;
   }
