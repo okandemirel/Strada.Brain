@@ -16,7 +16,36 @@ import { MUTATION_TOOLS, COMPILABLE_EXT, extractFilePath, isVerificationToolName
 import { expandExecutedToolCalls } from "./executed-tools.js";
 import type { WorkerRunResult } from "../supervisor/supervisor-types.js";
 
-const VERIFICATION_SHELL_COMMAND_RE = /\b(?:test|build|check|lint|typecheck|verify|compile|tsc|eslint|vitest|jest|pytest)\b/iu;
+/**
+ * A shell command is a verification when the PROGRAM it invokes is a
+ * verifier — not when any word in the line happens to be "test" or "build".
+ *
+ * Audited 2026-09-02: the previous pattern was an unanchored word search over
+ * the whole line, so `cp Assets/Scripts/Test.cs …`, `mkdir -p build` and
+ * `cat GAME_DESIGN.md | grep test` each cleared the compile gate and published
+ * lastBuildOk=true — a file copy recorded as a clean build. This matches the
+ * head of a command segment, after any env assignments and launchers.
+ */
+const VERIFICATION_COMMAND_HEAD_RE = new RegExp(
+  "^(?:[A-Za-z_][A-Za-z0-9_]*=\\S*\\s+)*" +
+    "(?:(?:npx|bunx|pnpm\\s+(?:exec|dlx)|yarn\\s+dlx)\\s+)?" +
+    "(?:" +
+    "(?:npm|pnpm|yarn|bun)\\s+(?:run\\s+)?(?:test|build|check|lint|typecheck|verify|compile)[\\w:.-]*" +
+    "|(?:tsc|eslint|vitest|jest|pytest|mocha)" +
+    "|python3?\\s+-m\\s+pytest" +
+    "|dotnet\\s+(?:build|test|vstest)" +
+    "|(?:make|cargo|go|gradle|\\.\\/gradlew|mvn|msbuild|xcodebuild)\\s+(?:test|build|check|lint|verify|compile)" +
+    ")(?:\\s|$)",
+  "iu",
+);
+
+/** True when any segment of a shell chain (`cd x && npm test`) invokes a verifier. */
+function shellCommandVerifies(command: string): boolean {
+  return command
+    .split(/\s*(?:&&|\|\||[;|\n])\s*/u)
+    .map((segment) => segment.replace(/^[\s(]+/u, ""))
+    .some((segment) => VERIFICATION_COMMAND_HEAD_RE.test(segment));
+}
 
 // ─── State ──────────────────────────────────────────────────────────────────────
 
@@ -473,7 +502,7 @@ function isVerificationTool(toolName: string, input: Record<string, unknown>): b
   }
 
   const command = typeof input["command"] === "string" ? input["command"].trim() : "";
-  return command.length > 0 && VERIFICATION_SHELL_COMMAND_RE.test(command);
+  return command.length > 0 && shellCommandVerifies(command);
 }
 
 /** A path that holds tests rather than the code under test. */

@@ -160,6 +160,58 @@ describe("SelfVerification", () => {
   });
 
   /**
+   * Audited 2026-09-02: VERIFICATION_SHELL_COMMAND_RE was an unanchored word
+   * search over the whole line, so `cp Assets/Scripts/Test.cs …`, `mkdir -p
+   * build` and `cat GAME_DESIGN.md | grep test` each cleared the compile gate,
+   * emptied pendingFiles and published lastBuildOk=true — a file copy recorded
+   * as a clean build. A shell command verifies when the PROGRAM it invokes is
+   * a verifier, checked per segment of a chain.
+   */
+  describe("a shell command is a verification only when it invokes a verifier", () => {
+    function fiveSourceFiles(): SelfVerification {
+      const verifier = new SelfVerification();
+      for (let i = 0; i < 5; i++) {
+        verifier.track("file_write", { path: `Assets/Scripts/Thing${i}.cs` }, {
+          toolCallId: `w${i}`, content: "written", isError: false,
+        });
+      }
+      expect(verifier.needsVerification()).toBe(true);
+      return verifier;
+    }
+
+    it.each([
+      "cp Assets/Scripts/Test.cs Assets/Scripts/Test2.cs",
+      "mkdir -p build",
+      "cat GAME_DESIGN.md | grep test",
+      "git commit -m 'add board test'",
+      "rm -rf Library/Bee/build",
+      "grep -rn Test Assets/Scripts",
+    ])("does not clear the gate for: %s", (command) => {
+      const verifier = fiveSourceFiles();
+      verifier.track("shell_exec", { command }, { toolCallId: "s", content: "", isError: false });
+
+      expect(verifier.needsVerification()).toBe(true);
+      expect(verifier.getState().lastBuildOk).toBeNull();
+      expect(verifier.getState().pendingFiles.size).toBe(5);
+    });
+
+    it.each([
+      "npm run typecheck:src",
+      "cd Assets && npx tsc --noEmit",
+      "dotnet build src/Core/Core.csproj -v q",
+      "CI=1 npx vitest run src/agents",
+      "make test",
+      "npm test",
+    ])("clears the gate for: %s", (command) => {
+      const verifier = fiveSourceFiles();
+      verifier.track("shell_exec", { command }, { toolCallId: "s", content: "Exit code: 0", isError: false });
+
+      expect(verifier.needsVerification()).toBe(false);
+      expect(verifier.getState().lastBuildOk).toBe(true);
+    });
+  });
+
+  /**
    * Audited 2026-09-02: lastBuildOk was assigned only by a verification, so
    * after one clean compile it stayed `true` through every later compilable
    * change — needsVerification() (hasCompilableChanges && lastBuildOk !== true)
