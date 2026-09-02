@@ -4034,6 +4034,11 @@ export class Orchestrator {
             reason: "rename operation is missing a source or destination path",
           };
         }
+        // audited 2026-09-02: this case predates the wall and checked nothing
+        // but presence, so write-to-module + rename-out reached any path the
+        // wall refuses. A rename is a write at its destination.
+        const renameViolation = this.frameworkPathsViolation(newPath);
+        if (renameViolation) return { approved: false, reason: renameViolation };
         return { approved: true };
       }
       case "git_commit": {
@@ -4057,26 +4062,9 @@ export class Orchestrator {
         // choke point both direct writes and batch_execute operations pass
         // through, so a loose Assets/Scripts/*.cs cannot arrive by either
         // path. Editor/Tests/Plugins tooling and non-code assets stay free.
-        if (
-          this.conformanceFrameworkPathsOnly !== false &&
-          toolName !== "file_delete" &&
-          toolName !== "file_delete_directory"
-        ) {
-          const normalized = path.replace(/\\/g, "/").replace(/^\.\//, "");
-          const isLooseGameCode =
-            /\.cs$/i.test(normalized) &&
-            /^assets\//i.test(normalized) &&
-            !/^assets\/(modules|editor|tests|plugins)\//i.test(normalized);
-          if (isLooseGameCode) {
-            return {
-              approved: false,
-              reason:
-                "Strada conformance (frameworkPathsOnly): compilable game code belongs under " +
-                "Assets/Modules/<Name>Module/ (the Strada.Core module pattern — config + DI + " +
-                "systems), Assets/Editor/, Assets/Tests/ or Assets/Plugins/. Do not write loose " +
-                "scripts elsewhere under Assets/; create or extend the owning module instead.",
-            };
-          }
+        if (toolName !== "file_delete" && toolName !== "file_delete_directory") {
+          const violation = this.frameworkPathsViolation(path);
+          if (violation) return { approved: false, reason: violation };
         }
         return { approved: true };
       }
@@ -4096,6 +4084,27 @@ export class Orchestrator {
       default:
         return { approved: true };
     }
+  }
+
+  /**
+   * The frameworkPathsOnly wall: the refusal reason when `path` would land
+   * compilable game code outside the Strada module layout, else null.
+   * Shared by every write shape (write/create/edit and rename destination).
+   */
+  private frameworkPathsViolation(path: string): string | null {
+    if (this.conformanceFrameworkPathsOnly === false) return null;
+    const normalized = path.replace(/\\/g, "/").replace(/^\.\//, "");
+    const isLooseGameCode =
+      /\.cs$/i.test(normalized) &&
+      /^assets\//i.test(normalized) &&
+      !/^assets\/(modules|editor|tests|plugins)\//i.test(normalized);
+    if (!isLooseGameCode) return null;
+    return (
+      "Strada conformance (frameworkPathsOnly): compilable game code belongs under " +
+      "Assets/Modules/<Name>Module/ (the Strada.Core module pattern — config + DI + " +
+      "systems), Assets/Editor/, Assets/Tests/ or Assets/Plugins/. Do not write loose " +
+      "scripts elsewhere under Assets/; create or extend the owning module instead."
+    );
   }
 
   /**
