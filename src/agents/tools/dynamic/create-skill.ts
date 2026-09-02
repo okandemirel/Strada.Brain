@@ -146,14 +146,37 @@ export class CreateSkillTool implements ITool {
       };
     }
 
-    // Hot-reload: make the skill available in the current session
-    let hotReloaded = false;
+    // Hot-reload: make the skill available in the current session.
+    // Audited 2026-09-02: "hot-loaded and available" was claimed from the mere
+    // absence of a throw, but loadSingle never throws — it returns the entry
+    // already held for that name (a bundled "web-search" collision loads
+    // nothing new), an entry parked as error/gated, or null. Report what the
+    // loader actually holds, and say "available" only for an active entry
+    // loaded from the directory just written.
+    let hotLoadOutcome = "This skill will be discovered automatically in future sessions.";
     if (context.onSkillCreated) {
       try {
-        await context.onSkillCreated(skillsDir);
-        hotReloaded = true;
-      } catch {
-        // Non-fatal — skill is on disk and will load next session
+        const entry = await context.onSkillCreated(skillsDir);
+        if (entry === null) {
+          hotLoadOutcome =
+            "Hot-load did NOT register the skill: the loader could not read the SKILL.md just written. " +
+            "It is on disk and discovery will retry at the next session start.";
+        } else if (resolve(entry.path) !== skillsDir) {
+          hotLoadOutcome =
+            `Hot-load did NOT load this skill: a skill named '${spec.name}' is already loaded from ${entry.path} ` +
+            `(status: ${entry.status}) and the session keeps that one. The new file is on disk only — ` +
+            "choose another name, or remove the existing skill first.";
+        } else if (entry.status === "active") {
+          hotLoadOutcome = "The skill has been hot-loaded and is available in the current session.";
+        } else {
+          hotLoadOutcome =
+            `Hot-load registered the skill with status '${entry.status}'` +
+            `${entry.gateReason ? ` (${entry.gateReason})` : ""} — it is NOT available in this session.`;
+        }
+      } catch (err) {
+        hotLoadOutcome =
+          `Hot-load failed: ${err instanceof Error ? err.message : String(err)}. ` +
+          "The skill is on disk and discovery will retry at the next session start.";
       }
     }
 
@@ -164,9 +187,7 @@ export class CreateSkillTool implements ITool {
     return {
       content:
         `Skill '${spec.name}' created at ${filePath}\n\n` +
-        (hotReloaded
-          ? `The skill has been hot-loaded and is available in the current session.\n\n`
-          : `This skill will be discovered automatically in future sessions.\n\n`) +
+        `${hotLoadOutcome}\n\n` +
         `Skill content preview (first 200 chars):\n${preview}`,
     };
   }

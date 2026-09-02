@@ -1351,7 +1351,7 @@ async function bootstrapImpl(
     loopHardCapReplan: config.loopHardCapReplan,
     loopHardCapBlock: config.loopHardCapBlock,
     progressAssessmentEnabled: config.progressAssessmentEnabled,
-    onSkillCreated: async (skillPath) => { await skillManager.loadSingle(skillPath); },
+    onSkillCreated: (skillPath) => skillManager.loadSingle(skillPath),
     getSkillEntries: () => skillManager.getEntries(),
     agentCoreFlagSet,
     capabilityRegistry,

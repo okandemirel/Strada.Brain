@@ -12,6 +12,14 @@
  * Minimal tool shape used by ToolContext callbacks.
  * The full ITool interface in tool.interface.ts extends this.
  */
+/** What the skill loader holds for a name after a hot-load attempt. */
+export interface SkillHotLoadVerdict {
+  readonly status: "active" | "disabled" | "gated" | "error" | "incomplete";
+  /** Directory the loaded entry came from — not necessarily the one just written. */
+  readonly path: string;
+  readonly gateReason?: string | undefined;
+}
+
 export interface IToolBase {
   /** Unique tool name (used in function calling) */
   readonly name: string;
@@ -79,8 +87,17 @@ export interface ToolContext {
   unregisterDynamicTool?: (toolName: string) => boolean;
   /** Look up an existing tool by name (for composite tool chaining). */
   lookupTool?: (toolName: string) => IToolBase | undefined;
-  /** Called after a skill is created on disk — triggers hot-reload in current session. */
-  onSkillCreated?: (skillPath: string) => Promise<void>;
+  /**
+   * Called after a skill is created on disk — triggers hot-reload in current
+   * session and returns the loader's verdict: the entry it now holds for that
+   * name (which may be a pre-existing one from another tier, or one whose
+   * status is not "active"), or null when it could not read the skill at all.
+   *
+   * Audited 2026-09-02: the callback returned void and the tool inferred
+   * "hot-loaded and available" from the absence of a throw, while the loader
+   * had skipped a name collision or parked the entry as error/gated.
+   */
+  onSkillCreated?: (skillPath: string) => Promise<SkillHotLoadVerdict | null>;
 
   // ── Codebase Memory Vault (optional; provided when vault.enabled) ─────
 
