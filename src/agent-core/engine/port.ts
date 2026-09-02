@@ -428,6 +428,14 @@ export function createAgentCorePort(
         deps.clearRunInstinctCredits(c.chatId);
         deps.propagateInstinctIdsToChannel(c.chatId, []);
         } finally {
+          // audited 2026-09-02: SelfVerification publishes into a process-wide
+          // map that prefers ANY currently-failing entry, and nothing retired a
+          // verifier when its run ended — so a finished run's last red compile,
+          // naming files nobody has any more, outranked every live worker's
+          // green one for the whole ten-minute staleness window. A run that is
+          // over has no current build state. In the finally so a persistence
+          // throw above cannot leave the publication behind.
+          c.selfVerification.dispose();
           // v1 parity (runBackgroundTask finally :4894-4896): settle the joined worker card WITHOUT
           // marking the parent whole-goal episode terminal — the episode stays open until the ROOT
           // run's requestEnd. In a FINALLY so a persistence throw above can never leave the card

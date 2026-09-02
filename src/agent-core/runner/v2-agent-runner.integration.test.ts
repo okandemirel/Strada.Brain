@@ -34,6 +34,10 @@ import { DEFAULT_TASK_CONFIG } from "../../config/config.js";
 import type { TaskConfig } from "../../config/config.js";
 import { createInitialState, type AgentState } from "../../agents/agent-state.js";
 import { TaskPlanner } from "../../agents/autonomy/task-planner.js";
+import {
+  SelfVerification,
+  getLatestGlobalBuildState,
+} from "../../agents/autonomy/self-verification.js";
 import { getResilienceMessage } from "../../agents/resilience-messages.js";
 import { createMonitorLifecycle } from "../../dashboard/monitor-lifecycle.js";
 import type { WorkspaceBus } from "../../dashboard/workspace-bus.js";
@@ -1221,5 +1225,53 @@ describe("BUG#1 P2 — plain-loop live step DAG (REAL port + REAL MonitorLifecyc
     );
     expect(stepDagInits).toHaveLength(0);
     expect(stepUpdates).toHaveLength(0);
+  });
+});
+
+describe("run teardown — the ended run stops publishing its build state", () => {
+  it("retires this run's red compile so a live worker's green one wins again", async () => {
+    // audited 2026-09-02: SelfVerification.dispose() existed and nothing called
+    // it. The verifier is built per run in createAutonomyBundle and publishes
+    // into a process-wide map that prefers ANY currently-failing entry, so a
+    // finished run's last red compile — with its long-gone files — outranked
+    // every live worker's green one until the ten-minute staleness window
+    // expired. Drives the REAL port so the assertion is about the wiring, not
+    // about dispose() itself (global-build-state.test.ts covers that).
+    const provider = mkScriptedProvider();
+    provider.chat
+      .mockResolvedValueOnce(resp({ text: "plan", stopReason: "end_turn" })) // PLANNING→EXECUTING
+      .mockResolvedValueOnce(
+        resp({
+          text: "",
+          stopReason: "tool_use",
+          toolCalls: [{ id: "tc-1", name: "unity_verify_change", input: {} }],
+        }),
+      )
+      .mockResolvedValueOnce(resp({ text: "done", stopReason: "end_turn" })); // REFLECTING→terminal
+    const redCompile = mkTool("unity_verify_change");
+    (redCompile.execute as ReturnType<typeof vi.fn>).mockResolvedValue({
+      content: "error CS0103: The name 'Board' does not exist",
+      isError: true,
+    });
+    const h = buildHarness(provider, [mkTool("file_read"), redCompile]);
+
+    // A worker that is still alive and compiling clean, published BEFORE the
+    // run under test so the run's red entry is the newer one.
+    const liveWorker = new SelfVerification();
+    liveWorker.track(
+      "unity_verify_change",
+      {},
+      { toolCallId: "v", content: "compile green", isError: false },
+    );
+    expect(getLatestGlobalBuildState().lastBuildOk).toBe(true);
+
+    try {
+      await drive(h.clock, h.runner.run(mkRequest(), mkIO("worker")));
+
+      // The run is over. Its verdict describes a tree nobody is working on.
+      expect(getLatestGlobalBuildState().lastBuildOk).toBe(true);
+    } finally {
+      liveWorker.dispose();
+    }
   });
 });
