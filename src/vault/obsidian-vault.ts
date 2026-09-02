@@ -636,10 +636,15 @@ export class ObsidianVault implements IVault {
       for (const id of newHnswIds) {
         try { this.adapter.remove(id); } catch { /* per-id best effort */ }
       }
-      // Drop the file row + chunks so the next sync retries cleanly. The
-      // OLD HNSW vectors are still in the external index but unreferenced
-      // (their SQL rows were just deleted) — a follow-up sync will rebuild
-      // both sides.
+      // The OLD vectors go too (audited 2026-09-02): their chunk rows were
+      // replaced by runReindexTxn, so no SQL row references them and no later
+      // sync could ever remove them — "a follow-up sync will rebuild both
+      // sides" rebuilt only the SQL side and left one stranded vector set per
+      // file per embedding hiccup.
+      for (const id of oldHnswIds) {
+        try { this.adapter.remove(id); } catch { /* per-id best effort */ }
+      }
+      // Drop the file row + chunks so the next sync retries cleanly.
       this.store.deleteFile(relPath);
       this.invalidateEdgesCache();
       throw err;

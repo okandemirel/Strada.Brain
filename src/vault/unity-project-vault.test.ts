@@ -213,7 +213,12 @@ describe("UnityProjectVault reindex vector lifecycle", () => {
     expect(Array.isArray(result.hits)).toBe(true);
   });
 
-  it("keeps prior vectors when re-embedding fails transiently, then rebuilds on retry", async () => {
+  // Audit 2026-09-02: the failure branch logged "keeping prior vectors; will
+  // retry next sync", but runReindexTxn had already replaced the file's chunk
+  // rows, cascading away every chunk_id -> hnsw_id mapping. The retry's
+  // listHnswIdsForPath therefore saw [] and the kept vectors were stranded in
+  // the store forever — one orphan set per file per embedding hiccup.
+  it("a transient embed failure drops the now-unreferenced old vectors and the retry leaves exactly the new ones", async () => {
     // Initial index embedded the note → at least one live vector exists.
     const initialIds = [...store.live.keys()];
     expect(initialIds.length).toBeGreaterThan(0);
@@ -223,24 +228,26 @@ describe("UnityProjectVault reindex vector lifecycle", () => {
     embed.shouldFail = true;
     await vault.reindexFile("note.md");
 
-    // Core guarantee (finding #3): a transient embed failure must NOT remove the
-    // old vectors. The old ids are still live because the new embed threw before
-    // any new vector was added and the old-removal only runs on success.
-    for (const id of initialIds) {
-      expect(store.live.has(id)).toBe(true);
-    }
+    // The old chunk rows are gone, so the old vectors are unreachable from SQL
+    // and must not be kept alive: nothing can ever remove them later.
+    expect(initialIds.filter((id) => store.live.has(id))).toEqual([]);
+    expect(store.live.size).toBe(0);
+    // The provisional empty hash forces the retry (no short-circuit).
+    expect(vault.listFiles().find((f) => f.path === "note.md")?.blobHash).toBe("");
 
-    // Recovery: embedding works again. Because the failed pass reset the stored
-    // hash, this reindex must NOT short-circuit — it re-embeds (new id) and only
-    // then removes the old vectors.
+    // Recovery: embedding works again → fresh vectors, and ONLY fresh vectors.
     embed.shouldFail = false;
-    await vault.reindexFile("note.md");
-
+    expect(await vault.reindexFile("note.md")).toBe(true);
     const finalIds = [...store.live.keys()];
-    // The file is vector-searchable again: a fresh vector (id greater than any
-    // initial id) was created on retry, proving the reset hash forced a
-    // re-embed instead of short-circuiting — i.e. no permanent vector loss.
-    expect(finalIds.some((id) => id > Math.max(...initialIds))).toBe(true);
+    expect(finalIds.length).toBeGreaterThan(0);
+    expect(finalIds.every((id) => id > Math.max(...initialIds))).toBe(true);
+    expect(vault.listFiles().find((f) => f.path === "note.md")?.blobHash).not.toBe("");
+
+    // A later clean reindex reclaims the previous vectors as before (control).
+    await writeFile(join(dir, "note.md"), "# Note\nthird body\n", "utf8");
+    expect(await vault.reindexFile("note.md")).toBe(true);
+    expect(finalIds.filter((id) => store.live.has(id))).toEqual([]);
+    expect(store.live.size).toBe(finalIds.length);
   });
 });
 

@@ -318,11 +318,13 @@ export class UnityProjectVault implements IVault {
   /**
    * Actual reindex. MUST be called from within the writeLock.
    *
-   * Ordering: snapshot the OLD HNSW ids but keep them live; write the SQL rows
-   * + chunks; embed the NEW vectors; ONLY on embed success remove the OLD
-   * vectors. On embed failure, roll back any partial new vectors and reset the
-   * stored hash so the next sync re-embeds — this prevents a transient
-   * embedding failure from permanently losing a file's vectors.
+   * Ordering: snapshot the OLD HNSW ids (their SQL mapping dies with the chunk
+   * rows in the transaction below); write the SQL rows + chunks; embed the NEW
+   * vectors. On success remove the OLD vectors and commit the real hash. On
+   * failure remove BOTH the partial new vectors and the old ones — nothing in
+   * SQL references them any more — and leave the provisional empty hash so the
+   * next sync re-embeds the file (audited 2026-09-02: keeping the old vectors
+   * stranded them for the life of the store).
    */
   protected async reindexFileInternal(relPath: string): Promise<boolean> {
     const fileInfo = await getIndexableFileInfo(this.rootPath, relPath);
@@ -420,17 +422,27 @@ export class UnityProjectVault implements IVault {
       // can't flood the log with one identical line per file.
       if (nowMs - this.lastEmbedWarnAtMs > UnityProjectVault.EMBED_WARN_WINDOW_MS) {
         this.lastEmbedWarnAtMs = nowMs;
-        getLoggerSafe().warn(`[vault ${this.id}] embedding failed for ${relPath} (and possibly other files), keeping prior vectors; will retry next sync — fix the embedding backend to enable semantic search`, {
+        getLoggerSafe().warn(`[vault ${this.id}] embedding failed for ${relPath} (and possibly other files): the file is indexed lexically and has no vectors until the next sync re-embeds it — fix the embedding backend to restore semantic search`, {
           error: embedErrMsg,
         });
       } else {
-        getLoggerSafe().debug(`[vault ${this.id}] embedding failed for ${relPath}, keeping prior vectors; will retry next sync`, {
+        getLoggerSafe().debug(`[vault ${this.id}] embedding failed for ${relPath}; lexical index kept, vectors rebuilt on next sync`, {
           error: embedErrMsg,
         });
       }
       // Roll back any vectors inserted before the failure. The provisional empty
       // hash is already committed — nothing further to reset.
       for (const id of newHnswIds) {
+        try { this.adapter.remove(id); } catch { /* per-id best effort */ }
+      }
+      // The OLD vectors must go too (audited 2026-09-02): runReindexTxn has
+      // already replaced this file's chunk rows, which cascaded away every
+      // chunk_id -> hnsw_id mapping. "Keeping prior vectors" therefore kept
+      // vectors that no query could reach and no later pass could remove —
+      // listHnswIdsForPath on the retry returned [] — stranding one vector set
+      // per file per embedding hiccup. The retry is still guaranteed by the
+      // provisional empty hash.
+      for (const id of oldHnswIds) {
         try { this.adapter.remove(id); } catch { /* per-id best effort */ }
       }
     }
