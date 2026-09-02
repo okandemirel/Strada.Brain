@@ -34,6 +34,12 @@ export class CLIChannel implements IChannelAdapter {
   private processing = false;
   private readonly pendingInputs: string[] = [];
   private pendingConfirmation: PendingCliConfirmation | null = null;
+  /**
+   * Set when stdin hit EOF while a message was in flight or queued: the
+   * shutdown is deferred to drainInputQueue's finally so the run is not killed
+   * mid-task (audited 2026-09-02).
+   */
+  private shutdownAfterDrain = false;
   private feedbackReactionCallback: FeedbackReactionCallback | null = null;
   /** Per-chatId applied instinct IDs for feedback attribution. */
   private readonly appliedInstinctIds = new Map<string, string[]>();
@@ -64,15 +70,26 @@ export class CLIChannel implements IChannelAdapter {
 
     // Handle stdin EOF (Ctrl+D or piped input ending) to prevent infinite hang
     this.rl.on("close", () => {
-      if (this.healthy) {
-        console.log("\nStdin closed (EOF). Shutting down CLI...");
-        this.healthy = false;
-        // Resolve any pending confirmation so its awaiting tool promise doesn't
-        // hang past shutdown; 'timeout' is treated as "do not proceed".
-        this.pendingConfirmation?.finalize("timeout");
-        this.rl = null;
-        process.kill(process.pid, "SIGINT");
+      if (!this.healthy) return;
+      // Resolve any pending confirmation so its awaiting tool promise doesn't
+      // hang past shutdown; 'timeout' is treated as "do not proceed".
+      this.pendingConfirmation?.finalize("timeout");
+      this.rl = null;
+      // Was: SIGINT unconditionally. Over a pipe readline emits 'line' then
+      // 'close' immediately, so the kill landed while the handler was still
+      // running — the run died mid-task, queued lines were discarded, and the
+      // process exited 0 without an answer. Defer the shutdown until the queue
+      // drains; nothing more can arrive since stdin is gone (audited 2026-09-02).
+      const queued = this.pendingInputs.length;
+      if (this.processing || queued > 0) {
+        this.shutdownAfterDrain = true;
+        console.log(
+          `\nStdin closed (EOF). Finishing ${this.processing ? "the in-flight message" : "queued input"}` +
+            `${queued > 0 ? ` and ${queued} queued input(s)` : ""} before shutting down...`,
+        );
+        return;
       }
+      this.shutdownNow();
     });
     this.rl.on("line", (input) => {
       void this.handleLine(input);
@@ -86,8 +103,21 @@ export class CLIChannel implements IChannelAdapter {
     this.showUserPrompt();
   }
 
+  /** Mark unhealthy and ask the process to shut down (stdin is gone). */
+  private shutdownNow(): void {
+    console.log("\nStdin closed (EOF). Shutting down CLI...");
+    this.healthy = false;
+    this.shutdownAfterDrain = false;
+    process.kill(process.pid, "SIGINT");
+  }
+
   async disconnect(): Promise<void> {
     this.healthy = false;
+    this.shutdownAfterDrain = false;
+    if (this.pendingInputs.length > 0) {
+      // Do not silently truncate the FIFO: say how many inputs never ran.
+      console.log(`\nDiscarding ${this.pendingInputs.length} queued input(s) not yet processed.`);
+    }
     this.pendingInputs.length = 0;
     this.pendingConfirmation?.finalize("timeout");
     this.rl?.close();
@@ -311,7 +341,10 @@ export class CLIChannel implements IChannelAdapter {
       }
     } finally {
       this.processing = false;
-      if (!this.pendingConfirmation) {
+      if (this.shutdownAfterDrain && this.pendingInputs.length === 0 && this.healthy) {
+        // Deferred EOF shutdown: the last message has been answered.
+        this.shutdownNow();
+      } else if (!this.pendingConfirmation) {
         this.showUserPrompt();
       }
     }
