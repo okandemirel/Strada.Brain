@@ -304,6 +304,10 @@ export class CampaignManager {
     // bar for the rest of the run.
     milestone.visualEvidenceBounced = false;
     milestone.noWorkBounced = false;
+    // The delivery-verification gate is the same one-bounce shape; leaving it
+    // spent meant a revived final sprint could never be bounced for a missing
+    // test run again (audited 2026-09-02: the gate landed after this block).
+    milestone.deliveryVerificationBounced = false;
     milestone.startedAtMs = undefined;
     milestone.timeBoxEscalations = 0;
     campaign.state = "executing";

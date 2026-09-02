@@ -820,6 +820,43 @@ describe("CampaignManager", () => {
     expect(report).toMatch(/Sprint C — Delivery: .*never seen to pass/);
   });
 
+  it("revival restores the delivery-verification gate along with the other evidence gates", async () => {
+    // Audited 2026-09-02: reviveAtCurrentMilestone reset the visual and
+    // no-work bounces ("fresh budget = fresh gates") but not
+    // deliveryVerificationBounced, so a revived final sprint could never be
+    // bounced for a missing test run again.
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+
+    tasks.emit("task:completed", "task_3", "shipping it"); // delivery bounce spent
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+    expect(storage.get(campaign.id)!.milestones[2]!.deliveryVerificationBounced).toBe(true);
+    tasks.emit("task:failed", "task_4", "boom");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(5));
+    tasks.emit("task:failed", "task_5", "boom again");
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"));
+
+    expect(await manager.tryHandleRevive("cli-local", "kampanya devam")).toBe(true);
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(6));
+    const revived = storage.get(campaign.id)!.milestones[2]!;
+    expect(revived.deliveryVerificationBounced).toBe(false);
+    expect(revived.visualEvidenceBounced).toBe(false);
+
+    // The revived sprint completes with no test run: visual bounce first
+    // (its prompt now demands a frame), then the delivery gate must bounce
+    // again instead of declaring delivery.
+    tasks.emit("task:completed", "task_6", "shipping it after revive");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(7));
+    tasks.emit("task:completed", "task_7", "shipping it after revive, again");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(8));
+    expect(storage.get(campaign.id)!.state).toBe("executing");
+    expect(storage.get(campaign.id)!.milestones[2]!.deliveryVerificationBounced).toBe(true);
+  });
+
   it("resumeActive leaves a still-running task alone", async () => {
     manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
     await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
