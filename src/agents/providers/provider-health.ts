@@ -287,9 +287,14 @@ export class ProviderHealthRegistry {
     const normalized = this.norm(providerName);
     const existing = this.entries.get(normalized);
     const now = Date.now();
-    // Don't extend an existing active cooldown — keep the original expiry
+    // Never SHORTEN an active cooldown, but never keep a shorter one either.
+    // audited 2026-09-02: this kept any active cooldown, so a 30s degraded one
+    // already running when the 403 arrived swallowed the 8h quota block — the
+    // provider read "down" and was readmitted 30s later. Same max as
+    // recordQuotaHardStop.
+    const desired = now + QUOTA_COOLDOWN_MS;
     const existingCooldown = existing?.cooldownUntil ?? 0;
-    const cooldownUntil = existingCooldown > now ? existingCooldown : now + QUOTA_COOLDOWN_MS;
+    const cooldownUntil = existingCooldown > desired ? existingCooldown : desired;
 
     this.setEntry(normalized, {
       status: "down",
@@ -310,8 +315,10 @@ export class ProviderHealthRegistry {
     const normalized = this.norm(providerName);
     const existing = this.entries.get(normalized);
     const now = Date.now();
+    // Max, not "keep whatever is active" — see recordQuotaExhausted (audited 2026-09-02).
+    const desired = now + SINGLE_PROVIDER_QUOTA_COOLDOWN_MS;
     const existingCooldown = existing?.cooldownUntil ?? 0;
-    const cooldownUntil = existingCooldown > now ? existingCooldown : now + SINGLE_PROVIDER_QUOTA_COOLDOWN_MS;
+    const cooldownUntil = existingCooldown > desired ? existingCooldown : desired;
 
     this.setEntry(normalized, {
       status: "down",
