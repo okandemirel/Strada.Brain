@@ -284,13 +284,6 @@ const NEVER_RUN_GATE_LIMIT = 3;
 const UNBOUND_PREFABS_GATE_LIMIT = 3;
 /** Same shape again: ask three times, then say which was the last. */
 const NOTHING_DRAWN_GATE_LIMIT = 3;
-/**
- * The design-document schedule, on its own budget. Audited 2026-09-02: SPEC
- * SCOPE used to be reachable only inside the NOTHING DRAWN branch and was
- * charged to THAT gate's asks — so the drawing gate's last words were never
- * spoken, and a game that did render was never checked against the schedule.
- */
-const SPEC_SCOPE_GATE_LIMIT = 3;
 
 /**
  * Where a class stops being one thing.
@@ -446,8 +439,6 @@ export class StradaConformanceGuard {
    */
   private nothingDrawnRaised = 0;
   private nothingDrawnRaisedAtCall: number | null = null;
-  private specScopeRaised = 0;
-  private specScopeRaisedAtCall: number | null = null;
   private unboundPrefabsRaised = 0;
   private unboundPrefabsRaisedAtCall: number | null = null;
   private neverRunGateRaised = 0;
@@ -1635,30 +1626,6 @@ export class StradaConformanceGuard {
       );
     }
 
-    // The design document is the checklist, on its own budget. Audited
-    // 2026-09-02: this was reachable only inside the NOTHING DRAWN branch below
-    // (`specScopePrompt() ?? "[STRADA NOTHING DRAWN] …"`), where every SPEC
-    // SCOPE ask was charged to the drawing gate's three — so a non-rendering
-    // game never once heard "never been observed to render" or its last-ask
-    // instruction, and a game whose frames did vary was never checked against
-    // the schedule at all.
-    const specScope = this.specScopePrompt();
-    if (specScope !== null && this.specScopeRaised < SPEC_SCOPE_GATE_LIMIT) {
-      if (this.specScopeRaisedAtCall !== this.toolCallsSeen) {
-        this.specScopeRaised += 1;
-        this.specScopeRaisedAtCall = this.toolCallsSeen;
-      }
-      const lastAsk = this.specScopeRaised === SPEC_SCOPE_GATE_LIMIT;
-      return (
-        specScope +
-        (lastAsk
-          ? " This is the last time this is asked. If scheduled elements are still unimplemented " +
-            "when you finish, report the delivery as partial and name them rather than reporting " +
-            "it as done."
-          : "")
-      );
-    }
-
     // Last, because it is the least specific complaint: every gate above names
     // something to fix, while this one only knows the outcome. Placed earlier it
     // shadowed all of them.
@@ -1670,6 +1637,7 @@ export class StradaConformanceGuard {
       }
       const lastAsk = this.nothingDrawnRaised === NOTHING_DRAWN_GATE_LIMIT;
       return (
+        this.specScopePrompt() ??
         `[STRADA NOTHING DRAWN] This game has never been observed to render: ${notDrawn}. ` +
         "A passing suite proves the simulation, not the picture — measured on this project, 54 " +
         "tests went green while all 120 captured frames were the same empty sky. Run " +
