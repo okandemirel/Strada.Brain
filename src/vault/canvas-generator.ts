@@ -257,11 +257,17 @@ function buildFileGraph(
     }
   };
 
+  // Built ONCE per canvas (audited 2026-09-02): the previous per-edge
+  // guessFileFromUnresolved() rescanned every file with three regex replaces
+  // each — O(edges x files), measured at ~76 s of synchronous CPU per
+  // regeneration on a 2,826-file / 57,630-edge index, on every watcher batch.
+  const fileByBasename = indexFilesByBasename(files);
+
   for (const e of symbolEdges) {
     const fromFile = symbolToFile.get(e.fromSymbol);
     const toFile = symbolToFile.get(e.toSymbol);
     // Accept unresolved targets if we can map them to a file
-    const toFileResolved = toFile ?? guessFileFromUnresolved(e.toSymbol, files);
+    const toFileResolved = toFile ?? guessFileFromUnresolved(e.toSymbol, fileByBasename);
     if (fromFile && toFileResolved && fromFile !== toFileResolved) {
       addFileEdge(fromFile, toFileResolved, e.kind);
     }
@@ -337,23 +343,32 @@ function buildFileGraph(
 }
 
 /**
- * Best-effort guess for unresolved symbol targets.
- * If the unresolved name matches a file basename (without extension),
- * return that file's path.
+ * Lower-cased basename (test/spec/d/extension suffixes stripped) → first
+ * file path carrying it, in input order — the same "first match wins"
+ * semantics the per-edge scan had, computed once instead of once per edge.
  */
-function guessFileFromUnresolved(unresolvedId: string, files: VaultFile[]): string | undefined {
-  // unresolved IDs look like: "typescript::unresolved::someMethod" or "csharp::unresolved::SomeClass"
-  const parts = unresolvedId.split('::');
-  const name = parts.pop() ?? unresolvedId;
-  // Try exact basename match (case-insensitive), stripping test/spec/d suffixes
-  const lowerName = name.toLowerCase();
+function indexFilesByBasename(files: VaultFile[]): Map<string, string> {
+  const byBasename = new Map<string, string>();
   for (const f of files) {
     const base = f.path.split('/').pop() ?? f.path;
     const baseNoExt = base
       .replace(/\.(test|spec)\.[^.]+$/, '')   // Foo.test.ts  → Foo
       .replace(/\.d\.ts$/, '')                // Foo.d.ts     → Foo
       .replace(/\.[^.]+$/, '');               // Foo.ts       → Foo
-    if (baseNoExt.toLowerCase() === lowerName) return f.path;
+    const key = baseNoExt.toLowerCase();
+    if (!byBasename.has(key)) byBasename.set(key, f.path);
   }
-  return undefined;
+  return byBasename;
+}
+
+/**
+ * Best-effort guess for unresolved symbol targets.
+ * If the unresolved name matches a file basename (without extension),
+ * return that file's path.
+ */
+function guessFileFromUnresolved(unresolvedId: string, fileByBasename: Map<string, string>): string | undefined {
+  // unresolved IDs look like: "typescript::unresolved::someMethod" or "csharp::unresolved::SomeClass"
+  const parts = unresolvedId.split('::');
+  const name = parts.pop() ?? unresolvedId;
+  return fileByBasename.get(name.toLowerCase());
 }
