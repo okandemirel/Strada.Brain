@@ -18,6 +18,12 @@ export interface RunResult {
   exitCode: number;
   timedOut: boolean;
   durationMs: number;
+  /**
+   * Characters of EARLIER stdout/stderr discarded by the capture cap; 0 when
+   * the text is complete. When non-zero the text opens with a marker saying so.
+   */
+  stdoutDropped: number;
+  stderrDropped: number;
 }
 
 /**
@@ -31,6 +37,8 @@ export function runProcess(opts: RunOptions): Promise<RunResult> {
     const start = Date.now();
     let stdout = "";
     let stderr = "";
+    let stdoutDropped = 0;
+    let stderrDropped = 0;
     let timedOut = false;
 
     const child = spawn(opts.command, opts.args, {
@@ -53,9 +61,18 @@ export function runProcess(opts: RunOptions): Promise<RunResult> {
       }
     };
 
+    // Past the cap only the TAIL is kept — the summary a build or test run
+    // prints last is usually the most useful part. What was wrong (audited
+    // 2026-09-02): the head was thrown away silently. shell_exec printed the
+    // remainder under `--- stdout ---` and git_diff returned it verbatim, so a
+    // 60KB `dotnet test` lost its failing-test list and first compile errors,
+    // and a >16KB `git diff --stat --patch` always lost its --stat header, with
+    // nothing in the result saying anything was missing. Now the discarded
+    // count is measured and the retained text opens with a marker naming it.
     child.stdout.on("data", (data: Buffer) => {
       stdout += data.toString();
       if (stdout.length > maxOutput * 2) {
+        stdoutDropped += stdout.length - maxOutput;
         stdout = stdout.slice(-maxOutput);
       }
     });
@@ -63,6 +80,7 @@ export function runProcess(opts: RunOptions): Promise<RunResult> {
     child.stderr.on("data", (data: Buffer) => {
       stderr += data.toString();
       if (stderr.length > maxOutput * 2) {
+        stderrDropped += stderr.length - maxOutput;
         stderr = stderr.slice(-maxOutput);
       }
     });
@@ -70,7 +88,22 @@ export function runProcess(opts: RunOptions): Promise<RunResult> {
     let killTimer: ReturnType<typeof setTimeout> | undefined;
     let abandonTimer: ReturnType<typeof setTimeout> | undefined;
     let settled = false;
-    const cap = (s: string) => (s.length > maxOutput ? s.slice(-maxOutput) : s);
+    /** Apply the final cap and, if anything was ever dropped, say so up front. */
+    const cap = (s: string, dropped: number, stream: "stdout" | "stderr"): { text: string; dropped: number } => {
+      if (s.length > maxOutput) {
+        dropped += s.length - maxOutput;
+        s = s.slice(-maxOutput);
+      }
+      if (dropped > 0) {
+        s = `[… ${dropped} earlier characters of ${stream} dropped by the ${maxOutput}-character capture limit; what follows is the TAIL of the output …]\n${s}`;
+      }
+      return { text: s, dropped };
+    };
+    const capped = (): Pick<RunResult, "stdout" | "stderr" | "stdoutDropped" | "stderrDropped"> => {
+      const out = cap(stdout, stdoutDropped, "stdout");
+      const err = cap(stderr, stderrDropped, "stderr");
+      return { stdout: out.text, stderr: err.text, stdoutDropped: out.dropped, stderrDropped: err.dropped };
+    };
 
     const finish = (result: RunResult): void => {
       if (settled) return;
@@ -91,8 +124,7 @@ export function runProcess(opts: RunOptions): Promise<RunResult> {
       // took the whole run with it. Answer regardless.
       abandonTimer = setTimeout(() => {
         finish({
-          stdout: cap(stdout),
-          stderr: cap(stderr),
+          ...capped(),
           exitCode: 124,
           timedOut: true,
           durationMs: Date.now() - start,
@@ -102,8 +134,7 @@ export function runProcess(opts: RunOptions): Promise<RunResult> {
 
     child.on("close", (code) => {
       finish({
-        stdout: cap(stdout),
-        stderr: cap(stderr),
+        ...capped(),
         exitCode: code ?? (timedOut ? 124 : 1),
         timedOut,
         durationMs: Date.now() - start,
@@ -128,6 +159,8 @@ export function runProcess(opts: RunOptions): Promise<RunResult> {
       finish({
         stdout: "",
         stderr: message,
+        stdoutDropped: 0,
+        stderrDropped: 0,
         exitCode: 127,
         timedOut: false,
         durationMs: Date.now() - start,
