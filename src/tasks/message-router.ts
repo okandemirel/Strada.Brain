@@ -124,6 +124,38 @@ export class MessageRouter {
    * Route an incoming message to the appropriate handler.
    * This bypasses the session lock for commands so /status works during long tasks.
    */
+  /**
+   * The part of routing every inbound path must run BEFORE doing its own
+   * thing: slash commands and campaign intake ("kampanya devam", a shared
+   * GDD, the approval reply). Returns true when the message was consumed.
+   *
+   * Measured 2026-09-02 19:23: with MULTI_AGENT_ENABLED the CLI channel is
+   * wired to the multi-agent handler in bootstrap.ts, which never called
+   * route() — "kampanya devam" became an ordinary LLM task and the failed
+   * campaign stayed parked. Every manual revive in the log had been a
+   * self-revival; the command had never worked in that mode.
+   */
+  async preRoute(msg: IncomingMessage): Promise<boolean> {
+    const text = msg.text ?? "";
+    if (!text.trim()) return false;
+    const classification = detectCommand(text);
+    if (classification.type === "command") {
+      await this.route(msg);
+      return true;
+    }
+    if (this.campaignManager) {
+      try {
+        if (await this.campaignManager.tryHandleIncoming(msg)) return true;
+      } catch (err) {
+        getLogger().warn("Campaign intake failed in preRoute; falling through", {
+          chatId: msg.chatId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    return false;
+  }
+
   async route(msg: IncomingMessage): Promise<void> {
     const logger = getLogger();
     const { chatId, text } = msg;

@@ -306,6 +306,16 @@ export class CampaignManager {
 
   /** Reset the current milestone's budget and resubmit it (revive core). */
   private async reviveAtCurrentMilestone(campaign: Campaign, milestone: CampaignMilestone): Promise<void> {
+    // Stop whatever is still alive on the old lineage first. The executor's
+    // boot re-arm revives blocked missions on its own; without this the
+    // revived sprint and the re-armed old lineage ran the same prompt against
+    // the same repo in parallel (measured 2026-09-02 19:23).
+    const tipId = milestone.taskId
+      ? this.taskManager.findLatestLineageTask(milestone.taskId as TaskId)?.id
+      : undefined;
+    if (tipId) {
+      try { this.taskManager.cancel(tipId as TaskId); } catch { /* already settled */ }
+    }
     milestone.attempts = 0;
     milestone.status = "pending";
     // Fresh budget = fresh gates: a revived campaign must be able to bounce

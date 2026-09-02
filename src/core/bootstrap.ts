@@ -1899,6 +1899,13 @@ async function bootstrapImpl(
         identityManager.recordActivity();
         identityManager.incrementMessages();
       }
+      // Commands and campaign intake run FIRST on this path too. The
+      // multi-agent handler never consulted the router, so with
+      // MULTI_AGENT_ENABLED "kampanya devam", GDD intake and every slash
+      // command were silently turned into ordinary tasks (2026-09-02).
+      if (await messageRouter.preRoute(normalizedMsg)) {
+        return;
+      }
       let taskRunId: string | undefined;
       if (learningResult.taskPlanner) {
         learningResult.taskPlanner.startTask({

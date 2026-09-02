@@ -48,6 +48,12 @@ class FakeTaskManager extends EventEmitter {
       : null;
   }
 
+  cancelled: string[] = [];
+  cancel(taskId: string): void {
+    this.cancelled.push(taskId);
+    this.statuses.set(taskId, TaskStatus.cancelled);
+  }
+
   markTerminal(taskId: string, status: TaskStatus, result?: string): void {
     this.statuses.set(taskId, status);
     if (result !== undefined) this.results.set(taskId, result);
@@ -309,6 +315,24 @@ describe("CampaignManager", () => {
       const fresh = storage.get(campaign.id)!;
       expect(fresh.milestones[0]!.taskId).not.toBe("task_1");
     });
+  });
+
+  it("revival cancels the old lineage's live tip before resubmitting", async () => {
+    // 2026-09-02 19:23: the executor's boot re-arm revived the old blocked
+    // lineage while the campaign resubmitted the sprint — two runs of the
+    // same prompt against the same repo.
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    const stored = storage.get(campaign.id)!;
+    stored.state = "failed";
+    stored.milestones[0]!.attempts = 2;
+    storage.save(stored);
+    tasks.markTerminal("task_1", TaskStatus.blocked);
+
+    const handled = await manager.tryHandleRevive("cli-local", "kampanya devam");
+    expect(handled).toBe(true);
+    expect(tasks.cancelled).toContain("task_1");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
   });
 
   it("a third time-box overrun charges an attempt instead of running unbounded", async () => {
