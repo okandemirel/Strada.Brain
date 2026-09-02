@@ -141,3 +141,54 @@ describe("interactive (user_confirm) writes pass the same local review as self-m
     expect(fileEdit.execute).toHaveBeenCalledTimes(1);
   });
 });
+
+// audited 2026-09-02: the confirmation check was handed a stub diff with
+// `totalChanges: 1`, so DMPolicy's SMART line threshold (50) compared 1 >= 50
+// on every write ever made — SMART silently degraded to DESTRUCTIVE_ONLY and
+// an edit that rewrote 800 lines ran with no prompt. Sizes are now derived
+// from the tool input; a size that cannot be derived is not reported as one
+// line.
+describe("SMART approval sees the real size of a write", () => {
+  const lines = (n: number) => Array.from({ length: n }, (_, i) => `line ${i}`).join("\n");
+
+  it("asks before a file_edit that replaces more lines than the threshold", async () => {
+    await runInteractive({
+      id: "tc1",
+      name: "file_edit",
+      input: { path: "Assets/Modules/AModule/A.cs", old_string: "a", new_string: lines(80) },
+    });
+    expect(requestConfirmation, "an 80-line edit ran unprompted").toHaveBeenCalledTimes(1);
+    expect(fileEdit.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not ask for a small file_edit", async () => {
+    await runInteractive({
+      id: "tc1",
+      name: "file_edit",
+      input: { path: "Assets/Modules/AModule/A.cs", old_string: "a", new_string: lines(3) },
+    });
+    expect(requestConfirmation).not.toHaveBeenCalled();
+    expect(fileEdit.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks when a write tool's size cannot be derived, instead of calling it one line", async () => {
+    const opaque = tool("project_apply_patch", true);
+    orch = new Orchestrator({
+      providerManager: {
+        getProvider: () => createMockProvider(),
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        shutdown: vi.fn(),
+      } as never,
+      tools: [opaque] as never,
+      channel: { ...createMockChannel(), requestConfirmation } as never,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: true,
+      conformanceFrameworkPathsOnly: true,
+    } as never);
+
+    await runInteractive({ id: "tc1", name: "project_apply_patch", input: { patchId: "p1" } });
+
+    expect(requestConfirmation, "an unmeasurable write ran unprompted").toHaveBeenCalledTimes(1);
+  });
+});

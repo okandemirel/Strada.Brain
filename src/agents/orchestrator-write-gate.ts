@@ -10,6 +10,61 @@ import { supportsInteractivity } from "../channels/channel-core.interface.js";
 
 // ─── Functions ────────────────────────────────────────────────────────────────
 
+const CONTENT_FIELDS = ["content", "new_string", "new_text", "text", "body", "data"] as const;
+const OLD_FIELDS = ["old_string", "old_text"] as const;
+
+function lineCount(value: unknown): number | null {
+  if (typeof value !== "string") return null;
+  if (value.length === 0) return 0;
+  return value.split("\n").length;
+}
+
+/**
+ * How many lines a write would change, derived from the tool input.
+ *
+ * audited 2026-09-02: the confirmation gate used to hand DMPolicy a stub diff
+ * with `totalChanges: 1`, so the SMART line threshold compared 1 >= 50 on every
+ * write ever made and could never fire. This derives a real count where one
+ * exists and says `known: false` where it does not, so the caller can treat
+ * an unmeasurable write as exceeding the threshold rather than as one line.
+ */
+export function estimateWriteChangeLines(
+  toolName: string,
+  input: Record<string, unknown>,
+): { totalChanges: number; known: boolean } {
+  if (toolName === "batch_execute") {
+    const ops = Array.isArray(input["operations"]) ? (input["operations"] as unknown[]) : [];
+    let total = 0;
+    for (const op of ops) {
+      if (typeof op !== "object" || op === null) return { totalChanges: 0, known: false };
+      const rec = op as Record<string, unknown>;
+      const nested = estimateWriteChangeLines(
+        String(rec["tool"] ?? ""),
+        (typeof rec["input"] === "object" && rec["input"] !== null ? rec["input"] : {}) as Record<string, unknown>,
+      );
+      if (!nested.known) return { totalChanges: 0, known: false };
+      total += nested.totalChanges;
+    }
+    return { totalChanges: total, known: ops.length > 0 };
+  }
+  if (toolName === "file_delete" || toolName === "file_delete_directory" || toolName === "file_rename") {
+    // Destructive by classification; the prompt fires on that, not on size.
+    return { totalChanges: 0, known: true };
+  }
+  let newest: number | null = null;
+  for (const field of CONTENT_FIELDS) {
+    const n = lineCount(input[field]);
+    if (n !== null) { newest = n; break; }
+  }
+  if (newest === null) return { totalChanges: 0, known: false };
+  let oldest = 0;
+  for (const field of OLD_FIELDS) {
+    const n = lineCount(input[field]);
+    if (n !== null) { oldest = n; break; }
+  }
+  return { totalChanges: Math.max(newest, oldest), known: true };
+}
+
 /** Tri-state so callers can tell a human "No" from "no human was reachable". */
 export type WriteConfirmationOutcome = "approved" | "denied" | "unavailable";
 

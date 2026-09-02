@@ -239,7 +239,7 @@ import {
   type ContextBuilderDeps,
 } from "./orchestrator-context-builder.js";
 import type { SupervisorBrain } from "../supervisor/supervisor-brain.js";
-import { requestWriteConfirmation as requestWriteConfirmationHelper } from "./orchestrator-write-gate.js";
+import { requestWriteConfirmation as requestWriteConfirmationHelper, estimateWriteChangeLines } from "./orchestrator-write-gate.js";
 import {
   buildTrajectoryReplayContext as buildTrajectoryReplayContextHelper,
   type TrajectoryReplayDeps,
@@ -4903,10 +4903,16 @@ export class Orchestrator {
         const destructive = this.isDestructiveForConfirmation(activeToolCall.name, activeToolCall.input);
         const sessionUserId = options.userId ?? chatId;
         const prefs = this.dmPolicy.getSessionPrefs(sessionUserId, chatId);
-        const stubDiff = {
+        // audited 2026-09-02: this was a stub with `totalChanges: 1`, so the
+        // SMART line threshold could never fire. Derive the size from the
+        // input; a size that cannot be derived counts as exceeding the
+        // threshold — an unmeasured write must not be reported as one line.
+        const estimate = estimateWriteChangeLines(activeToolCall.name, activeToolCall.input);
+        const totalChanges = estimate.known ? estimate.totalChanges : prefs.smartLineThreshold;
+        const sizedDiff = {
           path: String(activeToolCall.input["path"] ?? ""),
           content: "",
-          stats: { additions: 0, deletions: 0, modifications: 0, totalChanges: 1, hunks: 1 },
+          stats: { additions: 0, deletions: 0, modifications: 0, totalChanges, hunks: 1 },
           oldPath: "",
           newPath: String(activeToolCall.input["path"] ?? ""),
           diff: "",
@@ -4914,7 +4920,7 @@ export class Orchestrator {
           isDeleted: false,
           isRename: false,
         };
-        if (this.dmPolicy.isApprovalRequired(prefs, stubDiff, destructive)) {
+        if (this.dmPolicy.isApprovalRequired(prefs, sizedDiff, destructive)) {
           const confirmed = await this.requestWriteConfirmation(
             chatId,
             options.userId,
