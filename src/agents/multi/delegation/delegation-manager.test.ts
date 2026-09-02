@@ -1282,6 +1282,105 @@ describe("DelegationManager", () => {
       await manager.shutdown();
       expect(manager.getActiveDelegations(PARENT_AGENT_ID)).toHaveLength(0);
     });
+
+    // Measured 2026-09-02: shutdown() aborted each delegation and RETURNED;
+    // the lease commit lives in the aborted run's finally, which was still
+    // running when bootstrap reached process.exit(0). The sub-agent's writes
+    // missed the project and surfaced only as an orphan quarantine on the
+    // next boot. The delegation lease manager was also never disposed.
+    function slowLeaseManager(commitMs: number) {
+      let commitResolved = false;
+      const release = vi.fn().mockResolvedValue(undefined);
+      const commit = vi.fn(
+        () =>
+          new Promise((resolve) => {
+            const t = setTimeout(() => {
+              commitResolved = true;
+              resolve({ written: ["Assets/Scripts/Board.cs"], conflicts: [], removed: [], failed: [], conflictsQuarantinedUnder: null });
+            }, commitMs);
+            if (typeof t === "object" && "unref" in t) (t as NodeJS.Timeout).unref();
+          }),
+      );
+      const acquireLease = vi.fn().mockResolvedValue({
+        id: "lease-1",
+        kind: "temp-copy",
+        sourceRoot: "/test/project",
+        leaseRoot: "/tmp/leases",
+        path: "/tmp/leases/lease-1",
+        createdAt: Date.now(),
+        commit,
+        release,
+      });
+      const dispose = vi.fn().mockResolvedValue(undefined);
+      return {
+        manager: { acquireLease, dispose } as never,
+        commit,
+        release,
+        dispose,
+        get commitResolved() {
+          return commitResolved;
+        },
+      };
+    }
+
+    function hangOrchestrator(): void {
+      orchestratorHandleMessage = vi.fn().mockImplementation(
+        () => new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, 30000);
+          if (typeof timer === "object" && "unref" in timer) (timer as NodeJS.Timeout).unref();
+        }),
+      );
+    }
+
+    it("waits for in-flight lease commits before returning, then disposes the lease manager", async () => {
+      hangOrchestrator();
+      const lease = slowLeaseManager(60);
+      manager = new DelegationManager(buildManagerOpts({ delegationLog, workspaceLeaseManager: lease.manager }));
+
+      const run = manager.delegate({
+        type: "code_review",
+        task: "Write Board.cs",
+        parentAgentId: PARENT_AGENT_ID,
+        depth: 0,
+        mode: "sync",
+        toolContext: TEST_TOOL_CONTEXT,
+      }).catch(() => {});
+      await new Promise<void>((resolve) => setTimeout(resolve, 20));
+      expect(manager.getActiveDelegations(PARENT_AGENT_ID)).toHaveLength(1);
+
+      await manager.shutdown();
+
+      expect(lease.commit).toHaveBeenCalledTimes(1);
+      expect(lease.commitResolved, "shutdown returned while the commit was still running").toBe(true);
+      expect(lease.release).toHaveBeenCalledTimes(1);
+      expect(lease.dispose).toHaveBeenCalledTimes(1);
+      await run;
+    });
+
+    it("bounds the wait and says how many delegations were still committing", async () => {
+      hangOrchestrator();
+      const lease = slowLeaseManager(10_000);
+      manager = new DelegationManager(buildManagerOpts({ delegationLog, workspaceLeaseManager: lease.manager }));
+
+      const run = manager.delegate({
+        type: "code_review",
+        task: "Write Board.cs",
+        parentAgentId: PARENT_AGENT_ID,
+        depth: 0,
+        mode: "sync",
+        toolContext: TEST_TOOL_CONTEXT,
+      }).catch(() => {});
+      await new Promise<void>((resolve) => setTimeout(resolve, 20));
+
+      const started = Date.now();
+      const outcome = await manager.shutdownAndReport(50);
+
+      expect(Date.now() - started).toBeLessThan(2_000);
+      expect(outcome.stillCommitting).toBe(1);
+      expect(lease.commitResolved).toBe(false);
+      expect(lease.dispose).toHaveBeenCalledTimes(1);
+      void run;
+    });
   });
 
   describe("validation", () => {

@@ -126,7 +126,17 @@ interface ActiveDelegation {
    * and emitted as "Delegation timed out" (audited 2026-09-02).
    */
   cancelled: boolean;
+  /**
+   * Resolves once executeSingleDelegation's finally has finished — i.e. after
+   * the lease commit and release. shutdown() awaits these; before it did, it
+   * aborted and returned while the commits were still running and bootstrap
+   * reached process.exit(0) first (audited 2026-09-02).
+   */
+  readonly settled: Promise<void>;
 }
+
+/** How long shutdown() waits for aborted delegations to commit their leases. */
+const DELEGATION_SHUTDOWN_SETTLE_MS = 10_000;
 
 interface ResolvedDelegationProviderConfig {
   readonly name: string;
@@ -274,12 +284,60 @@ export class DelegationManager {
   }
 
   /**
-   * Shutdown: cancel all active delegations.
+   * Shutdown: cancel all active delegations, WAIT for their lease commits,
+   * then dispose the delegation lease manager.
+   *
+   * shutdown() used to abort each delegation and return in the same tick.
+   * The commit that publishes a sub-agent's files lives in the aborted run's
+   * finally, so bootstrap walked on to process.exit(0) while those commits
+   * were still waiting on the project write lock; the writes missed the
+   * project and resurfaced only as an orphan quarantine on the next boot.
+   * The lease manager built for delegation was also never disposed — the
+   * only dispose() in the tree belonged to the background executor's own
+   * instance (audited 2026-09-02).
+   *
+   * The wait is bounded; a delegation still committing at the deadline is
+   * counted and named, never silently abandoned.
    */
-  async shutdown(): Promise<void> {
+  async shutdown(settleTimeoutMs: number = DELEGATION_SHUTDOWN_SETTLE_MS): Promise<void> {
+    await this.shutdownAndReport(settleTimeoutMs);
+  }
+
+  /** shutdown() with its measurement: how many were cancelled and how many
+   *  were still committing when the deadline hit (0 when all settled). */
+  async shutdownAndReport(
+    settleTimeoutMs: number = DELEGATION_SHUTDOWN_SETTLE_MS,
+  ): Promise<{ cancelled: number; stillCommitting: number }> {
+    const inFlight = [...this.activeDelegations.values()].map((d) => d.settled);
     for (const [subAgentId] of this.activeDelegations) {
       this.cancelDelegation(subAgentId);
     }
+
+    let stillCommitting = 0;
+    if (inFlight.length > 0) {
+      let deadlineTimer: NodeJS.Timeout | undefined;
+      const deadline = new Promise<"deadline">((resolve) => {
+        deadlineTimer = setTimeout(() => resolve("deadline"), settleTimeoutMs);
+        deadlineTimer.unref?.();
+      });
+      let settledCount = 0;
+      const tracked = inFlight.map((p) => p.then(() => { settledCount++; }));
+      const outcome = await Promise.race([
+        Promise.allSettled(tracked).then(() => "settled" as const),
+        deadline,
+      ]);
+      if (deadlineTimer) clearTimeout(deadlineTimer);
+      if (outcome === "deadline") {
+        stillCommitting = inFlight.length - settledCount;
+        getLoggerSafe().warn(
+          "Delegation shutdown deadline reached with lease commits still running — their workspaces stay on disk for orphan salvage on the next start",
+          { settleTimeoutMs, cancelled: inFlight.length, stillCommitting },
+        );
+      }
+    }
+
+    await this.opts.workspaceLeaseManager?.dispose();
+    return { cancelled: inFlight.length, stillCommitting };
   }
 
   // ===========================================================================
@@ -455,6 +513,10 @@ export class DelegationManager {
     });
 
     // Track active delegation (concurrency already reserved in prepareRequest)
+    let markSettled: () => void = () => {};
+    const settled = new Promise<void>((resolve) => {
+      markSettled = resolve;
+    });
     const active: ActiveDelegation = {
       abortController,
       logId,
@@ -462,6 +524,7 @@ export class DelegationManager {
       type: request.type,
       startedAt: startTime,
       cancelled: false,
+      settled,
     };
     this.activeDelegations.set(subAgentId, active);
 
@@ -799,6 +862,7 @@ export class DelegationManager {
       await commitWorkspace();
       await workspaceLease?.release().catch(() => {});
       this.cleanup(subAgentId);
+      markSettled();
     }
   }
 
