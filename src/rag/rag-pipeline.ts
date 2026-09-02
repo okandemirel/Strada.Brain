@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { extname, join, relative } from "node:path";
+import { join, relative } from "node:path";
 import { createHash } from "node:crypto";
 import { glob } from "glob";
 import type {
@@ -13,7 +13,7 @@ import type {
   IndexingStats,
   VectorEntry,
 } from "./rag.interface.js";
-import { isCodeChunk } from "./rag.interface.js";
+import { isCodeChunk, isRagIndexableFile, RAG_INDEXABLE_EXTENSIONS } from "./rag.interface.js";
 import { createBrand } from "../types/index.js";
 import { chunkCSharpFile } from "./chunker.js";
 import { rerankResults } from "./reranker.js";
@@ -191,7 +191,8 @@ export class RAGPipeline implements IRAGPipeline {
   // ---------------------------------------------------------------------------
 
   async indexFile(filePath: string, content: string): Promise<number> {
-    if (extname(filePath).toLowerCase() !== ".cs") {
+    // Only extensions with a chunker are indexable (see RAG_INDEXABLE_EXTENSIONS).
+    if (!isRagIndexableFile(filePath)) {
       return 0;
     }
 
@@ -278,8 +279,14 @@ export class RAGPipeline implements IRAGPipeline {
     const startTime = Date.now();
     const logger = getLogger();
 
+    // The glob must match what indexFile accepts. It had drifted to twelve
+    // extensions while indexFile only ever chunked .cs, so every .ts/.md/.json
+    // match was read from disk, dropped at the gate, and still counted in
+    // totalFiles — the report claimed ~2x the files it indexed. Scan only the
+    // indexable set so totalFiles is the number of files actually handed to
+    // the chunker (audited 2026-09-02).
     const files = await glob(
-      ["**/*.cs", "**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.mjs", "**/*.cjs", "**/*.md", "**/*.mdx", "**/*.json", "**/*.yaml", "**/*.yml"],
+      RAG_INDEXABLE_EXTENSIONS.map((ext) => `**/*${ext}`),
       {
         cwd: projectPath,
         absolute: true,
@@ -313,6 +320,8 @@ export class RAGPipeline implements IRAGPipeline {
     const chunkCount = this.hnswStore?.count() ?? this.vectorStore.count();
 
     this.stats = {
+      // Every globbed file has an indexable extension, so this is the count of
+      // files handed to the chunker — not a raw scan count.
       totalFiles: files.length,
       totalChunks: chunkCount,
       indexedAt: createBrand(Date.now(), "TimestampMs" as const),

@@ -85,6 +85,42 @@ describe("RAGIndexTool", () => {
     expect(result.content).toContain("no changes");
   });
 
+  it("names the real cause when a file has no indexable extension (audited 2026-09-02)", async () => {
+    const rag = createMockRAG({
+      indexFile: vi.fn().mockResolvedValue(0),
+    });
+    const tool = new RAGIndexTool(rag);
+    const result = await tool.execute({ file_path: "src/foo.ts" }, createToolContext());
+
+    // The file was rejected for its extension, not because it was unchanged —
+    // the outcome must say so instead of claiming "no changes detected".
+    expect(result.isError).toBeUndefined();
+    expect(result.content).toMatch(/not indexable/i);
+    expect(result.content).toContain(".ts");
+    expect(result.content).toContain("src/foo.ts");
+    expect(result.content).not.toMatch(/no changes/i);
+    expect(rag.indexFile).not.toHaveBeenCalled();
+  });
+
+  it("says so when a project scan finds no indexable sources at all (audited 2026-09-02)", async () => {
+    const rag = createMockRAG({
+      indexProject: vi.fn<() => Promise<IndexingStats>>().mockResolvedValue({
+        totalFiles: 0,
+        totalChunks: 0,
+        indexedAt: new Date().toISOString(),
+        durationMs: 100,
+        changedFiles: 0,
+        errors: [],
+      } as unknown as IndexingStats),
+    });
+    const tool = new RAGIndexTool(rag);
+    const result = await tool.execute({}, createToolContext());
+
+    expect(result.isError).toBeUndefined();
+    expect(result.content).toContain("0 file(s)");
+    expect(result.content).toMatch(/no \.cs sources found/i);
+  });
+
   it("returns error on missing file", async () => {
     vi.mocked(readFile).mockRejectedValue(
       Object.assign(new Error("ENOENT"), { code: "ENOENT" })
