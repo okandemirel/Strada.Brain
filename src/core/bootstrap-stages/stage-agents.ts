@@ -380,6 +380,9 @@ export async function initializeMemoryConsolidationStage(
       sqliteDb: internals.sqliteDb,
       entries: internals.entries,
       hnswStore: internals.hnswStore,
+      // The engine must mirror its entries-Map mutations in the TF-IDF index
+      // or df/docCount drift for the rest of the process (audited 2026-09-02).
+      textIndex: internals.textIndex,
       config: { ...params.config.memory.consolidation, minAgeMs: 3600000 },
       generateEmbedding,
       summarizeWithLLM,

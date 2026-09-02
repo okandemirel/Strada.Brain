@@ -8,6 +8,11 @@
  */
 
 import type Database from "better-sqlite3";
+import { getLogger } from "../../utils/logger.js";
+
+function getLoggerSafe() {
+  try { return getLogger(); } catch { return console; }
+}
 
 export type SqliteProfile = "memory" | "learning" | "tasks" | "preferences" | "identity" | "daemon" | "balanced";
 
@@ -45,10 +50,12 @@ export function configureSqlitePragmas(
  *
  * Steps: WAL checkpoint, integrity_check, REINDEX if needed.
  * Returns true if healthy (or successfully repaired), false if unrecoverable.
+ * Callers MUST consume the verdict — it is the only corruption signal the
+ * memory layer has (audited 2026-09-02).
  */
 export function validateAndRepairSqlite(
   db: Database.Database,
-  _profile: SqliteProfile,
+  profile: SqliteProfile,
 ): boolean {
   try {
     // Checkpoint WAL to ensure all writes are committed
@@ -57,24 +64,39 @@ export function validateAndRepairSqlite(
     // Non-fatal: WAL might not exist yet on first run
   }
 
+  const integrityCheck = (): Array<{ integrity_check: string }> =>
+    db.pragma("integrity_check") as Array<{ integrity_check: string }>;
+  const isOk = (rows: Array<{ integrity_check: string }>): boolean =>
+    rows.length === 1 && rows[0]?.integrity_check === "ok";
+
   try {
-    const result = db.pragma("integrity_check") as Array<{ integrity_check: string }>;
-    const ok = result.length === 1 && result[0]?.integrity_check === "ok";
+    const result = integrityCheck();
+    if (isOk(result)) return true;
 
-    if (!ok) {
-      // Attempt repair via REINDEX
-      try {
-        db.pragma("REINDEX");
-        // Re-check after repair
-        const recheck = db.pragma("integrity_check") as Array<{ integrity_check: string }>;
-        return recheck.length === 1 && recheck[0]?.integrity_check === "ok";
-      } catch {
-        return false;
+    // Attempt repair via REINDEX. This must be issued as a statement:
+    // `db.pragma("REINDEX")` sends `PRAGMA REINDEX`, an unknown pragma that
+    // SQLite silently ignores, so the "repair" never ran and the recheck
+    // re-read the same damage — the function could not return true for a
+    // corrupt-index database (audited 2026-09-02).
+    try {
+      db.exec("REINDEX");
+      const recheck = integrityCheck();
+      const repaired = isOk(recheck);
+      if (!repaired) {
+        getLoggerSafe().warn(
+          `[sqlite:${profile}] integrity_check still failing after REINDEX: ${recheck.slice(0, 3).map((r) => r.integrity_check).join(" | ")}`,
+        );
       }
+      return repaired;
+    } catch (repairError) {
+      getLoggerSafe().warn(
+        `[sqlite:${profile}] integrity_check failed (${result.slice(0, 3).map((r) => r.integrity_check).join(" | ")}) and REINDEX threw: ${String(repairError)}`,
+      );
+      return false;
     }
-
-    return true;
-  } catch {
+  } catch (checkError) {
+    // integrity_check itself throws on heavier damage (SQLITE_CORRUPT).
+    getLoggerSafe().warn(`[sqlite:${profile}] integrity_check could not run: ${String(checkError)}`);
     return false;
   }
 }

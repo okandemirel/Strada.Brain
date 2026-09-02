@@ -69,6 +69,7 @@ import {
   MEMORY_SCHEMA_SQL,
 } from "./agentdb-sqlite.js";
 import type { AgentDBSqliteContext } from "./agentdb-sqlite.js";
+import { validateAndRepairSqlite } from "./sqlite-pragmas.js";
 import type { UnifiedMemoryEntry } from "./unified-memory.interface.js";
 import { MemoryTier } from "./unified-memory.interface.js";
 import type { NormalizedScore } from "../../types/index.js";
@@ -229,6 +230,30 @@ describe("initSqlite", () => {
 
     expect(ctx.sqliteDb).not.toBeNull();
     expect(ctx.sqliteInitFailed).toBe(false);
+  });
+
+  // audited 2026-09-02: the integrity verdict was discarded, so a memory.db
+  // that failed integrity_check (and could not be repaired) was opened and
+  // reported healthy. The verdict must be recorded on the context; the file
+  // DB is kept (rows are often still readable) but the store must say so.
+  it("records a failed integrity verdict on the context instead of discarding it", () => {
+    vi.mocked(validateAndRepairSqlite).mockReturnValueOnce(false);
+
+    const ctx = makeContext();
+    initSqlite(ctx);
+
+    expect(ctx.sqliteDb).not.toBeNull(); // not bailed to :memory: — that would be strictly worse
+    expect(ctx.sqliteInitFailed).toBe(false);
+    expect(ctx.sqliteIntegrityFailed).toBe(true);
+  });
+
+  it("records a passed integrity verdict as not failed", () => {
+    vi.mocked(validateAndRepairSqlite).mockReturnValueOnce(true);
+
+    const ctx = makeContext();
+    initSqlite(ctx);
+
+    expect(ctx.sqliteIntegrityFailed).toBe(false);
   });
 
   it("should set sqliteInitFailed when both file and memory fail", () => {

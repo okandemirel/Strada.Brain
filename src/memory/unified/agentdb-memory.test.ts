@@ -236,20 +236,160 @@ describe("AgentDBMemory", () => {
     });
   });
 
+  describe("getIndexHealth SQLite integrity (audited 2026-09-02)", () => {
+    // The integrity_check verdict from initSqlite used to go nowhere: a
+    // memory.db that failed the check and could not be repaired was opened
+    // and reported isHealthy: true. The verdict must surface as an issue.
+    it("reports a failed integrity check as an issue and isHealthy: false", () => {
+      expect(memory.getIndexHealth().isHealthy).toBe(true); // baseline on a fresh store
+      (memory as any).sqliteIntegrityFailed = true;
+
+      const health = memory.getIndexHealth();
+      expect(health.isHealthy).toBe(false);
+      expect(health.issues.some((i) => i.includes("integrity_check"))).toBe(true);
+    });
+  });
+
+  describe("demoteEntry expiry (audited 2026-09-02)", () => {
+    // demoteEntry only touched expiresAt when the target tier was Ephemeral.
+    // An Ephemeral->Persistent demotion therefore kept the (often already
+    // past) TTL stamp: cleanupExpired never reaps a Persistent entry, but
+    // retrieveSemantic skips any entry whose expiresAt is past — a ghost that
+    // is counted, stored and indexed but never returned. promoteEntry already
+    // clears the stamp; demoteEntry must mirror it.
+    it("clears expiresAt when demoting Ephemeral -> Persistent", async () => {
+      const stored = await memory.storeNote("ephemeral note that will be demoted", ["demote"], MemoryTier.Ephemeral);
+      const entry = (memory as any).entries.get(stored.id);
+      expect(entry.expiresAt).toBeDefined();
+      // The sweep demotes on staleness; by then the TTL is typically past.
+      entry.expiresAt = Date.now() - 60_000;
+
+      const result = await memory.demoteEntry(stored.id, MemoryTier.Persistent);
+      expect(result.kind).toBe("ok");
+      expect(entry.tier).toBe(MemoryTier.Persistent);
+      expect(entry.expiresAt).toBeUndefined();
+
+      const hits = await memory.retrieveSemantic("ephemeral note that will be demoted", { limit: 5 });
+      expect(hits.map((h) => h.entry.id)).toContain(stored.id);
+
+      // The cleared stamp must also reach SQLite, or a restart resurrects the ghost.
+      const row = (memory as any).sqliteDb.prepare("SELECT value FROM memories WHERE id = ?").get(stored.id as string) as { value: string };
+      expect(JSON.parse(row.value).expiresAt).toBeUndefined();
+    });
+  });
+
+  describe("HNSW capacity (audited 2026-09-02)", () => {
+    // The capacity-exceeded branch of storeEntry used to rebuild the index from
+    // this.entries — which does not yet contain the entry being stored — and
+    // then return ok. The entry landed in SQLite, the map and TF-IDF, but not
+    // in HNSW, so the pure-semantic path could not return it until the next
+    // rebuild. The rebuild must include the pending vector.
+    it("an entry that trips index capacity is still inserted into the rebuilt index", async () => {
+      const capDir = mkdtempSync(join(tmpdir(), "agentdb-capacity-test-"));
+      const capMemory = new AgentDBMemory({
+        dbPath: capDir,
+        dimensions: 128,
+        maxEntriesPerTier: {
+          [MemoryTier.Working]: 0,
+          [MemoryTier.Ephemeral]: 0,
+          [MemoryTier.Persistent]: 3, // maxElements = 3
+        },
+        hnswParams: { efConstruction: 50, M: 8, efSearch: 32 },
+        quantizationType: "none",
+        cacheSize: 100,
+        enableAutoTiering: false,
+        ephemeralTtlMs: 60_000,
+      });
+      await capMemory.initialize();
+      try {
+        await capMemory.storeNote("alpha one", ["a"]);
+        await capMemory.storeNote("beta two", ["b"]);
+        await capMemory.storeNote("gamma three", ["c"]);
+        expect(capMemory.getStats().hnswStats?.currentCount).toBe(3);
+
+        // Highest importance in the tier (longest + keyword), so tier eviction
+        // removes one of the three seeds, never this entry.
+        const tripping = await capMemory.storeNote(
+          "important delta four: the entry that trips the HNSW capacity guard",
+          ["d"],
+        );
+        const store = (capMemory as any).hnswStore as { idToIndex: Map<string, number> };
+        expect((capMemory as any).entries.has(tripping.id)).toBe(true); // precondition: survived eviction
+        expect(store.idToIndex.has(tripping.id as string)).toBe(true);
+
+        const hits = await capMemory.retrieveSemantic(
+          "important delta four: the entry that trips the HNSW capacity guard",
+          { limit: 5 },
+        );
+        expect(hits.map((h) => h.entry.id)).toContain(tripping.id);
+      } finally {
+        await capMemory.shutdown();
+        rmSync(capDir, { recursive: true, force: true });
+      }
+    });
+  });
+
   // ---------------------------------------------------------------------------
   // reEmbedHashEntries
   // ---------------------------------------------------------------------------
 
   describe("reEmbedHashEntries", () => {
-    it("should skip when migration marker exists", async () => {
-      // Pre-set the migration marker
-      await memory.setMigrationMarker("re_embed_complete_v1");
+    // audited 2026-09-02: a hash vector written during a provider outage AFTER
+    // the one-shot marker was set was never repaired — every later boot hit
+    // the marker and returned {0,0,0}. The marker records the last completed
+    // pass; the scan itself must run every time it is called.
+    it("repairs a hash vector written after the migration marker was set", async () => {
+      const outageDir = mkdtempSync(join(tmpdir(), "agentdb-outage-test-"));
+      let outage = false;
+      let providerCalls = 0;
+      const realVector = new Array(128).fill(0).map((_, i) => (i % 2 === 0 ? 0.05 : -0.05));
+      const memoryWithProvider = new AgentDBMemory({
+        dbPath: outageDir,
+        dimensions: 128,
+        maxEntriesPerTier: {
+          [MemoryTier.Working]: 10,
+          [MemoryTier.Ephemeral]: 50,
+          [MemoryTier.Persistent]: 100,
+        },
+        hnswParams: { efConstruction: 50, M: 8, efSearch: 32 },
+        quantizationType: "none",
+        cacheSize: 100,
+        enableAutoTiering: false,
+        ephemeralTtlMs: 60_000,
+        embeddingProvider: async (_text: string) => {
+          providerCalls++;
+          if (outage) throw new Error("429 rate limited");
+          return realVector;
+        },
+      });
+      await memoryWithProvider.initialize();
 
-      const result = await memory.reEmbedHashEntries();
+      try {
+        // Boot 1: healthy provider, clean pass, marker written.
+        await memoryWithProvider.reEmbedHashEntries();
+        expect(await memoryWithProvider.hasMigrationMarker("re_embed_complete_v1")).toBe(true);
 
-      expect(result.migrated).toBe(0);
-      expect(result.total).toBe(0);
-      expect(result.skipped).toBe(0);
+        // Mid-session outage: storeNote falls back to a hash vector.
+        outage = true;
+        const poisoned = await memoryWithProvider.storeNote("written during the outage", ["outage"]);
+        const before = (memoryWithProvider as any).entries.get(poisoned.id).embedding as number[];
+        expect((memoryWithProvider as any).isHashBasedEmbedding("written during the outage", before)).toBe(true);
+
+        // Boot 2 (provider healthy again): the repair must still run.
+        outage = false;
+        const callsBefore = providerCalls;
+        const result = await memoryWithProvider.reEmbedHashEntries();
+
+        expect(result.hashDetected).toBe(1);
+        expect(result.migrated).toBe(1);
+        expect(result.total).toBe(1);
+        expect(providerCalls).toBe(callsBefore + 1);
+        const after = (memoryWithProvider as any).entries.get(poisoned.id).embedding as number[];
+        expect((memoryWithProvider as any).isHashBasedEmbedding("written during the outage", after)).toBe(false);
+      } finally {
+        await memoryWithProvider.shutdown();
+        rmSync(outageDir, { recursive: true, force: true });
+      }
     });
 
     it("should return zeros when no embedding provider", async () => {
@@ -362,8 +502,9 @@ describe("AgentDBMemory", () => {
       }
     });
 
-    it("should be idempotent (second call returns zeros)", async () => {
+    it("is idempotent: a second call on a clean store re-scans, finds no hash vectors, calls no provider", async () => {
       const providerDir = mkdtempSync(join(tmpdir(), "agentdb-idem-test-"));
+      let idemCalls = 0;
       const memoryWithProvider = new AgentDBMemory({
         dbPath: providerDir,
         dimensions: 128,
@@ -378,20 +519,24 @@ describe("AgentDBMemory", () => {
         enableAutoTiering: true,
         ephemeralTtlMs: 60_000,
         embeddingProvider: async (_text: string) => {
+          idemCalls++;
           return new Array(128).fill(0).map((_, i) => (i % 2 === 0 ? 0.05 : -0.05));
         },
       });
       await memoryWithProvider.initialize();
 
       try {
-        // First call performs migration
+        await memoryWithProvider.storeNote("real from the start", ["idem"]);
+        // First call performs migration (nothing hash-based to migrate)
         await memoryWithProvider.reEmbedHashEntries();
+        const callsAfterFirst = idemCalls;
 
-        // Second call should be a no-op due to migration marker
+        // Second call re-scans; the scan is cheap and the provider is untouched
         const result2 = await memoryWithProvider.reEmbedHashEntries();
+        expect(result2.total).toBe(1);
+        expect(result2.hashDetected).toBe(0);
         expect(result2.migrated).toBe(0);
-        expect(result2.total).toBe(0);
-        expect(result2.skipped).toBe(0);
+        expect(idemCalls).toBe(callsAfterFirst);
       } finally {
         await memoryWithProvider.shutdown();
         rmSync(providerDir, { recursive: true, force: true });

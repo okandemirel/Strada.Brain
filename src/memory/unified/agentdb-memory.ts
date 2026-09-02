@@ -69,6 +69,7 @@ import {
   isHashBasedEmbedding,
   detectAndHandleDimensionMismatch,
   reEmbedHashEntries,
+  type ReEmbedResult,
 } from "./agentdb-vector.js";
 
 import {
@@ -134,6 +135,8 @@ export class AgentDBMemory implements IUnifiedMemory {
   private tieringParams: { intervalMs: number; promotionThreshold: number; demotionTimeoutDays: number } | null = null;
   private sqliteDb: Database.Database | null = null;
   private sqliteInitFailed = false;
+  /** memory.db failed integrity_check and REINDEX did not repair it (set by initSqlite). */
+  private sqliteIntegrityFailed = false;
   private sqliteStatements: Map<string, Database.Statement> = new Map();
   private decayConfig: MemoryDecayConfig | null = null;
   private userProfileStore: UserProfileStore | null = null;
@@ -174,6 +177,8 @@ export class AgentDBMemory implements IUnifiedMemory {
       set sqliteDb(v) { self.sqliteDb = v; },
       get sqliteInitFailed() { return self.sqliteInitFailed; },
       set sqliteInitFailed(v) { self.sqliteInitFailed = v; },
+      get sqliteIntegrityFailed() { return self.sqliteIntegrityFailed; },
+      set sqliteIntegrityFailed(v: boolean | undefined) { self.sqliteIntegrityFailed = v === true; },
       get sqliteStatements() { return self.sqliteStatements; },
       get entries() { return self.entries; },
     };
@@ -709,10 +714,17 @@ export class AgentDBMemory implements IUnifiedMemory {
               "[AgentDBMemory] HNSW index capacity mismatch detected, rebuilding index",
               { error: message, entryId: id as string },
             );
-            const rebuildResult = await this.rebuildIndex();
+            // The rebuild reads this.entries, which does not contain this
+            // entry yet (it is only added after SQLite succeeds). It used to
+            // rebuild without the pending vector and fall through to ok(),
+            // leaving the entry in SQLite/map/TF-IDF but absent from HNSW
+            // until the next rebuild. Pass the pending vector so the rebuilt
+            // index contains it (audited 2026-09-02).
+            const rebuildResult = await this.rebuildIndex([vectorEntry]);
             if (rebuildResult.kind === "err") {
               return err(rebuildResult.error);
             }
+            hnswInserted = true;
           } else {
             throw error;
           }
@@ -909,12 +921,19 @@ export class AgentDBMemory implements IUnifiedMemory {
 
       entry.tier = newTier;
 
-      // Update expiration for ephemeral
+      // Update expiration: Ephemeral gets a fresh TTL, every other tier has
+      // none. This used to leave the old (often already past) TTL on an
+      // Ephemeral->Persistent demotion; cleanupExpired only reaps Ephemeral
+      // entries but retrieveSemantic skips any past expiresAt, so the entry
+      // became a permanent ghost — stored, indexed, counted, never returned.
+      // Mirrors promoteEntry (audited 2026-09-02).
       if (newTier === MemoryTier.Ephemeral) {
         entry.expiresAt = createBrand(
           Date.now() + this.config.ephemeralTtlMs,
           "TimestampMs" as const,
         );
+      } else {
+        entry.expiresAt = undefined;
       }
 
       sqlitePersistEntry(this.getSqliteCtx(), entry);
@@ -1154,17 +1173,26 @@ export class AgentDBMemory implements IUnifiedMemory {
   // HNSW Index Operations
   // ---------------------------------------------------------------------------
 
-  async rebuildIndex(): Promise<Result<void, Error>> {
+  /**
+   * Rebuild the HNSW index from `this.entries`.
+   *
+   * @param pending Vectors that must be part of the rebuilt index but are not
+   *   in `this.entries` yet — storeEntry passes the entry it is in the middle
+   *   of writing when the insert trips index capacity. Without it the rebuild
+   *   silently excluded exactly the entry it was recovering for
+   *   (audited 2026-09-02). `replaceAll` sizes the index to fit them.
+   */
+  async rebuildIndex(pending: VectorEntry[] = []): Promise<Result<void, Error>> {
     try {
       if (!this.hnswStore) return ok(undefined);
 
-      getLoggerSafe().info("[AgentDBMemory] Rebuilding HNSW index");
+      getLoggerSafe().info("[AgentDBMemory] Rebuilding HNSW index", { pending: pending.length });
 
       // Rebuild from all entries, skipping those with mismatched dimensions
       const entries = Array.from(this.entries.values());
       const expectedDimensions = this.config.dimensions;
       let dimensionMismatchCount = 0;
-      const vectorEntries: VectorEntry[] = [];
+      const vectorEntries: VectorEntry[] = [...pending];
       for (const e of entries) {
         if (e.embedding && e.embedding.length !== expectedDimensions) {
           dimensionMismatchCount++;
@@ -1189,7 +1217,7 @@ export class AgentDBMemory implements IUnifiedMemory {
       const store = this.hnswStore;
       await this.writeMutex.withLock(() => store.replaceAll(vectorEntries));
 
-      getLoggerSafe().info("[AgentDBMemory] Index rebuild complete", { count: entries.length });
+      getLoggerSafe().info("[AgentDBMemory] Index rebuild complete", { count: vectorEntries.length });
       return ok(undefined);
     } catch (error) {
       return err(error instanceof Error ? error : new Error(String(error)));
@@ -1205,12 +1233,15 @@ export class AgentDBMemory implements IUnifiedMemory {
     entries: Map<string, UnifiedMemoryEntry>;
     hnswStore: HNSWVectorStore | undefined;
     hnswWriteMutex: HnswWriteMutex;
+    /** TF-IDF index — the engine must mirror its entries-Map mutations here (audited 2026-09-02). */
+    textIndex: TextIndex;
   } {
     return {
       sqliteDb: this.sqliteDb,
       entries: this.entries,
       hnswStore: this.hnswStore,
       hnswWriteMutex: this.writeMutex,
+      textIndex: this.textIndex,
     };
   }
 
@@ -1231,6 +1262,13 @@ export class AgentDBMemory implements IUnifiedMemory {
 
     if (this.sqliteInitFailed) {
       issues.push("SQLite initialization failed — persistence unavailable");
+    }
+
+    // The integrity verdict used to go nowhere (audited 2026-09-02).
+    if (this.sqliteIntegrityFailed) {
+      issues.push(
+        "memory.db failed integrity_check and REINDEX did not repair it — rows may be unreadable or silently missing",
+      );
     }
 
     if (hnswStats.elementCount === 0 && this.entries.size > 0) {
@@ -1431,7 +1469,7 @@ export class AgentDBMemory implements IUnifiedMemory {
   // Hash-to-Real Embedding Migration (delegates to agentdb-vector)
   // ---------------------------------------------------------------------------
 
-  async reEmbedHashEntries(): Promise<{ migrated: number; total: number; skipped: number }> {
+  async reEmbedHashEntries(): Promise<ReEmbedResult> {
     return reEmbedHashEntries(
       this.getVectorCtx(),
       this.hasMigrationMarker.bind(this),

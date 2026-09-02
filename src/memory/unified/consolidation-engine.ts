@@ -18,6 +18,8 @@ import type {
   MemoryCluster,
 } from "./consolidation-types.js";
 import { MemoryTier } from "./unified-memory.interface.js";
+import { toVectorEntry } from "./agentdb-vector.js";
+import { extractTerms } from "../text-index.js";
 
 // =============================================================================
 // TYPES FOR CONSTRUCTOR DEPENDENCIES
@@ -38,11 +40,18 @@ export type ConsolidationStatus = "pending" | "completed" | "failed" | "undone";
 const STATUS_PENDING: ConsolidationStatus = "pending";
 const STATUS_COMPLETED: ConsolidationStatus = "completed";
 
-/** Minimal HNSW store interface used by the consolidation engine */
+/**
+ * Minimal HNSW store interface used by the consolidation engine.
+ *
+ * `chunk` is typed with a required `id` rather than `unknown`: retrieval
+ * resolves a hit by `entries.get(hit.chunk.id)` (agentdb-retrieval.ts), so a
+ * chunk without one is silently unretrievable. `unknown` let an id-less
+ * literal compile (audited 2026-09-02).
+ */
 interface HnswStoreContract {
   search(queryVector: number[], topK: number): Promise<Array<{ id: string; score: number }>>;
   remove(ids: string[]): Promise<void>;
-  upsert(entries: Array<{ id: string; vector: number[]; chunk: unknown; addedAt: number; accessCount: number }>): Promise<void>;
+  upsert(entries: Array<{ id: string; vector: number[]; chunk: { id: string; content: string }; addedAt: number; accessCount: number }>): Promise<void>;
 }
 
 /** Minimal event emitter interface */
@@ -90,12 +99,28 @@ interface HnswWriteMutexContract {
   withLock<T>(fn: () => Promise<T>): Promise<T>;
 }
 
+/**
+ * Minimal TF-IDF index interface (AgentDBMemory's TextIndex).
+ *
+ * Every path that removes an entry from the shared `entries` Map must mirror
+ * the removal here, else df/docCount drift and every IDF score skews
+ * (agentdb-tiering.ts documents the invariant; cleanupExpired, delete and
+ * enforceTierLimits honour it). Consolidation did not receive the index at
+ * all and was the one Map-mutation path that bypassed it (audited 2026-09-02).
+ */
+interface TextIndexContract {
+  addDocument(terms: string[]): void;
+  removeDocument(terms: string[]): void;
+}
+
 /** Constructor options for MemoryConsolidationEngine */
 export interface ConsolidationEngineOptions {
   sqliteDb: Database.Database;
   entries: Map<string, unknown>;
   hnswStore: unknown;
   hnswWriteMutex?: HnswWriteMutexContract;
+  /** TF-IDF index shared with retrieval; see TextIndexContract. */
+  textIndex: TextIndexContract;
   config: ConsolidationConfig;
   generateEmbedding: (text: string) => Promise<number[]>;
   summarizeWithLLM: (contents: string[]) => Promise<SummarizeResult>;
@@ -114,6 +139,7 @@ export class MemoryConsolidationEngine {
   private readonly entries: Map<string, MemoryEntryLike>;
   private readonly hnsw: HnswStoreContract;
   private readonly hnswMutex: HnswWriteMutexContract | null;
+  private readonly textIndex: TextIndexContract | null;
   private readonly config: ConsolidationConfig;
   private readonly generateEmbedding: (text: string) => Promise<number[]>;
   private readonly summarizeWithLLM: (contents: string[]) => Promise<SummarizeResult>;
@@ -143,12 +169,21 @@ export class MemoryConsolidationEngine {
     this.entries = opts.entries as Map<string, MemoryEntryLike>;
     this.hnsw = opts.hnswStore as HnswStoreContract;
     this.hnswMutex = opts.hnswWriteMutex ?? null;
+    // Typed as required, but the bootstrap wiring casts through `unknown`,
+    // so guard at runtime and say so — a missing index must never look like
+    // a mirrored one (audited 2026-09-02).
+    this.textIndex = opts.textIndex ?? null;
     this.config = opts.config;
     this.generateEmbedding = opts.generateEmbedding;
     this.summarizeWithLLM = opts.summarizeWithLLM;
     this.emitter = opts.eventEmitter;
     this.logger = opts.logger;
     this.agentId = opts.agentId;
+    if (!this.textIndex) {
+      this.logger.warn(
+        "[Consolidation] No TF-IDF index supplied — every cycle will drift df/docCount and skew retrieveTFIDF scores until the next restart",
+      );
+    }
     // Always exempt instincts; merge with provided exempt domains
     this.exemptDomains = new Set(["instinct", ...(opts.exemptDomains ?? [])]);
 
@@ -494,13 +529,21 @@ export class MemoryConsolidationEngine {
     const doHnswAndFinalize = async (): Promise<void> => {
       try {
         await this.hnsw.remove(cluster.memberIds);
-        await this.hnsw.upsert([{
-          id: summaryId,
-          vector: summaryEmbedding,
-          chunk: { filePath: "", content: llmResult.summary, kind: "generic", language: "text" },
-          addedAt: now,
-          accessCount: 0,
-        }]);
+        // Same chunk shape as storeEntry/loadEntries (toVectorEntry): the chunk
+        // MUST carry `id`, because retrieveSemantic resolves hits by
+        // `entries.get(hit.chunk.id)`. An id-less chunk here made every
+        // consolidation summary invisible to semantic search until the next
+        // full index rebuild (audited 2026-09-02).
+        await this.hnsw.upsert([
+          toVectorEntry({
+            id: summaryId,
+            content: llmResult.summary,
+            chatId: summaryEntry.chatId,
+            embedding: summaryEmbedding,
+            createdAt: now,
+            accessCount: 0,
+          }),
+        ]);
         // Transition 'pending' -> 'completed' only after HNSW succeeded.
         markLogCompletedStmt.run(logId);
       } catch (hnswError) {
@@ -534,11 +577,17 @@ export class MemoryConsolidationEngine {
       await doHnswAndFinalize();
     }
 
-    // Update in-memory entries only after both SQLite and HNSW succeed
+    // Update in-memory entries only after both SQLite and HNSW succeed.
+    // Mirror every Map mutation in the TF-IDF index (remove BEFORE delete —
+    // extractTerms needs the content that is about to leave the map).
+    for (const member of memberEntries) {
+      this.textIndex?.removeDocument(extractTerms(member.content));
+    }
     for (const id of cluster.memberIds) {
       this.entries.delete(id);
     }
     this.entries.set(summaryId, summaryEntry);
+    this.textIndex?.addDocument(extractTerms(summaryEntry.content));
 
     this.logger.debug("[Consolidation] Processed cluster", {
       clusterId: cluster.seedId,
@@ -711,7 +760,12 @@ export class MemoryConsolidationEngine {
       markUndoneStmt.run(logId);
     })();
 
-    // Update in-memory entries: restore originals, remove summary
+    // Update in-memory entries: restore originals, remove summary.
+    // Mirror both in the TF-IDF index (audited 2026-09-02).
+    const summaryInMemory = this.entries.get(summaryEntryId);
+    if (summaryInMemory) {
+      this.textIndex?.removeDocument(extractTerms(summaryInMemory.content));
+    }
     this.entries.delete(summaryEntryId);
 
     // Restore originals to in-memory map by reading from DB
@@ -743,6 +797,7 @@ export class MemoryConsolidationEngine {
           chatId: (parsed.chatId as string) ?? "default",
           version: (parsed.version as number) ?? 1,
         });
+        this.textIndex?.addDocument(extractTerms((parsed.content as string) ?? ""));
       }
     }
 
@@ -754,14 +809,22 @@ export class MemoryConsolidationEngine {
     const doUndoHnsw = async (): Promise<void> => {
       await this.hnsw.remove([summaryEntryId]);
       if (originalEmbeddings.length > 0) {
+        // Restored originals get the same chunk shape as storeEntry
+        // (toVectorEntry, chunk.id set, real content). The previous literal
+        // had no `id` and `content: ""`, so undone originals were as
+        // unretrievable as the summary they replaced (audited 2026-09-02).
         await this.hnsw.upsert(
-          originalEmbeddings.map((oe) => ({
-            id: oe.id,
-            vector: oe.embedding,
-            chunk: { filePath: "", content: "", kind: "generic", language: "text" },
-            addedAt: now,
-            accessCount: 0,
-          })),
+          originalEmbeddings.map((oe) => {
+            const restored = this.entries.get(oe.id);
+            return toVectorEntry({
+              id: oe.id,
+              content: restored?.content ?? "",
+              chatId: restored?.chatId,
+              embedding: oe.embedding,
+              createdAt: restored?.createdAt ?? now,
+              accessCount: restored?.accessCount ?? 0,
+            });
+          }),
         );
       }
     };
