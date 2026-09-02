@@ -47,21 +47,20 @@ export interface AgentDBRetrievalContext {
 // the underlying store (which would corrupt pattern-store / learning
 // write paths owned by other subsystems).
 //
-// Perf: `sanitizePromptInjection` runs a handful of regex and unicode
-// normalization passes. For tight retrieval loops (TF-IDF + semantic both
-// call `.map(sanitizeResult)`), skip the heavy path on short, structurally
-// benign content — strings under 200 chars that contain no envelope-carrier
-// markers (`<` tag starts, `@`/`#` directive prefixes, or URL schemes) are
-// statistically safe and not worth the cost to run through the full engine.
-const BENIGN_CONTENT_THRESHOLD = 200;
-const INJECTION_CARRIER_RE = /[<@#]|https?:/i;
+// Every hit goes through `sanitizeRetrievalContent`, whatever its length.
+// A "benign short content" fast path used to return entries under 200 chars
+// with no `<`/`@`/`#`/URL untouched — but the override, role-hijack and
+// envelope patterns the sanitizer exists to catch ("Ignore all previous
+// instructions…", "[SYSTEM] …", "From now on you are …") contain none of
+// those characters, so the common short entry (note, insight, consolidation
+// summary) bypassed the defense and reached the re-retrieval system-prompt
+// splice (memory-refresher → orchestrator-loop-shared) verbatim. The
+// sanitizer is a few regex passes over a short string; the cost never
+// justified the hole. Fast path removed (audited 2026-09-02).
 
 function sanitizeResult(hit: RetrievalResult<MemoryEntry>): RetrievalResult<MemoryEntry> {
   const content = (hit.entry as { content?: unknown }).content;
   if (typeof content !== "string") return hit;
-  if (content.length < BENIGN_CONTENT_THRESHOLD && !INJECTION_CARRIER_RE.test(content)) {
-    return hit;
-  }
   const safeContent = sanitizeRetrievalContent(content, "agentdb-retrieval");
   if (safeContent === content) return hit;
   return {
