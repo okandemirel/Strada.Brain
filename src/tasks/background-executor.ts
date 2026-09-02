@@ -20,7 +20,7 @@ import type {
   TaskUsageEvent,
 } from "./types.js";
 import { getTaskConversationKey, TaskStatus } from "./types.js";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import type { ITaskManager, IOrchestrator, SupervisorAdmissionDecision } from "./orchestrator-contract.js";
 import { resolveConversationScope } from "../agents/orchestrator-text-utils.js";
@@ -1718,10 +1718,31 @@ export class BackgroundExecutor {
         .map((b) => b.trim())
         .filter((b) => /^(milestone|feature)\//.test(b) && b !== current);
       for (const branch of branches) {
-        const merged = run(["merge-base", "--is-ancestor", branch, current]) === "";
-        if (merged) continue;
+        // `merge-base --is-ancestor` answers with its EXIT CODE: 0 = already
+        // integrated, 1 = not an ancestor = the branch that needs merging.
+        // execFileSync throws on any non-zero exit, and this line sat one line
+        // BEFORE the per-branch try — so every branch that needed merging threw
+        // past the loop into the outer catch, `git merge` below was unreachable,
+        // and the failure logged at DEBUG. Audited 2026-09-02: 100% of
+        // deliveries left their milestone branch unmerged.
+        const probe = spawnSync("git", ["-C", root, "merge-base", "--is-ancestor", branch, current], {
+          encoding: "utf8",
+          timeout: 30_000,
+        });
+        if (probe.status === 0) continue;
+        if (probe.status !== 1) {
+          // Not "unmerged" but "could not tell" — say so rather than merging blind.
+          getLoggerSafe().warn("Milestone branch merge state could not be determined", {
+            branch, task: task.id, status: probe.status, error: (probe.stderr || probe.error?.message || "").slice(0, 200),
+          });
+          continue;
+        }
         try {
-          run(["merge", "--no-ff", "-X", "ours", branch, "-m", `integrate ${branch} (post-delivery)`]);
+          // No `-X ours`: it resolved every conflicting hunk in favour of the
+          // current branch and then logged "Integrated" — a full integration
+          // claimed while the milestone's side was silently discarded. A real
+          // conflict now fails into the manual-integration path below.
+          run(["merge", "--no-ff", branch, "-m", `integrate ${branch} (post-delivery)`]);
           getLoggerSafe().info("Integrated delivered milestone branch", { branch, task: task.id });
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
@@ -1734,7 +1755,10 @@ export class BackgroundExecutor {
         }
       }
     } catch (e) {
-      getLoggerSafe().debug("Milestone integration skipped", {
+      // This used to be a DEBUG "skipped" — invisible at the default log level
+      // while delivered work stayed stranded. A failure here is a failure.
+      getLoggerSafe().warn("Milestone integration failed — delivered branches may be left unmerged", {
+        task: task.id,
         error: e instanceof Error ? e.message : String(e),
       });
     }

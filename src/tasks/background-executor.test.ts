@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
 import { join } from "node:path";
 import os from "node:os";
 import { BackgroundExecutor } from "./background-executor.js";
@@ -2519,5 +2520,77 @@ describe("BackgroundExecutor - auto-resume bounds (measured loop of 2026-08-26)"
     await new Promise((r) => setTimeout(r, 50));
     expect(taskManager.retryGoalRoot).toHaveBeenCalledTimes(1);
     expect(taskManager.replanGoalRoot).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("BackgroundExecutor - integrateMilestoneBranches", () => {
+  it("merges every un-merged milestone branch and leaves a conflicting one for the person, loudly", () => {
+    // Audited 2026-09-02: `git merge-base --is-ancestor` answers with its exit
+    // code (1 = not an ancestor = needs merging) and execFileSync throws on it,
+    // one line BEFORE the per-branch try — so the only branch that did not
+    // throw was an already-merged one, `git merge` was unreachable, and the
+    // whole loop died at the first real candidate into a DEBUG log. The user
+    // then had to ask why the system "didn't merge it itself".
+    const root = mkdtempSync(join(os.tmpdir(), "milestone-int-"));
+    const git = (...args: string[]): string =>
+      execFileSync("git", ["-C", root, ...args], { encoding: "utf8" }).trim();
+    git("init", "-q", "-b", "main");
+    git("config", "user.email", "t@example.com");
+    git("config", "user.name", "t");
+    writeFileSync(join(root, "shared.txt"), "base\n");
+    git("add", ".");
+    git("commit", "-q", "-m", "base");
+    // A branch whose work collides with main's (sorts FIRST under for-each-ref).
+    git("checkout", "-q", "-b", "milestone/conflict");
+    writeFileSync(join(root, "shared.txt"), "from conflict\n");
+    git("commit", "-q", "-am", "conflict work");
+    git("checkout", "-q", "main");
+    // A cleanly deliverable branch (sorts after the conflicting one).
+    git("checkout", "-q", "-b", "milestone/sprint-c");
+    writeFileSync(join(root, "sprint-c.txt"), "delivered\n");
+    git("add", ".");
+    git("commit", "-q", "-m", "sprint c");
+    git("checkout", "-q", "main");
+    writeFileSync(join(root, "shared.txt"), "from main\n");
+    git("commit", "-q", "-am", "main work");
+
+    const executor = new BackgroundExecutor({
+      orchestrator: createMockOrchestrator() as any,
+      projectPath: root,
+    });
+    logSpies.warn.mockClear();
+    logSpies.info.mockClear();
+    logSpies.debug.mockClear();
+    try {
+      (executor as unknown as { integrateMilestoneBranches(t: Task): void })
+        .integrateMilestoneBranches(createTestTask());
+
+      const isAncestor = (branch: string): boolean =>
+        spawnSync("git", ["-C", root, "merge-base", "--is-ancestor", branch, "main"]).status === 0;
+
+      // The deliverable branch is integrated — even though a conflicting
+      // sibling was processed before it.
+      expect(isAncestor("milestone/sprint-c")).toBe(true);
+      expect(existsSync(join(root, "sprint-c.txt"))).toBe(true);
+      expect(logSpies.info).toHaveBeenCalledWith(
+        "Integrated delivered milestone branch",
+        expect.objectContaining({ branch: "milestone/sprint-c" }),
+      );
+
+      // The conflicting branch is NOT silently resolved in main's favour
+      // (`-X ours` did exactly that while logging "Integrated"): main keeps
+      // its own content, no merge is left half-done, and the person is told.
+      expect(isAncestor("milestone/conflict")).toBe(false);
+      expect(readFileSync(join(root, "shared.txt"), "utf8")).toBe("from main\n");
+      expect(existsSync(join(root, ".git", "MERGE_HEAD"))).toBe(false);
+      expect(logSpies.warn).toHaveBeenCalledWith(
+        "Milestone branch needs manual integration (conflict)",
+        expect.objectContaining({ branch: "milestone/conflict" }),
+      );
+      // Nothing about this run was swallowed into the debug-level "skipped" log.
+      expect(logSpies.debug).not.toHaveBeenCalledWith("Milestone integration skipped", expect.anything());
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
