@@ -180,14 +180,26 @@ export class CachedEmbeddingProvider implements IEmbeddingProvider {
 
     const logger = getLogger();
 
-    // Determine which texts are already cached
+    // Determine which texts are already cached.
+    //
+    // Read hits through get() and hold the vectors locally. The old code
+    // probed with has() — which does not refresh LRU recency — and then read
+    // hits back from the cache only AFTER the misses were set(). At capacity
+    // each set() evicts the LRU front, i.e. exactly the un-refreshed hits, so
+    // a batch of "mostly cached + a few new" chunks came back with undefined
+    // vectors for chunks the cache had, and indexFile blamed the provider
+    // ("Skipping chunk(s) with missing embeddings"). Holding hits locally
+    // means a set() in this same call can never drop them (audited 2026-09-02).
     const keys = texts.map((t) => this.cacheKey(t));
     const uncachedIndices: number[] = [];
+    const assembled: Array<number[] | undefined> = new Array(keys.length);
 
     for (let i = 0; i < keys.length; i++) {
       const key = keys[i]!;
-      if (this.cache.has(key)) {
+      const cached = this.cache.get(key);
+      if (cached !== undefined) {
         this.hits++;
+        assembled[i] = cached;
       } else {
         this.misses++;
         uncachedIndices.push(i);
@@ -221,13 +233,26 @@ export class CachedEmbeddingProvider implements IEmbeddingProvider {
         const key = keys[originalIdx]!;
         const embedding = result.embeddings[j]!;
         this.cache.set(key, embedding);
+        assembled[originalIdx] = embedding;
       }
 
       this.dirty = true;
     }
 
-    // Assemble results in original order
-    const embeddings = keys.map((key) => this.cache.get(key)!);
+    // Assemble results in original order from what this call actually
+    // obtained (held hits + fresh provider vectors), never by re-reading the
+    // cache, which may have evicted a hit while storing a miss above.
+    const embeddings: number[][] = [];
+    for (let i = 0; i < assembled.length; i++) {
+      const vec = assembled[i];
+      if (vec === undefined) {
+        // Every index is either a held hit or a freshly embedded miss; the
+        // batch-length guard above makes this unreachable. Fail loudly rather
+        // than hand an undefined vector downstream.
+        throw new Error(`EmbeddingCache: no vector assembled for text index ${i} of ${keys.length}`);
+      }
+      embeddings.push(vec);
+    }
 
     return { embeddings, usage: { totalTokens } };
   }
