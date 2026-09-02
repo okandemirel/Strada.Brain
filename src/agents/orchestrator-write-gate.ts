@@ -56,6 +56,20 @@ export async function requestWriteConfirmation(
       question = "Confirm git push to remote?";
       details = `Pushing to ${input["remote"] ?? "origin"}`;
       break;
+    case "batch_execute": {
+      // audited 2026-09-02: a batch used to fall to the default and ask
+      // "Confirm file edit: unknown?" — the human could not see what they
+      // were approving. Name the operations.
+      const ops = Array.isArray(input["operations"]) ? (input["operations"] as unknown[]) : [];
+      const names = ops
+        .map((op) => (typeof op === "object" && op !== null ? String((op as Record<string, unknown>)["tool"] ?? "?") : "?"));
+      const counts = new Map<string, number>();
+      for (const n of names) counts.set(n, (counts.get(n) ?? 0) + 1);
+      const summary = Array.from(counts.entries()).map(([n, c]) => `${c}× ${n}`).join(", ");
+      question = `Confirm batch of ${ops.length} operation${ops.length === 1 ? "" : "s"} (${summary || "unreadable"})?`;
+      details = `Running batch_execute: ${summary || "operations could not be read"}`;
+      break;
+    }
     default: {
       const path = String(input["path"] ?? "unknown");
       question = `Confirm file ${toolName === "file_write" ? "create/overwrite" : "edit"}: \`${path}\`?`;

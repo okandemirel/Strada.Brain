@@ -13,7 +13,7 @@ import type {
 // Streaming-first single-shot LLM call: a slow reasoning model must not trip the
 // FallbackChain's 90s first-response timer on the blocking chat() path (533b1e9).
 import { streamOrChatText } from "./providers/provider.interface.js";
-import { parseBatchOperations, type BatchOperation } from "./autonomy/batch-write-gate.js";
+import { BATCH_DISPATCH_TOOLS, parseBatchOperations, type BatchOperation } from "./autonomy/batch-write-gate.js";
 import { warrantsSupervisor } from "../goals/tree-shape.js";
 import { DotnetProjectPresence, DOTNET_PROJECT_TOOLS } from "./dotnet-project-presence.js";
 import { extractUserAuthorizedPaths } from "../security/user-authorized-paths.js";
@@ -3994,12 +3994,21 @@ export class Orchestrator {
     input: Record<string, unknown>,
     mode: ToolExecutionMode,
     options: ToolExecutionOptions,
+    // audited 2026-09-02: true on the user_confirm branch, where a human (not
+    // the LLM shell reviewer) is the arbiter of shell commands. The local,
+    // deterministic rules below still apply; only the shell arbitration moves.
+    humanConfirms: boolean = false,
   ): Promise<SelfManagedWriteReview> | SelfManagedWriteReview {
     switch (toolName) {
       case "shell_exec": {
         const command = this.normalizeInteractiveText(input["command"]);
         if (!command) {
           return { approved: false, reason: "shell command is missing" };
+        }
+        if (humanConfirms) {
+          // Destructive-shaped commands reach the confirmation prompt through
+          // isDestructiveOperation (direct call or batch), so the human decides.
+          return { approved: true };
         }
         // Allowlist FIRST: it is a bounded guarantee, not an escape hatch —
         // Unity batchmode/dotnet build against this project were being killed
@@ -4082,11 +4091,29 @@ export class Orchestrator {
         if (parsed.kind === "unreviewable") {
           return { approved: false, reason: `batch cannot be reviewed: ${parsed.reason}` };
         }
-        return this.reviewBatchedOperations(chatId, parsed.operations, mode, options);
+        return this.reviewBatchedOperations(chatId, parsed.operations, mode, options, humanConfirms);
       }
       default:
         return { approved: true };
     }
+  }
+
+  /**
+   * Whether a write needs the human prompt on the user_confirm branch.
+   *
+   * audited 2026-09-02: `batch_execute` is not in DESTRUCTIVE_TOOLS, so a batch
+   * carrying a file_delete or an `rm -rf` shell_exec was judged by the stub
+   * diff alone (1 change, under every threshold) and ran with no prompt. A
+   * batch is as destructive as its most destructive operation.
+   */
+  private isDestructiveForConfirmation(toolName: string, input: Record<string, unknown>): boolean {
+    if (isDestructiveOperation(toolName, input)) return true;
+    if (!BATCH_DISPATCH_TOOLS.has(toolName)) return false;
+    const parsed = parseBatchOperations(input);
+    // An unreadable batch is refused by the review before this is consulted;
+    // if it ever gets here, treat it as destructive rather than waving it on.
+    if (parsed.kind === "unreviewable") return true;
+    return parsed.operations.some((op) => isDestructiveOperation(op.tool, op.input));
   }
 
   /**
@@ -4101,6 +4128,7 @@ export class Orchestrator {
     operations: readonly BatchOperation[],
     mode: ToolExecutionMode,
     options: ToolExecutionOptions,
+    humanConfirms: boolean = false,
   ): Promise<SelfManagedWriteReview> {
     for (const operation of operations) {
       // Reads inside a batch are as free as reads outside one.
@@ -4112,6 +4140,7 @@ export class Orchestrator {
         operation.input,
         mode,
         options,
+        humanConfirms,
       );
       if (!review.approved) {
         return {
@@ -4723,13 +4752,22 @@ export class Orchestrator {
     });
 
     if (this.isWriteOperation(activeToolCall.name)) {
-      if (executionPolicy.mode === "self_managed") {
+      // audited 2026-09-02: the local review (framework-paths wall, batch
+      // operation review, destructive-shell refusal) used to run ONLY on the
+      // self_managed branch. An ordinary interactive chat resolves every write
+      // to user_confirm, so a loose Assets/Scripts/*.cs edit and a batch of
+      // thirty writes plus a file_delete both ran with no review and, for the
+      // batch, no prompt. The review is a conformance check, not an approval
+      // substitute: it runs on both branches, and the human prompt follows it.
+      if (executionPolicy.mode === "self_managed" || executionPolicy.mode === "user_confirm") {
+        const humanConfirms = executionPolicy.mode === "user_confirm";
         const review = await this.reviewSelfManagedWriteOperation(
           chatId,
           activeToolCall.name,
           activeToolCall.input,
           mode,
           options,
+          humanConfirms,
         );
         if (!review.approved) {
           return this.buildSelfManagedWriteRejection(
@@ -4739,8 +4777,9 @@ export class Orchestrator {
             review.reason ?? "operation did not pass local safety review",
           );
         }
-      } else if (executionPolicy.mode === "user_confirm") {
-        const destructive = isDestructiveOperation(activeToolCall.name, activeToolCall.input);
+      }
+      if (executionPolicy.mode === "user_confirm") {
+        const destructive = this.isDestructiveForConfirmation(activeToolCall.name, activeToolCall.input);
         const sessionUserId = options.userId ?? chatId;
         const prefs = this.dmPolicy.getSessionPrefs(sessionUserId, chatId);
         const stubDiff = {
@@ -4919,6 +4958,11 @@ export class Orchestrator {
    */
   private isWriteOperation(toolName: string): boolean {
     if (WRITE_OPERATIONS.has(toolName)) return true;
+    // audited 2026-09-02: a batch dispatch tool is a write by construction —
+    // it runs whatever operations it carries. Whether its registration
+    // metadata survived the adapter (it does not always) must not decide
+    // whether the batch review at reviewSelfManagedWriteOperation ever runs.
+    if (BATCH_DISPATCH_TOOLS.has(toolName)) return true;
 
     // Registration is where this is decided — see registerTool, which applies the
     // allowlist, the tool's own declaration, and finally its shape. Reading the
