@@ -119,6 +119,27 @@ describe("GrepSearchTool", () => {
     expect(result.content).toMatch(/scanning stopped after 7 of 60 files/);
   });
 
+  // Audited 2026-09-02: files the extension filter refused to open were never
+  // counted, so `file_pattern: "**/*.mat"` answered "No matches found" about
+  // files that were never read — an absence claim over an unrun check.
+  it("says when every globbed file was skipped by the extension filter", async () => {
+    vi.mocked(glob).mockResolvedValue(["Assets/Red.mat", "Assets/Blue.mat"] as any);
+    vi.mocked(readFile).mockResolvedValue("guid: deadbeef");
+    const result = await tool.execute({ pattern: "deadbeef", file_pattern: "**/*.mat" }, ctx);
+    expect(result.content).toMatch(/No files were searched/);
+    expect(result.content).toMatch(/2 of 2 file\(s\) matching '\*\*\/\*\.mat' were NOT searched/);
+    expect(result.content).toContain(".cs");
+    expect(result.content).not.toMatch(/^No matches found for pattern: deadbeef$/);
+  });
+
+  it("names the skipped files next to a genuine miss", async () => {
+    vi.mocked(glob).mockResolvedValue(["Player.cs", "Player.controller"] as any);
+    vi.mocked(readFile).mockResolvedValue("nothing here");
+    const result = await tool.execute({ pattern: "deadbeef" }, ctx);
+    expect(result.content).toContain("No matches found for pattern: deadbeef in the 1 file(s) searched");
+    expect(result.content).toMatch(/1 of 2 file\(s\) matching '\*\*\/\*' were NOT searched/);
+  });
+
   it("reports an exact count as exact when the cap is not reached", async () => {
     vi.mocked(glob).mockResolvedValue(["a.cs", "b.cs"] as any);
     vi.mocked(readFile).mockResolvedValue("x\nEventBus.Publish(a);");

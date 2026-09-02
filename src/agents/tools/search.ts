@@ -108,7 +108,9 @@ export class GrepSearchTool implements ITool {
       file_pattern: {
         type: "string",
         description:
-          "Optional glob pattern to filter which files to search (e.g., '**/*.cs'). Default: all code files.",
+          "Optional glob pattern to filter which files to search (e.g., '**/*.cs'). Default: '**/*'. " +
+          `Only text source/asset files are opened (${[...SEARCHABLE_EXTENSIONS].join(", ")}); ` +
+          "files with other extensions are counted and reported as not searched.",
       },
       case_sensitive: {
         type: "boolean",
@@ -162,10 +164,18 @@ export class GrepSearchTool implements ITool {
       let filesScanned = 0;
       let capReached = false;
       let stoppedMidFile = false;
+      // Audited 2026-09-02: files the extension filter dropped were never
+      // counted, so grep_search{file_pattern:"**/*.mat"} answered "No matches
+      // found" about files it never opened — an absence claim indistinguishable
+      // from a genuine miss. Count them and say so.
+      let skippedByExtension = 0;
 
       for (let fileIndex = 0; fileIndex < files.length; fileIndex++) {
         const file = files[fileIndex]!;
-        if (!SEARCHABLE_EXTENSIONS.has(extname(file).toLowerCase())) continue;
+        if (!SEARCHABLE_EXTENSIONS.has(extname(file).toLowerCase())) {
+          skippedByExtension += 1;
+          continue;
+        }
 
         // Validate each file path to prevent directory traversal
         const pathCheck = await validatePath(context.projectPath, file);
@@ -201,8 +211,21 @@ export class GrepSearchTool implements ITool {
         if (results.length >= MAX_CONTENT_RESULTS) break;
       }
 
+      const skippedNote = skippedByExtension > 0
+        ? `${skippedByExtension} of ${files.length} file(s) matching '${filePattern}' were NOT searched: ` +
+          `their extension is outside the searchable set (${[...SEARCHABLE_EXTENSIONS].join(", ")}).`
+        : "";
+
       if (results.length === 0) {
-        return { content: `No matches found for pattern: ${pattern}` };
+        if (filesScanned === 0 && skippedByExtension > 0) {
+          return {
+            content: `No files were searched for pattern: ${pattern} — ${skippedNote}`,
+          };
+        }
+        return {
+          content: `No matches found for pattern: ${pattern} in the ${filesScanned} file(s) searched.` +
+            (skippedNote ? `\n${skippedNote}` : ""),
+        };
       }
 
       const capNote = capReached
@@ -211,7 +234,8 @@ export class GrepSearchTool implements ITool {
         : "";
 
       return {
-        content: `Found ${results.length} match(es)${capNote}:\n${results.join("\n")}`,
+        content: `Found ${results.length} match(es)${capNote}:\n${results.join("\n")}` +
+          (skippedNote ? `\n(${skippedNote})` : ""),
       };
     } catch {
       return { content: "Error: search failed", isError: true };
