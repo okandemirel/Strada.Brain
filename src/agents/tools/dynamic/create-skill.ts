@@ -7,6 +7,15 @@ import { join, resolve, sep } from "node:path";
 import type { ITool, ToolContext, ToolExecutionResult } from "../tool.interface.js";
 import type { DynamicSkillSpec } from "./types.js";
 
+/**
+ * Emit a frontmatter scalar as a double-quoted string the parser reads back
+ * verbatim (it strips one pair of outer quotes and does no escape handling),
+ * so quotes are dropped and newlines folded rather than escaped.
+ */
+function quoteScalar(value: string): string {
+  return `"${value.replace(/"/g, "").replace(/\r?\n/g, " ")}"`;
+}
+
 export class CreateSkillTool implements ITool {
   readonly name = "create_skill";
   readonly description =
@@ -89,14 +98,20 @@ export class CreateSkillTool implements ITool {
       return { content: "Error: skill content exceeds 50,000 character limit.", isError: true };
     }
 
-    // Build SKILL.md content
+    // Build SKILL.md content.
+    // Audited 2026-09-02: `version: 1.0` written bare is read back by the
+    // frontmatter parser as the NUMBER 1, and discoverSkills then skipped the
+    // skill at every future boot ("missing or invalid version") while the
+    // in-session hot-load coerced it and reported success. Quote every free-
+    // text scalar so the parser returns the string that was given; a newline
+    // in one would break the line-based fence, so it is folded to a space.
     const frontmatterLines = [
       "---",
       `name: ${spec.name}`,
-      `version: ${spec.version}`,
-      `description: ${spec.description}`,
+      `version: ${quoteScalar(spec.version)}`,
+      `description: ${quoteScalar(spec.description)}`,
     ];
-    if (spec.author) frontmatterLines.push(`author: ${spec.author}`);
+    if (spec.author) frontmatterLines.push(`author: ${quoteScalar(spec.author)}`);
     if (spec.capabilities?.length) {
       frontmatterLines.push(`capabilities: [${spec.capabilities.join(", ")}]`);
     }

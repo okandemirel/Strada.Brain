@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFile, stat, rm, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { CreateSkillTool } from "./create-skill.js";
+import { discoverSkills } from "../../../skills/skill-loader.js";
 import { withTempDir, createToolContext } from "../../../test-helpers.js";
 
 describe("CreateSkillTool", () => {
@@ -39,9 +40,9 @@ describe("CreateSkillTool", () => {
       const skillPath = join(dir, "skills", "test-skill", "SKILL.md");
       const content = await readFile(skillPath, "utf-8");
       expect(content).toContain("name: test-skill");
-      expect(content).toContain("version: 1.0.0");
-      expect(content).toContain("description: A test skill");
-      expect(content).toContain("author: Test Author");
+      expect(content).toContain('version: "1.0.0"');
+      expect(content).toContain('description: "A test skill"');
+      expect(content).toContain('author: "Test Author"');
       expect(content).toContain("capabilities: [testing, demo]");
       expect(content).toContain("# Test Skill");
     });
@@ -175,5 +176,30 @@ describe("CreateSkillTool", () => {
 
     expect(result.isError).toBe(true);
     expect(result.content).toContain("Skill creation is blocked in read-only mode");
+  });
+
+  // Audited 2026-09-02: `version: 1.0` was written unquoted, the frontmatter
+  // parser read it back as the NUMBER 1, and discoverSkills skipped the skill
+  // at every future boot ("missing or invalid version") while the in-session
+  // hot-load coerced it fine — so the tool's promise of persistence was false
+  // for any two-segment or bare-integer version.
+  it("survives the next boot's discovery when the version looks numeric", async () => {
+    await withTempDir(async (dir) => {
+      const ctx = createToolContext({ projectPath: dir, workingDirectory: dir });
+
+      for (const [name, version] of [["two-seg", "1.0"], ["bare-int", "2"], ["zero-one", "0.1"]]) {
+        const result = await tool.execute(
+          { name, version, description: "numeric-looking version", content: "body" },
+          ctx,
+        );
+        expect(result.isError).toBeUndefined();
+      }
+
+      const discovered = await discoverSkills(dir);
+      const byName = new Map(discovered.map((s) => [s.manifest.name, s]));
+      expect(byName.get("two-seg")?.manifest.version).toBe("1.0");
+      expect(byName.get("bare-int")?.manifest.version).toBe("2");
+      expect(byName.get("zero-one")?.manifest.version).toBe("0.1");
+    });
   });
 });

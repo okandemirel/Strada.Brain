@@ -113,7 +113,12 @@ export async function discoverSkills(
 
         const { data, content: bodyContent } = parseFrontmatter(raw);
         const name = data["name"];
-        const version = data["version"];
+        // Audited 2026-09-02: a bare `version: 1.0` parses as a number, and
+        // this loader skipped the skill while SkillManager.loadSingle coerced
+        // it with String() — the same file loaded in-session and vanished at
+        // the next boot. Coerce here too so the two load paths agree.
+        const rawVersion = data["version"];
+        const version = typeof rawVersion === "number" ? String(rawVersion) : rawVersion;
         const description = data["description"];
 
         if (typeof name !== "string" || !name) {
