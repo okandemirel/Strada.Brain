@@ -1115,6 +1115,12 @@ export const configSchema = z
       data.fireworksApiKey,
       data.geminiApiKey,
       data.opencodeApiKey,
+      // Sibling OpenCode accounts are first-class providers everywhere else
+      // (registry, credential map, capacity counter); this hand-maintained
+      // list omitted them, so a sibling-only config was refused as having
+      // "no API key" (audited 2026-09-02).
+      data.opencode2ApiKey,
+      data.opencode3ApiKey,
       data.openrouterApiKey,
     ].some((k) => k && k.length > 0);
     const hasAnthropicSubscription =

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { loadConfig, resetConfigCache, validateConfig, secretPatterns } from "./config.js";
+import { loadConfig, resetConfigCache, validateConfig, secretPatterns, hasRequiredApiKeys } from "./config.js";
 import { realpathSync, statSync } from "node:fs";
 
 vi.mock("node:fs", () => ({
@@ -512,6 +512,26 @@ describe("loadConfig", () => {
         SYSTEM_PRESET: "gold",
       }),
     ).toThrow('Invalid SYSTEM_PRESET "gold"');
+  });
+
+  it("counts a sibling OpenCode account (OPENCODE2/OPENCODE3_API_KEY) as a credential at the boot gate (audited 2026-09-02)", () => {
+    // Every other layer (provider registry, credential map, capacity counter)
+    // treats opencode2/3 as first-class providers; pre-fix the schema's
+    // hasAnyKey list omitted them, so a sibling-only config was refused with
+    // "At least one AI provider API key is required".
+    const only2 = loadConfig({ UNITY_PROJECT_PATH: "/test/project", OPENCODE2_API_KEY: "oc2-key" });
+    expect(only2.opencode2ApiKey).toBe("oc2-key");
+    expect(hasRequiredApiKeys(only2)).toEqual({ valid: true, missing: [] });
+
+    const only3 = loadConfig({ UNITY_PROJECT_PATH: "/test/project", OPENCODE3_API_KEY: "oc3-key" });
+    expect(only3.opencode3ApiKey).toBe("oc3-key");
+    expect(hasRequiredApiKeys(only3)).toEqual({ valid: true, missing: [] });
+  });
+
+  it("still refuses a config with no credential at all (sibling-key guard)", () => {
+    expect(() => loadConfig({ UNITY_PROJECT_PATH: "/test/project" })).toThrow(
+      "At least one AI provider API key is required",
+    );
   });
 
   it("loads channel auth configuration into structured runtime config", () => {

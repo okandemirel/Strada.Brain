@@ -1747,6 +1747,10 @@ export function hasRequiredApiKeys(config: Config): { valid: boolean; missing: s
       config.fireworksApiKey,
       config.geminiApiKey,
       config.opencodeApiKey,
+      // Same omission as the schema gate: sibling OpenCode accounts are
+      // credentials too (audited 2026-09-02).
+      config.opencode2ApiKey,
+      config.opencode3ApiKey,
       config.openrouterApiKey,
     ].some((k) => k && k.length > 0);
 
