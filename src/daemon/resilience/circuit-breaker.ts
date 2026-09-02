@@ -68,12 +68,19 @@ export class CircuitBreaker {
 
   /**
    * Record a successful execution.
-   * In HALF_OPEN, transitions to CLOSED and resets counters.
+   * Any success ends the failure streak; in HALF_OPEN it also closes the
+   * circuit and resets the cooldown.
+   *
+   * Audited 2026-09-02: the streak was only cleared via HALF_OPEN, so in
+   * CLOSED the counter was a lifetime total persisted across restarts —
+   * three transient failures days apart, with thousands of successes between,
+   * tripped the circuit that `failureThreshold` promises counts CONSECUTIVE
+   * failures.
    */
   recordSuccess(): void {
+    this.consecutiveFailures = 0;
     if (this.state === "HALF_OPEN") {
       this.state = "CLOSED";
-      this.consecutiveFailures = 0;
       this.cooldownMs = this.baseCooldownMs;
     }
   }
