@@ -1014,6 +1014,59 @@ describe("FallbackChainProvider — recovery probe failures keep their cooldown 
     expect(entry.cooldownUntil - Date.now()).toBeGreaterThan(4 * 60 * 1000);
   });
 
+  // audited 2026-09-02: a probe failure / in-flight probe `continue`d past attempted++
+  // and never touched lastError, so the terminal error read "All providers are in
+  // cooldown. Try again later." with cause undefined — the measured 401s were dropped
+  // and the operator was told to wait when the real fix was a key rotation.
+  it("names the failed probes (and carries the last probe error) instead of blaming a cooldown", async () => {
+    const health = ProviderHealthRegistry.getInstance();
+    const p1 = { ...createMockProvider(), name: "openai" };
+    const p2 = { ...createMockProvider(), name: "opencode" };
+    (p1.chat as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("HTTP 401: invalid_api_key"));
+    (p2.chat as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("HTTP 401: invalid_api_key"));
+    const chain = new FallbackChainProvider([p1, p2]);
+    for (const name of ["openai", "opencode"]) {
+      for (let i = 0; i < 5; i++) health.recordFailure(name, "timeout");
+      Object.assign(health.getEntry(name)!, { cooldownUntil: Date.now() - 1000 });
+      expect(health.isRecovering(name)).toBe(true);
+    }
+
+    let thrown: unknown;
+    try {
+      await chain.chat("sys", [], []);
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    const message = (thrown as Error).message;
+    expect(message).toMatch(/^All providers failed or unavailable\./);
+    expect(message).toMatch(/recovery probe/i);
+    expect(message).toContain("401");
+    expect(message).not.toMatch(/try again later/i);
+    expect(((thrown as Error).cause as Error | undefined)?.message).toContain("401");
+    expect(p1.chat).toHaveBeenCalledTimes(1);
+    expect(p2.chat).toHaveBeenCalledTimes(1);
+  });
+
+  it("says a probe was already in flight when a concurrent call skipped every provider", async () => {
+    const health = ProviderHealthRegistry.getInstance();
+    const p1 = { ...createMockProvider(), name: "solo" };
+    let releaseProbe!: (value: unknown) => void;
+    const gate = new Promise((resolve) => { releaseProbe = resolve; });
+    (p1.chat as ReturnType<typeof vi.fn>).mockImplementation(() => gate);
+    const chain = new FallbackChainProvider([p1]);
+    for (let i = 0; i < 5; i++) health.recordFailure("solo", "timeout");
+    Object.assign(health.getEntry("solo")!, { cooldownUntil: Date.now() - 1000 });
+
+    const first = chain.chat("sys", [], []); // holds the probe guard
+    await new Promise((r) => setImmediate(r));
+    await expect(chain.chat("sys", [], [])).rejects.toThrow(/probe (?:was )?already in flight/i);
+    await expect(chain.chat("sys", [], [])).rejects.not.toThrow(/in cooldown/i);
+
+    releaseProbe({ text: "ok", toolCalls: [], stopReason: "end_turn", usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 } });
+    await expect(first).resolves.toMatchObject({ text: "ok" });
+  });
+
   it("a probe that fails on a hard quota stop honors the provider's Retry-After", async () => {
     const { chain } = recoveringChain(
       new QuotaExhaustedError("quota-dead", 3 * 24 * 60 * 60 * 1000, "usage quota exhausted; resets in ~3d"),

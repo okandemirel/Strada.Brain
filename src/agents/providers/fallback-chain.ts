@@ -654,6 +654,12 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
     const health = ProviderHealthRegistry.getInstance();
     let lastError: Error | null = null;
     let attempted = 0;
+    // What was measured when nothing was attempted (audited 2026-09-02): a provider
+    // skipped by a FAILED recovery probe or by a probe another call already had in
+    // flight used to be reported as "in cooldown" — the measured 401s were dropped
+    // and the caller was told to wait out a cooldown that was not the cause.
+    let probeFailed = 0;
+    let probeInFlight = 0;
 
     // Transient all-cooled guard: when EVERY provider is currently on cooldown but the
     // soonest is about to recover (within the bounded recovery window), wait once rather
@@ -717,6 +723,8 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
             this.recordClassifiedFailure(health, provider, probeErr, probeMsg);
           }
           logger.warn("Provider health probe failed, skipping", { provider: provider.name, error: sanitizeSecrets(probeMsg) });
+          probeFailed++;
+          lastError = probeErr instanceof Error ? probeErr : new Error(probeMsg);
           continue;
         } finally {
           this.probing.delete(provider.name);
@@ -724,6 +732,7 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
       } else if (health.isRecovering(provider.name) && this.probing.has(provider.name)) {
         // Another concurrent call is already probing this provider — skip
         logger.debug("Skipping provider, probe already in flight", { provider: provider.name });
+        probeInFlight++;
         continue;
       }
 
@@ -986,9 +995,24 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
       }
     }
 
-    const detail = attempted === 0
-      ? "All providers are in cooldown. Try again later."
-      : `Last error: ${sanitizeSecrets(lastError?.message ?? "")}`;
+    // The terminal reason names what this call actually measured. "In cooldown" is
+    // claimed only when every provider was skipped by an ACTIVE cooldown; a failed
+    // probe carries its error, and an in-flight probe says nothing was measured.
+    let detail: string;
+    if (attempted > 0) {
+      detail = `Last error: ${sanitizeSecrets(lastError?.message ?? "")}`;
+    } else if (probeFailed > 0) {
+      const cooled = this.providers.length - probeFailed - probeInFlight;
+      detail = `${probeFailed} provider(s) failed the recovery probe`
+        + (cooled > 0 ? `, ${cooled} still in cooldown` : "")
+        + (probeInFlight > 0 ? `, ${probeInFlight} being probed by another call` : "")
+        + `. Last probe error: ${sanitizeSecrets(lastError?.message ?? "")}`;
+    } else if (probeInFlight > 0) {
+      detail = `A recovery probe was already in flight for ${probeInFlight} provider(s); `
+        + "this call measured nothing. Retry shortly.";
+    } else {
+      detail = "All providers are in cooldown. Try again later.";
+    }
     throw new Error(`All providers failed or unavailable. ${detail}`, { cause: lastError ?? undefined });
   }
 }
