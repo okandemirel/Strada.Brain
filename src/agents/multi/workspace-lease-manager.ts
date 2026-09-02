@@ -1020,15 +1020,46 @@ export class WorkspaceLeaseManager {
    *  made during the run from a file that merely shares the lease's timestamp. */
   private snapshotMtimes(root: string, excludeRoot: string): Map<string, number> {
     const seeded = new Map<string, number>();
+    // This walk runs against the LIVE project (sourceSeed), where the editor,
+    // a build or the user deletes and locks files while it runs. It used to be
+    // bare, so one ENOENT/EACCES between the readdir and its stat threw out of
+    // acquireLease and the delegation died before the sub-agent started —
+    // commitLease's walk one screen down has guarded this exact case since it
+    // was measured in production. A file missing from the seed is handled
+    // conservatively by commit(): absent from leaseSeed reads as agent work,
+    // absent from sourceSeed reads as a conflict (audited 2026-09-02).
+    const skipped: string[] = [];
     const walk = (dir: string): void => {
-      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      let entries: Dirent[];
+      try {
+        entries = readdirSync(dir, { withFileTypes: true });
+      } catch (err) {
+        skipped.push(`${relative(root, dir) || "."} (${err instanceof Error ? err.message : String(err)})`);
+        return;
+      }
+      for (const entry of entries) {
         const full = join(dir, entry.name);
         if (!this.shouldCommitEntry(excludeRoot, full)) continue;
-        if (entry.isDirectory()) walk(full);
-        else if (entry.isFile()) seeded.set(relative(root, full), statSync(full).mtimeMs);
+        if (entry.isDirectory()) {
+          walk(full);
+          continue;
+        }
+        if (!entry.isFile()) continue;
+        try {
+          seeded.set(relative(root, full), statSync(full).mtimeMs);
+        } catch (err) {
+          skipped.push(`${relative(root, full)} (${err instanceof Error ? err.message : String(err)})`);
+        }
       }
     };
     if (existsSync(root)) walk(root);
+    if (skipped.length > 0) {
+      getLoggerSafe().warn("Seed snapshot skipped entries it could not stat — commit() will treat them conservatively", {
+        root,
+        count: skipped.length,
+        sample: skipped.slice(0, 5),
+      });
+    }
     return seeded;
   }
 

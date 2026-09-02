@@ -11,7 +11,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, utimesSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, utimesSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
@@ -257,6 +257,32 @@ describe("workspace lease commit", () => {
     expect(result.conflicts).toEqual([]);
     expect(result.conflictsQuarantinedUnder).toBeNull();
     expect(existsSync(join(source, ".strada", "lease-conflicts"))).toBe(false);
+  });
+});
+
+describe("seed snapshot resilience", () => {
+  it("acquires a lease when one project directory cannot be stat-walked, instead of failing the delegation", async () => {
+    // Measured 2026-09-02: snapshotMtimes walked the LIVE project with a bare
+    // readdirSync/statSync. One entry that vanished or was locked between the
+    // readdir and its stat threw straight out of acquireLease, so the parent
+    // saw "[Sub-agent failed: EACCES: permission denied, stat '…']" before the
+    // sub-agent ever started. commitLease's walk already guards this case.
+    mkdirSync(join(source, "Assets", "Sealed"), { recursive: true });
+    writeFileSync(join(source, "Assets", "Sealed", "Secret.cs"), "sealed", "utf8");
+    makeGitRepo();
+    // Readable but not searchable: readdirSync lists the children, statSync on
+    // each of them throws EACCES — the deterministic form of the race.
+    chmodSync(join(source, "Assets", "Sealed"), 0o444);
+    try {
+      const lease = await gitManager().acquireLease({ label: "seed-walk" });
+      writeFileSync(join(lease.path, "Assets", "Scripts", "Board.cs"), "namespace PixelFlow { }", "utf8");
+      const result = await lease.commit();
+      await lease.release();
+      expect(result.written).toContain(join("Assets", "Scripts", "Board.cs"));
+      expect(readFileSync(join(source, "Assets", "Scripts", "Board.cs"), "utf8")).toBe("namespace PixelFlow { }");
+    } finally {
+      chmodSync(join(source, "Assets", "Sealed"), 0o755);
+    }
   });
 });
 
