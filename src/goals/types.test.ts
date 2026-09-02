@@ -296,3 +296,22 @@ describe("GoalStorage plan_summary", () => {
     expect(retrieved!.planSummary).toBeUndefined();
   });
 });
+
+// =============================================================================
+// REVIEW GATE — nothing enforces one, so the module must not advertise one
+// =============================================================================
+
+// audited 2026-09-02: `isNodeTrulyDone` / `getNextReviewStatus` had no
+// production caller — a "mandatory review pipeline" that never ran while
+// nodes went executing -> completed. An advertised gate that nothing calls is
+// worse than no gate: it reads as enforcement. Node verification is the
+// supervisor's cross-provider verifier (result-aggregator.ts); `reviewStatus`
+// is the human-driven Kanban review column. This pins that the goal module
+// exports no review gate until one is actually wired into the completion path.
+describe("review gate", () => {
+  it("exports no review-gate helper that nothing enforces", async () => {
+    const mod = (await import("./types.js")) as Record<string, unknown>;
+    expect("isNodeTrulyDone" in mod).toBe(false);
+    expect("getNextReviewStatus" in mod).toBe(false);
+  });
+});
