@@ -13,6 +13,7 @@ import { TierRouter } from "./tier-router.js";
 import { createProvider } from "../../providers/provider-registry.js";
 import { ProviderHealthRegistry } from "../../providers/provider-health.js";
 import { setLiveChainMemberNames } from "../../providers/provider-outage.js";
+import { estimateCostWithCache } from "../../../budget/cost-model.js";
 import type {
   DelegationConfig,
   DelegationRequest,
@@ -462,6 +463,67 @@ describe("DelegationManager", () => {
       expect(budgetTracker.recordCost).toHaveBeenCalledOnce();
       const [agentId] = budgetTracker.recordCost.mock.calls[0]!;
       expect(agentId).toBe(PARENT_AGENT_ID);
+    });
+
+    it("bills the parent for the sub-agent's MEASURED token usage, not a wall-clock guess", async () => {
+      // Audited 2026-09-02: the delegated Orchestrator/runner got no usage
+      // sink, so the only charge was tier x seconds with tokensIn/Out = 0. A
+      // premium sub-agent burning 800k input tokens in 25s was billed $0.05
+      // against a real cost of ~$2.70 by the repo's own rate table; on a
+      // flat-fee chain the same guess charged imaginary money instead.
+      orchestratorHasAgentCore = true;
+      scriptedRunnerRun = vi.fn().mockImplementation(async (request: { onUsage?: (u: unknown) => void }) => {
+        request.onUsage?.({
+          provider: "claude",
+          model: "claude-opus-4-6-20250514",
+          inputTokens: 800_000,
+          outputTokens: 20_000,
+        });
+        return {
+          status: "completed",
+          finalText: "done",
+          finalSummary: "done",
+          provider: "claude",
+          catalogVersion: "claude:opus",
+          assignmentVersion: 0,
+          touchedFiles: [],
+          toolTrace: [],
+          verificationResults: [],
+          reviewFindings: [],
+          artifacts: [],
+        };
+      });
+
+      const request: DelegationRequest = {
+        type: "premium_task",
+        task: "Design the module",
+        parentAgentId: PARENT_AGENT_ID,
+        depth: 0,
+        mode: "sync",
+        toolContext: TEST_TOOL_CONTEXT,
+      };
+
+      const result = await manager.delegate(request);
+
+      const budgetTracker = opts.budgetTracker as unknown as ReturnType<typeof createMockBudgetTracker>;
+      expect(budgetTracker.recordCost).toHaveBeenCalledOnce();
+      const [agentId, costUsd, meta] = budgetTracker.recordCost.mock.calls[0]! as [
+        string,
+        number,
+        { model: string; tokensIn: number; tokensOut: number },
+      ];
+      expect(agentId).toBe(PARENT_AGENT_ID);
+      expect(meta.tokensIn).toBe(800_000);
+      expect(meta.tokensOut).toBe(20_000);
+      expect(meta.model).toBe("claude-opus-4-6-20250514");
+      const measured = estimateCostWithCache({ inputTokens: 800_000, outputTokens: 20_000 }, "claude");
+      expect(costUsd).toBeCloseTo(measured, 6);
+      expect(costUsd).toBeGreaterThan(1); // the wall-clock guess for a sub-second run is ~$0
+      // The figure the parent sees is the one that was measured.
+      expect(result.metadata.costUsd).toBeCloseTo(measured, 6);
+      // Both engine paths carry the sink: the handleMessage path reads it from
+      // the Orchestrator options, the V2 runner from the run request.
+      expect(orchestratorOpts["onUsage"]).toBeTypeOf("function");
     });
   });
 

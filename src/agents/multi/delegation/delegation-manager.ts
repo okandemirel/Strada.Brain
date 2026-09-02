@@ -14,7 +14,8 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { getLogger } from "../../../utils/logger.js";
+import { getLogger, getLoggerSafe } from "../../../utils/logger.js";
+import { estimateCostWithCache } from "../../../budget/cost-model.js";
 import type { IChannelAdapter, IncomingMessage } from "../../../channels/channel.interface.js";
 import type { IEventBus, LearningEventMap } from "../../../core/event-bus.js";
 import type { ITool } from "../../tools/tool.interface.js";
@@ -463,6 +464,54 @@ export class DelegationManager {
     const captureChannel = new CaptureChannel();
     let workspaceLease: Awaited<ReturnType<WorkspaceLeaseManager["acquireLease"]>> | undefined;
 
+    // Real usage accounting. The delegated Orchestrator/runner used to get NO
+    // usage sink, so the only thing ever charged for a sub-agent was
+    // tier x seconds with tokensIn/tokensOut = 0 — a premium run burning 800k
+    // tokens in 25s billed $0.05, and on a flat-fee chain the same guess
+    // charged imaginary money. Every provider turn is billed here exactly the
+    // way AgentManager bills the parent; the tier estimate survives only as a
+    // labelled fallback for a run that reported no usage (audited 2026-09-02).
+    const parentAgentId = request.parentAgentId as AgentId;
+    let usageEvents = 0;
+    let measuredCostUsd = 0;
+    const onUsage = (usage: {
+      provider: string;
+      model?: string;
+      inputTokens: number;
+      outputTokens: number;
+      cacheCreationInputTokens?: number;
+      cacheReadInputTokens?: number;
+    }): void => {
+      usageEvents++;
+      const costUsd = estimateCostWithCache(usage, usage.provider);
+      measuredCostUsd += costUsd;
+      if (costUsd <= 0) return; // flat-fee / local provider: nothing to charge
+      budgetTracker.recordCost(parentAgentId, costUsd, {
+        model: usage.model ?? usage.provider,
+        tokensIn: usage.inputTokens,
+        tokensOut: usage.outputTokens,
+      });
+    };
+    /** The cost to report: measured when any usage arrived, else the tier
+     *  estimate — recorded and logged as an estimate, never silently. */
+    const settleCost = (durationMs: number, outcome: "completed" | "timeout"): number => {
+      if (usageEvents > 0) return measuredCostUsd;
+      const estimatedCostUsd = this.estimateDelegationCost(tier, durationMs);
+      budgetTracker.recordCost(parentAgentId, estimatedCostUsd, {
+        model: providerConfig.model,
+        tokensIn: 0,
+        tokensOut: 0,
+      });
+      getLoggerSafe().warn("Delegated sub-agent reported no token usage — billing the tier estimate", {
+        subAgentId,
+        tier,
+        outcome,
+        durationMs,
+        estimatedCostUsd,
+      });
+      return estimatedCostUsd;
+    };
+
     try {
       workspaceLease = this.opts.workspaceLeaseManager
         ? await this.opts.workspaceLeaseManager.acquireLease({
@@ -487,6 +536,7 @@ export class DelegationManager {
         vaultWriteHookBudgetMs: this.opts.vaultWriteHookBudgetMs,
         maxIterations: typeConfig.maxIterations,
         authorizedPathsStore: this.opts.authorizedPathsStore,
+        onUsage,
       });
       // Carry the user's authorization across the instance boundary, keyed to
       // the delegate's own chat id — a worker cannot authorize itself, so this
@@ -534,6 +584,8 @@ export class DelegationManager {
               channelType: message.channelType,
               userId: message.userId,
               workspaceLease,
+              // The V2 runner reads its sink from the REQUEST, not the Orchestrator.
+              onUsage,
             },
             {
               mode,
@@ -574,15 +626,7 @@ export class DelegationManager {
       }
 
       const durationMs = Date.now() - startTime;
-      // Estimate cost from tier as a conservative approximation until
-      // real provider token usage tracking is available
-      const costUsd = this.estimateDelegationCost(tier, durationMs);
-
-      budgetTracker.recordCost(request.parentAgentId as AgentId, costUsd, {
-        model: providerConfig.model,
-        tokensIn: 0,
-        tokensOut: 0,
-      });
+      const costUsd = settleCost(durationMs, "completed");
 
       delegationLog.complete(logId, {
         durationMs,
@@ -628,12 +672,7 @@ export class DelegationManager {
         // post-race branch (unreachable when waitForAbort rejects), so the log row stayed
         // 'running' forever and the parent kept delegating for free.
         const timedOutMs = Date.now() - startTime;
-        const timedOutCostUsd = this.estimateDelegationCost(tier, timedOutMs);
-        budgetTracker.recordCost(request.parentAgentId as AgentId, timedOutCostUsd, {
-          model: providerConfig.model,
-          tokensIn: 0,
-          tokensOut: 0,
-        });
+        const timedOutCostUsd = settleCost(timedOutMs, "timeout");
         delegationLog.timeout(logId, { durationMs: timedOutMs, costUsd: timedOutCostUsd });
         eventBus.emit("delegation:failed", {
           parentAgentId: request.parentAgentId,
@@ -1024,6 +1063,9 @@ export class DelegationManager {
   /**
    * Estimate delegation cost by tier as a conservative approximation.
    * Per-second rates assume typical LLM API pricing.
+   *
+   * FALLBACK ONLY — used when a run reported no token usage at all. Measured
+   * usage (see the onUsage sink in executeSingleDelegation) is the norm.
    */
   private estimateDelegationCost(tier: ModelTier, durationMs: number): number {
     const costPerSecond: Record<ModelTier, number> = {
