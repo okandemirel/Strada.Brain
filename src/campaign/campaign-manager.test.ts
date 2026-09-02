@@ -955,6 +955,23 @@ describe("CampaignManager", () => {
     }
   });
 
+  it("a GDD draft that completed while the process was down is judged on restart, not redrafted", async () => {
+    // Audited 2026-09-02: resumeOne's "landed while we were down" branch was
+    // gated on state === "executing", so a drafting-gdd campaign whose draft
+    // had completed fell through to submitDraft — a whole new LLM draft, no
+    // revision note, no attempt charged, and the approval gate never opened.
+    const campaign = manager.startFromIdea(ctx, "a match-3 where pigs fly");
+    expect(tasks.submitted).toHaveLength(1);
+    // The draft completed, but its settlement event died with the process.
+    tasks.markTerminal("task_1", TaskStatus.completed, "wrote docs/Game_GDD.md");
+
+    await manager.resumeActive();
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("awaiting-approval"));
+    expect(tasks.submitted).toHaveLength(1); // no redraft
+    expect(storage.get(campaign.id)!.gddPath).toBe("docs/Game_GDD.md");
+    expect(messages.at(-1)!.text).toContain("GDD drafted");
+  });
+
   it("resumeActive leaves a still-running task alone", async () => {
     manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
     await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));

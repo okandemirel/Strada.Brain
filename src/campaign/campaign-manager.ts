@@ -438,8 +438,15 @@ export class CampaignManager {
         } else if (task && ACTIVE_STATUSES.has(task.status)) {
           this.adoptTask(campaign, task.id);
           return; // genuinely still in flight — track the live id
-        } else if (task && task.status === TaskStatus.completed && campaign.state === "executing") {
+        } else if (task && task.status === TaskStatus.completed) {
           // Landed while we were down; the settlement event is gone. Judge it.
+          // Audited 2026-09-02: this branch was gated on state === "executing",
+          // so a completed GDD draft fell through to submitDraft — a whole new
+          // draft, no revision note, no attempt charged, gate never opened.
+          if (campaign.state === "drafting-gdd") {
+            await this.onDraftSettled(campaign, task.status, task.result ?? "");
+            return;
+          }
           const milestone = campaign.milestones[campaign.currentMilestone];
           if (milestone) {
             await this.onMilestoneOutcome(campaign, milestone, task.status, task.result ?? "", {
