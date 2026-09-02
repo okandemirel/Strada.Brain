@@ -277,6 +277,24 @@ export class HeartbeatLoop {
         this.lastTick = now;
         return; // Skip all triggers this tick
       }
+      // The portal's "Daemon daily sub-limit" (subLimits.daemonDailyUsd) was
+      // accepted, persisted and displayed but read by nothing on the dispatch
+      // path — isSourceExceeded() had no production caller, so the setting
+      // enforced nothing (audited 2026-09-02). Gate the tick on it here, next
+      // to the global wall, and name the limit that stopped the daemon.
+      if (this.unifiedBudgetManager.isSourceExceeded("daemon")) {
+        const usedUsd = this.unifiedBudgetManager.getSnapshot().breakdown.daemon;
+        const limitUsd = this.unifiedBudgetManager.getConfig().subLimits.daemonDailyUsd;
+        this.eventBus.emit("daemon:budget_exceeded", {
+          source: "unified:daemon-sublimit",
+          usedUsd,
+          limitUsd,
+          timestamp: now.getTime(),
+        } as never);
+        this.logger.info("Daemon daily sub-limit reached — triggers skipped this tick", { usedUsd, limitUsd });
+        this.lastTick = now;
+        return;
+      }
     }
 
     // Sequential evaluation -- prevents budget race conditions

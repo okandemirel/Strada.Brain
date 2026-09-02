@@ -22,6 +22,7 @@ import { TypedEventBus } from "../../core/event-bus.js";
 import type { LearningEventMap } from "../../core/event-bus.js";
 import type { IncomingMessage } from "../../channels/channel-messages.interface.js";
 import { DaemonStorage } from "../../daemon/daemon-storage.js";
+import { UnifiedBudgetManager } from "../../budget/unified-budget-manager.js";
 import type { TaskUsageEvent } from "../../tasks/types.js";
 
 let mockUsageEvent: TaskUsageEvent | null = null;
@@ -452,6 +453,24 @@ describe("AgentManager", () => {
   // ===========================================================================
 
   describe("budget enforcement", () => {
+    it("seeds a new agent's cap from the unified subLimits.agentDefaultUsd the portal writes, not the boot-time env default", async () => {
+      // Portal scenario (audited 2026-09-02): the user sets "Agent default budget = $2";
+      // GET /api/budget/config echoed $2 while every new agent was still capped at the
+      // env/config default of $5 — displayed and enforced numbers diverged silently.
+      const unified = new UnifiedBudgetManager(daemonStorage, { emit: () => {} }, {});
+      unified.updateConfig({ subLimits: { daemonDailyUsd: 0, agentDefaultUsd: 2, verificationPct: 0.15 } });
+      manager.setUnifiedBudgetManager(unified);
+
+      await manager.routeMessage(makeMsg());
+
+      const [agent] = manager.getAllAgents();
+      expect(agent.budgetCapUsd).toBe(2);
+      // And the cap is what the pre-turn gate enforces: $2.50 of spend rejects the next turn.
+      budgetTracker.recordCost(agent.id, 2.5, { model: "claude" });
+      const reply = await manager.routeMessage(makeMsg());
+      expect(reply).toContain("Agent budget exceeded ($2.50 / $2.00)");
+    });
+
     it("records per-agent usage from orchestrator token callbacks", async () => {
       mockUsageEvent = { provider: "claude", inputTokens: 100_000, outputTokens: 50_000 };
 

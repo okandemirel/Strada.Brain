@@ -7,6 +7,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { HeartbeatLoop } from "./heartbeat-loop.js";
+import { UnifiedBudgetManager } from "../budget/unified-budget-manager.js";
 import { TriggerRegistry } from "./trigger-registry.js";
 import { CircuitBreaker } from "./resilience/circuit-breaker.js";
 import type { ITrigger, TriggerMetadata, TriggerState, DaemonConfig } from "./daemon-types.js";
@@ -894,5 +895,101 @@ describe("HeartbeatLoop", () => {
         expect.objectContaining({ count: 3 }),
       );
     });
+  });
+});
+
+// =============================================================================
+// Daemon sub-limit enforcement (audited 2026-09-02)
+// =============================================================================
+
+/**
+ * In-memory stand-in for the DaemonStorage budget adapter so a REAL
+ * UnifiedBudgetManager (not a mock) decides whether the daemon may spend.
+ */
+function makeBudgetStorage() {
+  const entries: Array<{ costUsd: number; timestamp: number; source?: string; agentId?: string | null }> = [];
+  const cfg: Record<string, string> = {};
+  const since = (w: number) => entries.filter((e) => e.timestamp >= w);
+  return {
+    entries,
+    insertBudgetEntry: (e: { costUsd: number; timestamp: number; source?: string }) => { entries.push({ ...e }); },
+    insertBudgetEntryWithAgent: (e: { costUsd: number; timestamp: number; agentId: string }) => { entries.push({ ...e }); },
+    insertBudgetEntryWithSource: (e: { costUsd: number; timestamp: number; source: string; agentId?: string | null }) => { entries.push({ ...e }); },
+    sumBudgetSince: (w: number) => since(w).reduce((s, e) => s + e.costUsd, 0),
+    sumBudgetBySource: (w: number) => {
+      const out: Record<string, number> = {};
+      for (const e of since(w)) out[e.source ?? "daemon"] = (out[e.source ?? "daemon"] ?? 0) + e.costUsd;
+      return out;
+    },
+    sumBudgetForSource: (source: string, w: number) =>
+      since(w).filter((e) => (e.source ?? "daemon") === source).reduce((s, e) => s + e.costUsd, 0),
+    sumBudgetSinceForAgent: (w: number, agentId: string) =>
+      since(w).filter((e) => e.agentId === agentId).reduce((s, e) => s + e.costUsd, 0),
+    getDailyHistory: () => [],
+    getBudgetConfig: (k: string) => cfg[k],
+    setBudgetConfig: (k: string, v: string) => { cfg[k] = v; },
+    getAllBudgetConfig: () => ({ ...cfg }),
+  };
+}
+
+describe("HeartbeatLoop — the daemon daily sub-limit gates trigger dispatch", () => {
+  let registry: TriggerRegistry;
+  let taskManager: ReturnType<typeof makeTaskManager>;
+  let eventBus: IEventBus<DaemonEventMap>;
+  let config: DaemonConfig;
+  let loop: HeartbeatLoop;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    registry = new TriggerRegistry();
+    taskManager = makeTaskManager();
+    eventBus = makeEventBus();
+    config = makeDaemonConfig();
+    loop = new HeartbeatLoop(
+      registry, taskManager as any, makeBudgetTracker() as any, makeSecurityPolicy() as any,
+      makeApprovalQueue() as any, makeStorage() as any, makeIdentityManager() as any, eventBus,
+      config, makeLogger() as any,
+    );
+  });
+
+  afterEach(() => {
+    loop.stop();
+    vi.useRealTimers();
+  });
+
+  async function tickWith(mgr: UnifiedBudgetManager): Promise<void> {
+    loop.setUnifiedBudgetManager(mgr);
+    registry.register(makeTrigger("t1", { shouldFire: true }));
+    loop.start();
+    await vi.advanceTimersByTimeAsync(config.heartbeat.intervalMs + 10);
+  }
+
+  it("skips every trigger once daemon spend reaches subLimits.daemonDailyUsd, even with no global limit set", async () => {
+    // Portal scenario: only "Daemon daily sub-limit = $5" is set; global limits stay 0.
+    const storage = makeBudgetStorage();
+    const mgr = new UnifiedBudgetManager(storage, { emit: () => {} }, {});
+    mgr.updateConfig({ subLimits: { daemonDailyUsd: 5, agentDefaultUsd: 5, verificationPct: 0.15 } });
+    mgr.recordCost(6, "daemon", { triggerName: "overnight" });
+    expect(mgr.isGlobalExceeded()).toBe(false); // the global wall is NOT what stops it
+
+    await tickWith(mgr);
+
+    expect(taskManager.submit).not.toHaveBeenCalled();
+    expect(eventBus.emit).toHaveBeenCalledWith(
+      "daemon:budget_exceeded",
+      expect.objectContaining({ source: "unified:daemon-sublimit", usedUsd: 6, limitUsd: 5 }),
+    );
+  });
+
+  it("still dispatches when daemon spend is under the sub-limit", async () => {
+    const storage = makeBudgetStorage();
+    const mgr = new UnifiedBudgetManager(storage, { emit: () => {} }, {});
+    mgr.updateConfig({ subLimits: { daemonDailyUsd: 5, agentDefaultUsd: 5, verificationPct: 0.15 } });
+    mgr.recordCost(1, "daemon", { triggerName: "overnight" });
+    mgr.recordCost(10, "agent", { agentId: "a1" }); // other sources do not count against the daemon
+
+    await tickWith(mgr);
+
+    expect(taskManager.submit).toHaveBeenCalled();
   });
 });
