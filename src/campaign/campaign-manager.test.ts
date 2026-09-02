@@ -1007,6 +1007,39 @@ describe("CampaignManager", () => {
     expect(messages.at(-1)!.text).toContain("kampanya devam");
   });
 
+  it("a fresh attempt starts with a fresh deferral clock: a stale reconcileDeferredSince cannot charge its first reap", async () => {
+    // Audited 2026-09-02: reconcileDeferredSince was cleared only on the
+    // judge path (line ~894); revive, bounces, escalations and restarts all
+    // began a new attempt with the old clock. Past 24h the deferral was
+    // skipped and an ordinary keep-alive reap — whose text promises the
+    // executor's own retry — was charged as a failed attempt and resubmitted.
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    tasks.emit("task:failed", "task_1", "boom");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    tasks.emit("task:failed", "task_2", "boom again");
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"));
+
+    // The parked milestone carries a deferral clock from a long-ago wall.
+    const parked = storage.get(campaign.id)!;
+    parked.milestones[0]!.reconcileDeferredSince = Date.now() - 25 * 60 * 60_000;
+    storage.save(parked);
+
+    expect(await manager.tryHandleRevive("cli-local", "kampanya devam")).toBe(true);
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    expect(storage.get(campaign.id)!.milestones[0]!.attempts).toBe(1);
+
+    // The revived attempt's very first reap: the executor promises a retry.
+    tasks.emit("task:blocked", "task_3", "Reaped: no progress for 15m. Auto-retry 2/10 in ~600s.");
+    await new Promise((r) => setTimeout(r, 250));
+
+    const fresh = storage.get(campaign.id)!;
+    expect(tasks.submitted).toHaveLength(3); // deferred, not resubmitted
+    expect(fresh.state).toBe("executing");
+    expect(fresh.milestones[0]!.attempts).toBe(1); // not charged
+    expect(fresh.milestones[0]!.reconcileDeferredSince).toBeGreaterThan(Date.now() - 60_000);
+  });
+
   it("resumeActive leaves a still-running task alone", async () => {
     manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
     await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));

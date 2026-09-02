@@ -666,6 +666,12 @@ export class CampaignManager {
     }
     milestone.status = "running";
     milestone.startedAtMs ??= Date.now();
+    // A new attempt gets a new deferral clock. Audited 2026-09-02: the clock
+    // was cleared only on the judge path, so revive/bounce/escalation/restart
+    // attempts inherited a stale one — past 24h the deferral was skipped and
+    // the fresh attempt's first keep-alive reap (whose text promises the
+    // executor's own retry) was charged and resubmitted on top of it.
+    milestone.reconcileDeferredSince = undefined;
     if (opts?.countAttempt !== false) {
       milestone.attempts += 1;
     }
