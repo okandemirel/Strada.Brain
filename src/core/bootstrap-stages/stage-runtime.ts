@@ -447,10 +447,16 @@ export async function initializeTaskRuntimeStage(
             } as import("../../agents/tools/tool-core.interface.js").ToolContext,
           );
           const detail = String(result.content ?? "");
-          const infrastructureFailure =
-            result.isError === true &&
-            /tool '.*' not found|unavailable|bridge.*(disconnect|not connected)|ECONN|timed?\s?out/i.test(detail);
-          if (infrastructureFailure) {
+          // PROVE THE FAILURE, do not assume it. The guardian edits the user's
+          // REAL project when this says "red", so a red verdict must carry a
+          // compile diagnostic. Measured live 2026-09-03 11:24: the tool
+          // returned "Connection lost" — an error that matched no
+          // infrastructure pattern — and the guardian declared the tree
+          // uncompilable and launched an autonomous repair task against the
+          // project the user was inspecting.
+          const carriesCompileDiagnostic =
+            /error\s+CS\d+|compile (failed|succeeded)|\d+\s+error\(s\)|compile entries|verification (FAILED|passed)/i.test(detail);
+          if (result.isError === true && !carriesCompileDiagnostic) {
             return { ok: true, ran: false, detail };
           }
           return { ok: result.isError !== true, ran: true, detail };
