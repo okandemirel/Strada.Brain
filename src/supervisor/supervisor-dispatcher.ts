@@ -738,15 +738,19 @@ export class SupervisorDispatcher {
    * text (no clock read) so a node's prompt is stable across retries.
    */
   private withDeadlineNotice(node: TaggedGoalNode, timeoutMs: number): TaggedGoalNode {
+    if (node.timeBudgetNotice) return node;
     const minutes = Math.max(1, Math.round(timeoutMs / 60_000));
-    const notice =
-      `\n\nTIME BUDGET: this node is cancelled after ${minutes} minutes, and everything it has ` +
-      "not committed is lost together with every node that depends on it. Long verification loops " +
-      "(a headless compile is minutes) burn it fast: finish and commit the smallest complete " +
-      "increment first, then continue; if the budget is nearly spent, commit what works and report " +
-      "precisely what remains.";
-    if (!node.task || node.task.includes("TIME BUDGET:")) return node;
-    return { ...node, task: `${node.task}${notice}` };
+    return {
+      ...node,
+      // NOT node.task: that string is the visible label the monitor and the
+      // narrative render. The worker prompt picks this field up separately.
+      timeBudgetNotice:
+        `TIME BUDGET: this node is cancelled after ${minutes} minutes, and everything it has ` +
+        "not committed is lost together with every node that depends on it. Long verification " +
+        "loops (a headless compile is minutes) burn it fast: finish and commit the smallest " +
+        "complete increment first, then continue; if the budget is nearly spent, commit what " +
+        "works and report precisely what remains.",
+    };
   }
 
   private async executeWithTimeout(

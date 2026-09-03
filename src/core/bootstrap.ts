@@ -220,9 +220,13 @@ export function createSupervisorExecuteNodeBridge(params: {
             `${node.task}\n\n## Completed dependencies (build on these; do not redo them)\n${depLines.join("\n")}`;
         }
       }
+      // The dispatcher states the node's time budget; the worker must see it.
+      const promptWithBudget = node.timeBudgetNotice
+        ? `${nodePrompt}\n\n${node.timeBudgetNotice}`
+        : nodePrompt;
       const result = await params.backgroundExecutor.runWorkerEnvelope(params.orchestrator, {
         mode: "delegated",
-        prompt: nodePrompt,
+        prompt: promptWithBudget,
         chatId: context.chatId,
         channelType: context.channelType ?? params.defaultChannelType ?? "cli",
         conversationId: context.conversationId,

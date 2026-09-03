@@ -17,23 +17,27 @@ describe("node time budget", () => {
   it("states the budget in the task the node receives", () => {
     const d = dispatcherWith(3_600_000);
     const withBudget = (d as unknown as {
-      withDeadlineNotice(n: unknown, ms: number): { task: string };
+      withDeadlineNotice(n: unknown, ms: number): { task: string; timeBudgetNotice?: string };
     }).withDeadlineNotice({ id: "n1", task: "Clean project structure" }, 3_600_000);
 
-    expect(withBudget.task).toContain("Clean project structure");
-    expect(withBudget.task).toContain("TIME BUDGET:");
-    expect(withBudget.task).toContain("60 minutes");
-    expect(withBudget.task).toContain("smallest complete increment");
+    // The visible label stays exactly as planned — the monitor and the
+    // narrative render it; the budget rides in its own field.
+    expect(withBudget.task).toBe("Clean project structure");
+    expect(withBudget.timeBudgetNotice).toContain("TIME BUDGET:");
+    expect(withBudget.timeBudgetNotice).toContain("60 minutes");
+    expect(withBudget.timeBudgetNotice).toContain("smallest complete increment");
   });
 
   it("does not append the notice twice across retries", () => {
     const d = dispatcherWith(600_000);
-    const api = d as unknown as { withDeadlineNotice(n: unknown, ms: number): { task: string } };
+    const api = d as unknown as {
+      withDeadlineNotice(n: unknown, ms: number): { task: string; timeBudgetNotice?: string };
+    };
     const once = api.withDeadlineNotice({ id: "n1", task: "Do the thing" }, 600_000);
     const twice = api.withDeadlineNotice(once, 600_000);
 
-    expect(twice.task).toBe(once.task);
-    expect(once.task.match(/TIME BUDGET:/g)).toHaveLength(1);
-    expect(once.task).toContain("10 minutes");
+    expect(twice.timeBudgetNotice).toBe(once.timeBudgetNotice);
+    expect(once.timeBudgetNotice!.match(/TIME BUDGET:/g)).toHaveLength(1);
+    expect(once.timeBudgetNotice).toContain("10 minutes");
   });
 });

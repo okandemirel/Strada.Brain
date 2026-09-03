@@ -42,6 +42,12 @@ export interface CapabilityProfile {
 /** A GoalNode extended with capability tagging and provider assignment */
 export interface TaggedGoalNode extends GoalNode {
   readonly capabilityProfile: CapabilityProfile;
+  /**
+   * The node's own time budget, stated by the dispatcher so the worker can
+   * land a smaller increment instead of being killed at the deadline with
+   * nothing salvaged (audited 2026-09-03). Not part of the visible label.
+   */
+  readonly timeBudgetNotice?: string;
   readonly assignedProvider?: string;
   readonly assignedModel?: string;
 }
