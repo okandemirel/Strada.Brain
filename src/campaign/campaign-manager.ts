@@ -828,6 +828,29 @@ export class CampaignManager {
       void this.tell(campaign, `❌ Campaign halted: ${campaign.lastError}`);
       return;
     }
+    // THE PREVIOUS LINEAGE IS ABANDONED, SO STOP IT. Every resubmit path
+    // (revive, bounce, gate refusal, outage, escalation) points the milestone
+    // at a NEW task and forgets the old one, whose keep-alive keeps reviving
+    // it — and once the campaign no longer references that lineage, nothing
+    // can find it to cancel. Measured live 2026-09-03: lineage task_3f52a987
+    // was abandoned by a resubmit, then resurrected at 09:19, 09:37, 09:53 and
+    // 10:20 — four times after the campaign had delivered, each able to write
+    // to the project the user was inspecting.
+    if (milestone.taskId) {
+      try {
+        const previousTip = this.taskManager.findLatestLineageTask(milestone.taskId as TaskId);
+        const previousId = (previousTip as { id?: string; status?: string } | null)?.id;
+        const previousStatus = (previousTip as { status?: string } | null)?.status;
+        if (previousId && previousStatus !== "completed" && previousStatus !== "cancelled") {
+          this.taskManager.cancel(previousId as TaskId);
+          getLoggerSafe().info("Cancelled the milestone's previous lineage before resubmitting", {
+            id: campaign.id,
+            milestone: milestone.id,
+            taskId: previousId,
+          });
+        }
+      } catch { /* already settled */ }
+    }
     milestone.status = "running";
     milestone.startedAtMs ??= Date.now();
     // A new attempt gets a new deferral clock. Audited 2026-09-02: the clock

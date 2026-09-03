@@ -363,6 +363,24 @@ describe("CampaignManager", () => {
     expect(tasks.submitted[1]!.prompt).toContain("TIME BOX EXHAUSTED");
   });
 
+  it("cancels the abandoned lineage on EVERY resubmit, not only on revive", async () => {
+    // Measured live 2026-09-03: a resubmit pointed the milestone at a new task
+    // and forgot the old lineage, whose keep-alive resurrected it at 09:19,
+    // 09:37, 09:53 and 10:20 — all after the campaign had delivered. Once the
+    // campaign stopped referencing that lineage, nothing could find it.
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    // The sprint blocks; the executor's keep-alive mints a retry under a new
+    // id, so the lineage tip is no longer the task the milestone points at.
+    const retryId = tasks.addRetry("task_1", TaskStatus.blocked);
+    tasks.updatedAts.set("task_1", Date.now() - 30 * 60_000);
+    tasks.updatedAts.set(retryId, Date.now() - 30 * 60_000);
+    tasks.emit("task:failed", "task_1", "the sprint failed outright");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+
+    expect(tasks.cancelled).toContain(retryId);
+  });
+
   it("cancels a delivered campaign's stragglers at boot, not only on delivery", async () => {
     // Measured live 2026-09-03 09:19 and 09:37: minutes after delivery the
     // executor's keep-alive re-arm revived a blocked pre-delivery task and
