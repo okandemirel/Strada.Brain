@@ -79,6 +79,10 @@ export interface CampaignMilestone {
    * 6 of 173 failing (audited 2026-09-03).
    */
   testVerdictUnfiltered?: boolean;
+  /** Tests the last observed run reported FAILING (bounded; see the verdict). */
+  testFailures?: readonly string[];
+  /** How many further failing names the run printed beyond those listed. */
+  testFailuresOmitted?: number;
   /** One-shot flag: a reaped settlement already deferred once to the
    *  executor's pending keep-alive retry (see reconcileMilestoneAfterSettle). */
   reconcileDeferred?: boolean;

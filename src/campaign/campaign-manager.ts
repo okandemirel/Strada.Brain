@@ -1475,9 +1475,22 @@ export class CampaignManager {
         const tip = milestone.taskId
           ? this.taskManager.findLatestLineageTask(milestone.taskId as TaskId)
           : null;
-        const verdict = (tip as { verification?: { testsGreen?: boolean; detail: string; unfiltered?: boolean } } | null)?.verification;
+        const verdict = (tip as {
+          verification?: {
+            testsGreen?: boolean;
+            detail: string;
+            unfiltered?: boolean;
+            failedTests?: readonly string[];
+            failedTestsOmitted?: number;
+          };
+        } | null)?.verification;
         milestone.testVerdict = verdict?.testsGreen === true ? verdict.detail : undefined;
         milestone.testVerdictUnfiltered = verdict?.testsGreen === true ? verdict.unfiltered : undefined;
+        // Red names are kept even though the milestone is green: a sprint can
+        // land green after a red run, and "which tests were red on the way"
+        // is what a reader needs (audited 2026-09-03).
+        milestone.testFailures = verdict?.failedTests;
+        milestone.testFailuresOmitted = verdict?.failedTestsOmitted;
       } catch { /* evidence capture is best-effort */ }
       // Persist the green BEFORE the coverage audit: that await is a
       // 400k-window LLM call lasting minutes, and storage said "running" the
@@ -1989,6 +2002,12 @@ export class CampaignManager {
         caveats.push(
           `${m.title}: its green test run was filtered, not the whole suite — ` +
             `what the rest of the suite does was never observed (\`${m.testVerdict.slice(0, 80)}\`)`,
+        );
+      }
+      if (m.testFailures && m.testFailures.length > 0) {
+        const more = m.testFailuresOmitted ? ` (+${m.testFailuresOmitted} more)` : "";
+        caveats.push(
+          `${m.title}: the suite reported these tests FAILING — ${m.testFailures.join(", ")}${more}`,
         );
       }
       if (m.visualEvidenceBounced) { marks.push("visual-evidence bounce spent"); caveats.push(`${m.title}: needed a second attempt to produce a captured frame`); }

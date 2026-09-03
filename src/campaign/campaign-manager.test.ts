@@ -407,6 +407,32 @@ describe("CampaignManager", () => {
     expect(messages.some((m) => m.text.includes("Campaign delivery"))).toBe(false);
   });
 
+  it("names the tests that were RED on the way in the delivery report", async () => {
+    // Audited 2026-09-03: "6 of 173 tests failed" reached the report without
+    // ever naming WinLevel_ReachesWonState — the failure that means the core
+    // loop does not work.
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+
+    tasks.verifications.set("task_3", {
+      testsGreen: true,
+      detail: "179 of 179 tests passed (unfiltered — the whole PlayMode suite)",
+      unfiltered: true,
+      failedTests: ["YourGame.PixelFlow.PlayModeTests.PixelFlowGameplayWinLossTests.WinLevel_ReachesWonState"],
+      failedTestsOmitted: 5,
+    } as never);
+    tasks.emit("task:completed", "task_3", "green, shipping");
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+
+    const report = messages.map((m) => m.text).find((t) => t.includes("Campaign delivery"))!;
+    expect(report).toContain("WinLevel_ReachesWonState");
+    expect(report).toContain("+5 more");
+  });
+
   it("delivers on an UNFILTERED green", async () => {
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
     await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));

@@ -25,7 +25,28 @@ export interface TaskTestVerdict {
    * apart.
    */
   unfiltered?: boolean;
+  /**
+   * The tests the winning RED observation named, in the order printed, at most
+   * MAX_NAMED_FAILURES. Undefined when the observation was green or named
+   * none.
+   *
+   * Audited 2026-09-03: the verdict kept only counts, so "6 of 173 tests
+   * failed" reached the delivery report without ever saying that one of them
+   * was WinLevel_ReachesWonState — the test whose failure means the core loop
+   * does not work. Names are read ONLY off the red line itself, never from a
+   * window of following lines: a runner that prints its whole suite after the
+   * summary would otherwise have its PASSING tests named as failures.
+   */
+  failedTests?: string[];
+  /** How many further names the red line held but this verdict does not list. */
+  failedTestsOmitted?: number;
 }
+
+/** The most failing test names a verdict carries; the rest are counted. */
+export const MAX_NAMED_FAILURES = 5;
+
+/** A dotted, PascalCase-ish test id: Namespace.Fixture.TestName. */
+const TEST_NAME_RE = /\b[A-Z][A-Za-z0-9]*(?:\.[A-Za-z_][A-Za-z0-9_]*){2,}\b/g;
 
 /** A tool observation: result text plus the tool-level error flag if known. */
 export interface TestEvidence {
@@ -97,9 +118,27 @@ export function deriveTestVerdict(evidence: readonly TestEvidence[]): TaskTestVe
       : /\bfilter\s*:/i.test(detail)
         ? false
         : undefined;
-    verdict = unfiltered === undefined
-      ? { testsGreen: !red, detail }
-      : { testsGreen: !red, detail, unfiltered };
+    // Names come from the UNTRIMMED red lines: `detail` is capped at 200 chars
+    // for display, and a suite that names several failures runs past it.
+    const rawRedLines = red
+      ? text.split("\n").filter((l) => RED_RE.test(l))
+      : [];
+    const named = red
+      ? [...new Set(rawRedLines.flatMap((l) => l.match(TEST_NAME_RE) ?? []))]
+      : [];
+    verdict = {
+      testsGreen: !red,
+      detail,
+      ...(unfiltered === undefined ? {} : { unfiltered }),
+      ...(named.length > 0
+        ? {
+            failedTests: named.slice(0, MAX_NAMED_FAILURES),
+            ...(named.length > MAX_NAMED_FAILURES
+              ? { failedTestsOmitted: named.length - MAX_NAMED_FAILURES }
+              : {}),
+          }
+        : {}),
+    };
   }
   return verdict;
 }
