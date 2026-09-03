@@ -109,6 +109,16 @@ export interface CampaignMilestone {
    * 2026-09-03 08:33). Bounded by the milestone's attempt budget.
    */
   deliveryVerificationBounces?: number;
+  /**
+   * What the delivery-only structural check measured on the SHIPPED scenes —
+   * renderer counts, project vs built-in bindings, unbound art, geometry built
+   * in code, and the GDD-vs-scene dimensionality disclosure. Rendered in the
+   * delivery report so the reader sees the game that was actually built, not
+   * the sprint titles that were ticked. Audited 2026-09-03.
+   */
+  structureFindings?: string[];
+  /** True when the structural check refused delivery at least once. */
+  structureRefused?: boolean;
   /** When this milestone's current run began (epoch ms) — the time-box clock. */
   startedAtMs?: number;
   /** How many times the time-box has forced a scope-narrowing escalation. */
