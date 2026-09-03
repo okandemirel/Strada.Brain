@@ -1452,7 +1452,14 @@ export class CampaignManager {
       // persist (audited 2026-09-02: the comment used to claim otherwise).
       this.persist(campaign);
       const isLast = campaign.currentMilestone >= campaign.milestones.length - 1;
-      if (isLast && !milestone.testVerdict && !milestone.deliveryVerificationBounced) {
+      // The gate spends one bounce per ATTEMPT the milestone still has, not
+      // one for the whole milestone. Measured live 2026-09-03 08:33: the
+      // second attempt also ran no tests, the single bounce was spent, and
+      // the ladder delivered a game whose suite was never seen to pass.
+      // While attempts remain, an unverified final sprint is charged and
+      // resent instead of waved through.
+      const deliveryBouncesSpent = milestone.deliveryVerificationBounces ?? (milestone.deliveryVerificationBounced ? 1 : 0);
+      if (isLast && !milestone.testVerdict && deliveryBouncesSpent < this.maxMilestoneAttempts) {
         // DELIVERY GATE: "the whole game runs" was only ever a sentence in the
         // planner's prompt — nothing in code required the final sprint to
         // have RUN the suite. A milestone whose task printed no recognizable
@@ -1460,17 +1467,23 @@ export class CampaignManager {
         // (audited 2026-09-01). One bounce, then the ladder proceeds so an
         // honest report can still be delivered.
         milestone.deliveryVerificationBounced = true;
-        milestone.prompt +=
+        milestone.deliveryVerificationBounces = deliveryBouncesSpent + 1;
+        const directive =
           "\n\nDELIVERY VERIFICATION REQUIRED: this is the final sprint, and no test run was observed in the " +
           "last attempt. Run the FULL PlayMode suite UNFILTERED against the assembled scene, capture a frame of " +
           "the running game, and report the suite's actual pass/fail counts. Delivery is not declared on a sprint " +
           "whose tests were never seen to run.";
+        if (!milestone.prompt.includes("DELIVERY VERIFICATION REQUIRED")) milestone.prompt += directive;
         this.persist(campaign);
         getLoggerSafe().warn("Delivery blocked: final milestone has no observed test verdict", {
           id: campaign.id,
           milestone: milestone.id,
+          bounce: milestone.deliveryVerificationBounces,
         });
-        this.submitCurrentMilestone(campaign, { countAttempt: false });
+        // The FIRST bounce is free (the sprint may simply not have printed a
+        // recognizable line); a repeat is charged, so the milestone's own
+        // attempt budget bounds this instead of it looping forever.
+        this.submitCurrentMilestone(campaign, { countAttempt: deliveryBouncesSpent > 0 });
         return;
       }
       if (isLast) {

@@ -102,6 +102,13 @@ export interface CampaignMilestone {
   noWorkBounced?: boolean;
   /** One-shot bounce: the FINAL milestone landed green with no observed test run. */
   deliveryVerificationBounced?: boolean;
+  /**
+   * How many times the delivery-verification gate has bounced this milestone.
+   * One bounce was not enough: the second attempt also ran no tests and the
+   * ladder delivered a suite that was never seen to pass (measured live
+   * 2026-09-03 08:33). Bounded by the milestone's attempt budget.
+   */
+  deliveryVerificationBounces?: number;
   /** When this milestone's current run began (epoch ms) — the time-box clock. */
   startedAtMs?: number;
   /** How many times the time-box has forced a scope-narrowing escalation. */

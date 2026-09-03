@@ -359,6 +359,40 @@ describe("CampaignManager", () => {
     expect(tasks.submitted[1]!.prompt).toContain("TIME BOX EXHAUSTED");
   });
 
+  it("keeps refusing delivery while the final sprint has attempts left", async () => {
+    // Measured live 2026-09-03 08:33: the gate bounced once, the second
+    // attempt also ran no tests, the single bounce was spent, and the ladder
+    // delivered a game whose suite was never seen to pass.
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+
+    // Final sprint completes with NO test verdict — twice.
+    tasks.emit("task:completed", "task_3", "shipping it");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+    expect(tasks.submitted[3]!.prompt).toContain("DELIVERY VERIFICATION REQUIRED");
+
+    // Other gates (visual evidence, no-work) can bounce a settle first, so
+    // keep settling until the delivery gate has spent its budget.
+    let taskNo = 4;
+    while ((storage.get(campaign.id)!.milestones[2]!.deliveryVerificationBounces ?? 0) < 2 && taskNo < 9) {
+      const submittedBefore = tasks.submitted.length;
+      tasks.emit("task:completed", `task_${taskNo}`, "shipping it, honest");
+      await vi.waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(submittedBefore));
+      taskNo++;
+    }
+
+    const after = storage.get(campaign.id)!;
+    expect(after.state).toBe("executing");
+    expect(after.milestones[2]!.deliveryVerificationBounces).toBe(2);
+    // The repeat is charged, so the milestone's attempt budget bounds it.
+    expect(after.milestones[2]!.attempts).toBeGreaterThan(1);
+    expect(messages.some((m) => m.text.includes("Campaign delivery"))).toBe(false);
+  });
+
   it("refuses delivery when the FINAL sprint never ran its tests (one bounce)", async () => {
     // Audited 2026-09-01: "full unfiltered suite" was only prose in the
     // planner prompt — a final sprint whose task printed no test result
@@ -935,6 +969,17 @@ describe("CampaignManager", () => {
     tasks.emit("task:completed", "task_4", "shipping it again");
     await vi.waitFor(() => expect(tasks.submitted).toHaveLength(5));
     tasks.emit("task:completed", "task_5", "shipping it, third time");
+    // The delivery gate now bounces while the sprint still has attempts, so
+    // keep settling until the ladder gives up and delivers with the caveat.
+    for (let round = 0; round < 6 && storage.get(campaign.id)!.state !== "done"; round++) {
+      const before = tasks.submitted.length;
+      // Always settle the CURRENT tip: each bounce mints a new task id.
+      tasks.emit("task:completed", `task_${before}`, "shipping it again");
+      await vi.waitFor(() => {
+        const state = storage.get(campaign.id)!.state;
+        expect(state === "done" || tasks.submitted.length > before).toBe(true);
+      });
+    }
     await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
 
     const report = messages.at(-1)!.text;

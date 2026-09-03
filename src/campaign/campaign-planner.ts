@@ -206,12 +206,41 @@ export class CampaignPlanner {
       `<completed-ladder>\n${ladderSummary}\n</completed-ladder>\n\n` +
       `List the concrete items the GDD schedules (mechanics, game elements, blockers, set-pieces, screens, systems) that NO milestone above covered or delivered. Respond ONLY with JSON: {"missing": ["<item>: <one-line what is missing>", ...]} — an empty array when the ladder covers the GDD.`;
 
-    const response = await streamOrChatText(this.provider, COVERAGE_SYSTEM, userMessage);
-    const jsonText = extractJsonObject(response.text ?? "");
+    // RETRY THE SHAPE, not the judgement. One malformed reply used to skip
+    // the GDD-coverage check for the whole delivery — measured live
+    // 2026-09-03 08:33: "delivered WITHOUT a clean GDD-coverage check"
+    // because a model wrapped its JSON in prose. The second ask restates the
+    // contract; only then does the audit give up.
+    let response = await streamOrChatText(this.provider, COVERAGE_SYSTEM, userMessage);
+    let jsonText = extractJsonObject(response.text ?? "");
+    let parsedOnce: unknown;
+    const tryParse = (text: string | null | undefined): unknown => {
+      if (!text) return undefined;
+      try {
+        return JSON.parse(text);
+      } catch {
+        return undefined;
+      }
+    };
+    parsedOnce = tryParse(jsonText);
+    if (parsedOnce === undefined) {
+      getLoggerSafe().warn("Coverage audit reply was not usable JSON — asking once more", {
+        replyLength: response.text?.length ?? 0,
+      });
+      response = await streamOrChatText(
+        this.provider,
+        COVERAGE_SYSTEM,
+        `${userMessage}
+
+Your previous reply was not valid JSON. Reply with the JSON object ALONE — no prose, no code fence: {"missing": [...]}.`,
+      );
+      jsonText = extractJsonObject(response.text ?? "");
+      parsedOnce = tryParse(jsonText);
+    }
     if (!jsonText) throw new Error("coverage audit returned no JSON object");
     let parsed: unknown;
     try {
-      parsed = JSON.parse(jsonText);
+      parsed = parsedOnce !== undefined ? parsedOnce : JSON.parse(jsonText);
     } catch {
       throw new Error("coverage audit returned malformed JSON");
     }
