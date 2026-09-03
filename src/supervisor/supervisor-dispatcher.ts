@@ -733,6 +733,22 @@ export class SupervisorDispatcher {
     return this.makeResult(node, "failed", "Max retry attempts exhausted");
   }
 
+  /**
+   * The node's own time budget, stated in the task it receives. Deterministic
+   * text (no clock read) so a node's prompt is stable across retries.
+   */
+  private withDeadlineNotice(node: TaggedGoalNode, timeoutMs: number): TaggedGoalNode {
+    const minutes = Math.max(1, Math.round(timeoutMs / 60_000));
+    const notice =
+      `\n\nTIME BUDGET: this node is cancelled after ${minutes} minutes, and everything it has ` +
+      "not committed is lost together with every node that depends on it. Long verification loops " +
+      "(a headless compile is minutes) burn it fast: finish and commit the smallest complete " +
+      "increment first, then continue; if the budget is nearly spent, commit what works and report " +
+      "precisely what remains.";
+    if (!node.task || node.task.includes("TIME BUDGET:")) return node;
+    return { ...node, task: `${node.task}${notice}` };
+  }
+
   private async executeWithTimeout(
     node: TaggedGoalNode,
     externalSignal?: AbortSignal,
@@ -789,7 +805,13 @@ export class SupervisorDispatcher {
     // Defuse the losing legs' rejections so they never bubble up as
     // unhandled rejections. The winner's error is still surfaced via
     // Promise.race below.
-    const nodePromise = this.executeNode(node, nodeController.signal);
+    // STATE THE BUDGET. A node that runs past nodeTimeoutMs is killed with
+    // nothing salvaged and every dependent skipped — measured 2026-09-03 on
+    // Sprint 7: one node spent 70 minutes on 12 headless compiles, hit the
+    // hour, and took 8 sibling nodes down with it. The node never knew it had
+    // a deadline, so it could not choose to land a smaller increment first.
+    const nodeWithBudget = this.withDeadlineNotice(node, timeoutMs);
+    const nodePromise = this.executeNode(nodeWithBudget, nodeController.signal);
     nodePromise.catch(() => { /* swallowed for race-loser only */ });
     abortPromise.catch(() => { /* swallowed for race-loser only */ });
 
