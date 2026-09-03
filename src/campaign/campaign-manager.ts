@@ -311,6 +311,33 @@ export class CampaignManager {
     return true;
   }
 
+  /**
+   * Stop every live run this campaign still owns. A terminal campaign must
+   * not keep writing to the project: measured live 2026-09-03 09:19, minutes
+   * after delivery the executor's boot keep-alive revived a blocked task from
+   * a pre-delivery lineage and resubmitted the sprint against a game that had
+   * already been delivered.
+   */
+  private cancelLiveLineages(campaign: Campaign, reason: string): void {
+    for (const milestone of campaign.milestones) {
+      if (!milestone.taskId) continue;
+      let tipId: string | undefined;
+      try {
+        tipId = this.taskManager.findLatestLineageTask(milestone.taskId as TaskId)?.id;
+      } catch { continue; }
+      if (!tipId) continue;
+      try {
+        this.taskManager.cancel(tipId as TaskId);
+        getLoggerSafe().info("Cancelled a live lineage of a terminal campaign", {
+          id: campaign.id,
+          milestone: milestone.id,
+          taskId: tipId,
+          reason,
+        });
+      } catch { /* already settled */ }
+    }
+  }
+
   /** Reset the current milestone's budget and resubmit it (revive core). */
   private async reviveAtCurrentMilestone(campaign: Campaign, milestone: CampaignMilestone): Promise<void> {
     // Stop whatever is still alive on the old lineage first. The executor's
@@ -1509,6 +1536,7 @@ export class CampaignManager {
           return;
         }
         campaign.state = "done";
+        this.cancelLiveLineages(campaign, "campaign delivered");
         // The flag is written only AFTER the report actually leaves. Audited
         // 2026-09-02: `done` was persisted first and tell() swallows an
         // outbound failure, so a crash or a messenger error in this window
@@ -1960,6 +1988,13 @@ export class CampaignManager {
     }
     const frames = this.countCaptureFiles();
     lines.push("", `Captured frames on disk: ${frames}`);
+
+    // HOW TO RUN IT. Measured 2026-09-03: the delivered project carried 20
+    // scenes, 14 of them enabled in the build, most of them single-purpose
+    // verification scaffolding — and the report never said which one is the
+    // game. A person cannot open a delivery they cannot find.
+    const entry = this.describeEntryPoint();
+    if (entry) lines.push("", entry);
     if (campaign.coverageAuditNote) {
       lines.push("", `⚠️ ${campaign.coverageAuditNote} — delivered WITHOUT a clean GDD-coverage check.`);
     }
@@ -1973,6 +2008,56 @@ export class CampaignManager {
       );
     }
     return lines.join("\n");
+  }
+
+  /**
+   * The scene a person should open, and the scratch scenes that are not it.
+   * Read from EditorBuildSettings + the scene files themselves; when nothing
+   * can be measured the report says so rather than guessing.
+   */
+  private describeEntryPoint(): string | undefined {
+    const settingsPath = join(this.projectRoot, "ProjectSettings", "EditorBuildSettings.asset");
+    if (!existsSync(settingsPath)) return undefined;
+    let enabled: string[] = [];
+    try {
+      const raw = readFileSync(settingsPath, "utf8");
+      enabled = [...raw.matchAll(/enabled:\s*1\s*\n\s*path:\s*(\S+)/g)].map((m) => m[1] ?? "").filter(Boolean);
+    } catch {
+      return undefined;
+    }
+    if (enabled.length === 0) return undefined;
+
+    // The entry scene is the richest one: scaffolding scenes hold a camera and
+    // one probe object, the game holds its systems.
+    const scored = enabled
+      .map((rel) => {
+        const abs = join(this.projectRoot, rel);
+        let objects = 0;
+        try { objects = (readFileSync(abs, "utf8").match(/^GameObject:/gm) ?? []).length; } catch { return undefined; }
+        return { rel, objects };
+      })
+      .filter((entry): entry is { rel: string; objects: number } => entry !== undefined)
+      .sort((a, b) => b.objects - a.objects);
+    const best = scored[0];
+    if (!best) return undefined;
+
+    const scratch = scored
+      .slice(1)
+      .filter((entry) => /InitTestScene|Verification|Showcase|Boundary|Assembled|Verified/i.test(entry.rel));
+    const out = [
+      "**How to run it**",
+      `- Open \`${best.rel}\` and press Play — it is the scene carrying the game's systems (${best.objects} objects).`,
+    ];
+    if (scratch.length > 0) {
+      out.push(
+        `- ${scratch.length} of the ${enabled.length} scenes enabled in the build are verification scaffolding, ` +
+          "not entry points: " +
+          scratch.slice(0, 6).map((entry) => `\`${entry.rel.split("/").pop() ?? entry.rel}\``).join(", ") +
+          (scratch.length > 6 ? ", …" : "") +
+          ". They can be removed from Build Settings.",
+      );
+    }
+    return out.join("\n");
   }
 
   /** Total capture artifacts under the project's recording roots. */
