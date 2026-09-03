@@ -101,7 +101,13 @@ function enabledScenePaths(raw: string): string[] {
 }
 
 function countObjects(text: string): number {
-  return (text.match(/^GameObject:/gmu) ?? []).length;
+  // A PrefabInstance IS content: the most ordinary Unity scene is composed of
+  // prefabs and holds few or no literal GameObject blocks. Counting only
+  // GameObject: read such a scene as empty, which made the entry-scene
+  // refusal fire on a perfectly good build (audited 2026-09-03).
+  const objects = (text.match(/^GameObject:/gmu) ?? []).length;
+  const prefabs = (text.match(/^PrefabInstance:/gmu) ?? []).length;
+  return objects + prefabs;
 }
 
 export function assessSceneHygiene(
@@ -164,7 +170,13 @@ export function assessSceneHygiene(
   // same tree always names the same scene — and the tie itself is disclosed
   // rather than hidden behind a sort order.
   const readable = enabled.filter((s): s is HygieneScene & { objects: number } => s.objects !== null);
-  const best = [...readable].sort((a, b) => b.objects - a.objects || a.path.localeCompare(b.path))[0];
+  // Never promote a scaffolding-NAMED scene to "open this and press Play"
+  // while a non-scaffolding one exists: the name is the author's own label
+  // (audited 2026-09-03).
+  const sortByRichness = (a: HygieneScene & { objects: number }, b: HygieneScene & { objects: number }): number =>
+    b.objects - a.objects || a.path.localeCompare(b.path);
+  const nonScaffolding = readable.filter((s) => !SCAFFOLDING_NAME.test(basename(s.path)));
+  const best = [...(nonScaffolding.length > 0 ? nonScaffolding : readable)].sort(sortByRichness)[0];
   if (!best || best.objects === 0) {
     return {
       ...empty,

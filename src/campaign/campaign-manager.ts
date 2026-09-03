@@ -25,6 +25,8 @@ import { detectCampaignIntent } from "./campaign-intake.js";
 import { assessSceneHygiene, renderSceneHygiene } from "./scene-hygiene.js";
 import { extractCoreLoop, readUnityVersion, renderHowToRun } from "./how-to-run.js";
 import { isTerminalFailureReport } from "../agents/autonomy/verifier-pipeline.js";
+import { assessBuiltAsSpecified } from "../agents/autonomy/built-as-specified.js";
+import { describeDimensionality } from "../agents/autonomy/gdd-dimensionality.js";
 import type { Campaign, CampaignMilestone } from "./types.js";
 import { generateCampaignId } from "./types.js";
 
@@ -1659,6 +1661,50 @@ export class CampaignManager {
         return;
       }
       if (isLast) {
+        // STRUCTURAL DELIVERY GATE (audited 2026-09-03): nothing in the
+        // pipeline ever asked what the delivered SCENES contain. PixelFlow
+        // shipped "game build complete" with an entry scene holding zero
+        // renderer components, five runtime scripts drawing the world with
+        // GameObject.CreatePrimitive, and 100 prefabs / 198 pngs / 62 models
+        // nothing bound — the user opened it and found flat squares and four
+        // spheres. This measures the enabled build scenes and the prefabs they
+        // place, and refuses ONLY the strong case; everything else is recorded
+        // for the report. Delivery-only by construction (inside `isLast`), and
+        // it shares the delivery bounce budget so it cannot loop.
+        const structure = this.measureDeliveryStructure(campaign);
+        milestone.structureFindings = structure.lines;
+        if (structure.refusal && deliveryBouncesSpent < this.maxMilestoneAttempts) {
+          milestone.deliveryVerificationBounced = true;
+          milestone.deliveryVerificationBounces = deliveryBouncesSpent + 1;
+          milestone.structureRefused = true;
+          const marker = "\n\nDELIVERY REFUSED — THE GAME IS NOT BUILT AS THE GDD SPECIFIES:";
+          const previous = milestone.prompt.indexOf(marker);
+          // Carry the LATEST measurement, not a stack of stale ones.
+          if (previous >= 0) milestone.prompt = milestone.prompt.slice(0, previous);
+          milestone.prompt +=
+            `${marker} ${structure.refusal}\n` +
+            "Fix the game, not the report: place the project's own prefabs in the scenes the build ships, bind " +
+            "real materials/meshes/sprites to their renderers instead of engine primitives, and re-verify with a " +
+            "captured frame of the entry scene. Then report what the scenes contain.";
+          this.persist(campaign);
+          getLoggerSafe().warn("Delivery blocked: the shipped scenes are not built as specified", {
+            id: campaign.id,
+            milestone: milestone.id,
+            bounce: milestone.deliveryVerificationBounces,
+            refusal: structure.refusal.slice(0, 300),
+          });
+          this.submitCurrentMilestone(campaign, { countAttempt: deliveryBouncesSpent > 0 });
+          return;
+        }
+        if (structure.refusal) {
+          // Budget spent: the delivery proceeds, but it must NOT read like one
+          // that passed the check.
+          milestone.structureRefused = true;
+          milestone.structureFindings = [
+            `REFUSAL STANDS, bounce budget spent: ${structure.refusal}`,
+            ...structure.lines,
+          ];
+        }
         // SCENE HYGIENE GATE. Measured on the delivered PixelFlow tree
         // 2026-09-03: 14 scenes enabled in Build Settings, most of them
         // single-purpose verification scaffolding, and the person who opened
@@ -2107,6 +2153,41 @@ export class CampaignManager {
     }
   }
 
+  /**
+   * What the shipped scenes actually contain, plus the GDD's own
+   * dimensionality against them. Delivery-only; never called mid-ladder,
+   * because an early sprint must not be judged against work scheduled for a
+   * later one. A failure to measure is RECORDED, never swallowed — a skipped
+   * check must not read like a passed one. Audited 2026-09-03.
+   */
+  private measureDeliveryStructure(campaign: Campaign): { refusal?: string; lines: string[] } {
+    try {
+      const report = assessBuiltAsSpecified(this.projectRoot);
+      // The GDD's own dimensionality against the scenes (audited 2026-09-03):
+      // it asked for "plump, glossy 3D-feel pigs" and nothing ever checked.
+      // DELIVERY is judged against the whole GDD, so the whole text is read.
+      const gddText =
+        campaign.gddText ?? (campaign.gddPath ? readGddFile(this.projectRoot, campaign.gddPath) : undefined);
+      const lines = [...report.disclosures, ...describeDimensionality(gddText, report).lines];
+      // No silent caps: when the unmeasured list is trimmed, the trim says so.
+      const shown = report.incomplete.slice(0, 5);
+      for (const note of shown) lines.push(`NOT measured: ${note}`);
+      if (report.incomplete.length > shown.length) {
+        lines.push(`NOT measured: +${report.incomplete.length - shown.length} further item(s), same scan`);
+      }
+      return { refusal: report.refusal, lines };
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      getLoggerSafe().warn("Structural delivery check could not run", { id: campaign.id, error: detail });
+      return {
+        lines: [
+          `⚠️ the structural check of the shipped scenes could NOT run (${detail.slice(0, 160)}) — ` +
+            "nothing was measured about what the delivered game renders",
+        ],
+      };
+    }
+  }
+
   private buildDeliveryReport(campaign: Campaign): string {
     // EVIDENCE, not stored booleans. The report used to render only
     // milestone.status — while the manager held commit hashes, capture
@@ -2199,6 +2280,21 @@ export class CampaignManager {
     // game. A person cannot open a delivery they cannot find.
     const entry = this.describeEntryPoint();
     if (entry) lines.push("", entry, this.writeHowToRun(campaign));
+    // What the shipped scenes actually contain — measured, not inferred from
+    // the ladder. Audited 2026-09-03: 7/7 green and 11351 frames said nothing
+    // about a delivery whose scenes held no renderer at all.
+    const structural = [...campaign.milestones].reverse().find((m) => m.structureFindings?.length);
+    if (structural?.structureFindings) {
+      lines.push("", "**What the shipped scenes actually contain:**", ...structural.structureFindings.map((l) => `- ${l}`));
+      if (structural.structureRefused) {
+        caveats.push(
+          "the structural check REFUSED this delivery — the shipped scenes are not built the way the GDD specifies " +
+            "(see 'What the shipped scenes actually contain')",
+        );
+      }
+    } else {
+      lines.push("", "⚠️ The shipped scenes were NOT structurally checked — nothing here says what the game renders.");
+    }
     if (campaign.coverageAuditNote) {
       lines.push("", `⚠️ ${campaign.coverageAuditNote} — delivered WITHOUT a clean GDD-coverage check.`);
     }

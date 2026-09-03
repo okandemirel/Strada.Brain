@@ -786,6 +786,136 @@ describe("CampaignManager", () => {
     expect(messages.some((m) => m.text.includes("Campaign delivery"))).toBe(false);
   });
 
+  // ── Structural delivery gate (audited 2026-09-03) ────────────────────────
+  // 7/7 sprints green and 11351 captured frames said nothing about a delivery
+  // whose entry scene held zero renderer components.
+
+  /** Writes a file plus the .meta sidecar Unity uses to address it by guid. */
+  const putAsset = (rel: string, body: string, guid?: string): void => {
+    const abs = join(projectRoot, rel);
+    mkdirSync(join(abs, ".."), { recursive: true });
+    writeFileSync(abs, body);
+    if (guid) writeFileSync(`${abs}.meta`, `fileFormatVersion: 2\nguid: ${guid}\n`);
+  };
+  const UNITY_HEADER = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n";
+  const CAMERA_DOC = "--- !u!20 &900\nCamera:\n  m_Enabled: 1\n  orthographic: 0\n";
+  const PIG_PREFAB =
+    `${UNITY_HEADER}--- !u!1 &7\nGameObject:\n  m_Name: Pig\n` +
+    "--- !u!212 &8\nSpriteRenderer:\n  m_Enabled: 1\n  m_Materials:\n" +
+    "  - {fileID: 2100000, guid: aaaabbbbccccddddeeeeffff00001111, type: 2}\n" +
+    "  m_Sprite: {fileID: 21300000, guid: 22222222222222222222222222222222, type: 3}\n";
+
+  const buildList = (scenes: string[]): void =>
+    putAsset(
+      "ProjectSettings/EditorBuildSettings.asset",
+      `EditorBuildSettings:\n  m_Scenes:\n${scenes
+        .map((p, i) => `  - enabled: 1\n    path: ${p}\n    guid: ${String(i).padStart(32, "a")}\n`)
+        .join("")}`,
+    );
+
+  /** The delivered PixelFlow shape: a scene with a camera and nothing else. */
+  const writeSlopProject = (): void => {
+    buildList(["Assets/Scenes/ProductionMain.unity"]);
+    putAsset("Assets/Scenes/ProductionMain.unity", `${UNITY_HEADER}${CAMERA_DOC}`, "5ce5e5e5e5e5e5e5e5e5e5e5e5e5e5e5");
+    putAsset("Assets/Prefabs/Pig.prefab", PIG_PREFAB, "11111111111111111111111111111111");
+    putAsset("Assets/Art/pig.png", "pixels", "22222222222222222222222222222222");
+    putAsset(
+      "Assets/Scripts/PlayfieldBuilder.cs",
+      "class PlayfieldBuilder { void B() { GameObject.CreatePrimitive(PrimitiveType.Cube); } }",
+      "66666666666666666666666666666666",
+    );
+  };
+
+  /** The same project with the prefab actually placed in the shipped scene. */
+  const writeBuiltProject = (): void => {
+    writeSlopProject();
+    putAsset(
+      "Assets/Scenes/ProductionMain.unity",
+      `${UNITY_HEADER}${CAMERA_DOC}--- !u!1001 &1001\nPrefabInstance:\n  m_Modification:\n    m_Modifications: []\n` +
+        "  m_SourcePrefab: {fileID: 100100000, guid: 11111111111111111111111111111111, type: 3}\n",
+      "5ce5e5e5e5e5e5e5e5e5e5e5e5e5e5e5",
+    );
+  };
+
+  const runLadderToDelivery = async (campaignGdd = "# GDD"): Promise<ReturnType<typeof manager.startFromGdd>> => {
+    const campaign = manager.startFromGdd(ctx, campaignGdd, "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    return campaign;
+  };
+
+  it("refuses delivery when the shipped scenes render nothing and the art sits unbound", async () => {
+    writeSlopProject();
+    const campaign = await runLadderToDelivery();
+
+    settleMilestone("integrated, all 42 tests pass");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+
+    const after = storage.get(campaign.id)!;
+    expect(after.state).toBe("executing");
+    expect(after.milestones[2]!.structureRefused).toBe(true);
+    // The bounce shares the delivery budget rather than opening a new one.
+    expect(after.milestones[2]!.deliveryVerificationBounces).toBe(1);
+    const prompt = tasks.submitted[3]!.prompt;
+    expect(prompt).toContain("DELIVERY REFUSED — THE GAME IS NOT BUILT AS THE GDD SPECIFIES");
+    expect(prompt).toContain("Assets/Scenes/ProductionMain.unity");
+    expect(prompt).toContain("0 renderer components");
+    expect(prompt).toContain("Assets/Prefabs/Pig.prefab");
+    expect(prompt).toContain("GameObject.CreatePrimitive");
+    expect(messages.some((m) => m.text.includes("Campaign delivery"))).toBe(false);
+  });
+
+  it("delivers a scene that places real prefabs, and the report says what it measured", async () => {
+    writeBuiltProject();
+    const campaign = await runLadderToDelivery();
+
+    settleMilestone("integrated, all 42 tests pass");
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+
+    expect(storage.get(campaign.id)!.milestones[2]!.structureRefused).toBeUndefined();
+    const report = messages.at(-1)!.text;
+    expect(report).toContain("What the shipped scenes actually contain");
+    expect(report).toContain("Shipped scenes PLACE 1 renderer component");
+    expect(report).toContain("Assets/Scenes/ProductionMain.unity");
+  });
+
+  it("discloses the GDD's own dimensionality against the shipped scenes, without refusing", async () => {
+    // Audited 2026-09-03: the GDD says "plump, glossy 3D-feel pigs" and the
+    // delivered scenes had no mesh renderers and bound none of the project's
+    // 62 imported models. A stylised 3D-feel look CAN be built from sprites,
+    // so this is disclosure with counts — the reader judges.
+    writeBuiltProject();
+    const campaign = await runLadderToDelivery(
+      "# GDD\n\n12. ART DIRECTION\nplump, glossy 3D-feel pigs on softly rendered dimensional stages.",
+    );
+
+    settleMilestone("integrated, all 42 tests pass");
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+
+    const report = messages.at(-1)!.text;
+    expect(report).toContain("The GDD asks for 3D");
+    expect(report).toContain("0 mesh renderer(s)");
+    expect(report).toContain("1 sprite renderer(s)");
+    expect(report).toContain("Camera projection in the shipped scenes: 0 orthographic, 1 perspective");
+    // Disclosure only — the campaign still delivered.
+    expect(storage.get(campaign.id)!.milestones[2]!.structureRefused).toBeUndefined();
+  });
+
+  it("says the shipped scenes were NOT structurally checked rather than passing silently", async () => {
+    // No Assets/ tree at all: the check cannot measure, and the delivery
+    // report must not read like one that measured and found nothing wrong.
+    const campaign = await runLadderToDelivery();
+    settleMilestone("integrated, all 42 tests pass");
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+
+    const report = messages.at(-1)!.text;
+    expect(report).toContain("NOT measured: no Assets/ directory");
+    expect(storage.get(campaign.id)!.milestones[2]!.structureRefused).toBeUndefined();
+  });
+
   it("a milestone retry carries the previous attempt's progress without persisting it", async () => {
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
     await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
