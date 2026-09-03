@@ -1542,10 +1542,18 @@ export class CampaignManager {
     // accounts were on quota walls).
     const outageCaused =
       /provider|cooldown|quota|rate.?limit/i.test(output) && allProvidersCoolingDownMs() > 0;
-    if (canRetry && outageCaused) {
-      getLoggerSafe().info("Milestone resubmitted without charging an attempt — provider outage", {
+    // A graceful shutdown is the OPERATOR stopping the process, not the sprint
+    // failing: the executor aborts in-flight runs with "shutting down" and the
+    // work done so far is kept. Charging it ended a campaign on a routine
+    // deploy — measured 2026-09-03 06:45: Sprint 7 "blocked after 2 attempts"
+    // whose cause was a daemon restart, with no self-revival armed because it
+    // was not an outage.
+    const shutdownCaused = /shutting down|shutdown|durduruldu \(shutting/i.test(output);
+    if (canRetry && (outageCaused || shutdownCaused)) {
+      getLoggerSafe().info("Milestone resubmitted without charging an attempt", {
         id: campaign.id,
         milestone: milestone.id,
+        cause: shutdownCaused ? "process-shutdown" : "provider-outage",
       });
       this.submitCurrentMilestone(campaign, { countAttempt: false });
       return;

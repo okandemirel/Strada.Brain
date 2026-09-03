@@ -515,6 +515,20 @@ describe("CampaignManager", () => {
     }
   });
 
+  it("a graceful shutdown does not charge the milestone an attempt", async () => {
+    // Measured 2026-09-03 06:45: a daemon restart aborted the in-flight run
+    // with "shutting down", the milestone was charged its second attempt and
+    // the campaign stopped — on a routine deploy, with no revival armed.
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    tasks.updatedAts.set("task_1", Date.now() - 30 * 60_000);
+    tasks.emit("task:blocked", "task_1", "The task was stopped before it finished (shutting down). Any changes it made have been kept.");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+
+    expect(storage.get(campaign.id)!.milestones[0]!.attempts).toBe(1);
+    expect(storage.get(campaign.id)!.state).toBe("executing");
+  });
+
   it("a BLOCKED outage settle also resubmits without charging an attempt", async () => {
     // Measured 2026-09-02 02:36: the outage surfaced as
     // `blocked:provider_unavailable`, and the blocked-nudge branch (which
