@@ -72,6 +72,13 @@ export interface CampaignMilestone {
   commitNote?: string;
   /** The mechanical test verdict observed when it landed green, if any. */
   testVerdict?: string;
+  /**
+   * Whether that verdict came from the WHOLE suite rather than a filtered
+   * run. A filtered green is not the suite passing: the delivered PixelFlow
+   * build's filtered runs were green while its one unfiltered run reported
+   * 6 of 173 failing (audited 2026-09-03).
+   */
+  testVerdictUnfiltered?: boolean;
   /** One-shot flag: a reaped settlement already deferred once to the
    *  executor's pending keep-alive retry (see reconcileMilestoneAfterSettle). */
   reconcileDeferred?: boolean;

@@ -12,6 +12,19 @@ export interface TaskTestVerdict {
   testsGreen?: boolean;
   /** The line the verdict was read from (empty when no run observed). */
   detail: string;
+  /**
+   * Whether the winning observation came from the WHOLE suite rather than a
+   * filter. The Unity MCP prints "(unfiltered — the whole PlayMode suite)" or
+   * "(filter: <names>)"; undefined means the line said neither.
+   *
+   * Audited 2026-09-03: the delivered PixelFlow campaign carried no verdict at
+   * all on any milestone, while its filtered runs went green and the ONE
+   * unfiltered run reported 6 of 173 failing — including
+   * WinLevel_ReachesWonState ("LevelWon event did not fire"). A green from a
+   * filter is not the suite passing, and delivery must be able to tell them
+   * apart.
+   */
+  unfiltered?: boolean;
 }
 
 /** A tool observation: result text plus the tool-level error flag if known. */
@@ -77,7 +90,16 @@ export function deriveTestVerdict(evidence: readonly TestEvidence[]): TaskTestVe
       : red
         ? `${lastLine} (tool reported an error)`
         : lastLine;
-    verdict = { testsGreen: !red, detail };
+    // Read the scope off the SAME line the verdict came from, never off the
+    // body: a report can hold both a filtered and an unfiltered run.
+    const unfiltered = /\bunfiltered\b/i.test(detail)
+      ? true
+      : /\bfilter\s*:/i.test(detail)
+        ? false
+        : undefined;
+    verdict = unfiltered === undefined
+      ? { testsGreen: !red, detail }
+      : { testsGreen: !red, detail, unfiltered };
   }
   return verdict;
 }

@@ -32,7 +32,7 @@ class FakeTaskManager extends EventEmitter {
   private createdAts = new Map<string, number>();
   updatedAts = new Map<string, number>();
 
-  verifications = new Map<string, { testsGreen?: boolean; detail: string }>();
+  verifications = new Map<string, { testsGreen?: boolean; detail: string; unfiltered?: boolean }>();
 
   getStatus(taskId: string): Task | null {
     const status = this.statuses.get(taskId);
@@ -176,7 +176,11 @@ describe("CampaignManager", () => {
     // The delivery gate requires the FINAL milestone to carry an observed
     // green test verdict; give every settle one so ladder tests exercise the
     // walk rather than the gate (the gate has its own test).
-    tasks.verifications.set(taskId, { testsGreen: true, detail: "All 42 tests passed" });
+    tasks.verifications.set(taskId, {
+      testsGreen: true,
+      detail: "All 42 tests passed (unfiltered — the whole PlayMode suite)",
+      unfiltered: true,
+    });
     tasks.emit("task:completed", taskId, result);
   };
 
@@ -377,6 +381,47 @@ describe("CampaignManager", () => {
     await manager.resumeActive();
 
     expect(tasks.cancelled).toContain(retryId);
+  });
+
+  it("refuses delivery on a FILTERED green — the whole suite must be seen", async () => {
+    // Audited 2026-09-03: the delivered PixelFlow build's filtered runs were
+    // green while its one unfiltered run reported 6 of 173 failing, including
+    // WinLevel_ReachesWonState ("LevelWon event did not fire").
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+
+    tasks.verifications.set("task_3", {
+      testsGreen: true,
+      detail: "PlayMode verification passed: 2 of 2 tests passed (filter: PixelFlowGameplayWinLossTests)",
+      unfiltered: false,
+    });
+    tasks.emit("task:completed", "task_3", "green, shipping");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+
+    expect(storage.get(campaign.id)!.state).toBe("executing");
+    expect(tasks.submitted[3]!.prompt).toContain("FILTERED");
+    expect(messages.some((m) => m.text.includes("Campaign delivery"))).toBe(false);
+  });
+
+  it("delivers on an UNFILTERED green", async () => {
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+
+    tasks.verifications.set("task_3", {
+      testsGreen: true,
+      detail: "PlayMode verification passed: 179 of 179 tests passed (unfiltered — the whole PlayMode suite)",
+      unfiltered: true,
+    });
+    tasks.emit("task:completed", "task_3", "green, shipping");
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
   });
 
   it("keeps refusing delivery while the final sprint has attempts left", async () => {
@@ -959,7 +1004,11 @@ describe("CampaignManager", () => {
     // retry lands completed inside the grace window.
     const retryId = tasks.addRetry("task_3", TaskStatus.completed);
     tasks.markTerminal(retryId, TaskStatus.completed, "final report via retry");
-    tasks.verifications.set(retryId, { testsGreen: true, detail: "All 42 tests passed" });
+    tasks.verifications.set(retryId, {
+      testsGreen: true,
+      detail: "All 42 tests passed (unfiltered — the whole PlayMode suite)",
+      unfiltered: true,
+    });
     tasks.emit("task:blocked", "task_3", "Transient failure — worker crashed mid-epoch.");
     tasks.emit("task:blocked", "task_3", "Transient failure — worker crashed mid-epoch.");
 

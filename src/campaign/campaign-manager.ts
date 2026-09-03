@@ -1475,8 +1475,9 @@ export class CampaignManager {
         const tip = milestone.taskId
           ? this.taskManager.findLatestLineageTask(milestone.taskId as TaskId)
           : null;
-        const verdict = (tip as { verification?: { testsGreen?: boolean; detail: string } } | null)?.verification;
+        const verdict = (tip as { verification?: { testsGreen?: boolean; detail: string; unfiltered?: boolean } } | null)?.verification;
         milestone.testVerdict = verdict?.testsGreen === true ? verdict.detail : undefined;
+        milestone.testVerdictUnfiltered = verdict?.testsGreen === true ? verdict.unfiltered : undefined;
       } catch { /* evidence capture is best-effort */ }
       // Persist the green BEFORE the coverage audit: that await is a
       // 400k-window LLM call lasting minutes, and storage said "running" the
@@ -1495,7 +1496,14 @@ export class CampaignManager {
       // While attempts remain, an unverified final sprint is charged and
       // resent instead of waved through.
       const deliveryBouncesSpent = milestone.deliveryVerificationBounces ?? (milestone.deliveryVerificationBounced ? 1 : 0);
-      if (isLast && !milestone.testVerdict && deliveryBouncesSpent < this.maxMilestoneAttempts) {
+      // DELIVERY NEEDS THE WHOLE SUITE. A verdict that merely EXISTS is not
+      // proof: the delivered PixelFlow campaign carried no verdict on any
+      // milestone, its filtered runs were green, and the one unfiltered run
+      // reported 6 of 173 failing — including WinLevel_ReachesWonState
+      // ("LevelWon event did not fire"). A green from a filter is the sprint
+      // choosing which tests count (audited 2026-09-03).
+      const deliveryProofMissing = !milestone.testVerdict || milestone.testVerdictUnfiltered !== true;
+      if (isLast && deliveryProofMissing && deliveryBouncesSpent < this.maxMilestoneAttempts) {
         // DELIVERY GATE: "the whole game runs" was only ever a sentence in the
         // planner's prompt — nothing in code required the final sprint to
         // have RUN the suite. A milestone whose task printed no recognizable
@@ -1504,11 +1512,15 @@ export class CampaignManager {
         // honest report can still be delivered.
         milestone.deliveryVerificationBounced = true;
         milestone.deliveryVerificationBounces = deliveryBouncesSpent + 1;
+        const observedButFiltered = Boolean(milestone.testVerdict) && milestone.testVerdictUnfiltered !== true;
         const directive =
-          "\n\nDELIVERY VERIFICATION REQUIRED: this is the final sprint, and no test run was observed in the " +
-          "last attempt. Run the FULL PlayMode suite UNFILTERED against the assembled scene, capture a frame of " +
+          "\n\nDELIVERY VERIFICATION REQUIRED: this is the final sprint, and " +
+          (observedButFiltered
+            ? "the only green test run observed was FILTERED — a subset you chose. "
+            : "no test run was observed in the last attempt. ") +
+          "Run the FULL PlayMode suite UNFILTERED against the assembled scene, capture a frame of " +
           "the running game, and report the suite's actual pass/fail counts. Delivery is not declared on a sprint " +
-          "whose tests were never seen to run.";
+          "whose whole suite was never seen to pass.";
         if (!milestone.prompt.includes("DELIVERY VERIFICATION REQUIRED")) milestone.prompt += directive;
         this.persist(campaign);
         getLoggerSafe().warn("Delivery blocked: final milestone has no observed test verdict", {
@@ -1968,7 +1980,15 @@ export class CampaignManager {
         marks.push("NO observed test run");
         caveats.push(
           `${m.title}: went green with NO observed test run — the full suite was never seen to pass` +
-            (m.deliveryVerificationBounced ? " (its one delivery-verification bounce was spent)" : ""),
+            (m.deliveryVerificationBounced ? " (its delivery-verification bounces were spent)" : ""),
+        );
+      } else if (m.testVerdict && m.testVerdictUnfiltered !== true && (isFinal || m.deliveryVerificationBounced)) {
+        // A filtered green is the sprint choosing which tests count. Saying
+        // only "tests: …" would read as the suite passing (audited 2026-09-03).
+        marks.push("green from a FILTERED run");
+        caveats.push(
+          `${m.title}: its green test run was filtered, not the whole suite — ` +
+            `what the rest of the suite does was never observed (\`${m.testVerdict.slice(0, 80)}\`)`,
         );
       }
       if (m.visualEvidenceBounced) { marks.push("visual-evidence bounce spent"); caveats.push(`${m.title}: needed a second attempt to produce a captured frame`); }
