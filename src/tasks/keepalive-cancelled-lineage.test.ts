@@ -96,8 +96,10 @@ describe("mission keep-alive vs a cancelled lineage", () => {
         task_root: { id: "task_root", status: "cancelled" },
       };
       internals.taskManager = {
+        // The tip is ALIVE: a tip-only guard sees nothing wrong here.
         findLatestLineageTask: () => rows["task_new"],
         getStatus: (id: string) => rows[id] ?? null,
+        findLineageRootId: () => "task_root",
         listTasks: () => [],
         retryTask: (id: string) => { submitted.push(id); return { id: "x" }; },
         submit: (o: { prompt: string }) => { submitted.push(o.prompt); return { id: "x" }; },

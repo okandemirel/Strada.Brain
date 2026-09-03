@@ -2137,17 +2137,29 @@ export class BackgroundExecutor {
    * cancel anywhere in the ancestry retires the whole lineage.
    */
   private isLineageCancelled(task: { id: string; parentId?: string }): boolean {
-    if (this.lineageTipOf(task)?.status === "cancelled") return true;
-    let current: { id: string; parentId?: string } | null = task;
-    for (let depth = 0; current && depth < 50; depth++) {
-      const status = (current as { status?: string }).status
-        ?? (this.taskManager?.getStatus(current.id as TaskId) as { status?: string } | null)?.status;
-      if (status === "cancelled") return true;
-      const parentId: string | undefined = current.parentId
-        ?? (this.taskManager?.getStatus(current.id as TaskId) as { parentId?: string } | null)?.parentId;
-      if (!parentId) break;
-      current = (this.taskManager?.getStatus(parentId as TaskId) as { id: string; parentId?: string } | null) ?? null;
-    }
+    // Every lookup is optional-called and the whole walk is guarded: a task
+    // manager without getStatus must degrade to "not cancelled", never throw
+    // into the settle path (a missing optional call turned this into a
+    // blocked task's error message, 2026-09-03).
+    try {
+      if (this.lineageTipOf(task)?.status === "cancelled") return true;
+      const read = (id: string): { id: string; status?: string; parentId?: string } | null =>
+        (this.taskManager?.getStatus?.(id as TaskId) as
+          | { id: string; status?: string; parentId?: string }
+          | null
+          | undefined) ?? null;
+      let current: { id: string; status?: string; parentId?: string } | null = {
+        ...(read(task.id) ?? {}),
+        ...task,
+      };
+      for (let depth = 0; current && depth < 50; depth++) {
+        const row = read(current.id);
+        if ((current.status ?? row?.status) === "cancelled") return true;
+        const parentId: string | undefined = current.parentId ?? row?.parentId;
+        if (!parentId) break;
+        current = read(parentId);
+      }
+    } catch { /* unreadable lineage — fall through to the ordinary guards */ }
     return false;
   }
 
