@@ -536,6 +536,142 @@ describe("CampaignManager", () => {
     await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
   });
 
+  /**
+   * SCENE HYGIENE. Measured on the delivered PixelFlow tree 2026-09-03: 20
+   * scenes on disk, 14 enabled in Build Settings, and the person who opened
+   * the delivery could not tell which one is the game.
+   */
+  const buildSettings = (scenes: ReadonlyArray<[string, number]>, disabled: readonly string[] = []): void => {
+    mkdirSync(join(projectRoot, "ProjectSettings"), { recursive: true });
+    const lines = ["%YAML 1.1", "EditorBuildSettings:", "  m_Scenes:"];
+    for (const [rel, objects] of scenes) {
+      mkdirSync(join(projectRoot, rel, ".."), { recursive: true });
+      writeFileSync(
+        join(projectRoot, rel),
+        Array.from({ length: objects }, () => "GameObject:\n  m_Name: X").join("\n"),
+      );
+      lines.push("  - enabled: 1", `    path: ${rel}`);
+    }
+    for (const rel of disabled) lines.push("  - enabled: 0", `    path: ${rel}`);
+    writeFileSync(join(projectRoot, "ProjectSettings", "EditorBuildSettings.asset"), lines.join("\n"));
+  };
+
+  /** The delivered tree's real enabled set and GameObject counts. */
+  const REAL_DELIVERED_BUILD: ReadonlyArray<[string, number]> = [
+    ["Assets/Scenes/Gameplay.unity", 3],
+    ["Assets/Scenes/Main.unity", 6],
+    ["Assets/Scenes/UfoShowcase.unity", 5],
+    ["Assets/Scenes/AssembledGame.unity", 2],
+    ["Assets/Scenes/ModuleBoundary.unity", 3],
+    ["Assets/InitTestScene4abd18f9.unity", 5],
+    ["Assets/Scenes/LiveOpsAssembled.unity", 3],
+    ["Assets/Scenes/AssembledMain.unity", 3],
+    ["Assets/Scenes/AssembledUfoRuntime.unity", 3],
+    ["Assets/Modules/LiveOpsModule/Scenes/LiveOpsVisualAssembly.unity", 1],
+    ["Assets/Scenes/LiveOpsVisualsVerified.unity", 3],
+    ["Assets/Scenes/LiveOpsPresentation.unity", 4],
+    ["Assets/Scenes/TargetedLevel151Verification.unity", 5],
+    ["Assets/Scenes/ProductionMain.unity", 17],
+  ];
+
+  /** Walk the ladder to the final sprint (task_3 in flight). */
+  const reachFinalSprint = async (): Promise<ReturnType<typeof manager.startFromGdd>> => {
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    return campaign;
+  };
+
+  it("the FINAL sprint is told to leave exactly one entry scene enabled", async () => {
+    await reachFinalSprint();
+
+    expect(tasks.submitted[0]!.prompt).not.toContain("BUILD HYGIENE");
+    const finalPrompt = tasks.submitted[2]!.prompt;
+    expect(finalPrompt).toContain("BUILD HYGIENE");
+    expect(finalPrompt).toContain("EXACTLY ONE");
+    expect(finalPrompt).toContain("deleted or disabled");
+    expect(finalPrompt).toContain("name the entry scene");
+  });
+
+  it("delivers the real delivered shape and discloses every enabled scene", async () => {
+    buildSettings(REAL_DELIVERED_BUILD, ["Assets/Scenes/Unused.unity"]);
+    const campaign = await reachFinalSprint();
+
+    settleMilestone("green, shipping");
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+
+    const report = messages.find((m) => m.text.includes("Campaign delivery"))!.text;
+    expect(report).toContain("Assets/Scenes/ProductionMain.unity");
+    expect(report).toContain("13 other scenes are enabled");
+    expect(report).toContain("10 of them");
+    expect(report).toContain("TargetedLevel151Verification.unity");
+    // The three that match neither rule are NOT called scaffolding.
+    expect(report).toContain("3 match neither rule");
+    // Untidy is disclosed, never refused — deleting a user's scenes is not
+    // this system's call.
+    expect(storage.get(campaign.id)!.milestones[2]!.sceneHygieneUnresolved).toBeUndefined();
+  });
+
+  it("a clean single-scene build discloses no scaffolding at all", async () => {
+    buildSettings([["Assets/Scenes/Main.unity", 24]]);
+    const campaign = await reachFinalSprint();
+
+    settleMilestone("green, shipping");
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+
+    const report = messages.find((m) => m.text.includes("Campaign delivery"))!.text;
+    expect(report).toContain("Assets/Scenes/Main.unity");
+    expect(report).not.toContain("scaffolding");
+    expect(report).not.toContain("other scenes are enabled");
+  });
+
+  it("refuses delivery when the build has no enabled scene at all", async () => {
+    buildSettings([], ["Assets/Scenes/Main.unity"]);
+    const campaign = await reachFinalSprint();
+
+    settleMilestone("green, shipping");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+
+    expect(storage.get(campaign.id)!.state).toBe("executing");
+    expect(storage.get(campaign.id)!.milestones[2]!.sceneHygieneBounces).toBe(1);
+    expect(tasks.submitted[3]!.prompt).toContain("NO ENTRY SCENE");
+    expect(tasks.submitted[3]!.prompt).toContain("no scene is enabled");
+    expect(messages.some((m) => m.text.includes("Campaign delivery"))).toBe(false);
+  });
+
+  it("delivering with the refusal unresolved says so in the report", async () => {
+    buildSettings([], ["Assets/Scenes/Main.unity"]);
+    const campaign = await reachFinalSprint();
+
+    // Settle until the hygiene gate has spent its whole budget; the ladder
+    // then delivers an HONEST report rather than wedging forever.
+    let taskNo = 3;
+    while (storage.get(campaign.id)!.state === "executing" && taskNo < 9) {
+      const before = tasks.submitted.length;
+      tasks.verifications.set(`task_${taskNo}`, {
+        testsGreen: true,
+        detail: "All 42 tests passed (unfiltered — the whole PlayMode suite)",
+        unfiltered: true,
+      });
+      tasks.emit("task:completed", `task_${taskNo}`, "shipping it, honest");
+      await vi.waitFor(() =>
+        expect(tasks.submitted.length > before || storage.get(campaign.id)!.state === "done").toBe(true),
+      );
+      taskNo++;
+    }
+
+    const after = storage.get(campaign.id)!;
+    expect(after.state).toBe("done");
+    expect(after.milestones[2]!.sceneHygieneBounces).toBe(2);
+    const report = messages.find((m) => m.text.includes("Campaign delivery"))!.text;
+    expect(report).toContain("NO ENTRY SCENE");
+    expect(report).toContain("NO scene a person can open");
+    expect(report).toContain("no entry scene");
+  });
+
   it("keeps refusing delivery while the final sprint has attempts left", async () => {
     // Measured live 2026-09-03 08:33: the gate bounced once, the second
     // attempt also ran no tests, the single bounce was spent, and the ladder

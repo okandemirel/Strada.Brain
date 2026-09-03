@@ -44,9 +44,16 @@ describe("delivery report entry point", () => {
     expect(text).toContain("UfoShowcase.unity");
   });
 
-  it("says nothing rather than guessing when there are no build settings", () => {
+  it("says it could not measure, rather than guessing OR going silent", () => {
+    // Tightened 2026-09-03: this used to return undefined and the report
+    // printed nothing at all — indistinguishable, to a reader, from a build
+    // with one obvious entry scene. A skipped measurement must never read
+    // like a passed one, and it still never guesses a scene.
     const manager = Object.create(CampaignManager.prototype) as CampaignManager;
     (manager as unknown as { projectRoot: string }).projectRoot = tmp();
-    expect((manager as unknown as { describeEntryPoint(): string | undefined }).describeEntryPoint()).toBeUndefined();
+    const text = (manager as unknown as { describeEntryPoint(): string }).describeEntryPoint();
+    expect(text).toContain("could not be measured");
+    expect(text).toContain("EditorBuildSettings.asset");
+    expect(text).not.toContain("press Play");
   });
 });
