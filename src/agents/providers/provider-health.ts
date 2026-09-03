@@ -75,6 +75,13 @@ const QUOTA_COOLDOWN_MS = 8 * 60 * 60 * 1000; // 8 hours
  */
 const CREDENTIAL_COOLDOWN_MS = QUOTA_COOLDOWN_MS;
 const SINGLE_PROVIDER_QUOTA_COOLDOWN_MS = 15 * 60 * 1000; // 15 minutes (when no fallbacks exist)
+/**
+ * A FREE-tier usage cap. Not congestion (5 min is far too eager: the probe
+ * just draws another 429) and not a paid quota block (8 hours wastes a window
+ * that often reopens within the hour). Measured live 2026-09-03: three
+ * accounts cycling 5-minute cooldowns produced 195 refusals in three hours.
+ */
+const FREE_TIER_COOLDOWN_MS = 45 * 60 * 1000; // 45 minutes
 
 /**
  * Upper bound for a hard-quota-stop cooldown sized from a provider's Retry-After. A
@@ -311,6 +318,26 @@ export class ProviderHealthRegistry {
    * cooldown (15 min) so the lone provider recovers sooner instead of being
    * locked out for 8 hours with no fallback available.
    */
+  /**
+   * A provider whose FREE tier is spent. Cooldown sits between overload and a
+   * paid quota block, because a free cap typically reopens on its own within
+   * the hour (audited 2026-09-03).
+   */
+  recordFreeTierExhausted(providerName: string, error: string): void {
+    const normalized = this.norm(providerName);
+    const now = Date.now();
+    const desired = now + FREE_TIER_COOLDOWN_MS;
+    const existing = this.entries.get(normalized)?.cooldownUntil ?? 0;
+    this.setEntry(normalized, {
+      status: "down",
+      consecutiveFailures: this.nextFailureCount(normalized),
+      lastFailureAt: now,
+      lastError: error.slice(0, 200),
+      cooldownUntil: Math.max(existing, desired),
+    });
+    this.persistNow();
+  }
+
   recordQuotaExhaustedShort(providerName: string, error: string): void {
     const normalized = this.norm(providerName);
     const existing = this.entries.get(normalized);

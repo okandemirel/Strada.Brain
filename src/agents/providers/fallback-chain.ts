@@ -158,6 +158,8 @@ const FIRST_RESPONSE_STALL_RETRY_DELAY_MS = 2_000;
 
 /** For a provider that never said how long it needs; the historical value. */
 const DEFAULT_PROBE_TIMEOUT_MS = 15_000;
+/** A provider saying the FREE tier's own cap is spent — a quota, not congestion. */
+const FREE_TIER_LIMIT_RE = /FreeUsageLimit|free[- ]?tier[^.]{0,20}(limit|quota)|free usage limit/i;
 
 function isEmptyProviderResponse(response: ProviderResponse): boolean {
   const hasText = typeof response.text === "string" && response.text.trim().length > 0;
@@ -462,6 +464,14 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
     } else if (/\b403\b/.test(errorMsg) && QUOTA_LIMIT_RE.test(errorMsg)) {
       const method = isSingleProvider ? "recordQuotaExhaustedShort" : "recordQuotaExhausted";
       health[method](provider.name, errorMsg);
+    } else if (FREE_TIER_LIMIT_RE.test(errorMsg)) {
+      // A free-tier usage cap arrives as a 429, but it is a QUOTA, not
+      // congestion: it does not clear in the five minutes an overload gets.
+      // Measured live 2026-09-03: three OpenCode accounts held
+      // FreeUsageLimitError, each 5-minute cooldown expired into a probe that
+      // drew another 429, and the campaign sat in a 195-refusal loop for
+      // hours. Treat it as the quota it says it is.
+      health.recordFreeTierExhausted(provider.name, errorMsg);
     } else if (OVERLOAD_RE.test(errorMsg) || isRateLimited) {
       const method = isSingleProvider ? "recordOverloadedShort" : "recordOverloaded";
       health[method](provider.name, errorMsg);
