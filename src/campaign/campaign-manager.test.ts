@@ -24,9 +24,19 @@ class FakeTaskManager extends EventEmitter {
     this.counter += 1;
     const id = `task_${this.counter}`;
     this.submitted.push({ chatId, prompt });
+    this.prompts.set(id, prompt);
     this.statuses.set(id, TaskStatus.executing);
     this.createdAts.set(id, Date.now());
     return { id, chatId, status: TaskStatus.executing } as unknown as Task;
+  }
+
+  private prompts = new Map<string, string>();
+
+  /** The real manager lists a chat's recent tasks; the sweep needs prompts. */
+  listTasks(chatId: string, limit = 10): Array<{ id: string; status: string; chatId: string; prompt: string }> {
+    return [...this.statuses.entries()]
+      .slice(-limit)
+      .map(([id, status]) => ({ id, status: String(status), chatId, prompt: this.prompts.get(id) ?? "" }));
   }
 
   private createdAts = new Map<string, number>();
@@ -379,6 +389,28 @@ describe("CampaignManager", () => {
     await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
 
     expect(tasks.cancelled).toContain(retryId);
+  });
+
+  it("cancels an ABANDONED mission the campaign no longer points at", async () => {
+    // Measured live 2026-09-03: two orphan roots (task_3f52a987 and
+    // task_ea50a818) kept reviving after delivery. Walking milestone.taskId
+    // could not reach them — the milestone pointed at the task that
+    // delivered, not at the lineages earlier resubmits had abandoned.
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    const stored = storage.get(campaign.id)!;
+    const milestonePrompt = stored.milestones[0]!.prompt;
+    // An orphan carrying the milestone's prompt, unreachable from taskId.
+    const orphanId = tasks.submit("cli-local", "cli", milestonePrompt).id;
+    tasks.markTerminal(orphanId, TaskStatus.blocked);
+    stored.milestones[0]!.taskId = "task_gone";
+    stored.state = "done";
+    stored.deliveryReported = true;
+    storage.save(stored);
+
+    await manager.resumeActive();
+
+    expect(tasks.cancelled).toContain(orphanId);
   });
 
   it("cancels a delivered campaign's stragglers at boot, not only on delivery", async () => {

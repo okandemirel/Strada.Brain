@@ -319,6 +319,44 @@ export class CampaignManager {
    * already been delivered.
    */
   private cancelLiveLineages(campaign: Campaign, reason: string): void {
+    // Identity by MISSION, not by pointer. A milestone that was resubmitted
+    // points at its newest task, so walking taskId alone misses every lineage
+    // the campaign abandoned along the way — and those are exactly the ones
+    // the executor's boot re-arm resurrects (measured live 2026-09-03: two
+    // distinct orphan roots, task_3f52a987 and task_ea50a818, still reviving
+    // after delivery). Match a task to a milestone by the prompt it was
+    // submitted with.
+    const promptKeys = new Set(
+      // A real sprint prompt is thousands of chars; 24 is enough to be
+      // specific while still matching short fixtures, and the match is an
+      // exact substring, not a similarity score.
+      campaign.milestones.map((m) => m.prompt.slice(0, 120)).filter((k) => k.length > 24),
+    );
+    try {
+      const onChat = this.taskManager.listTasks(campaign.chatId, 50) as unknown as Array<{
+        id: string;
+        status: string;
+        prompt?: string;
+      }>;
+      for (const task of onChat) {
+        if (task.status === "completed" || task.status === "cancelled") continue;
+        const prompt = task.prompt ?? "";
+        let owned = false;
+        for (const key of promptKeys) {
+          if (prompt.includes(key)) { owned = true; break; }
+        }
+        if (!owned) continue;
+        try {
+          this.taskManager.cancel(task.id as TaskId);
+          getLoggerSafe().info("Cancelled an abandoned mission of a terminal campaign", {
+            id: campaign.id,
+            taskId: task.id,
+            status: task.status,
+            reason,
+          });
+        } catch { /* already settled */ }
+      }
+    } catch { /* listing unavailable — the lineage walk below still runs */ }
     for (const milestone of campaign.milestones) {
       if (!milestone.taskId) continue;
       let tipId: string | undefined;
