@@ -120,6 +120,21 @@ export interface CampaignMilestone {
    * 2026-09-03 08:33). Bounded by the milestone's attempt budget.
    */
   deliveryVerificationBounces?: number;
+  /**
+   * How many times the scene-hygiene gate has bounced this milestone. The
+   * delivered PixelFlow tree left 14 scenes enabled in Build Settings and the
+   * user could not tell which one is the game (measured 2026-09-03). The gate
+   * refuses ONLY the unopenable cases — no enabled scene at all, or no entry
+   * scene that can be named — because deleting a user's scenes is not this
+   * system's decision. Bounded by the milestone's attempt budget.
+   */
+  sceneHygieneBounces?: number;
+  /**
+   * Set when delivery was declared anyway, with the hygiene refusal still
+   * standing (bounces exhausted). A waived gate must never read like a passed
+   * one, so the delivery report carries this verbatim.
+   */
+  sceneHygieneUnresolved?: string;
   /** When this milestone's current run began (epoch ms) — the time-box clock. */
   startedAtMs?: number;
   /** How many times the time-box has forced a scope-narrowing escalation. */

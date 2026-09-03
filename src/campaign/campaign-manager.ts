@@ -22,6 +22,8 @@ import type { CampaignPlanner } from "./campaign-planner.js";
 import { GDD_AUDIT_FULL_CHARS } from "./campaign-planner.js";
 import type { CampaignStorage } from "./campaign-storage.js";
 import { detectCampaignIntent } from "./campaign-intake.js";
+import { assessSceneHygiene, renderSceneHygiene } from "./scene-hygiene.js";
+import { extractCoreLoop, readUnityVersion, renderHowToRun } from "./how-to-run.js";
 import { isTerminalFailureReport } from "../agents/autonomy/verifier-pipeline.js";
 import type { Campaign, CampaignMilestone } from "./types.js";
 import { generateCampaignId } from "./types.js";
@@ -922,6 +924,21 @@ export class CampaignManager {
         }
       } catch { /* already settled */ }
     }
+    // THE FINAL SPRINT OWNS BUILD HYGIENE. The planner is told this too, but
+    // a planner instruction is a suggestion an LLM may drop; this append is
+    // deterministic, so the sprint that delivers ALWAYS carries the
+    // requirement. Measured 2026-09-03: the delivered tree left 14 scenes
+    // enabled in Build Settings and the report named none of them.
+    if (campaign.currentMilestone === campaign.milestones.length - 1) {
+      if (!milestone.prompt.includes("BUILD HYGIENE")) {
+        milestone.prompt +=
+          "\n\nBUILD HYGIENE (final sprint): when you are done, Build Settings must list EXACTLY ONE " +
+          "enabled scene — the entry scene a person opens to play the game. Every verification or " +
+          "scaffolding scene this campaign created along the way (InitTestScene*, *Verification, " +
+          "*Verified, *Showcase, *Boundary, Assembled*) must be deleted or disabled in Build Settings. " +
+          "Your report must name the entry scene and list every scene you deleted or disabled.";
+      }
+    }
     milestone.status = "running";
     milestone.startedAtMs ??= Date.now();
     // A new attempt gets a new deferral clock. Audited 2026-09-02: the clock
@@ -1642,6 +1659,42 @@ export class CampaignManager {
         return;
       }
       if (isLast) {
+        // SCENE HYGIENE GATE. Measured on the delivered PixelFlow tree
+        // 2026-09-03: 14 scenes enabled in Build Settings, most of them
+        // single-purpose verification scaffolding, and the person who opened
+        // the delivery could not find the game. The COUNT always reaches the
+        // report (see describeEntryPoint); this gate refuses delivery only in
+        // the two cases where there is nothing to open at all — no enabled
+        // scene, or no enabled scene whose file can be read and holds
+        // anything. Deleting or disabling a user's scenes is NOT a decision
+        // this system may make unilaterally, so a merely untidy build is
+        // disclosed and delivered, never blocked.
+        const hygiene = assessSceneHygiene(this.projectRoot);
+        const hygieneBounces = milestone.sceneHygieneBounces ?? 0;
+        if (hygiene.refusal && hygieneBounces < this.maxMilestoneAttempts) {
+          milestone.sceneHygieneBounces = hygieneBounces + 1;
+          const directive =
+            "\n\nNO ENTRY SCENE: " + hygiene.refusal.detail + ". A delivery nobody can open is not a " +
+            "delivery. Leave EXACTLY ONE obvious entry scene enabled in Build Settings — the scene that " +
+            "runs the game — with every verification/scaffolding scene deleted or disabled, and name that " +
+            "scene in your final report.";
+          if (!milestone.prompt.includes("NO ENTRY SCENE")) milestone.prompt += directive;
+          this.persist(campaign);
+          getLoggerSafe().warn("Delivery blocked: the build has no scene a person can open", {
+            id: campaign.id,
+            milestone: milestone.id,
+            refusal: hygiene.refusal.kind,
+            bounce: milestone.sceneHygieneBounces,
+          });
+          // Same charging rule as the delivery-verification gate: the first
+          // bounce is free, repeats are charged, so the attempt budget bounds
+          // this instead of it looping forever.
+          this.submitCurrentMilestone(campaign, { countAttempt: hygieneBounces > 0 });
+          return;
+        }
+        // A gate that ran out of bounces must not read like one that passed:
+        // the surviving refusal is carried into the delivery report verbatim.
+        milestone.sceneHygieneUnresolved = hygiene.refusal?.detail;
         // Coverage gate: "done" is measured against the GDD, not against the
         // ladder having run out. When scheduled items are missing, a
         // remediation sprint is appended instead of delivering short.
@@ -2115,6 +2168,15 @@ export class CampaignManager {
         caveats.push(`${m.title}: went green after its visual bounce with STILL no fresh captured frame`);
       }
       if (m.noWorkBounced) { marks.push("no-work bounce spent"); caveats.push(`${m.title}: an attempt left the repository untouched`); }
+      // The scene-hygiene gate ran out of bounces and delivery went ahead —
+      // never silently (audited 2026-09-03).
+      if (m.sceneHygieneUnresolved) {
+        marks.push("no entry scene");
+        caveats.push(
+          `${m.title}: delivered with NO scene a person can open — ${m.sceneHygieneUnresolved}` +
+            ` (the scene-hygiene gate bounced it ${m.sceneHygieneBounces ?? 0}× and ran out of attempts)`,
+        );
+      }
       if ((m.timeBoxEscalations ?? 0) > 0) { marks.push(`scope narrowed ×${m.timeBoxEscalations}`); caveats.push(`${m.title}: ran past its time box and was narrowed to a smaller increment — remaining scope is in its final report`); }
       if (m.attempts > 1) marks.push(`${m.attempts} attempts`);
       if (m.status !== "green") {
@@ -2136,7 +2198,7 @@ export class CampaignManager {
     // verification scaffolding — and the report never said which one is the
     // game. A person cannot open a delivery they cannot find.
     const entry = this.describeEntryPoint();
-    if (entry) lines.push("", entry);
+    if (entry) lines.push("", entry, this.writeHowToRun(campaign));
     if (campaign.coverageAuditNote) {
       lines.push("", `⚠️ ${campaign.coverageAuditNote} — delivered WITHOUT a clean GDD-coverage check.`);
     }
@@ -2153,53 +2215,98 @@ export class CampaignManager {
   }
 
   /**
-   * The scene a person should open, and the scratch scenes that are not it.
-   * Read from EditorBuildSettings + the scene files themselves; when nothing
-   * can be measured the report says so rather than guessing.
+   * The scene a person should open, and everything else the delivery left
+   * enabled in Build Settings.
+   *
+   * The measurement moved into scene-hygiene.ts (audited 2026-09-03) so the
+   * SAME numbers drive three consumers that must not disagree: this report
+   * block, the delivery refusal, and HOW_TO_RUN.md. It also stopped being
+   * silent when nothing can be measured — "which scene to open was NOT
+   * measured" is a disclosure; saying nothing reads exactly like a build with
+   * one obvious entry scene, which is the failure the user actually hit.
    */
-  private describeEntryPoint(): string | undefined {
-    const settingsPath = join(this.projectRoot, "ProjectSettings", "EditorBuildSettings.asset");
-    if (!existsSync(settingsPath)) return undefined;
-    let enabled: string[] = [];
+  private describeEntryPoint(): string {
+    return renderSceneHygiene(assessSceneHygiene(this.projectRoot));
+  }
+
+  /**
+   * Write HOW_TO_RUN.md at the project root and return the report line that
+   * names it.
+   *
+   * Measured 2026-09-03: the delivered tree had 20 scenes, no README of any
+   * kind, and the delivery report — a chat message that scrolls away — was
+   * the only thing that ever said which scene to open. The project itself
+   * said nothing to the person who opened it.
+   *
+   * Every field is MEASURED here and nowhere else: the Unity version off
+   * ProjectVersion.txt, the entry scene and the scaffolding off the same
+   * scene-hygiene scan the report renders, the play instructions off the
+   * GDD's own core-mechanic field, the suite off the final milestone's
+   * recorded verdict. Nothing is inferred; an unmeasured field is written as
+   * "Unknown — <why>". The file is left in the working tree rather than
+   * committed: it is regenerated on every report (including a re-send after a
+   * restart), and a commit per re-send would be noise in the user's history.
+   */
+  private writeHowToRun(campaign: Campaign): string {
+    const hygiene = assessSceneHygiene(this.projectRoot);
+    const version = readUnityVersion(this.projectRoot);
+
+    // The GDD ON DISK, not campaign.gddText: the stored copy is the intake
+    // snapshot and may be truncated, and the campaign may have redrafted.
+    let gddText: string | undefined;
+    let gddNote: string | undefined;
+    if (campaign.gddPath) {
+      try {
+        gddText = readFileSync(join(this.projectRoot, campaign.gddPath), "utf8");
+      } catch (err) {
+        gddNote = `\`${campaign.gddPath}\` could not be read (${err instanceof Error ? err.message : String(err)})`;
+      }
+    } else {
+      gddNote = "no GDD path was recorded for this campaign";
+    }
+    gddText ??= campaign.gddText;
+    const coreLoop = gddText === undefined ? undefined : extractCoreLoop(gddText);
+    if (coreLoop === undefined && gddNote === undefined) {
+      gddNote = `${campaign.gddPath ?? "the GDD"} names no core-mechanic field this could quote`;
+    }
+
+    const finalMilestone = campaign.milestones[campaign.milestones.length - 1];
+    const verdict = finalMilestone?.testVerdict;
+    const relPath = "HOW_TO_RUN.md";
+    const text = renderHowToRun({
+      projectRoot: this.projectRoot,
+      unityVersion: version.version,
+      unityVersionNote: version.note,
+      entryScene: hygiene.entry?.path,
+      entryObjects: hygiene.entry?.objects,
+      entryNote: hygiene.refusal?.detail ?? hygiene.note,
+      scaffolding: hygiene.scaffolding.map((s) => s.path),
+      unclassified: hygiene.unclassified.map((s) => s.path),
+      otherEnabled: hygiene.otherEnabled,
+      coreLoop,
+      coreLoopNote: gddNote,
+      gddPath: campaign.gddPath,
+      suiteVerdict: verdict,
+      suiteUnfiltered: finalMilestone?.testVerdictUnfiltered,
+      suiteNote: verdict ? undefined : "the final sprint recorded no observed test verdict",
+      // NEVER assumed: only what the recorded verdict actually names.
+      testPlatform: /\bPlayMode\b/i.test(verdict ?? "")
+        ? "PlayMode"
+        : /\bEditMode\b/i.test(verdict ?? "")
+          ? "EditMode"
+          : undefined,
+    });
+
     try {
-      const raw = readFileSync(settingsPath, "utf8");
-      enabled = [...raw.matchAll(/enabled:\s*1\s*\n\s*path:\s*(\S+)/g)].map((m) => m[1] ?? "").filter(Boolean);
-    } catch {
-      return undefined;
-    }
-    if (enabled.length === 0) return undefined;
-
-    // The entry scene is the richest one: scaffolding scenes hold a camera and
-    // one probe object, the game holds its systems.
-    const scored = enabled
-      .map((rel) => {
-        const abs = join(this.projectRoot, rel);
-        let objects = 0;
-        try { objects = (readFileSync(abs, "utf8").match(/^GameObject:/gm) ?? []).length; } catch { return undefined; }
-        return { rel, objects };
-      })
-      .filter((entry): entry is { rel: string; objects: number } => entry !== undefined)
-      .sort((a, b) => b.objects - a.objects);
-    const best = scored[0];
-    if (!best) return undefined;
-
-    const scratch = scored
-      .slice(1)
-      .filter((entry) => /InitTestScene|Verification|Showcase|Boundary|Assembled|Verified/i.test(entry.rel));
-    const out = [
-      "**How to run it**",
-      `- Open \`${best.rel}\` and press Play — it is the scene carrying the game's systems (${best.objects} objects).`,
-    ];
-    if (scratch.length > 0) {
-      out.push(
-        `- ${scratch.length} of the ${enabled.length} scenes enabled in the build are verification scaffolding, ` +
-          "not entry points: " +
-          scratch.slice(0, 6).map((entry) => `\`${entry.rel.split("/").pop() ?? entry.rel}\``).join(", ") +
-          (scratch.length > 6 ? ", …" : "") +
-          ". They can be removed from Build Settings.",
+      writeFileSync(join(this.projectRoot, relPath), text, "utf8");
+      return (
+        `- \`${relPath}\` at the project root says the same in the project itself: ` +
+        "Unity version, entry scene, how to play, and the command that re-runs the suite."
       );
+    } catch (err) {
+      // A README that was not written must never be linked as if it were.
+      return `- ⚠️ \`${relPath}\` could NOT be written (${err instanceof Error ? err.message : String(err)}) — this report is the only copy.`;
     }
-    return out.join("\n");
   }
 
   /** Total capture artifacts under the project's recording roots. */
