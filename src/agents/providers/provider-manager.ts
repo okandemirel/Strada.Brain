@@ -743,6 +743,30 @@ export class ProviderManager {
     };
   }
 
+  /**
+   * A SINGLE provider that can actually see, or null.
+   *
+   * Never route a vision question through the fallback chain: its capability
+   * flag is an OR across members (fallback-chain.ts sets
+   * `vision: providers.some(...)`) and it strips the image block when it
+   * routes to a text-only member — so the chain answers "yes I can see" and
+   * then answers the question blind. That fabricated pass is why two
+   * visual-conformance attempts were refused on review (audited 2026-09-03).
+   */
+  getVisionProvider(): { provider: IAIProvider; name: string; model?: string } | null {
+    for (const entry of this.listAvailable()) {
+      const capabilities = this.getProviderCapabilities(entry.name, entry.defaultModel);
+      if (capabilities?.vision !== true) continue;
+      const provider = this.buildPrimaryProvider(entry.name, entry.defaultModel);
+      if (!provider) continue;
+      // The built instance must claim vision on its OWN capabilities, not by
+      // inheriting a chain's aggregate.
+      if (provider.capabilities?.vision !== true) continue;
+      return { provider, name: entry.name, model: entry.defaultModel };
+    }
+    return null;
+  }
+
   getProviderCapabilities(name: string, model?: string): ProviderCapabilities | undefined {
     return this.mergeCapabilities(name, model);
   }

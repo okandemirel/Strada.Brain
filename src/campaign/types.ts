@@ -145,6 +145,8 @@ export interface CampaignMilestone {
   structureFindings?: string[];
   /** True when the structural check refused delivery at least once. */
   structureRefused?: boolean;
+  /** The rendered look-vs-GDD disclosure block for the delivery report. */
+  visualConformance?: string;
   /** When this milestone's current run began (epoch ms) — the time-box clock. */
   startedAtMs?: number;
   /** How many times the time-box has forced a scope-narrowing escalation. */

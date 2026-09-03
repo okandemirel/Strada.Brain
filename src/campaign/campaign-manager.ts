@@ -23,6 +23,12 @@ import { GDD_AUDIT_FULL_CHARS } from "./campaign-planner.js";
 import type { CampaignStorage } from "./campaign-storage.js";
 import { detectCampaignIntent } from "./campaign-intake.js";
 import { assessSceneHygiene, renderSceneHygiene } from "./scene-hygiene.js";
+import {
+  extractLookDescription,
+  judgeVisualConformance,
+  renderVisualConformance,
+  selectGameplayFrame,
+} from "./visual-conformance.js";
 import { extractCoreLoop, readUnityVersion, renderHowToRun } from "./how-to-run.js";
 import { isTerminalFailureReport } from "../agents/autonomy/verifier-pipeline.js";
 import { assessBuiltAsSpecified } from "../agents/autonomy/built-as-specified.js";
@@ -43,6 +49,12 @@ export interface CampaignContext {
 export interface CampaignManagerOptions {
   storage: CampaignStorage;
   planner: CampaignPlanner;
+  /**
+   * A provider that claims vision on its OWN capabilities (never a fallback
+   * chain — see ProviderManager.getVisionProvider). Absent means the look
+   * check is reported as not checked, never as passed.
+   */
+  visionProvider?: { provider: import("../agents/providers/provider.interface.js").IAIProvider; name: string } | null;
   taskManager: TaskManager;
   messenger: CampaignMessenger;
   projectRoot: string;
@@ -104,6 +116,7 @@ Do not ask questions — make strong, coherent choices and write them down. End 
 export class CampaignManager {
   private readonly storage: CampaignStorage;
   private readonly planner: CampaignPlanner;
+  private readonly visionProvider: { provider: import("../agents/providers/provider.interface.js").IAIProvider; name: string } | null;
   private readonly taskManager: TaskManager;
   private readonly messenger: CampaignMessenger;
   private readonly projectRoot: string;
@@ -118,6 +131,7 @@ export class CampaignManager {
   constructor(options: CampaignManagerOptions) {
     this.storage = options.storage;
     this.planner = options.planner;
+    this.visionProvider = options.visionProvider ?? null;
     this.taskManager = options.taskManager;
     this.messenger = options.messenger;
     this.projectRoot = options.projectRoot;
@@ -1741,6 +1755,22 @@ export class CampaignManager {
         // A gate that ran out of bounces must not read like one that passed:
         // the surviving refusal is carried into the delivery report verbatim.
         milestone.sceneHygieneUnresolved = hygiene.refusal?.detail;
+        // DOES IT LOOK LIKE THE GDD? Disclosure only: the structural gate
+        // above already refuses the hard case, and a stylised look is a
+        // judgement a model can get wrong. What must never happen is silence
+        // (audited 2026-09-03: 11351 frames of a flat coloured grid satisfied
+        // a check that only asks for size and a distinct hash).
+        try {
+          const gddForLook =
+            campaign.gddText ?? (campaign.gddPath ? readGddFile(this.projectRoot, campaign.gddPath) : undefined);
+          const look = extractLookDescription(gddForLook ?? "");
+          const frame = selectGameplayFrame(this.projectRoot, milestone.startedAtMs ?? 0);
+          const verdict = await judgeVisualConformance({ look, frame, visionProvider: this.visionProvider });
+          milestone.visualConformance = renderVisualConformance(verdict, frame);
+        } catch (err) {
+          milestone.visualConformance =
+            `**Does it look like the GDD?**\n- ⚠️ visual conformance not checked — ${err instanceof Error ? err.message : String(err)}.`;
+        }
         // Coverage gate: "done" is measured against the GDD, not against the
         // ladder having run out. When scheduled items are missing, a
         // remediation sprint is appended instead of delivering short.
@@ -2278,6 +2308,10 @@ export class CampaignManager {
     // scenes, 14 of them enabled in the build, most of them single-purpose
     // verification scaffolding — and the report never said which one is the
     // game. A person cannot open a delivery they cannot find.
+    // The look disclosure rides with the entry-point block: both answer "what
+    // did you actually deliver", and a missing one must be visible.
+    const look = [...campaign.milestones].reverse().find((m) => m.visualConformance)?.visualConformance;
+    if (look) lines.push("", look);
     const entry = this.describeEntryPoint();
     if (entry) lines.push("", entry, this.writeHowToRun(campaign));
     // What the shipped scenes actually contain — measured, not inferred from

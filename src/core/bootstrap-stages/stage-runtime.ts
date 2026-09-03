@@ -397,6 +397,12 @@ export async function initializeTaskRuntimeStage(
     campaignManager = new CampaignManager({
       storage: campaignStorage,
       planner: new CampaignPlanner(params.providerManager.getProvider("")),
+      // A provider that claims vision on its OWN capabilities. NEVER
+      // getProvider(""): that is the fallback chain, whose vision flag is an
+      // OR across members and which strips the image when it routes to a
+      // text-only one — "yes I can see", answered blind (audited 2026-09-03).
+      visionProvider: (params.providerManager as { getVisionProvider?: () => { provider: unknown; name: string } | null })
+        .getVisionProvider?.() as never ?? null,
       taskManager,
       messenger: async (chatId, markdown) => {
         await params.channel.sendMarkdown(chatId, sanitizeSecrets(markdown));
