@@ -59,13 +59,30 @@ export function allProvidersCoolingDownMs(): number {
 
     let sawMember = false;
     let soonestActive = Number.POSITIVE_INFINITY;
+    let anyUsable = false;
     for (const [name, entry] of entries) {
       if (!isCurrentChainMemberName(name)) continue;
       sawMember = true;
-      if (entry.cooldownUntil <= now) return 0; // a member is available
-      soonestActive = Math.min(soonestActive, entry.cooldownUntil);
+      if (entry.cooldownUntil > now) {
+        soonestActive = Math.min(soonestActive, entry.cooldownUntil);
+        continue;
+      }
+      // Cooldown expired — but a member that is still DOWN is not capacity.
+      // Measured live 2026-09-03 18:39: three accounts held
+      // FreeUsageLimitError 429s, their short cooldowns lapsed between the
+      // failing probe and the settle, the outage measure read 0, and the
+      // campaign charged Sprint 7 its second attempt for a wall it never got
+      // to work behind.
+      if (entry.status === "down") continue;
+      anyUsable = true;
     }
-    if (!sawMember) return 0;
+    if (!sawMember || anyUsable) return 0;
+    if (soonestActive === Number.POSITIVE_INFINITY) {
+      // Every member is down with no timer to wait for: still an outage, and
+      // the caller needs a horizon it can park on rather than a 0 that reads
+      // as "capacity available".
+      return 60_000;
+    }
     return Math.max(0, soonestActive - now) + 1_000;
   } catch {
     return 0;
