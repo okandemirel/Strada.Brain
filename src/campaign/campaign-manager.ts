@@ -23,6 +23,7 @@ import { GDD_AUDIT_FULL_CHARS } from "./campaign-planner.js";
 import type { CampaignStorage } from "./campaign-storage.js";
 import { detectCampaignIntent } from "./campaign-intake.js";
 import { assessSceneHygiene, renderSceneHygiene } from "./scene-hygiene.js";
+import { extractCoreLoop, readUnityVersion, renderHowToRun } from "./how-to-run.js";
 import { isTerminalFailureReport } from "../agents/autonomy/verifier-pipeline.js";
 import type { Campaign, CampaignMilestone } from "./types.js";
 import { generateCampaignId } from "./types.js";
@@ -2197,7 +2198,7 @@ export class CampaignManager {
     // verification scaffolding — and the report never said which one is the
     // game. A person cannot open a delivery they cannot find.
     const entry = this.describeEntryPoint();
-    if (entry) lines.push("", entry);
+    if (entry) lines.push("", entry, this.writeHowToRun(campaign));
     if (campaign.coverageAuditNote) {
       lines.push("", `⚠️ ${campaign.coverageAuditNote} — delivered WITHOUT a clean GDD-coverage check.`);
     }
@@ -2226,6 +2227,86 @@ export class CampaignManager {
    */
   private describeEntryPoint(): string {
     return renderSceneHygiene(assessSceneHygiene(this.projectRoot));
+  }
+
+  /**
+   * Write HOW_TO_RUN.md at the project root and return the report line that
+   * names it.
+   *
+   * Measured 2026-09-03: the delivered tree had 20 scenes, no README of any
+   * kind, and the delivery report — a chat message that scrolls away — was
+   * the only thing that ever said which scene to open. The project itself
+   * said nothing to the person who opened it.
+   *
+   * Every field is MEASURED here and nowhere else: the Unity version off
+   * ProjectVersion.txt, the entry scene and the scaffolding off the same
+   * scene-hygiene scan the report renders, the play instructions off the
+   * GDD's own core-mechanic field, the suite off the final milestone's
+   * recorded verdict. Nothing is inferred; an unmeasured field is written as
+   * "Unknown — <why>". The file is left in the working tree rather than
+   * committed: it is regenerated on every report (including a re-send after a
+   * restart), and a commit per re-send would be noise in the user's history.
+   */
+  private writeHowToRun(campaign: Campaign): string {
+    const hygiene = assessSceneHygiene(this.projectRoot);
+    const version = readUnityVersion(this.projectRoot);
+
+    // The GDD ON DISK, not campaign.gddText: the stored copy is the intake
+    // snapshot and may be truncated, and the campaign may have redrafted.
+    let gddText: string | undefined;
+    let gddNote: string | undefined;
+    if (campaign.gddPath) {
+      try {
+        gddText = readFileSync(join(this.projectRoot, campaign.gddPath), "utf8");
+      } catch (err) {
+        gddNote = `\`${campaign.gddPath}\` could not be read (${err instanceof Error ? err.message : String(err)})`;
+      }
+    } else {
+      gddNote = "no GDD path was recorded for this campaign";
+    }
+    gddText ??= campaign.gddText;
+    const coreLoop = gddText === undefined ? undefined : extractCoreLoop(gddText);
+    if (coreLoop === undefined && gddNote === undefined) {
+      gddNote = `${campaign.gddPath ?? "the GDD"} names no core-mechanic field this could quote`;
+    }
+
+    const finalMilestone = campaign.milestones[campaign.milestones.length - 1];
+    const verdict = finalMilestone?.testVerdict;
+    const relPath = "HOW_TO_RUN.md";
+    const text = renderHowToRun({
+      projectRoot: this.projectRoot,
+      unityVersion: version.version,
+      unityVersionNote: version.note,
+      entryScene: hygiene.entry?.path,
+      entryObjects: hygiene.entry?.objects,
+      entryNote: hygiene.refusal?.detail ?? hygiene.note,
+      scaffolding: hygiene.scaffolding.map((s) => s.path),
+      unclassified: hygiene.unclassified.map((s) => s.path),
+      otherEnabled: hygiene.otherEnabled,
+      coreLoop,
+      coreLoopNote: gddNote,
+      gddPath: campaign.gddPath,
+      suiteVerdict: verdict,
+      suiteUnfiltered: finalMilestone?.testVerdictUnfiltered,
+      suiteNote: verdict ? undefined : "the final sprint recorded no observed test verdict",
+      // NEVER assumed: only what the recorded verdict actually names.
+      testPlatform: /\bPlayMode\b/i.test(verdict ?? "")
+        ? "PlayMode"
+        : /\bEditMode\b/i.test(verdict ?? "")
+          ? "EditMode"
+          : undefined,
+    });
+
+    try {
+      writeFileSync(join(this.projectRoot, relPath), text, "utf8");
+      return (
+        `- \`${relPath}\` at the project root says the same in the project itself: ` +
+        "Unity version, entry scene, how to play, and the command that re-runs the suite."
+      );
+    } catch (err) {
+      // A README that was not written must never be linked as if it were.
+      return `- ⚠️ \`${relPath}\` could NOT be written (${err instanceof Error ? err.message : String(err)}) — this report is the only copy.`;
+    }
   }
 
   /** Total capture artifacts under the project's recording roots. */

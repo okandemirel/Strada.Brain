@@ -672,6 +672,66 @@ describe("CampaignManager", () => {
     expect(report).toContain("no entry scene");
   });
 
+  it("writes HOW_TO_RUN.md from measured facts and links it from the report", async () => {
+    // Measured 2026-09-03: the delivered project had no README at all, and
+    // the report — a chat message — was the only thing that ever named the
+    // entry scene.
+    buildSettings(REAL_DELIVERED_BUILD);
+    mkdirSync(join(projectRoot, "ProjectSettings"), { recursive: true });
+    writeFileSync(
+      join(projectRoot, "ProjectSettings", "ProjectVersion.txt"),
+      "m_EditorVersion: 6000.3.22f1\nm_EditorVersionWithRevision: 6000.3.22f1 (1c726e1fb402)\n",
+    );
+    writeFileSync(
+      join(projectRoot, "docs", "Game_GDD.md"),
+      "# GDD\n\nCore mechanic\nTap a pig on the conveyor to send it to a tray slot.\n",
+    );
+
+    const campaign = await reachFinalSprint();
+    tasks.verifications.set("task_3", {
+      testsGreen: true,
+      detail: "PlayMode verification passed: 179 of 179 tests passed (unfiltered — the whole PlayMode suite)",
+      unfiltered: true,
+    });
+    tasks.emit("task:completed", "task_3", "green, shipping");
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+
+    const readme = readFileSync(join(projectRoot, "HOW_TO_RUN.md"), "utf8");
+    expect(readme).toContain("6000.3.22f1");
+    expect(readme).toContain("Assets/Scenes/ProductionMain.unity");
+    expect(readme).toContain("Tap a pig on the conveyor");
+    expect(readme).toContain("179 of 179");
+    expect(readme).toContain("-testPlatform PlayMode");
+    expect(readme).toContain("TargetedLevel151Verification.unity");
+    expect(readme).not.toContain("Unknown");
+
+    const report = messages.find((m) => m.text.includes("Campaign delivery"))!.text;
+    expect(report).toContain("HOW_TO_RUN.md");
+  });
+
+  it("HOW_TO_RUN.md says Unknown, with the reason, for what nothing measured", async () => {
+    // No ProjectVersion.txt, no core-mechanic field in the GDD, and a final
+    // sprint whose verdict named no suite: three unmeasured fields that must
+    // read as unmeasured, not be quietly dropped.
+    buildSettings([["Assets/Scenes/Main.unity", 9]]);
+    const campaign = await reachFinalSprint();
+    tasks.verifications.set("task_3", {
+      testsGreen: true,
+      detail: "All 42 tests passed (unfiltered)",
+      unfiltered: true,
+    });
+    tasks.emit("task:completed", "task_3", "green, shipping");
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+
+    const readme = readFileSync(join(projectRoot, "HOW_TO_RUN.md"), "utf8");
+    expect(readme).toContain("Unknown — ProjectSettings/ProjectVersion.txt could not be read");
+    expect(readme).toContain("names no core-mechanic field");
+    expect(readme).toContain("the recorded verdict does not name which suite ran");
+    // What WAS measured is still stated.
+    expect(readme).toContain("Assets/Scenes/Main.unity");
+    expect(readme).toContain("42 tests passed");
+  });
+
   it("keeps refusing delivery while the final sprint has attempts left", async () => {
     // Measured live 2026-09-03 08:33: the gate bounced once, the second
     // attempt also ran no tests, the single bounce was spent, and the ladder
