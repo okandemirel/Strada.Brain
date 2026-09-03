@@ -11,9 +11,15 @@ import { describe, expect, it } from "vitest";
  */
 function classify(result: { content: string; isError?: boolean }): { ok: boolean; ran: boolean } {
   const detail = result.content;
-  const carriesCompileDiagnostic =
-    /error\s+CS\d+|compile (failed|succeeded)|\d+\s+error\(s\)|compile entries|verification (FAILED|passed)/i.test(detail);
+  const namedErrorCount = /(\d+)\s*(?:error\(s\)|errors?\b)/i.exec(detail)?.[1];
+  const jsonErrorCount = /"compileErrors"\s*:\s*(\d+)/i.exec(detail)?.[1];
+  const provenErrors =
+    /error\s+CS\d+/i.test(detail)
+    || (namedErrorCount !== undefined && Number(namedErrorCount) > 0)
+    || (jsonErrorCount !== undefined && Number(jsonErrorCount) > 0);
+  const carriesCompileDiagnostic = provenErrors || /compile succeeded|verification passed/i.test(detail);
   if (result.isError === true && !carriesCompileDiagnostic) return { ok: true, ran: false };
+  if (result.isError === true && !provenErrors) return { ok: true, ran: false };
   return { ok: result.isError !== true, ran: true };
 }
 
@@ -28,6 +34,16 @@ describe("real-tree compile verdict", () => {
       .toEqual({ ok: false, ran: true });
     expect(classify({ content: "Assets/Modules/A.cs(3,5): error CS1061: no such member", isError: true }))
       .toEqual({ ok: false, ran: true });
+  });
+
+  it("treats a failure that names ZERO errors as unmeasured", () => {
+    // Measured live 2026-09-03 11:51: {"status":"failed","reason":"Headless
+    // compile failed with 0 error(s)","compileErrors":0} — a failure that
+    // contradicts itself, taken as licence to edit the user's project.
+    expect(classify({
+      content: '{"status":"failed","mode":"offline","reason":"Headless compile failed with 0 error(s).","summary":{"compileErrors":0}}',
+      isError: true,
+    })).toEqual({ ok: true, ran: false });
   });
 
   it("treats a clean run as green", () => {
