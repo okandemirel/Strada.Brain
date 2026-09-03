@@ -318,6 +318,33 @@ export class CampaignManager {
    * a pre-delivery lineage and resubmitted the sprint against a game that had
    * already been delivered.
    */
+  /** Cancel the root of a task's retry/replan lineage, so every future
+   *  descendant inherits a cancelled ancestor (audited 2026-09-03). */
+  private cancelLineageRootOf(taskId: string): void {
+    try {
+      const manager = this.taskManager as unknown as {
+        findLineageRootId?: (id: string) => string | null;
+        getStatus?: (id: string) => { id: string; status?: string; parentId?: string } | null;
+        cancel?: (id: string) => void;
+      };
+      let rootId = manager.findLineageRootId?.(taskId) ?? null;
+      if (!rootId) {
+        let current = manager.getStatus?.(taskId) ?? null;
+        for (let depth = 0; current?.parentId && depth < 50; depth++) {
+          const parent = manager.getStatus?.(current.parentId) ?? null;
+          if (!parent) break;
+          current = parent;
+        }
+        rootId = current?.id ?? null;
+      }
+      if (!rootId || rootId === taskId) return;
+      const root = manager.getStatus?.(rootId);
+      if (root && root.status !== "completed" && root.status !== "cancelled") {
+        manager.cancel?.(rootId);
+      }
+    } catch { /* unreadable lineage */ }
+  }
+
   private cancelLiveLineages(campaign: Campaign, reason: string): void {
     // Identity by MISSION, not by pointer. A milestone that was resubmitted
     // points at its newest task, so walking taskId alone misses every lineage
@@ -347,6 +374,12 @@ export class CampaignManager {
         }
         if (!owned) continue;
         try {
+          // Cancel the lineage's ROOT as well as this task. Cancelling only
+          // the live end retires nothing: the next continuation mints a fresh
+          // child whose ancestry holds no cancel, and the chain walks around
+          // the guard (measured live 2026-09-03 11:04, a seventh
+          // resurrection). Every future descendant inherits the root.
+          this.cancelLineageRootOf(task.id);
           this.taskManager.cancel(task.id as TaskId);
           getLoggerSafe().info("Cancelled an abandoned mission of a terminal campaign", {
             id: campaign.id,

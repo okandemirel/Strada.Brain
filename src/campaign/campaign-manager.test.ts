@@ -32,6 +32,16 @@ class FakeTaskManager extends EventEmitter {
 
   private prompts = new Map<string, string>();
 
+  findLineageRootId(taskId: string): string | null {
+    let current = taskId;
+    for (let depth = 0; depth < 50; depth++) {
+      const parent = this.parents.get(current);
+      if (!parent) break;
+      current = parent;
+    }
+    return current === taskId ? null : current;
+  }
+
   /** The real manager lists a chat's recent tasks; the sweep needs prompts. */
   listTasks(chatId: string, limit = 10): Array<{ id: string; status: string; chatId: string; prompt: string }> {
     return [...this.statuses.entries()]
@@ -75,6 +85,10 @@ class FakeTaskManager extends EventEmitter {
     const id = `task_${this.counter}`;
     this.statuses.set(id, status);
     this.parents.set(id, parentId);
+    // A retry replays the mission, so it carries the parent's prompt — the
+    // identity the terminal-campaign sweep matches on.
+    const inherited = this.prompts.get(parentId);
+    if (inherited) this.prompts.set(id, inherited);
     return id;
   }
 
@@ -411,6 +425,28 @@ describe("CampaignManager", () => {
     await manager.resumeActive();
 
     expect(tasks.cancelled).toContain(orphanId);
+  });
+
+  it("retires the lineage ROOT so future children inherit the cancel", async () => {
+    // Measured live 2026-09-03 11:04, a seventh resurrection: cancelling only
+    // the live end retires nothing — the next continuation mints a fresh
+    // child whose ancestry holds no cancel at all.
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    const stored = storage.get(campaign.id)!;
+    const milestonePrompt = stored.milestones[0]!.prompt;
+    const rootId = tasks.submit("cli-local", "cli", milestonePrompt).id;
+    const childId = tasks.addRetry(rootId, TaskStatus.blocked);
+    tasks.markTerminal(rootId, TaskStatus.blocked);
+    stored.milestones[0]!.taskId = "task_gone";
+    stored.state = "done";
+    stored.deliveryReported = true;
+    storage.save(stored);
+
+    await manager.resumeActive();
+
+    expect(tasks.cancelled).toContain(childId);
+    expect(tasks.cancelled).toContain(rootId);
   });
 
   it("cancels a delivered campaign's stragglers at boot, not only on delivery", async () => {

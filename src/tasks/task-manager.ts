@@ -143,7 +143,17 @@ export class TaskManager extends EventEmitter {
    */
   cancel(taskId: TaskId): boolean {
     const task = this.storage.load(taskId);
-    if (!task || !ACTIVE_STATUSES.has(task.status)) {
+    if (!task) return false;
+    // A BLOCKED task is not finished — it is parked, waiting for a
+    // continuation (the mission keep-alive, the goal auto-resume) that will
+    // revive it. Refusing to cancel it made every retirement a silent no-op:
+    // measured live 2026-09-03, a delivered campaign's sweep logged 33
+    // cancellations while the database recorded 9, and its sprint work came
+    // back seven times. Cancelling a parked task is exactly how a deliberate
+    // stop is expressed; a task that already reached completed/failed/
+    // cancelled is left alone.
+    const retirable = ACTIVE_STATUSES.has(task.status) || task.status === TaskStatus.blocked;
+    if (!retirable) {
       return false;
     }
 
