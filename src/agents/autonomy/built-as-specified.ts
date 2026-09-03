@@ -42,7 +42,14 @@ import type { SceneWiringIo } from "./scene-wiring.js";
 /** Same injectable shape the sibling scene checks use, so tests need no disk. */
 export type BuiltAsSpecifiedIo = SceneWiringIo;
 
-function walk(dir: string, match?: (file: string) => boolean, budget = 20_000): string[] {
+/**
+ * How many matching files one walk may return. Hitting it is REPORTED, never
+ * swallowed (audited 2026-09-03): a truncated walk that reads like a complete
+ * one would call bound art unbound and empty scenes fully measured.
+ */
+export const ASSET_WALK_BUDGET = 20_000;
+
+function walk(dir: string, match?: (file: string) => boolean, budget = ASSET_WALK_BUDGET): string[] {
   const out: string[] = [];
   const stack = [dir];
   let visited = 0;
@@ -440,7 +447,13 @@ function isRuntimeScript(rel: string): boolean {
 export function assessBuiltAsSpecified(
   projectRoot: string,
   io: BuiltAsSpecifiedIo = defaultIo,
+  /** Tests shrink the walk budget to exercise the truncation disclosure. */
+  opts: { walkBudget?: number } = {},
 ): BuiltAsSpecifiedReport {
+  const walkBudget = opts.walkBudget ?? ASSET_WALK_BUDGET;
+  // The budget belongs to the walk, so a shrunken one really truncates rather
+  // than only changing the arithmetic the disclosure is derived from.
+  if (io === defaultIo) io = { ...defaultIo, listFiles: (dir, match) => walk(dir, match, walkBudget) };
   const assetsRoot = join(projectRoot, "Assets");
   const empty = {
     scenes: [] as SceneStructure[],
@@ -481,6 +494,12 @@ export function assessBuiltAsSpecified(
     .listFiles(assetsRoot, (f) => /\.(?:meta|prefab|asset|unity|cs)$/iu.test(f))
     .map((f) => relative(projectRoot, f).split(sep).join("/"));
   const fileSet = new Set(files);
+  if (files.length >= walkBudget) {
+    incomplete.push(
+      `the Assets/ scene-and-script walk returned its maximum of ${walkBudget} files — guids, prefabs and ` +
+        "scripts beyond that were not read, so art may be reported as unbound when it is not",
+    );
+  }
 
   // guid → project-relative path, from the .meta sidecars Unity writes.
   const guidToPath = new Map<string, string>();
@@ -639,6 +658,11 @@ export function assessBuiltAsSpecified(
     .map((f) => relative(projectRoot, f).split(sep).join("/"))
     // A fixture under Tests/ or Editor/ is not the game's unshipped art.
     .filter((rel) => !/(^|\/)(Tests?|Editor)\//i.test(rel));
+  if (artFiles.length >= walkBudget) {
+    incomplete.push(
+      `the art walk returned its maximum of ${walkBudget} files — the art inventory and the unbound lists are partial`,
+    );
+  }
   const pathToGuid = new Map<string, string>();
   for (const [guid, path] of guidToPath) pathToGuid.set(path, guid);
 

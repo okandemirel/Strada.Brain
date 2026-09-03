@@ -309,6 +309,20 @@ describe("assessBuiltAsSpecified — what it could not measure", () => {
     expect(report.refusal).toBeUndefined();
   });
 
+  it("records that the file walk was truncated instead of reporting a partial scan as whole", () => {
+    // No silent caps: a truncated walk would call bound art unbound.
+    const root = project();
+    buildSettings(root, [{ path: "Assets/Scenes/Main.unity" }]);
+    put(root, "Assets/Scenes/Main.unity", `${HEADER}${CAMERA(0)}`, "5ce5e5e5e5e5e5e5e5e5e5e5e5e5e5e5");
+    put(root, "Assets/Prefabs/Pig.prefab", artPrefab("22222222222222222222222222222222"), "11111111111111111111111111111111");
+    put(root, "Assets/Art/pig.png", "pixels", "22222222222222222222222222222222");
+
+    const report = assessBuiltAsSpecified(root, undefined, { walkBudget: 2 });
+    // Both walks are budgeted, and each says so in its own words.
+    expect(report.incomplete.join("\n")).toContain("scene-and-script walk returned its maximum of 2 files");
+    expect(report.incomplete.join("\n")).toContain("the art walk returned its maximum of 2 files");
+  });
+
   it("records that no scene is enabled rather than passing silently", () => {
     const root = project();
     buildSettings(root, [{ path: "Assets/Scenes/Main.unity", enabled: false }]);
