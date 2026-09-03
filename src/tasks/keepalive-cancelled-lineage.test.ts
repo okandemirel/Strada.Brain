@@ -72,6 +72,49 @@ describe("mission keep-alive vs a cancelled lineage", () => {
     expect(replan).not.toHaveBeenCalled();
   });
 
+  it("a cancel ANYWHERE in the ancestry retires the lineage", async () => {
+    // Measured live 2026-09-03 10:45, a sixth resurrection: once a
+    // continuation minted a fresh task after the cancel, the lineage TIP was
+    // that new task and the chain walked straight around a tip-only guard.
+    vi.useFakeTimers();
+    try {
+      const executor = Object.create(BackgroundExecutor.prototype) as BackgroundExecutor;
+      const internals = executor as unknown as {
+        missionRetries: Map<string, number>;
+        taskManager: unknown;
+        allProvidersCoolingDownMs: () => number;
+        lineageRootTaskId: (t: { id: string }) => string;
+      };
+      internals.missionRetries = new Map();
+      internals.allProvidersCoolingDownMs = () => 0;
+      internals.lineageRootTaskId = () => "task_root";
+      const submitted: string[] = [];
+      // tip is BLOCKED (a fresh task), but its grandparent was cancelled.
+      const rows: Record<string, { id: string; status: string; parentId?: string }> = {
+        task_new: { id: "task_new", status: "blocked", parentId: "task_mid" },
+        task_mid: { id: "task_mid", status: "blocked", parentId: "task_root" },
+        task_root: { id: "task_root", status: "cancelled" },
+      };
+      internals.taskManager = {
+        findLatestLineageTask: () => rows["task_new"],
+        getStatus: (id: string) => rows[id] ?? null,
+        listTasks: () => [],
+        retryTask: (id: string) => { submitted.push(id); return { id: "x" }; },
+        submit: (o: { prompt: string }) => { submitted.push(o.prompt); return { id: "x" }; },
+        appendTaskNotice: vi.fn(),
+        block: vi.fn(),
+      };
+
+      (executor as unknown as { scheduleMissionKeepAlive(t: unknown, r: string): boolean })
+        .scheduleMissionKeepAlive(rows["task_new"], "transient");
+      await vi.advanceTimersByTimeAsync(15 * 60_000);
+
+      expect(submitted).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("still retries when the lineage tip is merely blocked", async () => {
     vi.useFakeTimers();
     try {

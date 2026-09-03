@@ -2127,11 +2127,28 @@ export class BackgroundExecutor {
   }
 
   /**
-   * True when this task's lineage was cancelled — a deliberate stop that every
-   * automatic continuation must respect (audited 2026-09-03).
+   * True when ANY task in this lineage was cancelled — a deliberate stop that
+   * every automatic continuation must respect.
+   *
+   * Checking only the TIP was not enough: once a continuation minted a new
+   * task after the cancel, the tip was that fresh task and the chain walked
+   * straight around the guard. Measured live 2026-09-03 at 10:45, a sixth
+   * resurrection of a delivered campaign's sprint, three cancels deep. A
+   * cancel anywhere in the ancestry retires the whole lineage.
    */
-  private isLineageCancelled(task: { id: string }): boolean {
-    return this.lineageTipOf(task)?.status === "cancelled";
+  private isLineageCancelled(task: { id: string; parentId?: string }): boolean {
+    if (this.lineageTipOf(task)?.status === "cancelled") return true;
+    let current: { id: string; parentId?: string } | null = task;
+    for (let depth = 0; current && depth < 50; depth++) {
+      const status = (current as { status?: string }).status
+        ?? (this.taskManager?.getStatus(current.id as TaskId) as { status?: string } | null)?.status;
+      if (status === "cancelled") return true;
+      const parentId: string | undefined = current.parentId
+        ?? (this.taskManager?.getStatus(current.id as TaskId) as { parentId?: string } | null)?.parentId;
+      if (!parentId) break;
+      current = (this.taskManager?.getStatus(parentId as TaskId) as { id: string; parentId?: string } | null) ?? null;
+    }
+    return false;
   }
 
   private autoResumeBlockedGoal(
