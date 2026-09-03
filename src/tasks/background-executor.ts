@@ -2026,8 +2026,11 @@ export class BackgroundExecutor {
       // 09:53, each able to write to the project the user was inspecting).
       // A deliberate stop outranks a keep-alive.
       try {
-        const tip = this.lineageTipOf(task);
-        if (tip?.status === "cancelled") {
+        // The ANCESTRY, not just the tip: a continuation that minted a fresh
+        // task after the cancel would otherwise walk around this guard
+        // (audited 2026-09-03).
+        if (this.isLineageCancelled(task)) {
+          const tip = this.lineageTipOf(task);
           this.missionRetries.delete(key);
           getLoggerSafe().info("Mission keep-alive retry abandoned — the lineage was cancelled", {
             taskId: task.id,

@@ -90,10 +90,15 @@ describe("mission keep-alive vs a cancelled lineage", () => {
       internals.lineageRootTaskId = () => "task_root";
       const submitted: string[] = [];
       // tip is BLOCKED (a fresh task), but its grandparent was cancelled.
-      const rows: Record<string, { id: string; status: string; parentId?: string }> = {
-        task_new: { id: "task_new", status: "blocked", parentId: "task_mid" },
-        task_mid: { id: "task_mid", status: "blocked", parentId: "task_root" },
-        task_root: { id: "task_root", status: "cancelled" },
+      // origin/chatId/prompt matter: scheduleMissionKeepAlive returns early
+      // for anything that is not a user mission, which would make this test
+      // pass for the wrong reason.
+      const rows: Record<string, {
+        id: string; status: string; parentId?: string; origin: string; chatId: string; prompt: string;
+      }> = {
+        task_new: { id: "task_new", status: "blocked", parentId: "task_mid", origin: "user", chatId: "cli-local", prompt: "sprint" },
+        task_mid: { id: "task_mid", status: "blocked", parentId: "task_root", origin: "user", chatId: "cli-local", prompt: "sprint" },
+        task_root: { id: "task_root", status: "cancelled", origin: "user", chatId: "cli-local", prompt: "sprint" },
       };
       internals.taskManager = {
         // The tip is ALIVE: a tip-only guard sees nothing wrong here.
