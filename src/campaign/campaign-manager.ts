@@ -1660,7 +1660,13 @@ export class CampaignManager {
             : "no test run was observed in the last attempt. ") +
           "Run the FULL PlayMode suite UNFILTERED against the assembled scene, capture a frame of " +
           "the running game, and report the suite's actual pass/fail counts. Delivery is not declared on a sprint " +
-          "whose whole suite was never seen to pass.";
+          "whose whole suite was never seen to pass.\n" +
+          // Measured live 2026-09-03 23:30: the sprint answered this directive
+          // with a JSON INVENTORY (module counts, prefab counts, a scene list)
+          // and changed nothing. "Report the counts" was read as "produce a
+          // report". The verb has to be unmistakable.
+          "DO NOT AUDIT. An inventory of modules, prefabs, scenes or tests is not work and will be " +
+          "rejected: run the tools, change the code, and let the suite's own output be your report.";
         if (!milestone.prompt.includes("DELIVERY VERIFICATION REQUIRED")) milestone.prompt += directive;
         this.persist(campaign);
         getLoggerSafe().warn("Delivery blocked: final milestone has no observed test verdict", {
@@ -1699,7 +1705,8 @@ export class CampaignManager {
             `${marker} ${structure.refusal}\n` +
             "Fix the game, not the report: place the project's own prefabs in the scenes the build ships, bind " +
             "real materials/meshes/sprites to their renderers instead of engine primitives, and re-verify with a " +
-            "captured frame of the entry scene. Then report what the scenes contain.";
+            "captured frame of the entry scene. Then report what the scenes contain.\n" +
+            "DO NOT AUDIT: counting what exists is not the task — binding it into the shipped scenes is.";
           this.persist(campaign);
           getLoggerSafe().warn("Delivery blocked: the shipped scenes are not built as specified", {
             id: campaign.id,
