@@ -1066,6 +1066,25 @@ describe("CampaignManager", () => {
     expect(storage.get(campaign.id)!.state).toBe("executing");
   });
 
+  it("a shutdown never ends a sprint, even at its last attempt", async () => {
+    // Measured live 2026-09-03 21:24: the sprint sat at 2/2, a routine deploy
+    // stopped the process, and the exemption — gated behind canRetry — did
+    // not run, so the deploy itself ended the campaign.
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    const stored = storage.get(campaign.id)!;
+    stored.milestones[0]!.attempts = 2; // budget already spent
+    storage.save(stored);
+    tasks.updatedAts.set("task_1", Date.now() - 30 * 60_000);
+
+    tasks.emit("task:blocked", "task_1", "The task was stopped before it finished (shutting down). Any changes it made have been kept.");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+
+    const after = storage.get(campaign.id)!;
+    expect(after.state).toBe("executing");
+    expect(after.milestones[0]!.attempts).toBe(2);
+  });
+
   it("a BLOCKED outage settle also resubmits without charging an attempt", async () => {
     // Measured 2026-09-02 02:36: the outage surfaced as
     // `blocked:provider_unavailable`, and the blocked-nudge branch (which

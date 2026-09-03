@@ -1847,7 +1847,22 @@ export class CampaignManager {
     // whose cause was a daemon restart, with no self-revival armed because it
     // was not an outage.
     const shutdownCaused = /shutting down|shutdown|durduruldu \(shutting/i.test(output);
-    if (canRetry && (outageCaused || shutdownCaused)) {
+    // A shutdown is exempt from the ATTEMPT BUDGET ITSELF, not merely from
+    // being charged: the operator stopped the process, so the sprint's last
+    // attempt was never spent on work. Gating it behind canRetry meant a
+    // sprint already at 2/2 was ended by a routine deploy — measured live
+    // 2026-09-03 21:24, the second time the same deploy killed the same
+    // campaign (audited 2026-09-03).
+    if (shutdownCaused) {
+      getLoggerSafe().info("Milestone resubmitted after a process shutdown — no attempt charged", {
+        id: campaign.id,
+        milestone: milestone.id,
+        attempts: milestone.attempts,
+      });
+      this.submitCurrentMilestone(campaign, { countAttempt: false });
+      return;
+    }
+    if (canRetry && outageCaused) {
       getLoggerSafe().info("Milestone resubmitted without charging an attempt", {
         id: campaign.id,
         milestone: milestone.id,
