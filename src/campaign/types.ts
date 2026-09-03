@@ -111,6 +111,8 @@ export interface CampaignMilestone {
    * since the sprint began is rejected once; the second stands either way.
    */
   noWorkBounced?: boolean;
+  /** One-shot bounce: the sprint's commits were documentation only. */
+  prosOnlyBounced?: boolean;
   /** One-shot bounce: the FINAL milestone landed green with no observed test run. */
   deliveryVerificationBounced?: boolean;
   /**

@@ -1583,6 +1583,26 @@ export class CampaignManager {
         this.submitCurrentMilestone(campaign, { countAttempt: false });
         return;
       }
+      // PROSE IS NOT WORK. Measured live 2026-09-04: told not to audit, the
+      // final sprint answered three times with DOCUMENTS — a gap analysis, an
+      // entry-scene audit, a "vertical slice" write-up — and its commit
+      // touched 0 code, scene, prefab or asset files. The no-work gate above
+      // sees a dirty tree and passes it. A sprint whose entire output is
+      // documentation has not built anything.
+      if (!milestone.prosOnlyBounced && this.changedOnlyProse(milestone)) {
+        milestone.prosOnlyBounced = true;
+        milestone.prompt +=
+          "\n\nDOCUMENTS ARE NOT DELIVERY: your last attempt changed only documentation — no .cs, " +
+          "no .unity, no .prefab, no asset. Write code and scenes; the report is the test output and " +
+          "the captured frame, not a markdown file.";
+        this.persist(campaign);
+        getLoggerSafe().warn("Milestone completion rejected: the sprint changed only documentation", {
+          id: campaign.id,
+          milestone: milestone.id,
+        });
+        this.submitCurrentMilestone(campaign, { countAttempt: false });
+        return;
+      }
       milestone.status = "green";
       milestone.resultExcerpt = output.slice(-500);
       milestone.commitNote = commitNote.trim() || undefined;
@@ -2458,6 +2478,34 @@ export class CampaignManager {
     } catch (err) {
       // A README that was not written must never be linked as if it were.
       return `- ⚠️ \`${relPath}\` could NOT be written (${err instanceof Error ? err.message : String(err)}) — this report is the only copy.`;
+    }
+  }
+
+  /**
+   * True when everything this sprint committed is prose. Measured from the
+   * sprint's OWN commits (since startedAtMs), by file extension: a delivery
+   * whose only artefacts are .md files under docs/ built nothing
+   * (audited 2026-09-04).
+   */
+  private changedOnlyProse(milestone: CampaignMilestone): boolean {
+    const since = milestone.startedAtMs;
+    if (!since) return false;
+    try {
+      const iso = new Date(since).toISOString();
+      const out = execFileSync(
+        "git",
+        ["log", `--since=${iso}`, "--name-only", "--pretty=format:", "--no-merges"],
+        { cwd: this.projectRoot, encoding: "utf8", timeout: 20_000 },
+      );
+      const files = out.split("\n").map((f) => f.trim()).filter(Boolean);
+      if (files.length === 0) return false; // nothing committed: the no-work gate owns that
+      const buildsSomething = files.some((f) =>
+        /\.(cs|unity|prefab|asset|mat|shader|json|png|jpg|fbx|obj|anim|controller)$/i.test(f)
+        && !/^docs\//i.test(f),
+      );
+      return !buildsSomething;
+    } catch {
+      return false; // unmeasurable is never a refusal
     }
   }
 
