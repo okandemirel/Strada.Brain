@@ -456,6 +456,15 @@ export class CampaignManager {
         });
       }
     }
+    // A finished campaign must stop writing to the project. Cancelling on the
+    // transition to "done" is not enough: the campaign is already terminal on
+    // the next boot, nothing resumes it, and the executor's keep-alive re-arm
+    // revives its blocked tasks every restart — measured live 2026-09-03
+    // 09:19 and again 09:37, both minutes after delivery, both resubmitting a
+    // sprint against a game that had already shipped.
+    for (const campaign of this.storage.listRecentTerminal()) {
+      this.cancelLiveLineages(campaign, `campaign already ${campaign.state}`);
+    }
     // A delivered game whose report never reached the chat is announced now.
     // The report is rebuilt from the persisted evidence (the same builder the
     // live path uses), and the flag is set only when it actually lands, so a

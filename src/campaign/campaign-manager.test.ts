@@ -359,6 +359,26 @@ describe("CampaignManager", () => {
     expect(tasks.submitted[1]!.prompt).toContain("TIME BOX EXHAUSTED");
   });
 
+  it("cancels a delivered campaign's stragglers at boot, not only on delivery", async () => {
+    // Measured live 2026-09-03 09:19 and 09:37: minutes after delivery the
+    // executor's keep-alive re-arm revived a blocked pre-delivery task and
+    // resubmitted the sprint against a game that had already shipped. The
+    // campaign was already terminal, so nothing resumed it and nothing
+    // cancelled its lineage.
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    const stored = storage.get(campaign.id)!;
+    stored.state = "done";
+    stored.deliveryReported = true;
+    storage.save(stored);
+    // The old lineage is alive again (a keep-alive retry under a new id).
+    const retryId = tasks.addRetry("task_1");
+
+    await manager.resumeActive();
+
+    expect(tasks.cancelled).toContain(retryId);
+  });
+
   it("keeps refusing delivery while the final sprint has attempts left", async () => {
     // Measured live 2026-09-03 08:33: the gate bounced once, the second
     // attempt also ran no tests, the single bounce was spent, and the ladder

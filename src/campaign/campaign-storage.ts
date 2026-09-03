@@ -203,6 +203,21 @@ export class CampaignStorage {
    * crash/messenger-failure window between persisting `done` and the report
    * landing in the chat. Boot re-sends these (audited 2026-09-02).
    */
+  /**
+   * Recently finished campaigns, for the boot sweep that stops their
+   * stragglers. A terminal campaign is never resumed, so nothing else looks
+   * at it — and the executor's keep-alive happily revives its blocked tasks
+   * on every restart (audited 2026-09-03).
+   */
+  listRecentTerminal(limit = 10): Campaign[] {
+    const rows = this.db
+      .prepare(
+        "SELECT * FROM campaigns WHERE state IN ('done', 'cancelled') ORDER BY updated_at DESC LIMIT ?",
+      )
+      .all(limit) as CampaignRow[];
+    return rows.map(rowToCampaign);
+  }
+
   listUnreportedDeliveries(): Campaign[] {
     const rows = this.db
       .prepare(
