@@ -509,6 +509,28 @@ describe("CampaignManager", () => {
     expect(report).toContain("Assets/Scenes/ProductionMain.unity");
   });
 
+  it("discloses the GDD's own dimensionality against the shipped scenes, without refusing", async () => {
+    // Audited 2026-09-03: the GDD says "plump, glossy 3D-feel pigs" and the
+    // delivered scenes had no mesh renderers and bound none of the project's
+    // 62 imported models. A stylised 3D-feel look CAN be built from sprites,
+    // so this is disclosure with counts — the reader judges.
+    writeBuiltProject();
+    const campaign = await runLadderToDelivery(
+      "# GDD\n\n12. ART DIRECTION\nplump, glossy 3D-feel pigs on softly rendered dimensional stages.",
+    );
+
+    settleMilestone("integrated, all 42 tests pass");
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+
+    const report = messages.at(-1)!.text;
+    expect(report).toContain("The GDD asks for 3D");
+    expect(report).toContain("0 mesh renderer(s)");
+    expect(report).toContain("1 sprite renderer(s)");
+    expect(report).toContain("Camera projection in the shipped scenes: 0 orthographic, 1 perspective");
+    // Disclosure only — the campaign still delivered.
+    expect(storage.get(campaign.id)!.milestones[2]!.structureRefused).toBeUndefined();
+  });
+
   it("says the shipped scenes were NOT structurally checked rather than passing silently", async () => {
     // No Assets/ tree at all: the check cannot measure, and the delivery
     // report must not read like one that measured and found nothing wrong.

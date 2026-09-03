@@ -24,6 +24,7 @@ import type { CampaignStorage } from "./campaign-storage.js";
 import { detectCampaignIntent } from "./campaign-intake.js";
 import { isTerminalFailureReport } from "../agents/autonomy/verifier-pipeline.js";
 import { assessBuiltAsSpecified } from "../agents/autonomy/built-as-specified.js";
+import { describeDimensionality } from "../agents/autonomy/gdd-dimensionality.js";
 import type { Campaign, CampaignMilestone } from "./types.js";
 import { generateCampaignId } from "./types.js";
 
@@ -1953,7 +1954,12 @@ export class CampaignManager {
   private measureDeliveryStructure(campaign: Campaign): { refusal?: string; lines: string[] } {
     try {
       const report = assessBuiltAsSpecified(this.projectRoot);
-      const lines = [...report.disclosures];
+      // The GDD's own dimensionality against the scenes (audited 2026-09-03):
+      // it asked for "plump, glossy 3D-feel pigs" and nothing ever checked.
+      // DELIVERY is judged against the whole GDD, so the whole text is read.
+      const gddText =
+        campaign.gddText ?? (campaign.gddPath ? readGddFile(this.projectRoot, campaign.gddPath) : undefined);
+      const lines = [...report.disclosures, ...describeDimensionality(gddText, report).lines];
       // No silent caps: when the unmeasured list is trimmed, the trim says so.
       const shown = report.incomplete.slice(0, 5);
       for (const note of shown) lines.push(`NOT measured: ${note}`);
