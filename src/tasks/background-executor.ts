@@ -2026,9 +2026,8 @@ export class BackgroundExecutor {
       // 09:53, each able to write to the project the user was inspecting).
       // A deliberate stop outranks a keep-alive.
       try {
-        const tip = (this.taskManager as { findLatestLineageTask?: (id: string) => { id?: string; status?: string } | null } | undefined)
-          ?.findLatestLineageTask?.(this.lineageRootTaskId(task));
-        if ((tip as { status?: string } | null | undefined)?.status === "cancelled") {
+        const tip = this.lineageTipOf(task);
+        if (tip?.status === "cancelled") {
           this.missionRetries.delete(key);
           getLoggerSafe().info("Mission keep-alive retry abandoned — the lineage was cancelled", {
             taskId: task.id,
@@ -2114,6 +2113,27 @@ export class BackgroundExecutor {
    * prepareTreeForRetry keeps what completed and resets the rest, so a resume
    * costs only the work that failed. decideAutoResume holds the bounds.
    */
+  /** The newest task in this task's retry/replan lineage, if readable. */
+  private lineageTipOf(task: { id: string }): { id?: string; status?: string } | null {
+    try {
+      return (
+        (this.taskManager as {
+          findLatestLineageTask?: (id: string) => { id?: string; status?: string } | null;
+        } | undefined)?.findLatestLineageTask?.(this.lineageRootTaskId(task as Task)) ?? null
+      );
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * True when this task's lineage was cancelled — a deliberate stop that every
+   * automatic continuation must respect (audited 2026-09-03).
+   */
+  private isLineageCancelled(task: { id: string }): boolean {
+    return this.lineageTipOf(task)?.status === "cancelled";
+  }
+
   private autoResumeBlockedGoal(
     task: Task,
     tree: { rootId: string } | undefined,
@@ -2122,6 +2142,19 @@ export class BackgroundExecutor {
   ): void {
     if (!tree?.rootId || !this.taskManager) return;
     const rootId = tree.rootId;
+
+    // A CANCELLED lineage is a deliberate stop and outranks every automatic
+    // continuation. The mission keep-alive learned this on 2026-09-03; the
+    // goal auto-resume did not, so the same delivered campaign's sprint work
+    // came back a fifth time at 10:35 through "Replanning a stalled goal"
+    // instead — three fresh tasks against a game that had already shipped.
+    if (this.isLineageCancelled(task)) {
+      getLoggerSafe().info("Goal auto-resume abandoned — the lineage was cancelled", {
+        taskId: task.id,
+        goalRootId: rootId,
+      });
+      return;
+    }
 
     // An ask_user block is a QUESTION awaiting a person, and neither replay nor
     // replan can answer it — the same prompt re-asks the same question into the

@@ -50,6 +50,28 @@ describe("mission keep-alive vs a cancelled lineage", () => {
     }
   });
 
+  it("the goal auto-resume abandons a cancelled lineage too", () => {
+    // Measured live 2026-09-03 10:35: with the keep-alive guarded, the same
+    // delivered campaign's sprint work came back through "Replanning a
+    // stalled goal instead of replaying it" — three fresh tasks against a
+    // game that had already shipped.
+    const { executor, internals } = harness("cancelled");
+    const replan = vi.fn();
+    (internals.taskManager as { replanGoalRoot?: unknown }).replanGoalRoot = replan;
+    (internals.taskManager as { retryGoalRoot?: unknown }).retryGoalRoot = replan;
+
+    (executor as unknown as {
+      autoResumeBlockedGoal(t: unknown, tree: unknown, n: number, o: readonly string[]): void;
+    }).autoResumeBlockedGoal(
+      { id: "task_1", chatId: "cli-local", prompt: "sprint", origin: "user" },
+      { rootId: "goal_1" },
+      0,
+      ["node failed"],
+    );
+
+    expect(replan).not.toHaveBeenCalled();
+  });
+
   it("still retries when the lineage tip is merely blocked", async () => {
     vi.useFakeTimers();
     try {
