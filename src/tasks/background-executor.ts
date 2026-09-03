@@ -2019,6 +2019,24 @@ export class BackgroundExecutor {
           return t.prompt.slice(0, 160);
         }
       };
+      // A CANCELLED tip means someone stopped this mission on purpose — the
+      // campaign cancels its lineages when it finishes, and reviving them
+      // resubmits sprint work against a game that already shipped (measured
+      // live 2026-09-03: three revivals after delivery, at 09:19, 09:37 and
+      // 09:53, each able to write to the project the user was inspecting).
+      // A deliberate stop outranks a keep-alive.
+      try {
+        const tip = (this.taskManager as { findLatestLineageTask?: (id: string) => { id?: string; status?: string } | null } | undefined)
+          ?.findLatestLineageTask?.(this.lineageRootTaskId(task));
+        if ((tip as { status?: string } | null | undefined)?.status === "cancelled") {
+          this.missionRetries.delete(key);
+          getLoggerSafe().info("Mission keep-alive retry abandoned — the lineage was cancelled", {
+            taskId: task.id,
+            tipId: (tip as { id?: string } | null | undefined)?.id,
+          });
+          return;
+        }
+      } catch { /* status unreadable — fall through to the ordinary guards */ }
       const promptRoot = rootPromptOf(task);
       const alreadyContinued = (this.taskManager?.listTasks?.(task.chatId, 10) ?? []).some(
         (t) =>
