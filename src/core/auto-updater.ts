@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ChannelActivityRegistry } from "./channel-activity-registry.js";
+import { getLoggerSafe } from "../utils/logger.js";
 
 const VERSION_CHECK_TIMEOUT = 30_000;
 const UPDATE_TIMEOUT = 5 * 60 * 1000;
@@ -728,6 +729,9 @@ export class AutoUpdater {
         this.installRoot,
       )
     ).trim();
+    // Empty until the pull lands; a rollback before that has nothing to guard
+    // against and never runs, because the pull is the first thing in the try.
+    let postPullSha = prePullSha;
     const popStash = async (): Promise<void> => {
       if (!hadLocalChanges) return;
       try {
@@ -757,6 +761,44 @@ export class AutoUpdater {
       }
     };
 
+    /**
+     * Roll the checkout back to where the pull found it — but ONLY if nothing
+     * else has committed since.
+     *
+     * Measured live 2026-09-04. The updater pulled at 12:21:27 (1b527dbf →
+     * 235e5f9f), a commit landed on the branch at 12:23:50, and the failed
+     * post-update health check ran `git reset --hard 1b527dbf` at 12:30:39 —
+     * destroying both the pulled version bump and that commit. It survived
+     * only in the reflog, and nothing in the run log said an update had been
+     * attempted at all. A nine-minute window in which any commit to this
+     * checkout is silently discarded.
+     *
+     * So the rollback verifies HEAD is still the SHA the pull left, and when
+     * it is not it REFUSES and says so. A stale checkout the operator can fix
+     * is recoverable; a discarded commit is not.
+     */
+    const rollbackTo = async (postPullSha: string, why: string): Promise<void> => {
+      const headNow = (
+        await this.runCommand("git", ["rev-parse", "HEAD"], VERSION_CHECK_TIMEOUT, this.installRoot)
+      ).trim();
+      if (headNow !== postPullSha) {
+        const message =
+          `Update rollback REFUSED (${why}): the branch moved to ${headNow.slice(0, 8)} after the pull ` +
+          `left it at ${postPullSha.slice(0, 8)}, so resetting to ${prePullSha.slice(0, 8)} would discard ` +
+          "commits this updater did not make. The checkout is left as it is — resolve it by hand.";
+        getLoggerSafe().error("Auto-update rollback refused — the branch moved after the pull", {
+          prePullSha,
+          postPullSha,
+          headNow,
+          reason: why,
+        });
+        if (this.notifyFn) this.notifyFn(message);
+        return;
+      }
+      getLoggerSafe().warn("Auto-update rolling back", { to: prePullSha, reason: why });
+      await this.runCommand("git", ["reset", "--hard", prePullSha], VERSION_CHECK_TIMEOUT, this.installRoot);
+    };
+
     try {
       await this.runCommand(
         "git",
@@ -764,16 +806,15 @@ export class AutoUpdater {
         UPDATE_TIMEOUT,
         this.installRoot,
       );
+      postPullSha = (
+        await this.runCommand("git", ["rev-parse", "HEAD"], VERSION_CHECK_TIMEOUT, this.installRoot)
+      ).trim();
+      getLoggerSafe().info("Auto-update pulled", { remote, branch, from: prePullSha, to: postPullSha });
       await this.installProjectDependencies();
       await this.runCommand("npm", ["run", "build"], UPDATE_TIMEOUT, this.installRoot);
     } catch (buildErr) {
       try {
-        await this.runCommand(
-          "git",
-          ["reset", "--hard", prePullSha],
-          VERSION_CHECK_TIMEOUT,
-          this.installRoot,
-        );
+        await rollbackTo(postPullSha, "the build failed");
         // Restore old dependencies after source rollback
         await this.installProjectDependencies();
       } catch {
@@ -802,12 +843,7 @@ export class AutoUpdater {
         );
       }
       try {
-        await this.runCommand(
-          "git",
-          ["reset", "--hard", prePullSha],
-          VERSION_CHECK_TIMEOUT,
-          this.installRoot,
-        );
+        await rollbackTo(postPullSha, "the post-update health check failed");
         await this.installProjectDependencies();
         await this.runCommand("npm", ["run", "build"], UPDATE_TIMEOUT, this.installRoot);
       } catch {
