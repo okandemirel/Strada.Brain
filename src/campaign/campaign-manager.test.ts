@@ -469,6 +469,36 @@ describe("CampaignManager", () => {
     expect(tasks.cancelled).toContain(retryId);
   });
 
+  it("names the structural problem while the test gate is still bouncing", async () => {
+    // Measured live 2026-09-04 04:05: bounced for a missing verdict, the
+    // sprint never learned its scenes render nothing — and ADDED two more
+    // CreatePrimitive scripts while it worked.
+    mkdirSync(join(projectRoot, "ProjectSettings"), { recursive: true });
+    mkdirSync(join(projectRoot, "Assets", "Scenes"), { recursive: true });
+    mkdirSync(join(projectRoot, "Assets", "Prefabs"), { recursive: true });
+    writeFileSync(join(projectRoot, "Assets", "Scenes", "Game.unity"), "GameObject:\n  m_Name: Root");
+    writeFileSync(join(projectRoot, "Assets", "Prefabs", "Ball.prefab"), "MeshRenderer:\n  m_Materials: []");
+    writeFileSync(
+      join(projectRoot, "ProjectSettings", "EditorBuildSettings.asset"),
+      "EditorBuildSettings:\n  m_Scenes:\n  - enabled: 1\n    path: Assets/Scenes/Game.unity",
+    );
+
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+
+    // Final sprint completes with NO test verdict → the test gate bounces.
+    tasks.emit("task:completed", "task_3", "shipping it");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+
+    const prompt = tasks.submitted[3]!.prompt;
+    expect(prompt).toContain("DELIVERY VERIFICATION REQUIRED");
+    expect(prompt).toContain("ALREADY MEASURED");
+  });
+
   it("refuses delivery on a FILTERED green — the whole suite must be seen", async () => {
     // Audited 2026-09-03: the delivered PixelFlow build's filtered runs were
     // green while its one unfiltered run reported 6 of 173 failing, including

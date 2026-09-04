@@ -1687,7 +1687,17 @@ export class CampaignManager {
           // report". The verb has to be unmistakable.
           "DO NOT AUDIT. An inventory of modules, prefabs, scenes or tests is not work and will be " +
           "rejected: run the tools, change the code, and let the suite's own output be your report.";
-        if (!milestone.prompt.includes("DELIVERY VERIFICATION REQUIRED")) milestone.prompt += directive;
+        // SAY EVERYTHING THAT IS WRONG, NOT ONE THING AT A TIME. The
+        // structural check runs only after this gate passes, so a sprint stuck
+        // here never learns its scenes render nothing — measured live
+        // 2026-09-04 04:05: while bounced for a missing verdict, the sprint
+        // ADDED two more CreatePrimitive scripts (5 → 7), moving away from the
+        // requirement it had not been told about.
+        const structureNow = this.measureDeliveryStructure(campaign);
+        const combined = structureNow.refusal
+          ? `${directive}\n\nALSO, ALREADY MEASURED: ${structureNow.refusal}`
+          : directive;
+        if (!milestone.prompt.includes("DELIVERY VERIFICATION REQUIRED")) milestone.prompt += combined;
         this.persist(campaign);
         getLoggerSafe().warn("Delivery blocked: final milestone has no observed test verdict", {
           id: campaign.id,
