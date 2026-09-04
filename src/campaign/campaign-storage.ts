@@ -285,6 +285,20 @@ export class CampaignStorage {
     return row !== undefined;
   }
 
+  /**
+   * Whether the database is still usable.
+   *
+   * A deferred callback that outlives the storage must be able to ASK rather
+   * than throw: audited 2026-09-04, two `setTimeout(…, 0)` resubmit hops in
+   * CampaignManager called `get()` after close and raised an uncaught
+   * "The database connection is not open" — an unhandled rejection in
+   * production and, in the test run, two unhandled errors beside 565 passing
+   * tests, which vitest itself warns may be masking false positives.
+   */
+  isOpen(): boolean {
+    return this.db.open;
+  }
+
   close(): void {
     this.db.close();
   }

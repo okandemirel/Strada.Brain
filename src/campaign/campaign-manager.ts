@@ -492,6 +492,33 @@ export class CampaignManager {
     return trimmed.length > 0 ? `${outage}.\nWhat the run was doing when it hit: ${trimmed}` : outage;
   }
 
+  /**
+   * Re-submit the campaign's current milestone on the next tick.
+   *
+   * The hop exists so the caller's own settle finishes first. It must survive
+   * the process outliving it: audited 2026-09-04, this was a bare
+   * `setTimeout(…, 0)` with no unref, no guard and no catch, so a storage
+   * closed between the schedule and the fire raised an uncaught "The database
+   * connection is not open" — seen as two unhandled errors beside 565 passing
+   * campaign tests, which vitest warns can mask false positives.
+   */
+  private resubmitSoon(campaignId: string): void {
+    const timer = setTimeout(() => {
+      try {
+        if (!this.storage.isOpen()) return;
+        const fresh = this.storage.get(campaignId);
+        if (!fresh || fresh.state !== "executing") return;
+        this.submitCurrentMilestone(fresh);
+      } catch (err) {
+        getLoggerSafe().warn("Deferred milestone resubmit failed", {
+          id: campaignId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }, 0);
+    timer.unref?.();
+  }
+
   private scheduleAutoRevive(campaignId: string, delayMs: number): void {
     const timer = setTimeout(() => {
       void (async () => {
@@ -1845,11 +1872,7 @@ export class CampaignManager {
             `✅ ${milestone.title} — green.${commitNote}\n⚠️ Coverage audit against the GDD found gaps — appending **${remediation.title}** before delivery.`,
           );
           const id = campaign.id;
-          setTimeout(() => {
-            const fresh = this.storage.get(id);
-            if (!fresh || fresh.state !== "executing") return;
-            this.submitCurrentMilestone(fresh);
-          }, 0);
+          this.resubmitSoon(id);
           return;
         }
         campaign.state = "done";
@@ -1876,11 +1899,7 @@ export class CampaignManager {
       // Defer out of the event handler: submit() fires task:created and the
       // next sprint must not re-enter this handler mid-emit.
       const id = campaign.id;
-      setTimeout(() => {
-        const fresh = this.storage.get(id);
-        if (!fresh || fresh.state !== "executing") return;
-        this.submitCurrentMilestone(fresh);
-      }, 0);
+      this.resubmitSoon(id);
       return;
     }
 
