@@ -27,6 +27,17 @@ export interface ProviderHealthEntry {
   lastError: string;
   /** Timestamp when the provider will be reconsidered (0 = immediately) */
   cooldownUntil: number;
+  /**
+   * What this bench was earned AGAINST: the seat's endpoint and model.
+   *
+   * Health is keyed by seat NAME, and a seat can be re-pointed. Measured live
+   * 2026-09-04 18:51: the `opencode` seat took a 17-day GoUsageLimitError on
+   * the go endpoint; it was then re-pointed at the zen endpoint with a free
+   * model that answers 200, and it stayed benched for 6.6 days on a quota
+   * belonging to an endpoint it no longer calls. Undefined on rows written
+   * before this field existed — those are left alone rather than cleared.
+   */
+  identity?: string;
 }
 
 export interface ProviderHealthConfig {
@@ -176,7 +187,11 @@ export class ProviderHealthRegistry {
    */
   private setEntry(normalized: string, entry: ProviderHealthEntry): void {
     const previous = this.entries.get(normalized);
-    this.entries.set(normalized, entry);
+    // Carry the seat identity forward: every record* path builds a fresh entry
+    // literal, so without this the boot-time stamp would be erased by the next
+    // failure and a re-pointed seat could never be told from an unchanged one.
+    const identity = entry.identity ?? previous?.identity;
+    this.entries.set(normalized, identity === undefined ? entry : { ...entry, identity });
     if (
       previous?.status !== entry.status ||
       previous?.cooldownUntil !== entry.cooldownUntil
@@ -444,6 +459,36 @@ export class ProviderHealthRegistry {
   }
 
   /** Remove all state for a provider (health, episodes, thinking). */
+  /**
+   * Forget benches that were earned by a DIFFERENT endpoint or model.
+   *
+   * Called once at boot with what each seat is actually configured to call
+   * now. A seat whose identity is unchanged keeps its cooldown — a real quota
+   * block must survive a restart. A seat that has been re-pointed starts
+   * clean, because nothing it is about to do was measured. A row with no
+   * recorded identity is stamped, never cleared: we cannot tell whether it
+   * moved, and dropping a genuine quota bench would re-dial a walled account.
+   *
+   * Audited 2026-09-04 (see ProviderHealthEntry.identity).
+   */
+  reconcileSeatIdentities(identities: ReadonlyMap<string, string>): string[] {
+    const cleared: string[] = [];
+    for (const [rawName, identity] of identities) {
+      const normalized = this.norm(rawName);
+      const entry = this.entries.get(normalized);
+      if (!entry) continue;
+      if (entry.identity === undefined) {
+        this.entries.set(normalized, { ...entry, identity });
+        continue;
+      }
+      if (entry.identity === identity) continue;
+      this.clearProviderState(normalized);
+      cleared.push(normalized);
+    }
+    this.persistNow();
+    return cleared;
+  }
+
   clearProviderState(providerName: string): void {
     const normalized = this.norm(providerName);
     this.entries.delete(normalized);

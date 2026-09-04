@@ -33,7 +33,13 @@ function canonicalProviderNameSet(): Set<string> {
 }
 
 function normalizeProviderKey(value: string): string {
-  return value.trim().toLowerCase();
+  // A preset without a label, or a caller with a blank name, must not crash
+  // the lookup: canonicalizeProviderName walks EVERY preset looking for a
+  // label match, so one label-less entry took down every unknown-name
+  // resolution (measured 2026-09-04, reached from a boot-time seat-identity
+  // reconcile). Unresolvable input falls through to the caller's own
+  // lowercase fallback, which is what an unknown name already gets.
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
 }
 
 function simplifyProviderKey(value: string): string {
@@ -87,7 +93,7 @@ export function canonicalizeProviderName(value: string | null | undefined): stri
   }
 
   for (const [canonicalName, preset] of Object.entries(PROVIDER_PRESETS ?? {})) {
-    if (simplifyProviderKey(preset.label) === simplified) {
+    if (preset?.label && simplifyProviderKey(preset.label) === simplified) {
       return canonicalName;
     }
   }

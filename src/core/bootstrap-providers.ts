@@ -33,6 +33,7 @@ import {
 import { AppError } from "../common/errors.js";
 import { markProviderFlatFee } from "../budget/cost-model.js";
 import { setLiveChainMemberNames } from "../tasks/background-executor.js";
+import { ProviderHealthRegistry } from "../agents/providers/provider-health.js";
 import type { EmbeddingResolutionResult, ProviderInitResult } from "./bootstrap-stages.js";
 import type { IAIProvider } from "../agents/providers/provider.interface.js";
 import type * as winston from "winston";
@@ -285,6 +286,31 @@ export async function initializeAIProvider(
   // provider, the exact incident provider-outage.ts documents). Audited
   // 2026-09-02.
   setLiveChainMemberNames(defaultProviderOrder);
+
+  // A bench belongs to the endpoint that earned it. Measured live 2026-09-04
+  // 18:51: the `opencode` seat took a 17-day GoUsageLimitError on the go
+  // endpoint, was re-pointed at the zen endpoint with a free model that
+  // answers 200, and stayed benched 6.6 days on a quota for an endpoint it no
+  // longer calls — the operator changed the configuration and the system kept
+  // refusing a provider that now works.
+  {
+    const identities = new Map<string, string>();
+    for (const name of defaultProviderOrder) {
+      // A chain can carry a blank entry (auto-append path); a nameless seat
+      // has no identity to reconcile and must not throw the whole boot.
+      if (typeof name !== "string" || name.trim() === "") continue;
+      identities.set(
+        name,
+        `${baseUrlOverrides[name] ?? "default"}|${config.providerModels?.[name] ?? "default"}`,
+      );
+    }
+    const cleared = ProviderHealthRegistry.getInstance().reconcileSeatIdentities(identities);
+    if (cleared.length > 0) {
+      logger.info("Cleared provider health earned by a different endpoint/model", {
+        providers: cleared,
+      });
+    }
+  }
 
   // Run health check (non-blocking — warn only)
   if (defaultProvider.healthCheck) {
