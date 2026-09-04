@@ -52,6 +52,19 @@ const DEFAULT_INTERVAL_MS = 15 * 60_000;
 const POST_FIX_QUIET_MS = 10 * 60_000;
 /** Fix attempts per distinct error fingerprint before escalating to the user. */
 const MAX_FIX_ATTEMPTS_PER_FINGERPRINT = 3;
+/**
+ * Consecutive fix attempts that fail to BEAT the fewest errors seen this
+ * episode, before escalating.
+ *
+ * Measured live 2026-09-04 22:00–22:27, on the user's project:
+ *   25 → 40 → 40 → 37 → 40 → 31 → 10 → 22 → 37 → 37
+ * Ten rounds, no escalation. The streak counter keys on a hash of the error
+ * TEXT, so every round that changed which errors exist reset it to zero — and
+ * a thrashing repair changes the text every round by definition. The guard
+ * fired only on a byte-identical error list, which is the one case a
+ * thrashing repair never produces.
+ */
+const MAX_ATTEMPTS_WITHOUT_PROGRESS = 3;
 /** Back off this long after escalating; a changed error list resets earlier. */
 const ESCALATION_BACKOFF_MS = 6 * 60 * 60_000;
 /**
@@ -66,6 +79,24 @@ const FIX_TASK_PROMPT = (detail: string, projectRoot: string) =>
   `Fix the root cause directly on this tree (you are NOT in a workspace lease — edits land on the real ` +
   `project, which is exactly what is needed here; deletions are allowed and often the point — e.g. a ` +
   `duplicate type left by a salvage merge). Then verify with unity_verify_change and report the verdict.`;
+
+/**
+ * How many errors the verifier counted, or undefined when it named none.
+ *
+ * Reads the JSON field first and the prose second, the same two shapes
+ * stage-runtime already reconciles. Undefined is NOT zero: a verdict that
+ * names no count says nothing about whether the repair is progressing, so the
+ * caller falls back to the fingerprint rule rather than inventing progress.
+ */
+export function countCompileErrors(detail: string): number | undefined {
+  if (typeof detail !== "string" || detail.length === 0) return undefined;
+  const json = /"compileErrors"\s*:\s*(\d+)/i.exec(detail)?.[1];
+  const prose = /(\d+)\s*(?:error\(s\)|errors?\b)/i.exec(detail)?.[1];
+  const raw = json ?? prose;
+  if (raw === undefined) return undefined;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : undefined;
+}
 
 export class RealTreeGuardian {
   private readonly taskManager: TaskManager;
@@ -82,6 +113,10 @@ export class RealTreeGuardian {
   /** Fingerprint of the error list the current attempt streak is fixing. */
   private redFingerprint: string | undefined;
   private fixAttempts = 0;
+  /** Fewest errors seen since the tree last went green; Infinity = none yet. */
+  private bestErrorCount = Number.POSITIVE_INFINITY;
+  /** Consecutive attempts that did not beat bestErrorCount. */
+  private attemptsWithoutProgress = 0;
   private escalated = false;
   /** Consecutive ticks whose verifier could not run (no verdict either way). */
   private blindStreak = 0;
@@ -156,6 +191,8 @@ export class RealTreeGuardian {
       if (verdict.ok) {
         this.redFingerprint = undefined;
         this.fixAttempts = 0;
+        this.bestErrorCount = Number.POSITIVE_INFINITY;
+        this.attemptsWithoutProgress = 0;
         this.escalated = false;
         return;
       }
@@ -163,6 +200,42 @@ export class RealTreeGuardian {
       // Same error list as the failed attempts before? Count the streak and
       // stop feeding fix tasks that keep not fixing it — escalate instead.
       const fingerprint = createHash("sha256").update(verdict.detail).digest("hex").slice(0, 16);
+
+      // ESCALATE ON LACK OF PROGRESS, not on identity of the error text. A
+      // repair that keeps changing WHICH errors exist resets a text-keyed
+      // streak every round and can loop on the user's project forever — the
+      // measured 25 → 40 → 37 → 31 → 10 → 22 → 37 sequence never repeated a
+      // list, so the fingerprint guard never fired.
+      const errors = countCompileErrors(verdict.detail);
+      if (errors !== undefined) {
+        if (errors < this.bestErrorCount) {
+          this.bestErrorCount = errors;
+          this.attemptsWithoutProgress = 0;
+        } else {
+          this.attemptsWithoutProgress += 1;
+        }
+        if (this.attemptsWithoutProgress >= MAX_ATTEMPTS_WITHOUT_PROGRESS) {
+          if (!this.escalated) {
+            this.escalated = true;
+            getLoggerSafe().warn("Real-tree guardian escalating: autonomous repair is not converging", {
+              errors,
+              best: this.bestErrorCount,
+              attemptsWithoutProgress: this.attemptsWithoutProgress,
+            });
+            if (this.messenger) {
+              await this.messenger(
+                this.chatId,
+                `❌ Autonomous repair is NOT converging — ${this.attemptsWithoutProgress} attempts in a row failed to get below ` +
+                  `${this.bestErrorCount} error(s), and the tree is at ${errors}. Stopping so a person can look.\n` +
+                  `\`\`\`\n${verdict.detail.slice(0, 500)}\n\`\`\``,
+              ).catch(() => undefined);
+            }
+          }
+          this.nextVerifyAt = this.now() + ESCALATION_BACKOFF_MS;
+          return;
+        }
+      }
+
       if (fingerprint === this.redFingerprint) {
         if (this.fixAttempts >= MAX_FIX_ATTEMPTS_PER_FINGERPRINT) {
           if (!this.escalated) {

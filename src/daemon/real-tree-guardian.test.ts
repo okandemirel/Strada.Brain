@@ -150,3 +150,61 @@ describe("RealTreeGuardian", () => {
     expect(submitted).toHaveLength(2);
   });
 });
+
+describe("a repair that is not converging", () => {
+  /**
+   * Measured live 2026-09-04 22:00–22:27 on the user's project:
+   *   25 → 40 → 40 → 37 → 40 → 31 → 10 → 22 → 37 → 37
+   * Ten rounds, no escalation. The streak keyed on a hash of the error TEXT,
+   * so every round that changed which errors exist reset it — and a thrashing
+   * repair changes the text every round by definition.
+   */
+  const runSequence = async (counts: number[]): Promise<{ submitted: number; messages: string[] }> => {
+    const { manager, submitted } = makeTaskManager();
+    const messages: string[] = [];
+    let i = 0;
+    const guardian = new RealTreeGuardian({
+      taskManager: manager as unknown as TaskManager,
+      // A distinct error list each round, exactly like the live sequence.
+      verify: vi.fn(async () => ({
+        ok: false,
+        ran: true,
+        detail: `Headless compile failed with ${counts[Math.min(i++, counts.length - 1)]} error(s). CS${1000 + i}`,
+      })),
+      projectRoot: "/p",
+      messenger: async (_c, t) => { messages.push(t); },
+      now: (() => { let n = 0; return () => Date.now() + (n++) * 60 * 60_000; })(), // past every backoff
+    });
+    for (let n = 0; n < counts.length; n++) await guardian.tick();
+    return { submitted: submitted.length, messages };
+  };
+
+  it("escalates instead of looping when the error count never improves", async () => {
+    const { messages } = await runSequence([25, 40, 40, 37, 40, 31]);
+    const escalation = messages.find((m) => m.includes("NOT converging"));
+    expect(escalation).toBeDefined();
+    expect(escalation).toContain("25 error(s)");
+  });
+
+  it("keeps working while each attempt beats the last", async () => {
+    // Real progress must never be mistaken for thrashing.
+    const { messages } = await runSequence([40, 31, 22, 10, 4]);
+    expect(messages.find((m) => m.includes("NOT converging"))).toBeUndefined();
+  });
+
+  it("a verdict naming no count leaves the old fingerprint rule in charge", async () => {
+    const { manager } = makeTaskManager();
+    const messages: string[] = [];
+    const guardian = new RealTreeGuardian({
+      taskManager: manager as unknown as TaskManager,
+      verify: vi.fn(async () => ({ ok: false, ran: true, detail: "error CS0101: duplicate type" })),
+      projectRoot: "/p",
+      messenger: async (_c, t) => { messages.push(t); },
+      now: (() => { let n = 0; return () => Date.now() + (n++) * 60 * 60_000; })(),
+    });
+    for (let i = 0; i < 5; i++) await guardian.tick();
+    // Same text every round: the fingerprint guard is the one that fires.
+    expect(messages.find((m) => m.includes("same errors persist"))).toBeDefined();
+    expect(messages.find((m) => m.includes("NOT converging"))).toBeUndefined();
+  });
+});
