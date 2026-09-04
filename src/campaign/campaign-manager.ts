@@ -113,6 +113,30 @@ Write a complete, buildable GDD and save it as a markdown file under docs/ in th
 
 Do not ask questions — make strong, coherent choices and write them down. End your result with the project-relative path of the file you wrote.`;
 
+/**
+ * Did the provider layer stop this run, rather than the sprint failing?
+ *
+ * TWO signals, deliberately weighted differently:
+ *
+ *  - `blocked:provider_unavailable` is the EXECUTOR's own classification, so
+ *    it stands on its own. Measured live 2026-09-04 19:36: mcov1 settled with
+ *    exactly that marker while the zen endpoint answered 503 in bursts. The
+ *    registry's five-minute overload cooldown had lapsed between the failure
+ *    and the settle, so `coolingMs` read 0, the exemption did not fire, and
+ *    the sprint was FAILED after "2 attempts" it had spent on an endpoint that
+ *    never answered.
+ *
+ *  - Free text merely MENTIONING a provider still needs the registry to agree.
+ *    Arming on wording alone once made a "quota" message replan every two
+ *    minutes against a chain that read available (review of 6d520d19), and
+ *    planning has no attempt budget to stop it.
+ */
+export function isOutageCausedSettle(output: string, coolingMs: number): boolean {
+  if (typeof output !== "string" || output.length === 0) return false;
+  if (/blocked:provider_unavailable/i.test(output)) return true;
+  return /provider|cooldown|quota|rate.?limit/i.test(output) && coolingMs > 0;
+}
+
 export class CampaignManager {
   private readonly storage: CampaignStorage;
   private readonly planner: CampaignPlanner;
@@ -1935,8 +1959,7 @@ export class CampaignManager {
     // `blocked:provider_unavailable`, and that branch charged it (measured
     // 2026-09-02 02:36: m7 "blocked after 2 attempts" while all four
     // accounts were on quota walls).
-    const outageCaused =
-      /provider|cooldown|quota|rate.?limit/i.test(output) && allProvidersCoolingDownMs() > 0;
+    const outageCaused = isOutageCausedSettle(output, allProvidersCoolingDownMs());
     // A graceful shutdown is the OPERATOR stopping the process, not the sprint
     // failing: the executor aborts in-flight runs with "shutting down" and the
     // work done so far is kept. Charging it ended a campaign on a routine
