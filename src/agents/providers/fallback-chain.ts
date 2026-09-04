@@ -14,7 +14,7 @@ import { getLogger } from "../../utils/logger.js";
 import { ProviderHealthRegistry } from "./provider-health.js";
 import { sanitizeSecrets } from "../../security/secret-sanitizer.js";
 import { QUOTA_LIMIT_RE } from "../orchestrator-runtime-utils.js";
-import { QuotaExhaustedError, QUOTA_EXHAUSTED_PHRASE, sleep } from "../../common/fetch-with-retry.js";
+import { QuotaExhaustedError, QUOTA_EXHAUSTED_PHRASE, sleep, parseResetDurationMs } from "../../common/fetch-with-retry.js";
 import { CODEX_MODEL_UNSUPPORTED_RE } from "./codex-model-rejection.js";
 
 /**
@@ -458,7 +458,12 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
       // auto-recovers once the cooldown expires.
       health.recordQuotaHardStop(
         provider.name,
-        quotaHardStop?.retryAfterMs ?? Number.NaN,
+        // The structured error first; when it has been flattened to a string
+        // on the way here, read the reset back out of the sentence it wrote.
+        // Measured live 2026-09-04 17:48: OpenAI said "(resets in ~1h)" and
+        // was benched for the 8h default, parking the campaign seven hours
+        // longer than the provider had asked for.
+        quotaHardStop?.retryAfterMs ?? parseResetDurationMs(errorMsg) ?? Number.NaN,
         errorMsg,
       );
     } else if (/\b403\b/.test(errorMsg) && QUOTA_LIMIT_RE.test(errorMsg)) {

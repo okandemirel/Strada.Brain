@@ -3,7 +3,7 @@ import { MUTATION_TOOLS, isVerificationToolName } from "./autonomy/constants.js"
 import { isTerminalFailureReport } from "./autonomy/index.js";
 import type { ProviderResponse } from "./providers/provider.interface.js";
 import { redactSensitiveText, sanitizePromptInjection } from "./orchestrator-text-utils.js";
-import { QUOTA_EXHAUSTED_PHRASE } from "../common/fetch-with-retry.js";
+import { QUOTA_EXHAUSTED_PHRASE, parseResetDurationMs } from "../common/fetch-with-retry.js";
 
 /**
  * Cross-boundary recogniser for a HARD QUOTA STOP surfaced on a NON-chain (direct) provider
@@ -329,7 +329,13 @@ export function recordProviderHealthFailure(
   // default cooldown (measured on disk: delta exactly 28,800,000ms) and
   // rejoined the pool three times a day for the whole block.
   if (registry.recordQuotaHardStop && QUOTA_HARD_STOP_RE.test(errorMsg)) {
-    registry.recordQuotaHardStop(providerName, options?.retryAfterMs ?? Number.NaN, errorMsg);
+    registry.recordQuotaHardStop(
+      providerName,
+      // Same reconciliation as the chain's: structured value first, then the
+      // reset the message itself states, then the registry's default.
+      options?.retryAfterMs ?? parseResetDurationMs(errorMsg) ?? Number.NaN,
+      errorMsg,
+    );
   } else if (CREDENTIAL_REJECTION_RE.test(errorMsg) && registry.recordCredentialRejected) {
     // Mirrors fallback-chain's isCredentialRejection: a 401/invalid-key must
     // land on the session bench, not the ≤10min generic escalating one

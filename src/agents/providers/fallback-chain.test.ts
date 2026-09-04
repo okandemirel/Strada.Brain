@@ -948,9 +948,13 @@ describe("FallbackChainProvider", () => {
 
       const result = await chain.chat("sys", [], []);
       expect(result.text).toBe("from-b");
-      // NaN retryAfterMs (no structured field on a plain Error) → registry falls back to
-      // the default long quota cooldown.
-      expect(recordHardStop).toHaveBeenCalledWith("opencode", Number.NaN, expect.any(String));
+      // The plain Error carries no structured field, but the SENTENCE states the
+      // reset — so the bench is sized from "~3d" rather than from the registry's
+      // default. Measured live 2026-09-04 17:48: OpenAI announced "(resets in
+      // ~1h)" and was benched for the 8h default, parking the campaign seven
+      // hours longer than the provider had asked for. Asserting NaN here is what
+      // let that stand.
+      expect(recordHardStop).toHaveBeenCalledWith("opencode", 3 * 86_400_000, expect.any(String));
       expect(health.isAvailable("opencode")).toBe(false);
     });
   });

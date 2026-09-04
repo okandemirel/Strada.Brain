@@ -259,6 +259,32 @@ export function formatResetDuration(ms: number): string {
 }
 
 /**
+ * Read back a reset that formatResetDuration wrote — "(resets in ~1h)".
+ *
+ * The pair exists because only the WRITE direction did. Measured live
+ * 2026-09-04 17:48: OpenAI announced "usage quota exhausted (resets in ~1h)"
+ * and was benched for EIGHT hours, because the structured QuotaExhaustedError
+ * had been flattened to a string somewhere on the way to the health registry,
+ * `retryAfterMs` arrived NaN, and the registry fell back to its 8h default.
+ * The sentence still carried the number; nothing could read it.
+ *
+ * Rounded values only, so this is an approximation of an approximation — it
+ * returns undefined rather than guess when the text holds no such clause, and
+ * the caller keeps its default. Never used to SHORTEN a cooldown already set;
+ * the registry takes the later of the two.
+ */
+export function parseResetDurationMs(text: string): number | undefined {
+  if (typeof text !== "string" || text.length === 0) return undefined;
+  const match = /\(resets in ~(\d+)([dhms])\)/i.exec(text);
+  if (!match) return undefined;
+  const value = Number(match[1]);
+  if (!Number.isFinite(value) || value <= 0) return undefined;
+  const unit = (match[2] ?? "").toLowerCase();
+  const seconds = unit === "d" ? 86_400 : unit === "h" ? 3_600 : unit === "m" ? 60 : 1;
+  return value * seconds * 1000;
+}
+
+/**
  * Extract a concise human reason from a (sanitized, truncated) 429 body when it matches a
  * quota pattern. Returns undefined when the body is not quota-shaped (so only the generic
  * reason is used). The body is already secret-sanitized + truncated by the caller.
