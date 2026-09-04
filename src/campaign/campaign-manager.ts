@@ -13,7 +13,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { join, relative, sep } from "node:path";
 import { getLoggerSafe } from "../utils/logger.js";
-import { allProvidersCoolingDownMs } from "../agents/providers/provider-outage.js";
+import { allProvidersCoolingDownMs, describeProviderOutage } from "../agents/providers/provider-outage.js";
 import type { IncomingMessage } from "../channels/channel-messages.interface.js";
 import type { TaskManager } from "../tasks/task-manager.js";
 import type { TaskId } from "../tasks/types.js";
@@ -470,6 +470,28 @@ export class CampaignManager {
    * 12:27 quota walls), each costing hours of an operator's attention for
    * what is a scheduled, known-duration wait.
    */
+  /**
+   * The Cause line of an outage pause.
+   *
+   * The OUTAGE is the cause. What the run happened to be saying when the wall
+   * arrived is context, and labelling it "Cause:" made a parked campaign read
+   * as a failed one — measured live 2026-09-04:
+   *
+   *   ⏸️ Campaign paused by a provider outage at Sprint 7.
+   *   Cause: Sprint 7 blocked after 2 attempts: Completed: 1. **Varsayım**: …
+   *
+   * The sprint had not failed and its attempts had not been spent on work:
+   * one account's monthly quota was out for 17 days and the other's for ~4h,
+   * and no line said so. When the outage cannot be described (an unreadable
+   * registry), the original detail stands rather than an empty accusation.
+   */
+  private outageCause(detail: string): string {
+    const outage = describeProviderOutage();
+    if (outage.length === 0) return detail;
+    const trimmed = detail.trim();
+    return trimmed.length > 0 ? `${outage}.\nWhat the run was doing when it hit: ${trimmed}` : outage;
+  }
+
   private scheduleAutoRevive(campaignId: string, delayMs: number): void {
     const timer = setTimeout(() => {
       void (async () => {
@@ -870,7 +892,7 @@ export class CampaignManager {
         await this.tell(
           campaign,
           `⏸️ Campaign paused by a provider outage before the milestone ladder could be planned.\n` +
-            `Cause: ${campaign.lastError}\n` +
+            `Cause: ${this.outageCause(campaign.lastError ?? "")}\n` +
             `Self-revival armed for ${new Date(campaign.autoReviveAt).toLocaleTimeString()} (when the provider chain recovers). Reply **kampanya devam** to revive sooner.`,
         );
         return;
@@ -1219,7 +1241,7 @@ export class CampaignManager {
       await this.tell(
         campaign,
         `⏸️ Campaign paused by a provider outage while drafting the GDD.\n` +
-          `Cause: ${campaign.lastError}\n` +
+          `Cause: ${this.outageCause(campaign.lastError ?? "")}\n` +
           `Self-revival armed for ${new Date(campaign.autoReviveAt).toLocaleTimeString()} (when the provider chain recovers). Reply **kampanya devam** to revive sooner.`,
       );
       return;
@@ -1958,7 +1980,7 @@ export class CampaignManager {
       await this.tell(
         campaign,
         `⏸️ Campaign paused by a provider outage at **${milestone.title}**.\n` +
-          `Cause: ${campaign.lastError}\n` +
+          `Cause: ${this.outageCause(campaign.lastError ?? "")}\n` +
           `Self-revival armed for ${new Date(campaign.autoReviveAt).toLocaleTimeString()} (when the provider chain recovers). Reply **kampanya devam** to revive sooner.`,
       );
       return;

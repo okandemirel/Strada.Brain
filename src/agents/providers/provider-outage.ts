@@ -88,3 +88,42 @@ export function allProvidersCoolingDownMs(): number {
     return 0;
   }
 }
+
+/** How many providers a one-line outage description names before counting. */
+const OUTAGE_NAMED_LIMIT = 4;
+
+/**
+ * The outage, in a clause that names its CAUSE.
+ *
+ * Audited 2026-09-04: the campaign parked itself with
+ * "⏸️ paused by a provider outage. Cause: Sprint 7 blocked after 2 attempts:
+ * Completed: 1. **Varsayım**: …" — the first line said outage and the cause
+ * line quoted 200 characters of the agent's own prose, so the sprint read as
+ * having failed on its merits. The real cause was one account's monthly quota
+ * (17 days) and the other's ~4h wall, and nothing said so.
+ *
+ * Returns "" when nothing is measurable, so a caller can fall back rather
+ * than print an empty accusation.
+ */
+export function describeProviderOutage(now = Date.now()): string {
+  try {
+    const entries = ProviderHealthRegistry.getInstance().getAllEntries();
+    const members = [...entries].filter(([name]) => isCurrentChainMemberName(name));
+    if (members.length === 0) return "";
+    const described = members
+      .map(([name, entry]) => {
+        const leftMs = Math.max(0, entry.cooldownUntil - now);
+        if (leftMs === 0) return `${name} ${entry.status}`;
+        const hours = leftMs / 3_600_000;
+        const left = hours >= 1 ? `${hours.toFixed(1)}h` : `${Math.round(leftMs / 60_000)}min`;
+        return `${name} ${entry.status} for ${left}`;
+      })
+      .sort();
+    const shown = described.slice(0, OUTAGE_NAMED_LIMIT);
+    // No silent cap: a trimmed list says it was trimmed.
+    const tail = described.length > shown.length ? `, +${described.length - shown.length} more` : "";
+    return `every configured provider is unavailable — ${shown.join("; ")}${tail}`;
+  } catch {
+    return "";
+  }
+}
