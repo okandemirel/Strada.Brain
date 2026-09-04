@@ -103,6 +103,29 @@ describe("the final sprint is told what the tree renders, on every submit", () =
       attachStructureMeasurement(c: unknown, m: unknown): void;
     }).attachStructureMeasurement({ id: "c1", gddText: "" }, milestone);
     expect(milestone.prompt).toContain("measurement trimmed here");
+    // On a line boundary, not mid-word: the first live render ended
+    // "- Camera projection in the shi", which reads as corrupted, not trimmed.
+    const kept = milestone.prompt.split("\n- (measurement trimmed here")[0]!;
+    expect(kept.endsWith("shi")).toBe(false);
+  });
+
+  it("keeps whole lines when it trims a multi-line measurement", () => {
+    const manager = Object.create(CampaignManager.prototype) as CampaignManager;
+    (manager as unknown as { projectRoot: string }).projectRoot = emptyGameProject();
+    const line = (n: number): string => `line ${n}: ${"x".repeat(300)}`;
+    (manager as unknown as { measureDeliveryStructure(): unknown }).measureDeliveryStructure = () => ({
+      refusal: "the scenes render NOTHING",
+      lines: Array.from({ length: 20 }, (_, i) => line(i)),
+    });
+    const milestone = { prompt: "Sprint 7." } as { prompt: string };
+    (manager as unknown as {
+      attachStructureMeasurement(c: unknown, m: unknown): void;
+    }).attachStructureMeasurement({ id: "c1", gddText: "" }, milestone);
+    const kept = milestone.prompt.split("\n- (measurement trimmed here")[0]!;
+    // Every retained line is a WHOLE line: none ends inside the padding run.
+    for (const l of kept.split("\n").filter((x) => x.startsWith("- line "))) {
+      expect(l.endsWith("x".repeat(300))).toBe(true);
+    }
   });
 
   it("leaves the prompt alone when the project cannot be measured", () => {

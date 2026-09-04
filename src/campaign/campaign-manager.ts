@@ -2338,10 +2338,18 @@ export class CampaignManager {
     }
     // No silent cap: a trimmed measurement says it was trimmed, or the sprint
     // reads a truncated list as the whole truth.
-    const shown =
-      body.length > CampaignManager.STRUCTURE_MAX_CHARS
-        ? `${body.slice(0, CampaignManager.STRUCTURE_MAX_CHARS)}\n- (measurement trimmed here; re-run the structural check yourself for the rest)`
-        : body;
+    let shown = body;
+    if (body.length > CampaignManager.STRUCTURE_MAX_CHARS) {
+      // Cut on a line boundary, not mid-word: the first render of this block
+      // ended "- Camera projection in the shi", which reads as a corrupted
+      // measurement rather than a trimmed one. Falls back to the hard cut
+      // when a single line is itself longer than the budget.
+      const head = body.slice(0, CampaignManager.STRUCTURE_MAX_CHARS);
+      const lastBreak = head.lastIndexOf("\n- ");
+      shown =
+        `${lastBreak > 0 ? head.slice(0, lastBreak) : head}\n` +
+        "- (measurement trimmed here; re-run the structural check yourself for the rest)";
+    }
     milestone.prompt =
       `${stripped}\n\n${open}\n- ${shown}\n` +
       "This is a file-level measurement of the tree as it stands, not a review of your plan. " +
