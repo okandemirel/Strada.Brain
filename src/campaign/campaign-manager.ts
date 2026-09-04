@@ -976,6 +976,7 @@ export class CampaignManager {
           "*Verified, *Showcase, *Boundary, Assembled*) must be deleted or disabled in Build Settings. " +
           "Your report must name the entry scene and list every scene you deleted or disabled.";
       }
+      this.attachStructureMeasurement(campaign, milestone);
     }
     milestone.status = "running";
     milestone.startedAtMs ??= Date.now();
@@ -2264,6 +2265,72 @@ export class CampaignManager {
    * later one. A failure to measure is RECORDED, never swallowed — a skipped
    * check must not read like a passed one. Audited 2026-09-03.
    */
+  /** Literal text as a regex source — the markers hold `<`, `>` and `—`. */
+  private static escapeRegExp(text: string): string {
+    return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+
+  /** Delimits the re-measured structure block so a resubmit replaces it. */
+  private static readonly STRUCTURE_OPEN = "<<MEASURED NOW — what the shipped scenes render>>";
+  private static readonly STRUCTURE_CLOSE = "<</MEASURED NOW>>";
+  /** How much of the measurement the prompt carries before it says it trimmed. */
+  private static readonly STRUCTURE_MAX_CHARS = 2_600;
+
+  /**
+   * Put the CURRENT structural measurement in the final sprint's prompt, on
+   * every submit.
+   *
+   * Measured 2026-09-04 10:32: the refusal ("the shipped scenes render
+   * NOTHING … 100 prefabs, 62 models and 198 sprites no enabled scene
+   * reaches") was computed only inside the delivery-gate bounce, so the
+   * persisted m7 prompt held none of it — no "render NOTHING", no
+   * CreatePrimitive, no unbound art. Every sprint resubmitted by an outage, a
+   * self-revival, a time-box escalation or a restart therefore ran as blind
+   * as the seven before it, and each one answered by writing a document.
+   *
+   * Re-measured rather than cached: the whole point is to tell the sprint
+   * what the tree looks like NOW, including what its own last attempt
+   * changed. The previous block is stripped first, so a revived campaign
+   * carries one measurement and not a stack of stale ones — the same defect
+   * the previous-attempt tail already had (audited 2026-09-02).
+   */
+  private attachStructureMeasurement(campaign: Campaign, milestone: CampaignMilestone): void {
+    const open = CampaignManager.STRUCTURE_OPEN;
+    const close = CampaignManager.STRUCTURE_CLOSE;
+    const stripped = milestone.prompt.replace(
+      new RegExp(`\\n*${CampaignManager.escapeRegExp(open)}[\\s\\S]*?${CampaignManager.escapeRegExp(close)}`, "g"),
+      "",
+    );
+    let structure: { refusal?: string; lines: string[] };
+    try {
+      structure = this.measureDeliveryStructure(campaign);
+    } catch {
+      // measureDeliveryStructure already degrades to a disclosure; a throw
+      // here must not cost the sprint its prompt.
+      milestone.prompt = stripped;
+      return;
+    }
+    const body = [structure.refusal ? `REFUSED: ${structure.refusal}` : undefined, ...structure.lines]
+      .filter((l): l is string => typeof l === "string" && l.length > 0)
+      .join("\n- ");
+    if (body.length === 0) {
+      milestone.prompt = stripped;
+      return;
+    }
+    // No silent cap: a trimmed measurement says it was trimmed, or the sprint
+    // reads a truncated list as the whole truth.
+    const shown =
+      body.length > CampaignManager.STRUCTURE_MAX_CHARS
+        ? `${body.slice(0, CampaignManager.STRUCTURE_MAX_CHARS)}\n- (measurement trimmed here; re-run the structural check yourself for the rest)`
+        : body;
+    milestone.prompt =
+      `${stripped}\n\n${open}\n- ${shown}\n` +
+      "This is a file-level measurement of the tree as it stands, not a review of your plan. " +
+      "If it says the scenes render nothing, binding the project's own prefabs into the entry scene " +
+      "is the sprint's work — not a document about it.\n" +
+      `${close}`;
+  }
+
   private measureDeliveryStructure(campaign: Campaign): { refusal?: string; lines: string[] } {
     try {
       const report = assessBuiltAsSpecified(this.projectRoot);

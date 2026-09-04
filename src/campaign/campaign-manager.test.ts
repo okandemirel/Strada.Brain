@@ -626,6 +626,33 @@ describe("CampaignManager", () => {
     expect(finalPrompt).toContain("name the entry scene");
   });
 
+  it("the FINAL sprint carries the CURRENT structural measurement, not just a gate bounce", async () => {
+    // Measured live 2026-09-04 10:32: the refusal was computed only inside
+    // the delivery-gate bounce, so the persisted m7 prompt held no "render
+    // NOTHING", no unbound-art list and no CreatePrimitive line. Every sprint
+    // resubmitted by an outage, a revival or a restart ran blind.
+    buildSettings([["Assets/Scenes/Main.unity", 1]]);
+    mkdirSync(join(projectRoot, "Assets", "Prefabs"), { recursive: true });
+    writeFileSync(
+      join(projectRoot, "Assets", "Prefabs", "Pig.prefab"),
+      "%YAML 1.1\n--- !u!1 &7\nGameObject:\n  m_Name: Pig\n" +
+        "--- !u!212 &8\nSpriteRenderer:\n  m_Sprite: {fileID: 21300000, guid: 22222222222222222222222222222222, type: 3}\n",
+    );
+    writeFileSync(
+      join(projectRoot, "Assets", "Prefabs", "Pig.prefab.meta"),
+      "fileFormatVersion: 2\nguid: 11111111111111111111111111111111\n",
+    );
+
+    await reachFinalSprint();
+
+    const finalPrompt = tasks.submitted[2]!.prompt;
+    expect(finalPrompt).toContain("MEASURED NOW");
+    expect(finalPrompt).toContain("render NOTHING");
+    expect(finalPrompt).toContain("Assets/Prefabs/Pig.prefab");
+    // Earlier sprints are not judged on the whole tree's delivery shape.
+    expect(tasks.submitted[0]!.prompt).not.toContain("MEASURED NOW");
+  });
+
   it("delivers the real delivered shape and discloses every enabled scene", async () => {
     buildSettings(REAL_DELIVERED_BUILD, ["Assets/Scenes/Unused.unity"]);
     const campaign = await reachFinalSprint();
