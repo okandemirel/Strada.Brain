@@ -450,6 +450,18 @@ export class CampaignManager {
     // spent meant a revived final sprint could never be bounced for a missing
     // test run again (audited 2026-09-02: the gate landed after this block).
     milestone.deliveryVerificationBounced = false;
+    // …and the COUNTERS the gates actually read. Measured live 2026-09-04
+    // 16:18: the boolean above was reset on revival while
+    // deliveryVerificationBounces stayed at 2 of 2, so `deliveryBouncesSpent <
+    // maxMilestoneAttempts` was false and the delivery gate could not fire.
+    // Sprint 7 shipped green on "PlayMode verification passed: 184 of 185
+    // tests ran clean" — a verdict carrying NO unfiltered flag, recorded
+    // minutes after an unfiltered run had reported 32 of 185 failing. The
+    // reset above was written when the gate was a boolean; the counter that
+    // replaced it was never added here, so "fresh budget = fresh gates" had
+    // quietly stopped being true.
+    milestone.deliveryVerificationBounces = 0;
+    milestone.sceneHygieneBounces = 0;
     milestone.startedAtMs = undefined;
     milestone.timeBoxEscalations = 0;
     campaign.state = "executing";

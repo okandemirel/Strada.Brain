@@ -1573,6 +1573,43 @@ describe("CampaignManager", () => {
     expect(report).toMatch(/Sprint C — Delivery: .*never seen to pass/);
   });
 
+  it("revival resets the bounce COUNTERS the gates read, not just the booleans", async () => {
+    // Measured live 2026-09-04 16:18. reviveAtCurrentMilestone cleared
+    // deliveryVerificationBounced while deliveryVerificationBounces stayed at
+    // 2 of 2, so `spent < maxMilestoneAttempts` was false and the delivery
+    // gate could not fire. Sprint 7 shipped green on a verdict carrying no
+    // unfiltered flag, minutes after an unfiltered run reported 32 of 185
+    // failing.
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+
+    // Spend both delivery bounces on the final sprint.
+    tasks.emit("task:completed", "task_3", "shipping it");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+    tasks.emit("task:completed", "task_4", "shipping it again");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(5));
+    expect(storage.get(campaign.id)!.milestones[2]!.deliveryVerificationBounces).toBe(2);
+
+    tasks.emit("task:failed", "task_5", "boom");
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"));
+    expect(await manager.tryHandleRevive("cli-local", "kampanya devam")).toBe(true);
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(6));
+
+    const revived = storage.get(campaign.id)!.milestones[2]!;
+    expect(revived.deliveryVerificationBounces ?? 0).toBe(0);
+    expect(revived.sceneHygieneBounces ?? 0).toBe(0);
+
+    // And the gate can actually fire again: a completion with no verdict is
+    // bounced instead of delivering.
+    tasks.emit("task:completed", "task_6", "shipping it after revive");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(7));
+    expect(storage.get(campaign.id)!.state).toBe("executing");
+  });
+
   it("revival restores the delivery-verification gate along with the other evidence gates", async () => {
     // Audited 2026-09-02: reviveAtCurrentMilestone reset the visual and
     // no-work bounces ("fresh budget = fresh gates") but not
