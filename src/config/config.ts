@@ -132,6 +132,10 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
     opencode3ApiKey: rawConfig.opencode3ApiKey,
     opencodeBaseUrl: rawConfig.opencodeBaseUrl,
     opencodeDefaultModel: rawConfig.opencodeDefaultModel,
+    opencode2BaseUrl: rawConfig.opencode2BaseUrl,
+    opencode2DefaultModel: rawConfig.opencode2DefaultModel,
+    opencode3BaseUrl: rawConfig.opencode3BaseUrl,
+    opencode3DefaultModel: rawConfig.opencode3DefaultModel,
     openrouterApiKey: rawConfig.openrouterApiKey,
     ollamaBaseUrl: rawConfig.ollamaBaseUrl,
     providerChain: rawConfig.providerChain,
@@ -1071,6 +1075,10 @@ interface EnvVars {
   opencode3ApiKey: string | undefined;
   opencodeBaseUrl: string | undefined;
   opencodeDefaultModel: string | undefined;
+  opencode2BaseUrl: string | undefined;
+  opencode2DefaultModel: string | undefined;
+  opencode3BaseUrl: string | undefined;
+  opencode3DefaultModel: string | undefined;
   // OpenRouter
   openrouterApiKey: string | undefined;
   // External MCP servers (file-backed, not an env var — see loadMcpServers)
@@ -1184,6 +1192,10 @@ function loadFromEnv(env: Record<string, string | undefined>): EnvVars {
     opencode3ApiKey: env["OPENCODE3_API_KEY"],
     opencodeBaseUrl: env["OPENCODE_BASE_URL"],
     opencodeDefaultModel: env["OPENCODE_DEFAULT_MODEL"],
+    opencode2BaseUrl: env["OPENCODE2_BASE_URL"],
+    opencode2DefaultModel: env["OPENCODE2_DEFAULT_MODEL"],
+    opencode3BaseUrl: env["OPENCODE3_BASE_URL"],
+    opencode3DefaultModel: env["OPENCODE3_DEFAULT_MODEL"],
     openrouterApiKey: env["OPENROUTER_API_KEY"],
     providerChain: env["PROVIDER_CHAIN"],
     telegramBotToken: env["TELEGRAM_BOT_TOKEN"],
@@ -1551,9 +1563,21 @@ export function loadConfig(envOverride?: Record<string, string | undefined>): Co
   if (config.opencodeDefaultModel && !providerModels["opencode"]) {
     providerModels["opencode"] = config.opencodeDefaultModel;
   }
-  // opencode2 shares the same model/base-URL configuration as opencode.
+  // A sibling seat may point somewhere else entirely. Audited 2026-09-04: the
+  // aliases were forced to opencode's model and base URL, so the two OpenCode
+  // endpoints could not be used together — one account's zen free models and
+  // the same account's go models are separate quota pools, and asking for
+  // "free first, the paid endpoint only when free is spent" was unexpressible.
+  // Its OWN setting wins; opencode's is the fallback, which is what every
+  // existing config gets.
+  const seatModel: Record<string, string | undefined> = {
+    opencode2: config.opencode2DefaultModel,
+    opencode3: config.opencode3DefaultModel,
+  };
   for (const alias of ["opencode2", "opencode3"]) {
-    if (providerModels["opencode"] && !providerModels[alias]) {
+    const own = seatModel[alias];
+    if (own) providerModels[alias] = own;
+    else if (providerModels["opencode"] && !providerModels[alias]) {
       providerModels[alias] = providerModels["opencode"];
     }
   }
@@ -1567,6 +1591,9 @@ export function loadConfig(envOverride?: Record<string, string | undefined>): Co
     providerBaseUrls["opencode2"] = config.opencodeBaseUrl;
     providerBaseUrls["opencode3"] = config.opencodeBaseUrl;
   }
+  // …and a seat that names its own endpoint overrides the inherited one.
+  if (config.opencode2BaseUrl) providerBaseUrls["opencode2"] = config.opencode2BaseUrl;
+  if (config.opencode3BaseUrl) providerBaseUrls["opencode3"] = config.opencode3BaseUrl;
 
   // `anthropic` and `claude` are aliases for one provider, but the env var is
   // CLAUDE_MODEL (→ providerModels.claude). Mirror the value across both keys so

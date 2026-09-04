@@ -284,6 +284,33 @@ describe("loadConfig", () => {
     }
   });
 
+  // A sibling seat may point at a DIFFERENT endpoint and model. Audited
+  // 2026-09-04: opencode2/3 were forced to opencode's values, so one account's
+  // zen free models and the same account's go models — separate quota pools —
+  // could not be chained "free first, paid only when free is spent".
+  it("lets a sibling seat name its own endpoint and model", () => {
+    setEnv({
+      OPENCODE_BASE_URL: "https://opencode.ai/zen/v1",
+      OPENCODE_DEFAULT_MODEL: "muse-spark-1.3-contributor-free",
+      OPENCODE2_BASE_URL: "https://opencode.ai/zen/go/v1",
+      OPENCODE2_DEFAULT_MODEL: "omen-alpha",
+    });
+    try {
+      const config = loadConfig();
+      expect(config.providerBaseUrls?.opencode).toBe("https://opencode.ai/zen/v1");
+      expect(config.providerBaseUrls?.opencode2).toBe("https://opencode.ai/zen/go/v1");
+      expect(config.providerModels?.opencode).toBe("muse-spark-1.3-contributor-free");
+      expect(config.providerModels?.opencode2).toBe("omen-alpha");
+      // Seat 3 said nothing, so it still inherits — every existing config does.
+      expect(config.providerBaseUrls?.opencode3).toBe("https://opencode.ai/zen/v1");
+      expect(config.providerModels?.opencode3).toBe("muse-spark-1.3-contributor-free");
+    } finally {
+      for (const k of ["OPENCODE_BASE_URL", "OPENCODE_DEFAULT_MODEL", "OPENCODE2_BASE_URL", "OPENCODE2_DEFAULT_MODEL"]) {
+        delete process.env[k];
+      }
+    }
+  });
+
   // Phase 5: OPENCODE_BASE_URL must reach a base-URL override map (defaults to
   // the Zen preset inside createProvider when unset). Phase 6 flips this between
   // Zen and Go.

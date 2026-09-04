@@ -119,6 +119,11 @@ export const configSchema = z
     opencode2ApiKey: z.string().optional(),
     opencode3ApiKey: z.string().optional(),
     opencodeBaseUrl: z.string().optional(),
+    // Sibling seats may name their own endpoint/model; unset inherits opencode's.
+    opencode2BaseUrl: z.string().optional(),
+    opencode2DefaultModel: z.string().optional(),
+    opencode3BaseUrl: z.string().optional(),
+    opencode3DefaultModel: z.string().optional(),
     opencodeDefaultModel: z.string().optional(),
     openrouterApiKey: z.string().optional(),
     providerChain: z.string().optional(),

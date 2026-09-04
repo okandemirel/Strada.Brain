@@ -50,6 +50,10 @@ export type EnvVarName =
   | "OPENCODE3_API_KEY"
   | "OPENCODE_BASE_URL"
   | "OPENCODE_DEFAULT_MODEL"
+  | "OPENCODE2_BASE_URL"
+  | "OPENCODE2_DEFAULT_MODEL"
+  | "OPENCODE3_BASE_URL"
+  | "OPENCODE3_DEFAULT_MODEL"
   | "OPENROUTER_API_KEY"
   | "SYSTEM_PRESET"
   | "PROVIDER_CHAIN"
@@ -750,6 +754,11 @@ export interface Config {
   readonly opencode3ApiKey?: string;
   readonly opencodeBaseUrl?: string;
   readonly opencodeDefaultModel?: string;
+  /** Sibling seats may point at a different endpoint/model; unset = inherit opencode's. */
+  readonly opencode2BaseUrl?: string;
+  readonly opencode2DefaultModel?: string;
+  readonly opencode3BaseUrl?: string;
+  readonly opencode3DefaultModel?: string;
   readonly openrouterApiKey?: string;
   readonly ollamaBaseUrl?: string;
   /** Comma-separated provider names for fallback chain */
