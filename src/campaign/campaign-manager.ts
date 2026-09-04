@@ -875,11 +875,13 @@ export class CampaignManager {
         prompt: m.prompt,
         status: "pending",
         attempts: 0,
+        // Read the PLANNER's wording, once, before anything is appended.
+        visualGateArmed: /captur/i.test(m.prompt),
       }));
       // The planner is told to demand a captured frame of every sprint; the
       // visual gate keys on that wording. Name the sprints where it did not,
       // so a gate that will never run is visible before the ladder starts.
-      const ungated = campaign.milestones.filter((m) => !/captur/i.test(m.prompt)).map((m) => m.id);
+      const ungated = campaign.milestones.filter((m) => m.visualGateArmed !== true).map((m) => m.id);
       if (ungated.length > 0) {
         getLoggerSafe().warn("Planner omitted the captured-frame demand — visual gate will not run for these sprints", {
           id: campaign.id,
@@ -1586,7 +1588,11 @@ export class CampaignManager {
     // sprint — the exact disease the user found by hand: scenes look right in
     // reports and draw nothing. One missing-evidence bounce per milestone; the
     // bounce names the gap so the retry produces the frame instead of prose.
-    if (status === TaskStatus.completed && /captur/i.test(milestone.prompt)) {
+    // The recorded planner demand, NOT a scan of the live prompt: appended
+    // directives must not arm a gate the planner never asked for (audited
+    // 2026-09-04). Rows persisted before the field exists fall back to the scan.
+    const visualGateArmed = milestone.visualGateArmed ?? /captur/i.test(milestone.prompt);
+    if (status === TaskStatus.completed && visualGateArmed) {
       const evidence = this.freshCaptureEvidence(milestone);
       if (!evidence.found && !milestone.visualEvidenceBounced) {
         milestone.visualEvidenceBounced = true;
@@ -1661,7 +1667,7 @@ export class CampaignManager {
       // gate never ran must not read like one that passed it in the report
       // (audited 2026-09-02).
       try {
-        const captureDemanded = /captur/i.test(milestone.prompt);
+        const captureDemanded = visualGateArmed;
         milestone.visualEvidence = this.freshCaptureEvidence(milestone).found
           ? "observed"
           : captureDemanded
@@ -2355,6 +2361,19 @@ export class CampaignManager {
       "This is a file-level measurement of the tree as it stands, not a review of your plan. " +
       "If it says the scenes render nothing, binding the project's own prefabs into the entry scene " +
       "is the sprint's work — not a document about it.\n" +
+      // The same directive the gate-bounce paths carry. It lived ONLY there,
+      // so a sprint revived by an outage never saw it — measured live
+      // 2026-09-04 14:12: with the measurement in its prompt and no
+      // anti-audit line, the sprint planned "read the GDD in full" and "audit
+      // the landed modules" first, hit the decomposition node cap, and left
+      // "Produce real art-backed presentation and asset bindings" UNEXPANDED.
+      // It never reached the work it had correctly identified.
+      "DO NOT AUDIT. Counting or listing what exists is not the task, and an inventory will be " +
+      "rejected. Do not re-read the whole GDD or re-audit the landed modules before acting: this " +
+      "measurement is that audit, already done. Spend the sprint on the change itself — open the " +
+      "entry scene, place the named prefabs in it, bind real materials/meshes/sprites to their " +
+      "renderers instead of engine primitives, save the scene, and let a captured frame and the " +
+      "unfiltered suite be your report.\n" +
       `${close}`;
   }
 

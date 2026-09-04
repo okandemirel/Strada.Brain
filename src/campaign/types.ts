@@ -97,6 +97,18 @@ export interface CampaignMilestone {
    *  (the visual-evidence gate); the second completion stands either way. */
   visualEvidenceBounced?: boolean;
   /**
+   * Whether the PLANNER's own prompt demanded a captured frame — recorded when
+   * the ladder is built, because the gate that reads it must not be armed by
+   * text the system appends later.
+   *
+   * Audited 2026-09-04: the gate tested /captur/i against the live prompt, so
+   * a directive this manager itself appends ("let a captured frame … be your
+   * report") armed it on a sprint the planner never gated, and the final
+   * sprint bounced for evidence nobody had asked it to produce. Undefined on
+   * rows persisted before this field existed — those fall back to the scan.
+   */
+  visualGateArmed?: boolean;
+  /**
    * What the capture scan found when the milestone went green, and whether
    * the gate could act on it — the gate only bounces when the sprint prompt
    * demanded a capture. Audited 2026-09-02: a gate that never ran rendered

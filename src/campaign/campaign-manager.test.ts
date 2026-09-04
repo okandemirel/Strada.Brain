@@ -1599,13 +1599,16 @@ describe("CampaignManager", () => {
     expect(revived.deliveryVerificationBounced).toBe(false);
     expect(revived.visualEvidenceBounced).toBe(false);
 
-    // The revived sprint completes with no test run: visual bounce first
-    // (its prompt now demands a frame), then the delivery gate must bounce
-    // again instead of declaring delivery.
+    // The revived sprint completes with no test run, so the delivery gate
+    // must bounce it again instead of declaring delivery.
+    //
+    // This used to take TWO completions: the delivery bounce's own text says
+    // "capture a frame", and the visual gate re-scanned the live prompt, so a
+    // directive this manager appended armed a gate the planner never asked
+    // for and spent a spurious bounce first. The gate now reads the planner's
+    // recorded demand (audited 2026-09-04), so one completion is one bounce.
     tasks.emit("task:completed", "task_6", "shipping it after revive");
     await vi.waitFor(() => expect(tasks.submitted).toHaveLength(7));
-    tasks.emit("task:completed", "task_7", "shipping it after revive, again");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(8));
     expect(storage.get(campaign.id)!.state).toBe("executing");
     expect(storage.get(campaign.id)!.milestones[2]!.deliveryVerificationBounced).toBe(true);
   });

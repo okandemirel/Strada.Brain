@@ -69,6 +69,12 @@ describe("the final sprint is told what the tree renders, on every submit", () =
     expect(prompt).toContain("Assets/Prefabs/Pig.prefab");
     // And the entry scene's own emptiness, from the same measurement.
     expect(prompt).toContain("1 GameObject");
+    // The anti-audit directive rides with it: it used to live ONLY in the
+    // gate-bounce paths, so a sprint revived by an outage never saw it and
+    // planned "read the GDD in full, audit the landed modules" instead
+    // (measured live 2026-09-04 14:12).
+    expect(prompt).toContain("DO NOT AUDIT");
+    expect(prompt).toContain("re-audit the landed modules");
   });
 
   it("replaces the previous block instead of stacking a stale one", () => {
