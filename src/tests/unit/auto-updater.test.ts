@@ -410,6 +410,10 @@ describe("AutoUpdater", () => {
         "git status --porcelain",
         "git rev-parse HEAD",
         "git pull origin main",
+        // The rollback guard reads where the pull actually left HEAD, so it
+        // can refuse to reset over commits the updater did not make
+        // (audited 2026-09-04).
+        "git rev-parse HEAD",
         "npm install",
         "npm run build",
       ]);
@@ -525,12 +529,22 @@ describe("AutoUpdater", () => {
         "git status --porcelain",
         "git rev-parse HEAD",
         "git pull origin main",
+        // The rollback guard reads where the pull actually left HEAD, so it
+        // can refuse to reset over commits the updater did not make
+        // (audited 2026-09-04).
+        "git rev-parse HEAD",
         "npm install",
         "npm install",
         "npm run build",
       ]);
-      // Second npm install should target web-portal directory
-      expect(commandRunner.mock.calls[5]![3]).toBe(path.join(dir, "web-portal"));
+      // Second npm install should target web-portal directory. Found by
+      // predicate, not by index: a positional index breaks whenever the
+      // command sequence gains a step (audited 2026-09-04, when the rollback
+      // guard added a post-pull `git rev-parse HEAD`).
+      const installCwds = commandRunner.mock.calls
+        .filter((c) => c[0] === "npm" && (c[1] as string[])[0] === "install")
+        .map((c) => c[3]);
+      expect(installCwds).toEqual([dir, path.join(dir, "web-portal")]);
     });
 
     it("restores web-portal dependencies when rollback follows a build failure", async () => {
