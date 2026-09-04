@@ -158,6 +158,8 @@ describe("CampaignManager", () => {
   let messengerDownFor: RegExp | undefined;
 
   const ctx = { chatId: "cli-local", channelType: "cli", userId: "u1" };
+  /** What the compiler answers at the delivery gate; green unless a test says otherwise. */
+  let compileVerdict: { ok: boolean; ran: boolean; errors?: number; detail?: string } = { ok: true, ran: true };
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), "campaign-mgr-"));
@@ -168,6 +170,7 @@ describe("CampaignManager", () => {
     tasks = new FakeTaskManager();
     messages = [];
     messengerDownFor = undefined;
+    compileVerdict = { ok: true, ran: true };
 
     const planner = {
       planMilestones: vi.fn().mockResolvedValue(LADDER),
@@ -175,6 +178,8 @@ describe("CampaignManager", () => {
 
     manager = new CampaignManager({
       storage,
+      // The gate measures the compiler; tests drive it through this.
+      verifyCompile: async () => compileVerdict,
       planner,
       taskManager: tasks as unknown as TaskManager,
       messenger: async (chatId, text) => {
@@ -903,6 +908,62 @@ describe("CampaignManager", () => {
     await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
     return campaign;
   };
+
+  it("refuses to deliver a tree that does not compile, and says so first", async () => {
+    // Measured live 2026-09-04 21:37: Sprint 7 was committed green (1296
+    // files, f674e8d) and the campaign delivered while the tree carried 37
+    // compile errors — found seconds later by the real-tree guardian, and by
+    // no gate at all. Every other gate reads what a run REPORTED; none asked
+    // the compiler.
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+
+    compileVerdict = { ok: false, ran: true, errors: 37, detail: "Headless compile failed with 37 error(s)." };
+    // An UNFILTERED green — the strongest evidence a sprint can bring. It is
+    // still not delivery while the project does not build.
+    tasks.verifications.set("task_3", {
+      testsGreen: true,
+      detail: "PlayMode verification passed: 179 of 179 tests passed (unfiltered — the whole PlayMode suite)",
+      unfiltered: true,
+    });
+    tasks.emit("task:completed", "task_3", "shipping it");
+
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+    expect(storage.get(campaign.id)!.state).toBe("executing");
+    // The compiler leads the bounce: a suite run means nothing until it builds.
+    const prompt = tasks.submitted[3]!.prompt;
+    expect(prompt).toContain("THE PROJECT DOES NOT COMPILE");
+    expect(prompt).toContain("37 error(s)");
+    expect(prompt.indexOf("THE PROJECT DOES NOT COMPILE")).toBeLessThan(
+      prompt.indexOf("DELIVERY VERIFICATION REQUIRED"),
+    );
+  });
+
+  it("delivers on an unfiltered green once the project compiles", async () => {
+    // The other half of the same gate: it must not become a wall.
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+
+    compileVerdict = { ok: true, ran: true, errors: 0 };
+    tasks.verifications.set("task_3", {
+      testsGreen: true,
+      detail: "PlayMode verification passed: 179 of 179 tests passed (unfiltered — the whole PlayMode suite)",
+      unfiltered: true,
+    });
+    tasks.emit("task:completed", "task_3", "shipping it");
+
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+    const report = messages.map((m) => m.text).find((t) => t.includes("Campaign delivery"))!;
+    expect(report).toContain("compiles");
+  });
 
   it("does NOT declare delivery once the structural refusal has outlasted its budget", async () => {
     // Measured live 2026-09-04 21:37. The campaign printed

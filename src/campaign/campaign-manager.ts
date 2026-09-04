@@ -46,6 +46,18 @@ export interface CampaignContext {
   conversationId?: string;
 }
 
+/** What a compile check answers; `ran: false` means nothing was measured. */
+export interface CompileVerdict {
+  /** True only when a compile actually ran AND reported no errors. */
+  readonly ok: boolean;
+  /** False when no verifier was available — a skip, never a pass. */
+  readonly ran: boolean;
+  /** Errors counted, when the verifier gave a number. */
+  readonly errors?: number;
+  /** The verifier's own sentence, for the report. */
+  readonly detail?: string;
+}
+
 export interface CampaignManagerOptions {
   storage: CampaignStorage;
   planner: CampaignPlanner;
@@ -58,6 +70,20 @@ export interface CampaignManagerOptions {
   taskManager: TaskManager;
   messenger: CampaignMessenger;
   projectRoot: string;
+  /**
+   * Does the project compile RIGHT NOW? Injected because the campaign has no
+   * tool registry of its own; bootstrap wires the same unity_verify_change the
+   * real-tree guardian uses.
+   *
+   * Measured live 2026-09-04 21:37: Sprint 7 was committed green (1296 files,
+   * f674e8d) and the campaign delivered, while the tree carried 37 compile
+   * errors — found seconds later by the guardian, not by any gate. Every other
+   * gate reads what an agent REPORTED; nothing asked the compiler.
+   *
+   * Absent (or `ran: false`) means the check is DISCLOSED as not run, never
+   * treated as a pass.
+   */
+  verifyCompile?: (projectRoot: string) => Promise<CompileVerdict>;
   /** Auto-retry budget per milestone before the campaign fails loudly. */
   maxMilestoneAttempts?: number;
   /** GDD revision rounds at the approval gate before cancelling. */
@@ -144,6 +170,7 @@ export class CampaignManager {
   private readonly taskManager: TaskManager;
   private readonly messenger: CampaignMessenger;
   private readonly projectRoot: string;
+  private readonly verifyCompile?: (projectRoot: string) => Promise<CompileVerdict>;
   private readonly maxMilestoneAttempts: number;
   private readonly maxDraftAttempts: number;
   private readonly retryAdoptionGraceMs: number;
@@ -159,6 +186,7 @@ export class CampaignManager {
     this.taskManager = options.taskManager;
     this.messenger = options.messenger;
     this.projectRoot = options.projectRoot;
+    this.verifyCompile = options.verifyCompile;
     this.maxMilestoneAttempts = options.maxMilestoneAttempts ?? 2;
     this.maxDraftAttempts = options.maxDraftAttempts ?? 3;
     this.retryAdoptionGraceMs = options.retryAdoptionGraceMs ?? RETRY_ADOPTION_GRACE_MS;
@@ -1754,7 +1782,17 @@ export class CampaignManager {
       // reported 6 of 173 failing — including WinLevel_ReachesWonState
       // ("LevelWon event did not fire"). A green from a filter is the sprint
       // choosing which tests count (audited 2026-09-03).
-      const deliveryProofMissing = !milestone.testVerdict || milestone.testVerdictUnfiltered !== true;
+      // ASK THE COMPILER, not the agent. Every other gate reads what a run
+      // REPORTED; this one measures. Sprint 7 was committed green (1296 files,
+      // f674e8d) and the campaign delivered while the tree carried 37 compile
+      // errors — found seconds later by the real-tree guardian, and by no gate
+      // at all (measured live 2026-09-04 21:37). A verifier that could not run
+      // is recorded as NOT RUN and never as a pass.
+      const compile = await this.measureCompile();
+      milestone.compileVerdict = compile;
+      const compileBroken = compile.ran && !compile.ok;
+      const deliveryProofMissing =
+        !milestone.testVerdict || milestone.testVerdictUnfiltered !== true || compileBroken;
       if (isLast && deliveryProofMissing && deliveryBouncesSpent < this.maxMilestoneAttempts) {
         // DELIVERY GATE: "the whole game runs" was only ever a sentence in the
         // planner's prompt — nothing in code required the final sprint to
@@ -1786,9 +1824,19 @@ export class CampaignManager {
         // ADDED two more CreatePrimitive scripts (5 → 7), moving away from the
         // requirement it had not been told about.
         const structureNow = this.measureDeliveryStructure(campaign);
+        // Lead with the compiler when the compiler is the problem: a tree that
+        // does not build cannot be tested, so telling the sprint to run the
+        // suite first would send it at the second problem.
+        const compileFirst = compileBroken
+          ? `THE PROJECT DOES NOT COMPILE${
+              typeof compile.errors === "number" ? ` — ${compile.errors} error(s)` : ""
+            }. Fix that before anything else; no test run means anything until it builds.${
+              compile.detail ? ` The verifier said: ${compile.detail}` : ""
+            }\n\n`
+          : "";
         const combined = structureNow.refusal
-          ? `${directive}\n\nALSO, ALREADY MEASURED: ${structureNow.refusal}`
-          : directive;
+          ? `${compileFirst}${directive}\n\nALSO, ALREADY MEASURED: ${structureNow.refusal}`
+          : `${compileFirst}${directive}`;
         if (!milestone.prompt.includes("DELIVERY VERIFICATION REQUIRED")) milestone.prompt += combined;
         this.persist(campaign);
         getLoggerSafe().warn("Delivery blocked: final milestone has no observed test verdict", {
@@ -2436,6 +2484,29 @@ export class CampaignManager {
       `${close}`;
   }
 
+  /**
+   * Does the project compile right now?
+   *
+   * Never throws and never guesses: a missing verifier, or one that fails on
+   * its own plumbing, answers `ran: false`, which the report renders as NOT
+   * MEASURED. Treating "we could not ask" as "it compiles" is the exact shape
+   * of the false green this gate exists to stop.
+   */
+  private async measureCompile(): Promise<CompileVerdict> {
+    if (!this.verifyCompile) {
+      return { ok: false, ran: false, detail: "no compile verifier is configured" };
+    }
+    try {
+      return await this.verifyCompile(this.projectRoot);
+    } catch (err) {
+      return {
+        ok: false,
+        ran: false,
+        detail: `the compile check could not run (${err instanceof Error ? err.message : String(err)})`,
+      };
+    }
+  }
+
   private measureDeliveryStructure(campaign: Campaign): { refusal?: string; lines: string[] } {
     try {
       const report = assessBuiltAsSpecified(this.projectRoot);
@@ -2522,6 +2593,23 @@ export class CampaignManager {
         );
       }
       if (m.visualEvidenceBounced) { marks.push("visual-evidence bounce spent"); caveats.push(`${m.title}: needed a second attempt to produce a captured frame`); }
+      // The compiler's own answer, on every final-sprint line. "Not measured"
+      // is printed, never omitted: a delivery whose tree was never compiled
+      // must not read like one that was (audited 2026-09-04).
+      if (m.compileVerdict) {
+        const c = m.compileVerdict;
+        if (!c.ran) {
+          marks.push("compile NOT measured");
+          caveats.push(
+            `${m.title}: the project was never compiled at the delivery gate — ${c.detail ?? "no verifier"}`,
+          );
+        } else if (!c.ok) {
+          marks.push(`DOES NOT COMPILE${typeof c.errors === "number" ? ` (${c.errors} errors)` : ""}`);
+          caveats.push(`${m.title}: the project did not compile — ${c.detail ?? "no detail"}`);
+        } else {
+          marks.push("compiles");
+        }
+      }
       if (m.visualEvidence === "observed") marks.push("captured frame observed");
       if (m.visualEvidence === "none-gate-not-demanded") {
         marks.push("no captured frame; visual gate NOT run");

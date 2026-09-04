@@ -108,6 +108,8 @@ export interface CampaignMilestone {
    * rows persisted before this field existed — those fall back to the scan.
    */
   visualGateArmed?: boolean;
+  /** What the compiler said at the delivery gate; absent = never measured. */
+  compileVerdict?: { ok: boolean; ran: boolean; errors?: number; detail?: string };
   /**
    * What the capture scan found when the milestone went green, and whether
    * the gate could act on it — the gate only bounces when the sprint prompt

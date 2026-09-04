@@ -408,6 +408,45 @@ export async function initializeTaskRuntimeStage(
         await params.channel.sendMarkdown(chatId, sanitizeSecrets(markdown));
       },
       projectRoot: params.config.unityProjectPath,
+      // The delivery gate asks the COMPILER, not the agent's report. Same tool
+      // the real-tree guardian uses; a missing registry or an unregistered
+      // verifier answers `ran: false`, which the gate discloses as NOT
+      // MEASURED and never treats as a pass (audited 2026-09-04: a campaign
+      // delivered on a tree carrying 37 compile errors).
+      verifyCompile: params.toolRegistry
+        ? async (projectRoot: string) => {
+            const registry = params.toolRegistry!;
+            if (!registry.getAvailableToolNames().includes("unity_verify_change")) {
+              return { ok: false, ran: false, detail: "unity_verify_change is not registered" };
+            }
+            const result = await registry.execute(
+              "unity_verify_change",
+              {},
+              {
+                projectPath: projectRoot,
+                workingDirectory: projectRoot,
+                readOnly: true,
+              } as import("../../agents/tools/tool-core.interface.js").ToolContext,
+            );
+            const detail = String(result.content ?? "");
+            const counted = /"compileErrors"\s*:\s*(\d+)/i.exec(detail)?.[1]
+              ?? /(\d+)\s*error\(s\)/i.exec(detail)?.[1];
+            const errors = counted === undefined ? undefined : Number(counted);
+            // A "failed" with no counted error is the killed-compile shape:
+            // real, but it says nothing about the CODE, so it is reported as
+            // not measured rather than as a compile error the sprint can fix.
+            const failed = /"status"\s*:\s*"failed"/i.test(detail);
+            if (failed && (errors === undefined || errors === 0)) {
+              return { ok: false, ran: false, errors, detail: detail.slice(0, 300) };
+            }
+            return {
+              ok: !failed && (errors ?? 0) === 0,
+              ran: true,
+              ...(errors === undefined ? {} : { errors }),
+              detail: detail.slice(0, 300),
+            };
+          }
+        : undefined,
       styleAnalysis: new StyleAnalysis(params.providerManager.getProvider("")),
     });
     campaignManager.attachEvents();
