@@ -904,6 +904,39 @@ describe("CampaignManager", () => {
     return campaign;
   };
 
+  it("does NOT declare delivery once the structural refusal has outlasted its budget", async () => {
+    // Measured live 2026-09-04 21:37. The campaign printed
+    //   🏁 Campaign delivery — game built, 1 sprint did NOT land green
+    // directly above
+    //   REFUSAL STANDS, bounce budget spent: The shipped scenes render NOTHING
+    //   … 360 assets that no enabled scene reaches
+    // The findings were right; the first line a person reads said the opposite.
+    writeSlopProject();
+    const campaign = await runLadderToDelivery();
+
+    // Every gate bounces this tree for its own reason; keep completing until
+    // the ladder runs out of budget, which is the state under test.
+    for (let i = 0; i < 8 && storage.get(campaign.id)!.state === "executing"; i++) {
+      const before = tasks.submitted.length;
+      settleMilestone(`integrated, all 42 tests pass (round ${i})`);
+      await new Promise((r) => setTimeout(r, 120));
+      if (tasks.submitted.length === before) break;
+    }
+
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).not.toBe("executing"));
+    expect(storage.get(campaign.id)!.state).toBe("failed");
+    const report = messages.map((m) => m.text).find((t) => t.includes("NOT DELIVERED"))!;
+    expect(report).toBeDefined();
+    // The refusal is the headline, not a footnote…
+    expect(report.split("\n")[0]).toContain("NOT DELIVERED");
+    // …and nothing is hidden: the findings still travel with it.
+    expect(report).toContain("render NOTHING");
+    expect(report).toContain("kampanya devam");
+    // Never a done campaign, and never a delivery flag.
+    expect(storage.get(campaign.id)!.state).not.toBe("done");
+    expect(storage.get(campaign.id)!.deliveryReported).not.toBe(true);
+  });
+
   it("refuses delivery when the shipped scenes render nothing and the art sits unbound", async () => {
     writeSlopProject();
     const campaign = await runLadderToDelivery();

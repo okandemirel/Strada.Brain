@@ -1917,6 +1917,30 @@ export class CampaignManager {
           this.resubmitSoon(id);
           return;
         }
+        // A GAME THAT RENDERS NOTHING IS NOT DELIVERED. When the structural
+        // check still refuses after its bounce budget is spent, the campaign
+        // used to declare `done` and disclose the refusal as a caveat —
+        // measured live 2026-09-04 21:37: "🏁 Campaign delivery — game built"
+        // above "REFUSAL STANDS … The shipped scenes render NOTHING … 360
+        // assets no enabled scene reaches". The disclosure was honest and the
+        // headline was not: the one sentence a person reads first said the
+        // opposite of the evidence under it. Stop and hand it to a person
+        // instead; every finding still travels in the report.
+        if (milestone.structureRefused === true) {
+          campaign.state = "failed";
+          campaign.lastError =
+            "the shipped scenes do not render the project's own art, and the structural " +
+            "bounce budget is spent";
+          this.persist(campaign);
+          this.cancelLiveLineages(campaign, "campaign stopped short of delivery");
+          await this.tell(
+            campaign,
+            `${this.buildDeliveryReport(campaign)}${commitNote}\n\n` +
+              "Reply **kampanya devam** to give the final sprint a fresh budget against this, " +
+              "or change the GDD if this is the game you wanted.",
+          );
+          return;
+        }
         campaign.state = "done";
         this.cancelLiveLineages(campaign, "campaign delivered");
         // The flag is written only AFTER the report actually leaves. Audited
@@ -2451,8 +2475,15 @@ export class CampaignManager {
     // Audited 2026-09-02: partial delivery (a spent coverage-remediation
     // round after every planned sprint went green) had no rendering at all.
     const unfinished = campaign.milestones.filter((m) => m.status !== "green");
+    // The HEADLINE must say what the evidence says. Measured live 2026-09-04
+    // 21:37: "🏁 Campaign delivery — game built" sat directly above "REFUSAL
+    // STANDS … The shipped scenes render NOTHING". The findings were right and
+    // the first line a person reads was not.
+    const structureRefused = campaign.milestones.some((m) => m.structureRefused === true);
     const lines = [
-      unfinished.length === 0
+      structureRefused
+        ? `⛔ **NOT DELIVERED — the shipped scenes do not render the project's own art**`
+        : unfinished.length === 0
         ? `🏁 **Campaign delivery — game build complete**`
         : `🏁 **Campaign delivery — game built, ${unfinished.length} sprint${unfinished.length > 1 ? "s" : ""} did NOT land green**`,
       `GDD: \`${campaign.gddPath ?? "n/a"}\``,
