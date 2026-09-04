@@ -178,6 +178,21 @@ export interface SceneStructure {
   readonly unresolvedPrefabGuids: readonly string[];
   readonly camerasOrthographic: number;
   readonly camerasPerspective: number;
+  /**
+   * What the scene FILE itself holds, placed prefabs excluded: GameObject and
+   * PrefabInstance documents, and the MonoBehaviour classes on them.
+   *
+   * Audited 2026-09-04: the refusal could say "the shipped scenes render
+   * NOTHING" and the sprint still had nowhere to start, because the number it
+   * was given was a zero. PixelFlow's one enabled scene held a camera and a
+   * `GameBootstrapper` whose config listed no modules — two GameObjects, no
+   * prefab instance — and naming that is the difference between "something is
+   * wrong" and "this is the scene you have to fill".
+   */
+  readonly gameObjects: number;
+  readonly prefabInstances: number;
+  /** Distinct MonoBehaviour class names on the scene's own objects, sorted. */
+  readonly scripts: readonly string[];
 }
 
 export interface ArtInventory {
@@ -299,6 +314,16 @@ interface Tally {
   prefabGuids: Set<string>;
   camerasOrthographic: number;
   camerasPerspective: number;
+  /** GameObject documents in THIS file — the scene's own composition. */
+  gameObjects: number;
+  /** PrefabInstance documents in THIS file. */
+  prefabInstances: number;
+  /**
+   * Distinct MonoBehaviour class names, read off `m_EditorClassIdentifier`
+   * (Unity writes `Assembly::Namespace.Class`). A script whose identifier
+   * Unity left blank contributes nothing rather than a guessed name.
+   */
+  scripts: Set<string>;
 }
 
 function newTally(): Tally {
@@ -313,6 +338,9 @@ function newTally(): Tally {
     prefabGuids: new Set(),
     camerasOrthographic: 0,
     camerasPerspective: 0,
+    gameObjects: 0,
+    prefabInstances: 0,
+    scripts: new Set(),
   };
 }
 
@@ -331,6 +359,8 @@ function scanUnityFile(text: string, tally: Tally): void {
       if (MESH_RENDERER_CLASSES.has(doc.className)) tally.meshRenderers++;
       if (doc.className === "SpriteRenderer") tally.spriteRenderers++;
     }
+    if (doc.className === "GameObject") tally.gameObjects++;
+    if (doc.className === "PrefabInstance") tally.prefabInstances++;
     const wantsRefs = isRenderer || doc.className === "MeshFilter";
     let inMaterialList = false;
     for (const line of doc.lines) {
@@ -342,6 +372,13 @@ function scanUnityFile(text: string, tally: Tally): void {
         if (doc.className === "Camera" && key === "orthographic") {
           if (rest.trim() === "1") tally.camerasOrthographic++;
           else if (rest.trim() === "0") tally.camerasPerspective++;
+        }
+        if (doc.className === "MonoBehaviour" && key === "m_EditorClassIdentifier") {
+          // "Assembly::Namespace.Class" → "Class". The identifier is empty for
+          // a script Unity has not resolved; an empty name is dropped rather
+          // than reported as an unnamed component.
+          const short = rest.trim().split("::").pop()?.split(".").pop() ?? "";
+          if (short.length > 0) tally.scripts.add(short);
         }
         if (doc.className === "PrefabInstance" && key === "m_SourcePrefab") {
           const ref = parseRef(rest);
@@ -537,6 +574,9 @@ export function assessBuiltAsSpecified(
         unresolvedPrefabGuids: [],
         camerasOrthographic: 0,
         camerasPerspective: 0,
+        gameObjects: 0,
+        prefabInstances: 0,
+        scripts: [],
       });
       incomplete.push(`${scenePath} is enabled in Build Settings but the file is not on disk`);
       continue;
@@ -649,6 +689,12 @@ export function assessBuiltAsSpecified(
       unresolvedPrefabGuids: [...unresolved].sort(),
       camerasOrthographic: own.camerasOrthographic,
       camerasPerspective: own.camerasPerspective,
+      // `own` only, never `placed`: this measures what the SCENE holds, and a
+      // count that silently folded in every placed prefab's objects would say
+      // a scene is populated when all it has is one prefab instance.
+      gameObjects: own.gameObjects,
+      prefabInstances: own.prefabInstances,
+      scripts: [...own.scripts].sort(),
     });
   }
 
@@ -743,6 +789,12 @@ export function assessBuiltAsSpecified(
         ? `; ${scaffolds.length} of them are test scaffolding (${scaffolds.map((s) => basename(s.scene)).slice(0, 4).join(", ")}${scaffolds.length > 4 ? ", …" : ""})`
         : ""),
   );
+  const entryStructure = scenes.find((s) => s.scene === enabled[0]);
+  if (entryStructure) {
+    disclosures.push(
+      `The entry scene ${entryStructure.scene} holds ${describeSceneComposition(entryStructure)}.`,
+    );
+  }
   disclosures.push(
     `Shipped scenes PLACE ${shippedRenderers} renderer component${shippedRenderers === 1 ? "" : "s"} ` +
       `(${report.shippedMeshRenderers} mesh, ${report.shippedSpriteRenderers} sprite), binding ` +
@@ -812,6 +864,29 @@ export function assessBuiltAsSpecified(
  * this file cannot tell that apart from slop; the report says what it measured
  * and the reader judges.
  */
+/**
+ * What one scene FILE holds, in a clause a sprint can act on.
+ *
+ * A scene that is nearly empty is the most actionable fact the structural
+ * check has, and reporting only its renderer count hid it (audited
+ * 2026-09-04).
+ */
+export function describeSceneComposition(scene: SceneStructure): string {
+  if (scene.missing) return "the file is not on disk";
+  const parts = [
+    `${scene.gameObjects} GameObject${scene.gameObjects === 1 ? "" : "s"}`,
+    `${scene.prefabInstances} placed prefab instance${scene.prefabInstances === 1 ? "" : "s"}`,
+  ];
+  if (scene.scripts.length > 0) {
+    const shown = scene.scripts.slice(0, 6);
+    parts.push(
+      `script${scene.scripts.length === 1 ? "" : "s"} ${shown.join(", ")}` +
+        (scene.scripts.length > shown.length ? `, +${scene.scripts.length - shown.length} more` : ""),
+    );
+  }
+  return parts.join(", ");
+}
+
 function structuralRefusal(
   report: Omit<BuiltAsSpecifiedReport, "refusal" | "disclosures">,
   totals: { artTotal: number; unboundTotal: number; entryScene?: string },
@@ -828,6 +903,12 @@ function structuralRefusal(
       ? " — itself test scaffolding"
       : ""
   }`;
+  // The one fact that tells a bounced sprint where to start: how empty the
+  // scene it must fill actually is (audited 2026-09-04).
+  const entryStructure = report.scenes.find((s) => s.scene === entryScene);
+  const entryHolds = entryStructure
+    ? ` That scene holds ${describeSceneComposition(entryStructure)}.`
+    : "";
   const unboundSample = [
     ...report.unboundPrefabs.slice(0, 3),
     ...report.unboundModels.slice(0, 3),
@@ -845,7 +926,7 @@ function structuralRefusal(
       `The shipped scenes render NOTHING: across ${shippedScenes.length} enabled non-scaffolding ` +
       `scene${shippedScenes.length === 1 ? "" : "s"} — ${entry} — there are 0 renderer ` +
       `components (0 MeshRenderer/SkinnedMeshRenderer, 0 SpriteRenderer), in the scenes themselves and in ` +
-      `every prefab they place. Meanwhile the project holds ${report.artInventory.prefabs} prefabs, ` +
+      `every prefab they place.${entryHolds} Meanwhile the project holds ${report.artInventory.prefabs} prefabs, ` +
       `${report.artInventory.models} imported models and ${report.artInventory.sprites} sprite textures, of ` +
       `which ${unboundText}.` +
       (report.primitiveScripts.length > 0
@@ -866,7 +947,7 @@ function structuralRefusal(
       `component${shippedRenderers === 1 ? "" : "s"} across ${shippedScenes.length} scene(s) — ${entry} — ` +
       `reference ${report.shippedBuiltInRefs} built-in id(s)` +
       (ids.length > 0 ? ` (${ids.join(", ")})` : "") +
-      ` and 0 project materials, meshes or sprites. Meanwhile the project holds ${unboundText}.`
+      ` and 0 project materials, meshes or sprites.${entryHolds} Meanwhile the project holds ${unboundText}.`
     );
   }
 

@@ -331,3 +331,59 @@ describe("assessBuiltAsSpecified — what it could not measure", () => {
     expect(report.refusal).toBeUndefined();
   });
 });
+
+describe("assessBuiltAsSpecified — the entry scene's own composition", () => {
+  /**
+   * Audited 2026-09-04 against the live PixelFlow project: the refusal said
+   * "the shipped scenes render NOTHING ... 100 prefabs unbound" and seven
+   * sprints in a row failed to act on it. The scene it had to fill held a
+   * camera and a GameBootstrapper whose config listed no modules — two
+   * GameObjects, no prefab instance — and nothing the sprint was told said so.
+   */
+  it("names how empty the entry scene is, in the refusal and the disclosures", () => {
+    const root = project();
+    buildSettings(root, [{ path: "Assets/Scenes/Main.unity" }]);
+    put(
+      root,
+      "Assets/Scenes/Main.unity",
+      `${HEADER}--- !u!1 &100\nGameObject:\n  m_Name: MainCamera\n${CAMERA(0)}` +
+        `--- !u!1 &200\nGameObject:\n  m_Name: Bootstrap\n` +
+        `--- !u!114 &201\nMonoBehaviour:\n  m_Script: {fileID: 11500000, guid: 703ceb5289d5847f5800cd363a983966, type: 3}\n` +
+        `  m_EditorClassIdentifier: Strada.Core::Strada.Core.Bootstrap.GameBootstrapper\n`,
+      "5ce5e5e5e5e5e5e5e5e5e5e5e5e5e5e5",
+    );
+    put(root, "Assets/Prefabs/Pig.prefab", artPrefab("22222222222222222222222222222222"), "11111111111111111111111111111111");
+    put(root, "Assets/Art/pig.png", "pixels", "22222222222222222222222222222222");
+
+    const report = assessBuiltAsSpecified(root);
+    const entry = report.scenes[0]!;
+    expect(entry.gameObjects).toBe(2);
+    expect(entry.prefabInstances).toBe(0);
+    expect(entry.scripts).toEqual(["GameBootstrapper"]);
+
+    expect(report.refusal).toBeDefined();
+    expect(report.refusal).toContain("2 GameObjects, 0 placed prefab instances, script GameBootstrapper");
+    expect(report.disclosures.join("\n")).toContain(
+      "The entry scene Assets/Scenes/Main.unity holds 2 GameObjects, 0 placed prefab instances, script GameBootstrapper.",
+    );
+  });
+
+  it("counts the scene's OWN objects, not those inside the prefabs it places", () => {
+    const root = project();
+    buildSettings(root, [{ path: "Assets/Scenes/Main.unity" }]);
+    put(
+      root,
+      "Assets/Scenes/Main.unity",
+      `${HEADER}--- !u!1 &100\nGameObject:\n  m_Name: Root\n${prefabInstance("11111111111111111111111111111111")}`,
+      "5ce5e5e5e5e5e5e5e5e5e5e5e5e5e5e5",
+    );
+    put(root, "Assets/Prefabs/Pig.prefab", artPrefab("22222222222222222222222222222222"), "11111111111111111111111111111111");
+    put(root, "Assets/Art/pig.png", "pixels", "22222222222222222222222222222222");
+
+    const entry = assessBuiltAsSpecified(root).scenes[0]!;
+    // The placed Pig prefab holds a GameObject of its own; the scene's count
+    // must stay 1, or "how full is this scene" answers with the prefab's guts.
+    expect(entry.gameObjects).toBe(1);
+    expect(entry.prefabInstances).toBe(1);
+  });
+});
