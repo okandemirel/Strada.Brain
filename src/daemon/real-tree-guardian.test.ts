@@ -208,3 +208,68 @@ describe("a repair that is not converging", () => {
     expect(messages.find((m) => m.includes("NOT converging"))).toBeUndefined();
   });
 });
+
+describe("a green tick is not silence", () => {
+  /**
+   * Audited 2026-09-05: the green branch returned without logging. Two hours
+   * after a restart the log held one "Real-tree guardian started" and nothing
+   * else, and nothing could tell a healthy tree from a guardian that never
+   * ticked — the ambiguity this file already closed for the BLIND case, left
+   * open for the green one.
+   */
+  const greenGuardian = (nowRef: { t: number }) => {
+    const { manager } = makeTaskManager();
+    const messages: string[] = [];
+    const guardian = new RealTreeGuardian({
+      taskManager: manager as unknown as TaskManager,
+      verify: vi.fn(async () => ({ ok: true, ran: true, detail: "0 errors" })),
+      projectRoot: "/p",
+      messenger: async (_c, t) => { messages.push(t); },
+      now: () => nowRef.t,
+    });
+    return { guardian, messages };
+  };
+
+  it("notes a steady green at most hourly, but at least hourly", async () => {
+    const nowRef = { t: 1_000_000 };
+    const { guardian } = greenGuardian(nowRef);
+
+    await guardian.tick();
+    const first = loggerStub.info.mock.calls.filter((c) => String(c[0]).includes("tree is green")).length;
+    expect(first).toBe(1);
+
+    // A second tick minutes later must NOT spam.
+    nowRef.t += 15 * 60_000;
+    await guardian.tick();
+    expect(loggerStub.info.mock.calls.filter((c) => String(c[0]).includes("tree is green")).length).toBe(1);
+
+    // An hour on, it says it is still alive.
+    nowRef.t += 60 * 60_000;
+    await guardian.tick();
+    expect(loggerStub.info.mock.calls.filter((c) => String(c[0]).includes("tree is green")).length).toBe(2);
+  });
+
+  it("announces the recovery when a red tree turns green", async () => {
+    const { manager } = makeTaskManager();
+    const messages: string[] = [];
+    let green = false;
+    let t = 1_000_000;
+    const guardian = new RealTreeGuardian({
+      taskManager: manager as unknown as TaskManager,
+      verify: vi.fn(async () =>
+        green
+          ? { ok: true, ran: true, detail: "0 errors" }
+          : { ok: false, ran: true, detail: "Headless compile failed with 4 error(s)" },
+      ),
+      projectRoot: "/p",
+      messenger: async (_c, m) => { messages.push(m); },
+      now: () => (t += 60 * 60_000),
+    });
+
+    await guardian.tick();          // red
+    green = true;
+    await guardian.tick();          // green again
+
+    expect(messages.find((m) => m.includes("compiles again"))).toBeDefined();
+  });
+});

@@ -72,6 +72,17 @@ const ESCALATION_BACKOFF_MS = 6 * 60 * 60_000;
  * guardian is blind. 4 ticks at the default 15-min cadence is one hour.
  */
 const BLIND_TICKS_BEFORE_ESCALATION = 4;
+/**
+ * How often a steady GREEN tree is noted, so "alive and green" can be told
+ * from "not running at all".
+ *
+ * Audited 2026-09-05: the green branch returned silently. Two hours after a
+ * restart the log held one "Real-tree guardian started" and nothing else, and
+ * nothing in it could distinguish a healthy tree from a guardian that never
+ * ticked — the exact ambiguity this file already fixed once for the BLIND
+ * case, left open for the green one.
+ */
+const GREEN_HEARTBEAT_MS = 60 * 60_000;
 
 const FIX_TASK_PROMPT = (detail: string, projectRoot: string) =>
   `The REAL project tree at ${projectRoot} does not compile. This is the tree the user opens — ` +
@@ -121,6 +132,10 @@ export class RealTreeGuardian {
   /** Consecutive ticks whose verifier could not run (no verdict either way). */
   private blindStreak = 0;
   private blindReported = false;
+  /** When a steady-green tick was last noted; 0 = never, and the first is always noted. */
+  private lastGreenNoteAt = 0;
+  /** True while the last verdict was red, so the recovery can be announced. */
+  private wasRed = false;
 
   constructor(options: RealTreeGuardianOptions) {
     this.taskManager = options.taskManager;
@@ -189,13 +204,30 @@ export class RealTreeGuardian {
       this.blindStreak = 0;
       this.blindReported = false;
       if (verdict.ok) {
+        const recovered = this.wasRed;
         this.redFingerprint = undefined;
         this.fixAttempts = 0;
         this.bestErrorCount = Number.POSITIVE_INFINITY;
         this.attemptsWithoutProgress = 0;
         this.escalated = false;
+        this.wasRed = false;
+        // SILENCE IS NOT A STATUS. Announce the recovery once, then note a
+        // steady green at most hourly: without this, a green tick wrote
+        // nothing and a dead guardian looked exactly like a healthy tree.
+        const now = this.now();
+        if (recovered) {
+          getLoggerSafe().info("Real tree is back to green", { projectRoot: this.projectRoot });
+          if (this.messenger) {
+            await this.messenger(this.chatId, "✅ The project tree compiles again.").catch(() => undefined);
+          }
+          this.lastGreenNoteAt = now;
+        } else if (this.lastGreenNoteAt === 0 || now - this.lastGreenNoteAt >= GREEN_HEARTBEAT_MS) {
+          getLoggerSafe().info("Real-tree guardian: tree is green", { projectRoot: this.projectRoot });
+          this.lastGreenNoteAt = now;
+        }
         return;
       }
+      this.wasRed = true;
 
       // Same error list as the failed attempts before? Count the streak and
       // stop feeding fix tasks that keep not fixing it — escalate instead.
