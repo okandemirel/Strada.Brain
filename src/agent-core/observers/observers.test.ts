@@ -83,6 +83,28 @@ describe("BuildStateObserver", () => {
     expect(obs[0]!.summary).toContain("failed");
   });
 
+  it("a failure with nothing pending is reported but NOT actionable", () => {
+    // Measured live 2026-09-05: "Build failed with 0 pending file(s)" was
+    // raised nine times at priority 85, and each became a task telling an
+    // agent to "investigate the current build failure … and rerun the build"
+    // with no file to look at. Those agents went hunting for something to
+    // repair and edited the Unity project instead.
+    const buildState = {
+      getState: () => ({
+        pendingFiles: new Set<string>(),
+        hasCompilableChanges: false,
+        lastBuildOk: false,
+      }),
+    };
+    const obs = new BuildStateObserver(buildState).collect();
+    expect(obs).toHaveLength(1);
+    // Still disclosed — the state is real…
+    expect(obs[0]!.summary).toContain("no files are pending");
+    // …but it is not work: nothing names what broke.
+    expect(obs[0]!.actionable).toBe(false);
+    expect(obs[0]!.priority).toBeLessThan(85);
+  });
+
   it("only reports state changes", () => {
     const buildState = {
       getState: () => ({

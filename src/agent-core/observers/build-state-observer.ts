@@ -32,6 +32,26 @@ export class BuildStateObserver implements Observer {
 
     if (state.lastBuildOk === false) {
       const fileCount = state.pendingFiles.size;
+      // A FAILURE WITH NOTHING PENDING NAMES NOTHING TO FIX. Measured live
+      // 2026-09-05: "Build failed with 0 pending file(s)" was raised nine
+      // times at priority 85, and each one became a task telling an agent to
+      // "investigate the current build failure … and rerun the build" with no
+      // file to look at. Those agents went looking for something to repair and
+      // edited the Unity project instead. The state is still reported — it is
+      // real — but it is not actionable work until something names what broke.
+      if (fileCount === 0) {
+        return [
+          createObservation(
+            "build",
+            "Build state is failed, but no files are pending — nothing names what broke, so there is nothing to fix here",
+            {
+              priority: 20,
+              actionable: false,
+              context: { hasCompilableChanges: state.hasCompilableChanges },
+            },
+          ),
+        ];
+      }
       return [
         createObservation("build", `Build failed with ${fileCount} pending file(s)`, {
           priority: 85, // High priority — build failures should be addressed
