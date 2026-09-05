@@ -1678,7 +1678,15 @@ async function bootstrapImpl(
         observationEngine.register(new GitStateObserver(config.unityProjectPath));
         // Build health flows through the process-wide publication every
         // SelfVerification instance writes on each tracked verification tool.
-        observationEngine.register(new BuildStateObserver({ getState: getLatestGlobalBuildState }));
+        // One owner per concern: while the real-tree guardian is repairing the
+        // project, a build failure is disclosed but is not work for AgentCore
+        // (see BuildStateObserver's constructor for the measurement).
+        observationEngine.register(
+          new BuildStateObserver(
+            { getState: getLatestGlobalBuildState },
+            () => realTreeGuardian !== undefined,
+          ),
+        );
 
         observationEngine.start();
 

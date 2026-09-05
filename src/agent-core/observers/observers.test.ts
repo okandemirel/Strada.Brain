@@ -83,6 +83,42 @@ describe("BuildStateObserver", () => {
     expect(obs[0]!.summary).toContain("failed");
   });
 
+  it("hands the repair to the guardian instead of becoming a second owner", () => {
+    // Measured live 2026-09-04/05: the real-tree guardian AND a queue of
+    // AgentCore "investigate the build failure" tasks repaired the same Unity
+    // tree, each one's half-finished edits becoming the other's new error
+    // list. The count oscillated between 4 and 40 for eight hours; no
+    // convergence guard could bite, because it counts one owner's rounds while
+    // six agents share the tree. With a single owner it went 26 → 2 in ten
+    // minutes.
+    const buildState = {
+      getState: () => ({
+        pendingFiles: new Set(["Assets/Foo.cs"]),
+        hasCompilableChanges: true,
+        lastBuildOk: false,
+      }),
+    };
+    const obs = new BuildStateObserver(buildState, () => true).collect();
+    expect(obs).toHaveLength(1);
+    expect(obs[0]!.actionable).toBe(false);
+    expect(obs[0]!.summary).toContain("guardian owns this repair");
+    // Still says what it saw — the file count is not hidden.
+    expect(obs[0]!.summary).toContain("1 pending file");
+  });
+
+  it("is ordinary actionable work when no guardian owns it", () => {
+    const buildState = {
+      getState: () => ({
+        pendingFiles: new Set(["Assets/Foo.cs"]),
+        hasCompilableChanges: true,
+        lastBuildOk: false,
+      }),
+    };
+    const obs = new BuildStateObserver(buildState).collect();
+    expect(obs[0]!.priority).toBe(85);
+    expect(obs[0]!.actionable).not.toBe(false);
+  });
+
   it("a failure with nothing pending is reported but NOT actionable", () => {
     // Measured live 2026-09-05: "Build failed with 0 pending file(s)" was
     // raised nine times at priority 85, and each became a task telling an

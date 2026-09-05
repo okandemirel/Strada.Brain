@@ -18,7 +18,22 @@ export class BuildStateObserver implements Observer {
   readonly name = "build-state-observer";
   private lastReportedState: boolean | null = null;
 
-  constructor(private readonly buildState: BuildStateRef) {}
+  /**
+   * @param repairOwnedElsewhere True while another subsystem owns repairing
+   *   this build — today, the real-tree guardian.
+   *
+   *   Measured live 2026-09-04/05: the guardian and a queue of AgentCore
+   *   "investigate the build failure" tasks both repaired the SAME Unity tree,
+   *   and each one's half-finished edits became the other's new error list.
+   *   The compile-error count oscillated between 4 and 40 for eight hours and
+   *   no convergence guard could bite, because the guard counts one owner's
+   *   rounds while six agents share the tree. With one owner it went 26 → 2 in
+   *   ten minutes.
+   */
+  constructor(
+    private readonly buildState: BuildStateRef,
+    private readonly repairOwnedElsewhere: () => boolean = () => false,
+  ) {}
 
   collect(): AgentObservation[] {
     const state = this.buildState.getState();
@@ -39,6 +54,15 @@ export class BuildStateObserver implements Observer {
       // file to look at. Those agents went looking for something to repair and
       // edited the Unity project instead. The state is still reported — it is
       // real — but it is not actionable work until something names what broke.
+      if (this.repairOwnedElsewhere()) {
+        return [
+          createObservation(
+            "build",
+            `Build failed with ${fileCount} pending file(s) — the real-tree guardian owns this repair, so it is not work for anyone else`,
+            { priority: 20, actionable: false, context: { pendingFiles: [...state.pendingFiles].slice(0, 10) } },
+          ),
+        ];
+      }
       if (fileCount === 0) {
         return [
           createObservation(
