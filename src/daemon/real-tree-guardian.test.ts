@@ -10,17 +10,19 @@ vi.mock("../utils/logger.js", () => ({
   getLogger: () => loggerStub,
 }));
 
-function makeTaskManager(opts: { active?: boolean } = {}) {
+function makeTaskManager(opts: { active?: boolean; status?: unknown } = {}) {
   const submitted: Array<{ prompt: string; options?: Record<string, unknown> }> = [];
+  const cancelled: string[] = [];
   const manager = {
     hasActiveForegroundTasks: vi.fn(() => opts.active ?? false),
-    getStatus: vi.fn(() => null),
+    cancel: vi.fn((id: string) => { cancelled.push(id); return true; }),
+    getStatus: vi.fn(() => (opts.status ?? null) as never),
     submit: vi.fn((_chatId: string, _channel: string, prompt: string, options?: Record<string, unknown>) => {
       submitted.push({ prompt, options });
       return { id: "task_fix1" } as unknown as Task;
     }),
   };
-  return { manager, submitted };
+  return { manager, submitted, cancelled };
 }
 
 describe("RealTreeGuardian", () => {
@@ -271,5 +273,52 @@ describe("a green tick is not silence", () => {
     await guardian.tick();          // green again
 
     expect(messages.find((m) => m.includes("compiles again"))).toBeDefined();
+  });
+});
+
+describe("one fix task cannot hold the tree forever", () => {
+  /**
+   * Measured live 2026-09-05 09:00–09:50, with a single owner and the
+   * convergence guard already in place: ONE fix task ran 35+ minutes and drove
+   * the compile-error count 13 → 4 → 22 → 4 → 17 inside itself. The guard
+   * never bit, because it counts the GUARDIAN's rounds and the guardian spent
+   * the whole time waiting for that task.
+   */
+  it("cancels a fix task that overran, and counts it as no progress", async () => {
+    const { manager, cancelled } = makeTaskManager({
+      status: { status: "executing" },
+    });
+    let t = 1_000_000;
+    const guardian = new RealTreeGuardian({
+      taskManager: manager as unknown as TaskManager,
+      verify: vi.fn(async () => ({ ok: false, ran: true, detail: "Headless compile failed with 4 error(s)" })),
+      projectRoot: "/p",
+      now: () => t,
+    });
+
+    await guardian.tick();                       // submits fix task
+    t += 10 * 60_000;
+    await guardian.tick();                       // still young: left alone
+    expect(cancelled).toHaveLength(0);
+
+    t += 60 * 60_000;                            // past the budget
+    await guardian.tick();
+    expect(cancelled).toHaveLength(1);
+  });
+
+  it("leaves a fix task alone while it is within budget", async () => {
+    const { manager, cancelled } = makeTaskManager({ status: { status: "executing" } });
+    let t = 1_000_000;
+    const guardian = new RealTreeGuardian({
+      taskManager: manager as unknown as TaskManager,
+      verify: vi.fn(async () => ({ ok: false, ran: true, detail: "Headless compile failed with 4 error(s)" })),
+      projectRoot: "/p",
+      now: () => t,
+    });
+
+    await guardian.tick();
+    for (let i = 0; i < 4; i++) { t += 10 * 60_000; await guardian.tick(); }
+    // 40 minutes: a real fix deserves the room.
+    expect(cancelled).toHaveLength(0);
   });
 });

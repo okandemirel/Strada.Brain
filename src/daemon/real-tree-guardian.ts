@@ -83,6 +83,18 @@ const BLIND_TICKS_BEFORE_ESCALATION = 4;
  * case, left open for the green one.
  */
 const GREEN_HEARTBEAT_MS = 60 * 60_000;
+/**
+ * How long ONE fix task may stay in flight before the guardian takes the tree
+ * back.
+ *
+ * Measured live 2026-09-05 09:00–09:50, with a single owner and the
+ * convergence guard already in place: one fix task ran 35+ minutes and drove
+ * the compile-error count 13 → 4 → 22 → 4 → 17 inside itself. The guard never
+ * bit, because it counts the GUARDIAN's rounds and the guardian was waiting
+ * for that one task the whole time. Bounding how many fix tasks are submitted
+ * says nothing about what one of them does for an hour.
+ */
+const MAX_FIX_TASK_RUNTIME_MS = 45 * 60_000;
 
 const FIX_TASK_PROMPT = (detail: string, projectRoot: string) =>
   `The REAL project tree at ${projectRoot} does not compile. This is the tree the user opens — ` +
@@ -120,6 +132,8 @@ export class RealTreeGuardian {
   private timer: ReturnType<typeof setInterval> | undefined;
   private tickInFlight = false;
   private fixTaskId: string | undefined;
+  /** When the in-flight fix task was submitted; 0 = none. */
+  private fixTaskStartedAt = 0;
   private nextVerifyAt = 0;
   /** Fingerprint of the error list the current attempt streak is fixing. */
   private redFingerprint: string | undefined;
@@ -180,14 +194,40 @@ export class RealTreeGuardian {
       // duplicated the fix task every tick (measured 2026-08-28 02:17).
       if (this.fixTaskId) {
         const fix = this.taskManager.getStatus(this.fixTaskId as TaskId);
-        if (fix && ACTIVE_STATUSES.has(fix.status)) return;
-        const settledOk = fix && (fix as { status?: string }).status === "completed";
-        const finishedId = this.fixTaskId;
-        this.fixTaskId = undefined;
-        if (!settledOk) {
-          // The fix failed/blocked — fall through and re-diagnose from the
-          // CURRENT error list rather than resubmitting the same prompt.
-          getLoggerSafe().warn("Real-tree fix task did not complete; re-diagnosing", { fixTaskId: finishedId });
+        if (fix && ACTIVE_STATUSES.has(fix.status)) {
+          const ranForMs = this.now() - this.fixTaskStartedAt;
+          if (this.fixTaskStartedAt > 0 && ranForMs > MAX_FIX_TASK_RUNTIME_MS) {
+            // Take the tree back. The task is looping inside itself and the
+            // guardian cannot see it: from out here a 45-minute fix and a
+            // 45-minute thrash look identical, and only one of them is worth
+            // waiting for. Cancelling counts as an attempt that did not
+            // improve anything, so the convergence guard can finally reach it.
+            getLoggerSafe().warn("Real-tree fix task overran its budget — cancelling and re-diagnosing", {
+              fixTaskId: this.fixTaskId,
+              ranForMinutes: Math.round(ranForMs / 60_000),
+            });
+            try {
+              this.taskManager.cancel(this.fixTaskId as TaskId);
+            } catch {
+              /* already settled */
+            }
+            this.fixTaskId = undefined;
+            this.fixTaskStartedAt = 0;
+            this.attemptsWithoutProgress += 1;
+          } else {
+            return;
+          }
+        }
+        if (this.fixTaskId) {
+          const settledOk = fix && (fix as { status?: string }).status === "completed";
+          const finishedId = this.fixTaskId;
+          this.fixTaskId = undefined;
+          this.fixTaskStartedAt = 0;
+          if (!settledOk) {
+            // The fix failed/blocked — fall through and re-diagnose from the
+            // CURRENT error list rather than resubmitting the same prompt.
+            getLoggerSafe().warn("Real-tree fix task did not complete; re-diagnosing", { fixTaskId: finishedId });
+          }
         }
       }
 
@@ -309,6 +349,7 @@ export class RealTreeGuardian {
         },
       );
       this.fixTaskId = task.id;
+      this.fixTaskStartedAt = this.now();
       this.nextVerifyAt = this.now() + POST_FIX_QUIET_MS;
       if (this.messenger) {
         await this.messenger(
