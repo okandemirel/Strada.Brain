@@ -199,6 +199,15 @@ export interface ArtInventory {
   readonly prefabs: number;
   readonly models: number;
   readonly sprites: number;
+  /**
+   * Sprite textures whose PNG compresses below PLACEHOLDER_BYTES_PER_PIXEL —
+   * flat procedural shapes, not drawn art. Measured 2026-09-06 on the PixelFlow
+   * lease: 409 of 428 sprites, median 281 bytes at 64×64, every one produced by
+   * the procedural generator and every one counted as "a sprite texture" by
+   * the line below. A project whose art is 95% solid squares had passed this
+   * gate as art-complete.
+   */
+  readonly placeholderSprites: number;
 }
 
 export interface BuiltAsSpecifiedReport {
@@ -221,6 +230,8 @@ export interface BuiltAsSpecifiedReport {
   readonly unboundPrefabs: readonly string[];
   readonly unboundModels: readonly string[];
   readonly unboundSprites: readonly string[];
+  /** Sprite textures measured as placeholder-grade (see ArtInventory). */
+  readonly placeholderSpritePaths: readonly string[];
   /** Runtime scripts that build geometry with CreatePrimitive/PrimitiveType. */
   readonly primitiveScripts: readonly string[];
   /**
@@ -501,10 +512,11 @@ export function assessBuiltAsSpecified(
     shippedBuiltInRefs: 0,
     shippedMeshRenderers: 0,
     shippedSpriteRenderers: 0,
-    artInventory: { prefabs: 0, models: 0, sprites: 0 },
+    artInventory: { prefabs: 0, models: 0, sprites: 0, placeholderSprites: 0 },
     unboundPrefabs: [] as string[],
     unboundModels: [] as string[],
     unboundSprites: [] as string[],
+    placeholderSpritePaths: [] as string[],
     primitiveScripts: [] as string[],
     disclosures: [] as string[],
   };
@@ -715,6 +727,7 @@ export function assessBuiltAsSpecified(
   const unboundPrefabs: string[] = [];
   const unboundModels: string[] = [];
   const unboundSprites: string[] = [];
+  const placeholderSpritePaths: string[] = [];
   let prefabs = 0;
   let models = 0;
   let sprites = 0;
@@ -735,6 +748,7 @@ export function assessBuiltAsSpecified(
     } else if (SPRITE_EXT_RE.test(rel)) {
       sprites++;
       if (guid !== undefined && !bound) unboundSprites.push(rel);
+      if (isPlaceholderGradePng(join(projectRoot, rel))) placeholderSpritePaths.push(rel);
     }
   }
 
@@ -772,10 +786,11 @@ export function assessBuiltAsSpecified(
     shippedBuiltInRefs,
     shippedMeshRenderers: sum((s) => s.meshRenderers),
     shippedSpriteRenderers: sum((s) => s.spriteRenderers),
-    artInventory: { prefabs, models, sprites },
+    artInventory: { prefabs, models, sprites, placeholderSprites: placeholderSpritePaths.length },
     unboundPrefabs,
     unboundModels,
     unboundSprites,
+    placeholderSpritePaths,
     primitiveScripts,
     incomplete,
   };
@@ -811,7 +826,12 @@ export function assessBuiltAsSpecified(
   disclosures.push(
     `Project art: ${prefabs} prefabs, ${models} imported models, ${sprites} sprite textures — ` +
       `${unboundTotal} of them (${unboundPrefabs.length} prefabs, ${unboundModels.length} models, ` +
-      `${unboundSprites.length} sprites) are reached by no enabled scene.`,
+      `${unboundSprites.length} sprites) are reached by no enabled scene.` +
+      (placeholderSpritePaths.length > 0
+        ? ` ${placeholderSpritePaths.length} of the ${sprites} sprite textures are placeholder-grade: ` +
+          `their PNG compresses below ${PLACEHOLDER_BYTES_PER_PIXEL} byte per pixel, which is a flat ` +
+          `procedural shape, not drawn art (e.g. ${placeholderSpritePaths.slice(0, 3).join(", ")}).`
+        : ""),
   );
   if (primitiveScripts.length > 0) {
     disclosures.push(
@@ -822,11 +842,12 @@ export function assessBuiltAsSpecified(
   }
 
   // ── Refusal: only the strong, unambiguous case ────────────────────────
-  const refusal = structuralRefusal(report, {
-    artTotal,
-    unboundTotal,
-    entryScene: enabled[0],
-  });
+  const refusal =
+    structuralRefusal(report, {
+      artTotal,
+      unboundTotal,
+      entryScene: enabled[0],
+    }) ?? placeholderArtRefusal(report);
   if (!refusal && artTotal === 0) {
     disclosures.push(
       "The project holds no prefabs, imported models or sprite textures at all — there is nothing to bind, " +
@@ -952,6 +973,68 @@ function structuralRefusal(
   }
 
   return undefined;
+}
+
+/**
+ * Compressed bytes per pixel below which a PNG is a flat shape rather than art.
+ *
+ * Measured 2026-09-06 across the 428 sprites of the PixelFlow lease: 409 sat
+ * under 0.1 (median 0.07 — 281 bytes for 64×64), the 19 drawn ones between
+ * 0.28 and 0.67, and nothing in between. A real 64×64 sprite cannot compress
+ * to 400 bytes; a solid square with an outline always does.
+ */
+export const PLACEHOLDER_BYTES_PER_PIXEL = 0.1;
+
+/** Share of placeholder-grade sprites (and minimum count) at which the art is placeholder art. */
+const PLACEHOLDER_REFUSAL_SHARE = 0.8;
+const PLACEHOLDER_REFUSAL_MIN_SPRITES = 10;
+
+/** Width and height from a PNG's IHDR, or null for anything that is not a readable PNG. */
+export function readPngDimensions(bytes: Uint8Array): { width: number; height: number } | null {
+  if (bytes.length < 24) return null;
+  const sig = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+  for (let i = 0; i < sig.length; i++) if (bytes[i] !== sig[i]) return null;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const width = view.getUint32(16);
+  const height = view.getUint32(20);
+  return width > 0 && height > 0 ? { width, height } : null;
+}
+
+/** True only for a PNG that was read, parsed, and measured under the threshold. Unreadable is not placeholder. */
+export function isPlaceholderGradePng(absPath: string): boolean {
+  if (!/\.png$/iu.test(absPath)) return false;
+  let bytes: Uint8Array;
+  try {
+    bytes = readFileSync(absPath);
+  } catch {
+    return false;
+  }
+  const dims = readPngDimensions(bytes);
+  if (dims === null) return false;
+  return bytes.length / (dims.width * dims.height) < PLACEHOLDER_BYTES_PER_PIXEL;
+}
+
+/**
+ * C. The project's sprite art is, in the overwhelming majority, placeholder
+ *    shapes. A stylised game can be flat-shaded; a game whose "artwork" files
+ *    are 300-byte squares has not had its art made. Strong case only: at least
+ *    PLACEHOLDER_REFUSAL_MIN_SPRITES sprites and PLACEHOLDER_REFUSAL_SHARE of
+ *    them placeholder-grade. Anything softer is the disclosure above.
+ */
+function placeholderArtRefusal(
+  report: Omit<BuiltAsSpecifiedReport, "refusal" | "disclosures">,
+): string | undefined {
+  const { sprites, placeholderSprites } = report.artInventory;
+  if (sprites < PLACEHOLDER_REFUSAL_MIN_SPRITES) return undefined;
+  if (placeholderSprites / sprites < PLACEHOLDER_REFUSAL_SHARE) return undefined;
+  return (
+    `The project's art is placeholder art: ${placeholderSprites} of ${sprites} sprite textures compress ` +
+    `below ${PLACEHOLDER_BYTES_PER_PIXEL} byte per pixel — flat procedural shapes, not drawn art ` +
+    `(e.g. ${report.placeholderSpritePaths.slice(0, 4).join(", ")}). A solid square is not a delivered ` +
+    `game. Replace them with real art: unity_generate_sprite with provider "local" (the open-weights ` +
+    `model on this machine), or a purchased package via unity_my_assets_cloud (search → download) and ` +
+    `unity_import_asset_package — then bind the imported sprites where the placeholders are bound.`
+  );
 }
 
 /** Every guid a Unity text asset mentions. */

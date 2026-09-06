@@ -2,6 +2,7 @@ import { describe, expect, it, afterEach } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import os from "node:os";
+import { deflateSync } from "node:zlib";
 import {
   assessBuiltAsSpecified,
   isScaffoldingScene,
@@ -215,7 +216,7 @@ describe("assessBuiltAsSpecified — passes", () => {
     const report = assessBuiltAsSpecified(root);
 
     expect(report.refusal).toBeUndefined();
-    expect(report.artInventory).toEqual({ prefabs: 0, models: 0, sprites: 0 });
+    expect(report.artInventory).toEqual({ prefabs: 0, models: 0, sprites: 0, placeholderSprites: 0 });
     expect(report.disclosures.join("\n")).toContain("no prefabs, imported models or sprite textures at all");
     // A skipped claim must not read like a passed one.
     expect(report.disclosures.join("\n")).toContain("Shipped scenes PLACE 0 renderer components");
@@ -385,5 +386,121 @@ describe("assessBuiltAsSpecified — the entry scene's own composition", () => {
     // must stay 1, or "how full is this scene" answers with the prefab's guts.
     expect(entry.gameObjects).toBe(1);
     expect(entry.prefabInstances).toBe(1);
+  });
+});
+
+// ─── Placeholder-grade art ────────────────────────────────────────────────
+
+/** A valid RGBA PNG: flat colour compresses to a few hundred bytes, noise does not. */
+function png(width: number, height: number, kind: "flat" | "noise"): Buffer {
+  const crcTable = Array.from({ length: 256 }, (_, n) => {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    return c >>> 0;
+  });
+  const crc = (buf: Buffer): number => {
+    let c = 0xffffffff;
+    for (const b of buf) c = crcTable[(c ^ b) & 0xff]! ^ (c >>> 8);
+    return (c ^ 0xffffffff) >>> 0;
+  };
+  const chunk = (type: string, data: Buffer): Buffer => {
+    const len = Buffer.alloc(4);
+    len.writeUInt32BE(data.length);
+    const body = Buffer.concat([Buffer.from(type, "ascii"), data]);
+    const sum = Buffer.alloc(4);
+    sum.writeUInt32BE(crc(body));
+    return Buffer.concat([len, body, sum]);
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8; // bit depth
+  ihdr[9] = 6; // RGBA
+  const raw = Buffer.alloc((width * 4 + 1) * height);
+  let seed = 7;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width * 4; x++) {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      raw[y * (width * 4 + 1) + 1 + x] = kind === "flat" ? 0x80 : seed & 0xff;
+    }
+  }
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk("IHDR", ihdr),
+    chunk("IDAT", deflateSync(raw)),
+    chunk("IEND", Buffer.alloc(0)),
+  ]);
+}
+
+function putBytes(root: string, rel: string, body: Buffer, guid: string): void {
+  const abs = join(root, rel);
+  mkdirSync(dirname(abs), { recursive: true });
+  writeFileSync(abs, body);
+  writeFileSync(`${abs}.meta`, `fileFormatVersion: 2\nguid: ${guid}\n`);
+}
+
+/** A scene that places one sprite renderer bound to project art — the shape that passes A and B. */
+function boundSpriteProject(root: string, spriteGuid: string): void {
+  buildSettings(root, [{ path: "Assets/Scenes/Main.unity" }]);
+  put(
+    root,
+    "Assets/Scenes/Main.unity",
+    `${HEADER}${CAMERA(0)}${prefabInstance("11111111111111111111111111111111")}`,
+    "5ce5e5e5e5e5e5e5e5e5e5e5e5e5e5e5",
+  );
+  put(root, "Assets/Prefabs/Pig.prefab", artPrefab(spriteGuid), "11111111111111111111111111111111");
+}
+
+describe("assessBuiltAsSpecified — placeholder-grade art", () => {
+  // Measured 2026-09-06 on the PixelFlow lease: 409 of 428 sprites were
+  // 64×64 PNGs of ~281 bytes — procedural squares — and the gate counted them
+  // as "428 sprite textures". A game whose art is 95% solid squares delivered.
+  it("refuses when the sprite art is overwhelmingly flat shapes, naming counts, files and the tools", () => {
+    const root = project();
+    boundSpriteProject(root, "a0000000000000000000000000000000");
+    putBytes(root, "Assets/Art/Generated/Pig.png", png(64, 64, "flat"), "a0000000000000000000000000000000");
+    for (let i = 1; i <= 11; i++) {
+      putBytes(root, `Assets/Art/Areas/SunnyFarm/Artwork_${i}.png`, png(64, 64, "flat"), `b${String(i).padStart(31, "0")}`);
+    }
+    putBytes(root, "Assets/Art/Real/Hero.png", png(64, 64, "noise"), "c0000000000000000000000000000000");
+
+    const report = assessBuiltAsSpecified(root);
+
+    expect(report.artInventory).toEqual({ prefabs: 1, models: 0, sprites: 13, placeholderSprites: 12 });
+    expect(report.placeholderSpritePaths).not.toContain("Assets/Art/Real/Hero.png");
+    expect(report.refusal).toBeDefined();
+    expect(report.refusal).toContain("placeholder art: 12 of 13 sprite textures");
+    expect(report.refusal).toContain("Assets/Art/Areas/SunnyFarm/Artwork_1.png");
+    expect(report.refusal).toContain("unity_generate_sprite");
+    expect(report.refusal).toContain("unity_my_assets_cloud");
+  });
+
+  it("only discloses when the placeholders are a minority", () => {
+    const root = project();
+    boundSpriteProject(root, "a0000000000000000000000000000000");
+    putBytes(root, "Assets/Art/Real/Pig.png", png(64, 64, "noise"), "a0000000000000000000000000000000");
+    for (let i = 1; i <= 8; i++) {
+      putBytes(root, `Assets/Art/Real/Hero_${i}.png`, png(64, 64, "noise"), `c${String(i).padStart(31, "0")}`);
+    }
+    putBytes(root, "Assets/Art/Generated/Marker.png", png(64, 64, "flat"), "d0000000000000000000000000000000");
+
+    const report = assessBuiltAsSpecified(root);
+
+    expect(report.refusal).toBeUndefined();
+    expect(report.artInventory.placeholderSprites).toBe(1);
+    expect(report.disclosures.join("\n")).toContain("1 of the 10 sprite textures are placeholder-grade");
+  });
+
+  it("does not call a small or unreadable set placeholder art", () => {
+    const root = project();
+    boundSpriteProject(root, "a0000000000000000000000000000000");
+    // Fewer than the minimum, and one is not even a PNG.
+    putBytes(root, "Assets/Art/Generated/Pig.png", png(64, 64, "flat"), "a0000000000000000000000000000000");
+    put(root, "Assets/Art/junk.png", "pixels", "e0000000000000000000000000000000");
+
+    const report = assessBuiltAsSpecified(root);
+
+    expect(report.refusal).toBeUndefined();
+    expect(report.artInventory).toEqual({ prefabs: 1, models: 0, sprites: 2, placeholderSprites: 1 });
   });
 });
