@@ -96,3 +96,38 @@ describe("CampaignStorage", () => {
     expect(loaded!.milestones).toEqual([]);
   });
 });
+
+describe("findLatestRevivable", () => {
+  /**
+   * Audited 2026-09-06: a campaign the OLD delivery path had marked `done`
+   * while the structural refusal still stood ("delivered" a game that renders
+   * nothing) answered "kampanya devam" with silence — the query only looked
+   * at failed/cancelled, the user was told nothing, and the only way forward
+   * was a hand edit of this database.
+   */
+  let dir: string;
+  let storage: CampaignStorage;
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "revivable-")); storage = new CampaignStorage(join(dir, "c.db")); });
+  afterEach(() => { storage.close(); rmSync(dir, { recursive: true, force: true }); });
+
+  it("revives a `done` campaign whose final sprint still carries the structural refusal", () => {
+    storage.save(makeCampaign({
+      id: "c_done_refused", state: "done",
+      milestones: [{ id: "m1", title: "Sprint", prompt: "p", status: "green", attempts: 2, structureRefused: true }],
+    }));
+    expect(storage.findLatestRevivable("cli-local")?.id).toBe("c_done_refused");
+  });
+
+  it("leaves a plain `done` campaign final", () => {
+    storage.save(makeCampaign({
+      id: "c_done_clean", state: "done",
+      milestones: [{ id: "m1", title: "Sprint", prompt: "p", status: "green", attempts: 1 }],
+    }));
+    expect(storage.findLatestRevivable("cli-local")).toBeUndefined();
+  });
+
+  it("still finds a failed campaign", () => {
+    storage.save(makeCampaign({ id: "c_failed", state: "failed" }));
+    expect(storage.findLatestRevivable("cli-local")?.id).toBe("c_failed");
+  });
+});

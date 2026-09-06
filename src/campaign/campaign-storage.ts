@@ -235,11 +235,25 @@ export class CampaignStorage {
     return rows.map(rowToCampaign).filter((c) => typeof c.autoReviveAt === "number");
   }
 
-  /** Newest failed/cancelled campaign on this chat — the "kampanya devam" target. */
+  /**
+   * Newest campaign on this chat that "kampanya devam" may revive.
+   *
+   * Failed and cancelled ones, and — audited 2026-09-06 — a `done` one whose
+   * final sprint still carries the structural refusal. Under the current
+   * code such a campaign never reaches `done` (it stops at `failed`, see
+   * campaign-manager's NOT DELIVERED path); rows written before that fix
+   * read "delivered" over a game that renders nothing, and "kampanya devam"
+   * on them silently did nothing: the query only looked at failed/cancelled,
+   * the user was told nothing, and the only way forward was a hand edit of
+   * this database. A plain `done` stays final.
+   */
   findLatestRevivable(chatId: string): Campaign | undefined {
     const row = this.db
       .prepare(
-        "SELECT * FROM campaigns WHERE chat_id = ? AND state IN ('failed', 'cancelled') ORDER BY updated_at DESC LIMIT 1",
+        "SELECT * FROM campaigns WHERE chat_id = ? AND (" +
+          "state IN ('failed', 'cancelled') OR " +
+          "(state = 'done' AND milestones_json LIKE '%\"structureRefused\":true%')" +
+          ") ORDER BY updated_at DESC LIMIT 1",
       )
       .get(chatId) as CampaignRow | undefined;
     return row ? rowToCampaign(row) : undefined;
