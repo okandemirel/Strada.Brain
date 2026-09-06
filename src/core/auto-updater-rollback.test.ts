@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { AutoUpdater } from "./auto-updater.js";
 
 /**
@@ -92,5 +92,99 @@ describe("auto-update rollback", () => {
 
     expect(git.resets).toEqual([PRE]);
     expect(git.head()).toBe(PRE);
+  });
+});
+
+/**
+ * Measured 2026-09-07 01:40. "Auto-update rolling back … reason: the build
+ * failed" — the fourth such line in three days — while `npm run build` passed
+ * by hand every time. The failing command's output was thrown away, and the
+ * step (dependencies or build) was not named.
+ */
+describe("a failed update names the step and keeps the command's words", () => {
+  it("keeps the compiler's error text when the build fails", async () => {
+    const git = fakeGit({ commitDuringWindow: false });
+    const notices: string[] = [];
+    const u = updater(git, notices);
+    const logged: Array<{ msg: string; meta: Record<string, unknown> }> = [];
+    (u as unknown as { runCommand: (cmd: string, args: string[]) => Promise<string> }).runCommand = async (
+      cmd,
+      args,
+    ) => {
+      if (cmd === "npm" && args[0] === "run") {
+        throw new Error("npm exited with code 2: src/x.ts(1,1): error TS2304: Cannot find name 'y'.");
+      }
+      return git.run(cmd, args);
+    };
+    const { getLoggerSafe } = await import("../utils/logger.js");
+    const real = getLoggerSafe();
+    const spy = real ? vi.spyOn(real, "warn").mockImplementation((msg: string, meta?: unknown) => {
+      logged.push({ msg, meta: (meta ?? {}) as Record<string, unknown> });
+      return real;
+    }) : null;
+    try {
+      await performUpdate(u);
+    } finally {
+      spy?.mockRestore();
+    }
+    const failed = logged.find((l) => l.msg === "Auto-update step failed");
+    expect(failed?.meta["step"]).toBe("npm run build");
+    expect(String(failed?.meta["detail"])).toContain("TS2304");
+  });
+
+  it("blames npm install, not the build, when the dependencies fail", async () => {
+    const git = fakeGit({ commitDuringWindow: false });
+    const notices: string[] = [];
+    const u = updater(git, notices);
+    const logged: Array<{ msg: string; meta: Record<string, unknown> }> = [];
+    (u as unknown as { runCommand: (cmd: string, args: string[]) => Promise<string> }).runCommand = async (
+      cmd,
+      args,
+    ) => {
+      if (cmd === "npm" && args[0] === "install") throw new Error("Command timed out: npm install");
+      return git.run(cmd, args);
+    };
+    const { getLoggerSafe } = await import("../utils/logger.js");
+    const real = getLoggerSafe();
+    const spy = real ? vi.spyOn(real, "warn").mockImplementation((msg: string, meta?: unknown) => {
+      logged.push({ msg, meta: (meta ?? {}) as Record<string, unknown> });
+      return real;
+    }) : null;
+    try {
+      await performUpdate(u);
+    } finally {
+      spy?.mockRestore();
+    }
+    expect(logged.find((l) => l.msg === "Auto-update step failed")?.meta["step"]).toBe("npm install");
+    expect(logged.find((l) => l.msg === "Auto-update rolling back")?.meta["reason"]).toBe("npm install failed");
+  });
+});
+
+describe("the updater's own lock is not a local change", () => {
+  it("does not stash when the only untracked path is .strada-update.lock", async () => {
+    const git = fakeGit({ commitDuringWindow: false });
+    const stashes: string[] = [];
+    const run = git.run;
+    git.run = async (cmd, args) => {
+      if (cmd === "git" && args[0] === "status") return "?? .strada-update.lock\n";
+      if (cmd === "git" && args[0] === "stash") stashes.push(args.join(" "));
+      return run(cmd, args);
+    };
+    await performUpdate(updater(git, []));
+    expect(stashes).toEqual([]);
+  });
+
+  it("stashes real changes, and leaves the lock out of the stash", async () => {
+    const git = fakeGit({ commitDuringWindow: false });
+    const stashes: string[] = [];
+    const run = git.run;
+    git.run = async (cmd, args) => {
+      if (cmd === "git" && args[0] === "status") return " M src/a.ts\n?? .strada-update.lock\n";
+      if (cmd === "git" && args[0] === "stash") stashes.push(args.join(" "));
+      return run(cmd, args);
+    };
+    await performUpdate(updater(git, []));
+    expect(stashes[0]).toContain("push -u");
+    expect(stashes[0]).toContain(":(exclude).strada-update.lock");
   });
 });

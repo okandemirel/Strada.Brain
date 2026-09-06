@@ -711,11 +711,15 @@ export class AutoUpdater {
         this.installRoot,
       )
     ).trim();
-    const hadLocalChanges = statusOutput.length > 0;
+    // The updater's own lock file is untracked in this checkout; counting it
+    // stashed the tree on every cycle and put the lock itself into the stash.
+    const hadLocalChanges = statusOutput
+      .split("\n")
+      .some((line) => line.trim() !== "" && !line.endsWith(".strada-update.lock"));
     if (hadLocalChanges) {
       await this.runCommand(
         "git",
-        ["stash", "push", "-u", "-m", "auto-updater: stash before pull"],
+        ["stash", "push", "-u", "-m", "auto-updater: stash before pull", "--", ".", ":(exclude).strada-update.lock"],
         VERSION_CHECK_TIMEOUT,
         this.installRoot,
       );
@@ -732,11 +736,19 @@ export class AutoUpdater {
     // Empty until the pull lands; a rollback before that has nothing to guard
     // against and never runs, because the pull is the first thing in the try.
     let postPullSha = prePullSha;
+    let step = "git pull";
     const popStash = async (): Promise<void> => {
       if (!hadLocalChanges) return;
       try {
         await this.runCommand("git", ["stash", "pop"], VERSION_CHECK_TIMEOUT, this.installRoot);
-      } catch {
+      } catch (popErr) {
+        // Measured 2026-09-07 01:40: a stash holding three untracked notes
+        // from 2026-08-25 sat unrestored, and nothing in the log said so —
+        // the only notice went to a chat channel.
+        getLoggerSafe().warn("Auto-update could not restore the stashed working tree", {
+          detail: (popErr as Error).message.slice(0, 400),
+          recovery: "git stash list / git stash pop",
+        });
         // Check if working tree has conflict markers
         try {
           const statusOutput = await this.runCommand(
@@ -810,11 +822,22 @@ export class AutoUpdater {
         await this.runCommand("git", ["rev-parse", "HEAD"], VERSION_CHECK_TIMEOUT, this.installRoot)
       ).trim();
       getLoggerSafe().info("Auto-update pulled", { remote, branch, from: prePullSha, to: postPullSha });
+      step = "npm install";
       await this.installProjectDependencies();
+      step = "npm run build";
       await this.runCommand("npm", ["run", "build"], UPDATE_TIMEOUT, this.installRoot);
     } catch (buildErr) {
+      // Three rollbacks in three days said "the build failed" and nothing
+      // else (2026-09-04 18:51, 2026-09-06 12:45 and 18:41, 2026-09-07 01:40)
+      // while a manual `npm run build` passed each time. The step and the
+      // command's own words are the only way to tell a compile error from a
+      // timed-out `npm install`.
+      getLoggerSafe().warn("Auto-update step failed", {
+        step,
+        detail: (buildErr as Error).message.slice(0, 600),
+      });
       try {
-        await rollbackTo(postPullSha, "the build failed");
+        await rollbackTo(postPullSha, `${step} failed`);
         // Restore old dependencies after source rollback
         await this.installProjectDependencies();
       } catch {

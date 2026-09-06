@@ -52,3 +52,6 @@ src/channels/web/static/*
 # the recorded baselines MUST be committed — the gate compares against them.
 benchmarks/.report.json
 benchmarks/corpus/unity-synth-v1-*/
+
+# The auto-updater's own lock; untracked it was stashed on every update cycle
+.strada-update.lock
