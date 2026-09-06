@@ -2499,7 +2499,9 @@ export class CampaignManager {
       "measurement is that audit, already done. Spend the sprint on the change itself — open the " +
       "entry scene, place the named prefabs in it, bind real materials/meshes/sprites to their " +
       "renderers instead of engine primitives, save the scene, and let a captured frame and the " +
-      "unfiltered suite be your report.\n" +
+      "unfiltered suite be your report. Art comes from the purchased library (unity_my_assets_cloud " +
+      "'download' → unity_import_asset_package) or the generators, which use the installed local model " +
+      "by default — a result marked PLACEHOLDER is not the element's visual.\n" +
       `${close}`;
   }
 

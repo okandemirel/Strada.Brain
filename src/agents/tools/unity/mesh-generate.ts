@@ -21,6 +21,7 @@ import { dirname, join } from "node:path";
 import { reuseOrMintGuid } from "./meta-file-utils.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "../tool.interface.js";
 import { validatePath } from "../../../security/path-guard.js";
+import { realLocalAvailability } from "./sprite-generate.js";
 
 // =============================================================================
 // MESH MATH
@@ -520,6 +521,9 @@ ModelImporter:
 // =============================================================================
 
 export class MeshGenerateTool implements ITool {
+  constructor(
+    private readonly opts: import("./sprite-generate.js").GeneratorOptions = { localAvailable: realLocalAvailability() },
+  ) {}
   readonly name = "unity_generate_mesh";
   readonly description =
     "Generate a placeholder-grade low-poly 3D mesh (OBJ + import .meta, no Editor needed) for a " +
@@ -637,7 +641,7 @@ export class MeshGenerateTool implements ITool {
         isError: true,
       };
     }
-    const runner = new LocalModelRunner();
+    const runner: import("./sprite-generate.js").LocalRunnerLike = this.opts.runner ?? new LocalModelRunner();
     if (!runner.isModelInstalled(model3d.id)) {
       return {
         content: `Error: ${model3d.label} is not installed. Run \`strada assets-local-setup --model ${model3d.id}\` first.`,
@@ -733,13 +737,25 @@ export class MeshGenerateTool implements ITool {
       return { content: "Error: mesh generation is disabled in read-only mode", isError: true };
     }
 
-    const provider = String(input["provider"] ?? "procedural");
+    // AUTO: the installed image-to-3D model is the default, the analytic
+    // shape is the fallback (see SpriteGenerateTool for the measurement).
+    const explicit = input["provider"] !== undefined ? String(input["provider"]) : undefined;
+    const auto = explicit === undefined;
+    const provider = explicit ?? (this.opts.localAvailable("image-to-3d") ? "local" : "procedural");
     if (provider !== "procedural" && provider !== "local") {
       return { content: "Error: provider must be 'procedural' or 'local'", isError: true };
     }
     if (provider === "local") {
-      return this.executeLocal(input, context);
+      const local = await this.executeLocal(input, context);
+      if (!local.isError || !auto) return local;
+      const fallback = await this.execute({ ...input, provider: "procedural" }, context);
+      return fallback.isError
+        ? fallback
+        : { ...fallback, content: `${fallback.content} PLACEHOLDER: the local model failed (${String(local.content).slice(0, 160)}), so this is an analytic shape.` };
     }
+    const placeholderNote = auto
+      ? " PLACEHOLDER: no local image-to-3D model is installed (run `strada assets-local-setup`), so this is an analytic shape, not art."
+      : "";
 
     const rawName = String(input["name"] ?? "").trim();
     if (!/^[A-Za-z][\w-]{0,40}$/.test(rawName)) {
@@ -885,7 +901,7 @@ export class MeshGenerateTool implements ITool {
         content:
           `Mesh written: ${relFile} (+ .meta, guid ${guid.slice(0, 8)}…, ${mesh!.vertices.length} verts, ` +
           `${mesh!.faces.length} tris). Unity imports it as a model on next refresh. Place it on a child of the ` +
-          "element's prefab with a smooth/Lit material — an unreferenced mesh draws nothing." + aliasNote,
+          "element's prefab with a smooth/Lit material — an unreferenced mesh draws nothing." + aliasNote + placeholderNote,
       };
     } catch (err) {
       return {

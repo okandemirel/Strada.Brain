@@ -36,7 +36,7 @@ describe("encodePng", () => {
 
 describe("SpriteGenerateTool", () => {
   let dir: string;
-  const tool = new SpriteGenerateTool();
+  const tool = new SpriteGenerateTool({ localAvailable: () => false });
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), "sprite-gen-"));

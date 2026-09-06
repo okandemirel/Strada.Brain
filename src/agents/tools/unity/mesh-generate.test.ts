@@ -20,7 +20,7 @@ function parseObj(text: string): { verts: number; normals: number; faces: number
 
 describe("MeshGenerateTool", () => {
   let dir: string;
-  const tool = new MeshGenerateTool();
+  const tool = new MeshGenerateTool({ localAvailable: () => false });
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), "mesh-gen-"));

@@ -456,7 +456,36 @@ TextureImporter:
 // TOOL
 // =============================================================================
 
+/** Which local model kinds exist on this machine; a seam so tests never touch ~/.strada. */
+export type LocalAvailability = (kind: "text-to-image" | "image-to-3d") => boolean;
+
+export function realLocalAvailability(): LocalAvailability {
+  return (kind) => {
+    try {
+      // Lazy: the catalog probes the device and the runner checks the venv —
+      // neither belongs in module load, and both must fail closed.
+      const { defaultModelFor } = require("../../../assets-local/model-catalog.js") as typeof import("../../../assets-local/model-catalog.js");
+      const { LocalModelRunner } = require("../../../assets-local/local-model-runner.js") as typeof import("../../../assets-local/local-model-runner.js");
+      const spec = defaultModelFor(kind);
+      return spec !== undefined && new LocalModelRunner().isModelInstalled(spec.id);
+    } catch {
+      return false;
+    }
+  };
+}
+
+/** The runner surface the tools touch; a seam so tests never launch a model. */
+export type LocalRunnerLike = Pick<
+  import("../../../assets-local/local-model-runner.js").LocalModelRunner,
+  "isModelInstalled" | "textToImage" | "imageToMesh"
+>;
+export interface GeneratorOptions {
+  localAvailable: LocalAvailability;
+  runner?: LocalRunnerLike;
+}
+
 export class SpriteGenerateTool implements ITool {
+  constructor(private readonly opts: GeneratorOptions = { localAvailable: realLocalAvailability() }) {}
   readonly name = "unity_generate_sprite";
   readonly description =
     "Generate a placeholder-grade sprite for a game element and write it into the project " +
@@ -521,7 +550,15 @@ export class SpriteGenerateTool implements ITool {
       return { content: "Error: sprite generation is disabled in read-only mode", isError: true };
     }
 
-    const provider = String(input["provider"] ?? "procedural");
+    // AUTO: the installed real-art model is the default, the placeholder is
+    // the fallback. Measured 2026-09-06: sd15 and TripoSR were installed
+    // (6.7 GB of weights under ~/.strada/assets-local) and across a whole
+    // campaign `provider: "local"` was requested zero times — every sprite
+    // the game shipped was a procedural blob because "procedural" was the
+    // default and nothing told the sprint otherwise.
+    const explicit = input["provider"] !== undefined ? String(input["provider"]) : undefined;
+    const auto = explicit === undefined;
+    const provider = explicit ?? (this.opts.localAvailable("text-to-image") ? "local" : "procedural");
     if (provider !== "procedural" && provider !== "local") {
       return { content: "Error: provider must be 'procedural' (built-in shapes) or 'local' (open-weights diffusion on this machine)", isError: true };
     }
@@ -540,9 +577,20 @@ export class SpriteGenerateTool implements ITool {
     }
 
     if (provider === "local") {
-      return this.executeLocal(input, context, rawName, dirRel);
+      const local = await this.executeLocal(input, context, rawName, dirRel);
+      if (!local.isError || !auto) return local;
+      // Auto-chosen local failed: the element still gets a file, and the
+      // result says which kind and why — a silent placeholder would read as
+      // real art in the next audit.
+      const fallback = await this.executeProcedural(input, context, rawName, dirRel);
+      return fallback.isError
+        ? fallback
+        : { ...fallback, content: `${fallback.content} PLACEHOLDER: the local model failed (${String(local.content).slice(0, 160)}), so this is a procedural shape.` };
     }
-    return this.executeProcedural(input, context, rawName, dirRel);
+    const procedural = await this.executeProcedural(input, context, rawName, dirRel);
+    return auto && !procedural.isError
+      ? { ...procedural, content: `${procedural.content} PLACEHOLDER: no local text-to-image model is installed (run \`strada assets-local-setup\`), so this is a procedural shape, not art.` }
+      : procedural;
   }
 
   /** The open-weights path: a local diffusion model draws the sprite. */
@@ -570,7 +618,7 @@ export class SpriteGenerateTool implements ITool {
       };
     }
 
-    const runner = new LocalModelRunner();
+    const runner: LocalRunnerLike = this.opts.runner ?? new LocalModelRunner();
     if (!runner.isModelInstalled(spec.id)) {
       return {
         content:
