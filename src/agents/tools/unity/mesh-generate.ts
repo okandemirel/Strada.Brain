@@ -27,6 +27,19 @@ import { validatePath } from "../../../security/path-guard.js";
 // =============================================================================
 
 export const MESH_SHAPES = ["rounded-box", "sphere", "capsule", "cylinder", "cone", "organic"] as const;
+/**
+ * A SPRITE shape handed to the mesh tool, and its nearest solid. The mirror of
+ * sprite-generate's MESH_SHAPE_ALIASES: the two tools share one caller, and
+ * the caller confused the vocabularies (measured live 2026-09-03).
+ */
+export const SPRITE_SHAPE_ALIASES: Readonly<Record<string, (typeof MESH_SHAPES)[number]>> = {
+  square: "rounded-box",
+  rounded: "rounded-box",
+  circle: "sphere",
+  ring: "cylinder",
+  triangle: "cone",
+  capsule: "capsule",
+};
 export type MeshShape = (typeof MESH_SHAPES)[number];
 
 interface Vec3 {
@@ -741,10 +754,21 @@ export class MeshGenerateTool implements ITool {
       return { content: "Error: path must be under Assets/", isError: true };
     }
 
-    const shape = String(input["shape"] ?? "");
-    if (!(MESH_SHAPES as readonly string[]).includes(shape)) {
-      return { content: `Error: shape must be one of ${MESH_SHAPES.join(", ")}`, isError: true };
+    const shapeInput = String(input["shape"] ?? "");
+    const shape = (MESH_SHAPES as readonly string[]).includes(shapeInput)
+      ? shapeInput
+      : SPRITE_SHAPE_ALIASES[shapeInput] ?? "";
+    if (!shape) {
+      return {
+        content:
+          `Error: unknown shape "${shapeInput}" — mesh shapes are ${MESH_SHAPES.join(", ")}; ` +
+          "for a flat pixel-art piece use unity_generate_sprite instead.",
+        isError: true,
+      };
     }
+    const aliasNote = shape !== shapeInput
+      ? ` Note: "${shapeInput}" is a sprite shape; built as mesh shape "${shape}" — use unity_generate_sprite for a flat one.`
+      : "";
 
     const sizeRaw = Number(input["size"] ?? 1);
     const size = Number.isFinite(sizeRaw) ? Math.min(10, Math.max(0.05, sizeRaw)) : 1;
@@ -861,7 +885,7 @@ export class MeshGenerateTool implements ITool {
         content:
           `Mesh written: ${relFile} (+ .meta, guid ${guid.slice(0, 8)}…, ${mesh!.vertices.length} verts, ` +
           `${mesh!.faces.length} tris). Unity imports it as a model on next refresh. Place it on a child of the ` +
-          "element's prefab with a smooth/Lit material — an unreferenced mesh draws nothing.",
+          "element's prefab with a smooth/Lit material — an unreferenced mesh draws nothing." + aliasNote,
       };
     } catch (err) {
       return {

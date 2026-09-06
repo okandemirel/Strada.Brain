@@ -157,6 +157,23 @@ function colorFromName(name: string): Rgb {
 }
 
 /** A deterministic shape when the caller did not pick one. */
+/**
+ * A MESH shape handed to the sprite tool, and what it means in flat pixels.
+ *
+ * Measured live 2026-09-03 03:38: the sprint called unity_generate_sprite with
+ * shape "rounded-box" — a unity_generate_mesh word — got "unknown shape", and
+ * never retried. One vocabulary slip cost the element its art. The intent was
+ * obvious, so it is honoured and SAID, not refused.
+ */
+export const MESH_SHAPE_ALIASES: Readonly<Record<string, SpriteShape>> = {
+  "rounded-box": "rounded",
+  sphere: "circle",
+  capsule: "capsule",
+  cylinder: "rounded",
+  cone: "triangle",
+  organic: "creature",
+};
+
 function shapeFromName(name: string): SpriteShape {
   let h = 0;
   for (const ch of name) h = (h * 17 + ch.charCodeAt(0)) >>> 0;
@@ -680,14 +697,23 @@ export class SpriteGenerateTool implements ITool {
     }
 
     const shapeInput = input["shape"] !== undefined ? String(input["shape"]) : undefined;
+    const aliased = shapeInput ? MESH_SHAPE_ALIASES[shapeInput] : undefined;
     const shape = shapeInput
       ? (SPRITE_SHAPES as readonly string[]).includes(shapeInput)
         ? (shapeInput as SpriteShape)
-        : undefined
+        : aliased
       : shapeFromName(rawName);
     if (!shape) {
-      return { content: `Error: unknown shape "${shapeInput}" — one of ${SPRITE_SHAPES.join(", ")}`, isError: true };
+      return {
+        content:
+          `Error: unknown shape "${shapeInput}" — sprite shapes are ${SPRITE_SHAPES.join(", ")}; ` +
+          "for a dimensional object use unity_generate_mesh instead.",
+        isError: true,
+      };
     }
+    const aliasNote = aliased && shapeInput !== shape
+      ? ` Note: "${shapeInput}" is a mesh shape; drawn as sprite shape "${shape}" — use unity_generate_mesh for a 3D one.`
+      : "";
 
     const relFile = `${dirRel.replace(/[/\\]+$/, "")}/${rawName}.png`;
     const pathCheck = await validatePath(context.projectPath, relFile, { allowMissingParents: true });
@@ -715,7 +741,7 @@ export class SpriteGenerateTool implements ITool {
         content:
           `Sprite written: ${relFile} (+ .meta, guid ${guid.slice(0, 8)}…, shape ${shape}, ${size}px). ` +
           "Unity imports it as a Sprite on next refresh. Bind it to the element's prefab now — an " +
-          "unreferenced sprite draws nothing.",
+          "unreferenced sprite draws nothing." + aliasNote,
       };
     } catch (err) {
       return {
