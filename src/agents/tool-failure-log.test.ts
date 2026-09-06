@@ -225,3 +225,11 @@ describe("a truncated batch result", () => {
     expect(firstMeaningfulLine(allFine)).not.toContain("operation(s) failed");
   });
 });
+
+describe("failureTarget names the scope of a PlayMode run", () => {
+  it("keeps the testFilter — an empty run without it cannot be diagnosed", () => {
+    expect(failureTarget({ testFilter: "Game.Modules.Board.Tests", capture: true })).toBe(
+      "Game.Modules.Board.Tests",
+    );
+  });
+});

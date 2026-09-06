@@ -279,6 +279,10 @@ const TARGET_KEYS = [
   // "shell_exec: Self-managed write review rejected" nine times with no way to
   // tell which command was refused, or whether it was the same one each time.
   "command",
+  // For unity_playmode_verify the filter IS the scope. Measured 2026-09-06:
+  // two "no test executed" failures logged with no way to tell whether the
+  // agent filtered on a name that does not exist or ran the whole suite.
+  "testFilter",
 ] as const;
 
 export function failureTarget(input: unknown): string | undefined {
