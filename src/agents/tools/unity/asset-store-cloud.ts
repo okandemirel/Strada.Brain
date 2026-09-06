@@ -66,6 +66,18 @@ export interface DownloadInfo {
   productId: string;
   url: string;
   filename?: string;
+  /** Unity's filename-safe publisher/category labels — the cache layout keys. */
+  publisher?: string;
+  category?: string;
+}
+
+/** A package written to the local Asset Store cache, ready to import. */
+export interface DownloadedPackage {
+  productId: string;
+  /** Absolute path of the .unitypackage on disk. */
+  packagePath: string;
+  bytes: number;
+  filename: string;
 }
 
 export class UnityLinkMissingError extends Error {
@@ -211,7 +223,54 @@ export class UnityAssetStoreClient {
       filename: typeof dl?.["filename_safe_package_name"] === "string"
         ? `${dl["filename_safe_package_name"]}.unitypackage`
         : typeof data["filename"] === "string" ? data["filename"] : undefined,
+      ...(typeof dl?.["filename_safe_publisher_name"] === "string"
+        ? { publisher: dl["filename_safe_publisher_name"] as string }
+        : {}),
+      ...(typeof dl?.["filename_safe_category_name"] === "string"
+        ? { category: dl["filename_safe_category_name"] as string }
+        : {}),
     };
+  }
+
+  /**
+   * Fetch a purchased package to the local Asset Store cache and return the
+   * path an importer can use.
+   *
+   * Audited 2026-09-06: `download-info` returned a signed URL and told the
+   * agent "curl -L it, then unity_import_asset_package with packagePath" — a
+   * three-step manual chain that, across a whole campaign, never once ran.
+   * The only real-art source was one shell command away and stayed there.
+   *
+   * Written under `<root>/<Publisher>/<Category>/<Name>.unitypackage`, the
+   * layout Unity itself uses and both cache scanners (ours and the MCP
+   * importer's) walk — so after this, `unity_my_assets` lists it and
+   * `unity_import_asset_package` finds it by NAME with no path at all.
+   * Atomic (tmp + rename) and refuses an empty body: a zero-byte
+   * .unitypackage in the cache is worse than none, it reads as "downloaded".
+   */
+  async downloadPackage(productId: string, cacheRoot: string): Promise<DownloadedPackage> {
+    const info = await this.getDownloadInfo(productId);
+    const filename = info.filename ?? `${productId}.unitypackage`;
+    const safe = (v: string | undefined, fallback: string): string =>
+      (v ?? fallback).replace(/[/\\\u0000]/g, "_").trim() || fallback;
+    const dir = join(cacheRoot, safe(info.publisher, "Unknown Publisher"), safe(info.category, "Unknown Category"));
+    const packagePath = join(dir, safe(filename, `${productId}.unitypackage`));
+
+    // The signed URL is self-authorising; the bearer only belongs on our own
+    // packages host, and leaking it to a CDN would be a credential exposure.
+    const headers: Record<string, string> = {};
+    if (info.url.startsWith(this.link.packagesHost)) headers["Authorization"] = `Bearer ${await this.getToken()}`;
+    const resp = await this.fetchImpl(info.url, { headers, signal: AbortSignal.timeout(10 * 60_000) });
+    if (!resp.ok) throw new Error(`package download for ${productId} failed: HTTP ${resp.status}`);
+    const body = Buffer.from(await resp.arrayBuffer());
+    if (body.byteLength === 0) throw new Error(`package download for ${productId} returned an empty body — not written`);
+
+    const { mkdirSync, writeFileSync, renameSync } = await import("node:fs");
+    mkdirSync(dir, { recursive: true });
+    const tmp = `${packagePath}.part-${process.pid}`;
+    writeFileSync(tmp, body);
+    renameSync(tmp, packagePath);
+    return { productId, packagePath, bytes: body.byteLength, filename: safe(filename, filename) };
   }
 
   // ===========================================================================

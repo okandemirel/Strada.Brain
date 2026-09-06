@@ -26,7 +26,7 @@ import {
   type FetchLike,
 } from "./asset-store-cloud.js";
 
-const ACTIONS = ["search", "purchases", "download-info"] as const;
+const ACTIONS = ["search", "purchases", "download", "download-info"] as const;
 type Action = (typeof ACTIONS)[number];
 
 /** The local Asset Store download cache roots (same dirs unity_my_assets reads). */
@@ -97,7 +97,10 @@ export class MyAssetsCloudTool implements ITool {
       action: {
         type: "string",
         enum: ACTIONS,
-        description: "'purchases' (my library), 'search' (store catalog), or 'download-info'.",
+        description:
+          "'purchases' (my library), 'search' (store catalog), 'download' (fetch a purchased package into the " +
+          "local Asset Store cache and return its packagePath — then unity_import_asset_package), or " +
+          "'download-info' (signed URL only; prefer 'download').",
       },
       query: {
         type: "string",
@@ -105,7 +108,7 @@ export class MyAssetsCloudTool implements ITool {
       },
       productId: {
         type: "string",
-        description: "download-info only: the product/package id from purchases or search.",
+        description: "download / download-info: the product/package id from purchases or search.",
       },
       limit: { type: "number", description: "Max rows (default 20, cap 200)." },
       offset: { type: "number", description: "purchases paging offset (default 0)." },
@@ -119,6 +122,8 @@ export class MyAssetsCloudTool implements ITool {
      *  purchases test depended on what happened to be in this machine's
      *  Unity cache — green on the dev Mac, red on every CI runner. */
     private readonly cachedNamesImpl?: () => string[],
+    /** Test seam: where 'download' writes. Default is Unity's own cache root. */
+    private readonly cacheRootImpl?: () => string,
   ) {}
 
   async execute(input: Record<string, unknown>, _context: ToolContext): Promise<ToolExecutionResult> {
@@ -167,6 +172,18 @@ export class MyAssetsCloudTool implements ITool {
                   (p.downloadedLocally ? " — ON DISK" : " — not downloaded"),
               )
               .join("\n"),
+          };
+        }
+        case "download": {
+          const productId = String(input["productId"] ?? "").trim();
+          if (!productId) return { content: "Error: download needs productId", isError: true };
+          const root = (this.cacheRootImpl ?? (() => cacheRoots()[0]!))();
+          const dl = await client.downloadPackage(productId, root);
+          return {
+            content:
+              `Downloaded ${productId} (${dl.bytes} bytes) to ${dl.packagePath}\n` +
+              `Next: unity_import_asset_package with packagePath "${dl.packagePath}" — or by name ` +
+              `"${dl.filename.replace(/\.unitypackage$/i, "")}", it is now in the local cache.`,
           };
         }
         case "download-info": {
