@@ -162,3 +162,26 @@ describe('VaultRegistry disposal', () => {
     expect(registry.ids()).toEqual([]);
   });
 });
+
+describe('resolve() accepts a bare id', () => {
+  /**
+   * Measured 2026-09-06: every vault_search an agent issued in the PixelFlow
+   * campaign failed with "vault not found: 4ca9bd33 — registered:
+   * unity:4ca9bd33, …" — the id copied from a log line without its kind
+   * prefix. An id that is unambiguous without its prefix is not a wrong id.
+   */
+  it('resolves the hash without its kind prefix when it is unambiguous', () => {
+    const registry = new VaultRegistry();
+    registry.register(createFakeVault({ id: 'unity:4ca9bd33', rootPath: '/tmp/v-unity' }));
+    registry.register(createFakeVault({ id: 'self:strada-brain', rootPath: '/tmp/v-self' }));
+    expect(registry.resolve('4ca9bd33')?.id).toBe('unity:4ca9bd33');
+  });
+
+  it('refuses an ambiguous bare id rather than guessing', () => {
+    const registry = new VaultRegistry();
+    registry.register(createFakeVault({ id: 'unity:abc', rootPath: '/tmp/v1' }));
+    registry.register(createFakeVault({ id: 'generic:abc', rootPath: '/tmp/v2' }));
+    expect(registry.resolve('abc')).toBeUndefined();
+    expect(registry.resolve('nope')).toBeUndefined();
+  });
+});

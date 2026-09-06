@@ -68,7 +68,7 @@ export class VaultSearchTool {
         type: 'string',
         description:
           "Restrict to a single vault id (e.g. 'self' for Strada's own source). " +
-          'Omit to search the project vault by default.',
+          "Omit — or pass 'project' — to search this project's vault. A bare id without its kind prefix is accepted.",
       },
       topK: {
         type: 'number',
@@ -142,7 +142,13 @@ export class VaultSearchTool {
     const mode: VaultSearchMode =
       modeRaw === 'semantic' || modeRaw === 'fts' ? modeRaw : 'hybrid';
 
-    const vaultIdRaw = input['vaultId'];
+    // 'project' is what an agent reaches for when it means "this game's vault";
+    // measured 2026-09-06 as a failed call ("vault not found: project"). It is
+    // the omitted-id default by another name, so it is treated as omitted.
+    const vaultIdRaw =
+      typeof input['vaultId'] === 'string' && input['vaultId'].trim().toLowerCase() === 'project'
+        ? undefined
+        : input['vaultId'];
     const vaultId = typeof vaultIdRaw === 'string' && vaultIdRaw.length > 0 ? vaultIdRaw : undefined;
 
     // sec-H3: target selection.

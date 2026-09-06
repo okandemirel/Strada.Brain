@@ -156,7 +156,16 @@ export class VaultRegistry {
     if (byKind.length === 1) return byKind[0];
 
     const byPrefix = all.filter((v) => v.id.startsWith(`${requested}:`));
-    return byPrefix.length === 1 ? byPrefix[0] : undefined;
+    if (byPrefix.length === 1) return byPrefix[0];
+
+    // A bare hash. Measured 2026-09-06: every vault_search an agent ever
+    // issued in the PixelFlow campaign (three, across two weeks) failed with
+    // "vault not found: 4ca9bd33 — registered: unity:4ca9bd33, …": the agent
+    // copied the id it saw in a log line without its kind prefix, the exact
+    // match missed, and the indexed 84 MB project vault answered nothing. An
+    // id that is unambiguous without its prefix is not a wrong id.
+    const bySuffix = all.filter((v) => v.id.endsWith(`:${requested}`));
+    return bySuffix.length === 1 ? bySuffix[0] : undefined;
   }
 
   /** Registered ids, for an error that can be acted on rather than guessed at. */

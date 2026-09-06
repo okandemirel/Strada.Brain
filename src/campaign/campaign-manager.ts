@@ -2502,6 +2502,14 @@ export class CampaignManager {
       "unfiltered suite be your report. Art comes from the purchased library (unity_my_assets_cloud " +
       "'download' → unity_import_asset_package) or the generators, which use the installed local model " +
       "by default — a result marked PLACEHOLDER is not the element's visual.\n" +
+      // Measured 2026-09-06 23:14: 45 minutes into a sprint told DO NOT AUDIT,
+      // discovery was file_read/list_directory/code_search_rag — and zero
+      // vault_search, against an indexed 84 MB project vault. The tool's own
+      // description says "PRIMARY … use BEFORE file_read"; a description is
+      // not enough, so the sprint is told here too.
+      "DISCOVERY: the project is indexed — query vault_search (project vault, hybrid) first for any " +
+      "symbol, module or prefab you need to find; use file_read only for exact contents of a file you " +
+      "already know. Do not walk directories to learn the codebase.\n" +
       `${close}`;
   }
 

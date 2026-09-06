@@ -229,3 +229,17 @@ describe("VaultSearchTool mode='semantic' without a vector backend", () => {
     expect(result.content).toContain('source=semantic');
   });
 });
+
+describe("vaultId 'project'", () => {
+  // Measured 2026-09-06 as a failed call ("vault not found: project"): it is
+  // the omitted-id default by another name.
+  it('queries exactly the project vault', async () => {
+    const project = makeVault('unity:4ca9bd33', 'unity');
+    const self = makeVault('self:strada-brain', 'self' as VaultKind);
+    const ctx = makeContext([self, project], 'unity:4ca9bd33');
+    const result = await new VaultSearchTool().execute({ query: 'GameBootstrapper', vaultId: 'project' }, ctx);
+    expect(result.isError).toBeFalsy();
+    expect((project as { query: ReturnType<typeof vi.fn> }).query).toHaveBeenCalled();
+    expect((self as { query: ReturnType<typeof vi.fn> }).query).not.toHaveBeenCalled();
+  });
+});

@@ -75,6 +75,10 @@ describe("the final sprint is told what the tree renders, on every submit", () =
     // (measured live 2026-09-04 14:12).
     expect(prompt).toContain("DO NOT AUDIT");
     expect(prompt).toContain("re-audit the landed modules");
+    // Discovery goes through the indexed vault, not directory walks
+    // (measured 2026-09-06: 45 minutes of file_read/list_directory, zero
+    // vault_search, against an 84 MB project vault).
+    expect(prompt).toContain("vault_search");
   });
 
   it("replaces the previous block instead of stacking a stale one", () => {
