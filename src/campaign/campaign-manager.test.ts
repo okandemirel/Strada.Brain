@@ -909,6 +909,45 @@ describe("CampaignManager", () => {
     return campaign;
   };
 
+  it("tells the channel ONCE when the Unity link is dead, and the report carries it", async () => {
+    // Audited 2026-09-06: three dead-link failures in one campaign, zero words
+    // to the person who alone can re-link. The purchased library is the only
+    // real-art source; its death is news.
+    const DEAD = "The Unity account link expired or was revoked — re-run the Unity Link step. Detail: token refresh returned HTTP 412";
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+
+    // settleMilestone() overwrites the verification with its own green; set
+    // ours and emit directly, green AND blind, so the ladder still walks.
+    const GREEN = "All 42 tests passed (unfiltered — the whole PlayMode suite)";
+    tasks.verifications.set("task_1", { testsGreen: true, detail: GREEN, unfiltered: true, assetSourcingBlind: DEAD } as never);
+    tasks.emit("task:completed", "task_1", "sprint A done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    const told = messages.filter((m) => m.text.includes("Asset sourcing is BLIND"));
+    expect(told).toHaveLength(1);
+    expect(told[0]!.text).toContain("strada unity-link");
+    expect(storage.get(campaign.id)!.milestones[0]!.assetSourcingBlind).toContain("HTTP 412");
+
+    // A second affected sprint does not repeat the alarm…
+    tasks.verifications.set("task_2", { testsGreen: true, detail: GREEN, unfiltered: true, assetSourcingBlind: DEAD } as never);
+    tasks.emit("task:completed", "task_2", "sprint B done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    expect(messages.filter((m) => m.text.includes("Asset sourcing is BLIND"))).toHaveLength(1);
+
+    // …but the delivery report names every sprint it happened to.
+    compileVerdict = { ok: true, ran: true, errors: 0 };
+    tasks.verifications.set("task_3", {
+      testsGreen: true,
+      detail: "PlayMode verification passed: 179 of 179 tests passed (unfiltered — the whole PlayMode suite)",
+      unfiltered: true,
+    });
+    tasks.emit("task:completed", "task_3", "shipping it");
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+    const report = messages.map((m) => m.text).find((t) => t.includes("Campaign delivery"))!;
+    expect(report).toContain("asset sourcing BLIND");
+    expect((report.match(/purchased library was unreachable/g) ?? []).length).toBe(2);
+  });
+
   it("refuses to deliver a tree that does not compile, and says so first", async () => {
     // Measured live 2026-09-04 21:37: Sprint 7 was committed green (1296
     // files, f674e8d) and the campaign delivered while the tree carried 37

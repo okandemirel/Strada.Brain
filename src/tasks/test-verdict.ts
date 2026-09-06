@@ -40,6 +40,35 @@ export interface TaskTestVerdict {
   failedTests?: string[];
   /** How many further names the red line held but this verdict does not list. */
   failedTestsOmitted?: number;
+  /**
+   * The Unity account link was missing or dead when a tool tried to source
+   * art from the purchased library. The tool's own sentence, so the reader is
+   * told what to run.
+   *
+   * Audited 2026-09-06: across a whole campaign unity_my_assets_cloud was
+   * called three times, all three answered "The Unity account link expired or
+   * was revoked — re-run the Unity Link step" (token refresh HTTP 412), and
+   * not one word of it reached the channel or the delivery report. The only
+   * real-art source was dead for the entire build and nobody was told.
+   */
+  assetSourcingBlind?: string;
+}
+
+/** The two sentences asset-store-cloud.ts throws for a missing/dead link. */
+const ASSET_LINK_DEAD_RE = /Unity account (?:is not linked|link expired or was revoked)[^\n"]{0,160}/;
+
+/**
+ * The first dead-link sentence in the evidence, or undefined. Read off the
+ * TOOL RESULT text — the tool already says what to do, and quoting it beats
+ * inventing a second wording.
+ */
+export function detectAssetSourcingBlind(evidence: readonly TestEvidence[]): string | undefined {
+  for (const item of evidence) {
+    const text = typeof item.content === "string" ? item.content : "";
+    const m = ASSET_LINK_DEAD_RE.exec(text);
+    if (m) return m[0].trim();
+  }
+  return undefined;
 }
 
 /** The most failing test names a verdict carries; the rest are counted. */
@@ -99,6 +128,7 @@ export function findTestRunLines(text: string): string[] {
  */
 export function deriveTestVerdict(evidence: readonly TestEvidence[]): TaskTestVerdict {
   let verdict: TaskTestVerdict = { detail: "" };
+  const assetSourcingBlind = detectAssetSourcingBlind(evidence);
   for (const item of evidence) {
     const text = typeof item.content === "string" ? item.content : "";
     const lines = findTestRunLines(text);
@@ -140,5 +170,5 @@ export function deriveTestVerdict(evidence: readonly TestEvidence[]): TaskTestVe
         : {}),
     };
   }
-  return verdict;
+  return assetSourcingBlind === undefined ? verdict : { ...verdict, assetSourcingBlind };
 }

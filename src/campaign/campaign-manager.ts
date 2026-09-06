@@ -1749,8 +1749,27 @@ export class CampaignManager {
             unfiltered?: boolean;
             failedTests?: readonly string[];
             failedTestsOmitted?: number;
+            assetSourcingBlind?: string;
           };
         } | null)?.verification;
+        // THE ONLY REAL-ART SOURCE BEING DEAD IS NEWS. Audited 2026-09-06: a
+        // whole campaign's my-assets calls failed on an expired Unity link and
+        // nothing reached the channel or the report. Told once per campaign,
+        // carried on every affected sprint for the report.
+        if (verdict?.assetSourcingBlind) {
+          milestone.assetSourcingBlind = verdict.assetSourcingBlind;
+          const alreadyTold = campaign.milestones.some((m) => m.assetSourcingBlindTold === true);
+          if (!alreadyTold) {
+            milestone.assetSourcingBlindTold = true;
+            await this.tell(
+              campaign,
+              `⚠️ Asset sourcing is BLIND: ${verdict.assetSourcingBlind}\n` +
+                "The purchased library (unity_my_assets_cloud) cannot be reached until you run " +
+                "`strada unity-link` in a terminal — sprints can only fall back to procedural placeholders " +
+                "until then.",
+            );
+          }
+        }
         milestone.testVerdict = verdict?.testsGreen === true ? verdict.detail : undefined;
         milestone.testVerdictUnfiltered = verdict?.testsGreen === true ? verdict.unfiltered : undefined;
         // Red names are kept even though the milestone is green: a sprint can
@@ -2609,6 +2628,13 @@ export class CampaignManager {
         } else {
           marks.push("compiles");
         }
+      }
+      if (m.assetSourcingBlind) {
+        marks.push("asset sourcing BLIND");
+        caveats.push(
+          `${m.title}: the Unity account link was dead, so the purchased library was unreachable — ` +
+            `${m.assetSourcingBlind} (run \`strada unity-link\`)`,
+        );
       }
       if (m.visualEvidence === "observed") marks.push("captured frame observed");
       if (m.visualEvidence === "none-gate-not-demanded") {

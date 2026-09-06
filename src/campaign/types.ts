@@ -110,6 +110,10 @@ export interface CampaignMilestone {
   visualGateArmed?: boolean;
   /** What the compiler said at the delivery gate; absent = never measured. */
   compileVerdict?: { ok: boolean; ran: boolean; errors?: number; detail?: string };
+  /** The tool's own sentence when the Unity account link was dead during this sprint (see TaskTestVerdict). */
+  assetSourcingBlind?: string;
+  /** The channel was told once about it; later sprints do not repeat it. */
+  assetSourcingBlindTold?: boolean;
   /**
    * What the capture scan found when the milestone went green, and whether
    * the gate could act on it — the gate only bounces when the sprint prompt

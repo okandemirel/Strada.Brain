@@ -555,8 +555,12 @@ export class BackgroundExecutor {
       verdict.testsGreen !== undefined
         ? verdict
         : filesWritten > 0
-          ? { testsGreen: undefined, detail: `no test run observed (${filesWritten} file(s) written)` }
-          : undefined;
+          ? { ...verdict, testsGreen: undefined, detail: `no test run observed (${filesWritten} file(s) written)` }
+          // A dead Unity link is evidence even when the run wrote nothing and
+          // ran no test — that is exactly the run it stops (audited 2026-09-06).
+          : verdict.assetSourcingBlind !== undefined
+            ? { ...verdict, testsGreen: undefined, detail: "no test run observed" }
+            : undefined;
     if (!row) return;
     (this.taskManager as { setVerification?: (id: string, v: typeof row) => void })
       .setVerification?.(taskId, row);
