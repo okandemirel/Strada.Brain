@@ -80,6 +80,31 @@ describe("AgentCore", () => {
     expect(provider.chat).not.toHaveBeenCalled();
   });
 
+  it("skips tick while every provider is cooling down, keeping the observations", async () => {
+    // Measured 2026-09-08 01:12-01:16: a tick error every two minutes into a cooled chain.
+    const { ProviderHealthRegistry } = await import("../agents/providers/provider-health.js");
+    const { setLiveChainMemberNames } = await import("../agents/providers/provider-outage.js");
+    const registry = ProviderHealthRegistry.getInstance();
+    registry.clearProviderState("ac-cool");
+    registry.recordOverloaded("ac-cool", "quota wall");
+    setLiveChainMemberNames(["ac-cool"]);
+    try {
+      const engine = new ObservationEngine();
+      engine.register({ name: "test", collect: () => [createObservation("build", "Build failed", { priority: 90 })] });
+      const scorer = new PriorityScorer();
+      const provider = { chat: vi.fn() };
+      const taskManager = { submit: vi.fn().mockReturnValue({ id: "task_mock01" }), listTasks: vi.fn().mockReturnValue([]), getStatus: vi.fn() };
+      const channel = { sendText: vi.fn() };
+      const budget = { getUsage: () => ({ usedUsd: 1, limitUsd: 10, pct: 0.1 }) };
+      const core = new AgentCore(engine, scorer, provider as any, taskManager as any, channel as any, budget, undefined, { minReasoningIntervalMs: 0 });
+      await core.tick();
+      expect(provider.chat).not.toHaveBeenCalled();
+    } finally {
+      setLiveChainMemberNames([]);
+      registry.clearProviderState("ac-cool");
+    }
+  });
+
   it("skips tick when rate limited", async () => {
     vi.useFakeTimers();
     const engine = new ObservationEngine();

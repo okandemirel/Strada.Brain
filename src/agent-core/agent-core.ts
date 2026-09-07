@@ -12,6 +12,7 @@ import type { IChannelAdapter } from "../channels/channel.interface.js";
 import type { TaskManager } from "../tasks/task-manager.js";
 import type { TaskId } from "../tasks/types.js";
 import { getLogger } from "../utils/logger.js";
+import { allProvidersCoolingDownMs } from "../agents/providers/provider-outage.js";
 import { ObservationEngine } from "./observation-engine.js";
 import { createObservation, type AgentObservation } from "./observation-types.js";
 import { PriorityScorer } from "./priority-scorer.js";
@@ -99,6 +100,16 @@ export class AgentCore {
       // Rate limit (respect runtime override if set)
       const effectiveIntervalMs = this.runtimeOverrides.reasoningIntervalMs ?? this.config.minReasoningIntervalMs;
       if (Date.now() - this.lastReasoningMs < effectiveIntervalMs) return;
+
+      // Provider guard: a tick into a full cooldown is a guaranteed error
+      // every two minutes (measured 2026-09-08 01:12-01:16: "AgentCore tick
+      // error … All providers are in cooldown", observations re-queued each
+      // time). Nothing to reason with — keep the observations and wait.
+      const cooldownMs = allProvidersCoolingDownMs();
+      if (cooldownMs > 0) {
+        this.logger.debug("AgentCore: skipping tick — every provider is cooling down", { waitMs: cooldownMs });
+        return;
+      }
 
       // Budget guard
       const budget = this.budgetTracker.getUsage();
