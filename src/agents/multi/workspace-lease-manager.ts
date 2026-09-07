@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import { runProcess } from "../../utils/process-runner.js";
 import { getLoggerSafe } from "../../utils/logger.js";
 import { pruneCaptureEntries } from "./capture-retention.js";
+import { systemOwnedDeletionReason } from "./system-owned-path.js";
 
 export type WorkspaceLeaseKind = "git-worktree" | "temp-copy";
 
@@ -40,6 +41,11 @@ export interface WorkspaceCommitResult {
    * had fixed.
    */
   readonly removed: string[];
+  /**
+   * Deletions that WERE applied, because the file was measurably the
+   * system's own (see system-owned-path.ts): "<path> — <reason>".
+   */
+  readonly deleted: string[];
   /**
    * Paths that could not be processed at all (locked file, permission error,
    * target replaced by a directory mid-run…). The walk continues past them —
@@ -963,7 +969,7 @@ export class WorkspaceLeaseManager {
     let conflictsQuarantinedUnder: string | null = null;
     let quarantined = 0;
     if (!existsSync(workspacePath)) {
-      return { written, conflicts, removed, failed, conflictsQuarantinedUnder, quarantined };
+      return { written, conflicts, removed, deleted: [], failed, conflictsQuarantinedUnder, quarantined };
     }
 
     // Bulk write into ANY shared target: serialize against the other bulk
@@ -1121,9 +1127,28 @@ export class WorkspaceLeaseManager {
         // project — skip it rather than lose the rest of the report.
       }
     });
-    seedRels.forEach((rel, index) => {
-      if (removedFlags[index]) removed.push(rel);
-    });
+    const deleted: string[] = [];
+    const candidates = seedRels.filter((_, index) => removedFlags[index]);
+    // The system's own leftovers go; anything else stays and is reported.
+    for (const rel of candidates) {
+      const reason = opts?.quarantineOnly ? undefined : await systemOwnedDeletionReason(this.commandRunner, sourceRoot, rel);
+      if (reason === undefined) {
+        removed.push(rel);
+        continue;
+      }
+      try {
+        await fsp.rm(join(sourceRoot, rel), { force: true });
+        deleted.push(`${rel} — ${reason}`);
+      } catch {
+        removed.push(rel);
+      }
+    }
+    if (deleted.length > 0) {
+      getLoggerSafe().info("Workspace deletions applied to the system's own files", {
+        count: deleted.length,
+        sample: deleted.slice(0, 5),
+      });
+    }
     if (removed.length > 0) {
       getLoggerSafe().info("Workspace deletions left in place", {
         count: removed.length,
@@ -1164,6 +1189,7 @@ export class WorkspaceLeaseManager {
       written,
       conflicts,
       removed,
+      deleted,
       failed,
       conflictsQuarantinedUnder,
       quarantined,

@@ -1281,6 +1281,7 @@ export class BackgroundExecutor {
                 files: result.written.length,
                 conflicts: result.conflicts.length,
                 deletionsDeclined: result.removed.length,
+                deletionsApplied: result.deleted?.length ?? 0,
               });
             }
             if (result.removed.length > 0) {
@@ -1684,6 +1685,7 @@ export class BackgroundExecutor {
                 // had just resolved, the deletion was declined, and the next run
                 // opened on 25 CS0101 errors it had already fixed once.
                 deletionsDeclined: result.removed.length,
+                deletionsApplied: result.deleted?.length ?? 0,
               });
             }
             if (result.removed.length > 0) {

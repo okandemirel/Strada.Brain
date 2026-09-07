@@ -398,3 +398,37 @@ describe("capture retention rides the commit", () => {
     expect(existsSync(join(source, "Recordings", "old_29"))).toBe(false);
   });
 });
+
+describe("deletions of the system's own files are applied; the user's stay", () => {
+  // Measured 2026-09-07: every attempt deleted Assets/Scripts/PlayfieldBuilder.cs
+  // (a duplicate the conformance gate forbids editing) and the InitTestScene
+  // scaffolding the hygiene gate demands removed; every commit put them back.
+  it("removes a scaffolding scene and a campaign-authored duplicate, keeps a user file", async () => {
+    mkdirSync(join(source, "Assets", "Scripts"), { recursive: true });
+    writeFileSync(join(source, "Assets", "InitTestScene4abd18f9.unity"), "scene", "utf8");
+    writeFileSync(join(source, "Assets", "Scripts", "PlayfieldBuilder.cs"), "dup", "utf8");
+    writeFileSync(join(source, "Assets", "Scripts", "UserNotes.cs"), "mine", "utf8");
+    execSync(
+      "git init -q && git add -A && git -c user.email=a@b -c user.name=t commit -qm 'campaign: Sprint 1 — foundations' " +
+        "&& echo more >> Assets/Scripts/UserNotes.cs && git add -A && git -c user.email=a@b -c user.name=t commit -qm 'my own tweak'",
+      { cwd: source },
+    );
+    const lease = await gitManager().acquireLease({ label: "t" });
+    rmSync(join(lease.path, "Assets", "InitTestScene4abd18f9.unity"));
+    rmSync(join(lease.path, "Assets", "Scripts", "PlayfieldBuilder.cs"));
+    rmSync(join(lease.path, "Assets", "Scripts", "UserNotes.cs"));
+
+    const result = await lease.commit();
+    await lease.release();
+
+    expect(result.deleted.map((d) => d.split(" — ")[0])).toEqual(
+      expect.arrayContaining([join("Assets", "InitTestScene4abd18f9.unity"), join("Assets", "Scripts", "PlayfieldBuilder.cs")]),
+    );
+    expect(result.deleted.join("\n")).toContain("scaffolding scene");
+    expect(result.deleted.join("\n")).toContain("every commit that touched it was the system's own");
+    expect(result.removed).toEqual([join("Assets", "Scripts", "UserNotes.cs")]);
+    expect(existsSync(join(source, "Assets", "InitTestScene4abd18f9.unity"))).toBe(false);
+    expect(existsSync(join(source, "Assets", "Scripts", "PlayfieldBuilder.cs"))).toBe(false);
+    expect(existsSync(join(source, "Assets", "Scripts", "UserNotes.cs"))).toBe(true);
+  });
+});
