@@ -500,6 +500,23 @@ describe("assessBuiltAsSpecified — placeholder-grade art", () => {
     expect(report.refusal).toContain("unity_my_assets_cloud");
   });
 
+  it("names the placeholders a shipped scene binds FIRST, and says to replace those before wiring more", () => {
+    // Measured 2026-09-07 22:40: a sprint wired six area-background prefabs to
+    // placeholder PNGs while the refusal's examples were unbound LiveOps icons.
+    const root = project();
+    boundSpriteProject(root, "a0000000000000000000000000000000"); // Pig.prefab placed, sprite a000… bound
+    putBytes(root, "Assets/Art/pig.png", png(64, 64, "flat"), "a0000000000000000000000000000000"); // bound AND a placeholder
+    for (let i = 1; i <= 11; i++) {
+      putBytes(root, `Assets/Art/LiveOps/Icon_${i}.png`, png(64, 64, "flat"), `b${String(i).padStart(31, "0")}`);
+    }
+    const report = assessBuiltAsSpecified(root);
+    expect(report.boundPlaceholderSprites).toBe(1);
+    expect(report.placeholderSpritePaths[0]).toBe("Assets/Art/pig.png");
+    expect(report.refusal).toContain("1 of them are bound into the shipped scenes");
+    expect(report.refusal).toContain("do not wire more placeholders");
+    expect(report.refusal!.indexOf("Assets/Art/pig.png")).toBeLessThan(report.refusal!.indexOf("Icon_"));
+  });
+
   it("only discloses when the placeholders are a minority", () => {
     const root = project();
     boundSpriteProject(root, "a0000000000000000000000000000000");

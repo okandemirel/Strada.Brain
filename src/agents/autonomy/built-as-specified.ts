@@ -269,6 +269,8 @@ export interface BuiltAsSpecifiedReport {
   readonly unboundSprites: readonly string[];
   /** Sprite textures measured as placeholder-grade (see ArtInventory). */
   readonly placeholderSpritePaths: readonly string[];
+  /** How many of those a shipped scene reaches — they lead the list. */
+  readonly boundPlaceholderSprites: number;
   /** Runtime scripts that build geometry with CreatePrimitive/PrimitiveType. */
   readonly primitiveScripts: readonly string[];
   /** CreatePrimitive( call sites across those scripts — one fade quad is not a world. */
@@ -606,6 +608,7 @@ export function assessBuiltAsSpecified(
     unboundModels: [] as string[],
     unboundSprites: [] as string[],
     placeholderSpritePaths: [] as string[],
+    boundPlaceholderSprites: 0,
     primitiveScripts: [] as string[],
     primitiveCallSites: 0,
     disclosures: [] as string[],
@@ -863,6 +866,7 @@ export function assessBuiltAsSpecified(
   const unboundModels: string[] = [];
   const unboundSprites: string[] = [];
   const placeholderSpritePaths: string[] = [];
+  const boundPlaceholderPaths: string[] = [];
   const realSpritePaths: string[] = [];
   const audioHashes = new Map<string, string>();
   const duplicateAudioPaths: string[] = [];
@@ -888,8 +892,14 @@ export function assessBuiltAsSpecified(
     } else if (SPRITE_EXT_RE.test(rel)) {
       sprites++;
       if (guid !== undefined && !bound) unboundSprites.push(rel);
-      if (isPlaceholderGradePng(join(projectRoot, rel))) placeholderSpritePaths.push(rel);
-      else realSpritePaths.push(rel);
+      if (isPlaceholderGradePng(join(projectRoot, rel))) {
+        // The ones a shipped scene reaches go FIRST: they are what the player
+        // sees, and the one the sprint should replace before any LiveOps icon
+        // (measured 2026-09-07 22:40: a sprint wired six area backgrounds that
+        // were all placeholders while the refusal listed unbound icons).
+        if (bound) boundPlaceholderPaths.push(rel);
+        else placeholderSpritePaths.push(rel);
+      } else realSpritePaths.push(rel);
     } else if (AUDIO_EXT_RE.test(rel)) {
       audio++;
       const clip = measureAudioClip(join(projectRoot, rel));
@@ -947,7 +957,7 @@ export function assessBuiltAsSpecified(
       prefabs,
       models,
       sprites,
-      placeholderSprites: placeholderSpritePaths.length,
+      placeholderSprites: boundPlaceholderPaths.length + placeholderSpritePaths.length,
       audio,
       duplicateAudio: duplicateAudioPaths.length,
       shortAudio: shortAudioPaths.length,
@@ -955,7 +965,8 @@ export function assessBuiltAsSpecified(
     unboundPrefabs,
     unboundModels,
     unboundSprites,
-    placeholderSpritePaths,
+    placeholderSpritePaths: [...boundPlaceholderPaths, ...placeholderSpritePaths],
+    boundPlaceholderSprites: boundPlaceholderPaths.length,
     primitiveScripts,
     primitiveCallSites,
     incomplete,
@@ -993,10 +1004,10 @@ export function assessBuiltAsSpecified(
     `Project art: ${prefabs} prefabs, ${models} imported models, ${sprites} sprite textures — ` +
       `${unboundTotal} of them (${unboundPrefabs.length} prefabs, ${unboundModels.length} models, ` +
       `${unboundSprites.length} sprites) are reached by no enabled scene.` +
-      (placeholderSpritePaths.length > 0
-        ? ` ${placeholderSpritePaths.length} of the ${sprites} sprite textures are placeholder-grade: ` +
+      (boundPlaceholderPaths.length + placeholderSpritePaths.length > 0
+        ? ` ${boundPlaceholderPaths.length + placeholderSpritePaths.length} of the ${sprites} sprite textures are placeholder-grade: ` +
           `their pixels are a flat shape (${PLACEHOLDER_GRADE_RULE}), not drawn art ` +
-          `(e.g. ${placeholderSpritePaths.slice(0, 3).join(", ")}).` +
+          `(e.g. ${[...boundPlaceholderPaths, ...placeholderSpritePaths].slice(0, 3).join(", ")}).` +
           // What is already real, so a sprint does not redraw it. Measured
           // 2026-09-07 15:30: an attempt spent its first 13 minutes rediscovering
           // which of the 429 sprites the previous attempt had drawn.
@@ -1440,8 +1451,12 @@ function placeholderArtRefusal(
   return (
     `The project's art is placeholder art: ${placeholderSprites} of ${sprites} sprite textures are flat ` +
     `shapes by their pixels (${PLACEHOLDER_GRADE_RULE}) — procedural placeholders, not drawn art ` +
-    `(e.g. ${report.placeholderSpritePaths.slice(0, 4).join(", ")}). A solid square is not a delivered ` +
-    `game. Replace them with real art: unity_generate_sprite with provider "local" (the open-weights ` +
+    `(e.g. ${report.placeholderSpritePaths.slice(0, 4).join(", ")}). ` +
+    (report.boundPlaceholderSprites > 0
+      ? `${report.boundPlaceholderSprites} of them are bound into the shipped scenes — the player sees those; replace them FIRST ` +
+        `(the list above starts with them), and do not wire more placeholders into prefabs. `
+      : "") +
+    `A solid square is not a delivered game. Replace them with real art: unity_generate_sprite with provider "local" (the open-weights ` +
     `model on this machine), or a purchased package via unity_my_assets_cloud (search → download) and ` +
     `unity_import_asset_package — then bind the imported sprites where the placeholders are bound.`
   );
