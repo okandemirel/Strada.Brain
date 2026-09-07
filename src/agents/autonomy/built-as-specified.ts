@@ -744,6 +744,7 @@ export function assessBuiltAsSpecified(
   const unboundModels: string[] = [];
   const unboundSprites: string[] = [];
   const placeholderSpritePaths: string[] = [];
+  const realSpritePaths: string[] = [];
   const audioHashes = new Map<string, string>();
   const duplicateAudioPaths: string[] = [];
   const shortAudioPaths: string[] = [];
@@ -769,6 +770,7 @@ export function assessBuiltAsSpecified(
       sprites++;
       if (guid !== undefined && !bound) unboundSprites.push(rel);
       if (isPlaceholderGradePng(join(projectRoot, rel))) placeholderSpritePaths.push(rel);
+      else realSpritePaths.push(rel);
     } else if (AUDIO_EXT_RE.test(rel)) {
       audio++;
       const clip = measureAudioClip(join(projectRoot, rel));
@@ -867,7 +869,13 @@ export function assessBuiltAsSpecified(
       (placeholderSpritePaths.length > 0
         ? ` ${placeholderSpritePaths.length} of the ${sprites} sprite textures are placeholder-grade: ` +
           `their PNG compresses below ${PLACEHOLDER_BYTES_PER_PIXEL} byte per pixel, which is a flat ` +
-          `procedural shape, not drawn art (e.g. ${placeholderSpritePaths.slice(0, 3).join(", ")}).`
+          `procedural shape, not drawn art (e.g. ${placeholderSpritePaths.slice(0, 3).join(", ")}).` +
+          // What is already real, so a sprint does not redraw it. Measured
+          // 2026-09-07 15:30: an attempt spent its first 13 minutes rediscovering
+          // which of the 429 sprites the previous attempt had drawn.
+          (realSpritePaths.length > 0
+            ? ` ${realSpritePaths.length} are real art already (newest first: ${newestFirst(projectRoot, realSpritePaths).slice(0, 6).join(", ")}${realSpritePaths.length > 6 ? ", …" : ""}).`
+            : "")
         : ""),
   );
   disclosures.push(
@@ -1082,6 +1090,18 @@ export function measureAudioClip(absPath: string): { hash?: string; seconds?: nu
   }
   const bytesPerSecond = rate * channels * (bits / 8);
   return dataBytes !== undefined && bytesPerSecond > 0 ? { hash, seconds: dataBytes / bytesPerSecond } : { hash };
+}
+
+/** Paths ordered by mtime, newest first; unreadable ones last. */
+function newestFirst(projectRoot: string, rels: readonly string[]): string[] {
+  const stamped = rels.map((rel) => {
+    try {
+      return { rel, mtime: statSync(join(projectRoot, rel)).mtimeMs };
+    } catch {
+      return { rel, mtime: 0 };
+    }
+  });
+  return stamped.sort((a, b) => b.mtime - a.mtime).map((s) => s.rel);
 }
 
 /** True only for a PNG that was read, parsed, and measured under the threshold. Unreadable is not placeholder. */

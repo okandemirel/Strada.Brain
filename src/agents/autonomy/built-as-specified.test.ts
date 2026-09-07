@@ -470,6 +470,8 @@ describe("assessBuiltAsSpecified — placeholder-grade art", () => {
     expect(report.placeholderSpritePaths).not.toContain("Assets/Art/Real/Hero.png");
     expect(report.refusal).toBeDefined();
     expect(report.refusal).toContain("placeholder art: 12 of 13 sprite textures");
+    // …and what is real already, so the next sprint does not redraw it.
+    expect(report.disclosures.join("\n")).toContain("1 are real art already (newest first: Assets/Art/Real/Hero.png)");
     expect(report.refusal).toContain("Assets/Art/Areas/SunnyFarm/Artwork_1.png");
     expect(report.refusal).toContain("unity_generate_sprite");
     expect(report.refusal).toContain("unity_my_assets_cloud");
