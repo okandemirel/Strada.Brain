@@ -97,4 +97,69 @@ describe("inference runs one at a time", () => {
     await Promise.all([a, b]);
     expect(order).toEqual(["start /tmp/a.png", "end /tmp/a.png", "start /tmp/b.png", "end /tmp/b.png"]);
   });
+
+  // Review 2026-09-07: three runner defects, each reproduced first.
+  it("imageToMesh goes through the same inference lock as the draws", async () => {
+    const order: string[] = [];
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => { release = r; });
+    const spawn: SpawnImpl = async (_cmd, args) => {
+      const out = args[args.indexOf("--out") + 1]!;
+      order.push(`start ${out}`);
+      if (out.endsWith("a.obj")) await gate;
+      order.push(`end ${out}`);
+      return { code: 1, stdout: "", stderr: "stub" };
+    };
+    const runner = new LocalModelRunner(spawn);
+    (runner as unknown as { isModelInstalled: () => boolean }).isModelInstalled = () => true;
+    (runner as unknown as { writeScripts: () => void }).writeScripts = () => {};
+    const spec = { id: "triposr", label: "TripoSR", kind: "image-to-3d", weightsRef: "w", installMethod: "hub" } as never;
+    const a = runner.imageToMesh(spec, "/tmp/a.png", "/tmp/a.obj");
+    const b = runner.imageToMesh(spec, "/tmp/b.png", "/tmp/b.obj");
+    await new Promise((r) => setTimeout(r, 20));
+    expect(order).toEqual(["start /tmp/a.obj"]);
+    release();
+    await Promise.all([a, b]);
+    expect(order).toEqual(["start /tmp/a.obj", "end /tmp/a.obj", "start /tmp/b.obj", "end /tmp/b.obj"]);
+  });
+
+  it("a batch counts only files the run produced, not outputs that already existed", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "lmr-review-"));
+    const previous = process.env["STRADA_ASSETS_LOCAL_ROOT"];
+    process.env["STRADA_ASSETS_LOCAL_ROOT"] = dir;
+    try {
+      const out = join(dir, "old.png");
+      writeFileSync(out, "old bytes");
+      const stale = new Date(Date.now() - 60_000);
+      const { utimesSync } = await import("node:fs");
+      utimesSync(out, stale, stale);
+      const runner = new LocalModelRunner(spawnFail(1, "python exited 1"));
+      (runner as unknown as { isModelInstalled: () => boolean }).isModelInstalled = () => true;
+      (runner as unknown as { writeScripts: () => void }).writeScripts = () => {};
+      const spec = { id: "sd15", label: "sd15", kind: "text-to-image", weightsRef: "w", installMethod: "hub" } as never;
+      const r = await runner.textToImageBatch(spec, [{ prompt: "p", out }]);
+      expect(r.ok).toBe(false);
+      expect(r.written).toEqual([]);
+      expect(r.missing).toEqual([out]);
+    } finally {
+      if (previous === undefined) delete process.env["STRADA_ASSETS_LOCAL_ROOT"];
+      else process.env["STRADA_ASSETS_LOCAL_ROOT"] = previous;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("writeScripts creates the scripts directory it writes into", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "lmr-review-"));
+    const previous = process.env["STRADA_ASSETS_LOCAL_ROOT"];
+    process.env["STRADA_ASSETS_LOCAL_ROOT"] = join(dir, "fresh-root");
+    try {
+      const runner = new LocalModelRunner(spawnOk().spawn);
+      (runner as unknown as { writeScripts: () => void }).writeScripts();
+      expect(existsSync(join(dir, "fresh-root", "scripts", "txt2img.py"))).toBe(true);
+    } finally {
+      if (previous === undefined) delete process.env["STRADA_ASSETS_LOCAL_ROOT"];
+      else process.env["STRADA_ASSETS_LOCAL_ROOT"] = previous;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

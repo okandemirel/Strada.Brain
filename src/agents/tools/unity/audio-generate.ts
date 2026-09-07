@@ -16,6 +16,7 @@ import { dirname } from "node:path";
 import { reuseOrMintGuid } from "./meta-file-utils.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "../tool.interface.js";
 import { validatePath } from "../../../security/path-guard.js";
+import { outsideAssetsError } from "./generated-asset-guard.js";
 
 export const SAMPLE_RATE = 44_100;
 
@@ -345,6 +346,8 @@ export class AudioGenerateTool implements ITool {
     const relFile = `${dirRel.replace(/\/+$/, "")}/${rawName}.wav`;
     const pathCheck = await validatePath(context.projectPath, relFile, { allowMissingParents: true });
     if (!pathCheck.valid) return { content: `Error: ${pathCheck.error ?? "path validation failed"}`, isError: true };
+    const outside = outsideAssetsError(context.projectPath, pathCheck.fullPath, dirRel);
+    if (outside) return { content: outside, isError: true };
     const seed = typeof input["seed"] === "number" && Number.isFinite(input["seed"]) ? Math.floor(input["seed"]) : hashName(rawName);
 
     let samples: Float32Array;

@@ -21,6 +21,7 @@ import { dirname, join } from "node:path";
 import { reuseOrMintGuid } from "./meta-file-utils.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "../tool.interface.js";
 import { validatePath } from "../../../security/path-guard.js";
+import { PreviousAsset, outsideAssetsError } from "./generated-asset-guard.js";
 import { realLocalAvailability } from "./sprite-generate.js";
 
 // =============================================================================
@@ -706,17 +707,23 @@ export class MeshGenerateTool implements ITool {
     const relFile = `${dirRel.replace(/[/\\]+$/, "")}/${rawName}.obj`;
     const pathCheck = await validatePath(context.projectPath, relFile, { allowMissingParents: true });
     if (!pathCheck.valid) return { content: `Error: ${pathCheck.error ?? "path validation failed"}`, isError: true };
+    const outside = outsideAssetsError(context.projectPath, pathCheck.fullPath, dirRel);
+    if (outside) return { content: outside, isError: true };
     mkdirSync(dirname(pathCheck.fullPath), { recursive: true });
 
+    // The previous pair is kept until the lift is known good (review
+    // 2026-09-07: a failed lift deleted the bound mesh's .meta).
+    const previous = new PreviousAsset(pathCheck.fullPath);
     // Meta BEFORE art — see sprite-generate: torn pairs must fail toward an
     // orphan meta (cleaned), never meta-less art (random-guid Texture import).
     const guid = reuseOrMintGuid(`${pathCheck.fullPath}.meta`);
     writeFileSync(`${pathCheck.fullPath}.meta`, modelMeta(guid), "utf8");
     const lifted = await runner.imageToMesh(model3d, imageAbs, pathCheck.fullPath);
     if (!lifted.ok) {
-      try { rmSync(`${pathCheck.fullPath}.meta`, { force: true }); } catch { /* orphan meta cleanup */ }
-      return { content: `Error: image-to-3D failed: ${lifted.detail}`, isError: true };
+      previous.restore();
+      return { content: `Error: image-to-3D failed: ${lifted.detail} The previous mesh and its .meta (if any) were kept.`, isError: true };
     }
+    previous.commit();
     return {
       content:
         `Mesh written by local image-to-3D (${model3d.label}): ${relFile} (+ .meta). ` +
@@ -906,6 +913,8 @@ export class MeshGenerateTool implements ITool {
     if (!pathCheck.valid) {
       return { content: `Error: ${pathCheck.error ?? "path validation failed"}`, isError: true };
     }
+    const outsideAssets = outsideAssetsError(context.projectPath, pathCheck.fullPath, dirRel);
+    if (outsideAssets) return { content: outsideAssets, isError: true };
 
     try {
       // Reuse the existing guid on regeneration — a fresh guid orphans every

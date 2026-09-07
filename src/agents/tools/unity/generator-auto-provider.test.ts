@@ -1,7 +1,8 @@
-import { describe, it, expect, afterEach } from "vitest";
-import { mkdtempSync, rmSync, mkdirSync, existsSync, writeFileSync } from "node:fs";
+import { describe, it, expect, afterEach, vi } from "vitest";
+import { mkdtempSync, rmSync, mkdirSync, existsSync, writeFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { deflateSync } from "node:zlib";
 import { SpriteGenerateTool , type LocalRunnerLike } from "./sprite-generate.js";
 import { MeshGenerateTool } from "./mesh-generate.js";
 import type { ToolContext } from "../tool.interface.js";
@@ -21,6 +22,45 @@ const refusing = {
 } as never;
 const dirs: string[] = [];
 afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }); });
+
+/** A real RGBA PNG: "noise" is drawn art, "flat" a placeholder square, "specks" a cut-out that removed the subject. */
+function pngFixture(kind: "noise" | "flat" | "specks", size = 64): Buffer {
+  const crcTable = Array.from({ length: 256 }, (_, n) => {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    return c >>> 0;
+  });
+  const crc = (buf: Buffer): number => {
+    let c = 0xffffffff;
+    for (const b of buf) c = crcTable[(c ^ b) & 0xff]! ^ (c >>> 8);
+    return (c ^ 0xffffffff) >>> 0;
+  };
+  const chunk = (type: string, data: Buffer): Buffer => {
+    const len = Buffer.alloc(4);
+    len.writeUInt32BE(data.length);
+    const body = Buffer.concat([Buffer.from(type, "ascii"), data]);
+    const sum = Buffer.alloc(4);
+    sum.writeUInt32BE(crc(body));
+    return Buffer.concat([len, body, sum]);
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(size, 0);
+  ihdr.writeUInt32BE(size, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 6;
+  const raw = Buffer.alloc((size * 4 + 1) * size);
+  let seed = 7;
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      seed = (Math.imul(seed, 1103515245) + 12345) & 0x7fffffff;
+      const o = y * (size * 4 + 1) + 1 + x * 4;
+      if (kind === "noise") { raw[o] = seed & 0xff; raw[o + 1] = (seed >> 8) & 0xff; raw[o + 2] = (seed >> 16) & 0xff; raw[o + 3] = 255; }
+      else if (kind === "flat") { raw[o] = 200; raw[o + 1] = 40; raw[o + 2] = 40; raw[o + 3] = 255; }
+      else { const on = (seed >> 9) % 100 === 0; raw[o] = seed & 0xff; raw[o + 1] = (seed >> 8) & 0xff; raw[o + 2] = (seed >> 16) & 0xff; raw[o + 3] = on ? 255 : 0; }
+    }
+  }
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk("IHDR", ihdr), chunk("IDAT", deflateSync(raw)), chunk("IEND", Buffer.alloc(0))]);
+}
 function project(): { root: string; ctx: ToolContext } {
   const root = mkdtempSync(join(tmpdir(), "auto-provider-"));
   dirs.push(root);
@@ -82,7 +122,7 @@ describe("the installed model is the default; the placeholder is the fallback", 
       imageToMesh: vi.fn(async () => ({ ok: false, detail: "n/a" })),
       textToImageBatch: vi.fn(async (_spec: unknown, jobs: Array<{ out: string }>) => {
         batchCalls.push(jobs.length);
-        const written = jobs.slice(0, 2).map((j) => { writeFileSync(j.out, "png-bytes"); return j.out; });
+        const written = jobs.slice(0, 2).map((j) => { writeFileSync(j.out, pngFixture("noise")); return j.out; });
         return { ok: false, detail: "1 of 3 failed: cuda", written, missing: jobs.slice(2).map((j) => j.out) };
       }),
     } as unknown as LocalRunnerLike;
@@ -104,19 +144,9 @@ describe("the installed model is the default; the placeholder is the fallback", 
     // Measured 2026-09-07 15:02: rembg wiped a green pig off its green
     // background — 19 KB of alpha specks reported as ✓.
     const { root, ctx } = project();
-    // A 64×64 PNG under 0.1 byte/pixel reads as blank; a "real" one is fat.
-    const blank = (out: string) => {
-      const b = Buffer.alloc(208);
-      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(b, 0);
-      b.writeUInt32BE(64, 16); b.writeUInt32BE(64, 20); // 208 B at 64×64 = 0.05 B/px
-      writeFileSync(out, b);
-    };
-    const real = (out: string) => {
-      const b = Buffer.alloc(9000, 7);
-      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(b, 0);
-      b.writeUInt32BE(64, 16); b.writeUInt32BE(64, 20);
-      writeFileSync(out, b);
-    };
+    // A flat square reads as blank; drawn noise is real.
+    const blank = (out: string) => writeFileSync(out, pngFixture("flat"));
+    const real = (out: string) => writeFileSync(out, pngFixture("noise"));
     let calls = 0;
     const runner = {
       isModelInstalled: () => true,
@@ -148,12 +178,7 @@ describe("the installed model is the default; the placeholder is the fallback", 
       textToImage: vi.fn(async () => ({ ok: false, detail: "unused" })),
       imageToMesh: vi.fn(async () => ({ ok: false, detail: "n/a" })),
       textToImageBatch: vi.fn(async (_spec: unknown, jobs: Array<{ out: string }>) => {
-        for (const j of jobs) {
-          const b = Buffer.alloc(9000, 7);
-          Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(b, 0);
-          b.writeUInt32BE(64, 16); b.writeUInt32BE(64, 20);
-          writeFileSync(j.out, b);
-        }
+        for (const j of jobs) writeFileSync(j.out, pngFixture("noise"));
         return { ok: true, detail: "1 written", written: jobs.map((j) => j.out), missing: [], keptBackground: [jobs[0]!.out] };
       }),
     } as unknown as LocalRunnerLike;
@@ -266,5 +291,115 @@ describe("styleNotesForPrompt keeps the look and drops the report", () => {
     await new SpriteGenerateTool({ localAvailable: () => true, runner, specFor }).execute({ name: "Pig" }, ctx);
     expect(prompts[0]).toContain("warm toy-like palette");
     expect(prompts[0]).not.toMatch(/verif|prefab/i);
+  });
+});
+
+describe("defects the generator review found (2026-09-07)", () => {
+  const drawer = (draw: (out: string) => void, ok = true) => ({
+    isModelInstalled: () => true,
+    imageToMesh: vi.fn(async () => ({ ok: false, detail: "n/a" })),
+    textToImage: vi.fn(async (_s: unknown, _p: string, out: string) => { if (ok) draw(out); return ok ? { ok: true, detail: "drawn" } : { ok: false, detail: "OOM" }; }),
+  }) as unknown as LocalRunnerLike;
+
+  it("a failed regeneration keeps the previous sprite AND its .meta (the guid every prefab references)", async () => {
+    const { root, ctx } = project();
+    const png = join(root, "Assets/Art/Generated/Pig.png");
+    mkdirSync(join(root, "Assets/Art/Generated"), { recursive: true });
+    writeFileSync(png, pngFixture("noise"));
+    writeFileSync(`${png}.meta`, "fileFormatVersion: 2\nguid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n");
+    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner: drawer(() => {}, false), specFor }).execute({ name: "Pig", provider: "local" }, ctx);
+    expect(r.isError).toBe(true);
+    expect(r.content).toContain("previous drawn sprite and its .meta were kept");
+    expect(readFileSync(`${png}.meta`, "utf8")).toContain("guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    expect(readFileSync(png).equals(pngFixture("noise"))).toBe(true);
+    expect(existsSync(`${png}.strada-prev`)).toBe(false);
+  });
+
+  it("AUTO does not overwrite drawn art with a placeholder when the model fails", async () => {
+    const { root, ctx } = project();
+    const png = join(root, "Assets/Art/Generated/Pig.png");
+    mkdirSync(join(root, "Assets/Art/Generated"), { recursive: true });
+    writeFileSync(png, pngFixture("noise"));
+    writeFileSync(`${png}.meta`, "fileFormatVersion: 2\nguid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n");
+    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner: drawer(() => {}, false), specFor }).execute({ name: "Pig" }, ctx);
+    expect(r.isError).toBe(true);
+    expect(r.content).toContain("was KEPT");
+    expect(readFileSync(png).equals(pngFixture("noise"))).toBe(true);
+    expect(readFileSync(`${png}.meta`, "utf8")).toContain("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+  });
+
+  it("a blank-twice regeneration restores the previous good sprite instead of deleting it", async () => {
+    const { root, ctx } = project();
+    const png = join(root, "Assets/Art/Generated/Pig.png");
+    mkdirSync(join(root, "Assets/Art/Generated"), { recursive: true });
+    writeFileSync(png, pngFixture("noise"));
+    writeFileSync(`${png}.meta`, "fileFormatVersion: 2\nguid: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n");
+    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner: drawer((out) => writeFileSync(out, pngFixture("flat"))), specFor }).execute({ name: "Pig", provider: "local" }, ctx);
+    expect(r.isError).toBe(true);
+    expect(r.content).toContain("previous drawn sprite was kept");
+    expect(readFileSync(png).equals(pngFixture("noise"))).toBe(true);
+  });
+
+  it("a cut-out that removed the subject (alpha specks) is not a usable sprite", async () => {
+    const { root, ctx } = project();
+    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner: drawer((out) => writeFileSync(out, pngFixture("specks", 128))), specFor }).execute({ name: "GreenPig", provider: "local" }, ctx);
+    expect(r.isError).toBe(true);
+    expect(r.content).toContain("opaque");
+    expect(existsSync(join(root, "Assets/Art/Generated/GreenPig.png"))).toBe(false);
+    expect(existsSync(join(root, "Assets/Art/Generated/GreenPig.png.meta"))).toBe(false);
+  });
+
+  it("a batch that drew nothing over earlier files reports 0 written, not 3", async () => {
+    const { root, ctx } = project();
+    mkdirSync(join(root, "Assets/Art/Generated"), { recursive: true });
+    for (const n of ["A", "B", "C"]) writeFileSync(join(root, `Assets/Art/Generated/${n}.png`), pngFixture("noise"));
+    const runner = {
+      isModelInstalled: () => true,
+      textToImage: vi.fn(async () => ({ ok: false, detail: "unused" })),
+      imageToMesh: vi.fn(async () => ({ ok: false, detail: "n/a" })),
+      textToImageBatch: vi.fn(async (_s: unknown, jobs: Array<{ out: string }>) => ({ ok: false, detail: "python exited 1", written: jobs.map((j) => j.out), missing: [], keptBackground: [] })),
+    } as unknown as LocalRunnerLike;
+    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner, specFor }).execute({ batch: [{ name: "A" }, { name: "B" }, { name: "C" }] }, ctx);
+    expect(r.isError).toBe(true);
+    expect(r.content).toContain("0 of 3 sprites written");
+    expect(r.content).toContain("python exited 1");
+    expect(readFileSync(join(root, "Assets/Art/Generated/A.png")).equals(pngFixture("noise"))).toBe(true);
+  });
+
+  it("a runner that throws mid-batch does not escape the tool or leave orphan metas", async () => {
+    const { root, ctx } = project();
+    const runner = {
+      isModelInstalled: () => true,
+      textToImage: vi.fn(async () => ({ ok: false, detail: "unused" })),
+      imageToMesh: vi.fn(async () => ({ ok: false, detail: "n/a" })),
+      textToImageBatch: vi.fn(async () => { throw new Error("killed by SIGTERM"); }),
+    } as unknown as LocalRunnerLike;
+    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner, specFor }).execute({ batch: [{ name: "A" }, { name: "B" }] }, ctx);
+    expect(r.isError).toBe(true);
+    expect(r.content).toContain("killed by SIGTERM");
+    expect(existsSync(join(root, "Assets/Art/Generated/A.png.meta"))).toBe(false);
+    expect(existsSync(join(root, "Assets/Art/Generated/B.png.meta"))).toBe(false);
+  });
+
+  it("a path that resolves outside Assets/ is refused by every generator", async () => {
+    const { root, ctx } = project();
+    const sprite = await new SpriteGenerateTool({ localAvailable: () => false }).execute({ name: "Rocket", path: "Assets/../ProjectSettings" }, ctx);
+    expect(sprite.isError).toBe(true);
+    expect(sprite.content).toContain("outside Assets/");
+    expect(existsSync(join(root, "ProjectSettings/Rocket.png"))).toBe(false);
+    const mesh = await new MeshGenerateTool({ localAvailable: () => false }).execute({ name: "Rocket", shape: "cube", path: "Assets/.." }, ctx);
+    expect(mesh.isError).toBe(true);
+    expect(existsSync(join(root, "Rocket.obj"))).toBe(false);
+    const { AudioGenerateTool } = await import("./audio-generate.js");
+    const audio = await new AudioGenerateTool().execute({ name: "click", path: "Assets/../Library" }, ctx);
+    expect(audio.isError).toBe(true);
+    expect(existsSync(join(root, "Library/click.wav"))).toBe(false);
+  });
+
+  it("repeated names in a batch are refused up front", async () => {
+    const { ctx } = project();
+    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner: refusing, specFor }).execute({ batch: [{ name: "Pig" }, { name: "Pig" }] }, ctx);
+    expect(r.isError).toBe(true);
+    expect(r.content).toContain("repeat");
   });
 });

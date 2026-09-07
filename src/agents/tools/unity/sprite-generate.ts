@@ -20,14 +20,15 @@
  */
 
 import { deflateSync } from "node:zlib";
-import { mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
+import { mkdirSync, writeFileSync, existsSync, statSync } from "node:fs";
 import { dirname } from "node:path";
 import { reuseOrMintGuid } from "./meta-file-utils.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "../tool.interface.js";
 import { validatePath } from "../../../security/path-guard.js";
 import { defaultModelFor } from "../../../assets-local/model-catalog.js";
 import { LocalModelRunner } from "../../../assets-local/local-model-runner.js";
-import { isPlaceholderGradePng, PLACEHOLDER_BYTES_PER_PIXEL } from "../../autonomy/built-as-specified.js";
+import { isPlaceholderGradePng } from "../../autonomy/built-as-specified.js";
+import { PreviousAsset, outsideAssetsError, unusableSpriteReason } from "./generated-asset-guard.js";
 
 // =============================================================================
 // PNG ENCODER (RGBA8, filter-0 scanlines)
@@ -652,7 +653,16 @@ export class SpriteGenerateTool implements ITool {
       if (!local.isError || !auto) return local;
       // Auto-chosen local failed: the element still gets a file, and the
       // result says which kind and why — a silent placeholder would read as
-      // real art in the next audit.
+      // real art in the next audit. Unless real art is ALREADY there: a
+      // placeholder over a drawn sprite is a loss, not a fallback (review
+      // 2026-09-07).
+      const existing = await validatePath(context.projectPath, `${dirRel.replace(/[/\\]+$/, "")}/${rawName}.png`, { allowMissingParents: true });
+      if (existing.valid && existsSync(existing.fullPath) && !isPlaceholderGradePng(existing.fullPath)) {
+        return {
+          content: `${String(local.content)} The existing drawn sprite at ${dirRel.replace(/[/\\]+$/, "")}/${rawName}.png was KEPT — no placeholder was written over it.`,
+          isError: true,
+        };
+      }
       const fallback = await this.executeProcedural(input, context, rawName, dirRel);
       return fallback.isError
         ? fallback
@@ -706,6 +716,8 @@ export class SpriteGenerateTool implements ITool {
     if (!pathCheck.valid) {
       return { content: `Error: ${pathCheck.error ?? "path validation failed"}`, isError: true };
     }
+    const outside = outsideAssetsError(context.projectPath, pathCheck.fullPath, dirRel);
+    if (outside) return { content: outside, isError: true };
 
     const prompt =
       input["prompt"] !== undefined ? String(input["prompt"]) : await this.defaultPrompt(rawName, context.projectPath);
@@ -715,8 +727,11 @@ export class SpriteGenerateTool implements ITool {
         : "photo, realistic, blurry, watermark, signature, text, logo, dark background, " +
           "pattern background, scenery, multiple characters, cropped, deformed, extra limbs";
 
+    // The previous pair (if any) is kept until the new draw is known good:
+    // a failed regeneration used to delete the bound asset's .meta, and a
+    // blank-twice used to delete the previous good sprite (review 2026-09-07).
+    const previous = new PreviousAsset(pathCheck.fullPath);
     try {
-      mkdirSync(dirname(pathCheck.fullPath), { recursive: true });
       // Meta BEFORE art: if the pair is ever torn, a meta without art is
       // cleaned up (here, and by Unity); art without meta gets a random guid
       // and imports as a plain Texture — the binding-churn failure class.
@@ -728,31 +743,35 @@ export class SpriteGenerateTool implements ITool {
         // Sprites are game assets: cut the subject out instead of trusting
         // the model to honor "white background" (measured: it doesn't).
         removeBackground: input["keepBackground"] !== true,
-        seed: typeof input["seed"] === "number" ? Math.floor(input["seed"]) : undefined,
+        seed: typeof input["seed"] === "number" && Number.isFinite(input["seed"]) ? Math.floor(input["seed"]) : undefined,
       };
-      const result = await runner.textToImage(spec, prompt, pathCheck.fullPath, localOpts);
+      let result = await runner.textToImage(spec, prompt, pathCheck.fullPath, localOpts);
       if (!result.ok) {
-        try { rmSync(`${pathCheck.fullPath}.meta`, { force: true }); } catch { /* orphan meta cleanup */ }
-        return { content: `Error: local diffusion failed: ${result.detail}`, isError: true };
+        previous.restore();
+        return { content: `Error: local diffusion failed: ${result.detail}${previous.existingIsRealArt ? " The previous drawn sprite and its .meta were kept." : ""}`, isError: true };
       }
       // The model can return a blank (a filtered or empty draw; after
       // background removal, a field of specks). Measured 2026-09-07 15:02: a
       // 512² "green pig" came back as 19 KB of alpha noise and the tool said
-      // ✓. The same bytes-per-pixel rule the delivery gate applies is applied
-      // here, once, with one differently-seeded retry before giving up.
-      if (isPlaceholderGradePng(pathCheck.fullPath)) {
+      // ✓. The draw is measured (pixels: flat shape, or nearly all
+      // transparent), with one differently-seeded retry before giving up.
+      let unusable = unusableSpriteReason(pathCheck.fullPath);
+      if (unusable !== undefined) {
         const again = await runner.textToImage(spec, prompt, pathCheck.fullPath, { ...localOpts, seed: (localOpts.seed ?? 0) + 1 });
-        if (!again.ok || isPlaceholderGradePng(pathCheck.fullPath)) {
-          try { rmSync(pathCheck.fullPath, { force: true }); rmSync(`${pathCheck.fullPath}.meta`, { force: true }); } catch { /* cleanup */ }
+        if (again.ok) result = again;
+        unusable = again.ok ? unusableSpriteReason(pathCheck.fullPath) : `the retry failed: ${again.detail}`;
+        if (unusable !== undefined) {
+          previous.restore();
           return {
             content:
-              `Error: local diffusion drew nothing usable for ${relFile} twice (the file compressed below ` +
-              `${PLACEHOLDER_BYTES_PER_PIXEL} byte/pixel — a blank or filtered image). Nothing was kept. ` +
+              `Error: local diffusion drew nothing usable for ${relFile} twice (${unusable}). ` +
+              (previous.existingIsRealArt ? "The previous drawn sprite was kept. " : "Nothing was kept. ") +
               "Change the prompt (name the subject plainly, drop style words) and try again.",
             isError: true,
           };
         }
       }
+      previous.commit();
       return {
         content:
           `Sprite written by local diffusion (${spec.label}): ${relFile} (+ .meta). ` +
@@ -761,6 +780,7 @@ export class SpriteGenerateTool implements ITool {
           "unreferenced sprite draws nothing.",
       };
     } catch (err) {
+      previous.restore();
       return {
         content: `Error: local sprite generation failed: ${err instanceof Error ? err.message : String(err)}`,
         isError: true,
@@ -810,7 +830,7 @@ export class SpriteGenerateTool implements ITool {
     input: Record<string, unknown>,
     context: ToolContext,
     provider: "local" | "procedural",
-    auto: boolean,
+    _auto: boolean,
   ): Promise<ToolExecutionResult> {
     const items = (input["batch"] as unknown[]).map((raw) => {
       const r = (raw ?? {}) as Record<string, unknown>;
@@ -822,6 +842,17 @@ export class SpriteGenerateTool implements ITool {
     }
     const bad = items.find((i) => !/^[A-Za-z][\w-]{0,40}$/.test(i.name));
     if (bad) return { content: `Error: batch name "${bad.name}" must start with a letter and contain only letters, digits, _ or -`, isError: true };
+    // One file per name: a repeated name drew twice into one file and was
+    // reported as two ✓ lines (review 2026-09-07).
+    const seenNames = new Set<string>();
+    const duplicates: string[] = [];
+    for (const item of items) {
+      if (seenNames.has(item.name)) duplicates.push(item.name);
+      seenNames.add(item.name);
+    }
+    if (duplicates.length > 0) {
+      return { content: `Error: batch names repeat (${[...new Set(duplicates)].join(", ")}) — one sprite per name.`, isError: true };
+    }
     const dirRel = String(input["path"] ?? "Assets/Art/Generated");
     if (!/^Assets([/\\]|$)/i.test(dirRel.replace(/\\/g, "/")) && dirRel !== "Assets") {
       return { content: "Error: path must be under Assets/", isError: true };
@@ -864,71 +895,131 @@ export class SpriteGenerateTool implements ITool {
         refused.push(`${item.name}: ${check.error ?? "path validation failed"}`);
         continue;
       }
+      const outside = outsideAssetsError(context.projectPath, check.fullPath, dirRel);
+      if (outside) {
+        refused.push(`${item.name}: ${outside}`);
+        continue;
+      }
       jobs.push({ name: item.name, relFile, fullPath: check.fullPath, prompt: item.prompt ?? (await this.defaultPrompt(item.name, context.projectPath)) });
     }
     if (jobs.length === 0) return { content: `Error: nothing to draw —\n${refused.join("\n")}`, isError: true };
-    for (const job of jobs) {
-      mkdirSync(dirname(job.fullPath), { recursive: true });
-      writeFileSync(`${job.fullPath}.meta`, spriteMeta(reuseOrMintGuid(`${job.fullPath}.meta`)), "utf8");
-    }
-    const opts = { negative, size: 512, removeBackground: input["keepBackground"] !== true };
-    let written: Set<string>;
-    let detail: string;
-    let keptBackground = new Set<string>();
-    if (runner.textToImageBatch) {
-      const r = await runner.textToImageBatch(spec, jobs.map((j) => ({ prompt: j.prompt, out: j.fullPath, negative })), opts);
-      written = new Set(r.written);
-      keptBackground = new Set(r.keptBackground ?? []);
-      detail = r.detail;
-    } else {
-      written = new Set();
-      const notes: string[] = [];
+    // Every job's previous pair is kept until its new draw is known good;
+    // whatever this call cannot finish is put back, never left torn.
+    const previous = new Map<string, PreviousAsset>();
+    for (const job of jobs) previous.set(job.fullPath, new PreviousAsset(job.fullPath));
+    const restoreAll = (): void => { for (const p of previous.values()) p.restore(); };
+    try {
       for (const job of jobs) {
-        const r = await runner.textToImage(spec, job.prompt, job.fullPath, opts);
-        if (r.ok) written.add(job.fullPath);
-        else notes.push(`${job.name}: ${r.detail.slice(0, 120)}`);
+        writeFileSync(`${job.fullPath}.meta`, spriteMeta(reuseOrMintGuid(`${job.fullPath}.meta`)), "utf8");
       }
-      detail = notes.join("; ") || `${written.size} written`;
-    }
-    // A written file is not a drawn sprite until measured (see the single path).
-    const blank = jobs.filter((j) => written.has(j.fullPath) && isPlaceholderGradePng(j.fullPath));
-    if (blank.length > 0) {
-      const retryJobs = blank.map((j) => ({ prompt: j.prompt, out: j.fullPath, negative, seed: 1 + Math.floor(Math.random() * 1_000_000) }));
-      if (runner.textToImageBatch) await runner.textToImageBatch(spec, retryJobs, opts);
-      else for (const j of retryJobs) await runner.textToImage(spec, j.prompt, j.out, { ...opts, seed: j.seed });
-      for (const j of blank) {
-        if (!existsSync(j.fullPath) || isPlaceholderGradePng(j.fullPath)) {
-          written.delete(j.fullPath);
-          try { rmSync(j.fullPath, { force: true }); } catch { /* cleanup */ }
+      const opts = { negative, size: 512, removeBackground: input["keepBackground"] !== true };
+      // "Produced by this call" = the file's mtime changed since the call
+      // began (or the file did not exist) — a clock comparison misses a file
+      // written in the same millisecond the call started.
+      const before = new Map<string, number>();
+      for (const job of jobs) {
+        try { before.set(job.fullPath, statSync(job.fullPath).mtimeMs); } catch { /* absent */ }
+      }
+      const producedNow = (fullPath: string): boolean => {
+        try {
+          const now = statSync(fullPath).mtimeMs;
+          const prior = before.get(fullPath);
+          return prior === undefined || now !== prior;
+        } catch {
+          return false;
+        }
+      };
+      let written: Set<string>;
+      let detail: string;
+      let runOk = true;
+      let keptBackground = new Set<string>();
+      if (runner.textToImageBatch) {
+        const r = await runner.textToImageBatch(spec, jobs.map((j) => ({ prompt: j.prompt, out: j.fullPath, negative })), opts);
+        // Only files this call produced count (review 2026-09-07: a runner that
+        // drew nothing over three earlier PNGs reported all three written).
+        written = new Set(r.written.filter(producedNow));
+        keptBackground = new Set(r.keptBackground ?? []);
+        detail = r.detail;
+        runOk = r.ok;
+      } else {
+        written = new Set();
+        const notes: string[] = [];
+        for (const job of jobs) {
+          const r = await runner.textToImage(spec, job.prompt, job.fullPath, opts);
+          if (r.ok && producedNow(job.fullPath)) written.add(job.fullPath);
+          else notes.push(`${job.name}: ${r.detail.slice(0, 120)}`);
+          if (r.ok && /background kept/.test(r.detail)) keptBackground.add(job.fullPath);
+        }
+        detail = notes.join("; ") || `${written.size} written`;
+        runOk = notes.length === 0;
+      }
+      // A written file is not a drawn sprite until measured (see the single path).
+      const unusable = new Map<string, string>();
+      for (const j of jobs) {
+        if (!written.has(j.fullPath)) continue;
+        const why = unusableSpriteReason(j.fullPath);
+        if (why !== undefined) unusable.set(j.fullPath, why);
+      }
+      if (unusable.size > 0) {
+        const retryJobs = jobs.filter((j) => unusable.has(j.fullPath)).map((j) => ({ prompt: j.prompt, out: j.fullPath, negative, seed: 1 + Math.floor(Math.random() * 1_000_000) }));
+        let retryKept = new Set<string>();
+        if (runner.textToImageBatch) {
+          const again = await runner.textToImageBatch(spec, retryJobs, opts);
+          retryKept = new Set(again.keptBackground ?? []);
+        } else {
+          for (const j of retryJobs) {
+            const again = await runner.textToImage(spec, j.prompt, j.out, { ...opts, seed: j.seed });
+            if (again.ok && /background kept/.test(again.detail)) retryKept.add(j.out);
+          }
+        }
+        for (const j of retryJobs) {
+          const why = unusableSpriteReason(j.out);
+          if (why === undefined) {
+            unusable.delete(j.out);
+            // The retry's outcome, not the first draw's (review 2026-09-07).
+            if (retryKept.has(j.out)) keptBackground.add(j.out); else keptBackground.delete(j.out);
+          } else {
+            unusable.set(j.out, why);
+            written.delete(j.out);
+          }
         }
       }
-    }
-    const lines: string[] = [];
-    for (const job of jobs) {
-      if (written.has(job.fullPath)) {
-        lines.push(
-          keptBackground.has(job.fullPath)
-            ? `✓ ${job.relFile} (+ .meta) — background KEPT: the cut-out was empty, so this sprite carries the model's background; re-prompt with a contrasting plain background if it must be transparent`
-            : `✓ ${job.relFile} (+ .meta)`,
-        );
+      const lines: string[] = [];
+      for (const job of jobs) {
+        const prev = previous.get(job.fullPath)!;
+        if (written.has(job.fullPath)) {
+          prev.commit();
+          lines.push(
+            keptBackground.has(job.fullPath)
+              ? `✓ ${job.relFile} (+ .meta) — background KEPT: the cut-out was empty, so this sprite carries the model's background; re-prompt with a contrasting background if it must be a cut-out`
+              : `✓ ${job.relFile} (+ .meta)`,
+          );
+        } else {
+          prev.restore();
+          const kept = prev.existingIsRealArt ? "; the previous drawn sprite was kept" : "";
+          lines.push(unusable.has(job.fullPath)
+            ? `✗ ${job.relFile} — drew nothing usable twice (${unusable.get(job.fullPath)})${kept}`
+            : `✗ ${job.relFile} — not written${kept}`);
+        }
       }
-      else {
-        try { rmSync(`${job.fullPath}.meta`, { force: true }); } catch { /* orphan meta */ }
-        lines.push(blank.some((b) => b.fullPath === job.fullPath)
-          ? `✗ ${job.relFile} — drew nothing usable twice (blank or filtered image, under ${PLACEHOLDER_BYTES_PER_PIXEL} byte/pixel); nothing kept`
-          : `✗ ${job.relFile} — not written`);
-      }
+      const failures = jobs.length - written.size + refused.length;
+      return {
+        content:
+          `Batch by local diffusion (${spec.label}): ${written.size} of ${items.length} sprites written` +
+          (failures > 0 || !runOk ? `, ${failures} failed (${detail.slice(0, 200)})` : "") +
+          `.\n${[...lines, ...refused.map((r) => `✗ ${r}`)].join("\n")}\n` +
+          "Unity imports them as Sprites on next refresh. Bind each to its element — an unreferenced sprite draws nothing.",
+        isError: written.size === 0,
+      };
+    } catch (err) {
+      // A thrown runner (a killed process, a missing venv) used to escape the
+      // tool with every job's .meta left behind (review 2026-09-07).
+      restoreAll();
+      return {
+        content: `Error: local batch failed: ${err instanceof Error ? err.message : String(err)}. Nothing from this call was kept; previous sprites are untouched.`,
+        isError: true,
+      };
     }
-    const failures = jobs.length - written.size + refused.length;
-    return {
-      content:
-        `Batch by local diffusion (${spec.label}): ${written.size} of ${items.length} sprites written` +
-        (failures > 0 ? `, ${failures} failed (${detail.slice(0, 200)})` : "") +
-        `.\n${[...lines, ...refused.map((r) => `✗ ${r}`)].join("\n")}\n` +
-        "Unity imports them as Sprites on next refresh. Bind each to its element — an unreferenced sprite draws nothing." +
-        (auto ? "" : ""),
-      isError: written.size === 0,
-    };
   }
 
   private async executeProcedural(
@@ -995,6 +1086,8 @@ export class SpriteGenerateTool implements ITool {
     if (!pathCheck.valid) {
       return { content: `Error: ${pathCheck.error ?? "path validation failed"}`, isError: true };
     }
+    const outsideAssets = outsideAssetsError(context.projectPath, pathCheck.fullPath, dirRel);
+    if (outsideAssets) return { content: outsideAssets, isError: true };
 
     try {
       const grid = renderShape(shape, size, base, accent);

@@ -14,7 +14,7 @@
  */
 
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import type { LocalModelSpec } from "./model-catalog.js";
@@ -145,15 +145,22 @@ export type SpawnImpl = (
 ) => Promise<{ code: number; stdout: string; stderr: string }>;
 
 const defaultSpawn: SpawnImpl = (cmd, args, opts) =>
-  new Promise((resolvePromise, reject) => {
+  new Promise((resolvePromise) => {
     execFile(cmd, args, { timeout: opts.timeoutMs, env: opts.env, maxBuffer: 32 * 1024 * 1024 }, (err, stdout, stderr) => {
       if (err) {
-        const anyErr = err as NodeJS.ErrnoException & { code?: unknown };
+        const anyErr = err as NodeJS.ErrnoException & { code?: unknown; signal?: string; killed?: boolean };
         if (typeof anyErr.code === "number") {
           resolvePromise({ code: anyErr.code, stdout: String(stdout), stderr: String(stderr) });
           return;
         }
-        reject(err);
+        // A timeout (SIGTERM, code null), a missing interpreter (ENOENT) or
+        // an overflowed buffer is a FAILED inference, not an exception for
+        // the tool to leak (review 2026-09-07: a killed batch threw out of
+        // the tool and left every job's .meta behind).
+        const why = anyErr.killed || anyErr.signal
+          ? `killed by ${anyErr.signal ?? "timeout"} after ${opts.timeoutMs} ms`
+          : anyErr.message;
+        resolvePromise({ code: -1, stdout: String(stdout), stderr: `${String(stderr)}\n${why}`.trim() });
         return;
       }
       resolvePromise({ code: 0, stdout: String(stdout), stderr: String(stderr) });
@@ -343,10 +350,26 @@ export class LocalModelRunner {
         "--size", String(opts.size ?? 512),
         "--rmbg", opts.removeBackground ? "1" : "0",
       ];
+      // Only files this run produced count as written (review 2026-09-07:
+      // a batch that drew nothing over three earlier PNGs reported "3 of 3
+      // written" because the outputs existed).
+      const before = new Map<string, number>();
+      for (const j of jobs) {
+        try { before.set(j.out, statSync(j.out).mtimeMs); } catch { /* absent */ }
+      }
       // Budget scales with the batch: one sprite is ~45-60 s at 512² on MPS.
       const run = await this.inference(() => this.spawn(venvPython(), args, { timeoutMs: Math.min(3_600_000, 300_000 + 120_000 * jobs.length), env: this.envWithWeights() }));
-      const written = jobs.map((j) => j.out).filter((o) => existsSync(o));
-      const missing = jobs.map((j) => j.out).filter((o) => !existsSync(o));
+      const producedNow = (o: string): boolean => {
+        try {
+          const m = statSync(o).mtimeMs;
+          const prior = before.get(o);
+          return prior === undefined || m !== prior;
+        } catch {
+          return false;
+        }
+      };
+      const written = jobs.map((j) => j.out).filter(producedNow);
+      const missing = jobs.map((j) => j.out).filter((o) => !producedNow(o));
       const keptBackground = (run.stdout.match(/^KEPT-BG (.+?) coverage=/gm) ?? []).map((l) => l.replace(/^KEPT-BG /, "").replace(/ coverage=$/, ""));
       const ok = run.code === 0 && missing.length === 0;
       return {
@@ -377,10 +400,12 @@ export class LocalModelRunner {
       "--image", imagePath,
       "--out", outPath,
     ];
-    const run = await this.spawn(venvPython(), args, {
+    // Through the same process-wide lock as the draws: two lifts, or a lift
+    // beside a draw, overlapped on one GPU (review 2026-09-07).
+    const run = await this.inference(() => this.spawn(venvPython(), args, {
       timeoutMs: 1_200_000,
       env: spec.installMethod === "repo" ? this.envForRepo(spec) : this.envWithWeights(),
-    });
+    }));
     if (run.code !== 0 || !existsSync(outPath)) {
       return { ok: false, detail: `inference failed: ${(run.stderr || run.stdout).slice(-400)}` };
     }
@@ -462,6 +487,7 @@ def marching_cubes(density, level: float = 0.0):
       }
       writeFileSync(path, content, "utf8");
     };
+    mkdirSync(SCRIPTS(), { recursive: true });
     refresh(join(SCRIPTS(), "txt2img.py"), TXT2IMG_SCRIPT);
     refresh(join(SCRIPTS(), "img2mesh.py"), IMG2MESH_SCRIPT);
   }

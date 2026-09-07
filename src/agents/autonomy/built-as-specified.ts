@@ -1346,7 +1346,7 @@ const PLACEHOLDER_MAX_EDGE_SHARE = 0.2;
  * shape: a handful of colours and edges only along its outlines. Sampled on
  * a ≤64×64 grid so a 2048² texture costs the same as a sprite.
  */
-export function measurePngContent(bytes: Uint8Array): { colours: number; edgeShare: number } | null {
+export function measurePngContent(bytes: Uint8Array): { colours: number; edgeShare: number; opaqueShare: number } | null {
   const decoded = decodePngRgba(bytes);
   if (decoded === null) return null;
   const { width, height, rgba } = decoded;
@@ -1360,11 +1360,13 @@ export function measurePngContent(bytes: Uint8Array): { colours: number; edgeSha
   const colours = new Set<number>();
   let sampled = 0;
   let edges = 0;
+  let opaque = 0;
   for (let y = 0; y < height; y += step) {
     for (let x = 0; x < width; x += step) {
       const k = key(x, y);
       colours.add(k);
       sampled++;
+      if (k !== -1) opaque++;
       // The NEXT grid sample, not the adjacent pixel: pixel art exported at
       // 8× or 16× keeps its edge density this way, a flat disc does not.
       const right = x + step < width ? key(x + step, y) : k;
@@ -1372,7 +1374,11 @@ export function measurePngContent(bytes: Uint8Array): { colours: number; edgeSha
       if (right !== k || down !== k) edges++;
     }
   }
-  return { colours: colours.size, edgeShare: sampled === 0 ? 0 : edges / sampled };
+  return {
+    colours: colours.size,
+    edgeShare: sampled === 0 ? 0 : edges / sampled,
+    opaqueShare: sampled === 0 ? 0 : opaque / sampled,
+  };
 }
 
 /** The bytes inside IDAT only — metadata chunks are not image content. */
