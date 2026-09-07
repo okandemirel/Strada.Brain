@@ -90,6 +90,26 @@ export class UnityLinkMissingError extends Error {
   }
 }
 
+/**
+ * The link authenticates, but this product is not one the account may
+ * download. Measured 2026-09-07 10:30 (campaign mcov1): download-info
+ * answered 403 directly after a successful token refresh, and the tool told
+ * the agent the Unity link had expired — the user had linked the account
+ * twelve hours earlier. A 403 with a fresh token is about the product (not
+ * purchased or claimed, or an id the agent made up), not about the link.
+ */
+export class UnityNotEntitledError extends Error {
+  constructor(productId: string, status: number) {
+    super(
+      `download-info returned HTTP ${status} for productId ${productId} right after a successful token ` +
+        "refresh — the Unity link is live; this product is not one the account may download " +
+        "(not in its purchases/claimed library, or the id is wrong). List the owned ids with action " +
+        "'purchases' and download one of those; a free package must be claimed in the store first.",
+    );
+    this.name = "UnityNotEntitledError";
+  }
+}
+
 export class UnityLinkExpiredError extends Error {
   constructor(detail: string) {
     super(
@@ -200,8 +220,11 @@ export class UnityAssetStoreClient {
     const token = await this.getToken();
     const url = `${this.link.packagesHost}/-/api/legacy-package-download-info/${encodeURIComponent(productId)}`;
     const resp = await this.fetchImpl(url, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(60_000) });
-    if (resp.status === 401 || resp.status === 403) {
+    if (resp.status === 401) {
       throw new UnityLinkExpiredError(`download-info returned HTTP ${resp.status}`);
+    }
+    if (resp.status === 403) {
+      throw new UnityNotEntitledError(productId, resp.status);
     }
     if (!resp.ok) {
       throw new Error(`download-info failed (HTTP ${resp.status}) for ${productId}`);

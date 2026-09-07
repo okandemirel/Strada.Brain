@@ -283,6 +283,10 @@ const TARGET_KEYS = [
   // two "no test executed" failures logged with no way to tell whether the
   // agent filtered on a name that does not exist or ran the whole suite.
   "testFilter",
+  // For unity_my_assets_cloud the product IS the target. Measured 2026-09-07
+  // 10:30: "download-info returned HTTP 403" with no way to tell which id
+  // the agent asked for, or whether it exists in the purchases at all.
+  "productId",
 ] as const;
 
 export function failureTarget(input: unknown): string | undefined {

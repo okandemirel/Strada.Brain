@@ -233,3 +233,9 @@ describe("failureTarget names the scope of a PlayMode run", () => {
     );
   });
 });
+
+describe("failureTarget names the product of an asset-store call", () => {
+  it("keeps the productId", () => {
+    expect(failureTarget({ action: "download-info", productId: "27821" })).toBe("27821");
+  });
+});

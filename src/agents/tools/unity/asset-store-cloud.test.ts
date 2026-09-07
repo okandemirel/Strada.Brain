@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import {
   UnityAssetStoreClient,
   UnityLinkExpiredError,
+  UnityNotEntitledError,
   type UnityAssetStoreLink,
   type FetchLike,
 } from "./asset-store-cloud.js";
@@ -98,6 +99,29 @@ describe("UnityAssetStoreClient", () => {
     expect(seenUrl).toContain("q=pig%20character");
     expect(seenUrl).toContain("rows=5");
     expect(seenUrl.startsWith("https://kharma.unity3d.com/")).toBe(true);
+  });
+
+  it("a 403 on download-info with a fresh token is about the product, not the link", async () => {
+    // Measured 2026-09-07 10:30: the agent was told to re-run Unity Link
+    // twelve hours after the user had linked; the 403 was for the product.
+    const f: FetchLike = async (url) => {
+      if (url.includes("oauth2/token")) return new Response(JSON.stringify(TOKEN_OK), { status: 200 });
+      return new Response("forbidden", { status: 403 });
+    };
+    const client = new UnityAssetStoreClient(LINK, f);
+    const err = await client.getDownloadInfo("999999").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(UnityNotEntitledError);
+    expect(String((err as Error).message)).toContain("999999");
+    expect(String((err as Error).message)).toContain("the Unity link is live");
+    expect(String((err as Error).message)).not.toContain("re-run the Unity Link");
+  });
+
+  it("a 401 on download-info still means the link is dead", async () => {
+    const f: FetchLike = async (url) => {
+      if (url.includes("oauth2/token")) return new Response(JSON.stringify(TOKEN_OK), { status: 200 });
+      return new Response("unauthorized", { status: 401 });
+    };
+    await expect(new UnityAssetStoreClient(LINK, f).getDownloadInfo("27821")).rejects.toBeInstanceOf(UnityLinkExpiredError);
   });
 
   it("reads the signed url out of download-info", async () => {
