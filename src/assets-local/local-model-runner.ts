@@ -14,9 +14,9 @@
  */
 
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import type { LocalModelSpec } from "./model-catalog.js";
 
 // =============================================================================
@@ -27,13 +27,21 @@ export const TXT2IMG_SCRIPT = `import argparse, sys
 p = argparse.ArgumentParser()
 p.add_argument("--model", required=True)
 p.add_argument("--family", default="sd15", choices=["sd15", "sdxl", "flux"])
-p.add_argument("--prompt", required=True)
+p.add_argument("--prompt", default="")
 p.add_argument("--negative", default="")
-p.add_argument("--out", required=True)
+p.add_argument("--out", default="")
+p.add_argument("--jobs", default="")
 p.add_argument("--steps", type=int, default=0)
 p.add_argument("--size", type=int, default=512)
 p.add_argument("--rmbg", type=int, default=0)
 a = p.parse_args()
+# One pipeline load for many prompts: --jobs names a JSON list of
+# {"prompt","negative","out"}. Loading SD1.5 costs ~10 s per process; a
+# sprint that needs two hundred sprites pays it once, not two hundred times.
+import json
+jobs = json.load(open(a.jobs)) if a.jobs else [{"prompt": a.prompt, "negative": a.negative, "out": a.out}]
+if not jobs or any(not j.get("prompt") or not j.get("out") for j in jobs):
+    sys.exit("txt2img: every job needs a prompt and an out path")
 
 import torch
 device = "mps" if torch.backends.mps.is_available() else "cpu"
@@ -57,18 +65,17 @@ pipe = pipe.to(device)
 if device == "mps":
     pipe.enable_attention_slicing()
 
-image = pipe(prompt=a.prompt, negative_prompt=a.negative or None,
-             num_inference_steps=steps, height=a.size, width=a.size).images[0]
-
-if a.rmbg:
-    # Game sprites need transparency, not a model-guessed background. rembg
-    # (already in the venv for TripoSR) cuts the subject out; without this,
-    # "plain white background" in the prompt is a coin flip the model loses.
-    from rembg import remove
-    image = remove(image)
-
-image.save(a.out)
-print("WROTE", a.out)
+for job in jobs:
+    image = pipe(prompt=job["prompt"], negative_prompt=job.get("negative") or None,
+                 num_inference_steps=steps, height=a.size, width=a.size).images[0]
+    if a.rmbg:
+        # Game sprites need transparency, not a model-guessed background. rembg
+        # (already in the venv for TripoSR) cuts the subject out; without this,
+        # "plain white background" in the prompt is a coin flip the model loses.
+        from rembg import remove
+        image = remove(image)
+    image.save(job["out"])
+    print("WROTE", job["out"], flush=True)
 `;
 
 export const IMG2MESH_SCRIPT = `import argparse, sys
@@ -262,6 +269,50 @@ export class LocalModelRunner {
       return { ok: false, detail: `inference failed: ${(run.stderr || run.stdout).slice(-400)}` };
     }
     return { ok: true, detail: outPath };
+  }
+
+  /**
+   * Many prompts, one pipeline load. Each job is judged by its own file on
+   * disk afterwards, so a batch that died halfway reports exactly which
+   * sprites exist — never "the batch failed" over a directory of real files.
+   */
+  async textToImageBatch(
+    spec: LocalModelSpec,
+    jobs: ReadonlyArray<{ prompt: string; out: string; negative?: string }>,
+    opts: { size?: number; steps?: number; removeBackground?: boolean } = {},
+  ): Promise<{ ok: boolean; detail: string; written: string[]; missing: string[] }> {
+    if (!this.isModelInstalled(spec.id)) {
+      return { ok: false, detail: `${spec.label} is not installed — run assets-local-setup first.`, written: [], missing: jobs.map((j) => j.out) };
+    }
+    if (jobs.length === 0) return { ok: true, detail: "no jobs", written: [], missing: [] };
+    this.writeScripts();
+    const family = spec.id === "flux-schnell" ? "flux" : spec.id === "sdxl" ? "sdxl" : "sd15";
+    const jobsPath = join(tmpdir(), `strada-txt2img-${process.pid}-${Date.now()}.json`);
+    writeFileSync(jobsPath, JSON.stringify(jobs.map((j) => ({ prompt: j.prompt, negative: j.negative ?? "", out: j.out }))), "utf8");
+    try {
+      const args = [
+        join(SCRIPTS, "txt2img.py"),
+        "--model", spec.weightsRef,
+        "--family", family,
+        "--jobs", jobsPath,
+        "--steps", String(opts.steps ?? 0),
+        "--size", String(opts.size ?? 512),
+        "--rmbg", opts.removeBackground ? "1" : "0",
+      ];
+      // Budget scales with the batch: one sprite is ~45-60 s at 512² on MPS.
+      const run = await this.spawn(venvPython(), args, { timeoutMs: Math.min(3_600_000, 300_000 + 120_000 * jobs.length), env: this.envWithWeights() });
+      const written = jobs.map((j) => j.out).filter((o) => existsSync(o));
+      const missing = jobs.map((j) => j.out).filter((o) => !existsSync(o));
+      const ok = run.code === 0 && missing.length === 0;
+      return {
+        ok,
+        detail: ok ? `${written.length} written` : `${written.length} of ${jobs.length} written; ${(run.stderr || run.stdout).slice(-400)}`,
+        written,
+        missing,
+      };
+    } finally {
+      try { rmSync(jobsPath, { force: true }); } catch { /* temp */ }
+    }
   }
 
   /** image → OBJ mesh (TripoSR family). Returns the written path on success. */

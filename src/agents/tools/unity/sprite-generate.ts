@@ -25,6 +25,8 @@ import { dirname } from "node:path";
 import { reuseOrMintGuid } from "./meta-file-utils.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "../tool.interface.js";
 import { validatePath } from "../../../security/path-guard.js";
+import { defaultModelFor } from "../../../assets-local/model-catalog.js";
+import { LocalModelRunner } from "../../../assets-local/local-model-runner.js";
 
 // =============================================================================
 // PNG ENCODER (RGBA8, filter-0 scanlines)
@@ -462,10 +464,12 @@ export type LocalAvailability = (kind: "text-to-image" | "image-to-3d") => boole
 export function realLocalAvailability(): LocalAvailability {
   return (kind) => {
     try {
-      // Lazy: the catalog probes the device and the runner checks the venv —
-      // neither belongs in module load, and both must fail closed.
-      const { defaultModelFor } = require("../../../assets-local/model-catalog.js") as typeof import("../../../assets-local/model-catalog.js");
-      const { LocalModelRunner } = require("../../../assets-local/local-model-runner.js") as typeof import("../../../assets-local/local-model-runner.js");
+      // The probe and the venv check run here, at call time — the imports are
+      // static. Measured 2026-09-07 14:50: this used `require()` inside the
+      // try, the package is ESM ("type": "module"), so every call threw
+      // ReferenceError into the catch and answered false. The installed model
+      // was never "available" to a single sprint: every AUTO sprite went
+      // procedural, and the "local by default" fix of 2026-09-06 never ran.
       const spec = defaultModelFor(kind);
       return spec !== undefined && new LocalModelRunner().isModelInstalled(spec.id);
     } catch {
@@ -478,7 +482,13 @@ export function realLocalAvailability(): LocalAvailability {
 export type LocalRunnerLike = Pick<
   import("../../../assets-local/local-model-runner.js").LocalModelRunner,
   "isModelInstalled" | "textToImage" | "imageToMesh"
->;
+> & {
+  /** One pipeline load for many sprites; absent on older runners, then the batch runs one by one. */
+  textToImageBatch?: import("../../../assets-local/local-model-runner.js").LocalModelRunner["textToImageBatch"];
+};
+
+/** Sprites per batch call: bounded so one call cannot hold a sprint for hours. */
+export const SPRITE_BATCH_MAX = 12;
 export interface GeneratorOptions {
   localAvailable: LocalAvailability;
   runner?: LocalRunnerLike;
@@ -534,6 +544,18 @@ export class SpriteGenerateTool implements ITool {
         type: "boolean",
         description: "With provider 'procedural': knowingly write a placeholder-grade shape (a marker, a debug tile) although real art is available.",
       },
+      batch: {
+        type: "array",
+        description:
+          `Up to ${SPRITE_BATCH_MAX} sprites in ONE call — the local model loads once and draws them all (a GDD ` +
+          "area's canvases, a family of pig skins). Each item: { name, prompt? }; path/size/negative apply to all. " +
+          "The result names every file written and every one that failed.",
+        items: {
+          type: "object",
+          properties: { name: { type: "string" }, prompt: { type: "string" } },
+          required: ["name"],
+        },
+      },
       prompt: {
         type: "string",
         description: "local only: the diffusion prompt. Default: a flat pixel-art mobile sprite of the name.",
@@ -583,6 +605,10 @@ export class SpriteGenerateTool implements ITool {
           "acceptPlaceholder: true.",
         isError: true,
       };
+    }
+
+    if (Array.isArray(input["batch"])) {
+      return this.executeBatch(input, context, provider, auto);
     }
 
     const rawName = String(input["name"] ?? "").trim();
@@ -657,37 +683,7 @@ export class SpriteGenerateTool implements ITool {
     }
 
     const prompt =
-      input["prompt"] !== undefined
-        ? String(input["prompt"])
-        : await (async () => {
-            // The project's style.json (GDD-derived, never universal) steers
-            // the default prompt; without it, the toon-casual stock default.
-            let family = "toon-casual";
-            let notes = "";
-            try {
-              const { loadStyleProfile } = await import("../../style/style-profile.js");
-              const profile = loadStyleProfile(context.projectPath);
-              if (profile) {
-                family = profile.family;
-                notes = profile.notes;
-              }
-            } catch {
-              /* stock defaults */
-            }
-            const subject = rawName.replace(/([A-Z])/g, " $1").toLowerCase();
-            switch (family) {
-              case "realistic":
-                return `realistic game render of ${subject}, detailed natural materials, studio lighting, single full-body centered, isolated on plain background`;
-              case "pixel":
-                return `16-bit pixel-art game sprite of ${subject}, limited palette, crisp pixels, single character centered, plain background`;
-              case "lowpoly":
-                return `low-poly 3d render of ${subject}, flat shaded, clean geometry, single object centered, plain background`;
-              case "painterly":
-                return `hand-painted game art of ${subject}, soft brush strokes, storybook style, single character centered, plain background`;
-              default:
-                return `flat vector game sprite of ${subject}, mobile casual game character, thick clean outline, solid colors, soft glossy shading, single full-body character centered, isolated on plain white background, studio quality${notes ? `; ${notes}` : ""}`;
-            }
-          })();
+      input["prompt"] !== undefined ? String(input["prompt"]) : await this.defaultPrompt(rawName, context.projectPath);
     const negative =
       input["negative"] !== undefined
         ? String(input["negative"])
@@ -724,6 +720,144 @@ export class SpriteGenerateTool implements ITool {
         isError: true,
       };
     }
+  }
+
+
+  /** The default diffusion prompt for a name, steered by the project's style.json. */
+  private async defaultPrompt(rawName: string, projectPath: string): Promise<string> {
+
+            // The project's style.json (GDD-derived, never universal) steers
+            // the default prompt; without it, the toon-casual stock default.
+            let family = "toon-casual";
+            let notes = "";
+            try {
+              const { loadStyleProfile } = await import("../../style/style-profile.js");
+              const profile = loadStyleProfile(projectPath);
+              if (profile) {
+                family = profile.family;
+                notes = profile.notes;
+              }
+            } catch {
+              /* stock defaults */
+            }
+            const subject = rawName.replace(/([A-Z])/g, " $1").toLowerCase();
+            switch (family) {
+              case "realistic":
+                return `realistic game render of ${subject}, detailed natural materials, studio lighting, single full-body centered, isolated on plain background`;
+              case "pixel":
+                return `16-bit pixel-art game sprite of ${subject}, limited palette, crisp pixels, single character centered, plain background`;
+              case "lowpoly":
+                return `low-poly 3d render of ${subject}, flat shaded, clean geometry, single object centered, plain background`;
+              case "painterly":
+                return `hand-painted game art of ${subject}, soft brush strokes, storybook style, single character centered, plain background`;
+              default:
+                return `flat vector game sprite of ${subject}, mobile casual game character, thick clean outline, solid colors, soft glossy shading, single full-body character centered, isolated on plain white background, studio quality${notes ? `; ${notes}` : ""}`;
+            }
+  }
+
+  /**
+   * Many sprites, one model load. Measured 2026-09-07: one sprite is ~45-60 s
+   * on this machine and every call paid a ~10 s pipeline load plus a model
+   * round-trip; a GDD with 20 canvases per area and 10 areas is 200 sprites.
+   */
+  private async executeBatch(
+    input: Record<string, unknown>,
+    context: ToolContext,
+    provider: "local" | "procedural",
+    auto: boolean,
+  ): Promise<ToolExecutionResult> {
+    const items = (input["batch"] as unknown[]).map((raw) => {
+      const r = (raw ?? {}) as Record<string, unknown>;
+      return { name: String(r["name"] ?? "").trim(), prompt: typeof r["prompt"] === "string" ? r["prompt"] : undefined };
+    });
+    if (items.length === 0) return { content: "Error: batch is empty", isError: true };
+    if (items.length > SPRITE_BATCH_MAX) {
+      return { content: `Error: batch holds ${items.length} sprites; the limit is ${SPRITE_BATCH_MAX} per call — split it.`, isError: true };
+    }
+    const bad = items.find((i) => !/^[A-Za-z][\w-]{0,40}$/.test(i.name));
+    if (bad) return { content: `Error: batch name "${bad.name}" must start with a letter and contain only letters, digits, _ or -`, isError: true };
+    const dirRel = String(input["path"] ?? "Assets/Art/Generated");
+    if (!/^Assets([/\\]|$)/i.test(dirRel.replace(/\\/g, "/")) && dirRel !== "Assets") {
+      return { content: "Error: path must be under Assets/", isError: true };
+    }
+    if (provider === "procedural") {
+      // Each one through the single path, so every refusal and PLACEHOLDER
+      // note is the same as it would be alone.
+      const lines: string[] = [];
+      for (const item of items) {
+        const r = await this.execute({ ...input, batch: undefined, name: item.name }, context);
+        lines.push(`${item.name}: ${r.isError ? "FAILED — " : ""}${String(r.content).slice(0, 400)}`);
+      }
+      return { content: lines.join("\n"), isError: lines.every((l) => l.includes("FAILED")) };
+    }
+
+    const { LocalModelRunner } = await import("../../../assets-local/local-model-runner.js");
+    const { defaultModelFor, supportedModels } = await import("../../../assets-local/model-catalog.js");
+    const modelId = input["model"] !== undefined ? String(input["model"]) : undefined;
+    const spec = modelId
+      ? supportedModels().find((m) => m.id === modelId && m.kind === "text-to-image")
+      : defaultModelFor("text-to-image");
+    if (!spec) return { content: "Error: no local text-to-image model available for this device.", isError: true };
+    const runner: LocalRunnerLike = this.opts.runner ?? new LocalModelRunner();
+    if (!runner.isModelInstalled(spec.id)) {
+      return { content: `Error: ${spec.label} is not installed. Run \`strada assets-local-setup --model ${spec.id}\` first.`, isError: true };
+    }
+    const negative =
+      input["negative"] !== undefined
+        ? String(input["negative"])
+        : "photo, realistic, blurry, watermark, signature, text, logo, dark background, " +
+          "pattern background, scenery, multiple characters, cropped, deformed, extra limbs";
+    const jobs: Array<{ name: string; relFile: string; fullPath: string; prompt: string }> = [];
+    const refused: string[] = [];
+    for (const item of items) {
+      const relFile = `${dirRel.replace(/[/\\]+$/, "")}/${item.name}.png`;
+      const check = await validatePath(context.projectPath, relFile, { allowMissingParents: true });
+      if (!check.valid) {
+        refused.push(`${item.name}: ${check.error ?? "path validation failed"}`);
+        continue;
+      }
+      jobs.push({ name: item.name, relFile, fullPath: check.fullPath, prompt: item.prompt ?? (await this.defaultPrompt(item.name, context.projectPath)) });
+    }
+    if (jobs.length === 0) return { content: `Error: nothing to draw —\n${refused.join("\n")}`, isError: true };
+    for (const job of jobs) {
+      mkdirSync(dirname(job.fullPath), { recursive: true });
+      writeFileSync(`${job.fullPath}.meta`, spriteMeta(reuseOrMintGuid(`${job.fullPath}.meta`)), "utf8");
+    }
+    const opts = { negative, size: 512, removeBackground: input["keepBackground"] !== true };
+    let written: Set<string>;
+    let detail: string;
+    if (runner.textToImageBatch) {
+      const r = await runner.textToImageBatch(spec, jobs.map((j) => ({ prompt: j.prompt, out: j.fullPath, negative })), opts);
+      written = new Set(r.written);
+      detail = r.detail;
+    } else {
+      written = new Set();
+      const notes: string[] = [];
+      for (const job of jobs) {
+        const r = await runner.textToImage(spec, job.prompt, job.fullPath, opts);
+        if (r.ok) written.add(job.fullPath);
+        else notes.push(`${job.name}: ${r.detail.slice(0, 120)}`);
+      }
+      detail = notes.join("; ") || `${written.size} written`;
+    }
+    const lines: string[] = [];
+    for (const job of jobs) {
+      if (written.has(job.fullPath)) lines.push(`✓ ${job.relFile} (+ .meta)`);
+      else {
+        try { rmSync(`${job.fullPath}.meta`, { force: true }); } catch { /* orphan meta */ }
+        lines.push(`✗ ${job.relFile} — not written`);
+      }
+    }
+    const failures = jobs.length - written.size + refused.length;
+    return {
+      content:
+        `Batch by local diffusion (${spec.label}): ${written.size} of ${items.length} sprites written` +
+        (failures > 0 ? `, ${failures} failed (${detail.slice(0, 200)})` : "") +
+        `.\n${[...lines, ...refused.map((r) => `✗ ${r}`)].join("\n")}\n` +
+        "Unity imports them as Sprites on next refresh. Bind each to its element — an unreferenced sprite draws nothing." +
+        (auto ? "" : ""),
+      isError: written.size === 0,
+    };
   }
 
   private async executeProcedural(
