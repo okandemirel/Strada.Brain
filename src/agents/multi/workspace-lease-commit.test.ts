@@ -384,6 +384,7 @@ describe("capture retention rides the commit", () => {
       const dir = join(source, "Recordings", `old_${String(i).padStart(2, "0")}`);
       mkdirSync(dir, { recursive: true });
       writeFileSync(join(dir, "frame_0.png"), "x");
+      writeFileSync(join(dir, ".strada-capture"), "lease"); // entries an earlier lease wrote
       utimesSync(dir, past, past);
     }
     const lease = await manager().acquireLease({ label: "t", forceTempCopy: true });
@@ -440,7 +441,8 @@ describe("a loose script with a module twin is the system's own duplicate", () =
   it("applies the deletion even when the history is not campaign-only", async () => {
     mkdirSync(join(source, "Assets", "Scripts"), { recursive: true });
     mkdirSync(join(source, "Assets", "Modules", "PresentationModule", "Scripts"), { recursive: true });
-    writeFileSync(join(source, "Assets", "Scripts", "PlayfieldBuilder.cs"), "loose", "utf8");
+    // Byte-identical: a duplicate by content, whatever its history says.
+    writeFileSync(join(source, "Assets", "Scripts", "PlayfieldBuilder.cs"), "module copy", "utf8");
     writeFileSync(join(source, "Assets", "Modules", "PresentationModule", "Scripts", "PlayfieldBuilder.cs"), "module copy", "utf8");
     writeFileSync(join(source, "Assets", "Scripts", "Solo.cs"), "no twin", "utf8");
     execSync("git init -q && git add -A && git -c user.email=a@b -c user.name=t commit -qm 'feat: construct PlayfieldBuilder runtime'", { cwd: source });

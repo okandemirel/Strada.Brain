@@ -6,8 +6,8 @@ import os from "node:os";
 import { randomUUID } from "node:crypto";
 import { runProcess } from "../../utils/process-runner.js";
 import { getLoggerSafe } from "../../utils/logger.js";
-import { pruneCaptureEntries } from "./capture-retention.js";
-import { systemOwnedDeletionReason } from "./system-owned-path.js";
+import { markCaptureEntry, pruneCaptureEntries } from "./capture-retention.js";
+import { appendLeaseLedger, systemOwnedDeletionReason } from "./system-owned-path.js";
 
 export type WorkspaceLeaseKind = "git-worktree" | "temp-copy";
 
@@ -304,6 +304,20 @@ function ownerFileRecordsLivePid(file: string): boolean {
 /** True when the pid recorded in a lease's owner sidecar — or, while it is
  *  still being seeded, its sibling claim file — is still running. Missing or
  *  corrupt records read as not-alive (old-style orphan heuristic). */
+/** The project a lease was taken for, when its owner record says (records from before 2026-09-07 do not). */
+function leaseOwnerProject(leasePath: string): string | undefined {
+  for (const file of [join(leasePath, LEASE_OWNER_FILE), leaseClaimPath(leasePath)]) {
+    try {
+      const parsed: unknown = JSON.parse(readFileSync(file, "utf8"));
+      const root = (parsed as { projectRoot?: unknown })?.projectRoot;
+      if (typeof root === "string" && root !== "") return root;
+    } catch {
+      /* no record here */
+    }
+  }
+  return undefined;
+}
+
 function leaseOwnerAlive(leasePath: string): boolean {
   return (
     ownerFileRecordsLivePid(join(leasePath, LEASE_OWNER_FILE)) ||
@@ -413,6 +427,19 @@ export class WorkspaceLeaseManager {
         // The name pattern matches LIVE leases exactly as well as dead ones —
         // "orphan" is decided by owner liveness, never by naming.
         .filter((e) => !leaseOwnerAlive(join(this.leaseRoot, e.name)))
+        // …and only THIS project's orphans: another project's lease salvaged
+        // here would be quarantined into the wrong tree and deleted.
+        .filter((e) => {
+          const owner = leaseOwnerProject(join(this.leaseRoot, e.name));
+          if (owner !== undefined && resolve(owner) !== resolve(this.projectRoot)) {
+            getLoggerSafe().info("Orphaned workspace belongs to another project — left for its own manager", {
+              orphan: e.name,
+              project: owner,
+            });
+            return false;
+          }
+          return true;
+        })
         .map((e) => e.name);
     } catch {
       return [];
@@ -548,7 +575,10 @@ export class WorkspaceLeaseManager {
 
     // Claim ownership BEFORE the directory exists, so there is no instant at
     // which the workspace is on disk without a live owner (see LEASE_CLAIM_SUFFIX).
-    const ownerRecord = JSON.stringify({ pid: process.pid, startedAt: createdAt });
+    // projectRoot travels in the record: the lease root is machine-global, and
+    // a manager booted for another project used to salvage this one's orphan
+    // into ITS quarantine and delete it (review 2026-09-07).
+    const ownerRecord = JSON.stringify({ pid: process.pid, startedAt: createdAt, projectRoot: this.projectRoot });
     try {
       writeFileSync(leaseClaimPath(workspacePath), ownerRecord, "utf8");
     } catch {
@@ -816,7 +846,43 @@ export class WorkspaceLeaseManager {
         continue;
       }
       mkdirSync(dirname(target), { recursive: true });
-      cpSync(source, target, { recursive: true, force: true });
+      // verbatimSymlinks: a relative link stays relative. Dereferenced, an
+      // uncommitted `../Shared` link was rewritten to an absolute path into
+      // the REAL project, and the agent's writes through it landed there
+      // before any commit (review 2026-09-07).
+      cpSync(source, target, { recursive: true, force: true, verbatimSymlinks: true });
+    }
+
+    // The synced working state becomes the worktree's BASELINE commit. Left
+    // as uncommitted modifications on the detached HEAD, a routine `git
+    // stash` / `checkout -- .` / `reset --hard` by the agent reverted the
+    // user's WIP to HEAD with a fresh mtime, and the commit-back copied HEAD
+    // over the user's edits as "agent work" (review 2026-09-07).
+    if (applied.length > 0) {
+      const add = await this.commandRunner({
+        command: "git",
+        args: ["-C", workspacePath, "add", "-A"],
+        cwd: workspacePath,
+        timeoutMs: this.worktreeTimeoutMs,
+      });
+      if (add.exitCode === 0) {
+        const commit = await this.commandRunner({
+          command: "git",
+          args: [
+            "-C", workspacePath,
+            "-c", "user.name=Strada.Brain lease", "-c", "user.email=lease@strada.local",
+            "commit", "-q", "--no-verify", "--allow-empty-message", "-m",
+            "lease seed: the project's uncommitted working state (baseline, never pushed)",
+          ],
+          cwd: workspacePath,
+          timeoutMs: this.worktreeTimeoutMs,
+        });
+        if (commit.exitCode !== 0) {
+          getLoggerSafe().warn("Could not commit the seeded working state in the worktree — an agent git reset there would revert the user's WIP", {
+            stderr: commit.stderr.trim().slice(0, 200),
+          });
+        }
+      }
     }
   }
 
@@ -1014,8 +1080,25 @@ export class WorkspaceLeaseManager {
       }
     };
 
-    type FileOutcome = { written?: string; conflict?: string; failed?: string };
+    // Decisions first, writes second (review 2026-09-07): an asset and its
+    // .meta are one unit, and the pair can only be held together when the
+    // decision for both is known before either is written.
+    type FileOutcome = { written?: string; conflict?: string; failed?: string; write?: { rel: string; full: string; target: string } };
     const outcomes: Array<FileOutcome | undefined> = [];
+
+    const quarantine = async (rel: string, full: string): Promise<void> => {
+      if (!quarantineRoot) return;
+      try {
+        const quarantineTarget = join(quarantineRoot, rel);
+        await fsp.mkdir(dirname(quarantineTarget), { recursive: true });
+        await fsp.copyFile(full, quarantineTarget);
+        conflictsQuarantinedUnder ??= quarantineRoot;
+        quarantined += 1; // counted only AFTER the copy succeeded
+      } catch {
+        // Quarantine failed; the conflict report still stands, and
+        // `quarantined` stays short of `conflicts` so the caller knows.
+      }
+    };
 
     const processFile = async (full: string): Promise<FileOutcome> => {
         const rel = relative(workspacePath, full);
@@ -1046,57 +1129,58 @@ export class WorkspaceLeaseManager {
             if ((await pathExists(salvageTarget)) && (await sameContent(salvageTarget, full))) {
               return {};
             }
-            if (quarantineRoot) {
-              try {
-                const quarantineTarget = join(quarantineRoot, rel);
-                await fsp.mkdir(dirname(quarantineTarget), { recursive: true });
-                await fsp.copyFile(full, quarantineTarget);
-                conflictsQuarantinedUnder ??= quarantineRoot;
-                quarantined += 1; // counted only AFTER the copy succeeded
-              } catch {
-                // Quarantine failed; the conflict report still stands, and
-                // `quarantined` stays short of `conflicts` so the caller knows.
-              }
-            }
+            await quarantine(rel, full);
+            return { conflict: rel };
+          }
+
+          const sourceSeeded = sourceSeed.get(rel);
+          const targetExists = await pathExists(target);
+
+          // The agent never SAW the project's copy (review 2026-09-07): a
+          // git-worktree lease holds neither gitignored files nor anything
+          // past the seed budget, so a file the project has and the lease was
+          // never seeded with is one the agent wrote blind. Its version is
+          // kept for review; the user's copy is never overwritten by it.
+          if (leaseSeeded === undefined && sourceSeeded !== undefined && targetExists) {
+            if (await sameContent(target, full)) return {};
+            await quarantine(rel, full);
+            return { conflict: rel };
+          }
+
+          // The USER deleted it while the agent ran (review 2026-09-07): it
+          // was in the project at seed time and is gone now. Re-creating it
+          // from the lease undid a deliberate deletion with no word said.
+          if (sourceSeeded !== undefined && !targetExists) {
+            await quarantine(rel, full);
             return { conflict: rel };
           }
 
           // SECOND question: did the USER change it while the agent ran? Their
           // copy wins, and they are told rather than silently overwritten.
-          if (await pathExists(target)) {
+          if (targetExists) {
             if (await sameContent(target, full)) return {}; // already identical
             // Compared against the mtime recorded when the lease was taken, not a
             // wall clock: Date.now() is whole milliseconds while mtimeMs carries
             // a fraction, so a file written in the same millisecond as the lease
             // reads as "modified after" — measured at +0.63 ms.
-            const sourceSeeded = sourceSeed.get(rel);
             if (sourceSeeded === undefined || (await fsp.stat(target)).mtimeMs !== sourceSeeded) {
               // The agent's version used to be destroyed together with the
               // released workspace — hours of autonomous work lost to a single
               // .meta touch by the editor. Preserve it under the project's
               // .strada namespace; best-effort, never blocks the commit.
-              if (quarantineRoot) {
-                try {
-                  const quarantineTarget = join(quarantineRoot, rel);
-                  await fsp.mkdir(dirname(quarantineTarget), { recursive: true });
-                  await fsp.copyFile(full, quarantineTarget);
-                  conflictsQuarantinedUnder ??= quarantineRoot;
-                  quarantined += 1;
-                } catch {
-                  // Quarantine failed; the conflict report still stands.
-                }
-              }
+              await quarantine(rel, full);
               return { conflict: rel };
             }
           }
 
-          await fsp.mkdir(dirname(target), { recursive: true });
-          await fsp.copyFile(full, target);
-          return { written: rel };
+          return { write: { rel, full, target } };
         } catch (err) {
           // One locked or half-deleted file must not cost the rest of the
           // commit — measured in production: a walk that threw on an
           // editor-locked asset silently dropped every file after it.
+          // Its only copy is in the lease, which release() deletes: keep it
+          // (review 2026-09-07).
+          await quarantine(rel, full);
           return { failed: `${rel} (${err instanceof Error ? err.message : String(err)})` };
         }
     };
@@ -1105,6 +1189,38 @@ export class WorkspaceLeaseManager {
     await mapWithConcurrency(files, WALK_CONCURRENCY, async (full, index) => {
       outcomes[index] = await processFile(full);
     });
+
+    // An asset and its .meta travel together or not at all: a v2 texture
+    // shipped beside a v1 importer (or the reverse) is a broken import, not
+    // a partial success (review 2026-09-07).
+    const held = new Set<string>();
+    for (const outcome of outcomes) {
+      if (outcome?.conflict !== undefined) held.add(outcome.conflict);
+      if (outcome?.failed !== undefined) held.add(outcome.failed.replace(/ \(.*\)$/, ""));
+    }
+    const pairOf = (rel: string): string => (/\.meta$/i.test(rel) ? rel.replace(/\.meta$/i, "") : `${rel}.meta`);
+    for (let i = 0; i < outcomes.length; i++) {
+      const outcome = outcomes[i];
+      if (!outcome?.write) continue;
+      if (held.has(pairOf(outcome.write.rel))) {
+        await quarantine(outcome.write.rel, outcome.write.full);
+        outcomes[i] = { conflict: outcome.write.rel };
+      }
+    }
+
+    await mapWithConcurrency(outcomes, WALK_CONCURRENCY, async (outcome, index) => {
+      if (!outcome?.write) return;
+      const { rel, full, target } = outcome.write;
+      try {
+        await fsp.mkdir(dirname(target), { recursive: true });
+        await fsp.copyFile(full, target);
+        outcomes[index] = { written: rel };
+      } catch (err) {
+        await quarantine(rel, full);
+        outcomes[index] = { failed: `${rel} (${err instanceof Error ? err.message : String(err)})` };
+      }
+    });
+
     for (const outcome of outcomes) {
       if (!outcome) continue;
       if (outcome.written !== undefined) written.push(outcome.written);
@@ -1136,13 +1252,31 @@ export class WorkspaceLeaseManager {
         removed.push(rel);
         continue;
       }
+      // Every applied deletion is recoverable (review 2026-09-07): the
+      // history rule cannot tell a user's file swept into a campaign
+      // envelope commit from the campaign's own leftovers, so the project's
+      // copy goes to quarantine before it goes.
+      const doomed = join(sourceRoot, rel);
+      if (quarantineRoot) {
+        try {
+          const quarantineTarget = join(quarantineRoot, "deleted", rel);
+          await fsp.mkdir(dirname(quarantineTarget), { recursive: true });
+          await fsp.copyFile(doomed, quarantineTarget);
+          conflictsQuarantinedUnder ??= quarantineRoot;
+        } catch {
+          removed.push(rel);
+          continue; // not preserved → not deleted
+        }
+      }
       try {
-        await fsp.rm(join(sourceRoot, rel), { force: true });
+        await fsp.rm(doomed, { force: true });
         deleted.push(`${rel} — ${reason}`);
       } catch {
         removed.push(rel);
       }
     }
+    // What the system wrote is the only evidence a later deletion can rely on.
+    if (!opts?.quarantineOnly) appendLeaseLedger(sourceRoot, written);
     if (deleted.length > 0) {
       getLoggerSafe().info("Workspace deletions applied to the system's own files", {
         count: deleted.length,
@@ -1170,6 +1304,13 @@ export class WorkspaceLeaseManager {
     let capturesPruned: WorkspaceCommitResult["capturesPruned"];
     if (!opts?.quarantineOnly && resolve(sourceRoot) === resolve(this.projectRoot)) {
       try {
+        // Only entries a lease wrote are ever pruned; mark this commit's.
+        const markedNow = new Set<string>();
+        for (const rel of written) {
+          const parts = rel.split(/[\\/]/);
+          if (parts[0] === "Recordings" && parts.length > 2 && parts[1]) markedNow.add(parts[1]);
+        }
+        for (const name of markedNow) markCaptureEntry(this.projectRoot, name);
         const pruned = pruneCaptureEntries(this.projectRoot);
         if (pruned.removed > 0) {
           capturesPruned = pruned;

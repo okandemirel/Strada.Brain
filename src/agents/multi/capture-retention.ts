@@ -14,7 +14,7 @@
  * user's files — and what was removed is reported, never silent.
  */
 
-import { existsSync, readdirSync, rmSync, statSync } from "node:fs";
+import { existsSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 export const CAPTURE_ENTRIES_TO_KEEP = 25;
@@ -26,6 +26,8 @@ export interface CaptureRetentionResult {
   readonly bytes: number;
   /** Top-level entries left in place. */
   readonly kept: number;
+  /** Entries without the lease marker — the user's own; never pruned. */
+  readonly unmarked: number;
 }
 
 function sizeOf(path: string): number {
@@ -57,13 +59,36 @@ function sizeOf(path: string): number {
 }
 
 /** Delete all but the newest `keep` top-level entries of <projectRoot>/Recordings. */
+/**
+ * The marker a lease commit drops into every Recordings/ entry IT wrote. Only
+ * marked entries are ever pruned: Recordings/ is also Unity Recorder's default
+ * output folder, and the first version of this deleted the user's own takes on
+ * every commit, including a commit that wrote nothing (review 2026-09-07).
+ */
+export const CAPTURE_MARKER_FILE = ".strada-capture";
+
+export function markCaptureEntry(projectRoot: string, entryName: string): void {
+  const dir = join(projectRoot, "Recordings", entryName);
+  try {
+    if (!statSync(dir).isDirectory()) return;
+    writeFileSync(join(dir, CAPTURE_MARKER_FILE), "written by a Strada.Brain lease commit; retention may prune this entry\n");
+  } catch {
+    /* an unmarkable entry is simply never pruned */
+  }
+}
+
 export function pruneCaptureEntries(projectRoot: string, keep = CAPTURE_ENTRIES_TO_KEEP): CaptureRetentionResult {
   const root = join(projectRoot, "Recordings");
-  if (!existsSync(root)) return { removed: 0, bytes: 0, kept: 0 };
+  if (!existsSync(root)) return { removed: 0, bytes: 0, kept: 0, unmarked: 0 };
   const entries: Array<{ path: string; mtime: number }> = [];
+  let unmarked = 0;
   for (const name of readdirSync(root)) {
     const full = join(root, name);
     try {
+      if (!existsSync(join(full, CAPTURE_MARKER_FILE))) {
+        unmarked++;
+        continue;
+      }
       entries.push({ path: full, mtime: statSync(full).mtimeMs });
     } catch {
       /* vanished */
@@ -82,5 +107,5 @@ export function pruneCaptureEntries(projectRoot: string, keep = CAPTURE_ENTRIES_
       /* reported as kept */
     }
   }
-  return { removed, bytes, kept: entries.length - removed };
+  return { removed, bytes, kept: entries.length - removed, unmarked };
 }
