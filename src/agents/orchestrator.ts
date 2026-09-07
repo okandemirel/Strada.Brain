@@ -66,6 +66,7 @@ import { checkStradaDeps, installStradaDep } from "../config/strada-deps.js";
 import type { IRAGPipeline } from "../rag/rag.interface.js";
 import type { RateLimiter } from "../security/rate-limiter.js";
 import { getLogger, getLogRingBuffer } from "../utils/logger.js";
+import { logProviderCall } from "./providers/provider-call-log.js";
 import { buildPostSetupWelcomeMessage } from "../common/setup-state.js";
 import type { PostSetupBootstrap, PostSetupBootstrapContext } from "../common/setup-contract.js";
 import {
@@ -3905,6 +3906,7 @@ export class Orchestrator {
         ? AbortSignal.any([scope.token.signal, externalSignal])
         : scope.token.signal;
       let onLivenessAt = 0;
+      const turnStartedAt = Date.now();
       try {
         const response = await (provider as IStreamingProvider).chatStream(
           effectivePrompt,
@@ -3928,11 +3930,13 @@ export class Orchestrator {
           },
           { signal: composedSignal, externalSignal },
         );
+        logProviderCall("turn", provider, turnStartedAt, { response }, { chatId });
         this.classifySilentStreamResponse(response, provider);
         return response;
       } catch (err) {
         // Benign control-plane cancel → rethrow for the loop's `signal.aborted` path (audit #6).
         if (externalSignal?.aborted) throw err;
+        logProviderCall("turn", provider, turnStartedAt, { error: err }, { chatId });
         getLogger().error("Silent stream error", {
           chatId,
           error: err instanceof Error ? err.message : "Unknown streaming error",
@@ -3982,6 +3986,7 @@ export class Orchestrator {
     const composedSignal = externalSignal
       ? AbortSignal.any([timeoutGuard.signal, externalSignal])
       : timeoutGuard.signal;
+    const turnStartedAt = Date.now();
     try {
       const streamPromise = (provider as IStreamingProvider).chatStream(
         effectivePrompt,
@@ -4016,11 +4021,13 @@ export class Orchestrator {
       });
       const response = await Promise.race([streamPromise, timeoutGuard.timeoutPromise]);
       timeoutGuard.clear();
+      logProviderCall("turn", provider, turnStartedAt, { response });
       // Route empty 200s to the health-failure path (the shared breaker predicate, audit #9).
       this.classifySilentStreamResponse(response, provider);
       return response;
     } catch (err) {
       timeoutGuard.clear();
+      if (!externalSignal?.aborted) logProviderCall("turn", provider, turnStartedAt, { error: err });
       // Control-plane cancellation: the external signal aborted this call (user cancel /
       // task wind-down). Benign — NOT a provider failure. Do not log an error, do not
       // attempt the fallback chat (it would re-run the chain on the same aborted signal
