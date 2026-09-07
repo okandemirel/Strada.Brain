@@ -102,6 +102,7 @@ export class DelegationLog {
     cancel: Database.Statement;
     history: Database.Statement;
     byParent: Database.Statement;
+    recentByType: Database.Statement;
     activeByParent: Database.Statement;
   };
 
@@ -136,6 +137,9 @@ export class DelegationLog {
       ),
       history: this.db.prepare(
         `SELECT * FROM delegation_log ORDER BY started_at DESC LIMIT ?`,
+      ),
+      recentByType: this.db.prepare(
+        `SELECT * FROM delegation_log WHERE type = ? AND status != 'running' ORDER BY started_at DESC LIMIT ?`,
       ),
       byParent: this.db.prepare(
         `SELECT * FROM delegation_log WHERE parent_agent_id = ? ORDER BY started_at DESC LIMIT ?`,
@@ -217,6 +221,12 @@ export class DelegationLog {
    */
   getHistory(limit = 50): DelegationLogEntry[] {
     const rows = this.stmts.history.all(limit) as DelegationLogRow[];
+    return rows.map(this.rowToEntry);
+  }
+
+  /** The newest settled delegations of one type, newest first — the budget resolver's evidence. */
+  getRecentByType(type: string, limit = 10): DelegationLogEntry[] {
+    const rows = this.stmts.recentByType.all(type, limit) as DelegationLogRow[];
     return rows.map(this.rowToEntry);
   }
 

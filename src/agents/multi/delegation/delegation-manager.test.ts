@@ -415,6 +415,22 @@ describe("DelegationManager", () => {
       expect(result.content).toBe("The verifier loop is caused by a stale fingerprint");
     });
 
+    it("refuses a delegation whose type keeps timing out at the cap, before any lease is taken", async () => {
+      // Measured 2026-09-07: every code_review sub-agent of the day timed out
+      // at 60 s after seeding a 2000-file lease.
+      for (let i = 0; i < 3; i++) {
+        const id = delegationLog.start({ parentAgentId: PARENT_AGENT_ID, subAgentId: `dead-${i}`, type: "code_review", model: "m", tier: "cheap", depth: 0 });
+        delegationLog.timeout(id, { durationMs: 600_000 });
+      }
+      const acquireLease = vi.fn();
+      manager = new DelegationManager(buildManagerOpts({ delegationLog, workspaceLeaseManager: { acquireLease } as never }));
+      await expect(manager.delegate({
+        type: "code_review", task: "Review this code", parentAgentId: PARENT_AGENT_ID, depth: 0, mode: "sync", toolContext: TEST_TOOL_CONTEXT,
+      })).rejects.toThrow(/refused: its last 3 runs all timed out/);
+      expect(acquireLease).not.toHaveBeenCalled();
+      expect(delegationLog.getByParent(PARENT_AGENT_ID).filter((e) => e.status === "running")).toHaveLength(0);
+    });
+
     it("logs start/complete in DelegationLog", async () => {
       const request: DelegationRequest = {
         type: "code_review",

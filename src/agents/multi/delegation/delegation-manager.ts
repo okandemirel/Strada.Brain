@@ -31,6 +31,7 @@ import type {
   ModelTier,
 } from "./delegation-types.js";
 import type { DelegationLog } from "./delegation-log.js";
+import { resolveDelegationBudget } from "./delegation-budget.js";
 import type { TierRouter } from "./tier-router.js";
 import type { ProviderCredentialMap, ProviderConfig } from "../../providers/provider-registry.js";
 import { createProvider, PROVIDER_PRESETS } from "../../providers/provider-registry.js";
@@ -354,7 +355,28 @@ export class DelegationManager {
     effectiveTier: ModelTier;
     reservationId?: string;
   } {
-    const typeConfig = this.resolveTypeConfig(request.type);
+    const configured = this.resolveTypeConfig(request.type);
+    // The budget learns from the log (see delegation-budget.ts): a type that
+    // keeps timing out gets more time, and one that times out at the cap is
+    // refused here, before a slot, a reservation or a lease is taken.
+    const budget = resolveDelegationBudget(
+      request.type,
+      configured.timeoutMs,
+      typeof this.opts.delegationLog.getRecentByType === "function" ? this.opts.delegationLog.getRecentByType(request.type, 10) : [],
+    );
+    if (budget.refusal) {
+      getLoggerSafe().warn("Delegation refused by its own history", { type: request.type, consecutiveTimeouts: budget.consecutiveTimeouts });
+      throw new Error(budget.refusal);
+    }
+    if (budget.timeoutMs !== configured.timeoutMs) {
+      getLoggerSafe().info("Delegation budget raised from its history", {
+        type: request.type,
+        configuredMs: configured.timeoutMs,
+        timeoutMs: budget.timeoutMs,
+        consecutiveTimeouts: budget.consecutiveTimeouts,
+      });
+    }
+    const typeConfig: DelegationTypeConfig = { ...configured, timeoutMs: budget.timeoutMs };
     const effectiveTier = this.opts.tierRouter.getTypeEffectiveTier(
       request.type,
       typeConfig.tier,
