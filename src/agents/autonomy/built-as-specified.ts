@@ -34,6 +34,7 @@
  */
 
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { basename, join, relative, sep } from "node:path";
 import type { SceneWiringIo } from "./scene-wiring.js";
 
@@ -130,6 +131,9 @@ const MESH_RENDERER_CLASSES: ReadonlySet<string> = new Set([
 
 const MODEL_EXT_RE = /\.(?:fbx|obj|blend|dae|gltf|glb|3ds|max|ma|mb)$/iu;
 const SPRITE_EXT_RE = /\.(?:png|jpg|jpeg|psd|tga|exr|tif|tiff)$/iu;
+const AUDIO_EXT_RE = /\.(?:wav|ogg|mp3|aif|aiff|flac)$/iu;
+/** A clip shorter than this is a blip, whatever it is named. */
+const SHORT_AUDIO_SECONDS = 0.5;
 const FOLLOWABLE_EXT_RE = /\.(?:prefab|asset|unity|mat|controller|playable|spriteatlas)$/iu;
 
 // ─── Result shapes ─────────────────────────────────────────────────────────
@@ -208,6 +212,18 @@ export interface ArtInventory {
    * gate as art-complete.
    */
   readonly placeholderSprites: number;
+  /**
+   * Audio clips under Assets/, and what their bytes say. Measured 2026-09-07
+   * on the PixelFlow project: 19 WAVs — six 90-second "music" loops and
+   * thirteen 0.15-second SFX blips, four of them byte-identical to another —
+   * counted nowhere, while the GDD scheduled a music base loop, area
+   * variations and a complete SFX cue list.
+   */
+  readonly audio: number;
+  /** Clips whose bytes equal another clip's — the same sound under two names. */
+  readonly duplicateAudio: number;
+  /** Clips shorter than SHORT_AUDIO_SECONDS (WAV only; other formats are unmeasured). */
+  readonly shortAudio: number;
 }
 
 export interface BuiltAsSpecifiedReport {
@@ -512,7 +528,7 @@ export function assessBuiltAsSpecified(
     shippedBuiltInRefs: 0,
     shippedMeshRenderers: 0,
     shippedSpriteRenderers: 0,
-    artInventory: { prefabs: 0, models: 0, sprites: 0, placeholderSprites: 0 },
+    artInventory: { prefabs: 0, models: 0, sprites: 0, placeholderSprites: 0, audio: 0, duplicateAudio: 0, shortAudio: 0 },
     unboundPrefabs: [] as string[],
     unboundModels: [] as string[],
     unboundSprites: [] as string[],
@@ -712,7 +728,7 @@ export function assessBuiltAsSpecified(
 
   // ── Art inventory and what nothing binds ──────────────────────────────
   const artFiles = io
-    .listFiles(assetsRoot, (f) => /\.(?:prefab|fbx|obj|blend|dae|gltf|glb|png|jpg|jpeg|psd|tga|exr)$/iu.test(f))
+    .listFiles(assetsRoot, (f) => /\.(?:prefab|fbx|obj|blend|dae|gltf|glb|png|jpg|jpeg|psd|tga|exr|wav|ogg|mp3|aif|aiff|flac)$/iu.test(f))
     .map((f) => relative(projectRoot, f).split(sep).join("/"))
     // A fixture under Tests/ or Editor/ is not the game's unshipped art.
     .filter((rel) => !/(^|\/)(Tests?|Editor)\//i.test(rel));
@@ -728,6 +744,10 @@ export function assessBuiltAsSpecified(
   const unboundModels: string[] = [];
   const unboundSprites: string[] = [];
   const placeholderSpritePaths: string[] = [];
+  const audioHashes = new Map<string, string>();
+  const duplicateAudioPaths: string[] = [];
+  const shortAudioPaths: string[] = [];
+  let audio = 0;
   let prefabs = 0;
   let models = 0;
   let sprites = 0;
@@ -749,6 +769,15 @@ export function assessBuiltAsSpecified(
       sprites++;
       if (guid !== undefined && !bound) unboundSprites.push(rel);
       if (isPlaceholderGradePng(join(projectRoot, rel))) placeholderSpritePaths.push(rel);
+    } else if (AUDIO_EXT_RE.test(rel)) {
+      audio++;
+      const clip = measureAudioClip(join(projectRoot, rel));
+      if (clip.hash !== undefined) {
+        const twin = audioHashes.get(clip.hash);
+        if (twin !== undefined) duplicateAudioPaths.push(`${rel} = ${twin}`);
+        else audioHashes.set(clip.hash, rel);
+      }
+      if (clip.seconds !== undefined && clip.seconds < SHORT_AUDIO_SECONDS) shortAudioPaths.push(rel);
     }
   }
 
@@ -786,7 +815,15 @@ export function assessBuiltAsSpecified(
     shippedBuiltInRefs,
     shippedMeshRenderers: sum((s) => s.meshRenderers),
     shippedSpriteRenderers: sum((s) => s.spriteRenderers),
-    artInventory: { prefabs, models, sprites, placeholderSprites: placeholderSpritePaths.length },
+    artInventory: {
+      prefabs,
+      models,
+      sprites,
+      placeholderSprites: placeholderSpritePaths.length,
+      audio,
+      duplicateAudio: duplicateAudioPaths.length,
+      shortAudio: shortAudioPaths.length,
+    },
     unboundPrefabs,
     unboundModels,
     unboundSprites,
@@ -832,6 +869,18 @@ export function assessBuiltAsSpecified(
           `their PNG compresses below ${PLACEHOLDER_BYTES_PER_PIXEL} byte per pixel, which is a flat ` +
           `procedural shape, not drawn art (e.g. ${placeholderSpritePaths.slice(0, 3).join(", ")}).`
         : ""),
+  );
+  disclosures.push(
+    audio === 0
+      ? "Project audio: no audio clips under Assets/ at all."
+      : `Project audio: ${audio} clip${audio === 1 ? "" : "s"}, ${audio - duplicateAudioPaths.length} distinct by content` +
+        (duplicateAudioPaths.length > 0
+          ? ` (${duplicateAudioPaths.length} byte-identical to another: ${duplicateAudioPaths.slice(0, 2).join("; ")})`
+          : "") +
+        (shortAudioPaths.length > 0
+          ? `; ${shortAudioPaths.length} shorter than ${SHORT_AUDIO_SECONDS}s (e.g. ${shortAudioPaths.slice(0, 3).join(", ")})`
+          : "") +
+        ".",
   );
   if (primitiveScripts.length > 0) {
     disclosures.push(
@@ -998,6 +1047,41 @@ export function readPngDimensions(bytes: Uint8Array): { width: number; height: n
   const width = view.getUint32(16);
   const height = view.getUint32(20);
   return width > 0 && height > 0 ? { width, height } : null;
+}
+
+/** Content hash and, for a WAV, the duration its header declares. Unreadable → both undefined. */
+export function measureAudioClip(absPath: string): { hash?: string; seconds?: number } {
+  let bytes: Buffer;
+  try {
+    bytes = readFileSync(absPath);
+  } catch {
+    return {};
+  }
+  const hash = createHash("sha1").update(bytes).digest("hex");
+  if (bytes.length < 44 || bytes.toString("ascii", 0, 4) !== "RIFF" || bytes.toString("ascii", 8, 12) !== "WAVE") {
+    return { hash };
+  }
+  // Walk the chunks: fmt gives rate/channels/bits, data gives the byte count.
+  let channels = 0;
+  let rate = 0;
+  let bits = 0;
+  let dataBytes: number | undefined;
+  let at = 12;
+  while (at + 8 <= bytes.length) {
+    const id = bytes.toString("ascii", at, at + 4);
+    const size = bytes.readUInt32LE(at + 4);
+    if (id === "fmt " && at + 24 <= bytes.length) {
+      channels = bytes.readUInt16LE(at + 10);
+      rate = bytes.readUInt32LE(at + 12);
+      bits = bytes.readUInt16LE(at + 22);
+    } else if (id === "data") {
+      dataBytes = Math.min(size, bytes.length - at - 8);
+      break;
+    }
+    at += 8 + size + (size % 2);
+  }
+  const bytesPerSecond = rate * channels * (bits / 8);
+  return dataBytes !== undefined && bytesPerSecond > 0 ? { hash, seconds: dataBytes / bytesPerSecond } : { hash };
 }
 
 /** True only for a PNG that was read, parsed, and measured under the threshold. Unreadable is not placeholder. */

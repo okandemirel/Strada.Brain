@@ -216,7 +216,7 @@ describe("assessBuiltAsSpecified — passes", () => {
     const report = assessBuiltAsSpecified(root);
 
     expect(report.refusal).toBeUndefined();
-    expect(report.artInventory).toEqual({ prefabs: 0, models: 0, sprites: 0, placeholderSprites: 0 });
+    expect(report.artInventory).toEqual({ prefabs: 0, models: 0, sprites: 0, placeholderSprites: 0, audio: 0, duplicateAudio: 0, shortAudio: 0 });
     expect(report.disclosures.join("\n")).toContain("no prefabs, imported models or sprite textures at all");
     // A skipped claim must not read like a passed one.
     expect(report.disclosures.join("\n")).toContain("Shipped scenes PLACE 0 renderer components");
@@ -466,7 +466,7 @@ describe("assessBuiltAsSpecified — placeholder-grade art", () => {
 
     const report = assessBuiltAsSpecified(root);
 
-    expect(report.artInventory).toEqual({ prefabs: 1, models: 0, sprites: 13, placeholderSprites: 12 });
+    expect(report.artInventory).toEqual({ prefabs: 1, models: 0, sprites: 13, placeholderSprites: 12, audio: 0, duplicateAudio: 0, shortAudio: 0 });
     expect(report.placeholderSpritePaths).not.toContain("Assets/Art/Real/Hero.png");
     expect(report.refusal).toBeDefined();
     expect(report.refusal).toContain("placeholder art: 12 of 13 sprite textures");
@@ -501,6 +501,61 @@ describe("assessBuiltAsSpecified — placeholder-grade art", () => {
     const report = assessBuiltAsSpecified(root);
 
     expect(report.refusal).toBeUndefined();
-    expect(report.artInventory).toEqual({ prefabs: 1, models: 0, sprites: 2, placeholderSprites: 1 });
+    expect(report.artInventory).toEqual({ prefabs: 1, models: 0, sprites: 2, placeholderSprites: 1, audio: 0, duplicateAudio: 0, shortAudio: 0 });
+  });
+});
+
+// ─── Audio inventory ─────────────────────────────────────────────────────
+
+/** A valid 16-bit mono 8 kHz WAV of `seconds` length, filled with `fill`. */
+function wav(seconds: number, fill: number): Buffer {
+  const rate = 8000;
+  const data = Buffer.alloc(Math.round(seconds * rate) * 2, fill);
+  const header = Buffer.alloc(44);
+  header.write("RIFF", 0, "ascii");
+  header.writeUInt32LE(36 + data.length, 4);
+  header.write("WAVE", 8, "ascii");
+  header.write("fmt ", 12, "ascii");
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20); // PCM
+  header.writeUInt16LE(1, 22); // mono
+  header.writeUInt32LE(rate, 24);
+  header.writeUInt32LE(rate * 2, 28);
+  header.writeUInt16LE(2, 32);
+  header.writeUInt16LE(16, 34);
+  header.write("data", 36, "ascii");
+  header.writeUInt32LE(data.length, 40);
+  return Buffer.concat([header, data]);
+}
+
+describe("assessBuiltAsSpecified — audio inventory", () => {
+  // Measured 2026-09-07: 19 WAVs, thirteen of 0.15 s, four byte-identical
+  // to another, counted nowhere.
+  it("counts clips, duplicates by content and blips, and says so", () => {
+    const root = project();
+    boundSpriteProject(root, "a0000000000000000000000000000000");
+    putBytes(root, "Assets/Art/Real/Pig.png", png(64, 64, "noise"), "a0000000000000000000000000000000");
+    putBytes(root, "Assets/Audio/music_base_loop.wav", wav(3, 7), "d1000000000000000000000000000000");
+    putBytes(root, "Assets/Audio/music_beach.wav", wav(3, 7), "d2000000000000000000000000000000"); // same bytes
+    putBytes(root, "Assets/Audio/ui_click.wav", wav(0.15, 3), "d3000000000000000000000000000000");
+    putBytes(root, "Assets/Audio/win.ogg", Buffer.from("OggS not really"), "d4000000000000000000000000000000");
+
+    const report = assessBuiltAsSpecified(root);
+
+    expect(report.artInventory.audio).toBe(4);
+    expect(report.artInventory.duplicateAudio).toBe(1);
+    expect(report.artInventory.shortAudio).toBe(1);
+    const line = report.disclosures.find((d) => d.startsWith("Project audio"))!;
+    expect(line).toContain("4 clips, 3 distinct by content");
+    expect(line).toContain("music_beach.wav = Assets/Audio/music_base_loop.wav");
+    expect(line).toContain("1 shorter than 0.5s");
+    expect(line).toContain("ui_click.wav");
+  });
+
+  it("says when there is no audio at all", () => {
+    const root = project();
+    boundSpriteProject(root, "a0000000000000000000000000000000");
+    putBytes(root, "Assets/Art/Real/Pig.png", png(64, 64, "noise"), "a0000000000000000000000000000000");
+    expect(assessBuiltAsSpecified(root).disclosures).toContain("Project audio: no audio clips under Assets/ at all.");
   });
 });
