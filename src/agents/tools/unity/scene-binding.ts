@@ -68,8 +68,22 @@ export function joinUnityDocs(preamble: string, docs: readonly UnityDoc[]): stri
 }
 
 function field(doc: UnityDoc, name: string): string | undefined {
-  const m = new RegExp(`^  ${name}: (.*)$`, "m").exec(doc.text);
-  return m?.[1]?.trim();
+  const m = new RegExp(`^  ${name}: (.*?)\\r?$`, "m").exec(doc.text);
+  return m?.[1] === undefined ? undefined : yamlScalar(m[1].trim());
+}
+
+/** A YAML plain/quoted scalar as Unity writes it → its string value. */
+export function yamlScalar(raw: string): string {
+  if (raw.length >= 2 && raw.startsWith('"') && raw.endsWith('"')) {
+    return raw.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+  }
+  if (raw.length >= 2 && raw.startsWith("'") && raw.endsWith("'")) return raw.slice(1, -1).replace(/''/g, "'");
+  return raw;
+}
+
+/** A string value as a YAML scalar Unity will read back unchanged (quoted when it needs to be). */
+export function yamlString(value: string): string {
+  return /^[A-Za-z0-9_][A-Za-z0-9_ .\-]*$/.test(value) && !/\s$/.test(value) ? value : `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
 function refFileId(value: string | undefined): string | undefined {
@@ -178,9 +192,10 @@ export function spriteRef(guid: string): string {
  */
 export function ensureSpriteImporter(metaPath: string): boolean {
   const text = readFileSync(metaPath, "utf8");
-  if (/^\s*textureType: 8$/m.test(text) && /^\s*spriteMode: 1$/m.test(text)) return false;
-  let next = text.replace(/^(\s*)textureType: \d+$/m, "$1textureType: 8");
-  next = next.replace(/^(\s*)spriteMode: \d+$/m, "$1spriteMode: 1");
+  if (/^\s*textureType: 8\r?$/m.test(text) && /^\s*spriteMode: [12]\r?$/m.test(text)) return false;
+  let next = text.replace(/^(\s*)textureType: \d+(\r?)$/m, "$1textureType: 8$2");
+  // A sheet (spriteMode 2) keeps its slices; only a non-sprite mode becomes Single.
+  if (!/^\s*spriteMode: 2\r?$/m.test(next)) next = next.replace(/^(\s*)spriteMode: \d+(\r?)$/m, "$1spriteMode: 1$2");
   if (next === text) return false;
   writeAtomic(metaPath, next);
   return true;
@@ -223,15 +238,17 @@ export function bindSprite(
   if (renderer) {
     rendererFileId = renderer.fileId;
     if (!/^  m_Sprite: .*$/m.test(renderer.text)) throw new Error(`SpriteRenderer &${renderer.fileId} has no m_Sprite line`);
-    renderer.text = renderer.text.replace(/^  m_Sprite: .*$/m, `  m_Sprite: ${spriteRef(spriteGuid)}`);
+    // A reference the Editor wrapped onto continuation lines is replaced whole.
+    renderer.text = renderer.text.replace(/^  m_Sprite: .*(?:\r?\n {4}[^\r\n]*)*$/m, `  m_Sprite: ${spriteRef(spriteGuid)}`);
     renderer.text = renderer.text.replace(/^  m_WasSpriteAssigned: \d$/m, "  m_WasSpriteAssigned: 1");
   } else {
     if (opts.addRenderer === false) throw new Error(`GameObject "${goName}" has no SpriteRenderer and addRenderer is false`);
     const taken = new Set(docs.map((d) => d.fileId));
     rendererFileId = freshFileId(taken);
-    if (!/^  m_Component:\n/m.test(go.text)) throw new Error(`GameObject "${goName}" has no m_Component list`);
+    if (!/^  m_Component:\r?\n/m.test(go.text)) throw new Error(`GameObject "${goName}" has no m_Component list`);
     // Register the component on the GameObject, after its existing components.
-    go.text = go.text.replace(/^(  m_Component:\n(?:  - component: \{fileID: -?\d+\}\n)*)/m, `$1  - component: {fileID: ${rendererFileId}}\n`);
+    const eol = go.text.includes("\r\n") ? "\r\n" : "\n";
+    go.text = go.text.replace(/^(  m_Component:\r?\n(?:  - component: \{fileID: -?\d+\}\r?\n)*)/m, `$1  - component: {fileID: ${rendererFileId}}${eol}`);
     docs.push({ classId: 212, fileId: rendererFileId, stripped: false, text: spriteRendererDoc(rendererFileId, go.fileId, spriteGuid) });
     added = true;
   }
@@ -249,14 +266,14 @@ export function bindSprite(
 // ─── PrefabInstance ───────────────────────────────────────────────────────
 
 /** The prefab's root GameObject and its Transform (the Transform whose m_Father is 0). */
-export function prefabRoot(prefabText: string): { gameObjectId: string; transformId: string; name: string } {
+export function prefabRoot(prefabText: string): { gameObjectId: string; transformId: string; transformClassId: number; name: string } {
   const { docs } = splitUnityDocs(prefabText);
-  const rootTransform = docs.find((d) => (d.classId === 4 || d.classId === 224) && /^  m_Father: \{fileID: 0\}$/m.test(d.text));
-  if (!rootTransform) throw new Error("prefab has no root Transform (m_Father: {fileID: 0})");
+  const rootTransform = docs.find((d) => (d.classId === 4 || d.classId === 224) && !d.stripped && /^  m_Father: \{fileID: 0\}\r?$/m.test(d.text));
+  if (!rootTransform) throw new Error("prefab has no root Transform (m_Father: {fileID: 0}) — a prefab VARIANT inherits its root and is not supported here");
   const gameObjectId = refFileId(field(rootTransform, "m_GameObject"));
   const go = docs.find((d) => d.classId === 1 && d.fileId === gameObjectId);
   if (!gameObjectId || !go) throw new Error("prefab root Transform points at no GameObject");
-  return { gameObjectId, transformId: rootTransform.fileId, name: field(go, "m_Name") ?? "Prefab" };
+  return { gameObjectId, transformId: rootTransform.fileId, transformClassId: rootTransform.classId, name: field(go, "m_Name") ?? "Prefab" };
 }
 
 export interface PlacePrefabResult {
@@ -270,7 +287,7 @@ export interface PlacePrefabResult {
 export function placePrefab(
   scenePath: string,
   prefabGuid: string,
-  root: { gameObjectId: string; transformId: string; name: string },
+  root: { gameObjectId: string; transformId: string; transformClassId?: number; name: string },
   opts: { name?: string; position?: { x: number; y: number; z: number } } = {},
 ): PlacePrefabResult {
   const original = readFileSync(scenePath, "utf8");
@@ -292,21 +309,30 @@ export function placePrefab(
     mod(root.transformId, "m_LocalRotation.x", 0) +
     mod(root.transformId, "m_LocalRotation.y", 0) +
     mod(root.transformId, "m_LocalRotation.z", 0) +
-    mod(root.gameObjectId, "m_Name", name) +
+    mod(root.gameObjectId, "m_Name", yamlString(name)) +
     `    m_RemovedComponents: []\n    m_RemovedGameObjects: []\n    m_AddedGameObjects: []\n    m_AddedComponents: []\n  m_SourcePrefab: {fileID: 100100000, guid: ${prefabGuid}, type: 3}\n`;
+  // The proxy carries the ROOT'S class: a RectTransform root (224) gets a
+  // stripped RectTransform, not a Transform (Codex review, 2026-09-07).
+  const tClass = root.transformClassId === 224 ? 224 : 4;
+  const tName = tClass === 224 ? "RectTransform" : "Transform";
   const stripped =
-    `--- !u!4 &${stId} stripped\nTransform:\n  m_CorrespondingSourceObject: {fileID: ${root.transformId}, guid: ${prefabGuid}, type: 3}\n  m_PrefabInstance: {fileID: ${piId}}\n  m_PrefabAsset: {fileID: 0}\n`;
+    `--- !u!${tClass} &${stId} stripped\n${tName}:\n  m_CorrespondingSourceObject: {fileID: ${root.transformId}, guid: ${prefabGuid}, type: 3}\n  m_PrefabInstance: {fileID: ${piId}}\n  m_PrefabAsset: {fileID: 0}\n`;
   const sceneRoots = docs.find((d) => d.classId === 1660057539);
   let rootRegistered = false;
   if (sceneRoots) {
-    sceneRoots.text = sceneRoots.text.replace(/^(  m_Roots:\n(?:  - \{fileID: -?\d+\}\n)*)/m, `$1  - {fileID: ${stId}}\n`);
+    const eol = sceneRoots.text.includes("\r\n") ? "\r\n" : "\n";
+    // An empty scene writes `m_Roots: []` inline; a filled one a block list.
+    sceneRoots.text = sceneRoots.text.replace(/^  m_Roots: \[\]\r?$/m, "  m_Roots:");
+    sceneRoots.text = sceneRoots.text.replace(/^(  m_Roots:\r?\n(?:  - \{fileID: -?\d+\}\r?\n)*)/m, `$1  - {fileID: ${stId}}${eol}`);
+    if (!sceneRoots.text.endsWith("\n")) sceneRoots.text += eol;
     rootRegistered = sceneRoots.text.includes(`{fileID: ${stId}}`);
+    if (!rootRegistered) throw new Error("the scene's SceneRoots block was not in a shape this tool can extend — nothing written");
     // Keep SceneRoots last, as the Editor writes it.
     const idx = docs.indexOf(sceneRoots);
     docs.splice(idx, 1);
-    docs.push({ classId: 1001, fileId: piId, stripped: false, text: instance }, { classId: 4, fileId: stId, stripped: true, text: stripped }, sceneRoots);
+    docs.push({ classId: 1001, fileId: piId, stripped: false, text: instance }, { classId: tClass, fileId: stId, stripped: true, text: stripped }, sceneRoots);
   } else {
-    docs.push({ classId: 1001, fileId: piId, stripped: false, text: instance }, { classId: 4, fileId: stId, stripped: true, text: stripped });
+    docs.push({ classId: 1001, fileId: piId, stripped: false, text: instance }, { classId: tClass, fileId: stId, stripped: true, text: stripped });
   }
   writeAtomic(scenePath, joinUnityDocs(preamble, docs));
   const check = splitUnityDocs(readFileSync(scenePath, "utf8"));

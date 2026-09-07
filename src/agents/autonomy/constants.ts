@@ -21,7 +21,17 @@ export const MUTATION_TOOLS: ReadonlySet<string> = new Set([
   "shell_exec",
   "strada_create_module", "strada_create_component",
   "strada_create_mediator", "strada_create_system",
+  // The deterministic writers of 2026-09-07: each changes the project.
+  "unity_bind_sprite", "unity_place_prefab",
+  "unity_generate_sprite", "unity_generate_mesh", "unity_generate_audio",
 ]);
+
+/**
+ * Mutations that are EVIDENCE of progress for the loop arbiter. shell_exec is
+ * a mutation for gating purposes (it may write), but `git status` through it
+ * is not progress — Codex review, 2026-09-07.
+ */
+export const PROGRESS_MUTATION_TOOLS: ReadonlySet<string> = new Set([...MUTATION_TOOLS].filter((t) => t !== "shell_exec"));
 
 /** Tools that verify correctness. */
 export const VERIFY_TOOLS: ReadonlySet<string> = new Set([

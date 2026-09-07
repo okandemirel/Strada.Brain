@@ -137,7 +137,7 @@ describe("unity_place_prefab", () => {
     expect(text).toContain(`m_SourcePrefab: {fileID: 100100000, guid: ${PREFAB_GUID}, type: 3}`);
     expect(text).toMatch(/propertyPath: m_LocalPosition\.y\n {6}value: 2/);
     expect(text.trimEnd().endsWith("}")).toBe(true); // SceneRoots stays last
-    expect(prefabRoot(PREFAB_NO_RENDERER)).toEqual({ gameObjectId: "100", transformId: "400", name: "Pig" });
+    expect(prefabRoot(PREFAB_NO_RENDERER)).toEqual({ gameObjectId: "100", transformId: "400", transformClassId: 4, name: "Pig" });
 
     // The measurement the campaign uses now sees a placed prefab with a renderer.
     const report = assessBuiltAsSpecified(root);
@@ -146,5 +146,59 @@ describe("unity_place_prefab", () => {
     expect(main.renderersInPlacedPrefabs).toBe(1);
     expect(report.shippedRenderers).toBe(1);
     expect(report.refusal).toBeUndefined();
+  });
+});
+
+// ─── Codex (gpt-6-astra) adversarial review, 2026-09-07 ──────────────────
+
+describe("defects the independent review found", () => {
+  it("quotes an instance name YAML would misread, and keeps a plain one plain", async () => {
+    const { yamlString, yamlScalar } = await import("./scene-binding.js");
+    expect(yamlString("StradaProbeUfo")).toBe("StradaProbeUfo");
+    expect(yamlString("Enemy: Red")).toBe('"Enemy: Red"');
+    expect(yamlString("Enemy #1")).toBe('"Enemy #1"');
+    expect(yamlScalar('"Enemy: Red"')).toBe("Enemy: Red");
+    put("Assets/Prefabs/Pig.prefab", PREFAB_NO_RENDERER, PREFAB_GUID);
+    put("Assets/Scenes/Main.unity", SCENE, "dddddddddddddddddddddddddddddddd");
+    const r = await new PlacePrefabTool().execute({ scene: "Assets/Scenes/Main.unity", prefab: "Assets/Prefabs/Pig.prefab", name: "Enemy: Red" }, ctx);
+    expect(r.isError).toBeFalsy();
+    expect(readFileSync(join(root, "Assets/Scenes/Main.unity"), "utf8")).toContain('value: "Enemy: Red"');
+  });
+
+  it("registers the root in an empty scene's inline `m_Roots: []`", async () => {
+    put("Assets/Prefabs/Pig.prefab", PREFAB_NO_RENDERER, PREFAB_GUID);
+    put("Assets/Scenes/Empty.unity", SCENE.replace("  m_Roots:\n  - {fileID: 501}\n", "  m_Roots: []\n"), "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
+    const r = await new PlacePrefabTool().execute({ scene: "Assets/Scenes/Empty.unity", prefab: "Assets/Prefabs/Pig.prefab" }, ctx);
+    expect(r.isError).toBeFalsy();
+    expect(r.content).toContain("registered in SceneRoots");
+    const text = readFileSync(join(root, "Assets/Scenes/Empty.unity"), "utf8");
+    expect(text).toMatch(/m_Roots:\n  - \{fileID: \d+\}\n/);
+  });
+
+  it("gives a RectTransform root a stripped RectTransform, not a Transform", async () => {
+    const uiPrefab = PREFAB_NO_RENDERER.replace("--- !u!4 &400\nTransform:", "--- !u!224 &400\nRectTransform:");
+    put("Assets/Prefabs/Panel.prefab", uiPrefab, PREFAB_GUID);
+    put("Assets/Scenes/Main.unity", SCENE, "dddddddddddddddddddddddddddddddd");
+    expect(prefabRoot(uiPrefab).transformClassId).toBe(224);
+    await new PlacePrefabTool().execute({ scene: "Assets/Scenes/Main.unity", prefab: "Assets/Prefabs/Panel.prefab" }, ctx);
+    const text = readFileSync(join(root, "Assets/Scenes/Main.unity"), "utf8");
+    expect(text).toMatch(/--- !u!224 &\d+ stripped\nRectTransform:/);
+    expect(text).not.toMatch(/--- !u!4 &\d+ stripped\nTransform:\n  m_CorrespondingSourceObject: \{fileID: 400/);
+  });
+
+  it("keeps a sprite sheet's slices (spriteMode 2) instead of flattening it", async () => {
+    writeFileSync(join(root, "Assets/Art/pig.png.meta"), `fileFormatVersion: 2\nguid: ${SPRITE_GUID}\nTextureImporter:\n  textureType: 0\n  spriteMode: 2\n`);
+    put("Assets/Prefabs/Pig.prefab", PREFAB_NO_RENDERER, PREFAB_GUID);
+    await new BindSpriteTool().execute({ target: "Assets/Prefabs/Pig.prefab", sprite: "Assets/Art/pig.png" }, ctx);
+    const meta = readFileSync(join(root, "Assets/Art/pig.png.meta"), "utf8");
+    expect(meta).toMatch(/textureType: 8/);
+    expect(meta).toMatch(/spriteMode: 2/);
+  });
+
+  it("finds a GameObject whose serialized name is quoted", async () => {
+    put("Assets/Prefabs/Pig.prefab", PREFAB_NO_RENDERER.replace("m_Name: Pig", 'm_Name: "Pig: Red"'), PREFAB_GUID);
+    const r = await new BindSpriteTool().execute({ target: "Assets/Prefabs/Pig.prefab", sprite: "Assets/Art/pig.png", objectName: "Pig: Red" }, ctx);
+    expect(r.isError).toBeFalsy();
+    expect(r.content).toContain('"Pig: Red"');
   });
 });

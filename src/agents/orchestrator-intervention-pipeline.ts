@@ -77,7 +77,7 @@ import {
   type InteractionBoundaryDecision,
   computeAdaptiveHardCap,
 } from "./autonomy/index.js";
-import { isVerificationToolName, MUTATION_TOOLS } from "./autonomy/constants.js";
+import { isVerificationToolName, PROGRESS_MUTATION_TOOLS } from "./autonomy/constants.js";
 import type { StradaConformanceGuard } from "./autonomy/strada-conformance.js";
 import {
   buildBehavioralSnapshot,
@@ -608,7 +608,9 @@ export function measuredProgressSince(
   stepResults: ReadonlyArray<{ toolName: string; success: boolean; timestamp: number }>,
   sinceMs: number,
 ): { mutations: number; tools: string[] } {
-  const edits = stepResults.filter((s) => s.success && s.timestamp > sinceMs && MUTATION_TOOLS.has(s.toolName));
+  // `>=`: an edit in the same millisecond as the intervention is after it in
+  // the step log; shell_exec is not evidence (Codex review, 2026-09-07).
+  const edits = stepResults.filter((s) => s.success && s.timestamp >= sinceMs && PROGRESS_MUTATION_TOOLS.has(s.toolName));
   return { mutations: edits.length, tools: [...new Set(edits.map((s) => s.toolName))] };
 }
 
@@ -631,13 +633,18 @@ export async function handleBackgroundLoopRecovery(
   const since = params.tracker.lastInterventionAt();
   const progress = measuredProgressSince(params.state.stepResults, since);
   params.tracker.noteIntervention();
-  if (decision.action === "blocked" && progress.mutations > 0) {
+  // A block about the WORLD — a license, a credential, a provider outage — is
+  // not a loop verdict, and progress does not argue with it (Codex review).
+  const environmental = /license|activation|credential|unauthori[sz]ed|quota|all providers|not installed|no unity editor/i.test(decision.action === "blocked" ? decision.message ?? "" : "");
+  if (decision.action === "blocked" && progress.mutations > 0 && !environmental) {
     getLoggerSafe()?.warn("Block downgraded to replan — measured progress since the last intervention", {
       chatId: params.chatId,
       mutations: progress.mutations,
       tools: progress.tools,
     });
-    const directive = /Suggested action:\s*(.+?)(?:\n|$)/.exec(decision.message ?? "")?.[1]?.trim();
+    const directive =
+      /Suggested action:\s*(.+?)(?:\n|$)/.exec(decision.message ?? "")?.[1]?.trim() ??
+      /Reason:\s*(.+?)(?:\n|$)/.exec(decision.message ?? "")?.[1]?.trim();
     return {
       action: "replan",
       gate:

@@ -382,3 +382,30 @@ describe("resolveVerifierIntervention", () => {
     expect(result.gate).toContain("[VISIBILITY REVIEW REQUIRED]");
   });
 });
+
+describe("arbiter evidence rules (Codex review, 2026-09-07)", () => {
+  it("shell_exec is not progress; the new Unity writers are; a same-ms edit counts", async () => {
+    const { measuredProgressSince } = await import("./orchestrator-intervention-pipeline.js");
+    expect(measuredProgressSince([{ toolName: "shell_exec", success: true, timestamp: 100 }], 50).mutations).toBe(0);
+    expect(measuredProgressSince([{ toolName: "unity_bind_sprite", success: true, timestamp: 100 }], 50).mutations).toBe(1);
+    expect(measuredProgressSince([{ toolName: "unity_generate_sprite", success: true, timestamp: 100 }], 50).mutations).toBe(1);
+    expect(measuredProgressSince([{ toolName: "file_edit", success: true, timestamp: 100 }], 100).mutations).toBe(1);
+  });
+
+  it("an environmental block (license, credentials) is not withdrawn by progress", async () => {
+    const tracker = new ControlLoopTracker({ staleAnalysisThreshold: 99, hardCapReplan: 99, hardCapBlock: 100, maxRecoveryEpisodes: 2 });
+    tracker.noteIntervention(Date.now() - 30 * 60_000);
+    tracker.markRecoveryAttempt("progress_assessment_stuck:clarification_internal_continue");
+    tracker.incrementTextOnlyGate();
+    const base = makeBaseParams({
+      tracker,
+      availableToolNames: [],
+      maxRecoveryEpisodes: 2,
+      strategy: makeStrategy('{"verdict":"stuck","confidence":"high","directive":"Unity license unavailable; needs external activation"}'),
+    });
+    base.state.stepResults.push({ toolName: "file_edit", success: true, timestamp: Date.now() - 20 * 60_000 } as (typeof base.state.stepResults)[number]);
+    for (let i = 0; i < 6; i++) base.state.stepResults.push({ toolName: "file_read", success: true, timestamp: Date.now() - 60_000 + i } as (typeof base.state.stepResults)[number]);
+    const r = await handleBackgroundLoopRecovery(base, makeDeps());
+    expect(r.action).toBe("blocked");
+  });
+});
