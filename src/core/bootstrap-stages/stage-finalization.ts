@@ -290,6 +290,22 @@ export async function finalizeChannelStartupStage(params: {
   await params.channel.connect();
   params.logger.info("Strada Brain is running!");
 
+  // Prove the gates fire before trusting them for a whole campaign
+  // (measured 2026-09-07: two were dead, every test green).
+  try {
+    const { probeGateLiveness, summarizeGateLiveness } = await import("../gate-liveness.js");
+    const liveness = summarizeGateLiveness(probeGateLiveness());
+    params.logger.info(liveness.summary);
+    for (const dead of liveness.dead) {
+      params.logger.error(dead);
+      params.startupNotices.push(dead);
+    }
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    params.logger.error("Gate liveness probe itself failed", { error: detail });
+    params.startupNotices.push(`GATE DEAD: liveness probe crashed — ${detail}`);
+  }
+
   const runtimePaths = resolveRuntimePaths({ moduleUrl: params.moduleUrl });
   const bootReport = buildBootReport({
     config: params.config,
