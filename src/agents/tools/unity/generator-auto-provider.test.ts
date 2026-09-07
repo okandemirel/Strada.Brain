@@ -28,6 +28,9 @@ function project(): { root: string; ctx: ToolContext } {
   return { root, ctx: { projectPath: root, workingDirectory: root, readOnly: false } as ToolContext };
 }
 
+const STUB_SPEC = { id: "sd15", kind: "text-to-image", label: "stub sd15", weightsRef: "stub", installMethod: "hub" } as never;
+const specFor = () => STUB_SPEC;
+
 describe("the installed model is the default; the placeholder is the fallback", () => {
   it("sprite: with a local model available, AUTO goes local — and falls back WITH a note when that fails", async () => {
     // localAvailable says yes and the stub runner refuses to draw, so the
@@ -83,7 +86,7 @@ describe("the installed model is the default; the placeholder is the fallback", 
         return { ok: false, detail: "1 of 3 failed: cuda", written, missing: jobs.slice(2).map((j) => j.out) };
       }),
     } as unknown as LocalRunnerLike;
-    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner }).execute(
+    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner, specFor }).execute(
       { batch: [{ name: "PigRed" }, { name: "PigBlue", prompt: "a blue pig" }, { name: "PigGold" }] },
       ctx,
     );
@@ -130,7 +133,7 @@ describe("the installed model is the default; the placeholder is the fallback", 
         return { ok: true, detail: `${jobs.length} written`, written: jobs.map((j) => j.out), missing: [], keptBackground: [] };
       }),
     } as unknown as LocalRunnerLike;
-    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner }).execute({ batch: [{ name: "PigA" }, { name: "PigB" }] }, ctx);
+    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner, specFor }).execute({ batch: [{ name: "PigA" }, { name: "PigB" }] }, ctx);
     expect(calls).toBe(2); // one batch, one retry of the blanks
     expect(r.content).toContain("✓ Assets/Art/Generated/PigA.png");
     expect(r.content).toContain("✗ Assets/Art/Generated/PigB.png — drew nothing usable twice");
@@ -154,7 +157,7 @@ describe("the installed model is the default; the placeholder is the fallback", 
         return { ok: true, detail: "1 written", written: jobs.map((j) => j.out), missing: [], keptBackground: [jobs[0]!.out] };
       }),
     } as unknown as LocalRunnerLike;
-    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner }).execute({ batch: [{ name: "Pig" }] }, ctx);
+    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner, specFor }).execute({ batch: [{ name: "Pig" }] }, ctx);
     expect(r.content).toContain("background KEPT");
   });
 

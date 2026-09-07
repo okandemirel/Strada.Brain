@@ -493,6 +493,13 @@ export const SPRITE_BATCH_MAX = 12;
 export interface GeneratorOptions {
   localAvailable: LocalAvailability;
   runner?: LocalRunnerLike;
+  /**
+   * Which model spec a kind (and optional explicit id) resolves to. The
+   * default is the device-gated catalog; tests inject a spec so the local
+   * path runs the same on a CI box with no supported model as on this one
+   * (measured 2026-09-07: the batch test passed here and failed on CI).
+   */
+  specFor?: (kind: "text-to-image" | "image-to-3d", modelId?: string) => import("../../../assets-local/model-catalog.js").LocalModelSpec | undefined;
 }
 
 export class SpriteGenerateTool implements ITool {
@@ -655,9 +662,11 @@ export class SpriteGenerateTool implements ITool {
     const modelId = input["model"] !== undefined ? String(input["model"]) : undefined;
     // Explicit ids go through the DEVICE-GATED list too: getModelSpec would
     // hand back a 24GB-bar model on an 8GB machine and swap-thrash the run.
-    const spec = modelId
-      ? supportedModels().find((m) => m.id === modelId && m.kind === "text-to-image")
-      : defaultModelFor("text-to-image");
+    const spec = this.opts.specFor
+      ? this.opts.specFor("text-to-image", modelId)
+      : modelId
+        ? supportedModels().find((m) => m.id === modelId && m.kind === "text-to-image")
+        : defaultModelFor("text-to-image");
     if (!spec) {
       return {
         content:
@@ -816,9 +825,11 @@ export class SpriteGenerateTool implements ITool {
     const { LocalModelRunner } = await import("../../../assets-local/local-model-runner.js");
     const { defaultModelFor, supportedModels } = await import("../../../assets-local/model-catalog.js");
     const modelId = input["model"] !== undefined ? String(input["model"]) : undefined;
-    const spec = modelId
-      ? supportedModels().find((m) => m.id === modelId && m.kind === "text-to-image")
-      : defaultModelFor("text-to-image");
+    const spec = this.opts.specFor
+      ? this.opts.specFor("text-to-image", modelId)
+      : modelId
+        ? supportedModels().find((m) => m.id === modelId && m.kind === "text-to-image")
+        : defaultModelFor("text-to-image");
     if (!spec) return { content: "Error: no local text-to-image model available for this device.", isError: true };
     const runner: LocalRunnerLike = this.opts.runner ?? new LocalModelRunner();
     if (!runner.isModelInstalled(spec.id)) {
