@@ -1590,6 +1590,11 @@ export class CampaignManager {
 
     milestone.timeBoxEscalations = escalations + 1;
     milestone.startedAtMs = Date.now();
+    // One directive, the current one. Measured 2026-09-07 14:20: the prompt
+    // carried "TIME BOX (6h elapsed, escalation 1/2)" and "TIME BOX (7h
+    // elapsed, escalation 1/2)" back to back — the first from before a revive
+    // reset the budget, both read by the sprint as live instructions.
+    milestone.prompt = milestone.prompt.replace(/\n\nTIME BOX \([^)]*\):[\s\S]*?beats another broad attempt\./g, "");
     milestone.prompt +=
       `\n\nTIME BOX (${Math.round(elapsedMs / 3_600_000)}h elapsed, escalation ${escalations + 1}/2): this sprint has run far past its budget ` +
       "without landing green. NARROW THE SCOPE NOW: pick the single highest-value unmet requirement, " +

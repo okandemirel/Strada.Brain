@@ -1190,6 +1190,18 @@ describe("CampaignManager", () => {
     expect(tasks.submitted[1]!.prompt).toContain("NARROW THE SCOPE");
     expect(fresh.milestones[0]!.timeBoxEscalations).toBe(1);
     expect(fresh.milestones[0]!.attempts).toBe(1); // escalation burns no attempt
+
+    // A second overrun replaces the directive instead of stacking it.
+    // Measured 2026-09-07 14:20: "TIME BOX (6h …, escalation 1/2)" and
+    // "TIME BOX (7h …, escalation 1/2)" back to back in one prompt.
+    const again = storage.get(campaign.id)!;
+    again.milestones[0]!.startedAtMs = Date.now() - 3 * 60 * 60_000;
+    storage.save(again);
+    tasks.emit("task:failed", "task_2", "compile still red");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3), { timeout: 5_000 });
+    const prompt = tasks.submitted[2]!.prompt;
+    expect(prompt.match(/TIME BOX \(/g)).toHaveLength(1);
+    expect(prompt).toContain("escalation 2/2");
     expect(messages.some((m) => m.text.includes("narrowing scope"))).toBe(true);
   });
 
