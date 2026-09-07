@@ -23,6 +23,7 @@ import { GDD_AUDIT_FULL_CHARS } from "./campaign-planner.js";
 import type { CampaignStorage } from "./campaign-storage.js";
 import { detectCampaignIntent } from "./campaign-intake.js";
 import { assessSceneHygiene, renderSceneHygiene } from "./scene-hygiene.js";
+import { deliveryReviewPrompt, renderSecondOpinion } from "../agents/review/codex-second-opinion.js";
 import {
   extractLookDescription,
   judgeVisualConformance,
@@ -84,6 +85,13 @@ export interface CampaignManagerOptions {
    * treated as a pass.
    */
   verifyCompile?: (projectRoot: string) => Promise<CompileVerdict>;
+  /**
+   * The independent second opinion asked before every delivery report
+   * (user's ask, 2026-09-07: "çifte teyit"). Production wires the Codex CLI
+   * runner (gpt-6-astra at high effort, read-only, against the project) at
+   * bootstrap; absent, the report says the review did not run.
+   */
+  independentReviewer?: ((params: { projectRoot: string; prompt: string }) => Promise<import("../agents/review/codex-second-opinion.js").SecondOpinion>) | null;
   /** Auto-retry budget per milestone before the campaign fails loudly. */
   maxMilestoneAttempts?: number;
   /** GDD revision rounds at the approval gate before cancelling. */
@@ -171,6 +179,7 @@ export class CampaignManager {
   private readonly messenger: CampaignMessenger;
   private readonly projectRoot: string;
   private readonly verifyCompile?: (projectRoot: string) => Promise<CompileVerdict>;
+  private readonly independentReviewer: CampaignManagerOptions["independentReviewer"];
   private readonly maxMilestoneAttempts: number;
   private readonly maxDraftAttempts: number;
   private readonly retryAdoptionGraceMs: number;
@@ -187,6 +196,7 @@ export class CampaignManager {
     this.messenger = options.messenger;
     this.projectRoot = options.projectRoot;
     this.verifyCompile = options.verifyCompile;
+    this.independentReviewer = options.independentReviewer;
     this.maxMilestoneAttempts = options.maxMilestoneAttempts ?? 2;
     this.maxDraftAttempts = options.maxDraftAttempts ?? 3;
     this.retryAdoptionGraceMs = options.retryAdoptionGraceMs ?? RETRY_ADOPTION_GRACE_MS;
@@ -677,6 +687,7 @@ export class CampaignManager {
         id: campaign.id,
         deliveredAt: campaign.updatedAt,
       });
+      await this.gatherIndependentReview(campaign);
       if (await this.tell(campaign, this.buildDeliveryReport(campaign))) {
         campaign.deliveryReported = true;
         this.persist(campaign);
@@ -2044,6 +2055,7 @@ export class CampaignManager {
             "bounce budget is spent";
           this.persist(campaign);
           this.cancelLiveLineages(campaign, "campaign stopped short of delivery");
+          await this.gatherIndependentReview(campaign);
           await this.tell(
             campaign,
             `${this.buildDeliveryReport(campaign)}${commitNote}\n\n` +
@@ -2061,6 +2073,7 @@ export class CampaignManager {
         // revivable and not queryable, so nothing ever noticed.
         campaign.deliveryReported = false;
         this.persist(campaign);
+        await this.gatherIndependentReview(campaign);
         if (await this.tell(campaign, `${this.buildDeliveryReport(campaign)}${commitNote}`)) {
           campaign.deliveryReported = true;
           this.persist(campaign);
@@ -2247,6 +2260,7 @@ export class CampaignManager {
         state: campaign.state,
         structureRefused: milestone.structureRefused,
       });
+      await this.gatherIndependentReview(campaign);
       if (await this.tell(campaign, this.buildDeliveryReport(campaign))) {
         campaign.deliveryReported = true;
         this.persist(campaign);
@@ -2727,6 +2741,43 @@ export class CampaignManager {
     }
   }
 
+  /**
+   * Ask the independent reviewer before a delivery report goes out, with the
+   * campaign's own measurements in hand. Stored on the campaign so a re-sent
+   * report carries the same opinion; a reviewer that cannot run is recorded
+   * as unavailable — the report must never read as reviewed when it was not.
+   */
+  private async gatherIndependentReview(campaign: Campaign): Promise<void> {
+    // Explicit opt-in: production wires the Codex runner at bootstrap; a
+    // manager built without one (tests, embedded use) says so in the report.
+    const reviewer = this.independentReviewer ?? null;
+    if (reviewer === null) {
+      campaign.independentReview = { ok: false, model: "none", text: "", ms: 0, error: "disabled by configuration" };
+      this.persist(campaign);
+      return;
+    }
+    const structural = [...campaign.milestones].reverse().find((m) => m.structureFindings?.length);
+    const prompt = deliveryReviewPrompt({
+      gddPath: campaign.gddPath,
+      measurements: structural?.structureFindings ?? ["(no structural measurement recorded)"],
+      ladder: campaign.milestones.map((m) => `${m.id} ${m.title}: ${m.status}`),
+    });
+    try {
+      campaign.independentReview = await reviewer({ projectRoot: this.projectRoot, prompt });
+    } catch (err) {
+      campaign.independentReview = { ok: false, model: "unknown", text: "", ms: 0, error: err instanceof Error ? err.message : String(err) };
+    }
+    this.persist(campaign);
+    const review = campaign.independentReview;
+    getLoggerSafe().info("Independent delivery review", {
+      id: campaign.id,
+      ok: review?.ok,
+      model: review?.model,
+      ms: review?.ms,
+      error: review?.error,
+    });
+  }
+
   private buildDeliveryReport(campaign: Campaign): string {
     // EVIDENCE, not stored booleans. The report used to render only
     // milestone.status — while the manager held commit hashes, capture
@@ -2857,6 +2908,7 @@ export class CampaignManager {
     // What the shipped scenes actually contain — measured, not inferred from
     // the ladder. Audited 2026-09-03: 7/7 green and 11351 frames said nothing
     // about a delivery whose scenes held no renderer at all.
+    lines.push("", ...renderSecondOpinion(campaign.independentReview));
     const structural = [...campaign.milestones].reverse().find((m) => m.structureFindings?.length);
     if (structural?.structureFindings) {
       lines.push("", "**What the shipped scenes actually contain:**", ...structural.structureFindings.map((l) => `- ${l}`));

@@ -229,6 +229,12 @@ export interface Campaign {
    */
   deliveryReported?: boolean;
   /**
+   * The independent reviewer's verdict text for the last delivery report
+   * (Codex / gpt-6-astra, read-only), or the reason it could not run.
+   * Rendered verbatim in the report; never folded into the campaign's own verdict.
+   */
+  independentReview?: { ok: boolean; model: string; text: string; ms: number; error?: string };
+  /**
    * Set when the GDD-coverage audit did NOT run clean (skipped, budget spent,
    * or errored). Rendered in the delivery report so an unaudited delivery
    * cannot read like an audited one.

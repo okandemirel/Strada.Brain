@@ -1608,6 +1608,9 @@ describe("CampaignManager", () => {
     expect(report).toContain("Dragon boss: no milestone implemented it");
     expect(report).toMatch(/unclosed/i);
     expect(report).not.toContain("Campaign stopped");
+    // No reviewer wired here: the report says so instead of implying a review.
+    expect(report).toContain("Independent review");
+    expect(report).toContain("UNAVAILABLE");
     // The structure block is measured at delivery, on the tree delivered:
     // this fixture has no Assets/, and the report says exactly that.
     expect(report).toContain("NOT measured: no Assets/ directory");
@@ -1764,6 +1767,42 @@ describe("CampaignManager", () => {
     await vi.waitFor(() => expect(tasks.submitted).toHaveLength(5), { timeout: 5_000 });
     expect(tasks.submitted[4]!.prompt).not.toContain("ART NOT PRODUCED");
     void campaign;
+  });
+
+  it("the delivery report carries the independent reviewer's verdict verbatim, or says it did not run", async () => {
+    // User's ask 2026-09-07: "çifte teyit" — a second model's verdict on every delivery.
+    tasks = new FakeTaskManager();
+    storage.close();
+    storage = new CampaignStorage(join(dir, "campaigns-review.db"));
+    const seenPrompts: string[] = [];
+    manager = new CampaignManager({
+      storage,
+      planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async (chatId, text) => { messages.push({ chatId, text }); },
+      projectRoot,
+      retryAdoptionGraceMs: 10,
+      completedSettleDelayMs: 0,
+      milestoneTimeBoxMs: 60 * 60_000,
+      independentReviewer: async ({ prompt }) => {
+        seenPrompts.push(prompt);
+        return { ok: true, model: "fake-astra", text: "VERDICT: NOT DELIVERABLE\nBLOCKERS: 1. no pigs", ms: 1234 };
+      },
+    });
+    manager.attachEvents();
+    const campaign = manager.startFromGdd(ctx, "# GDD text", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    settleMilestone("final report");
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.deliveryReported).toBe(true), { timeout: 5_000 });
+    const report = messages.at(-1)!.text;
+    expect(report).toContain("Independent review (fake-astra via Codex, read-only, 1s)");
+    expect(report).toContain("> VERDICT: NOT DELIVERABLE");
+    expect(seenPrompts[0]).toContain("VERDICT: DELIVERABLE | NOT DELIVERABLE");
+    expect(seenPrompts[0]).toContain("docs/Game_GDD.md");
   });
 
   it("a spent coverage-remediation sprint is NOT a delivery when the measured tree is refused", async () => {
