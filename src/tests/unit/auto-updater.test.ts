@@ -409,7 +409,7 @@ describe("AutoUpdater", () => {
         "git rev-parse --abbrev-ref --symbolic-full-name @{upstream}",
         "git status --porcelain",
         "git rev-parse HEAD",
-        "git pull origin main",
+        "git pull --no-rebase origin main",
         // The rollback guard reads where the pull actually left HEAD, so it
         // can refuse to reset over commits the updater did not make
         // (audited 2026-09-04).
@@ -440,7 +440,7 @@ describe("AutoUpdater", () => {
 
       await expect(updater.performUpdate()).resolves.toBe(true);
       const cmds = commandRunner.mock.calls.map(([cmd, args]) => `${cmd} ${(args as string[]).join(" ")}`);
-      expect(cmds).toContain("git pull upstream develop");
+      expect(cmds).toContain("git pull --no-rebase upstream develop");
     });
 
     it("falls back to origin/main when upstream detection fails", async () => {
@@ -465,7 +465,7 @@ describe("AutoUpdater", () => {
 
       await expect(updater.performUpdate()).resolves.toBe(true);
       const cmds = commandRunner.mock.calls.map(([cmd, args]) => `${cmd} ${(args as string[]).join(" ")}`);
-      expect(cmds).toContain("git pull origin main");
+      expect(cmds).toContain("git pull --no-rebase origin main");
       expect(notifyFn).toHaveBeenCalledWith(expect.stringContaining("falling back to origin/main"));
     });
 
@@ -528,7 +528,7 @@ describe("AutoUpdater", () => {
         "git rev-parse --abbrev-ref --symbolic-full-name @{upstream}",
         "git status --porcelain",
         "git rev-parse HEAD",
-        "git pull origin main",
+        "git pull --no-rebase origin main",
         // The rollback guard reads where the pull actually left HEAD, so it
         // can refuse to reset over commits the updater did not make
         // (audited 2026-09-04).

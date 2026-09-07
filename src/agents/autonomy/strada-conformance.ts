@@ -23,6 +23,40 @@ function walkFiles(dir: string, budget = 4000, match?: (file: string) => boolean
 }
 
 /**
+ * PNG frames under Recordings/ written at or after `sinceMs`: the root's own
+ * files plus every subdirectory whose mtime says something was added since —
+ * a directory's mtime moves when a file is created in it, so an old capture
+ * directory with thousands of frames is skipped without being read.
+ */
+function framesWrittenSince(recordings: string, sinceMs: number): string[] {
+  const fresh = (file: string): boolean => {
+    try {
+      return statSync(file).mtimeMs >= sinceMs;
+    } catch {
+      return false;
+    }
+  };
+  const out: string[] = [];
+  let entries: import("node:fs").Dirent[];
+  try {
+    entries = readdirSync(recordings, { withFileTypes: true });
+  } catch {
+    return out;
+  }
+  for (const entry of entries) {
+    const full = joinPath(recordings, entry.name);
+    if (entry.isDirectory()) {
+      if (!fresh(full)) continue;
+      for (const f of walkFiles(full, 400, (x) => x.endsWith(".png"))) if (fresh(f)) out.push(f);
+    } else if (entry.name.endsWith(".png") && fresh(full)) {
+      out.push(full);
+    }
+    if (out.length >= 400) break;
+  }
+  return out;
+}
+
+/**
  * walkFiles, plus whether the walk stopped before it saw everything. A census
  * that judges absence — "no asset has this guid", "nothing references this
  * script" — must know when it did not finish, because a truncated one cannot
@@ -787,25 +821,27 @@ export class StradaConformanceGuard {
 
     const recordings = joinPath(projectPath, "Recordings");
     if (!existsSync(recordings)) return "no frame has ever been captured";
-    const allFrames = walkFiles(recordings, 400, (f) => f.endsWith(".png"));
-    if (allFrames.length === 0) return "no frame has ever been captured";
+    const older = walkFilesWithStatus(recordings, 400, (f) => f.endsWith(".png"));
     // Only frames captured in THIS run are this run's evidence. Audited
     // 2026-09-02: with no recency filter, an earlier sprint's varied frames
     // cleared a run that failed its play-mode verify and drew nothing, and —
     // sampled ahead of this run's own files — hid sixty identical frames. The
     // 2s tolerance is for filesystem timestamp granularity, as in
     // prerender-frames.ts.
-    const frames = allFrames.filter((f) => {
-      try {
-        return statSync(f).mtimeMs >= this.startedAtMs - 2_000;
-      } catch {
-        return false;
-      }
-    });
+    //
+    // Measured 2026-09-07 07:49: Recordings/ held 19,864 frames from earlier
+    // runs; the 400-file sample above never reached this run's 180 frames in
+    // Recordings/VerifierFinal, and a run that had just captured a varied
+    // picture was told "no frame has been captured in this run". A capture
+    // is found by WHEN it was written, so the walk starts from the
+    // directories written since the run began, not from the oldest files.
+    const since = this.startedAtMs - 2_000;
+    const frames = framesWrittenSince(recordings, since);
+    if (frames.length === 0 && older.files.length === 0) return "no frame has ever been captured";
     if (frames.length === 0) {
       return (
-        `no frame has been captured in this run (${allFrames.length} older frame(s) ` +
-        "from an earlier run exist in Recordings/ and do not count)"
+        `no frame has been captured in this run (${older.truncated ? "at least " : ""}${older.files.length} ` +
+        "older frame(s) from an earlier run exist in Recordings/ and do not count)"
       );
     }
 

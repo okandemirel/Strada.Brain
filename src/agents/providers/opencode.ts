@@ -1,4 +1,5 @@
 import type { ProviderCapabilities } from "./provider.interface.js";
+import { randomUUID } from "node:crypto";
 import { OpenAIProvider } from "./openai.js";
 
 /**
@@ -118,8 +119,16 @@ export class OpencodeProvider extends OpenAIProvider {
     return {
       ...headers,
       "User-Agent": "Strada.Brain/1.0",
+      // Measured 2026-09-07 07:39: every OpenCode call answered 400
+      // MissingSessionID — "Request is missing x-opencode-session and cannot
+      // be routed efficiently". One id per provider instance, as the codex
+      // session id is kept.
+      "x-opencode-session": this.opencodeSessionId,
     };
   }
+
+  /** Stable for the life of this provider instance; differs across instances. */
+  private readonly opencodeSessionId = randomUUID();
 
   // parseResponse is inherited from OpenAIProvider and works correctly
   // for OpenCode's OpenAI-compatible API. Override here if OpenCode adds

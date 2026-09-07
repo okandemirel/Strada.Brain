@@ -188,3 +188,21 @@ describe("the updater's own lock is not a local change", () => {
     expect(stashes[0]).toContain(":(exclude).strada-update.lock");
   });
 });
+
+describe("the pull merges local commits instead of refusing", () => {
+  // Measured 2026-09-07 07:50 (first cycle with the step logged): "git
+  // exited with code 128 … hint: You have divergent branches" — the checkout
+  // carried unpushed commits, origin carried a version bump, and a pull
+  // without a strategy refused. That was the "build failed" of three days.
+  it("passes --no-rebase", async () => {
+    const git = fakeGit({ commitDuringWindow: false });
+    const pulls: string[][] = [];
+    const run = git.run;
+    git.run = async (cmd, args) => {
+      if (cmd === "git" && args[0] === "pull") pulls.push(args);
+      return run(cmd, args);
+    };
+    await performUpdate(updater(git, []));
+    expect(pulls[0]).toContain("--no-rebase");
+  });
+});

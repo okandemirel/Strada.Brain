@@ -54,6 +54,17 @@ describe("OpencodeProvider", () => {
   });
 
   describe("buildHeaders", () => {
+    it("sends a stable x-opencode-session id (the API refuses requests without one)", async () => {
+      const provider = new OpencodeProvider({ apiKey: "sk-test" });
+      const build = (provider as unknown as { buildHeaders: () => Promise<Record<string, string>> }).buildHeaders.bind(provider);
+      const first = await build();
+      expect(first["x-opencode-session"]).toMatch(/^[0-9a-f-]{36}$/);
+      expect((await build())["x-opencode-session"]).toBe(first["x-opencode-session"]);
+      const other = new OpencodeProvider({ apiKey: "sk-test" });
+      const otherHeaders = await (other as unknown as { buildHeaders: () => Promise<Record<string, string>> }).buildHeaders();
+      expect(otherHeaders["x-opencode-session"]).not.toBe(first["x-opencode-session"]);
+    });
+
     it("includes User-Agent header", async () => {
       const provider = new OpencodeProvider("test-key");
       const headers = await (provider as unknown as { buildHeaders: () => Promise<Record<string, string>> }).buildHeaders();

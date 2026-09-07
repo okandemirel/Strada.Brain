@@ -814,7 +814,7 @@ export class AutoUpdater {
     try {
       await this.runCommand(
         "git",
-        ["pull", remote, branch],
+        ["pull", "--no-rebase", remote, branch],
         UPDATE_TIMEOUT,
         this.installRoot,
       );

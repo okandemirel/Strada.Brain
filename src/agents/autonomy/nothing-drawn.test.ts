@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readdirSync, utimesSync } from 'node:fs';
 import { join } from 'node:path';
 import os from 'node:os';
 import { StradaConformanceGuard } from './strada-conformance.js';
@@ -83,6 +83,25 @@ describe('a game that has never been seen to draw', () => {
 
     expect(prompt).toContain('[STRADA NOTHING DRAWN]');
     expect(prompt).toContain('identical');
+  });
+
+  it("finds this run's frames behind thousands of older ones", () => {
+    // Measured 2026-09-07 07:49: 19,864 frames from earlier runs in
+    // Recordings/, this run's 180 in Recordings/VerifierFinal — the 400-file
+    // sample never reached them and the run was told it drew nothing.
+    const old = Array.from({ length: 500 }, () => 'stale-pixels');
+    const { root, configPath } = project(old);
+    const rec = join(root, 'Recordings');
+    const past = new Date(Date.now() - 3 * 60 * 60_000);
+    for (const f of readdirSync(rec)) utimesSync(join(rec, f), past, past);
+    utimesSync(rec, past, past);
+    const fresh = join(rec, 'VerifierFinal');
+    mkdirSync(fresh);
+    for (let i = 0; i < 12; i++) writeFileSync(join(fresh, `frame_${i}.png`), `varied-${i}-${'x'.repeat(i * 7)}`);
+
+    const prompt = promptFor(root, configPath);
+
+    expect(prompt).not.toContain('no frame has been captured in this run');
   });
 
   it('objects when no frame was ever captured', () => {
