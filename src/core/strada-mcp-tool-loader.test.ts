@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Config } from "../config/config.js";
-import { loadInstalledStradaMcpTools, registerStradaMcpTools } from "./strada-mcp-tool-loader.js";
+import { fileBasedAlternative, loadInstalledStradaMcpTools, registerStradaMcpTools } from "./strada-mcp-tool-loader.js";
 import type { ITool, ToolContext } from "../agents/tools/tool-core.interface.js";
 
 describe("registerStradaMcpTools", () => {
@@ -258,13 +258,29 @@ describe("a projectPath outside the run's project is refused, not noted", () => 
     return tool;
   }
 
-  it("refuses the real checkout under a lease and says what would go wrong", async () => {
+  it("redirects the real checkout to the lease, runs there, and says so", async () => {
     const execute = vi.fn(async () => ({ content: "ran" }));
-    const result = await registeredTool(execute).execute({ projectPath: real }, context());
-    expect(result.isError).toBe(true);
-    expect(result.content).toContain("outside this run's project");
-    expect(result.content).toContain("WITHOUT this run's edits");
-    expect(execute).not.toHaveBeenCalled();
+    const result = await registeredTool(execute).execute({ projectPath: real, other: 1 }, context());
+    expect(result.isError).toBeFalsy();
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(execute.mock.calls[0]?.[0]).toEqual({ projectPath: lease, other: 1 });
+    expect(result.content).toContain("is the real checkout");
+    expect(result.content).toContain(`ran against ${lease}`);
+    expect(result.content).toContain("WITH this run's edits");
+    expect(result.content).toContain("ran");
+  });
+
+  it("redirects a subtree of the real checkout to the same subtree of the lease", async () => {
+    const execute = vi.fn(async () => ({ content: "ran" }));
+    await registeredTool(execute).execute({ projectPath: `${real}/Assets/Scenes` }, context());
+    expect(execute.mock.calls[0]?.[0]).toEqual({ projectPath: `${lease}/Assets/Scenes` });
+  });
+
+  it("a bridge refusal for a scene-composition tool names the file-based tool", () => {
+    expect(fileBasedAlternative("unity_create_gameobject")).toContain("unity_place_prefab");
+    expect(fileBasedAlternative("unity_create_gameobject")).toContain("unity_bind_sprite");
+    expect(fileBasedAlternative("unity_add_component")).toContain("unity_bind_sprite");
+    expect(fileBasedAlternative("unity_build_pipeline")).toBe("");
   });
 
   it("refuses any other tree too, without the lease wording", async () => {

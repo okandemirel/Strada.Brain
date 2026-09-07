@@ -1137,27 +1137,72 @@ function formatAge(ms: number): string {
  * the real project (237 workspace conflicts at commit), and the result said
  * "the game renders in the real project path" — verification of the wrong
  * tree, reported as resolution. The file tools' sandbox has to bind the Unity
- * tools too, and a refusal that says why beats a note that is easy to skip.
+ * tools too.
+ *
+ * The real checkout is a special case: the run works in a leased copy of
+ * exactly that tree, so the call the agent meant is the same call against the
+ * lease. Measured 2026-09-07 (same milestone, resubmitted 15:21): the refusal
+ * was answered three times in one run with the same argument (15:25, 15:50,
+ * 16:43) — each a verification turn spent on a sentence. The real checkout is
+ * therefore REDIRECTED to the lease and the result says so; any other tree is
+ * still refused.
  */
 export function projectPathEscape(
   input: Record<string, unknown>,
   context: Pick<ToolContext, "projectPath" | "sourceProjectPath">,
-): string | undefined {
+): { redirect: string; note: string } | { refuse: string } | undefined {
   const requested = typeof input["projectPath"] === "string" ? input["projectPath"].trim() : "";
   if (requested === "" || !context.projectPath) return undefined;
   const target = resolve(requested);
   const own = resolve(context.projectPath);
   if (target === own || target.startsWith(own + sep)) return undefined;
   const real = context.sourceProjectPath ? resolve(context.sourceProjectPath) : undefined;
-  const isRealCheckout = real !== undefined && (target === real || target.startsWith(real + sep));
-  return (
-    `projectPath ${requested} is outside this run's project (${context.projectPath}). ` +
-    (isRealCheckout
-      ? "That is the real checkout; this run works in a leased copy of it, so Unity there would verify " +
-        "a tree WITHOUT this run's edits and write its captures into the wrong project. "
-      : "Unity tools run only against the project this run was given. ") +
-    "Omit projectPath — the run's own project is the default."
-  );
+  if (real !== undefined && (target === real || target.startsWith(real + sep))) {
+    const redirect = target === real ? own : own + target.slice(real.length);
+    return {
+      redirect,
+      note:
+        `[projectPath ${requested} is the real checkout; this run works in a leased copy of it, so the call ` +
+        `ran against ${redirect} — the tree WITH this run's edits. Omit projectPath: the run's own project ` +
+        "is the default.]",
+    };
+  }
+  return {
+    refuse:
+      `projectPath ${requested} is outside this run's project (${context.projectPath}). ` +
+      "Unity tools run only against the project this run was given. " +
+      "Omit projectPath — the run's own project is the default.",
+  };
+}
+
+/**
+ * What to do instead when a scene-composition tool needs an Editor that is not
+ * there.
+ *
+ * Measured 2026-09-07 15:40 (campaign mcov1): unity_create_gameobject was
+ * refused twice with "Requires a live Unity bridge connection." — a sentence
+ * that names no alternative, in a run whose whole remaining work was putting
+ * prefabs and sprites into the scene. Brain's unity_place_prefab and
+ * unity_bind_sprite edit the .unity/.prefab YAML directly and need no Editor;
+ * the refusal has to say so, or the agent keeps asking the Editor.
+ */
+const FILE_BASED_ALTERNATIVES: Readonly<Record<string, string>> = {
+  unity_create_gameobject:
+    "To put a prefab into a scene without the Editor use unity_place_prefab (writes the PrefabInstance " +
+    "into the .unity file); to put a sprite on a GameObject use unity_bind_sprite.",
+  unity_modify_gameobject:
+    "To change what a GameObject renders without the Editor use unity_bind_sprite (edits the .prefab/.unity file).",
+  unity_add_component:
+    "A SpriteRenderer can be added without the Editor by unity_bind_sprite (edits the .prefab/.unity file).",
+  unity_set_transform:
+    "A prefab instance's position can be set at placement by unity_place_prefab (no Editor needed).",
+  unity_set_parent:
+    "unity_place_prefab places a prefab instance as a scene root without the Editor.",
+};
+
+export function fileBasedAlternative(toolName: string): string {
+  const hint = FILE_BASED_ALTERNATIVES[toolName];
+  return hint === undefined ? "" : ` ${hint}`;
 }
 
 class StradaMcpToolAdapter implements ITool {
@@ -1198,7 +1243,10 @@ class StradaMcpToolAdapter implements ITool {
     if (this.tool.metadata?.requiresBridge && this.runtime?.isDormant()) {
       const connected = await this.runtime.tryLazyReconnect();
       if (!connected) {
-        return { content: "Unity bridge unavailable. Start Unity Editor to use this tool.", isError: true };
+        return {
+          content: "Unity bridge unavailable. Start Unity Editor to use this tool." + fileBasedAlternative(this.name),
+          isError: true,
+        };
       }
     }
 
@@ -1215,7 +1263,8 @@ class StradaMcpToolAdapter implements ITool {
         const reqDesc = required.length > 0 ? ` required=[${required.join(", ")}]` : "";
         return {
           content:
-            `Unity bridge unavailable: ${availability.availabilityReason ?? "tool dependencies not satisfied"}.${reqDesc}`,
+            `Unity bridge unavailable: ${availability.availabilityReason ?? "tool dependencies not satisfied"}.${reqDesc}`
+            + fileBasedAlternative(this.name),
           isError: true,
         };
       }
@@ -1250,7 +1299,12 @@ class StradaMcpToolAdapter implements ITool {
     }
 
     const escape = projectPathEscape(input, context);
-    if (escape !== undefined) return { content: escape, isError: true };
+    if (escape !== undefined && "refuse" in escape) return { content: escape.refuse, isError: true };
+    let redirectNote = "";
+    if (escape !== undefined) {
+      input = { ...input, projectPath: escape.redirect };
+      redirectNote = escape.note;
+    }
 
     // Wrap tool invocation with a timeout so misbehaving bridges cannot hang
     // the orchestrator indefinitely.
@@ -1299,7 +1353,7 @@ class StradaMcpToolAdapter implements ITool {
       this.runtime?.refreshIntegrationState();
 
       return {
-        content: result.content,
+        content: redirectNote === "" ? result.content : `${redirectNote}\n${result.content}`,
         isError: result.isError,
         metadata: {
           executionTimeMs: result.metadata?.executionTimeMs,
