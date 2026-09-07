@@ -159,6 +159,21 @@ function venvPython(): string {
 export class LocalModelRunner {
   constructor(private readonly spawn: SpawnImpl = defaultSpawn) {}
 
+  /**
+   * One inference at a time, process-wide. Measured 2026-09-07 15:38: an
+   * agent issued two unity_generate_sprite calls in the same second; each
+   * spawned its own SD1.5 process, two 4 GB pipelines shared the GPU, and
+   * both drew slower than one after the other would have. Calls queue here
+   * in arrival order; a batch already loads once for many.
+   */
+  private static inferenceQueue: Promise<unknown> = Promise.resolve();
+
+  private async inference<T>(run: () => Promise<T>): Promise<T> {
+    const turn = LocalModelRunner.inferenceQueue.then(run, run);
+    LocalModelRunner.inferenceQueue = turn.catch(() => undefined);
+    return turn;
+  }
+
   venvReady(): boolean {
     return existsSync(venvPython());
   }
@@ -285,7 +300,7 @@ export class LocalModelRunner {
       "--rmbg", opts.removeBackground ? "1" : "0",
       "--seed", String(opts.seed ?? -1),
     ];
-    const run = await this.spawn(venvPython(), args, { timeoutMs: 1_200_000, env: this.envWithWeights() });
+    const run = await this.inference(() => this.spawn(venvPython(), args, { timeoutMs: 1_200_000, env: this.envWithWeights() }));
     if (run.code !== 0 || !existsSync(outPath)) {
       return { ok: false, detail: `inference failed: ${(run.stderr || run.stdout).slice(-400)}` };
     }
@@ -321,7 +336,7 @@ export class LocalModelRunner {
         "--rmbg", opts.removeBackground ? "1" : "0",
       ];
       // Budget scales with the batch: one sprite is ~45-60 s at 512² on MPS.
-      const run = await this.spawn(venvPython(), args, { timeoutMs: Math.min(3_600_000, 300_000 + 120_000 * jobs.length), env: this.envWithWeights() });
+      const run = await this.inference(() => this.spawn(venvPython(), args, { timeoutMs: Math.min(3_600_000, 300_000 + 120_000 * jobs.length), env: this.envWithWeights() }));
       const written = jobs.map((j) => j.out).filter((o) => existsSync(o));
       const missing = jobs.map((j) => j.out).filter((o) => !existsSync(o));
       const keptBackground = (run.stdout.match(/^KEPT-BG (.+?) coverage=/gm) ?? []).map((l) => l.replace(/^KEPT-BG /, "").replace(/ coverage=$/, ""));

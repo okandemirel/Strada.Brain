@@ -70,3 +70,31 @@ describe("LocalModelRunner", () => {
     expect(result.detail).toContain("not installed");
   });
 });
+
+describe("inference runs one at a time", () => {
+  // Measured 2026-09-07 15:38: two sprite calls in the same second, two
+  // SD1.5 processes on one GPU.
+  it("queues a second textToImage until the first spawn resolves", async () => {
+    const order: string[] = [];
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => { release = r; });
+    const spawn: SpawnImpl = async (_cmd, args) => {
+      const out = args[args.indexOf("--out") + 1]!;
+      order.push(`start ${out}`);
+      if (out.endsWith("a.png")) await gate;
+      order.push(`end ${out}`);
+      return { code: 1, stdout: "", stderr: "stub" }; // failure is fine — ordering is the point
+    };
+    const runner = new LocalModelRunner(spawn);
+    (runner as unknown as { isModelInstalled: () => boolean }).isModelInstalled = () => true;
+    (runner as unknown as { writeScripts: () => void }).writeScripts = () => {};
+    const spec = { id: "sd15", label: "sd15", kind: "text-to-image", weightsRef: "w", installMethod: "hub" } as never;
+    const a = runner.textToImage(spec, "p", "/tmp/a.png");
+    const b = runner.textToImage(spec, "p", "/tmp/b.png");
+    await new Promise((r) => setTimeout(r, 20));
+    expect(order).toEqual(["start /tmp/a.png"]); // b has not started
+    release();
+    await Promise.all([a, b]);
+    expect(order).toEqual(["start /tmp/a.png", "end /tmp/a.png", "start /tmp/b.png", "end /tmp/b.png"]);
+  });
+});
