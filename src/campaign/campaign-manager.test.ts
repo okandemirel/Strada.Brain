@@ -1663,7 +1663,7 @@ describe("CampaignManager", () => {
     expect(tasks.submitted.at(-1)!.prompt).toContain("unity_generate_sprite");
     expect(bounced.attempts).toBe(1); // a bounce is not a spent attempt
 
-    art = { sprites: 112, placeholders: 40 }; // real art replaced most of it
+    art = { sprites: 103, placeholders: 95 }; // eight real sprites ADDED under new names; placeholders untouched
     // Other one-shot gates (visual evidence, no-work) may still take a
     // completion each; the art gate must not take another one.
     const mcov1 = () => storage.get(campaign.id)!.milestones.find((m) => m.id === "mcov1")!;

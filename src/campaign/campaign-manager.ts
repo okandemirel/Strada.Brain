@@ -2681,7 +2681,13 @@ export class CampaignManager {
     if (!start || start.sprites < 10 || start.placeholders / start.sprites < 0.8) return undefined;
     const now = this.measurePlaceholderArt(campaign);
     if (!now) return undefined;
-    if (now.placeholders < start.placeholders) return undefined;
+    // Real art added under NEW names counts as much as a placeholder replaced.
+    // Measured 2026-09-07 15:15: the first sprint to draw real sprites wrote
+    // Ufo.png and SeatRed.png beside the 410 placeholders — the placeholder
+    // count alone would have bounced the one attempt that did the work.
+    const realBefore = start.sprites - start.placeholders;
+    const realNow = now.sprites - now.placeholders;
+    if (now.placeholders < start.placeholders || realNow > realBefore) return undefined;
     return (
       `ART NOT PRODUCED: when this sprint began, ${start.placeholders} of ${start.sprites} sprite textures were ` +
       `placeholder-grade (flat procedural shapes under ${PLACEHOLDER_BYTES_PER_PIXEL} byte/pixel); now it is ` +
