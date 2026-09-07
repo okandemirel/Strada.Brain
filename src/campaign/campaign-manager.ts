@@ -2615,8 +2615,10 @@ export class CampaignManager {
       "entry scene, place the named prefabs in it, bind real materials/meshes/sprites to their " +
       "renderers instead of engine primitives, save the scene, and let a captured frame and the " +
       "unfiltered suite be your report. Art comes from the purchased library (unity_my_assets_cloud " +
-      "'download' → unity_import_asset_package) or the generators, which use the installed local model " +
-      "by default — a result marked PLACEHOLDER is not the element's visual.\n" +
+      "'purchases' → 'download' → unity_import_asset_package) or the generators, which use the installed " +
+      "local model by default — unity_generate_sprite draws up to 12 named sprites per call with `batch` " +
+      "(one model load, ~50 s each), unity_generate_mesh for dimensional props, unity_generate_audio for " +
+      "SFX presets and music loops. A result marked PLACEHOLDER or ✗ is not the element's visual.\n" +
       // Measured 2026-09-06 23:14: 45 minutes into a sprint told DO NOT AUDIT,
       // discovery was file_read/list_directory/code_search_rag — and zero
       // vault_search, against an indexed 84 MB project vault. The tool's own

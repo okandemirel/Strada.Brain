@@ -79,6 +79,9 @@ describe("the final sprint is told what the tree renders, on every submit", () =
     // (measured 2026-09-06: 45 minutes of file_read/list_directory, zero
     // vault_search, against an 84 MB project vault).
     expect(prompt).toContain("vault_search");
+    // The recipe names the batch and the audio tool (added 2026-09-07).
+    expect(prompt).toContain("`batch`");
+    expect(prompt).toContain("unity_generate_audio");
   });
 
   it("replaces the previous block instead of stacking a stale one", () => {
