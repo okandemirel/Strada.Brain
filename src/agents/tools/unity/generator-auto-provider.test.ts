@@ -47,9 +47,30 @@ describe("the installed model is the default; the placeholder is the fallback", 
     expect(String(r.content)).toContain("PLACEHOLDER: no local text-to-image model is installed");
   });
 
-  it("sprite: an explicit provider is honoured and carries no placeholder note", async () => {
+  it("sprite: a knowing 'procedural' is refused while a local model is installed — unless accepted", async () => {
+    // Measured 2026-09-07 12:21: eight pig sprites regenerated procedurally
+    // (335 → 170 bytes) with sd15 installed; the delivery gate then counted
+    // them as placeholder art.
     const { ctx } = project();
-    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner: refusing }).execute({ name: "Pig", provider: "procedural" }, ctx);
+    const tool = new SpriteGenerateTool({ localAvailable: () => true, runner: refusing });
+    const refused = await tool.execute({ name: "Pig", provider: "procedural" }, ctx);
+    expect(refused.isError).toBe(true);
+    expect(refused.content).toContain("placeholder-grade");
+    expect(refused.content).toContain("acceptPlaceholder");
+    const accepted = await tool.execute({ name: "Pig", provider: "procedural", acceptPlaceholder: true }, ctx);
+    expect(accepted.isError).toBeFalsy();
+  });
+
+  it("mesh: a knowing 'procedural' is refused while a local model is installed", async () => {
+    const { ctx } = project();
+    const r = await new MeshGenerateTool({ localAvailable: () => true, runner: refusing }).execute({ name: "Pig", shape: "sphere", provider: "procedural" }, ctx);
+    expect(r.isError).toBe(true);
+    expect(r.content).toContain("acceptPlaceholder");
+  });
+
+  it("sprite: an accepted explicit placeholder is honoured and carries no placeholder note", async () => {
+    const { ctx } = project();
+    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner: refusing }).execute({ name: "Pig", provider: "procedural", acceptPlaceholder: true }, ctx);
     expect(r.isError).toBeFalsy();
     expect(String(r.content)).not.toContain("PLACEHOLDER");
   });

@@ -526,11 +526,13 @@ export class MeshGenerateTool implements ITool {
   ) {}
   readonly name = "unity_generate_mesh";
   readonly description =
-    "Generate a placeholder-grade low-poly 3D mesh (OBJ + import .meta, no Editor needed) for a " +
+    "Generate a 3D mesh (OBJ + import .meta, no Editor needed) for a " +
     "game element that needs DIMENSION — a stage prop, a 'plump glossy' character body, a rounded " +
     "block. The GDD's two-layer style needs pixel sprites for puzzles (unity_generate_sprite) and " +
     "meshes for dimensional elements. Use when unity_my_assets_cloud has nothing the user already owns. " +
-    "Compose characters in the prefab: a capsule body mesh + sphere head mesh as child objects.";
+    "Compose characters in the prefab: a capsule body mesh + sphere head mesh as child objects. By default " +
+    "the installed local image-to-3D model produces the mesh (provider 'local'); an analytic primitive is " +
+    "a placeholder the delivery gate counts as such.";
 
   readonly inputSchema = {
     type: "object",
@@ -582,8 +584,13 @@ export class MeshGenerateTool implements ITool {
         type: "string",
         enum: ["procedural", "local"],
         description:
-          "'procedural' = built-in analytic shapes + metaball organic (always works). 'local' = open-weights " +
-          "image-to-3D on this machine (e.g. TripoSR; install via `strada assets-local-setup`).",
+          "Omit it: 'local' (the installed image-to-3D model) is the default whenever it is installed. " +
+          "'procedural' = analytic placeholder primitive, refused while a local model is installed unless " +
+          "acceptPlaceholder is true.",
+      },
+      acceptPlaceholder: {
+        type: "boolean",
+        description: "With provider 'procedural': knowingly write a placeholder primitive although a real mesh is available.",
       },
       prompt: {
         type: "string",
@@ -745,10 +752,20 @@ export class MeshGenerateTool implements ITool {
     if (provider !== "procedural" && provider !== "local") {
       return { content: "Error: provider must be 'procedural' or 'local'", isError: true };
     }
+    // A knowing placeholder while a real mesh is one flag away (see SpriteGenerateTool).
+    if (explicit === "procedural" && input["acceptPlaceholder"] !== true && this.opts.localAvailable("image-to-3d")) {
+      return {
+        content:
+          "Refused: a local image-to-3D model is installed, and an analytic primitive is placeholder-grade — " +
+          "the delivery gate measures it as placeholder art. Omit `provider` (local is the default) or, for a " +
+          "deliberate placeholder, pass acceptPlaceholder: true.",
+        isError: true,
+      };
+    }
     if (provider === "local") {
       const local = await this.executeLocal(input, context);
       if (!local.isError || !auto) return local;
-      const fallback = await this.execute({ ...input, provider: "procedural" }, context);
+      const fallback = await this.execute({ ...input, provider: "procedural", acceptPlaceholder: true }, context);
       return fallback.isError
         ? fallback
         : { ...fallback, content: `${fallback.content} PLACEHOLDER: the local model failed (${String(local.content).slice(0, 160)}), so this is an analytic shape.` };

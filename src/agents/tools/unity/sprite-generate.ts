@@ -488,11 +488,11 @@ export class SpriteGenerateTool implements ITool {
   constructor(private readonly opts: GeneratorOptions = { localAvailable: realLocalAvailability() }) {}
   readonly name = "unity_generate_sprite";
   readonly description =
-    "Generate a placeholder-grade sprite for a game element and write it into the project " +
-    "as a Unity Sprite (PNG + import .meta, no Editor needed). Use when a GDD element has no " +
-    "art and unity_my_assets_cloud turned up nothing the user already owns. Distinct shapes and " +
-    "colours per element keep captured frames honest — a scene full of generated sprites still " +
-    "proves what renders and what does not.";
+    "Generate a sprite for a game element and write it into the project as a Unity Sprite (PNG + " +
+    "import .meta, no Editor needed). By default this draws REAL art with the installed local diffusion " +
+    "model (provider 'local', ~45-60 s per sprite; reads style.json for the art direction); a procedural " +
+    "shape is a placeholder the delivery gate counts as placeholder-grade. Use when a GDD element has no " +
+    "art and unity_my_assets_cloud has nothing the user already owns.";
 
   readonly inputSchema = {
     type: "object",
@@ -526,8 +526,13 @@ export class SpriteGenerateTool implements ITool {
         type: "string",
         enum: ["procedural", "local"],
         description:
-          "'procedural' = built-in placeholder shapes (always works, offline). 'local' = open-weights " +
-          "diffusion model on this machine (real art quality; install via `strada assets-local-setup`).",
+          "Omit it: 'local' (the installed open-weights diffusion model, real art) is the default whenever " +
+          "it is installed. 'procedural' = flat built-in placeholder shape, refused while a local model is " +
+          "installed unless acceptPlaceholder is true.",
+      },
+      acceptPlaceholder: {
+        type: "boolean",
+        description: "With provider 'procedural': knowingly write a placeholder-grade shape (a marker, a debug tile) although real art is available.",
       },
       prompt: {
         type: "string",
@@ -561,6 +566,23 @@ export class SpriteGenerateTool implements ITool {
     const provider = explicit ?? (this.opts.localAvailable("text-to-image") ? "local" : "procedural");
     if (provider !== "procedural" && provider !== "local") {
       return { content: "Error: provider must be 'procedural' (built-in shapes) or 'local' (open-weights diffusion on this machine)", isError: true };
+    }
+    // A KNOWING placeholder while real art is one flag away. Measured
+    // 2026-09-07 12:21 (campaign mcov1, attempt 4): the sprint regenerated
+    // eight pig sprites with provider "procedural" — 335 → 170 bytes each —
+    // while the installed model draws a real one in ~45 s. The tool's own
+    // description had called itself "placeholder-grade" and the procedural
+    // branch "always works"; the delivery gate then counts every one of
+    // those files as placeholder art. Say so before drawing, not after.
+    if (explicit === "procedural" && input["acceptPlaceholder"] !== true && this.opts.localAvailable("text-to-image")) {
+      return {
+        content:
+          "Refused: a local text-to-image model is installed, and a procedural shape is placeholder-grade — " +
+          "the delivery gate measures it as placeholder art, so it cannot close an art gap. Omit `provider` " +
+          "(local is the default; ~45-60 s per sprite) or, for a deliberate marker/debug shape, pass " +
+          "acceptPlaceholder: true.",
+        isError: true,
+      };
     }
 
     const rawName = String(input["name"] ?? "").trim();
