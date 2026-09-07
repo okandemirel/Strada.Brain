@@ -1,4 +1,5 @@
 import type { IAIProvider } from "../agents/providers/provider.interface.js";
+import { stripLeakedReasoning } from "../agents/leaked-reasoning.js";
 import { streamOrChatText } from "../agents/providers/provider.interface.js";
 import { canonicalizeProviderName } from "../agents/providers/provider-identity.js";
 import { ProviderHealthRegistry } from "../agents/providers/provider-health.js";
@@ -38,8 +39,8 @@ export function parseSupervisorVerificationVerdict(
   // Each was pasted, 240 chars of it, as a "VERIFIER FLAG" on a node that
   // nobody had reviewed. A terminated block is stripped so a verdict after it
   // still parses; an unterminated one is named for what it is.
-  const withoutReasoning = trimmed.replace(TERMINATED_REASONING_RE, "").trim();
-  if (UNTERMINATED_REASONING_RE.test(withoutReasoning)) {
+  const { text: withoutReasoning, reasoningOnly } = stripLeakedReasoning(trimmed);
+  if (reasoningOnly) {
     return {
       verdict: "flag_issues",
       issues: [
@@ -93,10 +94,6 @@ export function parseSupervisorVerificationVerdict(
   };
 }
 
-/** `<reasoning>…</reasoning>` / `<think>…</think>`, closed. */
-const TERMINATED_REASONING_RE = /<(reasoning|think)>[\s\S]*?<\/\1>/giu;
-/** A block that opened and never closed: everything after it is thinking. */
-const UNTERMINATED_REASONING_RE = /^\s*<(reasoning|think)>/iu;
 
 function buildVerificationPrompt(node: NodeResult): string {
   const files = node.artifacts

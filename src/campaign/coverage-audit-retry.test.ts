@@ -32,4 +32,17 @@ describe("coverage audit malformed JSON", () => {
     await expect(planner.auditCoverage("# GDD", [{ title: "Sprint A" }])).rejects.toThrow();
     expect(chat).toHaveBeenCalledTimes(2);
   });
+
+  it("reads the verdict past a leaked reasoning block on the first try", async () => {
+    // Measured 2026-09-07: the audit extracted `{…}` from inside
+    // "<reasoning>…</reasoning>" and delivered "WITHOUT a clean GDD-coverage
+    // check" because of it.
+    const { planner, chat } = plannerWith([
+      '<reasoning>\nLet me weigh {"missing": "everything?"} first.\n</reasoning>\n{"missing":["Pig skins: no milestone made them"]}',
+    ]);
+    await expect(planner.auditCoverage("# GDD", [], "final report")).resolves.toEqual([
+      "Pig skins: no milestone made them",
+    ]);
+    expect(chat).toHaveBeenCalledTimes(1);
+  });
 });

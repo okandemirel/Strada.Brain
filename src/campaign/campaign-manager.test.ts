@@ -1519,6 +1519,67 @@ describe("CampaignManager", () => {
     expect(report).toContain("Dragon boss: no milestone implemented it");
     expect(report).toMatch(/unclosed/i);
     expect(report).not.toContain("Campaign stopped");
+    // The structure block is measured at delivery, on the tree delivered:
+    // this fixture has no Assets/, and the report says exactly that.
+    expect(report).toContain("NOT measured: no Assets/ directory");
+  });
+
+  it("a spent coverage-remediation sprint is NOT a delivery when the measured tree is refused", async () => {
+    // Measured 2026-09-07 07:00: state=done under a "⛔ NOT DELIVERED"
+    // headline, with structure findings two days stale.
+    tasks = new FakeTaskManager();
+    storage.close();
+    storage = new CampaignStorage(join(dir, "campaigns-partial-refused.db"));
+    const planner = {
+      planMilestones: vi.fn().mockResolvedValue(LADDER),
+      auditCoverage: vi.fn().mockResolvedValue(["Pig skins: no milestone made them"]),
+    } as unknown as CampaignPlanner;
+    manager = new CampaignManager({
+      storage,
+      planner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async (chatId, text) => {
+        messages.push({ chatId, text });
+      },
+      projectRoot,
+      retryAdoptionGraceMs: 10,
+      completedSettleDelayMs: 0,
+      milestoneTimeBoxMs: 60 * 60_000,
+    });
+    // The planned ladder passes its own delivery gate; the tree is refused
+    // only when measured again at the partial delivery, after the
+    // remediation sprint failed to change it.
+    (manager as unknown as {
+      measureDeliveryStructure: (c: { milestones: Array<{ id: string }> }) => { refusal?: string; lines: string[] };
+    }).measureDeliveryStructure = (c) =>
+      c.milestones.some((m) => m.id.startsWith("mcov"))
+        ? {
+            refusal: "The shipped scenes render NOTHING: 0 renderer components",
+            lines: ["Project art: 429 sprite textures — 410 of them placeholder-grade"],
+          }
+        : { lines: ["Project art: 429 sprite textures"] };
+    manager.attachEvents();
+
+    const campaign = manager.startFromGdd(ctx, "# GDD text", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    settleMilestone("final report");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+    tasks.emit("task:failed", "task_4", "no art was made");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(5));
+    tasks.emit("task:failed", "task_5", "no art was made");
+
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.deliveryReported).toBe(true));
+    const delivered = storage.get(campaign.id)!;
+    expect(delivered.state).toBe("failed");
+    expect(delivered.lastError).toContain("NOT DELIVERED");
+    const report = messages.at(-1)!.text;
+    expect(report).toContain("NOT DELIVERED");
+    expect(report).toContain("REFUSAL STANDS at delivery");
+    expect(report).toContain("410 of them placeholder-grade");
   });
 
   it("bounces a completion once when the sprint demanded a capture and none exists", async () => {

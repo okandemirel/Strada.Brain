@@ -2151,13 +2151,27 @@ export class CampaignManager {
       plannedMilestones.length > 0 &&
       plannedMilestones.every((m) => m.status === "green")
     ) {
-      campaign.state = "done";
+      // Measure the tree being delivered, not the one an earlier sprint saw.
+      // Measured 2026-09-07 07:00: the report rendered findings stored two
+      // days before ("198 sprite textures", no placeholder line) while the
+      // tree on disk held 429 sprites, 410 of them placeholder-grade — and a
+      // refusal that stands makes this NOT a delivery, whatever the ladder.
+      const structure = this.measureDeliveryStructure(campaign);
+      milestone.structureFindings = structure.lines;
+      milestone.structureRefused = structure.refusal !== undefined;
+      if (structure.refusal !== undefined) {
+        milestone.structureFindings = [`REFUSAL STANDS at delivery: ${structure.refusal}`, ...structure.lines];
+        campaign.lastError = `NOT DELIVERED — ${structure.refusal.slice(0, 200)}`;
+      }
+      campaign.state = structure.refusal !== undefined ? "failed" : "done";
       campaign.deliveryReported = false;
       this.persist(campaign);
       getLoggerSafe().warn("Delivering with unclosed GDD gaps — remediation sprint spent its attempts", {
         id: campaign.id,
         milestone: milestone.id,
         attempts: milestone.attempts,
+        state: campaign.state,
+        structureRefused: milestone.structureRefused,
       });
       if (await this.tell(campaign, this.buildDeliveryReport(campaign))) {
         campaign.deliveryReported = true;

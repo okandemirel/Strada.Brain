@@ -9,6 +9,7 @@
  */
 
 import { z } from "zod";
+import { stripLeakedReasoning } from "../agents/leaked-reasoning.js";
 import type { IAIProvider } from "../agents/providers/provider.interface.js";
 import { getLoggerSafe } from "../utils/logger.js";
 import { streamOrChatText } from "../agents/providers/provider.interface.js";
@@ -277,7 +278,10 @@ const coverageResultSchema = z.object({
 });
 
 /** Tolerant extraction: find the outermost balanced {...} in the reply. */
-function extractJsonObject(text: string): string | undefined {
+function extractJsonObject(raw: string): string | undefined {
+  // A leaked thinking block holds braces of its own; the audit used to
+  // extract the first of them and report "malformed JSON" (2026-09-07).
+  const text = stripLeakedReasoning(raw).text;
   const start = text.indexOf("{");
   if (start === -1) return undefined;
   let depth = 0;
