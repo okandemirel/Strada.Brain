@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { extractScheduledElements, elementCodeTokens, assessSpecScope } from "./spec-scope.js";
+import { extractScheduledElements, elementCodeTokens, assessSpecScope, findDesignDoc } from "./spec-scope.js";
 
 const GDD_SNIPPET = `
 ## 4. GAME ELEMENTS
@@ -43,6 +43,26 @@ describe("spec scope — the design document is the checklist", () => {
       const report = assessSpecScope(root);
       expect(report.scheduled).toBe(4);
       expect(report.missing.map((m) => m.name)).toEqual(["Hard Pixel", "Wall", "Lock & Key"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("findDesignDoc runs in this ESM module", () => {
+  // Measured 2026-09-07 14:58: three require("node:fs") calls inside
+  // try/catch returned null/[] under ESM, so the scheduled-elements gate
+  // never saw the GDD — probe on the real project: null before, the GDD
+  // path after.
+  it("finds docs/<Name>_GDD.md", async () => {
+    const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const root = mkdtempSync(join(tmpdir(), "spec-scope-"));
+    try {
+      mkdirSync(join(root, "docs"));
+      writeFileSync(join(root, "docs", "Game_GDD.md"), "# GDD\n\nElement schedule: pig, ball");
+      expect(findDesignDoc(root)).toBe(join(root, "docs", "Game_GDD.md"));
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

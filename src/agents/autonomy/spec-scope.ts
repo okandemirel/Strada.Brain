@@ -13,7 +13,7 @@
  * named, verbatim, at delivery time.
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 export interface ScheduledElement {
@@ -63,7 +63,7 @@ export function findDesignDoc(projectPath: string): string | null {
   for (const root of roots) {
     if (!existsSync(root)) continue;
     try {
-      for (const entry of require("node:fs").readdirSync(root)) {
+      for (const entry of readdirSync(root)) {
         void entry;
       }
     } catch {
@@ -102,7 +102,7 @@ export function findDesignDoc(projectPath: string): string | null {
 
 function safeReaddir(dir: string): string[] {
   try {
-    return require("node:fs").readdirSync(dir) as string[];
+    return readdirSync(dir) as string[];
   } catch {
     return [];
   }
@@ -110,7 +110,7 @@ function safeReaddir(dir: string): string[] {
 
 function statSafe(path: string): { size: number; isDirectory(): boolean } | null {
   try {
-    const st = require("node:fs").statSync(path);
+    const st = statSync(path);
     return { size: st.size, isDirectory: () => st.isDirectory() };
   } catch {
     return null;
