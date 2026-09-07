@@ -243,6 +243,8 @@ describe("buildDepsContext", () => {
     expect(result).toContain("Delivering a Game, Not a Library");
     expect(result).toContain("unity_my_assets_cloud");
     expect(result).toMatch(/purchased library/);
+    expect(result).toContain("unity_bind_sprite");
+    expect(result).toContain("unity_place_prefab");
   });
 
   it("treats Strada.MCP as an authoritative source with truthful runtime availability", () => {

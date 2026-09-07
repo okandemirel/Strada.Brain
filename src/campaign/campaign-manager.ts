@@ -2612,8 +2612,8 @@ export class CampaignManager {
       "DO NOT AUDIT. Counting or listing what exists is not the task, and an inventory will be " +
       "rejected. Do not re-read the whole GDD or re-audit the landed modules before acting: this " +
       "measurement is that audit, already done. Spend the sprint on the change itself — open the " +
-      "entry scene, place the named prefabs in it, bind real materials/meshes/sprites to their " +
-      "renderers instead of engine primitives, save the scene, and let a captured frame and the " +
+      "entry scene, place the named prefabs in it (unity_place_prefab), bind real sprites to their " +
+      "renderers (unity_bind_sprite) instead of engine primitives, save the scene, and let a captured frame and the " +
       "unfiltered suite be your report. Art comes from the purchased library (unity_my_assets_cloud " +
       "'purchases' → 'download' → unity_import_asset_package) or the generators, which use the installed " +
       "local model by default — unity_generate_sprite draws up to 12 named sprites per call with `batch` " +

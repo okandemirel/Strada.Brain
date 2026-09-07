@@ -149,6 +149,8 @@ describe("assessBuiltAsSpecified — refusal", () => {
     expect(report.refusal).toContain("Assets/Prefabs/Ball.prefab");
     expect(report.refusal).toContain("Assets/Art/Models/Pig.fbx");
     expect(report.refusal).toContain("GameObject.CreatePrimitive");
+    expect(report.refusal).toContain("unity_bind_sprite");
+    expect(report.refusal).toContain("unity_place_prefab");
     expect(report.shippedRenderers).toBe(0);
     // The scaffolding scene is measured but not judged as shipped work.
     expect(report.shippedScenes.map((s) => s.scene)).toEqual(["Assets/Scenes/ProductionMain.unity"]);

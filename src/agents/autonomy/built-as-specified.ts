@@ -1014,7 +1014,11 @@ function structuralRefusal(
       (report.referencedOnlyRenderers > 0
         ? ` ${report.referencedOnlyRenderers} renderer(s) do exist in prefabs the scenes reference but never place; ` +
           "bind them in the scene (or prove at runtime that they are what the player sees) instead of drawing primitives."
-        : "")
+        : "") +
+      // The way out, by name. Measured 2026-09-07: eight attempts on this
+      // refusal with no deterministic tool to act on it.
+      " Deterministic path: unity_bind_sprite (a prefab's SpriteRenderer → a real sprite) and unity_place_prefab " +
+      "(that prefab into the entry scene) — no Editor, verified on write; then unity_playmode_verify with capture."
     );
   }
 

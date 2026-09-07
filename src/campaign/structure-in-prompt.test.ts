@@ -82,6 +82,8 @@ describe("the final sprint is told what the tree renders, on every submit", () =
     // The recipe names the batch and the audio tool (added 2026-09-07).
     expect(prompt).toContain("`batch`");
     expect(prompt).toContain("unity_generate_audio");
+    expect(prompt).toContain("unity_bind_sprite");
+    expect(prompt).toContain("unity_place_prefab");
   });
 
   it("replaces the previous block instead of stacking a stale one", () => {
