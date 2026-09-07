@@ -212,8 +212,15 @@ export function parseLLMOutput(text: string): LLMDecompositionOutput | null {
   try {
     let cleaned = text.trim();
 
-    // 1. Strip <reasoning>...</reasoning> blocks (Kimi K2.5 embeds these)
+    // 1. Strip <reasoning>...</reasoning> blocks (Kimi K2.5 embeds these).
+    //    An UNCLOSED block (nemotron-3.5 ran out of budget mid-thought, then
+    //    still printed the JSON, measured 2026-09-07 19:55) is cut at the
+    //    first "{" instead of swallowing the answer.
     cleaned = cleaned.replace(/<reasoning>[\s\S]*?<\/reasoning>\s*/g, "").trim();
+    if (/^<reasoning>/i.test(cleaned)) {
+      const brace = cleaned.indexOf("{");
+      cleaned = brace >= 0 ? cleaned.slice(brace) : "";
+    }
 
     // 2. Extract from markdown code fences anywhere in text (not just start/end)
     const fenceMatch = cleaned.match(/```(?:json)?\s*\n([\s\S]*?)\n\s*```/);

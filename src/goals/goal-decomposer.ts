@@ -254,7 +254,9 @@ export class GoalDecomposer {
     if (!llmOutput) {
       llmOutput = await this.callLLMForDecomposition(
         proactivePrompt,
-        `Previous attempt failed to produce valid JSON. Please try again.\n\nDecompose this task into sub-goals:\n\n<task>${taskDescription}</task>`,
+        "Previous attempt failed to produce valid JSON. Please try again. Output the JSON object ONLY — " +
+          "start your reply with \"{\" and do not write a <reasoning> block or any prose before it.\n\n" +
+          `Decompose this task into sub-goals:\n\n<task>${taskDescription}</task>`,
       );
     }
 
@@ -513,6 +515,11 @@ export class GoalDecomposer {
         getLoggerSafe().warn("Goal decomposition LLM output parse failed", {
           responsePreview: response.text.slice(0, 300),
           provider: this.provider.name,
+          // What shape the failure had: reasoning that never closed, no JSON at all, or JSON that did not validate.
+          length: response.text.length,
+          reasoningClosed: /<\/reasoning>/i.test(response.text),
+          hasJsonObject: response.text.includes("{"),
+          stopReason: response.stopReason,
         });
         return null;
       }

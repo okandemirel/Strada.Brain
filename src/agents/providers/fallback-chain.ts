@@ -752,6 +752,7 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
       }
 
       attempted++;
+      const callStartedAt = Date.now();
       try {
         // Apply thinking suppression based on reasoning timeout history (singleton state).
         if (health.isThinkingDisabled(provider.name) && "disableThinking" in provider) {
@@ -759,7 +760,6 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
         }
 
         const safeMessages = this.stripImages(messages, provider);
-        const callStartedAt = Date.now();
         let response = await this.attemptSurvivingOneStall(
           provider, attempt, safeMessages, i, label, externalSignal,
         );
@@ -848,6 +848,17 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
         if (midStream) error = midStream.underlying;
         const errorMsg = error instanceof Error ? error.message : String(error);
         lastError = error instanceof Error ? error : new Error(String(error));
+        // Every attempt leaves a line, not only the successful one: measured
+        // 2026-09-07 19:50, a first call took 4 min 21 s and no line said
+        // where the time went.
+        logger.info("Provider call failed", {
+          label,
+          provider: provider.name,
+          model: this.attemptMeta[i]?.model,
+          ms: Date.now() - callStartedAt,
+          error: errorMsg.slice(0, 200),
+          midStream: midStream !== null,
+        });
 
         // Control-plane cancellation: the EXTERNAL (un-composed) signal aborted this
         // call — a benign cancel (user cancel / task wind-down), NOT a provider outage.

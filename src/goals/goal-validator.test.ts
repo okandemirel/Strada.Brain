@@ -190,6 +190,15 @@ describe("parseLLMOutput", () => {
     expect(result!.nodes[0].id).toBe("1");
   });
 
+  it("parses past an UNCLOSED <reasoning> block when the JSON still follows (nemotron-3.5, 2026-09-07)", () => {
+    const text = `<reasoning>\nLet me analyze this task carefully. The user wants me to decompose\n{"nodes": [{"id": "s1", "task": "Scene", "dependsOn": []}]}`;
+    const result = parseLLMOutput(text);
+    expect(result).not.toBeNull();
+    expect(result!.nodes[0].id).toBe("s1");
+    // Reasoning with no JSON at all is still not a decomposition.
+    expect(parseLLMOutput("<reasoning>\nthinking forever without an answer")).toBeNull();
+  });
+
   it("handles needsFurtherDecomposition optional boolean", () => {
     const input = JSON.stringify({
       nodes: [

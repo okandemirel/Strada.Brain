@@ -32,6 +32,20 @@ describe("FallbackChainProvider", () => {
     expect(p2.chat).not.toHaveBeenCalled();
   });
 
+  it("logs a 'Provider call failed' line for every attempt that did not answer", async () => {
+    // Measured 2026-09-07 19:50: a first call took 4 min 21 s and no line said
+    // where the time went, because only successes were logged.
+    loggerSpies.info.mockClear();
+    const p1 = createMockProvider({ text: "unused" });
+    (p1.chat as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("API down"));
+    const chain = new FallbackChainProvider([p1, createMockProvider({ text: "ok" })]);
+    await chain.chat("sys", [], []);
+    const failed = loggerSpies.info.mock.calls.find(([m]) => m === "Provider call failed");
+    expect(failed?.[1]).toMatchObject({ label: "chat", error: "API down" });
+    expect(typeof (failed?.[1] as Record<string, unknown>)["ms"]).toBe("number");
+    expect(loggerSpies.info.mock.calls.find(([m]) => m === "Provider call")).toBeDefined();
+  });
+
   it("logs one 'Provider call' line per successful call with its duration", async () => {
     // Measured 2026-09-07: 52 of a sprint's 91 minutes were twelve model waits
     // and no line said how long any call took.
