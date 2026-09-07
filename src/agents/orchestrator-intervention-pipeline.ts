@@ -822,15 +822,17 @@ export async function handleBackgroundLoopRecovery(
       // in thirty seconds, each "stuck (high confidence)", each vetoed by a
       // mutation 93-123 s old — three model calls to learn what the step log
       // already said. When the log proves progress, there is nothing to ask.
+      // Skipping the ASSESSMENT is not skipping the safety net below: the
+      // tracker still records this gate, so plan-rejection and review caps
+      // keep counting (three orchestrator tests said so on 2026-09-07).
       const alreadyProgressing = stuckVerdictContradictedBy(snapshot, params.state.stepResults);
       if (alreadyProgressing) {
         getLogger().debug("Progress assessment skipped — the step log shows progress", {
           chatId: params.chatId,
           evidence: alreadyProgressing,
         });
-        return { action: "none" };
       }
-      const assessment = await runProgressAssessment(
+      const assessment = alreadyProgressing ? null : await runProgressAssessment(
         snapshot,
         params.strategy.reviewer as Parameters<typeof runProgressAssessment>[1],
         {
@@ -950,8 +952,8 @@ export async function handleBackgroundLoopRecovery(
               confidence: assessment.confidence,
               contradiction,
             });
-            return { action: "none" };
-          }
+            // Fall through to the safety net, which records the gate.
+          } else {
           // Agent is stuck — act without recording gate
           const fingerprint = `progress_assessment_stuck:${params.kind}`;
           const touchedFiles = [...params.selfVerification.getState().touchedFiles];
@@ -1024,6 +1026,7 @@ export async function handleBackgroundLoopRecovery(
             action: "replan",
             gate: buildDirectiveGate(assessment),
           };
+          }
         }
         // stuck + low confidence → fall through to safety net
       }
