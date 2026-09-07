@@ -119,6 +119,28 @@ describe("the final sprint is told what the tree renders, on every submit", () =
     expect(kept.endsWith("shi")).toBe(false);
   });
 
+  it("keeps the art and audio inventory ahead of the trim", () => {
+    // Measured 2026-09-07 14:23: the coverage sprint's block was cut before
+    // "Project art: … 410 of the 429 sprite textures are placeholder-grade".
+    const manager = Object.create(CampaignManager.prototype) as CampaignManager;
+    (manager as unknown as { projectRoot: string }).projectRoot = emptyGameProject();
+    const filler = Array.from({ length: 40 }, (_, i) => `scene detail ${i}: ${"x".repeat(90)}`);
+    (manager as unknown as { measureDeliveryStructure(): unknown }).measureDeliveryStructure = () => ({
+      refusal: "the scenes render NOTHING",
+      lines: [...filler, "Project art: 429 sprite textures — 410 of the 429 sprite textures are placeholder-grade", "Project audio: 19 clips, 15 distinct by content"],
+    });
+    const milestone = { id: "mcov1", title: "t", prompt: "Sprint.", status: "pending", attempts: 0 } as never;
+    (manager as unknown as { attachStructureMeasurement(c: unknown, m: unknown): void }).attachStructureMeasurement(
+      { id: "c", milestones: [milestone] },
+      milestone,
+    );
+    const prompt = (milestone as { prompt: string }).prompt;
+    expect(prompt).toContain("measurement trimmed here");
+    expect(prompt).toContain("410 of the 429 sprite textures are placeholder-grade");
+    expect(prompt).toContain("Project audio: 19 clips");
+    expect(prompt.indexOf("Project art")).toBeLessThan(prompt.indexOf("scene detail 0"));
+  });
+
   it("keeps whole lines when it trims a multi-line measurement", () => {
     const manager = Object.create(CampaignManager.prototype) as CampaignManager;
     (manager as unknown as { projectRoot: string }).projectRoot = emptyGameProject();

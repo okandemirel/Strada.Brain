@@ -2526,7 +2526,7 @@ export class CampaignManager {
   private static readonly STRUCTURE_OPEN = "<<MEASURED NOW — what the shipped scenes render>>";
   private static readonly STRUCTURE_CLOSE = "<</MEASURED NOW>>";
   /** How much of the measurement the prompt carries before it says it trimmed. */
-  private static readonly STRUCTURE_MAX_CHARS = 2_600;
+  private static readonly STRUCTURE_MAX_CHARS = 3_400;
 
   /**
    * Put the CURRENT structural measurement in the final sprint's prompt, on
@@ -2562,7 +2562,13 @@ export class CampaignManager {
       milestone.prompt = stripped;
       return;
     }
-    const body = [structure.refusal ? `REFUSED: ${structure.refusal}` : undefined, ...structure.lines]
+    // Most actionable first, so a trim takes the least important lines.
+    // Measured 2026-09-07 14:23: the block for the coverage sprint was cut at
+    // its budget before "Project art: … 410 of the 429 sprite textures are
+    // placeholder-grade" — the one line the art sprint exists to act on.
+    const inventory = structure.lines.filter((l) => /^Project (art|audio):/.test(l));
+    const rest = structure.lines.filter((l) => !/^Project (art|audio):/.test(l));
+    const body = [structure.refusal ? `REFUSED: ${structure.refusal}` : undefined, ...inventory, ...rest]
       .filter((l): l is string => typeof l === "string" && l.length > 0)
       .join("\n- ");
     if (body.length === 0) {
