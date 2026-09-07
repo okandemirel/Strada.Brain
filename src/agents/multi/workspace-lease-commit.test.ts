@@ -432,3 +432,27 @@ describe("deletions of the system's own files are applied; the user's stay", () 
     expect(existsSync(join(source, "Assets", "Scripts", "UserNotes.cs"))).toBe(true);
   });
 });
+
+describe("a loose script with a module twin is the system's own duplicate", () => {
+  // Measured 2026-09-07 15:58: Assets/Scripts/PlayfieldBuilder.cs, with a
+  // user-worded history, came back on every attempt while the module copy
+  // held the real one and the framework-paths refusal said "delete it".
+  it("applies the deletion even when the history is not campaign-only", async () => {
+    mkdirSync(join(source, "Assets", "Scripts"), { recursive: true });
+    mkdirSync(join(source, "Assets", "Modules", "PresentationModule", "Scripts"), { recursive: true });
+    writeFileSync(join(source, "Assets", "Scripts", "PlayfieldBuilder.cs"), "loose", "utf8");
+    writeFileSync(join(source, "Assets", "Modules", "PresentationModule", "Scripts", "PlayfieldBuilder.cs"), "module copy", "utf8");
+    writeFileSync(join(source, "Assets", "Scripts", "Solo.cs"), "no twin", "utf8");
+    execSync("git init -q && git add -A && git -c user.email=a@b -c user.name=t commit -qm 'feat: construct PlayfieldBuilder runtime'", { cwd: source });
+    const lease = await gitManager().acquireLease({ label: "t" });
+    rmSync(join(lease.path, "Assets", "Scripts", "PlayfieldBuilder.cs"));
+    rmSync(join(lease.path, "Assets", "Scripts", "Solo.cs"));
+
+    const result = await lease.commit();
+    await lease.release();
+
+    expect(result.deleted.join("\n")).toContain("PlayfieldBuilder.cs — loose duplicate of Assets/Modules/PresentationModule/Scripts/PlayfieldBuilder.cs");
+    expect(existsSync(join(source, "Assets", "Scripts", "PlayfieldBuilder.cs"))).toBe(false);
+    expect(result.removed).toEqual([join("Assets", "Scripts", "Solo.cs")]); // no twin: stays, reported
+  });
+});

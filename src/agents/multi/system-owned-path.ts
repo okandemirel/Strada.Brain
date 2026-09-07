@@ -18,6 +18,7 @@
  */
 
 import { isScaffoldingScene } from "../../agents/autonomy/built-as-specified.js";
+import { findModuleTwin } from "../../agents/orchestrator.js";
 
 /** Subjects the campaign and the lease watchdog write. */
 export const SYSTEM_COMMIT_SUBJECT_RE = /^campaign:|salvaged from lease|auto-watchdog/i;
@@ -37,6 +38,17 @@ export async function systemOwnedDeletionReason(
 ): Promise<string | undefined> {
   const bare = rel.replace(/\.meta$/i, "");
   if (isScaffoldingScene(bare)) return "scaffolding scene by the delivery gate's own rule";
+  // A loose script the framework-paths wall itself calls non-canonical,
+  // with its module twin in place. Measured 2026-09-07 15:58: after the
+  // "campaign commits only" rule, Assets/Scripts/PlayfieldBuilder.cs — history
+  // "feat: construct PlayfieldBuilder runtime" — came back on every attempt
+  // while Assets/Modules/PresentationModule/Scripts/PlayfieldBuilder.cs held
+  // the real one and the refusal told the agent to delete the loose copy.
+  const normalized = bare.replace(/\\/g, "/");
+  if (/\.cs$/i.test(normalized) && /^Assets\//i.test(normalized) && !/^Assets\/(Modules|Editor|Tests|Plugins)\//i.test(normalized)) {
+    const twin = findModuleTwin(sourceRoot, normalized);
+    if (twin) return `loose duplicate of ${twin} by the framework-paths rule's own definition`;
+  }
   try {
     const log = await run({ command: "git", args: ["log", "--format=%s", "--", rel], cwd: sourceRoot, timeoutMs: 15_000 });
     if (log.exitCode !== 0) return undefined;
