@@ -235,6 +235,16 @@ describe("buildDepsContext", () => {
     };
   }
 
+  it("names the purchased library, not only the local cache, before any art is generated", () => {
+    // Measured 2026-09-07: a sprint asked unity_my_assets (the local cache,
+    // 4 packages), read "nothing fits" and generated, while the account held
+    // 511 purchased packages behind unity_my_assets_cloud.
+    const result = buildDepsContext(makeDepsStatus());
+    expect(result).toContain("Delivering a Game, Not a Library");
+    expect(result).toContain("unity_my_assets_cloud");
+    expect(result).toMatch(/purchased library/);
+  });
+
   it("treats Strada.MCP as an authoritative source with truthful runtime availability", () => {
     const result = buildDepsContext(makeDepsStatus());
 
