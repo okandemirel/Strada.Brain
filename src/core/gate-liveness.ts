@@ -21,7 +21,7 @@ import {
 } from "../agents/autonomy/built-as-specified.js";
 import { assessSpecScope, findDesignDoc } from "../agents/autonomy/spec-scope.js";
 import { realLocalAvailability } from "../agents/tools/unity/sprite-generate.js";
-import { defaultModelFor } from "../assets-local/model-catalog.js";
+import { LOCAL_MODEL_CATALOG, defaultModelFor } from "../assets-local/model-catalog.js";
 import { LocalModelRunner } from "../assets-local/local-model-runner.js";
 import { bindSprite, placePrefab, prefabRoot } from "../agents/tools/unity/scene-binding.js";
 
@@ -182,8 +182,13 @@ export function probeGateLiveness(): GateProbe[] {
     }));
 
     probes.push(probe("local model availability", () => {
+      // The catalog is device-gated: on a machine it supports nothing for
+      // (CI's Linux runner), the default is undefined and availability is
+      // legitimately false — then only the runner's marker path can be
+      // proven, and the detail says so instead of reading like the full probe.
       const spec = defaultModelFor("text-to-image");
-      must(spec !== undefined, "no default text-to-image model in the catalog");
+      const anySpec = spec ?? LOCAL_MODEL_CATALOG.find((s) => s.kind === "text-to-image");
+      must(anySpec !== undefined, "no text-to-image model in the catalog at all");
       // Exercise the production path against a controlled root: with a venv
       // and the model's marker it must say true, without them false. The old
       // probe accepted false === false, which an always-false implementation
@@ -193,16 +198,22 @@ export function probeGateLiveness(): GateProbe[] {
       process.env["STRADA_ASSETS_LOCAL_ROOT"] = fake;
       try {
         must(!realLocalAvailability()("text-to-image"), "availability said true for an empty model root");
+        must(!new LocalModelRunner().isModelInstalled(anySpec!.id), "the runner saw a marker in an empty root");
         put(fake, "venv/bin/python3", "");
-        put(fake, `.installed-${spec!.id}`, "probe\n");
-        must(realLocalAvailability()("text-to-image"), `availability said false with venv and .installed-${spec!.id} present`);
-        must(new LocalModelRunner().isModelInstalled(spec!.id), "the runner did not see the installed marker");
+        put(fake, `.installed-${anySpec!.id}`, "probe\n");
+        must(new LocalModelRunner().isModelInstalled(anySpec!.id), "the runner did not see the installed marker");
+        if (spec !== undefined) {
+          must(realLocalAvailability()("text-to-image"), `availability said false with venv and .installed-${spec.id} present`);
+        }
       } finally {
         if (previous === undefined) delete process.env["STRADA_ASSETS_LOCAL_ROOT"];
         else process.env["STRADA_ASSETS_LOCAL_ROOT"] = previous;
       }
-      const installed = new LocalModelRunner().isModelInstalled(spec!.id);
-      return `turns true with a marker, false without; this machine: ${installed ? "installed" : "not installed"} (${spec!.id})`;
+      if (spec === undefined) {
+        return `catalog offers no text-to-image model on this device (availability is false by design); runner marker path proven with ${anySpec!.id}`;
+      }
+      const installed = new LocalModelRunner().isModelInstalled(spec.id);
+      return `turns true with a marker, false without; this machine: ${installed ? "installed" : "not installed"} (${spec.id})`;
     }));
 
     probes.push(probe("scene binding (bind + place)", () => {
