@@ -54,6 +54,7 @@ import { MediatorCreateTool } from "../agents/tools/strada/mediator-create.js";
 import { SystemCreateTool } from "../agents/tools/strada/system-create.js";
 import { SpriteGenerateTool } from "../agents/tools/unity/sprite-generate.js";
 import { MeshGenerateTool } from "../agents/tools/unity/mesh-generate.js";
+import { AudioGenerateTool } from "../agents/tools/unity/audio-generate.js";
 import { MyAssetsCloudTool } from "../agents/tools/unity/my-assets-cloud-tool.js";
 import { PrerenderFramesTool } from "../agents/tools/unity/prerender-frames.js";
 
@@ -679,6 +680,13 @@ export class ToolRegistry {
     });
 
     this.register(new MeshGenerateTool(), {
+      category: ToolCategories.STRADA,
+      dangerous: true,
+      requiresConfirmation: true,
+      readOnly: false,
+    });
+
+    this.register(new AudioGenerateTool(), {
       category: ToolCategories.STRADA,
       dangerous: true,
       requiresConfirmation: true,
