@@ -1481,6 +1481,67 @@ describe("CampaignManager", () => {
     await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
   });
 
+  it("schedules one gap sprint per audit finding, art first, and moves past a spent one", async () => {
+    // Measured 2026-09-07: art + audio + story in ONE remediation sprint;
+    // four attempts, the time-box narrowed three of them to something that
+    // was never the art, and the campaign delivered with all three open.
+    tasks = new FakeTaskManager();
+    storage.close();
+    storage = new CampaignStorage(join(dir, "campaigns-gap-sprints.db"));
+    const planner = {
+      planMilestones: vi.fn().mockResolvedValue(LADDER),
+      auditCoverage: vi
+        .fn()
+        .mockResolvedValueOnce([
+          "Audio production: base music loop and SFX are not covered",
+          "Art production: pig skins and area backgrounds are not covered",
+          "Story and theme content: area naming vignettes are not covered",
+        ])
+        .mockResolvedValue([]),
+    } as unknown as CampaignPlanner;
+    manager = new CampaignManager({
+      storage,
+      planner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async (chatId, text) => {
+        messages.push({ chatId, text });
+      },
+      projectRoot,
+      retryAdoptionGraceMs: 10,
+      completedSettleDelayMs: 0,
+      milestoneTimeBoxMs: 60 * 60_000,
+    });
+    manager.attachEvents();
+
+    const campaign = manager.startFromGdd(ctx, "# GDD text", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    settleMilestone("final report");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4), { timeout: 5_000 });
+
+    const ids = storage.get(campaign.id)!.milestones.map((m) => m.id);
+    expect(ids).toEqual(["m1", "m2", "m3", "mcov1", "mcov1-2", "mcov1-3"]);
+    const first = storage.get(campaign.id)!.milestones[3]!;
+    expect(first.title).toContain("Art production");
+    expect(first.prompt).toContain("- Art production");
+    expect(first.prompt).not.toContain("Audio production");
+
+    // The art sprint spends both attempts: the campaign moves to the audio gap.
+    tasks.emit("task:failed", "task_4", "no art was made");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(5), { timeout: 5_000 });
+    tasks.emit("task:failed", "task_5", "no art was made");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(6), { timeout: 5_000 });
+    const after = storage.get(campaign.id)!;
+    expect(after.state).toBe("executing");
+    expect(after.milestones[3]!.status).toBe("failed");
+    expect(after.currentMilestone).toBe(4);
+    expect(tasks.submitted[5]!.prompt).toContain("Audio production");
+    expect(messages.at(-1)!.text).toContain("Moving on to");
+  });
+
   it("a spent coverage-remediation sprint delivers the built game WITH the unclosed gaps named", async () => {
     // Audited 2026-09-02: a remediation sprint (mcovN) that exhausted its
     // attempts after every planned sprint had gone green ended the campaign

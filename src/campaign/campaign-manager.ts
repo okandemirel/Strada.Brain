@@ -2009,14 +2009,15 @@ export class CampaignManager {
         // ladder having run out. When scheduled items are missing, a
         // remediation sprint is appended instead of delivering short.
         const remediation = await this.buildCoverageRemediation(campaign);
-        if (remediation) {
+        if (remediation && remediation.length > 0) {
           milestone.status = "green";
-          campaign.milestones.push(remediation);
+          campaign.milestones.push(...remediation);
           campaign.currentMilestone += 1;
           this.persist(campaign);
           await this.tell(
             campaign,
-            `✅ ${milestone.title} — green.${commitNote}\n⚠️ Coverage audit against the GDD found gaps — appending **${remediation.title}** before delivery.`,
+            `✅ ${milestone.title} — green.${commitNote}\n⚠️ Coverage audit against the GDD found ${remediation.length} gap${remediation.length === 1 ? "" : "s"} — appending ` +
+              `${remediation.map((m) => `**${m.title}**`).join(", ")} before delivery.`,
           );
           const id = campaign.id;
           this.resubmitSoon(id);
@@ -2152,6 +2153,28 @@ export class CampaignManager {
       );
       milestone.prompt += `\n\nThe previous attempt ended ${status}: ${(cleaned || output).slice(0, 400)}. Fix the root cause, do not repeat it — and do NOT spend this attempt auditing prior attempts: continue the sprint's actual work from the first unmet requirement.`;
       this.submitCurrentMilestone(campaign, { countAttempt: opts.countAttempt });
+      return;
+    }
+
+    // A gap sprint that spent its attempts does not take the remaining gap
+    // sprints with it: mark it, say so, and move to the next one. The
+    // delivery report carries its ❌.
+    const nextGap = campaign.milestones[campaign.currentMilestone + 1];
+    if (milestone.id.startsWith("mcov") && nextGap?.status === "pending" && nextGap.id.startsWith("mcov")) {
+      milestone.status = "failed";
+      milestone.resultExcerpt = output.slice(-500);
+      campaign.currentMilestone += 1;
+      this.persist(campaign);
+      getLoggerSafe().warn("Gap sprint spent its attempts — moving to the next gap", {
+        id: campaign.id,
+        milestone: milestone.id,
+        next: nextGap.id,
+      });
+      await this.tell(
+        campaign,
+        `❌ ${milestone.title} — ${status} after ${milestone.attempts} attempts; it stays open in the delivery report. Moving on to **${nextGap.title}**.`,
+      );
+      this.resubmitSoon(campaign.id);
       return;
     }
 
@@ -2396,8 +2419,15 @@ export class CampaignManager {
    * the audit itself cannot run (no GDD on disk, provider down, round budget
    * spent). A failed audit never wedges delivery; it is logged and skipped.
    */
-  private async buildCoverageRemediation(campaign: Campaign): Promise<CampaignMilestone | undefined> {
-    const priorRounds = campaign.milestones.filter((m) => m.id.startsWith("mcov")).length;
+  /** Gaps per remediation round; more than this is a planning failure, not a sprint list. */
+  private static readonly MAX_GAP_SPRINTS_PER_ROUND = 4;
+
+  private async buildCoverageRemediation(campaign: Campaign): Promise<CampaignMilestone[] | undefined> {
+    // Rounds, not sprints: a round now appends one sprint per gap.
+    const priorRounds = campaign.milestones.reduce((max, m) => {
+      const round = /^mcov(\d+)/.exec(m.id);
+      return round ? Math.max(max, Number(round[1])) : max;
+    }, 0);
     // Every non-clean outcome is RECORDED, not collapsed into "undefined":
     // a skipped audit read exactly like a passing one in the delivery report
     // (audited 2026-09-01 — the round-budget and missing-GDD skips were
@@ -2433,21 +2463,35 @@ export class CampaignManager {
         return undefined;
       }
       const gddRef = campaign.gddPath ?? "the GDD";
-      return {
-        id: `mcov${priorRounds + 1}`,
-        title: `Coverage completion ${priorRounds + 1} — close the GDD gaps`,
+      // ONE SPRINT PER GAP, ART FIRST. Measured 2026-09-07: one remediation
+      // sprint carried "Art production …", "Audio production …" and "Story
+      // and theme content …" together; four attempts, three of them narrowed
+      // by the time-box to a single item that was never the art, and the
+      // campaign delivered with all three gaps open. A gap is a sprint's
+      // worth of work; the audit's list is a ladder, not a prompt.
+      const round = priorRounds + 1;
+      const ordered = [...missing].sort((a, b) => Number(isArtGap(b)) - Number(isArtGap(a)));
+      const shown = ordered.slice(0, CampaignManager.MAX_GAP_SPRINTS_PER_ROUND);
+      if (ordered.length > shown.length) {
+        campaign.coverageAuditNote =
+          `coverage audit found ${ordered.length} gaps; round ${round} schedules the first ${shown.length} — ` +
+          `the rest wait for the next audit: ${ordered.slice(shown.length).join("; ").slice(0, 300)}`;
+      }
+      return shown.map((item, i) => ({
+        id: i === 0 ? `mcov${round}` : `mcov${round}-${i + 1}`,
+        title: `Coverage completion ${round}.${i + 1} — ${item.slice(0, 60)}`,
         prompt: [
-          `The build's milestone ladder finished, but auditing it against ${gddRef} found these scheduled items undelivered:`,
-          ...missing.map((item) => `- ${item}`),
+          `The build's milestone ladder finished, but auditing it against ${gddRef} found this scheduled item undelivered:`,
+          `- ${item}`,
           "",
-          `Implement each item exactly as ${gddRef} specifies it, following the project's existing module pattern.`,
-          "Verification bar per item: headless compile green, the relevant PlayMode tests green and unfiltered, and a captured frame proving the bound visual renders (the project's style.json holds the derived art direction — generators read it).",
-          "Commit per logical unit. End with a summary naming each item and the evidence it is done.",
+          `Implement it exactly as ${gddRef} specifies it, following the project's existing module pattern. This sprint is this one item; the other gaps have their own sprints.`,
+          "Verification bar: headless compile green, the relevant PlayMode tests green and unfiltered, and a captured frame proving the bound visual renders (the project's style.json holds the derived art direction — generators read it).",
+          "Commit per logical unit. End with a summary naming the item and the evidence it is done.",
           "This is an autonomous campaign sprint — do not ask the user questions; make the strong choice and continue.",
         ].join("\n"),
-        status: "pending",
+        status: "pending" as const,
         attempts: 0,
-      };
+      }));
     } catch (err) {
       getLoggerSafe().warn("Coverage audit failed — delivering without it", {
         id: campaign.id,
@@ -3070,6 +3114,11 @@ export class CampaignManager {
  * remediation sprint whose list cannot be recovered (the caller then says so
  * rather than inventing gap names).
  */
+/** A gap the audit phrased as art: it goes first, because everything visible depends on it. */
+export function isArtGap(item: string): boolean {
+  return /\b(art|sprite|visual|illustration|skin|mascot|background|artwork|animation|vfx|texture|model)/i.test(item);
+}
+
 function coverageGapItems(milestone: CampaignMilestone): string[] {
   if (!milestone.id.startsWith("mcov")) return [];
   const items: string[] = [];
