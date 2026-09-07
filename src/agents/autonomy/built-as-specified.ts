@@ -51,11 +51,17 @@ export type BuiltAsSpecifiedIo = SceneWiringIo;
  */
 export const ASSET_WALK_BUDGET = 20_000;
 
+/** How many directory entries one walk may visit before it stops — reported through `lastWalkVisitCapHit`. */
+export const WALK_VISIT_CAP = 120_000;
+/** Set by the last walk() when it stopped on the visit cap; the caller discloses it (review 2026-09-07: it was silent). */
+let lastWalkVisitCapHit = false;
+
 function walk(dir: string, match?: (file: string) => boolean, budget = ASSET_WALK_BUDGET): string[] {
   const out: string[] = [];
   const stack = [dir];
   let visited = 0;
-  while (stack.length > 0 && out.length < budget && visited < 120_000) {
+  lastWalkVisitCapHit = false;
+  while (stack.length > 0 && out.length < budget && visited < WALK_VISIT_CAP) {
     const current = stack.pop()!;
     let entries: string[];
     try {
@@ -76,6 +82,7 @@ function walk(dir: string, match?: (file: string) => boolean, budget = ASSET_WAL
       else if (!match || match(full)) out.push(full);
     }
   }
+  if (stack.length > 0 && visited >= WALK_VISIT_CAP) lastWalkVisitCapHit = true;
   return out;
 }
 
@@ -626,6 +633,12 @@ export function assessBuiltAsSpecified(
     .listFiles(assetsRoot, (f) => /\.(?:meta|prefab|asset|unity|cs|mat|controller|overrideController|playable|spriteatlas|anim)$/iu.test(f))
     .map((f) => relative(projectRoot, f).split(sep).join("/"));
   const fileSet = new Set(files);
+  if (lastWalkVisitCapHit) {
+    incomplete.push(
+      `the Assets/ scene-and-script walk stopped after visiting ${WALK_VISIT_CAP} entries — directories beyond that were not read, ` +
+        "so art may be reported as unbound when it is not",
+    );
+  }
   if (files.length >= walkBudget) {
     incomplete.push(
       `the Assets/ scene-and-script walk returned its maximum of ${walkBudget} files — guids, prefabs and ` +
@@ -835,6 +848,9 @@ export function assessBuiltAsSpecified(
     .map((f) => relative(projectRoot, f).split(sep).join("/"))
     // A fixture under Tests/ or Editor/ is not the game's unshipped art.
     .filter((rel) => !/(^|\/)(Tests?|Editor)\//i.test(rel));
+  if (lastWalkVisitCapHit) {
+    incomplete.push(`the art walk stopped after visiting ${WALK_VISIT_CAP} entries — the art inventory and the unbound lists are partial`);
+  }
   if (artFiles.length >= walkBudget) {
     incomplete.push(
       `the art walk returned its maximum of ${walkBudget} files — the art inventory and the unbound lists are partial`,
