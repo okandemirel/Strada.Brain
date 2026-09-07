@@ -5,14 +5,10 @@ import { ProviderHealthRegistry } from "./provider-health.js";
 import { QuotaExhaustedError } from "../../common/fetch-with-retry.js";
 import type { IAIProvider, ConversationMessage, ToolDefinition } from "./provider.interface.js";
 
+const loggerSpies = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }));
 vi.mock("../../utils/logger.js", () => ({
-  getLoggerSafe: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
-  getLogger: () => ({
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-    debug: vi.fn(),
-  }),
+  getLoggerSafe: () => loggerSpies,
+  getLogger: () => loggerSpies,
 }));
 
 describe("FallbackChainProvider", () => {
@@ -34,6 +30,18 @@ describe("FallbackChainProvider", () => {
     expect(result.text).toBe("from-p1");
     expect(p1.chat).toHaveBeenCalledTimes(1);
     expect(p2.chat).not.toHaveBeenCalled();
+  });
+
+  it("logs one 'Provider call' line per successful call with its duration", async () => {
+    // Measured 2026-09-07: 52 of a sprint's 91 minutes were twelve model waits
+    // and no line said how long any call took.
+    loggerSpies.info.mockClear();
+    const chain = new FallbackChainProvider([createMockProvider({ text: "ok" }), createMockProvider({ text: "unused" })]);
+    await chain.chat("sys", [], []);
+    const line = loggerSpies.info.mock.calls.find(([m]) => m === "Provider call");
+    expect(line?.[1]).toMatchObject({ label: "chat" });
+    expect(typeof (line?.[1] as Record<string, unknown>)["provider"]).toBe("string");
+    expect(typeof (line?.[1] as Record<string, unknown>)["ms"]).toBe("number");
   });
 
   it("falls through to second provider on failure", async () => {

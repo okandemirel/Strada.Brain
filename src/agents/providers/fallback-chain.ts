@@ -759,6 +759,7 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
         }
 
         const safeMessages = this.stripImages(messages, provider);
+        const callStartedAt = Date.now();
         let response = await this.attemptSurvivingOneStall(
           provider, attempt, safeMessages, i, label, externalSignal,
         );
@@ -796,6 +797,19 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
         health.recordSuccess(provider.name);
         const okMeta = this.attemptMeta[i];
         if (okMeta) this.onModelResponsive?.(okMeta.provider, okMeta.model);
+        // The cost of a turn, measured. 2026-09-07: 52 of a sprint's 91 minutes
+        // were twelve waits of 2-10 minutes, each after a cheap tool call — the
+        // model, not Unity — and nothing recorded how long any model call took.
+        logger.info("Provider call", {
+          label,
+          provider: provider.name,
+          model: okMeta?.model,
+          ms: Date.now() - callStartedAt,
+          inputTokens: response.usage?.inputTokens,
+          outputTokens: response.usage?.outputTokens,
+          stopReason: response.stopReason,
+          toolCalls: response.toolCalls?.length ?? 0,
+        });
 
         // Require 3 consecutive successes before re-enabling thinking to
         // prevent timeout→success→re-enable→timeout cycles.
