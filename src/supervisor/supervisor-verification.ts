@@ -32,7 +32,26 @@ export function parseSupervisorVerificationVerdict(
     };
   }
 
-  const jsonMatch = trimmed.match(/\{[\s\S]*\}/);
+  // A thinking model that leaks its block. Measured 2026-09-07 (campaign
+  // mcov1, attempt 2): five verifier replies in one task began "<reasoning>
+  // Here's a thinking process:" and ended mid-sentence at the token cap.
+  // Each was pasted, 240 chars of it, as a "VERIFIER FLAG" on a node that
+  // nobody had reviewed. A terminated block is stripped so a verdict after it
+  // still parses; an unterminated one is named for what it is.
+  const withoutReasoning = trimmed.replace(TERMINATED_REASONING_RE, "").trim();
+  if (UNTERMINATED_REASONING_RE.test(withoutReasoning)) {
+    return {
+      verdict: "flag_issues",
+      issues: [
+        `Verifier produced no verdict: its reply was an unterminated reasoning block (${trimmed.length} chars) ` +
+          `cut off before any JSON — the token cap or a thinking model leaking its block (${verifierProvider}). ` +
+          "This node was not reviewed.",
+      ],
+      verifierProvider,
+    };
+  }
+
+  const jsonMatch = withoutReasoning.match(/\{[\s\S]*\}/);
   if (jsonMatch) {
     try {
       const parsed = JSON.parse(jsonMatch[0]) as {
@@ -69,10 +88,15 @@ export function parseSupervisorVerificationVerdict(
   // render a verdict; its prose is a flag, never a pass.
   return {
     verdict: "flag_issues",
-    issues: [trimmed.slice(0, 240)],
+    issues: [`Verifier returned prose, not a verdict: ${withoutReasoning.slice(0, 240)}`],
     verifierProvider,
   };
 }
+
+/** `<reasoning>…</reasoning>` / `<think>…</think>`, closed. */
+const TERMINATED_REASONING_RE = /<(reasoning|think)>[\s\S]*?<\/\1>/giu;
+/** A block that opened and never closed: everything after it is thinking. */
+const UNTERMINATED_REASONING_RE = /^\s*<(reasoning|think)>/iu;
 
 function buildVerificationPrompt(node: NodeResult): string {
   const files = node.artifacts

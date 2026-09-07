@@ -34,6 +34,27 @@ describe("parseSupervisorVerificationVerdict", () => {
     });
   });
 
+  it("names an unterminated reasoning block instead of quoting it as a finding", () => {
+    // Measured 2026-09-07: "<reasoning>\nHere's a thinking process:\n\n1.  **Analyze
+    // User Input:** …" cut at the token cap, five times in one task, each
+    // pasted as a VERIFIER FLAG on a node nobody reviewed.
+    const leaked = "<reasoning>\nHere's a thinking process:\n\n1.  **Analyze User Input:**\n   - User is a verification agent";
+    const verdict = parseSupervisorVerificationVerdict(leaked, "opencode");
+    expect(verdict.verdict).toBe("flag_issues");
+    expect(verdict.issues?.[0]).toContain("Verifier produced no verdict");
+    expect(verdict.issues?.[0]).toContain("unterminated reasoning block");
+    expect(verdict.issues?.[0]).not.toContain("thinking process");
+  });
+
+  it("still finds the verdict after a terminated reasoning block", () => {
+    const text = '<reasoning>\nlet me think {not json}\n</reasoning>\n{"verdict":"approve"}';
+    expect(parseSupervisorVerificationVerdict(text, "opencode")).toEqual({
+      verdict: "approve",
+      issues: undefined,
+      verifierProvider: "opencode",
+    });
+  });
+
   it("falls back to advisory flagging for non-JSON verifier output", () => {
     expect(
       parseSupervisorVerificationVerdict("I am not comfortable approving this.", "deepseek"),
