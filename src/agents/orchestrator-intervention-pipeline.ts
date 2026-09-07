@@ -818,6 +818,18 @@ export async function handleBackgroundLoopRecovery(
         taskStartedAtMs: params.taskStartedAtMs ?? Date.now(),
         draftExcerpt: (params.gate ?? params.reason ?? "").slice(0, 200),
       });
+      // Measure before you ask. Measured 2026-09-07 14:30: three assessments
+      // in thirty seconds, each "stuck (high confidence)", each vetoed by a
+      // mutation 93-123 s old — three model calls to learn what the step log
+      // already said. When the log proves progress, there is nothing to ask.
+      const alreadyProgressing = stuckVerdictContradictedBy(snapshot, params.state.stepResults);
+      if (alreadyProgressing) {
+        getLogger().debug("Progress assessment skipped — the step log shows progress", {
+          chatId: params.chatId,
+          evidence: alreadyProgressing,
+        });
+        return { action: "none" };
+      }
       const assessment = await runProgressAssessment(
         snapshot,
         params.strategy.reviewer as Parameters<typeof runProgressAssessment>[1],

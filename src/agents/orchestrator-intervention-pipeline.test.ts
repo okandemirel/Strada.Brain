@@ -145,6 +145,9 @@ describe("handleBackgroundLoopRecovery", () => {
 
     expect(result.action).toBe("none");
     expect(executeToolCalls).not.toHaveBeenCalled();
+    // …and the assessor was never asked: the step log answered first.
+    // Measured 2026-09-07 14:30: three assessments in thirty seconds, all vetoed.
+    expect((base.strategy as { reviewer: { provider: { chat: ReturnType<typeof vi.fn> } } }).reviewer.provider.chat).not.toHaveBeenCalled();
   });
 
   it("delegates on stale-analysis safety-net triggers instead of only replanning locally", async () => {
