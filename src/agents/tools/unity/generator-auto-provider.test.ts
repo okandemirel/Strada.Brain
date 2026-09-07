@@ -227,3 +227,44 @@ describe("realLocalAvailability is a measurement, not a require() that cannot ru
     expect(r.content.match(/PLACEHOLDER/g)).toHaveLength(2);
   });
 });
+
+describe("styleNotesForPrompt keeps the look and drops the report", () => {
+  it("cuts at the first | and drops verification/config sentences", async () => {
+    const { styleNotesForPrompt } = await import("./sprite-generate.js");
+    const notes =
+      "Use crisp flat pixel-art canvases against softly rendered dimensional stages, with thick friendly outlines, and plump glossy pigs. " +
+      "| verification: visual assets for areas integrated into PresentationModule config and prefab references verified.";
+    const out = styleNotesForPrompt(notes);
+    expect(out).toContain("plump glossy pigs");
+    expect(out).not.toMatch(/verif|config|prefab/i);
+  });
+
+  it("the default prompt handed to the runner carries no verification note", async () => {
+    const { root, ctx } = project();
+    writeFileSync(
+      join(root, "style.json"),
+      JSON.stringify({
+        family: "toon-casual",
+        pipeline: "realtime-3d",
+        palette: ["#e4574c"],
+        outline: { width: 2, color: "#3a2a2a" },
+        shading: "flat",
+        references: [],
+        notes: "warm toy-like palette. | verification: prefab references verified.",
+      }),
+    );
+    const prompts: string[] = [];
+    const runner = {
+      isModelInstalled: () => true,
+      textToImage: vi.fn(async (_s: unknown, prompt: string, out: string) => {
+        prompts.push(prompt);
+        const b = Buffer.alloc(9000, 7); Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(b, 0); b.writeUInt32BE(64, 16); b.writeUInt32BE(64, 20); writeFileSync(out, b);
+        return { ok: true, detail: out };
+      }),
+      imageToMesh: vi.fn(async () => ({ ok: false, detail: "n/a" })),
+    } as unknown as LocalRunnerLike;
+    await new SpriteGenerateTool({ localAvailable: () => true, runner, specFor }).execute({ name: "Pig" }, ctx);
+    expect(prompts[0]).toContain("warm toy-like palette");
+    expect(prompts[0]).not.toMatch(/verif|prefab/i);
+  });
+});

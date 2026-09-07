@@ -488,6 +488,21 @@ export type LocalRunnerLike = Pick<
   textToImageBatch?: import("../../../assets-local/local-model-runner.js").LocalModelRunner["textToImageBatch"];
 };
 
+/**
+ * The part of style.json's notes that describes a LOOK. Measured 2026-09-07:
+ * the project's notes read "…plump glossy pigs. | verification: visual assets
+ * for areas … integrated into PresentationModule config and prefab references
+ * verified." — a sprint had appended its report to the art direction, and
+ * every default diffusion prompt carried that sentence. Only the first
+ * "|"-segment, and never a sentence about verification, config or prefabs.
+ */
+export function styleNotesForPrompt(notes: string | undefined): string {
+  if (!notes) return "";
+  const first = notes.split("|")[0]!.trim();
+  const sentences = first.split(/(?<=[.!?])\s+/).filter((t) => !/verif|config|prefab|integrat|reference/i.test(t));
+  return sentences.join(" ").trim().slice(0, 220);
+}
+
 /** Sprites per batch call: bounded so one call cannot hold a sprint for hours. */
 export const SPRITE_BATCH_MAX = 12;
 export interface GeneratorOptions {
@@ -766,7 +781,7 @@ export class SpriteGenerateTool implements ITool {
               const profile = loadStyleProfile(projectPath);
               if (profile) {
                 family = profile.family;
-                notes = profile.notes;
+                notes = styleNotesForPrompt(profile.notes);
               }
             } catch {
               /* stock defaults */
