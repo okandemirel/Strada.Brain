@@ -154,6 +154,38 @@ Return JSON only:
 // Prompt builder
 // ---------------------------------------------------------------------------
 
+/** A mutation this recent makes "stuck" a claim the step log contradicts. */
+const RECENT_MUTATION_MS = 5 * 60_000;
+const RECENT_MUTATION_STEPS = 4;
+
+/**
+ * Why a "stuck" verdict must NOT be acted on — or undefined when nothing in
+ * the measured step log contradicts it.
+ *
+ * The verdict is an LLM estimate over a snapshot; the step log is a
+ * measurement. Measured 2026-09-07 (campaign mcov1): the last three loop
+ * blocks came right after "[OK] file_edit … PlayfieldBuilder.cs (1
+ * replacement made)" ×2, "[OK] file_read", "[OK] git_diff" — each rated
+ * "stuck (high confidence)", each spending a recovery episode, the third
+ * ending the task. Four attempts died this way with real edits in flight.
+ */
+export function stuckVerdictContradictedBy(
+  snapshot: Pick<BehavioralSnapshot, "timeSinceLastMutationMs" | "mutationStepCount">,
+  stepResults: ReadonlyArray<{ toolName: string; success: boolean }>,
+): string | undefined {
+  const recent = stepResults.slice(-RECENT_MUTATION_STEPS);
+  const edited = recent.filter((s) => s.success && MUTATION_TOOLS.has(s.toolName));
+  if (edited.length > 0) {
+    return `${edited.length} successful mutation(s) in the last ${recent.length} steps (${edited.map((s) => s.toolName).join(", ")})`;
+  }
+  // With no mutation ever, timeSinceLastMutationMs counts from the task's
+  // start — a young task that never edited is not "recently edited".
+  if (snapshot.mutationStepCount > 0 && snapshot.timeSinceLastMutationMs < RECENT_MUTATION_MS) {
+    return `last mutation ${Math.round(snapshot.timeSinceLastMutationMs / 1000)}s ago`;
+  }
+  return undefined;
+}
+
 export function buildProgressAssessmentRequest(snapshot: BehavioralSnapshot): string {
   return [
     `User goal: ${snapshot.prompt}`,

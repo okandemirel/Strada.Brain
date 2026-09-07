@@ -84,6 +84,7 @@ import {
   runProgressAssessment,
   buildDirectiveGate,
   buildStuckCheckpointMessage,
+  stuckVerdictContradictedBy,
 } from "./autonomy/progress-assessment.js";
 import { shouldDeferRawBoundaryForDirectTarget } from "./prompt-targets.js";
 import type { Session } from "./orchestrator-session-manager.js";
@@ -928,6 +929,17 @@ export async function handleBackgroundLoopRecovery(
           return { action: "none" };
         }
         if (assessment.verdict === "stuck" && assessment.confidence !== "low") {
+          // The step log outranks the verdict: an agent that just edited a
+          // file is not in an analysis loop, whatever the assessor says.
+          const contradiction = stuckVerdictContradictedBy(snapshot, params.state.stepResults);
+          if (contradiction) {
+            getLogger().info("Progress assessment 'stuck' vetoed by the step log", {
+              chatId: params.chatId,
+              confidence: assessment.confidence,
+              contradiction,
+            });
+            return { action: "none" };
+          }
           // Agent is stuck — act without recording gate
           const fingerprint = `progress_assessment_stuck:${params.kind}`;
           const touchedFiles = [...params.selfVerification.getState().touchedFiles];

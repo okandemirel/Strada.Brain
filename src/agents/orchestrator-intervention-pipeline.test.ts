@@ -124,6 +124,29 @@ describe("handleBackgroundLoopRecovery", () => {
     expect(result.gate).toContain("Helper found the duplicate recovery path");
   });
 
+  it("does not act on a 'stuck' verdict the step log contradicts", async () => {
+    // Measured 2026-09-07: "[OK] file_edit … (1 replacement made)" ×2, then
+    // "stuck (high confidence)" — the third such verdict ended the task.
+    const executeToolCalls = vi.fn(async () => [{ content: "unused", isError: false, metadata: {} }]);
+    const deps = makeDeps(executeToolCalls);
+    const tracker = new ControlLoopTracker({ staleAnalysisThreshold: 99, hardCapReplan: 99, hardCapBlock: 100 });
+    tracker.incrementTextOnlyGate();
+    const base = makeBaseParams({
+      tracker,
+      strategy: makeStrategy('{"verdict":"stuck","confidence":"high","directive":"Stop reflecting and edit PlayfieldBuilder.cs"}'),
+    });
+    base.state.stepResults.push({
+      toolName: "file_edit",
+      success: true,
+      timestamp: Date.now() - 30_000,
+    } as (typeof base.state.stepResults)[number]);
+
+    const result = await handleBackgroundLoopRecovery(base, deps);
+
+    expect(result.action).toBe("none");
+    expect(executeToolCalls).not.toHaveBeenCalled();
+  });
+
   it("delegates on stale-analysis safety-net triggers instead of only replanning locally", async () => {
     const executeToolCalls = vi.fn(async () => [
       {

@@ -1,13 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { AgentPhase } from "../agent-state.js";
-import {
-  buildBehavioralSnapshot,
-  buildDirectiveGate,
-  buildProgressAssessmentRequest,
-  buildStuckCheckpointMessage,
-  parseProgressAssessment,
-  PROGRESS_ASSESSMENT_SYSTEM_PROMPT,
-} from "./progress-assessment.js";
+import { buildBehavioralSnapshot, buildDirectiveGate, buildProgressAssessmentRequest, buildStuckCheckpointMessage, parseProgressAssessment, PROGRESS_ASSESSMENT_SYSTEM_PROMPT, stuckVerdictContradictedBy } from "./progress-assessment.js";
 import type { BehavioralSnapshot, BuildBehavioralSnapshotParams, ProgressAssessment } from "./progress-assessment.js";
 
 // ---------------------------------------------------------------------------
@@ -408,5 +401,32 @@ describe("PROGRESS_ASSESSMENT_SYSTEM_PROMPT", () => {
     expect(PROGRESS_ASSESSMENT_SYSTEM_PROMPT).toContain('"high"');
     expect(PROGRESS_ASSESSMENT_SYSTEM_PROMPT).toContain('"medium"');
     expect(PROGRESS_ASSESSMENT_SYSTEM_PROMPT).toContain('"low"');
+  });
+});
+
+describe("stuckVerdictContradictedBy", () => {
+  it("names a successful mutation among the last steps", () => {
+    const why = stuckVerdictContradictedBy({ timeSinceLastMutationMs: 60 * 60_000, mutationStepCount: 1 }, [
+      { toolName: "file_read", success: true },
+      { toolName: "file_edit", success: true },
+      { toolName: "file_read", success: true },
+    ]);
+    expect(why).toContain("file_edit");
+  });
+  it("names a recent mutation even when the last steps were reads", () => {
+    const steps = Array.from({ length: 6 }, () => ({ toolName: "file_read", success: true }));
+    expect(stuckVerdictContradictedBy({ timeSinceLastMutationMs: 90_000, mutationStepCount: 1 }, steps)).toContain("90s ago");
+  });
+  it("is silent for a genuine read-only loop", () => {
+    const steps = Array.from({ length: 6 }, () => ({ toolName: "file_read", success: true }));
+    expect(stuckVerdictContradictedBy({ timeSinceLastMutationMs: 20 * 60_000, mutationStepCount: 1 }, steps)).toBeUndefined();
+  });
+  it("does not count a failed edit as progress", () => {
+    expect(
+      stuckVerdictContradictedBy({ timeSinceLastMutationMs: 20 * 60_000, mutationStepCount: 0 }, [{ toolName: "file_edit", success: false }]),
+    ).toBeUndefined();
+  });
+  it("a young task that never edited is not 'recently edited'", () => {
+    expect(stuckVerdictContradictedBy({ timeSinceLastMutationMs: 5_000, mutationStepCount: 0 }, [])).toBeUndefined();
   });
 });
