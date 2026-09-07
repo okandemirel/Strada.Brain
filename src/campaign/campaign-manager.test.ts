@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { EventEmitter } from "node:events";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { CampaignManager, stripTimeBoxDirectives } from "./campaign-manager.js";
@@ -1440,6 +1440,36 @@ describe("CampaignManager", () => {
 
     expect(git("status", "--porcelain").trim()).toBe(""); // tree clean
     expect(git("log", "-1", "--pretty=%s")).toContain("milestone green");
+    expect(storage.get(campaign.id)!.state).toBe("executing");
+  });
+
+  it("keeps Recordings/ and .strada out of the envelope, and untracks what an earlier envelope swept in", async () => {
+    // Measured 2026-09-07 21:33: one envelope commit added 2 300 capture
+    // frames from eight runs to the user's history.
+    const { execFileSync } = await import("node:child_process");
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-C", projectRoot, ...args], { encoding: "utf8" });
+    git("init");
+    git("config", "user.email", "test@test.local");
+    git("config", "user.name", "Test");
+    mkdirSync(join(projectRoot, "Recordings", "old-run"), { recursive: true });
+    writeFileSync(join(projectRoot, "Recordings", "old-run", "frame_0.png"), "x");
+    git("add", "-A");
+    git("commit", "-q", "-m", "an earlier envelope swept Recordings in");
+
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    writeFileSync(join(projectRoot, "SprintWork.cs"), "class SprintWork {}");
+    mkdirSync(join(projectRoot, "Recordings", "this-run"), { recursive: true });
+    writeFileSync(join(projectRoot, "Recordings", "this-run", "frame_0.png"), "y");
+    tasks.emit("task:completed", "task_1", "sprint A done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+
+    expect(git("log", "-1", "--pretty=%s")).toContain("milestone green");
+    expect(git("ls-files", "--", "Recordings").trim()).toBe(""); // untracked now
+    expect(git("show", "--stat", "--format=", "HEAD")).toContain("SprintWork.cs");
+    expect(git("show", "--stat", "--format=", "HEAD")).not.toContain("this-run");
+    expect(existsSync(join(projectRoot, "Recordings", "old-run", "frame_0.png"))).toBe(true); // still on disk
     expect(storage.get(campaign.id)!.state).toBe("executing");
   });
 

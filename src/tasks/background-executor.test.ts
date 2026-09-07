@@ -257,6 +257,41 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
     expect(mockDecomposer.decomposeProactive).not.toHaveBeenCalled();
   });
 
+  it("integrates milestone branches only AFTER the lease has been written back", async () => {
+    // Measured 2026-09-07 21:32: the merge attempt ran one second before the
+    // lease commit, rewrote 169 project files, and the commit quarantined the
+    // sprint's scene placements as "the user changed it".
+    const order: string[] = [];
+    const goalTree = buildTestGoalTree();
+    const task = createTestTask(goalTree);
+    mockOrch.evaluateSupervisorAdmission.mockResolvedValue({
+      path: "supervisor",
+      reason: "eligible",
+      result: { success: true, partial: false, output: "done", totalNodes: 1, succeeded: 1, failed: 0, skipped: 0, totalCost: 0, totalDuration: 0, nodeResults: [] },
+    });
+    const workspaceLease = {
+      id: "lease-task",
+      path: "/tmp/task-lease",
+      release: vi.fn(async () => { order.push("release"); }),
+      commit: vi.fn(async () => { order.push("commit"); return { written: ["Assets/Scenes/Main.unity"], conflicts: [], removed: [], deleted: [], failed: [], conflictsQuarantinedUnder: null, quarantined: 0 }; }),
+    };
+    const executor = new BackgroundExecutor({
+      orchestrator: mockOrch as any,
+      decomposer: mockDecomposer as any,
+      goalStorage: mockGoalStorage as any,
+      daemonEventBus: mockDaemonEventBus as any,
+      workspaceLeaseManager: { acquireLease: vi.fn().mockResolvedValue(workspaceLease) } as any,
+      aiProvider: undefined,
+      channel: undefined,
+    });
+    (executor as unknown as { integrateMilestoneBranches: () => void }).integrateMilestoneBranches = () => { order.push("integrate"); };
+    const mockTaskManager = { updateStatus: vi.fn(), complete: vi.fn(), fail: vi.fn(), block: vi.fn() };
+    executor.setTaskManager(mockTaskManager as any);
+    executor.enqueue(task, new AbortController().signal, vi.fn());
+    await vi.waitFor(() => expect(order).toContain("integrate"), { timeout: 5000 });
+    expect(order).toEqual(["commit", "release", "integrate"]);
+  });
+
   it("routes top-level complex tasks through supervisor even without a prebuilt goal tree", async () => {
     const task = createTestTask(undefined, {
       prompt: "Audit the architecture, split the work across providers, and reconcile the findings",

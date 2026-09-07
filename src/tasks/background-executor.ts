@@ -1371,6 +1371,7 @@ export class BackgroundExecutor {
     }
 
     let requestFailed = false;
+    let integrateAfterWriteBack = false;
     let activeGoalTree: GoalTree | undefined;
     try {
       const hasRichInput =
@@ -1485,10 +1486,15 @@ export class BackgroundExecutor {
           this.taskManager.complete(task.id, supervisorResult.output);
           // Delivery includes INTEGRATION: worktree workers cannot merge to
           // main (the source worktree owns the ref), so the executor does it
-          // here, at the source root, after a successful run. Measured
-          // 2026-08-24: milestone branches piled up unmerged and the user had
-          // to ask why the system "didn't merge it itself".
-          this.integrateMilestoneBranches(task);
+          // at the source root, after a successful run. Measured 2026-08-24:
+          // milestone branches piled up unmerged and the user had to ask why
+          // the system "didn't merge it itself". It runs in the finally, AFTER
+          // the lease write-back: measured 2026-09-07 21:32, a failed merge
+          // attempt rewrote 169 project files one second before the commit,
+          // and the commit read every one of them as "the user changed it" —
+          // the sprint's scene placements and sprite bindings were quarantined
+          // and the project never received them.
+          integrateAfterWriteBack = true;
           return;
         }
         if (supervisorResult.partial) {
@@ -1716,6 +1722,7 @@ export class BackgroundExecutor {
       await taskWorkspaceLease?.release().catch((err) => {
         getLogger().warn("Task workspace lease release failed", { error: err instanceof Error ? err.message : String(err) });
       });
+      if (integrateAfterWriteBack) this.integrateMilestoneBranches(task);
       // A root task marks its episode terminal; a re-scoped sub-goal task settles ONLY
       // its joined card (joinEpisodeEnd) so it never prematurely terminates the shared
       // parent episode — the whole-goal episode stays open until the ROOT settles.

@@ -485,6 +485,7 @@ export class WorkspaceLeaseManager {
           orphanPath,
           new Map<string, number>(),
           new Map<string, number>(),
+          undefined,
           join(this.projectRoot, ".strada", "lease-conflicts", `orphan-${name.slice(0, 8)}`),
           { quarantineOnly: true },
         );
@@ -632,11 +633,17 @@ export class WorkspaceLeaseManager {
     //                edit the user makes DURING the run is detectable.
     const leaseSeed = await this.snapshotMtimes(workspacePath, workspacePath);
     const sourceSeed = await this.snapshotMtimes(sourceRoot, sourceRoot);
+    // The project's HEAD at seed time: for a tracked file whose mtime moved
+    // during the run, `git show <seedHead>:<path>` is what it held when the
+    // lease was taken, so "did the user change it" can be answered by content
+    // and not by a timestamp a git merge, a reimport or a reserialisation
+    // bumps without changing a byte (measured 2026-09-07 21:32).
+    const seedHead = await this.readHead(sourceRoot);
 
     let released = false;
     const lease: WorkspaceLease = {
       commit: async () =>
-        this.commitLease(sourceRoot, workspacePath, leaseSeed, sourceSeed, join(
+        this.commitLease(sourceRoot, workspacePath, leaseSeed, sourceSeed, seedHead, join(
           // ALWAYS the project, never the source: a lease derived from another
           // lease quarantined its conflicts inside the PARENT workspace, which
           // release() then deleted — the losing writer's work vanished with
@@ -1025,6 +1032,7 @@ export class WorkspaceLeaseManager {
     workspacePath: string,
     leaseSeed: ReadonlyMap<string, number>,
     sourceSeed: ReadonlyMap<string, number>,
+    seedHead: string | undefined,
     quarantineRoot: string | null,
     opts?: { quarantineOnly?: boolean },
   ): Promise<WorkspaceCommitResult> {
@@ -1163,7 +1171,12 @@ export class WorkspaceLeaseManager {
             // wall clock: Date.now() is whole milliseconds while mtimeMs carries
             // a fraction, so a file written in the same millisecond as the lease
             // reads as "modified after" — measured at +0.63 ms.
-            if (sourceSeeded === undefined || (await fsp.stat(target)).mtimeMs !== sourceSeeded) {
+            const mtimeMoved = sourceSeeded === undefined || (await fsp.stat(target)).mtimeMs !== sourceSeeded;
+            // A moved mtime with the SAME bytes as the seed-time commit is not a
+            // user change (review + measurement 2026-09-07): the merge attempt
+            // before this commit rewrote 169 files byte-for-byte and every
+            // agent edit to them was quarantined.
+            if (mtimeMoved && !(await this.unchangedSinceSeedHead(sourceRoot, seedHead, rel, target))) {
               // The agent's version used to be destroyed together with the
               // released workspace — hours of autonomous work lost to a single
               // .meta touch by the editor. Preserve it under the project's
@@ -1393,6 +1406,43 @@ export class WorkspaceLeaseManager {
 
   /** Records every seeded file's mtime, so commit() can tell an edit the user
    *  made during the run from a file that merely shares the lease's timestamp. */
+  /** The project's HEAD commit, or undefined when it is not a git checkout. */
+  private async readHead(sourceRoot: string): Promise<string | undefined> {
+    // Only a git checkout has a HEAD; a plain directory (or a lease derived
+    // from another lease) consults git for nothing.
+    if (!existsSync(join(sourceRoot, ".git"))) return undefined;
+    try {
+      const r = await this.commandRunner({ command: "git", args: ["-C", sourceRoot, "rev-parse", "HEAD"], cwd: sourceRoot, timeoutMs: 15_000 });
+      const sha = r.stdout.trim();
+      return r.exitCode === 0 && /^[0-9a-f]{40}$/.test(sha) ? sha : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * True when the project's current bytes at `rel` equal what the seed-time
+   * commit held — the file's mtime moved, its content did not. Unknown (no
+   * git, untracked at seed, unreadable) reads as "changed", the safe side.
+   */
+  private async unchangedSinceSeedHead(sourceRoot: string, seedHead: string | undefined, rel: string, target: string): Promise<boolean> {
+    if (!seedHead) return false;
+    try {
+      const shown = await this.commandRunner({
+        command: "git",
+        args: ["-C", sourceRoot, "show", `${seedHead}:${rel.split(sep).join("/")}`],
+        cwd: sourceRoot,
+        timeoutMs: 15_000,
+        maxOutput: 64 * 1024 * 1024,
+      });
+      if (shown.exitCode !== 0) return false;
+      const current = await fsp.readFile(target);
+      return Buffer.from(shown.stdout, "utf8").equals(current);
+    } catch {
+      return false;
+    }
+  }
+
   private async snapshotMtimes(root: string, excludeRoot: string): Promise<Map<string, number>> {
     const seeded = new Map<string, number>();
     // This walk runs against the LIVE project (sourceSeed), where the editor,

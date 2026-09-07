@@ -2357,16 +2357,30 @@ export class CampaignManager {
       // project mirrors ended up committed. It is excluded from both the
       // dirtiness check and the add, or a .strada-only change would produce
       // an empty commit attempt.
+      // Recordings/ is the system's capture output (and Unity Recorder's
+      // folder): measured 2026-09-07 21:33, one envelope commit added 2 300
+      // frames from eight capture runs to the user's history. Excluded like
+      // .strada, and untracked in this commit if an earlier envelope swept it in.
+      const isSystemPath = (path: string): boolean =>
+        /^(?:\.strada|Recordings)(?:[/\\]|$)/.test(path);
       const dirty = git(["status", "--porcelain"], 60_000)
         .split("\n")
         .filter((line) => {
           const path = line.slice(3).replace(/^"/, "");
-          return line.trim() !== "" && !path.startsWith(".strada/") && !path.startsWith(".strada\\");
+          return line.trim() !== "" && !isSystemPath(path);
         })
         .join("\n")
         .trim();
       if (dirty === "") return "";
-      git(["add", "-A", "--", ".", ":(exclude).strada"]);
+      git(["add", "-A", "--", ".", ":(exclude).strada", ":(exclude)Recordings"]);
+      const trackedSystemPaths = git(["ls-files", "--", ".strada", "Recordings"], 60_000).trim();
+      if (trackedSystemPaths !== "") {
+        git(["rm", "-r", "--cached", "--quiet", "--ignore-unmatch", "--", ".strada", "Recordings"]);
+        getLoggerSafe().info("Campaign envelope untracked the system's own paths", {
+          id: campaign.id,
+          files: trackedSystemPaths.split("\n").length,
+        });
+      }
       git([
         "commit",
         "-m",
