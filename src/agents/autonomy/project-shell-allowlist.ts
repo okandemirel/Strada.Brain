@@ -80,6 +80,32 @@ const RULES: readonly AllowlistRule[] = [
     },
   },
   {
+    // Measured 2026-09-08 00:25: `ls Assets/Art/Generated/ | grep -i super`
+    // went to the LLM reviewer, which was "inconclusive" twice, and a sprint
+    // collecting sprite guids lost two turns to a listing. A pipeline whose
+    // every stage is a read-only inspection command, with no redirection,
+    // no `find -exec/-delete` and no `xargs`, cannot change anything.
+    name: "read-only inspection pipeline (ls/cat/grep/head/tail/find/wc/sort…)",
+    matches(command, projectRoot) {
+      if (/[<>]|\bxargs\b|\btee\b|\bsudo\b/.test(command)) return false;
+      if (/\bfind\b[^|;&]*\s-(?:exec|execdir|delete|ok|okdir|fprint|fls)\b/.test(command)) return false;
+      // Reading is only harmless INSIDE the project: `cat ~/.ssh/config` and
+      // `cat /etc/passwd` are inspection commands too. No home shortcuts, and
+      // every absolute path under the project root — stricter than the build
+      // rules, which may read system tooling.
+      if (/(^|[\s"'=])~/.test(command)) return false;
+      const absolute = command.match(/(?:^|[\s"'=])\/[^\s"']*/g) ?? [];
+      if (absolute.some((raw) => !raw.replace(/^[\s"'=]+/, "").startsWith(projectRoot))) return false;
+      const stages = command.split(/\s*(?:\|\||&&|\||;)\s*/).map((s) => s.trim()).filter((s) => s.length > 0);
+      if (stages.length === 0) return false;
+      const readOnly = /^(?:ls|cat|head|tail|grep|egrep|fgrep|rg|find|wc|sort|uniq|cut|tr|awk|basename|dirname|realpath|pwd|echo|printf|file|stat|du|df|diff|cmp|md5|md5sum|shasum|sha256sum|tree|which|date|env|printenv|true|test|\[)\b/;
+      if (!stages.every((stage) => readOnly.test(stage))) return false;
+      // awk/sed-like stages can write via their own syntax: awk only prints here.
+      if (stages.some((stage) => /^awk\b/.test(stage) && /\b(?:system|getline|>)\s*/.test(stage))) return false;
+      return pathsStayInRoot(command, projectRoot);
+    },
+  },
+  {
     name: "git inspection + in-project integration (merge/checkout, no force, no push)",
     matches(command, projectRoot) {
       if (!/(^|[;&|(]\s*)git\s+/.test(command)) return false;

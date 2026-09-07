@@ -35,6 +35,20 @@ describe("project-scoped shell allowlist — canonical build/test/run pre-approv
     ).toBeNull();
   });
 
+  it("pre-approves a read-only inspection pipeline, and refuses one that can write", () => {
+    // Measured 2026-09-08 00:25: `ls | grep -i super` was "inconclusive" twice.
+    expect(matchProjectScopedAllowlist("ls Assets/Art/Generated/ | grep -i super", root)?.rule).toContain("read-only inspection");
+    expect(matchProjectScopedAllowlist("cat Assets/Art/Generated/PigSkin1.png.meta", root)).not.toBeNull();
+    expect(matchProjectScopedAllowlist("find Assets -name '*.prefab' | head -20 | sort", root)).not.toBeNull();
+    expect(matchProjectScopedAllowlist("grep -rn m_Sprite Assets/Prefabs | wc -l", root)).not.toBeNull();
+    expect(matchProjectScopedAllowlist("ls Assets > listing.txt", root)).toBeNull();
+    expect(matchProjectScopedAllowlist("find Assets -name '*.tmp' -delete", root)).toBeNull();
+    expect(matchProjectScopedAllowlist("find Assets -name '*.png' -exec rm {} \\;", root)).toBeNull();
+    expect(matchProjectScopedAllowlist("ls Assets | xargs rm", root)).toBeNull();
+    expect(matchProjectScopedAllowlist("cat /etc/passwd | grep root", root)).toBeNull();
+    expect(matchProjectScopedAllowlist("ls Assets && rm -rf Assets", root)).toBeNull();
+  });
+
   it("pre-approves read-only git inspection", () => {
     expect(matchProjectScopedAllowlist("git status --short", root)?.rule).toContain("git");
     expect(matchProjectScopedAllowlist("git log --oneline -5", root)).not.toBeNull();
