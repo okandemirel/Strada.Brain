@@ -1226,14 +1226,14 @@ describe("CampaignManager", () => {
     expect(tasks.submitted[1]!.prompt).toContain("NARROW THE SCOPE");
   });
 
-  it("an outage-caused settle resubmits WITHOUT charging an attempt", async () => {
-    // Measured 2026-09-01 16:16: a four-account quota wall drove attempts
-    // 1→2 — the milestone's budget spent on provider downtime, not on work.
+  it("an outage-caused settle parks the campaign WITHOUT charging an attempt, and recovery resubmits", async () => {
+    // Measured 2026-09-01 16:16: attempts 1→2 during a four-account quota
+    // wall. And 2026-09-08 01:08: a resubmit into the wall seeded a 2000-file
+    // lease and blocked 38 s later — so the park happens BEFORE any submit.
     const { ProviderHealthRegistry } = await import("../agents/providers/provider-health.js");
     const { setLiveChainMemberNames } = await import("../agents/providers/provider-outage.js");
     const registry = ProviderHealthRegistry.getInstance();
     registry.clearProviderState("cm-cool");
-    registry.recordOverloaded("cm-cool", "quota wall");
     setLiveChainMemberNames(["cm-cool"]);
 
     try {
@@ -1241,13 +1241,18 @@ describe("CampaignManager", () => {
       await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
       expect(storage.get(campaign.id)!.milestones[0]!.attempts).toBe(1);
 
-      // Dead promise (tip idle past its horizon) so reconcile judges the
-      // outcome instead of deferring — the live 16:16 path.
+      // The chain goes down while the task runs; the settle carries the outage.
+      registry.recordOverloaded("cm-cool", "quota wall");
       tasks.updatedAts.set("task_1", Date.now() - 30 * 60_000);
       tasks.emit("task:failed", "task_1", "Task execution failed: All providers are in cooldown. Auto-retry 1/10 in ~30s.");
-      await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
-
+      await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"));
+      expect(tasks.submitted).toHaveLength(1); // parked, not resubmitted into the wall
+      expect(storage.get(campaign.id)!.autoReviveAt).toBeGreaterThan(Date.now());
       expect(storage.get(campaign.id)!.milestones[0]!.attempts).toBe(1); // not charged
+
+      registry.clearProviderState("cm-cool");
+      (manager as unknown as { scheduleAutoRevive(id: string, ms: number): void }).scheduleAutoRevive(campaign.id, 20);
+      await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
     } finally {
       setLiveChainMemberNames([]);
       registry.clearProviderState("cm-cool");
@@ -1303,25 +1308,25 @@ describe("CampaignManager", () => {
     expect(after.milestones[0]!.attempts).toBe(2);
   });
 
-  it("a BLOCKED outage settle also resubmits without charging an attempt", async () => {
-    // Measured 2026-09-02 02:36: the outage surfaced as
-    // `blocked:provider_unavailable`, and the blocked-nudge branch (which
-    // runs first) charged attempts 1→2 → "blocked after 2 attempts".
+  it("a BLOCKED outage settle also parks without charging an attempt", async () => {
     const { ProviderHealthRegistry } = await import("../agents/providers/provider-health.js");
     const { setLiveChainMemberNames } = await import("../agents/providers/provider-outage.js");
     const registry = ProviderHealthRegistry.getInstance();
     registry.clearProviderState("cm-cool2");
-    registry.recordOverloaded("cm-cool2", "quota wall");
     setLiveChainMemberNames(["cm-cool2"]);
 
     try {
       const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
       await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+      registry.recordOverloaded("cm-cool2", "quota wall");
       tasks.updatedAts.set("task_1", Date.now() - 30 * 60_000);
       tasks.emit("task:blocked", "task_1", "Blocked:\n[goal_1] blocked:provider_unavailable. Auto-retry 2/10 in ~30s.");
-      await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
-
+      await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"));
+      expect(tasks.submitted).toHaveLength(1);
       expect(storage.get(campaign.id)!.milestones[0]!.attempts).toBe(1); // not charged
+      registry.clearProviderState("cm-cool2");
+      (manager as unknown as { scheduleAutoRevive(id: string, ms: number): void }).scheduleAutoRevive(campaign.id, 20);
+      await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
     } finally {
       setLiveChainMemberNames([]);
       registry.clearProviderState("cm-cool2");
@@ -1376,19 +1381,18 @@ describe("CampaignManager", () => {
     const { setLiveChainMemberNames } = await import("../agents/providers/provider-outage.js");
     const registry = ProviderHealthRegistry.getInstance();
     registry.clearProviderState("claude");
-    registry.recordOverloaded("claude", "quota wall");
     setLiveChainMemberNames(["claude"]);
 
     try {
       const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
       await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
-      // Non-outage wording (reconcile must not defer) while the chain cools —
-      // the stop-time health check is what must detect the outage.
+      // The chain goes down while the task runs. Non-outage wording (reconcile
+      // must not defer) — the health check at submit time is what parks it.
+      registry.recordOverloaded("claude", "quota wall");
       tasks.emit("task:failed", "task_1", "2 fresh plans produced nothing new");
-      await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
-      tasks.emit("task:failed", "task_2", "2 fresh plans produced nothing new");
 
       await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"));
+      expect(tasks.submitted).toHaveLength(1);
       const parked = storage.get(campaign.id)!;
       expect(parked.autoReviveAt).toBeGreaterThan(Date.now());
       expect(messages.at(-1)!.text).toContain("Self-revival armed");
@@ -1400,7 +1404,7 @@ describe("CampaignManager", () => {
       await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("executing"));
       const revived = storage.get(campaign.id)!;
       expect(revived.autoReviveAt).toBeUndefined();
-      expect(tasks.submitted.length).toBeGreaterThanOrEqual(3);
+      expect(tasks.submitted.length).toBeGreaterThanOrEqual(2);
     } finally {
       setLiveChainMemberNames([]);
       registry.clearProviderState("claude");
@@ -2615,23 +2619,28 @@ describe("CampaignManager", () => {
     expect(messages.at(-1)!.text).toContain("Campaign stopped");
   });
 
-  it("a boot during a provider outage resubmits the dead tip WITHOUT charging an attempt", async () => {
-    // The boot path must inherit the outage exemption too: charging the
-    // provider's downtime to the sprint is what pushed healthy sprints to a stop.
+  it("a boot during a provider outage parks the dead tip WITHOUT charging an attempt, and recovery resubmits", async () => {
     const { ProviderHealthRegistry } = await import("../agents/providers/provider-health.js");
     const { setLiveChainMemberNames } = await import("../agents/providers/provider-outage.js");
     const registry = ProviderHealthRegistry.getInstance();
     registry.clearProviderState("cm-boot");
-    registry.recordOverloaded("cm-boot", "quota wall");
     setLiveChainMemberNames(["cm-boot"]);
     try {
       const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
       await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+      registry.recordOverloaded("cm-boot", "quota wall");
       tasks.markTerminal("task_1", TaskStatus.failed, "All providers are in cooldown");
 
       await manager.resumeActive();
-      await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+      // Measured 2026-09-08 01:08: the boot resubmitted straight into the
+      // wall. Now it parks with a revival appointment and charges nothing.
+      await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"));
+      expect(tasks.submitted).toHaveLength(1);
+      expect(storage.get(campaign.id)!.autoReviveAt).toBeGreaterThan(Date.now());
       expect(storage.get(campaign.id)!.milestones[0]!.attempts).toBe(1); // not charged
+      registry.clearProviderState("cm-boot");
+      (manager as unknown as { scheduleAutoRevive(id: string, ms: number): void }).scheduleAutoRevive(campaign.id, 20);
+      await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
     } finally {
       setLiveChainMemberNames([]);
       registry.clearProviderState("cm-boot");
@@ -2925,6 +2934,28 @@ describe("CampaignManager", () => {
       await manager.resumeActive();
       await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
       expect(storage.get(campaign.id)!.state).toBe("executing");
+    });
+
+    it("a campaign started while every provider is cooling parks before submitting anything", async () => {
+      const { ProviderHealthRegistry } = await import("../agents/providers/provider-health.js");
+      const { setLiveChainMemberNames } = await import("../agents/providers/provider-outage.js");
+      const registry = ProviderHealthRegistry.getInstance();
+      registry.clearProviderState("cm-start");
+      registry.recordOverloaded("cm-start", "quota wall");
+      setLiveChainMemberNames(["cm-start"]);
+      try {
+        const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+        await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"));
+        expect(tasks.submitted).toHaveLength(0);
+        expect(storage.get(campaign.id)!.autoReviveAt).toBeGreaterThan(Date.now());
+        expect(messages.at(-1)!.text).toContain("every provider is in cooldown");
+        registry.clearProviderState("cm-start");
+        (manager as unknown as { scheduleAutoRevive(id: string, ms: number): void }).scheduleAutoRevive(campaign.id, 20);
+        await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+      } finally {
+        setLiveChainMemberNames([]);
+        registry.clearProviderState("cm-start");
+      }
     });
 
     it("a partial delivery that stopped on a refusal is re-sent after a restart; a plain failure is not", async () => {

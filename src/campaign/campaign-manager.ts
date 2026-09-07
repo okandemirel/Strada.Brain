@@ -1100,6 +1100,33 @@ export class CampaignManager {
       }
       this.attachStructureMeasurement(campaign, milestone);
     }
+    // NO PROVIDER, NO TASK. Measured 2026-09-08 01:08: a boot resubmitted the
+    // milestone while every provider was cooling; the task seeded a 2000-file
+    // lease and blocked 38 s later on "All providers are in cooldown". The
+    // executor's keep-alive already waits out the horizon; the campaign's own
+    // submits (boot, bounce, revive) now park the same way instead.
+    const outageWaitMs = allProvidersCoolingDownMs();
+    if (outageWaitMs > 0) {
+      const delayMs = outageWaitMs + 60_000;
+      milestone.status = "pending";
+      campaign.state = "failed";
+      campaign.lastError = `${milestone.title} not started: every provider is in cooldown (${describeProviderOutage()})`;
+      campaign.autoReviveAt = Date.now() + delayMs;
+      this.persist(campaign);
+      this.scheduleAutoRevive(campaign.id, delayMs);
+      getLoggerSafe().info("Campaign milestone parked — every provider is cooling down, nothing submitted", {
+        id: campaign.id,
+        milestone: milestone.id,
+        reviveInMs: delayMs,
+      });
+      void this.tell(
+        campaign,
+        `⏸️ Campaign paused before starting **${milestone.title}**: every provider is in cooldown.\n` +
+          `Cause: ${this.outageCause(campaign.lastError ?? "")}\n` +
+          `Self-revival armed for ${new Date(campaign.autoReviveAt).toLocaleTimeString()}. Reply **kampanya devam** to try sooner.`,
+      );
+      return;
+    }
     milestone.status = "running";
     milestone.startedAtMs ??= Date.now();
     // A new attempt gets a new deferral clock. Audited 2026-09-02: the clock
