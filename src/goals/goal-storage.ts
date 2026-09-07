@@ -188,7 +188,9 @@ export class GoalStorage {
       deleteNodesByRoot: `DELETE FROM goal_nodes WHERE root_id = ?`,
       getInterruptedTrees: `SELECT * FROM goal_trees WHERE status = 'executing' ORDER BY updated_at DESC LIMIT 20`,
       updateTreeStatus: `UPDATE goal_trees SET status = ?, updated_at = ? WHERE root_id = ?`,
-      pruneOldTrees: `DELETE FROM goal_trees WHERE status IN ('completed', 'failed', 'blocked') AND updated_at < ?`,
+      // `<=`: "older than maxAge" includes a tree settled in this same millisecond —
+      // with maxAge 0 the strict form skipped it about one run in five (measured 2026-09-07).
+      pruneOldTrees: `DELETE FROM goal_trees WHERE status IN ('completed', 'failed', 'blocked') AND updated_at <= ?`,
       setNodeStartedAt: `UPDATE goal_nodes SET started_at = ? WHERE id = ? AND started_at IS NULL`,
       setNodeCompletedAt: `UPDATE goal_nodes SET completed_at = ? WHERE id = ?`,
     };
