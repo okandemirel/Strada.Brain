@@ -1679,6 +1679,50 @@ describe("CampaignManager", () => {
     expect(tasks.submitted.filter((t) => t.prompt.includes("ART NOT PRODUCED")).length).toBe(1);
   });
 
+  it("a failed remediation attempt retries with the art directive when the placeholder count did not drop", async () => {
+    // Measured 2026-09-07: five attempts ended blocked/failed; the
+    // completion-time gate never spoke and no retry saw the recipe.
+    tasks = new FakeTaskManager();
+    storage.close();
+    storage = new CampaignStorage(join(dir, "campaigns-art-retry.db"));
+    const planner = {
+      planMilestones: vi.fn().mockResolvedValue(LADDER),
+      auditCoverage: vi.fn().mockResolvedValue(["Art production: pig skins are not covered"]),
+    } as unknown as CampaignPlanner;
+    manager = new CampaignManager({
+      storage,
+      planner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async (chatId, text) => {
+        messages.push({ chatId, text });
+      },
+      projectRoot,
+      retryAdoptionGraceMs: 10,
+      completedSettleDelayMs: 0,
+      milestoneTimeBoxMs: 60 * 60_000,
+    });
+    (manager as unknown as { measurePlaceholderArt: () => { sprites: number; placeholders: number } })
+      .measurePlaceholderArt = () => ({ sprites: 100, placeholders: 95 });
+    manager.attachEvents();
+
+    const campaign = manager.startFromGdd(ctx, "# GDD text", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    settleMilestone("final report");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4), { timeout: 5_000 });
+
+    tasks.emit("task:failed", "task_4", "compile still red");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(5), { timeout: 5_000 });
+    const retry = tasks.submitted[4]!.prompt;
+    expect(retry).toContain("The previous attempt ended");
+    expect(retry).toContain("ART NOT PRODUCED: when this sprint began, 95 of 100");
+    expect(retry.match(/ART NOT PRODUCED/g)).toHaveLength(1);
+    expect(storage.get(campaign.id)!.milestones.at(-1)!.artBounced).toBeUndefined(); // a directive, not a bounce
+  });
+
   it("a spent coverage-remediation sprint is NOT a delivery when the measured tree is refused", async () => {
     // Measured 2026-09-07 07:00: state=done under a "⛔ NOT DELIVERED"
     // headline, with structure findings two days stale.

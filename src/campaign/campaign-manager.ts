@@ -2157,6 +2157,14 @@ export class CampaignManager {
         "",
       );
       milestone.prompt += `\n\nThe previous attempt ended ${status}: ${(cleaned || output).slice(0, 400)}. Fix the root cause, do not repeat it — and do NOT spend this attempt auditing prior attempts: continue the sprint's actual work from the first unmet requirement.`;
+      // The art directive is not only for completions. Measured 2026-09-07:
+      // five remediation attempts in a row ended blocked or failed, so the
+      // completion-time art gate never spoke, and no retry ever started with
+      // the recipe in front of it. Same measurement, same words, no bounce.
+      const artDirective = this.placeholderArtGate(campaign, milestone);
+      if (artDirective !== undefined && !milestone.prompt.includes("ART NOT PRODUCED")) {
+        milestone.prompt += `\n\n${artDirective}`;
+      }
       this.submitCurrentMilestone(campaign, { countAttempt: opts.countAttempt });
       return;
     }
