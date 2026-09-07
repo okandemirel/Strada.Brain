@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Config } from "../config/config.js";
 import { loadInstalledStradaMcpTools, registerStradaMcpTools } from "./strada-mcp-tool-loader.js";
+import type { ITool, ToolContext } from "../agents/tools/tool-core.interface.js";
 
 describe("registerStradaMcpTools", () => {
   const tempDirs: string[] = [];
@@ -223,5 +224,63 @@ describe("what the loader reports about tools it dropped", () => {
 
     expect(result.skipped).toBe(result.shadowed.length);
     expect(result.skipped).toBe(3);
+  });
+});
+
+/**
+ * Measured 2026-09-07 (campaign mcov1, attempt 2): refused six times by the
+ * path guard for reading the real checkout, a sub-agent passed that checkout
+ * as projectPath to unity_playmode_verify and verified a tree without the
+ * run's edits — reported as "the game renders in the real project path".
+ */
+describe("a projectPath outside the run's project is refused, not noted", () => {
+  const lease = "/tmp/strada-workspaces/task-1";
+  const real = "/Users/someone/Game";
+  const context = (over: Partial<ToolContext> = {}): ToolContext =>
+    ({ projectPath: lease, sourceProjectPath: real, workingDirectory: lease, readOnly: false, ...over }) as ToolContext;
+
+  function registeredTool(execute: ReturnType<typeof vi.fn>): ITool {
+    let tool: ITool | undefined;
+    const registry = {
+      has: vi.fn().mockReturnValue(false),
+      register: vi.fn((t: ITool) => { tool = t; }),
+    };
+    registerStradaMcpTools(registry, [
+      {
+        name: "unity_playmode_verify",
+        description: "verify",
+        inputSchema: { type: "object", properties: {} },
+        metadata: { category: "unity", requiresBridge: false, dangerous: false, readOnly: true },
+        execute,
+      },
+    ]);
+    if (!tool) throw new Error("not registered");
+    return tool;
+  }
+
+  it("refuses the real checkout under a lease and says what would go wrong", async () => {
+    const execute = vi.fn(async () => ({ content: "ran" }));
+    const result = await registeredTool(execute).execute({ projectPath: real }, context());
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain("outside this run's project");
+    expect(result.content).toContain("WITHOUT this run's edits");
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("refuses any other tree too, without the lease wording", async () => {
+    const execute = vi.fn(async () => ({ content: "ran" }));
+    const result = await registeredTool(execute).execute({ projectPath: "/elsewhere/Other" }, context());
+    expect(result.isError).toBe(true);
+    expect(result.content).not.toContain("WITHOUT this run's edits");
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("lets the run's own project and its subtrees through, and an omitted path", async () => {
+    const execute = vi.fn(async () => ({ content: "ran" }));
+    const tool = registeredTool(execute);
+    await tool.execute({ projectPath: lease }, context());
+    await tool.execute({ projectPath: `${lease}/Assets` }, context());
+    await tool.execute({}, context());
+    expect(execute).toHaveBeenCalledTimes(3);
   });
 });

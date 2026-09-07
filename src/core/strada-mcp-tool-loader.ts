@@ -1126,6 +1126,40 @@ function formatAge(ms: number): string {
   return `${Math.round(ms / 60_000)}min`;
 }
 
+/**
+ * A `projectPath` argument that points outside this run's project.
+ *
+ * Three Strada.MCP tools accept an explicit projectPath and honour it over the
+ * context's, adding only a note. Measured 2026-09-07 (campaign mcov1, attempt
+ * 2): a sub-agent, refused six times by the path guard for reading the real
+ * checkout, passed that checkout as projectPath to unity_playmode_verify. The
+ * capture ran against a tree WITHOUT the run's edits, wrote 120 frames into
+ * the real project (237 workspace conflicts at commit), and the result said
+ * "the game renders in the real project path" — verification of the wrong
+ * tree, reported as resolution. The file tools' sandbox has to bind the Unity
+ * tools too, and a refusal that says why beats a note that is easy to skip.
+ */
+export function projectPathEscape(
+  input: Record<string, unknown>,
+  context: Pick<ToolContext, "projectPath" | "sourceProjectPath">,
+): string | undefined {
+  const requested = typeof input["projectPath"] === "string" ? input["projectPath"].trim() : "";
+  if (requested === "" || !context.projectPath) return undefined;
+  const target = resolve(requested);
+  const own = resolve(context.projectPath);
+  if (target === own || target.startsWith(own + sep)) return undefined;
+  const real = context.sourceProjectPath ? resolve(context.sourceProjectPath) : undefined;
+  const isRealCheckout = real !== undefined && (target === real || target.startsWith(real + sep));
+  return (
+    `projectPath ${requested} is outside this run's project (${context.projectPath}). ` +
+    (isRealCheckout
+      ? "That is the real checkout; this run works in a leased copy of it, so Unity there would verify " +
+        "a tree WITHOUT this run's edits and write its captures into the wrong project. "
+      : "Unity tools run only against the project this run was given. ") +
+    "Omit projectPath — the run's own project is the default."
+  );
+}
+
 class StradaMcpToolAdapter implements ITool {
   readonly name: string;
   readonly description: string;
@@ -1214,6 +1248,9 @@ class StradaMcpToolAdapter implements ITool {
         isError: true,
       };
     }
+
+    const escape = projectPathEscape(input, context);
+    if (escape !== undefined) return { content: escape, isError: true };
 
     // Wrap tool invocation with a timeout so misbehaving bridges cannot hang
     // the orchestrator indefinitely.
