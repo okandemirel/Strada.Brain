@@ -112,6 +112,14 @@ export interface VerificationVerdict {
   readonly verdict: "approve" | "flag_issues" | "reject" | "skipped";
   readonly issues?: string[];
   readonly verifierProvider: string;
+  /**
+   * False when the reviewer was the worker's own provider because no other
+   * healthy one existed (a single-provider chain, measured 2026-09-07: every
+   * delivery said "verification_skipped" for hours). A same-provider review
+   * still reads the code; it is not an independent audit and the report
+   * counts it apart.
+   */
+  readonly independent?: boolean;
 }
 
 /** What the verify stage actually measured — so a skipped check never reads like a passed one. */
@@ -133,6 +141,8 @@ export interface VerificationReport {
   readonly rejected: number;
   /** Candidates no verifier looked at: mode disabled, no verifier, budget, sampling, or a "skipped" verdict. */
   readonly notVerified: number;
+  /** Of `verified`, how many were reviewed by the worker's OWN provider (no independent one was healthy). */
+  readonly sameProvider?: number;
 }
 
 /** Configuration for the verification subsystem */

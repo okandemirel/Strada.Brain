@@ -105,6 +105,46 @@ describe("createSupervisorNodeVerifier", () => {
     expect(reviewer.chat).toHaveBeenCalledTimes(1);
   });
 
+  it("reviews with the worker's OWN provider when no other is healthy, and says so", async () => {
+    // Measured 2026-09-07: on a single-provider chain every delivery said
+    // "verification_skipped: no HEALTHY cross-provider verifier" for hours.
+    const { ProviderHealthRegistry } = await import("../../agents/providers/provider-health.js");
+    ProviderHealthRegistry.getInstance().clearProviderState("opencode");
+    const own = {
+      name: "opencode",
+      capabilities: { maxTokens: 4096, streaming: false, structuredStreaming: false, toolCalling: true, vision: false, systemPrompt: true },
+      chat: vi.fn().mockResolvedValue({ text: '{"verdict":"approve"}', toolCalls: [], stopReason: "end_turn", usage: undefined }),
+    };
+    const verifyNode = createSupervisorNodeVerifier({
+      listExecutionCandidates: () => [{ name: "OpenCode (Zen/Go)", defaultModel: "nemotron" }],
+      listAvailable: () => [{ name: "OpenCode (Zen/Go)", defaultModel: "nemotron" }],
+      getProviderByName: (name: string) => (name === "opencode" ? own as any : null),
+    });
+    const verdict = await verifyNode(makeNodeResult({ provider: "opencode" }), { chatId: "chat-1" } as any);
+    expect(own.chat).toHaveBeenCalledTimes(1);
+    expect(verdict.verdict).toBe("approve");
+    expect(verdict.independent).toBe(false);
+    expect(verdict.verifierProvider).toContain("same provider");
+    expect(verdict.issues ?? []).not.toContainEqual(expect.stringContaining("verification_skipped"));
+  });
+
+  it("still skips when the worker's own provider is in cooldown too", async () => {
+    const { ProviderHealthRegistry } = await import("../../agents/providers/provider-health.js");
+    const registry = ProviderHealthRegistry.getInstance();
+    registry.clearProviderState("opencode");
+    registry.recordOverloaded("opencode", "quota wall");
+    try {
+      const verifyNode = createSupervisorNodeVerifier({
+        listAvailable: () => [{ name: "OpenCode (Zen/Go)", defaultModel: "nemotron" }],
+        getProviderByName: () => null,
+      });
+      const verdict = await verifyNode(makeNodeResult({ provider: "opencode" }), { chatId: "chat-1" } as any);
+      expect(verdict.issues?.[0]).toContain("verification_skipped");
+    } finally {
+      registry.clearProviderState("opencode");
+    }
+  });
+
   it("routes the verification review through chatStream when the reviewer streams", async () => {
     // A reasoning-capable reviewer that streams. The verification call MUST go through
     // chatStream (clears the FallbackChain first-response timer) — never the blocking chat().

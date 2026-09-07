@@ -114,6 +114,7 @@ export class ResultAggregator {
     const { mode, samplingRate } = this.verificationConfig;
     const okResults = results.filter((r) => r.status === "ok");
     const counts = { approved: 0, flagged: 0, rejected: 0 };
+    let sameProvider = 0;
 
     // audited 2026-09-02: `candidates` is documented as the ok nodes eligible
     // under the ACTIVE mode, but counted every ok node — so a critical-only run
@@ -181,6 +182,7 @@ export class ResultAggregator {
       verificationSpend = projectedSpend;
       const verdict = await this.verifyFn(node);
 
+      if (verdict.independent === false) sameProvider++;
       if (verdict.verdict === "approve") {
         counts.approved++;
       } else if (verdict.verdict === "flag_issues") {
@@ -225,6 +227,7 @@ export class ResultAggregator {
         verified,
         ...counts,
         notVerified: candidates.length - verified,
+        ...(sameProvider > 0 ? { sameProvider } : {}),
       },
     };
   }

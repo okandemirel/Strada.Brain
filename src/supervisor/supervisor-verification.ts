@@ -174,9 +174,24 @@ export function createSupervisorNodeVerifier(providerManager: {
   listExecutionCandidates?(identityKey?: string): Array<{ name: string; defaultModel: string }>;
   listAvailable(): Array<{ name: string; defaultModel: string }>;
   getProviderByName(name: string, model?: string): IAIProvider | null;
+  getPrimaryProviderByName?(name: string, model?: string): IAIProvider | null;
 }): (node: NodeResult, context: SupervisorContext) => Promise<VerificationVerdict> {
   return async (node: NodeResult, context: SupervisorContext): Promise<VerificationVerdict> => {
-    const reviewer = chooseVerificationProvider(providerManager, node.provider, context.chatId);
+    let reviewer = chooseVerificationProvider(providerManager, node.provider, context.chatId);
+    let independent = true;
+    if (!reviewer) {
+      // No OTHER healthy provider: review with the worker's own, in a fresh
+      // context, and say so. A skip verified nothing; a same-provider read
+      // still catches the obvious, and the verdict carries the caveat.
+      const own = canonicalizeProviderName(node.provider) ?? node.provider;
+      if (own && ProviderHealthRegistry.getInstance().isAvailable(own)) {
+        const provider = providerManager.getPrimaryProviderByName?.(own) ?? providerManager.getProviderByName(own);
+        if (provider) {
+          reviewer = { providerName: `${own} (same provider — no independent verifier was healthy)`, model: "", provider };
+          independent = false;
+        }
+      }
+    }
     if (!reviewer) {
       return {
         verdict: "flag_issues" as const,
@@ -200,12 +215,14 @@ export function createSupervisorNodeVerifier(providerManager: {
         "You are a verification agent. Review another worker's result for obvious issues and reply with strict JSON only.",
         buildVerificationPrompt(node),
       );
-      return parseSupervisorVerificationVerdict(response.text, reviewer.providerName);
+      const parsed = parseSupervisorVerificationVerdict(response.text, reviewer.providerName);
+      return independent ? parsed : { ...parsed, independent: false };
     } catch (error) {
       return {
         verdict: "flag_issues",
         issues: [error instanceof Error ? error.message : String(error)],
         verifierProvider: reviewer.providerName,
+        ...(independent ? {} : { independent: false }),
       };
     }
   };
