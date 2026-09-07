@@ -249,6 +249,22 @@ export class ControlLoopTracker {
     this.consecutiveReadOnlyToolCalls = 0;
   }
 
+  /**
+   * When the pipeline last intervened (replan, delegation, block). The
+   * arbiter measures progress from here: an edit the agent made between two
+   * interventions is evidence the second must weigh, whatever the assessor
+   * says about the last few turns.
+   */
+  private lastInterventionAtMs = 0;
+
+  noteIntervention(at: number = Date.now()): void {
+    this.lastInterventionAtMs = at;
+  }
+
+  lastInterventionAt(): number {
+    return this.lastInterventionAtMs;
+  }
+
   markRecoveryAttempt(fingerprint: string): number {
     const next = (this.recoveryEpisodes.get(fingerprint) ?? 0) + 1;
     this.recoveryEpisodes.set(fingerprint, next);

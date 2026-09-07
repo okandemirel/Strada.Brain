@@ -77,7 +77,7 @@ import {
   type InteractionBoundaryDecision,
   computeAdaptiveHardCap,
 } from "./autonomy/index.js";
-import { isVerificationToolName } from "./autonomy/constants.js";
+import { isVerificationToolName, MUTATION_TOOLS } from "./autonomy/constants.js";
 import type { StradaConformanceGuard } from "./autonomy/strada-conformance.js";
 import {
   buildBehavioralSnapshot,
@@ -88,7 +88,7 @@ import {
 } from "./autonomy/progress-assessment.js";
 import { shouldDeferRawBoundaryForDirectTarget } from "./prompt-targets.js";
 import type { Session } from "./orchestrator-session-manager.js";
-import { getLogger, type LogEntry } from "../utils/logger.js";
+import { getLogger, type LogEntry, getLoggerSafe } from "../utils/logger.js";
 import { sanitizeSecrets } from "../security/secret-sanitizer.js";
 import { randomUUID } from "node:crypto";
 
@@ -603,7 +603,53 @@ export async function resolveLoopRecoveryReview(
  * patterns, delegates diagnosis when possible, and returns an intervention
  * decision (none / continue / replan / blocked).
  */
+/** Successful mutations recorded after `sinceMs`, by tool name. */
+export function measuredProgressSince(
+  stepResults: ReadonlyArray<{ toolName: string; success: boolean; timestamp: number }>,
+  sinceMs: number,
+): { mutations: number; tools: string[] } {
+  const edits = stepResults.filter((s) => s.success && s.timestamp > sinceMs && MUTATION_TOOLS.has(s.toolName));
+  return { mutations: edits.length, tools: [...new Set(edits.map((s) => s.toolName))] };
+}
+
+/**
+ * THE ARBITER. Every intervention layer — hard caps, stale-analysis strikes,
+ * the progress assessor, delegated reviews — can return "blocked", and each
+ * judges only the turns it saw. Measured 2026-09-07: four attempts ended
+ * "Task blocked" with real edits made between the episodes that counted the
+ * strikes. One rule, applied to every block: a successful mutation since the
+ * previous intervention is progress, and progress is not blocked — the block
+ * becomes a replan carrying the same directive, and the strike count for the
+ * next episode starts from this intervention.
+ */
 export async function handleBackgroundLoopRecovery(
+  params: Parameters<typeof decideBackgroundLoopRecovery>[0],
+  deps: Parameters<typeof decideBackgroundLoopRecovery>[1],
+): Promise<Awaited<ReturnType<typeof decideBackgroundLoopRecovery>>> {
+  const decision = await decideBackgroundLoopRecovery(params, deps);
+  if (decision.action === "none") return decision;
+  const since = params.tracker.lastInterventionAt();
+  const progress = measuredProgressSince(params.state.stepResults, since);
+  params.tracker.noteIntervention();
+  if (decision.action === "blocked" && progress.mutations > 0) {
+    getLoggerSafe()?.warn("Block downgraded to replan — measured progress since the last intervention", {
+      chatId: params.chatId,
+      mutations: progress.mutations,
+      tools: progress.tools,
+    });
+    const directive = /Suggested action:\s*(.+?)(?:\n|$)/.exec(decision.message ?? "")?.[1]?.trim();
+    return {
+      action: "replan",
+      gate:
+        `[MEASURED PROGRESS] ${progress.mutations} successful edit(s) since the last intervention (${progress.tools.join(", ")}) — ` +
+        "this is not a loop, so the block is withdrawn. Keep going from that work; do not re-analyze it." +
+        (directive ? `\n\nRequired next action: ${directive}` : ""),
+    };
+  }
+  return decision;
+}
+
+async function decideBackgroundLoopRecovery(
   params: {
     chatId: string;
     identityKey: string;
