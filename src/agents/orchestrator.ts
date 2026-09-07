@@ -3930,7 +3930,12 @@ export class Orchestrator {
           },
           { signal: composedSignal, externalSignal },
         );
-        logProviderCall("turn", provider, turnStartedAt, { response }, { chatId });
+        logProviderCall("turn", provider, turnStartedAt, { response }, {
+          chatId,
+          promptChars: effectivePrompt?.length ?? 0,
+          messages: session?.messages?.length ?? 0,
+          tools: toolDefinitions?.length ?? 0,
+        });
         this.classifySilentStreamResponse(response, provider);
         return response;
       } catch (err) {
@@ -4021,7 +4026,13 @@ export class Orchestrator {
       });
       const response = await Promise.race([streamPromise, timeoutGuard.timeoutPromise]);
       timeoutGuard.clear();
-      logProviderCall("turn", provider, turnStartedAt, { response });
+      logProviderCall("turn", provider, turnStartedAt, { response }, {
+        // Where the input tokens come from: measured 2026-09-07 21:56, the
+        // FIRST turn of a sprint carried 48 490 input tokens.
+        promptChars: effectivePrompt?.length ?? 0,
+        messages: session?.messages?.length ?? 0,
+        tools: toolDefinitions?.length ?? 0,
+      });
       // Route empty 200s to the health-failure path (the shared breaker predicate, audit #9).
       this.classifySilentStreamResponse(response, provider);
       return response;

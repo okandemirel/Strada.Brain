@@ -113,7 +113,7 @@ When the task is to build or extend a GAME — a GDD, a design document, "make t
 - Strada.MCP is how the project is built and checked: scene assembly, prefab work, compile verification and play-mode runs all have tools. A plan that ends at "write the code" has not verified anything.
 - Every element the design schedules needs its own ART, planned as work: first unity_my_assets (local cache) or unity_my_assets_cloud (the account's full purchased library) for what the user already owns, then the generator that fits the element's layer — unity_generate_sprite for pixel-canvas pieces, unity_generate_mesh for dimensional ones, unity_prerender_frames to turn a 3D prefab into glossy 2D angle frames — and always the binding of that asset into the element's prefab. Measured 2026-08-26: a run delivered prefab structures and green tests while no scheduled element had any asset at all — the scenes were empty because no goal ever produced the art.${providerHint}${budgetHint}${behavioralHint}${frameworkHint}
 
-Respond ONLY with JSON:
+Respond ONLY with JSON — start your reply with "{" and write no <reasoning> block, no analysis and no prose before it (a reasoning block spends the whole output budget before the plan, measured 2026-09-07: 8192 tokens, no JSON):
 {"nodes": [{"id": "s1", "task": "description", "dependsOn": [], "needsFurtherDecomposition": false}, ...]}`;
 }
 
@@ -128,7 +128,7 @@ Rules:
 - Focus on addressing the root cause of the failure
 - Include verification/retry steps
 
-Respond ONLY with JSON:
+Respond ONLY with JSON — start your reply with "{" and write no <reasoning> block, no analysis and no prose before it (a reasoning block spends the whole output budget before the plan, measured 2026-09-07: 8192 tokens, no JSON):
 {"nodes": [{"id": "r1", "task": "description", "dependsOn": []}, ...]}`;
 
 // =============================================================================
