@@ -84,7 +84,7 @@ export function createWorkspaceRuntimeBridge(params: {
         goalStorage.updateNodeStatus(
           node.id,
           bag.status as GoalStatus,
-          node.result,
+          typeof bag.output === "string" && bag.output.trim() !== "" ? bag.output : node.result,
           typeof bag.error === "string" ? bag.error : node.error,
           node.retryCount,
           node.redecompositionCount,

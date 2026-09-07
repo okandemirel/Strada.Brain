@@ -23,6 +23,9 @@ import {
   buildSupervisorWaveNarrative,
 } from "./supervisor-feedback.js";
 
+/** How much of a node's output the goal row keeps — enough to check the claim, not a transcript. */
+const NODE_OUTPUT_PERSIST_CHARS = 2000;
+
 // =============================================================================
 // TYPES
 // =============================================================================
@@ -219,7 +222,7 @@ export class SupervisorDispatcher {
   private emitNodeWorkspaceStatus(
     node: TaggedGoalNode,
     status: "executing" | "completed" | "failed" | "skipped" | "verifying",
-    result?: Pick<NodeResult, "duration">,
+    result?: Pick<NodeResult, "duration" | "output">,
     error?: string,
   ): void {
     // Before the rootId guard: liveness is about the task being alive, not about
@@ -250,6 +253,13 @@ export class SupervisorDispatcher {
       ...(status === "executing" ? { startedAt: Date.now() } : {}),
       ...(status !== "executing" ? { completedAt: Date.now() } : {}),
       ...(result?.duration ? { elapsed: result.duration } : {}),
+      // The node's own words. Measured 2026-09-07: 215 of 215 goal nodes
+      // marked completed carried result="" — the bridge persisted the row's
+      // old (empty) result because the event never carried the output, so a
+      // goal that "obtained non-placeholder art" left nothing to check.
+      ...(typeof result?.output === "string" && result.output.trim() !== ""
+        ? { output: result.output.slice(0, NODE_OUTPUT_PERSIST_CHARS) }
+        : {}),
       ...(error ? { error } : {}),
       ...(this.conversationId ? { conversationId: this.conversationId } : {}),
     });

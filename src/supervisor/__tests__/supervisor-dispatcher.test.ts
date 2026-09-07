@@ -250,6 +250,30 @@ describe("SupervisorDispatcher", () => {
     }));
   });
 
+  it("carries a completed node's output in its monitor task update", async () => {
+    // Measured 2026-09-07: 215 of 215 completed goal rows held result="" —
+    // the event never carried the output, so the bridge stored nothing.
+    const emit = vi.fn();
+    const executeNode = vi.fn().mockResolvedValue({
+      ...makeOkResult("A"),
+      output: "Generated 3 sprites under Assets/Art/Pigs (provider local).",
+    });
+    const dispatcher = new SupervisorDispatcher({
+      executeNode,
+      config: { maxParallelNodes: 1, nodeTimeoutMs: 5000, maxFailureBudget: 3 },
+      eventEmitter: { emit },
+      rootId: "root-1",
+    });
+
+    await dispatcher.dispatch([makeAssignedNode("A", "Task A", "claude")]);
+
+    expect(emit).toHaveBeenCalledWith("monitor:task_update", expect.objectContaining({
+      nodeId: "A",
+      status: "completed",
+      output: "Generated 3 sprites under Assets/Art/Pigs (provider local).",
+    }));
+  });
+
   it("handles timeout", async () => {
     const executeNode = vi.fn().mockImplementation(
       () => new Promise(resolve => setTimeout(() => resolve(makeOkResult("X")), 10000))
