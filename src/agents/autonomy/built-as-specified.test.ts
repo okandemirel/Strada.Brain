@@ -5,7 +5,11 @@ import os from "node:os";
 import { deflateSync } from "node:zlib";
 import {
   assessBuiltAsSpecified,
+  isPlaceholderGradePng,
   isScaffoldingScene,
+  measureAudioClip,
+  measurePngContent,
+  parseUnityDocuments,
   readEnabledBuildScenes,
 } from "./built-as-specified.js";
 
@@ -133,7 +137,7 @@ describe("assessBuiltAsSpecified — refusal", () => {
     put(
       root,
       "Assets/Scripts/PlayfieldBuilder.cs",
-      "public class PlayfieldBuilder { void Build() { GameObject.CreatePrimitive(PrimitiveType.Cube); } }",
+      "public class PlayfieldBuilder { void Build() { GameObject.CreatePrimitive(PrimitiveType.Cube); GameObject.CreatePrimitive(PrimitiveType.Sphere); } }",
       "66666666666666666666666666666666",
     );
 
@@ -144,7 +148,7 @@ describe("assessBuiltAsSpecified — refusal", () => {
     // Names the scene…
     expect(report.refusal).toContain("Assets/Scenes/ProductionMain.unity");
     // …the counts…
-    expect(report.refusal).toContain("0 renderer components");
+    expect(report.refusal).toContain("0 world renderer components");
     // …and the unbound assets it found.
     expect(report.refusal).toContain("Assets/Prefabs/Ball.prefab");
     expect(report.refusal).toContain("Assets/Art/Models/Pig.fbx");
@@ -434,6 +438,23 @@ function png(width: number, height: number, kind: "flat" | "noise"): Buffer {
   ]);
 }
 
+/** A standalone PNG chunk (length, type, data, crc) for splicing metadata into a fixture. */
+function pngChunk(type: string, data: Buffer): Buffer {
+  const crcTable = Array.from({ length: 256 }, (_, n) => {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    return c >>> 0;
+  });
+  const body = Buffer.concat([Buffer.from(type, "ascii"), data]);
+  let c = 0xffffffff;
+  for (const b of body) c = crcTable[(c ^ b) & 0xff]! ^ (c >>> 8);
+  const len = Buffer.alloc(4);
+  len.writeUInt32BE(data.length);
+  const sum = Buffer.alloc(4);
+  sum.writeUInt32BE((c ^ 0xffffffff) >>> 0);
+  return Buffer.concat([len, body, sum]);
+}
+
 function putBytes(root: string, rel: string, body: Buffer, guid: string): void {
   const abs = join(root, rel);
   mkdirSync(dirname(abs), { recursive: true });
@@ -561,5 +582,163 @@ describe("assessBuiltAsSpecified — audio inventory", () => {
     boundSpriteProject(root, "a0000000000000000000000000000000");
     putBytes(root, "Assets/Art/Real/Pig.png", png(64, 64, "noise"), "a0000000000000000000000000000000");
     expect(assessBuiltAsSpecified(root).disclosures).toContain("Project audio: no audio clips under Assets/ at all.");
+  });
+});
+
+describe("defects the measurement review found (2026-09-07)", () => {
+  const G = (n: string): string => n.repeat(32);
+  const SPRITE_PREFAB_BUILTIN_MAT = (spriteRef: string): string =>
+    `${HEADER}--- !u!1 &7\nGameObject:\n  m_Name: Thing\n` +
+    `--- !u!212 &8\nSpriteRenderer:\n  m_Enabled: 1\n  m_Materials:\n  - {fileID: 10754, guid: 0000000000000000f000000000000000, type: 0}\n` +
+    `  m_Sprite: ${spriteRef}\n`;
+
+  it("a HUD CanvasRenderer does not lift the 'renders NOTHING' refusal", () => {
+    const root = project();
+    buildSettings(root, [{ path: "Assets/Scenes/Main.unity" }]);
+    put(root, "Assets/Scenes/Main.unity",
+      `${HEADER}${CAMERA(0)}--- !u!1 &30\nGameObject:\n  m_Name: Score\n--- !u!222 &31\nCanvasRenderer:\n  m_GameObject: {fileID: 30}\n`, G("5"));
+    put(root, "Assets/Prefabs/Pig.prefab", artPrefab(G("2")), G("1"));
+    put(root, "Assets/Art/pig.png", "pixels", G("2"));
+    put(root, "Assets/Scripts/World.cs", "class W { void B() { GameObject.CreatePrimitive(PrimitiveType.Cube); GameObject.CreatePrimitive(PrimitiveType.Sphere); } }", G("6"));
+    const report = assessBuiltAsSpecified(root);
+    expect(report.shippedRenderers).toBe(1);
+    expect(report.shippedWorldRenderers).toBe(0);
+    expect(report.refusal).toContain("render NOTHING");
+    expect(report.refusal).toContain("1 UI CanvasRenderer/VideoPlayer do not count");
+  });
+
+  it("a PrefabInstance of an imported model is a placed, project-bound mesh", () => {
+    const root = project();
+    buildSettings(root, [{ path: "Assets/Scenes/Main.unity" }]);
+    put(root, "Assets/Scenes/Main.unity", `${HEADER}${CAMERA(0)}${prefabInstance(G("a"), 1001)}${prefabInstance(G("b"), 1002)}`, G("5"));
+    put(root, "Assets/Models/Tree.fbx", "binary", G("a"));
+    put(root, "Assets/Models/House.fbx", "binary", G("b"));
+    const report = assessBuiltAsSpecified(root);
+    expect(report.refusal).toBeUndefined();
+    expect(report.shippedRenderers).toBe(2);
+    expect(report.scenes[0]!.modelsBound.sort()).toEqual(["Assets/Models/House.fbx", "Assets/Models/Tree.fbx"]);
+    expect(report.scenes[0]!.unresolvedPrefabGuids).toEqual([]);
+    expect(report.unboundModels).toEqual([]);
+  });
+
+  it("a Resources.Load game is referenced by name, not refused as unbound", () => {
+    const root = project();
+    buildSettings(root, [{ path: "Assets/Scenes/Main.unity" }]);
+    put(root, "Assets/Scenes/Main.unity", `${HEADER}${CAMERA(0)}--- !u!114 &500\nMonoBehaviour:\n  m_EditorClassIdentifier: Assembly-CSharp::Spawner\n`, G("5"));
+    put(root, "Assets/Resources/Prefabs/Pig.prefab", artPrefab(G("2")), G("1"));
+    put(root, "Assets/Art/pig.png", "pixels", G("2"));
+    put(root, "Assets/Scripts/Spawner.cs", "class Spawner { void S() { Instantiate(Resources.Load(\"Prefabs/Pig\")); } }", G("6"));
+    const report = assessBuiltAsSpecified(root);
+    expect(report.refusal).toBeUndefined();
+    expect(report.referencedOnlyRenderers).toBe(1);
+    expect(report.unboundPrefabs).toEqual([]);
+    expect(report.unboundSprites).toEqual([]);
+  });
+
+  it("a Tilemap's tiles, a UI Image's sprite and a PrefabInstance override are project bindings", () => {
+    const root = project();
+    buildSettings(root, [{ path: "Assets/Scenes/Level1.unity" }]);
+    put(root, "Assets/Scenes/Level1.unity",
+      `${HEADER}${CAMERA(0)}--- !u!1 &200\nGameObject:\n  m_Name: Ground\n` +
+      `--- !u!1839735485 &201\nTilemap:\n  m_Tiles:\n  - first: {x: 0, y: 0, z: 0}\n    second:\n      m_TileIndex: 0\n  m_TileAssetArray:\n  - m_RefCount: 1\n    m_Data: {fileID: 11400000, guid: ${G("2")}, type: 2}\n  m_TileSpriteArray:\n  - m_RefCount: 1\n    m_Data: {fileID: 21300000, guid: ${G("3")}, type: 3}\n` +
+      `--- !u!483693784 &202\nTilemapRenderer:\n  m_Enabled: 1\n  m_Materials:\n  - {fileID: 10754, guid: 0000000000000000f000000000000000, type: 0}\n` +
+      `--- !u!114 &203\nMonoBehaviour:\n  m_EditorClassIdentifier: UnityEngine.UI::UnityEngine.UI.Image\n  m_Sprite: {fileID: 21300000, guid: ${G("8")}, type: 3}\n` +
+      `--- !u!1001 &1001\nPrefabInstance:\n  m_Modification:\n    m_Modifications:\n    - target: {fileID: 8, guid: ${G("1")}, type: 3}\n      propertyPath: m_Sprite\n      value: \n      objectReference: {fileID: 21300000, guid: ${G("4")}, type: 3}\n  m_SourcePrefab: {fileID: 100100000, guid: ${G("1")}, type: 3}\n`,
+      G("5"));
+    put(root, "Assets/Tiles/Grass.asset", `${HEADER}--- !u!114 &11400000\nMonoBehaviour:\n  m_Sprite: {fileID: 21300000, guid: ${G("3")}, type: 3}\n`, G("2"));
+    put(root, "Assets/Art/grass.png", "pixels", G("3"));
+    put(root, "Assets/Art/hud.png", "pixels", G("8"));
+    put(root, "Assets/Prefabs/SpriteObject.prefab", SPRITE_PREFAB_BUILTIN_MAT("{fileID: 0}"), G("1"));
+    put(root, "Assets/Art/player.png", "pixels", G("4"));
+    put(root, "Assets/Art/unused_concept.png", "pixels", G("9"));
+    const report = assessBuiltAsSpecified(root);
+    expect(report.refusal).toBeUndefined();
+    expect(report.shippedProjectRefs).toBeGreaterThanOrEqual(3);
+    expect(report.unboundSprites).toEqual(["Assets/Art/unused_concept.png"]);
+  });
+
+  it("follows materials and animation clips to the textures they bind", () => {
+    const root = project();
+    buildSettings(root, [{ path: "Assets/Scenes/Main.unity" }]);
+    put(root, "Assets/Scenes/Main.unity", `${HEADER}${CAMERA(0)}${prefabInstance(G("1"))}`, G("5"));
+    put(root, "Assets/Prefabs/Tree.prefab",
+      `${HEADER}--- !u!1 &7\nGameObject:\n  m_Name: Tree\n--- !u!33 &9\nMeshFilter:\n  m_Mesh: {fileID: 4300000, guid: ${G("a")}, type: 3}\n` +
+      `--- !u!23 &8\nMeshRenderer:\n  m_Enabled: 1\n  m_Materials:\n  - {fileID: 2100000, guid: ${G("c")}, type: 2}\n`, G("1"));
+    put(root, "Assets/Models/Tree.fbx", "binary", G("a"));
+    put(root, "Assets/Materials/Bark.mat", `${HEADER}--- !u!21 &2100000\nMaterial:\n  m_SavedProperties:\n    m_TexEnvs:\n    - _MainTex:\n        m_Texture: {fileID: 2800000, guid: ${G("d")}, type: 3}\n`, G("c"));
+    put(root, "Assets/Textures/bark.png", "pixels", G("d"));
+    const report = assessBuiltAsSpecified(root);
+    expect(report.refusal).toBeUndefined();
+    expect(report.unboundSprites).toEqual([]);
+  });
+
+  it("reads CRLF files, skips stripped documents, counts Terrain, and names a missing entry scene", () => {
+    const crlf = `${HEADER}${CAMERA(0)}${prefabInstance(G("1"))}--- !u!212 &88 stripped\nSpriteRenderer:\n  m_PrefabInstance: {fileID: 1001}\n`.replace(/\n/g, "\r\n");
+    expect(parseUnityDocuments(crlf).map((d) => d.className)).toEqual(["Camera", "PrefabInstance"]);
+    const root = project();
+    buildSettings(root, [{ path: "Assets/Scenes/Main.unity" }]);
+    put(root, "Assets/Scenes/Main.unity", crlf, G("5"));
+    put(root, "Assets/Prefabs/Pig.prefab", artPrefab(G("2")), G("1"));
+    put(root, "Assets/Art/pig.png", "pixels", G("2"));
+    const report = assessBuiltAsSpecified(root);
+    expect(report.refusal).toBeUndefined();
+    expect(report.shippedRenderers).toBe(1); // not 2: the stripped doc is the same renderer
+    expect(report.scenes[0]!.camerasPerspective).toBe(1);
+
+    const terrain = project();
+    buildSettings(terrain, [{ path: "Assets/Scenes/World.unity" }]);
+    put(terrain, "Assets/Scenes/World.unity", `${HEADER}${CAMERA(0)}--- !u!218 &40\nTerrain:\n  m_TerrainData: {fileID: 15600000, guid: ${G("e")}, type: 2}\n`, G("5"));
+    put(terrain, "Assets/Terrain/World.asset", "TerrainData", G("e"));
+    put(terrain, "Assets/Art/rock.png", "pixels", G("9"));
+    const t = assessBuiltAsSpecified(terrain);
+    expect(t.refusal).toBeUndefined();
+    expect(t.shippedRenderers).toBe(1);
+
+    const missing = project();
+    buildSettings(missing, [{ path: "Assets/Scenes/Gone.unity" }, { path: "Assets/Scenes/Main.unity" }]);
+    put(missing, "Assets/Scenes/Main.unity", `${HEADER}${CAMERA(0)}`, G("5"));
+    put(missing, "Assets/Art/pig.png", "pixels", G("2"));
+    expect(assessBuiltAsSpecified(missing).refusal).toContain("Gone.unity — missing from disk");
+  });
+
+  it("one CreatePrimitive call site beside referenced art is a disclosure; two are the world", () => {
+    const build = (calls: number): string => {
+      const root = project();
+      buildSettings(root, [{ path: "Assets/Scenes/Main.unity" }]);
+      put(root, "Assets/Scenes/Main.unity", `${HEADER}${CAMERA(0)}--- !u!114 &500\nMonoBehaviour:\n  _config: {fileID: 11400000, guid: ${G("c")}, type: 2}\n`, G("5"));
+      put(root, "Assets/Settings/Config.asset", `${HEADER}--- !u!114 &11400000\nMonoBehaviour:\n  _pig: {fileID: 7, guid: ${G("1")}, type: 3}\n`, G("c"));
+      put(root, "Assets/Prefabs/Pig.prefab", artPrefab(G("2")), G("1"));
+      put(root, "Assets/Art/pig.png", "pixels", G("2"));
+      put(root, "Assets/Scripts/Fader.cs", `class Fader { void F() { ${"GameObject.CreatePrimitive(PrimitiveType.Quad); ".repeat(calls)} } }`, G("6"));
+      return assessBuiltAsSpecified(root).refusal ?? "none";
+    };
+    expect(build(1)).toBe("none");
+    expect(build(2)).toContain("render NOTHING");
+  });
+
+  it("a WAV whose data size is 0 (streamed) runs to the end of the file", () => {
+    const root = project();
+    const clip = wav(90, 3);
+    clip.writeUInt32LE(0, 40);
+    putBytes(root, "Assets/Audio/stream.wav", clip, G("d"));
+    expect(measureAudioClip(join(root, "Assets/Audio/stream.wav")).seconds).toBeCloseTo(90, 2);
+  });
+
+  it("placeholder grade is what the pixels say, not what the file weighs", () => {
+    // Flat shapes: few colours, edges only on outlines — whatever the encoder does.
+    const root = project();
+    const flat = png(64, 64, "flat");
+    const flatWithText = Buffer.concat([flat.subarray(0, 33), pngChunk("tEXt", Buffer.alloc(3000, 0x41)), flat.subarray(33)]);
+    putBytes(root, "Assets/Art/flat.png", flat, G("1"));
+    putBytes(root, "Assets/Art/flat_text.png", flatWithText, G("2"));
+    putBytes(root, "Assets/Art/noise.png", png(64, 64, "noise"), G("3"));
+    putBytes(root, "Assets/Art/noise_big.png", png(512, 512, "noise"), G("4"));
+    expect(isPlaceholderGradePng(join(root, "Assets/Art/flat.png"))).toBe(true);
+    expect(isPlaceholderGradePng(join(root, "Assets/Art/flat_text.png"))).toBe(true); // 3 KB of metadata changes nothing
+    expect(isPlaceholderGradePng(join(root, "Assets/Art/noise.png"))).toBe(false);
+    expect(isPlaceholderGradePng(join(root, "Assets/Art/noise_big.png"))).toBe(false); // 0.0x bytes/pixel, still art
+    const content = measurePngContent(flat)!;
+    expect(content.colours).toBeLessThanOrEqual(2);
+    expect(measurePngContent(png(64, 64, "noise"))!.colours).toBeGreaterThan(12);
   });
 });

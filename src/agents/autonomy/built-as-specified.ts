@@ -34,6 +34,7 @@
  */
 
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { inflateSync } from "node:zlib";
 import { createHash } from "node:crypto";
 import { basename, join, relative, sep } from "node:path";
 import type { SceneWiringIo } from "./scene-wiring.js";
@@ -121,7 +122,16 @@ const RENDERER_CLASSES: ReadonlySet<string> = new Set([
   "SpriteShapeRenderer",
   "CanvasRenderer",
   "VideoPlayer",
+  "Terrain",
 ]);
+
+/**
+ * Renderers that draw UI or video, not the game world. They are counted and
+ * reported, but the "renders NOTHING" refusal looks past them: review
+ * 2026-09-07 — one HUD Text (a CanvasRenderer) on the audited PixelFlow
+ * shape lifted the refusal while the world was still CreatePrimitive cubes.
+ */
+const NON_WORLD_RENDERER_CLASSES: ReadonlySet<string> = new Set(["CanvasRenderer", "VideoPlayer"]);
 
 /** Renderer classes that draw actual 3D geometry (item 2's disclosure). */
 const MESH_RENDERER_CLASSES: ReadonlySet<string> = new Set([
@@ -134,7 +144,7 @@ const SPRITE_EXT_RE = /\.(?:png|jpg|jpeg|psd|tga|exr|tif|tiff)$/iu;
 const AUDIO_EXT_RE = /\.(?:wav|ogg|mp3|aif|aiff|flac)$/iu;
 /** A clip shorter than this is a blip, whatever it is named. */
 const SHORT_AUDIO_SECONDS = 0.5;
-const FOLLOWABLE_EXT_RE = /\.(?:prefab|asset|unity|mat|controller|playable|spriteatlas)$/iu;
+const FOLLOWABLE_EXT_RE = /\.(?:prefab|asset|unity|mat|controller|overrideController|playable|spriteatlas|anim)$/iu;
 
 // ─── Result shapes ─────────────────────────────────────────────────────────
 
@@ -153,6 +163,8 @@ export interface SceneStructure {
   readonly scaffolding: boolean;
   /** Renderer components in the scene file itself. */
   readonly renderersInScene: number;
+  /** Of the scene's own and placed renderers, those that draw the WORLD (not UI canvas / video). */
+  readonly worldRenderersShipped: number;
   /**
    * Renderer components inside the prefabs the scene PLACES (a PrefabInstance
    * whose m_SourcePrefab guid resolves to a .prefab, recursively). A placed
@@ -235,6 +247,8 @@ export interface BuiltAsSpecifiedReport {
   readonly shippedScenes: readonly SceneStructure[];
   /** Renderers actually placed in the shipped scenes (scene + placed prefabs). */
   readonly shippedRenderers: number;
+  /** Of those, the ones that draw the world (UI canvas and video excluded). */
+  readonly shippedWorldRenderers: number;
   /** Renderers in prefabs the shipped scenes only reference, never place. */
   readonly referencedOnlyRenderers: number;
   readonly shippedProjectRefs: number;
@@ -250,6 +264,8 @@ export interface BuiltAsSpecifiedReport {
   readonly placeholderSpritePaths: readonly string[];
   /** Runtime scripts that build geometry with CreatePrimitive/PrimitiveType. */
   readonly primitiveScripts: readonly string[];
+  /** CreatePrimitive( call sites across those scripts — one fade quad is not a world. */
+  readonly primitiveCallSites: number;
   /**
    * Set ONLY on the strong, unambiguous case. Names the scene, the counts and
    * the unbound assets — a refusal that cannot be acted on is a wall.
@@ -280,15 +296,21 @@ export function parseUnityDocuments(text: string): UnityDocument[] {
   const docs: UnityDocument[] = [];
   let className: string | undefined;
   let lines: string[] = [];
+  let stripped = false;
   const flush = (): void => {
-    if (className !== undefined) docs.push({ className, lines });
+    // A `stripped` document is a prefab component the scene references, not
+    // a component of its own — counting it doubled every placed renderer
+    // (review 2026-09-07).
+    if (className !== undefined && !stripped) docs.push({ className, lines });
     className = undefined;
     lines = [];
   };
-  for (const line of text.split("\n")) {
+  // CRLF files lost every keyed line to `(.*)$` (review 2026-09-07).
+  for (const line of text.split(/\r?\n/)) {
     if (line.startsWith("--- !u!")) {
       flush();
       className = "";
+      stripped = /\sstripped\s*$/.test(line);
       continue;
     }
     if (className === "") {
@@ -330,6 +352,8 @@ function describeBuiltIn(ref: UnityRef): string {
 
 interface Tally {
   renderers: number;
+  /** Renderers that draw the world — everything but UI canvas and video. */
+  worldRenderers: number;
   meshRenderers: number;
   spriteRenderers: number;
   projectRefs: number;
@@ -356,6 +380,7 @@ interface Tally {
 function newTally(): Tally {
   return {
     renderers: 0,
+    worldRenderers: 0,
     meshRenderers: 0,
     spriteRenderers: 0,
     projectRefs: 0,
@@ -383,14 +408,45 @@ function scanUnityFile(text: string, tally: Tally): void {
     const isRenderer = RENDERER_CLASSES.has(doc.className);
     if (isRenderer) {
       tally.renderers++;
+      if (!NON_WORLD_RENDERER_CLASSES.has(doc.className)) tally.worldRenderers++;
       if (MESH_RENDERER_CLASSES.has(doc.className)) tally.meshRenderers++;
       if (doc.className === "SpriteRenderer") tally.spriteRenderers++;
     }
     if (doc.className === "GameObject") tally.gameObjects++;
     if (doc.className === "PrefabInstance") tally.prefabInstances++;
     const wantsRefs = isRenderer || doc.className === "MeshFilter";
+    // Project bindings live off the renderer document too (review 2026-09-07):
+    // a Tilemap's tile sprites, a UI Image's sprite, a Terrain's data, and a
+    // PrefabInstance's per-instance overrides of m_Sprite / m_Mesh /
+    // m_Materials. Read only from the renderer, a legitimate tilemap level or
+    // an instance-configured sprite prefab measured as "all built-in".
+    let inTileList = false;
+    let overridePath: string | undefined;
     let inMaterialList = false;
     for (const line of doc.lines) {
+      if (doc.className === "Tilemap") {
+        // Only the document's own keys (two-space indent) open or close a
+        // list; a list item's nested keys (m_Data, m_RefCount) do not.
+        const keyedTile = /^  ([A-Za-z_][A-Za-z0-9_]*):/.exec(line);
+        if (keyedTile) inTileList = keyedTile[1] === "m_TileSpriteArray" || keyedTile[1] === "m_TileAssetArray";
+        if (inTileList) {
+          const ref = parseRef(line);
+          if (ref?.guid) recordRef(ref, tally);
+        }
+        continue;
+      }
+      if (doc.className === "PrefabInstance") {
+        const pathMatch = /^\s*-?\s*propertyPath:\s*(\S+)\s*$/.exec(line);
+        if (pathMatch) {
+          overridePath = pathMatch[1];
+        } else if (overridePath !== undefined && /^\s*objectReference:/.test(line)) {
+          if (/^(?:m_Sprite|m_Mesh|m_Materials\.Array\.data\[\d+\])$/.test(overridePath)) {
+            const ref = parseRef(line);
+            if (ref) recordRef(ref, tally);
+          }
+          overridePath = undefined;
+        }
+      }
       const keyed = /^\s*([A-Za-z_][A-Za-z0-9_]*):(.*)$/.exec(line);
       if (keyed) {
         const key = keyed[1]!;
@@ -415,6 +471,14 @@ function scanUnityFile(text: string, tally: Tally): void {
           const ref = parseRef(rest);
           if (ref) recordRef(ref, tally);
         }
+        if (doc.className === "Terrain" && key === "m_TerrainData") {
+          const ref = parseRef(rest);
+          if (ref) recordRef(ref, tally);
+        }
+        if (doc.className === "MonoBehaviour" && key === "m_Sprite") {
+          const ref = parseRef(rest); // UI Image and friends
+          if (ref?.guid) recordRef(ref, tally);
+        }
         continue;
       }
       if (inMaterialList && /^\s*-\s*\{fileID:/.test(line)) {
@@ -430,6 +494,7 @@ function scanUnityFile(text: string, tally: Tally): void {
 
 function mergeTally(into: Tally, from: Tally): void {
   into.renderers += from.renderers;
+  into.worldRenderers += from.worldRenderers;
   into.meshRenderers += from.meshRenderers;
   into.spriteRenderers += from.spriteRenderers;
   into.projectRefs += from.projectRefs;
@@ -465,7 +530,7 @@ export function readEnabledBuildScenes(projectRoot: string, io: BuiltAsSpecified
   }
   const scenes: string[] = [];
   let enabled = false;
-  for (const line of text.split("\n")) {
+  for (const line of text.split(/\r?\n/)) {
     const enabledMatch = /^\s*-\s*enabled:\s*(\d)\s*$/.exec(line);
     if (enabledMatch) {
       enabled = enabledMatch[1] === "1";
@@ -523,6 +588,7 @@ export function assessBuiltAsSpecified(
     scenes: [] as SceneStructure[],
     shippedScenes: [] as SceneStructure[],
     shippedRenderers: 0,
+    shippedWorldRenderers: 0,
     referencedOnlyRenderers: 0,
     shippedProjectRefs: 0,
     shippedBuiltInRefs: 0,
@@ -534,6 +600,7 @@ export function assessBuiltAsSpecified(
     unboundSprites: [] as string[],
     placeholderSpritePaths: [] as string[],
     primitiveScripts: [] as string[],
+    primitiveCallSites: 0,
     disclosures: [] as string[],
   };
   if (!io.exists(assetsRoot)) {
@@ -556,7 +623,7 @@ export function assessBuiltAsSpecified(
 
   // One walk, reused by every rule below.
   const files = io
-    .listFiles(assetsRoot, (f) => /\.(?:meta|prefab|asset|unity|cs)$/iu.test(f))
+    .listFiles(assetsRoot, (f) => /\.(?:meta|prefab|asset|unity|cs|mat|controller|overrideController|playable|spriteatlas|anim)$/iu.test(f))
     .map((f) => relative(projectRoot, f).split(sep).join("/"));
   const fileSet = new Set(files);
   if (files.length >= walkBudget) {
@@ -565,6 +632,12 @@ export function assessBuiltAsSpecified(
         "scripts beyond that were not read, so art may be reported as unbound when it is not",
     );
   }
+
+  // Assets a scene reaches WITHOUT a guid (review 2026-09-07): anything under
+  // a Resources/ folder is loadable by name, and Addressables are keyed by
+  // string in AddressableAssetsData. A Resources.Load game refused as
+  // "render NOTHING … prefab unbound" was legitimately built.
+  const implicitlyReachable: string[] = [];
 
   // guid → project-relative path, from the .meta sidecars Unity writes.
   const guidToPath = new Map<string, string>();
@@ -577,6 +650,17 @@ export function assessBuiltAsSpecified(
       continue;
     }
     if (guid) guidToPath.set(guid, rel.slice(0, -".meta".length));
+  }
+  for (const [guid, path] of guidToPath) {
+    if (/(^|\/)Resources\//.test(path)) implicitlyReachable.push(guid);
+  }
+  for (const rel of files) {
+    if (!/^Assets\/AddressableAssetsData\/.*\.asset$/i.test(rel)) continue;
+    try {
+      for (const g of collectGuids(io.readFile(join(projectRoot, rel)))) implicitlyReachable.push(g);
+    } catch {
+      incomplete.push(`${rel} (Addressables data) could not be read`);
+    }
   }
 
   // ── Per-scene structure, prefabs followed by guid ──────────────────────
@@ -592,6 +676,7 @@ export function assessBuiltAsSpecified(
         scaffolding,
         renderersInScene: 0,
         renderersInPlacedPrefabs: 0,
+        worldRenderersShipped: 0,
         renderersInReferencedPrefabs: 0,
         meshRenderers: 0,
         spriteRenderers: 0,
@@ -618,6 +703,11 @@ export function assessBuiltAsSpecified(
       incomplete.push(`${scenePath} could not be read — its contents are unmeasured`);
       continue;
     }
+    if (sceneText.slice(0, 4096).includes("\0")) {
+      // Force Binary / Mixed serialization: nothing here is text to scan.
+      incomplete.push(`${scenePath} is binary-serialized, not text — its contents are unmeasured`);
+      continue;
+    }
     scanUnityFile(sceneText, own);
 
     // PLACED: prefab instances the scene actually contains, followed
@@ -630,6 +720,17 @@ export function assessBuiltAsSpecified(
     while (placedQueue.length > 0 && placedFiles.size < 2_000) {
       const guid = placedQueue.shift()!;
       const target = guidToPath.get(guid);
+      // Dragging an FBX into the Hierarchy writes a PrefabInstance whose
+      // source is the model itself (review 2026-09-07): that is a placed,
+      // project-bound mesh, not an unresolved prefab.
+      if (target && MODEL_EXT_RE.test(target)) {
+        placed.renderers++;
+        placed.worldRenderers++;
+        placed.meshRenderers++;
+        placed.projectRefs++;
+        placed.refGuids.add(guid);
+        continue;
+      }
       if (!target || !target.endsWith(".prefab") || !fileSet.has(target)) {
         unresolved.add(guid);
         continue;
@@ -659,7 +760,8 @@ export function assessBuiltAsSpecified(
     // accusation. Its renderers are reported separately, never as shipped.
     const reach = new Set<string>();
     const queue: string[] = [];
-    for (const g of collectGuids(sceneText)) {
+    for (const g of [...collectGuids(sceneText), ...implicitlyReachable]) {
+      if (reach.has(g)) continue;
       reach.add(g);
       queue.push(g);
     }
@@ -707,6 +809,7 @@ export function assessBuiltAsSpecified(
       scaffolding,
       renderersInScene: own.renderers,
       renderersInPlacedPrefabs: placed.renderers,
+      worldRenderersShipped: own.worldRenderers + placed.worldRenderers,
       renderersInReferencedPrefabs: referencedOnly.renderers,
       meshRenderers: own.meshRenderers + placed.meshRenderers,
       spriteRenderers: own.spriteRenderers + placed.spriteRenderers,
@@ -785,6 +888,7 @@ export function assessBuiltAsSpecified(
 
   // ── Geometry built in code ────────────────────────────────────────────
   const primitiveScripts: string[] = [];
+  let primitiveCallSites = 0;
   for (const rel of files) {
     if (!rel.endsWith(".cs") || !isRuntimeScript(rel)) continue;
     let text: string;
@@ -793,13 +897,18 @@ export function assessBuiltAsSpecified(
     } catch {
       continue;
     }
-    if (PRIMITIVE_RE.test(stripComments(text))) primitiveScripts.push(rel);
+    const clean = stripComments(text);
+    if (PRIMITIVE_RE.test(clean)) {
+      primitiveScripts.push(rel);
+      primitiveCallSites += (clean.match(/\bCreatePrimitive\s*\(/gu) ?? []).length;
+    }
   }
 
   const shippedScenes = scenes.filter((s) => !s.scaffolding && !s.missing);
   const sum = (pick: (s: SceneStructure) => number): number =>
     shippedScenes.reduce((total, s) => total + pick(s), 0);
   const shippedRenderers = sum((s) => s.renderersInScene + s.renderersInPlacedPrefabs);
+  const shippedWorldRenderers = sum((s) => s.worldRenderersShipped);
   const referencedOnlyRenderers = sum((s) => s.renderersInReferencedPrefabs);
   const shippedProjectRefs = sum((s) => s.projectRefs);
   const shippedBuiltInRefs = sum((s) => s.builtInRefs);
@@ -812,6 +921,7 @@ export function assessBuiltAsSpecified(
     scenes,
     shippedScenes,
     shippedRenderers,
+    shippedWorldRenderers,
     referencedOnlyRenderers,
     shippedProjectRefs,
     shippedBuiltInRefs,
@@ -831,6 +941,7 @@ export function assessBuiltAsSpecified(
     unboundSprites,
     placeholderSpritePaths,
     primitiveScripts,
+    primitiveCallSites,
     incomplete,
   };
 
@@ -976,9 +1087,12 @@ function structuralRefusal(
   // The entry scene is build index 0, whatever it is; when that slot holds
   // scaffolding the message says so rather than promoting the next scene.
   const entryScene = totals.entryScene ?? shippedScenes[0]!.scene;
+  const entryRecord = report.scenes.find((s) => s.scene === entryScene);
   const entry = `entry scene (build index 0) ${entryScene}${
     totals.entryScene !== undefined && shippedScenes[0]?.scene !== totals.entryScene
-      ? " — itself test scaffolding"
+      ? entryRecord?.missing
+        ? " — missing from disk"
+        : " — itself test scaffolding"
       : ""
   }`;
   // The one fact that tells a bounced sprint where to start: how empty the
@@ -999,11 +1113,18 @@ function structuralRefusal(
         `${report.unboundSprites.length} sprite textures that no enabled scene reaches` +
         (unboundSample.length > 0 ? ` (e.g. ${unboundSample.join(", ")})` : "");
 
-  if (shippedRenderers === 0 && (report.referencedOnlyRenderers === 0 || report.primitiveScripts.length > 0)) {
+  // UI canvases and video do not count as the world (review 2026-09-07), and
+  // ONE runtime script touching PrimitiveType (a fade quad) does not turn a
+  // game whose art is referenced from a config into "primitives" — two or
+  // more do.
+  const uiOnly = shippedRenderers - report.shippedWorldRenderers;
+  const primitivesAreTheWorld =
+    report.primitiveCallSites >= 2 || (report.referencedOnlyRenderers === 0 && report.primitiveScripts.length > 0);
+  if (report.shippedWorldRenderers === 0 && (report.referencedOnlyRenderers === 0 || primitivesAreTheWorld)) {
     return (
       `The shipped scenes render NOTHING: across ${shippedScenes.length} enabled non-scaffolding ` +
-      `scene${shippedScenes.length === 1 ? "" : "s"} — ${entry} — there are 0 renderer ` +
-      `components (0 MeshRenderer/SkinnedMeshRenderer, 0 SpriteRenderer), in the scenes themselves and in ` +
+      `scene${shippedScenes.length === 1 ? "" : "s"} — ${entry} — there are 0 world renderer ` +
+      `components (0 MeshRenderer/SkinnedMeshRenderer, 0 SpriteRenderer${uiOnly > 0 ? `; ${uiOnly} UI CanvasRenderer/VideoPlayer do not count` : ""}), in the scenes themselves and in ` +
       `every prefab they place.${entryHolds} Meanwhile the project holds ${report.artInventory.prefabs} prefabs, ` +
       `${report.artInventory.models} imported models and ${report.artInventory.sprites} sprite textures, of ` +
       `which ${unboundText}.` +
@@ -1087,7 +1208,10 @@ export function measureAudioClip(absPath: string): { hash?: string; seconds?: nu
       rate = bytes.readUInt32LE(at + 12);
       bits = bytes.readUInt16LE(at + 22);
     } else if (id === "data") {
-      dataBytes = Math.min(size, bytes.length - at - 8);
+      // A streaming encoder writes size 0 (or 0xFFFFFFFF): the data runs to
+      // the end of the file, not for zero seconds (review 2026-09-07).
+      const remaining = bytes.length - at - 8;
+      dataBytes = size === 0 || size > remaining ? remaining : size;
       break;
     }
     at += 8 + size + (size % 2);
@@ -1108,7 +1232,156 @@ function newestFirst(projectRoot: string, rels: readonly string[]): string[] {
   return stamped.sort((a, b) => b.mtime - a.mtime).map((s) => s.rel);
 }
 
-/** True only for a PNG that was read, parsed, and measured under the threshold. Unreadable is not placeholder. */
+/**
+ * Decode an 8-bit, non-interlaced PNG (grey, RGB, palette, grey+alpha, RGBA;
+ * 16-bit takes the high byte) to RGBA. Null for anything else, or anything
+ * larger than the decode budget.
+ */
+export function decodePngRgba(bytes: Uint8Array): { width: number; height: number; rgba: Uint8Array } | null {
+  const dims = readPngDimensions(bytes);
+  if (dims === null || dims.width * dims.height > PNG_DECODE_MAX_PIXELS) return null;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const bitDepth = bytes[24]!;
+  const colorType = bytes[25]!;
+  const interlace = bytes[28]!;
+  if (interlace !== 0 || (bitDepth !== 8 && bitDepth !== 16)) return null;
+  const channels = ({ 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 } as Record<number, number | undefined>)[colorType];
+  if (channels === undefined) return null;
+  const idat: Uint8Array[] = [];
+  let palette: Uint8Array | undefined;
+  let trns: Uint8Array | undefined;
+  let at = 8;
+  while (at + 8 <= bytes.length) {
+    const len = view.getUint32(at);
+    const type = String.fromCharCode(bytes[at + 4]!, bytes[at + 5]!, bytes[at + 6]!, bytes[at + 7]!);
+    const data = bytes.subarray(at + 8, at + 8 + len);
+    if (type === "IDAT") idat.push(data);
+    else if (type === "PLTE") palette = data;
+    else if (type === "tRNS") trns = data;
+    else if (type === "IEND") break;
+    at += 12 + len;
+  }
+  let raw: Uint8Array;
+  try {
+    raw = inflateSync(Buffer.concat(idat.map((c) => Buffer.from(c))));
+  } catch {
+    return null;
+  }
+  const bytesPerSample = bitDepth / 8;
+  const bpp = channels * bytesPerSample;
+  const stride = dims.width * bpp;
+  if (raw.length < (stride + 1) * dims.height) return null;
+  const rgba = new Uint8Array(dims.width * dims.height * 4);
+  const prev = new Uint8Array(stride);
+  const cur = new Uint8Array(stride);
+  let inAt = 0;
+  for (let y = 0; y < dims.height; y++) {
+    const filter = raw[inAt++]!;
+    for (let x = 0; x < stride; x++) {
+      const a = x >= bpp ? cur[x - bpp]! : 0;
+      const b = prev[x]!;
+      const c = x >= bpp ? prev[x - bpp]! : 0;
+      let v = raw[inAt + x]!;
+      if (filter === 1) v += a;
+      else if (filter === 2) v += b;
+      else if (filter === 3) v += (a + b) >> 1;
+      else if (filter === 4) {
+        const pp = a + b - c;
+        const pa = Math.abs(pp - a);
+        const pb = Math.abs(pp - b);
+        const pc = Math.abs(pp - c);
+        v += pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
+      }
+      cur[x] = v & 0xff;
+    }
+    inAt += stride;
+    for (let px = 0; px < dims.width; px++) {
+      const o = (y * dims.width + px) * 4;
+      const i = px * bpp;
+      const sample = (k: number): number => cur[i + k * bytesPerSample]!;
+      if (colorType === 6) { rgba[o] = sample(0); rgba[o + 1] = sample(1); rgba[o + 2] = sample(2); rgba[o + 3] = sample(3); }
+      else if (colorType === 2) { rgba[o] = sample(0); rgba[o + 1] = sample(1); rgba[o + 2] = sample(2); rgba[o + 3] = 255; }
+      else if (colorType === 0) { const g = sample(0); rgba[o] = g; rgba[o + 1] = g; rgba[o + 2] = g; rgba[o + 3] = 255; }
+      else if (colorType === 4) { const g = sample(0); rgba[o] = g; rgba[o + 1] = g; rgba[o + 2] = g; rgba[o + 3] = sample(1); }
+      else {
+        const idx = cur[i]!;
+        rgba[o] = palette?.[idx * 3] ?? 0;
+        rgba[o + 1] = palette?.[idx * 3 + 1] ?? 0;
+        rgba[o + 2] = palette?.[idx * 3 + 2] ?? 0;
+        rgba[o + 3] = trns !== undefined && idx < trns.length ? trns[idx]! : 255;
+      }
+    }
+    prev.set(cur);
+  }
+  return { width: dims.width, height: dims.height, rgba };
+}
+
+const PNG_DECODE_MAX_PIXELS = 4_194_304;
+/** Distinct colours (4 bits per channel, transparent folded to one) at or below which an image is flat shapes. */
+const PLACEHOLDER_MAX_COLOURS = 12;
+/** Share of sampled pixels whose right or lower neighbour differs — flat shapes have edges only on their outlines. */
+const PLACEHOLDER_MAX_EDGE_SHARE = 0.2;
+
+/**
+ * What the PIXELS say (review 2026-09-07): the byte-per-pixel heuristic was
+ * resolution-dependent — pixel art exported at 8× and a 256 px anti-aliased
+ * icon fell under the threshold, while a 300-byte square with a 3 KB iCCP
+ * chunk or a stored (level 0) deflate rose above it. A placeholder is a flat
+ * shape: a handful of colours and edges only along its outlines. Sampled on
+ * a ≤64×64 grid so a 2048² texture costs the same as a sprite.
+ */
+export function measurePngContent(bytes: Uint8Array): { colours: number; edgeShare: number } | null {
+  const decoded = decodePngRgba(bytes);
+  if (decoded === null) return null;
+  const { width, height, rgba } = decoded;
+  const step = Math.max(1, Math.ceil(Math.max(width, height) / 64));
+  const key = (x: number, y: number): number => {
+    const o = (y * width + x) * 4;
+    const a = rgba[o + 3]!;
+    if (a < 16) return -1;
+    return ((rgba[o]! >> 4) << 12) | ((rgba[o + 1]! >> 4) << 8) | ((rgba[o + 2]! >> 4) << 4) | (a >> 4);
+  };
+  const colours = new Set<number>();
+  let sampled = 0;
+  let edges = 0;
+  for (let y = 0; y < height; y += step) {
+    for (let x = 0; x < width; x += step) {
+      const k = key(x, y);
+      colours.add(k);
+      sampled++;
+      // The NEXT grid sample, not the adjacent pixel: pixel art exported at
+      // 8× or 16× keeps its edge density this way, a flat disc does not.
+      const right = x + step < width ? key(x + step, y) : k;
+      const down = y + step < height ? key(x, y + step) : k;
+      if (right !== k || down !== k) edges++;
+    }
+  }
+  return { colours: colours.size, edgeShare: sampled === 0 ? 0 : edges / sampled };
+}
+
+/** The bytes inside IDAT only — metadata chunks are not image content. */
+function pngIdatBytes(bytes: Uint8Array): number {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let at = 8;
+  let total = 0;
+  let found = false;
+  while (at + 8 <= bytes.length) {
+    const len = view.getUint32(at);
+    const type = String.fromCharCode(bytes[at + 4]!, bytes[at + 5]!, bytes[at + 6]!, bytes[at + 7]!);
+    if (type === "IDAT") { total += len; found = true; }
+    if (type === "IEND") break;
+    at += 12 + len;
+  }
+  // No IDAT chunk at all: not a PNG this reader understands (a truncated or
+  // synthetic file) — the whole file is the only measure there is.
+  return found ? total : bytes.length;
+}
+
+/**
+ * True only for a PNG that was read, decoded and measured as flat shapes.
+ * When the pixels cannot be decoded (interlaced, exotic depth, oversized)
+ * the IDAT bytes-per-pixel heuristic decides. Unreadable is not placeholder.
+ */
 export function isPlaceholderGradePng(absPath: string): boolean {
   if (!/\.png$/iu.test(absPath)) return false;
   let bytes: Uint8Array;
@@ -1119,7 +1392,11 @@ export function isPlaceholderGradePng(absPath: string): boolean {
   }
   const dims = readPngDimensions(bytes);
   if (dims === null) return false;
-  return bytes.length / (dims.width * dims.height) < PLACEHOLDER_BYTES_PER_PIXEL;
+  const content = measurePngContent(bytes);
+  if (content !== null) {
+    return content.colours <= PLACEHOLDER_MAX_COLOURS && content.edgeShare <= PLACEHOLDER_MAX_EDGE_SHARE;
+  }
+  return pngIdatBytes(bytes) / (dims.width * dims.height) < PLACEHOLDER_BYTES_PER_PIXEL;
 }
 
 /**
