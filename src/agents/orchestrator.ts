@@ -1,4 +1,5 @@
 import { failureTarget } from "./orchestrator-tool-execution.js";
+import { existsSync, readdirSync } from "node:fs";
 import { notifyTaskLiveness } from "./liveness-hub.js";
 import { QuotaExhaustedError } from "../common/fetch-with-retry.js";
 import type { ChannelType } from "../channels/channel-messages.interface.js";
@@ -24,7 +25,7 @@ import { AgentEngine } from "../agent-core/engine/agent-engine.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { isAbsolute, join, relative as pathRelative } from "node:path";
+import { isAbsolute, join, relative as pathRelative, basename, relative, sep } from "node:path";
 import { detectLanguage } from "../dashboard/workspace-routes.js";
 import type { ProviderManager } from "./providers/provider-manager.js";
 import { canonicalizeProviderName } from "./providers/provider-identity.js";
@@ -708,6 +709,34 @@ const TOOL_RESULT_LOG_PREVIEW = 300;
  * captured output that explains it.
  */
 const TOOL_FAILURE_LOG_PREVIEW = 1200;
+
+/**
+ * The same-named script under Assets/Modules/, project-relative, or
+ * undefined. Bounded walk: a twin lookup is a message detail, not a census.
+ */
+export function findModuleTwin(projectPath: string, looseRel: string): string | undefined {
+  const base = basename(looseRel);
+  const modules = join(projectPath, "Assets", "Modules");
+  if (!existsSync(modules)) return undefined;
+  const stack = [modules];
+  let visited = 0;
+  while (stack.length > 0 && visited < 20_000) {
+    const dir = stack.pop()!;
+    let entries: import("node:fs").Dirent[];
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      visited++;
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) stack.push(full);
+      else if (entry.name === base) return relative(projectPath, full).split(sep).join("/");
+    }
+  }
+  return undefined;
+}
 
 export class Orchestrator {
   private readonly vaultRegistry?: import("../vault/vault-registry.js").VaultRegistry;
@@ -4247,11 +4276,21 @@ export class Orchestrator {
       /^assets\//i.test(normalized) &&
       !/^assets\/(modules|editor|tests|plugins)\//i.test(normalized);
     if (!isLooseGameCode) return null;
+    // Name the way out. Measured 2026-09-07: nine refusals in one day on
+    // Assets/Scripts/PlayfieldBuilder.cs — a loose duplicate of
+    // Assets/Modules/PresentationModule/Scripts/PlayfieldBuilder.cs — each
+    // answered with the layout rule and nothing about the twin, so the agent
+    // kept trying the loose copy while the build carried both definitions.
+    const twin = findModuleTwin(this.projectPath, normalized);
+    const wayOut = twin
+      ? ` ${normalized} is a loose duplicate of ${twin}: edit the module copy, and delete the loose one with ` +
+        "file_delete (deletes are not walled, and a commit applies the deletion of the system's own file)."
+      : " Create or extend the owning module and put the script there; if a loose copy must go, file_delete is not walled.";
     return (
       "Strada conformance (frameworkPathsOnly): compilable game code belongs under " +
       "Assets/Modules/<Name>Module/ (the Strada.Core module pattern — config + DI + " +
       "systems), Assets/Editor/, Assets/Tests/ or Assets/Plugins/. Do not write loose " +
-      "scripts elsewhere under Assets/; create or extend the owning module instead."
+      "scripts elsewhere under Assets/." + wayOut
     );
   }
 

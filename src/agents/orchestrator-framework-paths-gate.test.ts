@@ -145,3 +145,37 @@ describe("framework-paths write wall", () => {
     expect(r.approved).toBe(true);
   });
 });
+
+describe("the wall names the module twin", () => {
+  // Measured 2026-09-07: nine refusals on Assets/Scripts/PlayfieldBuilder.cs,
+  // a loose duplicate of the module copy, none naming it.
+  it("points at Assets/Modules/…/Same.cs and at file_delete for the loose copy", async () => {
+    const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const root = mkdtempSync(join(tmpdir(), "twin-"));
+    try {
+      mkdirSync(join(root, "Assets", "Modules", "PresentationModule", "Scripts"), { recursive: true });
+      writeFileSync(join(root, "Assets", "Modules", "PresentationModule", "Scripts", "PlayfieldBuilder.cs"), "module copy");
+      const o = new Orchestrator({
+        providerManager: {
+          getProvider: () => createMockProvider(),
+          getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+          shutdown: vi.fn(),
+        } as never,
+        tools: [tool("file_edit", true)] as never,
+        channel: createMockChannel() as never,
+        projectPath: root,
+        readOnly: false,
+        requireConfirmation: true,
+        conformanceFrameworkPathsOnly: true,
+      } as never);
+      const r = await review(o, "file_edit", { path: "Assets/Scripts/PlayfieldBuilder.cs", old_string: "a", new_string: "b" });
+      expect(r.approved).toBe(false);
+      expect(r.reason).toContain("loose duplicate of Assets/Modules/PresentationModule/Scripts/PlayfieldBuilder.cs");
+      expect(r.reason).toContain("file_delete");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
