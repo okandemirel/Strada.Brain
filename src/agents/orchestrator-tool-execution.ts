@@ -90,6 +90,17 @@ export function trackAndRecordToolResults(params: ToolTrackingParams): void {
     // twice and produced no scene there was no way to learn why. The verdict is
     // the one thing worth keeping — enough of it to name the cause, not so much
     // that a log becomes a transcript.
+    // Every call, one line: the failures alone could not answer "what did
+    // this sprint do for two hours" — measured 2026-09-07, an attempt's only
+    // trace was its refusals, and whether it ever called a generator or the
+    // purchased library had to be inferred from the files it left behind.
+    getLoggerSafe()?.info("Tool call", {
+      tool: tc.name,
+      chatId,
+      target: failureTarget(tc.input),
+      ok: !tr.isError,
+      bytes: typeof tr.content === "string" ? tr.content.length : undefined,
+    });
     if (tr.isError) {
       getLoggerSafe()?.info("Tool failed", {
         tool: tc.name,

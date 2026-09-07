@@ -60,6 +60,33 @@ describe("executeAndTrackTools", () => {
     expect(result.toolResults).toEqual([toolResult]);
   });
 
+  it("logs one 'Tool call' line per call, successes included", async () => {
+    // Measured 2026-09-07: only failures were logged, so a two-hour sprint's
+    // successful calls left no trace at all.
+    const { getLoggerSafe } = await import("../utils/logger.js");
+    const real = getLoggerSafe();
+    const seen: Array<[string, Record<string, unknown>]> = [];
+    const spy = real ? vi.spyOn(real, "info").mockImplementation((msg: string, meta?: unknown) => {
+      seen.push([msg, (meta ?? {}) as Record<string, unknown>]);
+      return real;
+    }) : null;
+    try {
+      await executeAndTrackTools({
+        chatId: "c3",
+        responseText: "text",
+        toolCalls: [toolCall],
+        session: { messages: [] as unknown[] } as any,
+        executeToolCalls: vi.fn().mockResolvedValue([toolResult]),
+        executeOptions: {},
+        trackingParams: makeTrackingParams() as any,
+      });
+    } finally {
+      spy?.mockRestore();
+    }
+    const line = seen.find(([msg]) => msg === "Tool call");
+    expect(line?.[1]).toMatchObject({ tool: "read_file", target: "a.ts", ok: true });
+  });
+
   it("passes tracking params through to trackAndRecordToolResults", async () => {
     const tracking = makeTrackingParams();
     const executeFn = vi.fn().mockResolvedValue([toolResult]);
