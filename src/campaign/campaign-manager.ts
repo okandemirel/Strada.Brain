@@ -32,7 +32,7 @@ import {
 } from "./visual-conformance.js";
 import { extractCoreLoop, readUnityVersion, renderHowToRun } from "./how-to-run.js";
 import { isTerminalFailureReport } from "../agents/autonomy/verifier-pipeline.js";
-import { assessBuiltAsSpecified, PLACEHOLDER_BYTES_PER_PIXEL } from "../agents/autonomy/built-as-specified.js";
+import { assessBuiltAsSpecified, PLACEHOLDER_GRADE_RULE } from "../agents/autonomy/built-as-specified.js";
 import { describeDimensionality } from "../agents/autonomy/gdd-dimensionality.js";
 import type { Campaign, CampaignMilestone } from "./types.js";
 import { generateCampaignId } from "./types.js";
@@ -2757,7 +2757,7 @@ export class CampaignManager {
     if (now.placeholders < start.placeholders || realNow > realBefore) return undefined;
     return (
       `ART NOT PRODUCED: when this sprint began, ${start.placeholders} of ${start.sprites} sprite textures were ` +
-      `placeholder-grade (flat procedural shapes under ${PLACEHOLDER_BYTES_PER_PIXEL} byte/pixel); now it is ` +
+      `placeholder-grade (flat shapes by their pixels: ${PLACEHOLDER_GRADE_RULE}); now it is ` +
       `${now.placeholders} of ${now.sprites}. Compiling, verifying and documenting did not change the art. ` +
       "Produce real art NOW, before anything else: unity_generate_sprite with provider \"local\" (the installed " +
       "model draws a real sprite in under a minute; name the target path of a placeholder to replace it), or " +

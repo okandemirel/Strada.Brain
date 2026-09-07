@@ -995,8 +995,8 @@ export function assessBuiltAsSpecified(
       `${unboundSprites.length} sprites) are reached by no enabled scene.` +
       (placeholderSpritePaths.length > 0
         ? ` ${placeholderSpritePaths.length} of the ${sprites} sprite textures are placeholder-grade: ` +
-          `their PNG compresses below ${PLACEHOLDER_BYTES_PER_PIXEL} byte per pixel, which is a flat ` +
-          `procedural shape, not drawn art (e.g. ${placeholderSpritePaths.slice(0, 3).join(", ")}).` +
+          `their pixels are a flat shape (${PLACEHOLDER_GRADE_RULE}), not drawn art ` +
+          `(e.g. ${placeholderSpritePaths.slice(0, 3).join(", ")}).` +
           // What is already real, so a sprint does not redraw it. Measured
           // 2026-09-07 15:30: an attempt spent its first 13 minutes rediscovering
           // which of the 429 sprites the previous attempt had drawn.
@@ -1182,6 +1182,9 @@ function structuralRefusal(
  * to 400 bytes; a solid square with an outline always does.
  */
 export const PLACEHOLDER_BYTES_PER_PIXEL = 0.1;
+
+/** The rule, in words, for every message that names a placeholder-grade sprite. */
+export const PLACEHOLDER_GRADE_RULE = "at most 12 distinct colours and edges only along outlines";
 
 /** Share of placeholder-grade sprites (and minimum count) at which the art is placeholder art. */
 const PLACEHOLDER_REFUSAL_SHARE = 0.8;
@@ -1435,8 +1438,8 @@ function placeholderArtRefusal(
   if (sprites < PLACEHOLDER_REFUSAL_MIN_SPRITES) return undefined;
   if (placeholderSprites / sprites < PLACEHOLDER_REFUSAL_SHARE) return undefined;
   return (
-    `The project's art is placeholder art: ${placeholderSprites} of ${sprites} sprite textures compress ` +
-    `below ${PLACEHOLDER_BYTES_PER_PIXEL} byte per pixel — flat procedural shapes, not drawn art ` +
+    `The project's art is placeholder art: ${placeholderSprites} of ${sprites} sprite textures are flat ` +
+    `shapes by their pixels (${PLACEHOLDER_GRADE_RULE}) — procedural placeholders, not drawn art ` +
     `(e.g. ${report.placeholderSpritePaths.slice(0, 4).join(", ")}). A solid square is not a delivered ` +
     `game. Replace them with real art: unity_generate_sprite with provider "local" (the open-weights ` +
     `model on this machine), or a purchased package via unity_my_assets_cloud (search → download) and ` +
