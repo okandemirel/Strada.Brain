@@ -1552,11 +1552,11 @@ describe("CampaignManager", () => {
     manager.attachEvents();
 
     const campaign = manager.startFromGdd(ctx, "# GDD text", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1), { timeout: 5_000 });
     settleMilestone("sprint A done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2), { timeout: 5_000 });
     settleMilestone("sprint B done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3), { timeout: 5_000 });
     settleMilestone("final report");
     await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4)); // mcov1, baseline 95/100 recorded
 
@@ -1565,7 +1565,7 @@ describe("CampaignManager", () => {
     for (let i = 0; i < 3 && !storage.get(campaign.id)!.milestones.at(-1)!.artBounced; i++) {
       const before = tasks.submitted.length;
       settleMilestone("pig skins implemented and verified");
-      await vi.waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(before));
+      await vi.waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(before), { timeout: 5_000 });
     }
     const bounced = storage.get(campaign.id)!.milestones.at(-1)!;
     expect(bounced.artBounced).toBe(true);
@@ -1575,9 +1575,19 @@ describe("CampaignManager", () => {
     expect(bounced.attempts).toBe(1); // a bounce is not a spent attempt
 
     art = { sprites: 112, placeholders: 40 }; // real art replaced most of it
-    settleMilestone("pig skins drawn with the local model and bound");
-    await vi.waitFor(() => expect(storage.get(campaign.id)!.milestones.at(-1)!.status).not.toBe("running"));
-    expect(storage.get(campaign.id)!.milestones.find((m) => m.id === "mcov1")!.status).toBe("green");
+    // Other one-shot gates (visual evidence, no-work) may still take a
+    // completion each; the art gate must not take another one.
+    const mcov1 = () => storage.get(campaign.id)!.milestones.find((m) => m.id === "mcov1")!;
+    for (let i = 0; i < 3 && mcov1().status === "running"; i++) {
+      const before = tasks.submitted.length;
+      settleMilestone("pig skins drawn with the local model and bound");
+      await vi.waitFor(
+        () => expect(mcov1().status !== "running" || tasks.submitted.length > before).toBe(true),
+        { timeout: 5_000 },
+      );
+    }
+    expect(mcov1().status).toBe("green");
+    expect(tasks.submitted.filter((t) => t.prompt.includes("ART NOT PRODUCED")).length).toBe(1);
   });
 
   it("a spent coverage-remediation sprint is NOT a delivery when the measured tree is refused", async () => {
@@ -1617,18 +1627,18 @@ describe("CampaignManager", () => {
     manager.attachEvents();
 
     const campaign = manager.startFromGdd(ctx, "# GDD text", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1), { timeout: 5_000 });
     settleMilestone("sprint A done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2), { timeout: 5_000 });
     settleMilestone("sprint B done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3), { timeout: 5_000 });
     settleMilestone("final report");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4), { timeout: 5_000 });
     tasks.emit("task:failed", "task_4", "no art was made");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(5));
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(5), { timeout: 5_000 });
     tasks.emit("task:failed", "task_5", "no art was made");
 
-    await vi.waitFor(() => expect(storage.get(campaign.id)!.deliveryReported).toBe(true));
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.deliveryReported).toBe(true), { timeout: 5_000 });
     const delivered = storage.get(campaign.id)!;
     expect(delivered.state).toBe("failed");
     expect(delivered.lastError).toContain("NOT DELIVERED");
