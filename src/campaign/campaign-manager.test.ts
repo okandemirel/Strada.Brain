@@ -1242,6 +1242,22 @@ describe("CampaignManager", () => {
     }
   });
 
+  it("does not wait for a retry nobody promised when the chain is healthy", async () => {
+    // Measured 2026-09-07 07:51: "provider_unavailable" in a blocked task's
+    // sub-goal note, every provider healthy, 22 minutes deferred to a
+    // keep-alive retry that never existed.
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    tasks.emit(
+      "task:blocked",
+      "task_1",
+      "Completed:\nI got stuck on this task after multiple approaches.\n\nBlocked:\n[goal_x] provider_unavailable",
+    );
+    // Judged now — attempt 2 submitted within seconds, not after a 10-minute re-check.
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2), { timeout: 5_000 });
+    expect(storage.get(campaign.id)!.milestones[0]!.reconcileDeferredSince).toBeUndefined();
+  });
+
   it("a graceful shutdown does not charge the milestone an attempt", async () => {
     // Measured 2026-09-03 06:45: a daemon restart aborted the in-flight run
     // with "shutting down", the milestone was charged its second attempt and

@@ -1283,8 +1283,14 @@ export class CampaignManager {
     // A reaped/auto-retry tip names a retry the executor WILL mint; wait one
     // promised horizon (trust-but-verify, as the milestone path does) before
     // judging, so the campaign does not redraft on top of the coming retry.
-    const executorWillRetry =
-      /Reaped:|Auto-retry \d+\/\d+|provider_unavailable|All providers (failed|are in cooldown)/i.test(output);
+    // Provider wording alone is not a promise. Measured 2026-09-07 07:51: a
+    // task ended "blocked" by loop detection with "provider_unavailable" in
+    // one sub-goal's note while every provider was healthy; nothing was going
+    // to retry it, and the campaign waited 22 minutes for a ghost before
+    // judging. The words defer only while the chain is actually cooling.
+    const namesRetry = /Reaped:|Auto-retry \d+\/\d+/i.test(output);
+    const providerWording = /provider_unavailable|All providers (failed|are in cooldown)/i.test(output);
+    const executorWillRetry = namesRetry || (providerWording && allProvidersCoolingDownMs() > 0);
     if (executorWillRetry) {
       const promised = /Auto-retry \d+\/\d+ in ~(\d+)s/.exec(output);
       const promisedMs = (promised ? Number(promised[1]) : 600) * 1000;
@@ -1478,8 +1484,13 @@ export class CampaignManager {
     // cooldown" block has a KNOWN expiry the keep-alive waits out — burning a
     // campaign attempt on it killed the campaign twice in four minutes
     // (measured live 2026-08-28 20:04-20:08).
-    const executorWillRetry =
-      /Reaped:|Auto-retry \d+\/\d+|provider_unavailable|All providers (failed|are in cooldown)/i.test(output);
+    // Provider wording alone is not a promise (see the draft path above):
+    // measured 2026-09-07 07:51, a loop-blocked task carrying
+    // "provider_unavailable" in one sub-goal note held the campaign 22
+    // minutes for a retry nobody was going to make, with every provider up.
+    const namesRetry = /Reaped:|Auto-retry \d+\/\d+/i.test(output);
+    const providerWording = /provider_unavailable|All providers (failed|are in cooldown)/i.test(output);
+    const executorWillRetry = namesRetry || (providerWording && allProvidersCoolingDownMs() > 0);
     // Deferral is TIME-bounded, not one-shot. The old boolean was consumed by
     // the second of a doubled settle emission (measured 2026-08-29 19:04: one
     // handler logged the defer, the next burned attempt 2 within the same
