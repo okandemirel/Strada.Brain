@@ -1524,6 +1524,62 @@ describe("CampaignManager", () => {
     expect(report).toContain("NOT measured: no Assets/ directory");
   });
 
+  it("bounces a remediation sprint once when the placeholder-art count did not drop, then accepts a drop", async () => {
+    // Measured 2026-09-07: four remediation attempts, 410/429 placeholder
+    // sprites before and after each, nothing compared the two numbers.
+    tasks = new FakeTaskManager();
+    storage.close();
+    storage = new CampaignStorage(join(dir, "campaigns-art-gate.db"));
+    const planner = {
+      planMilestones: vi.fn().mockResolvedValue(LADDER),
+      auditCoverage: vi.fn().mockResolvedValue(["Art production: pig skins are not covered"]),
+    } as unknown as CampaignPlanner;
+    manager = new CampaignManager({
+      storage,
+      planner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async (chatId, text) => {
+        messages.push({ chatId, text });
+      },
+      projectRoot,
+      retryAdoptionGraceMs: 10,
+      completedSettleDelayMs: 0,
+      milestoneTimeBoxMs: 60 * 60_000,
+    });
+    let art = { sprites: 100, placeholders: 95 };
+    (manager as unknown as { measurePlaceholderArt: () => { sprites: number; placeholders: number } })
+      .measurePlaceholderArt = () => art;
+    manager.attachEvents();
+
+    const campaign = manager.startFromGdd(ctx, "# GDD text", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    settleMilestone("final report");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4)); // mcov1, baseline 95/100 recorded
+
+    // The art is unchanged. Earlier one-shot gates (visual evidence) may
+    // bounce first; the art gate speaks on the completion that reaches it.
+    for (let i = 0; i < 3 && !storage.get(campaign.id)!.milestones.at(-1)!.artBounced; i++) {
+      const before = tasks.submitted.length;
+      settleMilestone("pig skins implemented and verified");
+      await vi.waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(before));
+    }
+    const bounced = storage.get(campaign.id)!.milestones.at(-1)!;
+    expect(bounced.artBounced).toBe(true);
+    expect(bounced.placeholderArtAtStart).toEqual({ sprites: 100, placeholders: 95 });
+    expect(tasks.submitted.at(-1)!.prompt).toContain("ART NOT PRODUCED: when this sprint began, 95 of 100");
+    expect(tasks.submitted.at(-1)!.prompt).toContain("unity_generate_sprite");
+    expect(bounced.attempts).toBe(1); // a bounce is not a spent attempt
+
+    art = { sprites: 112, placeholders: 40 }; // real art replaced most of it
+    settleMilestone("pig skins drawn with the local model and bound");
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.milestones.at(-1)!.status).not.toBe("running"));
+    expect(storage.get(campaign.id)!.milestones.find((m) => m.id === "mcov1")!.status).toBe("green");
+  });
+
   it("a spent coverage-remediation sprint is NOT a delivery when the measured tree is refused", async () => {
     // Measured 2026-09-07 07:00: state=done under a "⛔ NOT DELIVERED"
     // headline, with structure findings two days stale.

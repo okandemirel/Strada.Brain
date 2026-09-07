@@ -97,6 +97,16 @@ export interface CampaignMilestone {
    *  (the visual-evidence gate); the second completion stands either way. */
   visualEvidenceBounced?: boolean;
   /**
+   * The project's sprite art when a coverage-remediation sprint was first
+   * submitted: how many sprite textures, and how many of them placeholder-grade
+   * (see ArtInventory). Measured 2026-09-07: four remediation attempts, 0 art —
+   * 410 of 429 sprites were flat procedural shapes before and after each one,
+   * and nothing compared the two numbers.
+   */
+  placeholderArtAtStart?: { sprites: number; placeholders: number };
+  /** One-shot flag: completion was bounced once because the placeholder count did not drop. */
+  artBounced?: boolean;
+  /**
    * Whether the PLANNER's own prompt demanded a captured frame — recorded when
    * the ladder is built, because the gate that reads it must not be armed by
    * text the system appends later.

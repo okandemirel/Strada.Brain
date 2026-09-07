@@ -31,7 +31,7 @@ import {
 } from "./visual-conformance.js";
 import { extractCoreLoop, readUnityVersion, renderHowToRun } from "./how-to-run.js";
 import { isTerminalFailureReport } from "../agents/autonomy/verifier-pipeline.js";
-import { assessBuiltAsSpecified } from "../agents/autonomy/built-as-specified.js";
+import { assessBuiltAsSpecified, PLACEHOLDER_BYTES_PER_PIXEL } from "../agents/autonomy/built-as-specified.js";
 import { describeDimensionality } from "../agents/autonomy/gdd-dimensionality.js";
 import type { Campaign, CampaignMilestone } from "./types.js";
 import { generateCampaignId } from "./types.js";
@@ -1055,6 +1055,13 @@ export class CampaignManager {
         }
       } catch { /* already settled */ }
     }
+    // A remediation sprint is judged on what it changes, so record what it
+    // starts from. First submission only: a bounce must be measured against
+    // the same baseline, not against its own failed attempt.
+    if (milestone.id.startsWith("mcov") && milestone.placeholderArtAtStart === undefined) {
+      const art = this.measurePlaceholderArt(campaign);
+      if (art) milestone.placeholderArtAtStart = art;
+    }
     // THE FINAL SPRINT OWNS BUILD HYGIENE. The planner is told this too, but
     // a planner instruction is a suggestion an LLM may drop; this append is
     // deterministic, so the sprint that delivers ALWAYS carries the
@@ -1699,6 +1706,26 @@ export class CampaignManager {
         getLoggerSafe().warn("Milestone completion rejected: repository unchanged", {
           id: campaign.id,
           milestone: milestone.id,
+        });
+        this.submitCurrentMilestone(campaign, { countAttempt: false });
+        return;
+      }
+      // ART NOT PRODUCED. Measured 2026-09-07: four coverage-remediation
+      // attempts against a tree whose sprite art was 410/429 placeholder-grade
+      // ended with the same 410/429 — the sprints compiled, verified and wrote
+      // documents, and never called a generator or the purchased library. The
+      // installed local model draws a real sprite in ~45 s (measured today).
+      // The measurement that says "placeholder art" at delivery says it here,
+      // once, while the sprint can still act on it.
+      const artGate = this.placeholderArtGate(campaign, milestone);
+      if (artGate !== undefined && !milestone.artBounced) {
+        milestone.artBounced = true;
+        milestone.prompt += `\n\n${artGate}`;
+        this.persist(campaign);
+        getLoggerSafe().warn("Milestone completion rejected: placeholder art count did not drop", {
+          id: campaign.id,
+          milestone: milestone.id,
+          atStart: milestone.placeholderArtAtStart,
         });
         this.submitCurrentMilestone(campaign, { countAttempt: false });
         return;
@@ -2548,6 +2575,46 @@ export class CampaignManager {
         detail: `the compile check could not run (${err instanceof Error ? err.message : String(err)})`,
       };
     }
+  }
+
+  /** The project's sprite count and placeholder-grade count, or undefined when the scan could not run. */
+  private measurePlaceholderArt(campaign: Campaign): { sprites: number; placeholders: number } | undefined {
+    try {
+      const report = assessBuiltAsSpecified(this.projectRoot);
+      if (!report.measured) return undefined;
+      return { sprites: report.artInventory.sprites, placeholders: report.artInventory.placeholderSprites };
+    } catch (err) {
+      getLoggerSafe().warn("Placeholder-art measurement could not run", {
+        id: campaign.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return undefined;
+    }
+  }
+
+  /**
+   * The directive for a remediation sprint that reported completion while the
+   * project's placeholder-grade sprite count did not drop — or undefined when
+   * the gate does not apply (no baseline, art was not placeholder art to begin
+   * with, or the count did drop). Strong case only, as in built-as-specified:
+   * at least 10 sprites and 80% of them placeholder-grade at the start.
+   */
+  private placeholderArtGate(campaign: Campaign, milestone: CampaignMilestone): string | undefined {
+    if (!milestone.id.startsWith("mcov")) return undefined;
+    const start = milestone.placeholderArtAtStart;
+    if (!start || start.sprites < 10 || start.placeholders / start.sprites < 0.8) return undefined;
+    const now = this.measurePlaceholderArt(campaign);
+    if (!now) return undefined;
+    if (now.placeholders < start.placeholders) return undefined;
+    return (
+      `ART NOT PRODUCED: when this sprint began, ${start.placeholders} of ${start.sprites} sprite textures were ` +
+      `placeholder-grade (flat procedural shapes under ${PLACEHOLDER_BYTES_PER_PIXEL} byte/pixel); now it is ` +
+      `${now.placeholders} of ${now.sprites}. Compiling, verifying and documenting did not change the art. ` +
+      "Produce real art NOW, before anything else: unity_generate_sprite with provider \"local\" (the installed " +
+      "model draws a real sprite in under a minute; name the target path of a placeholder to replace it), or " +
+      "unity_my_assets_cloud action \"purchases\" → \"download\" → unity_import_asset_package for owned packs. " +
+      "Then bind what you made. This sprint is judged by that count dropping, not by a report."
+    );
   }
 
   private measureDeliveryStructure(campaign: Campaign): { refusal?: string; lines: string[] } {
