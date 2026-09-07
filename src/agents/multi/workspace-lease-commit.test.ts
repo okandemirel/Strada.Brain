@@ -376,3 +376,25 @@ describe("orphaned lease salvage at construction", () => {
     expect(existsSync(join(orphan, "Assets", "B.cs"))).toBe(true);
   });
 });
+
+describe("capture retention rides the commit", () => {
+  it("retires the oldest Recordings/ entries after the copy-back and reports it", async () => {
+    const past = new Date(Date.now() - 48 * 60 * 60_000);
+    for (let i = 0; i < 30; i++) {
+      const dir = join(source, "Recordings", `old_${String(i).padStart(2, "0")}`);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "frame_0.png"), "x");
+      utimesSync(dir, past, past);
+    }
+    const lease = await manager().acquireLease({ label: "t", forceTempCopy: true });
+    mkdirSync(join(lease.path, "Recordings", "this_run"), { recursive: true });
+    writeFileSync(join(lease.path, "Recordings", "this_run", "frame_0.png"), "new");
+
+    const result = await lease.commit();
+    await lease.release();
+
+    expect(result.capturesPruned?.removed).toBe(6);
+    expect(existsSync(join(source, "Recordings", "this_run", "frame_0.png"))).toBe(true);
+    expect(existsSync(join(source, "Recordings", "old_29"))).toBe(false);
+  });
+});

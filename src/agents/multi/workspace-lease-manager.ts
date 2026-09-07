@@ -6,6 +6,7 @@ import os from "node:os";
 import { randomUUID } from "node:crypto";
 import { runProcess } from "../../utils/process-runner.js";
 import { getLoggerSafe } from "../../utils/logger.js";
+import { pruneCaptureEntries } from "./capture-retention.js";
 
 export type WorkspaceLeaseKind = "git-worktree" | "temp-copy";
 
@@ -63,6 +64,12 @@ export interface WorkspaceCommitResult {
    * exist ONLY in the workspace.
    */
   readonly quarantined: number;
+  /**
+   * Capture retention applied to <project>/Recordings after the copy-back:
+   * how many top-level entries were deleted and how many bytes that freed.
+   * See capture-retention.ts for the measurement behind it.
+   */
+  readonly capturesPruned?: { removed: number; bytes: number; kept: number };
 }
 
 export interface WorkspaceLease {
@@ -1130,7 +1137,38 @@ export class WorkspaceLeaseManager {
       });
     }
 
-    return { written, conflicts, removed, failed, conflictsQuarantinedUnder, quarantined };
+    // The copy-back above just added this run's captures to the project;
+    // the same step retires the oldest so Recordings/ stays a recent window,
+    // not an archive nobody reads (1.2 GB by 2026-09-07). Only the real
+    // project: a quarantine-only pass, or a lease derived from another lease,
+    // touches nothing here.
+    let capturesPruned: WorkspaceCommitResult["capturesPruned"];
+    if (!opts?.quarantineOnly && resolve(sourceRoot) === resolve(this.projectRoot)) {
+      try {
+        const pruned = pruneCaptureEntries(this.projectRoot);
+        if (pruned.removed > 0) {
+          capturesPruned = pruned;
+          getLoggerSafe().info("Capture retention pruned old recordings", {
+            removed: pruned.removed,
+            kept: pruned.kept,
+            freedMb: Math.round(pruned.bytes / (1024 * 1024)),
+          });
+        }
+      } catch (err) {
+        getLoggerSafe().warn("Capture retention could not run", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    return {
+      written,
+      conflicts,
+      removed,
+      failed,
+      conflictsQuarantinedUnder,
+      quarantined,
+      ...(capturesPruned ? { capturesPruned } : {}),
+    };
     } finally {
       lock?.release();
     }
