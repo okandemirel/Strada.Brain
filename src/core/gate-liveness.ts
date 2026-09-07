@@ -19,7 +19,7 @@ import {
   isPlaceholderGradePng,
   measureAudioClip,
 } from "../agents/autonomy/built-as-specified.js";
-import { findDesignDoc } from "../agents/autonomy/spec-scope.js";
+import { assessSpecScope, findDesignDoc } from "../agents/autonomy/spec-scope.js";
 import { realLocalAvailability } from "../agents/tools/unity/sprite-generate.js";
 import { defaultModelFor } from "../assets-local/model-catalog.js";
 import { LocalModelRunner } from "../assets-local/local-model-runner.js";
@@ -79,6 +79,33 @@ function png(width: number, height: number, kind: "flat" | "noise"): Buffer {
   ]);
 }
 
+/** A 16-bit mono PCM WAV of the given length; two calls with the same seed are byte-identical. */
+function wav(seconds: number, seed: number): Buffer {
+  const rate = 8000;
+  const frames = Math.round(seconds * rate);
+  const data = Buffer.alloc(frames * 2);
+  let s = seed;
+  for (let i = 0; i < frames; i++) {
+    s = (s * 1103515245 + 12345) & 0x7fffffff;
+    data.writeInt16LE(((s >>> 8) & 0xffff) - 0x8000, i * 2);
+  }
+  const header = Buffer.alloc(44);
+  header.write("RIFF", 0, "ascii");
+  header.writeUInt32LE(36 + data.length, 4);
+  header.write("WAVE", 8, "ascii");
+  header.write("fmt ", 12, "ascii");
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20);
+  header.writeUInt16LE(1, 22);
+  header.writeUInt32LE(rate, 24);
+  header.writeUInt32LE(rate * 2, 28);
+  header.writeUInt16LE(2, 32);
+  header.writeUInt16LE(16, 34);
+  header.write("data", 36, "ascii");
+  header.writeUInt32LE(data.length, 40);
+  return Buffer.concat([header, data]);
+}
+
 const HEADER = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n";
 const PREFAB = `${HEADER}--- !u!1 &100\nGameObject:\n  m_Component:\n  - component: {fileID: 400}\n  m_Name: Pig\n--- !u!4 &400\nTransform:\n  m_GameObject: {fileID: 100}\n  m_Father: {fileID: 0}\n`;
 const SCENE = `${HEADER}--- !u!1 &500\nGameObject:\n  m_Component:\n  - component: {fileID: 501}\n  m_Name: Main Camera\n--- !u!20 &502\nCamera:\n  m_GameObject: {fileID: 500}\n  orthographic: 0\n--- !u!4 &501\nTransform:\n  m_GameObject: {fileID: 500}\n  m_Father: {fileID: 0}\n--- !u!1660057539 &9223372036854775807\nSceneRoots:\n  m_ObjectHideFlags: 0\n  m_Roots:\n  - {fileID: 501}\n`;
@@ -105,7 +132,13 @@ export function probeGateLiveness(): GateProbe[] {
     put(root, "Assets/Art/flat.png", png(64, 64, "flat"), "22222222222222222222222222222222");
     put(root, "Assets/Art/real.png", png(64, 64, "noise"), "33333333333333333333333333333333");
     put(root, "Assets/Scripts/Builder.cs", "public class Builder { void B() { GameObject.CreatePrimitive(PrimitiveType.Cube); } }", "44444444444444444444444444444444");
-    put(root, "docs/Game_GDD.md", "# GDD\n\nElement schedule: pig, ball\n");
+    // The schedule shape the parser recognises (a table with an L<n> tag per
+    // row). Codex review 2026-09-07: the earlier prose fixture scheduled
+    // nothing, so the probe proved document discovery and not the gate.
+    put(root, "docs/Game_GDD.md", "# GDD\n\n| Level | Element |\n|---|---|\n| L1 | Pig |\n| L2 | Conveyor |\n");
+    put(root, "Assets/Audio/long.wav", wav(2, 1), "55555555555555555555555555555555");
+    put(root, "Assets/Audio/blip.wav", wav(0.15, 2), "66666666666666666666666666666666");
+    put(root, "Assets/Audio/blip-copy.wav", wav(0.15, 2), "77777777777777777777777777777777");
 
     const probes: GateProbe[] = [];
 
@@ -124,23 +157,52 @@ export function probeGateLiveness(): GateProbe[] {
     }));
 
     probes.push(probe("audio inventory", () => {
-      const clip = measureAudioClip(join(root, "Assets/Art/real.png"));
-      must(clip.hash !== undefined, "no content hash for a readable file");
-      return "hashes clips";
+      const long = measureAudioClip(join(root, "Assets/Audio/long.wav"));
+      const blip = measureAudioClip(join(root, "Assets/Audio/blip.wav"));
+      const copy = measureAudioClip(join(root, "Assets/Audio/blip-copy.wav"));
+      must(long.seconds !== undefined && Math.abs(long.seconds - 2) < 0.01, `a 2 s WAV measured ${long.seconds ?? "no"} seconds`);
+      must(blip.seconds !== undefined && Math.abs(blip.seconds - 0.15) < 0.01, `a 0.15 s WAV measured ${blip.seconds ?? "no"} seconds`);
+      must(blip.hash !== undefined && blip.hash === copy.hash, "byte-identical clips did not hash the same");
+      must(long.hash !== blip.hash, "different clips hashed the same");
+      const r = assessBuiltAsSpecified(root);
+      must(r.artInventory.audio === 3, `audio count ${r.artInventory.audio}, expected 3`);
+      must(r.artInventory.duplicateAudio === 1, `duplicate count ${r.artInventory.duplicateAudio}, expected 1`);
+      must(r.artInventory.shortAudio === 2, `short-clip count ${r.artInventory.shortAudio}, expected 2`);
+      return "3 clips: durations measured, 1 duplicate, 2 blips";
     }));
 
-    probes.push(probe("GDD discovery (spec-scope)", () => {
+    probes.push(probe("GDD scheduled elements (spec-scope)", () => {
       const doc = findDesignDoc(root);
       must(doc === join(root, "docs", "Game_GDD.md"), `findDesignDoc returned ${doc}`);
-      return "finds docs/<Name>_GDD.md";
+      const scope = assessSpecScope(root);
+      must(scope.scheduled === 2, `parsed ${scope.scheduled} scheduled elements, expected 2`);
+      const missing = scope.missing.map((m) => m.name);
+      must(missing.includes("Conveyor"), `an unimplemented element was not reported missing (missing: ${missing.join(", ") || "none"})`);
+      return `finds the GDD, schedules 2, reports ${missing.length} unimplemented`;
     }));
 
     probes.push(probe("local model availability", () => {
       const spec = defaultModelFor("text-to-image");
-      const direct = spec !== undefined && new LocalModelRunner().isModelInstalled(spec.id);
-      const probed = realLocalAvailability()("text-to-image");
-      must(probed === direct, `availability says ${probed}, the runner says ${direct}`);
-      return direct ? `installed (${spec!.id})` : "no local model installed — consistent";
+      must(spec !== undefined, "no default text-to-image model in the catalog");
+      // Exercise the production path against a controlled root: with a venv
+      // and the model's marker it must say true, without them false. The old
+      // probe accepted false === false, which an always-false implementation
+      // also satisfies (Codex review 2026-09-07).
+      const fake = join(root, "assets-local");
+      const previous = process.env["STRADA_ASSETS_LOCAL_ROOT"];
+      process.env["STRADA_ASSETS_LOCAL_ROOT"] = fake;
+      try {
+        must(!realLocalAvailability()("text-to-image"), "availability said true for an empty model root");
+        put(fake, "venv/bin/python3", "");
+        put(fake, `.installed-${spec!.id}`, "probe\n");
+        must(realLocalAvailability()("text-to-image"), `availability said false with venv and .installed-${spec!.id} present`);
+        must(new LocalModelRunner().isModelInstalled(spec!.id), "the runner did not see the installed marker");
+      } finally {
+        if (previous === undefined) delete process.env["STRADA_ASSETS_LOCAL_ROOT"];
+        else process.env["STRADA_ASSETS_LOCAL_ROOT"] = previous;
+      }
+      const installed = new LocalModelRunner().isModelInstalled(spec!.id);
+      return `turns true with a marker, false without; this machine: ${installed ? "installed" : "not installed"} (${spec!.id})`;
     }));
 
     probes.push(probe("scene binding (bind + place)", () => {

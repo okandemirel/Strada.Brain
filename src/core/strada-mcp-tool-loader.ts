@@ -1,5 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
-import { join, resolve, sep } from "node:path";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { dirname, join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { Config } from "../config/config.js";
 import { detectStradaMcp, type StradaMcpInstall } from "../config/strada-deps.js";
@@ -1147,31 +1147,75 @@ function formatAge(ms: number): string {
  * therefore REDIRECTED to the lease and the result says so; any other tree is
  * still refused.
  */
+/**
+ * The path as the filesystem knows it: symlinks in every EXISTING ancestor
+ * resolved, the non-existent remainder appended, and on a case-insensitive
+ * platform folded to one case for comparison.
+ *
+ * Codex review 2026-09-07: containment was lexical, so a symlink inside the
+ * lease pointing at the real checkout (lease copies preserve symlinks)
+ * passed the guard and ran the Editor against the real tree while the note
+ * claimed the lease; and on Windows `C:\GAME` was refused as a stranger to
+ * `C:\Game`.
+ */
+export function canonicalPath(path: string): string {
+  const absolute = resolve(path);
+  let existing = absolute;
+  let remainder = "";
+  while (!existsSync(existing)) {
+    const parent = dirname(existing);
+    if (parent === existing) break;
+    remainder = join(existing.slice(parent.length), remainder);
+    existing = parent;
+  }
+  let canonical: string;
+  try {
+    canonical = realpathSync.native(existing);
+  } catch {
+    canonical = existing;
+  }
+  return remainder === "" ? canonical : join(canonical, remainder);
+}
+
+/** The canonical path folded for comparison on case-insensitive platforms. */
+export function pathKey(path: string, platform: NodeJS.Platform = process.platform): string {
+  const canonical = canonicalPath(path);
+  return platform === "win32" || platform === "darwin" ? canonical.toLowerCase() : canonical;
+}
+
+function within(path: string, root: string): boolean {
+  const p = pathKey(path);
+  const r = pathKey(root);
+  return p === r || p.startsWith(r.endsWith(sep) ? r : r + sep);
+}
+
 export function projectPathEscape(
   input: Record<string, unknown>,
   context: Pick<ToolContext, "projectPath" | "sourceProjectPath">,
 ): { redirect: string; note: string } | { refuse: string } | undefined {
   const requested = typeof input["projectPath"] === "string" ? input["projectPath"].trim() : "";
   if (requested === "" || !context.projectPath) return undefined;
-  const target = resolve(requested);
+  const target = canonicalPath(requested);
   const own = resolve(context.projectPath);
-  if (target === own || target.startsWith(own + sep)) return undefined;
-  const real = context.sourceProjectPath ? resolve(context.sourceProjectPath) : undefined;
-  if (real !== undefined && (target === real || target.startsWith(real + sep))) {
-    const redirect = target === real ? own : own + target.slice(real.length);
-    return {
-      redirect,
-      note:
-        `[projectPath ${requested} is the real checkout; this run works in a leased copy of it, so the call ` +
-        `ran against ${redirect} — the tree WITH this run's edits. Omit projectPath: the run's own project ` +
-        "is the default.]",
-    };
-  }
-  return {
+  if (within(target, own)) return undefined;
+  const refuse = (why: string): { refuse: string } => ({
     refuse:
-      `projectPath ${requested} is outside this run's project (${context.projectPath}). ` +
+      `projectPath ${requested} is outside this run's project (${context.projectPath}). ${why} ` +
       "Unity tools run only against the project this run was given. " +
       "Omit projectPath — the run's own project is the default.",
+  });
+  const real = context.sourceProjectPath ? canonicalPath(context.sourceProjectPath) : undefined;
+  if (real === undefined || !within(target, real)) return refuse("");
+  const redirect = target.length === real.length ? own : join(own, target.slice(real.length));
+  if (!within(redirect, own)) {
+    return refuse(`(that path is the real checkout, but its twin in the lease, ${redirect}, resolves outside the lease through a link.)`);
+  }
+  return {
+    redirect,
+    note:
+      `[projectPath ${requested} is the real checkout; this run works in a leased copy of it, so the call ` +
+      `ran against ${redirect} — the tree WITH this run's edits. Omit projectPath: the run's own project ` +
+      "is the default.]",
   };
 }
 

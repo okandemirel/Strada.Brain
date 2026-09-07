@@ -3,7 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Config } from "../config/config.js";
-import { fileBasedAlternative, loadInstalledStradaMcpTools, registerStradaMcpTools } from "./strada-mcp-tool-loader.js";
+import { pathKey, fileBasedAlternative, loadInstalledStradaMcpTools, projectPathEscape, registerStradaMcpTools } from "./strada-mcp-tool-loader.js";
+import { symlinkSync, realpathSync } from "node:fs";
 import type { ITool, ToolContext } from "../agents/tools/tool-core.interface.js";
 
 describe("registerStradaMcpTools", () => {
@@ -274,6 +275,39 @@ describe("a projectPath outside the run's project is refused, not noted", () => 
     const execute = vi.fn(async () => ({ content: "ran" }));
     await registeredTool(execute).execute({ projectPath: `${real}/Assets/Scenes` }, context());
     expect(execute.mock.calls[0]?.[0]).toEqual({ projectPath: `${lease}/Assets/Scenes` });
+  });
+
+  // Codex review (gpt-6-astra, 2026-09-07): containment was lexical.
+  it("a symlink inside the lease that points at the real checkout is refused, not redirected", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "strada-lease-link-"));
+    try {
+      const realDir = join(dir, "Game");
+      const leaseDir = join(dir, "lease");
+      mkdirSync(join(realDir, "Assets"), { recursive: true });
+      mkdirSync(leaseDir, { recursive: true });
+      symlinkSync(realDir, join(leaseDir, "Linked"));
+      const ctx = { projectPath: leaseDir, sourceProjectPath: realDir };
+      // The lease's own link, named directly, resolves to the real tree — so
+      // it is the real checkout, and runs against the lease root instead.
+      const direct = projectPathEscape({ projectPath: join(leaseDir, "Linked") }, ctx);
+      expect(direct !== undefined && "redirect" in direct && direct.redirect === leaseDir).toBe(true);
+      // The real checkout's twin path in the lease is the link — refused too.
+      const twin = projectPathEscape({ projectPath: join(realDir, "Linked") }, ctx);
+      expect(twin !== undefined && "refuse" in twin && /through a link/.test(twin.refuse)).toBe(true);
+      // A plain subtree of the real checkout still redirects.
+      const plain = projectPathEscape({ projectPath: join(realDir, "Assets") }, ctx);
+      expect(plain !== undefined && "redirect" in plain && plain.redirect === join(leaseDir, "Assets")).toBe(true);
+      // A symlinked LEASE root (macOS /var → /private/var) is still the lease.
+      const viaLink = projectPathEscape({ projectPath: join(realpathSync(leaseDir), "Assets") }, ctx);
+      expect(viaLink).toBeUndefined();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("canonical paths fold case on case-insensitive platforms and keep it on linux", () => {
+    expect(pathKey("/Games/GAME/x", "win32")).toBe(pathKey("/games/game/X", "win32"));
+    expect(pathKey("/Games/GAME/x", "linux")).not.toBe(pathKey("/games/game/X", "linux"));
   });
 
   it("a bridge refusal for a scene-composition tool names the file-based tool", () => {

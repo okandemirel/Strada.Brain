@@ -125,10 +125,18 @@ print("WROTE", a.out)
 // RUNNER
 // =============================================================================
 
-const ROOT = join(homedir(), ".strada", "assets-local");
-const VENV = join(ROOT, "venv");
-const SCRIPTS = join(ROOT, "scripts");
-const WEIGHTS = join(ROOT, "weights");
+/**
+ * Where the venv, scripts, weights and the `.installed-<model>` markers live.
+ * Read at call time so a boot probe can point it at a throwaway directory and
+ * prove that availability turns true with a marker and false without one
+ * (Codex review 2026-09-07: the liveness probe accepted false === false).
+ */
+function ROOT_DIR(): string {
+  return process.env["STRADA_ASSETS_LOCAL_ROOT"] ?? join(homedir(), ".strada", "assets-local");
+}
+const VENV = (): string => join(ROOT_DIR(), "venv");
+const SCRIPTS = (): string => join(ROOT_DIR(), "scripts");
+const WEIGHTS = (): string => join(ROOT_DIR(), "weights");
 
 export type SpawnImpl = (
   cmd: string,
@@ -153,7 +161,7 @@ const defaultSpawn: SpawnImpl = (cmd, args, opts) =>
   });
 
 function venvPython(): string {
-  return join(VENV, "bin", "python3");
+  return join(VENV(), "bin", "python3");
 }
 
 export class LocalModelRunner {
@@ -179,19 +187,19 @@ export class LocalModelRunner {
   }
 
   isModelInstalled(modelId: string): boolean {
-    return this.venvReady() && existsSync(join(ROOT, `.installed-${modelId}`));
+    return this.venvReady() && existsSync(join(ROOT_DIR(), `.installed-${modelId}`));
   }
 
   /** Create the venv and install a model (idempotent). */
   async install(spec: LocalModelSpec, onProgress?: (line: string) => void): Promise<{ ok: boolean; detail: string }> {
     try {
-      mkdirSync(SCRIPTS, { recursive: true });
-      mkdirSync(WEIGHTS, { recursive: true });
+      mkdirSync(SCRIPTS(), { recursive: true });
+      mkdirSync(WEIGHTS(), { recursive: true });
       this.writeScripts();
 
       if (!this.venvReady()) {
         onProgress?.("creating venv…");
-        const made = await this.spawn("python3", ["-m", "venv", VENV], { timeoutMs: 120_000 });
+        const made = await this.spawn("python3", ["-m", "venv", VENV()], { timeoutMs: 120_000 });
         if (made.code !== 0) return { ok: false, detail: `venv creation failed: ${made.stderr.slice(0, 300)}` };
       }
 
@@ -211,7 +219,7 @@ export class LocalModelRunner {
       );
       if (install.code !== 0) return { ok: false, detail: `pip install failed: ${install.stderr.slice(-500)}` };
 
-      writeFileSync(join(ROOT, `.installed-${spec.id}`), new Date().toISOString() + "\n");
+      writeFileSync(join(ROOT_DIR(), `.installed-${spec.id}`), new Date().toISOString() + "\n");
       return { ok: true, detail: `${spec.label} installed.` };
     } catch (err) {
       return { ok: false, detail: err instanceof Error ? err.message : String(err) };
@@ -224,7 +232,7 @@ export class LocalModelRunner {
     env: NodeJS.ProcessEnv,
     onProgress?: (line: string) => void,
   ): Promise<{ ok: boolean; detail: string }> {
-    const repoDir = join(ROOT, "src", spec.id);
+    const repoDir = join(ROOT_DIR(), "src", spec.id);
     if (!existsSync(repoDir)) {
       onProgress?.(`cloning ${spec.repoUrl}…`);
       const clone = await this.spawn(
@@ -272,7 +280,7 @@ export class LocalModelRunner {
     );
     if (install.code !== 0) return { ok: false, detail: `repo requirements failed: ${install.stderr.slice(-500)}` };
 
-    writeFileSync(join(ROOT, `.installed-${spec.id}`), new Date().toISOString() + "\n");
+    writeFileSync(join(ROOT_DIR(), `.installed-${spec.id}`), new Date().toISOString() + "\n");
     return { ok: true, detail: `${spec.label} installed (from source).` };
   }
 
@@ -289,7 +297,7 @@ export class LocalModelRunner {
     this.writeScripts();
     const family = spec.id === "flux-schnell" ? "flux" : spec.id === "sdxl" ? "sdxl" : "sd15";
     const args = [
-      join(SCRIPTS, "txt2img.py"),
+      join(SCRIPTS(), "txt2img.py"),
       "--model", spec.weightsRef,
       "--family", family,
       "--prompt", prompt,
@@ -327,7 +335,7 @@ export class LocalModelRunner {
     writeFileSync(jobsPath, JSON.stringify(jobs.map((j) => ({ prompt: j.prompt, negative: j.negative ?? "", out: j.out, seed: j.seed ?? -1 }))), "utf8");
     try {
       const args = [
-        join(SCRIPTS, "txt2img.py"),
+        join(SCRIPTS(), "txt2img.py"),
         "--model", spec.weightsRef,
         "--family", family,
         "--jobs", jobsPath,
@@ -364,7 +372,7 @@ export class LocalModelRunner {
     }
     this.writeScripts();
     const args = [
-      join(SCRIPTS, "img2mesh.py"),
+      join(SCRIPTS(), "img2mesh.py"),
       "--weights", spec.weightsRef,
       "--image", imagePath,
       "--out", outPath,
@@ -380,11 +388,11 @@ export class LocalModelRunner {
   }
 
   private envWithWeights(): NodeJS.ProcessEnv {
-    return { ...process.env, HF_HOME: WEIGHTS };
+    return { ...process.env, HF_HOME: WEIGHTS() };
   }
 
   private envForRepo(spec: LocalModelSpec): NodeJS.ProcessEnv {
-    return { ...this.envWithWeights(), PYTHONPATH: join(ROOT, "src", spec.id) };
+    return { ...this.envWithWeights(), PYTHONPATH: join(ROOT_DIR(), "src", spec.id) };
   }
 
   /**
@@ -454,11 +462,11 @@ def marching_cubes(density, level: float = 0.0):
       }
       writeFileSync(path, content, "utf8");
     };
-    refresh(join(SCRIPTS, "txt2img.py"), TXT2IMG_SCRIPT);
-    refresh(join(SCRIPTS, "img2mesh.py"), IMG2MESH_SCRIPT);
+    refresh(join(SCRIPTS(), "txt2img.py"), TXT2IMG_SCRIPT);
+    refresh(join(SCRIPTS(), "img2mesh.py"), IMG2MESH_SCRIPT);
   }
 }
 
 export function localAssetsRoot(): string {
-  return ROOT;
+  return ROOT_DIR();
 }
