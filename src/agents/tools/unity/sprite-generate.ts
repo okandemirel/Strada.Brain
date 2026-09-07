@@ -20,13 +20,14 @@
  */
 
 import { deflateSync } from "node:zlib";
-import { mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 import { reuseOrMintGuid } from "./meta-file-utils.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "../tool.interface.js";
 import { validatePath } from "../../../security/path-guard.js";
 import { defaultModelFor } from "../../../assets-local/model-catalog.js";
 import { LocalModelRunner } from "../../../assets-local/local-model-runner.js";
+import { isPlaceholderGradePng, PLACEHOLDER_BYTES_PER_PIXEL } from "../../autonomy/built-as-specified.js";
 
 // =============================================================================
 // PNG ENCODER (RGBA8, filter-0 scanlines)
@@ -697,20 +698,41 @@ export class SpriteGenerateTool implements ITool {
       // and imports as a plain Texture — the binding-churn failure class.
       const guid = reuseOrMintGuid(`${pathCheck.fullPath}.meta`);
       writeFileSync(`${pathCheck.fullPath}.meta`, spriteMeta(guid), "utf8");
-      const result = await runner.textToImage(spec, prompt, pathCheck.fullPath, {
+      const localOpts = {
         negative,
         size: 512,
         // Sprites are game assets: cut the subject out instead of trusting
         // the model to honor "white background" (measured: it doesn't).
         removeBackground: input["keepBackground"] !== true,
-      });
+        seed: typeof input["seed"] === "number" ? Math.floor(input["seed"]) : undefined,
+      };
+      const result = await runner.textToImage(spec, prompt, pathCheck.fullPath, localOpts);
       if (!result.ok) {
         try { rmSync(`${pathCheck.fullPath}.meta`, { force: true }); } catch { /* orphan meta cleanup */ }
         return { content: `Error: local diffusion failed: ${result.detail}`, isError: true };
       }
+      // The model can return a blank (a filtered or empty draw; after
+      // background removal, a field of specks). Measured 2026-09-07 15:02: a
+      // 512² "green pig" came back as 19 KB of alpha noise and the tool said
+      // ✓. The same bytes-per-pixel rule the delivery gate applies is applied
+      // here, once, with one differently-seeded retry before giving up.
+      if (isPlaceholderGradePng(pathCheck.fullPath)) {
+        const again = await runner.textToImage(spec, prompt, pathCheck.fullPath, { ...localOpts, seed: (localOpts.seed ?? 0) + 1 });
+        if (!again.ok || isPlaceholderGradePng(pathCheck.fullPath)) {
+          try { rmSync(pathCheck.fullPath, { force: true }); rmSync(`${pathCheck.fullPath}.meta`, { force: true }); } catch { /* cleanup */ }
+          return {
+            content:
+              `Error: local diffusion drew nothing usable for ${relFile} twice (the file compressed below ` +
+              `${PLACEHOLDER_BYTES_PER_PIXEL} byte/pixel — a blank or filtered image). Nothing was kept. ` +
+              "Change the prompt (name the subject plainly, drop style words) and try again.",
+            isError: true,
+          };
+        }
+      }
       return {
         content:
           `Sprite written by local diffusion (${spec.label}): ${relFile} (+ .meta). ` +
+          (/background kept/.test(result.detail) ? "Background KEPT: the cut-out was empty, so this sprite carries the model's background. " : "") +
           "Unity imports it as a Sprite on next refresh. Bind it to the element's prefab now — an " +
           "unreferenced sprite draws nothing.",
       };
@@ -826,9 +848,11 @@ export class SpriteGenerateTool implements ITool {
     const opts = { negative, size: 512, removeBackground: input["keepBackground"] !== true };
     let written: Set<string>;
     let detail: string;
+    let keptBackground = new Set<string>();
     if (runner.textToImageBatch) {
       const r = await runner.textToImageBatch(spec, jobs.map((j) => ({ prompt: j.prompt, out: j.fullPath, negative })), opts);
       written = new Set(r.written);
+      keptBackground = new Set(r.keptBackground ?? []);
       detail = r.detail;
     } else {
       written = new Set();
@@ -840,12 +864,33 @@ export class SpriteGenerateTool implements ITool {
       }
       detail = notes.join("; ") || `${written.size} written`;
     }
+    // A written file is not a drawn sprite until measured (see the single path).
+    const blank = jobs.filter((j) => written.has(j.fullPath) && isPlaceholderGradePng(j.fullPath));
+    if (blank.length > 0) {
+      const retryJobs = blank.map((j) => ({ prompt: j.prompt, out: j.fullPath, negative, seed: 1 + Math.floor(Math.random() * 1_000_000) }));
+      if (runner.textToImageBatch) await runner.textToImageBatch(spec, retryJobs, opts);
+      else for (const j of retryJobs) await runner.textToImage(spec, j.prompt, j.out, { ...opts, seed: j.seed });
+      for (const j of blank) {
+        if (!existsSync(j.fullPath) || isPlaceholderGradePng(j.fullPath)) {
+          written.delete(j.fullPath);
+          try { rmSync(j.fullPath, { force: true }); } catch { /* cleanup */ }
+        }
+      }
+    }
     const lines: string[] = [];
     for (const job of jobs) {
-      if (written.has(job.fullPath)) lines.push(`✓ ${job.relFile} (+ .meta)`);
+      if (written.has(job.fullPath)) {
+        lines.push(
+          keptBackground.has(job.fullPath)
+            ? `✓ ${job.relFile} (+ .meta) — background KEPT: the cut-out was empty, so this sprite carries the model's background; re-prompt with a contrasting plain background if it must be transparent`
+            : `✓ ${job.relFile} (+ .meta)`,
+        );
+      }
       else {
         try { rmSync(`${job.fullPath}.meta`, { force: true }); } catch { /* orphan meta */ }
-        lines.push(`✗ ${job.relFile} — not written`);
+        lines.push(blank.some((b) => b.fullPath === job.fullPath)
+          ? `✗ ${job.relFile} — drew nothing usable twice (blank or filtered image, under ${PLACEHOLDER_BYTES_PER_PIXEL} byte/pixel); nothing kept`
+          : `✗ ${job.relFile} — not written`);
       }
     }
     const failures = jobs.length - written.size + refused.length;

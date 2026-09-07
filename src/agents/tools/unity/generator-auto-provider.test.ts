@@ -97,6 +97,67 @@ describe("the installed model is the default; the placeholder is the fallback", 
     expect(existsSync(join(root, "Assets/Art/Generated/PigGold.png.meta"))).toBe(false); // orphan meta removed
   });
 
+  it("sprite: a blank draw is retried once with another seed, and reported ✗ when still blank", async () => {
+    // Measured 2026-09-07 15:02: rembg wiped a green pig off its green
+    // background — 19 KB of alpha specks reported as ✓.
+    const { root, ctx } = project();
+    // A 64×64 PNG under 0.1 byte/pixel reads as blank; a "real" one is fat.
+    const blank = (out: string) => {
+      const b = Buffer.alloc(208);
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(b, 0);
+      b.writeUInt32BE(64, 16); b.writeUInt32BE(64, 20); // 208 B at 64×64 = 0.05 B/px
+      writeFileSync(out, b);
+    };
+    const real = (out: string) => {
+      const b = Buffer.alloc(9000, 7);
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(b, 0);
+      b.writeUInt32BE(64, 16); b.writeUInt32BE(64, 20);
+      writeFileSync(out, b);
+    };
+    let calls = 0;
+    const runner = {
+      isModelInstalled: () => true,
+      textToImage: vi.fn(async () => ({ ok: false, detail: "unused" })),
+      imageToMesh: vi.fn(async () => ({ ok: false, detail: "n/a" })),
+      textToImageBatch: vi.fn(async (_spec: unknown, jobs: Array<{ out: string; seed?: number }>) => {
+        calls++;
+        for (const j of jobs) {
+          // Retry (a seed is set) succeeds for PigA, PigB stays blank forever.
+          if (j.seed !== undefined && j.out.endsWith("PigA.png")) real(j.out);
+          else if (j.out.endsWith("PigA.png")) blank(j.out);
+          else blank(j.out);
+        }
+        return { ok: true, detail: `${jobs.length} written`, written: jobs.map((j) => j.out), missing: [], keptBackground: [] };
+      }),
+    } as unknown as LocalRunnerLike;
+    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner }).execute({ batch: [{ name: "PigA" }, { name: "PigB" }] }, ctx);
+    expect(calls).toBe(2); // one batch, one retry of the blanks
+    expect(r.content).toContain("✓ Assets/Art/Generated/PigA.png");
+    expect(r.content).toContain("✗ Assets/Art/Generated/PigB.png — drew nothing usable twice");
+    expect(existsSync(join(root, "Assets/Art/Generated/PigB.png"))).toBe(false);
+    expect(existsSync(join(root, "Assets/Art/Generated/PigB.png.meta"))).toBe(false);
+  });
+
+  it("sprite: a kept background is said, not hidden", async () => {
+    const { ctx } = project();
+    const runner = {
+      isModelInstalled: () => true,
+      textToImage: vi.fn(async () => ({ ok: false, detail: "unused" })),
+      imageToMesh: vi.fn(async () => ({ ok: false, detail: "n/a" })),
+      textToImageBatch: vi.fn(async (_spec: unknown, jobs: Array<{ out: string }>) => {
+        for (const j of jobs) {
+          const b = Buffer.alloc(9000, 7);
+          Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(b, 0);
+          b.writeUInt32BE(64, 16); b.writeUInt32BE(64, 20);
+          writeFileSync(j.out, b);
+        }
+        return { ok: true, detail: "1 written", written: jobs.map((j) => j.out), missing: [], keptBackground: [jobs[0]!.out] };
+      }),
+    } as unknown as LocalRunnerLike;
+    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner }).execute({ batch: [{ name: "Pig" }] }, ctx);
+    expect(r.content).toContain("background KEPT");
+  });
+
   it("sprite: a batch over the limit is refused with the limit named", async () => {
     const { ctx } = project();
     const r = await new SpriteGenerateTool({ localAvailable: () => true, runner: refusing }).execute(

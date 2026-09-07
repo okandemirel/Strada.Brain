@@ -34,12 +34,13 @@ p.add_argument("--jobs", default="")
 p.add_argument("--steps", type=int, default=0)
 p.add_argument("--size", type=int, default=512)
 p.add_argument("--rmbg", type=int, default=0)
+p.add_argument("--seed", type=int, default=-1)
 a = p.parse_args()
 # One pipeline load for many prompts: --jobs names a JSON list of
 # {"prompt","negative","out"}. Loading SD1.5 costs ~10 s per process; a
 # sprint that needs two hundred sprites pays it once, not two hundred times.
 import json
-jobs = json.load(open(a.jobs)) if a.jobs else [{"prompt": a.prompt, "negative": a.negative, "out": a.out}]
+jobs = json.load(open(a.jobs)) if a.jobs else [{"prompt": a.prompt, "negative": a.negative, "out": a.out, "seed": a.seed}]
 if not jobs or any(not j.get("prompt") or not j.get("out") for j in jobs):
     sys.exit("txt2img: every job needs a prompt and an out path")
 
@@ -66,14 +67,33 @@ if device == "mps":
     pipe.enable_attention_slicing()
 
 for job in jobs:
+    # A seed makes a retry a different draw, and the same seed the same bytes.
+    seed = int(job.get("seed", -1) if job.get("seed") is not None else -1)
+    gen = torch.Generator(device="cpu").manual_seed(seed) if seed >= 0 else None
     image = pipe(prompt=job["prompt"], negative_prompt=job.get("negative") or None,
-                 num_inference_steps=steps, height=a.size, width=a.size).images[0]
+                 num_inference_steps=steps, height=a.size, width=a.size, generator=gen).images[0]
     if a.rmbg:
         # Game sprites need transparency, not a model-guessed background. rembg
         # (already in the venv for TripoSR) cuts the subject out; without this,
         # "plain white background" in the prompt is a coin flip the model loses.
         from rembg import remove
-        image = remove(image)
+        cut = remove(image)
+        # Measured 2026-09-07: a green pig on the green background the model
+        # drew anyway — rembg removed the pig with the background and left 19 KB
+        # of alpha specks. A cut-out that kept under 3% of the pixels is not a
+        # sprite; the raw draw with its background is, and says so.
+        try:
+            alpha = cut.getchannel("A")
+            opaque = sum(1 for v in alpha.getdata() if v > 32)
+            coverage = opaque / float(alpha.width * alpha.height)
+        except Exception:
+            coverage = 1.0
+        if coverage < 0.03:
+            image = image.convert("RGBA")
+            image.save(job["out"])
+            print("KEPT-BG", job["out"], "coverage=%.3f" % coverage, flush=True)
+            continue
+        image = cut
     image.save(job["out"])
     print("WROTE", job["out"], flush=True)
 `;
@@ -246,7 +266,7 @@ export class LocalModelRunner {
     spec: LocalModelSpec,
     prompt: string,
     outPath: string,
-    opts: { negative?: string; size?: number; steps?: number; removeBackground?: boolean } = {},
+    opts: { negative?: string; size?: number; steps?: number; removeBackground?: boolean; seed?: number } = {},
   ): Promise<{ ok: boolean; detail: string }> {
     if (!this.isModelInstalled(spec.id)) {
       return { ok: false, detail: `${spec.label} is not installed — run assets-local-setup first.` };
@@ -263,12 +283,13 @@ export class LocalModelRunner {
       "--steps", String(opts.steps ?? 0),
       "--size", String(opts.size ?? 512),
       "--rmbg", opts.removeBackground ? "1" : "0",
+      "--seed", String(opts.seed ?? -1),
     ];
     const run = await this.spawn(venvPython(), args, { timeoutMs: 1_200_000, env: this.envWithWeights() });
     if (run.code !== 0 || !existsSync(outPath)) {
       return { ok: false, detail: `inference failed: ${(run.stderr || run.stdout).slice(-400)}` };
     }
-    return { ok: true, detail: outPath };
+    return { ok: true, detail: /^KEPT-BG /m.test(run.stdout) ? `${outPath} (background kept: the cut-out was empty)` : outPath };
   }
 
   /**
@@ -278,17 +299,17 @@ export class LocalModelRunner {
    */
   async textToImageBatch(
     spec: LocalModelSpec,
-    jobs: ReadonlyArray<{ prompt: string; out: string; negative?: string }>,
+    jobs: ReadonlyArray<{ prompt: string; out: string; negative?: string; seed?: number }>,
     opts: { size?: number; steps?: number; removeBackground?: boolean } = {},
-  ): Promise<{ ok: boolean; detail: string; written: string[]; missing: string[] }> {
+  ): Promise<{ ok: boolean; detail: string; written: string[]; missing: string[]; keptBackground: string[] }> {
     if (!this.isModelInstalled(spec.id)) {
-      return { ok: false, detail: `${spec.label} is not installed — run assets-local-setup first.`, written: [], missing: jobs.map((j) => j.out) };
+      return { ok: false, detail: `${spec.label} is not installed — run assets-local-setup first.`, written: [], missing: jobs.map((j) => j.out), keptBackground: [] };
     }
-    if (jobs.length === 0) return { ok: true, detail: "no jobs", written: [], missing: [] };
+    if (jobs.length === 0) return { ok: true, detail: "no jobs", written: [], missing: [], keptBackground: [] };
     this.writeScripts();
     const family = spec.id === "flux-schnell" ? "flux" : spec.id === "sdxl" ? "sdxl" : "sd15";
     const jobsPath = join(tmpdir(), `strada-txt2img-${process.pid}-${Date.now()}.json`);
-    writeFileSync(jobsPath, JSON.stringify(jobs.map((j) => ({ prompt: j.prompt, negative: j.negative ?? "", out: j.out }))), "utf8");
+    writeFileSync(jobsPath, JSON.stringify(jobs.map((j) => ({ prompt: j.prompt, negative: j.negative ?? "", out: j.out, seed: j.seed ?? -1 }))), "utf8");
     try {
       const args = [
         join(SCRIPTS, "txt2img.py"),
@@ -303,12 +324,14 @@ export class LocalModelRunner {
       const run = await this.spawn(venvPython(), args, { timeoutMs: Math.min(3_600_000, 300_000 + 120_000 * jobs.length), env: this.envWithWeights() });
       const written = jobs.map((j) => j.out).filter((o) => existsSync(o));
       const missing = jobs.map((j) => j.out).filter((o) => !existsSync(o));
+      const keptBackground = (run.stdout.match(/^KEPT-BG (.+?) coverage=/gm) ?? []).map((l) => l.replace(/^KEPT-BG /, "").replace(/ coverage=$/, ""));
       const ok = run.code === 0 && missing.length === 0;
       return {
         ok,
         detail: ok ? `${written.length} written` : `${written.length} of ${jobs.length} written; ${(run.stderr || run.stdout).slice(-400)}`,
         written,
         missing,
+        keptBackground,
       };
     } finally {
       try { rmSync(jobsPath, { force: true }); } catch { /* temp */ }
