@@ -60,7 +60,7 @@ describe("deletions: only the system's own files go, and every applied deletion 
     expect(existsSync(join(source, "Assets/Editor/BuildPipeline.cs"))).toBe(true);
     expect(existsSync(join(source, "Assets/Tests/PlayerTests.cs"))).toBe(true);
     expect(existsSync(join(source, "Assets/Tests/InitTestScene123.unity"))).toBe(false);
-    expect(result.removed).toEqual([join("Assets", "Editor", "BuildPipeline.cs"), join("Assets", "Tests", "PlayerTests.cs")]);
+    expect([...result.removed].sort()).toEqual([join("Assets", "Editor", "BuildPipeline.cs"), join("Assets", "Tests", "PlayerTests.cs")]);
   });
 
   it("a loose script that merely shares a module file's NAME is not a duplicate", async () => {
