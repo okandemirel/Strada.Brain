@@ -512,6 +512,15 @@ export class CampaignManager {
     // spent meant a revived final sprint could never be bounced for a missing
     // test run again (audited 2026-09-02: the gate landed after this block).
     milestone.deliveryVerificationBounced = false;
+    // The art and prose one-shots are gates too (review 2026-09-07): left
+    // spent, a revived remediation sprint could go green on 410/429
+    // placeholders and documentation-only commits without a bounce. The
+    // structural flag follows the next measurement, and a stale time-box
+    // directive must not survive a reset of the time box itself.
+    milestone.artBounced = false;
+    milestone.prosOnlyBounced = false;
+    milestone.structureRefused = false;
+    milestone.prompt = stripTimeBoxDirectives(milestone.prompt);
     // …and the COUNTERS the gates actually read. Measured live 2026-09-04
     // 16:18: the boolean above was reset on revival while
     // deliveryVerificationBounces stayed at 2 of 2, so `deliveryBouncesSpent <
@@ -687,7 +696,9 @@ export class CampaignManager {
         id: campaign.id,
         deliveredAt: campaign.updatedAt,
       });
-      await this.gatherIndependentReview(campaign);
+      // A re-send carries the SAME opinion the report was built with; a second
+      // reviewer run is a second bill and a possibly different verdict.
+      if (campaign.independentReview?.ok !== true) await this.gatherIndependentReview(campaign);
       if (await this.tell(campaign, this.buildDeliveryReport(campaign))) {
         campaign.deliveryReported = true;
         this.persist(campaign);
@@ -1576,6 +1587,7 @@ export class CampaignManager {
       const hours = Math.round(elapsedMs / 3_600_000);
       if (milestone.attempts < this.maxMilestoneAttempts) {
         milestone.startedAtMs = Date.now();
+        milestone.prompt = stripTimeBoxDirectives(milestone.prompt);
         milestone.prompt +=
           `\n\nTIME BOX EXHAUSTED (${hours}h after two scope narrowings): this attempt is charged. ` +
           "Deliver ONLY the single smallest verifiable increment and stop.";
@@ -1605,7 +1617,7 @@ export class CampaignManager {
     // carried "TIME BOX (6h elapsed, escalation 1/2)" and "TIME BOX (7h
     // elapsed, escalation 1/2)" back to back — the first from before a revive
     // reset the budget, both read by the sprint as live instructions.
-    milestone.prompt = milestone.prompt.replace(/\n\nTIME BOX \([^)]*\):[\s\S]*?beats another broad attempt\./g, "");
+    milestone.prompt = stripTimeBoxDirectives(milestone.prompt);
     milestone.prompt +=
       `\n\nTIME BOX (${Math.round(elapsedMs / 3_600_000)}h elapsed, escalation ${escalations + 1}/2): this sprint has run far past its budget ` +
       "without landing green. NARROW THE SCOPE NOW: pick the single highest-value unmet requirement, " +
@@ -1878,7 +1890,9 @@ export class CampaignManager {
         const observedButFiltered = Boolean(milestone.testVerdict) && milestone.testVerdictUnfiltered !== true;
         const directive =
           "\n\nDELIVERY VERIFICATION REQUIRED: this is the final sprint, and " +
-          (observedButFiltered
+          (compileBroken && Boolean(milestone.testVerdict) && milestone.testVerdictUnfiltered === true
+            ? "the suite's green run means nothing while the project does not compile. "
+            : observedButFiltered
             ? "the only green test run observed was FILTERED — a subset you chose. "
             : "no test run was observed in the last attempt. ") +
           "Run the FULL PlayMode suite UNFILTERED against the assembled scene, capture a frame of " +
@@ -1910,12 +1924,23 @@ export class CampaignManager {
         const combined = structureNow.refusal
           ? `${compileFirst}${directive}\n\nALSO, ALREADY MEASURED: ${structureNow.refusal}`
           : `${compileFirst}${directive}`;
-        if (!milestone.prompt.includes("DELIVERY VERIFICATION REQUIRED")) milestone.prompt += combined;
+        // The CURRENT reason, not the first one. Review 2026-09-07: the block
+        // was appended only when absent, so a second bounce for a different
+        // cause (the compile broke after a green suite; the structure now
+        // refuses) sent the charged retry out with the stale "no test run was
+        // observed" text and never the compile failure.
+        const gateMarker = "\n\n[DELIVERY GATE — latest measurement]";
+        const cutAt = [milestone.prompt.indexOf(gateMarker), milestone.prompt.indexOf("\n\nDELIVERY VERIFICATION REQUIRED")]
+          .filter((i) => i >= 0);
+        if (cutAt.length > 0) milestone.prompt = milestone.prompt.slice(0, Math.min(...cutAt));
+        milestone.prompt += `${gateMarker}\n${combined}`;
         this.persist(campaign);
-        getLoggerSafe().warn("Delivery blocked: final milestone has no observed test verdict", {
+        getLoggerSafe().warn("Delivery blocked: the final milestone lacks its proof", {
           id: campaign.id,
           milestone: milestone.id,
           bounce: milestone.deliveryVerificationBounces,
+          cause: compileBroken ? "does not compile" : observedButFiltered ? "filtered test run" : "no test verdict",
+          structuralRefusal: structureNow.refusal !== undefined,
         });
         // The FIRST bounce is free (the sprint may simply not have printed a
         // recognizable line); a repeat is charged, so the milestone's own
@@ -1936,6 +1961,12 @@ export class CampaignManager {
         // it shares the delivery bounce budget so it cannot loop.
         const structure = this.measureDeliveryStructure(campaign);
         milestone.structureFindings = structure.lines;
+        // The flag follows the CURRENT measurement. Review 2026-09-07: it was
+        // only ever set, never cleared, so one structural bounce followed by a
+        // sprint that placed the prefabs still ended the campaign "failed"
+        // below on a tree the check had just passed — and "kampanya devam"
+        // could not get past it either.
+        milestone.structureRefused = structure.refusal !== undefined;
         if (structure.refusal && deliveryBouncesSpent < this.maxMilestoneAttempts) {
           milestone.deliveryVerificationBounced = true;
           milestone.deliveryVerificationBounces = deliveryBouncesSpent + 1;
@@ -2048,11 +2079,16 @@ export class CampaignManager {
         // headline was not: the one sentence a person reads first said the
         // opposite of the evidence under it. Stop and hand it to a person
         // instead; every finding still travels in the report.
-        if (milestone.structureRefused === true) {
+        // The compiler is held to the same rule (review 2026-09-07): with the
+        // delivery bounces spent, a tree that still does not build was
+        // declared "game build complete" with the compile failure as a
+        // footnote mark.
+        if (milestone.structureRefused === true || compileBroken) {
           campaign.state = "failed";
-          campaign.lastError =
-            "the shipped scenes do not render the project's own art, and the structural " +
-            "bounce budget is spent";
+          campaign.lastError = compileBroken
+            ? `the project does not compile${typeof compile.errors === "number" ? ` (${compile.errors} error(s))` : ""}, and the delivery bounce budget is spent`
+            : "the shipped scenes do not render the project's own art, and the structural " +
+              "bounce budget is spent";
           this.persist(campaign);
           this.cancelLiveLineages(campaign, "campaign stopped short of delivery");
           await this.gatherIndependentReview(campaign);
@@ -2096,7 +2132,12 @@ export class CampaignManager {
     // TIME-BOX: bounces and deferrals deliberately do not burn attempts, so a
     // sprint that keeps almost-finishing can spin indefinitely (measured
     // 2026-08-31: m6 ran 22h at attempts=1).
-    if (await this.escalateIfPastTimeBox(campaign, milestone)) return;
+    // A graceful shutdown is the OPERATOR stopping the process, not the sprint
+    // failing (see below); it is judged before the time box, or a routine
+    // restart of a sprint past its second narrowing ended the campaign
+    // (review 2026-09-07).
+    const shutdownCaused = /shutting down|shutdown|durduruldu \(shutting/i.test(output);
+    if (!shutdownCaused && (await this.escalateIfPastTimeBox(campaign, milestone))) return;
 
     const canRetry = milestone.attempts < this.maxMilestoneAttempts;
     // An outage-caused settle is not the sprint's failure: the run never got
@@ -2114,7 +2155,6 @@ export class CampaignManager {
     // deploy — measured 2026-09-03 06:45: Sprint 7 "blocked after 2 attempts"
     // whose cause was a daemon restart, with no self-revival armed because it
     // was not an outage.
-    const shutdownCaused = /shutting down|shutdown|durduruldu \(shutting/i.test(output);
     // A shutdown is exempt from the ATTEMPT BUDGET ITSELF, not merely from
     // being charged: the operator stopped the process, so the sprint's last
     // attempt was never spent on work. Gating it behind canRetry meant a
@@ -2210,8 +2250,12 @@ export class CampaignManager {
 
     // A stop caused by a full provider outage is a scheduled wait, not a
     // defeat — park with a self-revival at the chain's recovery horizon.
+    // The registry decides, never the wording alone (review 2026-09-07): a
+    // sprint failing twice with "sprite provider 'local' returned PLACEHOLDER"
+    // on a healthy chain armed a two-minute self-revival with a fresh attempt
+    // budget each cycle — an unbounded loop the attempt budget was meant to end.
     const outageWaitMs = allProvidersCoolingDownMs();
-    if (outageWaitMs > 0 || /provider|cooldown|quota/i.test(output)) {
+    if (outageWaitMs > 0 || isOutageCausedSettle(output, outageWaitMs)) {
       const delayMs = Math.max(outageWaitMs, 60_000) + 60_000;
       campaign.autoReviveAt = Date.now() + delayMs;
       this.persist(campaign);
@@ -2253,6 +2297,10 @@ export class CampaignManager {
       campaign.state = structure.refusal !== undefined ? "failed" : "done";
       campaign.deliveryReported = false;
       this.persist(campaign);
+      this.cancelLiveLineages(
+        campaign,
+        structure.refusal !== undefined ? "campaign stopped short of delivery" : "campaign delivered",
+      );
       getLoggerSafe().warn("Delivering with unclosed GDD gaps — remediation sprint spent its attempts", {
         id: campaign.id,
         milestone: milestone.id,
@@ -2691,6 +2739,11 @@ export class CampaignManager {
    */
   private placeholderArtGate(campaign: Campaign, milestone: CampaignMilestone): string | undefined {
     if (!milestone.id.startsWith("mcov")) return undefined;
+    // Only a sprint whose gap IS art is judged by the sprite count. Review
+    // 2026-09-07: an audio-only remediation sprint did its audio work, left
+    // the sprites alone (correctly), and was bounced with "ART NOT PRODUCED".
+    const items = coverageGapItems(milestone);
+    if (items.length > 0 && !items.some(isArtGap)) return undefined;
     const start = milestone.placeholderArtAtStart;
     if (!start || start.sprites < 10 || start.placeholders / start.sprites < 0.8) return undefined;
     const now = this.measurePlaceholderArt(campaign);
@@ -2793,10 +2846,21 @@ export class CampaignManager {
     // 21:37: "🏁 Campaign delivery — game built" sat directly above "REFUSAL
     // STANDS … The shipped scenes render NOTHING". The findings were right and
     // the first line a person reads was not.
-    const structureRefused = campaign.milestones.some((m) => m.structureRefused === true);
+    // The NEWEST measurement decides the headline (review 2026-09-07): a
+    // refusal from an earlier sprint that a later one resolved must not
+    // headline a delivered game, and a tree that does not compile must not
+    // headline as complete.
+    const newestStructural = [...campaign.milestones].reverse().find((m) => m.structureFindings?.length);
+    const structureRefused = newestStructural?.structureRefused === true;
+    const compiled = [...campaign.milestones].reverse().find((m) => m.compileVerdict?.ran);
+    const compileBroken = compiled?.compileVerdict?.ran === true && compiled.compileVerdict.ok === false;
     const lines = [
       structureRefused
         ? `⛔ **NOT DELIVERED — the shipped scenes do not render the project's own art**`
+        : compileBroken
+        ? `⛔ **NOT DELIVERED — the project does not compile${
+            typeof compiled?.compileVerdict?.errors === "number" ? ` (${compiled.compileVerdict.errors} error(s))` : ""
+          }**`
         : unfinished.length === 0
         ? `🏁 **Campaign delivery — game build complete**`
         : `🏁 **Campaign delivery — game built, ${unfinished.length} sprint${unfinished.length > 1 ? "s" : ""} did NOT land green**`,
@@ -3193,6 +3257,16 @@ export class CampaignManager {
  * remediation sprint whose list cannot be recovered (the caller then says so
  * rather than inventing gap names).
  */
+/**
+ * Remove every time-box directive from a prompt — the narrowing blocks and the
+ * "exhausted" line — so the one appended next is the only one the sprint reads.
+ */
+export function stripTimeBoxDirectives(prompt: string): string {
+  return prompt
+    .replace(/\n\nTIME BOX \([^)]*\):[\s\S]*?beats another broad attempt\./g, "")
+    .replace(/\n\nTIME BOX EXHAUSTED \([^)]*\):[^\n]*/g, "");
+}
+
 /** A gap the audit phrased as art: it goes first, because everything visible depends on it. */
 export function isArtGap(item: string): boolean {
   return /\b(art|sprite|visual|illustration|skin|mascot|background|artwork|animation|vfx|texture|model)/i.test(item);

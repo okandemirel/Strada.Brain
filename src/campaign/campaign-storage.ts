@@ -221,7 +221,12 @@ export class CampaignStorage {
   listUnreportedDeliveries(): Campaign[] {
     const rows = this.db
       .prepare(
-        "SELECT * FROM campaigns WHERE state = 'done' AND (delivery_reported IS NULL OR delivery_reported = 0) ORDER BY updated_at ASC",
+        // A partial delivery that stopped on a standing refusal is `failed`
+        // with lastError "NOT DELIVERED — …" — its report is owed just the
+        // same (review 2026-09-07). The column defaults to 0, so the flag
+        // alone cannot tell such a campaign from one that merely failed.
+        "SELECT * FROM campaigns WHERE (state = 'done' AND (delivery_reported IS NULL OR delivery_reported = 0)) " +
+          "OR (state = 'failed' AND delivery_reported = 0 AND last_error LIKE 'NOT DELIVERED%') ORDER BY updated_at ASC",
       )
       .all() as CampaignRow[];
     return rows.map(rowToCampaign);

@@ -3,7 +3,7 @@ import { EventEmitter } from "node:events";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { CampaignManager } from "./campaign-manager.js";
+import { CampaignManager, stripTimeBoxDirectives } from "./campaign-manager.js";
 import { CampaignStorage } from "./campaign-storage.js";
 import type { CampaignPlanner } from "./campaign-planner.js";
 import { GDD_AUDIT_FULL_CHARS } from "./campaign-planner.js";
@@ -1065,7 +1065,7 @@ describe("CampaignManager", () => {
     settleMilestone("integrated, all 42 tests pass");
     await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
 
-    expect(storage.get(campaign.id)!.milestones[2]!.structureRefused).toBeUndefined();
+    expect(storage.get(campaign.id)!.milestones[2]!.structureRefused).not.toBe(true);
     const report = messages.at(-1)!.text;
     expect(report).toContain("What the shipped scenes actually contain");
     expect(report).toContain("Shipped scenes PLACE 1 renderer component");
@@ -1091,7 +1091,7 @@ describe("CampaignManager", () => {
     expect(report).toContain("1 sprite renderer(s)");
     expect(report).toContain("Camera projection in the shipped scenes: 0 orthographic, 1 perspective");
     // Disclosure only — the campaign still delivered.
-    expect(storage.get(campaign.id)!.milestones[2]!.structureRefused).toBeUndefined();
+    expect(storage.get(campaign.id)!.milestones[2]!.structureRefused).not.toBe(true);
   });
 
   it("says the shipped scenes were NOT structurally checked rather than passing silently", async () => {
@@ -1103,7 +1103,7 @@ describe("CampaignManager", () => {
 
     const report = messages.at(-1)!.text;
     expect(report).toContain("NOT measured: no Assets/ directory");
-    expect(storage.get(campaign.id)!.milestones[2]!.structureRefused).toBeUndefined();
+    expect(storage.get(campaign.id)!.milestones[2]!.structureRefused).not.toBe(true);
   });
 
   it("a milestone retry carries the previous attempt's progress without persisting it", async () => {
@@ -2748,5 +2748,165 @@ describe("CampaignManager", () => {
 
     await manager.resumeActive(); // task_1 still 'executing' in the fake
     expect(tasks.submitted).toHaveLength(1);
+  });
+
+  describe("defects the gate review found (2026-09-07)", () => {
+    it("a structural bounce followed by a tree that passes DELIVERS, and the headline follows the newest measurement", async () => {
+      writeSlopProject();
+      const campaign = await runLadderToDelivery();
+      settleMilestone("integrated, all 42 tests pass");
+      await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+      expect(storage.get(campaign.id)!.milestones[2]!.structureRefused).toBe(true);
+      // The sprint places the prefab; the flag must follow the re-measure.
+      writeBuiltProject();
+      settleMilestone("prefabs placed, all 42 tests pass");
+      await vi.waitFor(() => expect(storage.get(campaign.id)!.state).not.toBe("executing"));
+      expect(storage.get(campaign.id)!.state).toBe("done");
+      expect(storage.get(campaign.id)!.milestones[2]!.structureRefused).toBe(false);
+      const report = messages.map((m) => m.text).find((t) => t.includes("Campaign delivery"))!;
+      expect(report.split("\n")[0]).not.toContain("NOT DELIVERED");
+    });
+
+    it("a terminal failure that merely MENTIONS a provider on a healthy chain stops — no self-revival", async () => {
+      const { setLiveChainMemberNames } = await import("../agents/providers/provider-outage.js");
+      const { ProviderHealthRegistry } = await import("../agents/providers/provider-health.js");
+      ProviderHealthRegistry.getInstance().clearProviderState("claude");
+      setLiveChainMemberNames(["claude"]);
+      const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+      await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+      tasks.emit("task:failed", "task_1", "sprite provider 'local' returned PLACEHOLDER");
+      await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+      tasks.emit("task:failed", "task_2", "sprite provider 'local' returned PLACEHOLDER");
+      await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"));
+      expect(storage.get(campaign.id)!.autoReviveAt).toBeUndefined();
+      expect(messages.at(-1)!.text).toContain("Campaign stopped");
+      expect(messages.at(-1)!.text).not.toContain("Self-revival armed");
+    });
+
+    it("a tree that still does not compile after the delivery bounces is NOT delivered", async () => {
+      writeBuiltProject();
+      const campaign = await runLadderToDelivery();
+      compileVerdict = { ok: false, ran: true, errors: 37, detail: "37 error(s)" };
+      for (let i = 0; i < 4 && storage.get(campaign.id)!.state === "executing"; i++) {
+        const before = tasks.submitted.length;
+        settleMilestone(`shipping it (round ${i})`);
+        await new Promise((r) => setTimeout(r, 150));
+        if (tasks.submitted.length === before) break;
+      }
+      await vi.waitFor(() => expect(storage.get(campaign.id)!.state).not.toBe("executing"));
+      expect(storage.get(campaign.id)!.state).toBe("failed");
+      expect(storage.get(campaign.id)!.lastError).toContain("does not compile");
+      const report = messages.map((m) => m.text).find((t) => t.includes("NOT DELIVERED"))!;
+      expect(report.split("\n")[0]).toContain("does not compile");
+      expect(report.split("\n")[0]).toContain("37 error(s)");
+    });
+
+    it("the second delivery bounce carries the CURRENT reason, not the first one", async () => {
+      writeBuiltProject();
+      const campaign = await runLadderToDelivery();
+      // Bounce 1: no verdict at all (compiles).
+      tasks.emit("task:completed", "task_3", "done, trust me");
+      await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+      expect(tasks.submitted[3]!.prompt).toContain("no test run was observed");
+      expect(tasks.submitted[3]!.prompt).not.toContain("DOES NOT COMPILE");
+      // Bounce 2: an unfiltered green, but the compile is now broken.
+      compileVerdict = { ok: false, ran: true, errors: 3 };
+      settleMilestone("suite green");
+      await vi.waitFor(() => expect(tasks.submitted).toHaveLength(5));
+      const prompt = tasks.submitted[4]!.prompt;
+      expect(prompt).toContain("THE PROJECT DOES NOT COMPILE");
+      expect(prompt).not.toContain("no test run was observed");
+      expect(prompt.split("DELIVERY VERIFICATION REQUIRED").length).toBe(2);
+      expect(storage.get(campaign.id)!.state).toBe("executing");
+    });
+
+    it("an AUDIO remediation sprint is not judged by the sprite count", async () => {
+      tasks = new FakeTaskManager();
+      storage.close();
+      storage = new CampaignStorage(join(dir, "campaigns-audio-gap.db"));
+      const planner = {
+        planMilestones: vi.fn().mockResolvedValue(LADDER),
+        auditCoverage: vi.fn().mockResolvedValueOnce(["Audio production: no SFX cue list implemented"]).mockResolvedValue([]),
+      } as unknown as CampaignPlanner;
+      manager = new CampaignManager({
+        storage, planner, taskManager: tasks as unknown as TaskManager,
+        messenger: async (chatId, text) => { messages.push({ chatId, text }); },
+        projectRoot, retryAdoptionGraceMs: 10, completedSettleDelayMs: 0, milestoneTimeBoxMs: 60 * 60_000,
+      });
+      (manager as unknown as { measurePlaceholderArt: () => { sprites: number; placeholders: number } })
+        .measurePlaceholderArt = () => ({ sprites: 100, placeholders: 95 });
+      manager.attachEvents();
+      const campaign = manager.startFromGdd(ctx, "# GDD text", "docs/Game_GDD.md");
+      await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1), { timeout: 5_000 });
+      settleMilestone("sprint A done");
+      await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2), { timeout: 5_000 });
+      settleMilestone("sprint B done");
+      await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3), { timeout: 5_000 });
+      settleMilestone("final report");
+      await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4)); // mcov1 (audio)
+      const mcov1 = () => storage.get(campaign.id)!.milestones.find((m) => m.id === "mcov1")!;
+      for (let i = 0; i < 4 && mcov1().status === "running"; i++) {
+        const before = tasks.submitted.length;
+        settleMilestone("SFX cue list generated with unity_generate_audio and wired");
+        await vi.waitFor(() => expect(mcov1().status !== "running" || tasks.submitted.length > before).toBe(true), { timeout: 5_000 });
+      }
+      expect(mcov1().status).toBe("green");
+      expect(mcov1().artBounced).not.toBe(true);
+      expect(tasks.submitted.some((t) => t.prompt.includes("ART NOT PRODUCED"))).toBe(false);
+    });
+
+    it("revival resets the art and prose one-shots and strips stale time-box directives", async () => {
+      const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+      await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+      const m = storage.get(campaign.id)!.milestones[0]!;
+      m.artBounced = true;
+      m.prosOnlyBounced = true;
+      m.structureRefused = true;
+      m.prompt += "\n\nTIME BOX (6h elapsed, escalation 1/2): this sprint has run far past its budget. NARROW THE SCOPE NOW: x beats another broad attempt." +
+        "\n\nTIME BOX EXHAUSTED (9h after two scope narrowings): this attempt is charged. Deliver ONLY the single smallest verifiable increment and stop.";
+      const c = storage.get(campaign.id)!;
+      c.milestones[0] = m;
+      c.state = "failed";
+      storage.save(c);
+      expect(await manager.tryHandleRevive(ctx.chatId, "kampanya devam")).toBe(true);
+      await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+      const revived = storage.get(campaign.id)!.milestones[0]!;
+      expect(revived.artBounced).toBe(false);
+      expect(revived.prosOnlyBounced).toBe(false);
+      expect(revived.structureRefused).toBe(false);
+      expect(tasks.submitted[1]!.prompt).not.toContain("TIME BOX");
+    });
+
+    it("stripTimeBoxDirectives removes both the narrowing blocks and the exhausted line", () => {
+      const p = "base\n\nTIME BOX (6h elapsed, escalation 1/2): blah beats another broad attempt.\n\nTIME BOX EXHAUSTED (9h after two scope narrowings): this attempt is charged. Deliver ONLY x and stop.";
+      expect(stripTimeBoxDirectives(p)).toBe("base");
+    });
+
+    it("a shutdown-caused tip found at boot is resubmitted even when the time box is past its last narrowing", async () => {
+      const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+      await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+      const c = storage.get(campaign.id)!;
+      const m = c.milestones[0]!;
+      m.timeBoxEscalations = 2;
+      m.attempts = 2;
+      m.startedAtMs = Date.now() - 7 * 3_600_000;
+      storage.save(c);
+      tasks.markTerminal("task_1", TaskStatus.blocked, "Task durduruldu (shutting down)");
+      await manager.resumeActive();
+      await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+      expect(storage.get(campaign.id)!.state).toBe("executing");
+    });
+
+    it("a partial delivery that stopped on a refusal is re-sent after a restart; a plain failure is not", async () => {
+      const a = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+      const ca = storage.get(a.id)!;
+      ca.state = "failed"; ca.lastError = "NOT DELIVERED — The shipped scenes render NOTHING"; ca.deliveryReported = false;
+      storage.save(ca);
+      const b = manager.startFromGdd(ctx, "# GDD 2", "docs/Game2_GDD.md");
+      const cb = storage.get(b.id)!;
+      cb.state = "failed"; cb.lastError = "m1 failed after 2 attempts: compile exploded"; cb.deliveryReported = false;
+      storage.save(cb);
+      expect(storage.listUnreportedDeliveries().map((c) => c.id)).toEqual([a.id]);
+    });
   });
 });
