@@ -252,6 +252,24 @@ describe("resolveRunBudgetPolicy", () => {
     expect(warnings).toHaveLength(0);
   });
 
+  it("raises taskInactivity to 3× the first-response allowance — a slow-but-answering provider is not an inactive task", () => {
+    // Measured 2026-09-08 10:00-11:53 (OpenCode free tier, first token after
+    // 3-5 min, every call answered): eight supervisor nodes died on
+    // task-inactivity at ~25 min each with a 10-minute ceiling against a
+    // 10-minute first-response allowance.
+    const { policy, warnings } = resolveRunBudgetPolicy("supervisor-node", {
+      ...seed,
+      providerFirstResponseMs: 600_000,
+      taskInactivityMs: 600_000,
+    });
+    expect(policy.callFirstResponseMs).toBe(600_000);
+    expect(policy.taskInactivityMs).toBe(1_800_000);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("slow-but-answering");
+    // A seed already above the floor is left alone, no warning.
+    expect(resolveRunBudgetPolicy("background", { ...seed, providerFirstResponseMs: 600_000, taskInactivityMs: 2_000_000 }).warnings).toHaveLength(0);
+  });
+
   it("clamps taskInactivity below 2×callStall and warns (the one surviving ratio, one place)", () => {
     const { policy, warnings } = resolveRunBudgetPolicy("background", {
       ...seed,

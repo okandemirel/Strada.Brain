@@ -55,6 +55,9 @@ export interface PolicyResolution {
  * (`taskInactivityMs >= ratio × callStallMs`) with a warning rather than silently honoring
  * an ordering-violating config.
  */
+/** How many full first-response waits a run may accumulate before it is inactive. */
+export const MIN_INACTIVITY_OVER_FIRST_RESPONSE_CALLS = 3;
+
 export function resolveRunBudgetPolicy(mode: RunMode, seed: PolicySeed): PolicyResolution {
   const warnings: string[] = [];
 
@@ -80,6 +83,24 @@ export function resolveRunBudgetPolicy(mode: RunMode, seed: PolicySeed): PolicyR
         `(${floor}ms); clamped to ${floor}ms so the task silence ceiling never trips before a single call's stall window.`,
     );
     taskInactivityMs = floor;
+  }
+  // A call is ALLOWED to wait callFirstResponseMs for its first token, and
+  // that wait is silence by the accumulator's rule (a productive call
+  // contributes only its first-token wait). A task ceiling under a few such
+  // allowed waits stops a run that is slow but answering. Measured 2026-09-08
+  // 10:00-11:53 on the OpenCode free tier (first token after 3-5 min, every
+  // call answered): eight supervisor nodes died on task-inactivity at ~25 min
+  // each, having completed two or three calls apiece, with a 10-minute
+  // ceiling against a 10-minute first-response allowance. A dead provider is
+  // still stopped by the per-call first-response timeout and the failure
+  // ledger's consecutive-failure rule, not by this ceiling.
+  const firstResponseFloor = MIN_INACTIVITY_OVER_FIRST_RESPONSE_CALLS * callFirstResponseMs;
+  if (taskInactivityMs < firstResponseFloor) {
+    warnings.push(
+      `taskInactivityMs (${taskInactivityMs}ms) < ${MIN_INACTIVITY_OVER_FIRST_RESPONSE_CALLS}×callFirstResponseMs ` +
+        `(${firstResponseFloor}ms); raised to ${firstResponseFloor}ms so a slow-but-answering provider is not read as an inactive task.`,
+    );
+    taskInactivityMs = firstResponseFloor;
   }
 
   return {
