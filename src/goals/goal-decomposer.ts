@@ -18,7 +18,7 @@ import type {
   LLMDecompositionOutput,
 } from "./types.js";
 import { generateGoalNodeId, parseLLMOutput } from "./types.js";
-import { validateDAG } from "./goal-validator.js";
+import { validateDAG, judgePlanShape } from "./goal-validator.js";
 
 // =============================================================================
 // DECOMPOSITION GUARD — minimal, language-agnostic
@@ -99,6 +99,7 @@ Rules:
 - Never substitute a document about a deliverable for the deliverable. "Write a plan describing the scene layout" does not satisfy "deliver a scene"
 - A named deliverable may be scheduled late, but it may not be dropped: measured, three runs asked for a playable scene with prefabs and a verified play-mode run, and all three produced plans made only of "write the scripts"
 - Prefer fewer, well-scoped goals over many granular ones
+- Every sub-goal CHANGES the project or PRODUCES an artifact. Searching, reading, inventories and analysis are not sub-goals — fold the looking into the work sub-goal that needs it. A plan made only of exploration is rejected (measured: seven "vault_search for …" nodes spent a sprint producing nothing)
 
 When the task is to build or extend a GAME — a GDD, a design document, "make this game", or a description of one someone imagined:
 - The person asking may not be a developer or a prompt engineer. A design document plus "build this" is a COMPLETE instruction. Do not plan a goal whose output is a question for them, and do not plan a goal that writes a specification back at them: they already gave you one.
@@ -252,9 +253,13 @@ export class GoalDecomposer {
 
     // If first attempt fails, retry with error feedback
     if (!llmOutput) {
+      const why = this.lastRejection
+        ? `Previous attempt was rejected: ${this.lastRejection}. `
+        : "Previous attempt failed to produce valid JSON. ";
+      this.lastRejection = undefined;
       llmOutput = await this.callLLMForDecomposition(
         proactivePrompt,
-        "Previous attempt failed to produce valid JSON. Please try again. Output the JSON object ONLY — " +
+        `${why}Please try again. Output the JSON object ONLY — ` +
           "start your reply with \"{\" and do not write a <reasoning> block or any prose before it.\n\n" +
           `Decompose this task into sub-goals:\n\n<task>${taskDescription}</task>`,
       );
@@ -448,6 +453,9 @@ export class GoalDecomposer {
   // ===========================================================================
 
   /** Call LLM and parse/validate the output */
+  /** Why the last LLM output was refused, for the retry prompt; cleared when read. */
+  private lastRejection: string | undefined;
+
   private async callLLMForDecomposition(
     systemPrompt: string,
     userMessage: string,
@@ -521,6 +529,17 @@ export class GoalDecomposer {
           hasJsonObject: response.text.includes("{"),
           stopReason: response.stopReason,
         });
+        return null;
+      }
+
+      const shape = judgePlanShape(parsed.nodes);
+      if (shape.explorationOnly) {
+        const { getLoggerSafe } = await import("../utils/logger.js");
+        getLoggerSafe().warn("Goal decomposition rejected — an exploration-only plan", {
+          nodeCount: parsed.nodes.length,
+          tasks: parsed.nodes.map((n) => n.task.slice(0, 80)),
+        });
+        this.lastRejection = "the plan was ONLY exploration (searching, reading, inventories) — every sub-goal must change the project or produce an artifact";
         return null;
       }
 

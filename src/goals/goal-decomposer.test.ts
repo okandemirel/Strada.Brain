@@ -258,6 +258,35 @@ describe("GoalDecomposer", () => {
       expect(childNodes).toHaveLength(1);
     });
 
+    it("rejects an exploration-only plan and tells the retry why", async () => {
+      // Measured 2026-09-08 08:21: seven "vault_search for …" nodes, thirty
+      // minutes, nothing produced.
+      const provider = createMockProvider([
+        JSON.stringify({
+          nodes: [
+            { id: "s1", task: "vault_search for GDD files", dependsOn: [] },
+            { id: "s2", task: "Read PixelFlow_GDD.md structure", dependsOn: ["s1"] },
+          ],
+        }),
+        JSON.stringify({
+          nodes: [
+            { id: "s1", task: "Generate the area background sprites with unity_generate_sprite", dependsOn: [] },
+            { id: "s2", task: "Bind the generated sprites into the entry scene prefabs", dependsOn: ["s1"] },
+          ],
+        }),
+      ]);
+
+      const decomposer = new GoalDecomposer(provider, 3);
+      const tree = await decomposer.decomposeProactive("test-session", "Deliver the art the GDD schedules for every area");
+
+      expect(provider.chat).toHaveBeenCalledTimes(2);
+      const retryMessages = provider.chat.mock.calls[1]![1] as Array<{ content: string }>;
+      expect(retryMessages[0]!.content).toContain("ONLY exploration");
+      const tasks = Array.from(tree.nodes.values()).map((n) => n.task);
+      expect(tasks.some((t) => t.includes("Generate the area background sprites"))).toBe(true);
+      expect(tasks.some((t) => t.includes("vault_search for GDD files"))).toBe(false);
+    });
+
     it("calls LLM recursively for depth-2 nodes flagged with needsFurtherDecomposition", async () => {
       const provider = createMockProvider([
         JSON.stringify({

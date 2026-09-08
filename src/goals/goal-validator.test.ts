@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { validateDAG } from "./goal-validator.js";
+import { judgePlanShape, validateDAG } from "./goal-validator.js";
 import type { DAGValidationResult } from "./goal-validator.js";
 import {
   parseLLMOutput,
@@ -266,5 +266,32 @@ describe("llmDecompositionSchema", () => {
     }));
     const result = llmDecompositionSchema.safeParse({ nodes });
     expect(result.success).toBe(false);
+  });
+});
+
+describe("judgePlanShape", () => {
+  it("rejects the seven-node exploration plan measured 2026-09-08 (30 minutes, 55 reads, nothing produced)", () => {
+    const nodes = [
+      "Explore project structure: vault_search for GDD, modules, scenes, prefabs, audio, and existing patterns",
+      "vault_search for GDD files including PixelFlow_GDD.md",
+      "vault_search for module definitions and scripts",
+      "vault_search for scene files",
+      "vault_search for prefab files",
+      "vault_search for audio assets",
+      "Read PixelFlow_GDD.md structure and extract key game design requirements",
+    ].map((task) => ({ task }));
+    const verdict = judgePlanShape(nodes);
+    expect(verdict.explorationOnly).toBe(true);
+    expect(verdict.workNodes).toBe(0);
+    expect(verdict.explorationNodes).toBe(7);
+  });
+
+  it("accepts a plan with at least one node that changes the project, and never judges a single-node tree", () => {
+    expect(judgePlanShape([{ task: "Read the GDD" }, { task: "Generate the Rocket sprites with unity_generate_sprite and bind them" }]).explorationOnly).toBe(false);
+    expect(judgePlanShape([{ task: "vault_search for everything" }]).explorationOnly).toBe(false);
+    expect(judgePlanShape([]).explorationOnly).toBe(false);
+    // Neutral labels say nothing about shape and are not judged.
+    expect(judgePlanShape([{ task: "Step 1" }, { task: "Step 2" }]).explorationOnly).toBe(false);
+    expect(judgePlanShape([{ task: "Read the GDD" }, { task: "Step 2" }]).explorationOnly).toBe(false);
   });
 });

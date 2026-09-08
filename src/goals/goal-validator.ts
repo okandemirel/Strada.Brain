@@ -110,3 +110,44 @@ export function validateDAG(
 
   return { valid: true, topologicalOrder: order };
 }
+
+/** Verbs that change the project or produce an artifact. */
+const WORK_RE =
+  /\b(create|generate|draw|paint|write|bind|place|instantiate|implement|add|replace|fix|build|import|compose|record|configure|wire|assemble|edit|update|refactor|remove|delete|rename|migrate|convert|apply|set up|setup|install|run|execute|verify|capture|test|deliver|produce|ship)\b/i;
+/** Verbs that only look. */
+const EXPLORATION_RE =
+  /\b(explore|vault_search|search|read|inspect|analy[sz]e|inventory|list|review|understand|survey|audit|examine|scan|grep|look|identify|locate|find|extract|gather|collect|map|catalog|document)\b/i;
+
+export interface PlanShapeVerdict {
+  /** True when the plan has 2+ nodes and none of them does work. */
+  readonly explorationOnly: boolean;
+  readonly workNodes: number;
+  readonly explorationNodes: number;
+}
+
+/**
+ * Whether a plan is all looking and no doing.
+ *
+ * Measured 2026-09-08 08:21-08:48 (PixelFlow, a sprint whose prompt said
+ * "DO NOT AUDIT"): the planner answered with seven nodes — "vault_search for
+ * GDD files", "vault_search for module definitions", "… scene files", "…
+ * prefab files", "… audio assets", "… existing patterns", "Read
+ * PixelFlow_GDD.md structure" — and the sprint spent thirty minutes and 55
+ * read calls producing nothing. A single-node tree is the whole task and is
+ * not judged here.
+ */
+export function judgePlanShape(nodes: ReadonlyArray<{ readonly task: string }>): PlanShapeVerdict {
+  let workNodes = 0;
+  let explorationNodes = 0;
+  for (const node of nodes) {
+    if (WORK_RE.test(node.task)) workNodes++;
+    else if (EXPLORATION_RE.test(node.task)) explorationNodes++;
+  }
+  // Every node must POSITIVELY be exploration: a plan of neutral labels
+  // ("Step 1", "Task A") says nothing about its shape and is not judged.
+  return {
+    explorationOnly: nodes.length >= 2 && workNodes === 0 && explorationNodes === nodes.length,
+    workNodes,
+    explorationNodes,
+  };
+}
