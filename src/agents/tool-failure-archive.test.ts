@@ -3,10 +3,10 @@
  * 1559-error compile verdict survived only as one log line.
  */
 import { describe, it, expect, afterEach } from "vitest";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { archiveToolFailure, toolFailureArchiveRoot } from "./tool-failure-archive.js";
+import { ARCHIVE_DAY_CAP, ARCHIVE_KEEP_DAYS, archiveToolFailure, toolFailureArchiveRoot } from "./tool-failure-archive.js";
 
 const roots: string[] = [];
 afterEach(() => { for (const r of roots.splice(0)) rmSync(r, { recursive: true, force: true }); });
@@ -49,8 +49,45 @@ describe("archiveToolFailure", () => {
     expect(archiveToolFailure({ tool: "t", chatId: "c", input: {}, content: "x" }, join(blocker, "sub"))).toBeUndefined();
   });
 
-  it("lives under STRADA_HOME/.strada/tool-failures", () => {
+  it("lives under STRADA_HOME/.strada/tool-failures, under the temp root while vitest runs, or where STRADA_TOOL_FAILURE_DIR says", () => {
     expect(toolFailureArchiveRoot({ STRADA_HOME: "/h" })).toBe(join("/h", ".strada", "tool-failures"));
     expect(existsSync(toolFailureArchiveRoot({ STRADA_HOME: "/definitely/not/there" }))).toBe(false);
+    // Reviewed 2026-09-08: the first version's unit tests wrote nonexistent_tool
+    // failures into the user's real ~/.strada.
+    expect(toolFailureArchiveRoot({ VITEST: "true" })).toBe(join(tmpdir(), "strada-tool-failures"));
+    expect(toolFailureArchiveRoot({ VITEST: "true", STRADA_TOOL_FAILURE_DIR: "/x" })).toBe("/x");
+    expect(toolFailureArchiveRoot()).toBe(join(tmpdir(), "strada-tool-failures"));
+  });
+
+  it("redacts credentials in both the input and the result", () => {
+    const root = freshRoot();
+    const key = "sk-ant-api03-SECRETSECRETSECRETSECRET";
+    const file = archiveToolFailure(
+      { tool: "shell_exec", chatId: "c", input: { command: `curl -H 'Authorization: Bearer ${key}'` }, content: `Error: 401 for key ${key}` },
+      root,
+    );
+    const text = readFileSync(file!, "utf8");
+    expect(text).not.toContain("SECRETSECRET");
+    expect(text).toContain("[REDACTED]");
+  });
+
+  it("stops writing after ARCHIVE_DAY_CAP files in a day and says so by returning undefined", () => {
+    const root = freshRoot();
+    const at = new Date("2026-09-08T10:00:00.000Z");
+    const day = join(root, "2026-09-08");
+    mkdirSync(day, { recursive: true });
+    for (let i = 0; i < ARCHIVE_DAY_CAP; i++) writeFileSync(join(day, `f${i}.txt`), "");
+    expect(archiveToolFailure({ tool: "t", chatId: "c", input: {}, content: "x", at }, root)).toBeUndefined();
+    expect(readdirSync(day)).toHaveLength(ARCHIVE_DAY_CAP);
+  });
+
+  it("removes day directories older than ARCHIVE_KEEP_DAYS when it first archives", () => {
+    const root = freshRoot();
+    mkdirSync(join(root, "2026-01-01"), { recursive: true });
+    mkdirSync(join(root, "2026-09-07"), { recursive: true });
+    const at = new Date("2026-09-08T10:00:00.000Z");
+    expect(archiveToolFailure({ tool: "t", chatId: "c", input: {}, content: "x", at }, root)).toBeTruthy();
+    expect(existsSync(join(root, "2026-01-01"))).toBe(false);
+    expect(existsSync(join(root, "2026-09-07"))).toBe(true);
   });
 });

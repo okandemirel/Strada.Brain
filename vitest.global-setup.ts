@@ -1,5 +1,6 @@
 /**
- * One temp root per test run, removed when the run ends.
+ * One temp root per test run, removed when the run exits normally (a
+ * Ctrl-C'd run leaves its root; the next normal run does not touch it).
  *
  * Measured 2026-09-08 03:50: the machine's temp directory held 139 813
  * entries — "assets-gate-" ×6455, "module-create-structure-" ×4692,

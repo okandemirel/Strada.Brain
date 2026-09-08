@@ -4,7 +4,6 @@ import type { ExecutionJournal } from "./autonomy/execution-journal.js";
 import type { ToolCall, ToolResult } from "./providers/provider-core.interface.js";
 import type { WorkerRunResult, WorkerToolTrace } from "./supervisor/supervisor-types.js";
 import { sanitizeToolResult } from "./orchestrator-runtime-utils.js";
-import { archiveToolFailure } from "./tool-failure-archive.js";
 
 /** Minimal interface for TaskPlanner methods used by tracking. */
 interface TaskPlannerLike {
@@ -103,17 +102,14 @@ export function trackAndRecordToolResults(params: ToolTrackingParams): void {
       bytes: typeof tr.content === "string" ? tr.content.length : undefined,
     });
     if (tr.isError) {
-      // The whole result goes to disk: the one-line detail names the failure,
-      // the file is what answers "why" afterwards (see tool-failure-archive.ts).
-      const archived = typeof tr.content === "string"
-        ? archiveToolFailure({ tool: tc.name, chatId, input: tc.input, content: tr.content })
-        : undefined;
+      // The one-line detail names the failure; the file the orchestrator
+      // archived from the untruncated result answers "why" afterwards.
       getLoggerSafe()?.info("Tool failed", {
         tool: tc.name,
         chatId,
         target: failureTarget(tc.input),
         detail: firstMeaningfulLine(tr.content),
-        archived,
+        archived: typeof tr.metadata?.["archivedFailure"] === "string" ? tr.metadata["archivedFailure"] : undefined,
       });
     }
 

@@ -67,6 +67,7 @@ import type { IRAGPipeline } from "../rag/rag.interface.js";
 import type { RateLimiter } from "../security/rate-limiter.js";
 import { getLogger, getLogRingBuffer } from "../utils/logger.js";
 import { logProviderCall, toolDefinitionChars } from "./providers/provider-call-log.js";
+import { archiveToolFailure } from "./tool-failure-archive.js";
 import { buildPostSetupWelcomeMessage } from "../common/setup-state.js";
 import type { PostSetupBootstrap, PostSetupBootstrapContext } from "../common/setup-contract.js";
 import {
@@ -5185,6 +5186,12 @@ export class Orchestrator {
 
       // audited 2026-09-02: a warn-tier instinct match is shown to the model here,
       // on the result it reads, instead of dying in a debug log.
+      // The failure is archived HERE, from the result as the tool returned it:
+      // sanitizeToolResult below truncates at 8 KB for the model, and an archive
+      // taken after that (reviewed 2026-09-08 04:10) kept the same cut blob.
+      const archivedFailure = result.isError && typeof result.content === "string"
+        ? archiveToolFailure({ tool: activeToolCall.name, chatId, input: activeToolCall.input, content: result.content })
+        : undefined;
       const content = sanitizeToolResult(result.content);
       return {
         toolCallId: activeToolCall.id,
@@ -5192,7 +5199,7 @@ export class Orchestrator {
           ? content
           : `${content}\n\n[learned warning for ${activeToolCall.name}]\n${learnedWarnings.map((w) => `- ${w}`).join("\n")}`,
         isError: result.isError,
-        metadata: result.metadata,
+        metadata: archivedFailure ? { ...(result.metadata ?? {}), archivedFailure } : result.metadata,
       };
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : "Unknown error";
