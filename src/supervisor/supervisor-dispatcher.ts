@@ -16,6 +16,7 @@
 
 import type { TaggedGoalNode, NodeResult } from "./supervisor-types.js";
 import { getLoggerSafe } from "../utils/logger.js";
+import { medianTurnMs } from "../agents/providers/provider-call-log.js";
 import {
   buildSupervisorCanvasNodeUpdate,
   buildSupervisorCanvasSummaryUpdate,
@@ -32,9 +33,21 @@ const NODE_OUTPUT_PERSIST_CHARS = 2000;
 
 export interface DispatcherConfig {
   readonly maxParallelNodes: number;
+  /** The configured floor of a node's time budget; see nodeBudgetMs(). */
   readonly nodeTimeoutMs: number;
   readonly maxFailureBudget: number;
+  /** Measured median turn latency (test seam; defaults to the provider-call gauge). */
+  readonly turnPaceMs?: () => number | undefined;
 }
+
+/**
+ * A node needs room for this many turns at the MEASURED pace. Measured
+ * 2026-09-08: at 162 s per turn a 60-minute budget was eleven turns — all
+ * inventory, no generation — and the node's eleven dependents were skipped.
+ */
+export const MIN_TURNS_PER_NODE = 30;
+/** No pace makes a node's budget longer than this. */
+export const NODE_BUDGET_CAP_MS = 3 * 60 * 60_000;
 
 export interface DispatcherOptions {
   readonly executeNode: (node: TaggedGoalNode, signal: AbortSignal) => Promise<NodeResult>;
@@ -763,13 +776,36 @@ export class SupervisorDispatcher {
     };
   }
 
+  /**
+   * The node's time budget: the configured floor, raised to MIN_TURNS_PER_NODE
+   * turns at the measured median turn latency (capped), so a slow provider
+   * does not turn the budget into a handful of turns.
+   */
+  private nodeBudgetMs(): number {
+    const base = this.config.nodeTimeoutMs;
+    const pace = (this.config.turnPaceMs ?? medianTurnMs)();
+    if (pace === undefined || !Number.isFinite(pace) || pace <= 0) return base;
+    const scaled = Math.min(NODE_BUDGET_CAP_MS, Math.round(MIN_TURNS_PER_NODE * pace));
+    if (scaled > base && !this.budgetRaiseLogged) {
+      this.budgetRaiseLogged = true;
+      getLoggerSafe().info("Node time budget raised to the measured turn pace", {
+        configuredMs: base,
+        budgetMs: scaled,
+        medianTurnMs: Math.round(pace),
+        turns: MIN_TURNS_PER_NODE,
+      });
+    }
+    return Math.max(base, scaled);
+  }
+  private budgetRaiseLogged = false;
+
   private async executeWithTimeout(
     node: TaggedGoalNode,
     externalSignal?: AbortSignal,
   ): Promise<NodeResult> {
     const nodeController = new AbortController();
     const startedAt = Date.now();
-    const timeoutMs = this.config.nodeTimeoutMs;
+    const timeoutMs = this.nodeBudgetMs();
     const nodeLabel = node.task?.slice(0, 80) ?? node.id ?? "unknown-node";
 
     // Link external signal to node controller
@@ -793,7 +829,7 @@ export class SupervisorDispatcher {
         const elapsed = Date.now() - startedAt;
         reject(
           new Error(
-            `Tool timeout after ${timeoutMs}ms (node="${nodeLabel}", elapsed=${elapsed}ms, reason=per-node-timeout)`,
+            `Node time budget exhausted after ${timeoutMs}ms (node="${nodeLabel}", elapsed=${elapsed}ms, reason=per-node-timeout)`,
           ),
         );
       }, timeoutMs);
@@ -849,7 +885,7 @@ export class SupervisorDispatcher {
             ? "node-abort"
             : "node-error";
       const baseMsg = timedOut
-        ? `Tool timeout after ${timeoutMs}ms`
+        ? `Node time budget exhausted after ${timeoutMs}ms`
         : (err instanceof Error ? err.message : String(err));
       // Abort the node controller so in-flight fetch() calls are cancelled
       nodeController.abort();

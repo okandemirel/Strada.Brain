@@ -293,6 +293,35 @@ describe("SupervisorDispatcher", () => {
   // 2s and ran the whole node AGAIN — a stuck node burned two full windows (up to
   // 6h + 6h with the shipped defaults) before it was reported failed, with the
   // abandoned first run still executing in the background.
+  it("sizes the node budget to the MEASURED turn pace: room for 30 turns, never below the configured floor", async () => {
+    // Measured 2026-09-08 15:43-16:45: median turn 162 s on the free tier, so a
+    // 60-minute budget was eleven turns of inventory; the node died before its
+    // first generation call and its eleven dependents were skipped.
+    const executeNode = vi.fn().mockImplementation(
+      () => new Promise<NodeResult>((resolve) => setTimeout(() => resolve(makeOkResult("X")), 300)),
+    );
+    const dispatcher = new SupervisorDispatcher({
+      executeNode,
+      // floor 100 ms would kill the 300 ms node; 30 × 20 ms = 600 ms lets it finish
+      config: { maxParallelNodes: 1, nodeTimeoutMs: 100, maxFailureBudget: 3, turnPaceMs: () => 20 },
+    });
+    const results = await dispatcher.dispatch([makeAssignedNode("X", "Paced task", "claude")]);
+    expect(results[0]?.status).toBe("ok");
+    expect(executeNode.mock.calls[0]?.[0]?.timeBudgetNotice).toContain("cancelled after 1 minutes");
+
+    // A fast pace never lowers the floor.
+    const slow = vi.fn().mockImplementation(
+      () => new Promise<NodeResult>((resolve) => setTimeout(() => resolve(makeOkResult("Y")), 5000)),
+    );
+    const floored = new SupervisorDispatcher({
+      executeNode: slow,
+      config: { maxParallelNodes: 1, nodeTimeoutMs: 100, maxFailureBudget: 3, turnPaceMs: () => 1 },
+    });
+    const r2 = await floored.dispatch([makeAssignedNode("Y", "Stuck task", "claude")]);
+    expect(r2[0]?.status).toBe("failed");
+    expect(r2[0]?.output).toContain("Node time budget exhausted after 100ms");
+  });
+
   it("does not retry a node that hit its own per-node timeout", async () => {
     const executeNode = vi.fn().mockImplementation(
       () => new Promise<NodeResult>((resolve) => setTimeout(() => resolve(makeOkResult("X")), 5000)),
@@ -309,7 +338,8 @@ describe("SupervisorDispatcher", () => {
     expect(executeNode).toHaveBeenCalledTimes(1);
     expect(results[0]?.status).toBe("failed");
     expect(results[0]?.output).toContain("per-node-timeout");
-    expect(results[0]?.output).toContain("Tool timeout after 100ms");
+    expect(results[0]?.output).toContain("Node time budget exhausted after 100ms");
+    expect(results[0]?.output).not.toContain("Tool timeout");
     expect(elapsed).toBeLessThan(1500); // no 2s transient backoff, no second window
   });
 

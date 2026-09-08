@@ -23,6 +23,34 @@ export function toolDefinitionChars(tools: ReadonlyArray<unknown> | undefined): 
   return JSON.stringify(tools).length;
 }
 
+/**
+ * The measured pace of the agent loop's turns, newest TURN_PACE_WINDOW.
+ * Measured 2026-09-08 15:43-16:45 on the OpenCode free tier: median 162 s per
+ * turn, so a 60-minute node budget bought eleven turns of inventory and the
+ * node died before its first generation call; eleven dependents were skipped.
+ * A budget that does not know the pace is a turn count nobody chose.
+ */
+const TURN_PACE_WINDOW = 20;
+const recentTurnMs: number[] = [];
+
+export function noteTurnDuration(ms: number): void {
+  if (!Number.isFinite(ms) || ms <= 0) return;
+  recentTurnMs.push(ms);
+  if (recentTurnMs.length > TURN_PACE_WINDOW) recentTurnMs.shift();
+}
+
+/** Median duration of recent answered turns, or undefined before any turn answered. */
+export function medianTurnMs(): number | undefined {
+  if (recentTurnMs.length === 0) return undefined;
+  const sorted = [...recentTurnMs].sort((a, b) => a - b);
+  return sorted[Math.floor(sorted.length / 2)];
+}
+
+/** Test seam. */
+export function resetTurnPace(): void {
+  recentTurnMs.length = 0;
+}
+
 export interface ProviderCallOutcome {
   readonly response?: ProviderResponse;
   readonly error?: unknown;
@@ -38,6 +66,7 @@ export function logProviderCall(
   const ms = Date.now() - startedAt;
   const { response, error } = outcome;
   if (response) {
+    if (label === "turn") noteTurnDuration(ms);
     getLogger().info("Provider call", {
       label,
       provider: response.servedBy?.provider ?? provider.name,

@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const loggerSpies = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
 vi.mock("../../utils/logger.js", () => ({ getLoggerSafe: () => loggerSpies, getLogger: () => loggerSpies }));
 
-import { logProviderCall, describeThrown } from "./provider-call-log.js";
+import { logProviderCall, describeThrown, medianTurnMs, noteTurnDuration, resetTurnPace } from "./provider-call-log.js";
 
 describe("logProviderCall", () => {
   beforeEach(() => loggerSpies.info.mockClear());
@@ -53,5 +53,22 @@ describe("toolDefinitionChars", () => {
     expect(describeThrown(new Error("boom"))).toBe("boom");
     expect(describeThrown("plain")).toBe("plain");
     expect(describeThrown(undefined)).toBe("undefined");
+  });
+
+  it("keeps a median of recent answered TURN durations for the node budget (failures and other labels do not count)", () => {
+    resetTurnPace();
+    expect(medianTurnMs()).toBeUndefined();
+    const ok = { text: "x", toolCalls: [], stopReason: "end_turn", usage: { inputTokens: 1, outputTokens: 1 } } as never;
+    logProviderCall("turn", { name: "p" }, Date.now() - 100_000, { response: ok });
+    logProviderCall("turn", { name: "p" }, Date.now() - 160_000, { response: ok });
+    logProviderCall("turn", { name: "p" }, Date.now() - 200_000, { response: ok });
+    logProviderCall("streaming", { name: "p" }, Date.now() - 900_000, { response: ok });
+    logProviderCall("turn", { name: "p" }, Date.now() - 900_000, { error: new Error("boom") });
+    const median = medianTurnMs()!;
+    expect(median).toBeGreaterThanOrEqual(160_000);
+    expect(median).toBeLessThan(165_000);
+    for (let i = 0; i < 25; i++) noteTurnDuration(1_000);
+    expect(medianTurnMs()).toBe(1_000); // rolling window forgets the old pace
+    resetTurnPace();
   });
 });
