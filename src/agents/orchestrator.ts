@@ -66,7 +66,7 @@ import { checkStradaDeps, installStradaDep } from "../config/strada-deps.js";
 import type { IRAGPipeline } from "../rag/rag.interface.js";
 import type { RateLimiter } from "../security/rate-limiter.js";
 import { getLogger, getLogRingBuffer } from "../utils/logger.js";
-import { logProviderCall } from "./providers/provider-call-log.js";
+import { logProviderCall, toolDefinitionChars } from "./providers/provider-call-log.js";
 import { buildPostSetupWelcomeMessage } from "../common/setup-state.js";
 import type { PostSetupBootstrap, PostSetupBootstrapContext } from "../common/setup-contract.js";
 import {
@@ -3935,6 +3935,7 @@ export class Orchestrator {
           promptChars: effectivePrompt?.length ?? 0,
           messages: session?.messages?.length ?? 0,
           tools: toolDefinitions?.length ?? 0,
+          toolChars: toolDefinitionChars(toolDefinitions),
         });
         this.classifySilentStreamResponse(response, provider);
         return response;
@@ -4032,6 +4033,7 @@ export class Orchestrator {
         promptChars: effectivePrompt?.length ?? 0,
         messages: session?.messages?.length ?? 0,
         tools: toolDefinitions?.length ?? 0,
+        toolChars: toolDefinitionChars(toolDefinitions),
       });
       // Route empty 200s to the health-failure path (the shared breaker predicate, audit #9).
       this.classifySilentStreamResponse(response, provider);

@@ -33,3 +33,13 @@ describe("logProviderCall", () => {
     expect(fields).toMatchObject({ label: "turn", provider: "opencode", error: "sent no response within 300000ms" });
   });
 });
+
+describe("toolDefinitionChars", () => {
+  it("is the serialized size of the tool schemas the request carries, 0 when there are none", async () => {
+    const { toolDefinitionChars } = await import("./provider-call-log.js");
+    expect(toolDefinitionChars(undefined)).toBe(0);
+    expect(toolDefinitionChars([])).toBe(0);
+    const tools = [{ name: "a", description: "x", parameters: { type: "object" } }];
+    expect(toolDefinitionChars(tools)).toBe(JSON.stringify(tools).length);
+  });
+});

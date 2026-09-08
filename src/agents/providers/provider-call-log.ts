@@ -12,6 +12,17 @@
 import type { IAIProvider, ProviderResponse } from "./provider.interface.js";
 import { getLogger } from "../../utils/logger.js";
 
+/**
+ * How much of the request the tool schemas are. Measured 2026-09-08 03:40
+ * on a PixelFlow sprint turn: 121k prompt chars + 104 tools = 57-64k input
+ * tokens, and the prompt alone accounts for roughly 30k of them — the rest
+ * is tools and messages, and only a measurement says which.
+ */
+export function toolDefinitionChars(tools: ReadonlyArray<unknown> | undefined): number {
+  if (!tools || tools.length === 0) return 0;
+  return JSON.stringify(tools).length;
+}
+
 export interface ProviderCallOutcome {
   readonly response?: ProviderResponse;
   readonly error?: unknown;
