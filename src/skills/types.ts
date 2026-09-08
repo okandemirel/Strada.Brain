@@ -23,6 +23,16 @@ export interface SkillManifest {
   homepage?: string;
   requires?: SkillRequirements;
   capabilities?: string[];
+  /**
+   * When the skill's SKILL.md body is put into the system prompt. Default
+   * "on-mention": only for a task whose prompt names the skill or one of its
+   * `triggers`. "always": every turn. Measured 2026-09-08 04:42: three
+   * agent-written plan skills (Aug 27 – Sep 2) rode every turn of every task
+   * at ~7.4k chars — a stale replan for a compile error fixed days earlier.
+   */
+  inject?: "always" | "on-mention";
+  /** Words or phrases in a task prompt that make the body relevant (case-insensitive). */
+  triggers?: string[];
 }
 
 /** Runtime status of a loaded skill. */

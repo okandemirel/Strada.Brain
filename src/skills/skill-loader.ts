@@ -152,6 +152,12 @@ export async function discoverSkills(
           ...(Array.isArray(data["capabilities"])
             ? { capabilities: data["capabilities"] as string[] }
             : {}),
+          ...(data["inject"] === "always" || data["inject"] === "on-mention"
+            ? { inject: data["inject"] }
+            : {}),
+          ...(Array.isArray(data["triggers"])
+            ? { triggers: (data["triggers"] as unknown[]).filter((t): t is string => typeof t === "string") }
+            : {}),
         };
 
         const trimmedBody = bodyContent?.trim();

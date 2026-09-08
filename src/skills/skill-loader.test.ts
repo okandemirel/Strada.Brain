@@ -104,6 +104,35 @@ describe("discoverSkills", () => {
     expect(skills[0]!.path).toBe(gmailDir);
   });
 
+  it("reads inject and triggers from the frontmatter (how a body earns its place in a prompt)", async () => {
+    const skillDir = "/test-project/skills";
+    const planDir = `${skillDir}/ufo-plan`;
+    fsMock.stat.mockImplementation(async (path: string) => {
+      if (path === skillDir || path === planDir) return dirStat;
+      if (path === `${planDir}/SKILL.md`) return fileStat;
+      throw new Error("ENOENT");
+    });
+    fsMock.readdir.mockImplementation(async (path: string) => (path === skillDir ? ["ufo-plan"] : []));
+    fsMock.readFile.mockImplementation(async (path: string) => {
+      if (path === `${planDir}/SKILL.md`) {
+        return makeSkillMd({
+          name: "ufo-plan",
+          version: "1.0.0",
+          description: "UFO set-piece plan",
+          inject: "on-mention",
+          triggers: ["UFO", "set-piece"],
+        }) + "# UFO plan body\n";
+      }
+      throw new Error("ENOENT");
+    });
+
+    const skills = await discoverSkills("/test-project");
+    expect(skills).toHaveLength(1);
+    expect(skills[0]!.manifest.inject).toBe("on-mention");
+    expect(skills[0]!.manifest.triggers).toEqual(["UFO", "set-piece"]);
+    expect(skills[0]!.body).toContain("UFO plan body");
+  });
+
   it("skips skills with missing name field", async () => {
     const extraDir = "/extra-skills";
     const badDir = `${extraDir}/bad-skill`;

@@ -20,8 +20,9 @@ export class CreateSkillTool implements ITool {
   readonly name = "create_skill";
   readonly description =
     "Create a new skill (SKILL.md) in the workspace skills directory. " +
-    "The skill will be available in future sessions after restart. " +
-    "Use this to persist specialized knowledge or instructions.";
+    "Its body reaches a future task's prompt only when that task names the skill or one of its " +
+    "`triggers` (frontmatter; `inject: always` forces it). Use this for reusable know-how, " +
+    "not for a plan of the task you are on — that plan would otherwise ride every later task.";
 
   readonly inputSchema = {
     type: "object" as const,

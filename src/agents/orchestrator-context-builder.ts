@@ -4,6 +4,7 @@ import type { TaskExecutionMemory, TaskExecutionStore } from "../memory/unified/
 import type { UserProfile } from "../memory/unified/user-profile-store.js";
 import type { SoulLoader } from "./soul/index.js";
 import type { SkillEntry } from "../skills/types.js";
+import { selectSkillKnowledge } from "./skill-knowledge-selection.js";
 import type { DMPolicy } from "../security/dm-policy.js";
 import type { GoalTree } from "../goals/types.js";
 import type { TaskClassification } from "../agent-core/routing/routing-types.js";
@@ -434,7 +435,14 @@ export async function buildContextLayers(
     const MAX_TOTAL_SKILL_CHARS = 40_000;
     const knowledgeParts: string[] = [];
     let totalChars = 0;
-    for (const skill of ctx.skillEntries) {
+    // Only the skills this task calls for (see skill-knowledge-selection.ts).
+    const selection = selectSkillKnowledge(ctx.skillEntries, userMessage);
+    if (selection.withheld.length > 0) {
+      getLogger().info("Skill knowledge withheld — the task does not name these skills", {
+        withheld: selection.withheld,
+      });
+    }
+    for (const skill of selection.included) {
       if (skill.status === "active" && skill.body) {
         if (totalChars >= MAX_TOTAL_SKILL_CHARS) break;
         const bodyText = skill.body.length > MAX_SKILL_BODY_CHARS
