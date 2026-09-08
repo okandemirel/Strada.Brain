@@ -76,6 +76,21 @@ describe("resolveTierMap — pins", () => {
 });
 
 describe("resolveTierMap — derivation", () => {
+  it("derives only from the run's chain when one is declared", () => {
+    // Measured 2026-09-08 03:12: chain [opencode, opencode2], yet standard and
+    // premium derived to openai:* — quota-dead and excluded by the operator.
+    const { tiers, derivations } = resolveTierMap({
+      configured: { cheap: "", standard: "", premium: "", local: "" } as never,
+      catalog: CATALOG,
+      availableProviders: ALL_PROVIDERS,
+      chain: ["ollama"],
+    });
+    const specs = Object.values(tiers).filter((s): s is string => Boolean(s));
+    expect(specs.length).toBeGreaterThan(0);
+    for (const spec of specs) expect(spec.startsWith("ollama:")).toBe(true);
+    expect(derivations.some((d) => d.source === "derived")).toBe(true);
+  });
+
   it("derives every tier when nothing is configured", () => {
     const r = resolveTierMap({
       configured: {},

@@ -1832,6 +1832,8 @@ async function bootstrapImpl(
             configured: configuredTiers,
             catalog: modelIntelligence.getAllModels(),
             availableProviders: getAvailableProviderNames(config),
+            // Sub-agents run on the same chain the run does (PROVIDER_CHAIN).
+            chain: config.providerChain?.split(/[>,\s]+/).filter(Boolean) ?? [],
             ...(behavioralScore ? { behavioralScore } : {}),
           });
           const derivedOnly = Object.fromEntries(

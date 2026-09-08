@@ -57,6 +57,14 @@ export interface ResolveTierMapParams {
   readonly catalog: readonly ModelInfo[];
   /** Provider names this deployment can actually call. */
   readonly availableProviders: readonly string[];
+  /**
+   * The run's provider chain (PROVIDER_CHAIN), when set. A credentialed
+   * provider outside it is not capacity for a sub-agent: measured 2026-09-08
+   * 03:12, the chain was [opencode, opencode2] and the standard/premium tiers
+   * derived to openai:* — quota-dead and excluded by the operator — so every
+   * standard delegation timed out. Empty or absent means no restriction.
+   */
+  readonly chain?: readonly string[];
   /** Optional observed-quality signal. */
   readonly behavioralScore?: BehavioralScoreLookup;
 }
@@ -272,7 +280,10 @@ export function parseTierSpec(spec: string): { provider: string; model: string }
  */
 export function resolveTierMap(params: ResolveTierMapParams): ResolveTierMapResult {
   const { configured, catalog, availableProviders, behavioralScore } = params;
-  const available = new Set(availableProviders.map((p) => p.toLowerCase()));
+  const chain = new Set((params.chain ?? []).map((p) => p.trim().toLowerCase()).filter((p) => p !== ""));
+  const available = new Set(
+    availableProviders.map((p) => p.toLowerCase()).filter((p) => chain.size === 0 || chain.has(p)),
+  );
   const reachable = catalog.filter((m) => available.has(m.provider.toLowerCase()));
 
   const tiers: Partial<Record<ModelTier, string>> = {};

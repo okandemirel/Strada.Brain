@@ -708,10 +708,20 @@ export class CampaignManager {
     // process — re-arm them from the persisted timestamps (overdue ones fire
     // on a short delay so boot recovery settles first).
     for (const campaign of this.storage.listAwaitingAutoRevive()) {
-      const dueInMs = Math.max((campaign.autoReviveAt ?? 0) - Date.now(), 120_000);
+      // The persisted appointment can be stale: measured 2026-09-08 03:12, it
+      // read Sep 11 (the next member's horizon, see provider-outage.ts) while
+      // the registry said a member was probe-worthy now. The registry's
+      // horizon wins when it is sooner; an overdue or moot appointment fires
+      // on a short delay so boot recovery settles first.
+      const stored = (campaign.autoReviveAt ?? 0) - Date.now();
+      const registry = allProvidersCoolingDownMs();
+      const horizon = registry > 0 ? Math.min(stored, registry + 60_000) : Math.min(stored, 0);
+      const dueInMs = Math.max(horizon, 120_000);
       getLoggerSafe().info("Re-arming campaign self-revival after restart", {
         id: campaign.id,
         dueInMs,
+        storedInMs: stored,
+        registryInMs: registry,
       });
       this.scheduleAutoRevive(campaign.id, dueInMs);
     }
