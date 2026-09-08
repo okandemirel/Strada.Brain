@@ -1115,6 +1115,11 @@ export class CampaignManager {
     // requirement. Measured 2026-09-03: the delivered tree left 14 scenes
     // enabled in Build Settings and the report named none of them.
     if (campaign.currentMilestone === campaign.milestones.length - 1) {
+      // The CURRENT wording, not the first one persisted. Measured 2026-09-08
+      // 06:00: a campaign planned before the "disable, do not delete" change
+      // kept its original paragraph on every resubmission because the append
+      // was gated on the heading alone.
+      milestone.prompt = milestone.prompt.replace(/\n\nBUILD HYGIENE \(final sprint\):[^\n]*(?:\n(?!\n)[^\n]*)*/g, "");
       if (!milestone.prompt.includes("BUILD HYGIENE")) {
         milestone.prompt +=
           "\n\nBUILD HYGIENE (final sprint): when you are done, Build Settings must list EXACTLY ONE " +

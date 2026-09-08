@@ -577,6 +577,27 @@ describe("CampaignManager", () => {
     expect(prompt).toContain("<<MEASURED NOW");
   });
 
+  it("an older BUILD HYGIENE paragraph in the persisted prompt is replaced by the current wording", async () => {
+    const campaign = await reachFinalSprint();
+    const stored = storage.get(campaign.id)!;
+    const finalIndex = stored.milestones.length - 1;
+    stored.milestones[finalIndex]!.prompt = stored.milestones[finalIndex]!.prompt.replace(
+      /\n\nBUILD HYGIENE \(final sprint\):[\s\S]*$/,
+      "\n\nBUILD HYGIENE (final sprint): old wording — must be deleted or disabled in Build Settings.",
+    );
+    stored.state = "failed";
+    stored.milestones[finalIndex]!.attempts = 2;
+    storage.save(stored);
+    tasks.markTerminal("task_3", TaskStatus.blocked);
+
+    expect(await manager.tryHandleRevive("cli-local", "kampanya devam")).toBe(true);
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+    const prompt = tasks.submitted[3]!.prompt;
+    expect(prompt).not.toContain("old wording");
+    expect(prompt).toContain("must be DISABLED in Build Settings");
+    expect(prompt.indexOf("BUILD HYGIENE")).toBe(prompt.lastIndexOf("BUILD HYGIENE"));
+  });
+
   it("refuses delivery on a FILTERED green — the whole suite must be seen", async () => {
     // Audited 2026-09-03: the delivered PixelFlow build's filtered runs were
     // green while its one unfiltered run reported 6 of 173 failing, including
