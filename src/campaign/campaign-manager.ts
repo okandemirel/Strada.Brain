@@ -1975,9 +1975,23 @@ export class CampaignManager {
               compile.detail ? ` The verifier said: ${compile.detail}` : ""
             }\n\n`
           : "";
-        const combined = structureNow.refusal
-          ? `${compileFirst}${directive}\n\nALSO, ALREADY MEASURED: ${structureNow.refusal}`
-          : `${compileFirst}${directive}`;
+        // The structural verdict is NOT repeated here. Measured 2026-09-08
+        // 05:25: a gate block from a verification bounce days earlier still
+        // said "ALSO, ALREADY MEASURED: the shipped scenes render NOTHING …
+        // bind them in the scene", while <<MEASURED NOW>> — refreshed at every
+        // submit — said the art was placeholder-grade with six world renderers
+        // in place. The sprint followed the older sentence: nineteen
+        // unity_bind_sprite calls, no sprite drawn, the count unchanged. One
+        // measurement, in one place, current at submit: <<MEASURED NOW>>
+        // (attachStructureMeasurement). structureNow still feeds the log.
+        const combined = `${compileFirst}${directive}`;
+        if (structureNow.refusal) {
+          getLoggerSafe().info("Delivery gate bounce — structural refusal carried by <<MEASURED NOW>>, not repeated in the gate", {
+            id: campaign.id,
+            milestone: milestone.id,
+            refusal: structureNow.refusal.slice(0, 200),
+          });
+        }
         // The CURRENT reason, not the first one. Review 2026-09-07: the block
         // was appended only when absent, so a second bounce for a different
         // cause (the compile broke after a green suite; the structure now
@@ -2661,6 +2675,8 @@ export class CampaignManager {
   }
 
   /** Delimits the re-measured structure block so a resubmit replaces it. */
+  /** "ALSO, ALREADY MEASURED: …" up to the next blank line — the pre-2026-09-08 gate blocks carried it. */
+  private static readonly LEGACY_STRUCTURE_SENTENCE_RE = /\n\nALSO, ALREADY MEASURED: [^\n]*(?:\n(?!\n)[^\n]*)*/g;
   private static readonly STRUCTURE_OPEN = "<<MEASURED NOW — what the shipped scenes render>>";
   private static readonly STRUCTURE_CLOSE = "<</MEASURED NOW>>";
   /** How much of the measurement the prompt carries before it says it trimmed. */
@@ -2687,10 +2703,15 @@ export class CampaignManager {
   private attachStructureMeasurement(campaign: Campaign, milestone: CampaignMilestone): void {
     const open = CampaignManager.STRUCTURE_OPEN;
     const close = CampaignManager.STRUCTURE_CLOSE;
-    const stripped = milestone.prompt.replace(
-      new RegExp(`\\n*${CampaignManager.escapeRegExp(open)}[\\s\\S]*?${CampaignManager.escapeRegExp(close)}`, "g"),
-      "",
-    );
+    const stripped = milestone.prompt
+      .replace(
+        new RegExp(`\\n*${CampaignManager.escapeRegExp(open)}[\\s\\S]*?${CampaignManager.escapeRegExp(close)}`, "g"),
+        "",
+      )
+      // A structural sentence an older gate block left behind is a second,
+      // stale measurement next to this one (measured 2026-09-08 05:25, see the
+      // bounce path): the paragraph goes, this block is the measurement.
+      .replace(CampaignManager.LEGACY_STRUCTURE_SENTENCE_RE, "");
     let structure: { refusal?: string; lines: string[] };
     try {
       structure = this.measureDeliveryStructure(campaign);

@@ -528,7 +528,53 @@ describe("CampaignManager", () => {
 
     const prompt = tasks.submitted[3]!.prompt;
     expect(prompt).toContain("DELIVERY VERIFICATION REQUIRED");
-    expect(prompt).toContain("ALREADY MEASURED");
+    // The structural verdict lives in ONE place, refreshed at every submit —
+    // the <<MEASURED NOW>> block — never as a second sentence inside the gate.
+    // Measured 2026-09-08 05:25: a days-old "ALSO, ALREADY MEASURED: the
+    // scenes render NOTHING … bind them" sat beside a fresh "placeholder art"
+    // measurement, and the sprint followed the stale one for an hour.
+    expect(prompt).not.toContain("ALREADY MEASURED");
+    expect(prompt).toContain("<<MEASURED NOW");
+    expect(prompt.indexOf("<<MEASURED NOW")).toBe(prompt.lastIndexOf("<<MEASURED NOW"));
+  });
+
+  it("a legacy 'ALSO, ALREADY MEASURED' paragraph is removed when the final sprint is resubmitted", async () => {
+    mkdirSync(join(projectRoot, "ProjectSettings"), { recursive: true });
+    mkdirSync(join(projectRoot, "Assets", "Scenes"), { recursive: true });
+    writeFileSync(join(projectRoot, "Assets", "Scenes", "Game.unity"), "GameObject:\n  m_Name: Root");
+    writeFileSync(
+      join(projectRoot, "ProjectSettings", "EditorBuildSettings.asset"),
+      "EditorBuildSettings:\n  m_Scenes:\n  - enabled: 1\n    path: Assets/Scenes/Game.unity",
+    );
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+
+    // A gate block written before 2026-09-08 left this paragraph in the
+    // persisted prompt. The art-gate and revive paths resubmit WITHOUT cutting
+    // the old gate block (only a verification bounce cuts it), so the strip in
+    // attachStructureMeasurement is what removes it there.
+    const stored = storage.get(campaign.id)!;
+    const finalIndex = stored.milestones.length - 1;
+    stored.milestones[finalIndex]!.prompt +=
+      "\n\nALSO, ALREADY MEASURED: The shipped scenes render NOTHING: bind them in the scene.\n" +
+      "Deterministic path: unity_bind_sprite.";
+    stored.state = "failed";
+    stored.milestones[finalIndex]!.attempts = 2;
+    storage.save(stored);
+    tasks.markTerminal("task_3", TaskStatus.blocked);
+
+    const handled = await manager.tryHandleRevive("cli-local", "kampanya devam");
+    expect(handled).toBe(true);
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+    const prompt = tasks.submitted[3]!.prompt;
+    expect(prompt).not.toContain("ALREADY MEASURED");
+    expect(prompt).not.toContain("render NOTHING: bind them");
+    expect(prompt).not.toContain("Deterministic path: unity_bind_sprite.");
+    expect(prompt).toContain("<<MEASURED NOW");
   });
 
   it("refuses delivery on a FILTERED green — the whole suite must be seen", async () => {
