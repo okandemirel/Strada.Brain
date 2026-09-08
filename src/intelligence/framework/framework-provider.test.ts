@@ -497,7 +497,9 @@ describe("FrameworkPromptGenerator", () => {
     expect(result).toContain("Strada.MCP Knowledge");
     expect(result).toContain("MCP Tools");
     expect(result).toContain("create_entity");
-    expect(result).toContain("Create a new entity in the Unity scene");
+    // Names only: the descriptions travel as tool schemas (measured 2026-09-08:
+    // the catalog was 10k of the section's 30k chars, duplicating the request).
+    expect(result).not.toContain("Create a new entity in the Unity scene");
     expect(result).toContain("run_command");
   });
 
@@ -576,17 +578,18 @@ describe("FrameworkPromptGenerator", () => {
     expect(result).toContain("`EntityRef`");
   });
 
-  it("MCP section includes tool names and descriptions", () => {
+  it("MCP section lists tool NAMES only — descriptions and params live in the tool schemas", () => {
+    // Measured 2026-09-08 04:54: per-tool descriptions and parameter names made
+    // this section 10 156 chars on every turn while the request already
+    // carried the same tools as full schemas.
     const mcpSnapshot = createMCPSnapshot();
     store.storeSnapshot(mcpSnapshot);
 
     const result = generator.buildFrameworkKnowledgeSection()!;
-    expect(result).toContain("**create_entity**");
-    expect(result).toContain("Create a new entity in the Unity scene");
-    expect(result).toContain("Params: name, components, parent");
-    expect(result).toContain("**run_command**");
-    expect(result).toContain("Execute an editor command");
-    expect(result).toContain("Params: command, args");
+    expect(result).toContain("2 tools, registered in this session's toolchain with full schemas: create_entity, run_command");
+    expect(result).not.toContain("Create a new entity in the Unity scene");
+    expect(result).not.toContain("Params:");
+    expect(result).not.toContain("Execute an editor command");
   });
 
   it("MCP section includes resources", () => {

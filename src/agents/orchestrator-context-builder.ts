@@ -4,7 +4,7 @@ import type { TaskExecutionMemory, TaskExecutionStore } from "../memory/unified/
 import type { UserProfile } from "../memory/unified/user-profile-store.js";
 import type { SoulLoader } from "./soul/index.js";
 import type { SkillEntry } from "../skills/types.js";
-import { selectSkillKnowledge } from "./skill-knowledge-selection.js";
+import { clampMemoryEntry, selectSkillKnowledge } from "./skill-knowledge-selection.js";
 import type { DMPolicy } from "../security/dm-policy.js";
 import type { GoalTree } from "../goals/types.js";
 import type { TaskClassification } from "../agent-core/routing/routing-types.js";
@@ -421,7 +421,9 @@ export async function buildContextLayers(
   if (semanticMemoryResult && isOk(semanticMemoryResult)) {
     const memories = semanticMemoryResult.value;
     if (memories.length > 0) {
-      const memoryContext = memories.map((m) => sanitizePromptInjection(m.entry.content)).join("\n---\n");
+      const memoryContext = memories
+        .map((m) => clampMemoryEntry(sanitizePromptInjection(m.entry.content)))
+        .join("\n---\n");
       layers.push(`## Relevant Memory\n${memoryContext}`);
       for (const m of memories) {
         contentHashes.push(m.entry.content);

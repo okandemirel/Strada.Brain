@@ -44,3 +44,17 @@ export function selectSkillKnowledge<T extends SkillKnowledgeEntry>(
   }
   return { included, withheld };
 }
+
+/**
+ * How much of one retrieved memory the "Relevant Memory" layer may carry.
+ * Measured 2026-09-08 04:42: five entries came to 10 485 chars — ~2.1k each —
+ * on every turn, most of it the tail of long task summaries. The first
+ * MAX_MEMORY_ENTRY_CHARS say what the memory is about; the rest is the
+ * vault's job.
+ */
+export const MAX_MEMORY_ENTRY_CHARS = 1_200;
+
+export function clampMemoryEntry(content: string, max: number = MAX_MEMORY_ENTRY_CHARS): string {
+  if (content.length <= max) return content;
+  return `${content.slice(0, max)}\n… (${content.length - max} more chars in memory)`;
+}

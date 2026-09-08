@@ -3,7 +3,7 @@
  * of every task at ~7.4k chars. A body goes in only when the task calls for it.
  */
 import { describe, it, expect } from "vitest";
-import { selectSkillKnowledge } from "./skill-knowledge-selection.js";
+import { clampMemoryEntry, MAX_MEMORY_ENTRY_CHARS, selectSkillKnowledge } from "./skill-knowledge-selection.js";
 
 const skill = (name: string, body: string, extra: Record<string, unknown> = {}, status = "active") => ({
   manifest: { name, version: "1.0.0", description: name, ...extra },
@@ -41,5 +41,16 @@ describe("selectSkillKnowledge", () => {
     const { included, withheld } = selectSkillKnowledge([gated, empty], "gated empty");
     expect(included).toEqual([]);
     expect(withheld).toEqual([]);
+  });
+});
+
+describe("clampMemoryEntry", () => {
+  it("passes a short memory through untouched and cuts a long one with a note that says how much is left", () => {
+    expect(clampMemoryEntry("short")).toBe("short");
+    const long = "m".repeat(MAX_MEMORY_ENTRY_CHARS + 900);
+    const out = clampMemoryEntry(long);
+    expect(out.startsWith("m".repeat(MAX_MEMORY_ENTRY_CHARS))).toBe(true);
+    expect(out).toContain("… (900 more chars in memory)");
+    expect(out.length).toBeLessThan(long.length);
   });
 });

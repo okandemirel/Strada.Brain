@@ -192,15 +192,17 @@ export class FrameworkPromptGenerator {
     ];
 
     if (snapshot.tools.length > 0) {
+      // Names only. Measured 2026-09-08 04:54: this section listed every tool
+      // with its description and parameter names — 10 156 of the framework
+      // section's 30 338 chars, on every turn — while the same tools were in
+      // the request as full schemas (71k chars for 104 tools). The catalog is
+      // for knowing what exists; the schema is where the model reads how to
+      // call it.
       lines.push("### MCP Tools");
-      for (const tool of snapshot.tools) {
-        lines.push(`- **${tool.name}**: ${tool.description}`);
-        if (tool.inputSchemaKeys.length > 0) {
-          lines.push(
-            `  - Params: ${tool.inputSchemaKeys.join(", ")}`,
-          );
-        }
-      }
+      lines.push(
+        `${snapshot.tools.length} tools, registered in this session's toolchain with full schemas: ` +
+          snapshot.tools.map((tool) => tool.name).join(", "),
+      );
       lines.push("");
     }
 
