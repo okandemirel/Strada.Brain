@@ -49,9 +49,25 @@ function readTimeoutOverride(): number | undefined {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }
 
+/**
+ * Output budget per call. Measured 2026-09-07 19:54 → 2026-09-08 03:24 on
+ * nemotron-3.5-lightning-free: of 25 long streaming calls (goal
+ * decompositions), 9 stopped at exactly 8192 with no answer, while the
+ * successes finished at 7847, 7988, 7435, 6009 and 4631 output tokens — the
+ * model mirrors its reasoning into the content stream and answers only after
+ * it, so a budget of 8192 was the difference between a 7-node plan and three
+ * wasted 200 s attempts. The endpoint accepted max_tokens 16384 and 32768
+ * (200, finish_reason "stop"); 16384 doubles the headroom without letting a
+ * genuine ramble run for a quarter of an hour. OPENCODE_MAX_TOKENS overrides.
+ */
+export const OPENCODE_MAX_TOKENS: number = (() => {
+  const raw = Number(process.env["OPENCODE_MAX_TOKENS"]);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 16_384;
+})();
+
 export class OpencodeProvider extends OpenAIProvider {
   override readonly capabilities: ProviderCapabilities = {
-    maxTokens: 8192,
+    maxTokens: OPENCODE_MAX_TOKENS,
     streaming: true,
     structuredStreaming: false,
     toolCalling: true,

@@ -114,7 +114,7 @@ describe("Feature: max_tokens from capabilities", () => {
     { name: "MiniMax", cls: MiniMaxProvider, args: ["key"], expected: 131072 },
     { name: "Together", cls: TogetherProvider, args: ["key"], expected: 4096 },
     { name: "Fireworks", cls: FireworksProvider, args: ["key"], expected: 4096 },
-    { name: "OpenCode", cls: OpencodeProvider, args: ["key"], expected: 8192 },
+    { name: "OpenCode", cls: OpencodeProvider, args: ["key"], expected: 16_384 },
   ];
 
   for (const { name, cls, args, expected } of providerConfigs) {
