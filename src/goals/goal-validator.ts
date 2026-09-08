@@ -111,15 +111,23 @@ export function validateDAG(
   return { valid: true, topologicalOrder: order };
 }
 
-/** Verbs that change the project or produce an artifact. */
+/** Verbs that change the project or produce an artifact — anywhere in the task text. */
 const WORK_RE =
-  /\b(create|generate|draw|paint|write|bind|place|instantiate|implement|add|replace|fix|build|import|compose|record|configure|wire|assemble|edit|update|refactor|remove|delete|rename|migrate|convert|apply|set up|setup|install|run|execute|verify|capture|test|deliver|produce|ship)\b/i;
-/** Verbs that only look. */
-const EXPLORATION_RE =
-  /\b(explore|vault_search|search|read|inspect|analy[sz]e|inventory|list|review|understand|survey|audit|examine|scan|grep|look|identify|locate|find|extract|gather|collect|map|catalog|document)\b/i;
+  /\b(create|generate|draw|paint|write|bind|place|instantiate|implement|add|replace|fix|build|import|compose|record|configure|wire|assemble|edit|update|refactor|remove|delete|rename|migrate|convert|apply|set up|setup|install|execute|verify|capture|deliver|produce|ship|author|animate|script|attach|spawn|hook up|populate|tune|polish|export|commit|register|integrate)\b/i;
+/**
+ * Verbs that only look — judged on the task's LEADING verb, so "Read the GDD
+ * and generate the sprites" is work (generate) while "Read PixelFlow_GDD.md
+ * structure and extract key requirements" is looking. Review 2026-09-08:
+ * "extract", "map", "document", "inspect", "locate", "find" are also how
+ * real work is phrased ("Extract the movement logic into MovementBase",
+ * "Map legacy enemy IDs to the new enum"), so they are neither list —
+ * neutral nodes are never counted as exploration.
+ */
+const EXPLORATION_LEAD_RE =
+  /^\W*(?:\d+[.)]\s*)?(explore|vault_search|search|read|analy[sz]e|inventory|list|review|understand|survey|audit|examine|scan|grep|look|gather|collect|catalog)\b/i;
 
 export interface PlanShapeVerdict {
-  /** True when the plan has 2+ nodes and none of them does work. */
+  /** True when the plan has 2+ nodes and every one of them only looks. */
   readonly explorationOnly: boolean;
   readonly workNodes: number;
   readonly explorationNodes: number;
@@ -141,10 +149,10 @@ export function judgePlanShape(nodes: ReadonlyArray<{ readonly task: string }>):
   let explorationNodes = 0;
   for (const node of nodes) {
     if (WORK_RE.test(node.task)) workNodes++;
-    else if (EXPLORATION_RE.test(node.task)) explorationNodes++;
+    else if (EXPLORATION_LEAD_RE.test(node.task)) explorationNodes++;
   }
   // Every node must POSITIVELY be exploration: a plan of neutral labels
-  // ("Step 1", "Task A") says nothing about its shape and is not judged.
+  // ("Step 1", "Task A", "Extract X into Y") says nothing about its shape.
   return {
     explorationOnly: nodes.length >= 2 && workNodes === 0 && explorationNodes === nodes.length,
     workNodes,

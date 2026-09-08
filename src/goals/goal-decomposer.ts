@@ -246,9 +246,11 @@ export class GoalDecomposer {
     const maxTotalNodes = this.decompositionContext?.maxTotalNodes ?? 12;
 
     // Attempt LLM decomposition with one retry
+    this.lastRejection = undefined; // one decomposer per daemon: never carry another task's reason
     let llmOutput = await this.callLLMForDecomposition(
       proactivePrompt,
       `Decompose this task into sub-goals:\n\n<task>${taskDescription}</task>`,
+      { rejectExplorationOnly: true },
     );
 
     // If first attempt fails, retry with error feedback
@@ -262,6 +264,7 @@ export class GoalDecomposer {
         `${why}Please try again. Output the JSON object ONLY — ` +
           "start your reply with \"{\" and do not write a <reasoning> block or any prose before it.\n\n" +
           `Decompose this task into sub-goals:\n\n<task>${taskDescription}</task>`,
+        { rejectExplorationOnly: true },
       );
     }
 
@@ -459,6 +462,7 @@ export class GoalDecomposer {
   private async callLLMForDecomposition(
     systemPrompt: string,
     userMessage: string,
+    opts: { readonly rejectExplorationOnly?: boolean } = {},
   ): Promise<LLMDecompositionOutput | null> {
     if (!this.provider) return null;
 
@@ -532,8 +536,11 @@ export class GoalDecomposer {
         return null;
       }
 
-      const shape = judgePlanShape(parsed.nodes);
-      if (shape.explorationOnly) {
+      // Only the proactive root plan is judged: review 2026-09-08 — the
+      // reactive REPLAN has no retry (a rejection there silently returned
+      // null) and a depth-2 expansion of one node is legitimately narrow.
+      const shape = opts.rejectExplorationOnly ? judgePlanShape(parsed.nodes) : undefined;
+      if (shape?.explorationOnly) {
         const { getLoggerSafe } = await import("../utils/logger.js");
         getLoggerSafe().warn("Goal decomposition rejected — an exploration-only plan", {
           nodeCount: parsed.nodes.length,

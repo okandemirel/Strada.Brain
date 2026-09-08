@@ -60,4 +60,11 @@ describe("an absolute path is a path", () => {
     expect(out).toBe(line);
     expect(out).not.toContain("[base64:");
   });
+
+  it("still redacts a base64 blob that happens to start with a slash — review 2026-09-08", () => {
+    const blob = "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsL";
+    const out = sanitizePromptInjection(`data:image/jpeg;base64,${blob}`);
+    expect(out).not.toContain("4AAQSkZJRgABAQEASABIAAD");
+    expect(out).toContain("[base64:");
+  });
 });

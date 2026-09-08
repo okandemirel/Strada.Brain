@@ -205,9 +205,10 @@ export class FrameworkPromptGenerator {
       lines.push(
         `${snapshot.tools.length} tools known to the framework: ` +
           snapshot.tools.map((tool) => tool.name).join(", ") +
-          ". Only the tools in THIS request's tool list can be called; a name here that is not in " +
-          "your tool list needs a live Unity Editor bridge and is unavailable right now — use the " +
-          "file-based tool for the same job (unity_place_prefab, unity_bind_sprite, unity_scene_build).",
+          ". Only the tools in THIS request's tool list can be called. A name here that is not in " +
+          "your tool list is not callable in this turn — it needs a live Unity Editor bridge, or the " +
+          "current phase allows read-only tools only; when writing is allowed, the file-based tools " +
+          "(unity_place_prefab, unity_bind_sprite, unity_scene_build) do the same jobs without a bridge.",
       );
       lines.push("");
     }

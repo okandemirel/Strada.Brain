@@ -294,4 +294,16 @@ describe("judgePlanShape", () => {
     expect(judgePlanShape([{ task: "Step 1" }, { task: "Step 2" }]).explorationOnly).toBe(false);
     expect(judgePlanShape([{ task: "Read the GDD" }, { task: "Step 2" }]).explorationOnly).toBe(false);
   });
+
+  it("does not reject real work phrased with extract/map/document/locate/find (review 2026-09-08 false positives)", () => {
+    const plans = [
+      ["Extract the shared movement logic into a MovementBase class", "Map legacy enemy IDs to the new EnemyKind enum", "Document the migration in CHANGELOG.md"],
+      ["Extract PlayerController's input handling into InputReader.cs", "Extract the camera follow into CameraRig.cs"],
+      ["Map the gamepad axes to the InputActions asset", "Document the control scheme in docs/controls.md"],
+      ["Inspect the compile error in RocketSystem.cs and fix the missing using", "Locate the null prefab reference and bind it"],
+    ];
+    for (const plan of plans) {
+      expect(judgePlanShape(plan.map((task) => ({ task }))).explorationOnly).toBe(false);
+    }
+  });
 });

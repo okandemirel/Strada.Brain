@@ -751,5 +751,12 @@ function looksLikeFilePath(match: string, after: string): boolean {
   // one part of the line that said where the file was.
   const segments = (match.startsWith("/") ? match.slice(1) : match).split("/");
   if (segments.length < 3) return false;
-  return segments.every((segment) => segment.length > 0 && segment.length <= 32);
+  if (!segments.every((segment) => segment.length > 0 && segment.length <= 32)) return false;
+  // Review 2026-09-08: with the leading slash dropped, the canonical JPEG
+  // base64 prefix "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsL"
+  // split into three short segments and read as a path. Path segments are
+  // words: most start with a letter and carry a lowercase letter; base64
+  // pieces start with digits and shout in mixed case.
+  const wordy = segments.filter((segment) => /^[A-Za-z]/.test(segment) && /[a-z]/.test(segment)).length;
+  return wordy * 2 >= segments.length;
 }

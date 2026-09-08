@@ -287,6 +287,29 @@ describe("GoalDecomposer", () => {
       expect(tasks.some((t) => t.includes("vault_search for GDD files"))).toBe(false);
     });
 
+    it("a depth-2 expansion is not judged for exploration — one node's sub-plan is legitimately narrow", async () => {
+      // Review 2026-09-08: the reactive REPLAN and depth-2 paths have no retry;
+      // a rejection there silently returned null.
+      const provider = createMockProvider([
+        JSON.stringify({
+          nodes: [
+            { id: "s1", task: "Generate and bind the area backgrounds", dependsOn: [], needsFurtherDecomposition: true },
+            { id: "s2", task: "Verify the entry scene renders them", dependsOn: ["s1"] },
+          ],
+        }),
+        JSON.stringify({
+          nodes: [
+            { id: "s1a", task: "Read the GDD's area list", dependsOn: [] },
+            { id: "s1b", task: "vault_search for the existing background prefabs", dependsOn: ["s1a"] },
+          ],
+        }),
+      ]);
+      const decomposer = new GoalDecomposer(provider, 3);
+      const tree = await decomposer.decomposeProactive("s", "Deliver the art the GDD schedules for every area");
+      expect(provider.chat).toHaveBeenCalledTimes(2);
+      expect(tree.nodes.size).toBe(5); // root + s1/s2 + s1a/s1b — the narrow sub-plan was kept
+    });
+
     it("calls LLM recursively for depth-2 nodes flagged with needsFurtherDecomposition", async () => {
       const provider = createMockProvider([
         JSON.stringify({

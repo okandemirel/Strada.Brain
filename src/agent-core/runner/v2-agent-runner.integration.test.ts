@@ -429,6 +429,34 @@ describe("V2AgentRunner — REAL port + REAL gateway (provider.chat scripted)", 
     expect(decompSpy).not.toHaveBeenCalled();
   });
 
+  it("a sub-goal worker's run never settles a goal tree — the tree under its scope is the PARENT's", async () => {
+    // Review 2026-09-08 (880e2977): the skip still claimed the once-per-run
+    // flag, and the run's finally settles the tree under the conversation
+    // scope when that flag is set — for a worker that is the parent's
+    // persisted tree, marked completed by the first node to finish.
+    const provider = mkScriptedProvider();
+    // PLANNING text → real handlePlanPhase → EXECUTING; then end_turn terminal (as test A).
+    provider.chat
+      .mockResolvedValueOnce(resp({ text: "here is the plan", stopReason: "end_turn" }))
+      .mockResolvedValueOnce(resp({ text: "all done", stopReason: "end_turn" }));
+    const h = buildHarness(provider);
+    const settleSpy = vi
+      .spyOn(h.orch as unknown as { settleGoalTree: (scope: string, status: string) => void }, "settleGoalTree")
+      .mockImplementation(() => {});
+    vi.spyOn(
+      h.orch as unknown as { runProactiveGoalDecomposition: (o: { agentState: AgentState }) => Promise<AgentState> },
+      "runProactiveGoalDecomposition",
+    ).mockImplementation(async (o: { agentState: AgentState }) => o.agentState);
+
+    const result = await drive(
+      h.clock,
+      h.runner.run(mkRequest({ goalContext: { rootId: "goal_root", nodeId: "goal_node_3" } }), mkIO("worker")),
+    );
+
+    expect(result.status).toBe("completed");
+    expect(settleSpy).not.toHaveBeenCalled();
+  });
+
   it("GAP3 (epoch-rollover side effects): the bg epoch boundary records phase-outcome + persists memory + resets the planner budget window", async () => {
     // Regression guard for the v2 background epoch-rollover gap. v1 runBackgroundTask ran a block of
     // side effects at EVERY epoch boundary (orchestrator.ts ~4587-4623): recordPhaseOutcome (continued

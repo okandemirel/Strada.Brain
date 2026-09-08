@@ -285,8 +285,11 @@ export function createAgentCorePort(
         // H2: once-per-run guard (rationale on EngineRunContext.goalsDecomposed).
         const c = ctx();
         if (c.goalsDecomposed) return params.agentState;
-        c.goalsDecomposed = true;
-        // A run that IS a node of an existing plan does not plan again.
+        // A run that IS a node of an existing plan does not plan again — and
+        // does not claim the once-per-run flag: review 2026-09-08 (880e2977)
+        // showed that flag makes the run's finally settle the tree under its
+        // conversation scope, which for a worker is the PARENT's persisted
+        // tree — settled "completed" by the first node to finish.
         // Measured 2026-09-08 04:48 and 05:00 (PixelFlow sprint): the
         // supervisor dispatched sub-goal workers, each started in PLANNING,
         // each re-decomposed its own task text into a fresh 12- and 3-node
@@ -302,6 +305,7 @@ export function createAgentCorePort(
           });
           return params.agentState;
         }
+        c.goalsDecomposed = true;
         return deps.runProactiveGoalDecomposition({
           // SCOPE-KEY ALIGNMENT (BUG#1 P2 HIGH): key the decomposition off the RESOLVED conversation
           // scope, not the raw chatId. The monitor episode + stepBatch + requestStart/End all key off
