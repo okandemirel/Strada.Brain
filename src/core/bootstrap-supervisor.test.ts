@@ -390,4 +390,31 @@ describe("createSupervisorExecuteNodeBridge", () => {
     expect(setDashboardWorkspaceBus).toHaveBeenCalledWith(workspaceBus);
     expect(setAgentWorkspaceRuntime).toHaveBeenCalledWith(workspaceBus, expect.anything());
   });
+
+  it("carries the task's workspacePolicy \"none\" to every node (measured 2026-09-08: the guardian's fix task got two goal leases)", async () => {
+    const runWorkerEnvelope = vi.fn().mockResolvedValue({
+      output: "done",
+      workerResult: { status: "completed", finalSummary: "done", touchedFiles: [] },
+    });
+    const bridge = createSupervisorExecuteNodeBridge({
+      backgroundExecutor: { runWorkerEnvelope } as any,
+      orchestrator: {} as any,
+      workspaceBus: { emit: vi.fn() } as any,
+      defaultChannelType: "cli",
+    });
+
+    await bridge(
+      { id: "node-1", task: "Fix RocketModuleConfig.cs" } as any,
+      { chatId: "cli-local", taskRunId: "task_fix", workspacePolicy: "none" } as any,
+      new AbortController().signal,
+    );
+    expect(runWorkerEnvelope.mock.calls[0]?.[1].workspacePolicy).toBe("none");
+
+    await bridge(
+      { id: "node-2", task: "Sub-goal" } as any,
+      { chatId: "cli-local", taskRunId: "task_other" } as any,
+      new AbortController().signal,
+    );
+    expect(runWorkerEnvelope.mock.calls[1]?.[1]).not.toHaveProperty("workspacePolicy");
+  });
 });

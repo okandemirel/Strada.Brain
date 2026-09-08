@@ -716,6 +716,7 @@ export class BackgroundExecutor {
       taskRunId: task.id,
       onUsage: this.buildUsageRecorder(task),
       workspaceLease,
+      ...(task.workspacePolicy ? { workspacePolicy: task.workspacePolicy } : {}),
       onGoalDecomposed: (goalTree: GoalTree) => {
         supervisorGoalTree = goalTree;
         supervisorGoalStartedAt = Date.now();
@@ -1253,12 +1254,16 @@ export class BackgroundExecutor {
       onUsage?: (usage: { provider: string; inputTokens: number; outputTokens: number }) => void;
       workspaceLease?: Awaited<ReturnType<WorkspaceLeaseManager["acquireLease"]>>;
       workspaceSourceRoot?: string;
+      /** "none" = no lease at all, not even the fallback below (see WorkerExecutionEnvelope). */
+      workspacePolicy?: "none";
       supervisorMode?: import("./types.js").BackgroundTaskOptions["supervisorMode"];
       goalContext?: import("./types.js").GoalContext;
       monitorScope?: string;
     },
   ): Promise<{ output: string; workerResult?: WorkerRunResult }> {
-    const managedWorkspaceLease = params.workspaceLease ?? (this.workspaceLeaseManager
+    // A task that must edit the real project root (workspacePolicy "none")
+    // reaches here with no lease, and the fallback used to hand it one anyway.
+    const managedWorkspaceLease = params.workspaceLease ?? (this.workspaceLeaseManager && params.workspacePolicy !== "none"
       ? await this.workspaceLeaseManager.acquireLease({
         label: `${params.mode}-worker-${params.taskRunId}`,
         workerId: params.taskRunId,
@@ -1568,6 +1573,7 @@ export class BackgroundExecutor {
         userContent: task.userContent,
         onUsage: this.buildUsageRecorder(task),
         workspaceLease: taskWorkspaceLease,
+        ...(task.workspacePolicy ? { workspacePolicy: task.workspacePolicy } : {}),
         supervisorMode: "off",
       });
 

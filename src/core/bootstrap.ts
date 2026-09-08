@@ -256,6 +256,7 @@ export function createSupervisorExecuteNodeBridge(params: {
         // the project root plus lock-covered commits; until that exists the
         // shared lease (and the supervisor's clamp) is the correct trade.
         workspaceLease: context.workspaceLease,
+        ...(context.workspacePolicy ? { workspacePolicy: context.workspacePolicy } : {}),
         signal: signal ?? context.signal ?? AbortSignal.timeout(300_000),
         ...(goalRootId ? { goalContext: { rootId: goalRootId, nodeId: String(node.id) } } : {}),
         onProgress: (update) => {

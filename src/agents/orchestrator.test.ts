@@ -9442,3 +9442,64 @@ describe("Orchestrator — #22 in-run trajectory-credit trigger (production orde
   // tests and by the direct-call #22 tests above (which pin populate/order/flag-off/failure
   // semantics without the deleted ingress).
 });
+
+describe("supervisor admission carries workspacePolicy", () => {
+  // Measured 2026-09-08: the guardian's policy-none fix task was admitted to the
+  // supervisor, whose nodes then each leased a workspace of their own.
+  it("hands workspacePolicy \"none\" to the supervisor context", async () => {
+    const mockProvider = createMockProvider();
+    const mockChannel = createMockChannel();
+    const supervisorBrain = {
+      shouldExecute: vi.fn().mockReturnValue(true),
+      execute: vi.fn().mockResolvedValue({
+        success: true,
+        partial: false,
+        output: "handled",
+        totalNodes: 1,
+        succeeded: 1,
+        failed: 0,
+        skipped: 0,
+        totalCost: 0,
+        totalDuration: 0,
+        nodeResults: [],
+      }),
+    };
+    const orchestrator = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getProviderByName: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        listAvailable: () => [{ name: "mock", label: "mock", defaultModel: "default" }],
+        shutdown: vi.fn(),
+      } as any,
+      tools: [],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: false,
+      supervisorBrain: supervisorBrain as any,
+      supervisorComplexityThreshold: "complex",
+    });
+    (orchestrator as any).taskClassifier = {
+      classify: vi.fn().mockReturnValue({ type: "analysis", complexity: "complex", criticality: "high" }),
+    };
+
+    const decision = await orchestrator.evaluateSupervisorAdmission({
+      prompt: "The REAL project tree does not compile. Fix the root cause directly on this tree and verify.",
+      chatId: "cli-local",
+      channelType: "cli",
+      forceEligibility: true,
+      workspacePolicy: "none",
+    });
+    expect(decision.path).toBe("supervisor");
+    expect(supervisorBrain.execute.mock.calls[0]?.[1]?.workspacePolicy).toBe("none");
+
+    await orchestrator.evaluateSupervisorAdmission({
+      prompt: "Another long request that is complex enough for the supervisor to take on.",
+      chatId: "cli-local",
+      channelType: "cli",
+      forceEligibility: true,
+    });
+    expect(supervisorBrain.execute.mock.calls[1]?.[1]).not.toHaveProperty("workspacePolicy");
+  });
+});

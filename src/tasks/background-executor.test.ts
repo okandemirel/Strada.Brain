@@ -3012,3 +3012,124 @@ describe("BackgroundExecutor - settle records 'no test run observed'", () => {
     await executor.shutdown();
   });
 });
+
+describe("workspacePolicy \"none\" means no lease at any level", () => {
+  // Measured 2026-09-08 14:07: the real-tree guardian submits its fix with
+  // workspacePolicy "none" (edits must land on the real tree; deletions are
+  // often the point). The top-level gate honoured it — and the worker envelope's
+  // fallback then acquired a lease of its own for the direct worker and for
+  // every supervisor node, so two goal leases appeared under strada-workspaces
+  // while the prompt told the agent "you are NOT in a workspace lease".
+  it("the envelope's fallback lease is skipped for a policy-none run", async () => {
+    const acquireLease = vi.fn();
+    const runWorkerTask = vi.fn().mockResolvedValue({
+      status: "completed",
+      finalSummary: "ok",
+      visibleResponse: "ok",
+      provider: "mock",
+      catalogVersion: "mock:default",
+      assignmentVersion: 0,
+      touchedFiles: [],
+      toolTrace: [],
+      verificationResults: [],
+      reviewFindings: [],
+      artifacts: [],
+    });
+    const workerOrchestrator = { runWorkerTask } as any;
+    const executor = new BackgroundExecutor({
+      orchestrator: workerOrchestrator,
+      workspaceLeaseManager: { acquireLease } as any,
+    });
+
+    await executor.runWorkerEnvelope(workerOrchestrator, {
+      mode: "delegated",
+      prompt: "Fix the real tree",
+      signal: new AbortController().signal,
+      onProgress: vi.fn(),
+      chatId: "cli-local",
+      taskRunId: "task_fix:node1",
+      channelType: "cli",
+      workspacePolicy: "none",
+      supervisorMode: "off",
+    });
+
+    expect(acquireLease).not.toHaveBeenCalled();
+    expect(runWorkerTask).toHaveBeenCalledWith(expect.objectContaining({ workspaceLease: undefined }));
+  });
+
+  it("the envelope still leases a run without the policy", async () => {
+    const release = vi.fn().mockResolvedValue(undefined);
+    const acquireLease = vi.fn().mockResolvedValue({
+      id: "lease-1",
+      workspaceId: "ws-1",
+      release,
+      commit: vi.fn().mockResolvedValue({ written: [], conflicts: [] }),
+    });
+    const runWorkerTask = vi.fn().mockResolvedValue({
+      status: "completed",
+      finalSummary: "ok",
+      visibleResponse: "ok",
+      provider: "mock",
+      catalogVersion: "mock:default",
+      assignmentVersion: 0,
+      touchedFiles: [],
+      toolTrace: [],
+      verificationResults: [],
+      reviewFindings: [],
+      artifacts: [],
+    });
+    const workerOrchestrator = { runWorkerTask } as any;
+    const executor = new BackgroundExecutor({
+      orchestrator: workerOrchestrator,
+      workspaceLeaseManager: { acquireLease } as any,
+    });
+    await executor.runWorkerEnvelope(workerOrchestrator, {
+      mode: "delegated",
+      prompt: "Sub-goal",
+      signal: new AbortController().signal,
+      onProgress: vi.fn(),
+      chatId: "cli-local",
+      taskRunId: "task_x:node1",
+      channelType: "cli",
+      supervisorMode: "off",
+    });
+    expect(acquireLease).toHaveBeenCalledTimes(1);
+  });
+
+  it("a direct worker for a policy-none task never acquires a lease and the admission carries the policy", async () => {
+    const acquireLease = vi.fn();
+    const mockOrch = createMockOrchestrator();
+    const mockDecomposer = createMockDecomposer();
+    const mockGoalStorage = createMockGoalStorage();
+    const mockDaemonEventBus = createMockDaemonEventBus();
+    const task = createTestTask(undefined, { workspacePolicy: "none", prompt: "The REAL project tree does not compile. Fix it directly on this tree; it is long enough to decompose." });
+    mockDecomposer.shouldDecompose.mockReturnValue(true);
+    mockOrch.evaluateSupervisorAdmission.mockResolvedValue({ path: "direct_worker", reason: "fallback" });
+
+    const executor = new BackgroundExecutor({
+      orchestrator: mockOrch as any,
+      decomposer: mockDecomposer as any,
+      goalStorage: mockGoalStorage as any,
+      daemonEventBus: mockDaemonEventBus as any,
+      workspaceLeaseManager: { acquireLease } as any,
+      aiProvider: undefined,
+      channel: undefined,
+    });
+    const mockTaskManager = { updateStatus: vi.fn(), complete: vi.fn(), fail: vi.fn(), block: vi.fn() };
+    executor.setTaskManager(mockTaskManager as any);
+
+    executor.enqueue(task, new AbortController().signal, vi.fn());
+    await vi.waitFor(() => {
+      expect(mockTaskManager.complete).toHaveBeenCalledWith(task.id, "task done");
+    }, { timeout: 5000 });
+
+    expect(acquireLease).not.toHaveBeenCalled();
+    expect(mockOrch.evaluateSupervisorAdmission).toHaveBeenCalledWith(
+      expect.objectContaining({ workspacePolicy: "none" }),
+    );
+    expect(mockOrch.runBackgroundTask).toHaveBeenCalledWith(
+      task.prompt,
+      expect.objectContaining({ workspaceLease: undefined }),
+    );
+  });
+});

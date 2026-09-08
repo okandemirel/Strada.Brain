@@ -89,6 +89,18 @@ export interface WorkerExecutionEnvelope {
   readonly onUsage?: (usage: WorkerUsageEvent) => void;
   readonly workspaceLease?: WorkspaceLease;
   /**
+   * "none" = this run edits the REAL project root and must NOT be given a
+   * workspace lease of its own. The top-level executor honoured this and then
+   * every path below it re-acquired one anyway: a direct worker got a
+   * `background-worker-<id>` lease, and each supervisor node — running with
+   * `context.workspaceLease` undefined because the task had none — got a
+   * `<mode>-worker-<taskRunId>` lease of its own. Measured 2026-09-08 14:07 on
+   * the real-tree guardian's fix task: two goal leases under strada-workspaces,
+   * a prompt that told the agent "you are NOT in a workspace lease", and
+   * deletions (the guardian's stated reason for the policy) impossible.
+   */
+  readonly workspacePolicy?: "none";
+  /**
    * Whole-goal MONITOR scope (optional). When a supervisor-decomposed worker runs with its
    * own chatId/conversationId, the parent goal's conversationScope is stamped here so the
    * worker's monitor events JOIN the parent episode (one workspace per whole goal) instead

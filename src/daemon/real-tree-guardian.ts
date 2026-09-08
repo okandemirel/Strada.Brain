@@ -104,9 +104,68 @@ const GREEN_HEARTBEAT_MS = 60 * 60_000;
  */
 const MAX_FIX_TASK_RUNTIME_MS = 45 * 60_000;
 
+/**
+ * The verifier's verdict, reduced to what a fixer can act on.
+ *
+ * The verdict is the compile tool's whole JSON payload. Measured 2026-09-08
+ * 13:42: 10 333 characters for ONE `error CS1061` — twenty entries of which
+ * seventeen were stack frames, asmdef notes and reload chatter, plus a warning
+ * with a CS code that the count had taken for an error. The fix task read it
+ * as "7 errors", decomposed into a node per Rocket file, and spent 25 minutes
+ * on grep/scene analysis looking for errors that were not there.
+ *
+ * Non-JSON (or JSON without a diagnostics list, or with no error in it) is
+ * returned untouched — nothing is hidden that could have been the cause.
+ */
+export function compactCompileDetail(detail: string): string {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(detail);
+  } catch {
+    return detail;
+  }
+  const root = parsed as { reason?: unknown; compile?: { diagnostics?: { entries?: unknown } } } | null;
+  const entries = root?.compile?.diagnostics?.entries;
+  if (!Array.isArray(entries)) return detail;
+  const messageOf = (entry: unknown): string =>
+    String((entry as { message?: unknown })?.message ?? "").trim();
+  const typeOf = (entry: unknown): string =>
+    String((entry as { type?: unknown })?.type ?? "").toLowerCase();
+  const isWarningLine = (message: string): boolean =>
+    /\bwarning\s+(?:CS|BC|NU)\d{4}\b/i.test(message) && !/\berror\b/i.test(message);
+  const isErrorEntry = (entry: unknown): boolean => {
+    const message = messageOf(entry);
+    if (isWarningLine(message)) return false;
+    return ["error", "exception", "assert"].includes(typeOf(entry)) || /\berror\s+(?:CS|BC|NU)\d{4}\b/i.test(message);
+  };
+  const distinct = (messages: string[]): string[] => {
+    const seen = new Set<string>();
+    return messages.filter((message) => {
+      const key = message.replace(/\s+/g, " ").toLowerCase();
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  };
+  const errors = distinct(entries.filter(isErrorEntry).map(messageOf));
+  if (errors.length === 0) return detail;
+  const warnings = distinct(
+    entries.filter((entry) => typeOf(entry) === "warning" || isWarningLine(messageOf(entry))).map(messageOf),
+  );
+  const reason = typeof root?.reason === "string" ? root.reason : `Compile failed with ${errors.length} error(s).`;
+  const lines = [reason, `${errors.length} distinct error(s):`, ...errors.slice(0, 40).map((m) => `- ${m}`)];
+  if (warnings.length > 0) {
+    lines.push(
+      `${warnings.length} warning(s) — not errors; the tree is red because of the errors above:`,
+      ...warnings.slice(0, 10).map((m) => `- ${m}`),
+    );
+  }
+  return lines.join("\n");
+}
+
 const FIX_TASK_PROMPT = (detail: string, projectRoot: string) =>
   `The REAL project tree at ${projectRoot} does not compile. This is the tree the user opens — ` +
-  `it must stay green. Errors:\n${detail}\n\n` +
+  `it must stay green. Errors:\n${compactCompileDetail(detail)}\n\n` +
   `Fix the root cause directly on this tree (you are NOT in a workspace lease — edits land on the real ` +
   `project, which is exactly what is needed here; deletions are allowed and often the point — e.g. a ` +
   `duplicate type left by a salvage merge). Then verify with unity_verify_change and report the verdict.`;
@@ -401,7 +460,7 @@ export class RealTreeGuardian {
       if (this.messenger) {
         await this.messenger(
           this.chatId,
-          `⚠️ The project tree doesn't compile — I'm fixing it autonomously (attempt ${this.fixAttempts}/${MAX_FIX_ATTEMPTS_PER_FINGERPRINT}).\n\`\`\`\n${verdict.detail.slice(0, 500)}\n\`\`\``,
+          `⚠️ The project tree doesn't compile — I'm fixing it autonomously (attempt ${this.fixAttempts}/${MAX_FIX_ATTEMPTS_PER_FINGERPRINT}).\n\`\`\`\n${compactCompileDetail(verdict.detail).slice(0, 500)}\n\`\`\``,
         ).catch(() => undefined);
       }
     } finally {

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { RealTreeGuardian } from "./real-tree-guardian.js";
+import { RealTreeGuardian, compactCompileDetail } from "./real-tree-guardian.js";
 import type { TaskManager } from "../tasks/task-manager.js";
 import type { Task } from "../tasks/types.js";
 import { TaskStatus } from "../tasks/types.js";
@@ -373,5 +373,59 @@ describe("one fix task cannot hold the tree forever", () => {
     for (let i = 0; i < 4; i++) { t += 10 * 60_000; await guardian.tick(); }
     // 40 minutes: a real fix deserves the room.
     expect(cancelled).toHaveLength(0);
+  });
+});
+
+describe("the fix task is told the errors, not the whole verdict", () => {
+  const verdict = JSON.stringify({
+    status: "failed",
+    reason: "Headless compile failed with 1 error(s) (46 compile entries including warnings).",
+    summary: { compileErrors: 1, compileIssues: 46 },
+    compile: {
+      source: "static_unity_batch",
+      diagnostics: {
+        errorCount: 1,
+        entries: [
+          { type: "error", message: "Assets/Modules/RocketModule/Scripts/Services/RocketService.cs(19,21): warning CS0108: 'RocketService.IsInitialized' hides inherited member 'Base.IsInitialized'." },
+          { type: "error", message: "Assets/Modules/RocketModule/Scripts/RocketModuleConfig.cs(13,17): error CS1061: 'IModuleBuilder' does not contain a definition for 'RegisterSystem'" },
+          { type: "error", message: "Assets/Modules/RocketModule/Scripts/RocketModuleConfig.cs(13,17): error CS1061: 'IModuleBuilder' does not contain a definition for 'RegisterSystem'" },
+          { type: "log", message: "## Script Compilation Error for: Csc Library/Bee/artifacts/200b0aE.dag/Game.Modules.Rocket.dll (+2 others)" },
+          { type: "log", message: "UnityEngine.StackTraceUtility:ExtractStackTrace () (at /Users/bokken/build/output/unity/unity/Runtime/Export/Scripting/StackTrace.cs:35)" },
+          { type: "log", message: "Assembly for Assembly Definition File 'Assets/Modules/UfoModule/Tests/Editor/Game.Modules.Ufo.Editor.Tests.asmdef' will not be compiled, because it has no scripts associated with it." },
+        ],
+      },
+    },
+  });
+
+  it("names each distinct error once, marks the CS warning as a warning, and drops the stack frames (measured 2026-09-08: 10 333 chars for one error)", () => {
+    const compact = compactCompileDetail(verdict);
+    expect(compact).toContain("1 distinct error(s):");
+    expect(compact).toContain("error CS1061");
+    expect(compact.split("error CS1061")).toHaveLength(2);
+    expect(compact).toMatch(/1 warning\(s\)[^\n]*\n- .*warning CS0108/);
+    expect(compact).not.toContain("StackTraceUtility");
+    expect(compact).not.toContain("Ufo.Editor.Tests.asmdef");
+    expect(compact.length).toBeLessThan(700);
+  });
+
+  it("the submitted fix prompt carries the compact form", async () => {
+    const { manager, submitted } = makeTaskManager();
+    const guardian = new RealTreeGuardian({
+      taskManager: manager as unknown as TaskManager,
+      verify: vi.fn().mockResolvedValue({ ok: false, detail: verdict }),
+      projectRoot: "/p",
+      now: () => 0,
+    });
+    await guardian.tick();
+    expect(submitted[0]!.prompt).toContain("1 distinct error(s):");
+    expect(submitted[0]!.prompt).not.toContain("StackTraceUtility");
+  });
+
+  it("leaves prose and JSON without an error list untouched", () => {
+    expect(compactCompileDetail("RocketState.cs(8,17): error CS0101")).toBe("RocketState.cs(8,17): error CS0101");
+    const noList = JSON.stringify({ status: "failed", reason: "Headless compile failed with 2 error(s)" });
+    expect(compactCompileDetail(noList)).toBe(noList);
+    const noErrors = JSON.stringify({ reason: "x", compile: { diagnostics: { entries: [{ type: "log", message: "Mono: reloaded" }] } } });
+    expect(compactCompileDetail(noErrors)).toBe(noErrors);
   });
 });

@@ -352,6 +352,8 @@ export interface SupervisorAdmissionRequest {
   readonly taskRunId?: string;
   readonly onUsage?: (usage: TaskUsageEvent) => void;
   readonly workspaceLease?: WorkspaceLease;
+  /** See WorkerExecutionEnvelope.workspacePolicy — carried to every node. */
+  readonly workspacePolicy?: "none";
   readonly onActivated?: (
     activation: ReturnType<typeof buildSupervisorActivationNarrative>,
   ) => Promise<void> | void;
@@ -1669,6 +1671,7 @@ export class Orchestrator {
         attachments: params.attachments,
         onUsage: params.onUsage,
         workspaceLease: params.workspaceLease,
+        ...(params.workspacePolicy ? { workspacePolicy: params.workspacePolicy } : {}),
         userContent: params.userContent,
         planningPrompt: supervisorPlanningPrompt,
         ...(params.signal ? { signal: params.signal } : {}),
