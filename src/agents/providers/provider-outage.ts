@@ -106,6 +106,29 @@ export function allProvidersCoolingDownMs(): number {
   }
 }
 
+/**
+ * Milliseconds since the newest failure any current chain member recorded,
+ * or Infinity when none has. Measured 2026-09-08 06:19-06:58: two 600 s
+ * provider-stalls and two first-response "fetch failed" aborts in a row, then
+ * the executor's 20-minute inactivity watchdog stopped the sprint — and a
+ * 40-token health probe passed seconds later, so the cooldown measure read 0
+ * and the sprint was charged an attempt for a queue it never got past. The
+ * probe is not the workload; the newest failure is the evidence.
+ */
+export function msSinceNewestProviderFailure(now: number = Date.now()): number {
+  try {
+    const entries = ProviderHealthRegistry.getInstance().getAllEntries();
+    let newest = 0;
+    for (const [name, entry] of entries) {
+      if (liveChainMemberNames.size > 0 && !isCurrentChainMemberName(name)) continue;
+      if (entry.lastFailureAt > newest) newest = entry.lastFailureAt;
+    }
+    return newest > 0 ? Math.max(0, now - newest) : Number.POSITIVE_INFINITY;
+  } catch {
+    return Number.POSITIVE_INFINITY;
+  }
+}
+
 /** How many providers a one-line outage description names before counting. */
 const OUTAGE_NAMED_LIMIT = 4;
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isOutageCausedSettle } from "./campaign-manager.js";
+import { isOutageCausedSettle, RECENT_PROVIDER_FAILURE_MS } from "./campaign-manager.js";
 
 /**
  * Measured live 2026-09-04 19:36: mcov1 settled with
@@ -28,5 +28,17 @@ describe("was it the provider layer that stopped the run", () => {
   it("a real sprint failure is not an outage", () => {
     expect(isOutageCausedSettle("compile failed with 43 errors", 60_000)).toBe(false);
     expect(isOutageCausedSettle("", 60_000)).toBe(false);
+  });
+
+  it("the executor's inactivity stop is an outage when a provider failed recently — even if a probe passed since", () => {
+    // Measured 2026-09-08 06:58: two 600 s provider-stalls, two first-response
+    // aborts, then "no progress for 1200000ms"; a 40-token probe passed seconds
+    // later, coolingMs read 0, and attempt 1 → 2 for a queue never passed.
+    const STALL = "The task stalled without making progress, so it was stopped. Please try again or break the request into smaller steps.";
+    expect(isOutageCausedSettle(STALL, 0, 5 * 60_000)).toBe(true);
+    expect(isOutageCausedSettle("Task made no progress for 1200000ms", 0, RECENT_PROVIDER_FAILURE_MS)).toBe(true);
+    // No provider failure on record: a stall is the sprint's own (a hung tool).
+    expect(isOutageCausedSettle(STALL, 0)).toBe(false);
+    expect(isOutageCausedSettle(STALL, 0, RECENT_PROVIDER_FAILURE_MS + 1)).toBe(false);
   });
 });

@@ -13,7 +13,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { join, relative, sep } from "node:path";
 import { getLoggerSafe } from "../utils/logger.js";
-import { allProvidersCoolingDownMs, describeProviderOutage } from "../agents/providers/provider-outage.js";
+import { allProvidersCoolingDownMs, describeProviderOutage, msSinceNewestProviderFailure } from "../agents/providers/provider-outage.js";
 import type { IncomingMessage } from "../channels/channel-messages.interface.js";
 import type { TaskManager } from "../tasks/task-manager.js";
 import type { TaskId } from "../tasks/types.js";
@@ -165,11 +165,29 @@ Do not ask questions — make strong, coherent choices and write them down. End 
  *    minutes against a chain that read available (review of 6d520d19), and
  *    planning has no attempt budget to stop it.
  */
-export function isOutageCausedSettle(output: string, coolingMs: number): boolean {
+export function isOutageCausedSettle(
+  output: string,
+  coolingMs: number,
+  msSinceProviderFailure: number = Number.POSITIVE_INFINITY,
+): boolean {
   if (typeof output !== "string" || output.length === 0) return false;
   if (/blocked:provider_unavailable/i.test(output)) return true;
+  // The executor's inactivity stop ("stalled without making progress" /
+  // "made no progress for Nms") is an outage when a chain member recorded a
+  // failure recently — measured 2026-09-08 06:58: two 600 s provider-stalls
+  // and two first-response aborts preceded the stop, a 40-token probe passed
+  // seconds later, coolingMs read 0, attempt 1 → 2 for a queue never passed.
+  if (
+    /stalled without making progress|made no progress for \d+ms/i.test(output) &&
+    msSinceProviderFailure <= RECENT_PROVIDER_FAILURE_MS
+  ) {
+    return true;
+  }
   return /provider|cooldown|quota|rate.?limit/i.test(output) && coolingMs > 0;
 }
+
+/** A provider failure this recent explains an inactivity stop. */
+export const RECENT_PROVIDER_FAILURE_MS = 30 * 60_000;
 
 export class CampaignManager {
   private readonly storage: CampaignStorage;
@@ -2221,7 +2239,7 @@ export class CampaignManager {
     // `blocked:provider_unavailable`, and that branch charged it (measured
     // 2026-09-02 02:36: m7 "blocked after 2 attempts" while all four
     // accounts were on quota walls).
-    const outageCaused = isOutageCausedSettle(output, allProvidersCoolingDownMs());
+    const outageCaused = isOutageCausedSettle(output, allProvidersCoolingDownMs(), msSinceNewestProviderFailure());
     // A graceful shutdown is the OPERATOR stopping the process, not the sprint
     // failing: the executor aborts in-flight runs with "shutting down" and the
     // work done so far is kept. Charging it ended a campaign on a routine
@@ -2328,7 +2346,7 @@ export class CampaignManager {
     // on a healthy chain armed a two-minute self-revival with a fresh attempt
     // budget each cycle — an unbounded loop the attempt budget was meant to end.
     const outageWaitMs = allProvidersCoolingDownMs();
-    if (outageWaitMs > 0 || isOutageCausedSettle(output, outageWaitMs)) {
+    if (outageWaitMs > 0 || isOutageCausedSettle(output, outageWaitMs, msSinceNewestProviderFailure())) {
       const delayMs = Math.max(outageWaitMs, 60_000) + 60_000;
       campaign.autoReviveAt = Date.now() + delayMs;
       this.persist(campaign);

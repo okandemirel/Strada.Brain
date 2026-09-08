@@ -1,5 +1,5 @@
 import { describe, expect, it, afterEach } from "vitest";
-import { allProvidersCoolingDownMs, LAPSED_DOWN_GRACE_MS, setLiveChainMemberNames } from "./provider-outage.js";
+import { allProvidersCoolingDownMs, LAPSED_DOWN_GRACE_MS, msSinceNewestProviderFailure, setLiveChainMemberNames } from "./provider-outage.js";
 import { ProviderHealthRegistry } from "./provider-health.js";
 
 const registry = ProviderHealthRegistry.getInstance();
@@ -61,5 +61,24 @@ describe("sibling accounts keep distinct identities", () => {
     const c = createProvider({ name: "opencode3", apiKey: "sk-c" });
     expect(a.name).not.toBe(b.name);
     expect(b.name).not.toBe(c.name);
+  });
+});
+
+describe("msSinceNewestProviderFailure", () => {
+  it("is Infinity with no failure on record, and the age of the newest chain member failure otherwise — a probe success does not erase it", () => {
+    // Measured 2026-09-08 06:58: stalls, then a passing 40-token probe, then
+    // coolingMs 0 — the failure had happened minutes earlier all the same.
+    setLiveChainMemberNames(["p-cool", "p-other"]);
+    expect(msSinceNewestProviderFailure()).toBe(Number.POSITIVE_INFINITY);
+    registry.recordFailure("p-cool", "provider-stall");
+    const t = Date.now();
+    expect(msSinceNewestProviderFailure(t + 90_000)).toBeGreaterThanOrEqual(90_000);
+    expect(msSinceNewestProviderFailure(t + 90_000)).toBeLessThan(95_000);
+    registry.recordSuccess("p-cool", "probe");
+    expect(msSinceNewestProviderFailure(t + 90_000)).toBeLessThan(95_000);
+    // A failure on a provider outside the live chain is not this chain's outage.
+    registry.recordFailure("p-fresh", "boom");
+    setLiveChainMemberNames(["p-other"]);
+    expect(msSinceNewestProviderFailure()).toBe(Number.POSITIVE_INFINITY);
   });
 });
