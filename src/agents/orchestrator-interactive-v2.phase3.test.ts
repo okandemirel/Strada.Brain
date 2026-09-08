@@ -77,7 +77,10 @@ function createAnswerProvider() {
   };
 }
 
-const SILENT_PER_CALL_MS = 700_000; // > the 600_000 task-inactivity ceiling, tripped on the first call
+// > the task-inactivity ceiling, tripped on the first call. Since 2026-09-08 the ceiling is
+// floored at 3× the call hard ceiling (these tests seed streamInitialTimeoutMs 10_000_000 →
+// 30_000_000), so the simulated silence must exceed that.
+const SILENT_PER_CALL_MS = 31_000_000;
 
 /** A non-streaming provider that simulates a SILENT call (advances the injected clock past the task
  *  inactivity ceiling) then throws — drives the full control plane to a rule-4 hard stop (the abort

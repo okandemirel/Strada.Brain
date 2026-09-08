@@ -243,13 +243,17 @@ describe("resolveRunBudgetPolicy", () => {
     costCapUsd: 10,
   };
 
-  it("maps seed → policy with no warning when ordering holds", () => {
+  it("maps seed → policy; the silence ceiling is raised to 3× the call hard ceiling and says so", () => {
     const { policy, warnings } = resolveRunBudgetPolicy("interactive", seed);
     expect(policy.callStallMs).toBe(300_000);
     expect(policy.callFirstResponseMs).toBe(90_000);
-    expect(policy.taskInactivityMs).toBe(600_000);
+    // 600 s call ceiling → a run is inactive only after three fully silent calls.
+    expect(policy.taskInactivityMs).toBe(1_800_000);
     expect(policy.pauseRetryBudget).toBe(5);
-    expect(warnings).toHaveLength(0);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("slow-but-answering");
+    // A seed already above the floor: untouched, no warning.
+    expect(resolveRunBudgetPolicy("interactive", { ...seed, taskInactivityMs: 2_000_000 }).warnings).toHaveLength(0);
   });
 
   it("raises taskInactivity to 3× the first-response allowance — a slow-but-answering provider is not an inactive task", () => {
@@ -257,17 +261,21 @@ describe("resolveRunBudgetPolicy", () => {
     // 3-5 min, every call answered): eight supervisor nodes died on
     // task-inactivity at ~25 min each with a 10-minute ceiling against a
     // 10-minute first-response allowance.
+    // Measured 2026-09-08 13:07-13:30: keyed on providerFirstResponseMs (the
+    // 90 s default) the floor changed nothing; the live per-call allowance is
+    // the 600 s stream ceiling.
     const { policy, warnings } = resolveRunBudgetPolicy("supervisor-node", {
       ...seed,
-      providerFirstResponseMs: 600_000,
+      streamInitialTimeoutMs: 600_000,
+      providerFirstResponseMs: 90_000,
       taskInactivityMs: 600_000,
     });
-    expect(policy.callFirstResponseMs).toBe(600_000);
+    expect(policy.callHardMs).toBe(600_000);
     expect(policy.taskInactivityMs).toBe(1_800_000);
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain("slow-but-answering");
-    // A seed already above the floor is left alone, no warning.
-    expect(resolveRunBudgetPolicy("background", { ...seed, providerFirstResponseMs: 600_000, taskInactivityMs: 2_000_000 }).warnings).toHaveLength(0);
+    // A short call ceiling keeps the seed's own ceiling.
+    expect(resolveRunBudgetPolicy("background", { ...seed, streamInitialTimeoutMs: 100_000, streamStallTimeoutMs: 50_000, taskInactivityMs: 600_000 }).policy.taskInactivityMs).toBe(600_000);
   });
 
   it("clamps taskInactivity below 2×callStall and warns (the one surviving ratio, one place)", () => {
@@ -275,9 +283,11 @@ describe("resolveRunBudgetPolicy", () => {
       ...seed,
       taskInactivityMs: 100_000, // < 2×300_000
     });
-    expect(policy.taskInactivityMs).toBe(600_000);
-    expect(warnings).toHaveLength(1);
+    // Clamped to 2×callStall (600_000), then floored to 3×callHardMs (1_800_000); both said.
+    expect(policy.taskInactivityMs).toBe(1_800_000);
+    expect(warnings).toHaveLength(2);
     expect(warnings[0]).toContain("clamped");
+    expect(warnings[1]).toContain("slow-but-answering");
   });
 });
 

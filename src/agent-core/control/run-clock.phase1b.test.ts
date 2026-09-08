@@ -74,17 +74,20 @@ const DEFAULT_1B_SEED: PolicySeed = {
 // ── §6.1 / §6.2: ~70min stall terminates at the SAME bound as v1 ─────────────
 
 describe("Phase 1b incident regression — ~70min stall", () => {
-  it("silence accumulator reaches the SAME bound as v1 DEFAULT_TASK_INACTIVITY_TIMEOUT_MS and stops", () => {
+  it("silence accumulator reaches the resolved ceiling (3× the 600 s call ceiling since 2026-09-08) and stops", () => {
     const clock = new FakeClock(0);
-    // Same numbers v1 uses: per-call streamInitialTimeoutMs=600_000, task inactivity=600_000.
+    // v1's numbers: per-call streamInitialTimeoutMs=600_000, task inactivity=600_000. The
+    // resolver now floors the ceiling at 3×callHardMs (measured 2026-09-08: a queued but
+    // answering provider killed nodes after two or three calls), so the bound is 1_800_000.
     const { policy } = resolveRunBudgetPolicy("background", DEFAULT_1B_SEED);
+    expect(policy.taskInactivityMs).toBe(1_800_000);
     const rc = openRunClock(clock, policy);
     const ledger = createFailureLedger(fakeHealth(), { pauseRetryBudget: 100 });
 
     let stopped = false;
     // Deep delegated chain: many FRESH silent calls, each well under the per-call hard window
     // so the call timer never fires — only the task accumulator can stop it (the livelock fix).
-    for (let i = 0; i < 20 && !stopped; i += 1) {
+    for (let i = 0; i < 60 && !stopped; i += 1) {
       const call = rc.enterCall({ firstResponseMs: 600_000, stallMs: 600_000, hardMs: 600_000 });
       clock.advance(60_000); // 60s silent per call
       call.leave();
@@ -92,9 +95,9 @@ describe("Phase 1b incident regression — ~70min stall", () => {
       if (v.decision === "stop") stopped = true;
     }
     expect(stopped).toBe(true);
-    // Same bound: stopped at exactly the 10th call (10 × 60_000 = 600_000 == v1's ceiling),
+    // Stopped at exactly the 30th call (30 × 60_000 = 1_800_000 == the resolved ceiling),
     // and a fresh call never reset the accumulator.
-    expect(rc.accumulatedSilentMs()).toBe(600_000);
+    expect(rc.accumulatedSilentMs()).toBe(1_800_000);
     expect(rc.silenceCeilingExceeded()).toBe(true);
   });
 
@@ -160,9 +163,12 @@ describe("Phase 1b policy clamps", () => {
       outputTokenCap: 500_000,
       costCapUsd: Number.POSITIVE_INFINITY,
     });
-    expect(policy.taskInactivityMs).toBe(600_000); // clamped UP to the floor
-    expect(warnings).toHaveLength(1);
+    // Clamped UP to 2×stall (600_000), then floored to 3×callHardMs (1_800_000) — since
+    // 2026-09-08, a queued-but-answering provider is not an inactive task. Both are said.
+    expect(policy.taskInactivityMs).toBe(1_800_000);
+    expect(warnings).toHaveLength(2);
     expect(warnings[0]).toMatch(/clamped to 600000ms/);
+    expect(warnings[1]).toMatch(/raised to 1800000ms/);
   });
 
   it("resolveRunBudgetPolicy clamps callStall above callHard and warns", () => {
@@ -179,9 +185,11 @@ describe("Phase 1b policy clamps", () => {
     expect(warnings.some((w) => /stall window never outlives/.test(w))).toBe(true);
   });
 
-  it("the default 1b seed produces no clamp warnings", () => {
+  it("the default 1b seed produces no CLAMP warning — only the 3×callHardMs raise", () => {
     const { warnings } = resolveRunBudgetPolicy("background", DEFAULT_1B_SEED);
-    expect(warnings).toEqual([]);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatch(/raised to 1800000ms/);
+    expect(warnings[0]).not.toMatch(/clamped/);
   });
 });
 

@@ -55,7 +55,7 @@ export interface PolicyResolution {
  * (`taskInactivityMs >= ratio × callStallMs`) with a warning rather than silently honoring
  * an ordering-violating config.
  */
-/** How many full first-response waits a run may accumulate before it is inactive. */
+/** How many maximally-silent calls (callHardMs each) a run may accumulate before it is inactive. */
 export const MIN_INACTIVITY_OVER_FIRST_RESPONSE_CALLS = 3;
 
 export function resolveRunBudgetPolicy(mode: RunMode, seed: PolicySeed): PolicyResolution {
@@ -94,10 +94,16 @@ export function resolveRunBudgetPolicy(mode: RunMode, seed: PolicySeed): PolicyR
   // ceiling against a 10-minute first-response allowance. A dead provider is
   // still stopped by the per-call first-response timeout and the failure
   // ledger's consecutive-failure rule, not by this ceiling.
-  const firstResponseFloor = MIN_INACTIVITY_OVER_FIRST_RESPONSE_CALLS * callFirstResponseMs;
+  // Keyed on the CALL HARD ceiling, not callFirstResponseMs: measured
+  // 2026-09-08 13:07-13:30, the seed's providerFirstResponseMs is the 90 s
+  // default while the live per-call allowance is the 600 s stream ceiling, so
+  // a floor of 3×90 s changed nothing and four guardian nodes died on
+  // task-inactivity after two or three answered calls. A call can be silent
+  // for at most callHardMs; three such calls is the ceiling.
+  const firstResponseFloor = MIN_INACTIVITY_OVER_FIRST_RESPONSE_CALLS * callHardMs;
   if (taskInactivityMs < firstResponseFloor) {
     warnings.push(
-      `taskInactivityMs (${taskInactivityMs}ms) < ${MIN_INACTIVITY_OVER_FIRST_RESPONSE_CALLS}×callFirstResponseMs ` +
+      `taskInactivityMs (${taskInactivityMs}ms) < ${MIN_INACTIVITY_OVER_FIRST_RESPONSE_CALLS}×callHardMs ` +
         `(${firstResponseFloor}ms); raised to ${firstResponseFloor}ms so a slow-but-answering provider is not read as an inactive task.`,
     );
     taskInactivityMs = firstResponseFloor;
