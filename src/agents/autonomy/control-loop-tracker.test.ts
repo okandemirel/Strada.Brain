@@ -408,6 +408,42 @@ describe("ControlLoopTracker", () => {
     expect(trigger?.reason).toContain("read-only/verification tool calls");
   });
 
+  it("a streak of DISTINCT read-only calls is reported at READ_ONLY_STREAK_LIMIT and re-arms for the next streak (measured 2026-09-08: 14 turns of reads, no gate)", () => {
+    const tracker = new ControlLoopTracker({ staleAnalysisThreshold: 100 });
+    for (let i = 0; i < ControlLoopTracker.READ_ONLY_STREAK_LIMIT - 1; i++) {
+      tracker.markToolExecution("vault_search", `vault_search:{"query":"q${i}"}`);
+    }
+    expect(tracker.takeUnreportedReadOnlyStall()).toBeNull();
+    tracker.markToolExecution("file_read", "file_read:{\"path\":\"a.cs\"}");
+    const first = tracker.takeUnreportedReadOnlyStall();
+    expect(first?.calls).toBe(ControlLoopTracker.READ_ONLY_STREAK_LIMIT);
+    expect(first?.reason).toContain("consecutive read-only tool calls");
+    // Reported once per streak: the next full streak reports again, not the next call.
+    expect(tracker.takeUnreportedReadOnlyStall()).toBeNull();
+    for (let i = 0; i < ControlLoopTracker.READ_ONLY_STREAK_LIMIT - 1; i++) {
+      tracker.markToolExecution("file_read", `file_read:{"path":"b${i}.cs"}`);
+    }
+    expect(tracker.takeUnreportedReadOnlyStall()).toBeNull();
+    tracker.markToolExecution("grep_search", "grep_search:{\"pattern\":\"x\"}");
+    expect(tracker.takeUnreportedReadOnlyStall()?.calls).toBe(ControlLoopTracker.READ_ONLY_STREAK_LIMIT);
+  });
+
+  it("a shell grep does not end a read-only streak; a file write does", () => {
+    const tracker = new ControlLoopTracker({ staleAnalysisThreshold: 100 });
+    for (let i = 0; i < 10; i++) tracker.markToolExecution("file_read", `file_read:{"path":"f${i}"}`);
+    tracker.markToolExecution("shell_exec", "shell_exec:{\"command\":\"grep -r foo .\"}");
+    for (let i = 0; i < ControlLoopTracker.READ_ONLY_STREAK_LIMIT - 11; i++) {
+      tracker.markToolExecution("vault_search", `vault_search:{"query":"q${i}"}`);
+    }
+    expect(tracker.takeUnreportedReadOnlyStall()?.calls).toBe(ControlLoopTracker.READ_ONLY_STREAK_LIMIT);
+    for (let i = 0; i < 5; i++) tracker.markToolExecution("file_read", `file_read:{"path":"g${i}"}`);
+    tracker.markToolExecution("file_write", "file_write:{\"path\":\"new.cs\"}");
+    for (let i = 0; i < ControlLoopTracker.READ_ONLY_STREAK_LIMIT - 1; i++) {
+      tracker.markToolExecution("file_read", `file_read:{"path":"h${i}"}`);
+    }
+    expect(tracker.takeUnreportedReadOnlyStall()).toBeNull(); // the write restarted the count
+  });
+
   it("does NOT trigger read_only_stall below threshold", () => {
     const tracker = new ControlLoopTracker({ staleAnalysisThreshold: 100 });
 
@@ -518,7 +554,11 @@ describe("ControlLoopTracker", () => {
     expect(tracker.getConsecutiveReadOnlyToolCalls()).toBe(1);
     tracker.markToolExecution("grep_search");
     expect(tracker.getConsecutiveReadOnlyToolCalls()).toBe(2);
+    // shell_exec is a mutation for the gate rules but not evidence of progress:
+    // a shell grep does not end a read-only streak (2026-09-08).
     tracker.markToolExecution("shell_exec");
+    expect(tracker.getConsecutiveReadOnlyToolCalls()).toBe(3);
+    tracker.markToolExecution("file_write");
     expect(tracker.getConsecutiveReadOnlyToolCalls()).toBe(0);
   });
 });
@@ -599,7 +639,7 @@ describe("reading a document is not a stall", () => {
   it("stays quiet while distinct targets are being read", () => {
     const tracker = new ControlLoopTracker();
 
-    readDistinct(tracker, 39);
+    readDistinct(tracker, ControlLoopTracker.READ_ONLY_STREAK_LIMIT - 1);
 
     expect(tracker.readOnlyStall(), "called an ordinary document read a stall").toBeNull();
   });

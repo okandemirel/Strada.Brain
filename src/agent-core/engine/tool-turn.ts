@@ -12,7 +12,8 @@
  * Import rule (cycle safety): orchestrator-FREE leaves only — see engine-deps.js.
  */
 
-import { getLogger } from "../../utils/logger.js";
+import { getLoggerSafe } from "../../utils/logger.js";
+import { readOnlyStreakGate } from "../../agents/autonomy/control-loop-tracker.js";
 import type { AgentState } from "../../agents/agent-state.js";
 import { createInitialState } from "../../agents/agent-state.js";
 import type { ToolCall, ToolResult, ConversationMessage } from "../../agents/providers/provider.interface.js";
@@ -235,11 +236,13 @@ export async function portExecuteToolTurn(
       // a threshold of 8. Ask here, where every tool turn passes.
       const stall = runCtx.controlLoopTracker.takeUnreportedReadOnlyStall();
       if (stall) {
-        getLogger().warn("Read-only stall", {
+        getLoggerSafe()?.warn("Read-only stall", {
           chatId: runCtx.chatId,
           calls: stall.calls,
           reason: stall.reason,
         });
+        // A warning nobody reads is not an intervention: the model is told.
+        runCtx.session.messages.push({ role: "user", content: readOnlyStreakGate(stall) });
       }
     }
 

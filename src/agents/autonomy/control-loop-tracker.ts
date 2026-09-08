@@ -1,4 +1,4 @@
-import { MUTATION_TOOLS } from "./constants.js";
+import { MUTATION_TOOLS, PROGRESS_MUTATION_TOOLS } from "./constants.js";
 
 export type ControlLoopGateKind =
   | "clarification_internal_continue"
@@ -46,7 +46,6 @@ export class ControlLoopTracker {
   private readonly recoveryEpisodes = new Map<string, number>();
   private consecutiveNoToolGates = 0;
   private consecutiveReadOnlyToolCalls = 0;
-  private readOnlyStallReported = false;
   private lastReadOnlyFingerprint: string | null = null;
   private sameReadOnlyFingerprintCount = 0;
   private mutationsSinceLastReset = false;
@@ -54,7 +53,14 @@ export class ControlLoopTracker {
 
   static readonly READ_ONLY_STALL_THRESHOLD = 8;
   /** Measured: a legitimate document read ran to 39 calls; a real spin ran to 108. */
-  static readonly READ_ONLY_STREAK_LIMIT = 60;
+  /**
+   * Consecutive read-only calls (DISTINCT ones — repeats trip the 8-call rule)
+   * before the run is told that reading is not progress. Measured 2026-09-08
+   * 17:57-18:44 on a PixelFlow sprint: 14 turns, ~30 vault/file reads, no
+   * write, no gate — the old limit of 60 was ~100 minutes of a 6-hour box at
+   * the provider's 4.5-minute turn pace, and shell greps reset it besides.
+   */
+  static readonly READ_ONLY_STREAK_LIMIT = 24;
 
   private readonly fpThreshold: number;
   private readonly hasCustomFpThreshold: boolean;
@@ -162,11 +168,17 @@ export class ControlLoopTracker {
     // Only reset stale analysis counter on mutation tools, not read-only tools
     // like file_read, grep_search, list_directory. When no toolName is provided
     // (backward compat), assume mutation to preserve existing behavior.
-    if (!toolName || MUTATION_TOOLS.has(toolName)) {
+    const mutates = !toolName || MUTATION_TOOLS.has(toolName);
+    // shell_exec may write, so it counts as a mutation for the gate rules —
+    // but `grep -r` through it is reading, and it used to end a read-only
+    // streak (measured 2026-09-08 16:07: four shell greps, streak reset).
+    const progresses = !toolName || PROGRESS_MUTATION_TOOLS.has(toolName);
+    if (mutates) {
       this.consecutiveNoToolGates = 0;
-      this.consecutiveReadOnlyToolCalls = 0;
       this.mutationsSinceLastReset = true;
-      this.readOnlyStallReported = false;
+    }
+    if (progresses) {
+      this.consecutiveReadOnlyToolCalls = 0;
       this.lastReadOnlyFingerprint = null;
       this.sameReadOnlyFingerprintCount = 0;
     } else {
@@ -217,10 +229,17 @@ export class ControlLoopTracker {
   }
 
   /** True the first time a stall crosses the threshold, so a caller reports it once. */
+  /**
+   * The stall, once per streak: reporting restarts the count, so a run that
+   * keeps reading is told again after the next full streak rather than once
+   * per mutation (which, in a read-only run, is never).
+   */
   takeUnreportedReadOnlyStall(): { readonly calls: number; readonly reason: string } | null {
     const stall = this.readOnlyStall();
-    if (stall === null || this.readOnlyStallReported) return null;
-    this.readOnlyStallReported = true;
+    if (stall === null) return null;
+    this.consecutiveReadOnlyToolCalls = 0;
+    this.lastReadOnlyFingerprint = null;
+    this.sameReadOnlyFingerprintCount = 0;
     return stall;
   }
 
@@ -230,7 +249,6 @@ export class ControlLoopTracker {
     this.consecutiveNoToolGates = 0;
     this.consecutiveReadOnlyToolCalls = 0;
     this.mutationsSinceLastReset = false;
-    this.readOnlyStallReported = false;
   }
 
   markMeaningfulFileEvidence(files: readonly string[], _iteration: number): void {
@@ -398,4 +416,16 @@ function summarizeText(text: string): string {
     .replace(/[^a-z0-9 _-]+/g, " ")
     .trim()
     .slice(0, 160);
+}
+
+/**
+ * What the model is told when a read-only streak trips: the measurement and
+ * the only two acceptable next moves. Pushed into the session as a user turn.
+ */
+export function readOnlyStreakGate(stall: { readonly calls: number; readonly reason: string }): string {
+  return (
+    `[READ-ONLY STREAK] ${stall.reason} Reading is not progress. ` +
+    "Your next turn must either CHANGE something with a write/generate/bind tool, or state in one " +
+    "paragraph exactly what blocks a change and what you will do about it. Do not read more first."
+  );
 }

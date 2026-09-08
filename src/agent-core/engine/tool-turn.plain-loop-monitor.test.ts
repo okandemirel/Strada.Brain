@@ -10,6 +10,7 @@
  */
 
 import { describe, it, expect, vi } from "vitest";
+import { ControlLoopTracker } from "../../agents/autonomy/control-loop-tracker.js";
 import { portExecuteToolTurn, isPlainLoop, summarizePlainLoopBatch, type ToolTurnDeps } from "./tool-turn.js";
 import type { EngineRunContext } from "./engine-deps.js";
 import { createInitialState } from "../../agents/agent-state.js";
@@ -216,5 +217,30 @@ describe("portExecuteToolTurn — SUPPRESSION on supervisor/decomposed/joined ru
 
     expect(deps.emitPlainLoopStep).not.toHaveBeenCalled();
     expect(runCtx.plainLoopStepIndex).toBe(0);
+  });
+});
+
+describe("portExecuteToolTurn — a read-only streak is told to the model", () => {
+  it("pushes the READ-ONLY STREAK gate into the session when the tracker reports a stall", async () => {
+    const deps = makeDeps();
+    const tracker = new ControlLoopTracker({ staleAnalysisThreshold: 100 });
+    const runCtx = makeRunCtx({ controlLoopTracker: tracker });
+    for (let i = 0; i < ControlLoopTracker.READ_ONLY_STREAK_LIMIT - 2; i++) {
+      tracker.markToolExecution("vault_search", `vault_search:{"query":"q${i}"}`);
+    }
+    // The turn's two calls (read_file, edit_file — neither a known mutation tool) complete the streak.
+    await portExecuteToolTurn(deps, makeArgs(), runCtx);
+    const messages = (runCtx.session as unknown as { messages: Array<{ role: string; content: string }> }).messages;
+    const gate = messages.find((m) => m.role === "user" && String(m.content).startsWith("[READ-ONLY STREAK]"));
+    expect(gate).toBeDefined();
+    expect(gate!.content).toContain("Do not read more first");
+  });
+
+  it("pushes nothing while the streak is short", async () => {
+    const deps = makeDeps();
+    const runCtx = makeRunCtx({ controlLoopTracker: new ControlLoopTracker({ staleAnalysisThreshold: 100 }) });
+    await portExecuteToolTurn(deps, makeArgs(), runCtx);
+    const messages = (runCtx.session as unknown as { messages: Array<{ role: string; content: string }> }).messages;
+    expect(messages.some((m) => String(m.content).startsWith("[READ-ONLY STREAK]"))).toBe(false);
   });
 });
