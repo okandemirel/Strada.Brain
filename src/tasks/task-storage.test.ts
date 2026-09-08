@@ -71,6 +71,18 @@ describe("TaskStorage", () => {
     expect(storage.load(leased.id)?.workspacePolicy).toBeUndefined();
   });
 
+  it("markCancelled persists the reason its descendants read; a plain cancel leaves none", () => {
+    const superseded = makeTask(TaskStatus.executing);
+    const plain = makeTask(TaskStatus.executing);
+    storage.save(superseded);
+    storage.save(plain);
+    storage.markCancelled(superseded.id, "superseded");
+    storage.markCancelled(plain.id);
+    expect(storage.load(superseded.id)).toMatchObject({ status: TaskStatus.cancelled, cancelReason: "superseded" });
+    expect(storage.load(plain.id)?.status).toBe(TaskStatus.cancelled);
+    expect(storage.load(plain.id)?.cancelReason).toBeUndefined();
+  });
+
   it("touch() bumps updated_at without adding a progress row (reaper liveness)", () => {
     const stale = Date.now() - 90 * 60_000;
     const task = makeTask(TaskStatus.executing, { createdAt: stale, updatedAt: stale });

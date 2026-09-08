@@ -172,6 +172,12 @@ export function isOutageCausedSettle(
 ): boolean {
   if (typeof output !== "string" || output.length === 0) return false;
   if (/blocked:provider_unavailable/i.test(output)) return true;
+  // The provider chain's own verdict — every member cooling, probing or
+  // failed — stands like the executor's marker. Measured 2026-09-08 15:18:
+  // a revived sprint settled on "All providers failed or unavailable. A
+  // recovery probe was already in flight…", the probe then succeeded
+  // (coolingMs 0, no failure on record), and attempt 2 was charged for it.
+  if (/All providers failed or unavailable/i.test(output)) return true;
   // The executor's inactivity stop ("stalled without making progress" /
   // "made no progress for Nms") is an outage when a chain member recorded a
   // failure recently — measured 2026-09-08 06:58: two 600 s provider-stalls
@@ -517,7 +523,7 @@ export class CampaignManager {
       ? this.taskManager.findLatestLineageTask(milestone.taskId as TaskId)?.id
       : undefined;
     if (tipId) {
-      try { this.taskManager.cancel(tipId as TaskId); } catch { /* already settled */ }
+      try { this.taskManager.cancel(tipId as TaskId, { reason: "superseded" }); } catch { /* already settled */ }
     }
     milestone.attempts = 0;
     milestone.status = "pending";
@@ -1111,7 +1117,9 @@ export class CampaignManager {
         const previousId = (previousTip as { id?: string; status?: string } | null)?.id;
         const previousStatus = (previousTip as { status?: string } | null)?.status;
         if (previousId && previousStatus !== "completed" && previousStatus !== "cancelled") {
-          this.taskManager.cancel(previousId as TaskId);
+          // "superseded": the next attempt is this task's child, and the
+          // executor's keep-alive must not read this cancel as a stop order.
+          this.taskManager.cancel(previousId as TaskId, { reason: "superseded" });
           getLoggerSafe().info("Cancelled the milestone's previous lineage before resubmitting", {
             id: campaign.id,
             milestone: milestone.id,
@@ -1662,7 +1670,7 @@ export class CampaignManager {
         ? this.taskManager.findLatestLineageTask(milestone.taskId as TaskId)?.id
         : undefined;
       if (tipId) {
-        try { this.taskManager.cancel(tipId as TaskId); } catch { /* already settled */ }
+        try { this.taskManager.cancel(tipId as TaskId, { reason: "superseded" }); } catch { /* already settled */ }
       }
       const hours = Math.round(elapsedMs / 3_600_000);
       if (milestone.attempts < this.maxMilestoneAttempts) {
@@ -1722,7 +1730,7 @@ export class CampaignManager {
       : undefined;
     if (tipId) {
       try {
-        this.taskManager.cancel(tipId as TaskId);
+        this.taskManager.cancel(tipId as TaskId, { reason: "superseded" });
       } catch { /* already settled */ }
     }
     this.submitCurrentMilestone(campaign, { countAttempt: false });

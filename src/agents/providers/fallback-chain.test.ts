@@ -1132,7 +1132,11 @@ describe("FallbackChainProvider — recovery probe failures keep their cooldown 
     expect(p2.chat).toHaveBeenCalledTimes(1);
   });
 
-  it("says a probe was already in flight when a concurrent call skipped every provider", async () => {
+  it("a call that arrives while another call is probing WAITS for the probe, then sends real traffic", async () => {
+    // Measured 2026-09-08 15:17-15:19: one probe in flight, every concurrent
+    // call failed with "A recovery probe was already in flight … this call
+    // measured nothing", the goal decomposer burned four rounds in 90 s and
+    // the campaign charged an attempt — the probe succeeded 24 s later.
     const health = ProviderHealthRegistry.getInstance();
     const p1 = { ...createMockProvider(), name: "solo" };
     let releaseProbe!: (value: unknown) => void;
@@ -1142,13 +1146,56 @@ describe("FallbackChainProvider — recovery probe failures keep their cooldown 
     for (let i = 0; i < 5; i++) health.recordFailure("solo", "timeout");
     Object.assign(health.getEntry("solo")!, { cooldownUntil: Date.now() - 1000 });
 
-    const first = chain.chat("sys", [], []); // holds the probe guard
+    const first = chain.chat("sys", [], []); // holds the probe
     await new Promise((r) => setImmediate(r));
-    await expect(chain.chat("sys", [], [])).rejects.toThrow(/probe (?:was )?already in flight/i);
-    await expect(chain.chat("sys", [], [])).rejects.not.toThrow(/in cooldown/i);
+    let secondSettled = false;
+    const second = chain.chat("sys", [], []).finally(() => { secondSettled = true; });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(secondSettled).toBe(false); // waiting on the probe, not failed
+    expect(p1.chat).toHaveBeenCalledTimes(1); // one probe, no second probe
 
     releaseProbe({ text: "ok", toolCalls: [], stopReason: "end_turn", usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 } });
     await expect(first).resolves.toMatchObject({ text: "ok" });
+    await expect(second).resolves.toMatchObject({ text: "ok" });
+    expect(p1.chat).toHaveBeenCalledTimes(3); // probe + two real calls
+  });
+
+  it("a waiter whose probe fails is told the probe failed, not that it measured nothing", async () => {
+    const health = ProviderHealthRegistry.getInstance();
+    const p1 = { ...createMockProvider(), name: "solo-fail" };
+    (p1.chat as ReturnType<typeof vi.fn>).mockImplementation(async (sys: string) => {
+      if (sys === "Reply with OK") {
+        await new Promise((r) => setTimeout(r, 30));
+        throw new Error("HTTP 503");
+      }
+      return { text: "ok", toolCalls: [], stopReason: "end_turn", usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 } };
+    });
+    const chain = new FallbackChainProvider([p1]);
+    for (let i = 0; i < 5; i++) health.recordFailure("solo-fail", "timeout");
+    Object.assign(health.getEntry("solo-fail")!, { cooldownUntil: Date.now() - 1000 });
+
+    const results = await Promise.allSettled([chain.chat("sys", [], []), chain.chat("sys", [], [])]);
+    expect(results.every((r) => r.status === "rejected")).toBe(true);
+    const messages = results.map((r) => String((r as PromiseRejectedResult).reason?.message ?? ""));
+    expect(messages.some((m) => /measured nothing/.test(m))).toBe(false);
+    expect(messages.some((m) => /did not clear it|failed the recovery probe/.test(m))).toBe(true);
+  });
+
+  it("a waiter stops waiting when its own call is aborted", async () => {
+    const health = ProviderHealthRegistry.getInstance();
+    const p1 = { ...createMockProvider(), name: "solo-abort" };
+    const gate = new Promise(() => undefined); // a probe that never answers within the test
+    (p1.chat as ReturnType<typeof vi.fn>).mockImplementation(() => gate);
+    const chain = new FallbackChainProvider([p1]);
+    for (let i = 0; i < 5; i++) health.recordFailure("solo-abort", "timeout");
+    Object.assign(health.getEntry("solo-abort")!, { cooldownUntil: Date.now() - 1000 });
+
+    void chain.chat("sys", [], []).catch(() => undefined); // holds the probe
+    await new Promise((r) => setImmediate(r));
+    const ac = new AbortController();
+    const waiter = chain.chat("sys", [], [], { externalSignal: ac.signal });
+    setTimeout(() => ac.abort(), 20);
+    await expect(waiter).rejects.toThrow(/Aborted while waiting for the recovery probe/);
   });
 
   it("a probe that fails on a hard quota stop honors the provider's Retry-After", async () => {

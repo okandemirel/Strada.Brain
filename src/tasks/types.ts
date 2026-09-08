@@ -118,6 +118,15 @@ export interface Task {
   progress: ProgressEntry[];
   createdAt: number;
   updatedAt: number;
+  /**
+   * Why a cancelled task was cancelled, when it matters to its descendants.
+   * "superseded" = the campaign cancelled this attempt only to resubmit the
+   * same milestone as its child. Measured 2026-09-08 15:19: every campaign
+   * attempt after the first descends from a task the campaign itself
+   * cancelled, so the executor's "a cancel anywhere in the ancestry retires
+   * the lineage" rule abandoned every keep-alive retry of every sprint.
+   */
+  cancelReason?: "superseded";
   completedAt?: number;
   parentId?: TaskId;
   /** Origin of the task -- 'user' for interactive, 'daemon' for daemon-initiated */

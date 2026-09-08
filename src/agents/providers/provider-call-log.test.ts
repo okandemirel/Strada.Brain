@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const loggerSpies = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
 vi.mock("../../utils/logger.js", () => ({ getLoggerSafe: () => loggerSpies, getLogger: () => loggerSpies }));
 
-import { logProviderCall } from "./provider-call-log.js";
+import { logProviderCall, describeThrown } from "./provider-call-log.js";
 
 describe("logProviderCall", () => {
   beforeEach(() => loggerSpies.info.mockClear());
@@ -41,5 +41,17 @@ describe("toolDefinitionChars", () => {
     expect(toolDefinitionChars([])).toBe(0);
     const tools = [{ name: "a", description: "x", parameters: { type: "object" } }];
     expect(toolDefinitionChars(tools)).toBe(JSON.stringify(tools).length);
+  });
+
+  // Measured 2026-09-08 14:45:56: two 17-minute calls ended with
+  // error:"[object Object]" — the cancel token's reason object, stringified.
+  it("names a thrown cancel-reason object instead of printing [object Object]", () => {
+    logProviderCall("turn", { name: "opencode" }, Date.now(), { error: { kind: "hard-timeout", scope: "call" } });
+    const [message, fields] = loggerSpies.info.mock.calls[0]!;
+    expect(message).toBe("Provider call failed");
+    expect((fields as { error: string }).error).toBe('{"kind":"hard-timeout","scope":"call"}');
+    expect(describeThrown(new Error("boom"))).toBe("boom");
+    expect(describeThrown("plain")).toBe("plain");
+    expect(describeThrown(undefined)).toBe("undefined");
   });
 });

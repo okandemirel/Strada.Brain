@@ -21,6 +21,7 @@ describe("cancelling a parked task", () => {
     (manager as unknown as { storage: unknown }).storage = {
       load: () => task,
       updateStatus: (id: string, s: string) => { updates.push({ id, status: s }); task.status = s as TaskStatus; },
+      markCancelled: (id: string) => { updates.push({ id, status: TaskStatus.cancelled }); task.status = TaskStatus.cancelled; },
     };
     (manager as unknown as { abortControllers: Map<string, AbortController> }).abortControllers = new Map();
     (manager as unknown as { emit: unknown }).emit = vi.fn();

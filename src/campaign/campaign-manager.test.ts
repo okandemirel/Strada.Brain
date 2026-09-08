@@ -69,8 +69,10 @@ class FakeTaskManager extends EventEmitter {
   }
 
   cancelled: string[] = [];
-  cancel(taskId: string): void {
+  cancelReasons = new Map<string, string | undefined>();
+  cancel(taskId: string, opts?: { reason?: string }): void {
     this.cancelled.push(taskId);
+    this.cancelReasons.set(taskId, opts?.reason);
     this.statuses.set(taskId, TaskStatus.cancelled);
   }
 
@@ -396,6 +398,10 @@ describe("CampaignManager", () => {
     const handled = await manager.tryHandleRevive("cli-local", "kampanya devam");
     expect(handled).toBe(true);
     expect(tasks.cancelled).toContain("task_1");
+    // The cancel is a supersession: the resubmitted attempt is task_1's child,
+    // and the executor's keep-alive must not read it as a stop order
+    // (measured 2026-09-08 15:19: it did, for every attempt after the first).
+    expect(tasks.cancelReasons.get("task_1")).toBe("superseded");
     await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
   });
 

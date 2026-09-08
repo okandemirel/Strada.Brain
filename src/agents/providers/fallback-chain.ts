@@ -234,7 +234,16 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
   /** Number of providers in this chain (used for single-provider detection). */
   get providerCount(): number { return this.providers.length; }
   /** Guards against thundering-herd concurrent probes to the same recovering provider. */
-  private readonly probing = new Set<string>();
+  /**
+   * Recovery probes in flight, by provider, so a second caller WAITS for the
+   * probe instead of failing on the spot. Measured 2026-09-08 15:17-15:19: a
+   * degraded OpenCode needed one probe (114 s to first byte); every call
+   * that arrived meanwhile got "A recovery probe was already in flight …
+   * this call measured nothing", the goal decomposer burned its four rounds
+   * in 90 s, the sprint settled blocked, and the campaign charged an attempt
+   * — for a provider that answered the probe 24 s later.
+   */
+  private readonly probing = new Map<string, Promise<void>>();
   /** Throttle flag so the single-point-of-failure warning fires once per collapse. */
   private spofWarned = false;
   // Thinking disable state now lives in ProviderHealthRegistry singleton
@@ -716,8 +725,7 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
       // Lightweight probe for providers that just exited cooldown but haven't proven healthy yet.
       // The probing guard prevents thundering-herd concurrent probes to the same provider.
       if (health.isRecovering(provider.name) && !this.probing.has(provider.name)) {
-        this.probing.add(provider.name);
-        try {
+        const probe = (async () => {
           await provider.chat(
             "Reply with OK",
             [{ role: "user", content: "health check" }] as ConversationMessage[],
@@ -726,6 +734,12 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
           );
           health.recordSuccess(provider.name, "probe");
           logger.info("Provider health probe succeeded (probe-only recovery)", { provider: provider.name });
+        })();
+        this.probing.set(provider.name, probe);
+        // Waiters observe the outcome through the registry; the rejection is handled below.
+        probe.catch(() => undefined);
+        try {
+          await probe;
         } catch (probeErr) {
           const probeMsg = probeErr instanceof Error ? probeErr.message : String(probeErr);
           // audited 2026-09-02: this used to be the generic recordFailure() for every
@@ -745,10 +759,29 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
           this.probing.delete(provider.name);
         }
       } else if (health.isRecovering(provider.name) && this.probing.has(provider.name)) {
-        // Another concurrent call is already probing this provider — skip
-        logger.debug("Skipping provider, probe already in flight", { provider: provider.name });
-        probeInFlight++;
-        continue;
+        // Another concurrent call is already probing this provider: wait for
+        // its verdict rather than failing on the spot (see `probing`).
+        logger.info("Waiting for the recovery probe already in flight", { provider: provider.name });
+        let probeOk = false;
+        try {
+          await Promise.race([
+            this.probing.get(provider.name),
+            externalSignal ? abortedPromise(externalSignal) : new Promise<never>(() => undefined),
+          ]);
+          probeOk = true;
+        } catch {
+          // The probe's own failure is in the registry; an external abort surfaces below.
+        }
+        if (externalSignal?.aborted) {
+          throw new Error(`Aborted while waiting for the recovery probe of "${provider.name}" (${label})`);
+        }
+        if (!probeOk) {
+          probeFailed++;
+          lastError = new Error(`${provider.name}: the recovery probe run by another call did not clear it`);
+          continue;
+        }
+        // The probe answered while we waited: the prober is sending real
+        // traffic on that verdict, and so do we.
       }
 
       attempted++;
@@ -1064,4 +1097,12 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
     }
     throw new Error(`All providers failed or unavailable. ${detail}`, { cause: lastError ?? undefined });
   }
+}
+
+/** Rejects when the signal aborts; never resolves otherwise. */
+function abortedPromise(signal: AbortSignal): Promise<never> {
+  return new Promise<never>((_, reject) => {
+    if (signal.aborted) { reject(new Error("aborted")); return; }
+    signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+  });
 }

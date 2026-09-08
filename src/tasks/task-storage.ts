@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   completed_at INTEGER,
   parent_id TEXT,
   workspace_policy TEXT,
+  cancel_reason TEXT,
   FOREIGN KEY (parent_id) REFERENCES tasks(id) ON DELETE SET NULL
 );
 
@@ -83,6 +84,7 @@ interface TaskRow {
   completed_at: number | null;
   parent_id: string | null;
   workspace_policy?: string | null;
+  cancel_reason?: string | null;
 }
 
 interface ProgressRow {
@@ -159,7 +161,14 @@ export class TaskStorage {
       // Audited 2026-09-02: never persisted, so a replayed "run against the
       // real root" fix task silently took a lease and its deletions were declined.
       task.workspacePolicy ?? null,
+      task.cancelReason ?? null,
     );
+  }
+
+  /** Cancel with the reason its descendants will read (see Task.cancelReason). */
+  markCancelled(id: TaskId, reason?: Task["cancelReason"]): void {
+    this.ensureConnection();
+    this.getStmt("updateCancelled").run(TaskStatus.cancelled, reason ?? null, Date.now(), id);
   }
 
   load(id: TaskId): Task | null {
@@ -329,6 +338,7 @@ export class TaskStorage {
       attachments: this.parseAttachments(row.attachments_json),
       verification: this.parseVerification(row.verification_json),
       workspacePolicy: row.workspace_policy === "none" ? "none" : undefined,
+      cancelReason: row.cancel_reason === "superseded" ? "superseded" : undefined,
     };
   }
 
@@ -348,6 +358,7 @@ export class TaskStorage {
       ["attachments_json", "TEXT"],
       ["verification_json", "TEXT"],
       ["workspace_policy", "TEXT"],
+      ["cancel_reason", "TEXT"],
     ];
     const missingColumns = migratableColumns.filter(([name]) => !knownColumns.has(name));
 
@@ -446,12 +457,13 @@ export class TaskStorage {
           id, chat_id, channel_type, conversation_id, user_id, goal_root_id,
           title, status, prompt, result, error, origin, trigger_name,
           force_shared_planning, user_content_json, attachments_json,
-          created_at, updated_at, completed_at, parent_id, workspace_policy
+          created_at, updated_at, completed_at, parent_id, workspace_policy, cancel_reason
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       getTask: `SELECT * FROM tasks WHERE id = ?`,
       updateStatus: `UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?`,
+      updateCancelled: `UPDATE tasks SET status = ?, cancel_reason = ?, updated_at = ? WHERE id = ?`,
       updateResult: `UPDATE tasks SET result = ?, status = ?, updated_at = ?, completed_at = ? WHERE id = ?`,
       updateError: `UPDATE tasks SET error = ?, status = ?, updated_at = ?, completed_at = ? WHERE id = ?`,
       updateBlocked: `UPDATE tasks SET result = ?, status = ?, updated_at = ?, completed_at = ? WHERE id = ?`,

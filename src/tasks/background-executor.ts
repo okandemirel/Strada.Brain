@@ -2186,18 +2186,22 @@ export class BackgroundExecutor {
     // blocked task's error message, 2026-09-03).
     try {
       if (this.lineageTipOf(task)?.status === "cancelled") return true;
-      const read = (id: string): { id: string; status?: string; parentId?: string } | null =>
-        (this.taskManager?.getStatus?.(id as TaskId) as
-          | { id: string; status?: string; parentId?: string }
-          | null
-          | undefined) ?? null;
-      let current: { id: string; status?: string; parentId?: string } | null = {
+      type Row = { id: string; status?: string; parentId?: string; cancelReason?: string };
+      const read = (id: string): Row | null =>
+        (this.taskManager?.getStatus?.(id as TaskId) as Row | null | undefined) ?? null;
+      let current: Row | null = {
         ...(read(task.id) ?? {}),
         ...task,
       };
       for (let depth = 0; current && depth < 50; depth++) {
         const row = read(current.id);
-        if ((current.status ?? row?.status) === "cancelled") return true;
+        // An ancestor the campaign cancelled only to resubmit the milestone as
+        // this lineage's next attempt is history, not a stop order. Measured
+        // 2026-09-08 15:19: attempt 1 of a revived sprint descended from four
+        // such cancels, and its keep-alive retry was abandoned in 30 s.
+        const superseded =
+          (current.cancelReason ?? row?.cancelReason) === "superseded" && current.id !== task.id;
+        if ((current.status ?? row?.status) === "cancelled" && !superseded) return true;
         const parentId: string | undefined = current.parentId ?? row?.parentId;
         if (!parentId) break;
         current = read(parentId);

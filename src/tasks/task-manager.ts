@@ -153,7 +153,13 @@ export class TaskManager extends EventEmitter {
   /**
    * Cancel a running task.
    */
-  cancel(taskId: TaskId): boolean {
+  /**
+   * `reason: "superseded"` marks a cancel made only to resubmit the same
+   * work as this task's child (the campaign's attempt N+1); descendants do
+   * not inherit it as a stop order. Every other cancel is a deliberate stop
+   * that retires the whole lineage.
+   */
+  cancel(taskId: TaskId, opts: { reason?: Task["cancelReason"] } = {}): boolean {
     const task = this.storage.load(taskId);
     if (!task) return false;
     // A BLOCKED task is not finished — it is parked, waiting for a
@@ -187,9 +193,9 @@ export class TaskManager extends EventEmitter {
       );
     }
 
-    this.storage.updateStatus(taskId, TaskStatus.cancelled);
+    this.storage.markCancelled(taskId, opts.reason);
     this.emit("task:cancelled", taskId);
-    getLogger().info("Task cancelled", { taskId });
+    getLogger().info("Task cancelled", { taskId, ...(opts.reason ? { reason: opts.reason } : {}) });
     return true;
   }
 

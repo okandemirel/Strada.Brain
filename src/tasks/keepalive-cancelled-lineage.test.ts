@@ -122,6 +122,105 @@ describe("mission keep-alive vs a cancelled lineage", () => {
     }
   });
 
+  it("an ancestor the campaign cancelled only to resubmit (superseded) is history, not a stop order", async () => {
+    // Measured 2026-09-08 15:19: attempt 1 of a revived sprint descended from
+    // four tasks the campaign had cancelled before resubmitting, so its
+    // keep-alive retry was "abandoned — the lineage was cancelled" 30 s after
+    // a provider probe blocked it, and the campaign charged an attempt.
+    vi.useFakeTimers();
+    try {
+      const executor = Object.create(BackgroundExecutor.prototype) as BackgroundExecutor;
+      const internals = executor as unknown as {
+        missionRetries: Map<string, number>;
+        taskManager: unknown;
+        allProvidersCoolingDownMs: () => number;
+        lineageRootTaskId: (t: { id: string }) => string;
+      };
+      internals.missionRetries = new Map();
+      internals.allProvidersCoolingDownMs = () => 0;
+      internals.lineageRootTaskId = () => "task_root";
+      const submitted: string[] = [];
+      const rows: Record<string, {
+        id: string; status: string; parentId?: string; origin: string; chatId: string; prompt: string; cancelReason?: string;
+      }> = {
+        task_new: { id: "task_new", status: "blocked", parentId: "task_prev", origin: "user", chatId: "cli-local", prompt: "sprint" },
+        task_prev: { id: "task_prev", status: "cancelled", cancelReason: "superseded", parentId: "task_root", origin: "user", chatId: "cli-local", prompt: "sprint" },
+        task_root: { id: "task_root", status: "cancelled", cancelReason: "superseded", origin: "user", chatId: "cli-local", prompt: "sprint" },
+      };
+      internals.taskManager = {
+        findLatestLineageTask: () => rows["task_new"],
+        getStatus: (id: string) => rows[id] ?? null,
+        findLineageRootId: () => "task_root",
+        listTasks: () => [],
+        retryTask: (id: string) => { submitted.push(id); return { id: "x" }; },
+        submit: (o: { prompt: string }) => { submitted.push(o.prompt); return { id: "x" }; },
+        appendTaskNotice: vi.fn(),
+        block: vi.fn(),
+      };
+
+      (executor as unknown as { scheduleMissionKeepAlive(t: unknown, r: string): boolean })
+        .scheduleMissionKeepAlive(rows["task_new"], "transient");
+      await vi.advanceTimersByTimeAsync(15 * 60_000);
+
+      expect(submitted).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a superseded cancel on the TIP itself still abandons the retry (only ancestors are history)", async () => {
+    vi.useFakeTimers();
+    try {
+      const { executor, internals, submitted } = harness("cancelled");
+      (internals.taskManager as { findLatestLineageTask: () => unknown }).findLatestLineageTask =
+        () => ({ id: "task_tip", status: "cancelled", cancelReason: "superseded" });
+      const task = { id: "task_tip", chatId: "cli-local", prompt: "sprint", origin: "user" };
+      (executor as unknown as { scheduleMissionKeepAlive(t: unknown, r: string): boolean })
+        .scheduleMissionKeepAlive(task, "transient");
+      await vi.advanceTimersByTimeAsync(15 * 60_000);
+      expect(submitted).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a task that was itself superseded does not re-arm: its successor is the live tip", async () => {
+    vi.useFakeTimers();
+    try {
+      const executor = Object.create(BackgroundExecutor.prototype) as BackgroundExecutor;
+      const internals = executor as unknown as {
+        missionRetries: Map<string, number>;
+        taskManager: unknown;
+        allProvidersCoolingDownMs: () => number;
+        lineageRootTaskId: (t: { id: string }) => string;
+      };
+      internals.missionRetries = new Map();
+      internals.allProvidersCoolingDownMs = () => 0;
+      internals.lineageRootTaskId = () => "task_old";
+      const submitted: string[] = [];
+      const rows: Record<string, { id: string; status: string; parentId?: string; origin: string; chatId: string; prompt: string; cancelReason?: string }> = {
+        task_old: { id: "task_old", status: "cancelled", cancelReason: "superseded", origin: "user", chatId: "cli-local", prompt: "sprint" },
+        task_next: { id: "task_next", status: "blocked", parentId: "task_old", origin: "user", chatId: "cli-local", prompt: "sprint" },
+      };
+      internals.taskManager = {
+        findLatestLineageTask: () => rows["task_next"],
+        getStatus: (id: string) => rows[id] ?? null,
+        findLineageRootId: () => "task_old",
+        listTasks: () => [],
+        retryTask: (id: string) => { submitted.push(id); return { id: "x" }; },
+        submit: (o: { prompt: string }) => { submitted.push(o.prompt); return { id: "x" }; },
+        appendTaskNotice: vi.fn(),
+        block: vi.fn(),
+      };
+      (executor as unknown as { scheduleMissionKeepAlive(t: unknown, r: string): boolean })
+        .scheduleMissionKeepAlive(rows["task_old"], "transient");
+      await vi.advanceTimersByTimeAsync(15 * 60_000);
+      expect(submitted).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("still retries when the lineage tip is merely blocked", async () => {
     vi.useFakeTimers();
     try {

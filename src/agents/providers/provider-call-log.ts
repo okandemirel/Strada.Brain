@@ -55,7 +55,26 @@ export function logProviderCall(
     label,
     provider: provider.name,
     ms,
-    error: (error instanceof Error ? error.message : String(error)).slice(0, 200),
+    error: describeThrown(error).slice(0, 200),
     ...extra,
   });
+}
+
+/**
+ * What was thrown, readable. A cancel token aborts fetch() with its
+ * CancelReason OBJECT as the reason, so `String(error)` printed
+ * "[object Object]" — measured 2026-09-08 14:45:56 on two 17-minute calls
+ * whose only record of why they ended was that string.
+ */
+export function describeThrown(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return error;
+  if (error && typeof error === "object") {
+    try {
+      return JSON.stringify(error);
+    } catch {
+      return Object.prototype.toString.call(error);
+    }
+  }
+  return String(error);
 }

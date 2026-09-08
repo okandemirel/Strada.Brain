@@ -18,6 +18,16 @@ describe("was it the provider layer that stopped the run", () => {
     expect(isOutageCausedSettle(BLOCKED, 60_000)).toBe(true);
   });
 
+  it("trusts the provider chain's own verdict too — even after the probe has since succeeded", () => {
+    // Measured 2026-09-08 15:18: the sprint settled on this text, the recovery
+    // probe succeeded 24 s later (coolingMs 0, no failure on record), and the
+    // campaign charged attempt 2 for an outage it had already outlived.
+    const CHAIN =
+      "Task execution failed: All providers failed or unavailable. A recovery probe was already in flight for 1 provider(s); this call measured nothing. Retry shortly.";
+    expect(isOutageCausedSettle(CHAIN, 0, Number.POSITIVE_INFINITY)).toBe(true);
+    expect(isOutageCausedSettle("All providers failed or unavailable. All providers are in cooldown.", 0)).toBe(true);
+  });
+
   it("still requires the registry to agree for free text", () => {
     // A model that merely says "quota" must not arm this on wording alone:
     // that once made planning replan every two minutes with no attempt budget.

@@ -255,6 +255,7 @@ describe("TaskManager", () => {
     const storage = {
       load: vi.fn().mockReturnValue(pausedTask),
       updateStatus: vi.fn(),
+      markCancelled: vi.fn(),
     } as any;
     const executor = { resumeConversation: vi.fn() } as any;
     const manager = new TaskManager(storage, executor);
@@ -263,7 +264,7 @@ describe("TaskManager", () => {
 
     expect(cancelled).toBe(true);
     expect(executor.resumeConversation).toHaveBeenCalledTimes(1);
-    expect(storage.updateStatus).toHaveBeenCalledWith("task_paused1", TaskStatus.cancelled);
+    expect(storage.markCancelled).toHaveBeenCalledWith("task_paused1", undefined);
   });
 
   it("creates a goal retry attempt that preserves completed checkpoints", () => {
