@@ -324,6 +324,23 @@ describe("orphaned lease salvage at construction", () => {
     expect(result.written).toContain(join("Assets", "Scripts", "AfterSalvage.cs"));
   });
 
+  it("a lease acquired while boot salvage is still running waits for it (Codex review 2026-09-08: acquisition raced salvage)", async () => {
+    const orphan = join(leaseRoot, "task-0badf00d-cafe-4bad-8fee-1234567890ab");
+    mkdirSync(join(orphan, "Assets", "Scripts"), { recursive: true });
+    writeFileSync(join(orphan, "Assets", "Scripts", "Orphaned.cs"), "orphan work", "utf8");
+
+    const manager2 = manager();
+    // No waitFor: acquire immediately, while the constructor's salvage is in flight.
+    const lease = await manager2.acquireLease({ label: "during-salvage", forceTempCopy: true });
+    try {
+      expect(existsSync(orphan)).toBe(false); // salvage finished before the lease was handed out
+      const conflictDir = join(source, ".strada", "lease-conflicts", "orphan-task-0ba");
+      expect(readFileSync(join(conflictDir, "Assets", "Scripts", "Orphaned.cs"), "utf8")).toBe("orphan work");
+    } finally {
+      await lease.release();
+    }
+  });
+
   it("with the seed maps the lease persisted, salvage COMMITS the crashed owner's work and quarantines only real conflicts", async () => {
     // Measured 2026-09-08 08:19: a restart mid-task quarantined five real
     // Rocket sprites (186 KB each, drawn over 274-byte placeholders) and three

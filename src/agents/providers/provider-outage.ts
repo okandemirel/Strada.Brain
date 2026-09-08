@@ -121,6 +121,12 @@ export function msSinceNewestProviderFailure(now: number = Date.now()): number {
     let newest = 0;
     for (const [name, entry] of entries) {
       if (liveChainMemberNames.size > 0 && !isCurrentChainMemberName(name)) continue;
+      // A REAL success since the failure (consecutiveFailures reset to 0)
+      // means the provider answered afterwards; the failure no longer explains
+      // a later stall. A probe success keeps the streak ≥ 1 and still counts
+      // (Codex review 2026-09-08: healthy provider, 20-minute tool hang,
+      // classified as an outage — uncharged retry).
+      if (entry.consecutiveFailures === 0) continue;
       if (entry.lastFailureAt > newest) newest = entry.lastFailureAt;
     }
     return newest > 0 ? Math.max(0, now - newest) : Number.POSITIVE_INFINITY;

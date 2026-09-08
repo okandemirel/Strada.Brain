@@ -76,6 +76,11 @@ describe("msSinceNewestProviderFailure", () => {
     expect(msSinceNewestProviderFailure(t + 90_000)).toBeLessThan(95_000);
     registry.recordSuccess("p-cool", "probe");
     expect(msSinceNewestProviderFailure(t + 90_000)).toBeLessThan(95_000);
+    // A REAL success after the failure means the provider answered since:
+    // that failure no longer explains a later stall (Codex review 2026-09-08:
+    // healthy provider, 20-minute tool hang, read as an outage).
+    registry.recordSuccess("p-cool");
+    expect(msSinceNewestProviderFailure(t + 90_000)).toBe(Number.POSITIVE_INFINITY);
     // A failure on a provider outside the live chain is not this chain's outage.
     registry.recordFailure("p-fresh", "boom");
     setLiveChainMemberNames(["p-other"]);

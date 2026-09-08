@@ -583,6 +583,54 @@ describe("CampaignManager", () => {
     expect(prompt).toContain("<<MEASURED NOW");
   });
 
+  it("the planner's BUILD HYGIENE bullet mid-list is replaced too, not kept beside nothing (Codex review 2026-09-08)", async () => {
+    const campaign = await reachFinalSprint();
+    const stored = storage.get(campaign.id)!;
+    const finalIndex = stored.milestones.length - 1;
+    stored.milestones[finalIndex]!.prompt = stored.milestones[finalIndex]!.prompt.replace(
+      /\n\nBUILD HYGIENE \(final sprint\):[\s\S]*$/,
+      "\n\nDeliverables:\n- Wire the HUD.\n- BUILD HYGIENE: old wording — scenes must be deleted or disabled.\n- Ship it.",
+    );
+    stored.state = "failed";
+    stored.milestones[finalIndex]!.attempts = 2;
+    storage.save(stored);
+    tasks.markTerminal("task_3", TaskStatus.blocked);
+
+    expect(await manager.tryHandleRevive("cli-local", "kampanya devam")).toBe(true);
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+    const prompt = tasks.submitted[3]!.prompt;
+    expect(prompt).not.toContain("old wording");
+    expect(prompt).toContain("- Wire the HUD.\n- Ship it.");
+    expect(prompt).toContain("BUILD HYGIENE (final sprint): when you are done, Build Settings must list EXACTLY ONE");
+    expect(prompt.indexOf("BUILD HYGIENE")).toBe(prompt.lastIndexOf("BUILD HYGIENE"));
+  });
+
+  it("a bounce's stale DELIVERY REFUSED paragraph is dropped when the measurement is refreshed (Codex review 2026-09-08)", async () => {
+    const campaign = await reachFinalSprint();
+    const stored = storage.get(campaign.id)!;
+    const finalIndex = stored.milestones.length - 1;
+    stored.milestones[finalIndex]!.prompt +=
+      "\n\nDELIVERY REFUSED — THE GAME IS NOT BUILT AS THE GDD SPECIFIES: OLD: the scenes render NOTHING\n" +
+      "Fix the game, not the report: place the project's own prefabs in the scenes the build ships.\n" +
+      "DO NOT AUDIT: counting what exists is not the task — binding it into the shipped scenes is.";
+    stored.state = "failed";
+    stored.milestones[finalIndex]!.attempts = 2;
+    storage.save(stored);
+    tasks.markTerminal("task_3", TaskStatus.blocked);
+
+    expect(await manager.tryHandleRevive("cli-local", "kampanya devam")).toBe(true);
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+    const prompt = tasks.submitted[3]!.prompt;
+    expect(prompt).not.toContain("OLD: the scenes render NOTHING");
+    // Either the gate passes now (paragraph gone) or it names the CURRENT refusal.
+    const marker = "DELIVERY REFUSED — THE GAME IS NOT BUILT AS THE GDD SPECIFIES:";
+    if (prompt.includes(marker)) {
+      const measured = /REFUSED: ([^\n]+)/.exec(prompt)?.[1];
+      expect(measured).toBeTruthy();
+      expect(prompt).toContain(`${marker} ${measured}`);
+    }
+  });
+
   it("an older BUILD HYGIENE paragraph in the persisted prompt is replaced by the current wording", async () => {
     const campaign = await reachFinalSprint();
     const stored = storage.get(campaign.id)!;

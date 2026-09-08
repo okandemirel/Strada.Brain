@@ -28,6 +28,12 @@ describe("was it the provider layer that stopped the run", () => {
     expect(isOutageCausedSettle("All providers failed or unavailable. All providers are in cooldown.", 0)).toBe(true);
   });
 
+  it("the Turkish executor's stop text is the same stop (Codex review 2026-09-08)", () => {
+    const TR = "Görev ilerleme kaydetmeden takıldı, bu yüzden durduruldu. Lütfen tekrar deneyin ya da isteği daha küçük adımlara bölün.";
+    expect(isOutageCausedSettle(TR, 0, 1_000)).toBe(true);
+    expect(isOutageCausedSettle(TR, 0, RECENT_PROVIDER_FAILURE_MS + 1)).toBe(false);
+  });
+
   it("still requires the registry to agree for free text", () => {
     // A model that merely says "quota" must not arm this on wording alone:
     // that once made planning replan every two minutes with no attempt budget.

@@ -184,7 +184,7 @@ export function isOutageCausedSettle(
   // and two first-response aborts preceded the stop, a 40-token probe passed
   // seconds later, coolingMs read 0, attempt 1 → 2 for a queue never passed.
   if (
-    /stalled without making progress|made no progress for \d+ms/i.test(output) &&
+    (/stalled without making progress|made no progress for \d+ms/i.test(output) || TURKISH_STALL_RE.test(output)) &&
     msSinceProviderFailure <= RECENT_PROVIDER_FAILURE_MS
   ) {
     return true;
@@ -194,6 +194,9 @@ export function isOutageCausedSettle(
 
 /** A provider failure this recent explains an inactivity stop. */
 export const RECENT_PROVIDER_FAILURE_MS = 30 * 60_000;
+
+/** The Turkish executor's own inactivity stop (background-executor.ts). */
+const TURKISH_STALL_RE = /Görev ilerleme kaydetmeden takıldı/i;
 
 export class CampaignManager {
   private readonly storage: CampaignStorage;
@@ -1148,8 +1151,13 @@ export class CampaignManager {
       // Any BUILD HYGIENE paragraph — the planner writes one of its own
       // ("BUILD HYGIENE: …", campaign-planner.ts) and it carried the old
       // "deleted or disabled" wording too (review 2026-09-08).
-      milestone.prompt = milestone.prompt.replace(/\n\nBUILD HYGIENE\b[^\n]*(?:\n(?!\n)[^\n]*)*/g, "");
-      if (!milestone.prompt.includes("BUILD HYGIENE")) {
+      milestone.prompt = milestone.prompt
+        .replace(/\n\nBUILD HYGIENE\b[^\n]*(?:\n(?!\n)[^\n]*)*/g, "")
+        // The planner's heading can also sit mid-list ("- BUILD HYGIENE: …");
+        // a paragraph regex misses it and `includes` then kept the old
+        // wording out of the current instruction (Codex review 2026-09-08).
+        .replace(/^[^\n]*\bBUILD HYGIENE\b[^\n]*\n?/gm, "");
+      if (!milestone.prompt.includes("BUILD HYGIENE (final sprint):")) {
         milestone.prompt +=
           "\n\nBUILD HYGIENE (final sprint): when you are done, Build Settings must list EXACTLY ONE " +
           "enabled scene — the entry scene a person opens to play the game. Every verification or " +
@@ -2711,6 +2719,8 @@ export class CampaignManager {
   /** Delimits the re-measured structure block so a resubmit replaces it. */
   /** "ALSO, ALREADY MEASURED: …" up to the next blank line — the pre-2026-09-08 gate blocks carried it. */
   private static readonly LEGACY_STRUCTURE_SENTENCE_RE = /\n\nALSO, ALREADY MEASURED: [^\n]*(?:\n(?!\n)[^\n]*)*/g;
+  private static readonly STALE_REFUSAL_PARAGRAPH_RE =
+    /\n\nDELIVERY REFUSED — THE GAME IS NOT BUILT AS THE GDD SPECIFIES:[\s\S]*?(?=\n\n|$)/g;
   private static readonly STRUCTURE_OPEN = "<<MEASURED NOW — what the shipped scenes render>>";
   private static readonly STRUCTURE_CLOSE = "<</MEASURED NOW>>";
   /** How much of the measurement the prompt carries before it says it trimmed. */
@@ -2737,7 +2747,7 @@ export class CampaignManager {
   private attachStructureMeasurement(campaign: Campaign, milestone: CampaignMilestone): void {
     const open = CampaignManager.STRUCTURE_OPEN;
     const close = CampaignManager.STRUCTURE_CLOSE;
-    const stripped = milestone.prompt
+    let stripped = milestone.prompt
       .replace(
         new RegExp(`\\n*${CampaignManager.escapeRegExp(open)}[\\s\\S]*?${CampaignManager.escapeRegExp(close)}`, "g"),
         "",
@@ -2759,6 +2769,15 @@ export class CampaignManager {
     // Measured 2026-09-07 14:23: the block for the coverage sprint was cut at
     // its budget before "Project art: … 410 of the 429 sprite textures are
     // placeholder-grade" — the one line the art sprint exists to act on.
+    // A bounce's "DELIVERY REFUSED … <refusal>" paragraph must say what is
+    // refused NOW: rewritten to the fresh refusal while the gate still
+    // refuses, dropped once it passes. Left alone, a revive carried "OLD:
+    // render NOTHING" beside "NOW: six renderers" (Codex review 2026-09-08).
+    stripped = stripped.replace(CampaignManager.STALE_REFUSAL_PARAGRAPH_RE, (paragraph) =>
+      structure.refusal
+        ? paragraph.replace(/(THE GAME IS NOT BUILT AS THE GDD SPECIFIES:)[^\n]*/, `$1 ${structure.refusal}`)
+        : "",
+    );
     const inventory = structure.lines.filter((l) => /^Project (art|audio):/.test(l));
     const rest = structure.lines.filter((l) => !/^Project (art|audio):/.test(l));
     const body = [structure.refusal ? `REFUSED: ${structure.refusal}` : undefined, ...inventory, ...rest]
