@@ -55,3 +55,4 @@ benchmarks/corpus/unity-synth-v1-*/
 
 # The auto-updater's own lock; untracked it was stashed on every update cycle
 .strada-update.lock
+.scratch/

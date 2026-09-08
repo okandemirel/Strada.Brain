@@ -62,7 +62,7 @@ export interface DecompositionContext {
   readonly liveProviderCount?: () => number;
 }
 
-function buildProactivePrompt(ctx?: DecompositionContext): string {
+export function buildProactivePrompt(ctx?: DecompositionContext): string {
   const frameworkSection = ctx?.frameworkKnowledge?.();
   const frameworkHint = frameworkSection
     ? `\n\nThe frameworks below were read from their own source at startup. Plan against what they actually provide, not against what a similar framework would:\n\n${frameworkSection}`

@@ -574,6 +574,20 @@ export async function buildSystemPromptWithContext(
     }
   }
 
+  // What the prompt is MADE of, measured (2026-09-08 03:26: 121 203 chars per
+  // turn, 57k input tokens on a free-tier model, and no line said which
+  // layer carried it). One info line per build; the per-turn "Provider call"
+  // line carries the total.
+  logger.info("System prompt composed", {
+    chatId: params.chatId,
+    baseChars: ctx.systemPrompt.length,
+    langAndSoulChars: systemPrompt.length - contextLayers.length - (params.vaultContext?.length ?? 0) - ctx.systemPrompt.length,
+    vaultContextChars: params.vaultContext?.length ?? 0,
+    contextLayersChars: contextLayers.length,
+    contextLayerHeads: contextLayers.split(/\n(?=## )/).map((l) => `${l.split("\n")[0]?.slice(0, 40) ?? ""}=${l.length}`).slice(0, 12),
+    totalChars: systemPrompt.length,
+  });
+
   // 6. Total system prompt budget — cap to leave room for conversation messages
   const maxSystemPromptChars = effectiveContextWindow * 3; // ~3 chars per token, reserve 25% for messages
   if (systemPrompt.length > maxSystemPromptChars) {
