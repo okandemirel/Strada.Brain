@@ -956,6 +956,48 @@ describe("V2AgentRunner — Phase 1c streaming liveness re-arm (no false task-in
     // accumulator crossed the 100ms ceiling (this is the bug the fix prevents).
     expect(runClock().accumulatedSilentMs()).toBeGreaterThanOrEqual(100);
   });
+
+  describe("a graceful STOP is not a success for a worker or background run", () => {
+  // Measured 2026-09-08 10:00-11:53 (PixelFlow sprint, supervisor node workers): eight nodes each
+  // hit a clock/stall stop with graceful finalize, reported status "completed", and carried as
+  // their whole output the localized "the AI provider is not responding" notice — the dispatcher
+  // marked all eight done ("Generate and bind area background sprites" among them).
+  function noRearmRunner(clock: FakeClock) {
+    const provider = mkProvider();
+    const { plane } = mkTinyInactivityPlane(clock);
+    let i = 0;
+    const script = [
+      mkResponse({ text: "the plan", stopReason: "end_turn" }),
+      mkResponse({ text: "all done", stopReason: "end_turn" }),
+    ];
+    const port: SilentStreamPort = async () => {
+      clock.advance(80); // no re-arm → the silence ceiling (100ms) is crossed on the 2nd call
+      const next = script[Math.min(i, script.length - 1)];
+      i += 1;
+      return next ?? mkResponse({ stopReason: "end_turn" });
+    };
+    return mkRunner(plane, new ModelGateway(port), mkPort(provider), clock);
+  }
+
+  it("a worker stopped by task-inactivity reports failed with the reason — not completed", async () => {
+    const clock = new FakeClock(0);
+    const result = await drive(clock, noRearmRunner(clock).run(mkRequest(), mkIO("worker")));
+    expect(result.reason).toBe("task-inactivity");
+    expect(result.status).toBe("failed");
+  });
+
+  it("a background run stopped the same way reports failed too; an interactive one keeps completed (the person read the notice)", async () => {
+    const bg = new FakeClock(0);
+    const bgResult = await drive(bg, noRearmRunner(bg).run(mkRequest(), mkIO("background")));
+    expect(bgResult.reason).toBe("task-inactivity");
+    expect(bgResult.status).toBe("failed");
+    const it2 = new FakeClock(0);
+    const itResult = await drive(it2, noRearmRunner(it2).run(mkRequest(), mkIO("interactive")));
+    expect(itResult.reason).toBe("task-inactivity");
+    expect(itResult.status).toBe("completed");
+  });
+});
+
 });
 
 describe("V2AgentRunner — a free-tier model costs the run's budget nothing (audited 2026-09-02)", () => {

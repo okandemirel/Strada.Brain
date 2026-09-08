@@ -120,6 +120,23 @@ function isInteractive(mode: RunnerMode): boolean {
   return mode === "interactive";
 }
 
+/**
+ * The status a run reports when a verdict STOPS it before the model said
+ * done. "graceful" finalize means the run winds down cleanly — it does not
+ * mean the task succeeded. Measured 2026-09-08 10:00-11:53 (PixelFlow
+ * sprint, supervisor node workers): eight nodes — "Generate and bind area
+ * background sprites", "Generate and bind 20 canvas artworks", … — each hit
+ * a clock/stall stop with graceful finalize, reported status "completed",
+ * and carried as their whole output the localized "the AI provider is not
+ * responding" notice. The dispatcher marked all eight done. An interactive
+ * chat keeps "completed" (the person read the notice); a background or
+ * worker run that was stopped is "failed", with the reason attached.
+ */
+function stoppedStatus(finalize: "graceful" | "hard", mode: RunnerMode, current: TerminalStatus): TerminalStatus {
+  if (finalize === "hard") return "failed";
+  return isInteractive(mode) ? current : "failed";
+}
+
 /** The v1 trim modes collapse to two; everything non-interactive trims as "background". */
 function trimMode(mode: RunnerMode): "interactive" | "background" {
   return mode === "interactive" ? "interactive" : "background";
@@ -367,7 +384,7 @@ export class V2AgentRunner implements AgentRunner {
           const gate = ledger.verdict(this.clockBudgetVerdict(runClock, budget, state));
           if (gate.decision === "stop") {
             terminalReason = describeCancelReason(gate.reason);
-            terminalStatus = gate.finalize === "hard" ? "failed" : "completed";
+            terminalStatus = stoppedStatus(gate.finalize, mode, "completed");
             if (gate.reason.kind === "budget-exhausted") {
               await saveBudgetStop();
               // 3.3: on the INTERACTIVE token-budget stop, render the SPECIFIC token_budget_exceeded
@@ -532,8 +549,8 @@ export class V2AgentRunner implements AgentRunner {
                   ? describeCancelReason(failVerdict.reason)
                   : "provider-failure";
               terminalStatus =
-                failVerdict.decision === "stop" && failVerdict.finalize === "hard"
-                  ? "failed"
+                failVerdict.decision === "stop"
+                  ? stoppedStatus(failVerdict.finalize, mode, terminalStatus)
                   : terminalStatus;
               emit({ type: "run.ending", reason: terminalReason });
               break epochLoop;
@@ -701,7 +718,7 @@ export class V2AgentRunner implements AgentRunner {
             if (reflectionVerdict.decision === "stop") {
               // Terminators win (rule 2/8) over the reflection extend.
               terminalReason = describeCancelReason(reflectionVerdict.reason);
-              terminalStatus = reflectionVerdict.finalize === "hard" ? "failed" : "completed";
+              terminalStatus = stoppedStatus(reflectionVerdict.finalize, mode, "completed");
               if (reflectionVerdict.reason.kind === "budget-exhausted") await saveBudgetStop();
               emit({ type: "run.ending", reason: terminalReason });
               break epochLoop;
@@ -731,7 +748,7 @@ export class V2AgentRunner implements AgentRunner {
             if (postDispatchVerdict.decision === "stop") {
               // A terminator surfacing on the post-dispatch re-verdict still wins (rule 2 > 8).
               terminalReason = describeCancelReason(postDispatchVerdict.reason);
-              terminalStatus = postDispatchVerdict.finalize === "hard" ? "failed" : "completed";
+              terminalStatus = stoppedStatus(postDispatchVerdict.finalize, mode, "completed");
               if (postDispatchVerdict.reason.kind === "budget-exhausted") await saveBudgetStop();
               emit({ type: "run.ending", reason: terminalReason });
               break epochLoop;
