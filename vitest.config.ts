@@ -8,6 +8,9 @@ export default defineConfig({
     clearMocks: true,
     // Native addons and long-running integration suites are more stable in forked workers.
     pool: "forks",
+    // Every worker inherits TMPDIR from here; the run's temp files go in one
+    // root that the teardown removes (see vitest.global-setup.ts).
+    globalSetup: ["./vitest.global-setup.ts"],
     include: ["src/**/*.test.ts", "tests/**/*.test.ts"],
     benchmark: {
       include: ["benchmarks/**/*.bench.ts"],
