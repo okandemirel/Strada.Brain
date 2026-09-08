@@ -68,6 +68,7 @@ import type { RateLimiter } from "../security/rate-limiter.js";
 import { getLogger, getLogRingBuffer } from "../utils/logger.js";
 import { logProviderCall, toolDefinitionChars } from "./providers/provider-call-log.js";
 import { archiveToolFailure } from "./tool-failure-archive.js";
+import { unknownToolMessage } from "./unknown-tool-hint.js";
 import { buildPostSetupWelcomeMessage } from "../common/setup-state.js";
 import type { PostSetupBootstrap, PostSetupBootstrapContext } from "../common/setup-contract.js";
 import {
@@ -4832,7 +4833,7 @@ export class Orchestrator {
     if (!tool) {
       return {
         toolCallId: activeToolCall.id,
-        content: `Error: unknown tool '${activeToolCall.name}'`,
+        content: unknownToolMessage(activeToolCall.name, this.tools.keys()),
         isError: true,
       };
     }

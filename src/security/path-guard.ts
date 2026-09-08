@@ -1,5 +1,6 @@
 import { realpath } from "node:fs/promises";
-import { resolve, sep, normalize, isAbsolute } from "node:path";
+import { readFileSync, statSync } from "node:fs";
+import { resolve, sep, normalize, isAbsolute, join, relative } from "node:path";
 
 /**
  * Sensitive file patterns that should never be accessed through tools,
@@ -48,6 +49,8 @@ export interface PathValidationResult {
   valid: boolean;
   fullPath: string;
   error?: string;
+  /** Set when an absolute path into the lease's real checkout was rewritten into the lease. */
+  redirectedFrom?: string;
 }
 
 /**
@@ -122,6 +125,52 @@ function outsideProjectError(projectRoot: string): string {
   return `Path resolves outside the project directory (${resolve(projectRoot)})`;
 }
 
+/**
+ * The real checkout a workspace lease was seeded from, read from the
+ * lease's owner file (written by the lease manager), or undefined when the
+ * root is not a lease. Cached by the owner file's mtime.
+ */
+const LEASE_OWNER_FILE = ".strada-lease-owner.json";
+const leaseOwnerCache = new Map<string, { mtimeMs: number; owner: string | undefined }>();
+export function leaseOwnerRootOf(projectRoot: string): string | undefined {
+  const file = join(projectRoot, LEASE_OWNER_FILE);
+  let mtimeMs: number;
+  try {
+    mtimeMs = statSync(file).mtimeMs;
+  } catch {
+    return undefined;
+  }
+  const cached = leaseOwnerCache.get(projectRoot);
+  if (cached && cached.mtimeMs === mtimeMs) return cached.owner;
+  let owner: string | undefined;
+  try {
+    const parsed = JSON.parse(readFileSync(file, "utf8")) as { projectRoot?: unknown };
+    owner = typeof parsed.projectRoot === "string" && parsed.projectRoot.length > 0 ? resolve(parsed.projectRoot) : undefined;
+  } catch {
+    owner = undefined;
+  }
+  leaseOwnerCache.set(projectRoot, { mtimeMs, owner });
+  return owner;
+}
+
+/**
+ * An absolute path into the lease's REAL checkout, rewritten into the lease.
+ * Measured 2026-09-08 07:17-07:27: five file_read/list_directory calls in
+ * ten minutes refused as "outside the project directory" because the model
+ * named the checkout it knows (/Users/…/PixelFlow-Clean/Assets/…) while the
+ * run's project was its lease under the temp directory. The MCP tools have
+ * redirected that case since 2026-09-07; the built-in tools refused it.
+ */
+export function redirectRealCheckoutPath(projectRoot: string, absolutePath: string): string | undefined {
+  if (!isAbsolute(absolutePath)) return undefined;
+  const owner = leaseOwnerRootOf(projectRoot);
+  if (!owner) return undefined;
+  const target = resolve(absolutePath);
+  if (target !== owner && !target.startsWith(owner + sep)) return undefined;
+  const rel = relative(owner, target);
+  return rel === "" ? "." : rel;
+}
+
 export async function validatePath(
   projectRoot: string,
   relativePath: string,
@@ -134,6 +183,14 @@ export async function validatePath(
   // Reject null bytes (defense-in-depth; Node.js also throws on null bytes)
   if (relativePath.includes("\0")) {
     return { valid: false, fullPath: "", error: "Path contains invalid characters" };
+  }
+
+  // The real checkout's path names the lease's twin (see redirectRealCheckoutPath).
+  let redirectedFrom: string | undefined;
+  const redirected = redirectRealCheckoutPath(projectRoot, relativePath);
+  if (redirected !== undefined) {
+    redirectedFrom = relativePath;
+    relativePath = redirected;
   }
 
   const rawFullPath = resolve(projectRoot, relativePath);
@@ -285,7 +342,9 @@ export async function validatePath(
     }
   }
 
-  return { valid: true, fullPath: realFullPath };
+  return redirectedFrom !== undefined
+    ? { valid: true, fullPath: realFullPath, redirectedFrom }
+    : { valid: true, fullPath: realFullPath };
 }
 
 /**
