@@ -307,6 +307,48 @@ describe("createSupervisorExecuteNodeBridge", () => {
     expect(envelopes.every((e) => e.goalContext?.rootId === "root")).toBe(true);
   });
 
+  it("a run cancelled while its plan is still being made never publishes that plan (audited 2026-09-08)", async () => {
+    // decomposeProactive cannot be cancelled; the time box cancelled a sprint
+    // at 13:04:18 and its 9-node plan still landed at 13:07:31 — attachGoalRoot,
+    // goalStorage and the monitor episode re-rooted onto a task already gone,
+    // beside the resubmission's own plan.
+    const { SupervisorBrain } = await import("../supervisor/supervisor-brain.js");
+    const { CapabilityMatcher } = await import("../supervisor/capability-matcher.js");
+    const { ProviderAssigner } = await import("../supervisor/provider-assigner.js");
+    const now = Date.now();
+    const nodes = new Map<string, any>([
+      ["root", { id: "root", parentId: null, task: "Build the enemy", dependsOn: [], depth: 0, status: "pending", createdAt: now, updatedAt: now }],
+      ["s1", { id: "s1", parentId: "root", task: "design the enemy state machine", dependsOn: [], depth: 1, status: "pending", createdAt: now, updatedAt: now }],
+    ]);
+    const controller = new AbortController();
+    const decomposer = {
+      shouldDecompose: vi.fn().mockReturnValue(true),
+      decomposeProactive: vi.fn().mockImplementation(async () => {
+        controller.abort(); // the lineage is cancelled while the model is still planning
+        return { rootId: "root", sessionId: "s", taskDescription: "Build the enemy", nodes, createdAt: now };
+      }),
+    };
+    const brain = new SupervisorBrain({
+      config: {
+        enabled: true, complexityThreshold: "complex", maxParallelNodes: 4, nodeTimeoutMs: 5000,
+        verificationMode: "disabled", verificationBudgetPct: 15, triageProvider: "groq",
+        maxFailureBudget: 3, diversityCap: 0.6,
+      },
+      decomposer: decomposer as any,
+      capabilityMatcher: new CapabilityMatcher(),
+      providerAssigner: new ProviderAssigner([
+        { name: "claude", model: "sonnet", scores: { reasoning: 0.9, vision: 0.9, "code-gen": 0.9, "tool-use": 0.9, "long-context": 0.9, speed: 0.9 }, costPerMillion: 1 },
+      ] as any),
+    });
+    brain.setExecuteNode(vi.fn());
+    const onGoalDecomposed = vi.fn();
+
+    const result = await brain.execute("Build the enemy", { chatId: "chat-1", signal: controller.signal, onGoalDecomposed } as any);
+
+    expect(onGoalDecomposed).not.toHaveBeenCalled();
+    expect(result?.succeeded ?? 0).toBe(0);
+  });
+
   it("wires supervisor execution before channel startup completes", () => {
     const setWorkspaceBus = vi.fn();
     const setMonitorLifecycle = vi.fn();

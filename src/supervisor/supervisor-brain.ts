@@ -373,14 +373,18 @@ export class SupervisorBrain {
       // stream — otherwise the DAG node patch misses and the DAG stays static
       // while the Kanban updates. buildAlignedDagTree guarantees that.
       const dagTree = this.buildAlignedDagTree(decomposedGoalTree, visibleGoalTree);
+
+      // Check abort BEFORE publishing: decomposeProactive cannot be cancelled,
+      // so a lineage cancelled mid-plan (the time box at 13:04:18 on
+      // 2026-09-08) used to finish minutes later and still publish its tree —
+      // attachGoalRoot, goalStorage, and the monitor episode re-rooted onto a
+      // task that was already gone, beside the resubmission's own plan.
+      if (externalSignal?.aborted || internalSignal.aborted) {
+        return this.makePartialResult([], "Aborted after decomposition");
+      }
       context.onGoalDecomposed?.(dagTree);
       if (!context.onGoalDecomposed) {
         this.emitter?.emit("monitor:dag_init", goalTreeToDagPayload(dagTree, conversationScope));
-      }
-
-      // Check abort after decomposition
-      if (externalSignal?.aborted || internalSignal.aborted) {
-        return this.makePartialResult([], "Aborted after decomposition");
       }
 
       // Step 4: Extract leaf nodes (non-root nodes)
