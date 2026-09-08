@@ -51,3 +51,13 @@ describe("redacting base64 without eating paths", () => {
     expect(sanitizePromptInjection(blob), "a two-piece blob was taken for a path").not.toContain("QWxwaGFCcmF2b0NoYXJsaWVEZ");
   });
 });
+
+describe("an absolute path is a path", () => {
+  it("keeps a lease root under /private/var intact — measured 2026-09-08 05:46, unity_bind_sprite's error lost its path", () => {
+    const line =
+      "Error: /private/var/folders/fd/vvqxld2x6k709xn2svhnkwl40000gn/T/strada-workspaces/task-20050354-75713c70/Assets/Modules/BoardModule/Prefabs/Blocker.prefab holds no GameObject";
+    const out = sanitizePromptInjection(line);
+    expect(out).toBe(line);
+    expect(out).not.toContain("[base64:");
+  });
+});

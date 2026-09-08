@@ -199,9 +199,15 @@ export class FrameworkPromptGenerator {
       // for knowing what exists; the schema is where the model reads how to
       // call it.
       lines.push("### MCP Tools");
+      // Measured 2026-09-08 05:43: five calls to unity_instantiate_prefab, each
+      // answered "Requires a live Unity bridge connection" — a name read here
+      // while the bridge was down and the tool absent from the request.
       lines.push(
-        `${snapshot.tools.length} tools, registered in this session's toolchain with full schemas: ` +
-          snapshot.tools.map((tool) => tool.name).join(", "),
+        `${snapshot.tools.length} tools known to the framework: ` +
+          snapshot.tools.map((tool) => tool.name).join(", ") +
+          ". Only the tools in THIS request's tool list can be called; a name here that is not in " +
+          "your tool list needs a live Unity Editor bridge and is unavailable right now — use the " +
+          "file-based tool for the same job (unity_place_prefab, unity_bind_sprite, unity_scene_build).",
       );
       lines.push("");
     }

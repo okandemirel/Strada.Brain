@@ -743,7 +743,13 @@ export function extractNaturalLanguageDirectiveUpdates(params: {
 function looksLikeFilePath(match: string, after: string): boolean {
   if (/^\.[A-Za-z0-9]{1,5}\b/.test(after)) return true;
 
-  const segments = match.split("/");
+  // An ABSOLUTE path starts with "/", so its first segment is empty — and
+  // the every-segment-non-empty rule below called every absolute path base64.
+  // Measured 2026-09-08 05:46: unity_bind_sprite's error reached the model as
+  // "[base64:63ch]-workspaces/task-…/Blocker.prefab holds no GameObject" —
+  // the lease root "/private/var/folders/fd/<30 chars>/T/strada" eaten, the
+  // one part of the line that said where the file was.
+  const segments = (match.startsWith("/") ? match.slice(1) : match).split("/");
   if (segments.length < 3) return false;
   return segments.every((segment) => segment.length > 0 && segment.length <= 32);
 }

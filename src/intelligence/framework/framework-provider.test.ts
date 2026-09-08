@@ -586,7 +586,10 @@ describe("FrameworkPromptGenerator", () => {
     store.storeSnapshot(mcpSnapshot);
 
     const result = generator.buildFrameworkKnowledgeSection()!;
-    expect(result).toContain("2 tools, registered in this session's toolchain with full schemas: create_entity, run_command");
+    expect(result).toContain("2 tools known to the framework: create_entity, run_command");
+    // Measured 2026-09-08 05:43: a bridge-only name read from this catalog was
+    // called five times while the bridge was down.
+    expect(result).toContain("Only the tools in THIS request's tool list can be called");
     expect(result).not.toContain("Create a new entity in the Unity scene");
     expect(result).not.toContain("Params:");
     expect(result).not.toContain("Execute an editor command");
