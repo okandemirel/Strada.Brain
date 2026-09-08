@@ -331,7 +331,9 @@ describe("orphaned lease salvage at construction", () => {
     // seed maps and could only quarantine. The lease now writes its seed maps
     // at acquire; a crashed owner's salvage commits by the live rules.
     const lease = await manager().acquireLease({ label: "crash", forceTempCopy: true });
-    expect(existsSync(join(lease.path, ".strada-lease-seed.json"))).toBe(true);
+    // The seed sidecar sits BESIDE the lease, out of the agent's reach.
+    expect(existsSync(`${lease.path}.seed.json`)).toBe(true);
+    expect(existsSync(join(lease.path, ".strada-lease-seed.json"))).toBe(false);
     // Agent work in the lease: a new file and an edit of a seeded file.
     writeFileSync(join(lease.path, "Assets", "Scripts", "RocketNose.png"), "REAL ART 186KB", "utf8");
     writeFileSync(join(lease.path, "Assets", "Scripts", "Existing.cs"), "agent edit", "utf8");
@@ -357,6 +359,7 @@ describe("orphaned lease salvage at construction", () => {
     const orphanPath = join(leaseRoot2, lease.path.split("/").pop()!);
     renameSync(lease.path, orphanPath);
     if (existsSync(claimFile)) renameSync(claimFile, `${orphanPath}.claim.json`);
+    renameSync(`${lease.path}.seed.json`, `${orphanPath}.seed.json`);
 
     const manager2 = new WorkspaceLeaseManager({ projectRoot: source, leaseRoot: leaseRoot2, preferGitWorktree: false });
     await vi.waitFor(() => {
@@ -370,9 +373,49 @@ describe("orphaned lease salvage at construction", () => {
     expect(readFileSync(join(source, "Assets", "Scripts", "UserFile.cs"), "utf8")).toBe("user evolved this");
     const conflictDir = join(source, ".strada", "lease-conflicts", `orphan-${orphanPath.split("/").pop()!.slice(0, 8)}`);
     expect(readFileSync(join(conflictDir, "Assets", "Scripts", "UserFile.cs"), "utf8")).toBe("agent copy");
-    // The seed file itself never travels into the project.
+    // The seed sidecar never travels into the project and goes with the orphan.
     expect(existsSync(join(source, ".strada-lease-seed.json"))).toBe(false);
+    expect(existsSync(`${orphanPath}.seed.json`)).toBe(false);
     await (await manager2.acquireLease({ label: "after", forceTempCopy: true })).release();
+    rmSync(leaseRoot2, { recursive: true, force: true });
+  });
+
+  it("a lease acquired right after construction is seeded AFTER salvage has written the crashed owner's work", async () => {
+    // Review 2026-09-08 (81985efd): salvage ran fire-and-forget while the
+    // campaign's boot resubmission seeded its lease — 0 of 2000 salvaged
+    // files reached the new lease, and the agent's later edit of one read
+    // as a user conflict.
+    const lease = await manager().acquireLease({ label: "crash2", forceTempCopy: true });
+    for (let i = 0; i < 40; i++) {
+      writeFileSync(join(lease.path, "Assets", "Scripts", `Work${i}.cs`), `work ${i}`, "utf8");
+    }
+    const ownerFile = join(lease.path, ".strada-lease-owner.json");
+    const owner = JSON.parse(readFileSync(ownerFile, "utf8")) as Record<string, unknown>;
+    writeFileSync(ownerFile, JSON.stringify({ ...owner, pid: 4194303 }), "utf8");
+    const claimFile = `${lease.path}.claim.json`;
+    if (existsSync(claimFile)) {
+      const claim = JSON.parse(readFileSync(claimFile, "utf8")) as Record<string, unknown>;
+      writeFileSync(claimFile, JSON.stringify({ ...claim, pid: 4194303 }), "utf8");
+    }
+    const leaseRoot2 = mkdtempSync(join(tmpdir(), "lease-root3-"));
+    const orphanPath = join(leaseRoot2, lease.path.split("/").pop()!);
+    renameSync(lease.path, orphanPath);
+    if (existsSync(claimFile)) renameSync(claimFile, `${orphanPath}.claim.json`);
+    renameSync(`${lease.path}.seed.json`, `${orphanPath}.seed.json`);
+
+    const manager2 = new WorkspaceLeaseManager({ projectRoot: source, leaseRoot: leaseRoot2, preferGitWorktree: false });
+    const fresh = await manager2.acquireLease({ label: "boot", forceTempCopy: true });
+    // Every salvaged file is in the new lease's seed.
+    for (let i = 0; i < 40; i++) {
+      expect(existsSync(join(fresh.path, "Assets", "Scripts", `Work${i}.cs`))).toBe(true);
+    }
+    // And editing one of them commits as agent work, not as a user conflict.
+    writeFileSync(join(fresh.path, "Assets", "Scripts", "Work7.cs"), "edited", "utf8");
+    utimesSync(join(fresh.path, "Assets", "Scripts", "Work7.cs"), new Date(Date.now() + 5000), new Date(Date.now() + 5000));
+    const result = await fresh.commit();
+    expect(result.written).toContain(join("Assets", "Scripts", "Work7.cs"));
+    expect(result.conflicts).toHaveLength(0);
+    await fresh.release();
     rmSync(leaseRoot2, { recursive: true, force: true });
   });
 

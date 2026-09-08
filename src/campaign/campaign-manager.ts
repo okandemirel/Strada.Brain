@@ -1137,7 +1137,10 @@ export class CampaignManager {
       // 06:00: a campaign planned before the "disable, do not delete" change
       // kept its original paragraph on every resubmission because the append
       // was gated on the heading alone.
-      milestone.prompt = milestone.prompt.replace(/\n\nBUILD HYGIENE \(final sprint\):[^\n]*(?:\n(?!\n)[^\n]*)*/g, "");
+      // Any BUILD HYGIENE paragraph — the planner writes one of its own
+      // ("BUILD HYGIENE: …", campaign-planner.ts) and it carried the old
+      // "deleted or disabled" wording too (review 2026-09-08).
+      milestone.prompt = milestone.prompt.replace(/\n\nBUILD HYGIENE\b[^\n]*(?:\n(?!\n)[^\n]*)*/g, "");
       if (!milestone.prompt.includes("BUILD HYGIENE")) {
         milestone.prompt +=
           "\n\nBUILD HYGIENE (final sprint): when you are done, Build Settings must list EXACTLY ONE " +

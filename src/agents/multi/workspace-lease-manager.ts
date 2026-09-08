@@ -252,7 +252,6 @@ const BASE_FALLBACK_COPY_EXCLUDES = new Set([
   // were copied into every subsequent lease, and travelled back on commit.
   ".strada",
   ".strada-lease-owner.json",
-  ".strada-lease-seed.json",
   "dist",
   "coverage",
   ".cache",
@@ -263,7 +262,6 @@ const DERIVED_COPY_EXCLUDES = new Set([
   "node_modules",
   ".strada",
   ".strada-lease-owner.json",
-  ".strada-lease-seed.json",
   "coverage",
   ".cache",
   ".vite",
@@ -273,14 +271,21 @@ const DERIVED_COPY_EXCLUDES = new Set([
  *  cross-process signal for "this lease belongs to a LIVE process". */
 const LEASE_OWNER_FILE = ".strada-lease-owner.json";
 /**
- * The seed maps and seed HEAD, written into the lease at acquire so that a
+ * The seed maps and seed HEAD, written BESIDE the lease at acquire so that a
  * crashed or restarted owner's work can still be committed by the rules the
  * live commit uses. Measured 2026-09-08 08:19: without them, salvage was
  * quarantine-only — five real Rocket sprites (186 KB each, replacing 274-byte
  * placeholders) and three prefab edits went to .strada/lease-conflicts and
- * the project kept the placeholders.
+ * the project kept the placeholders. Review 2026-09-08: a file INSIDE the
+ * lease is writable by the agent's own tools — a forged sourceSeed made
+ * salvage overwrite a user's concurrent edit, a forged leaseSeed entry made
+ * it delete a user's scene — so the sidecar lives outside the tree.
  */
-const LEASE_SEED_FILE = ".strada-lease-seed.json";
+const LEASE_SEED_SUFFIX = ".seed.json";
+/** `<leaseRoot>/<lease-name>.seed.json` — a SIBLING of the workspace, like the claim file: the agent's tools cannot reach it. */
+function leaseSeedPath(leasePath: string): string {
+  return `${leasePath}${LEASE_SEED_SUFFIX}`;
+}
 
 interface PersistedLeaseSeed {
   readonly seedHead: string | undefined;
@@ -291,7 +296,7 @@ interface PersistedLeaseSeed {
 function writeLeaseSeed(leasePath: string, seed: PersistedLeaseSeed): void {
   try {
     writeFileSync(
-      join(leasePath, LEASE_SEED_FILE),
+      leaseSeedPath(leasePath),
       JSON.stringify({
         seedHead: seed.seedHead ?? null,
         leaseSeed: [...seed.leaseSeed.entries()],
@@ -306,7 +311,7 @@ function writeLeaseSeed(leasePath: string, seed: PersistedLeaseSeed): void {
 
 function readLeaseSeed(leasePath: string): PersistedLeaseSeed | undefined {
   try {
-    const raw = JSON.parse(readFileSync(join(leasePath, LEASE_SEED_FILE), "utf8")) as {
+    const raw = JSON.parse(readFileSync(leaseSeedPath(leasePath), "utf8")) as {
       seedHead?: unknown;
       leaseSeed?: unknown;
       sourceSeed?: unknown;
@@ -403,6 +408,8 @@ function isInsidePath(root: string, candidate: string): boolean {
 export class WorkspaceLeaseManager {
   private readonly projectRoot: string;
   private readonly leaseRoot: string;
+  /** The constructor's orphan salvage while it runs; acquireLease waits for it. */
+  private salvageInFlight: Promise<void> | null = null;
   private readonly preferGitWorktree: boolean;
   private readonly commandRunner: WorkspaceCommandRunner;
   private readonly worktreeTimeoutMs: number;
@@ -467,7 +474,13 @@ export class WorkspaceLeaseManager {
       SALVAGED_LEASE_ROOTS.add(this.leaseRoot);
       const orphans = this.listOrphanedLeases();
       if (orphans.length > 0) {
-        void this.salvageOrphanedLeases(orphans);
+        // acquireLease awaits this: review 2026-09-08 (81985efd) measured a
+        // boot lease seeded with 0 of the 2000 files salvage was still writing
+        // into the project, so the agent's later edit of one of them read as
+        // a user conflict.
+        this.salvageInFlight = this.salvageOrphanedLeases(orphans).finally(() => {
+          this.salvageInFlight = null;
+        });
       }
     }
   }
@@ -585,6 +598,7 @@ export class WorkspaceLeaseManager {
         }
         this.removeDirectory(orphanPath);
         rmSync(leaseClaimPath(orphanPath), { force: true }); // a crashed seed's claim goes with it
+        rmSync(leaseSeedPath(orphanPath), { force: true });
         salvaged += 1;
       } catch (err) {
         logger.warn("Orphaned workspace could not be salvaged — left in place", {
@@ -617,6 +631,9 @@ export class WorkspaceLeaseManager {
   }
 
   async acquireLease(request: WorkspaceLeaseRequest = {}): Promise<WorkspaceLease> {
+    // A salvage still writing a crashed owner's work into the project must
+    // finish before this lease is seeded from it (see the constructor).
+    if (this.salvageInFlight) await this.salvageInFlight;
     const id = randomUUID();
     const createdAt = Date.now();
     const label = request.label?.trim() || undefined;
@@ -683,6 +700,7 @@ export class WorkspaceLeaseManager {
       // Seeding failed: the claim must not outlive the attempt, or the next
       // process could never reclaim whatever the failed seed left behind.
       rmSync(leaseClaimPath(workspacePath), { force: true });
+      rmSync(leaseSeedPath(workspacePath), { force: true });
       throw err;
     }
 
@@ -693,6 +711,7 @@ export class WorkspaceLeaseManager {
     try {
       writeFileSync(join(workspacePath, LEASE_OWNER_FILE), ownerRecord, "utf8");
       rmSync(leaseClaimPath(workspacePath), { force: true });
+      rmSync(leaseSeedPath(workspacePath), { force: true });
     } catch {
       // Best-effort; an unownable lease keeps its claim file as the signal.
     }
@@ -743,6 +762,7 @@ export class WorkspaceLeaseManager {
         this.activeLeases.delete(id);
         await releaseImpl();
         rmSync(leaseClaimPath(workspacePath), { force: true });
+        rmSync(leaseSeedPath(workspacePath), { force: true });
       },
     };
     this.activeLeases.set(id, lease);

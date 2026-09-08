@@ -41,4 +41,10 @@ describe("the real checkout's path names the lease's twin", () => {
     // A sibling directory that merely shares the owner's prefix is not the owner.
     expect(redirectRealCheckoutPath(lease, `${owner}-evil/Assets`)).toBeUndefined();
   });
+
+  it("refuses the lease's own sidecars — a forged seed map could make salvage overwrite or delete user files", async () => {
+    expect((await validatePath(lease, ".strada-lease-owner.json")).valid).toBe(false);
+    expect((await validatePath(lease, ".strada-lease-seed.json")).valid).toBe(false);
+    expect((await validatePath(lease, join("Assets", "Scenes", "Main.unity"))).valid).toBe(true);
+  });
 });

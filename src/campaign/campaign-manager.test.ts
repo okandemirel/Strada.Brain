@@ -581,9 +581,11 @@ describe("CampaignManager", () => {
     const campaign = await reachFinalSprint();
     const stored = storage.get(campaign.id)!;
     const finalIndex = stored.milestones.length - 1;
+    // The planner's own heading form ("BUILD HYGIENE: …", campaign-planner.ts)
+    // carried the old wording too (review 2026-09-08).
     stored.milestones[finalIndex]!.prompt = stored.milestones[finalIndex]!.prompt.replace(
       /\n\nBUILD HYGIENE \(final sprint\):[\s\S]*$/,
-      "\n\nBUILD HYGIENE (final sprint): old wording — must be deleted or disabled in Build Settings.",
+      "\n\nBUILD HYGIENE: old wording — must be deleted or disabled in Build Settings.",
     );
     stored.state = "failed";
     stored.milestones[finalIndex]!.attempts = 2;

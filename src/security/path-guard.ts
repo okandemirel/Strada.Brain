@@ -7,6 +7,10 @@ import { resolve, sep, normalize, isAbsolute, join, relative } from "node:path";
  * even if they are within the project directory.
  */
 const BLOCKED_PATTERNS: RegExp[] = [
+  // The lease's ownership/seed sidecars are the lease manager's, not the
+  // agent's: review 2026-09-08 showed a forged seed map could make salvage
+  // overwrite a user's edit or delete a user's file.
+  /(?:^|[/\\])\.strada-lease-(?:owner|seed)\.json$/i,
   // Audited 2026-09-02: this was `/\.env$/` plus `/\.env\.[a-z]+$/`, which
   // required exactly one all-alpha suffix — so `.env.production.local`,
   // `.env.dev2`, `.env.staging-eu` and the two backup names this repo already
