@@ -399,6 +399,36 @@ describe("V2AgentRunner — REAL port + REAL gateway (provider.chat scripted)", 
     expect(decompSpy).toHaveBeenCalledTimes(1); // once-per-run, NOT once-per-PLANNING-entry
   });
 
+  it("a sub-goal worker (goalContext set) never re-decomposes its own task", async () => {
+    // Measured 2026-09-08 04:48 and 05:00 (PixelFlow sprint): supervisor-dispatched
+    // node workers each started in PLANNING and re-decomposed their task text into
+    // a fresh 12- and 3-node tree under a new root — 4-7 minutes apiece — and each
+    // overwrote the parent's activeGoalTrees entry. The parent planner already
+    // decided the node's shape.
+    const provider = mkScriptedProvider();
+    const h = buildHarness(provider);
+    const setupInput = (
+      h.runner as unknown as {
+        toSetupInput: (r: AgentRunRequest, m: RunnerMode) => Parameters<typeof h.port.setupRun>[0];
+      }
+    ).toSetupInput(mkRequest({ goalContext: { rootId: "goal_root", nodeId: "goal_node_3" } }), "background");
+    await drive(h.clock, h.port.setupRun(setupInput));
+    const decompSpy = vi
+      .spyOn(
+        h.orch as unknown as {
+          runProactiveGoalDecomposition: (o: { agentState: AgentState }) => Promise<AgentState>;
+        },
+        "runProactiveGoalDecomposition",
+      )
+      .mockImplementation(async (o: { agentState: AgentState }) => o.agentState);
+    const state = createInitialState("enhance GameBootstrapper to Strada.ModuleBootstrapper<TConfig>");
+
+    const out = await h.port.decomposeGoalsIfPlanning({ agentState: state, responseText: "plan", chatId: "chat-1" });
+
+    expect(out).toBe(state);
+    expect(decompSpy).not.toHaveBeenCalled();
+  });
+
   it("GAP3 (epoch-rollover side effects): the bg epoch boundary records phase-outcome + persists memory + resets the planner budget window", async () => {
     // Regression guard for the v2 background epoch-rollover gap. v1 runBackgroundTask ran a block of
     // side effects at EVERY epoch boundary (orchestrator.ts ~4587-4623): recordPhaseOutcome (continued

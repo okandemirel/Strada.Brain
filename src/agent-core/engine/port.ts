@@ -13,6 +13,7 @@
  * agent-engine.ts, which imports createAgentCorePort as a value.
  */
 
+import { getLoggerSafe } from "../../utils/logger.js";
 import type { AgentEngine } from "./agent-engine.js";
 import type { ToolTurnDeps } from "./tool-turn.js";
 import type { EngineRunContext } from "./engine-deps.js";
@@ -285,6 +286,22 @@ export function createAgentCorePort(
         const c = ctx();
         if (c.goalsDecomposed) return params.agentState;
         c.goalsDecomposed = true;
+        // A run that IS a node of an existing plan does not plan again.
+        // Measured 2026-09-08 04:48 and 05:00 (PixelFlow sprint): the
+        // supervisor dispatched sub-goal workers, each started in PLANNING,
+        // each re-decomposed its own task text into a fresh 12- and 3-node
+        // tree under a new root — 4-7 minutes apiece on the free model, 18 of
+        // the sprint's first 37 minutes — and each new tree overwrote the
+        // parent's entry in activeGoalTrees. The parent planner already decided
+        // this node's shape; the worker executes it.
+        if (c.goalContext) {
+          getLoggerSafe().info("Sub-goal worker skips goal decomposition — it is a node of an existing plan", {
+            chatId: params.chatId,
+            rootId: c.goalContext.rootId,
+            nodeId: c.goalContext.nodeId,
+          });
+          return params.agentState;
+        }
         return deps.runProactiveGoalDecomposition({
           // SCOPE-KEY ALIGNMENT (BUG#1 P2 HIGH): key the decomposition off the RESOLVED conversation
           // scope, not the raw chatId. The monitor episode + stepBatch + requestStart/End all key off
