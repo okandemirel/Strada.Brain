@@ -37,6 +37,19 @@ export function isCurrentChainMemberName(registryName: string): boolean {
  * at least one member is available right now (or health state is unreadable —
  * unknown health must fail toward retrying, not waiting).
  */
+/**
+ * How long after its cooldown lapsed a still-"down" member reads as down.
+ * The rule below exists for a settle that lands seconds after the lapse
+ * (measured 2026-09-03 18:39) — it must NOT outlive that race: measured
+ * 2026-09-08 03:02, the only live member lapsed at 03:01, nothing had
+ * dialed it since (nothing runs while the campaign is parked), its entry
+ * stayed "down", and the outage measure fell through to the next member's
+ * horizon — Sep 11. The campaign re-parked itself for three days on a
+ * provider that was back. Past this grace a lapsed member is probe-worthy
+ * capacity, exactly as ProviderHealthRegistry.isAvailable() already says.
+ */
+export const LAPSED_DOWN_GRACE_MS = 30_000;
+
 export function allProvidersCoolingDownMs(): number {
   try {
     const registry = ProviderHealthRegistry.getInstance();
@@ -67,13 +80,17 @@ export function allProvidersCoolingDownMs(): number {
         soonestActive = Math.min(soonestActive, entry.cooldownUntil);
         continue;
       }
-      // Cooldown expired — but a member that is still DOWN is not capacity.
-      // Measured live 2026-09-03 18:39: three accounts held
-      // FreeUsageLimitError 429s, their short cooldowns lapsed between the
-      // failing probe and the settle, the outage measure read 0, and the
+      // Cooldown expired — but a member that is still DOWN is not capacity
+      // for a short grace. Measured live 2026-09-03 18:39: three accounts
+      // held FreeUsageLimitError 429s, their short cooldowns lapsed between
+      // the failing probe and the settle, the outage measure read 0, and the
       // campaign charged Sprint 7 its second attempt for a wall it never got
-      // to work behind.
-      if (entry.status === "down") continue;
+      // to work behind. Beyond the grace the member is probe-worthy (see
+      // LAPSED_DOWN_GRACE_MS) — only a call can flip it healthy again.
+      if (entry.status === "down" && now - entry.cooldownUntil < LAPSED_DOWN_GRACE_MS) {
+        soonestActive = Math.min(soonestActive, entry.cooldownUntil + LAPSED_DOWN_GRACE_MS);
+        continue;
+      }
       anyUsable = true;
     }
     if (!sawMember || anyUsable) return 0;

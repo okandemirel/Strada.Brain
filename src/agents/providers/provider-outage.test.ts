@@ -1,5 +1,5 @@
 import { describe, expect, it, afterEach } from "vitest";
-import { allProvidersCoolingDownMs, setLiveChainMemberNames } from "./provider-outage.js";
+import { allProvidersCoolingDownMs, LAPSED_DOWN_GRACE_MS, setLiveChainMemberNames } from "./provider-outage.js";
 import { ProviderHealthRegistry } from "./provider-health.js";
 
 const registry = ProviderHealthRegistry.getInstance();
@@ -24,6 +24,22 @@ describe("allProvidersCoolingDownMs", () => {
     registry.recordOverloaded("p-other", "quota");
     setLiveChainMemberNames(["p-cool", "p-other"]);
     expect(allProvidersCoolingDownMs()).toBeGreaterThan(0);
+  });
+
+  it("a member whose cooldown lapsed reads as down only for a short grace, then as capacity to probe", () => {
+    // Measured 2026-09-08 03:02: the only live member lapsed at 03:01 and
+    // nothing dialed it while the campaign was parked; the measure fell
+    // through to the next member's Sep 11 horizon and re-parked for 3 days.
+    registry.recordOverloaded("p-cool", "quota");
+    registry.recordOverloaded("p-other", "quota");
+    setLiveChainMemberNames(["p-cool", "p-other"]);
+    const entry = registry.getAllEntries().get("p-cool") as unknown as { cooldownUntil: number };
+    entry.cooldownUntil = Date.now() - 5_000; // lapsed 5 s ago, still "down"
+    const wait = allProvidersCoolingDownMs();
+    expect(wait).toBeGreaterThan(0);
+    expect(wait).toBeLessThanOrEqual(LAPSED_DOWN_GRACE_MS);
+    entry.cooldownUntil = Date.now() - 5 * 60_000; // lapsed five minutes ago
+    expect(allProvidersCoolingDownMs()).toBe(0);
   });
 
   it("an available member short-circuits to 0", () => {
