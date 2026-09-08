@@ -23,6 +23,13 @@ import { stripVisibleProviderArtifacts } from "../agents/orchestrator-text-utils
 import type { MessageContent } from "../agents/providers/provider-core.interface.js";
 import type { PendingTaskCheckpoint, TaskCheckpointStore } from "./task-checkpoint-store.js";
 
+/** The three replay prefaces buildReplayPrompt writes; a prompt starting with one IS a replay. */
+const REPLAY_PREFACE_RE = /^(?:Previous background execution was interrupted\.|The previous plan was attempted and then attempted again|Previous background execution failed or stalled\.)/;
+
+export function isReplayPrompt(prompt: string): boolean {
+  return REPLAY_PREFACE_RE.test(prompt.trimStart());
+}
+
 export class TaskManager extends EventEmitter {
   private readonly abortControllers = new Map<TaskId, AbortController>();
   private checkpointStore?: TaskCheckpointStore;
@@ -38,13 +45,18 @@ export class TaskManager extends EventEmitter {
   private readonly liveOrchestrators = new Map<TaskId, IOrchestrator>();
   private static readonly MAX_LIVE_ORCHESTRATORS = 500;
 
+  /** When this process began: a task created after it cannot have been interrupted by the restart that began it. */
+  private readonly bootedAt: number;
+
   constructor(
     private readonly storage: TaskStorage,
     private readonly executor: IBackgroundExecutor,
     private readonly goalStorage?: GoalStorage,
+    bootedAt: number = Date.now(),
   ) {
     super();
     this.setMaxListeners(20);
+    this.bootedAt = bootedAt;
   }
 
   setCheckpointStore(store: TaskCheckpointStore): void {
@@ -264,6 +276,32 @@ export class TaskManager extends EventEmitter {
       forceSharedPlanning: this.replayForcesSharedPlanning(task),
       parentId: task.id,
     });
+  }
+
+  /**
+   * The prompt a replay should quote: the task's own when it is not itself a
+   * replay, else the nearest ancestor's that is not (bounded walk; the
+   * lineage root as the last resort).
+   */
+  private originalPromptFor(task: Task): string {
+    let current: Task | null = task;
+    for (let depth = 0; current && depth < 64; depth++) {
+      if (!isReplayPrompt(current.prompt)) return current.prompt;
+      if (!current.parentId) break;
+      try {
+        current = this.storage.load(current.parentId);
+      } catch {
+        break;
+      }
+    }
+    try {
+      const rootId = this.storage.findLineageRootId(task.id);
+      const root = rootId && rootId !== task.id ? this.storage.load(rootId) : null;
+      if (root?.prompt) return root.prompt;
+    } catch {
+      // Lineage lookup is best-effort; the task's own prompt still works.
+    }
+    return task.prompt;
   }
 
   /**
@@ -688,6 +726,20 @@ export class TaskManager extends EventEmitter {
     logger.info("Recovering incomplete tasks on startup", { count: incomplete.length });
 
     for (const task of incomplete) {
+      // A task THIS process submitted is live, not interrupted. Measured
+      // 2026-09-08 04:18: the campaign's reconcile fired 16 s before this pass,
+      // cancelled the old lineage and submitted attempt 2 (8918 chars, delivery
+      // gate attached); this pass then paused it as an orphan and the campaign
+      // "resumed" it as a replay whose prompt had lost the gate block.
+      if (task.createdAt >= this.bootedAt) {
+        logger.info("Recovery left a task alone — it was submitted by this process", {
+          taskId: task.id,
+          status: task.status,
+          createdAt: new Date(task.createdAt).toISOString(),
+          bootedAt: new Date(this.bootedAt).toISOString(),
+        });
+        continue;
+      }
       if (task.origin === "daemon") {
         this.storage.updateError(
           task.id,
@@ -779,14 +831,13 @@ export class TaskManager extends EventEmitter {
     // preface per generation (measured live: +313 chars/gen, the real
     // instruction at nesting depth 3, and the bloat then polluted vault
     // retrieval because the query contained the failure boilerplate).
-    let originalPrompt = task.prompt;
-    try {
-      const rootId = this.storage.findLineageRootId(task.id);
-      const root = rootId && rootId !== task.id ? this.storage.load(rootId) : null;
-      if (root?.prompt) originalPrompt = root.prompt;
-    } catch {
-      // Lineage lookup is best-effort; the task's own prompt still works.
-    }
+    //
+    // The NEAREST non-replay ancestor, not the lineage root. Measured
+    // 2026-09-08 04:18: a campaign lineage 30 tasks deep — every resubmission
+    // a fresh prompt with the latest measurement and delivery gate, each with
+    // parentId on the last — replayed from its root, a 4584-char prompt from
+    // 29 sprints earlier with no gate block at all.
+    const originalPrompt = this.originalPromptFor(task);
 
     const lines = [preface, "", `Original request: ${originalPrompt}`];
 

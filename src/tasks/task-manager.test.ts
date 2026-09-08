@@ -308,7 +308,7 @@ describe("TaskManager", () => {
       updateError: vi.fn(),
     } as any;
     const goalStorage = { updateTreeStatus: vi.fn() } as any;
-    const manager = new TaskManager(storage, {} as any, goalStorage);
+    const manager = new TaskManager(storage, {} as any, goalStorage, Date.now() + 60_000);
     const pausedListener = vi.fn();
     manager.on("task:paused", pausedListener);
 
@@ -326,6 +326,69 @@ describe("TaskManager", () => {
     expect(pausedListener).toHaveBeenCalled()
   });
 
+  it("replays the nearest non-replay ancestor's prompt, not the stale lineage root's", () => {
+    // Measured 2026-09-08 04:18: a campaign lineage 30 deep, every resubmission
+    // a fresh prompt carrying the latest delivery gate; the replay quoted the
+    // root — 29 sprints old, no gate.
+    const root = buildTask({ id: "task_A" as Task["id"], status: TaskStatus.failed, prompt: "OLD ROOT PROMPT (no gate)" });
+    const fresh = buildTask({ id: "task_B" as Task["id"], status: TaskStatus.failed, parentId: "task_A" as Task["id"], prompt: "FRESH PROMPT [DELIVERY GATE — latest measurement]" });
+    const replay = buildTask({
+      id: "task_C" as Task["id"],
+      status: TaskStatus.failed,
+      parentId: "task_B" as Task["id"],
+      prompt: "Previous background execution was interrupted. Resume from the strongest checkpoint.\n\nOriginal request: OLD ROOT PROMPT (no gate)",
+    });
+    const byId: Record<string, Task> = { task_A: root, task_B: fresh, task_C: replay };
+    const storage = {
+      load: vi.fn((id: string) => byId[id] ?? null),
+      findLineageRootId: vi.fn(() => "task_A"),
+    } as any;
+    const manager = new TaskManager(storage, {} as any);
+    const submit = vi.spyOn(manager, "submit").mockReturnValue(null as any);
+
+    manager.retryTask("task_C" as Task["id"]);
+
+    expect(submit).toHaveBeenCalledTimes(1);
+    const prompt = submit.mock.calls[0]![2];
+    expect(prompt).toContain("Original request: FRESH PROMPT [DELIVERY GATE — latest measurement]");
+    expect(prompt).not.toContain("OLD ROOT PROMPT");
+    // A task that is not a replay quotes itself.
+    submit.mockClear();
+    manager.retryTask("task_B" as Task["id"]);
+    expect(submit.mock.calls[0]![2]).toContain("Original request: FRESH PROMPT");
+  });
+
+  it("leaves a task submitted by this process alone — it is live, not interrupted", () => {
+    // Measured 2026-09-08 04:18: the campaign submitted attempt 2 sixteen
+    // seconds before recovery ran; recovery paused it and the campaign then
+    // replayed it with a prompt that had lost the delivery gate block.
+    const bootedAt = 1_000_000;
+    const liveTask = buildTask({
+      id: "task_live" as Task["id"],
+      status: TaskStatus.executing,
+      origin: "user",
+      createdAt: bootedAt + 9_000,
+    });
+    const oldTask = buildTask({
+      id: "task_old" as Task["id"],
+      status: TaskStatus.executing,
+      origin: "user",
+      createdAt: bootedAt - 60_000,
+    });
+    const storage = {
+      loadIncomplete: vi.fn().mockReturnValue([liveTask, oldTask]),
+      updateStatus: vi.fn(),
+      updateError: vi.fn(),
+    } as any;
+    const manager = new TaskManager(storage, {} as any, undefined, bootedAt);
+
+    manager.recoverOnStartup();
+
+    expect(storage.updateStatus).not.toHaveBeenCalledWith("task_live", expect.anything());
+    expect(storage.updateError).not.toHaveBeenCalledWith("task_live", expect.anything());
+    expect(storage.updateStatus).toHaveBeenCalledWith("task_old", TaskStatus.paused);
+  });
+
   it("leaves a recovered user task paused, not failed (updateError must not clobber paused)", () => {
     const interruptedTask = buildTask({
       id: "task_order123" as Task["id"],
@@ -340,7 +403,7 @@ describe("TaskManager", () => {
       updateStatus: vi.fn((_id: Task["id"], s: TaskStatus) => { status = s; }),
       updateError: vi.fn(() => { status = TaskStatus.failed; }),
     } as any;
-    const manager = new TaskManager(storage, {} as any);
+    const manager = new TaskManager(storage, {} as any, undefined, Date.now() + 60_000);
 
     manager.recoverOnStartup();
 

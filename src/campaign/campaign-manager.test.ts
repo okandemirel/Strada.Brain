@@ -341,17 +341,44 @@ describe("CampaignManager", () => {
     await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
   });
 
-  it("resumes a paused (startup-recovered) task instead of wedging forever", async () => {
+  it("resumes a paused (startup-recovered) GDD draft instead of wedging forever", async () => {
+    // Drafts are replayed from their checkpoint; sprints are resubmitted
+    // (see the test below) because their prompt carries the latest measurement.
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
     await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    const stored = storage.get(campaign.id)!;
+    stored.state = "drafting-gdd";
+    stored.draftTaskId = "task_1";
+    storage.save(stored);
     tasks.markTerminal("task_1", TaskStatus.paused);
 
     await manager.resumeActive();
     expect(tasks.resumed).toContain("task_1");
     await vi.waitFor(() => {
       const fresh = storage.get(campaign.id)!;
-      expect(fresh.milestones[0]!.taskId).not.toBe("task_1");
+      expect(fresh.draftTaskId).not.toBe("task_1");
     });
+  });
+
+  it("a paused SPRINT is resubmitted with the milestone's current prompt, not replayed from a stale root", async () => {
+    // Measured 2026-09-08 04:18: the replay quoted a 29-sprints-old root
+    // prompt with no delivery gate; the milestone held the current one.
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    const stored = storage.get(campaign.id)!;
+    stored.state = "executing";
+    stored.milestones[0]!.taskId = "task_1";
+    stored.milestones[0]!.attempts = 1;
+    storage.save(stored);
+    tasks.markTerminal("task_1", TaskStatus.paused);
+
+    await manager.resumeActive();
+    expect(tasks.resumed).not.toContain("task_1");
+    expect(tasks.cancelled).toContain("task_1");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    const fresh = storage.get(campaign.id)!;
+    expect(fresh.milestones[0]!.attempts).toBe(1);
+    expect(fresh.milestones[0]!.taskId).not.toBe("task_1");
   });
 
   it("revival cancels the old lineage's live tip before resubmitting", async () => {

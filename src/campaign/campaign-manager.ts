@@ -745,6 +745,21 @@ export class CampaignManager {
           // Startup recovery marks interrupted user-origin tasks `paused` —
           // an ACTIVE status nothing would ever resume. Bailing here as
           // "still in flight" wedged the campaign forever; resume it instead.
+          //
+          // A SPRINT is resubmitted, not replayed. Measured 2026-09-08 04:18:
+          // the replay quoted the lineage root's prompt — 29 sprints old, no
+          // delivery gate, a stale measurement — while the milestone held the
+          // current one. The milestone prompt is the sprint's contract; the
+          // resubmission cancels the paused tip and charges no attempt.
+          if (campaign.state === "executing") {
+            getLoggerSafe().info("Campaign resubmitting the milestone instead of replaying a paused sprint", {
+              id: campaign.id,
+              milestone: campaign.milestones[campaign.currentMilestone]?.id,
+              pausedTask: task.id,
+            });
+            this.submitCurrentMilestone(campaign, { countAttempt: false });
+            return;
+          }
           const resumed = this.taskManager.resumeTask(task.id);
           if (resumed) {
             this.adoptTask(campaign, resumed.id);
