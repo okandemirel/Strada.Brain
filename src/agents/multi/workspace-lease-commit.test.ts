@@ -380,6 +380,32 @@ describe("orphaned lease salvage at construction", () => {
     rmSync(leaseRoot2, { recursive: true, force: true });
   });
 
+  it("a lease that still carries its seed INSIDE the workspace (pre-move) is salvaged by the same rules", async () => {
+    const lease = await manager().acquireLease({ label: "old-layout", forceTempCopy: true });
+    writeFileSync(join(lease.path, "Assets", "Scripts", "OldLayoutWork.cs"), "agent work", "utf8");
+    // Move the sidecar to where the pre-a3b0f64e code wrote it.
+    renameSync(`${lease.path}.seed.json`, join(lease.path, ".strada-lease-seed.json"));
+    const ownerFile = join(lease.path, ".strada-lease-owner.json");
+    const owner = JSON.parse(readFileSync(ownerFile, "utf8")) as Record<string, unknown>;
+    writeFileSync(ownerFile, JSON.stringify({ ...owner, pid: 4194303 }), "utf8");
+    const claimFile = `${lease.path}.claim.json`;
+    if (existsSync(claimFile)) {
+      const claim = JSON.parse(readFileSync(claimFile, "utf8")) as Record<string, unknown>;
+      writeFileSync(claimFile, JSON.stringify({ ...claim, pid: 4194303 }), "utf8");
+    }
+    const leaseRoot2 = mkdtempSync(join(tmpdir(), "lease-root4-"));
+    const orphanPath = join(leaseRoot2, lease.path.split("/").pop()!);
+    renameSync(lease.path, orphanPath);
+    if (existsSync(claimFile)) renameSync(claimFile, `${orphanPath}.claim.json`);
+
+    const manager2 = new WorkspaceLeaseManager({ projectRoot: source, leaseRoot: leaseRoot2, preferGitWorktree: false });
+    await vi.waitFor(() => { expect(existsSync(orphanPath)).toBe(false); }, { timeout: 5000 });
+    expect(readFileSync(join(source, "Assets", "Scripts", "OldLayoutWork.cs"), "utf8")).toBe("agent work");
+    expect(existsSync(join(source, ".strada-lease-seed.json"))).toBe(false);
+    await (await manager2.acquireLease({ label: "after2", forceTempCopy: true })).release();
+    rmSync(leaseRoot2, { recursive: true, force: true });
+  });
+
   it("a lease acquired right after construction is seeded AFTER salvage has written the crashed owner's work", async () => {
     // Review 2026-09-08 (81985efd): salvage ran fire-and-forget while the
     // campaign's boot resubmission seeded its lease — 0 of 2000 salvaged

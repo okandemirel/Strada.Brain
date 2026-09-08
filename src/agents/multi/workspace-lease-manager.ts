@@ -252,6 +252,7 @@ const BASE_FALLBACK_COPY_EXCLUDES = new Set([
   // were copied into every subsequent lease, and travelled back on commit.
   ".strada",
   ".strada-lease-owner.json",
+  ".strada-lease-seed.json", // pre-a3b0f64e leases wrote the seed inside the workspace
   "dist",
   "coverage",
   ".cache",
@@ -262,6 +263,7 @@ const DERIVED_COPY_EXCLUDES = new Set([
   "node_modules",
   ".strada",
   ".strada-lease-owner.json",
+  ".strada-lease-seed.json",
   "coverage",
   ".cache",
   ".vite",
@@ -310,8 +312,13 @@ function writeLeaseSeed(leasePath: string, seed: PersistedLeaseSeed): void {
 }
 
 function readLeaseSeed(leasePath: string): PersistedLeaseSeed | undefined {
+  // Leases taken between 81985efd and a3b0f64e (2026-09-08) wrote the seed
+  // INSIDE the workspace; a salvage after the move must still find it.
+  const candidates = [leaseSeedPath(leasePath), join(leasePath, ".strada-lease-seed.json")];
+  const file = candidates.find((f) => existsSync(f));
+  if (!file) return undefined;
   try {
-    const raw = JSON.parse(readFileSync(leaseSeedPath(leasePath), "utf8")) as {
+    const raw = JSON.parse(readFileSync(file, "utf8")) as {
       seedHead?: unknown;
       leaseSeed?: unknown;
       sourceSeed?: unknown;
