@@ -252,6 +252,7 @@ const BASE_FALLBACK_COPY_EXCLUDES = new Set([
   // were copied into every subsequent lease, and travelled back on commit.
   ".strada",
   ".strada-lease-owner.json",
+  ".strada-lease-seed.json",
   "dist",
   "coverage",
   ".cache",
@@ -262,6 +263,7 @@ const DERIVED_COPY_EXCLUDES = new Set([
   "node_modules",
   ".strada",
   ".strada-lease-owner.json",
+  ".strada-lease-seed.json",
   "coverage",
   ".cache",
   ".vite",
@@ -270,6 +272,61 @@ const DERIVED_COPY_EXCLUDES = new Set([
 /** Ownership sidecar written into every lease dir at acquire — the only
  *  cross-process signal for "this lease belongs to a LIVE process". */
 const LEASE_OWNER_FILE = ".strada-lease-owner.json";
+/**
+ * The seed maps and seed HEAD, written into the lease at acquire so that a
+ * crashed or restarted owner's work can still be committed by the rules the
+ * live commit uses. Measured 2026-09-08 08:19: without them, salvage was
+ * quarantine-only — five real Rocket sprites (186 KB each, replacing 274-byte
+ * placeholders) and three prefab edits went to .strada/lease-conflicts and
+ * the project kept the placeholders.
+ */
+const LEASE_SEED_FILE = ".strada-lease-seed.json";
+
+interface PersistedLeaseSeed {
+  readonly seedHead: string | undefined;
+  readonly leaseSeed: ReadonlyMap<string, number>;
+  readonly sourceSeed: ReadonlyMap<string, number>;
+}
+
+function writeLeaseSeed(leasePath: string, seed: PersistedLeaseSeed): void {
+  try {
+    writeFileSync(
+      join(leasePath, LEASE_SEED_FILE),
+      JSON.stringify({
+        seedHead: seed.seedHead ?? null,
+        leaseSeed: [...seed.leaseSeed.entries()],
+        sourceSeed: [...seed.sourceSeed.entries()],
+      }),
+      "utf8",
+    );
+  } catch {
+    // Best effort: without it, salvage falls back to quarantine-only.
+  }
+}
+
+function readLeaseSeed(leasePath: string): PersistedLeaseSeed | undefined {
+  try {
+    const raw = JSON.parse(readFileSync(join(leasePath, LEASE_SEED_FILE), "utf8")) as {
+      seedHead?: unknown;
+      leaseSeed?: unknown;
+      sourceSeed?: unknown;
+    };
+    const toMap = (v: unknown): ReadonlyMap<string, number> | undefined => {
+      if (!Array.isArray(v)) return undefined;
+      const m = new Map<string, number>();
+      for (const e of v) {
+        if (Array.isArray(e) && typeof e[0] === "string" && typeof e[1] === "number") m.set(e[0], e[1]);
+      }
+      return m;
+    };
+    const leaseSeed = toMap(raw.leaseSeed);
+    const sourceSeed = toMap(raw.sourceSeed);
+    if (!leaseSeed || !sourceSeed) return undefined;
+    return { seedHead: typeof raw.seedHead === "string" ? raw.seedHead : undefined, leaseSeed, sourceSeed };
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * Pre-seed claim: `<leaseRoot>/<lease-name>.claim.json`, a SIBLING of the
@@ -480,15 +537,29 @@ export class WorkspaceLeaseManager {
         // such files resurrected deliberate deletions. Salvage therefore never
         // writes into the project: everything non-identical goes to quarantine
         // for a person to review.
-        const result = await this.commitLease(
-          this.projectRoot,
-          orphanPath,
-          new Map<string, number>(),
-          new Map<string, number>(),
-          undefined,
-          join(this.projectRoot, ".strada", "lease-conflicts", `orphan-${name.slice(0, 8)}`),
-          { quarantineOnly: true },
-        );
+        // With the seed maps the lease persisted at acquire, salvage IS the
+        // commit: agent work lands, real conflicts go to quarantine, deletions
+        // follow the ledger rules. Without them, quarantine-only as before.
+        const seed = readLeaseSeed(orphanPath);
+        const quarantineRoot = join(this.projectRoot, ".strada", "lease-conflicts", `orphan-${name.slice(0, 8)}`);
+        const result = seed
+          ? await this.commitLease(this.projectRoot, orphanPath, seed.leaseSeed, seed.sourceSeed, seed.seedHead, quarantineRoot)
+          : await this.commitLease(
+              this.projectRoot,
+              orphanPath,
+              new Map<string, number>(),
+              new Map<string, number>(),
+              undefined,
+              quarantineRoot,
+              { quarantineOnly: true },
+            );
+        logger.info(seed ? "Orphaned workspace committed with its seed maps" : "Orphaned workspace quarantined — no seed maps persisted", {
+          orphan: name,
+          written: result.written.length,
+          conflicts: result.conflicts.length,
+          quarantined: result.quarantined,
+          sample: result.written.slice(0, 5),
+        });
         writtenTotal += result.written.length;
         quarantinedTotal += result.quarantined;
         const unpreserved = result.conflicts.length - result.quarantined;
@@ -639,6 +710,9 @@ export class WorkspaceLeaseManager {
     // and not by a timestamp a git merge, a reimport or a reserialisation
     // bumps without changing a byte (measured 2026-09-07 21:32).
     const seedHead = await this.readHead(sourceRoot);
+    // Persist them: a crashed owner's salvage commits by these same rules
+    // instead of quarantining everything (see LEASE_SEED_FILE).
+    writeLeaseSeed(workspacePath, { seedHead, leaseSeed, sourceSeed });
 
     let released = false;
     const lease: WorkspaceLease = {

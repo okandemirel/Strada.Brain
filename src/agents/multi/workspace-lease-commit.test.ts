@@ -10,8 +10,8 @@
  * presented to the user as "the agent produces nothing".
  */
 
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, utimesSync, chmodSync } from "node:fs";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, utimesSync, chmodSync, renameSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
@@ -322,6 +322,58 @@ describe("orphaned lease salvage at construction", () => {
     const result = await lease.commit();
     await lease.release();
     expect(result.written).toContain(join("Assets", "Scripts", "AfterSalvage.cs"));
+  });
+
+  it("with the seed maps the lease persisted, salvage COMMITS the crashed owner's work and quarantines only real conflicts", async () => {
+    // Measured 2026-09-08 08:19: a restart mid-task quarantined five real
+    // Rocket sprites (186 KB each, drawn over 274-byte placeholders) and three
+    // prefab edits; the project kept the placeholders because salvage had no
+    // seed maps and could only quarantine. The lease now writes its seed maps
+    // at acquire; a crashed owner's salvage commits by the live rules.
+    const lease = await manager().acquireLease({ label: "crash", forceTempCopy: true });
+    expect(existsSync(join(lease.path, ".strada-lease-seed.json"))).toBe(true);
+    // Agent work in the lease: a new file and an edit of a seeded file.
+    writeFileSync(join(lease.path, "Assets", "Scripts", "RocketNose.png"), "REAL ART 186KB", "utf8");
+    writeFileSync(join(lease.path, "Assets", "Scripts", "Existing.cs"), "agent edit", "utf8");
+    utimesSync(join(lease.path, "Assets", "Scripts", "Existing.cs"), new Date(Date.now() + 5000), new Date(Date.now() + 5000));
+    // The user evolved another seeded file in the PROJECT during the run.
+    writeFileSync(join(source, "Assets", "Scripts", "UserFile.cs"), "user evolved this", "utf8");
+    utimesSync(join(source, "Assets", "Scripts", "UserFile.cs"), new Date(Date.now() + 5000), new Date(Date.now() + 5000));
+    writeFileSync(join(lease.path, "Assets", "Scripts", "UserFile.cs"), "agent copy", "utf8");
+    utimesSync(join(lease.path, "Assets", "Scripts", "UserFile.cs"), new Date(Date.now() + 5000), new Date(Date.now() + 5000));
+    // The owner died without release(): its pid is gone.
+    const ownerFile = join(lease.path, ".strada-lease-owner.json");
+    const owner = JSON.parse(readFileSync(ownerFile, "utf8")) as Record<string, unknown>;
+    writeFileSync(ownerFile, JSON.stringify({ ...owner, pid: 4194303 }), "utf8");
+    // The pre-seed claim sidecar names the same dead pid.
+    const claimFile = `${lease.path}.claim.json`;
+    if (existsSync(claimFile)) {
+      const claim = JSON.parse(readFileSync(claimFile, "utf8")) as Record<string, unknown>;
+      writeFileSync(claimFile, JSON.stringify({ ...claim, pid: 4194303 }), "utf8");
+    }
+    // Salvage runs once per lease root per process, so the crashed lease is
+    // moved to a root this process has never constructed against.
+    const leaseRoot2 = mkdtempSync(join(tmpdir(), "lease-root2-"));
+    const orphanPath = join(leaseRoot2, lease.path.split("/").pop()!);
+    renameSync(lease.path, orphanPath);
+    if (existsSync(claimFile)) renameSync(claimFile, `${orphanPath}.claim.json`);
+
+    const manager2 = new WorkspaceLeaseManager({ projectRoot: source, leaseRoot: leaseRoot2, preferGitWorktree: false });
+    await vi.waitFor(() => {
+      expect(existsSync(orphanPath)).toBe(false);
+    }, { timeout: 5000 });
+
+    // Agent work landed in the project.
+    expect(readFileSync(join(source, "Assets", "Scripts", "RocketNose.png"), "utf8")).toBe("REAL ART 186KB");
+    expect(readFileSync(join(source, "Assets", "Scripts", "Existing.cs"), "utf8")).toBe("agent edit");
+    // The user's concurrent edit was kept; the agent's copy went to quarantine.
+    expect(readFileSync(join(source, "Assets", "Scripts", "UserFile.cs"), "utf8")).toBe("user evolved this");
+    const conflictDir = join(source, ".strada", "lease-conflicts", `orphan-${orphanPath.split("/").pop()!.slice(0, 8)}`);
+    expect(readFileSync(join(conflictDir, "Assets", "Scripts", "UserFile.cs"), "utf8")).toBe("agent copy");
+    // The seed file itself never travels into the project.
+    expect(existsSync(join(source, ".strada-lease-seed.json"))).toBe(false);
+    await (await manager2.acquireLease({ label: "after", forceTempCopy: true })).release();
+    rmSync(leaseRoot2, { recursive: true, force: true });
   });
 
   /** Resolves once salvage has finished its loop (the trailing prune runs after it). */
