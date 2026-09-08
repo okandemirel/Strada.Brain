@@ -297,6 +297,10 @@ const TARGET_KEYS = [
   // two "no test executed" failures logged with no way to tell whether the
   // agent filtered on a name that does not exist or ran the whole suite.
   "testFilter",
+  // For vault_search / grep the query IS the target. Measured 2026-09-08
+  // 18:10-18:34: ten vault_search rows with an empty target — no way to tell
+  // whether a 45-minute exploration streak was one question asked ten times.
+  "query",
   // For unity_my_assets_cloud the product IS the target. Measured 2026-09-07
   // 10:30: "download-info returned HTTP 403" with no way to tell which id
   // the agent asked for, or whether it exists in the purchases at all.

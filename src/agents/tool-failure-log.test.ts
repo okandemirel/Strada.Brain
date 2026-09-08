@@ -137,10 +137,15 @@ describe("what the call was aimed at", () => {
   it("finds the target under whichever key the tool uses", () => {
     expect(failureTarget({ directory: "Assets/Nowhere" })).toBe("Assets/Nowhere");
     expect(failureTarget({ pattern: "**/*.prefab" })).toBe("**/*.prefab");
+    // vault_search: ten empty-target rows in a 45-minute exploration streak (2026-09-08).
+    expect(failureTarget({ query: "where are placeholder sprites bound", vaultId: "self" })).toBe(
+      "where are placeholder sprites bound",
+    );
   });
 
-  it("keeps free-form content out of the log", () => {
-    expect(failureTarget({ content: "a whole file body", query: "some prose" })).toBeUndefined();
+  it("keeps free-form content out of the log (a search QUERY is the search's target, not content)", () => {
+    expect(failureTarget({ content: "a whole file body" })).toBeUndefined();
+    expect(failureTarget({ content: "a whole file body", text: "prose", message: "prose" })).toBeUndefined();
   });
 
   it("truncates a path long enough to bury the line", () => {
