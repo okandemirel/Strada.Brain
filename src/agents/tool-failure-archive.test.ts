@@ -90,4 +90,39 @@ describe("archiveToolFailure", () => {
     expect(existsSync(join(root, "2026-01-01"))).toBe(false);
     expect(existsSync(join(root, "2026-09-07"))).toBe(true);
   });
+
+  it("never overwrites: five failures of one tool in the same millisecond leave five files", () => {
+    // Review 2026-09-08: parallel file_read refusals in one turn left two files of five.
+    const root = freshRoot();
+    const at = new Date("2026-09-08T12:00:00.000Z");
+    const files = new Set<string>();
+    for (let i = 0; i < 5; i++) {
+      files.add(archiveToolFailure({ tool: "file_read", chatId: "c", input: { path: `p${i}` }, content: `refused ${i}` }, root, ) as string);
+    }
+    void at;
+    expect(files.size).toBe(5);
+    for (const f of files) expect(existsSync(f)).toBe(true);
+  });
+
+  it("redacts with the logger's pattern set, before any cut, and never truncates the result", () => {
+    const root = freshRoot();
+    const key = "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW\n-----END OPENSSH PRIVATE KEY-----";
+    const long = "y".repeat(12_000) + " password=hunter2secret " + "z".repeat(12_000);
+    const file = archiveToolFailure(
+      // JSON.stringify(input, null, 2) puts the key at text offset 3993, so a
+      // 4000-char cut made before redaction keeps "sk-ant-" — too short for the
+      // key pattern to catch afterwards, long enough to name the vendor.
+      { tool: "shell_exec", chatId: "c", input: { command: "x".repeat(3_976) + " sk-ant-api03-SECRETSECRETSECRETSECRET" }, content: `${key}\n${long}` },
+      root,
+    );
+    const text = readFileSync(file!, "utf8");
+    expect(text).not.toContain("b3BlbnNzaC1rZXktdjEAAAAA");
+    expect(text).not.toContain("hunter2secret");
+    expect(text).not.toContain("SECRETSECRET");
+    // The key straddled the 4000-char input cut: not even its head survives.
+    expect(text).not.toContain("sk-ant");
+    // The 24k+ result is kept whole (no 8 KB logger cut).
+    expect(text).toContain("y".repeat(12_000));
+    expect(text).toContain("z".repeat(12_000));
+  });
 });

@@ -33,8 +33,7 @@ import {
   V2AgentRunner,
   type ControlPlane,
   type OpenRunResult,
-  type V2RunnerDeps,
-} from "./v2-agent-runner.js";
+  type V2RunnerDeps, stoppedStatus } from "./v2-agent-runner.js";
 import type {
   AgentRunSetupInput,
   BudgetCheckpointParams,
@@ -456,6 +455,9 @@ describe("V2AgentRunner — clean run (PLANNING → EXECUTING → end_turn)", ()
     const result = await drive(handles.clock, runner.run(mkRequest({ taskRunId: "task-42", userId: "u-1" }), mkIO("worker")));
 
     expect(result.reason).toBe("budget-exhausted:tokens");
+    // Review 2026-09-08: a budget stop is an outcome to judge, not a failure
+    // to retry — as "failed" it reached the mission keep-alive.
+    expect(result.status).toBe("blocked");
     expect(saveSpy).toHaveBeenCalledTimes(1);
     const cp = saveSpy.mock.calls[0]![0] as BudgetCheckpointParams;
     expect(cp.used).toBe(15); // three 5-token turns actually spent
@@ -1114,5 +1116,25 @@ describe("V2AgentRunner — interactive gate ask_user takes the step (audited 20
     const asks = handles.events().filter((e) => e.type === "ask_user");
     expect(asks.length).toBeLessThanOrEqual(2);
     expect(port.spies.classifyFailureForVerdict).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe("stoppedStatus — what a verdict-stopped run reports", () => {
+  const stall = { kind: "provider-stall", scope: "call" } as const;
+  const userCancel = { kind: "user-cancel" } as const;
+  const budget = { kind: "budget-exhausted", resource: "tokens" } as const;
+  it("hard finalize is failed everywhere; interactive keeps its status", () => {
+    expect(stoppedStatus("hard", "interactive", "completed", stall as never)).toBe("failed");
+    expect(stoppedStatus("graceful", "interactive", "completed", stall as never)).toBe("completed");
+  });
+  it("a worker/background graceful stop on a provider reason is failed; a benign cancel is not; a budget stop is blocked", () => {
+    expect(stoppedStatus("graceful", "worker", "completed", stall as never)).toBe("failed");
+    expect(stoppedStatus("graceful", "background", "completed", stall as never)).toBe("failed");
+    // Review 2026-09-08: a user /cancel landing between tool execution and the
+    // next gate reached this path and was booked failed (dispatcher failure
+    // budget, health recordOutcome false).
+    expect(stoppedStatus("graceful", "worker", "completed", userCancel as never)).toBe("completed");
+    expect(stoppedStatus("graceful", "worker", "completed", { kind: "parent-cancelled", rootCause: userCancel } as never)).toBe("completed");
+    expect(stoppedStatus("graceful", "background", "completed", budget as never)).toBe("blocked");
   });
 });

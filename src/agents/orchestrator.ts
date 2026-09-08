@@ -4831,9 +4831,19 @@ export class Orchestrator {
 
     const tool = this.tools.get(activeToolCall.name);
     if (!tool) {
+      // Suggest only what THIS turn can call (review 2026-09-08: a hint that
+      // named a write tool in PLANNING, or a bridge tool while the bridge was
+      // down, cost the very turn it exists to save).
+      const phase = options.agentState?.phase;
+      const writesAllowed = phase === undefined || PHASES_ALLOWING_WRITES.has(phase);
+      const callable = [...this.tools.keys()].filter((name) => {
+        const meta = this.toolMetadataByName.get(name);
+        if (meta?.controlPlaneOnly || meta?.available === false) return false;
+        return writesAllowed || meta?.readOnly !== false;
+      });
       return {
         toolCallId: activeToolCall.id,
-        content: unknownToolMessage(activeToolCall.name, this.tools.keys()),
+        content: unknownToolMessage(activeToolCall.name, callable),
         isError: true,
       };
     }

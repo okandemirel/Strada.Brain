@@ -22,6 +22,7 @@ import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { redactSensitiveText } from "./orchestrator-text-utils.js";
+import { applySecretPatterns, DEFAULT_SECRET_PATTERNS } from "../security/secret-patterns.js";
 
 export const TOOL_FAILURE_ARCHIVE_DIR = "tool-failures";
 /** Inputs are kept for context, not as a second copy of a file the tool wrote. */
@@ -87,18 +88,38 @@ export function archiveToolFailure(failure: ArchivedToolFailure, root: string = 
   } catch {
     inputText = String(failure.input);
   }
+  // Redact BEFORE truncating (review 2026-09-08: a key straddling the cut
+  // kept its head), and with the logger's own pattern set — private keys,
+  // password=, AWS secrets — not only the API-key prefixes.
+  inputText = redact(inputText);
   if (inputText.length > INPUT_CHARS) inputText = `${inputText.slice(0, INPUT_CHARS)}\n… (${inputText.length - INPUT_CHARS} more chars)`;
-  const content = redactSensitiveText(failure.content);
+  const content = redact(failure.content);
   const body =
     `tool: ${failure.tool}\nchatId: ${failure.chatId}\nat: ${at.toISOString()}\n\n` +
-    `== input ==\n${redactSensitiveText(inputText)}\n\n== result (${content.length} chars) ==\n${content}\n`;
+    `== input ==\n${inputText}\n\n== result (${content.length} chars) ==\n${content}\n`;
   try {
     pruneOldDays(root, at);
     mkdirSync(dir, { recursive: true });
     if (existsSync(dir) && readdirSync(dir).length >= ARCHIVE_DAY_CAP) return undefined;
-    writeFileSync(file, body, { encoding: "utf8", mode: 0o600 });
-    return file;
+    // Same tool, same millisecond (parallel file_reads in one turn — review
+    // 2026-09-08: five refusals left two files) — never overwrite, suffix.
+    for (let n = 0; n < 100; n++) {
+      const candidate = n === 0 ? file : file.replace(/\.txt$/, `-${n}.txt`);
+      try {
+        writeFileSync(candidate, body, { encoding: "utf8", mode: 0o600, flag: "wx" });
+        return candidate;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+      }
+    }
+    return undefined;
   } catch {
     return undefined;
   }
+}
+
+function redact(text: string): string {
+  // The logger's pattern set, but never its 8 KB cut: the archive exists to
+  // keep the whole result.
+  return applySecretPatterns(redactSensitiveText(text), DEFAULT_SECRET_PATTERNS, Number.MAX_SAFE_INTEGER).content;
 }
