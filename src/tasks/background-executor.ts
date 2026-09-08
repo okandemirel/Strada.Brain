@@ -259,6 +259,23 @@ export class BackgroundExecutor {
   private readonly decomposer?: GoalDecomposer;
   private readonly goalStorage?: GoalStorage;
   private readonly daemonEventBus?: IEventEmitter<DaemonEventMap>;
+  /** Told after every lease write-back into the project (the real-tree guardian listens). */
+  private workspaceCommittedListener?: (info: { readonly taskId: string; readonly files: number; readonly deleted: number }) => void;
+
+  setWorkspaceCommittedListener(listener: ((info: { readonly taskId: string; readonly files: number; readonly deleted: number }) => void) | undefined): void {
+    this.workspaceCommittedListener = listener;
+  }
+
+  private notifyWorkspaceCommitted(taskId: string, result: { written: string[]; deleted?: string[] }): void {
+    const files = result.written.length;
+    const deleted = result.deleted?.length ?? 0;
+    if (files === 0 && deleted === 0) return;
+    try {
+      this.workspaceCommittedListener?.({ taskId, files, deleted });
+    } catch (err) {
+      getLogger().warn("Workspace-committed listener threw", { error: err instanceof Error ? err.message : String(err) });
+    }
+  }
   private readonly workspaceLeaseManager?: WorkspaceLeaseManager;
   private workspaceBus?: WorkspaceBus;
   private monitorLifecycle?: MonitorLifecycle;
@@ -1276,6 +1293,7 @@ export class BackgroundExecutor {
         await Promise.resolve()
           .then(() => managedWorkspaceLease.commit())
           .then((result) => {
+            this.notifyWorkspaceCommitted(String(params.taskRunId), result);
             if (result.written.length > 0) {
               getLogger().info("Workspace lease committed", {
                 files: result.written.length,
@@ -1681,6 +1699,7 @@ export class BackgroundExecutor {
         await Promise.resolve()
           .then(() => taskWorkspaceLease!.commit())
           .then((result) => {
+            this.notifyWorkspaceCommitted(String(task.id), result);
             if (result.written.length > 0) {
               getLogger().info("Task workspace committed", {
                 files: result.written.length,

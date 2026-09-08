@@ -45,9 +45,17 @@ export interface RealTreeGuardianOptions {
   intervalMs?: number;
   /** Test hook: run one tick manually instead of scheduling. */
   now?: () => number;
+  /** Delay of the boot check (default 2 min). */
+  readonly firstCheckDelayMs?: number;
+  /** Delay of the after-write-back check (default 5 s). */
+  readonly writeBackCheckDelayMs?: number;
 }
 
 const DEFAULT_INTERVAL_MS = 15 * 60_000;
+/** The boot look: after salvage has had its say, before the first sprint turn lands. */
+const DEFAULT_FIRST_CHECK_DELAY_MS = 2 * 60_000;
+/** The write-back look: right after the files land. */
+const DEFAULT_WRITE_BACK_CHECK_DELAY_MS = 5_000;
 /** After submitting a fix, verify no sooner than this — the fix needs time. */
 const POST_FIX_QUIET_MS = 10 * 60_000;
 /** Fix attempts per distinct error fingerprint before escalating to the user. */
@@ -130,6 +138,9 @@ export class RealTreeGuardian {
   private readonly intervalMs: number;
   private readonly now: () => number;
   private timer: ReturnType<typeof setInterval> | undefined;
+  private pendingCheck: ReturnType<typeof setTimeout> | undefined;
+  private readonly firstCheckDelayMs: number;
+  private readonly writeBackCheckDelayMs: number;
   private tickInFlight = false;
   private fixTaskId: string | undefined;
   /** When the in-flight fix task was submitted; 0 = none. */
@@ -158,6 +169,8 @@ export class RealTreeGuardian {
     this.messenger = options.messenger;
     this.chatId = options.chatId ?? "cli-local";
     this.intervalMs = options.intervalMs ?? DEFAULT_INTERVAL_MS;
+    this.firstCheckDelayMs = options.firstCheckDelayMs ?? DEFAULT_FIRST_CHECK_DELAY_MS;
+    this.writeBackCheckDelayMs = options.writeBackCheckDelayMs ?? DEFAULT_WRITE_BACK_CHECK_DELAY_MS;
     this.now = options.now ?? Date.now;
   }
 
@@ -171,6 +184,35 @@ export class RealTreeGuardian {
       });
     }, this.intervalMs);
     this.timer.unref?.();
+    // Boot salvage may have written a crashed owner's work into the project;
+    // look soon, and look even though the campaign has already resubmitted.
+    this.checkSoon("boot", this.firstCheckDelayMs);
+  }
+
+  /**
+   * A lease was just written back into the project: verify it soon, even
+   * while sprint work runs. Measured 2026-09-08: an 8-line edit committed by
+   * a graceful shutdown at 09:28 broke the real tree (7 errors); the sprint
+   * ran nearly continuously, the foreground guard skipped every tick, and the
+   * first verdict came at 13:05 — every lease seeded in between started red.
+   */
+  noteWriteBack(source: string): void {
+    this.checkSoon(source, this.writeBackCheckDelayMs);
+  }
+
+  private checkSoon(source: string, delayMs: number): void {
+    if (this.pendingCheck) clearTimeout(this.pendingCheck);
+    this.pendingCheck = setTimeout(() => {
+      this.pendingCheck = undefined;
+      this.nextVerifyAt = 0;
+      void this.tick({ ignoreForeground: true }).catch((err) => {
+        getLoggerSafe().warn("Real-tree guardian write-back check failed", {
+          source,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }, delayMs);
+    this.pendingCheck.unref?.();
   }
 
   stop(): void {
@@ -178,13 +220,18 @@ export class RealTreeGuardian {
       clearInterval(this.timer);
       this.timer = undefined;
     }
+    if (this.pendingCheck) {
+      clearTimeout(this.pendingCheck);
+      this.pendingCheck = undefined;
+    }
   }
 
-  async tick(): Promise<void> {
+  async tick(opts: { readonly ignoreForeground?: boolean } = {}): Promise<void> {
     if (this.tickInFlight) return;
     if (this.now() < this.nextVerifyAt) return;
-    // Never compete with sprint work for the machine or the project.
-    if (this.taskManager.hasActiveForegroundTasks?.()) return;
+    // Never compete with sprint work for the machine or the project — except
+    // for the one look a write-back or a boot salvage earns (noteWriteBack).
+    if (!opts.ignoreForeground && this.taskManager.hasActiveForegroundTasks?.()) return;
 
     this.tickInFlight = true;
     try {

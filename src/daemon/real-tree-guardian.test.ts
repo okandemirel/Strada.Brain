@@ -153,6 +153,59 @@ describe("RealTreeGuardian", () => {
   });
 });
 
+describe("a write-back earns a prompt look, sprint or no sprint", () => {
+  // Measured 2026-09-08: an 8-line edit committed by a graceful shutdown at
+  // 09:28 broke the real tree (7 errors); the sprint ran nearly continuously,
+  // the foreground guard skipped every tick, and the first verdict came at
+  // 13:05 — every lease seeded in between started red.
+  it("noteWriteBack verifies despite active foreground work and submits the fix on red", async () => {
+    vi.useFakeTimers();
+    try {
+      const { manager, submitted } = makeTaskManager({ active: true });
+      const verify = vi.fn().mockResolvedValue({ ok: false, detail: "error CS0117: 'IModuleBuilder' does not contain a definition for 'RegisterSystem'" });
+      const guardian = new RealTreeGuardian({
+        taskManager: manager as unknown as TaskManager,
+        verify,
+        projectRoot: "/p",
+        writeBackCheckDelayMs: 5_000,
+      });
+      // The periodic tick still yields to the sprint.
+      await guardian.tick();
+      expect(verify).not.toHaveBeenCalled();
+
+      guardian.noteWriteBack("write-back of task_x");
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(verify).toHaveBeenCalledTimes(1);
+      expect(submitted).toHaveLength(1);
+      expect(submitted[0]!.prompt).toContain("RegisterSystem");
+      guardian.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("start() looks once shortly after boot, before the first periodic tick", async () => {
+    vi.useFakeTimers();
+    try {
+      const { manager } = makeTaskManager({ active: true });
+      const verify = vi.fn().mockResolvedValue({ ok: true });
+      const guardian = new RealTreeGuardian({
+        taskManager: manager as unknown as TaskManager,
+        verify,
+        projectRoot: "/p",
+        intervalMs: 15 * 60_000,
+        firstCheckDelayMs: 2 * 60_000,
+      });
+      guardian.start();
+      await vi.advanceTimersByTimeAsync(2 * 60_000 + 10);
+      expect(verify).toHaveBeenCalledTimes(1);
+      guardian.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("a repair that is not converging", () => {
   /**
    * Measured live 2026-09-04 22:00–22:27 on the user's project:

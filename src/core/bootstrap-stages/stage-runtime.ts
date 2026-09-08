@@ -533,6 +533,10 @@ export async function initializeTaskRuntimeStage(
           await params.channel.sendMarkdown(target, sanitizeSecrets(text));
         },
       });
+      // Every lease written back into the project earns a prompt verdict,
+      // sprint or no sprint (see RealTreeGuardian.noteWriteBack).
+      const guardian = realTreeGuardian;
+      backgroundExecutor.setWorkspaceCommittedListener?.((info) => guardian.noteWriteBack(`write-back of ${info.taskId}`));
       realTreeGuardian.start();
       params.logger.info("Real-tree guardian started");
     } catch (error) {
