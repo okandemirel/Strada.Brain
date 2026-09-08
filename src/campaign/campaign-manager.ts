@@ -1119,9 +1119,11 @@ export class CampaignManager {
         milestone.prompt +=
           "\n\nBUILD HYGIENE (final sprint): when you are done, Build Settings must list EXACTLY ONE " +
           "enabled scene — the entry scene a person opens to play the game. Every verification or " +
-          "scaffolding scene this campaign created along the way (InitTestScene*, *Verification, " +
-          "*Verified, *Showcase, *Boundary, Assembled*) must be deleted or disabled in Build Settings. " +
-          "Your report must name the entry scene and list every scene you deleted or disabled.";
+          "scaffolding scene (InitTestScene*, *Verification, *Verified, *Showcase, *Boundary, Assembled*) " +
+          "must be DISABLED in Build Settings. Do NOT delete scene files that existed before this sprint: " +
+          "the write-back carries only deletions of files the system itself wrote, so deleting a " +
+          "pre-existing scene costs a turn and changes nothing (measured 2026-09-08: twelve such deletes, " +
+          "none applied). Your report must name the entry scene and list every scene you disabled.";
       }
       this.attachStructureMeasurement(campaign, milestone);
     }

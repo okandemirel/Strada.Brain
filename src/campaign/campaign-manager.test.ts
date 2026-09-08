@@ -654,7 +654,12 @@ describe("CampaignManager", () => {
     const finalPrompt = tasks.submitted[2]!.prompt;
     expect(finalPrompt).toContain("BUILD HYGIENE");
     expect(finalPrompt).toContain("EXACTLY ONE");
-    expect(finalPrompt).toContain("deleted or disabled");
+    // The write-back declines deletions of files the system did not write
+    // (measured 2026-09-08: twelve scene deletes, none applied), so the
+    // instruction is to disable, and says why deleting is wasted.
+    expect(finalPrompt).toContain("must be DISABLED in Build Settings");
+    expect(finalPrompt).toContain("Do NOT delete scene files that existed before this sprint");
+    expect(finalPrompt).not.toContain("deleted or disabled");
     expect(finalPrompt).toContain("name the entry scene");
   });
 
