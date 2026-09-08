@@ -3913,7 +3913,7 @@ export class Orchestrator {
       let onLivenessAt = 0;
       const turnStartedAt = Date.now();
       try {
-        const response = await (provider as IStreamingProvider).chatStream(
+        const streamPromise = (provider as IStreamingProvider).chatStream(
           effectivePrompt,
           session.messages,
           toolDefinitions,
@@ -3935,6 +3935,15 @@ export class Orchestrator {
           },
           { signal: composedSignal, externalSignal },
         );
+        // The call token is the ceiling, not a request. The v1 path below
+        // races the stream against its watchdog; this path handed the signal
+        // to the provider and waited on the stream alone. Measured 2026-09-08:
+        // a 629 s turn answered (max_tokens) and two 1 024 s turns ended only
+        // when the task was cancelled — all past the 600 s hard ceiling the
+        // clock had fired on time. Whatever swallowed the abort downstream,
+        // the turn ends here when the token says so.
+        streamPromise.catch(() => undefined);
+        const response = await Promise.race([streamPromise, rejectWhenAborted(composedSignal)]);
         logProviderCall("turn", provider, turnStartedAt, { response }, {
           chatId,
           promptChars: effectivePrompt?.length ?? 0,
@@ -5857,4 +5866,20 @@ export async function applyWriteHookToToolResult(
     result.warnings = result.warnings ?? [];
     result.warnings.push(warning);
   }
+}
+
+/** Rejects with the signal's reason (a CancelReason object or Error) when it aborts; never resolves. */
+function rejectWhenAborted(signal: AbortSignal): Promise<never> {
+  return new Promise<never>((_, reject) => {
+    const fail = (): void => {
+      const reason: unknown = signal.reason;
+      reject(
+        reason instanceof Error
+          ? reason
+          : new Error(`Call aborted: ${JSON.stringify(reason ?? "no reason")}`, { cause: reason }),
+      );
+    };
+    if (signal.aborted) { fail(); return; }
+    signal.addEventListener("abort", fail, { once: true });
+  });
 }

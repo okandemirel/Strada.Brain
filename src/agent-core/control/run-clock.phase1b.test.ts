@@ -101,6 +101,43 @@ describe("Phase 1b incident regression — ~70min stall", () => {
     expect(rc.silenceCeilingExceeded()).toBe(true);
   });
 
+  it("a call that keeps producing tokens still dies at its hard ceiling (probe for the 629 s / 1024 s calls measured 2026-09-08)", () => {
+    const clock = new FakeClock(0);
+    const rc = openRunClock(
+      clock,
+      POLICY({ callFirstResponseMs: 600_000, callHardMs: 600_000, callStallMs: 600_000 }),
+    );
+    const call = rc.enterCall({ firstResponseMs: 600_000, stallMs: 600_000, hardMs: 600_000 });
+    call.firstTokenSeen();
+    for (let t = 0; t < 590_000; t += 10_000) {
+      clock.advance(10_000);
+      call.touch();
+    }
+    expect(call.token.aborted).toBe(false);
+    clock.advance(10_001);
+    expect(call.token.aborted).toBe(true);
+    expect(call.token.reason).toEqual({ kind: "hard-timeout", scope: "call" });
+  });
+
+  it("re-entering a call (silentStream enters its own scope after the runner's) keeps a hard ceiling armed", () => {
+    const clock = new FakeClock(0);
+    const rc = openRunClock(
+      clock,
+      POLICY({ callFirstResponseMs: 600_000, callHardMs: 600_000, callStallMs: 600_000 }),
+    );
+    const runnerScope = rc.enterCall({ firstResponseMs: 600_000, stallMs: 600_000, hardMs: 600_000 });
+    const streamScope = rc.enterCall({ firstResponseMs: 600_000, stallMs: 600_000, hardMs: 600_000 });
+    streamScope.firstTokenSeen();
+    for (let t = 0; t < 600_000; t += 10_000) {
+      clock.advance(10_000);
+      streamScope.touch();
+    }
+    clock.advance(1);
+    expect(streamScope.token.aborted).toBe(true);
+    expect(streamScope.token.reason).toEqual({ kind: "hard-timeout", scope: "call" });
+    expect(runnerScope.token.aborted).toBe(false); // left, not cancelled
+  });
+
   it("a single stalled call aborts at exactly streamInitialTimeoutMs (== v1 AbortSignal.timeout bound)", () => {
     const clock = new FakeClock(0);
     const rc = openRunClock(

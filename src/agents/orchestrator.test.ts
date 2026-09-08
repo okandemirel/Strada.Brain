@@ -7596,6 +7596,60 @@ DONE`,
     // it) instead of attempting the fallback chat, recording a provider health failure,
     // or pushing a "provider failed" message + synthetic empty (which the circuit
     // breaker would miscount as an outage). A stall WITHOUT external abort is unchanged.
+    it("run-clock path: a stream that ignores its signal still ends at the call's ceiling (measured 2026-09-08: 629 s and 1 024 s turns past a 600 s ceiling)", async () => {
+      vi.useFakeTimers();
+      try {
+        const { openRunClock } = await import("../agent-core/control/run-clock.js");
+        const { SystemClock } = await import("../agent-core/control/clock.js");
+        const { resolveRunBudgetPolicy } = await import("../agent-core/control/policy.js");
+        const { policy } = resolveRunBudgetPolicy("background", {
+          streamInitialTimeoutMs: 50,
+          streamStallTimeoutMs: 50,
+          providerFirstResponseMs: 50,
+          taskInactivityMs: 600_000,
+          minInactivityOverStreamRatio: 2,
+          outputTokenCap: 1_000_000_000,
+          costCapUsd: 1_000_000,
+        });
+        const runClock = openRunClock(new SystemClock(), policy);
+        const streamingProvider = {
+          name: "deaf-stream",
+          capabilities: { maxTokens: 4096, streaming: true, structuredStreaming: false, toolCalling: true, vision: false, systemPrompt: true },
+          chat: vi.fn().mockRejectedValue(new Error("fallback chat refused")),
+          // Ignores the abort signal entirely and never answers.
+          chatStream: vi.fn().mockImplementation(() => new Promise<never>(() => undefined)),
+        };
+        const orch = new Orchestrator({
+          providerManager: { getProvider: () => streamingProvider, shutdown: vi.fn() } as any,
+          tools: [],
+          channel: mockChannel,
+          projectPath: "/tmp/test-project",
+          readOnly: false,
+          requireConfirmation: true,
+          streamInitialTimeoutMs: 50,
+          streamStallTimeoutMs: 50,
+        });
+        const call = (orch as any).silentStream(
+          "deaf-chat", "system", { messages: [], lastActivity: new Date() }, streamingProvider, [], undefined, undefined, runClock,
+        ) as Promise<unknown>;
+        const outcome = call.then(() => "resolved", (e: Error) => `rejected: ${e.message}`);
+        let sentinel = false;
+        const timer = setTimeout(() => { sentinel = true; }, 5_000);
+        await vi.advanceTimersByTimeAsync(200);
+        const settled = await Promise.race([outcome, new Promise<string>((r) => setTimeout(() => r("still pending"), 0))]);
+        await vi.advanceTimersByTimeAsync(1);
+        clearTimeout(timer);
+        expect(sentinel).toBe(false);
+        // Ended by the ceiling (the fallback then answered for it); never left pending.
+        expect(settled).not.toBe("still pending");
+        const passedSignal = streamingProvider.chatStream.mock.calls[0]?.[4]?.signal as AbortSignal;
+        expect(passedSignal.aborted).toBe(true);
+        expect(passedSignal.reason).toMatchObject({ scope: "call" });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("rethrows without fallback or failure message when the external signal is aborted", async () => {
       const controller = new AbortController();
       controller.abort(); // control-plane cancel
