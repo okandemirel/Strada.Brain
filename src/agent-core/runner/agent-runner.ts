@@ -160,6 +160,17 @@ export interface AgentRunRequest {
   /** Whether the caller retains the lease (worker artifact metadata). */
   readonly workspaceLeaseRetained?: boolean;
 
+  /**
+   * "none" = the run edits the REAL project root with no lease (the real-tree
+   * guardian's compile repairs). Such a run is maintenance, not a delivery:
+   * the conformance guard's delivery gates (NO CAMERA, NOTHING RENDERS, a
+   * library instead of a game) do not apply to it. Measured 2026-09-08 14:03:
+   * a fix task for one CS1061 was handed "[STRADA NO CAMERA] … add a camera to
+   * the scene spec you pass to unity_scene_build" and spent its next turns on
+   * scene analysis and a failed unity_scene_build on the user's real tree.
+   */
+  readonly workspacePolicy?: "none";
+
   /** Nested-supervision toggle (`BackgroundTaskOptions.supervisorMode`). Default per-mode. */
   readonly supervisorMode?: "auto" | "off";
 

@@ -1131,6 +1131,7 @@ export class V2AgentRunner implements AgentRunner {
       onUsage: request.onUsage,
       workspaceLease: request.workspaceLease,
       workspaceLeaseRetained: request.workspaceLeaseRetained,
+      workspacePolicy: request.workspacePolicy,
       goalContext: request.goalContext,
       monitorScope: request.monitorScope,
     };

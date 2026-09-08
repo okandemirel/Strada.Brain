@@ -154,6 +154,8 @@ export interface AgentRunSetupInput {
   // projectPath = options.workspaceLease?.path), never the session/systemPrompt.
   readonly workspaceLease?: WorkspaceLease;
   readonly workspaceLeaseRetained?: boolean;
+  /** "none" = real-tree repair with no lease; the conformance guard does not apply (see AgentRunRequest). */
+  readonly workspacePolicy?: "none";
   readonly goalContext?: { readonly rootId: string; readonly nodeId: string };
   /** Parent-episode monitor rollup scope (v1 parity: runBackgroundTask :3549-3565) — a worker
    *  carrying this joins the parent whole-goal episode instead of spraying a sibling workspace.

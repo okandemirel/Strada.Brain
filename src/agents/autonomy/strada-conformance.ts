@@ -644,6 +644,11 @@ export class StradaConformanceGuard {
     }
   }
 
+  /** Whether this guard will ever raise a gate — false for a run that opted out (see conformanceAppliesTo). */
+  isEnabled(): boolean {
+    return this.opts?.enabled !== false;
+  }
+
   needsConformanceReview(): boolean {
     if (this.opts?.enabled === false) return false;
     return (

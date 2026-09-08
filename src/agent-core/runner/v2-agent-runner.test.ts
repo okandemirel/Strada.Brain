@@ -1138,3 +1138,30 @@ describe("stoppedStatus — what a verdict-stopped run reports", () => {
     expect(stoppedStatus("graceful", "background", "completed", budget as never)).toBe("blocked");
   });
 });
+
+describe("workspacePolicy reaches the port's setup input", () => {
+  // Measured 2026-09-08 14:03: the guardian's real-tree repair was handed the
+  // conformance guard's "[STRADA NO CAMERA] … unity_scene_build" gate. The
+  // guard is built in setupRun from this input; the policy has to arrive there.
+  it("a policy-none request is set up as a policy-none run", async () => {
+    const handles = mkPlane();
+    const provider = mkProvider();
+    const gateway = new ModelGateway(scriptedStream([mkResponse({ text: "all done", stopReason: "end_turn" })]));
+    const port = mkPort(provider);
+    const runner = mkRunner(handles.plane, gateway, port, handles.clock);
+
+    await drive(handles.clock, runner.run(mkRequest({ workspacePolicy: "none" }), mkIO("worker")));
+    expect(port.spies.setupRun).toHaveBeenCalledWith(expect.objectContaining({ workspacePolicy: "none" }));
+  });
+
+  it("a request without the policy sets up without it", async () => {
+    const handles = mkPlane();
+    const provider = mkProvider();
+    const gateway = new ModelGateway(scriptedStream([mkResponse({ text: "all done", stopReason: "end_turn" })]));
+    const port = mkPort(provider);
+    const runner = mkRunner(handles.plane, gateway, port, handles.clock);
+
+    await drive(handles.clock, runner.run(mkRequest(), mkIO("worker")));
+    expect(port.spies.setupRun.mock.calls[0]?.[0]?.workspacePolicy).toBeUndefined();
+  });
+});

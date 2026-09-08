@@ -45,9 +45,10 @@ import type { GoalTree, GoalNode, GoalNodeId } from "../../goals/types.js";
 
 // Logger + strada-knowledge module mocks — copied from orchestrator.test.ts so the Orchestrator
 // boots without a real project / SQLite / network.
+const loggerStub = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }));
 vi.mock("../../utils/logger.js", () => ({
-  getLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
-  getLoggerSafe: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
+  getLogger: () => loggerStub,
+  getLoggerSafe: () => loggerStub,
   getLogRingBuffer: () => [],
 }));
 vi.mock("../../agents/context/strada-knowledge.js", () => ({
@@ -397,6 +398,32 @@ describe("V2AgentRunner — REAL port + REAL gateway (provider.chat scripted)", 
     }
 
     expect(decompSpy).toHaveBeenCalledTimes(1); // once-per-run, NOT once-per-PLANNING-entry
+  });
+
+  it("a policy-none run (real-tree repair) is set up with the conformance guard off", async () => {
+    // Measured 2026-09-08 14:03: the real-tree guardian's compile repair was
+    // handed "[STRADA NO CAMERA] … add a camera to the scene spec you pass to
+    // unity_scene_build" and spent its next turns on scene analysis and a
+    // failed unity_scene_build on the user's real project. A repair on the
+    // real tree is maintenance; delivery gates do not apply to it.
+    const provider = mkScriptedProvider();
+    const h = buildHarness(provider);
+    const toSetupInput = (
+      h.runner as unknown as {
+        toSetupInput: (r: AgentRunRequest, m: RunnerMode) => Parameters<typeof h.port.setupRun>[0];
+      }
+    ).toSetupInput.bind(h.runner);
+
+    loggerStub.debug.mockClear();
+    await drive(h.clock, h.port.setupRun(toSetupInput(mkRequest({ workspacePolicy: "none" }), "background")));
+    const created = loggerStub.debug.mock.calls.filter((c) => c[0] === "Conformance guard created");
+    expect(created).toHaveLength(1);
+    expect(created[0]?.[1]).toMatchObject({ enabled: false });
+
+    loggerStub.debug.mockClear();
+    await drive(h.clock, h.port.setupRun(toSetupInput(mkRequest(), "background")));
+    const createdDefault = loggerStub.debug.mock.calls.filter((c) => c[0] === "Conformance guard created");
+    expect(createdDefault[0]?.[1]).toMatchObject({ enabled: true });
   });
 
   it("a sub-goal worker (goalContext set) never re-decomposes its own task", async () => {

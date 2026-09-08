@@ -57,6 +57,20 @@ function debugLog(message: string, meta: Record<string, unknown>): void {
   }
 }
 
+/**
+ * Whether the conformance guard applies to this run: the configured switch,
+ * and never for a real-tree repair (workspacePolicy "none"). A repair on the
+ * user's project is maintenance — the guard's delivery gates ask for scenes,
+ * cameras and views, which is exactly the work a compile fix must not start.
+ */
+export function conformanceAppliesTo(
+  request: { readonly workspacePolicy?: "none" },
+  configuredEnabled: boolean | undefined,
+): boolean {
+  if (configuredEnabled === false) return false;
+  return request.workspacePolicy !== "none";
+}
+
 export function createAutonomyBundle(params: CreateAutonomyBundleParams): AutonomyBundle {
   const errorRecovery = new ErrorRecoveryEngine();
   // dotnet_build only when there is something for it to build. In a Unity

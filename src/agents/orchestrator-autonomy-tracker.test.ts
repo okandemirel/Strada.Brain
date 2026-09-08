@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { createAutonomyBundle } from "./orchestrator-autonomy-tracker.js";
+import { createAutonomyBundle, conformanceAppliesTo } from "./orchestrator-autonomy-tracker.js";
 
 describe("createAutonomyBundle", () => {
   it("creates all autonomy objects for background loop", () => {
@@ -57,5 +57,22 @@ describe("createAutonomyBundle", () => {
     });
     expect(bundle.stradaConformance).toBeDefined();
     expect(bundle.controlLoopTracker).toBeNull();
+  });
+});
+
+describe("conformanceAppliesTo", () => {
+  // Measured 2026-09-08 14:03: the real-tree guardian's compile repair (one
+  // CS1061, workspacePolicy "none") was handed "[STRADA NO CAMERA] … add a
+  // camera to the scene spec you pass to unity_scene_build" and spent its
+  // next turns on scene analysis and a failed unity_scene_build on the
+  // user's real project.
+  it("a real-tree repair runs without the delivery gates", () => {
+    expect(conformanceAppliesTo({ workspacePolicy: "none" }, true)).toBe(false);
+    expect(conformanceAppliesTo({ workspacePolicy: "none" }, undefined)).toBe(false);
+  });
+  it("every other run keeps the configured switch", () => {
+    expect(conformanceAppliesTo({}, true)).toBe(true);
+    expect(conformanceAppliesTo({}, undefined)).toBe(true);
+    expect(conformanceAppliesTo({}, false)).toBe(false);
   });
 });

@@ -1180,6 +1180,7 @@ export class BackgroundExecutor {
       onUsage?: (usage: { provider: string; inputTokens: number; outputTokens: number }) => void;
       workspaceLease?: Awaited<ReturnType<WorkspaceLeaseManager["acquireLease"]>>;
       workspaceLeaseRetained?: boolean;
+      workspacePolicy?: "none";
       supervisorMode?: import("./types.js").BackgroundTaskOptions["supervisorMode"];
       goalContext?: import("./types.js").GoalContext;
       monitorScope?: string;
@@ -1222,6 +1223,7 @@ export class BackgroundExecutor {
       assignedModel: params.assignedModel,
       workspaceLease: params.workspaceLease,
       workspaceLeaseRetained: params.workspaceLeaseRetained,
+      workspacePolicy: params.workspacePolicy,
       supervisorMode: params.supervisorMode,
       goalContext: params.goalContext,
       // Parent-episode rollup scope; see AgentRunRequest.monitorScope. MONITOR-only.

@@ -37,7 +37,7 @@ import {
 import { buildVaultProjectContext } from "../../agents/context/strada-knowledge.js";
 import { resolveIdentityKey, resolveConversationScope } from "../../agents/orchestrator-text-utils.js";
 import { canonicalizeProviderName } from "../../agents/providers/provider-identity.js";
-import { createAutonomyBundle } from "../../agents/orchestrator-autonomy-tracker.js";
+import { conformanceAppliesTo, createAutonomyBundle } from "../../agents/orchestrator-autonomy-tracker.js";
 import { conformanceProjectPath } from "../../agents/autonomy/strada-conformance.js";
 import { getRecommendedMaxMessages, type ModelIntelligenceLookup } from "../../agents/providers/provider-knowledge.js";
 import { getLogger } from "../../utils/logger.js";
@@ -384,7 +384,7 @@ export async function setupAgentCoreRun(
       projectWorldFingerprint,
       includeControlLoopTracker: true,
       previousJournalSnapshot: session.lastJournalSnapshot,
-      conformanceEnabled: deps.conformanceEnabled,
+      conformanceEnabled: conformanceAppliesTo(request, deps.conformanceEnabled),
       conformanceFrameworkPathsOnly: deps.conformanceFrameworkPathsOnly,
       // v1 parity (trio catch): the documented loop-detection knobs configure the
       // ControlLoopTracker on the v2 route exactly as the deleted loops threaded them.
