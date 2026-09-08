@@ -4,9 +4,9 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { access } from "node:fs/promises";
-import { normalize, relative, sep } from "node:path";
+import { basename, dirname, isAbsolute, normalize, relative, sep } from "node:path";
 
 /**
  * Generate a Unity-compatible GUID (32 lowercase hex characters).
@@ -59,40 +59,80 @@ export async function isUnityProject(projectPath: string): Promise<boolean> {
 export const UNITY_EXCLUDED_DIRS = new Set(["Library", "Temp", "Logs", "obj", "Builds"]);
 
 /**
+ * The roots a project path can appear under: as given, and resolved through
+ * symlinks. Measured 2026-09-08 03:54 in a workspace lease under macOS's
+ * temp directory: validatePath hands back the REAL path (/private/var/…)
+ * while the tool context carries the lexical one (/var/…), so a plain
+ * `relative()` began with ".." and every file the agent wrote in a lease
+ * was judged "outside the project" — no .meta on write, the .meta left
+ * behind on delete (eleven orphaned scene metas), none moved on rename.
+ */
+function projectRoots(projectPath: string): string[] {
+  const lexical = normalize(projectPath);
+  try {
+    const real = normalize(realpathSync.native(projectPath));
+    return real === lexical ? [lexical] : [lexical, real];
+  } catch {
+    return [lexical];
+  }
+}
+
+/** The real form of a path that may not exist yet: its nearest existing ancestor resolved, the rest appended. */
+function realFileForm(filePath: string): string {
+  let existing = filePath;
+  let rest = "";
+  while (true) {
+    try {
+      const real = realpathSync.native(existing);
+      return rest === "" ? normalize(real) : normalize(real + sep + rest);
+    } catch {
+      const parent = dirname(existing);
+      if (parent === existing) return filePath;
+      rest = rest === "" ? basename(existing) : basename(existing) + sep + rest;
+      existing = parent;
+    }
+  }
+}
+
+/**
  * Check if a file path is inside Assets/ and should have a .meta file.
  * Only files inside Assets/ need .meta files.
  * Excludes .meta files themselves and files inside Library/, Temp/, Logs/, etc.
+ * `filePath` may be the lexical or the real form of the path; both roots are tried.
  */
 export function shouldGenerateMeta(filePath: string, projectPath: string): boolean {
   const normalizedFile = normalize(filePath);
-  const normalizedProject = normalize(projectPath);
-  const rel = relative(normalizedProject, normalizedFile);
-
-  // Must be inside the project (no ../ traversal)
-  if (rel.startsWith("..") || rel === "") {
-    return false;
-  }
 
   // Never generate .meta for .meta files
   if (normalizedFile.endsWith(".meta")) {
     return false;
   }
 
-  const segments = rel.split(sep);
+  const roots = projectRoots(projectPath);
+  const files = [normalizedFile];
+  const realFile = realFileForm(normalizedFile);
+  if (realFile !== normalizedFile) files.push(realFile);
 
-  // Must be inside Assets/
-  if (segments[0] !== "Assets") {
-    return false;
-  }
-
-  // Exclude known non-asset directories
-  for (const segment of segments) {
-    if (UNITY_EXCLUDED_DIRS.has(segment)) {
+  for (const root of roots) for (const file of files) {
+    const rel = relative(root, file);
+    // Must be inside the project (no ../ traversal)
+    if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) {
+      continue;
+    }
+    const segments = rel.split(sep);
+    // Must be inside Assets/
+    if (segments[0] !== "Assets") {
       return false;
     }
+    // Exclude known non-asset directories
+    for (const segment of segments) {
+      if (UNITY_EXCLUDED_DIRS.has(segment)) {
+        return false;
+      }
+    }
+    return true;
   }
-
-  return true;
+  return false;
 }
 
 /**
