@@ -18,6 +18,7 @@ import type {
   LLMDecompositionOutput,
 } from "./types.js";
 import { generateGoalNodeId, parseLLMOutput } from "./types.js";
+import { archiveDecompositionFailure } from "./decomposition-failure-archive.js";
 import { validateDAG, judgePlanShape, isReadOnlyRequest, foldMeasurementNodes } from "./goal-validator.js";
 
 /** The endpoint closed the stream before the answer ended (undici "terminated", a mid-stream failure). */
@@ -544,8 +545,13 @@ export class GoalDecomposer {
       let parsed = parseLLMOutput(response.text);
       if (!parsed) {
         const { getLoggerSafe } = await import("../utils/logger.js");
+        // The whole reply, on disk: a 300-char preview cannot show WHY 40k
+        // chars with a closed reasoning block and a JSON object failed
+        // (2026-09-09 19:41, the fifth such failure of the evening).
+        const archived = archiveDecompositionFailure(response.text);
         getLoggerSafe().warn("Goal decomposition LLM output parse failed", {
           responsePreview: response.text.slice(0, 300),
+          archived,
           provider: this.provider.name,
           // What shape the failure had: reasoning that never closed, no JSON at all, or JSON that did not validate.
           length: response.text.length,
