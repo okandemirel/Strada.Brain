@@ -17,6 +17,7 @@
  * (Since THE FLIP this V2 spine is also the shipped production default on every route.)
  */
 
+import { AgentPhase } from "../../agents/agent-state.js";
 import { describe, it, expect, vi } from "vitest";
 import { FakeClock } from "../control/clock.js";
 import { createControlPlane } from "../control/control-plane.js";
@@ -424,6 +425,33 @@ describe("V2AgentRunner — REAL port + REAL gateway (provider.chat scripted)", 
     await drive(h.clock, h.port.setupRun(toSetupInput(mkRequest(), "background")));
     const createdDefault = loggerStub.debug.mock.calls.filter((c) => c[0] === "Conformance guard created");
     expect(createdDefault[0]?.[1]).toMatchObject({ enabled: true });
+  });
+
+  it("after a repeated read-only streak the port offers only progress tools for ONE turn", async () => {
+    const provider = mkScriptedProvider();
+    const h = buildHarness(provider, [mkTool("file_read"), mkTool("file_write", true, ["a.cs"]), mkTool("grep_search")]);
+    const toSetupInput = (
+      h.runner as unknown as { toSetupInput: (r: AgentRunRequest, m: RunnerMode) => Parameters<typeof h.port.setupRun>[0] }
+    ).toSetupInput.bind(h.runner);
+    const setup = await drive(h.clock, h.port.setupRun(toSetupInput(mkRequest(), "background")));
+    const ctx = h.port.debugRunContext!() as { restrictToProgressTools?: boolean };
+    ctx.restrictToProgressTools = true;
+    const params = {
+      prompt: "do the thing",
+      identityKey: setup.identityKey,
+      // EXECUTING: the phase in which a streak happens and write tools are offered at all.
+      agentState: { ...createInitialState("do the thing"), phase: AgentPhase.EXECUTING },
+      executionJournal: setup.executionJournal,
+      systemPrompt: setup.systemPrompt,
+      fallbackProvider: setup.fallbackProvider,
+      toolTurnAffinity: null,
+      enableGoalDetection: setup.enableGoalDetection,
+      iterationHealth: setup.iterationHealth,
+    };
+    const restricted = h.port.prepareIteration(params as never);
+    expect(restricted.currentToolNames).toEqual(["file_write"]);
+    const next = h.port.prepareIteration(params as never);
+    expect(next.currentToolNames).toEqual(expect.arrayContaining(["file_read", "file_write", "grep_search"]));
   });
 
   it("a sub-goal worker (goalContext set) never re-decomposes its own task", async () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ControlLoopTracker } from "./control-loop-tracker.js";
+import { ControlLoopTracker, restrictToProgressTools } from "./control-loop-tracker.js";
 
 describe("ControlLoopTracker", () => {
   it("triggers when the same fingerprint repeats within the short window", () => {
@@ -426,6 +426,25 @@ describe("ControlLoopTracker", () => {
     expect(tracker.takeUnreportedReadOnlyStall()).toBeNull();
     tracker.markToolExecution("grep_search", "grep_search:{\"pattern\":\"x\"}");
     expect(tracker.takeUnreportedReadOnlyStall()?.calls).toBe(ControlLoopTracker.READ_ONLY_STREAK_LIMIT);
+  });
+
+  it("counts the streaks a run has been told about, and a change resets the count (the escalation level)", () => {
+    const tracker = new ControlLoopTracker({ staleAnalysisThreshold: 100 });
+    expect(tracker.getReadOnlyStreakReports()).toBe(0);
+    for (let round = 1; round <= 2; round++) {
+      for (let i = 0; i < ControlLoopTracker.READ_ONLY_STREAK_LIMIT; i++) tracker.markToolExecution("file_read", `file_read:{"path":"r${round}-${i}"}`);
+      expect(tracker.takeUnreportedReadOnlyStall()).not.toBeNull();
+      expect(tracker.getReadOnlyStreakReports()).toBe(round);
+    }
+    tracker.markToolExecution("file_write", "file_write:{\"path\":\"x\"}");
+    expect(tracker.getReadOnlyStreakReports()).toBe(0);
+  });
+
+  it("restrictToProgressTools keeps only tools that change the project, and leaves a list without any alone", () => {
+    const tools = [{ name: "file_read" }, { name: "vault_search" }, { name: "file_write" }, { name: "unity_generate_sprite" }, { name: "shell_exec" }];
+    expect(restrictToProgressTools(tools).map((t) => t.name)).toEqual(["file_write", "unity_generate_sprite"]);
+    const readOnly = [{ name: "file_read" }, { name: "grep_search" }];
+    expect(restrictToProgressTools(readOnly).map((t) => t.name)).toEqual(["file_read", "grep_search"]);
   });
 
   it("a shell grep does not end a read-only streak; a file write does", () => {

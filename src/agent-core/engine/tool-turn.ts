@@ -241,8 +241,11 @@ export async function portExecuteToolTurn(
           calls: stall.calls,
           reason: stall.reason,
         });
-        // A warning nobody reads is not an intervention: the model is told.
-        runCtx.session.messages.push({ role: "user", content: readOnlyStreakGate(stall) });
+        // A warning nobody reads is not an intervention: the model is told —
+        // and from the second streak on, handed a write-only tool list.
+        const level = runCtx.controlLoopTracker.getReadOnlyStreakReports();
+        runCtx.session.messages.push({ role: "user", content: readOnlyStreakGate(stall, level) });
+        if (level >= 2) runCtx.restrictToProgressTools = true;
       }
     }
 

@@ -365,6 +365,8 @@ export interface OrchestratorPort {
    * FallbackChain selected (task-aware build happens INSIDE here).
    */
   prepareIteration(params: PrepareIterationParams): PreparedIteration;
+  /** Test seam: the run context this port closes over (undefined before setupRun). */
+  debugRunContext?: () => unknown;
 
   /** Session compaction (gauntlet #5). */
   maybeCompactSession(

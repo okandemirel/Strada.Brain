@@ -236,6 +236,21 @@ describe("portExecuteToolTurn — a read-only streak is told to the model", () =
     expect(gate!.content).toContain("Do not read more first");
   });
 
+  it("the SECOND streak escalates: a ×2 gate and a write-only tool list for the next turn", async () => {
+    const deps = makeDeps();
+    const tracker = new ControlLoopTracker({ staleAnalysisThreshold: 100 });
+    const runCtx = makeRunCtx({ controlLoopTracker: tracker });
+    const messages = (runCtx.session as unknown as { messages: Array<{ role: string; content: string }> }).messages;
+    for (let i = 0; i < ControlLoopTracker.READ_ONLY_STREAK_LIMIT - 2; i++) tracker.markToolExecution("vault_search", `vault_search:{"query":"a${i}"}`);
+    await portExecuteToolTurn(deps, makeArgs(), runCtx); // first streak
+    expect(runCtx.restrictToProgressTools).not.toBe(true);
+    expect(messages.some((m) => String(m.content).startsWith("[READ-ONLY STREAK]"))).toBe(true);
+    for (let i = 0; i < ControlLoopTracker.READ_ONLY_STREAK_LIMIT - 2; i++) tracker.markToolExecution("vault_search", `vault_search:{"query":"b${i}"}`);
+    await portExecuteToolTurn(deps, makeArgs(), runCtx); // second streak
+    expect(runCtx.restrictToProgressTools).toBe(true);
+    expect(messages.some((m) => String(m.content).startsWith("[READ-ONLY STREAK ×2]"))).toBe(true);
+  });
+
   it("pushes nothing while the streak is short", async () => {
     const deps = makeDeps();
     const runCtx = makeRunCtx({ controlLoopTracker: new ControlLoopTracker({ staleAnalysisThreshold: 100 }) });

@@ -46,6 +46,8 @@ export class ControlLoopTracker {
   private readonly recoveryEpisodes = new Map<string, number>();
   private consecutiveNoToolGates = 0;
   private consecutiveReadOnlyToolCalls = 0;
+  /** Read-only streaks reported this run (reset by a progress mutation) — the escalation level. */
+  private readOnlyStreakReports = 0;
   private lastReadOnlyFingerprint: string | null = null;
   private sameReadOnlyFingerprintCount = 0;
   private mutationsSinceLastReset = false;
@@ -179,6 +181,7 @@ export class ControlLoopTracker {
     }
     if (progresses) {
       this.consecutiveReadOnlyToolCalls = 0;
+      this.readOnlyStreakReports = 0;
       this.lastReadOnlyFingerprint = null;
       this.sameReadOnlyFingerprintCount = 0;
     } else {
@@ -240,7 +243,13 @@ export class ControlLoopTracker {
     this.consecutiveReadOnlyToolCalls = 0;
     this.lastReadOnlyFingerprint = null;
     this.sameReadOnlyFingerprintCount = 0;
+    this.readOnlyStreakReports += 1;
     return stall;
+  }
+
+  /** How many read-only streaks this run has been told about since its last change. */
+  getReadOnlyStreakReports(): number {
+    return this.readOnlyStreakReports;
   }
 
   markVerificationClean(_iteration: number): void {
@@ -422,10 +431,30 @@ function summarizeText(text: string): string {
  * What the model is told when a read-only streak trips: the measurement and
  * the only two acceptable next moves. Pushed into the session as a user turn.
  */
-export function readOnlyStreakGate(stall: { readonly calls: number; readonly reason: string }): string {
+export function readOnlyStreakGate(stall: { readonly calls: number; readonly reason: string }, level = 1): string {
+  if (level >= 2) {
+    return (
+      `[READ-ONLY STREAK ×${level}] ${stall.reason} You were told this before and kept reading. ` +
+      "For your next turn the tool list holds ONLY tools that change the project: make one change now " +
+      "(write, edit, generate, bind, place), or answer with a final report that names exactly what " +
+      "blocks a change. There is nothing left to read."
+    );
+  }
   return (
     `[READ-ONLY STREAK] ${stall.reason} Reading is not progress. ` +
     "Your next turn must either CHANGE something with a write/generate/bind tool, or state in one " +
     "paragraph exactly what blocks a change and what you will do about it. Do not read more first."
   );
+}
+
+/**
+ * The tool list for a turn that must change something: the progress-mutation
+ * tools only. Measured 2026-09-09 07:24-07:37: the streak gate fired three
+ * times in 13 minutes and the model went on reading each time — a nudge the
+ * model can ignore is not a gate. With nothing left to read, it cannot.
+ * Returns the list unchanged when it holds no such tool (nothing to force).
+ */
+export function restrictToProgressTools<T extends { readonly name: string }>(tools: readonly T[]): T[] {
+  const kept = tools.filter((t) => PROGRESS_MUTATION_TOOLS.has(t.name));
+  return kept.length > 0 ? kept : [...tools];
 }

@@ -56,6 +56,8 @@ import type {
   ExecuteToolCallsFn,
 } from "../runner/orchestrator-port.js";
 import { instinctScopeKey } from "./instinct-scope.js";
+import { restrictToProgressTools } from "../../agents/autonomy/control-loop-tracker.js";
+import { getLogger } from "../../utils/logger.js";
 
 /** The shell residue the port assembly injects (the engine facade methods are called directly). */
 export interface PortDeps extends ToolTurnDeps {
@@ -182,10 +184,12 @@ export function createAgentCorePort(
         );
       },
       buildPolicySeed: () => engine.buildPolicySeed(),
+      // Test seam: the run context this port closes over (undefined before setupRun).
+      debugRunContext: () => cell.ctx,
 
       // ── B. per-iteration prep ────────────────────────────────────────────────────────────
       prepareIteration: (params: PrepareIterationParams): PortPreparedIteration => {
-        const prepared = engine.prepareIteration({
+        let prepared = engine.prepareIteration({
           prompt: params.prompt,
           identityKey: params.identityKey,
           agentState: params.agentState,
@@ -205,6 +209,16 @@ export function createAgentCorePort(
         // ADAPT: capture the last strategy/assignment/toolNames so the handler contexts can read
         // them (they are loop-locals in v1; here the port threads them through runCtx).
         const c = ctx();
+        if (c.restrictToProgressTools) {
+          // One turn with nothing left to read (see restrictToProgressTools).
+          c.restrictToProgressTools = false;
+          const restricted = restrictToProgressTools(prepared.currentToolDefinitions);
+          getLogger().warn("Tool list restricted to progress tools for one turn after repeated read-only streaks", {
+            chatId: c.chatId,
+            offered: restricted.map((t) => t.name),
+          });
+          prepared = { ...prepared, currentToolDefinitions: restricted, currentToolNames: restricted.map((t) => t.name) };
+        }
         c.executionStrategy = prepared.executionStrategy;
         c.lastAssignment = prepared.currentAssignment;
         c.lastToolNames = prepared.currentToolNames;

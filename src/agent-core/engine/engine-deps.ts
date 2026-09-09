@@ -62,6 +62,12 @@ export interface EngineRunContext {
    * and spraying the DAG/Kanban monitor. Flipped true by the decomposeGoalsIfPlanning binding.
    */
   goalsDecomposed: boolean;
+  /**
+   * Set by the tool turn after a repeated read-only streak: the NEXT
+   * prepareIteration offers only tools that change the project, then clears
+   * this. See restrictToProgressTools.
+   */
+  restrictToProgressTools?: boolean;
   readonly identityKey: string;
   // Step 3 (3.5/3.6) — the interactive PLANNING-phase divergences need these: `userId` for the
   // autonomous-mode check (3.5 plan-review gate); `channelType`/`attachments`/`conversationScope`
