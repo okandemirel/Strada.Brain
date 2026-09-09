@@ -340,6 +340,9 @@ describe("measurement-only nodes fold into the work that uses them (measured 202
     expect(isMeasurementOnlyNode("Using the list from s1, take these 24 placeholder paths. Call unity_generate_sprite exactly TWICE")).toBe(false);
     expect(isMeasurementOnlyNode("Run the suite")).toBe(false);
     expect(isMeasurementOnlyNode("Call unity_generate_sprite with batch of 12")).toBe(false);
+    // A report-only closer (measured 2026-09-09 21:16) — and a report that carries work is work.
+    expect(isMeasurementOnlyNode("Output the final measured placeholderSprites number verbatim as the task completion count. This is the definitive measurement confirming placeholderSprites is below 300.")).toBe(true);
+    expect(isMeasurementOnlyNode("Report the count, then regenerate the remaining placeholders")).toBe(false);
   });
 
   it("folds the opening measurement into every dependent, rewires edges, and folds a trailing one into its predecessor", () => {

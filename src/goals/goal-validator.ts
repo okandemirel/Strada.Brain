@@ -113,7 +113,7 @@ export function validateDAG(
 
 /** Verbs that change the project or produce an artifact — anywhere in the task text. */
 const WORK_RE =
-  /\b(create|generate|draw|paint|write|bind|place|instantiate|implement|add|replace|fix|build|import|compose|record|configure|wire|assemble|edit|update|refactor|remove|delete|rename|migrate|convert|apply|set up|setup|install|execute|verify|capture|deliver|produce|ship|author|animate|script|attach|spawn|hook up|populate|tune|polish|export|commit|register|integrate|document)\b/i;
+  /\b(?:re-?)?(create|generate|draw|paint|write|bind|place|instantiate|implement|add|replace|fix|build|import|compose|record|configure|wire|assemble|edit|update|refactor|remove|delete|rename|migrate|convert|apply|set up|setup|install|execute|verify|capture|deliver|produce|ship|author|animate|script|attach|spawn|hook up|populate|tune|polish|export|commit|register|integrate|document)\b/i;
 /**
  * Verbs that only look — judged on the task's LEADING verb, so "Read the GDD
  * and generate the sprites" is work (generate) while "Read PixelFlow_GDD.md
@@ -194,11 +194,20 @@ const MEASUREMENT_TOOL_RE = /(measure|verify|check|count|inventory|status|analy[
 const REPORTING_RE = /\b(record|report|output|note|list|verify|measure|capture|document|save|store|print|return|write down|summari[sz]e)\b/gi;
 
 /** A node whose whole job is one measuring tool call plus reporting its result. */
+const REPORT_LEAD_RE = /^\W*(?:\d+[.)]\s*)?(?:output|report|record|summari[sz]e|document|note|state|print)\b/i;
+
 export function isMeasurementOnlyNode(task: string): boolean {
   const lead = TOOL_CALL_LEAD_RE.exec(task);
-  if (!lead?.[1] || !MEASUREMENT_TOOL_RE.test(lead[1])) return false;
-  const rest = task.slice(lead[0].length).replace(REPORTING_RE, "");
-  return !WORK_RE.test(rest);
+  if (lead?.[1] && MEASUREMENT_TOOL_RE.test(lead[1])) {
+    const rest = task.slice(lead[0].length).replace(REPORTING_RE, "");
+    return !WORK_RE.test(rest);
+  }
+  // "Output the final measured count verbatim …" — a report with no work of
+  // its own (measured 2026-09-09 21:16: the plan's last node).
+  if (REPORT_LEAD_RE.test(task)) {
+    return !WORK_RE.test(task.replace(REPORTING_RE, ""));
+  }
+  return false;
 }
 
 export interface FoldableNode {
