@@ -403,3 +403,31 @@ describe("defects the generator review found (2026-09-07)", () => {
     expect(r.content).toContain("repeat");
   });
 });
+
+describe("a batch item's bare name meets the existing placeholder (2026-09-09 19:24: twelve new files beside twelve untouched placeholders)", () => {
+  it("the local batch job is aimed at the placeholder's real path, not the default directory", async () => {
+    const { root, ctx } = project();
+    mkdirSync(join(root, "Assets/Modules/LiveOpsModule/Art/Status"), { recursive: true });
+    writeFileSync(join(root, "Assets/Modules/LiveOpsModule/Art/Status/ClaimFeedback.png"), pngFixture("flat"));
+    const outs: string[] = [];
+    const runner = {
+      isModelInstalled: () => true,
+      textToImage: vi.fn(async () => ({ ok: false, detail: "n/a" })),
+      imageToMesh: vi.fn(async () => ({ ok: false, detail: "n/a" })),
+      textToImageBatch: vi.fn(async (_spec: unknown, jobs: Array<{ out: string }>) => {
+        for (const j of jobs) { outs.push(j.out); writeFileSync(j.out, pngFixture("noise")); }
+        return { ok: true, detail: "ok", written: jobs.map((j) => j.out), missing: [] };
+      }),
+    } as unknown as LocalRunnerLike;
+    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner, specFor }).execute(
+      { batch: [{ name: "ClaimFeedback" }, { name: "Brand" }] },
+      ctx,
+    );
+    expect(r.isError, String(r.content)).toBeFalsy();
+    // validatePath hands back REAL paths (/private/var…), so compare by suffix.
+    expect(outs).toHaveLength(2);
+    expect(outs[0]!.endsWith("/Assets/Modules/LiveOpsModule/Art/Status/ClaimFeedback.png")).toBe(true);
+    expect(outs[1]!.endsWith("/Assets/Art/Generated/Brand.png")).toBe(true);
+    expect(existsSync(join(root, "Assets/Art/Generated/ClaimFeedback.png"))).toBe(false);
+  });
+});

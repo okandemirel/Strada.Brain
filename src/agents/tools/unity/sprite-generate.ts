@@ -20,8 +20,8 @@
  */
 
 import { deflateSync } from "node:zlib";
-import { mkdirSync, writeFileSync, existsSync, statSync } from "node:fs";
-import { dirname } from "node:path";
+import { mkdirSync, writeFileSync, existsSync, statSync, readdirSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
 import { reuseOrMintGuid } from "./meta-file-utils.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "../tool.interface.js";
 import { validatePath } from "../../../security/path-guard.js";
@@ -545,6 +545,54 @@ export function splitSpriteTarget(rawName: string, dirRel: string): { name: stri
   return { name, dirRel: dir };
 }
 
+const WALK_SKIP = new Set([".git", "Library", "Temp", "Logs", "obj", "node_modules", ".strada", ".strada-memory", "Packages"]);
+
+function walkPngs(dir: string, out: string[], depth = 0): void {
+  if (depth > 12) return;
+  let entries: import("node:fs").Dirent[];
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (entry.isDirectory()) {
+      if (!WALK_SKIP.has(entry.name)) walkPngs(join(dir, entry.name), out, depth + 1);
+    } else if (/\.png$/i.test(entry.name)) {
+      out.push(join(dir, entry.name));
+    }
+  }
+}
+
+export type SameStemPlaceholder =
+  | { readonly kind: "none" }
+  | { readonly kind: "one"; readonly dirRel: string; readonly relFile: string }
+  | { readonly kind: "many"; readonly matches: readonly string[] };
+
+/**
+ * A bare name that names an EXISTING placeholder elsewhere under Assets/
+ * means that placeholder. Measured 2026-09-09 19:24: a 12-sprite batch
+ * asked for "ClaimFeedback", "StatusLocked", … and wrote twelve new files
+ * into Assets/Art/Generated while the placeholders it was sent to replace
+ * sat untouched in Assets/Modules/LiveOpsModule/Art/Status — the count the
+ * mission is judged by cannot move that way. When `<dirRel>/<name>.png`
+ * does not exist and exactly one placeholder-grade `<name>.png` exists
+ * under Assets/, the sprite goes there; several matches are refused with
+ * the list, so the caller passes the path.
+ */
+export function findSameStemPlaceholder(projectPath: string, name: string, dirRel: string): SameStemPlaceholder {
+  const intended = join(projectPath, dirRel.replace(/\\/g, "/"), `${name}.png`);
+  if (existsSync(intended)) return { kind: "none" };
+  const all: string[] = [];
+  walkPngs(join(projectPath, "Assets"), all);
+  const matches = all.filter((abs) => abs.endsWith(`/${name}.png`) && isPlaceholderGradePng(abs));
+  if (matches.length === 0) return { kind: "none" };
+  const rels = matches.map((abs) => relative(projectPath, abs).replace(/\\/g, "/"));
+  if (matches.length > 1) return { kind: "many", matches: rels };
+  const relFile = rels[0]!;
+  return { kind: "one", dirRel: relFile.slice(0, relFile.lastIndexOf("/")), relFile };
+}
+
 export class SpriteGenerateTool implements ITool {
   constructor(private readonly opts: GeneratorOptions = { localAvailable: realLocalAvailability() }) {}
   readonly name = "unity_generate_sprite";
@@ -671,35 +719,50 @@ export class SpriteGenerateTool implements ITool {
       };
     }
 
-    const dirRel = target.dirRel;
+    let dirRel = target.dirRel;
+    let redirectNote = "";
+    const sameStem = findSameStemPlaceholder(context.projectPath, rawName, dirRel);
+    if (sameStem.kind === "many") {
+      return {
+        content: `Error: "${rawName}" names ${sameStem.matches.length} existing placeholders — pass the full path of the one to replace: ${sameStem.matches.join(", ")}`,
+        isError: true,
+      };
+    }
+    if (sameStem.kind === "one") {
+      dirRel = sameStem.dirRel;
+      redirectNote = `Redirected to ${sameStem.relFile} — the existing placeholder with this name — instead of writing a new file beside it. `;
+    }
     if (!/^Assets([/\\]|$)/i.test(dirRel.replace(/\\/g, "/")) && dirRel !== "Assets") {
       return { content: "Error: path must be under Assets/", isError: true };
     }
 
-    if (provider === "local") {
-      const local = await this.executeLocal(input, context, rawName, dirRel);
-      if (!local.isError || !auto) return local;
-      // Auto-chosen local failed: the element still gets a file, and the
-      // result says which kind and why — a silent placeholder would read as
-      // real art in the next audit. Unless real art is ALREADY there: a
-      // placeholder over a drawn sprite is a loss, not a fallback (review
-      // 2026-09-07).
-      const existing = await validatePath(context.projectPath, `${dirRel.replace(/[/\\]+$/, "")}/${rawName}.png`, { allowMissingParents: true });
-      if (existing.valid && existsSync(existing.fullPath) && !isPlaceholderGradePng(existing.fullPath)) {
-        return {
-          content: `${String(local.content)} The existing drawn sprite at ${dirRel.replace(/[/\\]+$/, "")}/${rawName}.png was KEPT — no placeholder was written over it.`,
-          isError: true,
-        };
+    const outcome = await (async (): Promise<ToolExecutionResult> => {
+      if (provider === "local") {
+        const local = await this.executeLocal(input, context, rawName, dirRel);
+        if (!local.isError || !auto) return local;
+        // Auto-chosen local failed: the element still gets a file, and the
+        // result says which kind and why — a silent placeholder would read as
+        // real art in the next audit. Unless real art is ALREADY there: a
+        // placeholder over a drawn sprite is a loss, not a fallback (review
+        // 2026-09-07).
+        const existing = await validatePath(context.projectPath, `${dirRel.replace(/[/\\]+$/, "")}/${rawName}.png`, { allowMissingParents: true });
+        if (existing.valid && existsSync(existing.fullPath) && !isPlaceholderGradePng(existing.fullPath)) {
+          return {
+            content: `${String(local.content)} The existing drawn sprite at ${dirRel.replace(/[/\\]+$/, "")}/${rawName}.png was KEPT — no placeholder was written over it.`,
+            isError: true,
+          };
+        }
+        const fallback = await this.executeProcedural(input, context, rawName, dirRel);
+        return fallback.isError
+          ? fallback
+          : { ...fallback, content: `${fallback.content} PLACEHOLDER: the local model failed (${String(local.content).slice(0, 160)}), so this is a procedural shape.` };
       }
-      const fallback = await this.executeProcedural(input, context, rawName, dirRel);
-      return fallback.isError
-        ? fallback
-        : { ...fallback, content: `${fallback.content} PLACEHOLDER: the local model failed (${String(local.content).slice(0, 160)}), so this is a procedural shape.` };
-    }
-    const procedural = await this.executeProcedural(input, context, rawName, dirRel);
-    return auto && !procedural.isError
-      ? { ...procedural, content: `${procedural.content} PLACEHOLDER: no local text-to-image model is installed (run \`strada assets-local-setup\`), so this is a procedural shape, not art.` }
-      : procedural;
+      const procedural = await this.executeProcedural(input, context, rawName, dirRel);
+      return auto && !procedural.isError
+        ? { ...procedural, content: `${procedural.content} PLACEHOLDER: no local text-to-image model is installed (run \`strada assets-local-setup\`), so this is a procedural shape, not art.` }
+        : procedural;
+    })();
+    return redirectNote && !outcome.isError ? { ...outcome, content: `${redirectNote}${String(outcome.content)}` } : outcome;
   }
 
   /** The open-weights path: a local diffusion model draws the sprite. */
@@ -865,7 +928,20 @@ export class SpriteGenerateTool implements ITool {
       const r = (raw ?? {}) as Record<string, unknown>;
       const target = splitSpriteTarget(String(r["name"] ?? ""), batchDir);
       return { name: target.name, dir: target.dirRel, prompt: typeof r["prompt"] === "string" ? r["prompt"] : undefined };
+    }).map((item) => {
+      if (!/^[A-Za-z][\w-]{0,40}$/.test(item.name)) return item;
+      const sameStem = findSameStemPlaceholder(context.projectPath, item.name, item.dir);
+      return sameStem.kind === "one" ? { ...item, dir: sameStem.dirRel } : item;
     });
+    for (const item of items) {
+      const sameStem = /^[A-Za-z][\w-]{0,40}$/.test(item.name) ? findSameStemPlaceholder(context.projectPath, item.name, item.dir) : { kind: "none" as const };
+      if (sameStem.kind === "many") {
+        return {
+          content: `Error: batch item "${item.name}" names ${sameStem.matches.length} existing placeholders — pass the full path of the one to replace: ${sameStem.matches.join(", ")}`,
+          isError: true,
+        };
+      }
+    }
     if (items.length === 0) return { content: "Error: batch is empty", isError: true };
     if (items.length > SPRITE_BATCH_MAX) {
       return { content: `Error: batch holds ${items.length} sprites; the limit is ${SPRITE_BATCH_MAX} per call — split it.`, isError: true };

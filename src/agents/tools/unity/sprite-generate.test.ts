@@ -99,6 +99,36 @@ describe("SpriteGenerateTool", () => {
     expect(existsSync(join(dir, "Assets/Art/Generated/Icons/Hand.png"))).toBe(true);
   });
 
+  it("a bare name that names an existing placeholder elsewhere under Assets/ overwrites THAT placeholder (measured 2026-09-09 19:24: 12 new files beside 12 untouched placeholders)", async () => {
+    const flat = new Uint8Array(16 * 16 * 4).fill(200);
+    const placeholder = join(dir, "Assets/Modules/LiveOpsModule/Art/Status/ClaimFeedback.png");
+    mkdirSync(join(dir, "Assets/Modules/LiveOpsModule/Art/Status"), { recursive: true });
+    writeFileSync(placeholder, encodePng(16, 16, flat));
+    const before = readFileSync(placeholder);
+
+    const result = await tool.execute({ name: "ClaimFeedback", acceptPlaceholder: true }, makeContext(dir));
+    expect(result.isError, String(result.content)).toBeFalsy();
+    expect(String(result.content)).toContain("Redirected to Assets/Modules/LiveOpsModule/Art/Status/ClaimFeedback.png");
+    expect(existsSync(join(dir, "Assets/Art/Generated/ClaimFeedback.png"))).toBe(false);
+    expect(readFileSync(placeholder).equals(before)).toBe(false);
+
+    // Two placeholders with the stem: refused with both paths, nothing written.
+    const second = join(dir, "Assets/Art/Other/ClaimFeedback.png");
+    mkdirSync(join(dir, "Assets/Art/Other"), { recursive: true });
+    writeFileSync(second, encodePng(16, 16, flat));
+    const ambiguous = await tool.execute({ name: "ClaimFeedback", acceptPlaceholder: true }, makeContext(dir));
+    expect(ambiguous.isError).toBe(true);
+    expect(String(ambiguous.content)).toContain("Assets/Art/Other/ClaimFeedback.png");
+    expect(existsSync(join(dir, "Assets/Art/Generated/ClaimFeedback.png"))).toBe(false);
+
+    // Batch items are redirected the same way.
+    rmSync(second);
+    const batch = await tool.execute({ batch: [{ name: "ClaimFeedback" }, { name: "Fresh" }], acceptPlaceholder: true }, makeContext(dir));
+    expect(batch.isError, String(batch.content)).toBeFalsy();
+    expect(existsSync(join(dir, "Assets/Art/Generated/ClaimFeedback.png"))).toBe(false);
+    expect(existsSync(join(dir, "Assets/Art/Generated/Fresh.png"))).toBe(true);
+  });
+
   it("refuses output outside Assets/", async () => {
     const result = await tool.execute({ name: "Rocket", path: "SomewhereElse" }, makeContext(dir));
     expect(result.isError).toBe(true);
