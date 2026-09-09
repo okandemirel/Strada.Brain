@@ -67,6 +67,18 @@ export const OPENCODE_MAX_TOKENS: number = (() => {
   return Number.isFinite(raw) && raw >= 1 ? raw : 16_384;
 })();
 
+/**
+ * The context window the compaction pipeline plans against. The endpoint
+ * advertises 128k, but measured 2026-09-09 the free tier stopped answering a
+ * 57k-token turn (two 600 s zero-output calls) after serving 41-47k turns in
+ * under a minute — so the window that matters is the one the model still
+ * answers within, and it is configurable. Floor 8192; unset = 128k.
+ */
+export const OPENCODE_CONTEXT_WINDOW: number = (() => {
+  const raw = Math.floor(Number(process.env["OPENCODE_CONTEXT_WINDOW"]));
+  return Number.isFinite(raw) && raw >= 8_192 ? raw : 128_000;
+})();
+
 export class OpencodeProvider extends OpenAIProvider {
   override readonly capabilities: ProviderCapabilities = {
     maxTokens: OPENCODE_MAX_TOKENS,
@@ -75,7 +87,7 @@ export class OpencodeProvider extends OpenAIProvider {
     toolCalling: true,
     vision: true,
     systemPrompt: true,
-    contextWindow: 128_000,
+    contextWindow: OPENCODE_CONTEXT_WINDOW,
     thinkingSupported: false,
     // Measured 2026-08-21 against opencode.ai/zen/go with deepseek-v4-flash on
     // a goal-decomposition prompt: default effort spent 1595 reasoning chunks

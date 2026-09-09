@@ -505,3 +505,35 @@ export function compactSession(
   const { messages: rest, summary } = partitionSummary(flat);
   return { messages: rest, summary, compacted: true, stageApplied: "hard_truncation", originalTokens, finalTokens };
 }
+
+// ---------------------------------------------------------------------------
+// Retry after a hard-timeout (2026-09-09)
+//
+// Measured 13:23-13:49 on the placeholder mission: a 57k-token turn hit the
+// 10-minute call ceiling twice in a row with zero output, while the same
+// model had been answering 41-47k turns in 20-55 s. The ordinary compaction
+// only triggers at COMPACTION_TRIGGER_RATIO of the declared 128k window, far
+// above where the free tier stops answering. When a call produces nothing for
+// the whole ceiling, the retry gets a prompt half the size.
+// ---------------------------------------------------------------------------
+
+/** Floor for the retry target so a short conversation is not shredded. */
+export const RETRY_COMPACTION_FLOOR_TOKENS = 8_000;
+
+export function isHardTimeoutError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : typeof err === "string" ? err : "";
+  return /hard-timeout/.test(message);
+}
+
+/** Compact to half the current estimate (never below the floor), keeping the last two messages verbatim. */
+export function compactForRetry(
+  messages: readonly ConversationMessage[],
+  previousSummary?: string,
+): CompactionResult {
+  const working: CompactableMessage[] = previousSummary
+    ? [{ role: "system", content: previousSummary }, ...messages]
+    : [...messages];
+  const estimate = estimateTokens(working);
+  const maxTokens = Math.max(RETRY_COMPACTION_FLOOR_TOKENS, Math.floor(estimate / 2));
+  return compactSession(messages, { maxTokens, preserveRecent: 2, maxGroups: 20, previousSummary });
+}

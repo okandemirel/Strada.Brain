@@ -76,3 +76,22 @@ describe("telling a refusal from a glitch", () => {
     expect(refuses(null)).toBe(false);
   });
 });
+
+describe("a zero-output hard-timeout retries with a smaller prompt (2026-09-09)", () => {
+  it("both streaming-error branches compact the session before the non-streaming fallback", () => {
+    const source = readFileSync("src/agents/orchestrator.ts", "utf8");
+    let cursor = 0;
+    let branches = 0;
+    for (;;) {
+      const at = source.indexOf('"Silent stream error"', cursor);
+      if (at < 0) break;
+      const next = source.indexOf("silentStreamFallback(", at);
+      const window = source.slice(at, next);
+      expect(window, `streaming-error branch ${branches + 1} no longer compacts before the fallback`)
+        .toContain("this.compactSessionAfterHardTimeout(err, session, chatId)");
+      branches += 1;
+      cursor = next + 1;
+    }
+    expect(branches).toBe(2);
+  });
+});

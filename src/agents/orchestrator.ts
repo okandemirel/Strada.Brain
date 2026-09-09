@@ -98,6 +98,8 @@ import {
 } from "./providers/provider-knowledge.js";
 import {
   compactSession,
+  compactForRetry,
+  isHardTimeoutError,
   estimateTokens,
   COMPACTION_TRIGGER_RATIO,
   COMPACTION_TARGET_RATIO,
@@ -3740,6 +3742,27 @@ export class Orchestrator {
     }
   }
 
+  /**
+   * A call that produced nothing for the whole hard ceiling gets a smaller
+   * retry: the session is compacted to half its estimate before the
+   * non-streaming fallback runs (measured 2026-09-09: two 600 s zero-output
+   * calls on a 57k turn). Returns true when something was compacted.
+   */
+  private compactSessionAfterHardTimeout(err: unknown, session: Session, chatId: string): boolean {
+    if (!isHardTimeoutError(err)) return false;
+    const result = compactForRetry(session.messages, session.compactionSummary);
+    if (!result.compacted) return false;
+    session.messages = result.messages;
+    if (result.summary) session.compactionSummary = result.summary;
+    getLogger().warn("Session compacted after hard-timeout — retrying with a smaller prompt", {
+      chatId,
+      stage: result.stageApplied,
+      originalTokens: result.originalTokens,
+      finalTokens: result.finalTokens,
+    });
+    return true;
+  }
+
   /** System prompt with the rolling compaction summary appended (if any). */
   private withCompactionSummary(systemPrompt: string, session: Session): string {
     return session.compactionSummary
@@ -3984,6 +4007,7 @@ export class Orchestrator {
           throw err;
         }
         // Non-cancel error → the same non-streaming fallback v1 runs, under a fresh scope.
+        this.compactSessionAfterHardTimeout(err, session, chatId);
         return await this.silentStreamFallback(
           provider, effectivePrompt, session, toolDefinitions, externalSignal, chatId, runClock,
         );
@@ -4066,6 +4090,7 @@ export class Orchestrator {
       }
       const errMsg = err instanceof Error ? err.message : "Unknown streaming error";
       getLogger().error("Silent stream error", { chatId, error: errMsg });
+      this.compactSessionAfterHardTimeout(err, session, chatId);
       // Fallback to non-streaming under the SAME per-call deadline v1 used (extracted; the
       // OFF call passes no runClock → AbortSignal.timeout, byte-identical to the prior inline).
       return await this.silentStreamFallback(

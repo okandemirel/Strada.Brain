@@ -74,6 +74,26 @@ describe("OpencodeProvider", () => {
     });
   });
 
+  it("OPENCODE_CONTEXT_WINDOW sets the window compaction plans against; below 8192 or unset means 128k (measured 2026-09-09: the free tier hung at 57k)", async () => {
+    const before = process.env["OPENCODE_CONTEXT_WINDOW"];
+    try {
+      process.env["OPENCODE_CONTEXT_WINDOW"] = "64000";
+      vi.resetModules();
+      const mod = await import("./opencode.js");
+      expect(mod.OPENCODE_CONTEXT_WINDOW).toBe(64_000);
+      expect(new mod.OpencodeProvider({ apiKey: "k" } as never).capabilities.contextWindow).toBe(64_000);
+      process.env["OPENCODE_CONTEXT_WINDOW"] = "100";
+      vi.resetModules();
+      expect((await import("./opencode.js")).OPENCODE_CONTEXT_WINDOW).toBe(128_000);
+      delete process.env["OPENCODE_CONTEXT_WINDOW"];
+      vi.resetModules();
+      expect((await import("./opencode.js")).OPENCODE_CONTEXT_WINDOW).toBe(128_000);
+    } finally {
+      if (before === undefined) delete process.env["OPENCODE_CONTEXT_WINDOW"]; else process.env["OPENCODE_CONTEXT_WINDOW"] = before;
+      vi.resetModules();
+    }
+  });
+
   it("OPENCODE_MAX_TOKENS below one token is not an override; a fraction is floored (Codex review 2026-09-09: 0.5 became max_tokens 0)", async () => {
     const before = process.env["OPENCODE_MAX_TOKENS"];
     try {

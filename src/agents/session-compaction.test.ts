@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { ConversationMessage } from "./providers/provider-core.interface.ts";
 import type { CompactableMessage } from "./session-compaction.ts";
+import { compactForRetry, isHardTimeoutError, estimateTokens as estimateTokensForRetry } from "./session-compaction.ts";
 import {
   compactSession,
   estimateTokens,
@@ -327,5 +328,32 @@ describe("orphan tool-reference repair (BUG 2)", () => {
     }
     for (const id of callIds) expect(resultIds.has(id)).toBe(true);
     for (const id of resultIds) expect(callIds.has(id)).toBe(true);
+  });
+});
+
+describe("compactForRetry — the smaller prompt after a zero-output hard-timeout (2026-09-09)", () => {
+  const big = (i: number): ConversationMessage => ({ role: i % 2 === 0 ? "user" : "assistant", content: `m${i} ` + "x".repeat(4_000) });
+
+  it("recognises the run clock's hard-timeout and nothing else", () => {
+    expect(isHardTimeoutError(new Error('Call aborted: {"kind":"hard-timeout","scope":"call"}'))).toBe(true);
+    expect(isHardTimeoutError(new Error("fetch failed"))).toBe(false);
+    expect(isHardTimeoutError(undefined)).toBe(false);
+  });
+
+  it("halves the estimate and keeps the last two messages verbatim", () => {
+    const messages = Array.from({ length: 24 }, (_, i) => big(i));
+    const before = estimateTokensForRetry(messages);
+    const result = compactForRetry(messages);
+    expect(result.compacted).toBe(true);
+    expect(result.finalTokens).toBeLessThanOrEqual(Math.floor(before / 2));
+    expect(result.messages.at(-1)?.content).toBe(messages[23]!.content);
+    expect(result.messages.at(-2)?.content).toBe(messages[22]!.content);
+  });
+
+  it("does not shred a short conversation: nothing under the floor is compacted", () => {
+    const messages: ConversationMessage[] = Array.from({ length: 4 }, (_, i) => ({ role: i % 2 === 0 ? "user" : "assistant", content: `short ${i}` }));
+    const result = compactForRetry(messages);
+    expect(result.compacted).toBe(false);
+    expect(result.messages).toHaveLength(4);
   });
 });
