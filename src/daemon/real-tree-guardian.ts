@@ -494,6 +494,8 @@ export class RealTreeGuardian {
           origin: "daemon",
           triggerName: "real-tree-guardian",
           workspacePolicy: "none",
+          // One agent fixes N named errors; a supervisor plan here burned an hour on node 1 (2026-09-09).
+          supervisorMode: "off",
         },
       );
       this.fixTaskId = task.id;

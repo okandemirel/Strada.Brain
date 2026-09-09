@@ -77,6 +77,8 @@ export class TaskManager extends EventEmitter {
       origin?: TaskOrigin;
       triggerName?: string;
       workspacePolicy?: "none";
+      /** "off": run as ONE agent — no top-level supervisor plan, no task lease (the guardian's compile repairs). */
+      supervisorMode?: "auto" | "off";
       goalTree?: GoalTree;
       forceSharedPlanning?: boolean;
       userContent?: string | MessageContent[];
@@ -108,6 +110,7 @@ export class TaskManager extends EventEmitter {
       origin: options?.origin ?? "user",
       triggerName: options?.triggerName,
       workspacePolicy: options?.workspacePolicy,
+      supervisorMode: options?.supervisorMode,
       goalTree: options?.goalTree,
       forceSharedPlanning: options?.forceSharedPlanning,
       userContent: options?.userContent,
@@ -276,6 +279,7 @@ export class TaskManager extends EventEmitter {
       userId: task.userId,
       orchestrator: this.replayOrchestrator(task),
       workspacePolicy: task.workspacePolicy,
+      supervisorMode: task.supervisorMode,
       userContent: task.userContent,
       attachments: task.attachments,
       // audited 2026-09-02: persisted but never forwarded — see replayForcesSharedPlanning.
@@ -360,6 +364,7 @@ export class TaskManager extends EventEmitter {
       userId: task.userId,
       orchestrator: this.replayOrchestrator(task),
       workspacePolicy: task.workspacePolicy,
+      supervisorMode: task.supervisorMode,
       userContent: task.userContent,
       attachments: task.attachments,
       // audited 2026-09-02: persisted but never forwarded — see replayForcesSharedPlanning.
@@ -382,6 +387,7 @@ export class TaskManager extends EventEmitter {
         userId: task.userId,
         orchestrator: this.replayOrchestrator(task),
         workspacePolicy: task.workspacePolicy,
+        supervisorMode: task.supervisorMode,
         userContent: task.userContent,
         attachments: task.attachments,
         // audited 2026-09-02: persisted but never forwarded — see replayForcesSharedPlanning.
@@ -401,6 +407,7 @@ export class TaskManager extends EventEmitter {
       attachments: task.attachments,
       orchestrator: this.replayOrchestrator(task),
       workspacePolicy: task.workspacePolicy,
+      supervisorMode: task.supervisorMode,
       conversationId: task.conversationId,
       userId: task.userId,
       parentId: task.id,
@@ -455,6 +462,7 @@ export class TaskManager extends EventEmitter {
       attachments: task.attachments,
       orchestrator: this.replayOrchestrator(task),
       workspacePolicy: task.workspacePolicy,
+      supervisorMode: task.supervisorMode,
       conversationId: task.conversationId,
       userId: task.userId,
       parentId: task.id,
@@ -475,6 +483,7 @@ export class TaskManager extends EventEmitter {
         userId: task.userId,
         orchestrator: this.replayOrchestrator(task),
         workspacePolicy: task.workspacePolicy,
+        supervisorMode: task.supervisorMode,
         userContent: task.userContent,
         attachments: task.attachments,
         // audited 2026-09-02: persisted but never forwarded — see replayForcesSharedPlanning.
@@ -496,6 +505,7 @@ export class TaskManager extends EventEmitter {
       attachments: task.attachments,
       orchestrator: this.replayOrchestrator(task),
       workspacePolicy: task.workspacePolicy,
+      supervisorMode: task.supervisorMode,
       conversationId: task.conversationId,
       userId: task.userId,
       parentId: task.id,

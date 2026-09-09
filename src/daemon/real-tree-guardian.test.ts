@@ -119,6 +119,7 @@ describe("RealTreeGuardian", () => {
     expect(submitted).toHaveLength(1);
     expect(submitted[0]!.prompt).toContain("CS0101");
     expect(submitted[0]!.options?.workspacePolicy).toBe("none");
+    expect(submitted[0]!.options?.supervisorMode).toBe("off");
     expect(submitted[0]!.options?.origin).toBe("daemon");
     expect(messages).toHaveLength(1);
 

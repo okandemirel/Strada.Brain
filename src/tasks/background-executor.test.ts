@@ -711,6 +711,39 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
     );
   });
 
+  it("supervisorMode \"off\" runs as one agent: no admission call, no task lease, even for a long prompt (2026-09-09)", async () => {
+    const task = createTestTask(undefined, { supervisorMode: "off" } as never);
+    mockDecomposer.shouldDecompose.mockReturnValue(true);
+    mockOrch.evaluateSupervisorAdmission.mockClear();
+    const acquireLease = vi.fn().mockResolvedValue({
+      path: "/tmp/lease",
+      release: vi.fn().mockResolvedValue(undefined),
+      commit: vi.fn().mockResolvedValue({ written: [], conflicts: [] }),
+    });
+
+    const executor = new BackgroundExecutor({
+      orchestrator: mockOrch as any,
+      decomposer: mockDecomposer as any,
+      goalStorage: mockGoalStorage as any,
+      workspaceLeaseManager: { acquireLease } as any,
+      aiProvider: undefined,
+      channel: undefined,
+    });
+    const mockTaskManager = { updateStatus: vi.fn(), complete: vi.fn(), fail: vi.fn(), block: vi.fn() };
+    executor.setTaskManager(mockTaskManager as any);
+
+    executor.enqueue(task, new AbortController().signal, vi.fn());
+    await vi.waitFor(() => {
+      expect(mockTaskManager.complete).toHaveBeenCalled();
+    }, { timeout: 5000 });
+
+    expect(mockOrch.evaluateSupervisorAdmission).not.toHaveBeenCalled();
+    // No task-level (shared-planning) lease; the worker envelope's own lease is
+    // still fine — it is what keeps a single agent's edits off the real tree.
+    expect(acquireLease).not.toHaveBeenCalledWith(expect.objectContaining({ label: `task-${task.id}` }));
+    expect(acquireLease.mock.calls.every((c) => String((c[0] as { label: string }).label).endsWith(`-worker-${task.id}`))).toBe(true);
+  });
+
   it("routes to direct_worker when task has no goalTree even if shouldDecompose returns true", async () => {
     // Without a pre-built goalTree, tasks should go through the direct worker path
     // (PAOR loop) instead of being decomposed into goal nodes — this prevents

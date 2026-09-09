@@ -654,6 +654,13 @@ export class BackgroundExecutor {
       reason: "unavailable",
     };
 
+    if (task.supervisorMode === "off" && !task.goalTree) {
+      return {
+        decision: { path: "direct_worker", reason: "supervisor_off" },
+        supervisorGoalStartedAt: 0,
+      };
+    }
+
     const supervisorCapableOrchestrator = taskOrchestrator as IOrchestrator & {
       evaluateSupervisorAdmission?: (params: {
         prompt: string;
@@ -1402,9 +1409,14 @@ export class BackgroundExecutor {
       const hasRichInput =
         (task.attachments?.length ?? 0) > 0 ||
         (Array.isArray(task.userContent) && task.userContent.some((block) => block.type !== "text"));
-      const shouldDecomposeTask = this.decomposer?.shouldDecompose(task.prompt) ?? false;
+      // supervisorMode "off": one agent, no plan, no task lease. Measured
+      // 2026-09-09 12:37: the guardian's 3-error compile repair was decomposed
+      // into 8 nodes and its first node spent its whole 60-min budget
+      // "extracting" errors that were already in the prompt; 7 nodes skipped.
+      const singleAgent = task.supervisorMode === "off";
+      const shouldDecomposeTask = !singleAgent && (this.decomposer?.shouldDecompose(task.prompt) ?? false);
       const shouldAttemptSharedPlanning =
-        Boolean(task.goalTree) || Boolean(task.forceSharedPlanning) || shouldDecomposeTask;
+        Boolean(task.goalTree) || (!singleAgent && (Boolean(task.forceSharedPlanning) || shouldDecomposeTask));
       const shouldUseTaskWorkspace =
         task.workspacePolicy !== "none" &&
         (shouldAttemptSharedPlanning || (!hasRichInput && shouldDecomposeTask));

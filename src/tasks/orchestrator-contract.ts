@@ -108,6 +108,7 @@ export type SupervisorAdmissionReason =
   | "busy"
   | "low_complexity"
   | "not_decomposable"
+  | "supervisor_off"
   | "unavailable"
   | "supervisor_error";
 

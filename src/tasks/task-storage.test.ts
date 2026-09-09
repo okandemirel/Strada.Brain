@@ -69,6 +69,13 @@ describe("TaskStorage", () => {
 
     expect(storage.load(direct.id)?.workspacePolicy).toBe("none");
     expect(storage.load(leased.id)?.workspacePolicy).toBeUndefined();
+
+    // Same class of bug for supervisorMode (2026-09-09): a replayed single-agent
+    // repair must not grow a supervisor plan after a restart.
+    const single = makeTask(TaskStatus.failed, { supervisorMode: "off" } as never);
+    storage.save(single);
+    expect(storage.load(single.id)?.supervisorMode).toBe("off");
+    expect(storage.load(leased.id)?.supervisorMode).toBeUndefined();
   });
 
   it("markCancelled persists the reason its descendants read; a plain cancel leaves none", () => {

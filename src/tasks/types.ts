@@ -140,6 +140,11 @@ export interface Task {
    * impossible inside a lease — the real-tree guardian's fix tasks use this.
    */
   workspacePolicy?: "none";
+  /**
+   * "off": this task runs as ONE agent — no top-level supervisor plan, no task
+   * lease. Persisted (2026-09-09) so a replayed repair stays single-agent.
+   */
+  supervisorMode?: "auto" | "off";
   /** Pre-decomposed goal tree for goal tasks (passed from Orchestrator to BackgroundExecutor) */
   goalTree?: GoalTree;
   /** Hint that the request already produced a goal plan and must re-enter shared planning. */

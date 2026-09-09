@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   parent_id TEXT,
   workspace_policy TEXT,
   cancel_reason TEXT,
+  supervisor_mode TEXT,
   FOREIGN KEY (parent_id) REFERENCES tasks(id) ON DELETE SET NULL
 );
 
@@ -85,6 +86,7 @@ interface TaskRow {
   parent_id: string | null;
   workspace_policy?: string | null;
   cancel_reason?: string | null;
+  supervisor_mode?: string | null;
 }
 
 interface ProgressRow {
@@ -162,6 +164,7 @@ export class TaskStorage {
       // real root" fix task silently took a lease and its deletions were declined.
       task.workspacePolicy ?? null,
       task.cancelReason ?? null,
+      task.supervisorMode ?? null,
     );
   }
 
@@ -339,6 +342,7 @@ export class TaskStorage {
       verification: this.parseVerification(row.verification_json),
       workspacePolicy: row.workspace_policy === "none" ? "none" : undefined,
       cancelReason: row.cancel_reason === "superseded" ? "superseded" : undefined,
+      supervisorMode: row.supervisor_mode === "off" ? "off" : undefined,
     };
   }
 
@@ -359,6 +363,7 @@ export class TaskStorage {
       ["verification_json", "TEXT"],
       ["workspace_policy", "TEXT"],
       ["cancel_reason", "TEXT"],
+      ["supervisor_mode", "TEXT"],
     ];
     const missingColumns = migratableColumns.filter(([name]) => !knownColumns.has(name));
 
@@ -457,9 +462,9 @@ export class TaskStorage {
           id, chat_id, channel_type, conversation_id, user_id, goal_root_id,
           title, status, prompt, result, error, origin, trigger_name,
           force_shared_planning, user_content_json, attachments_json,
-          created_at, updated_at, completed_at, parent_id, workspace_policy, cancel_reason
+          created_at, updated_at, completed_at, parent_id, workspace_policy, cancel_reason, supervisor_mode
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       getTask: `SELECT * FROM tasks WHERE id = ?`,
       updateStatus: `UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?`,
