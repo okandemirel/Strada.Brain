@@ -47,6 +47,9 @@ import {
   type RunnerHostOrchestrator,
 } from "../../../agent-core/runner/index.js";
 
+/** How long an aborted sub-agent run may take to settle before its lease is committed and released. */
+export const DELEGATION_ABORT_GRACE_MS = 90_000;
+
 // =============================================================================
 // OPTIONS
 // =============================================================================
@@ -780,8 +783,7 @@ export class DelegationManager {
         // the delegation timeout; toWorkerRunResult projects AgentRunResult → WorkerRunResult.
         const mode = "supervisor-node" as const;
         const runner = selectAgentRunner(orchestrator as unknown as RunnerHostOrchestrator, mode);
-        const runResult = await Promise.race([
-          runner.run(
+        const runPromise = runner.run(
             {
               prompt: message.text,
               chatId: message.chatId,
@@ -798,12 +800,33 @@ export class DelegationManager {
               externalSignal: abortController.signal,
               deliverFinal: () => {},
             },
-          ),
-          this.waitForAbort(
+          );
+        runPromise.catch(() => undefined);
+        let runResult: Awaited<typeof runPromise> | undefined;
+        try {
+          runResult = await Promise.race([
+            runPromise,
+            this.waitForAbort(
             abortController.signal,
             `delegation(${request.type}, sub=${subAgentId}, timeoutMs=${typeConfig.timeoutMs})`,
           ),
-        ]);
+          ]);
+        } catch (raceErr) {
+          // The budget expired while the run was still going. The finally block
+          // below commits and RELEASES the lease — deleting the directory a
+          // tool may still be working in. Measured 2026-09-09 05:07: a
+          // code_review sub-agent's unity_verify_change was mid-compile when its
+          // workspace was released; Unity ran on a vanishing directory and
+          // reported "compile failed with 0 errors". Give the aborted run a
+          // bounded grace to settle before the lease goes.
+          if (abortController.signal.aborted) {
+            await Promise.race([
+              runPromise.then(() => undefined, () => undefined),
+              new Promise<void>((r) => setTimeout(r, DELEGATION_ABORT_GRACE_MS)),
+            ]);
+          }
+          throw raceErr;
+        }
         workerResult = toWorkerRunResult(runResult);
       } else {
         // Execute with abort awareness

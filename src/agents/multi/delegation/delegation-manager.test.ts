@@ -6,7 +6,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import Database from "better-sqlite3";
-import { DelegationManager } from "./delegation-manager.js";
+import { DELEGATION_ABORT_GRACE_MS, DelegationManager } from "./delegation-manager.js";
 import type { DelegationManagerOptions } from "./delegation-manager.js";
 import { DelegationLog } from "./delegation-log.js";
 import { TierRouter } from "./tier-router.js";
@@ -1755,5 +1755,70 @@ describe("DelegationManager", () => {
       // The provider resolution should fail because deepseek is down and no other provider has a key
       await expect(healthManager.delegate(request)).rejects.toThrow();
     });
+  });
+});
+
+describe("a timed-out delegation does not release its lease under a running tool", () => {
+  // Measured 2026-09-09 05:07: a code_review sub-agent's unity_verify_change
+  // was mid-compile when its 60 s budget expired; the workspace was committed
+  // and released at once, Unity ran on a vanishing directory and reported
+  // "Headless compile failed with 0 error(s)".
+  function leaseHarness(order: string[]) {
+    const release = vi.fn(async () => { order.push("release"); });
+    const commit = vi.fn(async () => { order.push("commit"); return { written: [], conflicts: [], removed: [], failed: [], conflictsQuarantinedUnder: null }; });
+    const acquireLease = vi.fn().mockResolvedValue({
+      id: "lease-1", kind: "temp-copy", sourceRoot: "/test/project", leaseRoot: "/tmp/leases",
+      path: "/tmp/leases/lease-1", createdAt: Date.now(), commit, release,
+    });
+    return { manager: { acquireLease } as never, release, commit };
+  }
+  const request = (): DelegationRequest => ({
+    type: "code_review", task: "Verify Board.cs", parentAgentId: PARENT_AGENT_ID, depth: 0, mode: "sync", toolContext: TEST_TOOL_CONTEXT,
+  });
+
+  it("waits for the aborted run to settle (bounded) before commit and release", async () => {
+    vi.useFakeTimers();
+    try {
+      const order: string[] = [];
+      orchestratorHasAgentCore = true;
+      scriptedRunnerRun = vi.fn((_req: unknown, io: { externalSignal: AbortSignal }) =>
+        new Promise((resolve) => {
+          // The tool keeps running 2 s past the abort, then the run settles.
+          io.externalSignal.addEventListener("abort", () => {
+            setTimeout(() => { order.push("run-settled"); resolve({ status: "failed", finalText: "", finalSummary: "aborted", provider: "p", catalogVersion: "p:m", assignmentVersion: 0, touchedFiles: [], toolTrace: [], verificationResults: [], reviewFindings: [], artifacts: [], reason: "aborted" }); }, 2_000);
+          }, { once: true });
+        }),
+      );
+      const lease = leaseHarness(order);
+      const mgr = new DelegationManager(buildManagerOpts({ workspaceLeaseManager: lease.manager }));
+      const pending = mgr.delegate(request()).catch((e: Error) => e);
+      await vi.advanceTimersByTimeAsync(60_000 + 5); // the code_review budget expires
+      await vi.advanceTimersByTimeAsync(2_500);      // the run settles 2 s later
+      const outcome = await pending;
+      expect(outcome).toBeInstanceOf(Error);
+      expect(order.indexOf("run-settled")).toBeLessThan(order.indexOf("release"));
+      expect(lease.release).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not wait forever: after the grace the lease is released anyway", async () => {
+    vi.useFakeTimers();
+    try {
+      const order: string[] = [];
+      orchestratorHasAgentCore = true;
+      scriptedRunnerRun = vi.fn(() => new Promise(() => undefined)); // never settles
+      const lease = leaseHarness(order);
+      const mgr = new DelegationManager(buildManagerOpts({ workspaceLeaseManager: lease.manager }));
+      const pending = mgr.delegate(request()).catch((e: Error) => e);
+      await vi.advanceTimersByTimeAsync(60_000 + 5);
+      expect(lease.release).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(DELEGATION_ABORT_GRACE_MS + 5);
+      await pending;
+      expect(lease.release).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
