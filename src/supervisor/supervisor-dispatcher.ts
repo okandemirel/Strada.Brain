@@ -38,7 +38,15 @@ export interface DispatcherConfig {
   readonly maxFailureBudget: number;
   /** Measured median turn latency (test seam; defaults to the provider-call gauge). */
   readonly turnPaceMs?: () => number | undefined;
+  /**
+   * How long dispatch() waits for nodes it abandoned on timeout to settle
+   * before returning — i.e. before the task's lease is committed and released
+   * under a tool that may still be running. Measured 2026-09-09 10:20:39:
+   * a unity_generate_sprite hit ENOENT 20 s after the settle's lease release.
+   */
+  readonly abandonGraceMs?: number;
 }
+export const NODE_ABANDON_GRACE_MS = 90_000;
 
 /**
  * A node needs room for this many turns at the MEASURED pace. Measured
@@ -638,6 +646,15 @@ export class SupervisorDispatcher {
       }
 
       await Promise.allSettled(inFlight);
+      if (this.abandoned.length > 0) {
+        const grace = this.config.abandonGraceMs ?? NODE_ABANDON_GRACE_MS;
+        getLoggerSafe().info("Waiting for abandoned node runs to settle before returning the results", {
+          abandoned: this.abandoned.length,
+          graceMs: grace,
+        });
+        await Promise.race([Promise.allSettled(this.abandoned), this.delay(grace)]);
+        this.abandoned.length = 0;
+      }
 
       this.emitter?.emit("supervisor:wave_done", {
         waveIndex,
@@ -798,6 +815,8 @@ export class SupervisorDispatcher {
     return Math.max(base, scaled);
   }
   private budgetRaiseLogged = false;
+  /** Node runs that outlived their budget or abort and are still in flight. */
+  private readonly abandoned: Promise<void>[] = [];
 
   private async executeWithTimeout(
     node: TaggedGoalNode,
@@ -869,6 +888,9 @@ export class SupervisorDispatcher {
       const result = await Promise.race([nodePromise, timeoutPromise, abortPromise]);
       return result;
     } catch (err) {
+      // The node run is still in flight after a timeout/abort; dispatch() waits
+      // for it (bounded) before handing the results — and the lease — back.
+      this.abandoned.push(nodePromise.then(() => undefined, () => undefined));
       const elapsed = Date.now() - startedAt;
       // audited 2026-09-02: the controller was aborted BEFORE the reason was
       // classified, so `signal.aborted` was always true, every error read as

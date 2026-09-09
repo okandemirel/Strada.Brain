@@ -322,13 +322,43 @@ describe("SupervisorDispatcher", () => {
     expect(r2[0]?.output).toContain("Node time budget exhausted after 100ms");
   });
 
+  it("waits (bounded) for a timed-out node's run to settle before returning — the task's lease is released after dispatch (measured 2026-09-09 10:20: ENOENT under a running generate)", async () => {
+    let settledAt = 0;
+    const executeNode = vi.fn().mockImplementation(
+      () => new Promise<NodeResult>((resolve) => setTimeout(() => { settledAt = Date.now(); resolve(makeOkResult("X")); }, 400)),
+    );
+    const dispatcher = new SupervisorDispatcher({
+      executeNode,
+      config: { maxParallelNodes: 1, nodeTimeoutMs: 100, maxFailureBudget: 3, abandonGraceMs: 5_000 },
+    });
+    const results = await dispatcher.dispatch([makeAssignedNode("X", "Slow tool", "claude")]);
+    const returnedAt = Date.now();
+    expect(results[0]?.status).toBe("failed"); // the budget verdict stands
+    expect(settledAt).toBeGreaterThan(0); // but the run was allowed to settle first
+    expect(returnedAt).toBeGreaterThanOrEqual(settledAt);
+  });
+
+  it("does not wait forever for an abandoned node: the grace bounds it", async () => {
+    const executeNode = vi.fn().mockImplementation(() => new Promise<NodeResult>(() => undefined));
+    const dispatcher = new SupervisorDispatcher({
+      executeNode,
+      config: { maxParallelNodes: 1, nodeTimeoutMs: 100, maxFailureBudget: 3, abandonGraceMs: 300 },
+    });
+    const startedAt = Date.now();
+    const results = await dispatcher.dispatch([makeAssignedNode("X", "Stuck tool", "claude")]);
+    expect(results[0]?.status).toBe("failed");
+    expect(Date.now() - startedAt).toBeLessThan(2_000);
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(300);
+  });
+
   it("does not retry a node that hit its own per-node timeout", async () => {
     const executeNode = vi.fn().mockImplementation(
       () => new Promise<NodeResult>((resolve) => setTimeout(() => resolve(makeOkResult("X")), 5000)),
     );
     const dispatcher = new SupervisorDispatcher({
       executeNode,
-      config: { maxParallelNodes: 1, nodeTimeoutMs: 100, maxFailureBudget: 3 },
+      // abandonGraceMs 0: this test measures the retry backoff, not the abandon grace.
+      config: { maxParallelNodes: 1, nodeTimeoutMs: 100, maxFailureBudget: 3, abandonGraceMs: 0 },
     });
 
     const startedAt = Date.now();
