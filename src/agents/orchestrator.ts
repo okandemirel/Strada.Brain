@@ -96,6 +96,7 @@ import {
   getRecommendedMaxMessages,
   type ModelIntelligenceLookup,
 } from "./providers/provider-knowledge.js";
+import { summarizeToolSchemaSizes } from "./tool-schema-budget.js";
 import {
   compactSession,
   compactForRetry,
@@ -752,6 +753,7 @@ export class Orchestrator {
   private vaultWriteHook: import("../vault/write-hook.js").InstalledWriteHook | null = null;
   private readonly providerManager: ProviderManager;
   private readonly tools: Map<string, ITool>;
+  private toolSchemaBudgetLogged = false;
   private readonly toolDefinitions: Array<{
     name: string;
     description: string;
@@ -2797,6 +2799,19 @@ export class Orchestrator {
       phase !== AgentPhase.PLANNING &&
       phase !== AgentPhase.REPLANNING &&
       phase !== AgentPhase.REFLECTING;
+
+    // Once per process: what the schemas cost per turn, and which tools carry it
+    // (measured 2026-09-09: 29 863 chars for 59 tools on every worker turn).
+    if (!this.toolSchemaBudgetLogged && this.toolDefinitions.length > 0) {
+      this.toolSchemaBudgetLogged = true;
+      const budget = summarizeToolSchemaSizes(this.toolDefinitions);
+      getLogger().info("Tool schema budget", {
+        tools: budget.tools,
+        totalChars: budget.totalChars,
+        largestShare: Number(budget.largestShare.toFixed(2)),
+        largest: budget.largest.map((l) => `${l.name}=${l.chars}`),
+      });
+    }
 
     return this.toolDefinitions.filter((definition) => {
       const metadata = this.toolMetadataByName.get(definition.name);
