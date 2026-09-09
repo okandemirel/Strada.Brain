@@ -431,10 +431,10 @@ describe("ControlLoopTracker", () => {
   it("a read-only streak is also a stall by TIME: 15 minutes of reads at a slow pace, well under the count limit (measured 2026-09-09: 60 min, ~24 calls, no gate)", () => {
     let clock = 1_000_000;
     const tracker = new ControlLoopTracker({ staleAnalysisThreshold: 100, now: () => clock });
-    // Six distinct reads over ~14 minutes: not yet.
+    // Three distinct reads over ~14 minutes (a slow provider: ~5 min per turn): not yet.
     for (let i = 0; i < ControlLoopTracker.READ_ONLY_TIME_MIN_CALLS; i++) {
       tracker.markToolExecution("file_read", `file_read:{"path":"f${i}.cs"}`);
-      clock += 2.3 * 60_000;
+      clock += 4.6 * 60_000;
     }
     expect(tracker.takeUnreportedReadOnlyStall()).toBeNull();
     // One more read past the 15-minute mark: reported, with the minutes named.
@@ -442,7 +442,7 @@ describe("ControlLoopTracker", () => {
     tracker.markToolExecution("grep_search", "grep_search:{\"pattern\":\"z\"}");
     const stall = tracker.takeUnreportedReadOnlyStall();
     expect(stall?.calls).toBe(ControlLoopTracker.READ_ONLY_TIME_MIN_CALLS + 1);
-    expect(stall?.reason).toMatch(/spent 1[56] minutes on 7 consecutive read-only tool calls/);
+    expect(stall?.reason).toMatch(/spent 1[56] minutes on 4 consecutive read-only tool calls/);
     // Re-armed: the next streak's clock starts at ITS first read, not at the
     // old one — six quick reads right after the report are not a stall.
     for (let i = 0; i < 6; i++) tracker.markToolExecution("file_read", `file_read:{"path":"g${i}.cs"}`);
@@ -462,6 +462,9 @@ describe("ControlLoopTracker", () => {
     clock += 40 * 60_000;
     tracker.markToolExecution("file_read", "file_read:{\"path\":\"a.cs\"}");
     expect(tracker.takeUnreportedReadOnlyStall()).toBeNull();
+    // The third read after 15+ minutes is the floor (measured 2026-09-09: 2 reads per 10 min for 20 min, unreported at a floor of 6).
+    tracker.markToolExecution("file_read", "file_read:{\"path\":\"b.cs\"}");
+    expect(tracker.takeUnreportedReadOnlyStall()?.calls).toBe(3);
   });
 
   it("counts the streaks a run has been told about, and a change resets the count (the escalation level)", () => {

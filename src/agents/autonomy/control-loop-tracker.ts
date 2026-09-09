@@ -76,7 +76,13 @@ export class ControlLoopTracker {
    * of the budget at best. Fifteen minutes of reads is a stall at any pace.
    */
   static readonly READ_ONLY_STALL_MS = 15 * 60_000;
-  static readonly READ_ONLY_TIME_MIN_CALLS = 6;
+  /**
+   * Measured 2026-09-09 14:23-14:43: after the first report the same node kept
+   * reading at 2 calls per 10 minutes — a slow provider stretches every turn —
+   * so 6 was never reached and 20 minutes passed unreported. Three reads in
+   * fifteen minutes with no write is a stall; one or two may be a slow verify.
+   */
+  static readonly READ_ONLY_TIME_MIN_CALLS = 3;
 
   private readonly fpThreshold: number;
   private readonly hasCustomFpThreshold: boolean;
