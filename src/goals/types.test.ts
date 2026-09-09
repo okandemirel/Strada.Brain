@@ -197,6 +197,26 @@ describe("parseLLMOutput", () => {
     expect(result!.nodes[0]!.task).toBe("regenerate the first batch {in place}");
   });
 
+  it("accepts a numbered list when the model wrote no JSON (measured 2026-09-09 18:55: 13.8k chars of closed reasoning, no brace)", () => {
+    const text =
+      "<reasoning>long thinking about batches</reasoning>\n" +
+      "Here is the plan:\n" +
+      "1. Measure the placeholders and regenerate the first 24 in place, then re-measure, verify and commit\n" +
+      "2. Regenerate the next 24 in place, re-measure, verify and commit (after 1)\n" +
+      "- step 3: Regenerate the next 24 in place, re-measure, verify and commit | deps: s2\n" +
+      "That is all.";
+    const result = parseLLMOutput(text);
+    expect(result).not.toBeNull();
+    expect(result!.nodes.map((n) => n.id)).toEqual(["s1", "s2", "s3"]);
+    expect(result!.nodes[0]!.dependsOn).toEqual([]);
+    expect(result!.nodes[1]!.dependsOn).toEqual(["s1"]);
+    expect(result!.nodes[1]!.task).toBe("Regenerate the next 24 in place, re-measure, verify and commit");
+    expect(result!.nodes[2]!.dependsOn).toEqual(["s2"]);
+    // A single line is not a plan; prose without list markers is not a plan.
+    expect(parseLLMOutput("1. do everything")).toBeNull();
+    expect(parseLLMOutput("I would first measure, then regenerate, then verify.")).toBeNull();
+  });
+
   it("balancedObjects is string-aware and returns each top-level object", async () => {
     const { balancedObjects } = await import("./types.js");
     expect(balancedObjects('a {"x": "}"} b {"y": {"z": 1}} c')).toEqual(['{"x": "}"}', '{"y": {"z": 1}}']);

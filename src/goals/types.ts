@@ -241,10 +241,46 @@ export function parseLLMOutput(text: string): LLMDecompositionOutput | null {
         /* not this one */
       }
     }
-    return null;
+    // 4. No JSON at all: a numbered or bulleted list of goals is still a plan.
+    //    Measured 2026-09-09 18:55: 13 813 chars, reasoning closed, no "{" —
+    //    four of six decomposition calls that evening yielded no JSON.
+    return parsePlanList(cleaned);
   } catch {
     return null;
   }
+}
+
+const PLAN_LINE_RE =
+  /^\s*(?:[-*•]\s*)?(?:(?:step\s*)?(s\d+|\d+)\s*[.):|\-]\s*)(.+?)\s*$/i;
+const DEPS_RE = /\(?\s*(?:deps?|depends(?:\s*on)?|after|requires)\s*:?\s*((?:s?\d+\s*(?:,|and|&)?\s*)+)\)?\s*$/i;
+
+/**
+ * A plan written as a list: "1. task", "s2 | task | deps: s1", "- step 3: task (after 2)".
+ * Ids without an "s" get one; a line naming no dependency depends on the
+ * previous line (a list reads top to bottom). Needs at least two lines.
+ */
+export function parsePlanList(text: string): LLMDecompositionOutput | null {
+  const nodes: LLMDecompositionOutput["nodes"] = [];
+  let previous: string | null = null;
+  for (const raw of text.split(/\r?\n/)) {
+    const m = PLAN_LINE_RE.exec(raw);
+    if (!m?.[1] || !m[2]) continue;
+    const id = /^s/i.test(m[1]) ? m[1].toLowerCase() : `s${m[1]}`;
+    let task = m[2].replace(/\s*\|\s*$/, "");
+    let dependsOn: string[] | null = null;
+    const d = DEPS_RE.exec(task);
+    if (d?.[1]) {
+      dependsOn = d[1].split(/\s*(?:,|and|&)\s*/).map((x) => x.trim()).filter(Boolean).map((x) => (/^s/i.test(x) ? x.toLowerCase() : `s${x}`));
+      task = task.slice(0, d.index).replace(/[\s|,(]+$/, "");
+    }
+    task = task.replace(/^\s*\|\s*/, "").trim();
+    if (task.length < 4) continue;
+    nodes.push({ id, task, dependsOn: dependsOn ?? (previous ? [previous] : []) });
+    previous = id;
+  }
+  if (nodes.length < 2) return null;
+  const result = llmDecompositionSchema.safeParse({ nodes });
+  return result.success ? result.data : null;
 }
 
 /** Top-level `{…}` spans with balanced braces, string-aware, in order of appearance. */
