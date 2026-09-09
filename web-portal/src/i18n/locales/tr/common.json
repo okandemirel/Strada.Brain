@@ -127,6 +127,7 @@
   "dashboard.campaign.refused": "teslimat yapısal kapıda reddedildi",
   "dashboard.campaign.currentTask": "Mevcut görev",
   "dashboard.campaign.running": "{{elapsed}} süredir çalışıyor",
+  "dashboard.campaign.lasted": "{{elapsed}} sürdü",
   "dashboard.campaign.lastProgress": "Son ilerleme {{age}} önce",
   "dashboard.campaign.otherTasks": "Diğer etkin görevler",
   "dashboard.campaign.deliverySent": "Teslimat raporu gönderildi",

@@ -213,7 +213,10 @@ export function formatCampaignStatus(snapshot: CampaignStatusSnapshot, now: numb
 
   const task = snapshot.currentTask;
   if (task) {
-    lines.push("", `*Current task* \`${task.id}\` — ${task.status}, running ${formatDuration(now - task.createdAt)}`);
+    // A settled task is not "running": say how long it lasted.
+    const active = ACTIVE_STATUSES.has(task.status as never);
+    const span = active ? `running ${formatDuration(now - task.createdAt)}` : `lasted ${formatDuration(task.updatedAt - task.createdAt)}`;
+    lines.push("", `*Current task* \`${task.id}\` — ${task.status}, ${span}`);
     if (task.lastProgress) {
       const age = task.lastProgressAt !== undefined ? ` (${formatDuration(now - task.lastProgressAt)} ago)` : "";
       lines.push(`Last progress${age}: ${shorten(task.lastProgress, 200)}`);

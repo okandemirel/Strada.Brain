@@ -6,6 +6,9 @@ import { fetchJson } from '../utils/api'
 import { formatDurationShort } from '../utils/format'
 import type { BuildMeasurement, BuildStatus, CampaignStatus, GuardianStatus, MilestoneStatus } from '../types/build-status'
 
+/** Task statuses that are still in flight (mirrors ACTIVE_STATUSES in the daemon). */
+const ACTIVE_TASK_STATES = new Set(['pending', 'executing', 'verifying', 'paused', 'waiting_for_input'])
+
 const STATE_PILL: Record<CampaignStatus['state'], string> = {
   'drafting-gdd': 'bg-accent/10 text-accent',
   'awaiting-approval': 'bg-warning/10 text-warning',
@@ -228,7 +231,10 @@ export default function CampaignCard({ now: nowOverride }: { now?: number } = {}
               <div className="text-xs" data-testid="current-task">
                 <span className="uppercase tracking-wide text-text-tertiary">{t('dashboard.campaign.currentTask')}</span>
                 <div className="mt-1 text-text">
-                  <span className="font-mono">{c.currentTask.id}</span> · {c.currentTask.status} · {t('dashboard.campaign.running', { elapsed: formatDurationShort(now - c.currentTask.createdAt) })}
+                  <span className="font-mono">{c.currentTask.id}</span> · {c.currentTask.status} ·{' '}
+                  {ACTIVE_TASK_STATES.has(c.currentTask.status)
+                    ? t('dashboard.campaign.running', { elapsed: formatDurationShort(now - c.currentTask.createdAt) })
+                    : t('dashboard.campaign.lasted', { elapsed: formatDurationShort(c.currentTask.updatedAt - c.currentTask.createdAt) })}
                 </div>
                 {c.currentTask.lastProgress && (
                   <div className="mt-0.5 text-text-secondary">

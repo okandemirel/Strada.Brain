@@ -127,6 +127,7 @@
   "dashboard.campaign.refused": "delivery refused by the structural gate",
   "dashboard.campaign.currentTask": "Current task",
   "dashboard.campaign.running": "running {{elapsed}}",
+  "dashboard.campaign.lasted": "lasted {{elapsed}}",
   "dashboard.campaign.lastProgress": "Last progress {{age}} ago",
   "dashboard.campaign.otherTasks": "Other active tasks",
   "dashboard.campaign.deliverySent": "Delivery report sent",

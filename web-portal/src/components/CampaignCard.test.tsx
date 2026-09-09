@@ -100,6 +100,16 @@ describe('CampaignCard', () => {
     expect(guardian).toContain('fix task task_fix running 9m (2/3)')
   })
 
+  it("a settled current task 'lasted' instead of 'running'", () => {
+    const st = status()
+    st.campaign!.currentTask = { id: 'task_old', title: 'T', status: 'cancelled', createdAt: NOW - 9 * HOUR, updatedAt: NOW - 8 * HOUR }
+    useCampaignStatus.mockReturnValue({ data: st, isError: false })
+    render(<CampaignCard now={NOW} />)
+    const text = screen.getByTestId('current-task').textContent ?? ''
+    expect(text).toContain('lasted 1h 0m')
+    expect(text).not.toContain('running')
+  })
+
   it('says there is no campaign instead of rendering an empty ladder', () => {
     useCampaignStatus.mockReturnValue({ data: status({ campaign: null, guardian: null }), isError: false })
     render(<CampaignCard now={NOW} />)

@@ -1853,6 +1853,8 @@ describe("CampaignManager", () => {
     expect(bounced.placeholderArtAtStart).toEqual({ sprites: 100, placeholders: 95 });
     expect(tasks.submitted.at(-1)!.prompt).toContain("ART NOT PRODUCED: when this sprint began, 95 of 100");
     expect(tasks.submitted.at(-1)!.prompt).toContain("unity_generate_sprite");
+    // The in-place rule (measured 2026-09-09: 12 *_Real.png beside the placeholders, count unchanged).
+    expect(tasks.submitted.at(-1)!.prompt).toContain("SAME name and the SAME path as the placeholder");
     expect(bounced.attempts).toBe(1); // a bounce is not a spent attempt
 
     art = { sprites: 103, placeholders: 95 }; // eight real sprites ADDED under new names; placeholders untouched

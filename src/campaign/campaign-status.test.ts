@@ -135,6 +135,19 @@ describe("formatCampaignStatus", () => {
     expect(text).toContain("/campaign revive");
   });
 
+  it("a settled current task 'lasted', it is not 'running' (seen live 2026-09-09: cancelled · running 8h 37m)", () => {
+    const c = campaign({ state: "done" });
+    const snapshot = buildCampaignStatus(c, {
+      maxMilestoneAttempts: 2,
+      milestoneTimeBoxMs: HOUR,
+      getTask: () => ({ ...task("task_9", TaskStatus.cancelled, "planning done", NOW - 9 * HOUR), updatedAt: NOW - 8 * HOUR } as Task),
+      listTasks: () => [],
+    });
+    const text = formatCampaignStatus(snapshot, NOW);
+    expect(text).toContain("`task_9` — cancelled, lasted 1h 0m");
+    expect(text).not.toContain("cancelled, running");
+  });
+
   it("reports whether a done campaign's delivery report reached the channel", () => {
     const base = { maxMilestoneAttempts: 2, milestoneTimeBoxMs: HOUR, getTask: () => null, listTasks: () => [] };
     expect(formatCampaignStatus(buildCampaignStatus(campaign({ state: "done", deliveryReported: true }), base), NOW)).toContain(
