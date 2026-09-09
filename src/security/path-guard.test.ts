@@ -211,3 +211,23 @@ describe("validatePath blocks every .env variant, not just single-suffix ones", 
     });
   }
 });
+
+describe("redirectRealCheckoutPath", () => {
+  it("rewrites a checkout path into the lease, including when the checkout is the filesystem root (Codex review 2026-09-09: '/' + '/' was '//')", async () => {
+    const { redirectRealCheckoutPath } = await import("./path-guard.js");
+    const lease = mkdtempSync(join(tmpdir(), "lease-redirect-"));
+    try {
+      writeFileSync(join(lease, ".strada-lease-owner.json"), JSON.stringify({ projectRoot: "/" }), "utf8");
+      expect(redirectRealCheckoutPath(lease, "/Assets/a")).toBe("Assets/a");
+      expect(redirectRealCheckoutPath(lease, "/")).toBe(".");
+      writeFileSync(join(lease, ".strada-lease-owner.json"), JSON.stringify({ projectRoot: "/Users/x/Game" }), "utf8");
+      // The owner file changed; the cache keys on mtime — force a distinct mtime.
+      const { utimesSync } = await import("node:fs");
+      utimesSync(join(lease, ".strada-lease-owner.json"), new Date(Date.now() + 5_000), new Date(Date.now() + 5_000));
+      expect(redirectRealCheckoutPath(lease, "/Users/x/Game/Assets/a")).toBe("Assets/a");
+      expect(redirectRealCheckoutPath(lease, "/Users/x/Gamer/Assets/a")).toBeUndefined();
+    } finally {
+      rmSync(lease, { recursive: true, force: true });
+    }
+  });
+});

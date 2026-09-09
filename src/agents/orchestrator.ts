@@ -5302,10 +5302,14 @@ export class Orchestrator {
 
       this.trackToolError(breakerScope.key, activeToolCall.name, true, breakerTarget);
 
+      // A thrown error is a failure too (Codex review 2026-09-09): the model
+      // sees the classified line; the whole message is kept on disk.
+      const archivedFailure = archiveToolFailure({ tool: activeToolCall.name, chatId, input: activeToolCall.input, content: errMsg });
       return {
         toolCallId: activeToolCall.id,
         content: `Tool execution failed: ${classifyErrorMessage(error)}`,
         isError: true,
+        ...(archivedFailure ? { metadata: { archivedFailure } } : {}),
       };
     }
   }

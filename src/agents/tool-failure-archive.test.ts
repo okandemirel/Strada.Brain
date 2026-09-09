@@ -91,6 +91,18 @@ describe("archiveToolFailure", () => {
     expect(existsSync(join(root, "2026-09-07"))).toBe(true);
   });
 
+  it("keeps pruning as the days pass in one process (Codex review 2026-09-09: September stayed after October)", () => {
+    const root = freshRoot();
+    mkdirSync(join(root, "2026-08-01"), { recursive: true });
+    expect(archiveToolFailure({ tool: "t", chatId: "c", input: {}, content: "x", at: new Date("2026-09-08T10:00:00.000Z") }, root)).toBeTruthy();
+    expect(existsSync(join(root, "2026-08-01"))).toBe(false);
+    expect(existsSync(join(root, "2026-09-08"))).toBe(true);
+    // A month later, in the same process: September is now older than ARCHIVE_KEEP_DAYS.
+    expect(archiveToolFailure({ tool: "t", chatId: "c", input: {}, content: "x", at: new Date("2026-10-08T10:00:00.000Z") }, root)).toBeTruthy();
+    expect(existsSync(join(root, "2026-09-08"))).toBe(false);
+    expect(existsSync(join(root, "2026-10-08"))).toBe(true);
+  });
+
   it("never overwrites: five failures of one tool in the same millisecond leave five files", () => {
     // Review 2026-09-08: parallel file_read refusals in one turn left two files of five.
     const root = freshRoot();
@@ -124,5 +136,15 @@ describe("archiveToolFailure", () => {
     // The 24k+ result is kept whole (no 8 KB logger cut).
     expect(text).toContain("y".repeat(12_000));
     expect(text).toContain("z".repeat(12_000));
+  });
+});
+
+describe("every failure path archives", () => {
+  it("the tool-execution catch block archives the thrown message, not only error results (Codex review 2026-09-09)", () => {
+    const source = readFileSync("src/agents/orchestrator.ts", "utf8");
+    const at = source.indexOf('logger.error("Tool execution error"');
+    expect(at).toBeGreaterThan(0);
+    const window = source.slice(at, source.indexOf("Tool execution failed:", at));
+    expect(window).toContain("archiveToolFailure({ tool: activeToolCall.name, chatId, input: activeToolCall.input, content: errMsg })");
   });
 });

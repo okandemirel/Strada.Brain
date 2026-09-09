@@ -51,12 +51,17 @@ export interface ArchivedToolFailure {
   readonly at?: Date;
 }
 
-const prunedRoots = new Set<string>();
+/** Day (YYYY-MM-DD) each root was last pruned for — a long-lived daemon crosses midnights. */
+const prunedRootDay = new Map<string, string>();
 
 /** Remove day directories older than ARCHIVE_KEEP_DAYS; once per root per process. */
 function pruneOldDays(root: string, today: Date): void {
-  if (prunedRoots.has(root)) return;
-  prunedRoots.add(root);
+  // Once per root per DAY, not once per process: Codex review 2026-09-09 —
+  // archive September 8, then October 8 in the same process, and September
+  // stayed. A daemon that runs for weeks accumulated every day it had seen.
+  const day = today.toISOString().slice(0, 10);
+  if (prunedRootDay.get(root) === day) return;
+  prunedRootDay.set(root, day);
   const cutoff = new Date(today.getTime() - ARCHIVE_KEEP_DAYS * 86_400_000).toISOString().slice(0, 10);
   let days: string[];
   try {

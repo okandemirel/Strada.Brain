@@ -170,7 +170,10 @@ export function redirectRealCheckoutPath(projectRoot: string, absolutePath: stri
   const owner = leaseOwnerRootOf(projectRoot);
   if (!owner) return undefined;
   const target = resolve(absolutePath);
-  if (target !== owner && !target.startsWith(owner + sep)) return undefined;
+  // An owner that IS the root already ends in the separator ("/" + "/" was
+  // "//", and nothing under it matched — Codex review 2026-09-09).
+  const ownerPrefix = owner.endsWith(sep) ? owner : owner + sep;
+  if (target !== owner && !target.startsWith(ownerPrefix)) return undefined;
   const rel = relative(owner, target);
   return rel === "" ? "." : rel;
 }

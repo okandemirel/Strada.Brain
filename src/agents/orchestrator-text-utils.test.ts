@@ -126,6 +126,13 @@ describe("orchestrator-text-utils", () => {
       expect(result.clean).toMatch(/\[base64:\d+ch\]|\[filtered:base64-large\]/);
     });
 
+    it("collapses a slash-prefixed JPEG base64 blob (Codex review 2026-09-09: the parent commit collapsed it, a path-guard once let it through)", () => {
+      const jpeg = "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsL";
+      expect(sanitizePromptInjection(`img: ${jpeg} end`)).toBe("img: [base64:60ch] end");
+      // A real absolute path with the same slashes is left alone.
+      expect(sanitizePromptInjection("see /private/var/folders/fd/strada/Assets/Art/Generated/Pig.png now")).toContain("/Assets/Art/Generated/Pig.png");
+    });
+
     it("does NOT flag a pure SHA-256 hex digest as base64", () => {
       // 64-char hex (SHA-256) — long enough to pass the 60-char gate but has
       // no '+', '/', or '=' so the delimiter check rejects it.

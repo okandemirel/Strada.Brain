@@ -16,6 +16,10 @@ import { join } from "node:path";
 export default function setup(): () => void {
   const root = mkdtempSync(join(tmpdir(), "strada-vitest-"));
   process.env["TMPDIR"] = root;
+  // Node's tmpdir() reads TEMP/TMP on Windows and TMPDIR elsewhere (Codex
+  // review 2026-09-09): set all three so every platform's workers land here.
+  process.env["TEMP"] = root;
+  process.env["TMP"] = root;
   process.env["STRADA_VITEST_TMP_ROOT"] = root;
   return () => {
     rmSync(root, { recursive: true, force: true });
