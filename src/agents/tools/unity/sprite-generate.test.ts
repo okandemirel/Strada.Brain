@@ -129,6 +129,17 @@ describe("SpriteGenerateTool", () => {
     expect(existsSync(join(dir, "Assets/Art/Generated/Fresh.png"))).toBe(true);
   });
 
+  it("a batch item may name its target as path/file, and one malformed item does not cost the rest their turn (measured 2026-09-09 21:21)", async () => {
+    const r = await tool.execute({ batch: [{ path: "Assets/Art/Generated/Ball.png" }, { name: "" }, { file: "Icons/Hand" }], acceptPlaceholder: true }, makeContext(dir));
+    expect(r.isError, String(r.content)).toBeFalsy();
+    expect(existsSync(join(dir, "Assets/Art/Generated/Ball.png"))).toBe(true);
+    expect(existsSync(join(dir, "Assets/Art/Generated/Icons/Hand.png"))).toBe(true);
+    expect(String(r.content)).toContain("1 item(s) skipped");
+    const none = await tool.execute({ batch: [{ name: "" }, { name: "1bad" }] }, makeContext(dir));
+    expect(none.isError).toBe(true);
+    expect(String(none.content)).toContain("no usable batch item");
+  });
+
   it("refuses output outside Assets/", async () => {
     const result = await tool.execute({ name: "Rocket", path: "SomewhereElse" }, makeContext(dir));
     expect(result.isError).toBe(true);

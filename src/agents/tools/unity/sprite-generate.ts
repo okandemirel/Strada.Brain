@@ -926,7 +926,11 @@ export class SpriteGenerateTool implements ITool {
     const batchDir = String(input["path"] ?? "Assets/Art/Generated");
     const items = (input["batch"] as unknown[]).map((raw) => {
       const r = (raw ?? {}) as Record<string, unknown>;
-      const target = splitSpriteTarget(String(r["name"] ?? ""), batchDir);
+      // The item's target under any of the names a model reaches for
+      // (measured 2026-09-09 21:21: an item with no `name` — the path was
+      // in another field — failed the whole 12-sprite call).
+      const given = [r["name"], r["path"], r["file"], r["target"], r["sprite"]].find((v) => typeof v === "string" && v.trim().length > 0);
+      const target = splitSpriteTarget(String(given ?? ""), batchDir);
       return { name: target.name, dir: target.dirRel, prompt: typeof r["prompt"] === "string" ? r["prompt"] : undefined };
     }).map((item) => {
       if (!/^[A-Za-z][\w-]{0,40}$/.test(item.name)) return item;
@@ -946,8 +950,18 @@ export class SpriteGenerateTool implements ITool {
     if (items.length > SPRITE_BATCH_MAX) {
       return { content: `Error: batch holds ${items.length} sprites; the limit is ${SPRITE_BATCH_MAX} per call — split it.`, isError: true };
     }
-    const bad = items.find((i) => !/^[A-Za-z][\w-]{0,40}$/.test(i.name));
-    if (bad) return { content: `Error: batch name "${bad.name}" must start with a letter and contain only letters, digits, _ or -`, isError: true };
+    // One malformed item does not cost the other eleven their turn: it is
+    // named in the result and the rest are drawn.
+    const malformed = items.filter((i) => !/^[A-Za-z][\w-]{0,40}$/.test(i.name));
+    const items2 = items.filter((i) => /^[A-Za-z][\w-]{0,40}$/.test(i.name));
+    if (items2.length === 0) {
+      return { content: `Error: no usable batch item — every name must start with a letter and contain only letters, digits, _ or - (got: ${malformed.map((m) => JSON.stringify(m.name)).join(", ")})`, isError: true };
+    }
+    const malformedNote = malformed.length > 0
+      ? `\n${malformed.length} item(s) skipped — name must start with a letter and contain only letters, digits, _ or -: ${malformed.map((m) => JSON.stringify(m.name)).join(", ")}`
+      : "";
+    items.length = 0;
+    items.push(...items2);
     // One file per name: a repeated name drew twice into one file and was
     // reported as two ✓ lines (review 2026-09-07).
     const seenNames = new Set<string>();
@@ -974,7 +988,7 @@ export class SpriteGenerateTool implements ITool {
         const r = await this.execute({ ...input, batch: undefined, name: item.name, path: item.dir }, context);
         lines.push(`${item.name}: ${r.isError ? "FAILED — " : ""}${String(r.content).slice(0, 400)}`);
       }
-      return { content: lines.join("\n"), isError: lines.every((l) => l.includes("FAILED")) };
+      return { content: lines.join("\n") + malformedNote, isError: lines.every((l) => l.includes("FAILED")) };
     }
 
     const { LocalModelRunner } = await import("../../../assets-local/local-model-runner.js");
@@ -1117,7 +1131,8 @@ export class SpriteGenerateTool implements ITool {
           `Batch by local diffusion (${spec.label}): ${written.size} of ${items.length} sprites written` +
           (failures > 0 || !runOk ? `, ${failures} failed (${detail.slice(0, 200)})` : "") +
           `.\n${[...lines, ...refused.map((r) => `✗ ${r}`)].join("\n")}\n` +
-          "Unity imports them as Sprites on next refresh. Bind each to its element — an unreferenced sprite draws nothing.",
+          "Unity imports them as Sprites on next refresh. Bind each to its element — an unreferenced sprite draws nothing." +
+          malformedNote,
         isError: written.size === 0,
       };
     } catch (err) {
