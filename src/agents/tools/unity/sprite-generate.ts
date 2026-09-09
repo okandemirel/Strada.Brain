@@ -518,6 +518,33 @@ export interface GeneratorOptions {
   specFor?: (kind: "text-to-image" | "image-to-3d", modelId?: string) => import("../../../assets-local/model-catalog.js").LocalModelSpec | undefined;
 }
 
+/**
+ * Where a sprite goes, from what the model wrote. Measured 2026-09-09 16:46:
+ * unity_delivery_measure lists placeholders as paths ("Assets/Modules/
+ * LiveOpsModule/Art/Status/ClaimFeedback.png"); the worker handed the tail
+ * back as name "Status/ClaimFeedback" and lost a 3-minute turn to "name must
+ * start with a letter". A name carrying directories, or a whole Assets/ path,
+ * or a trailing ".png", means what it obviously means: the directory part
+ * joins the path, the file stem is the name. Traversal is still refused by
+ * validatePath on the joined result.
+ */
+export function splitSpriteTarget(rawName: string, dirRel: string): { name: string; dirRel: string } {
+  let name = rawName.trim().replace(/\\/g, "/").replace(/\.png$/i, "");
+  let dir = dirRel.replace(/\\/g, "/").replace(/\/+$/, "");
+  if (name.includes("/")) {
+    const slash = name.lastIndexOf("/");
+    const head = name.slice(0, slash).replace(/^\/+|\/+$/g, "");
+    // "." and ".." are not directories a sprite is drawn into: leave the name
+    // whole so the name rule refuses it, instead of quietly resolving upward.
+    if (head.split("/").some((segment) => segment === "." || segment === "..")) {
+      return { name: rawName.trim(), dirRel: dir };
+    }
+    name = name.slice(slash + 1);
+    if (head.length > 0) dir = /^assets(\/|$)/i.test(head) ? head : `${dir}/${head}`;
+  }
+  return { name, dirRel: dir };
+}
+
 export class SpriteGenerateTool implements ITool {
   constructor(private readonly opts: GeneratorOptions = { localAvailable: realLocalAvailability() }) {}
   readonly name = "unity_generate_sprite";
@@ -635,7 +662,8 @@ export class SpriteGenerateTool implements ITool {
       return this.executeBatch(input, context, provider, auto);
     }
 
-    const rawName = String(input["name"] ?? "").trim();
+    const target = splitSpriteTarget(String(input["name"] ?? ""), String(input["path"] ?? "Assets/Art/Generated"));
+    const rawName = target.name;
     if (!/^[A-Za-z][\w-]{0,40}$/.test(rawName)) {
       return {
         content: "Error: name must start with a letter and contain only letters, digits, _ or - (e.g. 'FrozenPig')",
@@ -643,7 +671,7 @@ export class SpriteGenerateTool implements ITool {
       };
     }
 
-    const dirRel = String(input["path"] ?? "Assets/Art/Generated");
+    const dirRel = target.dirRel;
     if (!/^Assets([/\\]|$)/i.test(dirRel.replace(/\\/g, "/")) && dirRel !== "Assets") {
       return { content: "Error: path must be under Assets/", isError: true };
     }
@@ -832,9 +860,11 @@ export class SpriteGenerateTool implements ITool {
     provider: "local" | "procedural",
     _auto: boolean,
   ): Promise<ToolExecutionResult> {
+    const batchDir = String(input["path"] ?? "Assets/Art/Generated");
     const items = (input["batch"] as unknown[]).map((raw) => {
       const r = (raw ?? {}) as Record<string, unknown>;
-      return { name: String(r["name"] ?? "").trim(), prompt: typeof r["prompt"] === "string" ? r["prompt"] : undefined };
+      const target = splitSpriteTarget(String(r["name"] ?? ""), batchDir);
+      return { name: target.name, dir: target.dirRel, prompt: typeof r["prompt"] === "string" ? r["prompt"] : undefined };
     });
     if (items.length === 0) return { content: "Error: batch is empty", isError: true };
     if (items.length > SPRITE_BATCH_MAX) {
@@ -847,22 +877,25 @@ export class SpriteGenerateTool implements ITool {
     const seenNames = new Set<string>();
     const duplicates: string[] = [];
     for (const item of items) {
-      if (seenNames.has(item.name)) duplicates.push(item.name);
-      seenNames.add(item.name);
+      const key = `${item.dir}/${item.name}`;
+      if (seenNames.has(key)) duplicates.push(item.name);
+      seenNames.add(key);
     }
     if (duplicates.length > 0) {
       return { content: `Error: batch names repeat (${[...new Set(duplicates)].join(", ")}) — one sprite per name.`, isError: true };
     }
-    const dirRel = String(input["path"] ?? "Assets/Art/Generated");
-    if (!/^Assets([/\\]|$)/i.test(dirRel.replace(/\\/g, "/")) && dirRel !== "Assets") {
-      return { content: "Error: path must be under Assets/", isError: true };
+    const dirRel = batchDir;
+    for (const item of items) {
+      if (!/^Assets([/\\]|$)/i.test(item.dir.replace(/\\/g, "/")) && item.dir !== "Assets") {
+        return { content: "Error: path must be under Assets/", isError: true };
+      }
     }
     if (provider === "procedural") {
       // Each one through the single path, so every refusal and PLACEHOLDER
       // note is the same as it would be alone.
       const lines: string[] = [];
       for (const item of items) {
-        const r = await this.execute({ ...input, batch: undefined, name: item.name }, context);
+        const r = await this.execute({ ...input, batch: undefined, name: item.name, path: item.dir }, context);
         lines.push(`${item.name}: ${r.isError ? "FAILED — " : ""}${String(r.content).slice(0, 400)}`);
       }
       return { content: lines.join("\n"), isError: lines.every((l) => l.includes("FAILED")) };
@@ -889,7 +922,7 @@ export class SpriteGenerateTool implements ITool {
     const jobs: Array<{ name: string; relFile: string; fullPath: string; prompt: string }> = [];
     const refused: string[] = [];
     for (const item of items) {
-      const relFile = `${dirRel.replace(/[/\\]+$/, "")}/${item.name}.png`;
+      const relFile = `${item.dir.replace(/[/\\]+$/, "")}/${item.name}.png`;
       const check = await validatePath(context.projectPath, relFile, { allowMissingParents: true });
       if (!check.valid) {
         refused.push(`${item.name}: ${check.error ?? "path validation failed"}`);

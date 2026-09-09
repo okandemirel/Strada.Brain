@@ -80,10 +80,23 @@ describe("SpriteGenerateTool", () => {
   });
 
   it("refuses names that would escape or collide weirdly", async () => {
-    for (const bad of ["../evil", "a/b", "", "1startsWithDigit", "sp ace"]) {
+    for (const bad of ["../evil", "", "1startsWithDigit", "sp ace", "Status/../../evil"]) {
       const result = await tool.execute({ name: bad }, makeContext(dir));
       expect(result.isError, `name ${bad}`).toBe(true);
     }
+  });
+
+  it("a name carrying a directory, a whole Assets/ path, or a .png suffix lands where it says (measured 2026-09-09: 'Status/ClaimFeedback' lost a turn)", async () => {
+    const a = await tool.execute({ name: "Status/ClaimFeedback", path: "Assets/Modules/LiveOpsModule/Art" }, makeContext(dir));
+    expect(a.isError, String(a.content)).toBeFalsy();
+    expect(existsSync(join(dir, "Assets/Modules/LiveOpsModule/Art/Status/ClaimFeedback.png"))).toBe(true);
+    const b = await tool.execute({ name: "Assets/Art/Generated/Pig.png" }, makeContext(dir));
+    expect(b.isError, String(b.content)).toBeFalsy();
+    expect(existsSync(join(dir, "Assets/Art/Generated/Pig.png"))).toBe(true);
+    const c = await tool.execute({ path: "Assets/Art/Generated", batch: [{ name: "Ball.png" }, { name: "Icons/Hand" }] }, makeContext(dir));
+    expect(c.isError, String(c.content)).toBeFalsy();
+    expect(existsSync(join(dir, "Assets/Art/Generated/Ball.png"))).toBe(true);
+    expect(existsSync(join(dir, "Assets/Art/Generated/Icons/Hand.png"))).toBe(true);
   });
 
   it("refuses output outside Assets/", async () => {
