@@ -103,6 +103,7 @@ Rules:
 - A named deliverable may be scheduled late, but it may not be dropped: measured, three runs asked for a playable scene with prefabs and a verified play-mode run, and all three produced plans made only of "write the scripts"
 - Prefer fewer, well-scoped goals over many granular ones
 - Every sub-goal CHANGES the project or PRODUCES an artifact. Searching, reading, inventories and analysis are not sub-goals — fold the looking into the work sub-goal that needs it. A plan made only of exploration is rejected (measured: seven "vault_search for …" nodes spent a sprint producing nothing)
+- A measurement, check, verification or commit is never its own sub-goal, even when the task lists it as a numbered step: put it inside the sub-goal that acts on its result. "Regenerate the first 20 placeholder sprites, re-measure, verify and commit" is ONE goal; "Run the measurement tool and output the list" is not a goal. Measured 2026-09-09: three attempts each spent a full 60-minute node budget on "Run unity_delivery_measure …" before any art was produced
 
 When the task is to build or extend a GAME — a GDD, a design document, "make this game", or a description of one someone imagined:
 - The person asking may not be a developer or a prompt engineer. A design document plus "build this" is a COMPLETE instruction. Do not plan a goal whose output is a question for them, and do not plan a goal that writes a specification back at them: they already gave you one.

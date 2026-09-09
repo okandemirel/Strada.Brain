@@ -51,6 +51,13 @@ describe("planning a game", () => {
     expect(prompt).toContain("they already gave you one");
   });
 
+  it("never makes a measurement, check or commit its own goal, even when the task lists it as a step (measured 2026-09-09: three 60-minute node budgets on 'Run unity_delivery_measure')", async () => {
+    const prompt = await decompositionPrompt();
+
+    expect(prompt).toContain("never its own sub-goal, even when the task lists it as a numbered step");
+    expect(prompt).toContain("re-measure, verify and commit\" is ONE goal");
+  });
+
   it("requires the plan to reach something playable, not something that compiles", async () => {
     const prompt = await decompositionPrompt();
 
