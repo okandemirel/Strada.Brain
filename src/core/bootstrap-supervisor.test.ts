@@ -417,4 +417,26 @@ describe("createSupervisorExecuteNodeBridge", () => {
     );
     expect(runWorkerEnvelope.mock.calls[1]?.[1]).not.toHaveProperty("workspacePolicy");
   });
+
+  it("every worker event re-arms the PARENT task's liveness (measured 2026-09-09 06:57: a generating node's parent was aborted as 'no progress')", async () => {
+    const runWorkerEnvelope = vi.fn().mockImplementation(async (_orch: unknown, params: { onProgress: (u: unknown) => void }) => {
+      params.onProgress({ kind: "heartbeat", message: "" });
+      params.onProgress({ kind: "tool", message: "unity_generate_sprite" });
+      params.onProgress({ kind: "heartbeat", message: "" });
+      return { output: "done", workerResult: { status: "completed", finalSummary: "done", touchedFiles: [] } };
+    });
+    const bridge = createSupervisorExecuteNodeBridge({
+      backgroundExecutor: { runWorkerEnvelope } as any,
+      orchestrator: {} as any,
+      workspaceBus: undefined as any, // no narrative sink: liveness must not depend on it
+      defaultChannelType: "cli",
+    });
+    const onLiveness = vi.fn();
+    await bridge(
+      { id: "node-1", task: "Generate sprites" } as any,
+      { chatId: "cli-local", taskRunId: "task_mission", onLiveness } as any,
+      new AbortController().signal,
+    );
+    expect(onLiveness).toHaveBeenCalledTimes(3);
+  });
 });

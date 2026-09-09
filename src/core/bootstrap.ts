@@ -260,6 +260,13 @@ export function createSupervisorExecuteNodeBridge(params: {
         signal: signal ?? context.signal ?? AbortSignal.timeout(300_000),
         ...(goalRootId ? { goalContext: { rootId: goalRootId, nodeId: String(node.id) } } : {}),
         onProgress: (update) => {
+          // Every worker event is the PARENT task's liveness. Only node status
+          // changes used to re-arm the task inactivity watchdog, so a node that
+          // ran longer than the ceiling on its own tools and calls got its
+          // parent task killed as "no progress": measured 2026-09-09 01:38
+          // (diffusion at 75%), 06:20 (44 files just committed) and 06:57
+          // (sprites generating at 06:54 and 06:58, task aborted at 06:57:57).
+          context.onLiveness?.();
           const narrative = buildTaskProgressSummary(
             { title: node.task, prompt: node.task },
             update,
