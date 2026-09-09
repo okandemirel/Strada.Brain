@@ -35,6 +35,29 @@ describe("createSupervisorExecuteNodeBridge", () => {
     expect(deriveTestVerdict(result.toolResults.map((tr) => ({ content: String(tr.content), isError: tr.isError }))).testsGreen).toBe(false);
   });
 
+  it("every node prompt carries the scope directive, after the task and before the time budget (measured 2026-09-09: a measure node spent 25 min on unrelated reads and writes)", async () => {
+    const runWorkerEnvelope = vi.fn().mockResolvedValue({ output: "done", workerResult: { status: "completed", toolTrace: [] } });
+    const bridge = createSupervisorExecuteNodeBridge({
+      backgroundExecutor: { runWorkerEnvelope } as any,
+      orchestrator: {} as any,
+      workspaceBus: { emit: vi.fn() } as any,
+      defaultChannelType: "cli",
+    });
+    await bridge(
+      { id: "node-3", task: "Run unity_delivery_measure and output the list", dependsOn: [], timeBudgetNotice: "Time budget: 60 minutes." } as any,
+      { chatId: "chat-1", taskRunId: "taskrun_parent" } as any,
+      new AbortController().signal,
+    );
+    const prompt = String(runWorkerEnvelope.mock.calls[0]?.[1]?.prompt);
+    const task = prompt.indexOf("Run unity_delivery_measure and output the list");
+    const scope = prompt.indexOf("## Scope of this node");
+    const budget = prompt.indexOf("Time budget: 60 minutes.");
+    expect(task).toBeGreaterThanOrEqual(0);
+    expect(scope).toBeGreaterThan(task);
+    expect(budget).toBeGreaterThan(scope);
+    expect(prompt).toContain("Do exactly what this node says and nothing else");
+  });
+
   it("a NodeResult tool row keeps the provider's real tool-call id", async () => {
     // Audited 2026-09-02: the bridge fabricated `trace-0`, `trace-1`… because
     // WorkerToolTrace carried no id. A fabricated id names nothing — it cannot
@@ -117,7 +140,7 @@ describe("createSupervisorExecuteNodeBridge", () => {
       expect.anything(),
       expect.objectContaining({
         mode: "delegated",
-        prompt: "Inspect screenshot",
+        prompt: expect.stringMatching(/^Inspect screenshot\n\n## Scope of this node/),
         chatId: "chat-1",
         channelType: "cli",
         taskRunId: "taskrun_parent:node-1",

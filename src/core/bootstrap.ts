@@ -6,6 +6,7 @@
  */
 
 import { parseChannelSpec } from "../channels/channel-spec.js";
+import { withNodeScope } from "../supervisor/node-scope.js";
 import { existsSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
@@ -222,9 +223,12 @@ export function createSupervisorExecuteNodeBridge(params: {
         }
       }
       // The dispatcher states the node's time budget; the worker must see it.
+      // Task → dependencies → scope → budget: the scope directive sits between
+      // what to do and how long there is (see supervisor/node-scope.ts).
+      const scopedPrompt = withNodeScope(nodePrompt);
       const promptWithBudget = node.timeBudgetNotice
-        ? `${nodePrompt}\n\n${node.timeBudgetNotice}`
-        : nodePrompt;
+        ? `${scopedPrompt}\n\n${node.timeBudgetNotice}`
+        : scopedPrompt;
       const result = await params.backgroundExecutor.runWorkerEnvelope(params.orchestrator, {
         mode: "delegated",
         prompt: promptWithBudget,
