@@ -139,7 +139,7 @@ export interface NarrativeEvent extends AgentEventBase {
  */
 export interface HeartbeatEvent extends AgentEventBase {
   readonly type: "heartbeat";
-  readonly source: "model-keepalive" | "tool-revive" | "loop-yield";
+  readonly source: "model-keepalive" | "tool-revive" | "loop-yield" | "tool-running";
 }
 export interface AskUserEvent extends AgentEventBase {
   readonly type: "ask_user";

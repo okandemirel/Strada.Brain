@@ -466,6 +466,28 @@ describe("V2AgentRunner — clean run (PLANNING → EXECUTING → end_turn)", ()
     expect(cp.userId).toBe("u-1");
   });
 
+  it("a running tool is not silence: the spine heartbeats every 30 s while a tool batch is in flight (measured 2026-09-09 01:38)", async () => {
+    const handles = mkPlane();
+    const toolTurn = mkResponse({
+      text: "generating",
+      stopReason: "tool_use",
+      toolCalls: [{ id: "tc-1", name: "unity_generate_sprite", input: { name: "BullTotem" } }],
+    });
+    const gateway = new ModelGateway(scriptedStream([mkResponse({ text: "the plan" }), toolTurn, mkResponse({ text: "done", stopReason: "end_turn" })]));
+    const port = mkPort(mkProvider());
+    // The tool takes 100 s of clock time (a local diffusion batch); it resolves only when the clock gets there.
+    port.spies.executeToolCalls.mockImplementation(
+      () => new Promise((resolve) => handles.clock.setTimer(100_000, () => resolve([{ toolName: "unity_generate_sprite", toolCallId: "tc-1", success: true }]))),
+    );
+    const runner = mkRunner(handles.plane, gateway, port, handles.clock);
+
+    const result = await drive(handles.clock, runner.run(mkRequest(), mkIO("worker")));
+
+    expect(result.status).toBe("completed");
+    const beats = handles.events().filter((e) => e.type === "heartbeat" && (e as { source?: string }).source === "tool-running");
+    expect(beats.length).toBeGreaterThanOrEqual(3); // 100 s / 30 s
+  });
+
   it("the spine never re-emits model.call.* (exactly one finished PER call, terminates without spinning)", async () => {
     const handles = mkPlane();
     const gateway = new ModelGateway(scriptedStream([mkResponse({ stopReason: "end_turn" })]));

@@ -682,7 +682,9 @@ export class V2AgentRunner implements AgentRunner {
               for (const tc of outcome.response.toolCalls) {
                 emit({ type: "tool.started", toolName: tc.name, toolCallId: tc.id });
               }
-              const planned = await this.executeTools(setup, outcome.response, state);
+              const planned = await this.executeTools(setup, outcome.response, state, () =>
+                emit({ type: "heartbeat", source: "tool-running" }),
+              );
               for (const tr of planned.trace) {
                 toolTrace.push({ toolName: tr.toolName, toolCallId: tr.toolCallId, success: tr.success, resultText: tr.resultText });
                 for (const f of tr.touchedFiles ?? []) touchedFiles.add(f);
@@ -790,7 +792,9 @@ export class V2AgentRunner implements AgentRunner {
             for (const tc of outcome.response.toolCalls) {
               emit({ type: "tool.started", toolName: tc.name, toolCallId: tc.id });
             }
-            const { trace, advancedState, progressSignal } = await this.executeTools(setup, outcome.response, state);
+            const { trace, advancedState, progressSignal } = await this.executeTools(setup, outcome.response, state, () =>
+              emit({ type: "heartbeat", source: "tool-running" }),
+            );
             for (const tr of trace) {
               toolTrace.push({ toolName: tr.toolName, toolCallId: tr.toolCallId, success: tr.success, resultText: tr.resultText });
               for (const f of tr.touchedFiles ?? []) touchedFiles.add(f);
@@ -1192,6 +1196,38 @@ export class V2AgentRunner implements AgentRunner {
   }
 
   /**
+   * A running tool is not silence. The task inactivity watchdog reads the
+   * event stream; a tool that runs for minutes (a local diffusion batch at
+   * 138 s per step, a headless compile) emits nothing, so the watchdog read
+   * it as a stalled task. Measured 2026-09-09 01:38: "Task made no progress
+   * for 1200000ms" while unity_generate_sprite was 16 minutes into a 30-minute
+   * inference at 75% — the task was blocked, the inference killed, and the
+   * campaign charged attempt 2. While a tool batch is in flight the run
+   * heartbeats on the clock every TOOL_HEARTBEAT_MS.
+   */
+  private async keepAliveWhile<T>(pending: Promise<T>, keepalive?: () => void): Promise<T> {
+    if (!keepalive) return pending;
+    const clock = this.deps.clock;
+    let handle: ReturnType<Clock["setTimer"]> | null = null;
+    let done = false;
+    const arm = (): void => {
+      handle = clock.setTimer(V2AgentRunner.TOOL_HEARTBEAT_MS, () => {
+        if (done) return;
+        keepalive();
+        arm();
+      });
+    };
+    arm();
+    try {
+      return await pending;
+    } finally {
+      done = true;
+      if (handle !== null) clock.clearTimer(handle);
+    }
+  }
+  static readonly TOOL_HEARTBEAT_MS = 30_000;
+
+  /**
    * Tool execution. DELEGATES the entire v1 tool turn to the port's bound executeToolCalls (the
    * REAL port runs executeAndTrackTools → controlLoopTracker.markToolExecution → consensus →
    * recordStepResultsAndCheckReflection → content-block append → refreshMemoryIfNeeded, returning
@@ -1203,6 +1239,7 @@ export class V2AgentRunner implements AgentRunner {
     setup: RunSetup,
     response: ProviderResponse,
     state: AgentState,
+    keepalive?: () => void,
   ): Promise<{
     trace: {
       toolName: string;
@@ -1222,11 +1259,9 @@ export class V2AgentRunner implements AgentRunner {
     // tool calls, the session, the live AgentState (the real port reads the 3rd arg to drive
     // recordStepResultsAndCheckReflection), AND response.text as the 4th arg (D2 fix: the port pushes
     // it onto the session before the tool results, v1 parity); the mock ignores extra args.
-    const raw = (await port.executeToolCalls(
-      response.toolCalls,
-      setup.session,
-      state,
-      response.text,
+    const raw = (await this.keepAliveWhile(
+      port.executeToolCalls(response.toolCalls, setup.session, state, response.text),
+      keepalive,
     )) as
       | {
           toolName: string;
