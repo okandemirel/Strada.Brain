@@ -428,6 +428,42 @@ describe("ControlLoopTracker", () => {
     expect(tracker.takeUnreportedReadOnlyStall()?.calls).toBe(ControlLoopTracker.READ_ONLY_STREAK_LIMIT);
   });
 
+  it("a read-only streak is also a stall by TIME: 15 minutes of reads at a slow pace, well under the count limit (measured 2026-09-09: 60 min, ~24 calls, no gate)", () => {
+    let clock = 1_000_000;
+    const tracker = new ControlLoopTracker({ staleAnalysisThreshold: 100, now: () => clock });
+    // Six distinct reads over ~14 minutes: not yet.
+    for (let i = 0; i < ControlLoopTracker.READ_ONLY_TIME_MIN_CALLS; i++) {
+      tracker.markToolExecution("file_read", `file_read:{"path":"f${i}.cs"}`);
+      clock += 2.3 * 60_000;
+    }
+    expect(tracker.takeUnreportedReadOnlyStall()).toBeNull();
+    // One more read past the 15-minute mark: reported, with the minutes named.
+    clock += 2 * 60_000;
+    tracker.markToolExecution("grep_search", "grep_search:{\"pattern\":\"z\"}");
+    const stall = tracker.takeUnreportedReadOnlyStall();
+    expect(stall?.calls).toBe(ControlLoopTracker.READ_ONLY_TIME_MIN_CALLS + 1);
+    expect(stall?.reason).toMatch(/spent 1[56] minutes on 7 consecutive read-only tool calls/);
+    // Re-armed: the next streak's clock starts at ITS first read, not at the
+    // old one — six quick reads right after the report are not a stall.
+    for (let i = 0; i < 6; i++) tracker.markToolExecution("file_read", `file_read:{"path":"g${i}.cs"}`);
+    expect(tracker.takeUnreportedReadOnlyStall()).toBeNull();
+    // A progress tool ends the streak and its clock: after a write and a long
+    // pause, six quick reads are a fresh streak, not a 30-minute one.
+    tracker.markToolExecution("file_edit", "file_edit:{\"path\":\"h.cs\"}");
+    clock += 30 * 60_000;
+    for (let i = 0; i < 6; i++) tracker.markToolExecution("file_read", `file_read:{"path":"i${i}.cs"}`);
+    expect(tracker.takeUnreportedReadOnlyStall()).toBeNull();
+  });
+
+  it("fewer than READ_ONLY_TIME_MIN_CALLS reads are not a stall however long they take (a slow single verify is not a loop)", () => {
+    let clock = 0;
+    const tracker = new ControlLoopTracker({ staleAnalysisThreshold: 100, now: () => clock });
+    tracker.markToolExecution("unity_verify_change", "unity_verify_change:{}");
+    clock += 40 * 60_000;
+    tracker.markToolExecution("file_read", "file_read:{\"path\":\"a.cs\"}");
+    expect(tracker.takeUnreportedReadOnlyStall()).toBeNull();
+  });
+
   it("counts the streaks a run has been told about, and a change resets the count (the escalation level)", () => {
     const tracker = new ControlLoopTracker({ staleAnalysisThreshold: 100 });
     expect(tracker.getReadOnlyStreakReports()).toBe(0);

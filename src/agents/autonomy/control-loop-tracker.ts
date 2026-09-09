@@ -28,6 +28,8 @@ interface StoredGateEvent extends ControlLoopGateEvent {
 }
 
 export interface ControlLoopConfig {
+  /** Clock, for the time-based read-only stall (tests). */
+  readonly now?: () => number;
   readonly sameFingerprintThreshold?: number;
   readonly sameFingerprintWindow?: number;
   readonly gateDensityThreshold?: number;
@@ -51,6 +53,9 @@ export class ControlLoopTracker {
   private lastReadOnlyFingerprint: string | null = null;
   private sameReadOnlyFingerprintCount = 0;
   private mutationsSinceLastReset = false;
+  /** When the current read-only streak began (epoch ms); null = no streak. */
+  private readOnlySince: number | null = null;
+  private readonly now: () => number;
   private pruneIndex = 0;
 
   static readonly READ_ONLY_STALL_THRESHOLD = 8;
@@ -63,6 +68,15 @@ export class ControlLoopTracker {
    * the provider's 4.5-minute turn pace, and shell greps reset it besides.
    */
   static readonly READ_ONLY_STREAK_LIMIT = 24;
+  /**
+   * Time-based stall: this long without a progress tool, after at least
+   * READ_ONLY_TIME_MIN_CALLS read-only calls. Measured 2026-09-09 11:37-12:37:
+   * a node with a 60-minute budget read the tree for the whole hour at ~2.5
+   * min per turn — about 24 calls, so the count-based limit fired at the end
+   * of the budget at best. Fifteen minutes of reads is a stall at any pace.
+   */
+  static readonly READ_ONLY_STALL_MS = 15 * 60_000;
+  static readonly READ_ONLY_TIME_MIN_CALLS = 6;
 
   private readonly fpThreshold: number;
   private readonly hasCustomFpThreshold: boolean;
@@ -75,6 +89,7 @@ export class ControlLoopTracker {
   readonly hardCapBlock: number;
 
   constructor(config?: ControlLoopConfig) {
+    this.now = config?.now ?? Date.now;
     this.fpThreshold = config?.sameFingerprintThreshold ?? 15;
     this.hasCustomFpThreshold = typeof config?.sameFingerprintThreshold === "number";
     this.fpWindow = config?.sameFingerprintWindow ?? 20;
@@ -184,8 +199,10 @@ export class ControlLoopTracker {
       this.readOnlyStreakReports = 0;
       this.lastReadOnlyFingerprint = null;
       this.sameReadOnlyFingerprintCount = 0;
+      this.readOnlySince = null;
     } else {
       this.consecutiveReadOnlyToolCalls++;
+      if (this.readOnlySince === null) this.readOnlySince = this.now();
       const fingerprint = callFingerprint ?? toolName;
       if (fingerprint === this.lastReadOnlyFingerprint) {
         this.sameReadOnlyFingerprintCount++;
@@ -228,6 +245,19 @@ export class ControlLoopTracker {
           `without any file mutation.`,
       };
     }
+    if (
+      this.readOnlySince !== null &&
+      this.consecutiveReadOnlyToolCalls >= ControlLoopTracker.READ_ONLY_TIME_MIN_CALLS &&
+      this.now() - this.readOnlySince >= ControlLoopTracker.READ_ONLY_STALL_MS
+    ) {
+      const minutes = Math.round((this.now() - this.readOnlySince) / 60_000);
+      return {
+        calls: this.consecutiveReadOnlyToolCalls,
+        reason:
+          `Agent spent ${minutes} minutes on ${this.consecutiveReadOnlyToolCalls} consecutive read-only tool calls ` +
+          `without any file mutation.`,
+      };
+    }
     return null;
   }
 
@@ -243,6 +273,7 @@ export class ControlLoopTracker {
     this.consecutiveReadOnlyToolCalls = 0;
     this.lastReadOnlyFingerprint = null;
     this.sameReadOnlyFingerprintCount = 0;
+    this.readOnlySince = null;
     this.readOnlyStreakReports += 1;
     return stall;
   }
