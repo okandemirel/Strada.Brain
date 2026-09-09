@@ -1990,6 +1990,27 @@ describe("BackgroundExecutor - reaper and shutdown settle in-flight work", () =>
     expect(taskManager.fail).toHaveBeenCalledWith("task_wedge", expect.stringContaining("Reaped"));
   });
 
+  it("the reaper leaves a stale row from a PREVIOUS process alone — recovery owns it (measured 2026-09-08 21:11)", () => {
+    const executor = new BackgroundExecutor({ orchestrator: {} as any, concurrencyLimit: 1 });
+    const taskManager = {
+      updateStatus: vi.fn(),
+      complete: vi.fn(),
+      fail: vi.fn(),
+      block: vi.fn(),
+      listStuckExecuting: vi.fn(),
+      listTasks: vi.fn(() => []),
+      appendTaskNotice: vi.fn(),
+    };
+    executor.setTaskManager(taskManager as any);
+    // A row this executor never ran: left "executing" by the process that died.
+    (taskManager.listStuckExecuting as ReturnType<typeof vi.fn>).mockReturnValue([
+      createTestTask(undefined, { id: "task_from_before_boot" as any, status: TaskStatus.executing, updatedAt: Date.now() - 2 * 60 * 60_000 }),
+    ]);
+    (executor as unknown as { reapStuckTasks(): void }).reapStuckTasks();
+    expect(taskManager.fail).not.toHaveBeenCalled();
+    expect(taskManager.block).not.toHaveBeenCalled();
+  });
+
   it("the reaper's keep-alive marker survives the aborted run's own settle (no second, weaker terminal)", async () => {
     // Audited 2026-09-02: reapStuckTasks aborts, fail()s and — via the mission
     // keep-alive — block()s "Auto-retry 1/10 in ~30s" in ONE synchronous tick.

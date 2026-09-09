@@ -1941,6 +1941,20 @@ export class BackgroundExecutor {
       import("./types.js").Task
     >;
     for (const task of stuck) {
+      // The reaper measures the runs THIS process owns. A row still
+      // "executing" from a process that died is not wedged — no process was
+      // running it — and startup recovery pauses it so the campaign resubmits
+      // without charging an attempt. Measured 2026-09-08 21:11:54: the first
+      // reaper tick after a boot (whose stage-runtime was still loading) reaped
+      // the previous process's sprint as "no progress signal for 60 minutes",
+      // and the campaign charged attempt 2 for a run nobody had been running.
+      if (!this.inflight.has(String(task.id))) {
+        getLoggerSafe().info("Reaper left a task alone — not executing in this process (recovery owns it)", {
+          taskId: task.id,
+          updatedAt: new Date(task.updatedAt).toISOString(),
+        });
+        continue;
+      }
       const reason = `no progress signal for ${Math.round(BackgroundExecutor.STUCK_TASK_MS / 60_000)} minutes`;
       getLoggerSafe().warn("Reaping stuck executing task", { taskId: task.id, reason });
       // Queue continuation first: if more work for this chat is already
