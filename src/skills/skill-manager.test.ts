@@ -313,6 +313,24 @@ describe("SkillManager", () => {
       expect(result).toBeNull();
     });
 
+    it("carries the selection metadata (inject, triggers) on hot-load — the boot loader did, this path did not", async () => {
+      await withTempDir(async (dir) => {
+        const skillDir = join(dir, "deploy-notes");
+        await mkdir(skillDir, { recursive: true });
+        await writeFile(
+          join(skillDir, "SKILL.md"),
+          ["---", "name: deploy-notes", "version: 1.0.0", "description: deploy know-how", "inject: always", "triggers: [deploy, release]", "---", "", "# Deploy"].join("\n"),
+          "utf-8",
+        );
+        mockLoadSkillTools.mockResolvedValue([]);
+        mockCheckGates.mockResolvedValue({ passed: true, reasons: [] });
+        const mgr = new SkillManager();
+        const entry = await mgr.loadSingle(skillDir);
+        expect(entry!.manifest.inject).toBe("always");
+        expect(entry!.manifest.triggers).toEqual(["deploy", "release"]);
+      });
+    });
+
     it("should load a valid SKILL.md and return an entry", async () => {
       await withTempDir(async (dir) => {
         const skillDir = join(dir, "my-skill");

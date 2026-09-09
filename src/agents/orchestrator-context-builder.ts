@@ -421,13 +421,15 @@ export async function buildContextLayers(
   if (semanticMemoryResult && isOk(semanticMemoryResult)) {
     const memories = semanticMemoryResult.value;
     if (memories.length > 0) {
-      const memoryContext = memories
-        .map((m) => clampMemoryEntry(sanitizePromptInjection(m.entry.content)))
-        .join("\n---\n");
-      layers.push(`## Relevant Memory\n${memoryContext}`);
-      for (const m of memories) {
-        contentHashes.push(m.entry.content);
-      }
+      const shown = memories.map((m) => clampMemoryEntry(sanitizePromptInjection(m.entry.content)));
+      layers.push(`## Relevant Memory\n${shown.join("\n---\n")}`);
+      // Dedupe on what was SHOWN. A clamped entry's tail never reached the
+      // prompt; hashing the whole entry told the refresher it had, so a
+      // decision past character 1 200 could not come back through retrieval
+      // (Codex review 2026-09-09). An entry shown whole hashes whole.
+      memories.forEach((m, i) => {
+        contentHashes.push(memoryDedupKey(m.entry.content, shown[i]!));
+      });
     }
   }
 
@@ -609,4 +611,13 @@ export async function buildSystemPromptWithContext(
   }
 
   return { systemPrompt, initialContentHashes, projectWorldSummary, projectWorldFingerprint };
+}
+
+/**
+ * What the refresher must treat as "already injected" for a memory entry:
+ * the entry itself when it was shown whole, the clamped text when it was
+ * not — so the unseen tail stays retrievable (Codex review 2026-09-09).
+ */
+export function memoryDedupKey(fullContent: string, shownContent: string): string {
+  return shownContent.length < sanitizePromptInjection(fullContent).length ? shownContent : fullContent;
 }

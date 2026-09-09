@@ -17,6 +17,23 @@ describe("CreateSkillTool", () => {
     expect(tool.inputSchema.required).toContain("content");
   });
 
+  it("writes the selection fields it advertises (inject, triggers) and the loader reads them back (Codex review 2026-09-09)", async () => {
+    await withTempDir(async (dir) => {
+      const ctx = createToolContext({ projectPath: dir, workingDirectory: dir });
+      const result = await tool.execute(
+        { name: "deploy-notes", version: "1.0.0", description: "deploy know-how", content: "# Deploy", inject: "always", triggers: ["deploy", "release"] },
+        ctx,
+      );
+      expect(result.isError).toBeFalsy();
+      const md = await readFile(join(dir, "skills", "deploy-notes", "SKILL.md"), "utf-8");
+      expect(md).toContain("inject: always");
+      expect(md).toMatch(/triggers: \["deploy", "release"\]/);
+      const found = (await discoverSkills(dir)).find((s) => s.manifest.name === "deploy-notes");
+      expect(found?.manifest.inject).toBe("always");
+      expect(found?.manifest.triggers).toEqual(["deploy", "release"]);
+    });
+  });
+
   it("creates SKILL.md in workspace skills directory", async () => {
     await withTempDir(async (dir) => {
       const ctx = createToolContext({ projectPath: dir, workingDirectory: dir });

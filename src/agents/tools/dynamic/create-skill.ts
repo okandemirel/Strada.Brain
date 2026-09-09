@@ -45,6 +45,16 @@ export class CreateSkillTool implements ITool {
           "The skill's body content (markdown). This is the knowledge/instructions " +
           "that will be available when the skill is loaded.",
       },
+      inject: {
+        type: "string",
+        enum: ["always", "on-mention"],
+        description: "\"always\" puts the body in every future prompt; \"on-mention\" (default) only when a task names the skill or a trigger.",
+      },
+      triggers: {
+        type: "array",
+        items: { type: "string" },
+        description: "Words in a task that pull this skill into the prompt (e.g. [\"deploy\", \"release\"]).",
+      },
       author: {
         type: "string",
         description: "Optional author name.",
@@ -77,6 +87,10 @@ export class CreateSkillTool implements ITool {
       content: String(input["content"] ?? "").trim(),
       author: input["author"] as string | undefined,
       capabilities: input["capabilities"] as string[] | undefined,
+      ...(input["inject"] === "always" || input["inject"] === "on-mention" ? { inject: input["inject"] } : {}),
+      ...(Array.isArray(input["triggers"])
+        ? { triggers: (input["triggers"] as unknown[]).filter((t): t is string => typeof t === "string" && t.trim() !== "") }
+        : {}),
     };
 
     // Validate
@@ -115,6 +129,12 @@ export class CreateSkillTool implements ITool {
     if (spec.author) frontmatterLines.push(`author: ${quoteScalar(spec.author)}`);
     if (spec.capabilities?.length) {
       frontmatterLines.push(`capabilities: [${spec.capabilities.join(", ")}]`);
+    }
+    // The selection fields the description promises (Codex review 2026-09-09:
+    // advertised, neither accepted nor written).
+    if (spec.inject) frontmatterLines.push(`inject: ${spec.inject}`);
+    if (spec.triggers?.length) {
+      frontmatterLines.push(`triggers: [${spec.triggers.map((t) => quoteScalar(t)).join(", ")}]`);
     }
     frontmatterLines.push("---");
 

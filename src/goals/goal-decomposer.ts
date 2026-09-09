@@ -18,7 +18,7 @@ import type {
   LLMDecompositionOutput,
 } from "./types.js";
 import { generateGoalNodeId, parseLLMOutput } from "./types.js";
-import { validateDAG, judgePlanShape } from "./goal-validator.js";
+import { validateDAG, judgePlanShape, isReadOnlyRequest } from "./goal-validator.js";
 
 /** The endpoint closed the stream before the answer ended (undici "terminated", a mid-stream failure). */
 const MID_STREAM_DROP_RE = /\bterminated\b|mid-?stream|socket hang up|ECONNRESET/i;
@@ -250,10 +250,12 @@ export class GoalDecomposer {
 
     // Attempt LLM decomposition with one retry
     this.lastRejection = undefined; // one decomposer per daemon: never carry another task's reason
+    // A review/audit/report asks for reading; its exploration plan is the work.
+    const rejectExplorationOnly = !isReadOnlyRequest(taskDescription);
     let llmOutput = await this.callLLMForDecomposition(
       proactivePrompt,
       `Decompose this task into sub-goals:\n\n<task>${taskDescription}</task>`,
-      { rejectExplorationOnly: true },
+      { rejectExplorationOnly },
     );
 
     // If first attempt fails, retry with error feedback
@@ -267,7 +269,7 @@ export class GoalDecomposer {
         `${why}Please try again. Output the JSON object ONLY — ` +
           "start your reply with \"{\" and do not write a <reasoning> block or any prose before it.\n\n" +
           `Decompose this task into sub-goals:\n\n<task>${taskDescription}</task>`,
-        { rejectExplorationOnly: true },
+        { rejectExplorationOnly },
       );
     }
 

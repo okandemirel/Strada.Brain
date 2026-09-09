@@ -54,3 +54,15 @@ describe("clampMemoryEntry", () => {
     expect(out.length).toBeLessThan(long.length);
   });
 });
+
+describe("memoryDedupKey — a clamped entry's tail stays retrievable", () => {
+  it("keys on the clamped text when the entry was cut, on the entry when it was shown whole", async () => {
+    const { memoryDedupKey } = await import("./orchestrator-context-builder.js");
+    const long = "decision: ".repeat(300); // > MAX_MEMORY_ENTRY_CHARS
+    const shown = clampMemoryEntry(long);
+    expect(shown.length).toBeLessThan(long.length);
+    expect(memoryDedupKey(long, shown)).toBe(shown);
+    const short = "decision: ship the tray module first";
+    expect(memoryDedupKey(short, clampMemoryEntry(short))).toBe(short);
+  });
+});

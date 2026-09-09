@@ -61,8 +61,10 @@ function readTimeoutOverride(): number | undefined {
  * genuine ramble run for a quarter of an hour. OPENCODE_MAX_TOKENS overrides.
  */
 export const OPENCODE_MAX_TOKENS: number = (() => {
-  const raw = Number(process.env["OPENCODE_MAX_TOKENS"]);
-  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 16_384;
+  // Floor BEFORE the positivity check: "0.5" passed `raw > 0` and floored to
+  // max_tokens 0 (Codex review 2026-09-09). Anything below 1 token is not an override.
+  const raw = Math.floor(Number(process.env["OPENCODE_MAX_TOKENS"]));
+  return Number.isFinite(raw) && raw >= 1 ? raw : 16_384;
 })();
 
 export class OpencodeProvider extends OpenAIProvider {

@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { judgePlanShape, validateDAG } from "./goal-validator.js";
+import { isReadOnlyRequest, judgePlanShape, validateDAG } from "./goal-validator.js";
 import type { DAGValidationResult } from "./goal-validator.js";
 import {
   parseLLMOutput,
@@ -305,5 +305,29 @@ describe("judgePlanShape", () => {
     for (const plan of plans) {
       expect(judgePlanShape(plan.map((task) => ({ task }))).explorationOnly).toBe(false);
     }
+  });
+});
+
+describe("a read-only request is not an exploration-only failure (Codex review 2026-09-09)", () => {
+  it("names the requests whose plan is legitimately reading", () => {
+    for (const t of [
+      "Review the audio module and report what is short or duplicated",
+      "Audit the shipped scenes against the GDD",
+      "Analyze why the tray module stalls",
+      "Please summarize the delivery report",
+      "Report on placeholder art coverage",
+    ]) expect(isReadOnlyRequest(t), t).toBe(true);
+    for (const t of ["Build the HUD", "Deliver the art the GDD schedules", "Fix the compile error in RocketService"]) {
+      expect(isReadOnlyRequest(t), t).toBe(false);
+    }
+  });
+
+  it("a documentation deliverable is work, not exploration", () => {
+    const verdict = judgePlanShape([
+      { id: "a", task: "Document the save API in docs/save.md", dependsOn: [] },
+      { id: "b", task: "Document the event bus contract", dependsOn: ["a"] },
+    ] as never);
+    expect(verdict.explorationOnly).toBe(false);
+    expect(verdict.workNodes).toBe(2);
   });
 });

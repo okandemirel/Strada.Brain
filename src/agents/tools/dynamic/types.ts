@@ -18,6 +18,10 @@ export interface DynamicSkillSpec {
   description: string;
   /** SKILL.md body content (markdown). */
   content: string;
+  /** Selection: "always" injects the body into every prompt; "on-mention" (default) only when named or triggered. */
+  inject?: "always" | "on-mention";
+  /** Words in a task that pull this skill in (see skill-knowledge-selection). */
+  triggers?: string[];
   /** Optional author attribution. */
   author?: string;
   /** Optional capability tags. */

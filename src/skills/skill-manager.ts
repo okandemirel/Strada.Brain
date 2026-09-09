@@ -228,6 +228,14 @@ export class SkillManager {
       ...(Array.isArray(data["capabilities"])
         ? { capabilities: data["capabilities"] as string[] }
         : {}),
+      // Selection metadata (skill-knowledge-selection reads it). The boot
+      // loader carried these; the hot-load path dropped them, so a skill
+      // created mid-session with `inject: always` was withheld from every
+      // prompt until the next boot (Codex review 2026-09-09).
+      ...(data["inject"] === "always" || data["inject"] === "on-mention" ? { inject: data["inject"] } : {}),
+      ...(Array.isArray(data["triggers"])
+        ? { triggers: (data["triggers"] as unknown[]).filter((t): t is string => typeof t === "string") }
+        : {}),
     };
 
     const requires = data["requires"] && typeof data["requires"] === "object"

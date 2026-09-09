@@ -287,6 +287,22 @@ describe("GoalDecomposer", () => {
       expect(tasks.some((t) => t.includes("vault_search for GDD files"))).toBe(false);
     });
 
+    it("a review/audit request keeps its exploration plan — reading IS the work (Codex review 2026-09-09)", async () => {
+      const provider = createMockProvider([
+        JSON.stringify({
+          nodes: [
+            { id: "s1", task: "Read every AudioCue asset and list clips shorter than 0.3 s", dependsOn: [] },
+            { id: "s2", task: "Review duplicate clips by content hash and summarize findings", dependsOn: ["s1"] },
+          ],
+        }),
+      ]);
+      const decomposer = new GoalDecomposer(provider, 3);
+      const tree = await decomposer.decomposeProactive("s", "Review the audio module and report what is short or duplicated");
+      expect(provider.chat).toHaveBeenCalledTimes(1);
+      const tasks = Array.from(tree.nodes.values()).map((n) => n.task);
+      expect(tasks.some((t) => t.includes("Read every AudioCue asset"))).toBe(true);
+    });
+
     it("a depth-2 expansion is not judged for exploration — one node's sub-plan is legitimately narrow", async () => {
       // Review 2026-09-08: the reactive REPLAN and depth-2 paths have no retry;
       // a rejection there silently returned null.

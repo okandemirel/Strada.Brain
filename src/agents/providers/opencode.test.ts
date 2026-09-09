@@ -73,4 +73,19 @@ describe("OpencodeProvider", () => {
       expect(headers["Authorization"]).toBe("Bearer test-key");
     });
   });
+
+  it("OPENCODE_MAX_TOKENS below one token is not an override; a fraction is floored (Codex review 2026-09-09: 0.5 became max_tokens 0)", async () => {
+    const before = process.env["OPENCODE_MAX_TOKENS"];
+    try {
+      process.env["OPENCODE_MAX_TOKENS"] = "0.5";
+      vi.resetModules();
+      expect((await import("./opencode.js")).OPENCODE_MAX_TOKENS).toBe(16_384);
+      process.env["OPENCODE_MAX_TOKENS"] = "4096.9";
+      vi.resetModules();
+      expect((await import("./opencode.js")).OPENCODE_MAX_TOKENS).toBe(4096);
+    } finally {
+      if (before === undefined) delete process.env["OPENCODE_MAX_TOKENS"]; else process.env["OPENCODE_MAX_TOKENS"] = before;
+      vi.resetModules();
+    }
+  });
 });

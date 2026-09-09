@@ -113,7 +113,7 @@ export function validateDAG(
 
 /** Verbs that change the project or produce an artifact — anywhere in the task text. */
 const WORK_RE =
-  /\b(create|generate|draw|paint|write|bind|place|instantiate|implement|add|replace|fix|build|import|compose|record|configure|wire|assemble|edit|update|refactor|remove|delete|rename|migrate|convert|apply|set up|setup|install|execute|verify|capture|deliver|produce|ship|author|animate|script|attach|spawn|hook up|populate|tune|polish|export|commit|register|integrate)\b/i;
+  /\b(create|generate|draw|paint|write|bind|place|instantiate|implement|add|replace|fix|build|import|compose|record|configure|wire|assemble|edit|update|refactor|remove|delete|rename|migrate|convert|apply|set up|setup|install|execute|verify|capture|deliver|produce|ship|author|animate|script|attach|spawn|hook up|populate|tune|polish|export|commit|register|integrate|document)\b/i;
 /**
  * Verbs that only look — judged on the task's LEADING verb, so "Read the GDD
  * and generate the sprites" is work (generate) while "Read PixelFlow_GDD.md
@@ -158,4 +158,18 @@ export function judgePlanShape(nodes: ReadonlyArray<{ readonly task: string }>):
     workNodes,
     explorationNodes,
   };
+}
+
+/**
+ * A request that asks for reading, not for change: a review, an audit, an
+ * analysis, a report. Its plan is legitimately exploration and must not be
+ * rejected as "exploration-only" (Codex review 2026-09-09: review/audit and
+ * summarize/report plans were refused and the retry demanded project changes
+ * for an expressly read-only task).
+ */
+const READ_ONLY_REQUEST_RE =
+  /^\W*(?:please\s+)?(review|audit|analy[sz]e|assess|evaluate|summari[sz]e|report on|report|explain|investigate|diagnose|measure|compare|inventory|describe|inspect)\b/i;
+
+export function isReadOnlyRequest(task: string): boolean {
+  return READ_ONLY_REQUEST_RE.test(task);
 }
