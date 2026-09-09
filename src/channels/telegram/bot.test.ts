@@ -657,3 +657,14 @@ describe("Telegram command menu (2026-09-09)", () => {
     expect(handler).toHaveBeenCalledWith(expect.objectContaining({ channelType: "telegram", text: "/help" }));
   });
 });
+
+describe("TelegramChannel.claimsChatId (hub routing)", () => {
+  it("claims integer chat ids, including negative group ids, and nothing else", () => {
+    const auth = { isAllowed: vi.fn().mockReturnValue(true), getRole: vi.fn().mockReturnValue("admin") } as never;
+    const channel = new TelegramChannel("test-token", auth);
+    expect(channel.claimsChatId("123456789")).toBe(true);
+    expect(channel.claimsChatId("-1001234567890")).toBe(true);
+    expect(channel.claimsChatId("6f9619ff-8b86-d011-b42d-00c04fc964ff")).toBe(false);
+    expect(channel.claimsChatId("cli-local")).toBe(false);
+  });
+});

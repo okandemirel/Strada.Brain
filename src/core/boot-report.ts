@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import { parseChannelSpec } from "../channels/channel-spec.js";
 import { join } from "node:path";
 import type {
   BootReport,
@@ -565,7 +566,9 @@ export function buildBootReport(
         ? options.embeddingStatus.notice ?? "Embeddings degraded; semantic retrieval is not fully available."
         : "Memory and semantic retrieval initialized for the current runtime.",
   };
-  const currentSurface = options.channelType === "web" || options.channelType === "cli"
+  // A hub ("web,telegram") is only as protected as its most exposed member.
+  const surfaceMembers = parseChannelSpec(options.channelType);
+  const currentSurface = surfaceMembers.length > 0 && surfaceMembers.every((m) => m === "web" || m === "cli")
     ? "protected"
     : "extended";
   const channelStage: BootStageReport = {

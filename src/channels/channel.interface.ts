@@ -18,6 +18,14 @@ import type { PostSetupBootstrapContext } from "../common/setup-contract.js";
  * - supportsInteractivity(channel) - for confirmation dialogs
  */
 export interface IChannelAdapter extends IChannelCore, IChannelReceiver, IChannelSender {
+  /**
+   * Whether a chat id has this channel's shape (Telegram: an integer, web: a
+   * UUID, CLI: "cli-local"). Lets a HubChannel route a reply for a chat it has
+   * not seen a message from since boot — a persisted campaign chat, a guardian
+   * notice — to the right member instead of the primary one.
+   */
+  claimsChatId?(chatId: string): boolean;
+
   setPostSetupBootstrapHandler?(handler: ((context: PostSetupBootstrapContext) => Promise<void> | void) | null): void;
 
   /**

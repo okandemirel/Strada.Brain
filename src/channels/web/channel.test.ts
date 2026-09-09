@@ -1468,3 +1468,16 @@ describe("GET /api/campaign — measured build status served in-daemon", () => {
     expect(JSON.parse(sent[0]!)).toMatchObject({ type: "campaign:status", payload: { campaign: { id: "camp_2" } } });
   });
 });
+
+describe("WebChannel.claimsChatId (hub routing)", () => {
+  it("claims UUID-shaped ids and ids of live or recently disconnected clients", () => {
+    const channel = new WebChannel();
+    expect(channel.claimsChatId("6f9619ff-8b86-d011-b42d-00c04fc964ff")).toBe(true);
+    expect(channel.claimsChatId("123456789")).toBe(false);
+    (channel as unknown as { clients: Map<string, unknown> }).clients.set("custom-profile-id", {});
+    expect(channel.claimsChatId("custom-profile-id")).toBe(true);
+    (channel as unknown as { recentlyDisconnected: Map<string, unknown> }).recentlyDisconnected.set("gone-id", {});
+    expect(channel.claimsChatId("gone-id")).toBe(true);
+    expect(channel.claimsChatId("cli-local")).toBe(false);
+  });
+});

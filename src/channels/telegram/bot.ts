@@ -75,6 +75,11 @@ function chunkTelegramMessage(text: string): string[] {
 export class TelegramChannel implements IChannelAdapter {
   readonly name = "telegram";
 
+  /** Telegram chat ids are integers (negative for groups). */
+  claimsChatId(chatId: string): boolean {
+    return /^-?\d+$/.test(chatId);
+  }
+
   private readonly bot: Bot;
   private readonly auth: AuthManager;
   private readonly rateLimiter: RateLimiter;

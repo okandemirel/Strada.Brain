@@ -20,6 +20,8 @@ import { CLIChannel } from "../channels/cli/repl.js";
 import { DiscordChannel } from "../channels/discord/bot.js";
 import { getDefaultSlashCommands } from "../channels/discord/commands.js";
 import { WebChannel } from "../channels/web/channel.js";
+import { HubChannel } from "../channels/hub/hub-channel.js";
+import { parseChannelSpec } from "../channels/channel-spec.js";
 
 
 import type { IChannelAdapter } from "../channels/channel.interface.js";
@@ -31,6 +33,17 @@ export async function initializeChannel(
   config: Config,
   auth: AuthManager,
 ): Promise<IChannelAdapter> {
+  // "web,telegram": every member boots, and a hub routes each chat to the
+  // member it arrived on (see channels/hub/hub-channel.ts).
+  const members = parseChannelSpec(channelType);
+  if (members.length > 1) {
+    const adapters: IChannelAdapter[] = [];
+    for (const member of members) {
+      adapters.push(await initializeChannel(member, config, auth));
+    }
+    return new HubChannel(adapters);
+  }
+
   switch (channelType) {
     case "cli":
       return new CLIChannel();

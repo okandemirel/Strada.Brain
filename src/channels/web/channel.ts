@@ -181,6 +181,15 @@ export class WebChannel
 {
   readonly name = "web";
 
+  /** A live or recently disconnected client, or a UUID-shaped id this channel would have minted. */
+  claimsChatId(chatId: string): boolean {
+    return (
+      this.clients.has(chatId) ||
+      this.recentlyDisconnected.has(chatId) ||
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(chatId)
+    );
+  }
+
   private server: Server | null = null;
   private wss: WebSocketServer | null = null;
   private handler: MessageHandler | null = null;

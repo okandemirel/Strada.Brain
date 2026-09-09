@@ -413,3 +413,11 @@ describe("CLIChannel", () => {
     expect(handler).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("CLIChannel.claimsChatId (hub routing)", () => {
+  it("claims only the local CLI chat id", () => {
+    const channel = new CLIChannel();
+    expect(channel.claimsChatId("cli-local")).toBe(true);
+    expect(channel.claimsChatId("123")).toBe(false);
+  });
+});

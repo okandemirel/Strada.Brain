@@ -1,8 +1,8 @@
 import { createServer } from "node:net";
+import { formatChannelSpec, isValidChannelSpec, parseChannelSpec } from "../channels/channel-spec.js";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { LocalRuntimeInspection, RuntimeProcessInfo } from "./auto-updater.js";
-import { CHANNEL_DEFAULTS, type SupportedChannelType } from "../common/constants.js";
 
 export interface StopRuntimeProcessesOptions {
   force?: boolean;
@@ -35,12 +35,13 @@ export function getMatchingLocalRuntimeProcesses(
 
 export function inferChannelFromRuntimeCommand(
   command: string,
-  defaultChannel: SupportedChannelType,
-): SupportedChannelType {
-  const channelMatch = command.match(/--channel\s+([a-z]+)/i);
+  defaultChannel: string,
+): string {
+  // "--channel web" or "--channel web,telegram" — a spec, not just one type.
+  const channelMatch = command.match(/--channel\s+([a-z,+]+)/i);
   const explicitChannel = channelMatch?.[1]?.toLowerCase();
-  if (explicitChannel && (CHANNEL_DEFAULTS.SUPPORTED_TYPES as readonly string[]).includes(explicitChannel)) {
-    return explicitChannel as SupportedChannelType;
+  if (explicitChannel && isValidChannelSpec(explicitChannel)) {
+    return formatChannelSpec(parseChannelSpec(explicitChannel));
   }
 
   if (/\bcli\b/i.test(command)) {

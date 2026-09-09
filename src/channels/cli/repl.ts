@@ -28,6 +28,10 @@ interface PendingCliConfirmation {
 export class CLIChannel implements IChannelAdapter {
   readonly name = "cli";
 
+  claimsChatId(chatId: string): boolean {
+    return chatId === "cli-local";
+  }
+
   private rl: readline.Interface | null = null;
   private handler: MessageHandler | null = null;
   private healthy = false;

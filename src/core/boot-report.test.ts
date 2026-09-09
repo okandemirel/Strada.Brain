@@ -438,3 +438,17 @@ describe("supervisor capability (audited 2026-09-02)", () => {
     expect(disabled.capabilities.find((c) => c.id === "supervisor")?.status).toBe("inactive");
   });
 });
+
+describe("runtime surface of a channel hub (2026-09-09)", () => {
+  const surfaceOf = (channelType: string): string => {
+    const report = buildBootReport({ config: makeConfig(), installRoot: process.cwd(), channelType, channelHealthy: true });
+    return report.stages.find((stage) => stage.id === "channel")?.detail ?? "";
+  };
+
+  it("is protected only while every member is local (web/cli); a Telegram member makes it extended", () => {
+    expect(surfaceOf("web")).toContain("protected");
+    expect(surfaceOf("web,cli")).toContain("protected");
+    expect(surfaceOf("web,telegram")).toContain("extended");
+    expect(surfaceOf("telegram")).toContain("extended");
+  });
+});

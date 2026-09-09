@@ -225,11 +225,22 @@ strada
 ./strada start --channel telegram
 ./strada start --channel discord
 ./strada start --channel slack
-./strada start --channel telegram
+
+# Several channels in ONE process (web portal on the desk, Telegram on the phone):
+# every member boots, replies go back on the channel each chat arrived on,
+# and campaign/guardian notices reach whichever chat spoke last.
+./strada start --channel web,telegram --daemon
+# (or DEFAULT_CHANNEL=web,telegram in .env, or `./strada --web --telegram`)
 
 # Always-on supervisor with auto-restart
 ./strada supervise --channel web
 ```
+
+Every channel understands the build commands: `/campaign` (`/kampanya`) for the
+measured campaign status, `/campaign revive`, `/measure` (`/ölç`) for the
+delivery-gate measurement, `/guardian` (`/bekçi`) for the real-tree guardian.
+The web portal shows the same numbers on its dashboard's Game Build card and
+serves them at `GET /api/campaign` (`?measure=1` adds the measurement).
 
 ### 4. CLI Commands
 

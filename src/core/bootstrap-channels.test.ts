@@ -131,6 +131,20 @@ describe("initializeChannel", () => {
     expect((channel as any).name).toBe("web");
   });
 
+  it("boots every member of 'web,telegram' behind one hub (2026-09-09)", async () => {
+    const config = makeConfig();
+    config.telegram.botToken = "tg-token";
+    const channel = await initializeChannel("web,telegram", config, auth, logger);
+    expect((channel as any).name).toBe("web+telegram");
+    expect((channel as any).members.map((m: { name: string }) => m.name)).toEqual(["web", "telegram"]);
+  });
+
+  it("fails the whole hub when one member cannot be built", async () => {
+    const config = makeConfig();
+    config.telegram.botToken = "";
+    await expect(initializeChannel("web,telegram", config, auth, logger)).rejects.toMatchObject({ code: "MISSING_TELEGRAM_TOKEN" });
+  });
+
 
 
 

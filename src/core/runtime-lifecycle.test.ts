@@ -36,6 +36,8 @@ describe("runtime lifecycle", () => {
     expect(inferChannelFromRuntimeCommand("node dist/index.js start --channel web", "cli")).toBe("web");
     expect(inferChannelFromRuntimeCommand("node dist/index.js cli", "web")).toBe("cli");
     expect(inferChannelFromRuntimeCommand("node dist/index.js start", "web")).toBe("web");
+    expect(inferChannelFromRuntimeCommand("node dist/index.js start --channel web,telegram", "cli")).toBe("web,telegram");
+    expect(inferChannelFromRuntimeCommand("node dist/index.js start --channel web,whatsapp", "cli")).toBe("cli");
   });
 
   it("falls back to default channel for invalid --channel values", () => {

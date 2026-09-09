@@ -42,7 +42,8 @@ import {
   initializeRuntimeEnvironment,
   resolveDotenvPath,
 } from "./common/runtime-paths.js";
-import { CHANNEL_DEFAULTS, type SupportedChannelType } from "./common/constants.js";
+import { CHANNEL_DEFAULTS } from "./common/constants.js";
+import { isValidChannelSpec, parseChannelSpec } from "./channels/channel-spec.js";
 import { runMetricsCommand } from "./metrics/metrics-cli.js";
 import { registerDaemonCommands } from "./daemon/daemon-cli.js";
 import { registerPresetCommands } from "./config/preset-cli.js";
@@ -102,7 +103,7 @@ program
   .description("Start Strada Brain")
   .option(
     "--channel <type>",
-    `Channel to use: ${CHANNEL_DEFAULTS.SUPPORTED_TYPES.join(", ")}`,
+    `Channel to use: ${CHANNEL_DEFAULTS.SUPPORTED_TYPES.join(", ")} (or several, e.g. web,telegram)`,
     CHANNEL_DEFAULTS.DEFAULT_TYPE,
   )
   .option("--daemon", "Enable daemon heartbeat mode", false)
@@ -138,7 +139,7 @@ program
   .description("Restart Strada Brain for this install")
   .option(
     "--channel <type>",
-    `Channel to use after restart: ${CHANNEL_DEFAULTS.SUPPORTED_TYPES.join(", ")}`,
+    `Channel to use after restart: ${CHANNEL_DEFAULTS.SUPPORTED_TYPES.join(", ")} (or several, e.g. web,telegram)`,
   )
   .option("--daemon", "Enable daemon heartbeat mode after restart")
   .option("--force", "Use SIGKILL immediately instead of graceful shutdown", false)
@@ -151,7 +152,7 @@ program
   .description("Run Strada Brain as an always-on supervisor with auto-restart")
   .option(
     "--channel <type>",
-    `Channel to use: ${CHANNEL_DEFAULTS.SUPPORTED_TYPES.join(", ")}`,
+    `Channel to use: ${CHANNEL_DEFAULTS.SUPPORTED_TYPES.join(", ")} (or several, e.g. web,telegram)`,
     CHANNEL_DEFAULTS.DEFAULT_TYPE,
   )
   .action(async (opts: { channel: string }) => {
@@ -515,12 +516,12 @@ async function startApp(
     setupWizardPort: wizardPort,
   });
 
-  if (channelType === "web" && !activeWizard) {
+  if (parseChannelSpec(channelType).includes("web") && !activeWizard) {
     const updater = await createCliAutoUpdater(config.autoUpdate);
     const inspection = await updater.inspectLocalRuntimes();
     const matchingRuntimes = getMatchingLocalRuntimeProcesses(inspection);
     const matchingWebRuntimes = matchingRuntimes.filter((runtime) => (
-      inferChannelFromRuntimeCommand(runtime.command, getConfiguredDefaultChannel()) === "web"
+      parseChannelSpec(inferChannelFromRuntimeCommand(runtime.command, getConfiguredDefaultChannel())).includes("web")
     ));
     const busyPorts = [
       ...(await isTcpPortBusy(config.web.port) ? [config.web.port] : []),
@@ -726,7 +727,7 @@ async function runRootLauncher(options: RootLaunchOptions): Promise<void> {
 
 async function runLauncherAction(action: {
   kind: "start";
-  channelType: SupportedChannelType;
+  channelType: string;
   daemonMode: boolean;
 } | { kind: "setup" } | { kind: "doctor" } | { kind: "exit" }): Promise<void> {
   if (action.kind === "start") {
@@ -924,8 +925,9 @@ async function runRestartCommand(
 // Helpers
 // ============================================================================
 
-function isValidChannelType(type: string): type is SupportedChannelType {
-  return (CHANNEL_DEFAULTS.SUPPORTED_TYPES as readonly string[]).includes(type);
+function isValidChannelType(type: string): boolean {
+  // A single type or a comma list ("web,telegram") — every member must exist.
+  return isValidChannelSpec(type);
 }
 
 function setupShutdownHandlers(shutdown: () => Promise<void>, afterShutdown?: () => Promise<void>): void {

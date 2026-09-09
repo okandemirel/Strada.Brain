@@ -5,6 +5,7 @@
  * Replaces the monolithic startBrain() function from index.ts.
  */
 
+import { parseChannelSpec } from "../channels/channel-spec.js";
 import { existsSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
@@ -2278,15 +2279,17 @@ async function bootstrapImpl(
 // ============================================================================
 
 function initializeAuth(config: Config, channelType: string, logger: winston.Logger): AuthManager {
+  // A spec may name several channels ("web,telegram"); warn for each member.
+  const members = new Set<string>(parseChannelSpec(channelType));
   const allowedTelegramIds = config.telegram.allowedUserIds ?? [];
-  if (channelType === "telegram" && allowedTelegramIds.length === 0) {
+  if (members.has("telegram") && allowedTelegramIds.length === 0) {
     logger.warn("ALLOWED_TELEGRAM_USER_IDS is empty — all Telegram users will be denied access");
   }
 
   const allowedDiscordIds = new Set(config.discord.allowedUserIds);
   const allowedDiscordRoles = new Set(config.discord.allowedRoleIds);
 
-  if (channelType === "discord" && allowedDiscordIds.size === 0 && allowedDiscordRoles.size === 0) {
+  if (members.has("discord") && allowedDiscordIds.size === 0 && allowedDiscordRoles.size === 0) {
     logger.warn(
       "ALLOWED_DISCORD_USER_IDS and ALLOWED_DISCORD_ROLE_IDS are empty — all Discord users will be denied access",
     );

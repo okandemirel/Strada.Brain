@@ -2,6 +2,10 @@
 import * as readline from "node:readline/promises";
 import { stdin, stdout } from "node:process";
 import { CHANNEL_DEFAULTS, type SupportedChannelType } from "../common/constants.js";
+import { describeChannelSpec, formatChannelSpec, isValidChannelSpec, parseChannelSpec } from "../channels/channel-spec.js";
+
+/** A channel type, or several joined by commas: "web,telegram". */
+export type ChannelSpec = string;
 
 export interface RootLaunchOptions {
   readonly daemon?: boolean;
@@ -15,13 +19,13 @@ export interface RootLaunchOptions {
 }
 
 export interface LauncherMenuContext {
-  readonly defaultChannel: SupportedChannelType;
+  readonly defaultChannel: ChannelSpec;
   readonly webPort: number;
   readonly dashboardPort: number;
 }
 
 export type LauncherAction =
-  | { readonly kind: "start"; readonly channelType: SupportedChannelType; readonly daemonMode: boolean }
+  | { readonly kind: "start"; readonly channelType: ChannelSpec; readonly daemonMode: boolean }
   | { readonly kind: "setup" }
   | { readonly kind: "doctor" }
   | { readonly kind: "exit" };
@@ -46,25 +50,17 @@ const QUICK_LAUNCH_FLAGS: ReadonlyArray<{
   { option: "teams", channelType: "teams" },
 ];
 
-const CHANNEL_LABELS: Record<SupportedChannelType, string> = {
-  web: "Web dashboard",
-  cli: "Interactive CLI",
-  telegram: "Telegram bot",
-  discord: "Discord bot",
-  slack: "Slack",
-  teams: "Microsoft Teams",
-};
-
 export function getConfiguredDefaultChannel(
   env: NodeJS.ProcessEnv = process.env,
-): SupportedChannelType {
+): ChannelSpec {
   const raw = env["DEFAULT_CHANNEL"]?.trim().toLowerCase();
   if (!raw) {
     return CHANNEL_DEFAULTS.DEFAULT_TYPE;
   }
 
-  if ((CHANNEL_DEFAULTS.SUPPORTED_TYPES as readonly string[]).includes(raw)) {
-    return raw as SupportedChannelType;
+  // "web,telegram" is a valid default: both channels boot behind one hub.
+  if (isValidChannelSpec(raw)) {
+    return formatChannelSpec(parseChannelSpec(raw));
   }
 
   return CHANNEL_DEFAULTS.DEFAULT_TYPE;
@@ -77,14 +73,12 @@ export function resolveQuickLaunchAction(
     .filter(({ option }) => options[option])
     .map(({ channelType }) => channelType);
 
-  if (selectedChannels.length > 1) {
-    throw new Error("Choose only one quick launch flag at a time.");
-  }
-
-  if (selectedChannels.length === 1) {
+  // Several flags at once ("--web --telegram") start every named channel
+  // behind one hub, in the order given.
+  if (selectedChannels.length >= 1) {
     return {
       kind: "start",
-      channelType: selectedChannels[0]!,
+      channelType: formatChannelSpec([...new Set(selectedChannels)]),
       daemonMode: options.daemon ?? false,
     };
   }
@@ -98,15 +92,16 @@ export function buildLauncherMenu(context: LauncherMenuContext): readonly Launch
     entries.push({ key: String(entries.length + 1), ...entry });
   };
 
+  const defaultMembers = parseChannelSpec(context.defaultChannel);
   appendEntry({
-    label: `Open configured default channel (${CHANNEL_LABELS[context.defaultChannel]})`,
-    detail: context.defaultChannel === "web"
+    label: `Open configured default channel (${describeChannelSpec(context.defaultChannel)})`,
+    detail: defaultMembers.includes("web")
       ? `Starts Strada on http://127.0.0.1:${context.webPort}`
       : "Uses the DEFAULT_CHANNEL from your saved setup",
     action: { kind: "start", channelType: context.defaultChannel, daemonMode: false },
   });
 
-  if (context.defaultChannel !== "web") {
+  if (!defaultMembers.includes("web")) {
     appendEntry({
       label: "Open local web dashboard",
       detail: `Starts local web access on http://127.0.0.1:${context.webPort} (dashboard ${context.dashboardPort})`,
@@ -114,7 +109,7 @@ export function buildLauncherMenu(context: LauncherMenuContext): readonly Launch
     });
   }
 
-  if (context.defaultChannel !== "cli") {
+  if (!defaultMembers.includes("cli")) {
     appendEntry({
       label: "Start interactive CLI chat",
       detail: "Best choice when you want to stay in the terminal",
@@ -150,7 +145,7 @@ export async function promptLauncherAction(
   try {
     console.log("\nStrada Launcher");
     console.log("===============");
-    console.log(`Default channel: ${CHANNEL_LABELS[context.defaultChannel]}`);
+    console.log(`Default channel: ${describeChannelSpec(context.defaultChannel)}`);
     console.log("Choose how you want to open Strada on this machine:\n");
 
     for (const entry of entries) {
