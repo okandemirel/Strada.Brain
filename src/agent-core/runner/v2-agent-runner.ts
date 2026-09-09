@@ -494,17 +494,25 @@ export class V2AgentRunner implements AgentRunner {
           //   exact v1 shape, where only ONE enterCall runs per LLM call.
           let outcome: StepOutcome;
           try {
-            const result = await gateway.call(
-              {
-                chatId: request.chatId,
-                systemPrompt: prepared.activePrompt,
-                session: setup.session,
-                provider: prepared.currentProvider,
-                toolDefinitions: prepared.currentToolDefinitions,
-                externalSignal: io.externalSignal, // = task token (dual-signal preserved verbatim)
-                runClock, // Phase 1c — silentStream re-arms call liveness from token arrival (v1 parity)
-              },
-              bus,
+            // A pending model call is not task silence either: it is bounded by
+            // its own call ceiling and the failure ledger. Measured 2026-09-09
+            // 06:20: the next node's first call sat in network retries with no
+            // byte to keep-alive on, and the executor's 20-minute inactivity
+            // watchdog blocked a sprint that had just committed 44 files.
+            const result = await this.keepAliveWhile(
+              gateway.call(
+                {
+                  chatId: request.chatId,
+                  systemPrompt: prepared.activePrompt,
+                  session: setup.session,
+                  provider: prepared.currentProvider,
+                  toolDefinitions: prepared.currentToolDefinitions,
+                  externalSignal: io.externalSignal, // = task token (dual-signal preserved verbatim)
+                  runClock, // Phase 1c — silentStream re-arms call liveness from token arrival (v1 parity)
+                },
+                bus,
+              ),
+              () => emit({ type: "heartbeat", source: "model-pending" }),
             );
             outcome = classifyOutcome(result);
           } catch (err) {

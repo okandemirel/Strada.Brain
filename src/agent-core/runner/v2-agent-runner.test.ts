@@ -488,6 +488,28 @@ describe("V2AgentRunner — clean run (PLANNING → EXECUTING → end_turn)", ()
     expect(beats.length).toBeGreaterThanOrEqual(3); // 100 s / 30 s
   });
 
+  it("a pending model call is not silence: the spine heartbeats every 30 s while a call has produced no byte (measured 2026-09-09 06:20)", async () => {
+    const handles = mkPlane();
+    // The first call answers only after 100 s of clock time with no bytes in between.
+    let first = true;
+    const stream: SilentStreamPort = async () => {
+      if (first) {
+        first = false;
+        await new Promise<void>((resolve) => handles.clock.setTimer(100_000, resolve));
+      }
+      return mkResponse({ text: "all done", stopReason: "end_turn" });
+    };
+    const gateway = new ModelGateway(stream);
+    const port = mkPort(mkProvider());
+    const runner = mkRunner(handles.plane, gateway, port, handles.clock);
+
+    const result = await drive(handles.clock, runner.run(mkRequest(), mkIO("worker")));
+
+    expect(result.status).toBe("completed");
+    const beats = handles.events().filter((e) => e.type === "heartbeat" && (e as { source?: string }).source === "model-pending");
+    expect(beats.length).toBeGreaterThanOrEqual(3);
+  });
+
   it("the spine never re-emits model.call.* (exactly one finished PER call, terminates without spinning)", async () => {
     const handles = mkPlane();
     const gateway = new ModelGateway(scriptedStream([mkResponse({ stopReason: "end_turn" })]));
