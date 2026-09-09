@@ -904,6 +904,8 @@ export const configSchema = z
       .prefault("24"),
 
     // Conformance Guard
+    /** PROVIDER_CHAIN_STRICT=1: an explicit PROVIDER_CHAIN is exhaustive — no auto-appended fallbacks. */
+    providerChainStrict: boolFromString(false),
     conformanceEnabled: boolFromString(true),
     conformanceFrameworkPathsOnly: boolFromString(true),
     // Control Loop

@@ -898,6 +898,7 @@ export interface Config {
   readonly autonomousDefaultHours: number;
 
   // Conformance Guard
+  readonly providerChainStrict: boolean;
   readonly conformanceEnabled: boolean;
   readonly conformanceFrameworkPathsOnly: boolean;
   // Control Loop

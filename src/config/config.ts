@@ -501,6 +501,7 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
     autonomousDefaultEnabled: rawConfig.autonomousDefaultEnabled,
     autonomousDefaultHours: rawConfig.autonomousDefaultHours,
 
+    providerChainStrict: rawConfig.providerChainStrict,
     conformanceEnabled: rawConfig.conformanceEnabled,
     conformanceFrameworkPathsOnly: rawConfig.conformanceFrameworkPathsOnly,
     loopFingerprintThreshold: rawConfig.loopFingerprintThreshold,
@@ -1026,6 +1027,7 @@ interface EnvVars {
   autonomousDefaultEnabled: string | undefined;
   autonomousDefaultHours: string | undefined;
   // Conformance Guard
+  providerChainStrict: string | undefined;
   conformanceEnabled: string | undefined;
   conformanceFrameworkPathsOnly: string | undefined;
   // Control Loop
@@ -1432,6 +1434,7 @@ function loadFromEnv(env: Record<string, string | undefined>): EnvVars {
     autonomousDefaultEnabled: env["AUTONOMOUS_DEFAULT_ENABLED"],
     autonomousDefaultHours: env["AUTONOMOUS_DEFAULT_HOURS"],
     // Conformance Guard
+    providerChainStrict: env["PROVIDER_CHAIN_STRICT"],
     conformanceEnabled: env["STRADA_CONFORMANCE_ENABLED"],
     conformanceFrameworkPathsOnly: env["STRADA_CONFORMANCE_FRAMEWORK_PATHS_ONLY"],
     // Control Loop

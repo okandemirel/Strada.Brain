@@ -386,6 +386,20 @@ describe("bootstrap-providers", () => {
       setLiveChainMemberNames([]);
     });
 
+    it("PROVIDER_CHAIN_STRICT keeps the configured chain exhaustive — no auto-appended fallbacks (measured 2026-09-09: openai appended to a project pinned to OpenCode)", async () => {
+      const config = makeConfig({ providerChain: "openai", providerChainStrict: true });
+      mockNormalizeProviderNames.mockReturnValue(["openai"]);
+      mockCollectApiKeys.mockReturnValue({ kimi: "kimi-key" });
+      mockPreflightResponseProviders.mockResolvedValueOnce({ passedProviderIds: ["openai"], failures: [] });
+
+      const result = await initializeAIProvider(config, logger);
+
+      expect(result.notices.some((n) => /Auto-appended fallback providers/.test(n))).toBe(false);
+      expect(result.notices.some((n) => /PROVIDER_CHAIN is strict: not appending kimi/.test(n))).toBe(true);
+      expect(isCurrentChainMemberName("openai")).toBe(true);
+      expect(isCurrentChainMemberName("kimi")).toBe(false);
+    });
+
     it("declares auto-appended fallbacks, not just the configured chain (audited 2026-09-02)", async () => {
       // PROVIDER_CHAIN=openai with a KIMI key present: the boot appends kimi
       // and rebuilds the chain as [openai, kimi]. The declaration used to be

@@ -203,7 +203,15 @@ export async function initializeAIProvider(
     // Auto-detect additional providers with valid keys as silent fallbacks
     const additionalNames = detectAvailableProviderNames(apiKeys, config, new Set(configuredNames));
 
-    if (additionalNames.length > 0) {
+    if (additionalNames.length > 0 && config.providerChainStrict) {
+      // The operator's chain is the whole chain. Measured 2026-09-09 07:51:
+      // a project pinned to OpenCode got "Auto-appended fallback providers:
+      // openai" — the account reserved for other work, which a sprint would
+      // dial the moment its quota returned.
+      notices.push(
+        `PROVIDER_CHAIN is strict: not appending ${additionalNames.join(", ")} (credentials present, chain unchanged)`,
+      );
+    } else if (additionalNames.length > 0) {
       const fallbackPreflight = await preflightResponseProviders(
         additionalNames,
         providerCredentials,
