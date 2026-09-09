@@ -186,6 +186,23 @@ describe("parseLLMOutput", () => {
     expect(result!.nodes[0]!.task).toBe("do stuff");
   });
 
+  it("finds the plan among prose that carries braces of its own (measured 2026-09-09 17:33: reasoning closed, JSON present, parse failed)", () => {
+    const plan = '{"nodes": [{"id": "s1", "task": "regenerate the first batch {in place}", "dependsOn": []}]}';
+    const text =
+      "<reasoning>The task mentions batches {like this} and the tool splits paths.</reasoning>\n" +
+      "Here is my thinking: the config object looks like {\"path\": \"Assets\"} and then the plan.\n" +
+      plan + "\nThat covers it — see also {notes}.";
+    const result = parseLLMOutput(text);
+    expect(result).not.toBeNull();
+    expect(result!.nodes[0]!.task).toBe("regenerate the first batch {in place}");
+  });
+
+  it("balancedObjects is string-aware and returns each top-level object", async () => {
+    const { balancedObjects } = await import("./types.js");
+    expect(balancedObjects('a {"x": "}"} b {"y": {"z": 1}} c')).toEqual(['{"x": "}"}', '{"y": {"z": 1}}']);
+    expect(balancedObjects("no objects here }")).toEqual([]);
+  });
+
   it("parses JSON wrapped in markdown code fences", () => {
     const text = '```json\n{"nodes": [{"id": "s1", "task": "do stuff", "dependsOn": []}]}\n```';
     const result = parseLLMOutput(text);

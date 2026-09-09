@@ -226,23 +226,58 @@ export function parseLLMOutput(text: string): LLMDecompositionOutput | null {
     const fenceMatch = cleaned.match(/```(?:json)?\s*\n([\s\S]*?)\n\s*```/);
     if (fenceMatch?.[1]) {
       cleaned = fenceMatch[1].trim();
-    } else {
-      // 3. Fallback: find first JSON object in text
-      const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        cleaned = jsonMatch[0];
-      }
     }
 
-    const parsed = JSON.parse(cleaned);
-    const result = llmDecompositionSchema.safeParse(parsed);
-    if (!result.success) {
-      return null;
+    // 3. Every balanced top-level object in the text, last first: prose
+    //    around the plan may carry braces of its own, and the greedy
+    //    first-"{"-to-last-"}" slice then failed to parse (measured
+    //    2026-09-09 17:33: a 33 084-char reply, reasoning closed, a JSON
+    //    object present, no plan).
+    for (const candidate of balancedObjects(cleaned).reverse()) {
+      try {
+        const result = llmDecompositionSchema.safeParse(JSON.parse(candidate));
+        if (result.success) return result.data;
+      } catch {
+        /* not this one */
+      }
     }
-    return result.data;
+    return null;
   } catch {
     return null;
   }
+}
+
+/** Top-level `{…}` spans with balanced braces, string-aware, in order of appearance. */
+export function balancedObjects(text: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let start = -1;
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]!;
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"' && depth > 0) {
+      inString = true;
+      continue;
+    }
+    if (ch === "{") {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (ch === "}" && depth > 0) {
+      depth--;
+      if (depth === 0 && start >= 0) {
+        out.push(text.slice(start, i + 1));
+        start = -1;
+      }
+    }
+  }
+  return out;
 }
 
 // audited 2026-09-02: the "review pipeline helpers" that lived here
