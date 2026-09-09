@@ -203,6 +203,25 @@ describe("OpenAIProvider", () => {
     }
   });
 
+  it("a per-call maxTokens caps the request below the provider's configured maximum (never above it)", async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        choices: [{ message: { content: "Hi", tool_calls: [] }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 10, completion_tokens: 20 },
+      }),
+      text: async () => "",
+    });
+    const provider = new OpenAIProvider("sk-test");
+    const configured = provider.capabilities.maxTokens;
+    await provider.chat("system", [{ role: "user", content: "Hello" }], [], { maxTokens: Math.floor(configured / 2) });
+    expect(JSON.parse(mockFetch.mock.calls[0]![1].body).max_tokens).toBe(Math.floor(configured / 2));
+    await provider.chat("system", [{ role: "user", content: "Hello" }], [], { maxTokens: configured * 10 });
+    expect(JSON.parse(mockFetch.mock.calls[1]![1].body).max_tokens).toBe(configured);
+    await provider.chat("system", [{ role: "user", content: "Hello" }], []);
+    expect(JSON.parse(mockFetch.mock.calls[2]![1].body).max_tokens).toBe(configured);
+  });
+
   it("does not include tools in the request body when tools array is empty", async () => {
     mockFetch.mockResolvedValue({
       ok: true,

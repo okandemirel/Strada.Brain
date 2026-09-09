@@ -345,6 +345,37 @@ describe("GoalDecomposer", () => {
   // ===========================================================================
 
   describe("streaming decomposition (FIX 1)", () => {
+    it("a stream the endpoint dropped mid-way is retried with HALF the output cap (measured 2026-09-08/09: every 16k decomposition died 'terminated')", async () => {
+      const plan = JSON.stringify({
+        nodes: [
+          { id: "s1", task: "Setup database schema", dependsOn: [] },
+          { id: "s2", task: "Create auth middleware", dependsOn: ["s1"] },
+        ],
+      });
+      const seen: Array<unknown> = [];
+      let call = 0;
+      const provider = {
+        name: "mock-drop",
+        capabilities: { streaming: true, vision: false, functionCalling: true, maxTokens: 16_000 },
+        chat: vi.fn(async () => { throw new Error("chat() must not be called"); }),
+        chatStream: vi.fn(async (_s: string, _m: unknown, _t: unknown, onChunk: (c: string) => void, options?: unknown) => {
+          seen.push(options);
+          call++;
+          if (call === 1) throw new Error("terminated");
+          onChunk(plan);
+          return { text: plan, toolCalls: [], usage: { inputTokens: 1, outputTokens: 1 }, stopReason: "end" };
+        }),
+      } as unknown as IStreamingProvider;
+
+      const decomposer = new GoalDecomposer(provider, 3, [0, 0, 0, 0]);
+      const tree = await decomposer.decomposeProactive("s", "Build auth with database schema and middleware");
+
+      expect(provider.chatStream).toHaveBeenCalledTimes(2);
+      expect(seen[0]).toBeUndefined(); // first call: the provider's own cap
+      expect((seen[1] as { maxTokens?: number })?.maxTokens).toBe(8_000); // retry: half
+      expect(tree.nodes.size).toBe(3);
+    });
+
     it("routes the decomposition call through chatStream, not blocking chat()", async () => {
       const provider = createStreamingMockProvider([
         JSON.stringify({

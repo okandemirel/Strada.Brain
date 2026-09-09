@@ -221,7 +221,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     // our reasoning_effort must carry the corrected value, and a body captured
     // beforehand would carry the rejected one straight back.
     const response = await this.postChatCompletion(
-      () => this.buildRequestBody(openaiMessages, openaiTools, options?.responseSchema),
+      () => this.buildRequestBody(openaiMessages, openaiTools, options?.responseSchema, options?.maxTokens),
       { signal: options?.signal, onBackoff: options?.onBackoff },
     );
 
@@ -254,7 +254,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
 
     const response = await this.postChatCompletion(
       () => {
-        const body = this.buildRequestBody(openaiMessages, openaiTools, options?.responseSchema);
+        const body = this.buildRequestBody(openaiMessages, openaiTools, options?.responseSchema, options?.maxTokens);
         body["stream"] = true;
         body["stream_options"] = { include_usage: true };
         return body;
@@ -832,10 +832,11 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     messages: OpenAIMessage[],
     tools: unknown,
     responseSchema?: ResponseSchema,
+    maxTokens?: number,
   ): Record<string, unknown> {
     const body: Record<string, unknown> = {
       model: this.model,
-      max_tokens: this.capabilities.maxTokens,
+      max_tokens: maxTokens !== undefined && maxTokens > 0 ? Math.min(maxTokens, this.capabilities.maxTokens) : this.capabilities.maxTokens,
       messages,
     };
     if (tools) {

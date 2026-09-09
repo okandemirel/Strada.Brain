@@ -63,6 +63,13 @@ export interface ProviderCallOptions extends ProviderCallHooks {
    * the need to dig JSON out of prose on the ones that can.
    */
   responseSchema?: ResponseSchema;
+  /**
+   * Per-call output cap, overriding the provider's configured maximum. A
+   * caller retrying after a mid-stream drop asks for less: measured
+   * 2026-09-08/09 on OpenCode, every 16k-token decomposition stream died
+   * "terminated" at 9–17 minutes, and each retry repeated the same call.
+   */
+  maxTokens?: number;
 }
 
 /**
@@ -161,6 +168,7 @@ export async function streamOrChatText(
   provider: IAIProvider,
   systemPrompt: string,
   userMessage: string,
+  options?: ProviderCallOptions,
 ): Promise<ProviderResponse> {
   const messages: ConversationMessage[] = [{ role: "user", content: userMessage }];
   if (supportsStreaming(provider)) {
@@ -168,11 +176,11 @@ export async function streamOrChatText(
     const response = await provider.chatStream(systemPrompt, messages, [], (chunk) => {
       // The first chunk clears the FallbackChain first-response timer (see fallback-chain.ts).
       if (chunk) accumulated += chunk;
-    });
+    }, options);
     const text = response.text && response.text.length > 0 ? response.text : accumulated;
     return { ...response, text };
   }
-  return provider.chat(systemPrompt, messages, []);
+  return provider.chat(systemPrompt, messages, [], options);
 }
 
 /**

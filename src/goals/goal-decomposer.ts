@@ -20,6 +20,9 @@ import type {
 import { generateGoalNodeId, parseLLMOutput } from "./types.js";
 import { validateDAG, judgePlanShape } from "./goal-validator.js";
 
+/** The endpoint closed the stream before the answer ended (undici "terminated", a mid-stream failure). */
+const MID_STREAM_DROP_RE = /\bterminated\b|mid-?stream|socket hang up|ECONNRESET/i;
+
 // =============================================================================
 // DECOMPOSITION GUARD — minimal, language-agnostic
 // =============================================================================
@@ -482,15 +485,29 @@ export class GoalDecomposer {
       // transient by nature — retry here on the SLOW clock before giving up.
       let response: Awaited<ReturnType<typeof streamOrChatText>> | undefined;
       const rounds = Math.max(1, this.outageBackoffMs.length);
+      // A stream the endpoint dropped mid-way is retried with HALF the output
+      // cap: the same 16k-token call died "terminated" at 9-17 minutes every
+      // time on OpenCode (2026-09-08/09), and a retry that asks for the same
+      // length dies the same way. Floor 4k: below that no plan fits.
+      let maxTokens: number | undefined;
       for (let round = 0; round < rounds; round++) {
         if ((this.outageBackoffMs[round] ?? 0) > 0) {
           await new Promise((r) => setTimeout(r, this.outageBackoffMs[round]));
         }
         try {
-          response = await streamOrChatText(this.provider, systemPrompt, userMessage);
+          response = await streamOrChatText(this.provider, systemPrompt, userMessage, maxTokens ? { maxTokens } : undefined);
           break;
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
+          if (MID_STREAM_DROP_RE.test(msg) && round < rounds - 1) {
+            const base = maxTokens ?? this.provider.capabilities?.maxTokens ?? 16_384;
+            maxTokens = Math.max(4_096, Math.floor(base / 2));
+            const { getLoggerSafe } = await import("../utils/logger.js");
+            getLoggerSafe().warn("Goal decomposition stream dropped mid-way — retrying with half the output cap", {
+              error: msg.slice(0, 120),
+              maxTokens,
+            });
+          }
           // A full-chain cooldown is NOT transient on this ladder's clock: the
           // terminal chain error reads "All providers failed or unavailable.
           // All providers are in cooldown." — the regex below matches its
@@ -507,7 +524,7 @@ export class GoalDecomposer {
             });
             throw err;
           }
-          const transient = /providers failed|503|500|502|504|network|timeout|ECONN/i.test(msg);
+          const transient = /providers failed|503|500|502|504|network|timeout|ECONN/i.test(msg) || MID_STREAM_DROP_RE.test(msg);
           const { getLoggerSafe } = await import("../utils/logger.js");
           getLoggerSafe().warn(
             `Goal decomposition attempt ${round + 1}/${rounds} failed` +
