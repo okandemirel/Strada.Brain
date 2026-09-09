@@ -211,6 +211,23 @@ describe("GoalDecomposer", () => {
       expect(children.every((n) => !/^Call unity_delivery_measure once\. Record[^]*$/.test(n.task) || n.task.includes("Then, in this same step"))).toBe(true);
     });
 
+    it("hands the reasoning of a plan-less reply back on the retry, so the model only has to write the JSON (archived 2026-09-09 21:07: reasoning, </reasoning>, nothing)", async () => {
+      const reasoning = "<reasoning>Batches of 24: first the LiveOps status icons, then notifications, verify and commit each.</reasoning>\n\n";
+      const provider = createMockProvider([
+        reasoning,
+        JSON.stringify({ nodes: [{ id: "s1", task: "Regenerate 24 status icons in place, verify, commit", dependsOn: [] }, { id: "s2", task: "Regenerate 24 notifications in place, verify, commit", dependsOn: ["s1"] }] }),
+      ]);
+      const decomposer = new GoalDecomposer(provider, 3);
+      const tree = await decomposer.decomposeProactive("test-session", "Replace the placeholder art in batches until the measured count is below 300");
+      expect(Array.from(tree.nodes.values()).filter((n) => n.depth === 1)).toHaveLength(2);
+      const chat = provider.chat as unknown as { mock: { calls: unknown[][] } };
+      expect(chat.mock.calls).toHaveLength(2);
+      const retry = JSON.stringify(chat.mock.calls[1]);
+      expect(retry).toContain("your_previous_reasoning");
+      expect(retry).toContain("first the LiveOps status icons");
+      expect(retry).toContain("Do not reason again");
+    });
+
     it("with simple result produces linear DAG (sequential deps)", async () => {
       const provider = createMockProvider([
         JSON.stringify({

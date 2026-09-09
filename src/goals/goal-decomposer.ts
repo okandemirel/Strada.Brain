@@ -266,9 +266,13 @@ export class GoalDecomposer {
         ? `Previous attempt was rejected: ${this.lastRejection}. `
         : "Previous attempt failed to produce valid JSON. ";
       this.lastRejection = undefined;
+      const carried = this.lastFailedReasoning
+        ? `You already reasoned this through in your previous reply:\n<your_previous_reasoning>\n${this.lastFailedReasoning}\n</your_previous_reasoning>\nDo not reason again. `
+        : "";
+      this.lastFailedReasoning = undefined;
       llmOutput = await this.callLLMForDecomposition(
         proactivePrompt,
-        `${why}Please try again. Output the JSON object ONLY — ` +
+        `${why}${carried}Please try again. Output the JSON object ONLY — ` +
           "start your reply with \"{\" and do not write a <reasoning> block or any prose before it.\n\n" +
           `Decompose this task into sub-goals:\n\n<task>${taskDescription}</task>`,
         { rejectExplorationOnly },
@@ -465,6 +469,14 @@ export class GoalDecomposer {
   /** Call LLM and parse/validate the output */
   /** Why the last LLM output was refused, for the retry prompt; cleared when read. */
   private lastRejection: string | undefined;
+  /**
+   * The reasoning of the last reply that carried no plan, for the retry.
+   * Measured 2026-09-09 21:07 (archived reply): 3 213 chars of reasoning
+   * that worked the plan out, "</reasoning>", and nothing — the model
+   * stopped before writing it. The retry used to start from zero; it now
+   * hands that reasoning back and asks only for the JSON.
+   */
+  private lastFailedReasoning: string | undefined;
 
   private async callLLMForDecomposition(
     systemPrompt: string,
@@ -549,6 +561,7 @@ export class GoalDecomposer {
         // chars with a closed reasoning block and a JSON object failed
         // (2026-09-09 19:41, the fifth such failure of the evening).
         const archived = archiveDecompositionFailure(response.text);
+        this.lastFailedReasoning = extractReasoning(response.text);
         getLoggerSafe().warn("Goal decomposition LLM output parse failed", {
           responsePreview: response.text.slice(0, 300),
           archived,
@@ -700,4 +713,13 @@ export class GoalDecomposer {
 
     return nodes;
   }
+}
+
+/** The last REASONING_CARRY_CHARS of a reply's reasoning block (tags stripped), or undefined when there is none. */
+export const REASONING_CARRY_CHARS = 2_500;
+export function extractReasoning(text: string): string | undefined {
+  const m = /<reasoning>([\s\S]*?)(?:<\/reasoning>|$)/i.exec(text);
+  const body = m?.[1]?.trim();
+  if (!body) return undefined;
+  return body.length > REASONING_CARRY_CHARS ? `…${body.slice(-REASONING_CARRY_CHARS)}` : body;
 }
