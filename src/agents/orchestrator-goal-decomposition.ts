@@ -6,6 +6,7 @@
  */
 
 import type { AgentState } from "./agent-state.js";
+import { withLivenessHeartbeat } from "./liveness-hub.js";
 import type { Session } from "./orchestrator-session-manager.js";
 import type { GoalDecomposer } from "../goals/goal-decomposer.js";
 import type { GoalTree, GoalNodeId, GoalStatus } from "../goals/types.js";
@@ -90,9 +91,8 @@ export async function runProactiveGoalDecomposition(
     return opts.agentState;
   }
   try {
-    const goalTree = await deps.goalDecomposer.decomposeProactive(
-      opts.conversationScope,
-      opts.userMessage,
+    const goalTree = await withLivenessHeartbeat(opts.chatId, () =>
+      deps.goalDecomposer!.decomposeProactive(opts.conversationScope, opts.userMessage),
     );
     deps.activeGoalTrees.set(opts.conversationScope, goalTree);
     emitGoalEvent(deps.eventEmitter, goalTree.rootId, goalTree.rootId, "pending", 0);

@@ -63,3 +63,40 @@ export function notifyTaskLiveness(chatId: string): void {
     }
   }
 }
+
+/** How often a long provider call reports that its task is alive. */
+export const LIVENESS_HEARTBEAT_MS = 30_000;
+
+/**
+ * Run a long await while the task's watchdog keeps hearing from it.
+ *
+ * Measured 2026-09-09 17:45 on the user's project: two goal-decomposition
+ * calls of ~640 s each — model turns, not silence — and the inactivity
+ * watchdog aborted the mission at 20 minutes of "no progress". Worker turns
+ * heartbeat through the runner; decomposition did not. Ticks immediately,
+ * then every LIVENESS_HEARTBEAT_MS until `run` settles; `extra` (a node's
+ * own liveness hook) is ticked with it.
+ */
+export async function withLivenessHeartbeat<T>(
+  chatId: string,
+  run: () => Promise<T>,
+  extra?: () => void,
+  intervalMs: number = LIVENESS_HEARTBEAT_MS,
+): Promise<T> {
+  const tick = (): void => {
+    notifyTaskLiveness(chatId);
+    try {
+      extra?.();
+    } catch {
+      /* a listener's failure is not the call's */
+    }
+  };
+  tick();
+  const timer = setInterval(tick, intervalMs);
+  timer.unref?.();
+  try {
+    return await run();
+  } finally {
+    clearInterval(timer);
+  }
+}

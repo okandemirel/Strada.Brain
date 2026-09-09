@@ -9,6 +9,7 @@
  */
 
 import type { GoalNode, GoalNodeId, GoalTree } from "../goals/types.js";
+import { withLivenessHeartbeat } from "../agents/liveness-hub.js";
 import type {
   NodeResult,
   SupervisorConfig,
@@ -361,9 +362,13 @@ export class SupervisorBrain {
       await this.reportUpdate(context, activation.markdown);
 
       // Step 3: Decompose the task into a GoalTree
-      const decomposedGoalTree = context.goalTree ?? await this.decomposer.decomposeProactive(
+      // Planning is a model call of minutes; the task's watchdog must keep
+      // hearing from it (measured 2026-09-09 17:45: aborted at 20 min of
+      // "no progress" during two decomposition calls).
+      const decomposedGoalTree = context.goalTree ?? await withLivenessHeartbeat(
         context.chatId,
-        planningTask,
+        () => this.decomposer.decomposeProactive(context.chatId, planningTask),
+        context.onLiveness,
       );
       const visibleGoalTree = this.buildVisibleGoalTree(decomposedGoalTree, task);
       goalRootId = String(decomposedGoalTree.rootId);

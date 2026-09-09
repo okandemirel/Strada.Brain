@@ -72,3 +72,39 @@ describe("liveness-hub", () => {
     unsubSecond();
   });
 });
+
+describe("withLivenessHeartbeat — a long model call keeps the watchdog fed (2026-09-09: aborted at 20 min during two 640 s decompositions)", () => {
+  it("ticks the chat's listeners and the extra hook at once and on every interval until the call settles", async () => {
+    vi.useFakeTimers();
+    try {
+      const { subscribeTaskLiveness, withLivenessHeartbeat } = await import("./liveness-hub.js");
+      let ticks = 0;
+      let extra = 0;
+      const unsubscribe = subscribeTaskLiveness("chat-hb", () => { ticks += 1; });
+      let settle!: (v: string) => void;
+      const pending = new Promise<string>((resolve) => { settle = resolve; });
+      const running = withLivenessHeartbeat("chat-hb", () => pending, () => { extra += 1; }, 30_000);
+      expect(extra).toBe(1);
+      await vi.advanceTimersByTimeAsync(95_000);
+      // Listener notifications are throttled to one per 20 s; the extra hook is not.
+      expect(ticks).toBeGreaterThanOrEqual(3);
+      expect(extra).toBe(4);
+      settle("done");
+      expect(await running).toBe("done");
+      const afterTicks = ticks;
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(ticks).toBe(afterTicks);
+      unsubscribe();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("both decomposition call sites run under the heartbeat", () => {
+    const { readFileSync } = require("node:fs") as typeof import("node:fs");
+    const brain = readFileSync("src/supervisor/supervisor-brain.ts", "utf8");
+    const proactive = readFileSync("src/agents/orchestrator-goal-decomposition.ts", "utf8");
+    expect(brain).toContain("withLivenessHeartbeat(\n        context.chatId,\n        () => this.decomposer.decomposeProactive(");
+    expect(proactive).toContain("withLivenessHeartbeat(opts.chatId, () =>\n      deps.goalDecomposer!.decomposeProactive(");
+  });
+});
