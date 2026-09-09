@@ -6,12 +6,22 @@
  */
 
 import type {
+
   NodeResult,
   VerificationConfig,
   VerificationReport,
   VerificationVerdict,
   SupervisorResult,
 } from "./supervisor-types.js";
+
+/**
+ * A verifier issue about the node's REPORT rather than its work: the output
+ * being a meta-statement, empty, or missing a summary. A rejection made only
+ * of these on a node whose files landed is a flag, not a failure; a
+ * substantive finding ("missing test coverage") still fails the node.
+ */
+const REPORT_SHAPED_ISSUE_RE =
+  /output (is )?incomplete|meta-?statement|no (final )?(report|summary)|(output|response|report) (is )?(empty|missing)|did not (report|summari[sz]e)|only (a )?(status|meta)/i;
 
 // =============================================================================
 // COLLECTED RESULTS
@@ -194,11 +204,29 @@ export class ResultAggregator {
       if (verdict.verdict === "reject") {
         const idx = updatedResults.findIndex((result) => result.nodeId === node.nodeId);
         if (idx !== -1) {
-          updatedResults[idx] = {
-            ...updatedResults[idx]!,
-            status: "failed",
-            output: `Verification rejected: ${verdict.issues?.join(", ") ?? "no details"}`,
-          };
+          const rejected = updatedResults[idx]!;
+          const landed = rejected.artifacts?.length ?? 0;
+          const issues = verdict.issues ?? [];
+          if (landed > 0 && issues.length > 0 && issues.every((i) => REPORT_SHAPED_ISSUE_RE.test(i))) {
+            // The verifier judged the REPORT; the node's files landed. Measured
+            // 2026-09-09 09:18: "Task output incomplete: only meta-statement"
+            // failed a node that had bound sprites and committed twice, six
+            // dependents were skipped, and the sprint settled "no node
+            // succeeded" over 26 committed files. A rejected report on real
+            // mutations is a flag, not a failure.
+            updatedResults[idx] = {
+              ...rejected,
+              output:
+                `${rejected.output}\n\n[VERIFIER REJECTED THE REPORT — ${landed} file(s) this node changed still stand; ` +
+                `not positively verified: ${verdict.issues?.join(", ") ?? "no details"}]`,
+            };
+          } else {
+            updatedResults[idx] = {
+              ...rejected,
+              status: "failed",
+              output: `Verification rejected: ${verdict.issues?.join(", ") ?? "no details"}`,
+            };
+          }
         }
       } else if (verdict.verdict === "flag_issues" && (verdict.issues?.length ?? 0) > 0) {
         // Flags used to be dropped on the floor: the node stayed "ok" and the

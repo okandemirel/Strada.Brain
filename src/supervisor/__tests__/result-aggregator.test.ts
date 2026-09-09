@@ -260,6 +260,18 @@ describe("ResultAggregator", () => {
       });
     });
 
+    it("a rejected REPORT does not fail a node whose files landed (measured 2026-09-09 09:18: 26 committed files, 'no node succeeded')", async () => {
+      const verifyFn = vi.fn().mockResolvedValue({ verdict: "reject", verifierProvider: "deepseek", issues: ["Task output incomplete: only meta-statement"] });
+      const agg = new ResultAggregator({ mode: "always", samplingRate: 0, preferDifferentProvider: true, maxVerificationCost: 15 }, verifyFn);
+      const withFiles = { ...makeResult("A", "ok"), artifacts: [{ path: "Assets/Prefabs/Slime.prefab", action: "modify" as const }] };
+      const noFiles = makeResult("B", "ok");
+      const verified = await agg.verify([withFiles, noFiles]);
+      expect(verified[0]!.status).toBe("ok");
+      expect(verified[0]!.output).toContain("VERIFIER REJECTED THE REPORT");
+      expect(verified[0]!.output).toContain("1 file(s)");
+      expect(verified[1]!.status).toBe("failed");
+    });
+
     it("stops verifying once the configured verification budget would be exceeded", async () => {
       const verifyFn = vi.fn().mockResolvedValue({ verdict: "approve", verifierProvider: "deepseek" });
       const agg = new ResultAggregator({ mode: "always", samplingRate: 0, preferDifferentProvider: true, maxVerificationCost: 0.15 }, verifyFn);
