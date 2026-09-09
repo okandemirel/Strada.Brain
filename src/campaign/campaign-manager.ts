@@ -35,6 +35,7 @@ import { isTerminalFailureReport } from "../agents/autonomy/verifier-pipeline.js
 import { assessBuiltAsSpecified, PLACEHOLDER_GRADE_RULE } from "../agents/autonomy/built-as-specified.js";
 import { describeDimensionality } from "../agents/autonomy/gdd-dimensionality.js";
 import type { Campaign, CampaignMilestone } from "./types.js";
+import { buildCampaignStatus, type CampaignStatusSnapshot } from "./campaign-status.js";
 import { generateCampaignId } from "./types.js";
 
 /** The channel-agnostic way back to the conversation (approval gate, reports). */
@@ -3375,6 +3376,45 @@ export class CampaignManager {
   }
 
   /** Returns whether the message actually reached the channel. */
+  /**
+   * The campaign a status surface should describe: the active one on this chat,
+   * else any active one on this project (the daemon serves one project, and a
+   * Telegram chat and a web chat are different chat ids), else the most recent
+   * terminal one. Undefined when this project never had a campaign.
+   */
+  findForStatus(chatId?: string): Campaign | undefined {
+    const active = this.storage.listActive().filter((c) => c.projectRoot === this.projectRoot);
+    const onChat = chatId ? active.find((c) => c.chatId === chatId) : undefined;
+    if (onChat) return onChat;
+    if (active.length > 0) {
+      return active.reduce((newest, c) => (c.updatedAt > newest.updatedAt ? c : newest));
+    }
+    const terminal = this.storage.listRecentTerminal(10).filter((c) => c.projectRoot === this.projectRoot);
+    if (terminal.length === 0) return undefined;
+    return terminal.reduce((newest, c) => (c.updatedAt > newest.updatedAt ? c : newest));
+  }
+
+  /** Measured status of the campaign `findForStatus` picks — see campaign-status.ts. */
+  describeStatus(chatId?: string): CampaignStatusSnapshot | undefined {
+    const campaign = this.findForStatus(chatId);
+    if (!campaign) return undefined;
+    return buildCampaignStatus(campaign, {
+      maxMilestoneAttempts: this.maxMilestoneAttempts,
+      milestoneTimeBoxMs: this.milestoneTimeBoxMs,
+      getTask: (taskId) => this.taskManager.getStatus(taskId as TaskId),
+      listTasks: (chat) => this.taskManager.listTasks(chat, 20),
+    });
+  }
+
+  /**
+   * `/campaign revive` — the same path as the "kampanya devam" text, so a
+   * command-menu tap and a typed phrase cannot drift apart. Returns false when
+   * nothing on this chat is revivable (the caller tells the user).
+   */
+  async reviveByCommand(chatId: string): Promise<boolean> {
+    return this.tryHandleRevive(chatId, "kampanya devam");
+  }
+
   private async tell(
     campaign: Pick<Campaign, "chatId"> & Partial<Pick<Campaign, "id">>,
     markdown: string,

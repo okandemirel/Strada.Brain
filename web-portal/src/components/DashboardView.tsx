@@ -1,6 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import { useHealth, useMetrics, useTriggers, useAgents, useDelegations, useConsolidation, useDeployment, useMaintenance } from '../hooks/use-api'
 import MetricCard from './MetricCard'
+import CampaignCard from './CampaignCard'
 import { PageSkeleton } from './ui/page-skeleton'
 import { Sparkline } from './ui/sparkline'
 import { formatUptime } from '../utils/format'
@@ -112,6 +113,9 @@ export default function DashboardView() {
           )}
         </div>
       </div>
+
+      {/* Game build — campaign, guardian, delivery measurement (2026-09-09) */}
+      <CampaignCard />
 
       {/* System Health */}
       <section className="bg-white/3 backdrop-blur border border-white/5 rounded-2xl p-5 mb-6">

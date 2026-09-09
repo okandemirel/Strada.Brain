@@ -640,3 +640,179 @@ describe("CommandHandler /run", () => {
     expect(sendMarkdown).not.toHaveBeenCalled();
   });
 });
+
+describe("CommandHandler build commands (/campaign, /measure, /guardian)", () => {
+  const sendMarkdown = vi.fn();
+  const sendText = vi.fn();
+  const NOW = 1_800_000_000_000;
+
+  function makeHandler() {
+    return new CommandHandler(
+      { listTasks: () => [], getStatus: () => null } as never,
+      { sendMarkdown, sendText } as never,
+    );
+  }
+
+  const snapshot = {
+    id: "camp_7",
+    chatId: "c",
+    channelType: "telegram",
+    state: "executing" as const,
+    projectRoot: "/p",
+    createdAt: NOW - 3_600_000,
+    updatedAt: NOW,
+    currentMilestone: 0,
+    milestones: [
+      { id: "m1", title: "Core", status: "running" as const, attempts: 1, maxAttempts: 2, timeBoxEscalations: 0, structureRefused: false, startedAtMs: NOW - 600_000 },
+      { id: "m2", title: "Polish", status: "pending" as const, attempts: 0, maxAttempts: 2, timeBoxEscalations: 0, structureRefused: false },
+    ],
+    milestoneTimeBoxMs: 6 * 3_600_000,
+    deliveryReported: false,
+    revivable: false,
+    activeTasks: [],
+  };
+
+  const guardianSnapshot = {
+    projectRoot: "/p",
+    lastVerdict: "red" as const,
+    lastCheckedAt: NOW - 60_000,
+    lastErrorCount: 2,
+    lastDetail: "error CS0001",
+    fixTaskId: "task_fix",
+    fixTaskStartedAt: NOW - 120_000,
+    fixAttempts: 1,
+    maxFixAttempts: 3,
+    attemptsWithoutProgress: 0,
+    escalated: false,
+    blindStreak: 0,
+    nextVerifyAt: 0,
+  };
+
+  beforeEach(() => {
+    sendMarkdown.mockReset();
+    sendText.mockReset();
+    sendMarkdown.mockResolvedValue(undefined);
+    sendText.mockResolvedValue(undefined);
+  });
+
+  it("/campaign renders the campaign snapshot and the guardian verdict together", async () => {
+    const handler = makeHandler();
+    const describeStatus = vi.fn(() => snapshot);
+    handler.setCampaignManager({ describeStatus, reviveByCommand: vi.fn() });
+    handler.setRealTreeGuardian({ snapshot: () => guardianSnapshot });
+
+    await handler.handle("chat-1", "campaign", []);
+
+    expect(describeStatus).toHaveBeenCalledWith("chat-1");
+    const text = String(sendMarkdown.mock.calls[0]?.[1]);
+    expect(text).toContain("camp_7");
+    expect(text).toContain("m1 Core — running, attempt 1/2");
+    expect(text).toContain("Real-tree guardian");
+    expect(text).toContain("Errors: 2");
+    expect(text).toContain("task_fix");
+  });
+
+  it("/campaign without a campaign layer or without a campaign says so instead of inventing one", async () => {
+    const handler = makeHandler();
+    await handler.handle("chat-1", "campaign", []);
+    expect(String(sendText.mock.calls[0]?.[1])).toMatch(/campaign layer is not running/);
+
+    handler.setCampaignManager({ describeStatus: () => undefined, reviveByCommand: vi.fn() });
+    await handler.handle("chat-1", "campaign", []);
+    expect(String(sendText.mock.calls[1]?.[1])).toMatch(/No campaign for this project yet/);
+    expect(sendMarkdown).not.toHaveBeenCalled();
+  });
+
+  it("/campaign revive goes through the campaign's own revive path and reports when nothing is revivable", async () => {
+    const handler = makeHandler();
+    const reviveByCommand = vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    handler.setCampaignManager({ describeStatus: () => snapshot, reviveByCommand });
+
+    await handler.handle("chat-1", "campaign", ["revive"]);
+    expect(reviveByCommand).toHaveBeenCalledWith("chat-1");
+    expect(sendText).not.toHaveBeenCalled();
+
+    await handler.handle("chat-1", "campaign", ["devam"]);
+    expect(String(sendText.mock.calls[0]?.[1])).toMatch(/Nothing to revive/);
+  });
+
+  it("/measure runs the delivery-gate measurement on the configured project and prints its counts", async () => {
+    const handler = makeHandler();
+    handler.setProjectPath("/proj");
+    const measurer = vi.fn(() => ({
+      measured: true,
+      scenes: [],
+      shippedScenes: [{ scene: "Assets/Main.unity" }],
+      shippedRenderers: 9,
+      shippedWorldRenderers: 8,
+      referencedOnlyRenderers: 0,
+      shippedProjectRefs: 5,
+      shippedBuiltInRefs: 0,
+      shippedMeshRenderers: 1,
+      shippedSpriteRenderers: 8,
+      artInventory: { prefabs: 3, models: 0, sprites: 50, placeholderSprites: 41, audio: 2, duplicateAudio: 0, shortAudio: 1 },
+      unboundPrefabs: [],
+      unboundModels: [],
+      unboundSprites: ["x"],
+      placeholderSpritePaths: [],
+      boundPlaceholderSprites: 4,
+      primitiveScripts: [],
+      primitiveCallSites: 0,
+      disclosures: [],
+      incomplete: [],
+    }));
+    handler.setDeliveryMeasurer(measurer as never);
+
+    await handler.handle("chat-1", "measure", []);
+    expect(measurer).toHaveBeenCalledWith("/proj");
+    const text = String(sendMarkdown.mock.calls[0]?.[1]);
+    expect(text).toContain("Placeholder-grade sprites: 41 (4 bound in shipped scenes)");
+    expect(text).toContain("Unbound: 0 prefabs, 0 models, 1 sprites");
+
+    // `/campaign measure` is the same measurement.
+    await handler.handle("chat-1", "campaign", ["measure"]);
+    expect(measurer).toHaveBeenCalledTimes(2);
+  });
+
+  it("/measure without a project path or with a failing measurer reports the cause", async () => {
+    const handler = makeHandler();
+    await handler.handle("chat-1", "measure", []);
+    expect(String(sendText.mock.calls[0]?.[1])).toMatch(/No project path/);
+
+    handler.setProjectPath("/proj");
+    handler.setDeliveryMeasurer(() => {
+      throw new Error("EACCES");
+    });
+    await handler.handle("chat-1", "measure", []);
+    expect(String(sendText.mock.calls[1]?.[1])).toMatch(/Measurement failed: EACCES/);
+    expect(sendMarkdown).not.toHaveBeenCalled();
+  });
+
+  it("/guardian renders the guardian snapshot alone", async () => {
+    const handler = makeHandler();
+    await handler.handle("chat-1", "guardian", []);
+    expect(String(sendText.mock.calls[0]?.[1])).toMatch(/guardian is not running/);
+
+    handler.setRealTreeGuardian({ snapshot: () => guardianSnapshot });
+    await handler.handle("chat-1", "guardian", []);
+    expect(String(sendMarkdown.mock.calls[0]?.[1])).toContain("tree red");
+  });
+
+  it("/status with no active tasks points at the campaign when one exists", async () => {
+    const handler = makeHandler();
+    handler.setCampaignManager({ describeStatus: () => snapshot, reviveByCommand: vi.fn() });
+    await handler.handle("chat-1", "status", []);
+    const text = String(sendMarkdown.mock.calls[0]?.[1]);
+    expect(text).toContain("No active tasks.");
+    expect(text).toContain("Campaign `camp_7`: executing, 0/2 milestones green · on m1 (attempt 1/2)");
+  });
+
+  it("/help lists the build commands", async () => {
+    const handler = makeHandler();
+    await handler.handle("chat-1", "help", []);
+    const text = String(sendMarkdown.mock.calls[0]?.[1]);
+    expect(text).toContain("/campaign");
+    expect(text).toContain("/measure");
+    expect(text).toContain("/guardian");
+  });
+});

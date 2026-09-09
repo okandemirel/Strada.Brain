@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { fetchJson } from '../utils/api'
+import type { BuildStatus } from '../types/build-status'
 
 // ---------------------------------------------------------------------------
 // Shared fetcher -- reuses the existing fetchJson utility but throws on null
@@ -494,6 +495,21 @@ export function useHealth() {
   return useQuery<HealthResponse>({
     queryKey: ['health'],
     queryFn: () => fetchApi<HealthResponse>('/health'),
+  })
+}
+
+/**
+ * GET /api/campaign — the measured build status (campaign, guardian). Served by
+ * the daemon itself, not the dashboard process, so it works even when the
+ * dashboard API is off. A `campaign:status` socket frame refreshes it sooner
+ * (see use-dashboard-socket / campaign-store).
+ */
+export function useCampaignStatus() {
+  return useQuery<BuildStatus>({
+    queryKey: ['campaign-status'],
+    queryFn: () => fetchApi<BuildStatus>('/api/campaign'),
+    refetchInterval: 60_000,
+    retry: false,
   })
 }
 

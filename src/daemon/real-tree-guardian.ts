@@ -188,6 +188,35 @@ export function countCompileErrors(detail: string): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
+/**
+ * What the guardian last saw, for the channels (`/guardian`, the web portal's
+ * campaign card). Every field is a measurement the guardian already took —
+ * nothing here is computed on demand, so a snapshot of a guardian that has
+ * never ticked says `unknown`, never `green`.
+ */
+export interface RealTreeGuardianSnapshot {
+  readonly projectRoot: string;
+  /** `unknown` until the first verdict; `blind` when the verifier could not run. */
+  readonly lastVerdict: "unknown" | "green" | "red" | "blind";
+  /** Epoch ms of the last verifier answer; 0 = never. */
+  readonly lastCheckedAt: number;
+  /** Errors the verifier counted in the last red verdict; undefined when it named none. */
+  readonly lastErrorCount?: number;
+  /** Compact excerpt of the last non-green verdict (≤300 chars). */
+  readonly lastDetail: string;
+  /** The in-flight autonomous fix task, if any. */
+  readonly fixTaskId?: string;
+  readonly fixTaskStartedAt: number;
+  readonly fixAttempts: number;
+  readonly maxFixAttempts: number;
+  readonly bestErrorCount?: number;
+  readonly attemptsWithoutProgress: number;
+  readonly escalated: boolean;
+  readonly blindStreak: number;
+  /** Epoch ms before which the guardian will not verify again; 0 = no hold. */
+  readonly nextVerifyAt: number;
+}
+
 export class RealTreeGuardian {
   private readonly taskManager: TaskManager;
   private readonly verify: RealTreeVerifier;
@@ -220,6 +249,10 @@ export class RealTreeGuardian {
   private lastGreenNoteAt = 0;
   /** True while the last verdict was red, so the recovery can be announced. */
   private wasRed = false;
+  private lastVerdict: RealTreeGuardianSnapshot["lastVerdict"] = "unknown";
+  private lastCheckedAt = 0;
+  private lastErrorCount: number | undefined;
+  private lastDetail = "";
 
   constructor(options: RealTreeGuardianOptions) {
     this.taskManager = options.taskManager;
@@ -338,7 +371,10 @@ export class RealTreeGuardian {
       }
 
       const verdict = await this.verify(this.projectRoot);
+      this.lastCheckedAt = this.now();
       if (verdict.ran === false) {
+        this.lastVerdict = "blind";
+        this.lastDetail = verdict.detail.slice(0, 300);
         // The verifier could not run — no signal about the tree, so no fix.
         // Audited 2026-09-02: this returned bare, discarding `detail`, so a
         // guardian whose verifier was permanently unavailable was
@@ -350,6 +386,9 @@ export class RealTreeGuardian {
       this.blindStreak = 0;
       this.blindReported = false;
       if (verdict.ok) {
+        this.lastVerdict = "green";
+        this.lastErrorCount = 0;
+        this.lastDetail = "";
         const recovered = this.wasRed;
         this.redFingerprint = undefined;
         this.fixAttempts = 0;
@@ -385,6 +424,9 @@ export class RealTreeGuardian {
       // measured 25 → 40 → 37 → 31 → 10 → 22 → 37 sequence never repeated a
       // list, so the fingerprint guard never fired.
       const errors = countCompileErrors(verdict.detail);
+      this.lastVerdict = "red";
+      this.lastErrorCount = errors;
+      this.lastDetail = compactCompileDetail(verdict.detail).slice(0, 300);
       if (errors !== undefined) {
         if (errors < this.bestErrorCount) {
           this.bestErrorCount = errors;
@@ -474,6 +516,26 @@ export class RealTreeGuardian {
    * after, and tells the user once per streak when the guardian has been
    * blind that long — so "not watching" never reads like "green".
    */
+  /** The guardian's last measurements, for status surfaces. Read-only; never triggers a tick. */
+  snapshot(): RealTreeGuardianSnapshot {
+    return {
+      projectRoot: this.projectRoot,
+      lastVerdict: this.lastVerdict,
+      lastCheckedAt: this.lastCheckedAt,
+      lastErrorCount: this.lastErrorCount,
+      lastDetail: this.lastDetail,
+      fixTaskId: this.fixTaskId,
+      fixTaskStartedAt: this.fixTaskStartedAt,
+      fixAttempts: this.fixAttempts,
+      maxFixAttempts: MAX_FIX_ATTEMPTS_PER_FINGERPRINT,
+      bestErrorCount: Number.isFinite(this.bestErrorCount) ? this.bestErrorCount : undefined,
+      attemptsWithoutProgress: this.attemptsWithoutProgress,
+      escalated: this.escalated,
+      blindStreak: this.blindStreak,
+      nextVerifyAt: this.nextVerifyAt,
+    };
+  }
+
   private async noteBlindTick(detail: string): Promise<void> {
     this.blindStreak += 1;
     const streak = this.blindStreak;

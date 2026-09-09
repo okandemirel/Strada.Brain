@@ -1411,3 +1411,60 @@ describe("WebChannel CSP drift guard", () => {
     expect(scriptSrc).not.toContain("'unsafe-inline'");
   });
 });
+
+describe("GET /api/campaign — measured build status served in-daemon", () => {
+  async function serve(channel: WebChannel, url: string, method = "GET") {
+    const req = createMockRequest({ method, url });
+    const res = createMockResponse();
+    await (channel as unknown as { handleHttp: (req: unknown, res: unknown) => Promise<void> }).handleHttp(req, res);
+    return res;
+  }
+
+  it("answers 503 (not a proxy 403 or an empty object) when no provider is registered", async () => {
+    const channel = new WebChannel();
+    const res = await serve(channel, "/api/campaign");
+    expect(res.statusCode).toBe(503);
+    expect(JSON.parse(res.body)).toMatchObject({ error: expect.stringMatching(/no campaign layer/) });
+  });
+
+  it("serves the provider's JSON and passes ?measure=1 through", async () => {
+    const channel = new WebChannel();
+    const provider = vi.fn(async ({ measure }: { measure: boolean }) => ({ campaign: { id: "camp_1" }, guardian: null, measurement: measure ? { measured: true } : null }));
+    channel.setBuildStatusProvider(provider);
+
+    const plain = await serve(channel, "/api/campaign");
+    expect(plain.statusCode).toBe(200);
+    expect(plain.headers["Cache-Control"]).toMatch(/no-store|no-cache/);
+    expect(JSON.parse(plain.body)).toEqual({ campaign: { id: "camp_1" }, guardian: null, measurement: null });
+    expect(provider).toHaveBeenLastCalledWith({ measure: false });
+
+    const measured = await serve(channel, "/api/campaign?measure=1");
+    expect(JSON.parse(measured.body).measurement).toEqual({ measured: true });
+    expect(provider).toHaveBeenLastCalledWith({ measure: true });
+
+    expect((await serve(channel, "/api/campaign", "POST")).statusCode).toBe(405);
+  });
+
+  it("reports a provider failure as 500 with the cause", async () => {
+    const channel = new WebChannel();
+    channel.setBuildStatusProvider(async () => {
+      throw new Error("campaigns.db locked");
+    });
+    const res = await serve(channel, "/api/campaign");
+    expect(res.statusCode).toBe(500);
+    expect(JSON.parse(res.body).error).toContain("campaigns.db locked");
+  });
+
+  it("broadcastBuildStatus pushes a campaign:status frame to connected clients", async () => {
+    const channel = new WebChannel();
+    channel.setBuildStatusProvider(async () => ({ campaign: { id: "camp_2" }, guardian: null, measurement: null }));
+    const sent: string[] = [];
+    (channel as unknown as { clients: Map<string, unknown> }).clients.set("c1", {
+      ws: { readyState: 1, send: (m: string) => sent.push(m), OPEN: 1 },
+      chatId: "c1",
+    });
+    await channel.broadcastBuildStatus();
+    expect(sent).toHaveLength(1);
+    expect(JSON.parse(sent[0]!)).toMatchObject({ type: "campaign:status", payload: { campaign: { id: "camp_2" } } });
+  });
+});

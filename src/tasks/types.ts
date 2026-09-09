@@ -154,7 +154,7 @@ export interface Task {
 
 // ─── Commands ────────────────────────────────────────────────────────────────────
 
-export type TaskCommand = "status" | "cancel" | "tasks" | "detail" | "help" | "pause" | "resume" | "model" | "goal" | "autonomous" | "persona" | "daemon" | "agent" | "routing" | "token" | "retry" | "continue" | "vault" | "run";
+export type TaskCommand = "status" | "cancel" | "tasks" | "detail" | "help" | "pause" | "resume" | "model" | "goal" | "autonomous" | "persona" | "daemon" | "agent" | "routing" | "token" | "retry" | "continue" | "vault" | "run" | "campaign" | "measure" | "guardian";
 
 export interface ParsedCommand {
   type: "command";

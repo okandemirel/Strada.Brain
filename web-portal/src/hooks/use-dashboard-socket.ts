@@ -4,6 +4,8 @@ import { useWorkspaceStore, type WorkspaceMode } from '../stores/workspace-store
 import { useCanvasStore, type CanvasLayout, type CanvasViewport } from '../stores/canvas-store'
 import { useCodeStore } from '../stores/code-store'
 import { useSupervisorStore } from '../stores/supervisor-store'
+import { useCampaignStore } from '../stores/campaign-store'
+import type { BuildStatus } from '../types/build-status'
 import { normalizeCanvasIncomingShapes } from '../components/canvas/canvas-shape-normalizer'
 import type { MonitorTask, ActivityEntry, DagState } from '../stores/monitor-store'
 
@@ -582,6 +584,13 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
       break
     }
 
+    case 'campaign:status': {
+      const payload = (data as { payload?: unknown }).payload
+      if (payload && typeof payload === 'object' && 'generatedAt' in payload) {
+        useCampaignStore.getState().setPushed(payload as BuildStatus)
+      }
+      break
+    }
     default:
       // Unknown workspace message type — ignore
       break
@@ -601,5 +610,6 @@ export function isWorkspaceMessage(type: string): boolean {
     || type.startsWith('progress:')
     || type.startsWith('budget:')
     || type.startsWith('verify:')
+    || type.startsWith('campaign:')
     || type === 'notification'
 }

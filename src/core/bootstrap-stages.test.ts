@@ -509,6 +509,8 @@ describe("bootstrap-stages", () => {
     const commandHandler = {
       setProviderRouter: vi.fn(),
       setProjectPath: vi.fn(),
+      setCampaignManager: vi.fn(),
+      setRealTreeGuardian: vi.fn(),
     } as any;
     const messageRouter = { _tag: "message-router" } as any;
     const daemonEventBus = { _tag: "daemon-bus" } as any;
@@ -567,6 +569,9 @@ describe("bootstrap-stages", () => {
     expect(autoUpdater.init).toHaveBeenCalled();
     expect(autoUpdater.scheduleChecks).toHaveBeenCalled();
     expect(commandHandler.setProviderRouter).toHaveBeenCalledWith(providerRouter);
+    // The channels' build commands are wired even when no campaign layer or guardian came up.
+    expect(commandHandler.setCampaignManager).toHaveBeenCalledTimes(1);
+    expect(commandHandler.setRealTreeGuardian).toHaveBeenCalledTimes(1);
     expect(result.daemonEventBus).toBe(daemonEventBus);
     expect(result.taskStorage).toBe(taskStorage);
     expect(result.backgroundExecutor).toBe(backgroundExecutor);

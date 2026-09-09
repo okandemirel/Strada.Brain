@@ -24,6 +24,23 @@ import type { IVault } from "../vault/vault.interface.js";
 import type { VaultRegistry } from "../vault/vault-registry.js";
 import { ShellExecTool } from "../agents/tools/shell-exec.js";
 import { requestWriteConfirmation } from "../agents/orchestrator-write-gate.js";
+import type { CampaignStatusSnapshot } from "../campaign/campaign-status.js";
+import { formatCampaignStatus, formatGuardianStatus, formatMeasurement } from "../campaign/campaign-status.js";
+import type { RealTreeGuardianSnapshot } from "../daemon/real-tree-guardian.js";
+import type { BuiltAsSpecifiedReport } from "../agents/autonomy/built-as-specified.js";
+
+/** The slice of CampaignManager the channels' status commands need. */
+export interface CampaignStatusSource {
+  describeStatus(chatId?: string): CampaignStatusSnapshot | undefined;
+  reviveByCommand(chatId: string): Promise<boolean>;
+}
+
+/** The slice of RealTreeGuardian the channels' status commands need. */
+export interface GuardianStatusSource {
+  snapshot(): RealTreeGuardianSnapshot;
+}
+
+export type DeliveryMeasurer = (projectRoot: string) => BuiltAsSpecifiedReport;
 
 /** Structural interface for ProviderRouter to avoid circular dependency */
 interface ProviderRouterRef {
@@ -155,6 +172,25 @@ export class CommandHandler {
     this.projectPath = projectPath;
   }
 
+  private campaignStatusSource?: CampaignStatusSource;
+  private guardianStatusSource?: GuardianStatusSource;
+  private deliveryMeasurer?: DeliveryMeasurer;
+
+  /** Wire the campaign layer so `/campaign` can read and revive it. */
+  setCampaignManager(source: CampaignStatusSource | undefined): void {
+    this.campaignStatusSource = source;
+  }
+
+  /** Wire the real-tree guardian so `/guardian` and `/campaign` can show its last verdict. */
+  setRealTreeGuardian(source: GuardianStatusSource | undefined): void {
+    this.guardianStatusSource = source;
+  }
+
+  /** The delivery-gate measurement `/measure` runs (defaults to assessBuiltAsSpecified). */
+  setDeliveryMeasurer(measurer: DeliveryMeasurer | undefined): void {
+    this.deliveryMeasurer = measurer;
+  }
+
   private getIdentityKey(chatId: string, userId?: string): string {
     const normalizedUserId = userId?.trim();
     return normalizedUserId ? normalizedUserId : chatId;
@@ -216,6 +252,15 @@ export class CommandHandler {
       case "vault":
         await this.handleVault(chatId, args);
         break;
+      case "campaign":
+        await this.handleCampaign(chatId, args);
+        break;
+      case "measure":
+        await this.handleMeasure(chatId);
+        break;
+      case "guardian":
+        await this.handleGuardian(chatId);
+        break;
       case "run":
         await this.handleRun(chatId, args, userId);
         break;
@@ -237,6 +282,11 @@ export class CommandHandler {
     const tasks = this.taskManager.listTasks(chatId);
     const active = tasks.filter((t) => ACTIVE_STATUSES.has(t.status));
     if (active.length === 0) {
+      const campaignLine = this.campaignOneLiner(chatId);
+      if (campaignLine) {
+        await this.channel.sendMarkdown(chatId, `No active tasks.\n${campaignLine}`);
+        return;
+      }
       await this.channel.sendText(chatId, "No active tasks.");
       return;
     }
@@ -329,6 +379,13 @@ export class CommandHandler {
       "`/tasks` - List recent tasks",
       "`/detail <id>` - Show full task details",
       "`/help` - Show this help",
+      "",
+      "*Build Commands*",
+      "",
+      "`/campaign` (`/kampanya`) - Measured campaign status: milestones, attempts, time box, current task, guardian",
+      "`/campaign revive` - Continue a failed/refused campaign (same as `kampanya devam`)",
+      "`/campaign measure` or `/measure` (`/ölç`) - Run the delivery-gate measurement now: scenes, renderers, placeholder sprites, unbound art",
+      "`/guardian` (`/bekçi`) - Real-tree guardian: last compile verdict, fix task, escalation",
       "",
       "*Goal Commands*",
       "",
@@ -1586,6 +1643,79 @@ export class CommandHandler {
     const icon = this.statusIcon(task.status);
     const elapsed = this.formatElapsed(task.createdAt);
     return `${icon} \`${task.id}\` ${task.title} (${elapsed})`;
+  }
+
+  private campaignOneLiner(chatId: string): string | undefined {
+    const snapshot = this.campaignStatusSource?.describeStatus(chatId);
+    if (!snapshot) return undefined;
+    const green = snapshot.milestones.filter((m) => m.status === "green").length;
+    const current = snapshot.milestones[snapshot.currentMilestone];
+    const where = current && snapshot.state === "executing" ? ` · on ${current.id} (attempt ${current.attempts}/${current.maxAttempts})` : "";
+    return `Campaign \`${snapshot.id}\`: ${snapshot.state}, ${green}/${snapshot.milestones.length} milestones green${where} — \`/campaign\` for details.`;
+  }
+
+  private async handleCampaign(chatId: string, args: string[]): Promise<void> {
+    const sub = (args[0] ?? "").toLowerCase();
+    if (sub === "measure" || sub === "olc" || sub === "ölç") {
+      await this.handleMeasure(chatId);
+      return;
+    }
+    if (!this.campaignStatusSource) {
+      await this.channel.sendText(chatId, "The campaign layer is not running in this daemon.");
+      return;
+    }
+    if (sub === "revive" || sub === "resume" || sub === "devam" || sub === "continue") {
+      const revived = await this.campaignStatusSource.reviveByCommand(chatId);
+      if (!revived) {
+        await this.channel.sendText(
+          chatId,
+          "Nothing to revive on this chat — only a failed, cancelled, or structurally refused campaign can be continued.",
+        );
+      }
+      return;
+    }
+    const snapshot = this.campaignStatusSource.describeStatus(chatId);
+    if (!snapshot) {
+      await this.channel.sendText(
+        chatId,
+        "No campaign for this project yet. Share a GDD (or describe the game idea) and the build starts on its own.",
+      );
+      return;
+    }
+    const sections = [formatCampaignStatus(snapshot)];
+    if (this.guardianStatusSource) {
+      sections.push("", formatGuardianStatus(this.guardianStatusSource.snapshot()));
+    }
+    await this.channel.sendMarkdown(chatId, sections.join("\n"));
+  }
+
+  private async handleMeasure(chatId: string): Promise<void> {
+    const projectRoot = this.projectPath;
+    if (!projectRoot) {
+      await this.channel.sendText(chatId, "No project path is configured — nothing to measure.");
+      return;
+    }
+    let measure = this.deliveryMeasurer;
+    if (!measure) {
+      const mod = await import("../agents/autonomy/built-as-specified.js");
+      measure = mod.assessBuiltAsSpecified;
+    }
+    let report: BuiltAsSpecifiedReport;
+    try {
+      report = measure(projectRoot);
+    } catch (err) {
+      await this.channel.sendText(chatId, `Measurement failed: ${err instanceof Error ? err.message : String(err)}`);
+      return;
+    }
+    await this.channel.sendMarkdown(chatId, formatMeasurement(report, projectRoot));
+  }
+
+  private async handleGuardian(chatId: string): Promise<void> {
+    if (!this.guardianStatusSource) {
+      await this.channel.sendText(chatId, "The real-tree guardian is not running in this daemon.");
+      return;
+    }
+    await this.channel.sendMarkdown(chatId, formatGuardianStatus(this.guardianStatusSource.snapshot()));
   }
 
   private formatTaskStatus(task: Task): string {

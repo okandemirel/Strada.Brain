@@ -106,6 +106,12 @@ const MIME_TYPES: Record<string, string> = {
   ".ico": "image/x-icon",
 };
 
+/**
+ * Measured build status for the portal: campaign snapshot, guardian snapshot,
+ * and (only when asked) the delivery-gate measurement, which walks Assets/.
+ */
+export type BuildStatusProvider = (opts: { readonly measure: boolean }) => Promise<object>;
+
 const PACKAGED_STATIC_DIR = fileURLToPath(new URL("static/", import.meta.url));
 // In a source checkout the line above points at src/channels/web/static, which
 // only holds a placeholder index.html (the built portal is git-ignored there and
@@ -208,6 +214,7 @@ export class WebChannel
    * consumer). (audited 2026-09-02)
    */
   private workspaceBusEmitter: ((event: string, payload: unknown) => boolean | void) | null = null;
+  private buildStatusProvider: BuildStatusProvider | null = null;
   /**
    * Cached monitor state for replaying to reconnecting clients, keyed PER DAG ROOT (episode).
    * The frontend monitor store is multi-root (rootsById, MAX_ROOTS); a single flat snapshot
@@ -294,6 +301,29 @@ export class WebChannel
    */
   setWorkspaceBusEmitter(emitter: ((event: string, payload: unknown) => boolean | void) | null): void {
     this.workspaceBusEmitter = emitter;
+  }
+
+  /**
+   * Register the daemon's measured build status (campaign + guardian + on
+   * demand the delivery measurement). Served at GET /api/campaign, pushed as a
+   * `campaign:status` frame on every session init, and re-pushed by
+   * `broadcastBuildStatus()` whenever the campaign or guardian speaks.
+   */
+  setBuildStatusProvider(provider: BuildStatusProvider | null): void {
+    this.buildStatusProvider = provider;
+  }
+
+  /** Push the current build status to every connected client (no-op without a provider). */
+  async broadcastBuildStatus(): Promise<void> {
+    if (!this.buildStatusProvider || this.clients.size === 0) return;
+    try {
+      const status = await this.buildStatusProvider({ measure: false });
+      this.broadcastRaw(JSON.stringify({ type: "campaign:status", payload: status, timestamp: Date.now() }));
+    } catch (err) {
+      getLoggerSafe().warn("[WebChannel] build status broadcast failed", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   /** Set the applied instinct IDs for a chat so outgoing messages include them for feedback. */
@@ -846,6 +876,30 @@ export class WebChannel
     "Expires": "0",
   };
 
+  private async serveBuildStatus(req: HttpReq, res: ServerResponse, url: string): Promise<void> {
+    const headers = { ...WebChannel.SECURITY_HEADERS, ...WebChannel.NO_CACHE_HEADERS, "Content-Type": "application/json" };
+    if ((req.method ?? "GET") !== "GET") {
+      res.writeHead(405, headers);
+      res.end(JSON.stringify({ error: "Method not allowed" }));
+      return;
+    }
+    if (!this.buildStatusProvider) {
+      res.writeHead(503, headers);
+      res.end(JSON.stringify({ error: "Build status is not available: no campaign layer is registered on this channel." }));
+      return;
+    }
+    const query = url.split("?")[1] ?? "";
+    const measure = /(^|&)measure=(1|true)(&|$)/.test(query);
+    try {
+      const status = await this.buildStatusProvider({ measure });
+      res.writeHead(200, headers);
+      res.end(JSON.stringify(status));
+    } catch (err) {
+      res.writeHead(500, headers);
+      res.end(JSON.stringify({ error: `Build status failed: ${err instanceof Error ? err.message : String(err)}` }));
+    }
+  }
+
   private async handleHttp(req: HttpReq, res: ServerResponse): Promise<void> {
     const url = req.url ?? "/";
     getLoggerSafe().debug("[WebChannel] handleHttp", { url, method: req.method });
@@ -858,6 +912,13 @@ export class WebChannel
         ...WebChannel.NO_CACHE_HEADERS,
       });
       res.end();
+      return;
+    }
+
+    // Measured build status — served in-daemon (the dashboard process has no
+    // campaign or guardian), so it is answered before the /api/ proxy below.
+    if (url === "/api/campaign" || url.startsWith("/api/campaign?")) {
+      await this.serveBuildStatus(req, res, url);
       return;
     }
 
@@ -1130,6 +1191,18 @@ export class WebChannel
     this.flushPendingDelivery(chatId, ws);
 
     void this.consumePostSetupBootstrap({ chatId, profileId: identity.profileId, profileToken: identity.profileToken });
+
+    // The measured build status, so a fresh portal shows the campaign without
+    // waiting for the next notice.
+    if (this.buildStatusProvider) {
+      void this.buildStatusProvider({ measure: false })
+        .then((status) => this.sendJson(ws, { type: "campaign:status", payload: status, timestamp: Date.now() }))
+        .catch((err: unknown) => {
+          getLoggerSafe().warn("[WebChannel] build status push failed", {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
+    }
 
     return { chatId, reconnectToken };
   }

@@ -619,3 +619,41 @@ describe("TelegramChannel", () => {
     });
   });
 });
+
+describe("Telegram command menu (2026-09-09)", () => {
+  it("advertises only commands the daemon handles", async () => {
+    const { TELEGRAM_MENU_COMMANDS } = await import("./bot.js");
+    const { detectCommand } = await import("../../tasks/command-detector.js");
+    const botNative = new Set(["start", "help", "feedback"]);
+    for (const entry of TELEGRAM_MENU_COMMANDS) {
+      const handled = botNative.has(entry.command) || detectCommand(`/${entry.command}`).type === "command";
+      expect(handled, `/${entry.command} is in the Telegram menu but nothing handles it`).toBe(true);
+      expect(entry.command).toMatch(/^[a-z0-9_]{1,32}$/);
+      expect(entry.description.length).toBeLessThanOrEqual(256);
+    }
+    expect(TELEGRAM_MENU_COMMANDS.map((c) => c.command)).toEqual(expect.arrayContaining(["campaign", "measure", "guardian"]));
+    expect(TELEGRAM_MENU_COMMANDS.map((c) => c.command)).not.toContain("analyze");
+  });
+
+  it("registers that menu with Telegram on connect and forwards /help to the shared command handler", async () => {
+    const { TELEGRAM_MENU_COMMANDS } = await import("./bot.js");
+    const auth = { isAllowed: vi.fn().mockReturnValue(true), getRole: vi.fn().mockReturnValue("admin") } as never;
+    const channel = new TelegramChannel("test-token", auth);
+    mockBotApi.setMyCommands.mockClear();
+    await channel.connect();
+    expect(mockBotApi.setMyCommands).toHaveBeenCalledWith([...TELEGRAM_MENU_COMMANDS]);
+
+    const handler = vi.fn().mockResolvedValue(undefined);
+    channel.onMessage(handler);
+    const reply = vi.fn().mockResolvedValue(undefined);
+    await mockHandlers.get("command:help")!({
+      chat: { id: 42 },
+      from: { id: 123 },
+      message: { text: "/help", date: 1700000000 },
+      api: { sendChatAction: vi.fn().mockResolvedValue(undefined) },
+      reply,
+    });
+    expect(reply).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledWith(expect.objectContaining({ channelType: "telegram", text: "/help" }));
+  });
+});

@@ -15,6 +15,32 @@ import type { RateLimitConfig } from "../../security/rate-limiter.js";
 import { classifyErrorMessage } from "../../utils/error-messages.js";
 import { chunkText } from "../chunk-text.js";
 
+/**
+ * The Telegram command menu. Every entry must be a command the daemon really
+ * handles — either one of the bot's own (`start`, `help`, `feedback`) or a
+ * `/name` the shared command detector maps (see command-detector.ts). Audited
+ * 2026-09-09: the menu advertised `/analyze`, which nothing handled, so a tap
+ * became a task titled "/analyze".
+ */
+export const TELEGRAM_MENU_COMMANDS: ReadonlyArray<{ command: string; description: string }> = [
+  { command: "start", description: "Start Strada Brain" },
+  { command: "campaign", description: "Measured build status: milestones, attempts, time box, guardian" },
+  { command: "measure", description: "Delivery-gate measurement of the project right now" },
+  { command: "guardian", description: "Real-tree guardian: last compile verdict and fix task" },
+  { command: "status", description: "Active tasks" },
+  { command: "tasks", description: "Recent tasks" },
+  { command: "cancel", description: "Cancel a running task" },
+  { command: "goal", description: "Start or list goals" },
+  { command: "autonomous", description: "Toggle autonomous mode (on/off/status)" },
+  { command: "model", description: "Provider routing (list/reset/provider-name)" },
+  { command: "daemon", description: "Daemon status and controls" },
+  { command: "retry", description: "Retry the last failed task" },
+  { command: "continue", description: "Continue the last task" },
+  { command: "feedback", description: "Give feedback on the last response (up/down)" },
+  { command: "help", description: "Full command list" },
+];
+
+
 type MessageHandler = (msg: IncomingMessage) => Promise<void>;
 
 /** Callback for feedback reactions (thumbs up/down) from channel adapters. */
@@ -117,15 +143,7 @@ export class TelegramChannel implements IChannelAdapter {
     logger.info("Starting Telegram bot...");
 
     // Set bot commands for the menu
-    await this.bot.api.setMyCommands([
-      { command: "start", description: "Start Strada Brain" },
-      { command: "status", description: "Show project status" },
-      { command: "analyze", description: "Analyze project structure" },
-      { command: "autonomous", description: "Toggle autonomous mode (on/off/status)" },
-      { command: "model", description: "Switch AI model provider (list/reset/provider-name)" },
-      { command: "feedback", description: "Give feedback on the last response (up/down)" },
-      { command: "help", description: "Show help" },
-    ]);
+    await this.bot.api.setMyCommands([...TELEGRAM_MENU_COMMANDS]);
 
     // Initialize BEFORE returning so isHealthy() (which reads bot.isInited())
     // reports the real ready state to the boot report instead of racing the
@@ -479,11 +497,12 @@ export class TelegramChannel implements IChannelAdapter {
         "Welcome to *Strada Brain* - Your AI-powered Unity development assistant.\n\n" +
           "Send me any message to start working with your Strada.Core project.\n\n" +
           "Commands:\n" +
-          "/status - Show project status\n" +
-          "/analyze - Analyze project structure\n" +
+          "/campaign - Measured build status (milestones, attempts, time box, guardian)\n" +
+          "/measure - Delivery-gate measurement of the project right now\n" +
+          "/status - Active tasks\n" +
           "/autonomous - Toggle autonomous mode\n" +
-          "/model - Switch AI model provider\n" +
-          "/help - Show help",
+          "/model - Provider routing\n" +
+          "/help - Full command list",
         { parse_mode: "Markdown" }
       );
     });
@@ -498,10 +517,14 @@ export class TelegramChannel implements IChannelAdapter {
           "- Show DI dependency graphs\n" +
           "- Trace EventBus message flow\n" +
           "- Generate Strada-convention code\n" +
-          "- Read and modify source files\n\n" +
+          "- Read and modify source files\n" +
+          "- Build a whole game from a GDD (share the document or the idea; `/campaign` shows the measured status)\n\n" +
           "Just describe what you need in natural language!",
         { parse_mode: "Markdown" }
       );
+      // The full, current command list lives in the shared CommandHandler —
+      // forward so Telegram's /help never drifts from what the daemon accepts.
+      await this.routeMessage(ctx);
     });
 
     // Handle /feedback command for instinct-level thumbs up/down

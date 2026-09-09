@@ -219,3 +219,19 @@ describe("detectCommand /run", () => {
     });
   });
 });
+
+describe("detectCommand build commands (2026-09-09)", () => {
+  it.each([
+    ["/campaign", "campaign", []],
+    ["/kampanya", "campaign", []],
+    ["/campaign revive", "campaign", ["revive"]],
+    ["/inşa", "campaign", []],
+    ["/measure", "measure", []],
+    ["/ölç", "measure", []],
+    ["/olc", "measure", []],
+    ["/guardian", "guardian", []],
+    ["/bekçi", "guardian", []],
+  ])("%s → %s", (text, command, args) => {
+    expect(detectCommand(text)).toEqual({ type: "command", command, args });
+  });
+});

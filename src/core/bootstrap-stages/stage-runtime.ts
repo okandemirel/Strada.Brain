@@ -390,6 +390,15 @@ export async function initializeTaskRuntimeStage(
   // Campaign layer ("GDD in → finished game out"). Wired best-effort: a
   // failure here degrades the run to ordinary per-message tasks, it must
   // never block the boot.
+  // The web portal's campaign card: re-pushed whenever the campaign or the
+  // guardian speaks, so the card and the chat notice never disagree.
+  const statusChannel = params.channel as unknown as {
+    setBuildStatusProvider?: (p: import("../../channels/web/channel.js").BuildStatusProvider | null) => void;
+    broadcastBuildStatus?: () => Promise<void>;
+  };
+  const broadcastBuildStatus = async (): Promise<void> => {
+    await statusChannel.broadcastBuildStatus?.();
+  };
   let campaignManager: import("../../campaign/index.js").CampaignManager | undefined;
   try {
     const { CampaignManager, CampaignPlanner, CampaignStorage } = await import("../../campaign/index.js");
@@ -407,6 +416,7 @@ export async function initializeTaskRuntimeStage(
       taskManager,
       messenger: async (chatId, markdown) => {
         await params.channel.sendMarkdown(chatId, sanitizeSecrets(markdown));
+        void broadcastBuildStatus();
       },
       // The independent second opinion on every delivery report: Codex CLI,
       // read-only, a different model family than the one that built the game.
@@ -531,6 +541,7 @@ export async function initializeTaskRuntimeStage(
           // route to wherever a person most recently talked instead.
           const target = taskManager.findLatestUserChat()?.chatId ?? chatId;
           await params.channel.sendMarkdown(target, sanitizeSecrets(text));
+          void broadcastBuildStatus();
         },
       });
       // Every lease written back into the project earns a prompt verdict,
@@ -544,6 +555,23 @@ export async function initializeTaskRuntimeStage(
         error: error instanceof Error ? error.message : String(error),
       });
     }
+  }
+
+  // Channels: /campaign, /measure, /guardian on every channel; GET /api/campaign
+  // and the `campaign:status` frame on the web channel. Wired 2026-09-09.
+  commandHandler.setCampaignManager(campaignManager);
+  commandHandler.setRealTreeGuardian(realTreeGuardian);
+  if (typeof statusChannel.setBuildStatusProvider === "function") {
+    const { buildBuildStatus } = await import("../../campaign/build-status.js");
+    const projectRoot = params.config.unityProjectPath;
+    statusChannel.setBuildStatusProvider(async ({ measure }) =>
+      buildBuildStatus({
+        campaign: campaignManager?.describeStatus(),
+        guardian: realTreeGuardian?.snapshot(),
+        projectRoot,
+        measure,
+      }),
+    );
   }
 
   const progressReporter = deps.createProgressReporter

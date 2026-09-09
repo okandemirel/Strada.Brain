@@ -429,3 +429,57 @@ describe("the fix task is told the errors, not the whole verdict", () => {
     expect(compactCompileDetail(noErrors)).toBe(noErrors);
   });
 });
+
+describe("snapshot() — what the channels read", () => {
+  it("is unknown before the first verdict and never green by default", () => {
+    const { manager } = makeTaskManager();
+    const guardian = new RealTreeGuardian({ taskManager: manager as unknown as TaskManager, verify: vi.fn(), projectRoot: "/p" });
+    expect(guardian.snapshot()).toMatchObject({ lastVerdict: "unknown", lastCheckedAt: 0, fixAttempts: 0, escalated: false });
+  });
+
+  it("records the red verdict with its count and the fix task, then green after recovery", async () => {
+    const { manager } = makeTaskManager();
+    let clock = 1_000_000;
+    const verify = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: false, ran: true, detail: "3 error(s)\nerror CS0246: missing Foo" })
+      .mockResolvedValueOnce({ ok: true, ran: true, detail: "compile succeeded" });
+    const guardian = new RealTreeGuardian({
+      taskManager: manager as unknown as TaskManager,
+      verify,
+      projectRoot: "/p",
+      now: () => clock,
+    });
+
+    await guardian.tick();
+    const red = guardian.snapshot();
+    expect(red.lastVerdict).toBe("red");
+    expect(red.lastCheckedAt).toBe(1_000_000);
+    expect(red.lastErrorCount).toBe(3);
+    expect(red.bestErrorCount).toBe(3);
+    expect(red.fixTaskId).toBeDefined();
+    expect(red.fixAttempts).toBe(1);
+    expect(red.maxFixAttempts).toBe(3);
+    expect(red.lastDetail).toContain("CS0246");
+    expect(red.nextVerifyAt).toBeGreaterThan(clock);
+
+    // The fix task settles; the quiet period passes; the tree is green again.
+    manager.getStatus = vi.fn(() => ({ status: TaskStatus.completed })) as never;
+    clock += 11 * 60_000;
+    await guardian.tick();
+    const green = guardian.snapshot();
+    expect(green.lastVerdict).toBe("green");
+    expect(green.lastErrorCount).toBe(0);
+    expect(green.fixTaskId).toBeUndefined();
+    expect(green.bestErrorCount).toBeUndefined();
+  });
+
+  it("reports a verifier that could not run as blind, with the streak", async () => {
+    const { manager } = makeTaskManager();
+    const verify = vi.fn().mockResolvedValue({ ok: true, ran: false, detail: "bridge down" });
+    const guardian = new RealTreeGuardian({ taskManager: manager as unknown as TaskManager, verify, projectRoot: "/p" });
+    await guardian.tick();
+    await guardian.tick();
+    expect(guardian.snapshot()).toMatchObject({ lastVerdict: "blind", blindStreak: 2, lastDetail: "bridge down" });
+  });
+});
