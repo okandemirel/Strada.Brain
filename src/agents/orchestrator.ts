@@ -1756,6 +1756,10 @@ export class Orchestrator {
 
   private rebuildBaseSystemPrompt(): void {
     const frameworkSection = this.frameworkPromptGenerator?.buildFrameworkKnowledgeSection();
+    const frameworkTrim = this.frameworkPromptGenerator?.getLastTrim?.();
+    if (frameworkTrim) {
+      getLogger().info("Framework knowledge section trimmed to fit the prompt budget", frameworkTrim);
+    }
     // Live section alone was a NAME LIST: namespaces and 40-per-namespace class
     // names, no usage contracts. Measured 2026-08-23 (PixelFlow): a run given
     // only that invented its own module shapes — Models/Systems folders, a

@@ -9,10 +9,41 @@
 import type { FrameworkKnowledgeStore } from "./framework-knowledge-store.js";
 import type { FrameworkAPISnapshot } from "./framework-types.js";
 
+/**
+ * Cap on the framework knowledge section, in chars. Measured 2026-09-09 on the
+ * user's project: the section was 21 715 chars (7 088 of them "Classes by
+ * namespace") inside a 72k-char system prompt, on every turn of every worker —
+ * including a node whose whole job was one unity_delivery_measure call — and
+ * the free-tier model stopped answering 57k-token turns. Floor 2 000; unset =
+ * 12 000. Trimming keeps every subsection and halves the list lengths.
+ */
+export const FRAMEWORK_PROMPT_MAX_CHARS: number = (() => {
+  const raw = Math.floor(Number(process.env["FRAMEWORK_PROMPT_MAX_CHARS"]));
+  return Number.isFinite(raw) && raw >= 2_000 ? raw : 12_000;
+})();
+
+const DENSITIES = [1, 0.5, 0.25, 0.125] as const;
+
 export class FrameworkPromptGenerator {
   private cachedSection: string | null | undefined = undefined;
+  private readonly maxChars: number;
+  /** How the list lengths were scaled to fit maxChars (1 = untrimmed). */
+  private density = 1;
+  private lastTrim: { density: number; untrimmedChars: number; chars: number } | null = null;
 
-  constructor(private readonly store: FrameworkKnowledgeStore) {}
+  constructor(private readonly store: FrameworkKnowledgeStore, options?: { maxChars?: number }) {
+    this.maxChars = options?.maxChars ?? FRAMEWORK_PROMPT_MAX_CHARS;
+  }
+
+  /** The trim applied to the cached section, or null when it fit untrimmed. */
+  getLastTrim(): { density: number; untrimmedChars: number; chars: number } | null {
+    return this.lastTrim;
+  }
+
+  /** A list length under the current density (never below 3). */
+  private limit(n: number): number {
+    return Math.max(3, Math.round(n * this.density));
+  }
 
   /** Invalidate cached prompt section (call after sync) */
   invalidateCache(): void {
@@ -26,7 +57,23 @@ export class FrameworkPromptGenerator {
    */
   buildFrameworkKnowledgeSection(): string | null {
     if (this.cachedSection !== undefined) return this.cachedSection;
+    let untrimmed: string | null = null;
+    let chosen: string | null = null;
+    for (const density of DENSITIES) {
+      this.density = density;
+      chosen = this.buildAtCurrentDensity();
+      if (untrimmed === null) untrimmed = chosen;
+      if (chosen === null || chosen.length <= this.maxChars) break;
+    }
+    this.lastTrim =
+      chosen !== null && untrimmed !== null && this.density < 1
+        ? { density: this.density, untrimmedChars: untrimmed.length, chars: chosen.length }
+        : null;
+    this.cachedSection = chosen;
+    return this.cachedSection;
+  }
 
+  private buildAtCurrentDensity(): string | null {
     const sections: string[] = [];
 
     const coreSnapshot = this.store.getLatestSnapshot("core");
@@ -49,8 +96,7 @@ export class FrameworkPromptGenerator {
       sections.push(generatorDirective);
     }
 
-    this.cachedSection = sections.length === 0 ? null : sections.join("\n\n");
-    return this.cachedSection;
+    return sections.length === 0 ? null : sections.join("\n\n");
   }
 
   private buildCoreSection(snapshot: FrameworkAPISnapshot): string {
@@ -62,9 +108,11 @@ export class FrameworkPromptGenerator {
     // Namespaces
     if (snapshot.namespaces.length > 0) {
       lines.push("### Namespaces");
-      for (const ns of snapshot.namespaces) {
+      const shownNs = snapshot.namespaces.slice(0, this.limit(60));
+      for (const ns of shownNs) {
         lines.push(`- \`${ns}\``);
       }
+      if (snapshot.namespaces.length > shownNs.length) lines.push(`- ... and ${snapshot.namespaces.length - shownNs.length} more`);
       lines.push("");
     }
 
@@ -72,9 +120,11 @@ export class FrameworkPromptGenerator {
     const abstractClasses = snapshot.classes.filter((c) => c.isAbstract);
     if (abstractClasses.length > 0) {
       lines.push("### Base Classes (abstract)");
-      for (const cls of abstractClasses) {
+      const shownAbstract = abstractClasses.slice(0, this.limit(40));
+      for (const cls of shownAbstract) {
         lines.push(`- \`${cls.name}\` (${cls.namespace})`);
       }
+      if (abstractClasses.length > shownAbstract.length) lines.push(`- ... and ${abstractClasses.length - shownAbstract.length} more`);
       lines.push("");
     }
 
@@ -95,11 +145,14 @@ export class FrameworkPromptGenerator {
         byNamespace.set(cls.namespace, bucket);
       }
       lines.push("### Classes by namespace");
-      for (const [ns, names] of [...byNamespace].sort((a, b) => a[0].localeCompare(b[0]))) {
-        const shown = names.slice(0, 40);
+      const buckets = [...byNamespace].sort((a, b) => a[0].localeCompare(b[0]));
+      const shownBuckets = buckets.slice(0, this.limit(30));
+      for (const [ns, names] of shownBuckets) {
+        const shown = names.slice(0, this.limit(40));
         const rest = names.length - shown.length;
         lines.push(`- \`${ns}\`: ${shown.join(", ")}${rest > 0 ? ` (+${rest} more)` : ""}`);
       }
+      if (buckets.length > shownBuckets.length) lines.push(`- ... and ${buckets.length - shownBuckets.length} more namespaces`);
       lines.push("");
     }
 
@@ -107,7 +160,7 @@ export class FrameworkPromptGenerator {
     // Key interfaces
     if (snapshot.interfaces.length > 0) {
       lines.push("### Interfaces");
-      for (const iface of snapshot.interfaces.slice(0, 30)) {
+      for (const iface of snapshot.interfaces.slice(0, this.limit(30))) {
         const methods =
           iface.methods.length > 0
             ? ` — ${iface.methods.join(", ")}`
@@ -125,9 +178,9 @@ export class FrameworkPromptGenerator {
     // Enums
     if (snapshot.enums.length > 0) {
       lines.push("### Enums");
-      for (const en of snapshot.enums.slice(0, 20)) {
+      for (const en of snapshot.enums.slice(0, this.limit(20))) {
         lines.push(
-          `- \`${en.name}\` (${en.namespace}): ${en.values.slice(0, 8).join(", ")}${en.values.length > 8 ? ", ..." : ""}`,
+          `- \`${en.name}\` (${en.namespace}): ${en.values.slice(0, this.limit(8)).join(", ")}${en.values.length > 8 ? ", ..." : ""}`,
         );
       }
       lines.push("");
@@ -136,7 +189,7 @@ export class FrameworkPromptGenerator {
     // Structs (components)
     if (snapshot.structs.length > 0) {
       lines.push("### Structs");
-      for (const st of snapshot.structs.slice(0, 20)) {
+      for (const st of snapshot.structs.slice(0, this.limit(20))) {
         lines.push(`- \`${st.name}\` (${st.namespace})`);
       }
       lines.push("");
@@ -153,15 +206,17 @@ export class FrameworkPromptGenerator {
 
     if (snapshot.namespaces.length > 0) {
       lines.push("### Namespaces");
-      for (const ns of snapshot.namespaces) {
+      const shownNs = snapshot.namespaces.slice(0, this.limit(60));
+      for (const ns of shownNs) {
         lines.push(`- \`${ns}\``);
       }
+      if (snapshot.namespaces.length > shownNs.length) lines.push(`- ... and ${snapshot.namespaces.length - shownNs.length} more`);
       lines.push("");
     }
 
     if (snapshot.classes.length > 0) {
       lines.push("### Classes");
-      for (const cls of snapshot.classes.slice(0, 30)) {
+      for (const cls of snapshot.classes.slice(0, this.limit(30))) {
         const base =
           cls.baseTypes.length > 0 ? ` : ${cls.baseTypes[0]}` : "";
         lines.push(`- \`${cls.name}\`${base} (${cls.namespace})`);
@@ -176,7 +231,7 @@ export class FrameworkPromptGenerator {
 
     if (snapshot.interfaces.length > 0) {
       lines.push("### Interfaces");
-      for (const iface of snapshot.interfaces.slice(0, 20)) {
+      for (const iface of snapshot.interfaces.slice(0, this.limit(20))) {
         lines.push(`- \`${iface.name}\` (${iface.namespace})`);
       }
       lines.push("");
@@ -233,7 +288,7 @@ export class FrameworkPromptGenerator {
 
     if (snapshot.classes.length > 0) {
       lines.push("### Classes");
-      for (const cls of snapshot.classes.slice(0, 20)) {
+      for (const cls of snapshot.classes.slice(0, this.limit(20))) {
         lines.push(`- \`${cls.name}\``);
       }
       lines.push("");

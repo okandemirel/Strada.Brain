@@ -111,13 +111,23 @@ export interface SetupDeps extends ReflectionDeps, BudgetDeps {
   clearRunInstinctCredits(chatId: string): void;
 }
 
+/**
+ * Tokens of vault (codebase) context per turn. Measured 2026-09-09: the
+ * default 4 000 tokens rendered as 15 724 chars of every worker turn, node or
+ * not. Floor 500; unset = 4 000.
+ */
+export function vaultContextBudgetTokens(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = Math.floor(Number(env["VAULT_CONTEXT_BUDGET_TOKENS"]));
+  return Number.isFinite(raw) && raw >= 500 ? raw : 4_000;
+}
+
 export async function computeVaultContext(deps: SetupDeps, userMessage: string): Promise<string> {
     if (!deps.vaultRegistry) return "";
     try {
       return await buildVaultProjectContext({
         vaultRegistry: deps.vaultRegistry,
         userMessage,
-        contextBudget: 4000,
+        contextBudget: vaultContextBudgetTokens(),
       });
     } catch (err) {
       getLogger().warn("Vault context enrichment failed", { err });
