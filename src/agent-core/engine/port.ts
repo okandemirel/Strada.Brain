@@ -311,6 +311,13 @@ export function createAgentCorePort(
         // the sprint's first 37 minutes — and each new tree overwrote the
         // parent's entry in activeGoalTrees. The parent planner already decided
         // this node's shape; the worker executes it.
+        if (c.realTreeRun) {
+          // One agent on the real tree: no plan, no nodes (see EngineRunContext.realTreeRun).
+          getLoggerSafe().info("Real-tree run skips goal decomposition — one agent, no plan", {
+            chatId: params.chatId,
+          });
+          return params.agentState;
+        }
         if (c.goalContext) {
           getLoggerSafe().info("Sub-goal worker skips goal decomposition — it is a node of an existing plan", {
             chatId: params.chatId,

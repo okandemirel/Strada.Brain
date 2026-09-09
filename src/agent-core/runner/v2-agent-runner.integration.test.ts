@@ -484,6 +484,33 @@ describe("V2AgentRunner — REAL port + REAL gateway (provider.chat scripted)", 
     expect(decompSpy).not.toHaveBeenCalled();
   });
 
+  it("a policy-none run (real-tree repair) never plans itself into nodes — one agent (measured 2026-09-09 15:18: a 4-error repair became a 5-node tree)", async () => {
+    const provider = mkScriptedProvider();
+    const h = buildHarness(provider);
+    const setupInput = (
+      h.runner as unknown as {
+        toSetupInput: (r: AgentRunRequest, m: RunnerMode) => Parameters<typeof h.port.setupRun>[0];
+      }
+    ).toSetupInput(mkRequest({ workspacePolicy: "none" }), "background");
+    await drive(h.clock, h.port.setupRun(setupInput));
+    const decompSpy = vi
+      .spyOn(
+        h.orch as unknown as {
+          runProactiveGoalDecomposition: (o: { agentState: AgentState }) => Promise<AgentState>;
+        },
+        "runProactiveGoalDecomposition",
+      )
+      .mockImplementation(async (o: { agentState: AgentState }) => o.agentState);
+    const state = createInitialState("The REAL project tree does not compile. Errors: CS0246 ×4. Fix the root cause directly.");
+
+    const out = await h.port.decomposeGoalsIfPlanning({ agentState: state, responseText: "plan", chatId: "chat-1" });
+
+    expect(out).toBe(state);
+    expect(decompSpy).not.toHaveBeenCalled();
+    // And it did not claim the once-per-run flag: nothing here is a tree to settle.
+    expect(h.port.debugRunContext().goalsDecomposed).toBe(false);
+  });
+
   it("a sub-goal worker's run never settles a goal tree — the tree under its scope is the PARENT's", async () => {
     // Review 2026-09-08 (880e2977): the skip still claimed the once-per-run
     // flag, and the run's finally settles the tree under the conversation

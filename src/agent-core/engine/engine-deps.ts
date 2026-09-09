@@ -47,6 +47,14 @@ export interface EngineRunContext {
   readonly workspaceLease?: WorkspaceLease;
   readonly workspaceLeaseRetained?: boolean;
   readonly goalContext?: { readonly rootId: string; readonly nodeId: string };
+  /**
+   * True for a run on the user's real project tree (workspacePolicy "none" —
+   * the real-tree guardian's repairs). Such a run is ONE agent: it never
+   * plans itself into nodes (measured 2026-09-09 15:18: a 4-error compile
+   * repair became a 5-node tree whose first node was "Explore project
+   * structure"), and parallel nodes on the real tree would share no lease.
+   */
+  readonly realTreeRun?: boolean;
   readonly executionJournal: ReturnType<typeof createAutonomyBundle>["executionJournal"];
   readonly selfVerification: ReturnType<typeof createAutonomyBundle>["selfVerification"];
   readonly stradaConformance: ReturnType<typeof createAutonomyBundle>["stradaConformance"];

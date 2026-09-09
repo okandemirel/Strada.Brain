@@ -447,6 +447,7 @@ export async function setupAgentCoreRun(
       workspaceLease: request.workspaceLease,
       workspaceLeaseRetained: request.workspaceLeaseRetained,
       goalContext: request.goalContext,
+      realTreeRun: request.workspacePolicy === "none",
       executionJournal: bundle.executionJournal,
       selfVerification: bundle.selfVerification,
       stradaConformance: bundle.stradaConformance,
