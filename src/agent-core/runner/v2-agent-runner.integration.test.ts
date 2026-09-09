@@ -511,6 +511,29 @@ describe("V2AgentRunner — REAL port + REAL gateway (provider.chat scripted)", 
     expect(h.port.debugRunContext().goalsDecomposed).toBe(false);
   });
 
+  it("the provider's reported input tokens reach the next compaction check, with the turn's tool-schema chars (2026-09-09: 73k-token turns, no compaction)", async () => {
+    const provider = mkScriptedProvider();
+    provider.chat
+      .mockResolvedValueOnce(resp({ text: "first", stopReason: "end_turn" }))
+      .mockResolvedValueOnce(resp({ text: "second", stopReason: "end_turn" }));
+    const h = buildHarness(provider);
+    const seen: Array<{ lastInputTokens: number | undefined; toolChars: number | undefined }> = [];
+    vi.spyOn(
+      h.orch as unknown as { maybeCompactSession: (s: { lastInputTokens?: number }, p: string, m?: string, sp?: string, t?: number) => void },
+      "maybeCompactSession",
+    ).mockImplementation((session, _p, _m, _sp, toolChars) => {
+      seen.push({ lastInputTokens: session.lastInputTokens, toolChars });
+    });
+
+    await drive(h.clock, h.runner.run(mkRequest(), mkIO("worker")));
+
+    expect(seen.length).toBeGreaterThanOrEqual(2);
+    // Before any call the session carries no count; after the first answer it carries the provider's 5.
+    expect(seen[0]!.lastInputTokens).toBeUndefined();
+    expect(seen[1]!.lastInputTokens).toBe(5);
+    expect(seen.every((s) => typeof s.toolChars === "number")).toBe(true);
+  });
+
   it("a sub-goal worker's run never settles a goal tree — the tree under its scope is the PARENT's", async () => {
     // Review 2026-09-08 (880e2977): the skip still claimed the once-per-run
     // flag, and the run's finally settles the tree under the conversation

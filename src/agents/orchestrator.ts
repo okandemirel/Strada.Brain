@@ -100,10 +100,10 @@ import { summarizeToolSchemaSizes } from "./tool-schema-budget.js";
 import {
   compactSession,
   compactForRetry,
+  decideCompaction,
+  toolSchemaTokens,
   isHardTimeoutError,
   estimateTokens,
-  COMPACTION_TRIGGER_RATIO,
-  COMPACTION_TARGET_RATIO,
   DEFAULT_CONTEXT_WINDOW,
 } from "./session-compaction.js";
 import {
@@ -754,6 +754,7 @@ export class Orchestrator {
   private readonly providerManager: ProviderManager;
   private readonly tools: Map<string, ITool>;
   private toolSchemaBudgetLogged = false;
+  private readonly contextWindowWarned = new Set<string>();
   private readonly toolDefinitions: Array<{
     name: string;
     description: string;
@@ -1269,8 +1270,8 @@ export class Orchestrator {
       // and the ModelGateway construction (silentStream stays in the shell).
       buildTaskAwareProvider: (primaryName, task, phase, options) =>
         this.buildTaskAwareProvider(primaryName, task, phase, options),
-      maybeCompactSession: (session, providerName, modelId, systemPrompt) =>
-        this.maybeCompactSession(session, providerName, modelId, systemPrompt),
+      maybeCompactSession: (session, providerName, modelId, systemPrompt, toolChars) =>
+        this.maybeCompactSession(session, providerName, modelId, systemPrompt, toolChars),
       saveBudgetExceededCheckpoint: (params) => this.saveBudgetExceededCheckpoint(params),
       saveRollingCheckpoint: (params) => this.saveRollingCheckpoint(params),
       withTaskExecutionContext: (context, run) => this.withTaskExecutionContext(context, run),
@@ -3734,17 +3735,33 @@ export class Orchestrator {
     providerName: string,
     modelId?: string,
     systemPrompt?: string,
+    toolChars = 0,
   ): void {
-    const ctxWindow =
-      this.providerManager.getProviderCapabilities?.(providerName, modelId)?.contextWindow
-      ?? DEFAULT_CONTEXT_WINDOW;
-    const tokenEstimate = estimateTokens(
+    const declared = this.providerManager.getProviderCapabilities?.(providerName, modelId)?.contextWindow;
+    if (declared === undefined && !this.contextWindowWarned.has(providerName)) {
+      // A window that cannot be resolved plans against the default — say so,
+      // because a 64k free-tier model planned at 128k never compacts in time.
+      this.contextWindowWarned.add(providerName);
+      getLogger().warn("Context window unknown for provider — compaction plans against the default", {
+        providerName,
+        modelId,
+        defaultContextWindow: DEFAULT_CONTEXT_WINDOW,
+      });
+    }
+    const ctxWindow = declared ?? DEFAULT_CONTEXT_WINDOW;
+    const estimatedTokens = estimateTokens(
       session.messages,
       (systemPrompt?.length ?? 0) + (session.compactionSummary?.length ?? 0),
     );
-    if (tokenEstimate <= ctxWindow * COMPACTION_TRIGGER_RATIO) return;
+    const decision = decideCompaction({
+      estimatedTokens,
+      toolTokens: toolSchemaTokens(toolChars),
+      observedInputTokens: session.lastInputTokens,
+      contextWindow: ctxWindow,
+    });
+    if (!decision.trigger) return;
     const result = compactSession(session.messages, {
-      maxTokens: Math.floor(ctxWindow * COMPACTION_TARGET_RATIO),
+      maxTokens: decision.maxTokens,
       preserveRecent: 4,
       maxGroups: 20,
       previousSummary: session.compactionSummary,
@@ -3752,11 +3769,15 @@ export class Orchestrator {
     if (result.compacted) {
       session.messages = result.messages;
       if (result.summary) session.compactionSummary = result.summary;
+      session.lastInputTokens = undefined;
       getLogger().info("Session compacted", {
         stage: result.stageApplied,
         originalTokens: result.originalTokens,
         finalTokens: result.finalTokens,
         systemPromptEstimate: systemPrompt ? estimateTextTokens(systemPrompt) : 0,
+        toolTokens: toolSchemaTokens(toolChars),
+        observedInputTokens: decision.tokenEstimate,
+        contextWindow: ctxWindow,
       });
     }
   }

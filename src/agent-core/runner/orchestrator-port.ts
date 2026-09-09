@@ -374,6 +374,8 @@ export interface OrchestratorPort {
     providerName: string,
     modelId?: string,
     systemPrompt?: string,
+    /** JSON chars of the tool schemas this turn carries (they count against the window too). */
+    toolChars?: number,
   ): void;
 
   /** Context-window trim for non-interactive (gauntlet #4). */

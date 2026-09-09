@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { ConversationMessage } from "./providers/provider-core.interface.ts";
 import type { CompactableMessage } from "./session-compaction.ts";
-import { compactForRetry, isHardTimeoutError, estimateTokens as estimateTokensForRetry } from "./session-compaction.ts";
+import { compactForRetry, isHardTimeoutError, estimateTokens as estimateTokensForRetry, decideCompaction, toolSchemaTokens, COMPACTION_TRIGGER_RATIO, COMPACTION_TARGET_RATIO, COMPACTION_TARGET_FLOOR_TOKENS } from "./session-compaction.ts";
 import {
   compactSession,
   estimateTokens,
@@ -355,5 +355,29 @@ describe("compactForRetry — the smaller prompt after a zero-output hard-timeou
     const result = compactForRetry(messages);
     expect(result.compacted).toBe(false);
     expect(result.messages).toHaveLength(4);
+  });
+});
+
+describe("decideCompaction — the provider's count is ground truth (measured 2026-09-09: 73k-token turns, no compaction, on a 64k window)", () => {
+  it("triggers on the observed input tokens even when the estimate is low", () => {
+    const d = decideCompaction({ estimatedTokens: 20_000, observedInputTokens: 60_000, contextWindow: 64_000 });
+    expect(d.tokenEstimate).toBe(60_000);
+    expect(d.trigger).toBe(true);
+  });
+
+  it("counts the tool schemas in the estimate and subtracts them from the target", () => {
+    const toolTokens = toolSchemaTokens(30_000);
+    expect(toolTokens).toBe(7_500);
+    const window = 64_000;
+    const d = decideCompaction({ estimatedTokens: Math.floor(window * COMPACTION_TRIGGER_RATIO) - 1_000, toolTokens, contextWindow: window });
+    expect(d.trigger).toBe(true);
+    expect(d.maxTokens).toBe(Math.floor(window * COMPACTION_TARGET_RATIO) - toolTokens);
+    const without = decideCompaction({ estimatedTokens: Math.floor(window * COMPACTION_TRIGGER_RATIO) - 1_000, contextWindow: window });
+    expect(without.trigger).toBe(false);
+  });
+
+  it("never plans a target under the floor", () => {
+    const d = decideCompaction({ estimatedTokens: 100_000, toolTokens: 50_000, contextWindow: 16_000 });
+    expect(d.maxTokens).toBe(COMPACTION_TARGET_FLOOR_TOKENS);
   });
 });

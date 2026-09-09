@@ -74,7 +74,7 @@ export interface PortDeps extends ToolTurnDeps {
     phase?: string,
     options?: { modelId?: string; identityKey?: string; usesMultipleProviders?: boolean },
   ): IAIProvider | null;
-  maybeCompactSession(session: Session, providerName: string, modelId?: string, systemPrompt?: string): void;
+  maybeCompactSession(session: Session, providerName: string, modelId?: string, systemPrompt?: string, toolChars?: number): void;
   saveBudgetExceededCheckpoint(params: {
     taskId: string;
     chatId: string;
@@ -244,8 +244,8 @@ export function createAgentCorePort(
           ) ?? prepared.currentProvider;
         return { ...prepared, currentProvider: resilientProvider } as PortPreparedIteration; // currentToolDefinitions is GatewayToolDefinition[]
       },
-      maybeCompactSession: (session, providerName, modelId, systemPrompt) =>
-        deps.maybeCompactSession(session as Session, providerName, modelId, systemPrompt),
+      maybeCompactSession: (session, providerName, modelId, systemPrompt, toolChars) =>
+        deps.maybeCompactSession(session as Session, providerName, modelId, systemPrompt, toolChars),
       trimContextWindow: (session, mode) =>
         engine.trimContextWindowForRun(session as unknown as Session, mode, ctx()),
 

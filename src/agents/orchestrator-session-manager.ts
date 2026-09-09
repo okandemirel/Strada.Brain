@@ -71,6 +71,12 @@ export interface Session {
    * Optional for backward compatibility with legacy session files.
    */
   compactionSummary?: string;
+  /**
+   * The provider's own count of the last call's input tokens (2026-09-09).
+   * Compaction trusts this over the chars/4 estimate; cleared by a compaction
+   * so a stale count cannot re-trigger before the next call reports.
+   */
+  lastInputTokens?: number;
 }
 
 /**

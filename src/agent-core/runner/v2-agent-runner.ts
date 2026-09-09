@@ -471,6 +471,7 @@ export class V2AgentRunner implements AgentRunner {
             prepared.currentAssignment.providerName,
             prepared.currentAssignment.modelId,
             prepared.activePrompt,
+            prepared.currentToolDefinitions.reduce((chars, d) => chars + JSON.stringify(d).length, 0),
           );
           // v1 parity (trio catch): attribute by the ASSIGNMENT's provider name (:4192/:5764) —
           // prepared.currentProvider may be a resilient FallbackChain whose synthetic name
@@ -533,6 +534,11 @@ export class V2AgentRunner implements AgentRunner {
             budget.debit(toBudgetUsage(outcome.response.usage, served.provider, served.model));
             usageTotal = mergeUsage(usageTotal, served.provider, outcome.response.usage);
             port.recordProviderUsage(served.provider, outcome.response.usage, served.model);
+            // The provider's own count of what it received — the compaction
+            // trigger trusts this over the chars/4 estimate (2026-09-09).
+            if (typeof outcome.response.usage?.inputTokens === "number" && outcome.response.usage.inputTokens > 0) {
+              (setup.session as { lastInputTokens?: number }).lastInputTokens = outcome.response.usage.inputTokens;
+            }
             port.recordExecutionTrace(this.traceParams(request, prepared, state, setup, outcome.response.servedBy));
           }
 

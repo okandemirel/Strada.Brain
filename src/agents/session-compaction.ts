@@ -537,3 +537,45 @@ export function compactForRetry(
   const maxTokens = Math.max(RETRY_COMPACTION_FLOOR_TOKENS, Math.floor(estimate / 2));
   return compactSession(messages, { maxTokens, preserveRecent: 2, maxGroups: 20, previousSummary });
 }
+
+// ---------------------------------------------------------------------------
+// The compaction decision, with the provider's own count as ground truth.
+//
+// Measured 2026-09-09 15:45-15:53 on the user's project: turns of 68-73k
+// input tokens on a provider declared at 64k, and no "Session compacted"
+// line — the estimate counted messages and the system prompt (chars/4) but
+// not the ~30k chars of tool schemas, and under-read code-heavy content. The
+// provider reports what it actually received; that number wins.
+// ---------------------------------------------------------------------------
+
+export interface CompactionDecision {
+  /** max(estimate incl. tools, provider-observed input tokens). */
+  readonly tokenEstimate: number;
+  readonly trigger: boolean;
+  /** Target for compactSession when triggered: window × target ratio minus the tool share, never under the floor. */
+  readonly maxTokens: number;
+}
+
+export const COMPACTION_TARGET_FLOOR_TOKENS = 8_000;
+
+export function decideCompaction(input: {
+  readonly estimatedTokens: number;
+  readonly toolTokens?: number;
+  readonly observedInputTokens?: number;
+  readonly contextWindow: number;
+}): CompactionDecision {
+  const toolTokens = Math.max(0, input.toolTokens ?? 0);
+  const observed = Math.max(0, input.observedInputTokens ?? 0);
+  const tokenEstimate = Math.max(input.estimatedTokens + toolTokens, observed);
+  const trigger = tokenEstimate > input.contextWindow * COMPACTION_TRIGGER_RATIO;
+  const maxTokens = Math.max(
+    COMPACTION_TARGET_FLOOR_TOKENS,
+    Math.floor(input.contextWindow * COMPACTION_TARGET_RATIO) - toolTokens,
+  );
+  return { tokenEstimate, trigger, maxTokens };
+}
+
+/** ~4 chars per token, the same rule estimateTokens applies to Latin text. */
+export function toolSchemaTokens(toolChars: number): number {
+  return Math.ceil(Math.max(0, toolChars) / 4);
+}
