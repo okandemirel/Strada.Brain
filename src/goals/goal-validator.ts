@@ -173,3 +173,75 @@ const READ_ONLY_REQUEST_RE =
 export function isReadOnlyRequest(task: string): boolean {
   return READ_ONLY_REQUEST_RE.test(task);
 }
+
+// ---------------------------------------------------------------------------
+// Measurement-only nodes are folded into the work that uses them.
+//
+// Measured 2026-09-09 (12:55, 14:08, 15:18, 18:05 plans): every plan for the
+// placeholder mission opened with "Call unity_delivery_measure … record the
+// count and list the paths" as a node of its own. The call takes a minute;
+// the node then held its 60-minute budget while the worker searched and
+// read, and the batch nodes behind it waited. The prompt rule alone did not
+// stop the planner, and rejecting the plan costs another ten-minute
+// decomposition — so the fold is deterministic: the node's text becomes the
+// first step of every node that depended on it, the edges are rewired, and
+// the node is gone.
+// ---------------------------------------------------------------------------
+
+const TOOL_CALL_LEAD_RE = /^\W*(?:\d+[.)]\s*)?(?:call|run|invoke|execute|use)\s+(?:the\s+)?`?([a-z][a-z0-9_]*)`?/i;
+const MEASUREMENT_TOOL_RE = /(measure|verify|check|count|inventory|status|analy[sz]e|list|inspect|diagnos|audit)/i;
+/** Verbs that only report what a measurement said — not work of their own. */
+const REPORTING_RE = /\b(record|report|output|note|list|verify|measure|capture|document|save|store|print|return|write down|summari[sz]e)\b/gi;
+
+/** A node whose whole job is one measuring tool call plus reporting its result. */
+export function isMeasurementOnlyNode(task: string): boolean {
+  const lead = TOOL_CALL_LEAD_RE.exec(task);
+  if (!lead?.[1] || !MEASUREMENT_TOOL_RE.test(lead[1])) return false;
+  const rest = task.slice(lead[0].length).replace(REPORTING_RE, "");
+  return !WORK_RE.test(rest);
+}
+
+export interface FoldableNode {
+  readonly id: string;
+  readonly task: string;
+  readonly dependsOn: readonly string[];
+  readonly needsFurtherDecomposition?: boolean;
+}
+
+export interface FoldResult<T extends FoldableNode> {
+  readonly nodes: T[];
+  /** Ids of the measurement nodes that were folded away. */
+  readonly folded: string[];
+}
+
+export function foldMeasurementNodes<T extends FoldableNode>(nodes: readonly T[]): FoldResult<T> {
+  let working: T[] = [...nodes];
+  const folded: string[] = [];
+  for (const node of nodes) {
+    if (!isMeasurementOnlyNode(node.task)) continue;
+    const dependents = working.filter((n) => n.dependsOn.includes(node.id));
+    const prerequisites = node.dependsOn;
+    if (dependents.length > 0) {
+      working = working
+        .filter((n) => n.id !== node.id)
+        .map((n) =>
+          n.dependsOn.includes(node.id)
+            ? {
+                ...n,
+                task: `${node.task.trim().replace(/[.\s]+$/, "")}. Then, in this same step: ${n.task.trim()}`,
+                dependsOn: [...new Set([...n.dependsOn.filter((d) => d !== node.id), ...prerequisites])],
+              }
+            : n,
+        );
+      folded.push(node.id);
+    } else if (prerequisites.length > 0) {
+      // A trailing measurement (nothing depends on it): it ends the last step it followed.
+      const last = prerequisites[prerequisites.length - 1]!;
+      working = working
+        .filter((n) => n.id !== node.id)
+        .map((n) => (n.id === last ? { ...n, task: `${n.task.trim().replace(/[.\s]+$/, "")}. Finally, in this same step: ${node.task.trim()}` } : n));
+      folded.push(node.id);
+    }
+  }
+  return { nodes: working, folded };
+}

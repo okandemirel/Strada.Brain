@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { isReadOnlyRequest, judgePlanShape, validateDAG } from "./goal-validator.js";
+import { isReadOnlyRequest, judgePlanShape, validateDAG, isMeasurementOnlyNode, foldMeasurementNodes } from "./goal-validator.js";
 import type { DAGValidationResult } from "./goal-validator.js";
 import {
   parseLLMOutput,
@@ -329,5 +329,39 @@ describe("a read-only request is not an exploration-only failure (Codex review 2
     ] as never);
     expect(verdict.explorationOnly).toBe(false);
     expect(verdict.workNodes).toBe(2);
+  });
+});
+
+describe("measurement-only nodes fold into the work that uses them (measured 2026-09-09: four plans, each opened with a bare unity_delivery_measure node)", () => {
+  it("recognises a bare measuring call with only reporting around it, and nothing else", () => {
+    expect(isMeasurementOnlyNode("Call unity_delivery_measure once. Record the current placeholderSprites count and the list of placeholder paths (first 24, bound ones first).")).toBe(true);
+    expect(isMeasurementOnlyNode("Run unity_verify_change and report the verdict")).toBe(true);
+    expect(isMeasurementOnlyNode("Run unity_verify_change and commit the batch")).toBe(false);
+    expect(isMeasurementOnlyNode("Using the list from s1, take these 24 placeholder paths. Call unity_generate_sprite exactly TWICE")).toBe(false);
+    expect(isMeasurementOnlyNode("Run the suite")).toBe(false);
+    expect(isMeasurementOnlyNode("Call unity_generate_sprite with batch of 12")).toBe(false);
+  });
+
+  it("folds the opening measurement into every dependent, rewires edges, and folds a trailing one into its predecessor", () => {
+    const nodes = [
+      { id: "s1", task: "Call unity_delivery_measure once. Record the count and list the paths.", dependsOn: [] },
+      { id: "s2", task: "Regenerate the first 24 placeholders in place, re-measure, verify and commit.", dependsOn: ["s1"] },
+      { id: "s3", task: "Regenerate the next 24 placeholders in place, re-measure, verify and commit.", dependsOn: ["s2"] },
+      { id: "s4", task: "Run unity_delivery_measure and report the final count.", dependsOn: ["s3"] },
+    ];
+    const { nodes: out, folded } = foldMeasurementNodes(nodes);
+    expect(folded).toEqual(["s1", "s4"]);
+    expect(out.map((n) => n.id)).toEqual(["s2", "s3"]);
+    expect(out[0]!.dependsOn).toEqual([]);
+    expect(out[0]!.task).toBe("Call unity_delivery_measure once. Record the count and list the paths. Then, in this same step: Regenerate the first 24 placeholders in place, re-measure, verify and commit.");
+    expect(out[1]!.dependsOn).toEqual(["s2"]);
+    expect(out[1]!.task).toContain("Finally, in this same step: Run unity_delivery_measure and report the final count.");
+  });
+
+  it("leaves a plan without measurement nodes untouched, and keeps an isolated measurement", () => {
+    const plain = [{ id: "a", task: "Build the scene", dependsOn: [] }, { id: "b", task: "Bind the sprites", dependsOn: ["a"] }];
+    expect(foldMeasurementNodes(plain)).toEqual({ nodes: plain, folded: [] });
+    const lone = [{ id: "m", task: "Run unity_delivery_measure and report", dependsOn: [] }];
+    expect(foldMeasurementNodes(lone).nodes).toEqual(lone);
   });
 });

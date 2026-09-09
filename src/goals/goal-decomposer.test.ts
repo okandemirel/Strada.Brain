@@ -193,6 +193,24 @@ describe("GoalDecomposer", () => {
       expect(hasDependency).toBe(true);
     });
 
+    it("folds a bare measurement node into the work that depends on it (measured 2026-09-09: four plans opened with one)", async () => {
+      const provider = createMockProvider([
+        JSON.stringify({
+          nodes: [
+            { id: "s1", task: "Call unity_delivery_measure once. Record the count and list the placeholder paths.", dependsOn: [] },
+            { id: "s2", task: "Regenerate the first 24 placeholders in place, re-measure, verify and commit", dependsOn: ["s1"] },
+            { id: "s3", task: "Regenerate the next 24 placeholders in place, re-measure, verify and commit", dependsOn: ["s2"] },
+          ],
+        }),
+      ]);
+      const decomposer = new GoalDecomposer(provider, 3);
+      const tree = await decomposer.decomposeProactive("test-session", "Replace the placeholder art in batches until the measured count is below 300");
+      const children = Array.from(tree.nodes.values()).filter((n) => n.depth === 1);
+      expect(children).toHaveLength(2);
+      expect(children.some((n) => /^Call unity_delivery_measure once\. Record the count and list the placeholder paths\. Then, in this same step: Regenerate the first 24/.test(n.task))).toBe(true);
+      expect(children.every((n) => !/^Call unity_delivery_measure once\. Record[^]*$/.test(n.task) || n.task.includes("Then, in this same step"))).toBe(true);
+    });
+
     it("with simple result produces linear DAG (sequential deps)", async () => {
       const provider = createMockProvider([
         JSON.stringify({

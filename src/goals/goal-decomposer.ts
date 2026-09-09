@@ -18,7 +18,7 @@ import type {
   LLMDecompositionOutput,
 } from "./types.js";
 import { generateGoalNodeId, parseLLMOutput } from "./types.js";
-import { validateDAG, judgePlanShape, isReadOnlyRequest } from "./goal-validator.js";
+import { validateDAG, judgePlanShape, isReadOnlyRequest, foldMeasurementNodes } from "./goal-validator.js";
 
 /** The endpoint closed the stream before the answer ended (undici "terminated", a mid-stream failure). */
 const MID_STREAM_DROP_RE = /\bterminated\b|mid-?stream|socket hang up|ECONNRESET/i;
@@ -541,7 +541,7 @@ export class GoalDecomposer {
         return null;
       }
 
-      const parsed = parseLLMOutput(response.text);
+      let parsed = parseLLMOutput(response.text);
       if (!parsed) {
         const { getLoggerSafe } = await import("../utils/logger.js");
         getLoggerSafe().warn("Goal decomposition LLM output parse failed", {
@@ -568,6 +568,18 @@ export class GoalDecomposer {
         });
         this.lastRejection = "the plan was ONLY exploration (searching, reading, inventories) — every sub-goal must change the project or produce an artifact";
         return null;
+      }
+
+      // A bare measurement node becomes the first step of the work that uses
+      // it (see goal-validator.ts foldMeasurementNodes — measured 2026-09-09).
+      const fold = foldMeasurementNodes(parsed.nodes);
+      if (fold.folded.length > 0) {
+        const { getLoggerSafe } = await import("../utils/logger.js");
+        getLoggerSafe().info("Goal decomposition folded measurement-only nodes into their dependents", {
+          folded: fold.folded,
+          nodeCount: fold.nodes.length,
+        });
+        parsed = { ...parsed, nodes: fold.nodes };
       }
 
       const validation = validateDAG(parsed.nodes);
