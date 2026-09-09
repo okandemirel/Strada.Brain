@@ -90,6 +90,7 @@ import { VaultInitTool } from "../agents/tools/vault-init-tool.js";
 import { VaultSyncTool } from "../agents/tools/vault-sync-tool.js";
 import { VaultStatusTool } from "../agents/tools/vault-status-tool.js";
 import { VaultSearchTool } from "../agents/tools/vault-search-tool.js";
+import { UnityDeliveryMeasureTool } from "../agents/tools/unity/delivery-measure.js";
 import { VaultGraphExploreTool } from "../agents/tools/vault-graph-explore-tool.js";
 import { VaultWriteNoteTool } from "../agents/tools/vault-write-note-tool.js";
 import { ObsidianSearchTool } from "../agents/tools/obsidian-search-tool.js";
@@ -576,6 +577,13 @@ export class ToolRegistry {
         category: ToolCategories.MEMORY, dangerous: true, requiresConfirmation: true, readOnly: false,
       });
     }
+
+    // The delivery gate's own measurement, read-only (see delivery-measure.ts).
+    this.register(new UnityDeliveryMeasureTool() as unknown as ITool, {
+      category: ToolCategories.STRADA,
+      dangerous: false,
+      readOnly: true,
+    });
 
     // File operations
     this.register(new FileReadTool(), {
