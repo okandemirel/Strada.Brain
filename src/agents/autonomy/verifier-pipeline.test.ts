@@ -516,3 +516,47 @@ DONE`,
     });
   });
 });
+
+describe("work evidence (audited 2026-09-10: one read call and no change was approved by the whole pipeline)", () => {
+  const base = (overrides: Record<string, unknown>) => ({
+    prompt: "Implement the PlaythroughDriver adapter and register it",
+    draft: "Implemented and registered the adapter.\nDONE",
+    state: createState({
+      stepResults: [{ toolName: "file_read", success: true, summary: "Read GameFlowModuleConfig.cs", timestamp: Date.now() - 500 }],
+    }),
+    task: IMPLEMENTATION_TASK,
+    verificationState: { pendingFiles: new Set(), touchedFiles: new Set(), hasCompilableChanges: false, lastBuildOk: null, lastVerificationAt: null },
+    buildVerificationGate: null,
+    conformanceGate: null,
+    logEntries: [],
+    chatId: "chat-evidence",
+    taskStartedAtMs: Date.now() - 1000,
+    ...overrides,
+  });
+
+  it("a code-generation task that changed nothing and verified nothing is continued, not approved", () => {
+    const plan = planVerifierPipeline(base({}));
+    expect(plan.initialDecision).toBe("continue");
+    expect(plan.gate).toContain("NO WORK EVIDENCE");
+    expect(plan.gate).toContain("1 tool call(s), 1 of them reads");
+  });
+
+  it("a plain failure report is still honoured", () => {
+    const plan = planVerifierPipeline(base({ draft: "I could not implement it: the module's asmdef cannot be edited headlessly, the file_edit failed. Stopping." }));
+    expect(plan.gate ?? "").not.toContain("NO WORK EVIDENCE");
+  });
+
+  it("an analysis task may end without a change", () => {
+    const plan = planVerifierPipeline(base({ task: { type: "analysis", complexity: "simple", criticality: "low" }, prompt: "Count the placeholder sprites and report", draft: "Counted 116 placeholder sprites." }));
+    expect(plan.gate ?? "").not.toContain("NO WORK EVIDENCE");
+  });
+
+  it("one mutation is evidence", () => {
+    const plan = planVerifierPipeline(base({
+      state: createState({ stepResults: [{ toolName: "file_write", success: true, summary: "Wrote PlaythroughDriver.cs", timestamp: Date.now() - 500 }] }),
+      verificationState: { pendingFiles: new Set(), touchedFiles: new Set(["Assets/PlaythroughDriver.cs"]), hasCompilableChanges: false, lastBuildOk: null, lastVerificationAt: null },
+    }));
+    expect(plan.gate ?? "").not.toContain("NO WORK EVIDENCE");
+  });
+});
+

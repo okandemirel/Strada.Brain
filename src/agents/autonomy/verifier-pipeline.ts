@@ -205,6 +205,30 @@ export function planVerifierPipeline(params: {
     };
   }
 
+  // WORK EVIDENCE. Every check above is conditional on something having
+  // happened: no pending files → build "clean", no failures → repro "clean",
+  // no touched files → conformance "not applicable". A run that made one
+  // read call and changed nothing therefore passed the whole pipeline and was
+  // approved (audited 2026-09-10). A task whose type is to change something
+  // must show a mutation or a verification, or say plainly that it could not
+  // (a terminal failure report is honoured as before).
+  if (
+    WORK_TASK_TYPES.has(evidence.task.type) &&
+    evidence.mutationStepCount === 0 &&
+    evidence.verificationStepCount === 0 &&
+    !evidence.hasTerminalFailureReport
+  ) {
+    return {
+      evidence,
+      checks,
+      reviewRequired: false,
+      initialDecision: "continue",
+      gate: buildNoWorkEvidenceGate(evidence),
+      summary: `The draft reports completion of a ${evidence.task.type} task with no change made and no verification run.`,
+      buildToolsAvailable: params.buildToolsAvailable,
+    };
+  }
+
   return {
     evidence,
     checks,
@@ -213,6 +237,27 @@ export function planVerifierPipeline(params: {
     summary: "Static verifier checks passed and the draft leaves nothing open.",
     buildToolsAvailable: params.buildToolsAvailable,
   };
+}
+
+/** Task types whose completion means something changed or something was run — never only read. */
+// A string set, not TaskType: the classifier's own vocabulary carries
+// "implementation" alongside the routing union's "code-generation".
+const WORK_TASK_TYPES: ReadonlySet<string> = new Set([
+  "implementation",
+  "code-generation",
+  "refactoring",
+  "debugging",
+  "destructive-operation",
+]);
+
+/** Told to the agent when it reports a work task done without having done anything. */
+function buildNoWorkEvidenceGate(evidence: VerifierPipelineEvidence): string {
+  return [
+    `[VERIFIER PIPELINE] NO WORK EVIDENCE: this is a ${evidence.task.type} task, and this run made no change`,
+    `and ran no verification (${evidence.totalStepCount} tool call(s), ${evidence.inspectionStepCount} of them reads).`,
+    "A report of completion is not completion. Either do the work — write the file, apply the edit, run the",
+    "verification — or state plainly that it could not be done, naming the tool result that stopped you.",
+  ].join("\n");
 }
 
 /** Told to the agent when its own draft still has loose ends. */
