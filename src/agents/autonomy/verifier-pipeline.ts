@@ -218,6 +218,26 @@ export function planVerifierPipeline(params: {
     evidence.verificationStepCount === 0 &&
     !evidence.hasTerminalFailureReport
   ) {
+    // Bounded: the gate asks twice, then demands a replan instead of asking
+    // a third time (the text-only hard cap ends a run that still does nothing,
+    // later and with a vaguer sentence). Keyed per run.
+    const runKey = `${params.chatId}:${params.taskStartedAtMs}`;
+    const asked = (noWorkGateEmissions.get(runKey) ?? 0) + 1;
+    noWorkGateEmissions.set(runKey, asked);
+    if (noWorkGateEmissions.size > 512) noWorkGateEmissions.delete(noWorkGateEmissions.keys().next().value as string);
+    if (asked > MAX_NO_WORK_EVIDENCE_GATES) {
+      return {
+        evidence,
+        checks,
+        reviewRequired: false,
+        initialDecision: "replan",
+        gate: buildNoWorkEvidenceGate(evidence) + `\nThis is the ${asked}th completion claim with nothing done: the approach, not the wording, has to change.`,
+        summary:
+          `Reported completion of a ${evidence.task.type} task ${asked} times with no change made and no verification run; ` +
+          "a report is not the work.",
+        buildToolsAvailable: params.buildToolsAvailable,
+      };
+    }
     return {
       evidence,
       checks,
@@ -249,6 +269,15 @@ const WORK_TASK_TYPES: ReadonlySet<string> = new Set([
   "debugging",
   "destructive-operation",
 ]);
+
+/** How many times the no-work gate asks before the run is failed as "reported, not done". */
+const MAX_NO_WORK_EVIDENCE_GATES = 2;
+/** Per-run emission count for the no-work gate (chatId:taskStartedAtMs → asks). */
+const noWorkGateEmissions = new Map<string, number>();
+/** Test hook: forget every run's no-work gate count. */
+export function resetNoWorkEvidenceGates(): void {
+  noWorkGateEmissions.clear();
+}
 
 /** Told to the agent when it reports a work task done without having done anything. */
 function buildNoWorkEvidenceGate(evidence: VerifierPipelineEvidence): string {

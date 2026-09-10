@@ -4,6 +4,7 @@ import {
   isTerminalFailureReport,
   planVerifierPipeline,
 } from "./verifier-pipeline.js";
+import { resetNoWorkEvidenceGates } from "./verifier-pipeline.js";
 
 function createState(overrides: Partial<AgentState> = {}): AgentState {
   return {
@@ -534,11 +535,17 @@ describe("work evidence (audited 2026-09-10: one read call and no change was app
     ...overrides,
   });
 
-  it("a code-generation task that changed nothing and verified nothing is continued, not approved", () => {
-    const plan = planVerifierPipeline(base({}));
+  it("a code-generation task that changed nothing and verified nothing is continued, not approved — and replanned on the third claim", () => {
+    resetNoWorkEvidenceGates();
+    const startedAt = Date.now() - 1000;
+    const plan = planVerifierPipeline(base({ taskStartedAtMs: startedAt }));
     expect(plan.initialDecision).toBe("continue");
     expect(plan.gate).toContain("NO WORK EVIDENCE");
     expect(plan.gate).toContain("1 tool call(s), 1 of them reads");
+    expect(planVerifierPipeline(base({ taskStartedAtMs: startedAt })).initialDecision).toBe("continue");
+    const third = planVerifierPipeline(base({ taskStartedAtMs: startedAt }));
+    expect(third.initialDecision).toBe("replan");
+    expect(third.summary).toContain("3 times with no change made");
   });
 
   it("a plain failure report is still honoured", () => {

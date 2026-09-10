@@ -7900,7 +7900,7 @@ DONE`,
       const chatSpy = vi
         .fn()
         .mockResolvedValueOnce(createToolResponse("Plan", "file_read"))
-        .mockResolvedValueOnce(createToolResponse("Done!", undefined));
+        .mockResolvedValue(createToolResponse("Done!", undefined)); // keeps answering: the work-evidence gate (2026-09-10) may ask a work-typed task that changed nothing to continue
       mockProvider.chat = chatSpy;
 
       const orchFail = new Orchestrator({
