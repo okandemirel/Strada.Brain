@@ -424,6 +424,58 @@ export class BackgroundExecutor {
             t.unref?.();
           }
         }
+        // Tasks the restart itself parked. recoverOnStartup marks a user task
+        // that was running `paused` and calls it recoverable — and then no
+        // autonomous path ever resumed it: the loop above reads blocked tasks
+        // with a retry marker, a human's /resume was the only other way.
+        // Measured 2026-09-10: five boots, each parking the mission in flight.
+        // Same guards as the blocked pass (one per lineage / prompt root /
+        // chat, never over a live continuation, never a cancelled lineage);
+        // resumeTask continues a goal tree from its saved plan.
+        const paused = (manager as { listPausedByRestart?: (limit?: number) => Array<Task> } | null)
+          ?.listPausedByRestart?.(50) ?? [];
+        for (const task of paused) {
+          const lineage = this.lineageRootTaskId(task);
+          if (seenLineages.has(lineage) || seenChats.has(task.chatId)) continue;
+          const root = this.taskManager?.getStatus(lineage) as { prompt?: string } | null;
+          const promptRoot = (root?.prompt ?? task.prompt).slice(0, 160);
+          if (seenPromptRoots.has(promptRoot)) continue;
+          seenLineages.add(lineage);
+          seenPromptRoots.add(promptRoot);
+          seenChats.add(task.chatId);
+          const staggerMs = rearmIndex * 45_000;
+          rearmIndex += 1;
+          const resume = (): void => {
+            try {
+              if (this.isLineageCancelled(task)) {
+                getLoggerSafe().info("Restart-paused task left alone — its lineage was cancelled", { taskId: task.id });
+                return;
+              }
+              const continued = (this.taskManager?.listTasks?.(task.chatId, 10) ?? []).some(
+                (t) =>
+                  t.id !== task.id &&
+                  ["pending", "planning", "executing"].includes(t.status) &&
+                  (((this.taskManager?.getStatus?.(this.lineageRootTaskId(t as Task)) as { prompt?: string } | null)?.prompt ?? t.prompt).slice(0, 160)) === promptRoot,
+              );
+              if (continued) {
+                getLoggerSafe().info("Restart-paused task left alone — the mission already continues under another task", { taskId: task.id });
+                return;
+              }
+              const resumed = (this.taskManager as (ITaskManager & { resumeTask?: (id: string) => unknown }) | null)?.resumeTask?.(task.id);
+              getLoggerSafe().info(
+                resumed ? "Resumed a task the restart had paused" : "Restart-paused task could not be resumed — a newer task in its lineage is live or done",
+                { taskId: task.id, resumedAs: (resumed as { id?: string } | null)?.id },
+              );
+            } catch (err) {
+              getLoggerSafe().warn("Restart-paused task resume threw", { taskId: task.id, error: err instanceof Error ? err.message : String(err) });
+            }
+          };
+          if (staggerMs === 0) resume();
+          else {
+            const t = setTimeout(resume, staggerMs);
+            t.unref?.();
+          }
+        }
       } catch {
         // Recovery is best-effort; a failure here must not affect boot.
       }

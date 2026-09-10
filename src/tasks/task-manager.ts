@@ -541,6 +541,27 @@ export class TaskManager extends EventEmitter {
     return this.storage.loadIncomplete();
   }
 
+  /**
+   * User tasks a restart parked as `paused` and nobody resumed.
+   *
+   * recoverOnStartup marks them paused-and-recoverable, and the only things
+   * that ever resumed one were a human's `/resume` or the monitor: the
+   * keep-alive re-arm reads listRecoverable, which excludes `paused`.
+   * Measured 2026-09-10: five boots, each pausing the mission in flight
+   * (task_d526df85 11:44, task_eee999a6 14:32 …), each waiting for a hand.
+   */
+  listPausedByRestart(limit = 20): Task[] {
+    return this.storage
+      .loadIncomplete()
+      .filter(
+        (t) =>
+          t.status === TaskStatus.paused &&
+          t.origin !== "daemon" &&
+          /interrupted by system restart/i.test(t.error ?? ""),
+      )
+      .slice(0, limit);
+  }
+
   listRecoverableTasks(limit = 20): Task[] {
     return this.storage
       .listRecoverable(limit)
