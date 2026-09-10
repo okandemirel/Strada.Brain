@@ -168,3 +168,27 @@ describe("ShellExecTool", () => {
     expect(result.content).toContain("nested shell -c");
   });
 });
+
+describe("the shell applies the same sensitive-path blocklist as the file tools (audited 2026-09-10: `cat .env` succeeded where `file_read .env` was refused)", () => {
+  it("refuses a command that names a secret, by the name it used", async () => {
+    const { sensitiveCommandPaths } = await import("./shell-exec.js");
+    expect(sensitiveCommandPaths("cat .env", "/p")).toEqual([".env"]);
+    expect(sensitiveCommandPaths("cp ./.env.production.local /tmp/x", "/p")).toEqual(["./.env.production.local"]);
+    expect(sensitiveCommandPaths("cat ~/.ssh/id_rsa", "/p").length).toBeGreaterThan(0);
+    expect(sensitiveCommandPaths('grep -r "TOKEN" .strada-lease-owner.json', "/p")).toEqual([".strada-lease-owner.json"]);
+  });
+
+  it("leaves ordinary commands alone", async () => {
+    const { sensitiveCommandPaths } = await import("./shell-exec.js");
+    expect(sensitiveCommandPaths("cat README.md && ls Assets/Scripts", "/p")).toEqual([]);
+    expect(sensitiveCommandPaths("echo environment --env=prod", "/p")).toEqual([]);
+    expect(sensitiveCommandPaths("dotnet build ./src/Game.csproj", "/p")).toEqual([]);
+  });
+
+  it("the tool refuses the command before running it", async () => {
+    const tool = new ShellExecTool();
+    const result = await tool.execute({ command: "cat .env" }, { projectPath: process.cwd(), workingDirectory: process.cwd(), readOnly: false } as never);
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain("sensitive path (.env)");
+  });
+});

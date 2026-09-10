@@ -1,5 +1,6 @@
 import { isAbsolute, resolve } from "node:path";
-import { validatePath } from "../../security/path-guard.js";
+import { homedir } from "node:os";
+import { isSensitivePath, validatePath } from "../../security/path-guard.js";
 import { runProcess } from "../../utils/process-runner.js";
 import { buildShellEnv } from "./shell-env-policy.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.js";
@@ -219,6 +220,18 @@ export class ShellExecTool implements ITool {
       cwd = pathCheck.fullPath;
     }
 
+    // The same sensitive-path blocklist the file tools apply. Audited
+    // 2026-09-10: `file_read .env` was refused while `cat .env` succeeded —
+    // the blocklist was never consulted for a command's arguments, only for
+    // working_directory. Every path-shaped argument is resolved against the
+    // command's cwd and checked; one hit refuses the whole command by name.
+    const sensitive = sensitiveCommandPaths(command, cwd);
+    if (sensitive.length > 0) {
+      return {
+        content: `Error: command names a sensitive path (${sensitive.join(", ")}) — refused. Secrets and lease sidecars are not readable from the shell either.`,
+        isError: true,
+      };
+    }
     const startedAt = Date.now();
     try {
       // Default-deny environment: the command is model-authored, so it must
@@ -325,3 +338,26 @@ function checkCommandSafety(command: string): { safe: boolean; reason?: string }
 
   return { safe: true };
 }
+
+/**
+ * Path-shaped arguments of a shell command that the blocklist refuses,
+ * resolved against `cwd`. Tokens are split on whitespace with quotes
+ * stripped; flags are skipped; `~` expands to the home directory. Only names
+ * that look like paths (a separator, a leading dot, a dotenv family name)
+ * are checked, so a word like `environment` is never mistaken for `.env`.
+ */
+export function sensitiveCommandPaths(command: string, cwd: string): string[] {
+  const hits: string[] = [];
+  const tokens = command.match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
+  for (const raw of tokens) {
+    const token = raw.replace(/^["']|["']$/g, "");
+    if (token.startsWith("-") || token.length === 0) continue;
+    const pathLike = token.includes("/") || token.includes("\\") || token.startsWith(".") || token.startsWith("~");
+    if (!pathLike) continue;
+    const expanded = token.startsWith("~") ? `${homedir()}${token.slice(1)}` : token;
+    const absolute = isAbsolute(expanded) ? expanded : resolve(cwd, expanded);
+    if (isSensitivePath(absolute) && !hits.includes(token)) hits.push(token);
+  }
+  return hits;
+}
+
