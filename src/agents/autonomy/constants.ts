@@ -47,6 +47,8 @@ export const VERIFY_TOOLS: ReadonlySet<string> = new Set([
   "unity_playmode_verify",
   // Plays the game — starts a level, taps, judges the frames. Delivery proof.
   "unity_playthrough",
+  // Builds the player headlessly and measures the artifact.
+  "unity_build_player",
 ]);
 
 const VERIFY_TOOL_NAME_RE =

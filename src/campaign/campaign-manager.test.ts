@@ -748,6 +748,7 @@ describe("CampaignManager", () => {
     settleMilestone("sprint B done");
     await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
     expect(tasks.submitted[2]!.prompt).toContain("PLAY-THROUGH (final sprint): the game must register ONE Strada.Core.Play.IPlaythroughDriver");
+    expect(tasks.submitted[2]!.prompt).toContain("run unity_build_player");
 
     tasks.verifications.set("task_3", {
       testsGreen: true,

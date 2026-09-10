@@ -1188,7 +1188,8 @@ export class CampaignManager {
           "names (no driver registered, a session that never ends, a screen that never changes, a driver " +
           "that refuses to start). It also reports whether the game starts play BY ITSELF after boot; if " +
           "it does not, wire the GDD's entry flow so a person who opens the entry scene is playing, not " +
-          "staring at an idle screen.";
+          "staring at an idle screen. Then run unity_build_player for the GDD's platform (or the project's " +
+          "active target): a delivery is a runnable artifact, and its measured path and size belong in your report.";
       }
       this.attachStructureMeasurement(campaign, milestone);
     }
