@@ -1715,7 +1715,11 @@ describe("CampaignManager", () => {
     mkdirSync(join(projectRoot, "Recordings", "this-run"), { recursive: true });
     writeFileSync(join(projectRoot, "Recordings", "this-run", "frame_0.png"), "y");
     tasks.emit("task:completed", "task_1", "sprint A done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    // The envelope commit shells out to git several times; under machine load
+    // (measured 2026-09-10 with a sprite generator running) it overran
+    // waitFor's default second and this test failed for reasons unrelated to
+    // what it asserts.
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2), { timeout: 15_000 });
 
     expect(git("log", "-1", "--pretty=%s")).toContain("milestone green");
     expect(git("ls-files", "--", "Recordings").trim()).toBe(""); // untracked now
