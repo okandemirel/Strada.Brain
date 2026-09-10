@@ -51,6 +51,34 @@ describe("AgentCore — an aborted tick must not destroy the batch it collected 
   });
 });
 
+describe("AgentCore — a goal about the working tree runs in the working tree (2026-09-10)", () => {
+  it("a git observation's goal is submitted with workspacePolicy 'none'; a build observation's goal keeps the lease", async () => {
+    const run = async (source: "git" | "build", summary: string) => {
+      const engine = new ObservationEngine();
+      engine.register({ name: `fake-${source}`, collect: () => [createObservation(source, summary, { priority: 90 })] });
+      const scorer = new PriorityScorer();
+      const provider = { chat: vi.fn().mockResolvedValue({
+        text: '```json\n{"action":"execute","goal":"Look into it","reasoning":"worth a look"}\n```',
+        toolCalls: [],
+        stopReason: "end_turn",
+      }) };
+      const taskManager = { submit: vi.fn().mockReturnValue({ id: "task_mock01" }), listTasks: vi.fn().mockReturnValue([]), getStatus: vi.fn().mockReturnValue(null) };
+      const channel = { sendText: vi.fn() };
+      const budget = { getUsage: () => ({ usedUsd: 1, limitUsd: 10, pct: 0.1 }) };
+      const core = new AgentCore(engine, scorer, provider as any, taskManager as any, channel as any, budget, undefined, { minReasoningIntervalMs: 0, minObservationPriority: 30, budgetFloorPct: 10 });
+      await core.tick();
+      expect(taskManager.submit).toHaveBeenCalledTimes(1);
+      return taskManager.submit.mock.calls[0]![3];
+    };
+    // Measured 22:31: "investigate the 1118 uncommitted changes" ran in a
+    // worktree lease seeded from HEAD and reported a clean tree.
+    expect(await run("git", "Uncommitted changes in the project's working tree (outside Strada's own output): 1118 — 1000 untracked")).toMatchObject({ origin: "daemon", workspacePolicy: "none" });
+    const build = await run("build", "Build broken: 3 compile errors");
+    expect(build).toMatchObject({ origin: "daemon" });
+    expect(build.workspacePolicy).toBeUndefined();
+  });
+});
+
 describe("AgentCore", () => {
   it("skips tick when no observations", async () => {
     const engine = new ObservationEngine();

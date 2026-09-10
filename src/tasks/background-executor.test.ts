@@ -2557,6 +2557,45 @@ describe("BackgroundExecutor - auto-resume bounds (measured loop of 2026-08-26)"
     }
   });
 
+  it("re-arm skips a blocked task whose goal tree has since completed (measured 2026-09-10: resubmitted on every boot, 'already completed' each time)", async () => {
+    const goalStorage = { ...createMockGoalStorage(), getTreeStatus: vi.fn((rootId: string) => (rootId === "goal_done" ? "completed" : "failed")) };
+    const executor = new BackgroundExecutor({
+      orchestrator: createMockOrchestrator() as any,
+      decomposer: createMockDecomposer() as any,
+      goalStorage: goalStorage as any,
+      daemonEventBus: createMockDaemonEventBus() as any,
+      aiProvider: undefined,
+      channel: undefined,
+    });
+    const finished = createTestTask(undefined, {
+      id: "task_finished" as any, status: TaskStatus.blocked, origin: "user", chatId: "chat-a" as any,
+      goalRootId: "goal_done", prompt: "mission A",
+      result: "Transient failure — keep-alive re-armed after restart. Auto-retry 3/10 in ~120s.",
+    });
+    const stillOpen = createTestTask(undefined, {
+      id: "task_open" as any, status: TaskStatus.blocked, origin: "user", chatId: "chat-b" as any,
+      goalRootId: "goal_failed", prompt: "mission B",
+      result: "Transient failure — All providers are in cooldown. Auto-retry 2/10 in ~465s.",
+    });
+    const taskManager = {
+      updateStatus: vi.fn(), complete: vi.fn(), fail: vi.fn(), block: vi.fn(),
+      appendTaskNotice: vi.fn(),
+      retryGoalRoot: vi.fn(), replanGoalRoot: vi.fn(), retryTask: vi.fn(),
+      getStatus: vi.fn().mockReturnValue(null),
+      listRecoverableTasks: vi.fn().mockReturnValue([finished, stillOpen]),
+      listTasks: vi.fn().mockReturnValue([]),
+    };
+    vi.useFakeTimers();
+    try {
+      executor.setTaskManager(taskManager as any);
+      await vi.advanceTimersByTimeAsync(91_000);
+      expect(taskManager.block).not.toHaveBeenCalledWith("task_finished", expect.anything());
+      expect(taskManager.block).toHaveBeenCalledWith("task_open", expect.stringContaining("Auto-retry"));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("re-arm resumes a mission at its persisted attempt count instead of a fresh ten-retry budget", async () => {
     // Audited 2026-09-02: missionRetries is an in-memory Map that dies with the
     // process. The boot re-arm matched "Auto-retry 8/10" only as a boolean, so

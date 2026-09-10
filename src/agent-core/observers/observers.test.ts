@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { TriggerObserver } from "./trigger-observer.js";
 import { UserActivityObserver } from "./user-activity-observer.js";
 import { BuildStateObserver } from "./build-state-observer.js";
-import { GitStateObserver } from "./git-state-observer.js";
+import { GitStateObserver, summarizeGitStatus, describeGitStatus, shouldReportGitGrowth, GIT_SUMMARY_PREFIX } from "./git-state-observer.js";
 import { FileWatchObserver } from "./file-watch-observer.js";
 import { TestResultObserver } from "./test-result-observer.js";
 
@@ -165,6 +165,64 @@ describe("GitStateObserver", () => {
     // Second immediate call should be rate-limited
     const obs2 = observer.collect();
     expect(obs2).toHaveLength(0); // Rate limited
+  });
+});
+
+describe("GitStateObserver — breakdown, stable summary, growth threshold (2026-09-10)", () => {
+  const porcelain = (lines: string[]) => async () => ({ exitCode: 0, stdout: lines.join("\n") + "\n" });
+
+  it("counts Strada's own output apart, classifies the rest, and names the top directories", () => {
+    const b = summarizeGitStatus([
+      " M Assets/Scripts/Board.cs",
+      "?? Assets/Generated/a.png",
+      "?? Assets/Generated/b.png",
+      " D Assets/Old.cs",
+      "R  Assets/A.cs -> Assets/B.cs",
+      "?? Recordings/playthrough/frame-1.png",
+      "?? .strada/lease-conflicts/x",
+    ]);
+    expect(b.total).toBe(7);
+    expect(b.own).toBe(5);
+    expect(b.systemOutput).toBe(2);
+    expect(b.byStatus).toEqual({ modified: 1, untracked: 2, deleted: 1, added: 0, renamed: 1 });
+    expect(b.topDirs[0]).toEqual(["Assets", 5]);
+    const text = describeGitStatus(b, 0);
+    expect(text.startsWith(GIT_SUMMARY_PREFIX)).toBe(true);
+    expect(text).toContain("5 — 1 modified, 2 untracked, 1 deleted, 1 renamed; top: Assets (5); 2 more under Strada's own output");
+  });
+
+  it("reports the first non-zero count, then only meaningful growth — the daemon's own captures never re-fire it", async () => {
+    let lines = ["?? Assets/a.cs", "?? Assets/b.cs"];
+    const observer = new GitStateObserver("/proj", 0, async () => ({ exitCode: 0, stdout: lines.join("\n") }));
+    await observer.refreshNow();
+    const first = observer.collect();
+    expect(first).toHaveLength(1);
+    expect(first[0]!.summary.slice(0, 60)).toBe(GIT_SUMMARY_PREFIX.slice(0, 60)); // the dedup key is stable
+    expect(first[0]!.context["measuredIn"]).toBe("/proj");
+    // captures written by play-throughs: not the user's work, no report
+    lines = [...lines, ...Array.from({ length: 40 }, (_, i) => `?? Recordings/playthrough/frame-${i}.png`)];
+    await observer.refreshNow();
+    expect(observer.collect()).toHaveLength(0);
+    // one more user file: below the growth threshold, no report
+    lines = [...lines, "?? Assets/c.cs"];
+    await observer.refreshNow();
+    expect(observer.collect()).toHaveLength(0);
+    // a real jump: reported, and it says how much since the last report
+    lines = [...lines, ...Array.from({ length: 30 }, (_, i) => `?? Assets/gen-${i}.cs`)];
+    await observer.refreshNow();
+    const again = observer.collect();
+    expect(again).toHaveLength(1);
+    expect(again[0]!.summary).toContain("+31 since the last report");
+    expect(again[0]!.context["systemOutputCount"]).toBe(40);
+  });
+
+  it("growth rule: 25 files or 10%, whichever is larger", () => {
+    expect(shouldReportGitGrowth(1, 0)).toBe(true);
+    expect(shouldReportGitGrowth(0, 0)).toBe(false);
+    expect(shouldReportGitGrowth(124, 100)).toBe(false);
+    expect(shouldReportGitGrowth(125, 100)).toBe(true);
+    expect(shouldReportGitGrowth(1140, 1118)).toBe(false);
+    expect(shouldReportGitGrowth(1230, 1118)).toBe(true);
   });
 });
 

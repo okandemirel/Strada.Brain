@@ -260,6 +260,13 @@ export class GoalStorage {
   }
 
   /** Get a complete GoalTree by root ID, or null if not found */
+  /** The tree-level status ("pending" | "completed" | "failed" | …), or null when unknown. */
+  getTreeStatus(rootId: GoalNodeId): string | null {
+    this.ensureConnection();
+    const row = this.getStatement("getTree").get(rootId) as { status?: unknown } | undefined;
+    return typeof row?.status === "string" ? row.status : null;
+  }
+
   getTree(rootId: GoalNodeId): GoalTree | null {
     this.ensureConnection();
 

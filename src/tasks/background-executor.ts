@@ -37,7 +37,7 @@ function getLoggerSafe() {
 }
 
 import type { GoalDecomposer } from "../goals/goal-decomposer.js";
-import type { GoalNode, GoalTree } from "../goals/types.js";
+import type { GoalNode, GoalNodeId, GoalTree } from "../goals/types.js";
 import type { GoalStorage } from "../goals/goal-storage.js";
 import { buildGoalNarrativeFeedback } from "../goals/goal-feedback.js";
 import type { IAIProvider } from "../agents/providers/provider.interface.js";
@@ -385,6 +385,18 @@ export class BackgroundExecutor {
           if (/MISSION STOPPED|Paused on a question|Reply with guidance|ask_user/i.test(result)) {
             getLoggerSafe().info("Keep-alive re-arm skipped — mission already escalated to a person", {
               taskId: task.id,
+            });
+            continue;
+          }
+          // A blocked task whose goal tree has since COMPLETED (a later lineage
+          // finished the plan) has nothing to resume: re-arming it resubmitted
+          // the mission on every boot and it ended with "already completed"
+          // each time (measured 2026-09-10 21:59 and 22:35).
+          const treeStatus = task.goalRootId ? this.goalStorage?.getTreeStatus?.(task.goalRootId as GoalNodeId) ?? null : null;
+          if (treeStatus === "completed") {
+            getLoggerSafe().info("Keep-alive re-arm skipped — its goal tree is already completed", {
+              taskId: task.id,
+              goalRootId: task.goalRootId,
             });
             continue;
           }
