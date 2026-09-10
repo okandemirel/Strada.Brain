@@ -88,6 +88,47 @@ type ChatGptSubscriptionAuth = Extract<
 >;
 
 /** Strip <reasoning> blocks from assistant messages before replay */
+/**
+ * Every assistant tool_call gets a tool message, or the endpoint refuses the
+ * whole request.
+ *
+ * Measured 2026-09-10 15:33 (DeepSeek V4.1 through OpenCode Go): 400
+ * "An assistant message with 'tool_calls' must be followed by tool messages
+ * responding to each 'tool_call_id' (insufficient tool messages following
+ * tool_calls message)". A call whose result never reached the session — the
+ * run aborted mid-tool, a compaction dropped the result, a stream died
+ * between the call and its answer — leaves the assistant turn dangling, and
+ * from then on every replay of the conversation is rejected: the session is
+ * poisoned until it is compacted away. The rule is the OpenAI wire format's
+ * own; DeepSeek merely enforces it. A missing answer is filled with a tool
+ * message that says so, in place, so the model reads "no result recorded"
+ * instead of the run dying.
+ */
+export function repairToolCallPairing(messages: OpenAIMessage[]): OpenAIMessage[] {
+  const out: OpenAIMessage[] = [];
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i]!;
+    out.push(msg);
+    if (msg.role !== "assistant" || !("tool_calls" in msg) || !Array.isArray(msg.tool_calls) || msg.tool_calls.length === 0) continue;
+    const expected = msg.tool_calls.map((tc) => tc.id);
+    const answered = new Set<string>();
+    let j = i + 1;
+    while (j < messages.length && messages[j]!.role === "tool") {
+      const t = messages[j] as { tool_call_id?: string };
+      if (t.tool_call_id) answered.add(t.tool_call_id);
+      out.push(messages[j]!);
+      j++;
+    }
+    for (const id of expected) {
+      if (!answered.has(id)) {
+        out.push({ role: "tool", tool_call_id: id, content: "[no result was recorded for this tool call — it was interrupted before it answered]" } as OpenAIMessage);
+      }
+    }
+    i = j - 1;
+  }
+  return out;
+}
+
 export function stripReasoningBlocks(messages: OpenAIMessage[]): void {
   for (const msg of messages) {
     if (msg.role === "assistant" && typeof msg.content === "string") {
@@ -634,7 +675,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
       }
     }
 
-    return result;
+    return repairToolCallPairing(result);
   }
 
   /**

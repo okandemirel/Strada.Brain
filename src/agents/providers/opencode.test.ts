@@ -145,3 +145,34 @@ describe("reasoning_content is passed back on tool-call turns (measured 2026-09-
   });
 });
 
+
+describe("every assistant tool_call is answered on replay (measured 2026-09-10 15:33: 400 'insufficient tool messages following tool_calls message')", () => {
+  const build = (messages: unknown[]) =>
+    (new OpencodeProvider("sk-test") as unknown as {
+      buildMessages(system: string, messages: unknown[]): Array<Record<string, unknown>>;
+    }).buildMessages("sys", messages);
+
+  it("fills a dangling tool call with a tool message that says no result was recorded", () => {
+    const out = build([
+      { role: "user", content: "go" },
+      { role: "assistant", content: "", tool_calls: [
+        { id: "call_a", name: "file_read", input: { path: "a" } },
+        { id: "call_b", name: "file_read", input: { path: "b" } },
+      ] },
+      { role: "user", content: [{ type: "tool_result", tool_use_id: "call_a", content: "A" }] },
+      { role: "assistant", content: "next" },
+    ]);
+    const roles = out.map((m) => `${m["role"]}${m["tool_call_id"] ? ":" + m["tool_call_id"] : ""}`);
+    expect(roles).toEqual(["system", "user", "assistant", "tool:call_a", "tool:call_b", "assistant"]);
+    expect(String(out[4]!["content"])).toContain("no result was recorded");
+  });
+
+  it("leaves a fully answered turn exactly as it was", () => {
+    const out = build([
+      { role: "user", content: "go" },
+      { role: "assistant", content: "", tool_calls: [{ id: "call_a", name: "file_read", input: { path: "a" } }] },
+      { role: "user", content: [{ type: "tool_result", tool_use_id: "call_a", content: "A" }] },
+    ]);
+    expect(out.map((m) => m["role"])).toEqual(["system", "user", "assistant", "tool"]);
+  });
+});
