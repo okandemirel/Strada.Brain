@@ -121,6 +121,33 @@ describe("createSupervisorExecuteNodeBridge", () => {
     expect(envelope.workspacePolicy).toBeUndefined();
   });
 
+  it("a completed node without the tool evidence its task named is failed, not approved (2026-09-10)", async () => {
+    const runWorkerEnvelope = vi.fn().mockResolvedValue({
+      output: "Driver registered; play-through passes.",
+      workerResult: { status: "completed", toolTrace: [{ toolName: "unity_verify_change", success: true, summary: "ok" }, { toolName: "unity_playthrough", success: false, summary: "PLAY-THROUGH FAILED" }] },
+    });
+    const bridge = createSupervisorExecuteNodeBridge({ backgroundExecutor: { runWorkerEnvelope } as any, orchestrator: {} as any, defaultChannelType: "cli" });
+    const result = await bridge(
+      { id: "node-1", task: "Register the driver, then run unity_playthrough and report its verdict VERBATIM.", assignedProvider: "p", assignedModel: "m" } as any,
+      { chatId: "chat-1", taskRunId: "taskrun_parent" } as any,
+      new AbortController().signal,
+    );
+    expect(result.status).toBe("failed");
+    expect(result.output).toContain("REQUIRED EVIDENCE MISSING: the task says run unity_playthrough; 1 run(s), none ok");
+    expect(result.output).toContain("Worker report: Driver registered");
+
+    runWorkerEnvelope.mockResolvedValueOnce({
+      output: "done",
+      workerResult: { status: "completed", toolTrace: [{ toolName: "unity_playthrough", success: true, summary: "PLAY-THROUGH OK" }] },
+    });
+    const ok = await bridge(
+      { id: "node-2", task: "Then run unity_playthrough and report.", assignedProvider: "p", assignedModel: "m" } as any,
+      { chatId: "chat-1", taskRunId: "taskrun_parent" } as any,
+      new AbortController().signal,
+    );
+    expect(ok.status).toBe("ok");
+  });
+
   it("derives child workspace context and remaps blocked workers", async () => {
     const runWorkerEnvelope = vi.fn().mockResolvedValue({
       output: "Need user input",

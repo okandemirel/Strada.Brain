@@ -7,13 +7,14 @@
 
 import { parseChannelSpec } from "../channels/channel-spec.js";
 import { withNodeScope } from "../supervisor/node-scope.js";
+import { describeEvidenceShortfall, missingRequiredEvidence } from "../supervisor/required-evidence.js";
 import { existsSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import type { Config } from "../config/config.js";
 import { type DurationMs } from "../types/index.js";
-import { createLogger } from "../utils/logger.js";
+import { createLogger, getLoggerSafe } from "../utils/logger.js";
 import { AuthManager } from "../security/auth.js";
 import { configureAuthManager } from "../security/auth-hardened.js";
 import { configureProviderConcurrency } from "../common/fetch-with-retry.js";
@@ -294,6 +295,29 @@ export function createSupervisorExecuteNodeBridge(params: {
         },
         supervisorMode: "off",
       });
+
+      // Evidence the task demanded by name (see supervisor/required-evidence.ts):
+      // a "completed" run whose trace holds no successful call of a tool the
+      // prompt says to run is not done — measured 2026-09-10 18:17, a mission
+      // was approved three minutes after resubmission without its play-through.
+      if (result.workerResult?.status === "completed") {
+        const shortfalls = missingRequiredEvidence(promptWithBudget, result.workerResult.toolTrace ?? []);
+        if (shortfalls.length > 0) {
+          const reason = describeEvidenceShortfall(shortfalls);
+          getLoggerSafe().warn("Node rejected: required tool evidence missing", { nodeId: String(node.id), shortfalls });
+          return {
+            nodeId: node.id,
+            status: "failed" as const,
+            output: `${reason}\n\nWorker report: ${(result.output ?? "").slice(0, 1500)}`,
+            artifacts: toNodeArtifacts(result.workerResult),
+            toolResults: toNodeToolResults(result.workerResult),
+            provider: result.workerResult.provider ?? node.assignedProvider ?? "unknown",
+            model: result.workerResult.model ?? node.assignedModel ?? "unknown",
+            cost: nodeCost,
+            duration: Date.now() - startedAt,
+          };
+        }
+      }
 
       if (result.workerResult?.status === "blocked") {
         return {
