@@ -23,7 +23,7 @@ A ruthless code-and-live-evidence audit of the README's ten headline claims
 | Task-aware routing + presets | **works-live** (`ROUTING_PHASE_SWITCHING` is a no-op flag) | live "ProviderRouter initialized" each boot |
 | Confidence consensus | degraded — advisory only: logs disagreement, never alters output | `orchestrator-consensus.ts` |
 | Learns from mistakes | **inert in production**: 35,006 observations → 0 learned instincts / 0 error patterns / 0 runtime artifacts in 19 days; only the 5 boot seeds exist | `learning.db` counts |
-| Parallel DAG execution | designed trade-off: nodes share ONE lease worktree, so lease ⇒ maxParallelNodes 1 protects against intra-worktree write races; true parallelism needs per-node child leases (backlog) | `supervisor-brain.ts` |
+| Parallel DAG execution | **works-live since 2026-09-10**: a leased task's nodes each get a git worktree off the project root (`nodeWorkspaces: "per-node"`), wave width = `maxParallelNodes`, node commits land under the project write lock and replay onto HEAD; batch-mode Unity tools queue on the process-wide editor lock | `supervisor-brain.ts` `nodeParallelism`, `bootstrap.ts` execute-node bridge, `unity-editor-lock.ts` |
 | Deployment subsystem | unit-proven only; off by default and daemon-gated — never initialized here | 0 log hits |
 | Skill ecosystem + git registry | **works-live** (8 skills load; registry reachable; honest gating) | boot log each start |
 | Memory consolidation + HNSW | HNSW live but hash-fallback vectors (no embedding provider); consolidation never ran (0 log rows) | `agentdb` files + `consolidation_log` |

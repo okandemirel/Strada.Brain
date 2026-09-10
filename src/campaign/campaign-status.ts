@@ -10,6 +10,7 @@
 // estimated at render time. A field the campaign never measured stays absent
 // and renders as "not measured", never as zero.
 // ---------------------------------------------------------------------------
+import { describePlaythrough } from "./playthrough-verdict.js";
 import type { Campaign, CampaignMilestone, CampaignState, MilestoneStatus } from "./types.js";
 import type { Task } from "../tasks/types.js";
 import { ACTIVE_STATUSES } from "../tasks/types.js";
@@ -31,6 +32,13 @@ export interface MilestoneStatusSnapshot {
   readonly structureRefused: boolean;
   readonly lastStructureFinding?: string;
   readonly resultExcerpt?: string;
+  /** The delivery evidence added 2026-09-10, one sentence each, so "where are we" has a measured answer. */
+  readonly playthrough?: string;
+  readonly build?: string;
+  /** met / not met / not measured counts over the GDD's numeric claims. */
+  readonly gddClaims?: { met: number; notMet: number; unmeasured: number; firstNotMet?: string };
+  /** What the final sprint still owed when its bounce budget ran out. */
+  readonly proofsMissing?: readonly string[];
 }
 
 export interface TaskStatusSnapshot {
@@ -109,6 +117,10 @@ export function buildCampaignStatus(
     structureRefused: m.structureRefused === true,
     lastStructureFinding: m.structureFindings?.[m.structureFindings.length - 1],
     resultExcerpt: m.resultExcerpt,
+    ...(m.playthroughVerdict ? { playthrough: describePlaythrough(m.playthroughVerdict) } : {}),
+    ...(m.buildVerdict ? { build: describeBuild(m.buildVerdict) } : {}),
+    ...(m.gddClaims && m.gddClaims.length > 0 ? { gddClaims: summarizeClaims(m.gddClaims) } : {}),
+    ...(m.deliveryProofsMissing && m.deliveryProofsMissing.length > 0 ? { proofsMissing: m.deliveryProofsMissing } : {}),
   }));
   const current = campaign.milestones[campaign.currentMilestone];
   const currentTaskRaw = current?.taskId ? opts.getTask(current.taskId) : undefined;
@@ -141,6 +153,31 @@ export function buildCampaignStatus(
 // ---------------------------------------------------------------------------
 // Rendering — one markdown shape for Telegram and the web chat.
 // ---------------------------------------------------------------------------
+
+/** One sentence about the player build the campaign ran itself. */
+export function describeBuild(b: NonNullable<CampaignMilestone["buildVerdict"]>): string {
+  if (!b.ran) return `player build NOT measured — ${b.detail ?? "no builder"}`;
+  if (!b.ok) return `player build FAILED — ${(b.reasons ?? []).slice(0, 2).join("; ") || b.detail || "no reason recorded"}`;
+  return `player built: ${b.artifactPath ?? "?"} (${b.target ?? "?"}, ${((b.sizeBytes ?? 0) / (1024 * 1024)).toFixed(1)} MB${
+    typeof b.durationMs === "number" ? `, ${Math.round(b.durationMs / 1000)} s` : ""
+  })`;
+}
+
+/** Counts over the rendered claim lines (gdd-claims.ts writes "MET —", "NOT MET —", "NOT MEASURED —"). */
+export function summarizeClaims(lines: readonly string[]): NonNullable<MilestoneStatusSnapshot["gddClaims"]> {
+  let met = 0;
+  let notMet = 0;
+  let unmeasured = 0;
+  let firstNotMet: string | undefined;
+  for (const line of lines) {
+    if (/: MET — /.test(line)) met++;
+    else if (/: NOT MET — /.test(line)) {
+      notMet++;
+      firstNotMet ??= line;
+    } else if (/: NOT MEASURED — /.test(line)) unmeasured++;
+  }
+  return { met, notMet, unmeasured, ...(firstNotMet ? { firstNotMet } : {}) };
+}
 
 export function formatDuration(ms: number): string {
   if (!Number.isFinite(ms) || ms < 0) return "0m";
@@ -207,6 +244,18 @@ export function formatCampaignStatus(snapshot: CampaignStatusSnapshot, now: numb
     }
     if (m.structureRefused) {
       parts.push(`   🚧 delivery refused by the structural gate${m.lastStructureFinding ? `: ${shorten(m.lastStructureFinding, 160)}` : ""}`);
+    }
+    if (m.playthrough) parts.push(`   🎮 ${shorten(m.playthrough, 220)}`);
+    if (m.build) parts.push(`   📦 ${shorten(m.build, 160)}`);
+    if (m.gddClaims) {
+      const c = m.gddClaims;
+      parts.push(
+        `   📐 GDD numbers: ${c.met} met, ${c.notMet} NOT met, ${c.unmeasured} not measured` +
+          (c.firstNotMet ? ` — ${shorten(c.firstNotMet, 120)}` : ""),
+      );
+    }
+    if (m.proofsMissing && m.proofsMissing.length > 0) {
+      parts.push(`   ⛔ proofs still missing: ${shorten(m.proofsMissing.join("; "), 240)}`);
     }
     lines.push(...parts);
   });

@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  describeBuild,
   buildCampaignStatus,
   formatCampaignStatus,
   formatDuration,
@@ -116,6 +117,32 @@ describe("formatCampaignStatus", () => {
     expect(text).toContain("`task_9` — executing, running 1h 0m");
     expect(text).toContain("Last progress (3m ago): editing PlayerController.cs");
     expect(text).not.toContain("Revivable");
+  });
+
+  it("renders the delivery evidence: play-through, player build, GDD numbers and the proofs still owed (2026-09-10)", () => {
+    const c = campaign({ state: "failed", lastError: "delivery proofs still missing after the bounce budget: …" });
+    c.milestones[2] = {
+      ...c.milestones[2]!,
+      status: "failed",
+      playthroughVerdict: { found: true, ok: false, reasons: ["session 1 never ended after 60 actions (phases seen: Playing)"], scene: "Main", session: 1, actions: 60, autoStarted: false },
+      buildVerdict: { ran: true, ok: true, target: "StandaloneOSX", artifactPath: "/p/Builds/StandaloneOSX/Game.app", sizeBytes: 88_000_000, durationMs: 118_000 },
+      gddClaims: [
+        "GDD boot time ≤ 3 s: MET — scene load → services in 2.4 s (editor play mode, batch)",
+        "GDD level count = 12: NOT MET — the game's session catalog reports 3",
+        'GDD frame rate ≥ 60 fps: NOT MEASURED — 25.0 fps loop rate … (GDD: "60 fps")',
+      ],
+      deliveryProofsMissing: ["play-through FAILED in Main: session 1 never ended after 60 actions (phases seen: Playing)", "THE GDD'S OWN NUMBERS ARE NOT MET: level count = 12 measured 3"],
+    };
+    const text = formatCampaignStatus(
+      buildCampaignStatus(c, { maxMilestoneAttempts: 2, milestoneTimeBoxMs: 6 * HOUR, getTask: () => null, listTasks: () => [] }),
+      NOW,
+    );
+    expect(text).toContain("🎮 play-through FAILED in Main: session 1 never ended after 60 actions");
+    expect(text).toContain("📦 player built: /p/Builds/StandaloneOSX/Game.app (StandaloneOSX, 83.9 MB, 118 s)");
+    expect(text).toContain("📐 GDD numbers: 1 met, 1 NOT met, 1 not measured — GDD level count = 12: NOT MET — the game's session catalog reports 3");
+    expect(text).toContain("⛔ proofs still missing: play-through FAILED in Main");
+    expect(describeBuild({ ran: false, detail: "no player builder is configured" })).toBe("player build NOT measured — no player builder is configured");
+    expect(describeBuild({ ran: true, ok: false, reasons: ["build failed with exit code 21"] })).toBe("player build FAILED — build failed with exit code 21");
   });
 
   it("says when the compile verdict was not measured and when a campaign can be revived", () => {
