@@ -24,6 +24,7 @@ import type { CampaignStorage } from "./campaign-storage.js";
 import { detectCampaignIntent } from "./campaign-intake.js";
 import { assessSceneHygiene, renderSceneHygiene } from "./scene-hygiene.js";
 import { readPlaythroughVerdict, describePlaythrough, playthroughDirective, PLAYER_PLAYTHROUGH_VERDICT_REL } from "./playthrough-verdict.js";
+import { readPlaymodeRun } from "./playmode-run.js";
 import { assessNumericClaims, claimsRefusal, describeClaims, extractNumericClaims } from "./gdd-claims.js";
 import { deliveryReviewPrompt, renderSecondOpinion } from "../agents/review/codex-second-opinion.js";
 import {
@@ -1051,9 +1052,29 @@ export class CampaignManager {
         prompt: m.prompt,
         status: "pending",
         attempts: 0,
+        ...(m.coveredSections?.length ? { coveredSections: m.coveredSections } : {}),
+        ...(m.deliverables?.length ? { deliverables: m.deliverables } : {}),
         // Read the PLANNER's wording, once, before anything is appended.
         visualGateArmed: /captur/i.test(m.prompt),
       }));
+      // The plan against the GDD's measured section inventory: recorded on
+      // the campaign, said to the chat, shown by /campaign. Never silent.
+      const uncoveredPlan = ladder.uncoveredSections ?? [];
+      campaign.planCoverage = {
+        covered: (ladder.totalSections ?? 0) - uncoveredPlan.length,
+        total: ladder.totalSections ?? 0,
+        uncovered: uncoveredPlan.slice(0, 40),
+        excluded: (ladder.excluded ?? []).slice(0, 30),
+        minMilestones: ladder.minMilestones ?? campaign.milestones.length,
+        maxMilestones: ladder.maxMilestones ?? campaign.milestones.length,
+      };
+      if (uncoveredPlan.length > 0) {
+        getLoggerSafe().warn("Campaign plan leaves GDD sections unclaimed", {
+          id: campaign.id,
+          uncovered: uncoveredPlan.slice(0, 20),
+          total: ladder.totalSections ?? 0,
+        });
+      }
       // The planner is told to demand a captured frame of every sprint; the
       // visual gate keys on that wording. Name the sprints where it did not,
       // so a gate that will never run is visible before the ladder starts.
@@ -1067,11 +1088,18 @@ export class CampaignManager {
       campaign.currentMilestone = 0;
       this.persist(campaign);
 
+      const coverage = campaign.planCoverage;
+      const coverageLine = coverage
+        ? `\nPlan covers ${coverage.covered}/${coverage.total} GDD sections (ladder sized ${coverage.minMilestones}–${coverage.maxMilestones} from the measured scope)` +
+          (coverage.uncovered.length > 0 ? `; UNPLANNED: ${coverage.uncovered.slice(0, 8).join(", ")}${coverage.uncovered.length > 8 ? ", …" : ""}` : "") +
+          (coverage.excluded.length > 0 ? `; excluded by the GDD: ${coverage.excluded.slice(0, 4).join("; ")}` : "") +
+          "."
+        : "";
       await this.tell(
         campaign,
         `Milestone ladder ready (${campaign.milestones.length} sprints):\n${campaign.milestones
-          .map((m) => `• ${m.title}`)
-          .join("\n")}${styleSummary}\n\nSprint 1 starts now.`,
+          .map((m) => `• ${m.title}${m.coveredSections?.length ? ` — ${m.coveredSections.slice(0, 4).join(", ")}${m.coveredSections.length > 4 ? ", …" : ""}` : ""}`)
+          .join("\n")}${styleSummary}${coverageLine}\n\nSprint 1 starts now.`,
       );
       this.submitCurrentMilestone(campaign);
     } catch (err) {
@@ -1996,13 +2024,29 @@ export class CampaignManager {
             );
           }
         }
-        milestone.testVerdict = verdict?.testsGreen === true ? verdict.detail : undefined;
-        milestone.testVerdictUnfiltered = verdict?.testsGreen === true ? verdict.unfiltered : undefined;
-        // Red names are kept even though the milestone is green: a sprint can
-        // land green after a red run, and "which tests were red on the way"
-        // is what a reader needs (audited 2026-09-03).
-        milestone.testFailures = verdict?.failedTests;
-        milestone.testFailuresOmitted = verdict?.failedTestsOmitted;
+        // THE NUNIT FILE OVER THE PROSE (2026-09-10): when the verification
+        // tool left its run record for this sprint, the counts and the filter
+        // come from there — green is failed === 0 with tests executed,
+        // unfiltered is "no -testFilter/-categories given", never a word in a
+        // sentence. The prose-derived verdict remains the fallback.
+        const run = readPlaymodeRun(this.projectRoot, this.sprintStartMs(milestone));
+        if (run.found && run.total !== undefined) {
+          const green = run.failed === 0 && run.total > 0;
+          milestone.testVerdict = green ? run.detail : undefined;
+          milestone.testVerdictUnfiltered = green ? run.unfiltered : undefined;
+          milestone.testFailures = run.failedNames && run.failedNames.length > 0 ? run.failedNames.slice(0, 5) : verdict?.failedTests;
+          milestone.testFailuresOmitted = run.failedNames && run.failedNames.length > 5 ? run.failedNames.length - 5 : verdict?.failedTestsOmitted;
+          milestone.testRunSource = "nunit";
+        } else {
+          milestone.testVerdict = verdict?.testsGreen === true ? verdict.detail : undefined;
+          milestone.testVerdictUnfiltered = verdict?.testsGreen === true ? verdict.unfiltered : undefined;
+          // Red names are kept even though the milestone is green: a sprint can
+          // land green after a red run, and "which tests were red on the way"
+          // is what a reader needs (audited 2026-09-03).
+          milestone.testFailures = verdict?.failedTests;
+          milestone.testFailuresOmitted = verdict?.failedTestsOmitted;
+          milestone.testRunSource = verdict ? "prose" : undefined;
+        }
       } catch { /* evidence capture is best-effort */ }
       // Persist the green BEFORE the coverage audit: that await is a
       // 400k-window LLM call lasting minutes, and storage said "running" the

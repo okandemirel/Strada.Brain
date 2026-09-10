@@ -62,6 +62,10 @@ export interface CampaignMilestone {
    */
   prompt: string;
   status: MilestoneStatus;
+  /** GDD section headings the planner assigned to this sprint (see milestonePlanSchema). */
+  coveredSections?: string[];
+  /** What the planner said this sprint leaves behind. */
+  deliverables?: string[];
   /** Last task submitted for this milestone (for event correlation/resume). */
   taskId?: string;
   /** One retry is automatic; the second failure fails the campaign. */
@@ -79,6 +83,8 @@ export interface CampaignMilestone {
    * 6 of 173 failing (audited 2026-09-03).
    */
   testVerdictUnfiltered?: boolean;
+  /** Where the verdict came from: the NUnit run record the tool wrote, or the tool's prose (2026-09-10). */
+  testRunSource?: "nunit" | "prose";
   /** Tests the last observed run reported FAILING (bounded; see the verdict). */
   testFailures?: readonly string[];
   /** How many further failing names the run printed beyond those listed. */
@@ -228,6 +234,8 @@ export interface Campaign {
   ideaText?: string;
   /** Project-relative path to the GDD once known (drafted or supplied). */
   gddPath?: string;
+  /** How the plan covers the GDD's measured section inventory (2026-09-10). */
+  planCoverage?: { covered: number; total: number; uncovered: string[]; excluded: string[]; minMilestones: number; maxMilestones: number };
   /** Supplied GDD content (attachment/paste mode), truncated for planning. */
   gddText?: string;
   /** Task id of the in-flight GDD draft (drafting-gdd state). */
@@ -281,13 +289,33 @@ export interface Campaign {
 export const milestonePlanSchema = z.object({
   title: z.string().min(1).max(200),
   prompt: z.string().min(40).max(8000),
+  /**
+   * The GDD section headings this sprint covers, as the document spells them
+   * (2026-09-10). Until then a milestone was {title, prompt} only, so which
+   * sections a plan covered could not be asked of anything but a later LLM.
+   */
+  coveredSections: z.array(z.string().min(1).max(160)).max(40).default([]),
+  /** Concrete things this sprint leaves behind: scenes, prefabs, systems, screens, clips. */
+  deliverables: z.array(z.string().min(1).max(200)).max(30).default([]),
 });
 
 export const milestoneLadderSchema = z.object({
-  milestones: z.array(milestonePlanSchema).min(2).max(12),
+  milestones: z.array(milestonePlanSchema).min(2).max(24),
+  /** What the planner dropped because the GDD explicitly excludes it, with the GDD's reason. */
+  excluded: z.array(z.string().min(1).max(200)).max(30).default([]),
 });
 
 export type MilestoneLadder = z.infer<typeof milestoneLadderSchema>;
+
+/** A validated ladder plus what the measured GDD scope says about it. */
+export interface PlannedLadder extends MilestoneLadder {
+  /** GDD headings no milestone claims, after one re-plan asked for them. */
+  readonly uncoveredSections: string[];
+  /** Headings the GDD has (trivial apparatus removed). */
+  readonly totalSections: number;
+  readonly minMilestones: number;
+  readonly maxMilestones: number;
+}
 
 // =============================================================================
 // FACTORY

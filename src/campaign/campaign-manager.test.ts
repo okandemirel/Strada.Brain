@@ -1042,6 +1042,70 @@ describe("CampaignManager", () => {
     expect(report).toContain("inside the built player: play-through OK in Entry");
   });
 
+  it("records how the plan covers the GDD's sections and says what stayed unplanned (structural planner 2026-09-10)", async () => {
+    const structured = {
+      milestones: [
+        { title: "Sprint A — Foundations", prompt: "build the foundations, verify compile", coveredSections: ["1. Core Loop"], deliverables: ["Main scene"] },
+        { title: "Sprint B — Elements", prompt: "build the elements, PlayMode green", coveredSections: ["3. Element schedule"], deliverables: [] },
+        { title: "Sprint C — Delivery", prompt: "integrate, full suite, DELIVERY REPORT", coveredSections: [], deliverables: ["player build"] },
+      ],
+      excluded: ["leaderboards: the GDD says none in v1"],
+      uncoveredSections: ["6. Audio"],
+      totalSections: 3,
+      minMilestones: 3,
+      maxMilestones: 6,
+    };
+    manager = new CampaignManager({
+      storage,
+      verifyCompile: async () => compileVerdict,
+      planner: { planMilestones: vi.fn().mockResolvedValue(structured) } as unknown as CampaignPlanner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async (chatId, text) => { messages.push({ chatId, text }); },
+      projectRoot,
+    });
+    manager.attachEvents();
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    const stored = storage.get(campaign.id)!;
+    expect(stored.planCoverage).toEqual({ covered: 2, total: 3, uncovered: ["6. Audio"], excluded: ["leaderboards: the GDD says none in v1"], minMilestones: 3, maxMilestones: 6 });
+    expect(stored.milestones[0]!.coveredSections).toEqual(["1. Core Loop"]);
+    expect(stored.milestones[0]!.deliverables).toEqual(["Main scene"]);
+    expect(stored.milestones[2]!.coveredSections).toBeUndefined();
+    const ladderMsg = messages.map((m) => m.text).find((t) => t.includes("Milestone ladder ready"))!;
+    expect(ladderMsg).toContain("Sprint A — Foundations — 1. Core Loop");
+    expect(ladderMsg).toContain("Plan covers 2/3 GDD sections (ladder sized 3–6 from the measured scope); UNPLANNED: 6. Audio; excluded by the GDD: leaderboards: the GDD says none in v1.");
+  });
+
+  it("the NUnit run record outranks the tool's prose: a red file bounces a 'green' sentence, an unfiltered file delivers a 'filtered' one (2026-09-10)", async () => {
+    const writeRun = (record: Record<string, unknown>): void => {
+      mkdirSync(join(projectRoot, "Recordings", "tests"), { recursive: true });
+      writeFileSync(join(projectRoot, "Recordings", "tests", "playmode-last.json"), JSON.stringify({ measuredAt: new Date().toISOString(), ...record }));
+    };
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    // Prose says green and unfiltered; the file says 10 failed.
+    writeRun({ total: 215, passed: 205, failed: 10, failedNames: ["Game.Tests.WinLevel_ReachesWonState"], filter: null, categories: null, unfiltered: true });
+    tasks.verifications.set("task_3", { testsGreen: true, detail: "PlayMode verification passed: 215 of 215 tests passed (unfiltered — the whole PlayMode suite)", unfiltered: true });
+    tasks.emit("task:completed", "task_3", "green, shipping");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+    const m = storage.get(campaign.id)!.milestones[2]!;
+    expect(m.testVerdict).toBeUndefined();
+    expect(m.testRunSource).toBe("nunit");
+    expect(m.testFailures).toEqual(["Game.Tests.WinLevel_ReachesWonState"]);
+    expect(tasks.submitted[3]!.prompt).toContain("no test run was observed");
+
+    // Prose says filtered; the file says the whole suite passed with no filter.
+    writeRun({ total: 215, passed: 215, failed: 0, failedNames: [], filter: null, categories: null, unfiltered: true });
+    tasks.verifications.set("task_4", { testsGreen: true, detail: "PlayMode verification passed: 12 of 12 tests passed (filter: Something)", unfiltered: false });
+    tasks.emit("task:completed", "task_4", "green, shipping");
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"), { timeout: 15_000 });
+    expect(storage.get(campaign.id)!.milestones[2]!.testVerdict).toBe("PlayMode verification passed: 215 of 215 tests passed (unfiltered — the whole PlayMode suite)");
+  });
+
   it("delivers on an UNFILTERED green", async () => {
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
     await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
