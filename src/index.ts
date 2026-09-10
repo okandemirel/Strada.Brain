@@ -827,6 +827,20 @@ async function runStatusCommand(): Promise<void> {
       console.log(`- PID ${runtime.pid} from ${runtime.cwd ?? "unknown working directory"}`);
     }
   }
+
+  // Operator read-out (2026-09-10): health, provider benches, campaign, last
+  // auto-update — the questions that used to need the log and the databases.
+  if (configResult.kind === "ok") {
+    const { gatherStatusReport, renderStatusReport } = await import("./core/status-report.js");
+    const report = await gatherStatusReport({
+      memoryDbPath: configResult.value.memory.dbPath,
+      installRoot: inspection.installRoot,
+      healthUrl: `http://127.0.0.1:${configResult.value.web.port}/health`,
+    });
+    for (const line of renderStatusReport(report)) console.log(line);
+  } else {
+    console.log("Config not loadable — health, providers, campaign and update history not read.");
+  }
 }
 
 async function runKillCommand(force: boolean): Promise<void> {

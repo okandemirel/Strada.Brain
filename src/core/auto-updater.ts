@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ChannelActivityRegistry } from "./channel-activity-registry.js";
 import { getLoggerSafe } from "../utils/logger.js";
+import { recordUpdateEvent } from "./update-history.js";
 
 const VERSION_CHECK_TIMEOUT = 30_000;
 const UPDATE_TIMEOUT = 5 * 60 * 1000;
@@ -734,6 +735,7 @@ export class AutoUpdater {
             changed: statusOutput.split("\n").filter((l) => l.trim() !== "").length,
           });
           this.notifyFn?.("Auto-update deferred: this checkout has uncommitted changes. Commit or stash them and the next cycle will update; set STRADA_AUTO_UPDATE_STASH=1 to let the updater stash them itself.");
+          recordUpdateEvent(this.installRoot, { at: Date.now(), kind: "deferred", reason: "local changes in the checkout" });
         }
         return false;
       }
@@ -826,10 +828,12 @@ export class AutoUpdater {
           reason: why,
         });
         if (this.notifyFn) this.notifyFn(message);
+        recordUpdateEvent(this.installRoot, { at: Date.now(), kind: "rollback-refused", from: prePullSha, to: headNow, reason: why });
         return;
       }
       getLoggerSafe().warn("Auto-update rolling back", { to: prePullSha, reason: why });
       await this.runCommand("git", ["reset", "--hard", prePullSha], VERSION_CHECK_TIMEOUT, this.installRoot);
+      recordUpdateEvent(this.installRoot, { at: Date.now(), kind: "rolled-back", from: postPullSha, to: prePullSha, reason: why });
     };
 
     try {
@@ -898,6 +902,7 @@ export class AutoUpdater {
     }
 
     await popStash();
+    recordUpdateEvent(this.installRoot, { at: Date.now(), kind: "pulled", from: prePullSha, to: postPullSha });
     return true;
   }
 

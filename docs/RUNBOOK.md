@@ -12,6 +12,15 @@ Paths are the defaults (`~/.strada` is `STRADA_HOME`).
 | Web health | `curl -s http://127.0.0.1:3000/health` | `{"status":"ok", …}` |
 | Boot report | `grep -E "Boot report\|Loaded Strada.MCP tools" ~/.strada/strada-brain.log \| tail -2` | a `Loaded Strada.MCP tools` line after the last boot; the boot report lists degraded stages by name |
 | Supervisor death | `<Strada.Brain>/.strada/supervisor-dead.json` (written when the supervisor gives up restarting; consumed and reported at the next boot) | absent |
+| One-shot read-out | `./strada status` (or `node node_modules/tsx/dist/cli.mjs src/index.ts status`) | `Health: ok (up …)`, `Providers: no bench in effect`, the live campaign's milestone or `Campaign: none active`, `Last auto-update: pulled … ago` |
+
+`strada status` reads four sources and says when one is not readable rather
+than skipping it: the web `/health` endpoint, `provider-health.json` (only
+benches whose cooldown is still ahead are listed, with the retry time and the
+last error), `campaigns.db` (active campaigns with their current milestone,
+failed ones with their auto-revive appointment, else the last finished one),
+and `<install>/.strada/auto-update.json` (the updater's last twenty outcomes:
+`pulled`, `rolled-back`, `rollback-refused`, `deferred`).
 
 The daemon logs to `~/.strada/strada-brain.log` (rotated `.gz` beside it) and
 uncaught errors to `~/.strada/strada-brain-error.log`.

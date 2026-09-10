@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { AutoUpdater } from "./auto-updater.js";
+import { readUpdateHistory } from "./update-history.js";
 
 /**
  * Measured live 2026-09-04. The updater pulled at 12:21:27 (1b527dbf →
@@ -54,10 +58,10 @@ function fakeGit(opts: { commitDuringWindow: boolean }): {
   };
 }
 
-function updater(git: ReturnType<typeof fakeGit>, notices: string[]): AutoUpdater {
+function updater(git: ReturnType<typeof fakeGit>, notices: string[], installRoot = mkdtempSync(join(tmpdir(), "strada-upd-"))): AutoUpdater {
   const u = Object.create(AutoUpdater.prototype) as AutoUpdater;
   Object.assign(u, {
-    installRoot: "/tmp/does-not-matter",
+    installRoot,
     commandRunner: (cmd: string, args: string[]) => git.run(cmd, args),
     notifyFn: (m: string) => notices.push(m),
   });
@@ -78,20 +82,25 @@ describe("auto-update rollback", () => {
   it("REFUSES to reset when the branch moved after the pull", async () => {
     const git = fakeGit({ commitDuringWindow: true });
     const notices: string[] = [];
-    await performUpdate(updater(git, notices));
+    const root = mkdtempSync(join(tmpdir(), "strada-upd-"));
+    await performUpdate(updater(git, notices, root));
 
     expect(git.resets).toEqual([]);
     expect(git.head()).toBe(MINE); // the commit survives
     expect(notices.join(" ")).toContain("rollback REFUSED");
+    // `strada status` reads this — the refusal is on record, not only in chat
+    expect(readUpdateHistory(root).at(-1)).toMatchObject({ kind: "rollback-refused", to: MINE });
   });
 
   it("still rolls back when nothing else committed", async () => {
     const git = fakeGit({ commitDuringWindow: false });
     const notices: string[] = [];
-    await performUpdate(updater(git, notices));
+    const root = mkdtempSync(join(tmpdir(), "strada-upd-"));
+    await performUpdate(updater(git, notices, root));
 
     expect(git.resets).toEqual([PRE]);
     expect(git.head()).toBe(PRE);
+    expect(readUpdateHistory(root).at(-1)).toMatchObject({ kind: "rolled-back", to: PRE });
   });
 });
 
@@ -186,9 +195,11 @@ describe("the updater's own lock is not a local change", () => {
       return run(cmd, args);
     };
     delete process.env["STRADA_AUTO_UPDATE_STASH"];
-    await performUpdate(updater(git, []));
+    const root = mkdtempSync(join(tmpdir(), "strada-upd-"));
+    await performUpdate(updater(git, [], root));
     expect(stashes).toEqual([]);
     expect(pulls).toEqual([]);
+    expect(readUpdateHistory(root).map((e) => e.kind)).toEqual(["deferred"]);
   });
 
   it("stashes real changes only when the operator opts in (STRADA_AUTO_UPDATE_STASH=1), and leaves the lock out of the stash", async () => {
