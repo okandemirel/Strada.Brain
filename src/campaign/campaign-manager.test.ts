@@ -796,6 +796,36 @@ describe("CampaignManager", () => {
     expect(storage.get(campaign.id)!.milestones[2]!.playthroughVerdict).toMatchObject({ found: true, ok: true, autoStarted: false });
   });
 
+  it("refuses delivery while a GDD-scheduled element has no trace in code, and delivers once it does (spec-scope wired 2026-09-10)", async () => {
+    writeFileSync(
+      join(projectRoot, "docs", "Game_GDD.md"),
+      "# GDD\n\n## Element schedule\n\n| Unlock | Element | Notes |\n|---|---|---|\n| L1 | Cube | basic |\n| L7 | Dragon Boss | set piece |\n",
+    );
+    mkdirSync(join(projectRoot, "Assets", "Scripts"), { recursive: true });
+    writeFileSync(join(projectRoot, "Assets", "Scripts", "Cube.cs"), "public class Cube {}");
+    const campaign = manager.startFromGdd(ctx, readFileSync(join(projectRoot, "docs", "Game_GDD.md"), "utf8"), "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    const green = { testsGreen: true, detail: "PlayMode verification passed: 179 of 179 tests passed (unfiltered — the whole PlayMode suite)", unfiltered: true };
+    tasks.verifications.set("task_3", green);
+    tasks.emit("task:completed", "task_3", "green, shipping");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+    const prompt = tasks.submitted[3]!.prompt;
+    expect(prompt).toContain("L7 Dragon Boss");
+    expect(prompt).toContain("the code never mentions");
+    expect(storage.get(campaign.id)!.state).not.toBe("done");
+    expect(storage.get(campaign.id)!.milestones[2]!.structureRefused).toBe(true);
+
+    writeFileSync(join(projectRoot, "Assets", "Scripts", "DragonBoss.cs"), "public class DragonBoss {}");
+    tasks.verifications.set("task_4", green);
+    tasks.emit("task:completed", "task_4", "dragon built, shipping");
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+    expect(storage.get(campaign.id)!.milestones[2]!.structureFindings?.join("\n")).toContain("all 2 scheduled element(s) have a trace in code");
+  });
+
   it("delivers on an UNFILTERED green", async () => {
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
     await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));

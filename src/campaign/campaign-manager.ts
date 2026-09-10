@@ -34,6 +34,7 @@ import {
 import { extractCoreLoop, readUnityVersion, renderHowToRun } from "./how-to-run.js";
 import { isTerminalFailureReport } from "../agents/autonomy/verifier-pipeline.js";
 import { assessBuiltAsSpecified, PLACEHOLDER_GRADE_RULE } from "../agents/autonomy/built-as-specified.js";
+import { assessSpecScope } from "../agents/autonomy/spec-scope.js";
 import { describeDimensionality } from "../agents/autonomy/gdd-dimensionality.js";
 import type { Campaign, CampaignMilestone } from "./types.js";
 import { buildCampaignStatus, type CampaignStatusSnapshot } from "./campaign-status.js";
@@ -2969,7 +2970,26 @@ export class CampaignManager {
       if (report.incomplete.length > shown.length) {
         lines.push(`NOT measured: +${report.incomplete.length - shown.length} further item(s), same scan`);
       }
-      return { refusal: report.refusal, lines };
+      // THE GDD'S OWN SCHEDULE. spec-scope parses the element table and looks
+      // for each element in the code; it had two consumers (a self-test and the
+      // conformance guard) and the campaign never asked it (audited
+      // 2026-09-10). A scheduled element the code never mentions is an
+      // objective gap, and delivering without it is delivering another game.
+      let refusal = report.refusal;
+      const scope = assessSpecScope(this.projectRoot, campaign.gddPath ? join(this.projectRoot, campaign.gddPath) : undefined);
+      if (scope.scheduled > 0) {
+        if (scope.missing.length === 0) {
+          lines.push(`GDD element schedule: all ${scope.scheduled} scheduled element(s) have a trace in code`);
+        } else {
+          const named = scope.missing.slice(0, 8).map((e) => `${e.unlock} ${e.name}`).join(", ");
+          const more = scope.missing.length > 8 ? `, +${scope.missing.length - 8} more` : "";
+          lines.push(`GDD element schedule: ${scope.missing.length} of ${scope.scheduled} scheduled element(s) have NO trace in code: ${named}${more}`);
+          refusal ??=
+            `the GDD schedules ${scope.missing.length} element(s) the code never mentions (${named}${more}) — ` +
+            "a delivery without them is not the game the GDD specifies";
+        }
+      }
+      return { refusal, lines };
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
       getLoggerSafe().warn("Structural delivery check could not run", { id: campaign.id, error: detail });
