@@ -1040,7 +1040,13 @@ describe("CampaignManager", () => {
     playerVerdictOnRun = { ok: true, extra: {} };
     tasks.verifications.set("task_5", green);
     tasks.emit("task:completed", "task_5", "green, shipping");
-    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"), { timeout: 15_000 });
+    // Say WHICH proof went missing when this fails (CI coverage 2026-09-10
+    // reported only "expected 'failed' to be 'done'").
+    await vi.waitFor(() => {
+      const c = storage.get(campaign.id)!;
+      const why = `${c.lastError ?? ""} | proofsMissing=${JSON.stringify(c.milestones[2]?.deliveryProofsMissing ?? [])} | attempts=${c.milestones[2]?.attempts}`;
+      expect(c.state, why).toBe("done");
+    }, { timeout: 15_000 });
     const report = messages.map((m) => m.text).join("\n");
     expect(report).toContain("GDD frame rate ≥ 60 fps: MET — 60.0 fps average over 600 frames in the built player (real rendering)");
     expect(report).toContain("inside the built player: play-through OK in Entry");
