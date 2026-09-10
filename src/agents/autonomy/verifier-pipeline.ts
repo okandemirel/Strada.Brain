@@ -28,6 +28,8 @@ export type VerifierPipelineDecision = "approve" | "continue" | "replan";
 
 export interface VerifierCheck {
   readonly name: VerifierName;
+  /** A gating check that has asked its fill: the pipeline replans instead of asking again. */
+  readonly escalate?: boolean;
   readonly status: VerifierCheckStatus;
   readonly summary: string;
   readonly gate?: string;
@@ -88,7 +90,7 @@ export function planVerifierPipeline(params: {
   const checks: VerifierCheck[] = [];
   const buildCheck = params.buildToolsAvailable === false
     ? buildUnavailableBuildToolsCheck(params.buildVerificationGate, evidence)
-    : buildBuildVerifierCheck(params.buildVerificationGate, params.verificationState);
+    : buildBuildVerifierCheck(params.buildVerificationGate, params.verificationState, evidence, `${params.chatId}:${params.taskStartedAtMs}`);
   if (buildCheck) {
     checks.push(buildCheck);
   }
@@ -134,7 +136,7 @@ export function planVerifierPipeline(params: {
     // one is needed, which is what a replan is. Every other gating check means
     // "there is more to do on this approach" — continue.
     const decision: VerifierPipelineDecision = gatingChecks.some(
-      (check) => check.name === ("same-error-repeat" as VerifierName),
+      (check) => check.name === ("same-error-repeat" as VerifierName) || check.escalate === true,
     )
       ? "replan"
       : "continue";
@@ -152,6 +154,33 @@ export function planVerifierPipeline(params: {
   }
 
   if (evidence.hasTerminalFailureReport) {
+    // A failure report is honoured — once it has an attempt behind it. The
+    // vocabulary check alone let a run say "could not, the edit failed" over a
+    // trace holding one read and no failed call (report 2026-09-10 #38: the
+    // terminal exit was judged by words, no attempt evidence asked). One ask,
+    // then the report stands: a run that truly cannot attempt anything must
+    // still be able to say so.
+    const attempted =
+      evidence.mutationStepCount > 0 ||
+      evidence.verificationStepCount > 0 ||
+      evidence.recentFailures.length > 0;
+    if (WORK_TASK_TYPES.has(evidence.task.type) && !attempted) {
+      const runKey = `${params.chatId}:${params.taskStartedAtMs}`;
+      const asked = (zeroAttemptFailureGates.get(runKey) ?? 0) + 1;
+      zeroAttemptFailureGates.set(runKey, asked);
+      if (zeroAttemptFailureGates.size > 512) zeroAttemptFailureGates.delete(zeroAttemptFailureGates.keys().next().value as string);
+      if (asked <= MAX_ZERO_ATTEMPT_FAILURE_GATES) {
+        return {
+          evidence,
+          checks,
+          reviewRequired: false,
+          initialDecision: "continue",
+          gate: buildFailureWithoutAttemptGate(evidence),
+          summary: `The draft reports failure of a ${evidence.task.type} task, but the trace holds no attempt: no change, no verification, no failed call.`,
+          buildToolsAvailable: params.buildToolsAvailable,
+        };
+      }
+    }
     return {
       evidence,
       checks,
@@ -272,10 +301,30 @@ const WORK_TASK_TYPES: ReadonlySet<string> = new Set([
 
 /** How many times the no-work gate asks before the run is failed as "reported, not done". */
 const MAX_NO_WORK_EVIDENCE_GATES = 2;
+/** A failure report with no attempt behind it is asked to try once; then it stands. */
+const MAX_ZERO_ATTEMPT_FAILURE_GATES = 1;
+const zeroAttemptFailureGates = new Map<string, number>();
+/** The exhausted compile gate asks for an honest report twice; a third completion claim over unverified files is a replan. */
+const MAX_UNPAID_DEBT_GATES = 2;
+const unpaidDebtGateEmissions = new Map<string, number>();
+
+function buildFailureWithoutAttemptGate(evidence: VerifierPipelineEvidence): string {
+  return [
+    "[FAILURE WITHOUT AN ATTEMPT] You report that the task could not be done, but this run's trace shows",
+    `no attempt: ${evidence.totalStepCount} tool call(s), no change made, no verification run, no failed call.`,
+    "",
+    "A failure report needs the attempt behind it. Try the work — make the change, run the verification —",
+    "and if it fails, report what failed and how. If nothing can even be attempted from here, say exactly",
+    "what is missing (the tool, the file, the access) so the report names a real blocker, not a guess.",
+  ].join("\n");
+}
+
 /** Per-run emission count for the no-work gate (chatId:taskStartedAtMs → asks). */
 const noWorkGateEmissions = new Map<string, number>();
 /** Test hook: forget every run's no-work gate count. */
 export function resetNoWorkEvidenceGates(): void {
+  zeroAttemptFailureGates.clear();
+  unpaidDebtGateEmissions.clear();
   noWorkGateEmissions.clear();
 }
 
@@ -473,6 +522,8 @@ function buildUnavailableBuildToolsCheck(
 function buildBuildVerifierCheck(
   gate: string | null,
   verificationState: VerificationState,
+  evidence?: Pick<VerifierPipelineEvidence, "hasTerminalFailureReport">,
+  runKey?: string,
 ): VerifierCheck | null {
   if (gate) {
     return {
@@ -491,13 +542,39 @@ function buildBuildVerifierCheck(
     const pending = [...verificationState.pendingFiles];
     const shown = pending.slice(0, 8).join(", ");
     const rest = pending.length > 8 ? ` and ${pending.length - 8} more` : "";
+    const summary =
+      `Compilable changes were never verified: ${pending.length} file(s) still pending ` +
+      `(${shown}${rest}) after the compile gate's ask budget was spent. ` +
+      "The asking stopped; the debt did not.";
+    // Report 2026-09-10 #38: this record used to be the whole consequence —
+    // the run went on to the completion review and could be approved over
+    // files nobody compiled. Unpaid debt now has two exits only: a clean
+    // verification, or a plain failure report naming the files. A completion
+    // claim gets that ask twice; the third is a replan.
+    if (evidence?.hasTerminalFailureReport) {
+      return { name: "build", status: "issues", summary };
+    }
+    const asked = runKey ? (unpaidDebtGateEmissions.get(runKey) ?? 0) + 1 : 1;
+    if (runKey) {
+      unpaidDebtGateEmissions.set(runKey, asked);
+      if (unpaidDebtGateEmissions.size > 512) unpaidDebtGateEmissions.delete(unpaidDebtGateEmissions.keys().next().value as string);
+    }
     return {
       name: "build",
       status: "issues",
-      summary:
-        `Compilable changes were never verified: ${pending.length} file(s) still pending ` +
-        `(${shown}${rest}) after the compile gate's ask budget was spent. ` +
-        "The asking stopped; the debt did not.",
+      summary,
+      escalate: asked > MAX_UNPAID_DEBT_GATES,
+      gate: [
+        `[VERIFICATION DEBT UNPAID] The compile gate asked its fill and ${pending.length} file(s) were never verified:`,
+        ...pending.slice(0, 12).map((f) => `- ${f}`),
+        ...(pending.length > 12 ? [`- and ${pending.length - 12} more`] : []),
+        "",
+        "You may NOT declare this work complete. Two exits only:",
+        "1. Run a verification that passes (compile-status / PlayMode tests / the equivalent) and report its result.",
+        "2. STOP and report the task as failed: name these files and say plainly why verification never passed.",
+        "",
+        "Do not restate completion without one of these.",
+      ].join("\n"),
     };
   }
   return {

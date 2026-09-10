@@ -465,6 +465,40 @@ DONE`,
     expect(build?.summary).not.toContain("No outstanding");
   });
 
+  it("unpaid verification debt is a gate, not a footnote: a completion claim is asked for a clean pass or a plain failure report, twice, then replanned (#38, 2026-09-10)", () => {
+    resetNoWorkEvidenceGates();
+    const startedAt = Date.now() - 1000;
+    const exhausted = (draft: string) => planVerifierPipeline({
+      prompt: "Implement the board",
+      draft,
+      state: createState({ stepResults: [{ toolName: "file_write", success: true, summary: "Wrote Board.cs", timestamp: Date.now() - 500 }] }),
+      task: IMPLEMENTATION_TASK,
+      verificationState: {
+        pendingFiles: new Set(["Assets/Game/Board.cs", "Assets/Game/Tray.cs"]),
+        touchedFiles: new Set(["Assets/Game/Board.cs", "Assets/Game/Tray.cs"]),
+        hasCompilableChanges: true,
+        lastBuildOk: null,
+        lastVerificationAt: null,
+        buildGateExhausted: true,
+      },
+      buildVerificationGate: null,
+      conformanceGate: null,
+      logEntries: [],
+      chatId: "chat-debt",
+      taskStartedAtMs: startedAt,
+    });
+    const first = exhausted("Implemented the board. DONE");
+    expect(first.initialDecision).toBe("continue");
+    expect(first.gate).toContain("VERIFICATION DEBT UNPAID");
+    expect(first.gate).toContain("- Assets/Game/Tray.cs");
+    expect(exhausted("Implemented the board. DONE").initialDecision).toBe("continue");
+    expect(exhausted("Implemented the board. DONE").initialDecision).toBe("replan");
+    // the honest exit stands, and is not counted as a claim
+    const honest = exhausted("I could not verify Board.cs and Tray.cs: the compile tool failed every time. Stopping, the task is blocked.");
+    expect(honest.initialDecision).toBe("approve");
+    expect(honest.summary).toContain("honest terminal failure report");
+  });
+
   /**
    * Audited 2026-09-02: the failure vocabulary included "missing", "requires",
    * "not found", "error" and "failure" — words an ordinary completion report
@@ -548,9 +582,34 @@ describe("work evidence (audited 2026-09-10: one read call and no change was app
     expect(third.summary).toContain("3 times with no change made");
   });
 
-  it("a plain failure report is still honoured", () => {
-    const plan = planVerifierPipeline(base({ draft: "I could not implement it: the module's asmdef cannot be edited headlessly, the file_edit failed. Stopping." }));
+  it("a plain failure report is still honoured when the trace holds the attempt it names", () => {
+    resetNoWorkEvidenceGates();
+    const plan = planVerifierPipeline(base({
+      draft: "I could not implement it: the module's asmdef cannot be edited headlessly, the file_edit failed. Stopping.",
+      state: createState({ stepResults: [
+        { toolName: "file_read", success: true, summary: "Read the asmdef", timestamp: Date.now() - 600 },
+        { toolName: "file_edit", success: false, summary: "EACCES: the asmdef is locked", timestamp: Date.now() - 500 },
+      ] }),
+    }));
+    expect(plan.initialDecision).toBe("approve");
     expect(plan.gate ?? "").not.toContain("NO WORK EVIDENCE");
+    expect(plan.gate ?? "").not.toContain("FAILURE WITHOUT AN ATTEMPT");
+  });
+
+  it("a failure report with no attempt behind it — one read, no change, no failed call — is asked to try once, then stands (#38, 2026-09-10)", () => {
+    resetNoWorkEvidenceGates();
+    const startedAt = Date.now() - 1000;
+    const claim = () => planVerifierPipeline(base({
+      taskStartedAtMs: startedAt,
+      draft: "I could not implement it: the file_edit failed. Stopping.",
+    }));
+    const first = claim();
+    expect(first.initialDecision).toBe("continue");
+    expect(first.gate).toContain("FAILURE WITHOUT AN ATTEMPT");
+    expect(first.gate).toContain("1 tool call(s)");
+    const second = claim();
+    expect(second.initialDecision).toBe("approve");
+    expect(second.summary).toContain("honest terminal failure report");
   });
 
   it("an analysis task may end without a change", () => {
