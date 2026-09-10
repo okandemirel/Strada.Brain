@@ -95,14 +95,29 @@ export function parseSupervisorVerificationVerdict(
 }
 
 
-function buildVerificationPrompt(node: NodeResult): string {
+/**
+ * How much of the worker's output the verifier sees. Was 1 800 characters —
+ * measured 2026-09-10: a node's structured result (a JSON block with a
+ * `tests` object) was cut mid-object by THIS slice, and the verifier rejected
+ * the node three times as "Worker output is truncated/incomplete: the `tests`
+ * object is not closed". The truncation was the verifier's own. The cap is
+ * now generous, and when it does cut, the prompt says so and forbids judging
+ * the cut as the worker's incompleteness.
+ */
+export const VERIFICATION_OUTPUT_CHARS = 12_000;
+
+export function buildVerificationPrompt(node: NodeResult): string {
   const files = node.artifacts
     .slice(0, 8)
     .map((artifact) => `- ${artifact.action}: ${artifact.path}`);
   const toolErrors = node.toolResults
     .filter((result) => result.isError)
     .slice(0, 4)
-    .map((result) => `- ${result.content.slice(0, 160)}`);
+    .map((result) => `- ${result.content.slice(0, 400)}`);
+  const cut = node.output.length > VERIFICATION_OUTPUT_CHARS;
+  const shownOutput = cut
+    ? `${node.output.slice(0, VERIFICATION_OUTPUT_CHARS)}\n[… cut by the system at ${VERIFICATION_OUTPUT_CHARS} of ${node.output.length} characters — judge what is shown; an unclosed block here is this cut, NOT the worker's incompleteness]`
+    : node.output;
 
   return [
     "Review this supervisor worker result for obvious correctness, completeness, and safety issues.",
@@ -115,7 +130,7 @@ function buildVerificationPrompt(node: NodeResult): string {
     `Original model: ${node.model}`,
     "",
     "Worker output:",
-    node.output.slice(0, 1800),
+    shownOutput,
     "",
     files.length > 0 ? `Touched files:\n${files.join("\n")}` : "Touched files: none reported",
     toolErrors.length > 0 ? `Tool errors:\n${toolErrors.join("\n")}` : "",
