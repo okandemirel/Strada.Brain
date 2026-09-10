@@ -228,3 +228,37 @@ describe("workspaces carry the user's uncommitted work", () => {
     await lease.release();
   });
 });
+
+describe("the seed budget never cuts the project's own content (audited 2026-09-10: edits past the 2000-path cut were quarantined, then deleted with the lease)", () => {
+  it("seeds every uncommitted Assets/ path, and an agent edit to the last of them commits back", async () => {
+    const root = committedRepo();
+    mkdirSync(join(root, "Assets", "Big"), { recursive: true });
+    for (let i = 0; i < 2100; i++) writeFileSync(join(root, "Assets", "Big", `f${i}.txt`), `v${i}\n`);
+    const lease = await leaseFor(root);
+    try {
+      expect(existsSync(join(lease.path, "Assets", "Big", "f2099.txt"))).toBe(true);
+      writeFileSync(join(lease.path, "Assets", "Big", "f2099.txt"), "edited by the agent\n");
+      const result = await lease.commit();
+      expect(result.conflicts).not.toContain(join("Assets", "Big", "f2099.txt"));
+      expect(readFileSync(join(root, "Assets", "Big", "f2099.txt"), "utf8")).toBe("edited by the agent\n");
+    } finally {
+      await lease.release();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("still bounds what lies outside the project's content", async () => {
+    const root = committedRepo();
+    mkdirSync(join(root, "notes"), { recursive: true });
+    for (let i = 0; i < 2100; i++) writeFileSync(join(root, "notes", `n${i}.md`), `n${i}\n`);
+    const lease = await leaseFor(root);
+    try {
+      expect(existsSync(join(lease.path, "notes", "n0.md"))).toBe(true);
+      expect(existsSync(join(lease.path, "notes", "n2099.md"))).toBe(false);
+    } finally {
+      await lease.release();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+

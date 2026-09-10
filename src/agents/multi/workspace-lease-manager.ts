@@ -221,9 +221,23 @@ async function sameContent(left: string, right: string): Promise<boolean> {
 
 const DEFAULT_WORKTREE_TIMEOUT_MS = 30_000;
 const DEFAULT_SUBMODULE_TIMEOUT_MS = 300_000;
-/** Upper bound on uncommitted paths copied into a workspace, so a repo with a
- *  huge dirty tree cannot turn every lease into a full project copy. */
+/**
+ * Upper bound on uncommitted paths OUTSIDE the project's own content that are
+ * copied into a workspace, so a repo with a huge dirty tree of build output
+ * cannot turn every lease into a full project copy.
+ *
+ * The project's content (Assets/, Packages/, ProjectSettings/, src/, the
+ * style profile, .gitmodules) is never counted against it. Audited
+ * 2026-09-10: the cap used to apply to everything, and a file the lease was
+ * not seeded with is one the agent "wrote blind" — its work is quarantined at
+ * commit and deleted with the lease. A Unity project routinely carries more
+ * than 2000 uncommitted paths under Assets/ (this one: 676 at the seed, 9002
+ * in the case the seed-priority comment cites), so the agent's edits to the
+ * paths past the cut were being thrown away.
+ */
 const MAX_UNCOMMITTED_ENTRIES = 2000;
+/** Paths the lease must always be seeded with: the project's own content. */
+const PROJECT_CONTENT_RE = /^(?:\.gitmodules$|style\.json$|Assets[/\\]|Packages[/\\]|ProjectSettings[/\\]|src[/\\])/;
 /** Ceiling for `git status -z` output; a large Unity project runs to hundreds of KB. */
 const GIT_STATUS_MAX_OUTPUT_BYTES = 32 * 1024 * 1024;
 
@@ -945,24 +959,22 @@ export class WorkspaceLeaseManager {
       if (!firstSegment) return true;
       return !this.fallbackExcludes.has(firstSegment) && !DERIVED_COPY_EXCLUDES.has(firstSegment);
     });
-    // When the budget still bites, code seeds first: git's byte order is not an
-    // importance order. (Stable sort — within a tier, git's order is kept.)
-    const seedPriority = (rel: string): number =>
-      // style.json is tier 0: the GDD-derived style profile is written to the
-      // project root untracked, and every generator reads it from the lease —
-      // dropped past the budget, generation silently falls back to stock.
-      /^(?:\.gitmodules$|style\.json$|Assets[/\\]|Packages[/\\]|ProjectSettings[/\\]|src[/\\])/.test(rel) ? 0 : 1;
-    const ordered = entries.length > MAX_UNCOMMITTED_ENTRIES
-      ? [...entries].sort((a, b) => seedPriority(a.path) - seedPriority(b.path))
-      : entries;
-    const applied = ordered.slice(0, MAX_UNCOMMITTED_ENTRIES);
+    // The project's content is always seeded in full; only what lies outside
+    // it (stray root files, docs, tool output) is bounded. style.json counts
+    // as content: the GDD-derived style profile is written to the project
+    // root untracked, and every generator reads it from the lease — dropped,
+    // generation silently falls back to stock. (Stable: git's order is kept.)
+    const content = entries.filter((e) => PROJECT_CONTENT_RE.test(e.path));
+    const other = entries.filter((e) => !PROJECT_CONTENT_RE.test(e.path));
+    const applied = [...content, ...other.slice(0, MAX_UNCOMMITTED_ENTRIES)];
     if (entries.length > applied.length) {
       // Never silently truncate: a partially seeded workspace that looks whole
       // is worse than one the log says is partial.
-      getLoggerSafe().warn("Project has more uncommitted paths than the workspace seeds", {
+      getLoggerSafe().warn("Project has more uncommitted paths outside its content than the workspace seeds", {
         total: entries.length,
         seeded: applied.length,
         skipped: entries.length - applied.length,
+        contentSeededInFull: content.length,
       });
     }
 
