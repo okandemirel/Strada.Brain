@@ -3238,9 +3238,15 @@ export class CampaignManager {
     );
   }
 
+  /** The newest play-through's runtime scene dump, for the structural check (see built-as-specified opts.runtime). */
+  private latestRuntimeEvidence(campaign: Campaign): import("../agents/autonomy/built-as-specified.js").RuntimeSceneEvidence | undefined {
+    const withRuntime = [...(campaign.milestones ?? [])].reverse().find((m) => m.playthroughVerdict?.found && m.playthroughVerdict.runtime);
+    return withRuntime?.playthroughVerdict?.runtime;
+  }
+
   private measureDeliveryStructure(campaign: Campaign): { refusal?: string; lines: string[] } {
     try {
-      const report = assessBuiltAsSpecified(this.projectRoot);
+      const report = assessBuiltAsSpecified(this.projectRoot, undefined, { runtime: this.latestRuntimeEvidence(campaign) });
       // The GDD's own dimensionality against the scenes (audited 2026-09-03):
       // it asked for "plump, glossy 3D-feel pigs" and nothing ever checked.
       // DELIVERY is judged against the whole GDD, so the whole text is read.

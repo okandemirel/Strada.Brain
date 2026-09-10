@@ -359,12 +359,32 @@ export interface PlaythroughEvidence {
   /** Every session the run played: index, outcome (None = never ended), actions. */
   sessions?: Array<{ index: number; outcome: string; actions: number; seconds: number }>;
   /**
+   * What was on screen at the end of play (2026-09-10): world renderers, the
+   * sprite/mesh names they bind, engine primitives, audio. The file scan
+   * cannot see what code instantiates; this can.
+   */
+  runtime?: RuntimeSceneDump;
+  /**
    * Boot time and frame timing of the play-through. `medium` names the
    * conditions (the editor in play mode under -batchmode): boot time and
    * hitches transfer to the player, the average frame rate is a floor.
    */
   perf?: PlaythroughPerf;
   measuredAt?: string;
+}
+
+export interface RuntimeSceneDump {
+  renderers: number;
+  worldRenderers: number;
+  spriteRenderers: number;
+  meshRenderers: number;
+  canvases: number;
+  particleSystems: number;
+  audioSources: number;
+  audioPlaying: number;
+  sprites: string[];
+  meshes: string[];
+  primitiveMeshes: number;
 }
 
 export interface PlayerBuildEvidence {

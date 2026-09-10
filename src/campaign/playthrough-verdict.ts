@@ -20,7 +20,7 @@
  */
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import type { PlaythroughEvidence, PlaythroughPerf } from "./types.js";
+import type { PlaythroughEvidence, PlaythroughPerf, RuntimeSceneDump } from "./types.js";
 
 export const PLAYTHROUGH_VERDICT_REL = join("Recordings", "playthrough", "playthrough-verdict.json");
 /** The same verdict shape, written by unity_run_player after playing INSIDE the built player. */
@@ -38,6 +38,7 @@ interface VerdictFile {
     missing?: unknown;
     sessionCount?: unknown;
     sessions?: unknown;
+    runtime?: unknown;
   } | null;
   frames?: { count?: unknown; flat?: unknown; maxMotionShare?: unknown } | null;
   perf?: {
@@ -90,6 +91,7 @@ export function readPlaythroughVerdict(projectRoot: string, sinceMs: number, rel
           scene: str(record.scene),
           missing: str(record.missing),
           ...(typeof record.sessionCount === "number" && record.sessionCount >= 0 ? { sessionCount: record.sessionCount } : {}),
+          ...(record.runtime && typeof record.runtime === "object" ? { runtime: parseRuntime(record.runtime as Record<string, unknown>) } : {}),
           ...(Array.isArray(record.sessions) && record.sessions.length > 0
             ? {
                 sessions: record.sessions.slice(0, 24).map((s) => {
@@ -121,6 +123,24 @@ export function readPlaythroughVerdict(projectRoot: string, sinceMs: number, rel
         }
       : {}),
     measuredAt: str(parsed.measuredAt),
+  };
+}
+
+function parseRuntime(r: Record<string, unknown>): RuntimeSceneDump {
+  const n = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+  const names = (v: unknown): string[] => (Array.isArray(v) ? v.map(String).slice(0, 40) : []);
+  return {
+    renderers: n(r.renderers),
+    worldRenderers: n(r.worldRenderers),
+    spriteRenderers: n(r.spriteRenderers),
+    meshRenderers: n(r.meshRenderers),
+    canvases: n(r.canvases),
+    particleSystems: n(r.particleSystems),
+    audioSources: n(r.audioSources),
+    audioPlaying: n(r.audioPlaying),
+    sprites: names(r.sprites),
+    meshes: names(r.meshes),
+    primitiveMeshes: n(r.primitiveMeshes),
   };
 }
 

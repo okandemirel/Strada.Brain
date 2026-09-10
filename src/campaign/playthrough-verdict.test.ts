@@ -63,6 +63,13 @@ describe("the play-through verdict the campaign reads back (measured 2026-09-10:
     expect(describePlaythrough(e)).toContain("timing (built player, real rendering): boot 1.1 s, 60.0 fps average over 600 frames, worst frame 40 ms");
   });
 
+  it("the runtime dump rides along in the evidence (2026-09-10)", () => {
+    write({ ...ok, record: { ...ok.record, runtime: { renderers: 3, worldRenderers: 2, spriteRenderers: 2, meshRenderers: 0, canvases: 1, particleSystems: 0, audioSources: 1, audioPlaying: 0, sprites: ["pig"], meshes: [], primitiveMeshes: 0 } } });
+    expect(readPlaythroughVerdict(root, 0).runtime).toEqual({ renderers: 3, worldRenderers: 2, spriteRenderers: 2, meshRenderers: 0, canvases: 1, particleSystems: 0, audioSources: 1, audioPlaying: 0, sprites: ["pig"], meshes: [], primitiveMeshes: 0 });
+    write(ok);
+    expect(readPlaythroughVerdict(root, 0).runtime).toBeUndefined();
+  });
+
   it("timing rides along, named by its medium, and is absent when the verdict has none", () => {
     write({ ...ok, perf: { medium: "editor-playmode-batch", bootSeconds: 2.4, playSeconds: 41.2, playFrames: 1030, avgFps: 25.0, worstFrameMs: 180.2 } });
     const e = readPlaythroughVerdict(root, 0);

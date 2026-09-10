@@ -257,6 +257,18 @@ export interface ArtInventory {
   readonly shortAudio: number;
 }
 
+/** What a play-through saw on screen at the end of play (see campaign/types.ts RuntimeSceneDump). */
+export interface RuntimeSceneEvidence {
+  readonly worldRenderers: number;
+  readonly spriteRenderers: number;
+  readonly meshRenderers: number;
+  readonly sprites: readonly string[];
+  readonly meshes: readonly string[];
+  readonly primitiveMeshes: number;
+  readonly audioSources: number;
+  readonly audioPlaying: number;
+}
+
 export interface BuiltAsSpecifiedReport {
   /** Whether the check could measure anything at all. */
   readonly measured: boolean;
@@ -658,7 +670,7 @@ export function assessBuiltAsSpecified(
   projectRoot: string,
   io: BuiltAsSpecifiedIo = defaultIo,
   /** Tests shrink the walk budget to exercise the truncation disclosure. */
-  opts: { walkBudget?: number } = {},
+  opts: { walkBudget?: number; runtime?: RuntimeSceneEvidence } = {},
 ): BuiltAsSpecifiedReport {
   const walkBudget = opts.walkBudget ?? ASSET_WALK_BUDGET;
   // The budget belongs to the walk, so a shrunken one really truncates rather
@@ -1156,12 +1168,35 @@ export function assessBuiltAsSpecified(
   }
 
   // ── Refusal: only the strong, unambiguous case ────────────────────────
-  const refusal =
+  let refusal =
     structuralRefusal(report, {
       artTotal,
       unboundTotal,
       entryScene: enabled[0],
     }) ?? placeholderArtRefusal(report);
+  // RUNTIME OVER THE FILE SCAN (2026-09-10). The scan cannot see what code
+  // instantiates and said so; a Resources.Load / pooled / spawned world was
+  // refused as "renders NOTHING". When a play-through of THIS sprint saw
+  // world renderers bound to real sprites or meshes, that is the stronger
+  // fact: the refusal is withdrawn and both measurements are disclosed.
+  const rt = opts.runtime;
+  if (rt) {
+    const realArt = rt.sprites.length + Math.max(0, rt.meshes.length - rt.primitiveMeshes);
+    disclosures.push(
+      `At runtime (play-through of this sprint): ${rt.worldRenderers} world renderer(s) — ${rt.spriteRenderers} sprite, ${rt.meshRenderers} mesh` +
+        (rt.primitiveMeshes > 0 ? ` (${rt.primitiveMeshes} engine primitive${rt.primitiveMeshes === 1 ? "" : "s"})` : "") +
+        (rt.sprites.length > 0 ? `; sprites bound: ${rt.sprites.slice(0, 6).join(", ")}${rt.sprites.length > 6 ? ", …" : ""}` : "") +
+        (rt.meshes.length > 0 ? `; meshes: ${rt.meshes.slice(0, 4).join(", ")}${rt.meshes.length > 4 ? ", …" : ""}` : "") +
+        `; ${rt.audioSources} audio source(s), ${rt.audioPlaying} playing.`,
+    );
+    if (refusal && /render NOTHING/.test(refusal) && rt.worldRenderers > 0 && realArt > 0) {
+      disclosures.push(
+        `The static scan found no world renderer in the shipped scene files, but the play-through saw ${rt.worldRenderers} at runtime ` +
+          `binding ${realArt} real sprite/mesh name(s) — the world is instantiated by code. The static refusal is withdrawn on that evidence.`,
+      );
+      refusal = undefined;
+    }
+  }
   if (!refusal && artTotal === 0) {
     disclosures.push(
       "The project holds no prefabs, imported models or sprite textures at all — there is nothing to bind, " +
