@@ -166,6 +166,8 @@ describe("CampaignManager", () => {
   const ctx = { chatId: "cli-local", channelType: "cli", userId: "u1" };
   /** What the compiler answers at the delivery gate; green unless a test says otherwise. */
   let compileVerdict: { ok: boolean; ran: boolean; errors?: number; detail?: string } = { ok: true, ran: true };
+  /** What the harness's vision provider answers when a test sets it; unset = no answer (not checked). */
+  let visionChat: (() => Promise<{ text: string }>) | undefined;
   /** Artifacts the campaign played inside the built player, and what the fake player leaves behind. */
   let playerRuns: string[] = [];
   let playerVerdictOnRun: { ok: boolean; extra: Record<string, unknown> } | undefined;
@@ -234,6 +236,7 @@ describe("CampaignManager", () => {
     messengerDownFor = undefined;
     compileVerdict = { ok: true, ran: true };
     attached = [];
+    visionChat = undefined;
     playerRuns = [];
     playerVerdictOnRun = { ok: true, extra: {} };
     buildVerdict = {
@@ -250,6 +253,7 @@ describe("CampaignManager", () => {
       verifyCompile: async () => compileVerdict,
       buildPlayer: async () => buildVerdict,
       runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); },
+      visionProvider: { provider: { chat: async () => (visionChat ? visionChat() : { text: "" }), capabilities: { vision: true } } as never, name: "vision" },
       attach: async (chatId, a) => { attached.push({ chatId, name: a.name, url: a.url, type: a.type }); },
       planner,
       taskManager: tasks as unknown as TaskManager,
@@ -1104,6 +1108,52 @@ describe("CampaignManager", () => {
     tasks.emit("task:completed", "task_4", "green, shipping");
     await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"), { timeout: 15_000 });
     expect(storage.get(campaign.id)!.milestones[2]!.testVerdict).toBe("PlayMode verification passed: 215 of 215 tests passed (unfiltered — the whole PlayMode suite)");
+  });
+
+  it("a vision model's explicit NO bounces the final sprint once; a YES delivers with the match in the report (2026-09-10)", async () => {
+    const gdd = [
+      "# GDD", "12.  ART DIRECTION", "12.1 Visual Style",
+      "Two-layer look: crisp flat pixel-art canvases on softly rendered dimensional stages, ",
+      "plus plump, glossy 3D-feel pigs with 2D-animation snappiness that read instantly against ",
+      "the destructible layer, in bright warm colour with heavy contrast for readability.",
+    ].join("\n");
+    const answers = ["The frame shows a flat grey grid and no pigs.\nMATCH: no", "Plump pigs on a warm stage, as described.\nMATCH: yes"];
+    let asked = 0;
+    visionChat = async () => { asked++; return { text: answers.shift() ?? "MATCH: yes" }; };
+    const campaign = manager.startFromGdd(ctx, gdd, "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    // A frame of the running game captured during the final sprint.
+    mkdirSync(join(projectRoot, "Recordings", "playthrough"), { recursive: true });
+    writeFileSync(join(projectRoot, "Recordings", "playthrough", "frame_00040.png"), Buffer.from("89504e470d0a1a0a", "hex"));
+    const green = { testsGreen: true, detail: "PlayMode verification passed: 179 of 179 tests passed (unfiltered — the whole PlayMode suite)", unfiltered: true };
+    tasks.verifications.set("task_3", green);
+    tasks.emit("task:completed", "task_3", "green, shipping");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+    expect(asked).toBe(1);
+    expect(tasks.submitted[3]!.prompt).toContain("LOOK DOES NOT MATCH THE GDD: a vision model judged the newest captured frame");
+    expect(tasks.submitted[3]!.prompt).toContain("flat grey grid and no pigs");
+    expect(storage.get(campaign.id)!.milestones[2]!.visualMismatchBounces).toBe(1);
+
+    tasks.verifications.set("task_4", green);
+    tasks.emit("task:completed", "task_4", "look fixed, shipping");
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"), { timeout: 15_000 });
+    const report = messages.map((m) => m.text).join("\n");
+    expect(report).toContain("MATCH — Plump pigs on a warm stage, as described.");
+  });
+
+  it("measures what the shipped scenes hold at EVERY sprint end, not only at delivery (2026-09-10)", async () => {
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    const first = storage.get(campaign.id)!.milestones[0]!;
+    expect(first.status).toBe("green");
+    expect(first.structureFindings?.length ?? 0).toBeGreaterThan(0);
+    expect(first.structureRefused).not.toBe(true);
   });
 
   it("delivers on an UNFILTERED green", async () => {

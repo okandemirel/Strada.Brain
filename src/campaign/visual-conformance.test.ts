@@ -89,6 +89,28 @@ describe("the judgement", () => {
     expect(renderVisualConformance(result, { path: frame })).toContain("claude");
   });
 
+  it("reads the MATCH line as the verdict and renders it; no line, no verdict (2026-09-10)", async () => {
+    const root = tmp();
+    const frame = join(root, "f.png");
+    writeFileSync(frame, "x".repeat(64));
+    const no = await judgeVisualConformance({
+      look, frame: { path: frame },
+      visionProvider: { provider: { chat: vi.fn(async () => ({ text: "The frame shows a flat grid, no pigs.\nMATCH: no" })), capabilities: { vision: true } } as never, name: "claude" },
+    });
+    expect(no).toMatchObject({ status: "checked", matches: false, detail: "The frame shows a flat grid, no pigs." });
+    expect(renderVisualConformance(no, { path: frame })).toContain("NO MATCH — The frame shows a flat grid");
+    const yes = await judgeVisualConformance({
+      look, frame: { path: frame },
+      visionProvider: { provider: { chat: vi.fn(async () => ({ text: "MATCH: yes\nPlump pigs on a dimensional stage, as described." })), capabilities: { vision: true } } as never, name: "claude" },
+    });
+    expect(yes).toMatchObject({ status: "checked", matches: true, detail: "Plump pigs on a dimensional stage, as described." });
+    const none = await judgeVisualConformance({
+      look, frame: { path: frame },
+      visionProvider: { provider: { chat: vi.fn(async () => ({ text: "Looks about right." })), capabilities: { vision: true } } as never, name: "claude" },
+    });
+    expect(none.matches).toBeUndefined();
+  });
+
   it("NEVER passes silently when there is no vision provider", async () => {
     const root = tmp();
     const frame = join(root, "f.png");

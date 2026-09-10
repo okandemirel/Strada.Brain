@@ -179,6 +179,12 @@ export interface VisualConformance {
   status: "checked" | "not-checked";
   /** The model's one-line answer, or why nothing was asked. */
   detail: string;
+  /**
+   * The model's yes/no on "does the frame show the described game" (2026-09-10).
+   * Absent when unchecked or when the model gave no verdict line; only an
+   * explicit `false` ever refuses anything, and only once.
+   */
+  matches?: boolean;
   framePath?: string;
   provider?: string;
 }
@@ -188,7 +194,13 @@ const VISION_SYSTEM =
   "description of how that game should look. Answer in ONE sentence: does the frame plausibly " +
   "show the described game, and what is the most visible difference? Judge the SUBJECT, not the " +
   "polish — an unfinished but correct scene is a match. Do not speculate about anything outside " +
-  "the frame.";
+  "the frame. Then, on a second line, write exactly `MATCH: yes` or `MATCH: no`.";
+
+/** The verdict line, when the model wrote one. */
+export function parseMatchLine(text: string): boolean | undefined {
+  const m = /\bMATCH:\s*(yes|no)\b/i.exec(text);
+  return m ? m[1]!.toLowerCase() === "yes" : undefined;
+}
 
 /**
  * Ask a provider that can actually see. `visionProvider` must claim vision on
@@ -239,7 +251,9 @@ export async function judgeVisualConformance(params: {
       ],
       [],
     );
-    const answer = (response.text ?? "").trim().split("\n")[0]?.slice(0, 300) ?? "";
+    const fullText = (response.text ?? "").trim();
+    const answer = fullText.split("\n").find((l) => l.trim().length > 0 && !/^\s*MATCH:/i.test(l))?.trim().slice(0, 300) ?? "";
+    const matches = parseMatchLine(fullText);
     if (answer.length === 0) {
       return {
         status: "not-checked",
@@ -248,7 +262,7 @@ export async function judgeVisualConformance(params: {
         provider: visionProvider.name,
       };
     }
-    return { status: "checked", detail: answer, framePath: frame.path, provider: visionProvider.name };
+    return { status: "checked", detail: answer, ...(matches !== undefined ? { matches } : {}), framePath: frame.path, provider: visionProvider.name };
   } catch (err) {
     getLoggerSafe().warn("Visual conformance check failed", {
       provider: visionProvider.name,
@@ -268,7 +282,7 @@ export function renderVisualConformance(result: VisualConformance, frame: FrameS
   const lines = ["**Does it look like the GDD?**"];
   if (result.status === "checked") {
     lines.push(
-      `- ${result.detail}`,
+      `- ${result.matches === undefined ? "" : result.matches ? "MATCH — " : "NO MATCH — "}${result.detail}`,
       `- Judged from \`${result.framePath ?? "?"}\` by ${result.provider ?? "a vision provider"}.`,
     );
   } else {

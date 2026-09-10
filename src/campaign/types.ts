@@ -197,6 +197,8 @@ export interface CampaignMilestone {
   structureRefused?: boolean;
   /** The rendered look-vs-GDD disclosure block for the delivery report. */
   visualConformance?: string;
+  /** Bounces spent on the vision model saying the frame does not show the described game (max 1). */
+  visualMismatchBounces?: number;
   /**
    * What unity_playthrough said about the game as delivered (read at the
    * delivery gate from Recordings/playthrough/playthrough-verdict.json; a

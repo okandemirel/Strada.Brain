@@ -2348,6 +2348,32 @@ export class CampaignManager {
           const frame = selectGameplayFrame(this.projectRoot, milestone.startedAtMs ?? 0);
           const verdict = await judgeVisualConformance({ look, frame, visionProvider: this.visionProvider });
           milestone.visualConformance = renderVisualConformance(verdict, frame);
+          // ONE bounce on an explicit "no" (2026-09-10): the check used to be
+          // disclosure only, so a frame of the wrong game shipped with a
+          // footnote. A vision model's judgement is fallible, so this is a
+          // single chance to fix the look, never a wall — after it, the
+          // disclosure stands and the report says NO MATCH.
+          const mismatchBounces = milestone.visualMismatchBounces ?? 0;
+          if (verdict.status === "checked" && verdict.matches === false && mismatchBounces < 1 && deliveryBouncesSpent < this.maxMilestoneAttempts) {
+            milestone.visualMismatchBounces = mismatchBounces + 1;
+            milestone.deliveryVerificationBounced = true;
+            milestone.deliveryVerificationBounces = deliveryBouncesSpent + 1;
+            const marker = "\n\nLOOK DOES NOT MATCH THE GDD:";
+            const previous = milestone.prompt.indexOf(marker);
+            if (previous >= 0) milestone.prompt = milestone.prompt.slice(0, previous);
+            milestone.prompt +=
+              `${marker} a vision model judged the newest captured frame (${frame.path ?? "?"}) against the GDD's own look description and said: ${verdict.detail}. ` +
+              "Bind the GDD's art and style into the shipped scenes (sprites, materials, palette, camera framing), capture a new frame of the running game, and report what changed. " +
+              "DO NOT AUDIT: change the scenes, not the description.";
+            this.persist(campaign);
+            getLoggerSafe().warn("Delivery bounced: the frame does not show the described game", {
+              id: campaign.id,
+              milestone: milestone.id,
+              detail: verdict.detail.slice(0, 200),
+            });
+            this.submitCurrentMilestone(campaign, { countAttempt: deliveryBouncesSpent > 0 });
+            return;
+          }
         } catch (err) {
           milestone.visualConformance =
             `**Does it look like the GDD?**\n- ⚠️ visual conformance not checked — ${err instanceof Error ? err.message : String(err)}.`;
@@ -2432,11 +2458,22 @@ export class CampaignManager {
         await this.attachDeliveryEvidence(campaign);
         return;
       }
+      // WHAT THE SCENES HOLD, EVERY SPRINT (2026-09-10). The structural
+      // measurement used to run only at delivery, so nine sprints of ten were
+      // never asked what they left in the shipped scenes. Disclosure here —
+      // the refusal stays a delivery decision — and the next sprint's
+      // <<MEASURED NOW>> block already carries the same numbers.
+      try {
+        milestone.structureFindings = this.measureDeliveryStructure(campaign).lines;
+      } catch {
+        /* measured at delivery regardless */
+      }
       campaign.currentMilestone += 1;
       this.persist(campaign);
+      const entryLine = milestone.structureFindings?.find((l) => l.startsWith("The entry scene ")) ?? "";
       await this.tell(
         campaign,
-        `✅ ${milestone.title} — green.${commitNote} Sprint ${campaign.currentMilestone + 1}/${campaign.milestones.length} starts now.`,
+        `✅ ${milestone.title} — green.${commitNote}${entryLine ? ` ${entryLine}` : ""} Sprint ${campaign.currentMilestone + 1}/${campaign.milestones.length} starts now.`,
       );
       // Defer out of the event handler: submit() fires task:created and the
       // next sprint must not re-enter this handler mid-emit.
