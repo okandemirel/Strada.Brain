@@ -1,4 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
+import { resolve } from "node:path";
 import { parseChannelSpec } from "../channels/channel-spec.js";
 import { join } from "node:path";
 import type {
@@ -503,10 +504,32 @@ function buildOperationsStage(capabilities: CapabilityDescriptor[]): BootStageRe
   };
 }
 
+/** Read and remove the supervisor-death marker; the sentence for the boot report, or null. */
+export function takeSupervisorDeathMarker(markerPath = resolve(process.cwd(), ".strada", "supervisor-dead.json")): string | null {
+  try {
+    if (!existsSync(markerPath)) return null;
+    const raw = JSON.parse(readFileSync(markerPath, "utf8")) as { at?: string; restarts?: number; maxRestarts?: number; lastExit?: { code?: number | null; signal?: string | null } };
+    rmSync(markerPath, { force: true });
+    const exit = raw.lastExit?.signal ? `signal ${raw.lastExit.signal}` : `exit code ${raw.lastExit?.code ?? "unknown"}`;
+    return (
+      `The supervisor gave up before this boot (${raw.at ?? "time unknown"}): the daemon exited ` +
+      `${(raw.restarts ?? 0) + 1} times (limit ${raw.maxRestarts ?? "?"}), last with ${exit}. ` +
+      "Whatever crashed it may still be there — read the log from that time before trusting this boot."
+    );
+  } catch {
+    return null;
+  }
+}
+
 export function collectConfigWarnings(
   options: CapabilitySnapshotOptions,
 ): string[] {
   const warnings: string[] = [];
+  // The supervisor gave up before this boot (see gateway/supervisor-death.ts).
+  // Say so once, here, and clear the marker: an operator reading the boot
+  // report is the one person guaranteed to see it.
+  const death = takeSupervisorDeathMarker();
+  if (death) warnings.push(death);
 
   // Streaming enabled but primary provider may not support it
   if (

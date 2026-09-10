@@ -1,4 +1,8 @@
 import { fork, type ChildProcess } from "node:child_process";
+import { announceSupervisorDeath, describeSupervisorDeath, telegramChatIdsFromEnv, type SupervisorDeathReport } from "./supervisor-death.js";
+
+/** Written under .strada/ when the supervisor gives up; the next boot reports and removes it. */
+export const SUPERVISOR_DEATH_MARKER = "supervisor-dead.json";
 import { resolve } from "node:path";
 import { getLogger } from "../utils/logger.js";
 
@@ -134,6 +138,25 @@ export class Daemon {
       if (this.restartCount >= this.maxRestarts) {
         logger.error(`Maximum restart attempts (${this.maxRestarts}) reached. Daemon stopping.`);
         this.running = false;
+        // Say so where it can be heard: a marker the next boot surfaces, a
+        // Telegram message when one is configured, and a non-zero exit code
+        // for whatever supervises the supervisor. Until 2026-09-10 this branch
+        // told nobody but the log file.
+        process.exitCode = 1;
+        const report: SupervisorDeathReport = {
+          at: new Date().toISOString(),
+          restarts: this.restartCount,
+          maxRestarts: this.maxRestarts,
+          lastExit: { code, signal },
+          entryPoint: this.entryPoint,
+          logHint: process.env["LOG_FILE"] ?? "the daemon log (LOG_FILE)",
+        };
+        void announceSupervisorDeath(report, {
+          markerPath: resolve(process.cwd(), ".strada", SUPERVISOR_DEATH_MARKER),
+          telegram: telegramChatIdsFromEnv(process.env),
+        }).then((outcome) => {
+          logger.error("Supervisor death announced", { ...outcome, report: describeSupervisorDeath(report) });
+        });
         return;
       }
 

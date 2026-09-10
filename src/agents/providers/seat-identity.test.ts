@@ -85,3 +85,30 @@ describe("a credential bench belongs to the key that earned it (measured 2026-09
   });
 });
 
+
+describe("the health file survives a kill mid-write and names itself when unreadable (audited 2026-09-10)", () => {
+  it("saves atomically: no partial file is ever at the path, and a corrupt file is reported, not swallowed", async () => {
+    const { mkdtempSync, readdirSync, writeFileSync, readFileSync, rmSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const { tmpdir } = await import("node:os");
+    const dir = mkdtempSync(join(tmpdir(), "health-"));
+    try {
+      const path = join(dir, "provider-health.json");
+      registry.load(path);
+      registry.recordQuotaExhausted("seat-atomic", "quota");
+      expect(readdirSync(dir)).toEqual(["provider-health.json"]); // no .tmp left behind
+      expect(JSON.parse(readFileSync(path, "utf8")).entries.some(([n]: [string]) => n === "seat-atomic")).toBe(true);
+      writeFileSync(path, "{\"entries\": [[\"x\", {");
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const { getLoggerSafe } = await import("../../utils/logger.js");
+      const logWarn = vi.spyOn(getLoggerSafe(), "warn").mockImplementation((() => undefined) as never);
+      registry.load(path);
+      expect(logWarn.mock.calls.some(([msg]) => String(msg).includes("Provider health file could not be read"))).toBe(true);
+      logWarn.mockRestore();
+      warn.mockRestore();
+    } finally {
+      registry.clearProviderState("seat-atomic");
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

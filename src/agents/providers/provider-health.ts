@@ -11,10 +11,11 @@
  * Singleton — shared across the entire process.
  */
 
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, renameSync } from "node:fs";
 import { createHash } from "node:crypto";
 
 import { canonicalizeProviderName } from "./provider-identity.js";
+import { getLoggerSafe } from "../../utils/logger.js";
 
 export type ProviderHealthStatus = "healthy" | "degraded" | "down";
 
@@ -656,7 +657,14 @@ export class ProviderHealthRegistry {
         // back on the base cooldown while its consecutiveFailures survived.
         downEpisodes: Array.from(this.downEpisodes.entries()),
       };
-      writeFileSync(path, JSON.stringify(data, null, 2));
+      // Atomic: write beside, then rename. This file carries every long
+      // cooldown, and persistNow() runs at the moment one is recorded — a
+      // SIGKILL mid-write left a truncated JSON that load() discarded in
+      // silence, and the next boot re-dialed walled accounts (audited
+      // 2026-09-10; the model catalog store already did this right).
+      const tmp = `${path}.${process.pid}.tmp`;
+      writeFileSync(tmp, JSON.stringify(data, null, 2));
+      renameSync(tmp, path);
     } catch {
       // Persistence is best-effort
     }
@@ -731,8 +739,16 @@ export class ProviderHealthRegistry {
           this.thinkingReEnableCounters.set(k, v);
         }
       }
-    } catch {
-      // Ignore corrupt or missing persistence file
+    } catch (err) {
+      // Missing is normal on a first boot; corrupt is not. Say which file and
+      // why, so a lost bench is visible in the boot log instead of being
+      // discovered when the first walled account is re-dialed.
+      if (existsSync(path)) {
+        getLoggerSafe().warn("Provider health file could not be read — every recorded cooldown is lost for this boot", {
+          path,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
     }
   }
 }
