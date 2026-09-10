@@ -1453,10 +1453,20 @@ export class WorkspaceLeaseManager {
     // on the project root alone meant a lease derived from another lease
     // committed with no lock at all, so two siblings could interleave their
     // bulk writes into the same tree (audited 2026-09-01).
+    // 30 s used to be the wait; with per-node worktrees (2026-09-10) several
+    // sibling commits queue on this lock and one large write-back with its
+    // replay can hold it for a minute. Waiting beats the alternative the
+    // helper falls back to (proceeding unlocked, interleaving two trees).
     const lock = await (await import("../../common/project-write-lock.js")).acquireProjectWriteLock(
       sourceRoot,
-      { timeoutMs: 30_000 },
+      { timeoutMs: 300_000 },
     );
+    if (!lock.acquired) {
+      getLoggerSafe().error("Lease commit proceeds WITHOUT the project write lock — a sibling writer may interleave", {
+        sourceRoot,
+        workspacePath,
+      });
+    }
     try {
 
     // Two phases, both on awaited fs.promises: list the lease, then process the
