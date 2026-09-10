@@ -10,6 +10,7 @@
 
 import type { GoalNode, GoalNodeId, GoalTree } from "../goals/types.js";
 import { withLivenessHeartbeat } from "../agents/liveness-hub.js";
+import { getLoggerSafe } from "../utils/logger.js";
 import type {
   NodeResult,
   SupervisorConfig,
@@ -420,6 +421,14 @@ export class SupervisorBrain {
       }
 
       if (leafNodes.length === 0) {
+        const alreadyDone = completedPlanOnResume(context.goalTree);
+        if (alreadyDone) {
+          getLoggerSafe().info("Saved plan already complete on resume — nothing left to run", {
+            goalRootId,
+            steps: alreadyDone.totalNodes,
+          });
+          return alreadyDone;
+        }
         return this.makePartialResult([], "No sub-tasks after decomposition");
       }
 
@@ -877,4 +886,51 @@ export class SupervisorBrain {
       nodeResults,
     };
   }
+}
+
+/**
+ * A resumed task carries the tree it saved. When every leaf of that tree is
+ * already completed, the plan is DONE — not "No sub-tasks after decomposition".
+ * Measured 2026-09-10 21:20: the driver mission's three leaves completed at
+ * 20:41, the restart re-armed its task, the leaf filter (which drops completed
+ * nodes) yielded nothing, the task was blocked twice and a fresh re-plan was
+ * started against work that had already landed.
+ */
+export function completedPlanOnResume(tree: GoalTree | undefined): SupervisorResult | null {
+  if (!tree) return null;
+  const hasChildren = new Set<string>();
+  for (const [, node] of tree.nodes) {
+    if (node.parentId !== null) hasChildren.add(String(node.parentId));
+  }
+  const leaves: GoalNode[] = [];
+  for (const [id, node] of tree.nodes) {
+    if (id === tree.rootId || hasChildren.has(String(id))) continue;
+    leaves.push(node);
+  }
+  if (leaves.length === 0 || leaves.some((n) => n.status !== "completed")) return null;
+  const nodeResults: NodeResult[] = leaves.map((n) => ({
+    nodeId: n.id,
+    status: "ok",
+    output: n.result ?? "",
+    artifacts: [],
+    toolResults: [],
+    provider: "resume",
+    model: "saved-plan",
+    cost: 0,
+    duration: Math.max(0, (n.completedAt ?? n.updatedAt) - (n.startedAt ?? n.createdAt)),
+  }));
+  return {
+    success: true,
+    partial: false,
+    output: `All ${leaves.length} planned steps were already completed before this resume; nothing was left to run.\n\n`
+      + leaves.map((n, i) => `${i + 1}. ${n.task.slice(0, 160)}${n.task.length > 160 ? "…" : ""}`).join("\n"),
+    totalNodes: leaves.length,
+    succeeded: leaves.length,
+    failed: 0,
+    blocked: 0,
+    skipped: 0,
+    totalCost: 0,
+    totalDuration: nodeResults.reduce((max, r) => Math.max(max, r.duration), 0),
+    nodeResults,
+  };
 }
