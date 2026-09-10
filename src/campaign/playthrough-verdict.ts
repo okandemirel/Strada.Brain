@@ -34,6 +34,8 @@ interface VerdictFile {
     session?: unknown;
     scene?: unknown;
     missing?: unknown;
+    sessionCount?: unknown;
+    sessions?: unknown;
   } | null;
   frames?: { count?: unknown; flat?: unknown; maxMotionShare?: unknown } | null;
   perf?: {
@@ -85,6 +87,20 @@ export function readPlaythroughVerdict(projectRoot: string, sinceMs: number): Pl
           session: num(record.session),
           scene: str(record.scene),
           missing: str(record.missing),
+          ...(typeof record.sessionCount === "number" && record.sessionCount >= 0 ? { sessionCount: record.sessionCount } : {}),
+          ...(Array.isArray(record.sessions) && record.sessions.length > 0
+            ? {
+                sessions: record.sessions.slice(0, 24).map((s) => {
+                  const r = (s ?? {}) as Record<string, unknown>;
+                  return {
+                    index: num(r.index) ?? 0,
+                    outcome: r.startAccepted === false ? "Refused" : str(r.outcome) ?? "None",
+                    actions: num(r.actions) ?? 0,
+                    seconds: num(r.seconds) ?? 0,
+                  };
+                }),
+              }
+            : {}),
         }
       : {}),
     ...(frames
@@ -119,10 +135,15 @@ export function describePlaythrough(e: PlaythroughEvidence | undefined): string 
   const frames = e.frames ? `; ${e.frames.count} frames, ${e.frames.flat} flat, max motion ${(e.frames.maxMotionShare * 100).toFixed(1)}%` : "";
   const start = e.autoStarted === false && !e.missing ? "; the game does NOT start play by itself after boot (the driver's StartSession was called)" : "";
   const perf = e.perf ? `; ${describePerf(e.perf)}` : "";
+  const catalog = e.sessionCount !== undefined ? `; catalog ${e.sessionCount} session(s)` : "; no session catalog (level count not measurable)";
+  const played =
+    e.sessions && e.sessions.length > 1
+      ? `; played ${e.sessions.length}: ${e.sessions.map((s) => `#${s.index} ${s.outcome} in ${s.actions}`).join(", ")}`
+      : "";
   if (e.ok) {
-    return `play-through OK${where}: session ${e.session ?? "?"} played to ${e.outcome ?? "an outcome"} in ${e.actions ?? "?"} actions${frames}${start}${perf}`;
+    return `play-through OK${where}: session ${e.session ?? "?"} played to ${e.outcome ?? "an outcome"} in ${e.actions ?? "?"} actions${played}${frames}${start}${perf}${catalog}`;
   }
-  return `play-through FAILED${where}: ${e.reasons && e.reasons.length > 0 ? e.reasons.join("; ") : "no reason recorded"}${frames}${start}${perf}`;
+  return `play-through FAILED${where}: ${e.reasons && e.reasons.length > 0 ? e.reasons.join("; ") : "no reason recorded"}${played}${frames}${start}${perf}${catalog}`;
 }
 
 /** The timing, with its medium: a frame rate from the batch editor is a floor, not the player's. */
@@ -144,7 +165,8 @@ export function playthroughDirective(e: PlaythroughEvidence | undefined): string
     : `the last play-through FAILED: ${e.reasons && e.reasons.length > 0 ? e.reasons.join("; ") : "no reason recorded"}`;
   return (
     `PLAY-THROUGH REQUIRED: ${why}. Run unity_playthrough (it boots the entry scene, resolves the game's ` +
-    "Strada.Core.Play.IPlaythroughDriver, starts a session, acts until it ends and judges the frames) and fix " +
+    "Strada.Core.Play.IPlaythroughDriver, starts a session, acts until it ends and judges the frames; register a " +
+    "Strada.Core.Play.ISessionCatalog too and pass sessions: \"all\" so every level is played and counted) and fix " +
     "whatever it names until its verdict is ok — no registered driver, a session that never ends, a screen " +
     "that never changes, or a driver that refuses to start is not a delivered game. Its verdict, not your " +
     "description of the game, is the proof."

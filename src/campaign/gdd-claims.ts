@@ -158,13 +158,27 @@ export function assessNumericClaims(
           blocking: true,
         };
       }
-      case "level_count":
+      case "level_count": {
+        if (!playthrough?.found) return { claim, status: "unmeasured", note: noRun, blocking: false };
+        if (playthrough.sessionCount === undefined) {
+          return {
+            claim,
+            status: "unmeasured",
+            note: "the game registers no Strada.Core.Play.ISessionCatalog, so its sessions cannot be counted",
+            blocking: false,
+          };
+        }
+        const met = playthrough.sessionCount === claim.value;
+        const played = playthrough.sessions?.length ?? 0;
+        const finished = playthrough.sessions?.filter((s) => s.outcome !== "None" && s.outcome !== "Refused").length ?? 0;
         return {
           claim,
-          status: "unmeasured",
-          note: "no universal way to count a game's levels exists yet — the driver contract starts a session by index but does not enumerate them",
-          blocking: false,
+          status: met ? "met" : "not_met",
+          measured: playthrough.sessionCount,
+          note: `the game's session catalog reports ${playthrough.sessionCount}${played > 0 ? `; ${finished} of ${played} played session(s) reached an outcome` : ""}`,
+          blocking: true,
         };
+      }
     }
   });
 }
@@ -200,7 +214,7 @@ export function claimsRefusal(assessments: readonly ClaimAssessment[]): string |
   return (
     "THE GDD'S OWN NUMBERS ARE NOT MET: " +
     failed
-      .map((a) => `${KIND_LABEL[a.claim.kind]} ${a.claim.comparator === "max" ? "≤" : "≥"} ${a.claim.value}${unit(a.claim.kind)} measured ${a.measured}${unit(a.claim.kind)} (${a.note})`)
+      .map((a) => `${KIND_LABEL[a.claim.kind]} ${a.claim.comparator === "max" ? "≤" : a.claim.comparator === "min" ? "≥" : "="} ${a.claim.value}${unit(a.claim.kind)} measured ${a.measured}${unit(a.claim.kind)} (${a.note})`)
       .join("; ") +
     ". Fix the game until unity_playthrough measures the budget met; the GDD's number, not a description, is the target."
   );

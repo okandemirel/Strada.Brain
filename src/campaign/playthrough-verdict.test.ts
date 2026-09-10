@@ -36,8 +36,22 @@ describe("the play-through verdict the campaign reads back (measured 2026-09-10:
     expect(e).toMatchObject({ found: true, ok: true, scene: "Entry", session: 1, outcome: "Won", actions: 12, autoStarted: false });
     expect(e.frames).toEqual({ count: 5, flat: 0, maxMotionShare: 0.31 });
     expect(describePlaythrough(e)).toBe(
-      "play-through OK in Entry: session 1 played to Won in 12 actions; 5 frames, 0 flat, max motion 31.0%; the game does NOT start play by itself after boot (the driver's StartSession was called)",
+      "play-through OK in Entry: session 1 played to Won in 12 actions; 5 frames, 0 flat, max motion 31.0%; the game does NOT start play by itself after boot (the driver's StartSession was called); no session catalog (level count not measurable)",
     );
+    write({ ...ok, record: { ...ok.record, sessionCount: 12, sessions: [
+      { index: 1, startAccepted: true, actions: 12, outcome: "Won", reachedOutcome: true, seconds: 8.5 },
+      { index: 2, startAccepted: true, actions: 60, outcome: "None", reachedOutcome: false, seconds: 45 },
+      { index: 3, startAccepted: false, actions: 0, outcome: "None", reachedOutcome: false, seconds: 0 },
+    ] } });
+    const many = readPlaythroughVerdict(root, 0);
+    expect(many.sessionCount).toBe(12);
+    expect(many.sessions).toEqual([
+      { index: 1, outcome: "Won", actions: 12, seconds: 8.5 },
+      { index: 2, outcome: "None", actions: 60, seconds: 45 },
+      { index: 3, outcome: "Refused", actions: 0, seconds: 0 },
+    ]);
+    expect(describePlaythrough(many)).toContain("; played 3: #1 Won in 12, #2 None in 60, #3 Refused in 0;");
+    expect(describePlaythrough(many)).toMatch(/; catalog 12 session\(s\)$/);
   });
 
   it("timing rides along, named by its medium, and is absent when the verdict has none", () => {

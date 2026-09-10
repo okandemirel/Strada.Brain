@@ -62,8 +62,22 @@ describe("assessNumericClaims", () => {
     expect(claimsRefusal(a)).toBeUndefined();
     const lines = describeClaims(a);
     expect(lines[0]).toMatch(/^GDD frame rate ≥ 60 fps: NOT MEASURED — no play-through of this build was observed/);
-    expect(lines[3]).toContain("no universal way to count a game's levels");
+    expect(lines[3]).toContain("no play-through of this build was observed");
     expect(lines).toHaveLength(5);
+  });
+
+  it("level count: unmeasured without a session catalog, measured against it with one, and the played sessions are named", () => {
+    const noCatalog = assessNumericClaims(claims, evidence());
+    expect(noCatalog.find((x) => x.claim.kind === "level_count")).toMatchObject({
+      status: "unmeasured", blocking: false, note: "the game registers no Strada.Core.Play.ISessionCatalog, so its sessions cannot be counted",
+    });
+    const three = assessNumericClaims(claims, evidence({ sessionCount: 3, sessions: [{ index: 1, outcome: "Won", actions: 10, seconds: 5 }, { index: 2, outcome: "None", actions: 60, seconds: 45 }] }));
+    expect(three.find((x) => x.claim.kind === "level_count")).toMatchObject({
+      status: "not_met", blocking: true, measured: 3, note: "the game's session catalog reports 3; 1 of 2 played session(s) reached an outcome",
+    });
+    expect(claimsRefusal(three)).toContain("level count = 12 measured 3");
+    const twelve = assessNumericClaims(claims, evidence({ sessionCount: 12 }));
+    expect(twelve.find((x) => x.claim.kind === "level_count")).toMatchObject({ status: "met", measured: 12, note: "the game's session catalog reports 12" });
   });
 
   it("a session that never ended has no length; a blown session budget blocks", () => {

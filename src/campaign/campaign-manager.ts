@@ -1198,7 +1198,10 @@ export class CampaignManager {
           "it boots the entry scene, resolves that driver, starts a session, acts until the session ends, " +
           "records checkpoint frames and judges them. Delivery requires its verdict to be ok — fix what it " +
           "names (no driver registered, a session that never ends, a screen that never changes, a driver " +
-          "that refuses to start). It also reports whether the game starts play BY ITSELF after boot; if " +
+          "that refuses to start). Register a Strada.Core.Play.ISessionCatalog as well (SessionCount = how many " +
+          "levels/rounds StartSession accepts) and run unity_playthrough with sessions: \"all\" so every level is " +
+          "played to an outcome and the GDD's level count is measured against what is shipped. " +
+          "It also reports whether the game starts play BY ITSELF after boot; if " +
           "it does not, wire the GDD's entry flow so a person who opens the entry scene is playing, not " +
           "staring at an idle screen. Then run unity_build_player for the GDD's platform (or the project's " +
           "active target): a delivery is a runnable artifact, and its measured path and size belong in your report.";

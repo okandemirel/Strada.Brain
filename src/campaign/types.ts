@@ -308,6 +308,13 @@ export interface PlaythroughEvidence {
   missing?: string;
   frames?: { count: number; flat: number; maxMotionShare: number };
   /**
+   * Strada.Core.Play.ISessionCatalog.SessionCount when the game registers
+   * one; absent when it does not (the level count is then not measurable).
+   */
+  sessionCount?: number;
+  /** Every session the run played: index, outcome (None = never ended), actions. */
+  sessions?: Array<{ index: number; outcome: string; actions: number; seconds: number }>;
+  /**
    * Boot time and frame timing of the play-through. `medium` names the
    * conditions (the editor in play mode under -batchmode): boot time and
    * hitches transfer to the player, the average frame rate is a floor.
