@@ -639,9 +639,29 @@ export class CommandHandler {
     const result = this.taskManager.resumeTask(taskId);
     if (result) {
       await this.channel.sendText(chatId, `Task ${taskId} resumed.`);
-    } else {
-      await this.channel.sendText(chatId, `Could not resume task ${taskId}. It may not be paused.`);
+      return;
     }
+    // Say what the task IS, not what it "may" be. Measured 2026-09-10 11:46: a
+    // mission the restart had marked paused-and-recoverable was re-marked
+    // blocked by its keep-alive before /resume arrived, and the reply "It may
+    // not be paused" left the operator to guess which command applied.
+    const task = this.taskManager.getStatus(taskId);
+    if (!task) {
+      await this.channel.sendText(chatId, `Could not resume task ${taskId}: no such task.`);
+      return;
+    }
+    if (task.status === TaskStatus.paused) {
+      await this.channel.sendText(
+        chatId,
+        `Task ${taskId} is paused but could not be resumed: a newer task in its lineage is still running or already completed.`,
+      );
+      return;
+    }
+    const hint =
+      task.status === TaskStatus.blocked || task.status === TaskStatus.failed
+        ? " Use /retry to run it again."
+        : "";
+    await this.channel.sendText(chatId, `Task ${taskId} is ${task.status}, not paused.${hint}`);
   }
 
   private async handleModel(chatId: string, args: string[], userId?: string): Promise<void> {

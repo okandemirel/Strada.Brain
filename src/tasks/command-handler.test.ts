@@ -816,3 +816,40 @@ describe("CommandHandler build commands (/campaign, /measure, /guardian)", () =>
     expect(text).toContain("/guardian");
   });
 });
+
+describe("CommandHandler /resume", () => {
+  const sendText = vi.fn();
+  const sendMarkdown = vi.fn();
+  beforeEach(() => {
+    sendText.mockReset();
+    sendMarkdown.mockReset();
+    sendText.mockResolvedValue(undefined);
+    sendMarkdown.mockResolvedValue(undefined);
+  });
+
+  const handlerWith = (status: string | null) =>
+    new CommandHandler(
+      {
+        resumeTask: () => null,
+        getStatus: () => (status === null ? null : { id: "task_1", status }),
+        listTasks: () => [],
+      } as never,
+      { sendText, sendMarkdown } as never,
+    );
+
+  it("names the task's real status and the command that applies (measured 2026-09-10: a blocked mission answered 'may not be paused')", async () => {
+    await handlerWith("blocked").handle("chat-1", "resume", ["task_1"], "user-1");
+    expect(sendText).toHaveBeenCalledWith("chat-1", "Task task_1 is blocked, not paused. Use /retry to run it again.");
+  });
+
+  it("a paused task that still cannot resume says why", async () => {
+    await handlerWith("paused").handle("chat-1", "resume", ["task_1"], "user-1");
+    expect(sendText).toHaveBeenCalledWith("chat-1", expect.stringContaining("is paused but could not be resumed"));
+  });
+
+  it("an unknown id is said to be unknown", async () => {
+    await handlerWith(null).handle("chat-1", "resume", ["task_9"], "user-1");
+    expect(sendText).toHaveBeenCalledWith("chat-1", "Could not resume task task_9: no such task.");
+  });
+});
+

@@ -125,15 +125,19 @@ describe("a process the kill cannot reach", () => {
 describe("output past the capture cap", () => {
   // 1000 lines of `LINE nnnn ` + 56 x's + newline = 67 chars each, ~67KB: four
   // times the default cap, so the head is guaranteed to fall off.
+  // One awk process, not a shell loop forking printf+tr per line: the loop
+  // was 2000 forks, and under machine load (a sprite generator saturating the
+  // CPU, measured 2026-09-10) it overran the 10 s timeout, was killed, and the
+  // truncated output failed assertions that are about the cap, not the clock.
   const script =
-    'for i in $(seq -f "%04g" 1 1000); do echo "LINE $i $(printf "%56s" | tr " " x)"; done';
+    'awk \'BEGIN { x = sprintf("%56s", ""); gsub(/ /, "x", x); for (i = 1; i <= 1000; i++) printf "LINE %04d %s\\n", i, x }\'';
 
   it("marks the dropped head and counts it, instead of presenting the tail as the whole", async () => {
     const full = await runProcess({
       command: "/bin/bash",
       args: ["-c", script],
       cwd: process.cwd(),
-      timeoutMs: 10_000,
+      timeoutMs: 60_000,
       maxOutput: 1_000_000,
     });
     expect(full.stdoutDropped).toBe(0);
@@ -143,7 +147,7 @@ describe("output past the capture cap", () => {
       command: "/bin/bash",
       args: ["-c", script],
       cwd: process.cwd(),
-      timeoutMs: 10_000,
+      timeoutMs: 60_000,
     });
 
     // The tail survived, the head did not — that part is by design.
@@ -170,7 +174,7 @@ describe("output past the capture cap", () => {
       command: "/bin/bash",
       args: ["-c", `(${script}) 1>&2`],
       cwd: process.cwd(),
-      timeoutMs: 10_000,
+      timeoutMs: 60_000,
     });
     expect(result.stderrDropped).toBeGreaterThan(0);
     expect(result.stderr).toMatch(/^\[… \d+ earlier characters of stderr dropped by the 16384-character capture limit/);
