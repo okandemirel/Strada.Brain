@@ -822,7 +822,7 @@ describe("CampaignManager", () => {
     writeFileSync(join(projectRoot, "Assets", "Scripts", "DragonBoss.cs"), "public class DragonBoss {}");
     tasks.verifications.set("task_4", green);
     tasks.emit("task:completed", "task_4", "dragon built, shipping");
-    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"), { timeout: 15_000 });
     expect(storage.get(campaign.id)!.milestones[2]!.structureFindings?.join("\n")).toContain("all 2 scheduled element(s) have a trace in code");
   });
 

@@ -159,10 +159,18 @@ export function assessSpecScope(
     })
     .join("\n");
 
+  // A long token anywhere in the code is a signal; a short one ("Cube",
+  // "Pig", "Tray") only as a whole identifier word — as a substring it would
+  // match "cubemap" or "pigment", but ignoring it outright reported every
+  // short-named element as missing (measured 2026-09-10: "Cube" with a
+  // `public class Cube` in the tree).
   const missing = elements.filter((el) => {
-    return !elementCodeTokens(el.name).some(
-      (tok) => tok.length >= 5 && corpus.includes(tok.toLowerCase()),
-    );
+    return !elementCodeTokens(el.name).some((tok) => {
+      const needle = tok.toLowerCase();
+      if (needle.length >= 5) return corpus.includes(needle);
+      if (needle.length < 3) return false;
+      return new RegExp(`(?<![a-z0-9_])${needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![a-z0-9_])`).test(corpus);
+    });
   });
   return { scheduled: elements.length, missing, gddPath: doc };
 }

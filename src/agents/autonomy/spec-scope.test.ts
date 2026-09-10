@@ -68,3 +68,24 @@ describe("findDesignDoc runs in this ESM module", () => {
     }
   });
 });
+
+describe("short element names count as whole words (measured 2026-09-10: 'Cube' with `public class Cube` reported missing)", () => {
+  it("finds a 4-letter element as an identifier and not inside another word", async () => {
+    const { assessSpecScope } = await import("./spec-scope.js");
+    const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const { tmpdir } = await import("node:os");
+    const root = mkdtempSync(join(tmpdir(), "spec-scope-short-"));
+    try {
+      mkdirSync(join(root, "docs"));
+      mkdirSync(join(root, "Assets"));
+      writeFileSync(join(root, "docs", "GDD.md"), "| L1 | Cube |\n| L2 | Pig |\n| L3 | Tray |\n");
+      writeFileSync(join(root, "Assets", "A.cs"), "public class Cube {} // pigment\nclass Tray {}\n");
+      const report = assessSpecScope(root, join(root, "docs", "GDD.md"));
+      expect(report.scheduled).toBe(3);
+      expect(report.missing.map((m) => m.name)).toEqual(["Pig"]); // "pigment" is not Pig
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
