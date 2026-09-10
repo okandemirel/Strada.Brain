@@ -29,7 +29,7 @@ import type { AgentId } from "../../agents/multi/agent-types.js";
 import type { StradaDepsStatus } from "../../config/strada-deps.js";
 import { collectApiKeys } from "../../rag/embeddings/embedding-resolver.js";
 import { collectProviderCredentials } from "../provider-config.js";
-import { WorkspaceLeaseManager } from "../../agents/multi/workspace-lease-manager.js";
+import { WorkspaceLeaseManager, DEFAULT_WORKSPACE_COPY_EXCLUDES } from "../../agents/multi/workspace-lease-manager.js";
 import type { SupervisorBrain } from "../../supervisor/supervisor-brain.js";
 import type {
   MultiAgentDelegationStageDeps,
@@ -182,7 +182,7 @@ export async function initializeMultiAgentDelegationStage(
       const envExcludes = process.env["WORKSPACE_COPY_EXCLUDES"];
       const additionalExcludes = envExcludes
         ? envExcludes.split(",").map((s) => s.trim()).filter(Boolean)
-        : ["Library", "Temp", "Logs", "Builds", "obj"];
+        : [...DEFAULT_WORKSPACE_COPY_EXCLUDES];
       workspaceLeaseManager = new WorkspaceLeaseManager({
         projectRoot: params.config.unityProjectPath,
         additionalExcludes,

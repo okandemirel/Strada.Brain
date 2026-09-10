@@ -15,7 +15,7 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
-import { WorkspaceLeaseManager } from "./workspace-lease-manager.js";
+import { WorkspaceLeaseManager, DEFAULT_WORKSPACE_COPY_EXCLUDES } from "./workspace-lease-manager.js";
 
 let source: string;
 let leaseRoot: string;
@@ -291,6 +291,28 @@ describe("workspace lease commit", () => {
       chmodSync(asset, 0o644);
       await lease.release();
     }
+  });
+
+  it("the editor's per-user state (UserSettings) is engine state: neither copied nor committed by default (2026-09-10)", async () => {
+    // Measured 21:43: a play-through inside the lease rewrote UserSettings/*
+    // there; the commit read them as files the agent wrote blind and
+    // quarantined both against the project's own editor state.
+    makeGitRepo();
+    mkdirSync(join(source, "UserSettings"), { recursive: true });
+    writeFileSync(join(source, "UserSettings", "Search.settings"), "project editor state", "utf8");
+    const lease = await new WorkspaceLeaseManager({ projectRoot: source, leaseRoot, additionalExcludes: DEFAULT_WORKSPACE_COPY_EXCLUDES }).acquireLease({ label: "t" });
+    mkdirSync(join(lease.path, "UserSettings"), { recursive: true });
+    writeFileSync(join(lease.path, "UserSettings", "Search.settings"), "lease editor state", "utf8");
+    writeFileSync(join(lease.path, "Assets", "Scripts", "Real.cs"), "class Real {}", "utf8");
+
+    const result = await lease.commit();
+    await lease.release();
+
+    expect(result.written).toContain(join("Assets", "Scripts", "Real.cs"));
+    expect(result.conflicts).toEqual([]);
+    expect(result.written).not.toContain(join("UserSettings", "Search.settings"));
+    expect(readFileSync(join(source, "UserSettings", "Search.settings"), "utf8")).toBe("project editor state");
+    expect(DEFAULT_WORKSPACE_COPY_EXCLUDES).toContain("UserSettings");
   });
 
   it("leaves no quarantine behind when there are no conflicts", async () => {

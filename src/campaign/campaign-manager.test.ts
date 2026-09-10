@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { EventEmitter } from "node:events";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, utimesSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, utimesSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { CampaignManager, stripTimeBoxDirectives } from "./campaign-manager.js";
@@ -1044,7 +1044,12 @@ describe("CampaignManager", () => {
     // reported only "expected 'failed' to be 'done'").
     await vi.waitFor(() => {
       const c = storage.get(campaign.id)!;
-      const why = `${c.lastError ?? ""} | proofsMissing=${JSON.stringify(c.milestones[2]?.deliveryProofsMissing ?? [])} | attempts=${c.milestones[2]?.attempts}`;
+      const m = c.milestones[2];
+      const verdictPath = join(projectRoot, "Recordings", "playthrough", "playthrough-verdict.json");
+      const mtime = existsSync(verdictPath) ? statSync(verdictPath).mtimeMs : "absent";
+      const rootId = m?.taskId ? tasks.findLineageRootId(m.taskId) : "none";
+      const why = `${c.lastError ?? ""} | proofsMissing=${JSON.stringify(m?.deliveryProofsMissing ?? [])} | attempts=${m?.attempts}`
+        + ` | taskId=${m?.taskId} root=${rootId} rootCreatedAt=${rootId === "none" ? "?" : tasks.getStatus(rootId)?.createdAt} verdictMtime=${mtime} now=${Date.now()}`;
       expect(c.state, why).toBe("done");
     }, { timeout: 15_000 });
     const report = messages.map((m) => m.text).join("\n");

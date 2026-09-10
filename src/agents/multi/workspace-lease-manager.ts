@@ -283,6 +283,16 @@ function parsePorcelainZ(stdout: string): PorcelainEntry[] {
 
   return entries;
 }
+/**
+ * Engine-generated directories a lease neither copies nor commits unless the
+ * operator overrides the list (WORKSPACE_COPY_EXCLUDES). Build caches and
+ * logs were here from the start; UserSettings joined 2026-09-10 after a
+ * play-through inside a lease rewrote the editor's per-user state there and
+ * the commit quarantined it against the project's copy as two "conflicts".
+ * Engine state, not game content — no vehicle name belongs in this list.
+ */
+export const DEFAULT_WORKSPACE_COPY_EXCLUDES: readonly string[] = ["Library", "Temp", "Logs", "Builds", "obj", "UserSettings"];
+
 const BASE_FALLBACK_COPY_EXCLUDES = new Set([
   ".git",
   "node_modules",
@@ -1492,6 +1502,7 @@ export class WorkspaceLeaseManager {
     const conflicts: string[] = [];
     const removed: string[] = [];
     const failed: string[] = [];
+    const failedRels: string[] = [];
     let conflictsQuarantinedUnder: string | null = null;
     let quarantined = 0;
     if (!existsSync(workspacePath)) {
@@ -1536,6 +1547,7 @@ export class WorkspaceLeaseManager {
         // remaining files still deserve their chance to travel home.
         const relDir = relative(workspacePath, dir) || ".";
         failed.push(`${relDir} (unreadable: ${err instanceof Error ? err.message : String(err)})`);
+        failedRels.push(relDir);
         return;
       }
       for (const entry of entries) {
@@ -1736,6 +1748,7 @@ export class WorkspaceLeaseManager {
       if (outcome.written !== undefined) written.push(outcome.written);
       if (outcome.conflict !== undefined) conflicts.push(outcome.conflict);
       if (outcome.failed !== undefined) failed.push(outcome.failed);
+      if (outcome.failedRel !== undefined) failedRels.push(outcome.failedRel);
     }
     // A file the agent removed is a decision it made about the project. We do not
     // act on it — deleting a user's files is not a commit's call — but leaving it
@@ -1838,7 +1851,9 @@ export class WorkspaceLeaseManager {
     }
     let commitsReplayed: WorkspaceCommitResult["commitsReplayed"];
     if (!opts?.quarantineOnly) {
-      const heldRels = new Set<string>([...conflicts, ...failed.map((f) => f.replace(/ \(.*\)$/, ""))]);
+      // Structured rels, not the report strings: " (reason)" stripping cut
+      // "Hero (1).png (EACCES)" to "Hero" (report 2026-09-10 #34).
+      const heldRels = new Set<string>([...conflicts, ...failedRels]);
       const deletedRels = new Set<string>(deleted.map((d) => d.replace(/ — .*$/, "")));
       commitsReplayed = await this.replayLeaseCommits(sourceRoot, workspacePath, heldRels, deletedRels);
     }

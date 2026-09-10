@@ -44,7 +44,7 @@ import {
   TaskManager,
   TaskStorage,
 } from "../../tasks/index.js";
-import { WorkspaceLeaseManager } from "../../agents/multi/workspace-lease-manager.js";
+import { WorkspaceLeaseManager, DEFAULT_WORKSPACE_COPY_EXCLUDES } from "../../agents/multi/workspace-lease-manager.js";
 
 export function initializeRuntimeStateStage(
   params: {
@@ -277,7 +277,7 @@ export async function initializeTaskRuntimeStage(
     const envExcludes = process.env["WORKSPACE_COPY_EXCLUDES"];
     const additionalExcludes = envExcludes
       ? envExcludes.split(",").map((s) => s.trim()).filter(Boolean)
-      : ["Library", "Temp", "Logs", "Builds", "obj"];
+      : [...DEFAULT_WORKSPACE_COPY_EXCLUDES];
     workspaceLeaseManager = new WorkspaceLeaseManager({
       projectRoot: params.config.unityProjectPath,
       additionalExcludes,
