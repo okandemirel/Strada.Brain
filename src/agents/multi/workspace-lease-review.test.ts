@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { execSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { WorkspaceLeaseManager } from "./workspace-lease-manager.js";
+import { WorkspaceLeaseManager, readCommitLedger } from "./workspace-lease-manager.js";
 import { LEASE_WRITTEN_LEDGER } from "./system-owned-path.js";
 import { CAPTURE_MARKER_FILE } from "./capture-retention.js";
 
@@ -267,6 +267,28 @@ describe("retention and salvage", () => {
     for (let i = 0; i < 30; i++) expect(existsSync(join(source, "Recordings", `take-${String(i).padStart(2, "0")}`))).toBe(true);
     expect(existsSync(join(source, "Recordings", "this-run", CAPTURE_MARKER_FILE))).toBe(true);
     expect(result.capturesPruned?.removed).toBe(2); // 26 old + 1 new marked, keep 25
+  });
+
+  it("an orphan that died mid-commit carries a ledger: salvage reads it, finishes what it can, and removes it (#34)", async () => {
+    const orphan = join(leaseRoot, `task-1-${randomUUID()}`);
+    put(orphan, "Assets/Scripts/HalfWritten.cs", "agent work");
+    writeFileSync(join(orphan, ".strada-lease-owner.json"), JSON.stringify({ pid: 2147483000, startedAt: 1, projectRoot: source }));
+    writeFileSync(`${orphan}.commit.json`, JSON.stringify({ startedAt: 123, sourceRoot: source, planned: ["Assets/Scripts/HalfWritten.cs"] }));
+    expect(readCommitLedger(orphan)?.planned).toEqual(["Assets/Scripts/HalfWritten.cs"]);
+    manager();
+    for (let i = 0; i < 50 && existsSync(orphan); i++) await new Promise((r) => setTimeout(r, 100));
+    expect(existsSync(orphan)).toBe(false);
+    // no seed maps → quarantine-only, the planned file is kept for review
+    expect(existsSync(`${orphan}.commit.json`)).toBe(false);
+    expect(readCommitLedger(orphan)).toBeUndefined();
+  });
+
+  it("a commit that finishes leaves no ledger behind", async () => {
+    const lease = await manager().acquireLease({ label: "t", forceTempCopy: true });
+    put(lease.path, "Assets/Scripts/Done.cs", "x");
+    await lease.commit();
+    expect(existsSync(`${lease.path}.commit.json`)).toBe(false);
+    await lease.release();
   });
 
   it("an orphan recorded for another project is left for that project's manager", async () => {

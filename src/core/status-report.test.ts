@@ -48,11 +48,13 @@ describe("strada status read-out", () => {
     expect(r.benched.map((b) => b.name)).toEqual(["openai"]);
     const lines = renderStatusReport({
       now: NOW, health: { reachable: false, detail: "ECONNREFUSED" }, providers: r,
+      ceilings: { opencode: { ceiling: 45_600, observedTokens: 57_000, learnedAt: NOW - 600_000 } },
       campaigns: { readable: false, path: "/x/campaigns.db", active: [], awaitingRevive: [] }, update: { path: d },
     });
     expect(lines).toContain("Health: unreachable — ECONNREFUSED");
     expect(lines.find((l) => l.startsWith("- openai"))).toMatch(/down, 1 failure, retry in 1 h — quota exhausted/);
     expect(lines).toContain("Campaign: /x/campaigns.db not readable");
+    expect(lines).toContain("Context ceiling learned: opencode answers below 57000 tokens — planning at 45600 (10 min ago)");
     expect(lines).toContain("Last auto-update: none recorded");
   });
 
@@ -60,7 +62,7 @@ describe("strada status read-out", () => {
     const r = readProviderBenches(join(dir(), "provider-health.json"), NOW);
     expect(r.readable).toBe(false);
     const lines = renderStatusReport({
-      now: NOW, health: { reachable: true, status: "ok", uptimeSeconds: 5400 }, providers: r,
+      now: NOW, health: { reachable: true, status: "ok", uptimeSeconds: 5400 }, providers: r, ceilings: {},
       campaigns: { readable: true, path: "p", active: [], awaitingRevive: [] }, update: { path: "/none" },
     });
     expect(lines[0]).toBe("Health: ok (up 1 h 30 min)");
@@ -94,7 +96,7 @@ describe("strada status read-out", () => {
 
   it("falls back to the last terminal campaign when nothing is active", () => {
     const lines = renderStatusReport({
-      now: NOW, health: { reachable: false }, providers: { readable: true, path: "p", benched: [], total: 2 },
+      now: NOW, health: { reachable: false }, providers: { readable: true, path: "p", benched: [], total: 2 }, ceilings: {},
       campaigns: { readable: true, path: "p", active: [], awaitingRevive: [], lastTerminal: snapshotOf(campaign({ id: "cmp_done", state: "done", updatedAt: NOW - 7_200_000 })) },
       update: { path: "/none" },
     });

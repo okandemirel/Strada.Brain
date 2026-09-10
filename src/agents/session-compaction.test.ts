@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { ConversationMessage } from "./providers/provider-core.interface.ts";
 import type { CompactableMessage } from "./session-compaction.ts";
-import { compactForRetry, isHardTimeoutError, estimateTokens as estimateTokensForRetry, decideCompaction, toolSchemaTokens, COMPACTION_TRIGGER_RATIO, COMPACTION_TARGET_RATIO, COMPACTION_TARGET_FLOOR_TOKENS } from "./session-compaction.ts";
+import { compactForRetry, isHardTimeoutError, estimateTokens as estimateTokensForRetry, decideCompaction, toolSchemaTokens, COMPACTION_TRIGGER_RATIO, COMPACTION_TARGET_RATIO, COMPACTION_TARGET_FLOOR_TOKENS, COMPACTION_CONVERSATION_FLOOR_RATIO } from "./session-compaction.ts";
 import {
   compactSession,
   estimateTokens,
@@ -379,5 +379,19 @@ describe("decideCompaction — the provider's count is ground truth (measured 20
   it("never plans a target under the floor", () => {
     const d = decideCompaction({ estimatedTokens: 100_000, toolTokens: 50_000, contextWindow: 16_000 });
     expect(d.maxTokens).toBe(COMPACTION_TARGET_FLOOR_TOKENS);
+  });
+
+  it("holds the conversation at its floor share when the schemas would squeeze it, and says the offer is what must shrink (#33)", () => {
+    const window = 64_000;
+    const toolTokens = toolSchemaTokens(73_352); // measured 2026-09-10 14:34: 106 tools
+    const d = decideCompaction({ estimatedTokens: 40_000, toolTokens, contextWindow: window });
+    expect(d.maxTokens).toBe(Math.floor(window * COMPACTION_CONVERSATION_FLOOR_RATIO));
+    expect(d.maxTokens).toBeGreaterThan(Math.floor(window * COMPACTION_TARGET_RATIO) - toolTokens);
+    expect(d.toolShareExceeded).toBe(true);
+    expect(d.toolShare).toBeCloseTo(toolTokens / window, 5);
+    // a modest offer is subtracted as before and raises no flag
+    const modest = decideCompaction({ estimatedTokens: 40_000, toolTokens: 5_000, contextWindow: window });
+    expect(modest.maxTokens).toBe(Math.floor(window * COMPACTION_TARGET_RATIO) - 5_000);
+    expect(modest.toolShareExceeded).toBe(false);
   });
 });

@@ -247,6 +247,52 @@ describe("workspace lease commit", () => {
     expect(readFileSync(target, "utf8")).toBe("user version");
   });
 
+  it("holds a .meta whose asset failed BEFORE the write phase — even when the asset's name carries parentheses (#34)", async () => {
+    // The pair rule recovered the failed path by stripping " (reason)" off the
+    // report string: "Hero (1).png (EACCES…)" became "Hero", and the .meta of
+    // a texture that could not be read travelled alone.
+    mkdirSync(join(source, "Assets", "Sprites"), { recursive: true });
+    writeFileSync(join(source, "Assets", "Sprites", "Hero (1).png"), "v1", "utf8");
+    writeFileSync(join(source, "Assets", "Sprites", "Hero (1).png.meta"), "meta v1", "utf8");
+    const lease = await manager().acquireLease({ label: "t", forceTempCopy: true });
+    const asset = join(lease.path, "Assets", "Sprites", "Hero (1).png");
+    writeFileSync(asset, "v2", "utf8");
+    writeFileSync(join(lease.path, "Assets", "Sprites", "Hero (1).png.meta"), "meta v2", "utf8");
+    chmodSync(asset, 0o000); // sameContent() cannot read it → processFile fails
+    try {
+      const result = await lease.commit();
+      expect(result.failed.some((f) => f.startsWith(join("Assets", "Sprites", "Hero (1).png") + " ("))).toBe(true);
+      expect(result.conflicts).toContain(join("Assets", "Sprites", "Hero (1).png.meta"));
+      expect(result.written).not.toContain(join("Assets", "Sprites", "Hero (1).png.meta"));
+      expect(readFileSync(join(source, "Assets", "Sprites", "Hero (1).png.meta"), "utf8")).toBe("meta v1");
+    } finally {
+      chmodSync(asset, 0o644);
+      await lease.release();
+    }
+  });
+
+  it("holds a .meta whose asset failed DURING the write phase (#34)", async () => {
+    // A new asset whose copy fails (locked, permission) used to leave its
+    // freshly written .meta in the project: the hold only knew failures decided
+    // before the write phase.
+    const lease = await manager().acquireLease({ label: "t", forceTempCopy: true });
+    mkdirSync(join(lease.path, "Assets", "Sprites"), { recursive: true });
+    const asset = join(lease.path, "Assets", "Sprites", "Boss.png");
+    writeFileSync(asset, "pixels", "utf8");
+    writeFileSync(join(lease.path, "Assets", "Sprites", "Boss.png.meta"), "importer", "utf8");
+    chmodSync(asset, 0o000); // a NEW file is never read before the copy → the copy itself fails
+    try {
+      const result = await lease.commit();
+      expect(result.failed.some((f) => f.startsWith(join("Assets", "Sprites", "Boss.png") + " ("))).toBe(true);
+      expect(existsSync(join(source, "Assets", "Sprites", "Boss.png.meta"))).toBe(false);
+      expect(result.conflicts).toContain(join("Assets", "Sprites", "Boss.png.meta"));
+      expect(readFileSync(join(result.conflictsQuarantinedUnder!, "Assets", "Sprites", "Boss.png.meta"), "utf8")).toBe("importer");
+    } finally {
+      chmodSync(asset, 0o644);
+      await lease.release();
+    }
+  });
+
   it("leaves no quarantine behind when there are no conflicts", async () => {
     const lease = await manager().acquireLease({ label: "t", forceTempCopy: true });
     writeFileSync(join(lease.path, "Assets", "Scripts", "Board.cs"), "fresh", "utf8");

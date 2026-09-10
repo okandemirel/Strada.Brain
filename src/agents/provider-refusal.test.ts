@@ -88,10 +88,19 @@ describe("a zero-output hard-timeout retries with a smaller prompt (2026-09-09)"
       const next = source.indexOf("silentStreamFallback(", at);
       const window = source.slice(at, next);
       expect(window, `streaming-error branch ${branches + 1} no longer compacts before the fallback`)
-        .toContain("this.compactSessionAfterHardTimeout(err, session, chatId)");
+        .toContain("this.compactSessionAfterHardTimeout(err, session, chatId, provider.name)");
       branches += 1;
       cursor = next + 1;
     }
     expect(branches).toBe(2);
+  });
+
+  it("the hung turn's size becomes the provider's learned context ceiling (2026-09-10, #37)", () => {
+    const source = readFileSync("src/agents/orchestrator.ts", "utf8");
+    const at = source.indexOf("private compactSessionAfterHardTimeout(");
+    const body = source.slice(at, source.indexOf("compactForRetry(", at));
+    expect(body).toContain("recordContextCeiling(providerName, observed)");
+    const plan = source.slice(source.indexOf("private maybeCompactSession("), source.indexOf("decideCompaction({", source.indexOf("private maybeCompactSession(")));
+    expect(plan).toContain("effectiveContextWindow(providerName, declared ?? DEFAULT_CONTEXT_WINDOW)");
   });
 });

@@ -552,11 +552,25 @@ export interface CompactionDecision {
   /** max(estimate incl. tools, provider-observed input tokens). */
   readonly tokenEstimate: number;
   readonly trigger: boolean;
-  /** Target for compactSession when triggered: window × target ratio minus the tool share, never under the floor. */
+  /** Target for compactSession when triggered: window × target ratio minus the tool share, never under the floors. */
   readonly maxTokens: number;
+  /** Tool schema tokens as a share of the window. */
+  readonly toolShare: number;
+  /** The schemas alone push the conversation to its floor: compaction cannot make room, the offer must shrink. */
+  readonly toolShareExceeded: boolean;
 }
 
 export const COMPACTION_TARGET_FLOOR_TOKENS = 8_000;
+/**
+ * The conversation keeps at least this share of the window whatever the tool
+ * schemas cost. Subtracting the schemas from the target alone (report
+ * 2026-09-10 #33) compacted the conversation to make room for tools nobody
+ * had chosen: 73k characters of schema on a 64k window left 14k tokens of
+ * conversation. Past TOOL_SHARE_WARN_RATIO the floor holds and the caller is
+ * told the offer is what has to shrink.
+ */
+export const COMPACTION_CONVERSATION_FLOOR_RATIO = 0.35;
+export const TOOL_SHARE_WARN_RATIO = COMPACTION_TARGET_RATIO - COMPACTION_CONVERSATION_FLOOR_RATIO;
 
 export function decideCompaction(input: {
   readonly estimatedTokens: number;
@@ -568,11 +582,13 @@ export function decideCompaction(input: {
   const observed = Math.max(0, input.observedInputTokens ?? 0);
   const tokenEstimate = Math.max(input.estimatedTokens + toolTokens, observed);
   const trigger = tokenEstimate > input.contextWindow * COMPACTION_TRIGGER_RATIO;
+  const toolShare = input.contextWindow > 0 ? toolTokens / input.contextWindow : 0;
   const maxTokens = Math.max(
     COMPACTION_TARGET_FLOOR_TOKENS,
+    Math.floor(input.contextWindow * COMPACTION_CONVERSATION_FLOOR_RATIO),
     Math.floor(input.contextWindow * COMPACTION_TARGET_RATIO) - toolTokens,
   );
-  return { tokenEstimate, trigger, maxTokens };
+  return { tokenEstimate, trigger, maxTokens, toolShare, toolShareExceeded: toolShare > TOOL_SHARE_WARN_RATIO };
 }
 
 /** ~4 chars per token, the same rule estimateTokens applies to Latin text. */

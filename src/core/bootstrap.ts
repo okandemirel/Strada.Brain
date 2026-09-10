@@ -91,6 +91,7 @@ import type { DaemonEventMap } from "../daemon/daemon-events.js";
 import { DaemonStorage } from "../daemon/daemon-storage.js";
 import { UnifiedBudgetManager } from "../budget/unified-budget-manager.js";
 import { ProviderHealthRegistry } from "../agents/providers/provider-health.js";
+import { configureContextCeilingStore, CONTEXT_CEILINGS_FILE } from "../agents/context-ceilings.js";
 
 // Workspace / monitor bridge imports
 import { createWorkspaceBus, type WorkspaceBus } from "../dashboard/workspace-bus.js";
@@ -518,6 +519,7 @@ async function bootstrapImpl(
   const providerHealthPath = join(config.memory.dbPath, "provider-health.json");
   const providerHealth = ProviderHealthRegistry.getInstance();
   providerHealth.load(providerHealthPath);
+  configureContextCeilingStore(join(config.memory.dbPath, CONTEXT_CEILINGS_FILE));
   logger.info("Provider health restored", {
     // Absolute, deliberately. A relative ".strada-memory/provider-health.json"
     // is resolved against the process CWD, which is not the project directory;

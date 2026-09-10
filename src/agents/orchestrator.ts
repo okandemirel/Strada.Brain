@@ -106,6 +106,7 @@ import {
   estimateTokens,
   DEFAULT_CONTEXT_WINDOW,
 } from "./session-compaction.js";
+import { effectiveContextWindow, recordContextCeiling } from "./context-ceilings.js";
 import {
   planVerifierPipeline,
   sanitizeVisibilityReviewDecision,
@@ -757,6 +758,8 @@ export class Orchestrator {
   private readonly tools: Map<string, ITool>;
   private toolSchemaBudgetLogged = false;
   private readonly contextWindowWarned = new Set<string>();
+  /** Providers already told that their tool offer, not the conversation, is what exceeds the window. */
+  private readonly toolShareWarned = new Set<string>();
   private readonly toolDefinitions: Array<{
     name: string;
     description: string;
@@ -3766,7 +3769,9 @@ export class Orchestrator {
         defaultContextWindow: DEFAULT_CONTEXT_WINDOW,
       });
     }
-    const ctxWindow = declared ?? DEFAULT_CONTEXT_WINDOW;
+    // min(declared, learned): a hard-timeout at N tokens taught the planner
+    // that this provider answers below N (context-ceilings.ts, report #37).
+    const { window: ctxWindow, learned } = effectiveContextWindow(providerName, declared ?? DEFAULT_CONTEXT_WINDOW);
     const estimatedTokens = estimateTokens(
       session.messages,
       (systemPrompt?.length ?? 0) + (session.compactionSummary?.length ?? 0),
@@ -3777,6 +3782,20 @@ export class Orchestrator {
       observedInputTokens: session.lastInputTokens,
       contextWindow: ctxWindow,
     });
+    if (decision.toolShareExceeded && !this.toolShareWarned.has(providerName)) {
+      // The schemas alone leave the conversation at its floor: compacting
+      // harder cannot help, the offer is what has to shrink (report #33).
+      this.toolShareWarned.add(providerName);
+      getLogger().warn("Tool schemas take more of the context window than compaction can make room for — narrow the tool offer", {
+        providerName,
+        modelId,
+        toolChars,
+        toolTokens: toolSchemaTokens(toolChars),
+        toolShare: Number(decision.toolShare.toFixed(3)),
+        contextWindow: ctxWindow,
+        conversationTarget: decision.maxTokens,
+      });
+    }
     if (!decision.trigger) return;
     const result = compactSession(session.messages, {
       maxTokens: decision.maxTokens,
@@ -3796,6 +3815,8 @@ export class Orchestrator {
         toolTokens: toolSchemaTokens(toolChars),
         observedInputTokens: decision.tokenEstimate,
         contextWindow: ctxWindow,
+        learnedContextCeiling: learned,
+        toolShare: Number(decision.toolShare.toFixed(3)),
       });
     }
   }
@@ -3806,8 +3827,26 @@ export class Orchestrator {
    * non-streaming fallback runs (measured 2026-09-09: two 600 s zero-output
    * calls on a 57k turn). Returns true when something was compacted.
    */
-  private compactSessionAfterHardTimeout(err: unknown, session: Session, chatId: string): boolean {
+  private compactSessionAfterHardTimeout(err: unknown, session: Session, chatId: string, providerName?: string): boolean {
     if (!isHardTimeoutError(err)) return false;
+    if (providerName) {
+      // The turn that hung is the size this provider does not answer: learn
+      // it, so the planner compacts BEFORE the next turn reaches it instead
+      // of hanging again (report #37: the env override was the only fix).
+      const observed = Math.max(
+        session.lastInputTokens ?? 0,
+        estimateTokens(session.messages, session.compactionSummary?.length ?? 0),
+      );
+      const ceiling = recordContextCeiling(providerName, observed);
+      if (ceiling !== undefined) {
+        getLogger().warn("Context ceiling learned from a hard-timeout — compaction now plans against it", {
+          chatId,
+          providerName,
+          observedTokens: observed,
+          ceiling,
+        });
+      }
+    }
     const result = compactForRetry(session.messages, session.compactionSummary);
     if (!result.compacted) return false;
     session.messages = result.messages;
@@ -4065,7 +4104,7 @@ export class Orchestrator {
           throw err;
         }
         // Non-cancel error → the same non-streaming fallback v1 runs, under a fresh scope.
-        this.compactSessionAfterHardTimeout(err, session, chatId);
+        this.compactSessionAfterHardTimeout(err, session, chatId, provider.name);
         return await this.silentStreamFallback(
           provider, effectivePrompt, session, toolDefinitions, externalSignal, chatId, runClock,
         );
@@ -4148,7 +4187,7 @@ export class Orchestrator {
       }
       const errMsg = err instanceof Error ? err.message : "Unknown streaming error";
       getLogger().error("Silent stream error", { chatId, error: errMsg });
-      this.compactSessionAfterHardTimeout(err, session, chatId);
+      this.compactSessionAfterHardTimeout(err, session, chatId, provider.name);
       // Fallback to non-streaming under the SAME per-call deadline v1 used (extracted; the
       // OFF call passes no runClock → AbortSignal.timeout, byte-identical to the prior inline).
       return await this.silentStreamFallback(

@@ -12,6 +12,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { CampaignStorage } from "../campaign/campaign-storage.js";
+import { CONTEXT_CEILINGS_FILE, readContextCeilings } from "../agents/context-ceilings.js";
 import { describeAgo, describeSpan, describeWhen, describeUpdateEvent, readUpdateHistory, type UpdateEvent } from "./update-history.js";
 
 export interface ProviderBench {
@@ -39,6 +40,8 @@ export interface StatusReport {
   now: number;
   health: { reachable: boolean; status?: string; uptimeSeconds?: number; detail?: string };
   providers: { readable: boolean; path: string; benched: ProviderBench[]; total: number };
+  /** Context ceilings learned from hard-timeouts (context-ceilings.ts). */
+  ceilings: Record<string, { ceiling: number; observedTokens: number; learnedAt: number }>;
   campaigns: { readable: boolean; path: string; active: CampaignSnapshot[]; awaitingRevive: CampaignSnapshot[]; lastTerminal?: CampaignSnapshot };
   update: { path: string; last?: UpdateEvent };
 }
@@ -64,6 +67,7 @@ export async function gatherStatusReport(opts: GatherOptions): Promise<StatusRep
     now,
     health: await probeHealth(opts.healthUrl, opts.fetchImpl ?? fetch),
     providers: readProviderBenches(providerPath, now),
+    ceilings: readContextCeilings(join(opts.memoryDbPath, CONTEXT_CEILINGS_FILE)),
     campaigns: readCampaigns(campaignsPath, opts.loadCampaigns ?? loadCampaignsFromDb),
     update: { path: opts.installRoot, last: readUpdateHistory(opts.installRoot).at(-1) },
   };
@@ -172,6 +176,10 @@ export function renderStatusReport(r: StatusReport): string[] {
       const err = b.lastError ? ` — ${b.lastError.replace(/\s+/g, " ").slice(0, 100)}` : "";
       lines.push(`- ${b.name}: ${b.status}, ${b.consecutiveFailures} failure${b.consecutiveFailures === 1 ? "" : "s"}, retry ${describeWhen(b.cooldownUntil, now)}${err}`);
     }
+  }
+
+  for (const [name, c] of Object.entries(r.ceilings)) {
+    lines.push(`Context ceiling learned: ${name} answers below ${c.observedTokens} tokens — planning at ${c.ceiling} (${describeAgo(now - c.learnedAt)})`);
   }
 
   if (!r.campaigns.readable) {

@@ -19,6 +19,14 @@ no credentials, stub Ollama, `/health` must say ok, SIGTERM must exit cleanly);
 the same command works locally after `npm run build` and prints the daemon's
 output when the boot fails.
 
+Two things the daemon learns by itself and `strada status` reports: a provider
+whose turn hung past the hard ceiling gets a learned context ceiling (0.8 × the
+hung turn's size, persisted in `context-ceilings.json` beside
+`provider-health.json`; compaction plans against it; `OPENCODE_CONTEXT_WINDOW`
+still overrides), and a tool offer that alone takes more than a quarter of the
+window is logged once per provider as the thing to narrow — the conversation
+is never compacted below 35 % of the window to make room for schemas.
+
 `strada status` reads four sources and says when one is not readable rather
 than skipping it: the web `/health` endpoint, `provider-health.json` (only
 benches whose cooldown is still ahead are listed, with the retry time and the

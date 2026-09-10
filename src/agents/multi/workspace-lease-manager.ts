@@ -331,6 +331,42 @@ function leaseSeedPath(leasePath: string): string {
   return `${leasePath}${LEASE_SEED_SUFFIX}`;
 }
 
+const LEASE_COMMIT_LEDGER_SUFFIX = ".commit.json";
+
+function leaseCommitLedgerPath(leasePath: string): string {
+  return `${leasePath}${LEASE_COMMIT_LEDGER_SUFFIX}`;
+}
+
+export interface LeaseCommitLedger {
+  readonly startedAt: number;
+  readonly sourceRoot: string;
+  readonly planned: readonly string[];
+}
+
+/** Written just before the write phase, removed right after it (best effort — the commit itself must not fail on it). */
+function writeCommitLedger(leasePath: string, ledger: LeaseCommitLedger): void {
+  try {
+    writeFileSync(leaseCommitLedgerPath(leasePath), JSON.stringify(ledger));
+  } catch {
+    /* advisory */
+  }
+}
+
+function clearCommitLedger(leasePath: string): void {
+  rmSync(leaseCommitLedgerPath(leasePath), { force: true });
+}
+
+/** The ledger of a commit that never finished, if one is on disk for this lease. */
+export function readCommitLedger(leasePath: string): LeaseCommitLedger | undefined {
+  try {
+    const raw = JSON.parse(readFileSync(leaseCommitLedgerPath(leasePath), "utf8")) as Partial<LeaseCommitLedger>;
+    if (typeof raw.startedAt !== "number" || !Array.isArray(raw.planned)) return undefined;
+    return { startedAt: raw.startedAt, sourceRoot: typeof raw.sourceRoot === "string" ? raw.sourceRoot : "", planned: raw.planned.filter((x): x is string => typeof x === "string") };
+  } catch {
+    return undefined;
+  }
+}
+
 interface PersistedLeaseSeed {
   readonly seedHead: string | undefined;
   readonly leaseSeed: ReadonlyMap<string, number>;
@@ -605,6 +641,17 @@ export class WorkspaceLeaseManager {
         // commit: agent work lands, real conflicts go to quarantine, deletions
         // follow the ledger rules. Without them, quarantine-only as before.
         const seed = readLeaseSeed(orphanPath);
+        const ledger = readCommitLedger(orphanPath);
+        if (ledger) {
+          logger.warn(seed
+            ? "Orphaned workspace died mid-commit — salvage finishes the planned writes from its seed maps"
+            : "Orphaned workspace died mid-commit and has no seed maps — the planned writes may be half-applied; review the quarantine", {
+            orphan: name,
+            startedAt: new Date(ledger.startedAt).toISOString(),
+            planned: ledger.planned.length,
+            sample: ledger.planned.slice(0, 5),
+          });
+        }
         const quarantineRoot = join(this.projectRoot, ".strada", "lease-conflicts", `orphan-${name.slice(0, 8)}`);
         const result = seed
           ? await this.commitLease(this.projectRoot, orphanPath, seed.leaseSeed, seed.sourceSeed, seed.seedHead, quarantineRoot)
@@ -650,6 +697,7 @@ export class WorkspaceLeaseManager {
         this.removeDirectory(orphanPath);
         rmSync(leaseClaimPath(orphanPath), { force: true }); // a crashed seed's claim goes with it
         rmSync(leaseSeedPath(orphanPath), { force: true });
+        clearCommitLedger(orphanPath);
         salvaged += 1;
       } catch (err) {
         logger.warn("Orphaned workspace could not be salvaged — left in place", {
@@ -752,6 +800,7 @@ export class WorkspaceLeaseManager {
       // process could never reclaim whatever the failed seed left behind.
       rmSync(leaseClaimPath(workspacePath), { force: true });
       rmSync(leaseSeedPath(workspacePath), { force: true });
+      clearCommitLedger(workspacePath);
       throw err;
     }
 
@@ -763,6 +812,7 @@ export class WorkspaceLeaseManager {
       writeFileSync(join(workspacePath, LEASE_OWNER_FILE), ownerRecord, "utf8");
       rmSync(leaseClaimPath(workspacePath), { force: true });
       rmSync(leaseSeedPath(workspacePath), { force: true });
+      clearCommitLedger(workspacePath);
     } catch {
       // Best-effort; an unownable lease keeps its claim file as the signal.
     }
@@ -814,6 +864,7 @@ export class WorkspaceLeaseManager {
         await releaseImpl();
         rmSync(leaseClaimPath(workspacePath), { force: true });
         rmSync(leaseSeedPath(workspacePath), { force: true });
+      clearCommitLedger(workspacePath);
       },
     };
     this.activeLeases.set(id, lease);
@@ -1502,7 +1553,11 @@ export class WorkspaceLeaseManager {
     // Decisions first, writes second (review 2026-09-07): an asset and its
     // .meta are one unit, and the pair can only be held together when the
     // decision for both is known before either is written.
-    type FileOutcome = { written?: string; conflict?: string; failed?: string; write?: { rel: string; full: string; target: string } };
+    // `failedRel` carries the path itself: the pair rule below used to recover
+    // it by stripping " (reason)" off the report string, which cut a name such
+    // as "Hero (1).png (EACCES)" down to "Hero" and let its .meta travel alone
+    // (report 2026-09-10 #34).
+    type FileOutcome = { written?: string; conflict?: string; failed?: string; failedRel?: string; write?: { rel: string; full: string; target: string } };
     const outcomes: Array<FileOutcome | undefined> = [];
 
     const quarantine = async (rel: string, full: string): Promise<void> => {
@@ -1605,7 +1660,7 @@ export class WorkspaceLeaseManager {
           // Its only copy is in the lease, which release() deletes: keep it
           // (review 2026-09-07).
           await quarantine(rel, full);
-          return { failed: `${rel} (${err instanceof Error ? err.message : String(err)})` };
+          return { failed: `${rel} (${err instanceof Error ? err.message : String(err)})`, failedRel: rel };
         }
     };
 
@@ -1620,7 +1675,7 @@ export class WorkspaceLeaseManager {
     const held = new Set<string>();
     for (const outcome of outcomes) {
       if (outcome?.conflict !== undefined) held.add(outcome.conflict);
-      if (outcome?.failed !== undefined) held.add(outcome.failed.replace(/ \(.*\)$/, ""));
+      if (outcome?.failedRel !== undefined) held.add(outcome.failedRel);
     }
     const pairOf = (rel: string): string => (/\.meta$/i.test(rel) ? rel.replace(/\.meta$/i, "") : `${rel}.meta`);
     for (let i = 0; i < outcomes.length; i++) {
@@ -1632,7 +1687,23 @@ export class WorkspaceLeaseManager {
       }
     }
 
-    await mapWithConcurrency(outcomes, WALK_CONCURRENCY, async (outcome, index) => {
+    // The ledger names every write this commit is about to make. A process
+    // that dies between here and the end of the write phase leaves the project
+    // half-written with no record of what was planned; salvage reads the
+    // ledger, says so, and — with the seed maps — finishes the commit.
+    const plannedRels = outcomes.flatMap((o) => (o?.write ? [o.write.rel] : []));
+    writeCommitLedger(workspacePath, { startedAt: Date.now(), sourceRoot, planned: plannedRels });
+
+    // A .meta whose asset is also being written waits for the asset: when the
+    // asset's copy fails (locked, permission), the .meta must not land alone
+    // — the pre-write hold above only knew about failures decided BEFORE the
+    // write phase (report 2026-09-10 #34).
+    const writeIndexByRel = new Map<string, number>();
+    outcomes.forEach((o, i) => { if (o?.write) writeIndexByRel.set(o.write.rel, i); });
+    const dependentMeta = (o: FileOutcome | undefined): boolean =>
+      o?.write !== undefined && /\.meta$/i.test(o.write.rel) && writeIndexByRel.has(pairOf(o.write.rel));
+    const writeOne = async (index: number): Promise<void> => {
+      const outcome = outcomes[index];
       if (!outcome?.write) return;
       const { rel, full, target } = outcome.write;
       try {
@@ -1641,9 +1712,24 @@ export class WorkspaceLeaseManager {
         outcomes[index] = { written: rel };
       } catch (err) {
         await quarantine(rel, full);
-        outcomes[index] = { failed: `${rel} (${err instanceof Error ? err.message : String(err)})` };
+        outcomes[index] = { failed: `${rel} (${err instanceof Error ? err.message : String(err)})`, failedRel: rel };
       }
+    };
+    await mapWithConcurrency(outcomes, WALK_CONCURRENCY, async (outcome, index) => {
+      if (!outcome?.write || dependentMeta(outcome)) return;
+      await writeOne(index);
     });
+    await mapWithConcurrency(outcomes, WALK_CONCURRENCY, async (outcome, index) => {
+      if (!outcome?.write || !dependentMeta(outcome)) return;
+      const partner = outcomes[writeIndexByRel.get(pairOf(outcome.write.rel))!];
+      if (partner?.failedRel !== undefined) {
+        await quarantine(outcome.write.rel, outcome.write.full);
+        outcomes[index] = { conflict: outcome.write.rel };
+        return;
+      }
+      await writeOne(index);
+    });
+    clearCommitLedger(workspacePath);
 
     for (const outcome of outcomes) {
       if (!outcome) continue;
