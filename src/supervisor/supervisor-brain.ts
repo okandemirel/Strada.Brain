@@ -509,6 +509,7 @@ export class SupervisorBrain {
         nodeCount: assignedNodes.length,
         nodes: visibleAssignedNodes,
         totalWaves: waves.length,
+        fallback: decomposedGoalTree.planSummary === "Fallback single-step execution",
       });
       this.emitNarrative(plan.narrative, plan.language);
       this.emitActivity(plan.narrative, context.chatId, "supervisor_plan_ready");

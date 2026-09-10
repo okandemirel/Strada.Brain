@@ -139,6 +139,8 @@ export function buildSupervisorPlanNarrative(params: {
   nodeCount: number;
   nodes: readonly TaggedGoalNode[];
   totalWaves: number;
+  /** Decomposition failed twice and the whole task runs as ONE node (2026-09-10: this used to be silent). */
+  fallback?: boolean;
 }): {
   language: SupervisorFeedbackLanguage;
   narrative: string;
@@ -156,6 +158,9 @@ export function buildSupervisorPlanNarrative(params: {
         `Sıradaki adım: ${params.totalWaves} dalgalı yürütmeyi başlatıp ilk uygun işleri çalıştıracağım.`,
       markdown: [
         "**Aşama:** planlama",
+        ...(params.fallback
+          ? ["- ⚠️ Ayrıştırma iki denemede de başarısız oldu: görevin TAMAMI tek düğüm olarak koşacak (bütçesi koşunun tamamı, ara kontrol noktası yok)."]
+          : []),
         `- ${params.nodeCount} görev üretildi.`,
         `- Provider dağıtımı: ${providerSummary}.`,
         `- Dalga planı: ${params.totalWaves}.`,
@@ -178,6 +183,9 @@ export function buildSupervisorPlanNarrative(params: {
       `Next: I'll start the ${params.totalWaves}-wave execution path and launch the first ready tasks.`,
     markdown: [
       "**Stage:** planning",
+      ...(params.fallback
+        ? ["- ⚠️ Decomposition failed on both attempts: the WHOLE task runs as one node (its budget is the whole run, with no intermediate checkpoints)."]
+        : []),
       `- ${params.nodeCount} tasks were generated.`,
       `- Provider distribution: ${providerSummary}.`,
       `- Wave plan: ${params.totalWaves}.`,

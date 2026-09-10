@@ -50,6 +50,14 @@ export class ControlLoopTracker {
   private consecutiveReadOnlyToolCalls = 0;
   /** Read-only streaks reported this run (reset by a progress mutation) — the escalation level. */
   private readOnlyStreakReports = 0;
+  /**
+   * Read-only stalls reported in this run since the last CLEAN verification
+   * (2026-09-10). One mutation used to reset the streak level entirely, so
+   * "24 reads → 1 write → 24 reads" was told level 1 every time and never lost
+   * its tools. Two episodes make every later stall level 2 until something
+   * verifies clean — a write that changes nothing verifiable is not progress.
+   */
+  private stallEpisodes = 0;
   private lastReadOnlyFingerprint: string | null = null;
   private sameReadOnlyFingerprintCount = 0;
   private mutationsSinceLastReset = false;
@@ -281,12 +289,22 @@ export class ControlLoopTracker {
     this.sameReadOnlyFingerprintCount = 0;
     this.readOnlySince = null;
     this.readOnlyStreakReports += 1;
+    this.stallEpisodes += 1;
     return stall;
   }
 
-  /** How many read-only streaks this run has been told about since its last change. */
+  /**
+   * The level the next stall gate speaks at: streaks since the last change,
+   * or 2 once this run has stalled twice in all — a single write between
+   * streaks no longer buys a fresh level 1.
+   */
   getReadOnlyStreakReports(): number {
-    return this.readOnlyStreakReports;
+    return Math.max(this.readOnlyStreakReports, this.stallEpisodes >= 2 ? 2 : 0);
+  }
+
+  /** Stalls reported in this run since the last clean verification. */
+  getStallEpisodes(): number {
+    return this.stallEpisodes;
   }
 
   markVerificationClean(_iteration: number): void {
@@ -295,6 +313,8 @@ export class ControlLoopTracker {
     this.consecutiveNoToolGates = 0;
     this.consecutiveReadOnlyToolCalls = 0;
     this.mutationsSinceLastReset = false;
+    // Verified progress is the one thing that earns a fresh start.
+    this.stallEpisodes = 0;
   }
 
   markMeaningfulFileEvidence(files: readonly string[], _iteration: number): void {

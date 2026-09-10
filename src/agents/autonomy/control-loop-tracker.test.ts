@@ -476,6 +476,11 @@ describe("ControlLoopTracker", () => {
       expect(tracker.getReadOnlyStreakReports()).toBe(round);
     }
     tracker.markToolExecution("file_write", "file_write:{\"path\":\"x\"}");
+    // 2026-09-10: after two stall episodes a single write no longer resets the
+    // level — that was the "24 reads → 1 write → 24 reads" escape. Only a
+    // clean verification does.
+    expect(tracker.getReadOnlyStreakReports()).toBe(2);
+    tracker.markVerificationClean(1);
     expect(tracker.getReadOnlyStreakReports()).toBe(0);
   });
 
@@ -726,5 +731,24 @@ describe("reading a document is not a stall", () => {
     readOnly(tracker, 7);
 
     expect(tracker.readOnlyStall()).toBeNull();
+  });
+});
+
+describe("read-only stall episodes (2026-09-10)", () => {
+  it("one write between two streaks no longer buys a fresh level 1: the second stall speaks at level 2", () => {
+    const tracker = new ControlLoopTracker({ staleAnalysisThreshold: 100 });
+    const read = (n: number) => { for (let i = 0; i < n; i++) tracker.markToolExecution("file_read", `file_read:${i}`); };
+    read(ControlLoopTracker.READ_ONLY_STREAK_LIMIT);
+    expect(tracker.takeUnreportedReadOnlyStall()).not.toBeNull();
+    expect(tracker.getReadOnlyStreakReports()).toBe(1);
+    tracker.markToolExecution("file_write", "file_write:x");
+    expect(tracker.getReadOnlyStreakReports(), "the write resets the streak count").toBe(0);
+    read(ControlLoopTracker.READ_ONLY_STREAK_LIMIT);
+    expect(tracker.takeUnreportedReadOnlyStall()).not.toBeNull();
+    expect(tracker.getReadOnlyStreakReports(), "second episode: level 2, tools restricted").toBe(2);
+    expect(tracker.getStallEpisodes()).toBe(2);
+    // Verified progress earns a fresh start.
+    tracker.markVerificationClean(1);
+    expect(tracker.getStallEpisodes()).toBe(0);
   });
 });

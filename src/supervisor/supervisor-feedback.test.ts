@@ -181,6 +181,16 @@ describe("buildSupervisorPlanNarrative", () => {
     expect(result.canvasSummary.length).toBeGreaterThan(0);
   });
 
+  it("says when decomposition fell back to one node — it used to be silent (2026-09-10)", () => {
+    const nodes = [makeNode({ id: "n1", task: "the whole thing", assignedProvider: "claude" })] as unknown as TaggedGoalNode[];
+    const en = buildSupervisorPlanNarrative({ task: "Build the pipeline", nodeCount: 1, nodes, totalWaves: 1, fallback: true });
+    expect(en.markdown).toContain("Decomposition failed on both attempts: the WHOLE task runs as one node");
+    const tr = buildSupervisorPlanNarrative({ task: "Boru hattını kur", nodeCount: 1, nodes, totalWaves: 1, fallback: true });
+    expect(tr.markdown).toContain("Ayrıştırma iki denemede de başarısız oldu");
+    const plain = buildSupervisorPlanNarrative({ task: "Build the pipeline", nodeCount: 1, nodes, totalWaves: 1 });
+    expect(plain.markdown).not.toContain("Decomposition failed");
+  });
+
   it("Turkish task → language 'tr', markdown has **Aşama:**", () => {
     const nodes = [makeNode({ task: "görev bir" })] as unknown as TaggedGoalNode[];
     const result = buildSupervisorPlanNarrative({
