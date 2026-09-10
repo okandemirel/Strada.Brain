@@ -37,7 +37,9 @@ import { isTerminalFailureReport } from "../agents/autonomy/verifier-pipeline.js
 import { assessBuiltAsSpecified, PLACEHOLDER_GRADE_RULE } from "../agents/autonomy/built-as-specified.js";
 import { assessSpecScope } from "../agents/autonomy/spec-scope.js";
 import { describeDimensionality } from "../agents/autonomy/gdd-dimensionality.js";
-import type { Campaign, CampaignMilestone } from "./types.js";
+import type { Campaign, CampaignMilestone,
+  PlayerBuildEvidence,
+} from "./types.js";
 import { buildCampaignStatus, type CampaignStatusSnapshot } from "./campaign-status.js";
 import { generateCampaignId } from "./types.js";
 
@@ -89,6 +91,13 @@ export interface CampaignManagerOptions {
    * treated as a pass.
    */
   verifyCompile?: (projectRoot: string) => Promise<CompileVerdict>;
+  /**
+   * Build the player from the project root and measure the artifact. The
+   * delivery gate runs it ONCE per final-sprint evaluation, only after the
+   * other proofs stand (a build is minutes; a tree that fails the suite
+   * does not need one yet). See stage-runtime for the tool-backed default.
+   */
+  buildPlayer?: (projectRoot: string) => Promise<PlayerBuildEvidence>;
   /**
    * The independent second opinion asked before every delivery report
    * (user's ask, 2026-09-07: "çifte teyit"). Production wires the Codex CLI
@@ -210,6 +219,7 @@ export class CampaignManager {
   private readonly messenger: CampaignMessenger;
   private readonly projectRoot: string;
   private readonly verifyCompile?: (projectRoot: string) => Promise<CompileVerdict>;
+  private readonly buildPlayer?: (projectRoot: string) => Promise<PlayerBuildEvidence>;
   private readonly independentReviewer: CampaignManagerOptions["independentReviewer"];
   private readonly maxMilestoneAttempts: number;
   private readonly maxDraftAttempts: number;
@@ -227,6 +237,7 @@ export class CampaignManager {
     this.messenger = options.messenger;
     this.projectRoot = options.projectRoot;
     this.verifyCompile = options.verifyCompile;
+    this.buildPlayer = options.buildPlayer;
     this.independentReviewer = options.independentReviewer;
     this.maxMilestoneAttempts = options.maxMilestoneAttempts ?? 2;
     this.maxDraftAttempts = options.maxDraftAttempts ?? 3;
@@ -2014,8 +2025,22 @@ export class CampaignManager {
       const claims = isLast ? this.measureGddClaims(campaign, playthrough) : undefined;
       if (claims) milestone.gddClaims = claims.lines;
       const claimsBroken = Boolean(claims?.refusal);
-      const deliveryProofMissing =
+      // THE ARTIFACT. A delivery is a runnable player, not an editor project
+      // that compiles. The campaign builds it ITSELF from the project root,
+      // once the other proofs stand — the worker's "built successfully" is a
+      // sentence; the artifact's size on disk is a measurement. Not attempted
+      // while earlier proofs are missing (a build is minutes), and disclosed
+      // as NOT MEASURED then, never as a pass.
+      const earlierProofsMissing =
         !milestone.testVerdict || milestone.testVerdictUnfiltered !== true || compileBroken || playthroughMissing || claimsBroken;
+      const build = isLast
+        ? earlierProofsMissing
+          ? { ran: false, detail: "not attempted: earlier delivery proofs are missing (suite, compile, play-through or GDD numbers)" }
+          : await this.measureBuild()
+        : undefined;
+      if (build !== undefined) milestone.buildVerdict = build;
+      const buildBroken = Boolean(build?.ran) && build?.ok !== true;
+      const deliveryProofMissing = earlierProofsMissing || buildBroken;
       if (isLast && deliveryProofMissing && deliveryBouncesSpent < this.maxMilestoneAttempts) {
         // DELIVERY GATE: "the whole game runs" was only ever a sentence in the
         // planner's prompt — nothing in code required the final sprint to
@@ -2029,7 +2054,14 @@ export class CampaignManager {
         const suiteProofMissing = !milestone.testVerdict || milestone.testVerdictUnfiltered !== true || compileBroken;
         const playthroughClause = playthroughMissing ? `\n${playthroughDirective(playthrough)}` : "";
         const claimsClause = claims?.refusal ? `\n${claims.refusal}` : "";
-        const suiteClause = !suiteProofMissing && !playthroughMissing && claimsBroken
+        const buildClause = buildBroken
+          ? `\nPLAYER BUILD FAILED: the campaign built the player from the project root and it did not produce a runnable artifact — ${
+              (build?.reasons ?? []).slice(0, 4).join("; ") || build?.detail || "no reason recorded"
+            }. Run unity_build_player yourself, fix what it names, and run it again until it reports the artifact's path and size; a delivery is a runnable artifact.`
+          : "";
+        const suiteClause = !suiteProofMissing && !playthroughMissing && !claimsBroken && buildBroken
+          ? "the suite is green, the game was played and the GDD's numbers hold, but the PLAYER DOES NOT BUILD. "
+          : !suiteProofMissing && !playthroughMissing && claimsBroken
           ? "the suite is green, the project compiles and the game was played, but the GDD's own numbers are NOT met. "
           : !suiteProofMissing
           ? "the suite is green and the project compiles, but the game was not shown to be PLAYABLE. "
@@ -2050,7 +2082,8 @@ export class CampaignManager {
           "DO NOT AUDIT. An inventory of modules, prefabs, scenes or tests is not work and will be " +
           "rejected: run the tools, change the code, and let the suite's own output be your report." +
           playthroughClause +
-          claimsClause;
+          claimsClause +
+          buildClause;
         // SAY EVERYTHING THAT IS WRONG, NOT ONE THING AT A TIME. The
         // structural check runs only after this gate passes, so a sprint stuck
         // here never learns its scenes render nothing — measured live
@@ -2617,6 +2650,16 @@ export class CampaignManager {
     return readPlaythroughVerdict(this.projectRoot, this.sprintStartMs(milestone));
   }
 
+  /** Build the player from the project root; `ran: false` when no builder is configured or it could not run. */
+  private async measureBuild(): Promise<PlayerBuildEvidence> {
+    if (!this.buildPlayer) return { ran: false, detail: "no player builder is configured" };
+    try {
+      return await this.buildPlayer(this.projectRoot);
+    } catch (err) {
+      return { ran: false, detail: `the player build could not run (${err instanceof Error ? err.message : String(err)})` };
+    }
+  }
+
   /** The GDD's numeric claims held against the play-through timing (see gdd-claims.ts). */
   private measureGddClaims(
     campaign: Campaign,
@@ -3172,6 +3215,24 @@ export class CampaignManager {
           caveats.push(`${m.title}: the project did not compile — ${c.detail ?? "no detail"}`);
         } else {
           marks.push("compiles");
+        }
+      }
+      // The artifact, on every final-sprint line: built (path, size), failed,
+      // or NOT MEASURED — an editor project that compiles is not a delivery.
+      if (m.buildVerdict) {
+        const b = m.buildVerdict;
+        if (!b.ran) {
+          marks.push("player build NOT measured");
+          caveats.push(`${m.title}: no player was built at the delivery gate — ${b.detail ?? "no builder"}`);
+        } else if (!b.ok) {
+          marks.push("PLAYER BUILD FAILED");
+          caveats.push(`${m.title}: the player build failed — ${(b.reasons ?? []).slice(0, 3).join("; ") || b.detail || "no reason recorded"}`);
+        } else {
+          marks.push(
+            `delivery artifact: ${b.artifactPath ?? "?"} (${b.target ?? "?"}, ${((b.sizeBytes ?? 0) / (1024 * 1024)).toFixed(1)} MB${
+              typeof b.durationMs === "number" ? `, built in ${Math.round(b.durationMs / 1000)} s` : ""
+            })`,
+          );
         }
       }
       if (m.assetSourcingBlind) {

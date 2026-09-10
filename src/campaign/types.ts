@@ -120,6 +120,12 @@ export interface CampaignMilestone {
   visualGateArmed?: boolean;
   /** What the compiler said at the delivery gate; absent = never measured. */
   compileVerdict?: { ok: boolean; ran: boolean; errors?: number; detail?: string };
+  /**
+   * The player build the campaign itself ran from the project root at the
+   * delivery gate (unity_build_player). A delivery is a runnable artifact;
+   * `ran: false` is disclosed as NOT MEASURED, never treated as a pass.
+   */
+  buildVerdict?: PlayerBuildEvidence;
   /** The tool's own sentence when the Unity account link was dead during this sprint (see TaskTestVerdict). */
   assetSourcingBlind?: string;
   /** The channel was told once about it; later sprints do not repeat it. */
@@ -307,6 +313,22 @@ export interface PlaythroughEvidence {
    * hitches transfer to the player, the average frame rate is a floor.
    */
   perf?: PlaythroughPerf;
+  measuredAt?: string;
+}
+
+export interface PlayerBuildEvidence {
+  /** The build tool ran to a verdict (ok or failed). false = could not run / not attempted. */
+  ran: boolean;
+  ok?: boolean;
+  reasons?: string[];
+  target?: string;
+  /** Absolute path of the artifact on disk, when built. */
+  artifactPath?: string;
+  sizeBytes?: number;
+  durationMs?: number;
+  scenes?: number;
+  /** Why it did not run, or the tool's first line. */
+  detail?: string;
   measuredAt?: string;
 }
 

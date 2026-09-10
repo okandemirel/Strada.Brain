@@ -166,6 +166,10 @@ describe("CampaignManager", () => {
   const ctx = { chatId: "cli-local", channelType: "cli", userId: "u1" };
   /** What the compiler answers at the delivery gate; green unless a test says otherwise. */
   let compileVerdict: { ok: boolean; ran: boolean; errors?: number; detail?: string } = { ok: true, ran: true };
+  /** What the campaign's own player build answers at the delivery gate; a real artifact unless a test says otherwise. */
+  let buildVerdict: import("./types.js").PlayerBuildEvidence = {
+    ran: true, ok: true, target: "StandaloneOSX", artifactPath: "/tmp/Builds/StandaloneOSX/Game.app", sizeBytes: 88_000_000, durationMs: 120_000, scenes: 2,
+  };
 
   /**
    * What unity_playthrough leaves behind. The delivery gate requires an ok
@@ -208,6 +212,9 @@ describe("CampaignManager", () => {
     messages = [];
     messengerDownFor = undefined;
     compileVerdict = { ok: true, ran: true };
+    buildVerdict = {
+      ran: true, ok: true, target: "StandaloneOSX", artifactPath: "/tmp/Builds/StandaloneOSX/Game.app", sizeBytes: 88_000_000, durationMs: 120_000, scenes: 2,
+    };
 
     const planner = {
       planMilestones: vi.fn().mockResolvedValue(LADDER),
@@ -217,6 +224,7 @@ describe("CampaignManager", () => {
       storage,
       // The gate measures the compiler; tests drive it through this.
       verifyCompile: async () => compileVerdict,
+      buildPlayer: async () => buildVerdict,
       planner,
       taskManager: tasks as unknown as TaskManager,
       messenger: async (chatId, text) => {
@@ -807,6 +815,59 @@ describe("CampaignManager", () => {
     const report = messages.map((m) => m.text).join("\n");
     expect(report).toContain("GDD boot time ≤ 1 s: MET — scene load → services in 0.6 s (editor play mode, batch)");
     expect(report).toContain("GDD frame rate ≥ 60 fps: NOT MET — 30.0 fps average");
+  });
+
+  it("builds the player itself at delivery: a failed build bounces, a built one is the report's artifact line (2026-09-10)", async () => {
+    buildVerdict = { ran: true, ok: false, reasons: ["the report says built but nothing exists at /tmp/Builds/StandaloneOSX/Game.app"], target: "StandaloneOSX" };
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    const green = { testsGreen: true, detail: "PlayMode verification passed: 179 of 179 tests passed (unfiltered — the whole PlayMode suite)", unfiltered: true };
+    tasks.verifications.set("task_3", green);
+    tasks.emit("task:completed", "task_3", "green, shipping");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+    const prompt = tasks.submitted[3]!.prompt;
+    expect(prompt).toContain("the suite is green, the game was played and the GDD's numbers hold, but the PLAYER DOES NOT BUILD");
+    expect(prompt).toContain("PLAYER BUILD FAILED: the campaign built the player from the project root and it did not produce a runnable artifact — the report says built but nothing exists");
+    expect(storage.get(campaign.id)!.milestones[2]!.buildVerdict).toMatchObject({ ran: true, ok: false });
+
+    buildVerdict = { ran: true, ok: true, target: "StandaloneOSX", artifactPath: "/tmp/Builds/StandaloneOSX/Game.app", sizeBytes: 88_000_000, durationMs: 120_000, scenes: 2 };
+    tasks.verifications.set("task_4", green);
+    tasks.emit("task:completed", "task_4", "green, shipping");
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+    const report = messages.map((m) => m.text).join("\n");
+    expect(report).toContain("delivery artifact: /tmp/Builds/StandaloneOSX/Game.app (StandaloneOSX, 83.9 MB, built in 120 s)");
+  });
+
+  it("does not build while earlier proofs are missing, and says so instead of passing", async () => {
+    rmSync(join(projectRoot, "Recordings"), { recursive: true, force: true });
+    let builds = 0;
+    buildVerdict = { ran: true, ok: true, target: "StandaloneOSX", artifactPath: "/x", sizeBytes: 1 };
+    const original = buildVerdict;
+    manager = new CampaignManager({
+      storage,
+      verifyCompile: async () => compileVerdict,
+      buildPlayer: async () => { builds++; return original; },
+      planner: { planMilestones: vi.fn().mockResolvedValue(LADDER) } as unknown as CampaignPlanner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async (chatId, text) => { messages.push({ chatId, text }); },
+      projectRoot,
+    });
+    manager.attachEvents();
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    tasks.verifications.set("task_3", { testsGreen: true, detail: "179 of 179 tests passed (unfiltered — the whole PlayMode suite)", unfiltered: true });
+    tasks.emit("task:completed", "task_3", "green, shipping");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+    expect(builds, "a build was attempted on a tree with no play-through").toBe(0);
+    expect(storage.get(campaign.id)!.milestones[2]!.buildVerdict).toEqual({ ran: false, detail: "not attempted: earlier delivery proofs are missing (suite, compile, play-through or GDD numbers)" });
   });
 
   it("the delivery report names the play-through and that the game does not start itself", async () => {

@@ -461,6 +461,28 @@ export async function initializeTaskRuntimeStage(
             };
           }
         : undefined,
+      // The delivery artifact: the campaign builds the player itself from the
+      // project root through the same tool a sprint uses, and reads the
+      // tool's own JSON verdict (path, size, duration) — never the worker's
+      // sentence about it.
+      buildPlayer: params.toolRegistry
+        ? async (projectRoot: string) => {
+            const registry = params.toolRegistry!;
+            if (!registry.getAvailableToolNames().includes("unity_build_player")) {
+              return { ran: false, detail: "unity_build_player is not registered" };
+            }
+            const result = await registry.execute(
+              "unity_build_player",
+              {},
+              {
+                projectPath: projectRoot,
+                workingDirectory: projectRoot,
+                readOnly: false,
+              } as import("../../agents/tools/tool-core.interface.js").ToolContext,
+            );
+            return parsePlayerBuildOutput(String(result.content ?? ""));
+          }
+        : undefined,
       styleAnalysis: new StyleAnalysis(params.providerManager.getProvider("")),
     });
     campaignManager.attachEvents();
@@ -630,5 +652,41 @@ export async function initializeTaskRuntimeStage(
     progressReporter,
     campaignManager,
     realTreeGuardian,
+  };
+}
+
+/**
+ * The build tool's fenced JSON verdict → campaign evidence. No JSON (the tool
+ * crashed before judging, or its output was cut) is `ran: false` with the
+ * first line as the reason, so the gate discloses instead of guessing.
+ */
+export function parsePlayerBuildOutput(content: string): import("../../campaign/types.js").PlayerBuildEvidence {
+  const fence = /```json\s*\n([\s\S]*?)\n\s*```/.exec(content);
+  if (!fence?.[1]) return { ran: false, detail: content.split("\n")[0]?.slice(0, 200) || "the build tool returned no verdict" };
+  let parsed: {
+    ok?: unknown;
+    reasons?: unknown;
+    result?: { target?: unknown; durationMs?: unknown; scenes?: unknown } | null;
+    artifact?: { path?: unknown; exists?: unknown; sizeBytes?: unknown } | null;
+    measuredAt?: unknown;
+  };
+  try {
+    parsed = JSON.parse(fence[1]);
+  } catch {
+    return { ran: false, detail: "the build tool's verdict was not valid JSON" };
+  }
+  const num = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
+  const str = (v: unknown): string | undefined => (typeof v === "string" && v.length > 0 ? v : undefined);
+  const ok = parsed.ok === true;
+  return {
+    ran: true,
+    ok,
+    reasons: Array.isArray(parsed.reasons) ? parsed.reasons.map(String).slice(0, 8) : [],
+    target: str(parsed.result?.target),
+    durationMs: num(parsed.result?.durationMs),
+    scenes: Array.isArray(parsed.result?.scenes) ? parsed.result!.scenes.length : undefined,
+    ...(parsed.artifact?.exists === true ? { artifactPath: str(parsed.artifact.path), sizeBytes: num(parsed.artifact.sizeBytes) } : {}),
+    detail: content.split("\n")[0]?.slice(0, 200),
+    measuredAt: str(parsed.measuredAt),
   };
 }
