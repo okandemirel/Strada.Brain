@@ -19,7 +19,7 @@
  */
 
 import { describe, it, expect, beforeAll } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, readdirSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import os from "node:os";
@@ -253,8 +253,8 @@ describe("the seed budget never cuts the project's own content (audited 2026-09-
     for (let i = 0; i < 2100; i++) writeFileSync(join(root, "notes", `n${i}.md`), `n${i}\n`);
     const lease = await leaseFor(root);
     try {
-      expect(existsSync(join(lease.path, "notes", "n0.md"))).toBe(true);
-      expect(existsSync(join(lease.path, "notes", "n2099.md"))).toBe(false);
+      const seeded = readdirSync(join(lease.path, "notes")).length;
+      expect(seeded).toBe(2000); // git lists paths lexicographically; the count is what is bounded
     } finally {
       await lease.release();
       rmSync(root, { recursive: true, force: true });
