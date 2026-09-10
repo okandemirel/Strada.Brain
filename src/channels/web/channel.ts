@@ -778,12 +778,85 @@ export class WebChannel
     this.sendToClient(chatId, { type: "typing", active: false });
   }
 
+  /**
+   * Deliver a file to the portal (2026-09-10). Until now this sent the text
+   * "[Attachment: name]" and nothing else, so a gameplay frame, a HOW_TO_RUN or
+   * a recording never reached the web chat. The file is registered under a
+   * one-time token and served by GET /attachments/<token>; the chat receives a
+   * markdown link (an image inline) that the client renders. Only files the
+   * daemon holds — a local path or bytes — ever travel; nothing is fetched
+   * from a URL on anyone's say-so.
+   */
   async sendAttachment(chatId: string, attachment: Attachment): Promise<void> {
-    this.sendToClient(chatId, {
-      type: "text",
-      text: `[Attachment: ${attachment.name}]`,
-      messageId: randomUUID(),
+    const token = this.registerAttachment(attachment);
+    if (token === null) {
+      this.sendToClient(chatId, {
+        type: "text",
+        text: `[Attachment: ${attachment.name} — not deliverable: it names neither a local file nor bytes]`,
+        messageId: randomUUID(),
+      });
+      return;
+    }
+    const href = `/attachments/${token}`;
+    const size = typeof attachment.size === "number" ? ` (${(attachment.size / 1024).toFixed(0)} KB)` : "";
+    const text = attachment.type === "image"
+      ? `![${attachment.name}](${href})\n[${attachment.name}](${href})${size}`
+      : `📎 [${attachment.name}](${href})${size}`;
+    this.sendToClient(chatId, { type: "text", text, messageId: randomUUID() });
+  }
+
+  /** Files handed to the portal, by token; bounded and time-limited. */
+  private readonly servedAttachments = new Map<
+    string,
+    { name: string; mimeType?: string; path?: string; data?: Buffer; expiresAt: number }
+  >();
+  private static readonly ATTACHMENT_TTL_MS = 24 * 60 * 60_000;
+  private static readonly MAX_SERVED_ATTACHMENTS = 200;
+
+  /** Register a local file or bytes; null when the attachment names neither. */
+  private registerAttachment(attachment: Attachment): string | null {
+    const localPath = attachment.url && /^(?:\/|[A-Za-z]:[\\/])/.test(attachment.url) ? attachment.url : undefined;
+    if (!localPath && !attachment.data) return null;
+    const now = Date.now();
+    for (const [key, entry] of this.servedAttachments) if (entry.expiresAt <= now) this.servedAttachments.delete(key);
+    while (this.servedAttachments.size >= WebChannel.MAX_SERVED_ATTACHMENTS) {
+      const oldest = this.servedAttachments.keys().next().value;
+      if (oldest === undefined) break;
+      this.servedAttachments.delete(oldest);
+    }
+    const token = randomBytes(18).toString("base64url");
+    this.servedAttachments.set(token, {
+      name: attachment.name,
+      mimeType: attachment.mimeType,
+      ...(localPath ? { path: localPath } : {}),
+      ...(attachment.data ? { data: attachment.data } : {}),
+      expiresAt: now + WebChannel.ATTACHMENT_TTL_MS,
     });
+    return token;
+  }
+
+  /** GET /attachments/<token> — the registered file, or 404. */
+  private async serveAttachment(res: ServerResponse, token: string): Promise<void> {
+    const entry = this.servedAttachments.get(token);
+    if (!entry || entry.expiresAt <= Date.now()) {
+      res.writeHead(404, { ...WebChannel.SECURITY_HEADERS, "Content-Type": "text/plain" });
+      res.end("Not Found");
+      return;
+    }
+    const contentType = entry.mimeType ?? MIME_TYPES[extname(entry.name).toLowerCase()] ?? "application/octet-stream";
+    const disposition = `${contentType.startsWith("image/") ? "inline" : "attachment"}; filename="${entry.name.replace(/["\\\r\n]/g, "_")}"`;
+    if (entry.data) {
+      res.writeHead(200, { ...WebChannel.SECURITY_HEADERS, "Content-Type": contentType, "Content-Length": String(entry.data.length), "Content-Disposition": disposition, ...WebChannel.NO_CACHE_HEADERS });
+      res.end(entry.data);
+      return;
+    }
+    if (entry.path && (await this.isServableFile(entry.path))) {
+      res.writeHead(200, { ...WebChannel.SECURITY_HEADERS, "Content-Type": contentType, "Content-Disposition": disposition, ...WebChannel.NO_CACHE_HEADERS });
+      await pipeline(createReadStream(entry.path), res);
+      return;
+    }
+    res.writeHead(404, { ...WebChannel.SECURITY_HEADERS, "Content-Type": "text/plain" });
+    res.end("Not Found");
   }
 
   async requestConfirmation(req: ConfirmationRequest): Promise<string> {
@@ -928,6 +1001,12 @@ export class WebChannel
     // campaign or guardian), so it is answered before the /api/ proxy below.
     if (url === "/api/campaign" || url.startsWith("/api/campaign?")) {
       await this.serveBuildStatus(req, res, url);
+      return;
+    }
+
+    // A file the daemon handed to this chat (see sendAttachment).
+    if (req.method === "GET" && url.startsWith("/attachments/")) {
+      await this.serveAttachment(res, url.slice("/attachments/".length).split("?")[0]!);
       return;
     }
 

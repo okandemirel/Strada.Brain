@@ -84,6 +84,39 @@ function projectWithLocalSubmodule(framework: string): string {
   return root;
 }
 
+describe("commits the agent makes inside a submodule reach the project (2026-09-10)", () => {
+  it("replays them into the project's submodule and leaves its git pointer intact", async () => {
+    const framework = frameworkRepo();
+    const root = projectWithLocalSubmodule(framework);
+    const sub = join("Packages", "Submodules", "Strada.Core");
+    const projectPointer = git(root, "-C", join(root, sub), "rev-parse", "--git-dir").trim();
+
+    const manager = new WorkspaceLeaseManager({
+      projectRoot: root,
+      leaseRoot: mkdtempSync(join(os.tmpdir(), "lease-root-")),
+    });
+    const lease = await manager.acquireLease({ preferGitWorktree: true });
+    expect(lease.kind).toBe("git-worktree");
+    const leaseSub = join(lease.path, sub);
+    writeFileSync(join(leaseSub, "Runtime", "Fix.cs"), "// a framework fix made during the sprint\n");
+    git(leaseSub, "add", "-A");
+    git(leaseSub, "commit", "-qm", "fix(framework): module config null check");
+    const leaseHead = git(leaseSub, "rev-parse", "HEAD").trim();
+
+    const result = await lease.commit();
+    expect(result.commitsReplayed?.submodules).toEqual([{ path: sub, replayed: 1 }]);
+    // The project's submodule now holds the commit, and its working tree the file.
+    expect(git(join(root, sub), "rev-parse", "HEAD").trim()).toBe(leaseHead);
+    expect(git(join(root, sub), "log", "--oneline", "-1")).toContain("fix(framework): module config null check");
+    expect(existsSync(join(root, sub, "Runtime", "Fix.cs"))).toBe(true);
+    // Its `.git` still points at the PROJECT's module store, not the worktree's.
+    expect(git(root, "-C", join(root, sub), "rev-parse", "--git-dir").trim()).toBe(projectPointer);
+    // The parent sees the pointer move as an uncommitted change.
+    expect(git(root, "status", "--porcelain", "--", sub)).toMatch(/^ M /);
+    await lease.release();
+  });
+});
+
 describe("a workspace for a project with local-path submodules", () => {
   it("contains the submodule's content", async () => {
     const framework = frameworkRepo();

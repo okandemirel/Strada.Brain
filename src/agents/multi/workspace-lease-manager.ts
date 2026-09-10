@@ -93,7 +93,13 @@ export interface WorkspaceCommitResult {
    * touched was a conflict, a failure, a declined deletion, or already at
    * that content.
    */
-  readonly commitsReplayed?: { replayed: number; skipped: number; shas: string[] };
+  readonly commitsReplayed?: {
+    replayed: number;
+    skipped: number;
+    shas: string[];
+    /** Per submodule the lease checked out: commits replayed into the project's submodule, or why not. */
+    submodules?: Array<{ path: string; replayed: number; note?: string }>;
+  };
 }
 
 export interface WorkspaceLease {
@@ -1199,7 +1205,12 @@ export class WorkspaceLeaseManager {
     if (!dotGit.isFile()) return undefined; // a worktree's .git is a file; a temp copy has none, a repo has a dir
     if (resolve(sourceRoot) !== resolve(this.projectRoot)) return undefined; // a lease of a lease: no branch to land on
     const commits = await this.listLeaseCommits(workspacePath);
-    if (commits.length === 0) return undefined;
+    if (commits.length === 0) {
+      // Nothing in the parent, but the agent may have committed inside a
+      // submodule (2026-09-10) — those live in the submodule's own history.
+      const submodules = await this.replaySubmoduleCommits(sourceRoot, workspacePath);
+      return submodules.length > 0 ? { replayed: 0, skipped: 0, shas: [], submodules } : undefined;
+    }
 
     const git = (args: string[], extra?: { env?: Record<string, string | undefined>; maxOutput?: number }) =>
       this.commandRunner({
@@ -1309,7 +1320,87 @@ export class WorkspaceLeaseManager {
         subjects: commits.filter((c) => replayedShas.has(c.sha)).map((c) => c.message.split("\n")[0]?.slice(0, 80)).slice(0, 5),
       });
     }
-    return { replayed: replayedShas.size, skipped, shas: projectShas };
+    const submodules = await this.replaySubmoduleCommits(sourceRoot, workspacePath);
+    return { replayed: replayedShas.size, skipped, shas: projectShas, ...(submodules.length > 0 ? { submodules } : {}) };
+  }
+
+  /**
+   * Commits the agent made INSIDE a submodule of its worktree (2026-09-10).
+   *
+   * The parent replay above skips gitlink entries (mode 160000) — a pointer is
+   * not the agent's file — and a worktree's submodule checkout has its own git
+   * dir under .git/worktrees/<lease>/modules, so the commits it holds were
+   * never reachable from the project's submodule and died with the worktree.
+   * A framework developed side by side with the game (Strada.Core as a
+   * submodule) lost every fix the agent made to it.
+   *
+   * For each submodule the lease checked out: fetch its commits into the
+   * project's submodule repository, and move that repository's HEAD (and
+   * index) to the lease's head when the project's head is an ancestor of it —
+   * the copy-back already wrote the files, this records the history. The
+   * parent's gitlink is left as an uncommitted change for the next project
+   * commit, and named in the log. A submodule whose heads have diverged is
+   * skipped and said so; nothing is force-moved.
+   */
+  private async replaySubmoduleCommits(
+    sourceRoot: string,
+    workspacePath: string,
+  ): Promise<Array<{ path: string; replayed: number; note?: string }>> {
+    const out: Array<{ path: string; replayed: number; note?: string }> = [];
+    if (!existsSync(join(workspacePath, ".gitmodules"))) return out;
+    const listing = await this.commandRunner({
+      command: "git",
+      args: ["-C", workspacePath, "config", "--file", ".gitmodules", "--get-regexp", "^submodule\\..*\\.path$"],
+      cwd: workspacePath,
+      timeoutMs: this.worktreeTimeoutMs,
+    });
+    if (listing.exitCode !== 0) return out;
+    const paths = listing.stdout
+      .split("\n")
+      .map((line) => line.trim().split(/\s+/).slice(1).join(" "))
+      .filter(Boolean);
+    for (const subPath of paths) {
+      const leaseSub = join(workspacePath, subPath);
+      const projectSub = join(sourceRoot, subPath);
+      if (!existsSync(join(leaseSub, ".git")) || !existsSync(join(projectSub, ".git"))) continue;
+      const run = (cwd: string, args: string[]) =>
+        this.commandRunner({ command: "git", args: ["-C", cwd, ...args], cwd, timeoutMs: this.worktreeTimeoutMs });
+      const leaseHead = (await run(leaseSub, ["rev-parse", "--verify", "HEAD"])).stdout.trim();
+      const projectHead = (await run(projectSub, ["rev-parse", "--verify", "HEAD"])).stdout.trim();
+      if (!leaseHead || !projectHead || leaseHead === projectHead) continue;
+      const ahead = await run(leaseSub, ["rev-list", "--reverse", `${projectHead}..${leaseHead}`]);
+      const shas = ahead.exitCode === 0 ? ahead.stdout.split(/\s+/).filter(Boolean) : [];
+      if (shas.length === 0) {
+        out.push({ path: subPath, replayed: 0, note: "the lease's submodule head is not ahead of the project's — nothing to replay" });
+        continue;
+      }
+      const behind = await run(leaseSub, ["merge-base", "--is-ancestor", projectHead, leaseHead]);
+      if (behind.exitCode !== 0) {
+        out.push({ path: subPath, replayed: 0, note: `the project's submodule head ${projectHead.slice(0, 8)} moved away from the lease's base — ${shas.length} commit(s) left in the lease's submodule` });
+        getLoggerSafe().warn("Lease submodule commits NOT replayed — heads diverged", { submodule: subPath, commits: shas.length });
+        continue;
+      }
+      const fetched = await run(projectSub, ["-c", "protocol.file.allow=always", "fetch", "-q", leaseSub, leaseHead]);
+      if (fetched.exitCode !== 0) {
+        out.push({ path: subPath, replayed: 0, note: `fetch from the lease's submodule failed: ${fetched.stderr.trim().slice(0, 160)}` });
+        getLoggerSafe().warn("Lease submodule commits NOT replayed — fetch failed", { submodule: subPath, stderr: fetched.stderr.trim().slice(0, 200) });
+        continue;
+      }
+      // HEAD and index follow; the working tree was written by the copy-back.
+      const moved = await run(projectSub, ["reset", "-q", "--mixed", leaseHead]);
+      if (moved.exitCode !== 0) {
+        out.push({ path: subPath, replayed: 0, note: `could not move the project's submodule head: ${moved.stderr.trim().slice(0, 160)}` });
+        continue;
+      }
+      out.push({ path: subPath, replayed: shas.length });
+      getLoggerSafe().info("Lease submodule commits replayed into the project's submodule", {
+        submodule: subPath,
+        commits: shas.length,
+        head: leaseHead.slice(0, 8),
+        note: "the parent's submodule pointer is left as an uncommitted change for the next project commit",
+      });
+    }
+    return out;
   }
 
   private async removeGitWorktree(workspacePath: string): Promise<void> {
@@ -1824,6 +1915,12 @@ export class WorkspaceLeaseManager {
     if (!rel) return true;
     const firstSegment = rel.split(/[/\\]/, 1)[0];
     if (!firstSegment) return true;
+    // A `.git` below the root is a SUBMODULE's git dir or gitdir pointer
+    // (2026-09-10). The lease's points into the worktree's own modules; the
+    // project's points into .git/modules. Copying one over the other breaks
+    // the project's submodule checkout — the excludes above only ever looked
+    // at the first path segment.
+    if (basename(path) === ".git") return false;
     return !this.fallbackExcludes.has(firstSegment) && !DERIVED_COPY_EXCLUDES.has(firstSegment);
   }
 
@@ -1841,6 +1938,7 @@ export class WorkspaceLeaseManager {
     if (!firstSegment) {
       return true;
     }
+    if (basename(sourcePath) === ".git") return false; // a nested submodule's git dir/pointer — see shouldCommitEntry
 
     if (sourceRoot !== this.projectRoot) {
       // The operator's heavy-directory excludes (Library, Temp, Logs, Builds,

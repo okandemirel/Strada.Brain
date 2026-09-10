@@ -1481,3 +1481,69 @@ describe("WebChannel.claimsChatId (hub routing)", () => {
     expect(channel.claimsChatId("cli-local")).toBe(false);
   });
 });
+
+describe("WebChannel file delivery (2026-09-10)", () => {
+  // Until now sendAttachment sent the text "[Attachment: name]" and nothing
+  // else: a gameplay frame or a HOW_TO_RUN never reached the portal.
+  function fakeRes() {
+    const out: { status?: number; headers?: Record<string, string>; body: Buffer[] } = { body: [] };
+    // A real Writable: the file branch streams through stream.pipeline, which
+    // needs 'finish'/'close' events a hand-rolled object never emits.
+    const res = new Writable({
+      write(chunk, _enc, cb) { out.body.push(Buffer.from(chunk)); cb(); },
+    }) as unknown as import("node:http").ServerResponse & { headersSent: boolean };
+    Object.assign(res, {
+      headersSent: false,
+      writeHead: (status: number, headers: Record<string, string>) => { out.status = status; out.headers = headers; res.headersSent = true; return res; },
+    });
+    return { res, out };
+  }
+  const handle = async (channel: WebChannel, url: string) => {
+    const { res, out } = fakeRes();
+    await (channel as unknown as { handleHttp: (req: unknown, res: unknown) => Promise<void> })
+      .handleHttp({ method: "GET", url, headers: {} }, res);
+    if (!(res as unknown as Writable).writableFinished) await new Promise((r) => (res as unknown as Writable).once("finish", r));
+    return out;
+  };
+
+  it("registers bytes under a token, tells the chat with a markdown image, and serves them once asked", async () => {
+    const channel = new WebChannel();
+    const sent: Array<Record<string, unknown>> = [];
+    (channel as unknown as { sendToClient: (c: string, d: Record<string, unknown>) => boolean }).sendToClient = (_c, d) => { sent.push(d); return true; };
+    const png = Buffer.from("89504e470d0a1a0a", "hex");
+    await channel.sendAttachment("chat-1", { type: "image", name: "frame_00012.png", data: png, mimeType: "image/png", size: png.length });
+    const text = String(sent[0]!.text);
+    const token = /\/attachments\/([A-Za-z0-9_-]+)\)/.exec(text)![1]!;
+    expect(text).toContain(`![frame_00012.png](/attachments/${token})`);
+    expect(text).not.toContain("[Attachment:");
+    const out = await handle(channel, `/attachments/${token}`);
+    expect(out.status).toBe(200);
+    expect(out.headers!["Content-Type"]).toBe("image/png");
+    expect(out.headers!["Content-Disposition"]).toContain("inline");
+    expect(Buffer.concat(out.body)).toEqual(png);
+    // An unknown token is 404, never a directory listing or an error page.
+    expect((await handle(channel, "/attachments/nope")).status).toBe(404);
+  });
+
+  it("serves a local file by path and refuses a remote URL as a source", async () => {
+    const channel = new WebChannel();
+    const sent: Array<Record<string, unknown>> = [];
+    (channel as unknown as { sendToClient: (c: string, d: Record<string, unknown>) => boolean }).sendToClient = (_c, d) => { sent.push(d); return true; };
+    const { mkdtempSync, writeFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const { tmpdir } = await import("node:os");
+    const dir = mkdtempSync(join(tmpdir(), "web-attach-"));
+    const file = join(dir, "HOW_TO_RUN.md");
+    writeFileSync(file, "# How to run\nOpen Assets/Scenes/Main.unity");
+    await channel.sendAttachment("chat-1", { type: "document", name: "HOW_TO_RUN.md", url: file });
+    const token = /\/attachments\/([A-Za-z0-9_-]+)\)/.exec(String(sent[0]!.text))![1]!;
+    expect(String(sent[0]!.text)).toContain("📎 [HOW_TO_RUN.md]");
+    const out = await handle(channel, `/attachments/${token}`);
+    expect(out.status).toBe(200);
+    expect(out.headers!["Content-Disposition"]).toContain('attachment; filename="HOW_TO_RUN.md"');
+    expect(Buffer.concat(out.body).toString()).toContain("Open Assets/Scenes/Main.unity");
+
+    await channel.sendAttachment("chat-1", { type: "document", name: "evil", url: "https://example.com/x" });
+    expect(String(sent[1]!.text)).toContain("not deliverable");
+  });
+});

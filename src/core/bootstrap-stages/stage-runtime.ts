@@ -1,3 +1,5 @@
+import { supportsRichMessaging } from "../../channels/channel-core.interface.js";
+import type { Attachment } from "../../channels/channel-messages.interface.js";
 import { join } from "node:path";
 import { runCodexSecondOpinion } from "../../agents/review/codex-second-opinion.js";
 import type * as winston from "winston";
@@ -418,6 +420,12 @@ export async function initializeTaskRuntimeStage(
         await params.channel.sendMarkdown(chatId, sanitizeSecrets(markdown));
         void broadcastBuildStatus();
       },
+      // The newest gameplay frame travels with the delivery report when the
+      // channel can carry files (the web portal serves it under a token).
+      attach: (() => {
+        const rich = supportsRichMessaging(params.channel) ? params.channel : null;
+        return rich ? (chatId: string, attachment: Attachment) => rich.sendAttachment(chatId, attachment) : undefined;
+      })(),
       // The independent second opinion on every delivery report: Codex CLI,
       // read-only, a different model family than the one that built the game.
       independentReviewer: (params) => runCodexSecondOpinion(params),

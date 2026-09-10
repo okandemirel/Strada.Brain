@@ -11,7 +11,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { join, relative, sep } from "node:path";
+import { basename, join, relative, sep } from "node:path";
 import { getLoggerSafe } from "../utils/logger.js";
 import { allProvidersCoolingDownMs, describeProviderOutage, msSinceNewestProviderFailure } from "../agents/providers/provider-outage.js";
 import type { IncomingMessage } from "../channels/channel-messages.interface.js";
@@ -101,6 +101,12 @@ export interface CampaignManagerOptions {
   buildPlayer?: (projectRoot: string) => Promise<PlayerBuildEvidence>;
   /** Pause before a NOT DELIVERED campaign resumes its final sprint by itself (default 15 min). */
   deliveryResumeDelayMs?: number;
+  /**
+   * Hand a file to the origin chat (2026-09-10): the newest captured frame of
+   * the running game travels with every delivery report, so a person sees the
+   * game the sentences describe. Absent = the channel cannot carry files.
+   */
+  attach?: (chatId: string, attachment: import("../channels/channel-messages.interface.js").Attachment) => Promise<void>;
   /**
    * The independent second opinion asked before every delivery report
    * (user's ask, 2026-09-07: "çifte teyit"). Production wires the Codex CLI
@@ -224,6 +230,7 @@ export class CampaignManager {
   private readonly verifyCompile?: (projectRoot: string) => Promise<CompileVerdict>;
   private readonly buildPlayer?: (projectRoot: string) => Promise<PlayerBuildEvidence>;
   private readonly deliveryResumeDelayMs: number;
+  private readonly attach?: (chatId: string, attachment: import("../channels/channel-messages.interface.js").Attachment) => Promise<void>;
   private readonly independentReviewer: CampaignManagerOptions["independentReviewer"];
   private readonly maxMilestoneAttempts: number;
   private readonly maxDraftAttempts: number;
@@ -243,6 +250,7 @@ export class CampaignManager {
     this.verifyCompile = options.verifyCompile;
     this.buildPlayer = options.buildPlayer;
     this.deliveryResumeDelayMs = options.deliveryResumeDelayMs ?? 15 * 60_000;
+    this.attach = options.attach;
     this.independentReviewer = options.independentReviewer;
     this.maxMilestoneAttempts = options.maxMilestoneAttempts ?? 2;
     this.maxDraftAttempts = options.maxDraftAttempts ?? 3;
@@ -2331,6 +2339,7 @@ export class CampaignManager {
               "Reply **kampanya devam** to resume now, or change the GDD if this is the game you wanted.",
           );
           this.scheduleAutoRevive(campaign.id, resumeMs);
+          await this.attachDeliveryEvidence(campaign);
           return;
         }
         campaign.state = "done";
@@ -2347,6 +2356,7 @@ export class CampaignManager {
           campaign.deliveryReported = true;
           this.persist(campaign);
         }
+        await this.attachDeliveryEvidence(campaign);
         return;
       }
       campaign.currentMilestone += 1;
@@ -2686,6 +2696,33 @@ export class CampaignManager {
   /** The play-through verdict for this sprint, if unity_playthrough ran since it began. */
   private measurePlaythrough(milestone: CampaignMilestone): ReturnType<typeof readPlaythroughVerdict> {
     return readPlaythroughVerdict(this.projectRoot, this.sprintStartMs(milestone));
+  }
+
+  /**
+   * The newest captured frame of the running game, sent as a file after a
+   * delivery (or NOT DELIVERED) report. Best-effort: a channel without file
+   * delivery, or a project with no frame, changes nothing about the report.
+   */
+  private async attachDeliveryEvidence(campaign: Campaign): Promise<void> {
+    if (!this.attach) return;
+    try {
+      const frame = selectGameplayFrame(this.projectRoot, 0);
+      if (!frame.path) return;
+      const abs = frame.path; // absolute — visual-conformance reads it as such
+      const size = existsSync(abs) ? statSync(abs).size : undefined;
+      await this.attach(campaign.chatId, {
+        type: "image",
+        name: basename(frame.path),
+        url: abs,
+        mimeType: "image/png",
+        ...(size !== undefined ? { size } : {}),
+      });
+    } catch (err) {
+      getLoggerSafe().warn("Delivery evidence could not be attached", {
+        id: campaign.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   /** Build the player from the project root; `ran: false` when no builder is configured or it could not run. */

@@ -166,6 +166,8 @@ describe("CampaignManager", () => {
   const ctx = { chatId: "cli-local", channelType: "cli", userId: "u1" };
   /** What the compiler answers at the delivery gate; green unless a test says otherwise. */
   let compileVerdict: { ok: boolean; ran: boolean; errors?: number; detail?: string } = { ok: true, ran: true };
+  /** Files the campaign handed to the chat (the newest gameplay frame with a delivery report). */
+  let attached: Array<{ chatId: string; name: string; url?: string; type: string }> = [];
   /** What the campaign's own player build answers at the delivery gate; a real artifact unless a test says otherwise. */
   let buildVerdict: import("./types.js").PlayerBuildEvidence = {
     ran: true, ok: true, target: "StandaloneOSX", artifactPath: "/tmp/Builds/StandaloneOSX/Game.app", sizeBytes: 88_000_000, durationMs: 120_000, scenes: 2,
@@ -212,6 +214,7 @@ describe("CampaignManager", () => {
     messages = [];
     messengerDownFor = undefined;
     compileVerdict = { ok: true, ran: true };
+    attached = [];
     buildVerdict = {
       ran: true, ok: true, target: "StandaloneOSX", artifactPath: "/tmp/Builds/StandaloneOSX/Game.app", sizeBytes: 88_000_000, durationMs: 120_000, scenes: 2,
     };
@@ -225,6 +228,7 @@ describe("CampaignManager", () => {
       // The gate measures the compiler; tests drive it through this.
       verifyCompile: async () => compileVerdict,
       buildPlayer: async () => buildVerdict,
+      attach: async (chatId, a) => { attached.push({ chatId, name: a.name, url: a.url, type: a.type }); },
       planner,
       taskManager: tasks as unknown as TaskManager,
       messenger: async (chatId, text) => {
@@ -961,6 +965,23 @@ describe("CampaignManager", () => {
     tasks.emit("task:completed", "task_4", "audio wired, shipping");
     await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"), { timeout: 15_000 });
     expect(storage.get(campaign.id)!.milestones[2]!.structureFindings?.join("\n")).toContain("1 AudioSource(s), 1 bound to a clip; 1 of the project's 1 clip(s) are reachable");
+  });
+
+  it("hands the newest gameplay frame to the chat with the delivery report (portal file delivery 2026-09-10)", async () => {
+    mkdirSync(join(projectRoot, "Recordings", "playthrough"), { recursive: true });
+    writeFileSync(join(projectRoot, "Recordings", "playthrough", "frame_00012.png"), Buffer.from("89504e470d0a1a0a", "hex"));
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    tasks.verifications.set("task_3", { testsGreen: true, detail: "179 of 179 tests passed (unfiltered — the whole PlayMode suite)", unfiltered: true });
+    tasks.emit("task:completed", "task_3", "green, shipping");
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+    await vi.waitFor(() => expect(attached).toHaveLength(1));
+    expect(attached[0]).toMatchObject({ chatId: "cli-local", name: "frame_00012.png", type: "image" });
+    expect(attached[0]!.url).toBe(join(projectRoot, "Recordings", "playthrough", "frame_00012.png"));
   });
 
   it("delivers on an UNFILTERED green", async () => {
