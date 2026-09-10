@@ -331,6 +331,7 @@ const MAX_SOURCE_LINES = 200;
 /** Tools that actually run the game rather than inspect it. */
 const PLAYMODE_VERIFICATION_TOOLS: ReadonlySet<string> = new Set([
   "unity_playmode_verify",
+  "unity_playthrough",
 ]);
 
 /** Tools that answer what art the user already owns, before any is made. */

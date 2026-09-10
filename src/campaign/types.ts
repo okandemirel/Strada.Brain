@@ -177,6 +177,12 @@ export interface CampaignMilestone {
   structureRefused?: boolean;
   /** The rendered look-vs-GDD disclosure block for the delivery report. */
   visualConformance?: string;
+  /**
+   * What unity_playthrough said about the game as delivered (read at the
+   * delivery gate from Recordings/playthrough/playthrough-verdict.json; a
+   * file older than the sprint is `stale`, not evidence). Absent = never read.
+   */
+  playthroughVerdict?: PlaythroughEvidence;
   /** When this milestone's current run began (epoch ms) — the time-box clock. */
   startedAtMs?: number;
   /** How many times the time-box has forced a scope-narrowing escalation. */
@@ -268,4 +274,23 @@ export function generateCampaignId(): string {
   return `campaign_${Date.now()}_${campaignCounter.toString(36)}${Math.random()
     .toString(36)
     .slice(2, 6)}`;
+}
+
+/** The campaign's view of a unity_playthrough verdict (see playthrough-verdict.ts). */
+export interface PlaythroughEvidence {
+  /** A verdict for THIS sprint exists and was readable. */
+  found: boolean;
+  /** The file exists but predates the sprint. */
+  stale?: boolean;
+  unreadable?: boolean;
+  ok?: boolean;
+  reasons?: string[];
+  scene?: string;
+  level?: number;
+  terminalState?: string;
+  /** Did the game leave the booted state by itself, before the test called StartLevel? */
+  autoStarted?: boolean;
+  tapsDriven?: number;
+  frames?: { count: number; flat: number; maxMotionShare: number };
+  measuredAt?: string;
 }

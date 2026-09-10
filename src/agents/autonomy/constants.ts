@@ -45,6 +45,8 @@ export const VERIFY_TOOLS: ReadonlySet<string> = new Set([
   // available here, and the only one that catches a scene that boots into a
   // module that throws.
   "unity_playmode_verify",
+  // Plays the game — starts a level, taps, judges the frames. Delivery proof.
+  "unity_playthrough",
 ]);
 
 const VERIFY_TOOL_NAME_RE =

@@ -554,7 +554,7 @@ export function looksLikeTestFile(path: string): boolean {
 
 /** Tools that RUN tests, as opposed to compiling the assemblies that hold them. */
 const TEST_RUNNING_TOOLS: ReadonlySet<string> = new Set([
-  "unity_playmode_verify", "unity_test_run", "unity_playmode_test",
+  "unity_playmode_verify", "unity_playthrough", "unity_test_run", "unity_playmode_test",
   "unity_editmode_test", "dotnet_test",
 ]);
 

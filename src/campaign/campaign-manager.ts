@@ -23,6 +23,7 @@ import { GDD_AUDIT_FULL_CHARS } from "./campaign-planner.js";
 import type { CampaignStorage } from "./campaign-storage.js";
 import { detectCampaignIntent } from "./campaign-intake.js";
 import { assessSceneHygiene, renderSceneHygiene } from "./scene-hygiene.js";
+import { readPlaythroughVerdict, describePlaythrough, playthroughDirective } from "./playthrough-verdict.js";
 import { deliveryReviewPrompt, renderSecondOpinion } from "../agents/review/codex-second-opinion.js";
 import {
   extractLookDescription,
@@ -1168,6 +1169,24 @@ export class CampaignManager {
           "pre-existing scene costs a turn and changes nothing (measured 2026-09-08: twelve such deletes, " +
           "none applied). Your report must name the entry scene and list every scene you disabled.";
       }
+      // THE FINAL SPRINT PLAYS THE GAME. Measured 2026-09-10: the campaign
+      // delivered green on compile + tests + art counts while the entry scene
+      // idled after boot — nothing at runtime starts a level — and no sprint
+      // had ever driven Home → level → win/fail. The delivery gate reads the
+      // verdict unity_playthrough leaves; this tells the sprint to earn it.
+      // Worded without "capture": the visual-evidence gate's legacy fallback
+      // scans the live prompt for that word, and a deterministic append must
+      // not arm a gate the planner never asked for.
+      if (!milestone.prompt.includes("PLAY-THROUGH (final sprint):")) {
+        milestone.prompt +=
+          "\n\nPLAY-THROUGH (final sprint): before you report, run unity_playthrough. It boots the entry " +
+          "scene, starts a level through the game's flow service, taps through it with the game's input " +
+          "service until the level ends, records checkpoint frames and judges them. Delivery requires its verdict " +
+          "to be ok — fix what it names (a level that never ends, a screen that never changes, a flow " +
+          "service that refuses to start). It also reports whether the game starts a level BY ITSELF " +
+          "after boot; if it does not, wire the GDD's Home → level start so a person who opens the " +
+          "entry scene is playing, not staring at an idle board.";
+      }
       this.attachStructureMeasurement(campaign, milestone);
     }
     // NO PROVIDER, NO TASK. Measured 2026-09-08 01:08: a boot resubmitted the
@@ -1973,8 +1992,16 @@ export class CampaignManager {
       const compile = await this.measureCompile();
       milestone.compileVerdict = compile;
       const compileBroken = compile.ran && !compile.ok;
+      // PLAY-THROUGH PROOF. A green suite and a clean compile say the game
+      // builds and its tests pass; neither says it can be played. Measured
+      // 2026-09-10: delivered green, entry scene idle after boot, no level
+      // ever started at runtime. Only the final sprint is held to it, and
+      // only within the same bounce budget as the test verdict.
+      const playthrough = isLast ? this.measurePlaythrough(milestone) : undefined;
+      if (playthrough !== undefined) milestone.playthroughVerdict = playthrough;
+      const playthroughMissing = isLast && (playthrough === undefined || !playthrough.found || playthrough.ok !== true);
       const deliveryProofMissing =
-        !milestone.testVerdict || milestone.testVerdictUnfiltered !== true || compileBroken;
+        !milestone.testVerdict || milestone.testVerdictUnfiltered !== true || compileBroken || playthroughMissing;
       if (isLast && deliveryProofMissing && deliveryBouncesSpent < this.maxMilestoneAttempts) {
         // DELIVERY GATE: "the whole game runs" was only ever a sentence in the
         // planner's prompt — nothing in code required the final sprint to
@@ -1985,13 +2012,17 @@ export class CampaignManager {
         milestone.deliveryVerificationBounced = true;
         milestone.deliveryVerificationBounces = deliveryBouncesSpent + 1;
         const observedButFiltered = Boolean(milestone.testVerdict) && milestone.testVerdictUnfiltered !== true;
+        const suiteProofMissing = !milestone.testVerdict || milestone.testVerdictUnfiltered !== true || compileBroken;
+        const playthroughClause = playthroughMissing ? `\n${playthroughDirective(playthrough)}` : "";
+        const suiteClause = !suiteProofMissing
+          ? "the suite is green and the project compiles, but the game was not shown to be PLAYABLE. "
+          : compileBroken && Boolean(milestone.testVerdict) && milestone.testVerdictUnfiltered === true
+          ? "the suite's green run means nothing while the project does not compile. "
+          : observedButFiltered
+          ? "the only green test run observed was FILTERED — a subset you chose. "
+          : "no test run was observed in the last attempt. ";
         const directive =
-          "\n\nDELIVERY VERIFICATION REQUIRED: this is the final sprint, and " +
-          (compileBroken && Boolean(milestone.testVerdict) && milestone.testVerdictUnfiltered === true
-            ? "the suite's green run means nothing while the project does not compile. "
-            : observedButFiltered
-            ? "the only green test run observed was FILTERED — a subset you chose. "
-            : "no test run was observed in the last attempt. ") +
+          "\n\nDELIVERY VERIFICATION REQUIRED: this is the final sprint, and " + suiteClause +
           "Run the FULL PlayMode suite UNFILTERED against the assembled scene, capture a frame of " +
           "the running game, and report the suite's actual pass/fail counts. Delivery is not declared on a sprint " +
           "whose whole suite was never seen to pass.\n" +
@@ -2000,7 +2031,8 @@ export class CampaignManager {
           // and changed nothing. "Report the counts" was read as "produce a
           // report". The verb has to be unmistakable.
           "DO NOT AUDIT. An inventory of modules, prefabs, scenes or tests is not work and will be " +
-          "rejected: run the tools, change the code, and let the suite's own output be your report.";
+          "rejected: run the tools, change the code, and let the suite's own output be your report." +
+          playthroughClause;
         // SAY EVERYTHING THAT IS WRONG, NOT ONE THING AT A TIME. The
         // structural check runs only after this gate passes, so a sprint stuck
         // here never learns its scenes render nothing — measured live
@@ -2050,7 +2082,8 @@ export class CampaignManager {
           id: campaign.id,
           milestone: milestone.id,
           bounce: milestone.deliveryVerificationBounces,
-          cause: compileBroken ? "does not compile" : observedButFiltered ? "filtered test run" : "no test verdict",
+          cause: compileBroken ? "does not compile" : observedButFiltered ? "filtered test run" : !milestone.testVerdict ? "no test verdict" : "no ok play-through",
+          playthrough: playthrough === undefined ? "not measured" : describePlaythrough(playthrough).slice(0, 200),
           structuralRefusal: structureNow.refusal !== undefined,
         });
         // The FIRST bounce is free (the sprint may simply not have printed a
@@ -2550,16 +2583,24 @@ export class CampaignManager {
     }
   }
 
+  /** When this milestone's lineage began — evidence older than this was earned by another build. */
+  private sprintStartMs(milestone: CampaignMilestone): number {
+    try {
+      const rootId = milestone.taskId ? this.taskManager.findLineageRootId(milestone.taskId as TaskId) : null;
+      const root = rootId ? this.taskManager.getStatus(rootId) : null;
+      return root?.createdAt ?? Date.now() - 6 * 60 * 60_000;
+    } catch {
+      return Date.now() - 6 * 60 * 60_000;
+    }
+  }
+
+  /** The play-through verdict for this sprint, if unity_playthrough ran since it began. */
+  private measurePlaythrough(milestone: CampaignMilestone): ReturnType<typeof readPlaythroughVerdict> {
+    return readPlaythroughVerdict(this.projectRoot, this.sprintStartMs(milestone));
+  }
+
   private freshCaptureEvidence(milestone: CampaignMilestone): { found: boolean } {
-    const sinceMs = (() => {
-      try {
-        const rootId = milestone.taskId ? this.taskManager.findLineageRootId(milestone.taskId as TaskId) : null;
-        const root = rootId ? this.taskManager.getStatus(rootId) : null;
-        return root?.createdAt ?? Date.now() - 6 * 60 * 60_000;
-      } catch {
-        return Date.now() - 6 * 60 * 60_000;
-      }
-    })();
+    const sinceMs = this.sprintStartMs(milestone);
     const roots = [
       join(this.projectRoot, "Recordings"),
       join(this.projectRoot, "Assets", "Art", "Prerendered"),
@@ -3023,6 +3064,14 @@ export class CampaignManager {
       // waived sprint showed as a clean ✅ with no mark and no caveat.
       const isFinal = i === campaign.milestones.length - 1;
       if (m.deliveryVerificationBounced) marks.push("delivery-verification bounce spent");
+      if (isFinal) {
+        const line = describePlaythrough(m.playthroughVerdict);
+        if (m.playthroughVerdict?.found && m.playthroughVerdict.ok) marks.push(line);
+        else caveats.push(`${m.title}: ${line}`);
+        if (m.playthroughVerdict?.found && m.playthroughVerdict.autoStarted === false) {
+          caveats.push(`${m.title}: the game does not start a level by itself after boot — a person opening the entry scene sees an idle board`);
+        }
+      }
       if (!m.testVerdict && (isFinal || m.deliveryVerificationBounced)) {
         marks.push("NO observed test run");
         caveats.push(

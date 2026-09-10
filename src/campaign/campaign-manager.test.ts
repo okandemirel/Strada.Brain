@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { EventEmitter } from "node:events";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, utimesSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { CampaignManager, stripTimeBoxDirectives } from "./campaign-manager.js";
@@ -11,6 +11,9 @@ import type { TaskManager } from "../tasks/task-manager.js";
 import type { IncomingMessage } from "../channels/channel-messages.interface.js";
 import type { Task } from "../tasks/types.js";
 import { TaskStatus } from "../tasks/types.js";
+
+/** The sprint "ran unity_playthrough before reporting": the suite refreshes the verdict on every completion. */
+let onTaskCompleted: (() => void) | undefined;
 
 class FakeTaskManager extends EventEmitter {
   submitted: Array<{ prompt: string; chatId: string }> = [];
@@ -136,6 +139,7 @@ class FakeTaskManager extends EventEmitter {
     if (event === "task:completed") {
       this.statuses.set(taskId, TaskStatus.completed);
       this.results.set(taskId, String(args[1] ?? ""));
+      onTaskCompleted?.();
     }
     return super.emit(event, ...args);
   }
@@ -163,13 +167,44 @@ describe("CampaignManager", () => {
   /** What the compiler answers at the delivery gate; green unless a test says otherwise. */
   let compileVerdict: { ok: boolean; ran: boolean; errors?: number; detail?: string } = { ok: true, ran: true };
 
+  /**
+   * What unity_playthrough leaves behind. The delivery gate requires an ok
+   * verdict newer than the final sprint (measured 2026-09-10: delivered green,
+   * never played), so every test that expects delivery starts with one; the
+   * tests about the gate itself remove or fail it.
+   */
+  const writePlaythroughVerdict = (ok: boolean, extra: Record<string, unknown> = {}): string => {
+    const path = join(projectRoot, "Recordings", "playthrough", "playthrough-verdict.json");
+    mkdirSync(join(projectRoot, "Recordings", "playthrough"), { recursive: true });
+    writeFileSync(
+      path,
+      JSON.stringify({
+        ok,
+        reasons: ok ? [] : ["level 1 never ended: last state Playing after 60 taps"],
+        record: { scene: "Main", level: 1, autoStarted: false, tapsDriven: 12, terminalState: ok ? "LevelWon" : "Playing", reachedTerminal: ok },
+        frames: { count: 5, flat: 0, maxMotionShare: 0.3 },
+        measuredAt: new Date().toISOString(),
+        ...extra,
+      }),
+    );
+    return path;
+  };
+
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), "campaign-mgr-"));
     projectRoot = join(dir, "project");
     mkdirSync(join(projectRoot, "docs"), { recursive: true });
     writeFileSync(join(projectRoot, "docs", "Game_GDD.md"), "# Test GDD\n\nElement schedule: ...");
+    writePlaythroughVerdict(true);
     storage = new CampaignStorage(join(dir, "campaigns.db"));
     tasks = new FakeTaskManager();
+    onTaskCompleted = () => {
+      const verdict = join(projectRoot, "Recordings", "playthrough", "playthrough-verdict.json");
+      if (existsSync(verdict)) {
+        const now = new Date();
+        utimesSync(verdict, now, now);
+      }
+    };
     messages = [];
     messengerDownFor = undefined;
     compileVerdict = { ok: true, ran: true };
@@ -702,6 +737,63 @@ describe("CampaignManager", () => {
     const report = messages.map((m) => m.text).find((t) => t.includes("Campaign delivery"))!;
     expect(report).toContain("WinLevel_ReachesWonState");
     expect(report).toContain("+5 more");
+  });
+
+  it("bounces the final sprint for a missing play-through even when the suite is green (measured 2026-09-10)", async () => {
+    rmSync(join(projectRoot, "Recordings"), { recursive: true, force: true });
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    expect(tasks.submitted[2]!.prompt).toContain("PLAY-THROUGH (final sprint): before you report, run unity_playthrough");
+
+    tasks.verifications.set("task_3", {
+      testsGreen: true,
+      detail: "PlayMode verification passed: 179 of 179 tests passed (unfiltered — the whole PlayMode suite)",
+      unfiltered: true,
+    });
+    tasks.emit("task:completed", "task_3", "green, shipping");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+
+    const prompt = tasks.submitted[3]!.prompt;
+    expect(prompt).toContain("the suite is green and the project compiles, but the game was not shown to be PLAYABLE");
+    expect(prompt).toContain("PLAY-THROUGH REQUIRED: no play-through of the game as it now stands was observed");
+    expect(prompt).not.toContain("no test run was observed");
+    expect(storage.get(campaign.id)!.state).not.toBe("done");
+    expect(storage.get(campaign.id)!.milestones[2]!.playthroughVerdict).toEqual({ found: false });
+
+    // A failed verdict bounces too, and the bounce repeats its reasons.
+    writePlaythroughVerdict(false);
+    tasks.verifications.set("task_4", {
+      testsGreen: true,
+      detail: "PlayMode verification passed: 179 of 179 tests passed (unfiltered — the whole PlayMode suite)",
+      unfiltered: true,
+    });
+    tasks.emit("task:completed", "task_4", "green, shipping");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(5));
+    expect(tasks.submitted[4]!.prompt).toContain("PLAY-THROUGH REQUIRED: the last play-through FAILED: level 1 never ended");
+  });
+
+  it("the delivery report names the play-through and that the game does not start itself", async () => {
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    tasks.verifications.set("task_3", {
+      testsGreen: true,
+      detail: "PlayMode verification passed: 179 of 179 tests passed (unfiltered — the whole PlayMode suite)",
+      unfiltered: true,
+    });
+    tasks.emit("task:completed", "task_3", "green, shipping");
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+    const report = messages.map((m) => m.text).join("\n");
+    expect(report).toContain("play-through OK in Main: level 1 played to LevelWon in 12 taps");
+    expect(report).toContain("does not start a level by itself after boot");
+    expect(storage.get(campaign.id)!.milestones[2]!.playthroughVerdict).toMatchObject({ found: true, ok: true, autoStarted: false });
   });
 
   it("delivers on an UNFILTERED green", async () => {
@@ -1583,6 +1675,7 @@ describe("CampaignManager", () => {
   });
 
   it("commits the working tree when a milestone goes green", async () => {
+    rmSync(join(projectRoot, "Recordings"), { recursive: true, force: true }); // Recordings/ never enters the envelope
     const { execFileSync } = await import("node:child_process");
     const git = (...args: string[]) =>
       execFileSync("git", ["-C", projectRoot, ...args], { encoding: "utf8" });
@@ -2182,6 +2275,7 @@ describe("CampaignManager", () => {
 
     // Final sprint: the executor parks task_3 (emitted twice) and its own
     // retry lands completed inside the grace window.
+    writePlaythroughVerdict(true); // the retry played the game before reporting
     const retryId = tasks.addRetry("task_3", TaskStatus.completed);
     tasks.markTerminal(retryId, TaskStatus.completed, "final report via retry");
     tasks.verifications.set(retryId, {
