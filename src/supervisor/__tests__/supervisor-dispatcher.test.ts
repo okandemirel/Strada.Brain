@@ -548,3 +548,53 @@ describe("SupervisorDispatcher", () => {
     expect(results.find(r => (r.nodeId as any) === "B")?.status).toBe("skipped");
   });
 });
+
+describe("a node that ran out of time with work in hand (measured 2026-09-10: 139 sprites replaced, then 'failed', dependents skipped)", () => {
+  it("is reported ok-with-timeout when the aborted run hands back its artifacts, and its dependents run", async () => {
+    const executed: string[] = [];
+    const executeNode = vi.fn().mockImplementation(async (node: TaggedGoalNode, signal?: AbortSignal) => {
+      executed.push(String(node.id));
+      if (node.id === ("A" as unknown as TaggedGoalNode["id"])) {
+        await new Promise<void>((resolve) => signal?.addEventListener("abort", () => resolve(), { once: true }));
+        await new Promise((r) => setTimeout(r, 20));
+        return { ...makeOkResult(node.id, node.assignedProvider!), status: "failed", output: "aborted mid-batch", artifacts: [{ path: "Assets/Art/A.png", action: "modified" }] };
+      }
+      return makeOkResult(node.id, node.assignedProvider!);
+    });
+    const dispatcher = new SupervisorDispatcher({
+      executeNode,
+      config: { maxParallelNodes: 1, nodeTimeoutMs: 50, maxFailureBudget: 3, abandonGraceMs: 2_000 },
+    });
+    const results = await dispatcher.dispatch([
+      makeAssignedNode("A", "Batch 1", "claude"),
+      makeAssignedNode("B", "Batch 2", "claude", ["A"]),
+    ]);
+    const a = results.find((r) => String(r.nodeId) === "A")!;
+    expect(a.status).toBe("ok");
+    expect(a.output).toContain("TIME BUDGET EXHAUSTED");
+    expect(a.output).toContain("1 file change(s)");
+    expect(executed).toEqual(["A", "B"]);
+    expect(results.find((r) => String(r.nodeId) === "B")!.status).toBe("ok");
+  });
+
+  it("is still failed, and dependents skipped, when the aborted run kept nothing", async () => {
+    const executeNode = vi.fn().mockImplementation(async (node: TaggedGoalNode, signal?: AbortSignal) => {
+      if (node.id === ("A" as unknown as TaggedGoalNode["id"])) {
+        await new Promise<void>((resolve) => signal?.addEventListener("abort", () => resolve(), { once: true }));
+        return { ...makeOkResult(node.id, node.assignedProvider!), status: "failed", output: "aborted while reading", artifacts: [] };
+      }
+      return makeOkResult(node.id, node.assignedProvider!);
+    });
+    const dispatcher = new SupervisorDispatcher({
+      executeNode,
+      config: { maxParallelNodes: 1, nodeTimeoutMs: 50, maxFailureBudget: 3, abandonGraceMs: 2_000 },
+    });
+    const results = await dispatcher.dispatch([
+      makeAssignedNode("A", "Batch 1", "claude"),
+      makeAssignedNode("B", "Batch 2", "claude", ["A"]),
+    ]);
+    expect(results.find((r) => String(r.nodeId) === "A")!.status).toBe("failed");
+    expect(results.find((r) => String(r.nodeId) === "B")!.status).toBe("skipped");
+  });
+});
+

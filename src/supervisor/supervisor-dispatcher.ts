@@ -912,6 +912,33 @@ export class SupervisorDispatcher {
       // Abort the node controller so in-flight fetch() calls are cancelled
       nodeController.abort();
       const message = `${baseMsg} [node="${nodeLabel}", elapsed=${elapsed}ms, reason=${reason}]`;
+      // WORK KEPT IS NOT A FAILURE. A node that ran out of time after
+      // producing file changes used to be reported "failed", and every
+      // dependent was skipped as "dependency failed". Measured 2026-09-10: a
+      // node replaced 139 placeholder sprites in five committed batches (the
+      // measured goal was met after three), hit its 9 600 000 ms budget, and
+      // took its three dependents down with it — nodes whose first step was
+      // to re-measure and continue. Give the aborted run the same grace the
+      // settle already gives it; if it hands back its artifacts, the node is
+      // done-with-timeout and its dependents run against the work it left.
+      if (timedOut) {
+        const grace = this.config.abandonGraceMs ?? NODE_ABANDON_GRACE_MS;
+        const settled = await Promise.race([
+          nodePromise.then((r) => r, () => null),
+          this.delay(grace).then(() => null),
+        ]);
+        if (settled !== null && settled.artifacts.length > 0) {
+          return {
+            ...settled,
+            status: "ok",
+            output:
+              `TIME BUDGET EXHAUSTED after ${timeoutMs}ms — the node's work is kept ` +
+              `(${settled.artifacts.length} file change(s)); dependents run against it. ` +
+              `Last report: ${settled.output.slice(0, 600)}`,
+            duration: Date.now() - startedAt,
+          };
+        }
+      }
       throw timedOut ? new NodeTimeoutError(message) : new Error(message);
     } finally {
       if (timer !== undefined) {
