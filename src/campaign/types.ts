@@ -157,6 +157,14 @@ export interface CampaignMilestone {
    */
   deliveryVerificationBounces?: number;
   /**
+   * The final sprint's proofs still missing when its bounce budget ran out
+   * (2026-09-10). Until then the campaign declared `done` with these as
+   * caveats — "went green with NO observed test run" under "game build
+   * complete". Now the campaign is NOT DELIVERED, names them here, and resumes
+   * the final sprint by itself with a fresh budget.
+   */
+  deliveryProofsMissing?: string[];
+  /**
    * How many times the scene-hygiene gate has bounced this milestone. The
    * delivered PixelFlow tree left 14 scenes enabled in Build Settings and the
    * user could not tell which one is the game (measured 2026-09-03). The gate

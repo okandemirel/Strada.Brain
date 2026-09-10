@@ -99,6 +99,8 @@ export interface CampaignManagerOptions {
    * does not need one yet). See stage-runtime for the tool-backed default.
    */
   buildPlayer?: (projectRoot: string) => Promise<PlayerBuildEvidence>;
+  /** Pause before a NOT DELIVERED campaign resumes its final sprint by itself (default 15 min). */
+  deliveryResumeDelayMs?: number;
   /**
    * The independent second opinion asked before every delivery report
    * (user's ask, 2026-09-07: "çifte teyit"). Production wires the Codex CLI
@@ -221,6 +223,7 @@ export class CampaignManager {
   private readonly projectRoot: string;
   private readonly verifyCompile?: (projectRoot: string) => Promise<CompileVerdict>;
   private readonly buildPlayer?: (projectRoot: string) => Promise<PlayerBuildEvidence>;
+  private readonly deliveryResumeDelayMs: number;
   private readonly independentReviewer: CampaignManagerOptions["independentReviewer"];
   private readonly maxMilestoneAttempts: number;
   private readonly maxDraftAttempts: number;
@@ -239,6 +242,7 @@ export class CampaignManager {
     this.projectRoot = options.projectRoot;
     this.verifyCompile = options.verifyCompile;
     this.buildPlayer = options.buildPlayer;
+    this.deliveryResumeDelayMs = options.deliveryResumeDelayMs ?? 15 * 60_000;
     this.independentReviewer = options.independentReviewer;
     this.maxMilestoneAttempts = options.maxMilestoneAttempts ?? 2;
     this.maxDraftAttempts = options.maxDraftAttempts ?? 3;
@@ -576,6 +580,7 @@ export class CampaignManager {
     // quietly stopped being true.
     milestone.deliveryVerificationBounces = 0;
     milestone.sceneHygieneBounces = 0;
+    milestone.deliveryProofsMissing = undefined;
     milestone.startedAtMs = undefined;
     milestone.timeBoxEscalations = 0;
     campaign.state = "executing";
@@ -2017,8 +2022,11 @@ export class CampaignManager {
       // 2026-09-10: delivered green, entry scene idle after boot, no level
       // ever started at runtime. Only the final sprint is held to it, and
       // only within the same bounce budget as the test verdict.
-      const playthrough = isLast ? this.measurePlaythrough(milestone) : undefined;
-      if (playthrough !== undefined) milestone.playthroughVerdict = playthrough;
+      // Measured at EVERY sprint (2026-09-10): a fresh verdict from a mid-
+      // ladder sprint is evidence the report can show and the next sprint can
+      // build on; only the final sprint is held to it.
+      const playthrough = this.measurePlaythrough(milestone);
+      milestone.playthroughVerdict = playthrough;
       const playthroughMissing = isLast && (playthrough === undefined || !playthrough.found || playthrough.ok !== true);
       // THE GDD'S OWN NUMBERS. "60 fps", "loads in under 3 s", "a round lasts
       // 30–90 s" were repeated to the planner and measured by nothing until
@@ -2045,6 +2053,18 @@ export class CampaignManager {
       if (build !== undefined) milestone.buildVerdict = build;
       const buildBroken = Boolean(build?.ran) && build?.ok !== true;
       const deliveryProofMissing = earlierProofsMissing || buildBroken;
+      // What is missing, in words — for the bounce, the NOT DELIVERED report
+      // and the stored milestone. Empty when everything stands.
+      const missingProofs: string[] = [];
+      if (isLast) {
+        if (!milestone.testVerdict) missingProofs.push("no test run was observed");
+        else if (milestone.testVerdictUnfiltered !== true) missingProofs.push("the only green test run was FILTERED (a subset the sprint chose)");
+        if (compileBroken) missingProofs.push(`the project does not compile${typeof compile.errors === "number" ? ` (${compile.errors} error(s))` : ""}`);
+        if (playthroughMissing) missingProofs.push(describePlaythrough(playthrough).slice(0, 220));
+        if (claims?.refusal) missingProofs.push(claims.refusal.slice(0, 220));
+        if (buildBroken) missingProofs.push(`the player build failed: ${(build?.reasons ?? []).slice(0, 2).join("; ") || build?.detail || "no reason recorded"}`.slice(0, 220));
+        milestone.deliveryProofsMissing = missingProofs;
+      }
       if (isLast && deliveryProofMissing && deliveryBouncesSpent < this.maxMilestoneAttempts) {
         // DELIVERY GATE: "the whole game runs" was only ever a sentence in the
         // planner's prompt — nothing in code required the final sprint to
@@ -2282,21 +2302,35 @@ export class CampaignManager {
         // delivery bounces spent, a tree that still does not build was
         // declared "game build complete" with the compile failure as a
         // footnote mark.
-        if (milestone.structureRefused === true || compileBroken) {
+        // DELIVERY GATES ARE NOT WAIVABLE (2026-09-10). The suite, the
+        // play-through, the GDD's numbers and the player build are held to
+        // the same rule as the structural check and the compiler: when the
+        // bounce budget runs out with a proof still missing, the campaign is
+        // NOT DELIVERED — it used to declare `done` with "went green with NO
+        // observed test run" as a caveat under "game build complete". It
+        // then resumes the final sprint BY ITSELF after a pause, with a fresh
+        // budget, so a GDD runs until the game is actually done; a person can
+        // resume sooner with "kampanya devam".
+        if (milestone.structureRefused === true || compileBroken || missingProofs.length > 0) {
           campaign.state = "failed";
           campaign.lastError = compileBroken
             ? `the project does not compile${typeof compile.errors === "number" ? ` (${compile.errors} error(s))` : ""}, and the delivery bounce budget is spent`
-            : "the shipped scenes do not render the project's own art, and the structural " +
-              "bounce budget is spent";
+            : milestone.structureRefused === true
+            ? "the shipped scenes do not render the project's own art, and the structural " +
+              "bounce budget is spent"
+            : `delivery proofs still missing after the bounce budget: ${missingProofs.join("; ")}`.slice(0, 600);
+          const resumeMs = this.deliveryResumeDelayMs;
+          campaign.autoReviveAt = Date.now() + resumeMs;
           this.persist(campaign);
           this.cancelLiveLineages(campaign, "campaign stopped short of delivery");
           await this.gatherIndependentReview(campaign);
           await this.tell(
             campaign,
             `${this.buildDeliveryReport(campaign)}${commitNote}\n\n` +
-              "Reply **kampanya devam** to give the final sprint a fresh budget against this, " +
-              "or change the GDD if this is the game you wanted.",
+              `The final sprint resumes by itself in ${Math.round(resumeMs / 60_000)} min with a fresh budget against this. ` +
+              "Reply **kampanya devam** to resume now, or change the GDD if this is the game you wanted.",
           );
+          this.scheduleAutoRevive(campaign.id, resumeMs);
           return;
         }
         campaign.state = "done";
@@ -3148,9 +3182,13 @@ export class CampaignManager {
     const structureRefused = newestStructural?.structureRefused === true;
     const compiled = [...campaign.milestones].reverse().find((m) => m.compileVerdict?.ran);
     const compileBroken = compiled?.compileVerdict?.ran === true && compiled.compileVerdict.ok === false;
+    const finalMilestone = campaign.milestones[campaign.milestones.length - 1];
+    const proofsMissing = campaign.state !== "done" ? finalMilestone?.deliveryProofsMissing ?? [] : [];
     const lines = [
       structureRefused
         ? `⛔ **NOT DELIVERED — the shipped scenes do not render the project's own art**`
+        : proofsMissing.length > 0 && !compileBroken
+        ? `⛔ **NOT DELIVERED — the final sprint's proofs are missing: ${proofsMissing.slice(0, 2).join("; ").slice(0, 240)}${proofsMissing.length > 2 ? "; …" : ""}**`
         : compileBroken
         ? `⛔ **NOT DELIVERED — the project does not compile${
             typeof compiled?.compileVerdict?.errors === "number" ? ` (${compiled.compileVerdict.errors} error(s))` : ""
@@ -3172,6 +3210,9 @@ export class CampaignManager {
       // waived sprint showed as a clean ✅ with no mark and no caveat.
       const isFinal = i === campaign.milestones.length - 1;
       if (m.deliveryVerificationBounced) marks.push("delivery-verification bounce spent");
+      if (!isFinal && m.playthroughVerdict?.found) {
+        marks.push(describePlaythrough(m.playthroughVerdict).slice(0, 160));
+      }
       if (isFinal) {
         const line = describePlaythrough(m.playthroughVerdict);
         if (m.playthroughVerdict?.found && m.playthroughVerdict.ok) marks.push(line);

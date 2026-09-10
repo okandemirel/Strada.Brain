@@ -2464,44 +2464,61 @@ describe("CampaignManager", () => {
     expect(tasks.submitted).toHaveLength(3);
   });
 
-  it("a delivery whose final sprint never ran a test SAYS so in the report", async () => {
-    // Audited 2026-09-02: the delivery gate is one-shot by design, and the
-    // report rendered the waived sprint as a clean green — no "tests:" mark,
-    // no caveat, under "game build complete".
+  it("proofs still missing after the bounce budget: NOT DELIVERED, named, and the final sprint resumes by itself (non-waivable 2026-09-10)", async () => {
+    rmSync(join(projectRoot, "Recordings"), { recursive: true, force: true });
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
     await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
     settleMilestone("sprint A done");
     await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
     settleMilestone("sprint B done");
     await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
-
-    // Final sprint completes with no observed test run: one delivery bounce.
-    tasks.emit("task:completed", "task_3", "everything works, shipping it");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
-    // The bounce text demands a captured frame, which arms the visual gate:
-    // one visual bounce, then the ladder proceeds.
-    tasks.emit("task:completed", "task_4", "shipping it again");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(5));
-    tasks.emit("task:completed", "task_5", "shipping it, third time");
-    // The delivery gate now bounces while the sprint still has attempts, so
-    // keep settling until the ladder gives up and delivers with the caveat.
-    for (let round = 0; round < 6 && storage.get(campaign.id)!.state !== "done"; round++) {
+    const green = { testsGreen: true, detail: "PlayMode verification passed: 179 of 179 tests passed (unfiltered — the whole PlayMode suite)", unfiltered: true };
+    // Green suite, no play-through, every time: the gate bounces while the budget lasts…
+    for (let round = 0; round < 6 && storage.get(campaign.id)!.state === "executing"; round++) {
       const before = tasks.submitted.length;
-      // Always settle the CURRENT tip: each bounce mints a new task id.
+      tasks.verifications.set(`task_${before}`, green);
+      tasks.emit("task:completed", `task_${before}`, "shipping it");
+      await vi.waitFor(() => {
+        const state = storage.get(campaign.id)!.state;
+        expect(state !== "executing" || tasks.submitted.length > before).toBe(true);
+      });
+    }
+    // …and then it does NOT deliver.
+    const after = storage.get(campaign.id)!;
+    expect(after.state).toBe("failed");
+    expect(after.deliveryReported).not.toBe(true);
+    expect(after.lastError).toMatch(/^delivery proofs still missing after the bounce budget: play-through: NOT observed/);
+    expect(after.milestones[2]!.deliveryProofsMissing).toEqual([expect.stringMatching(/^play-through: NOT observed/)]);
+    const report = messages.map((m) => m.text).find((t) => t.includes("NOT DELIVERED"))!;
+    expect(report.split("\n")[0]).toContain("NOT DELIVERED — the final sprint's proofs are missing: play-through: NOT observed");
+    expect(report).toContain("resumes by itself in 15 min");
+    expect(report).toContain("kampanya devam");
+    // Resumes on its own: the revive is armed.
+    expect(after.autoReviveAt).toBeGreaterThan(Date.now() + 10 * 60_000);
+    expect(messages.some((m) => m.text.includes("Campaign delivery — game build"))).toBe(false);
+  });
+
+  it("a final sprint that never ran a test is NOT delivered (was: delivered with a caveat)", async () => {
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    for (let round = 0; round < 8 && storage.get(campaign.id)!.state === "executing"; round++) {
+      const before = tasks.submitted.length;
       tasks.emit("task:completed", `task_${before}`, "shipping it again");
       await vi.waitFor(() => {
         const state = storage.get(campaign.id)!.state;
-        expect(state === "done" || tasks.submitted.length > before).toBe(true);
+        expect(state !== "executing" || tasks.submitted.length > before).toBe(true);
       });
     }
-    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
-
-    const report = messages.at(-1)!.text;
-    expect(report).toContain("Campaign delivery");
-    expect(report).toContain("Sprint C — Delivery");
+    const after = storage.get(campaign.id)!;
+    expect(after.state).toBe("failed");
+    expect(after.lastError).toContain("no test run was observed");
+    const report = messages.map((m) => m.text).find((t) => t.includes("NOT DELIVERED"))!;
+    expect(report).toContain("no test run was observed");
     expect(report).toMatch(/NO observed test run/);
-    expect(report).toContain("How these greens were reached");
-    expect(report).toMatch(/Sprint C — Delivery: .*never seen to pass/);
   });
 
   it("revival resets the bounce COUNTERS the gates read, not just the booleans", async () => {
