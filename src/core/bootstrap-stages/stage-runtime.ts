@@ -491,6 +491,23 @@ export async function initializeTaskRuntimeStage(
             return parsePlayerBuildOutput(String(result.content ?? ""));
           }
         : undefined,
+      // Play the artifact the campaign built: unity_run_player writes its
+      // verdict under Recordings/player-playthrough, which the campaign reads.
+      runPlayer: params.toolRegistry
+        ? async (projectRoot: string, artifactPath: string) => {
+            const registry = params.toolRegistry!;
+            if (!registry.getAvailableToolNames().includes("unity_run_player")) throw new Error("unity_run_player is not registered");
+            await registry.execute(
+              "unity_run_player",
+              { artifactPath },
+              {
+                projectPath: projectRoot,
+                workingDirectory: projectRoot,
+                readOnly: false,
+              } as import("../../agents/tools/tool-core.interface.js").ToolContext,
+            );
+          }
+        : undefined,
       styleAnalysis: new StyleAnalysis(params.providerManager.getProvider("")),
     });
     campaignManager.attachEvents();

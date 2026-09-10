@@ -23,7 +23,7 @@ import { GDD_AUDIT_FULL_CHARS } from "./campaign-planner.js";
 import type { CampaignStorage } from "./campaign-storage.js";
 import { detectCampaignIntent } from "./campaign-intake.js";
 import { assessSceneHygiene, renderSceneHygiene } from "./scene-hygiene.js";
-import { readPlaythroughVerdict, describePlaythrough, playthroughDirective } from "./playthrough-verdict.js";
+import { readPlaythroughVerdict, describePlaythrough, playthroughDirective, PLAYER_PLAYTHROUGH_VERDICT_REL } from "./playthrough-verdict.js";
 import { assessNumericClaims, claimsRefusal, describeClaims, extractNumericClaims } from "./gdd-claims.js";
 import { deliveryReviewPrompt, renderSecondOpinion } from "../agents/review/codex-second-opinion.js";
 import {
@@ -40,6 +40,7 @@ import { describeDimensionality } from "../agents/autonomy/gdd-dimensionality.js
 import { describeMedia } from "../agents/autonomy/gdd-media.js";
 import type { Campaign, CampaignMilestone,
   PlayerBuildEvidence,
+  PlaythroughEvidence,
 } from "./types.js";
 import { buildCampaignStatus, type CampaignStatusSnapshot } from "./campaign-status.js";
 import { generateCampaignId } from "./types.js";
@@ -101,6 +102,12 @@ export interface CampaignManagerOptions {
   buildPlayer?: (projectRoot: string) => Promise<PlayerBuildEvidence>;
   /** Pause before a NOT DELIVERED campaign resumes its final sprint by itself (default 15 min). */
   deliveryResumeDelayMs?: number;
+  /**
+   * Play the game inside the artifact the campaign just built (unity_run_player,
+   * 2026-09-10). The verdict is read back from the project afterwards; the
+   * frame rate it measures is the one a design document's target means.
+   */
+  runPlayer?: (projectRoot: string, artifactPath: string) => Promise<void>;
   /**
    * Hand a file to the origin chat (2026-09-10): the newest captured frame of
    * the running game travels with every delivery report, so a person sees the
@@ -230,6 +237,7 @@ export class CampaignManager {
   private readonly verifyCompile?: (projectRoot: string) => Promise<CompileVerdict>;
   private readonly buildPlayer?: (projectRoot: string) => Promise<PlayerBuildEvidence>;
   private readonly deliveryResumeDelayMs: number;
+  private readonly runPlayer?: (projectRoot: string, artifactPath: string) => Promise<void>;
   private readonly attach?: (chatId: string, attachment: import("../channels/channel-messages.interface.js").Attachment) => Promise<void>;
   private readonly independentReviewer: CampaignManagerOptions["independentReviewer"];
   private readonly maxMilestoneAttempts: number;
@@ -250,6 +258,7 @@ export class CampaignManager {
     this.verifyCompile = options.verifyCompile;
     this.buildPlayer = options.buildPlayer;
     this.deliveryResumeDelayMs = options.deliveryResumeDelayMs ?? 15 * 60_000;
+    this.runPlayer = options.runPlayer;
     this.attach = options.attach;
     this.independentReviewer = options.independentReviewer;
     this.maxMilestoneAttempts = options.maxMilestoneAttempts ?? 2;
@@ -1218,7 +1227,9 @@ export class CampaignManager {
           "It also reports whether the game starts play BY ITSELF after boot; if " +
           "it does not, wire the GDD's entry flow so a person who opens the entry scene is playing, not " +
           "staring at an idle screen. Then run unity_build_player for the GDD's platform (or the project's " +
-          "active target): a delivery is a runnable artifact, and its measured path and size belong in your report.";
+          "active target): a delivery is a runnable artifact, and its measured path and size belong in your report. " +
+          "Then run unity_run_player on that artifact: it plays the game inside the built player and measures the " +
+          "real frame rate — the number the GDD's frame-rate target means.";
       }
       this.attachStructureMeasurement(campaign, milestone);
     }
@@ -2042,9 +2053,6 @@ export class CampaignManager {
       // listed as NOT MEASURED with the reason; a blown budget the medium can
       // answer (boot time, session length) refuses delivery like the other
       // proofs, within the same bounce budget.
-      const claims = isLast ? this.measureGddClaims(campaign, playthrough) : undefined;
-      if (claims) milestone.gddClaims = claims.lines;
-      const claimsBroken = Boolean(claims?.refusal);
       // THE ARTIFACT. A delivery is a runnable player, not an editor project
       // that compiles. The campaign builds it ITSELF from the project root,
       // once the other proofs stand — the worker's "built successfully" is a
@@ -2052,15 +2060,31 @@ export class CampaignManager {
       // while earlier proofs are missing (a build is minutes), and disclosed
       // as NOT MEASURED then, never as a pass.
       const earlierProofsMissing =
-        !milestone.testVerdict || milestone.testVerdictUnfiltered !== true || compileBroken || playthroughMissing || claimsBroken;
+        !milestone.testVerdict || milestone.testVerdictUnfiltered !== true || compileBroken || playthroughMissing;
       const build = isLast
         ? earlierProofsMissing
-          ? { ran: false, detail: "not attempted: earlier delivery proofs are missing (suite, compile, play-through or GDD numbers)" }
+          ? { ran: false, detail: "not attempted: earlier delivery proofs are missing (suite, compile or play-through)" }
           : await this.measureBuild()
         : undefined;
       if (build !== undefined) milestone.buildVerdict = build;
       const buildBroken = Boolean(build?.ran) && build?.ok !== true;
-      const deliveryProofMissing = earlierProofsMissing || buildBroken;
+      // THE PLAYER, PLAYED. With an artifact in hand the campaign plays it
+      // (unity_run_player) — real rendering, real frame rate — and reads the
+      // verdict back. A player that runs but cannot be played to an outcome
+      // blocks; an artifact this machine cannot run (an .apk) is disclosed.
+      const player = isLast && build?.ran && build.ok === true ? await this.measurePlayerRun(milestone, build) : undefined;
+      if (player !== undefined) milestone.playerPlaythrough = player;
+      const playerBroken = player !== undefined && player.found && player.ok !== true;
+      // THE GDD'S OWN NUMBERS. "60 fps", "loads in under 3 s", "a round lasts
+      // 30–90 s" were repeated to the planner and measured by nothing until
+      // 2026-09-10. Each is now answered from the play-throughs' timing (the
+      // built player's frame rate when it was played) or listed as NOT
+      // MEASURED with the reason; a blown budget the medium can answer
+      // refuses delivery like the other proofs, within the same bounce budget.
+      const claims = isLast ? this.measureGddClaims(campaign, playthrough, player) : undefined;
+      if (claims) milestone.gddClaims = claims.lines;
+      const claimsBroken = Boolean(claims?.refusal);
+      const deliveryProofMissing = earlierProofsMissing || buildBroken || playerBroken || claimsBroken;
       // What is missing, in words — for the bounce, the NOT DELIVERED report
       // and the stored milestone. Empty when everything stands.
       const missingProofs: string[] = [];
@@ -2069,8 +2093,9 @@ export class CampaignManager {
         else if (milestone.testVerdictUnfiltered !== true) missingProofs.push("the only green test run was FILTERED (a subset the sprint chose)");
         if (compileBroken) missingProofs.push(`the project does not compile${typeof compile.errors === "number" ? ` (${compile.errors} error(s))` : ""}`);
         if (playthroughMissing) missingProofs.push(describePlaythrough(playthrough).slice(0, 220));
-        if (claims?.refusal) missingProofs.push(claims.refusal.slice(0, 220));
         if (buildBroken) missingProofs.push(`the player build failed: ${(build?.reasons ?? []).slice(0, 2).join("; ") || build?.detail || "no reason recorded"}`.slice(0, 220));
+        if (playerBroken && player) missingProofs.push(`inside the built player: ${describePlaythrough(player)}`.slice(0, 220));
+        if (claims?.refusal) missingProofs.push(claims.refusal.slice(0, 220));
         milestone.deliveryProofsMissing = missingProofs;
       }
       if (isLast && deliveryProofMissing && deliveryBouncesSpent < this.maxMilestoneAttempts) {
@@ -2090,6 +2115,9 @@ export class CampaignManager {
           ? `\nPLAYER BUILD FAILED: the campaign built the player from the project root and it did not produce a runnable artifact — ${
               (build?.reasons ?? []).slice(0, 4).join("; ") || build?.detail || "no reason recorded"
             }. Run unity_build_player yourself, fix what it names, and run it again until it reports the artifact's path and size; a delivery is a runnable artifact.`
+          : "";
+        const playerClause = playerBroken && player
+          ? `\nPLAYER PLAY-THROUGH FAILED: the campaign built the player and played it (unity_run_player); ${describePlaythrough(player)}. Fix what it names and run unity_run_player yourself until its verdict is ok.`
           : "";
         const suiteClause = !suiteProofMissing && !playthroughMissing && !claimsBroken && buildBroken
           ? "the suite is green, the game was played and the GDD's numbers hold, but the PLAYER DOES NOT BUILD. "
@@ -2115,7 +2143,8 @@ export class CampaignManager {
           "rejected: run the tools, change the code, and let the suite's own output be your report." +
           playthroughClause +
           claimsClause +
-          buildClause;
+          buildClause +
+          playerClause;
         // SAY EVERYTHING THAT IS WRONG, NOT ONE THING AT A TIME. The
         // structural check runs only after this gate passes, so a sprint stuck
         // here never learns its scenes render nothing — measured live
@@ -2735,10 +2764,30 @@ export class CampaignManager {
     }
   }
 
+  /**
+   * Play the artifact the campaign just built and read the verdict back
+   * (unity_run_player writes it under Recordings/player-playthrough). Not
+   * measurable — no runner configured, or the run could not start — is said.
+   */
+  private async measurePlayerRun(milestone: CampaignMilestone, build: PlayerBuildEvidence): Promise<PlaythroughEvidence> {
+    if (!this.runPlayer || !build.artifactPath) return { found: false };
+    const since = Date.now();
+    try {
+      await this.runPlayer(this.projectRoot, build.artifactPath);
+    } catch (err) {
+      getLoggerSafe().warn("The built player could not be played", {
+        milestone: milestone.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    return readPlaythroughVerdict(this.projectRoot, since - 1000, PLAYER_PLAYTHROUGH_VERDICT_REL);
+  }
+
   /** The GDD's numeric claims held against the play-through timing (see gdd-claims.ts). */
   private measureGddClaims(
     campaign: Campaign,
     playthrough: ReturnType<typeof readPlaythroughVerdict> | undefined,
+    player?: ReturnType<typeof readPlaythroughVerdict>,
   ): { lines: string[]; refusal?: string } {
     let gddText = campaign.gddText;
     if (!gddText && campaign.gddPath) {
@@ -2750,7 +2799,7 @@ export class CampaignManager {
     }
     if (!gddText) return { lines: ["GDD numbers: the GDD text was not available at delivery, so none were checked"] };
     const { claims, truncated } = extractNumericClaims(gddText);
-    const assessments = assessNumericClaims(claims, playthrough);
+    const assessments = assessNumericClaims(claims, playthrough, player);
     const refusal = claimsRefusal(assessments);
     return { lines: describeClaims(assessments, truncated), ...(refusal ? { refusal } : {}) };
   }
@@ -3256,6 +3305,11 @@ export class CampaignManager {
         else caveats.push(`${m.title}: ${line}`);
         if (m.playthroughVerdict?.found && m.playthroughVerdict.autoStarted === false) {
           caveats.push(`${m.title}: the game does not start play by itself after boot — a person opening the entry scene sees an idle screen`);
+        }
+        if (m.playerPlaythrough?.found) {
+          const line = `inside the built player: ${describePlaythrough(m.playerPlaythrough)}`;
+          if (m.playerPlaythrough.ok) marks.push(line);
+          else caveats.push(`${m.title}: ${line}`);
         }
         // The GDD's numbers: a MET line is a mark, everything else a caveat —
         // "not measured" included, so a report never reads as if it checked.

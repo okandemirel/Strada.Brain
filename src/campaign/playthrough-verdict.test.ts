@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, utimesSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { readPlaythroughVerdict, describePlaythrough, playthroughDirective, PLAYTHROUGH_VERDICT_REL } from "./playthrough-verdict.js";
+import { readPlaythroughVerdict, describePlaythrough, playthroughDirective, PLAYTHROUGH_VERDICT_REL, PLAYER_PLAYTHROUGH_VERDICT_REL } from "./playthrough-verdict.js";
 
 let root: string;
 beforeEach(() => { root = mkdtempSync(join(tmpdir(), "playthrough-verdict-")); });
@@ -52,6 +52,15 @@ describe("the play-through verdict the campaign reads back (measured 2026-09-10:
     ]);
     expect(describePlaythrough(many)).toContain("; played 3: #1 Won in 12, #2 None in 60, #3 Refused in 0;");
     expect(describePlaythrough(many)).toMatch(/; catalog 12 session\(s\)$/);
+  });
+
+  it("the built player's verdict is read from its own path and names its medium (2026-09-10)", () => {
+    mkdirSync(join(root, "Recordings", "player-playthrough"), { recursive: true });
+    writeFileSync(join(root, PLAYER_PLAYTHROUGH_VERDICT_REL), JSON.stringify({ ...ok, perf: { medium: "player", bootSeconds: 1.1, playSeconds: 10, playFrames: 600, avgFps: 60, worstFrameMs: 40 } }));
+    expect(readPlaythroughVerdict(root, 0)).toEqual({ found: false });
+    const e = readPlaythroughVerdict(root, 0, PLAYER_PLAYTHROUGH_VERDICT_REL);
+    expect(e.found).toBe(true);
+    expect(describePlaythrough(e)).toContain("timing (built player, real rendering): boot 1.1 s, 60.0 fps average over 600 frames, worst frame 40 ms");
   });
 
   it("timing rides along, named by its medium, and is absent when the verdict has none", () => {

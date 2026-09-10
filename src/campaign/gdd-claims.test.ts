@@ -67,6 +67,20 @@ describe("assessNumericClaims", () => {
     expect(lines).toHaveLength(5);
   });
 
+  it("the built player answers the frame-rate claim: measured, and blocking (2026-09-10)", () => {
+    const player = (avgFps: number): PlaythroughEvidence =>
+      evidence({ perf: { medium: "player", bootSeconds: 1.1, playSeconds: 10, playFrames: Math.round(avgFps * 10), avgFps, worstFrameMs: 40 } });
+    const slow = assessNumericClaims(claims, evidence(), player(42));
+    expect(slow[0]).toMatchObject({ status: "not_met", measured: 42, blocking: true });
+    expect(slow[0]!.note).toContain("42.0 fps average over 420 frames in the built player (real rendering), worst frame 40 ms");
+    expect(claimsRefusal(slow)).toContain("frame rate ≥ 60 fps measured 42 fps");
+    const fast = assessNumericClaims(claims, evidence(), player(61));
+    expect(fast[0]).toMatchObject({ status: "met", measured: 61, blocking: true });
+    // A player verdict without timing falls back to the editor's disclosure.
+    const silent = assessNumericClaims(claims, evidence(), evidence({ perf: undefined }));
+    expect(silent[0]).toMatchObject({ status: "unmeasured", blocking: false });
+  });
+
   it("level count: unmeasured without a session catalog, measured against it with one, and the played sessions are named", () => {
     const noCatalog = assessNumericClaims(claims, evidence());
     expect(noCatalog.find((x) => x.claim.kind === "level_count")).toMatchObject({

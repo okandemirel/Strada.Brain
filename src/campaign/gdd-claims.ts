@@ -116,13 +116,30 @@ export function extractNumericClaims(gddText: string): { claims: NumericClaim[];
 export function assessNumericClaims(
   claims: readonly NumericClaim[],
   playthrough: PlaythroughEvidence | undefined,
+  /** The play-through inside the built player, when the campaign ran one — answers the frame rate. */
+  player?: PlaythroughEvidence,
 ): ClaimAssessment[] {
   const perf = playthrough?.found ? playthrough.perf : undefined;
+  const playerPerf = player?.found ? player.perf : undefined;
   const medium = perf?.medium === "editor-playmode-batch" ? "editor play mode, batch" : perf?.medium ?? "";
   const noRun = "no play-through of this build was observed (unity_playthrough leaves the timing)";
   return claims.map((claim): ClaimAssessment => {
     switch (claim.kind) {
       case "fps": {
+        // The built player answers the claim (2026-09-10): real rendering,
+        // vsync, the frame rate a person sees. Measured, and blocking.
+        if (playerPerf?.avgFps !== undefined && playerPerf.medium === "player") {
+          const met = playerPerf.avgFps >= claim.value;
+          return {
+            claim,
+            status: met ? "met" : "not_met",
+            measured: Number(playerPerf.avgFps.toFixed(1)),
+            note:
+              `${playerPerf.avgFps.toFixed(1)} fps average over ${playerPerf.playFrames} frames in the built player (real rendering)` +
+              (playerPerf.worstFrameMs !== undefined ? `, worst frame ${playerPerf.worstFrameMs.toFixed(0)} ms` : ""),
+            blocking: true,
+          };
+        }
         if (!perf || perf.avgFps === undefined) return { claim, status: "unmeasured", note: perf ? "the play-through recorded no frame timing" : noRun, blocking: false };
         // Measured live 2026-09-10: 184 689 frames in 42 s = 4390 "fps" in the
         // batch editor, which renders only at capture points. That number says

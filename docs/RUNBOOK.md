@@ -55,6 +55,7 @@ or the web chat. The ones an operator needs:
 |---|---|---|
 | Play-through verdict (ok/reasons, sessions, timing, frames) | `<project>/Recordings/playthrough/playthrough-verdict.json` + `frame_*.png` | `unity_playthrough` (Strada.MCP); the campaign reads it at every sprint, requires it ok at the last |
 | Player build | `<project>/Builds/<target>/…`, verdict in the tool output JSON | `unity_build_player`, run by the campaign itself at the final gate |
+| Play-through inside the built player (real frame rate) | `<project>/Recordings/player-playthrough/playthrough-verdict.json` + `frame_*.png` | `unity_run_player`, run by the campaign itself right after a successful build; its fps answers the GDD's frame-rate target |
 | Tool failures (full input/output) | `~/.strada/tool-failures/<date>/<time>-<tool>.txt` | every failed tool call |
 | Provider health / cooldowns | `~/.strada/provider-health.json` (identity = endpoint\|model\|key hash; credential cooldown 8 h) | provider fallback chain |
 | Lease workspaces | `$TMPDIR/strada-workspaces/<task>-<uuid>` (git worktrees under `<project>/.git/worktrees`), `.strada-lease-owner.json` names the owning pid | workspace lease manager |

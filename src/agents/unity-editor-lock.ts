@@ -39,6 +39,7 @@ const EDITOR_EXCLUSIVE_NAMES: ReadonlySet<string> = new Set([
   "unity_playthrough",
   "unity_scene_build",
   "unity_build_player",
+  "unity_run_player",
 ]);
 
 /** Does this tool need the editor to itself? */

@@ -49,6 +49,8 @@ export const VERIFY_TOOLS: ReadonlySet<string> = new Set([
   "unity_playthrough",
   // Builds the player headlessly and measures the artifact.
   "unity_build_player",
+  // Plays the game inside the built player: the only frame rate that speaks for what a person sees.
+  "unity_run_player",
 ]);
 
 const VERIFY_TOOL_NAME_RE =

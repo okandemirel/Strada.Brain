@@ -23,6 +23,8 @@ import { join } from "node:path";
 import type { PlaythroughEvidence, PlaythroughPerf } from "./types.js";
 
 export const PLAYTHROUGH_VERDICT_REL = join("Recordings", "playthrough", "playthrough-verdict.json");
+/** The same verdict shape, written by unity_run_player after playing INSIDE the built player. */
+export const PLAYER_PLAYTHROUGH_VERDICT_REL = join("Recordings", "player-playthrough", "playthrough-verdict.json");
 
 interface VerdictFile {
   ok?: unknown;
@@ -54,8 +56,8 @@ interface VerdictFile {
  * was written at or after `sinceMs`. An older file is reported as stale so the
  * gate can say "you have a verdict, but from before this sprint's changes".
  */
-export function readPlaythroughVerdict(projectRoot: string, sinceMs: number): PlaythroughEvidence {
-  const path = join(projectRoot, PLAYTHROUGH_VERDICT_REL);
+export function readPlaythroughVerdict(projectRoot: string, sinceMs: number, rel: string = PLAYTHROUGH_VERDICT_REL): PlaythroughEvidence {
+  const path = join(projectRoot, rel);
   if (!existsSync(path)) return { found: false };
   let mtimeMs: number;
   try {
@@ -152,7 +154,7 @@ export function describePerf(p: PlaythroughPerf): string {
   if (p.bootSeconds !== undefined) parts.push(`boot ${p.bootSeconds.toFixed(1)} s`);
   if (p.avgFps !== undefined) parts.push(`${p.avgFps.toFixed(1)} fps average over ${p.playFrames} frames`);
   if (p.worstFrameMs !== undefined) parts.push(`worst frame ${p.worstFrameMs.toFixed(0)} ms`);
-  const medium = p.medium === "editor-playmode-batch" ? "editor play mode, batch — not the shipped player" : p.medium;
+  const medium = p.medium === "editor-playmode-batch" ? "editor play mode, batch — not the shipped player" : p.medium === "player" ? "built player, real rendering" : p.medium;
   return `timing (${medium}): ${parts.length > 0 ? parts.join(", ") : "nothing recorded"}`;
 }
 

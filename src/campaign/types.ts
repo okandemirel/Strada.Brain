@@ -198,6 +198,12 @@ export interface CampaignMilestone {
    */
   playthroughVerdict?: PlaythroughEvidence;
   /**
+   * The play-through the campaign ran INSIDE the built player at the delivery
+   * gate (unity_run_player, 2026-09-10): the same drive with real rendering,
+   * the only frame rate that speaks for what a person sees. Absent = never run.
+   */
+  playerPlaythrough?: PlaythroughEvidence;
+  /**
    * The GDD's own numbers (a frame-rate target, a load-time budget, a level
    * count, a session length) held against what was measured at delivery —
    * one line per claim: met, NOT met, or not measurable yet, never silent.

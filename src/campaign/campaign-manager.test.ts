@@ -166,6 +166,25 @@ describe("CampaignManager", () => {
   const ctx = { chatId: "cli-local", channelType: "cli", userId: "u1" };
   /** What the compiler answers at the delivery gate; green unless a test says otherwise. */
   let compileVerdict: { ok: boolean; ran: boolean; errors?: number; detail?: string } = { ok: true, ran: true };
+  /** Artifacts the campaign played inside the built player, and what the fake player leaves behind. */
+  let playerRuns: string[] = [];
+  let playerVerdictOnRun: { ok: boolean; extra: Record<string, unknown> } | undefined;
+  const writePlayerVerdict = (ok: boolean, extra: Record<string, unknown> = {}, root: string = projectRoot): void => {
+    const dir = join(root, "Recordings", "player-playthrough");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "playthrough-verdict.json"),
+      JSON.stringify({
+        ok,
+        reasons: ok ? [] : ["session 1 never ended after 60 actions (phases seen: Playing)"],
+        record: { medium: "player", scene: "Entry", session: 1, autoStarted: false, actions: 12, outcome: ok ? "Won" : "None", reachedOutcome: ok },
+        frames: { count: 5, flat: 0, maxMotionShare: 0.3 },
+        perf: { medium: "player", bootSeconds: 1.1, playSeconds: 10, playFrames: 600, avgFps: 60, worstFrameMs: 40 },
+        measuredAt: new Date().toISOString(),
+        ...extra,
+      }),
+    );
+  };
   /** Files the campaign handed to the chat (the newest gameplay frame with a delivery report). */
   let attached: Array<{ chatId: string; name: string; url?: string; type: string }> = [];
   /** What the campaign's own player build answers at the delivery gate; a real artifact unless a test says otherwise. */
@@ -215,6 +234,8 @@ describe("CampaignManager", () => {
     messengerDownFor = undefined;
     compileVerdict = { ok: true, ran: true };
     attached = [];
+    playerRuns = [];
+    playerVerdictOnRun = { ok: true, extra: {} };
     buildVerdict = {
       ran: true, ok: true, target: "StandaloneOSX", artifactPath: "/tmp/Builds/StandaloneOSX/Game.app", sizeBytes: 88_000_000, durationMs: 120_000, scenes: 2,
     };
@@ -228,6 +249,7 @@ describe("CampaignManager", () => {
       // The gate measures the compiler; tests drive it through this.
       verifyCompile: async () => compileVerdict,
       buildPlayer: async () => buildVerdict,
+      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); },
       attach: async (chatId, a) => { attached.push({ chatId, name: a.name, url: a.url, type: a.type }); },
       planner,
       taskManager: tasks as unknown as TaskManager,
@@ -807,8 +829,9 @@ describe("CampaignManager", () => {
     expect(prompt).toContain("THE GDD'S OWN NUMBERS ARE NOT MET: boot time ≤ 1 s measured 2.4 s");
     // The batch-editor frame rate is a floor, not the player's: reported, never a refusal.
     expect(prompt).not.toContain("frame rate ≥ 60 fps measured");
+    // The play-through stood, so the campaign built and played the player: its frame rate answers the fps claim; the boot budget still fails.
     expect(storage.get(campaign.id)!.milestones[2]!.gddClaims).toEqual([
-      'GDD frame rate ≥ 60 fps: NOT MEASURED — 30.0 fps loop rate over 900 frames in editor play mode, batch, which renders only at capture points (worst frame 90 ms) — no evidence about the player\'s frame rate; a measurement inside the built player is the next rung (GDD: "Target 60 fps.")',
+      "GDD frame rate ≥ 60 fps: MET — 60.0 fps average over 600 frames in the built player (real rendering), worst frame 40 ms",
       "GDD boot time ≤ 1 s: NOT MET — scene load → services in 2.4 s (editor play mode, batch)",
     ]);
 
@@ -818,7 +841,8 @@ describe("CampaignManager", () => {
     await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
     const report = messages.map((m) => m.text).join("\n");
     expect(report).toContain("GDD boot time ≤ 1 s: MET — scene load → services in 0.6 s (editor play mode, batch)");
-    expect(report).toContain("GDD frame rate ≥ 60 fps: NOT MEASURED — 30.0 fps loop rate");
+    // Delivered: the campaign built and played the player, whose frame rate answers the claim.
+    expect(report).toContain("GDD frame rate ≥ 60 fps: MET — 60.0 fps average over 600 frames in the built player (real rendering), worst frame 40 ms");
   });
 
   it("builds the player itself at delivery: a failed build bounces, a built one is the report's artifact line (2026-09-10)", async () => {
@@ -871,7 +895,7 @@ describe("CampaignManager", () => {
     tasks.emit("task:completed", "task_3", "green, shipping");
     await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
     expect(builds, "a build was attempted on a tree with no play-through").toBe(0);
-    expect(storage.get(campaign.id)!.milestones[2]!.buildVerdict).toEqual({ ran: false, detail: "not attempted: earlier delivery proofs are missing (suite, compile, play-through or GDD numbers)" });
+    expect(storage.get(campaign.id)!.milestones[2]!.buildVerdict).toEqual({ ran: false, detail: "not attempted: earlier delivery proofs are missing (suite, compile or play-through)" });
   });
 
   it("the delivery report names the play-through and that the game does not start itself", async () => {
@@ -982,6 +1006,40 @@ describe("CampaignManager", () => {
     await vi.waitFor(() => expect(attached).toHaveLength(1));
     expect(attached[0]).toMatchObject({ chatId: "cli-local", name: "frame_00012.png", type: "image" });
     expect(attached[0]!.url).toBe(join(projectRoot, "Recordings", "playthrough", "frame_00012.png"));
+  });
+
+  it("plays the built player at delivery: its frame rate answers the GDD, and a failed run bounces (2026-09-10)", async () => {
+    const gdd = "# GDD\n\nTarget 60 fps on mid-range phones.";
+    playerVerdictOnRun = { ok: true, extra: { perf: { medium: "player", bootSeconds: 1.1, playSeconds: 10, playFrames: 420, avgFps: 42, worstFrameMs: 70 } } };
+    const campaign = manager.startFromGdd(ctx, gdd, "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    const green = { testsGreen: true, detail: "PlayMode verification passed: 179 of 179 tests passed (unfiltered — the whole PlayMode suite)", unfiltered: true };
+    tasks.verifications.set("task_3", green);
+    tasks.emit("task:completed", "task_3", "green, shipping");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+    expect(playerRuns).toEqual(["/tmp/Builds/StandaloneOSX/Game.app"]);
+    expect(tasks.submitted[3]!.prompt).toContain("THE GDD'S OWN NUMBERS ARE NOT MET: frame rate ≥ 60 fps measured 42 fps");
+    expect(storage.get(campaign.id)!.milestones[2]!.playerPlaythrough).toMatchObject({ found: true, ok: true, perf: { medium: "player", avgFps: 42 } });
+
+    // The player runs but the session never ends: the run itself blocks.
+    playerVerdictOnRun = { ok: false, extra: {} };
+    tasks.verifications.set("task_4", green);
+    tasks.emit("task:completed", "task_4", "green, shipping");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(5));
+    expect(tasks.submitted[4]!.prompt).toContain("PLAYER PLAY-THROUGH FAILED: the campaign built the player and played it (unity_run_player); play-through FAILED in Entry: session 1 never ended");
+
+    // Fast enough and played to an outcome: delivered, with the player line in the report.
+    playerVerdictOnRun = { ok: true, extra: {} };
+    tasks.verifications.set("task_5", green);
+    tasks.emit("task:completed", "task_5", "green, shipping");
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"), { timeout: 15_000 });
+    const report = messages.map((m) => m.text).join("\n");
+    expect(report).toContain("GDD frame rate ≥ 60 fps: MET — 60.0 fps average over 600 frames in the built player (real rendering)");
+    expect(report).toContain("inside the built player: play-through OK in Entry");
   });
 
   it("delivers on an UNFILTERED green", async () => {
