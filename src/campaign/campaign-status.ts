@@ -73,6 +73,8 @@ export interface CampaignStatusSnapshot {
   /** Every active task on the campaign's chat — the mission keep-alive lives here after delivery. */
   readonly activeTasks: readonly TaskStatusSnapshot[];
   readonly independentReview?: Campaign["independentReview"];
+  /** How the plan covered the GDD's measured section inventory (2026-09-10). */
+  readonly planCoverage?: Campaign["planCoverage"];
 }
 
 /** Whether a revive command would act on this campaign (mirrors CampaignStorage.findLatestRevivable). */
@@ -147,6 +149,7 @@ export function buildCampaignStatus(
     currentTask: currentTaskRaw ? snapshotTask(currentTaskRaw) : undefined,
     activeTasks,
     independentReview: campaign.independentReview,
+    ...(campaign.planCoverage ? { planCoverage: campaign.planCoverage } : {}),
   };
 }
 
@@ -222,6 +225,14 @@ export function formatCampaignStatus(snapshot: CampaignStatusSnapshot, now: numb
   lines.push(`Started ${formatDuration(now - snapshot.createdAt)} ago · updated ${formatDuration(now - snapshot.updatedAt)} ago`);
 
   const green = snapshot.milestones.filter((m) => m.status === "green").length;
+  if (snapshot.planCoverage) {
+    const c = snapshot.planCoverage;
+    lines.push(
+      `Plan covers ${c.covered}/${c.total} GDD sections (ladder sized ${c.minMilestones}–${c.maxMilestones} from the measured scope)` +
+        (c.uncovered.length > 0 ? ` — UNPLANNED: ${shorten(c.uncovered.slice(0, 6).join(", "), 200)}` : "") +
+        (c.excluded.length > 0 ? ` — excluded by the GDD: ${shorten(c.excluded.slice(0, 3).join("; "), 160)}` : ""),
+    );
+  }
   lines.push("", `*Milestones* ${green}/${snapshot.milestones.length} green · time box ${formatDuration(snapshot.milestoneTimeBoxMs)} each`);
   snapshot.milestones.forEach((m, i) => {
     const icon = MILESTONE_ICON[m.status] ?? "•";

@@ -211,21 +211,21 @@ public static class StradaPrerenderRun
 export class PrerenderFramesTool implements ITool {
   readonly name = "unity_prerender_frames";
   readonly description =
-    "Render glossy game-ready 2D frames of any prefab (the casual-game prerendered pipeline): " +
-    "3-point-lit scene, game-style stylization (chibi proportions, pastel toon-glossy material, " +
-    "inverted-hull outline), captured at 6 angles synchronously. Use after importing/sourcing a " +
-    "rigged model (e.g. from unity_my_assets_cloud packages) — the realistic-to-cartoon transform is " +
-    "built in. Writes frame_XXX.png under the output dir.";
+    "Render 2D frames of any prefab in THIS project's own look: a 3-point-lit scene, stylization taken " +
+    "from the project's style.json (derived from its GDD — proportions, material, palette, outline; nothing " +
+    "is a universal preset), captured at 6 angles synchronously. Use after importing/sourcing a rigged model " +
+    "(e.g. from unity_my_assets_cloud packages) when the GDD wants 2D frames rendered from 3D. " +
+    "Writes frame_XXX.png under the output dir.";
 
   readonly inputSchema = {
     type: "object",
     properties: {
       prefab: { type: "string", description: "Project-relative prefab path, e.g. Assets/Realistic/.../Boar_cub_IP.prefab" },
       outDir: { type: "string", description: "Project-relative output dir under Assets/ (default: Assets/Art/Prerendered)" },
-      bodyColor: { type: "string", description: "Toon body color #rrggbb (default pastel pink #f89eb8)" },
-      outlineWidth: { type: "number", description: "Outline width factor (default 1.0; 0 disables)" },
-      plumpness: { type: "number", description: "Body squash 0.5–1.5 (default 1.2 wide / 0.86 tall)" },
-      headScale: { type: "number", description: "Head-bone scale multiplier (default 1.22)" },
+      bodyColor: { type: "string", description: "Body color #rrggbb (default: the project's style.json palette; stock fallback only when no profile exists)" },
+      outlineWidth: { type: "number", description: "Outline width factor (default from style.json; 0 disables)" },
+      plumpness: { type: "number", description: "Body squash 0.5–1.5 (default from style.json)" },
+      headScale: { type: "number", description: "Head-bone scale multiplier (default from style.json)" },
     },
     required: ["prefab"],
   };

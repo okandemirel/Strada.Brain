@@ -855,6 +855,8 @@ export class Orchestrator {
   private readonly activeGoalTrees = new Map<string, GoalTree>();
   /** Interrupted goal trees detected on startup, pending user resume/discard decision */
   private readonly pendingResumeTrees = new Map<string, GoalTree[]>();
+  /** Scopes already told about their interrupted trees, so the offer is not repeated on every message. */
+  private readonly resumeOfferShown = new Set<string>();
   /** TaskManager reference for inline goal detection submission (lazy setter) */
   private taskManager: TaskManager | null = null;
   /** Workspace bus for monitor UI events (lazy setter — bus created after orchestrator) */
@@ -3363,6 +3365,19 @@ export class Orchestrator {
             : `Interrupted goal trees partially discarded: ${removed} removed, ${failed} could not be deleted and will be detected again at the next boot.`;
         await this.sessionManager.sendVisibleAssistantMarkdown(chatId, session, outcome);
         return;
+      } else {
+        // Neither word: keep the offer alive and make it ONCE per scope, so
+        // the trees are still there when the person answers — they used to
+        // vanish from memory on the first unrelated message (2026-09-10).
+        this.sessionManager.restorePendingResumeTrees(conversationScope, pendingResumeTrees);
+        if (!this.resumeOfferShown.has(conversationScope)) {
+          this.resumeOfferShown.add(conversationScope);
+          await this.sessionManager.sendVisibleAssistantMarkdown(
+            chatId,
+            session,
+            `${resumePrompt}\n\n(Your message is being handled as usual; the interrupted goal tree${pendingResumeTrees.length > 1 ? "s stay" : " stays"} on offer until you reply **resume** or **discard**.)`,
+          );
+        }
       }
     }
 

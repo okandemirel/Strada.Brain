@@ -664,6 +664,19 @@ export class SessionManager {
     return refresher;
   }
 
+  /**
+   * Put trees back after a message that was neither "resume" nor "discard"
+   * (2026-09-10). take() removed the offer from memory, so any other first
+   * message silently dropped the interrupted trees: their rows stayed
+   * `executing` in goal storage forever and the offer was never made again
+   * until the next boot.
+   */
+  restorePendingResumeTrees(conversationScope: string, trees: GoalTree[]): void {
+    if (trees.length === 0) return;
+    const existing = this.deps.pendingResumeTrees.get(conversationScope) ?? [];
+    this.deps.pendingResumeTrees.set(conversationScope, [...trees, ...existing.filter((t) => !trees.some((p) => p.rootId === t.rootId))]);
+  }
+
   takePendingResumeTrees(conversationScope: string, chatId: string): GoalTree[] {
     const scoped = this.deps.pendingResumeTrees.get(conversationScope);
     if (scoped && scoped.length > 0) {

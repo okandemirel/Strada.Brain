@@ -59,6 +59,7 @@ interface CampaignRow {
   coverage_audit_note?: string | null;
   draft_deferred_since?: number | null;
   delivery_reported?: number | null;
+  plan_coverage?: string | null;
 }
 
 function rowToCampaign(row: CampaignRow): Campaign {
@@ -93,7 +94,25 @@ function rowToCampaign(row: CampaignRow): Campaign {
     coverageAuditNote: row.coverage_audit_note ?? undefined,
     draftDeferredSince: row.draft_deferred_since ?? undefined,
     deliveryReported: row.delivery_reported === 1,
+    ...(row.plan_coverage ? { planCoverage: parsePlanCoverage(row.plan_coverage) } : {}),
   };
+}
+
+function parsePlanCoverage(raw: string): Campaign["planCoverage"] | undefined {
+  try {
+    const p = JSON.parse(raw) as Record<string, unknown>;
+    if (typeof p.covered !== "number" || typeof p.total !== "number") return undefined;
+    return {
+      covered: p.covered,
+      total: p.total,
+      uncovered: Array.isArray(p.uncovered) ? p.uncovered.map(String) : [],
+      excluded: Array.isArray(p.excluded) ? p.excluded.map(String) : [],
+      minMilestones: typeof p.minMilestones === "number" ? p.minMilestones : 0,
+      maxMilestones: typeof p.maxMilestones === "number" ? p.maxMilestones : 0,
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 export class CampaignStorage {
@@ -131,6 +150,12 @@ export class CampaignStorage {
     } catch {
       // Column already exists — migration is idempotent.
     }
+    try {
+      // 2026-09-10: how the plan covers the GDD's measured section inventory.
+      this.db.exec("ALTER TABLE campaigns ADD COLUMN plan_coverage TEXT");
+    } catch {
+      // Column already exists — migration is idempotent.
+    }
   }
 
   save(campaign: Campaign): void {
@@ -140,8 +165,8 @@ export class CampaignStorage {
           id, chat_id, channel_type, user_id, conversation_id, project_root,
           state, idea_text, gdd_path, gdd_text, draft_task_id, draft_attempts,
           milestones_json, current_milestone, created_at, updated_at, last_error,
-          auto_revive_at, coverage_audit_note, draft_deferred_since, delivery_reported
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          auto_revive_at, coverage_audit_note, draft_deferred_since, delivery_reported, plan_coverage
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           state = excluded.state,
           gdd_path = excluded.gdd_path,
@@ -155,7 +180,8 @@ export class CampaignStorage {
           auto_revive_at = excluded.auto_revive_at,
           coverage_audit_note = excluded.coverage_audit_note,
           draft_deferred_since = excluded.draft_deferred_since,
-          delivery_reported = excluded.delivery_reported`,
+          delivery_reported = excluded.delivery_reported,
+          plan_coverage = excluded.plan_coverage`,
       )
       .run(
         campaign.id,
@@ -179,6 +205,7 @@ export class CampaignStorage {
         campaign.coverageAuditNote ?? null,
         campaign.draftDeferredSince ?? null,
         campaign.deliveryReported ? 1 : 0,
+        campaign.planCoverage ? JSON.stringify(campaign.planCoverage) : null,
       );
   }
 

@@ -107,3 +107,20 @@ describe("replying 'resume' to the resume prompt", () => {
     }
   });
 });
+
+describe("replying something else to the resume prompt (2026-09-10)", () => {
+  it("keeps the offer alive: the tree is still resumable on a later 'resume', and the person is told once", async () => {
+    await say("what is the status?");
+    // The offer text reached the chat, once…
+    const sent = (channel.sendMarkdown as ReturnType<typeof vi.fn>).mock.calls.map((c) => String(c[1]));
+    expect(sent.filter((m) => /interrupted goal tree/i.test(m)).length).toBeGreaterThanOrEqual(1);
+    await say("and now?");
+    const sentAfter = (channel.sendMarkdown as ReturnType<typeof vi.fn>).mock.calls.map((c) => String(c[1]));
+    expect(sentAfter.filter((m) => /stays on offer|stay on offer/i.test(m)).length).toBe(1);
+    // …and the tree was NOT dropped: 'resume' still resets it.
+    await say("resume");
+    const stored = storage.getTree(tree.rootId);
+    expect(stored).not.toBeNull();
+    for (const node of stored!.nodes.values()) expect(node.status).toBe("pending");
+  });
+});
