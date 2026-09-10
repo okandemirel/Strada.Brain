@@ -535,6 +535,41 @@ export async function initializeTaskRuntimeStage(
           }
           return { ok: result.isError !== true, ran: true, detail };
         },
+        // The play rung: unity_playthrough on the real tree once it compiles.
+        // Its verdict rides in a fenced JSON block at the end of the content;
+        // `ok` there is the measurement, the prose above it is for people.
+        play: async (projectRoot) => {
+          if (!registry.getAvailableToolNames().includes("unity_playthrough")) {
+            return { ok: true, ran: false, detail: "unity_playthrough is not registered — the play rung is skipped" };
+          }
+          const result = await registry.execute(
+            "unity_playthrough",
+            {},
+            {
+              projectPath: projectRoot,
+              workingDirectory: projectRoot,
+              readOnly: false,
+            } as import("../../agents/tools/tool-core.interface.js").ToolContext,
+          );
+          const detail = String(result.content ?? "");
+          const fenced = /```json\s*\n([\s\S]*?)\n```/.exec(detail)?.[1];
+          if (!fenced) {
+            // No verdict block at all: the editor did not run, or the tool
+            // refused before playing. Not a measurement of the game.
+            return { ok: true, ran: false, detail: detail.slice(0, 1500) };
+          }
+          try {
+            const verdict = JSON.parse(fenced) as { ok?: unknown; reasons?: unknown };
+            const reasons = Array.isArray(verdict.reasons) ? verdict.reasons.map(String) : [];
+            return {
+              ok: verdict.ok === true,
+              ran: true,
+              detail: verdict.ok === true ? detail.slice(0, 600) : `${reasons.join("; ")}\n\n${detail.slice(0, 1200)}`,
+            };
+          } catch {
+            return { ok: true, ran: false, detail: detail.slice(0, 1500) };
+          }
+        },
         messenger: async (chatId, text) => {
           // Guardian notices need a human. Its own chatId defaults to
           // "cli-local", which on a non-CLI channel is a chat nobody reads —

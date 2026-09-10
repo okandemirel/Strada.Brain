@@ -268,6 +268,10 @@ export function formatGuardianStatus(g: RealTreeGuardianSnapshot, now: number = 
   if (g.lastVerdict === "blind") lines.push(`Verifier could not run for ${g.blindStreak} consecutive check(s): ${shorten(g.lastDetail, 200)}`);
   if (g.nextVerifyAt > now) lines.push(`Next verification in ${formatDuration(g.nextVerifyAt - now)}.`);
   if (g.lastVerdict === "red" && g.lastDetail) lines.push("```", g.lastDetail.slice(0, 300), "```");
+  const playIcon = { unknown: "❔", ok: "🎮", failed: "🛑", blind: "🙈" }[g.lastPlayVerdict ?? "unknown"];
+  const played = g.lastPlayedAt > 0 ? `${formatDuration(now - g.lastPlayedAt)} ago` : "never";
+  lines.push(`${playIcon} Play-through: ${g.lastPlayVerdict ?? "unknown"}, last played ${played}${g.playFixAttempts > 0 ? ` (fix attempts ${g.playFixAttempts})` : ""}`);
+  if (g.lastPlayVerdict === "failed" && g.lastPlayDetail) lines.push("```", g.lastPlayDetail.slice(0, 300), "```");
   return lines.join("\n");
 }
 

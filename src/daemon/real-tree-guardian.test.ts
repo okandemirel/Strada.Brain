@@ -484,3 +484,70 @@ describe("snapshot() — what the channels read", () => {
     expect(guardian.snapshot()).toMatchObject({ lastVerdict: "blind", blindStreak: 2, lastDetail: "bridge down" });
   });
 });
+
+describe("the play rung: a tree that compiles but cannot be played is red of its own kind (audited 2026-09-10: the guardian only ever compiled)", () => {
+  it("on green compile it plays once, and a failed play-through submits ONE fix task naming the verdict", async () => {
+    const { manager, submitted } = makeTaskManager();
+    const play = vi.fn().mockResolvedValue({ ok: false, ran: true, detail: "session 1 never ended after 60 actions; every frame is flat" });
+    const guardian = new RealTreeGuardian({
+      taskManager: manager as unknown as TaskManager,
+      verify: vi.fn().mockResolvedValue({ ok: true, ran: true, detail: "compile succeeded" }),
+      play,
+      projectRoot: "/p",
+    });
+    await guardian.tick();
+    expect(play).toHaveBeenCalledTimes(1);
+    expect(submitted).toHaveLength(1);
+    expect(submitted[0]!.prompt).toContain("compiles but CANNOT BE PLAYED");
+    expect(submitted[0]!.prompt).toContain("session 1 never ended");
+    expect(submitted[0]!.options).toMatchObject({ workspacePolicy: "none", supervisorMode: "off" });
+    expect(guardian.snapshot()).toMatchObject({ lastVerdict: "green", lastPlayVerdict: "failed", playFixAttempts: 1 });
+  });
+
+  it("an ok play-through submits nothing and is not repeated until something changes", async () => {
+    const { manager, submitted } = makeTaskManager();
+    const play = vi.fn().mockResolvedValue({ ok: true, ran: true, detail: "PLAY-THROUGH OK" });
+    let now = 1_000_000;
+    const guardian = new RealTreeGuardian({
+      taskManager: manager as unknown as TaskManager,
+      verify: vi.fn().mockResolvedValue({ ok: true, ran: true, detail: "compile succeeded" }),
+      play,
+      projectRoot: "/p",
+      now: () => now,
+    });
+    await guardian.tick();
+    now += 60 * 60_000;
+    await guardian.tick();
+    expect(play).toHaveBeenCalledTimes(1); // nothing changed since
+    expect(submitted).toHaveLength(0);
+    expect(guardian.snapshot().lastPlayVerdict).toBe("ok");
+    guardian.noteWriteBack("test");
+    now += 60 * 60_000;
+    await guardian.tick();
+    expect(play).toHaveBeenCalledTimes(2); // a write-back earns a new play
+  });
+
+  it("a red compile never reaches the play rung, and a blind play-through submits nothing", async () => {
+    const red = makeTaskManager();
+    const play = vi.fn().mockResolvedValue({ ok: false, ran: true, detail: "x" });
+    const guardian = new RealTreeGuardian({
+      taskManager: red.manager as unknown as TaskManager,
+      verify: vi.fn().mockResolvedValue({ ok: false, ran: true, detail: "error CS0101" }),
+      play,
+      projectRoot: "/p",
+    });
+    await guardian.tick();
+    expect(play).not.toHaveBeenCalled();
+    const blind = makeTaskManager();
+    const g2 = new RealTreeGuardian({
+      taskManager: blind.manager as unknown as TaskManager,
+      verify: vi.fn().mockResolvedValue({ ok: true, ran: true, detail: "compile succeeded" }),
+      play: vi.fn().mockResolvedValue({ ok: true, ran: false, detail: "unity_playthrough is not registered" }),
+      projectRoot: "/p",
+    });
+    await g2.tick();
+    expect(blind.submitted).toHaveLength(0);
+    expect(g2.snapshot().lastPlayVerdict).toBe("blind");
+  });
+});
+

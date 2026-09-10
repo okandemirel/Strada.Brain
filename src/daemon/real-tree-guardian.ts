@@ -36,6 +36,13 @@ export type RealTreeVerifier = (
 export interface RealTreeGuardianOptions {
   taskManager: TaskManager;
   verify: RealTreeVerifier;
+  /**
+   * The second rung: play the game (unity_playthrough) once the tree
+   * compiles. Optional — a project without the tool keeps the compile-only
+   * guardian. Runs only after a write-back changed something, at most once
+   * per PLAY_MIN_INTERVAL_MS: a headless play-through is minutes of Unity.
+   */
+  play?: RealTreeVerifier;
   projectRoot: string;
   /** Channel delivery for "found red / submitted fix / back to green" notes. */
   messenger?: (chatId: string, text: string) => Promise<void>;
@@ -91,6 +98,13 @@ const BLIND_TICKS_BEFORE_ESCALATION = 4;
  * case, left open for the green one.
  */
 const GREEN_HEARTBEAT_MS = 60 * 60_000;
+/**
+ * Least time between two play-throughs of the real tree. The compile rung is
+ * seconds; the play rung boots Unity, loads the entry scene and plays a
+ * session (minutes), so it runs only when something changed since the last
+ * one and never more often than this.
+ */
+const PLAY_MIN_INTERVAL_MS = 20 * 60_000;
 /**
  * How long ONE fix task may stay in flight before the guardian takes the tree
  * back.
@@ -163,6 +177,20 @@ export function compactCompileDetail(detail: string): string {
   return lines.join("\n");
 }
 
+/**
+ * The fix task for a tree that compiles but cannot be played. The guardian
+ * used to check only compilation, so "green suite, empty screen" — the
+ * failure mode the whole system is written against — was invisible to the
+ * one component that looks at the real tree (audited 2026-09-10).
+ */
+const PLAY_FIX_TASK_PROMPT = (detail: string, projectRoot: string) =>
+  `The REAL project tree at ${projectRoot} compiles but CANNOT BE PLAYED by the framework. ` +
+  `unity_playthrough said:\n\n${detail.slice(0, 1500)}\n\n` +
+  `Work directly in the real tree (no workspace lease is used for this task). Fix what the verdict names — ` +
+  `a Strada.Core.Play.IPlaythroughDriver that is not registered, a bootstrapper that never publishes its ` +
+  `services, a session that never ends, a screen that never changes — then run unity_playthrough again and ` +
+  `report its verdict VERBATIM. Do not touch art and do not audit; a verdict that is not ok is not done.`;
+
 const FIX_TASK_PROMPT = (detail: string, projectRoot: string) =>
   `The REAL project tree at ${projectRoot} does not compile. This is the tree the user opens — ` +
   `it must stay green. Errors:\n${compactCompileDetail(detail)}\n\n` +
@@ -215,6 +243,11 @@ export interface RealTreeGuardianSnapshot {
   readonly blindStreak: number;
   /** Epoch ms before which the guardian will not verify again; 0 = no hold. */
   readonly nextVerifyAt: number;
+  /** The play rung: `unknown` until the first play-through, `blind` when the tool could not run. */
+  readonly lastPlayVerdict: "unknown" | "ok" | "failed" | "blind";
+  readonly lastPlayDetail: string;
+  readonly lastPlayedAt: number;
+  readonly playFixAttempts: number;
 }
 
 export class RealTreeGuardian {
@@ -250,6 +283,14 @@ export class RealTreeGuardian {
   /** True while the last verdict was red, so the recovery can be announced. */
   private wasRed = false;
   private lastVerdict: RealTreeGuardianSnapshot["lastVerdict"] = "unknown";
+  private readonly play: RealTreeVerifier | undefined;
+  private lastPlayVerdict: RealTreeGuardianSnapshot["lastPlayVerdict"] = "unknown";
+  private lastPlayDetail = "";
+  private lastPlayedAt = 0;
+  /** Something reached the tree since the last play-through (true at boot: never played). */
+  private playDirty = true;
+  private playFingerprint: string | undefined;
+  private playFixAttempts = 0;
   private lastCheckedAt = 0;
   private lastErrorCount: number | undefined;
   private lastDetail = "";
@@ -257,6 +298,7 @@ export class RealTreeGuardian {
   constructor(options: RealTreeGuardianOptions) {
     this.taskManager = options.taskManager;
     this.verify = options.verify;
+    this.play = options.play;
     this.projectRoot = options.projectRoot;
     this.messenger = options.messenger;
     this.chatId = options.chatId ?? "cli-local";
@@ -289,6 +331,7 @@ export class RealTreeGuardian {
    * first verdict came at 13:05 — every lease seeded in between started red.
    */
   noteWriteBack(source: string): void {
+    this.playDirty = true;
     this.checkSoon(source, this.writeBackCheckDelayMs);
   }
 
@@ -410,6 +453,7 @@ export class RealTreeGuardian {
           getLoggerSafe().info("Real-tree guardian: tree is green", { projectRoot: this.projectRoot });
           this.lastGreenNoteAt = now;
         }
+        await this.maybePlay();
         return;
       }
       this.wasRed = true;
@@ -519,8 +563,92 @@ export class RealTreeGuardian {
    * blind that long — so "not watching" never reads like "green".
    */
   /** The guardian's last measurements, for status surfaces. Read-only; never triggers a tick. */
+  /**
+   * The play rung. Only on a compiling tree, only after something changed
+   * since the last play-through, never more often than PLAY_MIN_INTERVAL_MS.
+   * A failed play-through is a red tree of its own kind: one fix task per
+   * fingerprint, the same attempt cap, the same quiet period.
+   */
+  private async maybePlay(): Promise<void> {
+    if (!this.play || !this.playDirty || this.fixTaskId) return;
+    const now = this.now();
+    if (this.lastPlayedAt > 0 && now - this.lastPlayedAt < PLAY_MIN_INTERVAL_MS) return;
+    this.lastPlayedAt = now;
+    this.playDirty = false;
+    const verdict = await this.play(this.projectRoot);
+    if (verdict.ran === false) {
+      this.lastPlayVerdict = "blind";
+      this.lastPlayDetail = verdict.detail.slice(0, 300);
+      getLoggerSafe().warn("Real-tree guardian: play-through could not run", { detail: this.lastPlayDetail });
+      return;
+    }
+    if (verdict.ok) {
+      const recovered = this.lastPlayVerdict === "failed";
+      this.lastPlayVerdict = "ok";
+      this.lastPlayDetail = "";
+      this.playFingerprint = undefined;
+      this.playFixAttempts = 0;
+      getLoggerSafe().info("Real-tree guardian: the game plays", { projectRoot: this.projectRoot });
+      if (recovered && this.messenger) {
+        await this.messenger(this.chatId, "✅ The real tree plays again — unity_playthrough is ok.").catch(() => undefined);
+      }
+      return;
+    }
+    this.lastPlayVerdict = "failed";
+    this.lastPlayDetail = verdict.detail.slice(0, 300);
+    const fingerprint = createHash("sha256").update(verdict.detail).digest("hex").slice(0, 16);
+    if (fingerprint === this.playFingerprint) {
+      if (this.playFixAttempts >= MAX_FIX_ATTEMPTS_PER_FINGERPRINT) {
+        if (!this.escalated) {
+          this.escalated = true;
+          getLoggerSafe().warn("Real-tree guardian escalating: the game still cannot be played after max fix attempts", {
+            attempts: this.playFixAttempts,
+            fingerprint,
+          });
+          if (this.messenger) {
+            await this.messenger(
+              this.chatId,
+              `❌ The real tree compiles but still cannot be played after ${this.playFixAttempts} autonomous fix attempts — this needs a person.\n\`\`\`\n${verdict.detail.slice(0, 500)}\n\`\`\``,
+            ).catch(() => undefined);
+          }
+        }
+        this.nextVerifyAt = now + ESCALATION_BACKOFF_MS;
+        return;
+      }
+    } else {
+      this.playFingerprint = fingerprint;
+      this.playFixAttempts = 0;
+    }
+    this.playFixAttempts += 1;
+    getLoggerSafe().warn("Real tree compiles but cannot be played — submitting autonomous fix", {
+      detail: this.lastPlayDetail,
+      attempt: this.playFixAttempts,
+      fingerprint,
+    });
+    const task = this.taskManager.submit(
+      this.chatId,
+      "daemon",
+      PLAY_FIX_TASK_PROMPT(verdict.detail, this.projectRoot),
+      { origin: "daemon", triggerName: "real-tree-guardian", workspacePolicy: "none", supervisorMode: "off" },
+    );
+    this.fixTaskId = task.id;
+    this.fixTaskStartedAt = now;
+    this.playDirty = true; // the fix will write back; play again after it
+    this.nextVerifyAt = now + POST_FIX_QUIET_MS;
+    if (this.messenger) {
+      await this.messenger(
+        this.chatId,
+        `⚠️ The project compiles but cannot be played — I'm fixing it autonomously (attempt ${this.playFixAttempts}/${MAX_FIX_ATTEMPTS_PER_FINGERPRINT}).\n\`\`\`\n${verdict.detail.slice(0, 500)}\n\`\`\``,
+      ).catch(() => undefined);
+    }
+  }
+
   snapshot(): RealTreeGuardianSnapshot {
     return {
+      lastPlayVerdict: this.lastPlayVerdict,
+      lastPlayDetail: this.lastPlayDetail,
+      lastPlayedAt: this.lastPlayedAt,
+      playFixAttempts: this.playFixAttempts,
       projectRoot: this.projectRoot,
       lastVerdict: this.lastVerdict,
       lastCheckedAt: this.lastCheckedAt,
