@@ -320,7 +320,7 @@ export class AudioGenerateTool implements ITool {
   readonly inputSchema = {
     type: "object",
     properties: {
-      name: { type: "string", description: "Clip name, e.g. 'ui_click' or 'music_farm' (letters, digits, _ or -)." },
+      name: { type: "string", description: "Clip name, e.g. 'ui_click' or 'music_main' (letters, digits, _ or -)." },
       kind: { type: "string", enum: ["sfx", "music"], description: "'sfx' (default) or 'music'." },
       preset: { type: "string", enum: [...SFX_PRESETS], description: `sfx only: ${SFX_PRESETS.join(", ")} (default 'pop').` },
       bpm: { type: "number", description: "music only: tempo, 60-200 (default 110)." },

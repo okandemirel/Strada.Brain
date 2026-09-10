@@ -540,7 +540,7 @@ export class MeshGenerateTool implements ITool {
     properties: {
       name: {
         type: "string",
-        description: "Element name the mesh is for, e.g. 'PigBody' or 'StageBlock'. Also the file name.",
+        description: "Element name the mesh is for, e.g. 'HeroBody' or 'Crate'. Also the file name.",
       },
       path: {
         type: "string",
@@ -784,7 +784,7 @@ export class MeshGenerateTool implements ITool {
     const rawName = String(input["name"] ?? "").trim();
     if (!/^[A-Za-z][\w-]{0,40}$/.test(rawName)) {
       return {
-        content: "Error: name must start with a letter and contain only letters, digits, _ or - (e.g. 'PigBody')",
+        content: "Error: name must start with a letter and contain only letters, digits, _ or - (e.g. 'HeroBody')",
         isError: true,
       };
     }

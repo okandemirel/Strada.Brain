@@ -3232,7 +3232,7 @@ export class CampaignManager {
       "Produce real art NOW, before anything else: unity_generate_sprite with provider \"local\" (the installed " +
       "model draws a real sprite in under a minute). Call it with the SAME name and the SAME path as the placeholder " +
       "file: that overwrites the placeholder and keeps its .meta GUID, so every binding survives and no bind call is " +
-      "needed — a new file beside the placeholder (e.g. Pig_Real.png) leaves this count unchanged. Or " +
+      "needed — a new file beside the placeholder (e.g. <Name>_Real.png) leaves this count unchanged. Or " +
       "unity_my_assets_cloud action \"purchases\" → \"download\" → unity_import_asset_package for owned packs. " +
       "Then bind what you made. This sprint is judged by that count dropping, not by a report."
     );

@@ -1612,7 +1612,7 @@ function placeholderArtRefusal(
       : "") +
     `A solid square is not a delivered game. Replace them with real art: unity_generate_sprite with provider "local" (the open-weights ` +
     `model on this machine) called with the SAME name and the SAME path as the placeholder file — that overwrites it and keeps ` +
-    `its .meta GUID, so every binding survives and no bind call is needed; a new file beside the placeholder (Pig_Real.png) ` +
+    `its .meta GUID, so every binding survives and no bind call is needed; a new file beside the placeholder (<Name>_Real.png) ` +
     `leaves this count unchanged (measured 2026-09-09: 12 such files, 394 placeholders before and after). Or a purchased ` +
     `package via unity_my_assets_cloud (search → download) and unity_import_asset_package — then bind the imported ` +
     `sprites where the placeholders are bound.`

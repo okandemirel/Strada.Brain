@@ -699,6 +699,9 @@ export class AutoUpdater {
     }
   }
 
+  /** Told once per dirty stretch; cleared when the tree is clean again. */
+  private deferredForLocalChanges = false;
+
   private async performGitUpdate(): Promise<boolean> {
     const { remote, branch } = await this.resolveGitUpstream();
 
@@ -717,6 +720,23 @@ export class AutoUpdater {
       .split("\n")
       .some((line) => line.trim() !== "" && !line.endsWith(".strada-update.lock"));
     if (hadLocalChanges) {
+      // UNATTENDED SAFETY (2026-09-10). Stashing a live checkout, pulling and
+      // popping was the default; it rolled the operator's tree back three
+      // times in three days and once left the changes in a stash nobody
+      // popped. A dirty tree now DEFERS the update — the next cycle tries
+      // again once the tree is clean — unless the operator opts back into
+      // stashing with STRADA_AUTO_UPDATE_STASH=1.
+      if (process.env["STRADA_AUTO_UPDATE_STASH"] !== "1") {
+        if (!this.deferredForLocalChanges) {
+          this.deferredForLocalChanges = true;
+          getLoggerSafe().warn("Auto-update deferred — the checkout has local changes; commit or stash them, or set STRADA_AUTO_UPDATE_STASH=1", {
+            installRoot: this.installRoot,
+            changed: statusOutput.split("\n").filter((l) => l.trim() !== "").length,
+          });
+          this.notifyFn?.("Auto-update deferred: this checkout has uncommitted changes. Commit or stash them and the next cycle will update; set STRADA_AUTO_UPDATE_STASH=1 to let the updater stash them itself.");
+        }
+        return false;
+      }
       await this.runCommand(
         "git",
         ["stash", "push", "-u", "-m", "auto-updater: stash before pull", "--", ".", ":(exclude).strada-update.lock"],
@@ -724,6 +744,7 @@ export class AutoUpdater {
         this.installRoot,
       );
     }
+    this.deferredForLocalChanges = false;
 
     const prePullSha = (
       await this.runCommand(

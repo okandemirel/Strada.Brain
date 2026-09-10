@@ -76,8 +76,10 @@ describe("module decomposition guidance", () => {
     // placing real modules inside it. The game is not a concern, so it owns
     // nothing and the wrapper only hides its children.
     expect(STRADA_AGENT_PREAMBLE).toMatch(/named after the game or the feature set/);
-    expect(STRADA_AGENT_PREAMBLE).toMatch(/PixelFlowModule\/BoardModule/);
-    expect(STRADA_AGENT_PREAMBLE).toMatch(/PixelFlow is the game,\s+not a concern/);
+    // The example is written with a <Game> placeholder: the rule is universal,
+    // and the vehicle's name must not appear in system prompts (universality guard).
+    expect(STRADA_AGENT_PREAMBLE).toMatch(/<Game>Module\/BoardModule/);
+    expect(STRADA_AGENT_PREAMBLE).toMatch(/<Game> is the game,\s+not a concern/);
   });
 
 });

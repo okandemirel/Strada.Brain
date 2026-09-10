@@ -174,7 +174,24 @@ describe("the updater's own lock is not a local change", () => {
     expect(stashes).toEqual([]);
   });
 
-  it("stashes real changes, and leaves the lock out of the stash", async () => {
+  it("a dirty tree DEFERS the update by default: no stash, no pull (unattended safety 2026-09-10)", async () => {
+    const git = fakeGit({ commitDuringWindow: false });
+    const stashes: string[] = [];
+    const pulls: string[][] = [];
+    const run = git.run;
+    git.run = async (cmd, args) => {
+      if (cmd === "git" && args[0] === "status") return " M src/a.ts\n?? .strada-update.lock\n";
+      if (cmd === "git" && args[0] === "stash") stashes.push(args.join(" "));
+      if (cmd === "git" && args[0] === "pull") pulls.push(args);
+      return run(cmd, args);
+    };
+    delete process.env["STRADA_AUTO_UPDATE_STASH"];
+    await performUpdate(updater(git, []));
+    expect(stashes).toEqual([]);
+    expect(pulls).toEqual([]);
+  });
+
+  it("stashes real changes only when the operator opts in (STRADA_AUTO_UPDATE_STASH=1), and leaves the lock out of the stash", async () => {
     const git = fakeGit({ commitDuringWindow: false });
     const stashes: string[] = [];
     const run = git.run;
@@ -183,7 +200,12 @@ describe("the updater's own lock is not a local change", () => {
       if (cmd === "git" && args[0] === "stash") stashes.push(args.join(" "));
       return run(cmd, args);
     };
-    await performUpdate(updater(git, []));
+    process.env["STRADA_AUTO_UPDATE_STASH"] = "1";
+    try {
+      await performUpdate(updater(git, []));
+    } finally {
+      delete process.env["STRADA_AUTO_UPDATE_STASH"];
+    }
     expect(stashes[0]).toContain("push -u");
     expect(stashes[0]).toContain(":(exclude).strada-update.lock");
   });

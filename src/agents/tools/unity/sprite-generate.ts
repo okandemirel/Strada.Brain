@@ -608,7 +608,7 @@ export class SpriteGenerateTool implements ITool {
     properties: {
       name: {
         type: "string",
-        description: "Element name the sprite is for, e.g. 'Rocket' or 'FrozenPig'. Also the file name.",
+        description: "Element name the sprite is for, e.g. 'Rocket' or 'IceCrate'. Also the file name.",
       },
       path: {
         type: "string",
@@ -714,7 +714,7 @@ export class SpriteGenerateTool implements ITool {
     const rawName = target.name;
     if (!/^[A-Za-z][\w-]{0,40}$/.test(rawName)) {
       return {
-        content: "Error: name must start with a letter and contain only letters, digits, _ or - (e.g. 'FrozenPig')",
+        content: "Error: name must start with a letter and contain only letters, digits, _ or - (e.g. 'IceCrate')",
         isError: true,
       };
     }

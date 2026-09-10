@@ -71,7 +71,7 @@ writing code, and create a module for each.
   A submodule that another module could equally depend on belongs at the top
   level instead.
 - Do NOT wrap everything in a folder named after the game or the feature set.
-  \`Assets/Modules/PixelFlowModule/BoardModule/\` is wrong: PixelFlow is the game,
+  \`Assets/Modules/<Game>Module/BoardModule/\` is wrong: <Game> is the game,
   not a concern, so it owns nothing and only hides its children. The game is the
   set of modules, not a module containing them.
 - One module holding the whole feature set is the failure this rule exists to

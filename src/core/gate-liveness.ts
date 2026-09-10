@@ -107,7 +107,7 @@ function wav(seconds: number, seed: number): Buffer {
 }
 
 const HEADER = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n";
-const PREFAB = `${HEADER}--- !u!1 &100\nGameObject:\n  m_Component:\n  - component: {fileID: 400}\n  m_Name: Pig\n--- !u!4 &400\nTransform:\n  m_GameObject: {fileID: 100}\n  m_Father: {fileID: 0}\n`;
+const PREFAB = `${HEADER}--- !u!1 &100\nGameObject:\n  m_Component:\n  - component: {fileID: 400}\n  m_Name: Hero\n--- !u!4 &400\nTransform:\n  m_GameObject: {fileID: 100}\n  m_Father: {fileID: 0}\n`;
 const SCENE = `${HEADER}--- !u!1 &500\nGameObject:\n  m_Component:\n  - component: {fileID: 501}\n  m_Name: Main Camera\n--- !u!20 &502\nCamera:\n  m_GameObject: {fileID: 500}\n  orthographic: 0\n--- !u!4 &501\nTransform:\n  m_GameObject: {fileID: 500}\n  m_Father: {fileID: 0}\n--- !u!1660057539 &9223372036854775807\nSceneRoots:\n  m_ObjectHideFlags: 0\n  m_Roots:\n  - {fileID: 501}\n`;
 
 function probe(gate: string, run: () => string): GateProbe {
@@ -128,14 +128,14 @@ export function probeGateLiveness(): GateProbe[] {
   try {
     put(root, "ProjectSettings/EditorBuildSettings.asset", "EditorBuildSettings:\n  m_Scenes:\n  - enabled: 1\n    path: Assets/Scenes/Main.unity\n    guid: 00000000000000000000000000000001\n");
     put(root, "Assets/Scenes/Main.unity", SCENE, "5ce5e5e5e5e5e5e5e5e5e5e5e5e5e5e5");
-    put(root, "Assets/Prefabs/Pig.prefab", PREFAB, "11111111111111111111111111111111");
+    put(root, "Assets/Prefabs/Hero.prefab", PREFAB, "11111111111111111111111111111111");
     put(root, "Assets/Art/flat.png", png(64, 64, "flat"), "22222222222222222222222222222222");
     put(root, "Assets/Art/real.png", png(64, 64, "noise"), "33333333333333333333333333333333");
     put(root, "Assets/Scripts/Builder.cs", "public class Builder { void B() { GameObject.CreatePrimitive(PrimitiveType.Cube); } }", "44444444444444444444444444444444");
     // The schedule shape the parser recognises (a table with an L<n> tag per
     // row). Codex review 2026-09-07: the earlier prose fixture scheduled
     // nothing, so the probe proved document discovery and not the gate.
-    put(root, "docs/Game_GDD.md", "# GDD\n\n| Level | Element |\n|---|---|\n| L1 | Pig |\n| L2 | Conveyor |\n");
+    put(root, "docs/Game_GDD.md", "# GDD\n\n| Level | Element |\n|---|---|\n| L1 | Hero |\n| L2 | Bridge |\n");
     put(root, "Assets/Audio/long.wav", wav(2, 1), "55555555555555555555555555555555");
     put(root, "Assets/Audio/blip.wav", wav(0.15, 2), "66666666666666666666666666666666");
     put(root, "Assets/Audio/blip-copy.wav", wav(0.15, 2), "77777777777777777777777777777777");
@@ -177,7 +177,7 @@ export function probeGateLiveness(): GateProbe[] {
       const scope = assessSpecScope(root);
       must(scope.scheduled === 2, `parsed ${scope.scheduled} scheduled elements, expected 2`);
       const missing = scope.missing.map((m) => m.name);
-      must(missing.includes("Conveyor"), `an unimplemented element was not reported missing (missing: ${missing.join(", ") || "none"})`);
+      must(missing.includes("Bridge"), `an unimplemented element was not reported missing (missing: ${missing.join(", ") || "none"})`);
       return `finds the GDD, schedules 2, reports ${missing.length} unimplemented`;
     }));
 
@@ -217,7 +217,7 @@ export function probeGateLiveness(): GateProbe[] {
     }));
 
     probes.push(probe("scene binding (bind + place)", () => {
-      bindSprite(join(root, "Assets/Prefabs/Pig.prefab"), "33333333333333333333333333333333");
+      bindSprite(join(root, "Assets/Prefabs/Hero.prefab"), "33333333333333333333333333333333");
       placePrefab(join(root, "Assets/Scenes/Main.unity"), "11111111111111111111111111111111", prefabRoot(PREFAB));
       const r = assessBuiltAsSpecified(root);
       must(r.shippedRenderers === 1, `placed prefab renderer not counted (shippedRenderers=${r.shippedRenderers})`);
