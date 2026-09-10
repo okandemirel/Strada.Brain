@@ -11,12 +11,22 @@ import { appendLeaseLedger, systemOwnedDeletionReason } from "./system-owned-pat
 
 export type WorkspaceLeaseKind = "git-worktree" | "temp-copy";
 
+/** Author of the lease's seed commit; the one commit in a lease that is never the agent's. */
+const LEASE_SEED_EMAIL = "lease@strada.local";
+
 export interface WorkspaceLeaseRequest {
   readonly label?: string;
   readonly workerId?: string;
   readonly preferGitWorktree?: boolean;
   readonly forceTempCopy?: boolean;
   readonly sourceRoot?: string;
+}
+
+interface LeaseCommit {
+  readonly sha: string;
+  readonly authorName: string;
+  readonly authorEmail: string;
+  readonly message: string;
 }
 
 /** What a commit() moved, and what it refused to move. */
@@ -76,6 +86,14 @@ export interface WorkspaceCommitResult {
    * See capture-retention.ts for the measurement behind it.
    */
   readonly capturesPruned?: { removed: number; bytes: number; kept: number };
+  /**
+   * Commits the agent made inside a git-worktree lease, replayed onto the
+   * project's HEAD after the copy-back (see replayLeaseCommits). `skipped`
+   * names lease commits that produced no project commit — every path they
+   * touched was a conflict, a failure, a declined deletion, or already at
+   * that content.
+   */
+  readonly commitsReplayed?: { replayed: number; skipped: number; shas: string[] };
 }
 
 export interface WorkspaceLease {
@@ -125,6 +143,8 @@ export type WorkspaceCommandRunner = (params: {
    * one for a command whose output IS the data.
    */
   maxOutput?: number;
+  /** Extra process environment (a temporary GIT_INDEX_FILE for commit replay). */
+  env?: Record<string, string | undefined>;
 }) => Promise<WorkspaceCommandResult>;
 
 export interface WorkspaceLeaseManagerOptions {
@@ -272,6 +292,8 @@ const DERIVED_COPY_EXCLUDES = new Set([
 /** Ownership sidecar written into every lease dir at acquire — the only
  *  cross-process signal for "this lease belongs to a LIVE process". */
 const LEASE_OWNER_FILE = ".strada-lease-owner.json";
+/** Files the manager itself writes at the lease root; `git add -A` in a worktree sweeps them into the agent's commits. */
+const LEASE_SIDECAR_FILES = new Set([".strada-lease-owner.json", ".strada-lease-seed.json"]);
 /**
  * The seed maps and seed HEAD, written BESIDE the lease at acquire so that a
  * crashed or restarted owner's work can still be committed by the rules the
@@ -419,6 +441,8 @@ export class WorkspaceLeaseManager {
   private salvageInFlight: Promise<void> | null = null;
   private readonly preferGitWorktree: boolean;
   private readonly commandRunner: WorkspaceCommandRunner;
+  /** Lease path → shas of its commits that already landed on the project's HEAD (so salvage skips them). */
+  private readonly replayedLeaseCommits = new Map<string, Set<string>>();
   private readonly worktreeTimeoutMs: number;
   private readonly submoduleTimeoutMs: number;
   private readonly fallbackExcludes: Set<string>;
@@ -978,7 +1002,7 @@ export class WorkspaceLeaseManager {
           command: "git",
           args: [
             "-C", workspacePath,
-            "-c", "user.name=Strada.Brain lease", "-c", "user.email=lease@strada.local",
+            "-c", "user.name=Strada.Brain lease", "-c", `user.email=${LEASE_SEED_EMAIL}`,
             "commit", "-q", "--no-verify", "--allow-empty-message", "-m",
             "lease seed: the project's uncommitted working state (baseline, never pushed)",
           ],
@@ -1070,21 +1094,12 @@ export class WorkspaceLeaseManager {
    */
   private async preserveLeaseCommits(workspacePath: string): Promise<void> {
     try {
-      const unique = await this.commandRunner({
-        command: "git",
-        args: ["-C", workspacePath, "rev-list", "--count", "HEAD", "--not", "--all"],
-        cwd: workspacePath,
-        timeoutMs: this.worktreeTimeoutMs,
-      });
-      if (unique.exitCode !== 0 || Number(unique.stdout.trim() || "0") === 0) return;
-      const head = await this.commandRunner({
-        command: "git",
-        args: ["-C", workspacePath, "rev-parse", "HEAD"],
-        cwd: workspacePath,
-        timeoutMs: this.worktreeTimeoutMs,
-      });
-      const sha = head.stdout.trim();
-      if (head.exitCode !== 0 || !sha) return;
+      const commits = await this.listLeaseCommits(workspacePath);
+      const replayed = this.replayedLeaseCommits.get(workspacePath) ?? new Set<string>();
+      this.replayedLeaseCommits.delete(workspacePath);
+      const stranded = commits.filter((c) => !replayed.has(c.sha));
+      if (stranded.length === 0) return;
+      const sha = stranded[stranded.length - 1]!.sha;
       const branch = `lease-salvage/${basename(workspacePath)}`;
       const result = await this.commandRunner({
         command: "git",
@@ -1095,12 +1110,194 @@ export class WorkspaceLeaseManager {
       if (result.exitCode === 0) {
         getLoggerSafe().info("Preserved lease commits on a salvage branch", {
           branch,
-          commits: unique.stdout.trim(),
+          commits: stranded.length,
+          replayedIntoProject: replayed.size,
         });
       }
     } catch {
       // Preservation is best-effort; removal proceeds regardless.
     }
+  }
+
+  /**
+   * Commits the agent made inside a git-worktree lease, oldest first. The seed
+   * commit (the project's uncommitted state, authored by the lease itself) is
+   * not the agent's and is left out.
+   *
+   * This used to be `rev-list --count HEAD --not --all`, which always answers
+   * 0: `--all` includes HEAD itself, so no commit is ever "not in --all".
+   * Measured 2026-09-10 in the game repo: three worker commits from the day
+   * before dangling in the object store, zero salvage branches, zero
+   * "Preserved lease commits" log lines — the salvage had never fired once.
+   */
+  private async listLeaseCommits(workspacePath: string): Promise<LeaseCommit[]> {
+    const list = await this.commandRunner({
+      command: "git",
+      args: ["-C", workspacePath, "rev-list", "--reverse", "HEAD", "--not", "--branches", "--tags", "--remotes"],
+      cwd: workspacePath,
+      timeoutMs: this.worktreeTimeoutMs,
+    });
+    if (list.exitCode !== 0) return [];
+    const commits: LeaseCommit[] = [];
+    for (const sha of list.stdout.split(/\s+/).filter(Boolean)) {
+      const show = await this.commandRunner({
+        command: "git",
+        args: ["-C", workspacePath, "show", "-s", "--format=%an%x00%ae%x00%B", sha],
+        cwd: workspacePath,
+        timeoutMs: this.worktreeTimeoutMs,
+      });
+      if (show.exitCode !== 0) continue;
+      const [authorName = "", authorEmail = "", ...rest] = show.stdout.split("\0");
+      if (authorEmail === LEASE_SEED_EMAIL) continue;
+      commits.push({ sha, authorName, authorEmail, message: rest.join("\0").trim() });
+    }
+    return commits;
+  }
+
+  /**
+   * Replay the agent's lease commits onto the project's HEAD.
+   *
+   * The copy-back moves FILES; the agent's `git_commit` calls ran inside the
+   * worktree on a detached HEAD, so the project received the content as
+   * uncommitted changes and the commits themselves died with the worktree
+   * (salvage never fired — see listLeaseCommits). Measured 2026-09-09: a run
+   * committed "final-sprite-delivery: reduce placeholder count to 279" in its
+   * lease; the project got 279 placeholders and no commit.
+   *
+   * Each lease commit becomes one project commit with the same author,
+   * message and per-path content, built through a TEMPORARY index so the
+   * user's own staged changes are neither committed nor disturbed. Only paths
+   * that actually travelled home are carried: a conflict or a failed write
+   * stays out (the project kept its version), a deletion only if it was
+   * applied. The lease and the project share one object store, so the blobs
+   * are addressed by sha — nothing is re-read from disk.
+   */
+  private async replayLeaseCommits(
+    sourceRoot: string,
+    workspacePath: string,
+    heldRels: ReadonlySet<string>,
+    deletedRels: ReadonlySet<string>,
+  ): Promise<WorkspaceCommitResult["commitsReplayed"]> {
+    let dotGit: import("node:fs").Stats;
+    try {
+      dotGit = await fsp.stat(join(workspacePath, ".git"));
+    } catch {
+      return undefined;
+    }
+    if (!dotGit.isFile()) return undefined; // a worktree's .git is a file; a temp copy has none, a repo has a dir
+    if (resolve(sourceRoot) !== resolve(this.projectRoot)) return undefined; // a lease of a lease: no branch to land on
+    const commits = await this.listLeaseCommits(workspacePath);
+    if (commits.length === 0) return undefined;
+
+    const git = (args: string[], extra?: { env?: Record<string, string | undefined>; maxOutput?: number }) =>
+      this.commandRunner({
+        command: "git",
+        args: ["-C", sourceRoot, ...args],
+        cwd: sourceRoot,
+        timeoutMs: this.worktreeTimeoutMs,
+        ...(extra?.env ? { env: extra.env } : {}),
+        ...(extra?.maxOutput ? { maxOutput: extra.maxOutput } : {}),
+      });
+    const toNative = (posix: string): string => posix.split("/").join(sep);
+    const replayedShas = new Set<string>();
+    const projectShas: string[] = [];
+    let skipped = 0;
+    const touched = new Set<string>();
+    const tmpIndex = join(os.tmpdir(), `strada-lease-replay-${randomUUID()}.index`);
+    const env = { ...process.env, GIT_INDEX_FILE: tmpIndex };
+    try {
+      for (const commit of commits) {
+        const head = await git(["rev-parse", "--verify", "HEAD"]);
+        if (head.exitCode !== 0) break; // an unborn branch has nothing to build on
+        const headSha = head.stdout.trim();
+        const raw = await this.commandRunner({
+          command: "git",
+          args: ["-C", workspacePath, "diff-tree", "--no-commit-id", "--no-renames", "--root", "-r", "-z", "--raw", commit.sha],
+          cwd: workspacePath,
+          timeoutMs: this.worktreeTimeoutMs,
+          maxOutput: 64 * 1024 * 1024,
+        });
+        if (raw.exitCode !== 0) { skipped++; continue; }
+        const fields = raw.stdout.split("\0");
+        const adds: string[] = [];
+        const removes: string[] = [];
+        for (let i = 0; i + 1 < fields.length; i += 2) {
+          const meta = fields[i]!;
+          const posixPath = fields[i + 1]!;
+          const m = /^:(\d{6}) (\d{6}) [0-9a-f]+ ([0-9a-f]+) ([A-Z])/.exec(meta);
+          if (!m || !posixPath) continue;
+          const [, , dstMode, dstSha, status] = m;
+          if (dstMode === "160000" || m[1] === "160000") continue; // submodule pointers are not the agent's files
+          if (!posixPath.includes("/") && LEASE_SIDECAR_FILES.has(posixPath)) continue; // the lease's own bookkeeping, never project content
+          const rel = toNative(posixPath);
+          if (heldRels.has(rel)) continue;
+          if (status === "D") {
+            if (deletedRels.has(rel)) removes.push(posixPath);
+            continue;
+          }
+          adds.push(`${dstMode},${dstSha},${posixPath}`);
+        }
+        if (adds.length === 0 && removes.length === 0) { skipped++; continue; }
+        rmSync(tmpIndex, { force: true });
+        const read = await git(["read-tree", headSha], { env });
+        if (read.exitCode !== 0) { skipped++; continue; }
+        let staged = true;
+        for (let i = 0; i < adds.length && staged; i += 200) {
+          const chunk = adds.slice(i, i + 200).flatMap((a) => ["--cacheinfo", a]);
+          staged = (await git(["update-index", "--add", ...chunk], { env })).exitCode === 0;
+        }
+        for (let i = 0; i < removes.length && staged; i += 200) {
+          staged = (await git(["update-index", "--force-remove", "--", ...removes.slice(i, i + 200)], { env })).exitCode === 0;
+        }
+        if (!staged) { skipped++; continue; }
+        const tree = await git(["write-tree"], { env });
+        const headTree = await git(["rev-parse", `${headSha}^{tree}`]);
+        if (tree.exitCode !== 0 || headTree.exitCode !== 0 || tree.stdout.trim() === headTree.stdout.trim()) { skipped++; continue; }
+        const authorName = commit.authorName || "Strada.Brain lease";
+        const authorEmail = commit.authorEmail || LEASE_SEED_EMAIL;
+        const message = `${commit.message}\n\nStrada-Lease: ${basename(workspacePath)}\nStrada-Lease-Commit: ${commit.sha}`;
+        const made = await git(
+          ["-c", `user.name=${authorName}`, "-c", `user.email=${authorEmail}`, "commit-tree", tree.stdout.trim(), "-p", headSha, "-m", message],
+          { env: { ...env, GIT_AUTHOR_NAME: authorName, GIT_AUTHOR_EMAIL: authorEmail } },
+        );
+        if (made.exitCode !== 0) {
+          getLoggerSafe().warn("Could not replay a lease commit into the project", { sha: commit.sha, stderr: made.stderr.trim().slice(0, 200) });
+          break; // later commits build on this one
+        }
+        const newSha = made.stdout.trim();
+        const moved = await git(["update-ref", "-m", `strada lease replay: ${commit.message.split("\n")[0] ?? ""}`, "HEAD", newSha, headSha]);
+        if (moved.exitCode !== 0) {
+          getLoggerSafe().warn("Project HEAD moved during lease commit replay — stopped", { sha: commit.sha, stderr: moved.stderr.trim().slice(0, 200) });
+          break;
+        }
+        replayedShas.add(commit.sha);
+        projectShas.push(newSha);
+        for (const a of adds) touched.add(a.split(",").slice(2).join(",")); // a path may hold commas
+        for (const r of removes) touched.add(r);
+      }
+      if (touched.size > 0) {
+        // The real index still describes these paths as they were before the
+        // replay; point it at HEAD for exactly them (never the user's other
+        // staged work) so the copied-back files read as committed, not as a
+        // staged reversal plus an unstaged edit.
+        const paths = [...touched];
+        for (let i = 0; i < paths.length; i += 200) {
+          await git(["reset", "-q", "HEAD", "--", ...paths.slice(i, i + 200)]);
+        }
+      }
+    } finally {
+      rmSync(tmpIndex, { force: true });
+    }
+    skipped = commits.length - replayedShas.size; // includes commits left after a stopped replay
+    this.replayedLeaseCommits.set(workspacePath, replayedShas);
+    if (replayedShas.size > 0 || skipped > 0) {
+      getLoggerSafe().info("Lease commits replayed into the project", {
+        replayed: replayedShas.size,
+        skipped,
+        subjects: commits.filter((c) => replayedShas.has(c.sha)).map((c) => c.message.split("\n")[0]?.slice(0, 80)).slice(0, 5),
+      });
+    }
+    return { replayed: replayedShas.size, skipped, shas: projectShas };
   }
 
   private async removeGitWorktree(workspacePath: string): Promise<void> {
@@ -1440,6 +1637,12 @@ export class WorkspaceLeaseManager {
         });
       }
     }
+    let commitsReplayed: WorkspaceCommitResult["commitsReplayed"];
+    if (!opts?.quarantineOnly) {
+      const heldRels = new Set<string>([...conflicts, ...failed.map((f) => f.replace(/ \(.*\)$/, ""))]);
+      const deletedRels = new Set<string>(deleted.map((d) => d.replace(/ — .*$/, "")));
+      commitsReplayed = await this.replayLeaseCommits(sourceRoot, workspacePath, heldRels, deletedRels);
+    }
     return {
       written,
       conflicts,
@@ -1449,6 +1652,7 @@ export class WorkspaceLeaseManager {
       conflictsQuarantinedUnder,
       quarantined,
       ...(capturesPruned ? { capturesPruned } : {}),
+      ...(commitsReplayed ? { commitsReplayed } : {}),
     };
     } finally {
       lock?.release();

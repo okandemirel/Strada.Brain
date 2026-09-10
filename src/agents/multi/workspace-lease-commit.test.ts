@@ -596,3 +596,90 @@ describe("a loose script with a module twin is the system's own duplicate", () =
     expect(result.removed).toEqual([join("Assets", "Scripts", "Solo.cs")]); // no twin: stays, reported
   });
 });
+
+describe("lease commit replay (measured 2026-09-10: three worker commits dangling in the game repo, no salvage branch)", () => {
+  const git = (cwd: string, cmd: string) =>
+    execSync(`git -c user.email=w@x -c user.name=worker ${cmd}`, { cwd, encoding: "utf8" }).trim();
+
+  it("replays the agent's commits onto the project's HEAD, in order, with author, message and content", async () => {
+    makeGitRepo();
+    writeFileSync(join(source, "Assets", "Scripts", "Wip.cs"), "user wip", "utf8"); // uncommitted → becomes the seed commit
+    const before = git(source, "rev-parse HEAD");
+    const lease = await gitManager().acquireLease({ label: "t" });
+    expect(lease.kind).toBe("git-worktree");
+    writeFileSync(join(lease.path, "Assets", "Scripts", "Board.cs"), "v1", "utf8");
+    git(lease.path, "add -A");
+    git(lease.path, 'commit -q -m "feat: board v1"');
+    writeFileSync(join(lease.path, "Assets", "Scripts", "Board.cs"), "v2", "utf8");
+    writeFileSync(join(lease.path, "Assets", "Scripts", "Existing.cs"), "edited", "utf8");
+    git(lease.path, "add -A");
+    git(lease.path, 'commit -q -m "feat: board v2"');
+
+    const result = await lease.commit();
+    await lease.release();
+
+    expect(result.commitsReplayed).toEqual({ replayed: 2, skipped: 0, shas: expect.any(Array) });
+    expect(git(source, "log --format=%s -n 3")).toBe("feat: board v2\nfeat: board v1\ninit");
+    expect(git(source, "log --format=%an -n 1")).toBe("worker");
+    expect(git(source, "log --format=%B -n 1")).toContain("Strada-Lease-Commit:");
+    expect(git(source, `show ${before}..HEAD~1 --format= --name-only`)).toBe("Assets/Scripts/Board.cs");
+    expect(git(source, "show HEAD~1:Assets/Scripts/Board.cs")).toBe("v1");
+    expect(git(source, "show HEAD:Assets/Scripts/Board.cs")).toBe("v2");
+    expect(readFileSync(join(source, "Assets", "Scripts", "Board.cs"), "utf8")).toBe("v2");
+    // The replayed paths read as committed; the user's own WIP is still theirs, uncommitted.
+    expect(git(source, "status --porcelain -- Assets")).toBe("?? Assets/Scripts/Wip.cs");
+    // Nothing is stranded, so no salvage branch is needed.
+    expect(git(source, "branch --list 'lease-salvage/*'")).toBe("");
+  });
+
+  it("does not commit a conflicted path on the user's behalf, and salvages the stranded commit on a branch", async () => {
+    makeGitRepo();
+    const lease = await gitManager().acquireLease({ label: "t" });
+    writeFileSync(join(lease.path, "Assets", "Scripts", "Existing.cs"), "agent", "utf8");
+    git(lease.path, "add -A");
+    git(lease.path, 'commit -q -m "feat: existing"');
+    const stranded = git(lease.path, "rev-parse HEAD");
+    // The user edits the same file while the agent works.
+    const target = join(source, "Assets", "Scripts", "Existing.cs");
+    writeFileSync(target, "user", "utf8");
+    utimesSync(target, new Date(Date.now() + 5000), new Date(Date.now() + 5000));
+
+    const result = await lease.commit();
+    await lease.release();
+
+    expect(result.conflicts).toContain(join("Assets", "Scripts", "Existing.cs"));
+    expect(result.commitsReplayed).toEqual({ replayed: 0, skipped: 1, shas: [] });
+    expect(git(source, "log --format=%s -n 2")).toBe("init");
+    expect(readFileSync(target, "utf8")).toBe("user");
+    expect(git(source, "branch --list 'lease-salvage/*'")).toContain("lease-salvage/");
+    expect(git(source, `branch --contains ${stranded} --list 'lease-salvage/*'`)).toContain("lease-salvage/");
+  });
+
+  it("leaves the user's staged changes staged and uncommitted", async () => {
+    makeGitRepo();
+    writeFileSync(join(source, "Assets", "Scripts", "Staged.cs"), "staged by user", "utf8");
+    git(source, "add Assets/Scripts/Staged.cs");
+    const lease = await gitManager().acquireLease({ label: "t" });
+    writeFileSync(join(lease.path, "Assets", "Scripts", "Board.cs"), "v1", "utf8");
+    git(lease.path, "add -A");
+    git(lease.path, 'commit -q -m "feat: board"');
+
+    await lease.commit();
+    await lease.release();
+
+    expect(git(source, "log --format=%s -n 1")).toBe("feat: board");
+    expect(git(source, "show HEAD --format= --name-only")).toBe("Assets/Scripts/Board.cs");
+    expect(git(source, "status --porcelain -- Assets")).toBe("A  Assets/Scripts/Staged.cs");
+  });
+
+  it("makes no project commit when the agent committed nothing", async () => {
+    makeGitRepo();
+    const lease = await gitManager().acquireLease({ label: "t" });
+    writeFileSync(join(lease.path, "Assets", "Scripts", "Board.cs"), "v1", "utf8"); // written, not committed
+    const result = await lease.commit();
+    await lease.release();
+    expect(result.commitsReplayed).toBeUndefined();
+    expect(git(source, "log --format=%s -n 2")).toBe("init");
+    expect(git(source, "branch --list 'lease-salvage/*'")).toBe("");
+  });
+});
