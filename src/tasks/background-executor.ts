@@ -1946,6 +1946,8 @@ export class BackgroundExecutor {
 
   /** Executing tasks whose last progress is older than this are considered wedged. */
   private static readonly STUCK_TASK_MS = 60 * 60_000;
+  /** Longest a keep-alive trusts one outage horizon before re-measuring it (see scheduleMissionKeepAlive). */
+  static readonly COOLDOWN_REPOLL_MS = 15 * 60_000;
 
   private reapStuckTasks(): void {
     if (!this.taskManager) return;
@@ -2055,8 +2057,21 @@ export class BackgroundExecutor {
     // Measured overnight 2026-08-27: the keep-alive fed doomed decompositions
     // every 30–60s for over an hour while both providers sat cooled. When every
     // tracked provider is cooling, wait out the soonest recovery instead.
+    // …but never TRUST that horizon for longer than a re-poll. The wait is
+    // computed once from the soonest cooldownUntil — a quota 429 with a
+    // next-day reset, or a credential bench, yields hours — and the timer
+    // was a single setTimeout, so capacity coming back early (a key rotated,
+    // the header wrong, a member recovering on its probe) never woke the
+    // mission. Measured 2026-09-10 11:47: a 6.5-minute outage that had
+    // cleared by 11:50 scheduled a 28 551 621 ms (7.9 h) retry. Wait at most
+    // COOLDOWN_REPOLL_MS, then re-measure; a re-poll that finds the chain
+    // still cooling re-parks WITHOUT spending a retry attempt.
     const cooldownWaitMs = this.allProvidersCoolingDownMs();
-    const effectiveBackoffMs = Math.max(decision.backoffMs, cooldownWaitMs);
+    const cooldownWaitCapped = cooldownWaitMs > BackgroundExecutor.COOLDOWN_REPOLL_MS;
+    const effectiveBackoffMs = Math.max(
+      decision.backoffMs,
+      Math.min(cooldownWaitMs, BackgroundExecutor.COOLDOWN_REPOLL_MS),
+    );
     try {
       this.taskManager.block(
         task.id,
@@ -2095,6 +2110,18 @@ export class BackgroundExecutor {
         // The ANCESTRY, not just the tip: a continuation that minted a fresh
         // task after the cancel would otherwise walk around this guard
         // (audited 2026-09-03).
+        // Still cooling at the re-poll: this wake was a measurement, not an
+        // attempt. Give the attempt back and park again on the fresh horizon.
+        if (cooldownWaitCapped && this.allProvidersCoolingDownMs() > 0) {
+          this.missionRetries.set(key, decision.attempt);
+          getLoggerSafe().info("Mission keep-alive re-polled the outage — still cooling, parking again without spending an attempt", {
+            taskId: task.id,
+            attempt: decision.attempt,
+            remainingMs: this.allProvidersCoolingDownMs(),
+          });
+          this.scheduleMissionKeepAlive(task, reason);
+          return;
+        }
         if (this.isLineageCancelled(task)) {
           const tip = this.lineageTipOf(task);
           this.missionRetries.delete(key);

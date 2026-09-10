@@ -591,7 +591,13 @@ async function runFetchLoop(
     const isRetryable = !isOverloaded && (status === 429 || (status >= 500 && status < 600));
 
     if (!isRetryable || attempt === maxRetries) {
-      const rawText = (await response.text().catch(() => "(unreadable)")).slice(0, 200);
+      // 1500, not 200: a gateway that relays an upstream's 4xx (OpenCode Go →
+      // DeepSeek) puts the sentence that names the cause at the END of a
+      // nested JSON body — "…Upstream request failed: [invalid_request_error]
+      // The `reasoning_content` in the thinking mode must be passed back…" —
+      // and 200 chars ended every copy at "[invalid_req" (measured 2026-09-10:
+      // nine identical 400s, three restarts, cause read only from a curl probe).
+      const rawText = (await response.text().catch(() => "(unreadable)")).slice(0, 1500);
       const errorText = shouldSanitize ? sanitizeSecrets(rawText) : rawText;
       // Honest classification: a 429 that has exhausted its retries is RATE-LIMITED,
       // not a generic API error — tag the message so upstream (FallbackChain,
