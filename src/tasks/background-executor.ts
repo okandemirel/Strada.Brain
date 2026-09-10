@@ -374,16 +374,22 @@ export class BackgroundExecutor {
           // re-armed the mission at attempt 0: a fresh ten-retry budget and the
           // backoff back at its 30s floor, making MAX_MISSION_RETRIES unenforceable.
           const marker = /Auto-retry (\d+)\/\d+ in ~\d+s/.exec(result);
-          if (!marker) continue;
-          // An escalated mission is waiting on a PERSON. Re-arming it would
-          // silently withdraw the escalation and overwrite its notice.
-          if (/MISSION STOPPED/.test(result)) {
+          // An escalated mission is waiting on a PERSON, and so is one blocked
+          // on a question. Re-arming either would silently withdraw the
+          // escalation and overwrite its notice. Everything else IS re-armed:
+          // the marker used to be the only admission ticket, so a mission
+          // blocked with any other sentence — "blocked:provider_unavailable",
+          // "workspace directory is gone", a channel-authored block — was
+          // never retried after a restart (audited 2026-09-10: the driver
+          // mission sat blocked through three boots with exactly that reason).
+          if (/MISSION STOPPED|Paused on a question|Reply with guidance|ask_user/i.test(result)) {
             getLoggerSafe().info("Keep-alive re-arm skipped — mission already escalated to a person", {
               taskId: task.id,
             });
             continue;
           }
-          const persistedAttempt = Number(marker[1]);
+          const persistedAttempt = marker ? Number(marker[1]) : 0;
+          const rearmReason = marker ? "keep-alive re-armed after restart" : `keep-alive re-armed after restart — ${result.slice(0, 120)}`;
           const lineage = this.lineageRootTaskId(task);
           if (seenLineages.has(lineage)) continue;
           seenLineages.add(lineage);
@@ -415,10 +421,10 @@ export class BackgroundExecutor {
           const key = `mission:${lineage}`;
           this.missionRetries.set(key, Math.max(this.missionRetries.get(key) ?? 0, persistedAttempt));
           if (staggerMs === 0) {
-            this.scheduleMissionKeepAlive(task, "keep-alive re-armed after restart");
+            this.scheduleMissionKeepAlive(task, rearmReason);
           } else {
             const t = setTimeout(
-              () => this.scheduleMissionKeepAlive(task, "keep-alive re-armed after restart"),
+              () => this.scheduleMissionKeepAlive(task, rearmReason),
               staggerMs,
             );
             t.unref?.();
