@@ -27,7 +27,19 @@ import { getLogger } from "../utils/logger.js";
  * overwrite each other's script and each other's output.
  */
 const EDITOR_EXCLUSIVE_PREFIXES = ["unity_verify", "unity_compile", "unity_playmode"] as const;
-const EDITOR_EXCLUSIVE_NAMES: ReadonlySet<string> = new Set(["unity_prerender_frames"]);
+/**
+ * Batch-mode Unity runs on a lease's own project copy — a play-through, a scene
+ * build, a player build — do not share editor state, but each is a full Unity
+ * process with a fresh Library import. With per-node worktrees (2026-09-10)
+ * several nodes may reach them at once, and two such imports on one machine
+ * are slower together than in sequence and can exhaust memory. They queue here.
+ */
+const EDITOR_EXCLUSIVE_NAMES: ReadonlySet<string> = new Set([
+  "unity_prerender_frames",
+  "unity_playthrough",
+  "unity_scene_build",
+  "unity_build_player",
+]);
 
 /** Does this tool need the editor to itself? */
 export function isUnityEditorExclusiveTool(toolName: string): boolean {

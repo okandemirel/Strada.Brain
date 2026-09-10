@@ -12,6 +12,7 @@
 
 import { describe, it, expect, beforeAll, vi } from "vitest";
 import { Orchestrator } from "./orchestrator.js";
+import { isUnityEditorExclusiveTool } from "./unity-editor-lock.js";
 import { createMockProvider, createMockChannel } from "../test-helpers.js";
 import { createLogger } from "../utils/logger.js";
 
@@ -78,6 +79,17 @@ const settle = async (): Promise<void> => {
 };
 
 describe("unity editor lock", () => {
+  it("batch-mode runs on a lease's own project copy queue too — one Unity import at a time", () => {
+    // Per-node worktrees (2026-09-10) let several nodes reach these at once;
+    // two fresh Library imports on one machine are slower together and can
+    // exhaust memory.
+    for (const name of ["unity_playthrough", "unity_scene_build", "unity_build_player", "unity_prerender_frames"]) {
+      expect(isUnityEditorExclusiveTool(name), name).toBe(true);
+    }
+    expect(isUnityEditorExclusiveTool("unity_scene_analyze")).toBe(false);
+    expect(isUnityEditorExclusiveTool("file_read")).toBe(false);
+  });
+
   it("a second unity_verify_change waits for the first to finish, then runs", async () => {
     const log: string[] = [];
     const a = editorTool("unity_verify_change", log);

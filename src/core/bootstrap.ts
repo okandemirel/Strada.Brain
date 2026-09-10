@@ -249,18 +249,18 @@ export function createSupervisorExecuteNodeBridge(params: {
         attachments: context.attachments,
         userContent: context.userContent,
         onUsage,
-        // Nodes share the task's lease. Per-node CHILD leases were tried
-        // 2026-09-01 to unlock wave parallelism and reverted the same day:
-        // a lease derived from another lease is a temp copy, so (a) it has no
-        // .git — every git_* tool and the "commit per logical unit" rule fail
-        // inside a node, (b) commitLease takes the project write lock only
-        // when sourceRoot === projectRoot, so node commits took NO lock, and
-        // a sibling that touched the same file had its work quarantined into
-        // the PARENT lease's .strada — deleted with the parent on release.
-        // Wave parallelism needs per-node leases that are real worktrees off
-        // the project root plus lock-covered commits; until that exists the
-        // shared lease (and the supervisor's clamp) is the correct trade.
-        workspaceLease: context.workspaceLease,
+        // Per-node workspaces: hand the node NO lease, and runWorkerEnvelope
+        // mints it one off the PROJECT root — a real git worktree (git_* tools
+        // and "commit per logical unit" work), committed under the project
+        // write lock and replayed onto the project's HEAD when the node ends,
+        // so the next wave's worktrees are seeded with this wave's work.
+        // Per-node CHILD leases (a temp copy derived from the task lease) were
+        // tried 2026-09-01 and reverted: no .git, no lock, conflicts quarantined
+        // into the parent and deleted with it. The flag is set only by an
+        // executor that owns a lease manager, so "no lease here" never means
+        // "run on the real tree". Without the flag nodes share the task's
+        // lease and the supervisor runs them one at a time (nodeParallelism).
+        workspaceLease: context.nodeWorkspaces === "per-node" ? undefined : context.workspaceLease,
         ...(context.workspacePolicy ? { workspacePolicy: context.workspacePolicy } : {}),
         signal: signal ?? context.signal ?? AbortSignal.timeout(300_000),
         ...(goalRootId ? { goalContext: { rootId: goalRootId, nodeId: String(node.id) } } : {}),

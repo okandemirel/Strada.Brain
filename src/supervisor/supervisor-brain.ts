@@ -62,6 +62,24 @@ export interface SupervisorBrainOptions {
 // SUPERVISOR BRAIN
 // =============================================================================
 
+/**
+ * How many nodes of one wave may run at once.
+ *
+ * A SHARED task lease means one worktree: concurrent nodes would write the
+ * same files with no lock and no usable conflict recovery, so they serialize.
+ * When the executor grants per-node workspaces (each node a real worktree off
+ * the project root, commits lock-covered — see the execute-node bridge) the
+ * configured width applies again. No lease at all: nodes already take their
+ * own leases in runWorkerEnvelope, so the width was never clamped there.
+ */
+export function nodeParallelism(
+  context: { readonly workspaceLease?: unknown; readonly nodeWorkspaces?: "per-node" },
+  configured: number,
+): number {
+  if (context.workspaceLease && context.nodeWorkspaces !== "per-node") return 1;
+  return configured;
+}
+
 export class SupervisorBrain {
   private readonly config: SupervisorConfig;
   private readonly decomposer: SupervisorDecomposer;
@@ -458,12 +476,7 @@ export class SupervisorBrain {
           return nodeResult;
         },
         config: {
-          // A SHARED lease means one worktree: concurrent nodes would write
-          // the same files with no lock and no usable conflict recovery, so
-          // they serialize. Wave parallelism is available where each worker
-          // owns a real worktree — the delegation path (swarm_tasks) — not
-          // here. See the execute-node bridge for the full rationale.
-          maxParallelNodes: context.workspaceLease ? 1 : this.config.maxParallelNodes,
+          maxParallelNodes: nodeParallelism(context, this.config.maxParallelNodes),
           nodeTimeoutMs: this.calculateAdaptiveTimeout(
             assignedNodes.length,
             planningTask.length,

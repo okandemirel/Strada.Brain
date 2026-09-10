@@ -734,6 +734,7 @@ export class BackgroundExecutor {
         taskRunId?: string;
         onUsage?: (usage: { provider: string; inputTokens: number; outputTokens: number }) => void;
         workspaceLease?: ManagedWorkspaceLease;
+        nodeWorkspaces?: "per-node";
         onActivated?: (activation: { markdown: string }) => Promise<void> | void;
         reportUpdate?: (markdown: string) => Promise<void> | void;
         onGoalDecomposed?: (goalTree: GoalTree) => void;
@@ -782,6 +783,10 @@ export class BackgroundExecutor {
       onUsage: this.buildUsageRecorder(task),
       workspaceLease,
       ...(task.workspacePolicy ? { workspacePolicy: task.workspacePolicy } : {}),
+      // Only an executor that can mint leases may promise one per node: the
+      // bridge hands such a node NO lease and runWorkerEnvelope takes one off
+      // the project root (see nodeParallelism / the execute-node bridge).
+      ...(this.workspaceLeaseManager && task.workspacePolicy !== "none" ? { nodeWorkspaces: "per-node" as const } : {}),
       onGoalDecomposed: (goalTree: GoalTree) => {
         supervisorGoalTree = goalTree;
         supervisorGoalStartedAt = Date.now();

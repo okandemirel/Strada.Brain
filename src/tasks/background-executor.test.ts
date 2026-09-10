@@ -292,6 +292,60 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
     expect(order).toEqual(["commit", "release", "integrate"]);
   });
 
+  it("promises per-node workspaces to the supervisor only when it owns a lease manager", async () => {
+    // The bridge withholds the task lease from a node on the strength of this
+    // flag, so it must come from the one place that can actually mint a
+    // replacement — never from the task or the caller.
+    const goalTree = buildTestGoalTree();
+    const admitted: Array<Record<string, unknown>> = [];
+    mockOrch.evaluateSupervisorAdmission.mockImplementation(async (params: Record<string, unknown>) => {
+      admitted.push(params);
+      return {
+        path: "supervisor",
+        reason: "eligible",
+        result: { success: true, partial: false, output: "done", totalNodes: 1, succeeded: 1, failed: 0, skipped: 0, totalCost: 0, totalDuration: 0, nodeResults: [] },
+      };
+    });
+    const lease = {
+      id: "lease-task",
+      path: "/tmp/task-lease",
+      release: vi.fn(async () => undefined),
+      commit: vi.fn(async () => ({ written: [], conflicts: [], removed: [], deleted: [], failed: [], conflictsQuarantinedUnder: null, quarantined: 0 })),
+    };
+    const withManager = new BackgroundExecutor({
+      orchestrator: mockOrch as any,
+      decomposer: mockDecomposer as any,
+      goalStorage: mockGoalStorage as any,
+      daemonEventBus: mockDaemonEventBus as any,
+      workspaceLeaseManager: { acquireLease: vi.fn().mockResolvedValue(lease) } as any,
+      aiProvider: undefined,
+      channel: undefined,
+    });
+    withManager.setTaskManager({ updateStatus: vi.fn(), complete: vi.fn(), fail: vi.fn(), block: vi.fn() } as any);
+    withManager.enqueue(createTestTask(goalTree), new AbortController().signal, vi.fn());
+    await vi.waitFor(() => expect(admitted.length).toBe(1), { timeout: 5000 });
+    expect(admitted[0]!.nodeWorkspaces).toBe("per-node");
+    expect(admitted[0]!.workspaceLease).toBe(lease);
+
+    const realTree = createTestTask(goalTree, { workspacePolicy: "none" } as any);
+    withManager.enqueue(realTree, new AbortController().signal, vi.fn());
+    await vi.waitFor(() => expect(admitted.length).toBe(2), { timeout: 5000 });
+    expect(admitted[1]!.nodeWorkspaces, "a real-tree repair must not be promised worktrees").toBeUndefined();
+
+    const withoutManager = new BackgroundExecutor({
+      orchestrator: mockOrch as any,
+      decomposer: mockDecomposer as any,
+      goalStorage: mockGoalStorage as any,
+      daemonEventBus: mockDaemonEventBus as any,
+      aiProvider: undefined,
+      channel: undefined,
+    });
+    withoutManager.setTaskManager({ updateStatus: vi.fn(), complete: vi.fn(), fail: vi.fn(), block: vi.fn() } as any);
+    withoutManager.enqueue(createTestTask(goalTree), new AbortController().signal, vi.fn());
+    await vi.waitFor(() => expect(admitted.length).toBe(3), { timeout: 5000 });
+    expect(admitted[2]!.nodeWorkspaces, "no lease manager: nothing could replace the withheld lease").toBeUndefined();
+  });
+
   it("routes top-level complex tasks through supervisor even without a prebuilt goal tree", async () => {
     const task = createTestTask(undefined, {
       prompt: "Audit the architecture, split the work across providers, and reconcile the findings",

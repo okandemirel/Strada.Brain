@@ -91,6 +91,36 @@ describe("createSupervisorExecuteNodeBridge", () => {
     expect(result.toolResults[1]!.toolCallId).toBe("trace-1");
   });
 
+  it("per-node workspaces: the node is handed NO lease so runWorkerEnvelope mints its own worktree", async () => {
+    // A node that shares the task lease cannot run beside a sibling (one
+    // worktree, no lock). With nodeWorkspaces "per-node" the bridge withholds
+    // the task lease and the executor's fallback takes a git worktree off the
+    // project root — a lease of its own, committed under the project write lock.
+    const runWorkerEnvelope = vi.fn().mockResolvedValue({
+      output: "done",
+      workerResult: { status: "completed", toolTrace: [] },
+    });
+    const bridge = createSupervisorExecuteNodeBridge({
+      backgroundExecutor: { runWorkerEnvelope } as any,
+      orchestrator: {} as any,
+      defaultChannelType: "cli",
+    });
+    await bridge(
+      { id: "node-1", task: "Build the board", assignedProvider: "p", assignedModel: "m" } as any,
+      {
+        chatId: "chat-1",
+        taskRunId: "taskrun_parent",
+        workspaceLease: { id: "lease-parent", path: "/tmp/parent-workspace" },
+        nodeWorkspaces: "per-node",
+      } as any,
+      new AbortController().signal,
+    );
+    const envelope = runWorkerEnvelope.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(envelope.workspaceLease, "the shared task lease reached the node").toBeUndefined();
+    // Never "no lease at all": the envelope must not carry the real-tree policy.
+    expect(envelope.workspacePolicy).toBeUndefined();
+  });
+
   it("derives child workspace context and remaps blocked workers", async () => {
     const runWorkerEnvelope = vi.fn().mockResolvedValue({
       output: "Need user input",

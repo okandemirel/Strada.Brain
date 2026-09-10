@@ -358,6 +358,8 @@ export interface SupervisorAdmissionRequest {
   readonly workspaceLease?: WorkspaceLease;
   /** See WorkerExecutionEnvelope.workspacePolicy — carried to every node. */
   readonly workspacePolicy?: "none";
+  /** See WorkerExecutionEnvelope.nodeWorkspaces — unlocks wave parallelism. */
+  readonly nodeWorkspaces?: "per-node";
   readonly onActivated?: (
     activation: ReturnType<typeof buildSupervisorActivationNarrative>,
   ) => Promise<void> | void;
@@ -1678,6 +1680,7 @@ export class Orchestrator {
         onUsage: params.onUsage,
         workspaceLease: params.workspaceLease,
         ...(params.workspacePolicy ? { workspacePolicy: params.workspacePolicy } : {}),
+        ...(params.nodeWorkspaces ? { nodeWorkspaces: params.nodeWorkspaces } : {}),
         userContent: params.userContent,
         planningPrompt: supervisorPlanningPrompt,
         ...(params.signal ? { signal: params.signal } : {}),

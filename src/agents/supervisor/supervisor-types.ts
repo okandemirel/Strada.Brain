@@ -101,6 +101,16 @@ export interface WorkerExecutionEnvelope {
    */
   readonly workspacePolicy?: "none";
   /**
+   * "per-node" = every supervisor node gets a lease of its own — a real git
+   * worktree off the project root, committed under the project write lock and
+   * replayed onto the project's HEAD when the node ends — instead of sharing
+   * the task's lease. Set ONLY by the executor that owns a lease manager, so a
+   * node can never run on the real tree just because the flag was requested.
+   * Until 2026-09-10 every leased task ran its nodes strictly one at a time
+   * (a 12-node plan with 1-hour nodes was a 12-hour sprint).
+   */
+  readonly nodeWorkspaces?: "per-node";
+  /**
    * Whole-goal MONITOR scope (optional). When a supervisor-decomposed worker runs with its
    * own chatId/conversationId, the parent goal's conversationScope is stamped here so the
    * worker's monitor events JOIN the parent episode (one workspace per whole goal) instead
