@@ -14,6 +14,11 @@ Paths are the defaults (`~/.strada` is `STRADA_HOME`).
 | Supervisor death | `<Strada.Brain>/.strada/supervisor-dead.json` (written when the supervisor gives up restarting; consumed and reported at the next boot) | absent |
 | One-shot read-out | `./strada status` (or `node node_modules/tsx/dist/cli.mjs src/index.ts status`) | `Health: ok (up …)`, `Providers: no bench in effect`, the live campaign's milestone or `Campaign: none active`, `Last auto-update: pulled … ago` |
 
+CI boots the built daemon on every push (`npm run smoke:boot`: throwaway home,
+no credentials, stub Ollama, `/health` must say ok, SIGTERM must exit cleanly);
+the same command works locally after `npm run build` and prints the daemon's
+output when the boot fails.
+
 `strada status` reads four sources and says when one is not readable rather
 than skipping it: the web `/health` endpoint, `provider-health.json` (only
 benches whose cooldown is still ahead are listed, with the retry time and the

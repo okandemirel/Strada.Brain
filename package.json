@@ -52,6 +52,7 @@
     "test:fast": "NODE_OPTIONS=--max-old-space-size=8192 vitest run src/config src/security src/utils src/common src/budget",
     "verify": "npm run typecheck:src && npm run lint:src && npm run test:fast",
     "smoke:cli:release": "node scripts/release/cli-release-smoke.mjs",
+    "smoke:boot": "node scripts/ci/boot-smoke.mjs",
     "security:audit": "npm audit --audit-level=high",
     "security:full": "./pentest/scripts/run-all-tests.sh",
     "security:critical": "./pentest/scripts/run-all-tests.sh --critical-only",
