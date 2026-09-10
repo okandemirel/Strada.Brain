@@ -12,6 +12,7 @@
  */
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 
 import { canonicalizeProviderName } from "./provider-identity.js";
 
@@ -190,7 +191,11 @@ export class ProviderHealthRegistry {
     // Carry the seat identity forward: every record* path builds a fresh entry
     // literal, so without this the boot-time stamp would be erased by the next
     // failure and a re-pointed seat could never be told from an unchanged one.
-    const identity = entry.identity ?? previous?.identity;
+    // A seat that has never failed has no entry to carry a stamp, so its first
+    // failure used to be recorded with no identity at all — and a later key
+    // rotation then stamped the new identity onto the old bench instead of
+    // clearing it (the 2026-09-10 rotation). The boot-time stamp lives here.
+    const identity = entry.identity ?? previous?.identity ?? this.seatIdentities.get(normalized);
     this.entries.set(normalized, identity === undefined ? entry : { ...entry, identity });
     if (
       previous?.status !== entry.status ||
@@ -471,10 +476,25 @@ export class ProviderHealthRegistry {
    *
    * Audited 2026-09-04 (see ProviderHealthEntry.identity).
    */
+  /**
+   * The identity of a seat: endpoint, model, and a fingerprint of the
+   * credential. Measured 2026-09-10 11:47: the operator rotated OPENCODE_API_KEY
+   * after the old key was revoked (a burst of 401s benched both OpenCode seats
+   * for 8 hours), restarted — and the new key inherited the bench, because the
+   * identity was endpoint|model only. A 401 belongs to a key; a new key has
+   * earned nothing. The fingerprint is a truncated hash: the file must never
+   * hold key material.
+   */
+  static seatIdentity(baseUrl: string | undefined, model: string | undefined, apiKey: string | undefined): string {
+    const fingerprint = apiKey ? createHash("sha256").update(apiKey).digest("hex").slice(0, 12) : "nokey";
+    return `${baseUrl ?? "default"}|${model ?? "default"}|${fingerprint}`;
+  }
+
   reconcileSeatIdentities(identities: ReadonlyMap<string, string>): string[] {
     const cleared: string[] = [];
     for (const [rawName, identity] of identities) {
       const normalized = this.norm(rawName);
+      this.seatIdentities.set(normalized, identity);
       const entry = this.entries.get(normalized);
       if (!entry) continue;
       if (entry.identity === undefined) {
@@ -482,6 +502,12 @@ export class ProviderHealthRegistry {
         continue;
       }
       if (entry.identity === identity) continue;
+      if (identity.startsWith(`${entry.identity}|`)) {
+        // A stamp written before the credential fingerprint existed: the
+        // endpoint and model still match, so the bench stands; upgrade the stamp.
+        this.entries.set(normalized, { ...entry, identity });
+        continue;
+      }
       this.clearProviderState(normalized);
       cleared.push(normalized);
     }
@@ -647,6 +673,8 @@ export class ProviderHealthRegistry {
    * discovering that by failing.
    */
   private persistPath: string | null = null;
+  /** What each seat is configured to call now (boot-time stamp for entries that do not exist yet). */
+  private readonly seatIdentities = new Map<string, string>();
 
   /** Write now, for facts that must survive a kill. Best-effort, like save(). */
   private persistNow(): void {

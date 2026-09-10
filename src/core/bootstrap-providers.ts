@@ -309,7 +309,7 @@ export async function initializeAIProvider(
       if (typeof name !== "string" || name.trim() === "") continue;
       identities.set(
         name,
-        `${baseUrlOverrides[name] ?? "default"}|${config.providerModels?.[name] ?? "default"}`,
+        ProviderHealthRegistry.seatIdentity(baseUrlOverrides[name], config.providerModels?.[name], apiKeys[name]),
       );
     }
     const cleared = ProviderHealthRegistry.getInstance().reconcileSeatIdentities(identities);

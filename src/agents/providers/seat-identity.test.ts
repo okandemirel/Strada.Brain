@@ -2,7 +2,7 @@ import { describe, expect, it, afterEach } from "vitest";
 import { ProviderHealthRegistry } from "./provider-health.js";
 
 const registry = ProviderHealthRegistry.getInstance();
-const SEATS = ["seat-a", "seat-b", "seat-c"];
+const SEATS = ["seat-a", "seat-b", "seat-c", "seat-k", "seat-u"];
 afterEach(() => { for (const s of SEATS) registry.clearProviderState(s); });
 
 /**
@@ -49,3 +49,39 @@ describe("a bench belongs to the endpoint that earned it", () => {
     expect(registry.reconcileSeatIdentities(new Map([["seat-a", ZEN]]))).toEqual(["seat-a"]);
   });
 });
+
+describe("a credential bench belongs to the key that earned it (measured 2026-09-10: a rotated key inherited an 8-hour 401 bench)", () => {
+  const GO_URL = "https://opencode.ai/zen/go/v1";
+
+  it("the identity changes with the key and never carries key material", () => {
+    const a = ProviderHealthRegistry.seatIdentity(GO_URL, "deepseek-flash", "sk-OLDKEY-0123456789");
+    const b = ProviderHealthRegistry.seatIdentity(GO_URL, "deepseek-flash", "sk-NEWKEY-0123456789");
+    expect(a).not.toBe(b);
+    expect(a.startsWith(`${GO_URL}|deepseek-flash|`)).toBe(true);
+    expect(a).not.toContain("OLDKEY");
+    expect(ProviderHealthRegistry.seatIdentity(GO_URL, "deepseek-flash", "sk-OLDKEY-0123456789")).toBe(a);
+  });
+
+  it("a rotated key clears the bench the old key earned", () => {
+    const old = ProviderHealthRegistry.seatIdentity(GO_URL, "deepseek-flash", "sk-old");
+    registry.reconcileSeatIdentities(new Map([["seat-k", old]])); // stamp
+    registry.recordCredentialRejected("seat-k", "401 Invalid API key");
+    expect(registry.isAvailable("seat-k")).toBe(false);
+    const rotated = ProviderHealthRegistry.seatIdentity(GO_URL, "deepseek-flash", "sk-new");
+    expect(registry.reconcileSeatIdentities(new Map([["seat-k", rotated]]))).toEqual(["seat-k"]);
+    expect(registry.isAvailable("seat-k")).toBe(true);
+  });
+
+  it("a stamp from before the fingerprint existed is upgraded, not cleared, when endpoint and model still match", () => {
+    registry.reconcileSeatIdentities(new Map([["seat-u", `${GO_URL}|deepseek-flash`]])); // old two-part stamp
+    registry.recordQuotaExhausted("seat-u", "quota");
+    expect(registry.isAvailable("seat-u")).toBe(false);
+    const withKey = ProviderHealthRegistry.seatIdentity(GO_URL, "deepseek-flash", "sk-any");
+    expect(registry.reconcileSeatIdentities(new Map([["seat-u", withKey]]))).toEqual([]);
+    expect(registry.isAvailable("seat-u")).toBe(false);
+    // and once upgraded, a later key rotation IS a change
+    const rotated = ProviderHealthRegistry.seatIdentity(GO_URL, "deepseek-flash", "sk-other");
+    expect(registry.reconcileSeatIdentities(new Map([["seat-u", rotated]]))).toEqual(["seat-u"]);
+  });
+});
+
