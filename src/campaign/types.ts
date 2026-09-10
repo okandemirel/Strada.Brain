@@ -286,11 +286,14 @@ export interface PlaythroughEvidence {
   ok?: boolean;
   reasons?: string[];
   scene?: string;
-  level?: number;
-  terminalState?: string;
-  /** Did the game leave the booted state by itself, before the test called StartLevel? */
+  session?: number;
+  /** PlaythroughOutcome name the driver reported: Won, Lost, Ended (None while unfinished). */
+  outcome?: string;
+  /** IsSessionActive read after boot, before StartSession: does the game start play by itself? */
   autoStarted?: boolean;
-  tapsDriven?: number;
+  actions?: number;
+  /** Why the test could not drive at all (no driver registered, no scene, no bootstrapper). */
+  missing?: string;
   frames?: { count: number; flat: number; maxMotionShare: number };
   measuredAt?: string;
 }

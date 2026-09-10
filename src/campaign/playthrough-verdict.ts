@@ -1,19 +1,22 @@
 /**
  * The play-through verdict, read back from the project.
  *
- * `unity_playthrough` (Strada.MCP) plays the game headlessly — boots the entry
- * scene, starts a level, taps until it ends, captures frames — and leaves
- * `Recordings/playthrough/playthrough-verdict.json`. This module is the
+ * `unity_playthrough` (Strada.MCP) plays the game headlessly through the one
+ * contract every Strada.Core game registers, Strada.Core.Play.IPlaythroughDriver
+ * — boots the entry scene, starts a session, acts until it ends, records
+ * frames — and leaves `Recordings/playthrough/playthrough-verdict.json`. This module is the
  * campaign's side of that contract: it reads the file, refuses one older than
  * the sprint (a verdict earned by an earlier build says nothing about this
  * one), and turns it into the sentences the delivery gate and the delivery
  * report use.
  *
- * Measured 2026-09-10: the campaign delivered "green" on compile, PlayMode
- * tests and art counts while no scene had gone Home → level → win/fail under
- * observation, and the entry scene idled after boot because nothing at runtime
- * calls StartLevel. A verdict that says "the game reported LevelWon after 12
- * taps and the frames moved" is the evidence those gates never had.
+ * Measured 2026-09-10 on the test vehicle: the campaign delivered "green" on
+ * compile, PlayMode tests and art counts while no scene had gone Home → play →
+ * outcome under observation, and the entry scene idled after boot because
+ * nothing at runtime starts a session. A verdict that says "the game reported
+ * Won after 12 actions and the frames moved" is the evidence those gates never
+ * had. Nothing here knows a game's own names: the driver contract is the only
+ * vocabulary.
  */
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -25,11 +28,12 @@ interface VerdictFile {
   ok?: unknown;
   reasons?: unknown;
   record?: {
-    terminalState?: unknown;
+    outcome?: unknown;
     autoStarted?: unknown;
-    tapsDriven?: unknown;
-    level?: unknown;
+    actions?: unknown;
+    session?: unknown;
     scene?: unknown;
+    missing?: unknown;
   } | null;
   frames?: { count?: unknown; flat?: unknown; maxMotionShare?: unknown } | null;
   measuredAt?: unknown;
@@ -66,11 +70,12 @@ export function readPlaythroughVerdict(projectRoot: string, sinceMs: number): Pl
     reasons: Array.isArray(parsed.reasons) ? parsed.reasons.map(String).slice(0, 8) : [],
     ...(record
       ? {
-          terminalState: str(record.terminalState),
+          outcome: str(record.outcome),
           autoStarted: record.autoStarted === true,
-          tapsDriven: num(record.tapsDriven),
-          level: num(record.level),
+          actions: num(record.actions),
+          session: num(record.session),
           scene: str(record.scene),
+          missing: str(record.missing),
         }
       : {}),
     ...(frames
@@ -91,9 +96,9 @@ export function describePlaythrough(e: PlaythroughEvidence | undefined): string 
   }
   const where = e.scene ? ` in ${e.scene}` : "";
   const frames = e.frames ? `; ${e.frames.count} frames, ${e.frames.flat} flat, max motion ${(e.frames.maxMotionShare * 100).toFixed(1)}%` : "";
-  const start = e.autoStarted === false ? "; the game does NOT start a level by itself after boot (the test called StartLevel)" : "";
+  const start = e.autoStarted === false && !e.missing ? "; the game does NOT start play by itself after boot (the driver's StartSession was called)" : "";
   if (e.ok) {
-    return `play-through OK${where}: level ${e.level ?? "?"} played to ${e.terminalState ?? "a terminal state"} in ${e.tapsDriven ?? "?"} taps${frames}${start}`;
+    return `play-through OK${where}: session ${e.session ?? "?"} played to ${e.outcome ?? "an outcome"} in ${e.actions ?? "?"} actions${frames}${start}`;
   }
   return `play-through FAILED${where}: ${e.reasons && e.reasons.length > 0 ? e.reasons.join("; ") : "no reason recorded"}${frames}${start}`;
 }
@@ -106,9 +111,10 @@ export function playthroughDirective(e: PlaythroughEvidence | undefined): string
       : "no play-through of the game as it now stands was observed"
     : `the last play-through FAILED: ${e.reasons && e.reasons.length > 0 ? e.reasons.join("; ") : "no reason recorded"}`;
   return (
-    `PLAY-THROUGH REQUIRED: ${why}. Run unity_playthrough (it boots the entry scene, starts a level, ` +
-    "taps through it and judges the frames) and fix whatever it names until its verdict is ok — a level " +
-    "that never ends, a screen that never changes, or a flow service that refuses to start is not a " +
-    "delivered game. Its verdict, not your description of the game, is the proof."
+    `PLAY-THROUGH REQUIRED: ${why}. Run unity_playthrough (it boots the entry scene, resolves the game's ` +
+    "Strada.Core.Play.IPlaythroughDriver, starts a session, acts until it ends and judges the frames) and fix " +
+    "whatever it names until its verdict is ok — no registered driver, a session that never ends, a screen " +
+    "that never changes, or a driver that refuses to start is not a delivered game. Its verdict, not your " +
+    "description of the game, is the proof."
   );
 }

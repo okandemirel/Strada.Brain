@@ -1179,13 +1179,15 @@ export class CampaignManager {
       // not arm a gate the planner never asked for.
       if (!milestone.prompt.includes("PLAY-THROUGH (final sprint):")) {
         milestone.prompt +=
-          "\n\nPLAY-THROUGH (final sprint): before you report, run unity_playthrough. It boots the entry " +
-          "scene, starts a level through the game's flow service, taps through it with the game's input " +
-          "service until the level ends, records checkpoint frames and judges them. Delivery requires its verdict " +
-          "to be ok — fix what it names (a level that never ends, a screen that never changes, a flow " +
-          "service that refuses to start). It also reports whether the game starts a level BY ITSELF " +
-          "after boot; if it does not, wire the GDD's Home → level start so a person who opens the " +
-          "entry scene is playing, not staring at an idle board.";
+          "\n\nPLAY-THROUGH (final sprint): the game must register ONE Strada.Core.Play.IPlaythroughDriver " +
+          "in its service container — an adapter over its own flow, level and input services (Phase, " +
+          "IsSessionActive, Outcome, StartSession(index), Act()). Before you report, run unity_playthrough: " +
+          "it boots the entry scene, resolves that driver, starts a session, acts until the session ends, " +
+          "records checkpoint frames and judges them. Delivery requires its verdict to be ok — fix what it " +
+          "names (no driver registered, a session that never ends, a screen that never changes, a driver " +
+          "that refuses to start). It also reports whether the game starts play BY ITSELF after boot; if " +
+          "it does not, wire the GDD's entry flow so a person who opens the entry scene is playing, not " +
+          "staring at an idle screen.";
       }
       this.attachStructureMeasurement(campaign, milestone);
     }
@@ -3069,7 +3071,7 @@ export class CampaignManager {
         if (m.playthroughVerdict?.found && m.playthroughVerdict.ok) marks.push(line);
         else caveats.push(`${m.title}: ${line}`);
         if (m.playthroughVerdict?.found && m.playthroughVerdict.autoStarted === false) {
-          caveats.push(`${m.title}: the game does not start a level by itself after boot — a person opening the entry scene sees an idle board`);
+          caveats.push(`${m.title}: the game does not start play by itself after boot — a person opening the entry scene sees an idle screen`);
         }
       }
       if (!m.testVerdict && (isFinal || m.deliveryVerificationBounced)) {

@@ -180,8 +180,8 @@ describe("CampaignManager", () => {
       path,
       JSON.stringify({
         ok,
-        reasons: ok ? [] : ["level 1 never ended: last state Playing after 60 taps"],
-        record: { scene: "Main", level: 1, autoStarted: false, tapsDriven: 12, terminalState: ok ? "LevelWon" : "Playing", reachedTerminal: ok },
+        reasons: ok ? [] : ["session 1 never ended after 60 actions (phases seen: Playing)"],
+        record: { scene: "Entry", session: 1, autoStarted: false, actions: 12, outcome: ok ? "Won" : "None", reachedOutcome: ok },
         frames: { count: 5, flat: 0, maxMotionShare: 0.3 },
         measuredAt: new Date().toISOString(),
         ...extra,
@@ -747,7 +747,7 @@ describe("CampaignManager", () => {
     await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
     settleMilestone("sprint B done");
     await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
-    expect(tasks.submitted[2]!.prompt).toContain("PLAY-THROUGH (final sprint): before you report, run unity_playthrough");
+    expect(tasks.submitted[2]!.prompt).toContain("PLAY-THROUGH (final sprint): the game must register ONE Strada.Core.Play.IPlaythroughDriver");
 
     tasks.verifications.set("task_3", {
       testsGreen: true,
@@ -773,7 +773,7 @@ describe("CampaignManager", () => {
     });
     tasks.emit("task:completed", "task_4", "green, shipping");
     await vi.waitFor(() => expect(tasks.submitted).toHaveLength(5));
-    expect(tasks.submitted[4]!.prompt).toContain("PLAY-THROUGH REQUIRED: the last play-through FAILED: level 1 never ended");
+    expect(tasks.submitted[4]!.prompt).toContain("PLAY-THROUGH REQUIRED: the last play-through FAILED: session 1 never ended");
   });
 
   it("the delivery report names the play-through and that the game does not start itself", async () => {
@@ -791,8 +791,8 @@ describe("CampaignManager", () => {
     tasks.emit("task:completed", "task_3", "green, shipping");
     await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
     const report = messages.map((m) => m.text).join("\n");
-    expect(report).toContain("play-through OK in Main: level 1 played to LevelWon in 12 taps");
-    expect(report).toContain("does not start a level by itself after boot");
+    expect(report).toContain("play-through OK in Entry: session 1 played to Won in 12 actions");
+    expect(report).toContain("does not start play by itself after boot");
     expect(storage.get(campaign.id)!.milestones[2]!.playthroughVerdict).toMatchObject({ found: true, ok: true, autoStarted: false });
   });
 
