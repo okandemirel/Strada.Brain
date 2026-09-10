@@ -69,6 +69,102 @@ Respond ONLY with JSON:
 {"milestones": [{"title": "Sprint A — ...", "prompt": "...", "coveredSections": ["<heading>", ...], "deliverables": ["<thing>", ...]}, ...], "excluded": ["<item>: <the GDD's reason>", ...]}`;
 }
 
+/**
+ * MAP-REDUCE for a document too large to plan from whole (2026-09-10).
+ * windowGdd kept a head, a tail and an outline of the middle — a 300k GDD's
+ * middle sections (element schedules, level ladders, art direction) reached
+ * the planner as heading lines. Now every section is briefed by the model
+ * on its own (its elements, rules, screens, numbers, assets — the section's
+ * own names and figures), and the planner plans from the briefs, so nothing
+ * the document schedules is invisible. A section whose brief fails is
+ * represented by its structural outline and counted, never dropped.
+ */
+export const GDD_BRIEF_CHUNK_CHARS = 40_000;
+export const GDD_BRIEF_MAX_CHUNKS = 16;
+
+const BRIEF_SYSTEM = `You brief a planner on ONE section of a game design document.
+List everything the section specifies that would need building or measuring: scheduled elements (with their unlock tags), mechanics and rules, screens and UI flow, systems, content counts (levels, worlds, waves), numbers (frame rate, timings, budgets, sizes), assets (art, audio, VFX, animation), platform and build requirements, save/progression rules.
+Keep the section's own names and numbers exactly as written. Omit marketing, KPIs and aspiration.
+At most 350 words, plain text, first line = the section heading.`;
+
+const SECTION_LINE_RE = /^\s{0,3}(?:#{1,3}\s+\S|\d{1,2}(?:\.\d{1,2}){0,2}\.?\s+[A-Z][^\n]{2,70}$)/;
+
+/** The document cut at its headings into chunks of at most `chunkChars`, tiny sections merged, oversize ones split at paragraphs. */
+export function splitGddSections(gddText: string, chunkChars: number = GDD_BRIEF_CHUNK_CHARS, maxChunks: number = GDD_BRIEF_MAX_CHUNKS): Array<{ heading: string; text: string }> {
+  const lines = gddText.split(/\r?\n/);
+  const sections: Array<{ heading: string; text: string }> = [];
+  let heading = "(start of document)";
+  let buffer: string[] = [];
+  const flush = (): void => {
+    const text = buffer.join("\n").trim();
+    if (text.length > 0) sections.push({ heading, text });
+    buffer = [];
+  };
+  for (const line of lines) {
+    if (SECTION_LINE_RE.test(line)) {
+      flush();
+      heading = line.replace(/^\s{0,3}#{1,3}\s+/, "").trim();
+    }
+    buffer.push(line);
+  }
+  flush();
+  // Oversize sections split at paragraph boundaries.
+  const sized: Array<{ heading: string; text: string }> = [];
+  for (const sec of sections) {
+    if (sec.text.length <= chunkChars) { sized.push(sec); continue; }
+    // A paragraph longer than a chunk (a converted document with no blank
+    // lines) is cut at whitespace so the bound holds.
+    const paragraphs = sec.text.split(/\n\s*\n/).flatMap((para) => {
+      const pieces: string[] = [];
+      let rest = para;
+      while (rest.length > chunkChars) {
+        const cut = Math.max(rest.lastIndexOf("\n", chunkChars), rest.lastIndexOf(" ", chunkChars), Math.floor(chunkChars / 2));
+        pieces.push(rest.slice(0, cut));
+        rest = rest.slice(cut).trimStart();
+      }
+      pieces.push(rest);
+      return pieces;
+    });
+    let part: string[] = []; let partLen = 0; let index = 1;
+    for (const para of paragraphs) {
+      if (partLen + para.length > chunkChars && part.length > 0) {
+        sized.push({ heading: `${sec.heading} (part ${index++})`, text: part.join("\n\n") });
+        part = []; partLen = 0;
+      }
+      part.push(para); partLen += para.length + 2;
+    }
+    if (part.length > 0) sized.push({ heading: index > 1 ? `${sec.heading} (part ${index})` : sec.heading, text: part.join("\n\n") });
+  }
+  // Tiny neighbours merged, and the whole list held to maxChunks by merging.
+  const merged: Array<{ heading: string; text: string }> = [];
+  for (const sec of sized) {
+    const last = merged[merged.length - 1];
+    if (last && last.text.length + sec.text.length + 2 <= chunkChars && (last.text.length < chunkChars / 4 || sec.text.length < chunkChars / 4)) {
+      last.text = `${last.text}\n\n${sec.text}`;
+      last.heading = `${last.heading} + ${sec.heading}`;
+    } else merged.push({ ...sec });
+  }
+  while (merged.length > maxChunks) {
+    // Merge the smallest adjacent pair.
+    let best = 0;
+    for (let i = 0; i + 1 < merged.length; i++) {
+      if (merged[i]!.text.length + merged[i + 1]!.text.length < merged[best]!.text.length + merged[best + 1]!.text.length) best = i;
+    }
+    merged[best] = { heading: `${merged[best]!.heading} + ${merged[best + 1]!.heading}`, text: `${merged[best]!.text}\n\n${merged[best + 1]!.text}` };
+    merged.splice(best + 1, 1);
+  }
+  return merged;
+}
+
+/** The section's headings, tables, lists and short definition lines — what stands in for a brief that could not be made. */
+function structuralOutline(text: string, cap = 4_000): string {
+  return text
+    .split("\n")
+    .filter((line) => /^\s*(#{1,6}\s|\||[-*•]\s|\d{1,3}[.)]\s)/.test(line) || (/^\s*[A-ZĞÜŞİÖÇ][^:\n]{2,60}:\s+\S/.test(line) && line.length <= 160))
+    .join("\n")
+    .slice(0, cap);
+}
+
 export function windowGdd(gddText: string, fullThreshold: number = GDD_FULL_CHARS): string {
   if (gddText.length <= fullThreshold) return gddText;
   // The slices SCALE with the threshold. Audited 2026-09-02: fullThreshold
@@ -151,11 +247,14 @@ export class CampaignPlanner {
     }
     const scope = measureGddScope(gddText);
     const system = plannerSystem(scope);
+    const planning = await this.gddForPlanning(gddText);
 
     const userMessage =
       `GDD project-relative path: ${gddPath}\n\n` +
       (styleNote ? `Derived style profile (stored at style.json — generators read it): ${styleNote}\n\n` : "") +
-      `<gdd>\n${windowGdd(gddText)}\n</gdd>\n\n` +
+      (planning.briefed
+        ? `<gdd-briefs sections="${planning.sections}" original-chars="${gddText.length}">\n${planning.text}\n</gdd-briefs>\n\n`
+        : `<gdd>\n${planning.text}\n</gdd>\n\n`) +
       `Produce the milestone ladder for this game.`;
 
     // One transient failure (provider blink, malformed reply) used to fail
@@ -198,6 +297,41 @@ export class CampaignPlanner {
       }
     }
     throw lastError instanceof Error ? lastError : new Error(String(lastError));
+  }
+
+  /**
+   * The text the planner plans from: the document itself up to GDD_FULL_CHARS,
+   * otherwise one model brief per section (see splitGddSections). Failed briefs
+   * fall back to the section's structural outline and are counted.
+   */
+  async gddForPlanning(gddText: string): Promise<{ text: string; briefed: boolean; sections: number; failed: number }> {
+    if (gddText.length <= GDD_FULL_CHARS || !this.provider) {
+      return { text: gddText.length <= GDD_FULL_CHARS ? gddText : windowGdd(gddText), briefed: false, sections: 0, failed: 0 };
+    }
+    const chunks = splitGddSections(gddText);
+    const briefs: string[] = [];
+    let failed = 0;
+    for (const chunk of chunks) {
+      try {
+        const response = await streamOrChatText(this.provider, BRIEF_SYSTEM, `<section heading="${chunk.heading.replace(/"/g, "'")}">\n${chunk.text}\n</section>`);
+        const brief = stripLeakedReasoning(response.text ?? "").text.trim();
+        if (brief.length === 0) throw new Error("empty brief");
+        briefs.push(brief.slice(0, 6_000));
+      } catch (err) {
+        failed++;
+        getLoggerSafe().warn("GDD section brief failed — using its structural outline", {
+          heading: chunk.heading.slice(0, 80),
+          error: err instanceof Error ? err.message : String(err),
+        });
+        briefs.push(`${chunk.heading}\n[brief could not be made — structural outline follows]\n${structuralOutline(chunk.text)}`);
+      }
+    }
+    getLoggerSafe().info("GDD briefed section by section for planning", { chars: gddText.length, sections: chunks.length, failed });
+    const text =
+      `[This GDD is ${gddText.length} characters — beyond the whole-document window — so it was briefed section by section: ` +
+      `${chunks.length} sections${failed > 0 ? `, ${failed} represented by outline only (brief failed)` : ""}. Every section is below.]\n\n` +
+      briefs.join("\n\n---\n\n");
+    return { text, briefed: true, sections: chunks.length, failed };
   }
 
   private async planOnce(system: string, userMessage: string): Promise<MilestoneLadder> {
