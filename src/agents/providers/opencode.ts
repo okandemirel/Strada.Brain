@@ -1,6 +1,8 @@
 import type { ProviderCapabilities } from "./provider.interface.js";
 import { randomUUID } from "node:crypto";
 import { OpenAIProvider } from "./openai.js";
+import type { OpenAIMessage } from "./openai.js";
+import type { AssistantMessage } from "./provider-core.interface.js";
 
 /**
  * OpenCode hosted-platform base URLs (both OpenAI-compatible). The Go API lives
@@ -163,4 +165,33 @@ export class OpencodeProvider extends OpenAIProvider {
   // parseResponse is inherited from OpenAIProvider and works correctly
   // for OpenCode's OpenAI-compatible API. Override here if OpenCode adds
   // provider-specific response fields in the future.
+
+  /**
+   * Feed the model's reasoning back on tool-call turns.
+   *
+   * Measured 2026-09-10 14:34 on the Go endpoint (deepseek-flash, a thinking
+   * model): every assistant message carrying tool_calls was rejected with
+   * 400 "The `reasoning_content` in the thinking mode must be passed back to
+   * the API" unless it carried reasoning_content — except, by quirk, when its
+   * content was exactly "". The base class replays `content || null` and no
+   * reasoning, so each run died on its first tool-call replay, nine times in
+   * a row, behind a 200-char log slice that hid the sentence.
+   *
+   * The reasoning comes from the first tool call's providerMetadata (attached
+   * by parseResponse), else from the <reasoning> block the base embeds in the
+   * text, else a placeholder: the API demands the field, not its prose, and
+   * a placeholder beats a dead turn. Harmless for models that do not reason —
+   * OpenAI-compatible endpoints ignore unknown assistant fields.
+   */
+  protected override buildAssistantToolCallMessage(msg: AssistantMessage): OpenAIMessage {
+    const built = super.buildAssistantToolCallMessage(msg);
+    const fromMetadata = msg.tool_calls
+      ?.find((tc) => typeof tc.providerMetadata?.["reasoning_content"] === "string" && tc.providerMetadata["reasoning_content"] !== "")
+      ?.providerMetadata?.["reasoning_content"];
+    const content = typeof msg.content === "string" ? msg.content : "";
+    const fromText = /<reasoning>\s*\n([\s\S]*?)\n\s*<\/reasoning>/.exec(content)?.[1]?.trim();
+    const reasoning = (typeof fromMetadata === "string" && fromMetadata) || fromText || "(reasoning not retained)";
+    (built as unknown as Record<string, unknown>)["reasoning_content"] = reasoning;
+    return built;
+  }
 }

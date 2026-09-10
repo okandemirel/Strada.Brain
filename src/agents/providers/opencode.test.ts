@@ -109,3 +109,39 @@ describe("OpencodeProvider", () => {
     }
   });
 });
+
+describe("reasoning_content is passed back on tool-call turns (measured 2026-09-10: DeepSeek V4.1 thinking mode returns 400 without it)", () => {
+  const build = (msg: Record<string, unknown>) =>
+    (new OpencodeProvider("sk-test") as unknown as {
+      buildMessages(system: string, messages: unknown[]): Array<Record<string, unknown>>;
+    }).buildMessages("sys", [msg])[1]!;
+  const toolCall = (providerMetadata?: Record<string, unknown>) => ({
+    id: "call_1",
+    name: "file_read",
+    input: { path: "Assets/Foo.cs" },
+    ...(providerMetadata ? { providerMetadata } : {}),
+  });
+
+  it("uses the reasoning the response carried in providerMetadata", () => {
+    const m = build({ role: "assistant", content: "Reading.", tool_calls: [toolCall({ reasoning_content: "I should read it." })] });
+    expect(m["reasoning_content"]).toBe("I should read it.");
+    expect(m["tool_calls"]).toHaveLength(1);
+  });
+
+  it("falls back to the <reasoning> block embedded in the text", () => {
+    const m = build({ role: "assistant", content: "<reasoning>\nthink hard\n</reasoning>\n\nReading.", tool_calls: [toolCall()] });
+    expect(m["reasoning_content"]).toBe("think hard");
+  });
+
+  it("never sends a tool-call turn without the field", () => {
+    const m = build({ role: "assistant", content: null, tool_calls: [toolCall()] });
+    expect(typeof m["reasoning_content"]).toBe("string");
+    expect((m["reasoning_content"] as string).length).toBeGreaterThan(0);
+  });
+
+  it("a plain assistant turn without tool calls is untouched", () => {
+    const m = build({ role: "assistant", content: "Done." });
+    expect(m["reasoning_content"]).toBeUndefined();
+  });
+});
+

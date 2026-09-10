@@ -889,7 +889,7 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
           provider: provider.name,
           model: this.attemptMeta[i]?.model,
           ms: Date.now() - callStartedAt,
-          error: errorMsg.slice(0, 200),
+          error: errorMsg.slice(0, 1200),
           midStream: midStream !== null,
         });
 

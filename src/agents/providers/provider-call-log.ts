@@ -84,7 +84,10 @@ export function logProviderCall(
     label,
     provider: provider.name,
     ms,
-    error: describeThrown(error).slice(0, 200),
+    // 1200, not 200: a 4xx body names its cause at the end ("Upstream request
+    // failed: [invalid_request_error] …"), and 200 chars cut it off every time
+    // (measured 2026-09-10 14:34: nine identical truncated 400s, cause unknown).
+    error: describeThrown(error).slice(0, 1200),
     ...extra,
   });
 }
