@@ -183,6 +183,12 @@ export interface CampaignMilestone {
    * file older than the sprint is `stale`, not evidence). Absent = never read.
    */
   playthroughVerdict?: PlaythroughEvidence;
+  /**
+   * The GDD's own numbers (a frame-rate target, a load-time budget, a level
+   * count, a session length) held against what was measured at delivery —
+   * one line per claim: met, NOT met, or not measurable yet, never silent.
+   */
+  gddClaims?: string[];
   /** When this milestone's current run began (epoch ms) — the time-box clock. */
   startedAtMs?: number;
   /** How many times the time-box has forced a scope-narrowing escalation. */
@@ -295,5 +301,20 @@ export interface PlaythroughEvidence {
   /** Why the test could not drive at all (no driver registered, no scene, no bootstrapper). */
   missing?: string;
   frames?: { count: number; flat: number; maxMotionShare: number };
+  /**
+   * Boot time and frame timing of the play-through. `medium` names the
+   * conditions (the editor in play mode under -batchmode): boot time and
+   * hitches transfer to the player, the average frame rate is a floor.
+   */
+  perf?: PlaythroughPerf;
   measuredAt?: string;
+}
+
+export interface PlaythroughPerf {
+  medium: string;
+  bootSeconds?: number;
+  playSeconds: number;
+  playFrames: number;
+  avgFps?: number;
+  worstFrameMs?: number;
 }

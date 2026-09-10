@@ -777,6 +777,38 @@ describe("CampaignManager", () => {
     expect(tasks.submitted[4]!.prompt).toContain("PLAY-THROUGH REQUIRED: the last play-through FAILED: session 1 never ended");
   });
 
+  it("holds the GDD's own numbers against the play-through timing: a blown boot budget bounces, a met one is reported (2026-09-10)", async () => {
+    const gdd = "# GDD\n\nThe game must load in under 1 second. Target 60 fps.";
+    writePlaythroughVerdict(true, { perf: { medium: "editor-playmode-batch", bootSeconds: 2.4, playSeconds: 30, playFrames: 900, avgFps: 30, worstFrameMs: 90 } });
+    const campaign = manager.startFromGdd(ctx, gdd, "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    const green = { testsGreen: true, detail: "PlayMode verification passed: 179 of 179 tests passed (unfiltered — the whole PlayMode suite)", unfiltered: true };
+    tasks.verifications.set("task_3", green);
+    tasks.emit("task:completed", "task_3", "green, shipping");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+    const prompt = tasks.submitted[3]!.prompt;
+    expect(prompt).toContain("the suite is green, the project compiles and the game was played, but the GDD's own numbers are NOT met");
+    expect(prompt).toContain("THE GDD'S OWN NUMBERS ARE NOT MET: boot time ≤ 1 s measured 2.4 s");
+    // The batch-editor frame rate is a floor, not the player's: reported, never a refusal.
+    expect(prompt).not.toContain("frame rate ≥ 60 fps measured");
+    expect(storage.get(campaign.id)!.milestones[2]!.gddClaims).toEqual([
+      "GDD frame rate ≥ 60 fps: NOT MET — 30.0 fps average over 900 frames in editor play mode, batch — a floor for the player, not its number",
+      "GDD boot time ≤ 1 s: NOT MET — scene load → services in 2.4 s (editor play mode, batch)",
+    ]);
+
+    writePlaythroughVerdict(true, { perf: { medium: "editor-playmode-batch", bootSeconds: 0.6, playSeconds: 30, playFrames: 900, avgFps: 30 } });
+    tasks.verifications.set("task_4", green);
+    tasks.emit("task:completed", "task_4", "green, shipping");
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+    const report = messages.map((m) => m.text).join("\n");
+    expect(report).toContain("GDD boot time ≤ 1 s: MET — scene load → services in 0.6 s (editor play mode, batch)");
+    expect(report).toContain("GDD frame rate ≥ 60 fps: NOT MET — 30.0 fps average");
+  });
+
   it("the delivery report names the play-through and that the game does not start itself", async () => {
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
     await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));

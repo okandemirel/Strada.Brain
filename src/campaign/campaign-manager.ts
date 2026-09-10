@@ -24,6 +24,7 @@ import type { CampaignStorage } from "./campaign-storage.js";
 import { detectCampaignIntent } from "./campaign-intake.js";
 import { assessSceneHygiene, renderSceneHygiene } from "./scene-hygiene.js";
 import { readPlaythroughVerdict, describePlaythrough, playthroughDirective } from "./playthrough-verdict.js";
+import { assessNumericClaims, claimsRefusal, describeClaims, extractNumericClaims } from "./gdd-claims.js";
 import { deliveryReviewPrompt, renderSecondOpinion } from "../agents/review/codex-second-opinion.js";
 import {
   extractLookDescription,
@@ -2004,8 +2005,17 @@ export class CampaignManager {
       const playthrough = isLast ? this.measurePlaythrough(milestone) : undefined;
       if (playthrough !== undefined) milestone.playthroughVerdict = playthrough;
       const playthroughMissing = isLast && (playthrough === undefined || !playthrough.found || playthrough.ok !== true);
+      // THE GDD'S OWN NUMBERS. "60 fps", "loads in under 3 s", "a round lasts
+      // 30–90 s" were repeated to the planner and measured by nothing until
+      // 2026-09-10. Each is now answered from the play-through's timing or
+      // listed as NOT MEASURED with the reason; a blown budget the medium can
+      // answer (boot time, session length) refuses delivery like the other
+      // proofs, within the same bounce budget.
+      const claims = isLast ? this.measureGddClaims(campaign, playthrough) : undefined;
+      if (claims) milestone.gddClaims = claims.lines;
+      const claimsBroken = Boolean(claims?.refusal);
       const deliveryProofMissing =
-        !milestone.testVerdict || milestone.testVerdictUnfiltered !== true || compileBroken || playthroughMissing;
+        !milestone.testVerdict || milestone.testVerdictUnfiltered !== true || compileBroken || playthroughMissing || claimsBroken;
       if (isLast && deliveryProofMissing && deliveryBouncesSpent < this.maxMilestoneAttempts) {
         // DELIVERY GATE: "the whole game runs" was only ever a sentence in the
         // planner's prompt — nothing in code required the final sprint to
@@ -2018,7 +2028,10 @@ export class CampaignManager {
         const observedButFiltered = Boolean(milestone.testVerdict) && milestone.testVerdictUnfiltered !== true;
         const suiteProofMissing = !milestone.testVerdict || milestone.testVerdictUnfiltered !== true || compileBroken;
         const playthroughClause = playthroughMissing ? `\n${playthroughDirective(playthrough)}` : "";
-        const suiteClause = !suiteProofMissing
+        const claimsClause = claims?.refusal ? `\n${claims.refusal}` : "";
+        const suiteClause = !suiteProofMissing && !playthroughMissing && claimsBroken
+          ? "the suite is green, the project compiles and the game was played, but the GDD's own numbers are NOT met. "
+          : !suiteProofMissing
           ? "the suite is green and the project compiles, but the game was not shown to be PLAYABLE. "
           : compileBroken && Boolean(milestone.testVerdict) && milestone.testVerdictUnfiltered === true
           ? "the suite's green run means nothing while the project does not compile. "
@@ -2036,7 +2049,8 @@ export class CampaignManager {
           // report". The verb has to be unmistakable.
           "DO NOT AUDIT. An inventory of modules, prefabs, scenes or tests is not work and will be " +
           "rejected: run the tools, change the code, and let the suite's own output be your report." +
-          playthroughClause;
+          playthroughClause +
+          claimsClause;
         // SAY EVERYTHING THAT IS WRONG, NOT ONE THING AT A TIME. The
         // structural check runs only after this gate passes, so a sprint stuck
         // here never learns its scenes render nothing — measured live
@@ -2603,6 +2617,26 @@ export class CampaignManager {
     return readPlaythroughVerdict(this.projectRoot, this.sprintStartMs(milestone));
   }
 
+  /** The GDD's numeric claims held against the play-through timing (see gdd-claims.ts). */
+  private measureGddClaims(
+    campaign: Campaign,
+    playthrough: ReturnType<typeof readPlaythroughVerdict> | undefined,
+  ): { lines: string[]; refusal?: string } {
+    let gddText = campaign.gddText;
+    if (!gddText && campaign.gddPath) {
+      try {
+        gddText = readGddFile(this.projectRoot, campaign.gddPath);
+      } catch {
+        gddText = undefined;
+      }
+    }
+    if (!gddText) return { lines: ["GDD numbers: the GDD text was not available at delivery, so none were checked"] };
+    const { claims, truncated } = extractNumericClaims(gddText);
+    const assessments = assessNumericClaims(claims, playthrough);
+    const refusal = claimsRefusal(assessments);
+    return { lines: describeClaims(assessments, truncated), ...(refusal ? { refusal } : {}) };
+  }
+
   private freshCaptureEvidence(milestone: CampaignMilestone): { found: boolean } {
     const sinceMs = this.sprintStartMs(milestone);
     const roots = [
@@ -3093,6 +3127,12 @@ export class CampaignManager {
         else caveats.push(`${m.title}: ${line}`);
         if (m.playthroughVerdict?.found && m.playthroughVerdict.autoStarted === false) {
           caveats.push(`${m.title}: the game does not start play by itself after boot — a person opening the entry scene sees an idle screen`);
+        }
+        // The GDD's numbers: a MET line is a mark, everything else a caveat —
+        // "not measured" included, so a report never reads as if it checked.
+        for (const line of m.gddClaims ?? []) {
+          if (/: MET — /.test(line)) marks.push(line);
+          else caveats.push(`${m.title}: ${line}`);
         }
       }
       if (!m.testVerdict && (isFinal || m.deliveryVerificationBounced)) {

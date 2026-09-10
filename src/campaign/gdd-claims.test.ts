@@ -1,0 +1,83 @@
+/**
+ * The GDD's numbers, read back and answered — or named as unanswerable.
+ * Until 2026-09-10 "60 fps" and "loads in under 3 seconds" in a GDD were
+ * repeated to the planner and never measured by any gate.
+ */
+import { describe, expect, it } from "vitest";
+import { assessNumericClaims, claimsRefusal, describeClaims, extractNumericClaims } from "./gdd-claims.js";
+import type { PlaythroughEvidence } from "./types.js";
+
+const GDD = `# Sky Pigs
+Target 60 fps on mid-range phones. The game must load in under 3 seconds from a cold start.
+There are 12 levels in the first world. Each level lasts 30-90 seconds.
+Frame rate is 60 FPS (again). The menu appears within 500 ms of launch.`;
+
+function evidence(over: Partial<PlaythroughEvidence> = {}): PlaythroughEvidence {
+  return {
+    found: true, ok: true, outcome: "Won", session: 1, actions: 20,
+    perf: { medium: "editor-playmode-batch", bootSeconds: 2.4, playSeconds: 41.2, playFrames: 1030, avgFps: 25, worstFrameMs: 180 },
+    ...over,
+  };
+}
+
+describe("extractNumericClaims", () => {
+  it("reads frame rate, boot budget (both word orders and ms), level count and session length, de-duplicated", () => {
+    const { claims, truncated } = extractNumericClaims(GDD);
+    expect(truncated).toBe(0);
+    expect(claims.map((c) => [c.kind, c.comparator, c.value])).toEqual([
+      ["fps", "min", 60],
+      ["boot_seconds", "max", 3],
+      ["boot_seconds", "max", 0.5],
+      ["level_count", "eq", 12],
+      ["session_seconds", "max", 90],
+    ]);
+    expect(claims[1]!.text).toContain("load in under 3 seconds");
+  });
+
+  it("finds nothing in prose without numbers, and ignores years and version numbers", () => {
+    expect(extractNumericClaims("A calm puzzle game released in 2026, version 1.4, with 1080p art.").claims).toEqual([]);
+  });
+});
+
+describe("assessNumericClaims", () => {
+  const { claims } = extractNumericClaims(GDD);
+
+  it("answers each claim from the play-through timing; a frame-rate shortfall in the batch editor does not block", () => {
+    const a = assessNumericClaims(claims, evidence());
+    expect(a.map((x) => [x.claim.kind, x.claim.value, x.status, x.blocking])).toEqual([
+      ["fps", 60, "not_met", false],
+      ["boot_seconds", 3, "met", true],
+      ["boot_seconds", 0.5, "not_met", true],
+      ["level_count", 12, "unmeasured", false],
+      ["session_seconds", 90, "met", true],
+    ]);
+    expect(a[0]!.note).toContain("a floor for the player");
+    expect(claimsRefusal(a)).toMatch(/^THE GDD'S OWN NUMBERS ARE NOT MET: boot time ≤ 0\.5 s measured 2\.4 s/);
+    expect(claimsRefusal(a)).not.toContain("frame rate");
+  });
+
+  it("nothing measured → every claim is listed as NOT MEASURED with the reason, and nothing blocks", () => {
+    const a = assessNumericClaims(claims, undefined);
+    expect(a.every((x) => x.status === "unmeasured" && !x.blocking)).toBe(true);
+    expect(claimsRefusal(a)).toBeUndefined();
+    const lines = describeClaims(a);
+    expect(lines[0]).toMatch(/^GDD frame rate ≥ 60 fps: NOT MEASURED — no play-through of this build was observed/);
+    expect(lines[3]).toContain("no universal way to count a game's levels");
+    expect(lines).toHaveLength(5);
+  });
+
+  it("a session that never ended has no length; a blown session budget blocks", () => {
+    const unfinished = assessNumericClaims(claims, evidence({ ok: false, outcome: "None" }));
+    expect(unfinished.find((x) => x.claim.kind === "session_seconds")).toMatchObject({ status: "unmeasured", blocking: false });
+    const slow = assessNumericClaims(claims, evidence({ perf: { medium: "editor-playmode-batch", bootSeconds: 1, playSeconds: 120, playFrames: 3000, avgFps: 25 } }));
+    expect(slow.find((x) => x.claim.kind === "session_seconds")).toMatchObject({ status: "not_met", blocking: true, measured: 120 });
+    expect(claimsRefusal(slow)).toContain("session length ≤ 90 s measured 120 s");
+  });
+
+  it("describeClaims names MET with the measurement and the medium", () => {
+    const lines = describeClaims(assessNumericClaims(claims, evidence()));
+    expect(lines[1]).toBe("GDD boot time ≤ 3 s: MET — scene load → services in 2.4 s (editor play mode, batch)");
+    expect(describeClaims([])).toEqual(["GDD numbers: none found (no frame-rate, load-time, level-count or session-length figure in the text)"]);
+    expect(describeClaims(assessNumericClaims(claims, evidence()), 2).at(-1)).toBe("GDD numbers: 2 further claim(s) not listed");
+  });
+});

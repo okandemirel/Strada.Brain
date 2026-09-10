@@ -40,6 +40,16 @@ describe("the play-through verdict the campaign reads back (measured 2026-09-10:
     );
   });
 
+  it("timing rides along, named by its medium, and is absent when the verdict has none", () => {
+    write({ ...ok, perf: { medium: "editor-playmode-batch", bootSeconds: 2.4, playSeconds: 41.2, playFrames: 1030, avgFps: 25.0, worstFrameMs: 180.2 } });
+    const e = readPlaythroughVerdict(root, 0);
+    expect(e.perf).toEqual({ medium: "editor-playmode-batch", bootSeconds: 2.4, playSeconds: 41.2, playFrames: 1030, avgFps: 25, worstFrameMs: 180.2 });
+    expect(describePlaythrough(e)).toContain("; timing (editor play mode, batch — not the shipped player): boot 2.4 s, 25.0 fps average over 1030 frames, worst frame 180 ms");
+    write(ok);
+    expect(readPlaythroughVerdict(root, 0).perf).toBeUndefined();
+    expect(describePlaythrough(readPlaythroughVerdict(root, 0))).not.toContain("timing");
+  });
+
   it("a failed verdict names its reasons, and the directive repeats them", () => {
     write({ ...ok, ok: false, reasons: ["session 1 never ended after 60 actions (phases seen: Playing)", "every frame is flat (one colour): nothing visible was drawn"] });
     const e = readPlaythroughVerdict(root, 0);
