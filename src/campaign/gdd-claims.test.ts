@@ -42,16 +42,17 @@ describe("extractNumericClaims", () => {
 describe("assessNumericClaims", () => {
   const { claims } = extractNumericClaims(GDD);
 
-  it("answers each claim from the play-through timing; a frame-rate shortfall in the batch editor does not block", () => {
+  it("answers each claim from the play-through timing; the batch editor's loop rate is disclosed, never a verdict on fps", () => {
     const a = assessNumericClaims(claims, evidence());
     expect(a.map((x) => [x.claim.kind, x.claim.value, x.status, x.blocking])).toEqual([
-      ["fps", 60, "not_met", false],
+      ["fps", 60, "unmeasured", false],
       ["boot_seconds", 3, "met", true],
       ["boot_seconds", 0.5, "not_met", true],
       ["level_count", 12, "unmeasured", false],
       ["session_seconds", 90, "met", true],
     ]);
-    expect(a[0]!.note).toContain("a floor for the player");
+    expect(a[0]!.note).toContain("no evidence about the player's frame rate");
+    expect(a[0]!.measured).toBe(25);
     expect(claimsRefusal(a)).toMatch(/^THE GDD'S OWN NUMBERS ARE NOT MET: boot time ≤ 0\.5 s measured 2\.4 s/);
     expect(claimsRefusal(a)).not.toContain("frame rate");
   });

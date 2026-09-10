@@ -804,7 +804,7 @@ describe("CampaignManager", () => {
     // The batch-editor frame rate is a floor, not the player's: reported, never a refusal.
     expect(prompt).not.toContain("frame rate ≥ 60 fps measured");
     expect(storage.get(campaign.id)!.milestones[2]!.gddClaims).toEqual([
-      "GDD frame rate ≥ 60 fps: NOT MET — 30.0 fps average over 900 frames in editor play mode, batch — a floor for the player, not its number",
+      'GDD frame rate ≥ 60 fps: NOT MEASURED — 30.0 fps loop rate over 900 frames in editor play mode, batch, which renders only at capture points (worst frame 90 ms) — no evidence about the player\'s frame rate; a measurement inside the built player is the next rung (GDD: "Target 60 fps.")',
       "GDD boot time ≤ 1 s: NOT MET — scene load → services in 2.4 s (editor play mode, batch)",
     ]);
 
@@ -814,7 +814,7 @@ describe("CampaignManager", () => {
     await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
     const report = messages.map((m) => m.text).join("\n");
     expect(report).toContain("GDD boot time ≤ 1 s: MET — scene load → services in 0.6 s (editor play mode, batch)");
-    expect(report).toContain("GDD frame rate ≥ 60 fps: NOT MET — 30.0 fps average");
+    expect(report).toContain("GDD frame rate ≥ 60 fps: NOT MEASURED — 30.0 fps loop rate");
   });
 
   it("builds the player itself at delivery: a failed build bounces, a built one is the report's artifact line (2026-09-10)", async () => {
@@ -918,6 +918,49 @@ describe("CampaignManager", () => {
     tasks.emit("task:completed", "task_4", "dragon built, shipping");
     await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"), { timeout: 15_000 });
     expect(storage.get(campaign.id)!.milestones[2]!.structureFindings?.join("\n")).toContain("all 2 scheduled element(s) have a trace in code");
+  });
+
+  it("refuses a silent delivery: the GDD asks for audio, clips exist, no shipped scene reaches one (2026-09-10)", async () => {
+    const HEADER = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n";
+    const scene = (extra: string): string =>
+      `${HEADER}--- !u!1 &1\nGameObject:\n  m_Name: Main Camera\n--- !u!20 &900\nCamera:\n  m_Enabled: 1\n  orthographic: 1\n--- !u!1 &2\nGameObject:\n  m_Name: Pig\n--- !u!212 &8\nSpriteRenderer:\n  m_Enabled: 1\n  m_Sprite: {fileID: 21300000, guid: 22222222222222222222222222222222, type: 3}\n${extra}`;
+    const meta = (rel: string, guid: string): void => writeFileSync(join(projectRoot, `${rel}.meta`), `fileFormatVersion: 2\nguid: ${guid}\n`);
+    mkdirSync(join(projectRoot, "Assets", "Scenes"), { recursive: true });
+    mkdirSync(join(projectRoot, "Assets", "Art"), { recursive: true });
+    mkdirSync(join(projectRoot, "Assets", "Audio"), { recursive: true });
+    mkdirSync(join(projectRoot, "ProjectSettings"), { recursive: true });
+    writeFileSync(join(projectRoot, "ProjectSettings", "EditorBuildSettings.asset"), "EditorBuildSettings:\n  m_Scenes:\n  - enabled: 1\n    path: Assets/Scenes/Main.unity\n    guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n");
+    writeFileSync(join(projectRoot, "Assets", "Scenes", "Main.unity"), scene(""));
+    meta("Assets/Scenes/Main.unity", "5ce5e5e5e5e5e5e5e5e5e5e5e5e5e5e5");
+    writeFileSync(join(projectRoot, "Assets", "Art", "pig.png"), "pixels");
+    meta("Assets/Art/pig.png", "22222222222222222222222222222222");
+    writeFileSync(join(projectRoot, "Assets", "Audio", "merge.wav"), "RIFF");
+    meta("Assets/Audio/merge.wav", "33333333333333333333333333333333");
+    const gdd = "# GDD\n\n## Audio\nMusic base loop per area; SFX for tap, merge and win; audio ducks on pause.\n";
+    writeFileSync(join(projectRoot, "docs", "Game_GDD.md"), gdd);
+    const campaign = manager.startFromGdd(ctx, gdd, "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    const green = { testsGreen: true, detail: "PlayMode verification passed: 179 of 179 tests passed (unfiltered — the whole PlayMode suite)", unfiltered: true };
+    tasks.verifications.set("task_3", green);
+    tasks.emit("task:completed", "task_3", "green, shipping");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+    expect(tasks.submitted[3]!.prompt).toContain("DELIVERY REFUSED — THE GAME IS NOT BUILT AS THE GDD SPECIFIES: the GDD specifies audio (");
+    expect(tasks.submitted[3]!.prompt).toContain("the delivery is silent");
+    expect(storage.get(campaign.id)!.milestones[2]!.structureRefused).toBe(true);
+
+    // An AudioSource bound to the clip: no longer silent, delivers.
+    writeFileSync(
+      join(projectRoot, "Assets", "Scenes", "Main.unity"),
+      scene("--- !u!82 &300\nAudioSource:\n  m_Enabled: 1\n  m_audioClip: {fileID: 8300000, guid: 33333333333333333333333333333333, type: 3}\n"),
+    );
+    tasks.verifications.set("task_4", green);
+    tasks.emit("task:completed", "task_4", "audio wired, shipping");
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"), { timeout: 15_000 });
+    expect(storage.get(campaign.id)!.milestones[2]!.structureFindings?.join("\n")).toContain("1 AudioSource(s), 1 bound to a clip; 1 of the project's 1 clip(s) are reachable");
   });
 
   it("delivers on an UNFILTERED green", async () => {

@@ -216,6 +216,18 @@ export interface SceneStructure {
   readonly prefabInstances: number;
   /** Distinct MonoBehaviour class names on the scene's own objects, sorted. */
   readonly scripts: readonly string[];
+  /** Sound, motion and effects in the scene and the prefabs it PLACES (2026-09-10). */
+  readonly audioSources: number;
+  /** Of those, AudioSources bound to a project clip. */
+  readonly audioSourcesBound: number;
+  readonly animators: number;
+  /** Of those, Animators bound to a project controller. */
+  readonly animatorsBound: number;
+  /** Legacy Animation components. */
+  readonly animations: number;
+  readonly particleSystems: number;
+  /** Project audio clips a placed AudioSource binds. */
+  readonly audioClipsBound: readonly string[];
 }
 
 export interface ArtInventory {
@@ -262,6 +274,18 @@ export interface BuiltAsSpecifiedReport {
   readonly shippedBuiltInRefs: number;
   readonly shippedMeshRenderers: number;
   readonly shippedSpriteRenderers: number;
+  /** Sound, motion and effects across the shipped scenes and the prefabs they place (2026-09-10). */
+  readonly shippedAudioSources: number;
+  readonly shippedAudioSourcesBound: number;
+  readonly shippedAnimators: number;
+  readonly shippedAnimatorsBound: number;
+  readonly shippedAnimations: number;
+  readonly shippedParticleSystems: number;
+  /** Project audio clips reached by any shipped scene — placed, or through a config asset a script could play. */
+  readonly reachableAudioClips: number;
+  /** Animator controllers (.controller) and animation clips (.anim) under Assets/. */
+  readonly animatorControllers: number;
+  readonly animationClips: number;
   readonly artInventory: ArtInventory;
   /** Project art no enabled scene reaches, transitively, by guid. */
   readonly unboundPrefabs: readonly string[];
@@ -384,6 +408,22 @@ interface Tally {
    * Unity left blank contributes nothing rather than a guessed name.
    */
   scripts: Set<string>;
+  /**
+   * Sound, motion and effects (2026-09-10): the GDD's audio, animation and
+   * VFX asks were measured by nothing — a delivery could ship silent, static
+   * scenes against a cue list and a "juicy" brief and read as complete.
+   */
+  audioSources: number;
+  /** AudioSources whose m_audioClip points at a project asset. */
+  audioSourcesWithClip: number;
+  animators: number;
+  /** Animators whose m_Controller points at a project asset. */
+  animatorsWithController: number;
+  /** Legacy Animation components. */
+  animations: number;
+  particleSystems: number;
+  /** guids of audio clips and animator controllers the file binds. */
+  mediaGuids: Set<string>;
 }
 
 function newTally(): Tally {
@@ -402,6 +442,13 @@ function newTally(): Tally {
     gameObjects: 0,
     prefabInstances: 0,
     scripts: new Set(),
+    audioSources: 0,
+    audioSourcesWithClip: 0,
+    animators: 0,
+    animatorsWithController: 0,
+    animations: 0,
+    particleSystems: 0,
+    mediaGuids: new Set(),
   };
 }
 
@@ -423,6 +470,10 @@ function scanUnityFile(text: string, tally: Tally): void {
     }
     if (doc.className === "GameObject") tally.gameObjects++;
     if (doc.className === "PrefabInstance") tally.prefabInstances++;
+    if (doc.className === "AudioSource") tally.audioSources++;
+    if (doc.className === "Animator") tally.animators++;
+    if (doc.className === "Animation") tally.animations++;
+    if (doc.className === "ParticleSystem") tally.particleSystems++;
     const wantsRefs = isRenderer || doc.className === "MeshFilter";
     // Project bindings live off the renderer document too (review 2026-09-07):
     // a Tilemap's tile sprites, a UI Image's sprite, a Terrain's data, and a
@@ -461,6 +512,20 @@ function scanUnityFile(text: string, tally: Tally): void {
         const key = keyed[1]!;
         const rest = keyed[2]!;
         inMaterialList = wantsRefs && key === "m_Materials" && rest.trim() === "";
+        if (doc.className === "AudioSource" && key === "m_audioClip") {
+          const ref = parseRef(rest);
+          if (ref?.guid && classifyRef(ref) === "project") {
+            tally.audioSourcesWithClip++;
+            tally.mediaGuids.add(ref.guid);
+          }
+        }
+        if (doc.className === "Animator" && key === "m_Controller") {
+          const ref = parseRef(rest);
+          if (ref?.guid && classifyRef(ref) === "project") {
+            tally.animatorsWithController++;
+            tally.mediaGuids.add(ref.guid);
+          }
+        }
         if (doc.className === "Camera" && key === "orthographic") {
           if (rest.trim() === "1") tally.camerasOrthographic++;
           else if (rest.trim() === "0") tally.camerasPerspective++;
@@ -512,6 +577,13 @@ function mergeTally(into: Tally, from: Tally): void {
   for (const g of from.refGuids) into.refGuids.add(g);
   into.camerasOrthographic += from.camerasOrthographic;
   into.camerasPerspective += from.camerasPerspective;
+  into.audioSources += from.audioSources;
+  into.audioSourcesWithClip += from.audioSourcesWithClip;
+  into.animators += from.animators;
+  into.animatorsWithController += from.animatorsWithController;
+  into.animations += from.animations;
+  into.particleSystems += from.particleSystems;
+  for (const g of from.mediaGuids) into.mediaGuids.add(g);
 }
 
 function recordRef(ref: UnityRef, tally: Tally): void {
@@ -603,6 +675,15 @@ export function assessBuiltAsSpecified(
     shippedBuiltInRefs: 0,
     shippedMeshRenderers: 0,
     shippedSpriteRenderers: 0,
+    shippedAudioSources: 0,
+    shippedAudioSourcesBound: 0,
+    shippedAnimators: 0,
+    shippedAnimatorsBound: 0,
+    shippedAnimations: 0,
+    shippedParticleSystems: 0,
+    reachableAudioClips: 0,
+    animatorControllers: 0,
+    animationClips: 0,
     artInventory: { prefabs: 0, models: 0, sprites: 0, placeholderSprites: 0, audio: 0, duplicateAudio: 0, shortAudio: 0 },
     unboundPrefabs: [] as string[],
     unboundModels: [] as string[],
@@ -706,6 +787,13 @@ export function assessBuiltAsSpecified(
         gameObjects: 0,
         prefabInstances: 0,
         scripts: [],
+        audioSources: 0,
+        audioSourcesBound: 0,
+        animators: 0,
+        animatorsBound: 0,
+        animations: 0,
+        particleSystems: 0,
+        audioClipsBound: [],
       });
       incomplete.push(`${scenePath} is enabled in Build Settings but the file is not on disk`);
       continue;
@@ -842,6 +930,19 @@ export function assessBuiltAsSpecified(
       gameObjects: own.gameObjects,
       prefabInstances: own.prefabInstances,
       scripts: [...own.scripts].sort(),
+      audioSources: own.audioSources + placed.audioSources,
+      audioSourcesBound: own.audioSourcesWithClip + placed.audioSourcesWithClip,
+      animators: own.animators + placed.animators,
+      animatorsBound: own.animatorsWithController + placed.animatorsWithController,
+      animations: own.animations + placed.animations,
+      particleSystems: own.particleSystems + placed.particleSystems,
+      audioClipsBound: [
+        ...new Set(
+          [...own.mediaGuids, ...placed.mediaGuids]
+            .map((g) => guidToPath.get(g))
+            .filter((p): p is string => p !== undefined && AUDIO_EXT_RE.test(p)),
+        ),
+      ].sort(),
     });
   }
 
@@ -953,6 +1054,18 @@ export function assessBuiltAsSpecified(
     shippedBuiltInRefs,
     shippedMeshRenderers: sum((s) => s.meshRenderers),
     shippedSpriteRenderers: sum((s) => s.spriteRenderers),
+    shippedAudioSources: sum((s) => s.audioSources),
+    shippedAudioSourcesBound: sum((s) => s.audioSourcesBound),
+    shippedAnimators: sum((s) => s.animators),
+    shippedAnimatorsBound: sum((s) => s.animatorsBound),
+    shippedAnimations: sum((s) => s.animations),
+    shippedParticleSystems: sum((s) => s.particleSystems),
+    reachableAudioClips: [...boundGuids].filter((g) => {
+      const path = guidToPath.get(g);
+      return path !== undefined && AUDIO_EXT_RE.test(path);
+    }).length,
+    animatorControllers: files.filter((rel) => /\.controller$/iu.test(rel) && !/(^|\/)(Tests?|Editor)\//i.test(rel)).length,
+    animationClips: files.filter((rel) => /\.anim$/iu.test(rel) && !/(^|\/)(Tests?|Editor)\//i.test(rel)).length,
     artInventory: {
       prefabs,
       models,
@@ -1027,6 +1140,12 @@ export function assessBuiltAsSpecified(
           ? `; ${shortAudioPaths.length} shorter than ${SHORT_AUDIO_SECONDS}s (e.g. ${shortAudioPaths.slice(0, 3).join(", ")})`
           : "") +
         ".",
+  );
+  disclosures.push(
+    `Sound, motion, effects in the shipped scenes: ${report.shippedAudioSources} AudioSource(s) (${report.shippedAudioSourcesBound} with a project clip; ` +
+      `${report.reachableAudioClips} of the ${audio} clip(s) reachable from a shipped scene by any route), ` +
+      `${report.shippedAnimators} Animator(s) (${report.shippedAnimatorsBound} with a controller; project holds ${report.animatorControllers} controller(s), ` +
+      `${report.animationClips} clip(s)), ${report.shippedAnimations} legacy Animation(s), ${report.shippedParticleSystems} ParticleSystem(s).`,
   );
   if (primitiveScripts.length > 0) {
     disclosures.push(

@@ -124,12 +124,19 @@ export function assessNumericClaims(
     switch (claim.kind) {
       case "fps": {
         if (!perf || perf.avgFps === undefined) return { claim, status: "unmeasured", note: perf ? "the play-through recorded no frame timing" : noRun, blocking: false };
-        const met = perf.avgFps >= claim.value;
+        // Measured live 2026-09-10: 184 689 frames in 42 s = 4390 "fps" in the
+        // batch editor, which renders only at capture points. That number says
+        // nothing about the player's frame rate in either direction, so the
+        // claim stays NOT MEASURED with the figure disclosed; the worst frame
+        // (a real hitch) is reported beside it.
         return {
           claim,
-          status: met ? "met" : "not_met",
+          status: "unmeasured",
           measured: Number(perf.avgFps.toFixed(1)),
-          note: `${perf.avgFps.toFixed(1)} fps average over ${perf.playFrames} frames in ${medium} — a floor for the player, not its number`,
+          note:
+            `${perf.avgFps.toFixed(1)} fps loop rate over ${perf.playFrames} frames in ${medium}, which renders only at capture points` +
+            (perf.worstFrameMs !== undefined ? ` (worst frame ${perf.worstFrameMs.toFixed(0)} ms)` : "") +
+            " — no evidence about the player's frame rate; a measurement inside the built player is the next rung",
           blocking: false,
         };
       }

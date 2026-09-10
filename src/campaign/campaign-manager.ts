@@ -37,6 +37,7 @@ import { isTerminalFailureReport } from "../agents/autonomy/verifier-pipeline.js
 import { assessBuiltAsSpecified, PLACEHOLDER_GRADE_RULE } from "../agents/autonomy/built-as-specified.js";
 import { assessSpecScope } from "../agents/autonomy/spec-scope.js";
 import { describeDimensionality } from "../agents/autonomy/gdd-dimensionality.js";
+import { describeMedia } from "../agents/autonomy/gdd-media.js";
 import type { Campaign, CampaignMilestone,
   PlayerBuildEvidence,
 } from "./types.js";
@@ -3044,7 +3045,11 @@ export class CampaignManager {
       // DELIVERY is judged against the whole GDD, so the whole text is read.
       const gddText =
         campaign.gddText ?? (campaign.gddPath ? readGddFile(this.projectRoot, campaign.gddPath) : undefined);
-      const lines = [...report.disclosures, ...describeDimensionality(gddText, report).lines];
+      // Sound, motion and effects (2026-09-10): the GDD's cue list and
+      // animation brief against what the shipped scenes carry. Refuses only
+      // the strong audio case (clips exist, no shipped scene reaches one).
+      const media = describeMedia(gddText, report);
+      const lines = [...report.disclosures, ...describeDimensionality(gddText, report).lines, ...media.lines];
       // No silent caps: when the unmeasured list is trimmed, the trim says so.
       const shown = report.incomplete.slice(0, 5);
       for (const note of shown) lines.push(`NOT measured: ${note}`);
@@ -3056,7 +3061,7 @@ export class CampaignManager {
       // conformance guard) and the campaign never asked it (audited
       // 2026-09-10). A scheduled element the code never mentions is an
       // objective gap, and delivering without it is delivering another game.
-      let refusal = report.refusal;
+      let refusal = report.refusal ?? media.refusal;
       const scope = assessSpecScope(this.projectRoot, campaign.gddPath ? join(this.projectRoot, campaign.gddPath) : undefined);
       if (scope.scheduled > 0) {
         if (scope.missing.length === 0) {
