@@ -57,6 +57,10 @@ import type {
 } from "../runner/orchestrator-port.js";
 import { instinctScopeKey } from "./instinct-scope.js";
 import { restrictToProgressTools } from "../../agents/autonomy/control-loop-tracker.js";
+import { isNodeScopedTask, selectNodeTools } from "../../agents/autonomy/node-tool-offer.js";
+
+/** Runs whose narrowed node offer has been logged (one line per run, not per turn). */
+const nodeOfferLogged = new WeakSet<object>();
 import { getLogger } from "../../utils/logger.js";
 
 /** The shell residue the port assembly injects (the engine facade methods are called directly). */
@@ -218,6 +222,26 @@ export function createAgentCorePort(
             offered: restricted.map((t) => t.name),
           });
           prepared = { ...prepared, currentToolDefinitions: restricted, currentToolNames: restricted.map((t) => t.name) };
+        }
+        // NODE-SCOPED OFFER. A plan node's worker sees the tools its task
+        // names, their families, and the core — not the whole registry
+        // (measured 2026-09-10 14:34: 106 tools, 73 352 chars of schema on
+        // every turn). Execution still resolves from the full registry, so a
+        // tool the model names anyway runs. Logged once per run.
+        if (isNodeScopedTask(params.agentState.taskDescription)) {
+          const offer = selectNodeTools(params.agentState.taskDescription, prepared.currentToolDefinitions);
+          if (offer.narrowed) {
+            if (!nodeOfferLogged.has(c)) {
+              nodeOfferLogged.add(c);
+              getLogger().info("Node tool offer narrowed to what the node names", {
+                chatId: c.chatId,
+                named: offer.named,
+                offered: offer.offered.length,
+                withheld: offer.withheld,
+              });
+            }
+            prepared = { ...prepared, currentToolDefinitions: offer.offered, currentToolNames: offer.offered.map((t) => t.name) };
+          }
         }
         c.executionStrategy = prepared.executionStrategy;
         c.lastAssignment = prepared.currentAssignment;
