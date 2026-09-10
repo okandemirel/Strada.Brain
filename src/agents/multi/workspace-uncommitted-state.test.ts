@@ -243,9 +243,10 @@ describe("the seed budget never cuts the project's own content (audited 2026-09-
       expect(readFileSync(join(root, "Assets", "Big", "f2099.txt"), "utf8")).toBe("edited by the agent\n");
     } finally {
       await lease.release();
-      // Linux CI: git's worktree removal can still be writing under .git when
-      // the first rm lands (ENOTEMPTY, measured 2026-09-10); retry briefly.
-      rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+      // The repo is left for the per-run TMPDIR teardown (vitest.global-setup):
+      // on Linux CI git keeps writing under .git after the worktree removal
+      // returns, and an immediate rm hit ENOTEMPTY even with retries
+      // (measured 2026-09-10, twice).
     }
   });
 
@@ -259,9 +260,10 @@ describe("the seed budget never cuts the project's own content (audited 2026-09-
       expect(seeded).toBe(2000); // git lists paths lexicographically; the count is what is bounded
     } finally {
       await lease.release();
-      // Linux CI: git's worktree removal can still be writing under .git when
-      // the first rm lands (ENOTEMPTY, measured 2026-09-10); retry briefly.
-      rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+      // The repo is left for the per-run TMPDIR teardown (vitest.global-setup):
+      // on Linux CI git keeps writing under .git after the worktree removal
+      // returns, and an immediate rm hit ENOTEMPTY even with retries
+      // (measured 2026-09-10, twice).
     }
   });
 });

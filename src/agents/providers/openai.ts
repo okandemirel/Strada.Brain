@@ -108,15 +108,36 @@ export function repairToolCallPairing(messages: OpenAIMessage[]): OpenAIMessage[
   const out: OpenAIMessage[] = [];
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i]!;
+    if (msg.role === "tool") {
+      // The mirror case (measured 2026-09-10 15:41: "Messages with role
+      // 'tool' must be a response to a preceding message with 'tool_calls'"):
+      // a result whose request was compacted away. Keep what it said, as the
+      // user's text, so the shape is legal and nothing the tool found is lost.
+      const t = msg as { tool_call_id?: string; content?: unknown };
+      out.push({
+        role: "user",
+        content: `[Result of an earlier tool call${t.tool_call_id ? ` (${t.tool_call_id})` : ""} whose request is no longer in this conversation]\n${typeof t.content === "string" ? t.content : JSON.stringify(t.content ?? "")}`,
+      } as OpenAIMessage);
+      continue;
+    }
     out.push(msg);
     if (msg.role !== "assistant" || !("tool_calls" in msg) || !Array.isArray(msg.tool_calls) || msg.tool_calls.length === 0) continue;
-    const expected = msg.tool_calls.map((tc) => tc.id);
+    const expected = new Set(msg.tool_calls.map((tc) => tc.id));
     const answered = new Set<string>();
     let j = i + 1;
     while (j < messages.length && messages[j]!.role === "tool") {
-      const t = messages[j] as { tool_call_id?: string };
-      if (t.tool_call_id) answered.add(t.tool_call_id);
-      out.push(messages[j]!);
+      const t = messages[j] as { tool_call_id?: string; content?: unknown };
+      if (t.tool_call_id && expected.has(t.tool_call_id) && !answered.has(t.tool_call_id)) {
+        answered.add(t.tool_call_id);
+        out.push(messages[j]!);
+      } else {
+        // A result for a call this turn never made (or a duplicate): fold it
+        // into the conversation as text rather than let it break the pairing.
+        out.push({
+          role: "user",
+          content: `[Result of an earlier tool call${t.tool_call_id ? ` (${t.tool_call_id})` : ""} whose request is no longer in this conversation]\n${typeof t.content === "string" ? t.content : JSON.stringify(t.content ?? "")}`,
+        } as OpenAIMessage);
+      }
       j++;
     }
     for (const id of expected) {

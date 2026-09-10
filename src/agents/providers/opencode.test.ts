@@ -167,6 +167,21 @@ describe("every assistant tool_call is answered on replay (measured 2026-09-10 1
     expect(String(out[4]!["content"])).toContain("no result was recorded");
   });
 
+  it("an orphan tool result (its request compacted away) becomes the user's text, so the shape stays legal (measured 2026-09-10 15:41)", () => {
+    const out = build([
+      { role: "user", content: [{ type: "tool_result", tool_use_id: "call_gone", content: "the file said X" }] },
+      { role: "assistant", content: "", tool_calls: [{ id: "call_a", name: "file_read", input: { path: "a" } }] },
+      { role: "user", content: [
+        { type: "tool_result", tool_use_id: "call_a", content: "A" },
+        { type: "tool_result", tool_use_id: "call_stale", content: "S" },
+      ] },
+    ]);
+    expect(out.map((m) => m["role"])).toEqual(["system", "user", "assistant", "tool", "user"]);
+    expect(String(out[1]!["content"])).toContain("call_gone");
+    expect(String(out[1]!["content"])).toContain("the file said X");
+    expect(String(out[4]!["content"])).toContain("call_stale");
+  });
+
   it("leaves a fully answered turn exactly as it was", () => {
     const out = build([
       { role: "user", content: "go" },
