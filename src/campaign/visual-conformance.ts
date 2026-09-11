@@ -34,7 +34,7 @@ const LOOK_HEADINGS = /^\s*(?:#{1,6}\s+)?(?:\d+[.\s]*)*\s*(art direction|visual 
 /** A body this short is a table-of-contents line, not a description. */
 const MIN_LOOK_CHARS = 200;
 /** …and the floor for a short section that plainly describes the look. */
-const MIN_SHORT_LOOK_CHARS = 24;
+const MIN_SHORT_LOOK_CHARS = 8;
 /** How much of the section to carry into the prompt. */
 const MAX_LOOK_CHARS = 2000;
 /** Directory entries the frame scan will walk before disclosing truncation. */
@@ -82,7 +82,10 @@ export function artDirectionText(look: LookDescription | undefined, gddText: str
 
 /** Words that make a sentence about the game's LOOK rather than its play. */
 const ART_WORD_RE =
-  /\b(?:art|artwork|arts|visual|visuals|sprite|sprites|palette|colour|color|colours|colors|style|styles|aesthetic|look|illustration|illustrated|texture|textures|shading|shaded|pixel|painted|painting|render|rendered|silhouette)\b/i;
+  // "look" is NOT here: "Players look for geometric clues" is a gameplay
+  // sentence, and admitting it handed gameplay vocabulary to the style check
+  // (Codex 2026-09-11 I#10). Only words that are about the artwork itself.
+  /\b(?:art|artwork|arts|visual|visuals|sprite|sprites|palette|colour|color|colours|colors|monochrome|greyscale|grayscale|style|styles|aesthetic|illustration|illustrated|texture|textures|shading|shaded|pixel|painted|painting|watercolou?r|silhouette|line[- ]art)\b/i;
 
 export function extractLookDescription(gddText: string): LookDescription {
   if (typeof gddText !== "string" || gddText.trim().length === 0) {
@@ -97,8 +100,12 @@ export function extractLookDescription(gddText: string): LookDescription {
     const body: string[] = [];
     for (let j = i + 1; j < lines.length && body.join("\n").length < MAX_LOOK_CHARS * 2; j++) {
       const line = lines[j] ?? "";
-      // Stop at the next heading of the same shape (a numbered top-level title).
+      // Stop at the next heading of the same shape (a numbered top-level title)
+      // …and at ANY markdown heading: the body used to run past "## Gameplay"
+      // and swallow "Solve geometric puzzles.", which then read as a request
+      // for flat geometric art (Codex 2026-09-11 I#10).
       if (/^\s*\d+\.\s+[A-Z][A-Z\s/&-]{3,}$/.test(line) && body.length > 0) break;
+      if (/^\s*#{1,6}\s+\S/.test(line) && body.length > 0) break;
       body.push(line);
     }
     // Markdown heading markers are not prose: "## Art Direction" bodies full of
@@ -129,7 +136,10 @@ export function extractLookDescription(gddText: string): LookDescription {
   // (Codex 2026-09-11 F#3, H#13). Prose about the look, at least one
   // sentence's worth, counts.
   const usable = candidates
-    .filter((c) => (c.body.length >= MIN_LOOK_CHARS || (c.body.length >= MIN_SHORT_LOOK_CHARS && ART_WORD_RE.test(c.body))) && isProse(c.body))
+    // The HEADING already said this is art direction, so a short body under it
+    // needs no art vocabulary of its own: "## Art Direction / Monochrome."
+    // was dropped and the legitimate flat-art exemption lost (Codex I#10).
+    .filter((c) => (c.body.length >= MIN_LOOK_CHARS || c.body.length >= MIN_SHORT_LOOK_CHARS) && isProse(c.body))
     .sort((a, b) => b.line - a.line);
 
   const best = usable[0];

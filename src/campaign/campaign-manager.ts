@@ -291,6 +291,42 @@ const MAX_IMPLEMENTATION_REVIVES = 2;
  * spends a month without shipping (Codex 2026-09-11 H#1).
  */
 const MAX_DELIVERY_REVIVES = 3;
+/**
+ * WHICH PROOFS are missing, as kinds rather than as sentences.
+ *
+ * The delivery budget is charged per distinct failure, so the identity of a
+ * failure may not contain a measurement: "0 frames" and "1 frame" are the same
+ * missing proof, and treating them as progress let a campaign revive for ever
+ * (Codex 2026-09-11 I#1). Exported for its tests.
+ */
+export function proofSignature(
+  missingProofs: readonly string[],
+  extra: { structureRefused: boolean; compileBroken: boolean },
+): string {
+  const kinds = new Set<string>();
+  for (const proof of missingProofs) {
+    const text = proof.toLowerCase();
+    if (text.includes("no test run") || text.includes("test verifier")) kinds.add("tests-not-run");
+    else if (text.includes("filtered")) kinds.add("tests-filtered");
+    else if (text.includes("does not compile")) kinds.add("compile-broken");
+    else if (text.includes("compile check did not run")) kinds.add("compile-not-run");
+    else if (text.includes("player build failed")) kinds.add("build-failed");
+    else if (text.includes("player build did not run")) kinds.add("build-not-run");
+    else if (text.includes("never played")) kinds.add("player-not-played");
+    else if (text.includes("inside the built player")) kinds.add("player-broken");
+    else if (text.includes("play-through") || text.includes("playthrough")) kinds.add("playthrough-missing");
+    else if (text.includes("gdd could not be read")) kinds.add("gdd-unreadable");
+    else if (text.includes("fps") || text.includes("level count") || text.includes("claim")) kinds.add("gdd-claims");
+    // A proof whose wording this list does not know is identified by its
+    // first few words rather than by its numbers.
+    else kinds.add(text.replace(/[0-9]+/g, "#").split(/[:(]/)[0]!.trim().slice(0, 40));
+  }
+  // …and the two refusals that never travelled in missingProofs (I#2).
+  if (extra.structureRefused) kinds.add("structure-refused");
+  if (extra.compileBroken) kinds.add("compile-broken");
+  return [...kinds].sort().join(" | ").slice(0, 400) || "none-named";
+}
+
 /** The revival tail, kept to exactly one copy however many revivals happen. */
 const REVIVE_TAIL_RE = /\n\nA ROUND OF ATTEMPTS ENDED[\s\S]*?keep whatever already works\./g;
 /** How long before a self-revived implementation failure tries again. */
@@ -2387,6 +2423,14 @@ export class CampaignManager {
           ];
         }
         if (playerBroken && player) missingProofs.push(`inside the built player: ${describePlaythrough(player)}`.slice(0, 220));
+        // A requirement the audit NAMED and no sprint has run yet is missing
+        // work, and delivery may not step over it (Codex 2026-09-11 I#4).
+        const queuedGaps = campaign.pendingCoverageGaps ?? [];
+        if (queuedGaps.length > 0) {
+          missingProofs.push(
+            `${queuedGaps.length} GDD requirement(s) the audit named have no sprint yet: ${queuedGaps.slice(0, 2).join("; ")}`.slice(0, 220),
+          );
+        }
         if (claims?.refusal) missingProofs.push(claims.refusal.slice(0, 220));
         milestone.deliveryProofsMissing = missingProofs;
       }
@@ -2712,7 +2756,17 @@ export class CampaignManager {
           // PROGRESS STARTS THE BUDGET AGAIN: the charge is per DISTINCT set
           // of missing proofs, so a campaign that closes one proof and fails
           // on the next keeps going, and only one that repeats itself stops.
-          const signature = [...missingProofs].sort().join(" | ").slice(0, 400);
+          // A STABLE signature. The first version hashed the proof SENTENCES,
+          // which carry measurements: a play-through whose frame count went
+          // 100, 101, 102 produced a different signature every round and the
+          // budget never charged (Codex 2026-09-11 I#1). And the structural
+          // refusal never entered missingProofs at all, so a campaign stuck
+          // on it had the EMPTY signature and its report named no proof
+          // (I#2). Kinds, not numbers.
+          const signature = proofSignature(missingProofs, {
+            structureRefused: milestone.structureRefused === true,
+            compileBroken,
+          });
           const repeating = campaign.deliveryProofsSignature === signature;
           campaign.deliveryRevives = repeating ? (campaign.deliveryRevives ?? 0) + 1 : 1;
           campaign.deliveryProofsSignature = signature;
@@ -2950,6 +3004,37 @@ export class CampaignManager {
       // here set `done` without any of the final gates (Codex 2026-09-11
       // B#1). A FINAL PROOF SPRINT is appended instead: it is the ladder's
       // last milestone, so the whole delivery gate judges the tree as it is.
+      // QUEUED REQUIREMENTS COME FIRST. The final proof sprint is the end of
+      // the ladder, and appending it while the audit's own list still had
+      // entries stranded them for good (Codex 2026-09-11 I#4).
+      const stillQueued = campaign.pendingCoverageGaps ?? [];
+      if (stillQueued.length > 0) {
+        const round = campaign.milestones.reduce((max, m) => {
+          const r = /^mcov(\d+)/.exec(m.id);
+          return r ? Math.max(max, Number(r[1])) : max;
+        }, 0) + 1;
+        const take = stillQueued.slice(0, CampaignManager.MAX_GAP_SPRINTS_PER_ROUND);
+        const rest = stillQueued.slice(take.length);
+        campaign.pendingCoverageGaps = rest.length > 0 ? rest : undefined;
+        milestone.status = "failed";
+        milestone.resultExcerpt = output.slice(-500);
+        campaign.milestones.push(...take.map((item, i) => this.gapSprint(campaign, round, i, item)));
+        campaign.currentMilestone = campaign.milestones.length - take.length;
+        campaign.state = "executing";
+        campaign.lastError = undefined;
+        this.persist(campaign);
+        this.submitCurrentMilestone(campaign);
+        getLoggerSafe().info("Draining queued coverage gaps before the final proof sprint", {
+          id: campaign.id,
+          scheduled: take.length,
+          stillQueued: rest.length,
+        });
+        await this.tell(
+          campaign,
+          `⚠️ ${milestone.title} ended without closing its gap. ${take.length} requirement(s) the audit named still have no sprint — running them now.`,
+        );
+        return;
+      }
       if (!campaign.milestones.some((m) => m.id.startsWith("mfinal"))) {
         const gaps = campaign.milestones.filter((m) => m.id.startsWith("mcov") && m.status !== "green").map((m) => m.title);
         const finalProof: CampaignMilestone = {
@@ -3373,7 +3458,11 @@ export class CampaignManager {
     // unclosed gaps stay named in the report. Auditing again would append
     // another remediation round and, on its exhaustion, another proof sprint
     // — a loop with no end (Codex 2026-09-11 B#1 follow-up).
-    if (campaign.milestones.some((m) => m.id.startsWith("mfinal"))) {
+    // KNOWN GAPS OUTLIVE THE FINAL PROOF SPRINT. This guard used to come
+    // first, so five queued requirements were stranded the moment mfinal was
+    // appended and the game delivered without them (Codex 2026-09-11 I#4).
+    // The queue is drained below; only a NEW audit is skipped here.
+    if (campaign.milestones.some((m) => m.id.startsWith("mfinal")) && (campaign.pendingCoverageGaps ?? []).length === 0) {
       campaign.coverageAuditNote = "coverage audit not repeated after the final proof sprint — the unclosed gaps are named in the report";
       this.persist(campaign);
       return undefined;
@@ -3417,6 +3506,11 @@ export class CampaignManager {
       this.persist(campaign);
       return undefined;
     }
+    if (campaign.milestones.some((m) => m.id.startsWith("mfinal"))) {
+      campaign.coverageAuditNote = "coverage audit not repeated after the final proof sprint — the unclosed gaps are named in the report";
+      this.persist(campaign);
+      return undefined;
+    }
     const gddText =
       campaign.gddText ?? (campaign.gddPath ? readGddFile(this.projectRoot, campaign.gddPath) : undefined);
     if (!gddText) {
@@ -3447,7 +3541,29 @@ export class CampaignManager {
       // campaign delivered with all three gaps open. A gap is a sprint's
       // worth of work; the audit's list is a ladder, not a prompt.
       const round = priorRounds + 1;
-      const ordered = [...missing].sort((a, b) => Number(isArtGap(b)) - Number(isArtGap(a)));
+      // ONE SPRINT PER REQUIREMENT: the planner's schema accepts a repeated
+      // entry, and ["Save: absent", "Save: absent", …] produced two sprints
+      // for the same work plus a third in the queue — duplicate workers that
+      // can overwrite each other's implementation (Codex 2026-09-11 I#5).
+      // Already-scheduled gaps are excluded too, for the same reason.
+      const alreadyScheduled = new Set(
+        campaign.milestones
+          .filter((m) => m.id.startsWith("mcov"))
+          .map((m) => m.title.replace(/^Coverage completion \d+\.\d+ — /, "").trim().toLowerCase()),
+      );
+      const seenGap = new Set<string>();
+      const unique = missing.filter((item) => {
+        const key = item.trim().toLowerCase();
+        if (key === "" || seenGap.has(key)) return false;
+        seenGap.add(key);
+        return ![...alreadyScheduled].some((t) => t.length > 8 && key.startsWith(t.slice(0, Math.min(60, t.length))));
+      });
+      if (unique.length === 0) {
+        campaign.coverageAuditNote = `coverage audit repeated ${missing.length} gap(s) that already have sprints`;
+        this.persist(campaign);
+        return undefined;
+      }
+      const ordered = [...unique].sort((a, b) => Number(isArtGap(b)) - Number(isArtGap(a)));
       const shown = ordered.slice(0, CampaignManager.MAX_GAP_SPRINTS_PER_ROUND);
       const overflow = ordered.slice(shown.length);
       if (overflow.length > 0) {

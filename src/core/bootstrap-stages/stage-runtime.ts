@@ -709,7 +709,14 @@ export function looksLikePlayer(artifactPath: string): boolean {
     try {
       const entries = readdirSync(artifactPath);
       const named = entries.some((e) => /^(?:index\.html|Build|Data|.*_Data|Contents|UnityPlayer\.(?:dll|so|dylib))$/i.test(e));
-      return named && holdsPayload(artifactPath, 3);
+      if (!named) return false;
+      // A WEB BUILD IS ITS DATA, not its page: index.html padded to 4 KB
+      // passed as a game (Codex 2026-09-11 I#15). When the only named entry
+      // is the page, the build folder beside it has to exist.
+      const onlyThePage =
+        entries.every((e) => !/^(?:Build|Data|.*_Data|Contents|UnityPlayer\.(?:dll|so|dylib))$/i.test(e));
+      if (onlyThePage) return false;
+      return holdsPayload(artifactPath, 3);
     } catch {
       return false;
     }
@@ -772,13 +779,17 @@ function hasPackageMagic(path: string): boolean {
   } catch {
     return false;
   }
+  const magic = head.readUInt32BE(0);
   if (/\.(?:apk|aab|ipa|zip)$/i.test(path)) return head.toString("latin1", 0, 2) === "PK";
   if (/\.exe$/i.test(path)) return head.toString("latin1", 0, 2) === "MZ";
-  if (/\.(?:app|x86_64)$/i.test(path)) {
-    const magic = head.readUInt32BE(0);
+  // A LINUX player is an ELF binary, and this branch demanded Mach-O of it —
+  // so a perfectly good .x86_64 build was refused (Codex 2026-09-11 I#15).
+  if (/\.x86_64$/i.test(path)) return head.toString("latin1", 1, 4) === "ELF";
+  if (/\.app$/i.test(path)) {
     // Mach-O 32/64 in both byte orders, and the universal (fat) header.
     return [0xfeedface, 0xfeedfacf, 0xcefaedfe, 0xcffaedfe, 0xcafebabe].includes(magic);
   }
+  // A .dmg carries no single stable header; its size is the only check.
   return true;
 }
 

@@ -175,7 +175,10 @@ export function readPlaythroughVerdict(projectRoot: string, sinceMs: number, rel
 
 function parseRuntime(r: Record<string, unknown>): RuntimeSceneDump {
   const n = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
-  const names = (v: unknown): string[] => (Array.isArray(v) ? v.map(String).slice(0, 40) : []);
+  // Only STRINGS: `map(String)` threw on `[{"toString":null}]` here too, the
+  // same wedge one field over (Codex 2026-09-11 I#12).
+  const names = (v: unknown): string[] =>
+    Array.isArray(v) ? v.filter((x): x is string => typeof x === "string").slice(0, 40) : [];
   return {
     renderers: n(r.renderers),
     worldRenderers: n(r.worldRenderers),

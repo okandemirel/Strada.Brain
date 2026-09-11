@@ -163,6 +163,33 @@ describe("the art direction a gate judges against (Codex 2026-09-11 F#3, H#13)",
     expect(artDirectionText(undefined, undefined)).toBeUndefined();
   });
 
+  it("stops at the next heading, keeps a one-word brief, and ignores generic verbs (Codex 2026-09-11 I#10)", () => {
+    // The art section came FIRST and its body ran past "## Gameplay".
+    const artFirst = [
+      "## Art Direction",
+      "Rich hand-painted watercolor environments and detailed painted characters.",
+      "## Gameplay",
+      "Solve geometric puzzles.",
+    ].join("\n");
+    const look = extractLookDescription(artFirst);
+    expect(look.found).toBe(true);
+    expect(look.text).not.toContain("geometric puzzles");
+
+    // "## Art Direction / Monochrome." is a complete brief.
+    const oneWord = "## Art Direction\nMonochrome.\n";
+    const mono = extractLookDescription(oneWord);
+    expect(mono.found).toBe(true);
+    expect(mono.text).toContain("Monochrome");
+
+    // "look" is a gameplay verb, not evidence of art direction.
+    const gameplayLook = "Players look for geometric clues. Levels are timed.";
+    expect(artDirectionText(extractLookDescription(gameplayLook), gameplayLook)).toBeUndefined();
+    const both = "Players look for geometric clues. Use richly painted watercolor environments.";
+    const text = artDirectionText(extractLookDescription(both), both)!;
+    expect(text).toContain("watercolor");
+    expect(text).not.toContain("geometric clues");
+  });
+
   it("never hands GAMEPLAY vocabulary to the style check (Codex 2026-09-11 H#13)", () => {
     // "Solve geometric puzzles." made asksForFlatArt true and waived the
     // placeholder-art refusal for a document asking for watercolour.

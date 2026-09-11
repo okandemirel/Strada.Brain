@@ -118,6 +118,15 @@ describe("a named player artifact must BE one (Codex 2026-09-11 E#2, G#3)", () =
     const realApk = join(artifactDir, "real.apk");
     writeFileSync(realApk, zip(256 * 1024));
     expect(looksLikePlayer(realApk)).toBe(true);
+
+    // A LINUX player is an ELF binary, and the macOS branch used to demand
+    // Mach-O of it — refusing a perfectly good build (Codex 2026-09-11 I#15).
+    const linux = join(artifactDir, "Game.x86_64");
+    writeFileSync(linux, Buffer.concat([Buffer.from([0x7f]), Buffer.from("ELF", "latin1"), Buffer.alloc(256 * 1024, 1)]));
+    expect(looksLikePlayer(linux)).toBe(true);
+    const notElf = join(artifactDir, "Fake.x86_64");
+    writeFileSync(notElf, Buffer.alloc(256 * 1024, 0x41));
+    expect(looksLikePlayer(notElf)).toBe(false);
   });
 
   it("rejects an EMPTY bundle and accepts one with a binary in it", () => {
@@ -130,12 +139,14 @@ describe("a named player artifact must BE one (Codex 2026-09-11 E#2, G#3)", () =
     expect(looksLikePlayer(hollow)).toBe(false);
     // The bundle with a real binary in it is a player.
     expect(looksLikePlayer(realArtifact)).toBe(true);
-    // A WebGL folder is judged the same way: index.html with bytes in it.
+    // A WEB BUILD IS ITS DATA: a padded index.html with no Build folder is a
+    // page, not a game (Codex 2026-09-11 I#15).
     const webgl = join(artifactDir, "WebGL2");
     mkdirSync(webgl, { recursive: true });
-    writeFileSync(join(webgl, "index.html"), "<html>");
-    expect(looksLikePlayer(webgl)).toBe(false);
     writeFileSync(join(webgl, "index.html"), `<html>${"<!-- pad -->".repeat(1000)}</html>`);
+    expect(looksLikePlayer(webgl)).toBe(false);
+    mkdirSync(join(webgl, "Build"), { recursive: true });
+    writeFileSync(join(webgl, "Build", "game.data"), Buffer.alloc(256 * 1024, 5));
     expect(looksLikePlayer(webgl)).toBe(true);
   });
 });

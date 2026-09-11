@@ -2753,6 +2753,137 @@ describe("CampaignManager", () => {
     expect(after.milestones[2]!.deliveryProofsMissing!.join(" ")).toContain("the GDD could not be read at delivery");
   });
 
+  it("a queued GDD requirement blocks delivery and survives the final proof sprint (Codex 2026-09-11 I#4)", async () => {
+    tasks = new FakeTaskManager();
+    storage.close();
+    storage = new CampaignStorage(join(dir, "campaigns-queued-gaps.db"));
+    const gaps = Array.from({ length: 6 }, (_, i) => `Mechanic ${i + 1}: no milestone implemented it`);
+    manager = new CampaignManager({
+      storage,
+      verifyCompile: async () => compileVerdict,
+      buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
+      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); },
+      planner: {
+        planMilestones: vi.fn().mockResolvedValue(LADDER),
+        auditCoverage: vi.fn().mockResolvedValueOnce(gaps).mockResolvedValue([]),
+      } as unknown as CampaignPlanner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async (chatId, text) => { messages.push({ chatId, text }); },
+      projectRoot,
+      retryAdoptionGraceMs: 10,
+      completedSettleDelayMs: 0,
+      milestoneTimeBoxMs: 60 * 60_000,
+      deliveryResumeDelayMs: 20,
+      implementationReviveDelayMs: 10,
+    });
+    manager.attachEvents();
+    const campaign = manager.startFromGdd(ctx, "# GDD text", "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    settleMilestone("final report");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(4));
+    expect(storage.get(campaign.id)!.pendingCoverageGaps).toHaveLength(2);
+
+    // Every gap sprint FAILS its attempts, which is what appends the final
+    // proof sprint — and the queue must not be stranded by it.
+    for (let i = 0; i < 30; i++) {
+      const stored = storage.get(campaign.id)!;
+      if (stored.state !== "executing") break;
+      const before = tasks.submitted.length;
+      tasks.emit("task:failed", `task_${before}`, "gap sprint gave up");
+      await waitFor(() => {
+        const after = storage.get(campaign.id)!;
+        expect(tasks.submitted.length > before || after.state !== "executing").toBe(true);
+      });
+    }
+    const after = storage.get(campaign.id)!;
+    // THE QUEUE IS DRAINED, final proof sprint or not: every named
+    // requirement has its own sprint by the time the run settles.
+    expect(after.pendingCoverageGaps ?? []).toHaveLength(0);
+    const titles = after.milestones.filter((m) => m.id.startsWith("mcov")).map((m) => m.title).join(" ");
+    for (let i = 1; i <= 6; i++) expect(titles).toContain(`Mechanic ${i}:`);
+  });
+
+  it("a still-queued requirement is a missing delivery proof (Codex 2026-09-11 I#4)", async () => {
+    tasks = new FakeTaskManager();
+    storage.close();
+    storage = new CampaignStorage(join(dir, "campaigns-queued-proof.db"));
+    manager = new CampaignManager({
+      storage,
+      verifyCompile: async () => compileVerdict,
+      buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
+      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); },
+      planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async (chatId, text) => { messages.push({ chatId, text }); },
+      projectRoot,
+      retryAdoptionGraceMs: 10,
+      completedSettleDelayMs: 0,
+      milestoneTimeBoxMs: 60 * 60_000,
+      deliveryResumeDelayMs: 20,
+      implementationReviveDelayMs: 10,
+    });
+    manager.attachEvents();
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    // A requirement the audit named is waiting when the final sprint settles.
+    const withQueue = storage.get(campaign.id)!;
+    withQueue.pendingCoverageGaps = ["Save system: no milestone implemented it"];
+    storage.save(withQueue);
+    settleMilestone("sprint B done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    settleMilestone("green, shipping");
+    await waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(3));
+
+    const after = storage.get(campaign.id)!;
+    expect(after.state).not.toBe("done");
+    expect(after.milestones[2]!.deliveryProofsMissing!.join(" ")).toContain("have no sprint yet");
+  });
+
+  it("a repeated audit entry gets ONE sprint (Codex 2026-09-11 I#5)", async () => {
+    tasks = new FakeTaskManager();
+    storage.close();
+    storage = new CampaignStorage(join(dir, "campaigns-dupe-gaps.db"));
+    manager = new CampaignManager({
+      storage,
+      verifyCompile: async () => compileVerdict,
+      buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
+      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); },
+      planner: {
+        planMilestones: vi.fn().mockResolvedValue(LADDER),
+        auditCoverage: vi.fn().mockResolvedValueOnce([
+          "Save: absent", "Save: absent", "Boss fight: absent", "Save: absent",
+        ]).mockResolvedValue([]),
+      } as unknown as CampaignPlanner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async (chatId, text) => { messages.push({ chatId, text }); },
+      projectRoot,
+      retryAdoptionGraceMs: 10,
+      completedSettleDelayMs: 0,
+      milestoneTimeBoxMs: 60 * 60_000,
+      implementationReviveDelayMs: 10,
+    });
+    manager.attachEvents();
+    const campaign = manager.startFromGdd(ctx, "# GDD text", "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    settleMilestone("final report");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(4));
+
+    const gapTitles = storage.get(campaign.id)!.milestones.filter((m) => m.id.startsWith("mcov")).map((m) => m.title);
+    expect(gapTitles.filter((t) => t.includes("Save: absent"))).toHaveLength(1);
+    expect(gapTitles.filter((t) => t.includes("Boss fight: absent"))).toHaveLength(1);
+    expect(storage.get(campaign.id)!.pendingCoverageGaps ?? []).toHaveLength(0);
+  });
+
   it("with NO player runner configured the game is not delivered (Codex 2026-09-11 H#8)", async () => {
     // F#12 removed the phrase from the host-incapability regex and the early
     // return set the waiver field directly, so nothing changed: Codex reached
@@ -2830,6 +2961,14 @@ describe("CampaignManager", () => {
       const stored = storage.get(campaign.id)!;
       if (stored.state === "failed" && !stored.autoReviveAt) break;
       const before = tasks.submitted.length;
+      // The MEASUREMENTS move every round while the missing proof does not:
+      // a play-through whose action and frame counts climb used to produce a
+      // new signature every round, so the budget never charged (Codex I#1).
+      writePlaythroughVerdict(false, {
+        reasons: [`session 1 never ended after ${60 + i} actions (phases seen: Playing)`],
+        record: { scene: "Entry", session: 1, autoStarted: false, actions: 60 + i, outcome: "None", reachedOutcome: false },
+        frames: { count: 100 + i, flat: 0, maxMotionShare: 0.4 },
+      });
       settleMilestone(`shipping it (round ${i})`);
       await waitFor(() => {
         const after = storage.get(campaign.id)!;

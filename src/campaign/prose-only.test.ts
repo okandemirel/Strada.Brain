@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { CampaignManager } from "./campaign-manager.js";
+import { CampaignManager, proofSignature } from "./campaign-manager.js";
 
 /**
  * Measured live 2026-09-04: told not to audit, the final sprint answered
@@ -52,5 +52,37 @@ describe("documents are not delivery", () => {
 
   it("leaves an empty sprint to the no-work gate", () => {
     expect(judge(repo())).toBe(false);
+  });
+});
+
+describe("the delivery budget's signature is a set of KINDS (Codex 2026-09-11 I#1, I#2)", () => {
+  it("ignores the numbers inside a proof and names the refusals that carry none", () => {
+    const a = proofSignature(
+      ["the built player was never played to a verdict (unity_run_player left no verdict)", "play-through: 100 frames captured, level never ends"],
+      { structureRefused: false, compileBroken: false },
+    );
+    const b = proofSignature(
+      ["the built player was never played to a verdict (unity_run_player left no verdict)", "play-through: 101 frames captured, level never ends"],
+      { structureRefused: false, compileBroken: false },
+    );
+    // One more captured frame is not progress.
+    expect(a).toBe(b);
+    // A DIFFERENT missing proof is.
+    expect(proofSignature(["no test run was observed"], { structureRefused: false, compileBroken: false })).not.toBe(a);
+    // The structural refusal travels in the signature even though it never
+    // travelled in missingProofs, and an empty list is never an empty key.
+    expect(proofSignature([], { structureRefused: true, compileBroken: false })).toContain("structure-refused");
+    expect(proofSignature([], { structureRefused: false, compileBroken: false })).toBe("none-named");
+    expect(proofSignature([], { structureRefused: true, compileBroken: false }))
+      .not.toBe(proofSignature([], { structureRefused: false, compileBroken: true }));
+    // …and the FALLBACK branch, for wording this list does not know, is
+    // number-insensitive too (Codex 2026-09-11 I#1).
+    expect(proofSignature(["some new gate: 42 widgets short"], { structureRefused: false, compileBroken: false }))
+      .toBe(proofSignature(["some new gate: 43 widgets short"], { structureRefused: false, compileBroken: false }));
+    expect(proofSignature(["some new gate: 42 widgets short"], { structureRefused: false, compileBroken: false }))
+      .not.toBe(proofSignature(["a different gate: 42 widgets short"], { structureRefused: false, compileBroken: false }));
+    // Order does not matter; the set does.
+    expect(proofSignature(["no test run was observed", "the project does not compile (3 error(s))"], { structureRefused: false, compileBroken: true }))
+      .toBe(proofSignature(["the project does not compile (12 error(s))", "no test run was observed"], { structureRefused: false, compileBroken: true }));
   });
 });
