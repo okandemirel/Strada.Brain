@@ -81,6 +81,31 @@ describe("the delivery budget's signature is a set of KINDS (Codex 2026-09-11 I#
       .toBe(proofSignature(["some new gate: 43 widgets short"], { structureRefused: false, compileBroken: false }));
     expect(proofSignature(["some new gate: 42 widgets short"], { structureRefused: false, compileBroken: false }))
       .not.toBe(proofSignature(["a different gate: 42 widgets short"], { structureRefused: false, compileBroken: false }));
+    // WHICH WAY a play-through failed is part of its identity: a game that
+    // cannot start a session and one that cannot reach an ending are
+    // different problems (Codex 2026-09-11 J#9).
+    const notStarted = proofSignature(["play-through: the game refused to start the session"], { structureRefused: false, compileBroken: false });
+    const noEnding = proofSignature(["play-through: session 1 never ended after 60 actions"], { structureRefused: false, compileBroken: false });
+    expect(notStarted).not.toBe(noEnding);
+    // …and the same failure keeps one identity across its measurements.
+    expect(noEnding).toBe(proofSignature(["play-through: session 1 never ended after 240 actions"], { structureRefused: false, compileBroken: false }));
+    // The EDITOR's missing play-through is not the PLAYER's, whichever words
+    // the description happens to use (J#10).
+    // This is the EDITOR's own wording for a stale verdict, and it contains
+    // "never played" — which is why order matters here.
+    const editorMissing = proofSignature(
+      ["play-through: the only verdict on disk predates this sprint — the game as delivered was never played"],
+      { structureRefused: false, compileBroken: false },
+    );
+    const editorAbsent = proofSignature(
+      ["play-through: NOT observed — nobody played the game as delivered (unity_playthrough never ran)"],
+      { structureRefused: false, compileBroken: false },
+    );
+    // Both are the editor play-through failing to run for this attempt.
+    expect(editorMissing).toBe(editorAbsent);
+    const playerMissing = proofSignature(["the built player was never played to a verdict (unity_run_player left no verdict)"], { structureRefused: false, compileBroken: false });
+    expect(editorMissing).not.toBe(playerMissing);
+    expect(playerMissing).toContain("player-not-played");
     // Order does not matter; the set does.
     expect(proofSignature(["no test run was observed", "the project does not compile (3 error(s))"], { structureRefused: false, compileBroken: true }))
       .toBe(proofSignature(["the project does not compile (12 error(s))", "no test run was observed"], { structureRefused: false, compileBroken: true }));

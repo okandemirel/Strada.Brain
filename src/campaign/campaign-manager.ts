@@ -312,9 +312,21 @@ export function proofSignature(
     else if (text.includes("compile check did not run")) kinds.add("compile-not-run");
     else if (text.includes("player build failed")) kinds.add("build-failed");
     else if (text.includes("player build did not run")) kinds.add("build-not-run");
-    else if (text.includes("never played")) kinds.add("player-not-played");
-    else if (text.includes("inside the built player")) kinds.add("player-broken");
-    else if (text.includes("play-through") || text.includes("playthrough")) kinds.add("playthrough-missing");
+    // THE PLAYER's own play, before the editor's: "inside the built player"
+    // is the player gate whatever words follow, and "the built player was
+    // never played" is its missing half. Matching "never played" first put
+    // the EDITOR's missing play-through under the player's name, so the same
+    // failure took two identities depending on whether a stale verdict
+    // happened to exist (Codex 2026-09-11 J#10).
+    else if (text.includes("inside the built player")) kinds.add(`player-broken:${playthroughFailureTag(text)}`);
+    else if (text.includes("built player was never played")) kinds.add("player-not-played");
+    else if (text.includes("play-through") || text.includes("playthrough")) {
+      // …and WHICH WAY the play-through failed is part of its identity: a game
+      // that cannot start a session and one that cannot reach an ending are
+      // different problems, and collapsing them spent a delivery round on
+      // progress (Codex 2026-09-11 J#9).
+      kinds.add(`playthrough:${playthroughFailureTag(text)}`);
+    }
     else if (text.includes("gdd could not be read")) kinds.add("gdd-unreadable");
     else if (text.includes("fps") || text.includes("level count") || text.includes("claim")) kinds.add("gdd-claims");
     // A proof whose wording this list does not know is identified by its
@@ -357,6 +369,21 @@ export function unscheduledGaps(
     seen.add(key);
     return true;
   });
+}
+
+/**
+ * HOW a play-through failed, as a word rather than a sentence: the identity a
+ * delivery budget can compare across rounds without reading its measurements
+ * (Codex 2026-09-11 J#9).
+ */
+function playthroughFailureTag(text: string): string {
+  if (text.includes("refused") || text.includes("never started") || text.includes("did not start")) return "not-started";
+  if (text.includes("took no action") || text.includes("no action")) return "no-actions";
+  if (text.includes("no frame") || text.includes("captured 0")) return "no-frames";
+  if (text.includes("never ended") || text.includes("no outcome") || text.includes("reached no outcome")) return "no-outcome";
+  if (text.includes("not registered") || text.includes("driver")) return "no-driver";
+  if (text.includes("no verdict") || text.includes("left no")) return "no-verdict";
+  return "other";
 }
 
 /** The revival tail, kept to exactly one copy however many revivals happen. */
