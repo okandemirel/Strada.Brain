@@ -20,7 +20,8 @@
  */
 
 import { deflateSync } from "node:zlib";
-import { mkdirSync, writeFileSync, existsSync, statSync, readdirSync } from "node:fs";
+import { mkdirSync, writeFileSync, existsSync, readFileSync, statSync, readdirSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { dirname, join, relative } from "node:path";
 import { reuseOrMintGuid } from "./meta-file-utils.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "../tool.interface.js";
@@ -846,6 +847,18 @@ export class SpriteGenerateTool implements ITool {
       // 512² "green pig" came back as 19 KB of alpha noise and the tool said
       // ✓. The draw is measured (pixels: flat shape, or nearly all
       // transparent), with one differently-seeded retry before giving up.
+      // A RUNNER THAT EXITED 0 WITHOUT WRITING leaves the previous image in
+      // place, and "ok" plus "the file exists" then reported a sprite this
+      // call had not drawn (Codex 2026-09-11 N#11).
+      if (previous.unchangedSinceBackup()) {
+        previous.restore();
+        return {
+          content:
+            `Error: local diffusion reported success but ${relFile} is byte-for-byte what was already there — ` +
+            "nothing was drawn. Change the prompt and try again.",
+          isError: true,
+        };
+      }
       let unusable = unusableSpriteReason(pathCheck.fullPath);
       if (unusable !== undefined) {
         const again = await runner.textToImage(spec, prompt, pathCheck.fullPath, { ...localOpts, seed: (localOpts.seed ?? 0) + 1 });
@@ -1082,6 +1095,23 @@ export class SpriteGenerateTool implements ITool {
         if (!written.has(j.fullPath)) continue;
         const why = unusableSpriteReason(j.fullPath);
         if (why !== undefined) unusable.set(j.fullPath, why);
+      }
+      // …and TWO SUBJECTS CANNOT SHARE ONE IMAGE. A runner that wrote the same
+      // valid picture for Pig, Rocket and Tree reported "3 of 3 sprites
+      // written" and the inventory counted three sprites with no placeholders
+      // (Codex 2026-09-11 N#10). The retry below redraws them with new seeds.
+      const byContent = new Map<string, string>();
+      for (const j of jobs) {
+        if (!written.has(j.fullPath) || unusable.has(j.fullPath)) continue;
+        let digest: string;
+        try {
+          digest = createHash("sha256").update(readFileSync(j.fullPath)).digest("hex");
+        } catch {
+          continue;
+        }
+        const twin = byContent.get(digest);
+        if (twin !== undefined) unusable.set(j.fullPath, `the same image as ${twin}`);
+        else byContent.set(digest, j.relFile);
       }
       if (unusable.size > 0) {
         const retryJobs = jobs.filter((j) => unusable.has(j.fullPath)).map((j) => ({ prompt: j.prompt, out: j.fullPath, negative, seed: 1 + Math.floor(Math.random() * 1_000_000) }));

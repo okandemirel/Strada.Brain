@@ -122,7 +122,9 @@ describe("the installed model is the default; the placeholder is the fallback", 
       imageToMesh: vi.fn(async () => ({ ok: false, detail: "n/a" })),
       textToImageBatch: vi.fn(async (_spec: unknown, jobs: Array<{ out: string }>) => {
         batchCalls.push(jobs.length);
-        const written = jobs.slice(0, 2).map((j) => { writeFileSync(j.out, pngFixture("noise")); return j.out; });
+        // Distinct artwork per subject; identical images are a defect of
+        // their own (Codex 2026-09-11 N#10).
+        const written = jobs.slice(0, 2).map((j, i) => { writeFileSync(j.out, pngFixture("noise", 64 + i)); return j.out; });
         return { ok: false, detail: "1 of 3 failed: cuda", written, missing: jobs.slice(2).map((j) => j.out) };
       }),
     } as unknown as LocalRunnerLike;
@@ -407,6 +409,47 @@ describe("defects the generator review found (2026-09-07)", () => {
 });
 
 describe("a batch item's bare name meets the existing placeholder (2026-09-09 19:24: twelve new files beside twelve untouched placeholders)", () => {
+  it("two subjects may not share ONE image, and a runner that wrote nothing did not draw (Codex 2026-09-11 N#10, N#11)", async () => {
+    const { root, ctx } = project();
+    mkdirSync(join(root, "Assets/Art/Generated"), { recursive: true });
+    // N#10: the same valid picture for every subject was reported as three
+    // sprites written, and the inventory counted three with no placeholders.
+    let round = 0;
+    const runner = {
+      isModelInstalled: () => true,
+      textToImage: vi.fn(async () => ({ ok: false, detail: "n/a" })),
+      imageToMesh: vi.fn(async () => ({ ok: false, detail: "n/a" })),
+      textToImageBatch: vi.fn(async (_spec: unknown, jobs: Array<{ out: string }>) => {
+        round += 1;
+        // Every job gets the same image on the first pass; the retry draws
+        // distinct ones.
+        for (const [i, j] of jobs.entries()) writeFileSync(j.out, pngFixture("noise", round === 1 ? 64 : 64 + i + round));
+        return { ok: true, detail: "ok", written: jobs.map((j) => j.out), missing: [] };
+      }),
+    } as unknown as LocalRunnerLike;
+    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner, specFor }).execute(
+      { batch: [{ name: "Pig" }, { name: "Rocket" }, { name: "Tree" }] },
+      ctx,
+    );
+    // The duplicates were redrawn rather than counted as distinct artwork.
+    expect(runner.textToImageBatch).toHaveBeenCalledTimes(2);
+    expect(r.content).toContain("3 of 3 sprites written");
+
+    // N#11: the runner exits 0 and writes nothing over an existing sprite.
+    const target = join(root, "Assets/Art/Generated/Hero.png");
+    writeFileSync(target, pngFixture("noise", 96));
+    const lazy = {
+      isModelInstalled: () => true,
+      imageToMesh: vi.fn(async () => ({ ok: false, detail: "n/a" })),
+      textToImage: vi.fn(async () => ({ ok: true, detail: "drawn" })),
+    } as unknown as LocalRunnerLike;
+    const stale = await new SpriteGenerateTool({ localAvailable: () => true, runner: lazy, specFor })
+      .execute({ name: "Hero", provider: "local" }, ctx);
+    expect(stale.isError).toBe(true);
+    expect(stale.content).toContain("byte-for-byte what was already there");
+    expect(readFileSync(target).equals(pngFixture("noise", 96))).toBe(true);
+  });
+
   it("the local batch job is aimed at the placeholder's real path, not the default directory", async () => {
     const { root, ctx } = project();
     mkdirSync(join(root, "Assets/Modules/LiveOpsModule/Art/Status"), { recursive: true });
@@ -417,7 +460,7 @@ describe("a batch item's bare name meets the existing placeholder (2026-09-09 19
       textToImage: vi.fn(async () => ({ ok: false, detail: "n/a" })),
       imageToMesh: vi.fn(async () => ({ ok: false, detail: "n/a" })),
       textToImageBatch: vi.fn(async (_spec: unknown, jobs: Array<{ out: string }>) => {
-        for (const j of jobs) { outs.push(j.out); writeFileSync(j.out, pngFixture("noise")); }
+        for (const [i, j] of jobs.entries()) { outs.push(j.out); writeFileSync(j.out, pngFixture("noise", 64 + i)); }
         return { ok: true, detail: "ok", written: jobs.map((j) => j.out), missing: [] };
       }),
     } as unknown as LocalRunnerLike;

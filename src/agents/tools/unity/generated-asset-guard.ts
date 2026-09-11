@@ -88,6 +88,22 @@ export class PreviousAsset {
     }
   }
 
+  /**
+   * Is the file at the target byte-for-byte what was already there?
+   *
+   * A runner that exits 0 without writing leaves the previous image in place,
+   * and the tool then reported "Sprite written" over art it had not drawn
+   * (Codex 2026-09-11 N#11). False when there was nothing there before.
+   */
+  unchangedSinceBackup(): boolean {
+    if (!this.hadAsset) return false;
+    try {
+      return readFileSync(this.fullPath).equals(readFileSync(this.assetBackup));
+    } catch {
+      return false;
+    }
+  }
+
   /** Put the previous pair back; remove a newly minted pair when there was none. */
   restore(): void {
     if (this.done) return;
