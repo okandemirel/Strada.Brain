@@ -76,7 +76,7 @@ const CONTAINER_WORD_RE = /\b(?:worlds|chapters|acts|episodes|zones)\b/i;
 const LEVEL_WORD_AHEAD_RE = /\b\d{1,3}\s+(?:levels|stages|rounds|puzzles|waves)\b/i;
 /** "2 worlds with 12 levels each", "4 chapters of 10 stages each". */
 const LEVEL_MULTIPLY_RE =
-  /\b(\d{1,3})\s+(?:worlds|chapters|acts|episodes|zones)\b[^.\n]{0,20}?\b(?:with|of|holding|containing|each\s+with)\s+(\d{1,3})\s+(?:levels|stages|rounds|puzzles|waves)\s+(?:each|per\s+\w+|apiece)\b/gi;
+  /\b(\d{1,3})\s+(?:worlds|chapters|acts|episodes|zones)\b[^.\n]{0,20}?\b(?:each\s+(?:with|holding|containing|of)|with|of|holding|containing)\s+(\d{1,3})\s+(?:levels|stages|rounds|puzzles|waves)(?:\s+(?:each|per\s+\w+|apiece))?\b/gi;
 const SESSION_RE =
   /\b(?:each|every|per|a|one|single|average|typical)\s+(?:level|session|round|match|run|game|play\s+session|attempt)\b[^.\n]{0,50}?\b(\d+(?:\.\d+)?)(?:\s*(?:[-–~]|to)\s*(\d+(?:\.\d+)?))?\s*(ms|s|secs?|seconds?|min(?:ute)?s?)\b/gi;
 
@@ -98,11 +98,20 @@ export function extractNumericClaims(gddText: string): { claims: NumericClaim[];
       // reversed boot regex matched the later sentence first, so the first
       // occurrence was dropped and the claim sorted last into the cap
       // (Codex 2026-09-11 C#25).
-      if (at < already.at) {
+      // Position: the earliest wins (so the cap keeps it). Text: a MANDATORY
+      // phrasing wins over a soft one, whichever came first — otherwise "a
+      // typical round lasts 30-60 s" hid a later "unskippable timer of
+      // 30-60 s" (Codex 2026-09-11 D#24).
+      const takeText = isMandatoryFloor(c.text) && !isMandatoryFloor(already.text);
+      if (at < already.at || takeText) {
         const i = found.indexOf(already);
-        const earliest = { ...c, at };
-        seen.set(key, earliest);
-        if (i >= 0) found[i] = earliest;
+        const merged = {
+          ...c,
+          at: Math.min(at, already.at),
+          text: takeText ? c.text : already.text,
+        };
+        seen.set(key, merged);
+        if (i >= 0) found[i] = merged;
       }
       return;
     }
@@ -128,7 +137,10 @@ export function extractNumericClaims(gddText: string): { claims: NumericClaim[];
     const outer = Number(m[1]);
     const inner = Number(m[2]);
     const total = outer * inner;
-    if (outer >= 1 && inner >= 1 && total <= 999) {
+    // "each"/"per"/"apiece" anywhere in the phrase means PER container; "in
+    // total" means the inner number IS the total (Codex 2026-09-11 D#22).
+    const distributive = /\b(?:each|per\s+\w+|apiece)\b/i.test(m[0]) && !/\bin total\b/i.test(m[0]);
+    if (distributive && outer >= 1 && inner >= 1 && total <= 999) {
       multiplied.push([m.index ?? 0, (m.index ?? 0) + m[0].length]);
       push({ kind: "level_count", comparator: "eq", value: total, text: fragment(text, m.index ?? 0, m[0].length) }, m.index ?? 0);
     }
@@ -249,7 +261,7 @@ export function assessNumericClaims(
           // A driven play-through is faster than a person's, so a range's floor
           // is disclosed — UNLESS the document makes it mandatory (an
           // unskippable timer is wall-clock, not skill; Codex 2026-09-11 C#24).
-          blocking: claim.comparator !== "min" || MANDATORY_FLOOR_RE.test(claim.text),
+          blocking: claim.comparator !== "min" || isMandatoryFloor(claim.text),
         };
       }
       case "level_count": {
@@ -303,7 +315,14 @@ export function assessNumericClaims(
 export const PLAYED_SESSIONS_PER_RUN = 12;
 
 /** Wording that makes a minimum duration a rule of the game, not a pace. */
-const MANDATORY_FLOOR_RE = /\b(?:unskippable|mandatory|must last|at least|minimum|no shorter than|timer)\b/i;
+const MANDATORY_FLOOR_RE = /\b(?:unskippable|mandatory|must last|at least|no shorter than|minimum(?:\s+(?:of|duration|length))?|timer)\b/i;
+/** …unless the sentence denies it: "with no mandatory timer" (Codex 2026-09-11 D#23). */
+const MANDATORY_NEGATED_RE = /\b(?:no|not|never|without|skippable)\b[^.\n]{0,24}\b(?:unskippable|mandatory|minimum|timer|must last)\b/i;
+
+export function isMandatoryFloor(text: string): boolean {
+  if (MANDATORY_NEGATED_RE.test(text)) return false;
+  return MANDATORY_FLOOR_RE.test(text);
+}
 
 const KIND_LABEL: Record<ClaimKind, string> = {
   fps: "frame rate",

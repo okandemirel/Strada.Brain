@@ -99,7 +99,12 @@ export function describeMedia(gddText: string | undefined, report: BuiltAsSpecif
     // A game may generate its sound in code, and a document may ASK for
     // silence; neither is a missing cue list (Codex 2026-09-11 C#17).
     const proceduralAudio = /\b(?:onaudiofilterread|procedural(?:ly)?[- ]generated (?:audio|music|sound)|synthesi[sz]ed at runtime|audio synthesis)\b/i.test(documentText);
-    const asksForSilence = /\b(?:no (?:music|audio|sound|sfx)\b|silent by design|without (?:any )?(?:music|audio|sound))\b/i.test(documentText);
+    // Silence must be the WHOLE document's answer: "No music. SFX for hits"
+    // still asks for sound, and a blanket exemption let it ship silent (Codex
+    // 2026-09-11 D#28). A positive ask anywhere cancels it.
+    const deniesSound = /\b(?:no (?:music|audio|sound|sfx)\b|silent by design|without (?:any )?(?:music|audio|sound))\b/i.test(documentText);
+    const asksForSound = /\b(?:sfx|sound effects?|voice ?over|music)\s+(?:for|on|when|plays?|cue)/i.test(documentText);
+    const asksForSilence = deniesSound && !asksForSound;
     if (asks("audio") && clips === 0 && !proceduralAudio && !asksForSilence) {
       refusal =
         `the GDD specifies audio (${audio.count} mentions) and the project holds NO audio clip at all — ` +
@@ -110,7 +115,11 @@ export function describeMedia(gddText: string | undefined, report: BuiltAsSpecif
           ? "GDD audio: no imported clips, and the document says the sound is generated at runtime — not measurable from files (disclosed)."
           : "GDD audio: the document asks for silence, and the project holds no clips — consistent (disclosed).",
       );
-    } else if (asks("audio") && clips > 0 && report.reachableAudioClips === 0 && report.shippedAudioSourcesBound === 0) {
+    } else if (asks("audio") && clips > 0 && report.reachableAudioClips === 0 && report.shippedAudioSourcesBound === 0
+      && !proceduralAudio && !asksForSilence) {
+      // An unused package clip appearing in the project did not turn a
+      // deliberately silent or procedurally-scored game into a defect
+      // (Codex 2026-09-11 D#29).
       refusal =
         `the GDD specifies audio (${audio.count} mentions) and the project holds ${clips} audio clip(s), but no shipped scene reaches a ` +
         `single clip by any route and none of its ${report.shippedAudioSources} AudioSource(s) is bound to one — the delivery is silent`;

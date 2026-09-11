@@ -112,6 +112,21 @@ describe("describeMedia", () => {
     expect(describeMedia(undefined, withScene("")).lines[0]).toContain("NOT checked");
   });
 
+  it("partial silence still asks for sound, and an unused clip does not revoke a real exemption (Codex 2026-09-11 D#28, D#29)", () => {
+    // "No music" beside "SFX for hits" is not a silent game.
+    const partial = describeMedia("# GDD\n\nNo music. SFX for hits; audio for wins; sound effects for jumps.", withScene(""));
+    expect(partial.refusal).toContain("NO audio clip at all");
+    // A deliberately silent game stays exempt even when a package clip appears.
+    const silentWithClip = describeMedia("# GDD\n\nNo music, no audio, no sound effects. Silent by design.", withScene("", withClip));
+    expect(silentWithClip.refusal).toBeUndefined();
+    // …and so does a procedurally scored one.
+    const proceduralWithClip = describeMedia(
+      "# GDD\n\nMusic, audio and SFX are generated procedurally in OnAudioFilterRead.",
+      withScene("", withClip),
+    );
+    expect(proceduralWithClip.refusal).toBeUndefined();
+  });
+
   it("an UNBOUND AudioSource does not make a silent delivery audible (Codex 2026-09-11 B#12)", () => {
     const d = describeMedia(GDD, withScene("--- !u!82 &9\nAudioSource:\n  m_GameObject: {fileID: 7}\n  m_audioClip: {fileID: 0}\n", withClip));
     expect(d.refusal).toContain("none of its");

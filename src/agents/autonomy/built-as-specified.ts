@@ -152,7 +152,14 @@ const UI_ONLY_MIN_RENDERERS = 3;
 /** Art directions whose own words describe flat, low-colour artwork. */
 const FLAT_ART_IS_THE_STYLE = /\b(?:flat[- ]?(?:shaded|colou?r|art|design)|minimalist|geometric|monochrome|silhouette|solid[- ]colou?r|vector art|block colou?r)\b/gi;
 /** "Never use flat art", "no flat shading", "avoid minimalist looks". */
-const NEGATED_BEFORE = /\b(?:no|not|never|avoid|avoids|avoiding|without|anything but|rather than|instead of)\b[^.\n]{0,40}$/i;
+const NEGATED_BEFORE = /\b(?:no|not|never|avoid|avoids|avoiding|without|anything but|rather than|instead of)\b[^.;,\n]{0,40}$/i;
+/**
+ * A flat phrase that speaks only about the INTERFACE says nothing about the
+ * game's artwork: "minimalist UI over richly painted character art" exempted
+ * placeholder character art (Codex 2026-09-11 D#25).
+ */
+const UI_SCOPED_BEFORE = /\b(?:ui|hud|menu|interface|typography|icons?)\b[^.\n]{0,12}$/i;
+const UI_SCOPED_AFTER = /^[^.\n]{0,12}\b(?:ui|hud|menu|interface|typography|icons?)\b/i;
 
 /**
  * Does this art direction ASK for flat artwork? A phrase inside a negation
@@ -162,8 +169,12 @@ const NEGATED_BEFORE = /\b(?:no|not|never|avoid|avoids|avoiding|without|anything
  */
 export function asksForFlatArt(artDirection: string): boolean {
   for (const m of artDirection.matchAll(FLAT_ART_IS_THE_STYLE)) {
-    const before = artDirection.slice(Math.max(0, (m.index ?? 0) - 60), m.index ?? 0);
-    if (!NEGATED_BEFORE.test(before)) return true;
+    const at = m.index ?? 0;
+    const before = artDirection.slice(Math.max(0, at - 60), at);
+    const after = artDirection.slice(at + m[0].length, at + m[0].length + 30);
+    if (NEGATED_BEFORE.test(before)) continue;
+    if (UI_SCOPED_BEFORE.test(before) || UI_SCOPED_AFTER.test(after)) continue;
+    return true;
   }
   return false;
 }

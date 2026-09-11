@@ -679,8 +679,11 @@ describe("defects the measurement review found (2026-09-07)", () => {
     expect(asksForFlatArt("A minimalist geometric look: solid colour shapes everywhere.")).toBe(true);
     expect(asksForFlatArt("Never use flat art; every object must have detailed painted texture.")).toBe(false);
     expect(asksForFlatArt("No flat shading anywhere — everything is hand-painted.")).toBe(false);
-    // "minimal UI" is not a statement about the game's artwork.
+    // A flat phrase about the INTERFACE says nothing about the artwork (D#25).
     expect(asksForFlatArt("A minimal UI over lush painted scenes.")).toBe(false);
+    expect(asksForFlatArt("Use minimalist UI over richly painted character art.")).toBe(false);
+    // …and a negation does not spill across punctuation (D#25).
+    expect(asksForFlatArt("Do not use gradients; use flat art.")).toBe(true);
   });
 
   it("a PrefabInstance of an imported model is a placed, project-bound mesh", () => {
