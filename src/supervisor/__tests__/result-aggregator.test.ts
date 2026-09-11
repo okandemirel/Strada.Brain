@@ -260,6 +260,23 @@ describe("ResultAggregator", () => {
       });
     });
 
+    it("a rejection that NAMES WORK fails the node, however it opens (Codex 2026-09-11 M#6)", async () => {
+      // "Output is incomplete" matched anywhere in the issue laundered the
+      // substantive finding after it, and the node stayed green.
+      const verifyFn = vi.fn().mockResolvedValue({
+        verdict: "reject",
+        verifierProvider: "deepseek",
+        issues: ["Output is incomplete: player movement was never implemented."],
+      });
+      const agg = new ResultAggregator({ mode: "always", samplingRate: 0, preferDifferentProvider: true, maxVerificationCost: 15 }, verifyFn);
+      const withFiles = { ...makeResult("A", "ok"), artifacts: [{ path: "Assets/Player.cs", action: "modify" as const }] };
+      const verified = await agg.verify([withFiles]);
+      expect(verified[0]!.status).toBe("failed");
+      expect(verified[0]!.output).toContain("Verification rejected");
+      const synthesized = agg.synthesize(verified);
+      expect(synthesized.success).toBe(false);
+    });
+
     it("a rejected REPORT does not fail a node whose files landed (measured 2026-09-09 09:18: 26 committed files, 'no node succeeded')", async () => {
       const verifyFn = vi.fn().mockResolvedValue({ verdict: "reject", verifierProvider: "deepseek", issues: ["Task output incomplete: only meta-statement"] });
       const agg = new ResultAggregator({ mode: "always", samplingRate: 0, preferDifferentProvider: true, maxVerificationCost: 15 }, verifyFn);

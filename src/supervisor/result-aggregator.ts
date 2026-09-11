@@ -23,6 +23,29 @@ import type {
 const REPORT_SHAPED_ISSUE_RE =
   /output (is )?incomplete|meta-?statement|no (final )?(report|summary)|(output|response|report) (is )?(empty|missing)|did not (report|summari[sz]e)|only (a )?(status|meta)/i;
 
+/** Words that carry no finding of their own once the phrase above is removed. */
+const REPORT_FILLER_RE =
+  /^(?:task|node|output|response|report|summary|final|result|results|the|a|an|is|was|were|be|been|it|this|that|there|no|not|only|just|and|or|of|for|with|in|on|to|meta|statement|s)$/i;
+
+/**
+ * Is this issue ABOUT THE REPORT and nothing else?
+ *
+ * The phrase used to be matched anywhere in the issue, so "Output is
+ * incomplete: player movement was never implemented" — a verifier naming
+ * work that does not exist — was filed as a report complaint and the node
+ * stayed green (Codex 2026-09-11 M#6). What the phrase leaves behind decides:
+ * a remainder that names anything is a defect.
+ */
+export function isReportShapedIssue(issue: string): boolean {
+  const m = REPORT_SHAPED_ISSUE_RE.exec(issue);
+  if (!m) return false;
+  const rest = `${issue.slice(0, m.index)} ${issue.slice(m.index + m[0].length)}`;
+  return rest
+    .split(/[^A-Za-z0-9]+/)
+    .filter((w) => w.length > 0)
+    .every((w) => REPORT_FILLER_RE.test(w));
+}
+
 // =============================================================================
 // COLLECTED RESULTS
 // =============================================================================
@@ -207,7 +230,7 @@ export class ResultAggregator {
           const rejected = updatedResults[idx]!;
           const landed = rejected.artifacts?.length ?? 0;
           const issues = verdict.issues ?? [];
-          if (landed > 0 && issues.length > 0 && issues.every((i) => REPORT_SHAPED_ISSUE_RE.test(i))) {
+          if (landed > 0 && issues.length > 0 && issues.every((i) => isReportShapedIssue(i))) {
             // The verifier judged the REPORT; the node's files landed. Measured
             // 2026-09-09 09:18: "Task output incomplete: only meta-statement"
             // failed a node that had bound sprites and committed twice, six

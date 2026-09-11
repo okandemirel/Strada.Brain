@@ -2356,8 +2356,17 @@ export class BackgroundExecutor {
    * what the auto-resume budget is actually bounded on.
    */
   private lineageRootTaskId(task: Task): string {
+    // THE STORAGE WALKS THE WHOLE CHAIN. The bounded walk below stopped after
+    // fifty parents and returned that intermediate ancestor, so every further
+    // generation got a different "root" — a different budget key — and no
+    // retry budget could ever be exhausted: 20 rounds, 20 keys, one attempt
+    // each (Codex 2026-09-11 M#11). A long-lived mission reaches fifty links
+    // in a day of retries.
+    const persisted = (this.taskManager as { findLineageRootId?: (id: string) => string | null } | undefined)
+      ?.findLineageRootId?.(task.id);
+    if (persisted) return persisted;
     let current: { id: string; parentId?: string } = task;
-    for (let depth = 0; current.parentId && depth < 50; depth++) {
+    for (let depth = 0; current.parentId && depth < 200; depth++) {
       const parent = this.taskManager?.getStatus(current.parentId) ?? null;
       if (!parent) break;
       current = parent;
