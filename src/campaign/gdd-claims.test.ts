@@ -119,9 +119,24 @@ describe("assessNumericClaims", () => {
     // A catalog of 12 is a claim; 12 sessions played to an outcome is the measurement (Codex 2026-09-11 B#10).
     const catalogOnly = assessNumericClaims(claims, evidence({ sessionCount: 12 }));
     expect(catalogOnly.find((x) => x.claim.kind === "level_count")).toMatchObject({ status: "not_met", blocking: true, measured: 12 });
-    const allPlayed = assessNumericClaims(claims, evidence({ sessionCount: 12, sessions: Array.from({ length: 12 }, (_, i) => ({ index: i + 1, outcome: "Won", actions: 10, seconds: 5 })) }));
+    // Indices are catalog entries (0-based) and each session did something.
+    const allPlayed = assessNumericClaims(claims, evidence({ sessionCount: 12, sessions: Array.from({ length: 12 }, (_, i) => ({ index: i, outcome: "Won", actions: 10, seconds: 5 })) }));
     expect(allPlayed.find((x) => x.claim.kind === "level_count")).toMatchObject({ status: "met", measured: 12 });
     expect(allPlayed.find((x) => x.claim.kind === "level_count")!.note).toContain("12 of 12 played session(s) reached an outcome");
+    // An impossible index, or a session that took no action, is not a level
+    // played (Codex 2026-09-11 D#21).
+    const bogus = assessNumericClaims(claims, evidence({
+      sessionCount: 12,
+      // Real actions, impossible indices: only the catalog check rejects these.
+      sessions: Array.from({ length: 12 }, (_, i) => ({ index: 100 + i, outcome: "Won", actions: 8, seconds: 3 })),
+    }));
+    expect(bogus.find((x) => x.claim.kind === "level_count")).toMatchObject({ status: "not_met" });
+    // …and a session that took no action is not a level played either.
+    const idle = assessNumericClaims(claims, evidence({
+      sessionCount: 12,
+      sessions: Array.from({ length: 12 }, (_, i) => ({ index: i, outcome: "Won", actions: 0, seconds: 1 })),
+    }));
+    expect(idle.find((x) => x.claim.kind === "level_count")).toMatchObject({ status: "not_met" });
   });
 
   it("distinct sessions, distributive wording, and a mandatory floor (Codex 2026-09-11 C#21-24)", () => {

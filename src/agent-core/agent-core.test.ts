@@ -92,6 +92,11 @@ describe("AgentCore — a goal about the working tree runs in the working tree (
     expect(staged).toMatchObject({ workspacePolicy: "none" });
     const feature = await run("git", "Uncommitted changes in the project's working tree (outside Strada's own output): 40", "Add a git status button to the dashboard");
     expect(feature.workspacePolicy).toBeUndefined();
+    // "write a summary" is the REPORT, not implementation (Codex 2026-09-11 D#17).
+    const summary = await run("git", "Uncommitted changes in the project's working tree (outside Strada's own output): 40", "Review the staged changes and write a summary");
+    expect(summary).toMatchObject({ workspacePolicy: "none" });
+    const writesCode = await run("git", "Uncommitted changes in the project's working tree (outside Strada's own output): 40", "Write a git status panel component");
+    expect(writesCode.workspacePolicy).toBeUndefined();
   });
 });
 

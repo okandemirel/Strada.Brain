@@ -486,7 +486,7 @@ export const WORKING_TREE_GOAL_RE =
   /\b(?:uncommitted|untracked|unstaged|staged changes|working[- ]tree|working copy|git status|git diff|dirty tree|stash(?:ed)?)\b/i;
 /** …and words that say it is ordinary development work that merely mentions them. */
 const BUILD_SOMETHING_RE =
-  /\b(?:add|implement|build|create|write|design|refactor|rename|port|migrate|document)\b/i;
+  /\b(?:add|implement|build|create|design|refactor|rename|port|migrate)\b|\bwrite\s+(?!a\s+(?:summary|report|note)\b)/i;
 
 /**
  * A goal driven by a working-tree observation must run in the real tree; a

@@ -278,9 +278,15 @@ export function assessNumericClaims(
         const played = playthrough.sessions?.length ?? 0;
         // DISTINCT sessions: three records of index 0 are one level played
         // three times (Codex 2026-09-11 C#22).
+        // A session index must be a real catalog entry and the session must
+        // have DONE something: {index:-1, actions:0} counted as a played
+        // level (Codex 2026-09-11 D#21).
+        const catalog = playthrough.sessionCount ?? 0;
         const finished = new Set(
           (playthrough.sessions ?? [])
             .filter((x) => x.outcome !== "None" && x.outcome !== "Refused")
+            .filter((x) => Number.isInteger(x.index) && x.index >= 0 && x.index < Math.max(catalog, 1))
+            .filter((x) => (x.actions ?? 0) > 0)
             .map((x) => x.index),
         ).size;
         // A catalog of N is a claim; N sessions played to an outcome is the
