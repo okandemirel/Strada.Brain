@@ -9,12 +9,22 @@
  * tool writes stay unlocked by design (they are fine-grained and short).
  *
  * mkdir-based: atomic on every platform, no O_EXCL races, survives inspection
- * by hand. Stale locks (holder crashed) are broken by age. On acquisition
- * timeout the caller PROCEEDS WITHOUT the lock with a loud warning —
- * availability over strictness: a stuck lock must never deadlock all delivery.
+ * by hand. A lock whose HOLDER IS GONE is broken at once; a lock whose holder
+ * is alive is left alone however long it has been held, because the holder
+ * heartbeats the owner file. Age alone used to decide both, so a live writer's
+ * lock was broken after ten minutes and a dead writer's lock stopped every
+ * other writer for ten (measured live 2026-09-11 21:16:24: the daemon had
+ * restarted five minutes earlier, the dead process's lock was not yet "stale",
+ * and the salvage commit wrote into the project UNLOCKED — Codex N#2).
+ *
+ * On acquisition timeout the caller PROCEEDS WITHOUT the lock with a loud
+ * warning — availability over strictness: a stuck lock must never deadlock all
+ * delivery.
  */
 
-import { mkdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { hostname } from "node:os";
+import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
 import { getLoggerSafe } from "../utils/logger.js";
 
@@ -23,6 +33,39 @@ const DEFAULT_TIMEOUT_MS = 60_000;
 /** A lock older than this is presumed abandoned by a dead process. */
 const DEFAULT_STALE_MS = 10 * 60_000;
 const POLL_MS = 250;
+/** How often the holder proves it is still alive by touching the owner file. */
+const HEARTBEAT_MS = 30_000;
+
+interface LockOwner {
+  pid: number;
+  host: string;
+  token: string;
+  at: string;
+}
+
+function readOwner(path: string): LockOwner | null {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(join(path, "owner"), "utf8"));
+    if (parsed && typeof parsed === "object" && typeof (parsed as LockOwner).token === "string") {
+      return parsed as LockOwner;
+    }
+  } catch {
+    /* unreadable or from an older version: age decides */
+  }
+  return null;
+}
+
+/** Is the process that took this lock still running on this machine? */
+export function holderIsAlive(owner: LockOwner | null): boolean | undefined {
+  if (!owner || owner.host !== hostname() || !Number.isInteger(owner.pid)) return undefined;
+  try {
+    process.kill(owner.pid, 0);
+    return true;
+  } catch (err) {
+    // EPERM means a process with that id exists and is not ours.
+    return (err as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
 
 export interface ProjectWriteLockHandle {
   /** True when the lock was actually held (false = timed out, proceeded unlocked). */
@@ -34,29 +77,55 @@ function lockPath(projectRoot: string): string {
   return join(resolve(projectRoot), ".strada", "locks", LOCK_DIR_NAME);
 }
 
-function tryTakeLock(path: string): boolean {
+function tryTakeLock(path: string, token: string): boolean {
   try {
     mkdirSync(path, { recursive: false });
-    try {
-      writeFileSync(join(path, "owner"), `${process.pid} ${new Date().toISOString()}\n`, "utf8");
-    } catch {
-      // Metadata is best-effort; the directory IS the lock.
-    }
-    return true;
   } catch {
     return false;
   }
+  try {
+    writeOwner(path, token);
+  } catch {
+    // Metadata is best-effort; the directory IS the lock. Without it the
+    // holder cannot be identified, so age decides staleness as it used to.
+  }
+  return true;
+}
+
+function writeOwner(path: string, token: string): void {
+  const owner: LockOwner = { pid: process.pid, host: hostname(), token, at: new Date().toISOString() };
+  writeFileSync(join(path, "owner"), JSON.stringify(owner), "utf8");
 }
 
 function breakIfStale(path: string, staleMs: number): void {
   try {
-    const age = Date.now() - statSync(path).mtimeMs;
+    const owner = readOwner(path);
+    const alive = holderIsAlive(owner);
+    if (alive === false) {
+      // THE HOLDER IS GONE. Waiting out the stale window for a process that
+      // no longer exists is what wrote into the project unlocked.
+      getLoggerSafe().warn("Breaking project write lock — its holder is gone", { path, pid: owner?.pid });
+      rmSync(path, { recursive: true, force: true });
+      return;
+    }
+    if (alive === true) return; // a live holder keeps its lock, however long the work takes
+    const age = Date.now() - statSync(join(path, "owner")).mtimeMs;
     if (age > staleMs) {
       getLoggerSafe().warn("Breaking stale project write lock", { path, ageMs: Math.round(age) });
       rmSync(path, { recursive: true, force: true });
     }
   } catch {
-    // Vanished between the failed take and the stat — that's a release.
+    // No owner file (an older holder, or a failed write): fall back to the
+    // directory's own age.
+    try {
+      const age = Date.now() - statSync(path).mtimeMs;
+      if (age > staleMs) {
+        getLoggerSafe().warn("Breaking stale project write lock", { path, ageMs: Math.round(age) });
+        rmSync(path, { recursive: true, force: true });
+      }
+    } catch {
+      // Vanished between the failed take and the stat — that's a release.
+    }
   }
 }
 
@@ -79,14 +148,34 @@ export async function acquireProjectWriteLock(
   }
 
   const deadline = Date.now() + timeoutMs;
+  const token = randomUUID();
   for (;;) {
-    if (tryTakeLock(path)) {
+    if (tryTakeLock(path, token)) {
       let released = false;
+      // The holder proves it is alive while it works, so a long write-back is
+      // never mistaken for an abandoned lock.
+      const beat = setInterval(() => {
+        try {
+          if (readOwner(path)?.token === token) writeOwner(path, token);
+        } catch {
+          /* the lock is gone or unwritable; release handles it */
+        }
+      }, HEARTBEAT_MS);
+      beat.unref?.();
       return {
         acquired: true,
         release: () => {
           if (released) return;
           released = true;
+          clearInterval(beat);
+          // ONLY OUR OWN LOCK. An unconditional remove deleted the lock a
+          // different process had taken after ours was broken, and a third
+          // writer then acquired it beside that one (Codex 2026-09-11 N#2).
+          const owner = readOwner(path);
+          if (owner !== null && owner.token !== token) {
+            getLoggerSafe().warn("Project write lock was taken over before release — leaving it alone", { path });
+            return;
+          }
           rmSync(path, { recursive: true, force: true });
         },
       };
