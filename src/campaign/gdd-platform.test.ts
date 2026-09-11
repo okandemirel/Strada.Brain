@@ -19,6 +19,14 @@ describe("the platform the GDD asks for (Codex 2026-09-11 B#11)", () => {
     expect(p.evidence).toContain("mid-range phones");
   });
 
+  it("an EXCLUDED platform is not a request, and a named target must be the one built (Codex 2026-09-11 D#32, D#33)", () => {
+    expect(gddPlatform("Target: Android only; no iOS release.")).toMatchObject({ target: "android" });
+    // iOS named, Android built: that frame rate answers nothing.
+    expect(frameRateAnswersPlatform(gddPlatform("iOS only."), "Android")).toBe(false);
+    expect(frameRateAnswersPlatform(gddPlatform("iOS only."), "iOS")).toBe(true);
+    expect(frameRateAnswersPlatform(gddPlatform("Ships on Android."), "Android")).toBe(true);
+  });
+
   it("a desktop player does not answer a handheld frame-rate claim", () => {
     const phones = gddPlatform("Target 60 fps on mid-range phones.");
     expect(frameRateAnswersPlatform(phones, "StandaloneOSX")).toBe(false);

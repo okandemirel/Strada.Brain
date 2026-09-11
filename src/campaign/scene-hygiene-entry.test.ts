@@ -34,6 +34,28 @@ describe("scene hygiene entry selection", () => {
     expect(report.entry?.objects).toBe(3);
   });
 
+  it("an unreadable or empty first scene does not let a later scene claim index 0, and does not erase the rest (Codex 2026-09-11 D#19, D#20)", () => {
+    // Empty first scene: the recommendation moves on, but what the build
+    // opens is named.
+    const empty = assessSceneHygiene("/p", io({
+      "ProjectSettings/EditorBuildSettings.asset": settings(["Assets/Scenes/Boot.unity", "Assets/Scenes/Game.unity"]),
+      "Assets/Scenes/Boot.unity": "",
+      "Assets/Scenes/Game.unity": Array.from({ length: 20 }, () => "GameObject:").join("\n"),
+    }) as never);
+    expect(empty.refusal).toBeUndefined();
+    expect(empty.entry?.path).toBe("Assets/Scenes/Game.unity");
+    expect(empty.buildOpensInstead?.path).toBe("Assets/Scenes/Boot.unity");
+    expect(renderSceneHygiene(empty)).toContain("opens `Boot.unity` FIRST");
+
+    // Every readable scene empty: that IS the refusal.
+    const allEmpty = assessSceneHygiene("/p", io({
+      "ProjectSettings/EditorBuildSettings.asset": settings(["Assets/Scenes/A.unity", "Assets/Scenes/B.unity"]),
+      "Assets/Scenes/A.unity": "",
+      "Assets/Scenes/B.unity": "",
+    }) as never);
+    expect(allEmpty.refusal?.kind).toBe("entry-unidentifiable");
+  });
+
   it("names the scene the BUILD opens, and the richer one beside it (Codex 2026-09-11 C#26)", () => {
     const report = assessSceneHygiene("/p", io({
       "ProjectSettings/EditorBuildSettings.asset": settings([

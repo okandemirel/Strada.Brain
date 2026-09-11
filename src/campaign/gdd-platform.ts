@@ -24,6 +24,13 @@ const PLATFORM_PATTERNS: ReadonlyArray<readonly [BuildTarget, RegExp]> = [
   ["linux", /\b(?:linux|steamos|proton)\b/i],
 ];
 
+/** Words that deny the platform they precede: "no iOS release", "not on Steam". */
+const EXCLUDED_BEFORE = /\b(?:no|not|never|without|excluding|apart from|other than)\b[^.\n]{0,20}$/i;
+
+function isExcluded(text: string, at: number): boolean {
+  return EXCLUDED_BEFORE.test(text.slice(Math.max(0, at - 40), at));
+}
+
 /** "mobile"/"phones"/"tablets" with no store named: a handheld, target unresolved. */
 const HANDHELD_RE = /\b(?:mobile|phones?|handheld|tablets?|smartphones?)\b/i;
 
@@ -41,7 +48,10 @@ export function gddPlatform(gddText: string | undefined): GddPlatform {
   const hits: Array<{ target: BuildTarget; at: number }> = [];
   for (const [target, re] of PLATFORM_PATTERNS) {
     const m = re.exec(gddText);
-    if (m) hits.push({ target, at: m.index });
+    // A platform the document EXCLUDES is not a platform it asks for: "Android
+    // only; no iOS release" named two and therefore forced neither (Codex
+    // 2026-09-11 D#32).
+    if (m && !isExcluded(gddText, m.index)) hits.push({ target, at: m.index });
   }
   const handheldMatch = HANDHELD_RE.exec(gddText);
   const handheld = handheldMatch !== null || hits.some((h) => MOBILE_TARGETS.has(h.target));
@@ -66,7 +76,11 @@ function sentenceAt(text: string, index: number): string {
  * document's platform? A desktop player cannot answer a phone's budget.
  */
 export function frameRateAnswersPlatform(platform: GddPlatform, builtTarget: string | undefined): boolean {
+  if (!builtTarget) return !platform.handheld;
+  const built = builtTarget.toLowerCase();
+  // A NAMED target must be the one that was built: Android performance does
+  // not answer an iOS-only requirement (Codex 2026-09-11 D#33).
+  if (platform.target) return built.includes(platform.target);
   if (!platform.handheld) return true;
-  if (!builtTarget) return false;
-  return MOBILE_TARGETS.has(builtTarget.toLowerCase());
+  return MOBILE_TARGETS.has(built) || [...MOBILE_TARGETS].some((t) => built.includes(t));
 }

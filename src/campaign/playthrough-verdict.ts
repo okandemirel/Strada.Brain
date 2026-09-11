@@ -92,8 +92,11 @@ export function readPlaythroughVerdict(projectRoot: string, sinceMs: number, rel
   // captured. An outcome is NOT required — an endless or sandbox game has no
   // terminal state (Codex 2026-09-11 C#14) — but a session the game REFUSED
   // to start is not play whatever the file claims (C#11).
-  const actionsTaken = typeof record?.actions === "number" && record.actions > 0;
-  const framesCaptured = typeof frames?.count === "number" && frames.count > 0;
+  // Whole counts: 0.5 actions and 0.5 frames are impossible records, and they
+  // authenticated a play-through (Codex 2026-09-11 D#30).
+  const whole = (v: unknown): boolean => typeof v === "number" && Number.isInteger(v) && v > 0;
+  const actionsTaken = whole(record?.actions);
+  const framesCaptured = whole(frames?.count);
   const refused = record !== undefined && (record.startAccepted === false || str(record.outcome) === "Refused" || str(record.missing) !== undefined);
   const evidenced = actionsTaken && framesCaptured && !refused;
   const reasons = Array.isArray(parsed.reasons) ? parsed.reasons.map(String).slice(0, 8) : [];

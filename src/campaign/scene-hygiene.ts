@@ -55,6 +55,12 @@ export interface SceneHygieneReport {
    * (Codex 2026-09-11 C#26).
    */
   readonly richest?: { readonly path: string; readonly objects: number };
+  /**
+   * The scene the build opens when it is NOT the one recommended — because it
+   * is empty or its file could not be read. Named so the operator sees what a
+   * player really gets (Codex 2026-09-11 D#19, D#20).
+   */
+  readonly buildOpensInstead?: { readonly path: string; readonly objects: number };
   /** Enabled scenes tying the entry scene's object count (ambiguity, disclosed). */
   readonly entryTied: readonly string[];
   /** How many enabled scenes are not the entry scene. */
@@ -198,9 +204,14 @@ export function assessSceneHygiene(
   // THE BUILD OPENS INDEX 0. That is the scene a person gets, so it is the
   // entry; the richest scene is named beside it when they differ, and a thin
   // or scaffolding-named first scene is a finding of its own (C#26).
-  const first = readable.find((sc) => sc.path === enabled[0]?.path);
-  const best = first ?? richest;
-  if (!best || best.objects === 0) {
+  // The first enabled scene the build can actually load: an unreadable or
+  // empty first entry must not let a later scene claim to be index 0, nor
+  // erase the richer scene (Codex 2026-09-11 D#19, D#20).
+  const firstReadable = enabled.find((sc) => readable.some((r) => r.path === sc.path));
+  const firstUsable = readable.find((sc) => sc.path === firstReadable?.path && sc.objects > 0);
+  const best = firstUsable ?? richest;
+  // "Every scene is empty" only when EVERY readable scene is (D#20).
+  if (!best || readable.every((sc) => sc.objects === 0)) {
     return {
       ...empty,
       measurable: true,
@@ -234,6 +245,9 @@ export function assessSceneHygiene(
     entry: { path: best.path, objects: best.objects },
     entryTied,
     ...(richest && best && richest.path !== best.path ? { richest: { path: richest.path, objects: richest.objects } } : {}),
+    ...(firstReadable && best && firstReadable.path !== best.path
+      ? { buildOpensInstead: { path: firstReadable.path, objects: firstReadable.objects ?? 0 } }
+      : {}),
     otherEnabled: others.length,
     scaffolding,
     unclassified,
@@ -266,6 +280,12 @@ export function renderSceneHygiene(report: SceneHygieneReport): string {
     lines.push(
       `- Open \`${entry.path}\` and press Play — it is the FIRST enabled scene, the one a built player loads (${entry.objects} objects).`,
     );
+    if (report.buildOpensInstead) {
+      lines.push(
+        `- ⚠️ Build Settings opens \`${basename(report.buildOpensInstead.path)}\` FIRST (${report.buildOpensInstead.objects} objects) — ` +
+          "that is what a player gets; fix its order or its contents.",
+      );
+    }
     if (report.richest) {
       lines.push(
         `- ⚠️ \`${basename(report.richest.path)}\` holds more (${report.richest.objects} objects) but is NOT what the build opens — ` +

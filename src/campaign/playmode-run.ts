@@ -53,6 +53,12 @@ export function readPlaymodeRun(projectRoot: string, sinceMs: number): PlaymodeR
   const total = num(raw.total);
   const failed = num(raw.failed);
   if (total === undefined || failed === undefined) return { found: false };
+  // An INVALID explicit field is not an absent one: {passed:"0",skipped:"10"}
+  // fell back to the derived counts and a malformed all-skipped record read as
+  // a full-suite pass (Codex 2026-09-11 D#31).
+  const invalidField =
+    (raw.passed !== undefined && num(raw.passed) === undefined) ||
+    (raw.skipped !== undefined && num(raw.skipped) === undefined);
   const passed = num(raw.passed) ?? total - failed;
   const skipped = num(raw.skipped) ?? 0;
   const categories = typeof raw.categories === "string" && raw.categories.trim() !== "" ? raw.categories : undefined;
@@ -65,6 +71,7 @@ export function readPlaymodeRun(projectRoot: string, sinceMs: number): PlaymodeR
   // passed+failed+skipped ≠ total, never passes as green.
   const whole = (v: number): boolean => Number.isInteger(v) && v >= 0;
   const consistent =
+    !invalidField &&
     whole(total) && whole(passed) && whole(failed) && whole(skipped) &&
     (passed + failed + skipped === total || (num(raw.skipped) === undefined && passed + failed === total));
   const failedNames = Array.isArray(raw.failedNames) ? raw.failedNames.map(String).slice(0, 50) : [];

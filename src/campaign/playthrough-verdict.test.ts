@@ -38,6 +38,10 @@ describe("a verdict is evidence, not a claim (Codex 2026-09-11 B#3, B#25)", () =
     write({ ok: true, reasons: [], record: { scene: "Endless", session: 1, actions: 240, outcome: "None" }, frames: { count: 30 } });
     expect(readPlaythroughVerdict(root, 0)).toMatchObject({ found: true, ok: true });
 
+    // Fractional counts are impossible records (Codex 2026-09-11 D#30).
+    write({ ok: true, reasons: [], record: { scene: "Entry", session: 1, actions: 0.5, outcome: "Won" }, frames: { count: 0.5 } });
+    expect(readPlaythroughVerdict(root, 0)).toMatchObject({ found: true, ok: false });
+
     write({ ok: true, reasons: [], record: { scene: "Entry", session: 1, actions: 12, outcome: "Won" }, frames: { count: 0 } });
     const noFrames = readPlaythroughVerdict(root, 0);
     expect(noFrames).toMatchObject({ found: true, ok: false });

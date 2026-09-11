@@ -35,6 +35,10 @@ describe("readPlaymodeRun — a record is counts that add up (Codex 2026-09-11 B
     write({ total: 1, passed: 2, failed: 0, skipped: -1, unfiltered: true });
     expect(readPlaymodeRun(root, 0)).toMatchObject({ found: true, green: false });
     // `categories` narrows a run exactly as `filter` does.
+    // An invalid explicit field is not an absent one (Codex 2026-09-11 D#31).
+    write({ total: 10, failed: 0, passed: "0", skipped: "10", unfiltered: true });
+    expect(readPlaymodeRun(root, 0)).toMatchObject({ found: true, green: false });
+
     write({ total: 2, passed: 2, failed: 0, skipped: 0, unfiltered: true, categories: "Smoke" });
     expect(readPlaymodeRun(root, 0)).toMatchObject({ found: true, green: true, unfiltered: false });
   });
