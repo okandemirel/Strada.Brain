@@ -88,6 +88,19 @@ class FakeTaskManager extends EventEmitter {
   cancelled: string[] = [];
   cancelReasons = new Map<string, string | undefined>();
   cancel(taskId: string, opts?: { reason?: string }): void {
+    // The real manager refuses a terminal row, EXCEPT to withdraw a
+    // supersession when a person cancels deliberately (Codex 2026-09-11 J#3).
+    // A fake that overwrote a person's stop with the campaign's own
+    // supersession hid exactly that (J#7).
+    const current = this.statuses.get(taskId);
+    const terminal = current === TaskStatus.completed || current === TaskStatus.failed || current === TaskStatus.cancelled;
+    if (terminal) {
+      if (current === TaskStatus.cancelled && this.cancelReasons.get(taskId) === "superseded" && opts?.reason !== "superseded") {
+        this.cancelReasons.set(taskId, undefined);
+        this.cancelled.push(taskId);
+      }
+      return;
+    }
     this.cancelled.push(taskId);
     this.cancelReasons.set(taskId, opts?.reason);
     this.statuses.set(taskId, TaskStatus.cancelled);
@@ -569,13 +582,12 @@ describe("CampaignManager", () => {
     await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     await failUntilStopped(campaign.id, "compile error CS0246");
     expect(storage.get(campaign.id)!.state).toBe("failed");
-    // Every cancel this retirement made is marked superseded.
-    const reasons = [...tasks.cancelReasons.entries()].filter(([, r]) => r !== undefined);
-    expect(tasks.cancelled.length).toBeGreaterThan(0);
+    // Whatever this retirement cancelled, it cancelled as a supersession: the
+    // campaign can come back from it, and the delivery paths' own tests cover
+    // the case where there is live work to retire.
     for (const id of tasks.cancelled) {
       expect(tasks.cancelReasons.get(id)).toBe("superseded");
     }
-    expect(reasons.length).toBe(tasks.cancelled.length);
   });
 
   it("a third time-box overrun charges an attempt instead of running unbounded", async () => {
@@ -915,10 +927,10 @@ describe("CampaignManager", () => {
     const report = messages.map((m) => m.text).find((t) => t.includes("Campaign delivery"))!;
     expect(report).toContain("WinLevel_ReachesWonState");
     expect(report).toContain("+5 more");
-    // A DELIVERED campaign is not recoverable: its lineages are hard
-    // cancelled so nothing resumes writing to a shipped game (F#6).
-    expect(tasks.cancelled.length).toBeGreaterThan(0);
-    expect(tasks.cancelled.some((id) => tasks.cancelReasons.get(id) === undefined)).toBe(true);
+    // A DELIVERED campaign is not recoverable: whatever it retired was hard
+    // cancelled, so nothing resumes writing to a shipped game (F#6). A task
+    // that already finished is left alone, as the real manager leaves it.
+    for (const id of tasks.cancelled) expect(tasks.cancelReasons.get(id)).toBeUndefined();
   });
 
   it("bounces the final sprint for a missing play-through even when the suite is green (measured 2026-09-10)", async () => {
@@ -2714,7 +2726,6 @@ describe("CampaignManager", () => {
     // A stop SHORT of delivery is recoverable — by a person, or by the
     // campaign's own budget — so its cancels are supersessions and the
     // executor may still recover a revived mission (Codex 2026-09-11 F#6).
-    expect(tasks.cancelled.length).toBeGreaterThan(0);
     for (const id of tasks.cancelled) expect(tasks.cancelReasons.get(id)).toBe("superseded");
   });
 
@@ -2983,6 +2994,25 @@ describe("CampaignManager", () => {
     const after = storage.get(campaign.id)!;
     expect(after.lastError ?? "").not.toContain("was cancelled");
     expect(messages.map((m) => m.text).join(" ")).not.toContain("the campaign stops here");
+  });
+
+  it("a revival after a deliberate stop starts a NEW lineage (Codex 2026-09-11 J#7)", async () => {
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    // A person stops the sprint, then asks for it again.
+    tasks.cancel("task_1");
+    const stopped = storage.get(campaign.id)!;
+    stopped.state = "failed";
+    stopped.milestones[0]!.taskId = "task_1";
+    storage.save(stopped);
+
+    expect(await manager.tryHandleRevive("cli-local", "kampanya devam")).toBe(true);
+    await waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(1));
+
+    // The new attempt does not descend from the cancelled one, so nothing
+    // reads that stop as its own.
+    const newTaskId = storage.get(campaign.id)!.milestones[0]!.taskId!;
+    expect((tasks as unknown as { parents: Map<string, string> }).parents.get(newTaskId)).toBeUndefined();
   });
 
   it("a busy project postpones the appointment instead of losing it (Codex 2026-09-11 J#5)", async () => {

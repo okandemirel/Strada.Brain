@@ -1666,7 +1666,12 @@ export class CampaignManager {
       {
         userId: campaign.userId,
         conversationId: campaign.conversationId,
-        parentId: prevTaskId,
+        // A NEW GENERATION after a deliberate stop: linking the new attempt to
+        // a lineage someone cancelled makes it inherit that stop for ever, so
+        // the revival that a person just asked for abandons its own recovery
+        // (Codex 2026-09-11 J#7). The prior work stands in the repo; only the
+        // task chain starts again.
+        ...(prevTaskId && !this.lineageWasCancelledOnPurpose(prevTaskId) ? { parentId: prevTaskId } : {}),
       },
     );
     milestone.taskId = task.id;
