@@ -167,6 +167,14 @@ export class ProviderManager {
     /** Per-attempt first-response timeout (ms) threaded into every chain we build,
      *  so an unresponsive model fails over instead of hanging. 0/undefined = disabled. */
     private readonly providerResponseTimeoutMs?: number,
+    /**
+     * PROVIDER_CHAIN_STRICT: the operator's chain is the WHOLE chain. A
+     * requested primary outside it is ignored rather than put at the head —
+     * measured live 2026-09-11: a project pinned to `opencode,opencode2` ran
+     * over a thousand worker turns on OpenAI because something asked for it by
+     * name, which is the account reserved for other work.
+     */
+    private readonly chainIsExhaustive: boolean = false,
   ) {
     const dbPath = preferencesDbPath ?? process.env["MEMORY_DB_PATH"] ?? join(process.cwd(), ".strada-memory");
     this.preferences = new ProviderPreferenceStore(
@@ -280,6 +288,20 @@ export class ProviderManager {
     const normalizedPrimary = canonicalizeProviderName(primaryName) ?? primaryName.trim().toLowerCase();
     const seen = new Set<string>();
     const order: string[] = [];
+
+    const configured = new Set(
+      this.defaultProviderOrder.map((n) => canonicalizeProviderName(n) ?? n.trim().toLowerCase()),
+    );
+    // A STRICT chain admits no newcomers. Without this the requested primary
+    // went to the head of the chain whatever the operator configured, and the
+    // strict flag only governed the boot-time auto-append.
+    if (this.chainIsExhaustive && normalizedPrimary && configured.size > 0 && !configured.has(normalizedPrimary)) {
+      getLogger().info("Requested provider is outside the strict chain — using the configured chain", {
+        requested: normalizedPrimary,
+        chain: [...configured],
+      });
+      return [...configured];
+    }
 
     if (normalizedPrimary) {
       seen.add(normalizedPrimary);

@@ -165,6 +165,66 @@ describe("ProviderManager", () => {
     expect(provider.name).toBe("chain(kimi->qwen)");
   });
 
+  it("a STRICT chain admits no provider outside it (measured live 2026-09-11)", () => {
+    // A project pinned to its own accounts ran over a thousand worker turns on
+    // a provider the chain excludes, because something asked for it by name and
+    // the requested primary always went to the head of the chain. The strict
+    // flag governed only the boot-time auto-append.
+    const defaultProvider = makeProvider("chain(qwen->kimi)");
+    preferenceState.set("chat-1", {
+      providerName: "minimax",
+      model: "minimax-text",
+      selectionMode: "strada-preference-bias",
+    });
+    const manager = new ProviderManager(
+      defaultProvider,
+      { qwen: { apiKey: "qwen-key" }, kimi: { apiKey: "kimi-key" }, minimax: { apiKey: "mm-key" } },
+      { qwen: "qwen-max", kimi: "kimi-for-coding" },
+      "/tmp/provider-manager-test",
+      ["qwen", "kimi"],
+      undefined,
+      undefined,
+      undefined,
+      true, // PROVIDER_CHAIN_STRICT
+    );
+
+    manager.getProvider("chat-1");
+
+    // The chain that was built is the operator's, and the outsider is not in it.
+    for (const call of buildProviderChainMock.mock.calls) {
+      expect(call[0]).not.toContain("minimax");
+    }
+    expect(buildProviderChainMock.mock.calls.every((c) => c[0][0] !== "minimax")).toBe(true);
+  });
+
+  it("…and a provider INSIDE the strict chain is still preferred", () => {
+    const defaultProvider = makeProvider("chain(qwen->kimi)");
+    preferenceState.set("chat-1", {
+      providerName: "kimi",
+      model: "kimi-long-context",
+      selectionMode: "strada-preference-bias",
+    });
+    const manager = new ProviderManager(
+      defaultProvider,
+      { qwen: { apiKey: "qwen-key" }, kimi: { apiKey: "kimi-key" } },
+      { qwen: "qwen-max", kimi: "kimi-for-coding" },
+      "/tmp/provider-manager-test",
+      ["qwen", "kimi"],
+      undefined,
+      undefined,
+      undefined,
+      true,
+    );
+
+    manager.getProvider("chat-1");
+
+    expect(buildProviderChainMock).toHaveBeenCalledWith(
+      ["kimi", "qwen"],
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
   it("returns a resilient routed provider with fallbacks behind it", () => {
     const defaultProvider = makeProvider("chain(qwen->kimi)");
     const manager = new ProviderManager(

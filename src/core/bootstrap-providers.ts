@@ -346,6 +346,7 @@ export async function initializeAIProvider(
     ollamaBaseUrl,
     config.providerBaseUrls,
     config.llmProviderFirstResponseTimeoutMs,
+    config.providerChainStrict === true,
   );
 
   // Verify Ollama reachability before marking it available for routing.
