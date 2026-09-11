@@ -231,3 +231,25 @@ export function frameRateAnswersPlatform(platform: GddPlatform, builtTarget: str
   if (!platform.handheld) return true;
   return MOBILE_TARGETS.has(built) || [...MOBILE_TARGETS].some((t) => built.includes(t));
 }
+
+/** The platform of the machine this process is running on. */
+export function hostTarget(platform: string = process.platform): BuildTarget | undefined {
+  if (platform === "darwin") return "macos";
+  if (platform === "win32") return "windows";
+  if (platform === "linux") return "linux";
+  return undefined;
+}
+
+/**
+ * Is this artifact built for a DIFFERENT machine than the one holding it?
+ *
+ * "exec format error" was waived as host incompatibility whatever the
+ * artifact was, so a malformed executable built FOR this machine excused
+ * playing the game at all (Codex 2026-09-11 L#17). Only a proven mismatch is
+ * a host's limit; an artifact whose platform is unknown is not proof of one.
+ */
+export function artifactIsForeign(artifactPath: string | undefined, host: BuildTarget | undefined): boolean {
+  const built = targetOfBuild(artifactPath);
+  if (built === undefined || host === undefined) return false;
+  return built !== host;
+}

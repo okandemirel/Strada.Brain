@@ -1,5 +1,5 @@
 import { supportsRichMessaging } from "../../channels/channel-core.interface.js";
-import { closeSync, existsSync, openSync, readSync, statSync, readdirSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, readSync, statSync, readdirSync } from "node:fs";
 import type { Attachment } from "../../channels/channel-messages.interface.js";
 import { join } from "node:path";
 import { runCodexSecondOpinion } from "../../agents/review/codex-second-opinion.js";
@@ -708,7 +708,11 @@ export function looksLikePlayer(artifactPath: string): boolean {
     // be a file with bytes in it.
     try {
       const entries = readdirSync(artifactPath);
-      const named = entries.some((e) => /^(?:index\.html|Build|Data|.*_Data|Contents|UnityPlayer\.(?:dll|so|dylib))$/i.test(e));
+      // The entry page is a PAGE, not one conventional filename: a build whose
+      // entry is `play.html` was refused outright, and renaming a page does
+      // not invalidate its relative references (Codex 2026-09-11 L#18).
+      const pages = entries.filter((e) => /\.html?$/i.test(e));
+      const named = pages.length > 0 || entries.some((e) => /^(?:Build|Data|.*_Data|Contents|UnityPlayer\.(?:dll|so|dylib))$/i.test(e));
       if (!named) return false;
       // A WEB BUILD IS ITS DATA, not its page: index.html padded to 4 KB
       // passed as a game (Codex 2026-09-11 I#15). When the only named entry
@@ -721,7 +725,11 @@ export function looksLikePlayer(artifactPath: string): boolean {
         // A WEB build needs its PAGE as well as its data: a Build folder
         // holding only a log, or a data file with no page at all, is not
         // something anyone can open (Codex 2026-09-11 K#12).
-        const webish = entries.some((e) => /^index\.html$/i.test(e));
+        // …and the page has to LOAD the build: "<html>a WebGL build</html>"
+        // beside 4 KB of zeros passed as a delivered game (Codex 2026-09-11
+        // L#17). A page that references no script and no build directory is
+        // not something anyone can play.
+        const webish = pages.some((p) => loadsSomething(join(artifactPath, p), buildDirs));
         const buildOnly = buildDirs.every((d) => /^Build$/i.test(d));
         if (buildOnly && !webish) return false;
         return buildDirs.some((dir) => holdsGameData(join(artifactPath, dir), 3));
@@ -803,6 +811,114 @@ function holdsPayload(dir: string, depth: number): boolean {
   return false;
 }
 
+/** How much of a file has to be something other than zero padding. */
+const MIN_SUBSTANCE_RATIO = 0.02;
+
+/**
+ * A web entry page that actually LOADS the build beside it: a script, a
+ * module, or a reference into one of the build directories. A page naming
+ * none of them is prose with an .html extension (Codex 2026-09-11 L#17).
+ */
+function loadsSomething(page: string, buildDirs: readonly string[]): boolean {
+  let text: string;
+  try {
+    text = readFileSync(page, "latin1").slice(0, 256 * 1024);
+  } catch {
+    return false;
+  }
+  if (/<script\b/i.test(text) || /\bcreateUnityInstance\b/.test(text)) return true;
+  return buildDirs.some((d) => new RegExp(`\\b${d.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/`, "i").test(text));
+}
+
+/**
+ * Is there anything in this file but its header? 65 536 bytes of which five
+ * are an ELF header and 65 531 are zeros passed every magic-byte check, the
+ * runner's "exec format error" was waived as host incompatibility, and the
+ * campaign delivered a game that did not exist (Codex 2026-09-11 L#17).
+ */
+function hasSubstance(path: string, size: number): boolean {
+  const window = 8192;
+  const offsets = [Math.floor(size / 2), Math.max(0, size - window)];
+  let nonZero = 0;
+  let read = 0;
+  try {
+    const fd = openSync(path, "r");
+    try {
+      for (const at of offsets) {
+        const buf = Buffer.alloc(Math.min(window, Math.max(0, size - at)));
+        if (buf.length === 0) continue;
+        readSync(fd, buf, 0, buf.length, at);
+        read += buf.length;
+        for (const b of buf) if (b !== 0) nonZero++;
+      }
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    return false;
+  }
+  return read > 0 && nonZero / read >= MIN_SUBSTANCE_RATIO;
+}
+
+/** The end-of-central-directory record every real ZIP container ends with. */
+function hasZipDirectory(path: string, size: number): boolean {
+  const window = Math.min(size, 66_000);
+  try {
+    const fd = openSync(path, "r");
+    try {
+      const buf = Buffer.alloc(window);
+      readSync(fd, buf, 0, window, size - window);
+      return buf.includes(Buffer.from("PK\u0005\u0006", "latin1"));
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    return false;
+  }
+}
+
+/** The PE signature a Windows executable's DOS header points at. */
+function hasPeSignature(path: string, size: number): boolean {
+  try {
+    const fd = openSync(path, "r");
+    try {
+      const at = Buffer.alloc(4);
+      readSync(fd, at, 0, 4, 0x3c);
+      const offset = at.readUInt32LE(0);
+      if (offset <= 0 || offset + 4 > size) return false;
+      const sig = Buffer.alloc(4);
+      readSync(fd, sig, 0, 4, offset);
+      return sig.toString("latin1") === "PE\u0000\u0000";
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * An ELF header that declares an EXECUTABLE for a machine — not five bytes
+ * of magic. e_type 2 (EXEC) or 3 (DYN, what a PIE build is), e_machine set.
+ */
+function hasElfProgram(path: string): boolean {
+  try {
+    const fd = openSync(path, "r");
+    try {
+      const head = Buffer.alloc(20);
+      readSync(fd, head, 0, 20, 0);
+      const little = head[5] === 1;
+      const type = little ? head.readUInt16LE(16) : head.readUInt16BE(16);
+      const machine = little ? head.readUInt16LE(18) : head.readUInt16BE(18);
+      return (type === 2 || type === 3) && machine !== 0;
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    return false;
+  }
+}
+
 /**
  * The first bytes of a packaged player: a ZIP container (apk/aab/ipa/zip), a
  * Windows executable, or a macOS Mach-O / universal binary. A `.dmg` is
@@ -822,8 +938,19 @@ function hasPackageMagic(path: string): boolean {
     return false;
   }
   const magic = head.readUInt32BE(0);
-  if (/\.(?:apk|aab|ipa|zip)$/i.test(path)) return head.toString("latin1", 0, 2) === "PK";
-  if (/\.exe$/i.test(path)) return head.toString("latin1", 0, 2) === "MZ";
+  // The MAGIC IS A COSTUME: every check below used to stop at the first bytes,
+  // so a header followed by zeros authenticated a player that did not exist
+  // (Codex 2026-09-11 L#17). Each format is now asked for the structure that
+  // makes it loadable, and every artifact for content behind its header.
+  let size = 0;
+  try {
+    size = statSync(path).size;
+  } catch {
+    return false;
+  }
+  if (!hasSubstance(path, size)) return false;
+  if (/\.(?:apk|aab|ipa|zip)$/i.test(path)) return head.toString("latin1", 0, 2) === "PK" && hasZipDirectory(path, size);
+  if (/\.exe$/i.test(path)) return head.toString("latin1", 0, 2) === "MZ" && hasPeSignature(path, size);
   // A LINUX player is an ELF binary, and this branch demanded Mach-O of it —
   // so a perfectly good .x86_64 build was refused (Codex 2026-09-11 I#15).
   // All four bytes: checking only "ELF" from byte one accepted "AELF"
@@ -841,8 +968,9 @@ function hasPackageMagic(path: string): boolean {
       } finally {
         closeSync(fd);
       }
-      // 1 = 32-bit, 2 = 64-bit; anything else is not an ELF header.
-      return (cls[0] === 1 || cls[0] === 2) && (st.mode & 0o111) !== 0;
+      // 1 = 32-bit, 2 = 64-bit; anything else is not an ELF header. And the
+      // header has to declare a program for a machine (L#17).
+      return (cls[0] === 1 || cls[0] === 2) && (st.mode & 0o111) !== 0 && hasElfProgram(path);
     } catch {
       return false;
     }

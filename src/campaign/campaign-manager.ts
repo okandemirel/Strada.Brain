@@ -25,7 +25,7 @@ import type { CampaignStorage } from "./campaign-storage.js";
 import { detectCampaignIntent } from "./campaign-intake.js";
 import { assessSceneHygiene, renderSceneHygiene } from "./scene-hygiene.js";
 import { readPlaythroughVerdict, describePlaythrough, playthroughDirective, PLAYER_PLAYTHROUGH_VERDICT_REL } from "./playthrough-verdict.js";
-import { gddPlatform, buildSatisfiesTarget, type BuildTarget } from "./gdd-platform.js";
+import { gddPlatform, buildSatisfiesTarget, artifactIsForeign, hostTarget, type BuildTarget } from "./gdd-platform.js";
 import { readPlaymodeRun } from "./playmode-run.js";
 import { assessNumericClaims, claimsRefusal, describeClaims, extractNumericClaims } from "./gdd-claims.js";
 import { deliveryReviewPrompt, renderSecondOpinion } from "../agents/review/codex-second-opinion.js";
@@ -3804,7 +3804,11 @@ export class CampaignManager {
     // An .apk on a Mac is not a failed game, it is an artifact this machine
     // cannot execute — disclosed, never a refusal, and never a reason to
     // retry forever (Codex 2026-09-11 C#2).
-    if (!verdict.found && failure !== undefined && UNRUNNABLE_HERE_RE.test(failure)) {
+    // …but only when the artifact really is for another machine. The same
+    // error text on an artifact built FOR this host is a BROKEN ARTIFACT, and
+    // waiving it delivered a player that could not start (Codex 2026-09-11
+    // L#17).
+    if (!verdict.found && failure !== undefined && UNRUNNABLE_HERE_RE.test(failure) && artifactIsForeign(build.artifactPath, hostTarget())) {
       return { ...verdict, unrunnableHere: failure.slice(0, 200) };
     }
     return verdict;

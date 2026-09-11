@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { gddPlatform, frameRateAnswersPlatform, buildSatisfiesTarget, targetOfBuild } from "./gdd-platform.js";
+import { gddPlatform, frameRateAnswersPlatform, buildSatisfiesTarget, targetOfBuild, artifactIsForeign, hostTarget } from "./gdd-platform.js";
 
 describe("the platform the GDD asks for (Codex 2026-09-11 B#11)", () => {
   it("names the FIRST target and carries every platform the document asks for", () => {
@@ -105,5 +105,22 @@ describe("the platform the GDD asks for (Codex 2026-09-11 B#11)", () => {
     // still counts, because an unsatisfiable gate is worse than a named gap.
     expect(buildSatisfiesTarget("windows", undefined, undefined)).toBe(true);
     expect(buildSatisfiesTarget(undefined, "StandaloneOSX")).toBe(true);
+  });
+
+  it("only a PROVEN mismatch is a host that cannot run the artifact (Codex 2026-09-11 L#17)", () => {
+    expect(hostTarget("darwin")).toBe("macos");
+    expect(hostTarget("win32")).toBe("windows");
+    expect(hostTarget("linux")).toBe("linux");
+    expect(hostTarget("aix")).toBeUndefined();
+    // An .apk on a Mac is a machine's limit.
+    expect(artifactIsForeign("/p/Game.apk", "macos")).toBe(true);
+    // A macOS bundle on a Mac that refuses to start is a BROKEN ARTIFACT, and
+    // waiving it delivered a player nobody could start.
+    expect(artifactIsForeign("/p/Game.app", "macos")).toBe(false);
+    expect(artifactIsForeign("/p/Game.exe", "windows")).toBe(false);
+    // An artifact whose platform is unknown proves no mismatch either.
+    expect(artifactIsForeign("/p/Game", "macos")).toBe(false);
+    expect(artifactIsForeign(undefined, "macos")).toBe(false);
+    expect(artifactIsForeign("/p/Game.apk", undefined)).toBe(false);
   });
 });
