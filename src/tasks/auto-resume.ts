@@ -115,8 +115,13 @@ export function decideMissionKeepAlive(
       action: "report",
       attempt,
       backoffMs: 0,
+      // The caller appends "Last blocker: <reason>" after this sentence, so
+      // saying "Last blocker:" here too printed the phrase twice and put
+      // machinery text where the cause belongs (measured live 2026-09-11
+      // 12:44:57: "Last blocker: this needs a human decision before work can
+      // continue. Last blocker: keep-alive re-armed after restart").
       reportReason:
-        `Persistently failing after ${MAX_MISSION_RETRIES} automatic retries. Last blocker: this needs a human decision before work can continue.`,
+        `Persistently failing after ${MAX_MISSION_RETRIES} automatic retries; this needs a human decision before work can continue.`,
     };
   }
   return { action: "retry", attempt, backoffMs: missionRetryBackoffMs(attempt) };

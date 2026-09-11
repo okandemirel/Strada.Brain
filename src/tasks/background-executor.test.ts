@@ -2638,16 +2638,26 @@ describe("BackgroundExecutor - auto-resume bounds (measured loop of 2026-08-26)"
       // 90s boot settle + the 45s re-arm stagger for every candidate.
       await vi.advanceTimersByTimeAsync(91_000 + 3 * 45_000);
 
-      // 8 retries already spent → the next one is 9/10, at the 600s backoff cap.
+      // 8 retries already spent → the backoff stays at its 600s cap and the
+      // count is NOT back at a fresh budget. It does not ADVANCE either: the
+      // restart is not one of the ten failures (measured live 2026-09-11 —
+      // three boots walked one mission 8 → 9 → 10 and stopped it, its only
+      // real failure having been at attempt 1).
       const parkedBlock = taskManager.block.mock.calls.find((c: unknown[]) => c[0] === "task_parked8");
       expect(parkedBlock?.[1]).toMatch(/Auto-retry 9\/10 in ~\d+s/);
+      expect(parkedBlock?.[1]).toContain("failure retries still at 8/10");
       expect(Number(/~(\d+)s/.exec(String(parkedBlock?.[1]))?.[1])).toBeGreaterThanOrEqual(600);
       const missionRetries = (executor as unknown as { missionRetries: Map<string, number> }).missionRetries;
-      expect(missionRetries.get("mission:task_parked8")).toBe(9);
+      expect(missionRetries.get("mission:task_parked8")).toBe(8);
 
-      // 10 already spent → the cap holds: escalate, never "Auto-retry 1/10".
-      expect(taskManager.block).not.toHaveBeenCalledWith("task_capped", expect.anything());
-      expect(taskManager.appendTaskNotice).toHaveBeenCalledWith(
+      // 10 already spent, and the process died before any of them escalated:
+      // a restart may not be the verdict, so it is re-armed at the cap's
+      // backoff and the NEXT real failure is what reports.
+      expect(taskManager.block).toHaveBeenCalledWith(
+        "task_capped",
+        expect.stringContaining("failure retries still at 10/10"),
+      );
+      expect(taskManager.appendTaskNotice).not.toHaveBeenCalledWith(
         "task_capped",
         expect.stringContaining("MISSION STOPPED"),
       );

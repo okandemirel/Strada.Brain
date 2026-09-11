@@ -50,7 +50,7 @@ import type { BudgetTracker } from "../daemon/budget/budget-tracker.js";
 import type { UnifiedBudgetManager } from "../budget/unified-budget-manager.js";
 import { getLogger } from "../utils/logger.js";
 import { summariseNodeOutcomes } from "./node-outcome-summary.js";
-import { decideAutoResume, type AutoResumeState , decideMissionKeepAlive } from "./auto-resume.js";
+import { decideAutoResume, type AutoResumeState , decideMissionKeepAlive, MAX_MISSION_RETRIES, missionRetryBackoffMs } from "./auto-resume.js";
 
 // Shared outage measurement (also used by goal auto-resume and campaign
 // self-revival); re-exported so existing importers keep their path.
@@ -400,7 +400,11 @@ export class BackgroundExecutor {
             });
             continue;
           }
-          const persistedAttempt = marker ? Number(marker[1]) : 0;
+          // Prefer the explicit carry: a previous restart's "Auto-retry n/m"
+          // marker names the retry it made, and reading THAT back as the
+          // failure budget is what walked the counter up one per boot.
+          const carried = /failure retries still at (\d+)\/\d+/.exec(result);
+          const persistedAttempt = carried ? Number(carried[1]) : marker ? Number(marker[1]) : 0;
           const rearmReason = marker ? "keep-alive re-armed after restart" : `keep-alive re-armed after restart — ${result.slice(0, 120)}`;
           const lineage = this.lineageRootTaskId(task);
           if (seenLineages.has(lineage)) continue;
@@ -433,10 +437,10 @@ export class BackgroundExecutor {
           const key = `mission:${lineage}`;
           this.missionRetries.set(key, Math.max(this.missionRetries.get(key) ?? 0, persistedAttempt));
           if (staggerMs === 0) {
-            this.scheduleMissionKeepAlive(task, rearmReason);
+            this.scheduleMissionKeepAlive(task, rearmReason, { spendAttempt: false });
           } else {
             const t = setTimeout(
-              () => this.scheduleMissionKeepAlive(task, rearmReason),
+              () => this.scheduleMissionKeepAlive(task, rearmReason, { spendAttempt: false }),
               staggerMs,
             );
             t.unref?.();
@@ -2076,8 +2080,14 @@ export class BackgroundExecutor {
     }
   }
 
-  private scheduleMissionKeepAlive(task: Task, reason: string): boolean {
+  /**
+   * @param opts.spendAttempt false when the caller is not reporting a mission
+   *   FAILURE — a process restart, which must not be charged to the ten-retry
+   *   failure budget. See the restart handling below.
+   */
+  private scheduleMissionKeepAlive(task: Task, reason: string, opts?: { spendAttempt?: boolean }): boolean {
     if (!this.taskManager || task.origin !== "user") return false;
+    const spendAttempt = opts?.spendAttempt !== false;
     // An ask_user block is a QUESTION awaiting a person, not a failure to
     // retry. Auto-resubmitting would re-ask the same question into the void
     // (measured 2026-08-24): deliver it to the channel and wait.
@@ -2100,7 +2110,21 @@ export class BackgroundExecutor {
     const key = `mission:${this.lineageRootTaskId(task)}`;
     const attempt = this.missionRetries.get(key) ?? 0;
     const budgetExceeded = this._unifiedBudgetManager?.isGlobalExceeded() ?? false;
-    const decision = decideMissionKeepAlive(attempt, { budgetExceeded });
+    let decision = decideMissionKeepAlive(attempt, { budgetExceeded });
+    // A RESTART IS NOT A FAILURE, so it cannot be the thing that gives up.
+    // Measured live 2026-09-11: three boots (11:54:22, 12:24:51, 12:44:57),
+    // each re-arming the same mission, walked the counter 8 → 9 → 10 and the
+    // third one escalated — "MISSION STOPPED — needs you … Last blocker:
+    // keep-alive re-armed after restart". The mission had not failed once in
+    // that hour; the auto-updater restarting the daemon had. Ten restarts now
+    // cost no retries, and only a real blocker escalates. Unbounded
+    // resubmission is not the alternative risk: the retry fires after the
+    // backoff (10 min at the cap), so a process that dies sooner than that
+    // never resubmits at all. A BUDGET stop still reports — that one is the
+    // product contract, not a verdict about this mission.
+    if (decision.action === "report" && !spendAttempt && !budgetExceeded) {
+      decision = { action: "retry", attempt, backoffMs: missionRetryBackoffMs(attempt) };
+    }
 
     if (decision.action === "report") {
       this.missionRetries.delete(key);
@@ -2130,7 +2154,7 @@ export class BackgroundExecutor {
       return false;
     }
 
-    this.missionRetries.set(key, decision.attempt + 1);
+    this.missionRetries.set(key, spendAttempt ? decision.attempt + 1 : decision.attempt);
     // A retry fired into an all-provider cooldown is a guaranteed burn: the
     // resubmitted task dies in its planning call before doing any work.
     // Measured overnight 2026-08-27: the keep-alive fed doomed decompositions
@@ -2152,9 +2176,18 @@ export class BackgroundExecutor {
       Math.min(cooldownWaitMs, BackgroundExecutor.COOLDOWN_REPOLL_MS),
     );
     try {
+      // The block TEXT is the only place the attempt count survives a
+      // process death (see scheduleKeepAliveRearm), so a re-arm that spends
+      // no attempt has to persist the unchanged count explicitly — the
+      // "Auto-retry n/m" marker reads as the retry being made, not as the
+      // failure budget.
+      const shown = Math.min(decision.attempt + 1, MAX_MISSION_RETRIES);
+      const carry = spendAttempt
+        ? ""
+        : ` Restart re-arm — failure retries still at ${decision.attempt}/${MAX_MISSION_RETRIES}.`;
       this.taskManager.block(
         task.id,
-        `Transient failure — ${reason.slice(0, 160)}. Auto-retry ${decision.attempt + 1}/${10} in ~${Math.round(effectiveBackoffMs / 1000)}s.`,
+        `Transient failure — ${reason.slice(0, 160)}. Auto-retry ${shown}/${MAX_MISSION_RETRIES} in ~${Math.round(effectiveBackoffMs / 1000)}s.${carry}`,
       );
     } catch { /* block-marking is cosmetic here */ }
     const timer = setTimeout(() => {

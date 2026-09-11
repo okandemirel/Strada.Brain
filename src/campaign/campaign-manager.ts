@@ -2687,6 +2687,7 @@ export class CampaignManager {
       const cleaned = output
         .replace(/Reaped:[^.]*\./g, "")
         .replace(/Auto-retry \d+\/\d+ in ~\d+s\.?/g, "")
+        .replace(/Restart re-arm — failure retries still at \d+\/\d+\.?/g, "")
         .replace(/Transient failure —\s*/g, "")
         .trim();
       // The strip must match the tail as APPENDED below. Audited 2026-09-02:

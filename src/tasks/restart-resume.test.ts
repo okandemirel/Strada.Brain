@@ -139,3 +139,90 @@ describe("a blocked mission without a retry marker is re-armed too (audited 2026
   });
 });
 
+
+/**
+ * Measured live 2026-09-11: the daemon booted at 11:54:22, 12:24:51 and
+ * 12:44:57 (auto-update restarts), and each boot's re-arm of the SAME blocked
+ * mission spent one of its ten retries — 8 → 9 → 10 — until the third boot
+ * escalated with "MISSION STOPPED — needs you … Last blocker: keep-alive
+ * re-armed after restart". The mission had not failed once in that hour.
+ */
+describe("a restart does not spend a mission retry, and never escalates", () => {
+  function harness(blocked: unknown[]) {
+    const executor = Object.create(BackgroundExecutor.prototype) as BackgroundExecutor;
+    const internals = executor as unknown as {
+      missionRetries: Map<string, number>;
+      taskManager: unknown;
+      allProvidersCoolingDownMs: () => number;
+      lineageRootTaskId: (t: { id: string }) => string;
+      isLineageCancelled: () => boolean;
+      lineageTipOf: () => unknown;
+      scheduleKeepAliveRearm: () => void;
+      scheduleMissionKeepAlive: (t: unknown, reason: string, o?: { spendAttempt?: boolean }) => boolean;
+    };
+    internals.missionRetries = new Map();
+    internals.allProvidersCoolingDownMs = () => 0;
+    internals.lineageRootTaskId = (t) => t.id;
+    internals.isLineageCancelled = () => false;
+    internals.lineageTipOf = () => null;
+    const retried: string[] = [];
+    const blocks: string[] = [];
+    const notices: string[] = [];
+    internals.taskManager = {
+      listRecoverableTasks: () => blocked,
+      listPausedByRestart: () => [],
+      listTasks: () => [],
+      getStatus: () => null,
+      findLatestLineageTask: () => ({ id: "task_1", status: "blocked" }),
+      findLineageRootId: () => null,
+      retryTask: (id: string) => { retried.push(id); return { id: "task_new" }; },
+      appendTaskNotice: (_id: string, msg: string) => { notices.push(msg); },
+      block: (_id: string, msg: string) => { blocks.push(msg); },
+    };
+    return { internals, retried, blocks, notices };
+  }
+  const blockedAt = (attempt: number, carry?: number): unknown => ({
+    id: "task_1", chatId: "cli-local", prompt: "Mission: build the game", origin: "user", status: "blocked",
+    result: `Transient failure — keep-alive re-armed after restart. Auto-retry ${attempt}/10 in ~600s.`
+      + (carry === undefined ? "" : ` Restart re-arm — failure retries still at ${carry}/10.`),
+  });
+
+  it("carries the failure count instead of walking it up one per boot", async () => {
+    vi.useFakeTimers();
+    try {
+      const { internals, blocks } = harness([blockedAt(9, 8)]);
+      internals.scheduleKeepAliveRearm();
+      await vi.advanceTimersByTimeAsync(90_000 + 1_000);
+      expect(blocks[0]).toContain("Restart re-arm — failure retries still at 8/10.");
+      expect(internals.missionRetries.get("mission:task_1")).toBe(8);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("re-arms a mission already at the cap rather than stopping it", async () => {
+    vi.useFakeTimers();
+    try {
+      const { internals, retried, notices } = harness([blockedAt(10, 10)]);
+      internals.scheduleKeepAliveRearm();
+      await vi.advanceTimersByTimeAsync(90_000 + 601_000);
+      expect(notices.join(" ")).not.toContain("MISSION STOPPED");
+      expect(retried).toEqual(["task_1"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("still escalates when a REAL failure hits the cap, naming the blocker once", () => {
+    const { internals, notices } = harness([]);
+    internals.missionRetries.set("mission:task_1", 10);
+    const kept = internals.scheduleMissionKeepAlive(
+      { id: "task_1", chatId: "cli-local", prompt: "Mission: build the game", origin: "user", status: "failed" },
+      "compile failed: CS1002",
+    );
+    expect(kept).toBe(false);
+    expect(notices[0]).toContain("MISSION STOPPED");
+    expect(notices[0]).toContain("Last blocker: compile failed: CS1002");
+    expect(notices[0]!.match(/Last blocker:/g)).toHaveLength(1);
+  });
+});
