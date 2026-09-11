@@ -4969,7 +4969,7 @@ export class CampaignManager {
   private findNewestGddPath(): string | undefined {
     const docsDir = join(this.projectRoot, "docs");
     if (!existsSync(docsDir)) return undefined;
-    const candidates: Array<{ rel: string; mtime: number }> = [];
+    const candidates: Array<{ rel: string; mtime: number; size: number; derivative: boolean }> = [];
     const stack: Array<{ dir: string; depth: number }> = [{ dir: docsDir, depth: 0 }];
     while (stack.length > 0) {
       const { dir, depth } = stack.pop()!;
@@ -4985,11 +4985,14 @@ export class CampaignManager {
           if (depth < 3 && !e.name.startsWith(".") && e.name !== "node_modules") {
             stack.push({ dir: full, depth: depth + 1 });
           }
-        } else if (/gdd/i.test(e.name) && e.name.toLowerCase().endsWith(".md")) {
+        } else if (/gdd|game[ _-]?design[ _-]?doc/i.test(e.name) && e.name.toLowerCase().endsWith(".md")) {
           try {
+            const stat = statSync(full);
             candidates.push({
               rel: relative(this.projectRoot, full).split(sep).join("/"),
-              mtime: statSync(full).mtimeMs,
+              mtime: stat.mtimeMs,
+              size: stat.size,
+              derivative: DERIVATIVE_DOC_RE.test(e.name),
             });
           } catch {
             /* vanished mid-scan */
@@ -4997,8 +5000,16 @@ export class CampaignManager {
         }
       }
     }
-    candidates.sort((a, b) => b.mtime - a.mtime);
-    return candidates[0]?.rel;
+    // THE DESIGN DOCUMENT, not the newest report about it. Taking the newest
+    // "gdd" name started a campaign from
+    // docs/PixelFlow_GDD_Traceability_Checklist.md — a file the system itself
+    // had written about the design — and the whole ladder would have been
+    // planned from a checklist (measured live 2026-09-12 00:21). A derivative
+    // is used only when nothing else carries the design.
+    const substantive = candidates.filter((c) => !c.derivative);
+    const pool = substantive.length > 0 ? substantive : candidates;
+    pool.sort((a, b) => b.mtime - a.mtime);
+    return pool[0]?.rel;
   }
 
   /**
@@ -5139,6 +5150,16 @@ function coverageGapItems(milestone: CampaignMilestone): string[] {
   }
   return items.filter((item) => item.length > 0);
 }
+
+/**
+ * A document ABOUT a GDD rather than the GDD: the audits, checklists and
+ * summaries the system writes as it works, whose names all contain "GDD"
+ * (Codex-style live measurement 2026-09-12).
+ */
+// NOT `\b`: an underscore is a word character, so "_Traceability_" has no
+// word boundary in it and every one of these names slipped through.
+const DERIVATIVE_DOC_RE =
+  /(?:^|[^a-z0-9])(?:audit|analysis|checklist|traceability|summary|report|review|status|notes?|plan|manifest|backlog|coverage|gap|todo|matrix|index)(?:[^a-z0-9]|$)/i;
 
 function readGddFile(projectRoot: string, gddPath: string): string | undefined {
   try {
