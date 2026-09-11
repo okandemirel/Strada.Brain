@@ -708,7 +708,7 @@ export class CampaignManager {
     const reviveDelayMs = this.implementationReviveDelayMs;
     campaign.autoReviveAt = Date.now() + reviveDelayMs;
     this.persist(campaign);
-    this.scheduleAutoRevive(campaign.id, reviveDelayMs);
+    this.scheduleAutoRevive(campaign.id, reviveDelayMs, campaign.autoReviveAt);
     getLoggerSafe().warn("Campaign self-reviving an implementation failure with a changed approach", {
       id: campaign.id,
       milestone: milestone.id,
@@ -722,6 +722,30 @@ export class CampaignManager {
         `(self-revival ${revives} of ${MAX_IMPLEMENTATION_REVIVES}).`,
     );
     return true;
+  }
+
+  /**
+   * Was this lineage stopped BY A PERSON (or by anything other than the
+   * campaign's own supersession)? Walks the lineage the same way the
+   * executor's guard does, and treats an unreadable lineage as not cancelled
+   * so a storage hiccup cannot strand a campaign.
+   */
+  private lineageWasCancelledOnPurpose(taskId: string): boolean {
+    try {
+      const manager = this.taskManager as unknown as {
+        findLatestLineageTask?: (id: string) => { id: string; status?: string; cancelReason?: string } | null;
+        getStatus?: (id: string) => { id: string; status?: string; cancelReason?: string; parentId?: string } | null;
+      };
+      const tip = manager.findLatestLineageTask?.(taskId) ?? manager.getStatus?.(taskId) ?? null;
+      if (tip && tip.status === "cancelled" && tip.cancelReason !== "superseded") return true;
+      let current = manager.getStatus?.(taskId) ?? null;
+      for (let depth = 0; current && depth < 50; depth++) {
+        if (current.status === "cancelled" && current.cancelReason !== "superseded") return true;
+        if (!current.parentId) break;
+        current = manager.getStatus?.(current.parentId) ?? null;
+      }
+    } catch { /* unreadable lineage is not a stop order */ }
+    return false;
   }
 
   /** Reset the current milestone's budget and resubmit it (revive core). */
@@ -839,18 +863,46 @@ export class CampaignManager {
     timer.unref?.();
   }
 
-  private scheduleAutoRevive(campaignId: string, delayMs: number): void {
+  private scheduleAutoRevive(campaignId: string, delayMs: number, expectedAt?: number): void {
     const timer = setTimeout(() => {
       void (async () => {
         try {
           const fresh = this.storage.get(campaignId);
           if (!fresh || fresh.state !== "failed" || !fresh.autoReviveAt) return;
+          // A CANCELLED LINEAGE OUTRANKS THE APPOINTMENT. Cancelling the
+          // parked sprint during the pause left the appointment standing —
+          // settlement correlation only scans ACTIVE campaigns — and the
+          // timer then submitted a child of the task someone had just
+          // stopped (Codex 2026-09-11 H#2).
+          const parked = fresh.milestones[fresh.currentMilestone];
+          if (parked?.taskId && this.lineageWasCancelledOnPurpose(parked.taskId)) {
+            fresh.autoReviveAt = undefined;
+            fresh.lastError = `NOT DELIVERED — ${parked.title} was cancelled while its retry was pending`;
+            this.persist(fresh);
+            getLoggerSafe().info("Campaign self-revival abandoned — its lineage was cancelled on purpose", {
+              id: campaignId,
+              milestone: parked.id,
+            });
+            return;
+          }
+          // …and the appointment must be THE one this timer was armed for. An
+          // older timer used to fire a NEWER appointment early, shortening a
+          // backoff someone else had just set (Codex 2026-09-11 H#3). A call
+          // with no expectation — "revive now", the boot sweep — still fires.
+          if (expectedAt !== undefined && fresh.autoReviveAt !== expectedAt) {
+            getLoggerSafe().info("Campaign self-revival timer is stale — a newer appointment stands", {
+              id: campaignId,
+              armedFor: new Date(expectedAt).toISOString(),
+              nowDue: new Date(fresh.autoReviveAt).toISOString(),
+            });
+            return;
+          }
           const stillCooling = allProvidersCoolingDownMs();
           if (stillCooling > 0) {
             // Horizon moved (another quota hit while parked) — follow it.
             fresh.autoReviveAt = Date.now() + stillCooling + 60_000;
             this.persist(fresh);
-            this.scheduleAutoRevive(campaignId, stillCooling + 60_000);
+            this.scheduleAutoRevive(campaignId, stillCooling + 60_000, fresh.autoReviveAt);
             return;
           }
           if (
@@ -1294,7 +1346,7 @@ export class CampaignManager {
         const delayMs = Math.max(outageWaitMs, 60_000) + 60_000;
         campaign.autoReviveAt = Date.now() + delayMs;
         this.persist(campaign);
-        this.scheduleAutoRevive(campaign.id, delayMs);
+        this.scheduleAutoRevive(campaign.id, delayMs, campaign.autoReviveAt);
         await this.tell(
           campaign,
           `⏸️ Campaign paused by a provider outage before the milestone ladder could be planned.\n` +
@@ -1864,6 +1916,34 @@ export class CampaignManager {
 
     const status = tip && tip.id !== milestone.taskId ? tip.status : settledStatus;
     const output = tip && tip.id !== milestone.taskId ? (tip.error ?? tip.result ?? "") : settledOutput;
+
+    // A DELIBERATE CANCELLATION IS A STOP ORDER, and it is read BEFORE the
+    // retry, time-box and gap-advance branches. It used to fall through them:
+    // cancelling a gap sprint at attempt 1 resubmitted it, and cancelling it
+    // on its last attempt advanced the ladder to the NEXT gap (Codex
+    // 2026-09-11 I#6). The campaign's own supersessions are not stop orders —
+    // that is what the mark is for.
+    const cancelledOnPurpose =
+      status === TaskStatus.cancelled &&
+      (tip as { cancelReason?: string } | null)?.cancelReason !== "superseded";
+    if (cancelledOnPurpose) {
+      milestone.status = "failed";
+      milestone.resultExcerpt = output.slice(-500);
+      campaign.state = "failed";
+      campaign.autoReviveAt = undefined;
+      campaign.lastError = `NOT DELIVERED — ${milestone.title} was cancelled`;
+      this.persist(campaign);
+      getLoggerSafe().info("Campaign stopped: its sprint was cancelled on purpose", {
+        id: campaign.id,
+        milestone: milestone.id,
+        taskId: tip?.id ?? milestone.taskId,
+      });
+      await this.tell(
+        campaign,
+        `🛑 **${milestone.title}** was cancelled, so the campaign stops here. Reply **kampanya devam** to start it again.`,
+      );
+      return;
+    }
 
     // A reaped task ("Reaped: no progress…" / "Auto-retry N/M in ~Xs") is one
     // the executor's keep-alive WILL retry — but its backoff grows past this
@@ -2798,7 +2878,7 @@ export class CampaignManager {
               `(delivery round ${campaign.deliveryRevives} of ${MAX_DELIVERY_REVIVES} on these proofs). ` +
               "Reply **kampanya devam** to resume now, or change the GDD if this is the game you wanted.",
           );
-          this.scheduleAutoRevive(campaign.id, resumeMs);
+          this.scheduleAutoRevive(campaign.id, resumeMs, campaign.autoReviveAt);
           await this.attachDeliveryEvidence(campaign);
           return;
         }

@@ -75,6 +75,11 @@ class FakeTaskManager extends EventEmitter {
           createdAt: this.createdAts.get(taskId) ?? Date.now(),
           updatedAt: this.updatedAts.get(taskId) ?? Date.now(),
           verification: this.verifications.get(taskId),
+          // The real store persists cancel_reason and every reader of a
+          // cancelled task asks for it; a fake that dropped it made a
+          // supersession look like a person's stop order.
+          ...(this.parents.has(taskId) ? { parentId: this.parents.get(taskId) } : {}),
+          ...(this.cancelReasons.has(taskId) ? { cancelReason: this.cancelReasons.get(taskId) } : {}),
         } as unknown as Task)
       : null;
   }
@@ -2843,6 +2848,74 @@ describe("CampaignManager", () => {
     const after = storage.get(campaign.id)!;
     expect(after.state).not.toBe("done");
     expect(after.milestones[2]!.deliveryProofsMissing!.join(" ")).toContain("have no sprint yet");
+  });
+
+  it("a sprint cancelled ON PURPOSE stops the campaign instead of continuing its work (Codex 2026-09-11 I#6)", async () => {
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    // A person cancels the sprint: not a supersession, a stop order.
+    tasks.cancel("task_1");
+    tasks.emit("task:cancelled", "task_1", "cancelled");
+    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"));
+    const after = storage.get(campaign.id)!;
+    expect(tasks.submitted).toHaveLength(1); // nothing resubmitted
+    expect(after.autoReviveAt).toBeUndefined();
+    expect(after.lastError).toContain("NOT DELIVERED");
+    expect(messages.at(-1)!.text).toContain("was cancelled");
+  });
+
+  it("the campaign's OWN supersession is not a stop order (Codex 2026-09-11 I#6)", async () => {
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    // This is the mark the campaign uses when it replaces an attempt itself.
+    tasks.cancel("task_1", { reason: "superseded" });
+    tasks.emit("task:cancelled", "task_1", "cancelled");
+    await new Promise((r) => setTimeout(r, 200));
+    const after = storage.get(campaign.id)!;
+    expect(after.lastError ?? "").not.toContain("was cancelled");
+    expect(messages.map((m) => m.text).join(" ")).not.toContain("the campaign stops here");
+  });
+
+  it("an older revival timer cannot fire a newer appointment early (Codex 2026-09-11 H#3)", async () => {
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    const parked = storage.get(campaign.id)!;
+    parked.state = "failed";
+    const firstAppointment = Date.now() + 5_000;
+    parked.autoReviveAt = firstAppointment;
+    storage.save(parked);
+    // The timer is armed FOR that appointment…
+    (manager as unknown as { scheduleAutoRevive(id: string, ms: number, at?: number): void })
+      .scheduleAutoRevive(campaign.id, 10, firstAppointment);
+    // …and a second pause replaces it before the timer fires.
+    const reparked = storage.get(campaign.id)!;
+    reparked.autoReviveAt = Date.now() + 60_000;
+    storage.save(reparked);
+
+    await new Promise((r) => setTimeout(r, 200));
+    expect(tasks.submitted).toHaveLength(1); // the stale timer did nothing
+    expect(storage.get(campaign.id)!.autoReviveAt).toBe(reparked.autoReviveAt);
+  });
+
+  it("a cancel during the revival pause cancels the revival (Codex 2026-09-11 H#2)", async () => {
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    // Park the campaign with an appointment, as a self-revival does.
+    const parked = storage.get(campaign.id)!;
+    parked.state = "failed";
+    parked.autoReviveAt = Date.now() + 10_000;
+    parked.milestones[0]!.taskId = "task_1";
+    storage.save(parked);
+    // …then a person cancels the parked sprint.
+    tasks.cancel("task_1");
+
+    const submittedBefore = tasks.submitted.length;
+    (manager as unknown as { scheduleAutoRevive(id: string, ms: number): void }).scheduleAutoRevive(campaign.id, 10);
+    await new Promise((r) => setTimeout(r, 200));
+    const after = storage.get(campaign.id)!;
+    expect(tasks.submitted).toHaveLength(submittedBefore);
+    expect(after.autoReviveAt).toBeUndefined();
+    expect(after.lastError).toContain("cancelled while its retry was pending");
   });
 
   it("a repeated audit entry gets ONE sprint (Codex 2026-09-11 I#5)", async () => {
