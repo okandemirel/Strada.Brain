@@ -116,6 +116,17 @@ describe("a resumed task whose saved plan is already complete (2026-09-10 21:20)
       { ...node("b", "p", "completed"), dependsOn: ["p" as GoalNodeId] },
     ]);
     expect(dependentClosure(sibling, new Set(["a"]))).toEqual(["a"]);
+
+    // …and inheritance walks the WHOLE ancestor chain, not one level: a
+    // grandparent's prerequisite reaches the leaves under it (Codex G#16).
+    const grandparent = tree([
+      node("root", null, "pending"),
+      { ...node("a", "root", "completed") },
+      { ...node("g", "root", "pending"), dependsOn: ["a" as GoalNodeId] },
+      node("p", "g", "pending"),
+      { ...node("b", "p", "completed") },
+    ]);
+    expect(dependentClosure(grandparent, new Set(["a"])).sort()).toEqual(["a", "b"]);
   });
 
   it("invalidation and execution read the SAME dependency list (Codex 2026-09-11 G#1, G#7)", () => {
@@ -151,7 +162,9 @@ describe("a resumed task whose saved plan is already complete (2026-09-10 21:20)
     const block = source.slice(at, source.indexOf('"No sub-tasks after decomposition"', at));
     expect(block).toContain("let verifyDeadlinePassed = false;");
     expect(block).toContain("verifyDeadlinePassed = true;");
-    expect(block).toContain("stopAfterDeadline(");
+    // The guard is wired to the FLAG, not to a constant: `() => false` keeps
+    // every assertion above true while nothing ever stops (Codex G#16).
+    expect(block).toContain("() => verifyDeadlinePassed)");
   });
 
   it("the rejection write preserves what the node already recorded (Codex 2026-09-11 D#18)", () => {
@@ -163,7 +176,9 @@ describe("a resumed task whose saved plan is already complete (2026-09-10 21:20)
     expect(block).toContain("node?.reviewStatus");
     // …including the review iterations, which a `0` here would silently drop
     // (Codex 2026-09-11 E#16).
-    expect(block).toContain("node?.reviewIterations");
+    // Pinned as the ARGUMENT, so `node?.reviewIterations ? 0 : 0` — which
+    // keeps the substring and drops every count — fails (Codex G#16).
+    expect(block).toMatch(/node\?\.reviewIterations,/);
   });
 
   it("the supervisor asks it before declaring 'No sub-tasks after decomposition'", () => {

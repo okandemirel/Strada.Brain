@@ -166,6 +166,14 @@ describe("a session record that omits its fields keeps them omitted (Codex 2026-
     expect(parsed.sessions?.[0]?.index).toBeUndefined();
     expect(parsed.sessions?.[0]?.actions).toBeUndefined();
     expect(parsed.sessions?.[1]).toEqual({ index: 1, outcome: "Won", actions: 4, seconds: 2 });
+
+    // An IMPOSSIBLE index is passed through as it is, not clamped into a
+    // valid one: clamping -1 to 0 makes it level zero, played (Codex G#16).
+    write({
+      ...ok,
+      record: { ...ok.record, sessionCount: 2, sessions: [{ index: -1, outcome: "Won", actions: 3, seconds: 1 }] },
+    });
+    expect(readPlaythroughVerdict(root, 0).sessions?.[0]?.index).toBe(-1);
   });
 });
 

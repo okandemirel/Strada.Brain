@@ -741,6 +741,21 @@ describe("defects the measurement review found (2026-09-07)", () => {
     expect(scriptedReport.scenes[0]!.videoClipsBound).toEqual(["Assets/Movies/Intro.mp4"]);
     expect(scriptedReport.refusal).toBeUndefined();
 
+    // An unrelated inactive object elsewhere in the scene disables nothing:
+    // "no inactive objects at all" is not the question (Codex G#16).
+    const bystander = project();
+    buildSettings(bystander, [{ path: "Assets/Scenes/Main.unity" }]);
+    put(bystander, "Assets/Scenes/Main.unity",
+      `${HEADER}${CAMERA(0)}` +
+      `--- !u!1 &50\nGameObject:\n  m_Name: DebugPanel\n  m_IsActive: 0\n--- !u!4 &51\nTransform:\n  m_GameObject: {fileID: 50}\n  m_Father: {fileID: 0}\n` +
+      `--- !u!1 &30\nGameObject:\n  m_Name: Screen\n  m_IsActive: 1\n--- !u!4 &32\nTransform:\n  m_GameObject: {fileID: 30}\n  m_Father: {fileID: 0}\n` +
+      `--- !u!328 &31\nVideoPlayer:\n  m_GameObject: {fileID: 30}\n  m_Enabled: 1\n  m_VideoClip: {fileID: 32900000, guid: ${G("9")}, type: 3}\n`, G("5"));
+    put(bystander, "Assets/Movies/Intro.mp4", "movie-bytes", G("9"));
+    put(bystander, "Assets/Art/Cover.png", "pixels", G("8"));
+    const bystanderReport = assessBuiltAsSpecified(bystander);
+    expect(bystanderReport.scenes[0]!.videoClipsBound).toEqual(["Assets/Movies/Intro.mp4"]);
+    expect(bystanderReport.refusal).toBeUndefined();
+
     // …and the enabled one still is the picture.
     const on = project();
     buildSettings(on, [{ path: "Assets/Scenes/Main.unity" }]);

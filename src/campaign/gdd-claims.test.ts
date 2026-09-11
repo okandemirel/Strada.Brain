@@ -144,11 +144,13 @@ describe("assessNumericClaims", () => {
       sessions: Array.from({ length: 12 }, () => ({ outcome: "Won", actions: 8, seconds: 3 })),
     }));
     expect(noIndex.find((x) => x.claim.kind === "level_count")).toMatchObject({ status: "not_met" });
-    const fractional = assessNumericClaims(claims, evidence({
-      sessionCount: 12,
-      sessions: Array.from({ length: 12 }, (_, i) => ({ index: i, outcome: "Won", actions: 0.5, seconds: 3 })),
-    }));
-    expect(fractional.find((x) => x.claim.kind === "level_count")).toMatchObject({ status: "not_met" });
+    for (const actions of [0.5, 1.5, 7.25]) {
+      const fractional = assessNumericClaims(claims, evidence({
+        sessionCount: 12,
+        sessions: Array.from({ length: 12 }, (_, i) => ({ index: i, outcome: "Won", actions, seconds: 3 })),
+      }));
+      expect(fractional.find((x) => x.claim.kind === "level_count")).toMatchObject({ status: "not_met" });
+    }
     // Negative actions are not actions either.
     const negative = assessNumericClaims(claims, evidence({
       sessionCount: 12,
