@@ -496,7 +496,7 @@ export class BackgroundExecutor {
           const lineage = this.lineageRootTaskId(task);
           if (seenLineages.has(lineage)) continue;
           const root = this.taskManager?.getStatus(lineage) as { prompt?: string } | null;
-          const promptRoot = (root?.prompt ?? task.prompt).slice(0, 160);
+          const promptRoot = task.goalRootId ?? (root?.prompt ?? task.prompt).slice(0, 160);
           if (seenPromptRoots.has(promptRoot)) continue;
           seenLineages.add(lineage);
           seenPromptRoots.add(promptRoot);

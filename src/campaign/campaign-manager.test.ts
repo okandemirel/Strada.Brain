@@ -704,6 +704,25 @@ describe("CampaignManager", () => {
     expect(after.lastError ?? "").not.toContain("was cancelled");
   });
 
+  it("a campaign persisted BEFORE ownership existed still retires its orphans (Codex 2026-09-11 O#11)", async () => {
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    const stored = storage.get(campaign.id)!;
+    // An orphan carrying the milestone's prompt, and a ledger that does not
+    // exist — exactly what an upgraded campaign looks like.
+    const orphanId = tasks.submit("cli-local", "cli", stored.milestones[0]!.prompt).id;
+    tasks.markTerminal(orphanId, TaskStatus.blocked);
+    for (const m of stored.milestones) m.taskIds = undefined;
+    stored.milestones[0]!.taskId = "task_gone";
+    stored.state = "done";
+    stored.deliveryReported = true;
+    storage.save(stored);
+
+    await manager.resumeActive();
+
+    expect(tasks.cancelled).toContain(orphanId);
+  });
+
   it("does NOT retire another mission that merely shares an opening (Codex 2026-09-11 L#4)", async () => {
     // Two unrelated task roots in one chat whose prompts share their first
     // 120 characters — a generic final-proof opening is enough — and

@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { attemptRunId, CampaignManager, deliveryFailureKinds, proofSignature, unscheduledGaps } from "./campaign-manager.js";
+import { attemptRunId, CampaignManager, deliveryFailureKinds, proofSignature, rememberOwnedTask, unscheduledGaps } from "./campaign-manager.js";
 
 /**
  * Measured live 2026-09-04: told not to audit, the final sprint answered
@@ -223,5 +223,21 @@ describe("deliveryFailureKinds — identity from the gates, not their prose (Cod
     expect(refusedToStart).not.toEqual(noFrames);
     expect(noFrames).not.toEqual(noActions);
     expect(refusedToStart).toContain("playthroughUndriveable");
+  });
+});
+
+describe("a milestone's ownership ledger (Codex 2026-09-11 L#4, O#11)", () => {
+  it("keeps the earliest roots as well as the newest tasks", () => {
+    const milestone = { id: "m1", title: "t", prompt: "p", status: "pending", attempts: 0 } as never as import("./types.js").CampaignMilestone;
+    for (let i = 0; i < 80; i++) rememberOwnedTask(milestone, `task_${i}`);
+
+    // The oldest entries are the abandoned ROOTS retirement has to reach;
+    // trimming from the front alone lost exactly those.
+    expect(milestone.taskIds).toContain("task_0");
+    expect(milestone.taskIds).toContain("task_79");
+    expect(milestone.taskIds!.length).toBeLessThanOrEqual(50);
+    // …and it never records the same task twice.
+    rememberOwnedTask(milestone, "task_79");
+    expect(milestone.taskIds!.filter((t) => t === "task_79")).toHaveLength(1);
   });
 });

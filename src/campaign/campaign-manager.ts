@@ -435,8 +435,10 @@ export function rememberOwnedTask(milestone: CampaignMilestone, taskId: string):
   const owned = milestone.taskIds ?? [];
   if (owned.includes(taskId)) return;
   owned.push(taskId);
-  // Bounded: a mission that retries all day must not grow without end.
-  milestone.taskIds = owned.slice(-50);
+  // Bounded at BOTH ends: the earliest entries are the abandoned roots the
+  // executor can still resurrect, and dropping them lost exactly the ownership
+  // retirement needs (Codex 2026-09-11 O#11).
+  milestone.taskIds = owned.length <= 50 ? owned : [...owned.slice(0, 25), ...owned.slice(-25)];
 }
 
 export function unscheduledGaps(
@@ -774,6 +776,31 @@ export class CampaignManager {
     // work: two missions sharing a chat and a generic final-proof opening
     // cancelled each other (Codex 2026-09-11 L#4). Every task a milestone has
     // owned is recorded as it is submitted.
+    // A campaign persisted before ownership was recorded has no ledger at all.
+    // Its abandoned lineages are still live, and the prompt scan is the only
+    // way left to find them — used ONLY for those milestones (Codex
+    // 2026-09-11 O#11).
+    const legacy = campaign.milestones.filter((m) => (m.taskIds ?? []).length === 0 && m.prompt.length > 24);
+    if (legacy.length > 0) {
+      const keys = legacy.map((m) => m.prompt.slice(0, 120));
+      try {
+        const onChat = this.taskManager.listTasks(campaign.chatId, 50) as unknown as Array<{
+          id: string; status: string; prompt?: string;
+        }>;
+        for (const task of onChat) {
+          if (task.status === "completed" || task.status === "cancelled") continue;
+          if (!keys.some((key) => (task.prompt ?? "").includes(key))) continue;
+          try {
+            this.cancelLineageRootOf(task.id, cancelOpts);
+            this.taskManager.cancel(task.id as TaskId, cancelOpts);
+            getLoggerSafe().info("Retired a legacy campaign lineage found by its prompt", {
+              id: campaign.id,
+              taskId: task.id,
+            });
+          } catch { /* already settled */ }
+        }
+      } catch { /* listing unavailable */ }
+    }
     for (const milestone of campaign.milestones) {
       for (const owned of milestone.taskIds ?? []) {
         if (owned === milestone.taskId) continue; // the live one is retired below

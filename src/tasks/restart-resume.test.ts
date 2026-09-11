@@ -37,6 +37,22 @@ describe("tasks a restart paused are resumed by the re-arm pass", () => {
   }
   const paused = { id: "task_1", chatId: "cli-local", prompt: "Mission: build the game", origin: "user", status: "paused", error: "Task interrupted by system restart. Resume is available from the monitor and will continue from the saved plan." };
 
+  it("two missions that share a PREAMBLE are still two missions (Codex 2026-09-11 O#13)", async () => {
+    vi.useFakeTimers();
+    try {
+      const preamble = "Mission: follow the standing instructions in full. ".repeat(4);
+      const one = { ...paused, id: "task_1", prompt: `${preamble} build the art pipeline`, goalRootId: "goal_a" };
+      const two = { ...paused, id: "task_2", prompt: `${preamble} fix the input module`, goalRootId: "goal_b" };
+      const { internals, resumed } = harness({ paused: [one, two] });
+      internals.scheduleKeepAliveRearm();
+      await vi.advanceTimersByTimeAsync(95_000 + 60_000);
+
+      expect(resumed).toEqual(["task_1", "task_2"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("resumes the paused mission 90 s after boot", async () => {
     vi.useFakeTimers();
     try {
