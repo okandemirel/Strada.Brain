@@ -559,3 +559,28 @@ describe("TaskManager", () => {
     }
   });
 });
+
+describe("a task a restart PAUSED can be resumed (measured live 2026-09-11 21:12:53)", () => {
+  it("resumes a paused goal root, and refuses one that is still running or done", () => {
+    const paused = buildTask({
+      id: "task_p" as Task["id"], status: TaskStatus.paused, goalRootId: "goal_root",
+      chatId: "chat-x", channelType: "cli", prompt: "Mission: finish the thing",
+    });
+    const storage = {
+      load: vi.fn().mockReturnValue(paused),
+      findLatestByGoalRoot: vi.fn().mockReturnValue(paused),
+      save: vi.fn(),
+      updateStatus: vi.fn(),
+      markCancelled: vi.fn(),
+    } as any;
+    const manager = new TaskManager(storage, { resumeConversation: vi.fn(), enqueue: vi.fn(), schedule: vi.fn() } as any);
+    // `paused` sits in ACTIVE_STATUSES, and this guard used to refuse the very
+    // task the caller had asked to resume.
+    expect(manager.resumeGoalRoot("goal_root")).not.toBeNull();
+
+    for (const status of [TaskStatus.executing, TaskStatus.planning, TaskStatus.pending, TaskStatus.completed]) {
+      storage.findLatestByGoalRoot.mockReturnValue(buildTask({ ...paused, status } as never));
+      expect(manager.resumeGoalRoot("goal_root")).toBeNull();
+    }
+  });
+});

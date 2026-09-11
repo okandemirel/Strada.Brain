@@ -497,7 +497,15 @@ export class TaskManager extends EventEmitter {
 
   resumeGoalRoot(goalRootId: string): Task | null {
     const task = this.storage.findLatestByGoalRoot(goalRootId);
-    if (!task || ACTIVE_STATUSES.has(task.status) || task.status === TaskStatus.completed) {
+    // PAUSED IS THE RESUME CASE. `paused` sits in ACTIVE_STATUSES, so this
+    // guard refused to resume the very task the caller had just asked about:
+    // any goal-backed task a restart parked could never be resumed by this
+    // path at all, and only a person could move it. Measured live 2026-09-11
+    // 21:12:53 — "Restart-paused task could not be resumed" on a mission
+    // whose work was already done.
+    if (!task) return null;
+    const stillRunning = ACTIVE_STATUSES.has(task.status) && task.status !== TaskStatus.paused;
+    if (stillRunning || task.status === TaskStatus.completed) {
       return null;
     }
     const tree = this.goalStorage?.getTree(goalRootId as GoalNodeId);
