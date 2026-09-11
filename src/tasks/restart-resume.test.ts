@@ -63,17 +63,20 @@ describe("tasks a restart paused are resumed by the re-arm pass", () => {
     }
   });
 
-  it("leaves a cancelled lineage alone, and resumes one mission per chat", async () => {
+  it("leaves a cancelled lineage alone, and resumes EVERY distinct mission in a chat (Codex 2026-09-11 M#10)", async () => {
     vi.useFakeTimers();
     try {
       const { internals, resumed } = harness({ paused: [paused], cancelled: true });
       internals.scheduleKeepAliveRearm();
       await vi.advanceTimersByTimeAsync(95_000);
       expect(resumed).toHaveLength(0);
+      // Two DIFFERENT unfinished missions in one chat produced exactly one
+      // continuation and the older one stayed blocked for good. Serialization
+      // orders them; it does not make them the same work.
       const second = harness({ paused: [paused, { ...paused, id: "task_2", prompt: "Mission: other" }] });
       second.internals.scheduleKeepAliveRearm();
       await vi.advanceTimersByTimeAsync(95_000 + 60_000);
-      expect(second.resumed).toEqual(["task_1"]);
+      expect(second.resumed).toEqual(["task_1", "task_2"]);
     } finally {
       vi.useRealTimers();
     }
@@ -199,6 +202,36 @@ describe("a restart does not spend a mission retry, and never escalates", () => 
       // (Codex 2026-09-11 E#16: the assertions above all land before the timer).
       await vi.advanceTimersByTimeAsync(601_000);
       expect(retried).toEqual(["task_1"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a shutdown notice does not replenish the budget — the ANCESTOR's count carries (Codex 2026-09-11 M#8)", async () => {
+    vi.useFakeTimers();
+    try {
+      // The ancestor recorded "Auto-retry 10/10"; its retry child was
+      // executing when shutdown parked it, so the child's result is the
+      // shutdown notice and carries no count at all. Recovery read that row,
+      // defaulted to zero, and repeated restarts kept the budget from ever
+      // being exhausted.
+      const ancestor = {
+        id: "task_parent", chatId: "cli-local", prompt: "Mission: build the game", origin: "user",
+        status: "failed", result: "Auto-retry 10/10 in ~600s. Restart re-arm — failure retries still at 9/10.",
+      };
+      const child = {
+        id: "task_1", chatId: "cli-local", prompt: "Mission: build the game", origin: "user",
+        status: "blocked", parentId: "task_parent",
+        result: "Strada restarted while this task was executing.",
+      };
+      const { internals, blocks } = harness([child]);
+      (internals.taskManager as { getStatus: (id: string) => unknown }).getStatus = (id: string) =>
+        id === "task_parent" ? ancestor : id === "task_1" ? child : null;
+      internals.scheduleKeepAliveRearm();
+      await vi.advanceTimersByTimeAsync(90_000 + 1_000);
+
+      expect(internals.missionRetries.get("mission:task_1")).toBe(9);
+      expect(blocks[0]).toContain("failure retries still at 9/10.");
     } finally {
       vi.useRealTimers();
     }

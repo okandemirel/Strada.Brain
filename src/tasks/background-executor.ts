@@ -425,19 +425,27 @@ export class BackgroundExecutor {
           // still at 0/10") set the budget, and a truncated tail silently fell
           // back to the higher marker number.
           const carried = /Auto-retry \d+\/\d+ in ~\d+s\. Restart re-arm — failure retries still at (\d+)\/\d+\./.exec(result);
-          const persistedAttempt = carried ? Number(carried[1]) : marker ? Number(marker[1]) : 0;
+          // …and THE WHOLE LINEAGE, not this row alone. A shutdown parks the
+          // retry child with the shutdown notice as its result, which carries
+          // no count, so recovery defaulted to zero and the ancestor holding
+          // "Auto-retry 10/10" was deduplicated away: repeated restarts during
+          // execution kept the budget from ever being exhausted (Codex
+          // 2026-09-11 M#8).
+          const persistedAttempt = Math.max(
+            carried ? Number(carried[1]) : marker ? Number(marker[1]) : 0,
+            this.retryCountFromLineage(task),
+          );
           const rearmReason = marker ? "keep-alive re-armed after restart" : `keep-alive re-armed after restart — ${result.slice(0, 120)}`;
           const lineage = this.lineageRootTaskId(task);
           if (seenLineages.has(lineage)) continue;
           seenLineages.add(lineage);
           const root = this.taskManager?.getStatus(lineage) as { prompt?: string } | null;
           const promptRoot = (root?.prompt ?? task.prompt).slice(0, 160);
-          if (seenChats.has(task.chatId)) {
-            getLoggerSafe().info("Keep-alive re-arm skipped — chat already has a re-armed mission", {
-              taskId: task.id,
-            });
-            continue;
-          }
+          // NOT one per chat. Two different unfinished missions in one chat
+          // produced exactly ONE continuation and the older one stayed blocked
+          // for good — serialization means they run in order, not that they
+          // are the same work (Codex 2026-09-11 M#10). The stagger below still
+          // spaces them out.
           if (seenPromptRoots.has(promptRoot)) {
             getLoggerSafe().info("Keep-alive re-arm skipped — same mission already re-armed under a newer lineage", {
               taskId: task.id,
@@ -479,7 +487,7 @@ export class BackgroundExecutor {
           ?.listPausedByRestart?.(50) ?? [];
         for (const task of paused) {
           const lineage = this.lineageRootTaskId(task);
-          if (seenLineages.has(lineage) || seenChats.has(task.chatId)) continue;
+          if (seenLineages.has(lineage)) continue;
           const root = this.taskManager?.getStatus(lineage) as { prompt?: string } | null;
           const promptRoot = (root?.prompt ?? task.prompt).slice(0, 160);
           if (seenPromptRoots.has(promptRoot)) continue;
@@ -2402,6 +2410,29 @@ export class BackgroundExecutor {
    * parent chain finds the mission the whole lineage belongs to — which is
    * what the auto-resume budget is actually bounded on.
    */
+  /**
+   * The highest retry count recorded anywhere in this task's ancestry.
+   *
+   * A restart's own notice replaces the result that carried the count, so the
+   * row recovery reads says nothing about the budget (Codex 2026-09-11 M#8).
+   */
+  private retryCountFromLineage(task: Task): number {
+    let highest = 0;
+    // ANCESTORS ONLY: this row's own count is read by the caller, which knows
+    // the precedence between the carry and the retry marker.
+    let current = task.parentId ? ((this.taskManager?.getStatus(task.parentId) ?? null) as { parentId?: string; result?: string } | null) : null;
+    for (let depth = 0; current && depth < 20; depth++) {
+      const text = String(current.result ?? "");
+      const carry = /Restart re-arm — failure retries still at (\d+)\/\d+\./.exec(text);
+      const marker = /Auto-retry (\d+)\/\d+ in ~\d+s/.exec(text);
+      const count = carry?.[1] ? Number(carry[1]) : marker?.[1] ? Number(marker[1]) : 0;
+      highest = Math.max(highest, count);
+      if (!current.parentId) break;
+      current = (this.taskManager?.getStatus(current.parentId) ?? null) as typeof current;
+    }
+    return highest;
+  }
+
   private lineageRootTaskId(task: Task): string {
     // THE STORAGE WALKS THE WHOLE CHAIN. The bounded walk below stopped after
     // fifty parents and returned that intermediate ancestor, so every further
