@@ -11,7 +11,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, statSync, utimesSync, chmodSync, renameSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, statSync, utimesSync, chmodSync, renameSync, promises as fsp } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
@@ -332,6 +332,40 @@ describe("workspace lease commit", () => {
       expect(readFileSync(join(result.conflictsQuarantinedUnder!, "Assets", "Sprites", "Boss.png"), "utf8")).toBe("pixels");
     } finally {
       chmodSync(meta, 0o644);
+      await lease.release();
+    }
+  });
+
+  it("rolls an OVERWRITTEN asset back when its .meta cannot follow (Codex 2026-09-11 N#6)", async () => {
+    // The asset exists in the project. Its new version lands, the .meta write
+    // then fails, and the project used to be left with NEW ART beside an OLD
+    // IMPORTER and nothing to put back.
+    mkdirSync(join(source, "Assets", "Sprites"), { recursive: true });
+    writeFileSync(join(source, "Assets", "Sprites", "Hero.png"), "old pixels", "utf8");
+    writeFileSync(join(source, "Assets", "Sprites", "Hero.png.meta"), "old importer", "utf8");
+    const lease = await manager().acquireLease({ label: "t", forceTempCopy: true });
+    writeFileSync(join(lease.path, "Assets", "Sprites", "Hero.png"), "new pixels", "utf8");
+    writeFileSync(join(lease.path, "Assets", "Sprites", "Hero.png.meta"), "new importer", "utf8");
+
+    // The .meta's own write is what fails — after the asset has landed.
+    const realRename = fsp.rename.bind(fsp);
+    const spy = vi.spyOn(fsp, "rename").mockImplementation(async (from: never, to: never) => {
+      if (String(to).endsWith("Hero.png.meta")) throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+      return realRename(from, to);
+    });
+    try {
+      const result = await lease.commit();
+
+      // The pair is whole, and it is the project's own version.
+      expect(readFileSync(join(source, "Assets", "Sprites", "Hero.png"), "utf8")).toBe("old pixels");
+      expect(readFileSync(join(source, "Assets", "Sprites", "Hero.png.meta"), "utf8")).toBe("old importer");
+      expect(result.failed.some((f) => f.includes("rolled back"))).toBe(true);
+      // …and the worker's version is preserved rather than lost.
+      expect(readFileSync(join(result.conflictsQuarantinedUnder!, "Assets", "Sprites", "Hero.png"), "utf8")).toBe("new pixels");
+      // No staging residue in the project.
+      expect(existsSync(join(source, ".strada", "lease-staging"))).toBe(false);
+    } finally {
+      spy.mockRestore();
       await lease.release();
     }
   });

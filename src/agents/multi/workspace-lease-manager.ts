@@ -1767,17 +1767,41 @@ export class WorkspaceLeaseManager {
     const dependentMeta = (o: FileOutcome | undefined): boolean =>
       o?.write !== undefined && /\.meta$/i.test(o.write.rel) && writeIndexByRel.has(pairOf(o.write.rel));
     const landed = new Map<number, { rel: string; full: string; target: string; targetExisted: boolean }>();
+    // What the project held before each overwrite, kept until the whole write
+    // phase is done. A .meta that could not follow its asset used to leave NEW
+    // ART beside an OLD IMPORTER with no way back, and a copy that failed
+    // part-way left the destination truncated — neither the source version nor
+    // the project's (Codex 2026-09-11 N#6).
+    // Same volume as the project, so the rename below is atomic. With no
+    // quarantine root (a caller that keeps none) the staging sits beside the
+    // project's own .strada directory.
+    const stagingRoot = join(sourceRoot, ".strada", "lease-staging", randomUUID().slice(0, 8));
+    const previousOf = new Map<number, string>();
     const writeOne = async (index: number): Promise<boolean> => {
       const outcome = outcomes[index];
       if (!outcome?.write) return false;
-      const { rel, full, target } = outcome.write;
+      const { rel, full, target, targetExisted } = outcome.write;
+      const token = randomUUID().slice(0, 8);
+      const staged = join(stagingRoot, `${token}.part`);
       try {
         await fsp.mkdir(dirname(target), { recursive: true });
-        await fsp.copyFile(full, target);
+        await fsp.mkdir(stagingRoot, { recursive: true });
+        // STAGE, then rename: a copy straight onto the destination that fails
+        // half-way leaves neither version whole.
+        await fsp.copyFile(full, staged);
+        if (targetExisted) {
+          const keep = join(stagingRoot, `${token}.prev`);
+          try {
+            await fsp.copyFile(target, keep);
+            previousOf.set(index, keep);
+          } catch { /* no rollback for this one; the write still proceeds */ }
+        }
+        await fsp.rename(staged, target);
         landed.set(index, outcome.write);
         outcomes[index] = { written: rel };
         return true;
       } catch (err) {
+        try { await fsp.unlink(staged); } catch { /* nothing staged */ }
         await quarantine(rel, full);
         outcomes[index] = { failed: `${rel} (${err instanceof Error ? err.message : String(err)})`, failedRel: rel };
         return false;
@@ -1820,9 +1844,30 @@ export class WorkspaceLeaseManager {
           failedRel: asset.rel,
         };
       } else {
-        outcomes[partnerIndex] = { failed: `${asset.rel} (written, but its .meta could not be written — the pair is inconsistent in the project)`, failedRel: asset.rel };
+        // The asset OVERWROTE a project file and its .meta could not follow.
+        // The previous version is still staged, so the pair can be put back
+        // whole instead of left mismatched (Codex 2026-09-11 N#6).
+        const keep = previousOf.get(partnerIndex);
+        let restored = false;
+        if (keep !== undefined) {
+          try {
+            await fsp.copyFile(keep, asset.target);
+            restored = true;
+          } catch { /* reported as inconsistent below */ }
+        }
+        await quarantine(asset.rel, asset.full);
+        outcomes[partnerIndex] = {
+          failed: restored
+            ? `${asset.rel} (rolled back: its .meta could not be written, the project keeps its previous version)`
+            : `${asset.rel} (written, but its .meta could not be written — the pair is inconsistent in the project)`,
+          failedRel: asset.rel,
+        };
       }
     });
+    // The staged copies have served their purpose; the directory that held
+    // them goes too, and its parent when nothing else is staging there.
+    try { await fsp.rm(stagingRoot, { recursive: true, force: true }); } catch { /* best effort */ }
+    try { await fsp.rmdir(dirname(stagingRoot)); } catch { /* another commit is still staging */ }
     clearCommitLedger(workspacePath);
 
     for (const outcome of outcomes) {
