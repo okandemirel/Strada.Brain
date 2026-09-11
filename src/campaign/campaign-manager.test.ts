@@ -15,6 +15,8 @@ import { TaskStatus } from "../tasks/types.js";
 
 /** The sprint "ran unity_playthrough before reporting": the suite refreshes the verdict on every completion. */
 let onTaskCompleted: (() => void) | undefined;
+/** The NUnit record a settling sprint leaves behind; undefined = it ran no suite. */
+let runRecordOnSettle: Record<string, unknown> | undefined;
 
 class FakeTaskManager extends EventEmitter {
   submitted: Array<{ prompt: string; chatId: string }> = [];
@@ -233,11 +235,21 @@ describe("CampaignManager", () => {
     writePlaythroughVerdict(true);
     storage = new CampaignStorage(join(dir, "campaigns.db"));
     tasks = new FakeTaskManager();
+    runRecordOnSettle = { total: 42, passed: 42, failed: 0, skipped: 0, unfiltered: true };
     onTaskCompleted = () => {
       const verdict = join(projectRoot, "Recordings", "playthrough", "playthrough-verdict.json");
       if (existsSync(verdict)) {
         const now = new Date();
         utimesSync(verdict, now, now);
+      }
+      // A sprint that RAN the suite leaves its NUnit record; the final sprint
+      // is held to that file rather than to prose (Codex 2026-09-11 D#13).
+      if (runRecordOnSettle) {
+        mkdirSync(join(projectRoot, "Recordings", "tests"), { recursive: true });
+        writeFileSync(
+          join(projectRoot, "Recordings", "tests", "playmode-last.json"),
+          JSON.stringify({ measuredAt: new Date().toISOString(), ...runRecordOnSettle }),
+        );
       }
     };
     messages = [];
@@ -590,6 +602,7 @@ describe("CampaignManager", () => {
   });
 
   it("names the structural problem while the test gate is still bouncing", async () => {
+    runRecordOnSettle = undefined; // this sprint leaves no NUnit record
     // Measured live 2026-09-04 04:05: bounced for a missing verdict, the
     // sprint never learned its scenes render nothing — and ADDED two more
     // CreatePrimitive scripts while it worked.
@@ -737,6 +750,7 @@ describe("CampaignManager", () => {
   });
 
   it("refuses delivery on a FILTERED green — the whole suite must be seen", async () => {
+    runRecordOnSettle = undefined; // this sprint leaves no NUnit record
     // Audited 2026-09-03: the delivered PixelFlow build's filtered runs were
     // green while its one unfiltered run reported 6 of 173 failing, including
     // WinLevel_ReachesWonState ("LevelWon event did not fire").
@@ -1205,10 +1219,7 @@ describe("CampaignManager", () => {
   });
 
   it("the NUnit run record outranks the tool's prose: a red file bounces a 'green' sentence, an unfiltered file delivers a 'filtered' one (2026-09-10)", async () => {
-    const writeRun = (record: Record<string, unknown>): void => {
-      mkdirSync(join(projectRoot, "Recordings", "tests"), { recursive: true });
-      writeFileSync(join(projectRoot, "Recordings", "tests", "playmode-last.json"), JSON.stringify({ measuredAt: new Date().toISOString(), ...record }));
-    };
+    const writeRun = (record: Record<string, unknown>): void => { runRecordOnSettle = record; };
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
     await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
     settleMilestone("sprint A done");
@@ -1477,6 +1488,7 @@ describe("CampaignManager", () => {
   });
 
   it("writes HOW_TO_RUN.md from measured facts and links it from the report", async () => {
+    runRecordOnSettle = { total: 179, passed: 179, failed: 0, skipped: 0, unfiltered: true };
     // Measured 2026-09-03: the delivered project had no README at all, and
     // the report — a chat message — was the only thing that ever named the
     // entry scene.
@@ -1514,6 +1526,7 @@ describe("CampaignManager", () => {
   });
 
   it("HOW_TO_RUN.md says Unknown, with the reason, for what nothing measured", async () => {
+    runRecordOnSettle = { total: 179, passed: 179, failed: 0, skipped: 0, unfiltered: true };
     // No ProjectVersion.txt, no core-mechanic field in the GDD, and a final
     // sprint whose verdict named no suite: three unmeasured fields that must
     // read as unmeasured, not be quietly dropped.
@@ -1530,13 +1543,17 @@ describe("CampaignManager", () => {
     const readme = readFileSync(join(projectRoot, "HOW_TO_RUN.md"), "utf8");
     expect(readme).toContain("Unknown — ProjectSettings/ProjectVersion.txt could not be read");
     expect(readme).toContain("names no core-mechanic field");
-    expect(readme).toContain("the recorded verdict does not name which suite ran");
+    // (A delivered campaign now always carries an unfiltered run record, so the
+    // "which suite ran" field can no longer be Unknown at delivery — Codex
+    // 2026-09-11 D#13.)
     // What WAS measured is still stated.
     expect(readme).toContain("Assets/Scenes/Main.unity");
-    expect(readme).toContain("42 tests passed");
+    // The record is the source of the suite line now (Codex 2026-09-11 D#13).
+    expect(readme).toContain("179 of 179 tests passed");
   });
 
   it("keeps refusing delivery while the final sprint has attempts left", async () => {
+    runRecordOnSettle = undefined; // this sprint leaves no NUnit record
     // Measured live 2026-09-03 08:33: the gate bounced once, the second
     // attempt also ran no tests, the single bounce was spent, and the ladder
     // delivered a game whose suite was never seen to pass.
@@ -1571,6 +1588,7 @@ describe("CampaignManager", () => {
   });
 
   it("refuses delivery when the FINAL sprint never ran its tests (one bounce)", async () => {
+    runRecordOnSettle = undefined; // this sprint leaves no NUnit record
     // Audited 2026-09-01: "full unfiltered suite" was only prose in the
     // planner prompt — a final sprint whose task printed no test result
     // carried no verdict and delivery was declared anyway.
@@ -2185,7 +2203,9 @@ describe("CampaignManager", () => {
     tasks.emit("task:completed", "task_1", "sprint A done");
     await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
 
-    expect(git("status", "--porcelain").trim()).toBe(""); // tree clean
+    // Recordings/ is Strada's own output (the run record the sprint left); it
+    // is never committed — see DEFAULT_WORKSPACE_COPY_EXCLUDES.
+    expect(git("status", "--porcelain").replace(/^\?\? Recordings\/$/m, "").trim()).toBe(""); // tree clean
     expect(git("log", "-1", "--pretty=%s")).toContain("milestone green");
     expect(storage.get(campaign.id)!.state).toBe("executing");
   });
@@ -2554,7 +2574,37 @@ describe("CampaignManager", () => {
     expect(messages.map((m) => m.text).join("\n")).toContain("This machine cannot produce the missing proof");
   });
 
+  it("at the final sprint the RECORD is the proof: green prose with no record does not deliver, and an unrelated stale file changes nothing (Codex 2026-09-11 D#13)", async () => {
+    // No record at all, but the sprint reports a green unfiltered suite.
+    runRecordOnSettle = undefined;
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    const green = { testsGreen: true, detail: "PlayMode verification passed: 215 of 215 tests passed (unfiltered — the whole PlayMode suite)", unfiltered: true };
+    tasks.verifications.set("task_3", green);
+    tasks.emit("task:completed", "task_3", "green, shipping");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+    expect(storage.get(campaign.id)!.milestones[2]!.testVerdict).toBeUndefined();
+    expect(storage.get(campaign.id)!.state).not.toBe("done");
+    // The same evidence with a STALE file present behaves identically — the
+    // file's presence is not what decides it.
+    mkdirSync(join(projectRoot, "Recordings", "tests"), { recursive: true });
+    const record = join(projectRoot, "Recordings", "tests", "playmode-last.json");
+    writeFileSync(record, JSON.stringify({ total: 215, passed: 215, failed: 0, skipped: 0, unfiltered: true }));
+    const old = new Date(Date.now() - 6 * 60 * 60_000);
+    utimesSync(record, old, old);
+    tasks.verifications.set("task_4", green);
+    tasks.emit("task:completed", "task_4", "green, shipping");
+    await new Promise((r) => setTimeout(r, 400));
+    expect(storage.get(campaign.id)!.milestones[2]!.testVerdict).toBeUndefined();
+    expect(storage.get(campaign.id)!.state).not.toBe("done");
+  });
+
   it("a STALE NUnit record cannot be laundered into fresh proof by the prose fallback (Codex 2026-09-11 C#10)", async () => {
+    runRecordOnSettle = undefined; // this sprint leaves no NUnit record
     mkdirSync(join(projectRoot, "Recordings", "tests"), { recursive: true });
     const record = join(projectRoot, "Recordings", "tests", "playmode-last.json");
     writeFileSync(record, JSON.stringify({ total: 215, passed: 215, failed: 0, skipped: 0, unfiltered: true, measuredAt: new Date().toISOString() }));
@@ -2997,6 +3047,12 @@ describe("CampaignManager", () => {
       detail: "All 42 tests passed (unfiltered — the whole PlayMode suite)",
       unfiltered: true,
     });
+    // The retry ran the suite: its record is on disk before the settle.
+    mkdirSync(join(projectRoot, "Recordings", "tests"), { recursive: true });
+    writeFileSync(
+      join(projectRoot, "Recordings", "tests", "playmode-last.json"),
+      JSON.stringify({ measuredAt: new Date().toISOString(), total: 42, passed: 42, failed: 0, skipped: 0, unfiltered: true }),
+    );
     tasks.emit("task:blocked", "task_3", "Transient failure — worker crashed mid-epoch.");
     tasks.emit("task:blocked", "task_3", "Transient failure — worker crashed mid-epoch.");
 
@@ -3042,6 +3098,7 @@ describe("CampaignManager", () => {
   });
 
   it("a final sprint that never ran a test is NOT delivered (was: delivered with a caveat)", async () => {
+    runRecordOnSettle = undefined; // this sprint leaves no NUnit record
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
     await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
     settleMilestone("sprint A done");
@@ -3065,6 +3122,7 @@ describe("CampaignManager", () => {
   });
 
   it("revival resets the bounce COUNTERS the gates read, not just the booleans", async () => {
+    runRecordOnSettle = undefined; // this sprint leaves no NUnit record
     // Measured live 2026-09-04 16:18. reviveAtCurrentMilestone cleared
     // deliveryVerificationBounced while deliveryVerificationBounces stayed at
     // 2 of 2, so `spent < maxMilestoneAttempts` was false and the delivery
@@ -3102,6 +3160,7 @@ describe("CampaignManager", () => {
   });
 
   it("revival restores the delivery-verification gate along with the other evidence gates", async () => {
+    runRecordOnSettle = undefined; // this sprint leaves no NUnit record
     // Audited 2026-09-02: reviveAtCurrentMilestone reset the visual and
     // no-work bounces ("fresh budget = fresh gates") but not
     // deliveryVerificationBounced, so a revived final sprint could never be
@@ -3840,12 +3899,14 @@ describe("CampaignManager", () => {
     it("the second delivery bounce carries the CURRENT reason, not the first one", async () => {
       writeBuiltProject();
       const campaign = await runLadderToDelivery();
-      // Bounce 1: no verdict at all (compiles).
+      // Bounce 1: no verdict at all (compiles) — the sprint ran no suite.
+      runRecordOnSettle = undefined;
       tasks.emit("task:completed", "task_3", "done, trust me");
       await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
       expect(tasks.submitted[3]!.prompt).toContain("no test run was observed");
       expect(tasks.submitted[3]!.prompt).not.toContain("DOES NOT COMPILE");
       // Bounce 2: an unfiltered green, but the compile is now broken.
+      runRecordOnSettle = { total: 42, passed: 42, failed: 0, skipped: 0, unfiltered: true };
       compileVerdict = { ok: false, ran: true, errors: 3 };
       settleMilestone("suite green");
       await vi.waitFor(() => expect(tasks.submitted).toHaveLength(5));

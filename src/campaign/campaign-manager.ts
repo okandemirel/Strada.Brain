@@ -2087,7 +2087,11 @@ export class CampaignManager {
         // into fresh proof (Codex 2026-09-11 C#10). The final sprint is held
         // to the file; earlier sprints keep the prose fallback.
         const finalSprint = campaign.currentMilestone >= campaign.milestones.length - 1;
-        if (run.stale === true && finalSprint) {
+        // THE FINAL SPRINT NEEDS THE RECORD, not prose. Accepting prose when
+        // no record file happened to exist — and clearing it when a stale one
+        // did — made an unrelated file decide whether identical evidence
+        // counted (Codex 2026-09-11 D#13). Earlier sprints keep the fallback.
+        if (finalSprint && !(run.found === true && run.total !== undefined)) {
           milestone.testVerdict = undefined;
           milestone.testVerdictUnfiltered = undefined;
           milestone.testRunSource = "nunit";
