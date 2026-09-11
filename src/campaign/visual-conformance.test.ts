@@ -175,6 +175,13 @@ describe("the art direction a gate judges against (Codex 2026-09-11 F#3, H#13)",
     expect(look.found).toBe(true);
     expect(look.text).not.toContain("geometric puzzles");
 
+    // An EMPTY art section does not swallow the next heading's content
+    // (Codex 2026-09-11 J#22).
+    const empty = ["## Art Direction", "## Gameplay", "Solve geometric puzzles."].join("\n");
+    const emptyLook = extractLookDescription(empty);
+    expect(emptyLook.text ?? "").not.toContain("geometric puzzles");
+    expect(artDirectionText(emptyLook, empty)).toBeUndefined();
+
     // "## Art Direction / Monochrome." is a complete brief.
     const oneWord = "## Art Direction\nMonochrome.\n";
     const mono = extractLookDescription(oneWord);

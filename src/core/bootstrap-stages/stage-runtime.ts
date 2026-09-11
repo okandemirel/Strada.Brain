@@ -713,10 +713,14 @@ export function looksLikePlayer(artifactPath: string): boolean {
       // A WEB BUILD IS ITS DATA, not its page: index.html padded to 4 KB
       // passed as a game (Codex 2026-09-11 I#15). When the only named entry
       // is the page, the build folder beside it has to exist.
-      const onlyThePage =
-        entries.every((e) => !/^(?:Build|Data|.*_Data|Contents|UnityPlayer\.(?:dll|so|dylib))$/i.test(e));
-      if (onlyThePage) return false;
-      return holdsPayload(artifactPath, 3);
+      // A WEB BUILD IS ITS DATA: the payload has to be INSIDE the build
+      // directory, not anywhere in the folder — a padded index.html beside an
+      // empty Build/ passed (Codex 2026-09-11 J#23).
+      const buildDirs = entries.filter((e) => /^(?:Build|Data|.*_Data|Contents)$/i.test(e));
+      if (buildDirs.length > 0) return buildDirs.some((dir) => holdsPayload(join(artifactPath, dir), 3));
+      // A player library at the top level is a build of its own shape.
+      const hasPlayerLib = entries.some((e) => /^UnityPlayer\.(?:dll|so|dylib)$/i.test(e));
+      return hasPlayerLib && holdsPayload(artifactPath, 3);
     } catch {
       return false;
     }
@@ -784,7 +788,9 @@ function hasPackageMagic(path: string): boolean {
   if (/\.exe$/i.test(path)) return head.toString("latin1", 0, 2) === "MZ";
   // A LINUX player is an ELF binary, and this branch demanded Mach-O of it —
   // so a perfectly good .x86_64 build was refused (Codex 2026-09-11 I#15).
-  if (/\.x86_64$/i.test(path)) return head.toString("latin1", 1, 4) === "ELF";
+  // All four bytes: checking only "ELF" from byte one accepted "AELF"
+  // (Codex 2026-09-11 J#23).
+  if (/\.x86_64$/i.test(path)) return head[0] === 0x7f && head.toString("latin1", 1, 4) === "ELF";
   if (/\.app$/i.test(path)) {
     // Mach-O 32/64 in both byte orders, and the universal (fat) header.
     return [0xfeedface, 0xfeedfacf, 0xcefaedfe, 0xcffaedfe, 0xcafebabe].includes(magic);

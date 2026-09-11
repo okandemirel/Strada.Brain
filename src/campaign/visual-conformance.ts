@@ -75,7 +75,11 @@ export function artDirectionText(look: LookDescription | undefined, gddText: str
   // Only the sentences that talk about the LOOK speak for the look.
   const sentences = gddText
     .split(/(?<=[.!?])\s+|\n+/)
-    .map((line) => line.replace(/^\s*#{1,6}\s+/, "").trim())
+    // A HEADING IS NOT A BRIEF: "## Art Direction" with nothing under it
+    // reduced to "Art Direction", which contains an art word and became the
+    // whole art direction (Codex 2026-09-11 J#22).
+    .filter((line) => !/^\s*#{1,6}\s+\S/.test(line))
+    .map((line) => line.trim())
     .filter((line) => line.length > 0 && ART_WORD_RE.test(line));
   return sentences.length > 0 ? sentences.join(" ") : undefined;
 }
@@ -97,6 +101,8 @@ export function extractLookDescription(gddText: string): LookDescription {
   for (let i = 0; i < lines.length; i++) {
     const match = LOOK_HEADINGS.exec(lines[i] ?? "");
     if (!match) continue;
+    // The art heading's own depth; a numbered top-level title counts as one.
+    const headingDepth = /^\s*(#{1,6})\s+/.exec(lines[i] ?? "")?.[1]?.length ?? 1;
     const body: string[] = [];
     for (let j = i + 1; j < lines.length && body.join("\n").length < MAX_LOOK_CHARS * 2; j++) {
       const line = lines[j] ?? "";
@@ -105,7 +111,13 @@ export function extractLookDescription(gddText: string): LookDescription {
       // and swallow "Solve geometric puzzles.", which then read as a request
       // for flat geometric art (Codex 2026-09-11 I#10).
       if (/^\s*\d+\.\s+[A-Z][A-Z\s/&-]{3,}$/.test(line) && body.length > 0) break;
-      if (/^\s*#{1,6}\s+\S/.test(line) && body.length > 0) break;
+      // A SIBLING OR PARENT heading ends the section, even when the body is
+      // still empty: "## Art Direction" immediately followed by "## Gameplay"
+      // took that heading and its text as the art brief (Codex 2026-09-11
+      // J#22). A DEEPER heading is a subsection of the art direction
+      // ("### Palette") and belongs to it (B#23).
+      const nextDepth = /^\s*(#{1,6})\s+\S/.exec(line)?.[1]?.length;
+      if (nextDepth !== undefined && nextDepth <= headingDepth) break;
       body.push(line);
     }
     // Markdown heading markers are not prose: "## Art Direction" bodies full of

@@ -150,3 +150,20 @@ describe("a named player artifact must BE one (Codex 2026-09-11 E#2, G#3)", () =
     expect(looksLikePlayer(webgl)).toBe(true);
   });
 });
+
+describe("a build folder must hold a build (Codex 2026-09-11 J#23)", () => {
+  it("rejects an empty Build/ beside a padded page, and a near-miss ELF header", () => {
+    const web = join(artifactDir, "WebGL3");
+    mkdirSync(join(web, "Build"), { recursive: true });
+    writeFileSync(join(web, "index.html"), `<html>${"<!-- pad -->".repeat(1000)}</html>`);
+    // The payload has to be INSIDE the build directory.
+    expect(looksLikePlayer(web)).toBe(false);
+    writeFileSync(join(web, "Build", "game.data"), Buffer.alloc(256 * 1024, 2));
+    expect(looksLikePlayer(web)).toBe(true);
+
+    // "AELF" is not an ELF header.
+    const nearMiss = join(artifactDir, "NearMiss.x86_64");
+    writeFileSync(nearMiss, Buffer.concat([Buffer.from("AELF", "latin1"), Buffer.alloc(256 * 1024, 1)]));
+    expect(looksLikePlayer(nearMiss)).toBe(false);
+  });
+});
