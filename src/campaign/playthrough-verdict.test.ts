@@ -21,6 +21,39 @@ function write(content: unknown, ageMs = 0): string {
   return path;
 }
 
+describe("a verdict is evidence, not a claim (Codex 2026-09-11 B#3, B#25)", () => {
+  it("ok WITHOUT a session outcome or a captured frame is not ok, and says which is missing", () => {
+    write({ ok: true, reasons: [], record: { scene: "Entry", session: 1, actions: 0, outcome: "None" }, frames: { count: 5 } });
+    const noOutcome = readPlaythroughVerdict(root, 0);
+    expect(noOutcome).toMatchObject({ found: true, ok: false });
+    expect(noOutcome.reasons?.join(" ")).toContain("records no session outcome");
+
+    write({ ok: true, reasons: [], record: { scene: "Entry", session: 1, actions: 12, outcome: "Won" }, frames: { count: 0 } });
+    const noFrames = readPlaythroughVerdict(root, 0);
+    expect(noFrames).toMatchObject({ found: true, ok: false });
+    expect(noFrames.reasons?.join(" ")).toContain("records no captured frame");
+
+    write({ ok: true, reasons: [] }); // the bare claim Codex reproduced
+    expect(readPlaythroughVerdict(root, 0)).toMatchObject({ found: true, ok: false });
+
+    write(ok);
+    expect(readPlaythroughVerdict(root, 0)).toMatchObject({ found: true, ok: true, outcome: "Won" });
+  });
+
+  it("a file whose stored mtime lands a fraction BEFORE the sprint start is fresh; a real earlier verdict is still stale", () => {
+    // Node's utimes path truncates the converted timestamp to microseconds, so
+    // a file touched in the same millisecond reads a hair older than the clock
+    // it is compared against (Codex 2026-09-11 B#25 — CI coverage job).
+    const path = write(ok);
+    const t = Date.now();
+    const justBefore = new Date(t - 1);
+    utimesSync(path, justBefore, justBefore);
+    expect(readPlaythroughVerdict(root, t)).toMatchObject({ found: true, ok: true });
+    // Ten milliseconds is not truncation: that verdict predates the sprint.
+    expect(readPlaythroughVerdict(root, t + 10)).toMatchObject({ found: false, stale: true });
+  });
+});
+
 describe("the play-through verdict the campaign reads back (measured 2026-09-10: delivered green, never played)", () => {
   it("absent, stale and unreadable are three different facts, none of them evidence", () => {
     expect(readPlaythroughVerdict(root, 0)).toEqual({ found: false });

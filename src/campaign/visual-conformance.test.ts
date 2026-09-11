@@ -14,6 +14,19 @@ function tmp(): string { const d = mkdtempSync(join(tmpdir(), "vc-")); dirs.push
 afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }); });
 
 describe("look description", () => {
+  it("a Markdown '## Art Direction' section is prose, not a contents listing (Codex 2026-09-11 B#23)", () => {
+    const gdd = [
+      "# Game", "## 1. Overview", "Some overview text.", "",
+      "## Art Direction", "### Palette", "Warm ochre and deep indigo, high contrast, no pastels anywhere.",
+      "### Shapes", "Chunky silhouettes with thick outlines; every element reads at 64 px on a phone screen.",
+      "### Motion", "Snappy 2-frame anticipation, no easing longer than 120 ms, and a soft screen shake on impact.",
+    ].join("\n");
+    const look = extractLookDescription(gdd);
+    expect(look.found).toBe(true);
+    expect(look.text).toContain("Warm ochre");
+    expect(look.text).not.toContain("### Palette");
+  });
+
   it("takes the art-direction PROSE, never the table of contents", () => {
     // The shape that sank the earlier attempt: a TOC entry ~1100 lines above
     // the real section, both matching the same heading.

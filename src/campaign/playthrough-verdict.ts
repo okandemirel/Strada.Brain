@@ -27,10 +27,12 @@ export const PLAYTHROUGH_VERDICT_REL = join("Recordings", "playthrough", "playth
 export const PLAYER_PLAYTHROUGH_VERDICT_REL = join("Recordings", "player-playthrough", "playthrough-verdict.json");
 
 interface VerdictFile {
+  /* loose: written by unity_playthrough / PlayerPlaythroughRunner */
   ok?: unknown;
   reasons?: unknown;
   record?: {
     outcome?: unknown;
+    reachedOutcome?: unknown;
     autoStarted?: unknown;
     actions?: unknown;
     session?: unknown;
@@ -66,7 +68,11 @@ export function readPlaythroughVerdict(projectRoot: string, sinceMs: number, rel
   } catch {
     return { found: false };
   }
-  if (mtimeMs < sinceMs) return { found: false, stale: true };
+  // Two milliseconds of tolerance: Node's utimes path truncates the fractional
+  // second to microseconds, so a file touched in the SAME millisecond the sprint
+  // started reads 0.001 ms older than it and was called stale (Codex 2026-09-11
+  // B#25 — CI coverage job, ~2 of 5 runs).
+  if (mtimeMs + 2 < sinceMs) return { found: false, stale: true };
   let parsed: VerdictFile;
   try {
     parsed = JSON.parse(readFileSync(path, "utf8")) as VerdictFile;
@@ -78,10 +84,22 @@ export function readPlaythroughVerdict(projectRoot: string, sinceMs: number, rel
   const perf = parsed.perf ?? undefined;
   const num = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
   const str = (v: unknown): string | undefined => (typeof v === "string" && v.length > 0 ? v : undefined);
+  // `ok` is a claim; the record and the frames are the evidence. A file that
+  // says {"ok":true} with no outcome reached and no frame captured was accepted
+  // as a played game (Codex 2026-09-11 B#3).
+  const outcomeReached = record !== undefined && (record.reachedOutcome === true || (str(record.outcome) !== undefined && record.outcome !== "None"));
+  const framesCaptured = typeof frames?.count === "number" && frames.count > 0;
+  const evidenced = outcomeReached && framesCaptured;
+  const reasons = Array.isArray(parsed.reasons) ? parsed.reasons.map(String).slice(0, 8) : [];
+  if (parsed.ok === true && !evidenced) {
+    reasons.push(!outcomeReached
+      ? "the verdict claims ok but records no session outcome"
+      : "the verdict claims ok but records no captured frame");
+  }
   return {
     found: true,
-    ok: parsed.ok === true,
-    reasons: Array.isArray(parsed.reasons) ? parsed.reasons.map(String).slice(0, 8) : [],
+    ok: parsed.ok === true && evidenced,
+    reasons,
     ...(record
       ? {
           outcome: str(record.outcome),

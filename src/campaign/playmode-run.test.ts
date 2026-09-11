@@ -17,6 +17,21 @@ function write(record: Record<string, unknown>, ageMs = 0): void {
   if (ageMs > 0) { const t = new Date(Date.now() - ageMs); utimesSync(p, t, t); }
 }
 
+describe("readPlaymodeRun — a record is counts that add up (Codex 2026-09-11 B#7)", () => {
+  it("all-skipped is not green, a filter beside `unfiltered` wins, and counts that do not add up are not a run", () => {
+    write({ total: 10, passed: 0, failed: 0, skipped: 10, unfiltered: true, filter: "OnlyOne" });
+    const skipped = readPlaymodeRun(root, 0);
+    expect(skipped).toMatchObject({ found: true, green: false, unfiltered: false });
+    expect(skipped.detail).toContain("none passed");
+
+    write({ total: 100, passed: 3, failed: 0, skipped: 0, unfiltered: true });
+    expect(readPlaymodeRun(root, 0)).toMatchObject({ found: true, green: false });
+
+    write({ total: 215, passed: 215, failed: 0, skipped: 0, unfiltered: true });
+    expect(readPlaymodeRun(root, 0)).toMatchObject({ found: true, green: true, unfiltered: true });
+  });
+});
+
 describe("readPlaymodeRun", () => {
   it("absent and stale are not evidence", () => {
     expect(readPlaymodeRun(root, 0)).toEqual({ found: false });

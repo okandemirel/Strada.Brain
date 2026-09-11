@@ -91,8 +91,12 @@ describe("assessNumericClaims", () => {
       status: "not_met", blocking: true, measured: 3, note: "the game's session catalog reports 3; 1 of 2 played session(s) reached an outcome",
     });
     expect(claimsRefusal(three)).toContain("level count = 12 measured 3");
-    const twelve = assessNumericClaims(claims, evidence({ sessionCount: 12 }));
-    expect(twelve.find((x) => x.claim.kind === "level_count")).toMatchObject({ status: "met", measured: 12, note: "the game's session catalog reports 12" });
+    // A catalog of 12 is a claim; 12 sessions played to an outcome is the measurement (Codex 2026-09-11 B#10).
+    const catalogOnly = assessNumericClaims(claims, evidence({ sessionCount: 12 }));
+    expect(catalogOnly.find((x) => x.claim.kind === "level_count")).toMatchObject({ status: "not_met", blocking: true, measured: 12 });
+    const allPlayed = assessNumericClaims(claims, evidence({ sessionCount: 12, sessions: Array.from({ length: 12 }, (_, i) => ({ index: i + 1, outcome: "Won", actions: 10, seconds: 5 })) }));
+    expect(allPlayed.find((x) => x.claim.kind === "level_count")).toMatchObject({ status: "met", measured: 12 });
+    expect(allPlayed.find((x) => x.claim.kind === "level_count")!.note).toContain("12 of 12 played session(s) reached an outcome");
   });
 
   it("a session that never ended has no length; a blown session budget blocks", () => {

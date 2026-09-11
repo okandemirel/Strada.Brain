@@ -15,6 +15,8 @@ import { join } from "node:path";
 export const PLAYMODE_RUN_RECORD_REL = join("Recordings", "tests", "playmode-last.json");
 
 export interface PlaymodeRunEvidence {
+  /** failed === 0, at least one test PASSED, and the counts add up — computed here so no reader re-derives it loosely. */
+  green?: boolean;
   found: boolean;
   stale?: boolean;
   total?: number;
@@ -50,18 +52,29 @@ export function readPlaymodeRun(projectRoot: string, sinceMs: number): PlaymodeR
   const failed = num(raw.failed);
   if (total === undefined || failed === undefined) return { found: false };
   const passed = num(raw.passed) ?? total - failed;
-  const unfiltered = raw.unfiltered === true;
-  const filter = typeof raw.filter === "string" ? raw.filter : undefined;
+  const skipped = num(raw.skipped) ?? 0;
+  const filter = typeof raw.filter === "string" && raw.filter.trim() !== "" ? raw.filter : undefined;
+  // "unfiltered" is a flag the writer sets; a filter string beside it says
+  // otherwise, and the string wins (Codex 2026-09-11 B#7).
+  const unfiltered = raw.unfiltered === true && filter === undefined;
+  // Counts that do not add up are not a run record: all-skipped, or
+  // passed+failed+skipped ≠ total, never passes as green.
+  const consistent = passed + failed + skipped === total || (num(raw.skipped) === undefined && passed + failed === total);
   const failedNames = Array.isArray(raw.failedNames) ? raw.failedNames.map(String).slice(0, 50) : [];
   const scope = unfiltered ? "unfiltered — the whole PlayMode suite" : `filter: ${filter ?? (typeof raw.categories === "string" ? raw.categories : "narrowed")}`;
   const detail =
     total === 0
       ? `PlayMode run (NUnit): 0 tests executed (${scope})`
+      : !consistent
+      ? `PlayMode run (NUnit): counts do not add up — ${passed} passed, ${failed} failed, ${skipped} skipped of ${total} (${scope})`
+      : failed === 0 && passed === 0
+      ? `PlayMode run (NUnit): ${total} tests, none passed (${skipped} skipped; ${scope})`
       : failed === 0
       ? `PlayMode verification passed: ${passed} of ${total} tests passed (${scope})`
       : `PlayMode verification FAILED: ${failed} of ${total} tests failed (${scope})`;
   return {
     found: true,
+    green: consistent && failed === 0 && passed > 0,
     total,
     passed,
     failed,

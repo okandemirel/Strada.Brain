@@ -647,7 +647,7 @@ export class SpriteGenerateTool implements ITool {
         type: "array",
         description:
           `Up to ${SPRITE_BATCH_MAX} sprites in ONE call — the local model loads once and draws them all (a GDD ` +
-          "area's canvases, a family of pig skins). Each item: { name, prompt? }; path/size/negative apply to all. " +
+          "area's canvases, a family of character skins). Each item: { name, prompt? }; path/size/negative apply to all. " +
           "The result names every file written and every one that failed.",
         items: {
           type: "object",

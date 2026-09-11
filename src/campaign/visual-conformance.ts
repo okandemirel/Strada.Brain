@@ -30,7 +30,7 @@ import type { IAIProvider } from "../agents/providers/provider.interface.js";
 import { getLoggerSafe } from "../utils/logger.js";
 
 /** Headings whose body describes how the game should look. */
-const LOOK_HEADINGS = /^\s*(?:\d+[.\s]*)*\s*(art direction|visual (?:style|direction|identity)|look and feel|art style)\b/i;
+const LOOK_HEADINGS = /^\s*(?:#{1,6}\s+)?(?:\d+[.\s]*)*\s*(art direction|visual (?:style|direction|identity)|look and feel|art style)\b/i;
 /** A body this short is a table-of-contents line, not a description. */
 const MIN_LOOK_CHARS = 200;
 /** How much of the section to carry into the prompt. */
@@ -70,7 +70,9 @@ export function extractLookDescription(gddText: string): LookDescription {
       if (/^\s*\d+\.\s+[A-Z][A-Z\s/&-]{3,}$/.test(line) && body.length > 0) break;
       body.push(line);
     }
-    candidates.push({ heading: (match[1] ?? "").trim(), line: i + 1, body: body.join("\n").trim() });
+    // Markdown heading markers are not prose: "## Art Direction" bodies full of
+    // "### Palette" lines were rejected as a contents listing (Codex 2026-09-11 B#23).
+    candidates.push({ heading: (match[1] ?? "").trim(), line: i + 1, body: body.map((l) => l.replace(/^\s*#{1,6}\s+/, "")).join("\n").trim() });
   }
 
   if (candidates.length === 0) {

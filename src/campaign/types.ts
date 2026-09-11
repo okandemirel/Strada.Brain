@@ -219,6 +219,13 @@ export interface CampaignMilestone {
   gddClaims?: string[];
   /** When this milestone's current run began (epoch ms) — the time-box clock. */
   startedAtMs?: number;
+  /**
+   * When the CURRENT attempt at this milestone was submitted (every submit,
+   * bounces included). The proof readers measure freshness against this: a
+   * verdict earned before a bounce describes the game before the sprint
+   * changed it again (Codex 2026-09-11 B#4).
+   */
+  attemptStartedAtMs?: number;
   /** How many times the time-box has forced a scope-narrowing escalation. */
   timeBoxEscalations?: number;
 }

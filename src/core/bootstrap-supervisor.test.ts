@@ -32,7 +32,14 @@ describe("createSupervisorExecuteNodeBridge", () => {
     expect(result.toolResults).toHaveLength(1);
     expect(result.toolResults[0]!.content).toContain("3 of 40 tests failed");
     const { deriveTestVerdict } = await import("../tasks/test-verdict.js");
-    expect(deriveTestVerdict(result.toolResults.map((tr) => ({ content: String(tr.content), isError: tr.isError }))).testsGreen).toBe(false);
+    // The tool's identity travels in the metadata now (Codex 2026-09-11 B#6): the
+    // verdict is derived only from tools that can run tests.
+    expect(result.toolResults[0]!.metadata).toMatchObject({ toolName: "unity_playmode_verify" });
+    expect(deriveTestVerdict(result.toolResults.map((tr) => ({
+      content: String(tr.content),
+      isError: tr.isError,
+      toolName: typeof tr.metadata?.["toolName"] === "string" ? (tr.metadata["toolName"] as string) : undefined,
+    }))).testsGreen).toBe(false);
   });
 
   it("every node prompt carries the scope directive, after the task and before the time budget (measured 2026-09-09: a measure node spent 25 min on unrelated reads and writes)", async () => {

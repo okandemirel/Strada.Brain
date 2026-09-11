@@ -2,17 +2,27 @@ import { describe, expect, it } from "vitest";
 import { deriveTestVerdict, findTestRunLines } from "./test-verdict.js";
 
 describe("deriveTestVerdict", () => {
+  it("the output of a tool that cannot run tests is not a test run, whatever it says (Codex 2026-09-11 B#6)", () => {
+    const v = deriveTestVerdict([
+      { toolName: "file_read", content: "All 0 tests passed (not unfiltered)" },
+      { content: "PlayMode verification passed: 12 of 12 tests passed (unfiltered — the whole PlayMode suite)" },
+    ]);
+    expect(v.testsGreen).toBeUndefined();
+    const real = deriveTestVerdict([{ toolName: "unity_verify_change", content: "PlayMode verification passed: 12 of 12 tests passed (unfiltered — the whole PlayMode suite)" }]);
+    expect(real.testsGreen).toBe(true);
+  });
+
   it("no test-run evidence → undefined verdict", () => {
     const v = deriveTestVerdict([
-      { content: "compile green, 0 errors" },
-      { content: "wrote Assets/Board.cs" },
+      { toolName: "unity_test_run", content: "compile green, 0 errors" },
+      { toolName: "unity_test_run", content: "wrote Assets/Board.cs" },
     ]);
     expect(v.testsGreen).toBeUndefined();
   });
 
   it("a red PlayMode body is red even with a green error flag", () => {
     const v = deriveTestVerdict([
-      { content: "PlayMode verification FAILED: 5 of 95 tests failed", isError: false },
+      { toolName: "unity_test_run", content: "PlayMode verification FAILED: 5 of 95 tests failed", isError: false },
     ]);
     expect(v.testsGreen).toBe(false);
     expect(v.detail).toContain("5 of 95");
@@ -20,22 +30,22 @@ describe("deriveTestVerdict", () => {
 
   it("the LAST run wins: red then green is green", () => {
     const v = deriveTestVerdict([
-      { content: "PlayMode verification FAILED: 2 of 10 tests failed", isError: true },
-      { content: "All 10 tests passed", isError: false },
+      { toolName: "unity_test_run", content: "PlayMode verification FAILED: 2 of 10 tests failed", isError: true },
+      { toolName: "unity_test_run", content: "All 10 tests passed", isError: false },
     ]);
     expect(v.testsGreen).toBe(true);
   });
 
   it("green then red is red", () => {
     const v = deriveTestVerdict([
-      { content: "All 10 tests passed" },
-      { content: "PlayMode verification FAILED: 1 of 10 tests failed" },
+      { toolName: "unity_test_run", content: "All 10 tests passed" },
+      { toolName: "unity_test_run", content: "PlayMode verification FAILED: 1 of 10 tests failed" },
     ]);
     expect(v.testsGreen).toBe(false);
   });
 
   it("an errored run of a passing-shaped body is red (tool-level failure)", () => {
-    const v = deriveTestVerdict([{ content: "EditMode verification passed", isError: true }]);
+    const v = deriveTestVerdict([{ toolName: "unity_test_run", content: "EditMode verification passed", isError: true }]);
     expect(v.testsGreen).toBe(false);
   });
 });
@@ -70,6 +80,7 @@ describe("deriveTestVerdict within one tool result", () => {
     // "Tests were RED at completion: EditMode verification passed".
     const v = deriveTestVerdict([
       {
+        toolName: "unity_test_run",
         content: [
           "EditMode verification passed",
           "Running PlayMode suite…",
@@ -84,7 +95,7 @@ describe("deriveTestVerdict within one tool result", () => {
 
   it("an all-green body names the LAST green observation", () => {
     const v = deriveTestVerdict([
-      { content: ["EditMode verification passed", "All 40 tests passed"].join("\n") },
+      { toolName: "unity_test_run", content: ["EditMode verification passed", "All 40 tests passed"].join("\n") },
     ]);
     expect(v.testsGreen).toBe(true);
     expect(v.detail).toBe("All 40 tests passed");
@@ -96,6 +107,7 @@ describe("deriveTestVerdict within one tool result", () => {
     // run. Chronology lives ACROSS results, where last-observation-wins.
     const v = deriveTestVerdict([
       {
+        toolName: "unity_test_run",
         content: [
           "PlayMode verification FAILED — 3 of 40 tests failed",
           "EditMode verification passed",
@@ -107,7 +119,7 @@ describe("deriveTestVerdict within one tool result", () => {
   });
 
   it("a tool-level error on a green-shaped body says so in the detail", () => {
-    const v = deriveTestVerdict([{ content: "EditMode verification passed", isError: true }]);
+    const v = deriveTestVerdict([{ toolName: "unity_test_run", content: "EditMode verification passed", isError: true }]);
     expect(v.testsGreen).toBe(false);
     expect(v.detail).toContain("tool reported an error");
   });

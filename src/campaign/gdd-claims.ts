@@ -192,20 +192,33 @@ export function assessNumericClaims(
             blocking: false,
           };
         }
-        const met = playthrough.sessionCount === claim.value;
+        const catalogMatches = playthrough.sessionCount === claim.value;
         const played = playthrough.sessions?.length ?? 0;
         const finished = playthrough.sessions?.filter((s) => s.outcome !== "None" && s.outcome !== "Refused").length ?? 0;
+        // A catalog of N is a claim; N sessions played to an outcome is the
+        // measurement (Codex 2026-09-11 B#10). The play-through plays at most
+        // PLAYED_SESSIONS_PER_RUN per run: past that the shortfall is named,
+        // not hidden — and not held against the delivery, since no single run
+        // can answer it.
+        const required = Math.min(claim.value, PLAYED_SESSIONS_PER_RUN);
+        const met = catalogMatches && finished >= required;
+        const beyondOneRun = claim.value > PLAYED_SESSIONS_PER_RUN;
         return {
           claim,
           status: met ? "met" : "not_met",
           measured: playthrough.sessionCount,
-          note: `the game's session catalog reports ${playthrough.sessionCount}${played > 0 ? `; ${finished} of ${played} played session(s) reached an outcome` : ""}`,
-          blocking: true,
+          note:
+            `the game's session catalog reports ${playthrough.sessionCount}; ${finished} of ${played} played session(s) reached an outcome` +
+            (beyondOneRun ? ` (one run plays at most ${PLAYED_SESSIONS_PER_RUN}; ${claim.value - Math.min(finished, claim.value)} of ${claim.value} levels are NOT yet played to an outcome)` : ""),
+          blocking: !catalogMatches || !beyondOneRun,
         };
       }
     }
   });
 }
+
+/** unity_playthrough's per-run session cap (MAX_SESSIONS_PER_RUN in Strada.MCP). */
+export const PLAYED_SESSIONS_PER_RUN = 12;
 
 const KIND_LABEL: Record<ClaimKind, string> = {
   fps: "frame rate",

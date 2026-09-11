@@ -13,25 +13,25 @@ const MISSING = "Unity account is not linked. Run the Unity Link step once (it o
 
 describe("a dead Unity link is evidence", () => {
   it("reads the tool's own sentence off the result", () => {
-    expect(detectAssetSourcingBlind([{ content: DEAD, isError: true }])).toContain("link expired or was revoked");
-    expect(detectAssetSourcingBlind([{ content: MISSING, isError: true }])).toContain("is not linked");
+    expect(detectAssetSourcingBlind([{ toolName: "unity_test_run", content: DEAD, isError: true }])).toContain("link expired or was revoked");
+    expect(detectAssetSourcingBlind([{ toolName: "unity_test_run", content: MISSING, isError: true }])).toContain("is not linked");
   });
 
   it("is undefined when no tool said so", () => {
-    expect(detectAssetSourcingBlind([{ content: "PlayMode verification passed: 3 of 3 tests passed" }])).toBeUndefined();
+    expect(detectAssetSourcingBlind([{ toolName: "unity_test_run", content: "PlayMode verification passed: 3 of 3 tests passed" }])).toBeUndefined();
     expect(detectAssetSourcingBlind([])).toBeUndefined();
   });
 
   it("rides the verdict even when no test ran", () => {
-    const v = deriveTestVerdict([{ content: DEAD, isError: true }]);
+    const v = deriveTestVerdict([{ toolName: "unity_test_run", content: DEAD, isError: true }]);
     expect(v.testsGreen).toBeUndefined();
     expect(v.assetSourcingBlind).toContain("re-run the Unity Link step");
   });
 
   it("does not disturb a real test verdict", () => {
     const v = deriveTestVerdict([
-      { content: DEAD, isError: true },
-      { content: "PlayMode verification passed: 3 of 3 tests passed (unfiltered — the whole PlayMode suite)" },
+      { toolName: "unity_test_run", content: DEAD, isError: true },
+      { toolName: "unity_test_run", content: "PlayMode verification passed: 3 of 3 tests passed (unfiltered — the whole PlayMode suite)" },
     ]);
     expect(v.testsGreen).toBe(true);
     expect(v.unfiltered).toBe(true);

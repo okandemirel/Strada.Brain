@@ -16,6 +16,14 @@ const built =
   }) + "\n```";
 
 describe("parsePlayerBuildOutput", () => {
+  it("ok WITHOUT an artifact on disk is not a successful build (Codex 2026-09-11 B#3)", () => {
+    const noArtifact = "PLAYER BUILT.\n\n```json\n" + JSON.stringify({ ok: true, reasons: [], artifact: { exists: false } }) + "\n```";
+    const parsed = parsePlayerBuildOutput(noArtifact);
+    expect(parsed).toMatchObject({ ran: true, ok: false });
+    expect(parsed.reasons?.join(" ")).toContain("no artifact exists on disk");
+    expect(parsed.artifactPath).toBeUndefined();
+  });
+
   it("a built player: ran, ok, artifact path and size, target, duration, scene count", () => {
     expect(parsePlayerBuildOutput(built)).toEqual({
       ran: true, ok: true, reasons: [], target: "StandaloneOSX", durationMs: 118_000, scenes: 2,

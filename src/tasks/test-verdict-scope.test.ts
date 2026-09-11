@@ -10,7 +10,7 @@ import { deriveTestVerdict } from "./test-verdict.js";
 describe("test verdict run scope", () => {
   it("reads unfiltered off the winning line", () => {
     const v = deriveTestVerdict([
-      { content: "PlayMode verification passed: 179 of 179 tests passed (unfiltered — the whole PlayMode suite)" },
+      { toolName: "unity_test_run", content: "PlayMode verification passed: 179 of 179 tests passed (unfiltered — the whole PlayMode suite)" },
     ]);
     expect(v.testsGreen).toBe(true);
     expect(v.unfiltered).toBe(true);
@@ -18,18 +18,19 @@ describe("test verdict run scope", () => {
 
   it("marks a filtered green as filtered", () => {
     const v = deriveTestVerdict([
-      { content: "PlayMode verification passed: 2 of 2 tests passed (filter: PixelFlowGameplayWinLossTests)" },
+      { toolName: "unity_test_run", content: "PlayMode verification passed: 2 of 2 tests passed (filter: PixelFlowGameplayWinLossTests)" },
     ]);
     expect(v.testsGreen).toBe(true);
     expect(v.unfiltered).toBe(false);
   });
 
   it("leaves the scope undefined when the line says neither", () => {
-    expect(deriveTestVerdict([{ content: "All 42 tests passed" }]).unfiltered).toBeUndefined();
+    expect(deriveTestVerdict([{ toolName: "unity_test_run", content: "All 42 tests passed" }]).unfiltered).toBeUndefined();
   });
 
   it("names the failing tests from the red line itself", () => {
     const v = deriveTestVerdict([{
+      toolName: "unity_test_run",
       content: "PlayMode verification FAILED: 2 of 179 tests failed (unfiltered — the whole PlayMode suite). " +
         "YourGame.PixelFlow.PlayModeTests.PixelFlowGameplayWinLossTests.LossLevel_ReachesLostState",
     }]);
@@ -43,6 +44,7 @@ describe("test verdict run scope", () => {
     // A runner that prints its whole suite after the summary must not have its
     // PASSING tests recorded as failures.
     const v = deriveTestVerdict([{
+      toolName: "unity_test_run",
       content: [
         "PlayMode verification FAILED: 1 of 3 tests failed (unfiltered — the whole PlayMode suite). Game.Tests.BoardTests.Clears",
         "Game.Tests.BoardTests.Spawns ... PASSED",
@@ -54,20 +56,20 @@ describe("test verdict run scope", () => {
 
   it("bounds the list and counts the rest", () => {
     const names = Array.from({ length: 8 }, (_, i) => `Game.Tests.Fixture.Test${i}`).join(" ");
-    const v = deriveTestVerdict([{ content: `PlayMode verification FAILED: 8 of 9 tests failed. ${names}` }]);
+    const v = deriveTestVerdict([{ toolName: "unity_test_run", content: `PlayMode verification FAILED: 8 of 9 tests failed. ${names}` }]);
     expect(v.failedTests).toHaveLength(5);
     expect(v.failedTestsOmitted).toBe(3);
   });
 
   it("names nothing on a green run", () => {
-    expect(deriveTestVerdict([{ content: "All 42 tests passed. Game.Tests.BoardTests.Clears" }]).failedTests)
+    expect(deriveTestVerdict([{ toolName: "unity_test_run", content: "All 42 tests passed. Game.Tests.BoardTests.Clears" }]).failedTests)
       .toBeUndefined();
   });
 
   it("takes the scope from the LAST observation, not the body", () => {
     const v = deriveTestVerdict([
-      { content: "PlayMode verification passed: 2 of 2 tests passed (filter: WinLoss)" },
-      { content: "PlayMode verification passed: 179 of 179 tests passed (unfiltered — the whole PlayMode suite)" },
+      { toolName: "unity_test_run", content: "PlayMode verification passed: 2 of 2 tests passed (filter: WinLoss)" },
+      { toolName: "unity_test_run", content: "PlayMode verification passed: 179 of 179 tests passed (unfiltered — the whole PlayMode suite)" },
     ]);
     expect(v.unfiltered).toBe(true);
   });

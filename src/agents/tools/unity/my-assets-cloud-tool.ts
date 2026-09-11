@@ -104,7 +104,7 @@ export class MyAssetsCloudTool implements ITool {
       },
       query: {
         type: "string",
-        description: "search only: catalog query, e.g. 'pig character'.",
+        description: "search only: catalog query, e.g. 'stylized character'.",
       },
       productId: {
         type: "string",

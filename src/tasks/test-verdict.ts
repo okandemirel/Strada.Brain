@@ -81,6 +81,19 @@ const TEST_NAME_RE = /\b[A-Z][A-Za-z0-9]*(?:\.[A-Za-z_][A-Za-z0-9_]*){2,}\b/g;
 export interface TestEvidence {
   content: string;
   isError?: boolean;
+  /** The tool that printed it. Evidence without a known test-capable tool behind it is not a test run. */
+  toolName?: string;
+}
+
+/**
+ * Tools whose output can be a test run. A document read with file_read that
+ * contained "All 0 tests passed" used to become a green, unfiltered verdict
+ * (Codex 2026-09-11 B#6): the producer scanned every tool's output.
+ */
+export const TEST_CAPABLE_TOOL_RE = /^unity_(?:test_run|test_rerun_failed|test_results|verify_change|playmode_verify|playthrough)$/i;
+
+export function isTestCapableTool(toolName: string | undefined): boolean {
+  return typeof toolName === "string" && TEST_CAPABLE_TOOL_RE.test(toolName.trim());
 }
 
 const TEST_RUN_RE =
@@ -130,6 +143,7 @@ export function deriveTestVerdict(evidence: readonly TestEvidence[]): TaskTestVe
   let verdict: TaskTestVerdict = { detail: "" };
   const assetSourcingBlind = detectAssetSourcingBlind(evidence);
   for (const item of evidence) {
+    if (!isTestCapableTool(item.toolName)) continue;
     const text = typeof item.content === "string" ? item.content : "";
     const lines = findTestRunLines(text);
     if (lines.length === 0) continue;

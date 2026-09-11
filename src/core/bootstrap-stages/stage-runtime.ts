@@ -702,11 +702,17 @@ export function parsePlayerBuildOutput(content: string): import("../../campaign/
   }
   const num = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
   const str = (v: unknown): string | undefined => (typeof v === "string" && v.length > 0 ? v : undefined);
-  const ok = parsed.ok === true;
+  // A build is ok when its artifact exists on disk; "ok" without an artifact
+  // was accepted as a successful build and then skipped the player run
+  // because there was nothing to play (Codex 2026-09-11 B#3).
+  const artifactExists = parsed.artifact?.exists === true && typeof parsed.artifact.path === "string" && parsed.artifact.path.length > 0;
+  const ok = parsed.ok === true && artifactExists;
+  const reasons = Array.isArray(parsed.reasons) ? parsed.reasons.map(String).slice(0, 8) : [];
+  if (parsed.ok === true && !artifactExists) reasons.push("the build reported ok but no artifact exists on disk");
   return {
     ran: true,
     ok,
-    reasons: Array.isArray(parsed.reasons) ? parsed.reasons.map(String).slice(0, 8) : [],
+    reasons,
     target: str(parsed.result?.target),
     durationMs: num(parsed.result?.durationMs),
     scenes: Array.isArray(parsed.result?.scenes) ? parsed.result!.scenes.length : undefined,

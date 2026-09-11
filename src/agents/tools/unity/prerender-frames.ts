@@ -220,7 +220,7 @@ export class PrerenderFramesTool implements ITool {
   readonly inputSchema = {
     type: "object",
     properties: {
-      prefab: { type: "string", description: "Project-relative prefab path, e.g. Assets/Realistic/.../Boar_cub_IP.prefab" },
+      prefab: { type: "string", description: "Project-relative prefab path, e.g. Assets/Characters/<Name>.prefab" },
       outDir: { type: "string", description: "Project-relative output dir under Assets/ (default: Assets/Art/Prerendered)" },
       bodyColor: { type: "string", description: "Body color #rrggbb (default: the project's style.json palette; stock fallback only when no profile exists)" },
       outlineWidth: { type: "number", description: "Outline width factor (default from style.json; 0 disables)" },

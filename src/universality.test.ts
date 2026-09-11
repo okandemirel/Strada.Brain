@@ -12,14 +12,17 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 
 /** Names of the test vehicle and its assets. Extend when a new vehicle is used. */
-const VEHICLE_NAMES = /\b(?:PixelFlow|Pigs?|Conveyor|FrozenPig|PigBody|StageBlock|music_farm|Boar_cub|Pig_Real|NeonCity)\b/;
+const VEHICLE_NAMES = /\b(?:pixel ?flow|pigs?|piglets?|conveyors?|frozen ?pig|pig ?body|stage ?block|music_farm|boar_cub(?:_ip)?|pig_real|neon ?city)\b/i;
 /** Files whose whole purpose is the vehicle's own knowledge and are configured, not defaulted. */
 const ALLOWED = new Set<string>([]);
 
 function stripComments(source: string): string {
   return source
     .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/(^|[^:\\])\/\/.*$/gm, "$1");
+    .replace(/(^|[^:\\])\/\/.*$/gm, "$1")
+    // Python comments inside an embedded script (assets-local/local-model-runner.ts)
+    // record measurements too; a TS line never starts with "# ".
+    .replace(/^\s*# .*$/gm, "");
 }
 
 function walk(dir: string, out: string[]): void {

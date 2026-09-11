@@ -1570,7 +1570,11 @@ export class BackgroundExecutor {
           // gate) stop judging prose.
           const verdict = deriveTestVerdict(
             supervisorResult.nodeResults.flatMap((n) =>
-              n.toolResults.map((tr) => ({ content: String(tr.content ?? ""), isError: tr.isError })),
+              n.toolResults.map((tr) => ({
+                content: String(tr.content ?? ""),
+                isError: tr.isError,
+                toolName: typeof tr.metadata?.["toolName"] === "string" ? (tr.metadata["toolName"] as string) : undefined,
+              })),
             ),
           );
           this.recordTestVerdict(
@@ -1690,7 +1694,7 @@ export class BackgroundExecutor {
 
       try {
         const verdict = deriveTestVerdict(
-          (result.workerResult?.toolTrace ?? []).map((t) => ({ content: t.summary, isError: !t.success })),
+          (result.workerResult?.toolTrace ?? []).map((t) => ({ content: t.summary, isError: !t.success, toolName: t.toolName })),
         );
         this.recordTestVerdict(
           task.id,

@@ -566,7 +566,7 @@ export class MeshGenerateTool implements ITool {
       fields: {
         type: "array",
         description:
-          "organic only: the blobs of the build as ellipsoid fields, e.g. a pig = body + head + 2 ears + snout. " +
+          "organic only: the blobs of the build as ellipsoid fields, e.g. a quadruped = body + head + 2 ears + snout. " +
           "Each: {pos:[x,y,z], radii:[rx,ry,rz]} in meters. Overlapping fields fuse into one smooth surface.",
         items: {
           type: "object",

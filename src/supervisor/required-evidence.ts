@@ -14,7 +14,11 @@
 /** Tools the task's text tells the worker to run: "run unity_playthrough", "Run the unity_build_player". */
 export function requiredToolsInPrompt(prompt: string): string[] {
   const out = new Set<string>();
-  for (const m of prompt.matchAll(/\brun\s+(?:the\s+)?(unity_[a-z0-9_]+)/gi)) out.add(m[1]!.toLowerCase());
+  // "run X", "execute X", "invoke X", "call X", "use X", "using X", "via X",
+  // "through X" — with up to a few words between ("run the full suite using
+  // unity_test_run"). "run X" alone let "execute unity_x" through (Codex
+  // 2026-09-11 B#13).
+  for (const m of prompt.matchAll(/\b(?:run|execute|invoke|call|use|using|via|through)\b(?:\s+(?!unity_)[a-z'-]+){0,4}\s+(unity_[a-z0-9_]+)/gi)) out.add(m[1]!.toLowerCase());
   return [...out];
 }
 

@@ -600,6 +600,7 @@ export class CampaignManager {
     milestone.sceneHygieneBounces = 0;
     milestone.deliveryProofsMissing = undefined;
     milestone.startedAtMs = undefined;
+    milestone.attemptStartedAtMs = undefined;
     milestone.timeBoxEscalations = 0;
     campaign.state = "executing";
     campaign.lastError = undefined;
@@ -1290,6 +1291,9 @@ export class CampaignManager {
     }
     milestone.status = "running";
     milestone.startedAtMs ??= Date.now();
+    // Every submit is a new attempt at proof, so the freshness clock moves
+    // even when the milestone clock does not (Codex 2026-09-11 B#4).
+    milestone.attemptStartedAtMs = Date.now();
     // A new attempt gets a new deferral clock. Audited 2026-09-02: the clock
     // was cleared only on the judge path, so revive/bounce/escalation/restart
     // attempts inherited a stale one — past 24h the deferral was skipped and
@@ -1869,6 +1873,23 @@ export class CampaignManager {
           status = TaskStatus.failed;
           output = `Tests were RED at completion: ${verdict.detail}. ${output}`.slice(0, 2000);
         }
+        // The NUnit record outranks the prose here too: a green/absent prose
+        // verdict beside a fresh RED run record advanced a non-final sprint
+        // (Codex 2026-09-11 B#14).
+        const run = readPlaymodeRun(this.projectRoot, this.sprintStartMs(milestone));
+        if (status === TaskStatus.completed && run.found && (run.failed ?? 0) > 0) {
+          getLoggerSafe().warn("Milestone completion rejected: the NUnit run record is red", {
+            id: campaign.id,
+            milestone: milestone.id,
+            detail: run.detail,
+          });
+          milestone.testVerdict = undefined;
+          milestone.testVerdictUnfiltered = undefined;
+          milestone.testRunSource = "nunit";
+          milestone.testFailures = run.failedNames && run.failedNames.length > 0 ? run.failedNames.slice(0, 5) : milestone.testFailures;
+          status = TaskStatus.failed;
+          output = `Tests were RED at completion (NUnit record): ${run.detail}. ${output}`.slice(0, 2000);
+        }
       } catch { /* verdict read is best-effort; other gates still apply */ }
     }
 
@@ -2031,7 +2052,7 @@ export class CampaignManager {
         // sentence. The prose-derived verdict remains the fallback.
         const run = readPlaymodeRun(this.projectRoot, this.sprintStartMs(milestone));
         if (run.found && run.total !== undefined) {
-          const green = run.failed === 0 && run.total > 0;
+          const green = run.green === true;
           milestone.testVerdict = green ? run.detail : undefined;
           milestone.testVerdictUnfiltered = green ? run.unfiltered : undefined;
           milestone.testFailures = run.failedNames && run.failedNames.length > 0 ? run.failedNames.slice(0, 5) : verdict?.failedTests;
@@ -2080,6 +2101,30 @@ export class CampaignManager {
       const compile = await this.measureCompile();
       milestone.compileVerdict = compile;
       const compileBroken = compile.ran && !compile.ok;
+      // A verifier that could not run proves nothing: at the final sprint that
+      // is a missing proof, not a pass (Codex 2026-09-11 B#2).
+      const compileNotRun = isLast && !compile.ran;
+      // A non-final sprint that does not compile is not green either: it
+      // advanced with the failure disclosed, and the next sprint inherited a
+      // red tree (Codex 2026-09-11 B#14). Same budget as the delivery gate;
+      // past it the attempt is charged and the milestone fails on its own.
+      if (!isLast && compileBroken) {
+        if (deliveryBouncesSpent < this.maxMilestoneAttempts) {
+          milestone.deliveryVerificationBounced = true;
+          milestone.deliveryVerificationBounces = deliveryBouncesSpent + 1;
+          const marker = "\n\n[COMPILE GATE — latest measurement]";
+          const cut = milestone.prompt.indexOf(marker);
+          if (cut >= 0) milestone.prompt = milestone.prompt.slice(0, cut);
+          milestone.prompt += `${marker}\nTHE PROJECT DOES NOT COMPILE${typeof compile.errors === "number" ? ` — ${compile.errors} error(s)` : ""}. ` +
+            `Fix that before anything else; a sprint is not green while the tree does not build.${compile.detail ? ` The verifier said: ${compile.detail}` : ""}`;
+          this.persist(campaign);
+          getLoggerSafe().warn("Sprint blocked: the tree does not compile", { id: campaign.id, milestone: milestone.id, bounce: milestone.deliveryVerificationBounces, errors: compile.errors });
+          this.submitCurrentMilestone(campaign, { countAttempt: deliveryBouncesSpent > 0 });
+          return;
+        }
+        await this.onMilestoneOutcome(campaign, milestone, TaskStatus.failed, `The tree does not compile${typeof compile.errors === "number" ? ` (${compile.errors} error(s))` : ""}: ${compile.detail ?? ""}`.slice(0, 600), { countAttempt: true });
+        return;
+      }
       // PLAY-THROUGH PROOF. A green suite and a clean compile say the game
       // builds and its tests pass; neither says it can be played. Measured
       // 2026-09-10: delivered green, entry scene idle after boot, no level
@@ -2104,7 +2149,7 @@ export class CampaignManager {
       // while earlier proofs are missing (a build is minutes), and disclosed
       // as NOT MEASURED then, never as a pass.
       const earlierProofsMissing =
-        !milestone.testVerdict || milestone.testVerdictUnfiltered !== true || compileBroken || playthroughMissing;
+        !milestone.testVerdict || milestone.testVerdictUnfiltered !== true || compileBroken || compileNotRun || playthroughMissing;
       const build = isLast
         ? earlierProofsMissing
           ? { ran: false, detail: "not attempted: earlier delivery proofs are missing (suite, compile or play-through)" }
@@ -2112,6 +2157,9 @@ export class CampaignManager {
         : undefined;
       if (build !== undefined) milestone.buildVerdict = build;
       const buildBroken = Boolean(build?.ran) && build?.ok !== true;
+      // The build was attempted (earlier proofs stood) and could not run: no
+      // artifact was measured — a missing proof, disclosed by its reason.
+      const buildNotRun = isLast && build !== undefined && !earlierProofsMissing && !build.ran;
       // THE PLAYER, PLAYED. With an artifact in hand the campaign plays it
       // (unity_run_player) — real rendering, real frame rate — and reads the
       // verdict back. A player that runs but cannot be played to an outcome
@@ -2119,6 +2167,9 @@ export class CampaignManager {
       const player = isLast && build?.ran && build.ok === true ? await this.measurePlayerRun(milestone, build) : undefined;
       if (player !== undefined) milestone.playerPlaythrough = player;
       const playerBroken = player !== undefined && player.found && player.ok !== true;
+      // An artifact in hand that was never played to a verdict — no runner,
+      // the run could not start, or it left no file — is a missing proof too.
+      const playerMissing = isLast && build?.ran === true && build.ok === true && (player === undefined || !player.found);
       // THE GDD'S OWN NUMBERS. "60 fps", "loads in under 3 s", "a round lasts
       // 30–90 s" were repeated to the planner and measured by nothing until
       // 2026-09-10. Each is now answered from the play-throughs' timing (the
@@ -2128,7 +2179,7 @@ export class CampaignManager {
       const claims = isLast ? this.measureGddClaims(campaign, playthrough, player) : undefined;
       if (claims) milestone.gddClaims = claims.lines;
       const claimsBroken = Boolean(claims?.refusal);
-      const deliveryProofMissing = earlierProofsMissing || buildBroken || playerBroken || claimsBroken;
+      const deliveryProofMissing = earlierProofsMissing || buildBroken || buildNotRun || playerBroken || playerMissing || claimsBroken;
       // What is missing, in words — for the bounce, the NOT DELIVERED report
       // and the stored milestone. Empty when everything stands.
       const missingProofs: string[] = [];
@@ -2136,8 +2187,11 @@ export class CampaignManager {
         if (!milestone.testVerdict) missingProofs.push("no test run was observed");
         else if (milestone.testVerdictUnfiltered !== true) missingProofs.push("the only green test run was FILTERED (a subset the sprint chose)");
         if (compileBroken) missingProofs.push(`the project does not compile${typeof compile.errors === "number" ? ` (${compile.errors} error(s))` : ""}`);
+        if (compileNotRun) missingProofs.push(`the compile check did not run: ${compile.detail ?? "no reason recorded"}`.slice(0, 220));
         if (playthroughMissing) missingProofs.push(describePlaythrough(playthrough).slice(0, 220));
         if (buildBroken) missingProofs.push(`the player build failed: ${(build?.reasons ?? []).slice(0, 2).join("; ") || build?.detail || "no reason recorded"}`.slice(0, 220));
+        if (buildNotRun) missingProofs.push(`the player build did not run: ${build?.detail ?? "no reason recorded"}`.slice(0, 220));
+        if (playerMissing) missingProofs.push(`the built player was never played to a verdict${this.runPlayer ? " (unity_run_player left no verdict)" : " (no player runner is configured)"}`);
         if (playerBroken && player) missingProofs.push(`inside the built player: ${describePlaythrough(player)}`.slice(0, 220));
         if (claims?.refusal) missingProofs.push(claims.refusal.slice(0, 220));
         milestone.deliveryProofsMissing = missingProofs;
@@ -2629,12 +2683,43 @@ export class CampaignManager {
     // gaps it failed to close either. Deliver, with the ladder's own ❌ line
     // and the unclosed gaps rendered by the report (so a re-send after a lost
     // report carries the same caveats).
-    const plannedMilestones = campaign.milestones.filter((m) => !m.id.startsWith("mcov"));
+    const plannedMilestones = campaign.milestones.filter((m) => !m.id.startsWith("mcov") && !m.id.startsWith("mfinal"));
     if (
       milestone.id.startsWith("mcov") &&
       plannedMilestones.length > 0 &&
       plannedMilestones.every((m) => m.status === "green")
     ) {
+      // The remediation may have changed the game since the last sprint's
+      // proofs — and it was never played, built or measured itself. Ending
+      // here set `done` without any of the final gates (Codex 2026-09-11
+      // B#1). A FINAL PROOF SPRINT is appended instead: it is the ladder's
+      // last milestone, so the whole delivery gate judges the tree as it is.
+      if (!campaign.milestones.some((m) => m.id.startsWith("mfinal"))) {
+        const gaps = campaign.milestones.filter((m) => m.id.startsWith("mcov") && m.status !== "green").map((m) => m.title);
+        const finalProof: CampaignMilestone = {
+          id: `mfinal-${campaign.milestones.length + 1}`,
+          title: "Final delivery proofs",
+          prompt:
+            "FINAL DELIVERY PROOFS: the coverage remediation ended and the game as it is NOW must be proven, not the game an earlier sprint saw. " +
+            "Run unity_verify_change (compile), run the FULL PlayMode suite UNFILTERED, run unity_playthrough with sessions \"all\" and capture frames, " +
+            "then run unity_build_player. Fix only what these measurements name. Do NOT audit; the tools' own output is the report." +
+            (gaps.length > 0 ? ` Unclosed coverage gaps stay named in the report: ${gaps.slice(0, 4).join("; ")}.` : ""),
+          status: "pending",
+          attempts: 0,
+          visualGateArmed: true,
+        } as CampaignMilestone;
+        campaign.milestones.push(finalProof);
+        campaign.currentMilestone = campaign.milestones.length - 1;
+        campaign.state = "executing";
+        campaign.lastError = undefined;
+        this.persist(campaign);
+        await this.tell(
+          campaign,
+          `⚠️ Coverage remediation ended without closing ${gaps.length || "its"} gap(s). The game is NOT delivered on that alone — a final proof sprint runs the whole delivery gate on the tree as it is now.`,
+        );
+        this.submitCurrentMilestone(campaign);
+        return;
+      }
       // Measure the tree being delivered, not the one an earlier sprint saw.
       // Measured 2026-09-07 07:00: the report rendered findings stored two
       // days before ("198 sprite textures", no placeholder line) while the
@@ -2794,12 +2879,17 @@ export class CampaignManager {
 
   /** When this milestone's lineage began — evidence older than this was earned by another build. */
   private sprintStartMs(milestone: CampaignMilestone): number {
+    // The lineage root's creation was the clock; a bounce keeps the root, so
+    // a verdict earned BEFORE the bounce — before the sprint changed the game
+    // again — still counted as this sprint's (Codex 2026-09-11 B#4). The
+    // later of the root's creation and this ATTEMPT's start is the clock now.
+    const attemptStart = milestone.attemptStartedAtMs ?? milestone.startedAtMs ?? 0;
     try {
       const rootId = milestone.taskId ? this.taskManager.findLineageRootId(milestone.taskId as TaskId) : null;
       const root = rootId ? this.taskManager.getStatus(rootId) : null;
-      return root?.createdAt ?? Date.now() - 6 * 60 * 60_000;
+      return Math.max(root?.createdAt ?? Date.now() - 6 * 60 * 60_000, attemptStart);
     } catch {
-      return Date.now() - 6 * 60 * 60_000;
+      return Math.max(Date.now() - 6 * 60 * 60_000, attemptStart);
     }
   }
 
@@ -2950,6 +3040,15 @@ export class CampaignManager {
   private static readonly MAX_GAP_SPRINTS_PER_ROUND = 4;
 
   private async buildCoverageRemediation(campaign: Campaign): Promise<CampaignMilestone[] | undefined> {
+    // After the FINAL PROOF sprint there is no further remediation: the
+    // unclosed gaps stay named in the report. Auditing again would append
+    // another remediation round and, on its exhaustion, another proof sprint
+    // — a loop with no end (Codex 2026-09-11 B#1 follow-up).
+    if (campaign.milestones.some((m) => m.id.startsWith("mfinal"))) {
+      campaign.coverageAuditNote = "coverage audit not repeated after the final proof sprint — the unclosed gaps are named in the report";
+      this.persist(campaign);
+      return undefined;
+    }
     // Rounds, not sprints: a round now appends one sprint per gap.
     const priorRounds = campaign.milestones.reduce((max, m) => {
       const round = /^mcov(\d+)/.exec(m.id);
@@ -3240,8 +3339,12 @@ export class CampaignManager {
 
   /** The newest play-through's runtime scene dump, for the structural check (see built-as-specified opts.runtime). */
   private latestRuntimeEvidence(campaign: Campaign): import("../agents/autonomy/built-as-specified.js").RuntimeSceneEvidence | undefined {
-    const withRuntime = [...(campaign.milestones ?? [])].reverse().find((m) => m.playthroughVerdict?.found && m.playthroughVerdict.runtime);
-    return withRuntime?.playthroughVerdict?.runtime;
+    // Only the CURRENT sprint's play-through, and only when it played to an
+    // outcome: an earlier sprint's dump showing sprites withdrew the "render
+    // NOTHING" refusal over a scene emptied since (Codex 2026-09-11 B#5).
+    const current = (campaign.milestones ?? [])[campaign.currentMilestone];
+    const v = current?.playthroughVerdict;
+    return v?.found && v.ok === true ? v.runtime : undefined;
   }
 
   private measureDeliveryStructure(campaign: Campaign): { refusal?: string; lines: string[] } {

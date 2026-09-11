@@ -879,7 +879,7 @@ export class StradaConformanceGuard {
       `frames vary too little to prove drawing: ${digests.size}/${sampled} distinct ` +
       `(${Math.round(distinctRatio * 100)}%); the scene instantiates ` +
       `${census.gameObjects} GameObject(s) and ${census.renderers} renderer(s) — ` +
-      `a playfield (board cubes, tray, conveyor, pigs) was never added to what the camera sees`
+      `the GDD's playfield objects were never added to what the camera sees`
     );
   }
 

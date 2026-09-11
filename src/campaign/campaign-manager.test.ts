@@ -23,13 +23,18 @@ class FakeTaskManager extends EventEmitter {
   private parents = new Map<string, string>();
   private results = new Map<string, string>();
 
-  submit(chatId: string, _channelType: string, prompt: string): Task {
+  submit(chatId: string, _channelType: string, prompt: string, opts?: { parentId?: string }): Task {
     this.counter += 1;
     const id = `task_${this.counter}`;
     this.submitted.push({ chatId, prompt });
     this.prompts.set(id, prompt);
     this.statuses.set(id, TaskStatus.executing);
     this.createdAts.set(id, Date.now());
+    // Production links a retry to its parent, so the LINEAGE ROOT stays the
+    // first attempt; the fake dropped the fourth argument and every task was
+    // its own root, which made freshness look per-attempt for free (Codex
+    // 2026-09-11, Q2 step 2).
+    if (opts?.parentId) this.parents.set(id, opts.parentId);
     return { id, chatId, status: TaskStatus.executing } as unknown as Task;
   }
 
@@ -881,6 +886,7 @@ describe("CampaignManager", () => {
     const original = buildVerdict;
     manager = new CampaignManager({
       storage,
+      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); },
       verifyCompile: async () => compileVerdict,
       buildPlayer: async () => { builds++; return original; },
       planner: { planMilestones: vi.fn().mockResolvedValue(LADDER) } as unknown as CampaignPlanner,
@@ -1057,6 +1063,102 @@ describe("CampaignManager", () => {
     expect(report).toContain("inside the built player: play-through OK in Entry");
   });
 
+  it("a measurement that could NOT run is a missing proof at delivery, never a pass (Codex 2026-09-11 B#2)", async () => {
+    const gdd = "# GDD\n\nA small game.";
+    compileVerdict = { ok: false, ran: false, detail: "the Unity bridge is not connected" };
+    const campaign = manager.startFromGdd(ctx, gdd, "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    const green = { testsGreen: true, detail: "PlayMode verification passed: 42 of 42 tests passed (unfiltered — the whole PlayMode suite)", unfiltered: true };
+    tasks.verifications.set("task_3", green);
+    tasks.emit("task:completed", "task_3", "green, shipping");
+
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+    const m = storage.get(campaign.id)!.milestones[2]!;
+    expect(m.deliveryProofsMissing?.join(" ")).toContain("the compile check did not run");
+    expect(storage.get(campaign.id)!.state).not.toBe("done");
+    // …and the builder that cannot run is named too, once the compile stands.
+    compileVerdict = { ok: true, ran: true, errors: 0 };
+    buildVerdict = { ran: false, detail: "no player builder is configured" };
+    tasks.verifications.set("task_4", green);
+    tasks.emit("task:completed", "task_4", "green, shipping");
+    await vi.waitFor(() => {
+      const missing = storage.get(campaign.id)!.milestones[2]!.deliveryProofsMissing?.join(" ") ?? "";
+      expect(missing).toContain("the player build did not run");
+    }, { timeout: 15_000 });
+    expect(storage.get(campaign.id)!.state).not.toBe("done");
+  });
+
+  it("a non-final sprint that does not compile is bounced, then fails — it does not advance the ladder (Codex 2026-09-11 B#14)", async () => {
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    compileVerdict = { ok: false, ran: true, errors: 12, detail: "Headless compile failed with 12 error(s)." };
+    settleMilestone("sprint A done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    // Still sprint 1: the tree does not build, so the ladder did not move on.
+    expect(storage.get(campaign.id)!.currentMilestone).toBe(0);
+    expect(tasks.submitted[1]!.prompt).toContain("THE PROJECT DOES NOT COMPILE");
+    expect(storage.get(campaign.id)!.milestones[0]!.status).not.toBe("green");
+    settleMilestone("sprint A done again");
+    await vi.waitFor(() => expect(tasks.submitted.length).toBeGreaterThanOrEqual(3));
+    expect(storage.get(campaign.id)!.currentMilestone).toBe(0);
+    compileVerdict = { ok: true, ran: true, errors: 0 };
+  });
+
+  it("a verdict earned BEFORE a delivery bounce is stale for the attempt after it (Codex 2026-09-11 B#4)", async () => {
+    const gdd = "# GDD\n\nA small game.";
+    // The completion hook stops touching the verdict: nothing re-plays the game.
+    onTaskCompleted = () => {};
+    writePlaythroughVerdict(true);
+    const campaign = manager.startFromGdd(ctx, gdd, "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    // A verdict earned during the FIRST attempt at the final sprint: written
+    // one millisecond after that attempt began, and never renewed.
+    const firstAttemptStart = storage.get(campaign.id)!.milestones[2]!.attemptStartedAtMs!;
+    expect(firstAttemptStart).toBeGreaterThan(0);
+    const verdictPath = writePlaythroughVerdict(true);
+    const earned = new Date(firstAttemptStart + 1);
+    utimesSync(verdictPath, earned, earned);
+    const green = { testsGreen: true, detail: "PlayMode verification passed: 42 of 42 tests passed (unfiltered — the whole PlayMode suite)", unfiltered: true };
+    tasks.verifications.set("task_3", green);
+    // The player run fails, so the sprint bounces with the verdict still on disk.
+    playerVerdictOnRun = { ok: false, extra: {} };
+    tasks.emit("task:completed", "task_3", "green, shipping");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+
+    // Second attempt: the game was NOT replayed, and the old verdict no longer
+    // counts — the attempt clock moved even though the milestone clock did not.
+    const secondAttemptStart = storage.get(campaign.id)!.milestones[2]!.attemptStartedAtMs!;
+    expect(secondAttemptStart).toBeGreaterThan(firstAttemptStart);
+    playerVerdictOnRun = { ok: true, extra: {} };
+    tasks.verifications.set("task_4", green);
+    tasks.emit("task:completed", "task_4", "green, shipping");
+    await vi.waitFor(() => {
+      const m = storage.get(campaign.id)!.milestones[2]!;
+      expect(m.playthroughVerdict?.stale === true || m.playthroughVerdict?.found === false).toBe(true);
+    }, { timeout: 15_000 });
+    expect(storage.get(campaign.id)!.state).not.toBe("done");
+  });
+
+  it("the runtime dump that withdraws a structural refusal is THIS sprint's, and only from an ok play-through (Codex 2026-09-11 B#5)", () => {
+    const runtime = { renderers: 247, worldRenderers: 12, spriteRenderers: 9, meshRenderers: 3, canvases: 1, particleSystems: 0, audioSources: 2, audioPlaying: 1, sprites: ["Hero"], meshes: [], primitiveMeshes: [] };
+    const withMilestones = (milestones: unknown[], current: number) => ({ milestones, currentMilestone: current }) as never;
+    const latest = (c: unknown) => (manager as unknown as { latestRuntimeEvidence: (c: unknown) => unknown }).latestRuntimeEvidence(c);
+    // An earlier sprint's dump does not speak for the sprint being delivered.
+    expect(latest(withMilestones([{ playthroughVerdict: { found: true, ok: true, runtime } }, { playthroughVerdict: { found: true, ok: true } }], 1))).toBeUndefined();
+    // A current verdict that is not ok proves nothing either.
+    expect(latest(withMilestones([{ playthroughVerdict: { found: true, ok: false, runtime } }], 0))).toBeUndefined();
+    // This sprint, played to an outcome: the dump counts.
+    expect(latest(withMilestones([{ playthroughVerdict: { found: true, ok: true, runtime } }], 0))).toMatchObject({ worldRenderers: 12 });
+  });
+
   it("records how the plan covers the GDD's sections and says what stayed unplanned (structural planner 2026-09-10)", async () => {
     const structured = {
       milestones: [
@@ -1072,6 +1174,8 @@ describe("CampaignManager", () => {
     };
     manager = new CampaignManager({
       storage,
+      buildPlayer: async () => buildVerdict,
+      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); },
       verifyCompile: async () => compileVerdict,
       planner: { planMilestones: vi.fn().mockResolvedValue(structured) } as unknown as CampaignPlanner,
       taskManager: tasks as unknown as TaskManager,
@@ -1108,10 +1212,12 @@ describe("CampaignManager", () => {
     tasks.emit("task:completed", "task_3", "green, shipping");
     await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
     const m = storage.get(campaign.id)!.milestones[2]!;
+    // A red record at completion is a FAILED attempt (Codex 2026-09-11 B#14), not a green sprint bounced later.
     expect(m.testVerdict).toBeUndefined();
+    expect(m.status).not.toBe("green");
     expect(m.testRunSource).toBe("nunit");
     expect(m.testFailures).toEqual(["Game.Tests.WinLevel_ReachesWonState"]);
-    expect(tasks.submitted[3]!.prompt).toContain("no test run was observed");
+    expect(storage.get(campaign.id)!.state).toBe("executing");
 
     // Prose says filtered; the file says the whole suite passed with no filter.
     writeRun({ total: 215, passed: 215, failed: 0, failedNames: [], filter: null, categories: null, unfiltered: true });
@@ -2120,6 +2226,9 @@ describe("CampaignManager", () => {
       taskManager: tasks as unknown as TaskManager,
       messenger: async (chatId, text) => messages.push({ chatId, text }),
       projectRoot,
+      verifyCompile: async () => compileVerdict,
+      buildPlayer: async () => buildVerdict,
+      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); },
       retryAdoptionGraceMs: 10,
       completedSettleDelayMs: 0,
       milestoneTimeBoxMs: 60 * 60_000,
@@ -2170,6 +2279,9 @@ describe("CampaignManager", () => {
     } as unknown as CampaignPlanner;
     manager = new CampaignManager({
       storage,
+      verifyCompile: async () => compileVerdict,
+      buildPlayer: async () => buildVerdict,
+      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); },
       planner,
       taskManager: tasks as unknown as TaskManager,
       messenger: async (chatId, text) => {
@@ -2211,7 +2323,7 @@ describe("CampaignManager", () => {
     expect(messages.at(-1)!.text).toContain("Moving on to");
   });
 
-  it("a spent coverage-remediation sprint delivers the built game WITH the unclosed gaps named", async () => {
+  it("a spent coverage-remediation sprint does not deliver by itself: a FINAL PROOF sprint runs the whole gate, then the report names the unclosed gaps (Codex 2026-09-11 B#1)", async () => {
     // Audited 2026-09-02: a remediation sprint (mcovN) that exhausted its
     // attempts after every planned sprint had gone green ended the campaign
     // with "❌ Campaign stopped" — nothing at all was reported about the game
@@ -2226,6 +2338,9 @@ describe("CampaignManager", () => {
     } as unknown as CampaignPlanner;
     manager = new CampaignManager({
       storage,
+      verifyCompile: async () => compileVerdict,
+      buildPlayer: async () => buildVerdict,
+      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); },
       planner,
       taskManager: tasks as unknown as TaskManager,
       messenger: async (chatId, text) => {
@@ -2253,10 +2368,23 @@ describe("CampaignManager", () => {
     await vi.waitFor(() => expect(tasks.submitted).toHaveLength(5));
     tasks.emit("task:failed", "task_5", "the boss scene will not compile");
 
-    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+    // Not `done` on that: the game was never re-proven after the remediation
+    // touched it. A final proof sprint is the ladder's last milestone now.
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(6));
+    expect(storage.get(campaign.id)!.state).toBe("executing");
+    expect(tasks.submitted[5]!.prompt).toContain("FINAL DELIVERY PROOFS");
+    expect(tasks.submitted[5]!.prompt).toContain("Dragon boss");
+    expect(storage.get(campaign.id)!.milestones.at(-1)!.id).toMatch(/^mfinal-/);
+    // The proof sprint captured a frame of the running game.
+    mkdirSync(join(projectRoot, "Recordings", "playthrough"), { recursive: true });
+    writeFileSync(join(projectRoot, "Recordings", "playthrough", "frame_00099.png"), Buffer.concat([Buffer.from("89504e470d0a1a0a", "hex"), Buffer.alloc(4096, 7)]));
+    settleMilestone("final proofs green");
+
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"), { timeout: 15_000 });
     const delivered = storage.get(campaign.id)!;
-    expect(delivered.milestones.filter((m) => m.status === "green")).toHaveLength(3);
-    expect(delivered.milestones.at(-1)!.status).toBe("failed");
+    expect(delivered.milestones.filter((m) => m.status === "green")).toHaveLength(4);
+    expect(delivered.milestones.at(-1)!.status).toBe("green");
+    expect(delivered.milestones.at(-2)!.status).toBe("failed");
     expect(delivered.deliveryReported).toBe(true);
 
     const report = messages.at(-1)!.text;
@@ -2285,6 +2413,9 @@ describe("CampaignManager", () => {
     } as unknown as CampaignPlanner;
     manager = new CampaignManager({
       storage,
+      verifyCompile: async () => compileVerdict,
+      buildPlayer: async () => buildVerdict,
+      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); },
       planner,
       taskManager: tasks as unknown as TaskManager,
       messenger: async (chatId, text) => {
@@ -2353,6 +2484,9 @@ describe("CampaignManager", () => {
     } as unknown as CampaignPlanner;
     manager = new CampaignManager({
       storage,
+      verifyCompile: async () => compileVerdict,
+      buildPlayer: async () => buildVerdict,
+      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); },
       planner,
       taskManager: tasks as unknown as TaskManager,
       messenger: async (chatId, text) => {
@@ -2397,6 +2531,9 @@ describe("CampaignManager", () => {
     } as unknown as CampaignPlanner;
     manager = new CampaignManager({
       storage,
+      verifyCompile: async () => compileVerdict,
+      buildPlayer: async () => buildVerdict,
+      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); },
       planner,
       taskManager: tasks as unknown as TaskManager,
       messenger: async (chatId, text) => {
@@ -2436,6 +2573,9 @@ describe("CampaignManager", () => {
     const seenPrompts: string[] = [];
     manager = new CampaignManager({
       storage,
+      verifyCompile: async () => compileVerdict,
+      buildPlayer: async () => buildVerdict,
+      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); },
       planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
       taskManager: tasks as unknown as TaskManager,
       messenger: async (chatId, text) => { messages.push({ chatId, text }); },
@@ -2476,6 +2616,9 @@ describe("CampaignManager", () => {
     } as unknown as CampaignPlanner;
     manager = new CampaignManager({
       storage,
+      verifyCompile: async () => compileVerdict,
+      buildPlayer: async () => buildVerdict,
+      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); },
       planner,
       taskManager: tasks as unknown as TaskManager,
       messenger: async (chatId, text) => {
@@ -2512,13 +2655,29 @@ describe("CampaignManager", () => {
     await vi.waitFor(() => expect(tasks.submitted).toHaveLength(5), { timeout: 5_000 });
     tasks.emit("task:failed", "task_5", "no art was made");
 
-    await vi.waitFor(() => expect(storage.get(campaign.id)!.deliveryReported).toBe(true), { timeout: 5_000 });
+    // The final proof sprint measures the tree as it is; the refusal stands
+    // through its bounce budget and the campaign is NOT delivered.
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(6), { timeout: 5_000 });
+    expect(tasks.submitted[5]!.prompt).toContain("FINAL DELIVERY PROOFS");
+    for (let round = 0; round < 4 && storage.get(campaign.id)!.state !== "failed"; round++) {
+      const before = tasks.submitted.length;
+      mkdirSync(join(projectRoot, "Recordings", "playthrough"), { recursive: true });
+      writeFileSync(join(projectRoot, "Recordings", "playthrough", `frame_0009${round}.png`), Buffer.concat([Buffer.from("89504e470d0a1a0a", "hex"), Buffer.alloc(4096, 7 + round)]));
+      settleMilestone("final proofs green");
+      await vi.waitFor(() => {
+        const c = storage.get(campaign.id)!;
+        expect(c.state === "failed" || tasks.submitted.length > before).toBe(true);
+      }, { timeout: 15_000 });
+    }
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"), { timeout: 5_000 });
     const delivered = storage.get(campaign.id)!;
-    expect(delivered.state).toBe("failed");
-    expect(delivered.lastError).toContain("NOT DELIVERED");
-    const report = messages.at(-1)!.text;
+    // The refusal now stops the FINAL PROOF sprint's own gate: the campaign
+    // fails with the measured reason and resumes itself with a fresh budget
+    // (Codex 2026-09-11 B#1) instead of a one-shot partial delivery.
+    expect(delivered.lastError).toContain("do not render the project's own art");
+    expect(delivered.autoReviveAt).toBeGreaterThan(Date.now());
+    const report = messages.map((m) => m.text).find((t) => t.includes("NOT DELIVERED"))!;
     expect(report).toContain("NOT DELIVERED");
-    expect(report).toContain("REFUSAL STANDS at delivery");
     expect(report).toContain("410 of them placeholder-grade");
   });
 
@@ -2539,7 +2698,10 @@ describe("CampaignManager", () => {
       planner,
       taskManager: tasks as unknown as TaskManager,
       messenger: async (chatId, text) => messages.push({ chatId, text }),
-      projectRoot, // no Recordings/ dir → no evidence
+      projectRoot,
+      verifyCompile: async () => compileVerdict,
+      buildPlayer: async () => buildVerdict,
+      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); }, // no Recordings/ dir → no evidence
       retryAdoptionGraceMs: 10,
       completedSettleDelayMs: 0,
       milestoneTimeBoxMs: 60 * 60_000,
@@ -2635,6 +2797,9 @@ describe("CampaignManager", () => {
       taskManager: tasks as unknown as TaskManager,
       messenger: async (chatId, text) => messages.push({ chatId, text }),
       projectRoot,
+      verifyCompile: async () => compileVerdict,
+      buildPlayer: async () => buildVerdict,
+      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); },
       retryAdoptionGraceMs: 10,
       completedSettleDelayMs: 0,
       milestoneTimeBoxMs: 60 * 60_000,
@@ -2829,6 +2994,9 @@ describe("CampaignManager", () => {
       taskManager: tasks as unknown as TaskManager,
       messenger: async (chatId, text) => messages.push({ chatId, text }),
       projectRoot,
+      verifyCompile: async () => compileVerdict,
+      buildPlayer: async () => buildVerdict,
+      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); },
       retryAdoptionGraceMs: 10,
       completedSettleDelayMs: 0,
       milestoneTimeBoxMs: 60 * 60_000,
@@ -3038,6 +3206,9 @@ describe("CampaignManager", () => {
     const planMilestones = vi.fn().mockResolvedValue(LADDER);
     manager = new CampaignManager({
       storage,
+      verifyCompile: async () => compileVerdict,
+      buildPlayer: async () => buildVerdict,
+      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); },
       planner: { planMilestones } as unknown as CampaignPlanner,
       taskManager: tasks as unknown as TaskManager,
       messenger: async (chatId, text) => {
@@ -3141,6 +3312,9 @@ describe("CampaignManager", () => {
       taskManager: tasks as unknown as TaskManager,
       messenger: async (chatId, text) => messages.push({ chatId, text }),
       projectRoot,
+      verifyCompile: async () => compileVerdict,
+      buildPlayer: async () => buildVerdict,
+      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); },
       retryAdoptionGraceMs: 10,
       completedSettleDelayMs: 0,
       milestoneTimeBoxMs: 60 * 60_000,
@@ -3307,6 +3481,9 @@ describe("CampaignManager", () => {
       taskManager: tasks as unknown as TaskManager,
       messenger: async (chatId, text) => messages.push({ chatId, text }),
       projectRoot,
+      verifyCompile: async () => compileVerdict,
+      buildPlayer: async () => buildVerdict,
+      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); },
       retryAdoptionGraceMs: 10,
       completedSettleDelayMs: 0,
       milestoneTimeBoxMs: 60 * 60_000,
@@ -3362,6 +3539,9 @@ describe("CampaignManager", () => {
       taskManager: tasks as unknown as TaskManager,
       messenger: async (chatId, text) => messages.push({ chatId, text }),
       projectRoot,
+      verifyCompile: async () => compileVerdict,
+      buildPlayer: async () => buildVerdict,
+      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); },
       retryAdoptionGraceMs: 10,
       completedSettleDelayMs: 0,
       milestoneTimeBoxMs: 60 * 60_000,
@@ -3512,6 +3692,9 @@ describe("CampaignManager", () => {
       } as unknown as CampaignPlanner;
       manager = new CampaignManager({
         storage, planner, taskManager: tasks as unknown as TaskManager,
+      verifyCompile: async () => compileVerdict,
+      buildPlayer: async () => buildVerdict,
+      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); },
         messenger: async (chatId, text) => { messages.push({ chatId, text }); },
         projectRoot, retryAdoptionGraceMs: 10, completedSettleDelayMs: 0, milestoneTimeBoxMs: 60 * 60_000,
       });
