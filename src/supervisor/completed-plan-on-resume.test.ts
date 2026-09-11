@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
-import { completedPlanOnResume, dependentClosure } from "./supervisor-brain.js";
+import { completedPlanOnResume, dependentClosure, stopAfterDeadline } from "./supervisor-brain.js";
 import type { GoalNode, GoalNodeId, GoalTree } from "../goals/types.js";
 
 function node(id: string, parentId: string | null, status: GoalNode["status"], task = `task ${id}`): GoalNode {
@@ -70,6 +70,50 @@ describe("a resumed task whose saved plan is already complete (2026-09-10 21:20)
     expect(dependentClosure(t, new Set(["a"])).sort()).toEqual(["a", "b", "c"]);
     expect(dependentClosure(t, new Set(["d"]))).toEqual(["d"]);
     expect(dependentClosure(undefined, new Set(["a"]))).toEqual(["a"]);
+
+    // …transitively, whatever ORDER the nodes were inserted in: a chain
+    // written back-to-front used to need one pass per link and a single pass
+    // reached the whole chain by luck (Codex 2026-09-11 E#16).
+    const reversed = tree([
+      node("root", null, "pending"),
+      { ...node("z", "root", "completed"), dependsOn: ["y" as GoalNodeId] },
+      { ...node("y", "root", "completed"), dependsOn: ["x" as GoalNodeId] },
+      { ...node("x", "root", "completed") },
+    ]);
+    expect(dependentClosure(reversed, new Set(["x"])).sort()).toEqual(["x", "y", "z"]);
+
+    // A step that waited on a scaffolding PARENT waited on its whole subtree
+    // (Codex 2026-09-11 E#3): rejecting the child invalidates that consumer.
+    const throughParent = tree([
+      node("root", null, "pending"),
+      node("p", "root", "pending"),
+      { ...node("a", "p", "completed") },
+      { ...node("b", "root", "completed"), dependsOn: ["p" as GoalNodeId] },
+      { ...node("c", "root", "completed"), dependsOn: ["b" as GoalNodeId] },
+      { ...node("e", "root", "completed") },
+    ]);
+    expect(dependentClosure(throughParent, new Set(["a"])).sort()).toEqual(["a", "b", "c"]);
+    // The parent itself is not invalidated — it has no work of its own.
+    expect(dependentClosure(throughParent, new Set(["a"]))).not.toContain("p");
+  });
+
+  it("nothing new is verified after the resume deadline (Codex 2026-09-11 E#11)", async () => {
+    const started: string[] = [];
+    let past = false;
+    const guarded = stopAfterDeadline(async (n: string) => { started.push(n); return "ok"; }, () => past);
+    await expect(guarded("a")).resolves.toBe("ok");
+    past = true;
+    await expect(guarded("b")).rejects.toThrow(/deadline passed/);
+    expect(started).toEqual(["a"]);
+    // …and the deadline is what flips it: the timeout sets the flag before it
+    // resolves the race, so the aggregator stops instead of running on.
+    const source = readFileSync("src/supervisor/supervisor-brain.ts", "utf8");
+    const at = source.indexOf("const alreadyDone = completedPlanOnResume(context.goalTree);");
+    expect(at).toBeGreaterThan(0);
+    const block = source.slice(at, source.indexOf('"No sub-tasks after decomposition"', at));
+    expect(block).toContain("let verifyDeadlinePassed = false;");
+    expect(block).toContain("verifyDeadlinePassed = true;");
+    expect(block).toContain("stopAfterDeadline(");
   });
 
   it("the rejection write preserves what the node already recorded (Codex 2026-09-11 D#18)", () => {
@@ -79,11 +123,20 @@ describe("a resumed task whose saved plan is already complete (2026-09-10 21:20)
     expect(block).toContain("node?.result");
     expect(block).toContain("node?.retryCount");
     expect(block).toContain("node?.reviewStatus");
+    // …including the review iterations, which a `0` here would silently drop
+    // (Codex 2026-09-11 E#16).
+    expect(block).toContain("node?.reviewIterations");
   });
 
   it("the supervisor asks it before declaring 'No sub-tasks after decomposition'", () => {
     const source = readFileSync("src/supervisor/supervisor-brain.ts", "utf8");
     const at = source.indexOf('"No sub-tasks after decomposition"');
     expect(source.lastIndexOf("completedPlanOnResume(context.goalTree)", at)).toBeGreaterThan(at - 8000);
+    // …and it ACTS on the answer: a guard that can never be true leaves the
+    // helper call sitting there while every resume falls through to "No
+    // sub-tasks" (Codex 2026-09-11 E#16).
+    const branch = source.slice(source.indexOf("const alreadyDone = completedPlanOnResume(context.goalTree);"), at);
+    expect(branch).toContain("if (alreadyDone) {");
+    expect(branch).not.toMatch(/if \(\s*(?:false|0)\s*&&/);
   });
 });

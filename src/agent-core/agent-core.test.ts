@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { AgentCore } from "./agent-core.js";
+import { AgentCore, workspacePolicyFor } from "./agent-core.js";
 import { ObservationEngine } from "./observation-engine.js";
 import { PriorityScorer } from "./priority-scorer.js";
 import { createObservation } from "./observation-types.js";
@@ -465,5 +465,31 @@ describe("PriorityScorer", () => {
     const result = await scorer.scoreAll([obs]);
     // 45 + 0 source = 45, actionable but not >50 → no boost = 45
     expect(result[0]!.priority).toBe(45);
+  });
+});
+
+describe("workspacePolicyFor — reporting on the tree, or building in it (Codex 2026-09-11 E#13, E#14)", () => {
+  const git = [{ source: "git" }];
+  const none = { workspacePolicy: "none" };
+
+  it("treats every kind of report the same, however it is spaced", () => {
+    // Reporting reads the REAL tree: a lease seeded off HEAD reports clean.
+    for (const noun of ["summary", "report", "note"]) {
+      expect(workspacePolicyFor(git, `Review the staged changes and write a ${noun}`)).toEqual(none);
+      // Two spaces used to let \s+ give one back and the exception never fired.
+      expect(workspacePolicyFor(git, `Review the staged changes and write  a ${noun}`)).toEqual(none);
+      expect(workspacePolicyFor(git, `Look at git status and give me a ${noun} of it`)).toEqual(none);
+    }
+  });
+
+  it("keeps the lease for work that authors a named file, and for ordinary development", () => {
+    expect(workspacePolicyFor(git, "Document the git status panel in docs/panel.md")).toEqual({});
+    expect(workspacePolicyFor(git, "Update docs/uncommitted.md with the new rules")).toEqual({});
+    expect(workspacePolicyFor(git, "Implement a git status panel")).toEqual({});
+    // …and a report that happens to name a file is still a report.
+    expect(workspacePolicyFor(git, "Write a summary of the uncommitted changes into notes.md")).toEqual(none);
+    // No git observation, or a goal that is not about the tree: lease as usual.
+    expect(workspacePolicyFor([{ source: "build" }], "Investigate the uncommitted changes")).toEqual({});
+    expect(workspacePolicyFor(git, "Investigate the failing build")).toEqual({});
   });
 });

@@ -441,13 +441,14 @@ export class SupervisorBrain {
               samplingRate: 1,
               preferDifferentProvider: true,
               maxVerificationCost: Number.POSITIVE_INFINITY,
-            }, (node) => this.verifyNode!(node, context));
+            }, stopAfterDeadline((node: NodeResult) => this.verifyNode!(node, context), () => verifyDeadlinePassed));
             // The verification itself is a model call per node: keep the
             // task's watchdog hearing from us, or a slow reviewer reads as an
             // inactive task (Codex 2026-09-11 C#7).
             // A verifier that never settles used to hold the resume open while
             // the heartbeat reported liveness (Codex 2026-09-11 D#7). The
             // whole batch gets a deadline; past it the resume fails honestly.
+            let verifyDeadlinePassed = false;
             const verifyDeadlineMs = Math.max(
               RESUME_VERIFY_MIN_MS,
               (this.config.nodeTimeoutMs ?? RESUME_VERIFY_MIN_MS) * Math.max(1, alreadyDone.nodeResults.length),
@@ -456,7 +457,10 @@ export class SupervisorBrain {
               context.chatId,
               () => Promise.race([
                 verifier.verifyWithReport(alreadyDone.nodeResults),
-                new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), verifyDeadlineMs).unref?.()),
+                new Promise<"timeout">((resolve) => setTimeout(() => {
+                  verifyDeadlinePassed = true;
+                  resolve("timeout");
+                }, verifyDeadlineMs).unref?.()),
               ]),
               context.onLiveness,
             );
@@ -1018,18 +1022,51 @@ const RESUME_VERIFY_MIN_MS = 120_000;
 export function dependentClosure(tree: GoalTree | undefined, rejected: ReadonlySet<string>): string[] {
   if (!tree) return [...rejected];
   const out = new Set(rejected);
+  const parentOf = (id: string): string | null => {
+    const p = tree.nodes.get(id as GoalNodeId)?.parentId;
+    return p === null || p === undefined ? null : String(p);
+  };
   let grew = true;
   while (grew) {
     grew = false;
+    // A step that waited on a PARENT waited on that parent's whole subtree, so
+    // every ancestor of an invalidated node is unfinished for the purpose of
+    // this test. Comparing only against the invalidated ids themselves left a
+    // consumer of a rejected node's parent marked completed, and its stale
+    // implementation counted as done (Codex 2026-09-11 E#3). The ancestors are
+    // not themselves invalidated — a scaffolding parent has no work of its own.
+    const unfinished = new Set(out);
+    for (const id of out) {
+      for (let p = parentOf(id); p !== null && !unfinished.has(p); p = parentOf(p)) unfinished.add(p);
+    }
     for (const [id, node] of tree.nodes) {
       if (out.has(String(id))) continue;
-      if (node.dependsOn.some((d) => out.has(String(d)))) {
+      if (node.dependsOn.some((d) => unfinished.has(String(d)))) {
         out.add(String(id));
         grew = true;
       }
     }
   }
   return [...out];
+}
+
+/**
+ * Wrap a per-node verification so that NOTHING NEW STARTS once the batch
+ * deadline has passed. `Promise.race` resolves the caller but does not cancel
+ * the aggregator, so a timed-out resume kept launching model calls behind the
+ * verdict it had already returned (Codex 2026-09-11 E#11). The call already in
+ * flight cannot be recalled; every call after the deadline is refused.
+ */
+export function stopAfterDeadline<N, R>(
+  verify: (node: N) => Promise<R>,
+  deadlinePassed: () => boolean,
+): (node: N) => Promise<R> {
+  return (node) => {
+    if (deadlinePassed()) {
+      return Promise.reject(new Error("resume re-verification deadline passed before this node was verified"));
+    }
+    return verify(node);
+  };
 }
 
 export function completedPlanOnResume(tree: GoalTree | undefined): SupervisorResult | null {
