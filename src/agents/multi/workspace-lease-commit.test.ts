@@ -862,6 +862,38 @@ describe("lease commit replay (measured 2026-09-10: three worker commits danglin
   });
 });
 
+describe("an edit made WHILE the lease was seeded is not overwritten (Codex 2026-09-11 N#4)", () => {
+  it("keeps the pre-seed stamp for a file that moved during seeding", async () => {
+    // Both snapshots used to be taken after the copy, so the concurrent edit
+    // became the baseline and the worker's version — made from the old bytes
+    // — overwrote it with zero conflicts reported.
+    const mgr = new WorkspaceLeaseManager({ projectRoot: source, leaseRoot, preferGitWorktree: false });
+    const target = join(source, "Assets", "Scripts", "Existing.cs");
+    // The copy is slow enough for the edit to land inside it.
+    const realCopy = fsp.copyFile.bind(fsp);
+    const spy = vi.spyOn(fsp, "copyFile").mockImplementation(async (from: never, to: never, mode?: never) => {
+      await realCopy(from, to, mode);
+      if (String(from) === target) writeFileSync(target, "MAIN CONCURRENT EDIT", "utf8");
+    });
+    let lease;
+    try {
+      lease = await mgr.acquireLease({ label: "t", workerId: "w", forceTempCopy: true });
+    } finally {
+      spy.mockRestore();
+    }
+    // The worker edits the file it received.
+    writeFileSync(join(lease.path, "Assets", "Scripts", "Existing.cs"), "WORKER BASE + FEATURE", "utf8");
+
+    const result = await lease.commit();
+
+    // The person's edit stands, and the worker's version is preserved.
+    expect(readFileSync(target, "utf8")).toBe("MAIN CONCURRENT EDIT");
+    expect(result.written).not.toContain(join("Assets", "Scripts", "Existing.cs"));
+    expect(result.conflicts).toContain(join("Assets", "Scripts", "Existing.cs"));
+    await lease.release();
+  });
+});
+
 describe("the seed records what the file WAS, not only when it was touched (Codex 2026-09-11 N#3)", () => {
   it("publishes a worker rewrite that preserved the seed mtime", async () => {
     // An asset pipeline that copies with timestamps preserved leaves the

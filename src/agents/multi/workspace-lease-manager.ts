@@ -818,6 +818,13 @@ export class WorkspaceLeaseManager {
       // Best-effort; an unclaimable lease degrades to the old post-seed sidecar.
     }
 
+    // The project AS THE SEEDING SAW IT. Both snapshots used to be taken after
+    // the copy, so a file the main process edited WHILE the lease was being
+    // seeded recorded its new state as the baseline — and the worker's version,
+    // made from the old bytes, overwrote that edit with no conflict reported
+    // (Codex 2026-09-11 N#4).
+    const beforeSeed = await this.snapshotMtimes(sourceRoot, sourceRoot);
+
     try {
       if (useWorktree) {
         try {
@@ -869,6 +876,22 @@ export class WorkspaceLeaseManager {
     //                edit the user makes DURING the run is detectable.
     const leaseSeed = await this.snapshotMtimes(workspacePath, workspacePath);
     const sourceSeed = await this.snapshotMtimes(sourceRoot, sourceRoot);
+    // A file that MOVED while the lease was being seeded keeps its earlier
+    // stamp, so the change is seen at commit time as what it is: someone
+    // else's edit, to be preserved rather than overwritten (N#4).
+    let movedWhileSeeding = 0;
+    for (const [rel, before] of beforeSeed) {
+      const after = sourceSeed.get(rel);
+      if (after === undefined || (after.m === before.m && after.s === before.s)) continue;
+      sourceSeed.set(rel, before);
+      movedWhileSeeding += 1;
+    }
+    if (movedWhileSeeding > 0) {
+      getLoggerSafe().info("Files changed in the project while the lease was being seeded", {
+        sourceRoot,
+        count: movedWhileSeeding,
+      });
+    }
     // The project's HEAD at seed time: for a tracked file whose mtime moved
     // during the run, `git show <seedHead>:<path>` is what it held when the
     // lease was taken, so "did the user change it" can be answered by content
