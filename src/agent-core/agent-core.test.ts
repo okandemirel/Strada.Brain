@@ -489,6 +489,20 @@ describe("workspacePolicyFor — describing the tree, or building in it (Codex 2
     }
   });
 
+  it("a goal that says it changes nothing, or that OPENS with a describing verb, reads the real tree (Codex 2026-09-11 I#14)", () => {
+    // "fix" belongs to the thing being reviewed, not to the work.
+    expect(workspacePolicyFor(git, "Review the uncommitted fix for crashes. Do not change files.")).toEqual(none);
+    expect(workspacePolicyFor(git, "Review the uncommitted fix for crashes")).toEqual(none);
+    expect(workspacePolicyFor(git, "Investigate the staged changes that add the new loader")).toEqual(none);
+    expect(workspacePolicyFor(git, "Audit the working tree and list what the refactor touched")).toEqual(none);
+    expect(workspacePolicyFor(git, "Implement the loader without changing the uncommitted work")).toEqual(none);
+    // …and an ordinary implementation goal still keeps its lease, including
+    // one that mentions reviewing LATER in the sentence: the goal's own verb
+    // is the one at the front.
+    expect(workspacePolicyFor(git, "Fix the uncommitted-changes observer")).toEqual({});
+    expect(workspacePolicyFor(git, "Implement the loader, then review the staged changes it produces")).toEqual({});
+  });
+
   it("keeps the lease when the goal BUILDS something, whatever else it says", () => {
     for (const goal of [
       "Implement a git status panel",

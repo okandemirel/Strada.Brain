@@ -756,6 +756,30 @@ describe("defects the measurement review found (2026-09-07)", () => {
     expect(bystanderReport.scenes[0]!.videoClipsBound).toEqual(["Assets/Movies/Intro.mp4"]);
     expect(bystanderReport.refusal).toBeUndefined();
 
+    // UNRELATED code does not authenticate it: an unused field beside an
+    // unrelated Play() call used to count (Codex 2026-09-11 I#16).
+    const unrelated = project();
+    buildSettings(unrelated, [{ path: "Assets/Scenes/Main.unity" }]);
+    put(unrelated, "Assets/Scenes/Main.unity", videoScene("1", "0"), G("5"));
+    put(unrelated, "Assets/Movies/Intro.mp4", "movie-bytes", G("9"));
+    put(unrelated, "Assets/Art/Cover.png", "pixels", G("8"));
+    put(unrelated, "Assets/Scripts/Sound.cs",
+      "using UnityEngine.Video; class Sound { VideoPlayer unused; AudioSource audio; void Boom() { audio.Play(); } }", G("6"));
+    expect(assessBuiltAsSpecified(unrelated).scenes[0]!.videoClipsBound).toEqual([]);
+
+    // …and a controller SPLIT across two partial-class files does: the field
+    // is declared in one and played in the other.
+    const split = project();
+    buildSettings(split, [{ path: "Assets/Scenes/Main.unity" }]);
+    put(split, "Assets/Scenes/Main.unity", videoScene("1", "0"), G("5"));
+    put(split, "Assets/Movies/Intro.mp4", "movie-bytes", G("9"));
+    put(split, "Assets/Art/Cover.png", "pixels", G("8"));
+    put(split, "Assets/Scripts/MovieBoot.Fields.cs",
+      "using UnityEngine.Video; partial class MovieBoot { [SerializeField] private VideoPlayer movie; }", G("6"));
+    put(split, "Assets/Scripts/MovieBoot.Start.cs",
+      "partial class MovieBoot { void Start() { movie.enabled = true; movie.Play(); } }", G("7"));
+    expect(assessBuiltAsSpecified(split).scenes[0]!.videoClipsBound).toEqual(["Assets/Movies/Intro.mp4"]);
+
     // …and the enabled one still is the picture.
     const on = project();
     buildSettings(on, [{ path: "Assets/Scenes/Main.unity" }]);

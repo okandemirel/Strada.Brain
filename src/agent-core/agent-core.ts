@@ -562,9 +562,27 @@ export const WORKING_TREE_GOAL_RE =
  */
 const BUILD_SOMETHING_RE =
   /\b(?:add|implement|build|create|design|refactor|rename|port|migrate|fix|delete|remove|revert|commit|merge|rebase)\b/i;
+/**
+ * …and the goal saying it will CHANGE NOTHING. "Review the uncommitted fix
+ * for crashes. Do not change files." is a review, and the word "fix" in the
+ * thing being reviewed sent it into a lease where the tree reads clean
+ * (Codex 2026-09-11 I#14).
+ */
+const CHANGES_NOTHING_RE =
+  /\b(?:do not|don't|without) (?:change|changing|modify|modifying|edit|editing|touch|touching|writ(?:e|ing))\b|\bread[- ]only\b|\bno (?:changes|edits)\b/i;
+/**
+ * A verb that only DESCRIBES. When the goal's own verb is one of these, an
+ * implementation word later in the sentence belongs to the thing being
+ * described, not to the work.
+ */
+const DESCRIBES_RE = /^\s*(?:review|investigate|analy[sz]e|examine|inspect|audit|summari[sz]e|describe|explain|list|report on|look (?:at|into)|check)\b/i;
 
 export function workspacePolicyFor(observations: ReadonlyArray<{ source: string }>, goal: string): { workspacePolicy?: "none" } {
   const sawGit = observations.some((o) => o.source === "git");
   if (!sawGit || !WORKING_TREE_GOAL_RE.test(goal)) return {};
+  // A goal that says it changes nothing, or that OPENS with a describing
+  // verb, is about the tree as it is — whatever implementation words appear
+  // later in the sentence (Codex 2026-09-11 I#14).
+  if (CHANGES_NOTHING_RE.test(goal) || DESCRIBES_RE.test(goal)) return { workspacePolicy: "none" };
   return BUILD_SOMETHING_RE.test(goal) ? {} : { workspacePolicy: "none" };
 }

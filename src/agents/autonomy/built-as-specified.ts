@@ -922,6 +922,8 @@ export function assessBuiltAsSpecified(
   // from a controller, and refusing that as "renders NOTHING" refused a
   // legitimate game (Codex 2026-09-11 G#6).
   let videoScriptControl = false;
+  const videoPlayerFields = new Set<string>();
+  const activatedIdentifiers = new Set<string>();
   for (const rel of files) {
     if (!rel.endsWith(".cs") || !isRuntimeScript(rel)) continue;
     let text: string;
@@ -935,8 +937,31 @@ export function assessBuiltAsSpecified(
       primitiveScripts.push(rel);
       primitiveCallSites += (clean.match(/\bCreatePrimitive\s*\(/gu) ?? []).length;
     }
-    if (/\bVideoPlayer\b/u.test(clean) && /\.(?:enabled\s*=\s*true|Play\s*\(|SetActive\s*\(\s*true\s*\))/u.test(clean)) {
+    // The two halves are collected PROJECT-WIDE and matched by IDENTIFIER.
+    // File-local matching was wrong in both directions (Codex 2026-09-11
+    // I#16): an unused `VideoPlayer unused;` beside an unrelated
+    // `audio.Play()` authenticated a disabled player, while a controller that
+    // declares `VideoPlayer movie` in one partial-class file and calls
+    // `movie.Play()` in another was refused.
+    for (const m of clean.matchAll(/\bVideoPlayer\s+([A-Za-z_][A-Za-z0-9_]*)\b/gu)) {
+      if (m[1]) videoPlayerFields.add(m[1]);
+    }
+    for (const m of clean.matchAll(/\b([A-Za-z_][A-Za-z0-9_]*)\s*\.\s*(?:enabled\s*=\s*true|Play\s*\()/gu)) {
+      if (m[1]) activatedIdentifiers.add(m[1]);
+    }
+    // …and a component switched on through its GameObject counts as well,
+    // when the object is the player's own.
+    for (const m of clean.matchAll(/\b([A-Za-z_][A-Za-z0-9_]*)\s*\.\s*gameObject\s*\.\s*SetActive\s*\(\s*true\s*\)/gu)) {
+      if (m[1]) activatedIdentifiers.add(m[1]);
+    }
+  }
+
+  // A VideoPlayer the game's own code turns on: the SAME identifier declared
+  // as a VideoPlayer somewhere and activated somewhere.
+  for (const field of videoPlayerFields) {
+    if (activatedIdentifiers.has(field)) {
       videoScriptControl = true;
+      break;
     }
   }
 
