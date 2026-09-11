@@ -753,16 +753,25 @@ export class CampaignManager {
   private lineageWasCancelledOnPurpose(taskId: string): boolean {
     try {
       const manager = this.taskManager as unknown as {
-        findLatestLineageTask?: (id: string) => { id: string; status?: string; cancelReason?: string } | null;
+        findLatestLineageTask?: (id: string) => { id: string } | null;
         getStatus?: (id: string) => { id: string; status?: string; cancelReason?: string; parentId?: string } | null;
       };
-      const tip = manager.findLatestLineageTask?.(taskId) ?? manager.getStatus?.(taskId) ?? null;
-      if (tip && tip.status === "cancelled" && tip.cancelReason !== "superseded") return true;
-      let current = manager.getStatus?.(taskId) ?? null;
-      for (let depth = 0; current && depth < 50; depth++) {
-        if (current.status === "cancelled" && current.cancelReason !== "superseded") return true;
-        if (!current.parentId) break;
-        current = manager.getStatus?.(current.parentId) ?? null;
+      // FROM THE TIP AND FROM THE MILESTONE'S OWN TASK, upward, visiting every
+      // node including the last. Walking only upward from the milestone missed
+      // a cancelled node BETWEEN it and the tip, and the depth guard used to
+      // exit before checking the node it had just loaded (Codex 2026-09-11 J#6).
+      const seen = new Set<string>();
+      const pending: string[] = [taskId];
+      const tipId = manager.findLatestLineageTask?.(taskId)?.id;
+      if (tipId) pending.push(tipId);
+      while (pending.length > 0 && seen.size < 200) {
+        const id = pending.pop()!;
+        if (seen.has(id)) continue;
+        seen.add(id);
+        const row = manager.getStatus?.(id) ?? null;
+        if (!row) continue;
+        if (row.status === "cancelled" && row.cancelReason !== "superseded") return true;
+        if (row.parentId) pending.push(row.parentId);
       }
     } catch { /* unreadable lineage is not a stop order */ }
     return false;
@@ -895,13 +904,16 @@ export class CampaignManager {
           // timer then submitted a child of the task someone had just
           // stopped (Codex 2026-09-11 H#2).
           const parked = fresh.milestones[fresh.currentMilestone];
-          if (parked?.taskId && this.lineageWasCancelledOnPurpose(parked.taskId)) {
+          // …including a campaign that has no ladder yet: its DRAFT task is
+          // the work, and a cancelled draft used to be redrafted (J#8).
+          const parkedTaskId = parked?.taskId ?? fresh.draftTaskId;
+          if (parkedTaskId && this.lineageWasCancelledOnPurpose(parkedTaskId)) {
             fresh.autoReviveAt = undefined;
-            fresh.lastError = `NOT DELIVERED — ${parked.title} was cancelled while its retry was pending`;
+            fresh.lastError = `NOT DELIVERED — ${parked?.title ?? "the GDD draft"} was cancelled while its retry was pending`;
             this.persist(fresh);
             getLoggerSafe().info("Campaign self-revival abandoned — its lineage was cancelled on purpose", {
               id: campaignId,
-              milestone: parked.id,
+              milestone: parked?.id ?? "draft",
             });
             return;
           }
@@ -1908,6 +1920,27 @@ export class CampaignManager {
       ? this.taskManager.findLatestLineageTask(milestone.taskId as TaskId)
       : null;
 
+    // A STOP ORDER ANYWHERE IN THE LINEAGE outranks every continuation: a
+    // deliberately cancelled task under a newer live child was adopted right
+    // past it (Codex 2026-09-11 J#2).
+    if (milestone.taskId && this.lineageWasCancelledOnPurpose(milestone.taskId)) {
+      milestone.status = "failed";
+      campaign.state = "failed";
+      campaign.autoReviveAt = undefined;
+      campaign.lastError = `NOT DELIVERED — ${milestone.title} was cancelled`;
+      this.persist(campaign);
+      this.cancelLiveLineages(campaign, "a sprint of this campaign was cancelled");
+      getLoggerSafe().info("Campaign stopped: a task in its lineage was cancelled on purpose", {
+        id: campaign.id,
+        milestone: milestone.id,
+      });
+      await this.tell(
+        campaign,
+        `🛑 **${milestone.title}** was cancelled, so the campaign stops here. Reply **kampanya devam** to start it again.`,
+      );
+      return;
+    }
+
     if (tip && ACTIVE_STATUSES.has(tip.status) && tip.status !== TaskStatus.paused) {
       // The box binds the adoption path too: adopting forever is precisely
       // how a sprint spends a day without an outcome.
@@ -1943,9 +1976,19 @@ export class CampaignManager {
     // on its last attempt advanced the ladder to the NEXT gap (Codex
     // 2026-09-11 I#6). The campaign's own supersessions are not stop orders —
     // that is what the mark is for.
+    // The reason comes from the SAME task as the status. Reading the event's
+    // "cancelled" beside the REPLACEMENT's missing reason turned the
+    // campaign's own supersession into a person's stop order (Codex
+    // 2026-09-11 J#1).
+    const statusSource =
+      tip && tip.id !== milestone.taskId
+        ? tip
+        : milestone.taskId
+        ? this.taskManager.getStatus(milestone.taskId as TaskId)
+        : null;
     const cancelledOnPurpose =
       status === TaskStatus.cancelled &&
-      (tip as { cancelReason?: string } | null)?.cancelReason !== "superseded";
+      (statusSource as { cancelReason?: string } | null)?.cancelReason !== "superseded";
     if (cancelledOnPurpose) {
       milestone.status = "failed";
       milestone.resultExcerpt = output.slice(-500);
@@ -2072,10 +2115,13 @@ export class CampaignManager {
       campaign.lastError = `${milestone.title} overran its time box after two narrowings and ${milestone.attempts} attempts`;
       // The same bounded recovery every other exhausted milestone gets: this
       // path used to stop dead with no appointment at all (Codex H#6).
+      // The fields are reset BEFORE the revival arms its timer: persisting
+      // this snapshot afterwards overwrote a revival that had already
+      // happened, putting the campaign back to failed with the old task
+      // (Codex 2026-09-11 J#14).
+      milestone.timeBoxEscalations = 0;
+      milestone.startedAtMs = undefined;
       if (await this.selfReviveImplementation(campaign, milestone, "over its time box", campaign.lastError)) {
-        milestone.timeBoxEscalations = 0;
-        milestone.startedAtMs = undefined;
-        this.persist(campaign);
         return true;
       }
       campaign.autoReviveAt = undefined;
@@ -3469,7 +3515,7 @@ export class CampaignManager {
     // disappeared reached `done` with "none were checked" and a coverage audit
     // that skipped itself for the same reason — nothing established that the
     // document the user supplied was implemented (Codex 2026-09-11 H#5).
-    if (!gddText) {
+    if (!gddText || gddText.trim() === "") {
       return {
         lines: [`GDD numbers: the GDD text was not available at delivery (${campaign?.gddPath ?? "no path"}), so none were checked`],
         refusal: `the GDD could not be read at delivery (${campaign?.gddPath ?? "no path recorded"}), so nothing here was measured against the document`,

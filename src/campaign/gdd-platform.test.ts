@@ -16,6 +16,22 @@ describe("the platform the GDD asks for (Codex 2026-09-11 B#11)", () => {
     expect(gddPlatform(undefined)).toEqual({ handheld: false, targets: [] });
   });
 
+  it("a storefront is not an operating system, and an excluded mention does not hide a later one (Codex 2026-09-11 J#19)", () => {
+    // Steam matched first and built Windows for a Linux game.
+    expect(gddPlatform("Ships on Steam for Linux.")).toMatchObject({ target: "linux", targets: ["linux"] });
+    // "App Store" is iOS only when no OS is named; "Mac app" is macOS.
+    expect(gddPlatform("Buy the Mac app on the App Store.")).toMatchObject({ target: "macos" });
+    expect(gddPlatform("Launching on the App Store this winter.")).toMatchObject({ target: "ios" });
+    expect(gddPlatform("Sold on Steam.")).toMatchObject({ target: "windows" });
+    // The first mention is excluded and the second is real.
+    // …and the order follows the document: Linux is named first, the later
+    // affirmative Windows mention is found rather than hidden by the denial.
+    expect(gddPlatform("No Windows release at launch. Linux first; Windows later."))
+      .toMatchObject({ target: "linux", targets: ["linux", "windows"] });
+    // …and a document that only DENIES a platform still names none.
+    expect(gddPlatform("No Windows release, ever.").targets).toEqual([]);
+  });
+
   it("'mid-range phones' is a handheld even when no store is named", () => {
     const p = gddPlatform("Target 60 fps on mid-range phones.");
     expect(p.handheld).toBe(true);

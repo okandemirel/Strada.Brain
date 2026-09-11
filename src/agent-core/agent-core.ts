@@ -366,11 +366,15 @@ export class AgentCore {
               if (!this.unparsedReported) {
                 this.unparsedReported = true;
                 try {
-                  void this.channel?.sendText?.(
+                  void Promise.resolve(this.channel?.sendText?.(
                     AgentCore.AGENT_CHAT_ID,
                     `I could not read my own reasoning ${MAX_UNPARSED_ROUNDS} times in a row (${decision.reasoning}). ` +
                       "The observations are held for an hour; the reasoning provider needs a look.",
-                  );
+                  // A channel that is offline rejects, and the synchronous
+                  // try/catch around this never saw it — an unhandled
+                  // rejection in the daemon that is carrying out the recovery
+                  // (Codex 2026-09-11 J#18).
+                  )).catch(() => { /* the log already carries it */ });
                 } catch { /* the log already carries it */ }
               }
             } else {
@@ -381,6 +385,10 @@ export class AgentCore {
           }
           break;
       }
+      // A decision that PARSED clears the charge: the counter is meant to
+      // measure consecutive unreadable rounds, and never clearing it turned
+      // an intermittent provider into an hour's hold (Codex 2026-09-11 J#17).
+      for (const obs of batch) this.unparsedRounds.delete(obs.id);
       // Every ACT arm above ran to completion on this batch (an LLM "wait" is a decision too).
       consumed = true;
     } catch (error) {

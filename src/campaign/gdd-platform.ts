@@ -15,13 +15,30 @@ export type BuildTarget = (typeof BUILD_TARGETS)[number];
 /** Targets that are a handheld device: a desktop frame rate says nothing about them. */
 export const MOBILE_TARGETS: ReadonlySet<string> = new Set(["android", "ios"]);
 
+/**
+ * The OPERATING SYSTEM the document names. A storefront is not one: "Ships on
+ * Steam for Linux" built Windows because Steam matched first, and "Buy the Mac
+ * app on the App Store" built iOS (Codex 2026-09-11 J#19).
+ */
 const PLATFORM_PATTERNS: ReadonlyArray<readonly [BuildTarget, RegExp]> = [
-  ["android", /\b(?:android|google play|play store)\b/i],
-  ["ios", /\b(?:ios|iphone|ipad|app store|testflight)\b/i],
-  ["webgl", /\b(?:webgl|web ?browser|html5|itch\.io|play in the browser)\b/i],
-  ["windows", /\b(?:windows|win64|pc(?:\s+(?:build|release|version))?|steam)\b/i],
-  ["macos", /\b(?:macos|mac os|osx|apple silicon)\b/i],
-  ["linux", /\b(?:linux|steamos|proton)\b/i],
+  ["android", /\b(?:android)\b/gi],
+  ["ios", /\b(?:ios|iphone|ipad|testflight)\b/gi],
+  ["webgl", /\b(?:webgl|web ?browser|html5|play in the browser)\b/gi],
+  ["windows", /\b(?:windows|win64|pc(?:\s+(?:build|release|version))?)\b/gi],
+  ["macos", /\b(?:macos|mac os|osx|apple silicon|mac app)\b/gi],
+  ["linux", /\b(?:linux|steamos|proton)\b/gi],
+];
+
+/**
+ * Storefronts, used ONLY when the document names no operating system: a store
+ * implies a platform ("Google Play" means Android) but a named OS beside it
+ * always wins.
+ */
+const STOREFRONT_PATTERNS: ReadonlyArray<readonly [BuildTarget, RegExp]> = [
+  ["android", /\b(?:google play|play store)\b/gi],
+  ["ios", /\b(?:app store)\b/gi],
+  ["webgl", /\bitch\.io\b/gi],
+  ["windows", /\bsteam\b/gi],
 ];
 
 /** Words that deny the platform they precede: "no iOS release", "not on Steam". */
@@ -57,13 +74,25 @@ export interface GddPlatform {
 export function gddPlatform(gddText: string | undefined): GddPlatform {
   if (!gddText) return { handheld: false, targets: [] };
   const hits: Array<{ target: BuildTarget; at: number }> = [];
-  for (const [target, re] of PLATFORM_PATTERNS) {
-    const m = re.exec(gddText);
-    // A platform the document EXCLUDES is not a platform it asks for: "Android
-    // only; no iOS release" named two and therefore forced neither (Codex
-    // 2026-09-11 D#32).
-    if (m && !isExcluded(gddText, m.index)) hits.push({ target, at: m.index });
-  }
+  const collect = (patterns: typeof PLATFORM_PATTERNS): void => {
+    for (const [target, re] of patterns) {
+      if (hits.some((h) => h.target === target)) continue;
+      // EVERY occurrence, not the first: "No Windows release at launch. Linux
+      // first; Windows later." excluded the first Windows mention and never
+      // looked at the second (Codex 2026-09-11 J#19).
+      for (const m of gddText.matchAll(re)) {
+        // A platform the document EXCLUDES is not a platform it asks for:
+        // "Android only; no iOS release" named two and therefore forced
+        // neither (Codex 2026-09-11 D#32).
+        if (isExcluded(gddText, m.index ?? 0)) continue;
+        hits.push({ target, at: m.index ?? 0 });
+        break;
+      }
+    }
+  };
+  collect(PLATFORM_PATTERNS);
+  // …and a storefront only speaks when no operating system did.
+  if (hits.length === 0) collect(STOREFRONT_PATTERNS);
   const handheldMatch = HANDHELD_RE.exec(gddText);
   const handheld = handheldMatch !== null || hits.some((h) => MOBILE_TARGETS.has(h.target));
   if (hits.length === 0) {

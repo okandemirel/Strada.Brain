@@ -2905,6 +2905,56 @@ describe("CampaignManager", () => {
     expect(tasks.cancelled).toContain(tip);
   });
 
+  it("a supersession event does not stop the replacement it made way for (Codex 2026-09-11 J#1)", async () => {
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    // The campaign replaces task_1 with a child, marking the old one
+    // superseded; the cancellation event arrives afterwards.
+    const replacement = tasks.addRetry("task_1", TaskStatus.blocked);
+    (tasks as unknown as { prompts: Map<string, string> }).prompts.set(replacement, tasks.submitted[0]!.prompt);
+    const stored = storage.get(campaign.id)!;
+    stored.milestones[0]!.taskId = replacement;
+    storage.save(stored);
+    tasks.cancel("task_1", { reason: "superseded" });
+    tasks.emit("task:cancelled", "task_1", "cancelled");
+    await new Promise((r) => setTimeout(r, 200));
+
+    const after = storage.get(campaign.id)!;
+    expect(after.lastError ?? "").not.toContain("was cancelled");
+    expect(after.state).not.toBe("failed");
+  });
+
+  it("a stop order in the MIDDLE of the lineage is found (Codex 2026-09-11 J#6)", async () => {
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    // root (the milestone's task) → middle (cancelled by a person) → tip.
+    const middle = tasks.addRetry("task_1", TaskStatus.blocked);
+    const tip = tasks.addRetry(middle, TaskStatus.blocked);
+    for (const id of [middle, tip]) {
+      (tasks as unknown as { prompts: Map<string, string> }).prompts.set(id, tasks.submitted[0]!.prompt);
+    }
+    tasks.cancel(middle);
+    tasks.emit("task:blocked", tip, "still stuck");
+
+    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"));
+    expect(storage.get(campaign.id)!.lastError).toContain("NOT DELIVERED");
+  });
+
+  it("a cancelled task under a LIVE child still stops the campaign (Codex 2026-09-11 J#2)", async () => {
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    // A person cancels the sprint; the executor's retry is already running.
+    const child = tasks.addRetry("task_1", TaskStatus.executing);
+    (tasks as unknown as { prompts: Map<string, string> }).prompts.set(child, tasks.submitted[0]!.prompt);
+    tasks.cancel("task_1");
+    tasks.emit("task:cancelled", "task_1", "cancelled");
+
+    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"));
+    expect(storage.get(campaign.id)!.lastError).toContain("NOT DELIVERED");
+    // …and the live child is retired rather than adopted.
+    expect(tasks.cancelled).toContain(child);
+  });
+
   it("a sprint cancelled ON PURPOSE stops the campaign instead of continuing its work (Codex 2026-09-11 I#6)", async () => {
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
     await waitFor(() => expect(tasks.submitted).toHaveLength(1));
