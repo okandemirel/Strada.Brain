@@ -1461,6 +1461,9 @@ export class BackgroundExecutor {
                 quarantinedUnder: result.conflictsQuarantinedUnder,
               });
             }
+            if (result.written.length === 0 && result.conflicts.length > 0) {
+              publicationLoss = `nothing reached the project: ${result.conflicts.length} file(s) conflicted and were quarantined`;
+            }
             if (result.failed.length > 0) {
               publicationLoss = `${result.failed.length} file(s) the worker changed could not be written into the project: ${result.failed.slice(0, 8).join(", ")}`;
               getLogger().warn("Workspace lease commit could not process some files", {
@@ -1533,6 +1536,8 @@ export class BackgroundExecutor {
       } catch { /* liveness must never break the run */ }
     });
     let taskWorkspaceLease: ManagedWorkspaceLease | undefined;
+    /** What this task's publication lost, if anything (Codex 2026-09-11 O#1/O#2). */
+    let taskPublicationLoss: string | undefined;
 
     if (!this.taskManager) {
       logger.error("TaskManager not set on BackgroundExecutor");
@@ -1901,8 +1906,18 @@ export class BackgroundExecutor {
       if (taskWorkspaceLease) {
         await Promise.resolve()
           .then(() => taskWorkspaceLease!.commit())
-          .then((result) => {
-            this.notifyWorkspaceCommitted(String(task.id), result);
+          .then((raw) => {
+            // Every array read defensively: a commit result without `removed`
+            // threw INSIDE this handler and the catch below then reported a
+            // publication failure that had not happened.
+            const result = {
+              ...raw,
+              written: raw.written ?? [],
+              conflicts: raw.conflicts ?? [],
+              removed: raw.removed ?? [],
+              failed: raw.failed ?? [],
+            };
+            this.notifyWorkspaceCommitted(String(task.id), raw);
             if (result.written.length > 0) {
               getLogger().info("Task workspace committed", {
                 files: result.written.length,
@@ -1928,22 +1943,42 @@ export class BackgroundExecutor {
                 quarantinedUnder: result.conflictsQuarantinedUnder,
               });
             }
-            if (result.failed.length > 0) {
+            if ((result.failed ?? []).length > 0) {
+              taskPublicationLoss = `${result.failed.length} file(s) could not be written into the project: ${result.failed.slice(0, 8).join(", ")}`;
               getLogger().warn("Task workspace commit could not process some files", {
                 count: result.failed.length,
                 failed: result.failed.slice(0, 20),
               });
             }
+            // NOTHING PUBLISHED AND EVERYTHING CONFLICTED is not a success
+            // either: the run's work sits in quarantine and the project has
+            // none of it (Codex 2026-09-11 O#2).
+            if ((result.written ?? []).length === 0 && (result.conflicts ?? []).length > 0) {
+              taskPublicationLoss = `nothing reached the project: ${result.conflicts.length} file(s) conflicted and were quarantined`;
+            }
           })
           .catch((err) => {
-            getLogger().error("Task workspace commit failed — agent work discarded", {
+            taskPublicationLoss = `the workspace commit threw before the work reached the project (${err instanceof Error ? err.message : String(err)})`;
+            getLogger().error("Task workspace commit failed — the lease is KEPT for salvage", {
               error: err instanceof Error ? err.message : String(err),
             });
           });
       }
-      await taskWorkspaceLease?.release().catch((err) => {
-        getLogger().warn("Task workspace lease release failed", { error: err instanceof Error ? err.message : String(err) });
-      });
+      if (taskPublicationLoss !== undefined) {
+        // NOT RELEASED, and NOT a completed task. release() deletes the lease
+        // directory, and the work exists nowhere else (Codex 2026-09-11 O#1).
+        getLogger().error("Task workspace lease NOT released — its work has not been published", {
+          taskId: task.id,
+          reason: taskPublicationLoss,
+        });
+        try {
+          this.taskManager.fail(task.id, `PUBLICATION FAILED: ${taskPublicationLoss}. The workspace is kept for salvage.`);
+        } catch { /* the task may already be terminal */ }
+      } else {
+        await taskWorkspaceLease?.release().catch((err) => {
+          getLogger().warn("Task workspace lease release failed", { error: err instanceof Error ? err.message : String(err) });
+        });
+      }
       if (integrateAfterWriteBack) this.integrateMilestoneBranches(task);
       // A root task marks its episode terminal; a re-scoped sub-goal task settles ONLY
       // its joined card (joinEpisodeEnd) so it never prematurely terminates the shared

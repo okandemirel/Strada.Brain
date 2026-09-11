@@ -1671,6 +1671,62 @@ describe("BackgroundExecutor - Blocked worker results", () => {
     expect(mockTaskManager.fail).not.toHaveBeenCalled();
   });
 
+  it("a TASK whose workspace did not publish is failed, and its lease kept (Codex 2026-09-11 O#1, O#2)", async () => {
+    const release = vi.fn().mockResolvedValue(undefined);
+    const run = async (commit: unknown): Promise<{ complete: ReturnType<typeof vi.fn>; fail: ReturnType<typeof vi.fn> }> => {
+      const mockOrch = {
+        runBackgroundTask: vi.fn().mockResolvedValue({ output: "task done" }),
+        evaluateSupervisorAdmission: vi.fn().mockResolvedValue({ mode: "direct_worker", reason: "simple" }),
+        runWorkerTask: vi.fn().mockResolvedValue({
+          status: "completed", finalSummary: "task done", visibleResponse: "task done", provider: "mock",
+          catalogVersion: "mock:default", assignmentVersion: 0, touchedFiles: [], toolTrace: [],
+          verificationResults: [], reviewFindings: [], artifacts: [],
+        }),
+      };
+      const executor = new BackgroundExecutor({
+        orchestrator: mockOrch as any,
+        workspaceLeaseManager: {
+          acquireLease: vi.fn().mockResolvedValue({
+            path: "/tmp/strada-workspaces/task-y", id: "lease-y", workspaceId: "ws-y", release, commit,
+          }),
+        } as any,
+      });
+      const mockTaskManager = { updateStatus: vi.fn(), complete: vi.fn(), fail: vi.fn(), block: vi.fn() };
+      executor.setTaskManager(mockTaskManager as any);
+      // forceSharedPlanning makes the TASK own the lease (the envelope then
+      // leaves the commit to the outer path), which is the case O#1 is about.
+      executor.enqueue(
+        createTestTask(undefined, { forceSharedPlanning: true } as never),
+        new AbortController().signal,
+        vi.fn(),
+      );
+      await vi.waitFor(() => {
+        expect(mockTaskManager.complete.mock.calls.length + mockTaskManager.fail.mock.calls.length).toBeGreaterThan(0);
+      }, { timeout: 5000 });
+      return mockTaskManager;
+    };
+
+    // The commit threw: the work exists only in the lease.
+    const threw = await run(vi.fn().mockRejectedValue(new Error("EIO")));
+    expect(threw.fail).toHaveBeenCalled();
+    expect(String(threw.fail.mock.calls[0]?.[1]).toLowerCase()).toContain("publication failed");
+    expect(release).not.toHaveBeenCalled();
+
+    // Everything conflicted and nothing was written: the project has none of it.
+    const conflicted = await run(vi.fn().mockResolvedValue({
+      written: [], conflicts: ["Assets/Player.cs"], removed: [], failed: [],
+    }));
+    expect(conflicted.fail).toHaveBeenCalled();
+    expect(release).not.toHaveBeenCalled();
+
+    // A clean publication completes and releases.
+    const clean = await run(vi.fn().mockResolvedValue({
+      written: ["Assets/Player.cs"], conflicts: [], removed: [], failed: [],
+    }));
+    expect(clean.complete).toHaveBeenCalled();
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
   it("an ESCALATED keep-alive is not overwritten by the block that triggered it (Codex 2026-09-11 O#14)", async () => {
     // The keep-alive had spent the mission's retries: it wrote "MISSION
     // STOPPED — needs you" and returned false. The caller then wrote the
