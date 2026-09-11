@@ -1405,7 +1405,10 @@ describe("CampaignManager", () => {
     await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
 
     const report = messages.find((m) => m.text.includes("Campaign delivery"))!.text;
-    expect(report).toContain("Assets/Scenes/ProductionMain.unity");
+    // The build's FIRST enabled scene is what a person opens; the richest is
+    // named beside it (Codex 2026-09-11 C#26).
+    expect(report).toContain("FIRST enabled scene");
+    expect(report).toContain("ProductionMain.unity");
     expect(report).toContain("13 other scenes are enabled");
     expect(report).toContain("10 of them");
     expect(report).toContain("TargetedLevel151Verification.unity");

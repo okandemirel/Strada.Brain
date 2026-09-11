@@ -18,7 +18,7 @@ function scene(objects: number): string {
 }
 
 describe("delivery report entry point", () => {
-  it("names the richest enabled scene and flags the scaffolding", () => {
+  it("names the scene the build opens, the richer one beside it, and the scaffolding (Codex 2026-09-11 C#26)", () => {
     const root = tmp();
     mkdirSync(join(root, "ProjectSettings"), { recursive: true });
     mkdirSync(join(root, "Assets", "Scenes"), { recursive: true });
@@ -38,10 +38,13 @@ describe("delivery report entry point", () => {
     const text = (manager as unknown as { describeEntryPoint(): string | undefined }).describeEntryPoint();
 
     expect(text).toContain("How to run it");
-    expect(text).toContain("Assets/Scenes/ProductionMain.unity");
+    // The build opens UfoShowcase (index 0) — that is what a person gets —
+    // and ProductionMain is named beside it with what to do about it.
+    expect(text).toContain("Assets/Scenes/UfoShowcase.unity");
+    expect(text).toContain("FIRST enabled scene");
+    expect(text).toContain("ProductionMain.unity");
     expect(text).toContain("17 objects");
     expect(text).toContain("verification scaffolding");
-    expect(text).toContain("UfoShowcase.unity");
   });
 
   it("says it could not measure, rather than guessing OR going silent", () => {

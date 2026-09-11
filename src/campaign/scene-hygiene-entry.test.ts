@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assessSceneHygiene } from "./scene-hygiene.js";
+import { assessSceneHygiene, renderSceneHygiene } from "./scene-hygiene.js";
 
 /**
  * Two holes the merge exposed (audited 2026-09-03):
@@ -34,7 +34,7 @@ describe("scene hygiene entry selection", () => {
     expect(report.entry?.objects).toBe(3);
   });
 
-  it("never promotes a scaffolding-named scene while a real one exists", () => {
+  it("names the scene the BUILD opens, and the richer one beside it (Codex 2026-09-11 C#26)", () => {
     const report = assessSceneHygiene("/p", io({
       "ProjectSettings/EditorBuildSettings.asset": settings([
         "Assets/Scenes/UfoShowcase.unity",
@@ -45,6 +45,11 @@ describe("scene hygiene entry selection", () => {
       "Assets/Scenes/ProductionMain.unity": Array.from({ length: 4 }, () => "GameObject:").join("\n"),
     }) as never);
 
-    expect(report.entry?.path).toBe("Assets/Scenes/ProductionMain.unity");
+    // Unity loads build index 0, so that is the scene a person gets — saying
+    // "open ProductionMain" described a game nobody would see. The richer
+    // scene is named beside it with what to do about it.
+    expect(report.entry?.path).toBe("Assets/Scenes/UfoShowcase.unity");
+    expect(report.richest?.path).toBe("Assets/Scenes/ProductionMain.unity");
+    expect(renderSceneHygiene(report)).toContain("NOT what the build opens");
   });
 });

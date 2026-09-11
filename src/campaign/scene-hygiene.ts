@@ -46,8 +46,15 @@ export interface SceneHygieneReport {
   readonly note?: string;
   /** Every scene enabled in Build Settings, in the order the file lists them. */
   readonly enabled: readonly HygieneScene[];
-  /** The scene a person should open. */
+  /** The scene a person should open: the FIRST enabled scene, which is what the player loads. */
   readonly entry?: { readonly path: string; readonly objects: number };
+  /**
+   * The richest non-scaffolding enabled scene, when it is NOT the one the
+   * build opens. Unity loads build index 0 whatever else the project holds,
+   * so "the richest scene" was a recommendation the player contradicted
+   * (Codex 2026-09-11 C#26).
+   */
+  readonly richest?: { readonly path: string; readonly objects: number };
   /** Enabled scenes tying the entry scene's object count (ambiguity, disclosed). */
   readonly entryTied: readonly string[];
   /** How many enabled scenes are not the entry scene. */
@@ -187,7 +194,12 @@ export function assessSceneHygiene(
     b.objects - a.objects || (buildIndex.get(a.path) ?? 0) - (buildIndex.get(b.path) ?? 0);
   const nonScaffolding = readable.filter((s) => !SCAFFOLDING_NAME.test(basename(s.path)));
   const pool = nonScaffolding.length > 0 ? nonScaffolding : readable;
-  const best = [...pool].sort(sortByRichness)[0];
+  const richest = [...pool].sort(sortByRichness)[0];
+  // THE BUILD OPENS INDEX 0. That is the scene a person gets, so it is the
+  // entry; the richest scene is named beside it when they differ, and a thin
+  // or scaffolding-named first scene is a finding of its own (C#26).
+  const first = readable.find((sc) => sc.path === enabled[0]?.path);
+  const best = first ?? richest;
   if (!best || best.objects === 0) {
     return {
       ...empty,
@@ -221,6 +233,7 @@ export function assessSceneHygiene(
     enabled,
     entry: { path: best.path, objects: best.objects },
     entryTied,
+    ...(richest && best && richest.path !== best.path ? { richest: { path: richest.path, objects: richest.objects } } : {}),
     otherEnabled: others.length,
     scaffolding,
     unclassified,
@@ -251,8 +264,14 @@ export function renderSceneHygiene(report: SceneHygieneReport): string {
   const entry = report.entry;
   if (entry) {
     lines.push(
-      `- Open \`${entry.path}\` and press Play — it is the richest enabled scene (${entry.objects} objects).`,
+      `- Open \`${entry.path}\` and press Play — it is the FIRST enabled scene, the one a built player loads (${entry.objects} objects).`,
     );
+    if (report.richest) {
+      lines.push(
+        `- ⚠️ \`${basename(report.richest.path)}\` holds more (${report.richest.objects} objects) but is NOT what the build opens — ` +
+          "if that is the game, move it to the top of Build Settings.",
+      );
+    }
   }
   if (report.entryTied.length > 0) {
     lines.push(

@@ -65,8 +65,11 @@ describe("scene hygiene — the real delivered shape", () => {
 
     expect(report.refusal).toBeUndefined();
     expect(report.enabled).toHaveLength(14);
-    expect(report.entry?.path).toBe("Assets/Scenes/ProductionMain.unity");
-    expect(report.entry?.objects).toBe(17);
+    // The build opens its FIRST enabled scene; the richest one is named
+    // beside it (Codex 2026-09-11 C#26).
+    expect(report.entry?.path).toBe("Assets/Scenes/Gameplay.unity");
+    expect(report.entry?.objects).toBe(3);
+    expect(report.richest?.path).toBe("Assets/Scenes/ProductionMain.unity");
     // 13 enabled scenes are NOT the entry point — the whole of the user's
     // "which one is the game?".
     expect(report.otherEnabled).toBe(13);
@@ -87,14 +90,17 @@ describe("scene hygiene — the real delivered shape", () => {
         "Assets/Scenes/UfoShowcase.unity",
       ].sort(),
     );
+    // Gameplay is now the entry (build index 0), so the non-entry
+    // unclassified list carries ProductionMain instead (Codex 2026-09-11 C#26).
     expect(report.unclassified.map((s) => s.path).sort()).toEqual([
-      "Assets/Scenes/Gameplay.unity",
       "Assets/Scenes/LiveOpsPresentation.unity",
       "Assets/Scenes/Main.unity",
+      "Assets/Scenes/ProductionMain.unity",
     ]);
 
     const text = renderSceneHygiene(report);
-    expect(text).toContain("Assets/Scenes/ProductionMain.unity");
+    expect(text).toContain("Assets/Scenes/Gameplay.unity");
+    expect(text).toContain("ProductionMain.unity");
     expect(text).toContain("17 objects");
     expect(text).toContain("13 other scenes are enabled");
     expect(text).toContain("10 of them");
