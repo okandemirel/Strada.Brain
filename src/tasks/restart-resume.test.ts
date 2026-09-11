@@ -255,6 +255,42 @@ describe("a restart does not spend a mission retry, and never escalates", () => 
     expect(blocks.join(" ")).toContain("the budget window re-opens on its own");
   });
 
+  it("a budget re-arm that cannot resubmit parks the mission again (Codex 2026-09-11 O#15)", async () => {
+    vi.useFakeTimers();
+    try {
+      const { internals, blocks } = harness([]);
+      let exceeded = true;
+      (internals as unknown as { _unifiedBudgetManager: unknown })._unifiedBudgetManager = {
+        isGlobalExceeded: () => exceeded,
+      };
+      // The resubmission returns nothing: the callback used to end there, with
+      // the task still blocked and no timer left anywhere.
+      (internals.taskManager as { retryTask: (id: string) => unknown }).retryTask = () => null;
+      const task = { id: "task_1", chatId: "cli-local", prompt: "Mission: build the game", origin: "user", status: "failed" };
+
+      internals.scheduleMissionKeepAlive(task, "budget exceeded");
+      exceeded = false;
+      await vi.advanceTimersByTimeAsync(60 * 60_000 + 1_000);
+
+      // Parked again rather than abandoned.
+      expect(blocks.length).toBeGreaterThan(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("an escalation RECORDS itself so the caller does not overwrite it (Codex 2026-09-11 O#14)", () => {
+    const { internals, notices } = harness([]);
+    internals.missionRetries.set("mission:task_1", 10);
+    const kept = internals.scheduleMissionKeepAlive(
+      { id: "task_1", chatId: "cli-local", prompt: "Mission: build the game", origin: "user", status: "failed" },
+      "blocked:provider_unavailable",
+    );
+    expect(kept).toBe(false);
+    expect(notices.join(" ")).toContain("MISSION STOPPED");
+    expect((internals as unknown as { keepAliveEscalated: boolean }).keepAliveEscalated).toBe(true);
+  });
+
   it("does not escalate a REAL failure that is still under the cap", () => {
     const { internals, notices, blocks } = harness([]);
     internals.missionRetries.set("mission:task_1", 3);

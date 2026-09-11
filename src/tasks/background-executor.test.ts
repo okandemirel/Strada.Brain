@@ -1671,6 +1671,38 @@ describe("BackgroundExecutor - Blocked worker results", () => {
     expect(mockTaskManager.fail).not.toHaveBeenCalled();
   });
 
+  it("an ESCALATED keep-alive is not overwritten by the block that triggered it (Codex 2026-09-11 O#14)", async () => {
+    // The keep-alive had spent the mission's retries: it wrote "MISSION
+    // STOPPED — needs you" and returned false. The caller then wrote the
+    // worker's own sentence over it, and a restart re-armed the mission as if
+    // nothing had been decided.
+    const executor = new BackgroundExecutor({
+      orchestrator: {
+        runWorkerTask: vi.fn().mockResolvedValue({
+          status: "blocked", reason: "blocked:provider_unavailable",
+          finalSummary: "", visibleResponse: "", provider: "mock", catalogVersion: "mock:default",
+          assignmentVersion: 0, touchedFiles: [], toolTrace: [], verificationResults: [],
+          reviewFindings: [], artifacts: [],
+        }),
+      } as any,
+    });
+    (executor as unknown as { scheduleMissionKeepAlive: (t: unknown, r: string) => boolean })
+      .scheduleMissionKeepAlive = () => {
+        (executor as unknown as { keepAliveEscalated: boolean }).keepAliveEscalated = true;
+        return false;
+      };
+    const mockTaskManager = { updateStatus: vi.fn(), complete: vi.fn(), fail: vi.fn(), block: vi.fn() };
+    executor.setTaskManager(mockTaskManager as any);
+
+    executor.enqueue(createTestTask(), new AbortController().signal, vi.fn());
+    await vi.waitFor(() => {
+      expect((executor as unknown as { keepAliveEscalated: boolean }).keepAliveEscalated).toBe(true);
+    });
+
+    expect(mockTaskManager.block).not.toHaveBeenCalled();
+    expect(mockTaskManager.complete).not.toHaveBeenCalled();
+  });
+
   it("a block that is WAITING ON A PERSON is parked, not retried (Codex 2026-09-11 M#1)", async () => {
     const executor = new BackgroundExecutor({
       orchestrator: {

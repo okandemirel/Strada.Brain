@@ -1826,9 +1826,18 @@ export class BackgroundExecutor {
         // looks at a blocked row, so only a restart or a person could move it
         // (Codex 2026-09-11 M#1). Indefinite parking is for a run that is
         // actually waiting on someone.
-        if (!AWAITS_A_PERSON_RE.test(blockedMessage)
-          && this.scheduleMissionKeepAlive(task, result.workerResult.reason ?? result.output ?? "worker blocked")) {
-          return;
+        if (!AWAITS_A_PERSON_RE.test(blockedMessage)) {
+          if (this.scheduleMissionKeepAlive(task, result.workerResult.reason ?? result.output ?? "worker blocked")) {
+            return;
+          }
+          if (this.keepAliveEscalated) {
+            // The keep-alive has already written what happened ("MISSION
+            // STOPPED — needs you", or a budget wait). Writing the worker's
+            // own sentence over it erased the stop, and a restart then
+            // re-armed the mission as if nothing had been decided (O#14).
+            requestFailed = true;
+            return;
+          }
         }
         requestFailed = true;
         this.taskManager.block(task.id, blockedMessage);
@@ -2176,7 +2185,16 @@ export class BackgroundExecutor {
    *   FAILURE — a process restart, which must not be charged to the ten-retry
    *   failure budget. See the restart handling below.
    */
+  /**
+   * Set when the last keep-alive call ESCALATED — it wrote "MISSION STOPPED"
+   * (or a budget wait) as the task's own outcome. A caller that then writes
+   * its own block or failure erases the stop, and a restart re-arms a mission
+   * whose escalation is no longer on the row (Codex 2026-09-11 O#14).
+   */
+  private keepAliveEscalated = false;
+
   private scheduleMissionKeepAlive(task: Task, reason: string, opts?: { spendAttempt?: boolean }): boolean {
+    this.keepAliveEscalated = false;
     if (!this.taskManager || task.origin !== "user") return false;
     const spendAttempt = opts?.spendAttempt !== false;
     // An ask_user block is a QUESTION awaiting a person, not a failure to
@@ -2218,6 +2236,7 @@ export class BackgroundExecutor {
     }
 
     if (decision.action === "report") {
+      this.keepAliveEscalated = true;
       this.missionRetries.delete(key);
       try {
         this.taskManager.appendTaskNotice(
@@ -2254,7 +2273,11 @@ export class BackgroundExecutor {
               return;
             }
             getLoggerSafe().info("Budget window drained — resuming stopped mission", { taskId: task.id });
-            this.taskManager?.retryTask(task.id);
+            // A resubmission that returns nothing is not a resumption: the
+            // callback used to end there, with the task still carrying the
+            // budget-wait block and no timer left (Codex 2026-09-11 O#15).
+            const resumed = this.taskManager?.retryTask(task.id) ?? null;
+            if (!resumed) this.scheduleMissionKeepAlive(task, reason);
           } catch { /* best-effort re-arm */ }
         }, 60 * 60_000);
         rearm.unref?.();
