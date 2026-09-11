@@ -182,6 +182,12 @@ describe("the art direction a gate judges against (Codex 2026-09-11 F#3, H#13)",
     expect(emptyLook.text ?? "").not.toContain("geometric puzzles");
     expect(artDirectionText(emptyLook, empty)).toBeUndefined();
 
+    // A PARENT heading ends the section too, not only a sibling.
+    const parent = "## Art Direction\n### Palette\nWarm ochre everywhere.\n# Part Two\nSolve geometric puzzles.";
+    const parentLook = extractLookDescription(parent);
+    expect(parentLook.text ?? "").toContain("Warm ochre");
+    expect(parentLook.text ?? "").not.toContain("geometric puzzles");
+
     // "## Art Direction / Monochrome." is a complete brief.
     const oneWord = "## Art Direction\nMonochrome.\n";
     const mono = extractLookDescription(oneWord);

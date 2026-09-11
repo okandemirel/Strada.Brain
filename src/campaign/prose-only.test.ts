@@ -75,6 +75,17 @@ describe("the delivery budget's signature is a set of KINDS (Codex 2026-09-11 I#
     expect(proofSignature([], { structureRefused: false, compileBroken: false })).toBe("none-named");
     expect(proofSignature([], { structureRefused: true, compileBroken: false }))
       .not.toBe(proofSignature([], { structureRefused: false, compileBroken: true }));
+    // Each WAY of failing keeps its own tag, including the ones no fixture
+    // reached before (Codex 2026-09-11 K's table).
+    const tags = [
+      "play-through: the game refused to start the session",
+      "play-through: the driver took no action at all",
+      "play-through: no frame was captured",
+      "play-through: session 1 never ended",
+      "play-through: IPlaythroughDriver is not registered",
+      "play-through: the tool left no verdict",
+    ].map((r) => proofSignature([r], { structureRefused: false, compileBroken: false }));
+    expect(new Set(tags).size).toBe(tags.length);
     // …and the FALLBACK branch, for wording this list does not know, is
     // number-insensitive too (Codex 2026-09-11 I#1).
     expect(proofSignature(["some new gate: 42 widgets short"], { structureRefused: false, compileBroken: false }))

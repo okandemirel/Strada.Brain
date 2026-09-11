@@ -2896,6 +2896,20 @@ describe("CampaignManager", () => {
     expect(describeBuild({ ...stored.milestones[2]!.buildVerdict!, ok: false, reasons: ["compiler failed", "SDK missing"] }))
       .toContain("ios");
     expect(describeBuild({ ...stored.milestones[2]!.buildVerdict!, ran: false })).toContain("ios");
+    // …and a builder that THROWS keeps them too.
+    const throwing = new CampaignManager({
+      storage,
+      buildPlayer: async () => { throw new Error("SDK missing"); },
+      planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async () => {},
+      projectRoot,
+    });
+    const threw = await (throwing as unknown as { measureBuild(c: unknown): Promise<{ unbuiltTargets?: string[]; ran: boolean }> })
+      .measureBuild({ gddText: "Ships on Steam for Windows and later on iOS.", milestones: [], currentMilestone: 0 });
+    expect(threw.ran).toBe(false);
+    expect(threw.unbuiltTargets).toEqual(["ios"]);
+
     // With NO BUILDER at all the requested platforms are still named (K#13).
     const noBuilder = new CampaignManager({
       storage,
@@ -2963,9 +2977,19 @@ describe("CampaignManager", () => {
   it("a stop order in the MIDDLE of the lineage is found (Codex 2026-09-11 J#6)", async () => {
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
     await waitFor(() => expect(tasks.submitted).toHaveLength(1));
-    // root (the milestone's task) → middle (cancelled by a person) → tip.
-    const middle = tasks.addRetry("task_1", TaskStatus.blocked);
-    const tip = tasks.addRetry(middle, TaskStatus.blocked);
+    // root (the milestone's task) → … → middle (cancelled by a person) → tip,
+    // with enough nodes between them that a small visit budget would miss it.
+    const chain: string[] = [];
+    let chainEnd = "task_1";
+    for (let i = 0; i < 10; i++) {
+      chainEnd = tasks.addRetry(chainEnd, TaskStatus.blocked);
+      chain.push(chainEnd);
+    }
+    // The stop order sits in the MIDDLE of the chain: far from the task the
+    // walk is asked about and far from the tip, so a short visit budget
+    // cannot reach it by luck.
+    const middle = chain[5]!;
+    const tip = chain.at(-1)!;
     for (const id of [middle, tip]) {
       (tasks as unknown as { prompts: Map<string, string> }).prompts.set(id, tasks.submitted[0]!.prompt);
     }
@@ -3013,6 +3037,18 @@ describe("CampaignManager", () => {
     expect(storage.get(campaign.id)!.lastError).toContain("NOT DELIVERED");
     // …and the live child is retired rather than adopted.
     expect(tasks.cancelled).toContain(child);
+  });
+
+  it("the same shape with a SUPERSESSION keeps working (Codex 2026-09-11 J#2)", async () => {
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    const child = tasks.addRetry("task_1", TaskStatus.executing);
+    (tasks as unknown as { prompts: Map<string, string> }).prompts.set(child, tasks.submitted[0]!.prompt);
+    // The campaign replaced task_1 itself; that is not a stop order.
+    tasks.cancel("task_1", { reason: "superseded" });
+    tasks.emit("task:cancelled", "task_1", "cancelled");
+    await new Promise((r) => setTimeout(r, 250));
+    expect(storage.get(campaign.id)!.state).not.toBe("failed");
   });
 
   it("a sprint cancelled ON PURPOSE stops the campaign instead of continuing its work (Codex 2026-09-11 I#6)", async () => {
@@ -3308,9 +3344,13 @@ describe("CampaignManager", () => {
     const lastGapAt = ids.map((id, i) => (id.startsWith("mcov") ? i : -1)).reduce((max, i) => Math.max(max, i), -1);
     expect(finalAt).toBeGreaterThan(0);
     expect(lastGapAt).toBeLessThan(finalAt);
-    // …and the campaign is working that new sprint, not the final proofs.
+    // …and the campaign is working THE NEW sprint — not the exhausted one it
+    // just failed, and not the final proofs.
     const current = storage.get(campaign.id)!;
-    expect(current.milestones[current.currentMilestone]!.id.startsWith("mcov")).toBe(true);
+    const running = current.milestones[current.currentMilestone]!;
+    expect(running.id).not.toBe("mcov1");
+    expect(running.coverageGap).toBe("Audio: absent");
+    expect(running.attempts).toBeLessThanOrEqual(1);
   });
 
   it("a repeated audit entry gets ONE sprint (Codex 2026-09-11 I#5)", async () => {

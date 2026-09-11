@@ -41,6 +41,9 @@ describe("the platform the GDD asks for (Codex 2026-09-11 B#11)", () => {
     // "PC" says desktop without saying which: only when nothing else does.
     expect(gddPlatform("Ships on PC running Linux.")).toMatchObject({ target: "linux", targets: ["linux"] });
     expect(gddPlatform("A PC game.")).toMatchObject({ target: "windows" });
+    // …and a store still tells us it is a handheld.
+    expect(gddPlatform("Release on Windows and Google Play.").handheld).toBe(true);
+    expect(gddPlatform("Ships on Steam for Linux.").handheld).toBe(false);
   });
 
   it("'mid-range phones' is a handheld even when no store is named", () => {
