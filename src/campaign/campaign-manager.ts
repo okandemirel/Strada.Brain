@@ -2063,7 +2063,19 @@ export class CampaignManager {
         // unfiltered is "no -testFilter/-categories given", never a word in a
         // sentence. The prose-derived verdict remains the fallback.
         const run = readPlaymodeRun(this.projectRoot, this.sprintStartMs(milestone));
-        if (run.found && run.total !== undefined) {
+        // A STALE record is not silence: reading an old result with
+        // unity_test_results produced green prose while the record on disk
+        // predated the attempt, so the prose fallback turned a cached answer
+        // into fresh proof (Codex 2026-09-11 C#10). The final sprint is held
+        // to the file; earlier sprints keep the prose fallback.
+        const finalSprint = campaign.currentMilestone >= campaign.milestones.length - 1;
+        if (run.stale === true && finalSprint) {
+          milestone.testVerdict = undefined;
+          milestone.testVerdictUnfiltered = undefined;
+          milestone.testRunSource = "nunit";
+          milestone.testFailures = verdict?.failedTests;
+          milestone.testFailuresOmitted = verdict?.failedTestsOmitted;
+        } else if (run.found && run.total !== undefined) {
           const green = run.green === true;
           milestone.testVerdict = green ? run.detail : undefined;
           milestone.testVerdictUnfiltered = green ? run.unfiltered : undefined;

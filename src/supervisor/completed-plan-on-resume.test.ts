@@ -44,11 +44,18 @@ describe("a resumed task whose saved plan is already complete (2026-09-10 21:20)
     expect(branch).toContain("verifier.verifyWithReport(alreadyDone.nodeResults)");
     expect(branch).toContain('mode: "always"');
     expect(branch).toContain("synthesized.success");
+    // Nobody-looked is not approval, the wait is kept alive, and an abort
+    // during it is honoured (Codex 2026-09-11 C#4, C#7).
+    expect(branch).toContain("const unapproved = report.candidates - report.approved;");
+    expect(branch).toContain("if (unapproved > 0) {");
+    expect(branch).toContain("success: false");
+    expect(branch).toContain("withLivenessHeartbeat");
+    expect(branch).toContain("Aborted during resume re-verification");
   });
 
   it("the supervisor asks it before declaring 'No sub-tasks after decomposition'", () => {
     const source = readFileSync("src/supervisor/supervisor-brain.ts", "utf8");
     const at = source.indexOf('"No sub-tasks after decomposition"');
-    expect(source.lastIndexOf("completedPlanOnResume(context.goalTree)", at)).toBeGreaterThan(at - 3000);
+    expect(source.lastIndexOf("completedPlanOnResume(context.goalTree)", at)).toBeGreaterThan(at - 5000);
   });
 });

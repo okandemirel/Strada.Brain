@@ -434,8 +434,41 @@ export class SupervisorBrain {
               preferDifferentProvider: true,
               maxVerificationCost: Number.POSITIVE_INFINITY,
             }, (node) => this.verifyNode!(node, context));
-            const { results: verified, report } = await verifier.verifyWithReport(alreadyDone.nodeResults);
+            // The verification itself is a model call per node: keep the
+            // task's watchdog hearing from us, or a slow reviewer reads as an
+            // inactive task (Codex 2026-09-11 C#7).
+            const { results: verified, report } = await withLivenessHeartbeat(
+              context.chatId,
+              () => verifier.verifyWithReport(alreadyDone.nodeResults),
+              context.onLiveness,
+            );
+            if (externalSignal?.aborted || internalSignal.aborted) {
+              return this.makePartialResult([], "Aborted during resume re-verification");
+            }
             const synthesized = verifier.synthesize(verified);
+            // NOBODY LOOKED is not approval (C#4): a resume counts as done
+            // only when every saved node was actually approved. A flagged or
+            // unverified node keeps its explanation in the output.
+            const unapproved = report.candidates - report.approved;
+            if (unapproved > 0) {
+              const detail = verified
+                .filter((r) => r.status !== "ok" || (r.output ?? "").length > 0)
+                .map((r) => `- ${String(r.nodeId)}: ${(r.output ?? "").slice(0, 200) || r.status}`)
+                .slice(0, 8)
+                .join("\n");
+              // NOTE (C#5, open): the saved GoalNodes stay "completed", so a
+              // retry re-verifies rather than re-running the rejected step. It
+              // cannot pass falsely — the rejection repeats — but self-healing
+              // needs node-status persistence this class does not own.
+              return {
+                ...synthesized,
+                success: false,
+                partial: true,
+                output:
+                  `The saved plan was re-verified on resume and ${unapproved} of ${report.candidates} step(s) did not pass: ` +
+                  `${report.approved} approved, ${report.flagged} flagged, ${report.rejected} rejected.\n${detail}`,
+              };
+            }
             getLoggerSafe().info("Saved plan already complete on resume — re-verified before counting it done", {
               goalRootId,
               steps: alreadyDone.totalNodes,
@@ -445,7 +478,7 @@ export class SupervisorBrain {
               success: synthesized.success,
             });
             return synthesized.success
-              ? { ...synthesized, output: `${alreadyDone.output}\n\nRe-verified on resume: ${report.approved} approved, ${report.flagged} flagged, ${report.rejected} rejected.` }
+              ? { ...synthesized, output: `${alreadyDone.output}\n\nRe-verified on resume: ${report.approved} of ${report.candidates} step(s) approved.` }
               : synthesized;
           }
           getLoggerSafe().info("Saved plan already complete on resume — nothing left to run (no verifier configured)", {

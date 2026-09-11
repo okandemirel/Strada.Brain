@@ -2524,6 +2524,28 @@ describe("CampaignManager", () => {
     expect(messages.map((m) => m.text).join("\n")).toContain("This machine cannot produce the missing proof");
   });
 
+  it("a STALE NUnit record cannot be laundered into fresh proof by the prose fallback (Codex 2026-09-11 C#10)", async () => {
+    mkdirSync(join(projectRoot, "Recordings", "tests"), { recursive: true });
+    const record = join(projectRoot, "Recordings", "tests", "playmode-last.json");
+    writeFileSync(record, JSON.stringify({ total: 215, passed: 215, failed: 0, skipped: 0, unfiltered: true, measuredAt: new Date().toISOString() }));
+    const old = new Date(Date.now() - 6 * 60 * 60_000);
+    utimesSync(record, old, old);
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    // The worker read the OLD result and reports it as green prose.
+    tasks.verifications.set("task_3", { testsGreen: true, detail: "PlayMode verification passed: 215 of 215 tests passed (unfiltered — the whole PlayMode suite)", unfiltered: true });
+    tasks.emit("task:completed", "task_3", "green, shipping");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+    const m = storage.get(campaign.id)!.milestones[2]!;
+    expect(m.testVerdict).toBeUndefined();
+    expect(m.testRunSource).toBe("nunit");
+    expect(storage.get(campaign.id)!.state).not.toBe("done");
+  });
+
   it("a CANCELLED coverage sprint does not start a final proof sprint (Codex 2026-09-11 C#1)", async () => {
     // A manager of its own, on its own task manager and storage: two managers
     // on one emitter double-handle every event.

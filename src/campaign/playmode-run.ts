@@ -40,7 +40,9 @@ export function readPlaymodeRun(projectRoot: string, sinceMs: number): PlaymodeR
   } catch {
     return { found: false };
   }
-  if (mtimeMs < sinceMs) return { found: false, stale: true };
+  // Two milliseconds of tolerance, as the play-through verdict has: a file
+  // touched in the same millisecond is not older than the attempt.
+  if (mtimeMs + 2 < sinceMs) return { found: false, stale: true };
   let raw: Record<string, unknown>;
   try {
     raw = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
