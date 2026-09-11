@@ -87,12 +87,33 @@ export function artDirectionText(look: LookDescription | undefined, gddText: str
     .filter((line) => {
       const t = line.trim();
       if (/^#{1,6}\s+\S/.test(t)) return false;
-      if (/^\d+\.\s+[A-Z][A-Z\s/&-]{3,}$/.test(t)) return false;
-      return /[a-z]/.test(t);
+      if (NUMBERED_HEADING_RE.test(t)) return false;
+      // An ALL-CAPS line is a HEADING only when it reads like one: a few
+      // words and no sentence punctuation. Demanding a lower-case letter threw
+      // away "MINIMALIST FLAT GEOMETRIC ART: USE SOLID COLORED SQUARES." —
+      // the entire requested style (Codex 2026-09-11 L#16).
+      if (!/[a-z]/.test(t)) return !isShoutedHeading(t);
+      return true;
     })
     .map((line) => line.trim())
     .filter((line) => line.length > 0 && ART_WORD_RE.test(line));
   return sentences.length > 0 ? sentences.join(" ") : undefined;
+}
+
+/**
+ * A numbered section title, in ANY case. Requiring ALL CAPS meant "2. Gameplay"
+ * did not end the art section, and the gameplay text below it became the art
+ * brief (Codex 2026-09-11 L#15).
+ */
+const NUMBERED_HEADING_RE = /^\s*\d+[.)]\s+[A-Z][^.!?:;]{2,48}$/;
+
+/** A rule, a divider, a row of dashes: structure, not prose (L#15). */
+const STRUCTURAL_LINE_RE = /^\s*(?:[-*_=~]\s*){3,}$|^\s*\|[\s|:-]*\|\s*$/;
+
+/** Is this shouted line a TITLE rather than an instruction? */
+function isShoutedHeading(line: string): boolean {
+  if (/[.!?]$/.test(line)) return false;
+  return line.split(/\s+/).filter(Boolean).length <= 6;
 }
 
 /** Words that make a sentence about the game's LOOK rather than its play. */
@@ -125,7 +146,7 @@ export function extractLookDescription(gddText: string): LookDescription {
       // body.length condition, so "1. ART DIRECTION" followed straight by
       // "2. GAMEPLAY" took the gameplay text as the art brief (Codex
       // 2026-09-11 K#11).
-      if (/^\s*\d+\.\s+[A-Z][A-Z\s/&-]{3,}$/.test(line)) break;
+      if (NUMBERED_HEADING_RE.test(line)) break;
       // A SIBLING OR PARENT heading ends the section, even when the body is
       // still empty: "## Art Direction" immediately followed by "## Gameplay"
       // took that heading and its text as the art brief (Codex 2026-09-11
@@ -144,13 +165,16 @@ export function extractLookDescription(gddText: string): LookDescription {
     const inline = /:\s*(\S.*)$/.exec((lines[i] ?? "").replace(/^\s*#{1,6}\s+/, ""))?.[1]?.trim();
     // …and a body made only of SUBHEADINGS is not a brief: "### Palette and
     // references" with nothing under it invented one (K#11).
-    const prose = body.filter((l) => !/^\s*#{1,6}\s+\S/.test(l));
+    const prose = body.filter((l) => !/^\s*#{1,6}\s+\S/.test(l) && !STRUCTURAL_LINE_RE.test(l));
     const substantive = prose.join("\n").trim().length > 0;
     const bodyText = body.map((l) => l.replace(/^\s*#{1,6}\s+/, "")).join("\n").trim();
     candidates.push({
       heading: (match[1] ?? "").trim(),
       line: i + 1,
-      body: substantive ? bodyText : inline ? `${inline}\n${bodyText}`.trim() : "",
+      // The inline brief is part of the description whether or not a body
+      // follows it: dropping it the moment one line existed discarded the
+      // requested style ("## Art Direction: Monochrome.") (L#16).
+      body: inline ? `${inline}\n${bodyText}`.trim() : substantive ? bodyText : "",
     });
   }
 

@@ -246,3 +246,38 @@ describe("the art direction a gate judges against (Codex 2026-09-11 F#3, H#13)",
     expect(inlineText).not.toContain("geometric puzzles");
   });
 });
+
+describe("what a brief is, and what a heading is (Codex 2026-09-11 L#15, L#16)", () => {
+  it("a MIXED-CASE numbered heading ends the section too", () => {
+    // "2. Gameplay" was not ALL CAPS, so the art section swallowed the
+    // gameplay text and "geometric puzzles" became a request for flat art.
+    const look = extractLookDescription("1. Art Direction\n2. Gameplay\nSolve geometric puzzles.\nReach the exit.");
+    expect(look.found).toBe(false);
+  });
+
+  it("a horizontal rule is not substantive prose", () => {
+    // "---" under "### Palette and references" counted as a body, so the
+    // subheading was promoted into a brief nobody wrote.
+    const look = extractLookDescription("## Art Direction\n### Palette and references\n---\n## Gameplay\nJump.");
+    expect(look.found).toBe(false);
+  });
+
+  it("an ALL-CAPS instruction is an instruction, not a heading", () => {
+    // The whole art direction was thrown away because it had no lower-case
+    // letter in it.
+    const text = artDirectionText(undefined, "MINIMALIST FLAT GEOMETRIC ART: USE SOLID COLORED SQUARES.");
+    expect(text).toBeDefined();
+    expect(text).toContain("SOLID COLORED SQUARES");
+    // …while a numbered title with no sentence in it is still a heading.
+    expect(artDirectionText(undefined, "1. ART DIRECTION")).toBeUndefined();
+  });
+
+  it("a brief written into the heading is kept BESIDE the body", () => {
+    // "## Art Direction: Monochrome." was discarded the moment a body line
+    // existed, so the requested style disappeared.
+    const look = extractLookDescription("## Art Direction: Monochrome.\nUse circles and squares.\n## Gameplay\nJump.");
+    expect(look.found).toBe(true);
+    expect(look.text).toContain("Monochrome");
+    expect(look.text).toContain("circles and squares");
+  });
+});
