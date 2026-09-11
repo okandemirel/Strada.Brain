@@ -93,6 +93,26 @@ describe("StyleAnalysis keyword fallback", () => {
     expect((await analysis.analyze("A realistic military shooter with PBR materials.")).profile.family).toBe("realistic");
   });
 
+  it("an unrecognized document gets NO invented style: unspecified family, its own colours, a matching pipeline (Codex 2026-09-11 B#20)", async () => {
+    const analysis = new StyleAnalysis(undefined);
+    const { profile } = await analysis.analyze("A turn-based game about trade routes between harbour towns.");
+    expect(profile.family).toBe("unspecified");
+    expect(profile.proportions).toMatchObject({ plump: 1, headScale: 1 });
+    expect(profile.outline.width).toBe(0);
+    expect(profile.palette).toEqual(["#9aa0a6"]);
+    expect(profile.notes).toContain("names no colours");
+
+    // The document's own colours are used when it names any.
+    const named = await analysis.analyze("Harbour towns rendered in #1b3a5c and #e8c37a, nothing else.");
+    expect(named.profile.palette).toEqual(["#1b3a5c", "#e8c37a"]);
+
+    // A realistic document is rendered in real time, not to sprite sheets.
+    const realistic = await analysis.analyze("A realistic military shooter with PBR materials.");
+    expect(realistic.profile.pipeline).toBe("realtime-3d");
+    const pixel = await analysis.analyze("A crisp pixel-art puzzle, 16-bit sprites everywhere.");
+    expect(pixel.profile.pipeline).toBe("sprite-native");
+  });
+
   it("never crashes on an empty document — returns a marked fallback", async () => {
     const analysis = new StyleAnalysis(undefined);
     const { profile, source } = await analysis.analyze("");

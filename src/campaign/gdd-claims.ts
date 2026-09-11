@@ -71,6 +71,9 @@ const BOOT_RE =
 const BOOT_REVERSED_RE =
   /\b(?:under|below|within|less\s+than|no\s+more\s+than|at\s+most)\s*(\d+(?:\.\d+)?)\s*(ms|milliseconds?|s|secs?|seconds?|min(?:ute)?s?)\b[^.\n]{0,40}?\b(?:to\s+)?(?:load(?:ing)?|boot(?:ing)?|start-?up|launch|first\s+frame|interactive)\b/gi;
 const LEVEL_COUNT_RE = /\b(\d{1,3})\s+(?:levels|stages|rounds|puzzles|worlds|chapters|waves)\b/gi;
+/** "2 worlds with 12 levels each", "4 chapters of 10 stages". */
+const LEVEL_MULTIPLY_RE =
+  /\b(\d{1,3})\s+(?:worlds|chapters|acts|episodes|zones)\b[^.\n]{0,20}?\b(?:with|of|holding|containing|each\s+with)\s+(\d{1,3})\s+(?:levels|stages|rounds|puzzles|waves)\b/gi;
 const SESSION_RE =
   /\b(?:each|every|per|a|one|single|average|typical)\s+(?:level|session|round|match|run|game|play\s+session|attempt)\b[^.\n]{0,50}?\b(\d+(?:\.\d+)?)(?:\s*(?:[-–~]|to)\s*(\d+(?:\.\d+)?))?\s*(ms|s|secs?|seconds?|min(?:ute)?s?)\b/gi;
 
@@ -81,35 +84,60 @@ const SESSION_RE =
  */
 export function extractNumericClaims(gddText: string): { claims: NumericClaim[]; truncated: number } {
   const text = gddText ?? "";
-  const found: NumericClaim[] = [];
+  const found: Array<NumericClaim & { at: number }> = [];
   const seen = new Set<string>();
-  const push = (c: NumericClaim) => {
+  const push = (c: NumericClaim, at = 0) => {
     const key = `${c.kind}:${c.comparator}:${c.value}`;
     if (seen.has(key)) return;
     seen.add(key);
-    found.push(c);
+    found.push({ ...c, at });
   };
   for (const m of text.matchAll(FPS_RE)) {
     const value = Number(m[1]);
-    if (value >= 10 && value <= 240) push({ kind: "fps", comparator: "min", value, text: fragment(text, m.index ?? 0, m[0].length) });
+    if (value >= 10 && value <= 240) push({ kind: "fps", comparator: "min", value, text: fragment(text, m.index ?? 0, m[0].length) }, m.index ?? 0);
   }
   for (const re of [BOOT_RE, BOOT_REVERSED_RE]) {
     for (const m of text.matchAll(re)) {
       const value = toSeconds(Number(m[1]), m[2] ?? "s");
-      if (value > 0 && value <= 600) push({ kind: "boot_seconds", comparator: "max", value, text: fragment(text, m.index ?? 0, m[0].length) });
+      if (value > 0 && value <= 600) push({ kind: "boot_seconds", comparator: "max", value, text: fragment(text, m.index ?? 0, m[0].length) }, m.index ?? 0);
     }
   }
+  // "2 worlds with 12 levels each" is 24 levels, not two claims that contradict
+  // each other against one session count (Codex 2026-09-11 B#19). The spans the
+  // multiplication consumed are not read again below.
+  const multiplied: Array<[number, number]> = [];
+  for (const m of text.matchAll(LEVEL_MULTIPLY_RE)) {
+    const outer = Number(m[1]);
+    const inner = Number(m[2]);
+    const total = outer * inner;
+    if (outer >= 1 && inner >= 1 && total <= 999) {
+      multiplied.push([m.index ?? 0, (m.index ?? 0) + m[0].length]);
+      push({ kind: "level_count", comparator: "eq", value: total, text: fragment(text, m.index ?? 0, m[0].length) }, m.index ?? 0);
+    }
+  }
+  const insideMultiplication = (at: number): boolean => multiplied.some(([from, to]) => at >= from && at < to);
   for (const m of text.matchAll(LEVEL_COUNT_RE)) {
+    if (insideMultiplication(m.index ?? 0)) continue;
     const value = Number(m[1]);
-    if (value >= 1) push({ kind: "level_count", comparator: "eq", value, text: fragment(text, m.index ?? 0, m[0].length) });
+    if (value >= 1) push({ kind: "level_count", comparator: "eq", value, text: fragment(text, m.index ?? 0, m[0].length) }, m.index ?? 0);
   }
   for (const m of text.matchAll(SESSION_RE)) {
     const unit = m[3] ?? "s";
     const upper = toSeconds(Number(m[2] ?? m[1]), unit);
-    if (upper > 0 && upper <= 4 * 3600) push({ kind: "session_seconds", comparator: "max", value: upper, text: fragment(text, m.index ?? 0, m[0].length) });
+    if (upper > 0 && upper <= 4 * 3600) push({ kind: "session_seconds", comparator: "max", value: upper, text: fragment(text, m.index ?? 0, m[0].length) }, m.index ?? 0);
+    // "a round lasts 30–60 seconds" has a FLOOR as well: only the ceiling was
+    // read, so a one-second round met the claim (Codex 2026-09-11 B#19).
+    if (m[2] !== undefined) {
+      const lower = toSeconds(Number(m[1]), unit);
+      if (lower > 0 && lower < upper) push({ kind: "session_seconds", comparator: "min", value: lower, text: fragment(text, m.index ?? 0, m[0].length) }, m.index ?? 0);
+    }
   }
+  // DOCUMENT ORDER, then the cap: the claims were collected kind by kind, so
+  // the cap dropped whole later categories rather than the tail of the
+  // document (Codex 2026-09-11 B#19).
+  found.sort((a, b) => a.at - b.at);
   const truncated = Math.max(0, found.length - MAX_CLAIMS);
-  return { claims: found.slice(0, MAX_CLAIMS), truncated };
+  return { claims: found.slice(0, MAX_CLAIMS).map(({ at: _at, ...c }) => c), truncated };
 }
 
 /** Hold each claim against the play-through evidence. */
@@ -173,13 +201,15 @@ export function assessNumericClaims(
         if (!perf || playthrough.ok !== true || !playthrough.outcome || playthrough.outcome === "None") {
           return { claim, status: "unmeasured", note: "the session never reached an outcome, so its length is unknown", blocking: false };
         }
-        const met = perf.playSeconds <= claim.value;
+        const met = claim.comparator === "min" ? perf.playSeconds >= claim.value : perf.playSeconds <= claim.value;
         return {
           claim,
           status: met ? "met" : "not_met",
           measured: Number(perf.playSeconds.toFixed(1)),
           note: `session ${playthrough.session ?? "?"} reached ${playthrough.outcome} after ${perf.playSeconds.toFixed(1)} s of driven play (${medium})`,
-          blocking: true,
+          // A driven play-through is faster than a person's; the FLOOR of a
+          // range is disclosed, never used to refuse a delivery.
+          blocking: claim.comparator !== "min",
         };
       }
       case "level_count": {

@@ -78,7 +78,12 @@ const defaultIo: SceneHygieneIo = {
  * against the file NAME, never the directory path — a project may perfectly
  * well keep its game under Assets/Assembled/.
  */
-const SCAFFOLDING_NAME = /InitTestScene|Verification|Verified|Showcase|Boundary|Assembled/i;
+/**
+ * Names that say "this scene exists to check something", not "this is the
+ * game". Ordinary scaffolding vocabulary, no vehicle's words; the entry pick
+ * below prefers build index 0 among the scenes these do not match.
+ */
+const SCAFFOLDING_NAME = /InitTestScene|TestScene|SmokeTest|Sandbox|Verification|Verified|Showcase|Boundary|Assembled/i;
 
 /** Below this, a scene cannot hold a game: camera, light, one probe object. */
 const MIN_GAME_OBJECTS = 3;
@@ -173,10 +178,16 @@ export function assessSceneHygiene(
   // Never promote a scaffolding-NAMED scene to "open this and press Play"
   // while a non-scaffolding one exists: the name is the author's own label
   // (audited 2026-09-03).
+  // Ties break on BUILD ORDER, not on the path: Unity opens the first enabled
+  // scene, so when two scenes are equally rich the earlier one is the one a
+  // person actually gets (Codex 2026-09-11 B#15). Path order was alphabetical
+  // chance.
+  const buildIndex = new Map(enabled.map((s, i) => [s.path, i]));
   const sortByRichness = (a: HygieneScene & { objects: number }, b: HygieneScene & { objects: number }): number =>
-    b.objects - a.objects || a.path.localeCompare(b.path);
+    b.objects - a.objects || (buildIndex.get(a.path) ?? 0) - (buildIndex.get(b.path) ?? 0);
   const nonScaffolding = readable.filter((s) => !SCAFFOLDING_NAME.test(basename(s.path)));
-  const best = [...(nonScaffolding.length > 0 ? nonScaffolding : readable)].sort(sortByRichness)[0];
+  const pool = nonScaffolding.length > 0 ? nonScaffolding : readable;
+  const best = [...pool].sort(sortByRichness)[0];
   if (!best || best.objects === 0) {
     return {
       ...empty,

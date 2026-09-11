@@ -625,6 +625,46 @@ describe("defects the measurement review found (2026-09-07)", () => {
     expect(report.refusal).toContain("1 UI CanvasRenderer/VideoPlayer do not count");
   });
 
+  it("a UI-driven game (a screen built from canvases, no primitives) is not 'renders NOTHING' (Codex 2026-09-11 B#16)", () => {
+    const root = project();
+    buildSettings(root, [{ path: "Assets/Scenes/Main.unity" }]);
+    const canvases = Array.from({ length: 12 }, (_, i) =>
+      `--- !u!1 &${40 + i}\nGameObject:\n  m_Name: Card${i}\n--- !u!222 &${80 + i}\nCanvasRenderer:\n  m_GameObject: {fileID: ${40 + i}}\n`).join("");
+    put(root, "Assets/Scenes/Main.unity", `${HEADER}${CAMERA(0)}${canvases}`, G("5"));
+    put(root, "Assets/Art/card.png", "pixels", G("2"));
+    const report = assessBuiltAsSpecified(root);
+    expect(report.shippedWorldRenderers).toBe(0);
+    expect(report.shippedRenderers).toBe(12);
+    expect(report.refusal).toBeUndefined();
+
+    // …and the measured hole stays shut: canvases over engine primitives are
+    // still a HUD over a world nobody made.
+    const withPrimitives = project();
+    buildSettings(withPrimitives, [{ path: "Assets/Scenes/Main.unity" }]);
+    put(withPrimitives, "Assets/Scenes/Main.unity", `${HEADER}${CAMERA(0)}${canvases}`, G("5"));
+    put(withPrimitives, "Assets/Prefabs/Pig.prefab", artPrefab(G("2")), G("1"));
+    put(withPrimitives, "Assets/Art/thing.png", "pixels", G("2"));
+    put(withPrimitives, "Assets/Scripts/World.cs", "class W { void B() { GameObject.CreatePrimitive(PrimitiveType.Cube); GameObject.CreatePrimitive(PrimitiveType.Sphere); } }", G("6"));
+    expect(assessBuiltAsSpecified(withPrimitives).refusal).toContain("render NOTHING");
+  });
+
+  it("flat artwork the GDD ASKED for is a style, not placeholder art (Codex 2026-09-11 B#17)", () => {
+    const root = project();
+    boundSpriteProject(root, "a0000000000000000000000000000000");
+    putBytes(root, "Assets/Art/Generated/Card.png", png(64, 64, "flat"), "a0000000000000000000000000000000");
+    for (let i = 1; i <= 11; i++) {
+      putBytes(root, `Assets/Art/Cards/Card_${i}.png`, png(64, 64, "flat"), `b${String(i).padStart(31, "0")}`);
+    }
+    // The pixels are identical; only the document differs.
+    expect(assessBuiltAsSpecified(root).refusal).toContain("placeholder art");
+    const asked = assessBuiltAsSpecified(root, undefined, {
+      artDirection: "A minimalist geometric look: solid colour shapes, no gradients, no texture detail anywhere.",
+    });
+    expect(asked.refusal ?? "").not.toContain("placeholder art");
+    // The counts are still disclosed — the style is honoured, not hidden.
+    expect(asked.disclosures.join(" ")).toContain("placeholder-grade");
+  });
+
   it("a PrefabInstance of an imported model is a placed, project-bound mesh", () => {
     const root = project();
     buildSettings(root, [{ path: "Assets/Scenes/Main.unity" }]);

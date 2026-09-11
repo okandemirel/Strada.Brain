@@ -91,12 +91,18 @@ export function describeMedia(gddText: string | undefined, report: BuiltAsSpecif
       `GDD audio (×${audio.count}; e.g. ${audio.excerpts[0] ?? ""}): shipped scenes carry ${report.shippedAudioSources} AudioSource(s), ` +
         `${report.shippedAudioSourcesBound} bound to a clip; ${report.reachableAudioClips} of the project's ${clips} clip(s) are reachable from a shipped scene by any route.`,
     );
-    if (asks("audio") && clips > 0 && report.reachableAudioClips === 0 && report.shippedAudioSources === 0) {
+    // AN UNBOUND AudioSource IS NOT SOUND, and a GDD that asks for audio with
+    // NO clip in the project is a cue list nobody made — both used to pass
+    // (Codex 2026-09-11 B#12). What still cannot be judged from files (mixing,
+    // triggers, loop points) stays a disclosure.
+    if (asks("audio") && clips === 0) {
       refusal =
-        `the GDD specifies audio (${audio.count} mentions) and the project holds ${clips} audio clip(s), but no shipped scene carries an ` +
-        "AudioSource or reaches a single clip by any route — the delivery is silent";
-    } else if (asks("audio") && clips === 0) {
-      lines.push("GDD audio: the project holds NO audio clips at all — the cue list was never produced (disclosed; the art inventory gate owns clip production).");
+        `the GDD specifies audio (${audio.count} mentions) and the project holds NO audio clip at all — ` +
+        "the cue list was never produced, so the delivery is silent";
+    } else if (asks("audio") && clips > 0 && report.reachableAudioClips === 0 && report.shippedAudioSourcesBound === 0) {
+      refusal =
+        `the GDD specifies audio (${audio.count} mentions) and the project holds ${clips} audio clip(s), but no shipped scene reaches a ` +
+        `single clip by any route and none of its ${report.shippedAudioSources} AudioSource(s) is bound to one — the delivery is silent`;
     }
   }
   const anim = signals.find((s) => s.kind === "animation");

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { PrerenderFramesTool, buildRenderScript } from "./prerender-frames.js";
+import { PrerenderFramesTool, buildRenderScript, materialForShading } from "./prerender-frames.js";
 import { resolveUnityCliPath } from "./unity-cli-path.js";
 import type { ToolContext } from "../tool.interface.js";
 
@@ -11,6 +11,18 @@ function makeContext(projectPath: string, readOnly = false): ToolContext {
 }
 
 describe("buildRenderScript", () => {
+  it("no profile means no styling: no squash, no pink, matte material (Codex 2026-09-11 B#21)", () => {
+    const neutral = buildRenderScript({ bodyColor: "#9aa0a6", plump: [1, 1, 1], headScale: 1, outlineWidth: 0, shading: "flat" });
+    expect(neutral).toContain('toon.SetFloat("_Glossiness", 0.1f)');
+    expect(neutral).not.toContain('toon.SetFloat("_Glossiness", 0.82f)');
+    expect(neutral).toContain("bool isEye = false;");
+    const glossy = buildRenderScript({ bodyColor: "#f89eb8", plump: [1.2, 0.833, 1.2], headScale: 1.22, outlineWidth: 1, shading: "glossy" });
+    expect(glossy).toContain('toon.SetFloat("_Glossiness", 0.82f)');
+    expect(materialForShading("glossy")).toEqual({ glossiness: 0.82, metallic: 0 });
+    expect(materialForShading("pbr-realistic")).toEqual({ glossiness: 0.5, metallic: 0.1 });
+    expect(materialForShading(undefined)).toEqual({ glossiness: 0.1, metallic: 0 });
+  });
+
   it("embeds the tuned lighting, the stylize stage, and the synchronous RT capture", () => {
     const script = buildRenderScript({
       bodyColor: "#f89eb8",

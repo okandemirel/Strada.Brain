@@ -42,11 +42,18 @@ export function elementCodeTokens(name: string): string[] {
  * (e.g. `L21`) followed by an element name — the shape GDDs in this genre
  * use for their element schedule (PixelFlow §4.1).
  */
+/** C# source with // and /* *\/ comments removed (strings are left as they are). */
+export function stripCsComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|[^:\\])\/\/.*$/gm, "$1");
+}
+
 export function extractScheduledElements(docText: string): ScheduledElement[] {
   const found = new Map<string, ScheduledElement>();
   const lines = docText.split("\n");
   for (let i = 0; i < lines.length; i++) {
-    const m = /^\s*\|\s*(L\d{1,4})\s*\|\s*([^|]+?)\s*\|/.exec(lines[i]!);
+    // Any unlock id in the first cell: L21, 21, E3, W1-3, Day 4 — one GDD's
+    // "L<number>" was the only shape recognized (Codex 2026-09-11 B#18).
+    const m = /^\s*\|\s*([A-Za-z]{0,3}\s?\d{1,4}(?:[.-]\d{1,4})?)\s*\|\s*([^|]+?)\s*\|/.exec(lines[i]!);
     if (!m) continue;
     const name = m[2]!.trim();
     if (!name || /^(element|unlock|name)$/i.test(name)) continue;
@@ -152,7 +159,9 @@ export function assessSpecScope(
   const corpus = files
     .map((f) => {
       try {
-        return (readFile?.(f) ?? readFileSync(f, "utf8")).toLowerCase();
+        // Comments are not an implementation: a TODO naming every element
+        // satisfied this gate (Codex 2026-09-11 B#18).
+        return stripCsComments(readFile?.(f) ?? readFileSync(f, "utf8")).toLowerCase();
       } catch {
         return "";
       }

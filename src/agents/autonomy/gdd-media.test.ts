@@ -79,7 +79,7 @@ describe("describeMedia", () => {
   it("refuses the strong audio case: the GDD asks, clips exist, no shipped scene reaches one", () => {
     const d = describeMedia(GDD, withScene("", withClip));
     expect(d.signals.map((s) => [s.kind, s.count >= 3])).toEqual([["audio", true], ["animation", true], ["vfx", true]]);
-    expect(d.refusal).toMatch(/^the GDD specifies audio \(\d+ mentions\) and the project holds 1 audio clip\(s\), but no shipped scene carries an AudioSource or reaches a single clip/);
+    expect(d.refusal).toMatch(/^the GDD specifies audio \(\d+ mentions\) and the project holds 1 audio clip\(s\), but no shipped scene reaches a single clip by any route and none of its 0 AudioSource\(s\) is bound to one/);
     const text = d.lines.join("\n");
     expect(text).toContain("GDD audio (×");
     expect(text).toContain("shipped scenes carry 0 AudioSource(s), 0 bound to a clip; 0 of the project's 1 clip(s) are reachable");
@@ -103,14 +103,19 @@ describe("describeMedia", () => {
     expect(d.lines.join("\n")).toContain("1 of the project's 1 clip(s) are reachable");
   });
 
-  it("no clips at all is disclosed, not refused here; a GDD without media asks says so; unreadable GDD says so", () => {
+  it("a GDD that asks for audio with NO clip in the project is refused, not merely disclosed (Codex 2026-09-11 B#12)", () => {
     const none = describeMedia(GDD, withScene(""));
-    expect(none.refusal).toBeUndefined();
-    expect(none.lines.join("\n")).toContain("the project holds NO audio clips at all");
+    expect(none.refusal).toContain("holds NO audio clip at all");
     expect(describeMedia("# GDD\n\nA quiet puzzle.", withScene("")).lines).toEqual([
       "Sound/motion/effects: the GDD names no audio, animation or effects — nothing to compare the scenes against.",
     ]);
     expect(describeMedia(undefined, withScene("")).lines[0]).toContain("NOT checked");
+  });
+
+  it("an UNBOUND AudioSource does not make a silent delivery audible (Codex 2026-09-11 B#12)", () => {
+    const d = describeMedia(GDD, withScene("--- !u!82 &9\nAudioSource:\n  m_GameObject: {fileID: 7}\n  m_audioClip: {fileID: 0}\n", withClip));
+    expect(d.refusal).toContain("none of its");
+    expect(d.refusal).toContain("AudioSource(s) is bound to one");
   });
 
   it("a passing mention is not an ask: below the threshold nothing refuses", () => {

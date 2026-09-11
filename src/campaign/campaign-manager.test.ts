@@ -679,7 +679,7 @@ describe("CampaignManager", () => {
     const prompt = tasks.submitted[3]!.prompt;
     expect(prompt).not.toContain("old wording");
     expect(prompt).toContain("- Wire the HUD.\n- Ship it.");
-    expect(prompt).toContain("BUILD HYGIENE (final sprint): when you are done, Build Settings must list EXACTLY ONE");
+    expect(prompt).toContain("BUILD HYGIENE (final sprint): when you are done, the FIRST enabled scene in Build Settings");
     expect(prompt.indexOf("BUILD HYGIENE")).toBe(prompt.lastIndexOf("BUILD HYGIENE"));
   });
 
@@ -840,8 +840,9 @@ describe("CampaignManager", () => {
     expect(prompt).not.toContain("frame rate ≥ 60 fps measured");
     // The play-through stood, so the campaign built and played the player: its frame rate answers the fps claim; the boot budget still fails.
     expect(storage.get(campaign.id)!.milestones[2]!.gddClaims).toEqual([
-      "GDD frame rate ≥ 60 fps: MET — 60.0 fps average over 600 frames in the built player (real rendering), worst frame 40 ms",
+      // Document order (Codex 2026-09-11 B#19): the boot budget is written first.
       "GDD boot time ≤ 1 s: NOT MET — scene load → services in 2.4 s (editor play mode, batch)",
+      "GDD frame rate ≥ 60 fps: MET — 60.0 fps average over 600 frames in the built player (real rendering), worst frame 40 ms",
     ]);
 
     writePlaythroughVerdict(true, { perf: { medium: "editor-playmode-batch", bootSeconds: 0.6, playSeconds: 30, playFrames: 900, avgFps: 30 } });
@@ -1339,13 +1340,16 @@ describe("CampaignManager", () => {
     return campaign;
   };
 
-  it("the FINAL sprint is told to leave exactly one entry scene enabled", async () => {
+  it("the FINAL sprint is told which scene opens the game, and to disable scaffolding (Codex 2026-09-11 B#15)", async () => {
     await reachFinalSprint();
 
     expect(tasks.submitted[0]!.prompt).not.toContain("BUILD HYGIENE");
     const finalPrompt = tasks.submitted[2]!.prompt;
     expect(finalPrompt).toContain("BUILD HYGIENE");
-    expect(finalPrompt).toContain("EXACTLY ONE");
+    // A boot/menu/level build needs several enabled scenes; what matters is
+    // which one is FIRST and that scaffolding is disabled.
+    expect(finalPrompt).toContain("the FIRST enabled scene in Build Settings");
+    expect(finalPrompt).not.toContain("EXACTLY ONE");
     // The write-back declines deletions of files the system did not write
     // (measured 2026-09-08: twelve scene deletes, none applied), so the
     // instruction is to disable, and says why deleting is wasted.

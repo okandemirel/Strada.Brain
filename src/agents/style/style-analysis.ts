@@ -42,7 +42,37 @@ function inferFamilyFromText(text: string): StyleProfile["family"] {
   if (/painterly|watercolor|hand[- ]?painted/.test(t)) return "painterly";
   if (/toon|cartoon|chibi|plump|glossy|cute|casual game/.test(t)) return "toon-casual";
   if (/realistic|pbr|military|shooter|simulation/.test(t)) return "realistic";
-  return "toon-casual";
+  // An unrecognized document is UNKNOWN, not a casual toon game: the default
+  // stamped one genre's look on every GDD (Codex 2026-09-11 B#20).
+  return "unspecified";
+}
+
+/**
+ * The pipeline a family implies. Everything non-pixel used to become
+ * prerendered-frames, so a realistic 3D game was rendered to sprite sheets
+ * (Codex 2026-09-11 B#20).
+ */
+function pipelineForFamily(family: StyleProfile["family"]): StyleProfile["pipeline"] {
+  switch (family) {
+    case "pixel":
+      return "sprite-native";
+    case "realistic":
+    case "lowpoly":
+      return "realtime-3d";
+    default:
+      return "prerendered-frames";
+  }
+}
+
+/** Hex colours the document itself names, in document order (max 5). */
+export function paletteFromText(text: string): string[] {
+  const out: string[] = [];
+  for (const m of text.matchAll(/#(?:[0-9a-f]{6}|[0-9a-f]{3})\b/gi)) {
+    const hex = m[0].toLowerCase();
+    if (!out.includes(hex)) out.push(hex);
+    if (out.length === 5) break;
+  }
+  return out;
 }
 
 export class StyleAnalysis {
@@ -83,15 +113,20 @@ export class StyleAnalysis {
 
     const family = inferFamilyFromText(gddText);
     const defaults = familyDefaults(family);
+    // The document's own colours, never an invented palette: three pastels
+    // were stamped on every fallback profile (Codex 2026-09-11 B#20).
+    const palette = paletteFromText(gddText);
     const fallback: StyleProfile = styleProfileSchema.parse({
       family,
-      pipeline: family === "pixel" ? "sprite-native" : "prerendered-frames",
+      pipeline: pipelineForFamily(family),
       proportions: { plump: defaults.plump, headScale: defaults.headScale },
-      palette: ["#f89eb8", "#7ec8f7", "#f7d97e"],
+      palette: palette.length > 0 ? palette : ["#9aa0a6"],
       outline: { width: defaults.outlineWidth, color: "#1f1418" },
       shading: defaults.shading,
       references: [],
-      notes: "derived by keyword fallback — review at the approval gate",
+      notes: palette.length > 0
+        ? "derived by keyword fallback (palette read from the document) — review at the approval gate"
+        : "derived by keyword fallback; the document names no colours, so the palette is a neutral grey — review at the approval gate",
     });
     return { profile: fallback, source: "keyword-fallback" };
   }

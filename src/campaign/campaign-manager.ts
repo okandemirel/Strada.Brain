@@ -1226,10 +1226,11 @@ export class CampaignManager {
         .replace(/^[^\n]*\bBUILD HYGIENE\b[^\n]*\n?/gm, "");
       if (!milestone.prompt.includes("BUILD HYGIENE (final sprint):")) {
         milestone.prompt +=
-          "\n\nBUILD HYGIENE (final sprint): when you are done, Build Settings must list EXACTLY ONE " +
-          "enabled scene — the entry scene a person opens to play the game. Every verification or " +
-          "scaffolding scene (InitTestScene*, *Verification, *Verified, *Showcase, *Boundary, Assembled*) " +
-          "must be DISABLED in Build Settings. Do NOT delete scene files that existed before this sprint: " +
+          "\n\nBUILD HYGIENE (final sprint): when you are done, the FIRST enabled scene in Build Settings " +
+          "must be the entry scene a person opens to play the game, and every scene enabled after it must be " +
+          "one the game itself loads (menu, levels, results). Every verification or scaffolding scene " +
+          "(InitTestScene*, *Verification, *Verified, *SmokeTest*, Sandbox*) must be DISABLED in Build " +
+          "Settings. Do NOT delete scene files that existed before this sprint: " +
           "the write-back carries only deletions of files the system itself wrote, so deleting a " +
           "pre-existing scene costs a turn and changes nothing (measured 2026-09-08: twelve such deletes, " +
           "none applied). Your report must name the entry scene and list every scene you disabled.";
@@ -2370,7 +2371,7 @@ export class CampaignManager {
           milestone.sceneHygieneBounces = hygieneBounces + 1;
           const directive =
             "\n\nNO ENTRY SCENE: " + hygiene.refusal.detail + ". A delivery nobody can open is not a " +
-            "delivery. Leave EXACTLY ONE obvious entry scene enabled in Build Settings — the scene that " +
+            "delivery. Put the obvious entry scene FIRST in Build Settings — the scene that " +
             "runs the game — with every verification/scaffolding scene deleted or disabled, and name that " +
             "scene in your final report.";
           if (!milestone.prompt.includes("NO ENTRY SCENE")) milestone.prompt += directive;
@@ -3349,12 +3350,18 @@ export class CampaignManager {
 
   private measureDeliveryStructure(campaign: Campaign): { refusal?: string; lines: string[] } {
     try {
-      const report = assessBuiltAsSpecified(this.projectRoot, undefined, { runtime: this.latestRuntimeEvidence(campaign) });
       // The GDD's own dimensionality against the scenes (audited 2026-09-03):
       // it asked for "plump, glossy 3D-feel pigs" and nothing ever checked.
       // DELIVERY is judged against the whole GDD, so the whole text is read.
       const gddText =
         campaign.gddText ?? (campaign.gddPath ? readGddFile(this.projectRoot, campaign.gddPath) : undefined);
+      // …and its art direction decides whether flat artwork is a defect or the
+      // style the document asked for (Codex 2026-09-11 B#17).
+      const look = gddText ? extractLookDescription(gddText) : undefined;
+      const report = assessBuiltAsSpecified(this.projectRoot, undefined, {
+        runtime: this.latestRuntimeEvidence(campaign),
+        ...(look?.found && look.text ? { artDirection: look.text } : {}),
+      });
       // Sound, motion and effects (2026-09-10): the GDD's cue list and
       // animation brief against what the shipped scenes carry. Refuses only
       // the strong audio case (clips exist, no shipped scene reaches one).

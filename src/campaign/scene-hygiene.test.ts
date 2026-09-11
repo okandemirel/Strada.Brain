@@ -159,8 +159,10 @@ describe("scene hygiene — clean and broken builds", () => {
     );
 
     expect(report.refusal).toBeUndefined();
-    expect(report.entry?.path).toBe("Assets/Scenes/A.unity");
-    expect(report.entryTied).toEqual(["Assets/Scenes/B.unity"]);
+    // Unity opens the FIRST enabled scene, so a tie is broken by build order,
+    // not by path (Codex 2026-09-11 B#15).
+    expect(report.entry?.path).toBe("Assets/Scenes/B.unity");
+    expect(report.entryTied).toEqual(["Assets/Scenes/A.unity"]);
     expect(renderSceneHygiene(report)).toContain("tie");
   });
 

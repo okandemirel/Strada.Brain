@@ -25,6 +25,12 @@ export const STYLE_FAMILIES = [
   "pixel",
   "lowpoly",
   "painterly",
+  /**
+   * The document says nothing this vocabulary recognizes. Neutral by design:
+   * the keyword fallback used to answer "toon-casual" and stamp one genre's
+   * proportions, palette and pipeline on every game (Codex 2026-09-11 B#20).
+   */
+  "unspecified",
 ] as const;
 
 export const RENDER_PIPELINES = ["prerendered-frames", "realtime-3d", "sprite-native"] as const;
@@ -104,7 +110,10 @@ export function familyDefaults(family: StyleProfile["family"]): FamilyDefaults {
     case "painterly":
       return { plump: 1.0, headScale: 1.0, outlineWidth: 0.3, shading: "glossy" };
     case "realistic":
-    default:
       return { plump: 1.0, headScale: 1.0, outlineWidth: 0, shading: "pbr-realistic" };
+    case "unspecified":
+    default:
+      // No squash, no outline, no gloss: nothing the document did not ask for.
+      return { plump: 1.0, headScale: 1.0, outlineWidth: 0, shading: "flat" };
   }
 }

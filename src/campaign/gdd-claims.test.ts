@@ -27,11 +27,18 @@ describe("extractNumericClaims", () => {
     expect(claims.map((c) => [c.kind, c.comparator, c.value])).toEqual([
       ["fps", "min", 60],
       ["boot_seconds", "max", 3],
-      ["boot_seconds", "max", 0.5],
       ["level_count", "eq", 12],
+      // A range has a floor as well as a ceiling (Codex 2026-09-11 B#19), and
+      // the list is in DOCUMENT order, so the 500 ms boot budget comes last.
       ["session_seconds", "max", 90],
+      ["session_seconds", "min", 30],
+      ["boot_seconds", "max", 0.5],
     ]);
     expect(claims[1]!.text).toContain("load in under 3 seconds");
+
+    // "2 worlds with 12 levels each" is ONE claim of 24, not 2 and 12.
+    const multiplied = extractNumericClaims("The game ships 2 worlds with 12 levels each.").claims;
+    expect(multiplied.map((c) => [c.kind, c.value])).toEqual([["level_count", 24]]);
   });
 
   it("finds nothing in prose without numbers, and ignores years and version numbers", () => {
@@ -47,9 +54,12 @@ describe("assessNumericClaims", () => {
     expect(a.map((x) => [x.claim.kind, x.claim.value, x.status, x.blocking])).toEqual([
       ["fps", 60, "unmeasured", false],
       ["boot_seconds", 3, "met", true],
-      ["boot_seconds", 0.5, "not_met", true],
       ["level_count", 12, "unmeasured", false],
       ["session_seconds", 90, "met", true],
+      // The floor is disclosed, never blocking: a driven play-through is
+      // faster than a person's.
+      ["session_seconds", 30, "met", false],
+      ["boot_seconds", 0.5, "not_met", true],
     ]);
     expect(a[0]!.note).toContain("no evidence about the player's frame rate");
     expect(a[0]!.measured).toBe(25);
@@ -64,7 +74,7 @@ describe("assessNumericClaims", () => {
     const lines = describeClaims(a);
     expect(lines[0]).toMatch(/^GDD frame rate ≥ 60 fps: NOT MEASURED — no play-through of this build was observed/);
     expect(lines[3]).toContain("no play-through of this build was observed");
-    expect(lines).toHaveLength(5);
+    expect(lines).toHaveLength(6); // the range's floor is a claim of its own (B#19)
   });
 
   it("the built player answers the frame-rate claim: measured, and blocking (2026-09-10)", () => {

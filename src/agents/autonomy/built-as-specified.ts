@@ -140,6 +140,16 @@ const RENDERER_CLASSES: ReadonlySet<string> = new Set([
  */
 const NON_WORLD_RENDERER_CLASSES: ReadonlySet<string> = new Set(["CanvasRenderer", "VideoPlayer"]);
 
+/**
+ * UI renderers that amount to a game rather than a HUD. One label over a world
+ * of engine primitives is a HUD (measured 2026-09-07); a screen built from a
+ * dozen of them is what a card game or a visual novel looks like.
+ */
+const UI_ONLY_MIN_RENDERERS = 8;
+
+/** Art directions whose own words describe flat, low-colour artwork. */
+const FLAT_ART_IS_THE_STYLE = /\b(?:flat[- ]?(?:shaded|colou?r|art|design)|minimalist|minimal|geometric|monochrome|silhouette|abstract|solid[- ]colou?r|vector art|block colou?r)\b/i;
+
 /** Renderer classes that draw actual 3D geometry (item 2's disclosure). */
 const MESH_RENDERER_CLASSES: ReadonlySet<string> = new Set([
   "MeshRenderer",
@@ -670,7 +680,7 @@ export function assessBuiltAsSpecified(
   projectRoot: string,
   io: BuiltAsSpecifiedIo = defaultIo,
   /** Tests shrink the walk budget to exercise the truncation disclosure. */
-  opts: { walkBudget?: number; runtime?: RuntimeSceneEvidence } = {},
+  opts: { walkBudget?: number; runtime?: RuntimeSceneEvidence; artDirection?: string } = {},
 ): BuiltAsSpecifiedReport {
   const walkBudget = opts.walkBudget ?? ASSET_WALK_BUDGET;
   // The budget belongs to the walk, so a shrunken one really truncates rather
@@ -1173,7 +1183,7 @@ export function assessBuiltAsSpecified(
       artTotal,
       unboundTotal,
       entryScene: enabled[0],
-    }) ?? placeholderArtRefusal(report);
+    }) ?? placeholderArtRefusal(report, opts.artDirection);
   // RUNTIME OVER THE FILE SCAN (2026-09-10). The scan cannot see what code
   // instantiates and said so; a Resources.Load / pooled / spawned world was
   // refused as "renders NOTHING". When a play-through of THIS sprint saw
@@ -1301,7 +1311,12 @@ function structuralRefusal(
   const uiOnly = shippedRenderers - report.shippedWorldRenderers;
   const primitivesAreTheWorld =
     report.primitiveCallSites >= 2 || (report.referencedOnlyRenderers === 0 && report.primitiveScripts.length > 0);
-  if (report.shippedWorldRenderers === 0 && (report.referencedOnlyRenderers === 0 || primitivesAreTheWorld)) {
+  // A card game, a visual novel or an FMV game draws through canvases and
+  // video, and refusing them for holding no MeshRenderer imposed one genre's
+  // architecture on every GDD (Codex 2026-09-11 B#16). The measured hole stays
+  // shut: a HUD label over CreatePrimitive cubes is still primitives-as-world.
+  const uiDrawsTheGame = uiOnly >= UI_ONLY_MIN_RENDERERS && !primitivesAreTheWorld;
+  if (report.shippedWorldRenderers === 0 && !uiDrawsTheGame && (report.referencedOnlyRenderers === 0 || primitivesAreTheWorld)) {
     return (
       `The shipped scenes render NOTHING: across ${shippedScenes.length} enabled non-scaffolding ` +
       `scene${shippedScenes.length === 1 ? "" : "s"} — ${entry} — there are 0 world renderer ` +
@@ -1598,10 +1613,16 @@ export function isPlaceholderGradePng(absPath: string): boolean {
  */
 function placeholderArtRefusal(
   report: Omit<BuiltAsSpecifiedReport, "refusal" | "disclosures">,
+  artDirection?: string,
 ): string | undefined {
   const { sprites, placeholderSprites } = report.artInventory;
   if (sprites < PLACEHOLDER_REFUSAL_MIN_SPRITES) return undefined;
   if (placeholderSprites / sprites < PLACEHOLDER_REFUSAL_SHARE) return undefined;
+  // A document that ASKS for flat, minimal or geometric art gets it: the
+  // pixel heuristic cannot tell a deliberate style from an unmade one, and
+  // refusing here forced one art style on every game (Codex 2026-09-11 B#17).
+  // The count is still disclosed; only the refusal is withdrawn.
+  if (artDirection !== undefined && FLAT_ART_IS_THE_STYLE.test(artDirection)) return undefined;
   return (
     `The project's art is placeholder art: ${placeholderSprites} of ${sprites} sprite textures are flat ` +
     `shapes by their pixels (${PLACEHOLDER_GRADE_RULE}) — procedural placeholders, not drawn art ` +

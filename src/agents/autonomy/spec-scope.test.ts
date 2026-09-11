@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { extractScheduledElements, elementCodeTokens, assessSpecScope, findDesignDoc } from "./spec-scope.js";
+import { extractScheduledElements, elementCodeTokens, assessSpecScope, findDesignDoc, stripCsComments } from "./spec-scope.js";
 
 const GDD_SNIPPET = `
 ## 4. GAME ELEMENTS
@@ -15,6 +15,19 @@ const GDD_SNIPPET = `
 `;
 
 describe("spec scope — the design document is the checklist", () => {
+  it("an unlock id in any shape, and a comment is not an implementation (Codex 2026-09-11 B#18)", () => {
+    const gdd = [
+      "| Unlock | Element | Notes |",
+      "| --- | --- | --- |",
+      "| 21 | Teleporter | bends the path |",
+      "| E3 | Magnet | pulls items |",
+      "| W1-2 | Springboard | launches |",
+    ].join("\n");
+    expect(extractScheduledElements(gdd).map((e) => e.name)).toEqual(["Teleporter", "Magnet", "Springboard"]);
+    expect(stripCsComments("// TODO Teleporter Magnet\nclass A { /* Springboard */ int x; }")).not.toContain("Teleporter");
+    expect(stripCsComments("class Teleporter { }")).toContain("Teleporter");
+  });
+
   it("extracts the element schedule from a GDD-style table", () => {
     const els = extractScheduledElements(GDD_SNIPPET);
     expect(els.map((e) => e.name)).toEqual(["Hard Pixel", "Ice Block", "Wall", "Lock & Key"]);
