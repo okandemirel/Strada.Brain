@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { PLAYMODE_RUN_RECORD_REL, readPlaymodeRun } from "./playmode-run.js";
+import { CLOCK_SKEW_TOLERANCE_MS, PLAYMODE_RUN_RECORD_REL, readPlaymodeRun } from "./playmode-run.js";
 
 let root: string;
 beforeEach(() => { root = mkdtempSync(join(tmpdir(), "playmode-run-")); });
@@ -79,8 +79,14 @@ describe("a record that is not a run record, and a run that is not this attempt'
       expect(run).toMatchObject({ found: false, malformed: true });
       expect(run.green).toBeUndefined();
     }
-    // A record missing the counts is malformed too, not absent.
+    // A record missing EITHER count is malformed, not absent (G#16: the
+    // fixtures all lacked `total`, so the `failed` half of the guard was
+    // never exercised).
     writeFileSync(p, JSON.stringify({ passed: 42, unfiltered: true }));
+    expect(readPlaymodeRun(root, 0)).toMatchObject({ found: false, malformed: true });
+    writeFileSync(p, JSON.stringify({ total: 42, passed: 42, unfiltered: true }));
+    expect(readPlaymodeRun(root, 0)).toMatchObject({ found: false, malformed: true });
+    writeFileSync(p, JSON.stringify({ failed: 0, passed: 42, unfiltered: true }));
     expect(readPlaymodeRun(root, 0)).toMatchObject({ found: false, malformed: true });
   });
 
@@ -100,8 +106,40 @@ describe("a record that is not a run record, and a run that is not this attempt'
     });
     expect(readPlaymodeRun(root, attemptStart)).toMatchObject({ found: true, green: true });
 
-    // An unparseable or absent stamp falls back to the file's mtime.
+    // An unparseable or absent stamp is REPORTED as missing: the mtime alone
+    // is refreshed by a copy, so the final sprint refuses such a record
+    // (Codex 2026-09-11 G#4 — this test used to assert the bypass).
     write({ total: 42, passed: 42, failed: 0, skipped: 0, unfiltered: true, measuredAt: "not a date" });
+    expect(readPlaymodeRun(root, attemptStart)).toMatchObject({ found: true, green: true, stampMissing: true });
+    write({ total: 42, passed: 42, failed: 0, skipped: 0, unfiltered: true });
+    expect(readPlaymodeRun(root, attemptStart)).toMatchObject({ found: true, stampMissing: true });
+    // A stamped record carries no such flag.
+    write({ total: 42, passed: 42, failed: 0, skipped: 0, unfiltered: true, measuredAt: new Date(attemptStart + 1_000).toISOString() });
+    expect(readPlaymodeRun(root, attemptStart).stampMissing).toBeUndefined();
+
+    // A runner whose clock is MINUTES behind the coordinator still belongs to
+    // this attempt; only a record from another day is stale (G#8).
+    write({
+      total: 42, passed: 42, failed: 0, skipped: 0, unfiltered: true,
+      measuredAt: new Date(attemptStart - 2 * 60_000).toISOString(),
+    });
     expect(readPlaymodeRun(root, attemptStart)).toMatchObject({ found: true, green: true });
+    write({
+      total: 42, passed: 42, failed: 0, skipped: 0, unfiltered: true,
+      measuredAt: new Date(attemptStart - 30 * 60_000).toISOString(),
+    });
+    expect(readPlaymodeRun(root, attemptStart)).toMatchObject({ found: false, stale: true });
+    // The window is exactly the declared skew tolerance, neither a
+    // millisecond nor an hour (G#16 pinned the old 2 ms as changeable).
+    write({
+      total: 42, passed: 42, failed: 0, skipped: 0, unfiltered: true,
+      measuredAt: new Date(attemptStart - (CLOCK_SKEW_TOLERANCE_MS - 1_000)).toISOString(),
+    });
+    expect(readPlaymodeRun(root, attemptStart)).toMatchObject({ found: true, green: true });
+    write({
+      total: 42, passed: 42, failed: 0, skipped: 0, unfiltered: true,
+      measuredAt: new Date(attemptStart - (CLOCK_SKEW_TOLERANCE_MS + 1_000)).toISOString(),
+    });
+    expect(readPlaymodeRun(root, attemptStart)).toMatchObject({ found: false, stale: true });
   });
 });

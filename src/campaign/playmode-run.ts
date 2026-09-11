@@ -14,6 +14,13 @@ import { join } from "node:path";
 
 export const PLAYMODE_RUN_RECORD_REL = join("Recordings", "tests", "playmode-last.json");
 
+/**
+ * How far behind the attempt's start a record's own stamp may be and still
+ * belong to this attempt. The runner can be a different machine; clocks differ
+ * by minutes, not by milliseconds (Codex 2026-09-11 G#8).
+ */
+export const CLOCK_SKEW_TOLERANCE_MS = 5 * 60_000;
+
 export interface PlaymodeRunEvidence {
   /** failed === 0, at least one test PASSED, and the counts add up — computed here so no reader re-derives it loosely. */
   green?: boolean;
@@ -21,6 +28,12 @@ export interface PlaymodeRunEvidence {
   stale?: boolean;
   /** The file exists but is not a run record — never read as silence. */
   malformed?: boolean;
+  /**
+   * The record carries no usable `measuredAt` of its own, so only the file's
+   * mtime says it is fresh — and an mtime is refreshed by a copy. The final
+   * sprint refuses such a record (Codex 2026-09-11 G#4).
+   */
+  stampMissing?: boolean;
   total?: number;
   passed?: number;
   failed?: number;
@@ -50,8 +63,19 @@ export function readPlaymodeRun(projectRoot: string, sinceMs: number): PlaymodeR
   // record is stale no matter what the filesystem says (Codex 2026-09-11 E#8:
   // copying yesterday's record refreshed its mtime and laundered yesterday's
   // 42/42 into today's final-sprint proof).
+  //
+  // CLOCK SKEW, not millisecond precision: the runner may be another machine
+  // whose clock is minutes behind the coordinator's, and a valid run stamped
+  // 09:59 for an attempt that began at 10:00 is not yesterday's run (Codex
+  // 2026-09-11 G#8). The window is wide enough for any plausible skew and far
+  // narrower than a stale record.
   const stamped = measuredAtMs(readStamp(path));
-  if (stamped !== undefined && stamped + 2 < sinceMs) return { found: false, stale: true };
+  if (stamped !== undefined && stamped + CLOCK_SKEW_TOLERANCE_MS < sinceMs) return { found: false, stale: true };
+  // A stamp that is MISSING or unparseable is not a fresh stamp. The file's
+  // mtime is trivially refreshed by a copy, so a record with no usable
+  // timestamp of its own carries no freshness of its own either; it is
+  // reported so the caller can decide (the final sprint requires one).
+  const stampMissing = stamped === undefined;
   let raw: Record<string, unknown>;
   try {
     const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
@@ -106,6 +130,7 @@ export function readPlaymodeRun(projectRoot: string, sinceMs: number): PlaymodeR
       : `PlayMode verification FAILED: ${failed} of ${total} tests failed (${scope})`;
   return {
     found: true,
+    ...(stampMissing ? { stampMissing: true } : {}),
     green: consistent && failed === 0 && passed > 0,
     total,
     passed,

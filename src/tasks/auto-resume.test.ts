@@ -180,3 +180,33 @@ describe("stripRetryMachinery", () => {
     expect(stripRetryMachinery(report)).toBe(report);
   });
 });
+
+describe("stripRetryMachinery is used where a result reaches a model (Codex 2026-09-11 G#16)", () => {
+  it("is called by priorProgressSummary and the campaign's retry tail", () => {
+    // The helper being right is not the property that matters; the property
+    // is that every path feeding a task's own result back into a prompt runs
+    // through it. Mutating the call away used to leave both tests green.
+    const taskManager = readFileSync("src/tasks/task-manager.ts", "utf8");
+    const atSummary = taskManager.indexOf("const resultTail =");
+    expect(atSummary).toBeGreaterThan(0);
+    expect(taskManager.slice(atSummary, atSummary + 200)).toContain("stripRetryMachinery(");
+    // …and the replay prompt's "Last known failure" too (G#10).
+    const atFailure = taskManager.indexOf("Last known failure:");
+    expect(taskManager.slice(atFailure - 400, atFailure)).toContain("stripRetryMachinery(");
+
+    const campaign = readFileSync("src/campaign/campaign-manager.ts", "utf8");
+    const atTail = campaign.indexOf("The previous attempt ended ${status}:");
+    expect(atTail).toBeGreaterThan(0);
+    expect(campaign.slice(atTail - 900, atTail)).toContain("stripRetryMachinery(output)");
+    // No fallback to the unstripped text (G#10).
+    expect(campaign.slice(atTail, atTail + 200)).not.toContain("cleaned || output");
+  });
+
+  it("removes the scheduler's re-arm reason, and leaves nothing when that is all there was", () => {
+    expect(stripRetryMachinery("Transient failure — keep-alive re-armed after restart. Auto-retry 9/10 in ~600s. Restart re-arm — failure retries still at 8/10.")).toBe("");
+    expect(stripRetryMachinery("could not resubmit after backoff — keep-alive re-armed after restart")).toBe("");
+    expect(stripRetryMachinery("Reaped: no progress signal for 60 minutes.")).toBe("");
+    // A real cause beside the machinery survives.
+    expect(stripRetryMachinery("Transient failure — keep-alive re-armed after restart. Compile error CS0246.")).toBe("Compile error CS0246.");
+  });
+});

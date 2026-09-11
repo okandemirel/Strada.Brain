@@ -98,7 +98,12 @@ export function stripRetryMachinery(text: string): string {
     .replace(/Reaped:[^.]*\./g, "")
     .replace(/Auto-retry \d+\/\d+ in ~\d+s\.?/g, "")
     .replace(/Restart re-arm — failure retries still at \d+\/\d+\.?/g, "")
+    // The re-arm's own REASON, which is the scheduler describing itself: left
+    // in, "keep-alive re-armed after restart." was quoted to the next run as
+    // the previous one's final report (Codex 2026-09-11 G#10).
+    .replace(/(?:could not resubmit after backoff —\s*)?keep-alive re-armed after restart(?:\s*—[^.]*)?\.?/gi, "")
     .replace(/Transient failure —\s*/g, "")
+    .replace(/^[\s.—-]+|[\s—-]+$/g, "")
     .trim();
 }
 

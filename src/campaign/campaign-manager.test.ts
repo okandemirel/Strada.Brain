@@ -246,10 +246,11 @@ describe("CampaignManager", () => {
       // is held to that file rather than to prose (Codex 2026-09-11 D#13).
       if (runRecordOnSettle) {
         mkdirSync(join(projectRoot, "Recordings", "tests"), { recursive: true });
-        writeFileSync(
-          join(projectRoot, "Recordings", "tests", "playmode-last.json"),
-          JSON.stringify({ measuredAt: new Date().toISOString(), ...runRecordOnSettle }),
-        );
+        // `measuredAt: null` means "a record with no stamp of its own", which
+        // is what a copied file looks like (Codex 2026-09-11 G#4).
+        const record: Record<string, unknown> = { measuredAt: new Date().toISOString(), ...runRecordOnSettle };
+        if (record.measuredAt === null) delete record.measuredAt;
+        writeFileSync(join(projectRoot, "Recordings", "tests", "playmode-last.json"), JSON.stringify(record));
       }
     };
     messages = [];
@@ -2646,6 +2647,27 @@ describe("CampaignManager", () => {
     await new Promise((r) => setTimeout(r, 400));
     expect(storage.get(campaign.id)!.milestones[2]!.testVerdict).toBeUndefined();
     expect(storage.get(campaign.id)!.state).not.toBe("done");
+  });
+
+  it("at the final sprint a record with no timestamp of its own is not proof (Codex 2026-09-11 G#4)", async () => {
+    // A copied record has a fresh mtime by construction, so an mtime is not
+    // freshness; the record has to say when it ran.
+    runRecordOnSettle = { total: 42, passed: 42, failed: 0, skipped: 0, unfiltered: true, measuredAt: null };
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    settleMilestone("green, shipping");
+    await vi.waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(3));
+    expect(storage.get(campaign.id)!.milestones[2]!.testVerdict).toBeUndefined();
+    expect(storage.get(campaign.id)!.state).not.toBe("done");
+
+    // The same record WITH its stamp delivers.
+    runRecordOnSettle = { total: 42, passed: 42, failed: 0, skipped: 0, unfiltered: true };
+    settleMilestone("green, shipping");
+    await vi.waitFor(() => expect(storage.get(campaign.id)!.milestones[2]!.testVerdict).toBeDefined(), { timeout: 5_000 });
   });
 
   it("a STALE NUnit record cannot be laundered into fresh proof by the prose fallback (Codex 2026-09-11 C#10)", async () => {

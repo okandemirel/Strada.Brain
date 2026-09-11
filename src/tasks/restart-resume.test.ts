@@ -262,10 +262,11 @@ describe("a restart does not spend a mission retry, and never escalates", () => 
       const task = { id: "task_1", chatId: "cli-local", prompt: "Mission: build the game", origin: "user", status: "blocked" };
       internals.scheduleMissionKeepAlive(task, "keep-alive re-armed after restart", { spendAttempt: false });
       await vi.advanceTimersByTimeAsync(601_000);
+      // The failed resubmission charged the attempt and re-armed (G#2), so
+      // the count moved and a further round is scheduled…
       expect(internals.missionRetries.get("mission:task_1")).toBe(9);
-      expect(notices.join(" ")).toContain("Auto-resubmit failed after backoff (9/10)");
-      internals.scheduleMissionKeepAlive(task, "keep-alive re-armed after restart", { spendAttempt: false });
-      await vi.advanceTimersByTimeAsync(601_000);
+      await vi.advanceTimersByTimeAsync(2 * 601_000);
+      // …and it ends at the cap rather than repeating for ever.
       expect(notices.join(" ")).toContain("MISSION STOPPED");
     } finally {
       vi.useRealTimers();
@@ -328,5 +329,69 @@ describe("a restart does not spend a mission retry, and never escalates", () => 
     expect(notices[0]).toContain("MISSION STOPPED");
     expect(notices[0]).toContain("Last blocker: compile failed: CS1002");
     expect(notices[0]!.match(/Last blocker:/g)).toHaveLength(1);
+  });
+});
+
+/**
+ * Codex 2026-09-11 G#2: the failed-resubmission count lived only in memory and
+ * in an appended notice, while the restart reader takes it from the block
+ * TEXT — so every boot restored the old number, the promised stop never came,
+ * and nothing rescheduled without another restart.
+ */
+describe("a resubmission that cannot happen persists its cost and re-arms", () => {
+  function harness(blocked: unknown[]) {
+    const executor = Object.create(BackgroundExecutor.prototype) as BackgroundExecutor;
+    const internals = executor as unknown as {
+      missionRetries: Map<string, number>;
+      taskManager: unknown;
+      allProvidersCoolingDownMs: () => number;
+      lineageRootTaskId: (t: { id: string }) => string;
+      isLineageCancelled: () => boolean;
+      lineageTipOf: () => unknown;
+      scheduleKeepAliveRearm: () => void;
+      scheduleMissionKeepAlive: (t: unknown, reason: string, o?: { spendAttempt?: boolean }) => boolean;
+    };
+    internals.missionRetries = new Map();
+    internals.allProvidersCoolingDownMs = () => 0;
+    internals.lineageRootTaskId = (t) => t.id;
+    internals.isLineageCancelled = () => false;
+    internals.lineageTipOf = () => null;
+    const blocks: string[] = [];
+    const notices: string[] = [];
+    internals.taskManager = {
+      listRecoverableTasks: () => blocked,
+      listPausedByRestart: () => [],
+      listTasks: () => [],
+      getStatus: () => null,
+      findLatestLineageTask: () => ({ id: "task_1", status: "blocked" }),
+      findLineageRootId: () => null,
+      retryTask: () => { throw new Error("task insert failed"); },
+      appendTaskNotice: (_id: string, msg: string) => { notices.push(msg); },
+      block: (_id: string, msg: string) => { blocks.push(msg); },
+    };
+    return { internals, blocks, notices };
+  }
+
+  it("writes the spent attempt into the block text every round, and ends at the cap", async () => {
+    vi.useFakeTimers();
+    try {
+      const { internals, blocks, notices } = harness([]);
+      internals.missionRetries.set("mission:task_1", 8);
+      const task = { id: "task_1", chatId: "cli-local", prompt: "Mission: build the game", origin: "user", status: "blocked" };
+      internals.scheduleMissionKeepAlive(task, "keep-alive re-armed after restart", { spendAttempt: false });
+      // Each failed resubmission charges one and re-arms, so the numbers the
+      // NEXT BOOT would read climb 9, 10 — and then it stops.
+      await vi.advanceTimersByTimeAsync(4 * 601_000);
+      const carried = blocks.map((b) => /Auto-retry (\d+)\/10/.exec(b)?.[1]).filter(Boolean);
+      // 9 for the restart re-arm itself (nothing spent), 9 again for the
+      // first charged attempt after the resubmission failed (8 → 9), 10 for
+      // the next one — and then the cap reports instead of blocking again.
+      expect(carried).toEqual(["9", "9", "10"]);
+      expect(notices.join(" ")).toContain("MISSION STOPPED");
+      // …and the restart reader sees the spent count, not the carried one.
+      expect(blocks.at(-1)).not.toContain("failure retries still at 8/10");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

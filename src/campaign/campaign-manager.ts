@@ -2127,7 +2127,10 @@ export class CampaignManager {
         // no record file happened to exist — and clearing it when a stale one
         // did — made an unrelated file decide whether identical evidence
         // counted (Codex 2026-09-11 D#13). Earlier sprints keep the fallback.
-        if (finalSprint && !(run.found === true && run.total !== undefined)) {
+        // …and the record must say WHEN it ran. A copied file's mtime is
+        // fresh by construction, so a record with no usable measuredAt is not
+        // this attempt's proof either (Codex 2026-09-11 G#4).
+        if (finalSprint && !(run.found === true && run.total !== undefined && run.stampMissing !== true)) {
           milestone.testVerdict = undefined;
           milestone.testVerdictUnfiltered = undefined;
           milestone.testRunSource = "nunit";
@@ -2731,6 +2734,10 @@ export class CampaignManager {
       // The failure tail is retry CONTEXT, not history: keep exactly one, and
       // strip retry-machinery noise ("Reaped: …", "Auto-retry n/m in ~Xs")
       // that names the executor's plumbing instead of the sprint's problem.
+      // NO FALLBACK to the unstripped text: `cleaned || output` put the whole
+      // "Reaped: no progress signal for 60 minutes." sentence back into the
+      // next sprint's prompt whenever stripping left nothing (Codex
+      // 2026-09-11 G#10). Nothing left to say is nothing to say.
       const cleaned = stripRetryMachinery(output);
       // The strip must match the tail as APPENDED below. Audited 2026-09-02:
       // it ended on "do not repeat it." while the append continues "do not
@@ -2742,7 +2749,7 @@ export class CampaignManager {
         /\n\nThe previous attempt ended (?:(?!\n\nThe previous attempt ended )[\s\S])*?(?:first unmet requirement\.|Fix the root cause, do not repeat it\.(?! —))/g,
         "",
       );
-      milestone.prompt += `\n\nThe previous attempt ended ${status}: ${(cleaned || output).slice(0, 400)}. Fix the root cause, do not repeat it — and do NOT spend this attempt auditing prior attempts: continue the sprint's actual work from the first unmet requirement.`;
+      milestone.prompt += `\n\nThe previous attempt ended ${status}: ${(cleaned || "no cause the executor could name").slice(0, 400)}. Fix the root cause, do not repeat it — and do NOT spend this attempt auditing prior attempts: continue the sprint's actual work from the first unmet requirement.`;
       // The art directive is not only for completions. Measured 2026-09-07:
       // five remediation attempts in a row ended blocked or failed, so the
       // completion-time art gate never spoke, and no retry ever started with

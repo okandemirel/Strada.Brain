@@ -884,7 +884,11 @@ export class TaskManager extends EventEmitter {
       lines.push("", `Last known checkpoint:\n${result.slice(0, 1200)}`);
     }
     if (task.error) {
-      lines.push("", `Last known failure:\n${sanitizeSecrets(task.error).slice(0, 800)}`);
+      // Stripped like the result is: "Reaped: no progress signal for 60
+      // minutes." reached the next run verbatim as its last known failure
+      // (Codex 2026-09-11 G#10).
+      const failure = stripRetryMachinery(sanitizeSecrets(task.error));
+      if (failure) lines.push("", `Last known failure:\n${failure.slice(0, 800)}`);
     }
 
     // The rolling epoch checkpoint knows which files the previous run actually

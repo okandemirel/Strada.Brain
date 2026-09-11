@@ -2286,23 +2286,20 @@ export class BackgroundExecutor {
       })();
       if (!retried) {
         // A resubmission that CANNOT HAPPEN is a failure of this attempt, and
-        // it must be able to end. Audited by Codex 2026-09-11 E#9: the count
-        // was deleted here and the notice carried no stop, so a task store
-        // that refuses every insert produced one more submission attempt per
-        // boot forever with nothing ever reporting to a person.
-        const spent = (this.missionRetries.get(key) ?? decision.attempt) + 1;
-        this.missionRetries.set(key, spent);
-        getLoggerSafe().warn("Mission keep-alive could not resubmit", { taskId: task.id, attemptsSpent: spent });
-        const stop = decideMissionKeepAlive(spent, { budgetExceeded: this._unifiedBudgetManager?.isGlobalExceeded() ?? false });
-        try {
-          this.taskManager?.appendTaskNotice(
-            task.id,
-            stop.action === "report"
-              ? `MISSION STOPPED — needs you. ${stop.reportReason} Last blocker: could not resubmit after backoff — ${reason.slice(0, 150)}`
-              : `Auto-resubmit failed after backoff (${spent}/${MAX_MISSION_RETRIES}). Last blocker: ${reason.slice(0, 200)}`,
-          );
-        } catch { /* best effort */ }
-        if (stop.action === "report") this.missionRetries.delete(key);
+        // it must both PERSIST and be able to end. Audited by Codex
+        // 2026-09-11 E#9 (the count was deleted here, so a store refusing
+        // every insert retried once per boot forever) and G#2 (the count was
+        // then only APPENDED as a notice, while the restart reader takes it
+        // from the block text — so every boot read the old number and the
+        // promised stop never came, and nothing rescheduled without a
+        // restart). Going back through scheduleMissionKeepAlive does both: it
+        // writes the count into the block text and arms the next attempt, and
+        // it escalates by itself at the cap.
+        getLoggerSafe().warn("Mission keep-alive could not resubmit — charging the attempt and re-arming", {
+          taskId: task.id,
+          attemptsSpent: this.missionRetries.get(key) ?? decision.attempt,
+        });
+        this.scheduleMissionKeepAlive(task, `could not resubmit after backoff — ${reason.slice(0, 150)}`);
       }
     }, effectiveBackoffMs);
     timer.unref?.();
