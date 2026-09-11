@@ -86,6 +86,12 @@ describe("AgentCore — a goal about the working tree runs in the working tree (
     // …and a build goal keeps its lease even when a git observation was on the list.
     const goalAboutBuild = await run("git", "Uncommitted changes in the project's working tree (outside Strada's own output): 40", "Fix the compile errors in Board.cs", [["build", "Build broken: 3 compile errors", 60]]);
     expect(goalAboutBuild.workspacePolicy).toBeUndefined();
+    // "Review the staged changes" is about the tree; "Add a git status button"
+    // is ordinary work that merely says git (Codex 2026-09-11 C#27).
+    const staged = await run("git", "Uncommitted changes in the project's working tree (outside Strada's own output): 40", "Review the staged changes and say what they touch");
+    expect(staged).toMatchObject({ workspacePolicy: "none" });
+    const feature = await run("git", "Uncommitted changes in the project's working tree (outside Strada's own output): 40", "Add a git status button to the dashboard");
+    expect(feature.workspacePolicy).toBeUndefined();
   });
 });
 

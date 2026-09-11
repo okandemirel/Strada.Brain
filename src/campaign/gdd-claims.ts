@@ -281,6 +281,9 @@ export function assessNumericClaims(
         // Blocking unless the SHORTFALL is only what one run could not reach:
         // a 13-level game with one session played used to be waived entirely
         // because 13 > 12 (Codex 2026-09-11 C#21).
+        // The waiver is for what ONE RUN cannot reach, so it applies only when
+        // the run actually played its full share: a 13-level game with one
+        // session played was waived entirely (Codex 2026-09-11 C#21).
         const beyondOneRun = claim.value > PLAYED_SESSIONS_PER_RUN && finished >= PLAYED_SESSIONS_PER_RUN;
         return {
           claim,

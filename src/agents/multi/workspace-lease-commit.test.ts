@@ -15,7 +15,7 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
-import { WorkspaceLeaseManager, DEFAULT_WORKSPACE_COPY_EXCLUDES } from "./workspace-lease-manager.js";
+import { WorkspaceLeaseManager, DEFAULT_WORKSPACE_COPY_EXCLUDES, isAlreadyGone } from "./workspace-lease-manager.js";
 
 let source: string;
 let leaseRoot: string;
@@ -334,6 +334,13 @@ describe("workspace lease commit", () => {
       chmodSync(meta, 0o644);
       await lease.release();
     }
+  });
+
+  it("only an ALREADY-GONE file counts as a withdrawal (Codex 2026-09-11 C#36)", () => {
+    expect(isAlreadyGone(Object.assign(new Error("gone"), { code: "ENOENT" }))).toBe(true);
+    expect(isAlreadyGone(Object.assign(new Error("locked"), { code: "EBUSY" }))).toBe(false);
+    expect(isAlreadyGone(Object.assign(new Error("denied"), { code: "EPERM" }))).toBe(false);
+    expect(isAlreadyGone(undefined)).toBe(false);
   });
 
   it("a commit whose ledger cannot be removed still succeeds (Codex 2026-09-11 #8)", async () => {

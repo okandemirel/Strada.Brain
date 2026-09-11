@@ -142,6 +142,20 @@ describe("assessNumericClaims", () => {
     expect(extractNumericClaims("The game ships 2 worlds with 12 levels in total.").claims.map((c) => c.value)).toEqual([12]);
     expect(extractNumericClaims("The game ships 2 worlds with 12 levels each.").claims.map((c) => c.value)).toEqual([24]);
 
+    // A 13-level game with ONE session played is still blocked: the waiver is
+    // for the shortfall one run cannot reach (Codex 2026-09-11 C#21).
+    const thirteen = extractNumericClaims("The game ships 13 levels.").claims;
+    const onlyOne = assessNumericClaims(thirteen, evidence({
+      sessionCount: 13,
+      sessions: [{ index: 0, outcome: "Won", actions: 5, seconds: 3 }],
+    }));
+    expect(onlyOne.find((x) => x.claim.kind === "level_count")).toMatchObject({ status: "not_met", blocking: true });
+    const twelvePlayed = assessNumericClaims(thirteen, evidence({
+      sessionCount: 13,
+      sessions: Array.from({ length: 12 }, (_, index) => ({ index, outcome: "Won", actions: 5, seconds: 3 })),
+    }));
+    expect(twelvePlayed.find((x) => x.claim.kind === "level_count")).toMatchObject({ blocking: false });
+
     // A mandatory minimum is wall-clock, not player skill: it blocks.
     const mandatory = extractNumericClaims("Each round runs an unskippable timer of 30-60 seconds.").claims;
     const floor = assessNumericClaims(mandatory, evidence({ perf: { medium: "editor-playmode-batch", bootSeconds: 1, playSeconds: 1, playFrames: 30, avgFps: 30 } }))

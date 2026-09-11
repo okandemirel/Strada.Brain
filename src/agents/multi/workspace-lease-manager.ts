@@ -319,6 +319,15 @@ const DERIVED_COPY_EXCLUDES = new Set([
   ".vite",
 ]);
 
+/**
+ * Did this unlink fail because the file was ALREADY gone? Only that counts as
+ * a withdrawal; a locked or permission-denied file is still in the project
+ * and must be reported as such (Codex 2026-09-11 C#36).
+ */
+export function isAlreadyGone(err: unknown): boolean {
+  return (err as NodeJS.ErrnoException | undefined)?.code === "ENOENT";
+}
+
 /** Ownership sidecar written into every lease dir at acquire — the only
  *  cross-process signal for "this lease belongs to a LIVE process". */
 const LEASE_OWNER_FILE = ".strada-lease-owner.json";
@@ -1761,13 +1770,22 @@ export class WorkspaceLeaseManager {
       const asset = landed.get(partnerIndex);
       if (!asset) return;
       if (!asset.targetExisted) {
+        let withdrawn = true;
         try {
           await fsp.unlink(asset.target);
-        } catch {
-          /* it may already be gone */
+        } catch (err) {
+          // Only "it is already gone" counts as withdrawn; a locked file is
+          // still in the project and must be reported as such (Codex
+          // 2026-09-11 C#36).
+          withdrawn = isAlreadyGone(err);
         }
         await quarantine(asset.rel, asset.full);
-        outcomes[partnerIndex] = { failed: `${asset.rel} (withdrawn: its .meta could not be written)`, failedRel: asset.rel };
+        outcomes[partnerIndex] = {
+          failed: withdrawn
+            ? `${asset.rel} (withdrawn: its .meta could not be written)`
+            : `${asset.rel} (written and NOT withdrawn: its .meta could not be written and the file could not be removed — the pair is inconsistent in the project)`,
+          failedRel: asset.rel,
+        };
       } else {
         outcomes[partnerIndex] = { failed: `${asset.rel} (written, but its .meta could not be written — the pair is inconsistent in the project)`, failedRel: asset.rel };
       }

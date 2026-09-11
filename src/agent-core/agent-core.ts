@@ -481,11 +481,21 @@ export class AgentCore {
  * 2026-09-10 22:31: "investigate the 1118 uncommitted changes" ran in a lease
  * and reported a clean tree. Every other goal keeps the lease.
  */
-export const WORKING_TREE_GOAL_RE = /\b(uncommitted|untracked|working[- ]tree|git status|dirty tree|unstaged)\b/i;
+/** Words that say the goal is ABOUT the tree's current state. */
+export const WORKING_TREE_GOAL_RE =
+  /\b(?:uncommitted|untracked|unstaged|staged changes|working[- ]tree|working copy|git status|git diff|dirty tree|stash(?:ed)?)\b/i;
+/** …and words that say it is ordinary development work that merely mentions them. */
+const BUILD_SOMETHING_RE =
+  /\b(?:add|implement|build|create|write|design|refactor|rename|port|migrate|document)\b/i;
 
+/**
+ * A goal driven by a working-tree observation must run in the real tree; a
+ * goal that merely contains the word "git" must not lose its lease (Codex
+ * 2026-09-11 #9, C#27). The subject wins over the vocabulary: an
+ * implementation verb means the goal BUILDS something, whatever it names.
+ */
 export function workspacePolicyFor(observations: ReadonlyArray<{ source: string }>, goal: string): { workspacePolicy?: "none" } {
-  // The reasoning saw every ranked observation and chose the goal: the goal's
-  // subject decides, not whichever observation ranked first (Codex 2026-09-11 #9).
   const sawGit = observations.some((o) => o.source === "git");
-  return sawGit && WORKING_TREE_GOAL_RE.test(goal) ? { workspacePolicy: "none" } : {};
+  if (!sawGit || !WORKING_TREE_GOAL_RE.test(goal)) return {};
+  return BUILD_SOMETHING_RE.test(goal) ? {} : { workspacePolicy: "none" };
 }
