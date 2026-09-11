@@ -107,7 +107,7 @@ function writeOwner(path: string, token: string): void {
  * owner file inside the renamed directory says whether it was the one judged
  * dead.
  */
-function reclaim(path: string, expected: LockOwner | null, why: string): void {
+function reclaim(path: string, expected: LockOwner | null, why: string, routine = false): void {
   const grave = `${path}.reclaimed-${randomUUID().slice(0, 8)}`;
   try {
     renameSync(path, grave);
@@ -125,7 +125,9 @@ function reclaim(path: string, expected: LockOwner | null, why: string): void {
       /* the slot is taken; drop what we hold */
     }
   }
-  getLoggerSafe().warn(why, { path, pid: inside?.pid });
+  // A release is routine; only TAKING a lock from someone is a warning.
+  if (routine) getLoggerSafe().debug(why, { path });
+  else getLoggerSafe().warn(why, { path, pid: inside?.pid });
   rmSync(grave, { recursive: true, force: true });
 }
 
@@ -202,7 +204,7 @@ export async function acquireProjectWriteLock(
           // writer then acquired it beside that one (Codex 2026-09-11 N#2).
           // The same atomic take-then-verify: reading the owner and deleting
           // afterwards could remove a lock that changed hands in between.
-          reclaim(path, { pid: process.pid, host: hostname(), token, at: "" }, "Project write lock released");
+          reclaim(path, { pid: process.pid, host: hostname(), token, at: "" }, "Project write lock released", true);
         },
       };
     }
