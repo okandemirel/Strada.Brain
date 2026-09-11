@@ -61,6 +61,7 @@ interface CampaignRow {
   delivery_reported?: number | null;
   unmeasurable_revives?: number | null;
   implementation_revives?: number | null;
+  pending_coverage_gaps?: string | null;
   plan_coverage?: string | null;
 }
 
@@ -98,6 +99,7 @@ function rowToCampaign(row: CampaignRow): Campaign {
     deliveryReported: row.delivery_reported === 1,
     unmeasurableRevives: row.unmeasurable_revives ?? undefined,
     implementationRevives: row.implementation_revives ?? undefined,
+    pendingCoverageGaps: parseGapQueue(row.pending_coverage_gaps),
     ...(row.plan_coverage ? { planCoverage: parsePlanCoverage(row.plan_coverage) } : {}),
   };
 }
@@ -150,6 +152,12 @@ export class CampaignStorage {
       // Column already exists — migration is idempotent.
     }
     try {
+      // Gaps the audit named and no round has scheduled yet (F#9).
+      this.db.exec("ALTER TABLE campaigns ADD COLUMN pending_coverage_gaps TEXT");
+    } catch {
+      // Column already exists — migration is idempotent.
+    }
+    try {
       // Audited 2026-09-02: the draft path's deferral clock (24h bound).
       this.db.exec("ALTER TABLE campaigns ADD COLUMN draft_deferred_since INTEGER");
     } catch {
@@ -182,8 +190,8 @@ export class CampaignStorage {
           state, idea_text, gdd_path, gdd_text, draft_task_id, draft_attempts,
           milestones_json, current_milestone, created_at, updated_at, last_error,
           auto_revive_at, coverage_audit_note, draft_deferred_since, delivery_reported, plan_coverage,
-          unmeasurable_revives, implementation_revives
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          unmeasurable_revives, implementation_revives, pending_coverage_gaps
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           state = excluded.state,
           gdd_path = excluded.gdd_path,
@@ -200,7 +208,8 @@ export class CampaignStorage {
           delivery_reported = excluded.delivery_reported,
           plan_coverage = excluded.plan_coverage,
           unmeasurable_revives = excluded.unmeasurable_revives,
-          implementation_revives = excluded.implementation_revives`,
+          implementation_revives = excluded.implementation_revives,
+          pending_coverage_gaps = excluded.pending_coverage_gaps`,
       )
       .run(
         campaign.id,
@@ -227,6 +236,9 @@ export class CampaignStorage {
         campaign.planCoverage ? JSON.stringify(campaign.planCoverage) : null,
         campaign.unmeasurableRevives ?? null,
         campaign.implementationRevives ?? null,
+        campaign.pendingCoverageGaps && campaign.pendingCoverageGaps.length > 0
+          ? JSON.stringify(campaign.pendingCoverageGaps)
+          : null,
       );
   }
 
@@ -368,5 +380,18 @@ export class CampaignStorage {
 
   close(): void {
     this.db.close();
+  }
+}
+
+/** The gap queue as stored: a JSON array of strings, or nothing at all. */
+function parseGapQueue(raw: string | null | undefined): string[] | undefined {
+  if (!raw) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return undefined;
+    const items = parsed.filter((x): x is string => typeof x === "string" && x.trim() !== "");
+    return items.length > 0 ? items : undefined;
+  } catch {
+    return undefined;
   }
 }

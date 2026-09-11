@@ -290,6 +290,15 @@ export interface Campaign {
    * devam", which is not autonomy (Codex 2026-09-11 F#1).
    */
   implementationRevives?: number;
+  /**
+   * Coverage gaps the audit named and no round has scheduled yet. Persisted
+   * because the round budget used to strip them: nine gaps, two rounds of
+   * four, and the ninth was never scheduled — the next audit was skipped as
+   * "round budget spent" and the campaign delivered `done` with a
+   * requirement it had explicitly identified as missing (Codex 2026-09-11
+   * F#9). A known gap is drained, never dropped.
+   */
+  pendingCoverageGaps?: string[];
   deliveryReported?: boolean;
   /**
    * The independent reviewer's verdict text for the last delivery report

@@ -527,12 +527,12 @@ export class CampaignManager {
    */
   /** Cancel the root of a task's retry/replan lineage, so every future
    *  descendant inherits a cancelled ancestor (audited 2026-09-03). */
-  private cancelLineageRootOf(taskId: string): void {
+  private cancelLineageRootOf(taskId: string, opts?: { reason: "superseded" }): void {
     try {
       const manager = this.taskManager as unknown as {
         findLineageRootId?: (id: string) => string | null;
         getStatus?: (id: string) => { id: string; status?: string; parentId?: string } | null;
-        cancel?: (id: string) => void;
+        cancel?: (id: string, opts?: { reason: "superseded" }) => void;
       };
       let rootId = manager.findLineageRootId?.(taskId) ?? null;
       if (!rootId) {
@@ -547,12 +547,26 @@ export class CampaignManager {
       if (!rootId || rootId === taskId) return;
       const root = manager.getStatus?.(rootId);
       if (root && root.status !== "completed" && root.status !== "cancelled") {
-        manager.cancel?.(rootId);
+        // The ROOT is what every future descendant inherits, so a recoverable
+        // retirement must stamp it "superseded" too (Codex 2026-09-11 F#6).
+        manager.cancel?.(rootId, opts);
       }
     } catch { /* unreadable lineage */ }
   }
 
-  private cancelLiveLineages(campaign: Campaign, reason: string): void {
+  /**
+   * Retire the campaign's live lineages.
+   *
+   * `recoverable` marks a retirement the campaign can come back from — a
+   * stop short of delivery, a superseding sprint, a failed campaign someone
+   * may revive. Those cancels are stamped "superseded", which the executor
+   * reads as history rather than as a stop order; a HARD cancel poisons every
+   * future descendant, so the revived mission's own keep-alive and goal
+   * auto-resume abandoned its recovery (Codex 2026-09-11 F#6). A DELIVERED
+   * campaign is not recoverable and keeps the hard cancel.
+   */
+  private cancelLiveLineages(campaign: Campaign, reason: string, opts: { recoverable?: boolean } = {}): void {
+    const cancelOpts = opts.recoverable === true ? ({ reason: "superseded" } as const) : undefined;
     // Identity by MISSION, not by pointer. A milestone that was resubmitted
     // points at its newest task, so walking taskId alone misses every lineage
     // the campaign abandoned along the way — and those are exactly the ones
@@ -586,8 +600,8 @@ export class CampaignManager {
           // child whose ancestry holds no cancel, and the chain walks around
           // the guard (measured live 2026-09-03 11:04, a seventh
           // resurrection). Every future descendant inherits the root.
-          this.cancelLineageRootOf(task.id);
-          this.taskManager.cancel(task.id as TaskId);
+          this.cancelLineageRootOf(task.id, cancelOpts);
+          this.taskManager.cancel(task.id as TaskId, cancelOpts);
           getLoggerSafe().info("Cancelled an abandoned mission of a terminal campaign", {
             id: campaign.id,
             taskId: task.id,
@@ -605,7 +619,7 @@ export class CampaignManager {
       } catch { continue; }
       if (!tipId) continue;
       try {
-        this.taskManager.cancel(tipId as TaskId);
+        this.taskManager.cancel(tipId as TaskId, cancelOpts);
         getLoggerSafe().info("Cancelled a live lineage of a terminal campaign", {
           id: campaign.id,
           milestone: milestone.id,
@@ -813,7 +827,9 @@ export class CampaignManager {
     // 09:19 and again 09:37, both minutes after delivery, both resubmitting a
     // sprint against a game that had already shipped.
     for (const campaign of this.storage.listRecentTerminal()) {
-      this.cancelLiveLineages(campaign, `campaign already ${campaign.state}`);
+      // A FAILED campaign can be revived (by its own budget or by a person);
+      // a delivered one cannot (Codex 2026-09-11 F#6).
+      this.cancelLiveLineages(campaign, `campaign already ${campaign.state}`, { recoverable: campaign.state === "failed" });
     }
     // A delivered game whose report never reached the chat is announced now.
     // The report is rebuilt from the persisted evidence (the same builder the
@@ -2601,7 +2617,7 @@ export class CampaignManager {
             campaign.lastError = `NOT DELIVERED — this machine cannot produce the missing proof: ${missingProofs.slice(0, 2).join("; ")}`.slice(0, 600);
             campaign.deliveryReported = false;
             this.persist(campaign);
-            this.cancelLiveLineages(campaign, "campaign stopped short of delivery");
+            this.cancelLiveLineages(campaign, "campaign stopped short of delivery", { recoverable: true });
             await this.gatherIndependentReview(campaign);
             await this.tell(
               campaign,
@@ -2616,7 +2632,7 @@ export class CampaignManager {
           const resumeMs = this.deliveryResumeDelayMs;
           campaign.autoReviveAt = Date.now() + resumeMs;
           this.persist(campaign);
-          this.cancelLiveLineages(campaign, "campaign stopped short of delivery");
+          this.cancelLiveLineages(campaign, "campaign stopped short of delivery", { recoverable: true });
           await this.gatherIndependentReview(campaign);
           await this.tell(
             campaign,
@@ -2851,7 +2867,7 @@ export class CampaignManager {
         this.persist(campaign);
         // The abandoned remediation lineage is retired first: left alive, the
         // boot re-arm could retry it beside the final proofs (C#3).
-        this.cancelLiveLineages(campaign, "superseded by the final proof sprint");
+        this.cancelLiveLineages(campaign, "superseded by the final proof sprint", { recoverable: true });
         // Submit BEFORE announcing: a messenger that never settles used to
         // leave the sprint appended but never submitted (C#6).
         this.submitCurrentMilestone(campaign);
@@ -2879,6 +2895,7 @@ export class CampaignManager {
       this.cancelLiveLineages(
         campaign,
         structure.refusal !== undefined ? "campaign stopped short of delivery" : "campaign delivered",
+        { recoverable: structure.refusal !== undefined },
       );
       getLoggerSafe().warn("Delivering with unclosed GDD gaps — remediation sprint spent its attempts", {
         id: campaign.id,
@@ -3248,6 +3265,26 @@ export class CampaignManager {
   /** Gaps per remediation round; more than this is a planning failure, not a sprint list. */
   private static readonly MAX_GAP_SPRINTS_PER_ROUND = 4;
 
+  /** One gap, one sprint — the audit's list is a ladder, not a prompt. */
+  private gapSprint(campaign: Campaign, round: number, index: number, item: string): CampaignMilestone {
+    const gddRef = campaign.gddPath ?? "the GDD";
+    return {
+      id: index === 0 ? `mcov${round}` : `mcov${round}-${index + 1}`,
+      title: `Coverage completion ${round}.${index + 1} — ${item.slice(0, 60)}`,
+      prompt: [
+        `The build's milestone ladder finished, but auditing it against ${gddRef} found this scheduled item undelivered:`,
+        `- ${item}`,
+        "",
+        `Implement it exactly as ${gddRef} specifies it, following the project's existing module pattern. This sprint is this one item; the other gaps have their own sprints.`,
+        "Verification bar: headless compile green, the relevant PlayMode tests green and unfiltered, and a captured frame proving the bound visual renders (the project's style.json holds the derived art direction — generators read it).",
+        "Commit per logical unit. End with a summary naming the item and the evidence it is done.",
+        "This is an autonomous campaign sprint — do not ask the user questions; make the strong choice and continue.",
+      ].join("\n"),
+      status: "pending" as const,
+      attempts: 0,
+    };
+  }
+
   private async buildCoverageRemediation(campaign: Campaign): Promise<CampaignMilestone[] | undefined> {
     // After the FINAL PROOF sprint there is no further remediation: the
     // unclosed gaps stay named in the report. Auditing again would append
@@ -3263,6 +3300,29 @@ export class CampaignManager {
       const round = /^mcov(\d+)/.exec(m.id);
       return round ? Math.max(max, Number(round[1])) : max;
     }, 0);
+    // KNOWN GAPS FIRST, and the round budget does not apply to them: they are
+    // already identified, so no audit is needed and none of them may be
+    // dropped. Nine gaps used to become eight sprints and a `done` campaign
+    // (Codex 2026-09-11 F#9).
+    const queued = campaign.pendingCoverageGaps ?? [];
+    if (queued.length > 0) {
+      const round = priorRounds + 1;
+      const take = queued.slice(0, CampaignManager.MAX_GAP_SPRINTS_PER_ROUND);
+      const rest = queued.slice(take.length);
+      campaign.pendingCoverageGaps = rest.length > 0 ? rest : undefined;
+      campaign.coverageAuditNote =
+        rest.length > 0
+          ? `${queued.length} gaps still known; round ${round} schedules ${take.length}, and ${rest.length} stay queued: ${rest.join("; ").slice(0, 300)}`
+          : undefined;
+      this.persist(campaign);
+      getLoggerSafe().info("Coverage remediation drains the known gap queue", {
+        id: campaign.id,
+        round,
+        scheduled: take.length,
+        stillQueued: rest.length,
+      });
+      return take.map((item, i) => this.gapSprint(campaign, round, i, item));
+    }
     // Every non-clean outcome is RECORDED, not collapsed into "undefined":
     // a skipped audit read exactly like a passing one in the delivery report
     // (audited 2026-09-01 — the round-budget and missing-GDD skips were
@@ -3297,7 +3357,6 @@ export class CampaignManager {
         this.persist(campaign);
         return undefined;
       }
-      const gddRef = campaign.gddPath ?? "the GDD";
       // ONE SPRINT PER GAP, ART FIRST. Measured 2026-09-07: one remediation
       // sprint carried "Art production …", "Audio production …" and "Story
       // and theme content …" together; four attempts, three of them narrowed
@@ -3307,26 +3366,17 @@ export class CampaignManager {
       const round = priorRounds + 1;
       const ordered = [...missing].sort((a, b) => Number(isArtGap(b)) - Number(isArtGap(a)));
       const shown = ordered.slice(0, CampaignManager.MAX_GAP_SPRINTS_PER_ROUND);
-      if (ordered.length > shown.length) {
+      const overflow = ordered.slice(shown.length);
+      if (overflow.length > 0) {
+        // QUEUED, not "waiting for the next audit": the next audit may never
+        // come, and the gap is already known (Codex 2026-09-11 F#9).
+        campaign.pendingCoverageGaps = overflow;
         campaign.coverageAuditNote =
-          `coverage audit found ${ordered.length} gaps; round ${round} schedules the first ${shown.length} — ` +
-          `the rest wait for the next audit: ${ordered.slice(shown.length).join("; ").slice(0, 300)}`;
+          `coverage audit found ${ordered.length} gaps; round ${round} schedules the first ${shown.length} and ` +
+          `${overflow.length} are queued for the following round(s): ${overflow.join("; ").slice(0, 300)}`;
+        this.persist(campaign);
       }
-      return shown.map((item, i) => ({
-        id: i === 0 ? `mcov${round}` : `mcov${round}-${i + 1}`,
-        title: `Coverage completion ${round}.${i + 1} — ${item.slice(0, 60)}`,
-        prompt: [
-          `The build's milestone ladder finished, but auditing it against ${gddRef} found this scheduled item undelivered:`,
-          `- ${item}`,
-          "",
-          `Implement it exactly as ${gddRef} specifies it, following the project's existing module pattern. This sprint is this one item; the other gaps have their own sprints.`,
-          "Verification bar: headless compile green, the relevant PlayMode tests green and unfiltered, and a captured frame proving the bound visual renders (the project's style.json holds the derived art direction — generators read it).",
-          "Commit per logical unit. End with a summary naming the item and the evidence it is done.",
-          "This is an autonomous campaign sprint — do not ask the user questions; make the strong choice and continue.",
-        ].join("\n"),
-        status: "pending" as const,
-        attempts: 0,
-      }));
+      return shown.map((item, i) => this.gapSprint(campaign, round, i, item));
     } catch (err) {
       getLoggerSafe().warn("Coverage audit failed — delivering without it", {
         id: campaign.id,

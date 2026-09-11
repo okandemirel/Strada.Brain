@@ -532,6 +532,24 @@ describe("CampaignManager", () => {
     await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
   });
 
+  it("a retirement the campaign can come back from is a supersession, not a stop order (Codex 2026-09-11 F#6)", async () => {
+    // A campaign that stops short of delivery may revive — by its own budget
+    // or by a person — and the revived mission descends from these tasks. A
+    // HARD cancel poisons every descendant, so the executor's keep-alive and
+    // goal auto-resume abandoned the revived mission's recovery.
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await failUntilStopped(campaign.id, "compile error CS0246");
+    expect(storage.get(campaign.id)!.state).toBe("failed");
+    // Every cancel this retirement made is marked superseded.
+    const reasons = [...tasks.cancelReasons.entries()].filter(([, r]) => r !== undefined);
+    expect(tasks.cancelled.length).toBeGreaterThan(0);
+    for (const id of tasks.cancelled) {
+      expect(tasks.cancelReasons.get(id)).toBe("superseded");
+    }
+    expect(reasons.length).toBe(tasks.cancelled.length);
+  });
+
   it("a third time-box overrun charges an attempt instead of running unbounded", async () => {
     // Measured 2026-09-01: after escalation 2/2 the box switched off and m6
     // ran 33h. The third overrun must be a charged, narrowest-scope retry.
@@ -831,6 +849,10 @@ describe("CampaignManager", () => {
     const report = messages.map((m) => m.text).find((t) => t.includes("Campaign delivery"))!;
     expect(report).toContain("WinLevel_ReachesWonState");
     expect(report).toContain("+5 more");
+    // A DELIVERED campaign is not recoverable: its lineages are hard
+    // cancelled so nothing resumes writing to a shipped game (F#6).
+    expect(tasks.cancelled.length).toBeGreaterThan(0);
+    expect(tasks.cancelled.some((id) => tasks.cancelReasons.get(id) === undefined)).toBe(true);
   });
 
   it("bounces the final sprint for a missing play-through even when the suite is green (measured 2026-09-10)", async () => {
@@ -1694,11 +1716,16 @@ describe("CampaignManager", () => {
 
   const runLadderToDelivery = async (campaignGdd = "# GDD"): Promise<ReturnType<typeof manager.startFromGdd>> => {
     const campaign = manager.startFromGdd(ctx, campaignGdd, "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    // Five seconds, not vitest's default one: these settles do real filesystem
+    // work and the default timed out under a full-suite run twice today —
+    // a slow machine is not a defect in the ladder.
+    const settled = (n: number): Promise<void> =>
+      vi.waitFor(() => expect(tasks.submitted).toHaveLength(n), { timeout: 5_000 });
+    await settled(1);
     settleMilestone("sprint A done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await settled(2);
     settleMilestone("sprint B done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    await settled(3);
     return campaign;
   };
 
@@ -2618,6 +2645,11 @@ describe("CampaignManager", () => {
     // No appointment: retrying cannot change a missing tool.
     expect(stopped.autoReviveAt).toBeUndefined();
     expect(messages.map((m) => m.text).join("\n")).toContain("This machine cannot produce the missing proof");
+    // A stop SHORT of delivery is recoverable — by a person, or by the
+    // campaign's own budget — so its cancels are supersessions and the
+    // executor may still recover a revived mission (Codex 2026-09-11 F#6).
+    expect(tasks.cancelled.length).toBeGreaterThan(0);
+    for (const id of tasks.cancelled) expect(tasks.cancelReasons.get(id)).toBe("superseded");
   });
 
   it("at the final sprint the RECORD is the proof: green prose with no record does not deliver, and an unrelated stale file changes nothing (Codex 2026-09-11 D#13)", async () => {
@@ -3604,6 +3636,63 @@ describe("CampaignManager", () => {
     const attemptTail = prompt.slice(prompt.indexOf("The previous attempt ended"));
     expect(attemptTail).not.toContain("compile exploded");
     expect(prompt).toContain("build the foundations"); // the sprint body survives the strip
+  });
+
+  it("every gap the audit NAMED gets a sprint, past the round budget (Codex 2026-09-11 F#9)", async () => {
+    // Nine gaps, four per round, two audit rounds: the ninth used to be
+    // narrated into a note and the campaign delivered `done` with a
+    // requirement it had itself identified as missing.
+    tasks = new FakeTaskManager();
+    storage.close();
+    storage = new CampaignStorage(join(dir, "campaigns-gap-queue.db"));
+    const gaps = Array.from({ length: 9 }, (_, i) => `Mechanic ${i + 1}: no milestone implemented it`);
+    const planner = {
+      planMilestones: vi.fn().mockResolvedValue(LADDER),
+      auditCoverage: vi.fn().mockResolvedValueOnce(gaps).mockResolvedValue([]),
+    } as unknown as CampaignPlanner;
+    manager = new CampaignManager({
+      storage,
+      verifyCompile: async () => compileVerdict,
+      buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
+      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); },
+      planner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async (chatId, text) => { messages.push({ chatId, text }); },
+      projectRoot,
+      retryAdoptionGraceMs: 10,
+      completedSettleDelayMs: 0,
+      milestoneTimeBoxMs: 60 * 60_000,
+      implementationReviveDelayMs: 10,
+    });
+    manager.attachEvents();
+
+    const campaign = manager.startFromGdd(ctx, "# GDD text", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    settleMilestone("final report");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4), { timeout: 5_000 });
+
+    // Round 1 schedules four and QUEUES five.
+    expect(storage.get(campaign.id)!.pendingCoverageGaps).toHaveLength(5);
+
+    // Drive every scheduled gap sprint to completion; the queue must empty.
+    for (let i = 0; i < 20 && storage.get(campaign.id)!.state === "executing"; i++) {
+      const before = tasks.submitted.length;
+      settleMilestone(`gap ${i} implemented, all 42 tests pass`);
+      await vi.waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(before), { timeout: 5_000 }).catch(() => undefined);
+      if (tasks.submitted.length === before) break;
+    }
+    const finished = storage.get(campaign.id)!;
+    expect(finished.pendingCoverageGaps ?? []).toHaveLength(0);
+    // One sprint per named gap, all nine of them.
+    const gapSprints = finished.milestones.filter((m) => m.id.startsWith("mcov"));
+    expect(gapSprints).toHaveLength(9);
+    for (let i = 1; i <= 9; i++) {
+      expect(gapSprints.some((m) => m.title.includes(`Mechanic ${i}:`))).toBe(true);
+    }
   });
 
   it("a clean coverage verdict from a WINDOWED audit is caveated, not reported as audited clean", async () => {
