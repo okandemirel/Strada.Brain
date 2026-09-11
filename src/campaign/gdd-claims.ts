@@ -166,6 +166,19 @@ export function extractNumericClaims(gddText: string): { claims: NumericClaim[];
       if (lower > 0 && lower < upper) push({ kind: "session_seconds", comparator: "min", value: lower, text: fragment(text, m.index ?? 0, m[0].length) }, m.index ?? 0);
     }
   }
+  // ONE LEVEL COUNT, THE LARGEST. Every level_count claim is measured against
+  // the same session catalog, so a document that says "12 levels" in one
+  // place and "the optional tutorial contains 3 puzzles" in another produced
+  // two claims no catalog size could satisfy at once — a delivery that could
+  // never pass (Codex 2026-09-11 F#2). The largest is the game's own count;
+  // the smaller ones describe parts of it.
+  const levelCounts = found.filter((c) => c.kind === "level_count");
+  if (levelCounts.length > 1) {
+    const biggest = levelCounts.reduce((max, c) => (c.value > max.value || (c.value === max.value && c.at < max.at) ? c : max));
+    for (const claim of levelCounts) {
+      if (claim !== biggest) found.splice(found.indexOf(claim), 1);
+    }
+  }
   // DOCUMENT ORDER, then the cap: the claims were collected kind by kind, so
   // the cap dropped whole later categories rather than the tail of the
   // document (Codex 2026-09-11 B#19).

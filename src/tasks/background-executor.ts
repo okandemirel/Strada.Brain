@@ -2404,6 +2404,23 @@ export class BackgroundExecutor {
     return false;
   }
 
+  /**
+   * How many nodes of this goal tree are complete, across every round. The
+   * dispatch count cannot answer it: a retry does not re-dispatch work that
+   * already succeeded.
+   */
+  private completedNodeCount(rootId: string): number | undefined {
+    try {
+      const tree = this.goalStorage?.getTree?.(rootId as GoalNodeId);
+      if (!tree) return undefined;
+      let done = 0;
+      for (const [, node] of tree.nodes) if (node.status === "completed") done++;
+      return done;
+    } catch {
+      return undefined;
+    }
+  }
+
   private autoResumeBlockedGoal(
     task: Task,
     tree: { rootId: string } | undefined,
@@ -2477,7 +2494,16 @@ export class BackgroundExecutor {
       replans: 0,
       previousSucceeded: 0,
     };
-    const decision = decideAutoResume(state, succeeded);
+    // CUMULATIVE progress, not this dispatch's. Completed nodes are excluded
+    // from a retry's dispatch, so a round that finished B after A was already
+    // done reported the same "1 succeeded" as the round before it — read as
+    // no progress, which threw the executable tree away and replanned from a
+    // prose summary (Codex 2026-09-11 F#8). The tree knows how many of its
+    // nodes are complete; ask it, and fall back to the dispatch count when
+    // no storage is wired.
+    const completedInTree = this.completedNodeCount(rootId);
+    const progressed = completedInTree ?? succeeded;
+    const decision = decideAutoResume(state, progressed);
 
     if (decision.action === "stop") {
       getLogger().warn("Blocked goal left for a person", {
@@ -2509,7 +2535,7 @@ export class BackgroundExecutor {
     this.autoResumeState.set(budgetKey, {
       attempts: replanning ? state.attempts : state.attempts + 1,
       replans: replanning ? state.replans + 1 : state.replans,
-      previousSucceeded: succeeded,
+      previousSucceeded: progressed,
     });
     getLogger().info(
       replanning

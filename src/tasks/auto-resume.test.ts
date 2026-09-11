@@ -210,3 +210,23 @@ describe("stripRetryMachinery is used where a result reaches a model (Codex 2026
     expect(stripRetryMachinery("Transient failure — keep-alive re-armed after restart. Compile error CS0246.")).toBe("Compile error CS0246.");
   });
 });
+
+describe("progress is CUMULATIVE, not this dispatch's (Codex 2026-09-11 F#8)", () => {
+  it("counts the tree's completed nodes so a second finished node is progress", () => {
+    const source = readFileSync("src/tasks/background-executor.ts", "utf8");
+    const at = source.indexOf("const decision = decideAutoResume(");
+    expect(at).toBeGreaterThan(0);
+    const block = source.slice(at - 900, at + 200);
+    // The comparison reads the TREE, not the dispatch, and the stored
+    // baseline is the same number so the next round compares like with like.
+    expect(block).toContain("this.completedNodeCount(rootId)");
+    // …and it is what the comparison USES, not merely what it computes.
+    expect(block).toContain("const progressed = completedInTree ?? succeeded;");
+    expect(block).toContain("decideAutoResume(state, progressed)");
+    expect(source.slice(at, at + 3000)).toContain("previousSucceeded: progressed,");
+
+    // The rule itself: one more completed node is progress, the same count is not.
+    expect(decideAutoResume({ attempts: 1, replans: 0, previousSucceeded: 1 }, 2).action).toBe("resume");
+    expect(decideAutoResume({ attempts: 1, replans: 0, previousSucceeded: 1 }, 1).action).toBe("replan");
+  });
+});

@@ -229,3 +229,20 @@ describe("assessNumericClaims", () => {
     expect(describeClaims(assessNumericClaims(claims, evidence()), 2).at(-1)).toBe("GDD numbers: 2 further claim(s) not listed");
   });
 });
+
+describe("independent level counts cannot contradict each other (Codex 2026-09-11 F#2)", () => {
+  it("keeps the largest, because they are all measured against one catalog", () => {
+    const { claims } = extractNumericClaims("Campaign contains 12 levels. The optional tutorial contains 3 puzzles.");
+    const levels = claims.filter((c) => c.kind === "level_count");
+    expect(levels).toHaveLength(1);
+    expect(levels[0]!.value).toBe(12);
+    // …whichever order the document names them in.
+    const reversed = extractNumericClaims("The tutorial contains 3 puzzles. The campaign contains 12 levels.");
+    const levelsReversed = reversed.claims.filter((c) => c.kind === "level_count");
+    expect(levelsReversed).toHaveLength(1);
+    expect(levelsReversed[0]!.value).toBe(12);
+    // A single count is untouched.
+    const one = extractNumericClaims("The game ships 7 levels.");
+    expect(one.claims.filter((c) => c.kind === "level_count").map((c) => c.value)).toEqual([7]);
+  });
+});
