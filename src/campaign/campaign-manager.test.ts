@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { CampaignManager, stripTimeBoxDirectives, UNMEASURABLE_PROOF_RE, UNRUNNABLE_HERE_RE, hasUnmeasurableProof } from "./campaign-manager.js";
 import { CampaignStorage } from "./campaign-storage.js";
+import { describeBuild } from "./campaign-status.js";
 import type { CampaignPlanner } from "./campaign-planner.js";
 import { GDD_AUDIT_FULL_CHARS } from "./campaign-planner.js";
 import type { TaskManager } from "../tasks/task-manager.js";
@@ -2848,6 +2849,25 @@ describe("CampaignManager", () => {
     const after = storage.get(campaign.id)!;
     expect(after.state).not.toBe("done");
     expect(after.milestones[2]!.deliveryProofsMissing!.join(" ")).toContain("have no sprint yet");
+  });
+
+  it("a two-platform GDD builds the first and NAMES the rest (Codex 2026-09-11 F#11)", async () => {
+    writeFileSync(join(projectRoot, "docs", "Game_GDD.md"), "# GDD\n\nShips on Steam for Windows and later on iOS. Target 60 fps.");
+    const campaign = manager.startFromGdd(ctx, "# GDD\n\nShips on Steam for Windows and later on iOS. Target 60 fps.", "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    settleMilestone("green, shipping");
+    await waitFor(() => expect(buildTargetsAsked.length).toBeGreaterThan(0));
+
+    // The FIRST named platform is built, rather than whatever the project had.
+    expect(buildTargetsAsked.at(-1)).toBe("windows");
+    const stored = storage.get(campaign.id)!;
+    // …and the platform it did NOT build is named where a person reads it.
+    expect((stored.milestones[2]!.buildVerdict?.reasons ?? []).join(" ")).toContain("ios");
+    expect(describeBuild(stored.milestones[2]!.buildVerdict!)).toContain("ios");
   });
 
   it("a sprint cancelled ON PURPOSE stops the campaign instead of continuing its work (Codex 2026-09-11 I#6)", async () => {

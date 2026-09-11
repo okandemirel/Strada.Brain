@@ -2,14 +2,18 @@ import { describe, expect, it } from "vitest";
 import { gddPlatform, frameRateAnswersPlatform } from "./gdd-platform.js";
 
 describe("the platform the GDD asks for (Codex 2026-09-11 B#11)", () => {
-  it("names one target when the document names one, and stays silent when it names several", () => {
-    expect(gddPlatform("Ships on Android first, Google Play in Q3.")).toMatchObject({ target: "android", handheld: true });
-    expect(gddPlatform("A WebGL game for itch.io.")).toMatchObject({ target: "webgl", handheld: false });
+  it("names the FIRST target and carries every platform the document asks for", () => {
+    expect(gddPlatform("Ships on Android first, Google Play in Q3.")).toMatchObject({ target: "android", targets: ["android"], handheld: true });
+    expect(gddPlatform("A WebGL game for itch.io.")).toMatchObject({ target: "webgl", targets: ["webgl"], handheld: false });
+    // Two platforms used to resolve to NO target, so the build took whatever
+    // the project had active and the report never named the second one
+    // (Codex 2026-09-11 F#11).
     const many = gddPlatform("Ships on Steam for Windows and later on iOS.");
-    expect(many.target).toBeUndefined();
+    expect(many.target).toBe("windows");
+    expect(many.targets).toEqual(["windows", "ios"]);
     expect(many.handheld).toBe(true);
-    expect(gddPlatform("A game about harbours.")).toEqual({ handheld: false });
-    expect(gddPlatform(undefined)).toEqual({ handheld: false });
+    expect(gddPlatform("A game about harbours.")).toEqual({ handheld: false, targets: [] });
+    expect(gddPlatform(undefined)).toEqual({ handheld: false, targets: [] });
   });
 
   it("'mid-range phones' is a handheld even when no store is named", () => {

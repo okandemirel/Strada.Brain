@@ -161,9 +161,13 @@ export function buildCampaignStatus(
 export function describeBuild(b: NonNullable<CampaignMilestone["buildVerdict"]>): string {
   if (!b.ran) return `player build NOT measured — ${b.detail ?? "no builder"}`;
   if (!b.ok) return `player build FAILED — ${(b.reasons ?? []).slice(0, 2).join("; ") || b.detail || "no reason recorded"}`;
+  // A SUCCESSFUL build still carries its reasons: the one that says which
+  // other platforms the document asked for and this build is not (Codex
+  // 2026-09-11 F#11).
+  const alsoAsked = (b.reasons ?? []).find((r) => /also asks for/i.test(r));
   return `player built: ${b.artifactPath ?? "?"} (${b.target ?? "?"}, ${((b.sizeBytes ?? 0) / (1024 * 1024)).toFixed(1)} MB${
     typeof b.durationMs === "number" ? `, ${Math.round(b.durationMs / 1000)} s` : ""
-  })`;
+  })${alsoAsked ? ` — ${alsoAsked}` : ""}`;
 }
 
 /** Counts over the rendered claim lines (gdd-claims.ts writes "MET —", "NOT MET —", "NOT MEASURED —"). */

@@ -35,8 +35,19 @@ function isExcluded(text: string, at: number): boolean {
 const HANDHELD_RE = /\b(?:mobile|phones?|handheld|tablets?|smartphones?)\b/i;
 
 export interface GddPlatform {
-  /** The build target to ask for, when the document names one. */
+  /** The build target to ask for: the FIRST platform the document names. */
   readonly target?: BuildTarget;
+  /**
+   * Every platform the document asks for, in the order it names them.
+   *
+   * A document that ships to two used to resolve to NO target at all, so the
+   * campaign built whatever the project had active, delivered that, and never
+   * said the second platform existed (Codex 2026-09-11 F#11). The first is
+   * built and the rest are disclosed, because a host that can build one
+   * cannot necessarily build the others and an unbuildable gate is worse than
+   * a named gap.
+   */
+  readonly targets: readonly BuildTarget[];
   /** True when the document describes a handheld device, whatever the store. */
   readonly handheld: boolean;
   /** The sentence the decision came from. */
@@ -44,7 +55,7 @@ export interface GddPlatform {
 }
 
 export function gddPlatform(gddText: string | undefined): GddPlatform {
-  if (!gddText) return { handheld: false };
+  if (!gddText) return { handheld: false, targets: [] };
   const hits: Array<{ target: BuildTarget; at: number }> = [];
   for (const [target, re] of PLATFORM_PATTERNS) {
     const m = re.exec(gddText);
@@ -55,14 +66,20 @@ export function gddPlatform(gddText: string | undefined): GddPlatform {
   }
   const handheldMatch = HANDHELD_RE.exec(gddText);
   const handheld = handheldMatch !== null || hits.some((h) => MOBILE_TARGETS.has(h.target));
-  if (hits.length === 0) return { handheld, ...(handheldMatch ? { evidence: sentenceAt(gddText, handheldMatch.index) } : {}) };
-  // One platform named: that is the target. Several: the document ships to
-  // more than one, and forcing one of them would be a guess — the project's
-  // own active target stands and the report says so.
-  const first = hits.sort((a, b) => a.at - b.at)[0]!;
-  return hits.length === 1
-    ? { target: first.target, handheld, evidence: sentenceAt(gddText, first.at) }
-    : { handheld, evidence: sentenceAt(gddText, first.at) };
+  if (hits.length === 0) {
+    return { handheld, targets: [], ...(handheldMatch ? { evidence: sentenceAt(gddText, handheldMatch.index) } : {}) };
+  }
+  // THE FIRST NAMED PLATFORM IS THE TARGET, and every named platform is
+  // carried. Returning no target for a two-platform document meant the build
+  // took whatever the project had active and the report never named the rest.
+  const ordered = [...hits].sort((a, b) => a.at - b.at);
+  const first = ordered[0]!;
+  return {
+    target: first.target,
+    targets: ordered.map((h) => h.target),
+    handheld,
+    evidence: sentenceAt(gddText, first.at),
+  };
 }
 
 function sentenceAt(text: string, index: number): string {

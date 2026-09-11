@@ -3371,7 +3371,19 @@ export class CampaignManager {
     const platform = gddPlatform(this.gddTextOf(campaign));
     try {
       const built = await this.buildPlayer(this.projectRoot, platform.target);
-      return platform.target ? { ...built, requestedTarget: platform.target } : built;
+      // Every platform the document asked for is NAMED, built or not: a
+      // two-platform GDD used to deliver one silently (Codex 2026-09-11 F#11).
+      const unbuilt = platform.targets.filter((t) => t !== platform.target);
+      const withTarget = platform.target ? { ...built, requestedTarget: platform.target } : built;
+      return unbuilt.length > 0
+        ? {
+            ...withTarget,
+            reasons: [
+              ...(withTarget.reasons ?? []),
+              `the GDD also asks for ${unbuilt.join(", ")}; this build is ${platform.target ?? "the project's active target"} only`,
+            ],
+          }
+        : withTarget;
     } catch (err) {
       return { ran: false, detail: `the player build could not run (${err instanceof Error ? err.message : String(err)})` };
     }
