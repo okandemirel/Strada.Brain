@@ -861,88 +861,17 @@ export class SupervisorBrain {
    * carry the leaves' results forward.
    */
   private extractLeafNodes(tree: GoalTree): GoalNode[] {
-    const childrenOf = new Map<string, GoalNodeId[]>();
-    for (const [, node] of tree.nodes) {
-      if (node.parentId === null) continue;
-      const siblings = childrenOf.get(String(node.parentId));
-      if (siblings) siblings.push(node.id);
-      else childrenOf.set(String(node.parentId), [node.id]);
-    }
-    const isScaffolding = (id: GoalNodeId): boolean =>
-      id !== tree.rootId && childrenOf.has(String(id));
-
-    // Leaf descendants of a scaffolding node, memoised; a malformed parent
-    // chain cannot loop because `visiting` stops re-entry.
-    const leavesUnder = new Map<string, GoalNodeId[]>();
-    const collectLeaves = (id: GoalNodeId, visiting: Set<string>): GoalNodeId[] => {
-      const cached = leavesUnder.get(String(id));
-      if (cached) return cached;
-      if (visiting.has(String(id))) return [];
-      visiting.add(String(id));
-      const leaves: GoalNodeId[] = [];
-      for (const childId of childrenOf.get(String(id)) ?? []) {
-        if (isScaffolding(childId)) leaves.push(...collectLeaves(childId, visiting));
-        else leaves.push(childId);
-      }
-      leavesUnder.set(String(id), leaves);
-      return leaves;
-    };
-
-    // Ancestors of a node, for the self-dependency guard below.
-    const isAncestorOf = (candidateId: GoalNodeId, nodeId: GoalNodeId): boolean => {
-      const seen = new Set<string>();
-      let current = tree.nodes.get(nodeId)?.parentId ?? null;
-      while (current !== null && !seen.has(String(current))) {
-        if (String(current) === String(candidateId)) return true;
-        seen.add(String(current));
-        current = tree.nodes.get(current)?.parentId ?? null;
-      }
-      return false;
-    };
-
-    // Rewire one node's dependency list: a dep on scaffolding becomes deps on
-    // that scaffolding's leaves; a leaf never depends on itself.
-    const rewire = (nodeId: GoalNodeId, deps: readonly GoalNodeId[], into: Set<GoalNodeId>): void => {
-      for (const depId of deps) {
-        if (!isScaffolding(depId)) {
-          if (depId !== nodeId) into.add(depId);
-          continue;
-        }
-        // A node that depends on its OWN scaffolding ancestor is saying "after
-        // my parent's work", which for a leaf means its siblings — expanding
-        // it manufactured a C1<->C2 cycle and both nodes were then reported
-        // unschedulable/FAILED (review of 25fa96d0, 2026-09-02). The dep is
-        // already satisfied by the node's own place in that subtree: drop it.
-        if (isAncestorOf(depId, nodeId)) continue;
-        for (const leafId of collectLeaves(depId, new Set())) {
-          if (leafId !== nodeId) into.add(leafId);
-        }
-      }
-    };
-
+    const deps = effectiveLeafDependencies(tree);
     const nodes: GoalNode[] = [];
     for (const [id, node] of tree.nodes) {
-      if (id === tree.rootId || node.status === "completed" || isScaffolding(id)) continue;
-
-      const deps = new Set<GoalNodeId>();
-      rewire(id, node.dependsOn, deps);
-      // Inherit every scaffolding ancestor's own dependencies: P waited on Q,
-      // so the leaves doing P's work wait on Q.
-      const seenAncestors = new Set<string>();
-      let ancestorId = node.parentId;
-      while (ancestorId !== null && ancestorId !== tree.rootId && !seenAncestors.has(String(ancestorId))) {
-        seenAncestors.add(String(ancestorId));
-        const ancestor = tree.nodes.get(ancestorId);
-        if (!ancestor) break;
-        rewire(id, ancestor.dependsOn, deps);
-        ancestorId = ancestor.parentId;
-      }
-
-      const rewired = [...deps];
+      if (node.status === "completed") continue;
+      const rewired = deps.get(String(id));
+      if (!rewired) continue; // the root, or a scaffolding parent
+      const asIds = [...rewired] as GoalNodeId[];
       const unchanged =
-        rewired.length === node.dependsOn.length &&
-        rewired.every((depId, index) => node.dependsOn[index] === depId);
-      nodes.push(unchanged ? node : { ...node, dependsOn: rewired });
+        asIds.length === node.dependsOn.length &&
+        asIds.every((depId, index) => node.dependsOn[index] === depId);
+      nodes.push(unchanged ? node : { ...node, dependsOn: asIds });
     }
     return nodes;
   }
@@ -1019,31 +948,109 @@ export class SupervisorBrain {
 /** Floor for the resume re-verification deadline. */
 const RESUME_VERIFY_MIN_MS = 120_000;
 
+/**
+ * Every leaf's EFFECTIVE dependencies — the same list the executor schedules
+ * on. One function because invalidation used to compute its own version and
+ * the two disagreed in both directions: a consumer of a rejected node's
+ * scaffolding parent stayed "completed" (Codex 2026-09-11 G#1) while an
+ * independent sibling was rebuilt for its neighbour's failure (G#7).
+ *
+ * The rules, all three of them load-bearing:
+ *  - a dependency on scaffolding means its leaves;
+ *  - a leaf inherits every scaffolding ancestor's own dependencies;
+ *  - a dependency on the node's OWN ancestor is already satisfied by the
+ *    node's place in that subtree, and expanding it manufactured a cycle
+ *    (review of 25fa96d0, 2026-09-02).
+ *
+ * Keyed by leaf id; scaffolding parents and the root are absent.
+ */
+export function effectiveLeafDependencies(tree: GoalTree): Map<string, Set<string>> {
+  const childrenOf = new Map<string, GoalNodeId[]>();
+  for (const [, node] of tree.nodes) {
+    if (node.parentId === null) continue;
+    const siblings = childrenOf.get(String(node.parentId));
+    if (siblings) siblings.push(node.id);
+    else childrenOf.set(String(node.parentId), [node.id]);
+  }
+  const isScaffolding = (id: GoalNodeId): boolean => id !== tree.rootId && childrenOf.has(String(id));
+
+  // Leaf descendants of a scaffolding node, memoised; a malformed parent
+  // chain cannot loop because `visiting` stops re-entry.
+  const leavesUnder = new Map<string, GoalNodeId[]>();
+  const collectLeaves = (id: GoalNodeId, visiting: Set<string>): GoalNodeId[] => {
+    const cached = leavesUnder.get(String(id));
+    if (cached) return cached;
+    if (visiting.has(String(id))) return [];
+    visiting.add(String(id));
+    const leaves: GoalNodeId[] = [];
+    for (const childId of childrenOf.get(String(id)) ?? []) {
+      if (isScaffolding(childId)) leaves.push(...collectLeaves(childId, visiting));
+      else leaves.push(childId);
+    }
+    leavesUnder.set(String(id), leaves);
+    return leaves;
+  };
+
+  const isAncestorOf = (candidateId: GoalNodeId, nodeId: GoalNodeId): boolean => {
+    const seen = new Set<string>();
+    let current = tree.nodes.get(nodeId)?.parentId ?? null;
+    while (current !== null && !seen.has(String(current))) {
+      if (String(current) === String(candidateId)) return true;
+      seen.add(String(current));
+      current = tree.nodes.get(current)?.parentId ?? null;
+    }
+    return false;
+  };
+
+  const rewire = (nodeId: GoalNodeId, deps: readonly GoalNodeId[], into: Set<string>): void => {
+    for (const depId of deps) {
+      if (!isScaffolding(depId)) {
+        if (String(depId) !== String(nodeId)) into.add(String(depId));
+        continue;
+      }
+      if (isAncestorOf(depId, nodeId)) continue;
+      for (const leafId of collectLeaves(depId, new Set())) {
+        if (String(leafId) !== String(nodeId)) into.add(String(leafId));
+      }
+    }
+  };
+
+  const out = new Map<string, Set<string>>();
+  for (const [id, node] of tree.nodes) {
+    if (id === tree.rootId || isScaffolding(id)) continue;
+    const deps = new Set<string>();
+    rewire(id, node.dependsOn, deps);
+    // Inherit every scaffolding ancestor's own dependencies: P waited on Q,
+    // so the leaves doing P's work wait on Q.
+    const seenAncestors = new Set<string>();
+    let ancestorId = node.parentId;
+    while (ancestorId !== null && ancestorId !== tree.rootId && !seenAncestors.has(String(ancestorId))) {
+      seenAncestors.add(String(ancestorId));
+      const ancestor = tree.nodes.get(ancestorId);
+      if (!ancestor) break;
+      rewire(id, ancestor.dependsOn, deps);
+      ancestorId = ancestor.parentId;
+    }
+    out.set(String(id), deps);
+  }
+  return out;
+}
+
 export function dependentClosure(tree: GoalTree | undefined, rejected: ReadonlySet<string>): string[] {
   if (!tree) return [...rejected];
+  const deps = effectiveLeafDependencies(tree);
   const out = new Set(rejected);
-  const parentOf = (id: string): string | null => {
-    const p = tree.nodes.get(id as GoalNodeId)?.parentId;
-    return p === null || p === undefined ? null : String(p);
-  };
   let grew = true;
   while (grew) {
     grew = false;
-    // A step that waited on a PARENT waited on that parent's whole subtree, so
-    // every ancestor of an invalidated node is unfinished for the purpose of
-    // this test. Comparing only against the invalidated ids themselves left a
-    // consumer of a rejected node's parent marked completed, and its stale
-    // implementation counted as done (Codex 2026-09-11 E#3). The ancestors are
-    // not themselves invalidated — a scaffolding parent has no work of its own.
-    const unfinished = new Set(out);
-    for (const id of out) {
-      for (let p = parentOf(id); p !== null && !unfinished.has(p); p = parentOf(p)) unfinished.add(p);
-    }
-    for (const [id, node] of tree.nodes) {
-      if (out.has(String(id))) continue;
-      if (node.dependsOn.some((d) => unfinished.has(String(d)))) {
-        out.add(String(id));
-        grew = true;
+    for (const [id, nodeDeps] of deps) {
+      if (out.has(id)) continue;
+      for (const dep of nodeDeps) {
+        if (out.has(dep)) {
+          out.add(id);
+          grew = true;
+          break;
+        }
       }
     }
   }

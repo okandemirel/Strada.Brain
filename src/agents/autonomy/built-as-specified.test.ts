@@ -714,6 +714,33 @@ describe("defects the measurement review found (2026-09-07)", () => {
       expect(offReport.refusal).toContain("render NOTHING");
     }
 
+    // An inactive ANCESTOR switches the child off too, as Unity does (G#5).
+    const parentOff = project();
+    buildSettings(parentOff, [{ path: "Assets/Scenes/Main.unity" }]);
+    put(parentOff, "Assets/Scenes/Main.unity",
+      `${HEADER}${CAMERA(0)}` +
+      `--- !u!1 &40\nGameObject:\n  m_Name: Root\n  m_IsActive: 0\n--- !u!4 &41\nTransform:\n  m_GameObject: {fileID: 40}\n  m_Father: {fileID: 0}\n` +
+      `--- !u!1 &30\nGameObject:\n  m_Name: Screen\n  m_IsActive: 1\n--- !u!4 &32\nTransform:\n  m_GameObject: {fileID: 30}\n  m_Father: {fileID: 41}\n` +
+      `--- !u!328 &31\nVideoPlayer:\n  m_GameObject: {fileID: 30}\n  m_Enabled: 1\n  m_VideoClip: {fileID: 32900000, guid: ${G("9")}, type: 3}\n`, G("5"));
+    put(parentOff, "Assets/Movies/Intro.mp4", "movie-bytes", G("9"));
+    put(parentOff, "Assets/Art/Cover.png", "pixels", G("8"));
+    const parentOffReport = assessBuiltAsSpecified(parentOff);
+    expect(parentOffReport.scenes[0]!.videoClipsBound).toEqual([]);
+    expect(parentOffReport.refusal).toContain("render NOTHING");
+
+    // …but a disabled player the GAME'S OWN CODE enables is an FMV game, and
+    // refusing it imposed one architecture on every GDD (Codex G#6).
+    const scripted = project();
+    buildSettings(scripted, [{ path: "Assets/Scenes/Main.unity" }]);
+    put(scripted, "Assets/Scenes/Main.unity", videoScene("1", "0"), G("5"));
+    put(scripted, "Assets/Movies/Intro.mp4", "movie-bytes", G("9"));
+    put(scripted, "Assets/Art/Cover.png", "pixels", G("8"));
+    put(scripted, "Assets/Scripts/MovieBoot.cs",
+      "using UnityEngine.Video; class MovieBoot { public VideoPlayer movie; void Start() { movie.enabled = true; movie.Play(); } }", G("7"));
+    const scriptedReport = assessBuiltAsSpecified(scripted);
+    expect(scriptedReport.scenes[0]!.videoClipsBound).toEqual(["Assets/Movies/Intro.mp4"]);
+    expect(scriptedReport.refusal).toBeUndefined();
+
     // …and the enabled one still is the picture.
     const on = project();
     buildSettings(on, [{ path: "Assets/Scenes/Main.unity" }]);

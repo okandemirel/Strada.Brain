@@ -494,42 +494,30 @@ export class AgentCore {
  * 2026-09-10 22:31: "investigate the 1118 uncommitted changes" ran in a lease
  * and reported a clean tree. Every other goal keeps the lease.
  */
-/** Words that say the goal is ABOUT the tree's current state. */
+/**
+ * Words that say the goal is ABOUT the tree's current state.
+ *
+ * The tree words used as a NOUN PHRASE are excluded: "the git status panel"
+ * names a component someone is building, not the repository's state, and
+ * documenting it in docs/panel.md was sent into the shared project because of
+ * that word (Codex 2026-09-11 E#14, G#9).
+ */
 export const WORKING_TREE_GOAL_RE =
-  /\b(?:uncommitted|untracked|unstaged|staged changes|working[- ]tree|working copy|git status|git diff|dirty tree|stash(?:ed)?)\b/i;
-/** …and words that say it is ordinary development work that merely mentions them. */
+  /\b(?:uncommitted|untracked|unstaged|staged changes|working[- ]tree|working copy|git status|git diff|dirty tree|stash(?:ed)?)\b(?!\s+(?:panel|view|screen|page|tab|button|widget|component|dialog|window|menu|bar|indicator|badge|tool|command|script|endpoint|api|module|feature))/i;
+/**
+ * …and words that say the goal BUILDS something. An implementation verb wins
+ * over everything else in the sentence: a goal that implements a feature and
+ * also writes a report about it is implementation work and keeps its lease
+ * (Codex 2026-09-11 G#9). Everything that merely DESCRIBES the tree — report,
+ * summary, note, documentation, investigation — runs in the real tree, because
+ * a lease seeded from HEAD reports a clean tree, which is a false answer
+ * (measured 2026-09-10 22:31).
+ */
 const BUILD_SOMETHING_RE =
-  // "write" with NO exception carved into it. The exception used to be a
-  // lookahead here — `write\s+(?!a\s+(?:summary|report|note))` — and "write  a
-  // summary" (two spaces) let \s+ give a space back so the lookahead never
-  // fired (Codex 2026-09-11 E#13). Reporting is one rule, below, checked
-  // first; duplicating it in two places is what let each cover the other's
-  // mistake.
-  /\b(?:add|implement|build|create|design|refactor|rename|port|migrate|write)\b/i;
-/**
- * Reporting ON the tree, whatever else the sentence says. This one outranks
- * the file-authoring rule below: a summary of the working tree read from a
- * lease seeded off HEAD reports a clean tree, which is a false answer, and a
- * doc written in the real tree is only a tidiness cost.
- */
-const REPORTS_ON_THE_TREE_RE = /\b(?:write|produce|prepare|give|send)\s+(?:me\s+)?a\s+(?:summary|report|note)\b/i;
-/**
- * Authoring a NAMED FILE is implementation work and keeps its lease. Dropping
- * the verb "document" entirely sent "Document the git status panel in
- * docs/panel.md" into the shared project (Codex 2026-09-11 E#14).
- */
-const AUTHORS_A_FILE_RE =
-  /\b(?:document|write|update|edit|append|add|extend)\b[^.!?]*?\b[\w./-]+\.(?:md|mdx|txt|ts|tsx|js|jsx|cs|json|ya?ml|toml|css|html)\b/i;
+  /\b(?:add|implement|build|create|design|refactor|rename|port|migrate|fix|delete|remove|revert|commit|merge|rebase)\b/i;
 
-/**
- * A goal driven by a working-tree observation must run in the real tree; a
- * goal that merely contains the word "git" must not lose its lease (Codex
- * 2026-09-11 #9, C#27). The subject wins over the vocabulary: an
- * implementation verb means the goal BUILDS something, whatever it names.
- */
 export function workspacePolicyFor(observations: ReadonlyArray<{ source: string }>, goal: string): { workspacePolicy?: "none" } {
   const sawGit = observations.some((o) => o.source === "git");
   if (!sawGit || !WORKING_TREE_GOAL_RE.test(goal)) return {};
-  if (REPORTS_ON_THE_TREE_RE.test(goal)) return { workspacePolicy: "none" };
-  return BUILD_SOMETHING_RE.test(goal) || AUTHORS_A_FILE_RE.test(goal) ? {} : { workspacePolicy: "none" };
+  return BUILD_SOMETHING_RE.test(goal) ? {} : { workspacePolicy: "none" };
 }

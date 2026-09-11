@@ -521,17 +521,12 @@ function newTally(): Tally {
  * empty list counts as zero references instead of silently inheriting the
  * previous key's classification.
  */
-function scanUnityFile(text: string, tally: Tally): void {
+function scanUnityFile(text: string, tally: Tally, videoScriptControl = false): void {
   const docs = parseUnityDocuments(text);
   // GameObjects the scene ships switched OFF. A component on one of them is
   // in the file and draws nothing (Codex 2026-09-11 E#12: a VideoPlayer with
   // m_Enabled 0 on an inactive GameObject counted as the game's picture).
-  const inactiveObjects = new Set(
-    docs
-      .filter((d) => d.className === "GameObject" && d.lines.some((l) => /^\s*m_IsActive:\s*0\s*$/.test(l)))
-      .map((d) => d.fileId)
-      .filter((id): id is string => id !== undefined),
-  );
+  const inactiveObjects = inactiveInHierarchy(docs);
   for (const doc of docs) {
     const isRenderer = RENDERER_CLASSES.has(doc.className);
     if (isRenderer) {
@@ -627,7 +622,11 @@ function scanUnityFile(text: string, tally: Tally): void {
         }
         // A VideoPlayer's clip: the visible content of a video-driven game
         // (Codex 2026-09-11 D#27).
-        if (doc.className === "VideoPlayer" && key === "m_VideoClip" && componentDraws(doc, inactiveObjects)) {
+        if (
+          doc.className === "VideoPlayer" && key === "m_VideoClip" &&
+          // Switched on in the scene, or switched on by the game's own code.
+          (componentDraws(doc, inactiveObjects) || videoScriptControl)
+        ) {
           const ref = parseRef(rest);
           if (ref?.guid) recordRef(ref, tally);
         }
@@ -645,9 +644,65 @@ function scanUnityFile(text: string, tally: Tally): void {
 }
 
 /**
+ * GameObjects that are off in the SHIPPED HIERARCHY: switched off themselves,
+ * or parented under something that is. Unity deactivates a child through its
+ * parent, so checking only the component's own owner let an inactive ancestor
+ * hide the switch (Codex 2026-09-11 G#5).
+ * https://docs.unity3d.com/ScriptReference/GameObject-activeInHierarchy.html
+ */
+function inactiveInHierarchy(docs: readonly UnityDocument[]): Set<string> {
+  const selfInactive = new Set<string>();
+  for (const d of docs) {
+    if (d.className !== "GameObject" || d.fileId === undefined) continue;
+    if (d.lines.some((l) => /^\s*m_IsActive:\s*0\s*$/.test(l))) selfInactive.add(d.fileId);
+  }
+  // gameObject fileId → its parent gameObject fileId, read through Transforms:
+  // a Transform names its own GameObject (m_GameObject) and its parent
+  // Transform (m_Father), and that Transform names the parent GameObject.
+  const objectOfTransform = new Map<string, string>();
+  const fatherOfTransform = new Map<string, string>();
+  for (const d of docs) {
+    if (d.className !== "Transform" && d.className !== "RectTransform") continue;
+    if (d.fileId === undefined) continue;
+    for (const line of d.lines) {
+      const owner = /^\s*m_GameObject:\s*\{fileID:\s*(\d+)\}/.exec(line)?.[1];
+      if (owner) objectOfTransform.set(d.fileId, owner);
+      const father = /^\s*m_Father:\s*\{fileID:\s*(\d+)\}/.exec(line)?.[1];
+      if (father && father !== "0") fatherOfTransform.set(d.fileId, father);
+    }
+  }
+  const transformOfObject = new Map<string, string>();
+  for (const [transform, object] of objectOfTransform) transformOfObject.set(object, transform);
+
+  const off = new Set(selfInactive);
+  for (const [, object] of objectOfTransform) {
+    if (off.has(object)) continue;
+    const seen = new Set<string>();
+    let transform = transformOfObject.get(object);
+    while (transform !== undefined && !seen.has(transform)) {
+      seen.add(transform);
+      const father = fatherOfTransform.get(transform);
+      if (father === undefined) break;
+      const parentObject = objectOfTransform.get(father);
+      if (parentObject !== undefined && selfInactive.has(parentObject)) {
+        off.add(object);
+        break;
+      }
+      transform = father;
+    }
+  }
+  return off;
+}
+
+/**
  * Is this component on at runtime? Its own `m_Enabled` and its GameObject's
- * `m_IsActive` both have to say so — a disabled component in a shipped scene
- * is a component nobody sees (Codex 2026-09-11 E#12).
+ * place in the hierarchy both have to say so — a disabled component in a
+ * shipped scene is a component nobody sees (Codex 2026-09-11 E#12, G#5).
+ *
+ * A script CAN enable a Behaviour at runtime, which is how an FMV game starts
+ * its movie, so serialized inactivity alone is not the answer: the caller
+ * passes `couldBeEnabledByScript` and the component then counts, with the
+ * uncertainty disclosed rather than decided (G#6).
  */
 function componentDraws(doc: UnityDocument, inactiveObjects: ReadonlySet<string>): boolean {
   if (doc.lines.some((l) => /^\s*m_Enabled:\s*0\s*$/.test(l))) return false;
@@ -857,6 +912,34 @@ export function assessBuiltAsSpecified(
     }
   }
 
+  // ── What the project's own code does at runtime ───────────────────────
+  // Read BEFORE the scenes, because one of these answers changes how a
+  // scene's switched-off component is read (see videoScriptControl).
+  const primitiveScripts: string[] = [];
+  let primitiveCallSites = 0;
+  // Does any runtime script turn a VideoPlayer on or start it? An FMV game
+  // ships its player disabled and calls `movie.enabled = true; movie.Play();`
+  // from a controller, and refusing that as "renders NOTHING" refused a
+  // legitimate game (Codex 2026-09-11 G#6).
+  let videoScriptControl = false;
+  for (const rel of files) {
+    if (!rel.endsWith(".cs") || !isRuntimeScript(rel)) continue;
+    let text: string;
+    try {
+      text = io.readFile(join(projectRoot, rel));
+    } catch {
+      continue;
+    }
+    const clean = stripComments(text);
+    if (PRIMITIVE_RE.test(clean)) {
+      primitiveScripts.push(rel);
+      primitiveCallSites += (clean.match(/\bCreatePrimitive\s*\(/gu) ?? []).length;
+    }
+    if (/\bVideoPlayer\b/u.test(clean) && /\.(?:enabled\s*=\s*true|Play\s*\(|SetActive\s*\(\s*true\s*\))/u.test(clean)) {
+      videoScriptControl = true;
+    }
+  }
+
   // ── Per-scene structure, prefabs followed by guid ──────────────────────
   const boundGuids = new Set<string>();
   const scenes: SceneStructure[] = [];
@@ -911,7 +994,7 @@ export function assessBuiltAsSpecified(
       incomplete.push(`${scenePath} is binary-serialized, not text — its contents are unmeasured`);
       continue;
     }
-    scanUnityFile(sceneText, own);
+    scanUnityFile(sceneText, own, videoScriptControl);
 
     // PLACED: prefab instances the scene actually contains, followed
     // recursively through nested instances. This is what the scene renders.
@@ -947,7 +1030,7 @@ export function assessBuiltAsSpecified(
         continue;
       }
       const nested = newTally();
-      scanUnityFile(text, nested);
+      scanUnityFile(text, nested, videoScriptControl);
       mergeTally(placed, nested);
       for (const g of nested.prefabGuids) {
         if (seenPrefabGuids.has(g)) continue;
@@ -985,7 +1068,7 @@ export function assessBuiltAsSpecified(
       }
       if (target.endsWith(".prefab") && !placedFiles.has(target)) {
         const t = newTally();
-        scanUnityFile(text, t);
+        scanUnityFile(text, t, videoScriptControl);
         mergeTally(referencedOnly, t);
       }
       for (const g of collectGuids(text)) {
@@ -1119,24 +1202,6 @@ export function assessBuiltAsSpecified(
         else audioHashes.set(clip.hash, rel);
       }
       if (clip.seconds !== undefined && clip.seconds < SHORT_AUDIO_SECONDS) shortAudioPaths.push(rel);
-    }
-  }
-
-  // ── Geometry built in code ────────────────────────────────────────────
-  const primitiveScripts: string[] = [];
-  let primitiveCallSites = 0;
-  for (const rel of files) {
-    if (!rel.endsWith(".cs") || !isRuntimeScript(rel)) continue;
-    let text: string;
-    try {
-      text = io.readFile(join(projectRoot, rel));
-    } catch {
-      continue;
-    }
-    const clean = stripComments(text);
-    if (PRIMITIVE_RE.test(clean)) {
-      primitiveScripts.push(rel);
-      primitiveCallSites += (clean.match(/\bCreatePrimitive\s*\(/gu) ?? []).length;
     }
   }
 

@@ -1,5 +1,5 @@
 import { supportsRichMessaging } from "../../channels/channel-core.interface.js";
-import { existsSync, statSync, readdirSync } from "node:fs";
+import { closeSync, existsSync, openSync, readSync, statSync, readdirSync } from "node:fs";
 import type { Attachment } from "../../channels/channel-messages.interface.js";
 import { join } from "node:path";
 import { runCodexSecondOpinion } from "../../agents/review/codex-second-opinion.js";
@@ -702,20 +702,84 @@ export function looksLikePlayer(artifactPath: string): boolean {
     return false;
   }
   if (st.isDirectory()) {
-    // A WebGL build or a .app bundle — it must hold something a player needs.
+    // A WebGL build or a .app bundle. The entry NAMES are not the evidence —
+    // `Game.app/Contents/` with nothing anywhere inside passed on its
+    // directory names alone (Codex 2026-09-11 G#3). Something in there has to
+    // be a file with bytes in it.
     try {
       const entries = readdirSync(artifactPath);
-      return entries.some((e) => /^(?:index\.html|Build|Data|.*_Data|Contents|UnityPlayer\.(?:dll|so|dylib))$/i.test(e));
+      const named = entries.some((e) => /^(?:index\.html|Build|Data|.*_Data|Contents|UnityPlayer\.(?:dll|so|dylib))$/i.test(e));
+      return named && holdsPayload(artifactPath, 3);
     } catch {
       return false;
     }
   }
-  // A FILE with a player extension: the extension says what it claims to be,
-  // the size says whether anything is in it.
-  if (PLAYER_EXT_RE.test(artifactPath)) return st.size >= MIN_PLAYER_FILE_BYTES;
+  // A FILE with a player extension: the extension says what it CLAIMS to be
+  // and the first bytes say whether it is one. 131 072 bytes of ASCII "x"
+  // named Padded.apk passed the size floor (G#3).
+  if (PLAYER_EXT_RE.test(artifactPath)) {
+    return st.size >= MIN_PLAYER_FILE_BYTES && hasPackageMagic(artifactPath);
+  }
   // A bare Linux/macOS executable has no extension; require it to be
   // executable and not trivially small.
   return st.size > 1024 * 1024 && (st.mode & 0o111) !== 0 && !/\.[a-z0-9]{1,6}$/i.test(artifactPath);
+}
+
+/** Smallest file inside a bundle that counts as payload rather than metadata. */
+const MIN_BUNDLE_PAYLOAD_BYTES = 4 * 1024;
+
+/** Does this directory hold a real file somewhere in its first few levels? */
+function holdsPayload(dir: string, depth: number): boolean {
+  if (depth <= 0) return false;
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return false;
+  }
+  for (const entry of entries) {
+    const child = join(dir, entry);
+    let st: ReturnType<typeof statSync>;
+    try {
+      st = statSync(child);
+    } catch {
+      continue;
+    }
+    if (st.isDirectory()) {
+      if (holdsPayload(child, depth - 1)) return true;
+    } else if (st.size >= MIN_BUNDLE_PAYLOAD_BYTES) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * The first bytes of a packaged player: a ZIP container (apk/aab/ipa/zip), a
+ * Windows executable, or a macOS Mach-O / universal binary. A `.dmg` is
+ * checked only for size, since its header varies by creator.
+ */
+function hasPackageMagic(path: string): boolean {
+  let head: Buffer;
+  try {
+    const fd = openSync(path, "r");
+    try {
+      head = Buffer.alloc(4);
+      readSync(fd, head, 0, 4, 0);
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    return false;
+  }
+  if (/\.(?:apk|aab|ipa|zip)$/i.test(path)) return head.toString("latin1", 0, 2) === "PK";
+  if (/\.exe$/i.test(path)) return head.toString("latin1", 0, 2) === "MZ";
+  if (/\.(?:app|x86_64)$/i.test(path)) {
+    const magic = head.readUInt32BE(0);
+    // Mach-O 32/64 in both byte orders, and the universal (fat) header.
+    return [0xfeedface, 0xfeedfacf, 0xcefaedfe, 0xcffaedfe, 0xcafebabe].includes(magic);
+  }
+  return true;
 }
 
 export function makeRunPlayer(registry: {

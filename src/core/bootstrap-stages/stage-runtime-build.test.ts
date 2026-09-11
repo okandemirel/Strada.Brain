@@ -9,12 +9,14 @@ import { join } from "node:path";
 import { parsePlayerBuildOutput, makeRunPlayer, looksLikePlayer } from "./stage-runtime.js";
 
 const artifactDir = mkdtempSync(join(tmpdir(), "build-artifact-"));
-// A REAL StandaloneOSX artifact: .app is a bundle DIRECTORY holding Contents.
-// The fixture used to be a 6-byte file, which is exactly what an empty file
-// named Game.app is — and the gate passed it (Codex 2026-09-11 E#2).
+// A REAL StandaloneOSX artifact: .app is a bundle DIRECTORY holding Contents,
+// and the bundle holds an actual binary. The fixture used to be a 6-byte file,
+// which is exactly what an empty file named Game.app is — and the gate passed
+// it (Codex 2026-09-11 E#2); then it became a bundle whose only content was a
+// 6-byte file, which is what an empty bundle is (G#3).
 const realArtifact = join(artifactDir, "Game.app");
 mkdirSync(join(realArtifact, "Contents", "MacOS"), { recursive: true });
-writeFileSync(join(realArtifact, "Contents", "MacOS", "Game"), "binary");
+writeFileSync(join(realArtifact, "Contents", "MacOS", "Game"), Buffer.alloc(64 * 1024, 7));
 
 const built =
   "PLAYER BUILT (StandaloneOSX).\nTarget StandaloneOSX; 2 scene(s): Assets/Scenes/Main.unity, Assets/Scenes/Level.unity; 118 s; 3 warning(s); 0 error(s).\n" +
@@ -48,10 +50,12 @@ describe("parsePlayerBuildOutput", () => {
     const parsed = parsePlayerBuildOutput(claimed);
     expect(parsed).toMatchObject({ ran: true, ok: false });
     expect(parsed.reasons?.join(" ")).toContain("not a player artifact");
-    // A WebGL folder is a player build.
+    // A WebGL folder is a player build — one with a build in it. A six-byte
+    // index.html beside nothing else is a page, not a game (Codex G#3).
     const webgl = join(artifactDir, "WebGL");
-    mkdirSync(webgl, { recursive: true });
+    mkdirSync(join(webgl, "Build"), { recursive: true });
     writeFileSync(join(webgl, "index.html"), "<html>");
+    writeFileSync(join(webgl, "Build", "game.data"), Buffer.alloc(256 * 1024, 3));
     expect(looksLikePlayer(webgl)).toBe(true);
     expect(looksLikePlayer(notAPlayer)).toBe(false);
   });
@@ -92,18 +96,46 @@ describe("parsePlayerBuildOutput", () => {
   });
 });
 
-describe("a named player artifact must have something in it (Codex 2026-09-11 E#2)", () => {
-  it("rejects a zero-byte file named like a build, and accepts a packaged one", () => {
+describe("a named player artifact must BE one (Codex 2026-09-11 E#2, G#3)", () => {
+  const zip = (bytes: number): Buffer => Buffer.concat([Buffer.from("PK\u0003\u0004", "latin1"), Buffer.alloc(bytes, 9)]);
+
+  it("rejects a name, a size and a padded file; accepts a real package", () => {
     const empty = join(artifactDir, "empty.app");
     writeFileSync(empty, "");
     expect(looksLikePlayer(empty)).toBe(false);
+
+    // Big enough, and nothing but padding: no package header.
+    const padded = join(artifactDir, "Padded.apk");
+    writeFileSync(padded, "x".repeat(131_072));
+    expect(looksLikePlayer(padded)).toBe(false);
+
+    // A real ZIP container, but too small to be a game.
     const tinyApk = join(artifactDir, "tiny.apk");
-    writeFileSync(tinyApk, "x".repeat(1024));
+    writeFileSync(tinyApk, zip(1024));
     expect(looksLikePlayer(tinyApk)).toBe(false);
+
+    // A real, plausible package.
     const realApk = join(artifactDir, "real.apk");
-    writeFileSync(realApk, "x".repeat(128 * 1024));
+    writeFileSync(realApk, zip(256 * 1024));
     expect(looksLikePlayer(realApk)).toBe(true);
-    // A bundle directory is judged by what it holds, not by its size.
+  });
+
+  it("rejects an EMPTY bundle and accepts one with a binary in it", () => {
+    // The directory names are right and there is nothing inside anywhere.
+    const hollow = join(artifactDir, "Hollow.app");
+    mkdirSync(join(hollow, "Contents", "MacOS"), { recursive: true });
+    expect(looksLikePlayer(hollow)).toBe(false);
+    // A plist alone is metadata, not a player.
+    writeFileSync(join(hollow, "Contents", "Info.plist"), "<plist/>");
+    expect(looksLikePlayer(hollow)).toBe(false);
+    // The bundle with a real binary in it is a player.
     expect(looksLikePlayer(realArtifact)).toBe(true);
+    // A WebGL folder is judged the same way: index.html with bytes in it.
+    const webgl = join(artifactDir, "WebGL2");
+    mkdirSync(webgl, { recursive: true });
+    writeFileSync(join(webgl, "index.html"), "<html>");
+    expect(looksLikePlayer(webgl)).toBe(false);
+    writeFileSync(join(webgl, "index.html"), `<html>${"<!-- pad -->".repeat(1000)}</html>`);
+    expect(looksLikePlayer(webgl)).toBe(true);
   });
 });

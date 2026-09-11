@@ -469,29 +469,51 @@ describe("PriorityScorer", () => {
   });
 });
 
-describe("workspacePolicyFor — reporting on the tree, or building in it (Codex 2026-09-11 E#13, E#14)", () => {
+describe("workspacePolicyFor — describing the tree, or building in it (Codex 2026-09-11 E#13, E#14, G#9)", () => {
   const git = [{ source: "git" }];
   const none = { workspacePolicy: "none" };
 
-  it("treats every kind of report the same, however it is spaced", () => {
-    // Reporting reads the REAL tree: a lease seeded off HEAD reports clean.
-    for (const noun of ["summary", "report", "note"]) {
-      expect(workspacePolicyFor(git, `Review the staged changes and write a ${noun}`)).toEqual(none);
-      // Two spaces used to let \s+ give one back and the exception never fired.
-      expect(workspacePolicyFor(git, `Review the staged changes and write  a ${noun}`)).toEqual(none);
-      expect(workspacePolicyFor(git, `Look at git status and give me a ${noun} of it`)).toEqual(none);
+  it("runs in the REAL tree for anything that describes the tree's state", () => {
+    // A lease seeded from HEAD reports a clean tree, which is a false answer.
+    for (const goal of [
+      "Investigate the uncommitted changes and categorize them",
+      "Review the staged changes and write a summary",
+      "Review the staged changes and write  a summary",
+      "Review the staged changes and write the report",
+      "Document the uncommitted changes in docs/status.md",
+      "Give me a note about the working tree",
+      "List the untracked files",
+      "Explain the git diff",
+    ]) {
+      expect(workspacePolicyFor(git, goal)).toEqual(none);
     }
   });
 
-  it("keeps the lease for work that authors a named file, and for ordinary development", () => {
+  it("keeps the lease when the goal BUILDS something, whatever else it says", () => {
+    for (const goal of [
+      "Implement a git status panel",
+      "Implement a git status panel and write a report of the implementation",
+      "Add a stash browser to the dashboard",
+      "Fix the uncommitted-changes observer",
+      "Refactor the working-tree scanner",
+    ]) {
+      expect(workspacePolicyFor(git, goal)).toEqual({});
+    }
+  });
+
+  it("a tree word used as a NOUN PHRASE is a feature name, not the tree", () => {
+    // "the git status panel" is a component; documenting it is ordinary work.
     expect(workspacePolicyFor(git, "Document the git status panel in docs/panel.md")).toEqual({});
-    expect(workspacePolicyFor(git, "Update docs/uncommitted.md with the new rules")).toEqual({});
-    expect(workspacePolicyFor(git, "Implement a git status panel")).toEqual({});
-    // …and a report that happens to name a file is still a report.
-    expect(workspacePolicyFor(git, "Write a summary of the uncommitted changes into notes.md")).toEqual(none);
-    // No git observation, or a goal that is not about the tree: lease as usual.
+    expect(workspacePolicyFor(git, "Document the git diff viewer in docs/viewer.md")).toEqual({});
+    expect(workspacePolicyFor(git, "Describe the git status command we expose")).toEqual({});
+    // …while the same verb about the tree ITSELF runs in the tree.
+    expect(workspacePolicyFor(git, "Document the uncommitted changes")).toEqual(none);
+  });
+
+  it("leaves every other goal alone", () => {
     expect(workspacePolicyFor([{ source: "build" }], "Investigate the uncommitted changes")).toEqual({});
     expect(workspacePolicyFor(git, "Investigate the failing build")).toEqual({});
+    expect(workspacePolicyFor([], "Investigate the uncommitted changes")).toEqual({});
   });
 });
 

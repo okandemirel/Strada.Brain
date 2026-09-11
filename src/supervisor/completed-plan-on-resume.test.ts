@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
-import { completedPlanOnResume, dependentClosure, stopAfterDeadline } from "./supervisor-brain.js";
+import { completedPlanOnResume, dependentClosure, effectiveLeafDependencies, stopAfterDeadline } from "./supervisor-brain.js";
 import type { GoalNode, GoalNodeId, GoalTree } from "../goals/types.js";
 
 function node(id: string, parentId: string | null, status: GoalNode["status"], task = `task ${id}`): GoalNode {
@@ -95,6 +95,44 @@ describe("a resumed task whose saved plan is already complete (2026-09-10 21:20)
     expect(dependentClosure(throughParent, new Set(["a"])).sort()).toEqual(["a", "b", "c"]);
     // The parent itself is not invalidated — it has no work of its own.
     expect(dependentClosure(throughParent, new Set(["a"]))).not.toContain("p");
+
+    // A PARENT's own prerequisite is inherited by its children, so rejecting
+    // that prerequisite invalidates the work done under it (Codex G#1).
+    const inherited = tree([
+      node("root", null, "pending"),
+      { ...node("a", "root", "completed") },
+      { ...node("p", "root", "pending"), dependsOn: ["a" as GoalNodeId] },
+      { ...node("b", "p", "completed") },
+    ]);
+    expect(dependentClosure(inherited, new Set(["a"])).sort()).toEqual(["a", "b"]);
+
+    // …and a leaf whose dependency IS its own scaffolding parent is not
+    // invalidated by a sibling's rejection: the executor drops that
+    // dependency, so invalidation must drop it too (Codex G#7).
+    const sibling = tree([
+      node("root", null, "pending"),
+      node("p", "root", "pending"),
+      { ...node("a", "p", "completed") },
+      { ...node("b", "p", "completed"), dependsOn: ["p" as GoalNodeId] },
+    ]);
+    expect(dependentClosure(sibling, new Set(["a"]))).toEqual(["a"]);
+  });
+
+  it("invalidation and execution read the SAME dependency list (Codex 2026-09-11 G#1, G#7)", () => {
+    const t = tree([
+      node("root", null, "pending"),
+      { ...node("a", "root", "completed") },
+      { ...node("p", "root", "pending"), dependsOn: ["a" as GoalNodeId] },
+      { ...node("b", "p", "pending"), dependsOn: ["p" as GoalNodeId] },
+      { ...node("c", "root", "pending"), dependsOn: ["p" as GoalNodeId] },
+    ]);
+    const deps = effectiveLeafDependencies(t);
+    // Scaffolding is not a unit of work, so it has no entry at all.
+    expect(deps.has("p")).toBe(false);
+    // b inherits p's prerequisite and drops its dependency on its own parent.
+    expect([...deps.get("b")!].sort()).toEqual(["a"]);
+    // c depends on p, which means p's leaves.
+    expect([...deps.get("c")!].sort()).toEqual(["b"]);
   });
 
   it("nothing new is verified after the resume deadline (Codex 2026-09-11 E#11)", async () => {
