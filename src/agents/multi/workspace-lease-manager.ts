@@ -390,10 +390,29 @@ export function readCommitLedger(leasePath: string): LeaseCommitLedger | undefin
   }
 }
 
+/**
+ * What a file looked like when the lease was taken.
+ *
+ * The mtime alone decided both questions this commit asks, and a rewrite that
+ * PRESERVED the mtime — a timestamp-preserving copy, which asset pipelines do
+ * — read as "the agent never touched it": publication returned empty success
+ * arrays and release deleted the changed file (Codex 2026-09-11 N#3). The size
+ * comes from the same stat and costs nothing.
+ */
+export interface SeedStamp {
+  readonly m: number;
+  readonly s: number;
+}
+
+/** Unchanged means BOTH, and an absent stamp answers nothing. */
+export function stampUnchanged(stamp: SeedStamp | undefined, now: { mtimeMs: number; size: number }): boolean {
+  return stamp !== undefined && stamp.m === now.mtimeMs && stamp.s === now.size;
+}
+
 interface PersistedLeaseSeed {
   readonly seedHead: string | undefined;
-  readonly leaseSeed: ReadonlyMap<string, number>;
-  readonly sourceSeed: ReadonlyMap<string, number>;
+  readonly leaseSeed: ReadonlyMap<string, SeedStamp>;
+  readonly sourceSeed: ReadonlyMap<string, SeedStamp>;
 }
 
 function writeLeaseSeed(leasePath: string, seed: PersistedLeaseSeed): void {
@@ -402,8 +421,8 @@ function writeLeaseSeed(leasePath: string, seed: PersistedLeaseSeed): void {
       leaseSeedPath(leasePath),
       JSON.stringify({
         seedHead: seed.seedHead ?? null,
-        leaseSeed: [...seed.leaseSeed.entries()],
-        sourceSeed: [...seed.sourceSeed.entries()],
+        leaseSeed: [...seed.leaseSeed.entries()].map(([rel, st]) => [rel, st.m, st.s]),
+        sourceSeed: [...seed.sourceSeed.entries()].map(([rel, st]) => [rel, st.m, st.s]),
       }),
       "utf8",
     );
@@ -424,11 +443,14 @@ function readLeaseSeed(leasePath: string): PersistedLeaseSeed | undefined {
       leaseSeed?: unknown;
       sourceSeed?: unknown;
     };
-    const toMap = (v: unknown): ReadonlyMap<string, number> | undefined => {
+    const toMap = (v: unknown): ReadonlyMap<string, SeedStamp> | undefined => {
       if (!Array.isArray(v)) return undefined;
-      const m = new Map<string, number>();
+      const m = new Map<string, SeedStamp>();
       for (const e of v) {
-        if (Array.isArray(e) && typeof e[0] === "string" && typeof e[1] === "number") m.set(e[0], e[1]);
+        // [rel, mtime, size] — and [rel, mtime] from a lease taken before the
+        // size was recorded, which keeps behaving exactly as it did.
+        if (!Array.isArray(e) || typeof e[0] !== "string" || typeof e[1] !== "number") continue;
+        m.set(e[0], { m: e[1], s: typeof e[2] === "number" ? e[2] : Number.NaN });
       }
       return m;
     };
@@ -681,8 +703,8 @@ export class WorkspaceLeaseManager {
           : await this.commitLease(
               this.projectRoot,
               orphanPath,
-              new Map<string, number>(),
-              new Map<string, number>(),
+              new Map<string, SeedStamp>(),
+              new Map<string, SeedStamp>(),
               undefined,
               quarantineRoot,
               { quarantineOnly: true },
@@ -1511,8 +1533,8 @@ export class WorkspaceLeaseManager {
   private async commitLease(
     sourceRoot: string,
     workspacePath: string,
-    leaseSeed: ReadonlyMap<string, number>,
-    sourceSeed: ReadonlyMap<string, number>,
+    leaseSeed: ReadonlyMap<string, SeedStamp>,
+    sourceSeed: ReadonlyMap<string, SeedStamp>,
     seedHead: string | undefined,
     quarantineRoot: string | null,
     opts?: { quarantineOnly?: boolean },
@@ -1623,8 +1645,16 @@ export class WorkspaceLeaseManager {
           // unrelated Board.cs reported written:[Board.cs, Player.cs] and
           // reverted Player.cs to its committed contents.
           const leaseSeeded = leaseSeed.get(rel);
-          if (leaseSeeded !== undefined && (await fsp.stat(full)).mtimeMs === leaseSeeded) {
-            return {}; // present at seed time and never written to — not agent work
+          // BOTH the mtime and the size: a rewrite that preserved the mtime
+          // read as "never written to", and the worker's changed bytes were
+          // deleted with the lease (Codex 2026-09-11 N#3). A seed from before
+          // the size was recorded carries NaN and behaves as it always did.
+          if (leaseSeeded !== undefined) {
+            const now = await fsp.stat(full);
+            const untouched = Number.isNaN(leaseSeeded.s)
+              ? now.mtimeMs === leaseSeeded.m
+              : stampUnchanged(leaseSeeded, now);
+            if (untouched) return {}; // present at seed time and never written to — not agent work
           }
 
           // Quarantine-only mode (orphan salvage): nothing is written into the
@@ -1668,7 +1698,10 @@ export class WorkspaceLeaseManager {
             // wall clock: Date.now() is whole milliseconds while mtimeMs carries
             // a fraction, so a file written in the same millisecond as the lease
             // reads as "modified after" — measured at +0.63 ms.
-            const mtimeMoved = sourceSeeded === undefined || (await fsp.stat(target)).mtimeMs !== sourceSeeded;
+            const targetNow = await fsp.stat(target);
+            const mtimeMoved = sourceSeeded === undefined
+              || targetNow.mtimeMs !== sourceSeeded.m
+              || (!Number.isNaN(sourceSeeded.s) && targetNow.size !== sourceSeeded.s);
             // A moved mtime with the SAME bytes as the seed-time commit is not a
             // user change (review + measurement 2026-09-07): the merge attempt
             // before this commit rewrote 169 files byte-for-byte and every
@@ -2011,8 +2044,8 @@ export class WorkspaceLeaseManager {
     }
   }
 
-  private async snapshotMtimes(root: string, excludeRoot: string): Promise<Map<string, number>> {
-    const seeded = new Map<string, number>();
+  private async snapshotMtimes(root: string, excludeRoot: string): Promise<Map<string, SeedStamp>> {
+    const seeded = new Map<string, SeedStamp>();
     // This walk runs against the LIVE project (sourceSeed), where the editor,
     // a build or the user deletes and locks files while it runs. It used to be
     // bare, so one ENOENT/EACCES between the readdir and its stat threw out of
@@ -2042,7 +2075,8 @@ export class WorkspaceLeaseManager {
         }
         if (!entry.isFile()) return;
         try {
-          seeded.set(relative(root, full), (await fsp.stat(full)).mtimeMs);
+          const st = await fsp.stat(full);
+          seeded.set(relative(root, full), { m: st.mtimeMs, s: st.size });
         } catch (err) {
           skipped.push(`${relative(root, full)} (${err instanceof Error ? err.message : String(err)})`);
         }

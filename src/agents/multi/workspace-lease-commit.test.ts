@@ -11,7 +11,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, utimesSync, chmodSync, renameSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, statSync, utimesSync, chmodSync, renameSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
@@ -825,5 +825,41 @@ describe("lease commit replay (measured 2026-09-10: three worker commits danglin
     expect(result.commitsReplayed).toBeUndefined();
     expect(git(source, "log --format=%s -n 2")).toBe("init");
     expect(git(source, "branch --list 'lease-salvage/*'")).toBe("");
+  });
+});
+
+describe("the seed records what the file WAS, not only when it was touched (Codex 2026-09-11 N#3)", () => {
+  it("publishes a worker rewrite that preserved the seed mtime", async () => {
+    // An asset pipeline that copies with timestamps preserved leaves the
+    // mtime exactly as the lease found it. The commit read that as "the agent
+    // never touched this file", returned empty success arrays, and release
+    // deleted the worker's only copy.
+    const mgr = new WorkspaceLeaseManager({ projectRoot: source, leaseRoot, preferGitWorktree: false });
+    const lease = await mgr.acquireLease({ label: "t", workerId: "w", forceTempCopy: true });
+    const inLease = join(lease.path, "Assets", "Scripts", "Existing.cs");
+    const before = readFileSync(inLease, "utf8");
+    expect(before).toBe("original");
+    const stat = statSync(inLease);
+    writeFileSync(inLease, "rewritten by the worker", "utf8");
+    // …and the mtime is put back exactly where it was.
+    utimesSync(inLease, stat.atime, stat.mtime);
+
+    const result = await lease.commit();
+
+    expect(result.written).toContain(join("Assets", "Scripts", "Existing.cs"));
+    expect(readFileSync(join(source, "Assets", "Scripts", "Existing.cs"), "utf8")).toBe("rewritten by the worker");
+    await lease.release();
+  });
+
+  it("still leaves an untouched file alone", async () => {
+    const mgr = new WorkspaceLeaseManager({ projectRoot: source, leaseRoot, preferGitWorktree: false });
+    const lease = await mgr.acquireLease({ label: "t", workerId: "w", forceTempCopy: true });
+    writeFileSync(join(lease.path, "Assets", "Scripts", "New.cs"), "new work", "utf8");
+
+    const result = await lease.commit();
+
+    expect(result.written).toEqual([join("Assets", "Scripts", "New.cs")]);
+    expect(readFileSync(join(source, "Assets", "Scripts", "Existing.cs"), "utf8")).toBe("original");
+    await lease.release();
   });
 });
