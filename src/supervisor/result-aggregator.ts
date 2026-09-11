@@ -40,8 +40,11 @@ export function isReportShapedIssue(issue: string): boolean {
   const m = REPORT_SHAPED_ISSUE_RE.exec(issue);
   if (!m) return false;
   const rest = `${issue.slice(0, m.index)} ${issue.slice(m.index + m[0].length)}`;
+  // UNICODE-AWARE. Splitting on ASCII alone erased "玩家移动从未实现" — a
+  // verifier naming work that does not exist — and the node stayed green
+  // (Codex 2026-09-11 O#21).
   return rest
-    .split(/[^A-Za-z0-9]+/)
+    .split(/[^\p{L}\p{N}]+/u)
     .filter((w) => w.length > 0)
     .every((w) => REPORT_FILLER_RE.test(w));
 }

@@ -3836,6 +3836,65 @@ describe("CampaignManager", () => {
     expect(noFrames).not.toEqual(refusedToStart);
   });
 
+  it("ALTERNATING defects cannot bounce for ever (Codex 2026-09-11 O#5)", async () => {
+    // Two failures that take turns each reset the per-signature counter, so
+    // twelve rounds ran with it stuck at one and the campaign never stopped.
+    runRecordOnSettle = undefined;
+    tasks = new FakeTaskManager();
+    storage.close();
+    storage = new CampaignStorage(join(dir, "campaigns-total-budget.db"));
+    manager = new CampaignManager({
+      storage,
+      verifyCompile: async () => compileVerdict,
+      buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
+      planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async (chatId, text) => { messages.push({ chatId, text }); },
+      projectRoot,
+      retryAdoptionGraceMs: 10,
+      completedSettleDelayMs: 0,
+      milestoneTimeBoxMs: 60 * 60_000,
+      deliveryResumeDelayMs: 20,
+      implementationReviveDelayMs: 10,
+    });
+    manager.attachEvents();
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1), { timeout: 5_000 });
+    settleMilestone("sprint A done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2), { timeout: 5_000 });
+    settleMilestone("sprint B done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3), { timeout: 5_000 });
+
+    for (let i = 0; i < 60; i++) {
+      const stored = storage.get(campaign.id)!;
+      if (stored.state === "failed" && !stored.autoReviveAt) break;
+      const before = tasks.submitted.length;
+      // Actions and no frames, then frames and no actions, round after round.
+      writePlaythroughVerdict(false, i % 2 === 0
+        ? {
+            record: { scene: "Entry", session: 1, autoStarted: false, actions: 40, outcome: "None", reachedOutcome: false },
+            frames: { count: 0, flat: 0, maxMotionShare: 0 },
+          }
+        : {
+            record: { scene: "Entry", session: 1, autoStarted: false, actions: 0, outcome: "None", reachedOutcome: false },
+            frames: { count: 12, flat: 0, maxMotionShare: 0.4 },
+          });
+      settleMilestone(`shipping it (round ${i})`);
+      await waitFor(() => {
+        const after = storage.get(campaign.id)!;
+        expect(tasks.submitted.length > before || (after.state === "failed" && !after.autoReviveAt)).toBe(true);
+      }, { timeout: 5_000 });
+    }
+
+    const stopped = storage.get(campaign.id)!;
+    expect(stopped.state).toBe("failed");
+    expect(stopped.autoReviveAt).toBeUndefined();
+    // The per-signature counter never got past its first round; the total did.
+    expect(stopped.deliveryRevives).toBeLessThanOrEqual(3);
+    expect(stopped.deliveryRoundsTotal).toBeGreaterThan(3);
+    expect(stopped.lastError).toContain("NOT DELIVERED");
+  });
+
   it("an upgraded signature FORMAT is not progress (Codex 2026-09-11 L#9)", () => {
     // A milestone persisted before the structured identity existed carried a
     // prose signature; the new format never matched it, so a campaign three

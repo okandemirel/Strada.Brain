@@ -7,6 +7,7 @@ import {
   assessBuiltAsSpecified,
   isPlaceholderGradePng,
   classifyPng,
+  classifyPngBytes,
   isScaffoldingScene,
   measureAudioClip,
   measurePngContent,
@@ -958,6 +959,30 @@ describe("defects the measurement review found (2026-09-07)", () => {
     expect(disclosures).toContain("1 are real art already");
     expect(disclosures).toContain("could not be READ as an image");
     expect(disclosures).toContain("Assets/Art/Empty.png");
+  });
+
+  it("a header is not a file: declared chunks must fit in it (Codex 2026-09-11 O#9)", () => {
+    // 41 bytes: the signature, a 64x64 IHDR, and an IDAT declaring 100 000
+    // bytes it does not contain. The pixels cannot be decoded, and the
+    // bytes-per-pixel fallback then called it art the sprint need not draw.
+    const flat = png(64, 64, "flat");
+    const header = Buffer.from(flat.subarray(0, 33)); // signature + IHDR
+    const idat = Buffer.alloc(12);
+    idat.writeUInt32BE(100_000, 0);
+    idat.write("IDAT", 4, "latin1");
+    expect(classifyPngBytes(Buffer.concat([header, idat]))).toBe("invalid");
+    // …and a whole file still classifies as it did.
+    expect(classifyPngBytes(flat)).toBe("placeholder");
+    expect(classifyPngBytes(png(64, 64, "noise"))).toBe("art");
+  });
+
+  it("a sprite in a format this decoder does not read is not 'unreadable' (Codex 2026-09-11 O#9)", () => {
+    const root = project();
+    boundSpriteProject(root, "a0000000000000000000000000000000");
+    putBytes(root, "Assets/Art/Hero.psd", Buffer.alloc(64 * 1024, 9), G("7"));
+    const disclosures = assessBuiltAsSpecified(root).disclosures.join("\n");
+    expect(disclosures).not.toContain("Assets/Art/Hero.psd");
+    expect(disclosures).not.toContain("could not be READ as an image");
   });
 
   it("placeholder grade is what the pixels say, not what the file weighs", () => {

@@ -292,6 +292,13 @@ const MAX_IMPLEMENTATION_REVIVES = 2;
  */
 const MAX_DELIVERY_REVIVES = 3;
 /**
+ * The hard ceiling on delivery rounds, whatever their identity. Generous
+ * beside MAX_DELIVERY_REVIVES so a campaign fixing one real defect after
+ * another still has room; finite so alternating defects cannot bounce for ever
+ * (Codex 2026-09-11 O#5).
+ */
+const MAX_DELIVERY_ROUNDS_TOTAL = 12;
+/**
  * WHICH GATES failed, from the gates' own outcomes.
  *
  * The delivery budget is charged per distinct failure, so the identity of a
@@ -3208,10 +3215,13 @@ export class CampaignManager {
             && stored.startsWith(STRUCTURED_SIGNATURE_PREFIX) !== signature.startsWith(STRUCTURED_SIGNATURE_PREFIX);
           const repeating = stored === signature || formatChanged;
           campaign.deliveryRevives = repeating ? (campaign.deliveryRevives ?? 0) + 1 : 1;
+          campaign.deliveryRoundsTotal = (campaign.deliveryRoundsTotal ?? 0) + 1;
           campaign.deliveryProofsSignature = signature;
-          if (campaign.deliveryRevives > MAX_DELIVERY_REVIVES) {
+          if (campaign.deliveryRevives > MAX_DELIVERY_REVIVES || campaign.deliveryRoundsTotal > MAX_DELIVERY_ROUNDS_TOTAL) {
             campaign.autoReviveAt = undefined;
-            campaign.lastError = `NOT DELIVERED — ${MAX_DELIVERY_REVIVES} delivery rounds ended with the same proofs missing: ${missingProofs.slice(0, 2).join("; ")}`.slice(0, 600);
+            campaign.lastError = campaign.deliveryRevives > MAX_DELIVERY_REVIVES
+              ? `NOT DELIVERED — ${MAX_DELIVERY_REVIVES} delivery rounds ended with the same proofs missing: ${missingProofs.slice(0, 2).join("; ")}`.slice(0, 600)
+              : `NOT DELIVERED — ${campaign.deliveryRoundsTotal} delivery rounds ran and the proofs still do not stand: ${missingProofs.slice(0, 2).join("; ")}`.slice(0, 600);
             campaign.deliveryReported = false;
             this.persist(campaign);
             this.cancelLiveLineages(campaign, "campaign stopped short of delivery", { recoverable: true });

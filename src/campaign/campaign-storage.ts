@@ -63,6 +63,7 @@ interface CampaignRow {
   implementation_revives?: number | null;
   pending_coverage_gaps?: string | null;
   delivery_revives?: number | null;
+  delivery_rounds_total?: number | null;
   delivery_proofs_signature?: string | null;
   plan_coverage?: string | null;
 }
@@ -103,6 +104,7 @@ function rowToCampaign(row: CampaignRow): Campaign {
     implementationRevives: row.implementation_revives ?? undefined,
     pendingCoverageGaps: parseGapQueue(row.pending_coverage_gaps),
     deliveryRevives: row.delivery_revives ?? undefined,
+    deliveryRoundsTotal: row.delivery_rounds_total ?? undefined,
     deliveryProofsSignature: row.delivery_proofs_signature ?? undefined,
     ...(row.plan_coverage ? { planCoverage: parsePlanCoverage(row.plan_coverage) } : {}),
   };
@@ -168,6 +170,12 @@ export class CampaignStorage {
       // Column already exists — migration is idempotent.
     }
     try {
+      // Every delivery round, whatever its identity (Codex 2026-09-11 O#5).
+      this.db.exec("ALTER TABLE campaigns ADD COLUMN delivery_rounds_total INTEGER");
+    } catch {
+      // Column already exists — migration is idempotent.
+    }
+    try {
       this.db.exec("ALTER TABLE campaigns ADD COLUMN delivery_proofs_signature TEXT");
     } catch {
       // Column already exists — migration is idempotent.
@@ -206,8 +214,8 @@ export class CampaignStorage {
           milestones_json, current_milestone, created_at, updated_at, last_error,
           auto_revive_at, coverage_audit_note, draft_deferred_since, delivery_reported, plan_coverage,
           unmeasurable_revives, implementation_revives, pending_coverage_gaps,
-          delivery_revives, delivery_proofs_signature
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          delivery_revives, delivery_proofs_signature, delivery_rounds_total
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           state = excluded.state,
           gdd_path = excluded.gdd_path,
@@ -227,7 +235,8 @@ export class CampaignStorage {
           implementation_revives = excluded.implementation_revives,
           pending_coverage_gaps = excluded.pending_coverage_gaps,
           delivery_revives = excluded.delivery_revives,
-          delivery_proofs_signature = excluded.delivery_proofs_signature`,
+          delivery_proofs_signature = excluded.delivery_proofs_signature,
+          delivery_rounds_total = excluded.delivery_rounds_total`,
       )
       .run(
         campaign.id,
@@ -259,6 +268,7 @@ export class CampaignStorage {
           : null,
         campaign.deliveryRevives ?? null,
         campaign.deliveryProofsSignature ?? null,
+        campaign.deliveryRoundsTotal ?? null,
       );
   }
 

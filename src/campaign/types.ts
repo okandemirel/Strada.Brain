@@ -330,6 +330,16 @@ export interface Campaign {
    * it.
    */
   deliveryRevives?: number;
+  /**
+   * EVERY delivery round this campaign has run, whatever the proofs were.
+   *
+   * The per-signature counter above gives a newly-identified defect its own
+   * patience, which is right — but two defects that alternate ("actions, no
+   * frames", then "frames, no actions") each reset it, and twelve rounds ran
+   * with the counter stuck at one (Codex 2026-09-11 O#5). This one never
+   * resets, so the bouncing ends even when the identity keeps changing.
+   */
+  deliveryRoundsTotal?: number;
   /** The missing proofs the last delivery round ended with, to detect progress. */
   deliveryProofsSignature?: string;
   deliveryReported?: boolean;

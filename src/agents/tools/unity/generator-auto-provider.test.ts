@@ -450,6 +450,37 @@ describe("a batch item's bare name meets the existing placeholder (2026-09-09 19
     expect(readFileSync(target).equals(pngFixture("noise", 96))).toBe(true);
   });
 
+  it("a redraw that changed nothing is not three sprites (Codex 2026-09-11 O#18)", async () => {
+    // The retry wrote nothing; the duplicate stayed on disk, its usability
+    // check passed, and the duplicate reason was cleared — "3 of 3 sprites
+    // written" over one image repeated three times.
+    const { root, ctx } = project();
+    mkdirSync(join(root, "Assets/Art/Generated"), { recursive: true });
+    let round = 0;
+    const runner = {
+      isModelInstalled: () => true,
+      textToImage: vi.fn(async () => ({ ok: false, detail: "n/a" })),
+      imageToMesh: vi.fn(async () => ({ ok: false, detail: "n/a" })),
+      textToImageBatch: vi.fn(async (_spec: unknown, jobs: Array<{ out: string }>) => {
+        round += 1;
+        if (round === 1) {
+          for (const j of jobs) writeFileSync(j.out, pngFixture("noise", 64));
+          return { ok: true, detail: "ok", written: jobs.map((j) => j.out), missing: [] };
+        }
+        // The redraw fails and writes nothing at all.
+        return { ok: false, detail: "cuda error", written: [], missing: jobs.map((j) => j.out) };
+      }),
+    } as unknown as LocalRunnerLike;
+
+    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner, specFor }).execute(
+      { batch: [{ name: "Pig" }, { name: "Rocket" }, { name: "Tree" }] },
+      ctx,
+    );
+
+    expect(r.content).not.toContain("3 of 3 sprites written");
+    expect(r.content).toContain("the same image as");
+  });
+
   it("the local batch job is aimed at the placeholder's real path, not the default directory", async () => {
     const { root, ctx } = project();
     mkdirSync(join(root, "Assets/Modules/LiveOpsModule/Art/Status"), { recursive: true });

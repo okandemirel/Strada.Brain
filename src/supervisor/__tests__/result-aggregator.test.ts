@@ -277,6 +277,21 @@ describe("ResultAggregator", () => {
       expect(synthesized.success).toBe(false);
     });
 
+    it("a rejection in ANY script fails the node (Codex 2026-09-11 O#21)", async () => {
+      // The remainder was tokenized as ASCII only, so a finding written in
+      // Chinese vanished and the rejection was filed as a report complaint.
+      const verifyFn = vi.fn().mockResolvedValue({
+        verdict: "reject",
+        verifierProvider: "deepseek",
+        issues: ["Output is incomplete: 玩家移动从未实现。"],
+      });
+      const agg = new ResultAggregator({ mode: "always", samplingRate: 0, preferDifferentProvider: true, maxVerificationCost: 15 }, verifyFn);
+      const withFiles = { ...makeResult("A", "ok"), artifacts: [{ path: "Assets/Player.cs", action: "modify" as const }] };
+      const verified = await agg.verify([withFiles]);
+      expect(verified[0]!.status).toBe("failed");
+      expect(agg.synthesize(verified).success).toBe(false);
+    });
+
     it("a rejected REPORT does not fail a node whose files landed (measured 2026-09-09 09:18: 26 committed files, 'no node succeeded')", async () => {
       const verifyFn = vi.fn().mockResolvedValue({ verdict: "reject", verifierProvider: "deepseek", issues: ["Task output incomplete: only meta-statement"] });
       const agg = new ResultAggregator({ mode: "always", samplingRate: 0, preferDifferentProvider: true, maxVerificationCost: 15 }, verifyFn);

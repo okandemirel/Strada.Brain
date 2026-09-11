@@ -1211,7 +1211,11 @@ export function assessBuiltAsSpecified(
     } else if (SPRITE_EXT_RE.test(rel)) {
       sprites++;
       if (guid !== undefined && !bound) unboundSprites.push(rel);
-      const grade = classifyPng(join(projectRoot, rel));
+      // ONLY PNGs are classified: the other sprite formats this project
+      // accepts (jpg, psd, tga, exr, tiff) are not readable by this decoder,
+      // and calling every one of them unreadable would report a project's real
+      // artwork as broken (Codex 2026-09-11 O#9).
+      const grade = /\.png$/iu.test(rel) ? classifyPng(join(projectRoot, rel)) : "art";
       if (grade === "invalid") {
         // NOT real art and not a placeholder either: an empty, truncated or
         // unreadable file. Counting it as art told the sprint there was
@@ -1760,6 +1764,24 @@ export function measurePngContent(bytes: Uint8Array): { colours: number; edgeSha
 }
 
 /** The bytes inside IDAT only — metadata chunks are not image content. */
+/** Do this PNG's declared chunk lengths stay inside the file it came in? */
+export function pngChunksFit(bytes: Uint8Array): boolean {
+  if (bytes.length < 12) return false;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let at = 8;
+  let sawIdat = false;
+  while (at + 12 <= bytes.length) {
+    const len = view.getUint32(at);
+    const type = String.fromCharCode(bytes[at + 4]!, bytes[at + 5]!, bytes[at + 6]!, bytes[at + 7]!);
+    // 12 = length + type + CRC around the data itself.
+    if (at + 12 + len > bytes.length) return false;
+    if (type === "IDAT") sawIdat = true;
+    if (type === "IEND") return sawIdat;
+    at += 12 + len;
+  }
+  return false; // ran off the end without an IEND
+}
+
 function pngIdatBytes(bytes: Uint8Array): number {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   let at = 8;
@@ -1794,6 +1816,10 @@ export type PngGrade = "placeholder" | "art" | "invalid";
 export function classifyPngBytes(bytes: Uint8Array): PngGrade {
   const dims = readPngDimensions(bytes);
   if (dims === null || dims.width <= 0 || dims.height <= 0) return "invalid";
+  // A HEADER IS NOT A FILE. 41 bytes carrying a valid IHDR and an IDAT
+  // declaring 100 000 bytes it does not contain decoded to nothing and the
+  // bytes-per-pixel heuristic then called it art (Codex 2026-09-11 O#9).
+  if (!pngChunksFit(bytes)) return "invalid";
   const content = measurePngContent(bytes);
   if (content !== null) {
     return content.colours <= PLACEHOLDER_MAX_COLOURS && content.edgeShare <= PLACEHOLDER_MAX_EDGE_SHARE

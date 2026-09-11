@@ -1125,8 +1125,36 @@ export class SpriteGenerateTool implements ITool {
             if (again.ok && /background kept/.test(again.detail)) retryKept.add(j.out);
           }
         }
+        // THE RETRY HAS TO HAVE PRODUCED SOMETHING, and something DISTINCT:
+        // a redraw that wrote nothing left the duplicate in place and its
+        // usability check cleared the duplicate reason, so three identical
+        // images were reported as three sprites written (Codex 2026-09-11
+        // O#18).
+        const digestOf = (file: string): string | undefined => {
+          try {
+            return createHash("sha256").update(readFileSync(file)).digest("hex");
+          } catch {
+            return undefined;
+          }
+        };
+        const seenDigests = new Map<string, string>();
+        for (const j of jobs) {
+          if (!written.has(j.fullPath) || unusable.has(j.fullPath)) continue;
+          const d = digestOf(j.fullPath);
+          if (d !== undefined) seenDigests.set(d, j.relFile);
+        }
         for (const j of retryJobs) {
           const why = unusableSpriteReason(j.out);
+          const digest = digestOf(j.out);
+          const twin = digest === undefined ? undefined : seenDigests.get(digest);
+          if (why === undefined && twin !== undefined) {
+            unusable.set(j.out, `the same image as ${twin}`);
+            written.delete(j.out);
+            continue;
+          }
+          if (why === undefined && digest !== undefined) {
+            seenDigests.set(digest, j.out);
+          }
           if (why === undefined) {
             unusable.delete(j.out);
             // The retry's outcome, not the first draw's (review 2026-09-07).
