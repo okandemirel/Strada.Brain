@@ -3033,6 +3033,13 @@ describe("CampaignManager", () => {
     const both = await (honest as unknown as { measureBuild(c: unknown): Promise<{ unbuiltTargets?: string[]; ok?: boolean }> })
       .measureBuild({ gddText: "Ships on Steam for Windows and later on iOS.", milestones: [], currentMilestone: 0 });
     expect(asked).toEqual(["windows", "ios"]);
+    // THREE platforms are three builds: a cap of any size would quietly leave
+    // the last one unbuilt (Codex 2026-09-11 review O, mutation table).
+    asked.length = 0;
+    const three = await (honest as unknown as { measureBuild(c: unknown): Promise<{ unbuiltTargets?: string[] }> })
+      .measureBuild({ gddText: "Ships on Windows, on Android, and on iOS.", milestones: [], currentMilestone: 0 });
+    expect(asked).toEqual(["windows", "android", "ios"]);
+    expect(three.unbuiltTargets).toBeUndefined();
     expect(both.unbuiltTargets).toBeUndefined();
     expect(both.ok).toBe(true);
     // …and a platform nobody built is missing WORK, not a footnote (K#15).
