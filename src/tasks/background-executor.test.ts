@@ -1591,6 +1591,55 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
     );
   });
 
+  it("a run whose files never reached the project is NOT a success, and its lease is kept (Codex 2026-09-11 N#1)", async () => {
+    const release = vi.fn().mockResolvedValue(undefined);
+    const worker = {
+      status: "completed", finalSummary: "Done", visibleResponse: "Done", provider: "mock",
+      catalogVersion: "mock:default", assignmentVersion: 0, touchedFiles: [], toolTrace: [],
+      verificationResults: [], reviewFindings: [], artifacts: [],
+    };
+    const runWorkerTask = vi.fn().mockResolvedValue(worker);
+    const workerOrchestrator = { runWorkerTask } as any;
+    const envelope = async (commit: unknown) => {
+      const executor = new BackgroundExecutor({
+        orchestrator: workerOrchestrator,
+        workspaceLeaseManager: {
+          acquireLease: vi.fn().mockResolvedValue({
+            path: "/tmp/strada-workspaces/task-x", id: "lease-x", workspaceId: "ws-x", release, commit,
+          }),
+        } as any,
+      });
+      return executor.runWorkerEnvelope(workerOrchestrator, {
+        mode: "delegated", prompt: "Do the thing", signal: new AbortController().signal,
+        onProgress: vi.fn(), chatId: "chat1", taskRunId: `task_pub:${Math.random()}`, channelType: "web",
+        workspaceSourceRoot: "/tmp/parent-workspace", supervisorMode: "off",
+      });
+    };
+
+    // The commit THREW: the bytes exist only in the lease, and releasing it
+    // deleted them while the task still reported completed.
+    const threw = await envelope(vi.fn().mockRejectedValue(new Error("EIO")));
+    expect(threw.workerResult?.status).toBe("failed");
+    expect(threw.output).toContain("PUBLICATION FAILED");
+    expect(release).not.toHaveBeenCalled();
+
+    // Files the commit could not write are the same loss, reported cleanly.
+    const partial = await envelope(vi.fn().mockResolvedValue({
+      written: ["Assets/A.cs"], conflicts: [], removed: [], failed: ["Assets/B.cs"],
+    }));
+    expect(partial.workerResult?.status).toBe("failed");
+    expect(partial.output).toContain("Assets/B.cs");
+    expect(release).not.toHaveBeenCalled();
+
+    // A clean publication still succeeds and still releases.
+    const clean = await envelope(vi.fn().mockResolvedValue({
+      written: ["Assets/A.cs"], conflicts: [], removed: [], failed: [],
+    }));
+    expect(clean.workerResult?.status).toBe("completed");
+    expect(clean.output).not.toContain("PUBLICATION FAILED");
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
 });
 
 describe("BackgroundExecutor - Blocked worker results", () => {

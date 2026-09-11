@@ -1389,8 +1389,13 @@ export class BackgroundExecutor {
       this.inflightWorkspacePaths.set(String(params.taskRunId), managedWorkspaceLease.path);
     }
 
+    // What publication lost, if anything. A worker whose bytes never reached
+    // the project did not do the work, whatever its own result says (Codex
+    // 2026-09-11 N#1/M#5).
+    let publicationLoss: string | undefined;
+    let outcome: { output: string; workerResult?: WorkerRunResult } | undefined;
     try {
-      return await this.executeWorkerRun(orchestrator, {
+      outcome = await this.executeWorkerRun(orchestrator, {
         ...params,
         workspaceLease: managedWorkspaceLease,
         workspaceLeaseRetained: !shouldReleaseLease,
@@ -1406,8 +1411,18 @@ export class BackgroundExecutor {
         // <tmp>/strada-workspaces/task-<id>/ and it was deleted on release.
         await Promise.resolve()
           .then(() => managedWorkspaceLease.commit())
-          .then((result) => {
-            this.notifyWorkspaceCommitted(String(params.taskRunId), result);
+          .then((raw) => {
+            // Every array read defensively: a commit shape without `failed`
+            // used to throw INSIDE this handler, and the catch below then
+            // reported a publication failure that never happened.
+            const result = {
+              ...raw,
+              written: raw.written ?? [],
+              conflicts: raw.conflicts ?? [],
+              removed: raw.removed ?? [],
+              failed: raw.failed ?? [],
+            };
+            this.notifyWorkspaceCommitted(String(params.taskRunId), raw);
             if (result.written.length > 0) {
               getLogger().info("Workspace lease committed", {
                 files: result.written.length,
@@ -1432,6 +1447,7 @@ export class BackgroundExecutor {
               });
             }
             if (result.failed.length > 0) {
+              publicationLoss = `${result.failed.length} file(s) the worker changed could not be written into the project: ${result.failed.slice(0, 8).join(", ")}`;
               getLogger().warn("Workspace lease commit could not process some files", {
                 count: result.failed.length,
                 failed: result.failed.slice(0, 20),
@@ -1439,15 +1455,46 @@ export class BackgroundExecutor {
             }
           })
           .catch((err) => {
-            getLogger().error("Workspace lease commit failed — agent work discarded", {
+            publicationLoss = `the workspace commit threw before the worker's files reached the project (${err instanceof Error ? err.message : String(err)})`;
+            getLogger().error("Workspace lease commit failed — the lease is KEPT for salvage", {
               error: err instanceof Error ? err.message : String(err),
             });
           });
-        await managedWorkspaceLease.release().catch((err) => {
-          getLogger().warn("Workspace lease release failed", { error: err instanceof Error ? err.message : String(err) });
-        });
+        if (publicationLoss !== undefined) {
+          // NOT RELEASED. release() deletes the lease directory, and with the
+          // commit unfinished those bytes exist nowhere else — the worker's
+          // work was discarded and the task still reported success (Codex
+          // 2026-09-11 N#1). The boot salvage pass picks up what is left here.
+          getLogger().error("Workspace lease NOT released — its work has not been published", {
+            workspace: managedWorkspaceLease.path,
+            reason: publicationLoss,
+          });
+        } else {
+          await managedWorkspaceLease.release().catch((err) => {
+            getLogger().warn("Workspace lease release failed", { error: err instanceof Error ? err.message : String(err) });
+          });
+        }
       }
     }
+    // A RUN THAT DID NOT PUBLISH DID NOT SUCCEED. The envelope used to return
+    // the worker's own "completed" whatever happened to its files, so a task
+    // whose bytes never reached the project settled green and its dependents
+    // ran against work that was not there (Codex 2026-09-11 N#1).
+    const settled = outcome ?? { output: "" };
+    if (publicationLoss === undefined) return settled;
+    return {
+      ...settled,
+      output: `${settled.output}\n\nPUBLICATION FAILED: ${publicationLoss}. The workspace is kept for salvage.`,
+      ...(settled.workerResult
+        ? {
+            workerResult: {
+              ...settled.workerResult,
+              status: "failed" as const,
+              reason: `publication failed: ${publicationLoss}`.slice(0, 300),
+            },
+          }
+        : {}),
+    };
   }
 
   private async executeTask(entry: QueueEntry): Promise<void> {
