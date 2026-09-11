@@ -25,7 +25,7 @@ import type { CampaignStorage } from "./campaign-storage.js";
 import { detectCampaignIntent } from "./campaign-intake.js";
 import { assessSceneHygiene, renderSceneHygiene } from "./scene-hygiene.js";
 import { readPlaythroughVerdict, describePlaythrough, playthroughDirective, PLAYER_PLAYTHROUGH_VERDICT_REL } from "./playthrough-verdict.js";
-import { gddPlatform } from "./gdd-platform.js";
+import { gddPlatform, buildSatisfiesTarget, type BuildTarget } from "./gdd-platform.js";
 import { readPlaymodeRun } from "./playmode-run.js";
 import { assessNumericClaims, claimsRefusal, describeClaims, extractNumericClaims } from "./gdd-claims.js";
 import { deliveryReviewPrompt, renderSecondOpinion } from "../agents/review/codex-second-opinion.js";
@@ -316,6 +316,8 @@ export function deliveryFailureKinds(flags: {
   claimsBroken: boolean;
   structureRefused: boolean;
   queuedGaps: boolean;
+  /** A platform the document asked for that no successful build named (L#10). */
+  targetUnbuilt: boolean;
 }): string[] {
   return Object.entries(flags)
     .filter(([, on]) => on === true)
@@ -2799,6 +2801,10 @@ export class CampaignManager {
           claimsBroken,
           structureRefused: milestone.structureRefused === true,
           queuedGaps: (campaign.pendingCoverageGaps ?? []).length > 0,
+          // The newly required proof had NO structured identity: an unbuilt
+          // platform was the only failure and the kinds list came back empty,
+          // so the budget fell back to prose (Codex 2026-09-11 L#10).
+          targetUnbuilt: unbuiltTargets.length > 0,
         });
       }
       if (isLast && deliveryProofMissing && deliveryBouncesSpent < this.maxMilestoneAttempts) {
@@ -3702,7 +3708,16 @@ export class CampaignManager {
     }
   }
 
-  /** Build the player from the project root; `ran: false` when no builder is configured or it could not run. */
+  /**
+   * Build the player from the project root, for EVERY platform the document
+   * asks for; `ran: false` when no builder is configured or it could not run.
+   *
+   * Building only the first named target and disclosing the rest as
+   * `unbuiltTargets` made every multi-platform GDD unsatisfiable: the missing
+   * platform blocked delivery, and the next round asked for the same first
+   * target again, for ever (Codex 2026-09-11 L#10). A target counts as built
+   * only when its own build succeeded AND named that platform (L#12).
+   */
   private async measureBuild(campaign?: Campaign): Promise<PlayerBuildEvidence> {
     // The GDD's own platform, when it names one: the build used to take
     // whatever target the project had active, so a desktop player answered a
@@ -3710,8 +3725,10 @@ export class CampaignManager {
     // no-builder return, or a deployment with no builder disclosed neither
     // requested platform (Codex 2026-09-11 K#13).
     const platform = gddPlatform(this.gddTextOf(campaign));
-    const requested = platform.targets.filter((t) => t !== platform.target);
+    const wanted: Array<BuildTarget | undefined> =
+      platform.targets.length > 0 ? [...platform.targets] : [platform.target];
     if (!this.buildPlayer) {
+      const requested = platform.targets.filter((t) => t !== platform.target);
       return {
         ran: false,
         detail: "no player builder is configured",
@@ -3719,25 +3736,44 @@ export class CampaignManager {
         ...(requested.length > 0 ? { unbuiltTargets: requested } : {}),
       };
     }
-    try {
-      const built = await this.buildPlayer(this.projectRoot, platform.target);
-      // Every platform the document asked for is NAMED, built or not: a
-      // two-platform GDD used to deliver one silently (Codex 2026-09-11 F#11).
-      const unbuilt = platform.targets.filter((t) => t !== platform.target);
-      const withTarget = platform.target ? { ...built, requestedTarget: platform.target } : built;
-      // STRUCTURED, not a sentence in `reasons`: a failed build renders only
-      // its first two reasons, so the disclosure disappeared precisely when
-      // the campaign still had work to do (Codex 2026-09-11 J#21).
-      return unbuilt.length > 0 ? { ...withTarget, unbuiltTargets: unbuilt } : withTarget;
-    } catch (err) {
-      const unbuilt = platform.targets.filter((t) => t !== platform.target);
-      return {
-        ran: false,
-        detail: `the player build could not run (${err instanceof Error ? err.message : String(err)})`,
-        ...(unbuilt.length > 0 ? { unbuiltTargets: unbuilt } : {}),
-        ...(platform.target ? { requestedTarget: platform.target } : {}),
-      };
+    let primary: PlayerBuildEvidence | undefined;
+    const unbuilt: BuildTarget[] = [];
+    for (const target of wanted) {
+      let built: PlayerBuildEvidence;
+      try {
+        built = await this.buildPlayer(this.projectRoot, target);
+      } catch (err) {
+        built = {
+          ran: false,
+          detail: `the player build could not run (${err instanceof Error ? err.message : String(err)})`,
+        };
+      }
+      // A build that succeeded but named a DIFFERENT platform has not built
+      // this one: a valid StandaloneOSX artifact used to satisfy "Release on
+      // Windows" and the campaign reached `done` (Codex 2026-09-11 L#12).
+      const proves = built.ran && built.ok === true && buildSatisfiesTarget(target, built.target, built.artifactPath);
+      if (target && !proves) unbuilt.push(target);
+      if (!primary) {
+        // The FIRST requested target carries the artifact: it is the one the
+        // player run plays and the one the GDD's frame rates are held to.
+        primary = target && built.ran && built.ok === true && !proves
+          ? {
+              ...built,
+              ok: false,
+              reasons: [
+                ...(built.reasons ?? []),
+                `the build asked for ${target} and produced ${built.target ?? built.artifactPath ?? "an unnamed artifact"}`,
+              ],
+            }
+          : built;
+      }
     }
+    const base = primary ?? { ran: false, detail: "no build was attempted" };
+    return {
+      ...base,
+      ...(platform.target ? { requestedTarget: platform.target } : {}),
+      ...(unbuilt.length > 0 ? { unbuiltTargets: unbuilt } : {}),
+    };
   }
 
   /**

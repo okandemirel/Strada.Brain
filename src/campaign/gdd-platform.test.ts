@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { gddPlatform, frameRateAnswersPlatform } from "./gdd-platform.js";
+import { gddPlatform, frameRateAnswersPlatform, buildSatisfiesTarget, targetOfBuild } from "./gdd-platform.js";
 
 describe("the platform the GDD asks for (Codex 2026-09-11 B#11)", () => {
   it("names the FIRST target and carries every platform the document asks for", () => {
@@ -68,5 +68,42 @@ describe("the platform the GDD asks for (Codex 2026-09-11 B#11)", () => {
     expect(frameRateAnswersPlatform(phones, undefined)).toBe(false);
     // A game that names no handheld is answered by whatever it was built for.
     expect(frameRateAnswersPlatform(gddPlatform("A desktop strategy game."), "StandaloneOSX")).toBe(true);
+  });
+  it("an OS BEFORE the store qualifies it too, and PC is resolved where it stands (Codex 2026-09-11 L#11)", () => {
+    // "the Mac app on the App Store" is ONE platform. The qualifier check only
+    // looked forward, so a macOS document also demanded an iOS build — and
+    // that invented platform then blocked delivery forever.
+    expect(gddPlatform("Buy the Mac app on the App Store.").targets).toEqual(["macos"]);
+    expect(gddPlatform("Linux release via Steam.").targets).toEqual(["linux"]);
+    // …but a coordinator between them still means two platforms.
+    expect(gddPlatform("Release on Windows and Google Play.").targets).toEqual(["windows", "android"]);
+    expect(gddPlatform("Mac app, and the App Store later.").targets).toEqual(["macos", "ios"]);
+    // PC named beside a NON-desktop platform is still a desktop requirement:
+    // suppressing every PC mention as soon as any OS appeared anywhere lost it.
+    expect(gddPlatform("Release on PC and Android.").targets).toEqual(["windows", "android"]);
+    // …and PC qualified by its own OS adds nothing.
+    expect(gddPlatform("Ships on PC running Linux.").targets).toEqual(["linux"]);
+  });
+
+  it("a build's own words name its platform, and a different platform does not satisfy the request (Codex 2026-09-11 L#12)", () => {
+    expect(targetOfBuild("StandaloneWindows64")).toBe("windows");
+    expect(targetOfBuild("StandaloneOSX")).toBe("macos");
+    expect(targetOfBuild("StandaloneLinux64")).toBe("linux");
+    expect(targetOfBuild("/tmp/Build/Game.apk")).toBe("android");
+    expect(targetOfBuild("/tmp/Build/Game.exe")).toBe("windows");
+    expect(targetOfBuild("/tmp/Build/Game.app")).toBe("macos");
+    expect(targetOfBuild("/tmp/Build/index.html")).toBe("webgl");
+    expect(targetOfBuild(undefined)).toBeUndefined();
+    expect(targetOfBuild("Release")).toBeUndefined();
+    // A macOS artifact used to satisfy "Release on Windows" and reach done.
+    expect(buildSatisfiesTarget("windows", "StandaloneOSX")).toBe(false);
+    expect(buildSatisfiesTarget("windows", "StandaloneWindows64")).toBe(true);
+    // The ARTIFACT contradicts the request even when the target is silent.
+    expect(buildSatisfiesTarget("windows", undefined, "/tmp/Build/Game.app")).toBe(false);
+    expect(buildSatisfiesTarget("windows", undefined, "/tmp/Build/Game.exe")).toBe(true);
+    // Silence is not a contradiction: an unnamed build of an unnamed shape
+    // still counts, because an unsatisfiable gate is worse than a named gap.
+    expect(buildSatisfiesTarget("windows", undefined, undefined)).toBe(true);
+    expect(buildSatisfiesTarget(undefined, "StandaloneOSX")).toBe(true);
   });
 });

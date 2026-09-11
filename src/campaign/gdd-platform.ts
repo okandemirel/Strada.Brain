@@ -35,11 +35,16 @@ const PLATFORM_PATTERNS: ReadonlyArray<readonly [BuildTarget, RegExp]> = [
  * always wins.
  */
 /**
- * "PC" names a desktop without saying which: Windows only when the document
- * names no operating system at all. "Ships on PC running Linux" used to
- * resolve to Windows first (Codex 2026-09-11 K#14).
+ * "PC" names a desktop without saying which. It is resolved WHERE IT STANDS:
+ * "Ships on PC running Linux" is Linux (Codex 2026-09-11 K#14), but "Release
+ * on PC and Android" is still a desktop requirement — suppressing every PC
+ * mention as soon as any operating system appeared anywhere in the document
+ * dropped the desktop build silently (Codex 2026-09-11 L#11).
  */
 const GENERIC_DESKTOP_RE = /\bpc(?:\s+(?:build|release|version))?\b/gi;
+
+/** The desktop operating systems: what a "PC" mention can already be saying. */
+const DESKTOP_TARGETS: ReadonlySet<BuildTarget> = new Set(["windows", "macos", "linux"]);
 
 const STOREFRONT_PATTERNS: ReadonlyArray<readonly [BuildTarget, RegExp]> = [
   ["android", /\b(?:google play|play store)\b/gi],
@@ -57,6 +62,81 @@ function isExcluded(text: string, at: number): boolean {
 
 /** "mobile"/"phones"/"tablets" with no store named: a handheld, target unresolved. */
 const HANDHELD_RE = /\b(?:mobile|phones?|handheld|tablets?|smartphones?)\b/i;
+
+/**
+ * Words that separate two requests from one: "Windows and Google Play" names
+ * two platforms, "Steam for Linux" names one. What sits between the store and
+ * the operating system decides which.
+ */
+const COORDINATOR_RE = /\b(?:and|or|plus|also|then|later|as well as)\b|[,;&/]/i;
+
+const OS_WORD_RE = new RegExp(PLATFORM_PATTERNS.map(([, re]) => re.source).join("|"), "gi");
+const DESKTOP_OS_RE = new RegExp(
+  PLATFORM_PATTERNS.filter(([t]) => DESKTOP_TARGETS.has(t)).map(([, re]) => re.source).join("|"),
+  "gi",
+);
+
+/** The clause around an index: never across a sentence end or a line break. */
+function clauseAfter(text: string): string {
+  const end = text.search(/[.\n!?;]/);
+  return end === -1 ? text : text.slice(0, end);
+}
+function clauseBefore(text: string): string {
+  let cut = -1;
+  for (const ch of [".", "\n", "!", "?", ";"]) cut = Math.max(cut, text.lastIndexOf(ch));
+  return cut === -1 ? text : text.slice(cut + 1);
+}
+
+/**
+ * Is this mention QUALIFIED by an operating system in the same noun phrase —
+ * on either side of it, with no coordinator in between?
+ */
+function qualifiedByOs(text: string, at: number, length: number, os: RegExp): boolean {
+  const after = clauseAfter(text.slice(at + length, at + length + 48));
+  for (const m of after.matchAll(os)) {
+    if (!COORDINATOR_RE.test(after.slice(0, m.index ?? 0))) return true;
+    break;
+  }
+  const before = clauseBefore(text.slice(Math.max(0, at - 48), at));
+  const prior = [...before.matchAll(os)].pop();
+  if (prior && !COORDINATOR_RE.test(before.slice((prior.index ?? 0) + prior[0].length))) return true;
+  return false;
+}
+
+/**
+ * The platform a build's OWN words name — its target string or its artifact
+ * path. A build that says nothing names nothing.
+ */
+export function targetOfBuild(text: string | undefined): BuildTarget | undefined {
+  if (!text) return undefined;
+  const t = text.toLowerCase();
+  if (/android|\.(?:apk|aab)$/.test(t)) return "android";
+  if (/\bios\b|iphone|ipad|\.ipa$/.test(t)) return "ios";
+  if (/webgl|\.html?$/.test(t)) return "webgl";
+  if (/windows|win64|win32|\.exe$/.test(t)) return "windows";
+  if (/osx|macos|mac os|darwin|\.app\/?$/.test(t)) return "macos";
+  if (/linux|\.x86_64$/.test(t)) return "linux";
+  return undefined;
+}
+
+/**
+ * Did this build produce the platform the document asked for?
+ *
+ * A valid StandaloneOSX artifact used to satisfy "Release on Windows" and the
+ * campaign reached `done` with the requested platform never built (Codex
+ * 2026-09-11 L#12). A build that names NO platform is silence, not a
+ * contradiction, and still counts — an unsatisfiable gate is worse than a
+ * named gap.
+ */
+export function buildSatisfiesTarget(
+  requested: string | undefined,
+  builtTarget?: string,
+  artifactPath?: string,
+): boolean {
+  if (!requested) return true;
+  const named = targetOfBuild(builtTarget) ?? targetOfBuild(artifactPath);
+  return named === undefined || named === requested;
+}
 
 export interface GddPlatform {
   /** The build target to ask for: the FIRST platform the document names. */
@@ -106,8 +186,14 @@ export function gddPlatform(gddText: string | undefined): GddPlatform {
   // A storefront QUALIFIED BY AN OS names no platform of its own: "Steam for
   // Linux" is one platform, while "Windows and Google Play" is two (Codex
   // 2026-09-11 K#14).
-  collect(STOREFRONT_PATTERNS, (at, length) => !/^\s*(?:for|on)\s+(?:windows|win64|linux|macos|mac os|osx|android|ios)\b/i.test(gddText.slice(at + length, at + length + 24)));
-  if (hits.length === 0) collect([["windows", GENERIC_DESKTOP_RE]]);
+  // …and the qualifier can stand EITHER SIDE of the store: "the Mac app on
+  // the App Store" and "Linux release via Steam" each name one platform, and
+  // reading only forward invented a second one that then blocked delivery
+  // forever (Codex 2026-09-11 L#11).
+  collect(STOREFRONT_PATTERNS, (at, length) => !qualifiedByOs(gddText, at, length, OS_WORD_RE));
+  // A PC mention is its own clause's question, asked every time rather than
+  // only when the document named nothing at all.
+  collect([["windows", GENERIC_DESKTOP_RE]], (at, length) => !qualifiedByOs(gddText, at, length, DESKTOP_OS_RE));
   const handheldMatch = HANDHELD_RE.exec(gddText);
   const handheld = handheldMatch !== null || hits.some((h) => MOBILE_TARGETS.has(h.target));
   if (hits.length === 0) {

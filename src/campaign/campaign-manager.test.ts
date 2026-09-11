@@ -2875,7 +2875,7 @@ describe("CampaignManager", () => {
     expect(after.milestones[2]!.deliveryProofsMissing!.join(" ")).toContain("have no sprint yet");
   });
 
-  it("a two-platform GDD builds the first and NAMES the rest (Codex 2026-09-11 F#11)", async () => {
+  it("a two-platform GDD builds BOTH, and a build of another platform proves neither (Codex 2026-09-11 F#11, L#10, L#12)", async () => {
     writeFileSync(join(projectRoot, "docs", "Game_GDD.md"), "# GDD\n\nShips on Steam for Windows and later on iOS. Target 60 fps.");
     const campaign = manager.startFromGdd(ctx, "# GDD\n\nShips on Steam for Windows and later on iOS. Target 60 fps.", "docs/Game_GDD.md");
     await waitFor(() => expect(tasks.submitted).toHaveLength(1));
@@ -2886,12 +2886,20 @@ describe("CampaignManager", () => {
     settleMilestone("green, shipping");
     await waitFor(() => expect(buildTargetsAsked.length).toBeGreaterThan(0));
 
-    // The FIRST named platform is built, rather than whatever the project had.
-    expect(buildTargetsAsked.at(-1)).toBe("windows");
+    // EVERY named platform is built. Building only the first and disclosing
+    // the rest made every multi-platform GDD unsatisfiable: the missing
+    // platform blocked delivery and the next round asked for the first one
+    // again, for ever (L#10).
+    expect(buildTargetsAsked).toContain("windows");
+    expect(buildTargetsAsked).toContain("ios");
     const stored = storage.get(campaign.id)!;
     // …and the platform it did NOT build is named where a person reads it,
     // as a structured field so a FAILED build cannot lose it (J#21).
-    expect(stored.milestones[2]!.buildVerdict?.unbuiltTargets).toEqual(["ios"]);
+    // …and this stub answers a macOS artifact whatever it is asked for, so
+    // NEITHER requested platform was built: a valid StandaloneOSX artifact
+    // used to satisfy "Release on Windows" and the campaign reached done (L#12).
+    expect(stored.milestones[2]!.buildVerdict?.unbuiltTargets).toEqual(["windows", "ios"]);
+    expect(stored.milestones[2]!.buildVerdict?.ok).toBe(false);
     expect(describeBuild(stored.milestones[2]!.buildVerdict!)).toContain("ios");
     expect(describeBuild({ ...stored.milestones[2]!.buildVerdict!, ok: false, reasons: ["compiler failed", "SDK missing"] }))
       .toContain("ios");
@@ -2908,7 +2916,8 @@ describe("CampaignManager", () => {
     const threw = await (throwing as unknown as { measureBuild(c: unknown): Promise<{ unbuiltTargets?: string[]; ran: boolean }> })
       .measureBuild({ gddText: "Ships on Steam for Windows and later on iOS.", milestones: [], currentMilestone: 0 });
     expect(threw.ran).toBe(false);
-    expect(threw.unbuiltTargets).toEqual(["ios"]);
+    expect((threw as { requestedTarget?: string }).requestedTarget).toBe("windows");
+    expect(threw.unbuiltTargets).toEqual(["windows", "ios"]);
 
     // With NO BUILDER at all the requested platforms are still named (K#13).
     const noBuilder = new CampaignManager({
@@ -2928,8 +2937,29 @@ describe("CampaignManager", () => {
       ran: true, ok: true, target: "windows", artifactPath: "/p/Game.exe", sizeBytes: 1,
       reasons: ["the GDD also asks for ios; this build is windows only"],
     } as never)).toContain("ios");
+
+    // A BUILDER THAT HONOURS THE ASK leaves nothing unbuilt: the two-platform
+    // document is satisfiable, which it was not while only the first target
+    // was ever requested (L#10).
+    const asked: string[] = [];
+    const honest = new CampaignManager({
+      storage,
+      buildPlayer: async (_root: string, target?: string) => {
+        asked.push(String(target));
+        return { ran: true, ok: true, target: String(target), artifactPath: `/p/Game.${target}`, sizeBytes: 1 };
+      },
+      planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async () => {},
+      projectRoot,
+    });
+    const both = await (honest as unknown as { measureBuild(c: unknown): Promise<{ unbuiltTargets?: string[]; ok?: boolean }> })
+      .measureBuild({ gddText: "Ships on Steam for Windows and later on iOS.", milestones: [], currentMilestone: 0 });
+    expect(asked).toEqual(["windows", "ios"]);
+    expect(both.unbuiltTargets).toBeUndefined();
+    expect(both.ok).toBe(true);
     // …and a platform nobody built is missing WORK, not a footnote (K#15).
-    expect(stored.milestones[2]!.deliveryProofsMissing!.join(" ")).toContain("no build of it exists");
+    expect(stored.milestones[2]!.deliveryProofsMissing!.join(" ")).toContain("no build of them exists");
     expect(storage.get(campaign.id)!.state).not.toBe("done");
   });
 
