@@ -122,3 +122,37 @@ describe("required evidence named by the task", () => {
     expect(missingRequiredEvidence(prompt, [...trace, { toolName: "unity_playthrough", success: true }, { toolName: "unity_build_player", success: true }])).toEqual([]);
   });
 });
+
+describe("a tool the situation does not call for is not missing evidence (measured live 2026-09-11)", () => {
+  // The real mission, shortened: a batch procedure that repeats until a
+  // measured count is below a threshold. The count was already 0, so the run
+  // correctly generated nothing — and this gate failed the node every round
+  // for hours, retrying a mission whose goal was already met.
+  const loop =
+    "Mission: replace placeholder art IN PLACE, in batches. Each batch is ONE unit of work: call unity_delivery_measure once " +
+    "and take the first 24 placeholder paths it lists; then call unity_generate_sprite exactly TWICE, each call with `batch` " +
+    "holding 12 items; then call unity_delivery_measure again and report the new number. " +
+    "Repeat batches until the measured count is below 200, then finish with the count you MEASURED.";
+
+  it("accepts a node that measured and found nothing to do", () => {
+    const measuredOnly = [{ toolName: "unity_delivery_measure", success: true }];
+    expect(missingRequiredEvidence(loop, measuredOnly)).toEqual([]);
+  });
+
+  it("still rejects a node that ran NONE of the tools it was told to", () => {
+    expect(missingRequiredEvidence(loop, []).map((s) => s.tool).sort())
+      .toEqual(["unity_delivery_measure", "unity_generate_sprite"]);
+    expect(missingRequiredEvidence(loop, [{ toolName: "git_status", success: true }])).toHaveLength(2);
+  });
+
+  it("leaves an ordinary instruction demanding every tool it names", () => {
+    const plain = "Run unity_verify_change, then run unity_playthrough and report its verdict.";
+    expect(missingRequiredEvidence(plain, [{ toolName: "unity_verify_change", success: true }]).map((s) => s.tool))
+      .toEqual(["unity_playthrough"]);
+    // …and a timing clause is not a condition (Codex 2026-09-11 B#13 stands).
+    expect(requiredToolsInPrompt("execute unity_playthrough when the scene loads")).toEqual(["unity_playthrough"]);
+    // An explicitly conditional instruction is not a demand.
+    expect(requiredToolsInPrompt("If the scene is empty, run unity_bind_sprite to fix it.")).toEqual([]);
+    expect(requiredToolsInPrompt("Run unity_playthrough as needed.")).toEqual([]);
+  });
+});

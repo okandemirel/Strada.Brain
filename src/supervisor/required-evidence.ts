@@ -12,13 +12,58 @@
  */
 
 /** Tools the task's text tells the worker to run: "run unity_playthrough", "Run the unity_build_player". */
+/**
+ * Words that make an instruction CONDITIONAL: the tool runs only in a case
+ * that may not arise.
+ *
+ * Measured live 2026-09-11 18:34 onward: a mission said "call
+ * unity_generate_sprite … repeat batches until the measured count is below
+ * 200". The count was already 0, so the run correctly generated nothing — and
+ * this gate failed the node for a call the situation did not call for, every
+ * round, for hours. A gate that demands an action the work does not need is
+ * the unsatisfiable gate this whole review week has been about.
+ *
+ * "until it passes" is NOT in here: that governs how often, not whether.
+ */
+const CONDITIONAL_RE =
+  /\b(?:if|unless|as needed|if needed|where necessary|only\s+(?:if|when)|in case)\b/i;
+
+/**
+ * A procedure that REPEATS UNTIL A MEASURED THRESHOLD: "repeat batches until
+ * the measured count is below 200". When the threshold already holds, the
+ * work inside the loop correctly does not run, so the tools named inside it
+ * cannot each be demanded — but the node must still have MEASURED something,
+ * which is what the rule below keeps.
+ */
+const THRESHOLD_LOOP_RE =
+  /\b(?:repeat|loop|continue|keep going|again)\b[^.\n]{0,80}?\buntil\b[^.\n]{0,80}?\b(?:below|under|fewer|less than|at most|reaches|drops|<=?|zero|none)\b/i;
+
+/** The sentence `at` sits in, for judging whether its instruction is conditional. */
+function sentenceAround(text: string, at: number): string {
+  const from = Math.max(text.lastIndexOf(".", at), text.lastIndexOf("\n", at)) + 1;
+  const dot = text.indexOf(".", at);
+  const nl = text.indexOf("\n", at);
+  const ends = [dot, nl].filter((i) => i >= 0);
+  const to = ends.length > 0 ? Math.min(...ends) : text.length;
+  return text.slice(from, to);
+}
+
 export function requiredToolsInPrompt(prompt: string): string[] {
   const out = new Set<string>();
   // "run X", "execute X", "invoke X", "call X", "use X", "using X", "via X",
   // "through X" — with up to a few words between ("run the full suite using
   // unity_test_run"). "run X" alone let "execute unity_x" through (Codex
   // 2026-09-11 B#13).
-  for (const m of prompt.matchAll(/\b(?:run|execute|invoke|call|use|using|via|through)\b(?:\s+(?!unity_)[a-z'-]+){0,4}\s+(unity_[a-z0-9_]+)/gi)) out.add(m[1]!.toLowerCase());
+  const conditional = new Set<string>();
+  for (const m of prompt.matchAll(/\b(?:run|execute|invoke|call|use|using|via|through)\b(?:\s+(?!unity_)[a-z'-]+){0,4}\s+(unity_[a-z0-9_]+)/gi)) {
+    const tool = m[1]!.toLowerCase();
+    // A tool named in a CONDITIONAL instruction is required only when that
+    // condition holds, and nothing here can judge that — so it is reported as
+    // conditional rather than demanded.
+    if (CONDITIONAL_RE.test(sentenceAround(prompt, m.index ?? 0))) conditional.add(tool);
+    else out.add(tool);
+  }
+  for (const tool of conditional) out.delete(tool);
   return [...out];
 }
 
@@ -91,9 +136,19 @@ export function missingRequiredEvidence(
 ): EvidenceShortfall[] {
   const required = requiredToolsInPrompt(prompt);
   const shortfalls: EvidenceShortfall[] = [];
+  // A THRESHOLD LOOP's tools are demanded as a SET, not one by one: when the
+  // threshold already holds the loop body correctly does not run, and
+  // demanding each named tool failed the node for work the situation did not
+  // call for — measured live 2026-09-11, a mission whose target was already
+  // met failed this gate every round for hours. One successful call of a
+  // named tool is the evidence that the node did the measuring; a node that
+  // ran none of them is still rejected.
+  const loopThreshold = THRESHOLD_LOOP_RE.test(prompt);
+  const ranSomething = required.some((tool) => trace.some((t) => t.toolName === tool && t.success));
   for (const tool of required) {
     const calls = trace.filter((t) => t.toolName === tool);
     if (!calls.some((t) => t.success)) {
+      if (loopThreshold && ranSomething) continue;
       shortfalls.push({ tool, attempts: calls.length });
       continue;
     }
