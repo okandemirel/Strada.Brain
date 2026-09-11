@@ -312,7 +312,7 @@ describe("CampaignManager", () => {
       if ((current.state === "failed" && !current.autoReviveAt) || current.state === "done") return;
       const submitted = tasks.submitted.length;
       tasks.emit("task:failed", `task_${submitted}`, reason);
-      await vi.waitFor(() => {
+      await waitFor(() => {
         const after = storage.get(campaignId)!;
         const stopped = after.state === "failed" && !after.autoReviveAt;
         expect(stopped || tasks.submitted.length > submitted).toBe(true);
@@ -320,6 +320,15 @@ describe("CampaignManager", () => {
     }
     throw new Error(`campaign ${campaignId} never stopped after 12 failed rounds`);
   };
+
+  /**
+   * vitest's waitFor defaults to ONE second, and these tests do real
+   * filesystem work: under a loaded machine the suite failed a different
+   * handful of them on every run. Five seconds by default, and a caller can
+   * still ask for more.
+   */
+  const waitFor = (fn: () => void | Promise<void>, opts?: { timeout?: number; interval?: number }): Promise<void> =>
+    vi.waitFor(fn, { timeout: 5_000, ...opts });
 
   const settleMilestone = (result: string) => {
     const last = tasks.submitted.length;
@@ -339,7 +348,7 @@ describe("CampaignManager", () => {
     const campaign = manager.startFromGdd(ctx, "# GDD text", "docs/Game_GDD.md");
     expect(campaign.state).toBe("planning");
 
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(tasks.submitted).toHaveLength(1);
     });
     expect(tasks.submitted[0]!.prompt).toContain("foundations");
@@ -350,17 +359,17 @@ describe("CampaignManager", () => {
 
   it("walks the ladder: sprint completion auto-submits the next sprint", async () => {
     const campaign = manager.startFromGdd(ctx, "# GDD text", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
 
     settleMilestone("sprint A done, committed");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     expect(tasks.submitted[1]!.prompt).toContain("elements");
 
     settleMilestone("sprint B done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
 
     settleMilestone("final report");
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(storage.get(campaign.id)!.state).toBe("done");
     });
     expect(messages.at(-1)!.text).toContain("Campaign delivery");
@@ -368,19 +377,19 @@ describe("CampaignManager", () => {
 
   it("retries a failed milestone with the failure appended, then fails loudly", async () => {
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
 
     tasks.emit("task:failed", "task_1", "compile exploded");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     expect(tasks.submitted[1]!.prompt).toContain("compile exploded");
 
     tasks.emit("task:failed", "task_2", "compile exploded again");
     // The spent budget is not the end any more: the campaign self-revives
     // with a changed approach, twice, and THEN stops (Codex 2026-09-11 F#1).
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(messages.some((m) => m.text.includes("Retrying with a changed approach"))).toBe(true);
     });
-    await vi.waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(2));
+    await waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(2));
     expect(tasks.submitted.at(-1)!.prompt).toContain("Do NOT repeat that approach");
     await failUntilStopped(campaign.id, "compile exploded again");
     expect(storage.get(campaign.id)!.state).toBe("failed");
@@ -390,10 +399,10 @@ describe("CampaignManager", () => {
 
   it("nudges a blocked sprint with the autonomous mandate instead of waiting on a person", async () => {
     manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
 
     tasks.emit("task:blocked", "task_1", "blocked:ask_user");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     expect(tasks.submitted[1]!.prompt).toContain("do not ask the user");
   });
 
@@ -405,7 +414,7 @@ describe("CampaignManager", () => {
 
     // Draft completes; the GDD file exists in docs/.
     tasks.emit("task:completed", "task_1", "wrote docs/Game_GDD.md");
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(storage.get(campaign.id)!.state).toBe("awaiting-approval");
     });
     expect(messages.at(-1)!.text).toContain("Game_GDD.md");
@@ -415,16 +424,16 @@ describe("CampaignManager", () => {
 
     // Revision feedback re-drafts instead of launching.
     expect(await manager.tryHandleApproval("cli-local", "daha fazla bölüm ekle")).toBe(true);
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     expect(tasks.submitted[1]!.prompt).toContain("daha fazla bölüm ekle");
 
     // Second draft lands, designer approves → ladder plans, sprint 1 starts.
     tasks.emit("task:completed", "task_2", "revised GDD written");
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(storage.get(campaign.id)!.state).toBe("awaiting-approval");
     });
     expect(await manager.tryHandleApproval("cli-local", "evet")).toBe(true);
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
     expect(storage.get(campaign.id)!.state).toBe("executing");
   });
 
@@ -434,31 +443,31 @@ describe("CampaignManager", () => {
     expect(campaign.state).toBe("drafting-gdd");
 
     tasks.emit("task:completed", "task_1", "I described the GDD in chat");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     expect(tasks.submitted[1]!.prompt).toContain("never wrote the GDD file");
   });
 
   it("resumeActive resubmits the in-flight milestone when the task died with the process", async () => {
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     // Simulate crash: the task is terminally failed but its event never arrived.
     tasks.markTerminal("task_1", TaskStatus.failed);
 
     await manager.resumeActive();
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     expect(storage.get(campaign.id)!.state).toBe("executing");
   });
 
   it("adopts the executor's own retry instead of resubmitting and burning an attempt", async () => {
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
 
     // Keep-alive parks task_1 as blocked and mints task_2 as its retry.
     const retryId = tasks.addRetry("task_1");
     tasks.emit("task:blocked", "task_1", "Transient failure — provider cooldown. Auto-retry 1/10 in ~30s.");
 
     // After the grace window the campaign adopts the retry: no resubmission.
-    await vi.waitFor(() => {
+    await waitFor(() => {
       const fresh = storage.get(campaign.id)!;
       expect(fresh.milestones[0]!.taskId).toBe(retryId);
     });
@@ -467,14 +476,14 @@ describe("CampaignManager", () => {
 
     // The adopted retry completing walks the ladder normally.
     tasks.emit("task:completed", retryId, "sprint A done via retry");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
   });
 
   it("resumes a paused (startup-recovered) GDD draft instead of wedging forever", async () => {
     // Drafts are replayed from their checkpoint; sprints are resubmitted
     // (see the test below) because their prompt carries the latest measurement.
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     const stored = storage.get(campaign.id)!;
     stored.state = "drafting-gdd";
     stored.draftTaskId = "task_1";
@@ -483,7 +492,7 @@ describe("CampaignManager", () => {
 
     await manager.resumeActive();
     expect(tasks.resumed).toContain("task_1");
-    await vi.waitFor(() => {
+    await waitFor(() => {
       const fresh = storage.get(campaign.id)!;
       expect(fresh.draftTaskId).not.toBe("task_1");
     });
@@ -493,7 +502,7 @@ describe("CampaignManager", () => {
     // Measured 2026-09-08 04:18: the replay quoted a 29-sprints-old root
     // prompt with no delivery gate; the milestone held the current one.
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     const stored = storage.get(campaign.id)!;
     stored.state = "executing";
     stored.milestones[0]!.taskId = "task_1";
@@ -504,7 +513,7 @@ describe("CampaignManager", () => {
     await manager.resumeActive();
     expect(tasks.resumed).not.toContain("task_1");
     expect(tasks.cancelled).toContain("task_1");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     const fresh = storage.get(campaign.id)!;
     expect(fresh.milestones[0]!.attempts).toBe(1);
     expect(fresh.milestones[0]!.taskId).not.toBe("task_1");
@@ -515,7 +524,7 @@ describe("CampaignManager", () => {
     // lineage while the campaign resubmitted the sprint — two runs of the
     // same prompt against the same repo.
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     const stored = storage.get(campaign.id)!;
     stored.state = "failed";
     stored.milestones[0]!.attempts = 2;
@@ -529,7 +538,7 @@ describe("CampaignManager", () => {
     // and the executor's keep-alive must not read it as a stop order
     // (measured 2026-09-08 15:19: it did, for every attempt after the first).
     expect(tasks.cancelReasons.get("task_1")).toBe("superseded");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
   });
 
   it("a retirement the campaign can come back from is a supersession, not a stop order (Codex 2026-09-11 F#6)", async () => {
@@ -538,7 +547,7 @@ describe("CampaignManager", () => {
     // HARD cancel poisons every descendant, so the executor's keep-alive and
     // goal auto-resume abandoned the revived mission's recovery.
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     await failUntilStopped(campaign.id, "compile error CS0246");
     expect(storage.get(campaign.id)!.state).toBe("failed");
     // Every cancel this retirement made is marked superseded.
@@ -554,7 +563,7 @@ describe("CampaignManager", () => {
     // Measured 2026-09-01: after escalation 2/2 the box switched off and m6
     // ran 33h. The third overrun must be a charged, narrowest-scope retry.
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     const stored = storage.get(campaign.id)!;
     stored.milestones[0]!.timeBoxEscalations = 2;
     stored.milestones[0]!.startedAtMs = Date.now() - 7 * 60 * 60_000; // past a 6h box
@@ -562,12 +571,50 @@ describe("CampaignManager", () => {
 
     // A blocked settle drives reconcile → escalateIfPastTimeBox.
     tasks.emit("task:blocked", "task_1", "Transient failure — provider hiccup");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
 
     const after = storage.get(campaign.id)!;
     expect(after.state).toBe("executing");
     expect(after.milestones[0]!.attempts).toBe(2); // charged
     expect(tasks.submitted[1]!.prompt).toContain("TIME BOX EXHAUSTED");
+  });
+
+  it("a time box that outlives the attempt budget still gets the bounded recovery (Codex 2026-09-11 H#6)", async () => {
+    // This path wrote `failed` with no appointment at all: a sprint that ran
+    // long was the one kind of exhaustion the autonomous recovery never saw.
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    const overrun = (): void => {
+      const stored = storage.get(campaign.id)!;
+      stored.milestones[0]!.timeBoxEscalations = 2;
+      stored.milestones[0]!.attempts = 2; // budget already spent
+      stored.milestones[0]!.startedAtMs = Date.now() - 7 * 60 * 60_000;
+      storage.save(stored);
+    };
+    overrun();
+    tasks.emit("task:blocked", `task_${tasks.submitted.length}`, "Transient failure — provider hiccup");
+    await waitFor(() => {
+      expect(messages.some((m) => m.text.includes("Retrying with a changed approach"))).toBe(true);
+    }, { timeout: 5_000 });
+    const revived = storage.get(campaign.id)!;
+    expect(revived.implementationRevives).toBe(1);
+    expect(revived.milestones[0]!.prompt).toContain("Do NOT repeat that approach");
+    // The revival's ten-millisecond appointment has already fired here, so the
+    // proof it was armed is the resubmission it produced.
+    await waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(1), { timeout: 5_000 });
+    expect(revived.milestones[0]!.timeBoxEscalations ?? 0).toBe(0); // a fresh box for the new approach
+
+    // …and it still ends: the budget is the same bounded one.
+    for (let i = 0; i < 6; i++) {
+      const stored = storage.get(campaign.id)!;
+      if (stored.state === "failed" && !stored.autoReviveAt) break;
+      await waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(i + 1), { timeout: 5_000 }).catch(() => undefined);
+      overrun();
+      tasks.emit("task:blocked", `task_${tasks.submitted.length}`, "Transient failure — provider hiccup");
+      await new Promise((r) => setTimeout(r, 120));
+    }
+    const stopped = storage.get(campaign.id)!;
+    expect(stopped.implementationRevives).toBeLessThanOrEqual(2);
   });
 
   it("cancels the abandoned lineage on EVERY resubmit, not only on revive", async () => {
@@ -576,14 +623,14 @@ describe("CampaignManager", () => {
     // 09:37, 09:53 and 10:20 — all after the campaign had delivered. Once the
     // campaign stopped referencing that lineage, nothing could find it.
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     // The sprint blocks; the executor's keep-alive mints a retry under a new
     // id, so the lineage tip is no longer the task the milestone points at.
     const retryId = tasks.addRetry("task_1", TaskStatus.blocked);
     tasks.updatedAts.set("task_1", Date.now() - 30 * 60_000);
     tasks.updatedAts.set(retryId, Date.now() - 30 * 60_000);
     tasks.emit("task:failed", "task_1", "the sprint failed outright");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
 
     expect(tasks.cancelled).toContain(retryId);
   });
@@ -594,7 +641,7 @@ describe("CampaignManager", () => {
     // could not reach them — the milestone pointed at the task that
     // delivered, not at the lineages earlier resubmits had abandoned.
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     const stored = storage.get(campaign.id)!;
     const milestonePrompt = stored.milestones[0]!.prompt;
     // An orphan carrying the milestone's prompt, unreachable from taskId.
@@ -615,7 +662,7 @@ describe("CampaignManager", () => {
     // the live end retires nothing — the next continuation mints a fresh
     // child whose ancestry holds no cancel at all.
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     const stored = storage.get(campaign.id)!;
     const milestonePrompt = stored.milestones[0]!.prompt;
     const rootId = tasks.submit("cli-local", "cli", milestonePrompt).id;
@@ -639,7 +686,7 @@ describe("CampaignManager", () => {
     // campaign was already terminal, so nothing resumed it and nothing
     // cancelled its lineage.
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     const stored = storage.get(campaign.id)!;
     stored.state = "done";
     stored.deliveryReported = true;
@@ -668,15 +715,15 @@ describe("CampaignManager", () => {
     );
 
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     settleMilestone("sprint A done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     settleMilestone("sprint B done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
 
     // Final sprint completes with NO test verdict → the test gate bounces.
     tasks.emit("task:completed", "task_3", "shipping it");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(4));
 
     const prompt = tasks.submitted[3]!.prompt;
     expect(prompt).toContain("DELIVERY VERIFICATION REQUIRED");
@@ -699,11 +746,11 @@ describe("CampaignManager", () => {
       "EditorBuildSettings:\n  m_Scenes:\n  - enabled: 1\n    path: Assets/Scenes/Game.unity",
     );
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     settleMilestone("sprint A done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     settleMilestone("sprint B done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
 
     // A gate block written before 2026-09-08 left this paragraph in the
     // persisted prompt. The art-gate and revive paths resubmit WITHOUT cutting
@@ -721,7 +768,7 @@ describe("CampaignManager", () => {
 
     const handled = await manager.tryHandleRevive("cli-local", "kampanya devam");
     expect(handled).toBe(true);
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(4));
     const prompt = tasks.submitted[3]!.prompt;
     expect(prompt).not.toContain("ALREADY MEASURED");
     expect(prompt).not.toContain("render NOTHING: bind them");
@@ -743,7 +790,7 @@ describe("CampaignManager", () => {
     tasks.markTerminal("task_3", TaskStatus.blocked);
 
     expect(await manager.tryHandleRevive("cli-local", "kampanya devam")).toBe(true);
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(4));
     const prompt = tasks.submitted[3]!.prompt;
     expect(prompt).not.toContain("old wording");
     expect(prompt).toContain("- Wire the HUD.\n- Ship it.");
@@ -765,7 +812,7 @@ describe("CampaignManager", () => {
     tasks.markTerminal("task_3", TaskStatus.blocked);
 
     expect(await manager.tryHandleRevive("cli-local", "kampanya devam")).toBe(true);
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(4));
     const prompt = tasks.submitted[3]!.prompt;
     expect(prompt).not.toContain("OLD: the scenes render NOTHING");
     // Either the gate passes now (paragraph gone) or it names the CURRENT refusal.
@@ -793,7 +840,7 @@ describe("CampaignManager", () => {
     tasks.markTerminal("task_3", TaskStatus.blocked);
 
     expect(await manager.tryHandleRevive("cli-local", "kampanya devam")).toBe(true);
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(4));
     const prompt = tasks.submitted[3]!.prompt;
     expect(prompt).not.toContain("old wording");
     expect(prompt).toContain("must be DISABLED in Build Settings");
@@ -806,11 +853,11 @@ describe("CampaignManager", () => {
     // green while its one unfiltered run reported 6 of 173 failing, including
     // WinLevel_ReachesWonState ("LevelWon event did not fire").
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     settleMilestone("sprint A done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     settleMilestone("sprint B done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
 
     tasks.verifications.set("task_3", {
       testsGreen: true,
@@ -818,7 +865,7 @@ describe("CampaignManager", () => {
       unfiltered: false,
     });
     tasks.emit("task:completed", "task_3", "green, shipping");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(4));
 
     expect(storage.get(campaign.id)!.state).toBe("executing");
     expect(tasks.submitted[3]!.prompt).toContain("FILTERED");
@@ -830,11 +877,11 @@ describe("CampaignManager", () => {
     // ever naming WinLevel_ReachesWonState — the failure that means the core
     // loop does not work.
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     settleMilestone("sprint A done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     settleMilestone("sprint B done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
 
     tasks.verifications.set("task_3", {
       testsGreen: true,
@@ -844,7 +891,7 @@ describe("CampaignManager", () => {
       failedTestsOmitted: 5,
     } as never);
     tasks.emit("task:completed", "task_3", "green, shipping");
-    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
 
     const report = messages.map((m) => m.text).find((t) => t.includes("Campaign delivery"))!;
     expect(report).toContain("WinLevel_ReachesWonState");
@@ -858,11 +905,11 @@ describe("CampaignManager", () => {
   it("bounces the final sprint for a missing play-through even when the suite is green (measured 2026-09-10)", async () => {
     rmSync(join(projectRoot, "Recordings"), { recursive: true, force: true });
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     settleMilestone("sprint A done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     settleMilestone("sprint B done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
     expect(tasks.submitted[2]!.prompt).toContain("PLAY-THROUGH (final sprint): the game must register ONE Strada.Core.Play.IPlaythroughDriver");
     expect(tasks.submitted[2]!.prompt).toContain("run unity_build_player");
 
@@ -872,7 +919,7 @@ describe("CampaignManager", () => {
       unfiltered: true,
     });
     tasks.emit("task:completed", "task_3", "green, shipping");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(4));
 
     const prompt = tasks.submitted[3]!.prompt;
     expect(prompt).toContain("the suite is green and the project compiles, but the game was not shown to be PLAYABLE");
@@ -889,7 +936,7 @@ describe("CampaignManager", () => {
       unfiltered: true,
     });
     tasks.emit("task:completed", "task_4", "green, shipping");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(5));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(5));
     expect(tasks.submitted[4]!.prompt).toContain("PLAY-THROUGH REQUIRED: the last play-through FAILED: session 1 never ended");
   });
 
@@ -897,15 +944,15 @@ describe("CampaignManager", () => {
     const gdd = "# GDD\n\nThe game must load in under 1 second. Target 60 fps.";
     writePlaythroughVerdict(true, { perf: { medium: "editor-playmode-batch", bootSeconds: 2.4, playSeconds: 30, playFrames: 900, avgFps: 30, worstFrameMs: 90 } });
     const campaign = manager.startFromGdd(ctx, gdd, "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     settleMilestone("sprint A done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     settleMilestone("sprint B done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
     const green = { testsGreen: true, detail: "PlayMode verification passed: 179 of 179 tests passed (unfiltered — the whole PlayMode suite)", unfiltered: true };
     tasks.verifications.set("task_3", green);
     tasks.emit("task:completed", "task_3", "green, shipping");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(4));
     const prompt = tasks.submitted[3]!.prompt;
     expect(prompt).toContain("the suite is green, the project compiles and the game was played, but the GDD's own numbers are NOT met");
     expect(prompt).toContain("THE GDD'S OWN NUMBERS ARE NOT MET: boot time ≤ 1 s measured 2.4 s");
@@ -921,7 +968,7 @@ describe("CampaignManager", () => {
     writePlaythroughVerdict(true, { perf: { medium: "editor-playmode-batch", bootSeconds: 0.6, playSeconds: 30, playFrames: 900, avgFps: 30 } });
     tasks.verifications.set("task_4", green);
     tasks.emit("task:completed", "task_4", "green, shipping");
-    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
     const report = messages.map((m) => m.text).join("\n");
     expect(report).toContain("GDD boot time ≤ 1 s: MET — scene load → services in 0.6 s (editor play mode, batch)");
     // Delivered: the campaign built and played the player, whose frame rate answers the claim.
@@ -931,15 +978,15 @@ describe("CampaignManager", () => {
   it("builds the player itself at delivery: a failed build bounces, a built one is the report's artifact line (2026-09-10)", async () => {
     buildVerdict = { ran: true, ok: false, reasons: ["the report says built but nothing exists at /tmp/Builds/StandaloneOSX/Game.app"], target: "StandaloneOSX" };
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     settleMilestone("sprint A done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     settleMilestone("sprint B done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
     const green = { testsGreen: true, detail: "PlayMode verification passed: 179 of 179 tests passed (unfiltered — the whole PlayMode suite)", unfiltered: true };
     tasks.verifications.set("task_3", green);
     tasks.emit("task:completed", "task_3", "green, shipping");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(4));
     const prompt = tasks.submitted[3]!.prompt;
     expect(prompt).toContain("the suite is green, the game was played and the GDD's numbers hold, but the PLAYER DOES NOT BUILD");
     expect(prompt).toContain("PLAYER BUILD FAILED: the campaign built the player from the project root and it did not produce a runnable artifact — the report says built but nothing exists");
@@ -948,7 +995,7 @@ describe("CampaignManager", () => {
     buildVerdict = { ran: true, ok: true, target: "StandaloneOSX", artifactPath: "/tmp/Builds/StandaloneOSX/Game.app", sizeBytes: 88_000_000, durationMs: 120_000, scenes: 2 };
     tasks.verifications.set("task_4", green);
     tasks.emit("task:completed", "task_4", "green, shipping");
-    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
     const report = messages.map((m) => m.text).join("\n");
     expect(report).toContain("delivery artifact: /tmp/Builds/StandaloneOSX/Game.app (StandaloneOSX, 83.9 MB, built in 120 s)");
   });
@@ -970,32 +1017,32 @@ describe("CampaignManager", () => {
     });
     manager.attachEvents();
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     settleMilestone("sprint A done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     settleMilestone("sprint B done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
     tasks.verifications.set("task_3", { testsGreen: true, detail: "179 of 179 tests passed (unfiltered — the whole PlayMode suite)", unfiltered: true });
     tasks.emit("task:completed", "task_3", "green, shipping");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(4));
     expect(builds, "a build was attempted on a tree with no play-through").toBe(0);
     expect(storage.get(campaign.id)!.milestones[2]!.buildVerdict).toEqual({ ran: false, detail: "not attempted: earlier delivery proofs are missing (suite, compile or play-through)" });
   });
 
   it("the delivery report names the play-through and that the game does not start itself", async () => {
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     settleMilestone("sprint A done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     settleMilestone("sprint B done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
     tasks.verifications.set("task_3", {
       testsGreen: true,
       detail: "PlayMode verification passed: 179 of 179 tests passed (unfiltered — the whole PlayMode suite)",
       unfiltered: true,
     });
     tasks.emit("task:completed", "task_3", "green, shipping");
-    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
     const report = messages.map((m) => m.text).join("\n");
     expect(report).toContain("play-through OK in Entry: session 1 played to Won in 12 actions");
     expect(report).toContain("does not start play by itself after boot");
@@ -1010,15 +1057,15 @@ describe("CampaignManager", () => {
     mkdirSync(join(projectRoot, "Assets", "Scripts"), { recursive: true });
     writeFileSync(join(projectRoot, "Assets", "Scripts", "Cube.cs"), "public class Cube {}");
     const campaign = manager.startFromGdd(ctx, readFileSync(join(projectRoot, "docs", "Game_GDD.md"), "utf8"), "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     settleMilestone("sprint A done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     settleMilestone("sprint B done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
     const green = { testsGreen: true, detail: "PlayMode verification passed: 179 of 179 tests passed (unfiltered — the whole PlayMode suite)", unfiltered: true };
     tasks.verifications.set("task_3", green);
     tasks.emit("task:completed", "task_3", "green, shipping");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(4));
     const prompt = tasks.submitted[3]!.prompt;
     expect(prompt).toContain("L7 Dragon Boss");
     expect(prompt).toContain("the code never mentions");
@@ -1028,7 +1075,7 @@ describe("CampaignManager", () => {
     writeFileSync(join(projectRoot, "Assets", "Scripts", "DragonBoss.cs"), "public class DragonBoss {}");
     tasks.verifications.set("task_4", green);
     tasks.emit("task:completed", "task_4", "dragon built, shipping");
-    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"), { timeout: 15_000 });
+    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"), { timeout: 15_000 });
     expect(storage.get(campaign.id)!.milestones[2]!.structureFindings?.join("\n")).toContain("all 2 scheduled element(s) have a trace in code");
   });
 
@@ -1051,15 +1098,15 @@ describe("CampaignManager", () => {
     const gdd = "# GDD\n\n## Audio\nMusic base loop per area; SFX for tap, merge and win; audio ducks on pause.\n";
     writeFileSync(join(projectRoot, "docs", "Game_GDD.md"), gdd);
     const campaign = manager.startFromGdd(ctx, gdd, "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     settleMilestone("sprint A done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     settleMilestone("sprint B done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
     const green = { testsGreen: true, detail: "PlayMode verification passed: 179 of 179 tests passed (unfiltered — the whole PlayMode suite)", unfiltered: true };
     tasks.verifications.set("task_3", green);
     tasks.emit("task:completed", "task_3", "green, shipping");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(4));
     expect(tasks.submitted[3]!.prompt).toContain("DELIVERY REFUSED — THE GAME IS NOT BUILT AS THE GDD SPECIFIES: the GDD specifies audio (");
     expect(tasks.submitted[3]!.prompt).toContain("the delivery is silent");
     expect(storage.get(campaign.id)!.milestones[2]!.structureRefused).toBe(true);
@@ -1071,7 +1118,7 @@ describe("CampaignManager", () => {
     );
     tasks.verifications.set("task_4", green);
     tasks.emit("task:completed", "task_4", "audio wired, shipping");
-    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"), { timeout: 15_000 });
+    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"), { timeout: 15_000 });
     expect(storage.get(campaign.id)!.milestones[2]!.structureFindings?.join("\n")).toContain("1 AudioSource(s), 1 bound to a clip; 1 of the project's 1 clip(s) are reachable");
   });
 
@@ -1079,15 +1126,15 @@ describe("CampaignManager", () => {
     mkdirSync(join(projectRoot, "Recordings", "playthrough"), { recursive: true });
     writeFileSync(join(projectRoot, "Recordings", "playthrough", "frame_00012.png"), Buffer.from("89504e470d0a1a0a", "hex"));
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     settleMilestone("sprint A done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     settleMilestone("sprint B done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
     tasks.verifications.set("task_3", { testsGreen: true, detail: "179 of 179 tests passed (unfiltered — the whole PlayMode suite)", unfiltered: true });
     tasks.emit("task:completed", "task_3", "green, shipping");
-    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
-    await vi.waitFor(() => expect(attached).toHaveLength(1));
+    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+    await waitFor(() => expect(attached).toHaveLength(1));
     expect(attached[0]).toMatchObject({ chatId: "cli-local", name: "frame_00012.png", type: "image" });
     expect(attached[0]!.url).toBe(join(projectRoot, "Recordings", "playthrough", "frame_00012.png"));
   });
@@ -1099,15 +1146,15 @@ describe("CampaignManager", () => {
     buildVerdict = { ran: true, ok: true, target: "Android", artifactPath: "/tmp/Builds/Android/Game.apk", sizeBytes: 88_000_000, durationMs: 120_000, scenes: 2 };
     playerVerdictOnRun = { ok: true, extra: { perf: { medium: "player", bootSeconds: 1.1, playSeconds: 10, playFrames: 420, avgFps: 42, worstFrameMs: 70 } } };
     const campaign = manager.startFromGdd(ctx, gdd, "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     settleMilestone("sprint A done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     settleMilestone("sprint B done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
     const green = { testsGreen: true, detail: "PlayMode verification passed: 179 of 179 tests passed (unfiltered — the whole PlayMode suite)", unfiltered: true };
     tasks.verifications.set("task_3", green);
     tasks.emit("task:completed", "task_3", "green, shipping");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(4));
     expect(playerRuns).toEqual(["/tmp/Builds/Android/Game.apk"]);
     expect(buildTargetsAsked).toContain("android");
     expect(tasks.submitted[3]!.prompt).toContain("THE GDD'S OWN NUMBERS ARE NOT MET: frame rate ≥ 60 fps measured 42 fps");
@@ -1117,7 +1164,7 @@ describe("CampaignManager", () => {
     playerVerdictOnRun = { ok: false, extra: {} };
     tasks.verifications.set("task_4", green);
     tasks.emit("task:completed", "task_4", "green, shipping");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(5));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(5));
     expect(tasks.submitted[4]!.prompt).toContain("PLAYER PLAY-THROUGH FAILED: the campaign built the player and played it (unity_run_player); play-through FAILED in Entry: session 1 never ended");
 
     // Fast enough and played to an outcome: delivered, with the player line in the report.
@@ -1126,7 +1173,7 @@ describe("CampaignManager", () => {
     tasks.emit("task:completed", "task_5", "green, shipping");
     // Say WHICH proof went missing when this fails (CI coverage 2026-09-10
     // reported only "expected 'failed' to be 'done'").
-    await vi.waitFor(() => {
+    await waitFor(() => {
       const c = storage.get(campaign.id)!;
       const m = c.milestones[2];
       const verdictPath = join(projectRoot, "Recordings", "playthrough", "playthrough-verdict.json");
@@ -1145,16 +1192,16 @@ describe("CampaignManager", () => {
     const gdd = "# GDD\n\nA small game.";
     compileVerdict = { ok: false, ran: false, detail: "the Unity bridge is not connected" };
     const campaign = manager.startFromGdd(ctx, gdd, "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     settleMilestone("sprint A done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     settleMilestone("sprint B done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
     const green = { testsGreen: true, detail: "PlayMode verification passed: 42 of 42 tests passed (unfiltered — the whole PlayMode suite)", unfiltered: true };
     tasks.verifications.set("task_3", green);
     tasks.emit("task:completed", "task_3", "green, shipping");
 
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(4));
     const m = storage.get(campaign.id)!.milestones[2]!;
     expect(m.deliveryProofsMissing?.join(" ")).toContain("the compile check did not run");
     expect(storage.get(campaign.id)!.state).not.toBe("done");
@@ -1163,7 +1210,7 @@ describe("CampaignManager", () => {
     buildVerdict = { ran: false, detail: "no player builder is configured" };
     tasks.verifications.set("task_4", green);
     tasks.emit("task:completed", "task_4", "green, shipping");
-    await vi.waitFor(() => {
+    await waitFor(() => {
       const missing = storage.get(campaign.id)!.milestones[2]!.deliveryProofsMissing?.join(" ") ?? "";
       expect(missing).toContain("the player build did not run");
     }, { timeout: 15_000 });
@@ -1172,16 +1219,16 @@ describe("CampaignManager", () => {
 
   it("a non-final sprint that does not compile is bounced, then fails — it does not advance the ladder (Codex 2026-09-11 B#14)", async () => {
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     compileVerdict = { ok: false, ran: true, errors: 12, detail: "Headless compile failed with 12 error(s)." };
     settleMilestone("sprint A done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     // Still sprint 1: the tree does not build, so the ladder did not move on.
     expect(storage.get(campaign.id)!.currentMilestone).toBe(0);
     expect(tasks.submitted[1]!.prompt).toContain("THE PROJECT DOES NOT COMPILE");
     expect(storage.get(campaign.id)!.milestones[0]!.status).not.toBe("green");
     settleMilestone("sprint A done again");
-    await vi.waitFor(() => expect(tasks.submitted.length).toBeGreaterThanOrEqual(3));
+    await waitFor(() => expect(tasks.submitted.length).toBeGreaterThanOrEqual(3));
     expect(storage.get(campaign.id)!.currentMilestone).toBe(0);
     compileVerdict = { ok: true, ran: true, errors: 0 };
   });
@@ -1192,11 +1239,11 @@ describe("CampaignManager", () => {
     onTaskCompleted = () => {};
     writePlaythroughVerdict(true);
     const campaign = manager.startFromGdd(ctx, gdd, "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     settleMilestone("sprint A done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     settleMilestone("sprint B done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
     // A verdict earned during the FIRST attempt at the final sprint: written
     // one millisecond after that attempt began, and never renewed.
     const firstAttemptStart = storage.get(campaign.id)!.milestones[2]!.attemptStartedAtMs!;
@@ -1209,7 +1256,7 @@ describe("CampaignManager", () => {
     // The player run fails, so the sprint bounces with the verdict still on disk.
     playerVerdictOnRun = { ok: false, extra: {} };
     tasks.emit("task:completed", "task_3", "green, shipping");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(4));
 
     // Second attempt: the game was NOT replayed, and the old verdict no longer
     // counts — the attempt clock moved even though the milestone clock did not.
@@ -1218,7 +1265,7 @@ describe("CampaignManager", () => {
     playerVerdictOnRun = { ok: true, extra: {} };
     tasks.verifications.set("task_4", green);
     tasks.emit("task:completed", "task_4", "green, shipping");
-    await vi.waitFor(() => {
+    await waitFor(() => {
       const m = storage.get(campaign.id)!.milestones[2]!;
       expect(m.playthroughVerdict?.stale === true || m.playthroughVerdict?.found === false).toBe(true);
     }, { timeout: 15_000 });
@@ -1262,7 +1309,7 @@ describe("CampaignManager", () => {
     });
     manager.attachEvents();
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     const stored = storage.get(campaign.id)!;
     expect(stored.planCoverage).toEqual({ covered: 2, total: 3, uncovered: ["6. Audio"], excluded: ["leaderboards: the GDD says none in v1"], minMilestones: 3, maxMilestones: 6 });
     expect(stored.milestones[0]!.coveredSections).toEqual(["1. Core Loop"]);
@@ -1276,16 +1323,16 @@ describe("CampaignManager", () => {
   it("the NUnit run record outranks the tool's prose: a red file bounces a 'green' sentence, an unfiltered file delivers a 'filtered' one (2026-09-10)", async () => {
     const writeRun = (record: Record<string, unknown>): void => { runRecordOnSettle = record; };
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     settleMilestone("sprint A done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     settleMilestone("sprint B done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
     // Prose says green and unfiltered; the file says 10 failed.
     writeRun({ total: 215, passed: 205, failed: 10, failedNames: ["Game.Tests.WinLevel_ReachesWonState"], filter: null, categories: null, unfiltered: true });
     tasks.verifications.set("task_3", { testsGreen: true, detail: "PlayMode verification passed: 215 of 215 tests passed (unfiltered — the whole PlayMode suite)", unfiltered: true });
     tasks.emit("task:completed", "task_3", "green, shipping");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(4));
     const m = storage.get(campaign.id)!.milestones[2]!;
     // A red record at completion is a FAILED attempt (Codex 2026-09-11 B#14), not a green sprint bounced later.
     expect(m.testVerdict).toBeUndefined();
@@ -1298,7 +1345,7 @@ describe("CampaignManager", () => {
     writeRun({ total: 215, passed: 215, failed: 0, failedNames: [], filter: null, categories: null, unfiltered: true });
     tasks.verifications.set("task_4", { testsGreen: true, detail: "PlayMode verification passed: 12 of 12 tests passed (filter: Something)", unfiltered: false });
     tasks.emit("task:completed", "task_4", "green, shipping");
-    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"), { timeout: 15_000 });
+    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"), { timeout: 15_000 });
     expect(storage.get(campaign.id)!.milestones[2]!.testVerdict).toBe("PlayMode verification passed: 215 of 215 tests passed (unfiltered — the whole PlayMode suite)");
   });
 
@@ -1313,18 +1360,18 @@ describe("CampaignManager", () => {
     let asked = 0;
     visionChat = async () => { asked++; return { text: answers.shift() ?? "MATCH: yes" }; };
     const campaign = manager.startFromGdd(ctx, gdd, "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     settleMilestone("sprint A done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     settleMilestone("sprint B done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
     // A frame of the running game captured during the final sprint.
     mkdirSync(join(projectRoot, "Recordings", "playthrough"), { recursive: true });
     writeFileSync(join(projectRoot, "Recordings", "playthrough", "frame_00040.png"), Buffer.from("89504e470d0a1a0a", "hex"));
     const green = { testsGreen: true, detail: "PlayMode verification passed: 179 of 179 tests passed (unfiltered — the whole PlayMode suite)", unfiltered: true };
     tasks.verifications.set("task_3", green);
     tasks.emit("task:completed", "task_3", "green, shipping");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(4));
     expect(asked).toBe(1);
     expect(tasks.submitted[3]!.prompt).toContain("LOOK DOES NOT MATCH THE GDD: a vision model judged the newest captured frame");
     expect(tasks.submitted[3]!.prompt).toContain("flat grey grid and no pigs");
@@ -1335,16 +1382,16 @@ describe("CampaignManager", () => {
     writeFileSync(join(projectRoot, "Recordings", "playthrough", "frame_00041.png"), Buffer.from("89504e470d0a1a0a", "hex"));
     tasks.verifications.set("task_4", green);
     tasks.emit("task:completed", "task_4", "look fixed, shipping");
-    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"), { timeout: 15_000 });
+    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"), { timeout: 15_000 });
     const report = messages.map((m) => m.text).join("\n");
     expect(report).toContain("MATCH — Plump pigs on a warm stage, as described.");
   });
 
   it("measures what the shipped scenes hold at EVERY sprint end, not only at delivery (2026-09-10)", async () => {
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     settleMilestone("sprint A done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     const first = storage.get(campaign.id)!.milestones[0]!;
     expect(first.status).toBe("green");
     expect(first.structureFindings?.length ?? 0).toBeGreaterThan(0);
@@ -1353,11 +1400,11 @@ describe("CampaignManager", () => {
 
   it("delivers on an UNFILTERED green", async () => {
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     settleMilestone("sprint A done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     settleMilestone("sprint B done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
 
     tasks.verifications.set("task_3", {
       testsGreen: true,
@@ -1365,7 +1412,7 @@ describe("CampaignManager", () => {
       unfiltered: true,
     });
     tasks.emit("task:completed", "task_3", "green, shipping");
-    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
   });
 
   /**
@@ -1409,11 +1456,11 @@ describe("CampaignManager", () => {
   /** Walk the ladder to the final sprint (task_3 in flight). */
   const reachFinalSprint = async (): Promise<ReturnType<typeof manager.startFromGdd>> => {
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     settleMilestone("sprint A done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     settleMilestone("sprint B done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
     return campaign;
   };
 
@@ -1468,7 +1515,7 @@ describe("CampaignManager", () => {
     const campaign = await reachFinalSprint();
 
     settleMilestone("green, shipping");
-    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
 
     const report = messages.find((m) => m.text.includes("Campaign delivery"))!.text;
     // The build's FIRST enabled scene is what a person opens; the richest is
@@ -1490,7 +1537,7 @@ describe("CampaignManager", () => {
     const campaign = await reachFinalSprint();
 
     settleMilestone("green, shipping");
-    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
 
     const report = messages.find((m) => m.text.includes("Campaign delivery"))!.text;
     expect(report).toContain("Assets/Scenes/Main.unity");
@@ -1503,7 +1550,7 @@ describe("CampaignManager", () => {
     const campaign = await reachFinalSprint();
 
     settleMilestone("green, shipping");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(4));
 
     expect(storage.get(campaign.id)!.state).toBe("executing");
     expect(storage.get(campaign.id)!.milestones[2]!.sceneHygieneBounces).toBe(1);
@@ -1527,7 +1574,7 @@ describe("CampaignManager", () => {
         unfiltered: true,
       });
       tasks.emit("task:completed", `task_${taskNo}`, "shipping it, honest");
-      await vi.waitFor(() =>
+      await waitFor(() =>
         expect(tasks.submitted.length > before || storage.get(campaign.id)!.state === "done").toBe(true),
       );
       taskNo++;
@@ -1565,7 +1612,7 @@ describe("CampaignManager", () => {
       unfiltered: true,
     });
     tasks.emit("task:completed", "task_3", "green, shipping");
-    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
 
     const readme = readFileSync(join(projectRoot, "HOW_TO_RUN.md"), "utf8");
     expect(readme).toContain("6000.3.22f1");
@@ -1593,7 +1640,7 @@ describe("CampaignManager", () => {
       unfiltered: true,
     });
     tasks.emit("task:completed", "task_3", "green, shipping");
-    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
 
     const readme = readFileSync(join(projectRoot, "HOW_TO_RUN.md"), "utf8");
     expect(readme).toContain("Unknown — ProjectSettings/ProjectVersion.txt could not be read");
@@ -1613,15 +1660,15 @@ describe("CampaignManager", () => {
     // attempt also ran no tests, the single bounce was spent, and the ladder
     // delivered a game whose suite was never seen to pass.
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     settleMilestone("sprint A done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     settleMilestone("sprint B done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
 
     // Final sprint completes with NO test verdict — twice.
     tasks.emit("task:completed", "task_3", "shipping it");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(4));
     expect(tasks.submitted[3]!.prompt).toContain("DELIVERY VERIFICATION REQUIRED");
 
     // Other gates (visual evidence, no-work) can bounce a settle first, so
@@ -1630,7 +1677,7 @@ describe("CampaignManager", () => {
     while ((storage.get(campaign.id)!.milestones[2]!.deliveryVerificationBounces ?? 0) < 2 && taskNo < 9) {
       const submittedBefore = tasks.submitted.length;
       tasks.emit("task:completed", `task_${taskNo}`, "shipping it, honest");
-      await vi.waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(submittedBefore));
+      await waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(submittedBefore));
       taskNo++;
     }
 
@@ -1648,15 +1695,15 @@ describe("CampaignManager", () => {
     // planner prompt — a final sprint whose task printed no test result
     // carried no verdict and delivery was declared anyway.
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     settleMilestone("sprint A done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     settleMilestone("sprint B done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
 
     // Final sprint completes with NO observed test verdict.
     tasks.emit("task:completed", "task_3", "everything works, shipping it");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(4));
 
     expect(storage.get(campaign.id)!.state).toBe("executing");
     expect(tasks.submitted[3]!.prompt).toContain("DELIVERY VERIFICATION REQUIRED");
@@ -1720,7 +1767,7 @@ describe("CampaignManager", () => {
     // work and the default timed out under a full-suite run twice today —
     // a slow machine is not a defect in the ladder.
     const settled = (n: number): Promise<void> =>
-      vi.waitFor(() => expect(tasks.submitted).toHaveLength(n), { timeout: 5_000 });
+      waitFor(() => expect(tasks.submitted).toHaveLength(n), { timeout: 5_000 });
     await settled(1);
     settleMilestone("sprint A done");
     await settled(2);
@@ -1735,14 +1782,14 @@ describe("CampaignManager", () => {
     // real-art source; its death is news.
     const DEAD = "The Unity account link expired or was revoked — re-run the Unity Link step. Detail: token refresh returned HTTP 412";
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
 
     // settleMilestone() overwrites the verification with its own green; set
     // ours and emit directly, green AND blind, so the ladder still walks.
     const GREEN = "All 42 tests passed (unfiltered — the whole PlayMode suite)";
     tasks.verifications.set("task_1", { testsGreen: true, detail: GREEN, unfiltered: true, assetSourcingBlind: DEAD } as never);
     tasks.emit("task:completed", "task_1", "sprint A done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     const told = messages.filter((m) => m.text.includes("Asset sourcing is BLIND"));
     expect(told).toHaveLength(1);
     expect(told[0]!.text).toContain("strada unity-link");
@@ -1751,7 +1798,7 @@ describe("CampaignManager", () => {
     // A second affected sprint does not repeat the alarm…
     tasks.verifications.set("task_2", { testsGreen: true, detail: GREEN, unfiltered: true, assetSourcingBlind: DEAD } as never);
     tasks.emit("task:completed", "task_2", "sprint B done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
     expect(messages.filter((m) => m.text.includes("Asset sourcing is BLIND"))).toHaveLength(1);
 
     // …but the delivery report names every sprint it happened to.
@@ -1762,7 +1809,7 @@ describe("CampaignManager", () => {
       unfiltered: true,
     });
     tasks.emit("task:completed", "task_3", "shipping it");
-    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
     const report = messages.map((m) => m.text).find((t) => t.includes("Campaign delivery"))!;
     expect(report).toContain("asset sourcing BLIND");
     expect((report.match(/purchased library was unreachable/g) ?? []).length).toBe(2);
@@ -1775,11 +1822,11 @@ describe("CampaignManager", () => {
     // no gate at all. Every other gate reads what a run REPORTED; none asked
     // the compiler.
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     settleMilestone("sprint A done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     settleMilestone("sprint B done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
 
     compileVerdict = { ok: false, ran: true, errors: 37, detail: "Headless compile failed with 37 error(s)." };
     // An UNFILTERED green — the strongest evidence a sprint can bring. It is
@@ -1791,7 +1838,7 @@ describe("CampaignManager", () => {
     });
     tasks.emit("task:completed", "task_3", "shipping it");
 
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(4));
     expect(storage.get(campaign.id)!.state).toBe("executing");
     // The compiler leads the bounce: a suite run means nothing until it builds.
     const prompt = tasks.submitted[3]!.prompt;
@@ -1805,11 +1852,11 @@ describe("CampaignManager", () => {
   it("delivers on an unfiltered green once the project compiles", async () => {
     // The other half of the same gate: it must not become a wall.
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     settleMilestone("sprint A done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     settleMilestone("sprint B done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
 
     compileVerdict = { ok: true, ran: true, errors: 0 };
     tasks.verifications.set("task_3", {
@@ -1819,7 +1866,7 @@ describe("CampaignManager", () => {
     });
     tasks.emit("task:completed", "task_3", "shipping it");
 
-    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
     const report = messages.map((m) => m.text).find((t) => t.includes("Campaign delivery"))!;
     expect(report).toContain("compiles");
   });
@@ -1843,7 +1890,7 @@ describe("CampaignManager", () => {
       if (tasks.submitted.length === before) break;
     }
 
-    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).not.toBe("executing"));
+    await waitFor(() => expect(storage.get(campaign.id)!.state).not.toBe("executing"));
     expect(storage.get(campaign.id)!.state).toBe("failed");
     const report = messages.map((m) => m.text).find((t) => t.includes("NOT DELIVERED"))!;
     expect(report).toBeDefined();
@@ -1862,7 +1909,7 @@ describe("CampaignManager", () => {
     const campaign = await runLadderToDelivery();
 
     settleMilestone("integrated, all 42 tests pass");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(4));
 
     const after = storage.get(campaign.id)!;
     expect(after.state).toBe("executing");
@@ -1883,7 +1930,7 @@ describe("CampaignManager", () => {
     const campaign = await runLadderToDelivery();
 
     settleMilestone("integrated, all 42 tests pass");
-    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
 
     expect(storage.get(campaign.id)!.milestones[2]!.structureRefused).not.toBe(true);
     const report = messages.at(-1)!.text;
@@ -1903,7 +1950,7 @@ describe("CampaignManager", () => {
     );
 
     settleMilestone("integrated, all 42 tests pass");
-    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
 
     const report = messages.at(-1)!.text;
     expect(report).toContain("The GDD asks for 3D");
@@ -1919,7 +1966,7 @@ describe("CampaignManager", () => {
     // report must not read like one that measured and found nothing wrong.
     const campaign = await runLadderToDelivery();
     settleMilestone("integrated, all 42 tests pass");
-    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
 
     const report = messages.at(-1)!.text;
     expect(report).toContain("NOT measured: no Assets/ directory");
@@ -1928,14 +1975,14 @@ describe("CampaignManager", () => {
 
   it("a milestone retry carries the previous attempt's progress without persisting it", async () => {
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
 
     tasks.progressBlocks.set(
       "task_1",
       "\n\nPREVIOUS ATTEMPT PROGRESS (verify before redoing any of it):\n- Assets/Scripts/Board.cs",
     );
     tasks.emit("task:failed", "task_1", "compile exploded");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
 
     // The SUBMITTED prompt carries the progress block…
     expect(tasks.submitted[1]!.prompt).toContain("PREVIOUS ATTEMPT PROGRESS");
@@ -1947,7 +1994,7 @@ describe("CampaignManager", () => {
 
   it("strips retry-machinery noise from the failure tail and keeps only one tail", async () => {
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
 
     // (Reaped/Auto-retry wording is settlement-deferred by design, so the
     // noise strip is exercised with the non-deferring machinery preface.)
@@ -1956,7 +2003,7 @@ describe("CampaignManager", () => {
       "task_1",
       "Transient failure — worker crashed mid-epoch. Board.cs does not compile",
     );
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     const prompt1 = storage.get(campaign.id)!.milestones[0]!.prompt;
     expect(prompt1).toContain("Board.cs does not compile");
     expect(prompt1).not.toContain("Transient failure —");
@@ -1976,11 +2023,11 @@ describe("CampaignManager", () => {
     await new Promise((r) => setTimeout(r, 1100));
 
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
 
     // Completion with a clean tree and no commits since the sprint began.
     settleMilestone("sprint A done (allegedly)");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     const bounced = storage.get(campaign.id)!;
     expect(bounced.milestones[0]!.status).toBe("running");
     expect(bounced.milestones[0]!.prompt).toContain("NO WORK DETECTED");
@@ -1988,14 +2035,14 @@ describe("CampaignManager", () => {
 
     // Second completion stands either way (one bounce per milestone).
     settleMilestone("sprint A done again");
-    await vi.waitFor(() => expect(storage.get(campaign.id)!.milestones[0]!.status).toBe("green"));
+    await waitFor(() => expect(storage.get(campaign.id)!.milestones[0]!.status).toBe("green"));
   });
 
   it("time-box forces scope narrowing when a sprint spins past its budget", async () => {
     // Measured 2026-08-31: m6 ran 22h at attempts=1 because bounces and
     // deferrals deliberately never burn attempts — nothing bounded the run.
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
 
     // Backdate the clock past the box, then settle badly.
     const stored = storage.get(campaign.id)!;
@@ -2003,7 +2050,7 @@ describe("CampaignManager", () => {
     storage.save(stored);
 
     tasks.emit("task:failed", "task_1", "compile still red");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
 
     const fresh = storage.get(campaign.id)!;
     expect(tasks.submitted[1]!.prompt).toContain("TIME BOX");
@@ -2018,7 +2065,7 @@ describe("CampaignManager", () => {
     again.milestones[0]!.startedAtMs = Date.now() - 3 * 60 * 60_000;
     storage.save(again);
     tasks.emit("task:failed", "task_2", "compile still red");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3), { timeout: 5_000 });
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3), { timeout: 5_000 });
     const prompt = tasks.submitted[2]!.prompt;
     expect(prompt.match(/TIME BOX \(/g)).toHaveLength(1);
     expect(prompt).toContain("escalation 2/2");
@@ -2029,7 +2076,7 @@ describe("CampaignManager", () => {
     // Measured 2026-09-01: m6 ran 7h+ with timeBoxEscalations=0 because every
     // settle was adopted as an executor retry and never reached an outcome.
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
 
     const stored = storage.get(campaign.id)!;
     stored.milestones[0]!.startedAtMs = Date.now() - 4 * 60 * 60_000;
@@ -2040,7 +2087,7 @@ describe("CampaignManager", () => {
     tasks.emit("task:blocked", "task_1", "Reaped: no progress signal for 60 minutes.");
     void retryId;
 
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     const fresh = storage.get(campaign.id)!;
     expect(fresh.milestones[0]!.timeBoxEscalations).toBe(1);
     expect(tasks.submitted[1]!.prompt).toContain("NARROW THE SCOPE");
@@ -2058,21 +2105,21 @@ describe("CampaignManager", () => {
 
     try {
       const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-      await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+      await waitFor(() => expect(tasks.submitted).toHaveLength(1));
       expect(storage.get(campaign.id)!.milestones[0]!.attempts).toBe(1);
 
       // The chain goes down while the task runs; the settle carries the outage.
       registry.recordOverloaded("cm-cool", "quota wall");
       tasks.updatedAts.set("task_1", Date.now() - 30 * 60_000);
       tasks.emit("task:failed", "task_1", "Task execution failed: All providers are in cooldown. Auto-retry 1/10 in ~30s.");
-      await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"));
+      await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"));
       expect(tasks.submitted).toHaveLength(1); // parked, not resubmitted into the wall
       expect(storage.get(campaign.id)!.autoReviveAt).toBeGreaterThan(Date.now());
       expect(storage.get(campaign.id)!.milestones[0]!.attempts).toBe(1); // not charged
 
       registry.clearProviderState("cm-cool");
       (manager as unknown as { scheduleAutoRevive(id: string, ms: number): void }).scheduleAutoRevive(campaign.id, 20);
-      await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+      await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     } finally {
       setLiveChainMemberNames([]);
       registry.clearProviderState("cm-cool");
@@ -2084,14 +2131,14 @@ describe("CampaignManager", () => {
     // sub-goal note, every provider healthy, 22 minutes deferred to a
     // keep-alive retry that never existed.
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     tasks.emit(
       "task:blocked",
       "task_1",
       "Completed:\nI got stuck on this task after multiple approaches.\n\nBlocked:\n[goal_x] provider_unavailable",
     );
     // Judged now — attempt 2 submitted within seconds, not after a 10-minute re-check.
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2), { timeout: 5_000 });
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2), { timeout: 5_000 });
     expect(storage.get(campaign.id)!.milestones[0]!.reconcileDeferredSince).toBeUndefined();
   });
 
@@ -2100,10 +2147,10 @@ describe("CampaignManager", () => {
     // with "shutting down", the milestone was charged its second attempt and
     // the campaign stopped — on a routine deploy, with no revival armed.
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     tasks.updatedAts.set("task_1", Date.now() - 30 * 60_000);
     tasks.emit("task:blocked", "task_1", "The task was stopped before it finished (shutting down). Any changes it made have been kept.");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
 
     expect(storage.get(campaign.id)!.milestones[0]!.attempts).toBe(1);
     expect(storage.get(campaign.id)!.state).toBe("executing");
@@ -2114,14 +2161,14 @@ describe("CampaignManager", () => {
     // stopped the process, and the exemption — gated behind canRetry — did
     // not run, so the deploy itself ended the campaign.
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     const stored = storage.get(campaign.id)!;
     stored.milestones[0]!.attempts = 2; // budget already spent
     storage.save(stored);
     tasks.updatedAts.set("task_1", Date.now() - 30 * 60_000);
 
     tasks.emit("task:blocked", "task_1", "The task was stopped before it finished (shutting down). Any changes it made have been kept.");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
 
     const after = storage.get(campaign.id)!;
     expect(after.state).toBe("executing");
@@ -2137,16 +2184,16 @@ describe("CampaignManager", () => {
 
     try {
       const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-      await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+      await waitFor(() => expect(tasks.submitted).toHaveLength(1));
       registry.recordOverloaded("cm-cool2", "quota wall");
       tasks.updatedAts.set("task_1", Date.now() - 30 * 60_000);
       tasks.emit("task:blocked", "task_1", "Blocked:\n[goal_1] blocked:provider_unavailable. Auto-retry 2/10 in ~30s.");
-      await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"));
+      await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"));
       expect(tasks.submitted).toHaveLength(1);
       expect(storage.get(campaign.id)!.milestones[0]!.attempts).toBe(1); // not charged
       registry.clearProviderState("cm-cool2");
       (manager as unknown as { scheduleAutoRevive(id: string, ms: number): void }).scheduleAutoRevive(campaign.id, 20);
-      await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+      await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     } finally {
       setLiveChainMemberNames([]);
       registry.clearProviderState("cm-cool2");
@@ -2158,7 +2205,7 @@ describe("CampaignManager", () => {
     // task active anywhere, yet reconcile re-deferred every cycle to a retry
     // that no longer existed — the campaign idled behind a ghost promise.
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
 
     // Tip promises a 1s retry but its updatedAt is 10 minutes old: promise dead.
     tasks.updatedAts.set("task_1", Date.now() - 10 * 60_000);
@@ -2168,7 +2215,7 @@ describe("CampaignManager", () => {
       "Transient failure — worker crashed. Auto-retry 1/10 in ~1s.",
     );
     // Not deferred: the outcome is judged and the retry branch resubmits.
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     expect(storage.get(campaign.id)!.milestones[0]!.status).toBe("running");
   });
 
@@ -2177,7 +2224,7 @@ describe("CampaignManager", () => {
     // (same second, doubled task:blocked emission) consumed the one-shot flag
     // and submitted attempt 2 into a 68-minute quota wall.
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
 
     const parkText = "Transient failure — All providers are in cooldown. Auto-retry 2/10 in ~4105s.";
     tasks.emit("task:blocked", "task_1", parkText);
@@ -2205,13 +2252,13 @@ describe("CampaignManager", () => {
 
     try {
       const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-      await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+      await waitFor(() => expect(tasks.submitted).toHaveLength(1));
       // The chain goes down while the task runs. Non-outage wording (reconcile
       // must not defer) — the health check at submit time is what parks it.
       registry.recordOverloaded("claude", "quota wall");
       tasks.emit("task:failed", "task_1", "2 fresh plans produced nothing new");
 
-      await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"));
+      await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"));
       expect(tasks.submitted).toHaveLength(1);
       const parked = storage.get(campaign.id)!;
       expect(parked.autoReviveAt).toBeGreaterThan(Date.now());
@@ -2221,7 +2268,7 @@ describe("CampaignManager", () => {
       registry.clearProviderState("claude");
       (manager as unknown as { scheduleAutoRevive(id: string, ms: number): void })
         .scheduleAutoRevive(campaign.id, 20);
-      await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("executing"));
+      await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("executing"));
       const revived = storage.get(campaign.id)!;
       expect(revived.autoReviveAt).toBeUndefined();
       expect(tasks.submitted.length).toBeGreaterThanOrEqual(2);
@@ -2233,9 +2280,9 @@ describe("CampaignManager", () => {
 
   it("'kampanya devam' revives a failed campaign with a fresh attempt budget", async () => {
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     tasks.emit("task:failed", "task_1", "boom");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     // Through the bounded self-revivals first (Codex 2026-09-11 F#1) — only a
     // campaign that has spent those stops and waits for a person.
     await failUntilStopped(campaign.id, "boom again");
@@ -2243,7 +2290,7 @@ describe("CampaignManager", () => {
     const beforeRevive = tasks.submitted.length;
     const consumed = await manager.tryHandleRevive("cli-local", "kampanya devam");
     expect(consumed).toBe(true);
-    await vi.waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(beforeRevive));
+    await waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(beforeRevive));
     const fresh = storage.get(campaign.id)!;
     expect(fresh.state).toBe("executing");
     expect(fresh.milestones[0]!.attempts).toBe(1); // fresh budget, one new attempt
@@ -2259,11 +2306,11 @@ describe("CampaignManager", () => {
     git("config", "user.name", "Test");
 
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
 
     writeFileSync(join(projectRoot, "SprintWork.cs"), "class SprintWork {}");
     tasks.emit("task:completed", "task_1", "sprint A done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
 
     // Recordings/ is Strada's own output (the run record the sprint left); it
     // is never committed — see DEFAULT_WORKSPACE_COPY_EXCLUDES.
@@ -2287,7 +2334,7 @@ describe("CampaignManager", () => {
     git("commit", "-q", "-m", "an earlier envelope swept Recordings in");
 
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     writeFileSync(join(projectRoot, "SprintWork.cs"), "class SprintWork {}");
     mkdirSync(join(projectRoot, "Recordings", "this-run"), { recursive: true });
     writeFileSync(join(projectRoot, "Recordings", "this-run", "frame_0.png"), "y");
@@ -2296,7 +2343,7 @@ describe("CampaignManager", () => {
     // (measured 2026-09-10 with a sprite generator running) it overran
     // waitFor's default second and this test failed for reasons unrelated to
     // what it asserts.
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2), { timeout: 15_000 });
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2), { timeout: 15_000 });
 
     expect(git("log", "-1", "--pretty=%s")).toContain("milestone green");
     expect(git("ls-files", "--", "Recordings").trim()).toBe(""); // untracked now
@@ -2336,14 +2383,14 @@ describe("CampaignManager", () => {
     manager.attachEvents();
 
     const campaign = manager.startFromGdd(ctx, "# GDD text", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     settleMilestone("sprint A done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     settleMilestone("sprint B done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
 
     settleMilestone("final report"); // last planned milestone → audit fires, finds a gap
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(4));
     expect(tasks.submitted[3]!.prompt).toContain("Dragon boss");
     expect(storage.get(campaign.id)!.state).toBe("executing");
 
@@ -2352,11 +2399,11 @@ describe("CampaignManager", () => {
     // bounces once — the gap-closing sprint is exactly the one that must not
     // be allowed to go green blind.
     settleMilestone("dragon implemented");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(5));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(5));
     expect(tasks.submitted[4]!.prompt).toContain("VISUAL EVIDENCE MISSING");
 
     settleMilestone("dragon implemented, frames captured");
-    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
   });
 
   it("schedules one gap sprint per audit finding, art first, and moves past a spent one", async () => {
@@ -2395,13 +2442,13 @@ describe("CampaignManager", () => {
     manager.attachEvents();
 
     const campaign = manager.startFromGdd(ctx, "# GDD text", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     settleMilestone("sprint A done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     settleMilestone("sprint B done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
     settleMilestone("final report");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4), { timeout: 5_000 });
+    await waitFor(() => expect(tasks.submitted).toHaveLength(4), { timeout: 5_000 });
 
     const ids = storage.get(campaign.id)!.milestones.map((m) => m.id);
     expect(ids).toEqual(["m1", "m2", "m3", "mcov1", "mcov1-2", "mcov1-3"]);
@@ -2412,9 +2459,9 @@ describe("CampaignManager", () => {
 
     // The art sprint spends both attempts: the campaign moves to the audio gap.
     tasks.emit("task:failed", "task_4", "no art was made");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(5), { timeout: 5_000 });
+    await waitFor(() => expect(tasks.submitted).toHaveLength(5), { timeout: 5_000 });
     tasks.emit("task:failed", "task_5", "no art was made");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(6), { timeout: 5_000 });
+    await waitFor(() => expect(tasks.submitted).toHaveLength(6), { timeout: 5_000 });
     const after = storage.get(campaign.id)!;
     expect(after.state).toBe("executing");
     expect(after.milestones[3]!.status).toBe("failed");
@@ -2455,22 +2502,22 @@ describe("CampaignManager", () => {
     manager.attachEvents();
 
     const campaign = manager.startFromGdd(ctx, "# GDD text", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     settleMilestone("sprint A done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     settleMilestone("sprint B done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
     settleMilestone("final report"); // audit finds the gap → mcov1 appended
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(4));
 
     // The remediation sprint burns both its attempts without landing green.
     tasks.emit("task:failed", "task_4", "the boss scene will not compile");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(5));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(5));
     tasks.emit("task:failed", "task_5", "the boss scene will not compile");
 
     // Not `done` on that: the game was never re-proven after the remediation
     // touched it. A final proof sprint is the ladder's last milestone now.
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(6));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(6));
     expect(storage.get(campaign.id)!.state).toBe("executing");
     expect(tasks.submitted[5]!.prompt).toContain("FINAL DELIVERY PROOFS");
     expect(tasks.submitted[5]!.prompt).toContain("Dragon boss");
@@ -2480,7 +2527,7 @@ describe("CampaignManager", () => {
     writeFileSync(join(projectRoot, "Recordings", "playthrough", "frame_00099.png"), Buffer.concat([Buffer.from("89504e470d0a1a0a", "hex"), Buffer.alloc(4096, 7)]));
     settleMilestone("final proofs green");
 
-    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"), { timeout: 15_000 });
+    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"), { timeout: 15_000 });
     const delivered = storage.get(campaign.id)!;
     expect(delivered.milestones.filter((m) => m.status === "green")).toHaveLength(4);
     expect(delivered.milestones.at(-1)!.status).toBe("green");
@@ -2532,20 +2579,20 @@ describe("CampaignManager", () => {
     manager.attachEvents();
 
     const campaign = manager.startFromGdd(ctx, "# GDD text", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1), { timeout: 5_000 });
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1), { timeout: 5_000 });
     settleMilestone("sprint A done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2), { timeout: 5_000 });
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2), { timeout: 5_000 });
     settleMilestone("sprint B done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3), { timeout: 5_000 });
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3), { timeout: 5_000 });
     settleMilestone("final report");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4)); // mcov1, baseline 95/100 recorded
+    await waitFor(() => expect(tasks.submitted).toHaveLength(4)); // mcov1, baseline 95/100 recorded
 
     // The art is unchanged. Earlier one-shot gates (visual evidence) may
     // bounce first; the art gate speaks on the completion that reaches it.
     for (let i = 0; i < 3 && !storage.get(campaign.id)!.milestones.at(-1)!.artBounced; i++) {
       const before = tasks.submitted.length;
       settleMilestone("pig skins implemented and verified");
-      await vi.waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(before), { timeout: 5_000 });
+      await waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(before), { timeout: 5_000 });
     }
     const bounced = storage.get(campaign.id)!.milestones.at(-1)!;
     expect(bounced.artBounced).toBe(true);
@@ -2563,7 +2610,7 @@ describe("CampaignManager", () => {
     for (let i = 0; i < 3 && mcov1().status === "running"; i++) {
       const before = tasks.submitted.length;
       settleMilestone("pig skins drawn with the local model and bound");
-      await vi.waitFor(
+      await waitFor(
         () => expect(mcov1().status !== "running" || tasks.submitted.length > before).toBe(true),
         { timeout: 5_000 },
       );
@@ -2625,11 +2672,11 @@ describe("CampaignManager", () => {
     });
     manager.attachEvents();
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     settleMilestone("sprint A done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     settleMilestone("sprint B done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
     const green = { testsGreen: true, detail: "PlayMode verification passed: 42 of 42 tests passed (unfiltered — the whole PlayMode suite)", unfiltered: true };
     // Keep completing the final sprint; the compile check can never run.
     for (let round = 0; round < 12; round++) {
@@ -2656,15 +2703,15 @@ describe("CampaignManager", () => {
     // No record at all, but the sprint reports a green unfiltered suite.
     runRecordOnSettle = undefined;
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     settleMilestone("sprint A done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     settleMilestone("sprint B done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
     const green = { testsGreen: true, detail: "PlayMode verification passed: 215 of 215 tests passed (unfiltered — the whole PlayMode suite)", unfiltered: true };
     tasks.verifications.set("task_3", green);
     tasks.emit("task:completed", "task_3", "green, shipping");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(4));
     expect(storage.get(campaign.id)!.milestones[2]!.testVerdict).toBeUndefined();
     expect(storage.get(campaign.id)!.state).not.toBe("done");
     // The same evidence with a STALE file present behaves identically — the
@@ -2679,6 +2726,31 @@ describe("CampaignManager", () => {
     await new Promise((r) => setTimeout(r, 400));
     expect(storage.get(campaign.id)!.milestones[2]!.testVerdict).toBeUndefined();
     expect(storage.get(campaign.id)!.state).not.toBe("done");
+  });
+
+  it("a delivery cannot claim the document was implemented when the document is gone (Codex 2026-09-11 H#5)", async () => {
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1), { timeout: 5_000 });
+    settleMilestone("sprint A done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2), { timeout: 5_000 });
+    settleMilestone("sprint B done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3), { timeout: 5_000 });
+    // The document disappears before the final sprint settles.
+    rmSync(join(projectRoot, "docs", "Game_GDD.md"), { force: true });
+    const stored = storage.get(campaign.id)!;
+    stored.gddText = undefined;
+    storage.save(stored);
+
+    for (let i = 0; i < 8 && storage.get(campaign.id)!.state === "executing"; i++) {
+      const before = tasks.submitted.length;
+      settleMilestone(`shipping it (round ${i})`);
+      await waitFor(() => {
+        expect(tasks.submitted.length > before || storage.get(campaign.id)!.state !== "executing").toBe(true);
+      }, { timeout: 5_000 });
+    }
+    const after = storage.get(campaign.id)!;
+    expect(after.state).not.toBe("done");
+    expect(after.milestones[2]!.deliveryProofsMissing!.join(" ")).toContain("the GDD could not be read at delivery");
   });
 
   it("with NO player runner configured the game is not delivered (Codex 2026-09-11 H#8)", async () => {
@@ -2705,17 +2777,17 @@ describe("CampaignManager", () => {
     });
     manager.attachEvents();
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1), { timeout: 5_000 });
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1), { timeout: 5_000 });
     settleMilestone("sprint A done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2), { timeout: 5_000 });
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2), { timeout: 5_000 });
     settleMilestone("sprint B done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3), { timeout: 5_000 });
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3), { timeout: 5_000 });
     // Through the delivery bounces: every one of them completes green, and
     // none of them plays the game.
     for (let i = 0; i < 12 && storage.get(campaign.id)!.state === "executing"; i++) {
       const before = tasks.submitted.length;
       settleMilestone(`green, shipping (round ${i})`);
-      await vi.waitFor(() => {
+      await waitFor(() => {
         expect(tasks.submitted.length > before || storage.get(campaign.id)!.state !== "executing").toBe(true);
       }, { timeout: 5_000 });
     }
@@ -2748,18 +2820,18 @@ describe("CampaignManager", () => {
     });
     manager.attachEvents();
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1), { timeout: 5_000 });
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1), { timeout: 5_000 });
     settleMilestone("sprint A done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2), { timeout: 5_000 });
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2), { timeout: 5_000 });
     settleMilestone("sprint B done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3), { timeout: 5_000 });
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3), { timeout: 5_000 });
 
     for (let i = 0; i < 30; i++) {
       const stored = storage.get(campaign.id)!;
       if (stored.state === "failed" && !stored.autoReviveAt) break;
       const before = tasks.submitted.length;
       settleMilestone(`shipping it (round ${i})`);
-      await vi.waitFor(() => {
+      await waitFor(() => {
         const after = storage.get(campaign.id)!;
         expect(tasks.submitted.length > before || (after.state === "failed" && !after.autoReviveAt)).toBe(true);
       }, { timeout: 5_000 });
@@ -2779,20 +2851,20 @@ describe("CampaignManager", () => {
     // freshness; the record has to say when it ran.
     runRecordOnSettle = { total: 42, passed: 42, failed: 0, skipped: 0, unfiltered: true, measuredAt: null };
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     settleMilestone("sprint A done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     settleMilestone("sprint B done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
     settleMilestone("green, shipping");
-    await vi.waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(3));
+    await waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(3));
     expect(storage.get(campaign.id)!.milestones[2]!.testVerdict).toBeUndefined();
     expect(storage.get(campaign.id)!.state).not.toBe("done");
 
     // The same record WITH its stamp delivers.
     runRecordOnSettle = { total: 42, passed: 42, failed: 0, skipped: 0, unfiltered: true };
     settleMilestone("green, shipping");
-    await vi.waitFor(() => expect(storage.get(campaign.id)!.milestones[2]!.testVerdict).toBeDefined(), { timeout: 5_000 });
+    await waitFor(() => expect(storage.get(campaign.id)!.milestones[2]!.testVerdict).toBeDefined(), { timeout: 5_000 });
   });
 
   it("a STALE NUnit record cannot be laundered into fresh proof by the prose fallback (Codex 2026-09-11 C#10)", async () => {
@@ -2803,15 +2875,15 @@ describe("CampaignManager", () => {
     const old = new Date(Date.now() - 6 * 60 * 60_000);
     utimesSync(record, old, old);
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     settleMilestone("sprint A done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     settleMilestone("sprint B done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
     // The worker read the OLD result and reports it as green prose.
     tasks.verifications.set("task_3", { testsGreen: true, detail: "PlayMode verification passed: 215 of 215 tests passed (unfiltered — the whole PlayMode suite)", unfiltered: true });
     tasks.emit("task:completed", "task_3", "green, shipping");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(4));
     const m = storage.get(campaign.id)!.milestones[2]!;
     expect(m.testVerdict).toBeUndefined();
     expect(m.testRunSource).toBe("nunit");
@@ -2839,15 +2911,15 @@ describe("CampaignManager", () => {
     });
     manager.attachEvents();
     const campaign = manager.startFromGdd(ctx, "# GDD text", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     settleMilestone("sprint A done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     settleMilestone("sprint B done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
     settleMilestone("final report");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(4));
     tasks.emit("task:failed", "task_4", "the boss scene will not compile");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(5));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(5));
     // A person stops it: no new sprint is started on that.
     tasks.emit("task:cancelled", "task_5", "stopped by the operator");
     await new Promise((r) => setTimeout(r, 300));
@@ -2857,7 +2929,7 @@ describe("CampaignManager", () => {
 
   it("adopting an executor retry advances the freshness clock (Codex 2026-09-11 C#9)", async () => {
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     const before = storage.get(campaign.id)!.milestones[0]!.attemptStartedAtMs!;
     await new Promise((r) => setTimeout(r, 5));
     (manager as unknown as { adoptTask: (c: unknown, id: string) => void }).adoptTask(storage.get(campaign.id), "task_retry");
@@ -2918,16 +2990,16 @@ describe("CampaignManager", () => {
     manager.attachEvents();
 
     const campaign = manager.startFromGdd(ctx, "# GDD text", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     settleMilestone("sprint A done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     settleMilestone("sprint B done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
     settleMilestone("final report");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4), { timeout: 5_000 });
+    await waitFor(() => expect(tasks.submitted).toHaveLength(4), { timeout: 5_000 });
 
     tasks.emit("task:failed", "task_4", "compile still red");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(5), { timeout: 5_000 });
+    await waitFor(() => expect(tasks.submitted).toHaveLength(5), { timeout: 5_000 });
     const retry = tasks.submitted[4]!.prompt;
     expect(retry).toContain("The previous attempt ended");
     expect(retry).toContain("ART NOT PRODUCED: when this sprint began, 95 of 100");
@@ -2966,17 +3038,17 @@ describe("CampaignManager", () => {
     manager.attachEvents();
 
     const campaign = manager.startFromGdd(ctx, "# GDD text", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     settleMilestone("sprint A done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     settleMilestone("sprint B done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
     settleMilestone("final report");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4), { timeout: 5_000 });
+    await waitFor(() => expect(tasks.submitted).toHaveLength(4), { timeout: 5_000 });
 
     art = { sprites: 103, placeholders: 95 }; // three real sprites added, placeholders untouched
     tasks.emit("task:failed", "task_4", "compile still red");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(5), { timeout: 5_000 });
+    await waitFor(() => expect(tasks.submitted).toHaveLength(5), { timeout: 5_000 });
     expect(tasks.submitted[4]!.prompt).not.toContain("ART NOT PRODUCED");
     void campaign;
   });
@@ -3006,13 +3078,13 @@ describe("CampaignManager", () => {
     });
     manager.attachEvents();
     const campaign = manager.startFromGdd(ctx, "# GDD text", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     settleMilestone("sprint A done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     settleMilestone("sprint B done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
     settleMilestone("final report");
-    await vi.waitFor(() => expect(storage.get(campaign.id)!.deliveryReported).toBe(true), { timeout: 5_000 });
+    await waitFor(() => expect(storage.get(campaign.id)!.deliveryReported).toBe(true), { timeout: 5_000 });
     const report = messages.at(-1)!.text;
     expect(report).toContain("Independent review (fake-astra via Codex, read-only, 1s)");
     expect(report).toContain("> VERDICT: NOT DELIVERABLE");
@@ -3060,32 +3132,32 @@ describe("CampaignManager", () => {
     manager.attachEvents();
 
     const campaign = manager.startFromGdd(ctx, "# GDD text", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1), { timeout: 5_000 });
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1), { timeout: 5_000 });
     settleMilestone("sprint A done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2), { timeout: 5_000 });
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2), { timeout: 5_000 });
     settleMilestone("sprint B done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3), { timeout: 5_000 });
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3), { timeout: 5_000 });
     settleMilestone("final report");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4), { timeout: 5_000 });
+    await waitFor(() => expect(tasks.submitted).toHaveLength(4), { timeout: 5_000 });
     tasks.emit("task:failed", "task_4", "no art was made");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(5), { timeout: 5_000 });
+    await waitFor(() => expect(tasks.submitted).toHaveLength(5), { timeout: 5_000 });
     tasks.emit("task:failed", "task_5", "no art was made");
 
     // The final proof sprint measures the tree as it is; the refusal stands
     // through its bounce budget and the campaign is NOT delivered.
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(6), { timeout: 5_000 });
+    await waitFor(() => expect(tasks.submitted).toHaveLength(6), { timeout: 5_000 });
     expect(tasks.submitted[5]!.prompt).toContain("FINAL DELIVERY PROOFS");
     for (let round = 0; round < 4 && storage.get(campaign.id)!.state !== "failed"; round++) {
       const before = tasks.submitted.length;
       mkdirSync(join(projectRoot, "Recordings", "playthrough"), { recursive: true });
       writeFileSync(join(projectRoot, "Recordings", "playthrough", `frame_0009${round}.png`), Buffer.concat([Buffer.from("89504e470d0a1a0a", "hex"), Buffer.alloc(4096, 7 + round)]));
       settleMilestone("final proofs green");
-      await vi.waitFor(() => {
+      await waitFor(() => {
         const c = storage.get(campaign.id)!;
         expect(c.state === "failed" || tasks.submitted.length > before).toBe(true);
       }, { timeout: 15_000 });
     }
-    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"), { timeout: 5_000 });
+    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"), { timeout: 5_000 });
     const delivered = storage.get(campaign.id)!;
     // The refusal now stops the FINAL PROOF sprint's own gate: the campaign
     // fails with the measured reason and resumes itself with a fresh budget
@@ -3125,11 +3197,11 @@ describe("CampaignManager", () => {
     manager.attachEvents();
 
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
 
     settleMilestone("done, everything renders (it says)");
     // Bounced: resubmitted with the missing-evidence demand, attempts NOT burned.
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     expect(tasks.submitted[1]!.prompt).toContain("VISUAL EVIDENCE MISSING");
     const fresh = storage.get(campaign.id)!;
     expect(fresh.milestones[0]!.status).toBe("running");
@@ -3137,12 +3209,12 @@ describe("CampaignManager", () => {
 
     // Second completion stands (one-shot bounce) and the ladder advances.
     settleMilestone("done again");
-    await vi.waitFor(() => expect(storage.get(campaign.id)!.milestones[0]!.status).toBe("green"));
+    await waitFor(() => expect(storage.get(campaign.id)!.milestones[0]!.status).toBe("green"));
   });
 
   it("a completion whose last test run was red is not green (mechanical test gate)", async () => {
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
 
     tasks.verifications.set("task_1", {
       testsGreen: false,
@@ -3151,7 +3223,7 @@ describe("CampaignManager", () => {
     tasks.emit("task:completed", "task_1", "sprint A complete, everything works great");
 
     // Routed to the retry path with the red run named — not green.
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     const fresh = storage.get(campaign.id)!;
     expect(fresh.milestones[0]!.status).not.toBe("green");
     expect(tasks.submitted[1]!.prompt).toContain("Tests were RED at completion");
@@ -3159,12 +3231,12 @@ describe("CampaignManager", () => {
     // A green-verdict completion passes.
     tasks.verifications.set("task_2", { testsGreen: true, detail: "All 95 tests passed" });
     tasks.emit("task:completed", "task_2", "sprint A complete for real");
-    await vi.waitFor(() => expect(storage.get(campaign.id)!.milestones[0]!.status).toBe("green"));
+    await waitFor(() => expect(storage.get(campaign.id)!.milestones[0]!.status).toBe("green"));
   });
 
   it("capture evidence demands meaningful, non-identical frames", async () => {
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     const milestone = storage.get(campaign.id)!.milestones[0]!;
     milestone.taskId = "task_1";
     const gate = (m: unknown) =>
@@ -3223,11 +3295,11 @@ describe("CampaignManager", () => {
     manager.attachEvents();
 
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     settleMilestone("sprint A done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     settleMilestone("sprint B done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
 
     // Final sprint: the executor parks task_3 (emitted twice) and its own
     // retry lands completed inside the grace window.
@@ -3248,7 +3320,7 @@ describe("CampaignManager", () => {
     tasks.emit("task:blocked", "task_3", "Transient failure — worker crashed mid-epoch.");
     tasks.emit("task:blocked", "task_3", "Transient failure — worker crashed mid-epoch.");
 
-    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
     await new Promise((r) => setTimeout(r, 120));
     expect(auditCalls).toBe(1);
     expect(messages.filter((m) => m.text.includes("Campaign delivery"))).toHaveLength(1);
@@ -3258,18 +3330,18 @@ describe("CampaignManager", () => {
   it("proofs still missing after the bounce budget: NOT DELIVERED, named, and the final sprint resumes by itself (non-waivable 2026-09-10)", async () => {
     rmSync(join(projectRoot, "Recordings"), { recursive: true, force: true });
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     settleMilestone("sprint A done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     settleMilestone("sprint B done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
     const green = { testsGreen: true, detail: "PlayMode verification passed: 179 of 179 tests passed (unfiltered — the whole PlayMode suite)", unfiltered: true };
     // Green suite, no play-through, every time: the gate bounces while the budget lasts…
     for (let round = 0; round < 6 && storage.get(campaign.id)!.state === "executing"; round++) {
       const before = tasks.submitted.length;
       tasks.verifications.set(`task_${before}`, green);
       tasks.emit("task:completed", `task_${before}`, "shipping it");
-      await vi.waitFor(() => {
+      await waitFor(() => {
         const state = storage.get(campaign.id)!.state;
         expect(state !== "executing" || tasks.submitted.length > before).toBe(true);
       });
@@ -3292,15 +3364,15 @@ describe("CampaignManager", () => {
   it("a final sprint that never ran a test is NOT delivered (was: delivered with a caveat)", async () => {
     runRecordOnSettle = undefined; // this sprint leaves no NUnit record
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     settleMilestone("sprint A done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     settleMilestone("sprint B done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
     for (let round = 0; round < 8 && storage.get(campaign.id)!.state === "executing"; round++) {
       const before = tasks.submitted.length;
       tasks.emit("task:completed", `task_${before}`, "shipping it again");
-      await vi.waitFor(() => {
+      await waitFor(() => {
         const state = storage.get(campaign.id)!.state;
         expect(state !== "executing" || tasks.submitted.length > before).toBe(true);
       });
@@ -3322,23 +3394,23 @@ describe("CampaignManager", () => {
     // unfiltered flag, minutes after an unfiltered run reported 32 of 185
     // failing.
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     settleMilestone("sprint A done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     settleMilestone("sprint B done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
 
     // Spend both delivery bounces on the final sprint.
     tasks.emit("task:completed", "task_3", "shipping it");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(4));
     tasks.emit("task:completed", "task_4", "shipping it again");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(5));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(5));
     expect(storage.get(campaign.id)!.milestones[2]!.deliveryVerificationBounces).toBe(2);
 
     await failUntilStopped(campaign.id, "boom");
     const beforeRevive = tasks.submitted.length;
     expect(await manager.tryHandleRevive("cli-local", "kampanya devam")).toBe(true);
-    await vi.waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(beforeRevive));
+    await waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(beforeRevive));
 
     const revived = storage.get(campaign.id)!.milestones[2]!;
     expect(revived.deliveryVerificationBounces ?? 0).toBe(0);
@@ -3348,7 +3420,7 @@ describe("CampaignManager", () => {
     // bounced instead of delivering.
     const beforeBounce = tasks.submitted.length;
     tasks.emit("task:completed", `task_${beforeBounce}`, "shipping it after revive");
-    await vi.waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(beforeBounce));
+    await waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(beforeBounce));
     expect(storage.get(campaign.id)!.state).toBe("executing");
   });
 
@@ -3359,22 +3431,22 @@ describe("CampaignManager", () => {
     // deliveryVerificationBounced, so a revived final sprint could never be
     // bounced for a missing test run again.
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     settleMilestone("sprint A done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     settleMilestone("sprint B done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
 
     tasks.emit("task:completed", "task_3", "shipping it"); // delivery bounce spent
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(4));
     expect(storage.get(campaign.id)!.milestones[2]!.deliveryVerificationBounced).toBe(true);
     tasks.emit("task:failed", "task_4", "boom");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(5));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(5));
     await failUntilStopped(campaign.id, "boom again");
 
     const submittedBeforeRevive = tasks.submitted.length;
     expect(await manager.tryHandleRevive("cli-local", "kampanya devam")).toBe(true);
-    await vi.waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(submittedBeforeRevive));
+    await waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(submittedBeforeRevive));
     const revived = storage.get(campaign.id)!.milestones[2]!;
     expect(revived.deliveryVerificationBounced).toBe(false);
     expect(revived.visualEvidenceBounced).toBe(false);
@@ -3389,7 +3461,7 @@ describe("CampaignManager", () => {
     // recorded demand (audited 2026-09-04), so one completion is one bounce.
     const beforeBounce = tasks.submitted.length;
     tasks.emit("task:completed", `task_${beforeBounce}`, "shipping it after revive");
-    await vi.waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(beforeBounce));
+    await waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(beforeBounce));
     expect(storage.get(campaign.id)!.state).toBe("executing");
     expect(storage.get(campaign.id)!.milestones[2]!.deliveryVerificationBounced).toBe(true);
   });
@@ -3432,7 +3504,7 @@ describe("CampaignManager", () => {
 
     try {
       const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-      await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"));
+      await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"));
       const parked = storage.get(campaign.id)!;
       expect(parked.autoReviveAt).toBeGreaterThan(Date.now());
       expect(storage.listAwaitingAutoRevive().map((c) => c.id)).toContain(campaign.id);
@@ -3444,7 +3516,7 @@ describe("CampaignManager", () => {
       registry.clearProviderState("claude");
       (manager as unknown as { scheduleAutoRevive(id: string, ms: number): void })
         .scheduleAutoRevive(campaign.id, 20);
-      await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("executing"));
+      await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("executing"));
       expect(tasks.submitted).toHaveLength(1);
       expect(storage.get(campaign.id)!.autoReviveAt).toBeUndefined();
     } finally {
@@ -3465,13 +3537,13 @@ describe("CampaignManager", () => {
     const retryId = tasks.addRetry("task_1");
     tasks.emit("task:blocked", "task_1", "Transient failure — provider hiccup. Auto-retry 1/10 in ~30s.");
 
-    await vi.waitFor(() => expect(storage.get(campaign.id)!.draftTaskId).toBe(retryId));
+    await waitFor(() => expect(storage.get(campaign.id)!.draftTaskId).toBe(retryId));
     expect(tasks.submitted).toHaveLength(1); // no second drafter
     expect(storage.get(campaign.id)!.draftAttempts).toBe(0); // no revision round spent
 
     // The adopted retry lands the GDD → the approval gate opens normally.
     tasks.emit("task:completed", retryId, "wrote docs/Game_GDD.md");
-    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("awaiting-approval"));
+    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("awaiting-approval"));
   });
 
   it("an outage-caused draft settle PARKS with self-revival instead of redrafting into the wall", async () => {
@@ -3492,7 +3564,7 @@ describe("CampaignManager", () => {
       // Dead retry promise (tip idle past its horizon) so the settle is judged.
       tasks.updatedAts.set("task_1", Date.now() - 30 * 60_000);
       tasks.emit("task:failed", "task_1", "Task execution failed: All providers are in cooldown. Auto-retry 1/10 in ~30s.");
-      await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"));
+      await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"));
 
       const parked = storage.get(campaign.id)!;
       expect(tasks.submitted).toHaveLength(1); // no redraft into the cooling chain
@@ -3517,7 +3589,7 @@ describe("CampaignManager", () => {
     // A live promise: the tip was touched just now, so it is not dead.
     tasks.updatedAts.set("task_1", Date.now());
     tasks.emit("task:blocked", "task_1", "Reaped: no progress for 15m. Auto-retry 1/10 in ~600s.");
-    await vi.waitFor(() => expect(storage.get(campaign.id)!.draftDeferredSince).toBeGreaterThan(0));
+    await waitFor(() => expect(storage.get(campaign.id)!.draftDeferredSince).toBeGreaterThan(0));
     expect(tasks.submitted).toHaveLength(1); // deferred, nothing redrafted
 
     // 25 hours of exactly this — the tip still promises a retry that never lands.
@@ -3529,7 +3601,7 @@ describe("CampaignManager", () => {
 
     // Past the bound the outcome is judged: the round is charged (no outage
     // measured here) and a fresh draft is issued with the cause named.
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     const judged = storage.get(campaign.id)!;
     expect(judged.draftAttempts).toBe(1);
     expect(judged.draftDeferredSince).toBeUndefined();
@@ -3547,7 +3619,7 @@ describe("CampaignManager", () => {
     tasks.markTerminal("task_1", TaskStatus.completed, "wrote docs/Game_GDD.md");
 
     await manager.resumeActive();
-    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("awaiting-approval"));
+    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("awaiting-approval"));
     expect(tasks.submitted).toHaveLength(1); // no redraft
     expect(storage.get(campaign.id)!.gddPath).toBe("docs/Game_GDD.md");
     expect(messages.at(-1)!.text).toContain("GDD drafted");
@@ -3562,7 +3634,7 @@ describe("CampaignManager", () => {
     const campaign = manager.startFromIdea(ctx, "a roguelike about ash");
 
     tasks.emit("task:completed", "task_1", "wrote docs/design/Ashen_GDD.md");
-    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("awaiting-approval"));
+    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("awaiting-approval"));
     expect(storage.get(campaign.id)!.gddPath).toBe("docs/design/Ashen_GDD.md");
     expect(tasks.submitted).toHaveLength(1);
   });
@@ -3576,13 +3648,13 @@ describe("CampaignManager", () => {
 
     for (let n = 1; n <= 3; n++) {
       tasks.emit("task:completed", `task_${n}`, "I described the GDD in chat");
-      await vi.waitFor(() => expect(tasks.submitted).toHaveLength(n + 1));
+      await waitFor(() => expect(tasks.submitted).toHaveLength(n + 1));
       expect(storage.get(campaign.id)!.draftAttempts).toBe(n);
       expect(tasks.submitted[n]!.prompt).toContain("never wrote the GDD file");
     }
     // The fourth landing without a file exhausts the budget: stop loudly.
     tasks.emit("task:completed", "task_4", "I described the GDD in chat");
-    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"));
+    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"));
     expect(tasks.submitted).toHaveLength(4);
     expect(storage.get(campaign.id)!.lastError).toMatch(/no \*GDD\*\.md was found under docs\/ \(searched recursively\)/);
     expect(messages.at(-1)!.text).toContain("kampanya devam");
@@ -3595,9 +3667,9 @@ describe("CampaignManager", () => {
     // skipped and an ordinary keep-alive reap — whose text promises the
     // executor's own retry — was charged as a failed attempt and resubmitted.
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     tasks.emit("task:failed", "task_1", "boom");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     await failUntilStopped(campaign.id, "boom again");
 
     // The parked milestone carries a deferral clock from a long-ago wall.
@@ -3607,7 +3679,7 @@ describe("CampaignManager", () => {
 
     const beforeRevive = tasks.submitted.length;
     expect(await manager.tryHandleRevive("cli-local", "kampanya devam")).toBe(true);
-    await vi.waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(beforeRevive));
+    await waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(beforeRevive));
     expect(storage.get(campaign.id)!.milestones[0]!.attempts).toBe(1);
 
     // The revived attempt's very first reap: the executor promises a retry.
@@ -3654,13 +3726,13 @@ describe("CampaignManager", () => {
 
     const campaign = manager.startFromIdea(ctx, "a match-3 where pigs fly");
     tasks.emit("task:completed", "task_1", "wrote docs/Game_GDD.md");
-    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("awaiting-approval"));
+    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("awaiting-approval"));
 
     const consumed = await Promise.all([
       manager.tryHandleApproval("cli-local", "evet"),
       manager.tryHandleApproval("cli-local", "evet"),
     ]);
-    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("executing"));
+    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("executing"));
     await new Promise((r) => setTimeout(r, 60));
 
     expect(consumed.filter(Boolean)).toHaveLength(1);
@@ -3687,7 +3759,7 @@ describe("CampaignManager", () => {
       }) as unknown as IncomingMessage;
 
     expect(await manager.tryHandleIncoming(share(v1))).toBe(true);
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     expect(readFileSync(join(projectRoot, "docs", "GDD.md"), "utf8")).toBe(v1);
 
     // The first build ends; the designer revises the document and re-shares it.
@@ -3696,7 +3768,7 @@ describe("CampaignManager", () => {
     storage.save(first);
 
     expect(await manager.tryHandleIncoming(share(v2))).toBe(true);
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     expect(readFileSync(join(projectRoot, "docs", "GDD.md"), "utf8")).toBe(v2);
     expect(storage.listActive()[0]!.gddPath).toBe("docs/GDD.md");
   });
@@ -3707,17 +3779,17 @@ describe("CampaignManager", () => {
     // strip never matched and every revived budget stacked another stale
     // "The previous attempt ended…" block into the persisted sprint prompt.
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     tasks.emit("task:failed", "task_1", "compile exploded in Board.cs");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     await failUntilStopped(campaign.id, "compile exploded in Board.cs again");
 
     const beforeRevive = tasks.submitted.length;
     expect(await manager.tryHandleRevive("cli-local", "kampanya devam")).toBe(true);
-    await vi.waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(beforeRevive));
+    await waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(beforeRevive));
     const beforeRed = tasks.submitted.length;
     tasks.emit("task:failed", `task_${beforeRed}`, "PlayMode red: 3 of 9 tests failed");
-    await vi.waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(beforeRed));
+    await waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(beforeRed));
 
     const prompt = storage.get(campaign.id)!.milestones[0]!.prompt;
     expect(prompt.match(/The previous attempt ended/g) ?? []).toHaveLength(1);
@@ -3760,13 +3832,13 @@ describe("CampaignManager", () => {
     manager.attachEvents();
 
     const campaign = manager.startFromGdd(ctx, "# GDD text", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     settleMilestone("sprint A done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     settleMilestone("sprint B done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
     settleMilestone("final report");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4), { timeout: 5_000 });
+    await waitFor(() => expect(tasks.submitted).toHaveLength(4), { timeout: 5_000 });
 
     // Round 1 schedules four and QUEUES five.
     expect(storage.get(campaign.id)!.pendingCoverageGaps).toHaveLength(5);
@@ -3775,7 +3847,7 @@ describe("CampaignManager", () => {
     for (let i = 0; i < 20 && storage.get(campaign.id)!.state === "executing"; i++) {
       const before = tasks.submitted.length;
       settleMilestone(`gap ${i} implemented, all 42 tests pass`);
-      await vi.waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(before), { timeout: 5_000 }).catch(() => undefined);
+      await waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(before), { timeout: 5_000 }).catch(() => undefined);
       if (tasks.submitted.length === before) break;
     }
     const finished = storage.get(campaign.id)!;
@@ -3817,13 +3889,13 @@ describe("CampaignManager", () => {
     const hugeGdd = "# GDD\n" + "core loop line\n".repeat(Math.ceil(GDD_AUDIT_FULL_CHARS / 15) + 100);
     expect(hugeGdd.length).toBeGreaterThan(GDD_AUDIT_FULL_CHARS);
     const campaign = manager.startFromGdd(ctx, hugeGdd, "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     settleMilestone("sprint A done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     settleMilestone("sprint B done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
     settleMilestone("final report");
-    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
 
     expect(storage.get(campaign.id)!.coverageAuditNote).toMatch(/WINDOWED GDD/);
     expect(messages.at(-1)!.text).toContain("WINDOWED GDD");
@@ -3835,13 +3907,13 @@ describe("CampaignManager", () => {
     // that it did, and the report had no mark for it — a sprint whose gate
     // never ran rendered byte-identically to one that passed it.
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     settleMilestone("sprint A done"); // LADDER prompts never demand a capture; no Recordings/
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     settleMilestone("sprint B done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
     settleMilestone("final report");
-    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
 
     const done = storage.get(campaign.id)!;
     expect(done.milestones.map((m) => m.visualEvidence)).toEqual([
@@ -3861,22 +3933,22 @@ describe("CampaignManager", () => {
     // not active, not revivable and not queryable, and the finished game was
     // never announced.
     const campaign = manager.startFromGdd(ctx, "# GDD text", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     settleMilestone("sprint A done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     settleMilestone("sprint B done");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
 
     messengerDownFor = /Campaign delivery/;
     settleMilestone("final sprint done, all tests green");
-    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
     expect(messages.some((m) => m.text.includes("Campaign delivery"))).toBe(false);
     expect(storage.get(campaign.id)!.deliveryReported).toBe(false);
 
     // Next boot: the messenger is back and the unreported delivery is re-sent.
     messengerDownFor = undefined;
     await manager.resumeActive();
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(messages.filter((m) => m.text.includes("Campaign delivery"))).toHaveLength(1),
     );
     expect(storage.get(campaign.id)!.deliveryReported).toBe(true);
@@ -3892,7 +3964,7 @@ describe("CampaignManager", () => {
     // which never consults the time box — so across repeated restarts a sprint
     // was relaunched forever with attempts frozen and no escalation.
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
 
     // The sprint died with the process after running well past its 1h box.
     const running = storage.get(campaign.id)!;
@@ -3901,7 +3973,7 @@ describe("CampaignManager", () => {
     tasks.markTerminal("task_1", TaskStatus.failed, "worker died: compile error CS0246");
 
     await manager.resumeActive();
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
 
     const after = storage.get(campaign.id)!;
     expect(after.milestones[0]!.timeBoxEscalations).toBe(1);
@@ -3911,12 +3983,12 @@ describe("CampaignManager", () => {
 
   it("a boot that finds a FAILED tip charges the attempt, and a spent budget stops the campaign", async () => {
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     expect(storage.get(campaign.id)!.milestones[0]!.attempts).toBe(1);
 
     tasks.markTerminal("task_1", TaskStatus.failed, "compile error CS0246");
     await manager.resumeActive();
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     expect(storage.get(campaign.id)!.milestones[0]!.attempts).toBe(2); // charged
     expect(tasks.submitted[1]!.prompt).toContain("The previous attempt ended failed");
 
@@ -3926,7 +3998,7 @@ describe("CampaignManager", () => {
     await manager.resumeActive();
     // The spent budget self-revives with a changed approach first (Codex
     // 2026-09-11 F#1) and stops only once those are spent too.
-    await vi.waitFor(() => expect(messages.some((m) => m.text.includes("Retrying with a changed approach"))).toBe(true));
+    await waitFor(() => expect(messages.some((m) => m.text.includes("Retrying with a changed approach"))).toBe(true));
     await failUntilStopped(campaign.id, "compile error CS0246 again");
     expect(storage.get(campaign.id)!.state).toBe("failed");
     expect(messages.at(-1)!.text).toContain("Campaign stopped");
@@ -3940,20 +4012,20 @@ describe("CampaignManager", () => {
     setLiveChainMemberNames(["cm-boot"]);
     try {
       const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-      await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+      await waitFor(() => expect(tasks.submitted).toHaveLength(1));
       registry.recordOverloaded("cm-boot", "quota wall");
       tasks.markTerminal("task_1", TaskStatus.failed, "All providers are in cooldown");
 
       await manager.resumeActive();
       // Measured 2026-09-08 01:08: the boot resubmitted straight into the
       // wall. Now it parks with a revival appointment and charges nothing.
-      await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"));
+      await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"));
       expect(tasks.submitted).toHaveLength(1);
       expect(storage.get(campaign.id)!.autoReviveAt).toBeGreaterThan(Date.now());
       expect(storage.get(campaign.id)!.milestones[0]!.attempts).toBe(1); // not charged
       registry.clearProviderState("cm-boot");
       (manager as unknown as { scheduleAutoRevive(id: string, ms: number): void }).scheduleAutoRevive(campaign.id, 20);
-      await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+      await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     } finally {
       setLiveChainMemberNames([]);
       registry.clearProviderState("cm-boot");
@@ -4009,7 +4081,7 @@ describe("CampaignManager", () => {
     });
 
     await manager.resumeActive();
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
 
     expect(planMilestones).not.toHaveBeenCalled();
     expect(tasks.submitted[0]!.prompt).toContain("foundations");
@@ -4061,7 +4133,7 @@ describe("CampaignManager", () => {
     });
 
     await manager.resumeActive();
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
 
     expect(planMilestones).not.toHaveBeenCalled();
     expect(tasks.submitted[0]!.prompt).toContain("a match-3 where pigs fly");
@@ -4081,13 +4153,13 @@ describe("CampaignManager", () => {
       const campaign = manager.startFromIdea(ctx, "a roguelike about ash");
       tasks.updatedAts.set("task_1", Date.now() - 30 * 60_000);
       tasks.emit("task:failed", "task_1", "Task execution failed: All providers are in cooldown.");
-      await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"));
+      await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"));
 
       registry.clearProviderState("cm-revive-draft");
       (manager as unknown as { scheduleAutoRevive(id: string, ms: number): void })
         .scheduleAutoRevive(campaign.id, 20);
 
-      await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("drafting-gdd"));
+      await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("drafting-gdd"));
       expect(tasks.submitted).toHaveLength(2);
       expect(tasks.submitted[1]!.prompt).toContain("a roguelike about ash");
       const revived = storage.get(campaign.id)!;
@@ -4102,7 +4174,7 @@ describe("CampaignManager", () => {
 
   it("resumeActive leaves a still-running task alone", async () => {
     manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
 
     await manager.resumeActive(); // task_1 still 'executing' in the fake
     expect(tasks.submitted).toHaveLength(1);
@@ -4113,12 +4185,12 @@ describe("CampaignManager", () => {
       writeSlopProject();
       const campaign = await runLadderToDelivery();
       settleMilestone("integrated, all 42 tests pass");
-      await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+      await waitFor(() => expect(tasks.submitted).toHaveLength(4));
       expect(storage.get(campaign.id)!.milestones[2]!.structureRefused).toBe(true);
       // The sprint places the prefab; the flag must follow the re-measure.
       writeBuiltProject();
       settleMilestone("prefabs placed, all 42 tests pass");
-      await vi.waitFor(() => expect(storage.get(campaign.id)!.state).not.toBe("executing"));
+      await waitFor(() => expect(storage.get(campaign.id)!.state).not.toBe("executing"));
       expect(storage.get(campaign.id)!.state).toBe("done");
       expect(storage.get(campaign.id)!.milestones[2]!.structureRefused).toBe(false);
       const report = messages.map((m) => m.text).find((t) => t.includes("Campaign delivery"))!;
@@ -4131,9 +4203,9 @@ describe("CampaignManager", () => {
       ProviderHealthRegistry.getInstance().clearProviderState("claude");
       setLiveChainMemberNames(["claude"]);
       const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-      await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+      await waitFor(() => expect(tasks.submitted).toHaveLength(1));
       tasks.emit("task:failed", "task_1", "sprite provider 'local' returned PLACEHOLDER");
-      await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+      await waitFor(() => expect(tasks.submitted).toHaveLength(2));
       // It self-revives with a CHANGED APPROACH, a bounded number of times
       // (Codex 2026-09-11 F#1) — never as an outage pause, which would hand it
       // a fresh attempt budget every cycle forever (the 2026-09-07 defect).
@@ -4156,7 +4228,7 @@ describe("CampaignManager", () => {
         await new Promise((r) => setTimeout(r, 150));
         if (tasks.submitted.length === before) break;
       }
-      await vi.waitFor(() => expect(storage.get(campaign.id)!.state).not.toBe("executing"));
+      await waitFor(() => expect(storage.get(campaign.id)!.state).not.toBe("executing"));
       expect(storage.get(campaign.id)!.state).toBe("failed");
       expect(storage.get(campaign.id)!.lastError).toContain("does not compile");
       const report = messages.map((m) => m.text).find((t) => t.includes("NOT DELIVERED"))!;
@@ -4170,14 +4242,14 @@ describe("CampaignManager", () => {
       // Bounce 1: no verdict at all (compiles) — the sprint ran no suite.
       runRecordOnSettle = undefined;
       tasks.emit("task:completed", "task_3", "done, trust me");
-      await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+      await waitFor(() => expect(tasks.submitted).toHaveLength(4));
       expect(tasks.submitted[3]!.prompt).toContain("no test run was observed");
       expect(tasks.submitted[3]!.prompt).not.toContain("DOES NOT COMPILE");
       // Bounce 2: an unfiltered green, but the compile is now broken.
       runRecordOnSettle = { total: 42, passed: 42, failed: 0, skipped: 0, unfiltered: true };
       compileVerdict = { ok: false, ran: true, errors: 3 };
       settleMilestone("suite green");
-      await vi.waitFor(() => expect(tasks.submitted).toHaveLength(5));
+      await waitFor(() => expect(tasks.submitted).toHaveLength(5));
       const prompt = tasks.submitted[4]!.prompt;
       expect(prompt).toContain("THE PROJECT DOES NOT COMPILE");
       expect(prompt).not.toContain("no test run was observed");
@@ -4205,18 +4277,18 @@ describe("CampaignManager", () => {
         .measurePlaceholderArt = () => ({ sprites: 100, placeholders: 95 });
       manager.attachEvents();
       const campaign = manager.startFromGdd(ctx, "# GDD text", "docs/Game_GDD.md");
-      await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1), { timeout: 5_000 });
+      await waitFor(() => expect(tasks.submitted).toHaveLength(1), { timeout: 5_000 });
       settleMilestone("sprint A done");
-      await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2), { timeout: 5_000 });
+      await waitFor(() => expect(tasks.submitted).toHaveLength(2), { timeout: 5_000 });
       settleMilestone("sprint B done");
-      await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3), { timeout: 5_000 });
+      await waitFor(() => expect(tasks.submitted).toHaveLength(3), { timeout: 5_000 });
       settleMilestone("final report");
-      await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4)); // mcov1 (audio)
+      await waitFor(() => expect(tasks.submitted).toHaveLength(4)); // mcov1 (audio)
       const mcov1 = () => storage.get(campaign.id)!.milestones.find((m) => m.id === "mcov1")!;
       for (let i = 0; i < 4 && mcov1().status === "running"; i++) {
         const before = tasks.submitted.length;
         settleMilestone("SFX cue list generated with unity_generate_audio and wired");
-        await vi.waitFor(() => expect(mcov1().status !== "running" || tasks.submitted.length > before).toBe(true), { timeout: 5_000 });
+        await waitFor(() => expect(mcov1().status !== "running" || tasks.submitted.length > before).toBe(true), { timeout: 5_000 });
       }
       expect(mcov1().status).toBe("green");
       expect(mcov1().artBounced).not.toBe(true);
@@ -4225,7 +4297,7 @@ describe("CampaignManager", () => {
 
     it("revival resets the art and prose one-shots and strips stale time-box directives", async () => {
       const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-      await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+      await waitFor(() => expect(tasks.submitted).toHaveLength(1));
       const m = storage.get(campaign.id)!.milestones[0]!;
       m.artBounced = true;
       m.prosOnlyBounced = true;
@@ -4237,7 +4309,7 @@ describe("CampaignManager", () => {
       c.state = "failed";
       storage.save(c);
       expect(await manager.tryHandleRevive(ctx.chatId, "kampanya devam")).toBe(true);
-      await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+      await waitFor(() => expect(tasks.submitted).toHaveLength(2));
       const revived = storage.get(campaign.id)!.milestones[0]!;
       expect(revived.artBounced).toBe(false);
       expect(revived.prosOnlyBounced).toBe(false);
@@ -4252,7 +4324,7 @@ describe("CampaignManager", () => {
 
     it("a shutdown-caused tip found at boot is resubmitted even when the time box is past its last narrowing", async () => {
       const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-      await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+      await waitFor(() => expect(tasks.submitted).toHaveLength(1));
       const c = storage.get(campaign.id)!;
       const m = c.milestones[0]!;
       m.timeBoxEscalations = 2;
@@ -4261,7 +4333,7 @@ describe("CampaignManager", () => {
       storage.save(c);
       tasks.markTerminal("task_1", TaskStatus.blocked, "Task durduruldu (shutting down)");
       await manager.resumeActive();
-      await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+      await waitFor(() => expect(tasks.submitted).toHaveLength(2));
       expect(storage.get(campaign.id)!.state).toBe("executing");
     });
 
@@ -4274,13 +4346,13 @@ describe("CampaignManager", () => {
       setLiveChainMemberNames(["cm-start"]);
       try {
         const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-        await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"));
+        await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"));
         expect(tasks.submitted).toHaveLength(0);
         expect(storage.get(campaign.id)!.autoReviveAt).toBeGreaterThan(Date.now());
         expect(messages.at(-1)!.text).toContain("every provider is in cooldown");
         registry.clearProviderState("cm-start");
         (manager as unknown as { scheduleAutoRevive(id: string, ms: number): void }).scheduleAutoRevive(campaign.id, 20);
-        await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+        await waitFor(() => expect(tasks.submitted).toHaveLength(1));
       } finally {
         setLiveChainMemberNames([]);
         registry.clearProviderState("cm-start");

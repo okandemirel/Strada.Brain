@@ -534,9 +534,12 @@ describe("parseReasoningResponse marks a reply it could not read (Codex 2026-09-
     const source = readFileSync("src/agent-core/agent-core.ts", "utf8");
     const at = source.indexOf('case "wait":');
     expect(at).toBeGreaterThan(0);
-    const block = source.slice(at, at + 900);
+    const block = source.slice(at, at + 1800);
     expect(block).toContain("decision.unparsed === true");
-    expect(block).toContain('this.requeueUnacted(batch, "unparsed-decision"');
+    expect(block).toContain("this.requeueUnacted(batch, ");
+    expect(block).toContain("unparsed-decision");
+    // …and the requeue is BOUNDED (Codex 2026-09-11 H#15).
+    expect(block).toContain("this.chargeUnparsed(batch)");
   });
 });
 
@@ -550,5 +553,42 @@ describe("a reply with no decision in it is not a decision (Codex 2026-09-11 H#1
     // An explicit action is still honoured.
     expect(parseReasoningResponse('```json\n{"action":"execute","goal":"fix the build","reasoning":"red"}\n```'))
       .toMatchObject({ action: "execute", goal: "fix the build" });
+  });
+});
+
+describe("unreadable reasoning is bounded (Codex 2026-09-11 H#15)", () => {
+  it("stops requeueing after a few rounds and says so once", async () => {
+    const engine = new ObservationEngine();
+    engine.register({ name: "fake-test", collect: () => [createObservation("test", "SaveGame_RoundTrip failing", { priority: 90, actionable: true })] });
+    const provider = { chat: vi.fn().mockResolvedValue({ text: "not JSON at all", toolCalls: [], stopReason: "end_turn" }) };
+    const taskManager = { submit: vi.fn().mockReturnValue({ id: "task_mock01" }), listTasks: vi.fn().mockReturnValue([]), getStatus: vi.fn().mockReturnValue(null) };
+    const channel = { sendText: vi.fn() };
+    const budget = { getUsage: () => ({ usedUsd: 1, limitUsd: 10, pct: 0.1 }) };
+    const core = new AgentCore(engine, new PriorityScorer(), provider as any, taskManager as any, channel as any, budget, undefined, {
+      minReasoningIntervalMs: 0, minObservationPriority: 30, budgetFloorPct: 10,
+    });
+    const deferred: Array<{ minutes: number }> = [];
+    const realDefer = engine.defer.bind(engine);
+    vi.spyOn(engine, "defer").mockImplementation((obs: never, minutes: number) => {
+      deferred.push({ minutes });
+      return realDefer(obs, minutes);
+    });
+
+    vi.useFakeTimers();
+    try {
+      for (let i = 0; i < 6; i++) {
+        await core.tick();
+        // Past the one-minute requeue, so the same observation comes back.
+        vi.advanceTimersByTime(2 * 60_000);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(taskManager.submit).not.toHaveBeenCalled();
+    // The first rounds put it back quickly; once the patience is spent the
+    // recheck is an hour and the trouble is reported exactly once.
+    expect(deferred.some((d) => d.minutes >= 60)).toBe(true);
+    expect(channel.sendText.mock.calls.filter((c: unknown[]) => String(c[1]).includes("could not read my own reasoning"))).toHaveLength(1);
   });
 });

@@ -638,6 +638,56 @@ export class CampaignManager {
     }
   }
 
+  /**
+   * Give an exhausted milestone another round with a CHANGED APPROACH, up to
+   * MAX_IMPLEMENTATION_REVIVES times. Returns true when a revival was armed.
+   *
+   * Every path that gives up on a milestone comes through here — the ordinary
+   * failure path and the time-box exhaustion, which had its own `failed` with
+   * no appointment at all (Codex 2026-09-11 F#1, H#6).
+   */
+  private async selfReviveImplementation(
+    campaign: Campaign,
+    milestone: CampaignMilestone,
+    status: string,
+    cause: string,
+  ): Promise<boolean> {
+    const revives = (campaign.implementationRevives ?? 0) + 1;
+    if (revives > MAX_IMPLEMENTATION_REVIVES) return false;
+    campaign.implementationRevives = revives;
+    milestone.status = "pending";
+    milestone.attempts = 0;
+    // EXACTLY ONE such tail survives — stacking one per revival is the defect
+    // the attempt tail already had to fix once.
+    milestone.prompt = milestone.prompt.replace(REVIVE_TAIL_RE, "");
+    milestone.prompt +=
+      `\n\nA ROUND OF ATTEMPTS ENDED ${status} on: ${stripRetryMachinery(cause).slice(0, 300)}. ` +
+      "Do NOT repeat that approach — take a different route to the same requirement (a smaller step, a different order, " +
+      "or a different implementation), and keep whatever already works.";
+    // The state stays `failed` until the revival timer fires: that is what
+    // scheduleAutoRevive and the boot sweep look for, so an implementation
+    // revival travels the same path the outage pause already uses, and
+    // reviveAtCurrentMilestone restores the attempt budget.
+    campaign.state = "failed";
+    const reviveDelayMs = this.implementationReviveDelayMs;
+    campaign.autoReviveAt = Date.now() + reviveDelayMs;
+    this.persist(campaign);
+    this.scheduleAutoRevive(campaign.id, reviveDelayMs);
+    getLoggerSafe().warn("Campaign self-reviving an implementation failure with a changed approach", {
+      id: campaign.id,
+      milestone: milestone.id,
+      revives,
+      cause: cause.slice(0, 200),
+    });
+    await this.tell(
+      campaign,
+      `🔁 **${milestone.title}** ran out of attempts (${status}). Cause: ${campaign.lastError ?? cause}\n` +
+        `Retrying with a changed approach in ${Math.max(1, Math.round(reviveDelayMs / 60_000))} min ` +
+        `(self-revival ${revives} of ${MAX_IMPLEMENTATION_REVIVES}).`,
+    );
+    return true;
+  }
+
   /** Reset the current milestone's budget and resubmit it (revive core). */
   private async reviveAtCurrentMilestone(campaign: Campaign, milestone: CampaignMilestone): Promise<void> {
     // Stop whatever is still alive on the old lineage first. The executor's
@@ -1884,6 +1934,15 @@ export class CampaignManager {
       }
       campaign.state = "failed";
       campaign.lastError = `${milestone.title} overran its time box after two narrowings and ${milestone.attempts} attempts`;
+      // The same bounded recovery every other exhausted milestone gets: this
+      // path used to stop dead with no appointment at all (Codex H#6).
+      if (await this.selfReviveImplementation(campaign, milestone, "over its time box", campaign.lastError)) {
+        milestone.timeBoxEscalations = 0;
+        milestone.startedAtMs = undefined;
+        this.persist(campaign);
+        return true;
+      }
+      campaign.autoReviveAt = undefined;
       this.persist(campaign);
       await this.tell(
         campaign,
@@ -2957,45 +3016,9 @@ export class CampaignManager {
       return;
     }
 
-    // AN ORDINARY FAILURE IS NOT THE END. A sprint out of attempts on a
-    // healthy chain used to stop here and wait for a person; the same work,
-    // attempted with a changed approach, is what a person would have asked
-    // for anyway. Bounded: MAX_IMPLEMENTATION_REVIVES rounds, and a cancel is
-    // a deliberate stop that revives nothing (Codex 2026-09-11 F#1).
-    const revives = (campaign.implementationRevives ?? 0) + 1;
-    if (status !== TaskStatus.cancelled && revives <= MAX_IMPLEMENTATION_REVIVES) {
-      campaign.implementationRevives = revives;
-      milestone.status = "pending";
-      milestone.attempts = 0;
-      // The next round must not repeat the last one: the blocker goes in, with
-      // the same "change the approach" instruction a replan carries. EXACTLY
-      // ONE such tail survives — stacking one per revival is the defect the
-      // attempt tail above already had to fix once.
-      milestone.prompt = milestone.prompt.replace(REVIVE_TAIL_RE, "");
-      milestone.prompt +=
-        `\n\nA ROUND OF ATTEMPTS ENDED ${status} on: ${stripRetryMachinery(campaign.lastError ?? output).slice(0, 300)}. ` +
-        "Do NOT repeat that approach — take a different route to the same requirement (a smaller step, a different order, " +
-        "or a different implementation), and keep whatever already works.";
-      // The state stays `failed` until the revival timer fires: that is what
-      // scheduleAutoRevive and the boot sweep look for, so an implementation
-      // revival travels the same path the outage pause already uses, and
-      // reviveAtCurrentMilestone restores the attempt budget.
-      const reviveDelayMs = this.implementationReviveDelayMs;
-      campaign.autoReviveAt = Date.now() + reviveDelayMs;
-      this.persist(campaign);
-      this.scheduleAutoRevive(campaign.id, reviveDelayMs);
-      getLoggerSafe().warn("Campaign self-reviving an implementation failure with a changed approach", {
-        id: campaign.id,
-        milestone: milestone.id,
-        revives,
-        cause: (campaign.lastError ?? "").slice(0, 200),
-      });
-      await this.tell(
-        campaign,
-        `🔁 **${milestone.title}** ran out of attempts (${status}). Cause: ${campaign.lastError}\n` +
-          `Retrying with a changed approach in ${Math.max(1, Math.round(reviveDelayMs / 60_000))} min ` +
-          `(self-revival ${revives} of ${MAX_IMPLEMENTATION_REVIVES}).`,
-      );
+    // AN ORDINARY FAILURE IS NOT THE END: bounded self-revival with a changed
+    // approach, in one place for every path that exhausts a milestone.
+    if (status !== TaskStatus.cancelled && await this.selfReviveImplementation(campaign, milestone, String(status), campaign.lastError ?? output)) {
       return;
     }
 
@@ -3244,7 +3267,17 @@ export class CampaignManager {
         gddText = undefined;
       }
     }
-    if (!gddText) return { lines: ["GDD numbers: the GDD text was not available at delivery, so none were checked"] };
+    // A DELIVERY WITHOUT THE DOCUMENT IS NOT A DELIVERY. This used to be a
+    // disclosure line and the gate moved on, so a campaign whose GDD file had
+    // disappeared reached `done` with "none were checked" and a coverage audit
+    // that skipped itself for the same reason — nothing established that the
+    // document the user supplied was implemented (Codex 2026-09-11 H#5).
+    if (!gddText) {
+      return {
+        lines: [`GDD numbers: the GDD text was not available at delivery (${campaign?.gddPath ?? "no path"}), so none were checked`],
+        refusal: `the GDD could not be read at delivery (${campaign?.gddPath ?? "no path recorded"}), so nothing here was measured against the document`,
+      };
+    }
     const { claims, truncated } = extractNumericClaims(gddText);
     const assessments = assessNumericClaims(claims, playthrough, player, { platform: gddPlatform(gddText), builtTarget: build?.target ?? build?.requestedTarget });
     const refusal = claimsRefusal(assessments);

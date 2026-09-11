@@ -31,6 +31,10 @@ const FOREGROUND_DECISION_DEFER_MINUTES = 5;
  * minute clears the engine's 60s dedup window so the re-queued item is not suppressed.
  */
 const UNACTED_BATCH_RECHECK_MINUTES = 1;
+/** Unreadable reasoning rounds an observation absorbs before it is left alone. */
+const MAX_UNPARSED_ROUNDS = 3;
+/** …and how long it is held once that happens. */
+const UNPARSED_COOLDOWN_MINUTES = 60;
 /**
  * audited 2026-09-02: the `adjust` action wrote priorityThreshold straight from LLM output
  * (clamped only to 0-100) with no ceiling and no way back except another `adjust` — one
@@ -51,6 +55,10 @@ export class AgentCore {
   private lastReasoningMs = Date.now(); // Init to now to prevent immediate LLM call on restart
   private readonly config: AgentCoreConfig;
   private readonly logger = getLogger();
+  /** Unreadable-reasoning rounds charged to each observation (Codex H#15). */
+  private readonly unparsedRounds = new Map<string, number>();
+  /** Said once per process, not once per round. */
+  private unparsedReported = false;
   /** Maps submitted task IDs to the instinct IDs that informed the decision */
   private readonly taskInstinctMap = new Map<TaskId, { instinctIds: string[]; createdAt: number }>();
   /** Multi-provider routing: selects best provider per task. */
@@ -342,11 +350,32 @@ export class AgentCore {
           // already recorded the failure as reported, so the repair never
           // happened (Codex 2026-09-11 F#13).
           if (decision.unparsed === true) {
-            this.logger.warn("AgentCore could not read its own reasoning — the observations go back in the queue", {
+            // BOUNDED: requeueing for ever is its own failure mode — a
+            // provider that never returns JSON produced 100 calls, 100
+            // requeues and zero repairs (Codex 2026-09-11 H#15). After a few
+            // rounds the observation is left alone with a long recheck and
+            // the trouble is said out loud once.
+            const exhausted = this.chargeUnparsed(batch);
+            this.logger.warn("AgentCore could not read its own reasoning", {
               reasoning: decision.reasoning,
               observations: batch.length,
+              exhausted,
             });
-            this.requeueUnacted(batch, "unparsed-decision", UNACTED_BATCH_RECHECK_MINUTES);
+            if (exhausted) {
+              this.requeueUnacted(batch, "unparsed-decision-exhausted", UNPARSED_COOLDOWN_MINUTES);
+              if (!this.unparsedReported) {
+                this.unparsedReported = true;
+                try {
+                  void this.channel?.sendText?.(
+                    AgentCore.AGENT_CHAT_ID,
+                    `I could not read my own reasoning ${MAX_UNPARSED_ROUNDS} times in a row (${decision.reasoning}). ` +
+                      "The observations are held for an hour; the reasoning provider needs a look.",
+                  );
+                } catch { /* the log already carries it */ }
+              }
+            } else {
+              this.requeueUnacted(batch, "unparsed-decision", UNACTED_BATCH_RECHECK_MINUTES);
+            }
             consumed = true;
             return;
           }
@@ -393,6 +422,24 @@ export class AgentCore {
    * Deferred, not injected: defer() re-surfaces past the engine's dedup window, whereas inject()
    * would be suppressed as a duplicate on the very next collect.
    */
+  /**
+   * Charge one unreadable reasoning round to every observation in the batch,
+   * and say whether any of them has now spent its patience. A successful
+   * parse clears the count (see tick()'s ACT arms).
+   */
+  private chargeUnparsed(batch: readonly AgentObservation[]): boolean {
+    let exhausted = false;
+    for (const obs of batch) {
+      const spent = (this.unparsedRounds.get(obs.id) ?? 0) + 1;
+      this.unparsedRounds.set(obs.id, spent);
+      if (spent >= MAX_UNPARSED_ROUNDS) exhausted = true;
+    }
+    // The map is per-observation and observations are finite; still, a daemon
+    // running for weeks should not accumulate ids for ever.
+    if (this.unparsedRounds.size > 500) this.unparsedRounds.clear();
+    return exhausted;
+  }
+
   private requeueUnacted(batch: readonly AgentObservation[], cause: string, recheckMinutes: number): void {
     const actionable = batch.filter((o) => o.actionable);
     for (const obs of actionable) {
