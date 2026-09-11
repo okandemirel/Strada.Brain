@@ -118,6 +118,17 @@ describe("describeMedia", () => {
     expect(d.refusal).toContain("AudioSource(s) is bound to one");
   });
 
+  it("procedural audio and a document that asks for silence are not a silent delivery (Codex 2026-09-11 C#17)", () => {
+    const procedural = describeMedia(
+      "# GDD\n\nMusic, audio and SFX are generated procedurally in OnAudioFilterRead — no imported clips at all.",
+      withScene(""),
+    );
+    expect(procedural.refusal).toBeUndefined();
+    expect(procedural.lines.join("\n")).toContain("generated at runtime");
+    const silent = describeMedia("# GDD\n\nNo music. No audio. No sound effects. The game is silent by design.", withScene(""));
+    expect(silent.refusal).toBeUndefined();
+  });
+
   it("a passing mention is not an ask: below the threshold nothing refuses", () => {
     const d = describeMedia("# GDD\n\nA little music would be nice.", withScene("", withClip));
     expect(d.signals[0]).toMatchObject({ kind: "audio", count: 1 });

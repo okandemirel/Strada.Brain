@@ -142,13 +142,31 @@ const NON_WORLD_RENDERER_CLASSES: ReadonlySet<string> = new Set(["CanvasRenderer
 
 /**
  * UI renderers that amount to a game rather than a HUD. One label over a world
- * of engine primitives is a HUD (measured 2026-09-07); a screen built from a
- * dozen of them is what a card game or a visual novel looks like.
+ * of engine primitives is a HUD (measured 2026-09-07); several of them BOUND
+ * TO THE PROJECT'S OWN ART is what a card game, a visual novel or an FMV
+ * interface looks like. Bare renderers with nothing in them are neither
+ * (Codex 2026-09-11 C#16).
  */
-const UI_ONLY_MIN_RENDERERS = 8;
+const UI_ONLY_MIN_RENDERERS = 3;
 
 /** Art directions whose own words describe flat, low-colour artwork. */
-const FLAT_ART_IS_THE_STYLE = /\b(?:flat[- ]?(?:shaded|colou?r|art|design)|minimalist|minimal|geometric|monochrome|silhouette|abstract|solid[- ]colou?r|vector art|block colou?r)\b/i;
+const FLAT_ART_IS_THE_STYLE = /\b(?:flat[- ]?(?:shaded|colou?r|art|design)|minimalist|geometric|monochrome|silhouette|solid[- ]colou?r|vector art|block colou?r)\b/gi;
+/** "Never use flat art", "no flat shading", "avoid minimalist looks". */
+const NEGATED_BEFORE = /\b(?:no|not|never|avoid|avoids|avoiding|without|anything but|rather than|instead of)\b[^.\n]{0,40}$/i;
+
+/**
+ * Does this art direction ASK for flat artwork? A phrase inside a negation
+ * asks for the opposite, and "Never use flat art" used to grant the exemption
+ * (Codex 2026-09-11 C#18). "minimal UI" alone does not describe the game's
+ * artwork either, so the bare word "minimal" was dropped.
+ */
+export function asksForFlatArt(artDirection: string): boolean {
+  for (const m of artDirection.matchAll(FLAT_ART_IS_THE_STYLE)) {
+    const before = artDirection.slice(Math.max(0, (m.index ?? 0) - 60), m.index ?? 0);
+    if (!NEGATED_BEFORE.test(before)) return true;
+  }
+  return false;
+}
 
 /** Renderer classes that draw actual 3D geometry (item 2's disclosure). */
 const MESH_RENDERER_CLASSES: ReadonlySet<string> = new Set([
@@ -1315,7 +1333,11 @@ function structuralRefusal(
   // video, and refusing them for holding no MeshRenderer imposed one genre's
   // architecture on every GDD (Codex 2026-09-11 B#16). The measured hole stays
   // shut: a HUD label over CreatePrimitive cubes is still primitives-as-world.
-  const uiDrawsTheGame = uiOnly >= UI_ONLY_MIN_RENDERERS && !primitivesAreTheWorld;
+  // …and only when the scenes bind the project's OWN art: eight bare
+  // CanvasRenderers with nothing in them withdrew the refusal (Codex
+  // 2026-09-11 C#16). One VideoPlayer playing a project clip is a game too.
+  const uiBindsArt = shippedScenes.some((s) => s.projectRefs > 0 || s.modelsBound.length > 0);
+  const uiDrawsTheGame = uiOnly >= UI_ONLY_MIN_RENDERERS && uiBindsArt && !primitivesAreTheWorld;
   if (report.shippedWorldRenderers === 0 && !uiDrawsTheGame && (report.referencedOnlyRenderers === 0 || primitivesAreTheWorld)) {
     return (
       `The shipped scenes render NOTHING: across ${shippedScenes.length} enabled non-scaffolding ` +
@@ -1622,7 +1644,7 @@ function placeholderArtRefusal(
   // pixel heuristic cannot tell a deliberate style from an unmade one, and
   // refusing here forced one art style on every game (Codex 2026-09-11 B#17).
   // The count is still disclosed; only the refusal is withdrawn.
-  if (artDirection !== undefined && FLAT_ART_IS_THE_STYLE.test(artDirection)) return undefined;
+  if (artDirection !== undefined && asksForFlatArt(artDirection)) return undefined;
   return (
     `The project's art is placeholder art: ${placeholderSprites} of ${sprites} sprite textures are flat ` +
     `shapes by their pixels (${PLACEHOLDER_GRADE_RULE}) — procedural placeholders, not drawn art ` +

@@ -22,11 +22,21 @@ function write(content: unknown, ageMs = 0): string {
 }
 
 describe("a verdict is evidence, not a claim (Codex 2026-09-11 B#3, B#25)", () => {
-  it("ok WITHOUT a session outcome or a captured frame is not ok, and says which is missing", () => {
+  it("ok WITHOUT play behind it is not ok, and says what is missing", () => {
+    // No action taken: nothing was played, whatever the file claims.
     write({ ok: true, reasons: [], record: { scene: "Entry", session: 1, actions: 0, outcome: "None" }, frames: { count: 5 } });
-    const noOutcome = readPlaythroughVerdict(root, 0);
-    expect(noOutcome).toMatchObject({ found: true, ok: false });
-    expect(noOutcome.reasons?.join(" ")).toContain("records no session outcome");
+    const noPlay = readPlaythroughVerdict(root, 0);
+    expect(noPlay).toMatchObject({ found: true, ok: false });
+    expect(noPlay.reasons?.join(" ")).toContain("took no action");
+
+    // A session the game REFUSED to start is not play (Codex 2026-09-11 C#11).
+    write({ ok: true, reasons: [], record: { scene: "Entry", session: 1, actions: 0, outcome: "Refused", startAccepted: false }, frames: { count: 3 } });
+    expect(readPlaythroughVerdict(root, 0)).toMatchObject({ found: true, ok: false });
+
+    // …and an ENDLESS game has no outcome to reach: driven actions and
+    // captured frames are the evidence (C#14).
+    write({ ok: true, reasons: [], record: { scene: "Endless", session: 1, actions: 240, outcome: "None" }, frames: { count: 30 } });
+    expect(readPlaythroughVerdict(root, 0)).toMatchObject({ found: true, ok: true });
 
     write({ ok: true, reasons: [], record: { scene: "Entry", session: 1, actions: 12, outcome: "Won" }, frames: { count: 0 } });
     const noFrames = readPlaythroughVerdict(root, 0);

@@ -36,7 +36,7 @@ import {
 } from "./visual-conformance.js";
 import { extractCoreLoop, readUnityVersion, renderHowToRun } from "./how-to-run.js";
 import { isTerminalFailureReport } from "../agents/autonomy/verifier-pipeline.js";
-import { assessBuiltAsSpecified, PLACEHOLDER_GRADE_RULE } from "../agents/autonomy/built-as-specified.js";
+import { assessBuiltAsSpecified, asksForFlatArt, PLACEHOLDER_GRADE_RULE } from "../agents/autonomy/built-as-specified.js";
 import { assessSpecScope } from "../agents/autonomy/spec-scope.js";
 import { describeDimensionality } from "../agents/autonomy/gdd-dimensionality.js";
 import { describeMedia } from "../agents/autonomy/gdd-media.js";
@@ -228,9 +228,6 @@ export const RECENT_PROVIDER_FAILURE_MS = 30 * 60_000;
 
 /** The Turkish executor's own inactivity stop (background-executor.ts). */
 const TURKISH_STALL_RE = /Görev ilerleme kaydetmeden takıldı/i;
-
-/** Art directions whose own words describe flat, low-colour artwork (see built-as-specified). */
-const FLAT_ART_DIRECTION = /\b(?:flat[- ]?(?:shaded|colou?r|art|design)|minimalist|minimal|geometric|monochrome|silhouette|abstract|solid[- ]colou?r|vector art|block colou?r)\b/i;
 
 export class CampaignManager {
   private readonly storage: CampaignStorage;
@@ -1152,6 +1149,9 @@ export class CampaignManager {
       const milestone = campaign.milestones[campaign.currentMilestone];
       if (!milestone || milestone.taskId === taskId) return;
       milestone.taskId = taskId;
+      // A retry is a new attempt at proof: the freshness clock moves with it,
+      // or evidence from the abandoned attempt stays eligible (Codex 2026-09-11 C#9).
+      milestone.attemptStartedAtMs = Date.now();
     }
     this.persist(campaign);
   }
@@ -2404,7 +2404,7 @@ export class CampaignManager {
           const gddForLook =
             campaign.gddText ?? (campaign.gddPath ? readGddFile(this.projectRoot, campaign.gddPath) : undefined);
           const look = extractLookDescription(gddForLook ?? "");
-          const frame = selectGameplayFrame(this.projectRoot, milestone.startedAtMs ?? 0);
+          const frame = selectGameplayFrame(this.projectRoot, this.sprintStartMs(milestone));
           const verdict = await judgeVisualConformance({ look, frame, visionProvider: this.visionProvider });
           milestone.visualConformance = renderVisualConformance(verdict, frame);
           // ONE bounce on an explicit "no" (2026-09-10): the check used to be
@@ -2691,6 +2691,9 @@ export class CampaignManager {
     const plannedMilestones = campaign.milestones.filter((m) => !m.id.startsWith("mcov") && !m.id.startsWith("mfinal"));
     if (
       milestone.id.startsWith("mcov") &&
+      // A CANCEL is a person stopping the work; it does not start a new
+      // sprint (Codex 2026-09-11 C#1).
+      status !== TaskStatus.cancelled &&
       plannedMilestones.length > 0 &&
       plannedMilestones.every((m) => m.status === "green")
     ) {
@@ -2718,11 +2721,16 @@ export class CampaignManager {
         campaign.state = "executing";
         campaign.lastError = undefined;
         this.persist(campaign);
+        // The abandoned remediation lineage is retired first: left alive, the
+        // boot re-arm could retry it beside the final proofs (C#3).
+        this.cancelLiveLineages(campaign, "superseded by the final proof sprint");
+        // Submit BEFORE announcing: a messenger that never settles used to
+        // leave the sprint appended but never submitted (C#6).
+        this.submitCurrentMilestone(campaign);
         await this.tell(
           campaign,
           `⚠️ Coverage remediation ended without closing ${gaps.length || "its"} gap(s). The game is NOT delivered on that alone — a final proof sprint runs the whole delivery gate on the tree as it is now.`,
         );
-        this.submitCurrentMilestone(campaign);
         return;
       }
       // Measure the tree being delivered, not the one an earlier sprint saw.
@@ -3335,8 +3343,13 @@ export class CampaignManager {
     // …and never against a document that ASKED for flat art: the pixel
     // heuristic cannot tell a minimalist style from unmade art, and this
     // bounce would demand it be replaced (Codex 2026-09-11 B#17).
-    const look = extractLookDescription(this.gddTextOf(campaign) ?? "");
-    if (look.found && look.text !== undefined && FLAT_ART_DIRECTION.test(look.text)) return undefined;
+    // The whole document, not only a long-enough "Art Direction" section: the
+    // extractor rejects a section under 200 characters and the exemption then
+    // never reached a legitimately minimal GDD (Codex 2026-09-11 C#19).
+    const gddText = this.gddTextOf(campaign) ?? "";
+    const look = extractLookDescription(gddText);
+    const artDirection = look.found && look.text !== undefined ? look.text : gddText;
+    if (asksForFlatArt(artDirection)) return undefined;
     const now = this.measurePlaceholderArt(campaign);
     if (!now) return undefined;
     // Real art added under NEW names counts as much as a placeholder replaced.

@@ -10,8 +10,7 @@ import {
   measureAudioClip,
   measurePngContent,
   parseUnityDocuments,
-  readEnabledBuildScenes,
-} from "./built-as-specified.js";
+  readEnabledBuildScenes, asksForFlatArt } from "./built-as-specified.js";
 
 /**
  * The delivered game measured, not the delivery report re-read.
@@ -628,14 +627,25 @@ describe("defects the measurement review found (2026-09-07)", () => {
   it("a UI-driven game (a screen built from canvases, no primitives) is not 'renders NOTHING' (Codex 2026-09-11 B#16)", () => {
     const root = project();
     buildSettings(root, [{ path: "Assets/Scenes/Main.unity" }]);
+    // Canvases BOUND to the project's own art: a card game's screen.
     const canvases = Array.from({ length: 12 }, (_, i) =>
-      `--- !u!1 &${40 + i}\nGameObject:\n  m_Name: Card${i}\n--- !u!222 &${80 + i}\nCanvasRenderer:\n  m_GameObject: {fileID: ${40 + i}}\n`).join("");
+      `--- !u!1 &${40 + i}\nGameObject:\n  m_Name: Card${i}\n--- !u!222 &${80 + i}\nCanvasRenderer:\n  m_GameObject: {fileID: ${40 + i}}\n` +
+      `--- !u!114 &${120 + i}\nMonoBehaviour:\n  m_GameObject: {fileID: ${40 + i}}\n  m_Sprite: {fileID: 21300000, guid: ${G("2")}, type: 3}\n`).join("");
     put(root, "Assets/Scenes/Main.unity", `${HEADER}${CAMERA(0)}${canvases}`, G("5"));
     put(root, "Assets/Art/card.png", "pixels", G("2"));
     const report = assessBuiltAsSpecified(root);
     expect(report.shippedWorldRenderers).toBe(0);
     expect(report.shippedRenderers).toBe(12);
     expect(report.refusal).toBeUndefined();
+
+    // Bare renderers with NOTHING in them are not a game (Codex 2026-09-11 C#16).
+    const empty = project();
+    buildSettings(empty, [{ path: "Assets/Scenes/Main.unity" }]);
+    const bare = Array.from({ length: 12 }, (_, i) =>
+      `--- !u!1 &${40 + i}\nGameObject:\n  m_Name: Blank${i}\n--- !u!222 &${80 + i}\nCanvasRenderer:\n  m_GameObject: {fileID: ${40 + i}}\n`).join("");
+    put(empty, "Assets/Scenes/Main.unity", `${HEADER}${CAMERA(0)}${bare}`, G("5"));
+    put(empty, "Assets/Art/unused.png", "pixels", G("2"));
+    expect(assessBuiltAsSpecified(empty).refusal).toContain("render NOTHING");
 
     // …and the measured hole stays shut: canvases over engine primitives are
     // still a HUD over a world nobody made.
@@ -663,6 +673,14 @@ describe("defects the measurement review found (2026-09-07)", () => {
     expect(asked.refusal ?? "").not.toContain("placeholder art");
     // The counts are still disclosed — the style is honoured, not hidden.
     expect(asked.disclosures.join(" ")).toContain("placeholder-grade");
+  });
+
+  it("a NEGATED flat phrase does not grant the flat-art exemption (Codex 2026-09-11 C#18)", () => {
+    expect(asksForFlatArt("A minimalist geometric look: solid colour shapes everywhere.")).toBe(true);
+    expect(asksForFlatArt("Never use flat art; every object must have detailed painted texture.")).toBe(false);
+    expect(asksForFlatArt("No flat shading anywhere — everything is hand-painted.")).toBe(false);
+    // "minimal UI" is not a statement about the game's artwork.
+    expect(asksForFlatArt("A minimal UI over lush painted scenes.")).toBe(false);
   });
 
   it("a PrefabInstance of an imported model is a placed, project-bound mesh", () => {

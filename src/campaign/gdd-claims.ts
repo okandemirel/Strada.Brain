@@ -72,9 +72,11 @@ const BOOT_RE =
 const BOOT_REVERSED_RE =
   /\b(?:under|below|within|less\s+than|no\s+more\s+than|at\s+most)\s*(\d+(?:\.\d+)?)\s*(ms|milliseconds?|s|secs?|seconds?|min(?:ute)?s?)\b[^.\n]{0,40}?\b(?:to\s+)?(?:load(?:ing)?|boot(?:ing)?|start-?up|launch|first\s+frame|interactive)\b/gi;
 const LEVEL_COUNT_RE = /\b(\d{1,3})\s+(?:levels|stages|rounds|puzzles|worlds|chapters|waves)\b/gi;
-/** "2 worlds with 12 levels each", "4 chapters of 10 stages". */
+const CONTAINER_WORD_RE = /\b(?:worlds|chapters|acts|episodes|zones)\b/i;
+const LEVEL_WORD_AHEAD_RE = /\b\d{1,3}\s+(?:levels|stages|rounds|puzzles|waves)\b/i;
+/** "2 worlds with 12 levels each", "4 chapters of 10 stages each". */
 const LEVEL_MULTIPLY_RE =
-  /\b(\d{1,3})\s+(?:worlds|chapters|acts|episodes|zones)\b[^.\n]{0,20}?\b(?:with|of|holding|containing|each\s+with)\s+(\d{1,3})\s+(?:levels|stages|rounds|puzzles|waves)\b/gi;
+  /\b(\d{1,3})\s+(?:worlds|chapters|acts|episodes|zones)\b[^.\n]{0,20}?\b(?:with|of|holding|containing|each\s+with)\s+(\d{1,3})\s+(?:levels|stages|rounds|puzzles|waves)\s+(?:each|per\s+\w+|apiece)\b/gi;
 const SESSION_RE =
   /\b(?:each|every|per|a|one|single|average|typical)\s+(?:level|session|round|match|run|game|play\s+session|attempt)\b[^.\n]{0,50}?\b(\d+(?:\.\d+)?)(?:\s*(?:[-–~]|to)\s*(\d+(?:\.\d+)?))?\s*(ms|s|secs?|seconds?|min(?:ute)?s?)\b/gi;
 
@@ -86,12 +88,27 @@ const SESSION_RE =
 export function extractNumericClaims(gddText: string): { claims: NumericClaim[]; truncated: number } {
   const text = gddText ?? "";
   const found: Array<NumericClaim & { at: number }> = [];
-  const seen = new Set<string>();
+
+  const seen = new Map<string, NumericClaim & { at: number }>();
   const push = (c: NumericClaim, at = 0) => {
     const key = `${c.kind}:${c.comparator}:${c.value}`;
-    if (seen.has(key)) return;
-    seen.add(key);
-    found.push({ ...c, at });
+    const already = seen.get(key);
+    if (already !== undefined) {
+      // The same requirement written twice keeps its EARLIEST position: the
+      // reversed boot regex matched the later sentence first, so the first
+      // occurrence was dropped and the claim sorted last into the cap
+      // (Codex 2026-09-11 C#25).
+      if (at < already.at) {
+        const i = found.indexOf(already);
+        const earliest = { ...c, at };
+        seen.set(key, earliest);
+        if (i >= 0) found[i] = earliest;
+      }
+      return;
+    }
+    const entry = { ...c, at };
+    seen.set(key, entry);
+    found.push(entry);
   };
   for (const m of text.matchAll(FPS_RE)) {
     const value = Number(m[1]);
@@ -119,6 +136,10 @@ export function extractNumericClaims(gddText: string): { claims: NumericClaim[];
   const insideMultiplication = (at: number): boolean => multiplied.some(([from, to]) => at >= from && at < to);
   for (const m of text.matchAll(LEVEL_COUNT_RE)) {
     if (insideMultiplication(m.index ?? 0)) continue;
+    // "2 worlds with 12 levels in total" is 12 levels: the CONTAINER count is
+    // not a level count when the sentence goes on to give one (Codex
+    // 2026-09-11 C#23).
+    if (CONTAINER_WORD_RE.test(m[0]) && LEVEL_WORD_AHEAD_RE.test(text.slice((m.index ?? 0) + m[0].length, (m.index ?? 0) + m[0].length + 40))) continue;
     const value = Number(m[1]);
     if (value >= 1) push({ kind: "level_count", comparator: "eq", value, text: fragment(text, m.index ?? 0, m[0].length) }, m.index ?? 0);
   }
@@ -225,9 +246,10 @@ export function assessNumericClaims(
           status: met ? "met" : "not_met",
           measured: Number(perf.playSeconds.toFixed(1)),
           note: `session ${playthrough.session ?? "?"} reached ${playthrough.outcome} after ${perf.playSeconds.toFixed(1)} s of driven play (${medium})`,
-          // A driven play-through is faster than a person's; the FLOOR of a
-          // range is disclosed, never used to refuse a delivery.
-          blocking: claim.comparator !== "min",
+          // A driven play-through is faster than a person's, so a range's floor
+          // is disclosed — UNLESS the document makes it mandatory (an
+          // unskippable timer is wall-clock, not skill; Codex 2026-09-11 C#24).
+          blocking: claim.comparator !== "min" || MANDATORY_FLOOR_RE.test(claim.text),
         };
       }
       case "level_count": {
@@ -242,7 +264,13 @@ export function assessNumericClaims(
         }
         const catalogMatches = playthrough.sessionCount === claim.value;
         const played = playthrough.sessions?.length ?? 0;
-        const finished = playthrough.sessions?.filter((s) => s.outcome !== "None" && s.outcome !== "Refused").length ?? 0;
+        // DISTINCT sessions: three records of index 0 are one level played
+        // three times (Codex 2026-09-11 C#22).
+        const finished = new Set(
+          (playthrough.sessions ?? [])
+            .filter((x) => x.outcome !== "None" && x.outcome !== "Refused")
+            .map((x) => x.index),
+        ).size;
         // A catalog of N is a claim; N sessions played to an outcome is the
         // measurement (Codex 2026-09-11 B#10). The play-through plays at most
         // PLAYED_SESSIONS_PER_RUN per run: past that the shortfall is named,
@@ -250,7 +278,10 @@ export function assessNumericClaims(
         // can answer it.
         const required = Math.min(claim.value, PLAYED_SESSIONS_PER_RUN);
         const met = catalogMatches && finished >= required;
-        const beyondOneRun = claim.value > PLAYED_SESSIONS_PER_RUN;
+        // Blocking unless the SHORTFALL is only what one run could not reach:
+        // a 13-level game with one session played used to be waived entirely
+        // because 13 > 12 (Codex 2026-09-11 C#21).
+        const beyondOneRun = claim.value > PLAYED_SESSIONS_PER_RUN && finished >= PLAYED_SESSIONS_PER_RUN;
         return {
           claim,
           status: met ? "met" : "not_met",
@@ -267,6 +298,9 @@ export function assessNumericClaims(
 
 /** unity_playthrough's per-run session cap (MAX_SESSIONS_PER_RUN in Strada.MCP). */
 export const PLAYED_SESSIONS_PER_RUN = 12;
+
+/** Wording that makes a minimum duration a rule of the game, not a pace. */
+const MANDATORY_FLOOR_RE = /\b(?:unskippable|mandatory|must last|at least|minimum|no shorter than|timer)\b/i;
 
 const KIND_LABEL: Record<ClaimKind, string> = {
   fps: "frame rate",

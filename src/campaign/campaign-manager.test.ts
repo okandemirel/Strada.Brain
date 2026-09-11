@@ -1264,6 +1264,9 @@ describe("CampaignManager", () => {
     expect(tasks.submitted[3]!.prompt).toContain("flat grey grid and no pigs");
     expect(storage.get(campaign.id)!.milestones[2]!.visualMismatchBounces).toBe(1);
 
+    // The retry captures its OWN frame: the judgement is of the game as it is
+    // now, not of the screenshot the bounced attempt left (Codex 2026-09-11 C#28).
+    writeFileSync(join(projectRoot, "Recordings", "playthrough", "frame_00041.png"), Buffer.from("89504e470d0a1a0a", "hex"));
     tasks.verifications.set("task_4", green);
     tasks.emit("task:completed", "task_4", "look fixed, shipping");
     await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"), { timeout: 15_000 });
@@ -2482,6 +2485,54 @@ describe("CampaignManager", () => {
     }
     expect(mcov1().status).toBe("green");
     expect(tasks.submitted.filter((t) => t.prompt.includes("ART NOT PRODUCED")).length).toBe(1);
+  });
+
+  it("a CANCELLED coverage sprint does not start a final proof sprint (Codex 2026-09-11 C#1)", async () => {
+    // A manager of its own, on its own task manager and storage: two managers
+    // on one emitter double-handle every event.
+    tasks = new FakeTaskManager();
+    storage.close();
+    storage = new CampaignStorage(join(dir, "campaigns-cancel.db"));
+    const planner = {
+      planMilestones: vi.fn().mockResolvedValue(LADDER),
+      auditCoverage: vi.fn().mockResolvedValue(["Dragon boss: no milestone implemented it"]),
+    } as unknown as CampaignPlanner;
+    manager = new CampaignManager({
+      storage, planner,
+      verifyCompile: async () => compileVerdict,
+      buildPlayer: async () => buildVerdict,
+      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); },
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async (chatId, text) => { messages.push({ chatId, text }); },
+      projectRoot, retryAdoptionGraceMs: 10, completedSettleDelayMs: 0, milestoneTimeBoxMs: 60 * 60_000,
+    });
+    manager.attachEvents();
+    const campaign = manager.startFromGdd(ctx, "# GDD text", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    settleMilestone("final report");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+    tasks.emit("task:failed", "task_4", "the boss scene will not compile");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(5));
+    // A person stops it: no new sprint is started on that.
+    tasks.emit("task:cancelled", "task_5", "stopped by the operator");
+    await new Promise((r) => setTimeout(r, 300));
+    expect(tasks.submitted).toHaveLength(5);
+    expect(storage.get(campaign.id)!.milestones.some((m) => m.id.startsWith("mfinal"))).toBe(false);
+  });
+
+  it("adopting an executor retry advances the freshness clock (Codex 2026-09-11 C#9)", async () => {
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    const before = storage.get(campaign.id)!.milestones[0]!.attemptStartedAtMs!;
+    await new Promise((r) => setTimeout(r, 5));
+    (manager as unknown as { adoptTask: (c: unknown, id: string) => void }).adoptTask(storage.get(campaign.id), "task_retry");
+    const after = storage.get(campaign.id)!.milestones[0]!;
+    expect(after.taskId).toBe("task_retry");
+    expect(after.attemptStartedAtMs!).toBeGreaterThan(before);
   });
 
   it("the art bounce does not fight a GDD that ASKED for flat art (Codex 2026-09-11 B#17)", () => {

@@ -15,6 +15,23 @@ const GDD_SNIPPET = `
 `;
 
 describe("spec scope — the design document is the checklist", () => {
+  it("word-prefixed unlocks are read, a staffing table is not a schedule, strings survive comment stripping (Codex 2026-09-11 C#29, C#30)", () => {
+    const gdd = [
+      "| Unlock | Element | Notes |",
+      "| --- | --- | --- |",
+      "| Level 21 | Ice Block | slides |",
+      "| Chapter 1 | Fire Wall | burns |",
+    ].join("\n");
+    expect(extractScheduledElements(gdd).map((e) => e.name)).toEqual(["Ice Block", "Fire Wall"]);
+    // A staffing table is not a game schedule.
+    const staffing = ["| # | Who | Role |", "| --- | --- | --- |", "| 1 | Alice (producer) | plans |"].join("\n");
+    expect(extractScheduledElements(staffing)).toEqual([]);
+    // A string containing "//" does not swallow the rest of the file…
+    expect(stripCsComments('class C { string separator="//"; void IceBlock() {} }')).toContain("IceBlock");
+    // …and a comment after a label is still a comment.
+    expect(stripCsComments("void M() { retry:// TODO IceBlock\n }")).not.toContain("IceBlock");
+  });
+
   it("an unlock id in any shape, and a comment is not an implementation (Codex 2026-09-11 B#18)", () => {
     const gdd = [
       "| Unlock | Element | Notes |",

@@ -90,10 +90,23 @@ export interface TestEvidence {
  * contained "All 0 tests passed" used to become a green, unfiltered verdict
  * (Codex 2026-09-11 B#6): the producer scanned every tool's output.
  */
-export const TEST_CAPABLE_TOOL_RE = /^unity_(?:test_run|test_rerun_failed|test_results|verify_change|playmode_verify|playthrough)$/i;
+export const TEST_CAPABLE_TOOL_RE =
+  /(?:^|_|\b)(?:unity_(?:test_run|test_rerun_failed|test_results|playmode_test|editmode_test|verify_change|playmode_verify|playthrough)|dotnet_test|run_tests?)$/i;
+/** Shells and batches can run anything, including a test command. */
+const GENERIC_RUNNER_RE = /^(?:shell_exec|bash|batch_execute|run_command|execute_command)$/i;
 
+/**
+ * Can this tool's output be a test run? An MCP name arrives namespaced
+ * ("mcp__unity__unity_test_run"), a shell can run the suite directly, and a
+ * batch wraps other calls — all of them were invisible to the first version
+ * of this filter (Codex 2026-09-11 C#8).
+ */
 export function isTestCapableTool(toolName: string | undefined): boolean {
-  return typeof toolName === "string" && TEST_CAPABLE_TOOL_RE.test(toolName.trim());
+  if (typeof toolName !== "string") return false;
+  const name = toolName.trim();
+  if (name === "") return false;
+  const bare = name.includes("__") ? name.slice(name.lastIndexOf("__") + 2) : name;
+  return TEST_CAPABLE_TOOL_RE.test(bare) || GENERIC_RUNNER_RE.test(bare);
 }
 
 const TEST_RUN_RE =

@@ -52,13 +52,23 @@ function inferFamilyFromText(text: string): StyleProfile["family"] {
  * prerendered-frames, so a realistic 3D game was rendered to sprite sheets
  * (Codex 2026-09-11 B#20).
  */
-function pipelineForFamily(family: StyleProfile["family"]): StyleProfile["pipeline"] {
+function pipelineForFamily(family: StyleProfile["family"], text = ""): StyleProfile["pipeline"] {
+  // What the document SAYS about rendering outranks the art family: "rendered
+  // in realtime with a free camera" became prerendered frames because the art
+  // vocabulary was unfamiliar (Codex 2026-09-11 C#31).
+  if (/\b(?:real[- ]?time (?:3d|render|rendering)|realtime|free(?:ly)?[- ]rotating camera|orbit camera|3d gameplay)\b/i.test(text)) return "realtime-3d";
+  if (/\b(?:pre[- ]?rendered|sprite ?sheets?|billboard)\b/i.test(text)) return "prerendered-frames";
+  if (/\b(?:2d sprites?|sprite[- ]native|pixel[- ]?art)\b/i.test(text)) return "sprite-native";
   switch (family) {
     case "pixel":
       return "sprite-native";
     case "realistic":
     case "lowpoly":
       return "realtime-3d";
+    case "unspecified":
+      // Nothing said: nothing imposed. A 2D sprite pipeline is the least
+      // invasive default — it needs no model, no rig and no render pass.
+      return "sprite-native";
     default:
       return "prerendered-frames";
   }
@@ -68,7 +78,11 @@ function pipelineForFamily(family: StyleProfile["family"]): StyleProfile["pipeli
 export function paletteFromText(text: string): string[] {
   const out: string[] = [];
   for (const m of text.matchAll(/#(?:[0-9a-f]{6}|[0-9a-f]{3})\b/gi)) {
-    const hex = m[0].toLowerCase();
+    const raw = m[0].toLowerCase();
+    // #fff is a colour; the profile schema stores six digits, and handing it
+    // three threw a ZodError out of the fallback that promises never to fail
+    // (Codex 2026-09-11 C#20).
+    const hex = raw.length === 4 ? `#${raw[1]!}${raw[1]!}${raw[2]!}${raw[2]!}${raw[3]!}${raw[3]!}` : raw;
     if (!out.includes(hex)) out.push(hex);
     if (out.length === 5) break;
   }
@@ -118,7 +132,7 @@ export class StyleAnalysis {
     const palette = paletteFromText(gddText);
     const fallback: StyleProfile = styleProfileSchema.parse({
       family,
-      pipeline: pipelineForFamily(family),
+      pipeline: pipelineForFamily(family, gddText),
       proportions: { plump: defaults.plump, headScale: defaults.headScale },
       palette: palette.length > 0 ? palette : ["#9aa0a6"],
       outline: { width: defaults.outlineWidth, color: "#1f1418" },

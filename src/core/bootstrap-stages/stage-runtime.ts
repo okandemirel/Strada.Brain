@@ -1,4 +1,5 @@
 import { supportsRichMessaging } from "../../channels/channel-core.interface.js";
+import { existsSync } from "node:fs";
 import type { Attachment } from "../../channels/channel-messages.interface.js";
 import { join } from "node:path";
 import { runCodexSecondOpinion } from "../../agents/review/codex-second-opinion.js";
@@ -708,10 +709,17 @@ export function parsePlayerBuildOutput(content: string): import("../../campaign/
   // A build is ok when its artifact exists on disk; "ok" without an artifact
   // was accepted as a successful build and then skipped the player run
   // because there was nothing to play (Codex 2026-09-11 B#3).
-  const artifactExists = parsed.artifact?.exists === true && typeof parsed.artifact.path === "string" && parsed.artifact.path.length > 0;
+  // The producer's own Boolean is a claim; the file system is the measurement
+  // (Codex 2026-09-11 C#12).
+  const artifactPath = typeof parsed.artifact?.path === "string" && parsed.artifact.path.length > 0 ? parsed.artifact.path : undefined;
+  const artifactExists = parsed.artifact?.exists === true && artifactPath !== undefined && existsSync(artifactPath);
   const ok = parsed.ok === true && artifactExists;
   const reasons = Array.isArray(parsed.reasons) ? parsed.reasons.map(String).slice(0, 8) : [];
-  if (parsed.ok === true && !artifactExists) reasons.push("the build reported ok but no artifact exists on disk");
+  if (parsed.ok === true && !artifactExists) {
+    reasons.push(artifactPath === undefined
+      ? "the build reported ok but named no artifact"
+      : `the build reported ok but ${artifactPath} is not on disk`);
+  }
   return {
     ran: true,
     ok,

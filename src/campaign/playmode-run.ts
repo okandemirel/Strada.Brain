@@ -53,13 +53,18 @@ export function readPlaymodeRun(projectRoot: string, sinceMs: number): PlaymodeR
   if (total === undefined || failed === undefined) return { found: false };
   const passed = num(raw.passed) ?? total - failed;
   const skipped = num(raw.skipped) ?? 0;
-  const filter = typeof raw.filter === "string" && raw.filter.trim() !== "" ? raw.filter : undefined;
+  const categories = typeof raw.categories === "string" && raw.categories.trim() !== "" ? raw.categories : undefined;
+  // `categories` narrows a run exactly as `filter` does (Codex 2026-09-11 C#13).
+  const filter = (typeof raw.filter === "string" && raw.filter.trim() !== "" ? raw.filter : undefined) ?? categories;
   // "unfiltered" is a flag the writer sets; a filter string beside it says
   // otherwise, and the string wins (Codex 2026-09-11 B#7).
   const unfiltered = raw.unfiltered === true && filter === undefined;
   // Counts that do not add up are not a run record: all-skipped, or
   // passed+failed+skipped ≠ total, never passes as green.
-  const consistent = passed + failed + skipped === total || (num(raw.skipped) === undefined && passed + failed === total);
+  const whole = (v: number): boolean => Number.isInteger(v) && v >= 0;
+  const consistent =
+    whole(total) && whole(passed) && whole(failed) && whole(skipped) &&
+    (passed + failed + skipped === total || (num(raw.skipped) === undefined && passed + failed === total));
   const failedNames = Array.isArray(raw.failedNames) ? raw.failedNames.map(String).slice(0, 50) : [];
   const scope = unfiltered ? "unfiltered — the whole PlayMode suite" : `filter: ${filter ?? (typeof raw.categories === "string" ? raw.categories : "narrowed")}`;
   const detail =
@@ -68,7 +73,7 @@ export function readPlaymodeRun(projectRoot: string, sinceMs: number): PlaymodeR
       : !consistent
       ? `PlayMode run (NUnit): counts do not add up — ${passed} passed, ${failed} failed, ${skipped} skipped of ${total} (${scope})`
       : failed === 0 && passed === 0
-      ? `PlayMode run (NUnit): ${total} tests, none passed (${skipped} skipped; ${scope})`
+      ? `PlayMode run (NUnit): ${total} test(s) collected, NONE ran to a pass — ${skipped} skipped (${scope})`
       : failed === 0
       ? `PlayMode verification passed: ${passed} of ${total} tests passed (${scope})`
       : `PlayMode verification FAILED: ${failed} of ${total} tests failed (${scope})`;

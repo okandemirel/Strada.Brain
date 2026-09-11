@@ -36,8 +36,20 @@ let loaded = false;
  * planner asks by assignment name ("opencode") — lowercasing alone kept them
  * apart and the ceiling was never consulted (Codex 2026-09-11 #5).
  */
+/** Providers whose display name and configured name are the same seat. */
+const CEILING_ALIASES: ReadonlyMap<string, string> = new Map([
+  ["claude", "anthropic"],
+  ["anthropic", "anthropic"],
+  ["gpt", "openai"],
+  ["codex", "openai"],
+]);
+
 export function ceilingKey(provider: string): string {
-  return canonicalizeProviderName(provider) ?? provider.trim().toLowerCase();
+  const canonical = canonicalizeProviderName(provider) ?? provider.trim().toLowerCase();
+  // canonicalizeProviderName treats "claude" and "anthropic" as two canonical
+  // names, so a ceiling recorded under one was never read under the other
+  // (Codex 2026-09-11 C#35).
+  return CEILING_ALIASES.get(canonical) ?? canonical;
 }
 function norm(provider: string): string {
   return ceilingKey(provider);

@@ -124,6 +124,31 @@ describe("assessNumericClaims", () => {
     expect(allPlayed.find((x) => x.claim.kind === "level_count")!.note).toContain("12 of 12 played session(s) reached an outcome");
   });
 
+  it("distinct sessions, distributive wording, and a mandatory floor (Codex 2026-09-11 C#21-24)", () => {
+    const three = extractNumericClaims("The game ships 3 levels.").claims;
+    // Three records of the SAME level are one level played three times.
+    const repeated = assessNumericClaims(three, evidence({
+      sessionCount: 3,
+      sessions: [0, 0, 0].map((index) => ({ index, outcome: "Won", actions: 5, seconds: 3 })),
+    }));
+    expect(repeated.find((x) => x.claim.kind === "level_count")).toMatchObject({ status: "not_met" });
+    const distinct = assessNumericClaims(three, evidence({
+      sessionCount: 3,
+      sessions: [0, 1, 2].map((index) => ({ index, outcome: "Won", actions: 5, seconds: 3 })),
+    }));
+    expect(distinct.find((x) => x.claim.kind === "level_count")).toMatchObject({ status: "met" });
+
+    // "in total" is not distributive: 12 levels, not 24.
+    expect(extractNumericClaims("The game ships 2 worlds with 12 levels in total.").claims.map((c) => c.value)).toEqual([12]);
+    expect(extractNumericClaims("The game ships 2 worlds with 12 levels each.").claims.map((c) => c.value)).toEqual([24]);
+
+    // A mandatory minimum is wall-clock, not player skill: it blocks.
+    const mandatory = extractNumericClaims("Each round runs an unskippable timer of 30-60 seconds.").claims;
+    const floor = assessNumericClaims(mandatory, evidence({ perf: { medium: "editor-playmode-batch", bootSeconds: 1, playSeconds: 1, playFrames: 30, avgFps: 30 } }))
+      .find((x) => x.claim.comparator === "min");
+    expect(floor).toMatchObject({ status: "not_met", blocking: true });
+  });
+
   it("a session that never ended has no length; a blown session budget blocks", () => {
     const unfinished = assessNumericClaims(claims, evidence({ ok: false, outcome: "None" }));
     expect(unfinished.find((x) => x.claim.kind === "session_seconds")).toMatchObject({ status: "unmeasured", blocking: false });

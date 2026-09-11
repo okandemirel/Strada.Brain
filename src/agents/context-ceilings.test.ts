@@ -36,9 +36,13 @@ describe("learned context ceilings (#37)", () => {
     expect(readContextCeilings(store)["opencode"]?.ceiling).toBe(40_000);
   });
 
-  it("the display name and the assignment name are ONE provider (Codex 2026-09-11 #5)", () => {
+  it("the display name and the assignment name are ONE provider (Codex 2026-09-11 #5, C#35)", () => {
     expect(recordContextCeiling("OpenCode (Zen/Go)", 57_000)).toBe(45_600);
     expect(effectiveContextWindow("opencode", 128_000)).toEqual({ window: 45_600, learned: 45_600 });
+    // …and a provider whose factory names it differently from its config
+    // ("claude" vs "anthropic") is still one seat (C#35).
+    expect(recordContextCeiling("claude", 50_000)).toBe(40_000);
+    expect(effectiveContextWindow("anthropic", 200_000)).toEqual({ window: 40_000, learned: 40_000 });
   });
 
   it("an empty observation records nothing", () => {

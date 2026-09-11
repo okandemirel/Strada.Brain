@@ -22,13 +22,21 @@ describe("readPlaymodeRun — a record is counts that add up (Codex 2026-09-11 B
     write({ total: 10, passed: 0, failed: 0, skipped: 10, unfiltered: true, filter: "OnlyOne" });
     const skipped = readPlaymodeRun(root, 0);
     expect(skipped).toMatchObject({ found: true, green: false, unfiltered: false });
-    expect(skipped.detail).toContain("none passed");
+    expect(skipped.detail).toContain("NONE ran to a pass");
 
     write({ total: 100, passed: 3, failed: 0, skipped: 0, unfiltered: true });
     expect(readPlaymodeRun(root, 0)).toMatchObject({ found: true, green: false });
 
     write({ total: 215, passed: 215, failed: 0, skipped: 0, unfiltered: true });
     expect(readPlaymodeRun(root, 0)).toMatchObject({ found: true, green: true, unfiltered: true });
+
+    // Counts that are not whole non-negative numbers are not a run record
+    // (Codex 2026-09-11 C#13): "2 of 1 tests passed" was green.
+    write({ total: 1, passed: 2, failed: 0, skipped: -1, unfiltered: true });
+    expect(readPlaymodeRun(root, 0)).toMatchObject({ found: true, green: false });
+    // `categories` narrows a run exactly as `filter` does.
+    write({ total: 2, passed: 2, failed: 0, skipped: 0, unfiltered: true, categories: "Smoke" });
+    expect(readPlaymodeRun(root, 0)).toMatchObject({ found: true, green: true, unfiltered: false });
   });
 });
 

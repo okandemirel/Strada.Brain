@@ -3,31 +3,44 @@
  * A missing or broken verdict is `ran: false` — disclosed, never a pass.
  */
 import { describe, expect, it } from "vitest";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { parsePlayerBuildOutput } from "./stage-runtime.js";
+
+const realArtifact = mkdtempSync(join(tmpdir(), "build-artifact-")) + "/Game.app";
+writeFileSync(realArtifact, "binary");
 
 const built =
   "PLAYER BUILT (StandaloneOSX).\nTarget StandaloneOSX; 2 scene(s): Assets/Scenes/Main.unity, Assets/Scenes/Level.unity; 118 s; 3 warning(s); 0 error(s).\n" +
   "Artifact: /p/Builds/StandaloneOSX/Game.app — 83.9 MB on disk.\n\n```json\n" +
   JSON.stringify({
     ok: true, reasons: [],
-    result: { built: true, exitCode: 0, target: "StandaloneOSX", outputPath: "/p/Builds/StandaloneOSX/Game.app", sizeBytes: 88_000_000, durationMs: 118_000, warnings: 3, scenes: ["a", "b"], errors: [] },
-    artifact: { path: "/p/Builds/StandaloneOSX/Game.app", exists: true, sizeBytes: 88_000_000 },
+    result: { built: true, exitCode: 0, target: "StandaloneOSX", outputPath: realArtifact, sizeBytes: 88_000_000, durationMs: 118_000, warnings: 3, scenes: ["a", "b"], errors: [] },
+    artifact: { path: realArtifact, exists: true, sizeBytes: 88_000_000 },
     measuredAt: "2026-09-10T13:00:00.000Z",
   }) + "\n```";
 
 describe("parsePlayerBuildOutput", () => {
+  it("a claimed artifact that is NOT on disk is not a successful build (Codex 2026-09-11 C#12)", () => {
+    const claimed = "PLAYER BUILT.\n\n```json\n" + JSON.stringify({ ok: true, reasons: [], artifact: { path: "/does/not/exist/Game.app", exists: true } }) + "\n```";
+    const parsed = parsePlayerBuildOutput(claimed);
+    expect(parsed).toMatchObject({ ran: true, ok: false });
+    expect(parsed.reasons?.join(" ")).toContain("is not on disk");
+  });
+
   it("ok WITHOUT an artifact on disk is not a successful build (Codex 2026-09-11 B#3)", () => {
     const noArtifact = "PLAYER BUILT.\n\n```json\n" + JSON.stringify({ ok: true, reasons: [], artifact: { exists: false } }) + "\n```";
     const parsed = parsePlayerBuildOutput(noArtifact);
     expect(parsed).toMatchObject({ ran: true, ok: false });
-    expect(parsed.reasons?.join(" ")).toContain("no artifact exists on disk");
+    expect(parsed.reasons?.join(" ")).toContain("named no artifact");
     expect(parsed.artifactPath).toBeUndefined();
   });
 
   it("a built player: ran, ok, artifact path and size, target, duration, scene count", () => {
     expect(parsePlayerBuildOutput(built)).toEqual({
       ran: true, ok: true, reasons: [], target: "StandaloneOSX", durationMs: 118_000, scenes: 2,
-      artifactPath: "/p/Builds/StandaloneOSX/Game.app", sizeBytes: 88_000_000,
+      artifactPath: realArtifact, sizeBytes: 88_000_000,
       detail: "PLAYER BUILT (StandaloneOSX).", measuredAt: "2026-09-10T13:00:00.000Z",
     });
   });

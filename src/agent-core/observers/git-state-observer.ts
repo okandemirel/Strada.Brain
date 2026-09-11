@@ -51,6 +51,12 @@ export function summarizeGitStatus(lines: readonly string[]): GitStatusBreakdown
     let path = raw.slice(3).trim();
     const arrow = path.indexOf(" -> ");
     if (arrow >= 0) path = path.slice(arrow + 4);
+    // Git quotes a path holding unusual bytes: "Recordings/frame\t001.png".
+    // Undecoded, it read as user work under a directory named `"Recordings`
+    // (Codex 2026-09-11 C#34).
+    if (path.startsWith('"') && path.endsWith('"') && path.length >= 2) {
+      path = path.slice(1, -1).replace(/\\(["\\])/g, "$1").replace(/\\[trn]/g, "");
+    }
     if (SYSTEM_OUTPUT_PREFIXES.some((p) => path.startsWith(p))) {
       systemOutput += 1;
       continue;

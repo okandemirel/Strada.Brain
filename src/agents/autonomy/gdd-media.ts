@@ -95,10 +95,21 @@ export function describeMedia(gddText: string | undefined, report: BuiltAsSpecif
     // NO clip in the project is a cue list nobody made — both used to pass
     // (Codex 2026-09-11 B#12). What still cannot be judged from files (mixing,
     // triggers, loop points) stays a disclosure.
-    if (asks("audio") && clips === 0) {
+    const documentText = gddText ?? "";
+    // A game may generate its sound in code, and a document may ASK for
+    // silence; neither is a missing cue list (Codex 2026-09-11 C#17).
+    const proceduralAudio = /\b(?:onaudiofilterread|procedural(?:ly)?[- ]generated (?:audio|music|sound)|synthesi[sz]ed at runtime|audio synthesis)\b/i.test(documentText);
+    const asksForSilence = /\b(?:no (?:music|audio|sound|sfx)\b|silent by design|without (?:any )?(?:music|audio|sound))\b/i.test(documentText);
+    if (asks("audio") && clips === 0 && !proceduralAudio && !asksForSilence) {
       refusal =
         `the GDD specifies audio (${audio.count} mentions) and the project holds NO audio clip at all — ` +
         "the cue list was never produced, so the delivery is silent";
+    } else if (asks("audio") && clips === 0) {
+      lines.push(
+        proceduralAudio
+          ? "GDD audio: no imported clips, and the document says the sound is generated at runtime — not measurable from files (disclosed)."
+          : "GDD audio: the document asks for silence, and the project holds no clips — consistent (disclosed).",
+      );
     } else if (asks("audio") && clips > 0 && report.reachableAudioClips === 0 && report.shippedAudioSourcesBound === 0) {
       refusal =
         `the GDD specifies audio (${audio.count} mentions) and the project holds ${clips} audio clip(s), but no shipped scene reaches a ` +

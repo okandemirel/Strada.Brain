@@ -106,6 +106,11 @@ describe("StyleAnalysis keyword fallback", () => {
     const named = await analysis.analyze("Harbour towns rendered in #1b3a5c and #e8c37a, nothing else.");
     expect(named.profile.palette).toEqual(["#1b3a5c", "#e8c37a"]);
 
+    // Shorthand hex is a colour too, and the schema stores six digits: three
+    // used to throw a ZodError out of the fallback (Codex 2026-09-11 C#20).
+    const shorthand = await analysis.analyze("Palette: #fff and #000, nothing else.");
+    expect(shorthand.profile.palette).toEqual(["#ffffff", "#000000"]);
+
     // A realistic document is rendered in real time, not to sprite sheets.
     const realistic = await analysis.analyze("A realistic military shooter with PBR materials.");
     expect(realistic.profile.pipeline).toBe("realtime-3d");

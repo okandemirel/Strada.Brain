@@ -199,10 +199,10 @@ public static class StradaPrerenderRun
         }
         var outlineShader = AssetDatabase.LoadAssetAtPath<Shader>(shaderPath);
 
-        var toon = new Material(Shader.Find("Standard"));
+        var toon = new Material(Shader.Find(${glossiness === 0 ? '"Unlit/Color"' : '"Standard"'}) ?? Shader.Find("Standard"));
         toon.color = new Color(${customBody});
-        toon.SetFloat("_Glossiness", ${glossiness}f);
-        toon.SetFloat("_Metallic", ${metallic}f);
+        if (toon.HasProperty("_Glossiness")) toon.SetFloat("_Glossiness", ${glossiness}f);
+        if (toon.HasProperty("_Metallic")) toon.SetFloat("_Metallic", ${metallic}f);
 
         var darkGlossy = new Material(Shader.Find("Standard"));
         darkGlossy.color = new Color(0.1f, 0.08f, 0.1f);
@@ -335,7 +335,9 @@ export class PrerenderFramesTool implements ITool {
         // was squashed like a chibi (Codex 2026-09-11 B#21). The Y factor now
         // preserves volume, which is 1.0 when nothing asked for plumpness.
         const p = Number.isFinite(plumpRaw) ? Math.min(1.5, Math.max(0.5, plumpRaw)) : (styleProfileDefaults.plump ?? 1.0);
-        const y = Number(Math.min(1.5, Math.max(0.5, 1 / p)).toFixed(3));
+        // Both horizontal axes are scaled by p, so the vertical compensation
+        // is 1/p² — 1/p left the volume 20% larger (Codex 2026-09-11 C#33).
+        const y = Number(Math.min(1.5, Math.max(0.5, 1 / (p * p))).toFixed(3));
         return [p, y, p] as [number, number, number];
       })(),
       headScale: Number.isFinite(headRaw) ? Math.min(2, Math.max(0.5, headRaw)) : (styleProfileDefaults.headScale ?? 1.0),
