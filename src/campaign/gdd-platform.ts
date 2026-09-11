@@ -24,7 +24,7 @@ const PLATFORM_PATTERNS: ReadonlyArray<readonly [BuildTarget, RegExp]> = [
   ["android", /\b(?:android)\b/gi],
   ["ios", /\b(?:ios|iphone|ipad|testflight)\b/gi],
   ["webgl", /\b(?:webgl|web ?browser|html5|play in the browser)\b/gi],
-  ["windows", /\b(?:windows|win64|pc(?:\s+(?:build|release|version))?)\b/gi],
+  ["windows", /\b(?:windows|win64)\b/gi],
   ["macos", /\b(?:macos|mac os|osx|apple silicon|mac app)\b/gi],
   ["linux", /\b(?:linux|steamos|proton)\b/gi],
 ];
@@ -34,6 +34,13 @@ const PLATFORM_PATTERNS: ReadonlyArray<readonly [BuildTarget, RegExp]> = [
  * implies a platform ("Google Play" means Android) but a named OS beside it
  * always wins.
  */
+/**
+ * "PC" names a desktop without saying which: Windows only when the document
+ * names no operating system at all. "Ships on PC running Linux" used to
+ * resolve to Windows first (Codex 2026-09-11 K#14).
+ */
+const GENERIC_DESKTOP_RE = /\bpc(?:\s+(?:build|release|version))?\b/gi;
+
 const STOREFRONT_PATTERNS: ReadonlyArray<readonly [BuildTarget, RegExp]> = [
   ["android", /\b(?:google play|play store)\b/gi],
   ["ios", /\b(?:app store)\b/gi],
@@ -74,7 +81,7 @@ export interface GddPlatform {
 export function gddPlatform(gddText: string | undefined): GddPlatform {
   if (!gddText) return { handheld: false, targets: [] };
   const hits: Array<{ target: BuildTarget; at: number }> = [];
-  const collect = (patterns: typeof PLATFORM_PATTERNS): void => {
+  const collect = (patterns: typeof PLATFORM_PATTERNS, accept: (at: number, length: number) => boolean = () => true): void => {
     for (const [target, re] of patterns) {
       if (hits.some((h) => h.target === target)) continue;
       // EVERY occurrence, not the first: "No Windows release at launch. Linux
@@ -85,14 +92,22 @@ export function gddPlatform(gddText: string | undefined): GddPlatform {
         // "Android only; no iOS release" named two and therefore forced
         // neither (Codex 2026-09-11 D#32).
         if (isExcluded(gddText, m.index ?? 0)) continue;
+        if (!accept(m.index ?? 0, m[0].length)) continue;
         hits.push({ target, at: m.index ?? 0 });
         break;
       }
     }
   };
   collect(PLATFORM_PATTERNS);
-  // …and a storefront only speaks when no operating system did.
-  if (hits.length === 0) collect(STOREFRONT_PATTERNS);
+  // …and a storefront names a platform the OS patterns did NOT: "Release on
+  // Windows and Google Play" asks for two, and suppressing every storefront
+  // as soon as one OS appeared dropped Android silently (Codex 2026-09-11
+  // K#14). `collect` already skips a target that is present.
+  // A storefront QUALIFIED BY AN OS names no platform of its own: "Steam for
+  // Linux" is one platform, while "Windows and Google Play" is two (Codex
+  // 2026-09-11 K#14).
+  collect(STOREFRONT_PATTERNS, (at, length) => !/^\s*(?:for|on)\s+(?:windows|win64|linux|macos|mac os|osx|android|ios)\b/i.test(gddText.slice(at + length, at + length + 24)));
+  if (hits.length === 0) collect([["windows", GENERIC_DESKTOP_RE]]);
   const handheldMatch = HANDHELD_RE.exec(gddText);
   const handheld = handheldMatch !== null || hits.some((h) => MOBILE_TARGETS.has(h.target));
   if (hits.length === 0) {

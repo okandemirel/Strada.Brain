@@ -163,7 +163,12 @@ export function describeBuild(b: NonNullable<CampaignMilestone["buildVerdict"]>)
   // outcome: rendered from `reasons` it was cut by the two-reason limit of a
   // failed build and lost entirely when the builder threw (Codex F#11, J#21).
   const unbuilt = (b as { unbuiltTargets?: readonly string[] }).unbuiltTargets ?? [];
-  const alsoAsked = unbuilt.length > 0 ? ` — the GDD also asks for ${unbuilt.join(", ")}, not built here` : "";
+  // …and a verdict persisted before the field existed still carries it as a
+  // reason (Codex 2026-09-11 K#13).
+  const legacy = unbuilt.length === 0 ? (b.reasons ?? []).find((r) => /also asks for/i.test(r)) : undefined;
+  const alsoAsked = unbuilt.length > 0
+    ? ` — the GDD also asks for ${unbuilt.join(", ")}, not built here`
+    : legacy ? ` — ${legacy}` : "";
   if (!b.ran) return `player build NOT measured — ${b.detail ?? "no builder"}${alsoAsked}`;
   if (!b.ok) {
     return `player build FAILED — ${(b.reasons ?? []).slice(0, 2).join("; ") || b.detail || "no reason recorded"}${alsoAsked}`;

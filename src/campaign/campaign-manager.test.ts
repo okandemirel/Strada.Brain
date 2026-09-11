@@ -2896,6 +2896,27 @@ describe("CampaignManager", () => {
     expect(describeBuild({ ...stored.milestones[2]!.buildVerdict!, ok: false, reasons: ["compiler failed", "SDK missing"] }))
       .toContain("ios");
     expect(describeBuild({ ...stored.milestones[2]!.buildVerdict!, ran: false })).toContain("ios");
+    // With NO BUILDER at all the requested platforms are still named (K#13).
+    const noBuilder = new CampaignManager({
+      storage,
+      planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async () => {},
+      projectRoot,
+    });
+    const measured = await (noBuilder as unknown as { measureBuild(c: unknown): Promise<{ unbuiltTargets?: string[]; requestedTarget?: string }> })
+      .measureBuild({ gddText: "Ships on Steam for Windows and later on iOS.", milestones: [], currentMilestone: 0 });
+    expect(measured.requestedTarget).toBe("windows");
+    expect(measured.unbuiltTargets).toEqual(["ios"]);
+
+    // A verdict persisted before the field existed still shows it (K#13).
+    expect(describeBuild({
+      ran: true, ok: true, target: "windows", artifactPath: "/p/Game.exe", sizeBytes: 1,
+      reasons: ["the GDD also asks for ios; this build is windows only"],
+    } as never)).toContain("ios");
+    // …and a platform nobody built is missing WORK, not a footnote (K#15).
+    expect(stored.milestones[2]!.deliveryProofsMissing!.join(" ")).toContain("no build of it exists");
+    expect(storage.get(campaign.id)!.state).not.toBe("done");
   });
 
   it("retiring a campaign cancels EVERY live task of its lineage, not just the tip (Codex 2026-09-11 I#7)", async () => {

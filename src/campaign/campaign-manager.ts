@@ -2719,6 +2719,13 @@ export class CampaignManager {
           ];
         }
         if (playerBroken && player) missingProofs.push(`inside the built player: ${describePlaythrough(player)}`.slice(0, 220));
+        // A PLATFORM the document asked for and nobody built is missing work
+        // too: disclosing it and delivering anyway said the game shipped on
+        // platforms it was never built for (Codex 2026-09-11 K#15).
+        const unbuiltTargets = (build as { unbuiltTargets?: readonly string[] } | undefined)?.unbuiltTargets ?? [];
+        if (unbuiltTargets.length > 0) {
+          missingProofs.push(`the GDD asks for ${unbuiltTargets.join(", ")} and no build of ${unbuiltTargets.length === 1 ? "it" : "them"} exists`);
+        }
         // A requirement the audit NAMED and no sprint has run yet is missing
         // work, and delivery may not step over it (Codex 2026-09-11 I#4).
         const queuedGaps = campaign.pendingCoverageGaps ?? [];
@@ -3655,11 +3662,21 @@ export class CampaignManager {
 
   /** Build the player from the project root; `ran: false` when no builder is configured or it could not run. */
   private async measureBuild(campaign?: Campaign): Promise<PlayerBuildEvidence> {
-    if (!this.buildPlayer) return { ran: false, detail: "no player builder is configured" };
     // The GDD's own platform, when it names one: the build used to take
     // whatever target the project had active, so a desktop player answered a
-    // phone's frame-rate budget (Codex 2026-09-11 B#11).
+    // phone's frame-rate budget (Codex 2026-09-11 B#11). Read BEFORE the
+    // no-builder return, or a deployment with no builder disclosed neither
+    // requested platform (Codex 2026-09-11 K#13).
     const platform = gddPlatform(this.gddTextOf(campaign));
+    const requested = platform.targets.filter((t) => t !== platform.target);
+    if (!this.buildPlayer) {
+      return {
+        ran: false,
+        detail: "no player builder is configured",
+        ...(platform.target ? { requestedTarget: platform.target } : {}),
+        ...(requested.length > 0 ? { unbuiltTargets: requested } : {}),
+      };
+    }
     try {
       const built = await this.buildPlayer(this.projectRoot, platform.target);
       // Every platform the document asked for is NAMED, built or not: a

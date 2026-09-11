@@ -32,6 +32,17 @@ describe("the platform the GDD asks for (Codex 2026-09-11 B#11)", () => {
     expect(gddPlatform("No Windows release, ever.").targets).toEqual([]);
   });
 
+  it("a store names its own platform unless an OS qualifies it, and PC is only a fallback (Codex 2026-09-11 K#14)", () => {
+    // Two platforms: one named by its OS, one by its store.
+    expect(gddPlatform("Release on Windows and Google Play.").targets).toEqual(["windows", "android"]);
+    // …but a store QUALIFIED by an OS is that one platform, not two.
+    expect(gddPlatform("Ships on Steam for Linux.").targets).toEqual(["linux"]);
+    expect(gddPlatform("On the App Store for iOS.").targets).toEqual(["ios"]);
+    // "PC" says desktop without saying which: only when nothing else does.
+    expect(gddPlatform("Ships on PC running Linux.")).toMatchObject({ target: "linux", targets: ["linux"] });
+    expect(gddPlatform("A PC game.")).toMatchObject({ target: "windows" });
+  });
+
   it("'mid-range phones' is a handheld even when no store is named", () => {
     const p = gddPlatform("Target 60 fps on mid-range phones.");
     expect(p.handheld).toBe(true);
