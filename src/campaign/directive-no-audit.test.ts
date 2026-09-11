@@ -41,3 +41,31 @@ describe("evidence that cannot be read is not evidence", () => {
     expect(block).toContain("milestone.testRunSource = undefined;");
   });
 });
+
+/**
+ * Codex 2026-09-11 I#3: the queue shrank in one write and the sprints it
+ * produced were appended in another. A crash in that window left the gaps in
+ * neither the queue nor the ladder — and the round budget could stop the next
+ * audit from rediscovering them.
+ */
+describe("a gap leaves the queue in the same write that schedules it", () => {
+  const source = readFileSync(new URL("./campaign-manager.ts", import.meta.url), "utf8");
+
+  it("does not persist the shortened queue before the milestones exist", () => {
+    const at = source.indexOf("const queued = campaign.pendingCoverageGaps ?? [];");
+    expect(at).toBeGreaterThan(0);
+    const drain = source.slice(at, source.indexOf("return take.map(", at));
+    expect(drain).toContain("campaign.pendingCoverageGaps = rest.length > 0 ? rest : undefined;");
+    expect(drain).not.toContain("this.persist(campaign);");
+
+    // …and the audit's overflow is queued the same way.
+    const overflowAt = source.indexOf("campaign.pendingCoverageGaps = overflow;");
+    expect(overflowAt).toBeGreaterThan(0);
+    expect(source.slice(overflowAt, overflowAt + 500)).not.toContain("this.persist(campaign);");
+
+    // The CALLER commits both together.
+    const callerAt = source.indexOf("campaign.milestones.push(...remediation);");
+    expect(callerAt).toBeGreaterThan(0);
+    expect(source.slice(callerAt, callerAt + 200)).toContain("this.persist(campaign);");
+  });
+});

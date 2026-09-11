@@ -3573,12 +3573,15 @@ export class CampaignManager {
       const round = priorRounds + 1;
       const take = queued.slice(0, CampaignManager.MAX_GAP_SPRINTS_PER_ROUND);
       const rest = queued.slice(take.length);
+      // NOT PERSISTED HERE. The queue shrinks and the sprints are appended in
+      // the CALLER's single write: persisting the shortened queue first meant
+      // a crash in that window lost every gap this round had taken off it
+      // (Codex 2026-09-11 I#3).
       campaign.pendingCoverageGaps = rest.length > 0 ? rest : undefined;
       campaign.coverageAuditNote =
         rest.length > 0
           ? `${queued.length} gaps still known; round ${round} schedules ${take.length}, and ${rest.length} stay queued: ${rest.join("; ").slice(0, 300)}`
           : undefined;
-      this.persist(campaign);
       getLoggerSafe().info("Coverage remediation drains the known gap queue", {
         id: campaign.id,
         round,
@@ -3661,11 +3664,12 @@ export class CampaignManager {
       if (overflow.length > 0) {
         // QUEUED, not "waiting for the next audit": the next audit may never
         // come, and the gap is already known (Codex 2026-09-11 F#9).
+        // Queued in MEMORY; the caller's write commits it together with the
+        // sprints this round appends (Codex 2026-09-11 I#3).
         campaign.pendingCoverageGaps = overflow;
         campaign.coverageAuditNote =
           `coverage audit found ${ordered.length} gaps; round ${round} schedules the first ${shown.length} and ` +
           `${overflow.length} are queued for the following round(s): ${overflow.join("; ").slice(0, 300)}`;
-        this.persist(campaign);
       }
       return shown.map((item, i) => this.gapSprint(campaign, round, i, item));
     } catch (err) {
