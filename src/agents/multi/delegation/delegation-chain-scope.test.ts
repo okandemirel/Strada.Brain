@@ -41,4 +41,30 @@ describe("a strict chain governs sub-agents too", () => {
     expect(candidates({ providerChain: ["opencode"], chainIsExhaustive: false }))
       .toEqual(["opencode", "opencode2", "openai"].sort());
   });
+
+  it("the TIER MAP does not outrank the chain either (measured live 2026-09-12 02:13)", () => {
+    // The candidate pool respected the chain and delegated turns still went to
+    // a provider outside it: the tier router's configured name is consulted
+    // first, before the pool is ever built.
+    const manager = Object.create(DelegationManager.prototype) as DelegationManager;
+    (manager as unknown as { opts: unknown }).opts = {
+      providerCredentials: { opencode: { apiKey: "a" }, openai: { apiKey: "c" } },
+      providerModels: {},
+      providerChain: ["opencode"],
+      chainIsExhaustive: true,
+      tierRouter: { resolveProviderConfig: () => ({ name: "openai", model: "gpt-x" }) },
+    };
+    (manager as unknown as { isDelegationProviderAvailable: (n: string) => boolean }).isDelegationProviderAvailable = () => true;
+    (manager as unknown as { getDefaultModelForProvider: (n: string) => string }).getDefaultModelForProvider = () => "m";
+    (manager as unknown as { buildDelegationProviderConfig: (n: string, m: string) => unknown }).buildDelegationProviderConfig =
+      (name: string) => ({ name, apiKey: "k", model: "m", baseUrl: "https://example.test/v1" });
+    (manager as unknown as { inferDelegationWorkload: () => string }).inferDelegationWorkload = () => "general";
+    (manager as unknown as { scoreDelegationCandidate: () => number }).scoreDelegationCandidate = () => 1;
+
+    const resolved = (manager as unknown as {
+      resolveDelegationProviderConfig(tier: string, cfg: unknown): { name: string };
+    }).resolveDelegationProviderConfig("standard", { name: "code_review" });
+
+    expect(resolved.name).toBe("opencode");
+  });
 });

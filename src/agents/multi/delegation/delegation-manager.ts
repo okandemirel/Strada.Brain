@@ -1026,6 +1026,18 @@ export class DelegationManager {
     const configured = this.opts.tierRouter.resolveProviderConfig(tier);
     const normalizedName = configured.name.trim().toLowerCase();
 
+    // THE TIER MAP IS NOT ABOVE THE CHAIN. The candidate pool learned to
+    // respect a strict chain, and delegated turns still went to a provider
+    // outside it — the tier router's own configured name is consulted first
+    // (measured live 2026-09-12 02:13, 36 calls after the pool was fixed).
+    if (normalizedName && !this.providerAllowedByChain(normalizedName)) {
+      const dynamicOnly = this.resolveDynamicProviderConfig(tier, typeConfig);
+      if (dynamicOnly) return dynamicOnly;
+      throw new Error(
+        `Delegation tier "${tier}" names provider "${normalizedName}", which is outside the configured PROVIDER_CHAIN, and no provider in the chain can serve it`,
+      );
+    }
+
     if (normalizedName && normalizedName !== "auto" && this.isDelegationProviderAvailable(normalizedName)) {
       return {
         name: normalizedName,
@@ -1074,6 +1086,13 @@ export class DelegationManager {
       name: top.name,
       model: top.model,
     };
+  }
+
+  /** Is this provider inside the operator's chain, when that chain is exhaustive? */
+  private providerAllowedByChain(name: string): boolean {
+    const chain = new Set((this.opts.providerChain ?? []).map((n) => n.trim().toLowerCase()).filter(Boolean));
+    if (this.opts.chainIsExhaustive !== true || chain.size === 0) return true;
+    return chain.has(name.trim().toLowerCase()) || name.trim().toLowerCase() === "auto";
   }
 
   private buildDelegationCandidates(): Array<{
