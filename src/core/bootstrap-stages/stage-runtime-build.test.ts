@@ -3,12 +3,13 @@
  * A missing or broken verdict is `ran: false` — disclosed, never a pass.
  */
 import { describe, expect, it } from "vitest";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parsePlayerBuildOutput, makeRunPlayer } from "./stage-runtime.js";
+import { parsePlayerBuildOutput, makeRunPlayer, looksLikePlayer } from "./stage-runtime.js";
 
-const realArtifact = mkdtempSync(join(tmpdir(), "build-artifact-")) + "/Game.app";
+const artifactDir = mkdtempSync(join(tmpdir(), "build-artifact-"));
+const realArtifact = join(artifactDir, "Game.app");
 writeFileSync(realArtifact, "binary");
 
 const built =
@@ -36,6 +37,21 @@ describe("makeRunPlayer — the tool's own failure reaches the caller (Codex 202
 });
 
 describe("parsePlayerBuildOutput", () => {
+  it("an existing file that is NOT a player build does not authenticate it (Codex 2026-09-11 D#12)", () => {
+    const notAPlayer = join(artifactDir, "package.json");
+    writeFileSync(notAPlayer, "{}");
+    const claimed = "PLAYER BUILT.\n\n```json\n" + JSON.stringify({ ok: true, reasons: [], artifact: { path: notAPlayer, exists: true } }) + "\n```";
+    const parsed = parsePlayerBuildOutput(claimed);
+    expect(parsed).toMatchObject({ ran: true, ok: false });
+    expect(parsed.reasons?.join(" ")).toContain("not a player artifact");
+    // A WebGL folder is a player build.
+    const webgl = join(artifactDir, "WebGL");
+    mkdirSync(webgl, { recursive: true });
+    writeFileSync(join(webgl, "index.html"), "<html>");
+    expect(looksLikePlayer(webgl)).toBe(true);
+    expect(looksLikePlayer(notAPlayer)).toBe(false);
+  });
+
   it("a claimed artifact that is NOT on disk is not a successful build (Codex 2026-09-11 C#12)", () => {
     const claimed = "PLAYER BUILT.\n\n```json\n" + JSON.stringify({ ok: true, reasons: [], artifact: { path: "/does/not/exist/Game.app", exists: true } }) + "\n```";
     const parsed = parsePlayerBuildOutput(claimed);

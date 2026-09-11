@@ -62,7 +62,7 @@ export interface SupervisorBrainOptions {
    * step back as `failed` so a retry RE-RUNS it instead of re-verifying the
    * same saved output forever (Codex 2026-09-11 C#5).
    */
-  readonly goalStorage?: { updateNodeStatus(nodeId: GoalNodeId, status: GoalStatus, result?: string, error?: string): void };
+  readonly goalStorage?: { updateNodeStatus(nodeId: GoalNodeId, status: GoalStatus, result?: string, error?: string, retryCount?: number, redecompositionCount?: number, reviewStatus?: string, reviewIterations?: number): void };
 }
 
 // =============================================================================
@@ -445,11 +445,33 @@ export class SupervisorBrain {
             // The verification itself is a model call per node: keep the
             // task's watchdog hearing from us, or a slow reviewer reads as an
             // inactive task (Codex 2026-09-11 C#7).
-            const { results: verified, report } = await withLivenessHeartbeat(
+            // A verifier that never settles used to hold the resume open while
+            // the heartbeat reported liveness (Codex 2026-09-11 D#7). The
+            // whole batch gets a deadline; past it the resume fails honestly.
+            const verifyDeadlineMs = Math.max(
+              RESUME_VERIFY_MIN_MS,
+              (this.config.nodeTimeoutMs ?? RESUME_VERIFY_MIN_MS) * Math.max(1, alreadyDone.nodeResults.length),
+            );
+            const verifiedOrTimeout = await withLivenessHeartbeat(
               context.chatId,
-              () => verifier.verifyWithReport(alreadyDone.nodeResults),
+              () => Promise.race([
+                verifier.verifyWithReport(alreadyDone.nodeResults),
+                new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), verifyDeadlineMs).unref?.()),
+              ]),
               context.onLiveness,
             );
+            if (verifiedOrTimeout === "timeout") {
+              getLoggerSafe().warn("Resume re-verification timed out — the saved plan is not counted as done", {
+                goalRootId,
+                steps: alreadyDone.totalNodes,
+                deadlineMs: verifyDeadlineMs,
+              });
+              return this.makePartialResult(
+                [],
+                `The saved plan could not be re-verified within ${Math.round(verifyDeadlineMs / 1000)} s, so it is not counted as done.`,
+              );
+            }
+            const { results: verified, report } = verifiedOrTimeout;
             if (externalSignal?.aborted || internalSignal.aborted) {
               return this.makePartialResult([], "Aborted during resume re-verification");
             }
@@ -467,10 +489,26 @@ export class SupervisorBrain {
               // A REJECTED step is no longer a completed checkpoint: writing
               // it back as failed makes the next retry re-run the work rather
               // than re-verify the same saved output (Codex 2026-09-11 C#5).
-              for (const r of verified) {
-                if (r.status === "ok") continue;
+              // Its DEPENDENTS go with it: a node whose input changed cannot
+              // keep its old "completed" (D#5), and the write preserves the
+              // result and retry counts the node already carried (D#18).
+              const rejected = new Set(verified.filter((r) => r.status !== "ok").map((r) => String(r.nodeId)));
+              const errorFor = new Map(verified.filter((r) => r.status !== "ok").map((r) => [String(r.nodeId), (r.output ?? "").slice(0, 500)]));
+              for (const id of dependentClosure(context.goalTree, rejected)) {
+                const node = context.goalTree?.nodes.get(id as GoalNodeId);
+                const why = errorFor.get(id)
+                  ?? "a step this one depends on was rejected on resume; its input may have changed";
                 try {
-                  this.goalStorage?.updateNodeStatus(r.nodeId, "failed", undefined, (r.output ?? "").slice(0, 500));
+                  this.goalStorage?.updateNodeStatus(
+                    id as GoalNodeId,
+                    "failed",
+                    node?.result,
+                    why,
+                    node?.retryCount,
+                    node?.redecompositionCount,
+                    node?.reviewStatus,
+                    node?.reviewIterations,
+                  );
                 } catch {
                   /* persistence is best effort; the returned result still says failed */
                 }
@@ -969,6 +1007,31 @@ export class SupervisorBrain {
  * nodes) yielded nothing, the task was blocked twice and a fresh re-plan was
  * started against work that had already landed.
  */
+/**
+ * The rejected nodes and everything that depends on them, transitively. A
+ * dependent's saved "completed" describes work done against an input that is
+ * about to change (Codex 2026-09-11 D#5).
+ */
+/** Floor for the resume re-verification deadline. */
+const RESUME_VERIFY_MIN_MS = 120_000;
+
+export function dependentClosure(tree: GoalTree | undefined, rejected: ReadonlySet<string>): string[] {
+  if (!tree) return [...rejected];
+  const out = new Set(rejected);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const [id, node] of tree.nodes) {
+      if (out.has(String(id))) continue;
+      if (node.dependsOn.some((d) => out.has(String(d)))) {
+        out.add(String(id));
+        grew = true;
+      }
+    }
+  }
+  return [...out];
+}
+
 export function completedPlanOnResume(tree: GoalTree | undefined): SupervisorResult | null {
   if (!tree) return null;
   const hasChildren = new Set<string>();

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
-import { completedPlanOnResume } from "./supervisor-brain.js";
+import { completedPlanOnResume, dependentClosure } from "./supervisor-brain.js";
 import type { GoalNode, GoalNodeId, GoalTree } from "../goals/types.js";
 
 function node(id: string, parentId: string | null, status: GoalNode["status"], task = `task ${id}`): GoalNode {
@@ -50,14 +50,40 @@ describe("a resumed task whose saved plan is already complete (2026-09-10 21:20)
     expect(branch).toContain("if (unapproved > 0) {");
     expect(branch).toContain("success: false");
     // A rejected step is written back as failed so a retry RE-RUNS it (C#5).
-    expect(branch).toContain('this.goalStorage?.updateNodeStatus(r.nodeId, "failed"');
+    expect(branch).toContain("for (const id of dependentClosure(context.goalTree, rejected))");
+    expect(branch).toContain('"failed"');
     expect(branch).toContain("withLivenessHeartbeat");
     expect(branch).toContain("Aborted during resume re-verification");
+    // A verifier that never settles cannot hold the resume open (D#7).
+    expect(branch).toContain('if (verifiedOrTimeout === "timeout") {');
+    expect(branch).toContain("could not be re-verified within");
+  });
+
+  it("a rejected step takes its DEPENDENTS with it (Codex 2026-09-11 D#5)", () => {
+    const t = tree([
+      node("root", null, "pending"),
+      { ...node("a", "root", "completed") },
+      { ...node("b", "root", "completed"), dependsOn: ["a" as GoalNodeId] },
+      { ...node("c", "root", "completed"), dependsOn: ["b" as GoalNodeId] },
+      { ...node("d", "root", "completed") },
+    ]);
+    expect(dependentClosure(t, new Set(["a"])).sort()).toEqual(["a", "b", "c"]);
+    expect(dependentClosure(t, new Set(["d"]))).toEqual(["d"]);
+    expect(dependentClosure(undefined, new Set(["a"]))).toEqual(["a"]);
+  });
+
+  it("the rejection write preserves what the node already recorded (Codex 2026-09-11 D#18)", () => {
+    const source = readFileSync("src/supervisor/supervisor-brain.ts", "utf8");
+    const at = source.indexOf("for (const id of dependentClosure(");
+    const block = source.slice(at, at + 900);
+    expect(block).toContain("node?.result");
+    expect(block).toContain("node?.retryCount");
+    expect(block).toContain("node?.reviewStatus");
   });
 
   it("the supervisor asks it before declaring 'No sub-tasks after decomposition'", () => {
     const source = readFileSync("src/supervisor/supervisor-brain.ts", "utf8");
     const at = source.indexOf('"No sub-tasks after decomposition"');
-    expect(source.lastIndexOf("completedPlanOnResume(context.goalTree)", at)).toBeGreaterThan(at - 5000);
+    expect(source.lastIndexOf("completedPlanOnResume(context.goalTree)", at)).toBeGreaterThan(at - 8000);
   });
 });

@@ -1,5 +1,5 @@
 import { supportsRichMessaging } from "../../channels/channel-core.interface.js";
-import { existsSync } from "node:fs";
+import { existsSync, statSync, readdirSync } from "node:fs";
 import type { Attachment } from "../../channels/channel-messages.interface.js";
 import { join } from "node:path";
 import { runCodexSecondOpinion } from "../../agents/review/codex-second-opinion.js";
@@ -681,6 +681,33 @@ export async function initializeTaskRuntimeStage(
  * identical to a runner that merely left no verdict, so the host exemption
  * could never fire in production (Codex 2026-09-11 D#6).
  */
+/**
+ * Does this path look like a player build? Existence alone authenticated the
+ * claim, so any file in the repository passed — a package.json was accepted as
+ * a delivered game (Codex 2026-09-11 D#12).
+ */
+export function looksLikePlayer(artifactPath: string): boolean {
+  if (/\.(?:app|apk|aab|ipa|exe|x86_64|dmg|zip)$/i.test(artifactPath)) return true;
+  try {
+    if (!statSync(artifactPath).isDirectory()) {
+      // A bare Linux/macOS executable has no extension; require it to be
+      // executable and not trivially small.
+      const st = statSync(artifactPath);
+      return st.size > 1024 * 1024 && (st.mode & 0o111) !== 0 && !/\.[a-z0-9]{1,6}$/i.test(artifactPath);
+    }
+  } catch {
+    return false;
+  }
+  // A directory: a WebGL build or a .app bundle's parent — it must hold
+  // something a player needs.
+  try {
+    const entries = readdirSync(artifactPath);
+    return entries.some((e) => /^(?:index\.html|Build|Data|.*_Data|Contents|UnityPlayer\.(?:dll|so|dylib))$/i.test(e));
+  } catch {
+    return false;
+  }
+}
+
 export function makeRunPlayer(registry: {
   getAvailableToolNames(): readonly string[];
   execute(name: string, input: Record<string, unknown>, context: unknown): Promise<{ content?: unknown; isError?: boolean }>;
@@ -719,13 +746,16 @@ export function parsePlayerBuildOutput(content: string): import("../../campaign/
   // The producer's own Boolean is a claim; the file system is the measurement
   // (Codex 2026-09-11 C#12).
   const artifactPath = typeof parsed.artifact?.path === "string" && parsed.artifact.path.length > 0 ? parsed.artifact.path : undefined;
-  const artifactExists = parsed.artifact?.exists === true && artifactPath !== undefined && existsSync(artifactPath);
+  const artifactExists =
+    parsed.artifact?.exists === true && artifactPath !== undefined && existsSync(artifactPath) && looksLikePlayer(artifactPath);
   const ok = parsed.ok === true && artifactExists;
   const reasons = Array.isArray(parsed.reasons) ? parsed.reasons.map(String).slice(0, 8) : [];
   if (parsed.ok === true && !artifactExists) {
     reasons.push(artifactPath === undefined
       ? "the build reported ok but named no artifact"
-      : `the build reported ok but ${artifactPath} is not on disk`);
+      : !existsSync(artifactPath)
+      ? `the build reported ok but ${artifactPath} is not on disk`
+      : `the build reported ok but ${artifactPath} is not a player artifact (expected an app bundle, executable, apk/aab/ipa or a WebGL folder)`);
   }
   return {
     ran: true,
