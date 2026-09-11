@@ -262,7 +262,17 @@ export class CampaignPlanner {
     let lastError: unknown;
     for (let round = 0; round < 2; round++) {
       try {
-        let ladder = await this.planOnce(system, userMessage);
+        // A RETRY THAT CHANGES NOTHING CHANGES NOTHING. The second round sent
+        // the identical message, so a model that answered in prose answered in
+        // prose again and the campaign failed at its first step (measured live
+        // 2026-09-12 00:42). The second ask names what was wrong with the
+        // first reply.
+        const ask = round === 0
+          ? userMessage
+          : `${userMessage}\n\nYour previous reply could not be used: ${
+              lastError instanceof Error ? lastError.message : String(lastError)
+            }. Reply with the JSON object ALONE — no prose before it, no explanation after it, no markdown fence.`;
+        let ladder = await this.planOnce(system, ask);
         let uncovered = uncoveredSections(scope.headings, ladder.milestones.flatMap((m) => m.coveredSections));
         if (uncovered.length > 0) {
           // Once: name the sections nobody claimed and ask for a ladder that
@@ -340,26 +350,32 @@ export class CampaignPlanner {
     }
     const response = await streamOrChatText(this.provider, system, userMessage);
     const text = response.text ?? "";
-    const jsonText = extractJsonObject(text);
-    if (!jsonText) {
+    // EVERY balanced object, last first. Taking the first "{" in the reply
+    // handed the parser whatever brace the model's prose happened to contain,
+    // and the campaign failed at its first step with "returned no JSON
+    // object" — measured live 2026-09-12 00:42 on a 1 458-line GDD.
+    const candidates = balancedJsonObjects(stripLeakedReasoning(text).text);
+    if (candidates.length === 0) {
+      getLoggerSafe().warn("Campaign planner reply carried no JSON object", { reply: text.slice(0, 400) });
       throw new Error("campaign planner returned no JSON object");
     }
-
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(jsonText);
-    } catch {
-      throw new Error("campaign planner returned malformed JSON");
+    let lastIssues: string | undefined;
+    for (const candidate of [...candidates].reverse()) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(candidate);
+      } catch {
+        continue;
+      }
+      const validated = milestoneLadderSchema.safeParse(parsed);
+      if (validated.success) return validated.data;
+      lastIssues = z.prettifyError(validated.error).slice(0, 300);
     }
-
-    const validated = milestoneLadderSchema.safeParse(parsed);
-    if (!validated.success) {
-      getLoggerSafe().warn("Campaign planner output failed validation", {
-        issues: z.prettifyError(validated.error).slice(0, 300),
-      });
+    if (lastIssues !== undefined) {
+      getLoggerSafe().warn("Campaign planner output failed validation", { issues: lastIssues });
       throw new Error("campaign planner output failed schema validation");
     }
-    return validated.data;
+    throw new Error("campaign planner returned malformed JSON");
   }
 
   /**
@@ -456,6 +472,39 @@ const coverageResultSchema = z.object({
 });
 
 /** Tolerant extraction: find the outermost balanced {...} in the reply. */
+/**
+ * Every TOP-LEVEL balanced `{…}` span in the text, in order of appearance.
+ *
+ * The single-object extractor takes the first "{" and whatever balances it,
+ * so a reply that explains itself before answering — or that shows a brace in
+ * prose — hid the object entirely (measured live 2026-09-12).
+ */
+export function balancedJsonObjects(text: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let start = -1;
+  let inString = false;
+  let escape = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]!;
+    if (escape) { escape = false; continue; }
+    if (ch === "\\") { escape = true; continue; }
+    if (ch === '"') { inString = !inString; continue; }
+    if (inString) continue;
+    if (ch === "{") {
+      if (depth === 0) start = i;
+      depth += 1;
+    } else if (ch === "}" && depth > 0) {
+      depth -= 1;
+      if (depth === 0 && start >= 0) {
+        out.push(text.slice(start, i + 1));
+        start = -1;
+      }
+    }
+  }
+  return out;
+}
+
 function extractJsonObject(raw: string): string | undefined {
   // A leaked thinking block holds braces of its own; the audit used to
   // extract the first of them and report "malformed JSON" (2026-09-07).
