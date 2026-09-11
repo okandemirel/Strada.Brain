@@ -1918,34 +1918,74 @@ export class WorkspaceLeaseManager {
     });
     const deleted: string[] = [];
     const candidates = seedRels.filter((_, index) => removedFlags[index]);
-    // The system's own leftovers go; anything else stays and is reported.
-    for (const rel of candidates) {
+    const candidateSet = new Set(candidates);
+    const declined = new Set<string>();
+    /** Preserve the project's copy before it goes; false = not preserved. */
+    const preserve = async (rel: string): Promise<boolean> => {
+      if (!quarantineRoot) return true;
+      try {
+        const quarantineTarget = join(quarantineRoot, "deleted", rel);
+        await fsp.mkdir(dirname(quarantineTarget), { recursive: true });
+        await fsp.copyFile(join(sourceRoot, rel), quarantineTarget);
+        conflictsQuarantinedUnder ??= quarantineRoot;
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    /** Is the project's copy still the one the worker decided about? */
+    const unchangedSinceSeed = async (rel: string): Promise<boolean> => {
+      const stamp = sourceSeed.get(rel);
+      if (stamp === undefined || Number.isNaN(stamp.s)) return true; // nothing recorded: as before
+      try {
+        return stampUnchanged(stamp, await fsp.stat(join(sourceRoot, rel)));
+      } catch {
+        return false;
+      }
+    };
+    // ASSETS BEFORE THEIR .meta, so a pair is decided as a pair.
+    const ordered = [...candidates].sort((a, b) => Number(/\.meta$/i.test(a)) - Number(/\.meta$/i.test(b)));
+    for (const rel of ordered) {
+      // The pair is decided together: whatever declines one declines the other,
+      // or the project keeps a .meta with no asset beside it (N#7).
+      const partner = /\.meta$/i.test(rel) ? rel.slice(0, -5) : `${rel}.meta`;
+      const partnerIsCandidate = candidateSet.has(partner);
+      const decline = (): void => {
+        removed.push(rel);
+        if (partnerIsCandidate) declined.add(partner);
+      };
+      if (declined.has(rel)) { removed.push(rel); continue; }
       const reason = opts?.quarantineOnly ? undefined : await systemOwnedDeletionReason(this.commandRunner, sourceRoot, rel);
       if (reason === undefined) {
-        removed.push(rel);
+        decline();
+        continue;
+      }
+      // THE PROJECT'S COPY MUST STILL BE THE ONE THE WORKER DELETED. Ownership
+      // and history said this file was the system's own leftover; neither says
+      // anything about the newer work someone else put there while the worker
+      // ran, and deleting it threw that work away (Codex 2026-09-11 N#7).
+      if (!(await unchangedSinceSeed(rel))) {
+        decline();
+        continue;
+      }
+      if (partnerIsCandidate && !(await unchangedSinceSeed(partner))) {
+        decline();
         continue;
       }
       // Every applied deletion is recoverable (review 2026-09-07): the
       // history rule cannot tell a user's file swept into a campaign
       // envelope commit from the campaign's own leftovers, so the project's
-      // copy goes to quarantine before it goes.
-      const doomed = join(sourceRoot, rel);
-      if (quarantineRoot) {
-        try {
-          const quarantineTarget = join(quarantineRoot, "deleted", rel);
-          await fsp.mkdir(dirname(quarantineTarget), { recursive: true });
-          await fsp.copyFile(doomed, quarantineTarget);
-          conflictsQuarantinedUnder ??= quarantineRoot;
-        } catch {
-          removed.push(rel);
-          continue; // not preserved → not deleted
-        }
+      // copy goes to quarantine before it goes. BOTH members are preserved
+      // before EITHER is removed.
+      if (!(await preserve(rel)) || (partnerIsCandidate && !(await preserve(partner)))) {
+        decline();
+        continue; // not preserved → not deleted
       }
       try {
-        await fsp.rm(doomed, { force: true });
+        await fsp.rm(join(sourceRoot, rel), { force: true });
         deleted.push(`${rel} — ${reason}`);
       } catch {
-        removed.push(rel);
+        decline();
       }
     }
     // What the system wrote is the only evidence a later deletion can rely on.

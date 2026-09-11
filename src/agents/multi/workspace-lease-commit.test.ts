@@ -720,6 +720,36 @@ describe("deletions of the system's own files are applied; the user's stay", () 
   // Measured 2026-09-07: every attempt deleted Assets/Scripts/PlayfieldBuilder.cs
   // (a duplicate the conformance gate forbids editing) and the InitTestScene
   // scaffolding the hygiene gate demands removed; every commit put them back.
+  it("does not delete a file someone CHANGED while the worker ran, nor split its pair (Codex 2026-09-11 N#7)", async () => {
+    // The deletion rule asks whose file it is; it never asked whether the file
+    // is still the one the worker decided about. A scene rewritten in the
+    // project while the worker ran was deleted with its newer bytes.
+    mkdirSync(join(source, "Assets"), { recursive: true });
+    writeFileSync(join(source, "Assets", "InitTestScene4abd18f9.unity"), "scene", "utf8");
+    writeFileSync(join(source, "Assets", "InitTestScene4abd18f9.unity.meta"), "meta", "utf8");
+    execSync(
+      "git init -q && git add -A && git -c user.email=a@b -c user.name=t commit -qm 'campaign: Sprint 1 — foundations'",
+      { cwd: source },
+    );
+    const lease = await gitManager().acquireLease({ label: "t" });
+    rmSync(join(lease.path, "Assets", "InitTestScene4abd18f9.unity"));
+    rmSync(join(lease.path, "Assets", "InitTestScene4abd18f9.unity.meta"));
+    // New scene work lands in the project while the worker runs.
+    writeFileSync(join(source, "Assets", "InitTestScene4abd18f9.unity"), "NEW SCENE WORK, much longer than before", "utf8");
+
+    const result = await lease.commit();
+    await lease.release();
+
+    expect(existsSync(join(source, "Assets", "InitTestScene4abd18f9.unity"))).toBe(true);
+    expect(readFileSync(join(source, "Assets", "InitTestScene4abd18f9.unity"), "utf8")).toContain("NEW SCENE WORK");
+    // …and its .meta is not left behind without it.
+    expect(existsSync(join(source, "Assets", "InitTestScene4abd18f9.unity.meta"))).toBe(true);
+    expect(result.deleted).toEqual([]);
+    expect(result.removed).toEqual(
+      expect.arrayContaining([join("Assets", "InitTestScene4abd18f9.unity"), join("Assets", "InitTestScene4abd18f9.unity.meta")]),
+    );
+  });
+
   it("removes a scaffolding scene and a campaign-authored duplicate, keeps a user file", async () => {
     mkdirSync(join(source, "Assets", "Scripts"), { recursive: true });
     writeFileSync(join(source, "Assets", "InitTestScene4abd18f9.unity"), "scene", "utf8");
