@@ -40,6 +40,13 @@ export interface WorkerToolTrace {
   readonly summary: string;
   readonly timestamp: number;
   readonly workspaceId?: string;
+  /**
+   * The call's own arguments, capped and redacted. Required-evidence used to
+   * accept ANY successful call of a named tool, so "run unity_playthrough
+   * with sessions \"all\"" was satisfied by a single-session run (Codex
+   * 2026-09-11, review B #13's residue).
+   */
+  readonly args?: string;
 }
 
 export interface WorkerVerificationResult {

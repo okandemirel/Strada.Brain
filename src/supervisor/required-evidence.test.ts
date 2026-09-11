@@ -1,7 +1,44 @@
 import { describe, expect, it } from "vitest";
-import { describeEvidenceShortfall, missingRequiredEvidence, requiredToolsInPrompt } from "./required-evidence.js";
+import { summarizeToolArgs } from "../agents/orchestrator-tool-execution.js";
+import { describeEvidenceShortfall, missingRequiredEvidence, requiredToolsInPrompt, requiredToolArguments } from "./required-evidence.js";
 
 describe("required evidence named by the task", () => {
+  it("the trace's argument copy is capped and redacted", () => {
+    const summary = summarizeToolArgs({
+      sessions: "all",
+      apiKey: "sk-should-never-appear",
+      prompt: "x".repeat(200),
+      nested: { a: 1 },
+      nothing: null,
+    });
+    expect(summary).toContain('"sessions":"all"');
+    expect(summary).not.toContain("sk-should-never-appear");
+    expect(summary).toContain("<redacted>");
+    expect(summary!.length).toBeLessThanOrEqual(400);
+    expect(summary).not.toContain("nothing");
+    expect(summarizeToolArgs(undefined)).toBeUndefined();
+    expect(summarizeToolArgs({})).toBeUndefined();
+  });
+
+  it("a tool that ran the WRONG way is not evidence (Codex 2026-09-11, review B #13 residue)", () => {
+    const prompt = 'Prove the levels: run unity_playthrough with sessions "all" and report the catalog.';
+    expect(requiredToolArguments(prompt)).toEqual([{ tool: "unity_playthrough", key: "sessions", value: "all" }]);
+    // Ran, but with one session: the task asked for all of them.
+    const narrow = missingRequiredEvidence(prompt, [
+      { toolName: "unity_playthrough", success: true, args: JSON.stringify({ sessions: "1" }) },
+    ]);
+    expect(narrow).toEqual([{ tool: "unity_playthrough", attempts: 1, argument: { key: "sessions", value: "all" } }]);
+    expect(describeEvidenceShortfall(narrow)).toContain('with sessions "all"');
+    // Ran the way the task named it.
+    expect(missingRequiredEvidence(prompt, [
+      { toolName: "unity_playthrough", success: true, args: JSON.stringify({ sessions: "all" }) },
+    ])).toEqual([]);
+    // A trace row that recorded no arguments cannot contradict the task.
+    expect(missingRequiredEvidence(prompt, [{ toolName: "unity_playthrough", success: true }])).toEqual([]);
+    // An ordinary mention manufactures no requirement.
+    expect(requiredToolArguments('unity_playthrough is a tool; the scene is named "Main".')).toEqual([]);
+  });
+
   it("names the tool whatever verb the sentence uses (Codex 2026-09-11 B#13)", () => {
     expect(requiredToolsInPrompt("execute unity_playthrough when the scene loads")).toEqual(["unity_playthrough"]);
     expect(requiredToolsInPrompt("run the full PlayMode suite using unity_test_run")).toEqual(["unity_test_run"]);

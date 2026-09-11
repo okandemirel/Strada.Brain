@@ -28,6 +28,31 @@ interface ErrorRecoveryLike {
 }
 
 /** Optional bg-specific worker instrumentation. */
+/**
+ * A capped, redacted copy of a tool call's arguments for the trace. Long
+ * values (prompts, file bodies) are cut; anything that looks like a secret is
+ * replaced. The required-evidence gate reads this to tell "ran the tool" from
+ * "ran the tool the way the task asked".
+ */
+export function summarizeToolArgs(input: unknown): string | undefined {
+  if (input === null || typeof input !== "object") return undefined;
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
+    // Substring, not word boundary: the name is usually camelCase ("apiKey"),
+    // which \b never matched.
+    if (/(?:key|token|secret|password|credential|auth)/i.test(key)) {
+      out[key] = "<redacted>";
+      continue;
+    }
+    if (value === null || value === undefined) continue;
+    const text = typeof value === "object" ? JSON.stringify(value) : String(value);
+    out[key] = text.length > 60 ? `${text.slice(0, 60)}…` : text;
+    if (Object.keys(out).length >= 12) break;
+  }
+  const json = JSON.stringify(out);
+  return json === "{}" ? undefined : json.slice(0, 400);
+}
+
 export interface WorkerCollectorLike {
   childWorkerResults: WorkerRunResult[];
   toolTrace: WorkerToolTrace[];
@@ -128,6 +153,7 @@ export function trackAndRecordToolResults(params: ToolTrackingParams): void {
         summary: tr.content.slice(0, 200),
         timestamp: Date.now(),
         workspaceId,
+        args: summarizeToolArgs(tc.input),
       });
     }
 
