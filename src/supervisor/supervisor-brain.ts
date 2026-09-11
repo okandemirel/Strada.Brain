@@ -684,7 +684,9 @@ export class SupervisorBrain {
             verifierProvider: canonicalizeProviderName(node.provider) ?? node.provider,
           });
         }
-        return this.verifyNode!(node, context);
+        // BOUNDED: a verifier that never settles used to hold the execution
+        // slot for ever (Codex 2026-09-11 M#12).
+        return withVerifyDeadline((n: NodeResult) => this.verifyNode!(n, context), VERIFY_TIMEOUT_MS, context.signal)(node);
       } : undefined,
       // audited 2026-09-02: the report's `candidates` counted every ok node even
       // in critical-only mode, so a run that verified all of its critical nodes
@@ -749,6 +751,39 @@ export class SupervisorBrain {
             "en",
             String(verifiedResults[i]!.nodeId),
           );
+        }
+      }
+
+      // A REJECTED NODE TAKES ITS DEPENDENTS WITH IT, on the ordinary path as
+      // well as on resume. Normal verification invalidated only the rejected
+      // node, so a retry re-ran it alone and the work built against its old
+      // output stayed "completed": A produced an API, B wired a scene against
+      // it, A was rejected and rebuilt, and B still referenced version one
+      // (Codex 2026-09-11 M#7).
+      const rejectedNow = new Set(
+        verifiedResults
+          .filter((r, i) => results[i]?.status === "ok" && r.status !== "ok")
+          .map((r) => String(r.nodeId)),
+      );
+      if (rejectedNow.size > 0 && this.goalStorage) {
+        for (const id of dependentClosure(decomposedGoalTree, rejectedNow)) {
+          if (rejectedNow.has(id)) continue; // already written by the aggregator
+          const node = decomposedGoalTree.nodes.get(id as GoalNodeId);
+          if (!node || node.status !== "completed") continue;
+          try {
+            this.goalStorage.updateNodeStatus(
+              id as GoalNodeId,
+              "failed",
+              node.result,
+              "a step this one depends on was rejected by verification; its input changed",
+              node.retryCount,
+              node.redecompositionCount,
+              node.reviewStatus,
+              node.reviewIterations,
+            );
+          } catch {
+            /* the tree may have moved on; the rejection itself still stands */
+          }
         }
       }
 
@@ -1064,6 +1099,57 @@ export function dependentClosure(tree: GoalTree | undefined, rejected: ReadonlyS
  * verdict it had already returned (Codex 2026-09-11 E#11). The call already in
  * flight cannot be recalled; every call after the deadline is refused.
  */
+/** How long one node's verification may take before it is given up on. */
+export const VERIFY_TIMEOUT_MS = 5 * 60_000;
+
+/**
+ * Bound a verification call.
+ *
+ * The normal post-dispatch path awaited a call with no deadline and no abort
+ * race, so a verifier that never settles held its execution slot for ever:
+ * abort could not reach the `finally` that releases it, and with concurrency 1
+ * the whole queue stopped behind it (Codex 2026-09-11 M#12). A verification
+ * nobody answered is "not verified", which is what an unanswered check means.
+ */
+export function withVerifyDeadline<N>(
+  verify: (node: N) => Promise<VerificationVerdict>,
+  timeoutMs: number = VERIFY_TIMEOUT_MS,
+  signal?: AbortSignal,
+): (node: N) => Promise<VerificationVerdict> {
+  return async (node) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let onAbort: (() => void) | undefined;
+    try {
+      return await Promise.race([
+        verify(node),
+        new Promise<VerificationVerdict>((resolve) => {
+          timer = setTimeout(
+            () => resolve({
+              verdict: "skipped",
+              issues: [`verification did not answer within ${Math.round(timeoutMs / 1000)}s`],
+              verifierProvider: "timeout",
+            }),
+            timeoutMs,
+          );
+          timer.unref?.();
+          if (signal) {
+            onAbort = (): void => resolve({
+              verdict: "skipped",
+              issues: ["verification abandoned: the run was aborted"],
+              verifierProvider: "aborted",
+            });
+            if (signal.aborted) onAbort();
+            else signal.addEventListener("abort", onAbort, { once: true });
+          }
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+      if (signal && onAbort) signal.removeEventListener("abort", onAbort);
+    }
+  };
+}
+
 export function stopAfterDeadline<N, R>(
   verify: (node: N) => Promise<R>,
   deadlinePassed: () => boolean,

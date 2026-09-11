@@ -193,3 +193,32 @@ describe("a resumed task whose saved plan is already complete (2026-09-10 21:20)
     expect(branch).not.toMatch(/if \(\s*(?:false|0)\s*&&/);
   });
 });
+
+describe("a rejected node takes its dependents with it on the ORDINARY path too (Codex 2026-09-11 M#7)", () => {
+  it("invalidates the completed work built against rejected output", () => {
+    // A produced a player API, B wired a scene against it, verification
+    // rejected A. Normal verification invalidated only A, so the retry
+    // rebuilt it alone and B kept referencing version one — success reported
+    // over work that no longer matched its input.
+    const source = readFileSync(new URL("./supervisor-brain.ts", import.meta.url), "utf8");
+    const at = source.indexOf("const rejectedNow = new Set(");
+    expect(at).toBeGreaterThan(0);
+    const block = source.slice(at, at + 1400);
+    expect(block).toContain("dependentClosure(decomposedGoalTree, rejectedNow)");
+    expect(block).toContain('"failed"');
+    expect(block).toContain("its input changed");
+    // …and it runs on the ordinary verification path, not only on resume.
+    expect(source.indexOf("const rejectedNow = new Set(")).toBeGreaterThan(source.indexOf("await aggregator.verifyWithReport(results)"));
+  });
+
+  it("the closure itself reaches every dependent, however deep", () => {
+    const a = { ...node("a", "root", "completed") };
+    const b = { ...node("b", "root", "completed"), dependsOn: ["a" as GoalNodeId] };
+    const c = { ...node("c", "root", "completed"), dependsOn: ["b" as GoalNodeId] };
+    const unrelated = node("d", "root", "completed");
+    const closure = dependentClosure(tree([node("root", null, "pending"), a, b, c, unrelated]), new Set(["a"]));
+
+    expect(closure).toEqual(expect.arrayContaining(["b", "c"]));
+    expect(closure).not.toContain("d");
+  });
+});
