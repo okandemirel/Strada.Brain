@@ -56,7 +56,10 @@ const BASELINE_SCORES: Record<CapabilityTag, number> = {
  */
 export function buildProviderDescriptors(providerManager: ProviderManager): SupervisorProviderDescriptor[] {
   // (behavioral profiles imported at module scope below)
-  const available = providerManager.listAvailable();
+  // ROUTABLE, not merely present: the assigner chooses the worker for every
+  // node, and a provider outside a strict chain is not ours to spend
+  // (measured live 2026-09-12 02:24).
+  const available = providerManager.listRoutable();
   return available.map((entry) => {
     const capabilities = providerManager.getProviderCapabilities(entry.name, entry.defaultModel);
     const scores: Record<CapabilityTag, number> = { ...BASELINE_SCORES };

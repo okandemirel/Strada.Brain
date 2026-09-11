@@ -12,7 +12,9 @@ describe("supervisor provider descriptors", () => {
     const { buildProviderDescriptors: build } = await import("./stage-supervisor.js");
 
     const providerManager = {
-      listAvailable: () => [
+      // The assigner asks for what may ROUTE, not merely what exists (the
+      // strict-chain fix, 2026-09-12).
+      listRoutable: () => [
         { name: "claude", defaultModel: "sonnet" },
         { name: "openai", defaultModel: "gpt" },
       ],

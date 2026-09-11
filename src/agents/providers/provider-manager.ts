@@ -872,6 +872,25 @@ export class ProviderManager {
     });
   }
 
+  /**
+   * What may actually SERVE work, as opposed to what has a credential.
+   *
+   * listAvailable() answers "which providers exist here", and the supervisor's
+   * node assignment used it to choose a worker — so with a strict
+   * PROVIDER_CHAIN the operator's own list was ignored a fourth time and
+   * delegated turns kept going to an account reserved for other work
+   * (measured live 2026-09-12 02:24). Routing asks this one.
+   */
+  listRoutable(): ReturnType<ProviderManager["listAvailable"]> {
+    const all = this.listAvailable();
+    const chain = new Set(
+      this.defaultProviderOrder.map((n) => canonicalizeProviderName(n) ?? n.trim().toLowerCase()),
+    );
+    if (!this.chainIsExhaustive || chain.size === 0) return all;
+    const inChain = all.filter((entry) => chain.has(canonicalizeProviderName(entry.name) ?? entry.name.toLowerCase()));
+    return inChain.length > 0 ? inChain : all;
+  }
+
   listAvailable(): Array<{
     name: string;
     label: string;
