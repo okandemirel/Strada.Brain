@@ -11,7 +11,7 @@
 
 import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { classifyPngBytes, isPlaceholderGradePng, measurePngContent } from "../../autonomy/built-as-specified.js";
 
 /** The real path of `p`'s nearest existing ancestor plus the rest — symlinked temp roots (/var → /private/var) compare equal. */
@@ -44,18 +44,41 @@ export function outsideAssetsError(projectPath: string, fullPath: string, reques
  * good. `restore()` puts them back (or removes what a failed call minted);
  * `commit()` forgets them.
  */
+/**
+ * Which generation last COMMITTED art at a path, as a monotonic tick.
+ *
+ * Two generations against one path each snapshot the same original; the first
+ * commits its new art, the second fails and restores ITS snapshot — over the
+ * first one's committed image, which then existed nowhere (Codex 2026-09-11
+ * O#17). A restore that would undo someone else's committed work does nothing
+ * instead.
+ */
+const committedAt = new Map<string, { tick: number; digest: string | undefined }>();
+let generationTick = 0;
+
+function digestOf(path: string): string | undefined {
+  try {
+    return createHash("sha256").update(readFileSync(path)).digest("hex");
+  } catch {
+    return undefined;
+  }
+}
+
 export class PreviousAsset {
   private readonly hadAsset: boolean;
   private readonly hadMeta: boolean;
   private readonly assetBackup: string;
   private readonly metaBackup: string;
   private done = false;
+  /** Where this instance sits in the order of generations at this path. */
+  private readonly startedAt: number;
 
   constructor(readonly fullPath: string) {
     // A backup name OF ITS OWN. Two generations targeting the same path used
     // the same two filenames: the first to finish deleted them, and the
     // second's restore threw ENOENT with its damaged output left in place and
     // the original surviving nowhere (Codex 2026-09-11 N#9).
+    this.startedAt = ++generationTick;
     const token = randomUUID().slice(0, 8);
     this.assetBackup = `${fullPath}.strada-prev-${token}`;
     this.metaBackup = `${fullPath}.meta.strada-prev-${token}`;
@@ -107,12 +130,24 @@ export class PreviousAsset {
   /** Put the previous pair back; remove a newly minted pair when there was none. */
   restore(): void {
     if (this.done) return;
-    this.done = true;
+    // SOMEONE ELSE'S COMMITTED ART IS NOT OURS TO UNDO — while it is still
+    // their art on disk. If the file has changed since they committed it, it
+    // is ours (a damaged draw), and our snapshot is the better of the two.
+    const newer = committedAt.get(this.fullPath);
+    if (newer !== undefined && newer.tick > this.startedAt && newer.digest !== undefined
+      && digestOf(this.fullPath) === newer.digest) {
+      this.done = true;
+      this.forget();
+      return;
+    }
     try {
       if (this.hadAsset) copyFileSync(this.assetBackup, this.fullPath);
       else rmSync(this.fullPath, { force: true });
       if (this.hadMeta) copyFileSync(this.metaBackup, `${this.fullPath}.meta`);
       else rmSync(`${this.fullPath}.meta`, { force: true });
+      // ONLY NOW. `done` used to be set before the copies, so a restore that
+      // failed could not be repeated after the filesystem was fixed (O#17).
+      this.done = true;
     } catch (err) {
       // A RESTORE THAT FAILED KEEPS ITS BACKUPS. Deleting them in a finally
       // block threw away the only surviving copy of the previous art exactly
@@ -126,6 +161,7 @@ export class PreviousAsset {
   commit(): void {
     if (this.done) return;
     this.done = true;
+    committedAt.set(this.fullPath, { tick: ++generationTick, digest: digestOf(this.fullPath) });
     this.forget();
   }
 

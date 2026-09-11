@@ -67,7 +67,10 @@ export function buildReasoningPrompt(params: {
     "Based on the above, respond with EXACTLY one JSON block:",
     "",
     "```json",
-    '{ "action": "execute", "goal": "description of what to do", "reasoning": "why" }',
+    // batchObservationIds NAMES what the goal answers. Without it only a
+    // single-observation batch is unambiguous, and every other actionable
+    // observation is held for another round (Codex 2026-09-11 O#19).
+    '{ "action": "execute", "goal": "description of what to do", "batchObservationIds": ["the id this goal answers"], "reasoning": "why" }',
     "```",
     "",
     "OR",

@@ -375,8 +375,64 @@ describe("AgentCore OODA Integration", () => {
 
     await core.tick();
 
-    // B is still outstanding, not forgotten.
+    // Nothing was named, so NEITHER is acknowledged: the goal could have been
+    // about either, and a one-shot observer does not report an unchanged
+    // failure twice (Codex 2026-09-11 M#3, O#19).
+    expect(engine.getDeferredCount()).toBe(2);
+  });
+
+  it("…and a decision that NAMES its observation consumes only that one (Codex 2026-09-11 O#19)", async () => {
+    const a = createObservation("build", "Broken module A", { priority: 80, actionable: true });
+    const b = createObservation("build", "Broken module B", { priority: 79, actionable: true });
+    const engine = new ObservationEngine();
+    let collects = 0;
+    engine.register({ name: "test", collect: () => (++collects === 1 ? [a, b] : []) });
+    const provider = {
+      chat: vi.fn().mockResolvedValue(makeLLMResponse({
+        action: "execute", goal: "Fix module B", batchObservationIds: [b.id], reasoning: "B first",
+      })),
+    };
+    const core = new AgentCore(
+      engine, new PriorityScorer(), provider as any,
+      { submit: vi.fn().mockReturnValue({ id: "task_mock01" }), listTasks: vi.fn().mockReturnValue([]), getStatus: vi.fn().mockReturnValue(null) } as any,
+      { sendText: vi.fn().mockResolvedValue(undefined) } as any,
+      { getUsage: vi.fn().mockReturnValue({ usedUsd: 5, limitUsd: 10, pct: 0.5 }) },
+      undefined,
+      { minReasoningIntervalMs: 0, minObservationPriority: 30, budgetFloorPct: 10 },
+    );
+
+    await core.tick();
+
+    // A is held; B was answered.
     expect(engine.getDeferredCount()).toBe(1);
+  });
+
+  it("a decision that cannot be carried out is charged, not celebrated (Codex 2026-09-11 O#20)", async () => {
+    // "execute" with no goal did nothing, cleared the unreadable-round charge
+    // and requeued everything: eight reasoning calls, zero submissions.
+    const a = createObservation("build", "Broken module A", { priority: 80, actionable: true });
+    const engine = new ObservationEngine();
+    let collects = 0;
+    engine.register({ name: "test", collect: () => (++collects === 1 ? [a] : []) });
+    const submit = vi.fn().mockReturnValue({ id: "task_mock01" });
+    const provider = {
+      chat: vi.fn().mockResolvedValue(makeLLMResponse({ action: "execute", reasoning: "no goal" })),
+    };
+    const core = new AgentCore(
+      engine, new PriorityScorer(), provider as any,
+      { submit, listTasks: vi.fn().mockReturnValue([]), getStatus: vi.fn().mockReturnValue(null) } as any,
+      { sendText: vi.fn().mockResolvedValue(undefined) } as any,
+      { getUsage: vi.fn().mockReturnValue({ usedUsd: 5, limitUsd: 10, pct: 0.5 }) },
+      undefined,
+      { minReasoningIntervalMs: 0, minObservationPriority: 30, budgetFloorPct: 10 },
+    );
+
+    await core.tick();
+
+    expect(submit).not.toHaveBeenCalled();
+    // Charged: the observation carries an unreadable round, so a provider that
+    // keeps doing this runs out of patience instead of looping for ever.
+    expect((core as unknown as { unparsedRounds: Map<string, number> }).unparsedRounds.get(a.id)).toBe(1);
   });
 
   it("action defer -> observation deferred and re-appears after timeout", async () => {

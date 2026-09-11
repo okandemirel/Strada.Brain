@@ -95,6 +95,39 @@ describe("what already sits at a generation target", () => {
     expect(readdirSync(dir).some((f) => f.includes(".strada-prev"))).toBe(true);
   });
 
+  it("does not roll back art another generation COMMITTED, and a failed restore can be repeated (Codex 2026-09-11 O#17)", () => {
+    const target = join(dir, "Hero.png");
+    const original = png(64, 64, "noise");
+    writeFileSync(target, original);
+    const a = new PreviousAsset(target);
+    const b = new PreviousAsset(target);
+
+    // A draws and commits.
+    const newArt = png(64, 64, "flat");
+    writeFileSync(target, newArt);
+    a.commit();
+
+    // B then fails and restores ITS snapshot — which is the OLD image, and
+    // would erase art that has already been committed.
+    b.restore();
+    expect(readFileSync(target).equals(newArt)).toBe(true);
+
+    // A restore that could not put the file back may be repeated once the
+    // filesystem allows it: `done` used to be set before the copy.
+    const c = new PreviousAsset(target);
+    writeFileSync(target, Buffer.alloc(4));
+    rmSync(target, { force: true });
+    mkdirSync(target, { recursive: true });
+    expect(() => c.restore()).toThrow();
+    rmSync(target, { recursive: true, force: true });
+    c.restore();
+    expect(readFileSync(target).equals(newArt)).toBe(true);
+    // …and once it HAS succeeded it is finished: calling it again is a no-op,
+    // not a second copy from backups that are already gone.
+    expect(() => c.restore()).not.toThrow();
+    expect(readFileSync(target).equals(newArt)).toBe(true);
+  });
+
   it("restores the previous pair byte for byte", () => {
     const target = join(dir, "Hero.png");
     const original = png(64, 64, "noise");

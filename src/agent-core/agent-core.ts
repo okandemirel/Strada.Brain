@@ -240,6 +240,32 @@ export class AgentCore {
         topObservation: ranked[0]?.summary.slice(0, 100),
       });
 
+      // A DECISION THAT CANNOT BE CARRIED OUT is not a decision. "execute"
+      // with no goal, "batch" with no ids, "notify" with no message: the arm
+      // did nothing, the unreadable-round charge was cleared and every
+      // observation was requeued — eight reasoning calls, zero submissions
+      // (Codex 2026-09-11 O#20). It is charged exactly like an unreadable one.
+      const unusable =
+        (decision.action === "execute" && !decision.goal)
+        || (decision.action === "batch" && (!decision.goal || !(decision.batchObservationIds ?? []).length))
+        || (decision.action === "notify" && !decision.message)
+        || (decision.action === "defer" && !decision.deferMinutes);
+      if (unusable) {
+        const exhausted = this.chargeUnparsed(batch);
+        this.logger.warn("AgentCore decision cannot be carried out", {
+          action: decision.action,
+          reasoning: decision.reasoning.slice(0, 200),
+          exhausted,
+        });
+        this.requeueUnacted(
+          batch,
+          `unusable-${decision.action}`,
+          exhausted ? UNPARSED_COOLDOWN_MINUTES : UNACTED_BATCH_RECHECK_MINUTES,
+        );
+        consumed = true;
+        return;
+      }
+
       // WHICH observations this decision actually handled. `consumed` used to
       // mean "the whole batch is answered", so a decision that submitted a
       // goal for ONE failure silently dropped every other actionable
@@ -262,8 +288,23 @@ export class AgentCore {
             // never followed up — its failure produced no task-outcome observation. Every submitted
             // task is tracked; an empty instinctIds list makes the instinct-credit loop a no-op.
             this.taskInstinctMap.set(task.id, { instinctIds: matchedInstinctIds, createdAt: Date.now() });
-            // Record action for dedup
-            if (ranked[0]) { this.priorityScorer.recordAction(ranked[0]); handled.add(ranked[0].id); }
+            // WHAT THE DECISION NAMED. Marking ranked[0] handled whatever the
+            // goal was about consumed the wrong failure: "Fix Broken B"
+            // acknowledged A and deferred B (Codex 2026-09-11 O#19). With no
+            // ids named, only a single-observation batch is unambiguous.
+            const named = new Set(decision.batchObservationIds ?? []);
+            const answered = named.size > 0
+              ? ranked.filter((o) => named.has(o.id))
+              : ranked.filter((o) => o.actionable).length === 1
+              ? ranked.filter((o) => o.actionable)
+              : [];
+            for (const obs of answered) {
+              this.priorityScorer.recordAction(obs);
+              handled.add(obs.id);
+            }
+            // The top observation is still recorded for dedup, so a requeued
+            // batch cannot resubmit the same goal on the next tick.
+            if (ranked[0] && !handled.has(ranked[0].id)) this.priorityScorer.recordAction(ranked[0]);
             this.logger.info("AgentCore: submitted goal", { goal: decision.goal.slice(0, 200) });
           }
           break;
