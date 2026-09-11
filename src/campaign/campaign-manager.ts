@@ -3349,7 +3349,12 @@ export class CampaignManager {
         // final proofs still pending (Codex 2026-09-11 J#11). The index is
         // found by ID rather than computed, so it cannot land on the wrong
         // milestone.
-        const finalAt = campaign.milestones.findIndex((m) => m.id.startsWith("mfinal"));
+        // The LAST final milestone that has not been proven: inserting before
+        // the FIRST one rewound the ladder past sprints already green when an
+        // older mfinal sat earlier in it (Codex 2026-09-11 K#10).
+        const finalAt = campaign.milestones.findIndex(
+          (m, i) => m.id.startsWith("mfinal") && m.status !== "green" && i >= campaign.currentMilestone,
+        );
         if (finalAt >= 0) campaign.milestones.splice(finalAt, 0, ...sprints);
         else campaign.milestones.push(...sprints);
         const firstId = sprints[0]!.id;
@@ -3400,6 +3405,35 @@ export class CampaignManager {
         await this.tell(
           campaign,
           `⚠️ Coverage remediation ended without closing ${gaps.length || "its"} gap(s). The game is NOT delivered on that alone — a final proof sprint runs the whole delivery gate on the tree as it is now.`,
+        );
+        return;
+      }
+      // A PENDING FINAL PROOF SPRINT IS RUN, not stepped over. Reaching this
+      // branch with an mfinal still pending declared `done` from the
+      // structural check alone: compile, tests, build and play-through never
+      // ran on the game the remediation had just changed (Codex 2026-09-11
+      // K#9). Move to it instead.
+      const pendingFinal = campaign.milestones.findIndex(
+        (m) => m.id.startsWith("mfinal") && m.status !== "green",
+      );
+      if (pendingFinal >= 0) {
+        milestone.status = "failed";
+        milestone.resultExcerpt = output.slice(-500);
+        campaign.currentMilestone = pendingFinal;
+        campaign.milestones[pendingFinal]!.status = "pending";
+        campaign.milestones[pendingFinal]!.attempts = 0;
+        campaign.state = "executing";
+        campaign.lastError = undefined;
+        this.cancelLiveLineages(campaign, "superseded by the final proof sprint", { recoverable: true });
+        this.persist(campaign);
+        this.submitCurrentMilestone(campaign);
+        getLoggerSafe().info("Coverage remediation ended — running the pending final proof sprint", {
+          id: campaign.id,
+          milestone: campaign.milestones[pendingFinal]!.id,
+        });
+        await this.tell(
+          campaign,
+          `⚠️ ${milestone.title} ended without closing its gap. The final proof sprint runs the whole delivery gate on the tree as it is now.`,
         );
         return;
       }

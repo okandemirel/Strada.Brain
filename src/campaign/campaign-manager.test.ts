@@ -3174,6 +3174,89 @@ describe("CampaignManager", () => {
     expect(gaps.filter((m) => m.coverageGap === "Boss fight: absent")).toHaveLength(1);
   });
 
+  it("a pending final proof sprint is RUN, not stepped over (Codex 2026-09-11 K#9)", async () => {
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
+
+    // The ladder after a remediation round: a spent gap sprint, and a final
+    // proof sprint that has never run.
+    const staged = storage.get(campaign.id)!;
+    staged.milestones = [
+      ...staged.milestones.slice(0, 2).map((m) => ({ ...m, status: "green" as const })),
+      { id: "mcov1", title: "Coverage completion 1.1 — Save", prompt: "close the save gap", status: "running" as const, attempts: 2, taskId: "task_3", coverageGap: "Save: absent" },
+      { id: "mfinal-4", title: "Final delivery proofs", prompt: "prove it", status: "pending" as const, attempts: 0 },
+    ];
+    staged.currentMilestone = 2;
+    storage.save(staged);
+
+    tasks.emit("task:failed", "task_3", "gap sprint gave up");
+    await waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(3));
+
+    const after = storage.get(campaign.id)!;
+    // It did not declare delivery from the structural check alone.
+    expect(after.state).toBe("executing");
+    expect(after.milestones[after.currentMilestone]!.id).toBe("mfinal-4");
+    expect(tasks.submitted.at(-1)!.prompt).toContain("prove it");
+
+    // …and with an OLDER final sprint already green in the ladder, it is the
+    // UNPROVEN one that runs: a green mfinal proved an earlier tree.
+    const twoFinals = storage.get(campaign.id)!;
+    twoFinals.milestones = [
+      { ...twoFinals.milestones[0]!, status: "green" as const },
+      { id: "mfinal-2", title: "Final delivery proofs", prompt: "proved once", status: "green" as const, attempts: 1 },
+      { id: "mcov9", title: "Coverage completion 9.1 — Audio", prompt: "close the audio gap", status: "running" as const, attempts: 2, taskId: "task_9", coverageGap: "Audio: absent" },
+      { id: "mfinal-9", title: "Final delivery proofs", prompt: "prove it again", status: "pending" as const, attempts: 0 },
+    ];
+    twoFinals.currentMilestone = 2;
+    twoFinals.state = "executing";
+    twoFinals.pendingCoverageGaps = undefined;
+    storage.save(twoFinals);
+    const before = tasks.submitted.length;
+    tasks.emit("task:failed", "task_9", "gap sprint gave up");
+    await waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(before));
+    expect(tasks.submitted.at(-1)!.prompt).toContain("prove it again");
+    expect(tasks.submitted.at(-1)!.prompt).not.toContain("proved once");
+  });
+
+  it("an OLD green final sprint does not rewind the ladder or satisfy the proofs (Codex 2026-09-11 K#9, K#10)", async () => {
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
+
+    const staged = storage.get(campaign.id)!;
+    staged.milestones = [
+      { ...staged.milestones[0]!, status: "green" as const },
+      { id: "mfinal-old", title: "Final delivery proofs", prompt: "proved once", status: "green" as const, attempts: 1 },
+      { id: "mcov1", title: "Coverage completion 1.1 — Save", prompt: "close the save gap", status: "green" as const, attempts: 1, coverageGap: "Save: absent" },
+      { id: "mcov2", title: "Coverage completion 1.2 — Audio", prompt: "close the audio gap", status: "running" as const, attempts: 2, taskId: "task_3", coverageGap: "Audio: absent" },
+      { id: "mfinal-new", title: "Final delivery proofs", prompt: "prove it again", status: "pending" as const, attempts: 0 },
+    ];
+    staged.currentMilestone = 3;
+    staged.pendingCoverageGaps = ["Story: absent"];
+    storage.save(staged);
+
+    tasks.emit("task:failed", "task_3", "gap sprint gave up");
+    await waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(3));
+
+    const after = storage.get(campaign.id)!;
+    const ids = after.milestones.map((m) => m.id);
+    // The queued gap went in before the sprint that still has to prove the
+    // game, NOT before the one that already did.
+    expect(ids.indexOf("mfinal-old")).toBeLessThan(ids.findIndex((id) => id.startsWith("mcov")));
+    const lastGap = ids.map((id, i) => (id.startsWith("mcov") ? i : -1)).reduce((max, i) => Math.max(max, i), -1);
+    expect(lastGap).toBeLessThan(ids.indexOf("mfinal-new"));
+    // …and the sprint it is running is the one that still has to prove the
+    // game, not the one that proved an earlier version of it.
+    expect(tasks.submitted.at(-1)!.prompt).not.toContain("proved once");
+  });
+
   it("a drained gap is inserted BEFORE the final proof sprint (Codex 2026-09-11 J#11)", async () => {
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
     await waitFor(() => expect(tasks.submitted).toHaveLength(1));
