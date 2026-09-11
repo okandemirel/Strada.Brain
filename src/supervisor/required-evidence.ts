@@ -55,7 +55,10 @@ export function requiredToolsInPrompt(prompt: string): string[] {
   // unity_test_run"). "run X" alone let "execute unity_x" through (Codex
   // 2026-09-11 B#13).
   const conditional = new Set<string>();
-  for (const m of prompt.matchAll(/\b(?:run|execute|invoke|call|use|using|via|through)\b(?:\s+(?!unity_)[a-z'-]+){0,4}\s+(unity_[a-z0-9_]+)/gi)) {
+  // The name may be CODE-FORMATTED or quoted: ``Run `unity_playthrough` `` is
+  // the ordinary way to write an instruction, and the gate saw no requirement
+  // at all (Codex 2026-09-11 M#2).
+  for (const m of prompt.matchAll(/\b(?:run|execute|invoke|call|use|using|via|through)\b(?:\s+(?!unity_)[a-z'-]+){0,4}\s*[`'"*_]*\s*(unity_[a-z0-9_]+)/gi)) {
     const tool = m[1]!.toLowerCase();
     // A tool named in a CONDITIONAL instruction is required only when that
     // condition holds, and nothing here can judge that — so it is reported as
@@ -63,7 +66,12 @@ export function requiredToolsInPrompt(prompt: string): string[] {
     if (CONDITIONAL_RE.test(sentenceAround(prompt, m.index ?? 0))) conditional.add(tool);
     else out.add(tool);
   }
-  for (const tool of conditional) out.delete(tool);
+  // …but an UNCONDITIONAL mention outranks a conditional one. "Run
+  // unity_playthrough. If it fails, run unity_playthrough again." required
+  // nothing at all, because the second sentence deleted the first (M#2).
+  for (const tool of conditional) {
+    if (!out.has(tool)) out.delete(tool);
+  }
   return [...out];
 }
 
@@ -129,6 +137,27 @@ function sentenceEnd(text: string, from: number): number {
   return stop === -1 ? text.length : from + stop;
 }
 
+/**
+ * The tools named inside a threshold loop's own sentences.
+ *
+ * The exemption exists because a loop whose threshold already holds correctly
+ * does not run its body; it has nothing to say about a tool the prompt demands
+ * elsewhere (Codex 2026-09-11 M#2).
+ */
+export function thresholdLoopTools(prompt: string): Set<string> {
+  const tools = new Set<string>();
+  if (!THRESHOLD_LOOP_RE.test(prompt)) return tools;
+  // The loop's own PROCEDURE is the paragraph it ends: "call A, then call B,
+  // … repeat until the count is below N". A paragraph that does not contain
+  // the threshold sentence is other work, and its tools are still demanded
+  // (Codex 2026-09-11 M#2).
+  for (const paragraph of prompt.split(/\n\s*\n/)) {
+    if (!THRESHOLD_LOOP_RE.test(paragraph)) continue;
+    for (const m of paragraph.matchAll(/(unity_[a-z0-9_]+)/gi)) tools.add(m[1]!.toLowerCase());
+  }
+  return tools;
+}
+
 /** Required tools without a successful call in the trace, with how many times each was tried. */
 export function missingRequiredEvidence(
   prompt: string,
@@ -143,12 +172,15 @@ export function missingRequiredEvidence(
   // met failed this gate every round for hours. One successful call of a
   // named tool is the evidence that the node did the measuring; a node that
   // ran none of them is still rejected.
-  const loopThreshold = THRESHOLD_LOOP_RE.test(prompt);
-  const ranSomething = required.some((tool) => trace.some((t) => t.toolName === tool && t.success));
+  // …and the exemption covers the tools the LOOP names, not every tool in the
+  // prompt: a sprite threshold loop followed by an unconditional Android build
+  // waived the build nobody had run (Codex 2026-09-11 M#2).
+  const loopTools = thresholdLoopTools(prompt);
+  const ranSomething = [...loopTools].some((tool) => trace.some((t) => t.toolName === tool && t.success));
   for (const tool of required) {
     const calls = trace.filter((t) => t.toolName === tool);
     if (!calls.some((t) => t.success)) {
-      if (loopThreshold && ranSomething) continue;
+      if (loopTools.has(tool) && ranSomething) continue;
       shortfalls.push({ tool, attempts: calls.length });
       continue;
     }
@@ -159,7 +191,13 @@ export function missingRequiredEvidence(
     const wants = requiredToolArguments(prompt).filter((w) => w.tool === tool);
     if (wants.length === 0) continue;
     const withArgs = calls.filter((t) => t.success && typeof t.args === "string");
-    if (withArgs.length === 0) continue;
+    if (withArgs.length === 0) {
+      // A CALL WITH NO RECORDED ARGUMENTS CANNOT SHOW the task's own argument.
+      // Accepting it let `sessions: "all"` pass on a run that never said so
+      // (Codex 2026-09-11 M#2).
+      shortfalls.push({ tool, attempts: calls.length, argument: { key: wants[0]!.key, value: wants[0]!.value } });
+      continue;
+    }
     const satisfied = withArgs.some((t) => wants.every((w) => argSatisfies(t.args!, w.key, w.value)));
     if (satisfied) continue;
     const firstUnmet = wants.find((w) => !withArgs.some((t) => argSatisfies(t.args!, w.key, w.value))) ?? wants[0]!;

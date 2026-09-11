@@ -52,8 +52,12 @@ describe("required evidence named by the task", () => {
     expect(missingRequiredEvidence(prompt, [
       { toolName: "unity_playthrough", success: true, args: JSON.stringify({ sessions: "all" }) },
     ])).toEqual([]);
-    // A trace row that recorded no arguments cannot contradict the task.
-    expect(missingRequiredEvidence(prompt, [{ toolName: "unity_playthrough", success: true }])).toEqual([]);
+    // A CALL WITH NO RECORDED ARGUMENTS cannot show the task's own argument:
+    // accepting it let `sessions: "all"` pass on a run that never said so
+    // (Codex 2026-09-11 M#2). A unity tool called with arguments always
+    // records them; no arguments means it was called with none.
+    expect(missingRequiredEvidence(prompt, [{ toolName: "unity_playthrough", success: true }]))
+      .toEqual([{ tool: "unity_playthrough", attempts: 1, argument: { key: "sessions", value: "all" } }]);
     // An ordinary mention manufactures no requirement.
     expect(requiredToolArguments('unity_playthrough is a tool; the scene is named "Main".')).toEqual([]);
   });
@@ -154,5 +158,32 @@ describe("a tool the situation does not call for is not missing evidence (measur
     // An explicitly conditional instruction is not a demand.
     expect(requiredToolsInPrompt("If the scene is empty, run unity_bind_sprite to fix it.")).toEqual([]);
     expect(requiredToolsInPrompt("Run unity_playthrough as needed.")).toEqual([]);
+  });
+});
+
+describe("prose formatting does not defeat the evidence gate (Codex 2026-09-11 M#2)", () => {
+  it("reads a tool name written as code", () => {
+    expect(requiredToolsInPrompt('Run `unity_playthrough` with sessions "all".')).toEqual(["unity_playthrough"]);
+    expect(requiredToolsInPrompt('Run **unity_verify_change** before reporting.')).toEqual(["unity_verify_change"]);
+  });
+
+  it("an unconditional instruction outranks a later conditional one", () => {
+    // "Run X. If it fails, run X again." required nothing at all: the second
+    // sentence deleted the first.
+    expect(requiredToolsInPrompt("Run unity_playthrough. If it fails, run unity_playthrough again."))
+      .toEqual(["unity_playthrough"]);
+    // …and a tool named ONLY conditionally is still not demanded.
+    expect(requiredToolsInPrompt("If the scene is empty, run unity_bind_sprite to fix it.")).toEqual([]);
+  });
+
+  it("a threshold loop waives its OWN tools, not the work beside it", () => {
+    const prompt =
+      "Replace placeholder art in batches: call unity_delivery_measure, then call unity_generate_sprite twice. " +
+      "Repeat until the measured count is below 200.\n\n" +
+      "Then run unity_build_player for Android and report its artifact.";
+
+    // The loop measured and found nothing to do — but the build was not run.
+    expect(missingRequiredEvidence(prompt, [{ toolName: "unity_delivery_measure", success: true }]).map((s) => s.tool))
+      .toEqual(["unity_build_player"]);
   });
 });
