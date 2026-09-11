@@ -11,7 +11,7 @@
 
 import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
-import { isPlaceholderGradePng, measurePngContent } from "../../autonomy/built-as-specified.js";
+import { classifyPngBytes, isPlaceholderGradePng, measurePngContent } from "../../autonomy/built-as-specified.js";
 
 /** The real path of `p`'s nearest existing ancestor plus the rest — symlinked temp roots (/var → /private/var) compare equal. */
 function canonical(p: string): string {
@@ -58,11 +58,28 @@ export class PreviousAsset {
     mkdirSync(dirname(fullPath), { recursive: true });
     if (this.hadAsset) copyFileSync(fullPath, this.assetBackup);
     if (this.hadMeta) copyFileSync(`${fullPath}.meta`, this.metaBackup);
+    this.existingIsRealArt = this.gradeOfExisting() === "art";
   }
 
-  /** Whether real (non-placeholder) art already sits at the target. */
-  get existingIsRealArt(): boolean {
-    return this.hadAsset && /\.png$/i.test(this.fullPath) && !isPlaceholderGradePng(this.assetBackup);
+  /**
+   * Whether real (non-placeholder) art already sat at the target.
+   *
+   * Measured at CONSTRUCTION, while the file is still there: callers ask
+   * after `restore()`, which forgets the backups, and a lazy read then found
+   * nothing. And the BYTES are classified, not the backup's filename — the
+   * backup ends in `.strada-prev`, the classifier required a `.png` name, and
+   * so every placeholder under a backup name came back "real art" (Codex
+   * 2026-09-11 N#5).
+   */
+  readonly existingIsRealArt: boolean;
+
+  private gradeOfExisting(): "placeholder" | "art" | "invalid" {
+    if (!this.hadAsset || !/\.png$/i.test(this.fullPath)) return "invalid";
+    try {
+      return classifyPngBytes(readFileSync(this.assetBackup));
+    } catch {
+      return "invalid";
+    }
   }
 
   /** Put the previous pair back; remove a newly minted pair when there was none. */

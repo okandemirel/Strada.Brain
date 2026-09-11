@@ -6,6 +6,7 @@ import { deflateSync } from "node:zlib";
 import {
   assessBuiltAsSpecified,
   isPlaceholderGradePng,
+  classifyPng,
   isScaffoldingScene,
   measureAudioClip,
   measurePngContent,
@@ -933,6 +934,30 @@ describe("defects the measurement review found (2026-09-07)", () => {
     clip.writeUInt32LE(0, 40);
     putBytes(root, "Assets/Audio/stream.wav", clip, G("d"));
     expect(measureAudioClip(join(root, "Assets/Audio/stream.wav")).seconds).toBeCloseTo(90, 2);
+  });
+
+  it("a file that is not a readable image is neither art nor a placeholder (Codex 2026-09-11 N#5)", () => {
+    const root = project();
+    putBytes(root, "Assets/Art/Real/Hero.png", png(64, 64, "noise"), G("1"));
+    putBytes(root, "Assets/Art/Empty.png", Buffer.alloc(0), G("2"));
+    putBytes(root, "Assets/Art/Junk.png", Buffer.from("this is not a png at all"), G("3"));
+    putBytes(root, "Assets/Art/Flat.png", png(64, 64, "flat"), G("4"));
+
+    expect(classifyPng(join(root, "Assets/Art/Real/Hero.png"))).toBe("art");
+    expect(classifyPng(join(root, "Assets/Art/Empty.png"))).toBe("invalid");
+    expect(classifyPng(join(root, "Assets/Art/Junk.png"))).toBe("invalid");
+    expect(classifyPng(join(root, "Assets/Art/Flat.png"))).toBe("placeholder");
+    expect(classifyPng(join(root, "Assets/Art/Missing.png"))).toBe("invalid");
+    // A file that is not a PNG at all is not art either, whatever it holds.
+    putBytes(root, "Assets/Art/notes.txt", Buffer.from("hello"), G("5"));
+    expect(classifyPng(join(root, "Assets/Art/notes.txt"))).toBe("invalid");
+
+    // …and the inventory says so: "not a placeholder" used to be read as
+    // "real art", so an empty file was disclosed as art already drawn.
+    const disclosures = assessBuiltAsSpecified(root).disclosures.join("\n");
+    expect(disclosures).toContain("1 are real art already");
+    expect(disclosures).toContain("could not be READ as an image");
+    expect(disclosures).toContain("Assets/Art/Empty.png");
   });
 
   it("placeholder grade is what the pixels say, not what the file weighs", () => {

@@ -1184,6 +1184,7 @@ export function assessBuiltAsSpecified(
   const unboundModels: string[] = [];
   const unboundSprites: string[] = [];
   const placeholderSpritePaths: string[] = [];
+  const unreadableSpritePaths: string[] = [];
   const boundPlaceholderPaths: string[] = [];
   const realSpritePaths: string[] = [];
   const audioHashes = new Map<string, string>();
@@ -1210,7 +1211,13 @@ export function assessBuiltAsSpecified(
     } else if (SPRITE_EXT_RE.test(rel)) {
       sprites++;
       if (guid !== undefined && !bound) unboundSprites.push(rel);
-      if (isPlaceholderGradePng(join(projectRoot, rel))) {
+      const grade = classifyPng(join(projectRoot, rel));
+      if (grade === "invalid") {
+        // NOT real art and not a placeholder either: an empty, truncated or
+        // unreadable file. Counting it as art told the sprint there was
+        // nothing to draw (Codex 2026-09-11 N#5).
+        unreadableSpritePaths.push(rel);
+      } else if (grade === "placeholder") {
         // The ones a shipped scene reaches go FIRST: they are what the player
         // sees, and the one the sprint should replace before any LiveOps icon
         // (measured 2026-09-07 22:40: a sprint wired six area backgrounds that
@@ -1326,6 +1333,10 @@ export function assessBuiltAsSpecified(
           (realSpritePaths.length > 0
             ? ` ${realSpritePaths.length} are real art already (newest first: ${newestFirst(projectRoot, realSpritePaths).slice(0, 6).join(", ")}${realSpritePaths.length > 6 ? ", …" : ""}).`
             : "")
+        : "") +
+      (unreadableSpritePaths.length > 0
+        ? ` ${unreadableSpritePaths.length} sprite texture(s) could not be READ as an image at all — empty, truncated or not a PNG ` +
+          `(e.g. ${unreadableSpritePaths.slice(0, 3).join(", ")}).`
         : ""),
   );
   disclosures.push(
@@ -1771,21 +1782,38 @@ function pngIdatBytes(bytes: Uint8Array): number {
  * When the pixels cannot be decoded (interlaced, exotic depth, oversized)
  * the IDAT bytes-per-pixel heuristic decides. Unreadable is not placeholder.
  */
-export function isPlaceholderGradePng(absPath: string): boolean {
-  if (!/\.png$/iu.test(absPath)) return false;
-  let bytes: Uint8Array;
-  try {
-    bytes = readFileSync(absPath);
-  } catch {
-    return false;
-  }
+/**
+ * What a PNG on disk actually is. THREE states, not two: "not placeholder" was
+ * read as "real art", so an empty file, a text file named .png and an
+ * unreadable one were all disclosed as art the sprint need not draw (Codex
+ * 2026-09-11 N#5).
+ */
+export type PngGrade = "placeholder" | "art" | "invalid";
+
+/** The grade of these BYTES, whatever the file holding them is called. */
+export function classifyPngBytes(bytes: Uint8Array): PngGrade {
   const dims = readPngDimensions(bytes);
-  if (dims === null) return false;
+  if (dims === null || dims.width <= 0 || dims.height <= 0) return "invalid";
   const content = measurePngContent(bytes);
   if (content !== null) {
-    return content.colours <= PLACEHOLDER_MAX_COLOURS && content.edgeShare <= PLACEHOLDER_MAX_EDGE_SHARE;
+    return content.colours <= PLACEHOLDER_MAX_COLOURS && content.edgeShare <= PLACEHOLDER_MAX_EDGE_SHARE
+      ? "placeholder"
+      : "art";
   }
-  return pngIdatBytes(bytes) / (dims.width * dims.height) < PLACEHOLDER_BYTES_PER_PIXEL;
+  return pngIdatBytes(bytes) / (dims.width * dims.height) < PLACEHOLDER_BYTES_PER_PIXEL ? "placeholder" : "art";
+}
+
+export function classifyPng(absPath: string): PngGrade {
+  if (!/\.png$/iu.test(absPath)) return "invalid";
+  try {
+    return classifyPngBytes(readFileSync(absPath));
+  } catch {
+    return "invalid";
+  }
+}
+
+export function isPlaceholderGradePng(absPath: string): boolean {
+  return classifyPng(absPath) === "placeholder";
 }
 
 /**
