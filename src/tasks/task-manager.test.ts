@@ -267,6 +267,42 @@ describe("TaskManager", () => {
     expect(storage.markCancelled).toHaveBeenCalledWith("task_paused1", undefined);
   });
 
+  it("a deliberate cancel of a terminal row EMITS the stop, and an unmarked row can be upgraded (Codex 2026-09-11 L#1, L#6)", () => {
+    // The upgrade persisted the reason and emitted nothing, so a campaign
+    // watching for the stop never saw one and its milestone carried on (L#1).
+    const superseded = buildTask({
+      id: "task_sup2" as Task["id"], status: TaskStatus.cancelled, cancelReason: "superseded",
+      chatId: "chat-x", channelType: "cli",
+    });
+    const storage = { load: vi.fn().mockReturnValue(superseded), updateStatus: vi.fn(), markCancelled: vi.fn() } as any;
+    const manager = new TaskManager(storage, { resumeConversation: vi.fn() } as any);
+    const stops: string[] = [];
+    manager.on("task:cancelled", (id: string) => stops.push(id));
+
+    expect(manager.cancel("task_sup2" as Task["id"], { reason: "user" })).toBe(true);
+    expect(stops).toEqual(["task_sup2"]);
+
+    // A row cancelled with NO reason — an older version, or the executor's own
+    // cancel — can be upgraded the same way; refusing it left a person's stop
+    // with no record anywhere (L#6).
+    const unmarked = buildTask({
+      id: "task_legacy" as Task["id"], status: TaskStatus.cancelled, chatId: "chat-x", channelType: "cli",
+    });
+    const legacyStorage = { load: vi.fn().mockReturnValue(unmarked), updateStatus: vi.fn(), markCancelled: vi.fn() } as any;
+    const legacyManager = new TaskManager(legacyStorage, { resumeConversation: vi.fn() } as any);
+    const legacyStops: string[] = [];
+    legacyManager.on("task:cancelled", (id: string) => legacyStops.push(id));
+
+    expect(legacyManager.cancel("task_legacy" as Task["id"], { reason: "user" })).toBe(true);
+    expect(legacyStorage.markCancelled).toHaveBeenCalledWith("task_legacy", "user");
+    expect(legacyStops).toEqual(["task_legacy"]);
+
+    // …and an automatic retirement of the same row still changes nothing.
+    legacyStorage.markCancelled.mockClear();
+    expect(legacyManager.cancel("task_legacy" as Task["id"], { reason: "superseded" })).toBe(false);
+    expect(legacyStorage.markCancelled).not.toHaveBeenCalled();
+  });
+
   it("a deliberate cancel WITHDRAWS a supersession, and leaves other terminal rows alone (Codex 2026-09-11 J#3)", () => {
     // "superseded" says "replaced, carry on", and a person cancelling that
     // task means stop. Writing nothing left the stop with no record, so the

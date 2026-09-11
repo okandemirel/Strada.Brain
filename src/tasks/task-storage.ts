@@ -310,6 +310,19 @@ export class TaskStorage {
   }
 
   /**
+   * Is there a DELIBERATE stop anywhere in this lineage tree — not only on the
+   * path between two nodes?
+   *
+   * Walking upward from the adopted task never visited its SIBLING retries, so
+   * a person cancelling one branch of a mission's own retry tree stopped
+   * nothing (Codex 2026-09-11 L#2).
+   */
+  lineageHasDeliberateStop(rootId: TaskId): boolean {
+    this.ensureConnection();
+    return this.getStmt("listDeliberateStopsInLineage").get(rootId) !== undefined;
+  }
+
+  /**
    * Every UNFINISHED task descending from this one, at any depth. Used to
    * retire a campaign's work completely; a recent-tasks window left older
    * descendants alive (Codex 2026-09-11 I#7).
@@ -524,6 +537,16 @@ export class TaskStorage {
         )
         SELECT t.* FROM tasks t JOIN lineage l ON t.id = l.id
         WHERE t.status NOT IN ('completed', 'cancelled', 'failed')
+      `,
+      listDeliberateStopsInLineage: `
+        WITH RECURSIVE lineage(id) AS (
+          SELECT id FROM tasks WHERE id = ?
+          UNION
+          SELECT t.id FROM tasks t JOIN lineage l ON t.parent_id = l.id
+        )
+        SELECT t.id FROM tasks t JOIN lineage l ON t.id = l.id
+        WHERE t.status = 'cancelled' AND t.cancel_reason = 'user'
+        LIMIT 1
       `,
       findLineageRoot: `
         WITH RECURSIVE up(id, parent_id) AS (

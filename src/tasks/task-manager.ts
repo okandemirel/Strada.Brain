@@ -182,9 +182,16 @@ export class TaskManager extends EventEmitter {
       // the campaign's revival timer then read the supersession and continued
       // (Codex 2026-09-11 J#3). A terminal row's status does not change; only
       // its reason is upgraded.
-      if (task.status === TaskStatus.cancelled && task.cancelReason === "superseded" && opts.reason === "user") {
+      // …and a row cancelled with NO reason at all (an older version, or the
+      // executor's own cancel) can be upgraded the same way: refusing it left
+      // a person's explicit stop with no record anywhere (Codex 2026-09-11 L#6).
+      if (task.status === TaskStatus.cancelled && task.cancelReason !== "user" && opts.reason === "user") {
         this.storage.markCancelled(taskId, "user");
-        getLogger().info("A superseded task was cancelled deliberately — the supersession is withdrawn", { taskId });
+        // THE EVENT, TOO. The upgrade persisted the reason and emitted
+        // nothing, so a campaign watching for the stop never saw one and its
+        // current milestone carried on working (Codex 2026-09-11 L#1).
+        this.emit("task:cancelled", taskId);
+        getLogger().info("A finished task was cancelled deliberately — the stop is recorded", { taskId });
         return true;
       }
       return false;
@@ -352,6 +359,12 @@ export class TaskManager extends EventEmitter {
   /** Stable root id of the retry lineage `taskId` belongs to (itself when never retried). */
   findLineageRootId(taskId: TaskId): TaskId | null {
     return this.storage.findLineageRootId(taskId);
+  }
+
+  /** Was any task in this lineage TREE stopped deliberately? (Codex L#2) */
+  lineageHasDeliberateStop(taskId: TaskId): boolean {
+    const root = this.storage.findLineageRootId(taskId) ?? taskId;
+    return this.storage.lineageHasDeliberateStop(root);
   }
 
   /**

@@ -893,7 +893,14 @@ export class CampaignManager {
       const manager = this.taskManager as unknown as {
         findLatestLineageTask?: (id: string) => { id: string } | null;
         getStatus?: (id: string) => { id: string; status?: string; cancelReason?: string; parentId?: string } | null;
+        lineageHasDeliberateStop?: (id: string) => boolean;
       };
+      // THE WHOLE LINEAGE TREE, not the path between two nodes. With
+      // root → A and root → B, a person cancelling blocked A while the
+      // milestone had adopted executing B stopped nothing: neither task
+      // descends from the other, so walking upward from B never saw A
+      // (Codex 2026-09-11 L#2).
+      if (manager.lineageHasDeliberateStop?.(taskId) === true) return true;
       // FROM THE TIP AND FROM THE MILESTONE'S OWN TASK, upward, visiting every
       // node including the last. Walking only upward from the milestone missed
       // a cancelled node BETWEEN it and the tip, and the depth guard used to

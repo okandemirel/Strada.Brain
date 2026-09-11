@@ -133,6 +133,20 @@ class FakeTaskManager extends EventEmitter {
     return false;
   }
 
+  /**
+   * A deliberate stop ANYWHERE in the lineage tree, as the real store's
+   * recursive query does — siblings included (Codex 2026-09-11 L#2).
+   */
+  lineageHasDeliberateStop(taskId: string): boolean {
+    const root = this.findLineageRootId(taskId) ?? taskId;
+    for (const [id, status] of this.statuses) {
+      if (String(status) !== "cancelled") continue;
+      if (this.cancelReasons.get(id) !== "user") continue;
+      if (id === root || this.isInLineage(root, id)) return true;
+    }
+    return false;
+  }
+
   /** Every unfinished task of the lineage, as the real store's query does. */
   listLiveInLineage(taskId: string): Array<{ id: string }> {
     const root = this.findLineageRootId(taskId) ?? taskId;
@@ -3326,6 +3340,27 @@ describe("CampaignManager", () => {
     await waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(before));
     expect(tasks.submitted.at(-1)!.prompt).toContain("prove it again");
     expect(tasks.submitted.at(-1)!.prompt).not.toContain("proved once");
+  });
+
+  it("a stop on a SIBLING retry stops the campaign too (Codex 2026-09-11 L#2)", async () => {
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    const root = storage.get(campaign.id)!.milestones[0]!.taskId!;
+
+    // The mission's own retry tree: root → A and root → B. The milestone has
+    // adopted B; a person cancels A. Neither descends from the other, so
+    // walking upward from B never saw the stop and the campaign carried on.
+    const siblingA = tasks.submit("cli-local", "cli", "retry A", { parentId: root });
+    const siblingB = tasks.submit("cli-local", "cli", "retry B", { parentId: root });
+    tasks.cancel(siblingA.id, { reason: "user" });
+    const adopted = storage.get(campaign.id)!;
+    adopted.milestones[0]!.taskId = siblingB.id;
+    storage.save(adopted);
+
+    expect(
+      (manager as unknown as { lineageWasCancelledOnPurpose(id: string): boolean })
+        .lineageWasCancelledOnPurpose(siblingB.id),
+    ).toBe(true);
   });
 
   it("outstanding SPRINTS come before the final proof, and an old final never rewinds the ladder (Codex 2026-09-11 L#14)", async () => {
