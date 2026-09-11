@@ -62,6 +62,12 @@ export interface CampaignMilestone {
    */
   coverageGap?: string;
   /**
+   * Which delivery gates failed on the last round, as flag names. The
+   * delivery budget compares these rather than the sentences the gates
+   * write, because prose carries measurements (Codex 2026-09-11 K#3-K#5).
+   */
+  deliveryFailureKinds?: string[];
+  /**
    * The full self-contained sprint kick prompt submitted to the task pipeline
    * when this milestone starts — the same shape as the hand-carried sprint
    * prompts that drove PixelFlow (scope, verification demands, commit

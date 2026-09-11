@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { attemptRunId, CampaignManager, proofSignature, unscheduledGaps } from "./campaign-manager.js";
+import { attemptRunId, CampaignManager, deliveryFailureKinds, proofSignature, unscheduledGaps } from "./campaign-manager.js";
 
 /**
  * Measured live 2026-09-04: told not to audit, the final sprint answered
@@ -125,6 +125,29 @@ describe("which GDD requirements still need a sprint (Codex 2026-09-11 J#12, J#1
     expect(unscheduledGaps(["", "   "], [])).toEqual([]);
   });
 
+  it("a FRESH AUDIT reopens a requirement a finished sprint claimed, and a legacy row is still recognised (Codex 2026-09-11 K#1, K#2)", () => {
+    const green = [{ id: "mcov1", title: "Coverage completion 1.1 — Save", status: "green", coverageGap: "Save: absent" }];
+    // The audit has just looked at the tree and says it is still missing.
+    expect(unscheduledGaps(["Save: absent"], green, { reopenCompleted: true })).toEqual(["Save: absent"]);
+    // A queue drain does not reopen it: its entries were named by an audit
+    // that has already been reconciled.
+    expect(unscheduledGaps(["Save: absent"], green)).toEqual([]);
+    // Work still outstanding suppresses a duplicate either way.
+    const running = [{ id: "mcov1", title: "Coverage completion 1.1 — Save", status: "running", coverageGap: "Save: absent" }];
+    expect(unscheduledGaps(["Save: absent"], running, { reopenCompleted: true })).toEqual([]);
+
+    // A milestone persisted before coverageGap existed keeps its requirement
+    // in its own prompt, and the truncated title is the last resort.
+    const legacy = [{
+      id: "mcov1",
+      title: `Coverage completion 1.1 — ${long.slice(0, 60)}`,
+      status: "running",
+      prompt: `The build's milestone ladder finished, but auditing it found this scheduled item undelivered:\n- ${long}\n\nImplement it.`,
+    }];
+    expect(unscheduledGaps([long], legacy)).toEqual([]);
+    expect(unscheduledGaps([sharesPrefix], legacy)).toEqual([sharesPrefix]);
+  });
+
   it("a sprint that FAILED covers nothing, and a green or open one covers its own requirement", () => {
     const green = [{ id: "mcov1", title: `Coverage completion 1.1 — ${long.slice(0, 60)}`, status: "green", coverageGap: long }];
     expect(unscheduledGaps([long], green)).toEqual([]);
@@ -149,5 +172,28 @@ describe("attemptRunId (the open half of Codex F#10 / I#11)", () => {
     expect(attemptRunId({ id: "m4", attempts: 1, attemptStartedAtMs: 1_700_000_000_000 })).not.toBe(attemptRunId(m));
     // A milestone that never recorded an attempt clock still has an id.
     expect(attemptRunId({ id: "m1" })).toBe("m1-0-0");
+  });
+});
+
+describe("deliveryFailureKinds — identity from the gates, not their prose (Codex 2026-09-11 K#3, K#4, K#5)", () => {
+  const none = {
+    testsNotRun: false, testsFiltered: false, compileBroken: false, compileNotRun: false,
+    playthroughMissing: false, playthroughStale: false, playthroughRefused: false,
+    buildBroken: false, buildNotRun: false, playerMissing: false, playerBroken: false,
+    claimsBroken: false, structureRefused: false, queuedGaps: false,
+  };
+
+  it("names the gates that failed, and nothing a sentence can change", () => {
+    expect(deliveryFailureKinds(none)).toEqual([]);
+    expect(deliveryFailureKinds({ ...none, testsNotRun: true })).toEqual(["testsNotRun"]);
+    // The set is the identity: order of the flags cannot change it.
+    expect(deliveryFailureKinds({ ...none, compileBroken: true, playerMissing: true }))
+      .toEqual(deliveryFailureKinds({ ...none, playerMissing: true, compileBroken: true }));
+    // Two different gates are two different identities.
+    expect(deliveryFailureKinds({ ...none, playthroughRefused: true }))
+      .not.toEqual(deliveryFailureKinds({ ...none, playthroughMissing: true }));
+    // A refusal that carries no proof sentence at all still has an identity.
+    expect(deliveryFailureKinds({ ...none, structureRefused: true })).toEqual(["structureRefused"]);
+    expect(deliveryFailureKinds({ ...none, queuedGaps: true })).toEqual(["queuedGaps"]);
   });
 });

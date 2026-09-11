@@ -3292,8 +3292,13 @@ describe("CampaignManager", () => {
       // The MEASUREMENTS move every round while the missing proof does not:
       // a play-through whose action and frame counts climb used to produce a
       // new signature every round, so the budget never charged (Codex I#1).
+      // The WORDING of the failure alternates while the gate outcome does not:
+      // a prose classifier flips its identity here, the structured one does
+      // not (Codex 2026-09-11 K#3, K#4).
       writePlaythroughVerdict(false, {
-        reasons: [`session 1 never ended after ${60 + i} actions (phases seen: Playing)`],
+        reasons: [i % 2 === 0
+          ? `session 1 never ended after ${60 + i} actions (phases seen: Playing)`
+          : `every frame is flat after ${60 + i} actions (no motion at all)`],
         record: { scene: "Entry", session: 1, autoStarted: false, actions: 60 + i, outcome: "None", reachedOutcome: false },
         frames: { count: 100 + i, flat: 0, maxMotionShare: 0.4 },
       });

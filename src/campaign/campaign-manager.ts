@@ -292,6 +292,38 @@ const MAX_IMPLEMENTATION_REVIVES = 2;
  */
 const MAX_DELIVERY_REVIVES = 3;
 /**
+ * WHICH GATES failed, from the gates' own outcomes.
+ *
+ * The delivery budget is charged per distinct failure, so the identity of a
+ * failure may not be read out of the sentences the gates write: a frame count
+ * inside a sentence, a word like "driver" appearing in an explanation, or a
+ * truncation at 220 characters all changed the identity while the game stayed
+ * exactly as broken (Codex 2026-09-11 I#1, K#3, K#4, K#5). Flags cannot be
+ * paraphrased. Sorted, so the set is the identity.
+ */
+export function deliveryFailureKinds(flags: {
+  testsNotRun: boolean;
+  testsFiltered: boolean;
+  compileBroken: boolean;
+  compileNotRun: boolean;
+  playthroughMissing: boolean;
+  playthroughStale: boolean;
+  playthroughRefused: boolean;
+  buildBroken: boolean;
+  buildNotRun: boolean;
+  playerMissing: boolean;
+  playerBroken: boolean;
+  claimsBroken: boolean;
+  structureRefused: boolean;
+  queuedGaps: boolean;
+}): string[] {
+  return Object.entries(flags)
+    .filter(([, on]) => on === true)
+    .map(([kind]) => kind)
+    .sort();
+}
+
+/**
  * WHICH PROOFS are missing, as kinds rather than as sentences.
  *
  * The delivery budget is charged per distinct failure, so the identity of a
@@ -353,6 +385,19 @@ export function attemptRunId(milestone: { id: string; attemptStartedAtMs?: numbe
   return `${milestone.id}-${milestone.attempts ?? 0}-${started}`;
 }
 
+/**
+ * The requirement a coverage sprint exists to close.
+ *
+ * `coverageGap` is the record; a milestone persisted before that field existed
+ * has the requirement in its own prompt ("- <requirement>"), and its truncated
+ * TITLE is the last resort (Codex 2026-09-11 K#2).
+ */
+function coverageGapOf(m: { title: string; prompt?: string; coverageGap?: string }): string {
+  if (m.coverageGap) return m.coverageGap;
+  const fromPrompt = /\n- (.+)\n/.exec(m.prompt ?? "")?.[1];
+  return fromPrompt ?? m.title.replace(/^Coverage completion \d+\.\d+ — /, "");
+}
+
 /** A coverage requirement's identity: its own text, normalized — never a prefix. */
 export function gapKey(gap: string): string {
   return gap.trim().toLowerCase().replace(/\s+/g, " ");
@@ -369,12 +414,21 @@ export function gapKey(gap: string): string {
  */
 export function unscheduledGaps(
   candidates: readonly string[],
-  milestones: ReadonlyArray<{ id: string; title: string; status?: string; coverageGap?: string }>,
+  milestones: ReadonlyArray<{ id: string; title: string; prompt?: string; status?: string; coverageGap?: string }>,
+  opts: { reopenCompleted?: boolean } = {},
 ): string[] {
+  // A FRESH AUDIT outranks a finished sprint: the audit has just looked at
+  // the tree and said the feature is missing, and suppressing that because a
+  // sprint once ran for it delivered the game without it (Codex 2026-09-11
+  // K#1). Only work still OUTSTANDING suppresses a duplicate. A queue drain
+  // passes nothing and keeps the stricter rule, because its entries were
+  // named by an audit that has already been reconciled.
+  const suppresses = (status?: string): boolean =>
+    opts.reopenCompleted === true ? status === "pending" || status === "running" : status !== "failed";
   const covered = new Set(
     milestones
-      .filter((m) => m.id.startsWith("mcov") && m.status !== "failed")
-      .map((m) => gapKey(m.coverageGap ?? m.title.replace(/^Coverage completion \d+\.\d+ — /, ""))),
+      .filter((m) => m.id.startsWith("mcov") && suppresses(m.status))
+      .map((m) => gapKey(coverageGapOf(m))),
   );
   const seen = new Set<string>();
   return candidates.filter((item) => {
@@ -2669,6 +2723,28 @@ export class CampaignManager {
         }
         if (claims?.refusal) missingProofs.push(claims.refusal.slice(0, 220));
         milestone.deliveryProofsMissing = missingProofs;
+        // …and the IDENTITY of this round's failure, computed from the gate
+        // outcomes themselves rather than from the sentences they produce.
+        // Every prose classifier this week has been defeated by a
+        // measurement moving inside a sentence or a word appearing in an
+        // explanation (Codex 2026-09-11 K#3, K#4, K#5). The flags cannot be
+        // paraphrased.
+        milestone.deliveryFailureKinds = deliveryFailureKinds({
+          testsNotRun: !milestone.testVerdict,
+          testsFiltered: Boolean(milestone.testVerdict) && milestone.testVerdictUnfiltered !== true,
+          compileBroken,
+          compileNotRun,
+          playthroughMissing,
+          playthroughStale: playthrough?.stale === true,
+          playthroughRefused: playthrough?.found === true && playthrough.ok !== true,
+          buildBroken,
+          buildNotRun,
+          playerMissing,
+          playerBroken,
+          claimsBroken,
+          structureRefused: milestone.structureRefused === true,
+          queuedGaps: (campaign.pendingCoverageGaps ?? []).length > 0,
+        });
       }
       if (isLast && deliveryProofMissing && deliveryBouncesSpent < this.maxMilestoneAttempts) {
         // DELIVERY GATE: "the whole game runs" was only ever a sentence in the
@@ -3004,10 +3080,10 @@ export class CampaignManager {
           // refusal never entered missingProofs at all, so a campaign stuck
           // on it had the EMPTY signature and its report named no proof
           // (I#2). Kinds, not numbers.
-          const signature = proofSignature(missingProofs, {
-            structureRefused: milestone.structureRefused === true,
-            compileBroken,
-          });
+          // The structured identity, with the prose one only as a fallback
+          // for a milestone persisted before it existed.
+          const signature = (milestone.deliveryFailureKinds ?? []).join(" | ")
+            || proofSignature(missingProofs, { structureRefused: milestone.structureRefused === true, compileBroken });
           const repeating = campaign.deliveryProofsSignature === signature;
           campaign.deliveryRevives = repeating ? (campaign.deliveryRevives ?? 0) + 1 : 1;
           campaign.deliveryProofsSignature = signature;
@@ -3828,7 +3904,7 @@ export class CampaignManager {
       // by one that failed: scheduling used to count as completion, so a
       // required feature disappeared from further repair the moment one
       // attempt had been made (Codex 2026-09-11 J#13).
-      const unique = unscheduledGaps(missing, campaign.milestones);
+      const unique = unscheduledGaps(missing, campaign.milestones, { reopenCompleted: true });
       if (unique.length === 0) {
         campaign.coverageAuditNote = `coverage audit repeated ${missing.length} gap(s) that already have sprints`;
         this.persist(campaign);
