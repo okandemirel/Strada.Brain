@@ -60,7 +60,12 @@ interface VerdictFile {
  * was written at or after `sinceMs`. An older file is reported as stale so the
  * gate can say "you have a verdict, but from before this sprint's changes".
  */
-export function readPlaythroughVerdict(projectRoot: string, sinceMs: number, rel: string = PLAYTHROUGH_VERDICT_REL): PlaythroughEvidence {
+export function readPlaythroughVerdict(
+  projectRoot: string,
+  sinceMs: number,
+  rel: string = PLAYTHROUGH_VERDICT_REL,
+  expectRunId?: string,
+): PlaythroughEvidence {
   const path = join(projectRoot, rel);
   if (!existsSync(path)) return { found: false };
   let mtimeMs: number;
@@ -89,6 +94,13 @@ export function readPlaythroughVerdict(projectRoot: string, sinceMs: number, rel
   } catch {
     return { found: false, unreadable: true };
   }
+  // A VERDICT FROM ANOTHER ATTEMPT is not this attempt's proof, whatever its
+  // clock says — compared only when both sides carry an id, so a tool that
+  // does not echo it yet behaves exactly as before (Codex F#10 / I#11).
+  const stampedRunId = typeof (parsed as { runId?: unknown }).runId === "string"
+    ? String((parsed as { runId?: unknown }).runId).trim()
+    : "";
+  if (expectRunId && stampedRunId && stampedRunId !== expectRunId) return { found: false, stale: true };
   const record = parsed.record ?? undefined;
   const frames = parsed.frames ?? undefined;
   const perf = parsed.perf ?? undefined;

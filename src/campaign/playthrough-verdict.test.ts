@@ -200,3 +200,14 @@ describe("a verdict's nested fields cannot throw (Codex 2026-09-11 H#12)", () =>
     expect(readPlaythroughVerdict(root, 0).ok).toBe(false);
   });
 });
+
+describe("a play-through verdict names the attempt that asked for it (Codex F#10 / I#11)", () => {
+  it("refuses another attempt's verdict and accepts one with no id", () => {
+    write({ ...ok, runId: "m3-1-1700000000000" });
+    expect(readPlaythroughVerdict(root, 0, undefined, "m3-1-1700000000000")).toMatchObject({ found: true, ok: true });
+    expect(readPlaythroughVerdict(root, 0, undefined, "m3-2-1700000000009")).toMatchObject({ found: false, stale: true });
+    // A tool that does not echo the id yet behaves exactly as before.
+    write(ok);
+    expect(readPlaythroughVerdict(root, 0, undefined, "m3-1-1700000000000")).toMatchObject({ found: true, ok: true });
+  });
+});

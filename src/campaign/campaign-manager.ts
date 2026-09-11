@@ -3490,7 +3490,7 @@ export class CampaignManager {
 
   /** The play-through verdict for this sprint, if unity_playthrough ran since it began. */
   private measurePlaythrough(milestone: CampaignMilestone): ReturnType<typeof readPlaythroughVerdict> {
-    return readPlaythroughVerdict(this.projectRoot, this.sprintStartMs(milestone));
+    return readPlaythroughVerdict(this.projectRoot, this.sprintStartMs(milestone), undefined, attemptRunId(milestone));
   }
 
   /**
@@ -3572,7 +3572,7 @@ export class CampaignManager {
       failure = err instanceof Error ? err.message : String(err);
       getLoggerSafe().warn("The built player could not be played", { milestone: milestone.id, error: failure });
     }
-    const verdict = readPlaythroughVerdict(this.projectRoot, since - 1000, PLAYER_PLAYTHROUGH_VERDICT_REL);
+    const verdict = readPlaythroughVerdict(this.projectRoot, since - 1000, PLAYER_PLAYTHROUGH_VERDICT_REL, attemptRunId(milestone));
     // An .apk on a Mac is not a failed game, it is an artifact this machine
     // cannot execute — disclosed, never a refusal, and never a reason to
     // retry forever (Codex 2026-09-11 C#2).
