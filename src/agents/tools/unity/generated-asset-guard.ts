@@ -11,6 +11,7 @@
 
 import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
+import { randomUUID } from "node:crypto";
 import { classifyPngBytes, isPlaceholderGradePng, measurePngContent } from "../../autonomy/built-as-specified.js";
 
 /** The real path of `p`'s nearest existing ancestor plus the rest — symlinked temp roots (/var → /private/var) compare equal. */
@@ -51,8 +52,13 @@ export class PreviousAsset {
   private done = false;
 
   constructor(readonly fullPath: string) {
-    this.assetBackup = `${fullPath}.strada-prev`;
-    this.metaBackup = `${fullPath}.meta.strada-prev`;
+    // A backup name OF ITS OWN. Two generations targeting the same path used
+    // the same two filenames: the first to finish deleted them, and the
+    // second's restore threw ENOENT with its damaged output left in place and
+    // the original surviving nowhere (Codex 2026-09-11 N#9).
+    const token = randomUUID().slice(0, 8);
+    this.assetBackup = `${fullPath}.strada-prev-${token}`;
+    this.metaBackup = `${fullPath}.meta.strada-prev-${token}`;
     this.hadAsset = existsSync(fullPath);
     this.hadMeta = existsSync(`${fullPath}.meta`);
     mkdirSync(dirname(fullPath), { recursive: true });
@@ -91,9 +97,13 @@ export class PreviousAsset {
       else rmSync(this.fullPath, { force: true });
       if (this.hadMeta) copyFileSync(this.metaBackup, `${this.fullPath}.meta`);
       else rmSync(`${this.fullPath}.meta`, { force: true });
-    } finally {
-      this.forget();
+    } catch (err) {
+      // A RESTORE THAT FAILED KEEPS ITS BACKUPS. Deleting them in a finally
+      // block threw away the only surviving copy of the previous art exactly
+      // when putting it back had not worked (Codex 2026-09-11 N#9).
+      throw err;
     }
+    this.forget();
   }
 
   /** The new pair is good; the backups go. */

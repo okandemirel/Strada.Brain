@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { deflateSync } from "node:zlib";
@@ -71,6 +71,28 @@ describe("what already sits at a generation target", () => {
 
     // …and nothing at the target at all is not art.
     expect(new PreviousAsset(join(dir, "Absent.png")).existingIsRealArt).toBe(false);
+  });
+
+  it("two generations at one path do not share backups, and a failed restore keeps them (Codex 2026-09-11 N#9)", () => {
+    const target = join(dir, "Hero.png");
+    const original = png(64, 64, "noise");
+    writeFileSync(target, original);
+    const first = new PreviousAsset(target);
+    const second = new PreviousAsset(target);
+    // Two calls, two backups: the first to finish used to delete the only
+    // copy the second could restore from.
+    first.commit();
+    writeFileSync(target, Buffer.alloc(3)); // the second call damaged its output
+    second.restore();
+    expect(readFileSync(target).equals(original)).toBe(true);
+
+    // A restore that could not put the file back keeps what it has: deleting
+    // the backups in a finally block threw away the only surviving copy.
+    const third = new PreviousAsset(target);
+    rmSync(target, { force: true });
+    mkdirSync(target, { recursive: true }); // a directory where the file was: the copy cannot land
+    expect(() => third.restore()).toThrow();
+    expect(readdirSync(dir).some((f) => f.includes(".strada-prev"))).toBe(true);
   });
 
   it("restores the previous pair byte for byte", () => {

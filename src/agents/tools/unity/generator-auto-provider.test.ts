@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { mkdtempSync, rmSync, mkdirSync, existsSync, writeFileSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdtempSync, rmSync, mkdirSync, existsSync, readdirSync, writeFileSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { deflateSync } from "node:zlib";
 import { SpriteGenerateTool , type LocalRunnerLike } from "./sprite-generate.js";
@@ -312,7 +312,9 @@ describe("defects the generator review found (2026-09-07)", () => {
     expect(r.content).toContain("previous drawn sprite and its .meta were kept");
     expect(readFileSync(`${png}.meta`, "utf8")).toContain("guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
     expect(readFileSync(png).equals(pngFixture("noise"))).toBe(true);
-    expect(existsSync(`${png}.strada-prev`)).toBe(false);
+    // The backup is uniquely named per call (Codex 2026-09-11 N#9); none of
+    // them may survive a completed restore.
+    expect(readdirSync(dirname(png)).filter((f) => f.includes(".strada-prev"))).toEqual([]);
   });
 
   it("AUTO does not overwrite drawn art with a placeholder when the model fails", async () => {

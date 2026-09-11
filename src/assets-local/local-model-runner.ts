@@ -17,6 +17,7 @@ import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { homedir, tmpdir } from "node:os";
+import { randomUUID } from "node:crypto";
 import type { LocalModelSpec } from "./model-catalog.js";
 
 // =============================================================================
@@ -338,7 +339,12 @@ export class LocalModelRunner {
     if (jobs.length === 0) return { ok: true, detail: "no jobs", written: [], missing: [], keptBackground: [] };
     this.writeScripts();
     const family = spec.id === "flux-schnell" ? "flux" : spec.id === "sdxl" ? "sdxl" : "sd15";
-    const jobsPath = join(tmpdir(), `strada-txt2img-${process.pid}-${Date.now()}.json`);
+    // A UNIQUE name, exclusively created. Two batches starting in the same
+    // process and the same millisecond wrote the same manifest: both
+    // subprocesses read the second one's jobs, the first batch's images were
+    // never drawn, and cleanup deleted a file the other call was still using
+    // (Codex 2026-09-11 N#12).
+    const jobsPath = join(tmpdir(), `strada-txt2img-${process.pid}-${randomUUID()}.json`);
     writeFileSync(jobsPath, JSON.stringify(jobs.map((j) => ({ prompt: j.prompt, negative: j.negative ?? "", out: j.out, seed: j.seed ?? -1 }))), "utf8");
     try {
       const args = [
