@@ -2985,6 +2985,27 @@ describe("CampaignManager", () => {
     expect(messages.map((m) => m.text).join(" ")).not.toContain("the campaign stops here");
   });
 
+  it("a busy project postpones the appointment instead of losing it (Codex 2026-09-11 J#5)", async () => {
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    // Another campaign holds the project while this one's appointment is due.
+    const busy = storage.get(campaign.id)!;
+    busy.state = "failed";
+    busy.autoReviveAt = Date.now() - 1_000;
+    storage.save(busy);
+    const other = manager.startFromGdd({ ...ctx, chatId: "cli-other" }, "# Other GDD", "docs/Game_GDD.md");
+    expect(other.id).not.toBe(campaign.id);
+
+    (manager as unknown as { scheduleAutoRevive(id: string, ms: number, at?: number): void })
+      .scheduleAutoRevive(campaign.id, 10, busy.autoReviveAt);
+    await new Promise((r) => setTimeout(r, 200));
+
+    const after = storage.get(campaign.id)!;
+    // The appointment moved forward; it did not disappear.
+    expect(after.autoReviveAt).toBeGreaterThan(Date.now());
+    expect(after.state).toBe("failed");
+  });
+
   it("an older revival timer cannot fire a newer appointment early (Codex 2026-09-11 H#3)", async () => {
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
     await waitFor(() => expect(tasks.submitted).toHaveLength(1));

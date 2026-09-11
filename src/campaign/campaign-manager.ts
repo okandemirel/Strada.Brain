@@ -1014,7 +1014,19 @@ export class CampaignManager {
             this.storage.hasActiveForChat(fresh.chatId) ||
             this.storage.hasActiveForProject(this.projectRoot)
           ) {
-            return; // someone else already continued the work
+            // SOMEONE ELSE HOLDS THE PROJECT — and this appointment is not
+            // cancelled by that, it is postponed. Returning left the row with
+            // an autoReviveAt nobody would ever fire again: the campaign
+            // needed another boot to move (Codex 2026-09-11 J#5).
+            const retryInMs = 5 * 60_000;
+            fresh.autoReviveAt = Date.now() + retryInMs;
+            this.persist(fresh);
+            this.scheduleAutoRevive(campaignId, retryInMs, fresh.autoReviveAt);
+            getLoggerSafe().info("Campaign self-revival deferred — the project is busy, appointment re-armed", {
+              id: campaignId,
+              retryInMs,
+            });
+            return;
           }
           const milestone = fresh.milestones[fresh.currentMilestone];
           if (!milestone) {
@@ -1119,7 +1131,7 @@ export class CampaignManager {
         storedInMs: stored,
         registryInMs: registry,
       });
-      this.scheduleAutoRevive(campaign.id, dueInMs);
+      this.scheduleAutoRevive(campaign.id, dueInMs, campaign.autoReviveAt);
     }
   }
 
@@ -1608,7 +1620,7 @@ export class CampaignManager {
       campaign.lastError = `${milestone.title} not started: every provider is in cooldown (${describeProviderOutage()})`;
       campaign.autoReviveAt = Date.now() + delayMs;
       this.persist(campaign);
-      this.scheduleAutoRevive(campaign.id, delayMs);
+      this.scheduleAutoRevive(campaign.id, delayMs, campaign.autoReviveAt);
       getLoggerSafe().info("Campaign milestone parked — every provider is cooling down, nothing submitted", {
         id: campaign.id,
         milestone: milestone.id,
@@ -1887,7 +1899,7 @@ export class CampaignManager {
       campaign.lastError = `GDD draft ${status} during a full provider outage: ${output.slice(0, 200)}`;
       campaign.autoReviveAt = Date.now() + delayMs;
       this.persist(campaign);
-      this.scheduleAutoRevive(campaign.id, delayMs);
+      this.scheduleAutoRevive(campaign.id, delayMs, campaign.autoReviveAt);
       getLoggerSafe().info("GDD draft parked by a provider outage — no revision round charged", {
         id: campaign.id,
         reviveInMs: delayMs,
@@ -3197,7 +3209,7 @@ export class CampaignManager {
       const delayMs = Math.max(outageWaitMs, 60_000) + 60_000;
       campaign.autoReviveAt = Date.now() + delayMs;
       this.persist(campaign);
-      this.scheduleAutoRevive(campaign.id, delayMs);
+      this.scheduleAutoRevive(campaign.id, delayMs, campaign.autoReviveAt);
       await this.tell(
         campaign,
         `⏸️ Campaign paused by a provider outage at **${milestone.title}**.\n` +
