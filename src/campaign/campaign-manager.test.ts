@@ -3405,6 +3405,25 @@ describe("CampaignManager", () => {
     expect(tasks.submitted.at(-1)!.prompt).not.toContain("proved once");
   });
 
+  it("a SIBLING's cancellation event reaches the campaign (Codex 2026-09-11 O#10)", async () => {
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    const root = storage.get(campaign.id)!.milestones[0]!.taskId!;
+
+    // root → A and root → B; the milestone has adopted B. A person cancels A.
+    // The guard knew about it; the EVENT reached no handler at all.
+    const siblingA = tasks.submit("cli-local", "cli", "retry A", { parentId: root });
+    const siblingB = tasks.submit("cli-local", "cli", "retry B", { parentId: root });
+    const adopted = storage.get(campaign.id)!;
+    adopted.milestones[0]!.taskId = siblingB.id;
+    storage.save(adopted);
+    tasks.cancel(siblingA.id, { reason: "user" });
+    tasks.emit("task:cancelled", siblingA.id);
+
+    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"));
+    expect(storage.get(campaign.id)!.lastError ?? "").toContain("cancelled");
+  });
+
   it("a stop on a SIBLING retry stops the campaign too (Codex 2026-09-11 L#2)", async () => {
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
     await waitFor(() => expect(tasks.submitted).toHaveLength(1));

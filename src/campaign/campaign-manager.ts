@@ -1844,11 +1844,26 @@ export class CampaignManager {
         // milestone's task, or the ANCESTOR the ladder adopted past. Asking
         // only the first was how a stop order on an adopted lineage's parent
         // reached no handler at all.
+        // …and SIBLINGS. Two directions still describe one path: with
+        // root → A and root → B, a stop on A while the milestone had adopted B
+        // reached no handler at all (Codex 2026-09-11 O#10). The stable
+        // lineage ROOT is what they share.
+        const rootOf = (id: string): string | undefined => {
+          try {
+            return (this.taskManager as unknown as { findLineageRootId?: (t: TaskId) => string | null })
+              .findLineageRootId?.(id as TaskId) ?? id;
+          } catch {
+            return undefined;
+          }
+        };
+        const cancelledRoot = rootOf(taskId);
         const ownsIt = campaign.milestones.some(
           (m) =>
             m.taskId &&
             (this.taskManager.isInLineage(m.taskId as TaskId, taskId as TaskId) ||
-              this.taskManager.isInLineage(taskId as TaskId, m.taskId as TaskId)),
+              this.taskManager.isInLineage(taskId as TaskId, m.taskId as TaskId) ||
+              (cancelledRoot !== undefined && rootOf(m.taskId) === cancelledRoot) ||
+              (m.taskIds ?? []).includes(taskId)),
         );
         const row = this.taskManager.getStatus(taskId as TaskId) as { cancelReason?: string } | null;
         if (ownsIt && row?.cancelReason === "user") {
