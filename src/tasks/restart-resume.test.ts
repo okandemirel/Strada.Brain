@@ -395,3 +395,101 @@ describe("a resubmission that cannot happen persists its cost and re-arms", () =
     }
   });
 });
+
+/**
+ * Codex 2026-09-11 F#7: a budget stop is a rolling WINDOW, not a verdict, and
+ * its hourly re-check timer dies with the process. The boot re-arm skipped
+ * anything whose result said MISSION STOPPED, so a restart before the window
+ * drained lost the mission until a person noticed.
+ */
+describe("a mission stopped by the BUDGET comes back when the window drains", () => {
+  function harness(blocked: unknown[], budgetExceeded: boolean) {
+    const executor = Object.create(BackgroundExecutor.prototype) as BackgroundExecutor;
+    const internals = executor as unknown as {
+      missionRetries: Map<string, number>;
+      taskManager: unknown;
+      allProvidersCoolingDownMs: () => number;
+      lineageRootTaskId: (t: { id: string }) => string;
+      isLineageCancelled: () => boolean;
+      lineageTipOf: () => unknown;
+      _unifiedBudgetManager: unknown;
+      scheduleKeepAliveRearm: () => void;
+    };
+    internals.missionRetries = new Map();
+    internals.allProvidersCoolingDownMs = () => 0;
+    internals.lineageRootTaskId = (t) => t.id;
+    internals.isLineageCancelled = () => false;
+    internals.lineageTipOf = () => null;
+    internals._unifiedBudgetManager = { isGlobalExceeded: () => budgetExceeded };
+    const blocks: string[] = [];
+    const notices: string[] = [];
+    internals.taskManager = {
+      listRecoverableTasks: () => blocked,
+      listPausedByRestart: () => [],
+      listTasks: () => [],
+      getStatus: () => null,
+      findLatestLineageTask: () => ({ id: "task_1", status: "blocked" }),
+      findLineageRootId: () => null,
+      retryTask: () => ({ id: "task_new" }),
+      appendTaskNotice: (_id: string, msg: string) => { notices.push(msg); },
+      block: (_id: string, msg: string) => { blocks.push(msg); },
+    };
+    return { internals, blocks, notices };
+  }
+  const stoppedOnBudget = {
+    id: "task_1", chatId: "cli-local", prompt: "Mission: build the game", origin: "user", status: "blocked",
+    result: "Transient failure — worker crashed. Auto-retry 4/10 in ~600s.\n\nMISSION STOPPED — needs you. Budget limit reached after 4 automatic retries — stopping is the contract, not a crash. Last blocker: worker crashed (the budget window re-opens on its own)",
+  };
+  const stoppedForGood = {
+    ...stoppedOnBudget,
+    result: "Transient failure — worker crashed. Auto-retry 10/10 in ~600s.\n\nMISSION STOPPED — needs you. Persistently failing after 10 automatic retries; this needs a human decision before work can continue. Last blocker: worker crashed",
+  };
+
+  it("re-arms it once the budget is back, and leaves it alone while the wall stands", async () => {
+    vi.useFakeTimers();
+    try {
+      const drained = harness([stoppedOnBudget], false);
+      drained.internals.scheduleKeepAliveRearm();
+      await vi.advanceTimersByTimeAsync(91_000);
+      expect(drained.blocks.join(" ")).toContain("Auto-retry");
+
+      // While the wall stands the mission is left exactly as it is: no block,
+      // and no second MISSION STOPPED notice on top of the first.
+      const stillWalled = harness([stoppedOnBudget], true);
+      stillWalled.internals.scheduleKeepAliveRearm();
+      await vi.advanceTimersByTimeAsync(91_000);
+      expect(stillWalled.blocks).toHaveLength(0);
+      expect(stillWalled.notices).toHaveLength(0);
+
+      // A stop that needs a PERSON is still left alone, budget or not.
+      const human = harness([stoppedForGood], false);
+      human.internals.scheduleKeepAliveRearm();
+      await vi.advanceTimersByTimeAsync(91_000);
+      expect(human.blocks).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("writes the marker that makes the next boot able to tell the two apart", () => {
+    const { internals, notices } = harness([], true);
+    (internals as unknown as { scheduleMissionKeepAlive: (t: unknown, r: string) => boolean })
+      .scheduleMissionKeepAlive(
+        { id: "task_1", chatId: "cli-local", prompt: "Mission: build the game", origin: "user", status: "failed" },
+        "worker crashed",
+      );
+    expect(notices[0]).toContain("MISSION STOPPED");
+    expect(notices[0]).toContain("budget window re-opens on its own");
+
+    // A NON-budget stop carries no such promise.
+    const ordinary = harness([], false);
+    ordinary.internals.missionRetries.set("mission:task_1", 10);
+    (ordinary.internals as unknown as { scheduleMissionKeepAlive: (t: unknown, r: string) => boolean })
+      .scheduleMissionKeepAlive(
+        { id: "task_1", chatId: "cli-local", prompt: "Mission: build the game", origin: "user", status: "failed" },
+        "compile failed: CS1002",
+      );
+    expect(ordinary.notices[0]).toContain("MISSION STOPPED");
+    expect(ordinary.notices[0]).not.toContain("budget window re-opens on its own");
+  });
+});

@@ -228,6 +228,13 @@ export const MIN_INACTIVITY_OVER_STREAM_RATIO = 2;
  */
 export { DEFAULT_TASK_INACTIVITY_TIMEOUT_MS };
 
+/**
+ * Written into a budget stop's notice so the next boot can tell a WAIT from a
+ * verdict. The text is user-visible on purpose: a stop that will lift itself
+ * should say so (Codex 2026-09-11 F#7).
+ */
+const BUDGET_WAIT_MARKER = "(the budget window re-opens on its own)";
+
 export class BackgroundExecutor {
   private readonly queue: QueueEntry[] = [];
   private readonly activeConversations = new Set<string>();
@@ -382,7 +389,16 @@ export class BackgroundExecutor {
           // "workspace directory is gone", a channel-authored block — was
           // never retried after a restart (audited 2026-09-10: the driver
           // mission sat blocked through three boots with exactly that reason).
-          if (/MISSION STOPPED|Paused on a question|Reply with guidance|ask_user/i.test(result)) {
+          // …unless the stop was the BUDGET, which is a rolling window rather
+          // than a verdict about the work. When it has drained, the mission
+          // goes back in (Codex 2026-09-11 F#7).
+          const budgetWait = result.includes(BUDGET_WAIT_MARKER);
+          const budgetStillExceeded = this._unifiedBudgetManager?.isGlobalExceeded() ?? false;
+          if (budgetWait && !budgetStillExceeded) {
+            getLoggerSafe().info("Re-arming a mission that stopped on the BUDGET — the window has drained", {
+              taskId: task.id,
+            });
+          } else if (/MISSION STOPPED|Paused on a question|Reply with guidance|ask_user/i.test(result)) {
             getLoggerSafe().info("Keep-alive re-arm skipped — mission already escalated to a person", {
               taskId: task.id,
             });
@@ -2136,7 +2152,13 @@ export class BackgroundExecutor {
       try {
         this.taskManager.appendTaskNotice(
           task.id,
-          `MISSION STOPPED — needs you. ${decision.reportReason} Last blocker: ${reason.slice(0, 200)}`,
+          `MISSION STOPPED — needs you. ${decision.reportReason} Last blocker: ${reason.slice(0, 200)}` +
+            // A BUDGET stop is a WAIT, and the next boot has to be able to
+            // tell it from a stop that needs a person: the hourly re-check
+            // timer dies with the process, and the boot re-arm skips anything
+            // that says MISSION STOPPED, so a restart before the window
+            // drained lost the mission for good (Codex 2026-09-11 F#7).
+            (budgetExceeded ? ` ${BUDGET_WAIT_MARKER}` : ""),
         );
       } catch { /* visibility best-effort */ }
       // A BUDGET stop is a rolling-window condition, not a terminal one: the
