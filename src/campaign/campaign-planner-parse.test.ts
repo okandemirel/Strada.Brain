@@ -102,4 +102,86 @@ describe("reading a milestone ladder out of a reply", () => {
     expect(asks[1]).toContain("could not be used");
     expect(asks[1]).toContain("FIRST character of your reply must be");
   });
+
+  it("falls back to two short replies when the whole ladder never arrives (measured live 2026-09-12)", async () => {
+    // Every single-reply attempt was spent enumerating the GDD's headings, so
+    // the campaign failed at its first step. The titles alone, then one prompt
+    // per milestone, is the same ladder in replies any model can finish.
+    const asks: string[] = [];
+    let call = 0;
+    const provider = {
+      name: "test",
+      capabilities: { maxTokens: 4096, streaming: false, structuredStreaming: false, toolCalling: false, vision: false, systemPrompt: true },
+      chat: vi.fn(async (_s: string, messages: Array<{ content: string }>) => {
+        const ask = String(messages.at(-1)?.content ?? "");
+        asks.push(ask);
+        call += 1;
+        // The two whole-ladder attempts never reach the JSON.
+        if (call <= 2) return reply("<reasoning>\nLet me enumerate the headings first.");
+        if (ask.includes("TITLES ONLY")) {
+          return reply(JSON.stringify({ milestones: [
+            { title: "Core loop", coveredSections: ["3. CORE GAMEPLAY"] },
+            { title: "Delivery", coveredSections: ["9. RELEASE"] },
+          ] }));
+        }
+        return reply("Build what this milestone covers in the project, verify it in PlayMode and leave the scene wired.");
+      }),
+    };
+    const reply = (text: string) => ({ text, toolCalls: [], stopReason: "end_turn", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } });
+
+    const result = await new CampaignPlanner(provider as never)
+      .planMilestones("# GDD\n\n## 3. CORE GAMEPLAY\nRules.\n\n## 9. RELEASE\nShip.\n", "docs/GDD.md");
+
+    expect(result.milestones.map((m) => m.title)).toEqual(["Core loop", "Delivery"]);
+    expect(result.milestones[0]!.prompt.length).toBeGreaterThanOrEqual(40);
+    expect(result.milestones[0]!.coveredSections).toEqual(["3. CORE GAMEPLAY"]);
+    // Two whole-ladder attempts, then titles, then one ask per milestone.
+    expect(asks).toHaveLength(5);
+  });
+
+  it("a milestone whose instruction never arrived is dropped, not shipped empty", async () => {
+    const reply = (text: string) => ({ text, toolCalls: [], stopReason: "end_turn", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } });
+    let call = 0;
+    const provider = {
+      name: "test",
+      capabilities: { maxTokens: 4096, streaming: false, structuredStreaming: false, toolCalling: false, vision: false, systemPrompt: true },
+      chat: vi.fn(async (_s: string, messages: Array<{ content: string }>) => {
+        const ask = String(messages.at(-1)?.content ?? "");
+        call += 1;
+        if (call <= 2) return reply("<reasoning>\nthinking");
+        if (ask.includes("TITLES ONLY")) {
+          return reply(JSON.stringify({ milestones: [
+            { title: "One", coveredSections: [] },
+            { title: "Two", coveredSections: [] },
+            { title: "Three", coveredSections: [] },
+          ] }));
+        }
+        // The middle milestone comes back with nothing usable.
+        return reply(ask.includes('"Two"') ? "ok" : "Build what this milestone covers and verify it in PlayMode before reporting.");
+      }),
+    };
+
+    const result = await new CampaignPlanner(provider as never)
+      .planMilestones("# GDD\n\n## 3. CORE GAMEPLAY\nRules.\n\n## 9. RELEASE\nShip.\n", "docs/GDD.md");
+
+    expect(result.milestones.map((m) => m.title)).toEqual(["One", "Three"]);
+  });
+
+  it("two titles are the floor: one is not a ladder", async () => {
+    const reply = (text: string) => ({ text, toolCalls: [], stopReason: "end_turn", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } });
+    let call = 0;
+    const provider = {
+      name: "test",
+      capabilities: { maxTokens: 4096, streaming: false, structuredStreaming: false, toolCalling: false, vision: false, systemPrompt: true },
+      chat: vi.fn(async () => {
+        call += 1;
+        if (call <= 2) return reply("<reasoning>\nthinking");
+        return reply(JSON.stringify({ milestones: [{ title: "Only one", coveredSections: [] }] }));
+      }),
+    };
+
+    await expect(
+      new CampaignPlanner(provider as never).planMilestones("# GDD\n\n## 3. CORE\nRules.\n", "docs/GDD.md"),
+    ).rejects.toThrow();
+  });
 });

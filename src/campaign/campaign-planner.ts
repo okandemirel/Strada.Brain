@@ -306,7 +306,84 @@ export class CampaignPlanner {
         if (allProvidersCoolingDownMs() > 0) break;
       }
     }
+    // TWO SHORT ANSWERS INSTEAD OF ONE LONG ONE. A whole ladder — twenty
+    // milestones with their prompts — is a reply some models cannot finish:
+    // measured live 2026-09-12, every attempt was spent enumerating the GDD's
+    // headings and the campaign failed at its first step. Asking for the
+    // titles alone, then each prompt on its own, is the same ladder in replies
+    // any model can complete.
+    try {
+      const staged = await this.planInStages(system, userMessage, scope);
+      const uncovered = uncoveredSections(scope.headings, staged.milestones.flatMap((m) => m.coveredSections));
+      getLoggerSafe().warn("Campaign ladder planned in stages after the single-reply plan failed", {
+        milestones: staged.milestones.length,
+        cause: lastError instanceof Error ? lastError.message : String(lastError),
+      });
+      return { ...staged, uncoveredSections: uncovered, totalSections: scope.headings.length, minMilestones: scope.minMilestones, maxMilestones: scope.maxMilestones };
+    } catch (err) {
+      getLoggerSafe().warn("Staged planning failed too", { error: err instanceof Error ? err.message : String(err) });
+    }
     throw lastError instanceof Error ? lastError : new Error(String(lastError));
+  }
+
+  /**
+   * The ladder in two kinds of short reply: the titles and their sections
+   * first, then one prompt per milestone. Every reply is small enough for a
+   * model that would never finish the whole ladder in one answer.
+   */
+  private async planInStages(system: string, userMessage: string, scope: GddScope): Promise<MilestoneLadder> {
+    if (!this.provider) throw new Error("campaign planning requires an LLM provider");
+    const titlesAsk =
+      `${userMessage}\n\nAnswer in TWO STEPS. This is step one: the TITLES ONLY.\n` +
+      `Reply with this JSON and nothing else — no prose, no <reasoning>, no markdown fence:\n` +
+      `{"milestones":[{"title":"…","coveredSections":["…"]}]}\n` +
+      `Between ${scope.minMilestones} and ${scope.maxMilestones} milestones. No "prompt" field in this step.`;
+    const titlesReply = await streamOrChatText(this.provider, system, titlesAsk, { maxTokens: CampaignPlanner.STAGE_OUTPUT_TOKENS });
+    const titles = this.readStagedTitles(titlesReply.text ?? "");
+    if (titles.length < 2) throw new Error("staged planning: no milestone titles");
+
+    const milestones: MilestoneLadder["milestones"] = [];
+    for (const [index, item] of titles.entries()) {
+      const promptAsk =
+        `${userMessage}\n\nThis is step two, milestone ${index + 1} of ${titles.length}: "${item.title}"` +
+        `${item.coveredSections.length > 0 ? ` covering ${item.coveredSections.map((h) => `"${h}"`).join(", ")}` : ""}.\n` +
+        `Write the sprint instruction for THIS milestone only: what to build, in this project, with what proof. ` +
+        `Reply with the instruction text itself — no JSON, no title, no preamble.`;
+      const reply = await streamOrChatText(this.provider, system, promptAsk, { maxTokens: CampaignPlanner.STAGE_OUTPUT_TOKENS });
+      const prompt = stripLeakedReasoning(reply.text ?? "").text.trim().slice(0, 8000);
+      // A milestone with no instruction is not a milestone; the schema's own
+      // floor (40 characters) is the measure.
+      if (prompt.length < 40) continue;
+      milestones.push({ title: item.title, prompt, coveredSections: item.coveredSections, deliverables: [] });
+    }
+    const validated = milestoneLadderSchema.safeParse({ milestones, excluded: [] });
+    if (!validated.success) {
+      throw new Error(`staged planning produced no usable ladder (${z.prettifyError(validated.error).slice(0, 200)})`);
+    }
+    return validated.data;
+  }
+
+  /** Titles + sections out of a step-one reply, however it was wrapped. */
+  private readStagedTitles(text: string): Array<{ title: string; coveredSections: string[] }> {
+    for (const candidate of balancedJsonObjects(stripLeakedReasoning(text).text).reverse()) {
+      try {
+        const parsed = JSON.parse(candidate) as { milestones?: Array<{ title?: unknown; coveredSections?: unknown }> };
+        const rows = Array.isArray(parsed.milestones) ? parsed.milestones : [];
+        const titles = rows
+          .map((r) => ({
+            title: typeof r.title === "string" ? r.title.trim().slice(0, 200) : "",
+            coveredSections: Array.isArray(r.coveredSections)
+              ? r.coveredSections.filter((h): h is string => typeof h === "string" && h.length > 0).slice(0, 40)
+              : [],
+          }))
+          .filter((r) => r.title.length > 0)
+          .slice(0, 24);
+        if (titles.length >= 2) return titles;
+      } catch {
+        continue;
+      }
+    }
+    return [];
   }
 
   /**
@@ -346,6 +423,8 @@ export class CampaignPlanner {
 
   /** Output budget for a ladder reply (see planOnce). */
   private static readonly PLAN_OUTPUT_TOKENS = 8000;
+  /** One stage of the staged plan: a short answer by construction. */
+  private static readonly STAGE_OUTPUT_TOKENS = 2500;
 
   private async planOnce(system: string, userMessage: string): Promise<MilestoneLadder> {
     if (!this.provider) {
