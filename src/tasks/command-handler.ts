@@ -307,7 +307,8 @@ export class CommandHandler {
       taskId = active.id;
     }
 
-    const success = this.taskManager.cancel(taskId);
+    // A PERSON typed this (Codex 2026-09-11 K#6).
+    const success = this.taskManager.cancel(taskId, { reason: "user" });
     if (success) {
       await this.channel.sendText(chatId, `Task ${taskId} cancelled.`);
     } else {

@@ -120,13 +120,18 @@ export interface Task {
   updatedAt: number;
   /**
    * Why a cancelled task was cancelled, when it matters to its descendants.
+   * "user" = A PERSON stopped this work (the /cancel command, the monitor's
+   * cancel button). Only that is a stop order a campaign must obey: an
+   * executor retirement carries no reason and used to read as a person's
+   * stop, stranding autonomous delivery (Codex 2026-09-11 K#6).
+   *
    * "superseded" = the campaign cancelled this attempt only to resubmit the
    * same milestone as its child. Measured 2026-09-08 15:19: every campaign
    * attempt after the first descends from a task the campaign itself
    * cancelled, so the executor's "a cancel anywhere in the ancestry retires
    * the lineage" rule abandoned every keep-alive retry of every sprint.
    */
-  cancelReason?: "superseded";
+  cancelReason?: "superseded" | "user";
   completedAt?: number;
   parentId?: TaskId;
   /** Origin of the task -- 'user' for interactive, 'daemon' for daemon-initiated */

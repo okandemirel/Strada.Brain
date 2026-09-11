@@ -148,12 +148,14 @@ describe("createWorkspaceRuntimeBridge", () => {
 
     workspaceBus.emit("monitor:cancel_task", { rootId: "root-1", taskId: "task-active" });
 
-    expect(taskManager.cancel).toHaveBeenCalledWith("task-active");
+    // A person clicked cancel in the monitor, and the store records that
+    // (Codex 2026-09-11 K#6).
+    expect(taskManager.cancel).toHaveBeenCalledWith("task-active", { reason: "user" });
     expect(taskManager.cancelGoalRoot).not.toHaveBeenCalled();
 
     workspaceBus.emit("monitor:cancel_task", { rootId: "root-1" });
 
-    expect(taskManager.cancelGoalRoot).toHaveBeenCalledWith("root-1");
+    expect(taskManager.cancelGoalRoot).toHaveBeenCalledWith("root-1", { reason: "user" });
   });
 
   it("routes move_task through goalStorage and emits notification", () => {

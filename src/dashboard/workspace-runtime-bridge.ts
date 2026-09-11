@@ -148,9 +148,10 @@ export function createWorkspaceRuntimeBridge(params: {
       const handleCancel = (payload: unknown) => {
         const action = extractActionPayload(payload);
         const cancelled = action.taskId
-          ? taskManager.cancel(action.taskId as never)
+          // A person clicked cancel in the monitor (Codex 2026-09-11 K#6).
+          ? taskManager.cancel(action.taskId as never, { reason: "user" } as never)
           : action.rootId
-            ? taskManager.cancelGoalRoot(action.rootId)
+            ? taskManager.cancelGoalRoot(action.rootId, { reason: "user" } as never)
             : false;
 
         if (!cancelled) {

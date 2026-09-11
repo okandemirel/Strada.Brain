@@ -95,8 +95,8 @@ class FakeTaskManager extends EventEmitter {
     const current = this.statuses.get(taskId);
     const terminal = current === TaskStatus.completed || current === TaskStatus.failed || current === TaskStatus.cancelled;
     if (terminal) {
-      if (current === TaskStatus.cancelled && this.cancelReasons.get(taskId) === "superseded" && opts?.reason !== "superseded") {
-        this.cancelReasons.set(taskId, undefined);
+      if (current === TaskStatus.cancelled && this.cancelReasons.get(taskId) === "superseded" && opts?.reason === "user") {
+        this.cancelReasons.set(taskId, "user");
         this.cancelled.push(taskId);
       }
       return;
@@ -2948,11 +2948,35 @@ describe("CampaignManager", () => {
     for (const id of [middle, tip]) {
       (tasks as unknown as { prompts: Map<string, string> }).prompts.set(id, tasks.submitted[0]!.prompt);
     }
-    tasks.cancel(middle);
+    tasks.cancel(middle, { reason: "user" });
     tasks.emit("task:blocked", tip, "still stuck");
 
     await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"));
     expect(storage.get(campaign.id)!.lastError).toContain("NOT DELIVERED");
+  });
+
+  it("the lineage walk looks at the milestone's OWN task first (Codex 2026-09-11 K#7)", async () => {
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    const chain: string[] = [];
+    for (let i = 0; i < 5; i++) {
+      chain.push(tasks.addRetry(chain.at(-1) ?? "task_1", TaskStatus.blocked));
+    }
+    const asked: string[] = [];
+    const realGetStatus = tasks.getStatus.bind(tasks);
+    vi.spyOn(tasks, "getStatus").mockImplementation((id: string) => {
+      asked.push(id);
+      return realGetStatus(id);
+    });
+    (manager as unknown as { lineageWasCancelledOnPurpose(id: string): boolean }).lineageWasCancelledOnPurpose("task_1");
+    vi.restoreAllMocks();
+    // The tip lookup happens first by construction; what matters is that the
+    // WALK reaches the asked-about task before it walks the chain back from
+    // the tip, so a long chain cannot push it past the visit budget.
+    const middle = chain.slice(0, -1); // the nodes only the walk touches
+    const firstMiddle = Math.min(...middle.map((id) => asked.indexOf(id)).filter((i) => i >= 0));
+    expect(asked.indexOf("task_1")).toBeGreaterThanOrEqual(0);
+    expect(asked.indexOf("task_1")).toBeLessThan(firstMiddle);
   });
 
   it("a cancelled task under a LIVE child still stops the campaign (Codex 2026-09-11 J#2)", async () => {
@@ -2961,7 +2985,7 @@ describe("CampaignManager", () => {
     // A person cancels the sprint; the executor's retry is already running.
     const child = tasks.addRetry("task_1", TaskStatus.executing);
     (tasks as unknown as { prompts: Map<string, string> }).prompts.set(child, tasks.submitted[0]!.prompt);
-    tasks.cancel("task_1");
+    tasks.cancel("task_1", { reason: "user" });
     tasks.emit("task:cancelled", "task_1", "cancelled");
 
     await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"));
@@ -2974,7 +2998,7 @@ describe("CampaignManager", () => {
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
     await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     // A person cancels the sprint: not a supersession, a stop order.
-    tasks.cancel("task_1");
+    tasks.cancel("task_1", { reason: "user" });
     tasks.emit("task:cancelled", "task_1", "cancelled");
     await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"));
     const after = storage.get(campaign.id)!;
@@ -2982,6 +3006,18 @@ describe("CampaignManager", () => {
     expect(after.autoReviveAt).toBeUndefined();
     expect(after.lastError).toContain("NOT DELIVERED");
     expect(messages.at(-1)!.text).toContain("was cancelled");
+  });
+
+  it("an EXECUTOR cancellation is not a person's stop order (Codex 2026-09-11 K#6)", async () => {
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    // No reason at all: how an automatic retirement looks in the store.
+    tasks.cancel("task_1");
+    tasks.emit("task:cancelled", "task_1", "cancelled");
+    await new Promise((r) => setTimeout(r, 250));
+    const after = storage.get(campaign.id)!;
+    expect(after.lastError ?? "").not.toContain("was cancelled");
+    expect(messages.map((m) => m.text).join(" ")).not.toContain("the campaign stops here");
   });
 
   it("the campaign's OWN supersession is not a stop order (Codex 2026-09-11 I#6)", async () => {
@@ -3000,7 +3036,7 @@ describe("CampaignManager", () => {
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
     await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     // A person stops the sprint, then asks for it again.
-    tasks.cancel("task_1");
+    tasks.cancel("task_1", { reason: "user" });
     const stopped = storage.get(campaign.id)!;
     stopped.state = "failed";
     stopped.milestones[0]!.taskId = "task_1";
@@ -3067,7 +3103,7 @@ describe("CampaignManager", () => {
     parked.milestones[0]!.taskId = "task_1";
     storage.save(parked);
     // …then a person cancels the parked sprint.
-    tasks.cancel("task_1");
+    tasks.cancel("task_1", { reason: "user" });
 
     const submittedBefore = tasks.submitted.length;
     (manager as unknown as { scheduleAutoRevive(id: string, ms: number): void }).scheduleAutoRevive(campaign.id, 10);

@@ -280,12 +280,15 @@ describe("TaskManager", () => {
     });
     const storage = { load: vi.fn().mockReturnValue(superseded), updateStatus: vi.fn(), markCancelled: vi.fn() } as any;
     const manager = new TaskManager(storage, { resumeConversation: vi.fn() } as any);
-    expect(manager.cancel("task_sup" as Task["id"])).toBe(true);
-    expect(storage.markCancelled).toHaveBeenCalledWith("task_sup", undefined);
+    // A PERSON's cancel withdraws it and says who did it (Codex K#6).
+    expect(manager.cancel("task_sup" as Task["id"], { reason: "user" })).toBe(true);
+    expect(storage.markCancelled).toHaveBeenCalledWith("task_sup", "user");
 
-    // The campaign's own supersession of an already-superseded row changes nothing.
+    // The campaign's own supersession of an already-superseded row changes
+    // nothing, and neither does an automatic retirement with no reason.
     storage.markCancelled.mockClear();
     expect(manager.cancel("task_sup" as Task["id"], { reason: "superseded" })).toBe(false);
+    expect(manager.cancel("task_sup" as Task["id"])).toBe(false);
     expect(storage.markCancelled).not.toHaveBeenCalled();
 
     // A completed task is still left alone.

@@ -352,7 +352,8 @@ export class TaskStorage {
       attachments: this.parseAttachments(row.attachments_json),
       verification: this.parseVerification(row.verification_json),
       workspacePolicy: row.workspace_policy === "none" ? "none" : undefined,
-      cancelReason: row.cancel_reason === "superseded" ? "superseded" : undefined,
+      cancelReason:
+        row.cancel_reason === "superseded" ? "superseded" : row.cancel_reason === "user" ? "user" : undefined,
       supervisorMode: row.supervisor_mode === "off" ? "off" : undefined,
     };
   }

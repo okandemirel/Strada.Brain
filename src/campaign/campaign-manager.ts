@@ -888,16 +888,19 @@ export class CampaignManager {
       // a cancelled node BETWEEN it and the tip, and the depth guard used to
       // exit before checking the node it had just loaded (Codex 2026-09-11 J#6).
       const seen = new Set<string>();
-      const pending: string[] = [taskId];
+      // The MILESTONE'S OWN TASK is examined first: pushing it and then the
+      // tip meant a 200-deep chain walked back from the tip, exhausted the
+      // visit budget and never looked at the task it was asked about (Codex
+      // 2026-09-11 K#7).
       const tipId = manager.findLatestLineageTask?.(taskId)?.id;
-      if (tipId) pending.push(tipId);
-      while (pending.length > 0 && seen.size < 200) {
+      const pending: string[] = tipId && tipId !== taskId ? [tipId, taskId] : [taskId];
+      while (pending.length > 0 && seen.size < 1000) {
         const id = pending.pop()!;
         if (seen.has(id)) continue;
         seen.add(id);
         const row = manager.getStatus?.(id) ?? null;
         if (!row) continue;
-        if (row.status === "cancelled" && row.cancelReason !== "superseded") return true;
+        if (row.status === "cancelled" && row.cancelReason === "user") return true;
         if (row.parentId) pending.push(row.parentId);
       }
     } catch { /* unreadable lineage is not a stop order */ }
@@ -2130,9 +2133,12 @@ export class CampaignManager {
         : milestone.taskId
         ? this.taskManager.getStatus(milestone.taskId as TaskId)
         : null;
+    // A PERSON's stop, not any cancellation: an executor retirement carries no
+    // reason at all, and reading that as a stop order stranded the campaign
+    // (Codex 2026-09-11 K#6).
     const cancelledOnPurpose =
       status === TaskStatus.cancelled &&
-      (statusSource as { cancelReason?: string } | null)?.cancelReason !== "superseded";
+      (statusSource as { cancelReason?: string } | null)?.cancelReason === "user";
     if (cancelledOnPurpose) {
       milestone.status = "failed";
       milestone.resultExcerpt = output.slice(-500);

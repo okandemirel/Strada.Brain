@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
 import Database from "better-sqlite3";
 import { CommandHandler } from "./command-handler.js";
 import { DMPolicy } from "../security/dm-policy.js";
@@ -853,3 +854,15 @@ describe("CommandHandler /resume", () => {
   });
 });
 
+
+describe("/cancel says WHO stopped the work (Codex 2026-09-11 K#6)", () => {
+  it("marks the cancellation as a person's, so a campaign obeys it", () => {
+    const source = readFileSync("src/tasks/command-handler.ts", "utf8");
+    const at = source.indexOf("this.taskManager.cancel(taskId");
+    expect(at).toBeGreaterThan(0);
+    // An automatic retirement carries no reason; only a person's stop does,
+    // and that difference is what keeps an executor cancellation from
+    // stranding an autonomous campaign.
+    expect(source.slice(at, at + 80)).toContain('{ reason: "user" }');
+  });
+});

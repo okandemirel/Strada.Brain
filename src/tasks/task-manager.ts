@@ -182,8 +182,8 @@ export class TaskManager extends EventEmitter {
       // the campaign's revival timer then read the supersession and continued
       // (Codex 2026-09-11 J#3). A terminal row's status does not change; only
       // its reason is upgraded.
-      if (task.status === TaskStatus.cancelled && task.cancelReason === "superseded" && opts.reason !== "superseded") {
-        this.storage.markCancelled(taskId, undefined);
+      if (task.status === TaskStatus.cancelled && task.cancelReason === "superseded" && opts.reason === "user") {
+        this.storage.markCancelled(taskId, "user");
         getLogger().info("A superseded task was cancelled deliberately — the supersession is withdrawn", { taskId });
         return true;
       }
@@ -214,12 +214,12 @@ export class TaskManager extends EventEmitter {
     return true;
   }
 
-  cancelGoalRoot(goalRootId: string): boolean {
+  cancelGoalRoot(goalRootId: string, opts: { reason?: Task["cancelReason"] } = {}): boolean {
     const task = this.storage.findLatestByGoalRoot(goalRootId);
     if (!task) {
       return false;
     }
-    return this.cancel(task.id);
+    return this.cancel(task.id, opts);
   }
 
   /**
