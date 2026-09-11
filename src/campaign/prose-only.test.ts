@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { CampaignManager, proofSignature, unscheduledGaps } from "./campaign-manager.js";
+import { attemptRunId, CampaignManager, proofSignature, unscheduledGaps } from "./campaign-manager.js";
 
 /**
  * Measured live 2026-09-04: told not to audit, the final sprint answered
@@ -137,5 +137,17 @@ describe("which GDD requirements still need a sprint (Codex 2026-09-11 J#12, J#1
     expect(unscheduledGaps([sharesPrefix], green)).toEqual([sharesPrefix]);
     // A milestone that is not a coverage sprint never covers anything.
     expect(unscheduledGaps([long], [{ id: "m1", title: long, status: "green" }])).toEqual([long]);
+  });
+});
+
+describe("attemptRunId (the open half of Codex F#10 / I#11)", () => {
+  it("is stable within an attempt and different across attempts", () => {
+    const m = { id: "m3", attempts: 1, attemptStartedAtMs: 1_700_000_000_000 };
+    expect(attemptRunId(m)).toBe(attemptRunId({ ...m }));
+    expect(attemptRunId({ ...m, attempts: 2 })).not.toBe(attemptRunId(m));
+    expect(attemptRunId({ ...m, attemptStartedAtMs: 1_700_000_000_001 })).not.toBe(attemptRunId(m));
+    expect(attemptRunId({ id: "m4", attempts: 1, attemptStartedAtMs: 1_700_000_000_000 })).not.toBe(attemptRunId(m));
+    // A milestone that never recorded an attempt clock still has an id.
+    expect(attemptRunId({ id: "m1" })).toBe("m1-0-0");
   });
 });

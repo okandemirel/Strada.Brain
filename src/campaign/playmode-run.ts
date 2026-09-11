@@ -34,6 +34,14 @@ export interface PlaymodeRunEvidence {
    * sprint refuses such a record (Codex 2026-09-11 G#4).
    */
   stampMissing?: boolean;
+  /**
+   * The run id the writer stamped, when it stamped one. The campaign issues
+   * an id per attempt and asks the verification tool to echo it; a record
+   * carrying a DIFFERENT id belongs to another attempt, whatever its
+   * timestamps say. Absent stays acceptable while the tool does not emit it
+   * (the open half of Codex F#10 / I#11).
+   */
+  runId?: string;
   total?: number;
   passed?: number;
   failed?: number;
@@ -46,7 +54,7 @@ export interface PlaymodeRunEvidence {
   detail?: string;
 }
 
-export function readPlaymodeRun(projectRoot: string, sinceMs: number): PlaymodeRunEvidence {
+export function readPlaymodeRun(projectRoot: string, sinceMs: number, expectRunId?: string): PlaymodeRunEvidence {
   const path = join(projectRoot, PLAYMODE_RUN_RECORD_REL);
   if (!existsSync(path)) return { found: false };
   let mtimeMs: number;
@@ -107,6 +115,13 @@ export function readPlaymodeRun(projectRoot: string, sinceMs: number): PlaymodeR
   // 42/42 into today's final-sprint proof). CLOCK SKEW, not millisecond
   // precision: the runner may be another machine whose clock is minutes
   // behind the coordinator's (G#8).
+  // A RECORD FROM ANOTHER ATTEMPT is not this attempt's proof, whatever its
+  // clock says. The id is only compared when both sides have one, so a tool
+  // that does not echo it yet behaves exactly as before.
+  const stampedRunId = typeof raw.runId === "string" ? raw.runId.trim() : "";
+  if (expectRunId && stampedRunId && stampedRunId !== expectRunId) {
+    return { found: false, stale: true };
+  }
   const stamped = measuredAtMs(raw.measuredAt);
   if (stamped !== undefined && stamped + CLOCK_SKEW_TOLERANCE_MS < sinceMs) return { found: false, stale: true };
   // A stamp from the FUTURE is fabrication, not skew: "2099-01-01" was
@@ -157,6 +172,7 @@ export function readPlaymodeRun(projectRoot: string, sinceMs: number): PlaymodeR
       : `PlayMode verification FAILED: ${failed} of ${total} tests failed (${scope})`;
   return {
     found: true,
+    ...(typeof raw.runId === "string" && raw.runId.trim() !== "" ? { runId: raw.runId.trim() } : {}),
     ...(stampMissing ? { stampMissing: true } : {}),
     green: consistent && failed === 0 && passed > 0,
     total,

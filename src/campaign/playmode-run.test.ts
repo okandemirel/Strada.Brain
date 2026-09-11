@@ -175,3 +175,25 @@ describe("a stamp is not a free pass (Codex 2026-09-11 H#9, H#10, H#11)", () => 
     expect(readPlaymodeRun(root, attemptStart)).toMatchObject({ found: true, green: true });
   });
 });
+
+describe("a record names the attempt that asked for it (the open half of Codex F#10 / I#11)", () => {
+  it("refuses a record stamped with ANOTHER attempt's run id, and accepts one with none", () => {
+    const attemptStart = Date.now() - 60_000;
+    const green = { total: 42, passed: 42, failed: 0, skipped: 0, unfiltered: true, measuredAt: new Date(attemptStart + 1_000).toISOString() };
+
+    // A tool that does not echo the id yet behaves exactly as before.
+    write(green);
+    expect(readPlaymodeRun(root, attemptStart, "m3-1-1700000000000")).toMatchObject({ found: true, green: true });
+
+    // The attempt's own id is accepted and carried.
+    write({ ...green, runId: "m3-1-1700000000000" });
+    expect(readPlaymodeRun(root, attemptStart, "m3-1-1700000000000")).toMatchObject({ found: true, green: true, runId: "m3-1-1700000000000" });
+
+    // Another attempt's record is not this attempt's proof, however fresh.
+    write({ ...green, runId: "m3-0-1600000000000" });
+    expect(readPlaymodeRun(root, attemptStart, "m3-1-1700000000000")).toMatchObject({ found: false, stale: true });
+
+    // With no expectation, an id changes nothing.
+    expect(readPlaymodeRun(root, attemptStart)).toMatchObject({ found: true, green: true });
+  });
+});

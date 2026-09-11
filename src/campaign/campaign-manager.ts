@@ -339,6 +339,20 @@ export function proofSignature(
   return [...kinds].sort().join(" | ").slice(0, 400) || "none-named";
 }
 
+/**
+ * The id THIS ATTEMPT issues for the runs it asks for.
+ *
+ * A worker writes the records the gates read, so freshness is the only thing
+ * those records prove today: a run id the campaign issues and the tool echoes
+ * is what binds a record to the attempt that asked for it (the open half of
+ * Codex 2026-09-11 F#10 / I#11). Derived, so it needs no column: the same
+ * attempt always computes the same id, and a new attempt a different one.
+ */
+export function attemptRunId(milestone: { id: string; attemptStartedAtMs?: number; startedAtMs?: number; attempts?: number }): string {
+  const started = milestone.attemptStartedAtMs ?? milestone.startedAtMs ?? 0;
+  return `${milestone.id}-${milestone.attempts ?? 0}-${started}`;
+}
+
 /** A coverage requirement's identity: its own text, normalized — never a prefix. */
 export function gapKey(gap: string): string {
   return gap.trim().toLowerCase().replace(/\s+/g, " ");
@@ -2266,7 +2280,7 @@ export class CampaignManager {
         // The NUnit record outranks the prose here too: a green/absent prose
         // verdict beside a fresh RED run record advanced a non-final sprint
         // (Codex 2026-09-11 B#14).
-        const run = readPlaymodeRun(this.projectRoot, this.sprintStartMs(milestone));
+        const run = readPlaymodeRun(this.projectRoot, this.sprintStartMs(milestone), attemptRunId(milestone));
         if (status === TaskStatus.completed && run.found && (run.failed ?? 0) > 0) {
           getLoggerSafe().warn("Milestone completion rejected: the NUnit run record is red", {
             id: campaign.id,
@@ -2440,7 +2454,7 @@ export class CampaignManager {
         // come from there — green is failed === 0 with tests executed,
         // unfiltered is "no -testFilter/-categories given", never a word in a
         // sentence. The prose-derived verdict remains the fallback.
-        const run = readPlaymodeRun(this.projectRoot, this.sprintStartMs(milestone));
+        const run = readPlaymodeRun(this.projectRoot, this.sprintStartMs(milestone), attemptRunId(milestone));
         // A STALE record is not silence: reading an old result with
         // unity_test_results produced green prose while the record on disk
         // predated the attempt, so the prose fallback turned a cached answer
@@ -2681,7 +2695,12 @@ export class CampaignManager {
           // and changed nothing. "Report the counts" was read as "produce a
           // report". The verb has to be unmistakable.
           "DO NOT AUDIT. An inventory of modules, prefabs, scenes or tests is not work and will be " +
-          "rejected: run the tools, change the code, and let the suite's own output be your report." +
+          "rejected: run the tools, change the code, and let the suite's own output be your report.\n" +
+          // The id that binds a record to THIS attempt. A tool that does not
+          // pass it through changes nothing; one that does makes a record from
+          // another attempt impossible to present as this one's proof.
+          `RUN ID for this attempt: ${attemptRunId(milestone)} — pass it to the verification tools ` +
+          "(runId) so the records they write name the attempt that asked for them." +
           playthroughClause +
           claimsClause +
           buildClause +
