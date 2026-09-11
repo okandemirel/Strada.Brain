@@ -64,7 +64,7 @@ describe("a gap leaves the queue in the same write that schedules it", () => {
     expect(source.slice(overflowAt, overflowAt + 500)).not.toContain("this.persist(campaign);");
 
     // The CALLER commits both together.
-    const callerAt = source.indexOf("campaign.milestones.push(...remediation);");
+    const callerAt = source.indexOf("this.scheduleBeforeFinal(campaign, remediation);");
     expect(callerAt).toBeGreaterThan(0);
     expect(source.slice(callerAt, callerAt + 200)).toContain("this.persist(campaign);");
   });

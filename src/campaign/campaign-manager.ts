@@ -3054,8 +3054,7 @@ export class CampaignManager {
         const remediation = await this.buildCoverageRemediation(campaign);
         if (remediation && remediation.length > 0) {
           milestone.status = "green";
-          campaign.milestones.push(...remediation);
-          campaign.currentMilestone += 1;
+          this.scheduleBeforeFinal(campaign, remediation);
           this.persist(campaign);
           await this.tell(
             campaign,
@@ -3407,13 +3406,7 @@ export class CampaignManager {
         // The LAST final milestone that has not been proven: inserting before
         // the FIRST one rewound the ladder past sprints already green when an
         // older mfinal sat earlier in it (Codex 2026-09-11 K#10).
-        const finalAt = campaign.milestones.findIndex(
-          (m, i) => m.id.startsWith("mfinal") && m.status !== "green" && i >= campaign.currentMilestone,
-        );
-        if (finalAt >= 0) campaign.milestones.splice(finalAt, 0, ...sprints);
-        else campaign.milestones.push(...sprints);
-        const firstId = sprints[0]!.id;
-        campaign.currentMilestone = campaign.milestones.findIndex((m) => m.id === firstId);
+        this.scheduleBeforeFinal(campaign, sprints);
         campaign.state = "executing";
         campaign.lastError = undefined;
         // The exhausted lineage is retired before its successor starts, or it
@@ -3468,9 +3461,7 @@ export class CampaignManager {
       // structural check alone: compile, tests, build and play-through never
       // ran on the game the remediation had just changed (Codex 2026-09-11
       // K#9). Move to it instead.
-      const pendingFinal = campaign.milestones.findIndex(
-        (m) => m.id.startsWith("mfinal") && m.status !== "green",
-      );
+      const pendingFinal = this.nextOutstandingMilestone(campaign, milestone);
       if (pendingFinal >= 0) {
         milestone.status = "failed";
         milestone.resultExcerpt = output.slice(-500);
@@ -3937,6 +3928,77 @@ export class CampaignManager {
       status: "pending" as const,
       attempts: 0,
     };
+  }
+
+  /**
+   * Put new sprints into the ladder BEFORE the final proof sprint, and make
+   * that proof answer for the tree they will leave behind.
+   *
+   * Appending them after the final stranded them: the completion path stored
+   * `mfinal` green, pushed the drained gap behind it, and when that gap spent
+   * its attempts a structural-only delivery set `done` with the final's own
+   * play-through still missing and its build never attempted (Codex
+   * 2026-09-11 L#13). A final proof measures the tree it was RUN against, so
+   * work scheduled after it invalidates its green.
+   */
+  private scheduleBeforeFinal(campaign: Campaign, sprints: readonly CampaignMilestone[]): void {
+    if (sprints.length === 0) return;
+    let lastFinal = -1;
+    campaign.milestones.forEach((m, i) => {
+      if (m.id.startsWith("mfinal")) lastFinal = i;
+    });
+    if (lastFinal >= 0) {
+      campaign.milestones.splice(lastFinal, 0, ...sprints);
+      for (const m of campaign.milestones) {
+        if (!m.id.startsWith("mfinal") || m.status !== "green") continue;
+        m.status = "pending";
+        m.attempts = 0;
+        m.taskId = undefined;
+        m.deliveryVerificationBounced = undefined;
+      }
+    } else {
+      campaign.milestones.push(...sprints);
+    }
+    const firstId = sprints[0]!.id;
+    campaign.currentMilestone = campaign.milestones.findIndex((m) => m.id === firstId);
+  }
+
+  /**
+   * The next milestone with work left: outstanding SPRINTS first, then the
+   * last final proof sprint.
+   *
+   * Taking the first unproven `mfinal` picked an OLD failed final sitting
+   * earlier in the ladder and advanced from there back into already-exhausted
+   * work; and with an unproven sprint still ahead of it, it jumped straight to
+   * the final and reached `done` with that sprint still pending (Codex
+   * 2026-09-11 L#14). One forward traversal, completed and exhausted entries
+   * skipped, the final chosen only when nothing precedes it.
+   */
+  private nextOutstandingMilestone(campaign: Campaign, exhausted: CampaignMilestone): number {
+    const outstanding = (m: CampaignMilestone): boolean =>
+      m.id !== exhausted.id && m.status !== "green" && (m.attempts ?? 0) < this.maxMilestoneAttempts;
+    const sprint = campaign.milestones.findIndex((m) => outstanding(m) && !m.id.startsWith("mfinal"));
+    if (sprint >= 0) return sprint;
+    let lastFinal = -1;
+    campaign.milestones.forEach((m, i) => {
+      if (m.id.startsWith("mfinal") && outstanding(m)) lastFinal = i;
+    });
+    if (lastFinal >= 0) return lastFinal;
+    // A GREEN FINAL THAT RAN BEFORE THIS WORK measured a tree that no longer
+    // exists. Delivering on it reached `done` with the gap sprint's own
+    // changes never compiled, played or built (Codex 2026-09-11 L#13).
+    const exhaustedAt = campaign.milestones.findIndex((m) => m.id === exhausted.id);
+    let stale = -1;
+    campaign.milestones.forEach((m, i) => {
+      if (m.id.startsWith("mfinal") && m.status === "green" && exhaustedAt >= 0 && i < exhaustedAt) stale = i;
+    });
+    if (stale >= 0) {
+      const proof = campaign.milestones[stale]!;
+      proof.attempts = 0;
+      proof.taskId = undefined;
+      proof.deliveryVerificationBounced = undefined;
+    }
+    return stale;
   }
 
   private async buildCoverageRemediation(campaign: Campaign): Promise<CampaignMilestone[] | undefined> {
