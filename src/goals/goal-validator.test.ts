@@ -368,3 +368,38 @@ describe("measurement-only nodes fold into the work that uses them (measured 202
     expect(foldMeasurementNodes(lone).nodes).toEqual(lone);
   });
 });
+
+describe("folding a measurement never deletes the work (Codex 2026-09-11 M#4)", () => {
+  it("keeps the verification when the node it folds into is itself folded", () => {
+    // The ordinary shape of a plan: do the work, verify it, report the result.
+    // Reading the ORIGINAL node after an earlier fold had rewritten it deleted
+    // both the verification and the report, and the survivor — "Implement
+    // player" alone — passed validation.
+    const { nodes, folded } = foldMeasurementNodes([
+      { id: "x", task: "Implement the player controller", dependsOn: [] },
+      { id: "a", task: "Run unity_verify_change and record the result", dependsOn: ["x"] },
+      { id: "b", task: "Report the results", dependsOn: ["a"] },
+    ]);
+
+    // Whatever it folds into, the verification is still IN the plan: the old
+    // walk left "Implement the player controller" alone, with the measurement
+    // and the report both gone.
+    expect(nodes.map((n) => n.task).join(" ")).toContain("unity_verify_change");
+    expect(nodes.map((n) => n.task).join(" ")).toContain("Report the results");
+    expect(nodes.some((n) => n.id === "x")).toBe(true);
+    expect(folded.length).toBeGreaterThan(0);
+  });
+
+  it("a folded verifier keeps every barrier it waited on", () => {
+    const { nodes } = foldMeasurementNodes([
+      { id: "a", task: "Build the playfield", dependsOn: [] },
+      { id: "b", task: "Build the HUD", dependsOn: [] },
+      { id: "v", task: "Report the measured results", dependsOn: ["a", "b"] },
+    ]);
+
+    const merged = nodes.find((n) => n.id === "b")!;
+    expect(merged.task).toContain("Report the measured results");
+    // Folding it into B alone used to drop its wait on A.
+    expect(merged.dependsOn).toContain("a");
+  });
+});

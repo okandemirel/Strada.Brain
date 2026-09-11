@@ -226,8 +226,14 @@ export interface FoldResult<T extends FoldableNode> {
 export function foldMeasurementNodes<T extends FoldableNode>(nodes: readonly T[]): FoldResult<T> {
   let working: T[] = [...nodes];
   const folded: string[] = [];
-  for (const node of nodes) {
-    if (!isMeasurementOnlyNode(node.task)) continue;
+  for (const original of nodes) {
+    // THE CURRENT NODE, not the one the caller passed in. Reading the original
+    // after an earlier fold had rewritten it deleted a measurement and its
+    // dependent together: "Implement player → run unity_verify_change → report
+    // the results" folded down to "Implement player" alone, with the
+    // verification gone and the plan still valid (Codex 2026-09-11 M#4).
+    const node = working.find((n) => n.id === original.id);
+    if (!node || !isMeasurementOnlyNode(node.task)) continue;
     const dependents = working.filter((n) => n.dependsOn.includes(node.id));
     const prerequisites = node.dependsOn;
     if (dependents.length > 0) {
@@ -244,11 +250,23 @@ export function foldMeasurementNodes<T extends FoldableNode>(nodes: readonly T[]
         );
       folded.push(node.id);
     } else if (prerequisites.length > 0) {
-      // A trailing measurement (nothing depends on it): it ends the last step it followed.
-      const last = prerequisites[prerequisites.length - 1]!;
+      // A trailing measurement (nothing depends on it): it ends the last step
+      // it followed — the last one STILL PRESENT, or the measurement stays
+      // where it is rather than vanishing with the node it pointed at.
+      const last = [...prerequisites].reverse().find((id) => working.some((n) => n.id === id));
+      if (last === undefined) continue;
+      const carried = prerequisites.filter((d) => d !== last);
       working = working
         .filter((n) => n.id !== node.id)
-        .map((n) => (n.id === last ? { ...n, task: `${n.task.trim().replace(/[.\s]+$/, "")}. Finally, in this same step: ${node.task.trim()}` } : n));
+        .map((n) => (n.id === last
+          ? {
+              ...n,
+              task: `${n.task.trim().replace(/[.\s]+$/, "")}. Finally, in this same step: ${node.task.trim()}`,
+              // EVERY BARRIER THE MEASUREMENT HAD. Folding a final verifier
+              // that waited on A and B into B alone dropped its wait on A.
+              dependsOn: [...new Set([...n.dependsOn, ...carried.filter((d) => d !== n.id)])],
+            }
+          : n));
       folded.push(node.id);
     }
   }
