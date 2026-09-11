@@ -340,6 +340,19 @@ export interface Campaign {
    * resets, so the bouncing ends even when the identity keeps changing.
    */
   deliveryRoundsTotal?: number;
+  /**
+   * When a PERSON's stop was recorded, and which generation of this campaign
+   * it belongs to.
+   *
+   * The stop used to be applied only when its queued handler ran, so a
+   * completion ahead of it in the queue reached `done` first and the stop then
+   * saw a finished campaign and returned — and a stop queued before a person
+   * revived the campaign was replayed into the NEW generation, failing work
+   * nobody had cancelled (Codex 2026-09-11 L#3). The stop is persisted the
+   * moment it is seen; the generation says which campaign it was meant for.
+   */
+  stopRequestedAt?: number;
+  stopGeneration?: number;
   /** The missing proofs the last delivery round ended with, to detect progress. */
   deliveryProofsSignature?: string;
   deliveryReported?: boolean;

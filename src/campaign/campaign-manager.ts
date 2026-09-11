@@ -695,6 +695,11 @@ export class CampaignManager {
       return true;
     }
 
+    // A REVIVAL IS A NEW GENERATION. A stop queued against the old one must
+    // not land on this (Codex 2026-09-11 L#3).
+    campaign.stopGeneration = (campaign.stopGeneration ?? 0) + 1;
+    campaign.stopRequestedAt = undefined;
+
     const milestone = campaign.milestones[campaign.currentMilestone];
     if (!milestone) {
       campaign.lastError = undefined;
@@ -1867,11 +1872,46 @@ export class CampaignManager {
         );
         const row = this.taskManager.getStatus(taskId as TaskId) as { cancelReason?: string } | null;
         if (ownsIt && row?.cancelReason === "user") {
+          // RECORDED NOW, not when the handler runs. A completion ahead of it
+          // in the queue used to reach `done` first, and the stop then saw a
+          // finished campaign and returned with nothing said (Codex
+          // 2026-09-11 L#3).
+          const stopped = this.storage.get(campaign.id);
+          const generation = (stopped?.stopGeneration ?? 0);
+          if (stopped && stopped.stopRequestedAt === undefined) {
+            stopped.stopRequestedAt = Date.now();
+            this.persist(stopped);
+          }
           this.enqueueSettle(campaign.id, async () => {
             const fresh = this.storage.get(campaign.id);
+            // …and it belongs to the generation it was queued in: a stop
+            // queued before a person revived the campaign was replayed into
+            // the NEW one, failing work nobody had cancelled (L#3).
+            if (fresh && (fresh.stopGeneration ?? 0) !== generation) {
+              getLoggerSafe().info("A queued stop belongs to an earlier generation of this campaign — ignored", {
+                id: campaign.id,
+                queuedAt: generation,
+                now: fresh.stopGeneration ?? 0,
+              });
+              return;
+            }
             if (!fresh || fresh.state !== "executing") return;
             const current = fresh.milestones[fresh.currentMilestone];
             if (!current) return;
+            // …and it must be about the work the campaign is doing NOW. After a
+            // revival the milestone runs a NEW lineage; the old task's stop is
+            // history, and replaying it failed work nobody had cancelled
+            // (Codex 2026-09-11 L#3). A sibling of the current work still
+            // counts — it shares its root.
+            const currentRoot = current.taskId ? rootOf(current.taskId) : undefined;
+            if (current.taskId !== taskId && currentRoot !== undefined && cancelledRoot !== undefined && currentRoot !== cancelledRoot) {
+              getLoggerSafe().info("A stop about earlier work does not stop the campaign's current sprint", {
+                id: campaign.id,
+                cancelled: taskId,
+                current: current.taskId,
+              });
+              return;
+            }
             current.status = "failed";
             fresh.state = "failed";
             fresh.autoReviveAt = undefined;

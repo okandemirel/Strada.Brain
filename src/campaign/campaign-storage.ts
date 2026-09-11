@@ -64,6 +64,8 @@ interface CampaignRow {
   pending_coverage_gaps?: string | null;
   delivery_revives?: number | null;
   delivery_rounds_total?: number | null;
+  stop_requested_at?: number | null;
+  stop_generation?: number | null;
   delivery_proofs_signature?: string | null;
   plan_coverage?: string | null;
 }
@@ -105,6 +107,8 @@ function rowToCampaign(row: CampaignRow): Campaign {
     pendingCoverageGaps: parseGapQueue(row.pending_coverage_gaps),
     deliveryRevives: row.delivery_revives ?? undefined,
     deliveryRoundsTotal: row.delivery_rounds_total ?? undefined,
+    stopRequestedAt: row.stop_requested_at ?? undefined,
+    stopGeneration: row.stop_generation ?? undefined,
     deliveryProofsSignature: row.delivery_proofs_signature ?? undefined,
     ...(row.plan_coverage ? { planCoverage: parsePlanCoverage(row.plan_coverage) } : {}),
   };
@@ -170,6 +174,17 @@ export class CampaignStorage {
       // Column already exists — migration is idempotent.
     }
     try {
+      // A person's stop, recorded when it is SEEN (Codex 2026-09-11 L#3).
+      this.db.exec("ALTER TABLE campaigns ADD COLUMN stop_requested_at INTEGER");
+    } catch {
+      // Column already exists — migration is idempotent.
+    }
+    try {
+      this.db.exec("ALTER TABLE campaigns ADD COLUMN stop_generation INTEGER");
+    } catch {
+      // Column already exists — migration is idempotent.
+    }
+    try {
       // Every delivery round, whatever its identity (Codex 2026-09-11 O#5).
       this.db.exec("ALTER TABLE campaigns ADD COLUMN delivery_rounds_total INTEGER");
     } catch {
@@ -214,8 +229,9 @@ export class CampaignStorage {
           milestones_json, current_milestone, created_at, updated_at, last_error,
           auto_revive_at, coverage_audit_note, draft_deferred_since, delivery_reported, plan_coverage,
           unmeasurable_revives, implementation_revives, pending_coverage_gaps,
-          delivery_revives, delivery_proofs_signature, delivery_rounds_total
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          delivery_revives, delivery_proofs_signature, delivery_rounds_total,
+          stop_requested_at, stop_generation
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           state = excluded.state,
           gdd_path = excluded.gdd_path,
@@ -236,7 +252,9 @@ export class CampaignStorage {
           pending_coverage_gaps = excluded.pending_coverage_gaps,
           delivery_revives = excluded.delivery_revives,
           delivery_proofs_signature = excluded.delivery_proofs_signature,
-          delivery_rounds_total = excluded.delivery_rounds_total`,
+          delivery_rounds_total = excluded.delivery_rounds_total,
+          stop_requested_at = excluded.stop_requested_at,
+          stop_generation = excluded.stop_generation`,
       )
       .run(
         campaign.id,
@@ -269,6 +287,8 @@ export class CampaignStorage {
         campaign.deliveryRevives ?? null,
         campaign.deliveryProofsSignature ?? null,
         campaign.deliveryRoundsTotal ?? null,
+        campaign.stopRequestedAt ?? null,
+        campaign.stopGeneration ?? null,
       );
   }
 

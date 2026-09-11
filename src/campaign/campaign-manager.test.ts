@@ -3412,6 +3412,30 @@ describe("CampaignManager", () => {
     expect(tasks.submitted.at(-1)!.prompt).not.toContain("proved once");
   });
 
+  it("a stop queued against an OLD generation does not fail the revived campaign (Codex 2026-09-11 L#3)", async () => {
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    const taskId = storage.get(campaign.id)!.milestones[0]!.taskId!;
+
+    // A person cancels; the stop is recorded the moment it is seen.
+    tasks.cancel(taskId, { reason: "user" });
+    tasks.emit("task:cancelled", taskId);
+    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"));
+    expect(storage.get(campaign.id)!.stopRequestedAt).toBeGreaterThan(0);
+
+    // The person revives it: a new generation, with the old stop behind it.
+    await manager.tryHandleRevive(ctx.chatId, "kampanya devam");
+    await waitFor(() => expect(storage.get(campaign.id)!.state).not.toBe("failed"));
+    const revived = storage.get(campaign.id)!;
+    expect(revived.stopGeneration ?? 0).toBeGreaterThan(0);
+    expect(revived.stopRequestedAt).toBeUndefined();
+
+    // A second cancellation event for the OLD task must not stop the new run.
+    tasks.emit("task:cancelled", taskId);
+    await new Promise((r) => setTimeout(r, 120));
+    expect(storage.get(campaign.id)!.state).not.toBe("failed");
+  });
+
   it("a SIBLING's cancellation event reaches the campaign (Codex 2026-09-11 O#10)", async () => {
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
     await waitFor(() => expect(tasks.submitted).toHaveLength(1));
