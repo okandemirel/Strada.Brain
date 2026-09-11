@@ -22,7 +22,7 @@
  * delivery.
  */
 
-import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
@@ -97,6 +97,38 @@ function writeOwner(path: string, token: string): void {
   writeFileSync(join(path, "owner"), JSON.stringify(owner), "utf8");
 }
 
+/**
+ * Take a lock away from whoever holds it, atomically.
+ *
+ * A token check followed by an independent delete is two steps: between them
+ * another reclaimer can break the same lock and a new writer can take it, and
+ * the first reclaimer's delete then removes the NEW holder's lock (Codex
+ * 2026-09-11 O#16). A rename is one step: only one caller can win it, and the
+ * owner file inside the renamed directory says whether it was the one judged
+ * dead.
+ */
+function reclaim(path: string, expected: LockOwner | null, why: string): void {
+  const grave = `${path}.reclaimed-${randomUUID().slice(0, 8)}`;
+  try {
+    renameSync(path, grave);
+  } catch {
+    return; // someone else got there first — nothing of ours to remove
+  }
+  const inside = readOwner(grave);
+  if (expected !== null && inside !== null && inside.token !== expected.token) {
+    // We took a lock that had already changed hands. Put it back if the slot
+    // is still free; otherwise the newcomer will simply take it again.
+    try {
+      renameSync(grave, path);
+      return;
+    } catch {
+      /* the slot is taken; drop what we hold */
+    }
+  }
+  getLoggerSafe().warn(why, { path, pid: inside?.pid });
+  rmSync(grave, { recursive: true, force: true });
+}
+
 function breakIfStale(path: string, staleMs: number): void {
   try {
     const owner = readOwner(path);
@@ -104,15 +136,13 @@ function breakIfStale(path: string, staleMs: number): void {
     if (alive === false) {
       // THE HOLDER IS GONE. Waiting out the stale window for a process that
       // no longer exists is what wrote into the project unlocked.
-      getLoggerSafe().warn("Breaking project write lock — its holder is gone", { path, pid: owner?.pid });
-      rmSync(path, { recursive: true, force: true });
+      reclaim(path, owner, "Breaking project write lock — its holder is gone");
       return;
     }
     if (alive === true) return; // a live holder keeps its lock, however long the work takes
     const age = Date.now() - statSync(join(path, "owner")).mtimeMs;
     if (age > staleMs) {
-      getLoggerSafe().warn("Breaking stale project write lock", { path, ageMs: Math.round(age) });
-      rmSync(path, { recursive: true, force: true });
+      reclaim(path, owner, "Breaking stale project write lock");
     }
   } catch {
     // No owner file (an older holder, or a failed write): fall back to the
@@ -120,8 +150,7 @@ function breakIfStale(path: string, staleMs: number): void {
     try {
       const age = Date.now() - statSync(path).mtimeMs;
       if (age > staleMs) {
-        getLoggerSafe().warn("Breaking stale project write lock", { path, ageMs: Math.round(age) });
-        rmSync(path, { recursive: true, force: true });
+        reclaim(path, null, "Breaking stale project write lock (no owner file)");
       }
     } catch {
       // Vanished between the failed take and the stat — that's a release.
@@ -171,12 +200,9 @@ export async function acquireProjectWriteLock(
           // ONLY OUR OWN LOCK. An unconditional remove deleted the lock a
           // different process had taken after ours was broken, and a third
           // writer then acquired it beside that one (Codex 2026-09-11 N#2).
-          const owner = readOwner(path);
-          if (owner !== null && owner.token !== token) {
-            getLoggerSafe().warn("Project write lock was taken over before release — leaving it alone", { path });
-            return;
-          }
-          rmSync(path, { recursive: true, force: true });
+          // The same atomic take-then-verify: reading the owner and deleting
+          // afterwards could remove a lock that changed hands in between.
+          reclaim(path, { pid: process.pid, host: hostname(), token, at: "" }, "Project write lock released");
         },
       };
     }

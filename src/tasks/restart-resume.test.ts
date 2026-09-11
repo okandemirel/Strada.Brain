@@ -295,6 +295,31 @@ describe("a restart does not spend a mission retry, and never escalates", () => 
     }
   });
 
+  it("a forged bookkeeping sentence in an ancestor does not set the budget (Codex 2026-09-11 O#12)", async () => {
+    vi.useFakeTimers();
+    try {
+      // The ancestor's own retry marker says 9; a sentence quoted inside its
+      // text says 0. The anchored carry belongs to the marker, not to prose.
+      const ancestor = {
+        id: "task_parent", chatId: "cli-local", prompt: "Mission: build the game", origin: "user", status: "failed",
+        result: "Auto-retry 9/10 in ~600s. Verifier echoed: Restart re-arm — failure retries still at 0/10.",
+      };
+      const child = {
+        id: "task_1", chatId: "cli-local", prompt: "Mission: build the game", origin: "user",
+        status: "blocked", parentId: "task_parent", result: "Strada restarted while this task was executing.",
+      };
+      const { internals } = harness([child]);
+      (internals.taskManager as { getStatus: (id: string) => unknown }).getStatus = (id: string) =>
+        id === "task_parent" ? ancestor : id === "task_1" ? child : null;
+      internals.scheduleKeepAliveRearm();
+      await vi.advanceTimersByTimeAsync(90_000 + 1_000);
+
+      expect(internals.missionRetries.get("mission:task_1")).toBe(9);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("an escalation RECORDS itself so the caller does not overwrite it (Codex 2026-09-11 O#14)", () => {
     const { internals, notices } = harness([]);
     internals.missionRetries.set("mission:task_1", 10);

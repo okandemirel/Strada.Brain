@@ -2505,10 +2505,21 @@ export class BackgroundExecutor {
     let highest = 0;
     // ANCESTORS ONLY: this row's own count is read by the caller, which knows
     // the precedence between the carry and the retry marker.
-    let current = task.parentId ? ((this.taskManager?.getStatus(task.parentId) ?? null) as { parentId?: string; result?: string } | null) : null;
-    for (let depth = 0; current && depth < 20; depth++) {
+    // NO DEPTH CUTOFF — a count nine ancestors past an arbitrary limit was
+    // recovered as zero (Codex 2026-09-11 O#12). A visited set is what keeps
+    // a malformed chain from looping.
+    const seen = new Set<string>([task.id]);
+    let current = task.parentId
+      ? ((this.taskManager?.getStatus(task.parentId) ?? null) as { id?: string; parentId?: string; result?: string } | null)
+      : null;
+    while (current && !seen.has(String(current.id ?? ""))) {
+      seen.add(String(current.id ?? ""));
       const text = String(current.result ?? "");
-      const carry = /Restart re-arm — failure retries still at (\d+)\/\d+\./.exec(text);
+      // THE ANCHORED CARRY, exactly as the live path reads it: a blocker whose
+      // prose merely contains the bookkeeping sentence ("Verifier echoed:
+      // Restart re-arm — failure retries still at 0/10") must not set the
+      // budget (Codex 2026-09-11 E#10, O#12).
+      const carry = /Auto-retry \d+\/\d+ in ~\d+s\. Restart re-arm — failure retries still at (\d+)\/\d+\./.exec(text);
       const marker = /Auto-retry (\d+)\/\d+ in ~\d+s/.exec(text);
       const count = carry?.[1] ? Number(carry[1]) : marker?.[1] ? Number(marker[1]) : 0;
       highest = Math.max(highest, count);
@@ -2528,10 +2539,15 @@ export class BackgroundExecutor {
     const persisted = (this.taskManager as { findLineageRootId?: (id: string) => string | null } | undefined)
       ?.findLineageRootId?.(task.id);
     if (persisted) return persisted;
+    // A VISITED SET, not a depth cap: an arbitrary limit returned a different
+    // "root" for consecutive descendants, and each got its own budget (Codex
+    // 2026-09-11 M#11, O#22).
     let current: { id: string; parentId?: string } = task;
-    for (let depth = 0; current.parentId && depth < 200; depth++) {
+    const walked = new Set<string>([current.id]);
+    while (current.parentId) {
       const parent = this.taskManager?.getStatus(current.parentId) ?? null;
-      if (!parent) break;
+      if (!parent || walked.has(parent.id)) break;
+      walked.add(parent.id);
       current = parent;
     }
     return current.id;

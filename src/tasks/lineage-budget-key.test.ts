@@ -53,4 +53,30 @@ describe("the retry budget's lineage key", () => {
     const { executor, tip } = harness(3, false);
     expect((executor as unknown as { lineageRootTaskId(t: unknown): string }).lineageRootTaskId(tip)).toBe("task_0");
   });
+
+  it("a cycle in the chain does not hang the walk (Codex 2026-09-11 O#22)", () => {
+    const executor = Object.create(BackgroundExecutor.prototype) as BackgroundExecutor;
+    const rows = new Map<string, { id: string; parentId?: string }>([
+      ["a", { id: "a", parentId: "b" }],
+      ["b", { id: "b", parentId: "a" }],
+    ]);
+    (executor as unknown as { taskManager: unknown }).taskManager = { getStatus: (id: string) => rows.get(id) ?? null };
+    const key = (executor as unknown as { lineageRootTaskId(t: unknown): string }).lineageRootTaskId(rows.get("a")!);
+    expect(["a", "b"]).toContain(key);
+  });
+
+  it("a chain longer than any cap still names ONE root (Codex 2026-09-11 O#22)", () => {
+    const executor = Object.create(BackgroundExecutor.prototype) as BackgroundExecutor;
+    const chain = new Map<string, { id: string; parentId?: string }>();
+    for (let i = 0; i <= 300; i++) {
+      chain.set(`t${i}`, i === 0 ? { id: "t0" } : { id: `t${i}`, parentId: `t${i - 1}` });
+    }
+    (executor as unknown as { taskManager: unknown }).taskManager = { getStatus: (id: string) => chain.get(id) ?? null };
+    const at = (id: string): string =>
+      (executor as unknown as { lineageRootTaskId(t: unknown): string }).lineageRootTaskId(chain.get(id)!);
+    // Consecutive descendants used to receive DIFFERENT roots, and therefore
+    // different budgets, once the chain passed the cap.
+    expect(at("t299")).toBe("t0");
+    expect(at("t300")).toBe("t0");
+  });
 });

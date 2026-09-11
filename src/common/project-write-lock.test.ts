@@ -72,4 +72,26 @@ describe("the project write lock", () => {
     expect(holderIsAlive(null)).toBeUndefined();
     expect(holderIsAlive({ pid: process.pid, host: hostname(), token: "t", at: "" })).toBe(true);
   });
+
+  it("reclaiming is one step, so a lock that changed hands is left alone (Codex 2026-09-11 O#16)", async () => {
+    // A reclaimer reads a dead owner, another reclaimer breaks it and a new
+    // writer takes it — and the first reclaimer's delete then removed the NEW
+    // holder's lock, letting a third writer in beside it.
+    mkdirSync(lockDir(), { recursive: true });
+    writeFileSync(join(lockDir(), "owner"), JSON.stringify({ pid: 2 ** 30, host: hostname(), token: "dead", at: new Date().toISOString() }));
+
+    // The lock changes hands while a reclaimer is mid-flight: this is what its
+    // stale observation would delete.
+    const live = await acquireProjectWriteLock(root, { timeoutMs: 2_000 });
+    expect(live.acquired).toBe(true);
+    const liveToken = JSON.parse(readFileSync(join(lockDir(), "owner"), "utf8")).token;
+
+    // A second reclaimer, still holding the DEAD owner's observation.
+    const second = await acquireProjectWriteLock(root, { timeoutMs: 200, staleMs: 10 * 60_000 });
+
+    expect(second.acquired).toBe(false);
+    expect(existsSync(lockDir())).toBe(true);
+    expect(JSON.parse(readFileSync(join(lockDir(), "owner"), "utf8")).token).toBe(liveToken);
+    live.release();
+  });
 });
