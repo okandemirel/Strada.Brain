@@ -125,10 +125,13 @@ export function readPlaythroughVerdict(projectRoot: string, sinceMs: number, rel
             ? {
                 sessions: record.sessions.slice(0, 24).map((s) => {
                   const r = (s ?? {}) as Record<string, unknown>;
+                  // An ABSENT index is not index 0 and an absent action count
+                  // is not zero actions — inventing either made a record with
+                  // neither read as "level 0, played" (Codex 2026-09-11 E#7).
                   return {
-                    index: num(r.index) ?? 0,
+                    ...(num(r.index) !== undefined ? { index: num(r.index) } : {}),
                     outcome: r.startAccepted === false ? "Refused" : str(r.outcome) ?? "None",
-                    actions: num(r.actions) ?? 0,
+                    ...(num(r.actions) !== undefined ? { actions: num(r.actions) } : {}),
                     seconds: num(r.seconds) ?? 0,
                   };
                 }),

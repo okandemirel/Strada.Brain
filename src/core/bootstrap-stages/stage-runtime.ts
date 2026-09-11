@@ -686,26 +686,36 @@ export async function initializeTaskRuntimeStage(
  * claim, so any file in the repository passed — a package.json was accepted as
  * a delivered game (Codex 2026-09-11 D#12).
  */
+const PLAYER_EXT_RE = /\.(?:app|apk|aab|ipa|exe|x86_64|dmg|zip)$/i;
+/**
+ * Smallest a packaged player can plausibly be. A game is megabytes; this floor
+ * only has to be above "a file someone created to satisfy the gate" — a
+ * zero-byte `empty.app` passed on its NAME alone (Codex 2026-09-11 E#2).
+ */
+const MIN_PLAYER_FILE_BYTES = 64 * 1024;
+
 export function looksLikePlayer(artifactPath: string): boolean {
-  if (/\.(?:app|apk|aab|ipa|exe|x86_64|dmg|zip)$/i.test(artifactPath)) return true;
+  let st: ReturnType<typeof statSync>;
   try {
-    if (!statSync(artifactPath).isDirectory()) {
-      // A bare Linux/macOS executable has no extension; require it to be
-      // executable and not trivially small.
-      const st = statSync(artifactPath);
-      return st.size > 1024 * 1024 && (st.mode & 0o111) !== 0 && !/\.[a-z0-9]{1,6}$/i.test(artifactPath);
+    st = statSync(artifactPath);
+  } catch {
+    return false;
+  }
+  if (st.isDirectory()) {
+    // A WebGL build or a .app bundle — it must hold something a player needs.
+    try {
+      const entries = readdirSync(artifactPath);
+      return entries.some((e) => /^(?:index\.html|Build|Data|.*_Data|Contents|UnityPlayer\.(?:dll|so|dylib))$/i.test(e));
+    } catch {
+      return false;
     }
-  } catch {
-    return false;
   }
-  // A directory: a WebGL build or a .app bundle's parent — it must hold
-  // something a player needs.
-  try {
-    const entries = readdirSync(artifactPath);
-    return entries.some((e) => /^(?:index\.html|Build|Data|.*_Data|Contents|UnityPlayer\.(?:dll|so|dylib))$/i.test(e));
-  } catch {
-    return false;
-  }
+  // A FILE with a player extension: the extension says what it claims to be,
+  // the size says whether anything is in it.
+  if (PLAYER_EXT_RE.test(artifactPath)) return st.size >= MIN_PLAYER_FILE_BYTES;
+  // A bare Linux/macOS executable has no extension; require it to be
+  // executable and not trivially small.
+  return st.size > 1024 * 1024 && (st.mode & 0o111) !== 0 && !/\.[a-z0-9]{1,6}$/i.test(artifactPath);
 }
 
 export function makeRunPlayer(registry: {

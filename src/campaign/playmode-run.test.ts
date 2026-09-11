@@ -68,3 +68,40 @@ describe("readPlaymodeRun", () => {
     expect(readPlaymodeRun(root, 0).detail).toBe("PlayMode run (NUnit): 0 tests executed (unfiltered — the whole PlayMode suite)");
   });
 });
+
+describe("a record that is not a run record, and a run that is not this attempt's (Codex 2026-09-11 E#1, E#8)", () => {
+  it("never throws on a malformed record, and says malformed rather than silent", () => {
+    mkdirSync(join(root, "Recordings", "tests"), { recursive: true });
+    const p = join(root, PLAYMODE_RUN_RECORD_REL);
+    for (const body of ["null", "42", "[]", "{", '"green"']) {
+      writeFileSync(p, body);
+      const run = readPlaymodeRun(root, 0);
+      expect(run).toMatchObject({ found: false, malformed: true });
+      expect(run.green).toBeUndefined();
+    }
+    // A record missing the counts is malformed too, not absent.
+    writeFileSync(p, JSON.stringify({ passed: 42, unfiltered: true }));
+    expect(readPlaymodeRun(root, 0)).toMatchObject({ found: false, malformed: true });
+  });
+
+  it("a touched file does not refresh yesterday's run: the record's own stamp decides", () => {
+    const attemptStart = Date.now() - 60_000;
+    // Written NOW (fresh mtime), measured yesterday.
+    write({
+      total: 42, passed: 42, failed: 0, skipped: 0, unfiltered: true,
+      measuredAt: new Date(attemptStart - 24 * 3_600_000).toISOString(),
+    });
+    expect(readPlaymodeRun(root, attemptStart)).toMatchObject({ found: false, stale: true });
+
+    // The same record measured during the attempt is the proof it claims to be.
+    write({
+      total: 42, passed: 42, failed: 0, skipped: 0, unfiltered: true,
+      measuredAt: new Date(attemptStart + 1_000).toISOString(),
+    });
+    expect(readPlaymodeRun(root, attemptStart)).toMatchObject({ found: true, green: true });
+
+    // An unparseable or absent stamp falls back to the file's mtime.
+    write({ total: 42, passed: 42, failed: 0, skipped: 0, unfiltered: true, measuredAt: "not a date" });
+    expect(readPlaymodeRun(root, attemptStart)).toMatchObject({ found: true, green: true });
+  });
+});

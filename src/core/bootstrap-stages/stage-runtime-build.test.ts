@@ -9,8 +9,12 @@ import { join } from "node:path";
 import { parsePlayerBuildOutput, makeRunPlayer, looksLikePlayer } from "./stage-runtime.js";
 
 const artifactDir = mkdtempSync(join(tmpdir(), "build-artifact-"));
+// A REAL StandaloneOSX artifact: .app is a bundle DIRECTORY holding Contents.
+// The fixture used to be a 6-byte file, which is exactly what an empty file
+// named Game.app is — and the gate passed it (Codex 2026-09-11 E#2).
 const realArtifact = join(artifactDir, "Game.app");
-writeFileSync(realArtifact, "binary");
+mkdirSync(join(realArtifact, "Contents", "MacOS"), { recursive: true });
+writeFileSync(join(realArtifact, "Contents", "MacOS", "Game"), "binary");
 
 const built =
   "PLAYER BUILT (StandaloneOSX).\nTarget StandaloneOSX; 2 scene(s): Assets/Scenes/Main.unity, Assets/Scenes/Level.unity; 118 s; 3 warning(s); 0 error(s).\n" +
@@ -85,5 +89,21 @@ describe("parsePlayerBuildOutput", () => {
     expect(parsePlayerBuildOutput("Unity crashed before the builder ran\nmore")).toEqual({ ran: false, detail: "Unity crashed before the builder ran" });
     expect(parsePlayerBuildOutput("")).toEqual({ ran: false, detail: "the build tool returned no verdict" });
     expect(parsePlayerBuildOutput("x\n```json\n{not json\n```")).toEqual({ ran: false, detail: "the build tool's verdict was not valid JSON" });
+  });
+});
+
+describe("a named player artifact must have something in it (Codex 2026-09-11 E#2)", () => {
+  it("rejects a zero-byte file named like a build, and accepts a packaged one", () => {
+    const empty = join(artifactDir, "empty.app");
+    writeFileSync(empty, "");
+    expect(looksLikePlayer(empty)).toBe(false);
+    const tinyApk = join(artifactDir, "tiny.apk");
+    writeFileSync(tinyApk, "x".repeat(1024));
+    expect(looksLikePlayer(tinyApk)).toBe(false);
+    const realApk = join(artifactDir, "real.apk");
+    writeFileSync(realApk, "x".repeat(128 * 1024));
+    expect(looksLikePlayer(realApk)).toBe(true);
+    // A bundle directory is judged by what it holds, not by its size.
+    expect(looksLikePlayer(realArtifact)).toBe(true);
   });
 });

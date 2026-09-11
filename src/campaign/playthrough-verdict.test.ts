@@ -151,3 +151,20 @@ describe("the play-through verdict the campaign reads back (measured 2026-09-10:
     expect(describePlaythrough({ found: false, stale: true })).toMatch(/predates this sprint/);
   });
 });
+
+describe("a session record that omits its fields keeps them omitted (Codex 2026-09-11 E#7)", () => {
+  it("does not invent index 0 or 0 actions", () => {
+    write({
+      ...ok,
+      record: {
+        ...ok.record, sessionCount: 2,
+        sessions: [{ outcome: "Won", seconds: 1 }, { index: 1, outcome: "Won", actions: 4, seconds: 2 }],
+      },
+    });
+    const parsed = readPlaythroughVerdict(root, 0);
+    expect(parsed.sessions?.[0]).toEqual({ outcome: "Won", seconds: 1 });
+    expect(parsed.sessions?.[0]?.index).toBeUndefined();
+    expect(parsed.sessions?.[0]?.actions).toBeUndefined();
+    expect(parsed.sessions?.[1]).toEqual({ index: 1, outcome: "Won", actions: 4, seconds: 2 });
+  });
+});

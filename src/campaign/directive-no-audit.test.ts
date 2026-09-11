@@ -22,3 +22,22 @@ describe("delivery directives", () => {
     expect(source.slice(start, start + 600)).toContain("DO NOT AUDIT");
   });
 });
+
+/**
+ * Codex 2026-09-11 E#1: readPlaymodeRun threw on a record that parsed to
+ * `null`, the enclosing best-effort catch swallowed it, and the PREVIOUS
+ * attempt's green verdict stayed on the milestone — so an unreadable record
+ * delivered the game. Unreadable evidence must clear the verdict.
+ */
+describe("evidence that cannot be read is not evidence", () => {
+  const source = readFileSync(new URL("./campaign-manager.ts", import.meta.url), "utf8");
+
+  it("clears the milestone's test verdict when the evidence read throws", () => {
+    const start = source.indexOf("NOT best-effort: leaving the PREVIOUS attempt's verdict");
+    expect(start).toBeGreaterThan(0);
+    const block = source.slice(start, start + 700);
+    expect(block).toContain("milestone.testVerdict = undefined;");
+    expect(block).toContain("milestone.testVerdictUnfiltered = undefined;");
+    expect(block).toContain("milestone.testRunSource = undefined;");
+  });
+});

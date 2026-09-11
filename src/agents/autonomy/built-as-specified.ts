@@ -372,6 +372,8 @@ export interface BuiltAsSpecifiedReport {
 interface UnityDocument {
   readonly className: string;
   readonly lines: readonly string[];
+  /** The `&<fileId>` anchor, which is how a component names its GameObject. */
+  readonly fileId?: string;
 }
 
 /**
@@ -387,13 +389,15 @@ export function parseUnityDocuments(text: string): UnityDocument[] {
   let className: string | undefined;
   let lines: string[] = [];
   let stripped = false;
+  let fileId: string | undefined;
   const flush = (): void => {
     // A `stripped` document is a prefab component the scene references, not
     // a component of its own — counting it doubled every placed renderer
     // (review 2026-09-07).
-    if (className !== undefined && !stripped) docs.push({ className, lines });
+    if (className !== undefined && !stripped) docs.push({ className, lines, ...(fileId ? { fileId } : {}) });
     className = undefined;
     lines = [];
+    fileId = undefined;
   };
   // CRLF files lost every keyed line to `(.*)$` (review 2026-09-07).
   for (const line of text.split(/\r?\n/)) {
@@ -401,6 +405,7 @@ export function parseUnityDocuments(text: string): UnityDocument[] {
       flush();
       className = "";
       stripped = /\sstripped\s*$/.test(line);
+      fileId = /&(\d+)/.exec(line)?.[1];
       continue;
     }
     if (className === "") {
@@ -517,7 +522,17 @@ function newTally(): Tally {
  * previous key's classification.
  */
 function scanUnityFile(text: string, tally: Tally): void {
-  for (const doc of parseUnityDocuments(text)) {
+  const docs = parseUnityDocuments(text);
+  // GameObjects the scene ships switched OFF. A component on one of them is
+  // in the file and draws nothing (Codex 2026-09-11 E#12: a VideoPlayer with
+  // m_Enabled 0 on an inactive GameObject counted as the game's picture).
+  const inactiveObjects = new Set(
+    docs
+      .filter((d) => d.className === "GameObject" && d.lines.some((l) => /^\s*m_IsActive:\s*0\s*$/.test(l)))
+      .map((d) => d.fileId)
+      .filter((id): id is string => id !== undefined),
+  );
+  for (const doc of docs) {
     const isRenderer = RENDERER_CLASSES.has(doc.className);
     if (isRenderer) {
       tally.renderers++;
@@ -612,7 +627,7 @@ function scanUnityFile(text: string, tally: Tally): void {
         }
         // A VideoPlayer's clip: the visible content of a video-driven game
         // (Codex 2026-09-11 D#27).
-        if (doc.className === "VideoPlayer" && key === "m_VideoClip") {
+        if (doc.className === "VideoPlayer" && key === "m_VideoClip" && componentDraws(doc, inactiveObjects)) {
           const ref = parseRef(rest);
           if (ref?.guid) recordRef(ref, tally);
         }
@@ -627,6 +642,19 @@ function scanUnityFile(text: string, tally: Tally): void {
       if (line.trim() !== "") inMaterialList = false;
     }
   }
+}
+
+/**
+ * Is this component on at runtime? Its own `m_Enabled` and its GameObject's
+ * `m_IsActive` both have to say so — a disabled component in a shipped scene
+ * is a component nobody sees (Codex 2026-09-11 E#12).
+ */
+function componentDraws(doc: UnityDocument, inactiveObjects: ReadonlySet<string>): boolean {
+  if (doc.lines.some((l) => /^\s*m_Enabled:\s*0\s*$/.test(l))) return false;
+  const owner = doc.lines
+    .map((l) => /^\s*m_GameObject:\s*\{fileID:\s*(\d+)\}/.exec(l)?.[1])
+    .find((id): id is string => id !== undefined);
+  return owner === undefined || !inactiveObjects.has(owner);
 }
 
 function mergeTally(into: Tally, from: Tally): void {
@@ -809,7 +837,13 @@ export function assessBuiltAsSpecified(
     } catch {
       continue;
     }
-    if (guid) guidToPath.set(guid, rel.slice(0, -".meta".length));
+    if (!guid) continue;
+    const asset = rel.slice(0, -".meta".length);
+    // A sidecar whose ASSET IS GONE resolves to nothing. Reading the .meta
+    // alone made a dangling GUID "resolved", which withdrew the very refusal
+    // the resolution check was added for (Codex 2026-09-11 E#6).
+    if (!io.exists(join(projectRoot, asset))) continue;
+    guidToPath.set(guid, asset);
   }
   for (const [guid, path] of guidToPath) {
     if (/(^|\/)Resources\//.test(path)) implicitlyReachable.push(guid);

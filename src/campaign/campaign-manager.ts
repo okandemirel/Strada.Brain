@@ -2115,7 +2115,18 @@ export class CampaignManager {
           milestone.testFailuresOmitted = verdict?.failedTestsOmitted;
           milestone.testRunSource = verdict ? "prose" : undefined;
         }
-      } catch { /* evidence capture is best-effort */ }
+      } catch (e) {
+        // NOT best-effort: leaving the PREVIOUS attempt's verdict standing is
+        // how a failure to read this attempt's evidence became this attempt's
+        // green (Codex 2026-09-11 E#1). No reading, no verdict.
+        milestone.testVerdict = undefined;
+        milestone.testVerdictUnfiltered = undefined;
+        milestone.testRunSource = undefined;
+        getLoggerSafe().warn("Test evidence unreadable — the sprint's verdict is cleared, not carried over", {
+          milestone: milestone.id,
+          error: e instanceof Error ? e.message.slice(0, 200) : String(e).slice(0, 200),
+        });
+      }
       // Persist the green BEFORE the coverage audit: that await is a
       // 400k-window LLM call lasting minutes, and storage said "running" the
       // whole time. What this persist buys is a DURABLE record of the green

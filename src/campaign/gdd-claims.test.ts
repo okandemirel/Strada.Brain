@@ -137,6 +137,24 @@ describe("assessNumericClaims", () => {
       sessions: Array.from({ length: 12 }, (_, i) => ({ index: i, outcome: "Won", actions: 0, seconds: 1 })),
     }));
     expect(idle.find((x) => x.claim.kind === "level_count")).toMatchObject({ status: "not_met" });
+    // A record that omits its index is not "level 0", and half an action is
+    // not an action (Codex 2026-09-11 E#7).
+    const noIndex = assessNumericClaims(claims, evidence({
+      sessionCount: 12,
+      sessions: Array.from({ length: 12 }, () => ({ outcome: "Won", actions: 8, seconds: 3 })),
+    }));
+    expect(noIndex.find((x) => x.claim.kind === "level_count")).toMatchObject({ status: "not_met" });
+    const fractional = assessNumericClaims(claims, evidence({
+      sessionCount: 12,
+      sessions: Array.from({ length: 12 }, (_, i) => ({ index: i, outcome: "Won", actions: 0.5, seconds: 3 })),
+    }));
+    expect(fractional.find((x) => x.claim.kind === "level_count")).toMatchObject({ status: "not_met" });
+    // Negative actions are not actions either.
+    const negative = assessNumericClaims(claims, evidence({
+      sessionCount: 12,
+      sessions: Array.from({ length: 12 }, (_, i) => ({ index: i, outcome: "Won", actions: -3, seconds: 3 })),
+    }));
+    expect(negative.find((x) => x.claim.kind === "level_count")).toMatchObject({ status: "not_met" });
   });
 
   it("distinct sessions, distributive wording, and a mandatory floor (Codex 2026-09-11 C#21-24)", () => {

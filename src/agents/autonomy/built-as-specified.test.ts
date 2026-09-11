@@ -683,6 +683,47 @@ describe("defects the measurement review found (2026-09-07)", () => {
     expect(report.refusal).toBeUndefined();
   });
 
+  it("an orphaned .meta does not resolve a sprite, and a switched-off video is not the picture (Codex 2026-09-11 E#6, E#12)", () => {
+    // The sidecar carries the GUID the canvases reference; the PNG is gone.
+    const orphaned = project();
+    buildSettings(orphaned, [{ path: "Assets/Scenes/Main.unity" }]);
+    const canvases = Array.from({ length: 3 }, (_, i) =>
+      `--- !u!1 &${40 + i}\nGameObject:\n  m_Name: Card${i}\n--- !u!222 &${80 + i}\nCanvasRenderer:\n  m_GameObject: {fileID: ${40 + i}}\n` +
+      `--- !u!114 &${120 + i}\nMonoBehaviour:\n  m_GameObject: {fileID: ${40 + i}}\n  m_Sprite: {fileID: 21300000, guid: ${G("f")}, type: 3}\n`).join("");
+    put(orphaned, "Assets/Scenes/Main.unity", `${HEADER}${CAMERA(0)}${canvases}`, G("5"));
+    put(orphaned, "Assets/Art/unbound.png", "pixels", G("2"));
+    // Only the sidecar, never the asset.
+    writeFileSync(join(orphaned, "Assets/Art/missing.png.meta"), `guid: ${G("f")}\n`);
+    const report = assessBuiltAsSpecified(orphaned);
+    expect(report.scenes[0]!.resolvedArtRefs).toBe(0);
+    expect(report.refusal).toContain("render NOTHING");
+
+    // Each switch ALONE is enough: the component disabled on a live object,
+    // and the component enabled on a dead one.
+    const videoScene = (active: string, enabled: string): string =>
+      `${HEADER}${CAMERA(0)}--- !u!1 &30\nGameObject:\n  m_Name: Screen\n  m_IsActive: ${active}\n` +
+      `--- !u!328 &31\nVideoPlayer:\n  m_GameObject: {fileID: 30}\n  m_Enabled: ${enabled}\n  m_VideoClip: {fileID: 32900000, guid: ${G("9")}, type: 3}\n`;
+    for (const [active, enabled] of [["1", "0"], ["0", "1"]] as const) {
+      const off = project();
+      buildSettings(off, [{ path: "Assets/Scenes/Main.unity" }]);
+      put(off, "Assets/Scenes/Main.unity", videoScene(active, enabled), G("5"));
+      put(off, "Assets/Movies/Intro.mp4", "movie-bytes", G("9"));
+      put(off, "Assets/Art/Cover.png", "pixels", G("8"));
+      const offReport = assessBuiltAsSpecified(off);
+      expect(offReport.scenes[0]!.videoClipsBound).toEqual([]);
+      expect(offReport.refusal).toContain("render NOTHING");
+    }
+
+    // …and the enabled one still is the picture.
+    const on = project();
+    buildSettings(on, [{ path: "Assets/Scenes/Main.unity" }]);
+    put(on, "Assets/Scenes/Main.unity",
+      `${HEADER}${CAMERA(0)}--- !u!1 &30\nGameObject:\n  m_Name: Screen\n  m_IsActive: 1\n--- !u!328 &31\nVideoPlayer:\n  m_GameObject: {fileID: 30}\n  m_Enabled: 1\n  m_VideoClip: {fileID: 32900000, guid: ${G("9")}, type: 3}\n`, G("5"));
+    put(on, "Assets/Movies/Intro.mp4", "movie-bytes", G("9"));
+    put(on, "Assets/Art/Cover.png", "pixels", G("8"));
+    expect(assessBuiltAsSpecified(on).refusal).toBeUndefined();
+  });
+
   it("flat artwork the GDD ASKED for is a style, not placeholder art (Codex 2026-09-11 B#17)", () => {
     const root = project();
     boundSpriteProject(root, "a0000000000000000000000000000000");

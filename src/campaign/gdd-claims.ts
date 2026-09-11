@@ -285,8 +285,10 @@ export function assessNumericClaims(
         const finished = new Set(
           (playthrough.sessions ?? [])
             .filter((x) => x.outcome !== "None" && x.outcome !== "Refused")
-            .filter((x) => Number.isInteger(x.index) && x.index >= 0 && x.index < Math.max(catalog, 1))
-            .filter((x) => (x.actions ?? 0) > 0)
+            .filter((x) => Number.isInteger(x.index) && x.index! >= 0 && x.index! < Math.max(catalog, 1))
+            // A WHOLE action, and at least one: "0.5 actions" is not half a
+            // move, it is a record nobody should count (Codex 2026-09-11 E#7).
+            .filter((x) => Number.isInteger(x.actions) && x.actions! > 0)
             .map((x) => x.index),
         ).size;
         // A catalog of N is a claim; N sessions played to an outcome is the

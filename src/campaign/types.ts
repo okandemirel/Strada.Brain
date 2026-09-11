@@ -371,7 +371,12 @@ export interface PlaythroughEvidence {
    */
   sessionCount?: number;
   /** Every session the run played: index, outcome (None = never ended), actions. */
-  sessions?: Array<{ index: number; outcome: string; actions: number; seconds: number }>;
+  /**
+   * `index` and `actions` are OPTIONAL on purpose: a record that omitted them
+   * used to be read as index 0 with 0 actions, which is a played level as far
+   * as a counter is concerned (Codex 2026-09-11 E#7). Absent stays absent.
+   */
+  sessions?: Array<{ index?: number; outcome: string; actions?: number; seconds: number }>;
   /**
    * What was on screen at the end of play (2026-09-10): world renderers, the
    * sprite/mesh names they bind, engine primitives, audio. The file scan

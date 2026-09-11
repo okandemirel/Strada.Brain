@@ -50,7 +50,7 @@ import type { BudgetTracker } from "../daemon/budget/budget-tracker.js";
 import type { UnifiedBudgetManager } from "../budget/unified-budget-manager.js";
 import { getLogger } from "../utils/logger.js";
 import { summariseNodeOutcomes } from "./node-outcome-summary.js";
-import { decideAutoResume, type AutoResumeState , decideMissionKeepAlive, MAX_MISSION_RETRIES, missionRetryBackoffMs } from "./auto-resume.js";
+import { decideAutoResume, type AutoResumeState , decideMissionKeepAlive, MAX_MISSION_RETRIES, missionRetryBackoffMs, stripRetryMachinery } from "./auto-resume.js";
 
 // Shared outage measurement (also used by goal auto-resume and campaign
 // self-revival); re-exported so existing importers keep their path.
@@ -403,7 +403,12 @@ export class BackgroundExecutor {
           // Prefer the explicit carry: a previous restart's "Auto-retry n/m"
           // marker names the retry it made, and reading THAT back as the
           // failure budget is what walked the counter up one per boot.
-          const carried = /failure retries still at (\d+)\/\d+/.exec(result);
+          // Anchored to the marker it follows, and to its closing period.
+          // Audited by Codex 2026-09-11 E#10: a bare match let a blocker whose
+          // PROSE contained the sentence ("Verifier echoed: failure retries
+          // still at 0/10") set the budget, and a truncated tail silently fell
+          // back to the higher marker number.
+          const carried = /Auto-retry \d+\/\d+ in ~\d+s\. Restart re-arm — failure retries still at (\d+)\/\d+\./.exec(result);
           const persistedAttempt = carried ? Number(carried[1]) : marker ? Number(marker[1]) : 0;
           const rearmReason = marker ? "keep-alive re-armed after restart" : `keep-alive re-armed after restart — ${result.slice(0, 120)}`;
           const lineage = this.lineageRootTaskId(task);
@@ -2182,12 +2187,16 @@ export class BackgroundExecutor {
       // "Auto-retry n/m" marker reads as the retry being made, not as the
       // failure budget.
       const shown = Math.min(decision.attempt + 1, MAX_MISSION_RETRIES);
+      // The blocker text is a provider's or a worker's words; it may not
+      // contain the scheduler's own bookkeeping sentence (Codex E#10).
+      const saidReason = (stripRetryMachinery(reason.slice(0, 160)) || reason.slice(0, 160))
+        .replace(/failure retries still at \d+\/\d+/gi, "failure retries (redacted)");
       const carry = spendAttempt
         ? ""
         : ` Restart re-arm — failure retries still at ${decision.attempt}/${MAX_MISSION_RETRIES}.`;
       this.taskManager.block(
         task.id,
-        `Transient failure — ${reason.slice(0, 160)}. Auto-retry ${shown}/${MAX_MISSION_RETRIES} in ~${Math.round(effectiveBackoffMs / 1000)}s.${carry}`,
+        `Transient failure — ${saidReason}. Auto-retry ${shown}/${MAX_MISSION_RETRIES} in ~${Math.round(effectiveBackoffMs / 1000)}s.${carry}`,
       );
     } catch { /* block-marking is cosmetic here */ }
     const timer = setTimeout(() => {
@@ -2231,7 +2240,12 @@ export class BackgroundExecutor {
             attempt: decision.attempt,
             remainingMs: this.allProvidersCoolingDownMs(),
           });
-          this.scheduleMissionKeepAlive(task, reason);
+          // …and it re-parks under the SAME terms it was scheduled on. Audited
+          // by Codex 2026-09-11 E#5: the re-poll called back with the default,
+          // so a restart re-arm waiting out a long outage spent the attempt it
+          // had just been given back, and at the cap the poll itself printed
+          // "MISSION STOPPED — needs you" without any retry having run.
+          this.scheduleMissionKeepAlive(task, reason, { spendAttempt });
           return;
         }
         if (this.isLineageCancelled(task)) {
@@ -2252,9 +2266,14 @@ export class BackgroundExecutor {
           rootPromptOf(t) === promptRoot,
       );
       if (alreadyContinued) {
-        this.missionRetries.delete(key);
+        // The COUNT STAYS. Audited by Codex 2026-09-11 E#4: this deleted the
+        // key, and the continuation shares this lineage's key — so a recovery
+        // handoff during the backoff refilled the budget, and the mission's
+        // next real failure was "Auto-retry 1/10" after eight of them. A
+        // continuation is the mission continuing, not a new mission.
         getLoggerSafe().info("Mission keep-alive retry skipped — the mission was already resubmitted elsewhere", {
           taskId: task.id,
+          attemptsSpent: this.missionRetries.get(key) ?? 0,
         });
         return;
       }
@@ -2266,11 +2285,24 @@ export class BackgroundExecutor {
         }
       })();
       if (!retried) {
-        this.missionRetries.delete(key);
-        getLoggerSafe().warn("Mission keep-alive could not resubmit — escalated to report", { taskId: task.id });
+        // A resubmission that CANNOT HAPPEN is a failure of this attempt, and
+        // it must be able to end. Audited by Codex 2026-09-11 E#9: the count
+        // was deleted here and the notice carried no stop, so a task store
+        // that refuses every insert produced one more submission attempt per
+        // boot forever with nothing ever reporting to a person.
+        const spent = (this.missionRetries.get(key) ?? decision.attempt) + 1;
+        this.missionRetries.set(key, spent);
+        getLoggerSafe().warn("Mission keep-alive could not resubmit", { taskId: task.id, attemptsSpent: spent });
+        const stop = decideMissionKeepAlive(spent, { budgetExceeded: this._unifiedBudgetManager?.isGlobalExceeded() ?? false });
         try {
-          this.taskManager?.appendTaskNotice(task.id, `Auto-resubmit failed after backoff. Last blocker: ${reason.slice(0, 200)}`);
+          this.taskManager?.appendTaskNotice(
+            task.id,
+            stop.action === "report"
+              ? `MISSION STOPPED — needs you. ${stop.reportReason} Last blocker: could not resubmit after backoff — ${reason.slice(0, 150)}`
+              : `Auto-resubmit failed after backoff (${spent}/${MAX_MISSION_RETRIES}). Last blocker: ${reason.slice(0, 200)}`,
+          );
         } catch { /* best effort */ }
+        if (stop.action === "report") this.missionRetries.delete(key);
       }
     }, effectiveBackoffMs);
     timer.unref?.();

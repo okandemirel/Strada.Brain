@@ -19,6 +19,8 @@ export interface PlaymodeRunEvidence {
   green?: boolean;
   found: boolean;
   stale?: boolean;
+  /** The file exists but is not a run record — never read as silence. */
+  malformed?: boolean;
   total?: number;
   passed?: number;
   failed?: number;
@@ -43,16 +45,32 @@ export function readPlaymodeRun(projectRoot: string, sinceMs: number): PlaymodeR
   // Two milliseconds of tolerance, as the play-through verdict has: a file
   // touched in the same millisecond is not older than the attempt.
   if (mtimeMs + 2 < sinceMs) return { found: false, stale: true };
+  // …and a touched file is not a fresh run. The writer stamps measuredAt from
+  // the results it parsed; when it says the run predates this attempt, the
+  // record is stale no matter what the filesystem says (Codex 2026-09-11 E#8:
+  // copying yesterday's record refreshed its mtime and laundered yesterday's
+  // 42/42 into today's final-sprint proof).
+  const stamped = measuredAtMs(readStamp(path));
+  if (stamped !== undefined && stamped + 2 < sinceMs) return { found: false, stale: true };
   let raw: Record<string, unknown>;
   try {
-    raw = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
+    // `null`, a bare number, an array: JSON.parse accepts all of them and the
+    // first property read then THREW, out of this function and into the
+    // caller's best-effort catch, which kept the PREVIOUS attempt's green
+    // verdict (Codex 2026-09-11 E#1). A record that is not an object is a
+    // malformed record, and malformed is a verdict of its own.
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return { found: false, malformed: true };
+    }
+    raw = parsed as Record<string, unknown>;
   } catch {
-    return { found: false };
+    return { found: false, malformed: true };
   }
   const num = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
   const total = num(raw.total);
   const failed = num(raw.failed);
-  if (total === undefined || failed === undefined) return { found: false };
+  if (total === undefined || failed === undefined) return { found: false, malformed: true };
   // An INVALID explicit field is not an absent one: {passed:"0",skipped:"10"}
   // fell back to the derived counts and a malformed all-skipped record read as
   // a full-suite pass (Codex 2026-09-11 D#31).
@@ -99,4 +117,22 @@ export function readPlaymodeRun(projectRoot: string, sinceMs: number): PlaymodeR
     measuredAt: typeof raw.measuredAt === "string" ? raw.measuredAt : undefined,
     detail,
   };
+}
+
+/** The record's own `measuredAt`, read without committing to the rest of the file. */
+function readStamp(path: string): unknown {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return undefined;
+    return (parsed as Record<string, unknown>).measuredAt;
+  } catch {
+    return undefined;
+  }
+}
+
+/** An ISO timestamp the writer stamped, or undefined when it is absent or unreadable. */
+export function measuredAtMs(value: unknown): number | undefined {
+  if (typeof value !== "string" || value.trim() === "") return undefined;
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) ? ms : undefined;
 }
