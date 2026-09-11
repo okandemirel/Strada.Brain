@@ -657,6 +657,26 @@ export class CampaignManager {
     } catch { /* listing unavailable — the lineage walk below still runs */ }
     for (const milestone of campaign.milestones) {
       if (!milestone.taskId) continue;
+      // EVERY live task of the lineage, not only its newest tip and not only
+      // the newest 50 of the chat: an older blocked descendant survived both
+      // and the executor could resume it against a shipped game (Codex
+      // 2026-09-11 I#7).
+      try {
+        const live = (this.taskManager as unknown as {
+          listLiveInLineage?: (id: TaskId) => Array<{ id: string }>;
+        }).listLiveInLineage?.(milestone.taskId as TaskId) ?? [];
+        for (const task of live) {
+          try { this.taskManager.cancel(task.id as TaskId, cancelOpts); } catch { /* already settled */ }
+        }
+        if (live.length > 0) {
+          getLoggerSafe().info("Retired every live task of a milestone's lineage", {
+            id: campaign.id,
+            milestone: milestone.id,
+            retired: live.length,
+            recoverable: opts.recoverable === true,
+          });
+        }
+      } catch { /* the tip walk below still runs */ }
       let tipId: string | undefined;
       try {
         tipId = this.taskManager.findLatestLineageTask(milestone.taskId as TaskId)?.id;

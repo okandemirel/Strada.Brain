@@ -221,3 +221,36 @@ describe("TaskStorage", () => {
     expect(loaded?.attachments?.[0]?.data?.toString()).toBe("abc");
   });
 });
+
+describe("listLiveInLineage — a campaign retires ALL of its work (Codex 2026-09-11 I#7)", () => {
+  it("returns every unfinished descendant at any depth, and nothing finished", () => {
+    const dir = mkdtempSync(join(tmpdir(), "lineage-live-"));
+    const storage = new TaskStorage(join(dir, "tasks.db"));
+    storage.initialize();
+    try {
+      const mk = (id: string, parentId: string | null, status: TaskStatus): void => {
+        storage.save(makeTask(status, {
+          id: id as never, prompt: `p ${id}`,
+          ...(parentId ? { parentId: parentId as never } : {}),
+        }));
+      };
+      mk("root", null, TaskStatus.cancelled);
+      mk("mid", "root", TaskStatus.completed);
+      mk("deep", "mid", TaskStatus.blocked);       // three levels down, still alive
+      mk("other", "mid", TaskStatus.executing);
+      mk("done", "mid", TaskStatus.failed);
+      mk("unrelated", null, TaskStatus.blocked);
+
+      const live = storage.listLiveInLineage("root" as TaskId).map((t) => t.id).sort();
+      expect(live).toEqual(["deep", "other"]);
+      // Asked from a leaf, it answers for that leaf's own subtree; the
+      // manager resolves the lineage ROOT first, which is what a campaign
+      // retiring its work needs.
+      expect(storage.listLiveInLineage("deep" as TaskId).map((t) => t.id)).toEqual(["deep"]);
+      expect(storage.listLiveInLineage("unrelated" as TaskId).map((t) => t.id)).toEqual(["unrelated"]);
+    } finally {
+      storage.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

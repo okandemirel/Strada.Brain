@@ -343,6 +343,20 @@ export class TaskManager extends EventEmitter {
     return this.storage.findLineageRootId(taskId);
   }
 
+  /**
+   * Every unfinished task descending from this one, at any depth — what a
+   * campaign must retire when it finishes, rather than the newest tasks of a
+   * chat (Codex 2026-09-11 I#7).
+   */
+  listLiveInLineage(taskId: TaskId): Task[] {
+    try {
+      const rootId = this.storage.findLineageRootId(taskId) ?? taskId;
+      return this.storage.listLiveInLineage(rootId);
+    } catch {
+      return [];
+    }
+  }
+
   /** The chat a person most recently talked in — the target for daemon notices. */
   findLatestUserChat(): { chatId: string; channelType: string } | null {
     return this.storage.findLatestUserChat();

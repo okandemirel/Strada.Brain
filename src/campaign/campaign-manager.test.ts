@@ -120,6 +120,17 @@ class FakeTaskManager extends EventEmitter {
     return false;
   }
 
+  /** Every unfinished task of the lineage, as the real store's query does. */
+  listLiveInLineage(taskId: string): Array<{ id: string }> {
+    const root = this.findLineageRootId(taskId) ?? taskId;
+    const out: Array<{ id: string }> = [];
+    for (const [id, status] of this.statuses) {
+      if (["completed", "cancelled", "failed"].includes(String(status))) continue;
+      if (id === root || this.isInLineage(root, id)) out.push({ id });
+    }
+    return out;
+  }
+
   findLatestLineageTask(rootId: string): Task | null {
     let latest = rootId;
     for (const [child, parent] of this.parents) {
@@ -336,9 +347,11 @@ describe("CampaignManager", () => {
   const waitFor = (fn: () => void | Promise<void>, opts?: { timeout?: number; interval?: number }): Promise<void> =>
     vi.waitFor(fn, { timeout: 5_000, ...opts });
 
-  const settleMilestone = (result: string) => {
+  const settleMilestone = (result: string, explicitTaskId?: string) => {
     const last = tasks.submitted.length;
-    const taskId = `task_${last}`;
+    // The settling task is the newest SUBMITTED one — a test that minted
+    // retries of its own has to say which.
+    const taskId = explicitTaskId ?? `task_${last}`;
     // The delivery gate requires the FINAL milestone to carry an observed
     // green test verdict; give every settle one so ladder tests exercise the
     // walk rather than the gate (the gate has its own test).
@@ -2868,6 +2881,28 @@ describe("CampaignManager", () => {
     // …and the platform it did NOT build is named where a person reads it.
     expect((stored.milestones[2]!.buildVerdict?.reasons ?? []).join(" ")).toContain("ios");
     expect(describeBuild(stored.milestones[2]!.buildVerdict!)).toContain("ios");
+  });
+
+  it("retiring a campaign cancels EVERY live task of its lineage, not just the tip (Codex 2026-09-11 I#7)", async () => {
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    // An older descendant of the FIRST sprint's lineage, still blocked,
+    // carrying a prompt that matches no milestone — only the lineage walk
+    // can find it — with a live tip beyond it.
+    const orphan = tasks.addRetry("task_1", TaskStatus.blocked);
+    (tasks as unknown as { prompts: Map<string, string> }).prompts.set(orphan, "an unrelated continuation");
+    const tip = tasks.addRetry(orphan, TaskStatus.executing);
+    (tasks as unknown as { prompts: Map<string, string> }).prompts.set(tip, "an unrelated continuation");
+
+    settleMilestone("green, shipping", "task_3");
+    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+
+    expect(tasks.cancelled).toContain(orphan);
+    expect(tasks.cancelled).toContain(tip);
   });
 
   it("a sprint cancelled ON PURPOSE stops the campaign instead of continuing its work (Codex 2026-09-11 I#6)", async () => {

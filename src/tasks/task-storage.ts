@@ -309,6 +309,17 @@ export class TaskStorage {
     return row ? (row.id as TaskId) : null;
   }
 
+  /**
+   * Every UNFINISHED task descending from this one, at any depth. Used to
+   * retire a campaign's work completely; a recent-tasks window left older
+   * descendants alive (Codex 2026-09-11 I#7).
+   */
+  listLiveInLineage(rootId: TaskId): Task[] {
+    this.ensureConnection();
+    const rows = this.getStmt("listLiveInLineage").all(rootId) as TaskRow[];
+    return rows.map((row) => this.rowToTask(row, this.getProgress(row.id)));
+  }
+
   // ─── Private ────────────────────────────────────────────────────────────────
 
   private getProgress(taskId: string): ProgressEntry[] {
@@ -497,6 +508,22 @@ export class TaskStorage {
         SELECT 1 FROM lineage WHERE id = ? LIMIT 1
       `,
       findLatestUserChat: `SELECT chat_id, channel_type FROM tasks WHERE origin = 'user' ORDER BY created_at DESC LIMIT 1`,
+      /**
+       * Every task in a lineage that is not finished — however deep the chain
+       * and however old the row. Retiring a campaign used to walk the newest
+       * 50 tasks of its chat, so an older blocked descendant was left alive
+       * and the executor could resume it against a shipped game (Codex
+       * 2026-09-11 I#7).
+       */
+      listLiveInLineage: `
+        WITH RECURSIVE lineage(id) AS (
+          SELECT id FROM tasks WHERE id = ?
+          UNION
+          SELECT t.id FROM tasks t JOIN lineage l ON t.parent_id = l.id
+        )
+        SELECT t.* FROM tasks t JOIN lineage l ON t.id = l.id
+        WHERE t.status NOT IN ('completed', 'cancelled', 'failed')
+      `,
       findLineageRoot: `
         WITH RECURSIVE up(id, parent_id) AS (
           SELECT id, parent_id FROM tasks WHERE id = ?
