@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { CampaignManager, proofSignature } from "./campaign-manager.js";
+import { CampaignManager, proofSignature, unscheduledGaps } from "./campaign-manager.js";
 
 /**
  * Measured live 2026-09-04: told not to audit, the final sprint answered
@@ -84,5 +84,33 @@ describe("the delivery budget's signature is a set of KINDS (Codex 2026-09-11 I#
     // Order does not matter; the set does.
     expect(proofSignature(["no test run was observed", "the project does not compile (3 error(s))"], { structureRefused: false, compileBroken: true }))
       .toBe(proofSignature(["the project does not compile (12 error(s))", "no test run was observed"], { structureRefused: false, compileBroken: true }));
+  });
+});
+
+describe("which GDD requirements still need a sprint (Codex 2026-09-11 J#12, J#13)", () => {
+  const long = "The save system must preserve all unlocked levels and scores across sessions";
+  const sharesPrefix = "The save system must preserve all unlocked levels and scores in the cloud too";
+
+  it("names each requirement once, by its whole text", () => {
+    expect(unscheduledGaps([long, long, "Boss fight: absent"], [])).toEqual([long, "Boss fight: absent"]);
+    // Two requirements sharing sixty characters are two requirements.
+    expect(unscheduledGaps([long, sharesPrefix], [])).toEqual([long, sharesPrefix]);
+    // Whitespace and case are not identity.
+    expect(unscheduledGaps(["Save: absent", "  save:   ABSENT "], [])).toEqual(["Save: absent"]);
+    expect(unscheduledGaps(["", "   "], [])).toEqual([]);
+  });
+
+  it("a sprint that FAILED covers nothing, and a green or open one covers its own requirement", () => {
+    const green = [{ id: "mcov1", title: `Coverage completion 1.1 — ${long.slice(0, 60)}`, status: "green", coverageGap: long }];
+    expect(unscheduledGaps([long], green)).toEqual([]);
+    const open = [{ id: "mcov1", title: "Coverage completion 1.1 — x", status: "pending", coverageGap: long }];
+    expect(unscheduledGaps([long], open)).toEqual([]);
+    // …but an attempt that failed is not a requirement delivered.
+    const failed = [{ id: "mcov1", title: "Coverage completion 1.1 — x", status: "failed", coverageGap: long }];
+    expect(unscheduledGaps([long], failed)).toEqual([long]);
+    // A sprint covering a requirement that merely SHARES a prefix covers nothing.
+    expect(unscheduledGaps([sharesPrefix], green)).toEqual([sharesPrefix]);
+    // A milestone that is not a coverage sprint never covers anything.
+    expect(unscheduledGaps([long], [{ id: "m1", title: long, status: "green" }])).toEqual([long]);
   });
 });

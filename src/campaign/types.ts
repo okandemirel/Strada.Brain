@@ -55,6 +55,13 @@ export interface CampaignMilestone {
   /** Human label, e.g. "Sprint A — Foundations & Core Sim". */
   title: string;
   /**
+   * For a coverage-remediation sprint, the requirement it exists to close, in
+   * full. The title truncates at 60 characters, and matching gaps by that
+   * prefix merged different requirements and discarded them for good (Codex
+   * 2026-09-11 J#13).
+   */
+  coverageGap?: string;
+  /**
    * The full self-contained sprint kick prompt submitted to the task pipeline
    * when this milestone starts — the same shape as the hand-carried sprint
    * prompts that drove PixelFlow (scope, verification demands, commit

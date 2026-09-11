@@ -327,6 +327,38 @@ export function proofSignature(
   return [...kinds].sort().join(" | ").slice(0, 400) || "none-named";
 }
 
+/** A coverage requirement's identity: its own text, normalized — never a prefix. */
+export function gapKey(gap: string): string {
+  return gap.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+/**
+ * The requirements that still need a sprint: each named once, and none that a
+ * sprint already covers.
+ *
+ * A sprint that FAILED covers nothing — counting it as covered made a required
+ * feature disappear from further repair the moment one attempt had been made —
+ * and identity is the requirement's whole text, because matching on the title's
+ * 60-character prefix merged different requirements (Codex 2026-09-11 J#12, J#13).
+ */
+export function unscheduledGaps(
+  candidates: readonly string[],
+  milestones: ReadonlyArray<{ id: string; title: string; status?: string; coverageGap?: string }>,
+): string[] {
+  const covered = new Set(
+    milestones
+      .filter((m) => m.id.startsWith("mcov") && m.status !== "failed")
+      .map((m) => gapKey(m.coverageGap ?? m.title.replace(/^Coverage completion \d+\.\d+ — /, ""))),
+  );
+  const seen = new Set<string>();
+  return candidates.filter((item) => {
+    const key = gapKey(item);
+    if (key === "" || seen.has(key) || covered.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 /** The revival tail, kept to exactly one copy however many revivals happen. */
 const REVIVE_TAIL_RE = /\n\nA ROUND OF ATTEMPTS ENDED[\s\S]*?keep whatever already works\./g;
 /** How long before a self-revived implementation failure tries again. */
@@ -3153,7 +3185,9 @@ export class CampaignManager {
       // QUEUED REQUIREMENTS COME FIRST. The final proof sprint is the end of
       // the ladder, and appending it while the audit's own list still had
       // entries stranded them for good (Codex 2026-09-11 I#4).
-      const stillQueued = campaign.pendingCoverageGaps ?? [];
+      // Deduplicated here as well as in the ordinary drain: this branch reads
+      // the same persisted list (Codex 2026-09-11 J#12).
+      const stillQueued = unscheduledGaps(campaign.pendingCoverageGaps ?? [], campaign.milestones);
       if (stillQueued.length > 0) {
         const round = campaign.milestones.reduce((max, m) => {
           const r = /^mcov(\d+)/.exec(m.id);
@@ -3164,10 +3198,22 @@ export class CampaignManager {
         campaign.pendingCoverageGaps = rest.length > 0 ? rest : undefined;
         milestone.status = "failed";
         milestone.resultExcerpt = output.slice(-500);
-        campaign.milestones.push(...take.map((item, i) => this.gapSprint(campaign, round, i, item)));
-        campaign.currentMilestone = campaign.milestones.length - take.length;
+        const sprints = take.map((item, i) => this.gapSprint(campaign, round, i, item));
+        // BEFORE the final proof sprint, never after it: appended at the end
+        // they ran after mfinal and the ladder then declared `done` with the
+        // final proofs still pending (Codex 2026-09-11 J#11). The index is
+        // found by ID rather than computed, so it cannot land on the wrong
+        // milestone.
+        const finalAt = campaign.milestones.findIndex((m) => m.id.startsWith("mfinal"));
+        if (finalAt >= 0) campaign.milestones.splice(finalAt, 0, ...sprints);
+        else campaign.milestones.push(...sprints);
+        const firstId = sprints[0]!.id;
+        campaign.currentMilestone = campaign.milestones.findIndex((m) => m.id === firstId);
         campaign.state = "executing";
         campaign.lastError = undefined;
+        // The exhausted lineage is retired before its successor starts, or it
+        // stays eligible for the executor's own recovery beside it (J#12).
+        this.cancelLiveLineages(campaign, "superseded by the next coverage sprint", { recoverable: true });
         this.persist(campaign);
         this.submitCurrentMilestone(campaign);
         getLoggerSafe().info("Draining queued coverage gaps before the final proof sprint", {
@@ -3597,6 +3643,9 @@ export class CampaignManager {
     return {
       id: index === 0 ? `mcov${round}` : `mcov${round}-${index + 1}`,
       title: `Coverage completion ${round}.${index + 1} — ${item.slice(0, 60)}`,
+      // The requirement IN FULL, because the title is truncated and identity
+      // by prefix merged different requirements (Codex 2026-09-11 J#13).
+      coverageGap: item,
       prompt: [
         `The build's milestone ladder finished, but auditing it against ${gddRef} found this scheduled item undelivered:`,
         `- ${item}`,
@@ -3637,8 +3686,12 @@ export class CampaignManager {
     const queued = campaign.pendingCoverageGaps ?? [];
     if (queued.length > 0) {
       const round = priorRounds + 1;
-      const take = queued.slice(0, CampaignManager.MAX_GAP_SPRINTS_PER_ROUND);
-      const rest = queued.slice(take.length);
+      // Deduplicated as it drains: a queue persisted by an older version, or
+      // by an audit that repeated itself, held ["Save", "Save"] and produced
+      // two sprints for one requirement (Codex 2026-09-11 J#12).
+      const distinct = unscheduledGaps(queued, campaign.milestones);
+      const take = distinct.slice(0, CampaignManager.MAX_GAP_SPRINTS_PER_ROUND);
+      const rest = distinct.slice(take.length);
       // NOT PERSISTED HERE. The queue shrinks and the sprints are appended in
       // the CALLER's single write: persisting the shortened queue first meant
       // a crash in that window lost every gap this round had taken off it
@@ -3646,7 +3699,7 @@ export class CampaignManager {
       campaign.pendingCoverageGaps = rest.length > 0 ? rest : undefined;
       campaign.coverageAuditNote =
         rest.length > 0
-          ? `${queued.length} gaps still known; round ${round} schedules ${take.length}, and ${rest.length} stay queued: ${rest.join("; ").slice(0, 300)}`
+          ? `${distinct.length} gaps still known; round ${round} schedules ${take.length}, and ${rest.length} stay queued: ${rest.join("; ").slice(0, 300)}`
           : undefined;
       getLoggerSafe().info("Coverage remediation drains the known gap queue", {
         id: campaign.id,
@@ -3707,18 +3760,11 @@ export class CampaignManager {
       // for the same work plus a third in the queue — duplicate workers that
       // can overwrite each other's implementation (Codex 2026-09-11 I#5).
       // Already-scheduled gaps are excluded too, for the same reason.
-      const alreadyScheduled = new Set(
-        campaign.milestones
-          .filter((m) => m.id.startsWith("mcov"))
-          .map((m) => m.title.replace(/^Coverage completion \d+\.\d+ — /, "").trim().toLowerCase()),
-      );
-      const seenGap = new Set<string>();
-      const unique = missing.filter((item) => {
-        const key = item.trim().toLowerCase();
-        if (key === "" || seenGap.has(key)) return false;
-        seenGap.add(key);
-        return ![...alreadyScheduled].some((t) => t.length > 8 && key.startsWith(t.slice(0, Math.min(60, t.length))));
-      });
+      // A requirement is covered by a sprint that is GREEN or still open, not
+      // by one that failed: scheduling used to count as completion, so a
+      // required feature disappeared from further repair the moment one
+      // attempt had been made (Codex 2026-09-11 J#13).
+      const unique = unscheduledGaps(missing, campaign.milestones);
       if (unique.length === 0) {
         campaign.coverageAuditNote = `coverage audit repeated ${missing.length} gap(s) that already have sprints`;
         this.persist(campaign);

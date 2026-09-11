@@ -3023,6 +3023,101 @@ describe("CampaignManager", () => {
     expect(after.lastError).toContain("cancelled while its retry was pending");
   });
 
+  it("a FAILED gap sprint does not count the requirement as covered, and identity is the whole text (Codex 2026-09-11 J#13)", async () => {
+    tasks = new FakeTaskManager();
+    storage.close();
+    storage = new CampaignStorage(join(dir, "campaigns-gap-identity.db"));
+    const long = "The save system must preserve all unlocked levels and scores across sessions";
+    const sharesPrefix = "The save system must preserve all unlocked levels and scores in the cloud too";
+    const auditCoverage = vi.fn()
+      .mockResolvedValueOnce([long])
+      .mockResolvedValueOnce([long, sharesPrefix])
+      .mockResolvedValue([]);
+    manager = new CampaignManager({
+      storage,
+      verifyCompile: async () => compileVerdict,
+      buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
+      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); },
+      planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage } as unknown as CampaignPlanner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async (chatId, text) => { messages.push({ chatId, text }); },
+      projectRoot,
+      retryAdoptionGraceMs: 10,
+      completedSettleDelayMs: 0,
+      milestoneTimeBoxMs: 60 * 60_000,
+      implementationReviveDelayMs: 10,
+    });
+    manager.attachEvents();
+    const campaign = manager.startFromGdd(ctx, "# GDD text", "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    settleMilestone("final report");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(4));
+
+    const first = storage.get(campaign.id)!.milestones.filter((m) => m.id.startsWith("mcov"));
+    expect(first).toHaveLength(1);
+    // The requirement is stored WHOLE, not truncated into the title.
+    expect(first[0]!.coverageGap).toBe(long);
+
+    // Two requirements sharing the first 60 characters are TWO requirements,
+    // and a repeated one is still one: the queue drain is where a persisted
+    // list is read back (Codex 2026-09-11 J#12, J#13).
+    const queued = storage.get(campaign.id)!;
+    queued.pendingCoverageGaps = [sharesPrefix, sharesPrefix, "Boss fight: absent"];
+    storage.save(queued);
+    for (let i = 0; i < 10 && storage.get(campaign.id)!.state === "executing"; i++) {
+      const before = tasks.submitted.length;
+      tasks.emit("task:failed", `task_${before}`, "gap sprint gave up");
+      await waitFor(() => {
+        const after = storage.get(campaign.id)!;
+        expect(tasks.submitted.length > before || after.state !== "executing").toBe(true);
+      });
+      if ((storage.get(campaign.id)!.pendingCoverageGaps ?? []).length === 0) break;
+    }
+    const gaps = storage.get(campaign.id)!.milestones.filter((m) => m.id.startsWith("mcov"));
+    expect(gaps.filter((m) => m.coverageGap === sharesPrefix)).toHaveLength(1);
+    expect(gaps.filter((m) => m.coverageGap === long)).toHaveLength(1);
+    expect(gaps.filter((m) => m.coverageGap === "Boss fight: absent")).toHaveLength(1);
+  });
+
+  it("a drained gap is inserted BEFORE the final proof sprint (Codex 2026-09-11 J#11)", async () => {
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
+
+    // The ladder a coverage round leaves behind: a spent gap sprint as the
+    // current milestone, a final proof sprint after it, and a requirement
+    // still queued.
+    const staged = storage.get(campaign.id)!;
+    staged.milestones = [
+      ...staged.milestones.slice(0, 2).map((m) => ({ ...m, status: "green" as const })),
+      { id: "mcov1", title: "Coverage completion 1.1 — Save", prompt: "close the save gap", status: "running" as const, attempts: 2, coverageGap: "Save: absent" },
+      { id: "mfinal-4", title: "Final delivery proofs", prompt: "prove it", status: "pending" as const, attempts: 0 },
+    ];
+    staged.currentMilestone = 2;
+    staged.pendingCoverageGaps = ["Audio: absent"];
+    staged.milestones[2]!.taskId = "task_3";
+    storage.save(staged);
+
+    tasks.emit("task:failed", "task_3", "gap sprint gave up");
+    await waitFor(() => expect((storage.get(campaign.id)!.pendingCoverageGaps ?? []).length).toBe(0));
+
+    const ids = storage.get(campaign.id)!.milestones.map((m) => m.id);
+    const finalAt = ids.findIndex((id) => id.startsWith("mfinal"));
+    const lastGapAt = ids.map((id, i) => (id.startsWith("mcov") ? i : -1)).reduce((max, i) => Math.max(max, i), -1);
+    expect(finalAt).toBeGreaterThan(0);
+    expect(lastGapAt).toBeLessThan(finalAt);
+    // …and the campaign is working that new sprint, not the final proofs.
+    const current = storage.get(campaign.id)!;
+    expect(current.milestones[current.currentMilestone]!.id.startsWith("mcov")).toBe(true);
+  });
+
   it("a repeated audit entry gets ONE sprint (Codex 2026-09-11 I#5)", async () => {
     tasks = new FakeTaskManager();
     storage.close();
