@@ -43,17 +43,45 @@ export interface RequiredToolArgument {
 export function requiredToolArguments(prompt: string): RequiredToolArgument[] {
   const out: RequiredToolArgument[] = [];
   const seen = new Set<string>();
-  const re = /\b(?:run|execute|invoke|call|use|using|via|through)\b(?:\s+(?!unity_)[a-z'-]+){0,4}\s+(unity_[a-z0-9_]+)([^.\n]{0,120})/gi;
-  for (const m of prompt.matchAll(re)) {
+  // The tool, then only what follows it up to the next tool name: "…with
+  // target \"android\"" after unity_build_player is not unity_playthrough's
+  // argument (Codex 2026-09-11 D#14).
+  const calls = [...prompt.matchAll(/\b(?:run|execute|invoke|call|use|using|via|through)\b(?:\s+(?!unity_)[a-z'-]+){0,4}\s+(unity_[a-z0-9_]+)/gi)];
+  for (let c = 0; c < calls.length; c++) {
+    const m = calls[c]!;
     const tool = m[1]!.toLowerCase();
-    for (const a of (m[2] ?? "").matchAll(/\b([a-z][a-zA-Z0-9_]{2,20})\s*[:=]?\s*"([^"]{1,40})"/g)) {
-      const key = `${tool}:${a[1]!.toLowerCase()}:${a[2]!.toLowerCase()}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push({ tool, key: a[1]!, value: a[2]! });
+    const from = (m.index ?? 0) + m[0].length;
+    const to = Math.min(calls[c + 1]?.index ?? prompt.length, from + 160, sentenceEnd(prompt, from));
+    const window = prompt.slice(from, to);
+    // KNOWN argument names only: an arbitrary word before a quote turned
+    // `report "all good"` into a requirement (D#14).
+    for (const a of window.matchAll(/\b(sessions|filter|categories|target|scene|mode|platform|capture|provider)\b\s*[:=]?\s*"([^"]{1,40})"/gi)) {
+      const key = a[1]!.toLowerCase();
+      const value = a[2]!.trim();
+      if (value === "" || /^[:{}\[\],]+$/.test(value)) continue; // JSON punctuation, not a value
+      const id = `${tool}:${key}:${value.toLowerCase()}`;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      out.push({ tool, key, value });
+    }
+    // A bare flag the campaign's own directives use: "run the FULL suite
+    // UNFILTERED using unity_test_run" (D#11). The window looks backwards too,
+    // because the flag usually precedes the tool.
+    const flagWindow = prompt.slice(Math.max(0, (m.index ?? 0) - 120), to);
+    if (/\bunfiltered\b/i.test(flagWindow)) {
+      const id = `${tool}:unfiltered:true`;
+      if (!seen.has(id)) {
+        seen.add(id);
+        out.push({ tool, key: "unfiltered", value: "true" });
+      }
     }
   }
   return out;
+}
+
+function sentenceEnd(text: string, from: number): number {
+  const stop = text.slice(from).search(/[.\n]/);
+  return stop === -1 ? text.length : from + stop;
 }
 
 /** Required tools without a successful call in the trace, with how many times each was tried. */
@@ -69,15 +97,18 @@ export function missingRequiredEvidence(
       shortfalls.push({ tool, attempts: calls.length });
       continue;
     }
-    // The tool RAN — now: the way the task named it? A trace row that
-    // recorded no arguments cannot contradict the task, so it passes.
-    for (const want of requiredToolArguments(prompt)) {
-      if (want.tool !== tool) continue;
-      const withArgs = calls.filter((t) => t.success && typeof t.args === "string");
-      if (withArgs.length === 0) continue;
-      if (withArgs.some((t) => argSatisfies(t.args!, want.key, want.value))) continue;
-      shortfalls.push({ tool, attempts: calls.length, argument: { key: want.key, value: want.value } });
-    }
+    // The tool RAN — now: the way the task named it? ONE call must satisfy
+    // EVERY argument the task named for this tool; separate calls used to
+    // manufacture a combination neither of them made (Codex 2026-09-11 D#10).
+    // A trace row that recorded no arguments cannot contradict the task.
+    const wants = requiredToolArguments(prompt).filter((w) => w.tool === tool);
+    if (wants.length === 0) continue;
+    const withArgs = calls.filter((t) => t.success && typeof t.args === "string");
+    if (withArgs.length === 0) continue;
+    const satisfied = withArgs.some((t) => wants.every((w) => argSatisfies(t.args!, w.key, w.value)));
+    if (satisfied) continue;
+    const firstUnmet = wants.find((w) => !withArgs.some((t) => argSatisfies(t.args!, w.key, w.value))) ?? wants[0]!;
+    shortfalls.push({ tool, attempts: calls.length, argument: { key: firstUnmet.key, value: firstUnmet.value } });
   }
   return shortfalls;
 }
@@ -88,7 +119,17 @@ export function argSatisfies(args: string, key: string, value: string): boolean 
     const parsed = JSON.parse(args) as Record<string, unknown>;
     for (const [k, v] of Object.entries(parsed)) {
       if (k.toLowerCase() !== key.toLowerCase()) continue;
-      return String(v).toLowerCase() === value.toLowerCase();
+      const got = String(v).toLowerCase();
+      const want = value.toLowerCase();
+      // "unfiltered" is satisfied by the flag being true OR by the run
+      // carrying no filter at all.
+      if (key.toLowerCase() === "unfiltered") return got === "true" || got === want;
+      return got === want;
+    }
+    // The key is absent. For a flag, absence is not proof either way and the
+    // sibling keys decide; for a named value, the call did not use it.
+    if (key.toLowerCase() === "unfiltered") {
+      return !("filter" in parsed) && !("categories" in parsed);
     }
     return false;
   } catch {

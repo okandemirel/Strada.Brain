@@ -36,22 +36,58 @@ interface ErrorRecoveryLike {
  */
 export function summarizeToolArgs(input: unknown): string | undefined {
   if (input === null || typeof input !== "object") return undefined;
-  const out: Record<string, string> = {};
-  for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
-    // Substring, not word boundary: the name is usually camelCase ("apiKey"),
-    // which \b never matched.
-    if (/(?:key|token|secret|password|credential|auth)/i.test(key)) {
-      out[key] = "<redacted>";
-      continue;
+  try {
+    const out: Record<string, string> = {};
+    for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
+      if (SECRET_NAME_RE.test(key)) {
+        out[key] = "<redacted>";
+        continue;
+      }
+      if (value === null || value === undefined) continue;
+      const text = redactSecrets(typeof value === "object" ? stringifySafe(value) : String(value));
+      // Cap each FIELD, never the finished JSON: slicing the JSON left it
+      // unparseable and a satisfied argument then read as missing (Codex
+      // 2026-09-11 D#15).
+      out[key] = text.length > 60 ? `${text.slice(0, 60)}…` : text;
+      if (Object.keys(out).length >= 12) break;
     }
-    if (value === null || value === undefined) continue;
-    const text = typeof value === "object" ? JSON.stringify(value) : String(value);
-    out[key] = text.length > 60 ? `${text.slice(0, 60)}…` : text;
-    if (Object.keys(out).length >= 12) break;
+    return Object.keys(out).length === 0 ? undefined : JSON.stringify(out);
+  } catch {
+    // Recording an argument must never interrupt a call that already ran
+    // (D#16): BigInt, a circular object and a hostile toJSON all threw here.
+    return undefined;
   }
-  const json = JSON.stringify(out);
-  return json === "{}" ? undefined : json.slice(0, 400);
 }
+
+/** Property names that name a credential. */
+const SECRET_NAME_RE = /(?:key|token|secret|password|credential|auth|bearer|cookie|session_id)/i;
+/** Credentials embedded in a VALUE rather than named by its key (D#1). */
+const SECRET_VALUE_RE =
+  /(?:--?(?:token|key|secret|password|apikey)[= ]\S+|\bbearer\s+[\w.\-]{8,}|\bsk-[A-Za-z0-9_\-]{8,}|\bgh[pousr]_[A-Za-z0-9]{8,}|\beyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{6,})/gi;
+
+function redactSecrets(text: string): string {
+  return text.replace(SECRET_VALUE_RE, "<redacted>");
+}
+
+/**
+ * JSON for the trace, with nested credentials removed by NAME at every depth
+ * — the first version looked only at top-level keys, so
+ * `{headers:{Authorization:"Bearer …"}}` travelled verbatim (D#1).
+ */
+function stringifySafe(value: unknown): string {
+  const seen = new WeakSet<object>();
+  const text = JSON.stringify(value, (key, v) => {
+    if (SECRET_NAME_RE.test(key)) return "<redacted>";
+    if (typeof v === "bigint") return `${v}n`;
+    if (typeof v === "object" && v !== null) {
+      if (seen.has(v as object)) return "<circular>";
+      seen.add(v as object);
+    }
+    return v;
+  });
+  return typeof text === "string" ? text : String(value);
+}
+
 
 export interface WorkerCollectorLike {
   childWorkerResults: WorkerRunResult[];

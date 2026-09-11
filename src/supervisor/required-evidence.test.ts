@@ -3,7 +3,7 @@ import { summarizeToolArgs } from "../agents/orchestrator-tool-execution.js";
 import { describeEvidenceShortfall, missingRequiredEvidence, requiredToolsInPrompt, requiredToolArguments } from "./required-evidence.js";
 
 describe("required evidence named by the task", () => {
-  it("the trace's argument copy is capped and redacted", () => {
+  it("the trace's argument copy is capped, deep-redacted, and never throws (Codex 2026-09-11 D#1, D#15, D#16)", () => {
     const summary = summarizeToolArgs({
       sessions: "all",
       apiKey: "sk-should-never-appear",
@@ -14,8 +14,27 @@ describe("required evidence named by the task", () => {
     expect(summary).toContain('"sessions":"all"');
     expect(summary).not.toContain("sk-should-never-appear");
     expect(summary).toContain("<redacted>");
-    expect(summary!.length).toBeLessThanOrEqual(400);
     expect(summary).not.toContain("nothing");
+    // NESTED credentials, and credentials inside ordinary values (D#1).
+    const nested = summarizeToolArgs({
+      headers: { Authorization: "OPAQUE-NESTED-CREDENTIAL-0001" },
+      env: [{ name: "API_KEY", value: "sk-FAKE-SECRET-VALUE-5678" }],
+      command: "curl --token FAKE-SECRET-VALUE-9012 https://x",
+    })!;
+    expect(nested).not.toContain("OPAQUE-NESTED-CREDENTIAL-0001");
+    expect(nested).not.toContain("FAKE-SECRET-VALUE-5678");
+    expect(nested).not.toContain("FAKE-SECRET-VALUE-9012");
+    // Every field stays parseable, however many there are (D#15).
+    const many: Record<string, unknown> = { sessions: "all" };
+    for (let i = 0; i < 8; i++) many[`field${i}`] = "y".repeat(60);
+    const parsed = JSON.parse(summarizeToolArgs(many)!) as Record<string, string>;
+    expect(parsed["sessions"]).toBe("all");
+    // Exotic input is recorded as nothing rather than thrown (D#16).
+    const circular: Record<string, unknown> = {};
+    circular["self"] = { back: circular };
+    expect(() => summarizeToolArgs(circular)).not.toThrow();
+    expect(() => summarizeToolArgs({ nested: { n: 1n } })).not.toThrow();
+    expect(() => summarizeToolArgs({ nested: { toJSON() { return undefined; } } })).not.toThrow();
     expect(summarizeToolArgs(undefined)).toBeUndefined();
     expect(summarizeToolArgs({})).toBeUndefined();
   });
@@ -37,6 +56,38 @@ describe("required evidence named by the task", () => {
     expect(missingRequiredEvidence(prompt, [{ toolName: "unity_playthrough", success: true }])).toEqual([]);
     // An ordinary mention manufactures no requirement.
     expect(requiredToolArguments('unity_playthrough is a tool; the scene is named "Main".')).toEqual([]);
+  });
+
+  it("the argument gate is narrow, same-call, and knows the unfiltered flag (Codex 2026-09-11 D#9-11, D#14)", () => {
+    // Prose does not invent requirements…
+    expect(requiredToolArguments('Run unity_playthrough and report "all good".')).toEqual([]);
+    expect(requiredToolArguments('Run unity_playthrough with {"sessions":"all"}')).toEqual([]);
+    // …and another tool's argument does not travel to this one.
+    expect(requiredToolArguments('Run unity_playthrough with sessions "all", then use unity_build_player with target "android".'))
+      .toEqual([
+        { tool: "unity_playthrough", key: "sessions", value: "all" },
+        { tool: "unity_build_player", key: "target", value: "android" },
+      ]);
+
+    // ONE call must satisfy EVERY named argument (D#10).
+    const two = 'run unity_playthrough with sessions "all" and mode "fast"';
+    expect(missingRequiredEvidence(two, [
+      { toolName: "unity_playthrough", success: true, args: JSON.stringify({ sessions: "all", mode: "slow" }) },
+      { toolName: "unity_playthrough", success: true, args: JSON.stringify({ sessions: "1", mode: "fast" }) },
+    ])).toHaveLength(1);
+    expect(missingRequiredEvidence(two, [
+      { toolName: "unity_playthrough", success: true, args: JSON.stringify({ sessions: "all", mode: "fast" }) },
+    ])).toEqual([]);
+
+    // "FULL suite UNFILTERED" is a requirement (D#11).
+    const unfiltered = "Run the FULL PlayMode suite UNFILTERED using unity_test_run.";
+    expect(requiredToolArguments(unfiltered)).toEqual([{ tool: "unity_test_run", key: "unfiltered", value: "true" }]);
+    expect(missingRequiredEvidence(unfiltered, [
+      { toolName: "unity_test_run", success: true, args: JSON.stringify({ filter: "Smoke" }) },
+    ])).toHaveLength(1);
+    expect(missingRequiredEvidence(unfiltered, [
+      { toolName: "unity_test_run", success: true, args: JSON.stringify({ scene: "Main" }) },
+    ])).toEqual([]);
   });
 
   it("names the tool whatever verb the sentence uses (Codex 2026-09-11 B#13)", () => {

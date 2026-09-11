@@ -497,21 +497,7 @@ export async function initializeTaskRuntimeStage(
         : undefined,
       // Play the artifact the campaign built: unity_run_player writes its
       // verdict under Recordings/player-playthrough, which the campaign reads.
-      runPlayer: params.toolRegistry
-        ? async (projectRoot: string, artifactPath: string) => {
-            const registry = params.toolRegistry!;
-            if (!registry.getAvailableToolNames().includes("unity_run_player")) throw new Error("unity_run_player is not registered");
-            await registry.execute(
-              "unity_run_player",
-              { artifactPath },
-              {
-                projectPath: projectRoot,
-                workingDirectory: projectRoot,
-                readOnly: false,
-              } as import("../../agents/tools/tool-core.interface.js").ToolContext,
-            );
-          }
-        : undefined,
+      runPlayer: params.toolRegistry ? makeRunPlayer(params.toolRegistry) : undefined,
       styleAnalysis: new StyleAnalysis(params.providerManager.getProvider("")),
     });
     campaignManager.attachEvents();
@@ -689,6 +675,27 @@ export async function initializeTaskRuntimeStage(
  * crashed before judging, or its output was cut) is `ran: false` with the
  * first line as the reason, so the gate discloses instead of guessing.
  */
+/**
+ * Play the built artifact through unity_run_player. The tool's own failure is
+ * THROWN: swallowed, an "unsupported artifact on this host" answer looked
+ * identical to a runner that merely left no verdict, so the host exemption
+ * could never fire in production (Codex 2026-09-11 D#6).
+ */
+export function makeRunPlayer(registry: {
+  getAvailableToolNames(): readonly string[];
+  execute(name: string, input: Record<string, unknown>, context: unknown): Promise<{ content?: unknown; isError?: boolean }>;
+}): (projectRoot: string, artifactPath: string) => Promise<void> {
+  return async (projectRoot, artifactPath) => {
+    if (!registry.getAvailableToolNames().includes("unity_run_player")) throw new Error("unity_run_player is not registered");
+    const result = await registry.execute(
+      "unity_run_player",
+      { artifactPath },
+      { projectPath: projectRoot, workingDirectory: projectRoot, readOnly: false },
+    );
+    if (result.isError === true) throw new Error(String(result.content ?? "unity_run_player failed").slice(0, 300));
+  };
+}
+
 export function parsePlayerBuildOutput(content: string): import("../../campaign/types.js").PlayerBuildEvidence {
   const fence = /```json\s*\n([\s\S]*?)\n\s*```/.exec(content);
   if (!fence?.[1]) return { ran: false, detail: content.split("\n")[0]?.slice(0, 200) || "the build tool returned no verdict" };

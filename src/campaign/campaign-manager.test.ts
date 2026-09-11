@@ -4,7 +4,7 @@ import { EventEmitter } from "node:events";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, utimesSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { CampaignManager, stripTimeBoxDirectives } from "./campaign-manager.js";
+import { CampaignManager, stripTimeBoxDirectives, UNMEASURABLE_PROOF_RE, UNRUNNABLE_HERE_RE, hasUnmeasurableProof } from "./campaign-manager.js";
 import { CampaignStorage } from "./campaign-storage.js";
 import type { CampaignPlanner } from "./campaign-planner.js";
 import { GDD_AUDIT_FULL_CHARS } from "./campaign-planner.js";
@@ -2488,6 +2488,33 @@ describe("CampaignManager", () => {
     }
     expect(mcov1().status).toBe("green");
     expect(tasks.submitted.filter((t) => t.prompt.includes("ART NOT PRODUCED")).length).toBe(1);
+  });
+
+  it("a game defect that merely SOUNDS like missing tooling still revives; only the campaign's own tooling wording stops the loop (Codex 2026-09-11 D#3, D#4)", () => {
+    const unmeasurable = (m: string) => (manager as unknown as { constructor: unknown }) && UNMEASURABLE_PROOF_RE.test(m);
+    // The campaign's own wording for absent tooling.
+    expect(unmeasurable("the compile check did not run: no compile verifier is configured")).toBe(true);
+    expect(unmeasurable("no test run was observed")).toBe(true);
+    expect(unmeasurable("the player build did not run: unity_build_player is not registered")).toBe(true);
+    // A GAME defect, whatever words it uses.
+    expect(unmeasurable("play-through: IPlaythroughDriver is not registered in the service container")).toBe(false);
+    expect(unmeasurable("the project does not compile (12 error(s))")).toBe(false);
+    expect(unmeasurable("inside the built player: session 1 never ended")).toBe(false);
+
+    // ANY unmeasurable proof counts: requiring ALL of them let one
+    // game-shaped proof beside it reset the counter forever (D#3).
+    expect(hasUnmeasurableProof(["no test run was observed", "the project does not compile (3 error(s))"])).toBe(true);
+    expect(hasUnmeasurableProof(["the project does not compile (3 error(s))"])).toBe(false);
+    expect(hasUnmeasurableProof([])).toBe(false);
+  });
+
+  it("only a HOST incapability exempts the player run; a broken bundle still blocks (Codex 2026-09-11 D#2)", () => {
+    expect(UNRUNNABLE_HERE_RE.test("exec format error")).toBe(true);
+    expect(UNRUNNABLE_HERE_RE.test("unsupported artifact on this host")).toBe(true);
+    expect(UNRUNNABLE_HERE_RE.test("requires a device")).toBe(true);
+    // A corrupt build is not a host limitation.
+    expect(UNRUNNABLE_HERE_RE.test("Cannot run player: Game_Data is missing")).toBe(false);
+    expect(UNRUNNABLE_HERE_RE.test("the player crashed on launch")).toBe(false);
   });
 
   it("a proof this MACHINE cannot produce stops the campaign and asks a person, instead of reviving forever (Codex 2026-09-11 C#2)", async () => {

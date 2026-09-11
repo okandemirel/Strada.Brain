@@ -230,9 +230,27 @@ export const RECENT_PROVIDER_FAILURE_MS = 30 * 60_000;
 const TURKISH_STALL_RE = /Görev ilerleme kaydetmeden takıldı/i;
 
 /** A player run that says THIS MACHINE cannot execute the artifact. */
-const UNRUNNABLE_HERE_RE = /\b(?:unsupported|cannot run|can't run|not executable|no runner|unrecognized (?:artifact|executable)|exec format error|requires a device|not supported on this (?:platform|host))\b/i;
+export const UNRUNNABLE_HERE_RE =
+  /\b(?:exec format error|not supported on this (?:platform|host)|unsupported (?:artifact|platform|target|host)|requires (?:a|an) (?:device|emulator|simulator)|no player runner is configured|cannot be executed on this (?:platform|host|machine))\b/i;
 /** Missing proofs that describe absent TOOLING rather than a broken game. */
-const UNMEASURABLE_PROOF_RE = /\b(?:did not run|could not run|is not configured|is not registered|not available|no compile verifier|no player builder|no player runner)\b/i;
+/**
+ * Missing proofs whose reason is absent TOOLING. Matched against the campaign's
+ * OWN generated wording, not against a game's error text: "IPlaythroughDriver
+ * is not registered" is implementation work, and "no test run was observed"
+ * had to be added because it is exactly the unmeasurable case (Codex
+ * 2026-09-11 D#3, D#4).
+ */
+export const UNMEASURABLE_PROOF_RE =
+  /(?:the compile check did not run|the player build did not run|no compile verifier is configured|no player builder is configured|no player runner is configured|unity_build_player is not registered|no test run was observed|the built player was never played to a verdict)/i;
+/**
+ * Does this round's shortfall include a proof absent TOOLING explains? ANY
+ * such proof counts: requiring all of them meant one game-shaped proof beside
+ * it reset the counter and the revive loop ran forever (Codex 2026-09-11 D#3).
+ */
+export function hasUnmeasurableProof(missingProofs: readonly string[]): boolean {
+  return missingProofs.some((m) => UNMEASURABLE_PROOF_RE.test(m));
+}
+
 /** Self-revivals spent on a proof this machine cannot produce before asking a person. */
 const MAX_UNMEASURABLE_REVIVES = 2;
 
@@ -2515,10 +2533,19 @@ export class CampaignManager {
           // A proof that is missing because this MACHINE cannot produce it
           // will be missing again in fifteen minutes: revive twice, then stop
           // and ask a person instead of looping forever (Codex 2026-09-11 C#2).
-          const unmeasurable = missingProofs.length > 0 && missingProofs.every((m) => UNMEASURABLE_PROOF_RE.test(m));
+          // ANY unmeasurable proof counts: `every` meant one game-shaped
+          // proof beside it reset the count and the loop ran forever (Codex
+          // 2026-09-11 D#3). A round with no unmeasurable proof at all clears
+          // it, so a game that starts failing for real revives as before.
+          const unmeasurable = hasUnmeasurableProof(missingProofs);
           campaign.unmeasurableRevives = unmeasurable ? (campaign.unmeasurableRevives ?? 0) + 1 : 0;
           if (unmeasurable && campaign.unmeasurableRevives > MAX_UNMEASURABLE_REVIVES) {
             campaign.autoReviveAt = undefined;
+            // The boot sweep re-reports a failed campaign only when its error
+            // starts with NOT DELIVERED; without the prefix this stop lost its
+            // notice to any crash or messenger failure (Codex 2026-09-11 D#8).
+            campaign.lastError = `NOT DELIVERED — this machine cannot produce the missing proof: ${missingProofs.slice(0, 2).join("; ")}`.slice(0, 600);
+            campaign.deliveryReported = false;
             this.persist(campaign);
             this.cancelLiveLineages(campaign, "campaign stopped short of delivery");
             await this.gatherIndependentReview(campaign);

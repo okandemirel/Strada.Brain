@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parsePlayerBuildOutput } from "./stage-runtime.js";
+import { parsePlayerBuildOutput, makeRunPlayer } from "./stage-runtime.js";
 
 const realArtifact = mkdtempSync(join(tmpdir(), "build-artifact-")) + "/Game.app";
 writeFileSync(realArtifact, "binary");
@@ -20,6 +20,20 @@ const built =
     artifact: { path: realArtifact, exists: true, sizeBytes: 88_000_000 },
     measuredAt: "2026-09-10T13:00:00.000Z",
   }) + "\n```";
+
+describe("makeRunPlayer — the tool's own failure reaches the caller (Codex 2026-09-11 D#6)", () => {
+  const registry = (result: { content?: unknown; isError?: boolean }, names = ["unity_run_player"]) => ({
+    getAvailableToolNames: () => names,
+    execute: async () => result,
+  });
+
+  it("throws what an unsupported host said, and stays silent on success", async () => {
+    await expect(makeRunPlayer(registry({ content: "unsupported artifact on this host", isError: true }))("/p", "/p/Game.apk"))
+      .rejects.toThrow(/unsupported artifact on this host/);
+    await expect(makeRunPlayer(registry({ content: "PLAYER PLAY-THROUGH OK" }))("/p", "/p/Game.app")).resolves.toBeUndefined();
+    await expect(makeRunPlayer(registry({}, []))("/p", "/p/Game.app")).rejects.toThrow(/not registered/);
+  });
+});
 
 describe("parsePlayerBuildOutput", () => {
   it("a claimed artifact that is NOT on disk is not a successful build (Codex 2026-09-11 C#12)", () => {
