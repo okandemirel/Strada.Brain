@@ -17,6 +17,8 @@ const artifactDir = mkdtempSync(join(tmpdir(), "build-artifact-"));
 const realArtifact = join(artifactDir, "Game.app");
 mkdirSync(join(realArtifact, "Contents", "MacOS"), { recursive: true });
 writeFileSync(join(realArtifact, "Contents", "MacOS", "Game"), Buffer.alloc(64 * 1024, 7));
+// A bundle is its BINARY: Contents holding only data was accepted (O#8).
+chmodSync(join(realArtifact, "Contents", "MacOS", "Game"), 0o755);
 
 const built =
   "PLAYER BUILT (StandaloneOSX).\nTarget StandaloneOSX; 2 scene(s): Assets/Scenes/Main.unity, Assets/Scenes/Level.unity; 118 s; 3 warning(s); 0 error(s).\n" +
@@ -102,12 +104,17 @@ describe("parsePlayerBuildOutput", () => {
 describe("a named player artifact must BE one (Codex 2026-09-11 E#2, G#3)", () => {
   // A real container ends with its central directory; "PK\u0003\u0004" and
   // padding is a first-bytes costume (Codex 2026-09-11 L#17).
-  const zip = (bytes: number): Buffer => Buffer.concat([
-    Buffer.from("PK\u0003\u0004", "latin1"),
-    Buffer.alloc(bytes, 9),
-    Buffer.from("PK\u0005\u0006", "latin1"),
-    Buffer.alloc(18),
-  ]);
+  const zip = (bytes: number): Buffer => {
+    const local = Buffer.concat([Buffer.from("PK\u0003\u0004", "latin1"), Buffer.alloc(bytes, 9)]);
+    const central = Buffer.concat([Buffer.from("PK\u0001\u0002", "latin1"), Buffer.alloc(42)]);
+    const eocd = Buffer.alloc(22);
+    eocd.write("PK\u0005\u0006", 0, "latin1");
+    eocd.writeUInt16LE(1, 8);  // entries on this disk
+    eocd.writeUInt16LE(1, 10); // entries in total
+    eocd.writeUInt32LE(central.length, 12);
+    eocd.writeUInt32LE(local.length, 16); // where the central directory starts
+    return Buffer.concat([local, central, eocd]);
+  };
   /** An ELF header shape: class, endianness, e_type EXEC and a machine. */
   const elf = (payload: Buffer): Buffer => {
     const head = Buffer.alloc(64);
@@ -279,5 +286,66 @@ describe("magic bytes are a costume, not a player (Codex 2026-09-11 L#17, L#18)"
     writeFileSync(join(web, "play.html"), `<html><script src="Build/game.loader.js"></script></html>`);
     writeFileSync(join(web, "Build", "game.data"), Buffer.alloc(256 * 1024, 5));
     expect(looksLikePlayer(web)).toBe(true);
+  });
+});
+
+describe("a package has to be one, not look like one (Codex 2026-09-11 O#8)", () => {
+  it("refuses a zip signature with no directory, a page that loads nothing, and a bundle with no binary", () => {
+    // Random bytes that merely CONTAIN the two signatures.
+    const costume = join(artifactDir, "Costume2.apk");
+    const bytes = Buffer.alloc(256 * 1024, 3);
+    bytes.write("PK\u0003\u0004", 0, "latin1");
+    bytes.write("PK\u0005\u0006", bytes.length - 40, "latin1");
+    writeFileSync(costume, bytes);
+    expect(looksLikePlayer(costume)).toBe(false);
+
+    // …a zip whose directory offset is right but holds ZERO entries…
+    const empty = join(artifactDir, "Empty.apk");
+    const local = Buffer.concat([Buffer.from("PK\u0003\u0004", "latin1"), Buffer.alloc(256 * 1024, 9)]);
+    const eocdEmpty = Buffer.alloc(22);
+    eocdEmpty.write("PK\u0005\u0006", 0, "latin1");
+    eocdEmpty.writeUInt16LE(0, 8);
+    eocdEmpty.writeUInt16LE(0, 10);
+    const centralRecord = Buffer.concat([Buffer.from("PK\u0001\u0002", "latin1"), Buffer.alloc(42)]);
+    eocdEmpty.writeUInt32LE(centralRecord.length, 12);
+    eocdEmpty.writeUInt32LE(local.length, 16); // a real record sits here; the count says zero
+    writeFileSync(empty, Buffer.concat([local, centralRecord, eocdEmpty]));
+    expect(looksLikePlayer(empty)).toBe(false);
+
+    // …and one whose offset points at something that is not a directory.
+    const bogus = join(artifactDir, "Bogus.apk");
+    const eocdBogus = Buffer.alloc(22);
+    eocdBogus.write("PK\u0005\u0006", 0, "latin1");
+    eocdBogus.writeUInt16LE(1, 8);
+    eocdBogus.writeUInt16LE(1, 10);
+    eocdBogus.writeUInt32LE(46, 12);
+    eocdBogus.writeUInt32LE(64, 16); // inside the file, but not a PK\u0001\u0002 record
+    writeFileSync(bogus, Buffer.concat([local, eocdBogus]));
+    expect(looksLikePlayer(bogus)).toBe(false);
+
+    // A page whose script does not exist beside it.
+    const dangling = join(artifactDir, "WebGL8");
+    mkdirSync(join(dangling, "Build"), { recursive: true });
+    writeFileSync(join(dangling, "index.html"), `<html><script src="Loader/game.js"></script></html>`);
+    writeFileSync(join(dangling, "Build", "game.data"), Buffer.alloc(256 * 1024, 5));
+    expect(looksLikePlayer(dangling)).toBe(false);
+
+    // A page whose script does not exist beside it.
+    const web = join(artifactDir, "WebGL7");
+    mkdirSync(join(web, "Build"), { recursive: true });
+    writeFileSync(join(web, "index.html"), `<html><script>console.log('hello')</script></html>`);
+    writeFileSync(join(web, "Build", "game.data"), Buffer.alloc(4096));
+    expect(looksLikePlayer(web)).toBe(false);
+    // …and the same page once the file it names is really there.
+    writeFileSync(join(web, "index.html"), `<html><script src="Build/game.loader.js"></script></html>`);
+    writeFileSync(join(web, "Build", "game.loader.js"), Buffer.alloc(8 * 1024, 1));
+    writeFileSync(join(web, "Build", "game.data"), Buffer.alloc(256 * 1024, 5));
+    expect(looksLikePlayer(web)).toBe(true);
+
+    // A bundle whose Contents holds data but no executable.
+    const hollow = join(artifactDir, "Padding.app");
+    mkdirSync(join(hollow, "Contents", "MacOS"), { recursive: true });
+    writeFileSync(join(hollow, "Contents", "padding.bin"), Buffer.alloc(512 * 1024, 4));
+    expect(looksLikePlayer(hollow)).toBe(false);
   });
 });

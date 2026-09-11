@@ -1,7 +1,7 @@
 import { supportsRichMessaging } from "../../channels/channel-core.interface.js";
 import { closeSync, existsSync, openSync, readFileSync, readSync, statSync, readdirSync } from "node:fs";
 import type { Attachment } from "../../channels/channel-messages.interface.js";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { runCodexSecondOpinion } from "../../agents/review/codex-second-opinion.js";
 import type * as winston from "winston";
 import type { Config } from "../../config/config.js";
@@ -720,6 +720,11 @@ export function looksLikePlayer(artifactPath: string): boolean {
       // A WEB BUILD IS ITS DATA: the payload has to be INSIDE the build
       // directory, not anywhere in the folder — a padded index.html beside an
       // empty Build/ passed (Codex 2026-09-11 J#23).
+      // A MAC BUNDLE IS ITS BINARY. Contents/padding.bin was accepted as a
+      // player because something in there had bytes (Codex 2026-09-11 O#8).
+      if (/\.app$/i.test(artifactPath) && entries.some((e) => /^Contents$/i.test(e))) {
+        return holdsExecutable(join(artifactPath, "Contents", "MacOS"));
+      }
       const buildDirs = entries.filter((e) => /^(?:Build|Data|.*_Data|Contents)$/i.test(e));
       if (buildDirs.length > 0) {
         // A WEB build needs its PAGE as well as its data: a Build folder
@@ -750,6 +755,25 @@ export function looksLikePlayer(artifactPath: string): boolean {
   // A bare Linux/macOS executable has no extension; require it to be
   // executable and not trivially small.
   return st.size > 1024 * 1024 && (st.mode & 0o111) !== 0 && !/\.[a-z0-9]{1,6}$/i.test(artifactPath);
+}
+
+/** A real executable inside a macOS bundle's MacOS directory. */
+function holdsExecutable(dir: string): boolean {
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return false;
+  }
+  for (const entry of entries) {
+    try {
+      const st = statSync(join(dir, entry));
+      if (st.isFile() && st.size >= MIN_BUNDLE_PAYLOAD_BYTES && (st.mode & 0o111) !== 0) return true;
+    } catch {
+      continue;
+    }
+  }
+  return false;
 }
 
 /** Smallest file inside a bundle that counts as payload rather than metadata. */
@@ -826,7 +850,15 @@ function loadsSomething(page: string, buildDirs: readonly string[]): boolean {
   } catch {
     return false;
   }
-  if (/<script\b/i.test(text) || /\bcreateUnityInstance\b/.test(text)) return true;
+  // The page has to load something that EXISTS: a lone
+  // "<script>console.log('hello')</script>" is not a game (Codex 2026-09-11 O#8).
+  const dir = dirname(page);
+  for (const m of text.matchAll(/(?:src|href)\s*=\s*["']([^"']+)["']/gi)) {
+    const ref = m[1];
+    if (ref === undefined || /^(?:https?:)?\/\//i.test(ref) || ref.startsWith("data:")) continue;
+    if (existsSync(join(dir, ref.split("?")[0] ?? ref))) return true;
+  }
+  // …or it names the build directory beside it, which was measured separately.
   return buildDirs.some((d) => new RegExp(`\\b${d.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/`, "i").test(text));
 }
 
@@ -860,7 +892,14 @@ function hasSubstance(path: string, size: number): boolean {
   return read > 0 && nonZero / read >= MIN_SUBSTANCE_RATIO;
 }
 
-/** The end-of-central-directory record every real ZIP container ends with. */
+/**
+ * The end-of-central-directory record every real ZIP container ends with —
+ * and the directory it points at.
+ *
+ * A signature plus padding was accepted as a package: random bytes beginning
+ * "PK\x03\x04" and containing "PK\x05\x06" near the end passed with no
+ * entries in them at all (Codex 2026-09-11 O#8).
+ */
 function hasZipDirectory(path: string, size: number): boolean {
   const window = Math.min(size, 66_000);
   try {
@@ -868,7 +907,15 @@ function hasZipDirectory(path: string, size: number): boolean {
     try {
       const buf = Buffer.alloc(window);
       readSync(fd, buf, 0, window, size - window);
-      return buf.includes(Buffer.from("PK\u0005\u0006", "latin1"));
+      const at = buf.lastIndexOf(Buffer.from("PK\u0005\u0006", "latin1"));
+      if (at < 0 || at + 22 > buf.length) return false;
+      const entries = buf.readUInt16LE(at + 10);
+      const directoryOffset = buf.readUInt32LE(at + 16);
+      if (entries === 0 || directoryOffset === 0 || directoryOffset >= size) return false;
+      // …and the offset must point AT the central directory.
+      const head = Buffer.alloc(4);
+      readSync(fd, head, 0, 4, directoryOffset);
+      return head.toString("latin1") === "PK\u0001\u0002";
     } finally {
       closeSync(fd);
     }
