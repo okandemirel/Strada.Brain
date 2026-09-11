@@ -25,7 +25,9 @@ const PLATFORM_PATTERNS: ReadonlyArray<readonly [BuildTarget, RegExp]> = [
   ["ios", /\b(?:ios|iphone|ipad|testflight)\b/gi],
   ["webgl", /\b(?:webgl|web ?browser|html5|play in the browser)\b/gi],
   ["windows", /\b(?:windows|win64)\b/gi],
-  ["macos", /\b(?:macos|mac os|osx|apple silicon|mac app)\b/gi],
+  // "Release on Windows and Mac." named one platform and lost the other
+  // (Codex 2026-09-11 O#7); "mac" alone is the ordinary way to write it.
+  ["macos", /\b(?:macos|mac os|osx|apple silicon|mac app|mac)\b/gi],
   ["linux", /\b(?:linux|steamos|proton)\b/gi],
 ];
 
@@ -57,7 +59,12 @@ const STOREFRONT_PATTERNS: ReadonlyArray<readonly [BuildTarget, RegExp]> = [
 const EXCLUDED_BEFORE = /\b(?:no|not|never|without|excluding|apart from|other than)\b[^.\n]{0,20}$/i;
 
 function isExcluded(text: string, at: number): boolean {
-  return EXCLUDED_BEFORE.test(text.slice(Math.max(0, at - 40), at));
+  // WITHIN THE CLAUSE. "No Windows; Linux release via Steam." denied Linux
+  // too, because the 40-character lookback reached across the semicolon —
+  // and the document then named no platform at all (Codex 2026-09-11 O#7).
+  const window = text.slice(Math.max(0, at - 40), at);
+  const boundary = Math.max(window.lastIndexOf(";"), window.lastIndexOf("."), window.lastIndexOf("\n"));
+  return EXCLUDED_BEFORE.test(boundary >= 0 ? window.slice(boundary + 1) : window);
 }
 
 /** "mobile"/"phones"/"tablets" with no store named: a handheld, target unresolved. */
@@ -109,7 +116,12 @@ function qualifiedByOs(text: string, at: number, length: number, os: RegExp): bo
  */
 export function targetOfBuild(text: string | undefined): BuildTarget | undefined {
   if (!text) return undefined;
-  const t = text.toLowerCase();
+  // THE ARTIFACT'S OWN NAME. Matching anywhere in the path called
+  // /projects/android-helper/Build/Game.app an Android build — and on a Mac
+  // that made a real launch failure look like a foreign host (Codex
+  // 2026-09-11 O#6). A directory above the artifact names nothing about it.
+  const lastSlash = Math.max(text.lastIndexOf("/"), text.lastIndexOf("\\"));
+  const t = (lastSlash >= 0 ? text.slice(lastSlash + 1) : text).toLowerCase();
   if (/android|\.(?:apk|aab)$/.test(t)) return "android";
   if (/\bios\b|iphone|ipad|\.ipa$/.test(t)) return "ios";
   if (/webgl|\.html?$/.test(t)) return "webgl";
@@ -134,7 +146,13 @@ export function buildSatisfiesTarget(
   artifactPath?: string,
 ): boolean {
   if (!requested) return true;
-  const named = targetOfBuild(builtTarget) ?? targetOfBuild(artifactPath);
+  const fromLabel = targetOfBuild(builtTarget);
+  const fromArtifact = targetOfBuild(artifactPath);
+  // CONTRADICTORY EVIDENCE PROVES NOTHING. A build labelled
+  // StandaloneWindows64 that produced a .app satisfied a Windows request
+  // because only the label was read (Codex 2026-09-11 O#6).
+  if (fromLabel !== undefined && fromArtifact !== undefined && fromLabel !== fromArtifact) return false;
+  const named = fromLabel ?? fromArtifact;
   return named === undefined || named === requested;
 }
 

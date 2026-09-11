@@ -123,4 +123,23 @@ describe("the platform the GDD asks for (Codex 2026-09-11 B#11)", () => {
     expect(artifactIsForeign(undefined, "macos")).toBe(false);
     expect(artifactIsForeign("/p/Game.apk", undefined)).toBe(false);
   });
+
+  it("contradictory evidence proves nothing, and a parent directory names no platform (Codex 2026-09-11 O#6)", () => {
+    // A build labelled StandaloneWindows64 that produced a .app satisfied a
+    // Windows request because only the label was read.
+    expect(buildSatisfiesTarget("windows", "StandaloneWindows64", "/p/Game.app")).toBe(false);
+    expect(buildSatisfiesTarget("windows", "StandaloneWindows64", "/p/Game.exe")).toBe(true);
+    // …and a directory ABOVE the artifact says nothing about it: this one was
+    // called an Android build, which on a Mac waived its launch failure.
+    expect(targetOfBuild("/projects/android-helper/Build/Game.app")).toBe("macos");
+    expect(targetOfBuild("/projects/x/Builds/Game.apk")).toBe("android");
+  });
+
+  it("an ordinary Mac release is a platform, and an exclusion stays in its clause (Codex 2026-09-11 O#7)", () => {
+    expect(gddPlatform("Release on Windows and Mac.").targets).toEqual(["windows", "macos"]);
+    // "No Windows; Linux release via Steam." used to name NO platform at all.
+    expect(gddPlatform("No Windows; Linux release via Steam.").targets).toEqual(["linux"]);
+    // …and an exclusion inside its own clause still holds.
+    expect(gddPlatform("No Windows release, ever.").targets).toEqual([]);
+  });
 });
