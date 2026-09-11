@@ -237,6 +237,24 @@ describe("a restart does not spend a mission retry, and never escalates", () => 
     }
   });
 
+  it("a BUDGET stop stays blocked and counts as handled (Codex 2026-09-11 M#9)", () => {
+    // The keep-alive wrote the wait notice, scheduled an hourly re-check and
+    // returned false — so the caller marked the task FAILED, which the boot
+    // re-arm does not look at, and the hourly timer died with the process.
+    const { internals, blocks, notices } = harness([]);
+    (internals as unknown as { _unifiedBudgetManager: unknown })._unifiedBudgetManager = {
+      isGlobalExceeded: () => true,
+    };
+    const handled = internals.scheduleMissionKeepAlive(
+      { id: "task_1", chatId: "cli-local", prompt: "Mission: build the game", origin: "user", status: "failed" },
+      "budget exceeded",
+    );
+
+    expect(handled).toBe(true);
+    expect(notices.join(" ")).toContain("the budget window re-opens on its own");
+    expect(blocks.join(" ")).toContain("the budget window re-opens on its own");
+  });
+
   it("does not escalate a REAL failure that is still under the cap", () => {
     const { internals, notices, blocks } = harness([]);
     internals.missionRetries.set("mission:task_1", 3);

@@ -1643,6 +1643,57 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
 });
 
 describe("BackgroundExecutor - Blocked worker results", () => {
+  it("a transient block is CONTINUED, not parked for ever (Codex 2026-09-11 M#1)", async () => {
+    // "blocked:provider_unavailable" is a real runner outcome and not a
+    // question for anyone. This branch persisted `blocked` and scheduled no
+    // continuation at all: no watchdog and no reaper looks at a blocked row,
+    // so only a restart or a person could move it.
+    const executor = new BackgroundExecutor({
+      orchestrator: {
+        runWorkerTask: vi.fn().mockResolvedValue({
+          status: "blocked", reason: "blocked:provider_unavailable",
+          finalSummary: "", visibleResponse: "", provider: "mock", catalogVersion: "mock:default",
+          assignmentVersion: 0, touchedFiles: [], toolTrace: [], verificationResults: [],
+          reviewFindings: [], artifacts: [],
+        }),
+      } as any,
+    });
+    const kept: string[] = [];
+    (executor as unknown as { scheduleMissionKeepAlive: (t: unknown, r: string) => boolean })
+      .scheduleMissionKeepAlive = (_t, r) => { kept.push(r); return true; };
+    const mockTaskManager = { updateStatus: vi.fn(), complete: vi.fn(), fail: vi.fn(), block: vi.fn() };
+    executor.setTaskManager(mockTaskManager as any);
+
+    executor.enqueue(createTestTask(), new AbortController().signal, vi.fn());
+    await vi.waitFor(() => { expect(kept).toEqual(["blocked:provider_unavailable"]); });
+
+    expect(mockTaskManager.block).not.toHaveBeenCalled();
+    expect(mockTaskManager.fail).not.toHaveBeenCalled();
+  });
+
+  it("a block that is WAITING ON A PERSON is parked, not retried (Codex 2026-09-11 M#1)", async () => {
+    const executor = new BackgroundExecutor({
+      orchestrator: {
+        runWorkerTask: vi.fn().mockResolvedValue({
+          status: "blocked", reason: "Paused on a question: which palette should the HUD use?",
+          finalSummary: "", visibleResponse: "", provider: "mock", catalogVersion: "mock:default",
+          assignmentVersion: 0, touchedFiles: [], toolTrace: [], verificationResults: [],
+          reviewFindings: [], artifacts: [],
+        }),
+      } as any,
+    });
+    const kept: string[] = [];
+    (executor as unknown as { scheduleMissionKeepAlive: (t: unknown, r: string) => boolean })
+      .scheduleMissionKeepAlive = (_t, r) => { kept.push(r); return true; };
+    const mockTaskManager = { updateStatus: vi.fn(), complete: vi.fn(), fail: vi.fn(), block: vi.fn() };
+    executor.setTaskManager(mockTaskManager as any);
+
+    executor.enqueue(createTestTask(), new AbortController().signal, vi.fn());
+    await vi.waitFor(() => { expect(mockTaskManager.block).toHaveBeenCalled(); });
+
+    expect(kept).toEqual([]);
+  });
+
   it("marks the root task blocked when a worker returns blocked", async () => {
     const executor = new BackgroundExecutor({
       orchestrator: {

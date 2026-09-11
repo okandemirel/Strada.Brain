@@ -235,6 +235,13 @@ export { DEFAULT_TASK_INACTIVITY_TIMEOUT_MS };
  */
 const BUDGET_WAIT_MARKER = "(the budget window re-opens on its own)";
 
+/**
+ * A stop that is waiting on a PERSON: an escalation, or a question the run
+ * asked. Everything else a worker calls "blocked" is a transient the mission
+ * keep-alive can carry (Codex 2026-09-11 M#1).
+ */
+const AWAITS_A_PERSON_RE = /MISSION STOPPED|Paused on a question|Reply with guidance|ask_user|needs? (?:your|a person'?s?) (?:input|answer|guidance)/i;
+
 export class BackgroundExecutor {
   private readonly queue: QueueEntry[] = [];
   private readonly activeConversations = new Set<string>();
@@ -398,7 +405,7 @@ export class BackgroundExecutor {
             getLoggerSafe().info("Re-arming a mission that stopped on the BUDGET — the window has drained", {
               taskId: task.id,
             });
-          } else if (/MISSION STOPPED|Paused on a question|Reply with guidance|ask_user/i.test(result)) {
+          } else if (AWAITS_A_PERSON_RE.test(result)) {
             getLoggerSafe().info("Keep-alive re-arm skipped — mission already escalated to a person", {
               taskId: task.id,
             });
@@ -1812,11 +1819,19 @@ export class BackgroundExecutor {
       }
 
       if (result.workerResult && result.workerResult.status === "blocked") {
+        const blockedMessage = terminalMessage(result.workerResult.reason, result.output, "Task blocked");
+        // A BLOCK IS NOT ALWAYS A QUESTION. "blocked:provider_unavailable" is a
+        // transient stop, and this branch parked it with no continuation at
+        // all: neither the inactivity watchdog nor the executing-task reaper
+        // looks at a blocked row, so only a restart or a person could move it
+        // (Codex 2026-09-11 M#1). Indefinite parking is for a run that is
+        // actually waiting on someone.
+        if (!AWAITS_A_PERSON_RE.test(blockedMessage)
+          && this.scheduleMissionKeepAlive(task, result.workerResult.reason ?? result.output ?? "worker blocked")) {
+          return;
+        }
         requestFailed = true;
-        this.taskManager.block(
-          task.id,
-          terminalMessage(result.workerResult.reason, result.output, "Task blocked"),
-        );
+        this.taskManager.block(task.id, blockedMessage);
         return;
       }
 
@@ -2221,6 +2236,17 @@ export class BackgroundExecutor {
       // one-shot, so a multi-day campaign that tripped the wall at hour 30
       // stayed stopped forever. Re-check hourly and resume when it clears.
       if (budgetExceeded) {
+        // …and the row must SAY it is waiting. The caller treats `false` as
+        // "not kept alive" and marks the task failed, which the boot re-arm
+        // does not look at — so the hourly timer died with the process and a
+        // mission that stopped on the budget never came back (Codex
+        // 2026-09-11 M#9).
+        try {
+          this.taskManager.block(
+            task.id,
+            `Mission parked on the budget window. ${BUDGET_WAIT_MARKER} Last blocker: ${reason.slice(0, 160)}`,
+          );
+        } catch { /* the notice above still stands */ }
         const rearm = setTimeout(() => {
           try {
             if (this._unifiedBudgetManager?.isGlobalExceeded() ?? false) {
@@ -2232,6 +2258,7 @@ export class BackgroundExecutor {
           } catch { /* best-effort re-arm */ }
         }, 60 * 60_000);
         rearm.unref?.();
+        return true;
       }
       return false;
     }
