@@ -4969,7 +4969,7 @@ export class CampaignManager {
   private findNewestGddPath(): string | undefined {
     const docsDir = join(this.projectRoot, "docs");
     if (!existsSync(docsDir)) return undefined;
-    const candidates: Array<{ rel: string; mtime: number; size: number; derivative: boolean }> = [];
+    const candidates: Array<{ rel: string; mtime: number; distance: number }> = [];
     const stack: Array<{ dir: string; depth: number }> = [{ dir: docsDir, depth: 0 }];
     while (stack.length > 0) {
       const { dir, depth } = stack.pop()!;
@@ -4988,12 +4988,8 @@ export class CampaignManager {
         } else if (/gdd|game[ _-]?design[ _-]?doc/i.test(e.name) && e.name.toLowerCase().endsWith(".md")) {
           try {
             const stat = statSync(full);
-            candidates.push({
-              rel: relative(this.projectRoot, full).split(sep).join("/"),
-              mtime: stat.mtimeMs,
-              size: stat.size,
-              derivative: DERIVATIVE_DOC_RE.test(e.name),
-            });
+            const rel = relative(this.projectRoot, full).split(sep).join("/");
+            candidates.push({ rel, mtime: stat.mtimeMs, distance: gddNameDistance(rel) });
           } catch {
             /* vanished mid-scan */
           }
@@ -5001,15 +4997,12 @@ export class CampaignManager {
       }
     }
     // THE DESIGN DOCUMENT, not the newest report about it. Taking the newest
-    // "gdd" name started a campaign from
-    // docs/PixelFlow_GDD_Traceability_Checklist.md — a file the system itself
-    // had written about the design — and the whole ladder would have been
-    // planned from a checklist (measured live 2026-09-12 00:21). A derivative
-    // is used only when nothing else carries the design.
-    const substantive = candidates.filter((c) => !c.derivative);
-    const pool = substantive.length > 0 ? substantive : candidates;
-    pool.sort((a, b) => b.mtime - a.mtime);
-    return pool[0]?.rel;
+    // "gdd" name started a campaign from a traceability checklist, and then
+    // from an "Implementation Baseline" under docs/run-notes — both files the
+    // system itself had written ABOUT the design (measured live 2026-09-12).
+    // The closest name to a bare GDD wins; mtime only breaks ties.
+    candidates.sort((a, b) => a.distance - b.distance || b.mtime - a.mtime);
+    return candidates[0]?.rel;
   }
 
   /**
@@ -5159,7 +5152,29 @@ function coverageGapItems(milestone: CampaignMilestone): string[] {
 // NOT `\b`: an underscore is a word character, so "_Traceability_" has no
 // word boundary in it and every one of these names slipped through.
 const DERIVATIVE_DOC_RE =
-  /(?:^|[^a-z0-9])(?:audit|analysis|checklist|traceability|summary|report|review|status|notes?|plan|manifest|backlog|coverage|gap|todo|matrix|index)(?:[^a-z0-9]|$)/i;
+  /(?:^|[^a-z0-9])(?:audit|analysis|checklist|traceability|summary|report|review|status|notes?|plan|manifest|backlog|coverage|gap|todo|matrix|index|baseline)(?:[^a-z0-9]|$)/i;
+
+/**
+ * How far a file's NAME is from being the design document itself.
+ *
+ * A word list alone kept losing: the picker took a traceability checklist,
+ * then an "Implementation Baseline" under docs/run-notes (measured live
+ * 2026-09-12). The structure is the stable signal — the design document is
+ * the one whose name is a GDD and nothing else, sitting where documents live
+ * rather than inside a folder of the system's own output.
+ */
+export function gddNameDistance(rel: string): number {
+  const file = rel.split("/").pop() ?? rel;
+  const stem = file.replace(/\.md$/i, "");
+  const marker = /gdd|game[ _-]?design[ _-]?doc(?:ument)?/i.exec(stem);
+  if (!marker) return 99;
+  // Whatever follows the marker: "PixelFlow_GDD" has nothing, an audit has
+  // "Audit_2026-09-02".
+  const after = stem.slice(marker.index + marker[0].length).replace(/^[ _-]+/, "");
+  const extraTokens = after.length === 0 ? 0 : after.split(/[ _-]+/).filter(Boolean).length;
+  const inSubfolder = rel.split("/").length - 1 > 1 ? 2 : 0;
+  return extraTokens + inSubfolder + (DERIVATIVE_DOC_RE.test(stem) ? 10 : 0);
+}
 
 function readGddFile(projectRoot: string, gddPath: string): string | undefined {
   try {

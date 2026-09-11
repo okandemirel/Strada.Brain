@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { CampaignManager } from "./campaign-manager.js";
+import { CampaignManager, gddNameDistance } from "./campaign-manager.js";
 import { CampaignStorage } from "./campaign-storage.js";
 import type { CampaignPlanner } from "./campaign-planner.js";
 import type { TaskManager } from "../tasks/task-manager.js";
@@ -42,6 +42,7 @@ describe("which document is THE GDD", () => {
 
   const write = (name: string, body: string, ageMinutes: number): void => {
     const path = join(projectRoot, "docs", name);
+    mkdirSync(join(path, ".."), { recursive: true });
     writeFileSync(path, body);
     const when = new Date(Date.now() - ageMinutes * 60_000);
     utimesSync(path, when, when);
@@ -56,6 +57,32 @@ describe("which document is THE GDD", () => {
     const found = (manager() as unknown as { findNewestGddPath(): string | undefined }).findNewestGddPath();
 
     expect(found).toBe("docs/PixelFlow_GDD.md");
+  });
+
+  it("a report in the system's own run-notes folder never outranks the design", () => {
+    // Measured live 2026-09-12 00:29, the second attempt: the picker took
+    // docs/run-notes/PixelFlow_GDD_Implementation_Baseline_2026-08-28.md.
+    write("PixelFlow_GDD.md", "# GDD\n\n".padEnd(40_000, "design prose\n"), 600);
+    write("run-notes/PixelFlow_GDD_Implementation_Baseline_2026-08-28.md", "# Baseline\n\nWhat we built.\n", 1);
+
+    expect((manager() as unknown as { findNewestGddPath(): string | undefined }).findNewestGddPath())
+      .toBe("docs/PixelFlow_GDD.md");
+  });
+
+  it("scores a name by how far it is from being a GDD and nothing else", () => {
+    expect(gddNameDistance("docs/PixelFlow_GDD.md")).toBe(0);
+    expect(gddNameDistance("docs/Game_Design_Document.md")).toBe(0);
+    expect(gddNameDistance("docs/PixelFlow_GDD_Traceability_Checklist.md"))
+      .toBeGreaterThan(gddNameDistance("docs/PixelFlow_GDD.md"));
+    expect(gddNameDistance("docs/run-notes/PixelFlow_GDD_Implementation_Baseline_2026-08-28.md"))
+      .toBeGreaterThan(gddNameDistance("docs/PixelFlow_GDD_v2.md"));
+    expect(gddNameDistance("docs/CHANGELOG.md")).toBe(99);
+    // …and the structure decides even when no derivative WORD appears: a copy
+    // in a subfolder, and a name with more said after "GDD", both rank behind.
+    expect(gddNameDistance("docs/run-notes/PixelFlow_GDD.md"))
+      .toBeGreaterThan(gddNameDistance("docs/PixelFlow_GDD.md"));
+    expect(gddNameDistance("docs/PixelFlow_GDD_Implementation_Details.md"))
+      .toBeGreaterThan(gddNameDistance("docs/PixelFlow_GDD_v2.md"));
   });
 
   it("prefers a newer design document over an older one", () => {
