@@ -176,6 +176,17 @@ export class TaskManager extends EventEmitter {
     // cancelled is left alone.
     const retirable = ACTIVE_STATUSES.has(task.status) || task.status === TaskStatus.blocked;
     if (!retirable) {
+      // …EXCEPT a deliberate stop on a task the campaign had SUPERSEDED. That
+      // row says "replaced, carry on"; a person cancelling it means "stop",
+      // and refusing to write anything left the stop with no record at all —
+      // the campaign's revival timer then read the supersession and continued
+      // (Codex 2026-09-11 J#3). A terminal row's status does not change; only
+      // its reason is upgraded.
+      if (task.status === TaskStatus.cancelled && task.cancelReason === "superseded" && opts.reason !== "superseded") {
+        this.storage.markCancelled(taskId, undefined);
+        getLogger().info("A superseded task was cancelled deliberately — the supersession is withdrawn", { taskId });
+        return true;
+      }
       return false;
     }
 

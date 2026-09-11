@@ -267,6 +267,35 @@ describe("TaskManager", () => {
     expect(storage.markCancelled).toHaveBeenCalledWith("task_paused1", undefined);
   });
 
+  it("a deliberate cancel WITHDRAWS a supersession, and leaves other terminal rows alone (Codex 2026-09-11 J#3)", () => {
+    // "superseded" says "replaced, carry on", and a person cancelling that
+    // task means stop. Writing nothing left the stop with no record, so the
+    // campaign's revival read the supersession and continued.
+    const superseded = buildTask({
+      id: "task_sup" as Task["id"],
+      status: TaskStatus.cancelled,
+      cancelReason: "superseded",
+      chatId: "chat-x",
+      channelType: "cli",
+    });
+    const storage = { load: vi.fn().mockReturnValue(superseded), updateStatus: vi.fn(), markCancelled: vi.fn() } as any;
+    const manager = new TaskManager(storage, { resumeConversation: vi.fn() } as any);
+    expect(manager.cancel("task_sup" as Task["id"])).toBe(true);
+    expect(storage.markCancelled).toHaveBeenCalledWith("task_sup", undefined);
+
+    // The campaign's own supersession of an already-superseded row changes nothing.
+    storage.markCancelled.mockClear();
+    expect(manager.cancel("task_sup" as Task["id"], { reason: "superseded" })).toBe(false);
+    expect(storage.markCancelled).not.toHaveBeenCalled();
+
+    // A completed task is still left alone.
+    const done = buildTask({ id: "task_done" as Task["id"], status: TaskStatus.completed, chatId: "chat-x", channelType: "cli" });
+    const doneStorage = { load: vi.fn().mockReturnValue(done), updateStatus: vi.fn(), markCancelled: vi.fn() } as any;
+    const doneManager = new TaskManager(doneStorage, { resumeConversation: vi.fn() } as any);
+    expect(doneManager.cancel("task_done" as Task["id"])).toBe(false);
+    expect(doneStorage.markCancelled).not.toHaveBeenCalled();
+  });
+
   it("creates a goal retry attempt that preserves completed checkpoints", () => {
     const failedTask = buildTask({
       id: "task_goal123" as Task["id"],
