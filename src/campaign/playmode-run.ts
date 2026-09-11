@@ -57,28 +57,37 @@ export function readPlaymodeRun(projectRoot: string, sinceMs: number): PlaymodeR
   }
   // Two milliseconds of tolerance, as the play-through verdict has: a file
   // touched in the same millisecond is not older than the attempt.
-  if (mtimeMs + 2 < sinceMs) return { found: false, stale: true };
-  // …and a touched file is not a fresh run. The writer stamps measuredAt from
-  // the results it parsed; when it says the run predates this attempt, the
-  // record is stale no matter what the filesystem says (Codex 2026-09-11 E#8:
-  // copying yesterday's record refreshed its mtime and laundered yesterday's
-  // 42/42 into today's final-sprint proof).
+  // ONE READ, ONE OBJECT. The stamp check and the counts used to come from
+  // two separate reads of the file, so a writer that replaced the record
+  // between them had its counts accepted under the other record's stamp
+  // (Codex 2026-09-11 H#11).
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch {
+    return { found: false };
+  }
+  // The mtime gate takes the SAME clock-skew allowance as the stamp: a real
+  // remote run whose file mtime is a minute behind the coordinator was
+  // rejected before the allowance was ever consulted (Codex 2026-09-11 H#10).
+  // THE FILE CLOCK IS THIS MACHINE'S, so it is exact: the record is written
+  // here, by the verification tool this attempt ran, and a file written before
+  // the attempt began is a previous attempt's result. Two milliseconds of
+  // tolerance, as the play-through verdict has, for a file touched in the same
+  // millisecond.
   //
-  // CLOCK SKEW, not millisecond precision: the runner may be another machine
-  // whose clock is minutes behind the coordinator's, and a valid run stamped
-  // 09:59 for an attempt that began at 10:00 is not yesterday's run (Codex
-  // 2026-09-11 G#8). The window is wide enough for any plausible skew and far
-  // narrower than a stale record.
-  const stamped = measuredAtMs(readStamp(path));
-  if (stamped !== undefined && stamped + CLOCK_SKEW_TOLERANCE_MS < sinceMs) return { found: false, stale: true };
-  // A stamp that is MISSING or unparseable is not a fresh stamp. The file's
-  // mtime is trivially refreshed by a copy, so a record with no usable
-  // timestamp of its own carries no freshness of its own either; it is
-  // reported so the caller can decide (the final sprint requires one).
-  const stampMissing = stamped === undefined;
+  // The five-minute allowance below is for the RECORD'S OWN stamp, which the
+  // runner writes from its own clock and may be minutes behind ours. Applying
+  // it here instead let a record written seconds before the attempt started
+  // count as this attempt's proof — the cached-result laundering C#10 is
+  // about. A runner on another machine transferring a file with its mtime
+  // preserved is therefore still refused (Codex 2026-09-11 H#10); that needs a
+  // run identity the tool does not yet issue, and accepting stale proof is the
+  // worse of the two failures.
+  if (mtimeMs + 2 < sinceMs) return { found: false, stale: true };
   let raw: Record<string, unknown>;
   try {
-    const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
+    const parsed: unknown = JSON.parse(text);
     // `null`, a bare number, an array: JSON.parse accepts all of them and the
     // first property read then THREW, out of this function and into the
     // caller's best-effort catch, which kept the PREVIOUS attempt's green
@@ -91,6 +100,24 @@ export function readPlaymodeRun(projectRoot: string, sinceMs: number): PlaymodeR
   } catch {
     return { found: false, malformed: true };
   }
+  // …and a touched file is not a fresh run. The writer stamps measuredAt from
+  // the results it parsed; when it says the run predates this attempt, the
+  // record is stale no matter what the filesystem says (Codex 2026-09-11 E#8:
+  // copying yesterday's record refreshed its mtime and laundered yesterday's
+  // 42/42 into today's final-sprint proof). CLOCK SKEW, not millisecond
+  // precision: the runner may be another machine whose clock is minutes
+  // behind the coordinator's (G#8).
+  const stamped = measuredAtMs(raw.measuredAt);
+  if (stamped !== undefined && stamped + CLOCK_SKEW_TOLERANCE_MS < sinceMs) return { found: false, stale: true };
+  // A stamp from the FUTURE is fabrication, not skew: "2099-01-01" was
+  // accepted as fresh evidence (Codex 2026-09-11 H#9). Beyond the same skew
+  // window, the stamp is no stamp at all.
+  const fabricated = stamped !== undefined && stamped > Date.now() + CLOCK_SKEW_TOLERANCE_MS;
+  // A stamp that is MISSING, unparseable or impossible is not a fresh stamp.
+  // The file's mtime is trivially refreshed by a copy, so such a record
+  // carries no freshness of its own; it is reported so the caller can decide
+  // (the final sprint requires one).
+  const stampMissing = stamped === undefined || fabricated;
   const num = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
   const total = num(raw.total);
   const failed = num(raw.failed);
@@ -142,17 +169,6 @@ export function readPlaymodeRun(projectRoot: string, sinceMs: number): PlaymodeR
     measuredAt: typeof raw.measuredAt === "string" ? raw.measuredAt : undefined,
     detail,
   };
-}
-
-/** The record's own `measuredAt`, read without committing to the rest of the file. */
-function readStamp(path: string): unknown {
-  try {
-    const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return undefined;
-    return (parsed as Record<string, unknown>).measuredAt;
-  } catch {
-    return undefined;
-  }
 }
 
 /** An ISO timestamp the writer stamped, or undefined when it is absent or unreadable. */

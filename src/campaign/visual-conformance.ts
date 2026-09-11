@@ -33,6 +33,8 @@ import { getLoggerSafe } from "../utils/logger.js";
 const LOOK_HEADINGS = /^\s*(?:#{1,6}\s+)?(?:\d+[.\s]*)*\s*(art direction|visual (?:style|direction|identity)|look and feel|art style)\b/i;
 /** A body this short is a table-of-contents line, not a description. */
 const MIN_LOOK_CHARS = 200;
+/** …and the floor for a short section that plainly describes the look. */
+const MIN_SHORT_LOOK_CHARS = 24;
 /** How much of the section to carry into the prompt. */
 const MAX_LOOK_CHARS = 2000;
 /** Directory entries the frame scan will walk before disclosing truncation. */
@@ -64,8 +66,23 @@ export interface LookDescription {
  * requested style (Codex 2026-09-11 F#3).
  */
 export function artDirectionText(look: LookDescription | undefined, gddText: string | undefined): string | undefined {
-  return look?.found === true && look.text ? look.text : gddText;
+  if (look?.found === true && look.text) return look.text;
+  if (gddText === undefined) return undefined;
+  // NOT the whole document. Handing everything to the style check made
+  // "Solve geometric puzzles." in a Gameplay section read as a request for
+  // flat geometric art, and the placeholder-art refusal was waived for a
+  // document asking for hand-painted watercolour (Codex 2026-09-11 H#13).
+  // Only the sentences that talk about the LOOK speak for the look.
+  const sentences = gddText
+    .split(/(?<=[.!?])\s+|\n+/)
+    .map((line) => line.replace(/^\s*#{1,6}\s+/, "").trim())
+    .filter((line) => line.length > 0 && ART_WORD_RE.test(line));
+  return sentences.length > 0 ? sentences.join(" ") : undefined;
 }
+
+/** Words that make a sentence about the game's LOOK rather than its play. */
+const ART_WORD_RE =
+  /\b(?:art|artwork|arts|visual|visuals|sprite|sprites|palette|colour|color|colours|colors|style|styles|aesthetic|look|illustration|illustrated|texture|textures|shading|shaded|pixel|painted|painting|render|rendered|silhouette)\b/i;
 
 export function extractLookDescription(gddText: string): LookDescription {
   if (typeof gddText !== "string" || gddText.trim().length === 0) {
@@ -106,8 +123,13 @@ export function extractLookDescription(gddText: string): LookDescription {
   // The LAST usable candidate wins, not the longest: a document puts its
   // contents page first and the real section later, and a TOC entry followed
   // by unrelated text can be longer than the section it points at.
+  // A SHORT, EXPLICIT brief is still a brief: "Minimalist flat geometric art:
+  // use solid colored squares." is 57 characters and says everything the gate
+  // needs, while the 200-character floor exists to reject contents listings
+  // (Codex 2026-09-11 F#3, H#13). Prose about the look, at least one
+  // sentence's worth, counts.
   const usable = candidates
-    .filter((c) => c.body.length >= MIN_LOOK_CHARS && isProse(c.body))
+    .filter((c) => (c.body.length >= MIN_LOOK_CHARS || (c.body.length >= MIN_SHORT_LOOK_CHARS && ART_WORD_RE.test(c.body))) && isProse(c.body))
     .sort((a, b) => b.line - a.line);
 
   const best = usable[0];

@@ -62,6 +62,8 @@ interface CampaignRow {
   unmeasurable_revives?: number | null;
   implementation_revives?: number | null;
   pending_coverage_gaps?: string | null;
+  delivery_revives?: number | null;
+  delivery_proofs_signature?: string | null;
   plan_coverage?: string | null;
 }
 
@@ -100,6 +102,8 @@ function rowToCampaign(row: CampaignRow): Campaign {
     unmeasurableRevives: row.unmeasurable_revives ?? undefined,
     implementationRevives: row.implementation_revives ?? undefined,
     pendingCoverageGaps: parseGapQueue(row.pending_coverage_gaps),
+    deliveryRevives: row.delivery_revives ?? undefined,
+    deliveryProofsSignature: row.delivery_proofs_signature ?? undefined,
     ...(row.plan_coverage ? { planCoverage: parsePlanCoverage(row.plan_coverage) } : {}),
   };
 }
@@ -158,6 +162,17 @@ export class CampaignStorage {
       // Column already exists — migration is idempotent.
     }
     try {
+      // Delivery rounds spent on the same missing proofs (H#1).
+      this.db.exec("ALTER TABLE campaigns ADD COLUMN delivery_revives INTEGER");
+    } catch {
+      // Column already exists — migration is idempotent.
+    }
+    try {
+      this.db.exec("ALTER TABLE campaigns ADD COLUMN delivery_proofs_signature TEXT");
+    } catch {
+      // Column already exists — migration is idempotent.
+    }
+    try {
       // Audited 2026-09-02: the draft path's deferral clock (24h bound).
       this.db.exec("ALTER TABLE campaigns ADD COLUMN draft_deferred_since INTEGER");
     } catch {
@@ -190,8 +205,9 @@ export class CampaignStorage {
           state, idea_text, gdd_path, gdd_text, draft_task_id, draft_attempts,
           milestones_json, current_milestone, created_at, updated_at, last_error,
           auto_revive_at, coverage_audit_note, draft_deferred_since, delivery_reported, plan_coverage,
-          unmeasurable_revives, implementation_revives, pending_coverage_gaps
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          unmeasurable_revives, implementation_revives, pending_coverage_gaps,
+          delivery_revives, delivery_proofs_signature
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           state = excluded.state,
           gdd_path = excluded.gdd_path,
@@ -209,7 +225,9 @@ export class CampaignStorage {
           plan_coverage = excluded.plan_coverage,
           unmeasurable_revives = excluded.unmeasurable_revives,
           implementation_revives = excluded.implementation_revives,
-          pending_coverage_gaps = excluded.pending_coverage_gaps`,
+          pending_coverage_gaps = excluded.pending_coverage_gaps,
+          delivery_revives = excluded.delivery_revives,
+          delivery_proofs_signature = excluded.delivery_proofs_signature`,
       )
       .run(
         campaign.id,
@@ -239,6 +257,8 @@ export class CampaignStorage {
         campaign.pendingCoverageGaps && campaign.pendingCoverageGaps.length > 0
           ? JSON.stringify(campaign.pendingCoverageGaps)
           : null,
+        campaign.deliveryRevives ?? null,
+        campaign.deliveryProofsSignature ?? null,
       );
   }
 

@@ -2681,6 +2681,99 @@ describe("CampaignManager", () => {
     expect(storage.get(campaign.id)!.state).not.toBe("done");
   });
 
+  it("with NO player runner configured the game is not delivered (Codex 2026-09-11 H#8)", async () => {
+    // F#12 removed the phrase from the host-incapability regex and the early
+    // return set the waiver field directly, so nothing changed: Codex reached
+    // `done` with an artifact nobody had run.
+    tasks = new FakeTaskManager();
+    storage.close();
+    storage = new CampaignStorage(join(dir, "campaigns-no-runner.db"));
+    manager = new CampaignManager({
+      storage,
+      verifyCompile: async () => compileVerdict,
+      buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
+      // runPlayer: deliberately absent — this deployment configured none.
+      planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async (chatId, text) => { messages.push({ chatId, text }); },
+      projectRoot,
+      retryAdoptionGraceMs: 10,
+      completedSettleDelayMs: 0,
+      milestoneTimeBoxMs: 60 * 60_000,
+      deliveryResumeDelayMs: 20,
+      implementationReviveDelayMs: 10,
+    });
+    manager.attachEvents();
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1), { timeout: 5_000 });
+    settleMilestone("sprint A done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2), { timeout: 5_000 });
+    settleMilestone("sprint B done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3), { timeout: 5_000 });
+    // Through the delivery bounces: every one of them completes green, and
+    // none of them plays the game.
+    for (let i = 0; i < 12 && storage.get(campaign.id)!.state === "executing"; i++) {
+      const before = tasks.submitted.length;
+      settleMilestone(`green, shipping (round ${i})`);
+      await vi.waitFor(() => {
+        expect(tasks.submitted.length > before || storage.get(campaign.id)!.state !== "executing").toBe(true);
+      }, { timeout: 5_000 });
+    }
+    const after = storage.get(campaign.id)!;
+    expect(after.state).not.toBe("done");
+    expect(after.milestones[2]!.deliveryProofsMissing!.join(" ")).toContain("no player runner is configured");
+  });
+
+  it("delivery rounds that keep ending with the SAME proofs missing stop, and progress starts the budget again (Codex 2026-09-11 H#1)", async () => {
+    // Codex measured 100 completions producing 100 submissions: the "resumes
+    // by itself with a fresh budget" path had no durable counter at all.
+    runRecordOnSettle = undefined; // every sprint completes without running the suite
+    tasks = new FakeTaskManager();
+    storage.close();
+    storage = new CampaignStorage(join(dir, "campaigns-delivery-budget.db"));
+    manager = new CampaignManager({
+      storage,
+      verifyCompile: async () => compileVerdict,
+      buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
+      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); },
+      planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async (chatId, text) => { messages.push({ chatId, text }); },
+      projectRoot,
+      retryAdoptionGraceMs: 10,
+      completedSettleDelayMs: 0,
+      milestoneTimeBoxMs: 60 * 60_000,
+      deliveryResumeDelayMs: 20,
+      implementationReviveDelayMs: 10,
+    });
+    manager.attachEvents();
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1), { timeout: 5_000 });
+    settleMilestone("sprint A done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2), { timeout: 5_000 });
+    settleMilestone("sprint B done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3), { timeout: 5_000 });
+
+    for (let i = 0; i < 30; i++) {
+      const stored = storage.get(campaign.id)!;
+      if (stored.state === "failed" && !stored.autoReviveAt) break;
+      const before = tasks.submitted.length;
+      settleMilestone(`shipping it (round ${i})`);
+      await vi.waitFor(() => {
+        const after = storage.get(campaign.id)!;
+        expect(tasks.submitted.length > before || (after.state === "failed" && !after.autoReviveAt)).toBe(true);
+      }, { timeout: 5_000 });
+    }
+    const stopped = storage.get(campaign.id)!;
+    expect(stopped.state).toBe("failed");
+    expect(stopped.autoReviveAt).toBeUndefined();
+    expect(stopped.lastError).toContain("NOT DELIVERED");
+    expect(stopped.deliveryRevives).toBe(4); // three rounds allowed, the fourth stops
+    expect(messages.at(-1)!.text).toContain("ended with exactly the same proofs missing");
+    // Bounded, not unlimited: nowhere near a submission per completion.
+    expect(tasks.submitted.length).toBeLessThan(20);
+  });
+
   it("at the final sprint a record with no timestamp of its own is not proof (Codex 2026-09-11 G#4)", async () => {
     // A copied record has a fresh mtime by construction, so an mtime is not
     // freshness; the record has to say when it ran.

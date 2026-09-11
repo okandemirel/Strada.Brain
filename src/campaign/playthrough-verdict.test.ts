@@ -186,3 +186,17 @@ describe("a verdict file that is not an object wedged the settlement (Codex 2026
     }
   });
 });
+
+describe("a verdict's nested fields cannot throw (Codex 2026-09-11 H#12)", () => {
+  it("keeps only string reasons", () => {
+    write({ ok: false, reasons: [{ toString: null }, "compile failed", 7] });
+    const parsed = readPlaythroughVerdict(root, 0);
+    expect(parsed.found).toBe(true);
+    expect(parsed.reasons).toContain("compile failed");
+    expect(parsed.reasons?.length).toBe(1);
+    // …whatever shape the file's other fields take.
+    write({ ok: true, reasons: { nope: true }, record: { actions: [1] }, frames: { count: { n: 1 } } });
+    expect(() => readPlaythroughVerdict(root, 0)).not.toThrow();
+    expect(readPlaythroughVerdict(root, 0).ok).toBe(false);
+  });
+});

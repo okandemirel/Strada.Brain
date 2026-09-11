@@ -147,19 +147,43 @@ describe("the judgement", () => {
   });
 });
 
-describe("artDirectionText — the document speaks even when its section is short (Codex 2026-09-11 F#3)", () => {
-  it("prefers the extracted section and falls back to the whole document", () => {
+describe("the art direction a gate judges against (Codex 2026-09-11 F#3, H#13)", () => {
+  it("extracts a SHORT explicit brief instead of falling back to the whole document", () => {
     const gdd = "## Art Direction\nMinimalist flat geometric art: use solid colored squares.\n";
     const look = extractLookDescription(gdd);
-    // The section is far shorter than the prose floor, so extraction declines…
-    expect(look.found).toBe(false);
-    // …and the gate still gets the document's own words.
-    expect(artDirectionText(look, gdd)).toBe(gdd);
-    // A section long enough to extract wins over the whole document.
+    // 57 characters, and it says everything the gate needs.
+    expect(look.found).toBe(true);
+    expect(look.text).toContain("solid colored squares");
+    expect(artDirectionText(look, gdd)).toBe(look.text);
+    // A section long enough for the ordinary floor still wins too.
     const long = `## Art Direction\n${"Hand-painted watercolour backdrops with visible brush texture, warm ochre and teal, soft edges everywhere and no hard outlines. ".repeat(3)}\n`;
     const found = extractLookDescription(long);
     expect(found.found).toBe(true);
     expect(artDirectionText(found, long)).toBe(found.text);
     expect(artDirectionText(undefined, undefined)).toBeUndefined();
+  });
+
+  it("never hands GAMEPLAY vocabulary to the style check (Codex 2026-09-11 H#13)", () => {
+    // "Solve geometric puzzles." made asksForFlatArt true and waived the
+    // placeholder-art refusal for a document asking for watercolour.
+    const gdd = [
+      "## Gameplay",
+      "Solve geometric puzzles.",
+      "## Art Direction",
+      "Rich hand-painted watercolor environments and detailed painted characters.",
+    ].join("\n");
+    const look = extractLookDescription(gdd);
+    expect(look.found).toBe(true);
+    const text = artDirectionText(look, gdd)!;
+    expect(text).toContain("watercolor");
+    expect(text).not.toContain("geometric puzzles");
+
+    // With NO art section at all, only the sentences about the LOOK speak.
+    const noSection = "Solve geometric puzzles. Levels are procedurally generated.";
+    expect(artDirectionText(extractLookDescription(noSection), noSection)).toBeUndefined();
+    const inline = "Solve geometric puzzles. The art style is flat, minimal, solid colours only.";
+    const inlineText = artDirectionText(extractLookDescription(inline), inline)!;
+    expect(inlineText).toContain("flat, minimal");
+    expect(inlineText).not.toContain("geometric puzzles");
   });
 });

@@ -108,7 +108,13 @@ export function readPlaythroughVerdict(projectRoot: string, sinceMs: number, rel
   const framesCaptured = whole(frames?.count);
   const refused = record !== undefined && (record.startAccepted === false || str(record.outcome) === "Refused" || str(record.missing) !== undefined);
   const evidenced = actionsTaken && framesCaptured && !refused;
-  const reasons = Array.isArray(parsed.reasons) ? parsed.reasons.map(String).slice(0, 8) : [];
+  // Only STRINGS: `reasons.map(String)` threw "Cannot convert object to
+  // primitive value" on `[{"toString":null}]`, outside the guarded parse and
+  // into a settlement path that had already persisted the milestone green
+  // (Codex 2026-09-11 H#12).
+  const reasons = Array.isArray(parsed.reasons)
+    ? parsed.reasons.filter((r): r is string => typeof r === "string").slice(0, 8)
+    : [];
   if (parsed.ok === true && !evidenced) {
     reasons.push(refused
       ? "the verdict claims ok but the game refused to start the session"

@@ -299,6 +299,18 @@ export interface Campaign {
    * F#9). A known gap is drained, never dropped.
    */
   pendingCoverageGaps?: string[];
+  /**
+   * Delivery rounds spent on the SAME missing proofs. The "resumes by itself
+   * with a fresh budget" path had no durable counter at all: 100 completed
+   * sprints produced 100 submissions and the campaign never stopped, once a
+   * repeatable missing proof stopped counting as unmeasurable (Codex
+   * 2026-09-11 H#1). Progress — a different set of missing proofs — starts the
+   * budget again, so a campaign that is getting somewhere is never stopped by
+   * it.
+   */
+  deliveryRevives?: number;
+  /** The missing proofs the last delivery round ended with, to detect progress. */
+  deliveryProofsSignature?: string;
   deliveryReported?: boolean;
   /**
    * The independent reviewer's verdict text for the last delivery report

@@ -539,3 +539,16 @@ describe("parseReasoningResponse marks a reply it could not read (Codex 2026-09-
     expect(block).toContain('this.requeueUnacted(batch, "unparsed-decision"');
   });
 });
+
+describe("a reply with no decision in it is not a decision (Codex 2026-09-11 H#14)", () => {
+  it("flags an empty object, an array and a missing action", () => {
+    for (const body of ["{}", "[]", '{"reasoning":"repair build"}', '{"action":""}', '{"action":"   "}', '[{"action":"execute"}]']) {
+      const decision = parseReasoningResponse(`\`\`\`json\n${body}\n\`\`\``);
+      expect(decision.action).toBe("wait");
+      expect(decision.unparsed).toBe(true);
+    }
+    // An explicit action is still honoured.
+    expect(parseReasoningResponse('```json\n{"action":"execute","goal":"fix the build","reasoning":"red"}\n```'))
+      .toMatchObject({ action: "execute", goal: "fix the build" });
+  });
+});

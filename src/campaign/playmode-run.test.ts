@@ -143,3 +143,35 @@ describe("a record that is not a run record, and a run that is not this attempt'
     expect(readPlaymodeRun(root, attemptStart)).toMatchObject({ found: false, stale: true });
   });
 });
+
+describe("a stamp is not a free pass (Codex 2026-09-11 H#9, H#10, H#11)", () => {
+  it("rejects a stamp from the future and reads counts and stamp from ONE read", () => {
+    const attemptStart = Date.now() - 60_000;
+    write({
+      total: 42, passed: 42, failed: 0, skipped: 0, unfiltered: true,
+      measuredAt: "2099-01-01T00:00:00.000Z",
+    });
+    // A fabricated future stamp carries no freshness: the final sprint refuses it.
+    expect(readPlaymodeRun(root, attemptStart)).toMatchObject({ found: true, stampMissing: true });
+  });
+
+  it("the file clock is exact and the record's own stamp carries the skew allowance", () => {
+    const attemptStart = Date.now();
+    // Written BEFORE the attempt began: a previous attempt's result, whatever
+    // the record says about itself. This is the cached-result laundering the
+    // gate exists for, so the file's own clock gets no allowance.
+    write({
+      total: 42, passed: 42, failed: 0, skipped: 0, unfiltered: true,
+      measuredAt: new Date(attemptStart + 1_000).toISOString(),
+    }, 60_000);
+    expect(readPlaymodeRun(root, attemptStart)).toMatchObject({ found: false, stale: true });
+
+    // Written DURING the attempt by a runner whose clock is two minutes
+    // behind: the stamp's allowance covers that.
+    write({
+      total: 42, passed: 42, failed: 0, skipped: 0, unfiltered: true,
+      measuredAt: new Date(attemptStart - 2 * 60_000).toISOString(),
+    });
+    expect(readPlaymodeRun(root, attemptStart)).toMatchObject({ found: true, green: true });
+  });
+});

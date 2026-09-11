@@ -158,8 +158,17 @@ function validateDecision(raw: unknown): ActionDecision {
     return { action: "wait", reasoning: "Invalid response shape", unparsed: true };
   }
 
+  // An ARRAY is an object too, and `{}` names no action: both defaulted to a
+  // deliberate "wait" that consumed the batch, so a reply with no decision in
+  // it silently dropped the observation it was about (Codex 2026-09-11 H#14).
+  if (Array.isArray(raw)) {
+    return { action: "wait", reasoning: "Invalid response shape", unparsed: true };
+  }
   const obj = raw as Record<string, unknown>;
-  const action = String(obj.action ?? "wait");
+  if (typeof obj.action !== "string" || obj.action.trim() === "") {
+    return { action: "wait", reasoning: "No action in the response", unparsed: true };
+  }
+  const action = obj.action.trim();
 
   if (!VALID_ACTIONS.includes(action as ActionType)) {
     return { action: "wait", reasoning: `Unknown action: ${action}`, unparsed: true };

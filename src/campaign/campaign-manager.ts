@@ -283,6 +283,14 @@ const MAX_UNMEASURABLE_REVIVES = 2;
  * do for itself (Codex 2026-09-11 F#1).
  */
 const MAX_IMPLEMENTATION_REVIVES = 2;
+/**
+ * Delivery rounds spent on the SAME missing proofs before the campaign stops
+ * and asks a person. More than the implementation budget, because a delivery
+ * round is the whole game being measured rather than one sprint's work, and
+ * bounded because repeating a round that changes nothing is how a daemon
+ * spends a month without shipping (Codex 2026-09-11 H#1).
+ */
+const MAX_DELIVERY_REVIVES = 3;
 /** The revival tail, kept to exactly one copy however many revivals happen. */
 const REVIVE_TAIL_RE = /\n\nA ROUND OF ATTEMPTS ENDED[\s\S]*?keep whatever already works\./g;
 /** How long before a self-revived implementation failure tries again. */
@@ -2305,7 +2313,14 @@ export class CampaignManager {
         if (playthroughMissing) missingProofs.push(describePlaythrough(playthrough).slice(0, 220));
         if (buildBroken) missingProofs.push(`the player build failed: ${(build?.reasons ?? []).slice(0, 2).join("; ") || build?.detail || "no reason recorded"}`.slice(0, 220));
         if (buildNotRun) missingProofs.push(`the player build did not run: ${build?.detail ?? "no reason recorded"}`.slice(0, 220));
-        if (playerMissing) missingProofs.push("the built player was never played to a verdict (unity_run_player left no verdict)");
+        if (playerMissing) {
+          const missingRunner = (player as { missingRunner?: string } | undefined)?.missingRunner;
+          missingProofs.push(
+            missingRunner
+              ? `the built player was never played: ${missingRunner}`
+              : "the built player was never played to a verdict (unity_run_player left no verdict)",
+          );
+        }
         if (playerUnrunnableHere) {
           milestone.gddClaims = [
             ...(milestone.gddClaims ?? []),
@@ -2629,6 +2644,35 @@ export class CampaignManager {
             await this.attachDeliveryEvidence(campaign);
             return;
           }
+          // A DELIVERY ROUND IS CHARGED, and the charge is durable. This
+          // path had no counter of its own: with a repeatable missing proof —
+          // a worker that completes without ever running the suite — it
+          // revived on every completion for ever. Measured by Codex
+          // 2026-09-11 H#1: 100 completions, 100 submissions, no stop.
+          //
+          // PROGRESS STARTS THE BUDGET AGAIN: the charge is per DISTINCT set
+          // of missing proofs, so a campaign that closes one proof and fails
+          // on the next keeps going, and only one that repeats itself stops.
+          const signature = [...missingProofs].sort().join(" | ").slice(0, 400);
+          const repeating = campaign.deliveryProofsSignature === signature;
+          campaign.deliveryRevives = repeating ? (campaign.deliveryRevives ?? 0) + 1 : 1;
+          campaign.deliveryProofsSignature = signature;
+          if (campaign.deliveryRevives > MAX_DELIVERY_REVIVES) {
+            campaign.autoReviveAt = undefined;
+            campaign.lastError = `NOT DELIVERED — ${MAX_DELIVERY_REVIVES} delivery rounds ended with the same proofs missing: ${missingProofs.slice(0, 2).join("; ")}`.slice(0, 600);
+            campaign.deliveryReported = false;
+            this.persist(campaign);
+            this.cancelLiveLineages(campaign, "campaign stopped short of delivery", { recoverable: true });
+            await this.gatherIndependentReview(campaign);
+            await this.tell(
+              campaign,
+              `${this.buildDeliveryReport(campaign)}${commitNote}\n\n` +
+                `${MAX_DELIVERY_REVIVES} delivery rounds ended with exactly the same proofs missing, so another round changes nothing: ` +
+                `${missingProofs.slice(0, 2).join("; ")}. Reply **kampanya devam** to try again anyway, or change the GDD.`,
+            );
+            await this.attachDeliveryEvidence(campaign);
+            return;
+          }
           const resumeMs = this.deliveryResumeDelayMs;
           campaign.autoReviveAt = Date.now() + resumeMs;
           this.persist(campaign);
@@ -2637,7 +2681,8 @@ export class CampaignManager {
           await this.tell(
             campaign,
             `${this.buildDeliveryReport(campaign)}${commitNote}\n\n` +
-              `The final sprint resumes by itself in ${Math.round(resumeMs / 60_000)} min with a fresh budget against this. ` +
+              `The final sprint resumes by itself in ${Math.round(resumeMs / 60_000)} min with a fresh budget against this ` +
+              `(delivery round ${campaign.deliveryRevives} of ${MAX_DELIVERY_REVIVES} on these proofs). ` +
               "Reply **kampanya devam** to resume now, or change the GDD if this is the game you wanted.",
           );
           this.scheduleAutoRevive(campaign.id, resumeMs);
@@ -3152,8 +3197,13 @@ export class CampaignManager {
   private async measurePlayerRun(
     milestone: CampaignMilestone,
     build: PlayerBuildEvidence,
-  ): Promise<PlaythroughEvidence & { unrunnableHere?: string }> {
-    if (!this.runPlayer) return { found: false, unrunnableHere: "no player runner is configured" };
+  ): Promise<PlaythroughEvidence & { unrunnableHere?: string; missingRunner?: string }> {
+    // NOT `unrunnableHere`: that field waives the player run, and this early
+    // return set it directly, so removing the phrase from UNRUNNABLE_HERE_RE
+    // changed nothing and delivery still reached `done` with an artifact
+    // nobody had run (Codex 2026-09-11 H#8, the hole in F#12). A runner this
+    // deployment never configured is a missing proof that names its cause.
+    if (!this.runPlayer) return { found: false, missingRunner: "no player runner is configured" };
     if (!build.artifactPath) return { found: false };
     const since = Date.now();
     let failure: string | undefined;
