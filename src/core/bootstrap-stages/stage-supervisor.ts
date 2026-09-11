@@ -177,6 +177,8 @@ export function initializeSupervisorStage(
     logger: winston.Logger;
     providerManager: ProviderManager;
     goalDecomposer?: GoalDecomposer;
+    /** Node-status sink for the resume re-verification (Codex 2026-09-11 C#5). */
+    goalStorage?: { updateNodeStatus(nodeId: never, status: never, result?: string, error?: string): void };
     /** Live framework API, read from Strada.Core / Modules / MCP themselves.
      *  A getter because the generator is wired asynchronously after this runs. */
     getFrameworkKnowledge?: () => string | null;
@@ -275,6 +277,7 @@ export function initializeSupervisorStage(
       capabilityMatcher,
       providerAssigner,
       verifyNode,
+      goalStorage: params.goalStorage as never,
     });
 
     params.logger.info("Supervisor Brain initialized", {

@@ -49,6 +49,8 @@ describe("a resumed task whose saved plan is already complete (2026-09-10 21:20)
     expect(branch).toContain("const unapproved = report.candidates - report.approved;");
     expect(branch).toContain("if (unapproved > 0) {");
     expect(branch).toContain("success: false");
+    // A rejected step is written back as failed so a retry RE-RUNS it (C#5).
+    expect(branch).toContain('this.goalStorage?.updateNodeStatus(r.nodeId, "failed"');
     expect(branch).toContain("withLivenessHeartbeat");
     expect(branch).toContain("Aborted during resume re-verification");
   });

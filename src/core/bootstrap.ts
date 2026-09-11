@@ -1329,6 +1329,7 @@ async function bootstrapImpl(
     logger,
     providerManager,
     goalDecomposer,
+    goalStorage,
     // A supervisor that failed to build must reach the boot report, not just
     // the log — the same sink the tool registry uses (audited 2026-09-02).
     onDegraded: (notice) => startupNotices.push(notice),

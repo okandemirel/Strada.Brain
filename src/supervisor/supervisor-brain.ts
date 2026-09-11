@@ -8,7 +8,7 @@
  * when the pipeline is interrupted mid-execution.
  */
 
-import type { GoalNode, GoalNodeId, GoalTree } from "../goals/types.js";
+import type { GoalNode, GoalNodeId, GoalStatus, GoalTree } from "../goals/types.js";
 import { withLivenessHeartbeat } from "../agents/liveness-hub.js";
 import { getLoggerSafe } from "../utils/logger.js";
 import type {
@@ -57,6 +57,12 @@ export interface SupervisorBrainOptions {
   readonly providerAssigner: ProviderAssigner;
   readonly eventEmitter?: { emit: (event: string, payload: unknown) => void };
   readonly verifyNode?: (node: NodeResult, context: SupervisorContext) => Promise<VerificationVerdict>;
+  /**
+   * Where a node's status lives. The resume re-verification writes a rejected
+   * step back as `failed` so a retry RE-RUNS it instead of re-verifying the
+   * same saved output forever (Codex 2026-09-11 C#5).
+   */
+  readonly goalStorage?: { updateNodeStatus(nodeId: GoalNodeId, status: GoalStatus, result?: string, error?: string): void };
 }
 
 // =============================================================================
@@ -88,6 +94,7 @@ export class SupervisorBrain {
   private readonly providerAssigner: ProviderAssigner;
   private emitter?: { emit: (event: string, payload: unknown) => void };
   private readonly verifyNode?: (node: NodeResult, context: SupervisorContext) => Promise<VerificationVerdict>;
+  private readonly goalStorage?: SupervisorBrainOptions["goalStorage"];
 
   private executeNodeFn?: (
     node: TaggedGoalNode,
@@ -102,6 +109,7 @@ export class SupervisorBrain {
     this.providerAssigner = options.providerAssigner;
     this.emitter = options.eventEmitter;
     this.verifyNode = options.verifyNode;
+    this.goalStorage = options.goalStorage;
   }
 
   // ---------------------------------------------------------------------------
@@ -456,10 +464,17 @@ export class SupervisorBrain {
                 .map((r) => `- ${String(r.nodeId)}: ${(r.output ?? "").slice(0, 200) || r.status}`)
                 .slice(0, 8)
                 .join("\n");
-              // NOTE (C#5, open): the saved GoalNodes stay "completed", so a
-              // retry re-verifies rather than re-running the rejected step. It
-              // cannot pass falsely — the rejection repeats — but self-healing
-              // needs node-status persistence this class does not own.
+              // A REJECTED step is no longer a completed checkpoint: writing
+              // it back as failed makes the next retry re-run the work rather
+              // than re-verify the same saved output (Codex 2026-09-11 C#5).
+              for (const r of verified) {
+                if (r.status === "ok") continue;
+                try {
+                  this.goalStorage?.updateNodeStatus(r.nodeId, "failed", undefined, (r.output ?? "").slice(0, 500));
+                } catch {
+                  /* persistence is best effort; the returned result still says failed */
+                }
+              }
               return {
                 ...synthesized,
                 success: false,
