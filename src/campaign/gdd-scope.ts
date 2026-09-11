@@ -37,9 +37,18 @@ export interface GddScope {
   readonly maxMilestones: number;
 }
 
-/** Headings that are document apparatus, never work. */
+/**
+ * Headings that are document apparatus, never work.
+ *
+ * The list named contents pages and glossaries but not the sections every
+ * design document OPENS with — so the ladder's first milestone was
+ * "INTRODUCTION" and a worker was asked to build one (measured live
+ * 2026-09-12). Anchored at both ends: "Introduction Cinematic" and "Scope of
+ * the Playfield" are work, and only a heading that is ENTIRELY apparatus is
+ * dropped.
+ */
 const TRIVIAL_HEADING_RE =
-  /^(?:table of contents|contents|appendix(?:\s+[a-z0-9])?|glossary|references|bibliography|changelog|change log|revision history|version history|document history|index|acknowledg(?:e)?ments|about this document|overview of this document)\b/i;
+  /^(?:table of contents|contents|appendix(?:\s+[a-z0-9])?|glossary|references|bibliography|changelog|change log|revision history|version history|document history|index|acknowledg(?:e)?ments|about this document|overview of this document|introduction|executive summary|summary|purpose|purpose of this document|scope|document conventions|conventions|terminology|credits|legal|confidentiality|disclaimer|market position|market position reference titles|reference titles|competitive analysis|prepared by|document control|sign off|approvals?)$/i;
 
 const HEADING_RE = /^\s{0,3}(#{1,3})\s+(.+?)\s*#*\s*$/;
 /** "3. Core Loop", "3.2 Scoring", "III. Art" as plain-text section lines (converted documents). */

@@ -81,3 +81,37 @@ describe("uncoveredSections", () => {
     expect(normalizeHeading("  3.2  Scoring & Combos! ")).toBe("scoring combos");
   });
 });
+
+describe("a design document's FRONT MATTER is not build work (measured live 2026-09-12)", () => {
+  it("leaves the introduction, the summary and the market section out of the ladder", () => {
+    // The live campaign's first milestone was "INTRODUCTION": the mechanical
+    // grouping turned the GDD's front matter into sprints, and a worker was
+    // asked to build an introduction. Apparatus was filtered by a list that
+    // named contents and glossaries but not the sections every design document
+    // opens with.
+    const gdd = [
+      "1. INTRODUCTION",
+      "1.1 Executive Summary",
+      "1.2 Purpose of This Document",
+      "1.3 Scope",
+      "1.5 Market Position & Reference Titles",
+      "2. GAME OVERVIEW",
+      "3. CORE GAMEPLAY SYSTEM",
+      "9. RELEASE & LIVE OPS",
+    ].join("\n");
+
+    const headings = extractHeadings(gdd);
+
+    expect(headings).toEqual(["GAME OVERVIEW", "CORE GAMEPLAY SYSTEM", "RELEASE & LIVE OPS"].map((h) => expect.stringContaining(h)));
+  });
+
+  it("keeps a section whose name only LOOKS like apparatus but names work", () => {
+    const headings = extractHeadings([
+      "2. Scope of the Playfield",
+      "4. Reference Art Pipeline",
+      "5. Introduction Cinematic",
+    ].join("\n"));
+
+    expect(headings).toHaveLength(3);
+  });
+});
