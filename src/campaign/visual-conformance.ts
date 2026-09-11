@@ -53,6 +53,20 @@ export interface LookDescription {
  * Candidates are every heading match; the winner is the LAST one whose body
  * is prose, because a document lists its sections before it writes them.
  */
+/**
+ * The art direction a gate should judge against: the document's own section
+ * when it has one, and otherwise THE WHOLE DOCUMENT.
+ *
+ * extractLookDescription requires a prose section of at least MIN_LOOK_CHARS,
+ * which a short, perfectly explicit brief fails — "Minimalist flat geometric
+ * art: use solid colored squares." is 44 characters. Dropping it refused the
+ * flat sprites the document asked for, and the only repair was to replace the
+ * requested style (Codex 2026-09-11 F#3).
+ */
+export function artDirectionText(look: LookDescription | undefined, gddText: string | undefined): string | undefined {
+  return look?.found === true && look.text ? look.text : gddText;
+}
+
 export function extractLookDescription(gddText: string): LookDescription {
   if (typeof gddText !== "string" || gddText.trim().length === 0) {
     return { found: false, reason: "the GDD text was empty" };

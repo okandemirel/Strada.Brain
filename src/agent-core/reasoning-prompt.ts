@@ -128,7 +128,7 @@ export function buildReasoningPrompt(params: {
  */
 export function parseReasoningResponse(text: string | null | undefined): ActionDecision {
   if (!text) {
-    return { action: "wait", reasoning: "No response from LLM" };
+    return { action: "wait", reasoning: "No response from LLM", unparsed: true };
   }
 
   // Extract JSON block
@@ -137,32 +137,32 @@ export function parseReasoningResponse(text: string | null | undefined): ActionD
     // Try bare JSON
     const bareMatch = text.match(/\{[\s\S]*"action"[\s\S]*\}/);
     if (!bareMatch) {
-      return { action: "wait", reasoning: "Could not parse LLM response" };
+      return { action: "wait", reasoning: "Could not parse LLM response", unparsed: true };
     }
     try {
       return validateDecision(JSON.parse(bareMatch[0]));
     } catch {
-      return { action: "wait", reasoning: "JSON parse failed" };
+      return { action: "wait", reasoning: "JSON parse failed", unparsed: true };
     }
   }
 
   try {
     return validateDecision(JSON.parse(jsonMatch[1].trim()));
   } catch {
-    return { action: "wait", reasoning: "JSON parse failed" };
+    return { action: "wait", reasoning: "JSON parse failed", unparsed: true };
   }
 }
 
 function validateDecision(raw: unknown): ActionDecision {
   if (!raw || typeof raw !== "object") {
-    return { action: "wait", reasoning: "Invalid response shape" };
+    return { action: "wait", reasoning: "Invalid response shape", unparsed: true };
   }
 
   const obj = raw as Record<string, unknown>;
   const action = String(obj.action ?? "wait");
 
   if (!VALID_ACTIONS.includes(action as ActionType)) {
-    return { action: "wait", reasoning: `Unknown action: ${action}` };
+    return { action: "wait", reasoning: `Unknown action: ${action}`, unparsed: true };
   }
 
   // Parse batchObservationIds (array of strings, max 20)

@@ -30,6 +30,7 @@ import { readPlaymodeRun } from "./playmode-run.js";
 import { assessNumericClaims, claimsRefusal, describeClaims, extractNumericClaims } from "./gdd-claims.js";
 import { deliveryReviewPrompt, renderSecondOpinion } from "../agents/review/codex-second-opinion.js";
 import {
+  artDirectionText,
   extractLookDescription,
   judgeVisualConformance,
   renderVisualConformance,
@@ -232,7 +233,13 @@ const TURKISH_STALL_RE = /Görev ilerleme kaydetmeden takıldı/i;
 
 /** A player run that says THIS MACHINE cannot execute the artifact. */
 export const UNRUNNABLE_HERE_RE =
-  /\b(?:exec format error|not supported on this (?:platform|host)|unsupported (?:artifact|platform|target|host)|requires (?:a|an) (?:device|emulator|simulator)|no player runner is configured|cannot be executed on this (?:platform|host|machine))\b/i;
+  // "no player runner is configured" is NOT here: a runner this deployment
+  // never set up is our own gap, and treating it as host incapability waived
+  // playing the game entirely — delivery reached `done` with an artifact
+  // nobody had run (Codex 2026-09-11 F#12). It stays in UNMEASURABLE_PROOF_RE
+  // below, so the campaign revives twice and then asks a person, which is the
+  // honest end for a missing tool.
+  /\b(?:exec format error|not supported on this (?:platform|host)|unsupported (?:artifact|platform|target|host)|requires (?:a|an) (?:device|emulator|simulator)|cannot be executed on this (?:platform|host|machine))\b/i;
 /** Missing proofs that describe absent TOOLING rather than a broken game. */
 /**
  * Missing proofs whose reason is absent TOOLING. Matched against the campaign's
@@ -3444,7 +3451,7 @@ export class CampaignManager {
     // never reached a legitimately minimal GDD (Codex 2026-09-11 C#19).
     const gddText = this.gddTextOf(campaign) ?? "";
     const look = extractLookDescription(gddText);
-    const artDirection = look.found && look.text !== undefined ? look.text : gddText;
+    const artDirection = artDirectionText(look, gddText) ?? "";
     if (asksForFlatArt(artDirection)) return undefined;
     const now = this.measurePlaceholderArt(campaign);
     if (!now) return undefined;
@@ -3490,7 +3497,15 @@ export class CampaignManager {
       const look = gddText ? extractLookDescription(gddText) : undefined;
       const report = assessBuiltAsSpecified(this.projectRoot, undefined, {
         runtime: this.latestRuntimeEvidence(campaign),
-        ...(look?.found && look.text ? { artDirection: look.text } : {}),
+        // The WHOLE DOCUMENT when its art-direction section is too short to
+        // pass extractLookDescription's prose floor. "Minimalist flat
+        // geometric art: use solid colored squares." is 44 characters, and
+        // dropping it refused the ten flat sprites the document asked for —
+        // forever, since the repair is to replace the requested style (Codex
+        // 2026-09-11 F#3). The same fallback the numeric-claims path uses.
+        ...(artDirectionText(look, gddText) !== undefined
+          ? { artDirection: artDirectionText(look, gddText)! }
+          : {}),
       });
       // Sound, motion and effects (2026-09-10): the GDD's cue list and
       // animation brief against what the shipped scenes carry. Refuses only

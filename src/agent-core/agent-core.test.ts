@@ -4,6 +4,7 @@ import { ObservationEngine } from "./observation-engine.js";
 import { PriorityScorer } from "./priority-scorer.js";
 import { createObservation } from "./observation-types.js";
 import { parseReasoningResponse, buildReasoningPrompt } from "./reasoning-prompt.js";
+import { readFileSync } from "node:fs";
 import { BuildStateObserver } from "./observers/build-state-observer.js";
 import { createLogger } from "../utils/logger.js";
 
@@ -491,5 +492,28 @@ describe("workspacePolicyFor — reporting on the tree, or building in it (Codex
     // No git observation, or a goal that is not about the tree: lease as usual.
     expect(workspacePolicyFor([{ source: "build" }], "Investigate the uncommitted changes")).toEqual({});
     expect(workspacePolicyFor(git, "Investigate the failing build")).toEqual({});
+  });
+});
+
+describe("parseReasoningResponse marks a reply it could not read (Codex 2026-09-11 F#13)", () => {
+  it("separates a malformed answer from a deliberate wait", () => {
+    for (const text of ["", null, undefined, "I think we should hold off for now.", '```json\n{"action":"wait"\n```', '```json\n{"action":"fly"}\n```']) {
+      const decision = parseReasoningResponse(text as string | null | undefined);
+      expect(decision.action).toBe("wait");
+      expect(decision.unparsed).toBe(true);
+    }
+    // A real wait is a decision and carries no flag.
+    const real = parseReasoningResponse('```json\n{"action":"wait","reasoning":"nothing actionable"}\n```');
+    expect(real).toMatchObject({ action: "wait", reasoning: "nothing actionable" });
+    expect(real.unparsed).toBeUndefined();
+  });
+
+  it("puts the observations back rather than consuming them on an unreadable reply", () => {
+    const source = readFileSync("src/agent-core/agent-core.ts", "utf8");
+    const at = source.indexOf('case "wait":');
+    expect(at).toBeGreaterThan(0);
+    const block = source.slice(at, at + 900);
+    expect(block).toContain("decision.unparsed === true");
+    expect(block).toContain('this.requeueUnacted(batch, "unparsed-decision"');
   });
 });

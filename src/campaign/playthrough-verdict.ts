@@ -76,7 +76,16 @@ export function readPlaythroughVerdict(projectRoot: string, sinceMs: number, rel
   if (mtimeMs + 2 < sinceMs) return { found: false, stale: true };
   let parsed: VerdictFile;
   try {
-    parsed = JSON.parse(readFileSync(path, "utf8")) as VerdictFile;
+    const raw: unknown = JSON.parse(readFileSync(path, "utf8"));
+    // `null`, a number, an array: JSON.parse accepts all of them, and the
+    // first property read THREW out of this reader into the settlement chain,
+    // which logged it after the milestone had already been persisted green —
+    // campaign executing, zero submissions, no recovery timer, and the same
+    // exception on every boot (Codex 2026-09-11 F#4).
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+      return { found: false, unreadable: true };
+    }
+    parsed = raw as VerdictFile;
   } catch {
     return { found: false, unreadable: true };
   }

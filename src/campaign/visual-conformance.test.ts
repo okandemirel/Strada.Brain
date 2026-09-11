@@ -6,8 +6,7 @@ import {
   extractLookDescription,
   judgeVisualConformance,
   renderVisualConformance,
-  selectGameplayFrame,
-} from "./visual-conformance.js";
+  selectGameplayFrame, artDirectionText } from "./visual-conformance.js";
 
 const dirs: string[] = [];
 function tmp(): string { const d = mkdtempSync(join(tmpdir(), "vc-")); dirs.push(d); return d; }
@@ -145,5 +144,22 @@ describe("the judgement", () => {
     });
     expect(result.status).toBe("not-checked");
     expect(result.detail).toContain("429");
+  });
+});
+
+describe("artDirectionText — the document speaks even when its section is short (Codex 2026-09-11 F#3)", () => {
+  it("prefers the extracted section and falls back to the whole document", () => {
+    const gdd = "## Art Direction\nMinimalist flat geometric art: use solid colored squares.\n";
+    const look = extractLookDescription(gdd);
+    // The section is far shorter than the prose floor, so extraction declines…
+    expect(look.found).toBe(false);
+    // …and the gate still gets the document's own words.
+    expect(artDirectionText(look, gdd)).toBe(gdd);
+    // A section long enough to extract wins over the whole document.
+    const long = `## Art Direction\n${"Hand-painted watercolour backdrops with visible brush texture, warm ochre and teal, soft edges everywhere and no hard outlines. ".repeat(3)}\n`;
+    const found = extractLookDescription(long);
+    expect(found.found).toBe(true);
+    expect(artDirectionText(found, long)).toBe(found.text);
+    expect(artDirectionText(undefined, undefined)).toBeUndefined();
   });
 });

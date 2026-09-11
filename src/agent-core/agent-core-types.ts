@@ -19,6 +19,13 @@ export interface ActionDecision {
   readonly batchObservationIds?: string[];  // For "batch"
   readonly deferMinutes?: number;           // For "defer"
   readonly adjustments?: AdjustmentSpec;    // For "adjust"
+  /**
+   * True when this "wait" is NOT a decision: the response was empty,
+   * unparseable, or the wrong shape. A parse failure used to be indistinguishable
+   * from a deliberate wait, so one malformed reply consumed the batch and the
+   * observation it carried was never acted on (Codex 2026-09-11 F#13).
+   */
+  readonly unparsed?: true;
 }
 
 export interface AgentCoreConfig {

@@ -336,7 +336,20 @@ export class AgentCore {
           break;
 
         case "wait":
-          // Intentionally idle
+          // Intentionally idle — unless nothing decided it. A reply that could
+          // not be parsed is not a choice to wait, and marking the batch
+          // consumed threw away the observation it described: the observer had
+          // already recorded the failure as reported, so the repair never
+          // happened (Codex 2026-09-11 F#13).
+          if (decision.unparsed === true) {
+            this.logger.warn("AgentCore could not read its own reasoning — the observations go back in the queue", {
+              reasoning: decision.reasoning,
+              observations: batch.length,
+            });
+            this.requeueUnacted(batch, "unparsed-decision", UNACTED_BATCH_RECHECK_MINUTES);
+            consumed = true;
+            return;
+          }
           break;
       }
       // Every ACT arm above ran to completion on this batch (an LLM "wait" is a decision too).

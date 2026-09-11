@@ -2535,6 +2535,12 @@ describe("CampaignManager", () => {
     // A corrupt build is not a host limitation.
     expect(UNRUNNABLE_HERE_RE.test("Cannot run player: Game_Data is missing")).toBe(false);
     expect(UNRUNNABLE_HERE_RE.test("the player crashed on launch")).toBe(false);
+    // …and NEITHER IS OUR OWN MISSING TOOL. Treating an unconfigured runner as
+    // host incapability waived playing the game and reached `done` with an
+    // artifact nobody had run (Codex 2026-09-11 F#12). It is still an
+    // unmeasurable proof, so the campaign revives and then asks a person.
+    expect(UNRUNNABLE_HERE_RE.test("no player runner is configured")).toBe(false);
+    expect(UNMEASURABLE_PROOF_RE.test("no player runner is configured")).toBe(true);
   });
 
   it("a proof this MACHINE cannot produce stops the campaign and asks a person, instead of reviving forever (Codex 2026-09-11 C#2)", async () => {

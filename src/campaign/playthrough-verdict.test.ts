@@ -168,3 +168,13 @@ describe("a session record that omits its fields keeps them omitted (Codex 2026-
     expect(parsed.sessions?.[1]).toEqual({ index: 1, outcome: "Won", actions: 4, seconds: 2 });
   });
 });
+
+describe("a verdict file that is not an object wedged the settlement (Codex 2026-09-11 F#4)", () => {
+  it("returns unreadable instead of throwing, for every non-object JSON", () => {
+    for (const body of ["null", "7", "[]", '"ok"', "{"]) {
+      write(body);
+      expect(() => readPlaythroughVerdict(root, 0)).not.toThrow();
+      expect(readPlaythroughVerdict(root, 0)).toMatchObject({ found: false, unreadable: true });
+    }
+  });
+});
