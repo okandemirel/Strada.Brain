@@ -333,13 +333,28 @@ export class CampaignPlanner {
    */
   private async planInStages(system: string, userMessage: string, scope: GddScope): Promise<MilestoneLadder> {
     if (!this.provider) throw new Error("campaign planning requires an LLM provider");
+    // THE HEADINGS, NOT THE DOCUMENT. Sending the whole GDD and asking to
+    // "cover every section" invited the model to enumerate all eighty headings
+    // inside its reasoning and never answer (measured live 2026-09-12 01:10).
+    // They are already measured; grouping a given list is a small answer.
+    const headingList = scope.headings.map((h, i) => `${i + 1}. ${h}`).join("\n");
     const titlesAsk =
-      `${userMessage}\n\nAnswer in TWO STEPS. This is step one: the TITLES ONLY.\n` +
-      `Reply with this JSON and nothing else — no prose, no <reasoning>, no markdown fence:\n` +
-      `{"milestones":[{"title":"…","coveredSections":["…"]}]}\n` +
-      `Between ${scope.minMilestones} and ${scope.maxMilestones} milestones. No "prompt" field in this step.`;
-    const titlesReply = await streamOrChatText(this.provider, system, titlesAsk, { maxTokens: CampaignPlanner.STAGE_OUTPUT_TOKENS });
-    const titles = this.readStagedTitles(titlesReply.text ?? "");
+      `These are the section headings of the game's design document, in order:\n${headingList}\n\n` +
+      `Group them into between ${scope.minMilestones} and ${scope.maxMilestones} build milestones, in order, ` +
+      `each covering consecutive headings. Reply with this JSON and NOTHING else — no prose, no <reasoning>, no fence:\n` +
+      `{"milestones":[{"title":"…","coveredSections":["…"]}]}`;
+    let titles = this.readStagedTitles(
+      (await streamOrChatText(this.provider, system, titlesAsk, { maxTokens: CampaignPlanner.STAGE_OUTPUT_TOKENS })).text ?? "",
+    );
+    if (titles.length < 2) {
+      // THE DOCUMENT'S OWN SHAPE. A ladder does not need a model to exist: the
+      // GDD's top-level sections are milestones, and a model that cannot
+      // group a list can still write one sprint instruction at a time.
+      titles = groupHeadingsIntoMilestones(scope);
+      getLoggerSafe().warn("Staged planning grouped the GDD's headings itself — the model returned no titles", {
+        milestones: titles.length,
+      });
+    }
     if (titles.length < 2) throw new Error("staged planning: no milestone titles");
 
     const milestones: MilestoneLadder["milestones"] = [];
@@ -600,6 +615,33 @@ export function balancedJsonObjects(text: string): string[] {
     }
   }
   return out;
+}
+
+/**
+ * The GDD's own shape as a ladder: consecutive headings in equal groups,
+ * named by the first heading of each group.
+ *
+ * A ladder does not need a model to exist. When one cannot even group a list
+ * of headings, this keeps the campaign moving and the model is asked only for
+ * one sprint instruction at a time (measured live 2026-09-12).
+ */
+export function groupHeadingsIntoMilestones(scope: GddScope): Array<{ title: string; coveredSections: string[] }> {
+  const headings = scope.headings.filter((h) => h.trim().length > 0);
+  if (headings.length === 0) return [];
+  const target = Math.max(2, Math.min(scope.maxMilestones, Math.max(scope.minMilestones, Math.ceil(headings.length / 5))));
+  const perGroup = Math.ceil(headings.length / target);
+  const out: Array<{ title: string; coveredSections: string[] }> = [];
+  for (let i = 0; i < headings.length; i += perGroup) {
+    const group = headings.slice(i, i + perGroup);
+    const first = group[0]!;
+    out.push({
+      // "3. CORE GAMEPLAY SYSTEM" → "Core gameplay system", with the number
+      // dropped: a milestone title is a name, not a table-of-contents row.
+      title: first.replace(/^\s*[\d.]+\s*/, "").slice(0, 200) || first.slice(0, 200),
+      coveredSections: group.slice(0, 40),
+    });
+  }
+  return out.slice(0, scope.maxMilestones);
 }
 
 function extractJsonObject(raw: string): string | undefined {

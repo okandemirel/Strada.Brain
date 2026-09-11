@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { balancedJsonObjects, CampaignPlanner } from "./campaign-planner.js";
+import { balancedJsonObjects, CampaignPlanner, groupHeadingsIntoMilestones } from "./campaign-planner.js";
 
 /**
  * Measured live 2026-09-12 00:42: the campaign failed at its very first step
@@ -118,7 +118,11 @@ describe("reading a milestone ladder out of a reply", () => {
         call += 1;
         // The two whole-ladder attempts never reach the JSON.
         if (call <= 2) return reply("<reasoning>\nLet me enumerate the headings first.");
-        if (ask.includes("TITLES ONLY")) {
+        if (ask.includes("Group them into between")) {
+          // The headings themselves are in the ask — grouping a given list is
+          // a small answer, unlike "read this GDD and cover every section".
+          expect(ask).toContain("3. CORE GAMEPLAY");
+          expect(ask).toContain("9. RELEASE");
           return reply(JSON.stringify({ milestones: [
             { title: "Core loop", coveredSections: ["3. CORE GAMEPLAY"] },
             { title: "Delivery", coveredSections: ["9. RELEASE"] },
@@ -149,7 +153,7 @@ describe("reading a milestone ladder out of a reply", () => {
         const ask = String(messages.at(-1)?.content ?? "");
         call += 1;
         if (call <= 2) return reply("<reasoning>\nthinking");
-        if (ask.includes("TITLES ONLY")) {
+        if (ask.includes("Group them into between")) {
           return reply(JSON.stringify({ milestones: [
             { title: "One", coveredSections: [] },
             { title: "Two", coveredSections: [] },
@@ -167,21 +171,38 @@ describe("reading a milestone ladder out of a reply", () => {
     expect(result.milestones.map((m) => m.title)).toEqual(["One", "Three"]);
   });
 
-  it("two titles are the floor: one is not a ladder", async () => {
+  it("the ladder exists even when the model can group nothing — the GDD's own sections are it", async () => {
+    // A model that returns no titles at all does not end the campaign: the
+    // headings are already measured, and it is asked only for one sprint
+    // instruction at a time (measured live 2026-09-12 01:10).
     const reply = (text: string) => ({ text, toolCalls: [], stopReason: "end_turn", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } });
-    let call = 0;
     const provider = {
       name: "test",
       capabilities: { maxTokens: 4096, streaming: false, structuredStreaming: false, toolCalling: false, vision: false, systemPrompt: true },
-      chat: vi.fn(async () => {
-        call += 1;
-        if (call <= 2) return reply("<reasoning>\nthinking");
-        return reply(JSON.stringify({ milestones: [{ title: "Only one", coveredSections: [] }] }));
+      chat: vi.fn(async (_s: string, messages: Array<{ content: string }>) => {
+        const ask = String(messages.at(-1)?.content ?? "");
+        if (ask.includes("step two")) {
+          return reply("Build this section's systems in the project and verify them in PlayMode before reporting.");
+        }
+        return reply("<reasoning>\nI should enumerate every heading first…");
       }),
     };
 
-    await expect(
-      new CampaignPlanner(provider as never).planMilestones("# GDD\n\n## 3. CORE\nRules.\n", "docs/GDD.md"),
-    ).rejects.toThrow();
+    const result = await new CampaignPlanner(provider as never)
+      .planMilestones("# GDD\n\n## 3. CORE GAMEPLAY\nRules.\n\n## 5. CONTENT\nLevels.\n\n## 9. RELEASE\nShip.\n", "docs/GDD.md");
+
+    expect(result.milestones.length).toBeGreaterThanOrEqual(2);
+    expect(result.milestones.every((m) => m.prompt.length >= 40)).toBe(true);
+  });
+
+  it("groups the GDD's headings into a ladder without asking anyone", () => {
+    const scope = { headings: ["1. INTRO", "2. CORE", "3. CONTENT", "4. META", "5. RELEASE"], elements: 0, screens: 0, asks: {} as never, minMilestones: 2, maxMilestones: 4 };
+    const grouped = groupHeadingsIntoMilestones(scope as never);
+
+    expect(grouped.length).toBeGreaterThanOrEqual(2);
+    expect(grouped.flatMap((g) => g.coveredSections)).toEqual(scope.headings);
+    // The number is a table-of-contents row, not a milestone name.
+    expect(grouped[0]!.title).not.toMatch(/^\d/);
+    expect(groupHeadingsIntoMilestones({ ...scope, headings: [] } as never)).toEqual([]);
   });
 });
