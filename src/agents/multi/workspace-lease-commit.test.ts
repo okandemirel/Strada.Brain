@@ -809,6 +809,31 @@ describe("lease commit replay (measured 2026-09-10: three worker commits danglin
   const git = (cwd: string, cmd: string) =>
     execSync(`git -c user.email=w@x -c user.name=worker ${cmd}`, { cwd, encoding: "utf8" }).trim();
 
+  it("does not replay a version the worker took back (Codex 2026-09-11 N#8)", async () => {
+    // The worker committed version B, then restored A without committing.
+    // Copy-back writes A (or nothing, when the project already has it) and the
+    // replay recorded B — a project commit describing a deliverable the
+    // working tree does not have.
+    makeGitRepo();
+    const lease = await gitManager().acquireLease({ label: "t" });
+    const inLease = join(lease.path, "Assets", "Scripts", "Board.cs");
+    writeFileSync(inLease, "version B", "utf8");
+    git(lease.path, "add -A");
+    git(lease.path, 'commit -q -m "feat: board B"');
+    writeFileSync(inLease, "version A", "utf8"); // taken back, never committed
+
+    const result = await lease.commit();
+    await lease.release();
+
+    // Whatever the commit says, it may not claim B.
+    const headTree = git(source, "show --name-only --format= HEAD");
+    if (headTree.includes("Board.cs")) {
+      expect(git(source, "show HEAD:Assets/Scripts/Board.cs")).toBe("version A");
+    }
+    expect(readFileSync(join(source, "Assets", "Scripts", "Board.cs"), "utf8")).toBe("version A");
+    expect(result.commitsReplayed?.replayed ?? 0).toBeLessThanOrEqual(1);
+  });
+
   it("replays the agent's commits onto the project's HEAD, in order, with author, message and content", async () => {
     makeGitRepo();
     writeFileSync(join(source, "Assets", "Scripts", "Wip.cs"), "user wip", "utf8"); // uncommitted → becomes the seed commit
