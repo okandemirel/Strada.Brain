@@ -13,7 +13,7 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
-import { decideAutoResume, MAX_AUTO_RESUMES, MAX_AUTO_REPLANS , decideMissionKeepAlive } from "./auto-resume.js";
+import { decideAutoResume, MAX_AUTO_RESUMES, MAX_AUTO_REPLANS , decideMissionKeepAlive, stripRetryMachinery } from "./auto-resume.js";
 
 describe("picking a blocked goal back up", () => {
   it("retries the first block even when nothing succeeded", () => {
@@ -157,5 +157,26 @@ describe("mission keep-alive — only time and budget may stop a mission", () =>
     const d = decideMissionKeepAlive(1, { budgetExceeded: true });
     expect(d.action).toBe("report");
     expect(d.reportReason).toMatch(/budget/i);
+  });
+});
+
+describe("stripRetryMachinery", () => {
+  // The keep-alive writes its bookkeeping into the task's RESULT, which is
+  // also what a replay prompt quotes back as "previous attempt progress".
+  // Measured 2026-09-11: the restart-carry sentence was added to the block
+  // text and to two of the three strip sites, and reached the replay prompt
+  // from the third.
+  it("removes every sentence the keep-alive writes, and keeps the work's own words", () => {
+    const cleaned = stripRetryMachinery(
+      "Transient failure — worker crashed. Auto-retry 9/10 in ~600s. Restart re-arm — failure retries still at 8/10.",
+    );
+    expect(cleaned).toBe("worker crashed.");
+    expect(stripRetryMachinery("Reaped: no progress signal for 60 minutes. Placeholders now 231."))
+      .toBe("Placeholders now 231.");
+  });
+
+  it("leaves a real report alone", () => {
+    const report = "Sprint 3 delivered: 24 sprites replaced, measured placeholderSprites 231.";
+    expect(stripRetryMachinery(report)).toBe(report);
   });
 });

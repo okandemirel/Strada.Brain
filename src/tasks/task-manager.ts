@@ -10,6 +10,7 @@ import { EventEmitter } from "node:events";
 import type { Task, TaskId, TaskProgressUpdate } from "./types.js";
 import { TaskStatus, ACTIVE_STATUSES, TERMINAL_STATUSES, generateTaskId, getTaskConversationKey } from "./types.js";
 import { getTaskProgressMessage, toTaskProgressSignal } from "./progress-signals.js";
+import { stripRetryMachinery } from "./auto-resume.js";
 import type { TaskStorage } from "./task-storage.js";
 import type { IBackgroundExecutor, IOrchestrator } from "./orchestrator-contract.js";
 import { getLogger } from "../utils/logger.js";
@@ -659,11 +660,7 @@ export class TaskManager extends EventEmitter {
       if (!latest) return "";
       const checkpoint = this.checkpointStore?.loadByTaskIdSync?.(latest.id);
       const touched = (checkpoint?.touchedFiles ?? []).slice(0, 30);
-      const resultTail = (latest.result ?? "")
-        .replace(/Reaped:[^.]*\./g, "")
-        .replace(/Auto-retry \d+\/\d+ in ~\d+s\.?/g, "")
-        .trim()
-        .slice(-400);
+      const resultTail = stripRetryMachinery(latest.result ?? "").slice(-400);
       if (touched.length === 0 && !resultTail) return "";
       const lines: string[] = ["\n\nPREVIOUS ATTEMPT PROGRESS (verify before redoing any of it):"];
       if (touched.length > 0) {

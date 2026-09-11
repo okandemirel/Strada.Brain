@@ -18,6 +18,7 @@ import type { IncomingMessage } from "../channels/channel-messages.interface.js"
 import type { TaskManager } from "../tasks/task-manager.js";
 import type { TaskId } from "../tasks/types.js";
 import { ACTIVE_STATUSES, TaskStatus } from "../tasks/types.js";
+import { stripRetryMachinery } from "../tasks/auto-resume.js";
 import type { CampaignPlanner } from "./campaign-planner.js";
 import { GDD_AUDIT_FULL_CHARS } from "./campaign-planner.js";
 import type { CampaignStorage } from "./campaign-storage.js";
@@ -2684,12 +2685,7 @@ export class CampaignManager {
       // The failure tail is retry CONTEXT, not history: keep exactly one, and
       // strip retry-machinery noise ("Reaped: …", "Auto-retry n/m in ~Xs")
       // that names the executor's plumbing instead of the sprint's problem.
-      const cleaned = output
-        .replace(/Reaped:[^.]*\./g, "")
-        .replace(/Auto-retry \d+\/\d+ in ~\d+s\.?/g, "")
-        .replace(/Restart re-arm — failure retries still at \d+\/\d+\.?/g, "")
-        .replace(/Transient failure —\s*/g, "")
-        .trim();
+      const cleaned = stripRetryMachinery(output);
       // The strip must match the tail as APPENDED below. Audited 2026-09-02:
       // it ended on "do not repeat it." while the append continues "do not
       // repeat it — and do NOT spend…", so it never matched and every revived

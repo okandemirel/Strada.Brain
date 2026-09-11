@@ -84,6 +84,25 @@ export function decideAutoResume(
  */
 export const MAX_MISSION_RETRIES = 10;
 
+/**
+ * The keep-alive's OWN sentences, removed wherever a task's result is fed back
+ * to a model as context. "Transient failure — worker crashed. Auto-retry 9/10
+ * in ~600s. Restart re-arm — failure retries still at 8/10." describes the
+ * executor's plumbing, not the work; quoting it told the next run to continue
+ * from a retry countdown. One function because the same text is stripped at
+ * three call sites and a pattern added to two of them is a leak in the third
+ * (measured 2026-09-11: the restart-carry sentence reached the replay prompt).
+ */
+export function stripRetryMachinery(text: string): string {
+  return text
+    .replace(/Reaped:[^.]*\./g, "")
+    .replace(/Auto-retry \d+\/\d+ in ~\d+s\.?/g, "")
+    .replace(/Restart re-arm — failure retries still at \d+\/\d+\.?/g, "")
+    .replace(/Transient failure —\s*/g, "")
+    .trim();
+}
+
+
 /** Backoff between mission retries: 30s doubling, capped at 10 minutes. */
 export function missionRetryBackoffMs(attempt: number): number {
   return Math.min(30_000 * 2 ** Math.max(0, attempt), 600_000);
