@@ -286,6 +286,9 @@ describe("CampaignManager", () => {
       retryAdoptionGraceMs: 10,
       completedSettleDelayMs: 0,
       milestoneTimeBoxMs: 60 * 60_000,
+      // The bounded self-revival of an implementation failure, driven in real
+      // time by the tests below (Codex 2026-09-11 F#1).
+      implementationReviveDelayMs: 10,
     });
     manager.attachEvents();
   });
@@ -294,6 +297,28 @@ describe("CampaignManager", () => {
     storage.close();
     rmSync(dir, { recursive: true, force: true });
   });
+
+  /**
+   * Fail the current sprint until the campaign STOPS — through its bounded
+   * self-revivals with a changed approach (Codex 2026-09-11 F#1), so a test
+   * that means "a spent budget ends the campaign" still means it.
+   */
+  const failUntilStopped = async (campaignId: string, reason: string): Promise<void> => {
+    for (let round = 0; round < 12; round++) {
+      const current = storage.get(campaignId)!;
+      // A campaign that is `failed` WITH a revival armed has not stopped: the
+      // self-revival keeps the state until its timer fires (F#1).
+      if ((current.state === "failed" && !current.autoReviveAt) || current.state === "done") return;
+      const submitted = tasks.submitted.length;
+      tasks.emit("task:failed", `task_${submitted}`, reason);
+      await vi.waitFor(() => {
+        const after = storage.get(campaignId)!;
+        const stopped = after.state === "failed" && !after.autoReviveAt;
+        expect(stopped || tasks.submitted.length > submitted).toBe(true);
+      }, { timeout: 5_000 });
+    }
+    throw new Error(`campaign ${campaignId} never stopped after 12 failed rounds`);
+  };
 
   const settleMilestone = (result: string) => {
     const last = tasks.submitted.length;
@@ -349,9 +374,16 @@ describe("CampaignManager", () => {
     expect(tasks.submitted[1]!.prompt).toContain("compile exploded");
 
     tasks.emit("task:failed", "task_2", "compile exploded again");
+    // The spent budget is not the end any more: the campaign self-revives
+    // with a changed approach, twice, and THEN stops (Codex 2026-09-11 F#1).
     await vi.waitFor(() => {
-      expect(storage.get(campaign.id)!.state).toBe("failed");
+      expect(messages.some((m) => m.text.includes("Retrying with a changed approach"))).toBe(true);
     });
+    await vi.waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(2));
+    expect(tasks.submitted.at(-1)!.prompt).toContain("Do NOT repeat that approach");
+    await failUntilStopped(campaign.id, "compile exploded again");
+    expect(storage.get(campaign.id)!.state).toBe("failed");
+    expect(storage.get(campaign.id)!.autoReviveAt).toBeUndefined();
     expect(messages.at(-1)!.text).toContain("Campaign stopped");
   });
 
@@ -2176,12 +2208,14 @@ describe("CampaignManager", () => {
     await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
     tasks.emit("task:failed", "task_1", "boom");
     await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
-    tasks.emit("task:failed", "task_2", "boom again");
-    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"));
+    // Through the bounded self-revivals first (Codex 2026-09-11 F#1) — only a
+    // campaign that has spent those stops and waits for a person.
+    await failUntilStopped(campaign.id, "boom again");
 
+    const beforeRevive = tasks.submitted.length;
     const consumed = await manager.tryHandleRevive("cli-local", "kampanya devam");
     expect(consumed).toBe(true);
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    await vi.waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(beforeRevive));
     const fresh = storage.get(campaign.id)!;
     expect(fresh.state).toBe("executing");
     expect(fresh.milestones[0]!.attempts).toBe(1); // fresh budget, one new attempt
@@ -2514,7 +2548,11 @@ describe("CampaignManager", () => {
     const unmeasurable = (m: string) => (manager as unknown as { constructor: unknown }) && UNMEASURABLE_PROOF_RE.test(m);
     // The campaign's own wording for absent tooling.
     expect(unmeasurable("the compile check did not run: no compile verifier is configured")).toBe(true);
-    expect(unmeasurable("no test run was observed")).toBe(true);
+    expect(unmeasurable("no test verifier is configured")).toBe(true);
+    // …but a suite nobody RAN is missing work, not missing tooling: three such
+    // rounds used to escalate as an infrastructure verdict while the tools were
+    // present and working (Codex 2026-09-11 F#5).
+    expect(unmeasurable("no test run was observed")).toBe(false);
     expect(unmeasurable("the player build did not run: unity_build_player is not registered")).toBe(true);
     // A GAME defect, whatever words it uses.
     expect(unmeasurable("play-through: IPlaythroughDriver is not registered in the service container")).toBe(false);
@@ -2523,7 +2561,8 @@ describe("CampaignManager", () => {
 
     // ANY unmeasurable proof counts: requiring ALL of them let one
     // game-shaped proof beside it reset the counter forever (D#3).
-    expect(hasUnmeasurableProof(["no test run was observed", "the project does not compile (3 error(s))"])).toBe(true);
+    expect(hasUnmeasurableProof(["no test verifier is configured", "the project does not compile (3 error(s))"])).toBe(true);
+    expect(hasUnmeasurableProof(["no test run was observed", "the project does not compile (3 error(s))"])).toBe(false);
     expect(hasUnmeasurableProof(["the project does not compile (3 error(s))"])).toBe(false);
     expect(hasUnmeasurableProof([])).toBe(false);
   });
@@ -3149,10 +3188,10 @@ describe("CampaignManager", () => {
     await vi.waitFor(() => expect(tasks.submitted).toHaveLength(5));
     expect(storage.get(campaign.id)!.milestones[2]!.deliveryVerificationBounces).toBe(2);
 
-    tasks.emit("task:failed", "task_5", "boom");
-    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"));
+    await failUntilStopped(campaign.id, "boom");
+    const beforeRevive = tasks.submitted.length;
     expect(await manager.tryHandleRevive("cli-local", "kampanya devam")).toBe(true);
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(6));
+    await vi.waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(beforeRevive));
 
     const revived = storage.get(campaign.id)!.milestones[2]!;
     expect(revived.deliveryVerificationBounces ?? 0).toBe(0);
@@ -3160,8 +3199,9 @@ describe("CampaignManager", () => {
 
     // And the gate can actually fire again: a completion with no verdict is
     // bounced instead of delivering.
-    tasks.emit("task:completed", "task_6", "shipping it after revive");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(7));
+    const beforeBounce = tasks.submitted.length;
+    tasks.emit("task:completed", `task_${beforeBounce}`, "shipping it after revive");
+    await vi.waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(beforeBounce));
     expect(storage.get(campaign.id)!.state).toBe("executing");
   });
 
@@ -3183,11 +3223,11 @@ describe("CampaignManager", () => {
     expect(storage.get(campaign.id)!.milestones[2]!.deliveryVerificationBounced).toBe(true);
     tasks.emit("task:failed", "task_4", "boom");
     await vi.waitFor(() => expect(tasks.submitted).toHaveLength(5));
-    tasks.emit("task:failed", "task_5", "boom again");
-    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"));
+    await failUntilStopped(campaign.id, "boom again");
 
+    const submittedBeforeRevive = tasks.submitted.length;
     expect(await manager.tryHandleRevive("cli-local", "kampanya devam")).toBe(true);
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(6));
+    await vi.waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(submittedBeforeRevive));
     const revived = storage.get(campaign.id)!.milestones[2]!;
     expect(revived.deliveryVerificationBounced).toBe(false);
     expect(revived.visualEvidenceBounced).toBe(false);
@@ -3200,8 +3240,9 @@ describe("CampaignManager", () => {
     // directive this manager appended armed a gate the planner never asked
     // for and spent a spurious bounce first. The gate now reads the planner's
     // recorded demand (audited 2026-09-04), so one completion is one bounce.
-    tasks.emit("task:completed", "task_6", "shipping it after revive");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(7));
+    const beforeBounce = tasks.submitted.length;
+    tasks.emit("task:completed", `task_${beforeBounce}`, "shipping it after revive");
+    await vi.waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(beforeBounce));
     expect(storage.get(campaign.id)!.state).toBe("executing");
     expect(storage.get(campaign.id)!.milestones[2]!.deliveryVerificationBounced).toBe(true);
   });
@@ -3410,27 +3451,30 @@ describe("CampaignManager", () => {
     await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
     tasks.emit("task:failed", "task_1", "boom");
     await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
-    tasks.emit("task:failed", "task_2", "boom again");
-    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"));
+    await failUntilStopped(campaign.id, "boom again");
 
     // The parked milestone carries a deferral clock from a long-ago wall.
     const parked = storage.get(campaign.id)!;
     parked.milestones[0]!.reconcileDeferredSince = Date.now() - 25 * 60 * 60_000;
     storage.save(parked);
 
+    const beforeRevive = tasks.submitted.length;
     expect(await manager.tryHandleRevive("cli-local", "kampanya devam")).toBe(true);
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    await vi.waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(beforeRevive));
     expect(storage.get(campaign.id)!.milestones[0]!.attempts).toBe(1);
 
     // The revived attempt's very first reap: the executor promises a retry.
-    tasks.emit("task:blocked", "task_3", "Reaped: no progress for 15m. Auto-retry 2/10 in ~600s.");
+    tasks.emit("task:blocked", `task_${tasks.submitted.length - 1}`, "Reaped: no progress for 15m. Auto-retry 2/10 in ~600s.");
     await new Promise((r) => setTimeout(r, 250));
 
     const fresh = storage.get(campaign.id)!;
-    expect(tasks.submitted).toHaveLength(3); // deferred, not resubmitted
+    expect(tasks.submitted.length).toBe(beforeRevive + 1); // deferred, not resubmitted
     expect(fresh.state).toBe("executing");
     expect(fresh.milestones[0]!.attempts).toBe(1); // not charged
-    expect(fresh.milestones[0]!.reconcileDeferredSince).toBeGreaterThan(Date.now() - 60_000);
+    // The clock was reset by the fresh attempt and the reap deferred against
+    // it, so it is either freshly stamped or cleanly absent — never the
+    // 25-hour-old value the revived attempt inherited.
+    expect(fresh.milestones[0]!.reconcileDeferredSince ?? Date.now()).toBeGreaterThan(Date.now() - 60_000);
   });
 
   it("a double-tapped approval plans ONE ladder and starts ONE sprint", async () => {
@@ -3519,18 +3563,24 @@ describe("CampaignManager", () => {
     await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
     tasks.emit("task:failed", "task_1", "compile exploded in Board.cs");
     await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
-    tasks.emit("task:failed", "task_2", "compile exploded in Board.cs again");
-    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"));
+    await failUntilStopped(campaign.id, "compile exploded in Board.cs again");
 
+    const beforeRevive = tasks.submitted.length;
     expect(await manager.tryHandleRevive("cli-local", "kampanya devam")).toBe(true);
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
-    tasks.emit("task:failed", "task_3", "PlayMode red: 3 of 9 tests failed");
-    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(4));
+    await vi.waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(beforeRevive));
+    const beforeRed = tasks.submitted.length;
+    tasks.emit("task:failed", `task_${beforeRed}`, "PlayMode red: 3 of 9 tests failed");
+    await vi.waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(beforeRed));
 
     const prompt = storage.get(campaign.id)!.milestones[0]!.prompt;
     expect(prompt.match(/The previous attempt ended/g) ?? []).toHaveLength(1);
+    // …and the self-revival's own tail is kept to one copy too (F#1).
+    expect(prompt.match(/A ROUND OF ATTEMPTS ENDED/g) ?? []).toHaveLength(1);
     expect(prompt).toContain("PlayMode red: 3 of 9 tests failed");
-    expect(prompt).not.toContain("compile exploded");
+    // The ATTEMPT tail is the latest failure only; the earlier cause survives
+    // exactly once, in the revival tail that exists to prevent a repeat.
+    const attemptTail = prompt.slice(prompt.indexOf("The previous attempt ended"));
+    expect(attemptTail).not.toContain("compile exploded");
     expect(prompt).toContain("build the foundations"); // the sprint body survives the strip
   });
 
@@ -3670,8 +3720,11 @@ describe("CampaignManager", () => {
     // campaign stops loudly instead of relaunching the sprint again.
     tasks.markTerminal("task_2", TaskStatus.failed, "compile error CS0246 again");
     await manager.resumeActive();
-    await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"));
-    expect(tasks.submitted).toHaveLength(2);
+    // The spent budget self-revives with a changed approach first (Codex
+    // 2026-09-11 F#1) and stops only once those are spent too.
+    await vi.waitFor(() => expect(messages.some((m) => m.text.includes("Retrying with a changed approach"))).toBe(true));
+    await failUntilStopped(campaign.id, "compile error CS0246 again");
+    expect(storage.get(campaign.id)!.state).toBe("failed");
     expect(messages.at(-1)!.text).toContain("Campaign stopped");
   });
 
@@ -3877,11 +3930,16 @@ describe("CampaignManager", () => {
       await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
       tasks.emit("task:failed", "task_1", "sprite provider 'local' returned PLACEHOLDER");
       await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
-      tasks.emit("task:failed", "task_2", "sprite provider 'local' returned PLACEHOLDER");
-      await vi.waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"));
+      // It self-revives with a CHANGED APPROACH, a bounded number of times
+      // (Codex 2026-09-11 F#1) — never as an outage pause, which would hand it
+      // a fresh attempt budget every cycle forever (the 2026-09-07 defect).
+      await failUntilStopped(campaign.id, "sprite provider 'local' returned PLACEHOLDER");
       expect(storage.get(campaign.id)!.autoReviveAt).toBeUndefined();
       expect(messages.at(-1)!.text).toContain("Campaign stopped");
-      expect(messages.at(-1)!.text).not.toContain("Self-revival armed");
+      expect(messages.some((m) => m.text.includes("Self-revival armed"))).toBe(false);
+      expect(messages.some((m) => m.text.includes("paused by a provider outage"))).toBe(false);
+      // Bounded: exactly the revive budget, not a round per failure forever.
+      expect(storage.get(campaign.id)!.implementationRevives).toBe(2);
     });
 
     it("a tree that still does not compile after the delivery bounces is NOT delivered", async () => {

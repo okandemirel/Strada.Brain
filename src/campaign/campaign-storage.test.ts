@@ -52,6 +52,21 @@ describe("CampaignStorage", () => {
     expect(loaded!.chatId).toBe("cli-local");
   });
 
+  it("round-trips the revive counters — a field with no column reads back undefined", () => {
+    // Every Campaign field needs its own column, migration, bind and row
+    // mapping; a new counter that silently vanished on reload is how a bound
+    // loop became unbounded (F#1 added implementation_revives).
+    const campaign = { ...makeCampaign(), unmeasurableRevives: 2, implementationRevives: 1 };
+    storage.save(campaign);
+    const loaded = storage.get(campaign.id)!;
+    expect(loaded.unmeasurableRevives).toBe(2);
+    expect(loaded.implementationRevives).toBe(1);
+    // …and an absent counter stays absent rather than becoming 0.
+    const fresh = makeCampaign();
+    storage.save(fresh);
+    expect(storage.get(fresh.id)!.implementationRevives).toBeUndefined();
+  });
+
   it("updates state on re-save (upsert)", () => {
     const campaign = makeCampaign();
     storage.save(campaign);

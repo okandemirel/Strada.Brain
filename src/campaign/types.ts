@@ -283,6 +283,13 @@ export interface Campaign {
    * retrying forever (Codex 2026-09-11 C#2).
    */
   unmeasurableRevives?: number;
+  /**
+   * Self-revivals spent on an ORDINARY implementation failure — a sprint that
+   * ran out of attempts on a healthy chain. Without this the campaign ended
+   * `failed` with no revival at all and waited for a person to type "kampanya
+   * devam", which is not autonomy (Codex 2026-09-11 F#1).
+   */
+  implementationRevives?: number;
   deliveryReported?: boolean;
   /**
    * The independent reviewer's verdict text for the last delivery report

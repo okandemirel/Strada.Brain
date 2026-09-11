@@ -60,6 +60,7 @@ interface CampaignRow {
   draft_deferred_since?: number | null;
   delivery_reported?: number | null;
   unmeasurable_revives?: number | null;
+  implementation_revives?: number | null;
   plan_coverage?: string | null;
 }
 
@@ -96,6 +97,7 @@ function rowToCampaign(row: CampaignRow): Campaign {
     draftDeferredSince: row.draft_deferred_since ?? undefined,
     deliveryReported: row.delivery_reported === 1,
     unmeasurableRevives: row.unmeasurable_revives ?? undefined,
+    implementationRevives: row.implementation_revives ?? undefined,
     ...(row.plan_coverage ? { planCoverage: parsePlanCoverage(row.plan_coverage) } : {}),
   };
 }
@@ -142,6 +144,12 @@ export class CampaignStorage {
       // Column already exists — migration is idempotent.
     }
     try {
+      // Self-revivals spent on an ordinary implementation failure (F#1).
+      this.db.exec("ALTER TABLE campaigns ADD COLUMN implementation_revives INTEGER");
+    } catch {
+      // Column already exists — migration is idempotent.
+    }
+    try {
       // Audited 2026-09-02: the draft path's deferral clock (24h bound).
       this.db.exec("ALTER TABLE campaigns ADD COLUMN draft_deferred_since INTEGER");
     } catch {
@@ -174,8 +182,8 @@ export class CampaignStorage {
           state, idea_text, gdd_path, gdd_text, draft_task_id, draft_attempts,
           milestones_json, current_milestone, created_at, updated_at, last_error,
           auto_revive_at, coverage_audit_note, draft_deferred_since, delivery_reported, plan_coverage,
-          unmeasurable_revives
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          unmeasurable_revives, implementation_revives
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           state = excluded.state,
           gdd_path = excluded.gdd_path,
@@ -191,7 +199,8 @@ export class CampaignStorage {
           draft_deferred_since = excluded.draft_deferred_since,
           delivery_reported = excluded.delivery_reported,
           plan_coverage = excluded.plan_coverage,
-          unmeasurable_revives = excluded.unmeasurable_revives`,
+          unmeasurable_revives = excluded.unmeasurable_revives,
+          implementation_revives = excluded.implementation_revives`,
       )
       .run(
         campaign.id,
@@ -217,6 +226,7 @@ export class CampaignStorage {
         campaign.deliveryReported ? 1 : 0,
         campaign.planCoverage ? JSON.stringify(campaign.planCoverage) : null,
         campaign.unmeasurableRevives ?? null,
+        campaign.implementationRevives ?? null,
       );
   }
 

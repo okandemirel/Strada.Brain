@@ -75,6 +75,12 @@ export interface CampaignManagerOptions {
   storage: CampaignStorage;
   planner: CampaignPlanner;
   /**
+   * How long a self-revived implementation failure waits before its next
+   * round. Injected only so a test can drive the whole bounded loop instead
+   * of asserting the first arming and trusting the rest (Codex 2026-09-11 F#1).
+   */
+  implementationReviveDelayMs?: number;
+  /**
    * A provider that claims vision on its OWN capabilities (never a fallback
    * chain — see ProviderManager.getVisionProvider). Absent means the look
    * check is reported as not checked, never as passed.
@@ -244,12 +250,19 @@ export const UNRUNNABLE_HERE_RE =
 /**
  * Missing proofs whose reason is absent TOOLING. Matched against the campaign's
  * OWN generated wording, not against a game's error text: "IPlaythroughDriver
- * is not registered" is implementation work, and "no test run was observed"
- * had to be added because it is exactly the unmeasurable case (Codex
- * 2026-09-11 D#3, D#4).
+ * is not registered" is implementation work.
+ *
+ * "no test run was observed" is NOT here (it was, from D#4). It describes an
+ * OMISSION — a worker that finished without running the suite — not a machine
+ * that cannot run it, and three such rounds escalated to a person as an
+ * infrastructure verdict about tooling that was present and working the whole
+ * time (Codex 2026-09-11 F#5). A missing run is ordinary missing work: the
+ * delivery gate bounces it with an explicit directive, and an exhausted
+ * milestone self-revives with a changed approach. Absent TEST tooling still
+ * names itself ("no test verifier is configured") and still counts.
  */
 export const UNMEASURABLE_PROOF_RE =
-  /(?:the compile check did not run|the player build did not run|no compile verifier is configured|no player builder is configured|no player runner is configured|unity_build_player is not registered|no test run was observed|the built player was never played to a verdict)/i;
+  /(?:the compile check did not run|the player build did not run|no compile verifier is configured|no player builder is configured|no player runner is configured|unity_build_player is not registered|no test verifier is configured|the built player was never played to a verdict)/i;
 /**
  * Does this round's shortfall include a proof absent TOOLING explains? ANY
  * such proof counts: requiring all of them meant one game-shaped proof beside
@@ -261,6 +274,19 @@ export function hasUnmeasurableProof(missingProofs: readonly string[]): boolean 
 
 /** Self-revivals spent on a proof this machine cannot produce before asking a person. */
 const MAX_UNMEASURABLE_REVIVES = 2;
+/**
+ * Self-revivals spent on an ORDINARY implementation failure: a sprint that ran
+ * out of attempts with healthy providers and a real blocker ("Compile error
+ * CS0246: missing type PlayerController"). Two, with the approach changed each
+ * time. Before this the campaign ended `failed` with no revival and waited for
+ * a person to type "kampanya devam" — the one thing an autonomous run cannot
+ * do for itself (Codex 2026-09-11 F#1).
+ */
+const MAX_IMPLEMENTATION_REVIVES = 2;
+/** The revival tail, kept to exactly one copy however many revivals happen. */
+const REVIVE_TAIL_RE = /\n\nA ROUND OF ATTEMPTS ENDED[\s\S]*?keep whatever already works\./g;
+/** How long before a self-revived implementation failure tries again. */
+const IMPLEMENTATION_REVIVE_DELAY_MS = 5 * 60_000;
 
 export class CampaignManager {
   private readonly storage: CampaignStorage;
@@ -272,6 +298,7 @@ export class CampaignManager {
   private readonly verifyCompile?: (projectRoot: string) => Promise<CompileVerdict>;
   private readonly buildPlayer?: (projectRoot: string, target?: string) => Promise<PlayerBuildEvidence>;
   private readonly deliveryResumeDelayMs: number;
+  private readonly implementationReviveDelayMs: number;
   private readonly runPlayer?: (projectRoot: string, artifactPath: string) => Promise<void>;
   private readonly attach?: (chatId: string, attachment: import("../channels/channel-messages.interface.js").Attachment) => Promise<void>;
   private readonly independentReviewer: CampaignManagerOptions["independentReviewer"];
@@ -293,6 +320,7 @@ export class CampaignManager {
     this.verifyCompile = options.verifyCompile;
     this.buildPlayer = options.buildPlayer;
     this.deliveryResumeDelayMs = options.deliveryResumeDelayMs ?? 15 * 60_000;
+    this.implementationReviveDelayMs = options.implementationReviveDelayMs ?? IMPLEMENTATION_REVIVE_DELAY_MS;
     this.runPlayer = options.runPlayer;
     this.attach = options.attach;
     this.independentReviewer = options.independentReviewer;
@@ -2860,10 +2888,56 @@ export class CampaignManager {
       return;
     }
 
+    // AN ORDINARY FAILURE IS NOT THE END. A sprint out of attempts on a
+    // healthy chain used to stop here and wait for a person; the same work,
+    // attempted with a changed approach, is what a person would have asked
+    // for anyway. Bounded: MAX_IMPLEMENTATION_REVIVES rounds, and a cancel is
+    // a deliberate stop that revives nothing (Codex 2026-09-11 F#1).
+    const revives = (campaign.implementationRevives ?? 0) + 1;
+    if (status !== TaskStatus.cancelled && revives <= MAX_IMPLEMENTATION_REVIVES) {
+      campaign.implementationRevives = revives;
+      milestone.status = "pending";
+      milestone.attempts = 0;
+      // The next round must not repeat the last one: the blocker goes in, with
+      // the same "change the approach" instruction a replan carries. EXACTLY
+      // ONE such tail survives — stacking one per revival is the defect the
+      // attempt tail above already had to fix once.
+      milestone.prompt = milestone.prompt.replace(REVIVE_TAIL_RE, "");
+      milestone.prompt +=
+        `\n\nA ROUND OF ATTEMPTS ENDED ${status} on: ${stripRetryMachinery(campaign.lastError ?? output).slice(0, 300)}. ` +
+        "Do NOT repeat that approach — take a different route to the same requirement (a smaller step, a different order, " +
+        "or a different implementation), and keep whatever already works.";
+      // The state stays `failed` until the revival timer fires: that is what
+      // scheduleAutoRevive and the boot sweep look for, so an implementation
+      // revival travels the same path the outage pause already uses, and
+      // reviveAtCurrentMilestone restores the attempt budget.
+      const reviveDelayMs = this.implementationReviveDelayMs;
+      campaign.autoReviveAt = Date.now() + reviveDelayMs;
+      this.persist(campaign);
+      this.scheduleAutoRevive(campaign.id, reviveDelayMs);
+      getLoggerSafe().warn("Campaign self-reviving an implementation failure with a changed approach", {
+        id: campaign.id,
+        milestone: milestone.id,
+        revives,
+        cause: (campaign.lastError ?? "").slice(0, 200),
+      });
+      await this.tell(
+        campaign,
+        `🔁 **${milestone.title}** ran out of attempts (${status}). Cause: ${campaign.lastError}\n` +
+          `Retrying with a changed approach in ${Math.max(1, Math.round(reviveDelayMs / 60_000))} min ` +
+          `(self-revival ${revives} of ${MAX_IMPLEMENTATION_REVIVES}).`,
+      );
+      return;
+    }
+
+    campaign.autoReviveAt = undefined;
+    campaign.lastError = `NOT DELIVERED — ${campaign.lastError ?? `${milestone.title} ${status}`}`.slice(0, 600);
     this.persist(campaign);
     await this.tell(
       campaign,
-      `❌ Campaign stopped: **${milestone.title}** ended ${status} after ${milestone.attempts} attempts.\nCause: ${campaign.lastError}\nReply **kampanya devam** to revive it with a fresh attempt budget.`,
+      `❌ Campaign stopped: **${milestone.title}** ended ${status} after ${milestone.attempts} attempts, ` +
+        `and ${campaign.implementationRevives ?? 0} self-revival(s) with a changed approach did not get past it.\n` +
+        `Cause: ${campaign.lastError}\nReply **kampanya devam** to revive it with a fresh attempt budget.`,
     );
   }
 
