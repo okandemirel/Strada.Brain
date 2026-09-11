@@ -230,6 +230,11 @@ export async function initializeMultiAgentDelegationStage(
       providerResponseTimeoutMs: params.config.llmProviderFirstResponseTimeoutMs,
       preferencesDbPath: params.config.memory.dbPath,
       verifiedLocalProviders: params.providerManager.isAvailable("ollama") ? ["ollama"] : [],
+      // The operator's chain governs sub-agents too (see buildDelegationCandidates).
+      providerChain: params.config.providerChain
+        ? params.config.providerChain.split(",").map((n) => n.trim()).filter(Boolean)
+        : undefined,
+      chainIsExhaustive: params.config.providerChainStrict === true,
       workspaceLeaseManager,
       providerRouter: params.providerRouter as ConstructorParameters<typeof DelegationManager>[0]["providerRouter"],
       vaultRegistry: params.vaultRegistry,

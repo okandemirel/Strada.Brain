@@ -93,6 +93,17 @@ export interface DelegationManagerOptions {
   readonly providerResponseTimeoutMs?: number;
   readonly preferencesDbPath?: string;
   readonly verifiedLocalProviders?: readonly string[];
+  /**
+   * The operator's configured provider chain, and whether it is exhaustive.
+   *
+   * Delegation built its candidate pool from EVERY credential present, so an
+   * account reserved for other work became a sub-agent worker the moment its
+   * key existed — measured live 2026-09-12: a project pinned to
+   * "opencode,opencode2" ran its sprint turns on OpenAI (Codex O's
+   * strict-chain finding, one layer down).
+   */
+  readonly providerChain?: readonly string[];
+  readonly chainIsExhaustive?: boolean;
   readonly workspaceLeaseManager?: WorkspaceLeaseManager;
   readonly providerRouter?: ConstructorParameters<typeof Orchestrator>[0]["providerRouter"];
   readonly vaultRegistry?: import("../../../vault/vault-registry.js").VaultRegistry;
@@ -1078,9 +1089,14 @@ export class DelegationManager {
       }
     }
 
+    // A STRICT CHAIN IS THE WHOLE POOL. Without this, every credential in the
+    // environment is a delegation candidate whatever the operator configured.
+    const chain = new Set((this.opts.providerChain ?? []).map((n) => n.trim().toLowerCase()).filter(Boolean));
+    const exhaustive = this.opts.chainIsExhaustive === true && chain.size > 0;
     for (const name of Object.keys(this.opts.providerCredentials ?? {})) {
       const normalized = name.trim().toLowerCase();
       if (!normalized || normalized === "anthropic") continue;
+      if (exhaustive && !chain.has(normalized)) continue;
       if (this.isDelegationProviderAvailable(normalized)) {
         names.add(normalized);
       }
