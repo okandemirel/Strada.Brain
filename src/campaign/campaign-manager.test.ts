@@ -3660,6 +3660,119 @@ describe("CampaignManager", () => {
     expect(tasks.submitted.length).toBeLessThan(20);
   });
 
+  it("an ABSENT and a STALE play-through are the same unmet proof, and the budget charges for both (Codex 2026-09-11 L#8)", async () => {
+    // Alternating between no verdict file and an old one produced two
+    // signatures, so every round looked like progress: eight rounds, counter
+    // still 1, revival armed every time, and no game improvement at all.
+    runRecordOnSettle = undefined;
+    tasks = new FakeTaskManager();
+    storage.close();
+    storage = new CampaignStorage(join(dir, "campaigns-stale-budget.db"));
+    manager = new CampaignManager({
+      storage,
+      verifyCompile: async () => compileVerdict,
+      buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
+      planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async (chatId, text) => { messages.push({ chatId, text }); },
+      projectRoot,
+      retryAdoptionGraceMs: 10,
+      completedSettleDelayMs: 0,
+      milestoneTimeBoxMs: 60 * 60_000,
+      deliveryResumeDelayMs: 20,
+      implementationReviveDelayMs: 10,
+    });
+    manager.attachEvents();
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1), { timeout: 5_000 });
+    settleMilestone("sprint A done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2), { timeout: 5_000 });
+    settleMilestone("sprint B done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3), { timeout: 5_000 });
+
+    for (let i = 0; i < 12; i++) {
+      const stored = storage.get(campaign.id)!;
+      if (stored.state === "failed" && !stored.autoReviveAt) break;
+      const before = tasks.submitted.length;
+      // Round after round: no record at all, then a record that predates the
+      // attempt. Neither proves anything about THIS attempt.
+      const verdictPath = join(projectRoot, "Recordings", "playthrough", "playthrough-verdict.json");
+      if (i % 2 === 0) {
+        rmSync(join(projectRoot, "Recordings", "playthrough"), { recursive: true, force: true });
+      } else {
+        // A record that predates the attempt: green, and about an earlier tree.
+        writePlaythroughVerdict(true, { measuredAt: new Date(Date.now() - 3 * 3600_000).toISOString() });
+      }
+      settleMilestone(`shipping it (round ${i})`);
+      // The settle handler touches the verdict's mtime; the stamp inside it
+      // is what makes this record stale, and it stays old.
+      if (i % 2 === 1 && existsSync(verdictPath)) {
+        const old = new Date(Date.now() - 3 * 3600_000);
+        utimesSync(verdictPath, old, old);
+      }
+      await waitFor(() => {
+        const after = storage.get(campaign.id)!;
+        expect(tasks.submitted.length > before || (after.state === "failed" && !after.autoReviveAt)).toBe(true);
+      }, { timeout: 5_000 });
+    }
+
+    const stopped = storage.get(campaign.id)!;
+    expect(stopped.state).toBe("failed");
+    expect(stopped.autoReviveAt).toBeUndefined();
+    expect(stopped.deliveryRevives).toBe(4);
+  });
+
+  it("a play-through that could not drive the game says so in its identity (Codex 2026-09-11 L#7)", async () => {
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
+
+    // The session refused to start at all. That is different work from a
+    // session that ran and captured no frames, and the budget must not treat
+    // fixing one as "exactly the same proofs missing".
+    writePlaythroughVerdict(false, {
+      record: { scene: "Entry", session: 1, missing: "no IPlaythroughDriver is registered", outcome: "None", reachedOutcome: false },
+    });
+    settleMilestone("shipping it");
+    await waitFor(() => expect(storage.get(campaign.id)!.milestones[2]!.deliveryFailureKinds).toBeDefined());
+
+    const refusedToStart = storage.get(campaign.id)!.milestones[2]!.deliveryFailureKinds!;
+    expect(refusedToStart).toContain("playthroughUndriveable");
+
+    // Now the session starts and drives, and captures nothing. Real progress,
+    // and the identity has to say so or the budget charges it as a repeat.
+    const before = tasks.submitted.length;
+    writePlaythroughVerdict(false, {
+      record: { scene: "Entry", session: 1, autoStarted: false, actions: 40, outcome: "None", reachedOutcome: false },
+      frames: { count: 0, flat: 0, maxMotionShare: 0 },
+    });
+    settleMilestone("shipping it again");
+    await waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(before));
+
+    const noFrames = storage.get(campaign.id)!.milestones[2]!.deliveryFailureKinds!;
+    expect(noFrames).toContain("playthroughNoFrames");
+    expect(noFrames).not.toEqual(refusedToStart);
+  });
+
+  it("an upgraded signature FORMAT is not progress (Codex 2026-09-11 L#9)", () => {
+    // A milestone persisted before the structured identity existed carried a
+    // prose signature; the new format never matched it, so a campaign three
+    // rounds into its budget started again at one and could never stop.
+    const source = readFileSync(new URL("./campaign-manager.ts", import.meta.url), "utf8");
+    const at = source.indexOf("const formatChanged =");
+    expect(at).toBeGreaterThan(0);
+    expect(source.slice(at, at + 400)).toContain("STRUCTURED_SIGNATURE_PREFIX");
+    const repeatingAt = source.indexOf("const repeating = stored === signature || formatChanged;");
+    expect(repeatingAt).toBeGreaterThan(at);
+    // …and the identity is built from THIS round's structural measurement.
+    const kindsAt = source.indexOf("milestone.deliveryFailureKinds = kinds;");
+    expect(kindsAt).toBeGreaterThan(0);
+    expect(source.slice(kindsAt - 400, kindsAt)).toContain("milestone.structureRefused === true");
+  });
+
   it("at the final sprint a record with no timestamp of its own is not proof (Codex 2026-09-11 G#4)", async () => {
     // A copied record has a fresh mtime by construction, so an mtime is not
     // freshness; the record has to say when it ran.

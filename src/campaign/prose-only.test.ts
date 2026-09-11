@@ -191,7 +191,8 @@ describe("deliveryFailureKinds — identity from the gates, not their prose (Cod
     testsNotRun: false, testsFiltered: false, compileBroken: false, compileNotRun: false,
     playthroughMissing: false, playthroughStale: false, playthroughRefused: false,
     buildBroken: false, buildNotRun: false, playerMissing: false, playerBroken: false,
-    claimsBroken: false, structureRefused: false, queuedGaps: false,
+    claimsBroken: false, structureRefused: false, queuedGaps: false, targetUnbuilt: false,
+    playthroughUndriveable: false, playthroughNoActions: false, playthroughNoFrames: false,
   };
 
   it("names the gates that failed, and nothing a sentence can change", () => {
@@ -206,5 +207,21 @@ describe("deliveryFailureKinds — identity from the gates, not their prose (Cod
     // A refusal that carries no proof sentence at all still has an identity.
     expect(deliveryFailureKinds({ ...none, structureRefused: true })).toEqual(["structureRefused"]);
     expect(deliveryFailureKinds({ ...none, queuedGaps: true })).toEqual(["queuedGaps"]);
+    // A platform the document asked for and nobody built has its own identity
+    // instead of falling back to prose (Codex 2026-09-11 L#10).
+    expect(deliveryFailureKinds({ ...none, targetUnbuilt: true })).toEqual(["targetUnbuilt"]);
+  });
+
+  it("different play-through defects are DIFFERENT work (Codex 2026-09-11 L#7)", () => {
+    // A session that refuses to start and a session that captures no frames
+    // both read as "playthroughMissing | playthroughRefused", so three rounds
+    // fixing the first and one hitting the second exhausted one budget and
+    // reported "exactly the same proofs missing".
+    const refusedToStart = deliveryFailureKinds({ ...none, playthroughMissing: true, playthroughUndriveable: true });
+    const noFrames = deliveryFailureKinds({ ...none, playthroughMissing: true, playthroughRefused: true, playthroughNoFrames: true });
+    const noActions = deliveryFailureKinds({ ...none, playthroughMissing: true, playthroughRefused: true, playthroughNoActions: true });
+    expect(refusedToStart).not.toEqual(noFrames);
+    expect(noFrames).not.toEqual(noActions);
+    expect(refusedToStart).toContain("playthroughUndriveable");
   });
 });

@@ -301,6 +301,9 @@ const MAX_DELIVERY_REVIVES = 3;
  * exactly as broken (Codex 2026-09-11 I#1, K#3, K#4, K#5). Flags cannot be
  * paraphrased. Sorted, so the set is the identity.
  */
+/** Marks a signature built from structured kinds rather than from prose. */
+export const STRUCTURED_SIGNATURE_PREFIX = "kinds:";
+
 export function deliveryFailureKinds(flags: {
   testsNotRun: boolean;
   testsFiltered: boolean;
@@ -309,6 +312,12 @@ export function deliveryFailureKinds(flags: {
   playthroughMissing: boolean;
   playthroughStale: boolean;
   playthroughRefused: boolean;
+  /** The run could not drive the game at all (no driver, no scene, no session). */
+  playthroughUndriveable: boolean;
+  /** It drove nothing: zero actions recorded. */
+  playthroughNoActions: boolean;
+  /** It captured no frames, so nothing was seen. */
+  playthroughNoFrames: boolean;
   buildBroken: boolean;
   buildNotRun: boolean;
   playerMissing: boolean;
@@ -2792,8 +2801,19 @@ export class CampaignManager {
           compileBroken,
           compileNotRun,
           playthroughMissing,
-          playthroughStale: playthrough?.stale === true,
+          // STALE IS A REASON, NOT A SECOND OBLIGATION. Alternating between no
+          // verdict file and an old one produced two signatures, so each round
+          // looked like progress and the budget reset for ever (Codex
+          // 2026-09-11 L#8). Neither supplies proof for this attempt.
+          playthroughStale: false,
           playthroughRefused: playthrough?.found === true && playthrough.ok !== true,
+          // …and DIFFERENT play-through defects are different work. A session
+          // that refuses to start and a session that captures no frames both
+          // read as "playthroughMissing | playthroughRefused", so fixing the
+          // first charged the budget as if nothing had changed (L#7).
+          playthroughUndriveable: typeof playthrough?.missing === "string" && playthrough.missing.length > 0,
+          playthroughNoActions: playthrough?.found === true && playthrough.ok !== true && (playthrough.actions ?? 0) === 0,
+          playthroughNoFrames: playthrough?.found === true && playthrough.ok !== true && (playthrough.frames?.count ?? 0) === 0,
           buildBroken,
           buildNotRun,
           playerMissing,
@@ -3142,9 +3162,29 @@ export class CampaignManager {
           // (I#2). Kinds, not numbers.
           // The structured identity, with the prose one only as a fallback
           // for a milestone persisted before it existed.
-          const signature = (milestone.deliveryFailureKinds ?? []).join(" | ")
-            || proofSignature(missingProofs, { structureRefused: milestone.structureRefused === true, compileBroken });
-          const repeating = campaign.deliveryProofsSignature === signature;
+          // THE STRUCTURAL OUTCOME OF THIS ROUND, not the flag a previous one
+          // left behind: the kinds are built before the structural check runs,
+          // so the same measurement produced different identities depending on
+          // what was already stored (Codex 2026-09-11 L#9).
+          const kinds = [
+            ...new Set([
+              ...(milestone.deliveryFailureKinds ?? []).filter((k) => k !== "structureRefused"),
+              ...(milestone.structureRefused === true ? ["structureRefused"] : []),
+            ]),
+          ].sort();
+          milestone.deliveryFailureKinds = kinds;
+          const signature = kinds.length > 0
+            ? `${STRUCTURED_SIGNATURE_PREFIX}${kinds.join(" | ")}`
+            : proofSignature(missingProofs, { structureRefused: milestone.structureRefused === true, compileBroken });
+          const stored = campaign.deliveryProofsSignature;
+          // An upgrade is not progress. A milestone persisted before the
+          // structured identity existed carried a prose signature, and the new
+          // format never matched it — so a campaign three rounds into its
+          // budget started again at one (L#9).
+          const formatChanged =
+            stored !== undefined
+            && stored.startsWith(STRUCTURED_SIGNATURE_PREFIX) !== signature.startsWith(STRUCTURED_SIGNATURE_PREFIX);
+          const repeating = stored === signature || formatChanged;
           campaign.deliveryRevives = repeating ? (campaign.deliveryRevives ?? 0) + 1 : 1;
           campaign.deliveryProofsSignature = signature;
           if (campaign.deliveryRevives > MAX_DELIVERY_REVIVES) {
