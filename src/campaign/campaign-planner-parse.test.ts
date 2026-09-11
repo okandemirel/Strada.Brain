@@ -50,6 +50,39 @@ describe("reading a milestone ladder out of a reply", () => {
     return { planner: new CampaignPlanner(provider as never), asks };
   }
 
+  it("a reply that is all THINKING says so, so the retry can forbid it", async () => {
+    // Measured live 2026-09-12 00:52: the whole reply was an unterminated
+    // <reasoning> block listing the GDD's headings — the model never reached
+    // the JSON, and the retry asked the same question again.
+    const { planner: p, asks } = planner([
+      "<reasoning>\nLet me produce the JSON milestone ladder. Need 16-20 milestones. Let me list headings:\n1. INTRODUCTION",
+      JSON.stringify(ladder),
+    ]);
+
+    const result = await p.planMilestones("# GDD\n\n## 3. CORE GAMEPLAY\nRules.\n\n## 9. RELEASE\nShip.\n", "docs/GDD.md");
+
+    expect(result.milestones).toHaveLength(2);
+    expect(asks[1]).toContain("thinking out loud");
+    expect(asks[1]).toContain("<reasoning>");
+  });
+
+  it("asks for an output budget a ladder can fit in", async () => {
+    const calls: Array<{ maxTokens?: number }> = [];
+    const provider = {
+      name: "test",
+      capabilities: { maxTokens: 4096, streaming: false, structuredStreaming: false, toolCalling: false, vision: false, systemPrompt: true },
+      chat: vi.fn(async (_s: string, _m: unknown, _t: unknown, opts?: { maxTokens?: number }) => {
+        calls.push({ maxTokens: opts?.maxTokens });
+        return { text: JSON.stringify(ladder), toolCalls: [], stopReason: "end_turn", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } };
+      }),
+    };
+    await new CampaignPlanner(provider as never)
+      .planMilestones("# GDD\n\n## 3. CORE GAMEPLAY\nRules.\n\n## 9. RELEASE\nShip.\n", "docs/GDD.md");
+
+    // Twenty milestones with their prompts do not fit a provider default.
+    expect(calls[0]?.maxTokens ?? 0).toBeGreaterThanOrEqual(8000);
+  });
+
   it("reads a ladder the model buried in prose", async () => {
     const { planner: p } = planner([`I'll plan this in two milestones. Note the {braces} in section 3.\n\n${JSON.stringify(ladder)}\n\nLet me know if you want changes.`]);
 
@@ -67,6 +100,6 @@ describe("reading a milestone ladder out of a reply", () => {
     expect(asks).toHaveLength(2);
     expect(asks[0]).not.toContain("could not be used");
     expect(asks[1]).toContain("could not be used");
-    expect(asks[1]).toContain("JSON object ALONE");
+    expect(asks[1]).toContain("FIRST character of your reply must be");
   });
 });

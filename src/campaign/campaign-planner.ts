@@ -271,7 +271,7 @@ export class CampaignPlanner {
           ? userMessage
           : `${userMessage}\n\nYour previous reply could not be used: ${
               lastError instanceof Error ? lastError.message : String(lastError)
-            }. Reply with the JSON object ALONE — no prose before it, no explanation after it, no markdown fence.`;
+            }. Do NOT think out loud and do NOT restate the GDD: the FIRST character of your reply must be "{" and the last must be "}". No prose, no explanation, no markdown fence, no <reasoning> block.`;
         let ladder = await this.planOnce(system, ask);
         let uncovered = uncoveredSections(scope.headings, ladder.milestones.flatMap((m) => m.coveredSections));
         if (uncovered.length > 0) {
@@ -344,20 +344,38 @@ export class CampaignPlanner {
     return { text, briefed: true, sections: chunks.length, failed };
   }
 
+  /** Output budget for a ladder reply (see planOnce). */
+  private static readonly PLAN_OUTPUT_TOKENS = 8000;
+
   private async planOnce(system: string, userMessage: string): Promise<MilestoneLadder> {
     if (!this.provider) {
       throw new Error("campaign planning requires an LLM provider");
     }
-    const response = await streamOrChatText(this.provider, system, userMessage);
+    // A LADDER IS A LONG ANSWER. Sixteen to twenty milestones, each with a
+    // prompt and its covered sections, does not fit in a provider's default
+    // reply budget — and a model that thinks out loud first never reaches the
+    // JSON at all: measured live 2026-09-12 00:52, the whole reply was an
+    // unterminated <reasoning> block listing the GDD's headings.
+    const response = await streamOrChatText(this.provider, system, userMessage, {
+      maxTokens: CampaignPlanner.PLAN_OUTPUT_TOKENS,
+    });
     const text = response.text ?? "";
     // EVERY balanced object, last first. Taking the first "{" in the reply
     // handed the parser whatever brace the model's prose happened to contain,
     // and the campaign failed at its first step with "returned no JSON
     // object" — measured live 2026-09-12 00:42 on a 1 458-line GDD.
-    const candidates = balancedJsonObjects(stripLeakedReasoning(text).text);
+    const stripped = stripLeakedReasoning(text);
+    const candidates = balancedJsonObjects(stripped.text);
     if (candidates.length === 0) {
-      getLoggerSafe().warn("Campaign planner reply carried no JSON object", { reply: text.slice(0, 400) });
-      throw new Error("campaign planner returned no JSON object");
+      getLoggerSafe().warn("Campaign planner reply carried no JSON object", {
+        reply: text.slice(0, 400),
+        reasoningOnly: stripped.reasoningOnly,
+      });
+      throw new Error(
+        stripped.reasoningOnly
+          ? "campaign planner spent its whole reply thinking out loud and never reached the JSON"
+          : "campaign planner returned no JSON object",
+      );
     }
     let lastIssues: string | undefined;
     for (const candidate of [...candidates].reverse()) {
