@@ -3514,17 +3514,18 @@ export class CampaignManager {
       // two-platform GDD used to deliver one silently (Codex 2026-09-11 F#11).
       const unbuilt = platform.targets.filter((t) => t !== platform.target);
       const withTarget = platform.target ? { ...built, requestedTarget: platform.target } : built;
-      return unbuilt.length > 0
-        ? {
-            ...withTarget,
-            reasons: [
-              ...(withTarget.reasons ?? []),
-              `the GDD also asks for ${unbuilt.join(", ")}; this build is ${platform.target ?? "the project's active target"} only`,
-            ],
-          }
-        : withTarget;
+      // STRUCTURED, not a sentence in `reasons`: a failed build renders only
+      // its first two reasons, so the disclosure disappeared precisely when
+      // the campaign still had work to do (Codex 2026-09-11 J#21).
+      return unbuilt.length > 0 ? { ...withTarget, unbuiltTargets: unbuilt } : withTarget;
     } catch (err) {
-      return { ran: false, detail: `the player build could not run (${err instanceof Error ? err.message : String(err)})` };
+      const unbuilt = platform.targets.filter((t) => t !== platform.target);
+      return {
+        ran: false,
+        detail: `the player build could not run (${err instanceof Error ? err.message : String(err)})`,
+        ...(unbuilt.length > 0 ? { unbuiltTargets: unbuilt } : {}),
+        ...(platform.target ? { requestedTarget: platform.target } : {}),
+      };
     }
   }
 

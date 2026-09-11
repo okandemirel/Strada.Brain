@@ -2878,9 +2878,13 @@ describe("CampaignManager", () => {
     // The FIRST named platform is built, rather than whatever the project had.
     expect(buildTargetsAsked.at(-1)).toBe("windows");
     const stored = storage.get(campaign.id)!;
-    // …and the platform it did NOT build is named where a person reads it.
-    expect((stored.milestones[2]!.buildVerdict?.reasons ?? []).join(" ")).toContain("ios");
+    // …and the platform it did NOT build is named where a person reads it,
+    // as a structured field so a FAILED build cannot lose it (J#21).
+    expect(stored.milestones[2]!.buildVerdict?.unbuiltTargets).toEqual(["ios"]);
     expect(describeBuild(stored.milestones[2]!.buildVerdict!)).toContain("ios");
+    expect(describeBuild({ ...stored.milestones[2]!.buildVerdict!, ok: false, reasons: ["compiler failed", "SDK missing"] }))
+      .toContain("ios");
+    expect(describeBuild({ ...stored.milestones[2]!.buildVerdict!, ran: false })).toContain("ios");
   });
 
   it("retiring a campaign cancels EVERY live task of its lineage, not just the tip (Codex 2026-09-11 I#7)", async () => {

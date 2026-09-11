@@ -444,6 +444,13 @@ export interface RuntimeSceneDump {
 export interface PlayerBuildEvidence {
   /** The target the campaign ASKED for, from the GDD's platform (Codex 2026-09-11 B#11). */
   readonly requestedTarget?: string;
+  /**
+   * Platforms the document asked for and this build is not. Structured rather
+   * than a sentence in `reasons`, because a FAILED build renders only its
+   * first two reasons and the disclosure vanished exactly when the campaign
+   * needed it (Codex 2026-09-11 J#21).
+   */
+  readonly unbuiltTargets?: readonly string[];
   /** The build tool ran to a verdict (ok or failed). false = could not run / not attempted. */
   ran: boolean;
   ok?: boolean;

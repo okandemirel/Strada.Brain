@@ -159,15 +159,18 @@ export function buildCampaignStatus(
 
 /** One sentence about the player build the campaign ran itself. */
 export function describeBuild(b: NonNullable<CampaignMilestone["buildVerdict"]>): string {
-  if (!b.ran) return `player build NOT measured — ${b.detail ?? "no builder"}`;
-  if (!b.ok) return `player build FAILED — ${(b.reasons ?? []).slice(0, 2).join("; ") || b.detail || "no reason recorded"}`;
-  // A SUCCESSFUL build still carries its reasons: the one that says which
-  // other platforms the document asked for and this build is not (Codex
-  // 2026-09-11 F#11).
-  const alsoAsked = (b.reasons ?? []).find((r) => /also asks for/i.test(r));
+  // The platforms the document asked for and this build is not, said on EVERY
+  // outcome: rendered from `reasons` it was cut by the two-reason limit of a
+  // failed build and lost entirely when the builder threw (Codex F#11, J#21).
+  const unbuilt = (b as { unbuiltTargets?: readonly string[] }).unbuiltTargets ?? [];
+  const alsoAsked = unbuilt.length > 0 ? ` — the GDD also asks for ${unbuilt.join(", ")}, not built here` : "";
+  if (!b.ran) return `player build NOT measured — ${b.detail ?? "no builder"}${alsoAsked}`;
+  if (!b.ok) {
+    return `player build FAILED — ${(b.reasons ?? []).slice(0, 2).join("; ") || b.detail || "no reason recorded"}${alsoAsked}`;
+  }
   return `player built: ${b.artifactPath ?? "?"} (${b.target ?? "?"}, ${((b.sizeBytes ?? 0) / (1024 * 1024)).toFixed(1)} MB${
     typeof b.durationMs === "number" ? `, ${Math.round(b.durationMs / 1000)} s` : ""
-  })${alsoAsked ? ` — ${alsoAsked}` : ""}`;
+  })${alsoAsked}`;
 }
 
 /** Counts over the rendered claim lines (gdd-claims.ts writes "MET —", "NOT MET —", "NOT MEASURED —"). */
