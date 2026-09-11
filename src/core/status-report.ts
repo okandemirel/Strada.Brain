@@ -78,11 +78,16 @@ async function probeHealth(url: string | undefined, fetchImpl: typeof fetch): Pr
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 2000);
-    const res = await fetchImpl(url, { signal: controller.signal });
-    clearTimeout(timer);
-    if (!res.ok) return { reachable: false, detail: `HTTP ${res.status}` };
-    const body = (await res.json()) as { status?: string; uptime?: number };
-    return { reachable: true, status: body.status, uptimeSeconds: body.uptime };
+    try {
+      const res = await fetchImpl(url, { signal: controller.signal });
+      if (!res.ok) return { reachable: false, detail: `HTTP ${res.status}` };
+      // The deadline covers the body too: a server that sends headers and
+      // then trickles JSON forever must not hang `strada status` (Codex 2026-09-11 #13).
+      const body = (await res.json()) as { status?: string; uptime?: number };
+      return { reachable: true, status: body.status, uptimeSeconds: body.uptime };
+    } finally {
+      clearTimeout(timer);
+    }
   } catch (err) {
     return { reachable: false, detail: (err as Error).message.slice(0, 120) };
   }

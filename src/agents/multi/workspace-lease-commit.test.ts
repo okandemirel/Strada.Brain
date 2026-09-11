@@ -315,6 +315,75 @@ describe("workspace lease commit", () => {
     expect(DEFAULT_WORKSPACE_COPY_EXCLUDES).toContain("UserSettings");
   });
 
+  it("withdraws a NEW asset whose .meta could not follow, so the pair never lands half (Codex 2026-09-11 #3)", async () => {
+    const lease = await manager().acquireLease({ label: "t", forceTempCopy: true });
+    mkdirSync(join(lease.path, "Assets", "Sprites"), { recursive: true });
+    writeFileSync(join(lease.path, "Assets", "Sprites", "Boss.png"), "pixels", "utf8");
+    const meta = join(lease.path, "Assets", "Sprites", "Boss.png.meta");
+    writeFileSync(meta, "importer", "utf8");
+    chmodSync(meta, 0o000); // only the .meta is unreadable: the asset's copy succeeds first
+    try {
+      const result = await lease.commit();
+      expect(existsSync(join(source, "Assets", "Sprites", "Boss.png"))).toBe(false);
+      expect(existsSync(join(source, "Assets", "Sprites", "Boss.png.meta"))).toBe(false);
+      expect(result.written).toEqual([]);
+      expect(result.failed.some((f) => f.startsWith(join("Assets", "Sprites", "Boss.png") + " (withdrawn"))).toBe(true);
+      expect(result.failed.some((f) => f.startsWith(join("Assets", "Sprites", "Boss.png.meta") + " ("))).toBe(true);
+      expect(readFileSync(join(result.conflictsQuarantinedUnder!, "Assets", "Sprites", "Boss.png"), "utf8")).toBe("pixels");
+    } finally {
+      chmodSync(meta, 0o644);
+      await lease.release();
+    }
+  });
+
+  it("a commit whose ledger cannot be removed still succeeds (Codex 2026-09-11 #8)", async () => {
+    const lease = await manager().acquireLease({ label: "t", forceTempCopy: true });
+    writeFileSync(join(lease.path, "Assets", "Scripts", "Fine.cs"), "ok", "utf8");
+    chmodSync(leaseRoot, 0o555); // the ledger lives beside the lease dir: unlink now fails
+    try {
+      const result = await lease.commit();
+      expect(result.written).toContain(join("Assets", "Scripts", "Fine.cs"));
+      expect(readFileSync(join(source, "Assets", "Scripts", "Fine.cs"), "utf8")).toBe("ok");
+    } finally {
+      chmodSync(leaseRoot, 0o755);
+      await lease.release();
+    }
+  });
+
+  it("replay never lands a file under an unreadable directory the walk could not copy home (Codex 2026-09-11 #4)", async () => {
+    makeGitRepo();
+    const lease = await gitManager().acquireLease({ label: "t" });
+    mkdirSync(join(lease.path, "Assets", "Locked"), { recursive: true });
+    writeFileSync(join(lease.path, "Assets", "Locked", "New.cs"), "class New {}", "utf8");
+    execSync("git add -A && git -c user.email=a@b -c user.name=t commit -qm 'locked work'", { cwd: lease.path });
+    chmodSync(join(lease.path, "Assets", "Locked"), 0o000);
+    try {
+      const result = await lease.commit();
+      expect(result.failed.some((f) => f.startsWith(join("Assets", "Locked") + " (unreadable"))).toBe(true);
+      const tree = execSync("git ls-tree -r --name-only HEAD", { cwd: source }).toString();
+      expect(tree).not.toContain("Assets/Locked/New.cs");
+      expect(existsSync(join(source, "Assets", "Locked", "New.cs"))).toBe(false);
+    } finally {
+      chmodSync(join(lease.path, "Assets", "Locked"), 0o755);
+      await lease.release();
+    }
+  });
+
+  it("replay never lands an excluded top-level directory the copy-back skipped (Codex 2026-09-11 #7)", async () => {
+    makeGitRepo();
+    const lease = await new WorkspaceLeaseManager({ projectRoot: source, leaseRoot, additionalExcludes: DEFAULT_WORKSPACE_COPY_EXCLUDES }).acquireLease({ label: "t" });
+    mkdirSync(join(lease.path, "UserSettings"), { recursive: true });
+    writeFileSync(join(lease.path, "UserSettings", "Search.settings"), "editor state", "utf8");
+    writeFileSync(join(lease.path, "Assets", "Scripts", "Real.cs"), "class Real {}", "utf8");
+    execSync("git add -A -f && git -c user.email=a@b -c user.name=t commit -qm 'with editor state'", { cwd: lease.path });
+    const result = await lease.commit();
+    await lease.release();
+    expect(result.written).toContain(join("Assets", "Scripts", "Real.cs"));
+    const tree = execSync("git ls-tree -r --name-only HEAD", { cwd: source }).toString();
+    expect(tree).toContain("Assets/Scripts/Real.cs");
+    expect(tree).not.toContain("UserSettings/Search.settings");
+  });
+
   it("leaves no quarantine behind when there are no conflicts", async () => {
     const lease = await manager().acquireLease({ label: "t", forceTempCopy: true });
     writeFileSync(join(lease.path, "Assets", "Scripts", "Board.cs"), "fresh", "utf8");

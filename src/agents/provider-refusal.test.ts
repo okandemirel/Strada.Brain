@@ -88,7 +88,7 @@ describe("a zero-output hard-timeout retries with a smaller prompt (2026-09-09)"
       const next = source.indexOf("silentStreamFallback(", at);
       const window = source.slice(at, next);
       expect(window, `streaming-error branch ${branches + 1} no longer compacts before the fallback`)
-        .toContain("this.compactSessionAfterHardTimeout(err, session, chatId, provider.name)");
+        .toContain("this.compactSessionAfterHardTimeout(err, session, chatId, provider.name, (effectivePrompt?.length ?? 0) + toolDefinitionChars(toolDefinitions))");
       branches += 1;
       cursor = next + 1;
     }

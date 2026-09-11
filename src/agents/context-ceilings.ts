@@ -14,6 +14,7 @@
 
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { canonicalizeProviderName } from "./providers/provider-identity.js";
 
 export const CONTEXT_CEILING_MIN_TOKENS = 8_192;
 export const CONTEXT_CEILING_SHRINK = 0.8;
@@ -29,8 +30,17 @@ const ceilings = new Map<string, CeilingRecord>();
 let storePath: string | null = null;
 let loaded = false;
 
+/**
+ * One key per provider whatever name a call site holds: the timeout path
+ * records the provider's display name ("OpenCode (Zen/Go)"), the compaction
+ * planner asks by assignment name ("opencode") — lowercasing alone kept them
+ * apart and the ceiling was never consulted (Codex 2026-09-11 #5).
+ */
+export function ceilingKey(provider: string): string {
+  return canonicalizeProviderName(provider) ?? provider.trim().toLowerCase();
+}
 function norm(provider: string): string {
-  return provider.trim().toLowerCase();
+  return ceilingKey(provider);
 }
 
 function loadOnce(): void {

@@ -85,6 +85,17 @@ const env = {
   CI: "1",
 };
 
+// Nothing may already answer on the port: a stale daemon's /health would pass
+// this smoke without the spawned one ever booting (Codex 2026-09-11 #12).
+try {
+  const pre = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(1500) });
+  console.error(`boot-smoke FAILED: something already answers on port ${port} (HTTP ${pre.status}) — pick another BOOT_SMOKE_PORT`);
+  rmSync(root, { recursive: true, force: true });
+  process.exit(1);
+} catch {
+  /* nothing listens — good */
+}
+
 const output = [];
 const child = spawn(process.execPath, [entry, "start", "--channel", "web"], {
   cwd: installRoot,
@@ -140,6 +151,8 @@ child.kill("SIGTERM");
 const shutdownDeadline = Date.now() + 30_000;
 while (!exited && Date.now() < shutdownDeadline) await sleep(250);
 if (!exited) fail("daemon did not exit within 30 s of SIGTERM");
-if (exited.code !== 0 && exited.signal !== "SIGTERM") fail(`daemon exited with code ${exited.code} (signal ${exited.signal}) after SIGTERM`);
+// A graceful shutdown ends in exit code 0. A child that merely died of the
+// signal never ran its shutdown path (Codex 2026-09-11 #12).
+if (exited.code !== 0) fail(`daemon did not shut down gracefully after SIGTERM (code ${exited.code}, signal ${exited.signal})`);
 console.log(`boot-smoke: clean shutdown (code ${exited.code}, signal ${exited.signal}) in ${((Date.now() - started) / 1000).toFixed(1)} s total`);
 rmSync(root, { recursive: true, force: true });

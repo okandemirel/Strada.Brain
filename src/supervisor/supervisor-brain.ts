@@ -423,7 +423,32 @@ export class SupervisorBrain {
       if (leafNodes.length === 0) {
         const alreadyDone = completedPlanOnResume(context.goalTree);
         if (alreadyDone) {
-          getLoggerSafe().info("Saved plan already complete on resume — nothing left to run", {
+          // A node's "completed" status is persisted before the independent
+          // verifier runs, so a tree saved between the two carries unverified
+          // work (Codex 2026-09-11 #1). The saved results are re-verified here,
+          // every one of them, before the resume may count as done.
+          if (this.verifyNode) {
+            const verifier = new ResultAggregator({
+              mode: "always",
+              samplingRate: 1,
+              preferDifferentProvider: true,
+              maxVerificationCost: Number.POSITIVE_INFINITY,
+            }, (node) => this.verifyNode!(node, context));
+            const { results: verified, report } = await verifier.verifyWithReport(alreadyDone.nodeResults);
+            const synthesized = verifier.synthesize(verified);
+            getLoggerSafe().info("Saved plan already complete on resume — re-verified before counting it done", {
+              goalRootId,
+              steps: alreadyDone.totalNodes,
+              approved: report.approved,
+              rejected: report.rejected,
+              flagged: report.flagged,
+              success: synthesized.success,
+            });
+            return synthesized.success
+              ? { ...synthesized, output: `${alreadyDone.output}\n\nRe-verified on resume: ${report.approved} approved, ${report.flagged} flagged, ${report.rejected} rejected.` }
+              : synthesized;
+          }
+          getLoggerSafe().info("Saved plan already complete on resume — nothing left to run (no verifier configured)", {
             goalRootId,
             steps: alreadyDone.totalNodes,
           });

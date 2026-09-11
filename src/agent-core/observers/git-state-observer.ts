@@ -143,9 +143,18 @@ export class GitStateObserver implements Observer {
   private async refresh(): Promise<void> {
     const result = await this.runGit(["-C", this.projectPath, "status", "--porcelain"], 5000);
     if (result.exitCode !== 0) return;
-    const status = result.stdout.trim();
-    const lines = status ? status.split("\n") : [];
+    // Not trim(): porcelain's first column may be a space (" M path"), and
+    // trimming the first line ate it — the path lost its first character and
+    // "Recordings/…" read as "ecordings/…", i.e. user work (Codex 2026-09-11 #11).
+    const status = result.stdout.replace(/\r?\n+$/, "");
+    const lines = status ? status.split(/\r?\n/) : [];
     const breakdown = summarizeGitStatus(lines);
+    if (breakdown.own === 0) {
+      // A clean tree resets the baseline: the next dirty episode is reported
+      // from its first file, not from 125 (Codex 2026-09-11 #10).
+      this.lastReportedOwn = 0;
+      return;
+    }
     if (!shouldReportGitGrowth(breakdown.own, this.lastReportedOwn)) return;
     const sinceLastReport = this.lastReportedOwn > 0 ? breakdown.own - this.lastReportedOwn : 0;
     this.lastReportedOwn = breakdown.own;

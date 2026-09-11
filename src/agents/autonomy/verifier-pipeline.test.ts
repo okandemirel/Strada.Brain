@@ -490,6 +490,22 @@ DONE`,
     const first = exhausted("Implemented the board. DONE");
     expect(first.initialDecision).toBe("continue");
     expect(first.gate).toContain("VERIFICATION DEBT UNPAID");
+    // With the tools away the gate was null and the unavailable-tools branch
+    // read that as "no debt" (Codex 2026-09-11 #2): the debt still gates.
+    const toolsAway = planVerifierPipeline({
+      prompt: "Implement the board",
+      draft: "Implemented the board. DONE",
+      state: createState({ stepResults: [{ toolName: "file_write", success: true, summary: "Wrote Board.cs", timestamp: Date.now() - 500 }] }),
+      task: IMPLEMENTATION_TASK,
+      verificationState: {
+        pendingFiles: new Set(["Assets/Game/Board.cs"]), touchedFiles: new Set(["Assets/Game/Board.cs"]),
+        hasCompilableChanges: true, lastBuildOk: null, lastVerificationAt: null, buildGateExhausted: true,
+      },
+      buildVerificationGate: null, conformanceGate: null, logEntries: [], chatId: "chat-debt-tools-away", taskStartedAtMs: startedAt,
+      buildToolsAvailable: false,
+    });
+    expect(toolsAway.initialDecision).toBe("continue");
+    expect(toolsAway.gate).toContain("VERIFICATION DEBT UNPAID");
     expect(first.gate).toContain("- Assets/Game/Tray.cs");
     expect(exhausted("Implemented the board. DONE").initialDecision).toBe("continue");
     expect(exhausted("Implemented the board. DONE").initialDecision).toBe("replan");

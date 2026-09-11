@@ -216,6 +216,27 @@ describe("GitStateObserver — breakdown, stable summary, growth threshold (2026
     expect(again[0]!.context["systemOutputCount"]).toBe(40);
   });
 
+  it("the first porcelain line keeps its leading status space, so Strada output on line one is not read as user work (Codex 2026-09-11 #11)", async () => {
+    const observer = new GitStateObserver("/proj", 0, async () => ({ exitCode: 0, stdout: " M Recordings/frame.png\n?? .strada/x\n" }));
+    await observer.refreshNow();
+    expect(observer.collect()).toHaveLength(0);
+    const b = summarizeGitStatus([" M Assets/A.cs"]);
+    expect(b.topDirs[0]).toEqual(["Assets", 1]);
+  });
+
+  it("a clean tree resets the baseline: the next dirty episode is reported from its first files (Codex 2026-09-11 #10)", async () => {
+    let lines = Array.from({ length: 100 }, (_, i) => `?? Assets/f${i}.cs`);
+    const observer = new GitStateObserver("/proj", 0, async () => ({ exitCode: 0, stdout: lines.join("\n") }));
+    await observer.refreshNow();
+    expect(observer.collect()).toHaveLength(1);
+    lines = [];
+    await observer.refreshNow();
+    expect(observer.collect()).toHaveLength(0);
+    lines = Array.from({ length: 30 }, (_, i) => `?? Assets/g${i}.cs`);
+    await observer.refreshNow();
+    expect(observer.collect()).toHaveLength(1);
+  });
+
   it("growth rule: 25 files or 10%, whichever is larger", () => {
     expect(shouldReportGitGrowth(1, 0)).toBe(true);
     expect(shouldReportGitGrowth(0, 0)).toBe(false);

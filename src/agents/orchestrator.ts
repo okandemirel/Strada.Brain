@@ -3827,15 +3827,18 @@ export class Orchestrator {
    * non-streaming fallback runs (measured 2026-09-09: two 600 s zero-output
    * calls on a 57k turn). Returns true when something was compacted.
    */
-  private compactSessionAfterHardTimeout(err: unknown, session: Session, chatId: string, providerName?: string): boolean {
+  private compactSessionAfterHardTimeout(err: unknown, session: Session, chatId: string, providerName?: string, requestOverheadChars = 0): boolean {
     if (!isHardTimeoutError(err)) return false;
     if (providerName) {
       // The turn that hung is the size this provider does not answer: learn
       // it, so the planner compacts BEFORE the next turn reaches it instead
       // of hanging again (report #37: the env override was the only fix).
+      // The whole request counts — system prompt and tool schemas included;
+      // messages alone under-measured a first request by 40k tokens and
+      // recorded the floor (Codex 2026-09-11 #6).
       const observed = Math.max(
         session.lastInputTokens ?? 0,
-        estimateTokens(session.messages, session.compactionSummary?.length ?? 0),
+        estimateTokens(session.messages, requestOverheadChars + (session.compactionSummary?.length ?? 0)),
       );
       const ceiling = recordContextCeiling(providerName, observed);
       if (ceiling !== undefined) {
@@ -4104,7 +4107,7 @@ export class Orchestrator {
           throw err;
         }
         // Non-cancel error → the same non-streaming fallback v1 runs, under a fresh scope.
-        this.compactSessionAfterHardTimeout(err, session, chatId, provider.name);
+        this.compactSessionAfterHardTimeout(err, session, chatId, provider.name, (effectivePrompt?.length ?? 0) + toolDefinitionChars(toolDefinitions));
         return await this.silentStreamFallback(
           provider, effectivePrompt, session, toolDefinitions, externalSignal, chatId, runClock,
         );
@@ -4187,7 +4190,7 @@ export class Orchestrator {
       }
       const errMsg = err instanceof Error ? err.message : "Unknown streaming error";
       getLogger().error("Silent stream error", { chatId, error: errMsg });
-      this.compactSessionAfterHardTimeout(err, session, chatId, provider.name);
+      this.compactSessionAfterHardTimeout(err, session, chatId, provider.name, (effectivePrompt?.length ?? 0) + toolDefinitionChars(toolDefinitions));
       // Fallback to non-streaming under the SAME per-call deadline v1 used (extracted; the
       // OFF call passes no runClock → AbortSignal.timeout, byte-identical to the prior inline).
       return await this.silentStreamFallback(

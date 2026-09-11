@@ -104,6 +104,19 @@ describe("strada status read-out", () => {
     expect(lines).toContain("Last campaign cmp_done: done 2 h ago");
   });
 
+  it("a health endpoint that sends headers and then never finishes its body does not hang status (Codex 2026-09-11 #13)", async () => {
+    const d = dir();
+    const trickle = ((url: string, init?: { signal?: AbortSignal }) => Promise.resolve({
+      ok: true, status: 200,
+      json: () => new Promise((_resolve, reject) => init?.signal?.addEventListener("abort", () => reject(new Error("aborted: body never finished")))),
+    })) as unknown as typeof fetch;
+    const started = Date.now();
+    const report = await gatherStatusReport({ memoryDbPath: d, installRoot: d, now: NOW, healthUrl: "http://127.0.0.1:1/health", fetchImpl: trickle });
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(report.health.reachable).toBe(false);
+    expect(report.health.detail).toContain("aborted");
+  });
+
   it("update history: appends, caps at the limit, and the last event is what status prints", () => {
     const d = dir();
     mkdirSync(join(d, ".strada"), { recursive: true });

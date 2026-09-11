@@ -53,12 +53,15 @@ describe("AgentCore — an aborted tick must not destroy the batch it collected 
 
 describe("AgentCore — a goal about the working tree runs in the working tree (2026-09-10)", () => {
   it("a git observation's goal is submitted with workspacePolicy 'none'; a build observation's goal keeps the lease", async () => {
-    const run = async (source: "git" | "build", summary: string) => {
+    const run = async (source: "git" | "build", summary: string, goal = "Look into it", extra: Array<["git" | "build", string, number]> = []) => {
       const engine = new ObservationEngine();
-      engine.register({ name: `fake-${source}`, collect: () => [createObservation(source, summary, { priority: 90 })] });
+      engine.register({ name: `fake-${source}`, collect: () => [
+        createObservation(source, summary, { priority: 90 }),
+        ...extra.map(([src, text, priority]) => createObservation(src, text, { priority })),
+      ] });
       const scorer = new PriorityScorer();
       const provider = { chat: vi.fn().mockResolvedValue({
-        text: '```json\n{"action":"execute","goal":"Look into it","reasoning":"worth a look"}\n```',
+        text: '```json\n{"action":"execute","goal":"' + goal + '","reasoning":"worth a look"}\n```',
         toolCalls: [],
         stopReason: "end_turn",
       }) };
@@ -72,10 +75,17 @@ describe("AgentCore — a goal about the working tree runs in the working tree (
     };
     // Measured 22:31: "investigate the 1118 uncommitted changes" ran in a
     // worktree lease seeded from HEAD and reported a clean tree.
-    expect(await run("git", "Uncommitted changes in the project's working tree (outside Strada's own output): 1118 — 1000 untracked")).toMatchObject({ origin: "daemon", workspacePolicy: "none" });
+    expect(await run("git", "Uncommitted changes in the project's working tree (outside Strada's own output): 1118 — 1000 untracked", "Investigate the uncommitted changes and categorize them")).toMatchObject({ origin: "daemon", workspacePolicy: "none" });
     const build = await run("build", "Build broken: 3 compile errors");
     expect(build).toMatchObject({ origin: "daemon" });
     expect(build.workspacePolicy).toBeUndefined();
+    // The goal's subject decides, not the top-ranked observation (Codex 2026-09-11 #9):
+    // a build observation outranks a git one, yet the chosen goal is about the working tree.
+    const goalAboutTree = await run("build", "Build broken: 3 compile errors", "Investigate the uncommitted working-tree changes", [["git", "Uncommitted changes in the project's working tree (outside Strada's own output): 40", 60]]);
+    expect(goalAboutTree).toMatchObject({ workspacePolicy: "none" });
+    // …and a build goal keeps its lease even when a git observation was on the list.
+    const goalAboutBuild = await run("git", "Uncommitted changes in the project's working tree (outside Strada's own output): 40", "Fix the compile errors in Board.cs", [["build", "Build broken: 3 compile errors", 60]]);
+    expect(goalAboutBuild.workspacePolicy).toBeUndefined();
   });
 });
 

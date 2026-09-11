@@ -36,6 +36,11 @@ describe("learned context ceilings (#37)", () => {
     expect(readContextCeilings(store)["opencode"]?.ceiling).toBe(40_000);
   });
 
+  it("the display name and the assignment name are ONE provider (Codex 2026-09-11 #5)", () => {
+    expect(recordContextCeiling("OpenCode (Zen/Go)", 57_000)).toBe(45_600);
+    expect(effectiveContextWindow("opencode", 128_000)).toEqual({ window: 45_600, learned: 45_600 });
+  });
+
   it("an empty observation records nothing", () => {
     expect(recordContextCeiling("x", 0)).toBeUndefined();
     expect(recordContextCeiling("x", Number.NaN)).toBeUndefined();

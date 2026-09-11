@@ -240,7 +240,7 @@ export class AgentCore {
               AgentCore.AGENT_CHAT_ID,
               AgentCore.AGENT_CHANNEL_TYPE,
               decision.goal,
-              { origin: "daemon" as const, ...workspacePolicyFor(ranked[0] ? [ranked[0]] : []) },
+              { origin: "daemon" as const, ...workspacePolicyFor(ranked, decision.goal) },
             );
             // audited 2026-09-02: tracking was gated on `matchedInstinctIds.length > 0`, so a goal
             // that matched no instinct (every goal at cold start, and with no retriever wired) was
@@ -290,7 +290,7 @@ export class AgentCore {
               AgentCore.AGENT_CHAT_ID,
               AgentCore.AGENT_CHANNEL_TYPE,
               compoundGoal,
-              { origin: "daemon" as const, ...workspacePolicyFor(matched) },
+              { origin: "daemon" as const, ...workspacePolicyFor(matched, compoundGoal) },
             );
             // audited 2026-09-02: same unconditional tracking as the execute arm (see above).
             this.taskInstinctMap.set(task.id, { instinctIds: matchedInstinctIds, createdAt: Date.now() });
@@ -481,6 +481,11 @@ export class AgentCore {
  * 2026-09-10 22:31: "investigate the 1118 uncommitted changes" ran in a lease
  * and reported a clean tree. Every other goal keeps the lease.
  */
-export function workspacePolicyFor(observations: ReadonlyArray<{ source: string }>): { workspacePolicy?: "none" } {
-  return observations.some((o) => o.source === "git") ? { workspacePolicy: "none" } : {};
+export const WORKING_TREE_GOAL_RE = /\b(uncommitted|untracked|working[- ]tree|git status|dirty tree|unstaged)\b/i;
+
+export function workspacePolicyFor(observations: ReadonlyArray<{ source: string }>, goal: string): { workspacePolicy?: "none" } {
+  // The reasoning saw every ranked observation and chose the goal: the goal's
+  // subject decides, not whichever observation ranked first (Codex 2026-09-11 #9).
+  const sawGit = observations.some((o) => o.source === "git");
+  return sawGit && WORKING_TREE_GOAL_RE.test(goal) ? { workspacePolicy: "none" } : {};
 }

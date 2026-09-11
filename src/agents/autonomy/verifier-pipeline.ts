@@ -88,7 +88,11 @@ export function planVerifierPipeline(params: {
   });
 
   const checks: VerifierCheck[] = [];
-  const buildCheck = params.buildToolsAvailable === false
+  // Exhausted debt takes the gating path whatever the tooling says: with the
+  // tools away, needsVerification() is false and the gate is null, and the
+  // unavailable-tools branch read null as "no debt" (Codex 2026-09-11 #2).
+  const exhaustedDebt = params.verificationState.buildGateExhausted === true && params.verificationState.pendingFiles.size > 0;
+  const buildCheck = params.buildToolsAvailable === false && !exhaustedDebt
     ? buildUnavailableBuildToolsCheck(params.buildVerificationGate, evidence)
     : buildBuildVerifierCheck(params.buildVerificationGate, params.verificationState, evidence, `${params.chatId}:${params.taskStartedAtMs}`);
   if (buildCheck) {

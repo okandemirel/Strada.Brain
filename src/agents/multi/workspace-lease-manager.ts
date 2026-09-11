@@ -363,7 +363,11 @@ function writeCommitLedger(leasePath: string, ledger: LeaseCommitLedger): void {
 }
 
 function clearCommitLedger(leasePath: string): void {
-  rmSync(leaseCommitLedgerPath(leasePath), { force: true });
+  try {
+    rmSync(leaseCommitLedgerPath(leasePath), { force: true });
+  } catch {
+    /* advisory: a ledger that cannot be removed must not fail a commit whose files already landed (Codex 2026-09-11 #8) */
+  }
 }
 
 /** The ledger of a commit that never finished, if one is on disk for this lease. */
@@ -1264,6 +1268,8 @@ export class WorkspaceLeaseManager {
       return undefined;
     }
     if (!dotGit.isFile()) return undefined; // a worktree's .git is a file; a temp copy has none, a repo has a dir
+    const heldPrefixes = [...heldRels].map((h) => `${h}${sep}`);
+    const isHeld = (rel: string): boolean => heldRels.has(rel) || heldPrefixes.some((p) => rel.startsWith(p));
     if (resolve(sourceRoot) !== resolve(this.projectRoot)) return undefined; // a lease of a lease: no branch to land on
     const commits = await this.listLeaseCommits(workspacePath);
     if (commits.length === 0) {
@@ -1314,7 +1320,11 @@ export class WorkspaceLeaseManager {
           if (dstMode === "160000" || m[1] === "160000") continue; // submodule pointers are not the agent's files
           if (!posixPath.includes("/") && LEASE_SIDECAR_FILES.has(posixPath)) continue; // the lease's own bookkeeping, never project content
           const rel = toNative(posixPath);
-          if (heldRels.has(rel)) continue;
+          // A held DIRECTORY (an unreadable one from the walk) holds everything
+          // under it; an excluded top-level name (Library, UserSettings, …)
+          // never enters the project's history either (Codex 2026-09-11 #4, #7).
+          if (isHeld(rel)) continue;
+          if (!this.shouldCommitEntry(workspacePath, join(workspacePath, rel))) continue;
           if (status === "D") {
             if (deletedRels.has(rel)) removes.push(posixPath);
             continue;
@@ -1569,7 +1579,7 @@ export class WorkspaceLeaseManager {
     // it by stripping " (reason)" off the report string, which cut a name such
     // as "Hero (1).png (EACCES)" down to "Hero" and let its .meta travel alone
     // (report 2026-09-10 #34).
-    type FileOutcome = { written?: string; conflict?: string; failed?: string; failedRel?: string; write?: { rel: string; full: string; target: string } };
+    type FileOutcome = { written?: string; conflict?: string; failed?: string; failedRel?: string; write?: { rel: string; full: string; target: string; targetExisted: boolean } };
     const outcomes: Array<FileOutcome | undefined> = [];
 
     const quarantine = async (rel: string, full: string): Promise<void> => {
@@ -1664,7 +1674,7 @@ export class WorkspaceLeaseManager {
             }
           }
 
-          return { write: { rel, full, target } };
+          return { write: { rel, full, target, targetExisted: targetExists } };
         } catch (err) {
           // One locked or half-deleted file must not cost the rest of the
           // commit — measured in production: a walk that threw on an
@@ -1714,17 +1724,21 @@ export class WorkspaceLeaseManager {
     outcomes.forEach((o, i) => { if (o?.write) writeIndexByRel.set(o.write.rel, i); });
     const dependentMeta = (o: FileOutcome | undefined): boolean =>
       o?.write !== undefined && /\.meta$/i.test(o.write.rel) && writeIndexByRel.has(pairOf(o.write.rel));
-    const writeOne = async (index: number): Promise<void> => {
+    const landed = new Map<number, { rel: string; full: string; target: string; targetExisted: boolean }>();
+    const writeOne = async (index: number): Promise<boolean> => {
       const outcome = outcomes[index];
-      if (!outcome?.write) return;
+      if (!outcome?.write) return false;
       const { rel, full, target } = outcome.write;
       try {
         await fsp.mkdir(dirname(target), { recursive: true });
         await fsp.copyFile(full, target);
+        landed.set(index, outcome.write);
         outcomes[index] = { written: rel };
+        return true;
       } catch (err) {
         await quarantine(rel, full);
         outcomes[index] = { failed: `${rel} (${err instanceof Error ? err.message : String(err)})`, failedRel: rel };
+        return false;
       }
     };
     await mapWithConcurrency(outcomes, WALK_CONCURRENCY, async (outcome, index) => {
@@ -1733,13 +1747,30 @@ export class WorkspaceLeaseManager {
     });
     await mapWithConcurrency(outcomes, WALK_CONCURRENCY, async (outcome, index) => {
       if (!outcome?.write || !dependentMeta(outcome)) return;
-      const partner = outcomes[writeIndexByRel.get(pairOf(outcome.write.rel))!];
+      const partnerIndex = writeIndexByRel.get(pairOf(outcome.write.rel))!;
+      const partner = outcomes[partnerIndex];
       if (partner?.failedRel !== undefined) {
         await quarantine(outcome.write.rel, outcome.write.full);
         outcomes[index] = { conflict: outcome.write.rel };
         return;
       }
-      await writeOne(index);
+      if (await writeOne(index)) return;
+      // The asset landed but its .meta could not follow (Codex 2026-09-11 #3):
+      // a NEW asset is withdrawn again so the pair stays whole; one that
+      // overwrote a project file cannot be un-written and is reported as such.
+      const asset = landed.get(partnerIndex);
+      if (!asset) return;
+      if (!asset.targetExisted) {
+        try {
+          await fsp.unlink(asset.target);
+        } catch {
+          /* it may already be gone */
+        }
+        await quarantine(asset.rel, asset.full);
+        outcomes[partnerIndex] = { failed: `${asset.rel} (withdrawn: its .meta could not be written)`, failedRel: asset.rel };
+      } else {
+        outcomes[partnerIndex] = { failed: `${asset.rel} (written, but its .meta could not be written — the pair is inconsistent in the project)`, failedRel: asset.rel };
+      }
     });
     clearCommitLedger(workspacePath);
 

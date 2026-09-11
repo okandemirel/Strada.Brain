@@ -37,9 +37,18 @@ describe("a resumed task whose saved plan is already complete (2026-09-10 21:20)
     expect(completedPlanOnResume(t)?.totalNodes).toBe(2);
   });
 
+  it("the supervisor re-verifies the saved results before counting the resume done (Codex 2026-09-11 #1)", () => {
+    const source = readFileSync("src/supervisor/supervisor-brain.ts", "utf8");
+    const at = source.indexOf("const alreadyDone = completedPlanOnResume(context.goalTree);");
+    const branch = source.slice(at, source.indexOf('"No sub-tasks after decomposition"', at));
+    expect(branch).toContain("verifier.verifyWithReport(alreadyDone.nodeResults)");
+    expect(branch).toContain('mode: "always"');
+    expect(branch).toContain("synthesized.success");
+  });
+
   it("the supervisor asks it before declaring 'No sub-tasks after decomposition'", () => {
     const source = readFileSync("src/supervisor/supervisor-brain.ts", "utf8");
     const at = source.indexOf('"No sub-tasks after decomposition"');
-    expect(source.lastIndexOf("completedPlanOnResume(context.goalTree)", at)).toBeGreaterThan(at - 600);
+    expect(source.lastIndexOf("completedPlanOnResume(context.goalTree)", at)).toBeGreaterThan(at - 3000);
   });
 });
