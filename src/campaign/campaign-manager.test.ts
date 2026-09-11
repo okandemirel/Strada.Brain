@@ -3039,6 +3039,25 @@ describe("CampaignManager", () => {
     expect(tasks.cancelled).toContain(child);
   });
 
+  it("a cancel on an ADOPTED lineage's ancestor still reaches the campaign (Codex 2026-09-11 K#8)", async () => {
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    // The executor mints a retry and the campaign adopts it, so the milestone
+    // no longer points at task_1.
+    const adopted = tasks.addRetry("task_1", TaskStatus.executing);
+    (tasks as unknown as { prompts: Map<string, string> }).prompts.set(adopted, tasks.submitted[0]!.prompt);
+    const moved = storage.get(campaign.id)!;
+    moved.milestones[0]!.taskId = adopted;
+    storage.save(moved);
+    // A person cancels the ancestor the ladder has moved past.
+    tasks.markTerminal("task_1", TaskStatus.blocked);
+    tasks.cancel("task_1", { reason: "user" });
+    tasks.emit("task:cancelled", "task_1", "cancelled");
+
+    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"));
+    expect(storage.get(campaign.id)!.lastError).toContain("NOT DELIVERED");
+  });
+
   it("the same shape with a SUPERSESSION keeps working (Codex 2026-09-11 J#2)", async () => {
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
     await waitFor(() => expect(tasks.submitted).toHaveLength(1));

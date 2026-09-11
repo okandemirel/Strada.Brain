@@ -1787,6 +1787,48 @@ export class CampaignManager {
         });
         return;
       }
+      // A PERSON'S CANCELLATION reaches the campaign whichever of its
+      // lineages it lands on. Correlation asks whether the settled task
+      // descends from the CURRENT milestone's task, so a stop order on an
+      // ancestor the ladder had adopted past, or on an earlier milestone's
+      // lineage, reached no handler at all and the campaign carried on
+      // (Codex 2026-09-11 K#8).
+      if (campaign.state === "executing" && status === TaskStatus.cancelled) {
+        // BOTH DIRECTIONS: the cancelled task may be a descendant of the
+        // milestone's task, or the ANCESTOR the ladder adopted past. Asking
+        // only the first was how a stop order on an adopted lineage's parent
+        // reached no handler at all.
+        const ownsIt = campaign.milestones.some(
+          (m) =>
+            m.taskId &&
+            (this.taskManager.isInLineage(m.taskId as TaskId, taskId as TaskId) ||
+              this.taskManager.isInLineage(taskId as TaskId, m.taskId as TaskId)),
+        );
+        const row = this.taskManager.getStatus(taskId as TaskId) as { cancelReason?: string } | null;
+        if (ownsIt && row?.cancelReason === "user") {
+          this.enqueueSettle(campaign.id, async () => {
+            const fresh = this.storage.get(campaign.id);
+            if (!fresh || fresh.state !== "executing") return;
+            const current = fresh.milestones[fresh.currentMilestone];
+            if (!current) return;
+            current.status = "failed";
+            fresh.state = "failed";
+            fresh.autoReviveAt = undefined;
+            fresh.lastError = `NOT DELIVERED — ${current.title} was cancelled`;
+            this.persist(fresh);
+            this.cancelLiveLineages(fresh, "a sprint of this campaign was cancelled");
+            getLoggerSafe().info("Campaign stopped: one of its lineages was cancelled on purpose", {
+              id: fresh.id,
+              taskId,
+            });
+            await this.tell(
+              fresh,
+              `🛑 **${current.title}** was cancelled, so the campaign stops here. Reply **kampanya devam** to start it again.`,
+            );
+          });
+          return;
+        }
+      }
       if (campaign.state === "executing") {
         const milestone = campaign.milestones[campaign.currentMilestone];
         if (
