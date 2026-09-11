@@ -3,7 +3,7 @@
  * A missing or broken verdict is `ran: false` — disclosed, never a pass.
  */
 import { describe, expect, it } from "vitest";
-import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
+import { chmodSync, mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parsePlayerBuildOutput, makeRunPlayer, looksLikePlayer } from "./stage-runtime.js";
@@ -122,8 +122,20 @@ describe("a named player artifact must BE one (Codex 2026-09-11 E#2, G#3)", () =
     // A LINUX player is an ELF binary, and the macOS branch used to demand
     // Mach-O of it — refusing a perfectly good build (Codex 2026-09-11 I#15).
     const linux = join(artifactDir, "Game.x86_64");
-    writeFileSync(linux, Buffer.concat([Buffer.from([0x7f]), Buffer.from("ELF", "latin1"), Buffer.alloc(256 * 1024, 1)]));
+    // 0x7f "ELF", the 64-bit class byte, and the executable bit: a header
+    // shape, not four magic bytes (Codex 2026-09-11 K#12).
+    writeFileSync(linux, Buffer.concat([Buffer.from([0x7f]), Buffer.from("ELF", "latin1"), Buffer.from([2]), Buffer.alloc(256 * 1024, 1)]));
+    chmodSync(linux, 0o755);
     expect(looksLikePlayer(linux)).toBe(true);
+    // …a well-formed header with no execute permission is not a player.
+    chmodSync(linux, 0o644);
+    expect(looksLikePlayer(linux)).toBe(false);
+    chmodSync(linux, 0o755);
+    // …and neither is one whose class byte is nonsense.
+    const badClass = join(artifactDir, "BadClass.x86_64");
+    writeFileSync(badClass, Buffer.concat([Buffer.from([0x7f]), Buffer.from("ELF", "latin1"), Buffer.from([9]), Buffer.alloc(256 * 1024)]));
+    chmodSync(badClass, 0o755);
+    expect(looksLikePlayer(badClass)).toBe(false);
     const notElf = join(artifactDir, "Fake.x86_64");
     writeFileSync(notElf, Buffer.alloc(256 * 1024, 0x41));
     expect(looksLikePlayer(notElf)).toBe(false);
@@ -165,5 +177,25 @@ describe("a build folder must hold a build (Codex 2026-09-11 J#23)", () => {
     const nearMiss = join(artifactDir, "NearMiss.x86_64");
     writeFileSync(nearMiss, Buffer.concat([Buffer.from("AELF", "latin1"), Buffer.alloc(256 * 1024, 1)]));
     expect(looksLikePlayer(nearMiss)).toBe(false);
+  });
+});
+
+describe("a build folder holding only a log is not a build (Codex 2026-09-11 K#12)", () => {
+  it("wants the page and the data, not one of them", () => {
+    const logOnly = join(artifactDir, "WebGL4");
+    mkdirSync(join(logOnly, "Build"), { recursive: true });
+    writeFileSync(join(logOnly, "index.html"), `<html>${"<!-- pad -->".repeat(1000)}</html>`);
+    writeFileSync(join(logOnly, "Build", "build.log"), "A".repeat(4096));
+    expect(looksLikePlayer(logOnly)).toBe(false);
+
+    // Data with no page at all is not something anyone can open.
+    const dataOnly = join(artifactDir, "WebGL5");
+    mkdirSync(join(dataOnly, "Build"), { recursive: true });
+    writeFileSync(join(dataOnly, "Build", "game.data"), Buffer.alloc(256 * 1024, 4));
+    expect(looksLikePlayer(dataOnly)).toBe(false);
+
+    // Both: a build.
+    writeFileSync(join(dataOnly, "index.html"), "<html>a WebGL build</html>");
+    expect(looksLikePlayer(dataOnly)).toBe(true);
   });
 });

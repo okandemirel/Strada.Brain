@@ -78,7 +78,18 @@ export function artDirectionText(look: LookDescription | undefined, gddText: str
     // A HEADING IS NOT A BRIEF: "## Art Direction" with nothing under it
     // reduced to "Art Direction", which contains an art word and became the
     // whole art direction (Codex 2026-09-11 J#22).
-    .filter((line) => !/^\s*#{1,6}\s+\S/.test(line))
+    // A HEADING IS NOT A BRIEF, numbered ("1. ART DIRECTION") as well as
+    // markdown (Codex 2026-09-11 J#22, K#11).
+    // A HEADING IS NOT A BRIEF: markdown ("## Art Direction"), numbered
+    // ("1. ART DIRECTION") — and an ALL-CAPS fragment, because the sentence
+    // splitter cuts a numbered title at its own full stop and the rest of it
+    // arrives on its own (Codex 2026-09-11 J#22, K#11).
+    .filter((line) => {
+      const t = line.trim();
+      if (/^#{1,6}\s+\S/.test(t)) return false;
+      if (/^\d+\.\s+[A-Z][A-Z\s/&-]{3,}$/.test(t)) return false;
+      return /[a-z]/.test(t);
+    })
     .map((line) => line.trim())
     .filter((line) => line.length > 0 && ART_WORD_RE.test(line));
   return sentences.length > 0 ? sentences.join(" ") : undefined;
@@ -110,7 +121,11 @@ export function extractLookDescription(gddText: string): LookDescription {
       // …and at ANY markdown heading: the body used to run past "## Gameplay"
       // and swallow "Solve geometric puzzles.", which then read as a request
       // for flat geometric art (Codex 2026-09-11 I#10).
-      if (/^\s*\d+\.\s+[A-Z][A-Z\s/&-]{3,}$/.test(line) && body.length > 0) break;
+      // …whatever the body holds so far: the numbered guard kept the
+      // body.length condition, so "1. ART DIRECTION" followed straight by
+      // "2. GAMEPLAY" took the gameplay text as the art brief (Codex
+      // 2026-09-11 K#11).
+      if (/^\s*\d+\.\s+[A-Z][A-Z\s/&-]{3,}$/.test(line)) break;
       // A SIBLING OR PARENT heading ends the section, even when the body is
       // still empty: "## Art Direction" immediately followed by "## Gameplay"
       // took that heading and its text as the art brief (Codex 2026-09-11
@@ -122,7 +137,21 @@ export function extractLookDescription(gddText: string): LookDescription {
     }
     // Markdown heading markers are not prose: "## Art Direction" bodies full of
     // "### Palette" lines were rejected as a contents listing (Codex 2026-09-11 B#23).
-    candidates.push({ heading: (match[1] ?? "").trim(), line: i + 1, body: body.map((l) => l.replace(/^\s*#{1,6}\s+/, "")).join("\n").trim() });
+    // A BRIEF WRITTEN INTO THE HEADING: "## Art Direction: Richly painted
+    // watercolour environments." is the whole description, and taking only
+    // the lines under it discarded the requested style (Codex 2026-09-11
+    // K#11).
+    const inline = /:\s*(\S.*)$/.exec((lines[i] ?? "").replace(/^\s*#{1,6}\s+/, ""))?.[1]?.trim();
+    // …and a body made only of SUBHEADINGS is not a brief: "### Palette and
+    // references" with nothing under it invented one (K#11).
+    const prose = body.filter((l) => !/^\s*#{1,6}\s+\S/.test(l));
+    const substantive = prose.join("\n").trim().length > 0;
+    const bodyText = body.map((l) => l.replace(/^\s*#{1,6}\s+/, "")).join("\n").trim();
+    candidates.push({
+      heading: (match[1] ?? "").trim(),
+      line: i + 1,
+      body: substantive ? bodyText : inline ? `${inline}\n${bodyText}`.trim() : "",
+    });
   }
 
   if (candidates.length === 0) {

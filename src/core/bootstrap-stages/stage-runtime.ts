@@ -717,7 +717,15 @@ export function looksLikePlayer(artifactPath: string): boolean {
       // directory, not anywhere in the folder — a padded index.html beside an
       // empty Build/ passed (Codex 2026-09-11 J#23).
       const buildDirs = entries.filter((e) => /^(?:Build|Data|.*_Data|Contents)$/i.test(e));
-      if (buildDirs.length > 0) return buildDirs.some((dir) => holdsPayload(join(artifactPath, dir), 3));
+      if (buildDirs.length > 0) {
+        // A WEB build needs its PAGE as well as its data: a Build folder
+        // holding only a log, or a data file with no page at all, is not
+        // something anyone can open (Codex 2026-09-11 K#12).
+        const webish = entries.some((e) => /^index\.html$/i.test(e));
+        const buildOnly = buildDirs.every((d) => /^Build$/i.test(d));
+        if (buildOnly && !webish) return false;
+        return buildDirs.some((dir) => holdsGameData(join(artifactPath, dir), 3));
+      }
       // A player library at the top level is a build of its own shape.
       const hasPlayerLib = entries.some((e) => /^UnityPlayer\.(?:dll|so|dylib)$/i.test(e));
       return hasPlayerLib && holdsPayload(artifactPath, 3);
@@ -738,6 +746,36 @@ export function looksLikePlayer(artifactPath: string): boolean {
 
 /** Smallest file inside a bundle that counts as payload rather than metadata. */
 const MIN_BUNDLE_PAYLOAD_BYTES = 4 * 1024;
+
+/**
+ * A real file that is not a LOG: a Build folder containing only build.log
+ * passed as a web game (Codex 2026-09-11 K#12).
+ */
+function holdsGameData(dir: string, depth: number): boolean {
+  if (depth <= 0) return false;
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return false;
+  }
+  for (const entry of entries) {
+    if (/\.(?:log|txt|md|json)$/i.test(entry)) continue;
+    const child = join(dir, entry);
+    let st: ReturnType<typeof statSync>;
+    try {
+      st = statSync(child);
+    } catch {
+      continue;
+    }
+    if (st.isDirectory()) {
+      if (holdsGameData(child, depth - 1)) return true;
+    } else if (st.size >= MIN_BUNDLE_PAYLOAD_BYTES) {
+      return true;
+    }
+  }
+  return false;
+}
 
 /** Does this directory hold a real file somewhere in its first few levels? */
 function holdsPayload(dir: string, depth: number): boolean {
@@ -790,7 +828,25 @@ function hasPackageMagic(path: string): boolean {
   // so a perfectly good .x86_64 build was refused (Codex 2026-09-11 I#15).
   // All four bytes: checking only "ELF" from byte one accepted "AELF"
   // (Codex 2026-09-11 J#23).
-  if (/\.x86_64$/i.test(path)) return head[0] === 0x7f && head.toString("latin1", 1, 4) === "ELF";
+  // The magic AND the class byte AND the executable bit: four bytes followed
+  // by 65 532 zeros, mode 0644, is not a player (Codex 2026-09-11 K#12).
+  if (/\.x86_64$/i.test(path)) {
+    if (!(head[0] === 0x7f && head.toString("latin1", 1, 4) === "ELF")) return false;
+    try {
+      const st = statSync(path);
+      const cls = Buffer.alloc(1);
+      const fd = openSync(path, "r");
+      try {
+        readSync(fd, cls, 0, 1, 4);
+      } finally {
+        closeSync(fd);
+      }
+      // 1 = 32-bit, 2 = 64-bit; anything else is not an ELF header.
+      return (cls[0] === 1 || cls[0] === 2) && (st.mode & 0o111) !== 0;
+    } catch {
+      return false;
+    }
+  }
   if (/\.app$/i.test(path)) {
     // Mach-O 32/64 in both byte orders, and the universal (fat) header.
     return [0xfeedface, 0xfeedfacf, 0xcefaedfe, 0xcffaedfe, 0xcafebabe].includes(magic);

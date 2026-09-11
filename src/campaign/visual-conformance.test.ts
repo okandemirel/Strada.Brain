@@ -197,6 +197,25 @@ describe("the art direction a gate judges against (Codex 2026-09-11 F#3, H#13)",
     expect(text).not.toContain("geometric clues");
   });
 
+  it("a numbered heading, a subheading-only body and an inline brief (Codex 2026-09-11 K#11)", () => {
+    // A NUMBERED heading ends the section too, empty body or not.
+    const numbered = "1. ART DIRECTION\n2. GAMEPLAY\nSolve geometric puzzles.\nReach the exit.";
+    const numberedLook = extractLookDescription(numbered);
+    expect(numberedLook.text ?? "").not.toContain("geometric puzzles");
+    expect(artDirectionText(numberedLook, numbered)).toBeUndefined();
+
+    // A body of SUBHEADINGS is not a brief.
+    const headingsOnly = "## Art Direction\n### Palette and references\n## Gameplay";
+    const headingsLook = extractLookDescription(headingsOnly);
+    expect(headingsLook.found).toBe(false);
+
+    // …and a brief written INTO the heading is the brief.
+    const inline = "## Art Direction: Richly painted watercolor environments.\n## Gameplay";
+    const inlineLook = extractLookDescription(inline);
+    expect(inlineLook.found).toBe(true);
+    expect(inlineLook.text).toContain("watercolor");
+  });
+
   it("never hands GAMEPLAY vocabulary to the style check (Codex 2026-09-11 H#13)", () => {
     // "Solve geometric puzzles." made asksForFlatArt true and waived the
     // placeholder-art refusal for a document asking for watercolour.
