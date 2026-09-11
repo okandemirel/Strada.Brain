@@ -2487,6 +2487,43 @@ describe("CampaignManager", () => {
     expect(tasks.submitted.filter((t) => t.prompt.includes("ART NOT PRODUCED")).length).toBe(1);
   });
 
+  it("a proof this MACHINE cannot produce stops the campaign and asks a person, instead of reviving forever (Codex 2026-09-11 C#2)", async () => {
+    tasks = new FakeTaskManager();
+    storage.close();
+    storage = new CampaignStorage(join(dir, "campaigns-unmeasurable.db"));
+    manager = new CampaignManager({
+      storage,
+      planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
+      // No compile verifier at all: this machine cannot answer that question.
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async (chatId, text) => { messages.push({ chatId, text }); },
+      projectRoot, retryAdoptionGraceMs: 10, completedSettleDelayMs: 0, milestoneTimeBoxMs: 60 * 60_000,
+      deliveryResumeDelayMs: 20,
+    });
+    manager.attachEvents();
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await vi.waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    const green = { testsGreen: true, detail: "PlayMode verification passed: 42 of 42 tests passed (unfiltered — the whole PlayMode suite)", unfiltered: true };
+    // Keep completing the final sprint; the compile check can never run.
+    for (let round = 0; round < 12; round++) {
+      const c = storage.get(campaign.id)!;
+      if (c.state === "failed" && c.autoReviveAt === undefined) break;
+      const id = storage.get(campaign.id)!.milestones[2]!.taskId!;
+      tasks.verifications.set(id, green);
+      tasks.emit("task:completed", id, "green, shipping");
+      await new Promise((r) => setTimeout(r, 150));
+    }
+    const stopped = storage.get(campaign.id)!;
+    expect(stopped.state).toBe("failed");
+    // No appointment: retrying cannot change a missing tool.
+    expect(stopped.autoReviveAt).toBeUndefined();
+    expect(messages.map((m) => m.text).join("\n")).toContain("This machine cannot produce the missing proof");
+  });
+
   it("a CANCELLED coverage sprint does not start a final proof sprint (Codex 2026-09-11 C#1)", async () => {
     // A manager of its own, on its own task manager and storage: two managers
     // on one emitter double-handle every event.

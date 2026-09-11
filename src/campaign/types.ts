@@ -276,6 +276,13 @@ export interface Campaign {
    * done campaigns are not active, not revivable and not queryable, so
    * nothing else would ever notice (audited 2026-09-02).
    */
+  /**
+   * Consecutive self-revivals spent on proofs this machine cannot produce
+   * (no Unity, no builder, an artifact it cannot execute). Past
+   * MAX_UNMEASURABLE_REVIVES the campaign stops and asks a person instead of
+   * retrying forever (Codex 2026-09-11 C#2).
+   */
+  unmeasurableRevives?: number;
   deliveryReported?: boolean;
   /**
    * The independent reviewer's verdict text for the last delivery report

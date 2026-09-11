@@ -229,6 +229,13 @@ export const RECENT_PROVIDER_FAILURE_MS = 30 * 60_000;
 /** The Turkish executor's own inactivity stop (background-executor.ts). */
 const TURKISH_STALL_RE = /Görev ilerleme kaydetmeden takıldı/i;
 
+/** A player run that says THIS MACHINE cannot execute the artifact. */
+const UNRUNNABLE_HERE_RE = /\b(?:unsupported|cannot run|can't run|not executable|no runner|unrecognized (?:artifact|executable)|exec format error|requires a device|not supported on this (?:platform|host))\b/i;
+/** Missing proofs that describe absent TOOLING rather than a broken game. */
+const UNMEASURABLE_PROOF_RE = /\b(?:did not run|could not run|is not configured|is not registered|not available|no compile verifier|no player builder|no player runner)\b/i;
+/** Self-revivals spent on a proof this machine cannot produce before asking a person. */
+const MAX_UNMEASURABLE_REVIVES = 2;
+
 export class CampaignManager {
   private readonly storage: CampaignStorage;
   private readonly planner: CampaignPlanner;
@@ -2174,7 +2181,9 @@ export class CampaignManager {
       const playerBroken = player !== undefined && player.found && player.ok !== true;
       // An artifact in hand that was never played to a verdict — no runner,
       // the run could not start, or it left no file — is a missing proof too.
-      const playerMissing = isLast && build?.ran === true && build.ok === true && (player === undefined || !player.found);
+      const playerUnrunnableHere = player !== undefined && typeof (player as { unrunnableHere?: string }).unrunnableHere === "string";
+      const playerMissing = isLast && build?.ran === true && build.ok === true
+        && (player === undefined || (!player.found && !playerUnrunnableHere));
       // THE GDD'S OWN NUMBERS. "60 fps", "loads in under 3 s", "a round lasts
       // 30–90 s" were repeated to the planner and measured by nothing until
       // 2026-09-10. Each is now answered from the play-throughs' timing (the
@@ -2196,7 +2205,13 @@ export class CampaignManager {
         if (playthroughMissing) missingProofs.push(describePlaythrough(playthrough).slice(0, 220));
         if (buildBroken) missingProofs.push(`the player build failed: ${(build?.reasons ?? []).slice(0, 2).join("; ") || build?.detail || "no reason recorded"}`.slice(0, 220));
         if (buildNotRun) missingProofs.push(`the player build did not run: ${build?.detail ?? "no reason recorded"}`.slice(0, 220));
-        if (playerMissing) missingProofs.push(`the built player was never played to a verdict${this.runPlayer ? " (unity_run_player left no verdict)" : " (no player runner is configured)"}`);
+        if (playerMissing) missingProofs.push("the built player was never played to a verdict (unity_run_player left no verdict)");
+        if (playerUnrunnableHere) {
+          milestone.gddClaims = [
+            ...(milestone.gddClaims ?? []),
+            `NOT MEASURED: the built artifact cannot be run on this machine — ${(player as { unrunnableHere?: string }).unrunnableHere}`,
+          ];
+        }
         if (playerBroken && player) missingProofs.push(`inside the built player: ${describePlaythrough(player)}`.slice(0, 220));
         if (claims?.refusal) missingProofs.push(claims.refusal.slice(0, 220));
         milestone.deliveryProofsMissing = missingProofs;
@@ -2485,6 +2500,26 @@ export class CampaignManager {
             ? "the shipped scenes do not render the project's own art, and the structural " +
               "bounce budget is spent"
             : `delivery proofs still missing after the bounce budget: ${missingProofs.join("; ")}`.slice(0, 600);
+          // A proof that is missing because this MACHINE cannot produce it
+          // will be missing again in fifteen minutes: revive twice, then stop
+          // and ask a person instead of looping forever (Codex 2026-09-11 C#2).
+          const unmeasurable = missingProofs.length > 0 && missingProofs.every((m) => UNMEASURABLE_PROOF_RE.test(m));
+          campaign.unmeasurableRevives = unmeasurable ? (campaign.unmeasurableRevives ?? 0) + 1 : 0;
+          if (unmeasurable && campaign.unmeasurableRevives > MAX_UNMEASURABLE_REVIVES) {
+            campaign.autoReviveAt = undefined;
+            this.persist(campaign);
+            this.cancelLiveLineages(campaign, "campaign stopped short of delivery");
+            await this.gatherIndependentReview(campaign);
+            await this.tell(
+              campaign,
+              `${this.buildDeliveryReport(campaign)}${commitNote}\n\n` +
+                "This machine cannot produce the missing proof, so retrying changes nothing: " +
+                `${missingProofs.slice(0, 2).join("; ")}. Connect the verification tooling (Unity bridge, build/test runners) ` +
+                "or run the campaign where it exists, then reply **kampanya devam**.",
+            );
+            await this.attachDeliveryEvidence(campaign);
+            return;
+          }
           const resumeMs = this.deliveryResumeDelayMs;
           campaign.autoReviveAt = Date.now() + resumeMs;
           this.persist(campaign);
@@ -2958,18 +2993,28 @@ export class CampaignManager {
    * (unity_run_player writes it under Recordings/player-playthrough). Not
    * measurable — no runner configured, or the run could not start — is said.
    */
-  private async measurePlayerRun(milestone: CampaignMilestone, build: PlayerBuildEvidence): Promise<PlaythroughEvidence> {
-    if (!this.runPlayer || !build.artifactPath) return { found: false };
+  private async measurePlayerRun(
+    milestone: CampaignMilestone,
+    build: PlayerBuildEvidence,
+  ): Promise<PlaythroughEvidence & { unrunnableHere?: string }> {
+    if (!this.runPlayer) return { found: false, unrunnableHere: "no player runner is configured" };
+    if (!build.artifactPath) return { found: false };
     const since = Date.now();
+    let failure: string | undefined;
     try {
       await this.runPlayer(this.projectRoot, build.artifactPath);
     } catch (err) {
-      getLoggerSafe().warn("The built player could not be played", {
-        milestone: milestone.id,
-        error: err instanceof Error ? err.message : String(err),
-      });
+      failure = err instanceof Error ? err.message : String(err);
+      getLoggerSafe().warn("The built player could not be played", { milestone: milestone.id, error: failure });
     }
-    return readPlaythroughVerdict(this.projectRoot, since - 1000, PLAYER_PLAYTHROUGH_VERDICT_REL);
+    const verdict = readPlaythroughVerdict(this.projectRoot, since - 1000, PLAYER_PLAYTHROUGH_VERDICT_REL);
+    // An .apk on a Mac is not a failed game, it is an artifact this machine
+    // cannot execute — disclosed, never a refusal, and never a reason to
+    // retry forever (Codex 2026-09-11 C#2).
+    if (!verdict.found && failure !== undefined && UNRUNNABLE_HERE_RE.test(failure)) {
+      return { ...verdict, unrunnableHere: failure.slice(0, 200) };
+    }
+    return verdict;
   }
 
   /** The GDD's numeric claims held against the play-through timing (see gdd-claims.ts). */
