@@ -3537,9 +3537,19 @@ export class CampaignManager {
       if (pendingFinal >= 0) {
         milestone.status = "failed";
         milestone.resultExcerpt = output.slice(-500);
-        campaign.currentMilestone = pendingFinal;
-        campaign.milestones[pendingFinal]!.status = "pending";
-        campaign.milestones[pendingFinal]!.attempts = 0;
+        // THE FINAL PROOF RUNS LAST. Selecting one that sits earlier in the
+        // ladder meant its completion advanced straight back into the
+        // exhausted gap behind it: four cycles, indices 1,2,1,2, zero build
+        // calls (Codex 2026-09-11 O#3). It is moved to the end first.
+        let finalIndex = pendingFinal;
+        if (campaign.milestones[pendingFinal]!.id.startsWith("mfinal") && pendingFinal !== campaign.milestones.length - 1) {
+          const [moved] = campaign.milestones.splice(pendingFinal, 1);
+          campaign.milestones.push(moved!);
+          finalIndex = campaign.milestones.length - 1;
+        }
+        campaign.currentMilestone = finalIndex;
+        campaign.milestones[finalIndex]!.status = "pending";
+        campaign.milestones[finalIndex]!.attempts = 0;
         campaign.state = "executing";
         campaign.lastError = undefined;
         this.cancelLiveLineages(campaign, "superseded by the final proof sprint", { recoverable: true });
@@ -3547,7 +3557,7 @@ export class CampaignManager {
         this.submitCurrentMilestone(campaign);
         getLoggerSafe().info("Coverage remediation ended — running the pending final proof sprint", {
           id: campaign.id,
-          milestone: campaign.milestones[pendingFinal]!.id,
+          milestone: campaign.milestones[finalIndex]!.id,
         });
         await this.tell(
           campaign,
@@ -3567,7 +3577,18 @@ export class CampaignManager {
         milestone.structureFindings = [`REFUSAL STANDS at delivery: ${structure.refusal}`, ...structure.lines];
         campaign.lastError = `NOT DELIVERED — ${structure.refusal.slice(0, 200)}`;
       }
-      campaign.state = structure.refusal !== undefined ? "failed" : "done";
+      // A LADDER WITH AN UNPROVEN FINAL IS NOT A DELIVERY. With a final that
+      // had failed at its limit, this path measured the structure alone and
+      // set `done` — the delivery gate's own proofs never having stood once
+      // (Codex 2026-09-11 O#4). The structural check is the last word only
+      // when there is no final proof sprint to answer for.
+      const unprovenFinal = campaign.milestones.find((m) => m.id.startsWith("mfinal") && m.status !== "green");
+      if (unprovenFinal !== undefined && structure.refusal === undefined) {
+        campaign.lastError =
+          `NOT DELIVERED — ${unprovenFinal.title} never passed the delivery gate (${unprovenFinal.attempts} attempt(s)); ` +
+          "the structural check alone does not deliver a game.";
+      }
+      campaign.state = structure.refusal !== undefined || unprovenFinal !== undefined ? "failed" : "done";
       campaign.deliveryReported = false;
       this.persist(campaign);
       this.cancelLiveLineages(

@@ -3453,6 +3453,65 @@ describe("CampaignManager", () => {
     expect(tasks.submitted.at(-1)!.prompt).toContain("prove it again");
   });
 
+  it("an EXHAUSTED final proof is not a delivery, and the final runs LAST (Codex 2026-09-11 O#3, O#4)", async () => {
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
+
+    // A final that failed at its limit, and a gap sprint that has spent its
+    // attempts: the campaign measured the structure alone and declared `done`
+    // with the delivery gate's proofs never having stood once.
+    const staged = storage.get(campaign.id)!;
+    staged.milestones = [
+      { ...staged.milestones[0]!, status: "green" as const },
+      { id: "mfinal-2", title: "Final delivery proofs", prompt: "prove it", status: "failed" as const, attempts: 2 },
+      { id: "mcov1", title: "Coverage 1 — Save", prompt: "close save", status: "running" as const, attempts: 2, taskId: "task_x1", coverageGap: "Save: absent" },
+    ];
+    staged.currentMilestone = 2;
+    staged.state = "executing";
+    staged.pendingCoverageGaps = undefined;
+    storage.save(staged);
+    tasks.emit("task:failed", "task_x1", "gap sprint gave up");
+    await waitFor(() => expect(storage.get(campaign.id)!.state).not.toBe("executing"));
+
+    const after = storage.get(campaign.id)!;
+    expect(after.state).not.toBe("done");
+    expect(after.lastError ?? "").toContain("never passed the delivery gate");
+  });
+
+  it("a final proof selected for a rerun is moved to the END of the ladder (Codex 2026-09-11 O#3)", async () => {
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
+
+    // The final sits BEFORE the exhausted gap. Running it in place meant its
+    // completion advanced straight back into that gap, round after round.
+    const staged = storage.get(campaign.id)!;
+    staged.milestones = [
+      { ...staged.milestones[0]!, status: "green" as const },
+      { id: "mfinal-2", title: "Final delivery proofs", prompt: "prove it", status: "pending" as const, attempts: 0 },
+      { id: "mcov1", title: "Coverage 1 — Save", prompt: "close save", status: "running" as const, attempts: 2, taskId: "task_x2", coverageGap: "Save: absent" },
+    ];
+    staged.currentMilestone = 2;
+    staged.state = "executing";
+    staged.pendingCoverageGaps = undefined;
+    storage.save(staged);
+    const before = tasks.submitted.length;
+    tasks.emit("task:failed", "task_x2", "gap sprint gave up");
+    await waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(before));
+
+    const after = storage.get(campaign.id)!;
+    expect(after.milestones.at(-1)!.id).toBe("mfinal-2");
+    expect(after.currentMilestone).toBe(after.milestones.length - 1);
+    expect(tasks.submitted.at(-1)!.prompt).toContain("prove it");
+  });
+
   it("work scheduled AFTER a green final invalidates its proof instead of riding on it (Codex 2026-09-11 L#13)", async () => {
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
     await waitFor(() => expect(tasks.submitted).toHaveLength(1));
