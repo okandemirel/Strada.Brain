@@ -240,6 +240,13 @@ export class AgentCore {
         topObservation: ranked[0]?.summary.slice(0, 100),
       });
 
+      // WHICH observations this decision actually handled. `consumed` used to
+      // mean "the whole batch is answered", so a decision that submitted a
+      // goal for ONE failure silently dropped every other actionable
+      // observation collected with it — and a one-shot observer does not
+      // report the same unchanged failure again (Codex 2026-09-11 M#3).
+      const handled = new Set<string>();
+
       // 4. ACT
       switch (decision.action) {
         case "execute":
@@ -256,7 +263,7 @@ export class AgentCore {
             // task is tracked; an empty instinctIds list makes the instinct-credit loop a no-op.
             this.taskInstinctMap.set(task.id, { instinctIds: matchedInstinctIds, createdAt: Date.now() });
             // Record action for dedup
-            if (ranked[0]) this.priorityScorer.recordAction(ranked[0]);
+            if (ranked[0]) { this.priorityScorer.recordAction(ranked[0]); handled.add(ranked[0].id); }
             this.logger.info("AgentCore: submitted goal", { goal: decision.goal.slice(0, 200) });
           }
           break;
@@ -302,7 +309,7 @@ export class AgentCore {
             );
             // audited 2026-09-02: same unconditional tracking as the execute arm (see above).
             this.taskInstinctMap.set(task.id, { instinctIds: matchedInstinctIds, createdAt: Date.now() });
-            for (const obs of matched) this.priorityScorer.recordAction(obs);
+            for (const obs of matched) { this.priorityScorer.recordAction(obs); handled.add(obs.id); }
             this.logger.info("AgentCore: submitted batch goal", { goal: compoundGoal.slice(0, 200), batchSize: matched.length });
           }
           break;
@@ -310,6 +317,7 @@ export class AgentCore {
         case "defer":
           if (ranked[0] && decision.deferMinutes) {
             this.observationEngine.defer(ranked[0], decision.deferMinutes);
+            handled.add(ranked[0].id);
             this.logger.info("AgentCore: deferred observation", { id: ranked[0].id, minutes: decision.deferMinutes });
           }
           break;
@@ -389,7 +397,20 @@ export class AgentCore {
       // measure consecutive unreadable rounds, and never clearing it turned
       // an intermittent provider into an hour's hold (Codex 2026-09-11 J#17).
       for (const obs of batch) this.unparsedRounds.delete(obs.id);
-      // Every ACT arm above ran to completion on this batch (an LLM "wait" is a decision too).
+      // Every ACT arm above ran to completion on this batch (an LLM "wait" is a
+      // decision too) — but only for the observations it named. The rest go
+      // back, so a second broken module is not forgotten because the first one
+      // was fixed (Codex 2026-09-11 M#3).
+      // …only for the arms that act on a SUBSET. "wait" and "adjust" are
+      // decisions about the whole batch (and the threshold path defers what it
+      // drops itself); "execute" and "batch" answer the observations they
+      // name and used to acknowledge the rest.
+      if (decision.action === "execute" || decision.action === "batch") {
+        const unhandled = batch.filter((o) => !handled.has(o.id));
+        if (unhandled.length > 0) {
+          this.requeueUnacted(unhandled, `unhandled-by-${decision.action}`, UNACTED_BATCH_RECHECK_MINUTES);
+        }
+      }
       consumed = true;
     } catch (error) {
       this.logger.error("AgentCore tick error", {

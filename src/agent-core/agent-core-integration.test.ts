@@ -351,6 +351,34 @@ describe("AgentCore OODA Integration", () => {
   });
 
   /* 15. defer action: observation deferred and re-appears after timeout */
+  it("a goal for ONE failure does not acknowledge the others (Codex 2026-09-11 M#3)", async () => {
+    // Two independent actionable failures arrive together; the decision
+    // submits a goal for the first. The second used to vanish — the batch was
+    // marked consumed, and a one-shot observer does not report the same
+    // unchanged failure again.
+    const a = createObservation("build", "Broken module A", { priority: 80, actionable: true });
+    const b = createObservation("build", "Broken module B", { priority: 79, actionable: true });
+    const engine = new ObservationEngine();
+    let collects = 0;
+    engine.register({ name: "test", collect: () => (++collects === 1 ? [a, b] : []) });
+    const provider = {
+      chat: vi.fn().mockResolvedValue(makeLLMResponse({ action: "execute", goal: "Fix module A", reasoning: "first" })),
+    };
+    const core = new AgentCore(
+      engine, new PriorityScorer(), provider as any,
+      { submit: vi.fn().mockReturnValue({ id: "task_mock01" }), listTasks: vi.fn().mockReturnValue([]), getStatus: vi.fn().mockReturnValue(null) } as any,
+      { sendText: vi.fn().mockResolvedValue(undefined) } as any,
+      { getUsage: vi.fn().mockReturnValue({ usedUsd: 5, limitUsd: 10, pct: 0.5 }) },
+      undefined,
+      { minReasoningIntervalMs: 0, minObservationPriority: 30, budgetFloorPct: 10 },
+    );
+
+    await core.tick();
+
+    // B is still outstanding, not forgotten.
+    expect(engine.getDeferredCount()).toBe(1);
+  });
+
   it("action defer -> observation deferred and re-appears after timeout", async () => {
     vi.useFakeTimers();
 
