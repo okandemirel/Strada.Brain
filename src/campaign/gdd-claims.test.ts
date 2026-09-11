@@ -4,6 +4,7 @@
  * repeated to the planner and never measured by any gate.
  */
 import { describe, expect, it } from "vitest";
+import { gddPlatform } from "./gdd-platform.js";
 import { assessNumericClaims, claimsRefusal, describeClaims, extractNumericClaims } from "./gdd-claims.js";
 import type { PlaythroughEvidence } from "./types.js";
 
@@ -75,6 +76,20 @@ describe("assessNumericClaims", () => {
     expect(lines[0]).toMatch(/^GDD frame rate ≥ 60 fps: NOT MEASURED — no play-through of this build was observed/);
     expect(lines[3]).toContain("no play-through of this build was observed");
     expect(lines).toHaveLength(6); // the range's floor is a claim of its own (B#19)
+  });
+
+  it("a player built for the WRONG platform does not answer a handheld frame-rate claim (Codex 2026-09-11 B#11)", () => {
+    const { claims: phoneClaims } = extractNumericClaims("Target 60 fps on mid-range phones.");
+    const player: PlaythroughEvidence = {
+      found: true, ok: true, outcome: "Won", session: 1, actions: 20,
+      perf: { medium: "player", bootSeconds: 1, playSeconds: 10, playFrames: 600, avgFps: 60, worstFrameMs: 40 },
+    };
+    const platform = gddPlatform("Target 60 fps on mid-range phones.");
+    const desktop = assessNumericClaims(phoneClaims, evidence(), player, { platform, builtTarget: "StandaloneOSX" });
+    expect(desktop[0]).toMatchObject({ status: "unmeasured", blocking: false, measured: 60 });
+    expect(desktop[0]!.note).toContain("the GDD asks for a handheld");
+    const onDevice = assessNumericClaims(phoneClaims, evidence(), player, { platform, builtTarget: "Android" });
+    expect(onDevice[0]).toMatchObject({ status: "met", blocking: true });
   });
 
   it("the built player answers the frame-rate claim: measured, and blocking (2026-09-10)", () => {

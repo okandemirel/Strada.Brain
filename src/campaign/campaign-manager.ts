@@ -24,6 +24,7 @@ import type { CampaignStorage } from "./campaign-storage.js";
 import { detectCampaignIntent } from "./campaign-intake.js";
 import { assessSceneHygiene, renderSceneHygiene } from "./scene-hygiene.js";
 import { readPlaythroughVerdict, describePlaythrough, playthroughDirective, PLAYER_PLAYTHROUGH_VERDICT_REL } from "./playthrough-verdict.js";
+import { gddPlatform } from "./gdd-platform.js";
 import { readPlaymodeRun } from "./playmode-run.js";
 import { assessNumericClaims, claimsRefusal, describeClaims, extractNumericClaims } from "./gdd-claims.js";
 import { deliveryReviewPrompt, renderSecondOpinion } from "../agents/review/codex-second-opinion.js";
@@ -100,7 +101,7 @@ export interface CampaignManagerOptions {
    * other proofs stand (a build is minutes; a tree that fails the suite
    * does not need one yet). See stage-runtime for the tool-backed default.
    */
-  buildPlayer?: (projectRoot: string) => Promise<PlayerBuildEvidence>;
+  buildPlayer?: (projectRoot: string, target?: string) => Promise<PlayerBuildEvidence>;
   /** Pause before a NOT DELIVERED campaign resumes its final sprint by itself (default 15 min). */
   deliveryResumeDelayMs?: number;
   /**
@@ -228,6 +229,9 @@ export const RECENT_PROVIDER_FAILURE_MS = 30 * 60_000;
 /** The Turkish executor's own inactivity stop (background-executor.ts). */
 const TURKISH_STALL_RE = /Görev ilerleme kaydetmeden takıldı/i;
 
+/** Art directions whose own words describe flat, low-colour artwork (see built-as-specified). */
+const FLAT_ART_DIRECTION = /\b(?:flat[- ]?(?:shaded|colou?r|art|design)|minimalist|minimal|geometric|monochrome|silhouette|abstract|solid[- ]colou?r|vector art|block colou?r)\b/i;
+
 export class CampaignManager {
   private readonly storage: CampaignStorage;
   private readonly planner: CampaignPlanner;
@@ -236,7 +240,7 @@ export class CampaignManager {
   private readonly messenger: CampaignMessenger;
   private readonly projectRoot: string;
   private readonly verifyCompile?: (projectRoot: string) => Promise<CompileVerdict>;
-  private readonly buildPlayer?: (projectRoot: string) => Promise<PlayerBuildEvidence>;
+  private readonly buildPlayer?: (projectRoot: string, target?: string) => Promise<PlayerBuildEvidence>;
   private readonly deliveryResumeDelayMs: number;
   private readonly runPlayer?: (projectRoot: string, artifactPath: string) => Promise<void>;
   private readonly attach?: (chatId: string, attachment: import("../channels/channel-messages.interface.js").Attachment) => Promise<void>;
@@ -2154,7 +2158,7 @@ export class CampaignManager {
       const build = isLast
         ? earlierProofsMissing
           ? { ran: false, detail: "not attempted: earlier delivery proofs are missing (suite, compile or play-through)" }
-          : await this.measureBuild()
+          : await this.measureBuild(campaign)
         : undefined;
       if (build !== undefined) milestone.buildVerdict = build;
       const buildBroken = Boolean(build?.ran) && build?.ok !== true;
@@ -2177,7 +2181,7 @@ export class CampaignManager {
       // built player's frame rate when it was played) or listed as NOT
       // MEASURED with the reason; a blown budget the medium can answer
       // refuses delivery like the other proofs, within the same bounce budget.
-      const claims = isLast ? this.measureGddClaims(campaign, playthrough, player) : undefined;
+      const claims = isLast ? this.measureGddClaims(campaign, playthrough, player, build) : undefined;
       if (claims) milestone.gddClaims = claims.lines;
       const claimsBroken = Boolean(claims?.refusal);
       const deliveryProofMissing = earlierProofsMissing || buildBroken || buildNotRun || playerBroken || playerMissing || claimsBroken;
@@ -2927,10 +2931,15 @@ export class CampaignManager {
   }
 
   /** Build the player from the project root; `ran: false` when no builder is configured or it could not run. */
-  private async measureBuild(): Promise<PlayerBuildEvidence> {
+  private async measureBuild(campaign?: Campaign): Promise<PlayerBuildEvidence> {
     if (!this.buildPlayer) return { ran: false, detail: "no player builder is configured" };
+    // The GDD's own platform, when it names one: the build used to take
+    // whatever target the project had active, so a desktop player answered a
+    // phone's frame-rate budget (Codex 2026-09-11 B#11).
+    const platform = gddPlatform(this.gddTextOf(campaign));
     try {
-      return await this.buildPlayer(this.projectRoot);
+      const built = await this.buildPlayer(this.projectRoot, platform.target);
+      return platform.target ? { ...built, requestedTarget: platform.target } : built;
     } catch (err) {
       return { ran: false, detail: `the player build could not run (${err instanceof Error ? err.message : String(err)})` };
     }
@@ -2956,10 +2965,17 @@ export class CampaignManager {
   }
 
   /** The GDD's numeric claims held against the play-through timing (see gdd-claims.ts). */
+  /** The GDD's text, however this campaign carries it. */
+  private gddTextOf(campaign?: Campaign): string | undefined {
+    if (!campaign) return undefined;
+    return campaign.gddText ?? (campaign.gddPath ? readGddFile(this.projectRoot, campaign.gddPath) : undefined);
+  }
+
   private measureGddClaims(
     campaign: Campaign,
     playthrough: ReturnType<typeof readPlaythroughVerdict> | undefined,
     player?: ReturnType<typeof readPlaythroughVerdict>,
+    build?: PlayerBuildEvidence,
   ): { lines: string[]; refusal?: string } {
     let gddText = campaign.gddText;
     if (!gddText && campaign.gddPath) {
@@ -2971,7 +2987,7 @@ export class CampaignManager {
     }
     if (!gddText) return { lines: ["GDD numbers: the GDD text was not available at delivery, so none were checked"] };
     const { claims, truncated } = extractNumericClaims(gddText);
-    const assessments = assessNumericClaims(claims, playthrough, player);
+    const assessments = assessNumericClaims(claims, playthrough, player, { platform: gddPlatform(gddText), builtTarget: build?.target ?? build?.requestedTarget });
     const refusal = claimsRefusal(assessments);
     return { lines: describeClaims(assessments, truncated), ...(refusal ? { refusal } : {}) };
   }
@@ -3316,6 +3332,11 @@ export class CampaignManager {
     if (items.length > 0 && !items.some(isArtGap)) return undefined;
     const start = milestone.placeholderArtAtStart;
     if (!start || start.sprites < 10 || start.placeholders / start.sprites < 0.8) return undefined;
+    // …and never against a document that ASKED for flat art: the pixel
+    // heuristic cannot tell a minimalist style from unmade art, and this
+    // bounce would demand it be replaced (Codex 2026-09-11 B#17).
+    const look = extractLookDescription(this.gddTextOf(campaign) ?? "");
+    if (look.found && look.text !== undefined && FLAT_ART_DIRECTION.test(look.text)) return undefined;
     const now = this.measurePlaceholderArt(campaign);
     if (!now) return undefined;
     // Real art added under NEW names counts as much as a placeholder replaced.

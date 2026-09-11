@@ -474,14 +474,17 @@ export async function initializeTaskRuntimeStage(
       // tool's own JSON verdict (path, size, duration) — never the worker's
       // sentence about it.
       buildPlayer: params.toolRegistry
-        ? async (projectRoot: string) => {
+        ? async (projectRoot: string, target?: string) => {
             const registry = params.toolRegistry!;
             if (!registry.getAvailableToolNames().includes("unity_build_player")) {
               return { ran: false, detail: "unity_build_player is not registered" };
             }
             const result = await registry.execute(
               "unity_build_player",
-              {},
+              // The GDD's platform, when it names one: the build used to take
+              // whatever target the project happened to have active (Codex
+              // 2026-09-11 B#11).
+              target ? { target } : {},
               {
                 projectPath: projectRoot,
                 workingDirectory: projectRoot,

@@ -395,6 +395,8 @@ export interface RuntimeSceneDump {
 }
 
 export interface PlayerBuildEvidence {
+  /** The target the campaign ASKED for, from the GDD's platform (Codex 2026-09-11 B#11). */
+  readonly requestedTarget?: string;
   /** The build tool ran to a verdict (ok or failed). false = could not run / not attempted. */
   ran: boolean;
   ok?: boolean;

@@ -23,6 +23,7 @@
  * Nothing here knows a game's own names.
  */
 import type { PlaythroughEvidence } from "./types.js";
+import { frameRateAnswersPlatform, type GddPlatform } from "./gdd-platform.js";
 
 export type ClaimKind = "fps" | "boot_seconds" | "session_seconds" | "level_count";
 
@@ -146,6 +147,8 @@ export function assessNumericClaims(
   playthrough: PlaythroughEvidence | undefined,
   /** The play-through inside the built player, when the campaign ran one — answers the frame rate. */
   player?: PlaythroughEvidence,
+  /** The GDD's platform and the target the player was actually built for. */
+  opts?: { platform?: GddPlatform; builtTarget?: string },
 ): ClaimAssessment[] {
   const perf = playthrough?.found ? playthrough.perf : undefined;
   const playerPerf = player?.found ? player.perf : undefined;
@@ -157,6 +160,21 @@ export function assessNumericClaims(
         // The built player answers the claim (2026-09-10): real rendering,
         // vsync, the frame rate a person sees. Measured, and blocking.
         if (playerPerf?.avgFps !== undefined && playerPerf.medium === "player") {
+          // A frame rate measured on the wrong device answers nothing: a
+          // desktop build used to satisfy "60 fps on mid-range phones"
+          // (Codex 2026-09-11 B#11).
+          if (opts?.platform && !frameRateAnswersPlatform(opts.platform, opts.builtTarget)) {
+            return {
+              claim,
+              status: "unmeasured",
+              measured: Number(playerPerf.avgFps.toFixed(1)),
+              note:
+                `${playerPerf.avgFps.toFixed(1)} fps in a player built for ${opts.builtTarget ?? "the project's own target"}, ` +
+                `but the GDD asks for a handheld${opts.platform.evidence ? ` ("${opts.platform.evidence.slice(0, 80)}")` : ""} — ` +
+                "build for that target and play it there to answer this",
+              blocking: false,
+            };
+          }
           const met = playerPerf.avgFps >= claim.value;
           return {
             claim,
