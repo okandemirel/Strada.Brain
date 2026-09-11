@@ -680,7 +680,50 @@ describe("CampaignManager", () => {
     expect(tasks.cancelled).toContain(retryId);
   });
 
-  it("cancels an ABANDONED mission the campaign no longer points at", async () => {
+  it("an EXECUTOR cancellation of an exhausted milestone still self-revives (Codex 2026-09-11 L#5)", async () => {
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+
+    // The milestone has spent its attempts and its task is cancelled with NO
+    // reason — the executor's own retirement, not a person's stop. The
+    // campaign used to end here: failed, no appointment, zero submissions,
+    // with another milestone still pending.
+    const staged = storage.get(campaign.id)!;
+    const taskId = staged.milestones[0]!.taskId!;
+    staged.milestones[0]!.attempts = 2;
+    storage.save(staged);
+    const before = tasks.submitted.length;
+    tasks.cancel(taskId);
+    tasks.emit("task:cancelled", taskId);
+
+    await waitFor(() => {
+      const after = storage.get(campaign.id)!;
+      expect(after.autoReviveAt !== undefined || tasks.submitted.length > before).toBe(true);
+    });
+    const after = storage.get(campaign.id)!;
+    expect(after.lastError ?? "").not.toContain("was cancelled");
+  });
+
+  it("does NOT retire another mission that merely shares an opening (Codex 2026-09-11 L#4)", async () => {
+    // Two unrelated task roots in one chat whose prompts share their first
+    // 120 characters — a generic final-proof opening is enough — and
+    // retirement cancelled both. Ownership is recorded, not inferred.
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    const stored = storage.get(campaign.id)!;
+    const stranger = tasks.submit("cli-local", "cli", `${stored.milestones[0]!.prompt}\n\nAND SOMETHING ELSE ENTIRELY`).id;
+    tasks.markTerminal(stranger, TaskStatus.blocked);
+    stored.state = "done";
+    stored.deliveryReported = true;
+    storage.save(stored);
+
+    await manager.resumeActive();
+
+    expect(tasks.cancelled).not.toContain(stranger);
+    expect(tasks.cancelReasons.get(stranger)).toBeUndefined();
+  });
+
+  it("cancels an ABANDONED mission the campaign no longer points at (Codex 2026-09-11 L#4)", async () => {
     // Measured live 2026-09-03: two orphan roots (task_3f52a987 and
     // task_ea50a818) kept reviving after delivery. Walking milestone.taskId
     // could not reach them — the milestone pointed at the task that
@@ -688,9 +731,11 @@ describe("CampaignManager", () => {
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
     await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     const stored = storage.get(campaign.id)!;
-    const milestonePrompt = stored.milestones[0]!.prompt;
-    // An orphan carrying the milestone's prompt, unreachable from taskId.
-    const orphanId = tasks.submit("cli-local", "cli", milestonePrompt).id;
+    // The campaign's OWN first task, abandoned when the milestone was
+    // re-pointed: ownership is recorded as it is submitted, so retirement
+    // reaches it without guessing from its wording (Codex 2026-09-11 L#4).
+    const orphanId = stored.milestones[0]!.taskId!;
+    expect(stored.milestones[0]!.taskIds).toContain(orphanId);
     tasks.markTerminal(orphanId, TaskStatus.blocked);
     stored.milestones[0]!.taskId = "task_gone";
     stored.state = "done";
@@ -709,8 +754,7 @@ describe("CampaignManager", () => {
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
     await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     const stored = storage.get(campaign.id)!;
-    const milestonePrompt = stored.milestones[0]!.prompt;
-    const rootId = tasks.submit("cli-local", "cli", milestonePrompt).id;
+    const rootId = stored.milestones[0]!.taskId!;
     const childId = tasks.addRetry(rootId, TaskStatus.blocked);
     tasks.markTerminal(rootId, TaskStatus.blocked);
     stored.milestones[0]!.taskId = "task_gone";

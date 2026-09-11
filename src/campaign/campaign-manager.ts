@@ -423,6 +423,15 @@ export function gapKey(gap: string): string {
  * and identity is the requirement's whole text, because matching on the title's
  * 60-character prefix merged different requirements (Codex 2026-09-11 J#12, J#13).
  */
+/** Record a task this milestone owns, newest last (Codex 2026-09-11 L#4). */
+export function rememberOwnedTask(milestone: CampaignMilestone, taskId: string): void {
+  const owned = milestone.taskIds ?? [];
+  if (owned.includes(taskId)) return;
+  owned.push(taskId);
+  // Bounded: a mission that retries all day must not grow without end.
+  milestone.taskIds = owned.slice(-50);
+}
+
 export function unscheduledGaps(
   candidates: readonly string[],
   milestones: ReadonlyArray<{ id: string; title: string; prompt?: string; status?: string; coverageGap?: string }>,
@@ -749,50 +758,33 @@ export class CampaignManager {
    */
   private cancelLiveLineages(campaign: Campaign, reason: string, opts: { recoverable?: boolean } = {}): void {
     const cancelOpts = opts.recoverable === true ? ({ reason: "superseded" } as const) : undefined;
-    // Identity by MISSION, not by pointer. A milestone that was resubmitted
+    // Identity by OWNERSHIP, not by wording. A milestone that was resubmitted
     // points at its newest task, so walking taskId alone misses every lineage
     // the campaign abandoned along the way — and those are exactly the ones
     // the executor's boot re-arm resurrects (measured live 2026-09-03: two
-    // distinct orphan roots, task_3f52a987 and task_ea50a818, still reviving
-    // after delivery). Match a task to a milestone by the prompt it was
-    // submitted with.
-    const promptKeys = new Set(
-      // A real sprint prompt is thousands of chars; 24 is enough to be
-      // specific while still matching short fixtures, and the match is an
-      // exact substring, not a similarity score.
-      campaign.milestones.map((m) => m.prompt.slice(0, 120)).filter((k) => k.length > 24),
-    );
-    try {
-      const onChat = this.taskManager.listTasks(campaign.chatId, 50) as unknown as Array<{
-        id: string;
-        status: string;
-        prompt?: string;
-      }>;
-      for (const task of onChat) {
-        if (task.status === "completed" || task.status === "cancelled") continue;
-        const prompt = task.prompt ?? "";
-        let owned = false;
-        for (const key of promptKeys) {
-          if (prompt.includes(key)) { owned = true; break; }
-        }
-        if (!owned) continue;
+    // distinct orphan roots still reviving after delivery). Matching a task to
+    // a milestone by the first 120 characters of its PROMPT retired unrelated
+    // work: two missions sharing a chat and a generic final-proof opening
+    // cancelled each other (Codex 2026-09-11 L#4). Every task a milestone has
+    // owned is recorded as it is submitted.
+    for (const milestone of campaign.milestones) {
+      for (const owned of milestone.taskIds ?? []) {
+        if (owned === milestone.taskId) continue; // the live one is retired below
         try {
-          // Cancel the lineage's ROOT as well as this task. Cancelling only
-          // the live end retires nothing: the next continuation mints a fresh
-          // child whose ancestry holds no cancel, and the chain walks around
-          // the guard (measured live 2026-09-03 11:04, a seventh
-          // resurrection). Every future descendant inherits the root.
-          this.cancelLineageRootOf(task.id, cancelOpts);
-          this.taskManager.cancel(task.id as TaskId, cancelOpts);
-          getLoggerSafe().info("Cancelled an abandoned mission of a terminal campaign", {
-            id: campaign.id,
-            taskId: task.id,
-            status: task.status,
-            reason,
-          });
+          // The root, the task itself, and every live descendant: cancelling
+          // only the live end retires nothing, because the next continuation
+          // mints a fresh child whose ancestry holds no cancel at all.
+          this.cancelLineageRootOf(owned, cancelOpts);
+          this.taskManager.cancel(owned as TaskId, cancelOpts);
+          const live = (this.taskManager as unknown as {
+            listLiveInLineage?: (id: TaskId) => Array<{ id: string }>;
+          }).listLiveInLineage?.(owned as TaskId) ?? [];
+          for (const task of live) {
+            try { this.taskManager.cancel(task.id as TaskId, cancelOpts); } catch { /* already settled */ }
+          }
         } catch { /* already settled */ }
       }
-    } catch { /* listing unavailable — the lineage walk below still runs */ }
+    }
     for (const milestone of campaign.milestones) {
       if (!milestone.taskId) continue;
       // EVERY live task of the lineage, not only its newest tip and not only
@@ -1564,6 +1556,7 @@ export class CampaignManager {
       const milestone = campaign.milestones[campaign.currentMilestone];
       if (!milestone || milestone.taskId === taskId) return;
       milestone.taskId = taskId;
+      rememberOwnedTask(milestone, taskId);
       // A retry is a new attempt at proof: the freshness clock moves with it,
       // or evidence from the abandoned attempt stays eligible (Codex 2026-09-11 C#9).
       milestone.attemptStartedAtMs = Date.now();
@@ -1750,6 +1743,7 @@ export class CampaignManager {
       },
     );
     milestone.taskId = task.id;
+    rememberOwnedTask(milestone, task.id);
     this.persist(campaign);
     getLoggerSafe().info("Campaign milestone submitted", {
       id: campaign.id,
@@ -2380,6 +2374,27 @@ export class CampaignManager {
     }
     this.submitCurrentMilestone(campaign, { countAttempt: false });
     return true;
+  }
+
+  /**
+   * Was this settle a PERSON's stop?
+   *
+   * An executor retirement carries no reason at all, and reading that as a
+   * stop order stranded the campaign (Codex 2026-09-11 K#6) — while reading it
+   * as an ordinary failure, but suppressing recovery for every cancellation
+   * alike, stranded it just as completely (L#5). One answer, used by both
+   * paths.
+   */
+  private stopWasDeliberate(milestone: CampaignMilestone, status: TaskStatus): boolean {
+    if (status !== TaskStatus.cancelled) return false;
+    if (!milestone.taskId) return false;
+    try {
+      if (this.lineageWasCancelledOnPurpose(milestone.taskId)) return true;
+      const row = this.taskManager.getStatus(milestone.taskId as TaskId) as { cancelReason?: string } | null;
+      return row?.cancelReason === "user";
+    } catch {
+      return false;
+    }
   }
 
   private async onMilestoneOutcome(
@@ -3567,7 +3582,12 @@ export class CampaignManager {
 
     // AN ORDINARY FAILURE IS NOT THE END: bounded self-revival with a changed
     // approach, in one place for every path that exhausts a milestone.
-    if (status !== TaskStatus.cancelled && await this.selfReviveImplementation(campaign, milestone, String(status), campaign.lastError ?? output)) {
+    // A CANCELLATION THAT NOBODY ORDERED is an ordinary failure. Suppressing
+    // recovery for every cancellation alike ended an exhausted milestone with
+    // `failed`, no appointment and zero submissions, while other milestones
+    // were still pending (Codex 2026-09-11 L#5).
+    if (!this.stopWasDeliberate(milestone, status)
+      && await this.selfReviveImplementation(campaign, milestone, String(status), campaign.lastError ?? output)) {
       return;
     }
 

@@ -81,6 +81,14 @@ export interface CampaignMilestone {
   deliverables?: string[];
   /** Last task submitted for this milestone (for event correlation/resume). */
   taskId?: string;
+  /**
+   * EVERY task this milestone has owned, newest last. Retirement used to find
+   * a campaign's abandoned lineages by matching the first 120 characters of a
+   * task's prompt, so two unrelated missions sharing a chat and a generic
+   * final-proof opening retired each other (Codex 2026-09-11 L#4). Ownership
+   * is recorded, not inferred. Rides in milestones_json; no column needed.
+   */
+  taskIds?: string[];
   /** One retry is automatic; the second failure fails the campaign. */
   attempts: number;
   /** Short result excerpt recorded when the milestone landed green. */
