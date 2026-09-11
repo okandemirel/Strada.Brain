@@ -658,6 +658,31 @@ describe("defects the measurement review found (2026-09-07)", () => {
     expect(assessBuiltAsSpecified(withPrimitives).refusal).toContain("render NOTHING");
   });
 
+  it("a DANGLING sprite GUID is not a UI binding, and a bound movie is a video game's picture (Codex 2026-09-11 D#26, D#27)", () => {
+    // Three canvases whose sprite reference resolves to nothing.
+    const dangling = project();
+    buildSettings(dangling, [{ path: "Assets/Scenes/Main.unity" }]);
+    const canvases = Array.from({ length: 3 }, (_, i) =>
+      `--- !u!1 &${40 + i}\nGameObject:\n  m_Name: Card${i}\n--- !u!222 &${80 + i}\nCanvasRenderer:\n  m_GameObject: {fileID: ${40 + i}}\n` +
+      `--- !u!114 &${120 + i}\nMonoBehaviour:\n  m_GameObject: {fileID: ${40 + i}}\n  m_Sprite: {fileID: 21300000, guid: ${G("f")}, type: 3}\n`).join("");
+    put(dangling, "Assets/Scenes/Main.unity", `${HEADER}${CAMERA(0)}${canvases}`, G("5"));
+    put(dangling, "Assets/Art/unbound.png", "pixels", G("2"));
+    expect(assessBuiltAsSpecified(dangling).refusal).toContain("render NOTHING");
+
+    // One VideoPlayer bound to a real movie: that IS the picture.
+    const video = project();
+    buildSettings(video, [{ path: "Assets/Scenes/Main.unity" }]);
+    put(video, "Assets/Scenes/Main.unity",
+      `${HEADER}${CAMERA(0)}--- !u!1 &30\nGameObject:\n  m_Name: Screen\n--- !u!328 &31\nVideoPlayer:\n  m_GameObject: {fileID: 30}\n  m_VideoClip: {fileID: 32900000, guid: ${G("9")}, type: 3}\n`, G("5"));
+    put(video, "Assets/Movies/Intro.mp4", "movie-bytes", G("9"));
+    // The project also holds cover art, so the "renders NOTHING despite art"
+    // branch is live — that is the branch that refused video games.
+    put(video, "Assets/Art/Cover.png", "pixels", G("8"));
+    const report = assessBuiltAsSpecified(video);
+    expect(report.scenes[0]!.videoClipsBound).toEqual(["Assets/Movies/Intro.mp4"]);
+    expect(report.refusal).toBeUndefined();
+  });
+
   it("flat artwork the GDD ASKED for is a style, not placeholder art (Codex 2026-09-11 B#17)", () => {
     const root = project();
     boundSpriteProject(root, "a0000000000000000000000000000000");

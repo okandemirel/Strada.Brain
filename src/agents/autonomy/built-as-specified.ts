@@ -187,6 +187,8 @@ const MESH_RENDERER_CLASSES: ReadonlySet<string> = new Set([
 
 const MODEL_EXT_RE = /\.(?:fbx|obj|blend|dae|gltf|glb|3ds|max|ma|mb)$/iu;
 const SPRITE_EXT_RE = /\.(?:png|jpg|jpeg|psd|tga|exr|tif|tiff)$/iu;
+/** Movie files: a video-driven game's visible content (Codex 2026-09-11 D#27). */
+const VIDEO_EXT_RE = /\.(?:mp4|mov|webm|m4v|avi)$/iu;
 const AUDIO_EXT_RE = /\.(?:wav|ogg|mp3|aif|aiff|flac)$/iu;
 /** A clip shorter than this is a blip, whatever it is named. */
 const SHORT_AUDIO_SECONDS = 0.5;
@@ -230,12 +232,16 @@ export interface SceneStructure {
   readonly spriteRenderers: number;
   /** Material/mesh/sprite references pointing at an asset of this project. */
   readonly projectRefs: number;
+  /** Project references that RESOLVE to a real sprite, model or movie file. */
+  readonly resolvedArtRefs: number;
   /** Material/mesh/sprite references pointing at a Unity built-in id. */
   readonly builtInRefs: number;
   /** Distinct built-in ids seen, named where the name is certain. */
   readonly builtInIds: readonly string[];
   /** Imported model files (fbx/obj/…) a PLACED renderer or MeshFilter binds. */
   readonly modelsBound: readonly string[];
+  /** Movie files a shipped scene binds (a video-driven game's picture). */
+  readonly videoClipsBound: readonly string[];
   /** Prefabs instantiated whose guid resolves to no file on disk. */
   readonly unresolvedPrefabGuids: readonly string[];
   readonly camerasOrthographic: number;
@@ -604,6 +610,12 @@ function scanUnityFile(text: string, tally: Tally): void {
           const ref = parseRef(rest); // UI Image and friends
           if (ref?.guid) recordRef(ref, tally);
         }
+        // A VideoPlayer's clip: the visible content of a video-driven game
+        // (Codex 2026-09-11 D#27).
+        if (doc.className === "VideoPlayer" && key === "m_VideoClip") {
+          const ref = parseRef(rest);
+          if (ref?.guid) recordRef(ref, tally);
+        }
         continue;
       }
       if (inMaterialList && /^\s*-\s*\{fileID:/.test(line)) {
@@ -828,6 +840,8 @@ export function assessBuiltAsSpecified(
         renderersInReferencedPrefabs: 0,
         meshRenderers: 0,
         spriteRenderers: 0,
+        resolvedArtRefs: 0,
+        videoClipsBound: [],
         projectRefs: 0,
         builtInRefs: 0,
         builtInIds: [],
@@ -969,9 +983,19 @@ export function assessBuiltAsSpecified(
       meshRenderers: own.meshRenderers + placed.meshRenderers,
       spriteRenderers: own.spriteRenderers + placed.spriteRenderers,
       projectRefs: own.projectRefs + placed.projectRefs,
+      // …of which these RESOLVE to a file in the project. A dangling GUID
+      // counted as a binding and withdrew the structural refusal (Codex
+      // 2026-09-11 D#26); a bound movie is the visible content of a
+      // video-driven game (D#27).
+      resolvedArtRefs: [...own.refGuids, ...placed.refGuids]
+        .map((g) => guidToPath.get(g))
+        .filter((p): p is string => p !== undefined && (SPRITE_EXT_RE.test(p) || MODEL_EXT_RE.test(p) || VIDEO_EXT_RE.test(p))).length,
       builtInRefs: own.builtInRefs + placed.builtInRefs,
       builtInIds: [...new Set([...own.builtInIds, ...placed.builtInIds])].sort(),
       modelsBound: [...new Set(boundModels)].sort(),
+      videoClipsBound: [...new Set([...own.refGuids, ...placed.refGuids]
+        .map((g) => guidToPath.get(g))
+        .filter((p): p is string => p !== undefined && VIDEO_EXT_RE.test(p)))].sort(),
       unresolvedPrefabGuids: [...unresolved].sort(),
       camerasOrthographic: own.camerasOrthographic,
       camerasPerspective: own.camerasPerspective,
@@ -1347,8 +1371,11 @@ function structuralRefusal(
   // …and only when the scenes bind the project's OWN art: eight bare
   // CanvasRenderers with nothing in them withdrew the refusal (Codex
   // 2026-09-11 C#16). One VideoPlayer playing a project clip is a game too.
-  const uiBindsArt = shippedScenes.some((s) => s.projectRefs > 0 || s.modelsBound.length > 0);
-  const uiDrawsTheGame = uiOnly >= UI_ONLY_MIN_RENDERERS && uiBindsArt && !primitivesAreTheWorld;
+  const uiBindsArt = shippedScenes.some((s) => s.resolvedArtRefs > 0 || s.modelsBound.length > 0);
+  // A single VideoPlayer bound to a real movie IS the game's picture, so the
+  // renderer-count threshold does not apply to it (D#27).
+  const videoDrawsTheGame = uiOnly > 0 && shippedScenes.some((s) => s.videoClipsBound.length > 0);
+  const uiDrawsTheGame = (videoDrawsTheGame || (uiOnly >= UI_ONLY_MIN_RENDERERS && uiBindsArt)) && !primitivesAreTheWorld;
   if (report.shippedWorldRenderers === 0 && !uiDrawsTheGame && (report.referencedOnlyRenderers === 0 || primitivesAreTheWorld)) {
     return (
       `The shipped scenes render NOTHING: across ${shippedScenes.length} enabled non-scaffolding ` +
