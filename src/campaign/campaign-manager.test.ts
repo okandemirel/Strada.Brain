@@ -742,6 +742,32 @@ describe("CampaignManager", () => {
     expect(tasks.cancelled).not.toContain(matchesUnsubmitted);
   });
 
+  it("a task that QUOTES a legacy milestone's prompt is not that milestone (Codex 2026-09-12 Q#4)", async () => {
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    const stored = storage.get(campaign.id)!;
+    // Someone asks a question ABOUT the sprint's instructions. It carries the
+    // whole prompt, and the ownership scan cancelled it.
+    const quoting = tasks.submit(
+      "cli-local", "cli", `Please explain this earlier instruction, do not execute it:\n\n${stored.milestones[0]!.prompt}`,
+    ).id;
+    tasks.markTerminal(quoting, TaskStatus.blocked);
+    // …while the milestone's OWN pre-upgrade task opens with it.
+    const itsOwn = tasks.submit("cli-local", "cli", `${stored.milestones[0]!.prompt}\n\nContinue.`).id;
+    tasks.markTerminal(itsOwn, TaskStatus.blocked);
+
+    for (const m of stored.milestones) m.taskIds = undefined;
+    stored.milestones[0]!.taskId = "task_gone";
+    stored.state = "done";
+    stored.deliveryReported = true;
+    storage.save(stored);
+
+    await manager.resumeActive();
+
+    expect(tasks.cancelled).not.toContain(quoting);
+    expect(tasks.cancelled).toContain(itsOwn);
+  });
+
   it("a campaign persisted BEFORE ownership existed still retires its orphans (Codex 2026-09-11 O#11)", async () => {
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
     await waitFor(() => expect(tasks.submitted).toHaveLength(1));

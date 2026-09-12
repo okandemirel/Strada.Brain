@@ -432,14 +432,28 @@ export function gapKey(gap: string): string {
  * 60-character prefix merged different requirements (Codex 2026-09-11 J#12, J#13).
  */
 /** Record a task this milestone owns, newest last (Codex 2026-09-11 L#4). */
+/** How many lineage roots one milestone's ownership ledger keeps. */
+export const OWNERSHIP_LEDGER_LIMIT = 500;
+
 export function rememberOwnedTask(milestone: CampaignMilestone, taskId: string): void {
   const owned = milestone.taskIds ?? [];
   if (owned.includes(taskId)) return;
   owned.push(taskId);
   // Bounded at BOTH ends: the earliest entries are the abandoned roots the
   // executor can still resurrect, and dropping them lost exactly the ownership
-  // retirement needs (Codex 2026-09-11 O#11).
-  milestone.taskIds = owned.length <= 50 ? owned : [...owned.slice(0, 25), ...owned.slice(-25)];
+  // retirement needs (Codex 2026-09-11 O#11). The bound is generous because
+  // every entry it drops is a live lineage nobody can retire afterwards, and a
+  // lineage root is twenty characters (Codex 2026-09-12 Q#4): a milestone
+  // would have to be resubmitted five hundred times to reach it.
+  if (owned.length > OWNERSHIP_LEDGER_LIMIT) {
+    getLoggerSafe().warn("Campaign ownership ledger is full — the oldest lineages can no longer be retired", {
+      milestone: milestone.id,
+      owned: owned.length,
+    });
+    milestone.taskIds = [...owned.slice(0, OWNERSHIP_LEDGER_LIMIT / 2), ...owned.slice(-OWNERSHIP_LEDGER_LIMIT / 2)];
+    return;
+  }
+  milestone.taskIds = owned;
 }
 
 export function unscheduledGaps(
@@ -801,7 +815,22 @@ export class CampaignManager {
         }>;
         for (const task of onChat) {
           if (task.status === "completed" || task.status === "cancelled") continue;
-          if (!keys.some((key) => (task.prompt ?? "").includes(key))) continue;
+          // The prompt must OPEN the task, not appear somewhere inside it: a
+          // mission that quotes a sprint's instructions ("explain this, do not
+          // execute it: …") is not that sprint, and cancelling it retired
+          // someone else's work (Codex 2026-09-12 Q#4). A pre-upgrade
+          // milestone's own task begins with its prompt.
+          const prompt = (task.prompt ?? "").trimStart();
+          const owns = keys.some((key) => prompt.startsWith(key));
+          if (!owns) {
+            if (keys.some((key) => prompt.includes(key))) {
+              getLoggerSafe().info("A task quotes a legacy milestone's prompt but does not begin with it — left alone", {
+                id: campaign.id,
+                taskId: task.id,
+              });
+            }
+            continue;
+          }
           try {
             this.cancelLineageRootOf(task.id, cancelOpts);
             this.taskManager.cancel(task.id as TaskId, cancelOpts);

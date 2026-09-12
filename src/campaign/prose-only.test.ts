@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { attemptRunId, CampaignManager, deliveryFailureKinds, proofSignature, rememberOwnedTask, unscheduledGaps } from "./campaign-manager.js";
+import { attemptRunId, CampaignManager, deliveryFailureKinds, proofSignature, rememberOwnedTask, OWNERSHIP_LEDGER_LIMIT, unscheduledGaps } from "./campaign-manager.js";
 
 /**
  * Measured live 2026-09-04: told not to audit, the final sprint answered
@@ -229,15 +229,21 @@ describe("deliveryFailureKinds — identity from the gates, not their prose (Cod
 describe("a milestone's ownership ledger (Codex 2026-09-11 L#4, O#11)", () => {
   it("keeps the earliest roots as well as the newest tasks", () => {
     const milestone = { id: "m1", title: "t", prompt: "p", status: "pending", attempts: 0 } as never as import("./types.js").CampaignMilestone;
+    // A milestone resubmitted eighty times keeps EVERY root: each entry the
+    // ledger drops is a live lineage nobody can retire afterwards (Codex
+    // 2026-09-12 Q#4).
     for (let i = 0; i < 80; i++) rememberOwnedTask(milestone, `task_${i}`);
+    expect(milestone.taskIds!.length).toBe(80);
 
-    // The oldest entries are the abandoned ROOTS retirement has to reach;
-    // trimming from the front alone lost exactly those.
+    // Past the bound the oldest entries still survive: they are the abandoned
+    // ROOTS retirement has to reach, and trimming from the front alone lost
+    // exactly those.
+    for (let i = 80; i < OWNERSHIP_LEDGER_LIMIT + 40; i++) rememberOwnedTask(milestone, `task_${i}`);
     expect(milestone.taskIds).toContain("task_0");
-    expect(milestone.taskIds).toContain("task_79");
-    expect(milestone.taskIds!.length).toBeLessThanOrEqual(50);
+    expect(milestone.taskIds).toContain(`task_${OWNERSHIP_LEDGER_LIMIT + 39}`);
+    expect(milestone.taskIds!.length).toBeLessThanOrEqual(OWNERSHIP_LEDGER_LIMIT);
     // …and it never records the same task twice.
-    rememberOwnedTask(milestone, "task_79");
-    expect(milestone.taskIds!.filter((t) => t === "task_79")).toHaveLength(1);
+    rememberOwnedTask(milestone, "task_0");
+    expect(milestone.taskIds!.filter((t) => t === "task_0")).toHaveLength(1);
   });
 });
