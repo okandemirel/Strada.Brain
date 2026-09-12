@@ -5963,6 +5963,52 @@ describe("CampaignManager", () => {
     expect(seenPrompts[0]).toContain("docs/Game_GDD.md");
   });
 
+  it("withholds the report when the campaign moves on WHILE the review is gathered (Codex 2026-09-13 AF#6)", async () => {
+    // The generation check ran before the reviewer's await; a person reviving
+    // the campaign inside that await still got the old generation's "game
+    // build complete".
+    tasks = new FakeTaskManager();
+    storage.close();
+    storage = new CampaignStorage(join(dir, `campaigns-review-race-${messages.length}.db`));
+    let campaignId: string | undefined;
+    manager = new CampaignManager({
+      storage,
+      verifyCompile: async () => compileVerdict,
+      buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
+      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); afterPlayerRun?.(); },
+      planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async (chatId, text) => { messages.push({ chatId, text }); },
+      projectRoot,
+      retryAdoptionGraceMs: 10,
+      completedSettleDelayMs: 0,
+      milestoneTimeBoxMs: 60 * 60_000,
+      independentReviewer: async () => {
+        // A person revives the campaign while the opinion is being gathered.
+        const live = storage.get(campaignId!)!;
+        live.stopGeneration = (live.stopGeneration ?? 0) + 1;
+        live.state = "executing";
+        storage.save(live);
+        return { ok: true, model: "fake-astra", text: "VERDICT: DELIVERABLE", ms: 5 };
+      },
+    });
+    manager.attachEvents();
+    const campaign = manager.startFromGdd(ctx, "# GDD text", "docs/Game_GDD.md");
+    campaignId = campaign.id;
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    const before = messages.length;
+    settleMilestone("final report");
+
+    await new Promise((r) => setTimeout(r, 1500));
+    expect(storage.get(campaign.id)!.stopGeneration).toBe(1);
+    expect(messages.slice(before).some((m) => m.text.includes("game build complete"))).toBe(false);
+    expect(storage.get(campaign.id)!.deliveryReported).not.toBe(true);
+  });
+
   it("a spent coverage-remediation sprint is NOT a delivery when the measured tree is refused", async () => {
     // Measured 2026-09-07 07:00: state=done under a "⛔ NOT DELIVERED"
     // headline, with structure findings two days stale.

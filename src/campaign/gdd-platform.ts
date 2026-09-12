@@ -32,6 +32,22 @@ const PLATFORM_PATTERNS: ReadonlyArray<readonly [BuildTarget, RegExp]> = [
 ];
 
 /**
+ * Does this text OPEN with a platform's name?
+ *
+ * A clause reader needs it: "Windows at least 60 fps, Android at most 30 fps"
+ * is two requirements, and a comma between them is a clause end exactly as a
+ * semicolon is (Codex 2026-09-13 AF#12). The names come from the same table
+ * the platform reader uses — nothing game-specific is added here.
+ */
+export function opensWithPlatformName(text: string): boolean {
+  const head = text.replace(/^[\s,;:—–-]+/u, "").slice(0, 24);
+  return PLATFORM_PATTERNS.some(([, pattern]) => {
+    const anchored = new RegExp(`^(?:${pattern.source})`, "i");
+    return anchored.test(head);
+  });
+}
+
+/**
  * Storefronts, used ONLY when the document names no operating system: a store
  * implies a platform ("Google Play" means Android) but a named OS beside it
  * always wins.

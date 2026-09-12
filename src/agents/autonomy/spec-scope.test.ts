@@ -333,9 +333,27 @@ describe("a converted table's blank lines (Codex 2026-09-12 AC)", () => {
     // leading newline or a title line above the table looks like.
     const shifted = "\nUnlock\n\nElement\n\nPitch\n\nL1\n\nIce\n\nFreezes";
     expect(extractScheduledElements(shifted)).toEqual([{ unlock: "L1", name: "Ice" }]);
-    // …and two lines of preamble, which puts the header back on an even line.
+    // …and preamble of its own, which moves the header off every parity the
+    // reader might have assumed.
     expect(extractScheduledElements("# GDD\n\nUnlock\n\nElement\n\nPitch\n\nL1\n\nIce\n\nFreezes"))
       .toEqual([{ unlock: "L1", name: "Ice" }]);
+    expect(extractScheduledElements("# GDD\nA game about ice.\n\nUnlock\n\nElement\n\nPitch\n\nL1\n\nIce\n\nFreezes"))
+      .toEqual([{ unlock: "L1", name: "Ice" }]);
+  });
+
+  it("reads a blank-separated table whose rows are separated too (Codex 2026-09-13 AF#8)", () => {
+    // Parity — the document's or the header's — breaks the moment one row
+    // carries an extra blank line, and every later cell was discarded.
+    expect(extractScheduledElements("Element\n\nUnlock\n\nRotor\n\nL1\n\n\nMagnet\n\nL2")).toEqual([
+      { unlock: "L1", name: "Rotor" },
+      { unlock: "L2", name: "Magnet" },
+    ]);
+  });
+
+  it("says so when the LAST row is cut short (Codex 2026-09-13 AF#8)", () => {
+    const truncated: { partial?: boolean } = {};
+    expect(extractFlattenedSchedule("Unlock\nElement\nL1\nRotor\nL2", truncated)).toEqual([{ unlock: "L1", name: "Rotor" }]);
+    expect(truncated.partial).toBe(true);
   });
 
   it("steps over TWO blank lines between rows", () => {

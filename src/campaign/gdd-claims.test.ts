@@ -870,6 +870,23 @@ describe("a platform's budget, and a session that took no time (Codex 2026-09-12
     expect(after.find((c) => c.kind === "level_count")!.text).toBe("Each round lasts 1.5 s and the game ships 12 levels.");
   });
 
+  it("ends a clause at a comma between platforms, and not inside an abbreviation (Codex 2026-09-13 AF#12)", () => {
+    const comma = extractNumericClaims("Ships on Windows and Android. Windows at least 60 fps, Android at most 30 fps.").claims;
+    expect(comma.map((c) => [c.comparator, c.value])).toEqual([["min", 60], ["max", 30]]);
+    expect(comma[0]!.text).not.toMatch(/Android/);
+    expect(comma[1]!.text).not.toMatch(/Windows/);
+    // An abbreviation's dot is not a sentence end: it used to sever "Windows"
+    // from its own requirement.
+    const abbreviated = extractNumericClaims(
+      "Ships on Windows and Android. Windows (e.g. desktop) at least 60 fps;Android at most 30 fps.",
+    ).claims;
+    expect(abbreviated[0]!.text).toContain("Windows");
+    expect(abbreviated[0]!.text).not.toMatch(/Android/);
+    // …and an ordinary comma inside one requirement still is not a boundary.
+    const plain = extractNumericClaims("The game must load in under 3 seconds, even on a cold start.").claims;
+    expect(plain[0]!.text).toContain("cold start");
+  });
+
   it("takes the document's platforms when the clause names none", () => {
     // A clause with no platform of its own inherits the document's: a boot
     // time measured on the desktop the project happens to build says nothing

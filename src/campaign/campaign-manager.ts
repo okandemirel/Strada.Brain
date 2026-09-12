@@ -3927,6 +3927,19 @@ export class CampaignManager {
         }
         this.cancelLiveLineages(campaign, "campaign delivered");
         await this.gatherIndependentReview(campaign);
+        // …AND THE REVIEWER'S AWAIT IS ANOTHER WINDOW. A person can revive the
+        // campaign while the independent opinion is being gathered: the row
+        // moves to a new generation, and this handler still announced the old
+        // one's delivery (Codex 2026-09-13 AF#6). Checked again on the far
+        // side of every await, before anything leaves.
+        if (!this.generationIsCurrent(campaign)) {
+          getLoggerSafe().warn("Delivery report withheld: the campaign moved on while its review was gathered", {
+            id: campaign.id,
+            writing: campaign.stopGeneration ?? 0,
+            stored: this.storage.get(campaign.id)?.stopGeneration ?? 0,
+          });
+          return;
+        }
         if (await this.tell(campaign, `${this.buildDeliveryReport(campaign)}${commitNote}`)) {
           campaign.deliveryReported = true;
           this.persist(campaign);
@@ -6275,6 +6288,19 @@ export class CampaignManager {
    * generation is carried forward; a revival, which bumps the generation and
    * clears the mark deliberately, still clears it.
    */
+  /**
+   * Is this copy still the campaign the STORE describes?
+   *
+   * Every await is a window in which a person can revive the campaign into a
+   * new generation, and a copy from before that is history (Codex 2026-09-13
+   * AF#6).
+   */
+  private generationIsCurrent(campaign: Campaign): boolean {
+    const stored = this.storage.get(campaign.id);
+    if (stored === undefined) return true;
+    return (stored.stopGeneration ?? 0) <= (campaign.stopGeneration ?? 0);
+  }
+
   /** Whether the row was actually written: a refused save is not an update. */
   private persist(campaign: Campaign): boolean {
     campaign.updatedAt = Date.now();

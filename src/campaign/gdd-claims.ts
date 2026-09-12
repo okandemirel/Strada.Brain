@@ -23,7 +23,7 @@
  * Nothing here knows a game's own names.
  */
 import type { PlaythroughEvidence } from "./types.js";
-import { frameRateAnswersPlatform, gddPlatform, type GddPlatform } from "./gdd-platform.js";
+import { frameRateAnswersPlatform, gddPlatform, opensWithPlatformName, type GddPlatform } from "./gdd-platform.js";
 
 export type ClaimKind = "fps" | "boot_seconds" | "level_load_seconds" | "session_seconds" | "level_count";
 
@@ -74,8 +74,19 @@ function platformOfClaim(text: string): GddPlatform | undefined {
 function isClauseEnd(text: string, i: number): boolean {
   const c = text[i];
   if (c === ";") return true;
+  // A COMMA BETWEEN TWO PLATFORMS' REQUIREMENTS ends a clause as a semicolon
+  // does: "Windows at least 60 fps, Android at most 30 fps" gave both claims
+  // a fragment holding both platforms (Codex 2026-09-13 AF#12).
+  if (c === ",") return opensWithPlatformName(text.slice(i + 1, i + 32));
   if (c !== ".") return false;
-  return !(/\d/.test(text[i - 1] ?? "") && /\d/.test(text[i + 1] ?? ""));
+  // A decimal point is not an end…
+  if (/\d/.test(text[i - 1] ?? "") && /\d/.test(text[i + 1] ?? "")) return false;
+  // …and neither is the dot inside an abbreviation: "Windows (e.g. desktop)
+  // at least 60 fps" lost "Windows" to the dot in "e.g." (AF#12). A sentence
+  // ends where the next thing said starts anew.
+  const after = text.slice(i + 1).match(/^\s*(\S)/u)?.[1];
+  if (after === undefined) return true;
+  return !/[a-zçğıöşü]/u.test(after);
 }
 
 /** A window of text around a number, one sentence at most. */

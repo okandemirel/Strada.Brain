@@ -147,12 +147,13 @@ export function extractFlattenedSchedule(
     // folded coordinates: the backward walk below stepped straight into a
     // blank, so a reversed column order and blank-separated cells worked
     // separately and failed together (Codex 2026-09-12 AB J2.5).
-    // …FROM THE HEADER'S OWN PARITY, not the document's. Folding on
-    // `i % 2 === 0` assumed the table starts at an even line: one leading
-    // blank line in the file kept every blank and dropped every cell (Codex
-    // 2026-09-12 AC J1).
-    const cells = spaced ? lines.filter((_cell, i) => (i - at) % 2 === 0) : lines;
-    const here = spaced ? Math.floor(at / 2) : at;
+    // …BY DROPPING THE BLANKS, not by counting lines. Parity — the document's
+    // or the header's — breaks the moment one row is separated by an extra
+    // blank line, and the reader then discarded every later cell (Codex
+    // 2026-09-12 AC J1, 2026-09-13 AF#8). In a table whose cells are
+    // blank-separated, a blank line is a separator and never a cell.
+    const cells = spaced ? lines.filter((cell) => cell.trim() !== "") : lines;
+    const here = spaced ? lines.slice(0, at).filter((cell) => cell.trim() !== "").length : at;
     // THE HEADER BLOCK, which may begin BEFORE the unlock column: a document
     // whose table starts with Element then Unlock read nothing at all (Y#4).
     const short = (cell: string): boolean => cell !== "" && cell.length <= 30 && !/[.;:!?]$/.test(cell);
@@ -198,6 +199,11 @@ export function extractFlattenedSchedule(
         rows.push({ unlock: block[unlockAt]!, name });
       }
       if (rows.length === 0) continue;
+      // A TRAILING ROW THE WIDTH DOES NOT COMPLETE is a row this reader did
+      // not read: "Unlock/Element/L1/Rotor/L2" loses L2's element silently
+      // (Codex 2026-09-13 AF#8).
+      const consumed = width + rows.length * width;
+      if (out && window.slice(consumed).some((cell) => UNLOCK_CELL_RE.test(cell))) out.partial = true;
       for (const el of rows) {
         const key = el.name.toLowerCase();
         if (!found.has(key)) found.set(key, el);
