@@ -103,16 +103,27 @@ class MidStreamFailureError extends Error {
   }
 }
 
+/**
+ * THIS provider cannot serve THIS request — but a sibling might.
+ *
+ * A ChatGPT/Codex subscription rejecting its pinned model is a static config
+ * mismatch for that provider, and a context-length refusal is about the model
+ * that was asked, not about the request in general. Both were treated as
+ * "no provider can do this": the chain threw the first provider's error and a
+ * healthy sibling received ZERO calls (Codex 2026-09-12 AE#6).
+ */
+function providerCannotServe(error: unknown): boolean {
+  const msg = error instanceof Error ? error.message : String(error);
+  if (CODEX_MODEL_UNSUPPORTED_RE.test(msg)) return true;
+  // A context window is a property of the model, and siblings have their own.
+  return /context length|context window|too many tokens|maximum context/i.test(msg);
+}
+
 function isNonRetryableRequestError(error: unknown): boolean {
   const msg = error instanceof Error ? error.message : String(error);
   if (REASONING_CONTENT_RE.test(msg)) return false;
-  // A ChatGPT/Codex subscription rejecting its pinned model is a STATIC config
-  // mismatch (the subscription serves a fixed Codex model set): retrying/failing
-  // over re-fails identically and churns an otherwise-healthy provider, so treat it
-  // as non-retryable and surface the actionable message. Checked BEFORE the generic
-  // MODEL_UNSUPPORTED_RE so the Codex case is not misread as a fail-over-able gateway
-  // mismatch.
-  if (CODEX_MODEL_UNSUPPORTED_RE.test(msg)) return true;
+  // A provider that cannot serve this request is skipped, not fatal (AE#6).
+  if (providerCannotServe(error)) return false;
   // Model-not-supported / ModelError is a per-provider config mismatch, not a fatal
   // auth/request error — retryable so the chain fails over to a healthy sibling.
   if (MODEL_UNSUPPORTED_RE.test(msg)) return false;

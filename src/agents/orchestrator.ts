@@ -766,6 +766,12 @@ export class Orchestrator {
     input_schema: import("../types/index.js").JsonObject;
   }>;
   private readonly toolMetadataByName = new Map<string, WorkerToolMetadata>();
+  /**
+   * The registry's own metadata map, when the caller passed one. Static
+   * permissions live in `toolMetadataByName`; AVAILABILITY is read from here,
+   * because it changes while the run is in flight (Codex 2026-09-12 AE#5).
+   */
+  private liveToolMetadata?: ReadonlyMap<string, WorkerToolMetadata>;
 
   /**
    * Is this tool offered to workers right now, and if not, why?
@@ -799,8 +805,15 @@ export class Orchestrator {
       return { offered: false, reason: `${name} needs a .sln or .csproj, and this project has none yet` };
     }
     if (metadata.controlPlaneOnly === true) return { offered: false, reason: `${name} is not offered to workers` };
-    if (metadata.available === false) {
-      return { offered: false, reason: metadata.availabilityReason || `${name} is currently unavailable` };
+    // AVAILABILITY AS IT IS NOW, from the registry's own map when there is
+    // one: a bridge that reconnected mid-run makes its tools available again,
+    // and this used to read a snapshot taken before the drop (AE#5).
+    const live = this.liveToolMetadata?.get(name);
+    const available = live?.available ?? metadata.available;
+    if (available === false) {
+      const reason = (live?.available === false ? live.availabilityReason : metadata.availabilityReason)
+        || metadata.availabilityReason;
+      return { offered: false, reason: reason || `${name} is currently unavailable` };
     }
     return { offered: true };
   }
@@ -1158,6 +1171,13 @@ export class Orchestrator {
     this.runtimeArtifactManager = opts.runtimeArtifactManager;
     if (opts.toolMetadataByName) {
       if (opts.toolMetadataByName instanceof Map) {
+        // THE LIVE MAP IS KEPT, not only copied. The registry rewrites a
+        // tool's availability when the Unity bridge connects or drops, and a
+        // snapshot taken at construction froze "Bridge disconnected" for the
+        // life of the run: after the editor came back the tool was still not
+        // offered, and a direct call was refused before the adapter's own
+        // reconnect logic could run (Codex 2026-09-12 AE#5).
+        this.liveToolMetadata = opts.toolMetadataByName as ReadonlyMap<string, WorkerToolMetadata>;
         for (const [name, metadata] of opts.toolMetadataByName.entries()) {
           this.toolMetadataByName.set(name, metadata);
         }

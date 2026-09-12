@@ -311,7 +311,7 @@ describe("FallbackChainProvider", () => {
   // offline for hours). This is the exact live bug: a churned gpt-5.2 override 400'd
   // the Codex subscription, poisoned OpenAI's health, and — with the only sibling on a
   // weekly-quota cooldown — collapsed the chain to a false "no available provider".
-  it("treats a Codex subscription model-rejection (400) as non-retryable WITHOUT churning health", async () => {
+  it("skips a provider whose subscription rejects its model and lets a SIBLING answer, without churning health", async () => {
     const health = ProviderHealthRegistry.getInstance();
     const recordFailure = vi.spyOn(health, "recordFailure");
 
@@ -319,17 +319,44 @@ describe("FallbackChainProvider", () => {
     (p1.chat as ReturnType<typeof vi.fn>).mockRejectedValue(
       new Error('OpenAI The configured model "gpt-5.2" is not accepted by the ChatGPT/Codex subscription endpoint (HTTP 400). The \'gpt-5.2\' model is not supported when using Codex with a ChatGPT account. Set the OpenAI model to a Codex-supported one (such as gpt-5.4) or switch OpenAI to API-key mode.'),
     );
-    const p2 = { ...createMockProvider({ text: "should-not-reach" }), name: "deepseek" };
+    const p2 = { ...createMockProvider({ text: "deepseek-ok" }), name: "deepseek" };
 
     const chain = new FallbackChainProvider([p1, p2]);
 
-    // Non-retryable: rethrows immediately, does NOT hammer the sibling.
-    await expect(chain.chat("sys", [], [])).rejects.toThrow(/not accepted by the ChatGPT\/Codex subscription/i);
-    expect(p2.chat).not.toHaveBeenCalled();
+    // The subscription serves a fixed model set — for THAT provider. A
+    // different provider has its own models, and it received ZERO calls while
+    // the chain threw the first one's error (Codex 2026-09-12 AE#6).
+    const answered = await chain.chat("sys", [], []);
+    expect(answered.text).toBe("deepseek-ok");
+    expect(p2.chat).toHaveBeenCalledTimes(1);
 
     // Health not poisoned — the provider stays available for a corrected model.
     expect(recordFailure).not.toHaveBeenCalled();
     expect(health.isAvailable("openai")).toBe(true);
+  });
+
+  it("fails over when a model refuses the request for its own CONTEXT LENGTH (Codex 2026-09-12 AE#6)", async () => {
+    // A context window belongs to the model that was asked; the sibling has
+    // its own. This was read as "the next provider would reject it
+    // identically" and the chain threw.
+    const p1 = { ...createMockProvider(), name: "openai" };
+    (p1.chat as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error("HTTP 400 Bad Request: maximum context length exceeded"),
+    );
+    const p2 = { ...createMockProvider({ text: "roomier-ok" }), name: "deepseek" };
+    const answered = await new FallbackChainProvider([p1, p2]).chat("sys", [], []);
+    expect(answered.text).toBe("roomier-ok");
+    expect(p2.chat).toHaveBeenCalledTimes(1);
+  });
+
+  it("still ends the chain for a request NO provider could serve", async () => {
+    // A malformed tool schema is about the request, and the sibling would
+    // reject it identically: this one must not be hammered around the chain.
+    const p1 = { ...createMockProvider(), name: "openai" };
+    (p1.chat as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("HTTP 400 invalid tool schema: tools[0].name"));
+    const p2 = { ...createMockProvider({ text: "should-not-reach" }), name: "deepseek" };
+    await expect(new FallbackChainProvider([p1, p2]).chat("sys", [], [])).rejects.toThrow(/invalid tool schema/i);
+    expect(p2.chat).not.toHaveBeenCalled();
   });
 
   // Guard: a GENUINE auth 401 stays non-retryable (don't hammer every sibling with a
