@@ -29,6 +29,7 @@ import { gddPlatform, buildSatisfiesTarget, artifactIsForeign, hostTarget, type 
 import { readPlaymodeRun } from "./playmode-run.js";
 import type { PlayerRunSpec } from "../core/bootstrap-stages/stage-runtime.js";
 import { assessNumericClaims, claimsRefusal, describeClaims, extractActionBudget, extractNumericClaims } from "./gdd-claims.js";
+import { entryScreenInDocument } from "./gdd-scope.js";
 import { REQUIRED_EVIDENCE_PREFIX } from "../supervisor/required-evidence.js";
 import { deliveryReviewPrompt, renderSecondOpinion } from "../agents/review/codex-second-opinion.js";
 import {
@@ -1872,6 +1873,19 @@ export class CampaignManager {
       // scans the live prompt for that word, and a deterministic append must
       // not arm a gate the planner never asked for.
       if (!milestone.prompt.includes("PLAY-THROUGH (final sprint):")) {
+        // THE DOCUMENT'S OWN ENTRY FLOW, not one game's. This told every
+        // sprint to make the game start playing by itself, and a document
+        // that specifies a home or menu as its first screen was told to
+        // delete its own design (Codex 2026-09-12 V, Job 3.9).
+        const named = entryScreenInDocument(this.gddTextOf(campaign));
+        const entryScreen =
+          named !== undefined
+            ? "It also reports whether the game starts play BY ITSELF after boot. " +
+              `This document opens on ${named}, so play must NOT start by itself: what has to work is the ROUTE from ` +
+              `${named} into a level through the same controls a person uses, and back out to the result screen. Wire that route and prove it.`
+            : "It also reports whether the game starts play BY ITSELF after boot; if " +
+              "it does not, wire the GDD's entry flow so a person who opens the entry scene is playing, not " +
+              "staring at an idle screen.";
         milestone.prompt +=
           "\n\nPLAY-THROUGH (final sprint): the game must register ONE Strada.Core.Play.IPlaythroughDriver " +
           "in its service container — an adapter over its own flow, level and input services (Phase, " +
@@ -1882,9 +1896,8 @@ export class CampaignManager {
           "that refuses to start). Register a Strada.Core.Play.ISessionCatalog as well (SessionCount = how many " +
           "levels/rounds StartSession accepts) and run unity_playthrough with sessions: \"all\" so every level is " +
           "played to an outcome and the GDD's level count is measured against what is shipped. " +
-          "It also reports whether the game starts play BY ITSELF after boot; if " +
-          "it does not, wire the GDD's entry flow so a person who opens the entry scene is playing, not " +
-          "staring at an idle screen. Then run unity_build_player for the GDD's platform (or the project's " +
+          entryScreen +
+          " Then run unity_build_player for the GDD's platform (or the project's " +
           "active target): a delivery is a runnable artifact, and its measured path and size belong in your report. " +
           "Then run unity_run_player on that artifact: it plays the game inside the built player and measures the " +
           "real frame rate — the number the GDD's frame-rate target means." +
@@ -5279,7 +5292,18 @@ export class CampaignManager {
         if (m.playthroughVerdict?.found && m.playthroughVerdict.ok) marks.push(line);
         else caveats.push(`${m.title}: ${line}`);
         if (m.playthroughVerdict?.found && m.playthroughVerdict.autoStarted === false) {
-          caveats.push(`${m.title}: the game does not start play by itself after boot — a person opening the entry scene sees an idle screen`);
+          // AN IDLE FIRST SCREEN IS A DEFECT ONLY IF THE DOCUMENT DID NOT ASK
+          // FOR ONE. The vehicle's says "cold boot ≤ 6 s to Home", and the
+          // report called its own design a defect (Codex 2026-09-12 V, Job
+          // 3.9). What is unproven either way is the route from that screen
+          // into play, which no producer measures yet.
+          const opensOn = entryScreenInDocument(this.gddTextOf(campaign));
+          caveats.push(
+            opensOn !== undefined
+              ? `${m.title}: the game opens on ${opensOn}, as the document specifies — but nothing in this run drove ` +
+                `${opensOn} → level → result through the controls a person uses, so that route is NOT proven`
+              : `${m.title}: the game does not start play by itself after boot — a person opening the entry scene sees an idle screen`,
+          );
         }
         if (m.playerPlaythrough?.found) {
           const line = `inside the built player: ${describePlaythrough(m.playerPlaythrough)}`;

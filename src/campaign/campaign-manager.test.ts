@@ -1264,6 +1264,39 @@ describe("CampaignManager", () => {
     expect(storage.get(campaign.id)!.milestones[2]!.playthroughVerdict).toMatchObject({ found: true, ok: true, autoStarted: false });
   });
 
+  it("a document that opens on a menu is not reported as broken for doing so (Codex 2026-09-12 V, Job 3.9)", async () => {
+    // The system told every final sprint to make the game start playing by
+    // itself and called an idle first screen a defect — one game's shape
+    // imposed on all of them. The vehicle's own document says "cold boot
+    // ≤ 6 s to Home"; the report called that a defect.
+    const gdd = "# GDD\n\nCold boot ≤ 6 s to Home on a mid device. Tap PLAY on Home to start a level.";
+    const campaign = manager.startFromGdd(ctx, gdd, "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1), { timeout: 15_000 });
+    settleMilestone("sprint A done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2), { timeout: 15_000 });
+    settleMilestone("sprint B done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3), { timeout: 15_000 });
+
+    // The final sprint is told to prove the document's OWN entry route.
+    const finalPrompt = tasks.submitted[2]!.prompt;
+    expect(finalPrompt).toContain("This document opens on Home, so play must NOT start by itself");
+    expect(finalPrompt).toContain("through the same controls a person uses");
+
+    tasks.verifications.set("task_3", {
+      testsGreen: true,
+      detail: "PlayMode verification passed: 179 of 179 tests passed (unfiltered — the whole PlayMode suite)",
+      unfiltered: true,
+    });
+    tasks.emit("task:completed", "task_3", "green, shipping");
+    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"), { timeout: 15_000 });
+
+    const report = messages.map((m) => m.text).join("\n");
+    expect(report).not.toContain("sees an idle screen");
+    expect(report).toContain("the game opens on Home, as the document specifies");
+    // …and the route nobody drove is still named as unproven.
+    expect(report).toContain("that route is NOT proven");
+  });
+
   it("refuses delivery while a GDD-scheduled element has no trace in code, and delivers once it does (spec-scope wired 2026-09-10)", async () => {
     writeFileSync(
       join(projectRoot, "docs", "Game_GDD.md"),
