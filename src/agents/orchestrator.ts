@@ -5119,11 +5119,22 @@ export class Orchestrator {
       };
     }
 
+    // AVAILABILITY AS IT IS NOW, the same answer the offering gives. Dispatch
+    // read the copied map while `toolOfferedNow` read the registry's, so a
+    // recovered Unity bridge was offered and then refused with "Bridge
+    // disconnected" — and a gate could demand a tool the executor would not
+    // run (Codex 2026-09-13 AF#11).
+    const offered = this.toolOfferedNow(activeToolCall.name);
     const toolMeta = this.toolMetadataByName.get(activeToolCall.name);
-    if (toolMeta?.available === false) {
+    const liveMeta = this.liveToolMetadata?.get(activeToolCall.name);
+    const unavailable = (liveMeta?.available ?? toolMeta?.available) === false;
+    if (unavailable) {
       return {
         toolCallId: activeToolCall.id,
-        content: toolMeta.availabilityReason || `Tool '${activeToolCall.name}' is currently unavailable.`,
+        content:
+          (liveMeta?.available === false ? liveMeta.availabilityReason : toolMeta?.availabilityReason)
+          || offered.reason
+          || `Tool '${activeToolCall.name}' is currently unavailable.`,
         isError: true,
       };
     }

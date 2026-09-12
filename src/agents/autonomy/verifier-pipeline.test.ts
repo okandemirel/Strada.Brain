@@ -675,10 +675,34 @@ describe("a completion claim needs work behind it, at every door (Codex 2026-09-
     });
 
   it("refuses a completion with no step of any kind", () => {
-    const plan = noStepsPlan("Implemented successfully.");
-    expect(plan.initialDecision).toBe("continue");
-    expect(plan.gate ?? "").toContain("[VERIFIER PIPELINE]");
-    expect(plan.summary).toContain("no change made and no verification run");
+    // Three shapes of the same claim: a verb from the list, a bare token, and
+    // a sentence saying the feature works (Codex 2026-09-13 AF#5 — the last
+    // two were approved).
+    // (The gate asks twice per run key, then demands a replan — so each draft
+    // is asked under its own chat id.)
+    for (const [i, draft] of ["Implemented successfully.", "Done.", "Scoring works now."].entries()) {
+      const plan = planVerifierPipeline({
+        prompt: "Implement scoring and win conditions.",
+        draft,
+        state: createState(),
+        task: { type: "code-generation", complexity: "simple", criticality: "medium" },
+        verificationState: {
+          pendingFiles: new Set<string>(),
+          touchedFiles: new Set<string>(),
+          hasCompilableChanges: false,
+          lastBuildOk: null,
+          lastVerificationAt: null,
+        },
+        buildVerificationGate: null,
+        conformanceGate: null,
+        logEntries: [],
+        chatId: `chat-ae1-${i}`,
+        taskStartedAtMs,
+      });
+      expect(plan.initialDecision, draft).toBe("continue");
+      expect(plan.gate ?? "", draft).toContain("[VERIFIER PIPELINE]");
+      expect(plan.summary, draft).toContain("no change made and no verification run");
+    }
   });
 
   it("does not hold back the answer to a question that asked for no change", () => {
@@ -704,6 +728,27 @@ describe("a completion claim needs work behind it, at every door (Codex 2026-09-
       taskStartedAtMs: Date.now() - 1000,
     });
     expect(plan.initialDecision).toBe("approve");
+    // …and a factual answer in the past tense is an ANSWER, not a claim that
+    // this run did it (AF#5).
+    const factual = planVerifierPipeline({
+      prompt: "When was PlayerController created?",
+      draft: "It was created in 2020.",
+      state: createState(),
+      task: { type: "code-generation", complexity: "simple", criticality: "medium" },
+      verificationState: {
+        pendingFiles: new Set<string>(),
+        touchedFiles: new Set<string>(),
+        hasCompilableChanges: false,
+        lastBuildOk: null,
+        lastVerificationAt: null,
+      },
+      buildVerificationGate: null,
+      conformanceGate: null,
+      logEntries: [],
+      chatId: "chat-ae1-factual",
+      taskStartedAtMs,
+    });
+    expect(factual.initialDecision).toBe("approve");
   });
 
   it("still honours an honest terminal failure report", () => {

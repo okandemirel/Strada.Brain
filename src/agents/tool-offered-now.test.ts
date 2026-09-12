@@ -37,7 +37,14 @@ function makeOrchestrator(toolMetadataByName?: Map<string, never>): Orchestrator
       listAvailable: () => [{ name: "mock", label: "mock", defaultModel: "default" }],
       shutdown: vi.fn(),
     } as never,
-    tools: [],
+    tools: toolMetadataByName
+      ? [{
+          name: "unity_create_scene",
+          description: "create a scene",
+          inputSchema: { type: "object", properties: {} },
+          execute: async () => ({ content: "scene created" }),
+        } as never]
+      : [],
     channel: { sendMessage: vi.fn(), type: "cli" } as never,
     projectPath: "/tmp/test-project",
     readOnly: false,
@@ -104,6 +111,37 @@ describe("availability as it is NOW (Codex 2026-09-12 AE#5)", () => {
       offered: false,
       reason: "the editor went away again",
     });
+  });
+
+  it("EXECUTES the recovered tool, not only offers it (Codex 2026-09-13 AF#11)", async () => {
+    // Offering read the registry's map while dispatch read the copy, so a
+    // recovered bridge was offered and then refused with "Bridge
+    // disconnected".
+    const registry = new Map<string, never>();
+    registry.set("unity_create_scene", { available: false, availabilityReason: "Bridge disconnected" } as never);
+    const orchestrator = makeOrchestrator(registry);
+    const call = async (): Promise<{ isError?: boolean; content: string }> =>
+      (orchestrator as unknown as {
+        executeSingleToolCall(
+          tc: { id: string; name: string; input: Record<string, unknown> },
+          order: number,
+          ctx: Record<string, unknown>,
+        ): Promise<{ isError?: boolean; content: string }>;
+      }).executeSingleToolCall({ id: "t1", name: "unity_create_scene", input: {} }, 0, {
+        chatId: "chat-af11",
+        mode: "background",
+        options: {},
+        toolContext: { projectPath: "/tmp/test-project", workingDirectory: "/tmp/test-project", readOnly: false },
+        logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
+      });
+
+    const refused = await call();
+    expect(refused.isError).toBe(true);
+    expect(refused.content).toContain("Bridge disconnected");
+
+    // The editor reconnects: the same call must no longer be refused for it.
+    registry.set("unity_create_scene", { available: true, availabilityReason: undefined } as never);
+    expect((await call()).content).not.toContain("Bridge disconnected");
   });
 
   it("keeps a tool the registry does not know at its own recorded availability", () => {

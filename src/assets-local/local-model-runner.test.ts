@@ -114,7 +114,7 @@ describe("a mesh must be newly produced geometry (Codex 2026-09-12 AE#10)", () =
     expect(result.ok).toBe(false);
     expect(result.detail).toContain("no usable geometry");
     expect(readFileSync(out, "utf8")).toBe(OBJ);
-    expect(existsSync(`${out}.staging`)).toBe(false);
+    expect(existsSync(out.replace(/\.obj$/, ".staging.obj"))).toBe(false);
   });
 
   it("refuses a vertex cloud and an empty file, and knows a glTF from a lie", async () => {
@@ -123,6 +123,8 @@ describe("a mesh must be newly produced geometry (Codex 2026-09-12 AE#10)", () =
     for (const [bytes, why] of [
       ["v 0 0 0\nv 1 0 0\nv 0 1 0\n", "vertices but no faces"],
       ["", "empty"],
+      // `f rubbish` is not a face, and a file of it is not a mesh.
+      ["v 0 0 0\nv 1 0 0\nv 0 1 0\nf rubbish\n", "vertices but no faces"],
     ] as const) {
       const out = join(dir, `Cloud-${why.length}.obj`);
       const runner = runnerWith(async (_cmd, args) => {
@@ -148,20 +150,34 @@ describe("a mesh must be newly produced geometry (Codex 2026-09-12 AE#10)", () =
     expect((await bad.imageToMesh(spec, join(dir, "Other.glb"), join(dir, "Other.glb"))).ok).toBe(false);
   });
 
+  it("accepts an OBJ written the way exporters write them", async () => {
+    // Leading-decimal coordinates and face indices with texture/normal parts
+    // are ordinary OBJ, and both were being refused (Codex 2026-09-13 AF#10).
+    const out = join(dir, "Decimals.obj");
+    const runner = runnerWith(async (_cmd, args) => {
+      writeFileSync(args[args.indexOf("--out") + 1]!, "v .1 .2 .3\nv 1 0 0\nv 0 1 0\nvn 0 0 1\nf 1/1/1 2/2/1 3/3/1\n");
+      return { code: 0, stdout: "", stderr: "" };
+    });
+    expect((await runner.imageToMesh(spec, join(dir, "in.png"), out)).ok).toBe(true);
+  });
+
   it("accepts a mesh the run actually produced", async () => {
     const out = join(dir, "Hero.obj");
     writeFileSync(out, "NOT AN OBJ AT ALL");
     const runner = runnerWith(async (_cmd, args) => {
-      // The subprocess writes to the path IT was given, never to the target.
+      // The subprocess writes to the path IT was given, never to the target —
+      // and that path keeps the target's EXTENSION, because the exporter
+      // infers the format from it (Codex 2026-09-13 AF#10).
       const target = args[args.indexOf("--out") + 1]!;
       expect(target).not.toBe(out);
+      expect(target.endsWith(".obj")).toBe(true);
       writeFileSync(target, OBJ);
       return { code: 0, stdout: "", stderr: "" };
     });
     const result = await runner.imageToMesh(spec, join(dir, "in.png"), out);
     expect(result.ok).toBe(true);
     expect(readFileSync(out, "utf8")).toBe(OBJ);
-    expect(existsSync(`${out}.staging`)).toBe(false);
+    expect(existsSync(out.replace(/\.obj$/, ".staging.obj"))).toBe(false);
   });
 });
 
@@ -201,7 +217,7 @@ describe("inference runs one at a time", () => {
       const out = args[args.indexOf("--out") + 1]!;
       order.push(`start ${out}`);
       // The runner generates into a staging path beside the target (AE#10).
-      if (out.startsWith("/tmp/a.obj")) await gate;
+      if (out.startsWith("/tmp/a.staging")) await gate;
       order.push(`end ${out}`);
       return { code: 1, stdout: "", stderr: "stub" };
     };
@@ -212,12 +228,12 @@ describe("inference runs one at a time", () => {
     const a = runner.imageToMesh(spec, "/tmp/a.png", "/tmp/a.obj");
     const b = runner.imageToMesh(spec, "/tmp/b.png", "/tmp/b.obj");
     await new Promise((r) => setTimeout(r, 20));
-    expect(order).toEqual(["start /tmp/a.obj.staging"]);
+    expect(order).toEqual(["start /tmp/a.staging.obj"]);
     release();
     await Promise.all([a, b]);
     expect(order).toEqual([
-      "start /tmp/a.obj.staging", "end /tmp/a.obj.staging",
-      "start /tmp/b.obj.staging", "end /tmp/b.obj.staging",
+      "start /tmp/a.staging.obj", "end /tmp/a.staging.obj",
+      "start /tmp/b.staging.obj", "end /tmp/b.staging.obj",
     ]);
   });
 

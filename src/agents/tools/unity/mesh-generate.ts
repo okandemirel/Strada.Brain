@@ -801,6 +801,22 @@ export class MeshGenerateTool implements ITool {
         ? fallback
         : { ...fallback, content: `${fallback.content} PLACEHOLDER: the local model failed (${String(local.content).slice(0, 160)}), so this is an analytic shape.` };
     }
+    // …AND THE SAME GUARD WITH NO LOCAL MODEL AT ALL. The preservation check
+    // ran only after an attempted lift, so with `provider` omitted and no
+    // image-to-3D model installed the analytic shape went straight over
+    // existing art and reported "Mesh written" (Codex 2026-09-13 AF#10).
+    if (auto && input["acceptPlaceholder"] !== true) {
+      const kept = existingMeshPath(context.projectPath, input);
+      if (kept !== undefined) {
+        return {
+          content:
+            `Error: ${kept} already holds a usable mesh and no local image-to-3D model is installed, so the only ` +
+            "thing on offer here is an analytic placeholder — the existing mesh was KEPT. Install a model " +
+            "(`strada assets-local-setup`), or pass provider: \"procedural\" with acceptPlaceholder: true to replace it deliberately.",
+          isError: true,
+        };
+      }
+    }
     const placeholderNote = auto
       ? " PLACEHOLDER: no local image-to-3D model is installed (run `strada assets-local-setup`), so this is an analytic shape, not art."
       : "";

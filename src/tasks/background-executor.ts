@@ -1560,6 +1560,8 @@ export class BackgroundExecutor {
     let taskWorkspaceLease: ManagedWorkspaceLease | undefined;
     /** What this task's publication lost, if anything (Codex 2026-09-11 O#1/O#2). */
     let taskPublicationLoss: string | undefined;
+    /** Something the person should know while the publication still stands. */
+    let taskPublicationNote: string | undefined;
 
     if (!this.taskManager) {
       logger.error("TaskManager not set on BackgroundExecutor");
@@ -2009,6 +2011,11 @@ export class BackgroundExecutor {
             // failed write are all work that did not reach the project.
             const verdict = judgePublication(raw as LeaseCommitResult);
             if (verdict.loss !== undefined) taskPublicationLoss = verdict.loss;
+            // …AND THE NOTE REACHES THE PERSON TOO. The worker envelope
+            // appends it to the output; this path dropped it, so a task whose
+            // deletion was declined completed with nothing said (Codex
+            // 2026-09-13 AF#14).
+            if (verdict.note !== undefined) taskPublicationNote = verdict.note;
           })
           .catch((err) => {
             taskPublicationLoss = `the workspace commit threw before the work reached the project (${err instanceof Error ? err.message : String(err)})`;
@@ -2065,7 +2072,9 @@ export class BackgroundExecutor {
           // A settlement that could not be WRITTEN is not settled: storage
           // blinks, and the run was left executing forever with only a log
           // line to say so (Codex 2026-09-12 Q#8). It is retried.
-          const output = pendingCompletion;
+          const output = taskPublicationNote === undefined
+            ? pendingCompletion
+            : `${pendingCompletion}\n\nPUBLICATION NOTE: ${taskPublicationNote}`;
           const settle = (attempt: number): void => {
             // Every attempt re-reads the abort: a cancel that lands between
             // two retries is the last word (S#3).

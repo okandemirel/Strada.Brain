@@ -1831,6 +1831,17 @@ describe("BackgroundExecutor - Blocked worker results", () => {
     }));
     expect(clean.complete).toHaveBeenCalled();
     expect(release).toHaveBeenCalledTimes(1);
+
+    // …and a DECLINED DELETION reaches the person here too: the worker
+    // envelope appended the note and this path dropped it, so a task whose
+    // deletion never landed completed with nothing said (Codex 2026-09-13
+    // AF#14).
+    const declined = await run(vi.fn().mockResolvedValue({
+      written: ["Assets/Player.cs"], conflicts: [], removed: ["Assets/Old.cs"], failed: [],
+    }));
+    expect(declined.complete).toHaveBeenCalled();
+    expect(String(declined.complete.mock.calls[0]?.[1])).toContain("PUBLICATION NOTE");
+    expect(String(declined.complete.mock.calls[0]?.[1])).toContain("Assets/Old.cs");
   });
 
   it("a TASK is announced completed only AFTER its work is published (Codex 2026-09-12 P#6)", async () => {

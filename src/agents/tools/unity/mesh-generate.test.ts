@@ -212,6 +212,34 @@ describe("a failed lift does not degrade existing art (Codex 2026-09-12 AE#9)", 
     expect(readFileSync(target, "utf8")).not.toBe(OBJ);
   });
 
+  it("keeps existing art when there is no local model at all (Codex 2026-09-13 AF#10)", async () => {
+    // The guard ran only after an attempted lift, so with no image-to-3D
+    // model installed the analytic shape went straight over existing art.
+    const target = join(meshDir(dir), "Hero.obj");
+    writeFileSync(target, OBJ);
+    const noModel = new MeshGenerateTool({ localAvailable: () => false });
+    const result = await noModel.execute({ name: "Hero", shape: "sphere" }, makeContext(dir));
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain("was KEPT");
+    expect(readFileSync(target, "utf8")).toBe(OBJ);
+    // …and a new name still gets its placeholder.
+    const fresh = await noModel.execute({ name: "Newcomer2", shape: "sphere" }, makeContext(dir));
+    expect(fresh.isError).toBeFalsy();
+    // …and a deliberate placeholder is still honoured, with or without an
+    // explicit provider: saying acceptPlaceholder IS the decision.
+    const acceptedOnly = await noModel.execute({ name: "Hero", shape: "sphere", acceptPlaceholder: true }, makeContext(dir));
+    expect(acceptedOnly.isError).toBeFalsy();
+    expect(readFileSync(target, "utf8")).not.toBe(OBJ);
+
+    writeFileSync(target, OBJ);
+    const asked = await noModel.execute(
+      { name: "Hero", shape: "sphere", provider: "procedural", acceptPlaceholder: true },
+      makeContext(dir),
+    );
+    expect(asked.isError).toBeFalsy();
+    expect(readFileSync(target, "utf8")).not.toBe(OBJ);
+  });
+
   it("does not treat unusable bytes as art worth keeping", async () => {
     const target = join(meshDir(dir), "Hero.obj");
     writeFileSync(target, "NOT AN OBJ AT ALL");

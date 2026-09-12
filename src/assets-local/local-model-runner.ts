@@ -405,7 +405,12 @@ export class LocalModelRunner {
     // existed — so a file that already held `NOT AN OBJ AT ALL`, or an old
     // placeholder, was reported as a freshly generated mesh while the
     // inference wrote nothing (Codex 2026-09-12 AE#10).
-    const staged = `${outPath}.staging`;
+    // THE EXTENSION IS THE FORMAT. `Hero.obj.staging` makes the exporter
+    // infer a "staging" format and throw, which would have failed every real
+    // local mesh run (Codex 2026-09-13 AF#10). The staging name keeps the
+    // target's extension.
+    const dot = outPath.lastIndexOf(".");
+    const staged = dot > outPath.lastIndexOf("/") ? `${outPath.slice(0, dot)}.staging${outPath.slice(dot)}` : `${outPath}.staging`;
     try { rmSync(staged, { force: true }); } catch { /* nothing to clear */ }
     const args = [
       join(SCRIPTS(), "img2mesh.py"),
@@ -541,9 +546,14 @@ export function meshBytesAreUsable(path: string, bytes: Buffer): { ok: true } | 
       : { ok: false, why: "the bytes are not an FBX" };
   }
   // OBJ: vertices AND faces. A vertex cloud draws nothing in Unity.
+  // THREE COORDINATES, and a leading decimal point is a number: `v .1 .2 .3`
+  // is a vertex and was read as "no vertex data", while `f rubbish` counted as
+  // a face (Codex 2026-09-13 AF#10).
   const text = bytes.subarray(0, 2_000_000).toString("utf8");
-  const vertices = /^v\s+-?\d/m.test(text);
-  const faces = /^f\s+\S/m.test(text);
+  const NUMBER = String.raw`[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?`;
+  const vertices = new RegExp(String.raw`^v\s+${NUMBER}\s+${NUMBER}\s+${NUMBER}`, "m").test(text);
+  // A face names vertices: indices, optionally with texture/normal parts.
+  const faces = /^f\s+-?\d+(?:\/\d*(?:\/\d*)?)?(?:\s+-?\d+(?:\/\d*(?:\/\d*)?)?){2,}/m.test(text);
   if (!vertices || !faces) {
     return { ok: false, why: `the file holds ${vertices ? "vertices but no faces" : "no vertex data"}` };
   }

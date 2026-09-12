@@ -327,9 +327,17 @@ export function planVerifierPipeline(params: {
  * MonoBehaviour." A claim of completed work is what needs work behind it.
  */
 export function draftClaimsWorkDone(draft: string | null | undefined): boolean {
-  const text = (draft ?? "").toLowerCase();
-  if (text.trim() === "") return false;
-  return /\b(?:implemented|created|added|wrote|written|built|fixed|repaired|refactored|renamed|removed|deleted|replaced|updated|migrated|wired|integrated|installed|generated|set\s+up|hooked\s+up|shipped|delivered|completed)\b/u.test(text);
+  const text = (draft ?? "").toLowerCase().trim();
+  if (text === "") return false;
+  // A PAST-TENSE ANSWER ABOUT THE PROJECT IS NOT A CLAIM OF WORK. "It was
+  // created in 2020" answers a question; the claim is about what THIS run
+  // did (Codex 2026-09-13 AF#5).
+  if (/^\b(?:it|they|that|this|the\s+\w+)\b[^.]{0,80}\bwas\b/u.test(text)) return false;
+  // Bare completion tokens count: "Done." and "Scoring works now." are
+  // completion claims with no verb from the list below (AF#5).
+  if (/^(?:done|tamam(?:landı)?|bitti|ok|finished|complete)\b[.!\s]*$/u.test(text)) return true;
+  if (/\b(?:works|working|is\s+(?:in\s+place|live|ready|done)|now\s+works)\b/u.test(text)) return true;
+  return /\b(?:implemented|created|added|wrote|written|built|fixed|repaired|refactored|renamed|removed|deleted|replaced|updated|migrated|wired|integrated|installed|generated|set\s+up|hooked\s+up|shipped|delivered|completed|yaptım|ekledim|düzelttim|oluşturdum|tamamladım)\b/u.test(text);
 }
 
 /** Task types whose completion means something changed or something was run — never only read. */
