@@ -527,14 +527,18 @@ export class MeshGenerateTool implements ITool {
     private readonly opts: import("./sprite-generate.js").GeneratorOptions = { localAvailable: realLocalAvailability() },
   ) {}
   readonly name = "unity_generate_mesh";
+  // NO GAME'S STYLE IS ASSUMED HERE. This description asserted "the GDD's
+  // two-layer style needs pixel sprites for puzzles" to every model that read
+  // it — one project's art direction stated as a system fact (Codex
+  // 2026-09-12 AE#13). What the project wants comes from its own style
+  // profile and its GDD.
   readonly description =
-    "Generate a 3D mesh (OBJ + import .meta, no Editor needed) for a " +
-    "game element that needs DIMENSION — a stage prop, a 'plump glossy' character body, a rounded " +
-    "block. The GDD's two-layer style needs pixel sprites for puzzles (unity_generate_sprite) and " +
-    "meshes for dimensional elements. Use when unity_my_assets_cloud has nothing the user already owns. " +
-    "Compose characters in the prefab: a capsule body mesh + sphere head mesh as child objects. By default " +
-    "the installed local image-to-3D model produces the mesh (provider 'local'); an analytic primitive is " +
-    "a placeholder the delivery gate counts as such.";
+    "Generate a 3D mesh (OBJ + import .meta, no Editor needed) for a game element that needs DIMENSION — " +
+    "a prop, a body, a block. Use unity_generate_sprite for flat art, and this for elements the project " +
+    "renders in 3D. Use when unity_my_assets_cloud has nothing the user already owns. Compose a character " +
+    "in the prefab from parts (for example a body mesh with a head mesh as a child). By default the " +
+    "installed local image-to-3D model produces the mesh (provider 'local'); an analytic primitive is a " +
+    "placeholder the delivery gate counts as such.";
 
   readonly inputSchema = {
     type: "object",

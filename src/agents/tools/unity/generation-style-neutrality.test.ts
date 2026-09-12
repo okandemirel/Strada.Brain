@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createLogger } from "../../../utils/logger.js";
 import { describeStyleForPrompt, saveStyleProfile, loadStyleProfile } from "../../style/style-profile.js";
-import { SpriteGenerateTool } from "./sprite-generate.js";
+import { SpriteGenerateTool, defaultNegative } from "./sprite-generate.js";
 
 beforeAll(() => {
   createLogger("error", "test.log");
@@ -77,5 +77,58 @@ describe("the sprite generator's default prompt", () => {
     const prompt = await promptFor(root);
     expect(prompt).toContain("pixel-art");
     expect(prompt).not.toMatch(/glossy/i);
+  });
+});
+
+/**
+ * Codex round AE#13, reproduced: a realistic profile asking for "overcast
+ * natural lighting, no studio light" was dispatched as "studio lighting" with
+ * its own notes dropped, while the fixed negative prompt forbade "photo,
+ * realistic, scenery, dark background" — the opposite of what the project
+ * asked for.
+ */
+describe("the request must not contradict the project's own direction (Codex 2026-09-12 AE#13)", () => {
+  const realistic = {
+    ...pixelProfile,
+    family: "realistic" as const,
+    shading: "pbr-realistic" as const,
+    notes: "overcast natural lighting, no studio light",
+  };
+
+  const promptFor = async (root: string, name = "StoneBridge"): Promise<string> => {
+    const tool = new SpriteGenerateTool();
+    return (tool as unknown as { defaultPrompt(n: string, projectPath: string): Promise<string> }).defaultPrompt(name, root);
+  };
+
+  it("keeps the profile's own notes in EVERY family, and drops the lighting it never asked for", async () => {
+    const prompt = await promptFor(projectWith(realistic as never));
+    expect(prompt).toContain("overcast natural lighting, no studio light");
+    expect(prompt).not.toMatch(/studio lighting/i);
+    // …and the same for the other families that used to drop them.
+    for (const family of ["pixel", "lowpoly", "painterly"] as const) {
+      const said = await promptFor(projectWith({ ...pixelProfile, family, notes: "chalk on slate" } as never));
+      expect(said, family).toContain("chalk on slate");
+    }
+  });
+
+  it("does not call an arbitrary subject a character", async () => {
+    for (const family of ["pixel", "painterly", "realistic"] as const) {
+      const said = await promptFor(projectWith({ ...pixelProfile, family, notes: "" } as never), "StoneBridge");
+      expect(said, family).toContain("stone bridge");
+      expect(said, family).not.toMatch(/single (?:character|full-body)/i);
+    }
+  });
+
+  it("does not forbid what the project asked for", async () => {
+    const root = projectWith(realistic as never);
+    const negative = await defaultNegative(root, false);
+    expect(negative).not.toMatch(/\bphoto\b|\brealistic\b/);
+    expect(negative).toContain("watermark");
+    // A project that did NOT ask for realism still keeps the old guard…
+    expect(await defaultNegative(projectWith(pixelProfile as never), false)).toMatch(/photo, realistic/);
+    // …and a caller that keeps the background is not told to avoid one.
+    const kept = await defaultNegative(projectWith(pixelProfile as never), true);
+    expect(kept).not.toMatch(/dark background|scenery/);
+    expect(await defaultNegative(projectWith(pixelProfile as never), false)).toMatch(/dark background/);
   });
 });

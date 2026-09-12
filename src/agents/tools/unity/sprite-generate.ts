@@ -816,8 +816,7 @@ export class SpriteGenerateTool implements ITool {
     const negative =
       input["negative"] !== undefined
         ? String(input["negative"])
-        : "photo, realistic, blurry, watermark, signature, text, logo, dark background, " +
-          "pattern background, scenery, multiple characters, cropped, deformed, extra limbs";
+        : await defaultNegative(context.projectPath, input["keepBackground"] === true);
 
     // The previous pair (if any) is kept until the new draw is known good:
     // a failed regeneration used to delete the bound asset's .meta, and a
@@ -916,21 +915,28 @@ export class SpriteGenerateTool implements ITool {
               /* nothing assumed */
             }
             const subject = rawName.replace(/([A-Z])/g, " $1").toLowerCase();
+            // THE PROJECT'S OWN NOTES BELONG TO EVERY FAMILY. Only two
+            // branches carried them, so a realistic profile asking for
+            // "overcast natural lighting, no studio light" was dispatched as
+            // "studio lighting" with its own words dropped (Codex 2026-09-12
+            // AE#13). And a subject is a SUBJECT: calling every one of them a
+            // character described a stone bridge as one.
+            const tail = notes ? `; ${notes}` : "";
             switch (family) {
               case "realistic":
-                return `realistic game render of ${subject}, detailed natural materials, studio lighting, single full-body centered, isolated on plain background`;
+                return `realistic game render of ${subject}, detailed natural materials, single subject centered, isolated on plain background${tail}`;
               case "pixel":
-                return `16-bit pixel-art game sprite of ${subject}, limited palette, crisp pixels, single character centered, plain background`;
+                return `16-bit pixel-art game sprite of ${subject}, limited palette, crisp pixels, single subject centered, plain background${tail}`;
               case "lowpoly":
-                return `low-poly 3d render of ${subject}, flat shaded, clean geometry, single object centered, plain background`;
+                return `low-poly 3d render of ${subject}, flat shaded, clean geometry, single subject centered, plain background${tail}`;
               case "painterly":
-                return `hand-painted game art of ${subject}, soft brush strokes, storybook style, single character centered, plain background`;
+                return `hand-painted game art of ${subject}, soft brush strokes, storybook style, single subject centered, plain background${tail}`;
               case "toon-casual":
-                return `flat vector game sprite of ${subject}, thick clean outline, solid colors, soft glossy shading, single subject centered, isolated on plain white background, studio quality${notes ? `; ${notes}` : ""}`;
+                return `flat vector game sprite of ${subject}, thick clean outline, solid colors, soft glossy shading, single subject centered, isolated on plain white background, studio quality${tail}`;
               default:
                 // UNSPECIFIED means unspecified: a plain, isolated game sprite
                 // of the subject, with whatever the profile's own notes say.
-                return `game sprite of ${subject}, single subject centered, isolated on plain white background, studio quality${notes ? `; ${notes}` : ""}`;
+                return `game sprite of ${subject}, single subject centered, isolated on plain white background, studio quality${tail}`;
             }
   }
 
@@ -1029,8 +1035,7 @@ export class SpriteGenerateTool implements ITool {
     const negative =
       input["negative"] !== undefined
         ? String(input["negative"])
-        : "photo, realistic, blurry, watermark, signature, text, logo, dark background, " +
-          "pattern background, scenery, multiple characters, cropped, deformed, extra limbs";
+        : await defaultNegative(context.projectPath, input["keepBackground"] === true);
     const jobs: Array<{ name: string; relFile: string; fullPath: string; prompt: string }> = [];
     const refused: string[] = [];
     for (const item of items) {
@@ -1309,4 +1314,30 @@ export class SpriteGenerateTool implements ITool {
       };
     }
   }
+}
+
+/**
+ * What the draw must NOT contain, without contradicting what the project
+ * ASKED for.
+ *
+ * One fixed list forbade "photo, realistic, scenery, dark background" on
+ * every call, so a realistic style profile was dispatched with its own
+ * direction in the positive prompt and its opposite in the negative — and a
+ * caller that explicitly kept the background was still told to avoid one
+ * (Codex 2026-09-12 AE#13).
+ */
+export async function defaultNegative(projectPath: string, keepBackground: boolean): Promise<string> {
+  let family = "unspecified";
+  try {
+    const { loadStyleProfile } = await import("../../style/style-profile.js");
+    family = loadStyleProfile(projectPath)?.family ?? "unspecified";
+  } catch {
+    /* nothing assumed */
+  }
+  const terms = ["blurry", "watermark", "signature", "text", "logo", "multiple characters", "cropped", "deformed", "extra limbs"];
+  // A realistic project asked for exactly what this used to forbid.
+  if (family !== "realistic") terms.unshift("photo", "realistic");
+  // …and a caller that wants the background wants the background.
+  if (!keepBackground) terms.push("dark background", "pattern background", "scenery");
+  return terms.join(", ");
 }
