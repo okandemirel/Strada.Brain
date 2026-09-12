@@ -159,6 +159,15 @@ export function readPlaymodeRun(projectRoot: string, sinceMs: number, expectRunI
     whole(total) && whole(passed) && whole(failed) && whole(skipped) &&
     (passed + failed + skipped === total || (num(raw.skipped) === undefined && passed + failed === total));
   const failedNames = Array.isArray(raw.failedNames) ? raw.failedNames.map(String).slice(0, 50) : [];
+  // THE PRODUCER'S OWN VERDICT outranks the counts it printed beside it: a
+  // run that ended "Failed" or "Inconclusive", or that threw, was read as
+  // green because failed came back 0 (Codex 2026-09-12 R#6).
+  const overall = typeof raw.result === "string" ? raw.result.trim() : "";
+  const overallSaysPass = overall === "" || /^(?:passed|success|succeeded|ok)$/i.test(overall);
+  const exceptions = num(raw.exceptions) ?? 0;
+  // A SUITE MOST OF WHICH NEVER RAN is not a whole-suite pass, whatever the
+  // unfiltered flag says: 1 passed and 99 skipped of 100 was green.
+  const mostlySkipped = skipped > passed;
   const scope = unfiltered ? "unfiltered — the whole PlayMode suite" : `filter: ${filter ?? (typeof raw.categories === "string" ? raw.categories : "narrowed")}`;
   const detail =
     total === 0
@@ -167,6 +176,12 @@ export function readPlaymodeRun(projectRoot: string, sinceMs: number, expectRunI
       ? `PlayMode run (NUnit): counts do not add up — ${passed} passed, ${failed} failed, ${skipped} skipped of ${total} (${scope})`
       : failed === 0 && passed === 0
       ? `PlayMode run (NUnit): ${total} test(s) collected, NONE ran to a pass — ${skipped} skipped (${scope})`
+      : !overallSaysPass
+      ? `PlayMode run (NUnit): the runner's own verdict is "${overall}" — ${passed} of ${total} passed (${scope})`
+      : exceptions > 0
+      ? `PlayMode run (NUnit): ${exceptions} runtime exception(s) during the run — ${passed} of ${total} passed (${scope})`
+      : mostlySkipped
+      ? `PlayMode run (NUnit): ${skipped} of ${total} tests never ran — ${passed} passed (${scope})`
       : failed === 0
       ? `PlayMode verification passed: ${passed} of ${total} tests passed (${scope})`
       : `PlayMode verification FAILED: ${failed} of ${total} tests failed (${scope})`;
@@ -174,7 +189,7 @@ export function readPlaymodeRun(projectRoot: string, sinceMs: number, expectRunI
     found: true,
     ...(typeof raw.runId === "string" && raw.runId.trim() !== "" ? { runId: raw.runId.trim() } : {}),
     ...(stampMissing ? { stampMissing: true } : {}),
-    green: consistent && failed === 0 && passed > 0,
+    green: consistent && failed === 0 && passed > 0 && overallSaysPass && exceptions === 0 && !mostlySkipped,
     total,
     passed,
     failed,

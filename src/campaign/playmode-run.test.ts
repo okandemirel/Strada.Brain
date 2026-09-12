@@ -197,3 +197,39 @@ describe("a record names the attempt that asked for it (the open half of Codex F
     expect(readPlaymodeRun(root, attemptStart)).toMatchObject({ found: true, green: true });
   });
 });
+
+describe("the runner's own verdict, its exceptions, and a suite that did not run (Codex 2026-09-12 R#6)", () => {
+  const fresh = { unfiltered: true, measuredAt: new Date().toISOString() };
+
+  it("a run the runner itself calls Failed or Inconclusive is not green", () => {
+    write({ ...fresh, total: 42, passed: 42, failed: 0, skipped: 0, result: "Failed" });
+    const failedOverall = readPlaymodeRun(root, 0);
+    expect(failedOverall).toMatchObject({ found: true, green: false });
+    expect(failedOverall.detail).toContain('own verdict is "Failed"');
+
+    write({ ...fresh, total: 42, passed: 42, failed: 0, skipped: 0, result: "Inconclusive" });
+    expect(readPlaymodeRun(root, 0)).toMatchObject({ green: false });
+
+    // …and its own "Passed" changes nothing about a run that already stands.
+    write({ ...fresh, total: 42, passed: 42, failed: 0, skipped: 0, result: "Passed" });
+    expect(readPlaymodeRun(root, 0)).toMatchObject({ green: true });
+  });
+
+  it("a run that threw is not green", () => {
+    write({ ...fresh, total: 42, passed: 42, failed: 0, skipped: 0, exceptions: 2 });
+    const threw = readPlaymodeRun(root, 0);
+    expect(threw).toMatchObject({ green: false });
+    expect(threw.detail).toContain("2 runtime exception(s)");
+  });
+
+  it("a suite most of which never ran is not a whole-suite pass", () => {
+    write({ ...fresh, total: 100, passed: 1, failed: 0, skipped: 99 });
+    const barely = readPlaymodeRun(root, 0);
+    expect(barely).toMatchObject({ green: false });
+    expect(barely.detail).toContain("99 of 100 tests never ran");
+
+    // The project's real record — a couple of platform exclusions — stands.
+    write({ ...fresh, total: 272, passed: 269, failed: 0, skipped: 3 });
+    expect(readPlaymodeRun(root, 0)).toMatchObject({ green: true });
+  });
+});
