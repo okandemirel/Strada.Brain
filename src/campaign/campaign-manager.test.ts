@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { hostname } from "node:os";
 import { execSync } from "node:child_process";
+import { EvidenceLedger } from "./evidence-ledger.js";
 import { requirementKey, CampaignManager, stripTimeBoxDirectives, UNMEASURABLE_PROOF_RE, UNRUNNABLE_HERE_RE, hasUnmeasurableProof, proofsSpanTwoRevisions } from "./campaign-manager.js";
 import { CampaignStorage } from "./campaign-storage.js";
 import { describeBuild } from "./campaign-status.js";
@@ -3009,6 +3010,42 @@ describe("CampaignManager", () => {
     settleMilestone("dragon implemented, frames captured");
     await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
   });
+
+  it("issues a TICKET for every producer dispatch and discloses its receipt (Codex 2026-09-12 AC Job 2)", async () => {
+    // The receiver had no production caller at all, so its refusals
+    // constrained nothing (Codex 2026-09-13 AF#1). Every dispatch is now
+    // written down before it runs and judged after — and today's producers
+    // emit no receipt, which is what the report says.
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    settleMilestone("green, shipping");
+    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"), { timeout: 15_000 });
+
+    const report = messages.map((m) => m.text).join("\n");
+    expect(report).toContain("**Producer receipts**");
+    expect(report).toContain("Receipt checks are informational in this version");
+    // The build and the play-through were both dispatched under a ticket, and
+    // neither producer sent a receipt back.
+    expect(report).toMatch(/player-build receipt.*REFUSED \(EVIDENCE_MISSING\)/);
+    expect(report).toMatch(/playthrough receipt.*REFUSED \(EVIDENCE_MISSING\)/);
+
+    // …and the tickets are on disk, bound to this campaign's own sprint.
+    const ledger = new EvidenceLedger(join(projectRoot, ".strada", "campaign-evidence.db"));
+    try {
+      const last = storage.get(campaign.id)!.milestones.at(-1)!;
+      const rows = ledger.forMilestone(campaign.id, last.id);
+      expect(rows.length).toBeGreaterThan(0);
+      expect(rows.every((r) => r.state !== "pending")).toBe(true);
+      expect(rows.map((r) => r.kind)).toContain("player-build");
+    } finally {
+      ledger.close();
+    }
+  });
+
 
   it("an audit that RAN discharges the unreadable-queue flag (Codex 2026-09-13 AF#2)", async () => {
     // The flag is persisted now, so it must be cleared by the thing that

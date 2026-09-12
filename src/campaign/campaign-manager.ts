@@ -10,6 +10,8 @@
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { systemInterrupted } from "../tasks/interruption.js";
+import { EvidenceLedger, artifactDigest, describeLedgerRow } from "./evidence-ledger.js";
+import { issueRunId, receiveEvidence, type EvidenceBinding, type EvidenceTicket } from "./producer-evidence.js";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { basename, dirname, join, relative, sep } from "node:path";
@@ -4686,7 +4688,14 @@ export class CampaignManager {
     for (const target of wanted) {
       let built: PlayerBuildEvidence;
       try {
-        built = await this.buildPlayer(this.projectRoot, target);
+        // UNDER A TICKET: what was asked for is on disk before the builder
+        // runs, and what came back is judged after (Codex 2026-09-12 AC).
+        built = await this.underTicket(
+          campaign,
+          campaign?.milestones[campaign.currentMilestone],
+          { kind: "player-build", medium: "builder", ...(target === undefined ? {} : { target }) },
+          async () => ({ value: await this.buildPlayer!(this.projectRoot, target) }),
+        );
       } catch (err) {
         built = {
           ran: false,
@@ -4852,7 +4861,18 @@ export class CampaignManager {
       return { found: false, missingRunner: `the player was not run: ${stale}` };
     }
     try {
-      await this.runPlayer(this.projectRoot, build.artifactPath, spec);
+      // UNDER A TICKET, bound to the artifact this run is about (AC Job 2).
+      await this.underTicket(
+        campaign,
+        milestone,
+        {
+          kind: "playthrough",
+          medium: "player",
+          ...(build.target === undefined ? {} : { target: build.target }),
+          ...(artifactDigest(build.artifactPath) === undefined ? {} : { artifactSha256: artifactDigest(build.artifactPath)! }),
+        },
+        async () => ({ value: await this.runPlayer!(this.projectRoot, build.artifactPath!, spec) }),
+      );
     } catch (err) {
       failure = err instanceof Error ? err.message : String(err);
       getLoggerSafe().warn("The built player could not be played", { milestone: milestone.id, error: failure });
@@ -4867,7 +4887,17 @@ export class CampaignManager {
         continue;
       }
       try {
-        await this.runPlayer(this.projectRoot, other.artifactPath, spec);
+        await this.underTicket(
+          campaign,
+          milestone,
+          {
+            kind: "playthrough",
+            medium: "player",
+            ...(other.target === undefined ? {} : { target: other.target }),
+            ...(artifactDigest(other.artifactPath) === undefined ? {} : { artifactSha256: artifactDigest(other.artifactPath)! }),
+          },
+          async () => ({ value: await this.runPlayer!(this.projectRoot, other.artifactPath, spec) }),
+        );
       } catch (err) {
         why = err instanceof Error ? err.message : String(err);
       }
@@ -6043,6 +6073,21 @@ export class CampaignManager {
         ...caveats.map((c) => `- ${c}`),
       );
     }
+    // WHAT EACH PRODUCER WAS ASKED FOR, AND WHAT CAME BACK. Every proof above
+    // is a file a worker could have written, with nothing binding it to the
+    // invocation that made it (Codex 2026-09-12 X#3, Y, AA). These lines say
+    // which dispatches this delivery rests on and what their receipts were.
+    // Informational in this version: the producers emit no receipts yet, so
+    // the delivery status still comes from the checks above.
+    const receipts = this.describeReceipts(campaign);
+    if (receipts.length > 0) {
+      lines.push(
+        "",
+        "**Producer receipts** (what each dispatch was asked for, and what came back):",
+        ...receipts.map((r) => `- ${r}`),
+        "Receipt checks are informational in this version; delivery status uses the existing checks.",
+      );
+    }
     return lines.join("\n");
   }
 
@@ -6288,6 +6333,115 @@ export class CampaignManager {
    * generation is carried forward; a revival, which bumps the generation and
    * clears the mark deliberately, still clears it.
    */
+  /**
+   * The tickets this campaign issued, opened on first use.
+   *
+   * `null` once opening has failed: a ledger that cannot be written must not
+   * stop a campaign from running, but its absence is said out loud in the
+   * report rather than read as "every receipt is fine".
+   */
+  private evidenceLedger?: EvidenceLedger | null;
+
+  private ledger(): EvidenceLedger | null {
+    if (this.evidenceLedger !== undefined) return this.evidenceLedger;
+    try {
+      this.evidenceLedger = new EvidenceLedger(join(this.projectRoot, ".strada", "campaign-evidence.db"));
+    } catch (err) {
+      getLoggerSafe().warn("The evidence ledger could not be opened — receipts will not be recorded", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      this.evidenceLedger = null;
+    }
+    return this.evidenceLedger;
+  }
+
+  /**
+   * Dispatch a producer under a TICKET: what was asked for is written before
+   * the work starts, and what came back is judged and written after.
+   *
+   * The receiver refuses everything today — the producers emit no envelopes —
+   * so this DISCLOSES rather than gates (Codex 2026-09-12 AC Job 2). A run
+   * that never settles stays "pending" on disk, which is what a killed
+   * dispatch actually is.
+   */
+  private async underTicket<T>(
+    campaign: Campaign | undefined,
+    milestone: CampaignMilestone | undefined,
+    binding: {
+      kind: EvidenceBinding["kind"];
+      medium: EvidenceBinding["medium"];
+      target?: string;
+      artifactSha256?: string;
+      processOwned?: boolean;
+    },
+    run: () => Promise<{ value: T; receipt?: string }>,
+  ): Promise<T> {
+    const ledger = campaign === undefined ? null : this.ledger();
+    if (ledger === null || campaign === undefined) return (await run()).value;
+    const dirtyBefore = this.projectIsDirty();
+    const ticket: EvidenceTicket = {
+      issuedAt: Date.now(),
+      binding: {
+        campaignId: campaign.id,
+        generation: campaign.stopGeneration ?? 0,
+        milestoneId: milestone?.id ?? "campaign",
+        attemptId: `${milestone?.id ?? "campaign"}-${milestone?.attempts ?? 0}-${milestone?.attemptStartedAtMs ?? 0}`,
+        runId: issueRunId(),
+        kind: binding.kind,
+        medium: binding.medium,
+        revision: this.projectRevision(),
+        dirty: dirtyBefore,
+        ...(binding.target === undefined ? {} : { target: binding.target }),
+        ...(binding.artifactSha256 === undefined ? {} : { artifactSha256: binding.artifactSha256 }),
+        ...(binding.processOwned === undefined ? {} : { processOwned: binding.processOwned }),
+      },
+    };
+    try {
+      ledger.issue(ticket);
+    } catch (err) {
+      getLoggerSafe().warn("A producer ticket could not be recorded", { error: err instanceof Error ? err.message : String(err) });
+      return (await run()).value;
+    }
+    let outcome: { value: T; receipt?: string } | undefined;
+    try {
+      outcome = await run();
+      return outcome.value;
+    } finally {
+      const decision = receiveEvidence(
+        ticket,
+        outcome?.receipt,
+        { completed: outcome !== undefined, exitCode: outcome === undefined ? null : 0, timedOut: false },
+        { revisionNow: this.projectRevision(), dirtyNow: this.projectIsDirty() },
+      );
+      try {
+        ledger.settle(ticket.binding.runId, outcome?.receipt, decision);
+      } catch (err) {
+        getLoggerSafe().warn("A producer receipt could not be recorded", { error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+  }
+
+  /**
+   * One line per producer dispatch this campaign's LAST sprint made.
+   *
+   * Bounded: a long campaign has hundreds of runs, and the report is for a
+   * person. The final sprint is the one the delivery decision rests on.
+   */
+  private describeReceipts(campaign: Campaign): string[] {
+    const ledger = this.evidenceLedger ?? null;
+    if (ledger === null) return [];
+    const milestone = campaign.milestones[campaign.milestones.length - 1];
+    if (milestone === undefined) return [];
+    try {
+      const rows = ledger.forMilestone(campaign.id, milestone.id);
+      const shown = rows.slice(-12).map((r) => describeLedgerRow(r));
+      return rows.length > shown.length ? [...shown, `+${rows.length - shown.length} earlier dispatch(es) in this sprint`] : shown;
+    } catch (err) {
+      getLoggerSafe().warn("The evidence ledger could not be read", { error: err instanceof Error ? err.message : String(err) });
+      return [];
+    }
+  }
+
   /**
    * Is this copy still the campaign the STORE describes?
    *
