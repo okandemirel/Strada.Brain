@@ -3495,6 +3495,40 @@ describe("CampaignManager", () => {
     expect(specs[0]).toMatchObject({ maxActions: 75 });
   });
 
+  it("a duration FLOOR is an allowance too (Codex 2026-09-12 W#9)", async () => {
+    // The spec excluded minimum-duration claims, so "each round must last at
+    // least 90 seconds" produced no allowance at all and the producer's
+    // 45-second default cut every round short: a correct game could not pass.
+    tasks = new FakeTaskManager();
+    storage.close();
+    storage = new CampaignStorage(join(dir, "campaigns-run-floor.db"));
+    const specs: Array<unknown> = [];
+    manager = new CampaignManager({
+      storage,
+      planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async (chatId, text) => { messages.push({ chatId, text }); },
+      projectRoot, retryAdoptionGraceMs: 10, completedSettleDelayMs: 0, milestoneTimeBoxMs: 60 * 60_000,
+      deliveryResumeDelayMs: 20,
+      verifyCompile: async () => ({ ok: true, ran: true, errors: 0 }),
+      buildPlayer: async () => buildVerdict,
+      runPlayer: async (root, artifact, spec) => { specs.push(spec); writePlayerVerdict(true, {}, root); },
+    });
+    manager.attachEvents();
+    const gdd = "# GDD\n\nThe game ships 3 levels. Each round must last at least 90 seconds with a mandatory timer.";
+    const campaign = manager.startFromGdd(ctx, gdd, "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1), { timeout: 15_000 });
+    settleMilestone("sprint A done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2), { timeout: 15_000 });
+    settleMilestone("sprint B done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3), { timeout: 15_000 });
+    settleMilestone("integrated, all 42 tests pass");
+
+    await waitFor(() => expect(specs.length).toBeGreaterThan(0), { timeout: 15_000 });
+    expect(specs[0]).toMatchObject({ deadlineSeconds: 150 });
+    expect(storage.get(campaign.id)!.id).toBe(campaign.id);
+  });
+
   it("a target this machine cannot RUN is pending, not waived (Codex 2026-09-12 R#13)", async () => {
     // The disclosure said "NOT MEASURED: the built artifact cannot be run on
     // this machine" and the campaign delivered anyway — a game nobody had

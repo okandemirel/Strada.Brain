@@ -513,3 +513,35 @@ describe("clause boundaries and the comparators the rest of the document uses (C
     expect(partly[0]!.status).toBe("not_met");
   });
 });
+
+/**
+ * Codex round W (2026-09-12) ran the reader again after round V's fixes.
+ * Each line below is an input it executed.
+ */
+describe("the comparators and boundaries round W found (Codex 2026-09-12 W#7)", () => {
+  const kinds = (text: string): Array<[string, string, number]> =>
+    extractNumericClaims(text).claims.map((c) => [c.kind, c.comparator, c.value]);
+
+  it("a decimal point is not the end of a sentence", () => {
+    // The dot in "1.5" cut away the "at least" before it, so the floor was
+    // read as a ceiling and a half-second round passed.
+    expect(kinds("Each round lasts at least 1.5 seconds.")).toEqual([["session_seconds", "min", 1.5]]);
+    // …and a real sentence end still separates two clauses.
+    expect(kinds("Levels are short. Each round lasts 45 seconds.")).toEqual([["session_seconds", "max", 45]]);
+  });
+
+  it("reads the strict and inclusive symbols, and a qualifier after the noun", () => {
+    expect(kinds("Ship > 12 levels.")).toEqual([["level_count", "min", 13]]);
+    expect(kinds("Ship < 12 levels.")).toEqual([["level_count", "max", 11]]);
+    expect(kinds("Ship >= 12 levels.")).toEqual([["level_count", "min", 12]]);
+    expect(kinds("Ship <= 12 levels.")).toEqual([["level_count", "max", 12]]);
+    expect(kinds("12 levels or fewer.")).toEqual([["level_count", "max", 12]]);
+  });
+
+  it("a verb is not a descriptor: a sentence about people is not a catalogue", () => {
+    expect(kinds("Players aged 18 complete levels.")).toEqual([]);
+    expect(kinds("Most players finish 30 levels.")).toEqual([]);
+    // …and a real descriptor still reads.
+    expect(kinds("Ship 200 certified levels.")).toEqual([["level_count", "eq", 200]]);
+  });
+});

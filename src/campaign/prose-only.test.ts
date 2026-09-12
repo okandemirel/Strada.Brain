@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { attemptRunId, CampaignManager, capabilityGapWork, closureHolds, MAX_REPAIRS_PER_REQUIREMENT, repairsForRequirement, deliveryFailureKinds, proofSignature, reconcileCapabilityGaps, rememberOwnedTask, OWNERSHIP_LEDGER_LIMIT, unscheduledGaps } from "./campaign-manager.js";
+import { attemptRunId, CampaignManager, capabilityGapWork, closureHolds, MAX_REPAIRS_PER_REQUIREMENT, repairsForRequirement, withRepairBudget, deliveryFailureKinds, proofSignature, reconcileCapabilityGaps, rememberOwnedTask, OWNERSHIP_LEDGER_LIMIT, unscheduledGaps } from "./campaign-manager.js";
 
 /**
  * Measured live 2026-09-04: told not to audit, the final sprint answered
@@ -120,6 +120,61 @@ describe("the delivery budget's signature is a set of KINDS (Codex 2026-09-11 I#
     // Order does not matter; the set does.
     expect(proofSignature(["no test run was observed", "the project does not compile (3 error(s))"], { structureRefused: false, compileBroken: true }))
       .toBe(proofSignature(["the project does not compile (12 error(s))", "no test run was observed"], { structureRefused: false, compileBroken: true }));
+  });
+});
+
+describe("the repair budget applies to every scheduling path (Codex 2026-09-12 W#5)", () => {
+  const legacy = (id: string, eol: string) => ({
+    id,
+    title: "Coverage completion 1.1 — Save the whole unlocked-level st",
+    prompt: `The ladder finished, but this item is undelivered:${eol}- Save: the whole unlocked-level state must survive a restart${eol}${eol}Implement it.`,
+  });
+
+  it("counts a legacy row's requirement whatever its line endings are", () => {
+    const requirement = "Save: the whole unlocked-level state must survive a restart";
+    for (const eol of ["\n", "\r\n"]) {
+      const ladder = [legacy("mcov1", eol), legacy("mcov2", eol)];
+      expect(repairsForRequirement(ladder, requirement)).toBe(2);
+      expect(withRepairBudget([requirement], ladder)).toEqual({ schedulable: [], spent: [requirement] });
+    }
+    // …and one that ends right after the requirement line.
+    const trailing = [{ id: "mcov1", title: "Coverage completion 1.1 — Save", prompt: "undelivered:\r\n- Save: absent" }];
+    expect(repairsForRequirement(trailing, "Save: absent")).toBe(1);
+  });
+
+  it("splits candidates into what may still be repaired and what may not", () => {
+    const ladder = [
+      { id: "mcov1", title: "c", coverageGap: "Boss: absent" },
+      { id: "mcov2", title: "c", coverageGap: "Boss: absent" },
+      { id: "mcov3", title: "c", coverageGap: "Shop: absent" },
+    ];
+    expect(withRepairBudget(["Boss: absent", "Shop: absent", "Save: absent"], ladder)).toEqual({
+      schedulable: ["Shop: absent", "Save: absent"],
+      spent: ["Boss: absent"],
+    });
+  });
+});
+
+describe("a dirty tree is an unknown revision (Codex 2026-09-12 W#4)", () => {
+  const dirty = (root: string): boolean => {
+    const manager = Object.create(CampaignManager.prototype) as CampaignManager;
+    (manager as unknown as { projectRoot: string }).projectRoot = root;
+    return (manager as unknown as { projectIsDirty(): boolean }).projectIsDirty();
+  };
+
+  it("is false on a clean checkout, true with uncommitted work, and true where git cannot answer", () => {
+    const root = repo();
+    commit(root, "Assets/Boss.cs");
+    expect(dirty(root)).toBe(false);
+    writeFileSync(join(root, "Assets", "Boss.cs"), "edited");
+    expect(dirty(root)).toBe(true);
+    // An untracked file counts too — a worker's new scene is uncommitted work.
+    const clean = repo();
+    commit(clean, "Assets/A.cs");
+    writeFileSync(join(clean, "Assets", "New.unity"), "x");
+    expect(dirty(clean)).toBe(true);
+    // Not a git tree at all: unknown, so nothing may be cached against it.
+    expect(dirty(mkdtempSync(join(tmpdir(), "not-git-")))).toBe(true);
   });
 });
 

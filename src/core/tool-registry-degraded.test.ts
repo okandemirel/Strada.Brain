@@ -80,7 +80,11 @@ describe("the notice a broken toolchain produces", () => {
     await new Fresh().initialize(configWithBrokenMcp(), {
       onDegraded: (n: string) => notices.push(n),
     });
-    vi.doUnmock("./strada-mcp-tool-loader.js");
+    // NOT unmocked here. `doUnmock` takes effect on the NEXT import of the
+    // module, so unmocking between calls raced with the reset above and the
+    // third call in this file got the real loader — no notice, and a red CI
+    // run on work that was fine (observed 2026-09-12, run 34702497556). Each
+    // call re-mocks after its own resetModules, which is enough.
     return notices;
   };
 

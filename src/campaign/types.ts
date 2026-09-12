@@ -66,6 +66,13 @@ export interface CampaignMilestone {
    * later evidence audit found delivered anyway. Exhaustion stops the repair;
    * only evidence closes the requirement (Codex 2026-09-12 U).
    */
+  /**
+   * Set on a coverage sprint an AUDIT created, as against one drained from the
+   * queue of requirements a previous audit had already named. The round budget
+   * counts audits, and batching one audit's list across three rounds spent it
+   * without a second audit running (Codex 2026-09-12 W#5).
+   */
+  fromAudit?: boolean;
   coverageClosed?: boolean;
   /**
    * The project revision that closure was read on. A closure is only as good

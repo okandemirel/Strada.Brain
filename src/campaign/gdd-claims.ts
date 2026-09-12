@@ -79,7 +79,7 @@ const BOOT_REVERSED_RE =
  * (Codex 2026-09-12 U#F3).
  */
 const LEVEL_COUNT_RE =
-  /\b(\d{1,3}(?:[.,]\d{3})+|\d{1,5})\s*(\+|\s+or\s+(?:more|fewer|less))?\s+((?:(?!(?:of|per|in|for|across|with|and|to|from|between|by|over|after|before|than|each|about|up)\b)[a-z][a-z-]{2,14}\s+){0,3})(?:levels|stages|rounds|puzzles|worlds|chapters|waves)\b/gi;
+  /\b(\d{1,3}(?:[.,]\d{3})+|\d{1,5})\s*(\+|\s+or\s+(?:more|fewer|less))?\s+((?:(?!(?:of|per|in|for|across|with|and|to|from|between|by|over|after|before|than|each|about|up|complete[sd]?|completing|play(?:s|ed|ing)?|finish(?:es|ed|ing)?|unlock(?:s|ed|ing)?|clear(?:s|ed|ing)?|beat(?:s|en|ing)?|reach(?:es|ed|ing)?|attempt(?:s|ed|ing)?|skip(?:s|ped|ping)?)\b)[a-z][a-z-]{2,14}\s+){0,3})(?:levels|stages|rounds|puzzles|worlds|chapters|waves)\b/gi;
 /**
  * The subject of the timing is a LEVEL opening, not the application starting.
  * Read on a window that reaches BEHIND the match, because the boot regex
@@ -89,16 +89,39 @@ const LOADS_A_LEVEL_RE =
   /\b(?:level|stage|scene|round|puzzle|match|map)s?\b[^.\n]{0,12}?\b(?:load|open|enter|ready|transition)|\b(?:load|open|enter)(?:s|ing)?\b[^.\n]{0,12}?\b(?:level|stage|scene|round|puzzle|match|map)s?\b/i;
 /** "at least 20 levels" is met by 21; "up to 20" is not (Codex 2026-09-12 U#F3). */
 const COUNT_AT_LEAST_RE =
-  /(?:\b(?:at\s+least|minimum(?:\s+of)?|no\s+fewer\s+than|not\s+fewer\s+than|more\s+than|over)\b|>=|≥)\s*$/i;
+  /(?:\b(?:at\s+least|minimum(?:\s+of)?|no\s+fewer\s+than|not\s+fewer\s+than|more\s+than|over|above|beyond)\b|>=|≥|>)\s*$/i;
 const COUNT_AT_MOST_RE =
-  /(?:\b(?:up\s+to|at\s+most|no\s+more\s+than|not\s+more\s+than|max(?:imum)?(?:\s+of)?|fewer\s+than|less\s+than)\b|<=|≤)\s*$/i;
+  /(?:\b(?:up\s+to|at\s+most|no\s+more\s+than|not\s+more\s+than|max(?:imum)?(?:\s+of)?|fewer\s+than|less\s+than|under|below)\b|<=|≤|<)\s*$/i;
 const COUNT_OR_MORE_AHEAD_RE = /^\s*(?:or\s+more|\+|and\s+up)\b/i;
+/** "12 levels or fewer" — the qualifier sits after the noun (Codex 2026-09-12 W#7). */
+const COUNT_OR_FEWER_AHEAD_RE = /^\s*(?:or\s+(?:fewer|less)|at\s+most)\b/i;
 
 /** The text since the last clause boundary — a subject cannot be read across one. */
 function clauseTail(before: string): string {
-  const boundary = Math.max(before.lastIndexOf(";"), before.lastIndexOf("."), before.lastIndexOf("\n"));
+  // A DECIMAL POINT IS NOT A SENTENCE. "Each round lasts at least 1.5
+  // seconds" had its "at least" cut away by the dot in 1.5, and the floor was
+  // read as a ceiling — a half-second round then passed (Codex 2026-09-12
+  // W#7). A sentence end is a dot NOT between two digits.
+  let boundary = Math.max(before.lastIndexOf(";"), before.lastIndexOf("\n"));
+  for (let i = before.length - 1; i > boundary; i--) {
+    if (before[i] !== ".") continue;
+    const left = before[i - 1] ?? "";
+    const right = before[i + 1] ?? "";
+    if (/\d/.test(left) && /\d/.test(right)) continue;
+    boundary = i;
+    break;
+  }
   return boundary >= 0 ? before.slice(boundary + 1) : before;
 }
+
+/**
+ * A count of levels PLAYED is not a count of levels SHIPPED. "Most players
+ * finish 30 levels" is a retention figure, and reading it as the catalogue
+ * size held the delivery to a number the document never promised (Codex
+ * 2026-09-12 W#7).
+ */
+const PLAYS_NOT_SHIPS_RE =
+  /\b(?:complete[sd]?|completing|finish(?:es|ed|ing)?|play(?:s|ed|ing)?|clear(?:s|ed|ing)?|beat(?:s|en|ing)?|reach(?:es|ed|ing)?|unlock(?:s|ed|ing)?|attempt(?:s|ed|ing)?|replay(?:s|ed|ing)?)\s+$/i;
 
 /** A number written with thousands separators: "3,000" and "3.000" are 3000. */
 function countValue(digits: string): number {
@@ -118,6 +141,7 @@ export function countComparator(text: string, at: number, matched: string, quali
   const before = clauseTail(text.slice(Math.max(0, at - 40), at));
   const after = text.slice(at + matched.length, at + matched.length + 20);
   if (COUNT_OR_MORE_AHEAD_RE.test(after)) return "min";
+  if (COUNT_OR_FEWER_AHEAD_RE.test(after)) return "max";
   if (COUNT_AT_MOST_RE.test(before)) return "max";
   if (COUNT_AT_LEAST_RE.test(before)) return "min";
   return "eq";
@@ -128,8 +152,8 @@ export function countComparator(text: string, at: number, matched: string, quali
  * levels" is at least thirteen, "fewer than 12" is at most eleven. Read as
  * inclusive, a game with exactly twelve satisfied both (Codex 2026-09-12 V).
  */
-const COUNT_STRICTLY_MORE_RE = /(?:\b(?:more\s+than|over|above|beyond)\b|>)\s*$/i;
-const COUNT_STRICTLY_FEWER_RE = /(?:\b(?:fewer\s+than|less\s+than|under|below)\b|<)\s*$/i;
+const COUNT_STRICTLY_MORE_RE = /(?:\b(?:more\s+than|over|above|beyond)\b|>(?!=))\s*$/i;
+const COUNT_STRICTLY_FEWER_RE = /(?:\b(?:fewer\s+than|less\s+than|under|below)\b|<(?!=))\s*$/i;
 
 export function countBound(
   text: string,
@@ -250,6 +274,8 @@ export function extractNumericClaims(gddText: string): {
     // not a level count when the sentence goes on to give one (Codex
     // 2026-09-11 C#23).
     if (CONTAINER_WORD_RE.test(m[0]) && LEVEL_WORD_AHEAD_RE.test(text.slice((m.index ?? 0) + m[0].length, (m.index ?? 0) + m[0].length + 40))) continue;
+    const before = clauseTail(text.slice(Math.max(0, (m.index ?? 0) - 24), m.index ?? 0));
+    if (PLAYS_NOT_SHIPS_RE.test(before)) continue;
     const bound = countBound(text, m.index ?? 0, m[0], m[2] ?? "", countValue(m[1] ?? ""));
     if (bound.value >= 1 && bound.value <= 100_000) {
       push(

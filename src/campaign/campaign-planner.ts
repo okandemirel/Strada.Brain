@@ -616,7 +616,7 @@ Your previous reply was not valid JSON. Reply with the JSON object ALONE — no 
     if (Array.isArray(raw)) {
       const clamped = raw
         .filter((x): x is string => typeof x === "string" && x.trim().length > 0)
-        .slice(0, 30)
+        .slice(0, MAX_AUDIT_REQUIREMENTS)
         .map((x) => x.slice(0, 300));
       if (clamped.length > 0 || raw.length === 0) {
         getLoggerSafe().warn("Coverage audit output clamped to schema bounds", {
@@ -762,8 +762,16 @@ Be strict about scheduled content (element tables, mechanics lists, screens, win
 A milestone's TITLE or PLAN is not coverage. Its evidence is: what it committed, what the suite measured, what the shipped tree and the document's own numbers say. An item whose only trace is a title, a plan or a promise in prose is MISSING.
 Respond ONLY with the requested JSON.`;
 
+/**
+ * The audit's full list. It was capped at thirty, so a document with more
+ * open requirements lost the thirty-first before the queue that exists to
+ * keep every one of them ever saw it (Codex 2026-09-12 W#10). Scheduling is
+ * batched by the caller; the list is not.
+ */
+export const MAX_AUDIT_REQUIREMENTS = 200;
+
 const coverageResultSchema = z.object({
-  missing: z.array(z.string().min(1).max(300)).max(30),
+  missing: z.array(z.string().min(1).max(300)).max(MAX_AUDIT_REQUIREMENTS),
 });
 
 /** One verdict per named requirement; anything unjudged stays missing. */

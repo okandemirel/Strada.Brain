@@ -435,7 +435,12 @@ export function attemptRunId(milestone: { id: string; attemptStartedAtMs?: numbe
  */
 function coverageGapOf(m: { title: string; prompt?: string; coverageGap?: string }): string {
   if (m.coverageGap) return m.coverageGap;
-  const fromPrompt = /\n- (.+)\n/.exec(m.prompt ?? "")?.[1];
+  // A LEGACY ROW'S OWN LINE, whatever its line endings are and whether the
+  // prompt ends right after it: the LF-only pattern found nothing in a CRLF
+  // prompt, and the truncated title was then used as the requirement's
+  // identity — so two sprints for one requirement counted as none (Codex
+  // 2026-09-12 W#5).
+  const fromPrompt = /(?:^|\r?\n)- (.+?)\s*(?:\r?\n|$)/.exec(m.prompt ?? "")?.[1];
   return fromPrompt ?? m.title.replace(/^Coverage completion \d+\.\d+ — /, "");
 }
 
@@ -543,6 +548,28 @@ export function capabilityGapWork(gap: string): string {
 export const MAX_REPAIRS_PER_REQUIREMENT = 2;
 
 /** How many sprints this requirement has already had. */
+/**
+ * The requirements of these candidates that still have a repair left, and the
+ * ones whose budget is spent.
+ *
+ * The budget was checked in ONE of the three places that schedule a repair,
+ * so the queue drains simply kept minting sprints for a requirement that had
+ * already had its two (Codex 2026-09-12 W#5). A requirement whose budget is
+ * spent stays in the queue — the delivery gate reports it — and is not
+ * scheduled again.
+ */
+export function withRepairBudget(
+  candidates: readonly string[],
+  milestones: ReadonlyArray<{ id: string; title: string; prompt?: string; coverageGap?: string }>,
+): { schedulable: string[]; spent: string[] } {
+  const schedulable: string[] = [];
+  const spent: string[] = [];
+  for (const item of candidates) {
+    (repairsForRequirement(milestones, item) >= MAX_REPAIRS_PER_REQUIREMENT ? spent : schedulable).push(item);
+  }
+  return { schedulable, spent };
+}
+
 export function repairsForRequirement(
   milestones: ReadonlyArray<{ id: string; title: string; prompt?: string; coverageGap?: string }>,
   requirement: string,
@@ -3487,14 +3514,10 @@ export class CampaignManager {
         // Past the budget the requirement is not repaired again; it is
         // reported to the gate below, where the delivery budget bounds it and
         // the campaign ends by naming it.
-        const capabilityWork: string[] = [];
-        const capabilitySpent: string[] = [];
-        for (const item of capabilityCandidates) {
-          (repairsForRequirement(campaign.milestones, item) >= MAX_REPAIRS_PER_REQUIREMENT
-            ? capabilitySpent
-            : capabilityWork
-          ).push(item);
-        }
+        const { schedulable: capabilityWork, spent: capabilitySpent } = withRepairBudget(
+          capabilityCandidates,
+          campaign.milestones,
+        );
         if (capabilitySpent.length > 0) {
           getLoggerSafe().warn("A capability requirement has spent its repair budget — reporting it instead", {
             id: campaign.id,
@@ -3948,7 +3971,10 @@ export class CampaignManager {
       // entries stranded them for good (Codex 2026-09-11 I#4).
       // Deduplicated here as well as in the ordinary drain: this branch reads
       // the same persisted list (Codex 2026-09-11 J#12).
-      const stillQueued = unscheduledGaps(campaign.pendingCoverageGaps ?? [], campaign.milestones);
+      const stillQueued = withRepairBudget(
+        unscheduledGaps(campaign.pendingCoverageGaps ?? [], campaign.milestones),
+        campaign.milestones,
+      ).schedulable;
       if (stillQueued.length > 0) {
         const round = campaign.milestones.reduce((max, m) => {
           const r = /^mcov(\d+)/.exec(m.id);
@@ -4177,6 +4203,28 @@ export class CampaignManager {
    * defect being fixed is silent accumulation, and a warning in the channel
    * is the opposite of silent.
    */
+  /**
+   * Does the project tree hold uncommitted work (submodules included)?
+   *
+   * `git rev-parse HEAD` answers for the last commit only, so a closure read
+   * against an edited working tree was bound to a revision that never
+   * contained it (Codex 2026-09-12 W#4). Unreadable counts as dirty: an
+   * unknown tree must not hold a cached proof.
+   */
+  private projectIsDirty(): boolean {
+    try {
+      const out = execFileSync("git", ["status", "--porcelain", "--ignore-submodules=none"], {
+        cwd: this.projectRoot,
+        encoding: "utf8",
+        timeout: 20_000,
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      return out.trim() !== "";
+    } catch {
+      return true;
+    }
+  }
+
   /**
    * The revision the project is at, or "" when it is not a git tree.
    *
@@ -4454,8 +4502,12 @@ export class CampaignManager {
     const text = this.gddTextOf(campaign);
     if (text === undefined || text.trim() === "") return spec;
     const { claims } = extractNumericClaims(text);
+    // EVERY duration the document states, floor or ceiling. Excluding floors
+    // meant "each round must last at least 90 seconds" produced no allowance
+    // at all, so the producer's 45-second default cut every round short and
+    // the requirement could not be met by any run (Codex 2026-09-12 W#9).
     const longestSession = claims
-      .filter((c) => c.kind === "session_seconds" && c.comparator !== "min")
+      .filter((c) => c.kind === "session_seconds")
       .map((c) => c.value)
       .reduce((max, value) => Math.max(max, value), 0);
     if (longestSession > 0) spec.deadlineSeconds = Math.ceil(longestSession * 1.5) + 15;
@@ -4724,7 +4776,11 @@ export class CampaignManager {
    * own exhausted sprint had named still missing (V#5).
    */
   private async openRequirements(campaign: Campaign): Promise<{ open: string[]; auditFailed?: string }> {
-    const revisionForClosure = this.projectRevision();
+    // A DIRTY TREE IS AN UNKNOWN REVISION. HEAD equality says nothing about
+    // uncommitted work, so a closure read on one working tree was held to
+    // describe another (Codex 2026-09-12 W#4). Unknown binds nothing, so a
+    // dirty tree is re-judged every round.
+    const revisionForClosure = this.projectIsDirty() ? "" : this.projectRevision();
     const unclosed = campaign.milestones.filter(
       (m) => m.id.startsWith("mcov") && m.status === "failed" && !closureHolds(m, revisionForClosure),
     );
@@ -4812,6 +4868,16 @@ export class CampaignManager {
       const round = /^mcov(\d+)/.exec(m.id);
       return round ? Math.max(max, Number(round[1])) : max;
     }, 0);
+    // ROUNDS THE AUDIT ACTUALLY RAN, not batches of its list. Nine gaps from
+    // ONE audit were scheduled four, four and one — rounds 1, 2 and 3 — and
+    // the two-round budget was then spent without a second audit ever running
+    // (Codex 2026-09-12 W#5). Sprints an audit created carry the mark.
+    const auditsRun = new Set(
+      campaign.milestones
+        .filter((m) => m.fromAudit === true)
+        .map((m) => /^mcov(\d+)/.exec(m.id)?.[1])
+        .filter((r): r is string => r !== undefined),
+    ).size;
     // KNOWN GAPS FIRST, and the round budget does not apply to them: they are
     // already identified, so no audit is needed and none of them may be
     // dropped. Nine gaps used to become eight sprints and a `done` campaign
@@ -4823,8 +4889,12 @@ export class CampaignManager {
       // by an audit that repeated itself, held ["Save", "Save"] and produced
       // two sprints for one requirement (Codex 2026-09-11 J#12).
       const distinct = unscheduledGaps(queued, campaign.milestones);
-      const take = distinct.slice(0, CampaignManager.MAX_GAP_SPRINTS_PER_ROUND);
-      const rest = distinct.slice(take.length);
+      // …and each of them must still have a repair left (Codex 2026-09-12 W#5).
+      // The ones whose budget is spent stay queued, where the delivery gate
+      // reports them as requirements no sprint closed.
+      const { schedulable, spent } = withRepairBudget(distinct, campaign.milestones);
+      const take = schedulable.slice(0, CampaignManager.MAX_GAP_SPRINTS_PER_ROUND);
+      const rest = [...schedulable.slice(take.length), ...spent];
       // NOT PERSISTED HERE. The queue shrinks and the sprints are appended in
       // the CALLER's single write: persisting the shortened queue first meant
       // a crash in that window lost every gap this round had taken off it
@@ -4846,7 +4916,7 @@ export class CampaignManager {
     // a skipped audit read exactly like a passing one in the delivery report
     // (audited 2026-09-01 — the round-budget and missing-GDD skips were
     // silent, and the doctrine comment below only covered the throw).
-    if (priorRounds >= CampaignManager.MAX_COVERAGE_ROUNDS) {
+    if (auditsRun >= CampaignManager.MAX_COVERAGE_ROUNDS) {
       campaign.coverageAuditNote =
         `coverage audit stopped after ${CampaignManager.MAX_COVERAGE_ROUNDS} remediation rounds — ` +
         "the last rounds reported gaps that were not re-audited";
@@ -4916,7 +4986,7 @@ export class CampaignManager {
           `coverage audit found ${ordered.length} gaps; round ${round} schedules the first ${shown.length} and ` +
           `${overflow.length} are queued for the following round(s): ${overflow.join("; ").slice(0, 300)}`;
       }
-      return shown.map((item, i) => this.gapSprint(campaign, round, i, item));
+      return shown.map((item, i) => ({ ...this.gapSprint(campaign, round, i, item), fromAudit: true }));
     } catch (err) {
       getLoggerSafe().warn("Coverage audit failed — delivering without it", {
         id: campaign.id,

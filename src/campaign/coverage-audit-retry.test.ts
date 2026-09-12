@@ -87,6 +87,24 @@ describe("coverage audit malformed JSON", () => {
  * known missing work or could never be reached. Exhaustion stops the repair;
  * evidence closes the requirement (Codex 2026-09-12 U, Job 2.7).
  */
+describe("the audit's full list survives (Codex 2026-09-12 W#10)", () => {
+  function plannerWith(replies: string[]) {
+    const chat = vi.fn(async () => ({ text: replies.shift() ?? "" }));
+    const provider = { chat, name: "test", capabilities: { streaming: false } } as never;
+    return { planner: new CampaignPlanner(provider), chat };
+  }
+
+  it("keeps the thirty-first requirement the audit named", async () => {
+    // The list was clamped to thirty, so requirement 31 never reached the
+    // queue that exists to keep every one of them.
+    const many = Array.from({ length: 31 }, (_, i) => `Req${i + 1}: absent`);
+    const { planner } = plannerWith([JSON.stringify({ missing: many })]);
+    const missing = await planner.auditCoverage("# GDD", [{ title: "Sprint A" }]);
+    expect(missing).toHaveLength(31);
+    expect(missing.at(-1)).toBe("Req31: absent");
+  });
+});
+
 describe("re-judging the requirements no sprint closed", () => {
   function plannerWith(replies: string[]) {
     const chat = vi.fn(async () => ({ text: replies.shift() ?? "" }));
