@@ -2345,6 +2345,15 @@ export class CampaignManager {
 
     const status = tip && tip.id !== milestone.taskId ? tip.status : settledStatus;
     const output = tip && tip.id !== milestone.taskId ? (tip.error ?? tip.result ?? "") : settledOutput;
+    // THE GAP, AT THE DOOR. It was recorded beside each excerpt, and the paths
+    // that return early — an exhausted coverage sprint, a time-box narrowing —
+    // never reached one: the sprint failed with a capability marker in its
+    // output and the campaign delivered with nothing recorded (Codex
+    // 2026-09-12 T#3). Captured once, from the full output, before any branch.
+    {
+      const gapAtEntry = capabilityGapIn(output);
+      if (gapAtEntry !== undefined) milestone.capabilityGap = gapAtEntry;
+    }
 
     // A DELIBERATE CANCELLATION IS A STOP ORDER, and it is read BEFORE the
     // retry, time-box and gap-advance branches. It used to fall through them:
@@ -3389,6 +3398,17 @@ export class CampaignManager {
         // then resumes the final sprint BY ITSELF after a pause, with a fresh
         // budget, so a GDD runs until the game is actually done; a person can
         // resume sooner with "kampanya devam".
+        // …AND AGAIN, AFTER EVERYTHING. The structural checks, the look
+        // judgement and the coverage audit all run after the second read, so a
+        // publication landing in THAT window still produced a verdict set no
+        // revision had (Codex 2026-09-12 T#1).
+        const revisionAtGate = this.projectRevision();
+        if (proofsSpanTwoRevisions(revisionBefore, revisionAtGate) && !treeMovedMidGate) {
+          missingProofs.push(
+            `the project changed while its proofs were being read (${revisionBefore.slice(0, 8)} → ${revisionAtGate.slice(0, 8)}), ` +
+            "so they do not all describe one revision of the game",
+          );
+        }
         // A DELIVERY NOBODY CAN OPEN IS NOT A DELIVERY — the hygiene gate's
         // own words. Its surviving refusal was carried into the report and
         // the campaign delivered anyway, so a build with no scene a person

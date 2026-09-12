@@ -2058,6 +2058,24 @@ describe("CampaignManager", () => {
     expect(report).toContain("compiles");
   });
 
+  it("a sprint that FAILED still records the gap it reported (Codex 2026-09-12 T#3)", async () => {
+    // The gap was recorded beside each excerpt, and the paths that return
+    // early never reached one: a sprint could fail with a capability marker in
+    // its output and leave nothing for the delivery gate to see.
+    const campaign = await runLadderToDelivery();
+    const failing = storage.get(campaign.id)!.milestones[2]!.taskId!;
+    tasks.emit(
+      "task:failed",
+      failing,
+      "EVIDENCE UNAVAILABLE — no tool for it in this run: unity_create_scene (the Unity bridge is not connected). " +
+      "That work is NOT done.\n\nthe sprint could not finish",
+    );
+
+    await waitFor(() => {
+      expect(storage.get(campaign.id)!.milestones[2]!.capabilityGap).toContain("unity_create_scene");
+    });
+  });
+
   it("a capability gap is THIS run's, not a permanent mark (Codex 2026-09-12 T#2)", async () => {
     // Merging the new gap with the old made it permanent, and the delivery
     // gate scans every milestone: one report of a missing tool meant the

@@ -683,18 +683,23 @@ export class MeshGenerateTool implements ITool {
         input["prompt"] !== undefined
           ? String(input["prompt"])
           : await (async () => {
-              let family = "toon-casual";
+              // THE PROJECT'S OWN DIRECTION, or nothing. The fallback said
+              // "casual mobile game character, soft glossy 3d-look" for every
+              // family and every name — a StoneBridge became a character in
+              // one game's art direction (Codex 2026-09-12 T#13). No family
+              // is assumed and no subject type is inferred from a name.
+              let look = "";
               try {
-                const { loadStyleProfile } = await import("../../style/style-profile.js");
-                family = loadStyleProfile(context.projectPath)?.family ?? family;
+                const { loadStyleProfile, describeStyleForPrompt } = await import("../../style/style-profile.js");
+                const profile = loadStyleProfile(context.projectPath);
+                look = profile ? describeStyleForPrompt(profile) : "";
               } catch {
-                /* stock default */
+                /* no profile: stay neutral */
               }
-              const subject = rawName.replace(/([A-Z])/g, " $1").toLowerCase();
-              if (family === "realistic") {
-                return `${subject}, realistic game character, natural materials and proportions, single object centered on plain background, full body visible`;
-              }
-              return `${subject}, casual mobile game character, soft glossy 3d-look, single object centered on plain background, full body visible`;
+              const subject = rawName.replace(/([A-Z])/g, " $1").toLowerCase().trim();
+              return [subject, look, "single object centered on plain background, whole object visible"]
+                .filter((part) => part !== "")
+                .join(", ");
             })();
       imageAbs = join(scratch, `${rawName}-concept.png`);
       const drawn = await runner.textToImage(model2d, prompt, imageAbs, {

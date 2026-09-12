@@ -897,8 +897,13 @@ export class SpriteGenerateTool implements ITool {
   private async defaultPrompt(rawName: string, projectPath: string): Promise<string> {
 
             // The project's style.json (GDD-derived, never universal) steers
-            // the default prompt; without it, the toon-casual stock default.
-            let family = "toon-casual";
+            // the default prompt. WITHOUT one, nothing is assumed: the
+            // fallback used to ask for a "mobile casual game character" with
+            // a thick outline and glossy shading — one game's art direction,
+            // applied to every document and every asset, and contradicting
+            // the profile's own notes when they said otherwise (Codex
+            // 2026-09-12 T#13).
+            let family = "unspecified";
             let notes = "";
             try {
               const { loadStyleProfile } = await import("../../style/style-profile.js");
@@ -908,7 +913,7 @@ export class SpriteGenerateTool implements ITool {
                 notes = styleNotesForPrompt(profile.notes);
               }
             } catch {
-              /* stock defaults */
+              /* nothing assumed */
             }
             const subject = rawName.replace(/([A-Z])/g, " $1").toLowerCase();
             switch (family) {
@@ -920,8 +925,12 @@ export class SpriteGenerateTool implements ITool {
                 return `low-poly 3d render of ${subject}, flat shaded, clean geometry, single object centered, plain background`;
               case "painterly":
                 return `hand-painted game art of ${subject}, soft brush strokes, storybook style, single character centered, plain background`;
+              case "toon-casual":
+                return `flat vector game sprite of ${subject}, thick clean outline, solid colors, soft glossy shading, single subject centered, isolated on plain white background, studio quality${notes ? `; ${notes}` : ""}`;
               default:
-                return `flat vector game sprite of ${subject}, mobile casual game character, thick clean outline, solid colors, soft glossy shading, single full-body character centered, isolated on plain white background, studio quality${notes ? `; ${notes}` : ""}`;
+                // UNSPECIFIED means unspecified: a plain, isolated game sprite
+                // of the subject, with whatever the profile's own notes say.
+                return `game sprite of ${subject}, single subject centered, isolated on plain white background, studio quality${notes ? `; ${notes}` : ""}`;
             }
   }
 

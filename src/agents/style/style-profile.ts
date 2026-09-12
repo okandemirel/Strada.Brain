@@ -92,6 +92,27 @@ export function saveStyleProfile(projectRoot: string, profile: StyleProfile): vo
 // DEFAULTS per family (used by tools when the profile omits specifics)
 // =============================================================================
 
+/**
+ * The project's own art direction, as words a generator can use.
+ *
+ * Generators used to fall back to one game's look — "casual mobile game
+ * character, soft glossy 3d-look" — whatever the document said and whatever
+ * the asset was (Codex 2026-09-12 T#13). This says what THIS project's
+ * profile says, and nothing when there is no profile.
+ */
+export function describeStyleForPrompt(profile: StyleProfile): string {
+  const parts: string[] = [];
+  if (profile.family !== "unspecified") parts.push(`${profile.family.replace(/-/g, " ")} style`);
+  if (profile.shading === "glossy") parts.push("soft glossy shading");
+  else if (profile.shading === "flat") parts.push("flat shading");
+  else if (profile.shading === "unlit") parts.push("unlit flat colours");
+  else if (profile.shading === "pbr-realistic") parts.push("realistic materials");
+  if (profile.outline.width > 0) parts.push("clear outlines");
+  const notes = profile.notes.trim();
+  if (notes !== "") parts.push(notes.slice(0, 120));
+  return parts.join(", ");
+}
+
 export interface FamilyDefaults {
   plump: number;
   headScale: number;
