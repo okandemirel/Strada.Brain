@@ -27,6 +27,7 @@ import { assessSceneHygiene, renderSceneHygiene } from "./scene-hygiene.js";
 import { readPlaythroughVerdict, describePlaythrough, playthroughDirective, PLAYER_PLAYTHROUGH_VERDICT_REL } from "./playthrough-verdict.js";
 import { gddPlatform, buildSatisfiesTarget, artifactIsForeign, hostTarget, type BuildTarget } from "./gdd-platform.js";
 import { readPlaymodeRun } from "./playmode-run.js";
+import type { PlayerRunSpec } from "../core/bootstrap-stages/stage-runtime.js";
 import { assessNumericClaims, claimsRefusal, describeClaims, extractNumericClaims } from "./gdd-claims.js";
 import { REQUIRED_EVIDENCE_PREFIX } from "../supervisor/required-evidence.js";
 import { deliveryReviewPrompt, renderSecondOpinion } from "../agents/review/codex-second-opinion.js";
@@ -118,7 +119,7 @@ export interface CampaignManagerOptions {
    * 2026-09-10). The verdict is read back from the project afterwards; the
    * frame rate it measures is the one a design document's target means.
    */
-  runPlayer?: (projectRoot: string, artifactPath: string) => Promise<void>;
+  runPlayer?: (projectRoot: string, artifactPath: string, spec?: PlayerRunSpec) => Promise<void>;
   /**
    * Hand a file to the origin chat (2026-09-10): the newest captured frame of
    * the running game travels with every delivery report, so a person sees the
@@ -534,7 +535,7 @@ export class CampaignManager {
   private readonly buildPlayer?: (projectRoot: string, target?: string) => Promise<PlayerBuildEvidence>;
   private readonly deliveryResumeDelayMs: number;
   private readonly implementationReviveDelayMs: number;
-  private readonly runPlayer?: (projectRoot: string, artifactPath: string) => Promise<void>;
+  private readonly runPlayer?: (projectRoot: string, artifactPath: string, spec?: PlayerRunSpec) => Promise<void>;
   private readonly attach?: (chatId: string, attachment: import("../channels/channel-messages.interface.js").Attachment) => Promise<void>;
   private readonly independentReviewer: CampaignManagerOptions["independentReviewer"];
   private readonly maxMilestoneAttempts: number;
@@ -2955,7 +2956,7 @@ export class CampaignManager {
       // (unity_run_player) — real rendering, real frame rate — and reads the
       // verdict back. A player that runs but cannot be played to an outcome
       // blocks; an artifact this machine cannot run (an .apk) is disclosed.
-      const player = isLast && build?.ran && build.ok === true ? await this.measurePlayerRun(milestone, build) : undefined;
+      const player = isLast && build?.ran && build.ok === true ? await this.measurePlayerRun(milestone, build, campaign) : undefined;
       if (player !== undefined) milestone.playerPlaythrough = player;
       const playerBroken = player !== undefined && player.found && player.ok !== true;
       // An artifact in hand that was never played to a verdict — no runner,
@@ -4233,9 +4234,40 @@ export class CampaignManager {
    * (unity_run_player writes it under Recordings/player-playthrough). Not
    * measurable — no runner configured, or the run could not start — is said.
    */
+  /**
+   * What the document's own numbers allow this run — not the tool's defaults.
+   *
+   * The player run always used 45 seconds a session, 60 actions and a
+   * 30-second boot, so a game whose document asks for a 90-second round could
+   * not be played to its outcome at all (Codex 2026-09-12 T#8). A driven run
+   * is faster than a person's, but never faster than the game allows, so the
+   * document's ceiling plus headroom is the deadline.
+   */
+  private playerRunSpec(campaign?: Campaign): PlayerRunSpec {
+    const spec: { sessions?: string; deadlineSeconds?: number; bootDeadlineSeconds?: number } = {};
+    const text = this.gddTextOf(campaign);
+    if (text === undefined || text.trim() === "") return spec;
+    const { claims } = extractNumericClaims(text);
+    const longestSession = claims
+      .filter((c) => c.kind === "session_seconds" && c.comparator !== "min")
+      .map((c) => c.value)
+      .reduce((max, value) => Math.max(max, value), 0);
+    if (longestSession > 0) spec.deadlineSeconds = Math.ceil(longestSession * 1.5) + 15;
+    const boot = claims
+      .filter((c) => c.kind === "boot_seconds")
+      .map((c) => c.value)
+      .reduce((max, value) => Math.max(max, value), 0);
+    if (boot > 0) spec.bootDeadlineSeconds = Math.max(30, Math.ceil(boot * 2));
+    // Every level the document claims, not just the first: the level-count
+    // proof is measured from what this run played.
+    if (claims.some((c) => c.kind === "level_count")) spec.sessions = "all";
+    return spec;
+  }
+
   private async measurePlayerRun(
     milestone: CampaignMilestone,
     build: PlayerBuildEvidence,
+    campaign?: Campaign,
   ): Promise<PlaythroughEvidence & { unrunnableHere?: string; missingRunner?: string }> {
     // NOT `unrunnableHere`: that field waives the player run, and this early
     // return set it directly, so removing the phrase from UNRUNNABLE_HERE_RE
@@ -4247,7 +4279,7 @@ export class CampaignManager {
     const since = Date.now();
     let failure: string | undefined;
     try {
-      await this.runPlayer(this.projectRoot, build.artifactPath);
+      await this.runPlayer(this.projectRoot, build.artifactPath, this.playerRunSpec(campaign));
     } catch (err) {
       failure = err instanceof Error ? err.message : String(err);
       getLoggerSafe().warn("The built player could not be played", { milestone: milestone.id, error: failure });

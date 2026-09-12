@@ -998,6 +998,18 @@ function hasPackageMagic(path: string): boolean {
 }
 
 /**
+ * What the built player's run is allowed to take, derived from the document's
+ * own numbers rather than the tool's defaults (Codex 2026-09-12 T#8).
+ */
+export interface PlayerRunSpec {
+  /** "all", "1-3", "2,5" — which sessions to play. */
+  readonly sessions?: string;
+  readonly maxActions?: number;
+  readonly deadlineSeconds?: number;
+  readonly bootDeadlineSeconds?: number;
+}
+
+/**
  * The delivery gate's compile verdict, from the COMPILER rather than a report.
  *
  * A missing registry or an unregistered verifier answers `ran: false`, which
@@ -1074,12 +1086,23 @@ export function makeVerifyCompile(
 export function makeRunPlayer(registry: {
   getAvailableToolNames(): readonly string[];
   execute(name: string, input: Record<string, unknown>, context: unknown): Promise<{ content?: unknown; isError?: boolean }>;
-}): (projectRoot: string, artifactPath: string) => Promise<void> {
-  return async (projectRoot, artifactPath) => {
+}): (projectRoot: string, artifactPath: string, spec?: PlayerRunSpec) => Promise<void> {
+  return async (projectRoot, artifactPath, spec) => {
     if (!registry.getAvailableToolNames().includes("unity_run_player")) throw new Error("unity_run_player is not registered");
+    // THE REQUIREMENT SETS THE ALLOWANCES. Only the artifact was passed, so
+    // the run always used the tool's defaults — 45 seconds a session, 60
+    // actions, a 30-second boot — and a game whose own document asks for a
+    // 90-second round, or more than sixty moves, could not be played to its
+    // outcome at all (Codex 2026-09-12 T#8).
     const result = await registry.execute(
       "unity_run_player",
-      { artifactPath },
+      {
+        artifactPath,
+        ...(spec?.sessions !== undefined ? { sessions: spec.sessions } : {}),
+        ...(spec?.maxActions !== undefined ? { maxActions: spec.maxActions } : {}),
+        ...(spec?.deadlineSeconds !== undefined ? { deadlineSeconds: spec.deadlineSeconds } : {}),
+        ...(spec?.bootDeadlineSeconds !== undefined ? { bootDeadlineSeconds: spec.bootDeadlineSeconds } : {}),
+      },
       { projectPath: projectRoot, workingDirectory: projectRoot, readOnly: false },
     );
     if (result.isError === true) throw new Error(String(result.content ?? "unity_run_player failed").slice(0, 300));

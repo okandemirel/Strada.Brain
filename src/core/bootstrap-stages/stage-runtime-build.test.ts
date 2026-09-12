@@ -350,6 +350,32 @@ describe("a package has to be one, not look like one (Codex 2026-09-11 O#8)", ()
   });
 });
 
+describe("the player run's allowances come from the requirement (Codex 2026-09-12 T#8)", () => {
+  it("passes the spec through, and nothing when there is none", async () => {
+    // Only the artifact was passed, so every run used the tool's defaults —
+    // 45 seconds a session, 60 actions, a 30-second boot — and a game whose
+    // document asks for a 90-second round could not be played to its outcome.
+    const calls: Array<Record<string, unknown>> = [];
+    const registry = {
+      getAvailableToolNames: () => ["unity_run_player"],
+      execute: async (_name: string, input: Record<string, unknown>) => {
+        calls.push(input);
+        return { content: "ok" };
+      },
+    };
+
+    await makeRunPlayer(registry as never)("/p", "/p/Game.app", {
+      sessions: "all", deadlineSeconds: 150, bootDeadlineSeconds: 60, maxActions: 200,
+    });
+    expect(calls[0]).toMatchObject({
+      artifactPath: "/p/Game.app", sessions: "all", deadlineSeconds: 150, bootDeadlineSeconds: 60, maxActions: 200,
+    });
+
+    await makeRunPlayer(registry as never)("/p", "/p/Game.app");
+    expect(Object.keys(calls[1]!)).toEqual(["artifactPath"]);
+  });
+});
+
 describe("the compile gate answers from the compiler, not from silence (Codex 2026-09-12 R#5)", () => {
   const registry = (result: { content?: unknown; isError?: boolean }) => ({
     getAvailableToolNames: () => ["unity_verify_change"],

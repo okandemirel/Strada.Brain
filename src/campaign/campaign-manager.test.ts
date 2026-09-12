@@ -2990,6 +2990,45 @@ describe("CampaignManager", () => {
     )).toBe(true);
   });
 
+  it("the player run is allowed what the document asks for (Codex 2026-09-12 T#8)", async () => {
+    // Every run used the tool's 45-second session deadline, so a game whose
+    // own document asks for a 90-second round could not be played to its
+    // outcome — the proof was impossible, not missing.
+    tasks = new FakeTaskManager();
+    storage.close();
+    storage = new CampaignStorage(join(dir, "campaigns-run-spec.db"));
+    const specs: Array<unknown> = [];
+    manager = new CampaignManager({
+      storage,
+      planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async (chatId, text) => { messages.push({ chatId, text }); },
+      projectRoot, retryAdoptionGraceMs: 10, completedSettleDelayMs: 0, milestoneTimeBoxMs: 60 * 60_000,
+      deliveryResumeDelayMs: 20,
+      verifyCompile: async () => ({ ok: true, ran: true, errors: 0 }),
+      buildPlayer: async () => buildVerdict,
+      runPlayer: async (root, artifact, spec) => {
+        specs.push(spec);
+        writePlayerVerdict(true, {}, root);
+      },
+    });
+    manager.attachEvents();
+    const gdd = "# GDD\n\nThe game ships 3 levels. A round lasts 60-90 seconds. It loads in under 4 seconds.";
+    const campaign = manager.startFromGdd(ctx, gdd, "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    settleMilestone("integrated, all 42 tests pass");
+
+    await waitFor(() => expect(specs.length).toBeGreaterThan(0));
+
+    // 90 s with headroom for a driven run, the boot budget doubled (never
+    // below the tool's own 30 s), and every level the document claims.
+    expect(specs[0]).toMatchObject({ deadlineSeconds: 150, bootDeadlineSeconds: 30, sessions: "all" });
+  });
+
   it("a target this machine cannot RUN is pending, not waived (Codex 2026-09-12 R#13)", async () => {
     // The disclosure said "NOT MEASURED: the built artifact cannot be run on
     // this machine" and the campaign delivered anyway — a game nobody had
