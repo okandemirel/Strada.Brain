@@ -995,6 +995,28 @@ describe("lease commit replay (measured 2026-09-10: three worker commits danglin
     expect(result.commitsReplayed?.replayed ?? 0).toBe(0);
   });
 
+  it("a person's STAGED version survives the replay (Codex 2026-09-12 Q#12)", async () => {
+    // The replay points the index at HEAD for every path it touched. A
+    // selection the person had staged on one of those paths lives only in the
+    // index, and resetting it threw their work away with nothing said.
+    makeGitRepo();
+    const lease = await gitManager().acquireLease({ label: "t" });
+    // The person stages their own version and then puts the file back to what
+    // HEAD holds — a common shape ("stage this hunk, keep working"). The
+    // selection now exists only in the index.
+    writeFileSync(join(source, "Assets", "Scripts", "Existing.cs"), "the person's staged version", "utf8");
+    git(source, "add Assets/Scripts/Existing.cs");
+    writeFileSync(join(source, "Assets", "Scripts", "Existing.cs"), "original", "utf8");
+    writeFileSync(join(lease.path, "Assets", "Scripts", "Existing.cs"), "the worker's version", "utf8");
+    git(lease.path, "add -A");
+    git(lease.path, 'commit -q -m "feat: worker edit"');
+
+    await lease.commit();
+    await lease.release();
+
+    expect(git(source, "show :Assets/Scripts/Existing.cs")).toBe("the person's staged version");
+  });
+
   it("a series that cannot be built whole leaves the branch where it was (Codex 2026-09-12 Q#7)", async () => {
     // HEAD moved once per commit, so a later commit that could not be staged
     // left the project's history ending at an EARLIER version of the work.

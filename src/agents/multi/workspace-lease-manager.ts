@@ -1626,7 +1626,23 @@ export class WorkspaceLeaseManager {
         // replay; point it at HEAD for exactly them (never the user's other
         // staged work) so the copied-back files read as committed, not as a
         // staged reversal plus an unstaged edit.
-        const paths = [...touched];
+        //
+        // …except where the person had STAGED something of their own on one of
+        // these paths. That selection exists only in the index, and resetting
+        // it discarded it with nothing said (Codex 2026-09-12 Q#12).
+        const staged = new Set<string>();
+        const all = [...touched];
+        for (let i = 0; i < all.length; i += 200) {
+          const diff = await git(["diff", "--cached", "--name-only", "-z", baseSha, "--", ...all.slice(i, i + 200)]);
+          if (diff.exitCode !== 0) continue;
+          for (const path of diff.stdout.split("\0").filter(Boolean)) staged.add(path);
+        }
+        if (staged.size > 0) {
+          getLoggerSafe().info("Lease replay left the index alone where someone had staged their own version", {
+            paths: [...staged].slice(0, 10),
+          });
+        }
+        const paths = all.filter((p) => !staged.has(p));
         for (let i = 0; i < paths.length; i += 200) {
           await git(["reset", "-q", "HEAD", "--", ...paths.slice(i, i + 200)]);
         }
