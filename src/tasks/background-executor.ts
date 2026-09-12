@@ -2050,7 +2050,7 @@ export class BackgroundExecutor {
       }
       // Merging milestone branches on top of work that never landed would
       // publish a half-finished tree under a green branch (Q#8).
-      if (integrateAfterWriteBack && taskPublicationLoss === undefined) this.integrateMilestoneBranches(task);
+      if (integrateAfterWriteBack && taskPublicationLoss === undefined) await this.integrateMilestoneBranches(task);
       // THE ONE TERMINAL. It is emitted here, after the lease has published
       // and after integration, so nothing downstream ever sees a completed
       // task whose work is not in the project yet.
@@ -2178,9 +2178,22 @@ export class BackgroundExecutor {
    * source root. Best-effort: a conflicted or non-fast history is left for the
    * person, with the conflict named in the log — never silently dropped.
    */
-  private integrateMilestoneBranches(task: Task): void {
+  private async integrateMilestoneBranches(task: Task): Promise<void> {
     const root = this.projectPath;
     if (!root) return;
+    // MERGING IS A BULK WRITE. It ran with no lock at all, after the lease
+    // publication had released its own, so a merge could interleave with the
+    // next publisher's copy-back (Codex 2026-09-12 S#4).
+    const { acquireProjectWriteLock } = await import("../common/project-write-lock.js");
+    // A short wait: an unmerged branch is picked up by the next delivery,
+    // while a long wait here holds the settlement path open.
+    const lock = await acquireProjectWriteLock(root, { timeoutMs: 15_000 });
+    if (!lock.acquired) {
+      getLogger().error("Milestone branch integration skipped — the project write lock could not be taken", {
+        taskId: task.id,
+      });
+      return;
+    }
     try {
       const run = (args: string[]): string =>
         execFileSync("git", ["-C", root, ...args], { encoding: "utf8", timeout: 30_000 });
@@ -2233,6 +2246,8 @@ export class BackgroundExecutor {
         task: task.id,
         error: e instanceof Error ? e.message : String(e),
       });
+    } finally {
+      lock.release();
     }
   }
 

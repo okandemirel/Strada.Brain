@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { execFileSync, spawnSync } from "node:child_process";
 import { join } from "node:path";
 import os from "node:os";
+import { hostname } from "node:os";
 import { BackgroundExecutor } from "./background-executor.js";
 import type { Task } from "./types.js";
 import { TaskStatus } from "./types.js";
@@ -3338,7 +3339,49 @@ describe("BackgroundExecutor - mission keep-alive on the direct-worker route", (
 });
 
 describe("BackgroundExecutor - integrateMilestoneBranches", () => {
-  it("merges every un-merged milestone branch and leaves a conflicting one for the person, loudly", () => {
+  it("does not merge without the project write lock (Codex 2026-09-12 S#4)", async () => {
+    // Integration ran with no lock at all, after the lease publication had
+    // released its own — so a merge could interleave with the next
+    // publisher's copy-back.
+    const root = mkdtempSync(join(os.tmpdir(), "milestone-int-lock-"));
+    const git = (...args: string[]): string =>
+      execFileSync("git", ["-C", root, ...args], { encoding: "utf8" }).trim();
+    git("init", "-q", "-b", "main");
+    git("config", "user.email", "t@example.com");
+    git("config", "user.name", "t");
+    writeFileSync(join(root, "a.txt"), "main\n");
+    git("add", "-A");
+    git("commit", "-qm", "first");
+    git("branch", "milestone/sprint-a");
+    // A live holder nothing may break: this very process, freshly heartbeated.
+    const lockDir = join(root, ".strada", "locks", "project-write.lock");
+    mkdirSync(lockDir, { recursive: true });
+    writeFileSync(
+      join(lockDir, "owner"),
+      JSON.stringify({ pid: process.pid, host: hostname(), token: "someone-else", at: new Date().toISOString() }),
+    );
+
+    const executor = new BackgroundExecutor({
+      orchestrator: createMockOrchestrator() as any,
+      projectPath: root,
+    });
+    logSpies.error.mockClear();
+    try {
+      await (executor as unknown as { integrateMilestoneBranches(t: Task): Promise<void> })
+        .integrateMilestoneBranches(createTestTask());
+
+      expect(logSpies.error).toHaveBeenCalledWith(
+        "Milestone branch integration skipped — the project write lock could not be taken",
+        expect.anything(),
+      );
+      // Nothing was merged: the branch is still not an ancestor of main.
+      expect(spawnSync("git", ["-C", root, "merge-base", "--is-ancestor", "milestone/sprint-a", "main"]).status).toBe(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("merges every un-merged milestone branch and leaves a conflicting one for the person, loudly", async () => {
     // Audited 2026-09-02: `git merge-base --is-ancestor` answers with its exit
     // code (1 = not an ancestor = needs merging) and execFileSync throws on it,
     // one line BEFORE the per-branch try — so the only branch that did not
@@ -3376,7 +3419,9 @@ describe("BackgroundExecutor - integrateMilestoneBranches", () => {
     logSpies.info.mockClear();
     logSpies.debug.mockClear();
     try {
-      (executor as unknown as { integrateMilestoneBranches(t: Task): void })
+      // Merging is a bulk write and takes the project write lock now
+      // (Codex 2026-09-12 S#4), so it is awaited.
+      await (executor as unknown as { integrateMilestoneBranches(t: Task): Promise<void> })
         .integrateMilestoneBranches(createTestTask());
 
       const isAncestor = (branch: string): boolean =>

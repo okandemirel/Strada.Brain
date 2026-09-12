@@ -4,6 +4,7 @@ import { EventEmitter } from "node:events";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, utimesSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { hostname } from "node:os";
 import { execSync } from "node:child_process";
 import { CampaignManager, stripTimeBoxDirectives, UNMEASURABLE_PROOF_RE, UNRUNNABLE_HERE_RE, hasUnmeasurableProof, proofsSpanTwoRevisions } from "./campaign-manager.js";
 import { CampaignStorage } from "./campaign-storage.js";
@@ -2841,6 +2842,41 @@ describe("CampaignManager", () => {
     expect(hasUnmeasurableProof(["no test run was observed", "the project does not compile (3 error(s))"])).toBe(false);
     expect(hasUnmeasurableProof(["the project does not compile (3 error(s))"])).toBe(false);
     expect(hasUnmeasurableProof([])).toBe(false);
+  });
+
+  it("the envelope does not commit without the project write lock (Codex 2026-09-12 S#4)", async () => {
+    // The handle's `acquired` was never read, so the envelope staged and
+    // committed the project beside whatever the other writer was doing.
+    const repo = mkdtempSync(join(tmpdir(), "envelope-lock-"));
+    try {
+      execSync("git init -q && git -c user.email=a@b -c user.name=t commit -qm first --allow-empty", { cwd: repo });
+      writeFileSync(join(repo, "work.cs"), "the sprint's work", "utf8");
+      const held = join(repo, ".strada", "locks", "project-write.lock");
+      mkdirSync(held, { recursive: true });
+      writeFileSync(
+        join(held, "owner"),
+        JSON.stringify({ pid: process.pid, host: hostname(), token: "someone-else", at: new Date().toISOString() }),
+      );
+
+      const mgr = new CampaignManager({
+        storage,
+        planner: { planMilestones: vi.fn(), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
+        taskManager: tasks as unknown as TaskManager,
+        messenger: async () => undefined,
+        projectRoot: repo,
+        projectLockTimeoutMs: 50,
+      });
+      const note = await (mgr as unknown as {
+        commitMilestoneWork(c: unknown, m: unknown): Promise<string>;
+      }).commitMilestoneWork({ id: "c1" }, { id: "m1" });
+
+      expect(note).toContain("SKIPPED");
+      // Nothing was committed: the tree still holds the sprint's work.
+      expect(execSync("git status --porcelain", { cwd: repo, encoding: "utf8" })).toContain("work.cs");
+      expect(execSync("git log --oneline", { cwd: repo, encoding: "utf8" }).trim().split("\n")).toHaveLength(1);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
   });
 
   it("proofs that span two revisions are not a verdict (Codex 2026-09-12 R#16)", () => {

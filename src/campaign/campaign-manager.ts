@@ -147,6 +147,8 @@ export interface CampaignManagerOptions {
    * measured 2026-08-31: m6 ran 22h at attempts=1.
    */
   milestoneTimeBoxMs?: number;
+  /** How long the envelope commit waits for the project write lock. */
+  projectLockTimeoutMs?: number;
   /**
    * GDD→style.json derivation, run at plan time (post-approval). Optional:
    * without it the campaign still plans, tools just fall back to stock
@@ -535,6 +537,7 @@ export class CampaignManager {
   private readonly retryAdoptionGraceMs: number;
   private readonly completedSettleDelayMs: number;
   private readonly milestoneTimeBoxMs: number;
+  private readonly projectLockTimeoutMs: number;
   private readonly styleAnalysis?: import("../agents/style/style-analysis.js").StyleAnalysis;
   private eventsAttached = false;
 
@@ -557,6 +560,7 @@ export class CampaignManager {
     this.retryAdoptionGraceMs = options.retryAdoptionGraceMs ?? RETRY_ADOPTION_GRACE_MS;
     this.completedSettleDelayMs = options.completedSettleDelayMs ?? 5_000;
     this.milestoneTimeBoxMs = options.milestoneTimeBoxMs ?? 6 * 60 * 60_000;
+    this.projectLockTimeoutMs = options.projectLockTimeoutMs ?? 60_000;
     this.styleAnalysis = options.styleAnalysis;
   }
 
@@ -3916,7 +3920,18 @@ export class CampaignManager {
     // Serialize against the other bulk writer (the lease write-back) so the
     // envelope never commits a tree that is half-way through a copy-back.
     const { acquireProjectWriteLock } = await import("../common/project-write-lock.js");
-    const lock = await acquireProjectWriteLock(this.projectRoot);
+    const lock = await acquireProjectWriteLock(this.projectRoot, { timeoutMs: this.projectLockTimeoutMs });
+    // A LOCK NOBODY COULD TAKE IS NOT A LOCK. The handle's `acquired` was
+    // never read, so the envelope staged and committed the project anyway —
+    // beside whatever the other writer was doing (Codex 2026-09-12 S#4). The
+    // sprint's work stays in the tree and the next round commits it.
+    if (!lock.acquired) {
+      getLoggerSafe().error("Milestone commit skipped — the project write lock could not be taken", {
+        id: campaign.id,
+        milestone: milestone.id,
+      });
+      return " — the milestone commit was SKIPPED: another writer holds the project lock, so the work is still uncommitted in the tree";
+    }
     try {
       // Never stage .strada — it holds lease-conflict quarantines and vault
       // indexes; sweeping them into the user's history is how quarantined
