@@ -4,7 +4,8 @@ import { EventEmitter } from "node:events";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, utimesSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { CampaignManager, stripTimeBoxDirectives, UNMEASURABLE_PROOF_RE, UNRUNNABLE_HERE_RE, hasUnmeasurableProof } from "./campaign-manager.js";
+import { execSync } from "node:child_process";
+import { CampaignManager, stripTimeBoxDirectives, UNMEASURABLE_PROOF_RE, UNRUNNABLE_HERE_RE, hasUnmeasurableProof, proofsSpanTwoRevisions } from "./campaign-manager.js";
 import { CampaignStorage } from "./campaign-storage.js";
 import { describeBuild } from "./campaign-status.js";
 import type { CampaignPlanner } from "./campaign-planner.js";
@@ -2836,6 +2837,18 @@ describe("CampaignManager", () => {
     expect(hasUnmeasurableProof(["no test run was observed", "the project does not compile (3 error(s))"])).toBe(false);
     expect(hasUnmeasurableProof(["the project does not compile (3 error(s))"])).toBe(false);
     expect(hasUnmeasurableProof([])).toBe(false);
+  });
+
+  it("proofs that span two revisions are not a verdict (Codex 2026-09-12 R#16)", () => {
+    // The gate reads compile, suite, play-through, build and shipped tree one
+    // at a time; a publication landing between two reads produced a verdict
+    // set no revision of the game ever had — and it delivered.
+    expect(proofsSpanTwoRevisions("a".repeat(40), "b".repeat(40))).toBe(true);
+    expect(proofsSpanTwoRevisions("a".repeat(40), "a".repeat(40))).toBe(false);
+    // A project that is not a git tree is measured exactly as before.
+    expect(proofsSpanTwoRevisions("", "b".repeat(40))).toBe(false);
+    expect(proofsSpanTwoRevisions("a".repeat(40), "")).toBe(false);
+    expect(proofsSpanTwoRevisions("", "")).toBe(false);
   });
 
   it("only a HOST incapability exempts the player run; a broken bundle still blocks (Codex 2026-09-11 D#2)", () => {

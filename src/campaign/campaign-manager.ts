@@ -247,6 +247,19 @@ export const UNRUNNABLE_HERE_RE =
   // below, so the campaign revives twice and then asks a person, which is the
   // honest end for a missing tool.
   /\b(?:exec format error|not supported on this (?:platform|host)|unsupported (?:artifact|platform|target|host)|requires (?:a|an) (?:device|emulator|simulator)|cannot be executed on this (?:platform|host|machine))\b/i;
+/**
+ * Do the delivery proofs describe two different trees?
+ *
+ * The gate reads them one at a time — compile, suite record, play-through,
+ * build, shipped tree — and a publication landing between two reads produced a
+ * verdict set no revision of the game ever had (Codex 2026-09-12 R#16). An
+ * unknown revision on either side answers nothing: a project that is not a git
+ * tree is measured exactly as it was before.
+ */
+export function proofsSpanTwoRevisions(before: string, after: string): boolean {
+  return before !== "" && after !== "" && before !== after;
+}
+
 /** Missing proofs that describe absent TOOLING rather than a broken game. */
 /**
  * Missing proofs whose reason is absent TOOLING. Matched against the campaign's
@@ -2837,6 +2850,11 @@ export class CampaignManager {
       // errors — found seconds later by the real-tree guardian, and by no gate
       // at all (measured live 2026-09-04 21:37). A verifier that could not run
       // is recorded as NOT RUN and never as a pass.
+      // ONE TREE FOR ALL THE PROOFS. Each is read separately, and a
+      // publication landing between two reads produced a verdict set no
+      // revision of the game ever had (Codex 2026-09-12 R#16). The revision is
+      // captured before the first read and checked after the last.
+      const revisionBefore = this.projectRevision();
       const compile = await this.measureCompile();
       milestone.compileVerdict = compile;
       const compileBroken = compile.ran && !compile.ok;
@@ -2920,11 +2938,30 @@ export class CampaignManager {
       const claims = isLast ? this.measureGddClaims(campaign, playthrough, player, build) : undefined;
       if (claims) milestone.gddClaims = claims.lines;
       const claimsBroken = Boolean(claims?.refusal);
-      const deliveryProofMissing = earlierProofsMissing || buildBroken || buildNotRun || playerBroken || playerMissing || claimsBroken;
+      // THE TREE MOVED WHILE ITS PROOFS WERE BEING READ. Whatever they say,
+      // they do not describe one revision of the game: this round is not a
+      // verdict, and the sprint is asked again against the tree as it stands.
+      const revisionAfter = this.projectRevision();
+      const treeMovedMidGate = isLast && proofsSpanTwoRevisions(revisionBefore, revisionAfter);
+      if (treeMovedMidGate) {
+        getLoggerSafe().warn("Delivery proofs span two revisions — re-measuring instead of delivering", {
+          id: campaign.id,
+          milestone: milestone.id,
+          before: revisionBefore.slice(0, 8),
+          after: revisionAfter.slice(0, 8),
+        });
+      }
+      const deliveryProofMissing = earlierProofsMissing || buildBroken || buildNotRun || playerBroken || playerMissing || claimsBroken || treeMovedMidGate;
       // What is missing, in words — for the bounce, the NOT DELIVERED report
       // and the stored milestone. Empty when everything stands.
       const missingProofs: string[] = [];
       if (isLast) {
+        if (treeMovedMidGate) {
+          missingProofs.push(
+            `the project changed while its proofs were being read (${revisionBefore.slice(0, 8)} → ${revisionAfter.slice(0, 8)}), ` +
+            "so they do not all describe one revision of the game",
+          );
+        }
         if (!milestone.testVerdict) missingProofs.push("no test run was observed");
         else if (milestone.testVerdictUnfiltered !== true) missingProofs.push("the only green test run was FILTERED (a subset the sprint chose)");
         if (compileBroken) missingProofs.push(`the project does not compile${typeof compile.errors === "number" ? ` (${compile.errors} error(s))` : ""}`);
@@ -3842,6 +3879,26 @@ export class CampaignManager {
    * defect being fixed is silent accumulation, and a warning in the channel
    * is the opposite of silent.
    */
+  /**
+   * The revision the project is at, or "" when it is not a git tree.
+   *
+   * The delivery gate reads its proofs one at a time — the compile, the suite
+   * record, the play-through, the build, the shipped tree — and nothing
+   * established that they all describe the SAME tree. A publication landing
+   * between two of those reads produced a verdict set that no revision of the
+   * game ever had (Codex 2026-09-12 R#16).
+   */
+  private projectRevision(): string {
+    try {
+      return execFileSync("git", ["-C", this.projectRoot, "rev-parse", "HEAD"], {
+        encoding: "utf8",
+        timeout: 10_000,
+      }).trim();
+    } catch {
+      return "";
+    }
+  }
+
   private async commitMilestoneWork(campaign: Campaign, milestone: CampaignMilestone): Promise<string> {
     const git = (args: string[], timeoutMs = 120_000): string =>
       execFileSync("git", ["-C", this.projectRoot, ...args], {
