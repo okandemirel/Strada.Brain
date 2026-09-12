@@ -12,7 +12,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, statSync, utimesSync, chmodSync, renameSync, promises as fsp } from "node:fs";
-import { tmpdir } from "node:os";
+import { tmpdir, hostname } from "node:os";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
 import { runProcess } from "../../utils/process-runner.js";
@@ -1409,5 +1409,34 @@ describe("compiler output is derived, at any depth (Codex 2026-09-12 R#4)", () =
     expect(isDerivedBuildOutput(join("Tools", "X", "bin", "Release", "a.dll"))).toBe(true);
     expect(isDerivedBuildOutput(join("bin", "tools.sh"))).toBe(false);
     expect(isDerivedBuildOutput(join("Assets", "Scripts", "Object.cs"))).toBe(false);
+  });
+});
+
+describe("publication never runs unlocked (Codex 2026-09-12 R#14)", () => {
+  it("reports the commit as unfinished when another writer holds the project lock", async () => {
+    // It used to proceed with a loud log — two publishers writing one tree,
+    // which is exactly the interleaving the lock exists to prevent.
+    writeFileSync(join(source, "Assets", "Scripts", "Existing.cs"), "original", "utf8");
+    const mgr = new WorkspaceLeaseManager({ projectRoot: source, leaseRoot, preferGitWorktree: false, projectLockTimeoutMs: 50 });
+    const lease = await mgr.acquireLease({ label: "t", forceTempCopy: true });
+    writeFileSync(join(lease.path, "Assets", "Scripts", "Existing.cs"), "the worker's work", "utf8");
+
+    // A live holder: this very process, heartbeating, so it is never broken.
+    const lockDir = join(source, ".strada", "locks", "project-write.lock");
+    mkdirSync(lockDir, { recursive: true });
+    writeFileSync(
+      join(lockDir, "owner"),
+      JSON.stringify({ pid: process.pid, host: hostname(), token: "someone-else", at: new Date().toISOString() }),
+    );
+
+    const result = await lease.commit();
+
+    expect(result.written).toEqual([]);
+    expect(result.failed.join(" ")).toContain("project write lock could not be taken");
+    // The project keeps its copy and the worker's version is still in the lease.
+    expect(readFileSync(join(source, "Assets", "Scripts", "Existing.cs"), "utf8")).toBe("original");
+    expect(readFileSync(join(lease.path, "Assets", "Scripts", "Existing.cs"), "utf8")).toBe("the worker's work");
+    rmSync(lockDir, { recursive: true, force: true });
+    await lease.release();
   });
 });

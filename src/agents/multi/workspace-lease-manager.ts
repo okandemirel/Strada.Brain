@@ -167,6 +167,8 @@ export interface WorkspaceLeaseManagerOptions {
   readonly submoduleTimeoutMs?: number;
   /** Additional directory names to exclude from fallback temp-copy workspaces */
   readonly additionalExcludes?: readonly string[];
+  /** How long publication waits for the project write lock before reporting the commit unfinished. */
+  readonly projectLockTimeoutMs?: number;
 }
 
 const DEFAULT_LEASE_ROOT = join(os.tmpdir(), "strada-workspaces");
@@ -636,6 +638,7 @@ export class WorkspaceLeaseManager {
   /** Lease path → shas of its commits that already landed on the project's HEAD (so salvage skips them). */
   private readonly replayedLeaseCommits = new Map<string, Set<string>>();
   private readonly worktreeTimeoutMs: number;
+  private readonly projectLockTimeoutMs: number;
   private readonly submoduleTimeoutMs: number;
   private readonly fallbackExcludes: Set<string>;
   private readonly configuredHeavyExcludes: Set<string>;
@@ -681,6 +684,7 @@ export class WorkspaceLeaseManager {
     this.preferGitWorktree = options.preferGitWorktree ?? true;
     this.commandRunner = options.commandRunner ?? runProcess;
     this.worktreeTimeoutMs = options.worktreeTimeoutMs ?? DEFAULT_WORKTREE_TIMEOUT_MS;
+    this.projectLockTimeoutMs = options.projectLockTimeoutMs ?? 300_000;
     this.submoduleTimeoutMs = options.submoduleTimeoutMs ?? DEFAULT_SUBMODULE_TIMEOUT_MS;
     this.fallbackExcludes = options.additionalExcludes?.length
       ? new Set([...BASE_FALLBACK_COPY_EXCLUDES, ...options.additionalExcludes])
@@ -1823,13 +1827,29 @@ export class WorkspaceLeaseManager {
     // helper falls back to (proceeding unlocked, interleaving two trees).
     const lock = await (await import("../../common/project-write-lock.js")).acquireProjectWriteLock(
       sourceRoot,
-      { timeoutMs: 300_000 },
+      { timeoutMs: this.projectLockTimeoutMs },
     );
     if (!lock.acquired) {
-      getLoggerSafe().error("Lease commit proceeds WITHOUT the project write lock — a sibling writer may interleave", {
+      // PUBLISHING UNLOCKED IS HOW THE INTERLEAVING HAPPENS. This used to
+      // proceed with a loud log, which is the very thing the lock exists to
+      // prevent: two publishers writing one tree, and the conflicts that
+      // follow (Codex 2026-09-12 R#14). A lock nobody can take is a resource
+      // to WAIT for — the lease is kept, the caller reports the publication as
+      // unfinished, and the mission retries. A dead holder's lock is broken on
+      // sight and a stale one after its window, so the wait is bounded.
+      getLoggerSafe().error("Lease commit did NOT run — the project write lock could not be taken", {
         sourceRoot,
         workspacePath,
       });
+      return {
+        written: [],
+        conflicts: [],
+        removed: [],
+        deleted: [],
+        failed: ["(the whole commit): the project write lock could not be taken — another writer holds it"],
+        conflictsQuarantinedUnder: null,
+        quarantined: 0,
+      };
     }
     try {
 
