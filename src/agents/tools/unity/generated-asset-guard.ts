@@ -13,6 +13,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { classifyPngBytes, isPlaceholderGradePng, measurePngContent } from "../../autonomy/built-as-specified.js";
+import { getLoggerSafe } from "../../../utils/logger.js";
 
 /** The real path of `p`'s nearest existing ancestor plus the rest — symlinked temp roots (/var → /private/var) compare equal. */
 function canonical(p: string): string {
@@ -56,6 +57,8 @@ export function outsideAssetsError(projectPath: string, fullPath: string, reques
 interface CommittedArt {
   tick: number;
   digest: string | undefined;
+  /** The committed .meta's digest, so a damaged .meta is seen as damage. */
+  metaDigest?: string | undefined;
   /** A copy of the committed pair, kept while another generation is still open. */
   assetCopy?: string;
   metaCopy?: string;
@@ -149,15 +152,30 @@ export class PreviousAsset {
     // back; only with no copy left is our snapshot the best available.
     const newer = committedAt.get(this.fullPath);
     if (newer !== undefined && newer.tick > this.startedAt) {
-      if (newer.digest !== undefined && digestOf(this.fullPath) === newer.digest) {
+      // THE PAIR, not the image alone: a draw that damaged only the .meta left
+      // the asset's digest matching, and the damaged importer stayed (Codex
+      // 2026-09-12 Q#6).
+      const assetIntact = newer.digest !== undefined && digestOf(this.fullPath) === newer.digest;
+      const metaIntact = newer.metaDigest === undefined || digestOf(`${this.fullPath}.meta`) === newer.metaDigest;
+      if (assetIntact && metaIntact) {
         this.settle();
         return;
       }
       if (newer.assetCopy !== undefined && existsSync(newer.assetCopy)) {
-        copyFileSync(newer.assetCopy, this.fullPath);
+        if (!assetIntact) copyFileSync(newer.assetCopy, this.fullPath);
         if (newer.hadMeta === true && newer.metaCopy !== undefined && existsSync(newer.metaCopy)) {
           copyFileSync(newer.metaCopy, `${this.fullPath}.meta`);
         }
+        this.settle();
+        return;
+      }
+      // No retained copy: our snapshot predates their commit, so writing it
+      // would erase committed art. Only when our own backup IS their bytes is
+      // putting it back the same thing as restoring theirs.
+      if (digestOf(this.assetBackup) !== newer.digest) {
+        getLoggerSafe().warn("A generation failed over art another generation had committed, and no copy of it survives", {
+          path: this.fullPath,
+        });
         this.settle();
         return;
       }
@@ -183,7 +201,18 @@ export class PreviousAsset {
   commit(): void {
     if (this.done) return;
     this.done = true;
-    const record: CommittedArt = { tick: ++generationTick, digest: digestOf(this.fullPath) };
+    const record: CommittedArt = {
+      tick: ++generationTick,
+      digest: digestOf(this.fullPath),
+      metaDigest: digestOf(`${this.fullPath}.meta`),
+    };
+    // A copy retained by an EARLIER commit is superseded by this one: the
+    // newest committed pair is what a failing generation must put back, and
+    // the old copies were left in Assets/ forever (Codex 2026-09-12 Q#6).
+    const superseded = committedAt.get(this.fullPath);
+    for (const copy of [superseded?.assetCopy, superseded?.metaCopy]) {
+      if (copy !== undefined) { try { rmSync(copy, { force: true }); } catch { /* best effort */ } }
+    }
     // While another generation is still open against this path, the committed
     // pair itself is kept: that generation may fail and need to put back what
     // WE committed rather than what either of us snapshotted.

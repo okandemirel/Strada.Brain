@@ -2016,6 +2016,8 @@ export class WorkspaceLeaseManager {
     // project's own .strada directory.
     const stagingRoot = join(sourceRoot, ".strada", "lease-staging", randomUUID().slice(0, 8));
     const previousOf = new Map<number, string>();
+    /** Set when a rollback copy is the last one and could not be put anywhere safe. */
+    let stagingHoldsTheOnlyCopy = false;
     /** Is this write half of a pair, so that a rollback may be needed for it? */
     const hasPartnerWrite = (rel: string): boolean => writeIndexByRel.has(pairOf(rel));
     /** Keep the project's previous version where a person can find it. */
@@ -2126,21 +2128,35 @@ export class WorkspaceLeaseManager {
           } catch { /* reported as inconsistent below */ }
           // A restore that did not work must not take the only copy of the
           // project's previous version down with the staging directory.
-          if (!restored) preservedAt = await preserveRollback(asset.rel, keep);
+          if (!restored) {
+            preservedAt = await preserveRollback(asset.rel, keep);
+            // NEITHER PUT BACK NOR PRESERVED: the staged copy is the only one
+            // left, and the cleanup below used to delete it (Codex 2026-09-12
+            // Q#6). It stays, and the failure says where.
+            if (preservedAt === undefined) stagingHoldsTheOnlyCopy = true;
+          }
         }
         await quarantine(asset.rel, asset.full);
         outcomes[partnerIndex] = {
           failed: restored
             ? `${asset.rel} (rolled back: its .meta could not be written, the project keeps its previous version)`
-            : `${asset.rel} (written, but its .meta could not be written — the pair is inconsistent in the project${preservedAt !== undefined ? `; the project's previous version is kept at ${preservedAt}` : ""})`,
+            : `${asset.rel} (written, but its .meta could not be written — the pair is inconsistent in the project${preservedAt !== undefined ? `; the project's previous version is kept at ${preservedAt}` : `; the project's previous version is the staged copy under ${stagingRoot}`})`,
           failedRel: asset.rel,
         };
       }
     });
     // The staged copies have served their purpose; the directory that held
-    // them goes too, and its parent when nothing else is staging there.
-    try { await fsp.rm(stagingRoot, { recursive: true, force: true }); } catch { /* best effort */ }
-    try { await fsp.rmdir(dirname(stagingRoot)); } catch { /* another commit is still staging */ }
+    // them goes too, and its parent when nothing else is staging there —
+    // unless it is holding the only copy of a version that could be neither
+    // restored nor preserved.
+    if (stagingHoldsTheOnlyCopy) {
+      getLoggerSafe().error("Lease staging KEPT — it holds the only copy of a version that could not be put back", {
+        stagingRoot,
+      });
+    } else {
+      try { await fsp.rm(stagingRoot, { recursive: true, force: true }); } catch { /* best effort */ }
+      try { await fsp.rmdir(dirname(stagingRoot)); } catch { /* another commit is still staging */ }
+    }
     clearCommitLedger(workspacePath);
 
     for (const outcome of outcomes) {

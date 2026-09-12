@@ -11,7 +11,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, statSync, utimesSync, chmodSync, renameSync, promises as fsp } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, statSync, utimesSync, chmodSync, renameSync, promises as fsp } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
@@ -398,6 +398,47 @@ describe("workspace lease commit", () => {
       expect(existsSync(join(source, ".strada", "lease-staging"))).toBe(false);
     } finally {
       spy.mockRestore();
+      await lease.release();
+    }
+  });
+
+  it("keeps the staged copy when a rollback can be neither applied nor preserved (Codex 2026-09-12 Q#6)", async () => {
+    mkdirSync(join(source, "Assets", "Sprites"), { recursive: true });
+    writeFileSync(join(source, "Assets", "Sprites", "Hero.png"), "old pixels", "utf8");
+    writeFileSync(join(source, "Assets", "Sprites", "Hero.png.meta"), "old importer", "utf8");
+    const lease = await manager().acquireLease({ label: "t", forceTempCopy: true });
+    writeFileSync(join(lease.path, "Assets", "Sprites", "Hero.png"), "new pixels", "utf8");
+    writeFileSync(join(lease.path, "Assets", "Sprites", "Hero.png.meta"), "new importer", "utf8");
+
+    // The .meta cannot be written, the rollback cannot be applied, and the
+    // recovery copy cannot be written either — and the staging directory (the
+    // last place the project's own version exists) used to be deleted anyway.
+    const realRename = fsp.rename.bind(fsp);
+    const renameSpy = vi.spyOn(fsp, "rename").mockImplementation(async (from: never, to: never) => {
+      if (String(to).endsWith("Hero.png.meta") || String(from).endsWith(".restore")) {
+        throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+      }
+      return realRename(from, to);
+    });
+    const realCopy = fsp.copyFile.bind(fsp);
+    const copySpy = vi.spyOn(fsp, "copyFile").mockImplementation(async (from: never, to: never, mode?: never) => {
+      if (String(to).includes(join("lease-conflicts")) && String(to).includes("previous")) {
+        throw Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" });
+      }
+      return realCopy(from, to, mode);
+    });
+    try {
+      const result = await lease.commit();
+
+      const inconsistent = result.failed.find((f) => f.startsWith(join("Assets", "Sprites", "Hero.png") + " ("));
+      expect(inconsistent).toContain("staged copy under");
+      const staging = join(source, ".strada", "lease-staging");
+      expect(existsSync(staging)).toBe(true);
+      const kept = readdirSync(staging).flatMap((d) => readdirSync(join(staging, d)).map((f) => readFileSync(join(staging, d, f), "utf8")));
+      expect(kept).toContain("old pixels");
+    } finally {
+      renameSpy.mockRestore();
+      copySpy.mockRestore();
       await lease.release();
     }
   });

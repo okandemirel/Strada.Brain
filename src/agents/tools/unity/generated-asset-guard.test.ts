@@ -154,6 +154,71 @@ describe("what already sits at a generation target", () => {
     expect(readdirSync(dir).sort()).toEqual(["Hero.png", "Hero.png.meta"]);
   });
 
+  it("puts back a DAMAGED .meta beside intact committed art (Codex 2026-09-12 Q#6)", () => {
+    const target = join(dir, "Hero.png");
+    writeFileSync(target, png(64, 64, "noise"));
+    writeFileSync(`${target}.meta`, "guid: original");
+    const a = new PreviousAsset(target);
+    const b = new PreviousAsset(target);
+
+    const committed = png(48, 48, "noise");
+    writeFileSync(target, committed);
+    writeFileSync(`${target}.meta`, "guid: committed");
+    a.commit();
+
+    // B damages ONLY the importer. The image's digest still matches, so the
+    // "their art is intact" guard used to return and leave it damaged.
+    writeFileSync(`${target}.meta`, "guid: DAMAGED");
+    b.restore();
+
+    expect(readFileSync(target).equals(committed)).toBe(true);
+    expect(readFileSync(`${target}.meta`, "utf8")).toBe("guid: committed");
+  });
+
+  it("does not put back a stale snapshot when the committed copy is gone (Codex 2026-09-12 Q#6)", () => {
+    const target = join(dir, "Hero.png");
+    const original = png(64, 64, "noise");
+    writeFileSync(target, original);
+    const a = new PreviousAsset(target);
+    const b = new PreviousAsset(target);
+
+    const committed = png(48, 48, "noise");
+    writeFileSync(target, committed);
+    a.commit();
+    // The retention copy is lost (a crash, a cleanup, a full disk).
+    for (const f of readdirSync(dir)) {
+      if (f.includes(".strada-committed-")) rmSync(join(dir, f), { force: true });
+    }
+
+    writeFileSync(target, Buffer.alloc(9)); // B's damaged draw
+    b.restore();
+
+    // The damaged draw is visible and regenerable; silently reverting to the
+    // pre-commit original would erase committed art and look fine.
+    expect(readFileSync(target).equals(original)).toBe(false);
+    expect(readdirSync(dir).sort()).toEqual(["Hero.png"]);
+  });
+
+  it("a superseded retained copy does not outlive the commit that replaced it (Codex 2026-09-12 Q#6)", () => {
+    const target = join(dir, "Hero.png");
+    writeFileSync(target, png(64, 64, "noise"));
+    const a = new PreviousAsset(target);
+    const b = new PreviousAsset(target);
+    const c = new PreviousAsset(target);
+
+    writeFileSync(target, png(48, 48, "noise"));
+    a.commit();
+    const second = png(32, 32, "noise");
+    writeFileSync(target, second);
+    b.commit();
+    c.restore();
+
+    // C's failure puts back the NEWEST committed image, and nothing is left
+    // beside it for Unity to import.
+    expect(readFileSync(target).equals(second)).toBe(true);
+    expect(readdirSync(dir).sort()).toEqual(["Hero.png"]);
+  });
+
   it("restores the previous pair byte for byte", () => {
     const target = join(dir, "Hero.png");
     const original = png(64, 64, "noise");
