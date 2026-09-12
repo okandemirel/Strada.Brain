@@ -77,6 +77,11 @@ describe("which document is THE GDD", () => {
     expect(gddNameDistance("docs/run-notes/PixelFlow_GDD_Implementation_Baseline_2026-08-28.md"))
       .toBeGreaterThan(gddNameDistance("docs/PixelFlow_GDD_v2.md"));
     expect(gddNameDistance("docs/CHANGELOG.md")).toBe(99);
+    // AN ARCHIVE is not where the live design lives: docs/archive/GDD.md used
+    // to score better than a dated copy in docs/ purely on token count
+    // (Codex 2026-09-12 P#14).
+    expect(gddNameDistance("docs/archive/GDD.md"))
+      .toBeGreaterThan(gddNameDistance("docs/PixelFlow_GDD_2026_09_12.md"));
     // …and the structure decides even when no derivative WORD appears: a copy
     // in a subfolder, and a name with more said after "GDD", both rank behind.
     expect(gddNameDistance("docs/run-notes/PixelFlow_GDD.md"))

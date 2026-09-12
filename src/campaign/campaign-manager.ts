@@ -5218,6 +5218,9 @@ function coverageGapItems(milestone: CampaignMilestone): string[] {
  */
 // NOT `\b`: an underscore is a word character, so "_Traceability_" has no
 // word boundary in it and every one of these names slipped through.
+/** Directories that hold what a project has FINISHED with. */
+const ARCHIVED_DIR_RE = /(?:^|\/)(?:archive[ds]?|old|deprecated|backup|attic|superseded|history|previous|_archive)(?:\/)/i;
+
 const DERIVATIVE_DOC_RE =
   /(?:^|[^a-z0-9])(?:audit|analysis|checklist|traceability|summary|report|review|status|notes?|plan|manifest|backlog|coverage|gap|todo|matrix|index|baseline)(?:[^a-z0-9]|$)/i;
 
@@ -5240,7 +5243,11 @@ export function gddNameDistance(rel: string): number {
   const after = stem.slice(marker.index + marker[0].length).replace(/^[ _-]+/, "");
   const extraTokens = after.length === 0 ? 0 : after.split(/[ _-]+/).filter(Boolean).length;
   const inSubfolder = rel.split("/").length - 1 > 1 ? 2 : 0;
-  return extraTokens + inSubfolder + (DERIVATIVE_DOC_RE.test(stem) ? 10 : 0);
+  // AN ARCHIVE IS NOT WHERE THE LIVE DESIGN LIVES. docs/archive/GDD.md scored
+  // better than docs/GDD_2026_09_12.md purely on token count, so an archived
+  // copy won whatever its age (Codex 2026-09-12 P#14).
+  const archived = ARCHIVED_DIR_RE.test(rel) ? 20 : 0;
+  return extraTokens + inSubfolder + archived + (DERIVATIVE_DOC_RE.test(stem) ? 10 : 0);
 }
 
 function readGddFile(projectRoot: string, gddPath: string): string | undefined {

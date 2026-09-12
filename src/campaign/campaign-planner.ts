@@ -375,6 +375,16 @@ export class CampaignPlanner {
       // A milestone with no instruction is not a milestone; the schema's own
       // floor (40 characters) is the measure.
       if (prompt.length < 40) continue;
+      // AN INSTRUCTION IS PROSE. A model that answers step two with the
+      // ladder-shaped JSON again produced a "sprint instruction" that was
+      // literally {"milestones":[…]} — with the capture demand appended to it
+      // (Codex 2026-09-12 P#9).
+      if (looksLikeJsonEcho(prompt)) {
+        getLoggerSafe().warn("Staged planning got JSON where a sprint instruction belongs — milestone dropped", {
+          milestone: item.title.slice(0, 80),
+        });
+        continue;
+      }
       // THE VISUAL GATE IS ARMED BY THE SPRINT'S OWN INSTRUCTION, and a model
       // writing one instruction at a time forgets to ask for the frame: the
       // live 14-sprint ladder left four sprints ungated (measured 2026-09-12
@@ -656,6 +666,16 @@ export function balancedJsonObjects(text: string): string[] {
  * of headings, this keeps the campaign moving and the model is asked only for
  * one sprint instruction at a time (measured live 2026-09-12).
  */
+/** Is this reply the ladder JSON echoed back rather than an instruction? */
+export function looksLikeJsonEcho(text: string): boolean {
+  const trimmed = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/```$/, "").trim();
+  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return false;
+  const objects = balancedJsonObjects(trimmed);
+  if (objects.length === 0) return trimmed.startsWith("[");
+  // A whole reply that IS one object, or that carries the ladder's own shape.
+  return objects[0]!.length >= trimmed.length * 0.8 || /"milestones"\s*:/.test(trimmed);
+}
+
 export function groupHeadingsIntoMilestones(scope: GddScope): Array<{ title: string; coveredSections: string[] }> {
   const headings = scope.headings.filter((h) => h.trim().length > 0);
   if (headings.length === 0) return [];

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { balancedJsonObjects, CampaignPlanner, groupHeadingsIntoMilestones } from "./campaign-planner.js";
+import { balancedJsonObjects, CampaignPlanner, groupHeadingsIntoMilestones, looksLikeJsonEcho } from "./campaign-planner.js";
 
 /**
  * Measured live 2026-09-12 00:42: the campaign failed at its very first step
@@ -243,5 +243,42 @@ describe("reading a milestone ladder out of a reply", () => {
       // Truncation used to cut the appended demand straight back off.
       expect(m.prompt).toContain("CAPTURING A FRAME");
     }
+  });
+
+  it("JSON where an instruction belongs is not an instruction (Codex 2026-09-12 P#9)", () => {
+    expect(looksLikeJsonEcho('{"milestones":[{"title":"Only one","coveredSections":[]}]}')).toBe(true);
+    expect(looksLikeJsonEcho('```json\n{"milestones":[]}\n```')).toBe(true);
+    expect(looksLikeJsonEcho("Build the playfield: place the board prefab and verify it in PlayMode.")).toBe(false);
+    // Prose that merely MENTIONS a JSON snippet is still prose.
+    expect(looksLikeJsonEcho('Write the config as {"levels": 5} and verify the loader reads it, then capture a frame.')).toBe(false);
+  });
+
+  it("drops a milestone whose instruction came back as the ladder JSON", async () => {
+    const reply = (text: string) => ({ text, toolCalls: [], stopReason: "end_turn", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } });
+    let call = 0;
+    const provider = {
+      name: "test",
+      capabilities: { maxTokens: 4096, streaming: false, structuredStreaming: false, toolCalling: false, vision: false, systemPrompt: true },
+      chat: vi.fn(async (_s: string, messages: Array<{ content: string }>) => {
+        const ask = String(messages.at(-1)?.content ?? "");
+        call += 1;
+        if (call <= 2) return reply("<reasoning>\nthinking");
+        if (ask.includes("Group them into between")) {
+          return reply(JSON.stringify({ milestones: [
+            { title: "Real", coveredSections: [] },
+            { title: "Echo", coveredSections: [] },
+            { title: "AlsoReal", coveredSections: [] },
+          ] }));
+        }
+        return reply(ask.includes('"Echo"')
+          ? JSON.stringify({ milestones: [{ title: "Echo", coveredSections: [] }] })
+          : "Build this section's systems in the project and verify them in PlayMode before reporting.");
+      }),
+    };
+
+    const result = await new CampaignPlanner(provider as never)
+      .planMilestones("# GDD\n\n## 3. CORE\nRules.\n\n## 5. CONTENT\nLevels.\n\n## 9. RELEASE\nShip.\n", "docs/GDD.md");
+
+    expect(result.milestones.map((m) => m.title)).toEqual(["Real", "AlsoReal"]);
   });
 });
