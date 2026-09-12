@@ -323,3 +323,29 @@ describe("conditions and loops reach exactly as far as their own clause (Codex 2
     expect(describeEvidenceShortfall(crossed)).toContain('target "Android" and scene "Boot" in ONE call');
   });
 });
+
+describe("a declaration is one call too (Codex 2026-09-12 S#13)", () => {
+  it("does not let separate calls satisfy separate arguments of one declaration", () => {
+    const prompt = `${REQUIRED_EVIDENCE_PREFIX} unity_build_player target="Android" scene="Boot"`;
+    // Every value appears somewhere, and the declaration was never carried out.
+    const crossed = missingRequiredEvidence(prompt, [
+      { toolName: "unity_build_player", success: true, args: JSON.stringify({ target: "Android", scene: "Other" }) },
+      { toolName: "unity_build_player", success: true, args: JSON.stringify({ target: "iOS", scene: "Boot" }) },
+    ]);
+    expect(crossed).toHaveLength(1);
+    expect(crossed[0]!.combination).toEqual([{ key: "target", value: "Android" }, { key: "scene", value: "Boot" }]);
+
+    // One call that carries both satisfies it.
+    expect(missingRequiredEvidence(prompt, [
+      { toolName: "unity_build_player", success: true, args: JSON.stringify({ target: "Android", scene: "Boot" }) },
+    ])).toEqual([]);
+
+    // Two declarations are two calls, as in prose.
+    const two =
+      `${REQUIRED_EVIDENCE_PREFIX} unity_build_player target="Android"; unity_build_player target="iOS"`;
+    expect(missingRequiredEvidence(two, [
+      { toolName: "unity_build_player", success: true, args: JSON.stringify({ target: "Android" }) },
+      { toolName: "unity_build_player", success: true, args: JSON.stringify({ target: "iOS" }) },
+    ])).toEqual([]);
+  });
+});

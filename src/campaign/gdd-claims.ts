@@ -198,12 +198,20 @@ export function extractNumericClaims(gddText: string): { claims: NumericClaim[];
  * counting 0…catalog-1 rejected the last valid session of every game (R#3).
  */
 export function finishedSessionIndices(
-  playthrough: { sessionCount?: number; sessions?: ReadonlyArray<{ index?: number; outcome?: string; actions?: number }> } | undefined,
+  playthrough: {
+    sessionCount?: number;
+    sessions?: ReadonlyArray<{ index?: number; outcome?: string; actions?: number; reachedOutcome?: boolean }>;
+  } | undefined,
 ): number[] {
   const catalog = playthrough?.sessionCount ?? 0;
   const seen = new Set<number>();
   for (const session of playthrough?.sessions ?? []) {
-    if (session.outcome === "None" || session.outcome === "Refused") continue;
+    // AN OUTCOME IT REACHED, stated. Excluding only "None" and "Refused" let a
+    // record with no outcome at all — an empty string, a missing field — count
+    // as a level played to the end (Codex 2026-09-12 S#11).
+    if (session.reachedOutcome === false) continue;
+    const outcome = (session.outcome ?? "").trim();
+    if (outcome === "" || outcome === "None" || outcome === "Refused") continue;
     if (!Number.isInteger(session.index) || session.index! < 1 || session.index! > Math.max(catalog, 1)) continue;
     if (!Number.isInteger(session.actions) || session.actions! <= 0) continue;
     seen.add(session.index!);
@@ -323,8 +331,6 @@ export function assessNumericClaims(
         // PLAYED_SESSIONS_PER_RUN per run: past that the shortfall is named,
         // not hidden — and not held against the delivery, since no single run
         // can answer it.
-        const required = Math.min(claim.value, PLAYED_SESSIONS_PER_RUN);
-        const met = catalogMatches && finished >= required;
         // Blocking unless the SHORTFALL is only what one run could not reach:
         // a 13-level game with one session played used to be waived entirely
         // because 13 > 12 (Codex 2026-09-11 C#21).
@@ -332,9 +338,15 @@ export function assessNumericClaims(
         // the run actually played its full share: a 13-level game with one
         // session played was waived entirely (Codex 2026-09-11 C#21).
         const beyondOneRun = claim.value > PLAYED_SESSIONS_PER_RUN && finished >= PLAYED_SESSIONS_PER_RUN;
+        // A SHORTFALL IS NOT A PASS. `met` used to be true once the run had
+        // played its own share, so a 24-level game reported status "met" with
+        // twelve levels never played (Codex 2026-09-12 S#11). The status is
+        // the truth; only the BLOCKING stays lifted for what one run cannot
+        // reach, because no single run can answer it.
+        const everyLevelPlayed = catalogMatches && finished >= claim.value;
         return {
           claim,
-          status: met ? "met" : "not_met",
+          status: everyLevelPlayed ? "met" : "not_met",
           measured: playthrough.sessionCount,
           note:
             `the game's session catalog reports ${playthrough.sessionCount}; ${finished} of ${played} played session(s) reached an outcome` +

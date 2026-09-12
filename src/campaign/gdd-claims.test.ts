@@ -295,3 +295,40 @@ describe("distinct finished sessions (Codex 2026-09-12 R#4)", () => {
     expect(finishedSessionIndices(undefined)).toEqual([]);
   });
 });
+
+describe("a shortfall is not a pass, and an outcome must be stated (Codex 2026-09-12 S#11)", () => {
+  const twentyFour = extractNumericClaims("The game ships 24 levels.").claims;
+
+  it("twelve of twenty-four levels is NOT met, though one run cannot be blamed for it", () => {
+    const half = assessNumericClaims(twentyFour, evidence({
+      sessionCount: 24,
+      sessions: Array.from({ length: 12 }, (_, i) => ({ index: i + 1, outcome: "Won", actions: 5, seconds: 3 })),
+    }));
+    const level = half.find((x) => x.claim.kind === "level_count")!;
+    // The status used to read "met" with twelve levels never played.
+    expect(level.status).toBe("not_met");
+    expect(level.note).toContain("12 of 24 levels are NOT yet played");
+    // …and it is still not held against the delivery, since no single run can
+    // answer it (C#21 stands).
+    expect(level.blocking).toBe(false);
+  });
+
+  it("every level played to an outcome IS met", () => {
+    const all = assessNumericClaims(twentyFour, evidence({
+      sessionCount: 24,
+      sessions: Array.from({ length: 24 }, (_, i) => ({ index: i + 1, outcome: "Won", actions: 5, seconds: 3 })),
+    }));
+    expect(all.find((x) => x.claim.kind === "level_count")).toMatchObject({ status: "met" });
+  });
+
+  it("a record with no outcome at all is not a level played", () => {
+    expect(finishedSessionIndices({
+      sessionCount: 3,
+      sessions: [
+        { index: 1, outcome: "", actions: 5 },
+        { index: 2, actions: 5 },
+        { index: 3, outcome: "Won", actions: 5, reachedOutcome: false },
+      ],
+    })).toEqual([]);
+  });
+});

@@ -126,12 +126,23 @@ export const REQUIRED_EVIDENCE_PREFIX = "STRADA-REQUIRED-EVIDENCE:";
 export interface DeclaredEvidence {
   readonly tools: string[];
   readonly args: RequiredToolArgument[];
+  /**
+   * One entry per DECLARATION, with its arguments kept together.
+   *
+   * Flattening them let separate calls satisfy separate arguments of one
+   * declaration — `unity_build_player target="Android" scene="Boot"` was
+   * accepted by an Android/Other call beside an iOS/Boot one, which is the
+   * combination-nobody-made defect the prose path already refuses (Codex
+   * 2026-09-12 S#13).
+   */
+  readonly groups: RequiredArgumentGroup[];
 }
 
 /** What the prompt's own STRADA-REQUIRED-EVIDENCE lines declare. */
 export function declaredEvidence(prompt: string): DeclaredEvidence {
   const tools = new Set<string>();
   const args: RequiredToolArgument[] = [];
+  const groups: RequiredArgumentGroup[] = [];
   const seen = new Set<string>();
   for (const line of prompt.split(/\r?\n/)) {
     const at = line.indexOf(REQUIRED_EVIDENCE_PREFIX);
@@ -143,18 +154,22 @@ export function declaredEvidence(prompt: string): DeclaredEvidence {
       if (!name) continue;
       const tool = name[1]!.toLowerCase();
       tools.add(tool);
+      const declared: Array<{ key: string; value: string }> = [];
       for (const a of text.slice(name[0].length).matchAll(/([a-z_]+)\s*[:=]\s*"([^"]{1,60})"/gi)) {
         const key = a[1]!.toLowerCase();
         const value = a[2]!.trim();
         if (value === "") continue;
+        declared.push({ key, value });
         const id = `${tool}:${key}:${value.toLowerCase()}`;
         if (seen.has(id)) continue;
         seen.add(id);
         args.push({ tool, key, value });
       }
+      // ONE DECLARATION, ONE CALL — the same rule the prose path follows.
+      if (declared.length > 0) groups.push({ tool, args: declared });
     }
   }
-  return { tools: [...tools], args };
+  return { tools: [...tools], args, groups };
 }
 
 export function requiredToolsInPrompt(prompt: string): string[] {
@@ -217,10 +232,7 @@ export interface RequiredArgumentGroup {
 
 /** The argument demands the prompt makes, one entry per instruction. */
 export function requiredArgumentGroups(prompt: string): RequiredArgumentGroup[] {
-  const groups: RequiredArgumentGroup[] = [];
-  for (const declared of declaredEvidence(prompt).args) {
-    groups.push({ tool: declared.tool, args: [{ key: declared.key, value: declared.value }] });
-  }
+  const groups: RequiredArgumentGroup[] = [...declaredEvidence(prompt).groups];
   // The tool, then only what follows it up to the next tool name: "…with
   // target \"android\"" after unity_build_player is not unity_playthrough's
   // argument (Codex 2026-09-11 D#14).
