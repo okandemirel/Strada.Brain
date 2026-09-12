@@ -263,7 +263,7 @@ export const UNRUNNABLE_HERE_RE =
  * names itself ("no test verifier is configured") and still counts.
  */
 export const UNMEASURABLE_PROOF_RE =
-  /(?:no tool for it in this run|the compile check did not run|the player build did not run|no compile verifier is configured|no player builder is configured|no player runner is configured|unity_build_player is not registered|no test verifier is configured|the built player was never played to a verdict)/i;
+  /(?:the GDD coverage audit did not run|no tool for it in this run|the compile check did not run|the player build did not run|no compile verifier is configured|no player builder is configured|no player runner is configured|unity_build_player is not registered|no test verifier is configured|the built player was never played to a verdict)/i;
 /**
  * Does this round's shortfall include a proof absent TOOLING explains? ANY
  * such proof counts: requiring all of them meant one game-shaped proof beside
@@ -2956,6 +2956,13 @@ export class CampaignManager {
         }
         // A requirement the audit NAMED and no sprint has run yet is missing
         // work, and delivery may not step over it (Codex 2026-09-11 I#4).
+        // AN AUDIT THAT COULD NOT RUN is not an audit that passed: the game
+        // was never compared to its own design document, and the campaign
+        // delivered with a note (Codex 2026-09-12 R#11). Same class as absent
+        // tooling — revive twice, then ask a person.
+        if (campaign.coverageAuditNote?.startsWith("coverage audit could not run") === true) {
+          missingProofs.push(`the GDD coverage audit did not run: ${campaign.coverageAuditNote.slice(29, 200)}`);
+        }
         // A sprint that could not even ATTEMPT part of its work — no tool for
         // it was offered to the run — is a gap delivery may not step over
         // (Codex 2026-09-12 R#1). The wording matches UNMEASURABLE_PROOF_RE,

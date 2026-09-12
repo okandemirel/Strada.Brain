@@ -2853,6 +2853,47 @@ describe("CampaignManager", () => {
     expect(UNMEASURABLE_PROOF_RE.test("no player runner is configured")).toBe(true);
   });
 
+  it("an audit that could not RUN is not an audit that passed (Codex 2026-09-12 R#11)", async () => {
+    // The campaign delivered with "coverage audit could not run: …" as a note:
+    // the game was never compared to its own design document, and the report
+    // read exactly like an audited one.
+    tasks = new FakeTaskManager();
+    storage.close();
+    storage = new CampaignStorage(join(dir, "campaigns-audit-down.db"));
+    manager = new CampaignManager({
+      storage,
+      planner: {
+        planMilestones: vi.fn().mockResolvedValue(LADDER),
+        auditCoverage: vi.fn().mockRejectedValue(new Error("All providers are in cooldown")),
+      } as unknown as CampaignPlanner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async (chatId, text) => { messages.push({ chatId, text }); },
+      projectRoot, retryAdoptionGraceMs: 10, completedSettleDelayMs: 0, milestoneTimeBoxMs: 60 * 60_000,
+      deliveryResumeDelayMs: 20,
+      verifyCompile: async () => ({ ok: true, ran: true, errors: 0 }),
+    });
+    manager.attachEvents();
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    const green = { testsGreen: true, detail: "PlayMode verification passed: 42 of 42 tests passed (unfiltered — the whole PlayMode suite)", unfiltered: true };
+    for (let round = 0; round < 12; round++) {
+      const c = storage.get(campaign.id)!;
+      if (c.state !== "executing") break;
+      const id = c.milestones[2]!.taskId!;
+      tasks.verifications.set(id, green);
+      tasks.emit("task:completed", id, "green, shipping");
+      await new Promise((r) => setTimeout(r, 150));
+    }
+
+    const after = storage.get(campaign.id)!;
+    expect(after.state).not.toBe("done");
+    expect(messages.map((m) => m.text).join("\n")).toContain("coverage audit did not run");
+  });
+
   it("a proof this MACHINE cannot produce stops the campaign and asks a person, instead of reviving forever (Codex 2026-09-11 C#2)", async () => {
     tasks = new FakeTaskManager();
     storage.close();
