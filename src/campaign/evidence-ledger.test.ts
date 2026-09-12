@@ -4,10 +4,10 @@
  * all, so its refusals constrained nothing (Codex 2026-09-13 AF#1).
  */
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { EvidenceLedger, describeLedgerRow } from "./evidence-ledger.js";
+import { ARTIFACT_DIGEST_VERSION, EvidenceLedger, artifactDigest, describeLedgerRow } from "./evidence-ledger.js";
 import { issueRunId, receiveEvidence, recordSha256, type EvidenceTicket } from "./producer-evidence.js";
 
 const REVISION = "a".repeat(40);
@@ -92,5 +92,41 @@ describe("EvidenceLedger", () => {
     expect(ledger.forMilestone("c1", "mfinal1").map((r) => r.kind)).toEqual(["compile", "playthrough"]);
     expect(ledger.forMilestone("c1", "m2").map((r) => r.kind)).toEqual(["player-build"]);
     expect(ledger.forMilestone("c1", "nothing-here")).toEqual([]);
+  });
+});
+
+/**
+ * Codex round AH#8, reproduced on two real 26 648-byte files: the digest
+ * hashed paths and SIZES, so two different artifacts of the same size were the
+ * same artifact as far as a ticket was concerned.
+ */
+describe("artifactDigest", () => {
+  let dir: string;
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "artifact-digest-")); });
+  afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
+
+  const bundle = (name: string, bytes: Buffer): string => {
+    const app = join(dir, name, "Contents", "MacOS");
+    mkdirSync(app, { recursive: true });
+    writeFileSync(join(app, "Game"), bytes);
+    return join(dir, name);
+  };
+
+  it("tells two artifacts of the SAME SIZE apart", () => {
+    const a = artifactDigest(bundle("A.app", Buffer.alloc(26_648, 1)));
+    const b = artifactDigest(bundle("B.app", Buffer.alloc(26_648, 2)));
+    expect(a).toMatch(/^[0-9a-f]{64}$/);
+    expect(a).not.toBe(b);
+  });
+
+  it("is stable for the same bytes and absent for an artifact that is not there", () => {
+    const first = artifactDigest(bundle("C.app", Buffer.alloc(1024, 7)));
+    expect(artifactDigest(join(dir, "C.app"))).toBe(first);
+    expect(artifactDigest(join(dir, "Nothing.app"))).toBeUndefined();
+    expect(artifactDigest(undefined)).toBeUndefined();
+  });
+
+  it("names its scheme, so an old size-only digest cannot pass as a content one", () => {
+    expect(ARTIFACT_DIGEST_VERSION).toContain("content");
   });
 });

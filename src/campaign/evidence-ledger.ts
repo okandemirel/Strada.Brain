@@ -18,7 +18,7 @@
 import Database from "better-sqlite3";
 import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
-import { mkdirSync, readdirSync, statSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, statSync } from "node:fs";
 import type { EvidenceDecision, EvidenceTicket } from "./producer-evidence.js";
 import { recordSha256 } from "./producer-evidence.js";
 
@@ -39,6 +39,15 @@ export interface LedgerRow {
   readonly detail?: string;
   readonly recordSha256?: string;
 }
+
+/**
+ * The digest SCHEME, mixed into every artifact digest.
+ *
+ * A digest that hashed paths and sizes is not a content digest, and a record
+ * written under the old scheme must never look like one written under this
+ * one (Codex 2026-09-13 AH#8). Strada.MCP uses the same string.
+ */
+export const ARTIFACT_DIGEST_VERSION = "strada-artifact-v2-content";
 
 /** A receipt larger than this is not stored whole — its hash and size are. */
 export const MAX_STORED_RECEIPT_BYTES = 256 * 1024;
@@ -204,6 +213,12 @@ export function artifactDigest(path: string | undefined): string | undefined {
   if (path === undefined || path === "") return undefined;
   try {
     const hash = createHash("sha256");
+    // THE BYTES, not the names and sizes. Hashing paths and sizes made two
+    // different files of the same size identical — measured on two real
+    // 26 648-byte files, whose digests matched exactly (Codex 2026-09-13
+    // AH#8). A player artifact is what a person would run; a same-size
+    // replacement is a different game.
+    hash.update(`${ARTIFACT_DIGEST_VERSION}\n`);
     const walk = (at: string, rel: string): void => {
       const st = statSync(at);
       if (st.isDirectory()) {
@@ -211,6 +226,7 @@ export function artifactDigest(path: string | undefined): string | undefined {
         return;
       }
       hash.update(`${rel}:${st.size}\n`);
+      hash.update(readFileSync(at));
     };
     walk(path, "");
     return hash.digest("hex");
