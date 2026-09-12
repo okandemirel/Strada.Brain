@@ -121,34 +121,85 @@ const ELEMENT_HEADER_RE = /^(?:element|elements|name|mechanic|blocker|feature|it
  */
 export function extractFlattenedSchedule(docText: string): ScheduledElement[] {
   const found = new Map<string, ScheduledElement>();
-  const lines = docText.split(/\r?\n/).map((l) => l.replace(/^[\s•\t|-]+|[\s|]+$/g, ""));
-  for (let i = 0; i < lines.length; i++) {
-    if (!UNLOCK_HEADER_RE.test(lines[i] ?? "")) continue;
-    // The header block: short cells, up to eight, one of which names the
-    // element itself. Anything long or sentence-shaped ends it.
-    const header: string[] = [];
-    for (let j = i; j < lines.length && header.length < 8; j++) {
-      const cell = lines[j] ?? "";
-      if (cell === "" || cell.length > 30 || /[.;:!?]$/.test(cell)) break;
-      // The first data row ends the header: its first cell is an unlock id,
-      // and swallowing it made every row after it read one column short.
-      if (j > i && UNLOCK_CELL_RE.test(cell)) break;
-      header.push(cell);
+  const raw = docText.split(/\r?\n/).map((l) => l.replace(/^[\s•\t|-]+|[\s|]+$/g, ""));
+  // TAB-SEPARATED ROWS are the other converter shape: a whole row on one
+  // line. Split those into cells first, so one reader serves both (Codex
+  // 2026-09-12 Y#4).
+  const lines: string[] = [];
+  for (const line of raw) {
+    const cells = line.split("\t").map((c) => c.trim());
+    if (cells.length >= 2 && cells.filter((c) => c !== "").length >= 2) lines.push(...cells);
+    else lines.push(line);
+  }
+  for (let at = 0; at < lines.length; at++) {
+    if (!UNLOCK_HEADER_RE.test(lines[at] ?? "")) continue;
+    // BLANK-SEPARATED CELLS: some converters leave an empty line between
+    // every cell. Blanks are dropped only where that is the shape — deleting
+    // them everywhere would merge genuinely empty cells (Y#4).
+    const spaced = (lines[at + 1] ?? "") === "" && (lines[at + 2] ?? "") !== "";
+    const cellsFrom = (start: number): string[] =>
+      spaced ? lines.slice(start).filter((_cell, i) => i % 2 === 0) : lines.slice(start);
+    // THE HEADER BLOCK, which may begin BEFORE the unlock column: a document
+    // whose table starts with Element then Unlock read nothing at all (Y#4).
+    const short = (cell: string): boolean => cell !== "" && cell.length <= 30 && !/[.;:!?]$/.test(cell);
+    let first = at;
+    while (first > 0 && short(lines[first - 1] ?? "") && !UNLOCK_CELL_RE.test(lines[first - 1] ?? "")) {
+      if (at - first >= 7) break;
+      first -= 1;
     }
-    const nameAt = header.findIndex((h) => ELEMENT_HEADER_RE.test(h));
-    if (nameAt < 0 || header.length < 2) continue;
-    const width = header.length;
-    // …then rows of exactly that width, until one stops looking like a row.
-    for (let row = i + width; row + width <= lines.length; row += width) {
-      const cells = lines.slice(row, row + width);
-      if (!UNLOCK_CELL_RE.test(cells[0] ?? "")) break;
-      const name = (cells[nameAt] ?? "").trim();
-      if (name === "" || name.length > 60 || NOT_AN_ELEMENT_RE.test(name)) continue;
-      const key = name.toLowerCase();
-      if (!found.has(key)) found.set(key, { unlock: cells[0]!, name });
+    const window = cellsFrom(spaced ? first : first);
+    // THE WIDTH IS WHAT MAKES THE ROWS LINE UP. Reading the header until the
+    // first unlock ID assumed the ID is a row's FIRST cell, which is only one
+    // of the shapes: every width from two to eight is tried, and the narrowest
+    // that actually parses a row wins (Codex 2026-09-12 Y#4).
+    for (let width = 2; width <= 8; width++) {
+      const header = window.slice(0, width);
+      if (header.length < width || !header.every(short)) break;
+      const nameAt = header.findIndex((h) => ELEMENT_HEADER_RE.test(h));
+      const unlockAt = header.findIndex((h) => UNLOCK_HEADER_RE.test(h));
+      if (nameAt < 0 || unlockAt < 0) continue;
+      const rows: ScheduledElement[] = [];
+      for (let row = width; row + width <= window.length; row += width) {
+        const cells = window.slice(row, row + width);
+        if (!UNLOCK_CELL_RE.test(cells[unlockAt] ?? "")) break;
+        const name = (cells[nameAt] ?? "").trim();
+        if (name === "" || name.length > 60 || NOT_AN_ELEMENT_RE.test(name)) continue;
+        rows.push({ unlock: cells[unlockAt]!, name });
+      }
+      if (rows.length === 0) continue;
+      for (const el of rows) {
+        const key = el.name.toLowerCase();
+        if (!found.has(key)) found.set(key, el);
+      }
+      break;
     }
   }
   return [...found.values()];
+}
+
+/**
+ * Does the document LOOK like it holds a schedule table, whether or not this
+ * reader could parse its rows?
+ *
+ * Zero parsed elements suppressed the whole coverage check, so an unreadable
+ * schedule was indistinguishable from a document that schedules nothing
+ * (Codex 2026-09-12 Y#4). The caller can then say "present but unreadable"
+ * instead of "no requirements".
+ */
+export function scheduleLooksPresent(docText: string): boolean {
+  const lines = docText.split(/\r?\n/).map((l) => l.replace(/^[\s•\t|-]+|[\s|]+$/g, ""));
+  for (let i = 0; i < lines.length; i++) {
+    if (!UNLOCK_HEADER_RE.test(lines[i] ?? "")) continue;
+    const near = lines.slice(Math.max(0, i - 7), i + 8);
+    if (near.some((l) => ELEMENT_HEADER_RE.test(l))) return true;
+  }
+  // A header ROW on one line, whatever separates its cells (pipes, tabs).
+  for (const line of docText.split(/\r?\n/)) {
+    const cells = line.split(/[|\t]/).map((c) => c.trim()).filter((c) => c !== "");
+    if (cells.length < 2) continue;
+    if (cells.some((c) => UNLOCK_HEADER_RE.test(c)) && cells.some((c) => ELEMENT_HEADER_RE.test(c))) return true;
+  }
+  return false;
 }
 
 export function extractScheduledElements(docText: string): ScheduledElement[] {
@@ -242,6 +293,13 @@ export interface SpecCoverageReport {
   readonly scheduled: number;
   readonly missing: ScheduledElement[];
   readonly gddPath: string | null;
+  /**
+   * Set when the document plainly HOLDS a schedule table and this reader
+   * could not parse a single row of it. Zero elements used to suppress the
+   * whole coverage check, so an unreadable schedule was indistinguishable
+   * from a document that schedules nothing (Codex 2026-09-12 Y#4).
+   */
+  readonly scheduleUnreadable?: boolean;
 }
 
 /**
@@ -266,7 +324,14 @@ export function assessSpecScope(
     return { scheduled: 0, missing: [], gddPath: doc };
   }
   const elements = extractScheduledElements(text);
-  if (elements.length === 0) return { scheduled: 0, missing: [], gddPath: doc };
+  if (elements.length === 0) {
+    return {
+      scheduled: 0,
+      missing: [],
+      gddPath: doc,
+      ...(scheduleLooksPresent(text) ? { scheduleUnreadable: true } : {}),
+    };
+  }
 
   const assetsRoot = join(projectPath, "Assets");
   const files = (listFiles?.(assetsRoot) ?? walkCs(assetsRoot)).filter((f) => f.endsWith(".cs"));

@@ -5546,6 +5546,15 @@ export class CampaignManager {
       // objective gap, and delivering without it is delivering another game.
       let refusal = report.refusal ?? media.refusal;
       const scope = assessSpecScope(this.projectRoot, campaign.gddPath ? join(this.projectRoot, campaign.gddPath) : undefined);
+      // A SCHEDULE THIS READER COULD NOT PARSE is not an absent schedule:
+      // zero elements suppressed the whole check, so a converted table read
+      // as "the document schedules nothing" (Codex 2026-09-12 Y#4).
+      if (scope.scheduleUnreadable === true) {
+        lines.push(
+          "GDD element schedule: the document HOLDS a schedule table and none of its rows could be read — " +
+          "nothing was compared against the code",
+        );
+      }
       if (scope.scheduled > 0) {
         if (scope.missing.length === 0) {
           lines.push(`GDD element schedule: all ${scope.scheduled} scheduled element(s) have a trace in code`);

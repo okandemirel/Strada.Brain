@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { extractScheduledElements, elementCodeTokens, assessSpecScope, findDesignDoc, stripCsComments } from "./spec-scope.js";
+import { extractScheduledElements, elementCodeTokens, assessSpecScope, findDesignDoc, scheduleLooksPresent, stripCsComments } from "./spec-scope.js";
 
 const GDD_SNIPPET = `
 ## 4. GAME ELEMENTS
@@ -246,5 +246,63 @@ describe("a shared stripped name covers no variant (Codex 2026-09-12 Z#8)", () =
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+/**
+ * The other shapes a document converter produces. Codex ran each of these
+ * against the reader (2026-09-12 Y#4): blank-separated cells, a reversed
+ * column order and tab-separated rows all read as NO scheduled elements, and
+ * zero suppresses the coverage check entirely.
+ */
+describe("every flattened shape, and saying when a schedule cannot be read (Codex 2026-09-12 Y#4)", () => {
+  const shapes: Array<[string, string]> = [
+    ["one cell per line", "Unlock\nElement\nPitch\nL1\nIce\nFreezes"],
+    ["a blank line between cells", "Unlock\n\nElement\n\nPitch\n\nL1\n\nIce\n\nFreezes"],
+    ["the element column first", "Element\nUnlock\nPitch\nIce\nL1\nFreezes"],
+    ["tab-separated rows", "Unlock\tElement\tPitch\nL1\tIce\tFreezes"],
+    // Two columns, and the vehicle's four: the width is whatever makes the
+    // rows line up, not a number this reader assumes.
+    ["two columns", "Unlock\nElement\nL1\nIce"],
+    ["four columns", "Unlock\nElement\nPitch\nSide\nL1\nIce\nFreezes\nCanvas"],
+  ];
+
+  it("reads the schedule in each of them", () => {
+    for (const [name, doc] of shapes) {
+      expect(extractScheduledElements(doc), name).toEqual([{ unlock: "L1", name: "Ice" }]);
+      expect(scheduleLooksPresent(doc), name).toBe(true);
+    }
+  });
+
+  it("the coverage report says a schedule was present but unreadable", () => {
+    const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = require("node:fs") as typeof import("node:fs");
+    const { tmpdir } = require("node:os") as typeof import("node:os");
+    const { join } = require("node:path") as typeof import("node:path");
+    const root = mkdtempSync(join(tmpdir(), "spec-scope-unreadable-"));
+    try {
+      mkdirSync(join(root, "docs"), { recursive: true });
+      writeFileSync(
+        join(root, "docs", "GDD.md"),
+        "## 4. GAME ELEMENTS\n\nUnlock\nElement\nPitch\nthe rows of this table were lost in conversion.\n" + "x".repeat(500),
+      );
+      const report = assessSpecScope(root);
+      expect(report.scheduled).toBe(0);
+      expect(report.scheduleUnreadable).toBe(true);
+      // …and a document with no schedule at all says nothing of the kind.
+      writeFileSync(join(root, "docs", "GDD.md"), "# GDD\n\nA puzzle game with 12 levels.\n" + "x".repeat(500));
+      expect(assessSpecScope(root).scheduleUnreadable).toBeUndefined();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("says a schedule is PRESENT even when its rows cannot be read, and absent when there is none", () => {
+    // A header this reader recognizes with rows it cannot parse: the caller
+    // must not read zero elements as "the document schedules nothing".
+    const unreadable = "Unlock\nElement\nPitch\nthe rows of this table were lost in conversion.";
+    expect(extractScheduledElements(unreadable)).toEqual([]);
+    expect(scheduleLooksPresent(unreadable)).toBe(true);
+    expect(scheduleLooksPresent("# GDD\n\nA puzzle game with 12 levels.")).toBe(false);
+    expect(scheduleLooksPresent(GDD_SNIPPET)).toBe(true);
   });
 });
