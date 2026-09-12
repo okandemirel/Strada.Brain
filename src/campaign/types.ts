@@ -73,6 +73,13 @@ export interface CampaignMilestone {
    * without a second audit running (Codex 2026-09-12 W#5).
    */
   fromAudit?: boolean;
+  /**
+   * One entry per target the build produced an artifact for, with what
+   * happened when the player ran there. Only the first target was ever
+   * played, so a second required platform's launch failure was invisible
+   * (Codex 2026-09-12 W#11).
+   */
+  playerRunsByTarget?: Array<{ target?: string; ok: boolean; detail: string }>;
   coverageClosed?: boolean;
   /**
    * The project revision that closure was read on. A closure is only as good
@@ -513,6 +520,13 @@ export interface PlayerBuildEvidence {
    * needed it (Codex 2026-09-11 J#21).
    */
   readonly unbuiltTargets?: readonly string[];
+  /**
+   * Every target this build produced an artifact for, in request order. The
+   * evidence carried ONE artifact — the first target's — so a second required
+   * platform was built and never played, and a player that crashed at launch
+   * there was invisible to the gate (Codex 2026-09-12 W#11).
+   */
+  readonly artifacts?: ReadonlyArray<{ readonly target?: string; readonly artifactPath: string }>;
   /** The build tool ran to a verdict (ok or failed). false = could not run / not attempted. */
   ran: boolean;
   ok?: boolean;

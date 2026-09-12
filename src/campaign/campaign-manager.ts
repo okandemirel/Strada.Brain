@@ -8,7 +8,7 @@
  * transition, so a crash mid-sprint resumes instead of restarting the game.
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { basename, join, relative, sep } from "node:path";
@@ -3179,6 +3179,19 @@ export class CampaignManager {
           missingProofs.push(`the built player was never run on a machine that can run it: ${String(why).slice(0, 160)}`);
         }
         if (playerBroken && player) missingProofs.push(`inside the built player: ${describePlaythrough(player)}`.slice(0, 220));
+        // EVERY REQUIRED TARGET, not just the first. A second platform was
+        // built and never played, so a player that crashes at launch there
+        // delivered green (Codex 2026-09-12 W#11). One that cannot run on
+        // THIS machine is the unmeasurable case: the campaign revives twice
+        // and then asks for a machine that can.
+        for (const run of (milestone.playerRunsByTarget ?? []).slice(1)) {
+          if (run.ok) continue;
+          missingProofs.push(
+            run.detail.startsWith("cannot run here")
+              ? `the built player for ${run.target ?? "a second target"} was never run on a machine that can run it: ${run.detail.slice(17, 160)}`
+              : `inside the built player for ${run.target ?? "a second target"}: ${run.detail}`.slice(0, 220),
+          );
+        }
         // A PLATFORM the document asked for and nobody built is missing work
         // too: disclosing it and delivering anyway said the game shipped on
         // platforms it was never built for (Codex 2026-09-11 K#15).
@@ -4445,6 +4458,9 @@ export class CampaignManager {
     }
     let primary: PlayerBuildEvidence | undefined;
     const unbuilt: BuildTarget[] = [];
+    // EVERY artifact, not just the first: a second required platform was
+    // built and then never played (Codex 2026-09-12 W#11).
+    const artifacts: Array<{ target?: string; artifactPath: string }> = [];
     for (const target of wanted) {
       let built: PlayerBuildEvidence;
       try {
@@ -4460,6 +4476,7 @@ export class CampaignManager {
       // Windows" and the campaign reached `done` (Codex 2026-09-11 L#12).
       const proves = built.ran && built.ok === true && buildSatisfiesTarget(target, built.target, built.artifactPath);
       if (target && !proves) unbuilt.push(target);
+      if (proves && built.artifactPath) artifacts.push({ target: target ?? built.target, artifactPath: built.artifactPath });
       if (!primary) {
         // The FIRST requested target carries the artifact: it is the one the
         // player run plays and the one the GDD's frame rates are held to.
@@ -4480,6 +4497,7 @@ export class CampaignManager {
       ...base,
       ...(platform.target ? { requestedTarget: platform.target } : {}),
       ...(unbuilt.length > 0 ? { unbuiltTargets: unbuilt } : {}),
+      ...(artifacts.length > 0 ? { artifacts } : {}),
     };
   }
 
@@ -4547,15 +4565,64 @@ export class CampaignManager {
     // deployment never configured is a missing proof that names its cause.
     if (!this.runPlayer) return { found: false, missingRunner: "no player runner is configured" };
     if (!build.artifactPath) return { found: false };
+    // EVERY ARTIFACT THE BUILD PRODUCED. Only the first target's was played,
+    // so a second required platform whose player crashes at launch delivered
+    // green (Codex 2026-09-12 W#11). The first is the one whose verdict the
+    // gate reads for timing; the others are recorded per target beside it,
+    // and one that cannot be played here says so.
+    const spec = this.playerRunSpec(campaign);
+    // THE FILE IS ONE FILE. Every player run writes the same verdict path, so
+    // a second target's read found the FIRST target's verdict still sitting
+    // there and reported a crashed player as a clean play-through (measured
+    // while fixing Codex 2026-09-12 W#11). Cleared before each run, so a
+    // verdict can only be the one this run wrote.
+    const clearVerdict = (): void => {
+      try {
+        rmSync(join(this.projectRoot, PLAYER_PLAYTHROUGH_VERDICT_REL), { force: true });
+      } catch {
+        // Unreadable or already gone: the freshness window still applies.
+      }
+    };
+    const others = (build.artifacts ?? []).filter((a) => a.artifactPath !== build.artifactPath);
+    const perTarget: Array<{ target?: string; ok: boolean; detail: string }> = [];
     const since = Date.now();
     let failure: string | undefined;
+    clearVerdict();
     try {
-      await this.runPlayer(this.projectRoot, build.artifactPath, this.playerRunSpec(campaign));
+      await this.runPlayer(this.projectRoot, build.artifactPath, spec);
     } catch (err) {
       failure = err instanceof Error ? err.message : String(err);
       getLoggerSafe().warn("The built player could not be played", { milestone: milestone.id, error: failure });
     }
     const verdict = readPlaythroughVerdict(this.projectRoot, since - 1000, PLAYER_PLAYTHROUGH_VERDICT_REL, attemptRunId(milestone));
+    for (const other of others) {
+      const at = Date.now();
+      let why: string | undefined;
+      clearVerdict();
+      try {
+        await this.runPlayer(this.projectRoot, other.artifactPath, spec);
+      } catch (err) {
+        why = err instanceof Error ? err.message : String(err);
+      }
+      const theirs = readPlaythroughVerdict(this.projectRoot, at - 1000, PLAYER_PLAYTHROUGH_VERDICT_REL, attemptRunId(milestone));
+      const foreignHere =
+        !theirs.found && why !== undefined && UNRUNNABLE_HERE_RE.test(why) && artifactIsForeign(other.artifactPath, hostTarget());
+      perTarget.push({
+        target: other.target,
+        ok: theirs.found === true && theirs.ok === true,
+        detail: foreignHere
+          ? `cannot run here: ${why!.slice(0, 120)}`
+          : theirs.found
+          ? describePlaythrough(theirs).slice(0, 160)
+          : `no verdict${why !== undefined ? `: ${why.slice(0, 120)}` : ""}`,
+      });
+    }
+    if (perTarget.length > 0) {
+      milestone.playerRunsByTarget = [
+        { target: build.target ?? build.requestedTarget, ok: verdict.found === true && verdict.ok === true, detail: describePlaythrough(verdict).slice(0, 160) },
+        ...perTarget,
+      ];
+    }
     // An .apk on a Mac is not a failed game, it is an artifact this machine
     // cannot execute — disclosed, never a refusal, and never a reason to
     // retry forever (Codex 2026-09-11 C#2).
