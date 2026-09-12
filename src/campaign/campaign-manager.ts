@@ -3293,13 +3293,22 @@ export class CampaignManager {
         // then resumes the final sprint BY ITSELF after a pause, with a fresh
         // budget, so a GDD runs until the game is actually done; a person can
         // resume sooner with "kampanya devam".
-        if (milestone.structureRefused === true || compileBroken || missingProofs.length > 0) {
+        // A DELIVERY NOBODY CAN OPEN IS NOT A DELIVERY — the hygiene gate's
+        // own words. Its surviving refusal was carried into the report and
+        // the campaign delivered anyway, so a build with no scene a person
+        // can open shipped with a footnote (Codex 2026-09-12 R#7). Unlike the
+        // look check, this one is mechanical: no enabled scene, or none whose
+        // file can be read and holds anything.
+        const noEntryScene = milestone.sceneHygieneUnresolved;
+        if (milestone.structureRefused === true || compileBroken || noEntryScene !== undefined || missingProofs.length > 0) {
           campaign.state = "failed";
           campaign.lastError = compileBroken
             ? `the project does not compile${typeof compile.errors === "number" ? ` (${compile.errors} error(s))` : ""}, and the delivery bounce budget is spent`
             : milestone.structureRefused === true
             ? "the shipped scenes do not render the project's own art, and the structural " +
               "bounce budget is spent"
+            : noEntryScene !== undefined
+            ? `the build has no scene a person can open: ${noEntryScene}`.slice(0, 600)
             : `delivery proofs still missing after the bounce budget: ${missingProofs.join("; ")}`.slice(0, 600);
           // A proof that is missing because this MACHINE cannot produce it
           // will be missing again in fifteen minutes: revive twice, then stop

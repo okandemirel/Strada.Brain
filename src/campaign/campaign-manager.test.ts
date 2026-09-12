@@ -1731,12 +1731,15 @@ describe("CampaignManager", () => {
     expect(messages.some((m) => m.text.includes("Campaign delivery"))).toBe(false);
   });
 
-  it("delivering with the refusal unresolved says so in the report", async () => {
+  it("a build with NO scene a person can open is not delivered (Codex 2026-09-12 R#7)", async () => {
+    // This used to deliver with the refusal as a footnote: "🏁 Campaign
+    // delivery" above "NO scene a person can open". The gate's own sentence is
+    // "a delivery nobody can open is not a delivery", and the campaign is held
+    // to it — the same rule the structural check and the compiler get. It is
+    // not a wedge: the campaign revives its final sprint by itself.
     buildSettings([], ["Assets/Scenes/Main.unity"]);
     const campaign = await reachFinalSprint();
 
-    // Settle until the hygiene gate has spent its whole budget; the ladder
-    // then delivers an HONEST report rather than wedging forever.
     let taskNo = 3;
     while (storage.get(campaign.id)!.state === "executing" && taskNo < 9) {
       const before = tasks.submitted.length;
@@ -1747,18 +1750,18 @@ describe("CampaignManager", () => {
       });
       tasks.emit("task:completed", `task_${taskNo}`, "shipping it, honest");
       await waitFor(() =>
-        expect(tasks.submitted.length > before || storage.get(campaign.id)!.state === "done").toBe(true),
+        expect(tasks.submitted.length > before || storage.get(campaign.id)!.state !== "executing").toBe(true),
       );
       taskNo++;
     }
 
     const after = storage.get(campaign.id)!;
-    expect(after.state).toBe("done");
+    expect(after.state).not.toBe("done");
     expect(after.milestones[2]!.sceneHygieneBounces).toBe(2);
-    const report = messages.find((m) => m.text.includes("Campaign delivery"))!.text;
-    expect(report).toContain("NO ENTRY SCENE");
-    expect(report).toContain("NO scene a person can open");
-    expect(report).toContain("no entry scene");
+    expect(after.lastError).toContain("no scene a person can open");
+    // …and every finding still travels with it.
+    const said = messages.map((m) => m.text).join("\n");
+    expect(said).toContain("NO ENTRY SCENE");
   });
 
   it("writes HOW_TO_RUN.md from measured facts and links it from the report", async () => {
