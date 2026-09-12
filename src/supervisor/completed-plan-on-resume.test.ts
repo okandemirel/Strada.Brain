@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
-import { completedPlanOnResume, dependentClosure, effectiveLeafDependencies, stopAfterDeadline } from "./supervisor-brain.js";
+import { completedPlanOnResume, dependentClosure, effectiveLeafDependencies, invalidationTargets, stopAfterDeadline } from "./supervisor-brain.js";
 import type { GoalNode, GoalNodeId, GoalTree } from "../goals/types.js";
 
 function node(id: string, parentId: string | null, status: GoalNode["status"], task = `task ${id}`): GoalNode {
@@ -195,20 +195,29 @@ describe("a resumed task whose saved plan is already complete (2026-09-10 21:20)
 });
 
 describe("a rejected node takes its dependents with it on the ORDINARY path too (Codex 2026-09-11 M#7)", () => {
-  it("invalidates the completed work built against rejected output", () => {
-    // A produced a player API, B wired a scene against it, verification
-    // rejected A. Normal verification invalidated only A, so the retry
-    // rebuilt it alone and B kept referencing version one — success reported
-    // over work that no longer matched its input.
+  it("invalidates the rejected node AND the completed work built against it", () => {
+    // Measured by Codex 2026-09-12 P#2: reading the tree as it was DISPATCHED
+    // saw every node still "pending", so the closure skipped them all and the
+    // invalidation wrote NOTHING — zero updateNodeStatus calls. And the
+    // rejected node's own row was never written either: the aggregator has no
+    // storage writer.
+    const a = { ...node("a", "root", "completed") };
+    const b = { ...node("b", "root", "completed"), dependsOn: ["a" as GoalNodeId] };
+    const untouched = node("c", "root", "completed");
+    const live = tree([node("root", null, "pending"), a, b, untouched]);
+
+    expect(invalidationTargets(live, new Set(["a"])).sort()).toEqual(["a", "b"]);
+    // A dependent that never completed needs no rewrite; the rejection does.
+    const pendingB = tree([node("root", null, "pending"), a, { ...b, status: "pending" as const }]);
+    expect(invalidationTargets(pendingB, new Set(["a"]))).toEqual(["a"]);
+    expect(invalidationTargets(undefined, new Set(["a"]))).toEqual(["a"]);
+  });
+
+  it("the ordinary path invalidates from the LIVE tree", () => {
     const source = readFileSync(new URL("./supervisor-brain.ts", import.meta.url), "utf8");
-    const at = source.indexOf("const rejectedNow = new Set(");
+    const at = source.indexOf("for (const id of invalidationTargets(liveGoalTree, rejectedNow))");
     expect(at).toBeGreaterThan(0);
-    const block = source.slice(at, at + 1400);
-    expect(block).toContain("dependentClosure(decomposedGoalTree, rejectedNow)");
-    expect(block).toContain('"failed"');
-    expect(block).toContain("its input changed");
-    // …and it runs on the ordinary verification path, not only on resume.
-    expect(source.indexOf("const rejectedNow = new Set(")).toBeGreaterThan(source.indexOf("await aggregator.verifyWithReport(results)"));
+    expect(at).toBeGreaterThan(source.indexOf("await aggregator.verifyWithReport(results)"));
   });
 
   it("the closure itself reaches every dependent, however deep", () => {

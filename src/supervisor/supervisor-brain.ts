@@ -766,16 +766,23 @@ export class SupervisorBrain {
           .map((r) => String(r.nodeId)),
       );
       if (rejectedNow.size > 0 && this.goalStorage) {
-        for (const id of dependentClosure(decomposedGoalTree, rejectedNow)) {
-          if (rejectedNow.has(id)) continue; // already written by the aggregator
-          const node = decomposedGoalTree.nodes.get(id as GoalNodeId);
-          if (!node || node.status !== "completed") continue;
+        // THE LIVE TREE, and the rejected nodes themselves. Reading
+        // `decomposedGoalTree` saw the statuses the plan was DISPATCHED with —
+        // every node still "pending" — so the closure skipped them all and the
+        // invalidation wrote nothing at all (Codex 2026-09-12 P#2). And the
+        // aggregator has no storage writer: the rejected node's own row was
+        // never written either.
+        for (const id of invalidationTargets(liveGoalTree, rejectedNow)) {
+          const node = liveNodes.get(id as GoalNodeId);
+          if (!node) continue;
           try {
             this.goalStorage.updateNodeStatus(
               id as GoalNodeId,
               "failed",
               node.result,
-              "a step this one depends on was rejected by verification; its input changed",
+              rejectedNow.has(id)
+                ? "rejected by verification"
+                : "a step this one depends on was rejected by verification; its input changed",
               node.retryCount,
               node.redecompositionCount,
               node.reviewStatus,
@@ -1148,6 +1155,25 @@ export function withVerifyDeadline<N>(
       if (signal && onAbort) signal.removeEventListener("abort", onAbort);
     }
   };
+}
+
+/**
+ * Which node rows a verification rejection must rewrite: the rejected nodes
+ * themselves, and every COMPLETED node that depends on them.
+ *
+ * The caller used to read the tree as it was DISPATCHED, where every node is
+ * still "pending", so the closure skipped everything and the invalidation
+ * wrote nothing at all (Codex 2026-09-12 P#2). Pure, so the behaviour can be
+ * measured instead of the source text.
+ */
+export function invalidationTargets(tree: GoalTree | undefined, rejected: ReadonlySet<string>): string[] {
+  const out: string[] = [...rejected];
+  for (const id of dependentClosure(tree, rejected)) {
+    if (rejected.has(id)) continue;
+    if (tree?.nodes.get(id as GoalNodeId)?.status !== "completed") continue;
+    out.push(id);
+  }
+  return out;
 }
 
 export function stopAfterDeadline<N, R>(

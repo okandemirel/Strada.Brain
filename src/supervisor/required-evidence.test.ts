@@ -187,3 +187,37 @@ describe("prose formatting does not defeat the evidence gate (Codex 2026-09-11 M
       .toEqual(["unity_build_player"]);
   });
 });
+
+describe("two calls are not one call (Codex 2026-09-12 P#3)", () => {
+  const twoBuilds = 'Run unity_build_player with target "Android". Run unity_build_player with target "iOS".';
+
+  it("accepts one call per named value of the same argument", () => {
+    // Requiring a single call to satisfy every named argument demanded one
+    // build whose target was Android AND iOS at once, and an honest two-call
+    // run failed the gate.
+    expect(missingRequiredEvidence(twoBuilds, [
+      { toolName: "unity_build_player", success: true, args: JSON.stringify({ target: "Android" }) },
+      { toolName: "unity_build_player", success: true, args: JSON.stringify({ target: "iOS" }) },
+    ])).toEqual([]);
+  });
+
+  it("still names the value nobody built", () => {
+    const missing = missingRequiredEvidence(twoBuilds, [
+      { toolName: "unity_build_player", success: true, args: JSON.stringify({ target: "Android" }) },
+    ]);
+    expect(missing).toEqual([{ tool: "unity_build_player", attempts: 1, argument: { key: "target", value: "iOS" } }]);
+  });
+
+  it("different KEYS must still meet in one call (D#10 stands)", () => {
+    const prompt = 'Run the full suite UNFILTERED using unity_test_run with filter "all".';
+    // Two calls, each satisfying one of the two demands, is the combination
+    // nobody made.
+    expect(missingRequiredEvidence(prompt, [
+      { toolName: "unity_test_run", success: true, args: JSON.stringify({ filter: "all" }) },
+      { toolName: "unity_test_run", success: true, args: JSON.stringify({ unfiltered: true }) },
+    ])).toHaveLength(1);
+    expect(missingRequiredEvidence(prompt, [
+      { toolName: "unity_test_run", success: true, args: JSON.stringify({ filter: "all", unfiltered: true }) },
+    ])).toEqual([]);
+  });
+});

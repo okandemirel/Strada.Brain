@@ -1977,7 +1977,6 @@ export class WorkspaceLeaseManager {
     const deleted: string[] = [];
     const candidates = seedRels.filter((_, index) => removedFlags[index]);
     const candidateSet = new Set(candidates);
-    const declined = new Set<string>();
     /** Preserve the project's copy before it goes; false = not preserved. */
     const preserve = async (rel: string): Promise<boolean> => {
       if (!quarantineRoot) return true;
@@ -2002,49 +2001,74 @@ export class WorkspaceLeaseManager {
       }
     };
     // ASSETS BEFORE THEIR .meta, so a pair is decided as a pair.
+    // ONE DECISION PER PAIR. Deciding member by member deleted the asset and
+    // then declined its .meta — because the .meta's "is the partner
+    // unchanged?" check stat'ed a file the same loop had just removed — so an
+    // ordinary pair deletion left the .meta orphaned in the project (Codex
+    // 2026-09-12 P#5, the hole in N#7).
     const ordered = [...candidates].sort((a, b) => Number(/\.meta$/i.test(a)) - Number(/\.meta$/i.test(b)));
+    const decided = new Set<string>();
     for (const rel of ordered) {
-      // The pair is decided together: whatever declines one declines the other,
-      // or the project keeps a .meta with no asset beside it (N#7).
+      if (decided.has(rel)) continue;
       const partner = /\.meta$/i.test(rel) ? rel.slice(0, -5) : `${rel}.meta`;
-      const partnerIsCandidate = candidateSet.has(partner);
-      const decline = (): void => {
-        removed.push(rel);
-        if (partnerIsCandidate) declined.add(partner);
-      };
-      if (declined.has(rel)) { removed.push(rel); continue; }
-      const reason = opts?.quarantineOnly ? undefined : await systemOwnedDeletionReason(this.commandRunner, sourceRoot, rel);
-      if (reason === undefined) {
-        decline();
+      const members = candidateSet.has(partner) ? [rel, partner] : [rel];
+      for (const m of members) decided.add(m);
+      const keepAll = (): void => { for (const m of members) removed.push(m); };
+
+      // Whose files are these? Every member must be the system's own.
+      const reasons = new Map<string, string>();
+      let owned = true;
+      for (const m of members) {
+        const reason = opts?.quarantineOnly ? undefined : await systemOwnedDeletionReason(this.commandRunner, sourceRoot, m);
+        if (reason === undefined) { owned = false; break; }
+        reasons.set(m, reason);
+      }
+      if (!owned) { keepAll(); continue; }
+
+      // THE PROJECT'S COPY MUST STILL BE THE ONE THE WORKER DELETED — for
+      // every member, measured before anything is removed (N#7).
+      let unchanged = true;
+      for (const m of members) {
+        if (!(await unchangedSinceSeed(m))) { unchanged = false; break; }
+      }
+      if (!unchanged) { keepAll(); continue; }
+
+      // Every applied deletion is recoverable (review 2026-09-07): both
+      // members are preserved before EITHER is removed.
+      let preservedAll = true;
+      for (const m of members) {
+        if (!(await preserve(m))) { preservedAll = false; break; }
+      }
+      if (!preservedAll) { keepAll(); continue; }
+
+      const gone: string[] = [];
+      for (const m of members) {
+        try {
+          await fsp.rm(join(sourceRoot, m), { force: true });
+          gone.push(m);
+        } catch {
+          break;
+        }
+      }
+      if (gone.length === members.length) {
+        for (const m of members) deleted.push(`${m} — ${reasons.get(m) ?? "the system's own file"}`);
         continue;
       }
-      // THE PROJECT'S COPY MUST STILL BE THE ONE THE WORKER DELETED. Ownership
-      // and history said this file was the system's own leftover; neither says
-      // anything about the newer work someone else put there while the worker
-      // ran, and deleting it threw that work away (Codex 2026-09-11 N#7).
-      if (!(await unchangedSinceSeed(rel))) {
-        decline();
-        continue;
+      // A pair that could not go whole goes back whole, from the copies just
+      // preserved.
+      for (const m of gone) {
+        if (!quarantineRoot) continue;
+        try {
+          await fsp.copyFile(join(quarantineRoot, "deleted", m), join(sourceRoot, m));
+        } catch {
+          getLoggerSafe().error("A half-deleted pair could not be restored — its copy is in quarantine", {
+            sourceRoot,
+            rel: m,
+            quarantine: quarantineRoot,
+          });
+        }
       }
-      if (partnerIsCandidate && !(await unchangedSinceSeed(partner))) {
-        decline();
-        continue;
-      }
-      // Every applied deletion is recoverable (review 2026-09-07): the
-      // history rule cannot tell a user's file swept into a campaign
-      // envelope commit from the campaign's own leftovers, so the project's
-      // copy goes to quarantine before it goes. BOTH members are preserved
-      // before EITHER is removed.
-      if (!(await preserve(rel)) || (partnerIsCandidate && !(await preserve(partner)))) {
-        decline();
-        continue; // not preserved → not deleted
-      }
-      try {
-        await fsp.rm(join(sourceRoot, rel), { force: true });
-        deleted.push(`${rel} — ${reason}`);
-      } catch {
-        decline();
-      }
+      keepAll();
     }
     // What the system wrote is the only evidence a later deletion can rely on.
     if (!opts?.quarantineOnly) appendLeaseLedger(sourceRoot, written);

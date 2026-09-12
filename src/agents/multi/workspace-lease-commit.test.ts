@@ -750,6 +750,32 @@ describe("deletions of the system's own files are applied; the user's stay", () 
     );
   });
 
+  it("deletes an asset and its .meta TOGETHER (Codex 2026-09-12 P#5)", async () => {
+    // Deciding member by member deleted the asset and then declined its .meta,
+    // because the .meta's "is the partner unchanged?" check stat'ed a file the
+    // same loop had just removed. The project kept an orphaned .meta.
+    mkdirSync(join(source, "Assets"), { recursive: true });
+    writeFileSync(join(source, "Assets", "InitTestScene4abd18f9.unity"), "scene", "utf8");
+    writeFileSync(join(source, "Assets", "InitTestScene4abd18f9.unity.meta"), "meta", "utf8");
+    execSync(
+      "git init -q && git add -A && git -c user.email=a@b -c user.name=t commit -qm 'campaign: Sprint 1 — foundations'",
+      { cwd: source },
+    );
+    const lease = await gitManager().acquireLease({ label: "t" });
+    rmSync(join(lease.path, "Assets", "InitTestScene4abd18f9.unity"));
+    rmSync(join(lease.path, "Assets", "InitTestScene4abd18f9.unity.meta"));
+
+    const result = await lease.commit();
+    await lease.release();
+
+    expect(existsSync(join(source, "Assets", "InitTestScene4abd18f9.unity"))).toBe(false);
+    expect(existsSync(join(source, "Assets", "InitTestScene4abd18f9.unity.meta"))).toBe(false);
+    expect(result.deleted.map((d) => d.split(" — ")[0]).sort()).toEqual(
+      [join("Assets", "InitTestScene4abd18f9.unity"), join("Assets", "InitTestScene4abd18f9.unity.meta")].sort(),
+    );
+    expect(result.removed).toEqual([]);
+  });
+
   it("removes a scaffolding scene and a campaign-authored duplicate, keeps a user file", async () => {
     mkdirSync(join(source, "Assets", "Scripts"), { recursive: true });
     writeFileSync(join(source, "Assets", "InitTestScene4abd18f9.unity"), "scene", "utf8");

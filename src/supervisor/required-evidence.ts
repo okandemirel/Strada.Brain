@@ -198,9 +198,32 @@ export function missingRequiredEvidence(
       shortfalls.push({ tool, attempts: calls.length, argument: { key: wants[0]!.key, value: wants[0]!.value } });
       continue;
     }
-    const satisfied = withArgs.some((t) => wants.every((w) => argSatisfies(t.args!, w.key, w.value)));
-    if (satisfied) continue;
-    const firstUnmet = wants.find((w) => !withArgs.some((t) => argSatisfies(t.args!, w.key, w.value))) ?? wants[0]!;
+    // TWO VALUES FOR ONE KEY ARE TWO CALLS. Requiring a single call to satisfy
+    // every named argument made an ordinary instruction unsatisfiable:
+    // "Run unity_build_player with target \"Android\". Run unity_build_player
+    // with target \"iOS\"." demanded one call whose target was both at once,
+    // and an honest two-call run failed the gate (Codex 2026-09-12 P#3).
+    // Different KEYS must still co-occur in one call — that is the
+    // combination-nobody-made defect (D#10).
+    const byKey = new Map<string, Set<string>>();
+    for (const w of wants) {
+      const key = w.key.toLowerCase();
+      const values = byKey.get(key) ?? new Set<string>();
+      values.add(w.value);
+      byKey.set(key, values);
+    }
+    const singleValued = [...byKey.entries()].filter(([, v]) => v.size === 1).map(([k, v]) => ({ key: k, value: [...v][0]! }));
+    const multiValued = [...byKey.entries()].filter(([, v]) => v.size > 1);
+    const together = singleValued.length === 0
+      || withArgs.some((t) => singleValued.every((w) => argSatisfies(t.args!, w.key, w.value)));
+    const eachValueSeen = multiValued.every(([key, values]) =>
+      [...values].every((value) => withArgs.some((t) => argSatisfies(t.args!, key, value))));
+    if (together && eachValueSeen) continue;
+    const unmetSingle = singleValued.find((w) => !withArgs.some((t) => argSatisfies(t.args!, w.key, w.value)));
+    const unmetMulti = multiValued
+      .flatMap(([key, values]) => [...values].map((value) => ({ key, value })))
+      .find((w) => !withArgs.some((t) => argSatisfies(t.args!, w.key, w.value)));
+    const firstUnmet = unmetSingle ?? unmetMulti ?? { key: singleValued[0]?.key ?? wants[0]!.key, value: singleValued[0]?.value ?? wants[0]!.value };
     shortfalls.push({ tool, attempts: calls.length, argument: { key: firstUnmet.key, value: firstUnmet.value } });
   }
   return shortfalls;
