@@ -1823,6 +1823,84 @@ describe("BackgroundExecutor - Blocked worker results", () => {
     expect(order).toEqual(["commit", "fail"]);
   });
 
+  it("a conflict that could not be preserved is a publication loss, not a success (Codex 2026-09-12 Q#8)", async () => {
+    // written:[A] conflicts:[B] completed and RELEASED the lease — and B's
+    // only copy was inside it, because the quarantine copy had failed.
+    const release = vi.fn().mockResolvedValue(undefined);
+    const executor = new BackgroundExecutor({
+      orchestrator: {
+        runBackgroundTask: vi.fn().mockResolvedValue({ output: "task done" }),
+        evaluateSupervisorAdmission: vi.fn().mockResolvedValue({ mode: "direct_worker", reason: "simple" }),
+        runWorkerTask: vi.fn().mockResolvedValue({
+          status: "completed", finalSummary: "task done", visibleResponse: "task done", provider: "mock",
+          catalogVersion: "mock:default", assignmentVersion: 0, touchedFiles: [], toolTrace: [],
+          verificationResults: [], reviewFindings: [], artifacts: [],
+        }),
+      } as any,
+      workspaceLeaseManager: {
+        acquireLease: vi.fn().mockResolvedValue({
+          path: "/tmp/strada-workspaces/task-q8", id: "lease-q8", workspaceId: "ws-q8", release,
+          commit: vi.fn().mockResolvedValue({
+            written: ["Assets/A.cs"], conflicts: ["Assets/B.cs"], removed: [], failed: [], quarantined: 0,
+          }),
+        }),
+      } as any,
+    });
+    const mockTaskManager = { updateStatus: vi.fn(), complete: vi.fn(), fail: vi.fn(), block: vi.fn() };
+    executor.setTaskManager(mockTaskManager as any);
+    executor.enqueue(createTestTask(undefined, { forceSharedPlanning: true } as never), new AbortController().signal, vi.fn());
+
+    await vi.waitFor(() => {
+      expect(mockTaskManager.complete.mock.calls.length + mockTaskManager.fail.mock.calls.length).toBeGreaterThan(0);
+    }, { timeout: 5000 });
+
+    expect(mockTaskManager.complete).not.toHaveBeenCalled();
+    expect(String(mockTaskManager.fail.mock.calls[0]?.[1])).toContain("ONLY in the workspace");
+    expect(release).not.toHaveBeenCalled(); // the lease is kept for salvage
+  });
+
+  it("a cancel that lands while the workspace publishes is still a cancel (Codex 2026-09-12 Q#8)", async () => {
+    const cancel = new AbortController();
+    const release = vi.fn().mockResolvedValue(undefined);
+    const executor = new BackgroundExecutor({
+      orchestrator: {
+        runBackgroundTask: vi.fn().mockResolvedValue({ output: "task done" }),
+        evaluateSupervisorAdmission: vi.fn().mockResolvedValue({ mode: "direct_worker", reason: "simple" }),
+        runWorkerTask: vi.fn().mockResolvedValue({
+          status: "completed", finalSummary: "task done", visibleResponse: "task done", provider: "mock",
+          catalogVersion: "mock:default", assignmentVersion: 0, touchedFiles: [], toolTrace: [],
+          verificationResults: [], reviewFindings: [], artifacts: [],
+        }),
+      } as any,
+      workspaceLeaseManager: {
+        acquireLease: vi.fn().mockResolvedValue({
+          path: "/tmp/strada-workspaces/task-q8b", id: "lease-q8b", workspaceId: "ws-q8b", release,
+          // The cancel arrives while the commit is still running.
+          commit: vi.fn().mockImplementation(async () => {
+            cancel.abort();
+            return { written: ["Assets/A.cs"], conflicts: [], removed: [], failed: [], quarantined: 0 };
+          }),
+        }),
+      } as any,
+    });
+    const settled: string[] = [];
+    const mockTaskManager = {
+      updateStatus: vi.fn(),
+      complete: vi.fn(() => { settled.push("complete"); }),
+      fail: vi.fn(() => { settled.push("fail"); }),
+      block: vi.fn(),
+    };
+    executor.setTaskManager(mockTaskManager as any);
+    executor.enqueue(createTestTask(undefined, { forceSharedPlanning: true } as never), cancel.signal, vi.fn());
+
+    // The lease published and was released — the point at which the terminal
+    // is emitted — and nothing was written over the cancel.
+    await vi.waitFor(() => { expect(release).toHaveBeenCalled(); }, { timeout: 5000 });
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(settled).toEqual([]); // the cancel stands; nothing overwrites it
+  });
+
   it("an ESCALATED keep-alive is not overwritten by the block that triggered it (Codex 2026-09-11 O#14)", async () => {
     // The keep-alive had spent the mission's retries: it wrote "MISSION
     // STOPPED — needs you" and returned false. The caller then wrote the

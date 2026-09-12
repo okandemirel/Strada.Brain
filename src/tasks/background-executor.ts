@@ -1597,6 +1597,8 @@ export class BackgroundExecutor {
      * publication.
      */
     let pendingCompletion: string | undefined;
+    /** The goal-tree completion that travels with it. */
+    let pendingGoalCompletion: (() => void) | undefined;
     let activeGoalTree: GoalTree | undefined;
     try {
       const hasRichInput =
@@ -1634,12 +1636,14 @@ export class BackgroundExecutor {
         activeGoalTree = admission.supervisorGoalTree;
         if (admission.supervisorGoalTree) {
           if (supervisorResult.success) {
-            this.completeGoalExecution(
-              task,
-              admission.supervisorGoalTree,
-              Date.now() - admission.supervisorGoalStartedAt,
-              supervisorResult.succeeded,
-            );
+            // …but not YET. The goal is announced complete with the task, after
+            // publication: announcing it here told every watcher the work was
+            // done while its files were still in the lease (Codex 2026-09-12
+            // Q#8).
+            const tree = admission.supervisorGoalTree;
+            const elapsed = Date.now() - admission.supervisorGoalStartedAt;
+            const succeeded = supervisorResult.succeeded;
+            pendingGoalCompletion = () => { this.completeGoalExecution(task, tree, elapsed, succeeded); };
           } else {
             this.failGoalExecution(
               task,
@@ -1982,6 +1986,15 @@ export class BackgroundExecutor {
             if ((result.written ?? []).length === 0 && (result.conflicts ?? []).length > 0) {
               taskPublicationLoss = `nothing reached the project: ${result.conflicts.length} file(s) conflicted and were quarantined`;
             }
+            // A CONFLICT THAT COULD NOT BE PRESERVED exists only inside the
+            // lease, and release() deletes the lease. Completing on a partial
+            // write destroyed the agent's only copy of those files (Codex
+            // 2026-09-12 Q#8).
+            const unpreserved = result.conflicts.length - (raw.quarantined ?? result.conflicts.length);
+            if (unpreserved > 0) {
+              taskPublicationLoss =
+                `${unpreserved} of ${result.conflicts.length} conflicted file(s) exist ONLY in the workspace — they could not be preserved`;
+            }
           })
           .catch((err) => {
             taskPublicationLoss = `the workspace commit threw before the work reached the project (${err instanceof Error ? err.message : String(err)})`;
@@ -1997,26 +2010,50 @@ export class BackgroundExecutor {
           taskId: task.id,
           reason: taskPublicationLoss,
         });
-        try {
-          this.taskManager.fail(task.id, `PUBLICATION FAILED: ${taskPublicationLoss}. The workspace is kept for salvage.`);
-        } catch { /* the task may already be terminal */ }
+        // The monitor was told the request succeeded while its files sat in a
+        // lease nobody published (Codex 2026-09-12 Q#8).
+        requestFailed = true;
+        // The goal tree is settled too, as what it is: the work did not land.
+        if (activeGoalTree !== undefined && pendingGoalCompletion !== undefined) {
+          pendingGoalCompletion = undefined;
+          this.failGoalExecution(task, activeGoalTree, `publication failed: ${taskPublicationLoss}`, 0);
+        }
+        // …and a task that ALREADY reported a terminal outcome does not get a
+        // second one; the reason is logged above either way.
+        if (pendingCompletion !== undefined) {
+          try {
+            this.taskManager.fail(task.id, `PUBLICATION FAILED: ${taskPublicationLoss}. The workspace is kept for salvage.`);
+          } catch { /* the task may already be terminal */ }
+        }
       } else {
         await taskWorkspaceLease?.release().catch((err) => {
           getLogger().warn("Task workspace lease release failed", { error: err instanceof Error ? err.message : String(err) });
         });
       }
-      if (integrateAfterWriteBack) this.integrateMilestoneBranches(task);
+      // Merging milestone branches on top of work that never landed would
+      // publish a half-finished tree under a green branch (Q#8).
+      if (integrateAfterWriteBack && taskPublicationLoss === undefined) this.integrateMilestoneBranches(task);
       // THE ONE TERMINAL. It is emitted here, after the lease has published
       // and after integration, so nothing downstream ever sees a completed
       // task whose work is not in the project yet.
       if (pendingCompletion !== undefined && taskPublicationLoss === undefined) {
-        try {
-          this.taskManager.complete(task.id, pendingCompletion);
-        } catch (err) {
-          getLogger().warn("Task completion could not be recorded after publication", {
+        // A CANCEL THAT LANDED WHILE THE COMMIT RAN is still a cancel: the
+        // completion used to overwrite it unconditionally (Q#8).
+        if (signal.aborted || externalSignal?.aborted === true) {
+          getLogger().info("Task was cancelled while its workspace was publishing — no completion recorded", {
             taskId: task.id,
-            error: err instanceof Error ? err.message : String(err),
           });
+          requestFailed = true;
+        } else {
+          try {
+            this.taskManager.complete(task.id, pendingCompletion);
+            pendingGoalCompletion?.();
+          } catch (err) {
+            getLogger().warn("Task completion could not be recorded after publication", {
+              taskId: task.id,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
         }
       }
       // A root task marks its episode terminal; a re-scoped sub-goal task settles ONLY

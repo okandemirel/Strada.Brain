@@ -97,18 +97,25 @@ describe("shutdown", () => {
     expect(leases.getActiveLeaseCount()).toBe(0);
   });
 
-  it("releases even when the commit fails", async () => {
-    // A lease that cannot be committed is exactly the case where leaking the
-    // directory would be worst.
+  it("KEEPS the workspace when the commit fails (Codex 2026-09-12 Q#11)", async () => {
+    // This used to release anyway, on the grounds that leaking a directory is
+    // worse than losing it. It is not: a commit that threw means the agent's
+    // files exist ONLY inside that directory, and release() deletes it — the
+    // same work every "kept for salvage" path in the executor protects. The
+    // boot salvage pass is what cleans it up, after publishing what it holds.
     const root = repo();
     const leases = manager(root);
     const lease = await leases.acquireLease({ preferGitWorktree: true });
+    writeFileSync(join(lease.path, "Assets", "OnlyHere.cs"), "// the agent's work\n");
     (lease as unknown as { commit: () => Promise<never> }).commit = async () => {
       throw new Error("disk full");
     };
 
     await expect(leases.dispose()).resolves.toBeUndefined();
-    expect(existsSync(lease.path)).toBe(false);
+
+    expect(existsSync(lease.path)).toBe(true);
+    expect(readFileSync(join(lease.path, "Assets", "OnlyHere.cs"), "utf8")).toBe("// the agent's work\n");
+    expect(leases.getActiveLeaseCount()).toBe(0);
   });
 
   it("does not touch a file the user changed during the run", async () => {

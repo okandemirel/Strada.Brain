@@ -1021,6 +1021,13 @@ export class WorkspaceLeaseManager {
     this.activeLeases.clear();
     await Promise.allSettled(
       leases.map(async (lease) => {
+        // SHUTDOWN IS NOT A REASON TO DESTROY WORK. release() deletes the
+        // workspace, so a commit that threw, files it could not write, or
+        // conflicts it could not preserve mean the only copy is inside the
+        // lease — and the boot salvage pass is what recovers it. Releasing
+        // anyway defeated every "kept for salvage" path in the executor
+        // (Codex 2026-09-12 Q#11).
+        let keep: string | undefined;
         try {
           const result = await lease.commit();
           if (
@@ -1035,11 +1042,23 @@ export class WorkspaceLeaseManager {
               failed: result.failed.length,
             });
           }
+          const unpreserved = result.conflicts.length - result.quarantined;
+          if (result.failed.length > 0) keep = `${result.failed.length} file(s) could not be written`;
+          else if (unpreserved > 0) keep = `${unpreserved} conflicted file(s) exist only in the workspace`;
         } catch (err) {
+          keep = `the commit threw (${err instanceof Error ? err.message : String(err)})`;
           getLoggerSafe().warn("Workspace could not be committed during shutdown", {
             leaseId: lease.id,
             err,
           });
+        }
+        if (keep !== undefined) {
+          getLoggerSafe().error("Workspace KEPT at shutdown — its work has not been published", {
+            leaseId: lease.id,
+            path: lease.path,
+            reason: keep,
+          });
+          return;
         }
         await lease.release();
       }),
