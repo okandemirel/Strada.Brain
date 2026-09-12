@@ -28,6 +28,20 @@ describe("reset duration round-trip", () => {
     ).toBe(17 * 86_400_000);
   });
 
+  it("says hours up to two days, so a 38-hour bench does not read as two days", () => {
+    // Measured live 2026-09-12 12:41: both OpenCode seats were benched for
+    // 38 h 15 m and the message said "~2d" — ten hours more than the provider
+    // had asked for, and that sentence is what a person plans around.
+    expect(formatResetDuration(38.25 * 3_600_000)).toBe("~38h");
+    expect(formatResetDuration(25 * 3_600_000)).toBe("~25h");
+    // Past two days, days read better.
+    expect(formatResetDuration(3 * 86_400_000)).toBe("~3d");
+    // …and both still round-trip.
+    for (const ms of [25 * 3_600_000, 38 * 3_600_000, 3 * 86_400_000]) {
+      expect(parseResetDurationMs(`quota exhausted (resets in ${formatResetDuration(ms)})`)).toBe(ms);
+    }
+  });
+
   it("returns undefined rather than guessing", () => {
     // No clause: the caller must keep its own default, not a zero.
     expect(parseResetDurationMs("OpenAI rate-limited (HTTP 429)")).toBeUndefined();

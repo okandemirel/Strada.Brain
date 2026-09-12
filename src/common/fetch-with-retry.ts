@@ -252,7 +252,12 @@ const QUOTA_BODY_RE = /usage limit|quota|insufficient|balance|out of credit|Usag
 export function formatResetDuration(ms: number): string {
   if (!Number.isFinite(ms) || ms <= 0) return "soon";
   const sec = Math.round(ms / 1000);
-  if (sec >= 86_400) return `~${Math.round(sec / 86_400)}d`;
+  // HOURS UP TO TWO DAYS. A 38-hour wait rounded to "~2d", which reads as ten
+  // hours longer than the provider actually asked for — and that sentence is
+  // what a person plans around (measured live 2026-09-12 12:41: the bench was
+  // 38 h 15 m, the message said ~2d).
+  if (sec >= 172_800) return `~${Math.round(sec / 86_400)}d`;
+  if (sec >= 86_400) return `~${Math.round(sec / 3_600)}h`;
   if (sec >= 3_600) return `~${Math.round(sec / 3_600)}h`;
   if (sec >= 60) return `~${Math.round(sec / 60)}m`;
   return `~${sec}s`;
