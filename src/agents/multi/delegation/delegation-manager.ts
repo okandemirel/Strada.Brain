@@ -1101,11 +1101,15 @@ export class DelegationManager {
     provider: ReturnType<typeof createProvider>;
   }> {
     const names = new Set<string>();
+    // A verified LOCAL provider is still a provider: it entered the pool
+    // before the chain filter ran (Codex 2026-09-12 P#1).
+    const chainForLocals = new Set((this.opts.providerChain ?? []).map((n) => n.trim().toLowerCase()).filter(Boolean));
+    const localsRestricted = this.opts.chainIsExhaustive === true && chainForLocals.size > 0;
     for (const name of this.opts.verifiedLocalProviders ?? []) {
       const normalized = name.trim().toLowerCase();
-      if (normalized) {
-        names.add(normalized);
-      }
+      if (!normalized) continue;
+      if (localsRestricted && !chainForLocals.has(normalized)) continue;
+      names.add(normalized);
     }
 
     // A STRICT CHAIN IS THE WHOLE POOL. Without this, every credential in the

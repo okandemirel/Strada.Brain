@@ -14,7 +14,7 @@ import type { ProviderCredentialMap } from "./provider-registry.js";
 import { ProviderPreferenceStore } from "./provider-preferences.js";
 import type { ProviderSelectionMode } from "./provider-preferences.js";
 import { ProviderHealthRegistry } from "./provider-health.js";
-import { getLogger } from "../../utils/logger.js";
+import { getLogger, getLoggerSafe } from "../../utils/logger.js";
 import { ProviderError } from "../../common/errors.js";
 import { LRUCache } from "../../common/lru-cache.js";
 import type { ProviderOfficialSnapshot } from "./provider-source-registry.js";
@@ -216,6 +216,15 @@ export class ProviderManager {
     if (!pref) return this.defaultProvider;
 
     if (pref.selectionMode === "strada-hard-pin") {
+      // A PIN OUTSIDE THE CHAIN IS NOT A PIN. It built the excluded provider
+      // directly, bypassing every chain rule (Codex 2026-09-12 P#1).
+      if (!this.allowsProvider(pref.providerName)) {
+        getLoggerSafe().warn("A pinned provider is outside the strict chain — routing on the chain instead", {
+          pinned: pref.providerName,
+          chain: this.defaultProviderOrder,
+        });
+        return this.defaultProvider;
+      }
       const pinned = this.buildPrimaryProvider(pref.providerName, pref.model);
       if (pinned) {
         return pinned;
@@ -662,7 +671,11 @@ export class ProviderManager {
 
     const normalizedOrder = order
       .map((name) => canonicalizeProviderName(name) ?? name.trim().toLowerCase())
-      .filter(Boolean);
+      .filter(Boolean)
+      // A CUSTOM ORDER IS NOT ABOVE THE CHAIN either: this path never
+      // intersected its caller's order with the operator's own (Codex
+      // 2026-09-12 P#1).
+      .filter((name) => this.allowsProvider(name));
 
     if (normalizedOrder.length === 0) return null;
 
@@ -881,14 +894,39 @@ export class ProviderManager {
    * delegated turns kept going to an account reserved for other work
    * (measured live 2026-09-12 02:24). Routing asks this one.
    */
+  /**
+   * May work be routed to this provider at all?
+   *
+   * One predicate for every place a provider is MATERIALIZED — the chain, a
+   * hard pin, a custom order, the supervisor's assigner, the ordinary
+   * verifier. Each of those was its own door, and the operator's strict chain
+   * was ignored through them one after another (Codex 2026-09-12 P#1).
+   */
+  allowsProvider(name: string): boolean {
+    const chain = new Set(
+      this.defaultProviderOrder.map((n) => canonicalizeProviderName(n) ?? n.trim().toLowerCase()),
+    );
+    if (!this.chainIsExhaustive || chain.size === 0) return true;
+    const canonical = canonicalizeProviderName(name) ?? name.trim().toLowerCase();
+    return chain.has(canonical);
+  }
+
   listRoutable(): ReturnType<ProviderManager["listAvailable"]> {
     const all = this.listAvailable();
     const chain = new Set(
       this.defaultProviderOrder.map((n) => canonicalizeProviderName(n) ?? n.trim().toLowerCase()),
     );
     if (!this.chainIsExhaustive || chain.size === 0) return all;
-    const inChain = all.filter((entry) => chain.has(canonicalizeProviderName(entry.name) ?? entry.name.toLowerCase()));
-    return inChain.length > 0 ? inChain : all;
+    const inChain = all.filter((entry) => this.allowsProvider(entry.name));
+    if (inChain.length > 0) return inChain;
+    // The chain and the credentials disagree — a naming mismatch, or keys that
+    // went away. Routing nothing stalls every run, so the deployment keeps
+    // working and says so loudly (Codex 2026-09-12 P#1 notes the tension).
+    getLoggerSafe().warn("PROVIDER_CHAIN matches no available provider — routing on what is available", {
+      chain: this.defaultProviderOrder,
+      available: all.map((p) => p.name),
+    });
+    return all;
   }
 
   listAvailable(): Array<{

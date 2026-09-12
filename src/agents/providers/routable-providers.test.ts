@@ -37,4 +37,33 @@ describe("what may route, as opposed to what exists", () => {
     // An unsatisfiable routing pool is worse than a named gap.
     expect(manager(["nothing-here"], true).listRoutable()).toHaveLength(3);
   });
+
+  it("one predicate governs every door (Codex 2026-09-12 P#1)", () => {
+    const strict = manager(["opencode", "opencode2"], true);
+    expect(strict.allowsProvider("opencode")).toBe(true);
+    expect(strict.allowsProvider("openai")).toBe(false);
+
+    // A HARD PIN outside the chain is not a pin: it used to build the excluded
+    // provider directly.
+    (strict as unknown as { resolveEffectivePreference: () => unknown }).resolveEffectivePreference =
+      () => ({ providerName: "openai", model: "gpt", selectionMode: "strada-hard-pin" });
+    const built: string[] = [];
+    (strict as unknown as { buildPrimaryProvider: (n: string) => unknown }).buildPrimaryProvider = (n: string) => {
+      built.push(n);
+      return { name: n } as never;
+    };
+    (strict as unknown as { defaultProvider: unknown }).defaultProvider = { name: "chain" };
+    expect((strict.getProvider("chat-1") as { name: string }).name).toBe("chain");
+    expect(built).toEqual([]);
+
+    // A CUSTOM ORDER is intersected with the chain.
+    const chainsBuilt: string[][] = [];
+    (strict as unknown as { providerCache: Map<string, unknown> }).providerCache = new Map();
+    (strict as unknown as { buildChainFor: unknown }).buildChainFor = undefined;
+    expect(strict.buildResilientProviderWithOrder(["openai"])).toBeNull();
+    expect(chainsBuilt).toEqual([]);
+
+    // An unpinned deployment allows everything, as before.
+    expect(manager([], false).allowsProvider("openai")).toBe(true);
+  });
 });

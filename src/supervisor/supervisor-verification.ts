@@ -143,15 +143,20 @@ function chooseVerificationProvider(
     listAvailable(): Array<{ name: string; defaultModel: string }>;
     getProviderByName(name: string, model?: string): IAIProvider | null;
     getPrimaryProviderByName?(name: string, model?: string): IAIProvider | null;
+    /** May work be routed to this provider at all? (strict PROVIDER_CHAIN) */
+    allowsProvider?(name: string): boolean;
   },
   originalProviderName: string,
   identityKey?: string,
 ): { providerName: string; model: string; provider: IAIProvider } | null {
   const originalProvider = canonicalizeProviderName(originalProviderName) ?? originalProviderName;
+  // THE REVIEWER IS WORK TOO. This pool appended everything with a
+  // credential, so the ordinary verifier ran on a provider the operator's
+  // strict chain excludes (Codex 2026-09-12 P#1).
   const candidates = [
     ...(providerManager.listExecutionCandidates?.(identityKey) ?? []),
     ...providerManager.listAvailable(),
-  ];
+  ].filter((candidate) => providerManager.allowsProvider?.(candidate.name) !== false);
   const seen = new Set<string>();
 
   for (const candidate of candidates) {
