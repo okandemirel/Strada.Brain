@@ -51,6 +51,14 @@ export interface ITrigger {
    * hashing metadata.description before onFired judged the PREVIOUS fire).
    */
   previewFireDescription?(now: Date): string;
+  /**
+   * The fire did NOT become work: the submission threw.
+   *
+   * A trigger that CONSUMES something when it fires — a checklist item fires
+   * once — must be able to put it back, or the item is gone and the work
+   * never runs (Codex 2026-09-13 AG#12).
+   */
+  onSubmitFailed?(now: Date): void;
   /** Get the next scheduled fire time (for display) */
   getNextRun(): Date | null;
   /** Get current trigger state */

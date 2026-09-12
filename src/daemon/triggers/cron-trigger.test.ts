@@ -28,6 +28,43 @@ describe("CronTrigger", () => {
     expect(trigger.shouldFire(new Date())).toBe(true);
   });
 
+  /**
+   * Codex round AG#12: the match was against the CURRENT MINUTE alone, so an
+   * evaluation at 02:59:50 and the next at 03:01:10 — a busy foreground, a
+   * restart, a slow tick — skipped "0 3 * * *" entirely and the work never
+   * ran.
+   */
+  it("fires for an occurrence that fell between two looks (Codex 2026-09-13 AG#12)", () => {
+    vi.setSystemTime(new Date("2026-03-09T02:59:00Z"));
+    const trigger = new CronTrigger(metadata, "0 3 * * *", "UTC");
+    // 02:59:50 — not due yet, and this look is remembered.
+    expect(trigger.shouldFire(new Date("2026-03-09T02:59:50Z"))).toBe(false);
+    // 03:01:10 — the 03:00 occurrence is in the past, and nobody looked in it.
+    expect(trigger.shouldFire(new Date("2026-03-09T03:01:10Z"))).toBe(true);
+  });
+
+  it("does not fire for an occurrence that has not happened, nor twice for one", () => {
+    vi.setSystemTime(new Date("2026-03-09T01:00:00Z"));
+    const trigger = new CronTrigger(metadata, "0 3 * * *", "UTC");
+    expect(trigger.shouldFire(new Date("2026-03-09T02:00:00Z"))).toBe(false);
+    expect(trigger.shouldFire(new Date("2026-03-09T02:30:00Z"))).toBe(false);
+    // It fires once for the missed occurrence…
+    expect(trigger.shouldFire(new Date("2026-03-09T03:01:10Z"))).toBe(true);
+    trigger.onFired(new Date("2026-03-09T03:01:10Z"));
+    // …and not again on the next look.
+    expect(trigger.shouldFire(new Date("2026-03-09T03:02:10Z"))).toBe(false);
+  });
+
+  it("a daemon that was down for a week runs the last occurrence, not every one", () => {
+    vi.setSystemTime(new Date("2026-03-01T02:50:00Z"));
+    const trigger = new CronTrigger(metadata, "0 3 * * *", "UTC");
+    expect(trigger.shouldFire(new Date("2026-03-01T03:00:30Z"))).toBe(true);
+    trigger.onFired(new Date("2026-03-01T03:00:30Z"));
+    // Seven days later: one catch-up, bounded by the window.
+    expect(trigger.shouldFire(new Date("2026-03-09T09:00:00Z"))).toBe(false);
+    expect(trigger.shouldFire(new Date("2026-03-10T03:00:20Z"))).toBe(true);
+  });
+
   it("shouldFire returns false when croner does not match", () => {
     // Set time to 10:30 AM -- cron is for 9:00
     vi.setSystemTime(new Date("2026-03-09T10:30:00Z"));

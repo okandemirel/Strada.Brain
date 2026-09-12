@@ -553,4 +553,25 @@ describe("ChecklistTrigger", () => {
 
     expect(trigger.getNextRun()).toBeNull();
   });
+
+  /**
+   * Codex round AG#12, reproduced: an unscheduled checklist item became due,
+   * `onFired()` consumed it, and the task submission threw — the submission
+   * was reported as failed and the item was no longer eligible, so the work
+   * never ran.
+   */
+  it("gives an unscheduled item back when the fire never became work (Codex 2026-09-13 AG#12)", () => {
+    const trigger = new ChecklistTrigger(makeDef([makeItem("Rotate keys")]), "UTC");
+    const now = new Date();
+    expect(trigger.shouldFire(now)).toBe(true);
+    trigger.onFired(now);
+    // Consumed: it fires once.
+    expect(trigger.shouldFire(new Date(now.getTime() + 60_000))).toBe(false);
+
+    trigger.onSubmitFailed(now);
+    expect(trigger.shouldFire(new Date(now.getTime() + 120_000))).toBe(true);
+    // …and a fire that DID become work stays consumed.
+    trigger.onFired(new Date(now.getTime() + 120_000));
+    expect(trigger.shouldFire(new Date(now.getTime() + 180_000))).toBe(false);
+  });
 });

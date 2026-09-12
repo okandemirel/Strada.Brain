@@ -549,13 +549,34 @@ export class HeartbeatLoop {
           // duplicate fires if the next tick runs before submit returns.
           this.activeTriggerTasks.set(name, "pending" as TaskId);
 
-          // Submit task via TaskManager with daemon origin
-          const task = this.taskManager.submit(
-            "daemon",
-            "daemon",
-            trigger.metadata.description,
-            { origin: "daemon", triggerName: name },
-          );
+          // Submit task via TaskManager with daemon origin.
+          // A FIRE THAT NEVER BECAME WORK GIVES BACK WHAT IT CONSUMED: a
+          // checklist item fires once, and a throwing submit left it marked
+          // as done with nothing running (Codex 2026-09-13 AG#12).
+          let task: ReturnType<typeof this.taskManager.submit>;
+          try {
+            task = this.taskManager.submit(
+              "daemon",
+              "daemon",
+              trigger.metadata.description,
+              { origin: "daemon", triggerName: name },
+            );
+          } catch (err) {
+            this.activeTriggerTasks.delete(name);
+            try {
+              trigger.onSubmitFailed?.(now);
+            } catch (restoreErr) {
+              this.logger.warn("A trigger could not take its fire back", {
+                trigger: name,
+                error: String(restoreErr),
+              });
+            }
+            this.logger.error("Trigger fired but its task could not be submitted", {
+              trigger: name,
+              error: err instanceof Error ? err.message : String(err),
+            });
+            continue;
+          }
 
           // Record dedup fire — with this trigger's own cooldown so another
           // trigger's cleanup pass cannot evict it early (audited 2026-09-02)

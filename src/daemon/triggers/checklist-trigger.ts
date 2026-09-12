@@ -125,6 +125,9 @@ export class ChecklistTrigger implements ITrigger {
    * Called after the trigger fires. Records fire time per due item
    * and updates metadata description with the due item list.
    */
+  /** The items the last onFired marked as done, in case it never became work. */
+  private consumedByLastFire: ChecklistItem[] = [];
+
   onFired(now: Date): void {
     const minuteFloor = floorToMinute(now);
 
@@ -144,6 +147,21 @@ export class ChecklistTrigger implements ITrigger {
     if (this.dueItems.length > 0) {
       // Spread keeps cooldownSeconds across the rebuild (audited 2026-09-02)
       this._metadata = { ...this._metadata, description: this.buildSummary() };
+    }
+    // WHAT THIS FIRE CONSUMED, so it can be given back if the fire never
+    // became work (Codex 2026-09-13 AG#12).
+    this.consumedByLastFire = [...this.dueItems];
+  }
+
+  /**
+   * The submission threw: an unscheduled item this fire consumed is due
+   * again. Without this the item was gone — marked fired, never run.
+   */
+  onSubmitFailed(_now: Date): void {
+    for (const item of this.consumedByLastFire) {
+      const idx = this.items.indexOf(item);
+      if (idx !== -1) this.lastFiredMinute.delete(idx);
+      if (!item.schedule) this.lastFiredMinute.delete(item.text);
     }
   }
 
