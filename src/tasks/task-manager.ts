@@ -733,6 +733,29 @@ export class TaskManager extends EventEmitter {
   /**
    * Mark a task as completed with result.
    */
+  /**
+   * Emit a TERMINAL event so one bad listener cannot silence the others.
+   *
+   * EventEmitter calls listeners in order and a throw stops the rest: measured
+   * by review 2026-09-12 (T#9) — a listener that threw after the task was
+   * already stored as completed left every later subscriber with nothing, and
+   * the retry could not help because the terminal guard (rightly) refuses to
+   * write twice. `rawListeners` keeps `once` semantics: the wrapper removes
+   * itself when it runs.
+   */
+  private emitTerminal(event: string, ...args: unknown[]): void {
+    for (const listener of this.rawListeners(event)) {
+      try {
+        (listener as (...a: unknown[]) => void)(...args);
+      } catch (err) {
+        getLogger().error("A task listener threw; the other listeners still ran", {
+          event,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  }
+
   complete(taskId: TaskId, result: string): void {
     // A TERMINAL STATE IS NOT OVERWRITTEN. This wrote and emitted
     // unconditionally, so a completion arriving after a cancel replaced it,
@@ -750,7 +773,7 @@ export class TaskManager extends EventEmitter {
     this.storage.updateResult(taskId, sanitizedResult);
     this.abortControllers.delete(taskId);
     this.liveOrchestrators.delete(taskId); // a completed task is never replayed
-    this.emit("task:completed", taskId, sanitizedResult);
+    this.emitTerminal("task:completed", taskId, sanitizedResult);
     getLogger().info("Task completed", { taskId, resultLength: sanitizedResult.length });
   }
 
@@ -761,7 +784,7 @@ export class TaskManager extends EventEmitter {
     const sanitizedError = sanitizeSecrets(error);
     this.storage.updateError(taskId, sanitizedError);
     this.abortControllers.delete(taskId);
-    this.emit("task:failed", taskId, sanitizedError);
+    this.emitTerminal("task:failed", taskId, sanitizedError);
     getLogger().error("Task failed", { taskId, error: sanitizedError });
   }
 

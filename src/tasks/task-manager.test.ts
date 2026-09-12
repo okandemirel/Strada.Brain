@@ -625,6 +625,49 @@ describe("a task a restart PAUSED can be resumed (measured live 2026-09-11 21:12
   });
 });
 
+describe("one bad listener does not silence the others (Codex 2026-09-12 T#9)", () => {
+  it("delivers the terminal event to every subscriber", () => {
+    const storage = {
+      load: vi.fn().mockReturnValue({ id: "task_l", status: "executing" }),
+      updateResult: vi.fn(),
+      updateError: vi.fn(),
+    } as any;
+    const manager = new TaskManager(storage, {} as any);
+    const heard: string[] = [];
+    manager.on("task:completed", () => { throw new Error("the campaign handler blew up"); });
+    manager.on("task:completed", () => { heard.push("second"); });
+    manager.once("task:completed", () => { heard.push("once"); });
+
+    manager.complete("task_l" as Task["id"], "done");
+
+    // The throw used to stop the rest, and the retry could not help: the task
+    // was already stored as completed, so the terminal guard refused to write
+    // again and the later subscribers never heard anything.
+    expect(heard).toEqual(["second", "once"]);
+
+    // `once` still means once.
+    storage.load.mockReturnValue({ id: "task_l2", status: "executing" });
+    heard.length = 0;
+    manager.complete("task_l2" as Task["id"], "done again");
+    expect(heard).toEqual(["second"]);
+  });
+
+  it("does the same for a failure", () => {
+    const storage = {
+      load: vi.fn().mockReturnValue({ id: "task_f", status: "executing" }),
+      updateError: vi.fn(),
+    } as any;
+    const manager = new TaskManager(storage, {} as any);
+    const heard: string[] = [];
+    manager.on("task:failed", () => { throw new Error("boom"); });
+    manager.on("task:failed", () => { heard.push("second"); });
+
+    manager.fail("task_f" as Task["id"], "it broke");
+
+    expect(heard).toEqual(["second"]);
+  });
+});
+
 describe("settlement is a conditional transition (Codex 2026-09-12 S#3)", () => {
   it("does not overwrite a cancel, and does not complete twice", () => {
     const settled: string[] = [];

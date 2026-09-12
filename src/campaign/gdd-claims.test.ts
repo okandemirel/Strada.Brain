@@ -332,3 +332,32 @@ describe("a shortfall is not a pass, and an outcome must be stated (Codex 2026-0
     })).toEqual([]);
   });
 });
+
+describe("a per-session requirement is measured per session (Codex 2026-09-12 T#7)", () => {
+  it("three 40-second levels satisfy \"each level lasts 30-60 seconds\"", () => {
+    // perf.playSeconds is the WHOLE RUN's play time, so three 40-second levels
+    // measured 120 s against a 60 s ceiling and failed a game that met the
+    // requirement exactly.
+    const claims = extractNumericClaims("The game ships 3 levels. Each level lasts 30-60 seconds with a mandatory timer.").claims;
+    const three = assessNumericClaims(claims, evidence({
+      sessionCount: 3,
+      sessions: [1, 2, 3].map((index) => ({ index, outcome: "Won", actions: 5, seconds: 40 })),
+      perf: { medium: "playmode", bootSeconds: 1, playSeconds: 120, playFrames: 600, avgFps: 60, worstFrameMs: 20 },
+    }));
+    const length = three.find((x) => x.claim.kind === "session_seconds")!;
+    expect(length.status).toBe("met");
+    expect(length.note).toContain("3 session(s) reached an outcome");
+
+    // …and a level that really does run long is still not met.
+    const long = assessNumericClaims(claims, evidence({
+      sessionCount: 3,
+      sessions: [
+        { index: 1, outcome: "Won", actions: 5, seconds: 40 },
+        { index: 2, outcome: "Won", actions: 5, seconds: 95 },
+        { index: 3, outcome: "Won", actions: 5, seconds: 40 },
+      ],
+      perf: { medium: "playmode", bootSeconds: 1, playSeconds: 175, playFrames: 600, avgFps: 60, worstFrameMs: 20 },
+    }));
+    expect(long.find((x) => x.claim.kind === "session_seconds")!.status).toBe("not_met");
+  });
+});

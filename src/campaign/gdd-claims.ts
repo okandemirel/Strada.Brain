@@ -296,12 +296,28 @@ export function assessNumericClaims(
         if (!perf || playthrough.ok !== true || !playthrough.outcome || playthrough.outcome === "None") {
           return { claim, status: "unmeasured", note: "the session never reached an outcome, so its length is unknown", blocking: false };
         }
-        const met = claim.comparator === "min" ? perf.playSeconds >= claim.value : perf.playSeconds <= claim.value;
+        // PER SESSION, when the run played more than one. `perf.playSeconds`
+        // is the whole run's play time, so three 40-second levels measured 120
+        // seconds against "each level lasts 30–60 s" and failed a game that
+        // met the requirement exactly (Codex 2026-09-12 T#7). An aggregate
+        // number answers only a single-session run.
+        const perSession = (playthrough.sessions ?? [])
+          .filter((x) => x.outcome !== "None" && x.outcome !== "Refused")
+          .map((x) => x.seconds)
+          .filter((x): x is number => typeof x === "number" && Number.isFinite(x) && x > 0);
+        const holds = (seconds: number): boolean =>
+          claim.comparator === "min" ? seconds >= claim.value : seconds <= claim.value;
+        const met = perSession.length > 1 ? perSession.every(holds) : holds(perf.playSeconds);
+        const measured = perSession.length > 1
+          ? Number(Math.max(...perSession).toFixed(1))
+          : Number(perf.playSeconds.toFixed(1));
         return {
           claim,
           status: met ? "met" : "not_met",
-          measured: Number(perf.playSeconds.toFixed(1)),
-          note: `session ${playthrough.session ?? "?"} reached ${playthrough.outcome} after ${perf.playSeconds.toFixed(1)} s of driven play (${medium})`,
+          measured,
+          note: perSession.length > 1
+            ? `${perSession.length} session(s) reached an outcome, each ${Math.min(...perSession).toFixed(1)}–${Math.max(...perSession).toFixed(1)} s of driven play (${medium})`
+            : `session ${playthrough.session ?? "?"} reached ${playthrough.outcome} after ${perf.playSeconds.toFixed(1)} s of driven play (${medium})`,
           // A driven play-through is faster than a person's, so a range's floor
           // is disclosed — UNLESS the document makes it mandatory (an
           // unskippable timer is wall-clock, not skill; Codex 2026-09-11 C#24).
