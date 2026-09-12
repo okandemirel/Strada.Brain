@@ -10,6 +10,8 @@ import type {
 } from "./completion-review.js";
 import {
   collectCompletionReviewEvidence,
+  isVerificationStep,
+  MUTATION_TOOL_NAMES,
   shouldRunCompletionReview,
 } from "./completion-review.js";
 import type { VerificationState } from "./self-verification.js";
@@ -414,10 +416,20 @@ export function collectVerifierPipelineEvidence(params: {
   draft: string;
   conformanceGate: string | null;
 }): VerifierPipelineEvidence {
-  // Detect consecutive same errors
-  const recentFailureSteps = params.state.stepResults
-    .filter(s => !s.success)
-    .slice(-5);
+  // Detect consecutive same errors — SINCE THE LAST REPAIR. Successful steps
+  // were filtered out before the streak was counted, so three identical
+  // compile failures followed by a corrective write and a clean compile still
+  // read as "the same error three times, the approach is not working" and the
+  // finished repair was sent back for a replan (Codex 2026-09-12 AE#7). A
+  // successful change or verification ENDS the streak; a successful read
+  // between two identical failures does not, because it repaired nothing.
+  const sinceRepair: Array<(typeof params.state.stepResults)[number]> = [];
+  for (let i = params.state.stepResults.length - 1; i >= 0; i--) {
+    const step = params.state.stepResults[i]!;
+    if (step.success && (MUTATION_TOOL_NAMES.has(step.toolName) || isVerificationStep(step.toolName, step.summary))) break;
+    if (!step.success) sinceRepair.unshift(step);
+  }
+  const recentFailureSteps = sinceRepair.slice(-5);
 
   let consecutiveSameErrors = 0;
   let repeatedErrorSignature: string | null = null;

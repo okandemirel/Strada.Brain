@@ -549,5 +549,47 @@ describe("the play rung: a tree that compiles but cannot be played is red of its
     expect(blind.submitted).toHaveLength(0);
     expect(g2.snapshot().lastPlayVerdict).toBe("blind");
   });
+
+  /**
+   * Codex round AE#12, reproduced: the first play attempt returned
+   * `ran: false`, the tool then recovered, and no project write followed. The
+   * play rung stayed "blind" through three hourly ticks with the play
+   * function called exactly once — `playDirty` was cleared before the attempt
+   * and restored by nothing.
+   */
+  it("keeps play verification pending when an attempt measured NOTHING (Codex 2026-09-12 AE#12)", async () => {
+    const { manager, submitted } = makeTaskManager();
+    let now = 1_000_000;
+    const play = vi.fn()
+      .mockResolvedValueOnce({ ok: true, ran: false, detail: "unity_playthrough is not registered" })
+      .mockRejectedValueOnce(new Error("the editor went away mid-run"))
+      .mockResolvedValue({ ok: true, ran: true, detail: "PLAY-THROUGH OK" });
+    const guardian = new RealTreeGuardian({
+      taskManager: manager as unknown as TaskManager,
+      verify: vi.fn().mockResolvedValue({ ok: true, ran: true, detail: "compile succeeded" }),
+      play,
+      projectRoot: "/p",
+      now: () => now,
+    });
+
+    await guardian.tick();
+    expect(guardian.snapshot().lastPlayVerdict).toBe("blind");
+    // The tool recovers; nothing is written to the project.
+    now += 60 * 60_000;
+    await guardian.tick();
+    expect(play).toHaveBeenCalledTimes(2); // it tried again
+    expect(guardian.snapshot().lastPlayVerdict).toBe("blind"); // …and it threw
+    now += 60 * 60_000;
+    await guardian.tick();
+    expect(play).toHaveBeenCalledTimes(3);
+    expect(guardian.snapshot().lastPlayVerdict).toBe("ok");
+    expect(submitted).toHaveLength(0);
+
+    // …and a CONCLUSIVE observation still settles it: no further attempt
+    // until something changes.
+    now += 60 * 60_000;
+    await guardian.tick();
+    expect(play).toHaveBeenCalledTimes(3);
+  });
 });
 

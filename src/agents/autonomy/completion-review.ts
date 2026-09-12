@@ -60,7 +60,7 @@ const INSPECTION_TOOL_NAMES = new Set([
   "strada_analyze_project",
 ]);
 
-const MUTATION_TOOL_NAMES = new Set([
+export const MUTATION_TOOL_NAMES = new Set([
   "file_write",
   "file_edit",
   "file_manage",
@@ -387,7 +387,7 @@ export function userExplicitlyAskedForCompletionReview(prompt: string): boolean 
   return EXPLICIT_COMPLETION_REVIEW_REQUEST_RE.test(prompt.trim());
 }
 
-function isVerificationStep(toolName: string, summary: string): boolean {
+export function isVerificationStep(toolName: string, summary: string): boolean {
   if (toolName === "shell_exec") {
     return /\b(?:test|build|check|lint|typecheck|verify|compile|tsc|eslint|vitest|jest|pytest)\b/iu.test(summary);
   }

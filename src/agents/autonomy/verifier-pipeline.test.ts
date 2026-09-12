@@ -716,3 +716,62 @@ describe("a completion claim needs work behind it, at every door (Codex 2026-09-
     expect(second.summary).toContain("honest terminal failure report");
   });
 });
+
+/**
+ * Codex round AE#7, reproduced: three identical compile failures, then a
+ * corrective write, then a successful compile. The streak was counted over
+ * FAILURES ONLY — successes were filtered out first — so the finished repair
+ * was answered with "Same error repeated 3 times, current approach is not
+ * working" and sent back for a replan.
+ */
+describe("a repair ends the streak (Codex 2026-09-12 AE#7)", () => {
+  const failure = (n: number) => ({
+    toolName: "unity_compile_status",
+    success: false,
+    summary: "error CS0101: the namespace already contains a definition",
+    timestamp: 1_000 + n,
+  });
+
+  const planFor = (stepResults: Array<Record<string, unknown>>) =>
+    planVerifierPipeline({
+      prompt: "Fix the duplicate definition",
+      draft: "Fixed the duplicate definition and the project compiles.\nDONE",
+      state: createState({ stepResults: stepResults as never }),
+      task: DEBUG_TASK,
+      verificationState: {
+        pendingFiles: new Set<string>(),
+        touchedFiles: new Set(["Assets/Rules.cs"]),
+        hasCompilableChanges: false,
+        lastBuildOk: true,
+        lastVerificationAt: Date.now(),
+      },
+      buildVerificationGate: null,
+      conformanceGate: null,
+      logEntries: [],
+      chatId: "chat-ae7",
+      taskStartedAtMs: Date.now() - 1000,
+    });
+
+  it("does not demand a replan after the error was repaired and the repair verified", () => {
+    const plan = planFor([
+      failure(1), failure(2), failure(3),
+      { toolName: "file_write", success: true, summary: "wrote Assets/Rules.cs", timestamp: 2_000 },
+      { toolName: "unity_compile_status", success: true, summary: "compile succeeded, 0 errors", timestamp: 2_100 },
+    ]);
+    expect(plan.initialDecision).not.toBe("replan");
+    expect(plan.checks.find((c) => c.name === "same-error-repeat")).toBeUndefined();
+  });
+
+  it("still demands one while the SAME error is all that has happened", () => {
+    const plan = planFor([failure(1), failure(2), failure(3)]);
+    expect(plan.initialDecision).toBe("replan");
+    expect(plan.gate ?? "").toContain("REPEATED ERROR DETECTED");
+    // …and a successful READ between two of them repairs nothing.
+    const withRead = planFor([
+      failure(1),
+      { toolName: "file_read", success: true, summary: "read Assets/Rules.cs", timestamp: 1_500 },
+      failure(2), failure(3),
+    ]);
+    expect(withRead.initialDecision).toBe("replan");
+  });
+});

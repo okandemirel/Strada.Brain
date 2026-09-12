@@ -574,9 +574,26 @@ export class RealTreeGuardian {
     const now = this.now();
     if (this.lastPlayedAt > 0 && now - this.lastPlayedAt < PLAY_MIN_INTERVAL_MS) return;
     this.lastPlayedAt = now;
+    // THE OBLIGATION SURVIVES AN ATTEMPT THAT MEASURED NOTHING. `playDirty`
+    // was cleared before the attempt and restored by nothing, so one
+    // transiently unavailable play-through (or one that threw) ended play
+    // checks for good: the tool recovered, no project write followed, and
+    // three hourly ticks later the play rung was still "blind" with the
+    // function called exactly once (Codex 2026-09-12 AE#12). Only a
+    // CONCLUSIVE observation clears it; the interval above bounds the retry.
     this.playDirty = false;
-    const verdict = await this.play(this.projectRoot);
+    let verdict: { ran?: boolean; ok?: boolean; detail: string };
+    try {
+      verdict = await this.play(this.projectRoot);
+    } catch (err) {
+      this.playDirty = true;
+      this.lastPlayVerdict = "blind";
+      this.lastPlayDetail = (err instanceof Error ? err.message : String(err)).slice(0, 300);
+      getLoggerSafe().warn("Real-tree guardian: the play-through threw", { detail: this.lastPlayDetail });
+      return;
+    }
     if (verdict.ran === false) {
+      this.playDirty = true;
       this.lastPlayVerdict = "blind";
       this.lastPlayDetail = verdict.detail.slice(0, 300);
       getLoggerSafe().warn("Real-tree guardian: play-through could not run", { detail: this.lastPlayDetail });
