@@ -779,8 +779,22 @@ describe("how long a run may keep playing one session (Codex 2026-09-12 AB)", ()
         "Session length\nLevels of 1–4 minutes; ~10 sessions and ~60 minutes of play per DAU per day",
       ),
     ).toBe(240);
-    // …and an explicitly enormous figure is bounded.
-    expect(extractSessionAllowanceSeconds("Median level duration\n45 minutes")).toBe(MAX_SESSION_ALLOWANCE_SECONDS);
+    // …and an explicitly enormous figure is bounded — by what ONE RUN may
+    // spend on ONE session, not by a judgement about how long a game may be.
+    expect(extractSessionAllowanceSeconds("Median level duration\n90 minutes")).toBe(MAX_SESSION_ALLOWANCE_SECONDS);
+    // A LEGAL LONG SESSION IS NOT CUT SHORT: a 30-minute round is a game
+    // design, and the ten-minute ceiling made its play-through unfinishable
+    // (Codex 2026-09-13 AF#13).
+    expect(extractSessionAllowanceSeconds("Median level duration\n30 min")).toBe(1800);
+  });
+
+  it("reads the value across blank lines and every mode the label covers (Codex 2026-09-13 AF#13)", () => {
+    // A converter that leaves two blank lines hid the value entirely, and a
+    // semicolon between difficulty modes lost the longer one.
+    expect(extractSessionAllowanceSeconds("Median level duration\n\n\n60–150 s")).toBe(150);
+    expect(extractSessionAllowanceSeconds("Median level duration\n60–150 s (Normal); 150–300 s (Hard)")).toBe(300);
+    // …while a clause that changes the subject is still not a session length.
+    expect(extractSessionAllowanceSeconds("Session length\n1–4 minutes; ~60 minutes of play per day")).toBe(240);
   });
 
   it("is not a claim: nothing is judged against it", () => {
@@ -817,16 +831,26 @@ describe("a platform's budget, and a session that took no time (Codex 2026-09-12
     expect(onWindows[0]!.blocking).toBe(true);
   });
 
-  it("still judges a boot time the editor measured, exactly as before", () => {
-    // No player carried a boot time, so the editor's stands — the platform
-    // question is about where a measurement was TAKEN, and there is no player
-    // here to take it anywhere.
+  it("does not answer a PLATFORM's budget with an editor measurement (Codex 2026-09-13 AF#7)", () => {
+    // An editor boot of 1.2 s passed BOTH "under 2 s on Windows" and "under
+    // 6 s on Android" while no player had been booted at all. The editor is
+    // not a platform.
     const claims = extractNumericClaims(GDD_BOOT).claims.filter((c) => c.kind === "boot_seconds");
     const editorOnly = assessNumericClaims(claims, evidence({ perf: { medium: "editor-playmode-batch", bootSeconds: 1.2, playSeconds: 10, playFrames: 600, avgFps: 30, worstFrameMs: 40 } }), undefined, {
       platform: gddPlatform(GDD_BOOT),
       builtTarget: "Android",
     });
-    expect(editorOnly.map((a) => a.status)).toEqual(["met", "met"]);
+    expect(editorOnly.map((a) => a.status)).toEqual(["unmeasured", "unmeasured"]);
+    expect(editorOnly.every((a) => a.blocking === false)).toBe(true);
+    // …and a slow editor boot is not a platform FAILURE either.
+    const slow = assessNumericClaims(claims, evidence({ perf: { medium: "editor-playmode-batch", bootSeconds: 4, playSeconds: 10, playFrames: 600, avgFps: 30, worstFrameMs: 40 } }), undefined, {
+      platform: gddPlatform(GDD_BOOT),
+      builtTarget: "Android",
+    });
+    expect(slow.map((a) => a.status)).toEqual(["unmeasured", "unmeasured"]);
+    // A budget that names NO platform is still answered by the editor.
+    const plain = extractNumericClaims("The game must load in under 3 seconds.").claims;
+    expect(assessNumericClaims(plain, evidence({ perf: { medium: "editor-playmode-batch", bootSeconds: 1.2, playSeconds: 10, playFrames: 600, avgFps: 30, worstFrameMs: 40 } }))[0]!.status).toBe("met");
   });
 
   it("ends a clause at a semicolon with no space after it", () => {
@@ -886,6 +910,9 @@ describe("a platform's budget, and a session that took no time (Codex 2026-09-12
     expect(both.note).toContain("2 session(s)");
     // A session NOBODY TIMED is unknown, not zero: the timed one still holds
     // the floor and the untimed one is disclosed rather than judged.
+    // A session NOBODY TIMED leaves the requirement UNMEASURED: "each round"
+    // is not answered by the rounds that happen to carry a clock (Codex
+    // 2026-09-13 AF#7).
     const untimed = assessNumericClaims(
       claims,
       evidence({
@@ -893,7 +920,17 @@ describe("a platform's budget, and a session that took no time (Codex 2026-09-12
         perf: { medium: "editor-playmode-batch", bootSeconds: 1, playSeconds: 30, playFrames: 600, avgFps: 30, worstFrameMs: 40 },
       }),
     )[0]!;
-    expect(untimed.status).toBe("met");
+    expect(untimed.status).toBe("unmeasured");
     expect(untimed.note).toContain("1 further session(s) carry no clock");
+    // …and a timed session that BREAKS the floor still fails, untimed
+    // siblings or not.
+    const broken = assessNumericClaims(
+      claims,
+      evidence({
+        sessions: [{ index: 1, outcome: "Won", actions: 9 }, { index: 2, outcome: "Won", actions: 9, seconds: 5 }],
+        perf: { medium: "editor-playmode-batch", bootSeconds: 1, playSeconds: 5, playFrames: 600, avgFps: 30, worstFrameMs: 40 },
+      }),
+    )[0]!;
+    expect(broken.status).toBe("not_met");
   });
 });

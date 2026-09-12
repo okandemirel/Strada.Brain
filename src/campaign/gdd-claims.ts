@@ -422,8 +422,14 @@ const DURATION_LABEL_RE =
 const DURATION_VALUE_RE =
   /(\d+(?:\.\d+)?)\s*(?:[-–~]|to)\s*(\d+(?:\.\d+)?)\s*(ms|s|secs?|seconds?|min(?:ute)?s?)\b|(\d+(?:\.\d+)?)\s*(ms|s|secs?|seconds?|min(?:ute)?s?)\b/gi;
 
-/** The longest per-session allowance any document may ask a run for. */
-export const MAX_SESSION_ALLOWANCE_SECONDS = 600;
+/**
+ * The longest ONE RUN may spend on ONE session, whatever the document says.
+ *
+ * Not a statement about how long a game's sessions may be: it bounds the
+ * run's own budget so a figure about a day or a week cannot turn one
+ * play-through into an afternoon (Codex 2026-09-13 AF#13).
+ */
+export const MAX_SESSION_ALLOWANCE_SECONDS = 3600;
 
 export function extractSessionAllowanceSeconds(gddText: string): number | undefined {
   const text = gddText ?? "";
@@ -441,8 +447,26 @@ export function extractSessionAllowanceSeconds(gddText: string): number | undefi
     // minutes; ~10 sessions and ~60 minutes of play per DAU per day" gave an
     // hour-long session allowance, because the sentence goes on to talk about
     // a DAY (measured on the vehicle's document).
-    const clauseOf = (line: string): string => line.split(";")[0] ?? line;
-    for (const candidate of [clauseOf(lines[i] ?? ""), clauseOf(lines[i + 1] ?? ""), clauseOf(lines[i + 2] ?? "")]) {
+    // …AND EVERY CLAUSE THAT IS STILL ABOUT A SESSION. "60–150 s (Normal);
+    // 150–300 s (Hard)" lost Hard mode to the first semicolon, so the run cut
+    // a legal 300-second round short (Codex 2026-09-13 AF#13). A clause that
+    // changes the subject — to a DAY, a WEEK, a SITTING — ends the read.
+    const OTHER_SUBJECT_RE = /\b(?:per\s+(?:day|week|month|dau|user|player)|daily|weekly|sitting|session\s+count|retention)\b/i;
+    const clauseOf = (line: string): string =>
+      line
+        .split(";")
+        .reduce<string[]>((kept, clause) => (OTHER_SUBJECT_RE.test(clause) ? kept : [...kept, clause]), [])
+        .join(";");
+    // A LABEL AND ITS VALUE MAY BE SEPARATED BY BLANK LINES: a converter that
+    // leaves two of them hid the value entirely (AF#13).
+    const nearby: string[] = [];
+    for (let j = i, seen = 0; j < lines.length && seen < 3; j++) {
+      const line = lines[j] ?? "";
+      if (j > i && line.trim() === "") continue;
+      nearby.push(clauseOf(line));
+      seen += 1;
+    }
+    for (const candidate of nearby) {
       DURATION_VALUE_RE.lastIndex = 0;
       let m: RegExpExecArray | null;
       let found = false;
@@ -457,9 +481,11 @@ export function extractSessionAllowanceSeconds(gddText: string): number | undefi
       if (found) break;
     }
   }
-  // A SESSION IS NOT A SITTING. Ten minutes is already generous for one
-  // session of any game this framework builds, and a stray figure about a day
-  // must not let one run keep playing for an hour.
+  // A SESSION IS NOT A SITTING: a stray figure about a DAY must not let one
+  // run keep playing for hours. The bound is about what ONE RUN may spend on
+  // ONE session, not about how long a game may be — a ten-minute ceiling was
+  // a judgement about the games this framework builds, and it cut a legal
+  // 30-minute session short (Codex 2026-09-13 AF#13).
   const bounded = Math.min(longest, MAX_SESSION_ALLOWANCE_SECONDS);
   return bounded > 0 ? bounded : undefined;
 }
@@ -555,9 +581,15 @@ export function assessNumericClaims(
   // measurement taken where the claim is not about answers "unmeasured for
   // this target", never "not met".
   const wrongPlatform = (text: string, fromPlayer: boolean): GddPlatform | undefined => {
-    if (!fromPlayer || !opts) return undefined;
-    const scope = platformOfClaim(text) ?? opts.platform;
+    if (!opts) return undefined;
+    const named = platformOfClaim(text);
+    const scope = named ?? opts.platform;
     if (!scope) return undefined;
+    // THE EDITOR IS NOT A PLATFORM. A clause that names one is not answered
+    // by a measurement taken in the editor: an editor boot of 1.2 s passed
+    // BOTH "under 2 s on Windows" and "under 6 s on Android" while no player
+    // had been booted at all (Codex 2026-09-13 AF#7).
+    if (!fromPlayer) return named ?? undefined;
     return frameRateAnswersPlatform(scope, opts.builtTarget) ? undefined : scope;
   };
   const builtFor = (): string => `a player built for ${opts?.builtTarget ?? "the project's own target"}`;
@@ -706,6 +738,21 @@ export function assessNumericClaims(
           ? Number(Math.max(...perSession).toFixed(1))
           : Number(timedPerf.playSeconds.toFixed(1));
         const partly = untimed > 0 ? ` — ${untimed} further session(s) carry no clock, so this covers only what was timed` : "";
+        // A REQUIREMENT ABOUT EVERY SESSION IS NOT MET BY THE TIMED ONES. A
+        // run of [30 s, no clock] was reported MET against "each round must
+        // last at least 30 seconds" with the gap merely noted (Codex
+        // 2026-09-13 AF#7): what is unknown is unmeasured, not met.
+        if (untimed > 0 && met) {
+          return {
+            claim,
+            status: "unmeasured",
+            measured,
+            note:
+              `${perSession.length} session(s) held the requirement${partly} — the untimed ones cannot be judged, so ` +
+              "the game is not measured against this requirement yet",
+            blocking: false,
+          };
+        }
         return {
           claim,
           status: met ? "met" : "not_met",

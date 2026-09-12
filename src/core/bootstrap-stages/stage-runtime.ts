@@ -540,40 +540,7 @@ export async function initializeTaskRuntimeStage(
           return { ok: result.isError !== true, ran: true, detail };
         },
         // The play rung: unity_playthrough on the real tree once it compiles.
-        // Its verdict rides in a fenced JSON block at the end of the content;
-        // `ok` there is the measurement, the prose above it is for people.
-        play: async (projectRoot) => {
-          if (!registry.getAvailableToolNames().includes("unity_playthrough")) {
-            return { ok: true, ran: false, detail: "unity_playthrough is not registered — the play rung is skipped" };
-          }
-          const result = await registry.execute(
-            "unity_playthrough",
-            {},
-            {
-              projectPath: projectRoot,
-              workingDirectory: projectRoot,
-              readOnly: false,
-            } as import("../../agents/tools/tool-core.interface.js").ToolContext,
-          );
-          const detail = String(result.content ?? "");
-          const fenced = /```json\s*\n([\s\S]*?)\n```/.exec(detail)?.[1];
-          if (!fenced) {
-            // No verdict block at all: the editor did not run, or the tool
-            // refused before playing. Not a measurement of the game.
-            return { ok: true, ran: false, detail: detail.slice(0, 1500) };
-          }
-          try {
-            const verdict = JSON.parse(fenced) as { ok?: unknown; reasons?: unknown };
-            const reasons = Array.isArray(verdict.reasons) ? verdict.reasons.map(String) : [];
-            return {
-              ok: verdict.ok === true,
-              ran: true,
-              detail: verdict.ok === true ? detail.slice(0, 600) : `${reasons.join("; ")}\n\n${detail.slice(0, 1200)}`,
-            };
-          } catch {
-            return { ok: true, ran: false, detail: detail.slice(0, 1500) };
-          }
-        },
+        play: makeGuardianPlay(registry),
         messenger: async (chatId, text) => {
           // Guardian notices need a human. Its own chatId defaults to
           // "cli-local", which on a non-CLI channel is a chat nobody reads —
@@ -1159,4 +1126,77 @@ export function parsePlayerBuildOutput(content: string): import("../../campaign/
     detail: content.split("\n")[0]?.slice(0, 200),
     measuredAt: str(parsed.measuredAt),
   };
+}
+
+/**
+ * The guardian's play rung: unity_playthrough on the real tree.
+ *
+ * Its verdict rides in a fenced JSON block at the end of the content; `ok`
+ * there is the measurement, the prose above it is for people. Exported so the
+ * interpretation itself can be tested — it used to accept a fenced
+ * `{"ok":true}` with the tool's error flag set and no record of play at all
+ * (Codex 2026-09-13 AF#9).
+ */
+export function makeGuardianPlay(
+  registry: { getAvailableToolNames(): string[]; execute(name: string, input: Record<string, unknown>, ctx: unknown): Promise<{ content?: unknown; isError?: boolean }> },
+): (projectRoot: string) => Promise<{ ok: boolean; ran: boolean; detail: string }> {
+  return async (projectRoot: string) => {
+  if (!registry.getAvailableToolNames().includes("unity_playthrough")) {
+    return { ok: true, ran: false, detail: "unity_playthrough is not registered — the play rung is skipped" };
+  }
+  const result = await registry.execute(
+    "unity_playthrough",
+    {},
+    {
+      projectPath: projectRoot,
+      workingDirectory: projectRoot,
+      readOnly: false,
+    } as import("../../agents/tools/tool-core.interface.js").ToolContext,
+  );
+  const detail = String(result.content ?? "");
+  const fenced = /```json\s*\n([\s\S]*?)\n```/.exec(detail)?.[1];
+  if (!fenced) {
+    // No verdict block at all: the editor did not run, or the tool
+    // refused before playing. Not a measurement of the game.
+    return { ok: true, ran: false, detail: detail.slice(0, 1500) };
+  }
+  try {
+    const verdict = JSON.parse(fenced) as {
+      ok?: unknown;
+      reasons?: unknown;
+      record?: { session?: unknown; actions?: unknown; outcome?: unknown; sessions?: unknown };
+    };
+    const reasons = Array.isArray(verdict.reasons) ? verdict.reasons.map(String) : [];
+    // A VERDICT IS A RECORD OF PLAY, not the word "ok". A fenced
+    // `{"ok":true}` — with the tool's own error flag set, no session,
+    // no action and no outcome — was accepted as a played game, and
+    // the guardian then cleared its play obligation (Codex
+    // 2026-09-13 AF#9). A block with nothing in it measured nothing:
+    // that is "did not run", so the rung stays pending instead of
+    // becoming a game failure that provokes repairs.
+    const record = verdict.record;
+    const sessions = Array.isArray(record?.sessions) ? record.sessions : [];
+    const played =
+      sessions.length > 0
+      || (typeof record?.actions === "number" && record.actions > 0)
+      || (typeof record?.outcome === "string" && record.outcome.trim() !== "");
+    if (!played) {
+      return {
+        ok: true,
+        ran: false,
+        detail: `the play-through verdict carries no record of play (no session, action or outcome)\n\n${detail.slice(0, 1200)}`,
+      };
+    }
+    // THE TOOL'S OWN ERROR FLAG COUNTS: a producer that reports an
+    // error and "ok" at once has not played the game cleanly.
+    const ok = verdict.ok === true && result.isError !== true;
+    return {
+      ok,
+      ran: true,
+      detail: ok ? detail.slice(0, 600) : `${reasons.join("; ")}\n\n${detail.slice(0, 1200)}`,
+    };
+  } catch {
+    return { ok: true, ran: false, detail: detail.slice(0, 1500) };
+  }
+};
 }

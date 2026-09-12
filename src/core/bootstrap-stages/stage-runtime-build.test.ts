@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { chmodSync, mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parsePlayerBuildOutput, makeRunPlayer, makeVerifyCompile, looksLikePlayer } from "./stage-runtime.js";
+import { parsePlayerBuildOutput, makeRunPlayer, makeVerifyCompile, makeGuardianPlay, looksLikePlayer } from "./stage-runtime.js";
 
 const artifactDir = mkdtempSync(join(tmpdir(), "build-artifact-"));
 // A REAL StandaloneOSX artifact: .app is a bundle DIRECTORY holding Contents,
@@ -450,5 +450,48 @@ describe("a refusal survives the message length", () => {
     } as never);
 
     await expect(runPlayer("/p", deep)).rejects.toThrow(/is not a player this machine can run/);
+  });
+});
+
+/**
+ * Codex round AF#9, reproduced against the production adapter: a fenced
+ * `{"ok":true}` with the tool's error flag set and no session, action or
+ * outcome was returned as `{ok: true, ran: true}` — a played game. The
+ * guardian then cleared its play obligation and recorded "ok".
+ */
+describe("makeGuardianPlay — a verdict is a record of play (Codex 2026-09-13 AF#9)", () => {
+  const fence = (verdict: unknown): string => `Play-through report\n\n\`\`\`json\n${JSON.stringify(verdict)}\n\`\`\``;
+  const registry = (result: { content?: unknown; isError?: boolean }, names = ["unity_playthrough"]) => ({
+    getAvailableToolNames: () => names,
+    execute: async () => result,
+  });
+
+  it("does not accept an empty verdict as a played game", async () => {
+    const bare = await makeGuardianPlay(registry({ content: fence({ ok: true }), isError: true }))("/p");
+    expect(bare.ran).toBe(false);
+    expect(bare.detail).toContain("no record of play");
+    // …and `{}` is not a game FAILURE either: nothing was measured, so the
+    // rung stays pending instead of provoking repairs.
+    const empty = await makeGuardianPlay(registry({ content: fence({}) }))("/p");
+    expect(empty.ran).toBe(false);
+  });
+
+  it("accepts a record with play in it, and honours the tool's own error flag", async () => {
+    const record = { session: 1, actions: 12, outcome: "Won", sessions: [{ index: 1, outcome: "Won", actions: 12 }] };
+    const good = await makeGuardianPlay(registry({ content: fence({ ok: true, reasons: [], record }) }))("/p");
+    expect(good).toMatchObject({ ok: true, ran: true });
+
+    const flagged = await makeGuardianPlay(registry({ content: fence({ ok: true, reasons: [], record }), isError: true }))("/p");
+    expect(flagged).toMatchObject({ ok: false, ran: true });
+
+    const refused = await makeGuardianPlay(registry({ content: fence({ ok: false, reasons: ["session 1 never ended"], record }) }))("/p");
+    expect(refused).toMatchObject({ ok: false, ran: true });
+    expect(refused.detail).toContain("session 1 never ended");
+  });
+
+  it("says the rung was skipped when the tool is not registered", async () => {
+    const skipped = await makeGuardianPlay(registry({}, []))("/p");
+    expect(skipped).toMatchObject({ ran: false });
+    expect(skipped.detail).toContain("not registered");
   });
 });
