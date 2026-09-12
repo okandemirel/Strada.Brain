@@ -202,6 +202,23 @@ describe("a session record that omits its fields keeps them omitted (Codex 2026-
     expect(parsed.sessions?.[0]?.actions).toBeUndefined();
     expect(parsed.sessions?.[1]).toEqual({ index: 1, outcome: "Won", actions: 4, seconds: 2 });
 
+    // …AND CARRIES THE RUNNER'S OWN FINGERPRINT of what loaded, which is how
+    // three "verified" sessions of one level are caught (Codex 2026-09-13
+    // AG#1).
+    write({
+      ...ok,
+      record: {
+        ...ok.record, sessionCount: 2,
+        sessions: [
+          { index: 1, outcome: "Won", actions: 4, seconds: 5, contentFingerprint: "aaa-3-7" },
+          { index: 2, outcome: "Won", actions: 4, seconds: 5 },
+        ],
+      },
+    });
+    const prints = readPlaythroughVerdict(root, 0);
+    expect(prints.sessions?.[0]?.contentFingerprint).toBe("aaa-3-7");
+    expect(prints.sessions?.[1]?.contentFingerprint).toBeUndefined();
+
     // …AND DOES NOT INVENT A ZERO-SECOND SESSION. A record with no clock and
     // a record of a session that lasted no time both arrived as 0, so a
     // duration floor could neither fail the one nor disclose the other

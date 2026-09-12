@@ -521,11 +521,20 @@ export function finishedSessionIndices(
       reachedOutcome?: boolean;
       identityVerified?: boolean;
       observedIndex?: number;
+      contentFingerprint?: string;
     }>;
   } | undefined,
 ): number[] {
   const catalog = playthrough?.sessionCount ?? 0;
   const seen = new Set<number>();
+  // DISTINCT CONTENT MUST LOOK DISTINCT. A catalogue reporting three levels,
+  // a StartSession that always loads the first, and an ActiveSession echoing
+  // the request gave three "verified" sessions of ONE level — every identity
+  // claim in that chain comes from the implementation under test (Codex
+  // 2026-09-13 AG#1). The runner's own fingerprint of what loaded is
+  // something else, and two sessions that rendered the same thing are one
+  // level played twice.
+  const fingerprintOwner = new Map<string, number>();
   for (const session of playthrough?.sessions ?? []) {
     // AN OUTCOME IT REACHED, stated. Excluding only "None" and "Refused" let a
     // record with no outcome at all — an empty string, a missing field — count
@@ -553,6 +562,14 @@ export function finishedSessionIndices(
     if (outcome === "" || outcome === "None" || outcome === "Refused") continue;
     if (!Number.isInteger(session.index) || session.index! < 1 || session.index! > Math.max(catalog, 1)) continue;
     if (!Number.isInteger(session.actions) || session.actions! <= 0) continue;
+    const fingerprint = session.contentFingerprint;
+    if (typeof fingerprint === "string" && fingerprint !== "") {
+      const owner = fingerprintOwner.get(fingerprint);
+      // The first session with a fingerprint keeps it; a later session that
+      // rendered exactly the same thing certifies no second level.
+      if (owner !== undefined && owner !== session.index) continue;
+      fingerprintOwner.set(fingerprint, session.index!);
+    }
     seen.add(session.index!);
   }
   return [...seen].sort((a, b) => a - b);

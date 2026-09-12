@@ -986,3 +986,42 @@ describe("does the document require an outcome (Codex 2026-09-13 AG#3)", () => {
     expect(documentRequiresAnOutcome("Story mode has a win condition. Endless mode never ends.")).toBe(false);
   });
 });
+
+/**
+ * Codex round AG#1, reproduced end to end: a catalogue reporting three levels,
+ * a StartSession that always loads the first, and an ActiveSession echoing the
+ * request produced three `identityVerified: true` records and the sentence
+ * "GDD level count = 3: MET". Every identity in that chain comes from the
+ * implementation under test.
+ */
+describe("distinct content must LOOK distinct (Codex 2026-09-13 AG#1)", () => {
+  const played = (index: number, contentFingerprint?: string) => ({
+    index,
+    outcome: "Won",
+    actions: 12,
+    reachedOutcome: true,
+    identityVerified: true,
+    observedIndex: index,
+    ...(contentFingerprint === undefined ? {} : { contentFingerprint }),
+  });
+
+  it("counts one level when three sessions rendered the same thing", () => {
+    expect(
+      finishedSessionIndices({ sessionCount: 3, sessions: [played(1, "abc-3-7"), played(2, "abc-3-7"), played(3, "abc-3-7")] }),
+    ).toEqual([1]);
+  });
+
+  it("counts three when the runner saw three different things", () => {
+    expect(
+      finishedSessionIndices({ sessionCount: 3, sessions: [played(1, "aaa-3-7"), played(2, "bbb-4-9"), played(3, "ccc-5-2")] }),
+    ).toEqual([1, 2, 3]);
+  });
+
+  it("reads a producer that reports no fingerprint exactly as before", () => {
+    expect(finishedSessionIndices({ sessionCount: 3, sessions: [played(1), played(2), played(3)] })).toEqual([1, 2, 3]);
+    // …and a session replayed under its OWN index is still that one level.
+    expect(
+      finishedSessionIndices({ sessionCount: 3, sessions: [played(1, "aaa-3-7"), played(1, "aaa-3-7")] }),
+    ).toEqual([1]);
+  });
+});

@@ -537,6 +537,13 @@ export interface PlaythroughEvidence {
     identitySource?: string;
     /** The index the game itself reported as active, when it can report one. */
     observedIndex?: number;
+    /**
+     * What the RUNNER saw of the loaded content — the active scene, its root
+     * objects, how much draws — independently of the game's own claim about
+     * which session it started. Two sessions with the SAME fingerprint are one
+     * level played twice (Codex 2026-09-13 AG#1).
+     */
+    contentFingerprint?: string;
   }>;
   /**
    * What was on screen at the end of play (2026-09-10): world renderers, the
