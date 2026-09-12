@@ -42,6 +42,15 @@ export interface EvidenceBinding {
   readonly dirty: boolean;
   /** The platform this run is about, when it is about one. */
   readonly target?: string;
+  /**
+   * Whether this run owns a process whose exit means something.
+   *
+   * A compile or a suite driven through a LIVE editor bridge has no process
+   * of its own — the editor stays alive, and the operation's terminal result
+   * IS the observation. Demanding an exit code refused those runs outright
+   * (Codex 2026-09-12 AC). Default true: a batch Unity run owns its process.
+   */
+  readonly processOwned?: boolean;
   /** sha256 of the artifact a player run must have played. */
   readonly artifactSha256?: string;
 }
@@ -127,6 +136,11 @@ export function issueRunId(): string {
 /** The bytes' own identity, so a second delivery of the same record is idempotent. */
 export function recordSha256(bytes: string): string {
   return createHash("sha256").update(bytes).digest("hex");
+}
+
+/** A sha256 is 64 hexadecimal characters; an empty string is not a measurement. */
+export function isSha256(v: unknown): v is string {
+  return typeof v === "string" && /^[0-9a-f]{64}$/.test(v);
 }
 
 const isSafeCount = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v) && v >= 0 && v < 1e9;
@@ -251,7 +265,7 @@ export function receiveEvidence(
   return admitEvidence(ticket, parsed, bytes as string, transport, opts);
 }
 
-export function admitEvidence(
+function admitEvidence(
   ticket: EvidenceTicket | undefined,
   record: ProducerEvidence,
   bytes: string,
@@ -300,15 +314,17 @@ export function admitEvidence(
   // A PLAYER RUN IS ABOUT ONE ARTIFACT. Paths and sizes are not identity: the
   // bytes that ran must be the bytes the build produced.
   if (b.medium === "player") {
-    if (b.artifactSha256 === undefined) {
+    // A DIGEST, not any string: the empty one equalled itself on all three
+    // sides and was admitted (Codex 2026-09-12 AC).
+    if (!isSha256(b.artifactSha256)) {
       return { admitted: false, refusal: "ARTIFACT_MISSING", detail: "the ticket names no artifact digest" };
     }
-    if (record.artifactSha256 === undefined) {
+    if (!isSha256(record.artifactSha256)) {
       return { admitted: false, refusal: "ARTIFACT_MISSING", detail: "the record names no artifact digest" };
     }
     // MEASURED BY THE CALLER, not echoed by the producer: a record that
     // repeats the digest it was given proves nothing (Codex 2026-09-12 AB).
-    if (opts.artifactSha256 === undefined) {
+    if (!isSha256(opts.artifactSha256)) {
       return { admitted: false, refusal: "ARTIFACT_MISSING", detail: "nobody measured the artifact that ran" };
     }
     if (record.artifactSha256 !== b.artifactSha256 || opts.artifactSha256 !== b.artifactSha256) {
@@ -323,7 +339,18 @@ export function admitEvidence(
   // BOTH ACCOUNTS, AGREEING. Falling back from one to the other let a null
   // transport code be covered by the producer's own "0", and a transport 0
   // cover the producer's own 42 (Codex 2026-09-12 AB).
-  if (transport.exitCode !== 0 || record.execution.exitCode !== 0) {
+  // A RUN WITH NO PROCESS OF ITS OWN is judged on completion alone: a compile
+  // or a suite through a live editor bridge never exits, and demanding a code
+  // refused those runs outright (Codex 2026-09-12 AC).
+  const processOwned = b.processOwned !== false;
+  if (!processOwned) {
+    if (transport.exitCode !== null && transport.exitCode !== 0) {
+      return { admitted: false, refusal: "PROCESS_FAILED", detail: `the transport reported ${transport.exitCode}` };
+    }
+    if (record.execution.exitCode !== null && record.execution.exitCode !== 0) {
+      return { admitted: false, refusal: "PROCESS_FAILED", detail: `the producer reported ${record.execution.exitCode}` };
+    }
+  } else if (transport.exitCode !== 0 || record.execution.exitCode !== 0) {
     return {
       admitted: false,
       refusal: "PROCESS_FAILED",
@@ -335,6 +362,27 @@ export function admitEvidence(
   // THE SESSIONS THAT WERE ASKED FOR, each identified. An absent session is a
   // missing measurement, and an unverified or contradictory identity certifies
   // no content (Codex 2026-09-12 X, Z#5).
+  // EVERY SESSION THE RECORD CARRIES. Validating only the requested ones let
+  // an unverified extra session ride along inside an admitted record, where
+  // the rest of the system reads it as evidence (Codex 2026-09-12 AC).
+  for (const s of record.sessions ?? []) {
+    if (!s.identityVerified) {
+      return {
+        admitted: false,
+        refusal: "SESSION_UNVERIFIED",
+        detail: `the record carries session ${s.index} with no identity the game confirmed`,
+      };
+    }
+    if (s.observedIndex !== undefined && s.observedIndex !== s.index) {
+      return {
+        admitted: false,
+        refusal: "SESSION_MISMATCH",
+        detail:
+          `the record says session ${s.index} while the game reported ` +
+          `${s.observedIndex === 0 ? "no session running" : s.observedIndex}`,
+      };
+    }
+  }
   for (const wanted of ticket.requestedSessions ?? []) {
     // ONE observation per requested session: a good first entry hid a
     // contradictory second one (Codex 2026-09-12 AB).

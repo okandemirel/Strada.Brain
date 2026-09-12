@@ -9,7 +9,6 @@
  */
 import { describe, expect, it } from "vitest";
 import {
-  admitEvidence,
   issueRunId,
   parseProducerEvidence,
   receiveEvidence,
@@ -112,7 +111,7 @@ describe("reading a producer's bytes", () => {
 describe("admitting a record against the ticket that was issued", () => {
   it("admits the record the ticket asked for", () => {
     const r = record();
-    const decision = admitEvidence(ticket(), r, bytesOf(r), ok, observed);
+    const decision = receiveEvidence(ticket(), bytesOf(r), ok, observed);
     expect(decision.admitted).toBe(true);
   });
 
@@ -124,50 +123,50 @@ describe("admitting a record against the ticket that was issued", () => {
     ];
     for (const [over, refusal] of cases) {
       const r = record(over);
-      expect(admitEvidence(ticket(), r, bytesOf(r), ok, observed), refusal).toMatchObject({ admitted: false, refusal });
+      expect(receiveEvidence(ticket(), bytesOf(r), ok, observed), refusal).toMatchObject({ admitted: false, refusal });
     }
     const targeted = record({ target: "android" });
-    expect(admitEvidence(ticket({ target: "ios" }), targeted, bytesOf(targeted), ok, observed)).toMatchObject({
+    expect(receiveEvidence(ticket({ target: "ios" }), bytesOf(targeted), ok, observed)).toMatchObject({
       admitted: false,
       refusal: "TARGET_MISMATCH",
     });
     // …and with NO ticket at all.
     const r = record();
-    expect(admitEvidence(undefined, r, bytesOf(r), ok, observed)).toMatchObject({ admitted: false, refusal: "RUN_UNKNOWN" });
+    expect(receiveEvidence(undefined, bytesOf(r), ok, observed)).toMatchObject({ admitted: false, refusal: "RUN_UNKNOWN" });
   });
 
   it("refuses a measurement of another tree, of a tree that was moving, or of a tree nobody observed", () => {
     const other = record({ revision: "c".repeat(40) });
-    expect(admitEvidence(ticket(), other, bytesOf(other), ok, observed)).toMatchObject({
+    expect(receiveEvidence(ticket(), bytesOf(other), ok, observed)).toMatchObject({
       admitted: false,
       refusal: "REVISION_MISMATCH",
     });
     const r = record();
-    expect(admitEvidence(ticket(), r, bytesOf(r), ok, { revisionNow: "d".repeat(40), dirtyNow: false })).toMatchObject({
+    expect(receiveEvidence(ticket(), bytesOf(r), ok, { revisionNow: "d".repeat(40), dirtyNow: false })).toMatchObject({
       admitted: false,
       refusal: "REVISION_MISMATCH",
     });
-    expect(admitEvidence(ticket({ dirty: true }), r, bytesOf(r), ok, observed)).toMatchObject({
+    expect(receiveEvidence(ticket({ dirty: true }), bytesOf(r), ok, observed)).toMatchObject({
       admitted: false,
       refusal: "SOURCE_DIRTY",
     });
-    expect(admitEvidence(ticket(), r, bytesOf(r), ok, { revisionNow: REVISION, dirtyNow: true })).toMatchObject({
+    expect(receiveEvidence(ticket(), bytesOf(r), ok, { revisionNow: REVISION, dirtyNow: true })).toMatchObject({
       admitted: false,
       refusal: "SOURCE_DIRTY",
     });
     // A RECORD THAT OMITS THE BINDING has not met it, and a tree nobody
     // observed at the end is not an unchanged tree (Codex 2026-09-12 AB).
     const silentAboutRevision = record({ revision: undefined });
-    expect(admitEvidence(ticket(), silentAboutRevision, bytesOf(silentAboutRevision), ok, observed)).toMatchObject({
+    expect(receiveEvidence(ticket(), bytesOf(silentAboutRevision), ok, observed)).toMatchObject({
       admitted: false,
       refusal: "REVISION_MISMATCH",
     });
-    expect(admitEvidence(ticket(), r, bytesOf(r), ok, {})).toMatchObject({
+    expect(receiveEvidence(ticket(), bytesOf(r), ok, {})).toMatchObject({
       admitted: false,
       refusal: "REVISION_MISMATCH",
     });
     const silentAboutTarget = record({ target: undefined });
-    expect(admitEvidence(ticket({ target: "android" }), silentAboutTarget, bytesOf(silentAboutTarget), ok, observed)).toMatchObject({
+    expect(receiveEvidence(ticket({ target: "android" }), bytesOf(silentAboutTarget), ok, observed)).toMatchObject({
       admitted: false,
       refusal: "TARGET_MISMATCH",
     });
@@ -177,24 +176,24 @@ describe("admitting a record against the ticket that was issued", () => {
     const player = ticket({ medium: "player", kind: "playthrough", artifactSha256: ARTIFACT });
     const right = record({ medium: "player", artifactSha256: ARTIFACT });
     const measured = { ...observed, artifactSha256: ARTIFACT };
-    expect(admitEvidence(player, right, bytesOf(right), ok, measured)).toMatchObject({ admitted: true });
+    expect(receiveEvidence(player, bytesOf(right), ok, measured)).toMatchObject({ admitted: true });
     const wrong = record({ medium: "player", artifactSha256: "e".repeat(64) });
-    expect(admitEvidence(player, wrong, bytesOf(wrong), ok, measured)).toMatchObject({
+    expect(receiveEvidence(player, bytesOf(wrong), ok, measured)).toMatchObject({
       admitted: false,
       refusal: "ARTIFACT_MISMATCH",
     });
     const silent = record({ medium: "player" });
-    expect(admitEvidence(player, silent, bytesOf(silent), ok, measured)).toMatchObject({
+    expect(receiveEvidence(player, bytesOf(silent), ok, measured)).toMatchObject({
       admitted: false,
       refusal: "ARTIFACT_MISSING",
     });
     // A RECORD THAT ECHOES THE DIGEST IT WAS GIVEN PROVES NOTHING: somebody
     // else has to have measured the bytes that ran (Codex 2026-09-12 AB).
-    expect(admitEvidence(player, right, bytesOf(right), ok, observed)).toMatchObject({
+    expect(receiveEvidence(player, bytesOf(right), ok, observed)).toMatchObject({
       admitted: false,
       refusal: "ARTIFACT_MISSING",
     });
-    expect(admitEvidence(player, right, bytesOf(right), ok, { ...observed, artifactSha256: "f".repeat(64) })).toMatchObject({
+    expect(receiveEvidence(player, bytesOf(right), ok, { ...observed, artifactSha256: "f".repeat(64) })).toMatchObject({
       admitted: false,
       refusal: "ARTIFACT_MISMATCH",
     });
@@ -202,15 +201,15 @@ describe("admitting a record against the ticket that was issued", () => {
 
   it("refuses a run that did not finish, whichever side says so — or says nothing", () => {
     const r = record();
-    expect(admitEvidence(ticket(), r, bytesOf(r), { completed: false, exitCode: null, timedOut: false }, observed)).toMatchObject({
+    expect(receiveEvidence(ticket(), bytesOf(r), { completed: false, exitCode: null, timedOut: false }, observed)).toMatchObject({
       admitted: false,
       refusal: "PROCESS_INCOMPLETE",
     });
-    expect(admitEvidence(ticket(), r, bytesOf(r), { completed: true, exitCode: 0, timedOut: true }, observed)).toMatchObject({
+    expect(receiveEvidence(ticket(), bytesOf(r), { completed: true, exitCode: 0, timedOut: true }, observed)).toMatchObject({
       admitted: false,
       refusal: "PROCESS_INCOMPLETE",
     });
-    expect(admitEvidence(ticket(), r, bytesOf(r), { completed: true, exitCode: 42, timedOut: false }, observed)).toMatchObject({
+    expect(receiveEvidence(ticket(), bytesOf(r), { completed: true, exitCode: 42, timedOut: false }, observed)).toMatchObject({
       admitted: false,
       refusal: "PROCESS_FAILED",
     });
@@ -219,16 +218,16 @@ describe("admitting a record against the ticket that was issued", () => {
     // transport code was covered by the producer's zero, and a transport zero
     // covered the producer's 42 (Codex 2026-09-12 AB).
     const lying = record({ execution: { completed: true, exitCode: 0, timedOut: false } });
-    expect(admitEvidence(ticket(), lying, bytesOf(lying), { completed: true, exitCode: 139, timedOut: false }, observed)).toMatchObject({
+    expect(receiveEvidence(ticket(), bytesOf(lying), { completed: true, exitCode: 139, timedOut: false }, observed)).toMatchObject({
       admitted: false,
       refusal: "PROCESS_FAILED",
     });
-    expect(admitEvidence(ticket(), lying, bytesOf(lying), { completed: true, exitCode: null, timedOut: false }, observed)).toMatchObject({
+    expect(receiveEvidence(ticket(), bytesOf(lying), { completed: true, exitCode: null, timedOut: false }, observed)).toMatchObject({
       admitted: false,
       refusal: "PROCESS_FAILED",
     });
     const died = record({ execution: { completed: true, exitCode: 42, timedOut: false } });
-    expect(admitEvidence(ticket(), died, bytesOf(died), ok, observed)).toMatchObject({
+    expect(receiveEvidence(ticket(), bytesOf(died), ok, observed)).toMatchObject({
       admitted: false,
       refusal: "PROCESS_FAILED",
     });
@@ -240,21 +239,21 @@ describe("admitting a record against the ticket that was issued", () => {
     });
     const asked = ticket({}, [7]);
     const good = record({ sessions: [played()] });
-    expect(admitEvidence(asked, good, bytesOf(good), ok, observed)).toMatchObject({ admitted: true });
+    expect(receiveEvidence(asked, bytesOf(good), ok, observed)).toMatchObject({ admitted: true });
 
     const absent = record({ sessions: [played({ requestedIndex: 3, index: 3 })] });
-    expect(admitEvidence(asked, absent, bytesOf(absent), ok, observed)).toMatchObject({
+    expect(receiveEvidence(asked, bytesOf(absent), ok, observed)).toMatchObject({
       admitted: false,
       refusal: "SESSION_MISSING",
     });
     const unverified = record({ sessions: [played({ identityVerified: false })] });
-    expect(admitEvidence(asked, unverified, bytesOf(unverified), ok, observed)).toMatchObject({
+    expect(receiveEvidence(asked, bytesOf(unverified), ok, observed)).toMatchObject({
       admitted: false,
       refusal: "SESSION_UNVERIFIED",
     });
     // The game said it was playing something else.
     const contradictory = record({ sessions: [played({ observedIndex: 1 })] });
-    expect(admitEvidence(asked, contradictory, bytesOf(contradictory), ok, observed)).toMatchObject({
+    expect(receiveEvidence(asked, bytesOf(contradictory), ok, observed)).toMatchObject({
       admitted: false,
       refusal: "SESSION_MISMATCH",
     });
@@ -262,25 +261,25 @@ describe("admitting a record against the ticket that was issued", () => {
     // two fields to each other admitted "asked for 7, played 1" as long as it
     // was consistent about playing 1 (Codex 2026-09-12 AB).
     const wrongContent = record({ sessions: [played({ index: 1, observedIndex: 1 })] });
-    expect(admitEvidence(asked, wrongContent, bytesOf(wrongContent), ok, observed)).toMatchObject({
+    expect(receiveEvidence(asked, bytesOf(wrongContent), ok, observed)).toMatchObject({
       admitted: false,
       refusal: "SESSION_MISMATCH",
     });
     // …with or without the game's own word for it.
     const quietlyWrong = record({ sessions: [played({ index: 1 })] });
-    expect(admitEvidence(asked, quietlyWrong, bytesOf(quietlyWrong), ok, observed)).toMatchObject({
+    expect(receiveEvidence(asked, bytesOf(quietlyWrong), ok, observed)).toMatchObject({
       admitted: false,
       refusal: "SESSION_MISMATCH",
     });
     // An explicit zero is NO session running, not "cannot tell".
     const nothingRunning = record({ sessions: [played({ observedIndex: 0 })] });
-    expect(admitEvidence(asked, nothingRunning, bytesOf(nothingRunning), ok, observed)).toMatchObject({
+    expect(receiveEvidence(asked, bytesOf(nothingRunning), ok, observed)).toMatchObject({
       admitted: false,
       refusal: "SESSION_MISMATCH",
     });
     // …and a good first observation does not hide a contradictory second one.
     const duplicated = record({ sessions: [played(), played({ index: 1, observedIndex: 1 })] });
-    expect(admitEvidence(asked, duplicated, bytesOf(duplicated), ok, observed)).toMatchObject({
+    expect(receiveEvidence(asked, bytesOf(duplicated), ok, observed)).toMatchObject({
       admitted: false,
       refusal: "SESSION_MISMATCH",
     });
@@ -302,5 +301,100 @@ describe("admitting a record against the ticket that was issued", () => {
       admitted: false,
       refusal: "EVIDENCE_MISSING",
     });
+  });
+});
+
+/**
+ * What Codex round AC got through, and the legitimate runs it showed the
+ * contract refusing.
+ */
+describe("what a receipt may not be admitted on (Codex 2026-09-12 AC)", () => {
+  it("refuses an empty string as an artifact digest, on each side separately", () => {
+    // Each side is checked on its own: with all three empty, any one of the
+    // three refusals covers the other two, so the empty string has to be
+    // refused where it appears while the other sides are sound.
+    const full = { ...observed, artifactSha256: ARTIFACT };
+    expect(
+      receiveEvidence(ticket({ medium: "player", artifactSha256: "" }), bytesOf(record({ medium: "player", artifactSha256: ARTIFACT })), ok, full),
+    ).toMatchObject({ admitted: false, refusal: "ARTIFACT_MISSING", detail: "the ticket names no artifact digest" });
+    expect(
+      receiveEvidence(ticket({ medium: "player", artifactSha256: ARTIFACT }), bytesOf(record({ medium: "player", artifactSha256: "" })), ok, full),
+    ).toMatchObject({ admitted: false, refusal: "ARTIFACT_MISSING", detail: "the record names no artifact digest" });
+    expect(
+      receiveEvidence(ticket({ medium: "player", artifactSha256: ARTIFACT }), bytesOf(record({ medium: "player", artifactSha256: ARTIFACT })), ok, {
+        ...observed,
+        artifactSha256: "",
+      }),
+    ).toMatchObject({ admitted: false, refusal: "ARTIFACT_MISSING", detail: "nobody measured the artifact that ran" });
+    // …and a digest that is not 64 hex characters at all, on each side.
+    const short = "abc";
+    expect(
+      receiveEvidence(ticket({ medium: "player", artifactSha256: short }), bytesOf(record({ medium: "player", artifactSha256: ARTIFACT })), ok, full),
+    ).toMatchObject({ admitted: false, refusal: "ARTIFACT_MISSING", detail: "the ticket names no artifact digest" });
+    expect(
+      receiveEvidence(ticket({ medium: "player", artifactSha256: ARTIFACT }), bytesOf(record({ medium: "player", artifactSha256: short })), ok, full),
+    ).toMatchObject({ admitted: false, refusal: "ARTIFACT_MISSING", detail: "the record names no artifact digest" });
+    expect(
+      receiveEvidence(ticket({ medium: "player", artifactSha256: ARTIFACT }), bytesOf(record({ medium: "player", artifactSha256: ARTIFACT })), ok, {
+        ...observed,
+        artifactSha256: short,
+      }),
+    ).toMatchObject({ admitted: false, refusal: "ARTIFACT_MISSING", detail: "nobody measured the artifact that ran" });
+  });
+
+  it("validates EVERY session in the record, not only the ones it asked for", () => {
+    // An unverified extra session rode along inside an admitted record, where
+    // the rest of the system reads it as evidence.
+    const asked = ticket({}, [7]);
+    const withStowaway = record({
+      sessions: [
+        { requestedIndex: 7, index: 7, observedIndex: 7, identityVerified: true, actions: 5, outcome: "Won", reachedOutcome: true, seconds: 30 },
+        { requestedIndex: 8, index: 8, observedIndex: 8, identityVerified: false, actions: 5, outcome: "Won", reachedOutcome: true, seconds: 30 },
+      ],
+    });
+    expect(receiveEvidence(asked, bytesOf(withStowaway), ok, observed)).toMatchObject({
+      admitted: false,
+      refusal: "SESSION_UNVERIFIED",
+    });
+    const contradictoryExtra = record({
+      sessions: [
+        { requestedIndex: 7, index: 7, observedIndex: 7, identityVerified: true, actions: 5, outcome: "Won", reachedOutcome: true, seconds: 30 },
+        { requestedIndex: 8, index: 8, observedIndex: 3, identityVerified: true, actions: 5, outcome: "Won", reachedOutcome: true, seconds: 30 },
+      ],
+    });
+    expect(receiveEvidence(asked, bytesOf(contradictoryExtra), ok, observed)).toMatchObject({
+      admitted: false,
+      refusal: "SESSION_MISMATCH",
+    });
+  });
+
+  it("judges a run with NO process of its own on completion alone", () => {
+    // A compile or a suite through a live editor bridge never exits: the
+    // operation's terminal result IS the observation, and demanding an exit
+    // code refused those runs outright (Codex 2026-09-12 AC).
+    const live = ticket({ kind: "compile", medium: "compiler", processOwned: false });
+    const done = record({
+      kind: "compile",
+      medium: "compiler",
+      execution: { completed: true, exitCode: null, timedOut: false },
+    });
+    expect(receiveEvidence(live, bytesOf(done), { completed: true, exitCode: null, timedOut: false }, observed)).toMatchObject({
+      admitted: true,
+    });
+    // A failure it DOES report still refuses…
+    const failed = record({
+      kind: "compile",
+      medium: "compiler",
+      execution: { completed: true, exitCode: 2, timedOut: false },
+    });
+    expect(receiveEvidence(live, bytesOf(failed), { completed: true, exitCode: null, timedOut: false }, observed)).toMatchObject({
+      admitted: false,
+      refusal: "PROCESS_FAILED",
+    });
+    // …and a run that DOES own its process still needs its exit code.
+    const batch = record({ kind: "compile", medium: "compiler", execution: { completed: true, exitCode: null, timedOut: false } });
+    expect(
+      receiveEvidence(ticket({ kind: "compile", medium: "compiler" }), bytesOf(batch), { completed: true, exitCode: null, timedOut: false }, observed),
+    ).toMatchObject({ admitted: false, refusal: "PROCESS_FAILED" });
   });
 });
