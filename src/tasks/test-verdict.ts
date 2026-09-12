@@ -131,10 +131,24 @@ const RED_RE = /verification FAILED|\d+ of \d+ tests? failed/i;
  * as it was.
  */
 export function withoutEchoedCommand(text: string): string {
-  return text
-    .split("\n")
-    .filter((line) => !/^\s*\$ /.test(line) && !/^\s*(?:>|\$>|command:)\s/i.test(line))
-    .join("\n");
+  const lines = text.split("\n");
+  const out: string[] = [];
+  // A COMMAND CAN BE MULTILINE, and every line of it is the model's own text.
+  // Dropping only the "$ " line left the rest of the echo behind, so a second
+  // line of the command — `# All 17 tests passed (unfiltered …)` — was still
+  // read as test output (Codex 2026-09-13 AF#4). The echo runs from the "$ "
+  // line to the runner's own "Exit code:" line.
+  let inEcho = false;
+  for (const line of lines) {
+    if (/^\s*\$ /.test(line)) { inEcho = true; continue; }
+    if (inEcho) {
+      if (/^\s*(?:Exit code|Duration|⚠|---)/i.test(line)) inEcho = false;
+      else continue;
+    }
+    if (/^\s*(?:>|\$>|command:)\s/i.test(line)) continue;
+    out.push(line);
+  }
+  return out.join("\n");
 }
 
 /**

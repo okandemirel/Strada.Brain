@@ -40,20 +40,49 @@ const VERIFICATION_COMMAND_HEAD_RE = new RegExp(
 );
 
 /** True when any segment of a shell chain (`cd x && npm test`) invokes a verifier. */
+/** A command that always succeeds (or always fails) whatever the tree is. */
+const ALWAYS_TRUE_RE = /^(?:true|:)\s*$/u;
+const ALWAYS_FALSE_RE = /^(?:false)\s*$/u;
+
+/**
+ * Did this shell command RUN a verifier — and can we be sure?
+ *
+ * "ran": a verifier sits where the shell had to execute it.
+ * "maybe": the verifier is behind a `||`, so it ran only if the left side
+ *   failed — the caller must see a verdict in the output before believing it.
+ * "no": no verifier, or one the shell could not have reached (`true ||
+ *   dotnet build` exits 0 having built nothing, and `false && dotnet build;
+ *   true` never reaches the build either — both cleared the compile debt of
+ *   every edited file: Codex 2026-09-12 AE#3, 2026-09-13 AF#3).
+ */
+export function shellVerification(command: string): "ran" | "maybe" | "no" {
+  let best: "ran" | "maybe" | "no" = "no";
+  for (const statement of command.split(/[;\n]/u)) {
+    const parts = statement.split(/\s*(&&|\|\|)\s*/u);
+    let reachable = true;
+    let behindOr = false;
+    for (let i = 0; i < parts.length; i += 2) {
+      const segment = (parts[i] ?? "").replace(/^[\s(]+/u, "").trim();
+      const operatorBefore = i === 0 ? undefined : parts[i - 1];
+      if (operatorBefore === "&&") {
+        // Reachable only if everything before it succeeded.
+        if (ALWAYS_FALSE_RE.test((parts[i - 2] ?? "").trim())) reachable = false;
+      } else if (operatorBefore === "||") {
+        // Runs only if the left side FAILED.
+        if (ALWAYS_TRUE_RE.test((parts[i - 2] ?? "").trim())) reachable = false;
+        else behindOr = true;
+      }
+      if (!reachable) continue;
+      if (!VERIFICATION_COMMAND_HEAD_RE.test(segment)) continue;
+      if (!behindOr) return "ran";
+      best = "maybe";
+    }
+  }
+  return best;
+}
+
 function shellCommandVerifies(command: string): boolean {
-  // A VERIFIER BEHIND `||` MAY NEVER RUN. `true || dotnet build` exits 0
-  // having built nothing, and it cleared the compile debt of every edited
-  // file (Codex 2026-09-12 AE#3). A segment that can only run when the one
-  // before it FAILED is not a verification this command performed — unless
-  // something before the `||` verifies too.
-  const reachable = command
-    .split(/\s*(?:\|\|)\s*/u)
-    .slice(0, 1)
-    .join("");
-  return reachable
-    .split(/\s*(?:&&|[;|\n])\s*/u)
-    .map((segment) => segment.replace(/^[\s(]+/u, ""))
-    .some((segment) => VERIFICATION_COMMAND_HEAD_RE.test(segment));
+  return shellVerification(command) !== "no";
 }
 
 // ─── State ──────────────────────────────────────────────────────────────────────
@@ -224,10 +253,22 @@ export class SelfVerification {
         // solely on the tool's isError flag — a result body saying "N of M
         // tests failed" IS a failure whatever the flag says (the false-green
         // class measured across this pipeline).
-        const bodyText = typeof result.content === "string" ? result.content : "";
+        // THE CHILD'S OWN OUTPUT. A batch envelope's outer content was read
+        // for every child in it, so a successful batch holding a
+        // `unity_compile_status` child whose body was `"{}"` cleared the debt
+        // (Codex 2026-09-13 AF#3).
+        const bodyText = executedTool.output !== undefined && executedTool.output !== ""
+          ? executedTool.output
+          : (typeof result.content === "string" ? result.content : "");
         const bodyReportsFailure =
-          runsTests(executedTool.toolName, executedTool.input) &&
-          /\b\d+ of \d+ tests? failed|PlayMode verification FAILED/i.test(bodyText);
+          (runsTests(executedTool.toolName, executedTool.input)
+            && /\b\d+ of \d+ tests? failed|PlayMode verification FAILED/i.test(bodyText))
+          // A BODY THAT SAYS IT FAILED IS A FAILURE, whatever the flag says:
+          // `{"success":false,"compileIssueCount":3}` cleared the debt of
+          // every edited file (Codex 2026-09-13 AF#3).
+          || /"?success"?\s*[:=]\s*false/i.test(bodyText)
+          || /"?compileIssueCount"?\s*[:=]\s*[1-9]/i.test(bodyText)
+          || /\bbuild failed\b|\bcompilation failed\b/i.test(bodyText);
         // AN INSPECTION IS NOT A VERIFICATION. A symbol search that returned
         // "No matches" and a console read cleared the compile debt of every
         // edited file, because "did not fail" was read as "compiled" (Codex
@@ -238,7 +279,10 @@ export class SelfVerification {
         // that skipped its build (`true || dotnet build`, which exits 0 with
         // no output) all produced lastBuildOk: true and emptied the pending
         // list (AE#3). An inconclusive answer leaves the debt where it was.
-        if (!executedTool.isError && !verificationIsConclusive(bodyText, { shell: executedTool.toolName === "shell_exec" })) {
+        const shell = executedTool.toolName === "shell_exec";
+        const needsVerdict = shell
+          && shellVerification(typeof executedTool.input["command"] === "string" ? executedTool.input["command"] : "") === "maybe";
+        if (!executedTool.isError && !verificationIsConclusive(bodyText, { shell, needsVerdict })) {
           this.lastVerificationAt = Date.now();
           this.lastBuildOk = null;
           continue;
@@ -591,13 +635,21 @@ const INSPECTION_ONLY_TOOLS: ReadonlySet<string> = new Set([
  * Every one of those cleared the compile debt of every edited file because
  * the tool did not set isError (Codex 2026-09-12 AE#3).
  */
-export function verificationIsConclusive(body: string, opts: { shell?: boolean } = {}): boolean {
+export function verificationIsConclusive(body: string, opts: { shell?: boolean; needsVerdict?: boolean } = {}): boolean {
   const text = body.trim();
   // A SILENT SHELL VERIFIER IS A PASS: `tsc --noEmit` and `dotnet build -v q`
   // print nothing when they succeed, and the exit code is what the tool's
   // error flag already carries. An MCP tool that answers `{}` has told us
   // nothing at all.
-  if (text === "" || text === "{}" || text === "[]") return opts.shell === true;
+  if (text === "" || text === "{}" || text === "[]") return opts.shell === true && opts.needsVerdict !== true;
+  // A TOOL THAT SAYS IT COULD NOT ANSWER has not answered (Codex 2026-09-13
+  // AF#3): "unavailable", "unknown", "pending" and "error" are states, not
+  // verdicts.
+  if (/"?status"?\s*[:=]\s*"?(?:unavailable|unknown|pending|queued|running|error)"?/i.test(text)) return false;
+  // A verifier BEHIND `||` must show its own verdict before it is believed.
+  if (opts.needsVerdict === true && !/\b(?:succeeded|success|passed|0 errors?|no errors?|build succeeded|compil\w+ succeeded)\b/i.test(text)) {
+    return false;
+  }
   // Still running: a compile in flight has no result yet.
   if (/"?is(?:Compiling|Reloading)"?\s*[:=]\s*true|\bcompilation in progress\b|\bcompiling\b\s*\.{3}/i.test(text)) return false;
   // A help screen is the tool explaining itself, not a build.

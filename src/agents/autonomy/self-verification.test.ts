@@ -349,6 +349,52 @@ describe("SelfVerification", () => {
       expect(ok.needsVerification()).toBe(false);
     });
 
+    it("keeps the debt for the shapes round AF found (Codex 2026-09-13 AF#3)", () => {
+      // Each of these reproduced lastBuildOk:true with an empty pending list.
+      for (const [body, why] of [
+        ['{"status":"unavailable"}', "the tool could not answer"],
+        // One reason at a time: two failure signals in one fixture hide each
+        // other when either is removed.
+        ['{"success":false}', "the body says it failed"],
+        ['{"compileIssueCount":3}', "the body counts compile issues"],
+        ['{"detail":"Build failed"}', "the body says the build failed"],
+      ] as const) {
+        const verifier = wrote();
+        verifier.track("unity_compile_status", {}, { toolCallId: "v", content: body, isError: false });
+        expect(verifier.needsVerification(), why).toBe(true);
+      }
+      // A build the shell never reached is not a build…
+      const skipped = wrote();
+      skipped.track("shell_exec", { command: "false && dotnet build; true" }, { toolCallId: "v", content: "$ …\nExit code: 0", isError: false });
+      expect(skipped.needsVerification()).toBe(true);
+      // …while a build that DID run behind a `||` and printed its verdict is.
+      const ranAnyway = wrote();
+      ranAnyway.track("shell_exec", { command: "false || dotnet build" }, {
+        toolCallId: "v",
+        content: "$ false || dotnet build\nExit code: 0\n\n--- stdout ---\nBuild succeeded.\n0 errors",
+        isError: false,
+      });
+      expect(ranAnyway.needsVerification()).toBe(false);
+      // …and the same command with nothing to show for itself is not.
+      const silentOr = wrote();
+      silentOr.track("shell_exec", { command: "false || dotnet build" }, { toolCallId: "v", content: "$ …\nExit code: 0", isError: false });
+      expect(silentOr.needsVerification()).toBe(true);
+    });
+
+    it("reads a BATCH child's own output, not the envelope's (Codex 2026-09-13 AF#3)", () => {
+      const verifier = wrote();
+      verifier.track(
+        "batch_execute",
+        { operations: [{ tool: "unity_compile_status", input: {} }] },
+        {
+          toolCallId: "b",
+          content: JSON.stringify({ results: [{ success: true, content: "{}" }] }),
+          isError: false,
+        },
+      );
+      expect(verifier.needsVerification()).toBe(true);
+    });
+
     it("still settles on a conclusive answer", () => {
       const verifier = wrote();
       verifier.track("unity_compile_status", {}, { toolCallId: "v", content: '{"isCompiling":false,"compileIssueCount":0}', isError: false });

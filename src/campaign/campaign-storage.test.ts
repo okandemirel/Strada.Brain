@@ -207,6 +207,34 @@ describe("findLatestRevivable", () => {
       expect(partial.coverageQueueUnreadable).toBe(true);
     });
 
+    it("keeps the flag across a save (Codex 2026-09-13 AF#2)", () => {
+      // The flag was derived at load and dropped at save: the very next save
+      // wrote NULL over the damaged row and the obligation was gone.
+      const loaded = storedQueue('["Save: absent"', "c_survives");
+      expect(loaded.coverageQueueUnreadable).toBe(true);
+      storage.save(loaded);
+      expect(storage.get("c_survives")!.coverageQueueUnreadable).toBe(true);
+      // …and a campaign that writes a readable queue is not flagged for ever.
+      storage.save({ ...loaded, coverageQueueUnreadable: undefined, pendingCoverageGaps: ["Save: absent"] });
+      const recovered = storage.get("c_survives")!;
+      expect(recovered.coverageQueueUnreadable).toBeUndefined();
+      expect(recovered.pendingCoverageGaps).toEqual(["Save: absent"]);
+    });
+
+    it("keeps the flag across a save (Codex 2026-09-13 AF#2)", () => {
+      // The flag was derived at load and dropped at save: the very next save
+      // wrote NULL over the damaged row and the obligation was gone.
+      const loaded = storedQueue('["Save: absent"', "c_survives");
+      expect(loaded.coverageQueueUnreadable).toBe(true);
+      storage.save(loaded);
+      expect(storage.get("c_survives")!.coverageQueueUnreadable).toBe(true);
+      // …and a campaign that writes a readable queue is not flagged for ever.
+      storage.save({ ...loaded, coverageQueueUnreadable: undefined, pendingCoverageGaps: ["Save: absent"] });
+      const recovered = storage.get("c_survives")!;
+      expect(recovered.coverageQueueUnreadable).toBeUndefined();
+      expect(recovered.pendingCoverageGaps).toEqual(["Save: absent"]);
+    });
+
     it("says nothing of the kind for a queue that is genuinely empty or readable", () => {
       expect(storedQueue("[]", "c_empty").coverageQueueUnreadable).toBeUndefined();
       expect(storedQueue("", "c_blank").coverageQueueUnreadable).toBeUndefined();

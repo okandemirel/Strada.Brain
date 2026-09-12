@@ -415,6 +415,27 @@ function admitEvidence(
           `${s.observedIndex === 0 ? "no session running" : s.observedIndex}`,
       };
     }
+    // …AND IT MUST BE THE SESSION THAT WAS ASKED FOR. The extra-session loop
+    // compared the record's own two fields to each other, so a session
+    // requested as 8 and played as 9 rode along inside an admitted record
+    // (Codex 2026-09-13 AF#1).
+    if (s.requestedIndex !== s.index) {
+      return {
+        admitted: false,
+        refusal: "SESSION_MISMATCH",
+        detail: `the record asked for session ${s.requestedIndex} and played ${s.index}`,
+      };
+    }
+    // A CONTRADICTION IS NOT A VERIFICATION: `identitySource: "unverified"`
+    // beside `identityVerified: true` is a record disagreeing with itself
+    // (AF#1).
+    if (s.identitySource === "unverified") {
+      return {
+        admitted: false,
+        refusal: "SESSION_UNVERIFIED",
+        detail: `session ${s.index} says its identity is verified and unverified at once`,
+      };
+    }
   }
   // "ALL" IS THE REQUEST THE TOOLS TAKE. Resolved against the catalogue the
   // producer itself reports: a run asked to play the whole game must say how
@@ -423,6 +444,20 @@ function admitEvidence(
   let wantedSessions: readonly number[];
   if (ticket.requestedSessions === "all") {
     const catalogue = record.sessionCount;
+    // A CATALOGUE LARGER THAN ONE RUN CAN REPORT is not a refusal of the
+    // producer — it is a request no single run can answer, and the ticket
+    // should have asked for a batch. Said as its own code so the caller can
+    // split the work instead of reading "schema invalid" (Codex 2026-09-13
+    // AF#1).
+    if (isSafeCount(catalogue) && catalogue > MAX_SESSION_OBSERVATIONS) {
+      return {
+        admitted: false,
+        refusal: "SESSION_MISSING",
+        detail:
+          `the game holds ${catalogue} sessions and one record may carry ${MAX_SESSION_OBSERVATIONS}: ` +
+          "ask for them in batches and accumulate the receipts",
+      };
+    }
     if (!isSafeCount(catalogue) || catalogue < 1) {
       return {
         admitted: false,

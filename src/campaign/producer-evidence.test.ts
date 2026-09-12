@@ -326,6 +326,21 @@ describe("what a receipt may not be admitted on (Codex 2026-09-12 AC)", () => {
         artifactSha256: "",
       }),
     ).toMatchObject({ admitted: false, refusal: "ARTIFACT_MISSING", detail: "nobody measured the artifact that ran" });
+    // A 64-CHARACTER STRING IS NOT A DIGEST. A length check alone would
+    // admit sixty-four question marks (Codex 2026-09-13 AF#1).
+    const notHex = "?".repeat(64);
+    expect(
+      receiveEvidence(ticket({ medium: "player", artifactSha256: notHex }), bytesOf(record({ medium: "player", artifactSha256: ARTIFACT })), ok, full),
+    ).toMatchObject({ admitted: false, refusal: "ARTIFACT_MISSING", detail: "the ticket names no artifact digest" });
+    expect(
+      receiveEvidence(ticket({ medium: "player", artifactSha256: ARTIFACT }), bytesOf(record({ medium: "player", artifactSha256: notHex })), ok, full),
+    ).toMatchObject({ admitted: false, refusal: "ARTIFACT_MISSING", detail: "the record names no artifact digest" });
+    expect(
+      receiveEvidence(ticket({ medium: "player", artifactSha256: ARTIFACT }), bytesOf(record({ medium: "player", artifactSha256: ARTIFACT })), ok, {
+        ...observed,
+        artifactSha256: notHex,
+      }),
+    ).toMatchObject({ admitted: false, refusal: "ARTIFACT_MISSING", detail: "nobody measured the artifact that ran" });
     // …and a digest that is not 64 hex characters at all, on each side.
     const short = "abc";
     expect(
@@ -401,17 +416,50 @@ describe("what a receipt may not be admitted on (Codex 2026-09-12 AC)", () => {
       bytesOf(record({
         sessions: [{ requestedIndex: 1, index: 1, observedIndex: 1, identityVerified: true, actions: 5, outcome: "Won", reachedOutcome: true, seconds: 30, identitySource } as never],
       }));
-    for (const source of ["active-session", "start-acceptance", "unverified"]) {
+    for (const source of ["active-session", "start-acceptance"]) {
       const decision = receiveEvidence(asked, withSource(source), ok, observed);
-      // "unverified" beside identityVerified:true is a contradiction the
-      // producer should not emit; the receiver's job here is to carry the
-      // field faithfully, and the identity rules above still apply.
       expect(decision.admitted, source).toBe(true);
       expect(decision.record?.sessions?.[0]?.identitySource, source).toBe(source);
     }
+    // A RECORD THAT DISAGREES WITH ITSELF is refused: "unverified" beside
+    // `identityVerified: true` was admitted, and the rest of the system then
+    // read that session as identified content (Codex 2026-09-13 AF#1).
+    expect(receiveEvidence(asked, withSource("unverified"), ok, observed)).toMatchObject({
+      admitted: false,
+      refusal: "SESSION_UNVERIFIED",
+    });
     expect(receiveEvidence(asked, withSource("whatever-i-like"), ok, observed)).toMatchObject({
       admitted: false,
       refusal: "EVIDENCE_SCHEMA_INVALID",
+    });
+  });
+
+  it("refuses an extra session that played something else (Codex 2026-09-13 AF#1)", () => {
+    // The extra-session loop compared the record's own two fields to each
+    // other, so a session asked for as 8 and played as 9 rode along inside an
+    // admitted record.
+    const asked = ticket({}, [7]);
+    const strayed = record({
+      sessions: [
+        { requestedIndex: 7, index: 7, observedIndex: 7, identityVerified: true, actions: 5, outcome: "Won", reachedOutcome: true, seconds: 30 },
+        { requestedIndex: 8, index: 9, observedIndex: 9, identityVerified: true, actions: 5, outcome: "Won", reachedOutcome: true, seconds: 30 },
+      ],
+    });
+    expect(receiveEvidence(asked, bytesOf(strayed), ok, observed)).toMatchObject({
+      admitted: false,
+      refusal: "SESSION_MISMATCH",
+      detail: "the record asked for session 8 and played 9",
+    });
+  });
+
+  it("says when a catalogue is larger than one record can carry (Codex 2026-09-13 AF#1)", () => {
+    // 25 sessions in one record is refused by the schema; the ticket that
+    // asked for "all" of a 25-session game gets a reason it can act on.
+    const all: EvidenceTicket = { ...ticket({}), requestedSessions: "all" };
+    expect(receiveEvidence(all, bytesOf(record({ sessionCount: 25 })), ok, observed)).toMatchObject({
+      admitted: false,
+      refusal: "SESSION_MISSING",
+      detail: expect.stringContaining("in batches"),
     });
   });
 

@@ -3010,6 +3010,24 @@ describe("CampaignManager", () => {
     await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
   });
 
+  it("an audit that RAN discharges the unreadable-queue flag (Codex 2026-09-13 AF#2)", async () => {
+    // The flag is persisted now, so it must be cleared by the thing that
+    // answers it: a fresh audit re-establishes the requirements.
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    const live = storage.get(campaign.id)!;
+    live.coverageQueueUnreadable = true;
+    storage.save(live);
+
+    const build = (manager as unknown as {
+      buildCoverageRemediation(c: Campaign): Promise<unknown>;
+    }).buildCoverageRemediation.bind(manager);
+    const carrying = storage.get(campaign.id)!;
+    expect(carrying.coverageQueueUnreadable).toBe(true);
+    await build(carrying);
+    expect(carrying.coverageQueueUnreadable).toBeUndefined();
+  });
+
   it("builds from the GDD the message NAMED, not the newest one (Codex 2026-09-12 AD#6)", () => {
     // Codex reproduced the discard: the manager chose a repository document
     // by filename distance and modification time, so a different, newer GDD

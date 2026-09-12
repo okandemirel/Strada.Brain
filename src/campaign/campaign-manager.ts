@@ -5361,6 +5361,10 @@ export class CampaignManager {
     }
     try {
       const missing = await this.planner.auditCoverage(gddText, campaign.milestones);
+      // THE AUDIT RAN, so the requirements are established again: whatever it
+      // found replaces the queue nobody could read. The flag is a column now
+      // (Codex 2026-09-13 AF#2), so it would otherwise outlive its cause.
+      campaign.coverageQueueUnreadable = undefined;
       if (missing.length === 0) {
         // A clean verdict names its scope. Audited 2026-09-02: past the audit
         // threshold the GDD is windowed for the audit too, and an empty

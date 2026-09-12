@@ -650,6 +650,10 @@ describe("work evidence (audited 2026-09-10: one read call and no change was app
  * ever asked whether anything had been done.
  */
 describe("a completion claim needs work behind it, at every door (Codex 2026-09-12 AE#1)", () => {
+  // ONE run key for both asks: the zero-attempt gate is keyed by chat and
+  // task start, and a `Date.now()` per call made each ask look like the first
+  // (green locally, red in CI where the two calls straddle a millisecond).
+  const taskStartedAtMs = 1_700_000_000_000;
   const noStepsPlan = (draft: string) =>
     planVerifierPipeline({
       prompt: "Implement scoring and win conditions.",
@@ -667,7 +671,7 @@ describe("a completion claim needs work behind it, at every door (Codex 2026-09-
       conformanceGate: null,
       logEntries: [],
       chatId: "chat-ae1",
-      taskStartedAtMs: Date.now() - 1000,
+      taskStartedAtMs,
     });
 
   it("refuses a completion with no step of any kind", () => {

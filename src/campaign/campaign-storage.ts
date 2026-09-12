@@ -69,6 +69,7 @@ interface CampaignRow {
   delivery_proofs_signature?: string | null;
   plan_coverage?: string | null;
   independent_review?: string | null;
+  coverage_queue_unreadable?: number | null;
 }
 
 function rowToCampaign(row: CampaignRow): Campaign {
@@ -107,9 +108,13 @@ function rowToCampaign(row: CampaignRow): Campaign {
     implementationRevives: row.implementation_revives ?? undefined,
     ...(() => {
       const queue = parseGapQueue(row.pending_coverage_gaps);
+      // The stored flag OR this load's own reading: a row damaged once stays
+      // flagged across saves until an audit re-establishes the requirements
+      // (Codex 2026-09-13 AF#2).
+      const unreadable = queue.unreadable === true || row.coverage_queue_unreadable === 1;
       return {
         ...(queue.gaps ? { pendingCoverageGaps: queue.gaps } : {}),
-        ...(queue.unreadable ? { coverageQueueUnreadable: true as const } : {}),
+        ...(unreadable ? { coverageQueueUnreadable: true as const } : {}),
       };
     })(),
     deliveryRevives: row.delivery_revives ?? undefined,
@@ -253,6 +258,16 @@ export class CampaignStorage {
     } catch {
       // Column already exists — migration is idempotent.
     }
+    try {
+      // 2026-09-13: an unreadable requirement queue was derived at load and
+      // lost at save — the very next save wrote NULL over the damaged row and
+      // the obligation was gone for good (Codex 2026-09-13 AF#2). It is a
+      // column now, so the flag survives until an audit re-establishes the
+      // requirements.
+      this.db.exec("ALTER TABLE campaigns ADD COLUMN coverage_queue_unreadable INTEGER");
+    } catch {
+      // Column already exists — migration is idempotent.
+    }
   }
 
   save(campaign: Campaign): void {
@@ -263,11 +278,11 @@ export class CampaignStorage {
           state, idea_text, gdd_path, gdd_text, draft_task_id, draft_attempts,
           milestones_json, current_milestone, created_at, updated_at, last_error,
           auto_revive_at, coverage_audit_note, draft_deferred_since, delivery_reported, plan_coverage,
-          independent_review,
+          independent_review, coverage_queue_unreadable,
           unmeasurable_revives, implementation_revives, pending_coverage_gaps,
           delivery_revives, delivery_proofs_signature, delivery_rounds_total,
           stop_requested_at, stop_generation
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           state = excluded.state,
           gdd_path = excluded.gdd_path,
@@ -284,6 +299,7 @@ export class CampaignStorage {
           delivery_reported = excluded.delivery_reported,
           plan_coverage = excluded.plan_coverage,
           independent_review = excluded.independent_review,
+          coverage_queue_unreadable = excluded.coverage_queue_unreadable,
           unmeasurable_revives = excluded.unmeasurable_revives,
           implementation_revives = excluded.implementation_revives,
           pending_coverage_gaps = excluded.pending_coverage_gaps,
@@ -317,6 +333,7 @@ export class CampaignStorage {
         campaign.deliveryReported ? 1 : 0,
         campaign.planCoverage ? JSON.stringify(campaign.planCoverage) : null,
         campaign.independentReview ? JSON.stringify(campaign.independentReview) : null,
+        campaign.coverageQueueUnreadable === true ? 1 : null,
         campaign.unmeasurableRevives ?? null,
         campaign.implementationRevives ?? null,
         campaign.pendingCoverageGaps && campaign.pendingCoverageGaps.length > 0
