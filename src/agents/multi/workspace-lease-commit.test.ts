@@ -15,7 +15,8 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
-import { WorkspaceLeaseManager, DEFAULT_WORKSPACE_COPY_EXCLUDES, isAlreadyGone } from "./workspace-lease-manager.js";
+import { WorkspaceLeaseManager, DEFAULT_WORKSPACE_COPY_EXCLUDES, isAlreadyGone, reconcileSeedBaseline, stampUnchanged, existedAtSeed } from "./workspace-lease-manager.js";
+import type { SeedStamp } from "./workspace-lease-manager.js";
 
 let source: string;
 let leaseRoot: string;
@@ -1008,5 +1009,63 @@ describe("the seed records what the file WAS, not only when it was touched (Code
     expect(result.written).toEqual([join("Assets", "Scripts", "New.cs")]);
     expect(readFileSync(join(source, "Assets", "Scripts", "Existing.cs"), "utf8")).toBe("original");
     await lease.release();
+  });
+});
+
+describe("size plus mtime cannot prove unchanged content (Codex 2026-09-12 P#16)", () => {
+  it("publishes a worker rewrite that preserved BOTH the seed mtime and the seed size", async () => {
+    // The N#3 fix added the size, and an edit of the same length defeats it:
+    // `score = 1;` → `score = 9;` with the mtime put back reads as "the agent
+    // never touched this file", and release then deletes the only copy.
+    const mgr = manager();
+    const lease = await mgr.acquireLease({ label: "t", workerId: "w", forceTempCopy: true });
+    const inLease = join(lease.path, "Assets", "Scripts", "Existing.cs");
+    const stat = statSync(inLease);
+    expect(readFileSync(inLease, "utf8")).toBe("original");
+    writeFileSync(inLease, "ORIGINAL", "utf8"); // same eight bytes, different content
+    utimesSync(inLease, stat.atime, stat.mtime);
+
+    const result = await lease.commit();
+
+    expect(result.written).toContain(join("Assets", "Scripts", "Existing.cs"));
+    expect(readFileSync(join(source, "Assets", "Scripts", "Existing.cs"), "utf8")).toBe("ORIGINAL");
+    await lease.release();
+  });
+
+  it("a stamp answers with everything it recorded, and an older seed keeps its old answer", () => {
+    const seed: SeedStamp = { m: 10, s: 8, c: 20 };
+    expect(stampUnchanged(seed, { mtimeMs: 10, size: 8, ctimeMs: 20 })).toBe(true);
+    expect(stampUnchanged(seed, { mtimeMs: 10, size: 8, ctimeMs: 99 })).toBe(false); // rewritten in place
+    expect(stampUnchanged({ m: 10, s: 8, c: Number.NaN }, { mtimeMs: 10, size: 8, ctimeMs: 99 })).toBe(true);
+    expect(stampUnchanged({ m: 10, s: 8, c: 20, absent: true }, { mtimeMs: 10, size: 8, ctimeMs: 20 })).toBe(false);
+    expect(existedAtSeed(undefined)).toBe(false);
+    expect(existedAtSeed({ m: 1, s: 1, c: 1, absent: true })).toBe(false);
+    expect(existedAtSeed({ m: 1, s: 1, c: 1 })).toBe(true);
+  });
+
+  it("creation and deletion during seeding are baseline transitions, not gaps", () => {
+    const before = new Map<string, SeedStamp>([
+      ["kept.cs", { m: 1, s: 2, c: 3 }],
+      ["edited.cs", { m: 1, s: 2, c: 3 }],
+      ["deleted.cs", { m: 4, s: 5, c: 6 }],
+    ]);
+    const after = new Map<string, SeedStamp>([
+      ["kept.cs", { m: 1, s: 2, c: 3 }],
+      ["edited.cs", { m: 9, s: 2, c: 9 }],
+      ["created.cs", { m: 7, s: 8, c: 9 }],
+    ]);
+
+    expect(reconcileSeedBaseline(before, after)).toBe(3);
+
+    expect(after.get("kept.cs")).toEqual({ m: 1, s: 2, c: 3 });
+    // The main process's edit is the baseline the WORKER never saw.
+    expect(after.get("edited.cs")).toEqual({ m: 1, s: 2, c: 3 });
+    // Deleted during seeding: the project HAD it, so putting it back is undoing
+    // a deliberate deletion.
+    expect(after.get("deleted.cs")).toEqual({ m: 4, s: 5, c: 6 });
+    // Created during seeding: the baseline is ABSENCE, recorded explicitly, so
+    // the agent's version of that path is a conflict rather than an update.
+    expect(after.get("created.cs")?.absent).toBe(true);
+    expect(existedAtSeed(after.get("created.cs"))).toBe(false);
   });
 });

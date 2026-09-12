@@ -402,11 +402,64 @@ export function readCommitLedger(leasePath: string): LeaseCommitLedger | undefin
 export interface SeedStamp {
   readonly m: number;
   readonly s: number;
+  /**
+   * The inode's change time. mtime and size are both settable from userland —
+   * a one-character edit that preserves the mtime and the length reads as
+   * "never written to" (Codex 2026-09-12 P#16). ctime is not settable: any
+   * write, chmod or rename moves it forward, and `utimes` (how a
+   * timestamp-preserving copy restores an mtime) moves it to now. NaN on a
+   * seed written before it was recorded.
+   */
+  readonly c: number;
+  /** The path did NOT exist at the baseline — recorded, not omitted. */
+  readonly absent?: true;
 }
 
-/** Unchanged means BOTH, and an absent stamp answers nothing. */
-export function stampUnchanged(stamp: SeedStamp | undefined, now: { mtimeMs: number; size: number }): boolean {
-  return stamp !== undefined && stamp.m === now.mtimeMs && stamp.s === now.size;
+/** Did this path exist when the lease was taken? An unrecorded path answers nothing. */
+export function existedAtSeed(stamp: SeedStamp | undefined): boolean {
+  return stamp !== undefined && stamp.absent !== true;
+}
+
+/** Unchanged means ALL of them, and an absent stamp answers nothing. */
+export function stampUnchanged(stamp: SeedStamp | undefined, now: { mtimeMs: number; size: number; ctimeMs?: number }): boolean {
+  if (stamp === undefined || stamp.absent === true) return false;
+  if (stamp.m !== now.mtimeMs || stamp.s !== now.size) return false;
+  // A seed from before ctime was recorded keeps behaving exactly as it did.
+  return Number.isNaN(stamp.c) || now.ctimeMs === undefined || stamp.c === now.ctimeMs;
+}
+
+/**
+ * Make the post-seed snapshot describe the project AS IT WAS BEFORE SEEDING.
+ *
+ * A file that MOVED while the lease was being seeded keeps its earlier stamp,
+ * so the change is seen at commit time as what it is: someone else's edit, to
+ * be preserved rather than overwritten (Codex 2026-09-11 N#4).
+ *
+ * Creation and deletion are baseline transitions too, and leaving them
+ * unrecorded is not neutral: a file the main process CREATED during seeding
+ * read as "this is how the project always looked", so the agent's blind
+ * version overwrote it; a file it DELETED read as "the project never had it",
+ * so the agent's copy put it back (Codex 2026-09-12 P#16).
+ *
+ * Returns how many paths were reconciled. `sourceSeed` is mutated in place.
+ */
+export function reconcileSeedBaseline(
+  beforeSeed: ReadonlyMap<string, SeedStamp>,
+  sourceSeed: Map<string, SeedStamp>,
+): number {
+  let reconciled = 0;
+  for (const [rel, before] of beforeSeed) {
+    const after = sourceSeed.get(rel);
+    if (after !== undefined && after.m === before.m && after.s === before.s && after.c === before.c) continue;
+    sourceSeed.set(rel, before); // moved, or deleted: the pre-seed stamp is the baseline
+    reconciled += 1;
+  }
+  for (const rel of [...sourceSeed.keys()]) {
+    if (beforeSeed.has(rel)) continue;
+    sourceSeed.set(rel, { m: Number.NaN, s: Number.NaN, c: Number.NaN, absent: true });
+    reconciled += 1;
+  }
+  return reconciled;
 }
 
 interface PersistedLeaseSeed {
@@ -421,8 +474,8 @@ function writeLeaseSeed(leasePath: string, seed: PersistedLeaseSeed): void {
       leaseSeedPath(leasePath),
       JSON.stringify({
         seedHead: seed.seedHead ?? null,
-        leaseSeed: [...seed.leaseSeed.entries()].map(([rel, st]) => [rel, st.m, st.s]),
-        sourceSeed: [...seed.sourceSeed.entries()].map(([rel, st]) => [rel, st.m, st.s]),
+        leaseSeed: [...seed.leaseSeed.entries()].map(([rel, st]) => [rel, st.m, st.s, st.c, st.absent === true ? 1 : 0]),
+        sourceSeed: [...seed.sourceSeed.entries()].map(([rel, st]) => [rel, st.m, st.s, st.c, st.absent === true ? 1 : 0]),
       }),
       "utf8",
     );
@@ -447,10 +500,16 @@ function readLeaseSeed(leasePath: string): PersistedLeaseSeed | undefined {
       if (!Array.isArray(v)) return undefined;
       const m = new Map<string, SeedStamp>();
       for (const e of v) {
-        // [rel, mtime, size] — and [rel, mtime] from a lease taken before the
-        // size was recorded, which keeps behaving exactly as it did.
+        // [rel, mtime, size, ctime, absent] — and the shorter forms from
+        // leases taken before those fields were recorded, which keep behaving
+        // exactly as they did.
         if (!Array.isArray(e) || typeof e[0] !== "string" || typeof e[1] !== "number") continue;
-        m.set(e[0], { m: e[1], s: typeof e[2] === "number" ? e[2] : Number.NaN });
+        const stamp: SeedStamp = {
+          m: e[1],
+          s: typeof e[2] === "number" ? e[2] : Number.NaN,
+          c: typeof e[3] === "number" ? e[3] : Number.NaN,
+        };
+        m.set(e[0], e[4] === 1 ? { ...stamp, absent: true } : stamp);
       }
       return m;
     };
@@ -876,16 +935,7 @@ export class WorkspaceLeaseManager {
     //                edit the user makes DURING the run is detectable.
     const leaseSeed = await this.snapshotMtimes(workspacePath, workspacePath);
     const sourceSeed = await this.snapshotMtimes(sourceRoot, sourceRoot);
-    // A file that MOVED while the lease was being seeded keeps its earlier
-    // stamp, so the change is seen at commit time as what it is: someone
-    // else's edit, to be preserved rather than overwritten (N#4).
-    let movedWhileSeeding = 0;
-    for (const [rel, before] of beforeSeed) {
-      const after = sourceSeed.get(rel);
-      if (after === undefined || (after.m === before.m && after.s === before.s)) continue;
-      sourceSeed.set(rel, before);
-      movedWhileSeeding += 1;
-    }
+    const movedWhileSeeding = reconcileSeedBaseline(beforeSeed, sourceSeed);
     if (movedWhileSeeding > 0) {
       getLoggerSafe().info("Files changed in the project while the lease was being seeded", {
         sourceRoot,
@@ -1766,7 +1816,7 @@ export class WorkspaceLeaseManager {
           // The USER deleted it while the agent ran (review 2026-09-07): it
           // was in the project at seed time and is gone now. Re-creating it
           // from the lease undid a deliberate deletion with no word said.
-          if (sourceSeeded !== undefined && !targetExists) {
+          if (existedAtSeed(sourceSeeded) && !targetExists) {
             await quarantine(rel, full);
             return { conflict: rel };
           }
@@ -1781,8 +1831,15 @@ export class WorkspaceLeaseManager {
             // reads as "modified after" — measured at +0.63 ms.
             const targetNow = await fsp.stat(target);
             const mtimeMoved = sourceSeeded === undefined
+              || sourceSeeded.absent === true
               || targetNow.mtimeMs !== sourceSeeded.m
               || (!Number.isNaN(sourceSeeded.s) && targetNow.size !== sourceSeeded.s);
+            // ctime is deliberately NOT consulted here. It moves on a chmod or
+            // a rename that changed no byte, and this branch QUARANTINES the
+            // agent's work: a false "the user changed it" costs the run its
+            // output. Where a wrong answer is merely conservative — "was this
+            // file written to?", "may this deletion be applied?" — the stamp
+            // comparison does consult it (Codex 2026-09-12 P#16).
             // A moved mtime with the SAME bytes as the seed-time commit is not a
             // user change (review + measurement 2026-09-07): the merge attempt
             // before this commit rewrote 169 files byte-for-byte and every
@@ -1993,6 +2050,7 @@ export class WorkspaceLeaseManager {
     /** Is the project's copy still the one the worker decided about? */
     const unchangedSinceSeed = async (rel: string): Promise<boolean> => {
       const stamp = sourceSeed.get(rel);
+      if (stamp?.absent === true) return false; // it appeared while we were seeding — not ours to delete
       if (stamp === undefined || Number.isNaN(stamp.s)) return true; // nothing recorded: as before
       try {
         return stampUnchanged(stamp, await fsp.stat(join(sourceRoot, rel)));
@@ -2266,7 +2324,7 @@ export class WorkspaceLeaseManager {
         if (!entry.isFile()) return;
         try {
           const st = await fsp.stat(full);
-          seeded.set(relative(root, full), { m: st.mtimeMs, s: st.size });
+          seeded.set(relative(root, full), { m: st.mtimeMs, s: st.size, c: st.ctimeMs });
         } catch (err) {
           skipped.push(`${relative(root, full)} (${err instanceof Error ? err.message : String(err)})`);
         }
