@@ -1604,6 +1604,18 @@ export class CampaignManager {
   }
 
   private submitCurrentMilestone(campaign: Campaign, opts?: { countAttempt?: boolean }): void {
+    // A RECORDED STOP IS A TRANSITION GUARD, not a note. It was persisted the
+    // moment a person's cancellation was seen and then read by nothing at all,
+    // so a completion handler ahead of it in the queue could still submit the
+    // next sprint or reach `done` (Codex 2026-09-12 P#12).
+    const stopped = this.storage.get(campaign.id)?.stopRequestedAt;
+    if (stopped !== undefined) {
+      getLoggerSafe().info("A stop is recorded for this campaign — not submitting more work", {
+        id: campaign.id,
+        stoppedAt: new Date(stopped).toISOString(),
+      });
+      return;
+    }
     const milestone = campaign.milestones[campaign.currentMilestone];
     if (!milestone) {
       // NEVER a silent delivery. A missing milestone here means the ladder is
@@ -3331,6 +3343,21 @@ export class CampaignManager {
           );
           this.scheduleAutoRevive(campaign.id, resumeMs, campaign.autoReviveAt);
           await this.attachDeliveryEvidence(campaign);
+          return;
+        }
+        // …and DELIVERY is a transition too: a stop recorded while this
+        // handler was mid-flight must not become a delivered game (P#12).
+        const stopBeforeDelivery = this.storage.get(campaign.id)?.stopRequestedAt;
+        if (stopBeforeDelivery !== undefined) {
+          campaign.state = "failed";
+          campaign.lastError = "NOT DELIVERED — the campaign was stopped while the final proofs were settling";
+          this.persist(campaign);
+          this.cancelLiveLineages(campaign, "campaign stopped while delivering", { recoverable: true });
+          await this.tell(
+            campaign,
+            "🛑 The campaign was stopped while its final proofs were settling, so it is NOT delivered. " +
+              "Reply **kampanya devam** to run the delivery gate again.",
+          );
           return;
         }
         campaign.state = "done";

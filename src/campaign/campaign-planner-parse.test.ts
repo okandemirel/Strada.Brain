@@ -209,4 +209,39 @@ describe("reading a milestone ladder out of a reply", () => {
     expect(grouped[0]!.title).not.toMatch(/^\d/);
     expect(groupHeadingsIntoMilestones({ ...scope, headings: [] } as never)).toEqual([]);
   });
+
+  it("the capture demand survives a maximum-length instruction, and means visual proof (Codex 2026-09-12 P#15)", async () => {
+    const reply = (text: string) => ({ text, toolCalls: [], stopReason: "end_turn", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } });
+    let call = 0;
+    // An instruction at the schema's ceiling, and one that says "capture" about
+    // something else entirely.
+    const huge = `Build it. ${"x".repeat(9_000)}`;
+    const provider = {
+      name: "test",
+      capabilities: { maxTokens: 4096, streaming: false, structuredStreaming: false, toolCalling: false, vision: false, systemPrompt: true },
+      chat: vi.fn(async (_s: string, messages: Array<{ content: string }>) => {
+        const ask = String(messages.at(-1)?.content ?? "");
+        call += 1;
+        if (call <= 2) return reply("<reasoning>\nthinking");
+        if (ask.includes("Group them into between")) {
+          return reply(JSON.stringify({ milestones: [
+            { title: "Huge", coveredSections: [] },
+            { title: "Input", coveredSections: [] },
+          ] }));
+        }
+        return reply(ask.includes('"Input"')
+          ? "Implement input capture for the playfield so taps register on the board."
+          : huge);
+      }),
+    };
+
+    const result = await new CampaignPlanner(provider as never)
+      .planMilestones("# GDD\n\n## 3. CORE\nRules.\n\n## 4. INPUT\nTaps.\n", "docs/GDD.md");
+
+    for (const m of result.milestones) {
+      expect(m.prompt.length).toBeLessThanOrEqual(8000);
+      // Truncation used to cut the appended demand straight back off.
+      expect(m.prompt).toContain("CAPTURING A FRAME");
+    }
+  });
 });

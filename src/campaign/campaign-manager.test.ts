@@ -3412,6 +3412,39 @@ describe("CampaignManager", () => {
     expect(tasks.submitted.at(-1)!.prompt).not.toContain("proved once");
   });
 
+  it("a recorded stop blocks the next submission AND delivery (Codex 2026-09-12 P#12)", async () => {
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+
+    // The stop is recorded while a completion handler is still in flight.
+    const stored = storage.get(campaign.id)!;
+    stored.stopRequestedAt = Date.now();
+    storage.save(stored);
+    const before = tasks.submitted.length;
+
+    // Nothing more is submitted: the marker was written by nothing reading it.
+    (manager as unknown as { submitCurrentMilestone(c: unknown): void }).submitCurrentMilestone(storage.get(campaign.id)!);
+    expect(tasks.submitted).toHaveLength(before);
+
+    // …and a settle that WOULD have delivered stops instead of shipping.
+    const staged = storage.get(campaign.id)!;
+    staged.milestones = [
+      { ...staged.milestones[0]!, status: "green" as const },
+      { id: "mlast", title: "Final delivery proofs", prompt: "prove it", status: "running" as const, attempts: 0, taskId: "task_p12" },
+    ];
+    staged.currentMilestone = 1;
+    staged.state = "executing";
+    staged.stopRequestedAt = Date.now();
+    storage.save(staged);
+    settleMilestone("green, shipping", "task_p12");
+    await new Promise((r) => setTimeout(r, 250));
+
+    // The campaign does not ship. (Which guard catches it — the submission
+    // one or the delivery one — is belt-and-braces; that it cannot reach
+    // `done` past a recorded stop is the contract.)
+    expect(storage.get(campaign.id)!.state).not.toBe("done");
+  });
+
   it("a stop queued against an OLD generation does not fail the revived campaign (Codex 2026-09-11 L#3)", async () => {
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
     await waitFor(() => expect(tasks.submitted).toHaveLength(1));

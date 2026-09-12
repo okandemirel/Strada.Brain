@@ -366,7 +366,12 @@ export class CampaignPlanner {
         `End it by demanding a CAPTURED FRAME of what was built, so the visual gate can run. ` +
         `Reply with the instruction text itself — no JSON, no title, no preamble.`;
       const reply = await streamOrChatText(this.provider, system, promptAsk, { maxTokens: CampaignPlanner.STAGE_OUTPUT_TOKENS });
-      const prompt = stripLeakedReasoning(reply.text ?? "").text.trim().slice(0, 8000);
+      // ROOM FOR THE DEMAND. Truncating to the cap, appending the capture
+      // requirement and truncating again produced an 8 000-character prompt
+      // with the requirement cut off — the gate unarmed and nobody the wiser
+      // (Codex 2026-09-12 P#15).
+      const prompt = stripLeakedReasoning(reply.text ?? "").text.trim()
+        .slice(0, CampaignPlanner.PROMPT_CAP - CampaignPlanner.CAPTURE_DEMAND.length - 2);
       // A milestone with no instruction is not a milestone; the schema's own
       // floor (40 characters) is the measure.
       if (prompt.length < 40) continue;
@@ -376,10 +381,13 @@ export class CampaignPlanner {
       // 02:56). Asked for above, and added here when it is still missing — so
       // the sprint genuinely demands the frame rather than the gate arming on
       // boilerplate nobody asked for (the 2026-09-04 audit).
-      const gated = /captur/i.test(prompt)
+      // …and the demand must be a demand for VISUAL PROOF, not the substring
+      // "captur": "implement input capture" armed nothing and asked for
+      // nothing (P#15).
+      const gated = VISUAL_PROOF_RE.test(prompt)
         ? prompt
-        : `${prompt.replace(/\s+$/, "")}\n\nFinish by CAPTURING A FRAME of what this sprint built (unity_capture_frame) and name the captured file in your report — a sprint that shows nothing is not done.`;
-      milestones.push({ title: item.title, prompt: gated.slice(0, 8000), coveredSections: item.coveredSections, deliverables: [] });
+        : `${prompt.replace(/\s+$/, "")}${CampaignPlanner.CAPTURE_DEMAND}`;
+      milestones.push({ title: item.title, prompt: gated, coveredSections: item.coveredSections, deliverables: [] });
     }
     const validated = milestoneLadderSchema.safeParse({ milestones, excluded: [] });
     if (!validated.success) {
@@ -450,6 +458,11 @@ export class CampaignPlanner {
   private static readonly PLAN_OUTPUT_TOKENS = 8000;
   /** One stage of the staged plan: a short answer by construction. */
   private static readonly STAGE_OUTPUT_TOKENS = 2500;
+  /** The schema's own ceiling for a sprint instruction. */
+  private static readonly PROMPT_CAP = 8000;
+  /** What arms the visual gate, appended when the model did not ask for it. */
+  private static readonly CAPTURE_DEMAND =
+    "\n\nFinish by CAPTURING A FRAME of what this sprint built (unity_capture_frame) and name the captured file in your report — a sprint that shows nothing is not done.";
 
   private async planOnce(system: string, userMessage: string): Promise<MilestoneLadder> {
     if (!this.provider) {
@@ -601,6 +614,14 @@ const coverageResultSchema = z.object({
  * so a reply that explains itself before answering — or that shows a brace in
  * prose — hid the object entirely (measured live 2026-09-12).
  */
+/**
+ * A demand for VISUAL PROOF, which is what the gate is about. Testing for the
+ * substring "captur" armed the gate on "implement input capture" and left it
+ * unarmed on an instruction that asked for a screenshot (Codex 2026-09-12 P#15).
+ */
+const VISUAL_PROOF_RE =
+  /\b(?:captur(?:e|ed|ing)\s+(?:a\s+)?(?:frame|screenshot|image|still)|screenshot|captured\s+frame|prerender(?:ed)?\s+frame|unity_capture_frame|unity_prerender_frames)\b/i;
+
 export function balancedJsonObjects(text: string): string[] {
   const out: string[] = [];
   let depth = 0;

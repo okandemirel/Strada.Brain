@@ -277,6 +277,32 @@ describe("ResultAggregator", () => {
       expect(synthesized.success).toBe(false);
     });
 
+    it("a check that did not ANSWER is named in the node's output (Codex 2026-09-12 P#8)", async () => {
+      // A verification that hit its deadline came back "skipped", the report
+      // said notVerified: 1 — and synthesis returned a clean success with the
+      // timeout explanation nowhere to be found.
+      const verifyFn = vi.fn().mockResolvedValue({
+        verdict: "skipped",
+        verifierProvider: "timeout",
+        issues: ["verification did not answer within 300s"],
+      });
+      const agg = new ResultAggregator({ mode: "always", samplingRate: 0, preferDifferentProvider: true, maxVerificationCost: 15 }, verifyFn);
+      const verified = await agg.verify([makeResult("A", "ok")]);
+
+      expect(verified[0]!.output).toContain("NOT VERIFIED");
+      expect(verified[0]!.output).toContain("did not answer");
+      // The node's own work is untouched: it ran, nobody checked it.
+      expect(verified[0]!.status).toBe("ok");
+
+      // …while an ordinary critical-only skip says nothing of the kind.
+      const skipAgg = new ResultAggregator(
+        { mode: "critical-only", samplingRate: 0, preferDifferentProvider: true, maxVerificationCost: 15 },
+        vi.fn().mockResolvedValue({ verdict: "skipped", verifierProvider: "deepseek", issues: ["not a critical node"] }),
+      );
+      const skipped = await skipAgg.verify([makeResult("B", "ok")]);
+      expect(skipped[0]!.output).not.toContain("NOT VERIFIED");
+    });
+
     it("a rejection in ANY script fails the node (Codex 2026-09-11 O#21)", async () => {
       // The remainder was tokenized as ASCII only, so a finding written in
       // Chinese vanished and the rejection was filed as a report complaint.

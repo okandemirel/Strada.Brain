@@ -20,6 +20,9 @@ import type {
  * of these on a node whose files landed is a flag, not a failure; a
  * substantive finding ("missing test coverage") still fails the node.
  */
+/** Verifier "providers" that mean nobody answered (see withVerifyDeadline). */
+const UNANSWERED_VERIFIER: ReadonlySet<string> = new Set(["timeout", "aborted"]);
+
 const REPORT_SHAPED_ISSUE_RE =
   /output (is )?incomplete|meta-?statement|no (final )?(report|summary)|(output|response|report) (is )?(empty|missing)|did not (report|summari[sz]e)|only (a )?(status|meta)/i;
 
@@ -225,6 +228,22 @@ export class ResultAggregator {
         counts.flagged++;
       } else if (verdict.verdict === "reject") {
         counts.rejected++;
+      }
+
+      // A CHECK THAT DID NOT ANSWER is not a check that passed. A verification
+      // that hit its deadline (or was abandoned by an abort) came back
+      // "skipped", the report said notVerified: 1 — and synthesis still
+      // returned a clean success with the timeout explanation nowhere in the
+      // node's output (Codex 2026-09-12 P#8).
+      if (verdict.verdict === "skipped" && UNANSWERED_VERIFIER.has(verdict.verifierProvider)) {
+        const idx = updatedResults.findIndex((result) => result.nodeId === node.nodeId);
+        if (idx !== -1) {
+          const unanswered = updatedResults[idx]!;
+          updatedResults[idx] = {
+            ...unanswered,
+            output: `${unanswered.output}\n\n[NOT VERIFIED — ${verdict.issues?.join(", ") ?? "the check did not answer"}]`,
+          };
+        }
       }
 
       if (verdict.verdict === "reject") {
