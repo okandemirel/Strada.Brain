@@ -237,6 +237,19 @@ export class FileRenameTool implements ITool {
 
 // ─── file_delete_directory ────────────────────────────────────────────────────
 
+/** Files a commit never publishes and a person never authored. */
+const SYSTEM_OUTPUT_DIR_RE =
+  /(?:^|[\\/])(?:Artifacts|Recordings|Logs|Temp|obj|Build|Builds|\.strada)(?:[\\/]|$)/i;
+
+/** Ordinary directories: a low cap, because this guard exists for a person's files. */
+const DELETE_DIR_LIMIT = 50;
+/** The system's own output: a capture folder holds more frames than that. */
+const SYSTEM_OUTPUT_DELETE_LIMIT = 2000;
+
+export function isSystemOutputDirectory(relPath: string): boolean {
+  return SYSTEM_OUTPUT_DIR_RE.test(relPath);
+}
+
 export class FileDeleteDirectoryTool implements ITool {
   readonly name = "file_delete_directory";
   readonly description =
@@ -289,11 +302,18 @@ export class FileDeleteDirectoryTool implements ITool {
         return { content: "Error: target is not a directory. Use file_delete for files.", isError: true };
       }
 
-      // Safety: count files
+      // Safety: count files. The cap is higher for a directory that holds the
+      // SYSTEM'S OWN output — a PlayMode capture folder routinely holds more
+      // than fifty frames, and the flat limit cost sixteen refused calls in a
+      // single ten-minute window while a sprint tried to clean up after itself
+      // (measured live 2026-09-12 03:50). A directory holding anything else
+      // keeps the low cap: mass deletion of a person's files is the danger
+      // this guard exists for.
       const fileCount = await countFiles(pathCheck.fullPath);
-      if (fileCount > 50) {
+      const limit = isSystemOutputDirectory(relPath) ? SYSTEM_OUTPUT_DELETE_LIMIT : DELETE_DIR_LIMIT;
+      if (fileCount > limit) {
         return {
-          content: `Error: directory contains ${fileCount} files (limit: 50). ` +
+          content: `Error: directory contains ${fileCount} files (limit: ${limit}). ` +
             "Delete files individually or increase the safety limit.",
           isError: true,
         };
