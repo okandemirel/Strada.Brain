@@ -105,7 +105,13 @@ function rowToCampaign(row: CampaignRow): Campaign {
     deliveryReported: row.delivery_reported === 1,
     unmeasurableRevives: row.unmeasurable_revives ?? undefined,
     implementationRevives: row.implementation_revives ?? undefined,
-    pendingCoverageGaps: parseGapQueue(row.pending_coverage_gaps),
+    ...(() => {
+      const queue = parseGapQueue(row.pending_coverage_gaps);
+      return {
+        ...(queue.gaps ? { pendingCoverageGaps: queue.gaps } : {}),
+        ...(queue.unreadable ? { coverageQueueUnreadable: true as const } : {}),
+      };
+    })(),
     deliveryRevives: row.delivery_revives ?? undefined,
     deliveryRoundsTotal: row.delivery_rounds_total ?? undefined,
     stopRequestedAt: row.stop_requested_at ?? undefined,
@@ -465,15 +471,28 @@ export class CampaignStorage {
   }
 }
 
-/** The gap queue as stored: a JSON array of strings, or nothing at all. */
-function parseGapQueue(raw: string | null | undefined): string[] | undefined {
-  if (!raw) return undefined;
+/**
+ * The gap queue as stored: a JSON array of strings, or nothing at all.
+ *
+ * AN UNREADABLE QUEUE IS NOT AN EMPTY ONE. Truncated JSON, a non-array, a row
+ * of nulls — every one of them returned `undefined`, which the campaign reads
+ * as "no requirements are waiting": the obligations a previous run discovered
+ * silently stopped existing, and with the audit budget spent nothing ever
+ * reconstructed them (Codex 2026-09-12 AD#18). `unreadable` says the row held
+ * something this reader could not use, so the campaign can re-establish the
+ * requirements from the GDD instead of delivering without them.
+ */
+function parseGapQueue(raw: string | null | undefined): { gaps?: string[]; unreadable?: true } {
+  if (!raw || raw.trim() === "") return {};
+  let parsed: unknown;
   try {
-    const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return undefined;
-    const items = parsed.filter((x): x is string => typeof x === "string" && x.trim() !== "");
-    return items.length > 0 ? items : undefined;
+    parsed = JSON.parse(raw);
   } catch {
-    return undefined;
+    return { unreadable: true };
   }
+  if (!Array.isArray(parsed)) return { unreadable: true };
+  const items = parsed.filter((x): x is string => typeof x === "string" && x.trim() !== "");
+  if (items.length === 0) return parsed.length > 0 ? { unreadable: true } : {};
+  // SOME entries usable and some not is still a partial loss.
+  return items.length < parsed.length ? { gaps: items, unreadable: true } : { gaps: items };
 }

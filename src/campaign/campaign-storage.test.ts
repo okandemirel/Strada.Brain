@@ -173,4 +173,50 @@ describe("findLatestRevivable", () => {
     });
   });
 
+  /**
+   * Codex round AD#18, reproduced through SQLite: a truncated or malformed
+   * requirement queue hydrated as `undefined`, which the campaign reads as
+   * "nothing is waiting" — the obligations a previous run discovered simply
+   * stopped existing.
+   */
+  describe("an unreadable requirement queue is not an empty one (Codex 2026-09-12 AD#18)", () => {
+    const storedQueue = (raw: string, id: string): Campaign => {
+      storage.save(makeCampaign({ id, pendingCoverageGaps: ["Save: absent"] }));
+      // Reach past the API the way a half-written row or an older writer does.
+      (storage as unknown as { db: { prepare(sql: string): { run(...args: unknown[]): void } } }).db
+        .prepare("UPDATE campaigns SET pending_coverage_gaps = ? WHERE id = ?")
+        .run(raw, id);
+      return storage.get(id)!;
+    };
+
+    it("says so for truncated JSON, a non-array and entries it cannot use", () => {
+      const truncated = storedQueue('["Save: absent"', "c_truncated");
+      expect(truncated.coverageQueueUnreadable).toBe(true);
+      expect(truncated.pendingCoverageGaps).toBeUndefined();
+
+      const notAnArray = storedQueue('{"Save": "absent"}', "c_object");
+      expect(notAnArray.coverageQueueUnreadable).toBe(true);
+
+      const nulls = storedQueue("[null, null]", "c_nulls");
+      expect(nulls.coverageQueueUnreadable).toBe(true);
+
+      // PARTIAL is still a loss: the readable entries are kept AND the row is
+      // flagged, so nothing claims the lost ones were satisfied.
+      const partial = storedQueue('["Save: absent", null, 7]', "c_partial");
+      expect(partial.pendingCoverageGaps).toEqual(["Save: absent"]);
+      expect(partial.coverageQueueUnreadable).toBe(true);
+    });
+
+    it("says nothing of the kind for a queue that is genuinely empty or readable", () => {
+      expect(storedQueue("[]", "c_empty").coverageQueueUnreadable).toBeUndefined();
+      expect(storedQueue("", "c_blank").coverageQueueUnreadable).toBeUndefined();
+      const good = storedQueue('["Save: absent", "Audio: absent"]', "c_good");
+      expect(good.pendingCoverageGaps).toEqual(["Save: absent", "Audio: absent"]);
+      expect(good.coverageQueueUnreadable).toBeUndefined();
+      // A campaign that never queued anything.
+      storage.save(makeCampaign({ id: "c_none" }));
+      expect(storage.get("c_none")!.coverageQueueUnreadable).toBeUndefined();
+    });
+  });
+
 });

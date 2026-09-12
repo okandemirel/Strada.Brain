@@ -3317,6 +3317,15 @@ export class CampaignManager {
             `${queuedGaps.length} GDD requirement(s) the audit named have no sprint yet: ${queuedGaps.slice(0, 2).join("; ")}`.slice(0, 220),
           );
         }
+        // …and an UNREADABLE queue is an unknown number of them (AD#18): the
+        // row held obligations this build could not read, so nothing here may
+        // claim they are satisfied.
+        if (campaign.coverageQueueUnreadable === true) {
+          missingProofs.push(
+            "the persisted GDD requirement queue could not be read — the requirements a previous round found are unknown "
+            + "until a fresh audit re-establishes them",
+          );
+        }
         if (claims?.refusal) missingProofs.push(claims.refusal.slice(0, 220));
         for (const perTarget of perTargetClaims) missingProofs.push(perTarget.slice(0, 220));
         milestone.deliveryProofsMissing = missingProofs;

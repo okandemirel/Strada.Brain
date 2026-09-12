@@ -411,6 +411,14 @@ export interface Campaign {
    * cannot read like an audited one.
    */
   coverageAuditNote?: string;
+  /**
+   * Set when the persisted requirement queue held something the reader could
+   * not use. An unreadable obligation set used to hydrate as an empty one, so
+   * requirements a previous run had discovered simply stopped existing (Codex
+   * 2026-09-12 AD#18). Derived at load, never a column: it clears as soon as
+   * a readable queue is written.
+   */
+  coverageQueueUnreadable?: boolean;
 }
 
 // =============================================================================

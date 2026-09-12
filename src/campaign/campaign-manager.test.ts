@@ -4391,6 +4391,36 @@ describe("CampaignManager", () => {
     expect(after.milestones[2]!.deliveryProofsMissing!.join(" ")).toContain("have no sprint yet");
   });
 
+  it("an UNREADABLE requirement queue is disclosed, never delivered over (Codex 2026-09-12 AD#18)", async () => {
+    // The persisted queue hydrated as `undefined` when its JSON was
+    // truncated, which reads as "nothing is waiting": the requirements a
+    // previous round found stopped existing. With the audit rounds spent,
+    // nothing rediscovers them either — so the delivery gate must say the
+    // obligations are unknown instead of reporting a finished game.
+    const campaign = await runToSpentRemediation(
+      (reqs) => ({ closed: [...reqs], open: [] }),
+      (cid) => {
+        // A HALF-WRITTEN ROW, as a crash leaves it: the queue's JSON is
+        // truncated. `save()` cannot express this — that is the point.
+        (storage as unknown as { db: { prepare(sql: string): { run(...args: unknown[]): void } } }).db
+          .prepare("UPDATE campaigns SET pending_coverage_gaps = ? WHERE id = ?")
+          .run('["Save: absent"', cid);
+      },
+    );
+
+    await waitFor(
+      () =>
+        expect(
+          storage
+            .get(campaign.id)!
+            .milestones.flatMap((m) => m.deliveryProofsMissing ?? [])
+            .join(" "),
+        ).toContain("requirement queue could not be read"),
+      { timeout: 15_000 },
+    );
+    expect(storage.get(campaign.id)!.state).not.toBe("done");
+  });
+
   it("a two-platform GDD builds BOTH, and a build of another platform proves neither (Codex 2026-09-11 F#11, L#10, L#12)", async () => {
     writeFileSync(join(projectRoot, "docs", "Game_GDD.md"), "# GDD\n\nShips on Steam for Windows and later on iOS. Target 60 fps.");
     const campaign = manager.startFromGdd(ctx, "# GDD\n\nShips on Steam for Windows and later on iOS. Target 60 fps.", "docs/Game_GDD.md");
