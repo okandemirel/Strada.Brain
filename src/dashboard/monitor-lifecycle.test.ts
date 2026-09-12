@@ -721,6 +721,23 @@ describe("createMonitorLifecycle", () => {
       expect(dag.edges).toEqual([{ source: "step-0", target: "step-1" }]);
     });
 
+    it("marks a batch whose tools all FAILED as failed, not completed (Codex 2026-09-13 AG#16)", () => {
+      // The prior node was transitioned to `completed` whatever its tools
+      // did, so a build that failed showed on the board as a finished step.
+      const lc = createMonitorLifecycle(bus);
+      lc.requestStart("scope-1", "msg");
+      lc.stepBatch("scope-1", 0, "dotnet_build");
+      bus.calls.length = 0;
+
+      lc.stepBatch("scope-1", 1, "file_read", undefined, true);
+
+      const dag = bus.calls.find((c) => c.event === "monitor:dag_init")!.payload as {
+        nodes: Array<{ id: string; status: string }>;
+      };
+      expect(dag.nodes.find((n) => n.id === "step-0")!.status).toBe("failed");
+      expect(dag.nodes.find((n) => n.id === "step-1")!.status).toBe("executing");
+    });
+
     it("requestEnd settles the final in-flight step node (completed)", () => {
       const lc = createMonitorLifecycle(bus);
       lc.requestStart("scope-1", "msg");

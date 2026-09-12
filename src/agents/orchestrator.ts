@@ -1329,6 +1329,7 @@ export class Orchestrator {
           params.batchIndex,
           params.toolLabel,
           params.monitorScope,
+          params.priorBatchFailed,
         ),
       // Step 9 (port assembly): the shell residue the port binds — provider resilience, session
       // compaction, checkpoint, ALS scope, epoch rollover, trajectory credit, terminal-reason map,

@@ -154,6 +154,8 @@ export interface ToolTurnDeps extends SetupDeps {
     monitorScope?: string;
     batchIndex: number;
     toolLabel: string;
+    /** Whether the batch this one supersedes ended with every call failing. */
+    priorBatchFailed?: boolean;
   }): void;
 }
 
@@ -313,6 +315,11 @@ export async function portExecuteToolTurn(
           monitorScope: runCtx.workerMonitorScope,
           batchIndex,
           toolLabel: summarizePlainLoopBatch(toolCalls),
+          // HOW THE BATCH BEFORE THIS ONE ENDED. The monitor marked the
+          // previous node `completed` whatever its tools did, so a failed
+          // build read as a finished step (Codex 2026-09-13 AG#16). A batch
+          // in which every call failed did not succeed.
+          priorBatchFailed: toolResults.length > 0 && toolResults.every((r) => r.isError === true),
         });
       } catch {
         /* non-fatal — monitor is best-effort */

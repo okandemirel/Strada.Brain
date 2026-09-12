@@ -154,9 +154,29 @@ describe("portExecuteToolTurn — plain-loop step DAG emission", () => {
       monitorScope: undefined,
       batchIndex: 0,
       toolLabel: "read_file, edit_file",
+      // …and how the batch this one supersedes ended, so the board does not
+      // show a failed build as a finished step (Codex 2026-09-13 AG#16).
+      priorBatchFailed: false,
     });
     // The per-run counter advanced so the NEXT batch would be step-1 (id alignment source).
     expect(runCtx.plainLoopStepIndex).toBe(1);
+  });
+
+  it("says when EVERY call in the batch failed, so a failed build is not a finished step (AG#16)", async () => {
+    const failing = makeDeps({
+      executeToolCalls: async (_chatId: string, toolCalls: ToolCall[]): Promise<ToolResult[]> =>
+        toolCalls.map((tc) => ({ toolCallId: tc.id, content: "error CS0103", isError: true }) as unknown as ToolResult),
+    } as Partial<ToolTurnDeps>);
+    await portExecuteToolTurn(failing, makeArgs(), makeRunCtx());
+    expect(failing.emitPlainLoopStep).toHaveBeenCalledWith(expect.objectContaining({ priorBatchFailed: true }));
+
+    // A batch where something succeeded is not a failed batch.
+    const mixed = makeDeps({
+      executeToolCalls: async (_chatId: string, toolCalls: ToolCall[]): Promise<ToolResult[]> =>
+        toolCalls.map((tc, i) => ({ toolCallId: tc.id, content: "ok", isError: i === 0 }) as unknown as ToolResult),
+    } as Partial<ToolTurnDeps>);
+    await portExecuteToolTurn(mixed, makeArgs(), makeRunCtx());
+    expect(mixed.emitPlainLoopStep).toHaveBeenCalledWith(expect.objectContaining({ priorBatchFailed: false }));
   });
 
   it("advances batchIndex monotonically across batches (single id source)", async () => {

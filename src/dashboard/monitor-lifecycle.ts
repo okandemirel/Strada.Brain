@@ -104,7 +104,7 @@ export interface MonitorLifecycle {
    * decomposition check — timing-correct because goalDecomposed fires in PLANNING, before
    * the first tool turn reaches stepBatch.
    */
-  stepBatch(conversationScope: string, batchIndex: number, toolLabel: string, monitorScope?: string): void
+  stepBatch(conversationScope: string, batchIndex: number, toolLabel: string, monitorScope?: string, priorBatchFailed?: boolean): void
 }
 
 import { randomUUID } from "node:crypto";
@@ -434,7 +434,7 @@ export function createMonitorLifecycle(workspaceBus: WorkspaceBus): MonitorLifec
       settleActiveStepNode(episode, scopeKey, failed)
     },
 
-    stepBatch(conversationScope: string, batchIndex: number, toolLabel: string, monitorScope?: string): void {
+    stepBatch(conversationScope: string, batchIndex: number, toolLabel: string, monitorScope?: string, priorBatchFailed?: boolean): void {
       // BUG#1 P2 — plain interactive/background loop only (the engine's suppression guard
       // proves it: no supervisor, no goal-tree/decomposition owns this board). Grow the one
       // static "executing" card into a live step DAG under the ACTIVE episode root. Never
@@ -477,7 +477,11 @@ export function createMonitorLifecycle(workspaceBus: WorkspaceBus): MonitorLifec
         // append this one.
         const prior = episode.stepDag.activeStepNodeId
         if (prior && prior !== nodeId) {
-          setStepStatusInMemory(episode, prior, 'completed')
+          // A FINISHED ATTEMPT IS NOT A SUCCESSFUL ONE. The prior node was
+          // transitioned to `completed` whatever its tools did, so a build
+          // that failed showed on the board as a finished step (Codex
+          // 2026-09-13 AG#16).
+          setStepStatusInMemory(episode, prior, priorBatchFailed === true ? 'failed' : 'completed')
         }
         // Guard against a duplicate index (e.g. a retry): only append a genuinely new node.
         if (!episode.stepDag.nodes.some((n) => n.id === nodeId)) {
