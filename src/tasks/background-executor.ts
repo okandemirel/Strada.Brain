@@ -2329,7 +2329,19 @@ export class BackgroundExecutor {
     // twenty minutes, sixteen plan files deep, cap never reached.
     const key = `mission:${this.lineageRootTaskId(task)}`;
     const attempt = this.missionRetries.get(key) ?? 0;
-    const budgetExceeded = this._unifiedBudgetManager?.isGlobalExceeded() ?? false;
+    // An UNANSWERABLE budget is treated as spent: the predicate reads storage,
+    // and letting it throw out of here took the whole keep-alive with it —
+    // the mission was left with no appointment at all (Codex 2026-09-12 Q#2).
+    let budgetExceeded: boolean;
+    try {
+      budgetExceeded = this._unifiedBudgetManager?.isGlobalExceeded() ?? false;
+    } catch (err) {
+      getLoggerSafe().warn("Budget could not be read while parking a mission — treating it as exceeded", {
+        taskId: task.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      budgetExceeded = true;
+    }
     let decision = decideMissionKeepAlive(attempt, { budgetExceeded });
     // A RESTART IS NOT A FAILURE, so it cannot be the thing that gives up.
     // Measured live 2026-09-11: three boots (11:54:22, 12:24:51, 12:44:57),
@@ -2379,7 +2391,21 @@ export class BackgroundExecutor {
         } catch { /* the notice above still stands */ }
         const rearm = setTimeout(() => {
           try {
-            if (this._unifiedBudgetManager?.isGlobalExceeded() ?? false) {
+            // EVERY probe on this path can throw — the budget predicate reads
+            // storage — and the empty catch below took the last scheduled
+            // recovery with it, parking the mission until a restart (Codex
+            // 2026-09-12 Q#2). An unanswerable probe re-parks instead.
+            let walled: boolean;
+            try {
+              walled = this._unifiedBudgetManager?.isGlobalExceeded() ?? false;
+            } catch (err) {
+              getLoggerSafe().warn("Budget re-arm could not read the budget — parking the mission again", {
+                taskId: task.id,
+                error: err instanceof Error ? err.message : String(err),
+              });
+              walled = true;
+            }
+            if (walled) {
               this.scheduleMissionKeepAlive(task, reason); // still walled — re-checks again
               return;
             }
@@ -2401,7 +2427,14 @@ export class BackgroundExecutor {
               });
             }
             if (!resumed) this.scheduleMissionKeepAlive(task, reason);
-          } catch { /* best-effort re-arm */ }
+          } catch (err) {
+            // Nothing on this path may end without another appointment.
+            getLoggerSafe().warn("Budget re-arm threw — parking the mission again", {
+              taskId: task.id,
+              error: err instanceof Error ? err.message : String(err),
+            });
+            try { this.scheduleMissionKeepAlive(task, reason); } catch { /* the mission is beyond recovery here */ }
+          }
         }, 60 * 60_000);
         rearm.unref?.();
         return true;

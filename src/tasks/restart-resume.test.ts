@@ -345,6 +345,35 @@ describe("a restart does not spend a mission retry, and never escalates", () => 
     }
   });
 
+  it("a budget PROBE that throws parks the mission and a later wake still retries (Codex 2026-09-12 Q#2)", async () => {
+    vi.useFakeTimers();
+    try {
+      const { internals, retried, blocks } = harness([]);
+      let probe: () => boolean = () => { throw new Error("TaskStorage not initialized"); };
+      (internals as unknown as { _unifiedBudgetManager: unknown })._unifiedBudgetManager = {
+        isGlobalExceeded: () => probe(),
+      };
+      const task = { id: "task_1", chatId: "cli-local", prompt: "Mission: build the game", origin: "user", status: "failed" };
+
+      internals.scheduleMissionKeepAlive(task, "budget exceeded");
+      const before = blocks.length;
+      await vi.advanceTimersByTimeAsync(60 * 60_000 + 1_000);
+
+      // The unanswerable probe re-parked the mission rather than ending the
+      // chain of appointments…
+      expect(blocks.length).toBeGreaterThan(before);
+      expect(retried).toEqual([]);
+
+      // …and the NEXT wake, with the budget readable again, resumes it.
+      probe = () => false;
+      await vi.advanceTimersByTimeAsync(60 * 60_000 + 1_000);
+
+      expect(retried).toEqual(["task_1"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("an escalation RECORDS itself so the caller does not overwrite it (Codex 2026-09-11 O#14)", () => {
     const { internals, notices } = harness([]);
     internals.missionRetries.set("mission:task_1", 10);
