@@ -38,6 +38,37 @@ export interface MediaDisclosure {
 /** How many mentions make a category a stated requirement rather than a passing word. */
 export const MEDIA_ASK_THRESHOLD = 3;
 
+/**
+ * The audio CUES a document names, as its own sentences.
+ *
+ * One reachable clip used to clear a cue list of any length: the gate asked
+ * whether ANY clip was reachable, so a document listing "SFX for the tap,
+ * music on the menu, a jingle when the level ends…" was satisfied by a single
+ * imported sound (Codex 2026-09-12 R#12). Only explicit cue statements count —
+ * a sound named FOR an event — so a document that merely says "audio" many
+ * times names no cues and this measures nothing.
+ */
+const AUDIO_CUE_RE =
+  /\b(sfx|sound\s+effects?|sound|music|soundtrack|jingle|voice[- ]?over|ambien(?:ce|t\s+sound))\b[^.\n]{0,40}?\b(?:for|on|when|plays?\s+(?:on|when)|cue(?:s|d)?\s+(?:on|when))\b([^.\n]{3,60})/giu;
+
+/** Distinct audio cues the document states, as "<sound> → <event>" keys. */
+export function audioCuesNamed(documentText: string): string[] {
+  const cues = new Set<string>();
+  AUDIO_CUE_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = AUDIO_CUE_RE.exec(documentText)) !== null) {
+    const sound = m[1]!.toLowerCase().replace(/\s+/gu, " ");
+    const event = m[2]!.toLowerCase().replace(/[^a-z0-9 ]+/gu, " ").replace(/\s+/gu, " ").trim().slice(0, 40);
+    if (event.length < 3) continue;
+    cues.add(`${sound} → ${event}`);
+    if (cues.size >= 64) break;
+  }
+  return [...cues];
+}
+
+/** Below this, a cue list is too small to measure a shortfall against. */
+export const MIN_CUES_TO_MEASURE = 3;
+
 const MEDIA_TERMS: ReadonlyArray<{ kind: MediaKind; re: RegExp }> = [
   { kind: "audio", re: /\b(?:music|soundtrack|sfx|sound\s+effects?|audio|jingle|ambien(?:ce|t\s+sound)|voice[- ]?over)\b/giu },
   { kind: "animation", re: /\b(?:animat(?:ion|ions|ed|e|es|ing)|squash[- ]and[- ]stretch|tween(?:s|ing)?|keyframes?)\b/giu },
@@ -117,12 +148,26 @@ export function describeMedia(gddText: string | undefined, report: BuiltAsSpecif
       );
     } else if (asks("audio") && clips > 0 && report.reachableAudioClips === 0 && report.shippedAudioSourcesBound === 0
       && !proceduralAudio && !asksForSilence) {
+      // (the zero-reachable case is below; the cue-count case follows it)
       // An unused package clip appearing in the project did not turn a
       // deliberately silent or procedurally-scored game into a defect
       // (Codex 2026-09-11 D#29).
       refusal =
         `the GDD specifies audio (${audio.count} mentions) and the project holds ${clips} audio clip(s), but no shipped scene reaches a ` +
         `single clip by any route and none of its ${report.shippedAudioSources} AudioSource(s) is bound to one — the delivery is silent`;
+    } else if (asks("audio") && !proceduralAudio && !asksForSilence) {
+      // A CUE LIST IS A LIST. The gate above only asks whether ANY clip is
+      // reachable, so one sound cleared a document naming a dozen cues
+      // (Codex 2026-09-12 R#12). What the document states as cues is counted,
+      // and the shortfall is named with both numbers.
+      const cues = audioCuesNamed(documentText);
+      if (cues.length >= MIN_CUES_TO_MEASURE && report.reachableAudioClips < cues.length) {
+        refusal =
+          `the GDD names ${cues.length} audio cues (${cues.slice(0, 4).join("; ")}${cues.length > 4 ? "; …" : ""}) and the shipped scenes ` +
+          `reach ${report.reachableAudioClips} clip(s) — the cue list is not produced`;
+      } else if (cues.length >= MIN_CUES_TO_MEASURE) {
+        lines.push(`GDD audio: ${cues.length} cue(s) named, ${report.reachableAudioClips} clip(s) reachable from a shipped scene (disclosed).`);
+      }
     }
   }
   const anim = signals.find((s) => s.kind === "animation");

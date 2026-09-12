@@ -8,7 +8,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import os from "node:os";
 import { assessBuiltAsSpecified } from "./built-as-specified.js";
-import { describeMedia } from "./gdd-media.js";
+import { describeMedia, audioCuesNamed } from "./gdd-media.js";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -148,5 +148,30 @@ describe("describeMedia", () => {
     const d = describeMedia("# GDD\n\nA little music would be nice.", withScene("", withClip));
     expect(d.signals[0]).toMatchObject({ kind: "audio", count: 1 });
     expect(d.refusal).toBeUndefined();
+  });
+});
+
+describe("a cue list is a list (Codex 2026-09-12 R#12)", () => {
+  const cueList =
+    "# GDD\n\n## Audio\nMusic plays on the menu. SFX for the tap. A jingle when the level ends. " +
+    "Sound effects for the merge. Voice-over on the boss intro.\n";
+
+  it("reads the cues the document states, and nothing from a document that only says 'audio'", () => {
+    expect(audioCuesNamed(cueList).length).toBeGreaterThanOrEqual(4);
+    // Mentions are not cues: "audio, audio, audio" names none.
+    expect(audioCuesNamed("Audio matters. The audio budget is small. Audio, audio.")).toEqual([]);
+  });
+
+  it("one reachable clip does not satisfy five named cues", () => {
+    // The gate asked only whether ANY clip was reachable, so a single imported
+    // sound cleared a whole cue list.
+    const one = describeMedia(cueList, withScene(`${AUDIO(CLIP)}`, withClip));
+    expect(one.refusal).toContain("audio cues");
+    expect(one.refusal).toContain("reach 1 clip(s)");
+  });
+
+  it("a document with no cue list keeps the old behaviour", () => {
+    const vague = "# GDD\n\n## Audio\nAudio is important. Audio everywhere. The audio team decides.\n";
+    expect(describeMedia(vague, withScene(`${AUDIO(CLIP)}`, withClip)).refusal).toBeUndefined();
   });
 });
