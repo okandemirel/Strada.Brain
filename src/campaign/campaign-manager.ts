@@ -3964,6 +3964,13 @@ export class CampaignManager {
 
   /** The play-through verdict for this sprint, if unity_playthrough ran since it began. */
   private measurePlaythrough(milestone: CampaignMilestone): ReturnType<typeof readPlaythroughVerdict> {
+    // NOT accumulated across the attempt's runs, deliberately: the verdict file
+    // is overwritten by each run and the campaign reads it only at settle, so
+    // an accumulator here would union nothing that was not already in the last
+    // file. Proving more sessions than one run can play has to be done where
+    // the runs happen — the play-through tool writing a cumulative record —
+    // and until then the shortfall past one run's share is NAMED, never
+    // waived (Codex 2026-09-12 R#4, left open with its reason).
     return readPlaythroughVerdict(this.projectRoot, this.sprintStartMs(milestone), undefined, attemptRunId(milestone));
   }
 

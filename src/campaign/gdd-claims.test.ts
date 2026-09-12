@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { gddPlatform } from "./gdd-platform.js";
-import { assessNumericClaims, claimsRefusal, describeClaims, extractNumericClaims } from "./gdd-claims.js";
+import { assessNumericClaims, claimsRefusal, describeClaims, extractNumericClaims, finishedSessionIndices } from "./gdd-claims.js";
 import type { PlaythroughEvidence } from "./types.js";
 
 const GDD = `# Sky Pigs
@@ -276,5 +276,22 @@ describe("independent level counts cannot contradict each other (Codex 2026-09-1
     // A single count is untouched.
     const one = extractNumericClaims("The game ships 7 levels.");
     expect(one.claims.filter((c) => c.kind === "level_count").map((c) => c.value)).toEqual([7]);
+  });
+});
+
+describe("distinct finished sessions (Codex 2026-09-12 R#4)", () => {
+  it("counts a session once, only inside the catalog, and only when it did something", () => {
+    expect(finishedSessionIndices({
+      sessionCount: 4,
+      sessions: [
+        { index: 1, outcome: "Won", actions: 5 },
+        { index: 1, outcome: "Won", actions: 9 },   // the same level again
+        { index: 4, outcome: "Lost", actions: 3 },  // the LAST catalog entry counts
+        { index: 5, outcome: "Won", actions: 3 },   // outside the catalog
+        { index: 2, outcome: "None", actions: 7 },  // never reached an outcome
+        { index: 3, outcome: "Won", actions: 0 },   // did nothing
+      ],
+    })).toEqual([1, 4]);
+    expect(finishedSessionIndices(undefined)).toEqual([]);
   });
 });

@@ -188,6 +188,29 @@ export function extractNumericClaims(gddText: string): { claims: NumericClaim[];
 }
 
 /** Hold each claim against the play-through evidence. */
+/**
+ * The DISTINCT sessions a play-through actually finished.
+ *
+ * Three records of one index are one level played three times (Codex
+ * 2026-09-11 C#22); an index the catalog does not hold, or a session that took
+ * no whole action, is not a level played (D#21, E#7); and the indices are
+ * ONE-based, the contract Strada.Core states — "the first session is 1" — so
+ * counting 0…catalog-1 rejected the last valid session of every game (R#3).
+ */
+export function finishedSessionIndices(
+  playthrough: { sessionCount?: number; sessions?: ReadonlyArray<{ index?: number; outcome?: string; actions?: number }> } | undefined,
+): number[] {
+  const catalog = playthrough?.sessionCount ?? 0;
+  const seen = new Set<number>();
+  for (const session of playthrough?.sessions ?? []) {
+    if (session.outcome === "None" || session.outcome === "Refused") continue;
+    if (!Number.isInteger(session.index) || session.index! < 1 || session.index! > Math.max(catalog, 1)) continue;
+    if (!Number.isInteger(session.actions) || session.actions! <= 0) continue;
+    seen.add(session.index!);
+  }
+  return [...seen].sort((a, b) => a - b);
+}
+
 export function assessNumericClaims(
   claims: readonly NumericClaim[],
   playthrough: PlaythroughEvidence | undefined,
@@ -294,22 +317,7 @@ export function assessNumericClaims(
         // A session index must be a real catalog entry and the session must
         // have DONE something: {index:-1, actions:0} counted as a played
         // level (Codex 2026-09-11 D#21).
-        const catalog = playthrough.sessionCount ?? 0;
-        const finished = new Set(
-          (playthrough.sessions ?? [])
-            .filter((x) => x.outcome !== "None" && x.outcome !== "Refused")
-            // ONE-BASED, which is the contract Strada.Core states
-            // ("the first session is 1") and the one the play-through driver
-            // generates ("all" → 1…min(catalog, cap)). Counting 0…catalog-1
-            // rejected the LAST valid session of every game and the only
-            // session of a one-level game: a correctly played run could not
-            // satisfy its own level count (Codex 2026-09-12 R#3).
-            .filter((x) => Number.isInteger(x.index) && x.index! >= 1 && x.index! <= Math.max(catalog, 1))
-            // A WHOLE action, and at least one: "0.5 actions" is not half a
-            // move, it is a record nobody should count (Codex 2026-09-11 E#7).
-            .filter((x) => Number.isInteger(x.actions) && x.actions! > 0)
-            .map((x) => x.index),
-        ).size;
+        const finished = finishedSessionIndices(playthrough).length;
         // A catalog of N is a claim; N sessions played to an outcome is the
         // measurement (Codex 2026-09-11 B#10). The play-through plays at most
         // PLAYED_SESSIONS_PER_RUN per run: past that the shortfall is named,
