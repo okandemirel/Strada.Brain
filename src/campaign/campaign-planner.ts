@@ -561,21 +561,8 @@ export class CampaignPlanner {
     // 2026-09-12 R#15). What each sprint MEASURED travels now: its status, the
     // suite it ran, what it committed, what the structural and numeric checks
     // said about the shipped tree.
-    const evidenceOf = (m: {
-      status?: string; testVerdict?: string; testVerdictUnfiltered?: boolean; commitNote?: string;
-      structureFindings?: readonly string[]; gddClaims?: readonly string[]; resultExcerpt?: string;
-    }): string => {
-      const facts: string[] = [];
-      if (m.status) facts.push(`status: ${m.status}`);
-      if (m.testVerdict) facts.push(`suite: ${m.testVerdict.slice(0, 160)}${m.testVerdictUnfiltered === true ? " (unfiltered)" : " (FILTERED or unknown scope)"}`);
-      if (m.commitNote) facts.push(`landed: ${m.commitNote.slice(0, 200)}`);
-      for (const line of (m.structureFindings ?? []).slice(0, 3)) facts.push(`shipped tree: ${line.slice(0, 160)}`);
-      for (const line of (m.gddClaims ?? []).slice(0, 3)) facts.push(`document numbers: ${line.slice(0, 160)}`);
-      if (m.resultExcerpt) facts.push(`report: ${m.resultExcerpt.slice(0, 300)}`);
-      return facts.length > 0 ? facts.map((f) => `\n   ${f}`).join("") : "\n   (no evidence recorded)";
-    };
     const ladderSummary = milestones
-      .map((m, i) => `${i + 1}. ${m.title}${evidenceOf(m)}`)
+      .map((m, i) => `${i + 1}. ${m.title}${milestoneEvidence(m)}`)
       .join("\n");
     const userMessage =
       `<gdd>\n${windowGdd(gddText, GDD_AUDIT_FULL_CHARS)}\n</gdd>\n\n` +
@@ -641,6 +628,100 @@ Your previous reply was not valid JSON. Reply with the JSON object ALONE — no 
     }
     throw new Error("coverage audit output failed schema validation");
   }
+
+  /**
+   * Of these named requirements, which the ladder's evidence now shows
+   * delivered — and which it still does not.
+   *
+   * A repair sprint that spent its attempts left its requirement "failed" for
+   * ever: nothing ever re-judged it, so delivery either stepped over known
+   * missing work or could never be reached at all. Exhaustion stops the
+   * repair; it does not decide whether the work is there (Codex 2026-09-12
+   * U#Job2.7). Evidence decides, and the default is OPEN: a requirement with
+   * no verdict, or a "delivered" with nothing to point at, stays missing.
+   * Throws when it cannot run — the CALLER decides what an unrun audit means.
+   */
+  async resolveCoverageGaps(
+    gddText: string,
+    requirements: readonly string[],
+    milestones: ReadonlyArray<{
+      title: string;
+      status?: string;
+      resultExcerpt?: string;
+      testVerdict?: string;
+      testVerdictUnfiltered?: boolean;
+      commitNote?: string;
+      structureFindings?: readonly string[];
+      gddClaims?: readonly string[];
+      coverageGap?: string;
+    }>,
+  ): Promise<{ closed: string[]; open: string[] }> {
+    if (requirements.length === 0) return { closed: [], open: [] };
+    if (!this.provider) {
+      throw new Error("coverage resolution requires an LLM provider");
+    }
+    const asked = requirements.slice(0, 30);
+    const ladderSummary = milestones
+      .map((m, i) => `${i + 1}. ${m.title}${milestoneEvidence(m)}`)
+      .join("\n");
+    const list = asked.map((r, i) => `${i + 1}. ${r.slice(0, 300)}`).join("\n");
+    const userMessage =
+      `<gdd>\n${windowGdd(gddText, GDD_AUDIT_FULL_CHARS)}\n</gdd>\n\n` +
+      `<completed-ladder>\n${ladderSummary}\n</completed-ladder>\n\n` +
+      `<requirements>\n${list}\n</requirements>\n\n` +
+      `For EACH numbered requirement, say whether the evidence above shows it implemented and shipped. ` +
+      `Respond ONLY with JSON: {"verdicts": [{"id": <number>, "delivered": true|false, "evidence": "<the evidence line that shows it, when delivered>"}, ...]}. ` +
+      `Quote the evidence; a plan, a title or a promise is not evidence, and a requirement you cannot judge is delivered:false.`;
+    const response = await streamOrChatText(this.provider, COVERAGE_SYSTEM, userMessage);
+    let parsed: unknown;
+    for (const candidate of balancedJsonObjects(response.text ?? "")) {
+      try {
+        const maybe = JSON.parse(candidate);
+        if (maybe !== null && typeof maybe === "object" && "verdicts" in (maybe as object)) {
+          parsed = maybe;
+          break;
+        }
+      } catch {
+        // the next candidate span
+      }
+    }
+    const verdicts = coverageResolutionSchema.safeParse(parsed);
+    if (!verdicts.success) {
+      throw new Error("coverage resolution output failed schema validation");
+    }
+    // EVIDENCE, or the requirement stays open: a bare "delivered" with nothing
+    // to point at is the prose that this audit exists to stop.
+    const closedIds = new Set(
+      verdicts.data.verdicts
+        .filter((v) => v.delivered === true && (v.evidence ?? "").trim().length >= 12)
+        .map((v) => v.id),
+    );
+    const closed: string[] = [];
+    const open: string[] = [];
+    asked.forEach((req, i) => (closedIds.has(i + 1) ? closed : open).push(req));
+    // Anything past the ask is unjudged, so it is open.
+    open.push(...requirements.slice(asked.length));
+    return { closed, open };
+  }
+}
+
+/**
+ * WHAT A MILESTONE MEASURED, for an auditing model to read: its status, the
+ * suite it ran, what it committed, what the structural and numeric checks said
+ * about the shipped tree — never its title or its plan (Codex 2026-09-12 R#15).
+ */
+function milestoneEvidence(m: {
+  status?: string; testVerdict?: string; testVerdictUnfiltered?: boolean; commitNote?: string;
+  structureFindings?: readonly string[]; gddClaims?: readonly string[]; resultExcerpt?: string;
+}): string {
+  const facts: string[] = [];
+  if (m.status) facts.push(`status: ${m.status}`);
+  if (m.testVerdict) facts.push(`suite: ${m.testVerdict.slice(0, 160)}${m.testVerdictUnfiltered === true ? " (unfiltered)" : " (FILTERED or unknown scope)"}`);
+  if (m.commitNote) facts.push(`landed: ${m.commitNote.slice(0, 200)}`);
+  for (const line of (m.structureFindings ?? []).slice(0, 3)) facts.push(`shipped tree: ${line.slice(0, 160)}`);
+  for (const line of (m.gddClaims ?? []).slice(0, 3)) facts.push(`document numbers: ${line.slice(0, 160)}`);
+  if (m.resultExcerpt) facts.push(`report: ${m.resultExcerpt.slice(0, 300)}`);
+  return facts.length > 0 ? facts.map((f) => `\n   ${f}`).join("") : "\n   (no evidence recorded)";
 }
 
 const COVERAGE_SYSTEM = `You audit whether a game design document's scheduled content is IMPLEMENTED AND SHIPPED, judged by the evidence each milestone carries.
@@ -650,6 +731,19 @@ Respond ONLY with the requested JSON.`;
 
 const coverageResultSchema = z.object({
   missing: z.array(z.string().min(1).max(300)).max(30),
+});
+
+/** One verdict per named requirement; anything unjudged stays missing. */
+const coverageResolutionSchema = z.object({
+  verdicts: z
+    .array(
+      z.object({
+        id: z.number().int().min(1).max(30),
+        delivered: z.boolean(),
+        evidence: z.string().max(400).optional(),
+      }),
+    )
+    .max(30),
 });
 
 /** Tolerant extraction: find the outermost balanced {...} in the reply. */

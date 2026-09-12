@@ -62,6 +62,12 @@ export interface CampaignMilestone {
    */
   coverageGap?: string;
   /**
+   * Set on a coverage sprint that spent its attempts and whose requirement a
+   * later evidence audit found delivered anyway. Exhaustion stops the repair;
+   * only evidence closes the requirement (Codex 2026-09-12 U).
+   */
+  coverageClosed?: boolean;
+  /**
    * Which delivery gates failed on the last round, as flag names. The
    * delivery budget compares these rather than the sentences the gates
    * write, because prose carries measurements (Codex 2026-09-11 K#3-K#5).

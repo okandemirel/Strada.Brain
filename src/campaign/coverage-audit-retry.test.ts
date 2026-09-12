@@ -80,3 +80,67 @@ describe("coverage audit malformed JSON", () => {
     expect(chat).toHaveBeenCalledTimes(1);
   });
 });
+
+/**
+ * A repair sprint that spent its attempts used to leave its requirement
+ * "failed" for ever: nothing re-judged it, so delivery either stepped over
+ * known missing work or could never be reached. Exhaustion stops the repair;
+ * evidence closes the requirement (Codex 2026-09-12 U, Job 2.7).
+ */
+describe("re-judging the requirements no sprint closed", () => {
+  function plannerWith(replies: string[]) {
+    const chat = vi.fn(async () => ({ text: replies.shift() ?? "" }));
+    const provider = { chat, name: "test", capabilities: { streaming: false } } as never;
+    return { planner: new CampaignPlanner(provider), chat };
+  }
+
+  const ladder = [
+    {
+      title: "Sprint A — Bosses",
+      status: "green",
+      commitNote: "3 commit(s): Assets/Scripts/Dragon.cs, Assets/Prefabs/Dragon.prefab",
+    },
+  ];
+
+  it("closes a requirement the evidence shows, and asks about exactly the named ones", async () => {
+    const { planner, chat } = plannerWith([
+      '{"verdicts": [{"id": 1, "delivered": true, "evidence": "landed: Assets/Scripts/Dragon.cs"}, {"id": 2, "delivered": false}]}',
+    ]);
+
+    const judged = await planner.resolveCoverageGaps(
+      "# GDD\n\nThe game ships a dragon boss and a shop.",
+      ["Dragon boss: no milestone implemented it", "Shop: absent"],
+      ladder,
+    );
+
+    expect(judged.closed).toEqual(["Dragon boss: no milestone implemented it"]);
+    expect(judged.open).toEqual(["Shop: absent"]);
+    const sent = JSON.stringify(chat.mock.calls[0]);
+    expect(sent).toContain("Dragon boss: no milestone implemented it");
+    expect(sent).toContain("landed: 3 commit(s)");
+  });
+
+  it("a 'delivered' with nothing to point at, or no verdict at all, stays OPEN", async () => {
+    // The default is the conservative one: this audit exists to stop prose
+    // from closing a requirement, so a bare claim closes nothing.
+    const { planner } = plannerWith([
+      '{"verdicts": [{"id": 1, "delivered": true}, {"id": 2, "delivered": true, "evidence": "yes"}]}',
+    ]);
+
+    const judged = await planner.resolveCoverageGaps("# GDD", ["Dragon boss: absent", "Shop: absent", "Save: absent"], ladder);
+
+    expect(judged.closed).toEqual([]);
+    expect(judged.open).toEqual(["Dragon boss: absent", "Shop: absent", "Save: absent"]);
+  });
+
+  it("throws when the reply is unusable, so the CALLER decides what an unrun audit means", async () => {
+    const { planner } = plannerWith(["I could not tell."]);
+    await expect(planner.resolveCoverageGaps("# GDD", ["Dragon boss: absent"], ladder)).rejects.toThrow(/schema validation/);
+  });
+
+  it("asks nothing when there is nothing to re-judge", async () => {
+    const { planner, chat } = plannerWith([]);
+    await expect(planner.resolveCoverageGaps("# GDD", [], ladder)).resolves.toEqual({ closed: [], open: [] });
+    expect(chat).not.toHaveBeenCalled();
+  });
+});

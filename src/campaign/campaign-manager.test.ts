@@ -317,6 +317,9 @@ describe("CampaignManager", () => {
       // delivery read "coverage audit could not run", which the gate now sees
       // in the round it happened (Codex 2026-09-12 S#1).
       auditCoverage: vi.fn().mockResolvedValue([]),
+      // A requirement no sprint closed is OPEN until evidence says otherwise:
+      // the audit's default answer is the conservative one (Codex U).
+      resolveCoverageGaps: vi.fn(async (_gdd: string, reqs: readonly string[]) => ({ closed: [], open: [...reqs] })),
     } as unknown as CampaignPlanner;
 
     manager = new CampaignManager({
@@ -2103,6 +2106,54 @@ describe("CampaignManager", () => {
 
   });
 
+  it("a capability gap its repair CLOSED is not scheduled again (Codex 2026-09-12 U#F1)", async () => {
+    // Scheduling the gap as work made it satisfiable (T#2), but nothing ever
+    // cleared the field on the sprint that reported it — and capability work
+    // reopens completed sprints, because a fresh audit outranks a finished
+    // one. So a SUCCESSFUL repair was scheduled again on every settlement:
+    // an endless series of coverage sprints instead of a delivery.
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    const settled = (n: number): Promise<void> =>
+      waitFor(() => expect(tasks.submitted).toHaveLength(n), { timeout: 15_000 });
+    await settled(1);
+    // The FIRST sprint reports the gap — a historical mark on a milestone the
+    // ladder never revisits, unlike the final sprint's own per-attempt read.
+    settleMilestone(
+      "EVIDENCE UNAVAILABLE — no tool for it in this run: unity_generate_audio (the Unity bridge is not connected). " +
+      "That work is NOT done.\n\nsprint A done",
+    );
+    await settled(2);
+    await waitFor(() => expect(storage.get(campaign.id)!.milestones[0]!.capabilityGap).toContain("unity_generate_audio"));
+    settleMilestone("sprint B done");
+    await settled(3);
+
+    // Delivery appends the repair sprint for it…
+    settleMilestone("integrated, all 42 tests pass");
+    await settled(4);
+    const repair = storage.get(campaign.id)!.milestones.find((m) => m.coverageGap?.includes("unity_generate_audio"));
+    expect(repair).toBeDefined();
+
+    // …the repair succeeds, and the campaign DELIVERS: no second round for
+    // work that is done, and the mark it closed is gone.
+    // …the repair succeeds, and every sprint after it reports success too. A
+    // bounded walk: the defect is unbounded, so running out of settles IS the
+    // failure this test is looking for.
+    for (let i = 0; i < 12 && storage.get(campaign.id)!.state === "executing"; i++) {
+      const before = tasks.submitted.length;
+      settleMilestone("the missing audio is generated and bound, a frame is captured, all 42 tests pass");
+      await waitFor(
+        () => expect(tasks.submitted.length > before || storage.get(campaign.id)!.state !== "executing").toBe(true),
+        { timeout: 15_000 },
+      );
+    }
+
+    const after = storage.get(campaign.id)!;
+    expect(after.state).toBe("done");
+    // The mark its repair closed is gone, and the work was scheduled ONCE.
+    expect(after.milestones[0]!.capabilityGap).toBeUndefined();
+    expect(after.milestones.filter((m) => m.coverageGap?.includes("unity_generate_audio"))).toHaveLength(1);
+  });
+
   it("the capability gap survives a long report (Codex 2026-09-12 S#10)", async () => {
     // The gap is reported at the TOP of a node's output and the milestone
     // keeps the last 500 characters, so a long report pushed it out of the
@@ -2744,18 +2795,21 @@ describe("CampaignManager", () => {
     expect(messages.at(-1)!.text).toContain("Moving on to");
   });
 
-  it("a spent coverage-remediation sprint does not deliver by itself: a FINAL PROOF sprint runs the whole gate, then the report names the unclosed gaps (Codex 2026-09-11 B#1)", async () => {
-    // Audited 2026-09-02: a remediation sprint (mcovN) that exhausted its
-    // attempts after every planned sprint had gone green ended the campaign
-    // with "❌ Campaign stopped" — nothing at all was reported about the game
-    // that was actually built, and the gaps it failed to close were never
-    // named either.
+  /**
+   * A campaign whose coverage-remediation sprint spends both attempts on
+   * "Dragon boss", and whose FINAL PROOF sprint then reports green. The
+   * evidence audit for the unclosed requirement answers with `resolve`.
+   */
+  const runToSpentRemediation = async (
+    resolve: (reqs: readonly string[]) => { closed: string[]; open: string[] } = (reqs) => ({ closed: [], open: [...reqs] }),
+  ): Promise<ReturnType<typeof manager.startFromGdd>> => {
     tasks = new FakeTaskManager();
     storage.close();
-    storage = new CampaignStorage(join(dir, "campaigns-partial.db"));
+    storage = new CampaignStorage(join(dir, `campaigns-partial-${messages.length}.db`));
     const planner = {
       planMilestones: vi.fn().mockResolvedValue(LADDER),
       auditCoverage: vi.fn().mockResolvedValue(["Dragon boss: no milestone implemented it"]),
+      resolveCoverageGaps: vi.fn(async (_gdd: string, reqs: readonly string[]) => resolve(reqs)),
     } as unknown as CampaignPlanner;
     manager = new CampaignManager({
       storage,
@@ -2800,19 +2854,35 @@ describe("CampaignManager", () => {
     mkdirSync(join(projectRoot, "Recordings", "playthrough"), { recursive: true });
     writeFileSync(join(projectRoot, "Recordings", "playthrough", "frame_00099.png"), Buffer.concat([Buffer.from("89504e470d0a1a0a", "hex"), Buffer.alloc(4096, 7)]));
     settleMilestone("final proofs green");
+    return campaign;
+  };
 
-    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"), { timeout: 15_000 });
-    const delivered = storage.get(campaign.id)!;
-    expect(delivered.milestones.filter((m) => m.status === "green")).toHaveLength(4);
-    expect(delivered.milestones.at(-1)!.status).toBe("green");
-    expect(delivered.milestones.at(-2)!.status).toBe("failed");
-    expect(delivered.deliveryReported).toBe(true);
+  it("a spent coverage-remediation sprint does not deliver by itself: a FINAL PROOF sprint runs the whole gate, and required work nothing closed is NOT delivered (Codex 2026-09-11 B#1, 2026-09-12 U)", async () => {
+    // Audited 2026-09-02: a remediation sprint (mcovN) that exhausted its
+    // attempts after every planned sprint had gone green ended the campaign
+    // with "❌ Campaign stopped" — nothing at all was reported about the game
+    // that was actually built, and the gaps it failed to close were never
+    // named either. So the ladder learned to run a final proof sprint and
+    // report everything.
+    // …and then it DELIVERED on those mechanical proofs with the feature
+    // still missing: "Dragon boss" was named in the report under a headline
+    // that said the game was built (Codex 2026-09-12 U, Job 2.7). Exhaustion
+    // stops the repair; it does not waive the requirement.
+    const campaign = await runToSpentRemediation();
+
+    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"), { timeout: 15_000 });
+    const stopped = storage.get(campaign.id)!;
+    // Everything the ladder DID prove is still green and still reported.
+    expect(stopped.milestones.filter((m) => m.status === "green")).toHaveLength(4);
+    expect(stopped.milestones.at(-1)!.status).toBe("green");
+    expect(stopped.milestones.at(-2)!.status).toBe("failed");
+    expect(stopped.lastError).toContain("Dragon boss");
+    expect(stopped.milestones.at(-1)!.deliveryFailureKinds).toContain("unclosedGaps");
 
     const report = messages.at(-1)!.text;
-    expect(report).toContain("Campaign delivery");
+    expect(report).toContain("NOT DELIVERED");
     expect(report).toContain("Sprint A — Foundations");
     expect(report).toContain("Dragon boss: no milestone implemented it");
-    expect(report).toMatch(/unclosed/i);
     expect(report).not.toContain("Campaign stopped");
     // No reviewer wired here: the report says so instead of implying a review.
     expect(report).toContain("Independent review");
@@ -2820,6 +2890,22 @@ describe("CampaignManager", () => {
     // The structure block is measured at delivery, on the tree delivered:
     // this fixture has no Assets/, and the report says exactly that.
     expect(report).toContain("NOT measured: no Assets/ directory");
+  });
+
+  it("…and delivers when the evidence audit finds the unclosed requirement delivered after all (Codex 2026-09-12 U)", async () => {
+    // The other direction of the same gate: a sprint's failure is not the
+    // requirement's verdict either. When the ladder's evidence shows the work
+    // landed — a later sprint did it, or the failed sprint's own commits did —
+    // the requirement is closed and the campaign delivers.
+    const campaign = await runToSpentRemediation((reqs) => ({ closed: [...reqs], open: [] }));
+
+    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"), { timeout: 15_000 });
+    const delivered = storage.get(campaign.id)!;
+    expect(delivered.milestones.at(-2)!.coverageClosed).toBe(true);
+    expect(delivered.deliveryReported).toBe(true);
+    const report = messages.at(-1)!.text;
+    expect(report).toContain("Campaign delivery");
+    expect(report).toContain("requirement found delivered by the evidence audit");
   });
 
   it("bounces a remediation sprint once when the placeholder-art count did not drop, then accepts a drop", async () => {
@@ -4419,7 +4505,10 @@ describe("CampaignManager", () => {
     // …and the identity is built from THIS round's structural measurement.
     const kindsAt = source.indexOf("milestone.deliveryFailureKinds = kinds;");
     expect(kindsAt).toBeGreaterThan(0);
-    expect(source.slice(kindsAt - 400, kindsAt)).toContain("milestone.structureRefused === true");
+    // The window holds the whole kinds block, comments included: the flags
+    // are computed there, never read from what a previous round stored.
+    expect(source.slice(kindsAt - 900, kindsAt)).toContain("milestone.structureRefused === true");
+    expect(source.slice(kindsAt - 900, kindsAt)).toContain("unclosedAtGate.length > 0");
   });
 
   it("at the final sprint a record with no timestamp of its own is not proof (Codex 2026-09-11 G#4)", async () => {
@@ -5446,6 +5535,9 @@ describe("CampaignManager", () => {
     const planner = {
       planMilestones: vi.fn().mockResolvedValue(LADDER),
       auditCoverage: vi.fn().mockResolvedValue([]),
+      // A requirement no sprint closed is OPEN until evidence says otherwise:
+      // the audit's default answer is the conservative one (Codex U).
+      resolveCoverageGaps: vi.fn(async (_gdd: string, reqs: readonly string[]) => ({ closed: [], open: [...reqs] })),
     } as unknown as CampaignPlanner;
     manager = new CampaignManager({
       storage,

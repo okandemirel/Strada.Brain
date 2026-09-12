@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { attemptRunId, CampaignManager, deliveryFailureKinds, proofSignature, rememberOwnedTask, OWNERSHIP_LEDGER_LIMIT, unscheduledGaps } from "./campaign-manager.js";
+import { attemptRunId, CampaignManager, capabilityGapWork, deliveryFailureKinds, proofSignature, reconcileCapabilityGaps, rememberOwnedTask, OWNERSHIP_LEDGER_LIMIT, unscheduledGaps } from "./campaign-manager.js";
 
 /**
  * Measured live 2026-09-04: told not to audit, the final sprint answered
@@ -120,6 +120,44 @@ describe("the delivery budget's signature is a set of KINDS (Codex 2026-09-11 I#
     // Order does not matter; the set does.
     expect(proofSignature(["no test run was observed", "the project does not compile (3 error(s))"], { structureRefused: false, compileBroken: true }))
       .toBe(proofSignature(["the project does not compile (12 error(s))", "no test run was observed"], { structureRefused: false, compileBroken: true }));
+  });
+});
+
+describe("a capability gap whose repair proved closure (Codex 2026-09-12 U#F1)", () => {
+  const gap = "unity_generate_audio (the Unity bridge is not connected)";
+  const reporter = (): { id: string; title: string; status: string; capabilityGap: string } => ({
+    id: "m4",
+    title: "Audio",
+    status: "green",
+    capabilityGap: gap,
+  });
+  const repair = (status: string): { id: string; title: string; status: string; coverageGap: string } => ({
+    id: "mcov1",
+    title: "Coverage completion 1.1 — work no tool was available",
+    status,
+    coverageGap: capabilityGapWork(gap),
+  });
+
+  it("clears the mark the reporting sprint left, so the work is not scheduled again", () => {
+    const milestones = [reporter(), repair("green")];
+    expect(reconcileCapabilityGaps(milestones)).toEqual([gap]);
+    expect(milestones[0]!.capabilityGap).toBeUndefined();
+    // And with the mark gone the gap is no longer work to schedule.
+    expect(unscheduledGaps([], milestones, { reopenCompleted: true })).toEqual([]);
+  });
+
+  it("keeps the mark when the repair FAILED, or when another gap is what closed", () => {
+    const failed = [reporter(), repair("failed")];
+    expect(reconcileCapabilityGaps(failed)).toEqual([]);
+    expect(failed[0]!.capabilityGap).toBe(gap);
+    // A green sprint for a DIFFERENT requirement proves nothing about this one.
+    const other = [reporter(), { ...repair("green"), coverageGap: capabilityGapWork("unity_create_scene") }];
+    expect(reconcileCapabilityGaps(other)).toEqual([]);
+    expect(other[0]!.capabilityGap).toBe(gap);
+    // Neither does a green sprint that is not a coverage sprint at all.
+    const notCoverage = [reporter(), { ...repair("green"), id: "m5" }];
+    expect(reconcileCapabilityGaps(notCoverage)).toEqual([]);
+    expect(notCoverage[0]!.capabilityGap).toBe(gap);
   });
 });
 
