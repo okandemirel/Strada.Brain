@@ -800,8 +800,12 @@ export class CampaignManager {
   }
 
   /** GDD-from-docs mode: build from the newest GDD already in the repo. */
-  startFromGddFromDocs(ctx: CampaignContext): Campaign | undefined {
-    const gddPath = this.findNewestGddPath();
+  startFromGddFromDocs(ctx: CampaignContext, preferredPath?: string): Campaign | undefined {
+    // THE PATH THE MESSAGE NAMED WINS. Discovery by filename distance and
+    // modification time is for a message that named nothing (Codex
+    // 2026-09-12 AD#6).
+    const named = preferredPath !== undefined && readGddFile(this.projectRoot, preferredPath) ? preferredPath : undefined;
+    const gddPath = named ?? this.findNewestGddPath();
     if (!gddPath) return undefined;
     const gddText = readGddFile(this.projectRoot, gddPath);
     if (!gddText) return undefined;
@@ -854,7 +858,7 @@ export class CampaignManager {
         return true;
       }
       case "gdd-from-docs": {
-        const campaign = this.startFromGddFromDocs(ctx);
+        const campaign = this.startFromGddFromDocs(ctx, intent.path);
         if (!campaign) {
           await this.tell(
             { chatId: msg.chatId },
@@ -5169,10 +5173,27 @@ export class CampaignManager {
         byRequirement.set(key, [...(byRequirement.get(key) ?? []), m]);
       }
       const needsJudging = new Set(unclosed.map((m) => requirementKey(coverageGapOf(m))));
-      const asked = [...byRequirement.entries()]
+      // THE LEAST RECENTLY ASKED FIRST. The resolver judges at most 30
+      // requirements per call, and with no revision to cache a closure
+      // against — a project with no git history — the SAME first thirty were
+      // asked on every pass: the thirty-first was never judged at all, and it
+      // stayed open until the budgets stopped the campaign (Codex 2026-09-12
+      // AD#16). Rotating by when each was last asked reaches all of them.
+      const askedAt = (ms: CampaignMilestone[]): number =>
+        Math.min(...ms.map((m) => m.coverageJudgedAtMs ?? 0));
+      const candidates = [...byRequirement.entries()]
         .filter(([key]) => needsJudging.has(key))
-        .map(([, ms]) => coverageGapOf(ms[0]!));
+        .sort((a, b) => askedAt(a[1]) - askedAt(b[1]));
+      const asked = candidates.map(([, ms]) => coverageGapOf(ms[0]!));
       const judged = await this.planner.resolveCoverageGaps(gddForGaps, asked, campaign.milestones);
+      // Stamped whether or not the answer closed them: what matters is that
+      // this pass ASKED, so the next one can ask the others.
+      const answered = new Set([...judged.closed, ...judged.open].map(requirementKey));
+      const askedNow = Date.now();
+      for (const [key, ms] of candidates) {
+        if (!answered.has(key)) continue;
+        for (const m of ms) m.coverageJudgedAtMs = askedNow;
+      }
       const closed = new Set(judged.closed.map(requirementKey));
       const stillOpen = new Set(judged.open.map(requirementKey));
       // NOT ACROSS A CHANGE OF TREE. A publication landing during the audit

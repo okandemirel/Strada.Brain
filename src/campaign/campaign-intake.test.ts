@@ -84,3 +84,41 @@ describe("a short instruction that names the document (Codex 2026-09-12 X)", () 
     expect(detectCampaignIntent(msg("where is the GDD?"))).toBeUndefined();
   });
 });
+
+/**
+ * Codex round AD#6, reproduced: both "Build the game from the GDD at
+ * docs/Space_GDD.md" and "Build this game. GDD: <the design>" became a bare
+ * `{kind: "gdd-from-docs"}`. The manager then chose a repository document by
+ * filename distance and modification time, so a different, newer GDD could
+ * win — and inline design text was discarded entirely.
+ */
+describe("what the message actually pointed at (Codex 2026-09-12 AD#6)", () => {
+  const msg = (text: string): Parameters<typeof detectCampaignIntent>[0] =>
+    ({ chatId: "c", text, attachments: [] }) as never;
+
+  it("keeps a path the message named", () => {
+    expect(detectCampaignIntent(msg("Build the game from the GDD at docs/Space_GDD.md"))).toEqual({
+      kind: "gdd-from-docs",
+      path: "docs/Space_GDD.md",
+    });
+    expect(detectCampaignIntent(msg("GDD'deki oyunu yap: docs/Oyun_GDD.md"))).toMatchObject({
+      kind: "gdd-from-docs",
+      path: "docs/Oyun_GDD.md",
+    });
+  });
+
+  it("keeps design text written in the message", () => {
+    const intent = detectCampaignIntent(
+      msg("Build this game. GDD: A puzzle where the player saves progress and restores it after exiting."),
+    );
+    expect(intent?.kind).toBe("idea");
+    expect((intent as { ideaText: string }).ideaText).toContain("saves progress");
+  });
+
+  it("still means the repository's document when the message names neither", () => {
+    expect(detectCampaignIntent(msg("Build the game in the GDD"))).toEqual({ kind: "gdd-from-docs" });
+    expect(detectCampaignIntent(msg("GDD'deki oyunu yap"))).toEqual({ kind: "gdd-from-docs" });
+    // A marker with nothing behind it is a reference, not a design.
+    expect(detectCampaignIntent(msg("Build this game. GDD: see above."))).toEqual({ kind: "gdd-from-docs" });
+  });
+});

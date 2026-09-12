@@ -3010,6 +3010,59 @@ describe("CampaignManager", () => {
     await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
   });
 
+  it("builds from the GDD the message NAMED, not the newest one (Codex 2026-09-12 AD#6)", () => {
+    // Codex reproduced the discard: the manager chose a repository document
+    // by filename distance and modification time, so a different, newer GDD
+    // could win over the one the message pointed at.
+    mkdirSync(join(projectRoot, "docs"), { recursive: true });
+    writeFileSync(join(projectRoot, "docs", "Space_GDD.md"), "# Space\n\nThe game the message asked for.\n" + "x".repeat(400));
+    writeFileSync(join(projectRoot, "docs", "Game_GDD.md"), "# Other\n\nA newer document nobody asked for.\n" + "y".repeat(400));
+
+    const named = manager.startFromGddFromDocs({ ...ctx, chatId: "chat-named" }, "docs/Space_GDD.md");
+    expect(named?.gddPath).toBe("docs/Space_GDD.md");
+
+    // A path that does not exist falls back to discovery rather than failing.
+    const missing = manager.startFromGddFromDocs({ ...ctx, chatId: "chat-missing" }, "docs/Nope.md");
+    expect(missing?.gddPath).toBeDefined();
+    expect(missing?.gddPath).not.toBe("docs/Nope.md");
+  });
+
+  it("asks the requirements it has NOT judged yet (Codex 2026-09-12 AD#16)", async () => {
+    // Reproduced by Codex in a project with no git history: the resolver
+    // judges at most 30 requirements per call and a closure with no revision
+    // is never cached, so the same first thirty were asked on every pass and
+    // the thirty-first was never judged at all.
+    const seen: string[][] = [];
+    const openRequirements = (manager as unknown as {
+      openRequirements(c: Campaign): Promise<{ open: string[] }>;
+    }).openRequirements.bind(manager);
+    (manager as unknown as { planner: { resolveCoverageGaps: unknown } }).planner.resolveCoverageGaps =
+      vi.fn(async (_gdd: string, reqs: readonly string[]) => {
+        const asked = reqs.slice(0, 30);
+        seen.push([...asked]);
+        return { closed: [], open: [...asked] };
+      });
+
+    const campaign = {
+      id: "c_rotate", chatId: "chat1", channelType: "cli", projectRoot,
+      gddText: "# GDD", gddPath: "docs/Game_GDD.md", state: "executing", currentMilestone: 0,
+      createdAt: Date.now(), updatedAt: Date.now(),
+      milestones: Array.from({ length: 31 }, (_unused, i) => ({
+        id: `mcov1-${i}`, title: `Req${i + 1}`, prompt: "p", status: "failed",
+        attempts: 2, fromAudit: true, coverageGap: `Req${i + 1}: absent`,
+      })),
+    } as unknown as Campaign;
+
+    await openRequirements(campaign);
+    await openRequirements(campaign);
+
+    const everAsked = new Set(seen.flat());
+    expect(seen[0]).toHaveLength(30);
+    // The second pass reaches the one the first could not.
+    expect(everAsked.size).toBe(31);
+    expect(everAsked.has("Req31: absent")).toBe(true);
+  });
+
   it("a requirement is not its diagnostics (Codex 2026-09-12 AD#15)", () => {
     // Reproduced by Codex: the same missing capability reported as "…,
     // attempt 1" and "…, attempt 2" were two requirements. Each rewording got

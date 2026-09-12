@@ -22,7 +22,7 @@ import { extractDocumentText } from "../agents/tools/document-text.js";
 export type CampaignIntent =
   | { kind: "idea"; ideaText: string }
   | { kind: "gdd-attachment"; gddText: string; sourceName: string }
-  | { kind: "gdd-from-docs" };
+  | { kind: "gdd-from-docs"; path?: string };
 
 /** End-to-end build intent. Narrow verbs of whole-game creation, TR + EN. */
 const BUILD_INTENT_RE =
@@ -60,6 +60,18 @@ export function detectCampaignIntent(msg: IncomingMessage): CampaignIntent | und
   // it points at a document. "Build the game in the GDD" is 25 characters,
   // and it was ignored entirely (Codex 2026-09-12 X).
   if (GDD_REFERENCE_RE.test(text) && BUILD_INTENT_RE.test(text)) {
+    // A PATH THE MESSAGE NAMED IS THE DOCUMENT IT MEANT. "Build the game
+    // from the GDD at docs/Space_GDD.md" became a bare "gdd-from-docs", and
+    // the manager then chose a repository document by filename distance and
+    // modification time — a different, newer GDD could win (Codex 2026-09-12
+    // AD#6).
+    const named = documentPathIn(text);
+    if (named) return { kind: "gdd-from-docs", path: named };
+    // …AND DESIGN TEXT WRITTEN IN THE MESSAGE IS THE DESIGN. "Build this
+    // game. GDD: <the design>" was read as a reference to a document in the
+    // repository and the supplied design was discarded (AD#6).
+    const inline = inlineDesignIn(text);
+    if (inline) return { kind: "idea", ideaText: inline };
     return { kind: "gdd-from-docs" };
   }
 
@@ -71,4 +83,23 @@ export function detectCampaignIntent(msg: IncomingMessage): CampaignIntent | und
   }
 
   return undefined;
+}
+
+/** A document path the message names, when it names one. */
+const DOCUMENT_PATH_RE = /(?:^|[\s"'`(])((?:[\w.-]+[/\\])*[\w.-]+\.(?:md|markdown|txt|docx|odt|rtf|pdf))(?=$|[\s"'`),.])/i;
+
+export function documentPathIn(text: string): string | undefined {
+  const match = DOCUMENT_PATH_RE.exec(text);
+  return match?.[1];
+}
+
+/**
+ * The design written INSIDE the message, after a "GDD:" marker — as opposed to
+ * a reference to a document that already exists.
+ */
+export function inlineDesignIn(text: string): string | undefined {
+  const marker = /\b(?:gdd|game\s+design\s+doc(?:ument)?)\b\s*[:\-—]\s*/i.exec(text);
+  if (!marker) return undefined;
+  const after = text.slice(marker.index + marker[0].length).trim();
+  return after.length >= MIN_IDEA_LENGTH ? text : undefined;
 }

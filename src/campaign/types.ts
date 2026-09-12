@@ -100,6 +100,13 @@ export interface CampaignMilestone {
    */
   coverageClosedRevision?: string;
   /**
+   * When this requirement was last PUT to the evidence audit. The resolver
+   * judges at most 30 requirements per call, so without this the same first
+   * thirty were asked on every pass and the thirty-first was never judged at
+   * all (Codex 2026-09-12 AD#16).
+   */
+  coverageJudgedAtMs?: number;
+  /**
    * Which delivery gates failed on the last round, as flag names. The
    * delivery budget compares these rather than the sentences the gates
    * write, because prose carries measurements (Codex 2026-09-11 K#3-K#5).
