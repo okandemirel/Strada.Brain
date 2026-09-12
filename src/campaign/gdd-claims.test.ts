@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { gddPlatform } from "./gdd-platform.js";
-import { assessNumericClaims, claimsRefusal, describeClaims, extractActionBudget, extractNumericClaims, extractSessionAllowanceSeconds, finishedSessionIndices, MAX_SESSION_ALLOWANCE_SECONDS } from "./gdd-claims.js";
+import { assessNumericClaims, claimsRefusal, describeClaims, documentRequiresAnOutcome, extractActionBudget, extractNumericClaims, extractSessionAllowanceSeconds, finishedSessionIndices, MAX_SESSION_ALLOWANCE_SECONDS } from "./gdd-claims.js";
 import type { PlaythroughEvidence } from "./types.js";
 
 const GDD = `# Sky Pigs
@@ -949,5 +949,40 @@ describe("a platform's budget, and a session that took no time (Codex 2026-09-12
       }),
     )[0]!;
     expect(broken.status).toBe("not_met");
+  });
+});
+
+/**
+ * Codex round AG#3: the producer refused every endless or sandbox session as
+ * "never ended after 60 actions" — a verdict no correct implementation could
+ * satisfy. Whether a session must END is the document's statement, not the
+ * producer's assumption.
+ */
+describe("does the document require an outcome (Codex 2026-09-13 AG#3)", () => {
+  it("says yes when the document states a win or lose condition", () => {
+    for (const text of [
+      "# GDD\n\nWin condition: clear every blocker on the board.",
+      "# GDD\n\nThe player loses when the timer runs out (game over).",
+      "# GDD\n\nComplete the level to unlock the next one.",
+      "# GDD\n\nKazanma koşulu: tüm bloklar temizlenir.",
+    ]) {
+      expect(documentRequiresAnOutcome(text), text).toBe(true);
+    }
+  });
+
+  it("says no for an endless game, a sandbox, and a document that states neither", () => {
+    for (const text of [
+      "# GDD\n\nAn endless runner: the player plays until they stop.",
+      "# GDD\n\nA sandbox with no win state — build whatever you like.",
+      "# GDD\n\nSonsuz bir oyun.",
+      "# GDD\n\nA calm game about arranging tiles.",
+      "",
+    ]) {
+      expect(documentRequiresAnOutcome(text), text).toBe(false);
+    }
+    // An explicit endless statement wins over a win condition described for
+    // another mode: the endless mode must not be failed for lacking an
+    // ending it never claimed.
+    expect(documentRequiresAnOutcome("Story mode has a win condition. Endless mode never ends.")).toBe(false);
   });
 });

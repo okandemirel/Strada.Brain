@@ -31,7 +31,7 @@ import { readPlaythroughVerdict, describePlaythrough, playthroughDirective, PLAY
 import { gddPlatform, buildSatisfiesTarget, artifactIsForeign, hostTarget, type BuildTarget } from "./gdd-platform.js";
 import { readPlaymodeRun } from "./playmode-run.js";
 import type { PlayerRunSpec } from "../core/bootstrap-stages/stage-runtime.js";
-import { assessNumericClaims, claimsRefusal, describeClaims, extractActionBudget, extractNumericClaims, extractSessionAllowanceSeconds } from "./gdd-claims.js";
+import { assessNumericClaims, claimsRefusal, describeClaims, documentRequiresAnOutcome, extractActionBudget, extractNumericClaims, extractSessionAllowanceSeconds } from "./gdd-claims.js";
 import { entryScreenInDocument } from "./gdd-scope.js";
 import { REQUIRED_EVIDENCE_PREFIX } from "../supervisor/required-evidence.js";
 import { deliveryReviewPrompt, renderSecondOpinion } from "../agents/review/codex-second-opinion.js";
@@ -4766,9 +4766,21 @@ export class CampaignManager {
    * document's ceiling plus headroom is the deadline.
    */
   private playerRunSpec(campaign?: Campaign): PlayerRunSpec {
-    const spec: { sessions?: string; deadlineSeconds?: number; bootDeadlineSeconds?: number; maxActions?: number } = {};
+    const spec: {
+      sessions?: string;
+      deadlineSeconds?: number;
+      bootDeadlineSeconds?: number;
+      maxActions?: number;
+      outcomeRequired?: boolean;
+    } = {};
     const text = this.gddTextOf(campaign);
     if (text === undefined || text.trim() === "") return spec;
+    // WHETHER A SESSION MUST END. The producer refused every endless or
+    // sandbox session as "never ended", a verdict no correct implementation
+    // could satisfy (Codex 2026-09-13 AG#3). The DOCUMENT decides: a game
+    // that states a win or lose condition must reach one; a game that states
+    // none is not failed for staying playable.
+    if (documentRequiresAnOutcome(text)) spec.outcomeRequired = true;
     const { claims } = extractNumericClaims(text);
     // EVERY duration the document states, floor or ceiling. Excluding floors
     // meant "each round must last at least 90 seconds" produced no allowance

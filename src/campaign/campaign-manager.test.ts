@@ -1119,7 +1119,10 @@ describe("CampaignManager", () => {
       failedTestsOmitted: 5,
     } as never);
     tasks.emit("task:completed", "task_3", "green, shipping");
-    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"), { timeout: 15_000 });
+    // `done` is persisted BEFORE the report is gathered and sent, so waiting
+    // on the state alone races the delivery message (green locally, red in CI).
+    await waitFor(() => expect(messages.some((m) => m.text.includes("Campaign delivery"))).toBe(true), { timeout: 15_000 });
 
     const report = messages.map((m) => m.text).find((t) => t.includes("Campaign delivery"))!;
     expect(report).toContain("WinLevel_ReachesWonState");
@@ -1208,7 +1211,10 @@ describe("CampaignManager", () => {
     };
     tasks.verifications.set("task_4", green);
     tasks.emit("task:completed", "task_4", "green, shipping");
-    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"), { timeout: 15_000 });
+    // `done` is persisted BEFORE the report is gathered and sent, so waiting
+    // on the state alone races the delivery message (green locally, red in CI).
+    await waitFor(() => expect(messages.some((m) => m.text.includes("Campaign delivery"))).toBe(true), { timeout: 15_000 });
     const report = messages.map((m) => m.text).join("\n");
     expect(report).toContain("GDD boot time ≤ 1 s: MET — scene load → services in 0.6 s (player)");
     // Delivered: the campaign built and played the player, whose frame rate answers the claim.
@@ -1266,7 +1272,10 @@ describe("CampaignManager", () => {
     buildVerdict = { ran: true, ok: true, target: "StandaloneOSX", artifactPath: "/tmp/Builds/StandaloneOSX/Game.app", sizeBytes: 88_000_000, durationMs: 120_000, scenes: 2 };
     tasks.verifications.set("task_4", green);
     tasks.emit("task:completed", "task_4", "green, shipping");
-    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"), { timeout: 15_000 });
+    // `done` is persisted BEFORE the report is gathered and sent, so waiting
+    // on the state alone races the delivery message (green locally, red in CI).
+    await waitFor(() => expect(messages.some((m) => m.text.includes("Campaign delivery"))).toBe(true), { timeout: 15_000 });
     const report = messages.map((m) => m.text).join("\n");
     expect(report).toContain("delivery artifact: /tmp/Builds/StandaloneOSX/Game.app (StandaloneOSX, 83.9 MB, built in 120 s)");
   });
@@ -1313,7 +1322,10 @@ describe("CampaignManager", () => {
       unfiltered: true,
     });
     tasks.emit("task:completed", "task_3", "green, shipping");
-    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"), { timeout: 15_000 });
+    // `done` is persisted BEFORE the report is gathered and sent, so waiting
+    // on the state alone races the delivery message (green locally, red in CI).
+    await waitFor(() => expect(messages.some((m) => m.text.includes("Campaign delivery"))).toBe(true), { timeout: 15_000 });
     const report = messages.map((m) => m.text).join("\n");
     expect(report).toContain("play-through OK in Entry: session 1 played to Won in 12 actions");
     expect(report).toContain("does not start play by itself after boot");
@@ -1345,6 +1357,9 @@ describe("CampaignManager", () => {
     });
     tasks.emit("task:completed", "task_3", "green, shipping");
     await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"), { timeout: 15_000 });
+    // `done` is persisted BEFORE the report is gathered and sent, so waiting
+    // on the state alone races the delivery message (green locally, red in CI).
+    await waitFor(() => expect(messages.some((m) => m.text.includes("Campaign delivery"))).toBe(true), { timeout: 15_000 });
 
     const report = messages.map((m) => m.text).join("\n");
     expect(report).not.toContain("sees an idle screen");
@@ -1734,8 +1749,13 @@ describe("CampaignManager", () => {
     tasks.verifications.set("task_4", green);
     tasks.emit("task:completed", "task_4", "look fixed, shipping");
     await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"), { timeout: 15_000 });
-    const report = messages.map((m) => m.text).join("\n");
-    expect(report).toContain("MATCH — Plump pigs on a warm stage, as described.");
+    // The REPORT, not the state: `done` is persisted before the report is
+    // gathered and sent, so asserting on the state alone races the delivery
+    // message (green locally, red in CI).
+    await waitFor(
+      () => expect(messages.map((m) => m.text).join("\n")).toContain("MATCH — Plump pigs on a warm stage, as described."),
+      { timeout: 15_000 },
+    );
   });
 
   it("measures what the shipped scenes hold at EVERY sprint end, not only at delivery (2026-09-10)", async () => {
@@ -1866,7 +1886,10 @@ describe("CampaignManager", () => {
     const campaign = await reachFinalSprint();
 
     settleMilestone("green, shipping");
-    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"), { timeout: 15_000 });
+    // `done` is persisted BEFORE the report is gathered and sent, so waiting
+    // on the state alone races the delivery message (green locally, red in CI).
+    await waitFor(() => expect(messages.some((m) => m.text.includes("Campaign delivery"))).toBe(true), { timeout: 15_000 });
 
     const report = messages.find((m) => m.text.includes("Campaign delivery"))!.text;
     // The build's FIRST enabled scene is what a person opens; the richest is
@@ -1888,7 +1911,10 @@ describe("CampaignManager", () => {
     const campaign = await reachFinalSprint();
 
     settleMilestone("green, shipping");
-    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"), { timeout: 15_000 });
+    // `done` is persisted BEFORE the report is gathered and sent, so waiting
+    // on the state alone races the delivery message (green locally, red in CI).
+    await waitFor(() => expect(messages.some((m) => m.text.includes("Campaign delivery"))).toBe(true), { timeout: 15_000 });
 
     const report = messages.find((m) => m.text.includes("Campaign delivery"))!.text;
     expect(report).toContain("Assets/Scenes/Main.unity");
@@ -2163,7 +2189,10 @@ describe("CampaignManager", () => {
       unfiltered: true,
     });
     tasks.emit("task:completed", "task_3", "shipping it");
-    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"), { timeout: 15_000 });
+    // `done` is persisted BEFORE the report is gathered and sent, so waiting
+    // on the state alone races the delivery message (green locally, red in CI).
+    await waitFor(() => expect(messages.some((m) => m.text.includes("Campaign delivery"))).toBe(true), { timeout: 15_000 });
     const report = messages.map((m) => m.text).find((t) => t.includes("Campaign delivery"))!;
     expect(report).toContain("asset sourcing BLIND");
     expect((report.match(/purchased library was unreachable/g) ?? []).length).toBe(2);
@@ -2220,7 +2249,10 @@ describe("CampaignManager", () => {
     });
     tasks.emit("task:completed", "task_3", "shipping it");
 
-    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"), { timeout: 15_000 });
+    // `done` is persisted BEFORE the report is gathered and sent, so waiting
+    // on the state alone races the delivery message (green locally, red in CI).
+    await waitFor(() => expect(messages.some((m) => m.text.includes("Campaign delivery"))).toBe(true), { timeout: 15_000 });
     const report = messages.map((m) => m.text).find((t) => t.includes("Campaign delivery"))!;
     expect(report).toContain("compiles");
   });
@@ -2523,7 +2555,10 @@ describe("CampaignManager", () => {
     );
 
     settleMilestone("integrated, all 42 tests pass");
-    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"), { timeout: 15_000 });
+    // `done` is persisted BEFORE the report is gathered and sent, so waiting
+    // on the state alone races the delivery message (green locally, red in CI).
+    await waitFor(() => expect(messages.some((m) => m.text.includes("Campaign delivery"))).toBe(true), { timeout: 15_000 });
 
     const report = messages.at(-1)!.text;
     expect(report).toContain("The GDD asks for 3D");
@@ -2539,7 +2574,10 @@ describe("CampaignManager", () => {
     // report must not read like one that measured and found nothing wrong.
     const campaign = await runLadderToDelivery();
     settleMilestone("integrated, all 42 tests pass");
-    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"), { timeout: 15_000 });
+    // `done` is persisted BEFORE the report is gathered and sent, so waiting
+    // on the state alone races the delivery message (green locally, red in CI).
+    await waitFor(() => expect(messages.some((m) => m.text.includes("Campaign delivery"))).toBe(true), { timeout: 15_000 });
 
     const report = messages.at(-1)!.text;
     expect(report).toContain("NOT measured: no Assets/ directory");
@@ -3025,6 +3063,9 @@ describe("CampaignManager", () => {
     await waitFor(() => expect(tasks.submitted).toHaveLength(3));
     settleMilestone("green, shipping");
     await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"), { timeout: 15_000 });
+    // `done` is persisted BEFORE the report is gathered and sent, so waiting
+    // on the state alone races the delivery message (green locally, red in CI).
+    await waitFor(() => expect(messages.some((m) => m.text.includes("Campaign delivery"))).toBe(true), { timeout: 15_000 });
 
     const report = messages.map((m) => m.text).join("\n");
     expect(report).toContain("**Producer receipts**");
@@ -4071,6 +4112,16 @@ describe("CampaignManager", () => {
     // 90 s with headroom for a driven run, the boot budget doubled (never
     // below the tool's own 30 s), and every level the document claims.
     expect(specs[0]).toMatchObject({ deadlineSeconds: 150, bootDeadlineSeconds: 30, sessions: "all" });
+    // …and this document states no win or lose condition, so the run is not
+    // told to demand one: an endless session is a game behaving as designed
+    // (Codex 2026-09-13 AG#3).
+    expect(specs[0]?.outcomeRequired).toBeUndefined();
+
+    // A document that states one DOES ask for it.
+    const withWin = (manager as unknown as {
+      playerRunSpec(c: { gddText: string }): { outcomeRequired?: boolean };
+    }).playerRunSpec({ gddText: "# GDD\n\nWin condition: clear every blocker. A round lasts 60-90 seconds." } as never);
+    expect(withWin.outcomeRequired).toBe(true);
     // …and the ACTION budget the document states, with headroom: the runner
     // stopped every session at its own sixty actions, so a session with a
     // longer allowance still ended without an outcome (Codex 2026-09-12 U#3).

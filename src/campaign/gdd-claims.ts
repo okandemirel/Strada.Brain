@@ -935,3 +935,27 @@ export function claimsRefusal(assessments: readonly ClaimAssessment[]): string |
     ". Fix the game until unity_playthrough measures the budget met; the GDD's number, not a description, is the target."
   );
 }
+
+/**
+ * Does this document require a session to END?
+ *
+ * A producer cannot know a game's win condition and refused every endless or
+ * sandbox session as "never ended" — a verdict no correct implementation could
+ * satisfy (Codex 2026-09-13 AG#3). A document that states a win or lose
+ * condition is asking for a terminal outcome; one that describes an endless
+ * game, a sandbox or a creative mode is not.
+ */
+const WIN_LOSE_RE =
+  /\b(?:win(?:s|ning)?\s+condition|lose\s+condition|loss\s+condition|fail(?:ure)?\s+(?:condition|state)|game\s+over|victory|defeat|you\s+win|you\s+lose|complete\s+the\s+level|clear\s+the\s+(?:level|stage|board)|reach\s+the\s+(?:goal|exit)|kazanma\s+koşulu|kaybetme\s+koşulu|oyun\s+bitti)\b/i;
+const ENDLESS_RE =
+  /\b(?:endless|infinite|never\s+ends|sandbox|free\s*play|creative\s+mode|no\s+(?:win|lose|fail)\s+(?:state|condition)|sonsuz|serbest\s+mod)\b/i;
+
+export function documentRequiresAnOutcome(gddText: string | undefined): boolean {
+  const text = gddText ?? "";
+  if (text.trim() === "") return false;
+  // An explicit endless statement wins: a document may describe a win
+  // condition for one mode and an endless one for another, and the run must
+  // not fail the endless mode for lacking an ending it never claimed.
+  if (ENDLESS_RE.test(text)) return false;
+  return WIN_LOSE_RE.test(text);
+}

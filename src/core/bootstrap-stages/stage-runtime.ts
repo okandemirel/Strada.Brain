@@ -978,6 +978,15 @@ export interface PlayerRunSpec {
   readonly maxActions?: number;
   readonly deadlineSeconds?: number;
   readonly bootDeadlineSeconds?: number;
+  /**
+   * Does the DOCUMENT require a session to end in a win or a lose state?
+   *
+   * A producer cannot know a game's win condition, and it refused every
+   * endless or sandbox session as "never ended" — a verdict no correct
+   * implementation could satisfy (Codex 2026-09-13 AG#3). The document can
+   * say, so the campaign reads it and tells the producer.
+   */
+  readonly outcomeRequired?: boolean;
 }
 
 /**
@@ -1073,6 +1082,7 @@ export function makeRunPlayer(registry: {
         ...(spec?.maxActions !== undefined ? { maxActions: spec.maxActions } : {}),
         ...(spec?.deadlineSeconds !== undefined ? { deadlineSeconds: spec.deadlineSeconds } : {}),
         ...(spec?.bootDeadlineSeconds !== undefined ? { bootDeadlineSeconds: spec.bootDeadlineSeconds } : {}),
+        ...(spec?.outcomeRequired === undefined ? {} : { outcomeRequired: spec.outcomeRequired }),
       },
       { projectPath: projectRoot, workingDirectory: projectRoot, readOnly: false },
     );

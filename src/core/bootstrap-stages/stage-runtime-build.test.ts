@@ -36,6 +36,23 @@ describe("makeRunPlayer — the tool's own failure reaches the caller (Codex 202
     execute: async () => result,
   });
 
+  it("forwards the document's allowances, including whether an outcome is required (Codex 2026-09-13 AG#3)", async () => {
+    const asked: Array<Record<string, unknown>> = [];
+    const recording = {
+      getAvailableToolNames: () => ["unity_run_player"],
+      execute: async (_name: string, input: Record<string, unknown>) => {
+        asked.push(input);
+        return { content: "PLAYER PLAY-THROUGH OK" };
+      },
+    };
+    await makeRunPlayer(recording)("/p", "/p/Game.app", { sessions: "all", maxActions: 80, deadlineSeconds: 150, outcomeRequired: true });
+    expect(asked[0]).toMatchObject({ artifactPath: "/p/Game.app", sessions: "all", maxActions: 80, deadlineSeconds: 150, outcomeRequired: true });
+    // A document that requires no outcome says nothing, and the producer's
+    // own default stands.
+    await makeRunPlayer(recording)("/p", "/p/Game.app", { sessions: "all" });
+    expect(asked[1]).not.toHaveProperty("outcomeRequired");
+  });
+
   it("throws what an unsupported host said, and stays silent on success", async () => {
     await expect(makeRunPlayer(registry({ content: "unsupported artifact on this host", isError: true }))("/p", "/p/Game.apk"))
       .rejects.toThrow(/unsupported artifact on this host/);
