@@ -337,6 +337,70 @@ describe("workspace lease commit", () => {
     }
   });
 
+  it("a pair is not published when the project's copy could not be backed up (Codex 2026-09-12 P#17)", async () => {
+    // The backup failed and the replacement went in anyway: when the .meta
+    // then could not follow, there was nothing to put the pair back from.
+    mkdirSync(join(source, "Assets", "Sprites"), { recursive: true });
+    writeFileSync(join(source, "Assets", "Sprites", "Hero.png"), "old pixels", "utf8");
+    writeFileSync(join(source, "Assets", "Sprites", "Hero.png.meta"), "old importer", "utf8");
+    const lease = await manager().acquireLease({ label: "t", forceTempCopy: true });
+    writeFileSync(join(lease.path, "Assets", "Sprites", "Hero.png"), "new pixels", "utf8");
+    writeFileSync(join(lease.path, "Assets", "Sprites", "Hero.png.meta"), "new importer", "utf8");
+
+    const realCopy = fsp.copyFile.bind(fsp);
+    const spy = vi.spyOn(fsp, "copyFile").mockImplementation(async (from: never, to: never, mode?: never) => {
+      if (String(to).endsWith(".prev")) throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+      return realCopy(from, to, mode);
+    });
+    try {
+      const result = await lease.commit();
+
+      // The project keeps its own pair, whole.
+      expect(readFileSync(join(source, "Assets", "Sprites", "Hero.png"), "utf8")).toBe("old pixels");
+      expect(readFileSync(join(source, "Assets", "Sprites", "Hero.png.meta"), "utf8")).toBe("old importer");
+      expect(result.written).toEqual([]);
+      expect(result.failed.some((f) => f.startsWith(join("Assets", "Sprites", "Hero.png") + " ("))).toBe(true);
+      // …and the worker's version is preserved, not dropped.
+      expect(readFileSync(join(result.conflictsQuarantinedUnder!, "Assets", "Sprites", "Hero.png"), "utf8")).toBe("new pixels");
+    } finally {
+      spy.mockRestore();
+      await lease.release();
+    }
+  });
+
+  it("a rollback that could not be applied keeps the project's previous version (Codex 2026-09-12 P#17)", async () => {
+    mkdirSync(join(source, "Assets", "Sprites"), { recursive: true });
+    writeFileSync(join(source, "Assets", "Sprites", "Hero.png"), "old pixels", "utf8");
+    writeFileSync(join(source, "Assets", "Sprites", "Hero.png.meta"), "old importer", "utf8");
+    const lease = await manager().acquireLease({ label: "t", forceTempCopy: true });
+    writeFileSync(join(lease.path, "Assets", "Sprites", "Hero.png"), "new pixels", "utf8");
+    writeFileSync(join(lease.path, "Assets", "Sprites", "Hero.png.meta"), "new importer", "utf8");
+
+    // The .meta cannot be written, and putting the asset back fails too — the
+    // staging directory used to be deleted with the only surviving copy of
+    // the project's own version inside it.
+    const realRename = fsp.rename.bind(fsp);
+    const spy = vi.spyOn(fsp, "rename").mockImplementation(async (from: never, to: never) => {
+      if (String(to).endsWith("Hero.png.meta") || String(from).endsWith(".restore")) {
+        throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+      }
+      return realRename(from, to);
+    });
+    try {
+      const result = await lease.commit();
+
+      const inconsistent = result.failed.find((f) => f.startsWith(join("Assets", "Sprites", "Hero.png") + " ("));
+      expect(inconsistent).toContain("previous version is kept at");
+      const kept = join(result.conflictsQuarantinedUnder!, "previous", "Assets", "Sprites", "Hero.png");
+      expect(readFileSync(kept, "utf8")).toBe("old pixels");
+      // The staging directory still goes; the recovery copy is elsewhere.
+      expect(existsSync(join(source, ".strada", "lease-staging"))).toBe(false);
+    } finally {
+      spy.mockRestore();
+      await lease.release();
+    }
+  });
+
   it("rolls an OVERWRITTEN asset back when its .meta cannot follow (Codex 2026-09-11 N#6)", async () => {
     // The asset exists in the project. Its new version lands, the .meta write
     // then fails, and the project used to be left with NEW ART beside an OLD

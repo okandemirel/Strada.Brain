@@ -1915,6 +1915,21 @@ export class WorkspaceLeaseManager {
     // project's own .strada directory.
     const stagingRoot = join(sourceRoot, ".strada", "lease-staging", randomUUID().slice(0, 8));
     const previousOf = new Map<number, string>();
+    /** Is this write half of a pair, so that a rollback may be needed for it? */
+    const hasPartnerWrite = (rel: string): boolean => writeIndexByRel.has(pairOf(rel));
+    /** Keep the project's previous version where a person can find it. */
+    const preserveRollback = async (rel: string, keep: string): Promise<string | undefined> => {
+      if (!quarantineRoot) return undefined;
+      try {
+        const to = join(quarantineRoot, "previous", rel);
+        await fsp.mkdir(dirname(to), { recursive: true });
+        await fsp.copyFile(keep, to);
+        conflictsQuarantinedUnder ??= quarantineRoot;
+        return to;
+      } catch {
+        return undefined;
+      }
+    };
     const writeOne = async (index: number): Promise<boolean> => {
       const outcome = outcomes[index];
       if (!outcome?.write) return false;
@@ -1929,10 +1944,19 @@ export class WorkspaceLeaseManager {
         await fsp.copyFile(full, staged);
         if (targetExisted) {
           const keep = join(stagingRoot, `${token}.prev`);
+          let backedUp = false;
           try {
             await fsp.copyFile(target, keep);
             previousOf.set(index, keep);
-          } catch { /* no rollback for this one; the write still proceeds */ }
+            backedUp = true;
+          } catch { /* decided below */ }
+          // A PAIR MAY HAVE TO BE PUT BACK. Publishing half of one with no
+          // rollback copy is how a new asset ended up beside an old importer
+          // with nothing to restore (Codex 2026-09-12 P#17). A file with no
+          // partner in this commit is never rolled back, so it still goes.
+          if (!backedUp && hasPartnerWrite(rel)) {
+            throw new Error("the project's copy could not be backed up, and this file is half of a pair");
+          }
         }
         await fsp.rename(staged, target);
         landed.set(index, outcome.write);
@@ -1987,17 +2011,27 @@ export class WorkspaceLeaseManager {
         // whole instead of left mismatched (Codex 2026-09-11 N#6).
         const keep = previousOf.get(partnerIndex);
         let restored = false;
+        let preservedAt: string | undefined;
         if (keep !== undefined) {
           try {
-            await fsp.copyFile(keep, asset.target);
+            // STAGE, then rename — the same rule the write itself follows. A
+            // copy straight onto the destination that fails part-way leaves
+            // neither version whole, which is what staging exists to prevent
+            // (Codex 2026-09-12 P#17).
+            const back = `${keep}.restore`;
+            await fsp.copyFile(keep, back);
+            await fsp.rename(back, asset.target);
             restored = true;
           } catch { /* reported as inconsistent below */ }
+          // A restore that did not work must not take the only copy of the
+          // project's previous version down with the staging directory.
+          if (!restored) preservedAt = await preserveRollback(asset.rel, keep);
         }
         await quarantine(asset.rel, asset.full);
         outcomes[partnerIndex] = {
           failed: restored
             ? `${asset.rel} (rolled back: its .meta could not be written, the project keeps its previous version)`
-            : `${asset.rel} (written, but its .meta could not be written — the pair is inconsistent in the project)`,
+            : `${asset.rel} (written, but its .meta could not be written — the pair is inconsistent in the project${preservedAt !== undefined ? `; the project's previous version is kept at ${preservedAt}` : ""})`,
           failedRel: asset.rel,
         };
       }
