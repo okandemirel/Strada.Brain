@@ -119,8 +119,11 @@ describe("assessNumericClaims", () => {
     // A catalog of 12 is a claim; 12 sessions played to an outcome is the measurement (Codex 2026-09-11 B#10).
     const catalogOnly = assessNumericClaims(claims, evidence({ sessionCount: 12 }));
     expect(catalogOnly.find((x) => x.claim.kind === "level_count")).toMatchObject({ status: "not_met", blocking: true, measured: 12 });
-    // Indices are catalog entries (0-based) and each session did something.
-    const allPlayed = assessNumericClaims(claims, evidence({ sessionCount: 12, sessions: Array.from({ length: 12 }, (_, i) => ({ index: i, outcome: "Won", actions: 10, seconds: 5 })) }));
+    // Indices are catalog entries and each session did something. ONE-BASED:
+    // Strada.Core states "the first session is 1" and the driver generates
+    // 1…min(catalog, cap). Counting 0…catalog-1 rejected the last valid
+    // session of every game (Codex 2026-09-12 R#3).
+    const allPlayed = assessNumericClaims(claims, evidence({ sessionCount: 12, sessions: Array.from({ length: 12 }, (_, i) => ({ index: i + 1, outcome: "Won", actions: 10, seconds: 5 })) }));
     expect(allPlayed.find((x) => x.claim.kind === "level_count")).toMatchObject({ status: "met", measured: 12 });
     expect(allPlayed.find((x) => x.claim.kind === "level_count")!.note).toContain("12 of 12 played session(s) reached an outcome");
     // An impossible index, or a session that took no action, is not a level
@@ -159,17 +162,46 @@ describe("assessNumericClaims", () => {
     expect(negative.find((x) => x.claim.kind === "level_count")).toMatchObject({ status: "not_met" });
   });
 
+  it("the LAST session of a catalog counts, and a one-level game can be proven (Codex 2026-09-12 R#3)", () => {
+    // Brain counted 0…catalog-1 while Strada.Core's contract is "the first
+    // session is 1" and the driver plays 1…min(catalog, cap). Every correctly
+    // played run therefore lost its last session, and a one-level game could
+    // never be proven at all.
+    // The LAST session is the one the old bound rejected: a two-level game
+    // proven by sessions 1 and 2 used to count only session 1.
+    const two = extractNumericClaims("The game ships 2 levels.").claims;
+    const played = assessNumericClaims(two, evidence({
+      sessionCount: 2,
+      sessions: [1, 2].map((index) => ({ index, outcome: "Won", actions: 7, seconds: 4 })),
+    }));
+    expect(played.find((x) => x.claim.kind === "level_count")).toMatchObject({ status: "met" });
+
+    const three = extractNumericClaims("The game ships 3 levels.").claims;
+    const all = assessNumericClaims(three, evidence({
+      sessionCount: 3,
+      sessions: [1, 2, 3].map((index) => ({ index, outcome: "Won", actions: 5, seconds: 3 })),
+    }));
+    expect(all.find((x) => x.claim.kind === "level_count")).toMatchObject({ status: "met" });
+
+    // …and an index the catalog does not have is still not a level played.
+    const outside = assessNumericClaims(three, evidence({
+      sessionCount: 3,
+      sessions: [0, 4, 9].map((index) => ({ index, outcome: "Won", actions: 5, seconds: 3 })),
+    }));
+    expect(outside.find((x) => x.claim.kind === "level_count")).toMatchObject({ status: "not_met" });
+  });
+
   it("distinct sessions, distributive wording, and a mandatory floor (Codex 2026-09-11 C#21-24)", () => {
     const three = extractNumericClaims("The game ships 3 levels.").claims;
     // Three records of the SAME level are one level played three times.
     const repeated = assessNumericClaims(three, evidence({
       sessionCount: 3,
-      sessions: [0, 0, 0].map((index) => ({ index, outcome: "Won", actions: 5, seconds: 3 })),
+      sessions: [1, 1, 1].map((index) => ({ index, outcome: "Won", actions: 5, seconds: 3 })),
     }));
     expect(repeated.find((x) => x.claim.kind === "level_count")).toMatchObject({ status: "not_met" });
     const distinct = assessNumericClaims(three, evidence({
       sessionCount: 3,
-      sessions: [0, 1, 2].map((index) => ({ index, outcome: "Won", actions: 5, seconds: 3 })),
+      sessions: [1, 2, 3].map((index) => ({ index, outcome: "Won", actions: 5, seconds: 3 })),
     }));
     expect(distinct.find((x) => x.claim.kind === "level_count")).toMatchObject({ status: "met" });
 
@@ -182,12 +214,12 @@ describe("assessNumericClaims", () => {
     const thirteen = extractNumericClaims("The game ships 13 levels.").claims;
     const onlyOne = assessNumericClaims(thirteen, evidence({
       sessionCount: 13,
-      sessions: [{ index: 0, outcome: "Won", actions: 5, seconds: 3 }],
+      sessions: [{ index: 1, outcome: "Won", actions: 5, seconds: 3 }],
     }));
     expect(onlyOne.find((x) => x.claim.kind === "level_count")).toMatchObject({ status: "not_met", blocking: true });
     const twelvePlayed = assessNumericClaims(thirteen, evidence({
       sessionCount: 13,
-      sessions: Array.from({ length: 12 }, (_, index) => ({ index, outcome: "Won", actions: 5, seconds: 3 })),
+      sessions: Array.from({ length: 12 }, (_, i) => ({ index: i + 1, outcome: "Won", actions: 5, seconds: 3 })),
     }));
     expect(twelvePlayed.find((x) => x.claim.kind === "level_count")).toMatchObject({ blocking: false });
 
