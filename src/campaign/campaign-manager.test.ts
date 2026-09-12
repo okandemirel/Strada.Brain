@@ -3099,7 +3099,7 @@ describe("CampaignManager", () => {
       },
     });
     manager.attachEvents();
-    const gdd = "# GDD\n\nThe game ships 3 levels. A round lasts 60-90 seconds. It loads in under 4 seconds.";
+    const gdd = "# GDD\n\nThe game ships 3 levels. A round lasts 60-90 seconds. It loads in under 4 seconds. Up to 40 taps per session.";
     const campaign = manager.startFromGdd(ctx, gdd, "docs/Game_GDD.md");
     await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     settleMilestone("sprint A done");
@@ -3113,6 +3113,10 @@ describe("CampaignManager", () => {
     // 90 s with headroom for a driven run, the boot budget doubled (never
     // below the tool's own 30 s), and every level the document claims.
     expect(specs[0]).toMatchObject({ deadlineSeconds: 150, bootDeadlineSeconds: 30, sessions: "all" });
+    // …and the ACTION budget the document states, with headroom: the runner
+    // stopped every session at its own sixty actions, so a session with a
+    // longer allowance still ended without an outcome (Codex 2026-09-12 U#3).
+    expect(specs[0]).toMatchObject({ maxActions: 75 });
   });
 
   it("a target this machine cannot RUN is pending, not waived (Codex 2026-09-12 R#13)", async () => {

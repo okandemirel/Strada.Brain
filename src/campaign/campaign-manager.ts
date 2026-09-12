@@ -28,7 +28,7 @@ import { readPlaythroughVerdict, describePlaythrough, playthroughDirective, PLAY
 import { gddPlatform, buildSatisfiesTarget, artifactIsForeign, hostTarget, type BuildTarget } from "./gdd-platform.js";
 import { readPlaymodeRun } from "./playmode-run.js";
 import type { PlayerRunSpec } from "../core/bootstrap-stages/stage-runtime.js";
-import { assessNumericClaims, claimsRefusal, describeClaims, extractNumericClaims } from "./gdd-claims.js";
+import { assessNumericClaims, claimsRefusal, describeClaims, extractActionBudget, extractNumericClaims } from "./gdd-claims.js";
 import { REQUIRED_EVIDENCE_PREFIX } from "../supervisor/required-evidence.js";
 import { deliveryReviewPrompt, renderSecondOpinion } from "../agents/review/codex-second-opinion.js";
 import {
@@ -4356,7 +4356,7 @@ export class CampaignManager {
    * document's ceiling plus headroom is the deadline.
    */
   private playerRunSpec(campaign?: Campaign): PlayerRunSpec {
-    const spec: { sessions?: string; deadlineSeconds?: number; bootDeadlineSeconds?: number } = {};
+    const spec: { sessions?: string; deadlineSeconds?: number; bootDeadlineSeconds?: number; maxActions?: number } = {};
     const text = this.gddTextOf(campaign);
     if (text === undefined || text.trim() === "") return spec;
     const { claims } = extractNumericClaims(text);
@@ -4370,6 +4370,19 @@ export class CampaignManager {
       .map((c) => c.value)
       .reduce((max, value) => Math.max(max, value), 0);
     if (boot > 0) spec.bootDeadlineSeconds = Math.max(30, Math.ceil(boot * 2));
+    // HOW LONG THE RUNNER MAY KEEP ACTING. The producer stops a session after
+    // sixty actions by default, so a session the document gives two minutes
+    // and the run 150 seconds still ended at action sixty with no outcome
+    // (Codex 2026-09-12 U#3). A budget, never a rule of the game: it can only
+    // allow more actions than the default, and the session still ends on its
+    // own outcome or its deadline.
+    const stated = extractActionBudget(text);
+    const budget = Math.max(
+      60,
+      stated !== undefined ? Math.ceil(stated * 1.5) : 0,
+      spec.deadlineSeconds !== undefined ? Math.ceil(spec.deadlineSeconds / 2) : 0,
+    );
+    if (budget > 60 || stated !== undefined) spec.maxActions = budget;
     // Every level the document claims, not just the first: the level-count
     // proof is measured from what this run played.
     if (claims.some((c) => c.kind === "level_count")) spec.sessions = "all";

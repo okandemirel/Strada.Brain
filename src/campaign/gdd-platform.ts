@@ -67,6 +67,44 @@ function isExcluded(text: string, at: number): boolean {
   return EXCLUDED_BEFORE.test(boundary >= 0 ? window.slice(boundary + 1) : window);
 }
 
+/**
+ * A "PC" that names a DISTRIBUTION, not a build target.
+ *
+ * "Android; Google Play Games on PC compatible" asked for an Android product
+ * that Google's own compatibility layer also runs on a desktop — and the
+ * reader added a native Windows target for it. Nobody builds that target, so
+ * the delivery gate then reported a platform the document never asked for as
+ * an unbuilt one, and no run could ever close it (Codex 2026-09-12 U#F3).
+ */
+const PC_VIA_STORE_RE =
+  /\b(?:google play(?:\s+games)?|play games|app store|amazon appstore|bluestacks|emulator|emulation|compatibility layer)\b[^.\n]{0,24}$/i;
+/** "PC compatible", "PC-compatible", "compatible with PC" — a compatibility statement. */
+const PC_COMPATIBLE_AFTER_RE = /^\s*[-–—]?\s*compatib\w*/i;
+const PC_COMPATIBLE_BEFORE_RE = /\bcompatib\w*\s+(?:with\s+)?$/i;
+/** "Windows/PC play (Google Play Games on PC)" — the layer named just after. */
+const PC_LAYER_RE = /\b(?:google play\s+games|play games|bluestacks|emulator|emulation|compatibility layer)\b/gi;
+/** …and the same layer named in parentheses right after it: "Windows/PC play (Google Play Games on PC)". */
+const PC_LAYER_PAREN_RE =
+  /^[^.\n)]{0,24}?\([^)\n]{0,40}?\b(?:google play\s+games|play games|bluestacks|emulator|emulation|compatibility layer)\b/i;
+
+function pcNamesDistributionOnly(text: string, at: number, length: number): boolean {
+  const before = text.slice(Math.max(0, at - 40), at);
+  const after = text.slice(at + length, at + length + 28);
+  if (PC_VIA_STORE_RE.test(before) || PC_COMPATIBLE_BEFORE_RE.test(before) || PC_COMPATIBLE_AFTER_RE.test(after)) {
+    return true;
+  }
+  // A LAYER NAMED AFTER THE OS QUALIFIES IT ONLY WITHOUT A COORDINATOR
+  // between them, the same rule storefronts already follow: "Windows/PC play
+  // (Google Play Games on PC)" is one distribution, while "Release on Windows
+  // and Google Play" is two platforms (Codex 2026-09-11 K#14).
+  if (PC_LAYER_PAREN_RE.test(text.slice(at + length, at + length + 72))) return true;
+  const clause = clauseAfter(text.slice(at + length, at + length + 48));
+  for (const m of clause.matchAll(PC_LAYER_RE)) {
+    return !COORDINATOR_RE.test(clause.slice(0, m.index ?? 0));
+  }
+  return false;
+}
+
 /** "mobile"/"phones"/"tablets" with no store named: a handheld, target unresolved. */
 const HANDHELD_RE = /\b(?:mobile|phones?|handheld|tablets?|smartphones?)\b/i;
 
@@ -179,7 +217,10 @@ export interface GddPlatform {
 export function gddPlatform(gddText: string | undefined): GddPlatform {
   if (!gddText) return { handheld: false, targets: [] };
   const hits: Array<{ target: BuildTarget; at: number }> = [];
-  const collect = (patterns: typeof PLATFORM_PATTERNS, accept: (at: number, length: number) => boolean = () => true): void => {
+  const collect = (
+    patterns: typeof PLATFORM_PATTERNS,
+    accept: (at: number, length: number, target: BuildTarget) => boolean = () => true,
+  ): void => {
     for (const [target, re] of patterns) {
       if (hits.some((h) => h.target === target)) continue;
       // EVERY occurrence, not the first: "No Windows release at launch. Linux
@@ -190,13 +231,22 @@ export function gddPlatform(gddText: string | undefined): GddPlatform {
         // "Android only; no iOS release" named two and therefore forced
         // neither (Codex 2026-09-11 D#32).
         if (isExcluded(gddText, m.index ?? 0)) continue;
-        if (!accept(m.index ?? 0, m[0].length)) continue;
+        if (!accept(m.index ?? 0, m[0].length, target)) continue;
         hits.push({ target, at: m.index ?? 0 });
         break;
       }
     }
   };
-  collect(PLATFORM_PATTERNS);
+  // A DESKTOP OS NAMED AS A COMPATIBILITY LAYER is not a build target either:
+  // "Windows/PC play (Google Play Games on PC) uses the same account" is a
+  // sentence about one account across devices, and it put a Windows build on
+  // the delivery gate's list of platforms nobody had built (Codex 2026-09-12
+  // U#F3). Every occurrence is still examined, so a native mention elsewhere
+  // in the document still names the target.
+  collect(
+    PLATFORM_PATTERNS,
+    (at, length, target) => !DESKTOP_TARGETS.has(target) || !pcNamesDistributionOnly(gddText, at, length),
+  );
   // …and a storefront names a platform the OS patterns did NOT: "Release on
   // Windows and Google Play" asks for two, and suppressing every storefront
   // as soon as one OS appeared dropped Android silently (Codex 2026-09-11
@@ -211,7 +261,11 @@ export function gddPlatform(gddText: string | undefined): GddPlatform {
   collect(STOREFRONT_PATTERNS, (at, length) => !qualifiedByOs(gddText, at, length, OS_WORD_RE));
   // A PC mention is its own clause's question, asked every time rather than
   // only when the document named nothing at all.
-  collect([["windows", GENERIC_DESKTOP_RE]], (at, length) => !qualifiedByOs(gddText, at, length, DESKTOP_OS_RE));
+  collect(
+    [["windows", GENERIC_DESKTOP_RE]],
+    (at, length) =>
+      !qualifiedByOs(gddText, at, length, DESKTOP_OS_RE) && !pcNamesDistributionOnly(gddText, at, length),
+  );
   const handheldMatch = HANDHELD_RE.exec(gddText);
   const handheld = handheldMatch !== null || hits.some((h) => MOBILE_TARGETS.has(h.target));
   if (hits.length === 0) {

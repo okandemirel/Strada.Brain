@@ -25,7 +25,7 @@
 import type { PlaythroughEvidence } from "./types.js";
 import { frameRateAnswersPlatform, type GddPlatform } from "./gdd-platform.js";
 
-export type ClaimKind = "fps" | "boot_seconds" | "session_seconds" | "level_count";
+export type ClaimKind = "fps" | "boot_seconds" | "level_load_seconds" | "session_seconds" | "level_count";
 
 export interface NumericClaim {
   readonly kind: ClaimKind;
@@ -68,10 +68,54 @@ function toSeconds(value: number, unit: string): number {
 
 const FPS_RE = /\b(\d{2,3})\s*(?:fps|frames?\s+per\s+second)\b/gi;
 const BOOT_RE =
-  /\b(?:load(?:ing|s)?|boot(?:s|ing)?|start-?up|launch(?:es|ing)?|cold\s+start|time\s+to\s+(?:play|interactive|first\s+frame))\b[^.\n]{0,60}?\b(?:under|below|within|less\s+than|no\s+more\s+than|at\s+most|max(?:imum)?(?:\s+of)?|<=?|≤)\s*(\d+(?:\.\d+)?)\s*(ms|milliseconds?|s|secs?|seconds?|min(?:ute)?s?)\b/gi;
+  /\b(?:load(?:ing|s)?|boot(?:s|ing)?|start-?up|launch(?:es|ing)?|cold\s+start|time\s+to\s+(?:play|interactive|first\s+frame))\b[^.\n]{0,60}?(?:\b(?:under|below|within|less\s+than|no\s+more\s+than|at\s+most|max(?:imum)?(?:\s+of)?)\b|<=?|≤)\s*(\d+(?:\.\d+)?)\s*(ms|milliseconds?|s|secs?|seconds?|min(?:ute)?s?)\b/gi;
 const BOOT_REVERSED_RE =
   /\b(?:under|below|within|less\s+than|no\s+more\s+than|at\s+most)\s*(\d+(?:\.\d+)?)\s*(ms|milliseconds?|s|secs?|seconds?|min(?:ute)?s?)\b[^.\n]{0,40}?\b(?:to\s+)?(?:load(?:ing)?|boot(?:ing)?|start-?up|launch|first\s+frame|interactive)\b/gi;
-const LEVEL_COUNT_RE = /\b(\d{1,3})\s+(?:levels|stages|rounds|puzzles|worlds|chapters|waves)\b/gi;
+/**
+ * A count with its separators and an optional "+": "20 levels", "3,000+
+ * levels", "1.200 Level" — a four-digit catalogue used to match nothing at
+ * all, so a document asking for 3,000 levels stated no level count and the
+ * delivery was measured against whatever smaller number the prose held
+ * (Codex 2026-09-12 U#F3).
+ */
+const LEVEL_COUNT_RE =
+  /\b(\d{1,3}(?:[.,]\d{3})+|\d{1,5})\s*(\+|\s+or\s+(?:more|fewer|less))?\s+(?:levels|stages|rounds|puzzles|worlds|chapters|waves)\b/gi;
+/**
+ * The subject of the timing is a LEVEL opening, not the application starting.
+ * Read on a window that reaches BEHIND the match, because the boot regex
+ * starts at the verb: in "level load ≤ 1.5 s" the noun is not in the match.
+ */
+const LOADS_A_LEVEL_RE =
+  /\b(?:level|stage|scene|round|puzzle|match|map)s?\b[^.\n]{0,12}?\b(?:load|open|enter|ready|transition)|\b(?:load|open|enter)(?:s|ing)?\b[^.\n]{0,12}?\b(?:level|stage|scene|round|puzzle|match|map)s?\b/i;
+/** "at least 20 levels" is met by 21; "up to 20" is not (Codex 2026-09-12 U#F3). */
+const COUNT_AT_LEAST_RE =
+  /(?:\b(?:at\s+least|minimum(?:\s+of)?|no\s+fewer\s+than|not\s+fewer\s+than|more\s+than|over)\b|>=|≥)\s*$/i;
+const COUNT_AT_MOST_RE =
+  /(?:\b(?:up\s+to|at\s+most|no\s+more\s+than|not\s+more\s+than|max(?:imum)?(?:\s+of)?|fewer\s+than|less\s+than)\b|<=|≤)\s*$/i;
+const COUNT_OR_MORE_AHEAD_RE = /^\s*(?:or\s+more|\+|and\s+up)\b/i;
+
+/** A number written with thousands separators: "3,000" and "3.000" are 3000. */
+function countValue(digits: string): number {
+  return Number(digits.replace(/[.,]/g, ""));
+}
+
+/**
+ * WHICH WAY the document's count points, read from the words around it. The
+ * reader used to call every count exact, so "ship at least 20 levels" was met
+ * by exactly 20 and failed on 21 (Codex 2026-09-12 U#F3).
+ */
+export function countComparator(text: string, at: number, matched: string, qualifier: string): "min" | "max" | "eq" {
+  // "3,000+", "3,000 or more" — the qualifier sits between the number and the
+  // noun, so the count regex carries it.
+  if (qualifier.includes("+") || /\bor\s+more\b/i.test(qualifier)) return "min";
+  if (/\bor\s+(?:fewer|less)\b/i.test(qualifier)) return "max";
+  const before = text.slice(Math.max(0, at - 40), at);
+  const after = text.slice(at + matched.length, at + matched.length + 20);
+  if (COUNT_OR_MORE_AHEAD_RE.test(after)) return "min";
+  if (COUNT_AT_MOST_RE.test(before)) return "max";
+  if (COUNT_AT_LEAST_RE.test(before)) return "min";
+  return "eq";
+}
 const CONTAINER_WORD_RE = /\b(?:worlds|chapters|acts|episodes|zones)\b/i;
 const LEVEL_WORD_AHEAD_RE = /\b\d{1,3}\s+(?:levels|stages|rounds|puzzles|waves)\b/i;
 /** "2 worlds with 12 levels each", "4 chapters of 10 stages each". */
@@ -126,7 +170,16 @@ export function extractNumericClaims(gddText: string): { claims: NumericClaim[];
   for (const re of [BOOT_RE, BOOT_REVERSED_RE]) {
     for (const m of text.matchAll(re)) {
       const value = toSeconds(Number(m[1]), m[2] ?? "s");
-      if (value > 0 && value <= 600) push({ kind: "boot_seconds", comparator: "max", value, text: fragment(text, m.index ?? 0, m[0].length) }, m.index ?? 0);
+      if (value <= 0 || value > 600) continue;
+      // A LEVEL LOAD IS NOT A COLD BOOT. "Cold boot ≤ 6 s; level load ≤ 1.5 s"
+      // produced two boot claims, and the stricter one won: the boot gate then
+      // demanded that the whole game start in the time one level may take to
+      // open (Codex 2026-09-12 U#F3, U#F10). They are separate intervals, and
+      // only the producer can separate them.
+      const at = m.index ?? 0;
+      const subject = text.slice(Math.max(0, at - 20), at + m[0].length);
+      const kind: ClaimKind = LOADS_A_LEVEL_RE.test(subject) ? "level_load_seconds" : "boot_seconds";
+      push({ kind, comparator: "max", value, text: fragment(text, m.index ?? 0, m[0].length) }, m.index ?? 0);
     }
   }
   // "2 worlds with 12 levels each" is 24 levels, not two claims that contradict
@@ -152,8 +205,11 @@ export function extractNumericClaims(gddText: string): { claims: NumericClaim[];
     // not a level count when the sentence goes on to give one (Codex
     // 2026-09-11 C#23).
     if (CONTAINER_WORD_RE.test(m[0]) && LEVEL_WORD_AHEAD_RE.test(text.slice((m.index ?? 0) + m[0].length, (m.index ?? 0) + m[0].length + 40))) continue;
-    const value = Number(m[1]);
-    if (value >= 1) push({ kind: "level_count", comparator: "eq", value, text: fragment(text, m.index ?? 0, m[0].length) }, m.index ?? 0);
+    const value = countValue(m[1] ?? "");
+    const comparator = countComparator(text, m.index ?? 0, m[0], m[2] ?? "");
+    if (value >= 1 && value <= 100_000) {
+      push({ kind: "level_count", comparator, value, text: fragment(text, m.index ?? 0, m[0].length) }, m.index ?? 0);
+    }
   }
   for (const m of text.matchAll(SESSION_RE)) {
     const unit = m[3] ?? "s";
@@ -185,6 +241,28 @@ export function extractNumericClaims(gddText: string): { claims: NumericClaim[];
   found.sort((a, b) => a.at - b.at);
   const truncated = Math.max(0, found.length - MAX_CLAIMS);
   return { claims: found.slice(0, MAX_CLAIMS).map(({ at: _at, ...c }) => c), truncated };
+}
+
+/**
+ * The actions one session may take, when the document states them: "up to 60
+ * taps per session", "30 moves per level".
+ *
+ * Not a claim — nothing measures a game against its input count — but a
+ * BUDGET the play-through runner needs: its default stopped the session after
+ * sixty actions whatever the document asked for, so a scenario that needs
+ * more could not finish and the level reported no outcome (Codex 2026-09-12
+ * U#3). Returns the largest stated figure, or undefined.
+ */
+const ACTION_BUDGET_RE =
+  /\b(\d{1,4})\s+(?:taps|clicks|moves|actions|swipes|inputs|turns|drags|placements)\b[^.\n]{0,24}?\b(?:per|a|each|in\s+a|in\s+each)\s+(?:session|level|round|match|run|game|stage|puzzle)\b/gi;
+
+export function extractActionBudget(gddText: string): number | undefined {
+  let most = 0;
+  for (const m of (gddText ?? "").matchAll(ACTION_BUDGET_RE)) {
+    const value = Number(m[1]);
+    if (Number.isFinite(value) && value > 0 && value <= 5000) most = Math.max(most, value);
+  }
+  return most > 0 ? most : undefined;
 }
 
 /** Hold each claim against the play-through evidence. */
@@ -324,6 +402,21 @@ export function assessNumericClaims(
           blocking: claim.comparator !== "min" || isMandatoryFloor(claim.text),
         };
       }
+      case "level_load_seconds": {
+        // NOBODY RECORDS IT YET. Core's play-through stops its clock when the
+        // bootstrap services exist, and records no level-ready checkpoint, so
+        // the document's level-load figure has no measurement to hold it
+        // against (Codex 2026-09-12 U#F10). Named, never waived by silence —
+        // and not blocking, because no run on any machine could answer it.
+        return {
+          claim,
+          status: "unmeasured",
+          note:
+            "no producer records when a level becomes interactive — Strada.Core must emit a level-ready checkpoint " +
+            "(level-request → level-interactive) for unity_playthrough to report it",
+          blocking: false,
+        };
+      }
       case "level_count": {
         if (!playthrough?.found) return { claim, status: "unmeasured", note: noRun, blocking: false };
         if (playthrough.sessionCount === undefined) {
@@ -334,7 +427,16 @@ export function assessNumericClaims(
             blocking: false,
           };
         }
-        const catalogMatches = playthrough.sessionCount === claim.value;
+        // THE COMPARATOR THE DOCUMENT STATED. Every count was read as exact,
+        // so "ship at least 20 levels" was met by 20 and failed on 21 — a
+        // game that shipped MORE than it promised was not delivered (Codex
+        // 2026-09-12 U#F3).
+        const catalogMatches =
+          claim.comparator === "min"
+            ? playthrough.sessionCount >= claim.value
+            : claim.comparator === "max"
+            ? playthrough.sessionCount <= claim.value
+            : playthrough.sessionCount === claim.value;
         const played = playthrough.sessions?.length ?? 0;
         // DISTINCT sessions: three records of index 0 are one level played
         // three times (Codex 2026-09-11 C#22).
@@ -353,13 +455,19 @@ export function assessNumericClaims(
         // The waiver is for what ONE RUN cannot reach, so it applies only when
         // the run actually played its full share: a 13-level game with one
         // session played was waived entirely (Codex 2026-09-11 C#21).
-        const beyondOneRun = claim.value > PLAYED_SESSIONS_PER_RUN && finished >= PLAYED_SESSIONS_PER_RUN;
+        const beyondOneRun =
+          Math.max(claim.value, claim.comparator === "min" ? playthrough.sessionCount : 0) > PLAYED_SESSIONS_PER_RUN
+          && finished >= PLAYED_SESSIONS_PER_RUN;
         // A SHORTFALL IS NOT A PASS. `met` used to be true once the run had
         // played its own share, so a 24-level game reported status "met" with
         // twelve levels never played (Codex 2026-09-12 S#11). The status is
         // the truth; only the BLOCKING stays lifted for what one run cannot
         // reach, because no single run can answer it.
-        const everyLevelPlayed = catalogMatches && finished >= claim.value;
+        // How many levels must be played to an outcome: the catalogue's own
+        // size when the document set a floor and the game shipped more, and
+        // the document's number otherwise.
+        const mustPlay = claim.comparator === "min" ? Math.max(claim.value, playthrough.sessionCount) : claim.value;
+        const everyLevelPlayed = catalogMatches && finished >= mustPlay;
         return {
           claim,
           status: everyLevelPlayed ? "met" : "not_met",
@@ -390,6 +498,7 @@ export function isMandatoryFloor(text: string): boolean {
 const KIND_LABEL: Record<ClaimKind, string> = {
   fps: "frame rate",
   boot_seconds: "boot time",
+  level_load_seconds: "level load time",
   session_seconds: "session length",
   level_count: "level count",
 };

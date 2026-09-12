@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { gddPlatform } from "./gdd-platform.js";
-import { assessNumericClaims, claimsRefusal, describeClaims, extractNumericClaims, finishedSessionIndices } from "./gdd-claims.js";
+import { assessNumericClaims, claimsRefusal, describeClaims, extractActionBudget, extractNumericClaims, finishedSessionIndices } from "./gdd-claims.js";
 import type { PlaythroughEvidence } from "./types.js";
 
 const GDD = `# Sky Pigs
@@ -359,5 +359,69 @@ describe("a per-session requirement is measured per session (Codex 2026-09-12 T#
       perf: { medium: "playmode", bootSeconds: 1, playSeconds: 175, playFrames: 600, avgFps: 60, worstFrameMs: 20 },
     }));
     expect(long.find((x) => x.claim.kind === "session_seconds")!.status).toBe("not_met");
+  });
+});
+
+/**
+ * The document's own numbers, read the way it wrote them. Measured by Codex
+ * 2026-09-12 (U#F3) against the real GDD: "Cold boot ≤ 6 s" stated no timing
+ * requirement at all, "ship at least 20 levels" meant exactly twenty, "3,000+
+ * levels" meant nothing, and the level count the delivery was held to came
+ * from a sentence about how far ahead of the player the queue runs.
+ */
+describe("comparators, separators and subjects (Codex 2026-09-12 U#F3)", () => {
+  const kinds = (text: string): Array<[string, string, number]> =>
+    extractNumericClaims(text).claims.map((c) => [c.kind, c.comparator, c.value]);
+
+  it("reads a symbol comparator — the word boundary before ≤ could never match", () => {
+    expect(kinds("Cold boot ≤ 6 s to Home on a mid device.")).toEqual([["boot_seconds", "max", 6]]);
+    expect(kinds("Boot <= 4s.")).toEqual([["boot_seconds", "max", 4]]);
+    // …and the worded form still reads as before.
+    expect(kinds("The game must load in under 3 seconds.")).toEqual([["boot_seconds", "max", 3]]);
+  });
+
+  it("a LEVEL load is not a cold boot: two intervals, not one stricter boot budget", () => {
+    expect(kinds("Cold boot ≤ 6 s to Home on mid device; level load ≤ 1.5 s.")).toEqual([
+      ["boot_seconds", "max", 6],
+      ["level_load_seconds", "max", 1.5],
+    ]);
+    expect(kinds("Loading a stage takes under 2 seconds.")).toEqual([["level_load_seconds", "max", 2]]);
+  });
+
+  it("names the level-load requirement as unmeasured, because no producer records it", () => {
+    const claim = extractNumericClaims("Level load ≤ 1.5 s.").claims[0]!;
+    const [assessed] = assessNumericClaims([claim], evidence());
+    expect(assessed!.status).toBe("unmeasured");
+    expect(assessed!.blocking).toBe(false);
+    expect(assessed!.note).toContain("level-ready checkpoint");
+  });
+
+  it("reads which way a count points, and reads thousands", () => {
+    expect(kinds("Ship at least 20 levels.")).toEqual([["level_count", "min", 20]]);
+    expect(kinds("Ship 3,000+ levels.")).toEqual([["level_count", "min", 3000]]);
+    expect(kinds("3,000 or more levels at launch.")).toEqual([["level_count", "min", 3000]]);
+    expect(kinds("Up to 20 levels.")).toEqual([["level_count", "max", 20]]);
+    expect(kinds("The game ships 12 levels.")).toEqual([["level_count", "eq", 12]]);
+    // The largest count is still the game's own (Codex 2026-09-11 F#2).
+    expect(kinds("Launch depth: 2,000 levels. The tutorial has 3 puzzles.")).toEqual([["level_count", "eq", 2000]]);
+  });
+
+  it("a game that ships MORE than its floor is delivered, and one that ships fewer is not", () => {
+    const atLeast = extractNumericClaims("Ship at least 20 levels.").claims;
+    const sessions = (n: number) =>
+      Array.from({ length: n }, (_, i) => ({ index: i + 1, outcome: "Won", actions: 5, seconds: 30 }));
+    const more = assessNumericClaims(atLeast, evidence({ sessionCount: 24, sessions: sessions(24) }));
+    expect(more[0]!.status).toBe("met");
+    const fewer = assessNumericClaims(atLeast, evidence({ sessionCount: 19, sessions: sessions(19) }));
+    expect(fewer[0]!.status).toBe("not_met");
+    expect(fewer[0]!.blocking).toBe(true);
+    // A catalogue that holds enough but was not PLAYED is still not met.
+    const unplayed = assessNumericClaims(atLeast, evidence({ sessionCount: 24, sessions: sessions(11) }));
+    expect(unplayed[0]!.status).toBe("not_met");
+  });
+
+  it("reads the action budget a session is allowed, or nothing", () => {
+    expect(extractActionBudget("Up to 60 taps per session; 30 moves per level.")).toBe(60);
+    expect(extractActionBudget("A round lasts 90 seconds.")).toBeUndefined();
   });
 });

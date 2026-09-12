@@ -143,3 +143,38 @@ describe("the platform the GDD asks for (Codex 2026-09-11 B#11)", () => {
     expect(gddPlatform("No Windows release, ever.").targets).toEqual([]);
   });
 });
+
+/**
+ * A compatibility layer is not a build target. Measured by Codex 2026-09-12
+ * (U#F3) against the real document: "Mobile — iOS & Android; Google Play
+ * Games on PC compatible" asked for a Windows build nobody would ever make,
+ * and the delivery gate then reported a platform the document never asked for
+ * as an unbuilt one — a proof no run could close.
+ */
+describe("a PC that names a distribution, not a target (Codex 2026-09-12 U#F3)", () => {
+  it("reads the document's own platform line as two mobile targets", () => {
+    const platform = gddPlatform("Mobile — iOS (15.0+) & Android (8.0+); Google Play Games on PC compatible");
+    expect(platform.targets).toEqual(["ios", "android"]);
+    expect(platform.handheld).toBe(true);
+  });
+
+  it("ignores a desktop OS named as the layer, wherever the layer sits", () => {
+    expect(gddPlatform("Launch on Android; Google Play Games on PC compatible.").targets).toEqual(["android"]);
+    expect(gddPlatform("Android only. PC-compatible via Google Play Games.").targets).toEqual(["android"]);
+    // The OS word itself, qualified by the layer right after it.
+    expect(
+      gddPlatform("Ships on Android. Windows/PC play (Google Play Games on PC) uses the same account.").targets,
+    ).toEqual(["android"]);
+  });
+
+  it("still reads a native desktop request", () => {
+    expect(gddPlatform("A PC build on Steam, plus Android.").targets).toEqual(["windows", "android"]);
+    expect(gddPlatform("Also playable on PC.").targets).toEqual(["windows"]);
+    // "compatible" about something else entirely does not deny the target.
+    expect(gddPlatform("Ships on PC, compatible with gamepads.").targets).toEqual(["windows"]);
+    // …and a native mention elsewhere still names it.
+    expect(
+      gddPlatform("Android first; Google Play Games on PC compatible. A native Windows build follows.").targets,
+    ).toEqual(["android", "windows"]);
+  });
+});
