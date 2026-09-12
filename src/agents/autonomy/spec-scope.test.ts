@@ -203,3 +203,48 @@ describe("a parenthetical is an annotation, not part of the name (Codex 2026-09-
     expect(elementCodeTokens("Lock & Key")).toEqual(["LockKey", "lockkey"]);
   });
 });
+
+/**
+ * A token two elements SHARE proves neither: "Gate (one-way)" and "Gate
+ * (two-way)" both strip to "Gate", so a single `class Gate` covered both
+ * scheduled variants (Codex 2026-09-12 Z#8).
+ */
+describe("a shared stripped name covers no variant (Codex 2026-09-12 Z#8)", () => {
+  const project = (gdd: string, code: string): string => {
+    const { mkdtempSync, mkdirSync, writeFileSync } = require("node:fs") as typeof import("node:fs");
+    const { tmpdir } = require("node:os") as typeof import("node:os");
+    const { join } = require("node:path") as typeof import("node:path");
+    const root = mkdtempSync(join(tmpdir(), "spec-scope-shared-"));
+    mkdirSync(join(root, "docs"), { recursive: true });
+    writeFileSync(join(root, "docs", "GDD.md"), gdd + "\n# rest of a large document\n" + "x".repeat(500));
+    const scripts = join(root, "Assets", "Modules", "M", "Scripts");
+    mkdirSync(scripts, { recursive: true });
+    writeFileSync(join(scripts, "Code.cs"), code);
+    return root;
+  };
+  const twoGates =
+    "\n## 4. GAME ELEMENTS\n\n### 4.1 Element Introduction Schedule\n\n" +
+    "| Unlock | Element | Pitch |\n|---|---|---|\n| L1 | Gate (one-way) | in only |\n| L2 | Gate (two-way) | both |\n";
+
+  it("reports both variants missing when only the shared name exists", () => {
+    const { rmSync } = require("node:fs") as typeof import("node:fs");
+    const root = project(twoGates, "public sealed class Gate {}");
+    try {
+      const report = assessSpecScope(root);
+      expect(report.scheduled).toBe(2);
+      expect(report.missing.map((m) => m.name)).toEqual(["Gate (one-way)", "Gate (two-way)"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts each variant's own spelling", () => {
+    const { rmSync } = require("node:fs") as typeof import("node:fs");
+    const root = project(twoGates, "public class GateOneWay {}\npublic class GateTwoWay {}");
+    try {
+      expect(assessSpecScope(root).missing).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});

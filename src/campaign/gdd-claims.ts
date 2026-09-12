@@ -292,6 +292,15 @@ export function extractNumericClaims(gddText: string): {
     // clause's own words decide; a range still carries both bounds.
     const clause = clauseTail(text.slice(Math.max(0, (m.index ?? 0) - 10), (m.index ?? 0) + m[0].length));
     const floorOnly = m[2] === undefined && /(?:\b(?:at\s+least|minimum(?:\s+of)?|no\s+shorter\s+than|no\s+less\s+than|more\s+than)\b|>=|≥)/i.test(clause);
+    // "EXACTLY 30 seconds" is neither a floor nor a ceiling: read as a
+    // maximum, two 20-second rounds satisfied it (Codex 2026-09-12 Z).
+    const exactly = m[2] === undefined && /\b(?:exactly|precisely|always)\b/i.test(clause);
+    if (exactly) {
+      if (upper > 0 && upper <= 4 * 3600) {
+        push({ kind: "session_seconds", comparator: "eq", value: upper, text: fragment(text, m.index ?? 0, m[0].length) }, m.index ?? 0);
+      }
+      continue;
+    }
     if (floorOnly) {
       if (upper > 0 && upper <= 4 * 3600) {
         push({ kind: "session_seconds", comparator: "min", value: upper, text: fragment(text, m.index ?? 0, m[0].length) }, m.index ?? 0);
@@ -530,8 +539,15 @@ export function assessNumericClaims(
           .filter((x) => x.outcome !== "None" && x.outcome !== "Refused")
           .map((x) => x.seconds)
           .filter((x): x is number => typeof x === "number" && Number.isFinite(x) && x > 0);
+        // AN EXACT DURATION is met within a stated tolerance: a driven run's
+        // clock is not a stopwatch, and "exactly 30 seconds" read as a
+        // maximum was satisfied by twenty (Codex 2026-09-12 Z).
         const holds = (seconds: number): boolean =>
-          claim.comparator === "min" ? seconds >= claim.value : seconds <= claim.value;
+          claim.comparator === "min"
+            ? seconds >= claim.value
+            : claim.comparator === "eq"
+            ? Math.abs(seconds - claim.value) <= Math.max(1, claim.value * EXACT_DURATION_TOLERANCE)
+            : seconds <= claim.value;
         const met = perSession.length > 1 ? perSession.every(holds) : holds(timedPerf.playSeconds);
         const measured = perSession.length > 1
           ? Number(Math.max(...perSession).toFixed(1))
@@ -634,6 +650,13 @@ export function assessNumericClaims(
     }
   });
 }
+
+/**
+ * How far a measured duration may sit from an EXACT one and still be met.
+ * A driven play-through's clock is not a stopwatch: frames, capture stalls
+ * and the driver's own pace move it by a few per cent (Codex 2026-09-12 Z).
+ */
+export const EXACT_DURATION_TOLERANCE = 0.1;
 
 /** unity_playthrough's per-run session cap (MAX_SESSIONS_PER_RUN in Strada.MCP). */
 export const PLAYED_SESSIONS_PER_RUN = 12;

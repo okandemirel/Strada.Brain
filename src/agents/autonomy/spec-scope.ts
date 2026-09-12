@@ -287,8 +287,20 @@ export function assessSpecScope(
   // match "cubemap" or "pigment", but ignoring it outright reported every
   // short-named element as missing (measured 2026-09-10: "Cube" with a
   // `public class Cube` in the tree).
+  // A TOKEN TWO ELEMENTS SHARE PROVES NEITHER. "Gate (one-way)" and "Gate
+  // (two-way)" both strip to "Gate", so one `class Gate` covered both
+  // scheduled variants (Codex 2026-09-12 Z#8). A shared candidate is dropped
+  // from both; each variant is then judged by the spelling that is its own.
+  const tokensFor = new Map(elements.map((el) => [el.name, elementCodeTokens(el.name)]));
+  const timesUsed = new Map<string, number>();
+  for (const tokens of tokensFor.values()) {
+    for (const tok of new Set(tokens.map((t) => t.toLowerCase()))) {
+      timesUsed.set(tok, (timesUsed.get(tok) ?? 0) + 1);
+    }
+  }
   const missing = elements.filter((el) => {
-    return !elementCodeTokens(el.name).some((tok) => {
+    const own = (tokensFor.get(el.name) ?? []).filter((tok) => (timesUsed.get(tok.toLowerCase()) ?? 0) === 1);
+    return !own.some((tok) => {
       const needle = tok.toLowerCase();
       if (needle.length >= 5) return corpus.includes(needle);
       if (needle.length < 3) return false;

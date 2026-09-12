@@ -649,3 +649,26 @@ describe("the shipped artifact answers the document's numbers (Codex 2026-09-12 
     expect(judged.find((a) => a.claim.kind === "level_count")!.status).toBe("met");
   });
 });
+
+/**
+ * "Each round must last exactly 30 seconds" was read as a maximum, so two
+ * 20-second rounds satisfied it (Codex 2026-09-12 Z).
+ */
+describe("an EXACT duration (Codex 2026-09-12 Z)", () => {
+  const claims = extractNumericClaims("Each round must last exactly 30 seconds.").claims;
+  const ran = (seconds: number): PlaythroughEvidence =>
+    evidence({ perf: { medium: "player", bootSeconds: 1, playSeconds: seconds, playFrames: 300, avgFps: 30, worstFrameMs: 40 } });
+
+  it("is neither a floor nor a ceiling, and holds within a stated tolerance", () => {
+    expect(claims.map((c) => [c.kind, c.comparator, c.value])).toEqual([["session_seconds", "eq", 30]]);
+    expect(assessNumericClaims(claims, ran(30))[0]!.status).toBe("met");
+    expect(assessNumericClaims(claims, ran(29))[0]!.status).toBe("met");
+    expect(assessNumericClaims(claims, ran(20))[0]!.status).toBe("not_met");
+    expect(assessNumericClaims(claims, ran(40))[0]!.status).toBe("not_met");
+  });
+
+  it("leaves an ordinary duration a ceiling and a floor a floor", () => {
+    expect(extractNumericClaims("Each round lasts 30 seconds.").claims[0]!.comparator).toBe("max");
+    expect(extractNumericClaims("Each round lasts at least 30 seconds.").claims[0]!.comparator).toBe("min");
+  });
+});
