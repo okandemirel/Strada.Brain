@@ -243,6 +243,14 @@ export const RECENT_PROVIDER_FAILURE_MS = 30 * 60_000;
 const TURKISH_STALL_RE = /Görev ilerleme kaydetmeden takıldı/i;
 
 /** A player run that says THIS MACHINE cannot execute the artifact. */
+/**
+ * The PRODUCER's own refusal to run an artifact on this host: "…is not a
+ * player this machine can run (an .apk, WebGL folder or missing executable) —
+ * nothing was played". It is not an execution error, so none of the OS
+ * wordings below match it (Codex 2026-09-12 Y#J4.6).
+ */
+export const NOT_A_PLAYER_HERE_RE = /\bnot a player this machine can run\b|\bnothing was played\b/i;
+
 export const UNRUNNABLE_HERE_RE =
   // "no player runner is configured" is NOT here: a runner this deployment
   // never set up is our own gap, and treating it as host incapability waived
@@ -1857,11 +1865,25 @@ export class CampaignManager {
     // moment a person's cancellation was seen and then read by nothing at all,
     // so a completion handler ahead of it in the queue could still submit the
     // next sprint or reach `done` (Codex 2026-09-12 P#12).
-    const stopped = this.storage.get(campaign.id)?.stopRequestedAt;
+    const stored = this.storage.get(campaign.id);
+    const stopped = stored?.stopRequestedAt;
     if (stopped !== undefined) {
       getLoggerSafe().info("A stop is recorded for this campaign — not submitting more work", {
         id: campaign.id,
         stoppedAt: new Date(stopped).toISOString(),
+      });
+      return;
+    }
+    // AN OBSOLETE WRITER SUBMITS NOTHING. `persist` refuses a save from an
+    // earlier generation (X#1), but submission happens BEFORE that refusal —
+    // so a caller holding a pre-revival copy still minted a task, and the
+    // stored ladder never owned it: an orphan with a live lineage (Codex
+    // 2026-09-12 Y#2). A stale writer stops here instead.
+    if (stored !== undefined && (stored.stopGeneration ?? 0) > (campaign.stopGeneration ?? 0)) {
+      getLoggerSafe().warn("Refused to submit work from an earlier generation of this campaign", {
+        id: campaign.id,
+        writing: campaign.stopGeneration ?? 0,
+        stored: stored.stopGeneration ?? 0,
       });
       return;
     }
@@ -4560,7 +4582,23 @@ export class CampaignManager {
       // Windows" and the campaign reached `done` (Codex 2026-09-11 L#12).
       const proves = built.ran && built.ok === true && buildSatisfiesTarget(target, built.target, built.artifactPath);
       if (target && !proves) unbuilt.push(target);
-      if (proves && built.artifactPath) artifacts.push({ target: target ?? built.target, artifactPath: built.artifactPath });
+      if (proves && built.artifactPath) {
+        // TWO TARGETS CANNOT OWN ONE ARTIFACT. A build that writes both to the
+        // same path has produced one product, and the second target's proof
+        // would be the first one's file read twice (Codex 2026-09-12 Y#5).
+        // That target is not built: the gate names it as missing, rather than
+        // crediting it silently.
+        const claimed = artifacts.some((a) => a.artifactPath === built.artifactPath);
+        if (claimed) {
+          if (target) unbuilt.push(target);
+          getLoggerSafe().warn("Two targets name one artifact path — the later one is not a build of its own", {
+            target,
+            artifactPath: built.artifactPath,
+          });
+        } else {
+          artifacts.push({ target: target ?? built.target, artifactPath: built.artifactPath });
+        }
+      }
       if (!primary) {
         // The FIRST requested target carries the artifact: it is the one the
         // player run plays and the one the GDD's frame rates are held to.
@@ -4660,18 +4698,38 @@ export class CampaignManager {
     // there and reported a crashed player as a clean play-through (measured
     // while fixing Codex 2026-09-12 W#11). Cleared before each run, so a
     // verdict can only be the one this run wrote.
-    const clearVerdict = (): void => {
+    // A CLEAR THAT FAILED is not a clear: the previous target's verdict would
+    // be read as this one's (Codex 2026-09-12 Y#5), so the run does not
+    // happen at all rather than measure the wrong thing.
+    const clearVerdict = (): string | undefined => {
+      const at = join(this.projectRoot, PLAYER_PLAYTHROUGH_VERDICT_REL);
       try {
-        rmSync(join(this.projectRoot, PLAYER_PLAYTHROUGH_VERDICT_REL), { force: true });
-      } catch {
-        // Unreadable or already gone: the freshness window still applies.
+        rmSync(at, { force: true });
+      } catch (err) {
+        return `the previous verdict at ${PLAYER_PLAYTHROUGH_VERDICT_REL} could not be removed (${err instanceof Error ? err.message : String(err)})`;
       }
+      return existsSync(at) ? `the previous verdict at ${PLAYER_PLAYTHROUGH_VERDICT_REL} is still there` : undefined;
     };
-    const others = (build.artifacts ?? []).filter((a) => a.artifactPath !== build.artifactPath);
+    // ONE RUN PER ARTIFACT. A repeated artifact path ran twice, and two
+    // targets naming ONE output path silently became one measurement (Y#5).
+    const seenArtifacts = new Set<string>([build.artifactPath]);
+    const others: Array<{ target?: string; artifactPath: string }> = [];
+    for (const a of build.artifacts ?? []) {
+      if (seenArtifacts.has(a.artifactPath)) continue;
+      seenArtifacts.add(a.artifactPath);
+      others.push(a);
+    }
+    // REBUILT EVERY MEASUREMENT: the list was only assigned when a secondary
+    // target existed, so a previous round's failed secondary survived into a
+    // round that had none (Y#5).
+    milestone.playerRunsByTarget = undefined;
     const perTarget: Array<{ target?: string; ok: boolean; detail: string }> = [];
     const since = Date.now();
     let failure: string | undefined;
-    clearVerdict();
+    const stale = clearVerdict();
+    if (stale !== undefined) {
+      return { found: false, missingRunner: `the player was not run: ${stale}` };
+    }
     try {
       await this.runPlayer(this.projectRoot, build.artifactPath, spec);
     } catch (err) {
@@ -4682,15 +4740,27 @@ export class CampaignManager {
     for (const other of others) {
       const at = Date.now();
       let why: string | undefined;
-      clearVerdict();
+      const staleHere = clearVerdict();
+      if (staleHere !== undefined) {
+        perTarget.push({ target: other.target, ok: false, detail: `not run: ${staleHere}` });
+        continue;
+      }
       try {
         await this.runPlayer(this.projectRoot, other.artifactPath, spec);
       } catch (err) {
         why = err instanceof Error ? err.message : String(err);
       }
       const theirs = readPlaythroughVerdict(this.projectRoot, at - 1000, PLAYER_PLAYTHROUGH_VERDICT_REL, attemptRunId(milestone));
+      // The producer's own refusal — "…is not a player this machine can run
+      // (an .apk, WebGL folder or missing executable) — nothing was played" —
+      // did not match the host-incapability wording, so an Android secondary
+      // read as a broken game instead of an unplayable-here artifact (Codex
+      // 2026-09-12 Y#J4.6).
       const foreignHere =
-        !theirs.found && why !== undefined && UNRUNNABLE_HERE_RE.test(why) && artifactIsForeign(other.artifactPath, hostTarget());
+        !theirs.found
+        && why !== undefined
+        && (UNRUNNABLE_HERE_RE.test(why) || NOT_A_PLAYER_HERE_RE.test(why))
+        && artifactIsForeign(other.artifactPath, hostTarget());
       perTarget.push({
         target: other.target,
         ok: theirs.found === true && theirs.ok === true,

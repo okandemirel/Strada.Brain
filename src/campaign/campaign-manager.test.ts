@@ -3372,6 +3372,29 @@ describe("CampaignManager", () => {
     expect(`${after.lastError}`).toContain("boss: ABSENT");
   });
 
+  it("an obsolete writer submits no work either (Codex 2026-09-12 Y#2)", async () => {
+    // `persist` refuses a save from an earlier generation (X#1), but
+    // submission happens BEFORE that refusal: a caller holding a pre-revival
+    // copy still minted a task, and the stored ladder never owned it — an
+    // orphan with a live lineage.
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1), { timeout: 15_000 });
+    const stale = structuredClone(storage.get(campaign.id)!);
+
+    // A person revives: a new generation on the stored row.
+    const revived = storage.get(campaign.id)!;
+    revived.stopGeneration = (revived.stopGeneration ?? 0) + 1;
+    storage.save(revived);
+
+    const before = tasks.submitted.length;
+    (manager as unknown as { submitCurrentMilestone(c: unknown): void }).submitCurrentMilestone(stale);
+    expect(tasks.submitted.length).toBe(before);
+
+    // …and the current generation still submits.
+    (manager as unknown as { submitCurrentMilestone(c: unknown): void }).submitCurrentMilestone(storage.get(campaign.id)!);
+    expect(tasks.submitted.length).toBe(before + 1);
+  });
+
   it("a save from an EARLIER generation is refused (Codex 2026-09-12 X#1)", async () => {
     // A person revived the campaign while a settlement was awaiting; when it
     // returned, its copy — old state, old ladder, the stop that revival had
@@ -3395,13 +3418,18 @@ describe("CampaignManager", () => {
       (cid) => { id = cid; },
     );
 
-    // The settlement's own writes are dropped: the revived row stands.
+    // The settlement's own writes are dropped: the revived row stands…
+    const submittedAtRevival = tasks.submitted.length;
     await new Promise((r) => setTimeout(r, 500));
     const after = storage.get(campaign.id)!;
     expect(after.stopGeneration).toBe(1);
     expect(after.state).toBe("planning");
     expect(after.lastError).toBe("revived by a person");
     expect(after.deliveryReported).not.toBe(true);
+    // …and it submits no work either: `persist` refuses the save, but the
+    // task was minted BEFORE that refusal and the stored ladder never owned
+    // it — an orphan with a live lineage (Codex 2026-09-12 Y#2).
+    expect(tasks.submitted.length).toBe(submittedAtRevival);
   });
 
   it("a stop recorded DURING the coverage audit is not lost, on either terminal path (Codex 2026-09-12 W#1)", async () => {
@@ -3684,6 +3712,129 @@ describe("CampaignManager", () => {
     expect(specs[0]).toMatchObject({ maxActions: 75 });
   });
 
+  it("a verdict file that cannot be cleared stops the run rather than measuring the old one (Codex 2026-09-12 Y#5)", async () => {
+    // Every player run writes one verdict path; the previous one is removed
+    // first so a verdict can only be this run's. When that removal FAILS, the
+    // old verdict is what the reader would find — so the run does not happen
+    // and the gate says the player was not run.
+    tasks = new FakeTaskManager();
+    storage.close();
+    storage = new CampaignStorage(join(dir, "campaigns-unclearable.db"));
+    const played: string[] = [];
+    manager = new CampaignManager({
+      storage,
+      planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async (chatId, text) => { messages.push({ chatId, text }); },
+      projectRoot, retryAdoptionGraceMs: 10, completedSettleDelayMs: 0, milestoneTimeBoxMs: 60 * 60_000,
+      deliveryResumeDelayMs: 20,
+      verifyCompile: async () => ({ ok: true, ran: true, errors: 0 }),
+      buildPlayer: async () => buildVerdict,
+      runPlayer: async (root, artifact) => { played.push(artifact); writePlayerVerdict(true, {}, root); },
+    });
+    manager.attachEvents();
+    // The verdict PATH is a directory: rmSync cannot remove it.
+    mkdirSync(join(projectRoot, "Recordings", "player-playthrough", "playthrough-verdict.json"), { recursive: true });
+
+    const campaign = manager.startFromGdd(ctx, "# GDD\n\nRelease on macOS. The game ships 3 levels.", "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1), { timeout: 15_000 });
+    settleMilestone("sprint A done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2), { timeout: 15_000 });
+    settleMilestone("sprint B done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3), { timeout: 15_000 });
+    settleMilestone("integrated, all 42 tests pass");
+
+    await waitFor(
+      () => expect((storage.get(campaign.id)!.milestones[2]!.deliveryProofsMissing ?? []).join(" ")).toContain("the player was not run"),
+      { timeout: 15_000 },
+    );
+    expect(played).toHaveLength(0);
+    expect(storage.get(campaign.id)!.state).not.toBe("done");
+    rmSync(join(projectRoot, "Recordings", "player-playthrough", "playthrough-verdict.json"), { recursive: true, force: true });
+  });
+
+  it("two targets cannot own ONE artifact (Codex 2026-09-12 Y#5)", async () => {
+    // A build that writes both targets to the same path has produced one
+    // product; the second target's "proof" would be the first one's file read
+    // twice. It is not a build of its own, and the gate says so.
+    tasks = new FakeTaskManager();
+    storage.close();
+    storage = new CampaignStorage(join(dir, "campaigns-shared-artifact.db"));
+    const played: string[] = [];
+    manager = new CampaignManager({
+      storage,
+      planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async (chatId, text) => { messages.push({ chatId, text }); },
+      projectRoot, retryAdoptionGraceMs: 10, completedSettleDelayMs: 0, milestoneTimeBoxMs: 60 * 60_000,
+      deliveryResumeDelayMs: 20,
+      verifyCompile: async () => ({ ok: true, ran: true, errors: 0 }),
+      // Both targets report the SAME artifact path.
+      buildPlayer: async (_root: string, target?: string) => ({
+        ran: true, ok: true,
+        target: target === "linux" ? "StandaloneLinux64" : "StandaloneWindows64",
+        artifactPath: "/tmp/Builds/shared/Game",
+        sizeBytes: 70_000_000, durationMs: 90_000, scenes: 2,
+      }),
+      runPlayer: async (root, artifact) => { played.push(artifact); writePlayerVerdict(true, {}, root); },
+    });
+    manager.attachEvents();
+    const campaign = manager.startFromGdd(ctx, "# GDD\n\nRelease on Windows and Linux. The game ships 3 levels.", "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1), { timeout: 15_000 });
+    settleMilestone("sprint A done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2), { timeout: 15_000 });
+    settleMilestone("sprint B done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3), { timeout: 15_000 });
+    settleMilestone("integrated, all 42 tests pass");
+
+    await waitFor(() => expect(played.length).toBeGreaterThan(0), { timeout: 15_000 });
+    // One product, one run — and the second target counts as unbuilt.
+    expect(played).toHaveLength(1);
+    await waitFor(
+      () => expect(storage.get(campaign.id)!.milestones[2]!.buildVerdict?.unbuiltTargets ?? []).toContain("linux"),
+      { timeout: 15_000 },
+    );
+    expect(storage.get(campaign.id)!.state).not.toBe("done");
+  });
+
+  it("a per-target result from a previous round does not survive a round without it (Codex 2026-09-12 Y#5)", async () => {
+    // The list was only assigned when a secondary target existed, so a
+    // previous round's failed secondary stayed on the milestone into a round
+    // that had none — and the delivery gate reads it as a missing proof.
+    tasks = new FakeTaskManager();
+    storage.close();
+    storage = new CampaignStorage(join(dir, "campaigns-stale-targets.db"));
+    manager = new CampaignManager({
+      storage,
+      planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async (chatId, text) => { messages.push({ chatId, text }); },
+      projectRoot, retryAdoptionGraceMs: 10, completedSettleDelayMs: 0, milestoneTimeBoxMs: 60 * 60_000,
+      deliveryResumeDelayMs: 20,
+      verifyCompile: async () => ({ ok: true, ran: true, errors: 0 }),
+      buildPlayer: async () => buildVerdict,
+      runPlayer: async (root, artifact) => { playerRuns.push(artifact); writePlayerVerdict(true, {}, root); },
+    });
+    manager.attachEvents();
+    const campaign = manager.startFromGdd(ctx, "# GDD\n\nRelease on macOS. The game ships 3 levels.", "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1), { timeout: 15_000 });
+    settleMilestone("sprint A done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2), { timeout: 15_000 });
+    settleMilestone("sprint B done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3), { timeout: 15_000 });
+
+    const seeded = storage.get(campaign.id)!;
+    seeded.milestones[2]!.playerRunsByTarget = [{ target: "a target that is gone", ok: false, detail: "stale" }];
+    storage.save(seeded);
+
+    settleMilestone("integrated, all 42 tests pass");
+    await waitFor(() => expect(playerRuns.length).toBeGreaterThan(0), { timeout: 15_000 });
+    await waitFor(
+      () => expect(storage.get(campaign.id)!.milestones[2]!.playerRunsByTarget).toBeUndefined(),
+      { timeout: 15_000 },
+    );
+  });
+
   it("a duration FLOOR is an allowance too (Codex 2026-09-12 W#9)", async () => {
     // The spec excluded minimum-duration claims, so "each round must last at
     // least 90 seconds" produced no allowance at all and the producer's
@@ -3786,6 +3937,9 @@ describe("CampaignManager", () => {
     expect(runs[0]!.ok).toBe(true);
     expect(runs[1]!.ok).toBe(false);
     expect(runs[1]!.detail).toContain("code 139");
+    // ONE RUN PER ARTIFACT, however many times the build names it (Y#5).
+    expect(played.filter((p) => p.includes("Linux"))).toHaveLength(1);
+
   });
 
   it("a target this machine cannot RUN is pending, not waived (Codex 2026-09-12 R#13)", async () => {
