@@ -204,13 +204,16 @@ export class RAGPipeline implements IRAGPipeline {
     }
 
     const chunks = chunkCSharpFile(filePath, content);
+    // A FILE THAT NOW CHUNKS TO NOTHING STILL HAD CHUNKS. The early return
+    // recorded the new hash and left the old vectors in place, so a file
+    // emptied (or gutted to comments) kept answering searches with the
+    // implementation it no longer has — for ever, because the next index sees
+    // an unchanged hash (Codex 2026-09-13 AG#14).
+    await this.removeByFile(filePath);
     if (chunks.length === 0) {
       this.fileHashes.set(filePath, contentHash);
       return 0;
     }
-
-    // Remove stale vectors for this file before re-indexing.
-    await this.removeByFile(filePath);
 
     // Embed all chunk contents in a single batch.
     const texts = chunks.map((c) => c.content);
@@ -315,6 +318,25 @@ export class RAGPipeline implements IRAGPipeline {
         errors.push({ filePath, error: errorMsg });
       }
     }
+
+    // A FILE THAT IS GONE MUST STOP ANSWERING. Indexing only walked what
+    // exists, so a deleted file's vectors stayed in the store and kept being
+    // retrieved as the project's code (Codex 2026-09-13 AG#14).
+    const present = new Set(files);
+    let removedFiles = 0;
+    for (const indexed of [...this.fileHashes.keys()]) {
+      if (present.has(indexed)) continue;
+      try {
+        await this.removeByFile(indexed);
+        this.fileHashes.delete(indexed);
+        removedFiles++;
+      } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        logger.warn("[RAGPipeline] Failed to drop a deleted file from the index", { filePath: indexed, error: errorMsg });
+        errors.push({ filePath: indexed, error: errorMsg });
+      }
+    }
+    if (removedFiles > 0) logger.info("[RAGPipeline] Dropped files that no longer exist", { removedFiles });
 
     // Get count from appropriate store
     const chunkCount = this.hnswStore?.count() ?? this.vectorStore.count();

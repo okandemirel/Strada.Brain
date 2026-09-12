@@ -352,6 +352,35 @@ describe("RAGPipeline", () => {
         await rm(dir, { recursive: true, force: true });
       }
     });
+
+    /**
+     * Codex round AG#14: indexing walked only what exists, so a DELETED file's
+     * vectors stayed in the store and kept being retrieved as the project's
+     * own code.
+     */
+    it("drops the vectors of files that are gone", async () => {
+      const { mkdtemp, writeFile, mkdir, rm, unlink } = await import("node:fs/promises");
+      const { tmpdir } = await import("node:os");
+      const { join } = await import("node:path");
+
+      const dir = await mkdtemp(join(tmpdir(), "rag-deleted-"));
+      try {
+        await mkdir(join(dir, "Assets"), { recursive: true });
+        const gone = join(dir, "Assets", "Save.cs");
+        await writeFile(gone, "public class Save {}");
+        mockChunks.push(makeChunk({ id: "save-1", filePath: gone }));
+        await pipeline.indexProject(dir);
+        expect(await pipeline.search("Save")).not.toHaveLength(0);
+
+        await unlink(gone);
+        mockChunks.length = 0;
+        await pipeline.indexProject(dir);
+        expect(vectorStore.removeByFile).toHaveBeenCalledWith(gone);
+        expect(await pipeline.search("Save")).toHaveLength(0);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
   });
 
   describe("indexFile", () => {
@@ -402,6 +431,25 @@ describe("RAGPipeline", () => {
 
       // removeByFile should have been called to clear stale vectors.
       expect(vectorStore.removeByFile).toHaveBeenCalledWith("Assets/Foo.cs");
+    });
+
+    /**
+     * Codex round AG#14, reproduced: a file emptied (or gutted to comments)
+     * chunks to nothing, and the early return recorded the new hash while
+     * leaving the old vectors in place — so search kept answering with the
+     * implementation the project no longer has, for ever, because the next
+     * index sees an unchanged hash.
+     */
+    it("drops a file's vectors when it now chunks to NOTHING", async () => {
+      mockChunks.length = 0;
+      mockChunks.push(makeChunk({ id: "chunk-orig", filePath: "Assets/Save.cs" }));
+      expect(await pipeline.indexFile("Assets/Save.cs", "class Save { void Run() {} }")).toBe(1);
+      expect(await pipeline.search("Run")).not.toHaveLength(0);
+
+      mockChunks.length = 0; // the file is now empty
+      expect(await pipeline.indexFile("Assets/Save.cs", "")).toBe(0);
+      expect(vectorStore.removeByFile).toHaveBeenCalledWith("Assets/Save.cs");
+      expect(await pipeline.search("Run")).toHaveLength(0);
     });
   });
 });
