@@ -200,6 +200,54 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
     mockWorkspaceBus = createMockWorkspaceBus();
   });
 
+  it("a FULL supervisor failure replans instead of replaying the same tree (Codex 2026-09-12 R#2)", async () => {
+    // Measured live 2026-09-12: eight successive tasks carried the identical
+    // 4 933-byte prompt and goal root over five hours, because a full failure
+    // went straight to the keep-alive, which replays the same tree.
+    const goalTree = buildTestGoalTree();
+    const failure = {
+      path: "supervisor",
+      reason: "eligible",
+      result: {
+        success: false, partial: false, output: "No node succeeded: 1 failed, 2 skipped",
+        totalNodes: 3, succeeded: 0, failed: 1, skipped: 2, blocked: 0, totalCost: 0, totalDuration: 0,
+        nodeResults: [{ nodeId: "n1", status: "failed", output: "REQUIRED EVIDENCE MISSING", toolResults: [], artifacts: [] }],
+      },
+    };
+    mockOrch.evaluateSupervisorAdmission.mockImplementation(async (opts: { onGoalDecomposed?: (t: unknown) => void }) => {
+      opts.onGoalDecomposed?.(goalTree); // the supervisor decomposed, then every node failed
+      return failure;
+    });
+    const executor = new BackgroundExecutor({
+      orchestrator: mockOrch as any,
+      decomposer: mockDecomposer as any,
+      goalStorage: mockGoalStorage as any,
+      daemonEventBus: mockDaemonEventBus as any,
+    });
+    const retried: string[] = [];
+    const replanned: string[] = [];
+    const mockTaskManager = {
+      updateStatus: vi.fn(), complete: vi.fn(), fail: vi.fn(), block: vi.fn(),
+      appendTaskNotice: vi.fn(),
+      retryGoalRoot: (id: string) => { retried.push(id); return { id: "task_next" }; },
+      replanGoalRoot: (id: string) => { replanned.push(id); return { id: "task_next" }; },
+    };
+    executor.setTaskManager(mockTaskManager as any);
+    (executor as unknown as { allProvidersCoolingDownMs: () => number }).allProvidersCoolingDownMs = () => 0;
+    (executor as unknown as { completedNodeCount: () => number | undefined }).completedNodeCount = () => 0;
+
+    executor.enqueue(createTestTask(goalTree), new AbortController().signal, vi.fn());
+    await vi.waitFor(() => { expect(retried.length + replanned.length).toBeGreaterThan(0); }, { timeout: 5000 });
+    // The first full failure is worth one retry…
+    expect(retried).toHaveLength(1);
+
+    executor.enqueue(createTestTask(goalTree), new AbortController().signal, vi.fn());
+    await vi.waitFor(() => { expect(retried.length + replanned.length).toBeGreaterThan(1); }, { timeout: 5000 });
+    // …and a second round that completed nothing changes the PLAN, not the
+    // number of attempts.
+    expect(replanned).toHaveLength(1);
+  });
+
   it("routes pre-decomposed goalTree through supervisor when available", async () => {
     const goalTree = buildTestGoalTree();
     const task = createTestTask(goalTree);

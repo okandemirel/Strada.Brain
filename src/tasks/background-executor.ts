@@ -1757,6 +1757,24 @@ export class BackgroundExecutor {
           );
           return;
         }
+        // A FULL failure is exactly where replaying the same tree changes
+        // nothing. It went straight to the keep-alive, which resubmits the
+        // SAME prompt against the SAME goal tree: measured live 2026-09-12,
+        // eight successive tasks carried the identical 4 933-byte prompt and
+        // goal root over five hours (Codex 2026-09-12 R#2). The partial branch
+        // already has the right decision — retry once, then REPLAN when
+        // nothing completed, then escalate — so a full failure takes it too.
+        if (admission.supervisorGoalTree?.rootId) {
+          requestFailed = true;
+          this.taskManager.block(task.id, supervisorResult.output);
+          this.autoResumeBlockedGoal(
+            task,
+            admission.supervisorGoalTree,
+            supervisorResult.succeeded,
+            summariseNodeOutcomes(supervisorResult.nodeResults),
+          );
+          return;
+        }
         // Mission keep-alive BEFORE terminal fail: only budget/cap may stop a
         // user-origin mission; provider blinks and node failures feed back in.
         if (this.scheduleMissionKeepAlive(task, supervisorResult.output || "supervisor run failed")) {
