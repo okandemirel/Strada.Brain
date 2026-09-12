@@ -2374,7 +2374,11 @@ export class CampaignManager {
       // THE GAP, OUT OF THE FULL OUTPUT. The excerpt keeps the last 500
       // characters, so a gap reported before a long report simply vanished
       // before the delivery gate looked for it (Codex 2026-09-12 S#10).
-      milestone.capabilityGap = capabilityGapIn(output) ?? milestone.capabilityGap;
+      // THIS RUN'S gap, not the history of them: merging with the old value
+      // made it permanent, so a milestone that reported a missing tool once
+      // could never deliver again however many clean runs followed — the
+      // unsatisfiable gate, from my own fix (Codex 2026-09-12 T#2).
+      milestone.capabilityGap = capabilityGapIn(output);
       campaign.state = "failed";
       campaign.autoReviveAt = undefined;
       campaign.lastError = `NOT DELIVERED — ${milestone.title} was cancelled`;
@@ -2738,7 +2742,11 @@ export class CampaignManager {
       // THE GAP, OUT OF THE FULL OUTPUT. The excerpt keeps the last 500
       // characters, so a gap reported before a long report simply vanished
       // before the delivery gate looked for it (Codex 2026-09-12 S#10).
-      milestone.capabilityGap = capabilityGapIn(output) ?? milestone.capabilityGap;
+      // THIS RUN'S gap, not the history of them: merging with the old value
+      // made it permanent, so a milestone that reported a missing tool once
+      // could never deliver again however many clean runs followed — the
+      // unsatisfiable gate, from my own fix (Codex 2026-09-12 T#2).
+      milestone.capabilityGap = capabilityGapIn(output);
       milestone.commitNote = commitNote.trim() || undefined;
       // Record what the capture scan saw for EVERY green, not only the gated
       // ones: the gate above is keyed on planner wording, and a sprint whose
@@ -3022,12 +3030,6 @@ export class CampaignManager {
         // (Codex 2026-09-12 R#1). The wording matches UNMEASURABLE_PROOF_RE,
         // so the campaign revives twice and then asks a person to connect the
         // tooling instead of looping on something no retry can change.
-        const capabilityGaps = campaign.milestones
-          .map((m) => m.capabilityGap)
-          .filter((x): x is string => x !== undefined);
-        if (capabilityGaps.length > 0) {
-          missingProofs.push(`a sprint could not do part of its work — no tool for it in this run: ${capabilityGaps[0]!.slice(0, 160)}`);
-        }
         const queuedGaps = campaign.pendingCoverageGaps ?? [];
         if (queuedGaps.length > 0) {
           missingProofs.push(
@@ -3318,6 +3320,21 @@ export class CampaignManager {
         // Coverage gate: "done" is measured against the GDD, not against the
         // ladder having run out. When scheduled items are missing, a
         // remediation sprint is appended instead of delivering short.
+        // A GAP IS WORK, NOT A VERDICT. Reported as a missing proof it was
+        // permanent: an early sprint's gap blocked delivery forever, because
+        // that sprint is never resubmitted and nothing could clear the mark —
+        // my own unsatisfiable gate (Codex 2026-09-12 T#2). It is scheduled
+        // like any other undelivered item: with the tool back that sprint does
+        // the work, and with the tool still missing the sprint reports the gap
+        // again until the ladder's own budgets stop the campaign and name it.
+        const capabilityWork = unscheduledGaps(
+          campaign.milestones
+            .map((m) => m.capabilityGap)
+            .filter((x): x is string => x !== undefined)
+            .map((gap) => `work no tool was available for: ${gap}`),
+          campaign.milestones,
+          { reopenCompleted: true },
+        );
         const remediation = await this.buildCoverageRemediation(campaign);
         // AN AUDIT THAT COULD NOT RUN is not an audit that passed: the game was
         // never compared to its own design document (Codex 2026-09-12 R#11).
@@ -3328,14 +3345,23 @@ export class CampaignManager {
         if (campaign.coverageAuditNote?.startsWith("coverage audit could not run") === true) {
           missingProofs.push(`the GDD coverage audit did not run: ${campaign.coverageAuditNote.slice(29, 200)}`);
         }
-        if (remediation && remediation.length > 0) {
+        const gapRound = campaign.milestones.reduce((max, m) => {
+          const seen = /^mcov(\d+)/.exec(m.id);
+          return seen ? Math.max(max, Number(seen[1])) : max;
+        }, 0) + 1;
+        const scheduled = [
+          ...(remediation ?? []),
+          ...capabilityWork.slice(0, 2).map((item, i) => this.gapSprint(campaign, gapRound, (remediation?.length ?? 0) + i, item)),
+        ];
+        if (scheduled.length > 0) {
+          const remediationCount = scheduled.length;
           milestone.status = "green";
-          this.scheduleBeforeFinal(campaign, remediation);
+          this.scheduleBeforeFinal(campaign, scheduled);
           this.persist(campaign);
           await this.tell(
             campaign,
-            `✅ ${milestone.title} — green.${commitNote}\n⚠️ Coverage audit against the GDD found ${remediation.length} gap${remediation.length === 1 ? "" : "s"} — appending ` +
-              `${remediation.map((m) => `**${m.title}**`).join(", ")} before delivery.`,
+            `✅ ${milestone.title} — green.${commitNote}\n⚠️ ${remediationCount} gap${remediationCount === 1 ? "" : "s"} between the GDD and what is delivered — appending ` +
+              `${scheduled.map((m) => `**${m.title}**`).join(", ")} before delivery.`,
           );
           const id = campaign.id;
           this.resubmitSoon(id);
@@ -3646,7 +3672,11 @@ export class CampaignManager {
       // THE GAP, OUT OF THE FULL OUTPUT. The excerpt keeps the last 500
       // characters, so a gap reported before a long report simply vanished
       // before the delivery gate looked for it (Codex 2026-09-12 S#10).
-      milestone.capabilityGap = capabilityGapIn(output) ?? milestone.capabilityGap;
+      // THIS RUN'S gap, not the history of them: merging with the old value
+      // made it permanent, so a milestone that reported a missing tool once
+      // could never deliver again however many clean runs followed — the
+      // unsatisfiable gate, from my own fix (Codex 2026-09-12 T#2).
+      milestone.capabilityGap = capabilityGapIn(output);
       campaign.currentMilestone += 1;
       this.persist(campaign);
       getLoggerSafe().warn("Gap sprint spent its attempts — moving to the next gap", {
@@ -3724,11 +3754,15 @@ export class CampaignManager {
         campaign.pendingCoverageGaps = rest.length > 0 ? rest : undefined;
         milestone.status = "failed";
         milestone.resultExcerpt = output.slice(-500);
-        milestone.capabilityGap = capabilityGapIn(output) ?? milestone.capabilityGap;
+        milestone.capabilityGap = capabilityGapIn(output);
       // THE GAP, OUT OF THE FULL OUTPUT. The excerpt keeps the last 500
       // characters, so a gap reported before a long report simply vanished
       // before the delivery gate looked for it (Codex 2026-09-12 S#10).
-      milestone.capabilityGap = capabilityGapIn(output) ?? milestone.capabilityGap;
+      // THIS RUN'S gap, not the history of them: merging with the old value
+      // made it permanent, so a milestone that reported a missing tool once
+      // could never deliver again however many clean runs followed — the
+      // unsatisfiable gate, from my own fix (Codex 2026-09-12 T#2).
+      milestone.capabilityGap = capabilityGapIn(output);
         const sprints = take.map((item, i) => this.gapSprint(campaign, round, i, item));
         // BEFORE the final proof sprint, never after it: appended at the end
         // they ran after mfinal and the ladder then declared `done` with the
@@ -3799,11 +3833,15 @@ export class CampaignManager {
       if (pendingFinal >= 0) {
         milestone.status = "failed";
         milestone.resultExcerpt = output.slice(-500);
-        milestone.capabilityGap = capabilityGapIn(output) ?? milestone.capabilityGap;
+        milestone.capabilityGap = capabilityGapIn(output);
       // THE GAP, OUT OF THE FULL OUTPUT. The excerpt keeps the last 500
       // characters, so a gap reported before a long report simply vanished
       // before the delivery gate looked for it (Codex 2026-09-12 S#10).
-      milestone.capabilityGap = capabilityGapIn(output) ?? milestone.capabilityGap;
+      // THIS RUN'S gap, not the history of them: merging with the old value
+      // made it permanent, so a milestone that reported a missing tool once
+      // could never deliver again however many clean runs followed — the
+      // unsatisfiable gate, from my own fix (Codex 2026-09-12 T#2).
+      milestone.capabilityGap = capabilityGapIn(output);
         // THE FINAL PROOF RUNS LAST. Selecting one that sits earlier in the
         // ladder meant its completion advanced straight back into the
         // exhausted gap behind it: four cycles, indices 1,2,1,2, zero build

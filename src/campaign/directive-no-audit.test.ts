@@ -64,7 +64,9 @@ describe("a gap leaves the queue in the same write that schedules it", () => {
     expect(source.slice(overflowAt, overflowAt + 500)).not.toContain("this.persist(campaign);");
 
     // The CALLER commits both together.
-    const callerAt = source.indexOf("this.scheduleBeforeFinal(campaign, remediation);");
+    // The remediation list also carries capability-gap sprints now (T#2), so
+    // the caller's call site is `scheduled`, not `remediation`.
+    const callerAt = source.indexOf("this.scheduleBeforeFinal(campaign, scheduled);");
     expect(callerAt).toBeGreaterThan(0);
     expect(source.slice(callerAt, callerAt + 200)).toContain("this.persist(campaign);");
   });

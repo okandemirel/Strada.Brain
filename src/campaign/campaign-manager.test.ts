@@ -2058,6 +2058,33 @@ describe("CampaignManager", () => {
     expect(report).toContain("compiles");
   });
 
+  it("a capability gap is THIS run's, not a permanent mark (Codex 2026-09-12 T#2)", async () => {
+    // Merging the new gap with the old made it permanent, and the delivery
+    // gate scans every milestone: one report of a missing tool meant the
+    // campaign could never deliver again, however many clean runs followed.
+    const campaign = await runLadderToDelivery();
+    // The final sprint reports a gap and bounces…
+    settleMilestone(
+      "EVIDENCE UNAVAILABLE — no tool for it in this run: unity_create_scene (the Unity bridge is not connected). " +
+      "That work is NOT done.\n\nintegrated, all 42 tests pass",
+    );
+    await waitFor(() => expect(storage.get(campaign.id)!.milestones[2]!.capabilityGap).toBeDefined());
+
+    // …a sprint is scheduled for the work, and the next attempt of the sprint
+    // that reported it starts with NO gap: the tool may be back by then, and
+    // the old mark must not decide for it.
+    await waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(3));
+    settleMilestone("the scene is built now, all 42 tests pass");
+
+    await waitFor(() => {
+      const m = storage.get(campaign.id)!.milestones.find((x) => x.coverageGap?.includes("unity_create_scene"));
+      expect(m?.status === "green" || m?.status === "running").toBe(true);
+    });
+    const cleared = storage.get(campaign.id)!.milestones.find((x) => x.coverageGap?.includes("unity_create_scene"))!;
+    expect(cleared.capabilityGap).toBeUndefined();
+
+  });
+
   it("the capability gap survives a long report (Codex 2026-09-12 S#10)", async () => {
     // The gap is reported at the TOP of a node's output and the milestone
     // keeps the last 500 characters, so a long report pushed it out of the
@@ -2068,13 +2095,13 @@ describe("CampaignManager", () => {
       "That work is NOT done.\n\n" + "x".repeat(2_000) + "\nintegrated, all 42 tests pass",
     );
 
-    await waitFor(() => expect(storage.get(campaign.id)!.state).not.toBe("executing"), { timeout: 15_000 });
+    await waitFor(() => expect(storage.get(campaign.id)!.milestones.length).toBeGreaterThan(3));
 
     const after = storage.get(campaign.id)!;
     expect(after.milestones[2]!.resultExcerpt).not.toContain("EVIDENCE UNAVAILABLE");
     expect(after.milestones[2]!.capabilityGap).toContain("unity_create_scene");
     expect(after.state).not.toBe("done");
-    expect(messages.map((m) => m.text).join("\n")).toContain("no tool for it in this run");
+    expect(after.milestones.some((m) => m.coverageGap?.includes("unity_create_scene"))).toBe(true);
   });
 
   it("a sprint with no tool for part of its work blocks delivery (Codex 2026-09-12 R#1)", async () => {
@@ -2087,11 +2114,15 @@ describe("CampaignManager", () => {
       "That work is NOT done and nothing in this report should be read as proof of it.\n\nintegrated, all 42 tests pass",
     );
 
-    await waitFor(() => expect(storage.get(campaign.id)!.state).not.toBe("executing"), { timeout: 15_000 });
+    await waitFor(() => expect(storage.get(campaign.id)!.milestones.length).toBeGreaterThan(3));
 
-    expect(storage.get(campaign.id)!.state).not.toBe("done");
-    const said = messages.map((m) => m.text).join("\n");
-    expect(said).toContain("no tool for it in this run");
+    const after = storage.get(campaign.id)!;
+    expect(after.state).not.toBe("done");
+    // The work nothing could attempt is SCHEDULED, not marked forever: a
+    // sprint carries it, and delivery waits for that sprint.
+    const gapSprint = after.milestones.find((m) => m.coverageGap?.includes("unity_create_scene"));
+    expect(gapSprint).toBeDefined();
+    expect(gapSprint!.status).toBe("pending");
   });
 
   it("does NOT declare delivery once the structural refusal has outlasted its budget", async () => {
