@@ -87,6 +87,32 @@ describe("buildCampaignStatus", () => {
     expect(snapshot.revivable).toBe(false);
   });
 
+  it("carries a requirement's closure, which is not the sprint's outcome (Codex 2026-09-12 V#7)", () => {
+    // A repair can end unfinished and its requirement be found delivered by
+    // the evidence audit afterwards. The snapshot said only the former, so an
+    // API reader could not tell a waived requirement from an open one.
+    const withClosure = campaign();
+    withClosure.milestones[0] = {
+      id: "mcov1",
+      title: "Coverage completion 1.1 — Boss",
+      prompt: "p",
+      status: "failed",
+      attempts: 2,
+      coverageGap: "Boss: absent",
+      coverageClosed: true,
+      coverageClosedRevision: "a".repeat(40),
+    };
+    const snapshot = buildCampaignStatus(withClosure, {
+      maxMilestoneAttempts: 2,
+      milestoneTimeBoxMs: 6 * HOUR,
+      getTask: () => null,
+      listTasks: () => [],
+    });
+    expect(snapshot.milestones[0]).toMatchObject({ id: "mcov1", status: "failed", coverageClosed: true });
+    // A sprint with no closure says nothing about one.
+    expect(snapshot.milestones[2]!.coverageClosed).toBeUndefined();
+  });
+
   it("marks failed, cancelled, and structurally refused campaigns as revivable", () => {
     expect(isRevivable(campaign({ state: "failed" }))).toBe(true);
     expect(isRevivable(campaign({ state: "cancelled" }))).toBe(true);

@@ -68,6 +68,13 @@ export interface CampaignMilestone {
    */
   coverageClosed?: boolean;
   /**
+   * The project revision that closure was read on. A closure is only as good
+   * as the tree it was judged against: without this the flag was permanent,
+   * and code implementing the requirement could be removed afterwards without
+   * the gate ever looking again (Codex 2026-09-12 V#4).
+   */
+  coverageClosedRevision?: string;
+  /**
    * Which delivery gates failed on the last round, as flag names. The
    * delivery budget compares these rather than the sentences the gates
    * write, because prose carries measurements (Codex 2026-09-11 K#3-K#5).

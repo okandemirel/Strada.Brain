@@ -39,6 +39,13 @@ export interface MilestoneStatusSnapshot {
   readonly gddClaims?: { met: number; notMet: number; unmeasured: number; firstNotMet?: string };
   /** What the final sprint still owed when its bounce budget ran out. */
   readonly proofsMissing?: readonly string[];
+  /**
+   * Set when a repair sprint ended unfinished and the evidence audit then
+   * found its requirement delivered. A sprint's outcome is not its
+   * requirement's verdict, and the snapshot said only the former (Codex
+   * 2026-09-12 V#7).
+   */
+  readonly coverageClosed?: boolean;
 }
 
 export interface TaskStatusSnapshot {
@@ -123,6 +130,7 @@ export function buildCampaignStatus(
     ...(m.buildVerdict ? { build: describeBuild(m.buildVerdict) } : {}),
     ...(m.gddClaims && m.gddClaims.length > 0 ? { gddClaims: summarizeClaims(m.gddClaims) } : {}),
     ...(m.deliveryProofsMissing && m.deliveryProofsMissing.length > 0 ? { proofsMissing: m.deliveryProofsMissing } : {}),
+    ...(m.coverageClosed === true ? { coverageClosed: true } : {}),
   }));
   const current = campaign.milestones[campaign.currentMilestone];
   const currentTaskRaw = current?.taskId ? opts.getTask(current.taskId) : undefined;

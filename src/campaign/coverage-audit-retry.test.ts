@@ -104,7 +104,7 @@ describe("re-judging the requirements no sprint closed", () => {
 
   it("closes a requirement the evidence shows, and asks about exactly the named ones", async () => {
     const { planner, chat } = plannerWith([
-      '{"verdicts": [{"id": 1, "delivered": true, "evidence": "landed: Assets/Scripts/Dragon.cs"}, {"id": 2, "delivered": false}]}',
+      '{"verdicts": [{"id": 1, "delivered": true, "evidence": "landed: 3 commit(s): Assets/Scripts/Dragon.cs"}, {"id": 2, "delivered": false}]}',
     ]);
 
     const judged = await planner.resolveCoverageGaps(
@@ -131,6 +131,38 @@ describe("re-judging the requirements no sprint closed", () => {
 
     expect(judged.closed).toEqual([]);
     expect(judged.open).toEqual(["Dragon boss: absent", "Shop: absent", "Save: absent"]);
+  });
+
+  it("invented prose closes nothing, and two verdicts for one id close nothing (Codex 2026-09-12 V#2)", async () => {
+    // Executed by Codex: twelve characters of "The feature is definitely
+    // done." closed an absent feature against a ladder with no evidence at
+    // all — and a reply carrying both false and true for the same id closed
+    // it on the positive one. The quote must exist in the record we sent.
+    const invented = plannerWith([
+      '{"verdicts": [{"id": 1, "delivered": true, "evidence": "The feature is definitely done."}]}',
+    ]);
+    await expect(
+      invented.planner.resolveCoverageGaps("# GDD", ["Dragon boss: absent"], [{ title: "Sprint A" }]),
+    ).resolves.toEqual({ closed: [], open: ["Dragon boss: absent"] });
+
+    for (const reply of [
+      '{"verdicts": [{"id": 1, "delivered": false}, {"id": 1, "delivered": true, "evidence": "landed: 3 commit(s): Assets/Scripts/Dragon.cs"}]}',
+      // …in either order: the positive one used to win whichever side it sat on.
+      '{"verdicts": [{"id": 1, "delivered": true, "evidence": "landed: 3 commit(s): Assets/Scripts/Dragon.cs"}, {"id": 1, "delivered": false}]}',
+    ]) {
+      const conflicting = plannerWith([reply]);
+      await expect(
+        conflicting.planner.resolveCoverageGaps("# GDD", ["Dragon boss: absent"], ladder),
+      ).resolves.toEqual({ closed: [], open: ["Dragon boss: absent"] });
+    }
+
+    // An id nobody asked about closes nothing either.
+    const strayId = plannerWith([
+      '{"verdicts": [{"id": 2, "delivered": true, "evidence": "landed: 3 commit(s): Assets/Scripts/Dragon.cs"}]}',
+    ]);
+    await expect(
+      strayId.planner.resolveCoverageGaps("# GDD", ["Dragon boss: absent"], ladder),
+    ).resolves.toEqual({ closed: [], open: ["Dragon boss: absent"] });
   });
 
   it("throws when the reply is unusable, so the CALLER decides what an unrun audit means", async () => {

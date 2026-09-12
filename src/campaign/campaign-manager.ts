@@ -504,9 +504,50 @@ export function unscheduledGaps(
   });
 }
 
+/**
+ * Does this sprint's recorded closure still describe the tree in front of us?
+ *
+ * A closure is only as good as the revision it was read on: the flag was
+ * permanent, so a requirement found delivered once was never judged again and
+ * the code implementing it could be removed afterwards without the gate ever
+ * looking (Codex 2026-09-12 V#4). An UNKNOWN revision binds nothing, so a
+ * closure recorded without one is re-judged every round.
+ */
+export function closureHolds(
+  milestone: { coverageClosed?: boolean; coverageClosedRevision?: string },
+  revision: string,
+): boolean {
+  if (milestone.coverageClosed !== true) return false;
+  const at = milestone.coverageClosedRevision;
+  if (at === undefined || at === "" || revision === "") return false;
+  return at === revision;
+}
+
 /** The requirement text a capability gap is scheduled as. */
 export function capabilityGapWork(gap: string): string {
   return `work no tool was available for: ${gap}`;
+}
+
+/**
+ * How many repair sprints one requirement may have before the campaign stops
+ * repairing it and reports it instead.
+ *
+ * Capability work reopens completed sprints, and each round minted a sprint
+ * with a NEW identity and a fresh attempt budget — so a repair that kept
+ * failing was rescheduled for ever, and the path returns before any delivery
+ * counter is charged: Codex ran twenty cycles and the ladder grew to
+ * twenty-three sprints with all three revival counters still at zero
+ * (2026-09-12 V#1).
+ */
+export const MAX_REPAIRS_PER_REQUIREMENT = 2;
+
+/** How many sprints this requirement has already had. */
+export function repairsForRequirement(
+  milestones: ReadonlyArray<{ id: string; title: string; prompt?: string; coverageGap?: string }>,
+  requirement: string,
+): number {
+  const key = gapKey(requirement);
+  return milestones.filter((m) => m.id.startsWith("mcov") && gapKey(coverageGapOf(m)) === key).length;
 }
 
 /**
@@ -535,6 +576,11 @@ export function reconcileCapabilityGaps(
   const closed = new Set(
     milestones
       .filter((m) => m.id.startsWith("mcov") && m.status === "green")
+      // …AND THAT DOES NOT STILL REPORT IT. A milestone can go green and
+      // carry a fresh capability gap of its own, and such a repair was
+      // reconciling the very gap it was reporting — both marks vanished and
+      // the work was never done (Codex 2026-09-12 V#3).
+      .filter((m) => m.capabilityGap === undefined || gapKey(capabilityGapWork(m.capabilityGap)) !== gapKey(coverageGapOf(m)))
       .map((m) => gapKey(coverageGapOf(m))),
   );
   if (closed.size === 0) return [];
@@ -3396,7 +3442,7 @@ export class CampaignManager {
             closed: reconciledGaps.map((g) => g.slice(0, 80)),
           });
         }
-        const capabilityWork = unscheduledGaps(
+        const capabilityCandidates = unscheduledGaps(
           campaign.milestones
             .map((m) => m.capabilityGap)
             .filter((x): x is string => x !== undefined)
@@ -3404,6 +3450,27 @@ export class CampaignManager {
           campaign.milestones,
           { reopenCompleted: true },
         );
+        // A REQUIREMENT HAS A REPAIR BUDGET. Every round minted a new sprint
+        // identity with a fresh attempt budget for the same work, and this
+        // path returns before any delivery counter is charged — twenty cycles
+        // produced twenty-three sprints and no stop (Codex 2026-09-12 V#1).
+        // Past the budget the requirement is not repaired again; it is
+        // reported to the gate below, where the delivery budget bounds it and
+        // the campaign ends by naming it.
+        const capabilityWork: string[] = [];
+        const capabilitySpent: string[] = [];
+        for (const item of capabilityCandidates) {
+          (repairsForRequirement(campaign.milestones, item) >= MAX_REPAIRS_PER_REQUIREMENT
+            ? capabilitySpent
+            : capabilityWork
+          ).push(item);
+        }
+        if (capabilitySpent.length > 0) {
+          getLoggerSafe().warn("A capability requirement has spent its repair budget — reporting it instead", {
+            id: campaign.id,
+            requirements: capabilitySpent.map((g) => g.slice(0, 80)),
+          });
+        }
         const remediation = await this.buildCoverageRemediation(campaign);
         // AN AUDIT THAT COULD NOT RUN is not an audit that passed: the game was
         // never compared to its own design document (Codex 2026-09-12 R#11).
@@ -3467,49 +3534,17 @@ export class CampaignManager {
         // has measured since, so a requirement a later sprint happened to
         // deliver is closed, and one nothing can show blocks delivery until
         // the delivery budget stops the campaign and names it.
-        const unclosed = campaign.milestones.filter(
-          (m) => m.id.startsWith("mcov") && m.status === "failed" && m.coverageClosed !== true,
-        );
-        let unclosedAtGate: string[] = [];
-        if (unclosed.length > 0) {
-          const gddForGaps =
-            campaign.gddText ?? (campaign.gddPath ? readGddFile(this.projectRoot, campaign.gddPath) : undefined);
-          try {
-            if (gddForGaps === undefined || gddForGaps === "") {
-              throw new Error(`the GDD text could not be read (${campaign.gddPath ?? "no path"})`);
-            }
-            const judged = await this.planner.resolveCoverageGaps(
-              gddForGaps,
-              unclosed.map((m) => coverageGapOf(m)),
-              campaign.milestones,
-            );
-            const closed = new Set(judged.closed.map(gapKey));
-            for (const m of unclosed) {
-              if (closed.has(gapKey(coverageGapOf(m)))) m.coverageClosed = true;
-            }
-            unclosedAtGate = judged.open;
-            this.persist(campaign);
-            getLoggerSafe().info("Unclosed coverage requirements re-judged against the ladder's evidence", {
-              id: campaign.id,
-              closed: judged.closed.length,
-              open: judged.open.length,
-            });
-          } catch (err) {
-            // An audit that COULD NOT RUN is not an audit that passed, and
-            // this wording is the one the unmeasurable-proof rule knows: the
-            // campaign revives twice and then asks a person, instead of
-            // looping on something no retry here can change.
-            unclosedAtGate = unclosed.map((m) => coverageGapOf(m));
-            missingProofs.push(
-              `the GDD coverage audit did not run for ${unclosed.length} unclosed requirement(s): ` +
-              `${err instanceof Error ? err.message : String(err)}`.slice(0, 200),
-            );
-          }
-          if (unclosedAtGate.length > 0) {
-            missingProofs.push(
-              `${unclosedAtGate.length} GDD requirement(s) no sprint closed: ${unclosedAtGate.slice(0, 2).join("; ")}`.slice(0, 220),
-            );
-          }
+        // A CLOSURE IS BOUND TO THE REVISION IT WAS READ ON. The flag was
+        // permanent, so a requirement found delivered once was never judged
+        // again — and code that implemented it could be removed afterwards
+        // without the gate ever looking (Codex 2026-09-12 V#4).
+        const outstanding = await this.openRequirements(campaign);
+        const unclosedAtGate = [...capabilitySpent, ...outstanding.open];
+        if (outstanding.auditFailed !== undefined) missingProofs.push(outstanding.auditFailed);
+        if (unclosedAtGate.length > 0) {
+          missingProofs.push(
+            `${unclosedAtGate.length} GDD requirement(s) no sprint closed: ${unclosedAtGate.slice(0, 2).join("; ")}`.slice(0, 220),
+          );
         }
         // …AND AGAIN, AFTER EVERYTHING. The structural checks, the look
         // judgement and the coverage audit all run after the second read, so a
@@ -4031,7 +4066,21 @@ export class CampaignManager {
           `NOT DELIVERED — ${unprovenFinal.title} never passed the delivery gate (${unprovenFinal.attempts} attempt(s)); ` +
           "the structural check alone does not deliver a game.";
       }
-      campaign.state = structure.refusal !== undefined || unprovenFinal !== undefined ? "failed" : "done";
+      // …AND THE REQUIREMENTS NOBODY CLOSED. This path measured the shipped
+      // tree and set `done` with the requirement its own exhausted sprint had
+      // named still missing, and it never asked the evidence audit at all
+      // (Codex 2026-09-12 V#5). Every transition to `done` answers for the
+      // same outstanding work.
+      const outstandingHere = await this.openRequirements(campaign);
+      if (outstandingHere.open.length > 0 && structure.refusal === undefined && unprovenFinal === undefined) {
+        campaign.lastError =
+          `NOT DELIVERED — ${outstandingHere.open.length} GDD requirement(s) no sprint closed: ` +
+          `${outstandingHere.open.slice(0, 2).join("; ")}`.slice(0, 600);
+      }
+      campaign.state =
+        structure.refusal !== undefined || unprovenFinal !== undefined || outstandingHere.open.length > 0
+          ? "failed"
+          : "done";
       campaign.deliveryReported = false;
       this.persist(campaign);
       this.cancelLiveLineages(
@@ -4624,6 +4673,63 @@ export class CampaignManager {
     return stale;
   }
 
+  /**
+   * The requirements of coverage sprints that spent their attempts and that
+   * the ladder's evidence still cannot show delivered.
+   *
+   * Exhaustion stops the REPAIR; only evidence closes the requirement, and a
+   * closure is bound to the revision it was read on (Codex 2026-09-12 U Job
+   * 2.7, V#4). Every terminal path asks this — the partial-delivery path used
+   * to measure the shipped tree alone and set `done` with the requirement its
+   * own exhausted sprint had named still missing (V#5).
+   */
+  private async openRequirements(campaign: Campaign): Promise<{ open: string[]; auditFailed?: string }> {
+    const revisionForClosure = this.projectRevision();
+    const unclosed = campaign.milestones.filter(
+      (m) => m.id.startsWith("mcov") && m.status === "failed" && !closureHolds(m, revisionForClosure),
+    );
+    if (unclosed.length === 0) return { open: [] };
+    const gddForGaps = campaign.gddText ?? (campaign.gddPath ? readGddFile(this.projectRoot, campaign.gddPath) : undefined);
+    try {
+      if (gddForGaps === undefined || gddForGaps === "") {
+        throw new Error(`the GDD text could not be read (${campaign.gddPath ?? "no path"})`);
+      }
+      const judged = await this.planner.resolveCoverageGaps(
+        gddForGaps,
+        unclosed.map((m) => coverageGapOf(m)),
+        campaign.milestones,
+      );
+      const closed = new Set(judged.closed.map(gapKey));
+      // NOT ACROSS A PUBLICATION: a closure read while the tree was moving
+      // describes neither revision (V#4).
+      const stillSameRevision = this.projectRevision() === revisionForClosure;
+      for (const m of unclosed) {
+        if (!closed.has(gapKey(coverageGapOf(m)))) continue;
+        if (!stillSameRevision) continue;
+        m.coverageClosed = true;
+        m.coverageClosedRevision = revisionForClosure;
+      }
+      this.persist(campaign);
+      getLoggerSafe().info("Unclosed coverage requirements re-judged against the ladder's evidence", {
+        id: campaign.id,
+        closed: judged.closed.length,
+        open: judged.open.length,
+      });
+      return { open: stillSameRevision ? judged.open : unclosed.map((m) => coverageGapOf(m)) };
+    } catch (err) {
+      // An audit that COULD NOT RUN is not an audit that passed, and this
+      // wording is the one the unmeasurable-proof rule knows: the campaign
+      // revives twice and then asks a person, instead of looping on something
+      // no retry here can change.
+      return {
+        open: unclosed.map((m) => coverageGapOf(m)),
+        auditFailed:
+          `the GDD coverage audit did not run for ${unclosed.length} unclosed requirement(s): ` +
+          `${err instanceof Error ? err.message : String(err)}`.slice(0, 200),
+      };
+    }
+  }
+
   private async buildCoverageRemediation(campaign: Campaign): Promise<CampaignMilestone[] | undefined> {
     // After the FINAL PROOF sprint there is no further remediation: the
     // unclosed gaps stay named in the report. Auditing again would append
@@ -5114,6 +5220,13 @@ export class CampaignManager {
     const compileBroken = compiled?.compileVerdict?.ran === true && compiled.compileVerdict.ok === false;
     const finalMilestone = campaign.milestones[campaign.milestones.length - 1];
     const proofsMissing = campaign.state !== "done" ? finalMilestone?.deliveryProofsMissing ?? [] : [];
+    // A CAMPAIGN THAT STOPPED SHORT SAYS SO IN ITS FIRST LINE, whichever path
+    // stopped it. The partial-delivery path records NOT DELIVERED in
+    // `lastError` and stores no missing-proof list, so its report was
+    // headlined "game built" over an error that said the opposite (Codex
+    // 2026-09-12 V#5, V#7).
+    const stoppedShort =
+      campaign.state !== "done" && (campaign.lastError ?? "").startsWith("NOT DELIVERED") ? campaign.lastError! : undefined;
     const lines = [
       structureRefused
         ? `⛔ **NOT DELIVERED — the shipped scenes do not render the project's own art**`
@@ -5123,6 +5236,8 @@ export class CampaignManager {
         ? `⛔ **NOT DELIVERED — the project does not compile${
             typeof compiled?.compileVerdict?.errors === "number" ? ` (${compiled.compileVerdict.errors} error(s))` : ""
           }**`
+        : stoppedShort !== undefined
+        ? `⛔ **${stoppedShort.slice(0, 240)}**`
         : unfinished.length === 0
         ? `🏁 **Campaign delivery — game build complete**`
         : `🏁 **Campaign delivery — game built, ${unfinished.length} sprint${unfinished.length > 1 ? "s" : ""} did NOT land green**`,
@@ -5253,8 +5368,16 @@ export class CampaignManager {
       if (m.status !== "green") {
         marks.push(`did NOT land green (${m.attempts} attempts)`);
         const gaps = coverageGapItems(m);
+        // A SPRINT THAT FAILED IS NOT ITS REQUIREMENT'S VERDICT. With the
+        // closure recorded, the same report said the requirement was
+        // delivered on the sprint's line and NOT delivered here (Codex
+        // 2026-09-12 V#7). The sprint's history stands; the requirement's
+        // closure is stated as what it is.
         caveats.push(
-          gaps.length > 0
+          m.coverageClosed === true
+            ? `${m.title}: the sprint ended ${m.status ?? "unfinished"}, and the evidence audit then found its requirement delivered` +
+              (gaps.length > 0 ? `: ${gaps.join("; ")}` : "")
+            : gaps.length > 0
             ? `${m.title}: unclosed — the GDD items it was appended to close are NOT delivered: ${gaps.join("; ")}`
             : `${m.title}: unclosed — its scope is NOT delivered. Cause: ${campaign.lastError ?? "not recorded"}`,
         );

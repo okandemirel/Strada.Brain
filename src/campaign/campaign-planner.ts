@@ -671,7 +671,8 @@ Your previous reply was not valid JSON. Reply with the JSON object ALONE — no 
       `<requirements>\n${list}\n</requirements>\n\n` +
       `For EACH numbered requirement, say whether the evidence above shows it implemented and shipped. ` +
       `Respond ONLY with JSON: {"verdicts": [{"id": <number>, "delivered": true|false, "evidence": "<the evidence line that shows it, when delivered>"}, ...]}. ` +
-      `Quote the evidence; a plan, a title or a promise is not evidence, and a requirement you cannot judge is delivered:false.`;
+      `ONE verdict per id. When you answer delivered:true, copy the evidence line from <completed-ladder> VERBATIM — at least twelve characters of it, exactly as written above. ` +
+      `A paraphrase, a plan, a title or a promise is not evidence and closes nothing, and a requirement you cannot judge is delivered:false.`;
     const response = await streamOrChatText(this.provider, COVERAGE_SYSTEM, userMessage);
     let parsed: unknown;
     for (const candidate of balancedJsonObjects(response.text ?? "")) {
@@ -689,13 +690,28 @@ Your previous reply was not valid JSON. Reply with the JSON object ALONE — no 
     if (!verdicts.success) {
       throw new Error("coverage resolution output failed schema validation");
     }
-    // EVIDENCE, or the requirement stays open: a bare "delivered" with nothing
-    // to point at is the prose that this audit exists to stop.
-    const closedIds = new Set(
-      verdicts.data.verdicts
-        .filter((v) => v.delivered === true && (v.evidence ?? "").trim().length >= 12)
-        .map((v) => v.id),
-    );
+    // EVIDENCE THAT EXISTS, or the requirement stays open. A length check let
+    // twelve characters of invented prose — "The feature is definitely done."
+    // — close an absent feature, and a reply carrying both `delivered:false`
+    // and `delivered:true` for the same id closed it on the positive one
+    // (Codex 2026-09-12 V#2). The quote must be IN the record we sent, and a
+    // requirement with more than one verdict is unjudged.
+    const flat = (text: string): string => text.toLowerCase().replace(/\s+/g, " ").trim();
+    const record = flat(ladderSummary);
+    const verdictsById = new Map<number, Array<{ delivered: boolean; evidence?: string }>>();
+    for (const v of verdicts.data.verdicts) {
+      // An id nobody asked about is simply never consulted below.
+      verdictsById.set(v.id, [...(verdictsById.get(v.id) ?? []), { delivered: v.delivered, evidence: v.evidence }]);
+    }
+    const closedIds = new Set<number>();
+    for (const [id, list] of verdictsById) {
+      if (list.length !== 1) continue;
+      const only = list[0]!;
+      if (only.delivered !== true) continue;
+      const quote = flat(only.evidence ?? "");
+      if (quote.length < 12 || !record.includes(quote)) continue;
+      closedIds.add(id);
+    }
     const closed: string[] = [];
     const open: string[] = [];
     asked.forEach((req, i) => (closedIds.has(i + 1) ? closed : open).push(req));

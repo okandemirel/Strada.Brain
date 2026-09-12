@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { attemptRunId, CampaignManager, capabilityGapWork, deliveryFailureKinds, proofSignature, reconcileCapabilityGaps, rememberOwnedTask, OWNERSHIP_LEDGER_LIMIT, unscheduledGaps } from "./campaign-manager.js";
+import { attemptRunId, CampaignManager, capabilityGapWork, closureHolds, MAX_REPAIRS_PER_REQUIREMENT, repairsForRequirement, deliveryFailureKinds, proofSignature, reconcileCapabilityGaps, rememberOwnedTask, OWNERSHIP_LEDGER_LIMIT, unscheduledGaps } from "./campaign-manager.js";
 
 /**
  * Measured live 2026-09-04: told not to audit, the final sprint answered
@@ -120,6 +120,38 @@ describe("the delivery budget's signature is a set of KINDS (Codex 2026-09-11 I#
     // Order does not matter; the set does.
     expect(proofSignature(["no test run was observed", "the project does not compile (3 error(s))"], { structureRefused: false, compileBroken: true }))
       .toBe(proofSignature(["the project does not compile (12 error(s))", "no test run was observed"], { structureRefused: false, compileBroken: true }));
+  });
+});
+
+describe("a recorded closure and the revision it was read on (Codex 2026-09-12 V#4)", () => {
+  it("holds only for the revision it names", () => {
+    const sha = "a".repeat(40);
+    expect(closureHolds({ coverageClosed: true, coverageClosedRevision: sha }, sha)).toBe(true);
+    expect(closureHolds({ coverageClosed: true, coverageClosedRevision: sha }, "b".repeat(40))).toBe(false);
+    // An UNKNOWN revision binds nothing, on either side.
+    expect(closureHolds({ coverageClosed: true }, sha)).toBe(false);
+    expect(closureHolds({ coverageClosed: true, coverageClosedRevision: "" }, sha)).toBe(false);
+    expect(closureHolds({ coverageClosed: true, coverageClosedRevision: sha }, "")).toBe(false);
+    // …including when NEITHER side knows the revision: two unknowns are not
+    // the same tree.
+    expect(closureHolds({ coverageClosed: true, coverageClosedRevision: "" }, "")).toBe(false);
+    // …and a sprint with no closure at all is not closed.
+    expect(closureHolds({ coverageClosedRevision: sha }, sha)).toBe(false);
+  });
+});
+
+describe("how many repairs one requirement may have (Codex 2026-09-12 V#1)", () => {
+  it("counts the sprints for THAT requirement, whatever they are called", () => {
+    const gap = capabilityGapWork("unity_generate_audio");
+    const ladder = [
+      { id: "m1", title: "Audio" },
+      { id: "mcov1", title: "Coverage completion 1.1", coverageGap: gap },
+      { id: "mcov2", title: "Coverage completion 2.1", coverageGap: `  ${gap.toUpperCase()}  ` },
+      { id: "mcov3", title: "Coverage completion 3.1", coverageGap: capabilityGapWork("unity_create_scene") },
+    ];
+    expect(repairsForRequirement(ladder, gap)).toBe(MAX_REPAIRS_PER_REQUIREMENT);
+    expect(repairsForRequirement(ladder, capabilityGapWork("unity_create_scene"))).toBe(1);
+    expect(repairsForRequirement(ladder, capabilityGapWork("unity_build_player"))).toBe(0);
   });
 });
 
