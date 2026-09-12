@@ -7,6 +7,7 @@
  */
 
 import { EventEmitter } from "node:events";
+import { markSystemInterruption } from "./interruption.js";
 import type { Task, TaskId, TaskProgressUpdate } from "./types.js";
 import { TaskStatus, ACTIVE_STATUSES, TERMINAL_STATUSES, generateTaskId, getTaskConversationKey } from "./types.js";
 import { getTaskProgressMessage, toTaskProgressSignal } from "./progress-signals.js";
@@ -862,7 +863,7 @@ export class TaskManager extends EventEmitter {
       if (task.origin === "daemon") {
         this.storage.updateError(
           task.id,
-          "Task interrupted by system restart. The daemon will recreate it if still needed.",
+          markSystemInterruption("Task interrupted by system restart. The daemon will recreate it if still needed."),
         );
         if (task.goalRootId && this.goalStorage) {
           this.goalStorage.updateTreeStatus(task.goalRootId as GoalNodeId, "failed");
@@ -871,9 +872,9 @@ export class TaskManager extends EventEmitter {
         continue;
       }
 
-      const pausedReason = task.goalRootId
+      const pausedReason = markSystemInterruption(task.goalRootId
         ? "Task interrupted by system restart. Resume is available from the monitor and will continue from the saved plan."
-        : "Task interrupted by system restart. Resume is available and will continue from the strongest checkpoint.";
+        : "Task interrupted by system restart. Resume is available and will continue from the strongest checkpoint.");
       // updateError() also forces status=failed, so it must run BEFORE
       // updateStatus(paused) — otherwise it clobbers the paused status and the
       // recoverable task is wrongly left as failed. updateStatus only touches
@@ -897,6 +898,9 @@ export class TaskManager extends EventEmitter {
    * executing until a later startup recovery pass.
    */
   failActiveTasksOnShutdown(reason = "Task interrupted by system shutdown. Resume is available after restart."): void {
+    // STAMPED, so a reader can tell the system's own interruption from a task
+    // that merely mentions one (Codex 2026-09-12 AD#14).
+    reason = markSystemInterruption(reason);
     const logger = getLogger();
     const activeTasks = this.storage.loadIncomplete();
 

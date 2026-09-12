@@ -9,6 +9,7 @@
  */
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { systemInterrupted } from "../tasks/interruption.js";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { basename, dirname, join, relative, sep } from "node:path";
@@ -3875,14 +3876,28 @@ export class CampaignManager {
           return;
         }
         campaign.state = "done";
-        this.cancelLiveLineages(campaign, "campaign delivered");
         // The flag is written only AFTER the report actually leaves. Audited
         // 2026-09-02: `done` was persisted first and tell() swallows an
         // outbound failure, so a crash or a messenger error in this window
         // lost the report for good — a done campaign is not active, not
         // revivable and not queryable, so nothing ever noticed.
         campaign.deliveryReported = false;
-        this.persist(campaign);
+        // A DELIVERY THE STORE REFUSED IS NOT A DELIVERY. persist() drops a
+        // save from an earlier generation — correctly — and this handler went
+        // on regardless: it cancelled the live work of the generation that
+        // had replaced it and announced "game build complete" for a campaign
+        // whose stored row was already running its next generation (Codex
+        // 2026-09-12 AD#9). The write is the transition; nothing happens
+        // until it lands.
+        if (!this.persist(campaign)) {
+          getLoggerSafe().warn("Delivery transition refused: the campaign moved on to a newer generation", {
+            id: campaign.id,
+            writing: campaign.stopGeneration ?? 0,
+            stored: this.storage.get(campaign.id)?.stopGeneration ?? 0,
+          });
+          return;
+        }
+        this.cancelLiveLineages(campaign, "campaign delivered");
         await this.gatherIndependentReview(campaign);
         if (await this.tell(campaign, `${this.buildDeliveryReport(campaign)}${commitNote}`)) {
           campaign.deliveryReported = true;
@@ -3922,7 +3937,14 @@ export class CampaignManager {
     // failing (see below); it is judged before the time box, or a routine
     // restart of a sprint past its second narrowing ended the campaign
     // (review 2026-09-07).
-    const shutdownCaused = /shutting down|shutdown|durduruldu \(shutting/i.test(output);
+    // THE SYSTEM'S OWN INTERRUPTION, not the word. This regex exempted a
+    // sprint from its attempt budget and its time box whenever the output held
+    // "shutdown", so the game defect "The shutdown menu does not save
+    // progress" bought unlimited free retries — twenty failures, twenty
+    // resubmissions, attempts unchanged (Codex 2026-09-12 AD#14). The three
+    // places the system writes an interruption stamp a marker at the start of
+    // the message; nothing else does.
+    const shutdownCaused = systemInterrupted(output);
     if (!shutdownCaused && (await this.escalateIfPastTimeBox(campaign, milestone))) return;
 
     const canRetry = milestone.attempts < this.maxMilestoneAttempts;
@@ -6177,7 +6199,8 @@ export class CampaignManager {
    * generation is carried forward; a revival, which bumps the generation and
    * clears the mark deliberately, still clears it.
    */
-  private persist(campaign: Campaign): void {
+  /** Whether the row was actually written: a refused save is not an update. */
+  private persist(campaign: Campaign): boolean {
     campaign.updatedAt = Date.now();
     // A SAVE FROM AN EARLIER GENERATION IS HISTORY, not an update. A person
     // revived the campaign while the independent reviewer was still awaiting;
@@ -6191,7 +6214,7 @@ export class CampaignManager {
         writing: campaign.stopGeneration ?? 0,
         stored: before.stopGeneration ?? 0,
       });
-      return;
+      return false;
     }
     if (campaign.stopRequestedAt === undefined) {
       const stored = this.storage.get(campaign.id);
@@ -6207,6 +6230,7 @@ export class CampaignManager {
       }
     }
     this.storage.save(campaign);
+    return true;
   }
 
   /** Returns whether the message actually reached the channel. */

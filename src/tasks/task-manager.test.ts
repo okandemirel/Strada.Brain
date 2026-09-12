@@ -1,4 +1,5 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { SYSTEM_INTERRUPTION_MARKER, systemInterrupted } from "./interruption.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -90,7 +91,11 @@ describe("TaskManager", () => {
     manager.failActiveTasksOnShutdown("Shutdown cleanup.");
 
     expect(storage.loadIncomplete).toHaveBeenCalledOnce();
-    expect(storage.updateBlocked).toHaveBeenCalledWith(activeTask.id, "Shutdown cleanup.");
+    // STAMPED as the system's own interruption: a downstream reader exempts
+    // this from its budgets, and it used to decide that by looking for the
+    // word "shutdown" in the task's output (Codex 2026-09-12 AD#14).
+    expect(storage.updateBlocked).toHaveBeenCalledWith(activeTask.id, `${SYSTEM_INTERRUPTION_MARKER} Shutdown cleanup.`);
+    expect(systemInterrupted(String((storage.updateBlocked as ReturnType<typeof vi.fn>).mock.calls[0]![1]))).toBe(true);
     expect(failedListener).not.toHaveBeenCalled();
   });
 
@@ -481,6 +486,28 @@ describe("TaskManager", () => {
     manager.recoverOnStartup();
 
     expect(status).toBe(TaskStatus.paused);
+    // …and the reason is STAMPED as the system's own interruption, so a
+    // reader does not have to recognise the sentence (Codex 2026-09-12 AD#14).
+    expect(systemInterrupted(String((storage.updateError as ReturnType<typeof vi.fn>).mock.calls[0]![1]))).toBe(true);
+  });
+
+  it("a DAEMON task interrupted by a restart is failed with the system marker", () => {
+    // The daemon recreates its own work; the row must still say WHO stopped
+    // it, because a downstream reader exempts a system interruption from its
+    // budgets (Codex 2026-09-12 AD#14).
+    const daemonTask = buildTask({ id: "task_daemon1" as Task["id"], status: TaskStatus.executing, origin: "daemon" });
+    const storage = {
+      loadIncomplete: vi.fn().mockReturnValue([daemonTask]),
+      updateStatus: vi.fn(),
+      updateError: vi.fn(),
+    } as any;
+    const manager = new TaskManager(storage, {} as any, undefined, Date.now() + 60_000);
+
+    manager.recoverOnStartup();
+
+    const reason = String((storage.updateError as ReturnType<typeof vi.fn>).mock.calls[0]![1]);
+    expect(systemInterrupted(reason)).toBe(true);
+    expect(reason).toContain("system restart");
   });
 
   it("a replay keeps the live orchestrator and workspace policy the task was submitted with", () => {

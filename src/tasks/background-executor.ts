@@ -21,6 +21,7 @@ import type {
   TaskUsageEvent,
 } from "./types.js";
 import { getTaskConversationKey, TaskStatus } from "./types.js";
+import { markSystemInterruption, SHUTDOWN_ABORT_REASON } from "./interruption.js";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import type { ITaskManager, IOrchestrator, SupervisorAdmissionDecision } from "./orchestrator-contract.js";
@@ -575,7 +576,7 @@ export class BackgroundExecutor {
     // work-shredder for every task caught running.
     for (const controller of this.inflight.values()) {
       if (!controller.signal.aborted) {
-        controller.abort(new Error("shutting down"));
+        controller.abort(new Error(SHUTDOWN_ABORT_REASON));
       }
     }
     const settleDeadline = Date.now() + 10_000;
@@ -747,7 +748,14 @@ export class BackgroundExecutor {
       : (isTurkish
         ? `Görev tamamlanmadan durduruldu${reasonText ? ` (${reasonText})` : ""}. Yapılan değişiklikler korundu.`
         : `The task was stopped before it finished${reasonText ? ` (${reasonText})` : ""}. Any changes it made have been kept.`);
-    this.taskManager.block(task.id, message);
+    // THE SYSTEM'S OWN INTERRUPTION, stamped: a downstream reader exempts a
+    // shutdown from its budgets, and it decided that by looking for the WORD
+    // in the task's output — which a game defect can carry (Codex 2026-09-12
+    // AD#14). Only an abort whose reason IS the shutdown is stamped.
+    this.taskManager.block(
+      task.id,
+      reasonText === SHUTDOWN_ABORT_REASON ? markSystemInterruption(message) : message,
+    );
     return true;
   }
 

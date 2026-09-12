@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { SYSTEM_INTERRUPTION_MARKER } from "../tasks/interruption.js";
 import { extractLookDescription } from "./visual-conformance.js";
 import { EventEmitter } from "node:events";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, utimesSync, statSync } from "node:fs";
@@ -227,6 +228,12 @@ describe("CampaignManager", () => {
   /** Artifacts the campaign played inside the built player, and what the fake player leaves behind. */
   let playerRuns: string[] = [];
   let playerVerdictOnRun: { ok: boolean; extra: Record<string, unknown> } | undefined;
+  /**
+   * Runs inside the delivery gate, right after the player has been played:
+   * the window in which a person can revive the campaign into a new
+   * generation (Codex 2026-09-12 AD#9).
+   */
+  let afterPlayerRun: (() => void) | undefined;
   const writePlayerVerdict = (ok: boolean, extra: Record<string, unknown> = {}, root: string = projectRoot): void => {
     const dir = join(root, "Recordings", "player-playthrough");
     mkdirSync(dir, { recursive: true });
@@ -309,6 +316,7 @@ describe("CampaignManager", () => {
     visionChat = undefined;
     playerRuns = [];
     playerVerdictOnRun = { ok: true, extra: {} };
+    afterPlayerRun = undefined;
     buildVerdict = {
       ran: true, ok: true, target: "StandaloneOSX", artifactPath: "/tmp/Builds/StandaloneOSX/Game.app", sizeBytes: 88_000_000, durationMs: 120_000, scenes: 2,
     };
@@ -329,7 +337,7 @@ describe("CampaignManager", () => {
       // The gate measures the compiler; tests drive it through this.
       verifyCompile: async () => compileVerdict,
       buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
-      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); },
+      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); afterPlayerRun?.(); },
       visionProvider: { provider: { chat: async () => (visionChat ? visionChat() : { text: "" }), capabilities: { vision: true } } as never, name: "vision" },
       attach: async (chatId, a) => { attached.push({ chatId, name: a.name, url: a.url, type: a.type }); },
       planner,
@@ -1205,6 +1213,37 @@ describe("CampaignManager", () => {
     expect(report).toContain("GDD frame rate ≥ 60 fps: MET — 60.0 fps average over 600 frames in the built player (real rendering), worst frame 40 ms");
   });
 
+  it("does not announce a delivery the store refused (Codex 2026-09-12 AD#9)", async () => {
+    // While the last gates were settling, a person revived the campaign: the
+    // stored row moved to a new generation. persist() correctly drops the old
+    // generation's save — and this handler went on regardless, cancelling the
+    // live work of the generation that had replaced it and announcing "game
+    // build complete" for a campaign that was already running its next
+    // attempt.
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    const green = { testsGreen: true, detail: "PlayMode verification passed: 179 of 179 tests passed (unfiltered — the whole PlayMode suite)", unfiltered: true };
+    afterPlayerRun = () => {
+      const live = storage.get(campaign.id)!;
+      live.stopGeneration = (live.stopGeneration ?? 0) + 1;
+      live.state = "executing";
+      storage.save(live);
+    };
+    tasks.verifications.set("task_3", green);
+    tasks.emit("task:completed", "task_3", "green, shipping");
+
+    await new Promise((r) => setTimeout(r, 1500));
+    const after = storage.get(campaign.id)!;
+    expect(after.stopGeneration).toBe(1);
+    expect(after.state).not.toBe("done");
+    expect(after.deliveryReported).not.toBe(true);
+    expect(messages.some((m) => m.text.includes("game build complete"))).toBe(false);
+  });
+
   it("builds the player itself at delivery: a failed build bounces, a built one is the report's artifact line (2026-09-10)", async () => {
     buildVerdict = { ran: true, ok: false, reasons: ["the report says built but nothing exists at /tmp/Builds/StandaloneOSX/Game.app"], target: "StandaloneOSX" };
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
@@ -1237,7 +1276,7 @@ describe("CampaignManager", () => {
     const original = buildVerdict;
     manager = new CampaignManager({
       storage,
-      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); },
+      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); afterPlayerRun?.(); },
       verifyCompile: async () => compileVerdict,
       buildPlayer: async () => { builds++; return original; },
       planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
@@ -1563,7 +1602,7 @@ describe("CampaignManager", () => {
     manager = new CampaignManager({
       storage,
       buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
-      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); },
+      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); afterPlayerRun?.(); },
       verifyCompile: async () => compileVerdict,
       planner: { planMilestones: vi.fn().mockResolvedValue(structured), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
       taskManager: tasks as unknown as TaskManager,
@@ -2681,11 +2720,40 @@ describe("CampaignManager", () => {
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
     await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     tasks.updatedAts.set("task_1", Date.now() - 30 * 60_000);
-    tasks.emit("task:blocked", "task_1", "The task was stopped before it finished (shutting down). Any changes it made have been kept.");
+    tasks.emit("task:blocked", "task_1", `${SYSTEM_INTERRUPTION_MARKER} The task was stopped before it finished (shutting down). Any changes it made have been kept.`);
     await waitFor(() => expect(tasks.submitted).toHaveLength(2));
 
     expect(storage.get(campaign.id)!.milestones[0]!.attempts).toBe(1);
     expect(storage.get(campaign.id)!.state).toBe("executing");
+  });
+
+  it("a game defect that MENTIONS shutdown is charged like any other failure", async () => {
+    // Codex 2026-09-12 AD#14, reproduced: the exemption was a regex over the
+    // task's output, so "The shutdown menu does not save progress" bought
+    // unlimited free retries — twenty failures, twenty resubmissions, with
+    // attempts unchanged and the time box never applied.
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    const stored = storage.get(campaign.id)!;
+    stored.milestones[0]!.startedAtMs = Date.now() - 4 * 60 * 60_000; // past the 1h box
+    storage.save(stored);
+
+    tasks.emit("task:blocked", "task_1", "The shutdown menu does not save progress.");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    // The time box applies: the scope is narrowed. A real shutdown is judged
+    // before the box and would leave it untouched.
+    expect(storage.get(campaign.id)!.milestones[0]!.timeBoxEscalations).toBe(1);
+
+    // …and a worker that QUOTES the marker inside its own prose does not get
+    // the exemption either: the system writes it at the start of the message,
+    // and that position is the claim.
+    const second = storage.get(campaign.id)!;
+    second.milestones[0]!.startedAtMs = Date.now() - 4 * 60 * 60_000;
+    second.milestones[0]!.timeBoxEscalations = 0;
+    storage.save(second);
+    tasks.emit("task:blocked", "task_2", `The log said ${SYSTEM_INTERRUPTION_MARKER} but the sprint simply failed.`);
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    expect(storage.get(campaign.id)!.milestones[0]!.timeBoxEscalations).toBe(1);
   });
 
   it("a shutdown never ends a sprint, even at its last attempt", async () => {
@@ -2699,7 +2767,7 @@ describe("CampaignManager", () => {
     storage.save(stored);
     tasks.updatedAts.set("task_1", Date.now() - 30 * 60_000);
 
-    tasks.emit("task:blocked", "task_1", "The task was stopped before it finished (shutting down). Any changes it made have been kept.");
+    tasks.emit("task:blocked", "task_1", `${SYSTEM_INTERRUPTION_MARKER} The task was stopped before it finished (shutting down). Any changes it made have been kept.`);
     await waitFor(() => expect(tasks.submitted).toHaveLength(2));
 
     const after = storage.get(campaign.id)!;
@@ -2907,7 +2975,7 @@ describe("CampaignManager", () => {
       projectRoot,
       verifyCompile: async () => compileVerdict,
       buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
-      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); },
+      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); afterPlayerRun?.(); },
       retryAdoptionGraceMs: 10,
       completedSettleDelayMs: 0,
       milestoneTimeBoxMs: 60 * 60_000,
@@ -2960,7 +3028,7 @@ describe("CampaignManager", () => {
       storage,
       verifyCompile: async () => compileVerdict,
       buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
-      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); },
+      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); afterPlayerRun?.(); },
       planner,
       taskManager: tasks as unknown as TaskManager,
       messenger: async (chatId, text) => {
@@ -3023,7 +3091,7 @@ describe("CampaignManager", () => {
       storage,
       verifyCompile: async () => compileVerdict,
       buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
-      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); },
+      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); afterPlayerRun?.(); },
       planner,
       taskManager: tasks as unknown as TaskManager,
       messenger: async (chatId, text) => {
@@ -3438,6 +3506,11 @@ describe("CampaignManager", () => {
     expect(after.state).toBe("planning");
     expect(after.lastError).toBe("revived by a person");
     expect(after.deliveryReported).not.toBe(true);
+    // …AND IT ANNOUNCES NOTHING. The handler went on past the refused save:
+    // it cancelled the live work of the generation that had replaced it and
+    // reported "game build complete" for a row already running its next
+    // generation (Codex 2026-09-12 AD#9).
+    expect(messages.some((m) => m.text.includes("game build complete"))).toBe(false);
     // …and it submits no work either: `persist` refuses the save, but the
     // task was minted BEFORE that refusal and the stored ladder never owned
     // it — an orphan with a live lineage (Codex 2026-09-12 Y#2).
@@ -3527,7 +3600,7 @@ describe("CampaignManager", () => {
       storage,
       verifyCompile: async () => compileVerdict,
       buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
-      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); },
+      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); afterPlayerRun?.(); },
       planner,
       taskManager: tasks as unknown as TaskManager,
       messenger: async (chatId, text) => {
@@ -4235,7 +4308,7 @@ describe("CampaignManager", () => {
       storage,
       verifyCompile: async () => compileVerdict,
       buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
-      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); },
+      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); afterPlayerRun?.(); },
       planner: {
         planMilestones: vi.fn().mockResolvedValue(LADDER),
         auditCoverage: vi.fn().mockResolvedValueOnce(gaps).mockResolvedValue([]),
@@ -4288,7 +4361,7 @@ describe("CampaignManager", () => {
       storage,
       verifyCompile: async () => compileVerdict,
       buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
-      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); },
+      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); afterPlayerRun?.(); },
       planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
       taskManager: tasks as unknown as TaskManager,
       messenger: async (chatId, text) => { messages.push({ chatId, text }); },
@@ -4684,7 +4757,7 @@ describe("CampaignManager", () => {
       storage,
       verifyCompile: async () => compileVerdict,
       buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
-      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); },
+      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); afterPlayerRun?.(); },
       planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage } as unknown as CampaignPlanner,
       taskManager: tasks as unknown as TaskManager,
       messenger: async (chatId, text) => { messages.push({ chatId, text }); },
@@ -5129,7 +5202,7 @@ describe("CampaignManager", () => {
       storage,
       verifyCompile: async () => compileVerdict,
       buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
-      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); },
+      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); afterPlayerRun?.(); },
       planner: {
         planMilestones: vi.fn().mockResolvedValue(LADDER),
         auditCoverage: vi.fn().mockResolvedValueOnce([
@@ -5214,7 +5287,7 @@ describe("CampaignManager", () => {
       storage,
       verifyCompile: async () => compileVerdict,
       buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
-      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); },
+      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); afterPlayerRun?.(); },
       planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
       taskManager: tasks as unknown as TaskManager,
       messenger: async (chatId, text) => { messages.push({ chatId, text }); },
@@ -5499,7 +5572,7 @@ describe("CampaignManager", () => {
       storage, planner,
       verifyCompile: async () => compileVerdict,
       buildPlayer: async () => buildVerdict,
-      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); },
+      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); afterPlayerRun?.(); },
       taskManager: tasks as unknown as TaskManager,
       messenger: async (chatId, text) => { messages.push({ chatId, text }); },
       projectRoot, retryAdoptionGraceMs: 10, completedSettleDelayMs: 0, milestoneTimeBoxMs: 60 * 60_000,
@@ -5569,7 +5642,7 @@ describe("CampaignManager", () => {
       storage,
       verifyCompile: async () => compileVerdict,
       buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
-      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); },
+      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); afterPlayerRun?.(); },
       planner,
       taskManager: tasks as unknown as TaskManager,
       messenger: async (chatId, text) => {
@@ -5616,7 +5689,7 @@ describe("CampaignManager", () => {
       storage,
       verifyCompile: async () => compileVerdict,
       buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
-      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); },
+      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); afterPlayerRun?.(); },
       planner,
       taskManager: tasks as unknown as TaskManager,
       messenger: async (chatId, text) => {
@@ -5658,7 +5731,7 @@ describe("CampaignManager", () => {
       storage,
       verifyCompile: async () => compileVerdict,
       buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
-      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); },
+      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); afterPlayerRun?.(); },
       planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
       taskManager: tasks as unknown as TaskManager,
       messenger: async (chatId, text) => { messages.push({ chatId, text }); },
@@ -5701,7 +5774,7 @@ describe("CampaignManager", () => {
       storage,
       verifyCompile: async () => compileVerdict,
       buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
-      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); },
+      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); afterPlayerRun?.(); },
       planner,
       taskManager: tasks as unknown as TaskManager,
       messenger: async (chatId, text) => {
@@ -5784,7 +5857,7 @@ describe("CampaignManager", () => {
       projectRoot,
       verifyCompile: async () => compileVerdict,
       buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
-      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); }, // no Recordings/ dir → no evidence
+      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); afterPlayerRun?.(); }, // no Recordings/ dir → no evidence
       retryAdoptionGraceMs: 10,
       completedSettleDelayMs: 0,
       milestoneTimeBoxMs: 60 * 60_000,
@@ -5882,7 +5955,7 @@ describe("CampaignManager", () => {
       projectRoot,
       verifyCompile: async () => compileVerdict,
       buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
-      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); },
+      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); afterPlayerRun?.(); },
       retryAdoptionGraceMs: 10,
       completedSettleDelayMs: 0,
       milestoneTimeBoxMs: 60 * 60_000,
@@ -6090,7 +6163,7 @@ describe("CampaignManager", () => {
       projectRoot,
       verifyCompile: async () => compileVerdict,
       buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
-      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); },
+      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); afterPlayerRun?.(); },
       retryAdoptionGraceMs: 10,
       completedSettleDelayMs: 0,
       milestoneTimeBoxMs: 60 * 60_000,
@@ -6305,7 +6378,7 @@ describe("CampaignManager", () => {
       storage,
       verifyCompile: async () => compileVerdict,
       buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
-      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); },
+      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); afterPlayerRun?.(); },
       planner: { planMilestones } as unknown as CampaignPlanner,
       taskManager: tasks as unknown as TaskManager,
       messenger: async (chatId, text) => {
@@ -6454,7 +6527,7 @@ describe("CampaignManager", () => {
       storage,
       verifyCompile: async () => compileVerdict,
       buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
-      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); },
+      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); afterPlayerRun?.(); },
       planner,
       taskManager: tasks as unknown as TaskManager,
       messenger: async (chatId, text) => { messages.push({ chatId, text }); },
@@ -6517,7 +6590,7 @@ describe("CampaignManager", () => {
       projectRoot,
       verifyCompile: async () => compileVerdict,
       buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
-      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); },
+      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); afterPlayerRun?.(); },
       retryAdoptionGraceMs: 10,
       completedSettleDelayMs: 0,
       milestoneTimeBoxMs: 60 * 60_000,
@@ -6689,7 +6762,7 @@ describe("CampaignManager", () => {
       projectRoot,
       verifyCompile: async () => compileVerdict,
       buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
-      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); },
+      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); afterPlayerRun?.(); },
       retryAdoptionGraceMs: 10,
       completedSettleDelayMs: 0,
       milestoneTimeBoxMs: 60 * 60_000,
@@ -6747,7 +6820,7 @@ describe("CampaignManager", () => {
       projectRoot,
       verifyCompile: async () => compileVerdict,
       buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
-      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); },
+      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); afterPlayerRun?.(); },
       retryAdoptionGraceMs: 10,
       completedSettleDelayMs: 0,
       milestoneTimeBoxMs: 60 * 60_000,
@@ -6907,7 +6980,7 @@ describe("CampaignManager", () => {
         storage, planner, taskManager: tasks as unknown as TaskManager,
       verifyCompile: async () => compileVerdict,
       buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
-      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); },
+      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); afterPlayerRun?.(); },
         messenger: async (chatId, text) => { messages.push({ chatId, text }); },
         projectRoot, retryAdoptionGraceMs: 10, completedSettleDelayMs: 0, milestoneTimeBoxMs: 60 * 60_000,
       });
@@ -6969,7 +7042,7 @@ describe("CampaignManager", () => {
       m.attempts = 2;
       m.startedAtMs = Date.now() - 7 * 3_600_000;
       storage.save(c);
-      tasks.markTerminal("task_1", TaskStatus.blocked, "Task durduruldu (shutting down)");
+      tasks.markTerminal("task_1", TaskStatus.blocked, `${SYSTEM_INTERRUPTION_MARKER} Task durduruldu (shutting down)`);
       await manager.resumeActive();
       await waitFor(() => expect(tasks.submitted).toHaveLength(2));
       expect(storage.get(campaign.id)!.state).toBe("executing");

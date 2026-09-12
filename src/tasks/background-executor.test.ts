@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { SHUTDOWN_ABORT_REASON, systemInterrupted } from "./interruption.js";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { execFileSync, spawnSync } from "node:child_process";
 import { join } from "node:path";
@@ -2553,6 +2554,38 @@ describe("BackgroundExecutor - reaper and shutdown settle in-flight work", () =>
     expect(blocks).toHaveLength(1);
     expect(blocks[0]).toMatch(/Auto-retry 1\/10 in ~\d+s/);
     expect(blocks[0]).not.toContain("stopped before it finished");
+  });
+
+  it("stamps the SYSTEM interruption marker on a shutdown settle, and on nothing else", async () => {
+    // The campaign exempts a sprint from its attempt budget and its time box
+    // when the system stopped it, and it used to decide that by looking for
+    // the word "shutdown" in the output — which a game defect can carry
+    // (Codex 2026-09-12 AD#14). The marker says it structurally, and only a
+    // shutdown abort may carry it.
+    const blockedOn = async (abort: (c: AbortController) => void): Promise<string> => {
+      const events: string[] = [];
+      const runBackgroundTask = hangingOnAbort(events);
+      const executor = new BackgroundExecutor({ orchestrator: { runBackgroundTask } as any, concurrencyLimit: 1 });
+      const block = vi.fn();
+      executor.setTaskManager({
+        updateStatus: vi.fn(), complete: vi.fn(), fail: vi.fn(), block,
+        appendTaskNotice: vi.fn(), retryTask: vi.fn(), listTasks: vi.fn(() => []), getStatus: vi.fn(() => null),
+      } as any);
+      const external = new AbortController();
+      executor.enqueue(createTestTask(undefined, { origin: "user" }), external.signal, vi.fn());
+      await vi.waitFor(() => expect(runBackgroundTask).toHaveBeenCalledTimes(1), { timeout: 3000 });
+      abort((executor as unknown as { inflight: Map<string, AbortController> }).inflight.values().next().value!);
+      await vi.waitFor(() => expect(block).toHaveBeenCalled(), { timeout: 3000 });
+      return String(block.mock.calls[0]![1]);
+    };
+
+    const onShutdown = await blockedOn((c) => c.abort(new Error(SHUTDOWN_ABORT_REASON)));
+    expect(systemInterrupted(onShutdown)).toBe(true);
+    // Any other abort — a watchdog, a crash, a tool that gave up — is the
+    // task's own failure and carries no exemption.
+    const onOther = await blockedOn((c) => c.abort(new Error("the editor never answered")));
+    expect(systemInterrupted(onOther)).toBe(false);
+    expect(onOther).toContain("the editor never answered");
   });
 
   it("shutdown aborts in-flight executions and settles them BEFORE disposing leases", async () => {
