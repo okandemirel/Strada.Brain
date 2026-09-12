@@ -372,7 +372,13 @@ export function extractActionBudget(gddText: string): number | undefined {
 export function finishedSessionIndices(
   playthrough: {
     sessionCount?: number;
-    sessions?: ReadonlyArray<{ index?: number; outcome?: string; actions?: number; reachedOutcome?: boolean }>;
+    sessions?: ReadonlyArray<{
+      index?: number;
+      outcome?: string;
+      actions?: number;
+      reachedOutcome?: boolean;
+      identityVerified?: boolean;
+    }>;
   } | undefined,
 ): number[] {
   const catalog = playthrough?.sessionCount ?? 0;
@@ -382,6 +388,12 @@ export function finishedSessionIndices(
     // record with no outcome at all — an empty string, a missing field — count
     // as a level played to the end (Codex 2026-09-12 S#11).
     if (session.reachedOutcome === false) continue;
+    // A SESSION WHOSE CONTENT NOBODY COULD IDENTIFY certifies no level. The
+    // run adopts a session the game started by itself, and the record used to
+    // carry the index the run had asked for: an auto-started level 1 counted
+    // as level 7 played (Codex 2026-09-12 X). Records that do not report
+    // identity at all are read exactly as before.
+    if (session.identityVerified === false) continue;
     const outcome = (session.outcome ?? "").trim();
     if (outcome === "" || outcome === "None" || outcome === "Refused") continue;
     if (!Number.isInteger(session.index) || session.index! < 1 || session.index! > Math.max(catalog, 1)) continue;

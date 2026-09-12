@@ -180,6 +180,14 @@ export function readPlaythroughVerdict(
                     // reachedOutcome:false counted as a level played once it
                     // had passed through here (Codex 2026-09-12 T#11).
                     ...(typeof r.reachedOutcome === "boolean" ? { reachedOutcome: r.reachedOutcome } : {}),
+                    // WHICH CONTENT it was, when the producer can say. A game
+                    // that starts playing by itself has its session ADOPTED by
+                    // the run, and the record used to carry the index the run
+                    // asked for — so an auto-started level 1 certified level 7
+                    // (Codex 2026-09-12 X). Absent on older records, which are
+                    // read exactly as before.
+                    ...(typeof r.identityVerified === "boolean" ? { identityVerified: r.identityVerified } : {}),
+                    ...(num(r.requestedIndex) !== undefined ? { requestedIndex: num(r.requestedIndex) } : {}),
                     seconds: num(r.seconds) ?? 0,
                   };
                 }),

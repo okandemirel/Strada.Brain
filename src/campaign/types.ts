@@ -480,7 +480,21 @@ export interface PlaythroughEvidence {
    * used to be read as index 0 with 0 actions, which is a played level as far
    * as a counter is concerned (Codex 2026-09-11 E#7). Absent stays absent.
    */
-  sessions?: Array<{ index?: number; outcome: string; actions?: number; seconds: number; reachedOutcome?: boolean }>;
+  sessions?: Array<{
+    index?: number;
+    outcome: string;
+    actions?: number;
+    seconds: number;
+    reachedOutcome?: boolean;
+    /**
+     * Whether this session IS the content the run asked for. False when the
+     * run adopted a session the game had already started and nothing could
+     * identify it (Strada.Core.Play.IActiveSession); absent on records from
+     * producers that do not report it yet (Codex 2026-09-12 X).
+     */
+    identityVerified?: boolean;
+    requestedIndex?: number;
+  }>;
   /**
    * What was on screen at the end of play (2026-09-10): world renderers, the
    * sprite/mesh names they bind, engine primitives, audio. The file scan

@@ -88,7 +88,7 @@ describe("the play-through verdict the campaign reads back (measured 2026-09-10:
       "play-through OK in Entry: session 1 played to Won in 12 actions; 5 frames, 0 flat, max motion 31.0%; the game does NOT start play by itself after boot (the driver's StartSession was called); no session catalog (level count not measurable)",
     );
     write({ ...ok, record: { ...ok.record, sessionCount: 12, sessions: [
-      { index: 1, startAccepted: true, actions: 12, outcome: "Won", reachedOutcome: true, seconds: 8.5 },
+      { index: 1, startAccepted: true, actions: 12, outcome: "Won", reachedOutcome: true, seconds: 8.5, identityVerified: true, requestedIndex: 1 },
       { index: 2, startAccepted: true, actions: 60, outcome: "None", reachedOutcome: false, seconds: 45 },
       { index: 3, startAccepted: false, actions: 0, outcome: "None", reachedOutcome: false, seconds: 0 },
     ] } });
@@ -96,7 +96,8 @@ describe("the play-through verdict the campaign reads back (measured 2026-09-10:
     expect(many.sessionCount).toBe(12);
     // The writer's own reachedOutcome travels with each session now (T#11).
     expect(many.sessions).toEqual([
-      { index: 1, outcome: "Won", actions: 12, seconds: 8.5, reachedOutcome: true },
+      // …and WHICH CONTENT it was, when the producer says (Codex 2026-09-12 X).
+      { index: 1, outcome: "Won", actions: 12, seconds: 8.5, reachedOutcome: true, identityVerified: true, requestedIndex: 1 },
       { index: 2, outcome: "None", actions: 60, seconds: 45, reachedOutcome: false },
       { index: 3, outcome: "Refused", actions: 0, seconds: 0, reachedOutcome: false },
     ]);

@@ -545,3 +545,35 @@ describe("the comparators and boundaries round W found (Codex 2026-09-12 W#7)", 
     expect(kinds("Ship 200 certified levels.")).toEqual([["level_count", "eq", 200]]);
   });
 });
+
+/**
+ * A game may start playing BY ITSELF after boot. The run then adopts that
+ * session instead of starting one, and the record carried the index the run
+ * had ASKED for — so a game that auto-starts level 1, asked for session 7,
+ * certified level 7 (Codex 2026-09-12 X). The producer now says whether it
+ * could identify what it adopted.
+ */
+describe("a session whose content nobody could identify (Codex 2026-09-12 X)", () => {
+  const played = (over: Record<string, unknown>) => ({
+    index: 7, outcome: "Won", actions: 5, seconds: 30, reachedOutcome: true, ...over,
+  });
+
+  it("is not a level played, while an identified one is", () => {
+    expect(finishedSessionIndices({ sessionCount: 12, sessions: [played({ identityVerified: false })] })).toEqual([]);
+    expect(finishedSessionIndices({ sessionCount: 12, sessions: [played({ identityVerified: true })] })).toEqual([7]);
+    // A producer that says nothing about identity is read exactly as before.
+    expect(finishedSessionIndices({ sessionCount: 12, sessions: [played({})] })).toEqual([7]);
+  });
+
+  it("keeps the level count honest: an unidentified session does not close it", () => {
+    const claim = extractNumericClaims("The game ships 3 levels.").claims;
+    const three = [1, 2, 3].map((index) => ({ index, outcome: "Won", actions: 5, seconds: 30, reachedOutcome: true }));
+    const identified = assessNumericClaims(claim, evidence({ sessionCount: 3, sessions: three }));
+    expect(identified[0]!.status).toBe("met");
+    const adopted = assessNumericClaims(
+      claim,
+      evidence({ sessionCount: 3, sessions: [{ ...three[0]!, identityVerified: false }, three[1]!, three[2]!] }),
+    );
+    expect(adopted[0]!.status).toBe("not_met");
+  });
+});
