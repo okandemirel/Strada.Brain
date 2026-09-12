@@ -472,7 +472,13 @@ export class CampaignPlanner {
   private static readonly PROMPT_CAP = 8000;
   /** What arms the visual gate, appended when the model did not ask for it. */
   private static readonly CAPTURE_DEMAND =
-    "\n\nFinish by CAPTURING A FRAME of what this sprint built (unity_capture_frame) and name the captured file in your report — a sprint that shows nothing is not done.";
+    "\n\nFinish by CAPTURING A FRAME of what this sprint built (unity_capture_frame) and name the captured file in your report — a sprint that shows nothing is not done. " +
+    // ONE LOCATION CONTRACT. The frame reader only counts what is under
+    // Recordings/ — a picture in Assets/ is an art asset and must not stand in
+    // for a frame of the running game — and a sprint told to write
+    // "docs/sprints/m2_frame.png" left the visual gate with nothing to read
+    // (Codex 2026-09-12 R#9).
+    "The frame must land under Recordings/ (that is where the delivery gate reads it from); a picture written anywhere else is not evidence this system can see.";
 
   private async planOnce(system: string, userMessage: string): Promise<MilestoneLadder> {
     if (!this.provider) {

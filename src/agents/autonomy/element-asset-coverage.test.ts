@@ -121,6 +121,13 @@ describe("element asset coverage", () => {
     expect(prompt).toContain("Rocket");
     expect(prompt).toContain("Ice Block");
     expect(prompt).toContain("unity_generate_sprite");
+    // THE DESIGN'S OWN WORDS, never one game's. The prompt quoted the test
+    // vehicle's art direction — "softly rendered dimensional stages", "plump,
+    // glossy 3D-feel" — at every game the system builds (Codex 2026-09-12
+    // R#10, and the standing rule that no vehicle's wording belongs in system
+    // behaviour).
+    expect(prompt).not.toMatch(/softly rendered|plump|glossy|3D-feel|PixelFlow/i);
+    expect(prompt).toContain("THIS design describes as dimensional");
   });
 
   it("names elements whose art exists but is bound to nothing", () => {

@@ -1674,9 +1674,9 @@ export class StradaConformanceGuard {
         "The design's element schedule is the contract for what must be VISIBLE, not only " +
         "implemented. For each named element: first run unity_my_assets_cloud for art the user " +
         "already owns; when nothing fits, generate with the tool that matches the element's " +
-        "layer — unity_generate_sprite for pixel-canvas pieces, unity_generate_mesh for " +
-        "dimensional ones (the GDD's 'softly rendered dimensional stages' and 'plump, glossy " +
-        "3D-feel' characters are NOT sprites) — then bind the asset into the element's prefab " +
+        "layer — unity_generate_sprite for the flat, pixel or 2D pieces, unity_generate_mesh " +
+        "for the pieces THIS design describes as dimensional or 3D (those are not sprites; the " +
+        "design's own words decide which is which) — then bind the asset into the element's prefab " +
         "(a SpriteRenderer's sprite field, a MeshFilter's mesh, a config asset's reference). " +
         "An asset on disk that nothing references is the same as no asset." +
         (lastAsk
