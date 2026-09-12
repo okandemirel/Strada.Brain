@@ -16,7 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
 import { runProcess } from "../../utils/process-runner.js";
-import { WorkspaceLeaseManager, DEFAULT_WORKSPACE_COPY_EXCLUDES, isAlreadyGone, reconcileSeedBaseline, stampUnchanged, existedAtSeed, readLeaseSeed, writeLeaseSeed } from "./workspace-lease-manager.js";
+import { WorkspaceLeaseManager, DEFAULT_WORKSPACE_COPY_EXCLUDES, isAlreadyGone, reconcileSeedBaseline, stampUnchanged, existedAtSeed, readLeaseSeed, writeLeaseSeed, isDerivedBuildOutput } from "./workspace-lease-manager.js";
 import type { SeedStamp } from "./workspace-lease-manager.js";
 
 let source: string;
@@ -1366,5 +1366,48 @@ describe("a person's edit that stats cannot see is not published over (Codex 202
     expect(result.written).toContain(join("Assets", "Scripts", "Existing.cs"));
     expect(readFileSync(target, "utf8")).toBe("worker work");
     expect(git(source, "status --porcelain -- Assets/Scripts/Existing.cs")).not.toBe("");
+  });
+});
+
+describe("compiler output is derived, at any depth (Codex 2026-09-12 R#4)", () => {
+  it("does not carry, publish or conflict on bin/obj build output", async () => {
+    // Measured live 2026-09-12 11:26 and 12:03: thirteen files under
+    // Tools/PixelFlowCoreBuild/{bin,obj}/Debug differed between the lease and
+    // the project — both had built them — so every one came back a CONFLICT,
+    // the commit published nothing, and the whole node failed.
+    mkdirSync(join(source, "Tools", "CoreBuild", "obj", "Debug"), { recursive: true });
+    mkdirSync(join(source, "Tools", "CoreBuild", "bin", "Debug"), { recursive: true });
+    mkdirSync(join(source, "bin"), { recursive: true });
+    writeFileSync(join(source, "Tools", "CoreBuild", "obj", "Debug", "Core.cache"), "project build", "utf8");
+    writeFileSync(join(source, "Tools", "CoreBuild", "bin", "Debug", "Core.dll"), "project build", "utf8");
+    writeFileSync(join(source, "bin", "tools.sh"), "#!/bin/sh\necho hi\n", "utf8"); // a repository's own bin/
+
+    const lease = await manager().acquireLease({ label: "t", forceTempCopy: true });
+    // The worker builds too, and its outputs differ.
+    mkdirSync(join(lease.path, "Tools", "CoreBuild", "obj", "Debug"), { recursive: true });
+    mkdirSync(join(lease.path, "Tools", "CoreBuild", "bin", "Debug"), { recursive: true });
+    writeFileSync(join(lease.path, "Tools", "CoreBuild", "obj", "Debug", "Core.cache"), "lease build", "utf8");
+    writeFileSync(join(lease.path, "Tools", "CoreBuild", "bin", "Debug", "Core.dll"), "lease build", "utf8");
+    writeFileSync(join(lease.path, "Assets", "Scripts", "Real.cs"), "the actual work", "utf8");
+    writeFileSync(join(lease.path, "bin", "tools.sh"), "#!/bin/sh\necho edited\n", "utf8");
+
+    const result = await lease.commit();
+    await lease.release();
+
+    expect(result.conflicts).toEqual([]);
+    expect(result.written).toContain(join("Assets", "Scripts", "Real.cs"));
+    // The project keeps its own compiler output, untouched…
+    expect(readFileSync(join(source, "Tools", "CoreBuild", "obj", "Debug", "Core.cache"), "utf8")).toBe("project build");
+    expect(readFileSync(join(source, "Tools", "CoreBuild", "bin", "Debug", "Core.dll"), "utf8")).toBe("project build");
+    // …and a repository's own bin/ of scripts is not compiler output.
+    expect(readFileSync(join(source, "bin", "tools.sh"), "utf8")).toBe("#!/bin/sh\necho edited\n");
+  });
+
+  it("knows what a build directory looks like", () => {
+    expect(isDerivedBuildOutput(join("Tools", "X", "obj", "Debug", "a.dll"))).toBe(true);
+    expect(isDerivedBuildOutput(join("Tools", "X", "obj", "project.assets.json"))).toBe(true);
+    expect(isDerivedBuildOutput(join("Tools", "X", "bin", "Release", "a.dll"))).toBe(true);
+    expect(isDerivedBuildOutput(join("bin", "tools.sh"))).toBe(false);
+    expect(isDerivedBuildOutput(join("Assets", "Scripts", "Object.cs"))).toBe(false);
   });
 });

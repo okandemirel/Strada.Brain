@@ -308,6 +308,30 @@ const BASE_FALLBACK_COPY_EXCLUDES = new Set([
   ".cache",
   ".vite",
 ]);
+/**
+ * Compiler output, at ANY depth.
+ *
+ * The excludes above only ever looked at a path's FIRST segment, so
+ * `Tools/PixelFlowCoreBuild/obj/Debug/…` and its `bin/Debug/…` twin travelled
+ * with every lease — and since the project builds them too, all thirteen came
+ * back as CONFLICTS and the whole commit published nothing (measured live
+ * 2026-09-12 11:26 and 11:51). These are derived from the sources beside them;
+ * nothing is lost by leaving them where they were built.
+ *
+ * `obj/` is .NET's own name for its intermediate directory; `bin/` is only
+ * derived when it holds a build configuration, so a repository's own `bin/`
+ * of scripts is untouched.
+ */
+export function isDerivedBuildOutput(rel: string): boolean {
+  const parts = rel.split(/[/\\]/);
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i];
+    if (part === "obj") return true;
+    if (part === "bin" && /^(?:Debug|Release)$/i.test(parts[i + 1] ?? "")) return true;
+  }
+  return false;
+}
+
 const DERIVED_COPY_EXCLUDES = new Set([
   ".git",
   "node_modules",
@@ -2542,6 +2566,7 @@ export class WorkspaceLeaseManager {
     // the project's submodule checkout — the excludes above only ever looked
     // at the first path segment.
     if (basename(path) === ".git") return false;
+    if (isDerivedBuildOutput(rel)) return false;
     return !this.fallbackExcludes.has(firstSegment) && !DERIVED_COPY_EXCLUDES.has(firstSegment);
   }
 
