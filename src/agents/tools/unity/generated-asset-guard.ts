@@ -165,6 +165,11 @@ export class PreviousAsset {
         if (!assetIntact) copyFileSync(newer.assetCopy, this.fullPath);
         if (newer.hadMeta === true && newer.metaCopy !== undefined && existsSync(newer.metaCopy)) {
           copyFileSync(newer.metaCopy, `${this.fullPath}.meta`);
+        } else if (newer.hadMeta !== true) {
+          // ABSENCE IS PART OF THE PAIR. The committed state had no .meta, and
+          // a damaged one written afterwards was left in place because only
+          // presence was ever restored (Codex 2026-09-12 S#9).
+          rmSync(`${this.fullPath}.meta`, { force: true });
         }
         this.settle();
         return;
@@ -206,13 +211,7 @@ export class PreviousAsset {
       digest: digestOf(this.fullPath),
       metaDigest: digestOf(`${this.fullPath}.meta`),
     };
-    // A copy retained by an EARLIER commit is superseded by this one: the
-    // newest committed pair is what a failing generation must put back, and
-    // the old copies were left in Assets/ forever (Codex 2026-09-12 Q#6).
     const superseded = committedAt.get(this.fullPath);
-    for (const copy of [superseded?.assetCopy, superseded?.metaCopy]) {
-      if (copy !== undefined) { try { rmSync(copy, { force: true }); } catch { /* best effort */ } }
-    }
     // While another generation is still open against this path, the committed
     // pair itself is kept: that generation may fail and need to put back what
     // WE committed rather than what either of us snapshotted.
@@ -220,19 +219,36 @@ export class PreviousAsset {
       const token = randomUUID().slice(0, 8);
       const assetCopy = `${this.fullPath}.strada-committed-${token}`;
       const metaCopy = `${this.fullPath}.meta.strada-committed-${token}`;
+      // THE PAIR OR NOTHING. Retaining the asset and failing on its .meta left
+      // a half-copy that a later rollback restored, damaged metadata and all
+      // (Codex 2026-09-12 S#9).
       try {
         copyFileSync(this.fullPath, assetCopy);
-        record.assetCopy = assetCopy;
         if (existsSync(`${this.fullPath}.meta`)) {
           copyFileSync(`${this.fullPath}.meta`, metaCopy);
           record.metaCopy = metaCopy;
           record.hadMeta = true;
         }
+        record.assetCopy = assetCopy;
       } catch {
-        // Unreadable target: the digest guard still protects intact bytes.
+        // Unreadable target: keep nothing rather than half a pair. The digest
+        // guard still protects intact bytes.
+        record.assetCopy = undefined;
+        record.metaCopy = undefined;
+        record.hadMeta = undefined;
+        for (const partial of [assetCopy, metaCopy]) {
+          try { rmSync(partial, { force: true }); } catch { /* best effort */ }
+        }
       }
     }
     committedAt.set(this.fullPath, record);
+    // ONLY NOW are the previous commit's copies superseded: deleting them
+    // before this pair was secured left nothing to roll back to (S#9).
+    if (record.assetCopy !== undefined || (openGenerations.get(this.fullPath) ?? 0) <= 1) {
+      for (const copy of [superseded?.assetCopy, superseded?.metaCopy]) {
+        if (copy !== undefined) { try { rmSync(copy, { force: true }); } catch { /* best effort */ } }
+      }
+    }
     this.settle();
   }
 

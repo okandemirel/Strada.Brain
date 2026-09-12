@@ -219,6 +219,27 @@ describe("what already sits at a generation target", () => {
     expect(readdirSync(dir).sort()).toEqual(["Hero.png"]);
   });
 
+  it("restores the committed pair's ABSENCE of a .meta, and keeps nothing half-copied (Codex 2026-09-12 S#9)", () => {
+    const target = join(dir, "Hero.png");
+    writeFileSync(target, png(64, 64, "noise"));
+    const a = new PreviousAsset(target);
+    const b = new PreviousAsset(target);
+
+    // A committed image with NO .meta beside it.
+    const committed = png(48, 48, "noise");
+    writeFileSync(target, committed);
+    a.commit();
+
+    // B damages the image AND writes a .meta the committed state never had.
+    writeFileSync(target, Buffer.alloc(9));
+    writeFileSync(`${target}.meta`, "guid: DAMAGED");
+    b.restore();
+
+    expect(readFileSync(target).equals(committed)).toBe(true);
+    // The unexpected .meta used to survive the restore.
+    expect(readdirSync(dir).sort()).toEqual(["Hero.png"]);
+  });
+
   it("restores the previous pair byte for byte", () => {
     const target = join(dir, "Hero.png");
     const original = png(64, 64, "noise");
