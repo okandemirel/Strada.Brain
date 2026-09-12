@@ -330,7 +330,19 @@ export function isDerivedBuildOutput(rel: string): boolean {
   // A target-framework folder: obj/net8.0/…, obj/netstandard2.1/…
   const framework = /^net(?:standard|coreapp)?[0-9][0-9.]*(?:-[a-z0-9.]+)?$/i;
   // The files .NET writes directly into obj/.
-  const intermediate = /^(?:project\.(?:assets\.json|nuget\.cache|packagespec\.json)|.+\.(?:csproj|vbproj|fsproj)\.nuget\.g\.(?:props|targets)|.+\.(?:cache|CopyComplete|FileListAbsolute\.txt))$/i;
+  // NAMES .NET WRITES, not any file that ends in .cache: `Assets/obj/terrain.cache`
+  // is a game's own baked data and was classified as compiler output (Codex
+  // 2026-09-12 T#10).
+  const intermediate = new RegExp(
+    "^(?:" +
+      "project\\.(?:assets\\.json|nuget\\.cache|packagespec\\.json)" +
+      "|.+\\.(?:csproj|vbproj|fsproj)\\.(?:nuget\\.g\\.(?:props|targets)|CopyComplete|FileListAbsolute\\.txt)" +
+      "|.+\\.(?:assets|AssemblyInfoInputs|CoreCompileInputs|GeneratedMSBuildEditorConfig)\\.(?:cache|editorconfig)" +
+      "|.+\\.AssemblyInfo\\.cs" +
+      "|.+\\.sourcelink\\.json" +
+    ")$",
+    "i",
+  );
   for (let i = 0; i < parts.length; i++) {
     const part = parts[i];
     const next = parts[i + 1] ?? "";

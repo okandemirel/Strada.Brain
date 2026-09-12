@@ -1534,6 +1534,13 @@ describe("compiler output is derived, at any depth (Codex 2026-09-12 R#4)", () =
     // Assets/Models/obj was classified derived and dropped from publication,
     // which loses authored work (Codex 2026-09-12 S#8).
     expect(isDerivedBuildOutput(join("Assets", "Models", "obj", "Hero.obj"))).toBe(false);
+    // A GAME'S OWN baked data in a folder called obj is not compiler output
+    // either, whatever its extension (Codex 2026-09-12 T#10).
+    expect(isDerivedBuildOutput(join("Assets", "obj", "terrain.cache"))).toBe(false);
+    expect(isDerivedBuildOutput(join("Assets", "Models", "obj", "Hero.cache"))).toBe(false);
+    // …while the names .NET actually writes there still count.
+    expect(isDerivedBuildOutput(join("Tools", "X", "obj", "Core.assets.cache"))).toBe(true);
+    expect(isDerivedBuildOutput(join("Tools", "X", "obj", "Core.csproj.FileListAbsolute.txt"))).toBe(true);
     expect(isDerivedBuildOutput(join("Assets", "obj", "Pig", "body.fbx"))).toBe(false);
     expect(isDerivedBuildOutput(join("Tools", "X", "bin", "Custom", "a.dll"))).toBe(false);
   });

@@ -94,10 +94,11 @@ describe("the play-through verdict the campaign reads back (measured 2026-09-10:
     ] } });
     const many = readPlaythroughVerdict(root, 0);
     expect(many.sessionCount).toBe(12);
+    // The writer's own reachedOutcome travels with each session now (T#11).
     expect(many.sessions).toEqual([
-      { index: 1, outcome: "Won", actions: 12, seconds: 8.5 },
-      { index: 2, outcome: "None", actions: 60, seconds: 45 },
-      { index: 3, outcome: "Refused", actions: 0, seconds: 0 },
+      { index: 1, outcome: "Won", actions: 12, seconds: 8.5, reachedOutcome: true },
+      { index: 2, outcome: "None", actions: 60, seconds: 45, reachedOutcome: false },
+      { index: 3, outcome: "Refused", actions: 0, seconds: 0, reachedOutcome: false },
     ]);
     expect(describePlaythrough(many)).toContain("; played 3: #1 Won in 12, #2 None in 60, #3 Refused in 0;");
     expect(describePlaythrough(many)).toMatch(/; catalog 12 session\(s\)$/);
@@ -230,5 +231,26 @@ describe("the writer's own stamp, not just the file's mtime (Codex 2026-09-12 R#
     expect(readPlaythroughVerdict(root, Date.now() - 60_000)).toMatchObject({ found: true, ok: true });
     write({ ...ok, measuredAt: undefined });
     expect(readPlaythroughVerdict(root, Date.now() - 60_000)).toMatchObject({ found: true, ok: true });
+  });
+});
+
+describe("a contradictory session record is rejected the same way everywhere (Codex 2026-09-12 T#11)", () => {
+  it("carries reachedOutcome through the reader, so the level count cannot count it", async () => {
+    const { finishedSessionIndices } = await import("./gdd-claims.js");
+    write({
+      ...ok,
+      record: {
+        ...ok.record,
+        sessionCount: 1,
+        sessions: [{ index: 1, startAccepted: true, actions: 1, outcome: "Won", reachedOutcome: false, seconds: 2 }],
+      },
+    });
+
+    const read = readPlaythroughVerdict(root, Date.now() - 60_000);
+
+    expect(read.sessions?.[0]).toMatchObject({ reachedOutcome: false });
+    // The helper rejected this record directly; it used to count once the
+    // record had passed through the reader, which dropped the field.
+    expect(finishedSessionIndices(read)).toEqual([]);
   });
 });

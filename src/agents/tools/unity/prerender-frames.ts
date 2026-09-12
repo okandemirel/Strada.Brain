@@ -62,6 +62,44 @@ export function materialForShading(shading: string | undefined): { glossiness: n
   }
 }
 
+
+/**
+ * The style a prerender run uses: explicit input, then the project's own
+ * derived profile, then neutral.
+ *
+ * NEUTRAL means neutral: the stock outline of 1.0 drew an outline on every
+ * project that had not been analysed yet, and a profile that explicitly said
+ * "no outline" had the family's outline put back over it (Codex 2026-09-12
+ * T#14). Absence is the only thing a default may answer for.
+ */
+export function resolvePrerenderStyle(
+  input: { outlineWidth?: number; plump?: number; headScale?: number; bodyColor?: unknown },
+  profile: { bodyColor?: string; outlineWidth?: number; plump?: number; headScale?: number; shading?: string },
+): Required<PrerenderStyle> {
+  const outlineRaw = Number(input.outlineWidth);
+  const plumpRaw = Number(input.plump);
+  const headRaw = Number(input.headScale);
+  return {
+    // A neutral grey when nothing named a colour — the default was a pink
+    // that belonged to one game (Codex 2026-09-11 B#21).
+    bodyColor: input.bodyColor !== undefined ? String(input.bodyColor) : (profile.bodyColor ?? "#9aa0a6"),
+    outlineWidth: Number.isFinite(outlineRaw) ? Math.max(0, Math.min(3, outlineRaw)) : (profile.outlineWidth ?? 0),
+    plump: (() => {
+      // No style profile means NO styling: the squash was a fixed 0.86 for
+      // every character and the plumpness default 1.2, so a realistic model
+      // was squashed like a chibi (Codex 2026-09-11 B#21). The Y factor now
+      // preserves volume, which is 1.0 when nothing asked for plumpness.
+      const p = Number.isFinite(plumpRaw) ? Math.min(1.5, Math.max(0.5, plumpRaw)) : (profile.plump ?? 1.0);
+      // Both horizontal axes are scaled by p, so the vertical compensation
+      // is 1/p² — 1/p left the volume 20% larger (Codex 2026-09-11 C#33).
+      const y = Number(Math.min(1.5, Math.max(0.5, 1 / (p * p))).toFixed(3));
+      return [p, y, p] as [number, number, number];
+    })(),
+    headScale: Number.isFinite(headRaw) ? Math.min(2, Math.max(0.5, headRaw)) : (profile.headScale ?? 1.0),
+    shading: (profile.shading ?? "flat") as Required<PrerenderStyle>["shading"],
+  };
+}
+
 export function buildRenderScript(style: Required<PrerenderStyle>): string {
   const neutral: [number, number, number] = [0.6, 0.63, 0.65];
   const body = hexToRgb(undefined, neutral);
@@ -316,33 +354,21 @@ export class PrerenderFramesTool implements ITool {
           headScale: profile.proportions.headScale,
           shading: profile.shading,
         };
-        // Family defaults fill any profile gaps.
-        if (styleProfileDefaults.outlineWidth === 0 && fam.outlineWidth !== 0 && profile.family !== "realistic") {
+        // Family defaults fill any profile GAP — not an explicit zero. A
+        // profile that says "no outline" had the family's outline put back
+        // (Codex 2026-09-12 T#14); absence is the only thing a default may
+        // answer for.
+        if (!Number.isFinite(profile.outline.width) && fam.outlineWidth !== 0 && profile.family !== "realistic") {
           styleProfileDefaults.outlineWidth = fam.outlineWidth;
         }
       }
     } catch {
       /* profile read is best-effort; explicit inputs and stock defaults still work */
     }
-    const style: Required<PrerenderStyle> = {
-      // A neutral grey when nothing named a colour — the default was a pink
-      // that belonged to one game (Codex 2026-09-11 B#21).
-      bodyColor: input["bodyColor"] !== undefined ? String(input["bodyColor"]) : (styleProfileDefaults.bodyColor ?? "#9aa0a6"),
-      outlineWidth: Number.isFinite(outlineRaw) ? Math.max(0, Math.min(3, outlineRaw)) : (styleProfileDefaults.outlineWidth ?? 1.0),
-      plump: (() => {
-        // No style profile means NO styling: the squash was a fixed 0.86 for
-        // every character and the plumpness default 1.2, so a realistic model
-        // was squashed like a chibi (Codex 2026-09-11 B#21). The Y factor now
-        // preserves volume, which is 1.0 when nothing asked for plumpness.
-        const p = Number.isFinite(plumpRaw) ? Math.min(1.5, Math.max(0.5, plumpRaw)) : (styleProfileDefaults.plump ?? 1.0);
-        // Both horizontal axes are scaled by p, so the vertical compensation
-        // is 1/p² — 1/p left the volume 20% larger (Codex 2026-09-11 C#33).
-        const y = Number(Math.min(1.5, Math.max(0.5, 1 / (p * p))).toFixed(3));
-        return [p, y, p] as [number, number, number];
-      })(),
-      headScale: Number.isFinite(headRaw) ? Math.min(2, Math.max(0.5, headRaw)) : (styleProfileDefaults.headScale ?? 1.0),
-      shading: styleProfileDefaults.shading ?? "flat",
-    };
+    const style: Required<PrerenderStyle> = resolvePrerenderStyle(
+      { outlineWidth: outlineRaw, plump: plumpRaw, headScale: headRaw, bodyColor: input["bodyColor"] },
+      styleProfileDefaults,
+    );
 
     const scriptRel = "Assets/Editor/StradaPrerenderRun.cs";
     const scriptCheck = await validatePath(context.projectPath, scriptRel, { allowMissingParents: true });

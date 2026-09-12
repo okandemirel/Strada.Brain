@@ -324,6 +324,26 @@ describe("conditions and loops reach exactly as far as their own clause (Codex 2
   });
 });
 
+describe("a declaration's own punctuation is not a separator (Codex 2026-09-12 T#12)", () => {
+  it("keeps a value that contains a semicolon, and a long one", () => {
+    const semi = `${REQUIRED_EVIDENCE_PREFIX} unity_playthrough scene="Assets/Scenes/Boot;Intro.unity"`;
+    expect(requiredToolArguments(semi)).toEqual([
+      { tool: "unity_playthrough", key: "scene", value: "Assets/Scenes/Boot;Intro.unity" },
+    ]);
+
+    const long = "Assets/Scenes/VeryLongDirectoryName/AnotherLevelDeeper/BootAndIntroSequence.unity";
+    expect(long.length).toBeGreaterThan(60);
+    expect(requiredToolArguments(`${REQUIRED_EVIDENCE_PREFIX} unity_playthrough scene="${long}"`)).toEqual([
+      { tool: "unity_playthrough", key: "scene", value: long },
+    ]);
+
+    // Two declarations still separate on their own semicolon.
+    const two = `${REQUIRED_EVIDENCE_PREFIX} unity_build_player target="Android"; unity_playthrough sessions="all"`;
+    expect(requiredToolsInPrompt(two).sort()).toEqual(["unity_build_player", "unity_playthrough"]);
+    expect(requiredToolArguments(two)).toHaveLength(2);
+  });
+});
+
 describe("a declaration is one call too (Codex 2026-09-12 S#13)", () => {
   it("does not let separate calls satisfy separate arguments of one declaration", () => {
     const prompt = `${REQUIRED_EVIDENCE_PREFIX} unity_build_player target="Android" scene="Boot"`;

@@ -453,7 +453,7 @@ export interface PlaythroughEvidence {
    * used to be read as index 0 with 0 actions, which is a played level as far
    * as a counter is concerned (Codex 2026-09-11 E#7). Absent stays absent.
    */
-  sessions?: Array<{ index?: number; outcome: string; actions?: number; seconds: number }>;
+  sessions?: Array<{ index?: number; outcome: string; actions?: number; seconds: number; reachedOutcome?: boolean }>;
   /**
    * What was on screen at the end of play (2026-09-10): world renderers, the
    * sprite/mesh names they bind, engine primitives, audio. The file scan

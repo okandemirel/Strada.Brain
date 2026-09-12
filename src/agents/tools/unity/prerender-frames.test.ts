@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { PrerenderFramesTool, buildRenderScript, materialForShading } from "./prerender-frames.js";
+import { PrerenderFramesTool, buildRenderScript, materialForShading, resolvePrerenderStyle } from "./prerender-frames.js";
 import { resolveUnityCliPath } from "./unity-cli-path.js";
 import type { ToolContext } from "../tool.interface.js";
 
@@ -47,6 +47,22 @@ describe("buildRenderScript", () => {
       outlineWidth: 0,
     });
     expect(script).toContain("if (false)");
+  });
+});
+
+describe("resolvePrerenderStyle (Codex 2026-09-12 T#14)", () => {
+  it("keeps an explicit no-outline, and asks for none when nothing does", () => {
+    // A profile that says "no outline" had the family's outline put back over
+    // it, and a project with no profile at all got the stock 1.0.
+    expect(resolvePrerenderStyle({}, { outlineWidth: 0 }).outlineWidth).toBe(0);
+    expect(resolvePrerenderStyle({}, {}).outlineWidth).toBe(0);
+    // An explicit input still wins, and the profile answers when the input is absent.
+    expect(resolvePrerenderStyle({ outlineWidth: 2 }, { outlineWidth: 0 }).outlineWidth).toBe(2);
+    expect(resolvePrerenderStyle({}, { outlineWidth: 1.5 }).outlineWidth).toBe(1.5);
+    // …and nothing else is invented: neutral colour, no squash, flat shading.
+    expect(resolvePrerenderStyle({}, {})).toMatchObject({
+      bodyColor: "#9aa0a6", plump: [1, 1, 1], headScale: 1, shading: "flat",
+    });
   });
 });
 

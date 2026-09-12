@@ -175,6 +175,11 @@ export function readPlaythroughVerdict(
                     ...(num(r.index) !== undefined ? { index: num(r.index) } : {}),
                     outcome: r.startAccepted === false ? "Refused" : str(r.outcome) ?? "None",
                     ...(num(r.actions) !== undefined ? { actions: num(r.actions) } : {}),
+                    // The writer's own "did it reach an outcome" travels: the
+                    // reader dropped it, so a record claiming Won with
+                    // reachedOutcome:false counted as a level played once it
+                    // had passed through here (Codex 2026-09-12 T#11).
+                    ...(typeof r.reachedOutcome === "boolean" ? { reachedOutcome: r.reachedOutcome } : {}),
                     seconds: num(r.seconds) ?? 0,
                   };
                 }),

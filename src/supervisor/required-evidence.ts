@@ -147,7 +147,21 @@ export function declaredEvidence(prompt: string): DeclaredEvidence {
   for (const line of prompt.split(/\r?\n/)) {
     const at = line.indexOf(REQUIRED_EVIDENCE_PREFIX);
     if (at < 0) continue;
-    for (const entry of line.slice(at + REQUIRED_EVIDENCE_PREFIX.length).split(";")) {
+    // SPLIT OUTSIDE QUOTES. A value with a semicolon in it —
+    // scene="Assets/Scenes/Boot;Intro.unity" — was cut in half and the whole
+    // declaration lost its arguments (Codex 2026-09-12 T#12).
+    const declarations: string[] = [];
+    {
+      let current = "";
+      let inQuote = false;
+      for (const ch of line.slice(at + REQUIRED_EVIDENCE_PREFIX.length)) {
+        if (ch === '"') { inQuote = !inQuote; current += ch; continue; }
+        if (ch === ";" && !inQuote) { declarations.push(current); current = ""; continue; }
+        current += ch;
+      }
+      declarations.push(current);
+    }
+    for (const entry of declarations) {
       const text = entry.trim();
       if (text === "") continue;
       const name = /^(unity_[a-z0-9_]+)/i.exec(text);
@@ -155,7 +169,9 @@ export function declaredEvidence(prompt: string): DeclaredEvidence {
       const tool = name[1]!.toLowerCase();
       tools.add(tool);
       const declared: Array<{ key: string; value: string }> = [];
-      for (const a of text.slice(name[0].length).matchAll(/([a-z_]+)\s*[:=]\s*"([^"]{1,60})"/gi)) {
+      // Values up to 200 characters: a path or a scene name easily passes
+      // sixty, and the pattern simply dropped the argument (T#12).
+      for (const a of text.slice(name[0].length).matchAll(/([a-z_]+)\s*[:=]\s*"([^"]{1,200})"/gi)) {
         const key = a[1]!.toLowerCase();
         const value = a[2]!.trim();
         if (value === "") continue;
