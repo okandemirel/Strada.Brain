@@ -96,6 +96,11 @@ export interface CampaignMilestone {
   /** Commit hash + file count from the envelope commit that closed it. */
   commitNote?: string;
   /** The mechanical test verdict observed when it landed green, if any. */
+  /**
+   * A tool this run was never offered, as the node reported it — kept out of
+   * the FULL output, because the 500-character excerpt drops it (S#10).
+   */
+  capabilityGap?: string;
   testVerdict?: string;
   /**
    * Whether that verdict came from the WHOLE suite rather than a filtered

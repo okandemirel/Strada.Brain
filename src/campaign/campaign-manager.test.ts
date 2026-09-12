@@ -2052,6 +2052,25 @@ describe("CampaignManager", () => {
     expect(report).toContain("compiles");
   });
 
+  it("the capability gap survives a long report (Codex 2026-09-12 S#10)", async () => {
+    // The gap is reported at the TOP of a node's output and the milestone
+    // keeps the last 500 characters, so a long report pushed it out of the
+    // excerpt and the delivery gate found nothing to block on.
+    const campaign = await runLadderToDelivery();
+    settleMilestone(
+      "EVIDENCE UNAVAILABLE — no tool for it in this run: unity_create_scene (the Unity bridge is not connected). " +
+      "That work is NOT done.\n\n" + "x".repeat(2_000) + "\nintegrated, all 42 tests pass",
+    );
+
+    await waitFor(() => expect(storage.get(campaign.id)!.state).not.toBe("executing"), { timeout: 5_000 });
+
+    const after = storage.get(campaign.id)!;
+    expect(after.milestones[2]!.resultExcerpt).not.toContain("EVIDENCE UNAVAILABLE");
+    expect(after.milestones[2]!.capabilityGap).toContain("unity_create_scene");
+    expect(after.state).not.toBe("done");
+    expect(messages.map((m) => m.text).join("\n")).toContain("no tool for it in this run");
+  });
+
   it("a sprint with no tool for part of its work blocks delivery (Codex 2026-09-12 R#1)", async () => {
     // Measured live 2026-09-12: the Unity Editor was down, unity_create_scene
     // was hidden, and the node reported the gap. Delivery may not step over a

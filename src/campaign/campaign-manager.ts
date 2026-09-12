@@ -258,6 +258,11 @@ export const UNRUNNABLE_HERE_RE =
  * unknown revision on either side answers nothing: a project that is not a git
  * tree is measured exactly as it was before.
  */
+/** The capability gap a node reported, out of its FULL output. */
+export function capabilityGapIn(output: string): string | undefined {
+  return /EVIDENCE UNAVAILABLE — no tool for it in this run: ([^\n]{1,200})/.exec(output)?.[1];
+}
+
 export function proofsSpanTwoRevisions(before: string, after: string): boolean {
   return before !== "" && after !== "" && before !== after;
 }
@@ -2366,6 +2371,10 @@ export class CampaignManager {
     if (cancelledOnPurpose) {
       milestone.status = "failed";
       milestone.resultExcerpt = output.slice(-500);
+      // THE GAP, OUT OF THE FULL OUTPUT. The excerpt keeps the last 500
+      // characters, so a gap reported before a long report simply vanished
+      // before the delivery gate looked for it (Codex 2026-09-12 S#10).
+      milestone.capabilityGap = capabilityGapIn(output) ?? milestone.capabilityGap;
       campaign.state = "failed";
       campaign.autoReviveAt = undefined;
       campaign.lastError = `NOT DELIVERED — ${milestone.title} was cancelled`;
@@ -2726,6 +2735,10 @@ export class CampaignManager {
       }
       milestone.status = "green";
       milestone.resultExcerpt = output.slice(-500);
+      // THE GAP, OUT OF THE FULL OUTPUT. The excerpt keeps the last 500
+      // characters, so a gap reported before a long report simply vanished
+      // before the delivery gate looked for it (Codex 2026-09-12 S#10).
+      milestone.capabilityGap = capabilityGapIn(output) ?? milestone.capabilityGap;
       milestone.commitNote = commitNote.trim() || undefined;
       // Record what the capture scan saw for EVERY green, not only the gated
       // ones: the gate above is keyed on planner wording, and a sprint whose
@@ -3010,7 +3023,7 @@ export class CampaignManager {
         // so the campaign revives twice and then asks a person to connect the
         // tooling instead of looping on something no retry can change.
         const capabilityGaps = campaign.milestones
-          .map((m) => /EVIDENCE UNAVAILABLE — no tool for it in this run: ([^\n]{1,200})/.exec(m.resultExcerpt ?? "")?.[1])
+          .map((m) => m.capabilityGap)
           .filter((x): x is string => x !== undefined);
         if (capabilityGaps.length > 0) {
           missingProofs.push(`a sprint could not do part of its work — no tool for it in this run: ${capabilityGaps[0]!.slice(0, 160)}`);
@@ -3630,6 +3643,10 @@ export class CampaignManager {
     if (milestone.id.startsWith("mcov") && nextGap?.status === "pending" && nextGap.id.startsWith("mcov")) {
       milestone.status = "failed";
       milestone.resultExcerpt = output.slice(-500);
+      // THE GAP, OUT OF THE FULL OUTPUT. The excerpt keeps the last 500
+      // characters, so a gap reported before a long report simply vanished
+      // before the delivery gate looked for it (Codex 2026-09-12 S#10).
+      milestone.capabilityGap = capabilityGapIn(output) ?? milestone.capabilityGap;
       campaign.currentMilestone += 1;
       this.persist(campaign);
       getLoggerSafe().warn("Gap sprint spent its attempts — moving to the next gap", {
@@ -3707,6 +3724,11 @@ export class CampaignManager {
         campaign.pendingCoverageGaps = rest.length > 0 ? rest : undefined;
         milestone.status = "failed";
         milestone.resultExcerpt = output.slice(-500);
+        milestone.capabilityGap = capabilityGapIn(output) ?? milestone.capabilityGap;
+      // THE GAP, OUT OF THE FULL OUTPUT. The excerpt keeps the last 500
+      // characters, so a gap reported before a long report simply vanished
+      // before the delivery gate looked for it (Codex 2026-09-12 S#10).
+      milestone.capabilityGap = capabilityGapIn(output) ?? milestone.capabilityGap;
         const sprints = take.map((item, i) => this.gapSprint(campaign, round, i, item));
         // BEFORE the final proof sprint, never after it: appended at the end
         // they ran after mfinal and the ladder then declared `done` with the
@@ -3777,6 +3799,11 @@ export class CampaignManager {
       if (pendingFinal >= 0) {
         milestone.status = "failed";
         milestone.resultExcerpt = output.slice(-500);
+        milestone.capabilityGap = capabilityGapIn(output) ?? milestone.capabilityGap;
+      // THE GAP, OUT OF THE FULL OUTPUT. The excerpt keeps the last 500
+      // characters, so a gap reported before a long report simply vanished
+      // before the delivery gate looked for it (Codex 2026-09-12 S#10).
+      milestone.capabilityGap = capabilityGapIn(output) ?? milestone.capabilityGap;
         // THE FINAL PROOF RUNS LAST. Selecting one that sits earlier in the
         // ladder meant its completion advanced straight back into the
         // exhausted gap behind it: four cycles, indices 1,2,1,2, zero build
