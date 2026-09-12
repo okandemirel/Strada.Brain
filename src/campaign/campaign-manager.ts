@@ -433,6 +433,25 @@ export function attemptRunId(milestone: { id: string; attemptStartedAtMs?: numbe
  * has the requirement in its own prompt ("- <requirement>"), and its truncated
  * TITLE is the last resort (Codex 2026-09-11 K#2).
  */
+/**
+ * The requirement text, and whether it is an IDENTITY or a guess.
+ *
+ * A row persisted before `coverageGap` existed keeps its requirement in its
+ * prompt; failing that, all that is left is the 60-character title, which
+ * truncates — "Boss Alpha: absent" and "Boss Beta: absent" both reduce to
+ * "Boss", so one question closed two different requirements (Codex 2026-09-12
+ * X#2). A guessed requirement may be scheduled and reported, never closed.
+ */
+export function coverageRequirementOf(m: { id?: string; title: string; prompt?: string; coverageGap?: string }): {
+  text: string;
+  identified: boolean;
+} {
+  if (m.coverageGap) return { text: m.coverageGap, identified: true };
+  const fromPrompt = /(?:^|\r?\n)- (.+?)\s*(?:\r?\n|$)/.exec(m.prompt ?? "")?.[1];
+  if (fromPrompt !== undefined) return { text: fromPrompt, identified: true };
+  return { text: m.title.replace(/^Coverage completion \d+\.\d+ — /, ""), identified: false };
+}
+
 function coverageGapOf(m: { title: string; prompt?: string; coverageGap?: string }): string {
   if (m.coverageGap) return m.coverageGap;
   // A LEGACY ROW'S OWN LINE, whatever its line endings are and whether the
@@ -442,6 +461,19 @@ function coverageGapOf(m: { title: string; prompt?: string; coverageGap?: string
   // 2026-09-12 W#5).
   const fromPrompt = /(?:^|\r?\n)- (.+?)\s*(?:\r?\n|$)/.exec(m.prompt ?? "")?.[1];
   return fromPrompt ?? m.title.replace(/^Coverage completion \d+\.\d+ — /, "");
+}
+
+/**
+ * A requirement's identity FOR CLOSURE: its own text, whitespace collapsed,
+ * case PRESERVED.
+ *
+ * `gapKey` lowercases so that one requirement written twice is scheduled once
+ * — right for scheduling, wrong for closure: "Assets/Art/Hero.png" and
+ * "Assets/Art/hero.png" are two files, and a positive verdict about one
+ * closed the other (Codex 2026-09-12 X#2).
+ */
+export function requirementKey(text: string): string {
+  return text.trim().replace(/\s+/g, " ");
 }
 
 /** A coverage requirement's identity: its own text, normalized — never a prefix. */
@@ -599,6 +631,7 @@ export function reconcileCapabilityGaps(
     status?: string;
     coverageGap?: string;
     capabilityGap?: string;
+    attemptStartedAtMs?: number;
   }>,
 ): string[] {
   const repairs = milestones
@@ -609,7 +642,7 @@ export function reconcileCapabilityGaps(
     // reconciling the very gap it was reporting — both marks vanished and
     // the work was never done (Codex 2026-09-12 V#3).
     .filter(({ m }) => m.capabilityGap === undefined || gapKey(capabilityGapWork(m.capabilityGap)) !== gapKey(coverageGapOf(m)))
-    .map(({ m, at }) => ({ key: gapKey(coverageGapOf(m)), at }));
+    .map(({ m, at }) => ({ key: gapKey(coverageGapOf(m)), at, startedAtMs: m.attemptStartedAtMs }));
   if (repairs.length === 0) return [];
   const reconciled: string[] = [];
   milestones.forEach((m, at) => {
@@ -620,7 +653,16 @@ export function reconcileCapabilityGaps(
     // LATER report of the same missing tool — the ladder had said the tool
     // went away again, and the mark for it vanished on the strength of work
     // done before that happened (Codex 2026-09-12 W#6).
-    if (!repairs.some((r) => r.key === key && r.at > at)) return;
+    // BY THE CLOCK when both sides carry one: ladder POSITION is mutable —
+    // work is inserted before the final sprint and finals are moved — so a
+    // restored or reordered row reversed the judgement without changing the
+    // evidence (Codex 2026-09-12 X#4).
+    const reportedAt = m.attemptStartedAtMs;
+    if (!repairs.some((r) => {
+      if (r.key !== key) return false;
+      if (r.startedAtMs !== undefined && reportedAt !== undefined) return r.startedAtMs > reportedAt;
+      return r.at > at;
+    })) return;
     reconciled.push(gap);
     delete (m as { capabilityGap?: string }).capabilityGap;
   });
@@ -2105,7 +2147,19 @@ export class CampaignManager {
           // 2026-09-11 L#3).
           const stopped = this.storage.get(campaign.id);
           const generation = (stopped?.stopGeneration ?? 0);
-          if (stopped && stopped.stopRequestedAt === undefined) {
+          // …AND ONLY FOR THE WORK THE CAMPAIGN IS DOING NOW. The handler
+          // below rejects a stop about earlier work, but the stamp above it
+          // did not — so cancelling an old owned task left a stop mark that
+          // no handler would ever clear, and it then blocked every submission
+          // (Codex 2026-09-12 X#1). Same eligibility rule, checked first.
+          const live = stopped?.milestones[stopped.currentMilestone];
+          const liveRoot = live?.taskId ? rootOf(live.taskId) : undefined;
+          const aboutCurrentWork =
+            live?.taskId === taskId
+            || liveRoot === undefined
+            || cancelledRoot === undefined
+            || liveRoot === cancelledRoot;
+          if (stopped && stopped.stopRequestedAt === undefined && aboutCurrentWork) {
             stopped.stopRequestedAt = Date.now();
             this.persist(stopped);
           }
@@ -4848,9 +4902,8 @@ export class CampaignManager {
     // describe another (Codex 2026-09-12 W#4). Unknown binds nothing, so a
     // dirty tree is re-judged every round.
     const revisionForClosure = this.projectIsDirty() ? "" : this.projectRevision();
-    const unclosed = campaign.milestones.filter(
-      (m) => m.id.startsWith("mcov") && m.status === "failed" && !closureHolds(m, revisionForClosure),
-    );
+    const failedRepairs = campaign.milestones.filter((m) => m.id.startsWith("mcov") && m.status === "failed");
+    const unclosed = failedRepairs.filter((m) => !closureHolds(m, revisionForClosure));
     if (unclosed.length === 0) return { open: [] };
     const gddForGaps = campaign.gddText ?? (campaign.gddPath ? readGddFile(this.projectRoot, campaign.gddPath) : undefined);
     try {
@@ -4861,26 +4914,34 @@ export class CampaignManager {
       // requirement were asked about separately, and opposite answers — one
       // id delivered, the other not — stamped BOTH of them closed (Codex
       // 2026-09-12 W#2).
+      // EVERY SIBLING ROW FOR THE REQUIREMENT, cached ones included: a
+      // second repair for the same requirement kept its stale closure while
+      // the fresh judgment said open, and the report rendered its delivered
+      // line anyway (Codex 2026-09-12 X#5).
       const byRequirement = new Map<string, CampaignMilestone[]>();
-      for (const m of unclosed) {
-        const key = gapKey(coverageGapOf(m));
+      for (const m of failedRepairs) {
+        const key = requirementKey(coverageGapOf(m));
         byRequirement.set(key, [...(byRequirement.get(key) ?? []), m]);
       }
-      const judged = await this.planner.resolveCoverageGaps(
-        gddForGaps,
-        [...byRequirement.values()].map((ms) => coverageGapOf(ms[0]!)),
-        campaign.milestones,
-      );
-      const closed = new Set(judged.closed.map(gapKey));
-      const stillOpen = new Set(judged.open.map(gapKey));
+      const needsJudging = new Set(unclosed.map((m) => requirementKey(coverageGapOf(m))));
+      const asked = [...byRequirement.entries()]
+        .filter(([key]) => needsJudging.has(key))
+        .map(([, ms]) => coverageGapOf(ms[0]!));
+      const judged = await this.planner.resolveCoverageGaps(gddForGaps, asked, campaign.milestones);
+      const closed = new Set(judged.closed.map(requirementKey));
+      const stillOpen = new Set(judged.open.map(requirementKey));
       // NOT ACROSS A PUBLICATION: a closure read while the tree was moving
       // describes neither revision (V#4).
       const stillSameRevision = this.projectRevision() === revisionForClosure;
       for (const [key, ms] of byRequirement) {
+        if (!needsJudging.has(key)) continue;
         // Never a key the answer names on both sides.
         const isClosed = stillSameRevision && closed.has(key) && !stillOpen.has(key);
         for (const m of ms) {
-          if (isClosed) {
+          // …and only where the requirement is an IDENTITY: a truncated title
+          // merges two different requirements, so it may be scheduled and
+          // reported but never closed (Codex 2026-09-12 X#2).
+          if (isClosed && coverageRequirementOf(m).identified) {
             m.coverageClosed = true;
             m.coverageClosedRevision = revisionForClosure;
             continue;
@@ -4900,8 +4961,13 @@ export class CampaignManager {
         closed: judged.closed.length,
         open: judged.open.length,
       });
-      if (!stillSameRevision) return { open: [...byRequirement.values()].map((ms) => coverageGapOf(ms[0]!)) };
-      return { open: judged.open };
+      if (!stillSameRevision) return { open: asked };
+      // A requirement whose identity is only a truncated title cannot be
+      // closed, so it stays open however the audit answered.
+      const unidentified = [...byRequirement.entries()]
+        .filter(([key, ms]) => needsJudging.has(key) && !ms.some((m) => coverageRequirementOf(m).identified))
+        .map(([, ms]) => coverageGapOf(ms[0]!));
+      return { open: [...new Set([...judged.open, ...unidentified])] };
     } catch (err) {
       // An audit that COULD NOT RUN is not an audit that passed, and this
       // wording is the one the unmeasurable-proof rule knows: the campaign
@@ -5883,6 +5949,20 @@ export class CampaignManager {
    */
   private persist(campaign: Campaign): void {
     campaign.updatedAt = Date.now();
+    // A SAVE FROM AN EARLIER GENERATION IS HISTORY, not an update. A person
+    // revived the campaign while the independent reviewer was still awaiting;
+    // when it returned, its copy — old state, old ladder, the stop that
+    // revival had cleared — was written back over the revived row (Codex
+    // 2026-09-12 X#1). The obsolete writer's changes are dropped, loudly.
+    const before = this.storage.get(campaign.id);
+    if (before !== undefined && (before.stopGeneration ?? 0) > (campaign.stopGeneration ?? 0)) {
+      getLoggerSafe().warn("Refused a campaign save from an earlier generation", {
+        id: campaign.id,
+        writing: campaign.stopGeneration ?? 0,
+        stored: before.stopGeneration ?? 0,
+      });
+      return;
+    }
     if (campaign.stopRequestedAt === undefined) {
       const stored = this.storage.get(campaign.id);
       if (

@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { attemptRunId, CampaignManager, capabilityGapWork, closureHolds, MAX_REPAIRS_PER_REQUIREMENT, repairsForRequirement, withRepairBudget, deliveryFailureKinds, proofSignature, reconcileCapabilityGaps, rememberOwnedTask, OWNERSHIP_LEDGER_LIMIT, unscheduledGaps } from "./campaign-manager.js";
+import { attemptRunId, CampaignManager, capabilityGapWork, closureHolds, coverageRequirementOf, MAX_REPAIRS_PER_REQUIREMENT, repairsForRequirement, withRepairBudget, deliveryFailureKinds, proofSignature, reconcileCapabilityGaps, rememberOwnedTask, OWNERSHIP_LEDGER_LIMIT, unscheduledGaps } from "./campaign-manager.js";
 
 /**
  * Measured live 2026-09-04: told not to audit, the final sprint answered
@@ -120,6 +120,46 @@ describe("the delivery budget's signature is a set of KINDS (Codex 2026-09-11 I#
     // Order does not matter; the set does.
     expect(proofSignature(["no test run was observed", "the project does not compile (3 error(s))"], { structureRefused: false, compileBroken: true }))
       .toBe(proofSignature(["the project does not compile (12 error(s))", "no test run was observed"], { structureRefused: false, compileBroken: true }));
+  });
+});
+
+describe("a requirement's identity, and what a title can prove (Codex 2026-09-12 X#2)", () => {
+  it("is identified by its own field or its own prompt line, never by a truncated title", () => {
+    expect(coverageRequirementOf({ title: "t", coverageGap: "Boss Alpha: absent" })).toEqual({
+      text: "Boss Alpha: absent",
+      identified: true,
+    });
+    expect(coverageRequirementOf({ title: "t", prompt: "Work\r\n- Boss Beta: absent" })).toEqual({
+      text: "Boss Beta: absent",
+      identified: true,
+    });
+    // All that is left is a 60-character title: two different requirements
+    // reduce to the same words, so this one may be scheduled and reported —
+    // never closed.
+    const guessed = coverageRequirementOf({ title: "Coverage completion 1.1 — Boss", prompt: "no bullet here" });
+    expect(guessed).toEqual({ text: "Boss", identified: false });
+  });
+});
+
+describe("a repair closes what came before it, by the clock (Codex 2026-09-12 X#4)", () => {
+  const gap = "unity_generate_audio (the Unity bridge is not connected)";
+  it("reads the attempt times when both sides carry them, not the ladder position", () => {
+    // Ladder POSITION is mutable: work is inserted before the final sprint
+    // and finals are moved, so a restored row reversed the judgement without
+    // changing the evidence.
+    const reorderedButOlderRepair = [
+      { id: "m1", title: "Audio", status: "green", capabilityGap: gap, attemptStartedAtMs: 300 },
+      { id: "mcov1", title: "c", status: "green", coverageGap: capabilityGapWork(gap), attemptStartedAtMs: 200 },
+    ];
+    expect(reconcileCapabilityGaps(reorderedButOlderRepair)).toEqual([]);
+    expect(reorderedButOlderRepair[0]!.capabilityGap).toBe(gap);
+
+    // The repair that really did run later closes it, wherever it sits.
+    const laterRepairFirst = [
+      { id: "mcov1", title: "c", status: "green", coverageGap: capabilityGapWork(gap), attemptStartedAtMs: 400 },
+      { id: "m1", title: "Audio", status: "green", capabilityGap: gap, attemptStartedAtMs: 300 },
+    ];
+    expect(reconcileCapabilityGaps(laterRepairFirst)).toEqual([gap]);
   });
 });
 

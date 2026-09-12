@@ -20,6 +20,8 @@ import { TaskStatus } from "../tasks/types.js";
 let onTaskCompleted: (() => void) | undefined;
 /** The NUnit record a settling sprint leaves behind; undefined = it ran no suite. */
 let runRecordOnSettle: Record<string, unknown> | undefined;
+/** Real git checkouts a test made, cleaned up with the fixture. */
+const repos: string[] = [];
 
 class FakeTaskManager extends EventEmitter {
   submitted: Array<{ prompt: string; chatId: string }> = [];
@@ -350,6 +352,7 @@ describe("CampaignManager", () => {
   afterEach(() => {
     storage.close();
     rmSync(dir, { recursive: true, force: true });
+    for (const r of repos.splice(0)) rmSync(r, { recursive: true, force: true });
   });
 
   /**
@@ -3213,6 +3216,160 @@ describe("CampaignManager", () => {
     const after = storage.get(campaign.id)!;
     expect(after.state).toBe("failed");
     expect(after.milestones.filter((m) => m.coverageClosed === true)).toHaveLength(0);
+  });
+
+  /**
+   * A campaign on a REAL clean checkout, so a recorded closure can hold for
+   * the revision it names — the git-less fixture leaves every revision
+   * unknown, and unknown binds nothing.
+   */
+  const onACleanCheckout = async (
+    rows: Array<Record<string, unknown>>,
+    resolve: (reqs: readonly string[]) => { closed: string[]; open: string[] },
+    asked: string[][],
+  ): Promise<{ id: string; head: string }> => {
+    const { execFileSync } = await import("node:child_process");
+    const repoRoot = mkdtempSync(join(tmpdir(), "campaign-clean-repo-"));
+    repos.push(repoRoot);
+    mkdirSync(join(repoRoot, "docs"), { recursive: true });
+    writeFileSync(join(repoRoot, "docs", "Game_GDD.md"), "# GDD\n\nThe game ships a boss.");
+    const git = (...args: string[]): void => { execFileSync("git", ["-C", repoRoot, ...args], { encoding: "utf8" }); };
+    git("init", "-q");
+    git("config", "user.email", "t@t");
+    git("config", "user.name", "t");
+    git("add", "-A");
+    git("commit", "-q", "-m", "the tree the closure was read on");
+    const head = execFileSync("git", ["-C", repoRoot, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+
+    tasks = new FakeTaskManager();
+    storage.close();
+    storage = new CampaignStorage(join(dir, `campaigns-clean-${repos.length}.db`));
+    manager = new CampaignManager({
+      storage,
+      planner: {
+        planMilestones: vi.fn().mockResolvedValue(LADDER),
+        auditCoverage: vi.fn().mockResolvedValue([]),
+        resolveCoverageGaps: vi.fn(async (_gdd: string, reqs: readonly string[]) => {
+          asked.push([...reqs]);
+          return resolve(reqs);
+        }),
+      } as unknown as CampaignPlanner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async (chatId, text) => { messages.push({ chatId, text }); },
+      projectRoot: repoRoot,
+      retryAdoptionGraceMs: 10, completedSettleDelayMs: 0, milestoneTimeBoxMs: 60 * 60_000,
+      verifyCompile: async () => ({ ok: true, ran: true, errors: 0 }),
+    });
+    manager.attachEvents();
+    const campaign = manager.startFromGdd(ctx, "# GDD\n\nThe game ships a boss.", "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1), { timeout: 15_000 });
+    const restored = storage.get(campaign.id)!;
+    restored.milestones = [
+      { ...restored.milestones[0]!, status: "green", taskId: undefined },
+      ...rows.map((r) => ({ ...r, head })),
+      { id: "mfinal1", title: "Final delivery proofs", prompt: "Prove it.", status: "green", attempts: 1 },
+    ] as never;
+    restored.currentMilestone = 1;
+    restored.state = "executing";
+    storage.save(restored);
+    return { id: campaign.id, head };
+  };
+
+  it("a sibling row's stale closure is withdrawn with its requirement (Codex 2026-09-12 X#5)", async () => {
+    // The closure check ran BEFORE grouping, so a second repair for the same
+    // requirement kept its stale closure while the fresh judgment said open —
+    // and the report rendered its delivered line anyway.
+    const asked: string[][] = [];
+    const { id, head } = await onACleanCheckout(
+      [
+        { id: "mcov1", title: "c", coverageGap: "Boss: absent", prompt: "p", status: "running", attempts: 2, taskId: "task_1" },
+        { id: "mcov2", title: "c", coverageGap: "Boss: absent", prompt: "p", status: "failed", attempts: 2, coverageClosed: true },
+      ],
+      (reqs) => ({ closed: [], open: [...reqs] }),
+      asked,
+    );
+    // The cached row's closure names THIS revision, so it would hold.
+    const seeded = storage.get(id)!;
+    seeded.milestones[2]!.coverageClosedRevision = head;
+    storage.save(seeded);
+
+    tasks.emit("task:failed", "task_1", "the boss scene will not compile");
+    await waitFor(() => expect(storage.get(id)!.state).not.toBe("executing"), { timeout: 15_000 });
+
+    const after = storage.get(id)!;
+    expect(asked).toEqual([["Boss: absent"]]);
+    expect(after.milestones.filter((m) => m.coverageClosed === true)).toHaveLength(0);
+    expect(after.state).not.toBe("done");
+    expect(messages.map((m) => m.text).join("\n")).not.toContain("found delivered by the evidence audit");
+  });
+
+  it("a requirement that differs only in CASE is its own requirement (Codex 2026-09-12 X#2)", async () => {
+    // `gapKey` lowercases, which is right for scheduling one sprint per
+    // requirement and wrong for closure: "Assets/Art/Hero.png" and
+    // ".../hero.png" are two files, and a verdict about one closed the other.
+    const asked: string[][] = [];
+    const { id } = await onACleanCheckout(
+      [
+        { id: "mcov1", title: "c", coverageGap: "Boss: absent", prompt: "p", status: "running", attempts: 2, taskId: "task_1" },
+        { id: "mcov2", title: "c", coverageGap: "boss: ABSENT", prompt: "p", status: "failed", attempts: 2 },
+        // A row whose requirement survives only as a TRUNCATED TITLE: it may
+        // be reported, never closed, however the audit answers.
+        { id: "mcov3", title: "Coverage completion 1.1 — Boss", prompt: "no bullet here", status: "failed", attempts: 2 },
+      ],
+      (reqs) => ({
+        closed: reqs.filter((r) => r !== "boss: ABSENT"),
+        open: reqs.filter((r) => r === "boss: ABSENT"),
+      }),
+      asked,
+    );
+
+    tasks.emit("task:failed", "task_1", "the boss scene will not compile");
+    await waitFor(() => expect(storage.get(id)!.state).not.toBe("executing"), { timeout: 15_000 });
+
+    const after = storage.get(id)!;
+    expect(asked[0]!.slice().sort()).toEqual(["Boss", "Boss: absent", "boss: ABSENT"]);
+    // Only the row whose own text the audit closed is closed.
+    expect(after.milestones.find((m) => m.id === "mcov1")!.coverageClosed).toBe(true);
+    expect(after.milestones.find((m) => m.id === "mcov2")!.coverageClosed).toBeUndefined();
+    // The audit said the title row's requirement was delivered; a title
+    // cannot carry that, so it stays open.
+    expect(after.milestones.find((m) => m.id === "mcov3")!.coverageClosed).toBeUndefined();
+    expect(`${after.lastError}`).toContain("Boss");
+    // …and the one still open keeps the campaign from delivering.
+    expect(after.state).not.toBe("done");
+    expect(`${after.lastError}`).toContain("boss: ABSENT");
+  });
+
+  it("a save from an EARLIER generation is refused (Codex 2026-09-12 X#1)", async () => {
+    // A person revived the campaign while a settlement was awaiting; when it
+    // returned, its copy — old state, old ladder, the stop that revival had
+    // cleared — was written back over the revived row. Codex reproduced it
+    // through the independent reviewer's await.
+    let id: string | undefined;
+    const campaign = await runToSpentRemediation(
+      (reqs) => {
+        // The revival happens while the audit is in flight: a new generation,
+        // a cleared stop and a state of its own.
+        if (id !== undefined) {
+          const live = storage.get(id)!;
+          live.stopGeneration = (live.stopGeneration ?? 0) + 1;
+          live.stopRequestedAt = undefined;
+          live.state = "planning";
+          live.lastError = "revived by a person";
+          storage.save(live);
+        }
+        return { closed: [...reqs], open: [] };
+      },
+      (cid) => { id = cid; },
+    );
+
+    // The settlement's own writes are dropped: the revived row stands.
+    await new Promise((r) => setTimeout(r, 500));
+    const after = storage.get(campaign.id)!;
+    expect(after.stopGeneration).toBe(1);
+    expect(after.state).toBe("planning");
+    expect(after.lastError).toBe("revived by a person");
+    expect(after.deliveryReported).not.toBe(true);
   });
 
   it("a stop recorded DURING the coverage audit is not lost, on either terminal path (Codex 2026-09-12 W#1)", async () => {
