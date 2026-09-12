@@ -2037,8 +2037,11 @@ export class BackgroundExecutor {
           this.failGoalExecution(task, activeGoalTree, `publication failed: ${taskPublicationLoss}`, 0);
         }
         // …and a task that ALREADY reported a terminal outcome does not get a
-        // second one; the reason is logged above either way.
-        if (pendingCompletion !== undefined) {
+        // second one; the reason is logged above either way. A CANCEL is a
+        // terminal outcome too: the failure branch did not check it, so a
+        // cancelled task was failed over its own cancellation (Codex
+        // 2026-09-12 S#3).
+        if (pendingCompletion !== undefined && !signal.aborted && externalSignal?.aborted !== true) {
           try {
             this.taskManager.fail(task.id, `PUBLICATION FAILED: ${taskPublicationLoss}. The workspace is kept for salvage.`);
           } catch { /* the task may already be terminal */ }
@@ -2068,6 +2071,12 @@ export class BackgroundExecutor {
           // line to say so (Codex 2026-09-12 Q#8). It is retried.
           const output = pendingCompletion;
           const settle = (attempt: number): void => {
+            // Every attempt re-reads the abort: a cancel that lands between
+            // two retries is the last word (S#3).
+            if (signal.aborted || externalSignal?.aborted === true) {
+              getLogger().info("Task was cancelled before its completion could be recorded", { taskId: task.id });
+              return;
+            }
             try {
               this.taskManager?.complete(task.id, output);
               pendingGoalCompletion?.();

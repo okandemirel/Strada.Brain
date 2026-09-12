@@ -126,6 +126,10 @@ describe("TaskManager", () => {
 
   it("strips provider reasoning artifacts before completing a task", () => {
     const storage = {
+      // complete() refuses to overwrite a terminal state now (Codex
+      // 2026-09-12 S#3), so the stub answers what an executing task looks
+      // like.
+      load: vi.fn().mockReturnValue({ id: "task_reasoning123", status: "executing" }),
       updateResult: vi.fn(),
     } as any;
     const manager = new TaskManager(storage, {} as any);
@@ -618,5 +622,33 @@ describe("a task a restart PAUSED can be resumed (measured live 2026-09-11 21:12
       storage.findLatestByGoalRoot.mockReturnValue(buildTask({ ...paused, status } as never));
       expect(manager.resumeGoalRoot("goal_root")).toBeNull();
     }
+  });
+});
+
+describe("settlement is a conditional transition (Codex 2026-09-12 S#3)", () => {
+  it("does not overwrite a cancel, and does not complete twice", () => {
+    const settled: string[] = [];
+    const storage = {
+      load: vi.fn().mockReturnValue({ id: "task_c", status: "cancelled" }),
+      updateResult: vi.fn(() => { settled.push("result"); }),
+    } as any;
+    const manager = new TaskManager(storage, {} as any);
+    manager.on("task:completed", () => { settled.push("emitted"); });
+
+    manager.complete("task_c" as Task["id"], "the work finished after the cancel");
+
+    // A cancelled task stays cancelled: nothing written, nothing emitted.
+    expect(settled).toEqual([]);
+
+    // …and a task that is already COMPLETED is not completed a second time,
+    // which is what a throwing listener used to cause.
+    storage.load.mockReturnValue({ id: "task_c", status: "completed" });
+    manager.complete("task_c" as Task["id"], "again");
+    expect(settled).toEqual([]);
+
+    // An executing task settles normally.
+    storage.load.mockReturnValue({ id: "task_c", status: "executing" });
+    manager.complete("task_c" as Task["id"], "done");
+    expect(settled).toEqual(["result", "emitted"]);
   });
 });

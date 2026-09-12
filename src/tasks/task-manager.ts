@@ -734,6 +734,18 @@ export class TaskManager extends EventEmitter {
    * Mark a task as completed with result.
    */
   complete(taskId: TaskId, result: string): void {
+    // A TERMINAL STATE IS NOT OVERWRITTEN. This wrote and emitted
+    // unconditionally, so a completion arriving after a cancel replaced it,
+    // and a listener that threw made the caller repeat the write — the task
+    // emitted `completed` twice (Codex 2026-09-12 S#3).
+    const current = this.storage.load(taskId);
+    if (current && TERMINAL_STATUSES.has(current.status)) {
+      getLogger().info("Task completion ignored — the task is already settled", {
+        taskId,
+        status: current.status,
+      });
+      return;
+    }
     const sanitizedResult = sanitizeSecrets(stripVisibleProviderArtifacts(result));
     this.storage.updateResult(taskId, sanitizedResult);
     this.abortControllers.delete(taskId);
