@@ -350,9 +350,15 @@ export function createSupervisorExecuteNodeBridge(params: {
             nodeId: String(node.id),
             unavailable,
           });
+          // A STABLE FIRST LINE: the campaign's delivery gate reads it out of
+          // the stored report excerpt, and the wording is the one
+          // UNMEASURABLE_PROOF_RE recognises, so the campaign revives twice
+          // and then asks a person to connect the tooling rather than looping
+          // (Codex 2026-09-12 R#1).
           result.output =
-            `${result.output ?? ""}\n\nEVIDENCE NOT POSSIBLE HERE: the task asks for ${unavailable.join("; ")}. ` +
-            "That work is NOT done and nothing in this report should be read as proof of it.";
+            `EVIDENCE UNAVAILABLE — no tool for it in this run: ${unavailable.join("; ")}. ` +
+            "That work is NOT done and nothing in this report should be read as proof of it.\n\n" +
+            `${result.output ?? ""}`;
         }
         if (shortfalls.length > 0) {
           const reason = describeEvidenceShortfall(shortfalls);

@@ -101,7 +101,7 @@ describe("createSupervisorExecuteNodeBridge", () => {
 
     // Named as a gap, in the report, instead of failing forever…
     expect(offered.status).toBe("ok");
-    expect(offered.output).toContain("EVIDENCE NOT POSSIBLE HERE");
+    expect(offered.output).toContain("EVIDENCE UNAVAILABLE — no tool for it in this run");
     expect(offered.output).toContain("unity_create_scene");
     expect(offered.output).toContain("NOT done");
 

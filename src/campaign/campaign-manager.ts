@@ -263,7 +263,7 @@ export const UNRUNNABLE_HERE_RE =
  * names itself ("no test verifier is configured") and still counts.
  */
 export const UNMEASURABLE_PROOF_RE =
-  /(?:the compile check did not run|the player build did not run|no compile verifier is configured|no player builder is configured|no player runner is configured|unity_build_player is not registered|no test verifier is configured|the built player was never played to a verdict)/i;
+  /(?:no tool for it in this run|the compile check did not run|the player build did not run|no compile verifier is configured|no player builder is configured|no player runner is configured|unity_build_player is not registered|no test verifier is configured|the built player was never played to a verdict)/i;
 /**
  * Does this round's shortfall include a proof absent TOOLING explains? ANY
  * such proof counts: requiring all of them meant one game-shaped proof beside
@@ -2956,6 +2956,17 @@ export class CampaignManager {
         }
         // A requirement the audit NAMED and no sprint has run yet is missing
         // work, and delivery may not step over it (Codex 2026-09-11 I#4).
+        // A sprint that could not even ATTEMPT part of its work — no tool for
+        // it was offered to the run — is a gap delivery may not step over
+        // (Codex 2026-09-12 R#1). The wording matches UNMEASURABLE_PROOF_RE,
+        // so the campaign revives twice and then asks a person to connect the
+        // tooling instead of looping on something no retry can change.
+        const capabilityGaps = campaign.milestones
+          .map((m) => /EVIDENCE UNAVAILABLE — no tool for it in this run: ([^\n]{1,200})/.exec(m.resultExcerpt ?? "")?.[1])
+          .filter((x): x is string => x !== undefined);
+        if (capabilityGaps.length > 0) {
+          missingProofs.push(`a sprint could not do part of its work — no tool for it in this run: ${capabilityGaps[0]!.slice(0, 160)}`);
+        }
         const queuedGaps = campaign.pendingCoverageGaps ?? [];
         if (queuedGaps.length > 0) {
           missingProofs.push(

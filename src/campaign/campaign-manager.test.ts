@@ -2043,6 +2043,23 @@ describe("CampaignManager", () => {
     expect(report).toContain("compiles");
   });
 
+  it("a sprint with no tool for part of its work blocks delivery (Codex 2026-09-12 R#1)", async () => {
+    // Measured live 2026-09-12: the Unity Editor was down, unity_create_scene
+    // was hidden, and the node reported the gap. Delivery may not step over a
+    // piece of work nothing in the run could even attempt.
+    const campaign = await runLadderToDelivery();
+    settleMilestone(
+      "EVIDENCE UNAVAILABLE — no tool for it in this run: unity_create_scene (the Unity bridge is not connected). " +
+      "That work is NOT done and nothing in this report should be read as proof of it.\n\nintegrated, all 42 tests pass",
+    );
+
+    await waitFor(() => expect(storage.get(campaign.id)!.state).not.toBe("executing"), { timeout: 5_000 });
+
+    expect(storage.get(campaign.id)!.state).not.toBe("done");
+    const said = messages.map((m) => m.text).join("\n");
+    expect(said).toContain("no tool for it in this run");
+  });
+
   it("does NOT declare delivery once the structural refusal has outlasted its budget", async () => {
     // Measured live 2026-09-04 21:37. The campaign printed
     //   🏁 Campaign delivery — game built, 1 sprint did NOT land green
@@ -2805,6 +2822,10 @@ describe("CampaignManager", () => {
     expect(unmeasurable("play-through: IPlaythroughDriver is not registered in the service container")).toBe(false);
     expect(unmeasurable("the project does not compile (12 error(s))")).toBe(false);
     expect(unmeasurable("inside the built player: session 1 never ended")).toBe(false);
+
+    // A sprint that had NO TOOL for part of its work is the same class as
+    // absent tooling: no retry produces the tool (Codex 2026-09-12 R#1).
+    expect(unmeasurable("a sprint could not do part of its work — no tool for it in this run: unity_create_scene (the Unity bridge is not connected)")).toBe(true);
 
     // ANY unmeasurable proof counts: requiring ALL of them let one
     // game-shaped proof beside it reset the counter forever (D#3).
