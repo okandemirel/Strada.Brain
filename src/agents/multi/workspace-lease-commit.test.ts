@@ -1017,6 +1017,40 @@ describe("lease commit replay (measured 2026-09-10: three worker commits danglin
     expect(git(source, "show :Assets/Scripts/Existing.cs")).toBe("the person's staged version");
   });
 
+  it("a commit whose metadata cannot be READ is a hole in the series (Codex 2026-09-12 T#4)", async () => {
+    // A failed `git show` dropped its commit from the list, so a two-commit
+    // series looked like a one-commit series: the replay published the prefix
+    // and reported skipped: 0.
+    makeGitRepo();
+    const before = git(source, "rev-parse HEAD");
+    let shows = 0;
+    const mgr = new WorkspaceLeaseManager({
+      projectRoot: source,
+      leaseRoot,
+      additionalExcludes: ["Library", "Temp", "Logs", "Builds", "obj"],
+      commandRunner: (async (spec: { args: string[] }) => {
+        // The SECOND commit's metadata read fails.
+        if (spec.args.includes("show") && spec.args.includes("-s") && ++shows === 2) {
+          return { exitCode: 1, stdout: "", stderr: "simulated object read failure", timedOut: false };
+        }
+        return runProcess(spec as never);
+      }) as never,
+    });
+    const lease = await mgr.acquireLease({ label: "t" });
+    writeFileSync(join(lease.path, "Assets", "Scripts", "One.cs"), "1", "utf8");
+    git(lease.path, "add -A");
+    git(lease.path, 'commit -q -m "feat: one"');
+    writeFileSync(join(lease.path, "Assets", "Scripts", "Two.cs"), "2", "utf8");
+    git(lease.path, "add -A");
+    git(lease.path, 'commit -q -m "feat: two"');
+
+    const result = await lease.commit();
+    await lease.release();
+
+    expect(git(source, "rev-parse HEAD")).toBe(before);
+    expect(result.commitsReplayed?.replayed).toBe(0);
+  });
+
   it("a failed git INSPECTION aborts the chain too, not just a failed stage (Codex 2026-09-12 S#5)", async () => {
     // Two paths incremented `skipped` without aborting: a diff-tree that could
     // not be read, and a write-tree that failed. Both moved HEAD to a prefix

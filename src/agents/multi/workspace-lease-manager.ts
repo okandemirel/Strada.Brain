@@ -651,6 +651,8 @@ export class WorkspaceLeaseManager {
   private readonly replayedLeaseCommits = new Map<string, Set<string>>();
   private readonly worktreeTimeoutMs: number;
   private readonly projectLockTimeoutMs: number;
+  /** Leases whose commit list could not be read in full; their replay may not move HEAD. */
+  private readonly unreadableLeaseCommits = new Set<string>();
   private readonly submoduleTimeoutMs: number;
   private readonly fallbackExcludes: Set<string>;
   private readonly configuredHeavyExcludes: Set<string>;
@@ -1384,6 +1386,15 @@ export class WorkspaceLeaseManager {
    * before dangling in the object store, zero salvage branches, zero
    * "Preserved lease commits" log lines — the salvage had never fired once.
    */
+  /**
+   * The lease's own commits, oldest first — and whether every one of them
+   * could be READ.
+   *
+   * A `git show` that failed used to drop its commit from the list, so a
+   * two-commit series looked like a one-commit series and the replay published
+   * the prefix with `skipped: 0` (Codex 2026-09-12 T#4). An unreadable commit
+   * is not an absent commit.
+   */
   private async listLeaseCommits(workspacePath: string): Promise<LeaseCommit[]> {
     const list = await this.commandRunner({
       command: "git",
@@ -1400,7 +1411,10 @@ export class WorkspaceLeaseManager {
         cwd: workspacePath,
         timeoutMs: this.worktreeTimeoutMs,
       });
-      if (show.exitCode !== 0) continue;
+      if (show.exitCode !== 0) {
+        this.unreadableLeaseCommits.add(workspacePath);
+        continue;
+      }
       const [authorName = "", authorEmail = "", ...rest] = show.stdout.split("\0");
       if (authorEmail === LEASE_SEED_EMAIL) continue;
       commits.push({ sha, authorName, authorEmail, message: rest.join("\0").trim() });
@@ -1442,7 +1456,9 @@ export class WorkspaceLeaseManager {
     const heldPrefixes = [...heldRels].map((h) => `${h}${sep}`);
     const isHeld = (rel: string): boolean => heldRels.has(rel) || heldPrefixes.some((p) => rel.startsWith(p));
     if (resolve(sourceRoot) !== resolve(this.projectRoot)) return undefined; // a lease of a lease: no branch to land on
+    this.unreadableLeaseCommits.delete(workspacePath);
     const commits = await this.listLeaseCommits(workspacePath);
+    const commitListComplete = !this.unreadableLeaseCommits.has(workspacePath);
     if (commits.length === 0) {
       // Nothing in the parent, but the agent may have committed inside a
       // submodule (2026-09-10) — those live in the submodule's own history.
@@ -1577,7 +1593,9 @@ export class WorkspaceLeaseManager {
     if (startHead.exitCode !== 0) return undefined; // an unborn branch has nothing to build on
     const baseSha = startHead.stdout.trim();
     let headSha = baseSha;
-    let failedMidSeries = false;
+    // A commit the enumeration could not read is a hole in the series: the
+    // chain cannot be built past it, so the branch stays where it is (T#4).
+    let failedMidSeries = !commitListComplete;
     try {
       for (const commit of commits) {
         const entries = perCommit.get(commit.sha);

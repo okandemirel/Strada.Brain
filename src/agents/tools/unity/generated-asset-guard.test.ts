@@ -240,6 +240,52 @@ describe("what already sits at a generation target", () => {
     expect(readdirSync(dir).sort()).toEqual(["Hero.png"]);
   });
 
+  it("an unwanted .meta beside INTACT committed art is still removed (Codex 2026-09-12 T#5)", () => {
+    // The committed pair had no .meta, so its digest was undefined and the
+    // "their art is intact" shortcut counted that as intact — a damaged .meta
+    // written afterwards survived the rollback with the image untouched.
+    const target = join(dir, "Hero.png");
+    writeFileSync(target, png(64, 64, "noise"));
+    const a = new PreviousAsset(target);
+    const b = new PreviousAsset(target);
+
+    const committed = png(48, 48, "noise");
+    writeFileSync(target, committed);
+    a.commit();
+
+    // B leaves the image ALONE and only adds metadata that was never there.
+    writeFileSync(`${target}.meta`, "guid: DAMAGED");
+    b.restore();
+
+    expect(readFileSync(target).equals(committed)).toBe(true);
+    expect(readdirSync(dir).sort()).toEqual(["Hero.png"]);
+  });
+
+  it("a retention that failed leaves nothing behind for Unity to import (Codex 2026-09-12 T#6)", () => {
+    // With three generations open, A retained its pair and B's retention
+    // failed: B's record replaced A's, so A's copies were referenced by
+    // nothing and stayed in Assets/ for good.
+    const target = join(dir, "Hero.png");
+    writeFileSync(target, png(64, 64, "noise"));
+    writeFileSync(`${target}.meta`, "guid: original");
+    const a = new PreviousAsset(target);
+    const b = new PreviousAsset(target);
+    const c = new PreviousAsset(target);
+
+    writeFileSync(target, png(48, 48, "noise"));
+    a.commit();
+    // B commits with its .meta unreadable: the retention cannot be completed.
+    writeFileSync(target, png(32, 32, "noise"));
+    rmSync(`${target}.meta`, { force: true });
+    mkdirSync(`${target}.meta`, { recursive: true }); // a directory where a file must be
+    b.commit();
+    rmSync(`${target}.meta`, { recursive: true, force: true });
+    c.restore();
+
+    // Whatever the outcome of the restore, nothing is left beside the asset.
+    expect(readdirSync(dir).filter((f) => f.includes(".strada-committed-"))).toEqual([]);
+  });
+
   it("restores the previous pair byte for byte", () => {
     const target = join(dir, "Hero.png");
     const original = png(64, 64, "noise");

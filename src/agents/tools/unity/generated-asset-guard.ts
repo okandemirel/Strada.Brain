@@ -59,6 +59,14 @@ interface CommittedArt {
   digest: string | undefined;
   /** The committed .meta's digest, so a damaged .meta is seen as damage. */
   metaDigest?: string | undefined;
+  /**
+   * Whether a .meta was there when this was committed — recorded SEPARATELY
+   * from its digest. An unreadable digest read as "there was none", so a
+   * damaged .meta written afterwards counted as intact (Codex 2026-09-12 T#5).
+   */
+  metaPresent?: boolean;
+  /** Copies a failed retention left behind, kept only so they can be removed. */
+  orphanCopies?: string[];
   /** A copy of the committed pair, kept while another generation is still open. */
   assetCopy?: string;
   metaCopy?: string;
@@ -156,7 +164,11 @@ export class PreviousAsset {
       // the asset's digest matching, and the damaged importer stayed (Codex
       // 2026-09-12 Q#6).
       const assetIntact = newer.digest !== undefined && digestOf(this.fullPath) === newer.digest;
-      const metaIntact = newer.metaDigest === undefined || digestOf(`${this.fullPath}.meta`) === newer.metaDigest;
+      // ABSENCE IS A STATE, NOT A MISSING ANSWER. With no .meta at commit
+      // time, the intact state is that there is still none (T#5).
+      const metaIntact = newer.metaPresent === true
+        ? newer.metaDigest !== undefined && digestOf(`${this.fullPath}.meta`) === newer.metaDigest
+        : !existsSync(`${this.fullPath}.meta`);
       if (assetIntact && metaIntact) {
         this.settle();
         return;
@@ -210,6 +222,7 @@ export class PreviousAsset {
       tick: ++generationTick,
       digest: digestOf(this.fullPath),
       metaDigest: digestOf(`${this.fullPath}.meta`),
+      metaPresent: existsSync(`${this.fullPath}.meta`),
     };
     const superseded = committedAt.get(this.fullPath);
     // While another generation is still open against this path, the committed
@@ -239,6 +252,12 @@ export class PreviousAsset {
         for (const partial of [assetCopy, metaCopy]) {
           try { rmSync(partial, { force: true }); } catch { /* best effort */ }
         }
+        // The PREVIOUS commit's copies are now referenced by nothing — this
+        // record replaces it and carries no copies of its own. They are not a
+        // restore source (they predate what is on disk), but they must still
+        // be removed when the path settles (Codex 2026-09-12 T#6).
+        record.orphanCopies = [superseded?.assetCopy, superseded?.metaCopy, ...(superseded?.orphanCopies ?? [])]
+          .filter((x): x is string => x !== undefined);
       }
     }
     committedAt.set(this.fullPath, record);
@@ -264,10 +283,15 @@ export class PreviousAsset {
     openGenerations.delete(this.fullPath);
     const record = committedAt.get(this.fullPath);
     if (record === undefined) return;
-    for (const copy of [record.assetCopy, record.metaCopy]) {
+    for (const copy of [record.assetCopy, record.metaCopy, ...(record.orphanCopies ?? [])]) {
       if (copy !== undefined) { try { rmSync(copy, { force: true }); } catch { /* best effort */ } }
     }
-    committedAt.set(this.fullPath, { tick: record.tick, digest: record.digest });
+    committedAt.set(this.fullPath, {
+      tick: record.tick,
+      digest: record.digest,
+      metaDigest: record.metaDigest,
+      metaPresent: record.metaPresent,
+    });
   }
 
   private forget(): void {
