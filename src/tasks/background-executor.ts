@@ -2045,15 +2045,26 @@ export class BackgroundExecutor {
           });
           requestFailed = true;
         } else {
-          try {
-            this.taskManager.complete(task.id, pendingCompletion);
-            pendingGoalCompletion?.();
-          } catch (err) {
-            getLogger().warn("Task completion could not be recorded after publication", {
-              taskId: task.id,
-              error: err instanceof Error ? err.message : String(err),
-            });
-          }
+          // A settlement that could not be WRITTEN is not settled: storage
+          // blinks, and the run was left executing forever with only a log
+          // line to say so (Codex 2026-09-12 Q#8). It is retried.
+          const output = pendingCompletion;
+          const settle = (attempt: number): void => {
+            try {
+              this.taskManager?.complete(task.id, output);
+              pendingGoalCompletion?.();
+            } catch (err) {
+              getLogger().warn("Task completion could not be recorded after publication", {
+                taskId: task.id,
+                attempt,
+                error: err instanceof Error ? err.message : String(err),
+              });
+              if (attempt >= 5) return;
+              const again = setTimeout(() => settle(attempt + 1), 5_000 * (attempt + 1));
+              again.unref?.();
+            }
+          };
+          settle(0);
         }
       }
       // A root task marks its episode terminal; a re-scoped sub-goal task settles ONLY
