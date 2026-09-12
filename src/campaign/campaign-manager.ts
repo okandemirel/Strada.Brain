@@ -263,7 +263,7 @@ export const UNRUNNABLE_HERE_RE =
  * names itself ("no test verifier is configured") and still counts.
  */
 export const UNMEASURABLE_PROOF_RE =
-  /(?:the GDD coverage audit did not run|no tool for it in this run|the compile check did not run|the player build did not run|no compile verifier is configured|no player builder is configured|no player runner is configured|unity_build_player is not registered|no test verifier is configured|the built player was never played to a verdict)/i;
+  /(?:the built player was never run on a machine that can run it|the GDD coverage audit did not run|no tool for it in this run|the compile check did not run|the player build did not run|no compile verifier is configured|no player builder is configured|no player runner is configured|unity_build_player is not registered|no test verifier is configured|the built player was never played to a verdict)/i;
 /**
  * Does this round's shortfall include a proof absent TOOLING explains? ANY
  * such proof counts: requiring all of them meant one game-shaped proof beside
@@ -2941,10 +2941,17 @@ export class CampaignManager {
           );
         }
         if (playerUnrunnableHere) {
+          const why = (player as { unrunnableHere?: string }).unrunnableHere;
           milestone.gddClaims = [
             ...(milestone.gddClaims ?? []),
-            `NOT MEASURED: the built artifact cannot be run on this machine — ${(player as { unrunnableHere?: string }).unrunnableHere}`,
+            `NOT MEASURED: the built artifact cannot be run on this machine — ${why}`,
           ];
+          // A GAME NOBODY HAS RUN IS NOT PROVEN, and this host's inability is
+          // not the game's alibi: the proof was disclosed and waived, so a
+          // build for another platform delivered without ever being played
+          // (Codex 2026-09-12 R#13). It is unmeasurable HERE — the campaign
+          // revives twice and then asks for a machine that can run it.
+          missingProofs.push(`the built player was never run on a machine that can run it: ${String(why).slice(0, 160)}`);
         }
         if (playerBroken && player) missingProofs.push(`inside the built player: ${describePlaythrough(player)}`.slice(0, 220));
         // A PLATFORM the document asked for and nobody built is missing work

@@ -2851,6 +2851,59 @@ describe("CampaignManager", () => {
     // unmeasurable proof, so the campaign revives and then asks a person.
     expect(UNRUNNABLE_HERE_RE.test("no player runner is configured")).toBe(false);
     expect(UNMEASURABLE_PROOF_RE.test("no player runner is configured")).toBe(true);
+
+    // A HOST that cannot run the artifact does not EXEMPT the proof either —
+    // it only moves it out of this machine's reach: the campaign revives
+    // twice and then asks for a machine that can run it (Codex 2026-09-12
+    // R#13). Delivered-and-never-played was the alternative.
+    expect(UNMEASURABLE_PROOF_RE.test(
+      "the built player was never run on a machine that can run it: exec format error",
+    )).toBe(true);
+  });
+
+  it("a target this machine cannot RUN is pending, not waived (Codex 2026-09-12 R#13)", async () => {
+    // The disclosure said "NOT MEASURED: the built artifact cannot be run on
+    // this machine" and the campaign delivered anyway — a game nobody had
+    // played, shipped as finished.
+    tasks = new FakeTaskManager();
+    storage.close();
+    storage = new CampaignStorage(join(dir, "campaigns-foreign-host.db"));
+    manager = new CampaignManager({
+      storage,
+      planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async (chatId, text) => { messages.push({ chatId, text }); },
+      projectRoot, retryAdoptionGraceMs: 10, completedSettleDelayMs: 0, milestoneTimeBoxMs: 60 * 60_000,
+      deliveryResumeDelayMs: 20,
+      verifyCompile: async () => ({ ok: true, ran: true, errors: 0 }),
+      // An .apk on this machine: built, and not executable HERE.
+      buildPlayer: async () => ({
+        ran: true, ok: true, target: "Android", artifactPath: "/tmp/Builds/Android/Game.apk",
+        sizeBytes: 60_000_000, durationMs: 90_000, scenes: 2,
+      }),
+      runPlayer: async () => { throw new Error("exec format error"); },
+    });
+    manager.attachEvents();
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
+
+    const green = { testsGreen: true, detail: "PlayMode verification passed: 42 of 42 tests passed (unfiltered — the whole PlayMode suite)", unfiltered: true };
+    for (let round = 0; round < 12; round++) {
+      const c = storage.get(campaign.id)!;
+      if (c.state !== "executing") break;
+      const id = c.milestones[2]!.taskId!;
+      tasks.verifications.set(id, green);
+      tasks.emit("task:completed", id, "green, shipping");
+      await new Promise((r) => setTimeout(r, 150));
+    }
+
+    const after = storage.get(campaign.id)!;
+    expect(after.state).not.toBe("done");
+    expect(messages.map((m) => m.text).join("\n")).toContain("never run on a machine that can run it");
   });
 
   it("an audit that could not RUN is not an audit that passed (Codex 2026-09-12 R#11)", async () => {
