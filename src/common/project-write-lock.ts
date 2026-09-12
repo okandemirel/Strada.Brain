@@ -97,38 +97,88 @@ function writeOwner(path: string, token: string): void {
   writeFileSync(join(path, "owner"), JSON.stringify(owner), "utf8");
 }
 
+/** How long a reclaim decision may take before another reclaimer overrides it. */
+const RECLAIM_MARKER_STALE_MS = 30_000;
+
+/**
+ * Serialize the DECISION to break or release a lock.
+ *
+ * Reclaimers do not compete with acquirers for this — acquirers only ever take
+ * a path this function has already vacated, and that is a rightful handover.
+ * What it prevents is two reclaimers acting on the same observation.
+ */
+function takeReclaimMarker(path: string): boolean {
+  const marker = `${path}.reclaiming`;
+  try {
+    mkdirSync(marker, { recursive: false });
+    return true;
+  } catch {
+    /* another reclaimer holds the decision — unless it died holding it */
+  }
+  try {
+    if (Date.now() - statSync(marker).mtimeMs > RECLAIM_MARKER_STALE_MS) {
+      rmSync(marker, { recursive: true, force: true });
+      mkdirSync(marker, { recursive: false });
+      return true;
+    }
+  } catch {
+    /* vanished under us, or unwritable: leave the lock alone */
+  }
+  return false;
+}
+
+function dropReclaimMarker(path: string): void {
+  try {
+    rmSync(`${path}.reclaiming`, { recursive: true, force: true });
+  } catch {
+    /* already gone */
+  }
+}
+
 /**
  * Take a lock away from whoever holds it, atomically.
  *
  * A token check followed by an independent delete is two steps: between them
  * another reclaimer can break the same lock and a new writer can take it, and
  * the first reclaimer's delete then removes the NEW holder's lock (Codex
- * 2026-09-11 O#16). A rename is one step: only one caller can win it, and the
- * owner file inside the renamed directory says whether it was the one judged
- * dead.
+ * 2026-09-11 O#16). Renaming first and restoring on a token mismatch was not
+ * enough either: while the canonical path stands empty a third writer takes
+ * it, the restore then fails, and the live holder's lock is deleted anyway
+ * (Codex 2026-09-12 P#20).
+ *
+ * So the decision comes FIRST and is serialized: under the reclaim marker the
+ * owner is read AGAIN and must still be the one this reclaim was justified
+ * against. A lock can only change hands through a reclaim, every reclaim holds
+ * the marker, and the path is never vacated on a stale observation — so there
+ * is no window in which a new holder's lock can be removed.
  */
 function reclaim(path: string, expected: LockOwner | null, why: string, routine = false): void {
-  const grave = `${path}.reclaimed-${randomUUID().slice(0, 8)}`;
+  if (!takeReclaimMarker(path)) return; // someone else owns this decision
   try {
-    renameSync(path, grave);
-  } catch {
-    return; // someone else got there first — nothing of ours to remove
-  }
-  const inside = readOwner(grave);
-  if (expected !== null && inside !== null && inside.token !== expected.token) {
-    // We took a lock that had already changed hands. Put it back if the slot
-    // is still free; otherwise the newcomer will simply take it again.
-    try {
-      renameSync(grave, path);
+    const current = readOwner(path);
+    if (expected !== null) {
+      // The observation that justified this reclaim may be old. If the lock
+      // has changed hands since, it belongs to its new holder.
+      if (current === null || current.token !== expected.token) return;
+    } else if (current !== null && holderIsAlive(current) !== false) {
+      // We judged an ownerless directory stale; it has an owner now.
       return;
-    } catch {
-      /* the slot is taken; drop what we hold */
     }
+    try {
+      // A grave left by a reclaimer that died mid-flight would block the
+      // rename; it holds nothing but a settled lock's metadata.
+      rmSync(`${path}.reclaimed`, { recursive: true, force: true });
+      renameSync(path, `${path}.reclaimed`);
+    } catch {
+      return; // released under us — nothing of ours to remove
+    }
+    // A release is routine; only TAKING a lock from someone is a warning.
+    if (routine) getLoggerSafe().debug(why, { path });
+    else getLoggerSafe().warn(why, { path, pid: current?.pid });
+    rmSync(`${path}.reclaimed`, { recursive: true, force: true });
+  } finally {
+    dropReclaimMarker(path);
   }
-  // A release is routine; only TAKING a lock from someone is a warning.
-  if (routine) getLoggerSafe().debug(why, { path });
-  else getLoggerSafe().warn(why, { path, pid: inside?.pid });
-  rmSync(grave, { recursive: true, force: true });
 }
 
 function breakIfStale(path: string, staleMs: number): void {

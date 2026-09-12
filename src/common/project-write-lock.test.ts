@@ -2,7 +2,27 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { hostname } from "node:os";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+/**
+ * Lets one test fire a third writer INTO the window a reclaimer opens when it
+ * renames the canonical path away. Unset for every other test.
+ */
+const afterNextRename: { run?: () => void } = {};
+vi.mock("node:fs", async (importOriginal) => {
+  const real = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...real,
+    default: real,
+    renameSync: (from: string, to: string) => {
+      const hook = afterNextRename.run;
+      afterNextRename.run = undefined;
+      const out = real.renameSync(from, to);
+      hook?.();
+      return out;
+    },
+  };
+});
 
 import { acquireProjectWriteLock, holderIsAlive } from "./project-write-lock.js";
 
@@ -93,5 +113,54 @@ describe("the project write lock", () => {
     expect(existsSync(lockDir())).toBe(true);
     expect(JSON.parse(readFileSync(join(lockDir(), "owner"), "utf8")).token).toBe(liveToken);
     live.release();
+  });
+
+  it("a stale observation never vacates the path, so a live holder's lock cannot be deleted (Codex 2026-09-12 P#20)", async () => {
+    const mine = await acquireProjectWriteLock(root, { timeoutMs: 100 });
+    expect(mine.acquired).toBe(true);
+    // The lock changed hands while we worked: a different writer owns it now.
+    writeFileSync(
+      join(lockDir(), "owner"),
+      JSON.stringify({ pid: process.pid, host: hostname(), token: "b-is-writing", at: new Date().toISOString() }),
+    );
+    // …and the moment the canonical path is vacated, a third writer takes it —
+    // which is exactly what made the rename-back fail and the live holder's
+    // lock get deleted anyway.
+    afterNextRename.run = () => {
+      mkdirSync(lockDir(), { recursive: true });
+      writeFileSync(
+        join(lockDir(), "owner"),
+        JSON.stringify({ pid: process.pid, host: hostname(), token: "c-came-later", at: new Date().toISOString() }),
+      );
+    };
+
+    mine.release();
+
+    // The path was never vacated on our stale observation, so the third writer
+    // never got in and B still holds its lock.
+    expect(afterNextRename.run).toBeDefined();
+    expect(existsSync(lockDir())).toBe(true);
+    expect(JSON.parse(readFileSync(join(lockDir(), "owner"), "utf8")).token).toBe("b-is-writing");
+    afterNextRename.run = undefined;
+  });
+
+  it("one reclaim decision at a time: a lock is not broken under a reclaimer that is mid-flight (Codex 2026-09-12 P#20)", async () => {
+    mkdirSync(lockDir(), { recursive: true });
+    writeFileSync(
+      join(lockDir(), "owner"),
+      JSON.stringify({ pid: 2 ** 30, host: hostname(), token: "dead", at: new Date().toISOString() }),
+    );
+    mkdirSync(`${lockDir()}.reclaiming`, { recursive: true }); // another reclaimer is deciding
+
+    const denied = await acquireProjectWriteLock(root, { timeoutMs: 300, staleMs: 10 * 60_000 });
+
+    expect(denied.acquired).toBe(false);
+    expect(JSON.parse(readFileSync(join(lockDir(), "owner"), "utf8")).token).toBe("dead");
+
+    // A reclaimer that died holding the decision does not block forever.
+    rmSync(`${lockDir()}.reclaiming`, { recursive: true, force: true });
+    const taken = await acquireProjectWriteLock(root, { timeoutMs: 2_000, staleMs: 10 * 60_000 });
+    expect(taken.acquired).toBe(true);
+    taken.release();
   });
 });
