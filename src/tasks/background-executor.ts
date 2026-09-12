@@ -1586,6 +1586,17 @@ export class BackgroundExecutor {
 
     let requestFailed = false;
     let integrateAfterWriteBack = false;
+    /**
+     * A success that is not announced until its files are in the project.
+     *
+     * `complete()` used to fire here, inside the run, while publication
+     * happened in the finally below — so a consumer that acts on
+     * `task:completed` (the campaign's own settle handler) saw a green task
+     * whose bytes had not landed, and the publication failure arrived as a
+     * SECOND terminal afterwards (Codex 2026-09-12 P#6). One terminal, after
+     * publication.
+     */
+    let pendingCompletion: string | undefined;
     let activeGoalTree: GoalTree | undefined;
     try {
       const hasRichInput =
@@ -1706,7 +1717,7 @@ export class BackgroundExecutor {
         } catch { /* note write is best-effort */ }
 
         if (supervisorResult.success) {
-          this.taskManager.complete(task.id, supervisorResult.output);
+          pendingCompletion = supervisorResult.output;
           // Delivery includes INTEGRATION: worktree workers cannot merge to
           // main (the source worktree owns the ref), so the executor does it
           // at the source root, after a successful run. Measured 2026-08-24:
@@ -1864,7 +1875,7 @@ export class BackgroundExecutor {
         return;
       }
 
-      this.taskManager.complete(task.id, result.output);
+      pendingCompletion = result.output;
     } catch (error) {
       if (signal.aborted) {
         // The run threw because it was aborted. A user /cancel stays silent; the
@@ -1995,6 +2006,19 @@ export class BackgroundExecutor {
         });
       }
       if (integrateAfterWriteBack) this.integrateMilestoneBranches(task);
+      // THE ONE TERMINAL. It is emitted here, after the lease has published
+      // and after integration, so nothing downstream ever sees a completed
+      // task whose work is not in the project yet.
+      if (pendingCompletion !== undefined && taskPublicationLoss === undefined) {
+        try {
+          this.taskManager.complete(task.id, pendingCompletion);
+        } catch (err) {
+          getLogger().warn("Task completion could not be recorded after publication", {
+            taskId: task.id,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
       // A root task marks its episode terminal; a re-scoped sub-goal task settles ONLY
       // its joined card (joinEpisodeEnd) so it never prematurely terminates the shared
       // parent episode — the whole-goal episode stays open until the ROOT settles.

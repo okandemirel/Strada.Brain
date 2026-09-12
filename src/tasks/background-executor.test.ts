@@ -1765,6 +1765,64 @@ describe("BackgroundExecutor - Blocked worker results", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+  it("a TASK is announced completed only AFTER its work is published (Codex 2026-09-12 P#6)", async () => {
+    // complete() fired inside the run while publication happened in the
+    // finally: a consumer acting on task:completed saw a green task whose
+    // bytes had not landed, and a publication failure arrived as a SECOND
+    // terminal afterwards.
+    const order: string[] = [];
+    const run = async (commit: () => Promise<unknown>): Promise<{ complete: ReturnType<typeof vi.fn>; fail: ReturnType<typeof vi.fn> }> => {
+      const mockOrch = {
+        runBackgroundTask: vi.fn().mockResolvedValue({ output: "task done" }),
+        evaluateSupervisorAdmission: vi.fn().mockResolvedValue({ mode: "direct_worker", reason: "simple" }),
+        runWorkerTask: vi.fn().mockResolvedValue({
+          status: "completed", finalSummary: "task done", visibleResponse: "task done", provider: "mock",
+          catalogVersion: "mock:default", assignmentVersion: 0, touchedFiles: [], toolTrace: [],
+          verificationResults: [], reviewFindings: [], artifacts: [],
+        }),
+      };
+      const executor = new BackgroundExecutor({
+        orchestrator: mockOrch as any,
+        workspaceLeaseManager: {
+          acquireLease: vi.fn().mockResolvedValue({
+            path: "/tmp/strada-workspaces/task-p6", id: "lease-p6", workspaceId: "ws-p6",
+            release: vi.fn().mockResolvedValue(undefined), commit,
+          }),
+        } as any,
+      });
+      const mockTaskManager = {
+        updateStatus: vi.fn(),
+        complete: vi.fn(() => { order.push("complete"); }),
+        fail: vi.fn(() => { order.push("fail"); }),
+        block: vi.fn(),
+      };
+      executor.setTaskManager(mockTaskManager as any);
+      executor.enqueue(
+        createTestTask(undefined, { forceSharedPlanning: true } as never),
+        new AbortController().signal,
+        vi.fn(),
+      );
+      await vi.waitFor(() => {
+        expect(mockTaskManager.complete.mock.calls.length + mockTaskManager.fail.mock.calls.length).toBeGreaterThan(0);
+      }, { timeout: 5000 });
+      return mockTaskManager;
+    };
+
+    const published = await run(async () => {
+      await new Promise((r) => setTimeout(r, 20)); // publication takes time
+      order.push("commit");
+      return { written: ["Assets/Player.cs"], conflicts: [], removed: [], failed: [] };
+    });
+    expect(published.complete).toHaveBeenCalled();
+    expect(order).toEqual(["commit", "complete"]);
+
+    // …and a publication that failed leaves exactly ONE terminal: the failure.
+    order.length = 0;
+    const lost = await run(async () => { order.push("commit"); throw new Error("EIO"); });
+    expect(lost.complete).not.toHaveBeenCalled();
+    expect(order).toEqual(["commit", "fail"]);
+  });
+
   it("an ESCALATED keep-alive is not overwritten by the block that triggered it (Codex 2026-09-11 O#14)", async () => {
     // The keep-alive had spent the mission's retries: it wrote "MISSION
     // STOPPED — needs you" and returned false. The caller then wrote the
