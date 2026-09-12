@@ -366,7 +366,7 @@ describe("CampaignManager", () => {
         const after = storage.get(campaignId)!;
         const stopped = after.state === "failed" && !after.autoReviveAt;
         expect(stopped || tasks.submitted.length > submitted).toBe(true);
-      }, { timeout: 5_000 });
+      }, { timeout: 15_000 });
     }
     throw new Error(`campaign ${campaignId} never stopped after 12 failed rounds`);
   };
@@ -377,8 +377,14 @@ describe("CampaignManager", () => {
    * handful of them on every run. Five seconds by default, and a caller can
    * still ask for more.
    */
+  // FIFTEEN seconds, not five: these settles do real filesystem work — a git
+  // repo, Unity-shaped fixtures, compile and play-through verdict files — and
+  // under a full-suite run on a loaded machine a five-second ceiling made this
+  // file flake about one run in three (measured 2026-09-12). A slow machine is
+  // not a defect in the ladder; a test that fails for being slow hides the
+  // ones that fail for being wrong.
   const waitFor = (fn: () => void | Promise<void>, opts?: { timeout?: number; interval?: number }): Promise<void> =>
-    vi.waitFor(fn, { timeout: 5_000, ...opts });
+    vi.waitFor(fn, { timeout: 15_000, ...opts });
 
   const settleMilestone = (result: string, explicitTaskId?: string) => {
     const last = tasks.submitted.length;
@@ -646,20 +652,20 @@ describe("CampaignManager", () => {
     tasks.emit("task:blocked", `task_${tasks.submitted.length}`, "Transient failure — provider hiccup");
     await waitFor(() => {
       expect(messages.some((m) => m.text.includes("Retrying with a changed approach"))).toBe(true);
-    }, { timeout: 5_000 });
+    }, { timeout: 15_000 });
     const revived = storage.get(campaign.id)!;
     expect(revived.implementationRevives).toBe(1);
     expect(revived.milestones[0]!.prompt).toContain("Do NOT repeat that approach");
     // The revival's ten-millisecond appointment has already fired here, so the
     // proof it was armed is the resubmission it produced.
-    await waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(1), { timeout: 5_000 });
+    await waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(1), { timeout: 15_000 });
     expect(revived.milestones[0]!.timeBoxEscalations ?? 0).toBe(0); // a fresh box for the new approach
 
     // …and it still ends: the budget is the same bounded one.
     for (let i = 0; i < 6; i++) {
       const stored = storage.get(campaign.id)!;
       if (stored.state === "failed" && !stored.autoReviveAt) break;
-      await waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(i + 1), { timeout: 5_000 }).catch(() => undefined);
+      await waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(i + 1), { timeout: 15_000 }).catch(() => undefined);
       overrun();
       tasks.emit("task:blocked", `task_${tasks.submitted.length}`, "Transient failure — provider hiccup");
       await new Promise((r) => setTimeout(r, 120));
@@ -1948,7 +1954,7 @@ describe("CampaignManager", () => {
     // work and the default timed out under a full-suite run twice today —
     // a slow machine is not a defect in the ladder.
     const settled = (n: number): Promise<void> =>
-      waitFor(() => expect(tasks.submitted).toHaveLength(n), { timeout: 5_000 });
+      waitFor(() => expect(tasks.submitted).toHaveLength(n), { timeout: 15_000 });
     await settled(1);
     settleMilestone("sprint A done");
     await settled(2);
@@ -2062,7 +2068,7 @@ describe("CampaignManager", () => {
       "That work is NOT done.\n\n" + "x".repeat(2_000) + "\nintegrated, all 42 tests pass",
     );
 
-    await waitFor(() => expect(storage.get(campaign.id)!.state).not.toBe("executing"), { timeout: 5_000 });
+    await waitFor(() => expect(storage.get(campaign.id)!.state).not.toBe("executing"), { timeout: 15_000 });
 
     const after = storage.get(campaign.id)!;
     expect(after.milestones[2]!.resultExcerpt).not.toContain("EVIDENCE UNAVAILABLE");
@@ -2081,7 +2087,7 @@ describe("CampaignManager", () => {
       "That work is NOT done and nothing in this report should be read as proof of it.\n\nintegrated, all 42 tests pass",
     );
 
-    await waitFor(() => expect(storage.get(campaign.id)!.state).not.toBe("executing"), { timeout: 5_000 });
+    await waitFor(() => expect(storage.get(campaign.id)!.state).not.toBe("executing"), { timeout: 15_000 });
 
     expect(storage.get(campaign.id)!.state).not.toBe("done");
     const said = messages.map((m) => m.text).join("\n");
@@ -2282,7 +2288,7 @@ describe("CampaignManager", () => {
     again.milestones[0]!.startedAtMs = Date.now() - 3 * 60 * 60_000;
     storage.save(again);
     tasks.emit("task:failed", "task_2", "compile still red");
-    await waitFor(() => expect(tasks.submitted).toHaveLength(3), { timeout: 5_000 });
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3), { timeout: 15_000 });
     const prompt = tasks.submitted[2]!.prompt;
     expect(prompt.match(/TIME BOX \(/g)).toHaveLength(1);
     expect(prompt).toContain("escalation 2/2");
@@ -2355,7 +2361,7 @@ describe("CampaignManager", () => {
       "Completed:\nI got stuck on this task after multiple approaches.\n\nBlocked:\n[goal_x] provider_unavailable",
     );
     // Judged now — attempt 2 submitted within seconds, not after a 10-minute re-check.
-    await waitFor(() => expect(tasks.submitted).toHaveLength(2), { timeout: 5_000 });
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2), { timeout: 15_000 });
     expect(storage.get(campaign.id)!.milestones[0]!.reconcileDeferredSince).toBeUndefined();
   });
 
@@ -2665,7 +2671,7 @@ describe("CampaignManager", () => {
     settleMilestone("sprint B done");
     await waitFor(() => expect(tasks.submitted).toHaveLength(3));
     settleMilestone("final report");
-    await waitFor(() => expect(tasks.submitted).toHaveLength(4), { timeout: 5_000 });
+    await waitFor(() => expect(tasks.submitted).toHaveLength(4), { timeout: 15_000 });
 
     const ids = storage.get(campaign.id)!.milestones.map((m) => m.id);
     expect(ids).toEqual(["m1", "m2", "m3", "mcov1", "mcov1-2", "mcov1-3"]);
@@ -2676,9 +2682,9 @@ describe("CampaignManager", () => {
 
     // The art sprint spends both attempts: the campaign moves to the audio gap.
     tasks.emit("task:failed", "task_4", "no art was made");
-    await waitFor(() => expect(tasks.submitted).toHaveLength(5), { timeout: 5_000 });
+    await waitFor(() => expect(tasks.submitted).toHaveLength(5), { timeout: 15_000 });
     tasks.emit("task:failed", "task_5", "no art was made");
-    await waitFor(() => expect(tasks.submitted).toHaveLength(6), { timeout: 5_000 });
+    await waitFor(() => expect(tasks.submitted).toHaveLength(6), { timeout: 15_000 });
     const after = storage.get(campaign.id)!;
     expect(after.state).toBe("executing");
     expect(after.milestones[3]!.status).toBe("failed");
@@ -2796,11 +2802,11 @@ describe("CampaignManager", () => {
     manager.attachEvents();
 
     const campaign = manager.startFromGdd(ctx, "# GDD text", "docs/Game_GDD.md");
-    await waitFor(() => expect(tasks.submitted).toHaveLength(1), { timeout: 5_000 });
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1), { timeout: 15_000 });
     settleMilestone("sprint A done");
-    await waitFor(() => expect(tasks.submitted).toHaveLength(2), { timeout: 5_000 });
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2), { timeout: 15_000 });
     settleMilestone("sprint B done");
-    await waitFor(() => expect(tasks.submitted).toHaveLength(3), { timeout: 5_000 });
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3), { timeout: 15_000 });
     settleMilestone("final report");
     await waitFor(() => expect(tasks.submitted).toHaveLength(4)); // mcov1, baseline 95/100 recorded
 
@@ -2809,7 +2815,7 @@ describe("CampaignManager", () => {
     for (let i = 0; i < 3 && !storage.get(campaign.id)!.milestones.at(-1)!.artBounced; i++) {
       const before = tasks.submitted.length;
       settleMilestone("pig skins implemented and verified");
-      await waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(before), { timeout: 5_000 });
+      await waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(before), { timeout: 15_000 });
     }
     const bounced = storage.get(campaign.id)!.milestones.at(-1)!;
     expect(bounced.artBounced).toBe(true);
@@ -2829,7 +2835,7 @@ describe("CampaignManager", () => {
       settleMilestone("pig skins drawn with the local model and bound");
       await waitFor(
         () => expect(mcov1().status !== "running" || tasks.submitted.length > before).toBe(true),
-        { timeout: 5_000 },
+        { timeout: 15_000 },
       );
     }
     expect(mcov1().status).toBe("green");
@@ -3091,11 +3097,11 @@ describe("CampaignManager", () => {
 
   it("a delivery cannot claim the document was implemented when the document is gone (Codex 2026-09-11 H#5)", async () => {
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await waitFor(() => expect(tasks.submitted).toHaveLength(1), { timeout: 5_000 });
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1), { timeout: 15_000 });
     settleMilestone("sprint A done");
-    await waitFor(() => expect(tasks.submitted).toHaveLength(2), { timeout: 5_000 });
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2), { timeout: 15_000 });
     settleMilestone("sprint B done");
-    await waitFor(() => expect(tasks.submitted).toHaveLength(3), { timeout: 5_000 });
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3), { timeout: 15_000 });
     // The document disappears before the final sprint settles.
     rmSync(join(projectRoot, "docs", "Game_GDD.md"), { force: true });
     const stored = storage.get(campaign.id)!;
@@ -3107,7 +3113,7 @@ describe("CampaignManager", () => {
       settleMilestone(`shipping it (round ${i})`);
       await waitFor(() => {
         expect(tasks.submitted.length > before || storage.get(campaign.id)!.state !== "executing").toBe(true);
-      }, { timeout: 5_000 });
+      }, { timeout: 15_000 });
     }
     const after = storage.get(campaign.id)!;
     expect(after.state).not.toBe("done");
@@ -4072,11 +4078,11 @@ describe("CampaignManager", () => {
     });
     manager.attachEvents();
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await waitFor(() => expect(tasks.submitted).toHaveLength(1), { timeout: 5_000 });
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1), { timeout: 15_000 });
     settleMilestone("sprint A done");
-    await waitFor(() => expect(tasks.submitted).toHaveLength(2), { timeout: 5_000 });
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2), { timeout: 15_000 });
     settleMilestone("sprint B done");
-    await waitFor(() => expect(tasks.submitted).toHaveLength(3), { timeout: 5_000 });
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3), { timeout: 15_000 });
     // Through the delivery bounces: every one of them completes green, and
     // none of them plays the game.
     for (let i = 0; i < 12 && storage.get(campaign.id)!.state === "executing"; i++) {
@@ -4084,7 +4090,7 @@ describe("CampaignManager", () => {
       settleMilestone(`green, shipping (round ${i})`);
       await waitFor(() => {
         expect(tasks.submitted.length > before || storage.get(campaign.id)!.state !== "executing").toBe(true);
-      }, { timeout: 5_000 });
+      }, { timeout: 15_000 });
     }
     const after = storage.get(campaign.id)!;
     expect(after.state).not.toBe("done");
@@ -4115,11 +4121,11 @@ describe("CampaignManager", () => {
     });
     manager.attachEvents();
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await waitFor(() => expect(tasks.submitted).toHaveLength(1), { timeout: 5_000 });
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1), { timeout: 15_000 });
     settleMilestone("sprint A done");
-    await waitFor(() => expect(tasks.submitted).toHaveLength(2), { timeout: 5_000 });
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2), { timeout: 15_000 });
     settleMilestone("sprint B done");
-    await waitFor(() => expect(tasks.submitted).toHaveLength(3), { timeout: 5_000 });
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3), { timeout: 15_000 });
 
     for (let i = 0; i < 30; i++) {
       const stored = storage.get(campaign.id)!;
@@ -4142,7 +4148,7 @@ describe("CampaignManager", () => {
       await waitFor(() => {
         const after = storage.get(campaign.id)!;
         expect(tasks.submitted.length > before || (after.state === "failed" && !after.autoReviveAt)).toBe(true);
-      }, { timeout: 5_000 });
+      }, { timeout: 15_000 });
     }
     const stopped = storage.get(campaign.id)!;
     expect(stopped.state).toBe("failed");
@@ -4178,11 +4184,11 @@ describe("CampaignManager", () => {
     });
     manager.attachEvents();
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await waitFor(() => expect(tasks.submitted).toHaveLength(1), { timeout: 5_000 });
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1), { timeout: 15_000 });
     settleMilestone("sprint A done");
-    await waitFor(() => expect(tasks.submitted).toHaveLength(2), { timeout: 5_000 });
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2), { timeout: 15_000 });
     settleMilestone("sprint B done");
-    await waitFor(() => expect(tasks.submitted).toHaveLength(3), { timeout: 5_000 });
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3), { timeout: 15_000 });
 
     for (let i = 0; i < 12; i++) {
       const stored = storage.get(campaign.id)!;
@@ -4207,7 +4213,7 @@ describe("CampaignManager", () => {
       await waitFor(() => {
         const after = storage.get(campaign.id)!;
         expect(tasks.submitted.length > before || (after.state === "failed" && !after.autoReviveAt)).toBe(true);
-      }, { timeout: 5_000 });
+      }, { timeout: 15_000 });
     }
 
     const stopped = storage.get(campaign.id)!;
@@ -4274,11 +4280,11 @@ describe("CampaignManager", () => {
     });
     manager.attachEvents();
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
-    await waitFor(() => expect(tasks.submitted).toHaveLength(1), { timeout: 5_000 });
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1), { timeout: 15_000 });
     settleMilestone("sprint A done");
-    await waitFor(() => expect(tasks.submitted).toHaveLength(2), { timeout: 5_000 });
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2), { timeout: 15_000 });
     settleMilestone("sprint B done");
-    await waitFor(() => expect(tasks.submitted).toHaveLength(3), { timeout: 5_000 });
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3), { timeout: 15_000 });
 
     for (let i = 0; i < 60; i++) {
       const stored = storage.get(campaign.id)!;
@@ -4298,7 +4304,7 @@ describe("CampaignManager", () => {
       await waitFor(() => {
         const after = storage.get(campaign.id)!;
         expect(tasks.submitted.length > before || (after.state === "failed" && !after.autoReviveAt)).toBe(true);
-      }, { timeout: 5_000 });
+      }, { timeout: 15_000 });
     }
 
     const stopped = storage.get(campaign.id)!;
@@ -4344,7 +4350,7 @@ describe("CampaignManager", () => {
     // The same record WITH its stamp delivers.
     runRecordOnSettle = { total: 42, passed: 42, failed: 0, skipped: 0, unfiltered: true };
     settleMilestone("green, shipping");
-    await waitFor(() => expect(storage.get(campaign.id)!.milestones[2]!.testVerdict).toBeDefined(), { timeout: 5_000 });
+    await waitFor(() => expect(storage.get(campaign.id)!.milestones[2]!.testVerdict).toBeDefined(), { timeout: 15_000 });
   });
 
   it("a STALE NUnit record cannot be laundered into fresh proof by the prose fallback (Codex 2026-09-11 C#10)", async () => {
@@ -4476,10 +4482,10 @@ describe("CampaignManager", () => {
     settleMilestone("sprint B done");
     await waitFor(() => expect(tasks.submitted).toHaveLength(3));
     settleMilestone("final report");
-    await waitFor(() => expect(tasks.submitted).toHaveLength(4), { timeout: 5_000 });
+    await waitFor(() => expect(tasks.submitted).toHaveLength(4), { timeout: 15_000 });
 
     tasks.emit("task:failed", "task_4", "compile still red");
-    await waitFor(() => expect(tasks.submitted).toHaveLength(5), { timeout: 5_000 });
+    await waitFor(() => expect(tasks.submitted).toHaveLength(5), { timeout: 15_000 });
     const retry = tasks.submitted[4]!.prompt;
     expect(retry).toContain("The previous attempt ended");
     expect(retry).toContain("ART NOT PRODUCED: when this sprint began, 95 of 100");
@@ -4524,11 +4530,11 @@ describe("CampaignManager", () => {
     settleMilestone("sprint B done");
     await waitFor(() => expect(tasks.submitted).toHaveLength(3));
     settleMilestone("final report");
-    await waitFor(() => expect(tasks.submitted).toHaveLength(4), { timeout: 5_000 });
+    await waitFor(() => expect(tasks.submitted).toHaveLength(4), { timeout: 15_000 });
 
     art = { sprites: 103, placeholders: 95 }; // three real sprites added, placeholders untouched
     tasks.emit("task:failed", "task_4", "compile still red");
-    await waitFor(() => expect(tasks.submitted).toHaveLength(5), { timeout: 5_000 });
+    await waitFor(() => expect(tasks.submitted).toHaveLength(5), { timeout: 15_000 });
     expect(tasks.submitted[4]!.prompt).not.toContain("ART NOT PRODUCED");
     void campaign;
   });
@@ -4564,7 +4570,7 @@ describe("CampaignManager", () => {
     settleMilestone("sprint B done");
     await waitFor(() => expect(tasks.submitted).toHaveLength(3));
     settleMilestone("final report");
-    await waitFor(() => expect(storage.get(campaign.id)!.deliveryReported).toBe(true), { timeout: 5_000 });
+    await waitFor(() => expect(storage.get(campaign.id)!.deliveryReported).toBe(true), { timeout: 15_000 });
     const report = messages.at(-1)!.text;
     expect(report).toContain("Independent review (fake-astra via Codex, read-only, 1s)");
     expect(report).toContain("> VERDICT: NOT DELIVERABLE");
@@ -4612,20 +4618,20 @@ describe("CampaignManager", () => {
     manager.attachEvents();
 
     const campaign = manager.startFromGdd(ctx, "# GDD text", "docs/Game_GDD.md");
-    await waitFor(() => expect(tasks.submitted).toHaveLength(1), { timeout: 5_000 });
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1), { timeout: 15_000 });
     settleMilestone("sprint A done");
-    await waitFor(() => expect(tasks.submitted).toHaveLength(2), { timeout: 5_000 });
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2), { timeout: 15_000 });
     settleMilestone("sprint B done");
-    await waitFor(() => expect(tasks.submitted).toHaveLength(3), { timeout: 5_000 });
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3), { timeout: 15_000 });
     settleMilestone("final report");
-    await waitFor(() => expect(tasks.submitted).toHaveLength(4), { timeout: 5_000 });
+    await waitFor(() => expect(tasks.submitted).toHaveLength(4), { timeout: 15_000 });
     tasks.emit("task:failed", "task_4", "no art was made");
-    await waitFor(() => expect(tasks.submitted).toHaveLength(5), { timeout: 5_000 });
+    await waitFor(() => expect(tasks.submitted).toHaveLength(5), { timeout: 15_000 });
     tasks.emit("task:failed", "task_5", "no art was made");
 
     // The final proof sprint measures the tree as it is; the refusal stands
     // through its bounce budget and the campaign is NOT delivered.
-    await waitFor(() => expect(tasks.submitted).toHaveLength(6), { timeout: 5_000 });
+    await waitFor(() => expect(tasks.submitted).toHaveLength(6), { timeout: 15_000 });
     expect(tasks.submitted[5]!.prompt).toContain("FINAL DELIVERY PROOFS");
     for (let round = 0; round < 4 && storage.get(campaign.id)!.state !== "failed"; round++) {
       const before = tasks.submitted.length;
@@ -4637,7 +4643,7 @@ describe("CampaignManager", () => {
         expect(c.state === "failed" || tasks.submitted.length > before).toBe(true);
       }, { timeout: 15_000 });
     }
-    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"), { timeout: 5_000 });
+    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"), { timeout: 15_000 });
     const delivered = storage.get(campaign.id)!;
     // The refusal now stops the FINAL PROOF sprint's own gate: the campaign
     // fails with the measured reason and resumes itself with a fresh budget
@@ -5318,7 +5324,7 @@ describe("CampaignManager", () => {
     settleMilestone("sprint B done");
     await waitFor(() => expect(tasks.submitted).toHaveLength(3));
     settleMilestone("final report");
-    await waitFor(() => expect(tasks.submitted).toHaveLength(4), { timeout: 5_000 });
+    await waitFor(() => expect(tasks.submitted).toHaveLength(4), { timeout: 15_000 });
 
     // Round 1 schedules four and QUEUES five.
     expect(storage.get(campaign.id)!.pendingCoverageGaps).toHaveLength(5);
@@ -5327,7 +5333,7 @@ describe("CampaignManager", () => {
     for (let i = 0; i < 20 && storage.get(campaign.id)!.state === "executing"; i++) {
       const before = tasks.submitted.length;
       settleMilestone(`gap ${i} implemented, all 42 tests pass`);
-      await waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(before), { timeout: 5_000 }).catch(() => undefined);
+      await waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(before), { timeout: 15_000 }).catch(() => undefined);
       if (tasks.submitted.length === before) break;
     }
     const finished = storage.get(campaign.id)!;
@@ -5757,18 +5763,18 @@ describe("CampaignManager", () => {
         .measurePlaceholderArt = () => ({ sprites: 100, placeholders: 95 });
       manager.attachEvents();
       const campaign = manager.startFromGdd(ctx, "# GDD text", "docs/Game_GDD.md");
-      await waitFor(() => expect(tasks.submitted).toHaveLength(1), { timeout: 5_000 });
+      await waitFor(() => expect(tasks.submitted).toHaveLength(1), { timeout: 15_000 });
       settleMilestone("sprint A done");
-      await waitFor(() => expect(tasks.submitted).toHaveLength(2), { timeout: 5_000 });
+      await waitFor(() => expect(tasks.submitted).toHaveLength(2), { timeout: 15_000 });
       settleMilestone("sprint B done");
-      await waitFor(() => expect(tasks.submitted).toHaveLength(3), { timeout: 5_000 });
+      await waitFor(() => expect(tasks.submitted).toHaveLength(3), { timeout: 15_000 });
       settleMilestone("final report");
       await waitFor(() => expect(tasks.submitted).toHaveLength(4)); // mcov1 (audio)
       const mcov1 = () => storage.get(campaign.id)!.milestones.find((m) => m.id === "mcov1")!;
       for (let i = 0; i < 4 && mcov1().status === "running"; i++) {
         const before = tasks.submitted.length;
         settleMilestone("SFX cue list generated with unity_generate_audio and wired");
-        await waitFor(() => expect(mcov1().status !== "running" || tasks.submitted.length > before).toBe(true), { timeout: 5_000 });
+        await waitFor(() => expect(mcov1().status !== "running" || tasks.submitted.length > before).toBe(true), { timeout: 15_000 });
       }
       expect(mcov1().status).toBe("green");
       expect(mcov1().artBounced).not.toBe(true);
