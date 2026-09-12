@@ -785,7 +785,19 @@ export class Orchestrator {
 
   toolOfferedNow(name: string): { offered: boolean; reason?: string } {
     const metadata = this.toolMetadataByName.get(name);
-    if (metadata === undefined) return { offered: true };
+    // A NAME NOTHING REGISTERED cannot have been called by anyone, so demanding
+    // it is the unsatisfiable gate again: it answers "not offered" and becomes
+    // a named gap (Codex 2026-09-12 S#12). It used to default to offered.
+    if (metadata === undefined) {
+      return this.toolDefinitions.some((d) => d.name === name)
+        ? { offered: true }
+        : { offered: false, reason: `${name} is not a tool this run has` };
+    }
+    // The same filters the offered list applies: a .NET tool without a project
+    // to build is not offered either.
+    if (DOTNET_PROJECT_TOOLS.has(name) && !this.dotnetProject.check()) {
+      return { offered: false, reason: `${name} needs a .sln or .csproj, and this project has none yet` };
+    }
     if (metadata.controlPlaneOnly === true) return { offered: false, reason: `${name} is not offered to workers` };
     if (metadata.available === false) {
       return { offered: false, reason: metadata.availabilityReason || `${name} is currently unavailable` };
