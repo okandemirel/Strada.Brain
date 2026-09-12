@@ -1564,6 +1564,53 @@ describe("CampaignManager", () => {
     expect(storage.get(campaign.id)!.milestones[2]!.testVerdict).toBe("PlayMode verification passed: 215 of 215 tests passed (unfiltered — the whole PlayMode suite)");
   });
 
+  it("a record the reader calls RED for any reason stops the sprint (Codex 2026-09-12 V)", async () => {
+    // The gate asked only whether `failed > 0`, so a run whose own result was
+    // "Failed", or that threw, or whose counts did not add up, advanced the
+    // ladder as green. And a malformed failure name threw inside the reader,
+    // where a best-effort catch swallowed the whole red record.
+    const writeRun = (record: Record<string, unknown>): void => { runRecordOnSettle = record; };
+    const reds: Array<Record<string, unknown>> = [
+      // The runner's own verdict is a failure while every counter looks fine.
+      { total: 1, passed: 1, failed: 0, skipped: 0, result: "Failed", unfiltered: true },
+      // A runtime exception during the run.
+      { total: 42, passed: 42, failed: 0, skipped: 0, exceptions: 1, unfiltered: true },
+      // Counts that do not add up.
+      { total: 42, passed: 40, failed: 0, skipped: 0, unfiltered: true },
+      // A suite most of which never ran.
+      { total: 100, passed: 1, failed: 0, skipped: 99, unfiltered: true },
+      // A failed test whose NAME is malformed — the reader used to throw here.
+      { total: 1, passed: 0, failed: 1, failedNames: [{ toString: null }], unfiltered: true },
+    ];
+
+    for (const red of reds) {
+      tasks = new FakeTaskManager();
+      storage.close();
+      storage = new CampaignStorage(join(dir, `campaigns-red-${reds.indexOf(red)}.db`));
+      manager = new CampaignManager({
+        storage,
+        planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
+        taskManager: tasks as unknown as TaskManager,
+        messenger: async (chatId, text) => { messages.push({ chatId, text }); },
+        projectRoot, retryAdoptionGraceMs: 10, completedSettleDelayMs: 0, milestoneTimeBoxMs: 60 * 60_000,
+        verifyCompile: async () => ({ ok: true, ran: true, errors: 0 }),
+      });
+      manager.attachEvents();
+      const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+      await waitFor(() => expect(tasks.submitted).toHaveLength(1), { timeout: 15_000 });
+      writeRun(red);
+      settleMilestone("all green, shipping");
+      // The sprint does not advance: the attempt is retried instead.
+      await waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(1), { timeout: 15_000 });
+      const after = storage.get(campaign.id)!;
+      expect(after.milestones[0]!.status).not.toBe("green");
+      expect(after.currentMilestone).toBe(0);
+    }
+
+    // …and a genuinely green record still advances the ladder.
+    runRecordOnSettle = { total: 42, passed: 42, failed: 0, skipped: 0, unfiltered: true };
+  });
+
   it("a vision model's explicit NO bounces the final sprint once; a YES delivers with the match in the report (2026-09-10)", async () => {
     const gdd = [
       "# GDD", "12.  ART DIRECTION", "12.1 Visual Style",

@@ -2722,7 +2722,12 @@ export class CampaignManager {
         // verdict beside a fresh RED run record advanced a non-final sprint
         // (Codex 2026-09-11 B#14).
         const run = readPlaymodeRun(this.projectRoot, this.sprintStartMs(milestone), attemptRunId(milestone));
-        if (status === TaskStatus.completed && run.found && (run.failed ?? 0) > 0) {
+        // THE READER'S OWN VERDICT, not one of the counters it printed. This
+        // asked only whether `failed > 0`, so a record the reader calls red
+        // for any other reason — the runner's own "Failed" result, a runtime
+        // exception, counts that do not add up, a suite that mostly never ran
+        // — advanced the sprint as green (Codex 2026-09-12 V).
+        if (status === TaskStatus.completed && run.found && run.green === false) {
           getLoggerSafe().warn("Milestone completion rejected: the NUnit run record is red", {
             id: campaign.id,
             milestone: milestone.id,
@@ -2735,7 +2740,15 @@ export class CampaignManager {
           status = TaskStatus.failed;
           output = `Tests were RED at completion (NUnit record): ${run.detail}. ${output}`.slice(0, 2000);
         }
-      } catch { /* verdict read is best-effort; other gates still apply */ }
+      } catch (err) {
+        // Best-effort, but never SILENT: a throw in here (a malformed record)
+        // used to hide a red run completely (Codex 2026-09-12 V).
+        getLoggerSafe().warn("Could not read this sprint's test evidence — the other gates still apply", {
+          id: campaign.id,
+          milestone: milestone.id,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
     }
 
     if (status === TaskStatus.completed && isTerminalFailureReport(output)) {
@@ -4509,10 +4522,10 @@ export class CampaignManager {
         refusal: `the GDD could not be read at delivery (${campaign?.gddPath ?? "no path recorded"}), so nothing here was measured against the document`,
       };
     }
-    const { claims, truncated } = extractNumericClaims(gddText);
+    const { claims, truncated, otherLevelCounts } = extractNumericClaims(gddText);
     const assessments = assessNumericClaims(claims, playthrough, player, { platform: gddPlatform(gddText), builtTarget: build?.target ?? build?.requestedTarget });
     const refusal = claimsRefusal(assessments);
-    return { lines: describeClaims(assessments, truncated), ...(refusal ? { refusal } : {}) };
+    return { lines: describeClaims(assessments, truncated, otherLevelCounts), ...(refusal ? { refusal } : {}) };
   }
 
   private freshCaptureEvidence(milestone: CampaignMilestone): { found: boolean } {

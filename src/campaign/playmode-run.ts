@@ -158,7 +158,14 @@ export function readPlaymodeRun(projectRoot: string, sinceMs: number, expectRunI
     !invalidField &&
     whole(total) && whole(passed) && whole(failed) && whole(skipped) &&
     (passed + failed + skipped === total || (num(raw.skipped) === undefined && passed + failed === total));
-  const failedNames = Array.isArray(raw.failedNames) ? raw.failedNames.map(String).slice(0, 50) : [];
+  // STRINGS, WITHOUT COERCION. `String(x)` throws on an entry whose
+  // `toString` is not callable — `{toString:null}` — and the caller's
+  // best-effort catch then swallowed the whole red record, so a run with a
+  // failed test advanced a sprint (Codex 2026-09-12 V). A name that is not a
+  // string is dropped; the FAILED COUNT is what the gate reads.
+  const failedNames = Array.isArray(raw.failedNames)
+    ? raw.failedNames.filter((n): n is string => typeof n === "string" && n.trim() !== "").slice(0, 50)
+    : [];
   // THE PRODUCER'S OWN VERDICT outranks the counts it printed beside it: a
   // run that ended "Failed" or "Inconclusive", or that threw, was read as
   // green because failed came back 0 (Codex 2026-09-12 R#6).

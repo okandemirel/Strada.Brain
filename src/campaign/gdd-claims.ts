@@ -157,7 +157,12 @@ const SESSION_RE =
  * order, de-duplicated by kind+value, capped at MAX_CLAIMS (the cap is
  * reported by the caller through the returned `truncated` flag).
  */
-export function extractNumericClaims(gddText: string): { claims: NumericClaim[]; truncated: number } {
+export function extractNumericClaims(gddText: string): {
+  claims: NumericClaim[];
+  truncated: number;
+  /** The other level counts the document names, largest first — see below. */
+  otherLevelCounts: number[];
+} {
   const text = gddText ?? "";
   const found: Array<NumericClaim & { at: number }> = [];
 
@@ -282,18 +287,28 @@ export function extractNumericClaims(gddText: string): { claims: NumericClaim[];
   // never pass (Codex 2026-09-11 F#2). The largest is the game's own count;
   // the smaller ones describe parts of it.
   const levelCounts = found.filter((c) => c.kind === "level_count");
+  const otherLevelCounts: number[] = [];
   if (levelCounts.length > 1) {
     const biggest = levelCounts.reduce((max, c) => (c.value > max.value || (c.value === max.value && c.at < max.at) ? c : max));
     for (const claim of levelCounts) {
-      if (claim !== biggest) found.splice(found.indexOf(claim), 1);
+      if (claim !== biggest) {
+        // NOT SILENTLY DROPPED. A document names its counts by release phase
+        // — an MVP, a launch, a live target — and taking the largest is a
+        // choice of release, not a reading of the document. The others are
+        // carried so the delivery report can name them and a person can see
+        // which one this delivery is being held to (Codex 2026-09-12 V).
+        otherLevelCounts.push(claim.value);
+        found.splice(found.indexOf(claim), 1);
+      }
     }
   }
+  otherLevelCounts.sort((a, b) => b - a);
   // DOCUMENT ORDER, then the cap: the claims were collected kind by kind, so
   // the cap dropped whole later categories rather than the tail of the
   // document (Codex 2026-09-11 B#19).
   found.sort((a, b) => a.at - b.at);
   const truncated = Math.max(0, found.length - MAX_CLAIMS);
-  return { claims: found.slice(0, MAX_CLAIMS).map(({ at: _at, ...c }) => c), truncated };
+  return { claims: found.slice(0, MAX_CLAIMS).map(({ at: _at, ...c }) => c), truncated, otherLevelCounts };
 }
 
 /**
@@ -566,7 +581,11 @@ function unit(kind: ClaimKind): string {
 }
 
 /** One line per claim for the delivery report; the header says how many there were. */
-export function describeClaims(assessments: readonly ClaimAssessment[], truncated = 0): string[] {
+export function describeClaims(
+  assessments: readonly ClaimAssessment[],
+  truncated = 0,
+  otherLevelCounts: readonly number[] = [],
+): string[] {
   if (assessments.length === 0) return ["GDD numbers: none found (no frame-rate, load-time, level-count or session-length figure in the text)"];
   const lines = assessments.map((a) => {
     const target = `${a.claim.comparator === "min" ? "≥" : a.claim.comparator === "max" ? "≤" : "="} ${a.claim.value}${unit(a.claim.kind)}`;
@@ -574,6 +593,17 @@ export function describeClaims(assessments: readonly ClaimAssessment[], truncate
     if (a.status === "unmeasured") return `${head}: NOT MEASURED — ${a.note} (GDD: "${a.claim.text}")`;
     return `${head}: ${a.status === "met" ? "MET" : "NOT MET"} — ${a.note}`;
   });
+  if (otherLevelCounts.length > 0) {
+    // WHICH RELEASE THIS IS. The largest count wins so that one catalog can
+    // satisfy every mention, but a document that names 200 for an MVP and
+    // 3,000 for a live target is naming release PHASES — and choosing one of
+    // those silently is choosing what to ship (Codex 2026-09-12 V).
+    const chosen = assessments.find((a) => a.claim.kind === "level_count")?.claim.value;
+    lines.push(
+      `GDD level count: measured against ${chosen ?? "the largest"}; the document also names ` +
+      `${otherLevelCounts.slice(0, 6).join(", ")} — say which release this delivery is if it is not the largest`,
+    );
+  }
   if (truncated > 0) lines.push(`GDD numbers: ${truncated} further claim(s) not listed`);
   return lines;
 }

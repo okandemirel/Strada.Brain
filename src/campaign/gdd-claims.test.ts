@@ -430,6 +430,26 @@ describe("comparators, separators and subjects (Codex 2026-09-12 U#F3)", () => {
  * Codex round V (2026-09-12) ran the reader again after the U#F3 fix and
  * found two regressions in it plus four rules it had not reached.
  */
+describe("the release the delivery is measured against (Codex 2026-09-12 V)", () => {
+  it("names the other counts the document states instead of dropping them", () => {
+    const doc = "MVP: 200 certified levels. Global launch: 800+ levels. Launch depth: 2,000 levels. Live target: 3,000 levels.";
+    const read = extractNumericClaims(doc);
+    // One count is measured — one catalogue cannot satisfy four at once — and
+    // it is the largest, so nothing is quietly shipped short.
+    expect(read.claims.filter((c) => c.kind === "level_count").map((c) => c.value)).toEqual([3000]);
+    expect(read.otherLevelCounts).toEqual([2000, 800, 200]);
+
+    const lines = describeClaims(assessNumericClaims(read.claims, evidence()), read.truncated, read.otherLevelCounts);
+    const said = lines.find((l) => l.startsWith("GDD level count:"))!;
+    expect(said).toContain("measured against 3000");
+    expect(said).toContain("2000, 800, 200");
+    // A document with ONE count says nothing about releases.
+    const single = extractNumericClaims("The game ships 12 levels.");
+    expect(single.otherLevelCounts).toEqual([]);
+    expect(describeClaims(assessNumericClaims(single.claims, evidence()), 0, single.otherLevelCounts).some((l) => l.startsWith("GDD level count:"))).toBe(false);
+  });
+});
+
 describe("clause boundaries and the comparators the rest of the document uses (Codex 2026-09-12 V)", () => {
   const kinds = (text: string): Array<[string, string, number]> =>
     extractNumericClaims(text).claims.map((c) => [c.kind, c.comparator, c.value]);
