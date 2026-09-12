@@ -540,18 +540,47 @@ export class CampaignPlanner {
    */
   async auditCoverage(
     gddText: string,
-    milestones: ReadonlyArray<{ title: string; resultExcerpt?: string }>,
+    milestones: ReadonlyArray<{
+      title: string;
+      status?: string;
+      resultExcerpt?: string;
+      testVerdict?: string;
+      testVerdictUnfiltered?: boolean;
+      commitNote?: string;
+      structureFindings?: readonly string[];
+      gddClaims?: readonly string[];
+      coverageGap?: string;
+    }>,
   ): Promise<string[]> {
     if (!this.provider) {
       throw new Error("coverage audit requires an LLM provider");
     }
+    // THE EVIDENCE, NOT THE TITLE. The audit used to see a title and 300
+    // characters of prose, so a milestone whose plan mentioned an item read as
+    // coverage of it — "plausibly includes it" was the instruction (Codex
+    // 2026-09-12 R#15). What each sprint MEASURED travels now: its status, the
+    // suite it ran, what it committed, what the structural and numeric checks
+    // said about the shipped tree.
+    const evidenceOf = (m: {
+      status?: string; testVerdict?: string; testVerdictUnfiltered?: boolean; commitNote?: string;
+      structureFindings?: readonly string[]; gddClaims?: readonly string[]; resultExcerpt?: string;
+    }): string => {
+      const facts: string[] = [];
+      if (m.status) facts.push(`status: ${m.status}`);
+      if (m.testVerdict) facts.push(`suite: ${m.testVerdict.slice(0, 160)}${m.testVerdictUnfiltered === true ? " (unfiltered)" : " (FILTERED or unknown scope)"}`);
+      if (m.commitNote) facts.push(`landed: ${m.commitNote.slice(0, 200)}`);
+      for (const line of (m.structureFindings ?? []).slice(0, 3)) facts.push(`shipped tree: ${line.slice(0, 160)}`);
+      for (const line of (m.gddClaims ?? []).slice(0, 3)) facts.push(`document numbers: ${line.slice(0, 160)}`);
+      if (m.resultExcerpt) facts.push(`report: ${m.resultExcerpt.slice(0, 300)}`);
+      return facts.length > 0 ? facts.map((f) => `\n   ${f}`).join("") : "\n   (no evidence recorded)";
+    };
     const ladderSummary = milestones
-      .map((m, i) => `${i + 1}. ${m.title}${m.resultExcerpt ? `\n   Result: ${m.resultExcerpt.slice(0, 300)}` : ""}`)
+      .map((m, i) => `${i + 1}. ${m.title}${evidenceOf(m)}`)
       .join("\n");
     const userMessage =
       `<gdd>\n${windowGdd(gddText, GDD_AUDIT_FULL_CHARS)}\n</gdd>\n\n` +
       `<completed-ladder>\n${ladderSummary}\n</completed-ladder>\n\n` +
-      `List the concrete items the GDD schedules (mechanics, game elements, blockers, set-pieces, screens, systems) that NO milestone above covered or delivered. Respond ONLY with JSON: {"missing": ["<item>: <one-line what is missing>", ...]} — an empty array when the ladder covers the GDD.`;
+      `List the concrete items the GDD schedules (mechanics, game elements, blockers, set-pieces, screens, systems) that the EVIDENCE above does not show implemented and shipped. Respond ONLY with JSON: {"missing": ["<item>: <one-line what is missing>", ...]} — an empty array when every scheduled item has evidence behind it.`;
 
     // RETRY THE SHAPE, not the judgement. One malformed reply used to skip
     // the GDD-coverage check for the whole delivery — measured live
@@ -614,9 +643,10 @@ Your previous reply was not valid JSON. Reply with the JSON object ALONE — no 
   }
 }
 
-const COVERAGE_SYSTEM = `You audit whether a completed milestone ladder covers everything its game design document schedules.
+const COVERAGE_SYSTEM = `You audit whether a game design document's scheduled content is IMPLEMENTED AND SHIPPED, judged by the evidence each milestone carries.
 Be strict about scheduled content (element tables, mechanics lists, screens, win/lose rules) and lenient about aspiration (KPIs, live-ops roadmaps, marketing).
-Only report an item as missing when no milestone's scope or result plausibly includes it. Respond ONLY with the requested JSON.`;
+A milestone's TITLE or PLAN is not coverage. Its evidence is: what it committed, what the suite measured, what the shipped tree and the document's own numbers say. An item whose only trace is a title, a plan or a promise in prose is MISSING.
+Respond ONLY with the requested JSON.`;
 
 const coverageResultSchema = z.object({
   missing: z.array(z.string().min(1).max(300)).max(30),

@@ -27,6 +27,40 @@ describe("coverage audit malformed JSON", () => {
     expect(missing).toEqual(["Dragon boss: no milestone implemented it"]);
   });
 
+  it("shows the audit what each sprint MEASURED, not its title (Codex 2026-09-12 R#15)", async () => {
+    // "Only report an item as missing when no milestone's scope or result
+    // plausibly includes it" — with a title and 300 characters of prose as the
+    // whole input. A plan that mentioned an item read as coverage of it.
+    const { planner, chat } = plannerWith(['{"missing": []}']);
+
+    await planner.auditCoverage("# GDD\n\nThe game ships a dragon boss.", [
+      {
+        title: "Sprint A — Bosses",
+        status: "green",
+        testVerdict: "PlayMode verification passed: 42 of 42 tests passed",
+        testVerdictUnfiltered: true,
+        commitNote: "3 commit(s): Assets/Scripts/Dragon.cs, Assets/Prefabs/Dragon.prefab",
+        structureFindings: ["the shipped scenes bind 12 of 14 elements"],
+        gddClaims: ["level count = 12 measured 12"],
+        resultExcerpt: "the dragon is implemented",
+      },
+      { title: "Sprint B — Nothing measured yet" },
+    ]);
+
+    const sent = JSON.stringify(chat.mock.calls[0]);
+    expect(sent).toContain("status: green");
+    expect(sent).toContain("suite: PlayMode verification passed");
+    expect(sent).toContain("(unfiltered)");
+    expect(sent).toContain("landed: 3 commit(s)");
+    expect(sent).toContain("shipped tree: the shipped scenes bind 12 of 14");
+    expect(sent).toContain("document numbers: level count = 12");
+    // A sprint with nothing measured says so, instead of passing as covered.
+    expect(sent).toContain("(no evidence recorded)");
+    // …and the instruction is evidence, not plausibility.
+    expect(sent).toContain("TITLE or PLAN is not coverage");
+    expect(sent).not.toContain("plausibly includes it");
+  });
+
   it("gives up after the second malformed reply", async () => {
     const { planner, chat } = plannerWith(["not json", "still not json"]);
     await expect(planner.auditCoverage("# GDD", [{ title: "Sprint A" }])).rejects.toThrow();
