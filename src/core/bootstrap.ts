@@ -305,7 +305,31 @@ export function createSupervisorExecuteNodeBridge(params: {
       // prompt says to run is not done — measured 2026-09-10 18:17, a mission
       // was approved three minutes after resubmission without its play-through.
       if (result.workerResult?.status === "completed") {
-        const shortfalls = missingRequiredEvidence(promptWithBudget, result.workerResult.toolTrace ?? []);
+        const all = missingRequiredEvidence(promptWithBudget, result.workerResult.toolTrace ?? []);
+        // A TOOL THE RUN WAS NEVER OFFERED cannot be evidence for anyone.
+        // Measured live 2026-09-12: the Unity Editor was not running, so 76
+        // bridge-gated tools were hidden from agents, and a node the plan told
+        // to call unity_create_scene was rejected for not calling it — eight
+        // rounds, the mission's whole retry budget, no possible pass. An
+        // unsatisfiable gate is worse than a named gap: the gap is written
+        // into the node's report, where the campaign and a person can see it,
+        // and delivery still rests on the measured artifacts.
+        const unavailable: string[] = [];
+        const shortfalls = all.filter((shortfall) => {
+          const offered = params.orchestrator.toolOfferedNow?.(shortfall.tool) ?? { offered: true };
+          if (offered.offered) return true;
+          unavailable.push(`${shortfall.tool} (${offered.reason ?? "not offered to this run"})`);
+          return false;
+        });
+        if (unavailable.length > 0) {
+          getLoggerSafe().warn("Required evidence names tools this run cannot call — reported as a gap, not a rejection", {
+            nodeId: String(node.id),
+            unavailable,
+          });
+          result.output =
+            `${result.output ?? ""}\n\nEVIDENCE NOT POSSIBLE HERE: the task asks for ${unavailable.join("; ")}. ` +
+            "That work is NOT done and nothing in this report should be read as proof of it.";
+        }
         if (shortfalls.length > 0) {
           const reason = describeEvidenceShortfall(shortfalls);
           getLoggerSafe().warn("Node rejected: required tool evidence missing", { nodeId: String(node.id), shortfalls });

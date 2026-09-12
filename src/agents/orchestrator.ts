@@ -766,6 +766,25 @@ export class Orchestrator {
     input_schema: import("../types/index.js").JsonObject;
   }>;
   private readonly toolMetadataByName = new Map<string, WorkerToolMetadata>();
+
+  /**
+   * Is this tool offered to workers right now, and if not, why?
+   *
+   * Bridge-gated tools vanish from the offered list when the Unity Editor is
+   * not connected (76 of them, measured 2026-09-12 11:22). Anything that
+   * DEMANDS a tool has to be able to ask, or it demands what nobody can run.
+   * An unknown name answers "offered": the registry is dynamic, and refusing
+   * to judge is not the same as judging it absent.
+   */
+  toolOfferedNow(name: string): { offered: boolean; reason?: string } {
+    const metadata = this.toolMetadataByName.get(name);
+    if (metadata === undefined) return { offered: true };
+    if (metadata.controlPlaneOnly === true) return { offered: false, reason: `${name} is not offered to workers` };
+    if (metadata.available === false) {
+      return { offered: false, reason: metadata.availabilityReason || `${name} is currently unavailable` };
+    }
+    return { offered: true };
+  }
   private readonly channel: IChannelAdapter;
   private readonly projectPath: string;
   private readonly readOnly: boolean;

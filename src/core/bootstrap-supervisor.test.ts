@@ -42,6 +42,54 @@ describe("createSupervisorExecuteNodeBridge", () => {
     }))).testsGreen).toBe(false);
   });
 
+  it("does not fail a node for a tool this run was never offered (Codex 2026-09-12 R#1)", async () => {
+    // Measured live 2026-09-12 11:22: the Unity Editor was not running, so 76
+    // bridge-gated tools were hidden from agents — and a node whose plan said
+    // "run unity_create_scene" was rejected for not calling it, eight rounds
+    // running, until the mission's retry budget was gone. Nobody could have
+    // passed that gate.
+    const runWorkerEnvelope = vi.fn().mockResolvedValue({
+      output: "the simulation module is written and compiles",
+      workerResult: { status: "completed", toolTrace: [{ toolName: "unity_verify_change", success: true, summary: "compiled", timestamp: 0 }] },
+    });
+    const bridge = createSupervisorExecuteNodeBridge({
+      backgroundExecutor: { runWorkerEnvelope } as any,
+      orchestrator: {
+        toolOfferedNow: (name: string) =>
+          name === "unity_create_scene"
+            ? { offered: false, reason: "the Unity bridge is not connected" }
+            : { offered: true },
+      } as any,
+      defaultChannelType: "cli",
+    });
+
+    const offered = await bridge(
+      { id: "node-1", task: "Build the model, then run unity_create_scene for the playfield.", assignedProvider: "p", assignedModel: "m" } as any,
+      { chatId: "chat-1", taskRunId: "taskrun_parent" } as any,
+      new AbortController().signal,
+    );
+
+    // Named as a gap, in the report, instead of failing forever…
+    expect(offered.status).toBe("ok");
+    expect(offered.output).toContain("EVIDENCE NOT POSSIBLE HERE");
+    expect(offered.output).toContain("unity_create_scene");
+    expect(offered.output).toContain("NOT done");
+
+    // …while a tool the run COULD have called is still demanded.
+    const withdrawn = createSupervisorExecuteNodeBridge({
+      backgroundExecutor: { runWorkerEnvelope } as any,
+      orchestrator: { toolOfferedNow: () => ({ offered: true }) } as any,
+      defaultChannelType: "cli",
+    });
+    const rejected = await withdrawn(
+      { id: "node-2", task: "Build the model, then run unity_create_scene for the playfield.", assignedProvider: "p", assignedModel: "m" } as any,
+      { chatId: "chat-1", taskRunId: "taskrun_parent" } as any,
+      new AbortController().signal,
+    );
+    expect(rejected.status).toBe("failed");
+    expect(rejected.output).toContain("REQUIRED EVIDENCE MISSING");
+  });
+
   it("every node prompt carries the scope directive, after the task and before the time budget (measured 2026-09-09: a measure node spent 25 min on unrelated reads and writes)", async () => {
     const runWorkerEnvelope = vi.fn().mockResolvedValue({ output: "done", workerResult: { status: "completed", toolTrace: [] } });
     const bridge = createSupervisorExecuteNodeBridge({
