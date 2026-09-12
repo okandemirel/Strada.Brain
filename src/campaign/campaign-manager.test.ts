@@ -704,6 +704,44 @@ describe("CampaignManager", () => {
     expect(after.lastError ?? "").not.toContain("was cancelled");
   });
 
+  it("a milestone that has not run yet is not 'legacy', and a shared preamble is not ownership (Codex 2026-09-12 P#11)", async () => {
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    const stored = storage.get(campaign.id)!;
+    // Real sprint prompts run past 120 characters, and two sprints of one
+    // campaign open the same way — that shared opening is the whole point.
+    const preamble =
+      "You are continuing the campaign for the game described in the design document docs/Game_GDD.md. Work only inside the project root and ";
+    stored.milestones[0]!.prompt = `${preamble}build the foundations, verify compile.`;
+    stored.milestones[1]!.prompt = `${preamble}build the elements, PlayMode green.`;
+    expect(preamble.length).toBeGreaterThanOrEqual(120);
+
+    // A mission that shares the first 120 characters of a PRE-UPGRADE
+    // milestone's prompt and then diverges: prefix matching cancelled it.
+    const sharesPreamble = tasks.submit(
+      "cli-local", "cli", `${stored.milestones[0]!.prompt.slice(0, 120)}AND SOMETHING ELSE ENTIRELY`,
+    ).id;
+    tasks.markTerminal(sharesPreamble, TaskStatus.blocked);
+    // …and a mission carrying the WHOLE prompt of a milestone that has never
+    // been submitted: that milestone is not pre-upgrade, so it owns nothing.
+    const matchesUnsubmitted = tasks.submit(
+      "cli-local", "cli", `${stored.milestones[1]!.prompt}\n\nAND SOMETHING ELSE ENTIRELY`,
+    ).id;
+    tasks.markTerminal(matchesUnsubmitted, TaskStatus.blocked);
+
+    stored.milestones[0]!.taskIds = undefined; // ran under the old code
+    stored.milestones[1]!.taskId = undefined;  // never submitted
+    stored.milestones[1]!.taskIds = undefined;
+    stored.state = "done";
+    stored.deliveryReported = true;
+    storage.save(stored);
+
+    await manager.resumeActive();
+
+    expect(tasks.cancelled).not.toContain(sharesPreamble);
+    expect(tasks.cancelled).not.toContain(matchesUnsubmitted);
+  });
+
   it("a campaign persisted BEFORE ownership existed still retires its orphans (Codex 2026-09-11 O#11)", async () => {
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
     await waitFor(() => expect(tasks.submitted).toHaveLength(1));

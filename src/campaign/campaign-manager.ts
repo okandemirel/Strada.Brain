@@ -785,9 +785,15 @@ export class CampaignManager {
     // Its abandoned lineages are still live, and the prompt scan is the only
     // way left to find them — used ONLY for those milestones (Codex
     // 2026-09-11 O#11).
-    const legacy = campaign.milestones.filter((m) => (m.taskIds ?? []).length === 0 && m.prompt.length > 24);
+    // A milestone that RAN but recorded nothing is pre-upgrade; one that has
+    // simply not been submitted yet is not (Codex 2026-09-12 P#11). And the
+    // whole prompt must match, not its first 120 characters: two missions
+    // sharing a preamble is exactly how prefix matching cancels the wrong work.
+    const legacy = campaign.milestones.filter(
+      (m) => m.taskId !== undefined && (m.taskIds ?? []).length === 0 && m.prompt.length > 24,
+    );
     if (legacy.length > 0) {
-      const keys = legacy.map((m) => m.prompt.slice(0, 120));
+      const keys = legacy.map((m) => m.prompt.trim());
       try {
         const onChat = this.taskManager.listTasks(campaign.chatId, 50) as unknown as Array<{
           id: string; status: string; prompt?: string;
@@ -919,6 +925,16 @@ export class CampaignManager {
    * executor's guard does, and treats an unreadable lineage as not cancelled
    * so a storage hiccup cannot strand a campaign.
    */
+  /** The stable root of this task's lineage, or the task itself. */
+  private lineageRootOf(taskId: string): string {
+    try {
+      return (this.taskManager as unknown as { findLineageRootId?: (t: TaskId) => string | null })
+        .findLineageRootId?.(taskId as TaskId) ?? taskId;
+    } catch {
+      return taskId;
+    }
+  }
+
   private lineageWasCancelledOnPurpose(taskId: string): boolean {
     try {
       const manager = this.taskManager as unknown as {
@@ -1595,7 +1611,7 @@ export class CampaignManager {
       const milestone = campaign.milestones[campaign.currentMilestone];
       if (!milestone || milestone.taskId === taskId) return;
       milestone.taskId = taskId;
-      rememberOwnedTask(milestone, taskId);
+      rememberOwnedTask(milestone, this.lineageRootOf(taskId));
       // A retry is a new attempt at proof: the freshness clock moves with it,
       // or evidence from the abandoned attempt stays eligible (Codex 2026-09-11 C#9).
       milestone.attemptStartedAtMs = Date.now();
@@ -1794,7 +1810,10 @@ export class CampaignManager {
       },
     );
     milestone.taskId = task.id;
-    rememberOwnedTask(milestone, task.id);
+    // THE LINEAGE ROOT, not every retry's id: recording each attempt filled
+    // the ledger and the eviction then dropped whole roots out of its middle
+    // (Codex 2026-09-12 P#11).
+    rememberOwnedTask(milestone, this.lineageRootOf(task.id));
     this.persist(campaign);
     getLoggerSafe().info("Campaign milestone submitted", {
       id: campaign.id,
