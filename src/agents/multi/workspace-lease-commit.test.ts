@@ -15,7 +15,7 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
-import { WorkspaceLeaseManager, DEFAULT_WORKSPACE_COPY_EXCLUDES, isAlreadyGone, reconcileSeedBaseline, stampUnchanged, existedAtSeed } from "./workspace-lease-manager.js";
+import { WorkspaceLeaseManager, DEFAULT_WORKSPACE_COPY_EXCLUDES, isAlreadyGone, reconcileSeedBaseline, stampUnchanged, existedAtSeed, readLeaseSeed, writeLeaseSeed } from "./workspace-lease-manager.js";
 import type { SeedStamp } from "./workspace-lease-manager.js";
 
 let source: string;
@@ -1195,5 +1195,75 @@ describe("size plus mtime cannot prove unchanged content (Codex 2026-09-12 P#16)
     // the agent's version of that path is a conflict rather than an update.
     expect(after.get("created.cs")?.absent).toBe(true);
     expect(existedAtSeed(after.get("created.cs"))).toBe(false);
+  });
+});
+
+describe("the seed survives a restart exactly as it was written (Codex 2026-09-12 Q#5)", () => {
+  it("keeps an explicitly ABSENT path across the sidecar round trip", () => {
+    // Absence carries no timestamps, its NaNs serialise as null, and the
+    // reader required a numeric mtime — so the entry vanished on reload and a
+    // salvage deleted a file the live commit had just declined to delete.
+    const lease = join(leaseRoot, "task-roundtrip");
+    mkdirSync(lease, { recursive: true });
+    writeLeaseSeed(lease, {
+      seedHead: "abc123",
+      leaseSeed: new Map([["Assets/Kept.cs", { m: 1, s: 2, c: 3 }]]),
+      sourceSeed: new Map([
+        ["Assets/Kept.cs", { m: 1, s: 2, c: 3 }],
+        ["Assets/AppearedDuringSeeding.cs", { m: Number.NaN, s: Number.NaN, c: Number.NaN, absent: true as const }],
+      ]),
+    });
+
+    const back = readLeaseSeed(lease)!;
+
+    expect(back.seedHead).toBe("abc123");
+    expect(back.sourceSeed.get("Assets/Kept.cs")).toEqual({ m: 1, s: 2, c: 3 });
+    expect(existedAtSeed(back.sourceSeed.get("Assets/AppearedDuringSeeding.cs"))).toBe(false);
+    expect(back.sourceSeed.get("Assets/AppearedDuringSeeding.cs")?.absent).toBe(true);
+  });
+});
+
+describe("a person's edit that stats cannot see is not published over (Codex 2026-09-12 Q#5)", () => {
+  const git = (cwd: string, cmd: string) =>
+    execSync(`git -c user.email=w@x -c user.name=worker ${cmd}`, { cwd, encoding: "utf8" }).trim();
+
+  it("quarantines the worker's version when the project's copy changed under the same size and mtime", async () => {
+    makeGitRepo();
+    const target = join(source, "Assets", "Scripts", "Existing.cs");
+    // A whole-second stamp, so putting it back is exact rather than rounded.
+    const stamp = 1_600_000_000;
+    utimesSync(target, stamp, stamp);
+    const lease = await gitManager().acquireLease({ label: "t", workerId: "w" });
+    // The person rewrites eight bytes over eight bytes and the mtime is put
+    // back — the seed stamp cannot tell, and their edit used to be overwritten
+    // with no conflict reported at all.
+    writeFileSync(target, "PERSON!!", "utf8");
+    utimesSync(target, stamp, stamp);
+    expect(statSync(target).mtimeMs).toBe(stamp * 1000);
+    writeFileSync(join(lease.path, "Assets", "Scripts", "Existing.cs"), "WORKER!!", "utf8");
+
+    const result = await lease.commit();
+    await lease.release();
+
+    expect(readFileSync(target, "utf8")).toBe("PERSON!!");
+    expect(result.written).not.toContain(join("Assets", "Scripts", "Existing.cs"));
+    expect(result.conflicts).toContain(join("Assets", "Scripts", "Existing.cs"));
+    // …and the worker's version is preserved rather than dropped.
+    expect(readFileSync(join(result.conflictsQuarantinedUnder!, "Assets", "Scripts", "Existing.cs"), "utf8")).toBe("WORKER!!");
+  });
+
+  it("a permission change that moved no byte is not a conflict", async () => {
+    makeGitRepo();
+    const lease = await gitManager().acquireLease({ label: "t", workerId: "w" });
+    const target = join(source, "Assets", "Scripts", "Existing.cs");
+    chmodSync(target, 0o640); // ctime moves, content does not
+    writeFileSync(join(lease.path, "Assets", "Scripts", "Existing.cs"), "worker work", "utf8");
+
+    const result = await lease.commit();
+    await lease.release();
+
+    expect(result.written).toContain(join("Assets", "Scripts", "Existing.cs"));
+    expect(readFileSync(target, "utf8")).toBe("worker work");
+    expect(git(source, "status --porcelain -- Assets/Scripts/Existing.cs")).not.toBe("");
   });
 });

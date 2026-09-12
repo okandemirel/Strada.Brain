@@ -144,6 +144,28 @@ describe("the project write lock", () => {
     afterNextRename.run = undefined;
   });
 
+  it("a release the marker blocked is retried, not reported done (Codex 2026-09-12 Q#3)", async () => {
+    // The handle marked itself released and stopped its heartbeat even when
+    // the reclaim could not run: the lock then stood forever with a live
+    // owner, and every later writer proceeded UNLOCKED.
+    const held = await acquireProjectWriteLock(root, { timeoutMs: 100 });
+    expect(held.acquired).toBe(true);
+    mkdirSync(`${lockDir()}.reclaiming`, { recursive: true }); // another reclaimer is deciding
+
+    vi.useFakeTimers();
+    try {
+      held.release();
+      expect(existsSync(lockDir())).toBe(true); // still ours, still held
+
+      rmSync(`${lockDir()}.reclaiming`, { recursive: true, force: true });
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(existsSync(lockDir())).toBe(false); // the retry settled it
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("one reclaim decision at a time: a lock is not broken under a reclaimer that is mid-flight (Codex 2026-09-12 P#20)", async () => {
     mkdirSync(lockDir(), { recursive: true });
     writeFileSync(

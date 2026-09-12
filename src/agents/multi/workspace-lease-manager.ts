@@ -462,13 +462,13 @@ export function reconcileSeedBaseline(
   return reconciled;
 }
 
-interface PersistedLeaseSeed {
+export interface PersistedLeaseSeed {
   readonly seedHead: string | undefined;
   readonly leaseSeed: ReadonlyMap<string, SeedStamp>;
   readonly sourceSeed: ReadonlyMap<string, SeedStamp>;
 }
 
-function writeLeaseSeed(leasePath: string, seed: PersistedLeaseSeed): void {
+export function writeLeaseSeed(leasePath: string, seed: PersistedLeaseSeed): void {
   try {
     writeFileSync(
       leaseSeedPath(leasePath),
@@ -484,7 +484,7 @@ function writeLeaseSeed(leasePath: string, seed: PersistedLeaseSeed): void {
   }
 }
 
-function readLeaseSeed(leasePath: string): PersistedLeaseSeed | undefined {
+export function readLeaseSeed(leasePath: string): PersistedLeaseSeed | undefined {
   // Leases taken between 81985efd and a3b0f64e (2026-09-08) wrote the seed
   // INSIDE the workspace; a salvage after the move must still find it.
   const candidates = [leaseSeedPath(leasePath), join(leasePath, ".strada-lease-seed.json")];
@@ -503,13 +503,21 @@ function readLeaseSeed(leasePath: string): PersistedLeaseSeed | undefined {
         // [rel, mtime, size, ctime, absent] — and the shorter forms from
         // leases taken before those fields were recorded, which keep behaving
         // exactly as they did.
-        if (!Array.isArray(e) || typeof e[0] !== "string" || typeof e[1] !== "number") continue;
-        const stamp: SeedStamp = {
+        if (!Array.isArray(e) || typeof e[0] !== "string") continue;
+        // EXPLICIT ABSENCE CARRIES NO TIMESTAMPS. Its NaNs serialise as null,
+        // and requiring a numeric mtime dropped the entry on reload — so a
+        // salvage after a restart deleted a file the live commit had just
+        // declined to delete (Codex 2026-09-12 Q#5).
+        if (e[4] === 1) {
+          m.set(e[0], { m: Number.NaN, s: Number.NaN, c: Number.NaN, absent: true });
+          continue;
+        }
+        if (typeof e[1] !== "number") continue;
+        m.set(e[0], {
           m: e[1],
           s: typeof e[2] === "number" ? e[2] : Number.NaN,
           c: typeof e[3] === "number" ? e[3] : Number.NaN,
-        };
-        m.set(e[0], e[4] === 1 ? { ...stamp, absent: true } : stamp);
+        });
       }
       return m;
     };
@@ -1863,17 +1871,28 @@ export class WorkspaceLeaseManager {
               || sourceSeeded.absent === true
               || targetNow.mtimeMs !== sourceSeeded.m
               || (!Number.isNaN(sourceSeeded.s) && targetNow.size !== sourceSeeded.s);
-            // ctime is deliberately NOT consulted here. It moves on a chmod or
-            // a rename that changed no byte, and this branch QUARANTINES the
-            // agent's work: a false "the user changed it" costs the run its
-            // output. Where a wrong answer is merely conservative — "was this
-            // file written to?", "may this deletion be applied?" — the stamp
-            // comparison does consult it (Codex 2026-09-12 P#16).
+            // ctime moves on a chmod or a rename that changed no byte, and
+            // this branch QUARANTINES the agent's work — a false "the user
+            // changed it" costs the run its output. So it is consulted only
+            // where the answer can be CHECKED: against the seed commit. There
+            // it catches the edit stats cannot see — a person's same-length
+            // rewrite with the mtime preserved, which was published over with
+            // zero conflicts (Codex 2026-09-12 Q#5). Where there is no commit
+            // to check against, the old rule stands rather than quarantine
+            // every chmod.
+            const ctimeMoved = sourceSeeded !== undefined
+              && sourceSeeded.absent !== true
+              && !Number.isNaN(sourceSeeded.c)
+              && targetNow.ctimeMs !== sourceSeeded.c;
             // A moved mtime with the SAME bytes as the seed-time commit is not a
             // user change (review + measurement 2026-09-07): the merge attempt
             // before this commit rewrote 169 files byte-for-byte and every
             // agent edit to them was quarantined.
-            if (mtimeMoved && !(await this.unchangedSinceSeedHead(sourceRoot, seedHead, rel, target))) {
+            const atSeed = mtimeMoved || ctimeMoved
+              ? await this.seedHeadVerdict(sourceRoot, seedHead, rel, target)
+              : "same";
+            const userChanged = mtimeMoved ? atSeed !== "same" : ctimeMoved && atSeed === "different";
+            if (userChanged) {
               // The agent's version used to be destroyed together with the
               // released workspace — hours of autonomous work lost to a single
               // .meta touch by the editor. Preserve it under the project's
@@ -2337,8 +2356,20 @@ export class WorkspaceLeaseManager {
    * commit held — the file's mtime moved, its content did not. Unknown (no
    * git, untracked at seed, unreadable) reads as "changed", the safe side.
    */
-  private async unchangedSinceSeedHead(sourceRoot: string, seedHead: string | undefined, rel: string, target: string): Promise<boolean> {
-    if (!seedHead) return false;
+  /**
+   * How the project's copy compares to the commit the lease was taken from.
+   *
+   * "unknown" is its own answer: a file the seed commit does not hold (an
+   * untracked or gitignored one) can neither confirm nor contradict a stamp,
+   * and the caller decides which way that cuts.
+   */
+  private async seedHeadVerdict(
+    sourceRoot: string,
+    seedHead: string | undefined,
+    rel: string,
+    target: string,
+  ): Promise<"same" | "different" | "unknown"> {
+    if (!seedHead) return "unknown";
     try {
       const shown = await this.commandRunner({
         command: "git",
@@ -2347,11 +2378,11 @@ export class WorkspaceLeaseManager {
         timeoutMs: 15_000,
         maxOutput: 64 * 1024 * 1024,
       });
-      if (shown.exitCode !== 0) return false;
+      if (shown.exitCode !== 0) return "unknown";
       const current = await fsp.readFile(target);
-      return Buffer.from(shown.stdout, "utf8").equals(current);
+      return Buffer.from(shown.stdout, "utf8").equals(current) ? "same" : "different";
     } catch {
-      return false;
+      return "unknown";
     }
   }
 

@@ -99,6 +99,9 @@ function writeOwner(path: string, token: string): void {
 
 /** How long a reclaim decision may take before another reclaimer overrides it. */
 const RECLAIM_MARKER_STALE_MS = 30_000;
+/** How a contended release waits out the reclaimer that holds the decision. */
+const RELEASE_RETRY_MS = 500;
+const RELEASE_RETRIES = Math.ceil((RECLAIM_MARKER_STALE_MS * 2) / RELEASE_RETRY_MS);
 
 /**
  * Serialize the DECISION to break or release a lock.
@@ -136,6 +139,12 @@ function dropReclaimMarker(path: string): void {
 }
 
 /**
+ * What a reclaim attempt did: took the lock away, found it was not ours to
+ * take, or could not decide because another reclaimer held the marker.
+ */
+type ReclaimOutcome = "settled" | "not-ours" | "contended";
+
+/**
  * Take a lock away from whoever holds it, atomically.
  *
  * A token check followed by an independent delete is two steps: between them
@@ -152,17 +161,21 @@ function dropReclaimMarker(path: string): void {
  * the marker, and the path is never vacated on a stale observation — so there
  * is no window in which a new holder's lock can be removed.
  */
-function reclaim(path: string, expected: LockOwner | null, why: string, routine = false): void {
-  if (!takeReclaimMarker(path)) return; // someone else owns this decision
+function reclaim(path: string, expected: LockOwner | null, why: string, routine = false): ReclaimOutcome {
+  // CONTENDED IS NOT DONE. A release that reported success while another
+  // reclaimer held the marker stopped its heartbeat and left the lock
+  // standing with a live owner: nothing could ever take it, and every later
+  // writer proceeded unlocked (Codex 2026-09-12 Q#3).
+  if (!takeReclaimMarker(path)) return "contended";
   try {
     const current = readOwner(path);
     if (expected !== null) {
       // The observation that justified this reclaim may be old. If the lock
       // has changed hands since, it belongs to its new holder.
-      if (current === null || current.token !== expected.token) return;
+      if (current === null || current.token !== expected.token) return "not-ours";
     } else if (current !== null && holderIsAlive(current) !== false) {
       // We judged an ownerless directory stale; it has an owner now.
-      return;
+      return "not-ours";
     }
     try {
       // A grave left by a reclaimer that died mid-flight would block the
@@ -170,12 +183,13 @@ function reclaim(path: string, expected: LockOwner | null, why: string, routine 
       rmSync(`${path}.reclaimed`, { recursive: true, force: true });
       renameSync(path, `${path}.reclaimed`);
     } catch {
-      return; // released under us — nothing of ours to remove
+      return "settled"; // released under us — nothing of ours to remove
     }
     // A release is routine; only TAKING a lock from someone is a warning.
     if (routine) getLoggerSafe().debug(why, { path });
     else getLoggerSafe().warn(why, { path, pid: current?.pid });
     rmSync(`${path}.reclaimed`, { recursive: true, force: true });
+    return "settled";
   } finally {
     dropReclaimMarker(path);
   }
@@ -247,14 +261,33 @@ export async function acquireProjectWriteLock(
         acquired: true,
         release: () => {
           if (released) return;
-          released = true;
-          clearInterval(beat);
           // ONLY OUR OWN LOCK. An unconditional remove deleted the lock a
           // different process had taken after ours was broken, and a third
           // writer then acquired it beside that one (Codex 2026-09-11 N#2).
           // The same atomic take-then-verify: reading the owner and deleting
           // afterwards could remove a lock that changed hands in between.
-          reclaim(path, { pid: process.pid, host: hostname(), token, at: "" }, "Project write lock released", true);
+          const mine: LockOwner = { pid: process.pid, host: hostname(), token, at: "" };
+          const settle = (attempt: number): void => {
+            if (released) return;
+            const outcome = reclaim(path, mine, "Project write lock released", true);
+            if (outcome === "contended" && attempt < RELEASE_RETRIES) {
+              // ANOTHER RECLAIMER IS DECIDING. Our lock is still ours and
+              // still held: keep the heartbeat alive and come back, or the
+              // lock stands forever with a live owner and every later writer
+              // proceeds unlocked (Codex 2026-09-12 Q#3). A reclaimer that
+              // died holding the marker is overridden after its stale window,
+              // so these retries always terminate.
+              const again = setTimeout(() => settle(attempt + 1), RELEASE_RETRY_MS);
+              again.unref?.();
+              return;
+            }
+            if (outcome === "contended") {
+              getLoggerSafe().warn("Project write lock could not be released — another reclaimer holds the decision", { path });
+            }
+            released = true;
+            clearInterval(beat);
+          };
+          settle(0);
         },
       };
     }
