@@ -25,12 +25,24 @@ export interface ScheduledElement {
 
 /** Strip formatting from a spec element name for code search. */
 export function elementCodeTokens(name: string): string[] {
-  const words = name.replace(/[^\w\s]/g, " ").split(/\s+/).filter(Boolean);
-  const pascal = words.map((w) => (w[0] ?? "").toUpperCase() + w.slice(1).toLowerCase()).join("");
-  const tokens = new Set<string>([pascal, words.join("").toLowerCase()]);
-  // Common compound splits the code might choose instead ("LockAndKey" vs "LockKey").
-  if (words.length > 1) {
-    tokens.add(words.map((w) => (w[0] ?? "").toUpperCase() + w.slice(1).toLowerCase()).slice(0, 2).join(""));
+  const tokens = new Set<string>();
+  // A PARENTHETICAL IS AN ANNOTATION, not part of the name. "Caged (Locked)
+  // Pig" produced only CagedLockedPig/cagedlockedpig, so a project whose code
+  // says `CagedPig` was reported as missing the element it had implemented —
+  // the real two-element false refusal on the vehicle (Codex 2026-09-12 Y).
+  // The annotated spelling stays a candidate: some code keeps it.
+  const spellings = new Set<string>([name]);
+  const withoutNotes = name.replace(/\s*\([^)]*\)\s*/g, " ").trim();
+  if (withoutNotes !== "" && withoutNotes !== name) spellings.add(withoutNotes);
+  for (const spelling of spellings) {
+    const words = spelling.replace(/[^\w\s]/g, " ").split(/\s+/).filter(Boolean);
+    if (words.length === 0) continue;
+    const pascalOf = (ws: readonly string[]): string =>
+      ws.map((w) => (w[0] ?? "").toUpperCase() + w.slice(1).toLowerCase()).join("");
+    tokens.add(pascalOf(words));
+    tokens.add(words.join("").toLowerCase());
+    // Common compound splits the code might choose instead ("LockAndKey" vs "LockKey").
+    if (words.length > 1) tokens.add(pascalOf(words.slice(0, 2)));
   }
   return [...tokens];
 }

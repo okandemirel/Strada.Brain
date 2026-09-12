@@ -206,6 +206,16 @@ describe("a dirty tree is an unknown revision (Codex 2026-09-12 W#4)", () => {
     const root = repo();
     commit(root, "Assets/Boss.cs");
     expect(dirty(root)).toBe(false);
+    // THE SYSTEM'S OWN OUTPUT IS NOT DIRT. Recordings/ and .strada/ are what
+    // a run writes — frames, verdicts, leases — and the commit path excludes
+    // them for that reason. Counting them made every tree dirty DURING a run,
+    // so a requirement the audit had just closed could never be recorded as
+    // closed (Codex 2026-09-12 Y#J4.1).
+    mkdirSync(join(root, "Recordings", "run"), { recursive: true });
+    writeFileSync(join(root, "Recordings", "run", "playthrough.json"), "{}");
+    mkdirSync(join(root, ".strada"), { recursive: true });
+    writeFileSync(join(root, ".strada", "lease.json"), "{}");
+    expect(dirty(root)).toBe(false);
     writeFileSync(join(root, "Assets", "Boss.cs"), "edited");
     expect(dirty(root)).toBe(true);
     // An untracked file counts too — a worker's new scene is uncommitted work.
@@ -241,10 +251,12 @@ describe("how many repairs one requirement may have (Codex 2026-09-12 V#1)", () 
     const ladder = [
       { id: "m1", title: "Audio" },
       { id: "mcov1", title: "Coverage completion 1.1", coverageGap: gap },
-      { id: "mcov2", title: "Coverage completion 2.1", coverageGap: `  ${gap.toUpperCase()}  ` },
+      { id: "mcov2", title: "Coverage completion 2.1", coverageGap: `  ${gap}  ` },
       { id: "mcov3", title: "Coverage completion 3.1", coverageGap: capabilityGapWork("unity_create_scene") },
     ];
     expect(repairsForRequirement(ladder, gap)).toBe(MAX_REPAIRS_PER_REQUIREMENT);
+    // …and a requirement that differs in CASE has its own budget (Y#1).
+    expect(repairsForRequirement(ladder, gap.toUpperCase())).toBe(0);
     expect(repairsForRequirement(ladder, capabilityGapWork("unity_create_scene"))).toBe(1);
     expect(repairsForRequirement(ladder, capabilityGapWork("unity_build_player"))).toBe(0);
   });
@@ -308,8 +320,14 @@ describe("which GDD requirements still need a sprint (Codex 2026-09-11 J#12, J#1
     expect(unscheduledGaps([long, long, "Boss fight: absent"], [])).toEqual([long, "Boss fight: absent"]);
     // Two requirements sharing sixty characters are two requirements.
     expect(unscheduledGaps([long, sharesPrefix], [])).toEqual([long, sharesPrefix]);
-    // Whitespace and case are not identity.
-    expect(unscheduledGaps(["Save: absent", "  save:   ABSENT "], [])).toEqual(["Save: absent"]);
+    // Whitespace is not identity; CASE IS — "Assets/Art/Hero.png" and
+    // ".../hero.png" are two files, and lowercasing them into one dropped the
+    // second before any sprint ran for it (Codex 2026-09-12 X#2, Y#1).
+    expect(unscheduledGaps(["Save: absent", "  Save:   absent "], [])).toEqual(["Save: absent"]);
+    expect(unscheduledGaps(["Ship Assets/Art/Hero.png", "Ship Assets/Art/hero.png"], [])).toEqual([
+      "Ship Assets/Art/Hero.png",
+      "Ship Assets/Art/hero.png",
+    ]);
     expect(unscheduledGaps(["", "   "], [])).toEqual([]);
   });
 

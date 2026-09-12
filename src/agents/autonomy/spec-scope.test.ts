@@ -184,3 +184,22 @@ describe("a flattened schedule table (Codex 2026-09-12 W#12)", () => {
     ]);
   });
 });
+
+/**
+ * The real two-element false refusal on the vehicle (Codex 2026-09-12 Y):
+ * "Caged (Locked) Pig" and "Dragon (boss)" produced only the annotated
+ * spellings, so a project whose code says `CagedPig` and `Dragon` was
+ * reported as missing the elements it had implemented.
+ */
+describe("a parenthetical is an annotation, not part of the name (Codex 2026-09-12 Y)", () => {
+  it("offers the name without its notes as well as with them", () => {
+    expect(elementCodeTokens("Caged (Locked) Pig")).toEqual(
+      expect.arrayContaining(["CagedLockedPig", "CagedPig", "cagedpig"]),
+    );
+    expect(elementCodeTokens("Dragon (boss)")).toEqual(expect.arrayContaining(["Dragon", "dragon", "DragonBoss"]));
+    expect(elementCodeTokens("Frozen Pig (+ moving belt)")).toEqual(expect.arrayContaining(["FrozenPig"]));
+    // A name with no annotation is unchanged.
+    expect(elementCodeTokens("Ice Block")).toEqual(["IceBlock", "iceblock"]);
+    expect(elementCodeTokens("Lock & Key")).toEqual(["LockKey", "lockkey"]);
+  });
+});

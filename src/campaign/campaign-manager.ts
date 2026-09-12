@@ -467,10 +467,14 @@ function coverageGapOf(m: { title: string; prompt?: string; coverageGap?: string
  * A requirement's identity FOR CLOSURE: its own text, whitespace collapsed,
  * case PRESERVED.
  *
- * `gapKey` lowercases so that one requirement written twice is scheduled once
- * — right for scheduling, wrong for closure: "Assets/Art/Hero.png" and
- * "Assets/Art/hero.png" are two files, and a positive verdict about one
- * closed the other (Codex 2026-09-12 X#2).
+ * Whitespace is not identity; CASE IS. "Assets/Art/Hero.png" and
+ * "Assets/Art/hero.png" are two files, and lowercasing merged them: a
+ * positive verdict about one closed the other (Codex 2026-09-12 X#2), and —
+ * with closure using this rule while scheduling still lowercased — the second
+ * requirement could be dropped as a duplicate before any sprint ran for it,
+ * or have its repair budget spent by the first (Codex 2026-09-12 Y#1).
+ * ONE identity, everywhere: scheduling, the repair budget, capability
+ * reconciliation and closure.
  */
 export function requirementKey(text: string): string {
   return text.trim().replace(/\s+/g, " ");
@@ -478,7 +482,7 @@ export function requirementKey(text: string): string {
 
 /** A coverage requirement's identity: its own text, normalized — never a prefix. */
 export function gapKey(gap: string): string {
-  return gap.trim().toLowerCase().replace(/\s+/g, " ");
+  return requirementKey(gap);
 }
 
 /**
@@ -4291,12 +4295,27 @@ export class CampaignManager {
    */
   private projectIsDirty(): boolean {
     try {
-      const out = execFileSync("git", ["status", "--porcelain", "--ignore-submodules=none"], {
-        cwd: this.projectRoot,
-        encoding: "utf8",
-        timeout: 20_000,
-        stdio: ["ignore", "pipe", "ignore"],
-      });
+      // THE BUILD INPUTS, not the system's own output. Recordings/ and
+      // .strada/ are what the run WRITES — frames, verdicts, leases — and the
+      // commit path excludes them for that reason. Counting them as dirt made
+      // every tree dirty during a run, so `revisionForClosure` was always ""
+      // and a requirement the audit had just closed could never be recorded
+      // as closed (Codex 2026-09-12 Y#J4.1): my own W#4 fix, turned into an
+      // unsatisfiable gate. Everything else — source, assets, settings,
+      // submodules — still counts.
+      const out = execFileSync(
+        "git",
+        [
+          "status", "--porcelain", "--ignore-submodules=none",
+          "--", ".", ":(exclude).strada", ":(exclude)Recordings",
+        ],
+        {
+          cwd: this.projectRoot,
+          encoding: "utf8",
+          timeout: 20_000,
+          stdio: ["ignore", "pipe", "ignore"],
+        },
+      );
       return out.trim() !== "";
     } catch {
       return true;
@@ -4910,9 +4929,11 @@ export class CampaignManager {
   private async openRequirements(campaign: Campaign): Promise<{ open: string[]; auditFailed?: string }> {
     // A DIRTY TREE IS AN UNKNOWN REVISION. HEAD equality says nothing about
     // uncommitted work, so a closure read on one working tree was held to
-    // describe another (Codex 2026-09-12 W#4). Unknown binds nothing, so a
-    // dirty tree is re-judged every round.
-    const revisionForClosure = this.projectIsDirty() ? "" : this.projectRevision();
+    // describe another (Codex 2026-09-12 W#4). An unknown revision binds
+    // nothing, so such a closure counts for THIS round and is re-judged on
+    // the next one.
+    const treeBefore = { revision: this.projectRevision(), dirty: this.projectIsDirty() };
+    const revisionForClosure = treeBefore.dirty ? "" : treeBefore.revision;
     const failedRepairs = campaign.milestones.filter((m) => m.id.startsWith("mcov") && m.status === "failed");
     const unclosed = failedRepairs.filter((m) => !closureHolds(m, revisionForClosure));
     if (unclosed.length === 0) return { open: [] };
@@ -4941,9 +4962,13 @@ export class CampaignManager {
       const judged = await this.planner.resolveCoverageGaps(gddForGaps, asked, campaign.milestones);
       const closed = new Set(judged.closed.map(requirementKey));
       const stillOpen = new Set(judged.open.map(requirementKey));
-      // NOT ACROSS A PUBLICATION: a closure read while the tree was moving
-      // describes neither revision (V#4).
-      const stillSameRevision = this.projectRevision() === revisionForClosure;
+      // NOT ACROSS A CHANGE OF TREE. A publication landing during the audit
+      // gave a closure that describes neither revision (V#4) — and HEAD
+      // equality alone let an uncommitted implementation change land in that
+      // window and stamp the closure anyway (Codex 2026-09-12 Y#3). Both
+      // reads, the same scope, before and after.
+      const stillSameRevision =
+        this.projectRevision() === treeBefore.revision && this.projectIsDirty() === treeBefore.dirty;
       for (const [key, ms] of byRequirement) {
         if (!needsJudging.has(key)) continue;
         // Never a key the answer names on both sides.

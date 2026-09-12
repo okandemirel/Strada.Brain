@@ -3303,6 +3303,38 @@ describe("CampaignManager", () => {
     expect(messages.map((m) => m.text).join("\n")).not.toContain("found delivered by the evidence audit");
   });
 
+  it("a tree EDITED during the audit closes nothing (Codex 2026-09-12 Y#3)", async () => {
+    // HEAD equality says nothing about uncommitted work, so an
+    // implementation change landing inside the audit's own await was stamped
+    // as a closure of the tree the audit had read.
+    const asked: string[][] = [];
+    let editDuringAudit: (() => void) | undefined;
+    const { id } = await onACleanCheckout(
+      [{ id: "mcov1", title: "c", coverageGap: "Boss: absent", prompt: "p", status: "running", attempts: 2, taskId: "task_1" }],
+      (reqs) => {
+        editDuringAudit?.();
+        return { closed: [...reqs], open: [] };
+      },
+      asked,
+    );
+    const repoRoot = storage.get(id)!.projectRoot;
+    editDuringAudit = () => {
+      mkdirSync(join(repoRoot, "Assets"), { recursive: true });
+      writeFileSync(join(repoRoot, "Assets", "Boss.cs"), "// the boss, uncommitted");
+    };
+
+    tasks.emit("task:failed", "task_1", "the boss scene will not compile");
+    await waitFor(() => expect(storage.get(id)!.state).not.toBe("executing"), { timeout: 15_000 });
+
+    const after = storage.get(id)!;
+    expect(asked).toHaveLength(1);
+    // The audit said delivered; the tree it judged is not the tree in front
+    // of us, so nothing is closed and the requirement still blocks.
+    expect(after.milestones.find((m) => m.id === "mcov1")!.coverageClosed).toBeUndefined();
+    expect(after.state).not.toBe("done");
+    expect(`${after.lastError}`).toContain("Boss: absent");
+  });
+
   it("a requirement that differs only in CASE is its own requirement (Codex 2026-09-12 X#2)", async () => {
     // `gapKey` lowercases, which is right for scheduling one sprint per
     // requirement and wrong for closure: "Assets/Art/Hero.png" and
