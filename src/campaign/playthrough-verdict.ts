@@ -193,7 +193,10 @@ export function readPlaythroughVerdict(
                     // observedIndex naming a different session is a
                     // contradiction, and it counted (Codex 2026-09-12 Z#5).
                     ...(num(r.observedIndex) !== undefined ? { observedIndex: num(r.observedIndex) } : {}),
-                    seconds: num(r.seconds) ?? 0,
+                    // A ZERO IS A MEASUREMENT; an absent clock is not. Both
+                    // arrived here as 0, so a floor of 30 s could neither fail
+                    // the first nor disclose the second (Codex 2026-09-12 AC).
+                    ...(num(r.seconds) !== undefined ? { seconds: num(r.seconds) } : {}),
                   };
                 }),
               }

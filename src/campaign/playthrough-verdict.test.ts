@@ -171,6 +171,21 @@ describe("a session record that omits its fields keeps them omitted (Codex 2026-
     expect(parsed.sessions?.[0]?.actions).toBeUndefined();
     expect(parsed.sessions?.[1]).toEqual({ index: 1, outcome: "Won", actions: 4, seconds: 2 });
 
+    // …AND DOES NOT INVENT A ZERO-SECOND SESSION. A record with no clock and
+    // a record of a session that lasted no time both arrived as 0, so a
+    // duration floor could neither fail the one nor disclose the other
+    // (Codex 2026-09-12 AC J4.3).
+    write({
+      ...ok,
+      record: {
+        ...ok.record, sessionCount: 2,
+        sessions: [{ index: 1, outcome: "Won", actions: 4 }, { index: 2, outcome: "Won", actions: 4, seconds: 0 }],
+      },
+    });
+    const clocks = readPlaythroughVerdict(root, 0);
+    expect(clocks.sessions?.[0]?.seconds).toBeUndefined();
+    expect(clocks.sessions?.[1]?.seconds).toBe(0);
+
     // An IMPOSSIBLE index is passed through as it is, not clamped into a
     // valid one: clamping -1 to 0 makes it level zero, played (Codex G#16).
     write({

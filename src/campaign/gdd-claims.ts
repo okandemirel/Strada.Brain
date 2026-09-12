@@ -541,6 +541,22 @@ export function assessNumericClaims(
   const timedMedium = nameOfMedium(timedRun === player ? playerPerf?.medium ?? "player" : perf?.medium);
   const countedRun = player?.found === true && player.sessionCount !== undefined ? player : playthrough;
   const noRun = "no play-through of this build was observed (unity_playthrough leaves the timing)";
+  // A CLAUSE THAT NAMES ITS OWN PLATFORM is about that platform, whatever it
+  // measures. Only the frame rate asked, so an Android player's 4-second boot
+  // failed "boot under 2 s on Windows" outright — while the next sentence of
+  // the same document allowed Android 6 s (Codex 2026-09-12 AC J4.2). A
+  // measurement taken where the claim is not about answers "unmeasured for
+  // this target", never "not met".
+  const wrongPlatform = (text: string, fromPlayer: boolean): GddPlatform | undefined => {
+    if (!fromPlayer || !opts) return undefined;
+    const scope = platformOfClaim(text) ?? opts.platform;
+    if (!scope) return undefined;
+    return frameRateAnswersPlatform(scope, opts.builtTarget) ? undefined : scope;
+  };
+  const builtFor = (): string => `a player built for ${opts?.builtTarget ?? "the project's own target"}`;
+  const answerItThere = (scope: GddPlatform): string =>
+    `this requirement is for ${scope.targets.length > 0 ? scope.targets.join("/") : "a handheld"}` +
+    `${scope.evidence ? ` ("${scope.evidence.slice(0, 80)}")` : ""} — build for that target and play it there to answer this`;
   return claims.map((claim): ClaimAssessment => {
     switch (claim.kind) {
       case "fps": {
@@ -611,6 +627,16 @@ export function assessNumericClaims(
             blocking: false,
           };
         }
+        const elsewhere = wrongPlatform(claim.text, playerPerf?.bootSeconds !== undefined);
+        if (elsewhere) {
+          return {
+            claim,
+            status: "unmeasured",
+            measured: Number(bootFrom.bootSeconds.toFixed(2)),
+            note: `${bootFrom.bootSeconds.toFixed(1)} s to boot ${builtFor()}, but ${answerItThere(elsewhere)}`,
+            blocking: false,
+          };
+        }
         const met = bootFrom.bootSeconds <= claim.value;
         return {
           claim,
@@ -629,15 +655,31 @@ export function assessNumericClaims(
         if (!timedPerf || timed.ok !== true || !timed.outcome || timed.outcome === "None") {
           return { claim, status: "unmeasured", note: "the session never reached an outcome, so its length is unknown", blocking: false };
         }
+        const elsewhere = wrongPlatform(claim.text, timed === player);
+        if (elsewhere) {
+          return {
+            claim,
+            status: "unmeasured",
+            measured: Number(timedPerf.playSeconds.toFixed(1)),
+            note: `driven play measured in ${builtFor()}, but ${answerItThere(elsewhere)}`,
+            blocking: false,
+          };
+        }
         // PER SESSION, when the run played more than one. `perf.playSeconds`
         // is the whole run's play time, so three 40-second levels measured 120
         // seconds against "each level lasts 30–60 s" and failed a game that
         // met the requirement exactly (Codex 2026-09-12 T#7). An aggregate
         // number answers only a single-session run.
-        const perSession = (timed.sessions ?? [])
-          .filter((x) => x.outcome !== "None" && x.outcome !== "Refused")
+        // A ZERO-SECOND SESSION IS A MEASUREMENT, and a failing one against
+        // any floor. Dropping every non-positive number meant two sessions of
+        // [0 s, 30 s] were judged as the one that passed, and the report
+        // described a single session (Codex 2026-09-12 AC J4.3). A session
+        // NOBODY TIMED stays unknown and is disclosed, never judged.
+        const counted = (timed.sessions ?? []).filter((x) => x.outcome !== "None" && x.outcome !== "Refused");
+        const perSession = counted
           .map((x) => x.seconds)
-          .filter((x): x is number => typeof x === "number" && Number.isFinite(x) && x > 0);
+          .filter((x): x is number => typeof x === "number" && Number.isFinite(x) && x >= 0);
+        const untimed = counted.length - perSession.length;
         // AN EXACT DURATION is met within a stated tolerance: a driven run's
         // clock is not a stopwatch, and "exactly 30 seconds" read as a
         // maximum was satisfied by twenty (Codex 2026-09-12 Z).
@@ -656,13 +698,14 @@ export function assessNumericClaims(
         const measured = perSession.length > 0
           ? Number(Math.max(...perSession).toFixed(1))
           : Number(timedPerf.playSeconds.toFixed(1));
+        const partly = untimed > 0 ? ` — ${untimed} further session(s) carry no clock, so this covers only what was timed` : "";
         return {
           claim,
           status: met ? "met" : "not_met",
           measured,
           note: perSession.length > 0
-            ? `${perSession.length} session(s) reached an outcome, each ${Math.min(...perSession).toFixed(1)}–${Math.max(...perSession).toFixed(1)} s of driven play (${timedMedium})`
-            : `session ${timed.session ?? "?"} reached ${timed.outcome} after ${timedPerf.playSeconds.toFixed(1)} s of driven play (${timedMedium})`,
+            ? `${perSession.length} session(s) reached an outcome, each ${Math.min(...perSession).toFixed(1)}–${Math.max(...perSession).toFixed(1)} s of driven play (${timedMedium})${partly}`
+            : `session ${timed.session ?? "?"} reached ${timed.outcome} after ${timedPerf.playSeconds.toFixed(1)} s of driven play (${timedMedium})${partly}`,
           // A driven play-through is faster than a person's, so a range's floor
           // is disclosed — UNLESS the document makes it mandatory (an
           // unskippable timer is wall-clock, not skill; Codex 2026-09-11 C#24).

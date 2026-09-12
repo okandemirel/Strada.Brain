@@ -788,3 +788,95 @@ describe("how long a run may keep playing one session (Codex 2026-09-12 AB)", ()
     expect(extractNumericClaims(doc).claims.filter((c) => c.kind === "session_seconds")).toEqual([]);
   });
 });
+
+/**
+ * Codex round AC, executed against the assessor: a document that budgets boot
+ * per platform failed the platform it had not built, and a session that took
+ * no time at all vanished from the floor it broke.
+ */
+describe("a platform's budget, and a session that took no time (Codex 2026-09-12 AC)", () => {
+  const GDD_BOOT = "Ships on Windows and Android. Boot under 2 s on Windows. Boot under 6 s on Android.";
+  const judgeBoot = (builtTarget: string, bootSeconds: number) => {
+    const claims = extractNumericClaims(GDD_BOOT).claims.filter((c) => c.kind === "boot_seconds");
+    const player = evidence({ perf: { medium: "player", bootSeconds, playSeconds: 10, playFrames: 600, avgFps: 60, worstFrameMs: 20 } });
+    return assessNumericClaims(claims, evidence(), player, { platform: gddPlatform(GDD_BOOT), builtTarget });
+  };
+
+  it("answers the boot budget of the platform it built, and leaves the others unmeasured", () => {
+    const onAndroid = judgeBoot("Android", 4);
+    expect(onAndroid.map((a) => a.status)).toEqual(["unmeasured", "met"]);
+    // The Windows clause is not FAILED by an Android measurement…
+    expect(onAndroid[0]!.blocking).toBe(false);
+    expect(onAndroid[0]!.note).toContain("this requirement is for windows");
+    expect(onAndroid[0]!.measured).toBe(4);
+    // …and Android's own 6 s budget is met and blocking.
+    expect(onAndroid[1]!.blocking).toBe(true);
+    // The mirror image: the Windows player answers Windows and not Android.
+    const onWindows = judgeBoot("StandaloneWindows64", 4);
+    expect(onWindows.map((a) => a.status)).toEqual(["not_met", "unmeasured"]);
+    expect(onWindows[0]!.blocking).toBe(true);
+  });
+
+  it("still judges a boot time the editor measured, exactly as before", () => {
+    // No player carried a boot time, so the editor's stands — the platform
+    // question is about where a measurement was TAKEN, and there is no player
+    // here to take it anywhere.
+    const claims = extractNumericClaims(GDD_BOOT).claims.filter((c) => c.kind === "boot_seconds");
+    const editorOnly = assessNumericClaims(claims, evidence({ perf: { medium: "editor-playmode-batch", bootSeconds: 1.2, playSeconds: 10, playFrames: 600, avgFps: 30, worstFrameMs: 40 } }), undefined, {
+      platform: gddPlatform(GDD_BOOT),
+      builtTarget: "Android",
+    });
+    expect(editorOnly.map((a) => a.status)).toEqual(["met", "met"]);
+  });
+
+  it("takes the document's platforms when the clause names none", () => {
+    // A clause with no platform of its own inherits the document's: a boot
+    // time measured on the desktop the project happens to build says nothing
+    // about the handheld the GDD ships to.
+    const gdd = "Ships on Android only. Boot under 2 s.";
+    const claims = extractNumericClaims(gdd).claims.filter((c) => c.kind === "boot_seconds");
+    const player = evidence({ perf: { medium: "player", bootSeconds: 1, playSeconds: 10, playFrames: 600, avgFps: 60, worstFrameMs: 20 } });
+    const onMac = assessNumericClaims(claims, evidence(), player, { platform: gddPlatform(gdd), builtTarget: "StandaloneOSX" })[0]!;
+    expect(onMac.status).toBe("unmeasured");
+    expect(onMac.note).toContain("this requirement is for android");
+    expect(assessNumericClaims(claims, evidence(), player, { platform: gddPlatform(gdd), builtTarget: "Android" })[0]!.status).toBe("met");
+  });
+
+  it("keeps a session length to the platform its clause names", () => {
+    const gdd = "Ships on Windows and Android. Each round on Android lasts at most 30 seconds.";
+    const claims = extractNumericClaims(gdd).claims.filter((c) => c.kind === "session_seconds");
+    const player = evidence({
+      perf: { medium: "player", bootSeconds: 1, playSeconds: 90, playFrames: 600, avgFps: 60, worstFrameMs: 20 },
+      sessions: [{ index: 1, outcome: "Won", actions: 9, seconds: 90 }],
+    });
+    const onWindows = assessNumericClaims(claims, evidence(), player, { platform: gddPlatform(gdd), builtTarget: "StandaloneWindows64" })[0]!;
+    expect(onWindows.status).toBe("unmeasured");
+    expect(onWindows.blocking).toBe(false);
+    expect(assessNumericClaims(claims, evidence(), player, { platform: gddPlatform(gdd), builtTarget: "Android" })[0]!.status).toBe("not_met");
+  });
+
+  it("fails a mandatory floor on a session that lasted no time, and says how many were timed", () => {
+    const claims = extractNumericClaims("Each round must last at least 30 seconds.").claims;
+    const both = assessNumericClaims(
+      claims,
+      evidence({
+        sessions: [{ index: 1, outcome: "Won", actions: 9, seconds: 0 }, { index: 2, outcome: "Won", actions: 9, seconds: 30 }],
+        perf: { medium: "editor-playmode-batch", bootSeconds: 1, playSeconds: 30, playFrames: 600, avgFps: 30, worstFrameMs: 40 },
+      }),
+    )[0]!;
+    expect(both.status).toBe("not_met");
+    expect(both.blocking).toBe(true);
+    expect(both.note).toContain("2 session(s)");
+    // A session NOBODY TIMED is unknown, not zero: the timed one still holds
+    // the floor and the untimed one is disclosed rather than judged.
+    const untimed = assessNumericClaims(
+      claims,
+      evidence({
+        sessions: [{ index: 1, outcome: "Won", actions: 9 }, { index: 2, outcome: "Won", actions: 9, seconds: 30 }],
+        perf: { medium: "editor-playmode-batch", bootSeconds: 1, playSeconds: 30, playFrames: 600, avgFps: 30, worstFrameMs: 40 },
+      }),
+    )[0]!;
+    expect(untimed.status).toBe("met");
+    expect(untimed.note).toContain("1 further session(s) carry no clock");
+  });
+});

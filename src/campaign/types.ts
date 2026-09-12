@@ -495,7 +495,14 @@ export interface PlaythroughEvidence {
     index?: number;
     outcome: string;
     actions?: number;
-    seconds: number;
+    /**
+     * OPTIONAL for the same reason as `index`: a record that omits the clock
+     * used to be read as a zero-second session, which a duration floor then
+     * dropped as "not a real number" — so a session that took no time at all
+     * and a session nobody timed were the same thing, and neither failed
+     * (Codex 2026-09-12 AC J4.3).
+     */
+    seconds?: number;
     reachedOutcome?: boolean;
     /**
      * Whether this session IS the content the run asked for. False when the
