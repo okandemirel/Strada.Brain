@@ -973,6 +973,27 @@ describe("WebChannel confirmation send-failure", () => {
   });
 });
 
+describe("queued is not delivered (Codex 2026-09-13 AG#13)", () => {
+  it("says whether the markdown actually LEFT, not merely that it was queued", async () => {
+    const channel = new WebChannel();
+    const socket = createMockSocket();
+    (channel as unknown as { handleWsConnection: (ws: unknown) => void }).handleWsConnection(socket);
+    const chatId = String(socket.getSentMessages().find((m) => m.type === "connected")!.chatId);
+
+    // Connected: it left.
+    expect(await channel.sendMarkdownDelivered(chatId, "Delivered while you were here.")).toBe(true);
+
+    // Offline: it is buffered for the next reconnect, and that is NOT delivery
+    // — a restart or a reconnect expiry removes it with nobody having read it.
+    socket.close();
+    expect(await channel.sendMarkdownDelivered(chatId, "Your game is ready.")).toBe(false);
+    const buffered = (channel as unknown as {
+      pendingDelivery: Map<string, Array<Record<string, unknown>>>;
+    }).pendingDelivery.get(chatId);
+    expect(buffered).toHaveLength(1);
+  });
+});
+
 describe("WebChannel offline final delivery (BUG#7 2b)", () => {
   it("buffers an answer frame dropped while offline and replays it on reconnect with the same messageId", async () => {
     const channel = new WebChannel();

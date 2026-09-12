@@ -759,6 +759,26 @@ export class WebChannel
     });
   }
 
+  /**
+   * Did this markdown actually LEAVE, or is it only queued for the next
+   * reconnect?
+   *
+   * `sendMarkdown` resolves either way, so a delivery report produced while
+   * the browser was offline was recorded as delivered — and a restart or a
+   * reconnect expiry then removed it, with nobody having read it (Codex
+   * 2026-09-13 AG#13). A caller that records "the person was told" asks this
+   * instead.
+   */
+  async sendMarkdownDelivered(chatId: string, markdown: string): Promise<boolean> {
+    const instinctIds = this.appliedInstinctIds.get(chatId);
+    return this.sendToClient(chatId, {
+      type: "markdown",
+      text: markdown,
+      messageId: randomUUID(),
+      ...(instinctIds && instinctIds.length > 0 ? { instinctIds } : {}),
+    });
+  }
+
   async sendSystemMessage(chatId: string, text: string): Promise<void> {
     this.sendToClient(chatId, {
       type: "system",

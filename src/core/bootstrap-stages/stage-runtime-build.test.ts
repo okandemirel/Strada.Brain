@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { chmodSync, mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parsePlayerBuildOutput, makeRunPlayer, makeVerifyCompile, makeGuardianPlay, extractReceipt, looksLikePlayer } from "./stage-runtime.js";
+import { parsePlayerBuildOutput, makeRunPlayer, makeVerifyCompile, makeGuardianPlay, makeCampaignMessenger, extractReceipt, looksLikePlayer } from "./stage-runtime.js";
 
 const artifactDir = mkdtempSync(join(tmpdir(), "build-artifact-"));
 // A REAL StandaloneOSX artifact: .app is a bundle DIRECTORY holding Contents,
@@ -527,5 +527,43 @@ describe("extractReceipt", () => {
     expect(extractReceipt("\n```strada-evidence\n\n```")).toBeUndefined();
     // The ordinary json verdict block is not a receipt.
     expect(extractReceipt('```json\n{"ok":true}\n```')).toBeUndefined();
+  });
+});
+
+/**
+ * Codex round AG#13: a channel that BUFFERS a frame for the next reconnect
+ * resolves exactly like one that sent it, so a delivery report produced while
+ * the browser was offline was recorded as reported — and a restart then
+ * dropped it unread.
+ */
+describe("makeCampaignMessenger — queued is not delivered", () => {
+  it("throws when the channel only queued the message, and returns when it left", async () => {
+    const sent: string[] = [];
+    let delivered = true;
+    let broadcasts = 0;
+    const messenger = makeCampaignMessenger(
+      {
+        sendMarkdown: async (_chatId: string, markdown: string) => { sent.push(markdown); },
+        sendMarkdownDelivered: async (_chatId: string, markdown: string) => { sent.push(markdown); return delivered; },
+      },
+      () => { broadcasts++; },
+    );
+
+    await expect(messenger("chat-1", "Your game is ready.")).resolves.toBeUndefined();
+    delivered = false;
+    await expect(messenger("chat-1", "Your game is ready.")).rejects.toThrow(/queued for a client that is not connected/);
+    // Both attempts reached the channel, and the status broadcast ran either way.
+    expect(sent).toHaveLength(2);
+    expect(broadcasts).toBe(2);
+  });
+
+  it("uses a channel that cannot tell exactly as before", async () => {
+    const sent: string[] = [];
+    const messenger = makeCampaignMessenger(
+      { sendMarkdown: async (_chatId: string, markdown: string) => { sent.push(markdown); } },
+      () => undefined,
+    );
+    await expect(messenger("chat-1", "Your game is ready.")).resolves.toBeUndefined();
+    expect(sent).toEqual(["Your game is ready."]);
   });
 });

@@ -417,10 +417,7 @@ export async function initializeTaskRuntimeStage(
       visionProvider: (params.providerManager as { getVisionProvider?: () => { provider: unknown; name: string } | null })
         .getVisionProvider?.() as never ?? null,
       taskManager,
-      messenger: async (chatId, markdown) => {
-        await params.channel.sendMarkdown(chatId, sanitizeSecrets(markdown));
-        void broadcastBuildStatus();
-      },
+      messenger: makeCampaignMessenger(params.channel, () => { void broadcastBuildStatus(); }),
       // The newest gameplay frame travels with the delivery report when the
       // channel can carry files (the web portal serves it under a token).
       attach: (() => {
@@ -1229,4 +1226,36 @@ export function extractReceipt(content: string): string | undefined {
   const match = new RegExp("```" + EVIDENCE_FENCE + "\\s*\\n([\\s\\S]*?)\\n```").exec(content);
   const body = match?.[1]?.trim();
   return body === undefined || body === "" ? undefined : body;
+}
+
+/**
+ * The campaign's messenger: markdown out, and an HONEST answer about whether
+ * it left.
+ *
+ * A channel that buffers a frame for the next reconnect resolves exactly like
+ * one that sent it, so a delivery report produced while the browser was
+ * offline was recorded as reported — and a restart then dropped it unread
+ * (Codex 2026-09-13 AG#13). A channel that can tell the difference is asked;
+ * one that cannot is used exactly as before.
+ */
+export function makeCampaignMessenger(
+  channel: {
+    sendMarkdown(chatId: string, markdown: string): Promise<void>;
+    sendMarkdownDelivered?(chatId: string, markdown: string): Promise<boolean>;
+  },
+  afterSend: () => void,
+): (chatId: string, markdown: string) => Promise<void> {
+  return async (chatId: string, markdown: string) => {
+    const text = sanitizeSecrets(markdown);
+    if (typeof channel.sendMarkdownDelivered === "function") {
+      const delivered = await channel.sendMarkdownDelivered(chatId, text);
+      afterSend();
+      if (!delivered) {
+        throw new Error("the message was queued for a client that is not connected — nobody has read it yet");
+      }
+      return;
+    }
+    await channel.sendMarkdown(chatId, text);
+    afterSend();
+  };
 }
