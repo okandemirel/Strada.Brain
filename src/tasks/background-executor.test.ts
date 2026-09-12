@@ -1671,6 +1671,44 @@ describe("BackgroundExecutor - Blocked worker results", () => {
     expect(mockTaskManager.fail).not.toHaveBeenCalled();
   });
 
+  it("a worker learns its deletions were DECLINED, so it stops repeating them (measured live 2026-09-12)", async () => {
+    // The same eight .meta deletions were declined sprint after sprint: the
+    // commit logged it and the worker was never told.
+    const worker = {
+      status: "completed", finalSummary: "Done", visibleResponse: "Done", provider: "mock",
+      catalogVersion: "mock:default", assignmentVersion: 0, touchedFiles: [], toolTrace: [],
+      verificationResults: [], reviewFindings: [], artifacts: [],
+    };
+    const workerOrchestrator = { runWorkerTask: vi.fn().mockResolvedValue(worker) } as any;
+    const executor = new BackgroundExecutor({
+      orchestrator: workerOrchestrator,
+      workspaceLeaseManager: {
+        acquireLease: vi.fn().mockResolvedValue({
+          path: "/tmp/strada-workspaces/task-d", id: "lease-d", workspaceId: "ws-d",
+          release: vi.fn().mockResolvedValue(undefined),
+          commit: vi.fn().mockResolvedValue({
+            written: ["Assets/A.cs"],
+            conflicts: [],
+            failed: [],
+            removed: ["Assets/Art/Generated/PixelCube_Blue.png.meta", "Assets/Scenes/ContentAssetAssembly.unity"],
+          }),
+        }),
+      } as any,
+    });
+
+    const result = await executor.runWorkerEnvelope(workerOrchestrator, {
+      mode: "delegated", prompt: "Do the thing", signal: new AbortController().signal,
+      onProgress: vi.fn(), chatId: "chat1", taskRunId: "task_decl", channelType: "web",
+      workspaceSourceRoot: "/tmp/parent-workspace", supervisorMode: "off",
+    });
+
+    expect(result.output).toContain("PUBLICATION NOTE");
+    expect(result.output).toContain("PixelCube_Blue.png.meta");
+    expect(result.output).toContain("instead of deleting them again");
+    // A declined deletion is by design — the run still succeeded.
+    expect(result.workerResult?.status).toBe("completed");
+  });
+
   it("a TASK whose workspace did not publish is failed, and its lease kept (Codex 2026-09-11 O#1, O#2)", async () => {
     const release = vi.fn().mockResolvedValue(undefined);
     const run = async (commit: unknown): Promise<{ complete: ReturnType<typeof vi.fn>; fail: ReturnType<typeof vi.fn> }> => {

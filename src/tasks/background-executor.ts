@@ -1408,6 +1408,13 @@ export class BackgroundExecutor {
     // the project did not do the work, whatever its own result says (Codex
     // 2026-09-11 N#1/M#5).
     let publicationLoss: string | undefined;
+    /**
+     * What publication DECLINED, as opposed to lost. A worker whose deletions
+     * are refused learns nothing today, so it deletes the same files again on
+     * every attempt — measured live 2026-09-12 03:27, the same eight .meta
+     * deletions declined sprint after sprint.
+     */
+    let publicationNote: string | undefined;
     let outcome: { output: string; workerResult?: WorkerRunResult } | undefined;
     try {
       outcome = await this.executeWorkerRun(orchestrator, {
@@ -1447,6 +1454,10 @@ export class BackgroundExecutor {
               });
             }
             if (result.removed.length > 0) {
+              publicationNote =
+                `${result.removed.length} deletion(s) were NOT applied — the project keeps these files: ` +
+                `${result.removed.slice(0, 8).join(", ")}. A commit never deletes files the system did not author; ` +
+                "if they must go, say so in your report instead of deleting them again.";
               getLogger().warn("Workspace lease deletions were not applied — the source keeps files the agent removed", {
                 count: result.removed.length,
                 removed: result.removed.slice(0, 20),
@@ -1499,7 +1510,11 @@ export class BackgroundExecutor {
     // whose bytes never reached the project settled green and its dependents
     // ran against work that was not there (Codex 2026-09-11 N#1).
     const settled = outcome ?? { output: "" };
-    if (publicationLoss === undefined) return settled;
+    if (publicationLoss === undefined) {
+      return publicationNote === undefined
+        ? settled
+        : { ...settled, output: `${settled.output}\n\nPUBLICATION NOTE: ${publicationNote}` };
+    }
     return {
       ...settled,
       output: `${settled.output}\n\nPUBLICATION FAILED: ${publicationLoss}. The workspace is kept for salvage.`,
