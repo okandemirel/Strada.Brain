@@ -1681,6 +1681,16 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
     expect(partial.output).toContain("Assets/B.cs");
     expect(release).not.toHaveBeenCalled();
 
+    // A PARTIAL publication is the same loss: the file the task was about
+    // conflicted and was kept aside while an incidental one published, and
+    // the task settled completed (Codex 2026-09-12 AE#4).
+    const conflicted = await envelope(vi.fn().mockResolvedValue({
+      written: ["Assets/Other.cs"], conflicts: ["Assets/Rules.cs"], removed: [], failed: [], quarantined: 1,
+    }));
+    expect(conflicted.workerResult?.status).toBe("failed");
+    expect(conflicted.output).toContain("Assets/Rules.cs");
+    expect(release).not.toHaveBeenCalled();
+
     // A clean publication still succeeds and still releases.
     const clean = await envelope(vi.fn().mockResolvedValue({
       written: ["Assets/A.cs"], conflicts: [], removed: [], failed: [],
@@ -1688,6 +1698,14 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
     expect(clean.workerResult?.status).toBe("completed");
     expect(clean.output).not.toContain("PUBLICATION FAILED");
     expect(release).toHaveBeenCalledTimes(1);
+
+    // …and a declined DELETION is disclosed without failing the run.
+    const declined = await envelope(vi.fn().mockResolvedValue({
+      written: ["Assets/A.cs"], conflicts: [], removed: ["Assets/Old.cs"], failed: [],
+    }));
+    expect(declined.workerResult?.status).toBe("completed");
+    expect(declined.output).toContain("PUBLICATION NOTE");
+    expect(declined.output).toContain("Assets/Old.cs");
   });
 
 });

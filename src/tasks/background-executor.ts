@@ -22,6 +22,7 @@ import type {
 } from "./types.js";
 import { getTaskConversationKey, TaskStatus } from "./types.js";
 import { markSystemInterruption, SHUTDOWN_ABORT_REASON } from "./interruption.js";
+import { judgePublication, type LeaseCommitResult } from "./publication.js";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import type { ITaskManager, IOrchestrator, SupervisorAdmissionDecision } from "./orchestrator-contract.js";
@@ -1462,10 +1463,6 @@ export class BackgroundExecutor {
               });
             }
             if (result.removed.length > 0) {
-              publicationNote =
-                `${result.removed.length} deletion(s) were NOT applied — the project keeps these files: ` +
-                `${result.removed.slice(0, 8).join(", ")}. A commit never deletes files the system did not author; ` +
-                "if they must go, say so in your report instead of deleting them again.";
               getLogger().warn("Workspace lease deletions were not applied — the source keeps files the agent removed", {
                 count: result.removed.length,
                 removed: result.removed.slice(0, 20),
@@ -1480,16 +1477,18 @@ export class BackgroundExecutor {
                 quarantinedUnder: result.conflictsQuarantinedUnder,
               });
             }
-            if (result.written.length === 0 && result.conflicts.length > 0) {
-              publicationLoss = `nothing reached the project: ${result.conflicts.length} file(s) conflicted and were quarantined`;
-            }
             if (result.failed.length > 0) {
-              publicationLoss = `${result.failed.length} file(s) the worker changed could not be written into the project: ${result.failed.slice(0, 8).join(", ")}`;
               getLogger().warn("Workspace lease commit could not process some files", {
                 count: result.failed.length,
                 failed: result.failed.slice(0, 20),
               });
             }
+            // ONE ADJUDICATOR for both publication paths: each had its own
+            // rules, and both accepted a partial publication in which the
+            // file the task was about conflicted (Codex 2026-09-12 AE#4).
+            const verdict = judgePublication(raw as LeaseCommitResult);
+            if (verdict.loss !== undefined) publicationLoss = verdict.loss;
+            if (verdict.note !== undefined) publicationNote = verdict.note;
           })
           .catch((err) => {
             publicationLoss = `the workspace commit threw before the worker's files reached the project (${err instanceof Error ? err.message : String(err)})`;
@@ -2000,27 +1999,16 @@ export class BackgroundExecutor {
               });
             }
             if ((result.failed ?? []).length > 0) {
-              taskPublicationLoss = `${result.failed.length} file(s) could not be written into the project: ${result.failed.slice(0, 8).join(", ")}`;
               getLogger().warn("Task workspace commit could not process some files", {
                 count: result.failed.length,
                 failed: result.failed.slice(0, 20),
               });
             }
-            // NOTHING PUBLISHED AND EVERYTHING CONFLICTED is not a success
-            // either: the run's work sits in quarantine and the project has
-            // none of it (Codex 2026-09-11 O#2).
-            if ((result.written ?? []).length === 0 && (result.conflicts ?? []).length > 0) {
-              taskPublicationLoss = `nothing reached the project: ${result.conflicts.length} file(s) conflicted and were quarantined`;
-            }
-            // A CONFLICT THAT COULD NOT BE PRESERVED exists only inside the
-            // lease, and release() deletes the lease. Completing on a partial
-            // write destroyed the agent's only copy of those files (Codex
-            // 2026-09-12 Q#8).
-            const unpreserved = result.conflicts.length - (raw.quarantined ?? result.conflicts.length);
-            if (unpreserved > 0) {
-              taskPublicationLoss =
-                `${unpreserved} of ${result.conflicts.length} conflicted file(s) exist ONLY in the workspace — they could not be preserved`;
-            }
+            // THE SAME ADJUDICATOR the worker envelope uses (AE#4): nothing
+            // published, a partial publication, an unpreserved conflict and a
+            // failed write are all work that did not reach the project.
+            const verdict = judgePublication(raw as LeaseCommitResult);
+            if (verdict.loss !== undefined) taskPublicationLoss = verdict.loss;
           })
           .catch((err) => {
             taskPublicationLoss = `the workspace commit threw before the work reached the project (${err instanceof Error ? err.message : String(err)})`;
