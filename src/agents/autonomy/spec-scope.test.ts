@@ -265,6 +265,9 @@ describe("every flattened shape, and saying when a schedule cannot be read (Code
     // rows line up, not a number this reader assumes.
     ["two columns", "Unlock\nElement\nL1\nIce"],
     ["four columns", "Unlock\nElement\nPitch\nSide\nL1\nIce\nFreezes\nCanvas"],
+    // Two shapes AT ONCE: each worked alone and they failed together, because
+    // the header walk stepped straight into a blank (Codex 2026-09-12 AB J2.5).
+    ["the element column first AND blank-separated", "Element\n\nUnlock\n\nPitch\n\nIce\n\nL1\n\nFreezes"],
   ];
 
   it("reads the schedule in each of them", () => {
@@ -272,6 +275,17 @@ describe("every flattened shape, and saying when a schedule cannot be read (Code
       expect(extractScheduledElements(doc), name).toEqual([{ unlock: "L1", name: "Ice" }]);
       expect(scheduleLooksPresent(doc), name).toBe(true);
     }
+  });
+
+  it("a blank line between ROWS is a separator, not the end of the table", () => {
+    // It ended the parse, so every later row vanished from coverage — and the
+    // rows already read certified the schedule as complete (Codex 2026-09-12
+    // AB J2.6).
+    const withSeparators = "Unlock\nElement\nPitch\nL1\nIce\nFreezes\n\nL2\nFire\nBurns";
+    expect(extractScheduledElements(withSeparators)).toEqual([
+      { unlock: "L1", name: "Ice" },
+      { unlock: "L2", name: "Fire" },
+    ]);
   });
 
   it("the coverage report says a schedule was present but unreadable", () => {

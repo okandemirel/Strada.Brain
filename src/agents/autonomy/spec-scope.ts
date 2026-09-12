@@ -137,17 +137,21 @@ export function extractFlattenedSchedule(docText: string): ScheduledElement[] {
     // every cell. Blanks are dropped only where that is the shape — deleting
     // them everywhere would merge genuinely empty cells (Y#4).
     const spaced = (lines[at + 1] ?? "") === "" && (lines[at + 2] ?? "") !== "";
-    const cellsFrom = (start: number): string[] =>
-      spaced ? lines.slice(start).filter((_cell, i) => i % 2 === 0) : lines.slice(start);
+    // Fold the blank separators FIRST when that is the shape, then work in
+    // folded coordinates: the backward walk below stepped straight into a
+    // blank, so a reversed column order and blank-separated cells worked
+    // separately and failed together (Codex 2026-09-12 AB J2.5).
+    const cells = spaced ? lines.filter((_cell, i) => i % 2 === 0) : lines;
+    const here = spaced ? Math.floor(at / 2) : at;
     // THE HEADER BLOCK, which may begin BEFORE the unlock column: a document
     // whose table starts with Element then Unlock read nothing at all (Y#4).
     const short = (cell: string): boolean => cell !== "" && cell.length <= 30 && !/[.;:!?]$/.test(cell);
-    let first = at;
-    while (first > 0 && short(lines[first - 1] ?? "") && !UNLOCK_CELL_RE.test(lines[first - 1] ?? "")) {
-      if (at - first >= 7) break;
+    let first = here;
+    while (first > 0 && short(cells[first - 1] ?? "") && !UNLOCK_CELL_RE.test(cells[first - 1] ?? "")) {
+      if (here - first >= 7) break;
       first -= 1;
     }
-    const window = cellsFrom(spaced ? first : first);
+    const window = cells.slice(first);
     // THE WIDTH IS WHAT MAKES THE ROWS LINE UP. Reading the header until the
     // first unlock ID assumed the ID is a row's FIRST cell, which is only one
     // of the shapes: every width from two to eight is tried, and the narrowest
@@ -160,11 +164,19 @@ export function extractFlattenedSchedule(docText: string): ScheduledElement[] {
       if (nameAt < 0 || unlockAt < 0) continue;
       const rows: ScheduledElement[] = [];
       for (let row = width; row + width <= window.length; row += width) {
-        const cells = window.slice(row, row + width);
-        if (!UNLOCK_CELL_RE.test(cells[unlockAt] ?? "")) break;
-        const name = (cells[nameAt] ?? "").trim();
+        let block = window.slice(row, row + width);
+        // A BLANK LINE BETWEEN ROWS is a separator, not the end of the table:
+        // it ended the parse and every later row vanished from coverage while
+        // the rows already read certified the schedule as complete (Codex
+        // 2026-09-12 AB J2.6). One separator is stepped over.
+        if (block[0] === "" && row + width + 1 <= window.length) {
+          row += 1;
+          block = window.slice(row, row + width);
+        }
+        if (!UNLOCK_CELL_RE.test(block[unlockAt] ?? "")) break;
+        const name = (block[nameAt] ?? "").trim();
         if (name === "" || name.length > 60 || NOT_AN_ELEMENT_RE.test(name)) continue;
-        rows.push({ unlock: cells[unlockAt]!, name });
+        rows.push({ unlock: block[unlockAt]!, name });
       }
       if (rows.length === 0) continue;
       for (const el of rows) {
