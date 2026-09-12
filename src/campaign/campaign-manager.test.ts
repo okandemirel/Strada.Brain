@@ -6047,6 +6047,46 @@ describe("CampaignManager", () => {
     expect(messages.filter((m) => m.text.includes("Milestone ladder ready"))).toHaveLength(1);
   });
 
+  it("two concurrent REVISION replies draft once (Codex 2026-09-12 X)", async () => {
+    // The approval branch claims the gate before its announcement; the
+    // revision branch still announced first, and that announcement is a real
+    // await with no per-chat serialization — so two replies both found the
+    // campaign awaiting approval, both submitted a draft, and only one was
+    // counted or owned (Codex measured: drafts 2, draftAttempts 1).
+    tasks = new FakeTaskManager();
+    storage.close();
+    storage = new CampaignStorage(join(dir, "campaigns-revise.db"));
+    manager = new CampaignManager({
+      storage,
+      planner: { planMilestones: vi.fn().mockResolvedValue(LADDER) } as unknown as CampaignPlanner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async (chatId, text) => {
+        messages.push({ chatId, text });
+        await new Promise((r) => setTimeout(r, 5)); // a real channel round-trip
+      },
+      projectRoot, retryAdoptionGraceMs: 10, completedSettleDelayMs: 0, milestoneTimeBoxMs: 60 * 60_000,
+    });
+    manager.attachEvents();
+
+    const campaign = manager.startFromIdea(ctx, "a match-3 where pigs fly");
+    tasks.emit("task:completed", "task_1", "wrote docs/Game_GDD.md");
+    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("awaiting-approval"), { timeout: 15_000 });
+    const before = tasks.submitted.length;
+
+    const consumed = await Promise.all([
+      manager.tryHandleApproval("cli-local", "daha fazla bölüm ekle"),
+      manager.tryHandleApproval("cli-local", "ve bir boss ekle"),
+    ]);
+
+    // One reply is handled, one draft is submitted, and the campaign owns it.
+    expect(consumed.filter(Boolean)).toHaveLength(1);
+    expect(tasks.submitted.length - before).toBe(1);
+    const after = storage.get(campaign.id)!;
+    expect(after.draftAttempts).toBe(1);
+    expect(after.draftTaskId).toBe(`task_${tasks.submitted.length}`);
+    expect(after.state).toBe("drafting-gdd");
+  });
+
   it("re-sharing a revised GDD under the same filename rewrites docs/ so sprints build the new design", async () => {
     // Audited 2026-09-02: persistSuppliedGdd was "idempotent per name" — an
     // existence check only — so GDD.docx v2 left docs/GDD.md holding v1 while

@@ -145,4 +145,32 @@ describe("findLatestRevivable", () => {
     storage.save(makeCampaign({ id: "c_failed", state: "failed" }));
     expect(storage.findLatestRevivable("cli-local")?.id).toBe("c_failed");
   });
+
+  /**
+   * The independent opinion was gathered, rendered into the delivery report and
+   * then thrown away: nothing wrote it. The boot resend assumes it is there, so
+   * a lost report meant a campaign that had already paid for a review paid for
+   * another one (Codex 2026-09-12 X).
+   */
+  describe("the independent review survives a round trip", () => {
+    it("comes back exactly as it was stored", () => {
+      storage.save(makeCampaign({
+        id: "c_review",
+        independentReview: { ok: true, model: "fixture", text: "Keep this exact opinion", ms: 2 },
+      }));
+      expect(storage.get("c_review")!.independentReview).toEqual({
+        ok: true, model: "fixture", text: "Keep this exact opinion", ms: 2,
+      });
+      // A failed review keeps its cause, so the report can say why.
+      storage.save(makeCampaign({
+        id: "c_review_failed",
+        independentReview: { ok: false, model: "unknown", text: "", ms: 0, error: "no reviewer configured" },
+      }));
+      expect(storage.get("c_review_failed")!.independentReview).toMatchObject({ ok: false, error: "no reviewer configured" });
+      // …and a campaign with none says none.
+      storage.save(makeCampaign({ id: "c_no_review" }));
+      expect(storage.get("c_no_review")!.independentReview).toBeUndefined();
+    });
+  });
+
 });

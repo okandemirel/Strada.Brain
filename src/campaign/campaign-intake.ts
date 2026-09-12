@@ -54,12 +54,16 @@ export function detectCampaignIntent(msg: IncomingMessage): CampaignIntent | und
     }
   }
 
-  if (text.length < MIN_IDEA_LENGTH) return undefined;
-
   // 2. "Build the game in the GDD" — the design already lives in the repo.
+  // BEFORE the idea-length minimum: that minimum exists because an IDEA has
+  // to be long enough to design from, and this instruction is not an idea —
+  // it points at a document. "Build the game in the GDD" is 25 characters,
+  // and it was ignored entirely (Codex 2026-09-12 X).
   if (GDD_REFERENCE_RE.test(text) && BUILD_INTENT_RE.test(text)) {
     return { kind: "gdd-from-docs" };
   }
+
+  if (text.length < MIN_IDEA_LENGTH) return undefined;
 
   // 3. A written game idea with build intent.
   if (BUILD_INTENT_RE.test(text)) {

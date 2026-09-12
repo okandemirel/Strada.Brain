@@ -68,6 +68,7 @@ interface CampaignRow {
   stop_generation?: number | null;
   delivery_proofs_signature?: string | null;
   plan_coverage?: string | null;
+  independent_review?: string | null;
 }
 
 function rowToCampaign(row: CampaignRow): Campaign {
@@ -111,7 +112,27 @@ function rowToCampaign(row: CampaignRow): Campaign {
     stopGeneration: row.stop_generation ?? undefined,
     deliveryProofsSignature: row.delivery_proofs_signature ?? undefined,
     ...(row.plan_coverage ? { planCoverage: parsePlanCoverage(row.plan_coverage) } : {}),
+    // The independent opinion was gathered, rendered into the report and then
+    // dropped: nothing wrote it, so a lost report meant the boot resend had
+    // no review to resend and would pay for another one (Codex 2026-09-12 X).
+    ...(row.independent_review ? { independentReview: parseIndependentReview(row.independent_review) } : {}),
   };
+}
+
+function parseIndependentReview(raw: string): Campaign["independentReview"] | undefined {
+  try {
+    const p = JSON.parse(raw) as Record<string, unknown>;
+    if (typeof p.ok !== "boolean" || typeof p.model !== "string") return undefined;
+    return {
+      ok: p.ok,
+      model: p.model,
+      text: typeof p.text === "string" ? p.text : "",
+      ms: typeof p.ms === "number" ? p.ms : 0,
+      ...(typeof p.error === "string" ? { error: p.error } : {}),
+    } as Campaign["independentReview"];
+  } catch {
+    return undefined;
+  }
 }
 
 function parsePlanCoverage(raw: string): Campaign["planCoverage"] | undefined {
@@ -218,6 +239,14 @@ export class CampaignStorage {
     } catch {
       // Column already exists — migration is idempotent.
     }
+    try {
+      // 2026-09-12: the independent opinion on the delivery. It was gathered,
+      // rendered and thrown away, while the boot resend assumed it was there
+      // (Codex 2026-09-12 X).
+      this.db.exec("ALTER TABLE campaigns ADD COLUMN independent_review TEXT");
+    } catch {
+      // Column already exists — migration is idempotent.
+    }
   }
 
   save(campaign: Campaign): void {
@@ -228,10 +257,11 @@ export class CampaignStorage {
           state, idea_text, gdd_path, gdd_text, draft_task_id, draft_attempts,
           milestones_json, current_milestone, created_at, updated_at, last_error,
           auto_revive_at, coverage_audit_note, draft_deferred_since, delivery_reported, plan_coverage,
+          independent_review,
           unmeasurable_revives, implementation_revives, pending_coverage_gaps,
           delivery_revives, delivery_proofs_signature, delivery_rounds_total,
           stop_requested_at, stop_generation
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           state = excluded.state,
           gdd_path = excluded.gdd_path,
@@ -247,6 +277,7 @@ export class CampaignStorage {
           draft_deferred_since = excluded.draft_deferred_since,
           delivery_reported = excluded.delivery_reported,
           plan_coverage = excluded.plan_coverage,
+          independent_review = excluded.independent_review,
           unmeasurable_revives = excluded.unmeasurable_revives,
           implementation_revives = excluded.implementation_revives,
           pending_coverage_gaps = excluded.pending_coverage_gaps,
@@ -279,6 +310,7 @@ export class CampaignStorage {
         campaign.draftDeferredSince ?? null,
         campaign.deliveryReported ? 1 : 0,
         campaign.planCoverage ? JSON.stringify(campaign.planCoverage) : null,
+        campaign.independentReview ? JSON.stringify(campaign.independentReview) : null,
         campaign.unmeasurableRevives ?? null,
         campaign.implementationRevives ?? null,
         campaign.pendingCoverageGaps && campaign.pendingCoverageGaps.length > 0

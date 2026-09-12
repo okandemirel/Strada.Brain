@@ -862,7 +862,18 @@ export class CampaignManager {
       return true;
     }
 
+    // CLAIM THE GATE BEFORE YIELDING, on the revision path too. The approval
+    // branch above learned this in 2026-09-02; this one still announced
+    // first, and the announcement is a real await with no per-chat
+    // serialization — so two revision replies both found the campaign
+    // awaiting approval, both submitted a draft, and only one was counted or
+    // owned (Codex 2026-09-12 X: drafts 2, draftAttempts 1). The state claim
+    // makes the second reply find nothing to revise.
     campaign.draftAttempts += 1;
+    if (campaign.draftAttempts <= this.maxDraftAttempts) {
+      campaign.state = "drafting-gdd";
+      this.persist(campaign);
+    }
     if (campaign.draftAttempts > this.maxDraftAttempts) {
       campaign.state = "cancelled";
       campaign.lastError = "approval gate exceeded revision budget";

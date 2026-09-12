@@ -63,3 +63,24 @@ describe("detectCampaignIntent", () => {
     ).toBeUndefined();
   });
 });
+
+/**
+ * The idea-length minimum exists because an IDEA has to be long enough to
+ * design from. It was applied to every message, so an instruction that points
+ * at an existing document — "Build the game in the GDD", 25 characters — was
+ * ignored entirely and fell through to ordinary task handling (Codex
+ * 2026-09-12 X).
+ */
+describe("a short instruction that names the document (Codex 2026-09-12 X)", () => {
+  it("is a campaign, however short", () => {
+    expect(detectCampaignIntent(msg("Build the game in the GDD"))).toEqual({ kind: "gdd-from-docs" });
+    expect(detectCampaignIntent(msg("GDD'deki oyunu yap"))).toEqual({ kind: "gdd-from-docs" });
+  });
+
+  it("and a short message that is only an idea still is not", () => {
+    expect(detectCampaignIntent(msg("oyun yap"))).toBeUndefined();
+    expect(detectCampaignIntent(msg("make a game"))).toBeUndefined();
+    // …nor is a short mention of the GDD with no build intent.
+    expect(detectCampaignIntent(msg("where is the GDD?"))).toBeUndefined();
+  });
+});
