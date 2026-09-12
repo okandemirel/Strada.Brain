@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { summarizeToolArgs } from "../agents/orchestrator-tool-execution.js";
-import { describeEvidenceShortfall, missingRequiredEvidence, requiredToolsInPrompt, requiredToolArguments } from "./required-evidence.js";
+import { describeEvidenceShortfall, missingRequiredEvidence, requiredToolsInPrompt, requiredToolArguments, thresholdLoopTools, REQUIRED_EVIDENCE_PREFIX } from "./required-evidence.js";
 
 describe("required evidence named by the task", () => {
   it("the trace's argument copy is capped, deep-redacted, and never throws (Codex 2026-09-11 D#1, D#15, D#16)", () => {
@@ -219,5 +219,60 @@ describe("two calls are not one call (Codex 2026-09-12 P#3)", () => {
     expect(missingRequiredEvidence(prompt, [
       { toolName: "unity_test_run", success: true, args: JSON.stringify({ filter: "all", unfiltered: true }) },
     ])).toEqual([]);
+  });
+});
+
+describe("one parser, clause scope, and a prompt that states its own evidence (Codex 2026-09-12 P#4)", () => {
+  it("reads an argument beside a CODE-FORMATTED tool name", () => {
+    // The tool matcher learned backticks and the argument matcher did not, so
+    // a `sessions: "smoke"` call passed a prompt that asked for "all".
+    const prompt = 'Run `unity_playthrough` with sessions "all".';
+    expect(requiredToolsInPrompt(prompt)).toEqual(["unity_playthrough"]);
+    expect(requiredToolArguments(prompt)).toEqual([{ tool: "unity_playthrough", key: "sessions", value: "all" }]);
+    expect(missingRequiredEvidence(prompt, [
+      { toolName: "unity_playthrough", success: true, args: JSON.stringify({ sessions: "smoke" }) },
+    ])).toEqual([{ tool: "unity_playthrough", attempts: 1, argument: { key: "sessions", value: "all" } }]);
+  });
+
+  it("a conditional CLAUSE does not govern the unconditional one beside it", () => {
+    // "Run X; if it fails, run X again." required nothing: the whole line was
+    // judged conditional because only "." and newline ended a sentence.
+    expect(requiredToolsInPrompt("Run unity_playthrough; if it fails, run unity_playthrough again."))
+      .toEqual(["unity_playthrough"]);
+    // …and a genuinely conditional instruction is still not demanded.
+    expect(requiredToolsInPrompt("If the scene fails to load; run unity_playthrough again")).toEqual([]);
+  });
+
+  it("a threshold loop waives its own body, not the work written after it", () => {
+    const prompt =
+      "Call unity_generate_sprite for each placeholder and repeat batches until the measured count is below 200. " +
+      "Then run unity_build_player for the GDD's platform.";
+    expect(thresholdLoopTools(prompt)).toEqual(new Set(["unity_generate_sprite"]));
+    expect(missingRequiredEvidence(prompt, [
+      { toolName: "unity_generate_sprite", success: true, args: "{}" },
+    ])).toEqual([{ tool: "unity_build_player", attempts: 0 }]);
+  });
+
+  it("a prompt may state its evidence outright, in any language", () => {
+    const prompt =
+      "Exécutez unity_playthrough avec toutes les sessions.\n\n" +
+      `${REQUIRED_EVIDENCE_PREFIX} unity_playthrough sessions="all"; unity_build_player`;
+    expect(requiredToolsInPrompt(prompt).sort()).toEqual(["unity_build_player", "unity_playthrough"]);
+    expect(requiredToolArguments(prompt)).toEqual([{ tool: "unity_playthrough", key: "sessions", value: "all" }]);
+    expect(missingRequiredEvidence(prompt, [
+      { toolName: "unity_playthrough", success: true, args: JSON.stringify({ sessions: "all" }) },
+      { toolName: "unity_build_player", success: true, args: "{}" },
+    ])).toEqual([]);
+  });
+
+  it("a declared requirement is not waived by a threshold loop", () => {
+    const prompt =
+      "Call unity_generate_sprite, then call unity_build_player, and repeat until the placeholder count is below 200.\n\n" +
+      `${REQUIRED_EVIDENCE_PREFIX} unity_build_player`;
+    // The loop body DID measure — one of its tools ran — so the loop's own
+    // tools are waived. The declared one is not one of them.
+    expect(missingRequiredEvidence(prompt, [
+      { toolName: "unity_generate_sprite", success: true, args: "{}" },
+    ])).toEqual([{ tool: "unity_build_player", attempts: 0 }]);
   });
 });

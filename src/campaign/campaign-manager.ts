@@ -28,6 +28,7 @@ import { readPlaythroughVerdict, describePlaythrough, playthroughDirective, PLAY
 import { gddPlatform, buildSatisfiesTarget, artifactIsForeign, hostTarget, type BuildTarget } from "./gdd-platform.js";
 import { readPlaymodeRun } from "./playmode-run.js";
 import { assessNumericClaims, claimsRefusal, describeClaims, extractNumericClaims } from "./gdd-claims.js";
+import { REQUIRED_EVIDENCE_PREFIX } from "../supervisor/required-evidence.js";
 import { deliveryReviewPrompt, renderSecondOpinion } from "../agents/review/codex-second-opinion.js";
 import {
   artDirectionText,
@@ -1738,7 +1739,10 @@ export class CampaignManager {
           "staring at an idle screen. Then run unity_build_player for the GDD's platform (or the project's " +
           "active target): a delivery is a runnable artifact, and its measured path and size belong in your report. " +
           "Then run unity_run_player on that artifact: it plays the game inside the built player and measures the " +
-          "real frame rate — the number the GDD's frame-rate target means.";
+          "real frame rate — the number the GDD's frame-rate target means." +
+          // Stated, not inferred: the evidence gate reads this line instead of
+          // re-reading the paragraph above as English (Codex 2026-09-12 P#4).
+          `\n\n${REQUIRED_EVIDENCE_PREFIX} unity_playthrough sessions="all"; unity_build_player; unity_run_player`;
       }
       this.attachStructureMeasurement(campaign, milestone);
     }
@@ -3634,7 +3638,9 @@ export class CampaignManager {
             "FINAL DELIVERY PROOFS: the coverage remediation ended and the game as it is NOW must be proven, not the game an earlier sprint saw. " +
             "Run unity_verify_change (compile), run the FULL PlayMode suite UNFILTERED, run unity_playthrough with sessions \"all\" and capture frames, " +
             "then run unity_build_player. Fix only what these measurements name. Do NOT audit; the tools' own output is the report." +
-            (gaps.length > 0 ? ` Unclosed coverage gaps stay named in the report: ${gaps.slice(0, 4).join("; ")}.` : ""),
+            (gaps.length > 0 ? ` Unclosed coverage gaps stay named in the report: ${gaps.slice(0, 4).join("; ")}.` : "") +
+            `\n\n${REQUIRED_EVIDENCE_PREFIX} unity_verify_change; unity_test_run unfiltered="true"; ` +
+            `unity_playthrough sessions="all"; unity_build_player`,
           status: "pending",
           attempts: 0,
           visualGateArmed: true,

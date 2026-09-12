@@ -38,14 +38,107 @@ const CONDITIONAL_RE =
 const THRESHOLD_LOOP_RE =
   /\b(?:repeat|loop|continue|keep going|again)\b[^.\n]{0,80}?\buntil\b[^.\n]{0,80}?\b(?:below|under|fewer|less than|at most|reaches|drops|<=?|zero|none)\b/i;
 
-/** The sentence `at` sits in, for judging whether its instruction is conditional. */
-function sentenceAround(text: string, at: number): string {
-  const from = Math.max(text.lastIndexOf(".", at), text.lastIndexOf("\n", at)) + 1;
-  const dot = text.indexOf(".", at);
-  const nl = text.indexOf("\n", at);
-  const ends = [dot, nl].filter((i) => i >= 0);
-  const to = ends.length > 0 ? Math.min(...ends) : text.length;
-  return text.slice(from, to);
+/**
+ * Where one instruction ends and the next begins.
+ *
+ * The full stop and the newline are not the only boundaries people write:
+ * "Run unity_playthrough; if it fails, run unity_playthrough again." is two
+ * instructions, and judging the whole line as one made the conditional clause
+ * govern the unconditional one — the prompt then required nothing at all
+ * (Codex 2026-09-12 P#4).
+ */
+const CLAUSE_BREAK = /[.\n;—–]/;
+
+/**
+ * Does a condition govern the instruction at `at`?
+ *
+ * A condition reaches FORWARD, not backward. "If it fails, run X" and "If the
+ * scene stalls; run X" are conditional; "Run X; if it fails, run X again" is
+ * not — the second clause cannot un-demand the first, which is how a prompt
+ * that plainly says "run unity_playthrough" ended up requiring nothing (Codex
+ * 2026-09-12 P#4). So: a conditional word anywhere BEFORE the instruction in
+ * its sentence governs it, and one AFTER it does only while still inside its
+ * own clause ("run X only if needed").
+ */
+function instructionIsConditional(text: string, at: number): boolean {
+  let from = 0;
+  for (let i = at; i >= 0; i--) {
+    if (text[i] === "." || text[i] === "\n") { from = i + 1; break; }
+  }
+  return CONDITIONAL_RE.test(text.slice(from, at)) || CONDITIONAL_RE.test(text.slice(at, clauseEnd(text, at)));
+}
+
+/** The offset at which the clause containing `from` ends. */
+function clauseEnd(text: string, from: number): number {
+  const stop = text.slice(from).search(CLAUSE_BREAK);
+  return stop === -1 ? text.length : from + stop;
+}
+
+/**
+ * Every "run <tool>" the prompt writes, with where it sits.
+ *
+ * ONE matcher for both questions. The tool matcher learned to read a
+ * code-formatted name (``Run `unity_playthrough` ``) and the argument matcher
+ * did not, so a prompt written the ordinary way named a tool with no
+ * requirement on how it is called (Codex 2026-09-12 P#4).
+ */
+function toolCalls(prompt: string): Array<{ tool: string; at: number; after: number }> {
+  const calls: Array<{ tool: string; at: number; after: number }> = [];
+  for (const m of prompt.matchAll(/\b(?:run|execute|invoke|call|use|using|via|through)\b(?:\s+(?!unity_)[a-z'-]+){0,4}\s*[`'"*_]*\s*(unity_[a-z0-9_]+)/gi)) {
+    calls.push({ tool: m[1]!.toLowerCase(), at: m.index ?? 0, after: (m.index ?? 0) + m[0].length });
+  }
+  return calls;
+}
+
+/**
+ * The marker a SYSTEM-WRITTEN prompt uses to state its evidence outright.
+ *
+ * Every classifier that reads prose is defeated by prose moving: a
+ * code-formatted name, a semicolon, a French imperative
+ * ("Exécutez unity_playthrough") — each one silently emptied the requirement
+ * set (Codex 2026-09-12 P#4). Where the system writes the prompt it does not
+ * have to be re-read as English: it says what it demands.
+ *
+ *   STRADA-REQUIRED-EVIDENCE: unity_playthrough sessions="all"; unity_build_player
+ *
+ * Declared requirements are added to whatever the prose demands — never
+ * subtracted from it — and are not waived by a threshold loop, because they
+ * were not inferred in the first place.
+ */
+export const REQUIRED_EVIDENCE_PREFIX = "STRADA-REQUIRED-EVIDENCE:";
+
+export interface DeclaredEvidence {
+  readonly tools: string[];
+  readonly args: RequiredToolArgument[];
+}
+
+/** What the prompt's own STRADA-REQUIRED-EVIDENCE lines declare. */
+export function declaredEvidence(prompt: string): DeclaredEvidence {
+  const tools = new Set<string>();
+  const args: RequiredToolArgument[] = [];
+  const seen = new Set<string>();
+  for (const line of prompt.split(/\r?\n/)) {
+    const at = line.indexOf(REQUIRED_EVIDENCE_PREFIX);
+    if (at < 0) continue;
+    for (const entry of line.slice(at + REQUIRED_EVIDENCE_PREFIX.length).split(";")) {
+      const text = entry.trim();
+      if (text === "") continue;
+      const name = /^(unity_[a-z0-9_]+)/i.exec(text);
+      if (!name) continue;
+      const tool = name[1]!.toLowerCase();
+      tools.add(tool);
+      for (const a of text.slice(name[0].length).matchAll(/([a-z_]+)\s*[:=]\s*"([^"]{1,60})"/gi)) {
+        const key = a[1]!.toLowerCase();
+        const value = a[2]!.trim();
+        if (value === "") continue;
+        const id = `${tool}:${key}:${value.toLowerCase()}`;
+        if (seen.has(id)) continue;
+        seen.add(id);
+        args.push({ tool, key, value });
+      }
+    }
+  }
+  return { tools: [...tools], args };
 }
 
 export function requiredToolsInPrompt(prompt: string): string[] {
@@ -54,23 +147,17 @@ export function requiredToolsInPrompt(prompt: string): string[] {
   // "through X" — with up to a few words between ("run the full suite using
   // unity_test_run"). "run X" alone let "execute unity_x" through (Codex
   // 2026-09-11 B#13).
-  const conditional = new Set<string>();
   // The name may be CODE-FORMATTED or quoted: ``Run `unity_playthrough` `` is
   // the ordinary way to write an instruction, and the gate saw no requirement
   // at all (Codex 2026-09-11 M#2).
-  for (const m of prompt.matchAll(/\b(?:run|execute|invoke|call|use|using|via|through)\b(?:\s+(?!unity_)[a-z'-]+){0,4}\s*[`'"*_]*\s*(unity_[a-z0-9_]+)/gi)) {
-    const tool = m[1]!.toLowerCase();
+  for (const tool of declaredEvidence(prompt).tools) out.add(tool);
+  for (const call of toolCalls(prompt)) {
     // A tool named in a CONDITIONAL instruction is required only when that
-    // condition holds, and nothing here can judge that — so it is reported as
-    // conditional rather than demanded.
-    if (CONDITIONAL_RE.test(sentenceAround(prompt, m.index ?? 0))) conditional.add(tool);
-    else out.add(tool);
-  }
-  // …but an UNCONDITIONAL mention outranks a conditional one. "Run
-  // unity_playthrough. If it fails, run unity_playthrough again." required
-  // nothing at all, because the second sentence deleted the first (M#2).
-  for (const tool of conditional) {
-    if (!out.has(tool)) out.delete(tool);
+    // condition holds, and nothing here can judge that — so it is not demanded
+    // on the strength of that mention. An UNCONDITIONAL mention elsewhere
+    // still demands it: only unconditional mentions ever reach `out` (M#2).
+    if (instructionIsConditional(prompt, call.at)) continue;
+    out.add(call.tool);
   }
   return [...out];
 }
@@ -96,15 +183,21 @@ export interface RequiredToolArgument {
 export function requiredToolArguments(prompt: string): RequiredToolArgument[] {
   const out: RequiredToolArgument[] = [];
   const seen = new Set<string>();
+  for (const declared of declaredEvidence(prompt).args) {
+    const id = `${declared.tool}:${declared.key}:${declared.value.toLowerCase()}`;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push(declared);
+  }
   // The tool, then only what follows it up to the next tool name: "…with
   // target \"android\"" after unity_build_player is not unity_playthrough's
   // argument (Codex 2026-09-11 D#14).
-  const calls = [...prompt.matchAll(/\b(?:run|execute|invoke|call|use|using|via|through)\b(?:\s+(?!unity_)[a-z'-]+){0,4}\s+(unity_[a-z0-9_]+)/gi)];
+  const calls = toolCalls(prompt);
   for (let c = 0; c < calls.length; c++) {
     const m = calls[c]!;
-    const tool = m[1]!.toLowerCase();
-    const from = (m.index ?? 0) + m[0].length;
-    const to = Math.min(calls[c + 1]?.index ?? prompt.length, from + 160, sentenceEnd(prompt, from));
+    const tool = m.tool;
+    const from = m.after;
+    const to = Math.min(calls[c + 1]?.at ?? prompt.length, from + 160, clauseEnd(prompt, from));
     const window = prompt.slice(from, to);
     // KNOWN argument names only: an arbitrary word before a quote turned
     // `report "all good"` into a requirement (D#14).
@@ -120,7 +213,7 @@ export function requiredToolArguments(prompt: string): RequiredToolArgument[] {
     // A bare flag the campaign's own directives use: "run the FULL suite
     // UNFILTERED using unity_test_run" (D#11). The window looks backwards too,
     // because the flag usually precedes the tool.
-    const flagWindow = prompt.slice(Math.max(0, (m.index ?? 0) - 120), to);
+    const flagWindow = prompt.slice(Math.max(0, m.at - 120), to);
     if (/\bunfiltered\b/i.test(flagWindow)) {
       const id = `${tool}:unfiltered:true`;
       if (!seen.has(id)) {
@@ -130,11 +223,6 @@ export function requiredToolArguments(prompt: string): RequiredToolArgument[] {
     }
   }
   return out;
-}
-
-function sentenceEnd(text: string, from: number): number {
-  const stop = text.slice(from).search(/[.\n]/);
-  return stop === -1 ? text.length : from + stop;
 }
 
 /**
@@ -153,7 +241,13 @@ export function thresholdLoopTools(prompt: string): Set<string> {
   // (Codex 2026-09-11 M#2).
   for (const paragraph of prompt.split(/\n\s*\n/)) {
     if (!THRESHOLD_LOOP_RE.test(paragraph)) continue;
-    for (const m of paragraph.matchAll(/(unity_[a-z0-9_]+)/gi)) tools.add(m[1]!.toLowerCase());
+    // The body is described UP TO the "repeat … until" sentence; what follows
+    // it is a new instruction. Exempting the whole paragraph waived an
+    // unconditional build written after the loop (Codex 2026-09-12 P#4).
+    let lastLoopAt = -1;
+    for (const m of paragraph.matchAll(new RegExp(THRESHOLD_LOOP_RE.source, "gi"))) lastLoopAt = (m.index ?? 0) + m[0].length;
+    const body = paragraph.slice(0, clauseEnd(paragraph, Math.max(0, lastLoopAt)));
+    for (const m of body.matchAll(/(unity_[a-z0-9_]+)/gi)) tools.add(m[1]!.toLowerCase());
   }
   return tools;
 }
@@ -176,6 +270,9 @@ export function missingRequiredEvidence(
   // prompt: a sprite threshold loop followed by an unconditional Android build
   // waived the build nobody had run (Codex 2026-09-11 M#2).
   const loopTools = thresholdLoopTools(prompt);
+  // A DECLARED requirement was not inferred from prose, so no prose loop
+  // waives it.
+  for (const declared of declaredEvidence(prompt).tools) loopTools.delete(declared);
   const ranSomething = [...loopTools].some((tool) => trace.some((t) => t.toolName === tool && t.success));
   for (const tool of required) {
     const calls = trace.filter((t) => t.toolName === tool);
