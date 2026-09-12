@@ -195,7 +195,71 @@ export function planVerifierPipeline(params: {
     };
   }
 
+  /**
+   * WORK EVIDENCE. Every check in this pipeline is conditional on something
+   * having happened: no pending files → build "clean", no failures → repro
+   * "clean", no touched files → conformance "not applicable". A run that made
+   * one read call and changed nothing therefore passed the whole pipeline and
+   * was approved (audited 2026-09-10). A task whose type is to change
+   * something must show a mutation or a verification, or say plainly that it
+   * could not (a terminal failure report is honoured as before).
+   *
+   * Asked at BOTH doors. The check sat below the "no review required" return,
+   * so a run with ZERO tool steps and the draft "Implemented successfully."
+   * never reached it: the pipeline approved, the handler returned done, and
+   * the task completed with nothing inspected, implemented or verified (Codex
+   * 2026-09-12 AE#1).
+   */
+  const noWorkOutcome = (): VerifierPipelinePlan | undefined => {
+    if (
+      !WORK_TASK_TYPES.has(evidence.task.type) ||
+      evidence.mutationStepCount > 0 ||
+      evidence.verificationStepCount > 0 ||
+      evidence.hasTerminalFailureReport
+    ) {
+      return undefined;
+    }
+    // Bounded: the gate asks twice, then demands a replan instead of asking
+    // a third time (the text-only hard cap ends a run that still does nothing,
+    // later and with a vaguer sentence). Keyed per run.
+    const runKey = `${params.chatId}:${params.taskStartedAtMs}`;
+    const asked = (noWorkGateEmissions.get(runKey) ?? 0) + 1;
+    noWorkGateEmissions.set(runKey, asked);
+    if (noWorkGateEmissions.size > 512) noWorkGateEmissions.delete(noWorkGateEmissions.keys().next().value as string);
+    if (asked > MAX_NO_WORK_EVIDENCE_GATES) {
+      return {
+        evidence,
+        checks,
+        reviewRequired: false,
+        initialDecision: "replan",
+        gate: buildNoWorkEvidenceGate(evidence) + `\nThis is the ${asked}th completion claim with nothing done: the approach, not the wording, has to change.`,
+        summary:
+          `Reported completion of a ${evidence.task.type} task ${asked} times with no change made and no verification run; ` +
+          "a report is not the work.",
+        buildToolsAvailable: params.buildToolsAvailable,
+      };
+    }
+    return {
+      evidence,
+      checks,
+      reviewRequired: false,
+      initialDecision: "continue",
+      gate: buildNoWorkEvidenceGate(evidence),
+      summary: `The draft reports completion of a ${evidence.task.type} task with no change made and no verification run.`,
+      buildToolsAvailable: params.buildToolsAvailable,
+    };
+  };
+
   if (!shouldRunCompletionReview(evidence, params.draft, params.prompt)) {
+    // The draft needs no review — but a claim that work was DONE still needs
+    // work behind it (AE#1). Only a claim: the task classifier falls back to
+    // "code-generation" for everything it cannot place, so gating every
+    // unreviewed draft here would hold back the answer to "read this file and
+    // tell me what it extends" — which is an answer, not a claim.
+    if (draftClaimsWorkDone(params.draft)) {
+      const noWork = noWorkOutcome();
+      if (noWork) return noWork;
+    }
     return {
       evidence,
       checks,
@@ -238,49 +302,8 @@ export function planVerifierPipeline(params: {
     };
   }
 
-  // WORK EVIDENCE. Every check above is conditional on something having
-  // happened: no pending files → build "clean", no failures → repro "clean",
-  // no touched files → conformance "not applicable". A run that made one
-  // read call and changed nothing therefore passed the whole pipeline and was
-  // approved (audited 2026-09-10). A task whose type is to change something
-  // must show a mutation or a verification, or say plainly that it could not
-  // (a terminal failure report is honoured as before).
-  if (
-    WORK_TASK_TYPES.has(evidence.task.type) &&
-    evidence.mutationStepCount === 0 &&
-    evidence.verificationStepCount === 0 &&
-    !evidence.hasTerminalFailureReport
-  ) {
-    // Bounded: the gate asks twice, then demands a replan instead of asking
-    // a third time (the text-only hard cap ends a run that still does nothing,
-    // later and with a vaguer sentence). Keyed per run.
-    const runKey = `${params.chatId}:${params.taskStartedAtMs}`;
-    const asked = (noWorkGateEmissions.get(runKey) ?? 0) + 1;
-    noWorkGateEmissions.set(runKey, asked);
-    if (noWorkGateEmissions.size > 512) noWorkGateEmissions.delete(noWorkGateEmissions.keys().next().value as string);
-    if (asked > MAX_NO_WORK_EVIDENCE_GATES) {
-      return {
-        evidence,
-        checks,
-        reviewRequired: false,
-        initialDecision: "replan",
-        gate: buildNoWorkEvidenceGate(evidence) + `\nThis is the ${asked}th completion claim with nothing done: the approach, not the wording, has to change.`,
-        summary:
-          `Reported completion of a ${evidence.task.type} task ${asked} times with no change made and no verification run; ` +
-          "a report is not the work.",
-        buildToolsAvailable: params.buildToolsAvailable,
-      };
-    }
-    return {
-      evidence,
-      checks,
-      reviewRequired: false,
-      initialDecision: "continue",
-      gate: buildNoWorkEvidenceGate(evidence),
-      summary: `The draft reports completion of a ${evidence.task.type} task with no change made and no verification run.`,
-      buildToolsAvailable: params.buildToolsAvailable,
-    };
-  }
+  const noWork = noWorkOutcome();
+  if (noWork) return noWork;
 
   return {
     evidence,
@@ -290,6 +313,21 @@ export function planVerifierPipeline(params: {
     summary: "Static verifier checks passed and the draft leaves nothing open.",
     buildToolsAvailable: params.buildToolsAvailable,
   };
+}
+
+/**
+ * Does this draft claim that WORK WAS DONE, as opposed to answering a
+ * question?
+ *
+ * The task classifier falls back to "code-generation" for everything it
+ * cannot place — a short prompt, a question, a non-English one — so the task
+ * type alone cannot tell "Implemented successfully." from "It extends
+ * MonoBehaviour." A claim of completed work is what needs work behind it.
+ */
+export function draftClaimsWorkDone(draft: string | null | undefined): boolean {
+  const text = (draft ?? "").toLowerCase();
+  if (text.trim() === "") return false;
+  return /\b(?:implemented|created|added|wrote|written|built|fixed|repaired|refactored|renamed|removed|deleted|replaced|updated|migrated|wired|integrated|installed|generated|set\s+up|hooked\s+up|shipped|delivered|completed)\b/u.test(text);
 }
 
 /** Task types whose completion means something changed or something was run — never only read. */

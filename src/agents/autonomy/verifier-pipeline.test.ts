@@ -642,3 +642,77 @@ describe("work evidence (audited 2026-09-10: one read call and no change was app
   });
 });
 
+/**
+ * Codex round AE#1, reproduced: prompt "Implement scoring and win
+ * conditions." (classified code-generation/simple/medium), ZERO tool steps,
+ * draft "Implemented successfully." The pipeline returned approve — the
+ * work-evidence check sat below the "no review required" return, so nothing
+ * ever asked whether anything had been done.
+ */
+describe("a completion claim needs work behind it, at every door (Codex 2026-09-12 AE#1)", () => {
+  const noStepsPlan = (draft: string) =>
+    planVerifierPipeline({
+      prompt: "Implement scoring and win conditions.",
+      draft,
+      state: createState(),
+      task: { type: "code-generation", complexity: "simple", criticality: "medium" },
+      verificationState: {
+        pendingFiles: new Set<string>(),
+        touchedFiles: new Set<string>(),
+        hasCompilableChanges: false,
+        lastBuildOk: null,
+        lastVerificationAt: null,
+      },
+      buildVerificationGate: null,
+      conformanceGate: null,
+      logEntries: [],
+      chatId: "chat-ae1",
+      taskStartedAtMs: Date.now() - 1000,
+    });
+
+  it("refuses a completion with no step of any kind", () => {
+    const plan = noStepsPlan("Implemented successfully.");
+    expect(plan.initialDecision).toBe("continue");
+    expect(plan.gate ?? "").toContain("[VERIFIER PIPELINE]");
+    expect(plan.summary).toContain("no change made and no verification run");
+  });
+
+  it("does not hold back the answer to a question that asked for no change", () => {
+    // The classifier defaults to "code-generation" for anything it cannot
+    // place, so this door asks whether the draft CLAIMS work: an answer to a
+    // question claims none, and it must reach the user.
+    const plan = planVerifierPipeline({
+      prompt: "Read the PlayerController file and tell me what it extends",
+      draft: "It extends MonoBehaviour.",
+      state: createState(),
+      task: { type: "code-generation", complexity: "simple", criticality: "medium" },
+      verificationState: {
+        pendingFiles: new Set<string>(),
+        touchedFiles: new Set<string>(),
+        hasCompilableChanges: false,
+        lastBuildOk: null,
+        lastVerificationAt: null,
+      },
+      buildVerificationGate: null,
+      conformanceGate: null,
+      logEntries: [],
+      chatId: "chat-ae1-question",
+      taskStartedAtMs: Date.now() - 1000,
+    });
+    expect(plan.initialDecision).toBe("approve");
+  });
+
+  it("still honours an honest terminal failure report", () => {
+    // Saying plainly that it could not be done is not the same as claiming it
+    // was: that report is asked once for an attempt and then STANDS, exactly
+    // as before — the no-work gate does not take it over.
+    const draft =
+      "BLOCKED: I could not do this. The project has no scoring system to extend and the tool that would create one was not offered in this run.";
+    const first = noStepsPlan(draft);
+    expect(first.initialDecision).toBe("continue");
+    expect(first.summary).toContain("no attempt");
+    const second = noStepsPlan(draft);
+    expect(second.initialDecision).toBe("approve");
+    expect(second.summary).toContain("honest terminal failure report");
+  });
+});
