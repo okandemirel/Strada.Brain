@@ -188,6 +188,11 @@ export function readPlaythroughVerdict(
                     // read exactly as before.
                     ...(typeof r.identityVerified === "boolean" ? { identityVerified: r.identityVerified } : {}),
                     ...(num(r.requestedIndex) !== undefined ? { requestedIndex: num(r.requestedIndex) } : {}),
+                    // …and WHAT THE GAME SAID was running, which the reader
+                    // dropped: an `identityVerified: true` beside an
+                    // observedIndex naming a different session is a
+                    // contradiction, and it counted (Codex 2026-09-12 Z#5).
+                    ...(num(r.observedIndex) !== undefined ? { observedIndex: num(r.observedIndex) } : {}),
                     seconds: num(r.seconds) ?? 0,
                   };
                 }),

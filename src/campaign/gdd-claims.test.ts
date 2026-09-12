@@ -18,6 +18,11 @@ function evidence(over: Partial<PlaythroughEvidence> = {}): PlaythroughEvidence 
     found: true, ok: true, outcome: "Won", session: 1, actions: 20,
     perf: { medium: "editor-playmode-batch", bootSeconds: 2.4, playSeconds: 41.2, playFrames: 1030, avgFps: 25, worstFrameMs: 180 },
     ...over,
+    // WHAT A CURRENT PRODUCER EMITS. Every session record carries whether the
+    // run could identify the content it played (Codex 2026-09-12 X, Z#5), so
+    // the fixtures carry it too; a test that is about identity says otherwise
+    // for the session it means.
+    ...(over.sessions ? { sessions: over.sessions.map((s) => ({ identityVerified: true, ...s })) } : {}),
   };
 }
 
@@ -281,15 +286,17 @@ describe("independent level counts cannot contradict each other (Codex 2026-09-1
 
 describe("distinct finished sessions (Codex 2026-09-12 R#4)", () => {
   it("counts a session once, only inside the catalog, and only when it did something", () => {
+    // Every session carries the identity a current producer records (X, Z#5).
+    const played = (over: Record<string, unknown>) => ({ identityVerified: true, ...over });
     expect(finishedSessionIndices({
       sessionCount: 4,
       sessions: [
-        { index: 1, outcome: "Won", actions: 5 },
-        { index: 1, outcome: "Won", actions: 9 },   // the same level again
-        { index: 4, outcome: "Lost", actions: 3 },  // the LAST catalog entry counts
-        { index: 5, outcome: "Won", actions: 3 },   // outside the catalog
-        { index: 2, outcome: "None", actions: 7 },  // never reached an outcome
-        { index: 3, outcome: "Won", actions: 0 },   // did nothing
+        played({ index: 1, outcome: "Won", actions: 5 }),
+        played({ index: 1, outcome: "Won", actions: 9 }),   // the same level again
+        played({ index: 4, outcome: "Lost", actions: 3 }),  // the LAST catalog entry counts
+        played({ index: 5, outcome: "Won", actions: 3 }),   // outside the catalog
+        played({ index: 2, outcome: "None", actions: 7 }),  // never reached an outcome
+        played({ index: 3, outcome: "Won", actions: 0 }),   // did nothing
       ],
     })).toEqual([1, 4]);
     expect(finishedSessionIndices(undefined)).toEqual([]);
@@ -558,11 +565,24 @@ describe("a session whose content nobody could identify (Codex 2026-09-12 X)", (
     index: 7, outcome: "Won", actions: 5, seconds: 30, reachedOutcome: true, ...over,
   });
 
-  it("is not a level played, while an identified one is", () => {
+  it("is not a level played, and neither is an unidentified or self-contradictory one", () => {
     expect(finishedSessionIndices({ sessionCount: 12, sessions: [played({ identityVerified: false })] })).toEqual([]);
     expect(finishedSessionIndices({ sessionCount: 12, sessions: [played({ identityVerified: true })] })).toEqual([7]);
-    // A producer that says nothing about identity is read exactly as before.
-    expect(finishedSessionIndices({ sessionCount: 12, sessions: [played({})] })).toEqual([7]);
+    // A producer that says NOTHING about identity certifies no content
+    // either: absence was read as permission, and a malformed flag became
+    // absence (Codex 2026-09-12 Z#5).
+    expect(finishedSessionIndices({ sessionCount: 12, sessions: [played({})] })).toEqual([]);
+    expect(finishedSessionIndices({ sessionCount: 12, sessions: [played({ identityVerified: "false" as never })] })).toEqual([]);
+    expect(finishedSessionIndices({ sessionCount: 12, sessions: [played({ identityVerified: null as never })] })).toEqual([]);
+    // …and a record that claims verification while naming a DIFFERENT session
+    // as the one that ran is a contradiction, not a level played.
+    expect(
+      finishedSessionIndices({ sessionCount: 12, sessions: [played({ identityVerified: true, observedIndex: 1 })] }),
+    ).toEqual([]);
+    // The game reporting the session it was asked for is consistent.
+    expect(
+      finishedSessionIndices({ sessionCount: 12, sessions: [played({ identityVerified: true, observedIndex: 7 })] }),
+    ).toEqual([7]);
   });
 
   it("keeps the level count honest: an unidentified session does not close it", () => {

@@ -5022,7 +5022,12 @@ export class CampaignManager {
     // describe another (Codex 2026-09-12 W#4). An unknown revision binds
     // nothing, so such a closure counts for THIS round and is re-judged on
     // the next one.
-    const treeBefore = { revision: this.projectRevision(), dirty: this.projectIsDirty() };
+    // A tree with no revisions at all is a different thing from a tree whose
+    // revision is known and moving: with git absent there is nothing to bind
+    // a closure to and nothing to be inconsistent with, while a dirty git
+    // tree is measurably changing under the audit (Codex 2026-09-12 Z#1).
+    const revisionNow = this.projectRevision();
+    const treeBefore = { revision: revisionNow, dirty: revisionNow !== "" && this.projectIsDirty(), tracked: revisionNow !== "" };
     const revisionForClosure = treeBefore.dirty ? "" : treeBefore.revision;
     const failedRepairs = campaign.milestones.filter((m) => m.id.startsWith("mcov") && m.status === "failed");
     const unclosed = failedRepairs.filter((m) => !closureHolds(m, revisionForClosure));
@@ -5057,8 +5062,15 @@ export class CampaignManager {
       // equality alone let an uncommitted implementation change land in that
       // window and stamp the closure anyway (Codex 2026-09-12 Y#3). Both
       // reads, the same scope, before and after.
-      const stillSameRevision =
-        this.projectRevision() === treeBefore.revision && this.projectIsDirty() === treeBefore.dirty;
+      // A DIRTY AUDIT CLOSES NOTHING. Two equal dirtiness booleans are not
+      // one tree: an implementation change landing inside the audit's await
+      // left "dirty → dirty" and the closure was accepted for that round
+      // (Codex 2026-09-12 Z#1). A requirement is closed only against a tree
+      // whose revision is known and unchanged; when it is not, the audit's
+      // answer is reported and nothing is recorded.
+      const stillSameRevision = treeBefore.tracked
+        ? revisionForClosure !== "" && this.projectRevision() === revisionForClosure && !this.projectIsDirty()
+        : this.projectRevision() === "";
       for (const [key, ms] of byRequirement) {
         if (!needsJudging.has(key)) continue;
         // Never a key the answer names on both sides.
@@ -5087,7 +5099,16 @@ export class CampaignManager {
         closed: judged.closed.length,
         open: judged.open.length,
       });
-      if (!stillSameRevision) return { open: asked };
+      if (!stillSameRevision) {
+        return {
+          open: asked,
+          auditFailed:
+            treeBefore.tracked && (treeBefore.dirty || this.projectIsDirty())
+              ? "the project has uncommitted changes, so nothing could be judged against a revision of it: " +
+                `${asked.length} requirement(s) stay open`
+              : undefined,
+        };
+      }
       // A requirement whose identity is only a truncated title cannot be
       // closed, so it stays open however the audit answered.
       const unidentified = [...byRequirement.entries()]

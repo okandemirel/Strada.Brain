@@ -505,6 +505,8 @@ export interface PlaythroughEvidence {
      */
     identityVerified?: boolean;
     requestedIndex?: number;
+    /** The index the game itself reported as active, when it can report one. */
+    observedIndex?: number;
   }>;
   /**
    * What was on screen at the end of play (2026-09-10): world renderers, the

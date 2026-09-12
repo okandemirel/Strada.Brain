@@ -378,6 +378,7 @@ export function finishedSessionIndices(
       actions?: number;
       reachedOutcome?: boolean;
       identityVerified?: boolean;
+      observedIndex?: number;
     }>;
   } | undefined,
 ): number[] {
@@ -393,7 +394,19 @@ export function finishedSessionIndices(
     // carry the index the run had asked for: an auto-started level 1 counted
     // as level 7 played (Codex 2026-09-12 X). Records that do not report
     // identity at all are read exactly as before.
-    if (session.identityVerified === false) continue;
+    if (session.identityVerified !== true) continue;
+    // …AND CONSISTENT WITH ITSELF. A record can claim verification while
+    // naming a different session as the one that was running; that is a
+    // contradiction, not a level played (Codex 2026-09-12 Z#5). A malformed
+    // flag ("false", null) is not a verification either — the check above
+    // requires the boolean true.
+    if (
+      typeof session.observedIndex === "number"
+      && session.observedIndex > 0
+      && session.observedIndex !== session.index
+    ) {
+      continue;
+    }
     const outcome = (session.outcome ?? "").trim();
     if (outcome === "" || outcome === "None" || outcome === "Refused") continue;
     if (!Number.isInteger(session.index) || session.index! < 1 || session.index! > Math.max(catalog, 1)) continue;

@@ -3744,12 +3744,18 @@ describe("CampaignManager", () => {
     await waitFor(() => expect(tasks.submitted).toHaveLength(3), { timeout: 15_000 });
     settleMilestone("integrated, all 42 tests pass");
 
-    await waitFor(
-      () => expect((storage.get(campaign.id)!.milestones[2]!.deliveryProofsMissing ?? []).join(" ")).toContain("the player was not run"),
-      { timeout: 15_000 },
-    );
+    for (let i = 0; i < 12 && storage.get(campaign.id)!.state === "executing"; i++) {
+      const before = tasks.submitted.length;
+      settleMilestone("integrated, all 42 tests pass");
+      await waitFor(
+        () => expect(tasks.submitted.length > before || storage.get(campaign.id)!.state !== "executing").toBe(true),
+        { timeout: 15_000 },
+      );
+    }
     expect(played).toHaveLength(0);
-    expect(storage.get(campaign.id)!.state).not.toBe("done");
+    const stoppedHere = storage.get(campaign.id)!;
+    expect(stoppedHere.state).not.toBe("done");
+    expect(`${stoppedHere.lastError}`).toContain("the player was not run");
     rmSync(join(projectRoot, "Recordings", "player-playthrough", "playthrough-verdict.json"), { recursive: true, force: true });
   });
 
@@ -3792,13 +3798,20 @@ describe("CampaignManager", () => {
     await waitFor(() => expect(tasks.submitted).toHaveLength(3), { timeout: 15_000 });
     settleMilestone("integrated, all 42 tests pass");
 
-    await waitFor(
-      () => expect((storage.get(campaign.id)!.milestones[2]!.deliveryProofsMissing ?? []).join(" ")).toContain("in the built player for"),
-      { timeout: 15_000 },
-    );
-    const missing = (storage.get(campaign.id)!.milestones[2]!.deliveryProofsMissing ?? []).join(" ");
-    expect(missing).toContain("frame rate");
-    expect(storage.get(campaign.id)!.state).not.toBe("done");
+    // Driven to a terminal state: `deliveryProofsMissing` is cleared between
+    // rounds, so the durable evidence is the campaign's own stop.
+    for (let i = 0; i < 12 && storage.get(campaign.id)!.state === "executing"; i++) {
+      const before = tasks.submitted.length;
+      settleMilestone("integrated, all 42 tests pass");
+      await waitFor(
+        () => expect(tasks.submitted.length > before || storage.get(campaign.id)!.state !== "executing").toBe(true),
+        { timeout: 15_000 },
+      );
+    }
+    const stopped = storage.get(campaign.id)!;
+    expect(stopped.state).not.toBe("done");
+    expect(`${stopped.lastError}`).toContain("in the built player for");
+    expect(`${stopped.lastError}`).toContain("frame rate");
     // The secondary's own evidence is kept, not a sentence about it.
     const runs = storage.get(campaign.id)!.milestones[2]!.playerRunsByTarget ?? [];
     expect(runs[1]!.evidence?.perf?.avgFps).toBe(10);

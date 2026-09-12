@@ -697,7 +697,11 @@ Your previous reply was not valid JSON. Reply with the JSON object ALONE — no 
     // and `delivered:true` for the same id closed it on the positive one
     // (Codex 2026-09-12 V#2). The quote must be IN the record we sent, and a
     // requirement with more than one verdict is unjudged.
-    const flat = (text: string): string => text.toLowerCase().replace(/\s+/g, " ").trim();
+    // CASE IS PART OF THE QUOTE. Lowercasing it made "Added
+    // Assets/Art/hero.png" a verbatim quote of "Added Assets/Art/Hero.png",
+    // so a commit of one file closed a requirement about another (Codex
+    // 2026-09-12 Z#4). Whitespace still is not identity.
+    const flat = (text: string): string => text.replace(/\s+/g, " ").trim();
     // THE MEASURED LINES ONLY. The membership test searched the whole summary,
     // so a requirement's own TITLE ("Dragon boss: absent") and a failed
     // sprint's prose ("the dragon boss is NOT delivered") were both accepted
