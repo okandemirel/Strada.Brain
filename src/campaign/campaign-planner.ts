@@ -363,13 +363,23 @@ export class CampaignPlanner {
         `${userMessage}\n\nThis is step two, milestone ${index + 1} of ${titles.length}: "${item.title}"` +
         `${item.coveredSections.length > 0 ? ` covering ${item.coveredSections.map((h) => `"${h}"`).join(", ")}` : ""}.\n` +
         `Write the sprint instruction for THIS milestone only: what to build, in this project, with what proof. ` +
+        `End it by demanding a CAPTURED FRAME of what was built, so the visual gate can run. ` +
         `Reply with the instruction text itself — no JSON, no title, no preamble.`;
       const reply = await streamOrChatText(this.provider, system, promptAsk, { maxTokens: CampaignPlanner.STAGE_OUTPUT_TOKENS });
       const prompt = stripLeakedReasoning(reply.text ?? "").text.trim().slice(0, 8000);
       // A milestone with no instruction is not a milestone; the schema's own
       // floor (40 characters) is the measure.
       if (prompt.length < 40) continue;
-      milestones.push({ title: item.title, prompt, coveredSections: item.coveredSections, deliverables: [] });
+      // THE VISUAL GATE IS ARMED BY THE SPRINT'S OWN INSTRUCTION, and a model
+      // writing one instruction at a time forgets to ask for the frame: the
+      // live 14-sprint ladder left four sprints ungated (measured 2026-09-12
+      // 02:56). Asked for above, and added here when it is still missing — so
+      // the sprint genuinely demands the frame rather than the gate arming on
+      // boilerplate nobody asked for (the 2026-09-04 audit).
+      const gated = /captur/i.test(prompt)
+        ? prompt
+        : `${prompt.replace(/\s+$/, "")}\n\nFinish by CAPTURING A FRAME of what this sprint built (unity_capture_frame) and name the captured file in your report — a sprint that shows nothing is not done.`;
+      milestones.push({ title: item.title, prompt: gated.slice(0, 8000), coveredSections: item.coveredSections, deliverables: [] });
     }
     const validated = milestoneLadderSchema.safeParse({ milestones, excluded: [] });
     if (!validated.success) {

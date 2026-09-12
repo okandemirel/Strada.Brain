@@ -139,6 +139,10 @@ describe("reading a milestone ladder out of a reply", () => {
     expect(result.milestones.map((m) => m.title)).toEqual(["Core loop", "Delivery"]);
     expect(result.milestones[0]!.prompt.length).toBeGreaterThanOrEqual(40);
     expect(result.milestones[0]!.coveredSections).toEqual(["3. CORE GAMEPLAY"]);
+    // EVERY staged sprint demands a captured frame, or the visual gate never
+    // runs for it: the live 14-sprint ladder left four sprints ungated
+    // (measured 2026-09-12 02:56).
+    expect(result.milestones.every((m) => /captur/i.test(m.prompt))).toBe(true);
     // Two whole-ladder attempts, then titles, then one ask per milestone.
     expect(asks).toHaveLength(5);
   });
