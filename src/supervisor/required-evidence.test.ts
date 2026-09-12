@@ -276,3 +276,50 @@ describe("one parser, clause scope, and a prompt that states its own evidence (C
     ])).toEqual([{ tool: "unity_build_player", attempts: 0 }]);
   });
 });
+
+describe("conditions and loops reach exactly as far as their own clause (Codex 2026-09-12 Q#9, Q#10)", () => {
+  it("a condition governs its clause and the next, not the rest of the sentence", () => {
+    // "If needed, run A; then always run B" required NOTHING: everything after
+    // the "if" was judged conditional.
+    expect(requiredToolsInPrompt("If needed, run unity_verify_change; then always run unity_build_player."))
+      .toEqual(["unity_build_player"]);
+  });
+
+  it("a loop written after the work does not waive the work", () => {
+    const prompt = "Run unity_build_player. Call unity_generate_sprite and repeat until the count is below 200.";
+    expect(thresholdLoopTools(prompt)).toEqual(new Set(["unity_generate_sprite"]));
+    expect(missingRequiredEvidence(prompt, [{ toolName: "unity_generate_sprite", success: true }]).map((s) => s.tool))
+      .toEqual(["unity_build_player"]);
+  });
+
+  it("a conditional instruction demands no arguments either", () => {
+    // An Android-only setup was failed for an iOS build nobody asked for —
+    // the unsatisfiable gate this review week keeps returning to.
+    const prompt =
+      'Run `unity_build_player` with target "Android". If porting to iOS, run `unity_build_player` with target "iOS".';
+    expect(requiredToolArguments(prompt)).toEqual([{ tool: "unity_build_player", key: "target", value: "Android" }]);
+    expect(missingRequiredEvidence(prompt, [
+      { toolName: "unity_build_player", success: true, args: JSON.stringify({ target: "Android" }) },
+    ])).toEqual([]);
+  });
+
+  it("an instruction's arguments are satisfied TOGETHER or not at all", () => {
+    const prompt =
+      'Run unity_build_player with target "Android" and scene "Boot". ' +
+      'Run unity_build_player with target "iOS" and scene "Menu".';
+    // Each instruction answered by its own call: both demands are met.
+    expect(missingRequiredEvidence(prompt, [
+      { toolName: "unity_build_player", success: true, args: JSON.stringify({ target: "Android", scene: "Boot" }) },
+      { toolName: "unity_build_player", success: true, args: JSON.stringify({ target: "iOS", scene: "Menu" }) },
+    ])).toEqual([]);
+    // The values crossed over: every value was used somewhere and neither
+    // instruction was actually carried out.
+    const crossed = missingRequiredEvidence(prompt, [
+      { toolName: "unity_build_player", success: true, args: JSON.stringify({ target: "Android", scene: "Menu" }) },
+      { toolName: "unity_build_player", success: true, args: JSON.stringify({ target: "iOS", scene: "Boot" }) },
+    ]);
+    expect(crossed).toHaveLength(1);
+    expect(crossed[0]!.combination).toEqual([{ key: "target", value: "Android" }, { key: "scene", value: "Boot" }]);
+    expect(describeEvidenceShortfall(crossed)).toContain('target "Android" and scene "Boot" in ONE call');
+  });
+});

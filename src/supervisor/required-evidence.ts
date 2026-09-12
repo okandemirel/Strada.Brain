@@ -49,23 +49,39 @@ const THRESHOLD_LOOP_RE =
  */
 const CLAUSE_BREAK = /[.\n;—–]/;
 
+/** A sub-clause boundary — the comma included, which the instruction one is not. */
+const SUB_CLAUSE_BREAK = /[.\n;,—–]/;
+
 /**
  * Does a condition govern the instruction at `at`?
  *
- * A condition reaches FORWARD, not backward. "If it fails, run X" and "If the
- * scene stalls; run X" are conditional; "Run X; if it fails, run X again" is
- * not — the second clause cannot un-demand the first, which is how a prompt
- * that plainly says "run unity_playthrough" ended up requiring nothing (Codex
- * 2026-09-12 P#4). So: a conditional word anywhere BEFORE the instruction in
- * its sentence governs it, and one AFTER it does only while still inside its
- * own clause ("run X only if needed").
+ * A condition reaches FORWARD, and only as far as the clause it introduces.
+ * "If it fails, run X" and "If the scene stalls; run X" are conditional; "Run
+ * X; if it fails, run X again" is not — the second clause cannot un-demand the
+ * first (Codex 2026-09-12 P#4). Neither does it reach past that clause: "If
+ * needed, run A; then always run B" demands B, and treating everything after
+ * the "if" as conditional made that prompt require nothing at all (Codex
+ * 2026-09-12 Q#9).
+ *
+ * So a condition counts when it is in the instruction's OWN clause ("run X
+ * only if needed") or in the clause immediately before it inside the same
+ * sentence.
  */
 function instructionIsConditional(text: string, at: number): boolean {
   let from = 0;
   for (let i = at; i >= 0; i--) {
-    if (text[i] === "." || text[i] === "\n") { from = i + 1; break; }
+    if (SUB_CLAUSE_BREAK.test(text[i]!)) { from = i + 1; break; }
   }
-  return CONDITIONAL_RE.test(text.slice(from, at)) || CONDITIONAL_RE.test(text.slice(at, clauseEnd(text, at)));
+  const ownEnd = text.slice(at).search(SUB_CLAUSE_BREAK);
+  if (CONDITIONAL_RE.test(text.slice(from, ownEnd === -1 ? text.length : at + ownEnd))) return true;
+  if (from === 0) return false;
+  const separator = text[from - 1]!;
+  if (separator === "." || separator === "\n") return false; // a sentence of its own
+  let previousFrom = 0;
+  for (let i = from - 2; i >= 0; i--) {
+    if (SUB_CLAUSE_BREAK.test(text[i]!)) { previousFrom = i + 1; break; }
+  }
+  return CONDITIONAL_RE.test(text.slice(previousFrom, from - 1));
 }
 
 /** The offset at which the clause containing `from` ends. */
@@ -167,6 +183,12 @@ export interface EvidenceShortfall {
   readonly attempts: number;
   /** Set when the tool RAN but not the way the task named it. */
   readonly argument?: { readonly key: string; readonly value: string };
+  /**
+   * The whole instruction, when it named more than one argument: each may have
+   * been used somewhere, and the point is that no single call used them
+   * together (Codex 2026-09-12 Q#10).
+   */
+  readonly combination?: ReadonlyArray<{ readonly key: string; readonly value: string }>;
 }
 
 export interface RequiredToolArgument {
@@ -180,14 +202,24 @@ export interface RequiredToolArgument {
  * sessions "all"`. Only quoted scalars, only within the same sentence as the
  * tool, so an ordinary mention cannot manufacture a requirement.
  */
-export function requiredToolArguments(prompt: string): RequiredToolArgument[] {
-  const out: RequiredToolArgument[] = [];
-  const seen = new Set<string>();
+/**
+ * One instruction's arguments, kept together.
+ *
+ * `run X with target "Android" and scene "Boot"` is ONE demand: a call that
+ * used the target of one instruction and the scene of another satisfies
+ * neither, and flattening every named value into independent sets accepted
+ * exactly that combination (Codex 2026-09-12 Q#10).
+ */
+export interface RequiredArgumentGroup {
+  readonly tool: string;
+  readonly args: ReadonlyArray<{ readonly key: string; readonly value: string }>;
+}
+
+/** The argument demands the prompt makes, one entry per instruction. */
+export function requiredArgumentGroups(prompt: string): RequiredArgumentGroup[] {
+  const groups: RequiredArgumentGroup[] = [];
   for (const declared of declaredEvidence(prompt).args) {
-    const id = `${declared.tool}:${declared.key}:${declared.value.toLowerCase()}`;
-    if (seen.has(id)) continue;
-    seen.add(id);
-    out.push(declared);
+    groups.push({ tool: declared.tool, args: [{ key: declared.key, value: declared.value }] });
   }
   // The tool, then only what follows it up to the next tool name: "…with
   // target \"android\"" after unity_build_player is not unity_playthrough's
@@ -195,35 +227,53 @@ export function requiredToolArguments(prompt: string): RequiredToolArgument[] {
   const calls = toolCalls(prompt);
   for (let c = 0; c < calls.length; c++) {
     const m = calls[c]!;
+    // A CONDITIONAL instruction demands nothing, and its arguments demand
+    // nothing either: "If porting to iOS, run unity_build_player with target
+    // \"iOS\"" made an Android-only run unsatisfiable (Codex 2026-09-12 Q#9).
+    if (instructionIsConditional(prompt, m.at)) continue;
     const tool = m.tool;
     const from = m.after;
     const to = Math.min(calls[c + 1]?.at ?? prompt.length, from + 160, clauseEnd(prompt, from));
     const window = prompt.slice(from, to);
+    const args: Array<{ key: string; value: string }> = [];
+    const seen = new Set<string>();
     // KNOWN argument names only: an arbitrary word before a quote turned
     // `report "all good"` into a requirement (D#14).
     for (const a of window.matchAll(/\b(sessions|filter|categories|target|scene|mode|platform|capture|provider)\b\s*[:=]?\s*"([^"]{1,40})"/gi)) {
       const key = a[1]!.toLowerCase();
       const value = a[2]!.trim();
       if (value === "" || /^[:{}\[\],]+$/.test(value)) continue; // JSON punctuation, not a value
-      const id = `${tool}:${key}:${value.toLowerCase()}`;
-      if (seen.has(id)) continue;
-      seen.add(id);
-      out.push({ tool, key, value });
+      if (seen.has(`${key}:${value.toLowerCase()}`)) continue;
+      seen.add(`${key}:${value.toLowerCase()}`);
+      args.push({ key, value });
     }
     // A bare flag the campaign's own directives use: "run the FULL suite
     // UNFILTERED using unity_test_run" (D#11). The window looks backwards too,
     // because the flag usually precedes the tool.
     const flagWindow = prompt.slice(Math.max(0, m.at - 120), to);
-    if (/\bunfiltered\b/i.test(flagWindow)) {
-      const id = `${tool}:unfiltered:true`;
-      if (!seen.has(id)) {
-        seen.add(id);
-        out.push({ tool, key: "unfiltered", value: "true" });
-      }
+    if (/\bunfiltered\b/i.test(flagWindow) && !seen.has("unfiltered:true")) {
+      args.push({ key: "unfiltered", value: "true" });
+    }
+    if (args.length > 0) groups.push({ tool, args });
+  }
+  return groups;
+}
+
+/** Every named argument, flattened and deduplicated — for reporting. */
+export function requiredToolArguments(prompt: string): RequiredToolArgument[] {
+  const out: RequiredToolArgument[] = [];
+  const seen = new Set<string>();
+  for (const group of requiredArgumentGroups(prompt)) {
+    for (const a of group.args) {
+      const id = `${group.tool}:${a.key}:${a.value.toLowerCase()}`;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      out.push({ tool: group.tool, key: a.key, value: a.value });
     }
   }
   return out;
 }
+
 
 /**
  * The tools named inside a threshold loop's own sentences.
@@ -235,22 +285,40 @@ export function requiredToolArguments(prompt: string): RequiredToolArgument[] {
 export function thresholdLoopTools(prompt: string): Set<string> {
   const tools = new Set<string>();
   if (!THRESHOLD_LOOP_RE.test(prompt)) return tools;
-  // The loop's own PROCEDURE is the paragraph it ends: "call A, then call B,
-  // … repeat until the count is below N". A paragraph that does not contain
-  // the threshold sentence is other work, and its tools are still demanded
-  // (Codex 2026-09-11 M#2).
+  const loopRe = new RegExp(THRESHOLD_LOOP_RE.source, "gi");
+  const namesIn = (text: string): string[] =>
+    [...text.matchAll(/(unity_[a-z0-9_]+)/gi)].map((m) => m[1]!.toLowerCase());
   for (const paragraph of prompt.split(/\n\s*\n/)) {
     if (!THRESHOLD_LOOP_RE.test(paragraph)) continue;
-    // The body is described UP TO the "repeat … until" sentence; what follows
-    // it is a new instruction. Exempting the whole paragraph waived an
-    // unconditional build written after the loop (Codex 2026-09-12 P#4).
-    let lastLoopAt = -1;
-    for (const m of paragraph.matchAll(new RegExp(THRESHOLD_LOOP_RE.source, "gi"))) lastLoopAt = (m.index ?? 0) + m[0].length;
-    const body = paragraph.slice(0, clauseEnd(paragraph, Math.max(0, lastLoopAt)));
-    for (const m of body.matchAll(/(unity_[a-z0-9_]+)/gi)) tools.add(m[1]!.toLowerCase());
+    // Sentences, in order, so the loop's body can be bounded by the ones that
+    // actually describe it. The whole paragraph was exempt, which waived an
+    // unconditional build written beside the loop (Codex 2026-09-12 P#4, Q#9).
+    const sentences = paragraph.split(/(?<=[.\n])/).filter((x) => x.trim() !== "");
+    let last = -1;
+    for (let i = 0; i < sentences.length; i++) {
+      loopRe.lastIndex = 0;
+      if (loopRe.test(sentences[i]!)) last = i;
+    }
+    if (last < 0) continue;
+    // The threshold's own sentence is the body: "call unity_generate_sprite
+    // and repeat until the count is below 200". When that sentence names no
+    // tool at all — "…call A, then call B. Repeat until the count is below
+    // 200." — the body is the sentence before it, and no further (M#2).
+    const found = namesIn(sentences[last]!);
+    if (found.length > 0) {
+      for (const tool of found) tools.add(tool);
+      continue;
+    }
+    for (let i = last - 1; i >= 0; i--) {
+      const earlier = namesIn(sentences[i]!);
+      if (earlier.length === 0) continue;
+      for (const tool of earlier) tools.add(tool);
+      break;
+    }
   }
   return tools;
 }
+
 
 /** Required tools without a successful call in the trace, with how many times each was tried. */
 export function missingRequiredEvidence(
@@ -285,43 +353,33 @@ export function missingRequiredEvidence(
     // EVERY argument the task named for this tool; separate calls used to
     // manufacture a combination neither of them made (Codex 2026-09-11 D#10).
     // A trace row that recorded no arguments cannot contradict the task.
-    const wants = requiredToolArguments(prompt).filter((w) => w.tool === tool);
-    if (wants.length === 0) continue;
+    const groups = requiredArgumentGroups(prompt).filter((g) => g.tool === tool);
+    if (groups.length === 0) continue;
     const withArgs = calls.filter((t) => t.success && typeof t.args === "string");
     if (withArgs.length === 0) {
       // A CALL WITH NO RECORDED ARGUMENTS CANNOT SHOW the task's own argument.
       // Accepting it let `sessions: "all"` pass on a run that never said so
       // (Codex 2026-09-11 M#2).
-      shortfalls.push({ tool, attempts: calls.length, argument: { key: wants[0]!.key, value: wants[0]!.value } });
+      const first = groups[0]!.args[0]!;
+      shortfalls.push({ tool, attempts: calls.length, argument: { key: first.key, value: first.value } });
       continue;
     }
-    // TWO VALUES FOR ONE KEY ARE TWO CALLS. Requiring a single call to satisfy
-    // every named argument made an ordinary instruction unsatisfiable:
-    // "Run unity_build_player with target \"Android\". Run unity_build_player
-    // with target \"iOS\"." demanded one call whose target was both at once,
-    // and an honest two-call run failed the gate (Codex 2026-09-12 P#3).
-    // Different KEYS must still co-occur in one call — that is the
-    // combination-nobody-made defect (D#10).
-    const byKey = new Map<string, Set<string>>();
-    for (const w of wants) {
-      const key = w.key.toLowerCase();
-      const values = byKey.get(key) ?? new Set<string>();
-      values.add(w.value);
-      byKey.set(key, values);
-    }
-    const singleValued = [...byKey.entries()].filter(([, v]) => v.size === 1).map(([k, v]) => ({ key: k, value: [...v][0]! }));
-    const multiValued = [...byKey.entries()].filter(([, v]) => v.size > 1);
-    const together = singleValued.length === 0
-      || withArgs.some((t) => singleValued.every((w) => argSatisfies(t.args!, w.key, w.value)));
-    const eachValueSeen = multiValued.every(([key, values]) =>
-      [...values].every((value) => withArgs.some((t) => argSatisfies(t.args!, key, value))));
-    if (together && eachValueSeen) continue;
-    const unmetSingle = singleValued.find((w) => !withArgs.some((t) => argSatisfies(t.args!, w.key, w.value)));
-    const unmetMulti = multiValued
-      .flatMap(([key, values]) => [...values].map((value) => ({ key, value })))
-      .find((w) => !withArgs.some((t) => argSatisfies(t.args!, w.key, w.value)));
-    const firstUnmet = unmetSingle ?? unmetMulti ?? { key: singleValued[0]?.key ?? wants[0]!.key, value: singleValued[0]?.value ?? wants[0]!.value };
-    shortfalls.push({ tool, attempts: calls.length, argument: { key: firstUnmet.key, value: firstUnmet.value } });
+    // ONE INSTRUCTION, ONE CALL. Every argument an instruction names must be
+    // satisfied TOGETHER by a single successful call — that is the
+    // combination-nobody-made rule (Codex 2026-09-11 D#10, 2026-09-12 Q#10) —
+    // while two instructions are two calls, so "target Android" and "target
+    // iOS" no longer demand one call that was both at once (P#3).
+    const unmet = groups.find(
+      (g) => !withArgs.some((t) => g.args.every((a) => argSatisfies(t.args!, a.key, a.value))),
+    );
+    if (unmet === undefined) continue;
+    const firstUnmet = unmet.args.find((a) => !withArgs.some((t) => argSatisfies(t.args!, a.key, a.value))) ?? unmet.args[0]!;
+    shortfalls.push({
+      tool,
+      attempts: calls.length,
+      argument: { key: firstUnmet.key, value: firstUnmet.value },
+      ...(unmet.args.length > 1 ? { combination: unmet.args.map((a) => ({ key: a.key, value: a.value })) } : {}),
+    });
   }
   return shortfalls;
 }
@@ -355,9 +413,15 @@ export function describeEvidenceShortfall(shortfalls: readonly EvidenceShortfall
   return (
     "REQUIRED EVIDENCE MISSING: " +
     shortfalls
-      .map((s) => s.argument
-        ? `the task says run ${s.tool} with ${s.argument.key} "${s.argument.value}"; it ran, but no successful call used that argument`
-        : `the task says run ${s.tool}; ${s.attempts === 0 ? "it never ran in this node" : `${s.attempts} run(s), none ok`}`)
+      .map((s) => {
+        if (s.combination !== undefined) {
+          const named = s.combination.map((a) => `${a.key} "${a.value}"`).join(" and ");
+          return `the task says run ${s.tool} with ${named} in ONE call; it ran, but no successful call used them together`;
+        }
+        return s.argument
+          ? `the task says run ${s.tool} with ${s.argument.key} "${s.argument.value}"; it ran, but no successful call used that argument`
+          : `the task says run ${s.tool}; ${s.attempts === 0 ? "it never ran in this node" : `${s.attempts} run(s), none ok`}`;
+      })
       .join("; ") +
     " — the result is not done whatever the report says."
   );
