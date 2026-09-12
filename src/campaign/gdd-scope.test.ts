@@ -114,4 +114,44 @@ describe("a design document's FRONT MATTER is not build work (measured live 2026
 
     expect(headings).toHaveLength(3);
   });
+
+  it("an apparatus NAME over a section that asks for work is work (Codex 2026-09-12 P#13)", () => {
+    // The denylist dropped these outright, so the requirements vanished from
+    // the ladder — a credits screen nobody built, a cinematic nobody played.
+    expect(extractHeadings([
+      "## Credits",
+      "Build an interactive credits screen.",
+      "## Introduction",
+      "Play an opening cinematic.",
+    ].join("\n"))).toEqual(["Credits", "Introduction"]);
+
+    // …while a section that DESCRIBES is still apparatus.
+    expect(extractHeadings([
+      "## Introduction",
+      "This document describes the design of Pixel Flow.",
+      "## Core Loop",
+      "Merge pigs.",
+    ].join("\n"))).toEqual(["Core Loop"]);
+
+    // A section's own body decides, not the NEXT section's: without the
+    // boundary, apparatus inherits the work below it.
+    expect(extractHeadings(["## Glossary", "Terms used in this document.", "## Playfield", "Build the board."].join("\n")))
+      .toEqual(["Playfield"]);
+
+    // An obligation counts as an ask.
+    expect(extractHeadings(["## Scope", "The game must support 500 levels.", "## Core", "Rules."].join("\n")))
+      .toEqual(["Scope", "Core"]);
+  });
+
+  it("the numbering is stripped as a token, not as characters (Codex 2026-09-12 P#13)", () => {
+    expect(normalizeHeading("1. INTRODUCTION")).toBe("introduction");
+    // Lowercasing first left the Roman numeral in place, so this slipped past
+    // every apparatus rule…
+    expect(normalizeHeading("I. Introduction")).toBe("introduction");
+    // …and a character class that merely listed the numerals ate the leading
+    // "I" of the word itself.
+    expect(normalizeHeading("Introduction")).toBe("introduction");
+    expect(normalizeHeading("iOS Build")).toBe("ios build");
+    expect(normalizeHeading("3.2 Scoring & Combos")).toBe("scoring combos");
+  });
 });

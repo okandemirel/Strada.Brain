@@ -50,14 +50,37 @@ export interface GddScope {
 const TRIVIAL_HEADING_RE =
   /^(?:table of contents|contents|appendix(?:\s+[a-z0-9])?|glossary|references|bibliography|changelog|change log|revision history|version history|document history|index|acknowledg(?:e)?ments|about this document|overview of this document|introduction|executive summary|summary|purpose|purpose of this document|scope|document conventions|conventions|terminology|credits|legal|confidentiality|disclaimer|market position|market position reference titles|reference titles|competitive analysis|prepared by|document control|sign off|approvals?)$/i;
 
+/**
+ * A section ASKING for something, as opposed to describing it: an imperative
+ * or an obligation. A bare verb list kept "This document describes the design
+ * of Pixel Flow" as work, because "design" is a noun far more often than a
+ * verb in a design document.
+ */
+const WORK_DEMAND_RE =
+  /(?:^|[.:;!?]\s+|\bmust\s+|\bshall\s+|\bshould\s+|\bwill\s+)(?:build|implement|create|add|wire|bind|author|code|write|render|animate|spawn|show|display|present|play|unlock|award|grant|trigger|ship|support)\b/i;
+
+/** Does the body under this heading ask for work, whatever the heading is called? */
+function sectionAsksForWork(lines: readonly string[], headingIndex: number): boolean {
+  for (let i = headingIndex + 1; i < lines.length && i <= headingIndex + 12; i++) {
+    const line = lines[i] ?? "";
+    if (HEADING_RE.test(line) || NUMBERED_HEADING_RE.test(line)) break; // the next section
+    if (WORK_DEMAND_RE.test(line)) return true;
+  }
+  return false;
+}
+
 const HEADING_RE = /^\s{0,3}(#{1,3})\s+(.+?)\s*#*\s*$/;
 /** "3. Core Loop", "3.2 Scoring", "III. Art" as plain-text section lines (converted documents). */
 const NUMBERED_HEADING_RE = /^\s{0,3}(?:\d{1,2}(?:\.\d{1,2}){0,2}\.?|[IVX]{1,4}\.)\s+([A-Z][^\n]{2,70})$/;
 
 export function normalizeHeading(h: string): string {
   return h
+    // THE NUMBERING FIRST, as a TOKEN. Lowercasing before stripping left
+    // "I. Introduction" with its numeral, so it slipped past every apparatus
+    // rule (Codex 2026-09-12 P#13) — and a character class that merely listed
+    // the numerals ate the leading "I" of "INTRODUCTION" itself.
+    .replace(/^\s*(?:\d{1,3}(?:\.\d{1,3})*\.?|[ivxlc]{1,6}\.(?=\s))[\s).-]*/i, "")
     .toLowerCase()
-    .replace(/^[\d.\s)IVX-]+/, "")
     .replace(/[^\p{L}\p{N}\s]/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
@@ -66,12 +89,17 @@ export function normalizeHeading(h: string): string {
 export function extractHeadings(gddText: string): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
-  for (const raw of gddText.split(/\r?\n/)) {
+  const lines = gddText.split(/\r?\n/);
+  for (const [index, raw] of lines.entries()) {
     const m = HEADING_RE.exec(raw) ?? NUMBERED_HEADING_RE.exec(raw);
     if (!m) continue;
     const title = (m.length > 2 ? m[2] : m[1])!.trim();
     if (title.length < 3 || title.length > 90) continue;
-    if (TRIVIAL_HEADING_RE.test(normalizeHeading(title))) continue;
+    // AN APPARATUS NAME OVER A SECTION THAT ASKS FOR WORK IS WORK. The
+    // denylist dropped "## Credits\nBuild an interactive credits screen." and
+    // the requirement vanished from the ladder entirely (Codex 2026-09-12
+    // P#13). What the section SAYS decides.
+    if (TRIVIAL_HEADING_RE.test(normalizeHeading(title)) && !sectionAsksForWork(lines, index)) continue;
     const key = normalizeHeading(title);
     if (!key || seen.has(key)) continue;
     seen.add(key);

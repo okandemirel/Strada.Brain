@@ -397,9 +397,33 @@ describe("folding a measurement never deletes the work (Codex 2026-09-11 M#4)", 
       { id: "v", task: "Report the measured results", dependsOn: ["a", "b"] },
     ]);
 
-    const merged = nodes.find((n) => n.id === "b")!;
-    expect(merged.task).toContain("Report the measured results");
-    // Folding it into B alone used to drop its wait on A.
-    expect(merged.dependsOn).toContain("a");
+    // Either independent prerequisite is a valid host; whichever took the
+    // text must still wait on the other — folding it into one alone used to
+    // drop that wait.
+    const merged = nodes.find((n) => n.task.includes("Report the measured results"))!;
+    expect(merged).toBeDefined();
+    const other = merged.id === "a" ? "b" : "a";
+    expect(merged.dependsOn).toContain(other);
+  });
+
+  it("never closes a loop: the host is the last step in DEPENDENCY order (Codex 2026-09-12 P#7)", () => {
+    // V waited on [B, A] and B already depended on A. Folding V into A gave A
+    // a dependency on B — a cycle out of a perfectly valid plan, which the
+    // decomposer then rejected, losing the whole decomposition.
+    const { nodes } = foldMeasurementNodes([
+      { id: "a", task: "Implement the player API", dependsOn: [] },
+      { id: "b", task: "Wire the scene against it", dependsOn: ["a"] },
+      { id: "v", task: "Run unity_verify_change and record the result", dependsOn: ["b", "a"] },
+    ]);
+
+    const byId = new Map(nodes.map((n) => [n.id, n]));
+    // No node depends on something that depends on it.
+    for (const n of nodes) {
+      for (const dep of n.dependsOn) {
+        expect(byId.get(dep)?.dependsOn ?? []).not.toContain(n.id);
+      }
+    }
+    // …and the verification is still in the plan.
+    expect(nodes.map((n) => n.task).join(" ")).toContain("unity_verify_change");
   });
 });

@@ -223,6 +223,21 @@ export interface FoldResult<T extends FoldableNode> {
   readonly folded: string[];
 }
 
+/** Does `from` depend on `to`, directly or through other nodes? */
+function dependsTransitively<T extends FoldableNode>(nodes: readonly T[], from: string, to: string): boolean {
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const seen = new Set<string>();
+  const stack = [...(byId.get(from)?.dependsOn ?? [])];
+  while (stack.length > 0) {
+    const id = stack.pop()!;
+    if (id === to) return true;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    stack.push(...(byId.get(id)?.dependsOn ?? []));
+  }
+  return false;
+}
+
 export function foldMeasurementNodes<T extends FoldableNode>(nodes: readonly T[]): FoldResult<T> {
   let working: T[] = [...nodes];
   const folded: string[] = [];
@@ -253,8 +268,19 @@ export function foldMeasurementNodes<T extends FoldableNode>(nodes: readonly T[]
       // A trailing measurement (nothing depends on it): it ends the last step
       // it followed — the last one STILL PRESENT, or the measurement stays
       // where it is rather than vanishing with the node it pointed at.
-      const last = [...prerequisites].reverse().find((id) => working.some((n) => n.id === id));
+      // …and "last" means LAST IN DEPENDENCY ORDER, not last in the array.
+      // Folding a verifier that waited on [B, A] into A, while B already
+      // depended on A, gave A a dependency on B and made a cycle out of a
+      // valid plan (Codex 2026-09-12 P#7).
+      const present = prerequisites.filter((id) => working.some((n) => n.id === id));
+      const downstreamCount = (id: string): number =>
+        present.filter((other) => other !== id && dependsTransitively(working, id, other)).length;
+      const last = [...present].sort((a, b) => downstreamCount(b) - downstreamCount(a))[0];
       if (last === undefined) continue;
+      // A host that some carried prerequisite already depends on would close a
+      // loop; the measurement stays where it is instead.
+      const carriedNow = present.filter((d) => d !== last);
+      if (carriedNow.some((d) => dependsTransitively(working, d, last))) continue;
       const carried = prerequisites.filter((d) => d !== last);
       working = working
         .filter((n) => n.id !== node.id)
