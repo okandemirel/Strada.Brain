@@ -436,40 +436,7 @@ export async function initializeTaskRuntimeStage(
       // verifier answers `ran: false`, which the gate discloses as NOT
       // MEASURED and never treats as a pass (audited 2026-09-04: a campaign
       // delivered on a tree carrying 37 compile errors).
-      verifyCompile: params.toolRegistry
-        ? async (projectRoot: string) => {
-            const registry = params.toolRegistry!;
-            if (!registry.getAvailableToolNames().includes("unity_verify_change")) {
-              return { ok: false, ran: false, detail: "unity_verify_change is not registered" };
-            }
-            const result = await registry.execute(
-              "unity_verify_change",
-              {},
-              {
-                projectPath: projectRoot,
-                workingDirectory: projectRoot,
-                readOnly: true,
-              } as import("../../agents/tools/tool-core.interface.js").ToolContext,
-            );
-            const detail = String(result.content ?? "");
-            const counted = /"compileErrors"\s*:\s*(\d+)/i.exec(detail)?.[1]
-              ?? /(\d+)\s*error\(s\)/i.exec(detail)?.[1];
-            const errors = counted === undefined ? undefined : Number(counted);
-            // A "failed" with no counted error is the killed-compile shape:
-            // real, but it says nothing about the CODE, so it is reported as
-            // not measured rather than as a compile error the sprint can fix.
-            const failed = /"status"\s*:\s*"failed"/i.test(detail);
-            if (failed && (errors === undefined || errors === 0)) {
-              return { ok: false, ran: false, errors, detail: detail.slice(0, 300) };
-            }
-            return {
-              ok: !failed && (errors ?? 0) === 0,
-              ran: true,
-              ...(errors === undefined ? {} : { errors }),
-              detail: detail.slice(0, 300),
-            };
-          }
-        : undefined,
+      verifyCompile: params.toolRegistry ? makeVerifyCompile(params.toolRegistry) : undefined,
       // The delivery artifact: the campaign builds the player itself from the
       // project root through the same tool a sprint uses, and reads the
       // tool's own JSON verdict (path, size, duration) — never the worker's
@@ -1028,6 +995,67 @@ function hasPackageMagic(path: string): boolean {
   }
   // A .dmg carries no single stable header; its size is the only check.
   return true;
+}
+
+/**
+ * The delivery gate's compile verdict, from the COMPILER rather than a report.
+ *
+ * A missing registry or an unregistered verifier answers `ran: false`, which
+ * the gate discloses as NOT MEASURED and never treats as a pass (audited
+ * 2026-09-04: a campaign delivered on a tree carrying 37 compile errors).
+ */
+export function makeVerifyCompile(
+  registry: {
+    getAvailableToolNames(): readonly string[];
+    execute(name: string, input: Record<string, unknown>, context: never): Promise<{ content?: unknown; isError?: boolean }>;
+  },
+): (projectRoot: string) => Promise<{ ok: boolean; ran: boolean; errors?: number; detail?: string }> {
+  return async (projectRoot: string) => {
+            if (!registry.getAvailableToolNames().includes("unity_verify_change")) {
+              return { ok: false, ran: false, detail: "unity_verify_change is not registered" };
+            }
+            const result = await registry.execute(
+              "unity_verify_change",
+              {},
+              {
+                projectPath: projectRoot,
+                workingDirectory: projectRoot,
+                readOnly: true,
+              } as never,
+            );
+            const detail = String(result.content ?? "");
+            // THE TOOL'S OWN ERROR FLAG FIRST. It was never read, and a
+            // response that matched none of the patterns below fell through to
+            // "ok, ran" — so "Unity Editor executable not found" and
+            // "Operation timed out" both reported a zero-error compile (Codex
+            // 2026-09-12 R#5).
+            if (result.isError === true) {
+              return { ok: false, ran: false, detail: detail.slice(0, 300) || "the compile tool reported an error" };
+            }
+            const counted = /"compileErrors"\s*:\s*(\d+)/i.exec(detail)?.[1]
+              ?? /(\d+)\s*error\(s\)/i.exec(detail)?.[1];
+            const errors = counted === undefined ? undefined : Number(counted);
+            // A "failed" with no counted error is the killed-compile shape:
+            // real, but it says nothing about the CODE, so it is reported as
+            // not measured rather than as a compile error the sprint can fix.
+            const failed = /"status"\s*:\s*"failed"/i.test(detail);
+            if (failed && (errors === undefined || errors === 0)) {
+              return { ok: false, ran: false, errors, detail: detail.slice(0, 300) };
+            }
+            // A COMPILE IS PROVEN, not assumed: either the errors were counted
+            // or the tool said in so many words that it succeeded. Anything
+            // else is unmeasured, which the gate discloses and never passes.
+            const said = /"(?:lastSucceeded|success|compiled)"\s*:\s*true|"exitCode"\s*:\s*0|"status"\s*:\s*"(?:ok|success|succeeded|passed)"/i.test(detail);
+            if (errors === undefined && !said) {
+              return { ok: false, ran: false, detail: detail.slice(0, 300) || "the compile tool answered nothing measurable" };
+            }
+            return {
+              ok: !failed && (errors ?? 0) === 0,
+              ran: true,
+              ...(errors === undefined ? {} : { errors }),
+              detail: detail.slice(0, 300),
+            };
+  };
 }
 
 export function makeRunPlayer(registry: {

@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { chmodSync, mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parsePlayerBuildOutput, makeRunPlayer, looksLikePlayer } from "./stage-runtime.js";
+import { parsePlayerBuildOutput, makeRunPlayer, makeVerifyCompile, looksLikePlayer } from "./stage-runtime.js";
 
 const artifactDir = mkdtempSync(join(tmpdir(), "build-artifact-"));
 // A REAL StandaloneOSX artifact: .app is a bundle DIRECTORY holding Contents,
@@ -347,5 +347,42 @@ describe("a package has to be one, not look like one (Codex 2026-09-11 O#8)", ()
     mkdirSync(join(hollow, "Contents", "MacOS"), { recursive: true });
     writeFileSync(join(hollow, "Contents", "padding.bin"), Buffer.alloc(512 * 1024, 4));
     expect(looksLikePlayer(hollow)).toBe(false);
+  });
+});
+
+describe("the compile gate answers from the compiler, not from silence (Codex 2026-09-12 R#5)", () => {
+  const registry = (result: { content?: unknown; isError?: boolean }) => ({
+    getAvailableToolNames: () => ["unity_verify_change"],
+    execute: async () => result,
+  });
+
+  it("an errored tool is NOT MEASURED, never a zero-error compile", async () => {
+    // Executed by the reviewer: {isError:true, content:"Unity Editor
+    // executable not found"} and a timeout both returned {ok:true, ran:true}.
+    expect(await makeVerifyCompile(registry({ isError: true, content: "Unity Editor executable not found" }) as never)("/p"))
+      .toMatchObject({ ok: false, ran: false });
+    expect(await makeVerifyCompile(registry({ isError: true, content: "Operation timed out" }) as never)("/p"))
+      .toMatchObject({ ok: false, ran: false });
+    // …including one whose text still carries a green-looking number from an
+    // earlier run: the tool said it failed, and that outranks the text.
+    expect(await makeVerifyCompile(registry({ isError: true, content: '{"compileErrors": 0, "exitCode": 0}' }) as never)("/p"))
+      .toMatchObject({ ok: false, ran: false });
+  });
+
+  it("an answer with no verdict in it is NOT MEASURED", async () => {
+    expect(await makeVerifyCompile(registry({ content: "the editor is busy; try again later" }) as never)("/p"))
+      .toMatchObject({ ok: false, ran: false });
+  });
+
+  it("a counted or stated success is green, and counted errors are red", async () => {
+    expect(await makeVerifyCompile(registry({ content: '{"compileErrors": 0, "exitCode": 0}' }) as never)("/p"))
+      .toMatchObject({ ok: true, ran: true, errors: 0 });
+    expect(await makeVerifyCompile(registry({ content: '{"lastSucceeded": true}' }) as never)("/p"))
+      .toMatchObject({ ok: true, ran: true });
+    expect(await makeVerifyCompile(registry({ content: '{"compileErrors": 37}' }) as never)("/p"))
+      .toMatchObject({ ok: false, ran: true, errors: 37 });
+    // A "failed" with no counted error says nothing about the code.
+    expect(await makeVerifyCompile(registry({ content: '{"status": "failed"}' }) as never)("/p"))
+      .toMatchObject({ ok: false, ran: false });
   });
 });
