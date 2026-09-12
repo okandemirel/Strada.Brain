@@ -103,6 +103,8 @@ export function stripCsComments(source: string): string {
 /** Second-cell text that names a person or a role rather than a game element. */
 const NOT_AN_ELEMENT_RE = /\((?:producer|designer|artist|engineer|programmer|lead|qa|pm|owner|manager)\b|\b(?:producer|designer|artist|engineer|programmer|lead|qa|manager)\s*$/i;
 
+/** Blank lines a converter may leave between two rows of one table. */
+const MAX_ROW_SEPARATORS = 3;
 /** An unlock id in a schedule's first cell: "L21", "21", "E3", "Level 21". */
 const UNLOCK_CELL_RE = /^(?:[A-Za-z][A-Za-z ]{0,9}\s*)?\d{1,4}(?:[.-]\d{1,4})?$/;
 /** A header cell naming WHEN an element arrives, and one naming the element. */
@@ -119,7 +121,11 @@ const ELEMENT_HEADER_RE = /^(?:element|elements|name|mechanic|blocker|feature|it
  * special mechanic the game is made of — read as ZERO scheduled elements, and
  * zero suppresses the coverage check entirely (Codex 2026-09-12 W#12).
  */
-export function extractFlattenedSchedule(docText: string): ScheduledElement[] {
+export function extractFlattenedSchedule(
+  docText: string,
+  /** Set to true when a table parsed here STOPPED before its last row. */
+  out?: { partial?: boolean },
+): ScheduledElement[] {
   const found = new Map<string, ScheduledElement>();
   const raw = docText.split(/\r?\n/).map((l) => l.replace(/^[\s•\t|-]+|[\s|]+$/g, ""));
   // TAB-SEPARATED ROWS are the other converter shape: a whole row on one
@@ -141,7 +147,11 @@ export function extractFlattenedSchedule(docText: string): ScheduledElement[] {
     // folded coordinates: the backward walk below stepped straight into a
     // blank, so a reversed column order and blank-separated cells worked
     // separately and failed together (Codex 2026-09-12 AB J2.5).
-    const cells = spaced ? lines.filter((_cell, i) => i % 2 === 0) : lines;
+    // …FROM THE HEADER'S OWN PARITY, not the document's. Folding on
+    // `i % 2 === 0` assumed the table starts at an even line: one leading
+    // blank line in the file kept every blank and dropped every cell (Codex
+    // 2026-09-12 AC J1).
+    const cells = spaced ? lines.filter((_cell, i) => (i - at) % 2 === 0) : lines;
     const here = spaced ? Math.floor(at / 2) : at;
     // THE HEADER BLOCK, which may begin BEFORE the unlock column: a document
     // whose table starts with Element then Unlock read nothing at all (Y#4).
@@ -165,15 +175,24 @@ export function extractFlattenedSchedule(docText: string): ScheduledElement[] {
       const rows: ScheduledElement[] = [];
       for (let row = width; row + width <= window.length; row += width) {
         let block = window.slice(row, row + width);
-        // A BLANK LINE BETWEEN ROWS is a separator, not the end of the table:
-        // it ended the parse and every later row vanished from coverage while
-        // the rows already read certified the schedule as complete (Codex
-        // 2026-09-12 AB J2.6). One separator is stepped over.
-        if (block[0] === "" && row + width + 1 <= window.length) {
+        // BLANK LINES BETWEEN ROWS are separators, not the end of the table:
+        // they ended the parse and every later row vanished from coverage
+        // while the rows already read certified the schedule as complete
+        // (Codex 2026-09-12 AB J2.6). Stepping over exactly ONE left the same
+        // hole for a table with two blank lines between rows, which is what a
+        // converter emits for a paragraph break (AC J1).
+        for (let skipped = 0; block[0] === "" && skipped < MAX_ROW_SEPARATORS && row + width + 1 <= window.length; skipped++) {
           row += 1;
           block = window.slice(row, row + width);
         }
-        if (!UNLOCK_CELL_RE.test(block[unlockAt] ?? "")) break;
+        if (!UNLOCK_CELL_RE.test(block[unlockAt] ?? "")) {
+          // STOPPED SHORT, and there is more table below. The rows already
+          // read would otherwise certify the schedule as complete.
+          if (rows.length > 0 && window.slice(row).some((cell) => UNLOCK_CELL_RE.test(cell))) {
+            if (out) out.partial = true;
+          }
+          break;
+        }
         const name = (block[nameAt] ?? "").trim();
         if (name === "" || name.length > 60 || NOT_AN_ELEMENT_RE.test(name)) continue;
         rows.push({ unlock: block[unlockAt]!, name });
@@ -214,7 +233,7 @@ export function scheduleLooksPresent(docText: string): boolean {
   return false;
 }
 
-export function extractScheduledElements(docText: string): ScheduledElement[] {
+export function extractScheduledElements(docText: string, out?: { partial?: boolean }): ScheduledElement[] {
   const found = new Map<string, ScheduledElement>();
   const lines = docText.split("\n");
   for (let i = 0; i < lines.length; i++) {
@@ -233,7 +252,7 @@ export function extractScheduledElements(docText: string): ScheduledElement[] {
     if (!found.has(key)) found.set(key, { unlock: m[1]!, name });
   }
   // …and the same table with its pipes stripped by a document converter.
-  for (const el of extractFlattenedSchedule(docText)) {
+  for (const el of extractFlattenedSchedule(docText, out)) {
     const key = el.name.toLowerCase();
     if (!found.has(key)) found.set(key, el);
   }
@@ -312,6 +331,12 @@ export interface SpecCoverageReport {
    * from a document that schedules nothing (Codex 2026-09-12 Y#4).
    */
   readonly scheduleUnreadable?: boolean;
+  /**
+   * Set when a schedule table WAS parsed but the reader stopped before its
+   * last row. The rows it did read would otherwise certify the schedule as
+   * complete, hiding every element below the break (Codex 2026-09-12 AC J1).
+   */
+  readonly schedulePartial?: boolean;
 }
 
 /**
@@ -335,7 +360,8 @@ export function assessSpecScope(
   } catch {
     return { scheduled: 0, missing: [], gddPath: doc };
   }
-  const elements = extractScheduledElements(text);
+  const read: { partial?: boolean } = {};
+  const elements = extractScheduledElements(text, read);
   if (elements.length === 0) {
     return {
       scheduled: 0,
@@ -384,7 +410,12 @@ export function assessSpecScope(
       return new RegExp(`(?<![a-z0-9_])${needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![a-z0-9_])`).test(corpus);
     });
   });
-  return { scheduled: elements.length, missing, gddPath: doc };
+  return {
+    scheduled: elements.length,
+    missing,
+    gddPath: doc,
+    ...(read.partial === true ? { schedulePartial: true } : {}),
+  };
 }
 
 function walkCs(root: string): string[] {

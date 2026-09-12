@@ -829,6 +829,23 @@ describe("a platform's budget, and a session that took no time (Codex 2026-09-12
     expect(editorOnly.map((a) => a.status)).toEqual(["met", "met"]);
   });
 
+  it("ends a clause at a semicolon with no space after it", () => {
+    // A document written "60 fps;Android" — no space — kept both platforms in
+    // one fragment, so each claim was judged against the other's platform
+    // (Codex 2026-09-12 AC J1).
+    const tight = extractNumericClaims("Ships on Windows and Android. Windows at least 60 fps;Android at most 30 fps.").claims;
+    expect(tight.map((c) => [c.comparator, c.value])).toEqual([["min", 60], ["max", 30]]);
+    expect(tight[0]!.text).not.toMatch(/Android/);
+    expect(tight[1]!.text).not.toMatch(/Windows/);
+    // A DECIMAL POINT still ends nothing.
+    const decimal = extractNumericClaims("Each round lasts at least 1.5 seconds.").claims;
+    expect(decimal.map((c) => [c.comparator, c.value])).toEqual([["min", 1.5]]);
+    // …and a decimal BEFORE a later number does not cut that number's clause
+    // in half: the quote is what the report shows the reader.
+    const after = extractNumericClaims("Each round lasts 1.5 s and the game ships 12 levels.").claims;
+    expect(after.find((c) => c.kind === "level_count")!.text).toBe("Each round lasts 1.5 s and the game ships 12 levels.");
+  });
+
   it("takes the document's platforms when the clause names none", () => {
     // A clause with no platform of its own inherits the document's: a boot
     // time measured on the desktop the project happens to build says nothing

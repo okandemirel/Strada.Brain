@@ -63,24 +63,31 @@ function platformOfClaim(text: string): GddPlatform | undefined {
   return undefined;
 }
 
+/**
+ * A CLAUSE END, wherever it is. A semicolon or a sentence dot ends a clause
+ * whether or not a space follows it: requiring "; " left
+ * "Windows ≥60 fps;Android ≤30 fps" — a document written without the space,
+ * which happens — as one fragment holding both platforms, so each claim was
+ * judged against the other's platform (Codex 2026-09-12 AC J1). A dot between
+ * two digits is a decimal point, not an end.
+ */
+function isClauseEnd(text: string, i: number): boolean {
+  const c = text[i];
+  if (c === ";") return true;
+  if (c !== ".") return false;
+  return !(/\d/.test(text[i - 1] ?? "") && /\d/.test(text[i + 1] ?? ""));
+}
+
 /** A window of text around a number, one sentence at most. */
 function fragment(text: string, index: number, length: number): string {
-  // WITHIN ONE CLAUSE. "Windows at least 60 fps; Android at most 30 fps" gave
-  // both claims a fragment holding both platforms, so each was judged against
-  // the other's (Codex 2026-09-12 AB J2.2). A semicolon ends a clause exactly
-  // as a sentence does.
-  const start = Math.max(
-    0,
-    text.lastIndexOf("\n", index),
-    text.lastIndexOf(". ", index) + 1,
-    text.lastIndexOf("; ", index) + 1,
-    index - 90,
-  );
+  // WITHIN ONE CLAUSE (Codex 2026-09-12 AB J2.2).
+  let before = -1;
+  for (let i = index - 1; i >= 0 && before < 0; i--) if (isClauseEnd(text, i)) before = i;
+  const start = Math.max(0, text.lastIndexOf("\n", index), before + 1, index - 90);
   let end = text.indexOf("\n", index + length);
   if (end < 0) end = text.length;
-  for (const mark of [". ", "; "]) {
-    const at = text.indexOf(mark, index + length);
-    if (at >= 0 && at < end) end = at + 1;
+  for (let i = index + length; i < end; i++) {
+    if (isClauseEnd(text, i)) { end = i + 1; break; }
   }
   return text.slice(start, Math.min(end, index + length + 90)).replace(/\s+/g, " ").trim().slice(0, 140);
 }

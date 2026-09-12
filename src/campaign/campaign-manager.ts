@@ -5621,6 +5621,14 @@ export class CampaignManager {
           "nothing was compared against the code",
         );
       }
+      // A TABLE READ ONLY AS FAR AS ITS FIRST BREAK certifies nothing about
+      // the rows below it (Codex 2026-09-12 AC J1).
+      if (scope.schedulePartial === true) {
+        lines.push(
+          `GDD element schedule: the reader stopped part-way through the table — the ${scope.scheduled} element(s) below ` +
+          "are what it read, not what the document schedules",
+        );
+      }
       if (scope.scheduled > 0) {
         if (scope.missing.length === 0) {
           lines.push(`GDD element schedule: all ${scope.scheduled} scheduled element(s) have a trace in code`);

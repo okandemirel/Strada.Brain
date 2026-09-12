@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { extractScheduledElements, elementCodeTokens, assessSpecScope, findDesignDoc, scheduleLooksPresent, stripCsComments } from "./spec-scope.js";
+import { extractScheduledElements, extractFlattenedSchedule, elementCodeTokens, assessSpecScope, findDesignDoc, scheduleLooksPresent, stripCsComments } from "./spec-scope.js";
 
 const GDD_SNIPPET = `
 ## 4. GAME ELEMENTS
@@ -318,5 +318,54 @@ describe("every flattened shape, and saying when a schedule cannot be read (Code
     expect(scheduleLooksPresent(unreadable)).toBe(true);
     expect(scheduleLooksPresent("# GDD\n\nA puzzle game with 12 levels.")).toBe(false);
     expect(scheduleLooksPresent(GDD_SNIPPET)).toBe(true);
+  });
+});
+
+/**
+ * Codex round AC, executed against the flattened reader: one leading blank
+ * line in the file dropped every cell, and a table whose rows are separated
+ * by TWO blank lines lost everything below the first break while the rows it
+ * did read certified the schedule as complete.
+ */
+describe("a converted table's blank lines (Codex 2026-09-12 AC)", () => {
+  it("folds blank-separated cells from the HEADER's parity, not the document's", () => {
+    // The same table, shifted by one line — which is what a file with a
+    // leading newline or a title line above the table looks like.
+    const shifted = "\nUnlock\n\nElement\n\nPitch\n\nL1\n\nIce\n\nFreezes";
+    expect(extractScheduledElements(shifted)).toEqual([{ unlock: "L1", name: "Ice" }]);
+    // …and two lines of preamble, which puts the header back on an even line.
+    expect(extractScheduledElements("# GDD\n\nUnlock\n\nElement\n\nPitch\n\nL1\n\nIce\n\nFreezes"))
+      .toEqual([{ unlock: "L1", name: "Ice" }]);
+  });
+
+  it("steps over TWO blank lines between rows", () => {
+    const doubled = "Unlock\nElement\nPitch\nL1\nIce\nFreezes\n\n\nL2\nFire\nBurns\n\n\nL3\nWind\nBlows";
+    expect(extractScheduledElements(doubled)).toEqual([
+      { unlock: "L1", name: "Ice" },
+      { unlock: "L2", name: "Fire" },
+      { unlock: "L3", name: "Wind" },
+    ]);
+  });
+
+  it("says so when it stopped part-way through a table it could read", () => {
+    // A row the reader cannot parse in the middle of the table: the elements
+    // below it are NOT in the coverage set, and the rows above must not
+    // certify the schedule as complete.
+    const broken = "Unlock\nElement\nPitch\nL1\nIce\nFreezes\nthis sentence is not a row of the table at all, it is prose\nL9\nWind\nBlows";
+    const read: { partial?: boolean } = {};
+    expect(extractFlattenedSchedule(broken, read)).toEqual([{ unlock: "L1", name: "Ice" }]);
+    expect(read.partial).toBe(true);
+    // A table that ends cleanly says nothing of the kind — including one
+    // followed by ordinary prose, where the reader stops because the TABLE
+    // ended and not because a row was lost.
+    const whole: { partial?: boolean } = {};
+    extractFlattenedSchedule("Unlock\nElement\nPitch\nL1\nIce\nFreezes\nL2\nFire\nBurns", whole);
+    expect(whole.partial).toBeUndefined();
+    const thenProse: { partial?: boolean } = {};
+    extractFlattenedSchedule(
+      "Unlock\nElement\nPitch\nL1\nIce\nFreezes\nThe elements above arrive in order.\nNothing below this line is a row.\nThe end.",
+      thenProse,
+    );
+    expect(thenProse.partial).toBeUndefined();
   });
 });
