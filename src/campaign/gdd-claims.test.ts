@@ -706,3 +706,47 @@ describe("a frame-rate requirement belongs to the platform its clause names (Cod
     expect(judge("Ships on macOS. At least 60 fps.", "StandaloneOSX", 12).status).toBe("not_met");
   });
 });
+
+/**
+ * Codex round AB, executed against the reader: a document with a budget per
+ * platform had both clauses in both claims, two platforms' identical numbers
+ * deduplicated into one requirement, and a single session's own 90-second
+ * clock was replaced by the run's 20-second sampled play time.
+ */
+describe("a clause is a requirement's scope, and a session's own clock is its length (Codex 2026-09-12 AB)", () => {
+  it("keeps each platform's budget to its own clause", () => {
+    const gdd = "Ships on Windows and Android. Windows at least 60 fps; Android at most 30 fps.";
+    const claims = extractNumericClaims(gdd).claims.filter((c) => c.kind === "fps");
+    expect(claims.map((c) => [c.comparator, c.value])).toEqual([["min", 60], ["max", 30]]);
+    // Each fragment holds ONE clause, so each is judged on its own platform.
+    expect(claims[0]!.text).not.toMatch(/Android/);
+    expect(claims[1]!.text).not.toMatch(/Windows/);
+  });
+
+  it("keeps two platforms' identical numbers as two requirements", () => {
+    const gdd = "Ships on Windows and Android. Windows at least 60 fps. Android at least 60 fps.";
+    const claims = extractNumericClaims(gdd).claims.filter((c) => c.kind === "fps");
+    expect(claims).toHaveLength(2);
+    expect(claims.map((c) => c.text.includes("Android"))).toEqual([false, true]);
+  });
+
+  it("measures ONE session by its own duration", () => {
+    const claims = extractNumericClaims("Each round lasts at most 60 seconds.").claims;
+    const long = assessNumericClaims(
+      claims,
+      evidence({
+        sessions: [{ index: 1, outcome: "Won", actions: 9, seconds: 90 }],
+        perf: { medium: "editor-playmode-batch", bootSeconds: 1, playSeconds: 20, playFrames: 600, avgFps: 30, worstFrameMs: 40 },
+      }),
+    );
+    expect(long[0]!.status).toBe("not_met");
+    expect(long[0]!.measured).toBe(90);
+    // A run that recorded no session duration still answers with its own.
+    const aggregate = assessNumericClaims(
+      claims,
+      evidence({ perf: { medium: "editor-playmode-batch", bootSeconds: 1, playSeconds: 20, playFrames: 600, avgFps: 30, worstFrameMs: 40 } }),
+    );
+    expect(aggregate[0]!.status).toBe("met");
+    expect(aggregate[0]!.measured).toBe(20);
+  });
+});

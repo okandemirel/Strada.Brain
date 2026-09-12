@@ -218,6 +218,18 @@ describe("three answers about a repository, not two (Codex 2026-09-12 AA#1)", ()
     writeFileSync(join(unborn, "Boss.cs"), "x");
     execFileSync("git", ["add", "-A"], { cwd: unborn });
     expect(state(unborn)).toBe("unknown");
+
+    // A SUBDIRECTORY of a repository is not a project without git: checking
+    // only the project's own directory for `.git` called it "none" and let it
+    // close requirements uncached (Codex 2026-09-12 AB). The fallback only
+    // runs when git cannot answer, so this asserts the ancestry walk itself.
+    const inside = join(committed, "src", "deep");
+    mkdirSync(inside, { recursive: true });
+    const manager = Object.create(CampaignManager.prototype) as CampaignManager;
+    (manager as unknown as { projectRoot: string }).projectRoot = inside;
+    expect(
+      (manager as unknown as { projectRepoState(): string }).projectRepoState(),
+    ).not.toBe("none");
   });
 });
 

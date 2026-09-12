@@ -243,3 +243,24 @@ describe("the runner's own verdict, its exceptions, and a suite that did not run
     expect(readPlaymodeRun(root, 0).detail).not.toMatch(/SKIPPED/);
   });
 });
+
+/**
+ * Executed by Codex (2026-09-12 AB J4.1): a fresh record with ten of ten
+ * passing and `exitCode: 42` beside them came back green — the runner died and
+ * its counts survived.
+ */
+describe("the suite's own process has to have succeeded", () => {
+  it("is not green when the runner exited non-zero", () => {
+    const now = { unfiltered: true, measuredAt: new Date().toISOString() };
+    write({ ...now, total: 10, passed: 10, failed: 0, skipped: 0, exceptions: 0, exitCode: 42 });
+    const died = readPlaymodeRun(root, 0);
+    expect(died).toMatchObject({ green: false });
+    expect(died.detail).toContain("the runner exited 42");
+    // Exit 0 beside the same counts is the green it always was…
+    write({ ...now, total: 10, passed: 10, failed: 0, skipped: 0, exceptions: 0, exitCode: 0 });
+    expect(readPlaymodeRun(root, 0)).toMatchObject({ green: true });
+    // …and a record that says nothing about its exit reads exactly as before.
+    write({ ...now, total: 10, passed: 10, failed: 0, skipped: 0, exceptions: 0 });
+    expect(readPlaymodeRun(root, 0)).toMatchObject({ green: true });
+  });
+});

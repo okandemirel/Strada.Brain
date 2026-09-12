@@ -11,7 +11,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { basename, join, relative, sep } from "node:path";
+import { basename, dirname, join, relative, sep } from "node:path";
 import { getLoggerSafe } from "../utils/logger.js";
 import { allProvidersCoolingDownMs, describeProviderOutage, msSinceNewestProviderFailure } from "../agents/providers/provider-outage.js";
 import type { IncomingMessage } from "../channels/channel-messages.interface.js";
@@ -4392,7 +4392,17 @@ export class CampaignManager {
       // confirmed absence; it also fails when git itself cannot run, and we
       // cannot tell those apart — so the cautious answer is "unknown" unless
       // the directory plainly has no .git anywhere above it.
-      return existsSync(join(this.projectRoot, ".git")) ? "unknown" : "none";
+      // …and no `.git` ANYWHERE ABOVE the project: checking only the
+      // project's own directory called a subdirectory of a repository "no
+      // git" and let it close requirements uncached (Codex 2026-09-12 AB).
+      let at = this.projectRoot;
+      for (;;) {
+        if (existsSync(join(at, ".git"))) return "unknown";
+        const up = dirname(at);
+        if (up === at) break;
+        at = up;
+      }
+      return "none";
     }
   }
 

@@ -156,10 +156,14 @@ export function parseProducerEvidence(bytes: string | undefined): ProducerEviden
   const media: readonly string[] = ["compiler", "editor", "builder", "player"];
   if (typeof r.kind !== "string" || !kinds.includes(r.kind)) return "EVIDENCE_SCHEMA_INVALID";
   if (typeof r.medium !== "string" || !media.includes(r.medium)) return "EVIDENCE_SCHEMA_INVALID";
+  // NOT NULL, NOT AN ARRAY: `typeof null === "object"`, so an envelope with
+  // `execution: null` threw instead of being refused (Codex 2026-09-12 AB).
   const exec = r.execution as Record<string, unknown> | undefined;
   if (
     exec === undefined
+    || exec === null
     || typeof exec !== "object"
+    || Array.isArray(exec)
     || typeof exec.completed !== "boolean"
     || typeof exec.timedOut !== "boolean"
     || !(exec.exitCode === null || isSafeCount(exec.exitCode) || (typeof exec.exitCode === "number" && Number.isInteger(exec.exitCode)))
@@ -227,6 +231,26 @@ export function parseProducerEvidence(bytes: string | undefined): ProducerEviden
  * record for another run is not judged on its measurements, and a process that
  * died is not judged on its numbers.
  */
+/**
+ * Receive a producer's bytes against the ticket that was issued: parse,
+ * validate and hash THE SAME BYTES in one operation.
+ *
+ * Taking a parsed record and its bytes as separate arguments let a caller
+ * hand over a valid object beside unrelated bytes, and the receipt was the
+ * hash of the bytes nobody had validated (Codex 2026-09-12 AB). This is the
+ * only entry point a caller should use.
+ */
+export function receiveEvidence(
+  ticket: EvidenceTicket | undefined,
+  bytes: string | undefined,
+  transport: ExecutionObservation,
+  opts: { readonly revisionNow?: string; readonly dirtyNow?: boolean; readonly artifactSha256?: string } = {},
+): EvidenceDecision {
+  const parsed = parseProducerEvidence(bytes);
+  if (typeof parsed === "string") return { admitted: false, refusal: parsed, detail: "the producer's record was not usable" };
+  return admitEvidence(ticket, parsed, bytes as string, transport, opts);
+}
+
 export function admitEvidence(
   ticket: EvidenceTicket | undefined,
   record: ProducerEvidence,
@@ -245,8 +269,11 @@ export function admitEvidence(
   if (record.medium !== b.medium) {
     return { admitted: false, refusal: "MEDIUM_MISMATCH", detail: `asked for ${b.medium}, got ${record.medium}` };
   }
-  if (b.target !== undefined && record.target !== undefined && record.target !== b.target) {
-    return { admitted: false, refusal: "TARGET_MISMATCH", detail: `asked for ${b.target}, got ${record.target}` };
+  // A BINDING THE RECORD DOES NOT ANSWER IS NOT A BINDING IT MET. Omitting
+  // the field was an escape from every check (Codex 2026-09-12 AB): unknown
+  // is not "unchanged".
+  if (b.target !== undefined && record.target !== b.target) {
+    return { admitted: false, refusal: "TARGET_MISMATCH", detail: `asked for ${b.target}, got ${record.target ?? "no target"}` };
   }
   // THE TREE THE TICKET WAS ABOUT. A measurement of another revision is
   // another game's measurement, and one taken while the tree was moving
@@ -254,10 +281,20 @@ export function admitEvidence(
   if (b.dirty || opts.dirtyNow === true) {
     return { admitted: false, refusal: "SOURCE_DIRTY", detail: "the project had uncommitted build inputs" };
   }
-  if (record.revision !== undefined && record.revision !== b.revision) {
-    return { admitted: false, refusal: "REVISION_MISMATCH", detail: `the record names ${record.revision.slice(0, 8)}, the ticket ${b.revision.slice(0, 8)}` };
+  if (record.revision !== b.revision) {
+    return {
+      admitted: false,
+      refusal: "REVISION_MISMATCH",
+      detail: `the record names ${record.revision === undefined ? "no revision" : record.revision.slice(0, 8)}, the ticket ${b.revision.slice(0, 8)}`,
+    };
   }
-  if (opts.revisionNow !== undefined && opts.revisionNow !== b.revision) {
+  // …AND THE CALLER MUST SAY WHAT THE TREE WAS WHEN THE RUN ENDED. Without
+  // that observation the record's own word is all there is, which is what
+  // this receiver exists to stop.
+  if (opts.revisionNow === undefined || opts.dirtyNow === undefined) {
+    return { admitted: false, refusal: "REVISION_MISMATCH", detail: "the tree was not observed when the run ended" };
+  }
+  if (opts.revisionNow !== b.revision) {
     return { admitted: false, refusal: "REVISION_MISMATCH", detail: `the project moved to ${opts.revisionNow.slice(0, 8)} during the run` };
   }
   // A PLAYER RUN IS ABOUT ONE ARTIFACT. Paths and sizes are not identity: the
@@ -269,8 +306,12 @@ export function admitEvidence(
     if (record.artifactSha256 === undefined) {
       return { admitted: false, refusal: "ARTIFACT_MISSING", detail: "the record names no artifact digest" };
     }
-    const ran = opts.artifactSha256 ?? record.artifactSha256;
-    if (record.artifactSha256 !== b.artifactSha256 || ran !== b.artifactSha256) {
+    // MEASURED BY THE CALLER, not echoed by the producer: a record that
+    // repeats the digest it was given proves nothing (Codex 2026-09-12 AB).
+    if (opts.artifactSha256 === undefined) {
+      return { admitted: false, refusal: "ARTIFACT_MISSING", detail: "nobody measured the artifact that ran" };
+    }
+    if (record.artifactSha256 !== b.artifactSha256 || opts.artifactSha256 !== b.artifactSha256) {
       return { admitted: false, refusal: "ARTIFACT_MISMATCH", detail: "the artifact played is not the artifact built" };
     }
   }
@@ -279,26 +320,55 @@ export function admitEvidence(
   if (!transport.completed || transport.timedOut || !record.execution.completed || record.execution.timedOut) {
     return { admitted: false, refusal: "PROCESS_INCOMPLETE", detail: "the producer's process did not run to a normal end" };
   }
-  const exitCode = transport.exitCode ?? record.execution.exitCode;
-  if (exitCode !== 0) {
-    return { admitted: false, refusal: "PROCESS_FAILED", detail: `the producer exited ${exitCode ?? "with no code"}` };
+  // BOTH ACCOUNTS, AGREEING. Falling back from one to the other let a null
+  // transport code be covered by the producer's own "0", and a transport 0
+  // cover the producer's own 42 (Codex 2026-09-12 AB).
+  if (transport.exitCode !== 0 || record.execution.exitCode !== 0) {
+    return {
+      admitted: false,
+      refusal: "PROCESS_FAILED",
+      detail:
+        `the run did not end cleanly (transport ${transport.exitCode ?? "unknown"}, ` +
+        `producer ${record.execution.exitCode ?? "unknown"})`,
+    };
   }
   // THE SESSIONS THAT WERE ASKED FOR, each identified. An absent session is a
   // missing measurement, and an unverified or contradictory identity certifies
   // no content (Codex 2026-09-12 X, Z#5).
   for (const wanted of ticket.requestedSessions ?? []) {
-    const played = (record.sessions ?? []).find((s) => s.requestedIndex === wanted);
-    if (!played) {
+    // ONE observation per requested session: a good first entry hid a
+    // contradictory second one (Codex 2026-09-12 AB).
+    const played = (record.sessions ?? []).filter((s) => s.requestedIndex === wanted);
+    if (played.length === 0) {
       return { admitted: false, refusal: "SESSION_MISSING", detail: `session ${wanted} was asked for and is not in the record` };
     }
-    if (!played.identityVerified) {
-      return { admitted: false, refusal: "SESSION_UNVERIFIED", detail: `session ${wanted} could not be identified by the game` };
-    }
-    if (played.observedIndex !== undefined && played.observedIndex > 0 && played.observedIndex !== played.index) {
+    if (played.length > 1) {
       return {
         admitted: false,
         refusal: "SESSION_MISMATCH",
-        detail: `session ${wanted} says it played ${played.index} while the game reported ${played.observedIndex}`,
+        detail: `session ${wanted} has ${played.length} observations in one record`,
+      };
+    }
+    const one = played[0]!;
+    if (!one.identityVerified) {
+      return { admitted: false, refusal: "SESSION_UNVERIFIED", detail: `session ${wanted} could not be identified by the game` };
+    }
+    // …AND IT MUST BE THE SESSION THAT WAS ASKED FOR. Comparing the record's
+    // own two fields to each other admitted "asked for 7, played 1" as long
+    // as it was consistent about playing 1 (Codex 2026-09-12 AB), and an
+    // explicit zero — no session running — passed as well.
+    if (one.index !== wanted) {
+      return {
+        admitted: false,
+        refusal: "SESSION_MISMATCH",
+        detail: `session ${wanted} was asked for and the record played ${one.index}`,
+      };
+    }
+    if (one.observedIndex !== undefined && one.observedIndex !== wanted) {
+      return {
+        admitted: false,
+        refusal: "SESSION_MISMATCH",
+        detail: `session ${wanted} was asked for and the game reported ${one.observedIndex === 0 ? "no session running" : one.observedIndex}`,
       };
     }
   }

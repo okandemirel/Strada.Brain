@@ -430,3 +430,25 @@ describe("the compile gate answers from the compiler, not from silence (Codex 20
       .toMatchObject({ ok: false, ran: false });
   });
 });
+
+
+/**
+ * The producer names the artifact BEFORE its refusal, so three long directory
+ * components pushed "is not a player this machine can run" past a 300-
+ * character cut — and the campaign, which classifies a foreign artifact by
+ * that phrase, saw a missing proof with no cause (Codex 2026-09-12 AB J2.4).
+ */
+describe("a refusal survives the message length", () => {
+  it("carries the producer's whole reason to the caller", async () => {
+    const deep = `/p/${"a".repeat(100)}/${"b".repeat(100)}/${"c".repeat(100)}/Game.apk`;
+    const refusal =
+      `Error: ${deep} is not a player this machine can run ` +
+      "(an .apk, WebGL folder or missing executable) — nothing was played.";
+    const runPlayer = makeRunPlayer({
+      getAvailableToolNames: () => ["unity_run_player"],
+      execute: async () => ({ content: refusal, isError: true }),
+    } as never);
+
+    await expect(runPlayer("/p", deep)).rejects.toThrow(/is not a player this machine can run/);
+  });
+});

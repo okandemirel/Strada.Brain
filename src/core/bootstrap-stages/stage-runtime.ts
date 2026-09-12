@@ -1105,7 +1105,12 @@ export function makeRunPlayer(registry: {
       },
       { projectPath: projectRoot, workingDirectory: projectRoot, readOnly: false },
     );
-    if (result.isError === true) throw new Error(String(result.content ?? "unity_run_player failed").slice(0, 300));
+    // THE WHOLE REFUSAL, not its first 300 characters: the producer names the
+    // artifact first, so three long directory components pushed "is not a
+    // player this machine can run" past the cut and the campaign saw a
+    // missing proof with no cause (Codex 2026-09-12 AB J2.4). The campaign
+    // truncates for display where it needs to.
+    if (result.isError === true) throw new Error(String(result.content ?? "unity_run_player failed").slice(0, 2000));
   };
 }
 

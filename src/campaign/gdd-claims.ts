@@ -65,11 +65,23 @@ function platformOfClaim(text: string): GddPlatform | undefined {
 
 /** A window of text around a number, one sentence at most. */
 function fragment(text: string, index: number, length: number): string {
-  const start = Math.max(0, text.lastIndexOf("\n", index), text.lastIndexOf(". ", index) + 1, index - 90);
+  // WITHIN ONE CLAUSE. "Windows at least 60 fps; Android at most 30 fps" gave
+  // both claims a fragment holding both platforms, so each was judged against
+  // the other's (Codex 2026-09-12 AB J2.2). A semicolon ends a clause exactly
+  // as a sentence does.
+  const start = Math.max(
+    0,
+    text.lastIndexOf("\n", index),
+    text.lastIndexOf(". ", index) + 1,
+    text.lastIndexOf("; ", index) + 1,
+    index - 90,
+  );
   let end = text.indexOf("\n", index + length);
   if (end < 0) end = text.length;
-  const period = text.indexOf(". ", index + length);
-  if (period >= 0 && period < end) end = period + 1;
+  for (const mark of [". ", "; "]) {
+    const at = text.indexOf(mark, index + length);
+    if (at >= 0 && at < end) end = at + 1;
+  }
   return text.slice(start, Math.min(end, index + length + 90)).replace(/\s+/g, " ").trim().slice(0, 140);
 }
 
@@ -206,7 +218,11 @@ export function extractNumericClaims(gddText: string): {
 
   const seen = new Map<string, NumericClaim & { at: number }>();
   const push = (c: NumericClaim, at = 0) => {
-    const key = `${c.kind}:${c.comparator}:${c.value}`;
+    // …AND THE PLATFORM ITS CLAUSE NAMES. "Windows at least 60 fps. Android
+    // at least 60 fps." deduplicated to one claim, so a 10 fps Android player
+    // failed nothing (Codex 2026-09-12 AB J2.3). Equal numbers on different
+    // platforms are different requirements.
+    const key = `${c.kind}:${c.comparator}:${c.value}:${platformOfClaim(c.text)?.targets.join("/") ?? ""}`;
     const already = seen.get(key);
     if (already !== undefined) {
       // The same requirement written twice keeps its EARLIEST position: the
@@ -572,15 +588,20 @@ export function assessNumericClaims(
             : claim.comparator === "eq"
             ? Math.abs(seconds - claim.value) <= Math.max(1, claim.value * EXACT_DURATION_TOLERANCE)
             : seconds <= claim.value;
-        const met = perSession.length > 1 ? perSession.every(holds) : holds(timedPerf.playSeconds);
-        const measured = perSession.length > 1
+        // A SESSION'S OWN CLOCK, whenever there is one. Requiring MORE THAN
+        // ONE meant a single 90-second round was judged by the run's sampled
+        // play time of 20 s and passed a 60-second ceiling (Codex 2026-09-12
+        // AB J4.3). The aggregate answers only a run that recorded no session
+        // durations at all.
+        const met = perSession.length > 0 ? perSession.every(holds) : holds(timedPerf.playSeconds);
+        const measured = perSession.length > 0
           ? Number(Math.max(...perSession).toFixed(1))
           : Number(timedPerf.playSeconds.toFixed(1));
         return {
           claim,
           status: met ? "met" : "not_met",
           measured,
-          note: perSession.length > 1
+          note: perSession.length > 0
             ? `${perSession.length} session(s) reached an outcome, each ${Math.min(...perSession).toFixed(1)}–${Math.max(...perSession).toFixed(1)} s of driven play (${timedMedium})`
             : `session ${timed.session ?? "?"} reached ${timed.outcome} after ${timedPerf.playSeconds.toFixed(1)} s of driven play (${timedMedium})`,
           // A driven play-through is faster than a person's, so a range's floor

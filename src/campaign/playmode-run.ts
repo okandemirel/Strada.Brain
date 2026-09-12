@@ -170,6 +170,12 @@ export function readPlaymodeRun(projectRoot: string, sinceMs: number, expectRunI
   // run that ended "Failed" or "Inconclusive", or that threw, was read as
   // green because failed came back 0 (Codex 2026-09-12 R#6).
   const overall = typeof raw.result === "string" ? raw.result.trim() : "";
+  // THE PROCESS HAS TO HAVE SUCCEEDED. A record with ten of ten passing and
+  // `exitCode: 42` beside them was green: the runner died and its counts
+  // survived (Codex 2026-09-12 AB J4.1). An explicit non-zero exit, or an
+  // exit that is there but unreadable, certifies nothing.
+  const exitCode = raw.exitCode === undefined ? undefined : num(raw.exitCode);
+  const processFailed = raw.exitCode !== undefined && exitCode !== 0;
   const overallSaysPass = overall === "" || /^(?:passed|success|succeeded|ok)$/i.test(overall);
   const exceptions = num(raw.exceptions) ?? 0;
   // A SUITE MOST OF WHICH NEVER RAN is not a whole-suite pass, whatever the
@@ -193,6 +199,8 @@ export function readPlaymodeRun(projectRoot: string, sinceMs: number, expectRunI
       ? `PlayMode run (NUnit): the runner's own verdict is "${overall}" — ${passed} of ${total} passed (${scope})`
       : exceptions > 0
       ? `PlayMode run (NUnit): ${exceptions} runtime exception(s) during the run — ${passed} of ${total} passed (${scope})`
+      : processFailed
+      ? `PlayMode run (NUnit): the runner exited ${exitCode ?? "with an unreadable code"} — ${passed} of ${total} passed (${scope})`
       : mostlySkipped
       ? `PlayMode run (NUnit): ${skipped} of ${total} tests never ran — ${passed} passed (${scope})`
       : failed === 0
@@ -202,7 +210,8 @@ export function readPlaymodeRun(projectRoot: string, sinceMs: number, expectRunI
     found: true,
     ...(typeof raw.runId === "string" && raw.runId.trim() !== "" ? { runId: raw.runId.trim() } : {}),
     ...(stampMissing ? { stampMissing: true } : {}),
-    green: consistent && failed === 0 && passed > 0 && overallSaysPass && exceptions === 0 && !mostlySkipped,
+    green:
+      consistent && failed === 0 && passed > 0 && overallSaysPass && exceptions === 0 && !mostlySkipped && !processFailed,
     total,
     passed,
     failed,
