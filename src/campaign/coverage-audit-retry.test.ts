@@ -165,6 +165,40 @@ describe("re-judging the requirements no sprint closed", () => {
     ).resolves.toEqual({ closed: [], open: ["Dragon boss: absent"] });
   });
 
+  it("a title or the worker's own prose is not evidence (Codex 2026-09-12 W#3)", async () => {
+    // Both of these closed "Dragon boss: absent" in Codex's run: the
+    // requirement's own title, quoted back, and a failed sprint's sentence
+    // saying the boss is NOT delivered. The quotable record is the MEASURED
+    // lines only.
+    const titleQuoted = plannerWith([
+      '{"verdicts": [{"id": 1, "delivered": true, "evidence": "Dragon boss: absent"}]}',
+    ]);
+    await expect(
+      titleQuoted.planner.resolveCoverageGaps("# GDD", ["Dragon boss: absent"], [{ title: "Dragon boss: absent" }]),
+    ).resolves.toEqual({ closed: [], open: ["Dragon boss: absent"] });
+
+    const proseQuoted = plannerWith([
+      '{"verdicts": [{"id": 1, "delivered": true, "evidence": "The dragon boss is NOT delivered."}]}',
+    ]);
+    await expect(
+      proseQuoted.planner.resolveCoverageGaps("# GDD", ["Dragon boss: absent"], [
+        { title: "Sprint A", status: "failed", resultExcerpt: "The dragon boss is NOT delivered." },
+      ]),
+    ).resolves.toEqual({ closed: [], open: ["Dragon boss: absent"] });
+
+    // …and a measured line still closes it.
+    const measured = plannerWith([
+      '{"verdicts": [{"id": 1, "delivered": true, "evidence": "landed: 3 commit(s): Assets/Scripts/Dragon.cs"}]}',
+    ]);
+    await expect(
+      measured.planner.resolveCoverageGaps("# GDD", ["Dragon boss: absent"], ladder),
+    ).resolves.toEqual({ closed: ["Dragon boss: absent"], open: [] });
+
+    // The prompt still SHOWS the worker's report as context.
+    const sent = JSON.stringify(proseQuoted.chat.mock.calls[0]);
+    expect(sent).toContain("report: The dragon boss is NOT delivered.");
+  });
+
   it("throws when the reply is unusable, so the CALLER decides what an unrun audit means", async () => {
     const { planner } = plannerWith(["I could not tell."]);
     await expect(planner.resolveCoverageGaps("# GDD", ["Dragon boss: absent"], ladder)).rejects.toThrow(/schema validation/);

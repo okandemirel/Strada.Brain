@@ -671,8 +671,9 @@ Your previous reply was not valid JSON. Reply with the JSON object ALONE — no 
       `<requirements>\n${list}\n</requirements>\n\n` +
       `For EACH numbered requirement, say whether the evidence above shows it implemented and shipped. ` +
       `Respond ONLY with JSON: {"verdicts": [{"id": <number>, "delivered": true|false, "evidence": "<the evidence line that shows it, when delivered>"}, ...]}. ` +
-      `ONE verdict per id. When you answer delivered:true, copy the evidence line from <completed-ladder> VERBATIM — at least twelve characters of it, exactly as written above. ` +
-      `A paraphrase, a plan, a title or a promise is not evidence and closes nothing, and a requirement you cannot judge is delivered:false.`;
+      `ONE verdict per id. When you answer delivered:true, copy VERBATIM — at least twelve characters — from one of the MEASURED lines of <completed-ladder>: ` +
+      `the lines beginning "status:", "suite:", "landed:", "shipped tree:" or "document numbers:". ` +
+      `A paraphrase, a milestone title, a worker's own "report:" sentence, a plan or a promise is not evidence and closes nothing, and a requirement you cannot judge is delivered:false.`;
     const response = await streamOrChatText(this.provider, COVERAGE_SYSTEM, userMessage);
     let parsed: unknown;
     for (const candidate of balancedJsonObjects(response.text ?? "")) {
@@ -697,7 +698,11 @@ Your previous reply was not valid JSON. Reply with the JSON object ALONE — no 
     // (Codex 2026-09-12 V#2). The quote must be IN the record we sent, and a
     // requirement with more than one verdict is unjudged.
     const flat = (text: string): string => text.toLowerCase().replace(/\s+/g, " ").trim();
-    const record = flat(ladderSummary);
+    // THE MEASURED LINES ONLY. The membership test searched the whole summary,
+    // so a requirement's own TITLE ("Dragon boss: absent") and a failed
+    // sprint's prose ("the dragon boss is NOT delivered") were both accepted
+    // as the evidence that closed it (Codex 2026-09-12 W#3).
+    const record = flat(milestones.flatMap((m) => milestoneFacts(m)).join("\n"));
     const verdictsById = new Map<number, Array<{ delivered: boolean; evidence?: string }>>();
     for (const v of verdicts.data.verdicts) {
       // An id nobody asked about is simply never consulted below.
@@ -726,16 +731,28 @@ Your previous reply was not valid JSON. Reply with the JSON object ALONE — no 
  * suite it ran, what it committed, what the structural and numeric checks said
  * about the shipped tree — never its title or its plan (Codex 2026-09-12 R#15).
  */
-function milestoneEvidence(m: {
+function milestoneFacts(m: {
   status?: string; testVerdict?: string; testVerdictUnfiltered?: boolean; commitNote?: string;
-  structureFindings?: readonly string[]; gddClaims?: readonly string[]; resultExcerpt?: string;
-}): string {
+  structureFindings?: readonly string[]; gddClaims?: readonly string[];
+}): string[] {
   const facts: string[] = [];
   if (m.status) facts.push(`status: ${m.status}`);
   if (m.testVerdict) facts.push(`suite: ${m.testVerdict.slice(0, 160)}${m.testVerdictUnfiltered === true ? " (unfiltered)" : " (FILTERED or unknown scope)"}`);
   if (m.commitNote) facts.push(`landed: ${m.commitNote.slice(0, 200)}`);
   for (const line of (m.structureFindings ?? []).slice(0, 3)) facts.push(`shipped tree: ${line.slice(0, 160)}`);
   for (const line of (m.gddClaims ?? []).slice(0, 3)) facts.push(`document numbers: ${line.slice(0, 160)}`);
+  return facts;
+}
+
+function milestoneEvidence(m: {
+  status?: string; testVerdict?: string; testVerdictUnfiltered?: boolean; commitNote?: string;
+  structureFindings?: readonly string[]; gddClaims?: readonly string[]; resultExcerpt?: string;
+}): string {
+  const facts = milestoneFacts(m);
+  // The worker's own report travels for CONTEXT, and it is deliberately kept
+  // out of the quotable record below: a failed sprint's sentence "the dragon
+  // boss is NOT delivered" was quoted back as the evidence that closed it
+  // (Codex 2026-09-12 W#3).
   if (m.resultExcerpt) facts.push(`report: ${m.resultExcerpt.slice(0, 300)}`);
   return facts.length > 0 ? facts.map((f) => `\n   ${f}`).join("") : "\n   (no evidence recorded)";
 }

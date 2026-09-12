@@ -574,25 +574,29 @@ export function reconcileCapabilityGaps(
     capabilityGap?: string;
   }>,
 ): string[] {
-  const closed = new Set(
-    milestones
-      .filter((m) => m.id.startsWith("mcov") && m.status === "green")
-      // …AND THAT DOES NOT STILL REPORT IT. A milestone can go green and
-      // carry a fresh capability gap of its own, and such a repair was
-      // reconciling the very gap it was reporting — both marks vanished and
-      // the work was never done (Codex 2026-09-12 V#3).
-      .filter((m) => m.capabilityGap === undefined || gapKey(capabilityGapWork(m.capabilityGap)) !== gapKey(coverageGapOf(m)))
-      .map((m) => gapKey(coverageGapOf(m))),
-  );
-  if (closed.size === 0) return [];
+  const repairs = milestones
+    .map((m, at) => ({ m, at }))
+    .filter(({ m }) => m.id.startsWith("mcov") && m.status === "green")
+    // …AND THAT DOES NOT STILL REPORT IT. A milestone can go green and
+    // carry a fresh capability gap of its own, and such a repair was
+    // reconciling the very gap it was reporting — both marks vanished and
+    // the work was never done (Codex 2026-09-12 V#3).
+    .filter(({ m }) => m.capabilityGap === undefined || gapKey(capabilityGapWork(m.capabilityGap)) !== gapKey(coverageGapOf(m)))
+    .map(({ m, at }) => ({ key: gapKey(coverageGapOf(m)), at }));
+  if (repairs.length === 0) return [];
   const reconciled: string[] = [];
-  for (const m of milestones) {
+  milestones.forEach((m, at) => {
     const gap = m.capabilityGap;
-    if (gap === undefined) continue;
-    if (!closed.has(gapKey(capabilityGapWork(gap)))) continue;
+    if (gap === undefined) return;
+    const key = gapKey(capabilityGapWork(gap));
+    // A REPAIR CLOSES WHAT CAME BEFORE IT. An old green repair was clearing a
+    // LATER report of the same missing tool — the ladder had said the tool
+    // went away again, and the mark for it vanished on the strength of work
+    // done before that happened (Codex 2026-09-12 W#6).
+    if (!repairs.some((r) => r.key === key && r.at > at)) return;
     reconciled.push(gap);
     delete (m as { capabilityGap?: string }).capabilityGap;
-  }
+  });
   return reconciled;
 }
 
@@ -4103,8 +4107,18 @@ export class CampaignManager {
           `NOT DELIVERED — ${outstandingHere.open.length} GDD requirement(s) no sprint closed: ` +
           `${outstandingHere.open.slice(0, 2).join("; ")}`.slice(0, 600);
       }
+      // A STOP RECORDED WHILE THIS PATH WAS SETTLING is not a delivery
+      // either — the delivery gate has checked this since P#12 and this path
+      // never did (Codex 2026-09-12 W#1).
+      const stopBeforePartial = this.storage.get(campaign.id)?.stopRequestedAt;
+      if (stopBeforePartial !== undefined) {
+        campaign.lastError = "NOT DELIVERED — the campaign was stopped while its last sprint was settling";
+      }
       campaign.state =
-        structure.refusal !== undefined || unprovenFinal !== undefined || outstandingHere.open.length > 0
+        structure.refusal !== undefined
+        || unprovenFinal !== undefined
+        || outstandingHere.open.length > 0
+        || stopBeforePartial !== undefined
           ? "failed"
           : "done";
       campaign.deliveryReported = false;
@@ -4720,20 +4734,42 @@ export class CampaignManager {
       if (gddForGaps === undefined || gddForGaps === "") {
         throw new Error(`the GDD text could not be read (${campaign.gddPath ?? "no path"})`);
       }
+      // ONE QUESTION PER REQUIREMENT. Two failed repairs for the same
+      // requirement were asked about separately, and opposite answers — one
+      // id delivered, the other not — stamped BOTH of them closed (Codex
+      // 2026-09-12 W#2).
+      const byRequirement = new Map<string, CampaignMilestone[]>();
+      for (const m of unclosed) {
+        const key = gapKey(coverageGapOf(m));
+        byRequirement.set(key, [...(byRequirement.get(key) ?? []), m]);
+      }
       const judged = await this.planner.resolveCoverageGaps(
         gddForGaps,
-        unclosed.map((m) => coverageGapOf(m)),
+        [...byRequirement.values()].map((ms) => coverageGapOf(ms[0]!)),
         campaign.milestones,
       );
       const closed = new Set(judged.closed.map(gapKey));
+      const stillOpen = new Set(judged.open.map(gapKey));
       // NOT ACROSS A PUBLICATION: a closure read while the tree was moving
       // describes neither revision (V#4).
       const stillSameRevision = this.projectRevision() === revisionForClosure;
-      for (const m of unclosed) {
-        if (!closed.has(gapKey(coverageGapOf(m)))) continue;
-        if (!stillSameRevision) continue;
-        m.coverageClosed = true;
-        m.coverageClosedRevision = revisionForClosure;
+      for (const [key, ms] of byRequirement) {
+        // Never a key the answer names on both sides.
+        const isClosed = stillSameRevision && closed.has(key) && !stillOpen.has(key);
+        for (const m of ms) {
+          if (isClosed) {
+            m.coverageClosed = true;
+            m.coverageClosedRevision = revisionForClosure;
+            continue;
+          }
+          // A CLOSURE THE AUDIT HAS JUST WITHDRAWN is not a closure: left
+          // standing, the report called the same requirement delivered on the
+          // sprint's line and NOT DELIVERED in its headline (W#8).
+          if (m.coverageClosed === true) {
+            m.coverageClosed = undefined;
+            m.coverageClosedRevision = undefined;
+          }
+        }
       }
       this.persist(campaign);
       getLoggerSafe().info("Unclosed coverage requirements re-judged against the ladder's evidence", {
@@ -4741,7 +4777,8 @@ export class CampaignManager {
         closed: judged.closed.length,
         open: judged.open.length,
       });
-      return { open: stillSameRevision ? judged.open : unclosed.map((m) => coverageGapOf(m)) };
+      if (!stillSameRevision) return { open: [...byRequirement.values()].map((ms) => coverageGapOf(ms[0]!)) };
+      return { open: judged.open };
     } catch (err) {
       // An audit that COULD NOT RUN is not an audit that passed, and this
       // wording is the one the unmeasurable-proof rule knows: the campaign
@@ -5696,8 +5733,32 @@ export class CampaignManager {
     }
   }
 
+  /**
+   * Save this row — and NEVER lose a stop order to a stale copy of it.
+   *
+   * A person's cancellation is recorded by the task handler the moment it
+   * arrives, on the row as it is stored. Any settlement holding an older copy
+   * across an `await` — the coverage audit's provider call is seconds long —
+   * wrote its copy back over that mark, and the delivery gate then found no
+   * stop and delivered the game (Codex 2026-09-12 W#1). A stop from THIS
+   * generation is carried forward; a revival, which bumps the generation and
+   * clears the mark deliberately, still clears it.
+   */
   private persist(campaign: Campaign): void {
     campaign.updatedAt = Date.now();
+    if (campaign.stopRequestedAt === undefined) {
+      const stored = this.storage.get(campaign.id);
+      if (
+        stored?.stopRequestedAt !== undefined
+        && (stored.stopGeneration ?? 0) === (campaign.stopGeneration ?? 0)
+      ) {
+        campaign.stopRequestedAt = stored.stopRequestedAt;
+        getLoggerSafe().info("Carried a stop order forward over a stale save", {
+          id: campaign.id,
+          stopRequestedAt: stored.stopRequestedAt,
+        });
+      }
+    }
     this.storage.save(campaign);
   }
 

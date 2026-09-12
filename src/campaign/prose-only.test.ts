@@ -178,6 +178,18 @@ describe("a capability gap whose repair proved closure (Codex 2026-09-12 U#F1)",
     expect(unscheduledGaps([], milestones, { reopenCompleted: true })).toEqual([]);
   });
 
+  it("only a repair that came AFTER the report can close it (Codex 2026-09-12 W#6)", () => {
+    // An OLD green repair was clearing a LATER report of the same missing
+    // tool: the ladder had said the tool went away again, and the mark for it
+    // vanished on the strength of work done before that happened.
+    const before = [repair("green"), reporter()];
+    expect(reconcileCapabilityGaps(before)).toEqual([]);
+    expect(before[1]!.capabilityGap).toBe(gap);
+    // The ordinary order still reconciles.
+    const after = [reporter(), repair("green")];
+    expect(reconcileCapabilityGaps(after)).toEqual([gap]);
+  });
+
   it("keeps the mark when the repair FAILED, or when another gap is what closed", () => {
     const failed = [reporter(), repair("failed")];
     expect(reconcileCapabilityGaps(failed)).toEqual([]);

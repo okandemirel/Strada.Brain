@@ -3137,6 +3137,13 @@ describe("CampaignManager", () => {
     const after = storage.get(campaign.id)!;
     expect(after.state).not.toBe("done");
     expect(`${after.lastError}`).toContain("Dragon boss");
+    // …and the closure the audit has just WITHDRAWN is gone: left standing,
+    // the report called the same requirement delivered on the sprint's line
+    // and NOT DELIVERED in its headline (Codex 2026-09-12 W#8).
+    const repair = after.milestones.find((m) => m.coverageGap?.includes("Dragon boss"))!;
+    expect(repair.coverageClosed).toBeUndefined();
+    expect(repair.coverageClosedRevision).toBeUndefined();
+    expect(messages.at(-1)!.text).not.toContain("found delivered by the evidence audit");
   });
 
   it("the partial-delivery path answers for the requirements nobody closed (Codex 2026-09-12 V#5)", async () => {
@@ -3172,6 +3179,109 @@ describe("CampaignManager", () => {
     expect(after.state).toBe("failed");
     expect(`${after.lastError}`).toContain("Boss: absent");
     expect(messages.at(-1)!.text).toContain("NOT DELIVERED");
+  });
+
+  it("two failed repairs for ONE requirement are asked about once (Codex 2026-09-12 W#2)", async () => {
+    // Each was asked separately, and opposite answers — one id delivered, the
+    // other not — stamped BOTH of them closed.
+    const asked: string[][] = [];
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1), { timeout: 15_000 });
+
+    const restored = storage.get(campaign.id)!;
+    restored.milestones = [
+      { ...restored.milestones[0]!, status: "green", taskId: undefined },
+      { id: "mcov1", title: "Coverage completion 1.1 — Boss", coverageGap: "Boss: absent", prompt: "Implement the boss.\n- Boss: absent\n", status: "failed", attempts: 2 },
+      { id: "mcov2", title: "Coverage completion 2.1 — Boss", coverageGap: "Boss: absent", prompt: "Implement the boss.\n- Boss: absent\n", status: "running", attempts: 2, taskId: "task_1" },
+      { id: "mfinal1", title: "Final delivery proofs", prompt: "Prove it.", status: "green", attempts: 1 },
+    ] as never;
+    restored.currentMilestone = 2;
+    restored.state = "executing";
+    storage.save(restored);
+    (manager as unknown as { planner: { resolveCoverageGaps: unknown } }).planner.resolveCoverageGaps =
+      vi.fn(async (_gdd: string, reqs: readonly string[]) => {
+        asked.push([...reqs]);
+        return { closed: [], open: [...reqs] };
+      });
+
+    tasks.emit("task:failed", "task_1", "the boss scene will not compile");
+    await waitFor(() => expect(storage.get(campaign.id)!.state).not.toBe("executing"), { timeout: 15_000 });
+
+    // ONE question for one requirement, however many sprints tried it.
+    expect(asked).toHaveLength(1);
+    expect(asked[0]).toEqual(["Boss: absent"]);
+    const after = storage.get(campaign.id)!;
+    expect(after.state).toBe("failed");
+    expect(after.milestones.filter((m) => m.coverageClosed === true)).toHaveLength(0);
+  });
+
+  it("a stop recorded DURING the coverage audit is not lost, on either terminal path (Codex 2026-09-12 W#1)", async () => {
+    // `openRequirements` holds its copy of the campaign across a provider
+    // call that takes seconds, and wrote that copy back over the stop the
+    // cancellation handler had just recorded — the delivery gate then found
+    // no stop and delivered the game.
+    let id: string | undefined;
+    const stopMidAudit = (reqs: readonly string[]): { closed: string[]; open: string[] } => {
+      if (id !== undefined) {
+        const live = storage.get(id)!;
+        live.stopRequestedAt = Date.now();
+        storage.save(live);
+      }
+      // Everything is closed, so nothing but the stop can block delivery.
+      return { closed: [...reqs], open: [] };
+    };
+
+    const campaign = await runToSpentRemediation(stopMidAudit, (cid) => { id = cid; });
+    await waitFor(() => expect(storage.get(campaign.id)!.state).not.toBe("executing"), { timeout: 15_000 });
+    const after = storage.get(campaign.id)!;
+    expect(after.stopRequestedAt).toBeDefined();
+    expect(after.state).not.toBe("done");
+    expect(`${after.lastError}`).toContain("stopped");
+
+    // …and the partial-delivery path, which never had the check at all.
+    tasks = new FakeTaskManager();
+    storage.close();
+    storage = new CampaignStorage(join(dir, "campaigns-stop-partial.db"));
+    let partialId: string | undefined;
+    manager = new CampaignManager({
+      storage,
+      planner: {
+        planMilestones: vi.fn().mockResolvedValue(LADDER),
+        auditCoverage: vi.fn().mockResolvedValue([]),
+        resolveCoverageGaps: vi.fn(async (_gdd: string, reqs: readonly string[]) => {
+          if (partialId !== undefined) {
+            const live = storage.get(partialId)!;
+            live.stopRequestedAt = Date.now();
+            storage.save(live);
+          }
+          return { closed: [...reqs], open: [] };
+        }),
+      } as unknown as CampaignPlanner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async (chatId, text) => { messages.push({ chatId, text }); },
+      projectRoot, retryAdoptionGraceMs: 10, completedSettleDelayMs: 0, milestoneTimeBoxMs: 60 * 60_000,
+      verifyCompile: async () => ({ ok: true, ran: true, errors: 0 }),
+    });
+    manager.attachEvents();
+    const partial = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    partialId = partial.id;
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1), { timeout: 15_000 });
+    const restored = storage.get(partial.id)!;
+    restored.milestones = [
+      { ...restored.milestones[0]!, status: "green", taskId: undefined },
+      { id: "mcov1", title: "Coverage completion 1.1 — Boss", coverageGap: "Boss: absent", prompt: "Implement the boss.\n- Boss: absent\n", status: "running", attempts: 2, taskId: "task_1" },
+      { id: "mfinal1", title: "Final delivery proofs", prompt: "Prove it.", status: "green", attempts: 1 },
+    ] as never;
+    restored.currentMilestone = 1;
+    restored.state = "executing";
+    storage.save(restored);
+
+    tasks.emit("task:failed", "task_1", "the boss scene will not compile");
+    await waitFor(() => expect(storage.get(partial.id)!.state).not.toBe("executing"), { timeout: 15_000 });
+    const partialAfter = storage.get(partial.id)!;
+    expect(partialAfter.stopRequestedAt).toBeDefined();
+    expect(partialAfter.state).not.toBe("done");
+    expect(`${partialAfter.lastError}`).toContain("stopped");
   });
 
   it("bounces a remediation sprint once when the placeholder-art count did not drop, then accepts a drop", async () => {
