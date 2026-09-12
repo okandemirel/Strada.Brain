@@ -1024,17 +1024,22 @@ export function makeVerifyCompile(
               } as never,
             );
             const detail = String(result.content ?? "");
-            // THE TOOL'S OWN ERROR FLAG FIRST. It was never read, and a
-            // response that matched none of the patterns below fell through to
-            // "ok, ran" — so "Unity Editor executable not found" and
-            // "Operation timed out" both reported a zero-error compile (Codex
-            // 2026-09-12 R#5).
-            if (result.isError === true) {
-              return { ok: false, ran: false, detail: detail.slice(0, 300) || "the compile tool reported an error" };
-            }
             const counted = /"compileErrors"\s*:\s*(\d+)/i.exec(detail)?.[1]
               ?? /(\d+)\s*error\(s\)/i.exec(detail)?.[1];
             const errors = counted === undefined ? undefined : Number(counted);
+            // THE TOOL'S OWN ERROR FLAG, read AFTER the count. It was never
+            // read at all, so "Unity Editor executable not found" and
+            // "Operation timed out" both reported a zero-error compile (Codex
+            // 2026-09-12 R#5) — but reading it first turned a COMPLETED
+            // compile that found 37 errors into "not run", which the non-final
+            // gate does not treat as broken at all (S#2). A counted error is
+            // the compiler's answer whatever the flag says; a flag with no
+            // count is a tool that did not get to answer.
+            if (result.isError === true) {
+              return errors !== undefined && errors > 0
+                ? { ok: false, ran: true, errors, detail: detail.slice(0, 300) }
+                : { ok: false, ran: false, detail: detail.slice(0, 300) || "the compile tool reported an error" };
+            }
             // A "failed" with no counted error is the killed-compile shape:
             // real, but it says nothing about the CODE, so it is reported as
             // not measured rather than as a compile error the sprint can fix.
@@ -1045,6 +1050,14 @@ export function makeVerifyCompile(
             // A COMPILE IS PROVEN, not assumed: either the errors were counted
             // or the tool said in so many words that it succeeded. Anything
             // else is unmeasured, which the gate discloses and never passes.
+            // A COUNT IS ONLY AN ANSWER WHEN THE COMPILE FINISHED. A reply
+            // carrying "verified": false, "status": "unknown", or a compile
+            // still in progress has a zero in it that means nothing (Codex
+            // 2026-09-12 S#2).
+            const unfinished = /"verified"\s*:\s*false|"status"\s*:\s*"(?:unknown|compiling|in[_ -]?progress|pending)"|\bstill compiling\b/i.test(detail);
+            if (unfinished) {
+              return { ok: false, ran: false, detail: detail.slice(0, 300) };
+            }
             const said = /"(?:lastSucceeded|success|compiled)"\s*:\s*true|"exitCode"\s*:\s*0|"status"\s*:\s*"(?:ok|success|succeeded|passed)"/i.test(detail);
             if (errors === undefined && !said) {
               return { ok: false, ran: false, detail: detail.slice(0, 300) || "the compile tool answered nothing measurable" };

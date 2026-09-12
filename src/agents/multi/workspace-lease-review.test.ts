@@ -126,10 +126,13 @@ describe("writes: the user's copy is never overwritten by a version the agent wr
       chmodSync(join(source, "Assets/Scripts/Locked.cs"), 0o644);
     }
     await lease.release();
-    expect(result.failed.length + result.written.length).toBeGreaterThan(0);
-    if (result.failed.length > 0) {
-      expect(readFileSync(join(result.conflictsQuarantinedUnder!, "Assets/Scripts/Locked.cs"), "utf8")).toBe("the agent's version");
-    }
+    // Locked, or judged changed-under-us — either way the agent's version is
+    // PRESERVED and never destroyed with the lease. (A chmod moves the ctime,
+    // and with no commit to check the bytes against, the project's copy wins
+    // and the agent's is quarantined — Codex 2026-09-12 S#7.)
+    const rel = join("Assets", "Scripts", "Locked.cs");
+    expect([...result.failed.map((f) => f.split(" ")[0]), ...result.conflicts]).toContain(rel);
+    expect(readFileSync(join(result.conflictsQuarantinedUnder!, "Assets/Scripts/Locked.cs"), "utf8")).toBe("the agent's version");
   });
 
   it("a gitignored user file the worktree never held is a conflict, not a write", async () => {

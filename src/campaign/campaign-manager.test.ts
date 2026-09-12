@@ -312,6 +312,10 @@ describe("CampaignManager", () => {
 
     const planner = {
       planMilestones: vi.fn().mockResolvedValue(LADDER),
+      // A campaign always HAS an audit; a fixture without one made every
+      // delivery read "coverage audit could not run", which the gate now sees
+      // in the round it happened (Codex 2026-09-12 S#1).
+      auditCoverage: vi.fn().mockResolvedValue([]),
     } as unknown as CampaignPlanner;
 
     manager = new CampaignManager({
@@ -1183,7 +1187,7 @@ describe("CampaignManager", () => {
       runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); },
       verifyCompile: async () => compileVerdict,
       buildPlayer: async () => { builds++; return original; },
-      planner: { planMilestones: vi.fn().mockResolvedValue(LADDER) } as unknown as CampaignPlanner,
+      planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
       taskManager: tasks as unknown as TaskManager,
       messenger: async (chatId, text) => { messages.push({ chatId, text }); },
       projectRoot,
@@ -1475,7 +1479,7 @@ describe("CampaignManager", () => {
       buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
       runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); },
       verifyCompile: async () => compileVerdict,
-      planner: { planMilestones: vi.fn().mockResolvedValue(structured) } as unknown as CampaignPlanner,
+      planner: { planMilestones: vi.fn().mockResolvedValue(structured), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
       taskManager: tasks as unknown as TaskManager,
       messenger: async (chatId, text) => { messages.push({ chatId, text }); },
       projectRoot,

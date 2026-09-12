@@ -367,6 +367,24 @@ describe("the compile gate answers from the compiler, not from silence (Codex 20
     // earlier run: the tool said it failed, and that outranks the text.
     expect(await makeVerifyCompile(registry({ isError: true, content: '{"compileErrors": 0, "exitCode": 0}' }) as never)("/p"))
       .toMatchObject({ ok: false, ran: false });
+    // BUT a COMPLETED compile that found errors is an answer, not a silence:
+    // MCP sets isError for real compile errors, and reading the flag first
+    // turned 37 errors into "not run" — which the non-final gate does not
+    // treat as broken at all (Codex 2026-09-12 S#2).
+    expect(await makeVerifyCompile(registry({ isError: true, content: '{"status":"failed","compileErrors": 37}' }) as never)("/p"))
+      .toMatchObject({ ok: false, ran: true, errors: 37 });
+  });
+
+  it("a zero from a compile that has not finished is NOT MEASURED", async () => {
+    // {status:"unknown", compileErrors:0, verified:false} passed as a clean
+    // compile: the count is only an answer once the compile finished (Codex
+    // 2026-09-12 S#2).
+    expect(await makeVerifyCompile(registry({ content: '{"status":"unknown","compileErrors":0}' }) as never)("/p"))
+      .toMatchObject({ ok: false, ran: false });
+    expect(await makeVerifyCompile(registry({ content: '{"verified":false,"compileErrors":0,"exitCode":0}' }) as never)("/p"))
+      .toMatchObject({ ok: false, ran: false });
+    expect(await makeVerifyCompile(registry({ content: '{"status":"compiling","compileErrors":0}' }) as never)("/p"))
+      .toMatchObject({ ok: false, ran: false });
   });
 
   it("an answer with no verdict in it is NOT MEASURED", async () => {

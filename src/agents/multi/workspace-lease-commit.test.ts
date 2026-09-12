@@ -1017,6 +1017,71 @@ describe("lease commit replay (measured 2026-09-10: three worker commits danglin
     expect(git(source, "show :Assets/Scripts/Existing.cs")).toBe("the person's staged version");
   });
 
+  it("a failed git INSPECTION aborts the chain too, not just a failed stage (Codex 2026-09-12 S#5)", async () => {
+    // Two paths incremented `skipped` without aborting: a diff-tree that could
+    // not be read, and a write-tree that failed. Both moved HEAD to a prefix
+    // of the series.
+    makeGitRepo();
+    const before = git(source, "rev-parse HEAD");
+    let writeTrees = 0;
+    const mgr = new WorkspaceLeaseManager({
+      projectRoot: source,
+      leaseRoot,
+      additionalExcludes: ["Library", "Temp", "Logs", "Builds", "obj"],
+      commandRunner: (async (spec: { args: string[] }) => {
+        if (spec.args.includes("write-tree") && ++writeTrees === 2) {
+          return { exitCode: 1, stdout: "", stderr: "simulated write-tree failure", timedOut: false };
+        }
+        return runProcess(spec as never);
+      }) as never,
+    });
+    const lease = await mgr.acquireLease({ label: "t" });
+    const inLease = join(lease.path, "Assets", "Scripts", "Board.cs");
+    writeFileSync(inLease, "v1", "utf8");
+    git(lease.path, "add -A");
+    git(lease.path, 'commit -q -m "feat: board v1"');
+    writeFileSync(join(lease.path, "Assets", "Scripts", "Other.cs"), "v2", "utf8");
+    git(lease.path, "add -A");
+    git(lease.path, 'commit -q -m "feat: other"');
+
+    const result = await lease.commit();
+    await lease.release();
+
+    expect(git(source, "rev-parse HEAD")).toBe(before);
+    expect(result.commitsReplayed?.replayed).toBe(0);
+  });
+
+  it("an index it could not READ is an index it does not touch (Codex 2026-09-12 S#6)", async () => {
+    // A failed `diff --cached` was treated as "nothing staged" and the paths
+    // were reset anyway — which is exactly how a person's staged selection
+    // disappears.
+    makeGitRepo();
+    const mgr = new WorkspaceLeaseManager({
+      projectRoot: source,
+      leaseRoot,
+      additionalExcludes: ["Library", "Temp", "Logs", "Builds", "obj"],
+      commandRunner: (async (spec: { args: string[] }) => {
+        if (spec.args.includes("diff") && spec.args.includes("--cached")) {
+          return { exitCode: 1, stdout: "", stderr: "simulated index read failure", timedOut: false };
+        }
+        return runProcess(spec as never);
+      }) as never,
+    });
+    const lease = await mgr.acquireLease({ label: "t" });
+    // The person stages their own version, then restores the working file.
+    writeFileSync(join(source, "Assets", "Scripts", "Existing.cs"), "the person's staged version", "utf8");
+    git(source, "add Assets/Scripts/Existing.cs");
+    writeFileSync(join(source, "Assets", "Scripts", "Existing.cs"), "original", "utf8");
+    writeFileSync(join(lease.path, "Assets", "Scripts", "Existing.cs"), "the worker's version", "utf8");
+    git(lease.path, "add -A");
+    git(lease.path, 'commit -q -m "feat: worker edit"');
+
+    await lease.commit();
+    await lease.release();
+
+    expect(git(source, "show :Assets/Scripts/Existing.cs")).toBe("the person's staged version");
+  });
+
   it("a series that cannot be built whole leaves the branch where it was (Codex 2026-09-12 Q#7)", async () => {
     // HEAD moved once per commit, so a later commit that could not be staged
     // left the project's history ending at an EARLIER version of the work.
@@ -1353,6 +1418,25 @@ describe("a person's edit that stats cannot see is not published over (Codex 202
     expect(readFileSync(join(result.conflictsQuarantinedUnder!, "Assets", "Scripts", "Existing.cs"), "utf8")).toBe("WORKER!!");
   });
 
+  it("a changed ctime with NO commit to check against keeps the project's copy (Codex 2026-09-12 S#7)", async () => {
+    // An untracked or gitignored file whose ctime moved may have changed under
+    // us, and requiring PROOF of difference published the worker's version
+    // over it. The agent's work is preserved in quarantine either way; the
+    // person's file is not recoverable once overwritten.
+    const target = join(source, "Assets", "Scripts", "Untracked.cs");
+    writeFileSync(target, "the person's file", "utf8");
+    const lease = await manager().acquireLease({ label: "t", forceTempCopy: true });
+    chmodSync(target, 0o640); // ctime moves; no git, so nothing can prove the bytes
+    writeFileSync(join(lease.path, "Assets", "Scripts", "Untracked.cs"), "the worker's version", "utf8");
+
+    const result = await lease.commit();
+    await lease.release();
+
+    expect(readFileSync(target, "utf8")).toBe("the person's file");
+    expect(result.conflicts).toContain(join("Assets", "Scripts", "Untracked.cs"));
+    expect(readFileSync(join(result.conflictsQuarantinedUnder!, "Assets", "Scripts", "Untracked.cs"), "utf8")).toBe("the worker's version");
+  });
+
   it("a permission change that moved no byte is not a conflict", async () => {
     makeGitRepo();
     const lease = await gitManager().acquireLease({ label: "t", workerId: "w" });
@@ -1403,12 +1487,21 @@ describe("compiler output is derived, at any depth (Codex 2026-09-12 R#4)", () =
     expect(readFileSync(join(source, "bin", "tools.sh"), "utf8")).toBe("#!/bin/sh\necho edited\n");
   });
 
-  it("knows what a build directory looks like", () => {
+  it("knows what a build directory looks like, and what merely shares its name", () => {
     expect(isDerivedBuildOutput(join("Tools", "X", "obj", "Debug", "a.dll"))).toBe(true);
+    expect(isDerivedBuildOutput(join("Tools", "X", "obj", "net8.0", "a.dll"))).toBe(true);
+    expect(isDerivedBuildOutput(join("Tools", "X", "obj", "netstandard2.1", "Core.AssemblyInfo.cs"))).toBe(true);
     expect(isDerivedBuildOutput(join("Tools", "X", "obj", "project.assets.json"))).toBe(true);
+    expect(isDerivedBuildOutput(join("Tools", "X", "obj", "Core.csproj.nuget.g.props"))).toBe(true);
     expect(isDerivedBuildOutput(join("Tools", "X", "bin", "Release", "a.dll"))).toBe(true);
     expect(isDerivedBuildOutput(join("bin", "tools.sh"))).toBe(false);
     expect(isDerivedBuildOutput(join("Assets", "Scripts", "Object.cs"))).toBe(false);
+    // A GAME'S OWN ASSETS in a folder called obj: a Wavefront model under
+    // Assets/Models/obj was classified derived and dropped from publication,
+    // which loses authored work (Codex 2026-09-12 S#8).
+    expect(isDerivedBuildOutput(join("Assets", "Models", "obj", "Hero.obj"))).toBe(false);
+    expect(isDerivedBuildOutput(join("Assets", "obj", "Pig", "body.fbx"))).toBe(false);
+    expect(isDerivedBuildOutput(join("Tools", "X", "bin", "Custom", "a.dll"))).toBe(false);
   });
 });
 

@@ -326,13 +326,25 @@ const BASE_FALLBACK_COPY_EXCLUDES = new Set([
  */
 export function isDerivedBuildOutput(rel: string): boolean {
   const parts = rel.split(/[/\\]/);
+  const config = /^(?:Debug|Release)$/i;
+  // A target-framework folder: obj/net8.0/…, obj/netstandard2.1/…
+  const framework = /^net(?:standard|coreapp)?[0-9][0-9.]*(?:-[a-z0-9.]+)?$/i;
+  // The files .NET writes directly into obj/.
+  const intermediate = /^(?:project\.(?:assets\.json|nuget\.cache|packagespec\.json)|.+\.(?:csproj|vbproj|fsproj)\.nuget\.g\.(?:props|targets)|.+\.(?:cache|CopyComplete|FileListAbsolute\.txt))$/i;
   for (let i = 0; i < parts.length; i++) {
     const part = parts[i];
-    if (part === "obj") return true;
-    if (part === "bin" && /^(?:Debug|Release)$/i.test(parts[i + 1] ?? "")) return true;
+    const next = parts[i + 1] ?? "";
+    // `bin` and `obj` are only derived when they hold what a compiler puts
+    // there. The bare directory NAME is not enough: a game's own
+    // `Assets/Models/obj/Hero.obj` was classified derived and dropped from
+    // publication, which loses authored work (Codex 2026-09-12 S#8).
+    if (part !== "bin" && part !== "obj") continue;
+    if (config.test(next) || framework.test(next)) return true;
+    if (part === "obj" && i + 2 === parts.length && intermediate.test(next)) return true;
   }
   return false;
 }
+
 
 const DERIVED_COPY_EXCLUDES = new Set([
   ".git",
@@ -1569,7 +1581,10 @@ export class WorkspaceLeaseManager {
     try {
       for (const commit of commits) {
         const entries = perCommit.get(commit.sha);
-        if (entries === undefined) { skipped++; continue; }
+        // A commit whose diff could not be READ is not an empty commit: the
+        // chain cannot be built past it, and continuing moved HEAD to a prefix
+        // of the series (Codex 2026-09-12 S#5).
+        if (entries === undefined) { skipped++; failedMidSeries = true; continue; }
         const adds: DiffEntry[] = [];
         const removes: string[] = [];
         for (const entry of entries) {
@@ -1604,7 +1619,11 @@ export class WorkspaceLeaseManager {
         if (!staged) { skipped++; failedMidSeries = true; continue; }
         const tree = await git(["write-tree"], { env });
         const headTree = await git(["rev-parse", `${headSha}^{tree}`]);
-        if (tree.exitCode !== 0 || headTree.exitCode !== 0 || tree.stdout.trim() === headTree.stdout.trim()) { skipped++; continue; }
+        // A tree that could not be WRITTEN or READ is a failed inspection, not
+        // a commit that changed nothing — only the identical-tree case is a
+        // legitimate skip (Codex 2026-09-12 S#5).
+        if (tree.exitCode !== 0 || headTree.exitCode !== 0) { skipped++; failedMidSeries = true; continue; }
+        if (tree.stdout.trim() === headTree.stdout.trim()) { skipped++; continue; }
         const authorName = commit.authorName || "Strada.Brain lease";
         const authorEmail = commit.authorEmail || LEASE_SEED_EMAIL;
         const message = `${commit.message}\n\nStrada-Lease: ${basename(workspacePath)}\nStrada-Lease-Commit: ${commit.sha}`;
@@ -1662,7 +1681,13 @@ export class WorkspaceLeaseManager {
         const all = [...touched];
         for (let i = 0; i < all.length; i += 200) {
           const diff = await git(["diff", "--cached", "--name-only", "-z", baseSha, "--", ...all.slice(i, i + 200)]);
-          if (diff.exitCode !== 0) continue;
+          // AN UNREADABLE INDEX MEANS DO NOT TOUCH IT. Continuing treated
+          // those paths as unstaged and reset them, which is what discards a
+          // person's staged selection (Codex 2026-09-12 S#6).
+          if (diff.exitCode !== 0) {
+            for (const path of all.slice(i, i + 200)) staged.add(path);
+            continue;
+          }
           for (const path of diff.stdout.split("\0").filter(Boolean)) staged.add(path);
         }
         if (staged.size > 0) {
@@ -2004,7 +2029,13 @@ export class WorkspaceLeaseManager {
             const atSeed = mtimeMoved || ctimeMoved
               ? await this.seedHeadVerdict(sourceRoot, seedHead, rel, target)
               : "same";
-            const userChanged = mtimeMoved ? atSeed !== "same" : ctimeMoved && atSeed === "different";
+            // A ctime that moved with NO commit to check against is the case
+            // this branch exists for: an untracked or gitignored file whose
+            // bytes may have changed under us. Requiring proof of difference
+            // published the worker's version over it (Codex 2026-09-12 S#7).
+            // The agent's work is preserved in quarantine either way; the
+            // person's file is not recoverable once overwritten.
+            const userChanged = mtimeMoved ? atSeed !== "same" : ctimeMoved && atSeed !== "same";
             if (userChanged) {
               // The agent's version used to be destroyed together with the
               // released workspace — hours of autonomous work lost to a single
