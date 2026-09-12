@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, readFileSync, existsSync, mkdirSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { MeshGenerateTool, MESH_SHAPES } from "./mesh-generate.js";
@@ -158,5 +158,65 @@ describe("MeshGenerateTool", () => {
     if (empty.isError) {
       expect(String(empty.content)).toContain("no surface");
     }
+  });
+});
+
+/**
+ * Codex round AE#9, reproduced: `Hero.obj` already held a real mesh, the
+ * automatic local lift failed, and the fallback — which supplies
+ * `acceptPlaceholder: true` on its own behalf — replaced it with a procedural
+ * sphere and reported "Mesh written".
+ */
+describe("a failed lift does not degrade existing art (Codex 2026-09-12 AE#9)", () => {
+  let dir: string;
+  const OBJ = "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n";
+  const meshDir = (root: string): string => join(root, "Assets", "Art", "Generated", "Meshes");
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "mesh-keep-"));
+    mkdirSync(meshDir(dir), { recursive: true });
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  /** A tool whose local image-to-3D is installed and always fails. */
+  const failingLocal = (): MeshGenerateTool => {
+    const tool = new MeshGenerateTool({ localAvailable: () => true });
+    (tool as unknown as { executeLocal: () => Promise<unknown> }).executeLocal = async () => ({
+      content: "Error: image-to-3D failed: the weights are missing",
+      isError: true,
+    });
+    return tool;
+  };
+
+  it("keeps a usable mesh and says so instead of writing a placeholder over it", async () => {
+    const target = join(meshDir(dir), "Hero.obj");
+    writeFileSync(target, OBJ);
+    const result = await failingLocal().execute({ name: "Hero", shape: "sphere" }, makeContext(dir));
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain("was KEPT");
+    expect(readFileSync(target, "utf8")).toBe(OBJ);
+  });
+
+  it("still falls back when there is nothing to lose, and still replaces on a DELIBERATE request", async () => {
+    const fresh = await failingLocal().execute({ name: "Newcomer", shape: "sphere" }, makeContext(dir));
+    expect(fresh.isError).toBeFalsy();
+    expect(fresh.content).toContain("PLACEHOLDER");
+
+    const target = join(meshDir(dir), "Hero.obj");
+    writeFileSync(target, OBJ);
+    const asked = await failingLocal().execute(
+      { name: "Hero", shape: "sphere", provider: "procedural", acceptPlaceholder: true },
+      makeContext(dir),
+    );
+    expect(asked.isError).toBeFalsy();
+    expect(readFileSync(target, "utf8")).not.toBe(OBJ);
+  });
+
+  it("does not treat unusable bytes as art worth keeping", async () => {
+    const target = join(meshDir(dir), "Hero.obj");
+    writeFileSync(target, "NOT AN OBJ AT ALL");
+    const result = await failingLocal().execute({ name: "Hero", shape: "sphere" }, makeContext(dir));
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain("PLACEHOLDER");
   });
 });

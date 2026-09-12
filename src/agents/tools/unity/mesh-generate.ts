@@ -16,13 +16,14 @@
  * whenever a package fits.
  */
 
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { reuseOrMintGuid } from "./meta-file-utils.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "../tool.interface.js";
 import { validatePath } from "../../../security/path-guard.js";
 import { PreviousAsset, outsideAssetsError } from "./generated-asset-guard.js";
 import { realLocalAvailability } from "./sprite-generate.js";
+import { meshBytesAreUsable } from "../../../assets-local/local-model-runner.js";
 
 // =============================================================================
 // MESH MATH
@@ -777,6 +778,20 @@ export class MeshGenerateTool implements ITool {
     if (provider === "local") {
       const local = await this.executeLocal(input, context);
       if (!local.isError || !auto) return local;
+      // A FAILED LIFT DOES NOT DEGRADE EXISTING ART. The automatic fallback
+      // supplied acceptPlaceholder itself, so a real Hero.obj already in the
+      // project was replaced by a procedural sphere — a replacement nobody
+      // asked for, reported as "Mesh written" (Codex 2026-09-12 AE#9).
+      const kept = existingMeshPath(context.projectPath, input);
+      if (kept !== undefined) {
+        return {
+          content:
+            `Error: image-to-3D failed (${String(local.content).slice(0, 160)}), and ${kept} already holds a usable mesh — ` +
+            "it was KEPT. To replace it with an analytic placeholder deliberately, pass provider: \"procedural\" with " +
+            "acceptPlaceholder: true.",
+          isError: true,
+        };
+      }
       const fallback = await this.execute({ ...input, provider: "procedural", acceptPlaceholder: true }, context);
       return fallback.isError
         ? fallback
@@ -940,5 +955,27 @@ export class MeshGenerateTool implements ITool {
         isError: true,
       };
     }
+  }
+}
+
+/**
+ * The mesh this call would write, when one is already there and usable.
+ *
+ * The automatic fallback from a failed image-to-3D lift passes
+ * `acceptPlaceholder: true` on its own behalf, so it overwrote real art with
+ * a procedural primitive (Codex 2026-09-12 AE#9). Existing geometry is only
+ * replaced by a deliberate request.
+ */
+function existingMeshPath(projectPath: string, input: Record<string, unknown>): string | undefined {
+  const rawName = String(input["name"] ?? "").trim();
+  if (!/^[A-Za-z][\w-]{0,40}$/.test(rawName)) return undefined;
+  const dirRel = String(input["path"] ?? "Assets/Art/Generated/Meshes").replace(/[/\\]+$/, "");
+  const rel = `${dirRel}/${rawName}.obj`;
+  const full = join(projectPath, rel);
+  try {
+    // An absent file throws here, which is the same answer: nothing to keep.
+    return meshBytesAreUsable(full, readFileSync(full)).ok ? rel : undefined;
+  } catch {
+    return undefined;
   }
 }

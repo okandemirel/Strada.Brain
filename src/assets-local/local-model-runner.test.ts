@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir, homedir } from "node:os";
 import { LocalModelRunner, type SpawnImpl } from "./local-model-runner.js";
@@ -71,6 +71,100 @@ describe("LocalModelRunner", () => {
   });
 });
 
+/**
+ * Codex round AE#10, reproduced: `Hero.obj` already held `NOT AN OBJ AT ALL`
+ * and the inference subprocess exited 0 without writing anything. The runner
+ * checked only the exit code and the target path's existence, so the old
+ * bytes were reported as a newly generated mesh.
+ */
+describe("a mesh must be newly produced geometry (Codex 2026-09-12 AE#10)", () => {
+  const spec = { id: "trellis", label: "trellis", kind: "image-to-mesh", weightsRef: "w", installMethod: "hub" } as never;
+  const OBJ = "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n";
+
+  const runnerWith = (spawn: SpawnImpl): LocalModelRunner => {
+    const runner = new LocalModelRunner(spawn);
+    (runner as unknown as { isModelInstalled: () => boolean }).isModelInstalled = () => true;
+    (runner as unknown as { writeScripts: () => void }).writeScripts = () => {};
+    return runner;
+  };
+
+  let dir: string;
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "lmr-mesh-")); });
+  afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
+
+  it("refuses when the inference wrote nothing, whatever was already there", async () => {
+    const out = join(dir, "Hero.obj");
+    writeFileSync(out, "NOT AN OBJ AT ALL");
+    const runner = runnerWith(async () => ({ code: 0, stdout: "done", stderr: "" }));
+    const result = await runner.imageToMesh(spec, join(dir, "in.png"), out);
+    expect(result.ok).toBe(false);
+    expect(result.detail).toContain("inference failed");
+    // The old bytes are untouched — and still not a mesh anybody produced.
+    expect(readFileSync(out, "utf8")).toBe("NOT AN OBJ AT ALL");
+  });
+
+  it("refuses bytes that are not geometry, and keeps the target untouched", async () => {
+    const out = join(dir, "Hero.obj");
+    writeFileSync(out, OBJ);
+    const runner = runnerWith(async (_cmd, args) => {
+      writeFileSync(args[args.indexOf("--out") + 1]!, "# an empty scene\n");
+      return { code: 0, stdout: "", stderr: "" };
+    });
+    const result = await runner.imageToMesh(spec, join(dir, "in.png"), out);
+    expect(result.ok).toBe(false);
+    expect(result.detail).toContain("no usable geometry");
+    expect(readFileSync(out, "utf8")).toBe(OBJ);
+    expect(existsSync(`${out}.staging`)).toBe(false);
+  });
+
+  it("refuses a vertex cloud and an empty file, and knows a glTF from a lie", async () => {
+    // A mesh with no faces draws nothing in Unity, and an empty file is not
+    // a mesh at all — both exited 0 and both were accepted.
+    for (const [bytes, why] of [
+      ["v 0 0 0\nv 1 0 0\nv 0 1 0\n", "vertices but no faces"],
+      ["", "empty"],
+    ] as const) {
+      const out = join(dir, `Cloud-${why.length}.obj`);
+      const runner = runnerWith(async (_cmd, args) => {
+        writeFileSync(args[args.indexOf("--out") + 1]!, bytes);
+        return { code: 0, stdout: "", stderr: "" };
+      });
+      const result = await runner.imageToMesh(spec, join(dir, "in.png"), out);
+      expect(result.ok, why).toBe(false);
+      expect(result.detail, why).toContain(why === "empty" ? "empty" : "vertices but no faces");
+      expect(existsSync(out), why).toBe(false);
+    }
+    // …and a .glb is judged by its own magic, not by OBJ rules.
+    const glb = join(dir, "Hero.glb");
+    const good = runnerWith(async (_cmd, args) => {
+      writeFileSync(args[args.indexOf("--out") + 1]!, Buffer.concat([Buffer.from("glTF", "ascii"), Buffer.alloc(64, 1)]));
+      return { code: 0, stdout: "", stderr: "" };
+    });
+    expect((await good.imageToMesh(spec, join(dir, "in.png"), glb)).ok).toBe(true);
+    const bad = runnerWith(async (_cmd, args) => {
+      writeFileSync(args[args.indexOf("--out") + 1]!, Buffer.alloc(64, 1));
+      return { code: 0, stdout: "", stderr: "" };
+    });
+    expect((await bad.imageToMesh(spec, join(dir, "Other.glb"), join(dir, "Other.glb"))).ok).toBe(false);
+  });
+
+  it("accepts a mesh the run actually produced", async () => {
+    const out = join(dir, "Hero.obj");
+    writeFileSync(out, "NOT AN OBJ AT ALL");
+    const runner = runnerWith(async (_cmd, args) => {
+      // The subprocess writes to the path IT was given, never to the target.
+      const target = args[args.indexOf("--out") + 1]!;
+      expect(target).not.toBe(out);
+      writeFileSync(target, OBJ);
+      return { code: 0, stdout: "", stderr: "" };
+    });
+    const result = await runner.imageToMesh(spec, join(dir, "in.png"), out);
+    expect(result.ok).toBe(true);
+    expect(readFileSync(out, "utf8")).toBe(OBJ);
+    expect(existsSync(`${out}.staging`)).toBe(false);
+  });
+});
+
 describe("inference runs one at a time", () => {
   // Measured 2026-09-07 15:38: two sprite calls in the same second, two
   // SD1.5 processes on one GPU.
@@ -106,7 +200,8 @@ describe("inference runs one at a time", () => {
     const spawn: SpawnImpl = async (_cmd, args) => {
       const out = args[args.indexOf("--out") + 1]!;
       order.push(`start ${out}`);
-      if (out.endsWith("a.obj")) await gate;
+      // The runner generates into a staging path beside the target (AE#10).
+      if (out.startsWith("/tmp/a.obj")) await gate;
       order.push(`end ${out}`);
       return { code: 1, stdout: "", stderr: "stub" };
     };
@@ -117,10 +212,13 @@ describe("inference runs one at a time", () => {
     const a = runner.imageToMesh(spec, "/tmp/a.png", "/tmp/a.obj");
     const b = runner.imageToMesh(spec, "/tmp/b.png", "/tmp/b.obj");
     await new Promise((r) => setTimeout(r, 20));
-    expect(order).toEqual(["start /tmp/a.obj"]);
+    expect(order).toEqual(["start /tmp/a.obj.staging"]);
     release();
     await Promise.all([a, b]);
-    expect(order).toEqual(["start /tmp/a.obj", "end /tmp/a.obj", "start /tmp/b.obj", "end /tmp/b.obj"]);
+    expect(order).toEqual([
+      "start /tmp/a.obj.staging", "end /tmp/a.obj.staging",
+      "start /tmp/b.obj.staging", "end /tmp/b.obj.staging",
+    ]);
   });
 
   it("a batch counts only files the run produced, not outputs that already existed", async () => {

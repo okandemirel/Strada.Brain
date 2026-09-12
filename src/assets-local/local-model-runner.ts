@@ -14,7 +14,7 @@
  */
 
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
@@ -400,11 +400,18 @@ export class LocalModelRunner {
       return { ok: false, detail: `${spec.label} is not installed — run assets-local-setup first.` };
     }
     this.writeScripts();
+    // INTO A STAGING PATH, never over the target. The subprocess was trusted
+    // to have produced geometry because it exited 0 and the target path
+    // existed — so a file that already held `NOT AN OBJ AT ALL`, or an old
+    // placeholder, was reported as a freshly generated mesh while the
+    // inference wrote nothing (Codex 2026-09-12 AE#10).
+    const staged = `${outPath}.staging`;
+    try { rmSync(staged, { force: true }); } catch { /* nothing to clear */ }
     const args = [
       join(SCRIPTS(), "img2mesh.py"),
       "--weights", spec.weightsRef,
       "--image", imagePath,
-      "--out", outPath,
+      "--out", staged,
     ];
     // Through the same process-wide lock as the draws: two lifts, or a lift
     // beside a draw, overlapped on one GPU (review 2026-09-07).
@@ -412,9 +419,18 @@ export class LocalModelRunner {
       timeoutMs: 1_200_000,
       env: spec.installMethod === "repo" ? this.envForRepo(spec) : this.envWithWeights(),
     }));
-    if (run.code !== 0 || !existsSync(outPath)) {
+    if (run.code !== 0 || !existsSync(staged)) {
+      try { rmSync(staged, { force: true }); } catch { /* best effort */ }
       return { ok: false, detail: `inference failed: ${(run.stderr || run.stdout).slice(-400)}` };
     }
+    // …AND IT MUST BE GEOMETRY. An exit code says the process ended, not that
+    // it produced a mesh (AE#10).
+    const usable = meshBytesAreUsable(outPath, readFileSync(staged));
+    if (!usable.ok) {
+      try { rmSync(staged, { force: true }); } catch { /* best effort */ }
+      return { ok: false, detail: `inference produced no usable geometry: ${usable.why}` };
+    }
+    renameSync(staged, outPath);
     return { ok: true, detail: outPath };
   }
 
@@ -501,4 +517,35 @@ def marching_cubes(density, level: float = 0.0):
 
 export function localAssetsRoot(): string {
   return ROOT_DIR();
+}
+
+/**
+ * Is this what a mesh file looks like?
+ *
+ * The acceptance test for a local image-to-3D run was "the process exited 0
+ * and the path exists" — and the path already existed, holding whatever was
+ * there before: invalid bytes, an old placeholder, a previous mesh. Every one
+ * of them was reported as newly generated (Codex 2026-09-12 AE#10).
+ */
+export function meshBytesAreUsable(path: string, bytes: Buffer): { ok: true } | { ok: false; why: string } {
+  if (bytes.length === 0) return { ok: false, why: "the file is empty" };
+  const lower = path.toLowerCase();
+  if (lower.endsWith(".glb")) {
+    return bytes.length > 12 && bytes.subarray(0, 4).toString("ascii") === "glTF"
+      ? { ok: true }
+      : { ok: false, why: "the bytes are not a glTF binary" };
+  }
+  if (lower.endsWith(".fbx")) {
+    return bytes.subarray(0, 18).toString("ascii").startsWith("Kaydara")
+      ? { ok: true }
+      : { ok: false, why: "the bytes are not an FBX" };
+  }
+  // OBJ: vertices AND faces. A vertex cloud draws nothing in Unity.
+  const text = bytes.subarray(0, 2_000_000).toString("utf8");
+  const vertices = /^v\s+-?\d/m.test(text);
+  const faces = /^f\s+\S/m.test(text);
+  if (!vertices || !faces) {
+    return { ok: false, why: `the file holds ${vertices ? "vertices but no faces" : "no vertex data"}` };
+  }
+  return { ok: true };
 }
