@@ -320,6 +320,31 @@ describe("a restart does not spend a mission retry, and never escalates", () => 
     }
   });
 
+  it("a budget re-arm whose resubmission THROWS parks the mission again (Codex 2026-09-12 P#18)", async () => {
+    vi.useFakeTimers();
+    try {
+      const { internals, blocks } = harness([]);
+      let exceeded = true;
+      (internals as unknown as { _unifiedBudgetManager: unknown })._unifiedBudgetManager = {
+        isGlobalExceeded: () => exceeded,
+      };
+      // A transient storage error, not a null return: the empty catch used to
+      // swallow it along with the last scheduled recovery.
+      (internals.taskManager as { retryTask: (id: string) => unknown }).retryTask = () => {
+        throw new Error("TaskStorage not initialized");
+      };
+      const task = { id: "task_1", chatId: "cli-local", prompt: "Mission: build the game", origin: "user", status: "failed" };
+
+      internals.scheduleMissionKeepAlive(task, "budget exceeded");
+      exceeded = false;
+      await vi.advanceTimersByTimeAsync(60 * 60_000 + 1_000);
+
+      expect(blocks.length).toBeGreaterThan(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("an escalation RECORDS itself so the caller does not overwrite it (Codex 2026-09-11 O#14)", () => {
     const { internals, notices } = harness([]);
     internals.missionRetries.set("mission:task_1", 10);

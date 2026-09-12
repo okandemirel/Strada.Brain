@@ -2326,7 +2326,19 @@ export class BackgroundExecutor {
             // A resubmission that returns nothing is not a resumption: the
             // callback used to end there, with the task still carrying the
             // budget-wait block and no timer left (Codex 2026-09-11 O#15).
-            const resumed = this.taskManager?.retryTask(task.id) ?? null;
+            // A THROW IS THE SAME OUTCOME AS NOTHING. The null case was
+            // handled and a transient storage error still fell into the empty
+            // catch below, taking the last scheduled recovery with it (Codex
+            // 2026-09-12 P#18).
+            let resumed: unknown = null;
+            try {
+              resumed = this.taskManager?.retryTask(task.id) ?? null;
+            } catch (err) {
+              getLoggerSafe().warn("Budget re-arm could not resubmit — parking the mission again", {
+                taskId: task.id,
+                error: err instanceof Error ? err.message : String(err),
+              });
+            }
             if (!resumed) this.scheduleMissionKeepAlive(task, reason);
           } catch { /* best-effort re-arm */ }
         }, 60 * 60_000);
