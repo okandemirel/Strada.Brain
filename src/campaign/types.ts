@@ -79,7 +79,18 @@ export interface CampaignMilestone {
    * played, so a second required platform's launch failure was invisible
    * (Codex 2026-09-12 W#11).
    */
-  playerRunsByTarget?: Array<{ target?: string; ok: boolean; detail: string }>;
+  playerRunsByTarget?: Array<{
+    target?: string;
+    ok: boolean;
+    detail: string;
+    /**
+     * That target's own play-through evidence. A sentence cannot be held
+     * against the document's numbers: "at least 60 fps" with one platform at
+     * 60 and another at 10 passed, because only the primary's evidence
+     * reached the claim check (Codex 2026-09-12 Y#J4.3).
+     */
+    evidence?: PlaythroughEvidence;
+  }>;
   coverageClosed?: boolean;
   /**
    * The project revision that closure was read on. A closure is only as good

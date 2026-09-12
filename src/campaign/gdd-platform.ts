@@ -302,7 +302,13 @@ export function frameRateAnswersPlatform(platform: GddPlatform, builtTarget: str
   const built = builtTarget.toLowerCase();
   // A NAMED target must be the one that was built: Android performance does
   // not answer an iOS-only requirement (Codex 2026-09-11 D#33).
-  if (platform.target) return built.includes(platform.target);
+  // ANY target the document named, not only the first: a document asking for
+  // Windows AND Linux has its frame rate answered by either platform's own
+  // measurement, and reading `target` alone made the second target's numbers
+  // unmeasurable — so a 10 fps Linux build satisfied "60 fps" by saying
+  // nothing (Codex 2026-09-12 Y#J4.3).
+  const named = platform.targets.length > 0 ? platform.targets : platform.target ? [platform.target] : [];
+  if (named.length > 0) return named.some((t) => built.includes(t));
   if (!platform.handheld) return true;
   return MOBILE_TARGETS.has(built) || [...MOBILE_TARGETS].some((t) => built.includes(t));
 }

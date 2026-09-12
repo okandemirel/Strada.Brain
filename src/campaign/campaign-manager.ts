@@ -3215,6 +3215,19 @@ export class CampaignManager {
       // MEASURED with the reason; a blown budget the medium can answer
       // refuses delivery like the other proofs, within the same bounce budget.
       const claims = isLast ? this.measureGddClaims(campaign, playthrough, player, build) : undefined;
+      // …AND FOR EVERY OTHER TARGET THAT RAN. A frame rate measured on one
+      // platform says nothing about another, and only the primary's evidence
+      // reached this check (Codex 2026-09-12 Y#J4.3).
+      const perTargetClaims = isLast
+        ? (milestone.playerRunsByTarget ?? []).slice(1).flatMap((run) => {
+            if (!run.evidence) return [];
+            const judged = this.measureGddClaims(campaign, playthrough, run.evidence, {
+              ...(build ?? { ran: false }),
+              target: run.target ?? build?.target,
+            });
+            return judged.refusal !== undefined ? [`in the built player for ${run.target ?? "a second target"}: ${judged.refusal}`] : [];
+          })
+        : [];
       if (claims) milestone.gddClaims = claims.lines;
       const claimsBroken = Boolean(claims?.refusal);
       // THE TREE MOVED WHILE ITS PROOFS WERE BEING READ. Whatever they say,
@@ -3304,6 +3317,7 @@ export class CampaignManager {
           );
         }
         if (claims?.refusal) missingProofs.push(claims.refusal.slice(0, 220));
+        for (const perTarget of perTargetClaims) missingProofs.push(perTarget.slice(0, 220));
         milestone.deliveryProofsMissing = missingProofs;
         // …and the IDENTITY of this round's failure, computed from the gate
         // outcomes themselves rather than from the sentences they produce.
@@ -4763,6 +4777,12 @@ export class CampaignManager {
         && artifactIsForeign(other.artifactPath, hostTarget());
       perTarget.push({
         target: other.target,
+        // THE WHOLE EVIDENCE, not a sentence: the GDD's numbers have to be
+        // held against each target's own measurement — "Windows and Linux; at
+        // least 60 fps" with Windows at 60 and Linux at 10 passed, because
+        // only the primary's evidence reached the claim check (Codex
+        // 2026-09-12 Y#J4.3).
+        ...(theirs.found ? { evidence: theirs } : {}),
         ok: theirs.found === true && theirs.ok === true,
         detail: foreignHere
           ? `cannot run here: ${why!.slice(0, 120)}`

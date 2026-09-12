@@ -3753,6 +3753,57 @@ describe("CampaignManager", () => {
     rmSync(join(projectRoot, "Recordings", "player-playthrough", "playthrough-verdict.json"), { recursive: true, force: true });
   });
 
+  it("the GDD's numbers are held against EVERY target that ran (Codex 2026-09-12 Y#J4.3)", async () => {
+    // "Windows and Linux; at least 60 fps" with Windows at 60 and Linux at 10
+    // passed: only the primary's evidence reached the claim check, and a
+    // secondary's play-through `ok` says nothing about a frame-rate budget.
+    tasks = new FakeTaskManager();
+    storage.close();
+    storage = new CampaignStorage(join(dir, "campaigns-per-target-fps.db"));
+    manager = new CampaignManager({
+      storage,
+      planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async (chatId, text) => { messages.push({ chatId, text }); },
+      projectRoot, retryAdoptionGraceMs: 10, completedSettleDelayMs: 0, milestoneTimeBoxMs: 60 * 60_000,
+      deliveryResumeDelayMs: 20,
+      verifyCompile: async () => ({ ok: true, ran: true, errors: 0 }),
+      buildPlayer: async (_root: string, target?: string) => ({
+        ran: true, ok: true,
+        target: target === "linux" ? "StandaloneLinux64" : "StandaloneWindows64",
+        artifactPath: target === "linux" ? "/tmp/Builds/Linux/Game.x86_64" : "/tmp/Builds/Windows/Game.exe",
+        sizeBytes: 70_000_000, durationMs: 90_000, scenes: 2,
+      }),
+      // Both players play to a clean outcome; the Linux one runs at 10 fps.
+      runPlayer: async (root, artifact) => {
+        const fps = artifact.includes("Linux") ? 10 : 60;
+        writePlayerVerdict(true, {
+          perf: { medium: "player", bootSeconds: 1.1, playSeconds: 10, playFrames: 600, avgFps: fps, worstFrameMs: 40 },
+        }, root);
+      },
+    });
+    manager.attachEvents();
+    const gdd = "# GDD\n\nRelease on Windows and Linux. Target 60 fps. The game ships 3 levels.";
+    const campaign = manager.startFromGdd(ctx, gdd, "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1), { timeout: 15_000 });
+    settleMilestone("sprint A done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2), { timeout: 15_000 });
+    settleMilestone("sprint B done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3), { timeout: 15_000 });
+    settleMilestone("integrated, all 42 tests pass");
+
+    await waitFor(
+      () => expect((storage.get(campaign.id)!.milestones[2]!.deliveryProofsMissing ?? []).join(" ")).toContain("in the built player for"),
+      { timeout: 15_000 },
+    );
+    const missing = (storage.get(campaign.id)!.milestones[2]!.deliveryProofsMissing ?? []).join(" ");
+    expect(missing).toContain("frame rate");
+    expect(storage.get(campaign.id)!.state).not.toBe("done");
+    // The secondary's own evidence is kept, not a sentence about it.
+    const runs = storage.get(campaign.id)!.milestones[2]!.playerRunsByTarget ?? [];
+    expect(runs[1]!.evidence?.perf?.avgFps).toBe(10);
+  });
+
   it("two targets cannot own ONE artifact (Codex 2026-09-12 Y#5)", async () => {
     // A build that writes both targets to the same path has produced one
     // product; the second target's "proof" would be the first one's file read
@@ -3937,8 +3988,11 @@ describe("CampaignManager", () => {
     expect(runs[0]!.ok).toBe(true);
     expect(runs[1]!.ok).toBe(false);
     expect(runs[1]!.detail).toContain("code 139");
-    // ONE RUN PER ARTIFACT, however many times the build names it (Y#5).
-    expect(played.filter((p) => p.includes("Linux"))).toHaveLength(1);
+    // ONE RUN PER ARTIFACT IN A MEASUREMENT, however many times the build
+    // names it (Y#5). Later rounds measure again, so this counts the first
+    // measurement only — the primary, then each distinct secondary.
+    expect(played.slice(0, 2).filter((p) => p.includes("Linux"))).toHaveLength(1);
+    expect(played.slice(0, 2).filter((p) => p.includes("Windows"))).toHaveLength(1);
 
   });
 
