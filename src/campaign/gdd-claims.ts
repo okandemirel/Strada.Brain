@@ -527,14 +527,6 @@ export function finishedSessionIndices(
 ): number[] {
   const catalog = playthrough?.sessionCount ?? 0;
   const seen = new Set<number>();
-  // DISTINCT CONTENT MUST LOOK DISTINCT. A catalogue reporting three levels,
-  // a StartSession that always loads the first, and an ActiveSession echoing
-  // the request gave three "verified" sessions of ONE level — every identity
-  // claim in that chain comes from the implementation under test (Codex
-  // 2026-09-13 AG#1). The runner's own fingerprint of what loaded is
-  // something else, and two sessions that rendered the same thing are one
-  // level played twice.
-  const fingerprintOwner = new Map<string, number>();
   for (const session of playthrough?.sessions ?? []) {
     // AN OUTCOME IT REACHED, stated. Excluding only "None" and "Refused" let a
     // record with no outcome at all — an empty string, a missing field — count
@@ -562,14 +554,6 @@ export function finishedSessionIndices(
     if (outcome === "" || outcome === "None" || outcome === "Refused") continue;
     if (!Number.isInteger(session.index) || session.index! < 1 || session.index! > Math.max(catalog, 1)) continue;
     if (!Number.isInteger(session.actions) || session.actions! <= 0) continue;
-    const fingerprint = session.contentFingerprint;
-    if (typeof fingerprint === "string" && fingerprint !== "") {
-      const owner = fingerprintOwner.get(fingerprint);
-      // The first session with a fingerprint keeps it; a later session that
-      // rendered exactly the same thing certifies no second level.
-      if (owner !== undefined && owner !== session.index) continue;
-      fingerprintOwner.set(fingerprint, session.index!);
-    }
     seen.add(session.index!);
   }
   return [...seen].sort((a, b) => a - b);
@@ -866,6 +850,23 @@ export function assessNumericClaims(
         const mustPlay = catalogMatches ? counted.sessionCount : claim.value;
         const beyondOneRun = mustPlay > PLAYED_SESSIONS_PER_RUN && finished >= PLAYED_SESSIONS_PER_RUN;
         const everyLevelPlayed = catalogMatches && finished >= mustPlay;
+        // THE SAME CONTENT, PLAYED TWICE, IS NOT TWO LEVELS — and the
+        // runner's fingerprint is evidence of that, not proof: two genuinely
+        // different levels built in one scene can share it (Codex 2026-09-13
+        // AG#1, AH#2). So it does not fail the claim and does not remove a
+        // session; it says the distinctness was not measured.
+        const shared = sessionsSharedContent(counted.sessions, finishedSessionIndices(counted));
+        if (shared !== undefined && everyLevelPlayed) {
+          return {
+            claim,
+            status: "unmeasured",
+            measured: counted.sessionCount,
+            note:
+              `the game's session catalog reports ${counted.sessionCount} and ${finished} session(s) reached an outcome, but the runner saw the ` +
+              `SAME content for session(s) ${shared.indices.join(", ")} — nothing here shows they are different levels`,
+            blocking: false,
+          };
+        }
         return {
           claim,
           status: everyLevelPlayed ? "met" : "not_met",
@@ -975,4 +976,32 @@ export function documentRequiresAnOutcome(gddText: string | undefined): boolean 
   // not fail the endless mode for lacking an ending it never claimed.
   if (ENDLESS_RE.test(text)) return false;
   return WIN_LOSE_RE.test(text);
+}
+
+/**
+ * Did the runner see the SAME content for sessions it played as different
+ * levels?
+ *
+ * The fingerprint — active scene, root names, renderer count — is evidence,
+ * not an equivalence relation: two genuinely different levels built in one
+ * scene can share it, and renaming a root makes one level look like two
+ * (Codex 2026-09-13 AH#2). So it never removes a session; it says the
+ * distinctness is UNMEASURED, which is the honest answer to "three sessions
+ * that all rendered the same thing" (AG#1).
+ */
+export function sessionsSharedContent(
+  sessions: ReadonlyArray<{ index?: number; contentFingerprint?: string }> | undefined,
+  counted: readonly number[],
+): { shared: true; fingerprint: string; indices: number[] } | undefined {
+  const byPrint = new Map<string, Set<number>>();
+  for (const s of sessions ?? []) {
+    const print = s.contentFingerprint;
+    if (typeof print !== "string" || print === "" || !Number.isInteger(s.index)) continue;
+    if (!counted.includes(s.index!)) continue;
+    byPrint.set(print, new Set([...(byPrint.get(print) ?? []), s.index!]));
+  }
+  for (const [fingerprint, indices] of byPrint) {
+    if (indices.size > 1) return { shared: true, fingerprint, indices: [...indices].sort((a, b) => a - b) };
+  }
+  return undefined;
 }
