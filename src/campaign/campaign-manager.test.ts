@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { hostname } from "node:os";
 import { execSync } from "node:child_process";
-import { CampaignManager, stripTimeBoxDirectives, UNMEASURABLE_PROOF_RE, UNRUNNABLE_HERE_RE, hasUnmeasurableProof, proofsSpanTwoRevisions } from "./campaign-manager.js";
+import { requirementKey, CampaignManager, stripTimeBoxDirectives, UNMEASURABLE_PROOF_RE, UNRUNNABLE_HERE_RE, hasUnmeasurableProof, proofsSpanTwoRevisions } from "./campaign-manager.js";
 import { CampaignStorage } from "./campaign-storage.js";
 import { describeBuild } from "./campaign-status.js";
 import type { CampaignPlanner } from "./campaign-planner.js";
@@ -3008,6 +3008,48 @@ describe("CampaignManager", () => {
 
     settleMilestone("dragon implemented, frames captured");
     await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+  });
+
+  it("a requirement is not its diagnostics (Codex 2026-09-12 AD#15)", () => {
+    // Reproduced by Codex: the same missing capability reported as "…,
+    // attempt 1" and "…, attempt 2" were two requirements. Each rewording got
+    // a fresh repair budget, and the changed text let the previous one be
+    // reconciled away unfixed — twenty iterations, twenty repairs, nineteen
+    // descriptions cleared.
+    const base = "EVIDENCE UNAVAILABLE — no tool for it in this run: audio generator unavailable";
+    expect(requirementKey(`${base}, attempt 1`)).toBe(requirementKey(`${base}, attempt 2`));
+    expect(requirementKey(`${base} (attempt 3 of 5)`)).toBe(requirementKey(base));
+    expect(requirementKey(`${base} — try 7`)).toBe(requirementKey(base));
+    expect(requirementKey("Shop: absent at 2026-09-12T21:14:00Z")).toBe(requirementKey("Shop: absent"));
+    expect(requirementKey("Shop: absent run a1b2c3d4")).toBe(requirementKey("Shop: absent"));
+    // …and two DIFFERENT requirements are still different.
+    expect(requirementKey("Save: absent")).not.toBe(requirementKey("Shop: absent"));
+    // A number that is part of what was asked for is not a diagnostic tail.
+    expect(requirementKey("The game ships 12 levels")).toBe("The game ships 12 levels");
+  });
+
+  it("never headlines a campaign that is not done as complete (Codex 2026-09-12 AD#10)", () => {
+    // Reproduced by Codex: a campaign with green milestones and a clean
+    // compile that FAILED because no entry scene could be opened — an error
+    // without the "NOT DELIVERED" prefix and an empty missing-proof list —
+    // was headlined "🏁 Campaign delivery — game build complete". And a
+    // stored `{state:"done", milestones: []}` produced the same headline.
+    const report = (over: Partial<Campaign>): string =>
+      (manager as unknown as { buildDeliveryReport(c: Campaign): string }).buildDeliveryReport({
+        id: "c1", chatId: "chat1", channelType: "cli", projectRoot,
+        gddPath: "docs/Game_GDD.md", state: "done", currentMilestone: 0,
+        milestones: [{ id: "m1", title: "Sprint A", prompt: "p", status: "green", attempts: 1 }],
+        createdAt: Date.now(), updatedAt: Date.now(),
+        ...over,
+      } as Campaign);
+
+    expect(report({ state: "failed", lastError: "no entry scene could be opened" })).toContain("NOT DELIVERED");
+    expect(report({ state: "failed", lastError: "no entry scene could be opened" })).toContain("no entry scene");
+    expect(report({ state: "failed" })).toContain("recorded no cause");
+    // A record with no sprint at all says so instead of reading as a delivery.
+    expect(report({ milestones: [] })).toContain("carries no sprint at all");
+    // …and a campaign that really is done still reads as delivered.
+    expect(report({})).toContain("game build complete");
   });
 
   it("a GREEN repair does not erase the requirement it did not implement (Codex 2026-09-12 AD#2)", async () => {

@@ -486,7 +486,22 @@ function coverageGapOf(m: { title: string; prompt?: string; coverageGap?: string
  * reconciliation and closure.
  */
 export function requirementKey(text: string): string {
-  return text.trim().replace(/\s+/g, " ");
+  // A REQUIREMENT IS NOT ITS DIAGNOSTICS. The whole text was the identity, so
+  // the same missing capability reported as "…audio generator unavailable,
+  // attempt 1" and "…attempt 2" were two different requirements: each
+  // rewording got a fresh repair budget, and the changed text also let the
+  // PREVIOUS one be reconciled away unfixed — twenty iterations scheduled
+  // twenty repairs and cleared nineteen descriptions (Codex 2026-09-12
+  // AD#15). Run-specific tails are not part of what is being asked for.
+  return text
+    .trim()
+    .replace(/\s+/g, " ")
+    // ", attempt 3" / " (attempt 3 of 5)" / " — try 2"
+    .replace(/[\s,;:—–-]*\(?\b(?:attempt|try|retry|round|pass|iteration)\b\s*#?\d+(?:\s*(?:of|\/)\s*\d+)?\)?\s*$/i, "")
+    // a trailing timestamp or run id the reporter appended
+    .replace(/[\s,;:—–-]*\b(?:at|on)\s+\d{4}-\d{2}-\d{2}[T\s][\d:.]+Z?\s*$/i, "")
+    .replace(/[\s,;:—–-]*\b(?:run|task)\s+[A-Za-z0-9_-]{6,}\s*$/i, "")
+    .trim();
 }
 
 /** A coverage requirement's identity: its own text, normalized — never a prefix. */
@@ -5763,8 +5778,19 @@ export class CampaignManager {
     // `lastError` and stores no missing-proof list, so its report was
     // headlined "game built" over an error that said the opposite (Codex
     // 2026-09-12 V#5, V#7).
+    // A CAMPAIGN THAT IS NOT `done` IS NOT DELIVERED, whatever its error
+    // happens to say. The headline keyed off a "NOT DELIVERED" prefix, so a
+    // campaign that failed because no entry scene could be opened — an error
+    // without that prefix and an empty missing-proof list — was headlined
+    // "game build complete" (Codex 2026-09-12 AD#10). The STATE decides.
     const stoppedShort =
-      campaign.state !== "done" && (campaign.lastError ?? "").startsWith("NOT DELIVERED") ? campaign.lastError! : undefined;
+      campaign.state === "done"
+        ? undefined
+        : (campaign.lastError ?? "").startsWith("NOT DELIVERED")
+        ? campaign.lastError!
+        : `NOT DELIVERED — the campaign ended ${campaign.state}${
+            campaign.lastError ? `: ${campaign.lastError.slice(0, 200)}` : " and recorded no cause"
+          }`;
     const lines = [
       structureRefused
         ? `⛔ **NOT DELIVERED — the shipped scenes do not render the project's own art**`
@@ -5776,6 +5802,11 @@ export class CampaignManager {
           }**`
         : stoppedShort !== undefined
         ? `⛔ **${stoppedShort.slice(0, 240)}**`
+        // …AND A RECORD WITH NOTHING IN IT PROVES NOTHING. A stored
+        // `{state:"done", milestones: []}` produced the same headline as a
+        // campaign that had actually run its ladder (AD#10).
+        : campaign.milestones.length === 0
+        ? `⚠️ **Campaign delivery — this record carries no sprint at all, so nothing here was measured**`
         : unfinished.length === 0
         ? `🏁 **Campaign delivery — game build complete**`
         : `🏁 **Campaign delivery — game built, ${unfinished.length} sprint${unfinished.length > 1 ? "s" : ""} did NOT land green**`,
