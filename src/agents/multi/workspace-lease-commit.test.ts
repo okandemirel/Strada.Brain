@@ -15,6 +15,7 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
+import { runProcess } from "../../utils/process-runner.js";
 import { WorkspaceLeaseManager, DEFAULT_WORKSPACE_COPY_EXCLUDES, isAlreadyGone, reconcileSeedBaseline, stampUnchanged, existedAtSeed, readLeaseSeed, writeLeaseSeed } from "./workspace-lease-manager.js";
 import type { SeedStamp } from "./workspace-lease-manager.js";
 
@@ -951,6 +952,43 @@ describe("lease commit replay (measured 2026-09-10: three worker commits danglin
       expect(shown).toBe("original");
     }
     expect(result.commitsReplayed?.replayed ?? 0).toBe(0);
+  });
+
+  it("a series that cannot be built whole leaves the branch where it was (Codex 2026-09-12 Q#7)", async () => {
+    // HEAD moved once per commit, so a later commit that could not be staged
+    // left the project's history ending at an EARLIER version of the work.
+    makeGitRepo();
+    const before = git(source, "rev-parse HEAD");
+    let readTrees = 0;
+    const mgr = new WorkspaceLeaseManager({
+      projectRoot: source,
+      leaseRoot,
+      additionalExcludes: ["Library", "Temp", "Logs", "Builds", "obj"],
+      commandRunner: (async (spec: { args: string[] }) => {
+        // The SECOND commit of the series cannot be staged.
+        if (spec.args.includes("read-tree") && ++readTrees === 2) {
+          return { exitCode: 1, stdout: "", stderr: "simulated index failure", timedOut: false };
+        }
+        return runProcess(spec as never);
+      }) as never,
+    });
+    const lease = await mgr.acquireLease({ label: "t" });
+    const inLease = join(lease.path, "Assets", "Scripts", "Board.cs");
+    writeFileSync(inLease, "v1", "utf8");
+    git(lease.path, "add -A");
+    git(lease.path, 'commit -q -m "feat: board v1"');
+    writeFileSync(inLease, "v2", "utf8");
+    git(lease.path, "add -A");
+    git(lease.path, 'commit -q -m "feat: board v2"');
+
+    const result = await lease.commit();
+    await lease.release();
+
+    // Nothing was applied: the files are in the project as uncommitted work,
+    // and no commit claims a version of them that is not the final one.
+    expect(git(source, "rev-parse HEAD")).toBe(before);
+    expect(result.commitsReplayed?.replayed).toBe(0);
+    expect(readFileSync(join(source, "Assets", "Scripts", "Board.cs"), "utf8")).toBe("v2");
   });
 
   it("a path whose current content cannot be read is held, not replayed (Codex 2026-09-12 P#10)", async () => {

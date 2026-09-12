@@ -1497,14 +1497,22 @@ export class WorkspaceLeaseManager {
         chunk.forEach((path, at) => out.set(path, shas[at]?.length === 40 ? shas[at] : undefined));
         return true;
       };
-      for (let i = 0; i < paths.length; i += 100) {
-        const chunk = paths.slice(i, i + 100);
-        if (await run(chunk)) continue;
-        // One unreadable path fails its whole batch: ask again one at a time
-        // so a single missing file cannot decide for ninety-nine others.
-        for (const path of chunk) {
-          if (!(await run([path]))) out.set(path, undefined);
+      // One unreadable path fails its whole batch. Asking again ONE AT A TIME
+      // turned a 26 000-path tree with one bad file per batch into 26 260 git
+      // invocations; halving the failed batch finds the bad paths in log time
+      // (Codex 2026-09-12 Q#7).
+      const resolve = async (chunk: readonly string[]): Promise<void> => {
+        if (chunk.length === 0 || await run(chunk)) return;
+        if (chunk.length === 1) {
+          out.set(chunk[0]!, undefined);
+          return;
         }
+        const half = Math.floor(chunk.length / 2);
+        await resolve(chunk.slice(0, half));
+        await resolve(chunk.slice(half));
+      };
+      for (let i = 0; i < paths.length; i += 100) {
+        await resolve(paths.slice(i, i + 100));
       }
       return out;
     };
@@ -1521,11 +1529,17 @@ export class WorkspaceLeaseManager {
         paths: [...withdrawn].slice(0, 10),
       });
     }
+    // THE CHAIN IS BUILT BEFORE THE BRANCH MOVES. Moving HEAD once per commit
+    // left the project's history ending at an EARLIER version when a later
+    // commit in the series could not be staged (Codex 2026-09-12 Q#7). The
+    // objects are written either way; only the ref waits.
+    const startHead = await git(["rev-parse", "--verify", "HEAD"]);
+    if (startHead.exitCode !== 0) return undefined; // an unborn branch has nothing to build on
+    const baseSha = startHead.stdout.trim();
+    let headSha = baseSha;
+    let failedMidSeries = false;
     try {
       for (const commit of commits) {
-        const head = await git(["rev-parse", "--verify", "HEAD"]);
-        if (head.exitCode !== 0) break; // an unborn branch has nothing to build on
-        const headSha = head.stdout.trim();
         const entries = perCommit.get(commit.sha);
         if (entries === undefined) { skipped++; continue; }
         const adds: DiffEntry[] = [];
@@ -1550,7 +1564,7 @@ export class WorkspaceLeaseManager {
         if (adds.length === 0 && removes.length === 0) { skipped++; continue; }
         rmSync(tmpIndex, { force: true });
         const read = await git(["read-tree", headSha], { env });
-        if (read.exitCode !== 0) { skipped++; continue; }
+        if (read.exitCode !== 0) { skipped++; failedMidSeries = true; continue; }
         let staged = true;
         for (let i = 0; i < adds.length && staged; i += 200) {
           const chunk = adds.slice(i, i + 200).flatMap((a) => ["--cacheinfo", `${a.mode},${a.sha},${a.path}`]);
@@ -1559,7 +1573,7 @@ export class WorkspaceLeaseManager {
         for (let i = 0; i < removes.length && staged; i += 200) {
           staged = (await git(["update-index", "--force-remove", "--", ...removes.slice(i, i + 200)], { env })).exitCode === 0;
         }
-        if (!staged) { skipped++; continue; }
+        if (!staged) { skipped++; failedMidSeries = true; continue; }
         const tree = await git(["write-tree"], { env });
         const headTree = await git(["rev-parse", `${headSha}^{tree}`]);
         if (tree.exitCode !== 0 || headTree.exitCode !== 0 || tree.stdout.trim() === headTree.stdout.trim()) { skipped++; continue; }
@@ -1572,20 +1586,40 @@ export class WorkspaceLeaseManager {
         );
         if (made.exitCode !== 0) {
           getLoggerSafe().warn("Could not replay a lease commit into the project", { sha: commit.sha, stderr: made.stderr.trim().slice(0, 200) });
+          failedMidSeries = true;
           break; // later commits build on this one
         }
-        const newSha = made.stdout.trim();
-        const moved = await git(["update-ref", "-m", `strada lease replay: ${commit.message.split("\n")[0] ?? ""}`, "HEAD", newSha, headSha]);
-        if (moved.exitCode !== 0) {
-          getLoggerSafe().warn("Project HEAD moved during lease commit replay — stopped", { sha: commit.sha, stderr: moved.stderr.trim().slice(0, 200) });
-          break;
-        }
+        headSha = made.stdout.trim();
+        const newSha = headSha;
         replayedShas.add(commit.sha);
         projectShas.push(newSha);
         // Structured fields, never a re-split string: a path with a comma in
         // it ("Assets/Hero,Idle.cs") was cut at the wrong place (P#10).
         for (const a of adds) touched.add(a.path);
         for (const r of removes) touched.add(r);
+      }
+      // ONE MOVE, AT THE END. A series that could not be built whole leaves
+      // the branch where it was: the files are already in the project as
+      // uncommitted changes, and a history that stops halfway describes a
+      // version of the work nobody has (Q#7).
+      if (failedMidSeries && headSha !== baseSha) {
+        getLoggerSafe().warn("Lease replay could not build the whole series — the project's branch was left where it was", {
+          built: replayedShas.size,
+          of: commits.length,
+        });
+        replayedShas.clear();
+        projectShas.length = 0;
+        touched.clear();
+      } else if (headSha !== baseSha) {
+        const moved = await git(["update-ref", "-m", `strada lease replay: ${commits[0]?.message.split("\n")[0] ?? ""}`, "HEAD", headSha, baseSha]);
+        if (moved.exitCode !== 0) {
+          getLoggerSafe().warn("Project HEAD moved during lease commit replay — nothing was applied", {
+            stderr: moved.stderr.trim().slice(0, 200),
+          });
+          replayedShas.clear();
+          projectShas.length = 0;
+          touched.clear();
+        }
       }
       if (touched.size > 0) {
         // The real index still describes these paths as they were before the
