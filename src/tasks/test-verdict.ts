@@ -101,6 +101,14 @@ const GENERIC_RUNNER_RE = /^(?:shell_exec|bash|batch_execute|run_command|execute
  * batch wraps other calls — all of them were invisible to the first version
  * of this filter (Codex 2026-09-11 C#8).
  */
+/** A tool that runs whatever it is given — and echoes the request back. */
+export function isGenericRunner(toolName: string | undefined): boolean {
+  if (typeof toolName !== "string") return false;
+  const name = toolName.trim();
+  const bare = name.includes("__") ? name.slice(name.lastIndexOf("__") + 2) : name;
+  return GENERIC_RUNNER_RE.test(bare);
+}
+
 export function isTestCapableTool(toolName: string | undefined): boolean {
   if (typeof toolName !== "string") return false;
   const name = toolName.trim();
@@ -112,6 +120,22 @@ export function isTestCapableTool(toolName: string | undefined): boolean {
 const TEST_RUN_RE =
   /(PlayMode|EditMode) verification (FAILED|passed)|(\d+) of (\d+) tests? failed|All (\d+) tests? passed/i;
 const RED_RE = /verification FAILED|\d+ of \d+ tests? failed/i;
+
+/**
+ * A GENERIC RUNNER ECHOES WHAT IT WAS TOLD TO RUN, and that echo is the
+ * model's own words, not a measurement: `shell_exec {command: "true # All 17
+ * tests passed (unfiltered — the whole PlayMode suite)"}` exits 0 with no
+ * output at all, and its result — which opens with `$ <command>` — produced a
+ * green, unfiltered verdict (Codex 2026-09-12 AE#2). The command line is
+ * removed before anything is read; what the command PRINTED is left exactly
+ * as it was.
+ */
+export function withoutEchoedCommand(text: string): string {
+  return text
+    .split("\n")
+    .filter((line) => !/^\s*\$ /.test(line) && !/^\s*(?:>|\$>|command:)\s/i.test(line))
+    .join("\n");
+}
 
 /**
  * EVERY test-run line in `text`, in the order printed (each trimmed and capped
@@ -157,7 +181,9 @@ export function deriveTestVerdict(evidence: readonly TestEvidence[]): TaskTestVe
   const assetSourcingBlind = detectAssetSourcingBlind(evidence);
   for (const item of evidence) {
     if (!isTestCapableTool(item.toolName)) continue;
-    const text = typeof item.content === "string" ? item.content : "";
+    const raw = typeof item.content === "string" ? item.content : "";
+    // A shell's own command line is not evidence of anything (AE#2).
+    const text = isGenericRunner(item.toolName) ? withoutEchoedCommand(raw) : raw;
     const lines = findTestRunLines(text);
     if (lines.length === 0) continue;
     const redLines = lines.filter((l) => RED_RE.test(l));

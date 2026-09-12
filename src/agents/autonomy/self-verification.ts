@@ -41,8 +41,17 @@ const VERIFICATION_COMMAND_HEAD_RE = new RegExp(
 
 /** True when any segment of a shell chain (`cd x && npm test`) invokes a verifier. */
 function shellCommandVerifies(command: string): boolean {
-  return command
-    .split(/\s*(?:&&|\|\||[;|\n])\s*/u)
+  // A VERIFIER BEHIND `||` MAY NEVER RUN. `true || dotnet build` exits 0
+  // having built nothing, and it cleared the compile debt of every edited
+  // file (Codex 2026-09-12 AE#3). A segment that can only run when the one
+  // before it FAILED is not a verification this command performed — unless
+  // something before the `||` verifies too.
+  const reachable = command
+    .split(/\s*(?:\|\|)\s*/u)
+    .slice(0, 1)
+    .join("");
+  return reachable
+    .split(/\s*(?:&&|[;|\n])\s*/u)
     .map((segment) => segment.replace(/^[\s(]+/u, ""))
     .some((segment) => VERIFICATION_COMMAND_HEAD_RE.test(segment));
 }
@@ -219,6 +228,21 @@ export class SelfVerification {
         const bodyReportsFailure =
           runsTests(executedTool.toolName, executedTool.input) &&
           /\b\d+ of \d+ tests? failed|PlayMode verification FAILED/i.test(bodyText);
+        // AN INSPECTION IS NOT A VERIFICATION. A symbol search that returned
+        // "No matches" and a console read cleared the compile debt of every
+        // edited file, because "did not fail" was read as "compiled" (Codex
+        // 2026-09-12 AE#3). They answer questions; they do not build.
+        if (INSPECTION_ONLY_TOOLS.has(executedTool.toolName)) continue;
+        // …AND A RESULT THAT SAYS NOTHING SETTLES NOTHING. `{}` with no error,
+        // `{"isCompiling":true}`, a `--help` usage dump and a shell command
+        // that skipped its build (`true || dotnet build`, which exits 0 with
+        // no output) all produced lastBuildOk: true and emptied the pending
+        // list (AE#3). An inconclusive answer leaves the debt where it was.
+        if (!executedTool.isError && !verificationIsConclusive(bodyText, { shell: executedTool.toolName === "shell_exec" })) {
+          this.lastVerificationAt = Date.now();
+          this.lastBuildOk = null;
+          continue;
+        }
         const ok = !executedTool.isError && !bodyReportsFailure;
         this.lastBuildOk = ok;
         this.lastVerificationAt = Date.now();
@@ -550,6 +574,35 @@ export function looksLikeTestFile(path: string): boolean {
   // Latest.cs is not, and lowercasing first makes them the same string.
   return /Tests?\.(?:cs|ts|tsx|js)$/u.test(normalized)
     || /\.(?:test|spec)\.(?:ts|tsx|js)$/u.test(normalized);
+}
+
+/**
+ * Tools that answer a QUESTION about the tree rather than building it. Their
+ * success says the question was answered, never that the code compiles.
+ */
+const INSPECTION_ONLY_TOOLS: ReadonlySet<string> = new Set([
+  "csharp_symbol_search", "unity_console_read", "unity_console_analyze",
+]);
+
+/**
+ * Does this verifier's own output settle anything?
+ *
+ * A body that is empty, still in progress, or a usage dump is not a verdict.
+ * Every one of those cleared the compile debt of every edited file because
+ * the tool did not set isError (Codex 2026-09-12 AE#3).
+ */
+export function verificationIsConclusive(body: string, opts: { shell?: boolean } = {}): boolean {
+  const text = body.trim();
+  // A SILENT SHELL VERIFIER IS A PASS: `tsc --noEmit` and `dotnet build -v q`
+  // print nothing when they succeed, and the exit code is what the tool's
+  // error flag already carries. An MCP tool that answers `{}` has told us
+  // nothing at all.
+  if (text === "" || text === "{}" || text === "[]") return opts.shell === true;
+  // Still running: a compile in flight has no result yet.
+  if (/"?is(?:Compiling|Reloading)"?\s*[:=]\s*true|\bcompilation in progress\b|\bcompiling\b\s*\.{3}/i.test(text)) return false;
+  // A help screen is the tool explaining itself, not a build.
+  if (/^\s*(?:usage|description):/im.test(text) && !/\berror\b|\bpassed\b|\bsucceeded\b/i.test(text)) return false;
+  return true;
 }
 
 /** Tools that RUN tests, as opposed to compiling the assemblies that hold them. */

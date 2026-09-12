@@ -297,4 +297,63 @@ describe("SelfVerification", () => {
       expect(verifier.needsVerification()).toBe(false);
     });
   });
+
+  /**
+   * Codex round AE#3, reproduced: a write to Assets/Rules.cs followed by an
+   * inspection, an empty result, a compile still in flight, a usage dump or a
+   * build that never ran all produced lastBuildOk: true, an empty pending
+   * list and needsVerification(): false.
+   */
+  describe("an inspection is not a verification (Codex 2026-09-12 AE#3)", () => {
+    const wrote = (): SelfVerification => {
+      const verifier = new SelfVerification();
+      verifier.track("file_write", { path: "Assets/Rules.cs" }, { toolCallId: "w", content: "written", isError: false });
+      expect(verifier.needsVerification()).toBe(true);
+      return verifier;
+    };
+
+    it("keeps the debt when a tool only ANSWERED A QUESTION", () => {
+      for (const [tool, body] of [
+        ["csharp_symbol_search", "No matches"],
+        ["unity_console_read", "[]"],
+        ["unity_console_analyze", "no errors in the console"],
+      ] as const) {
+        const verifier = wrote();
+        verifier.track(tool, {}, { toolCallId: "v", content: body, isError: false });
+        expect(verifier.needsVerification(), tool).toBe(true);
+        expect(verifier.getState().pendingFiles.has("Assets/Rules.cs"), tool).toBe(true);
+      }
+    });
+
+    it("keeps the debt when the verifier settled nothing", () => {
+      for (const body of [
+        "{}",
+        '{"success":false,"isCompiling":true}',
+        "Usage: dotnet build [options]\nDescription:\n  Builds a project",
+      ]) {
+        const verifier = wrote();
+        verifier.track("unity_compile_status", {}, { toolCallId: "v", content: body, isError: false });
+        expect(verifier.needsVerification(), body).toBe(true);
+        expect(verifier.getState().lastBuildOk, body).toBeNull();
+      }
+    });
+
+    it("does not accept a build the command SKIPPED", () => {
+      // `true || dotnet build` exits 0 having built nothing.
+      const verifier = wrote();
+      verifier.track("shell_exec", { command: "true || dotnet build" }, { toolCallId: "v", content: "$ true || dotnet build\nExit code: 0", isError: false });
+      expect(verifier.needsVerification()).toBe(true);
+      // …while a real build still settles it, silent success included.
+      const ok = wrote();
+      ok.track("shell_exec", { command: "dotnet build || echo failed" }, { toolCallId: "v", content: "$ dotnet build\nExit code: 0", isError: false });
+      expect(ok.needsVerification()).toBe(false);
+    });
+
+    it("still settles on a conclusive answer", () => {
+      const verifier = wrote();
+      verifier.track("unity_compile_status", {}, { toolCallId: "v", content: '{"isCompiling":false,"compileIssueCount":0}', isError: false });
+      expect(verifier.needsVerification()).toBe(false);
+      expect(verifier.getState().lastBuildOk).toBe(true);
+    });
+  });
 });
