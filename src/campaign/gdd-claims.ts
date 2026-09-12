@@ -68,9 +68,9 @@ function toSeconds(value: number, unit: string): number {
 
 const FPS_RE = /\b(\d{2,3})\s*(?:fps|frames?\s+per\s+second)\b/gi;
 const BOOT_RE =
-  /\b(?:load(?:ing|s)?|boot(?:s|ing)?|start-?up|launch(?:es|ing)?|cold\s+start|time\s+to\s+(?:play|interactive|first\s+frame))\b[^.\n]{0,60}?(?:\b(?:under|below|within|less\s+than|no\s+more\s+than|at\s+most|max(?:imum)?(?:\s+of)?)\b|<=?|≤)\s*(\d+(?:\.\d+)?)\s*(ms|milliseconds?|s|secs?|seconds?|min(?:ute)?s?)\b/gi;
+  /\b(?:load(?:ing|s)?|boot(?:s|ing)?|start-?up|launch(?:es|ing)?|cold\s+start|time\s+to\s+(?:play|interactive|first\s+frame))\b[^.;\n]{0,60}?(?:\b(?:under|below|within|less\s+than|no\s+more\s+than|at\s+most|max(?:imum)?(?:\s+of)?)\b|<=?|≤)\s*(\d+(?:\.\d+)?)\s*(ms|milliseconds?|s|secs?|seconds?|min(?:ute)?s?)\b/gi;
 const BOOT_REVERSED_RE =
-  /\b(?:under|below|within|less\s+than|no\s+more\s+than|at\s+most)\s*(\d+(?:\.\d+)?)\s*(ms|milliseconds?|s|secs?|seconds?|min(?:ute)?s?)\b[^.\n]{0,40}?\b(?:to\s+)?(?:load(?:ing)?|boot(?:ing)?|start-?up|launch|first\s+frame|interactive)\b/gi;
+  /\b(?:under|below|within|less\s+than|no\s+more\s+than|at\s+most)\s*(\d+(?:\.\d+)?)\s*(ms|milliseconds?|s|secs?|seconds?|min(?:ute)?s?)\b[^.;\n]{0,40}?\b(?:to\s+)?(?:load(?:ing)?|boot(?:ing)?|start-?up|launch|first\s+frame|interactive)\b/gi;
 /**
  * A count with its separators and an optional "+": "20 levels", "3,000+
  * levels", "1.200 Level" — a four-digit catalogue used to match nothing at
@@ -79,7 +79,7 @@ const BOOT_REVERSED_RE =
  * (Codex 2026-09-12 U#F3).
  */
 const LEVEL_COUNT_RE =
-  /\b(\d{1,3}(?:[.,]\d{3})+|\d{1,5})\s*(\+|\s+or\s+(?:more|fewer|less))?\s+(?:levels|stages|rounds|puzzles|worlds|chapters|waves)\b/gi;
+  /\b(\d{1,3}(?:[.,]\d{3})+|\d{1,5})\s*(\+|\s+or\s+(?:more|fewer|less))?\s+((?:(?!(?:of|per|in|for|across|with|and|to|from|between|by|over|after|before|than|each|about|up)\b)[a-z][a-z-]{2,14}\s+){0,3})(?:levels|stages|rounds|puzzles|worlds|chapters|waves)\b/gi;
 /**
  * The subject of the timing is a LEVEL opening, not the application starting.
  * Read on a window that reaches BEHIND the match, because the boot regex
@@ -93,6 +93,12 @@ const COUNT_AT_LEAST_RE =
 const COUNT_AT_MOST_RE =
   /(?:\b(?:up\s+to|at\s+most|no\s+more\s+than|not\s+more\s+than|max(?:imum)?(?:\s+of)?|fewer\s+than|less\s+than)\b|<=|≤)\s*$/i;
 const COUNT_OR_MORE_AHEAD_RE = /^\s*(?:or\s+more|\+|and\s+up)\b/i;
+
+/** The text since the last clause boundary — a subject cannot be read across one. */
+function clauseTail(before: string): string {
+  const boundary = Math.max(before.lastIndexOf(";"), before.lastIndexOf("."), before.lastIndexOf("\n"));
+  return boundary >= 0 ? before.slice(boundary + 1) : before;
+}
 
 /** A number written with thousands separators: "3,000" and "3.000" are 3000. */
 function countValue(digits: string): number {
@@ -109,12 +115,34 @@ export function countComparator(text: string, at: number, matched: string, quali
   // noun, so the count regex carries it.
   if (qualifier.includes("+") || /\bor\s+more\b/i.test(qualifier)) return "min";
   if (/\bor\s+(?:fewer|less)\b/i.test(qualifier)) return "max";
-  const before = text.slice(Math.max(0, at - 40), at);
+  const before = clauseTail(text.slice(Math.max(0, at - 40), at));
   const after = text.slice(at + matched.length, at + matched.length + 20);
   if (COUNT_OR_MORE_AHEAD_RE.test(after)) return "min";
   if (COUNT_AT_MOST_RE.test(before)) return "max";
   if (COUNT_AT_LEAST_RE.test(before)) return "min";
   return "eq";
+}
+
+/**
+ * A STRICT bound on a whole number is a bound on the next one: "more than 12
+ * levels" is at least thirteen, "fewer than 12" is at most eleven. Read as
+ * inclusive, a game with exactly twelve satisfied both (Codex 2026-09-12 V).
+ */
+const COUNT_STRICTLY_MORE_RE = /(?:\b(?:more\s+than|over|above|beyond)\b|>)\s*$/i;
+const COUNT_STRICTLY_FEWER_RE = /(?:\b(?:fewer\s+than|less\s+than|under|below)\b|<)\s*$/i;
+
+export function countBound(
+  text: string,
+  at: number,
+  matched: string,
+  qualifier: string,
+  value: number,
+): { comparator: "min" | "max" | "eq"; value: number } {
+  const comparator = countComparator(text, at, matched, qualifier);
+  const before = clauseTail(text.slice(Math.max(0, at - 40), at));
+  if (comparator === "min" && COUNT_STRICTLY_MORE_RE.test(before)) return { comparator, value: value + 1 };
+  if (comparator === "max" && COUNT_STRICTLY_FEWER_RE.test(before)) return { comparator, value: Math.max(0, value - 1) };
+  return { comparator, value };
 }
 const CONTAINER_WORD_RE = /\b(?:worlds|chapters|acts|episodes|zones)\b/i;
 const LEVEL_WORD_AHEAD_RE = /\b\d{1,3}\s+(?:levels|stages|rounds|puzzles|waves)\b/i;
@@ -165,7 +193,15 @@ export function extractNumericClaims(gddText: string): { claims: NumericClaim[];
   };
   for (const m of text.matchAll(FPS_RE)) {
     const value = Number(m[1]);
-    if (value >= 10 && value <= 240) push({ kind: "fps", comparator: "min", value, text: fragment(text, m.index ?? 0, m[0].length) }, m.index ?? 0);
+    if (value < 10 || value > 240) continue;
+    // A frame-rate figure is a FLOOR unless the document says otherwise: "at
+    // most 30 fps" (a cap, to save battery) was read as a demand for at least
+    // thirty (Codex 2026-09-12 V).
+    const capped = COUNT_AT_MOST_RE.test(clauseTail(text.slice(Math.max(0, (m.index ?? 0) - 40), m.index ?? 0)));
+    push(
+      { kind: "fps", comparator: capped ? "max" : "min", value, text: fragment(text, m.index ?? 0, m[0].length) },
+      m.index ?? 0,
+    );
   }
   for (const re of [BOOT_RE, BOOT_REVERSED_RE]) {
     for (const m of text.matchAll(re)) {
@@ -177,7 +213,11 @@ export function extractNumericClaims(gddText: string): { claims: NumericClaim[];
       // open (Codex 2026-09-12 U#F3, U#F10). They are separate intervals, and
       // only the producer can separate them.
       const at = m.index ?? 0;
-      const subject = text.slice(Math.max(0, at - 20), at + m[0].length);
+      // WITHIN THE CLAUSE. The lookbehind reached across the sentence before
+      // it, so "Map loads fast; boot under 6 s" read the only boot budget in
+      // the document as a level-load figure and stopped measuring it (Codex
+      // 2026-09-12 V, a regression in my own U#F3 fix).
+      const subject = clauseTail(text.slice(Math.max(0, at - 20), at)) + m[0];
       const kind: ClaimKind = LOADS_A_LEVEL_RE.test(subject) ? "level_load_seconds" : "boot_seconds";
       push({ kind, comparator: "max", value, text: fragment(text, m.index ?? 0, m[0].length) }, m.index ?? 0);
     }
@@ -205,15 +245,28 @@ export function extractNumericClaims(gddText: string): { claims: NumericClaim[];
     // not a level count when the sentence goes on to give one (Codex
     // 2026-09-11 C#23).
     if (CONTAINER_WORD_RE.test(m[0]) && LEVEL_WORD_AHEAD_RE.test(text.slice((m.index ?? 0) + m[0].length, (m.index ?? 0) + m[0].length + 40))) continue;
-    const value = countValue(m[1] ?? "");
-    const comparator = countComparator(text, m.index ?? 0, m[0], m[2] ?? "");
-    if (value >= 1 && value <= 100_000) {
-      push({ kind: "level_count", comparator, value, text: fragment(text, m.index ?? 0, m[0].length) }, m.index ?? 0);
+    const bound = countBound(text, m.index ?? 0, m[0], m[2] ?? "", countValue(m[1] ?? ""));
+    if (bound.value >= 1 && bound.value <= 100_000) {
+      push(
+        { kind: "level_count", comparator: bound.comparator, value: bound.value, text: fragment(text, m.index ?? 0, m[0].length) },
+        m.index ?? 0,
+      );
     }
   }
   for (const m of text.matchAll(SESSION_RE)) {
     const unit = m[3] ?? "s";
     const upper = toSeconds(Number(m[2] ?? m[1]), unit);
+    // "Each round lasts AT LEAST 90 seconds" is a floor, and reading it as a
+    // ceiling failed every round that honoured it (Codex 2026-09-12 V). The
+    // clause's own words decide; a range still carries both bounds.
+    const clause = clauseTail(text.slice(Math.max(0, (m.index ?? 0) - 10), (m.index ?? 0) + m[0].length));
+    const floorOnly = m[2] === undefined && /(?:\b(?:at\s+least|minimum(?:\s+of)?|no\s+shorter\s+than|no\s+less\s+than|more\s+than)\b|>=|≥)/i.test(clause);
+    if (floorOnly) {
+      if (upper > 0 && upper <= 4 * 3600) {
+        push({ kind: "session_seconds", comparator: "min", value: upper, text: fragment(text, m.index ?? 0, m[0].length) }, m.index ?? 0);
+      }
+      continue;
+    }
     if (upper > 0 && upper <= 4 * 3600) push({ kind: "session_seconds", comparator: "max", value: upper, text: fragment(text, m.index ?? 0, m[0].length) }, m.index ?? 0);
     // "a round lasts 30–60 seconds" has a FLOOR as well: only the ceiling was
     // read, so a one-second round met the claim (Codex 2026-09-11 B#19).
@@ -330,7 +383,9 @@ export function assessNumericClaims(
               blocking: false,
             };
           }
-          const met = playerPerf.avgFps >= claim.value;
+          // The comparator the document stated: a cap ("at most 30 fps", to
+          // save battery) is met by staying under it (Codex 2026-09-12 V).
+          const met = claim.comparator === "max" ? playerPerf.avgFps <= claim.value : playerPerf.avgFps >= claim.value;
           return {
             claim,
             status: met ? "met" : "not_met",
@@ -455,9 +510,7 @@ export function assessNumericClaims(
         // The waiver is for what ONE RUN cannot reach, so it applies only when
         // the run actually played its full share: a 13-level game with one
         // session played was waived entirely (Codex 2026-09-11 C#21).
-        const beyondOneRun =
-          Math.max(claim.value, claim.comparator === "min" ? playthrough.sessionCount : 0) > PLAYED_SESSIONS_PER_RUN
-          && finished >= PLAYED_SESSIONS_PER_RUN;
+
         // A SHORTFALL IS NOT A PASS. `met` used to be true once the run had
         // played its own share, so a 24-level game reported status "met" with
         // twelve levels never played (Codex 2026-09-12 S#11). The status is
@@ -466,7 +519,12 @@ export function assessNumericClaims(
         // How many levels must be played to an outcome: the catalogue's own
         // size when the document set a floor and the game shipped more, and
         // the document's number otherwise.
-        const mustPlay = claim.comparator === "min" ? Math.max(claim.value, playthrough.sessionCount) : claim.value;
+        // THE CATALOGUE THE GAME SHIPS, not the number the document permits:
+        // "at most 12 levels" with eight shipped and all eight played
+        // demanded twelve played levels and refused the delivery (Codex
+        // 2026-09-12 V).
+        const mustPlay = catalogMatches ? playthrough.sessionCount : claim.value;
+        const beyondOneRun = mustPlay > PLAYED_SESSIONS_PER_RUN && finished >= PLAYED_SESSIONS_PER_RUN;
         const everyLevelPlayed = catalogMatches && finished >= mustPlay;
         return {
           claim,

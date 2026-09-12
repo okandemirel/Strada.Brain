@@ -626,6 +626,10 @@ describe("a task a restart PAUSED can be resumed (measured live 2026-09-11 21:12
 });
 
 describe("one bad listener does not silence the others (Codex 2026-09-12 T#9)", () => {
+  beforeAll(() => {
+    try { createLogger("error", "/tmp/strada-task-manager-test.log"); } catch { /* already initialized */ }
+  });
+
   it("delivers the terminal event to every subscriber", () => {
     const storage = {
       load: vi.fn().mockReturnValue({ id: "task_l", status: "executing" }),
@@ -650,6 +654,28 @@ describe("one bad listener does not silence the others (Codex 2026-09-12 T#9)", 
     heard.length = 0;
     manager.complete("task_l2" as Task["id"], "done again");
     expect(heard).toEqual(["second"]);
+  });
+
+  it("calls each listener with the emitter as `this` (Codex 2026-09-12 U#F12)", () => {
+    // rawListeners hands back the bare functions, and calling them bare loses
+    // the binding EventEmitter gives: a normal-function subscriber saw
+    // `this === undefined` for terminal events and for those alone.
+    const storage = {
+      load: vi.fn().mockReturnValue({ id: "task_b", status: "executing" }),
+      updateResult: vi.fn(),
+      updateError: vi.fn(),
+      addProgress: vi.fn(),
+    } as any;
+    const manager = new TaskManager(storage, {} as any);
+    const bound: unknown[] = [];
+    manager.on("task:completed", function (this: unknown) { bound.push(this); });
+    // A progress event goes through EventEmitter's own emit; both must agree.
+    manager.on("task:progress", function (this: unknown) { bound.push(this); });
+
+    manager.complete("task_b" as Task["id"], "done");
+    manager.addProgress("task_b" as Task["id"], "half way" as never);
+
+    expect(bound).toEqual([manager, manager]);
   });
 
   it("does the same for a failure", () => {

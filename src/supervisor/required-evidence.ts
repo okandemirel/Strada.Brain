@@ -412,24 +412,57 @@ export function missingRequiredEvidence(
   return shortfalls;
 }
 
+/**
+ * THE ARGUMENTS THE PRODUCER RAN WITH narrow a test run, whatever a flag
+ * beside them declares.
+ *
+ * `{mode:"play", filter:{testNames:["Smoke"]}, unfiltered:true}` satisfied a
+ * demand for an unfiltered suite while the producer's schema executed the
+ * filter — one test ran and the node's evidence said the whole suite had
+ * (Codex 2026-09-12 U#F6). Every filter key the producers accept counts, and
+ * an empty one narrows nothing.
+ */
+const FILTER_KEYS = ["filter", "categories", "testfilter", "testnames", "categorynames", "assemblynames", "groupnames"];
+
+export function carriesTestFilter(parsed: Record<string, unknown>): boolean {
+  for (const [k, v] of Object.entries(parsed)) {
+    if (!FILTER_KEYS.includes(k.toLowerCase())) continue;
+    if (v === undefined || v === null) continue;
+    if (typeof v === "string" && v.trim() === "") continue;
+    // A filter whose value IS the whole suite narrows nothing: some producers
+    // take `filter: "all"` for exactly that.
+    if (typeof v === "string" && /^(?:all|any|\*|everything|full|whole(?:\s+suite)?)$/i.test(v.trim())) continue;
+    if (Array.isArray(v) && v.length === 0) continue;
+    if (typeof v === "object" && !Array.isArray(v) && Object.keys(v as object).length === 0) continue;
+    if (typeof v === "object" && !Array.isArray(v) && !carriesTestFilter(v as Record<string, unknown>)) continue;
+    return true;
+  }
+  return false;
+}
+
 /** Does this recorded argument object carry `key` with `value` (case-insensitive)? */
 export function argSatisfies(args: string, key: string, value: string): boolean {
   try {
     const parsed = JSON.parse(args) as Record<string, unknown>;
+    const wantsWholeSuite = key.toLowerCase() === "unfiltered";
+    // The filter decides before the flag does: a call that narrows the suite
+    // has not run it, however it labelled itself (U#F6).
+    if (wantsWholeSuite && carriesTestFilter(parsed)) return false;
     for (const [k, v] of Object.entries(parsed)) {
       if (k.toLowerCase() !== key.toLowerCase()) continue;
       const got = String(v).toLowerCase();
       const want = value.toLowerCase();
       // "unfiltered" is satisfied by the flag being true OR by the run
       // carrying no filter at all.
-      if (key.toLowerCase() === "unfiltered") return got === "true" || got === want;
+      if (wantsWholeSuite) return got === "true" || got === want;
       return got === want;
     }
     // The key is absent. For a flag, absence is not proof either way and the
     // sibling keys decide; for a named value, the call did not use it.
-    if (key.toLowerCase() === "unfiltered") {
-      return !("filter" in parsed) && !("categories" in parsed);
-    }
+    // A NARROWING filter is already refused above, so this only has to judge
+    // a filter argument that does not narrow — "filter: all" beside no flag
+    // is still not the claim that the suite ran whole.
+    if (wantsWholeSuite) return !("filter" in parsed) && !("categories" in parsed);
     return false;
   } catch {
     return false;

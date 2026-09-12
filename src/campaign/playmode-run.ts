@@ -168,6 +168,12 @@ export function readPlaymodeRun(projectRoot: string, sinceMs: number, expectRunI
   // A SUITE MOST OF WHICH NEVER RAN is not a whole-suite pass, whatever the
   // unfiltered flag says: 1 passed and 99 skipped of 100 was green.
   const mostlySkipped = skipped > passed;
+  // …and a MINORITY that never ran is still not the whole suite passing. The
+  // count rode invisibly inside "80 of 100 tests passed (unfiltered — the
+  // whole PlayMode suite)", so twenty tests nobody ran read as twenty tests
+  // that had (Codex 2026-09-12 U#F6). Which of them may be skipped is the
+  // acceptance contract's to state — the producer must record the test
+  // inventory and each skip's reason — so this discloses, and does not judge.
   const scope = unfiltered ? "unfiltered — the whole PlayMode suite" : `filter: ${filter ?? (typeof raw.categories === "string" ? raw.categories : "narrowed")}`;
   const detail =
     total === 0
@@ -183,7 +189,7 @@ export function readPlaymodeRun(projectRoot: string, sinceMs: number, expectRunI
       : mostlySkipped
       ? `PlayMode run (NUnit): ${skipped} of ${total} tests never ran — ${passed} passed (${scope})`
       : failed === 0
-      ? `PlayMode verification passed: ${passed} of ${total} tests passed (${scope})`
+      ? `PlayMode verification passed: ${passed} of ${total} tests passed${skipped > 0 ? `, ${skipped} SKIPPED` : ""} (${scope})`
       : `PlayMode verification FAILED: ${failed} of ${total} tests failed (${scope})`;
   return {
     found: true,

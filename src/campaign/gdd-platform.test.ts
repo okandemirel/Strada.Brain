@@ -178,3 +178,14 @@ describe("a PC that names a distribution, not a target (Codex 2026-09-12 U#F3)",
     ).toEqual(["android", "windows"]);
   });
 });
+
+describe("a storefront is not a compatibility layer (Codex 2026-09-12 V)", () => {
+  it("keeps a native target a store qualified", () => {
+    // My own regression: the layer list held "app store", so "Release on the
+    // App Store for Mac" named no platform at all.
+    expect(gddPlatform("Release on the App Store for Mac.").targets).toEqual(["macos"]);
+    expect(gddPlatform("On the App Store for iPhone and iPad.").targets).toEqual(["ios"]);
+    // …and the layer itself is still not a target.
+    expect(gddPlatform("Android; Google Play Games on PC compatible.").targets).toEqual(["android"]);
+  });
+});

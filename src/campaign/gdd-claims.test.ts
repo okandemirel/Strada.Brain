@@ -425,3 +425,71 @@ describe("comparators, separators and subjects (Codex 2026-09-12 U#F3)", () => {
     expect(extractActionBudget("A round lasts 90 seconds.")).toBeUndefined();
   });
 });
+
+/**
+ * Codex round V (2026-09-12) ran the reader again after the U#F3 fix and
+ * found two regressions in it plus four rules it had not reached.
+ */
+describe("clause boundaries and the comparators the rest of the document uses (Codex 2026-09-12 V)", () => {
+  const kinds = (text: string): Array<[string, string, number]> =>
+    extractNumericClaims(text).claims.map((c) => [c.kind, c.comparator, c.value]);
+
+  it("a timing subject is read INSIDE its clause", () => {
+    // My own regression: the lookbehind reached across the sentence before
+    // it, so the only boot budget in the document became a level-load figure
+    // — and that kind is unmeasured, so nothing held the game to it.
+    expect(kinds("Map loads fast; boot under 6 s.")).toEqual([["boot_seconds", "max", 6]]);
+    // …and the two subjects in one sentence still separate.
+    expect(kinds("The level loads in under 2 s. Cold boot ≤ 6 s.")).toEqual([
+      ["level_load_seconds", "max", 2],
+      ["boot_seconds", "max", 6],
+    ]);
+  });
+
+  it("a frame-rate CAP is a ceiling, not a floor", () => {
+    expect(kinds("At most 30 fps.")).toEqual([["fps", "max", 30]]);
+    expect(kinds("Target 60 fps on mid devices.")).toEqual([["fps", "min", 60]]);
+    const cap = extractNumericClaims("At most 30 fps to save battery.").claims;
+    const player: PlaythroughEvidence = {
+      found: true, ok: true, outcome: "Won", session: 1, actions: 20,
+      perf: { medium: "player", bootSeconds: 1, playSeconds: 40, playFrames: 1200, avgFps: 30, worstFrameMs: 40 },
+    };
+    expect(assessNumericClaims(cap, evidence(), player)[0]!.status).toBe("met");
+  });
+
+  it("a session FLOOR is not a ceiling", () => {
+    expect(kinds("Each round lasts at least 90 seconds.")).toEqual([["session_seconds", "min", 90]]);
+    // A range still carries both bounds, and a plain figure is still a ceiling.
+    expect(kinds("Each round lasts 30-60 seconds.")).toEqual([
+      ["session_seconds", "max", 60],
+      ["session_seconds", "min", 30],
+    ]);
+    expect(kinds("Each round lasts 45 seconds.")).toEqual([["session_seconds", "max", 45]]);
+  });
+
+  it("reads a count through the words that describe it, and a STRICT bound as the next whole number", () => {
+    expect(kinds("Ship 200 certified levels.")).toEqual([["level_count", "eq", 200]]);
+    expect(kinds("Ship 3,000+ handcrafted deterministic levels.")).toEqual([["level_count", "min", 3000]]);
+    expect(kinds("More than 12 levels.")).toEqual([["level_count", "min", 13]]);
+    expect(kinds("Fewer than 12 levels.")).toEqual([["level_count", "max", 11]]);
+    expect(kinds("At most 12 levels.")).toEqual([["level_count", "max", 12]]);
+    // A preposition is not a descriptor: "12 minutes across 5 levels" is five.
+    expect(kinds("12 minutes across 5 levels.")).toEqual([["level_count", "eq", 5]]);
+  });
+
+  it("holds the game to the catalogue it ships, not to the count the document permits", () => {
+    // "At most 12 levels" with eight shipped and all eight played demanded
+    // twelve played levels and refused the delivery.
+    const atMost = extractNumericClaims("At most 12 levels.").claims;
+    const sessions = (n: number) =>
+      Array.from({ length: n }, (_, i) => ({ index: i + 1, outcome: "Won", actions: 5, seconds: 30 }));
+    const eight = assessNumericClaims(atMost, evidence({ sessionCount: 8, sessions: sessions(8) }));
+    expect(eight[0]!.status).toBe("met");
+    // …and a catalogue over the cap is still not met.
+    const thirteen = assessNumericClaims(atMost, evidence({ sessionCount: 13, sessions: sessions(13) }));
+    expect(thirteen[0]!.status).toBe("not_met");
+    // …and eight shipped with only three played is not met either.
+    const partly = assessNumericClaims(atMost, evidence({ sessionCount: 8, sessions: sessions(3) }));
+    expect(partly[0]!.status).toBe("not_met");
+  });
+});

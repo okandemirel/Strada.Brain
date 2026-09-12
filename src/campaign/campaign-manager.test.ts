@@ -1034,6 +1034,34 @@ describe("CampaignManager", () => {
     expect(prompt.indexOf("BUILD HYGIENE")).toBe(prompt.lastIndexOf("BUILD HYGIENE"));
   });
 
+  it("a hygiene line the planner wrote in ITS OWN CASE is replaced too (Codex 2026-09-12 U#F9)", async () => {
+    // The stored final prompt of the live campaign said "Build hygiene: leave
+    // EXACTLY ONE entry scene enabled" — a planner's paraphrase. Both strips
+    // matched only the shouted form, so that line stayed for ever beside the
+    // newer rule, and a game that spans several scenes was told to disable
+    // the scenes it loads.
+    const campaign = await reachFinalSprint();
+    const stored = storage.get(campaign.id)!;
+    const finalIndex = stored.milestones.length - 1;
+    stored.milestones[finalIndex]!.prompt = stored.milestones[finalIndex]!.prompt.replace(
+      /\n\nBUILD HYGIENE \(final sprint\):[\s\S]*$/,
+      "\n\nDeliverables:\n- Wire the HUD.\n- Build hygiene: leave EXACTLY ONE entry scene enabled in Build Settings.\n- Ship it.",
+    );
+    stored.state = "failed";
+    stored.milestones[finalIndex]!.attempts = 2;
+    storage.save(stored);
+    tasks.markTerminal("task_3", TaskStatus.blocked);
+
+    expect(await manager.tryHandleRevive("cli-local", "kampanya devam")).toBe(true);
+    await waitFor(() => expect(tasks.submitted).toHaveLength(4));
+    const prompt = tasks.submitted[3]!.prompt;
+    expect(prompt).not.toMatch(/EXACTLY ONE entry scene/i);
+    expect(prompt).toContain("every scene enabled after it must be one the game itself loads");
+    // The rest of the deliverables list is untouched.
+    expect(prompt).toContain("Wire the HUD");
+    expect(prompt).toContain("Ship it");
+  });
+
   it("refuses delivery on a FILTERED green — the whole suite must be seen", async () => {
     runRecordOnSettle = undefined; // this sprint leaves no NUnit record
     // Audited 2026-09-03: the delivered PixelFlow build's filtered runs were

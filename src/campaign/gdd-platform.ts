@@ -76,8 +76,11 @@ function isExcluded(text: string, at: number): boolean {
  * the delivery gate then reported a platform the document never asked for as
  * an unbuilt one, and no run could ever close it (Codex 2026-09-12 U#F3).
  */
+// A STOREFRONT IS NOT A COMPATIBILITY LAYER: "Release on the App Store for
+// Mac" names a native Mac product, and listing the store here dropped the
+// target entirely (Codex 2026-09-12 V, a regression in my own U#F3 fix).
 const PC_VIA_STORE_RE =
-  /\b(?:google play(?:\s+games)?|play games|app store|amazon appstore|bluestacks|emulator|emulation|compatibility layer)\b[^.\n]{0,24}$/i;
+  /\b(?:google play\s+games|play games|bluestacks|emulator|emulation|compatibility layer)\b[^.\n]{0,24}$/i;
 /** "PC compatible", "PC-compatible", "compatible with PC" — a compatibility statement. */
 const PC_COMPATIBLE_AFTER_RE = /^\s*[-–—]?\s*compatib\w*/i;
 const PC_COMPATIBLE_BEFORE_RE = /\bcompatib\w*\s+(?:with\s+)?$/i;

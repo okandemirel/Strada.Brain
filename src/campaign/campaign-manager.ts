@@ -1795,12 +1795,17 @@ export class CampaignManager {
       // Any BUILD HYGIENE paragraph — the planner writes one of its own
       // ("BUILD HYGIENE: …", campaign-planner.ts) and it carried the old
       // "deleted or disabled" wording too (review 2026-09-08).
+      // …IN ANY CASE. A planner that wrote "Build hygiene: leave EXACTLY ONE
+      // entry scene enabled" kept that line for ever, because both strips
+      // matched only the shouted form — so the stored final prompt carried an
+      // instruction to disable the scenes the newer rule requires the game to
+      // load, and a multi-scene game could lose them (Codex 2026-09-12 U#F9).
       milestone.prompt = milestone.prompt
-        .replace(/\n\nBUILD HYGIENE\b[^\n]*(?:\n(?!\n)[^\n]*)*/g, "")
+        .replace(/\n\nBUILD HYGIENE\b[^\n]*(?:\n(?!\n)[^\n]*)*/gi, "")
         // The planner's heading can also sit mid-list ("- BUILD HYGIENE: …");
         // a paragraph regex misses it and `includes` then kept the old
         // wording out of the current instruction (Codex review 2026-09-08).
-        .replace(/^[^\n]*\bBUILD HYGIENE\b[^\n]*\n?/gm, "");
+        .replace(/^[^\n]*\bBUILD HYGIENE\b[^\n]*\n?/gim, "");
       if (!milestone.prompt.includes("BUILD HYGIENE (final sprint):")) {
         milestone.prompt +=
           "\n\nBUILD HYGIENE (final sprint): when you are done, the FIRST enabled scene in Build Settings " +

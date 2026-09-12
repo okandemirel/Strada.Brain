@@ -228,8 +228,18 @@ describe("the runner's own verdict, its exceptions, and a suite that did not run
     expect(barely).toMatchObject({ green: false });
     expect(barely.detail).toContain("99 of 100 tests never ran");
 
-    // The project's real record — a couple of platform exclusions — stands.
+    // The project's real record — a couple of platform exclusions — stands,
+    // and the verdict SAYS which tests nobody ran: the count used to ride
+    // invisibly inside "269 of 272 tests passed (unfiltered — the whole
+    // PlayMode suite)", so three tests nobody ran read as three that had
+    // (Codex 2026-09-12 U#F6). Which skips are acceptable is the acceptance
+    // contract's to state, so this discloses rather than judges.
     write({ ...fresh, total: 272, passed: 269, failed: 0, skipped: 3 });
-    expect(readPlaymodeRun(root, 0)).toMatchObject({ green: true });
+    const withSkips = readPlaymodeRun(root, 0);
+    expect(withSkips).toMatchObject({ green: true });
+    expect(withSkips.detail).toContain("3 SKIPPED");
+    // …and a run with none says nothing about skipping.
+    write({ ...fresh, total: 272, passed: 272, failed: 0, skipped: 0 });
+    expect(readPlaymodeRun(root, 0).detail).not.toMatch(/SKIPPED/);
   });
 });

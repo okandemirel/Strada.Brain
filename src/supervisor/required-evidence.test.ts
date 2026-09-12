@@ -369,3 +369,56 @@ describe("a declaration is one call too (Codex 2026-09-12 S#13)", () => {
     ])).toEqual([]);
   });
 });
+
+/**
+ * A flag that contradicts the call it rode on. Executed by Codex 2026-09-12
+ * (U#F6): `{mode:"play", filter:{testNames:["Smoke"]}, unfiltered:true}`
+ * satisfied a demand for the whole suite while the producer's schema ran the
+ * filter — one test ran, and the node's evidence said the suite had passed.
+ */
+describe("the arguments the producer ran with decide the scope (Codex 2026-09-12 U#F6)", () => {
+  // The campaign's own final-sprint prompt, in the form it really writes.
+  const prompt = `FINAL DELIVERY PROOFS: run the FULL PlayMode suite UNFILTERED.\n\n${REQUIRED_EVIDENCE_PREFIX} unity_test_run unfiltered="true"`;
+
+  it("a filter beside the flag is a filtered run, whichever key carries it", () => {
+    for (const args of [
+      { mode: "play", filter: { testNames: ["Smoke"] }, unfiltered: true },
+      { mode: "play", testFilter: "Board.Tests", unfiltered: true },
+      { mode: "play", categoryNames: ["Fast"], unfiltered: true },
+      { mode: "play", assemblyNames: ["PixelFlow.Tests"], unfiltered: true },
+      { mode: "play", filter: { categoryNames: ["Fast"] }, unfiltered: "true" },
+    ]) {
+      expect(
+        missingRequiredEvidence(prompt, [{ toolName: "unity_test_run", success: true, args: JSON.stringify(args) }]),
+      ).toHaveLength(1);
+    }
+  });
+
+  it("an EMPTY filter narrows nothing, and neither does one that names the whole suite", () => {
+    for (const args of [
+      { mode: "play", unfiltered: true },
+      { mode: "play", filter: {}, unfiltered: true },
+      { mode: "play", filter: { testNames: [] }, unfiltered: true },
+      { mode: "play", testFilter: "", unfiltered: true },
+      { mode: "play", filter: "all", unfiltered: true },
+    ]) {
+      expect(
+        missingRequiredEvidence(prompt, [{ toolName: "unity_test_run", success: true, args: JSON.stringify(args) }]),
+      ).toEqual([]);
+    }
+  });
+
+  it("no flag at all: a filter key the check did not know still narrows the run", () => {
+    expect(
+      missingRequiredEvidence(prompt, [
+        { toolName: "unity_test_run", success: true, args: JSON.stringify({ mode: "play", testFilter: "Board.Tests" }) },
+      ]),
+    ).toHaveLength(1);
+    // …and a call with no filter key of any kind still proves it.
+    expect(
+      missingRequiredEvidence(prompt, [
+        { toolName: "unity_test_run", success: true, args: JSON.stringify({ mode: "play" }) },
+      ]),
+    ).toEqual([]);
+  });
+});

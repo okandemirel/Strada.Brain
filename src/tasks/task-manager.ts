@@ -746,7 +746,11 @@ export class TaskManager extends EventEmitter {
   private emitTerminal(event: string, ...args: unknown[]): void {
     for (const listener of this.rawListeners(event)) {
       try {
-        (listener as (...a: unknown[]) => void)(...args);
+        // WITH THE EMITTER AS `this`, the binding EventEmitter itself gives:
+        // invoking them bare left a normal-function subscriber with
+        // `this === undefined` for terminal events alone (Codex 2026-09-12
+        // U#F12).
+        (listener as (...a: unknown[]) => void).apply(this, args);
       } catch (err) {
         getLogger().error("A task listener threw; the other listeners still ran", {
           event,
