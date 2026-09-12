@@ -2966,6 +2966,10 @@ describe("CampaignManager", () => {
         .fn()
         .mockResolvedValueOnce(["Dragon boss: no milestone implemented it"])
         .mockResolvedValue([]),
+      // The repair landed the boss, and the delivery audit says so: a GREEN
+      // repair's requirement is judged on the evidence now, not waived by the
+      // sprint's own status (Codex 2026-09-12 AD#2).
+      resolveCoverageGaps: vi.fn(async (_gdd: string, reqs: readonly string[]) => ({ closed: [...reqs], open: [] })),
     } as unknown as CampaignPlanner;
     manager = new CampaignManager({
       storage,
@@ -3004,6 +3008,62 @@ describe("CampaignManager", () => {
 
     settleMilestone("dragon implemented, frames captured");
     await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+  });
+
+  it("a GREEN repair does not erase the requirement it did not implement (Codex 2026-09-12 AD#2)", async () => {
+    // Reproduced by Codex: audit one finds Save missing, repair one goes
+    // green without implementing it, audit two finds it again, repair two
+    // goes green too. `openRequirements` looked only at FAILED repairs, so
+    // with the audit rounds spent nothing was open and the campaign could
+    // finish with the feature absent.
+    tasks = new FakeTaskManager();
+    storage.close();
+    storage = new CampaignStorage(join(dir, `campaigns-green-repair-${messages.length}.db`));
+    const planner = {
+      planMilestones: vi.fn().mockResolvedValue(LADDER),
+      auditCoverage: vi.fn().mockResolvedValue(["Save progress across restarts: no milestone implemented it"]),
+      // The delivery audit is asked, and it says the requirement is still not
+      // delivered — whatever the repair's own status says.
+      resolveCoverageGaps: vi.fn(async (_gdd: string, reqs: readonly string[]) => ({ closed: [], open: [...reqs] })),
+    } as unknown as CampaignPlanner;
+    manager = new CampaignManager({
+      storage,
+      planner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async (chatId, text) => messages.push({ chatId, text }),
+      projectRoot,
+      verifyCompile: async () => compileVerdict,
+      buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
+      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); afterPlayerRun?.(); },
+      retryAdoptionGraceMs: 10,
+      completedSettleDelayMs: 0,
+      milestoneTimeBoxMs: 60 * 60_000,
+    });
+    manager.attachEvents();
+
+    const campaign = manager.startFromGdd(ctx, "# GDD text", "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    mkdirSync(join(projectRoot, "Recordings", "playthrough"), { recursive: true });
+    writeFileSync(join(projectRoot, "Recordings", "playthrough", "frame_00099.png"), Buffer.concat([Buffer.from("89504e470d0a1a0a", "hex"), Buffer.alloc(4096, 7)]));
+    settleMilestone("final report"); // the audit finds Save missing → a repair sprint
+
+    // Every repair reports success without the feature; the campaign must
+    // never call that delivered.
+    for (let i = 0; i < 10 && storage.get(campaign.id)!.state === "executing"; i++) {
+      const before = tasks.submitted.length;
+      settleMilestone("all 42 tests pass, frames captured");
+      await waitFor(
+        () => expect(tasks.submitted.length > before || storage.get(campaign.id)!.state !== "executing").toBe(true),
+        { timeout: 15_000 },
+      );
+    }
+    expect(storage.get(campaign.id)!.state).not.toBe("done");
+    const report = messages.map((m) => m.text).join("\n");
+    expect(report).toContain("Save progress across restarts");
   });
 
   it("schedules one gap sprint per audit finding, art first, and moves past a spent one", async () => {

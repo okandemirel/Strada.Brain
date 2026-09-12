@@ -5121,7 +5121,18 @@ export class CampaignManager {
       unknown: repoState === "unknown",
     };
     const revisionForClosure = treeBefore.dirty ? "" : treeBefore.revision;
-    const failedRepairs = campaign.milestones.filter((m) => m.id.startsWith("mcov") && m.status === "failed");
+    // EVERY REPAIR'S REQUIREMENT, not only the ones whose sprint failed. A
+    // repair that went GREEN without implementing the requirement removed it
+    // from this question entirely: audit one found "Save progress across
+    // restarts" missing, repair one went green without it, audit two found it
+    // again, repair two went green too, and with the audit rounds spent there
+    // was nothing left to ask — the campaign could finish with the feature
+    // absent (Codex 2026-09-12 AD#2). A sprint's own status is not evidence
+    // about the requirement; the audit's answer is, and a requirement already
+    // judged closed against this tree is not re-asked.
+    const failedRepairs = campaign.milestones.filter(
+      (m) => m.id.startsWith("mcov") && (m.status === "failed" || m.fromAudit === true),
+    );
     const unclosed = failedRepairs.filter((m) => !closureHolds(m, revisionForClosure));
     if (unclosed.length === 0) return { open: [] };
     const gddForGaps = campaign.gddText ?? (campaign.gddPath ? readGddFile(this.projectRoot, campaign.gddPath) : undefined);

@@ -183,6 +183,40 @@ describe("re-judging the requirements no sprint closed", () => {
     ).resolves.toEqual({ closed: [], open: ["Dragon boss: absent"] });
   });
 
+  it("a sprint's STATUS closes nothing, nor does a suite of unknown scope (Codex 2026-09-12 AD#1)", async () => {
+    // Reproduced by Codex: `{"verdicts":[{"id":1,"delivered":true,"evidence":
+    // "status: failed"}]}` — fourteen characters that exist in every
+    // milestone's record — closed "Save progress across restarts". A status
+    // says how a sprint ENDED; it says nothing about this requirement. A
+    // suite whose scope nobody knows says nothing about it either.
+    const failedLadder = [{ title: "Sprint A — Save", status: "failed", coverageGap: "Save: absent" }];
+    for (const evidence of ["status: failed", "status: green"]) {
+      const quoted = plannerWith([`{"verdicts": [{"id": 1, "delivered": true, "evidence": "${evidence}"}]}`]);
+      await expect(
+        quoted.planner.resolveCoverageGaps("# GDD", ["Save: absent"], [{ ...failedLadder[0]!, status: evidence.slice(8) }]),
+      ).resolves.toEqual({ closed: [], open: ["Save: absent"] });
+    }
+
+    const filtered = plannerWith([
+      '{"verdicts": [{"id": 1, "delivered": true, "evidence": "suite: 12 of 12 tests passed (FILTERED or unknown scope)"}]}',
+    ]);
+    await expect(
+      filtered.planner.resolveCoverageGaps("# GDD", ["Save: absent"], [
+        { title: "Sprint A", status: "green", testVerdict: "12 of 12 tests passed", testVerdictUnfiltered: false },
+      ]),
+    ).resolves.toEqual({ closed: [], open: ["Save: absent"] });
+
+    // …and an UNFILTERED suite still counts as a measurement.
+    const unfiltered = plannerWith([
+      '{"verdicts": [{"id": 1, "delivered": true, "evidence": "suite: 179 of 179 tests passed (unfiltered)"}]}',
+    ]);
+    await expect(
+      unfiltered.planner.resolveCoverageGaps("# GDD", ["Save: absent"], [
+        { title: "Sprint A", status: "green", testVerdict: "179 of 179 tests passed", testVerdictUnfiltered: true },
+      ]),
+    ).resolves.toEqual({ closed: ["Save: absent"], open: [] });
+  });
+
   it("a title or the worker's own prose is not evidence (Codex 2026-09-12 W#3)", async () => {
     // Both of these closed "Dragon boss: absent" in Codex's run: the
     // requirement's own title, quoted back, and a failed sprint's sentence

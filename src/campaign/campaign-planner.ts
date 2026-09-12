@@ -672,7 +672,8 @@ Your previous reply was not valid JSON. Reply with the JSON object ALONE — no 
       `For EACH numbered requirement, say whether the evidence above shows it implemented and shipped. ` +
       `Respond ONLY with JSON: {"verdicts": [{"id": <number>, "delivered": true|false, "evidence": "<the evidence line that shows it, when delivered>"}, ...]}. ` +
       `ONE verdict per id. When you answer delivered:true, copy VERBATIM — at least twelve characters — from one of the MEASURED lines of <completed-ladder>: ` +
-      `the lines beginning "status:", "suite:", "landed:", "shipped tree:" or "document numbers:". ` +
+      `the lines beginning "landed:", "shipped tree:", "document numbers:", or a "suite:" line marked (unfiltered). ` +
+      `A "status:" line says how a sprint ended and nothing about this requirement; it closes nothing. ` +
       `A paraphrase, a milestone title, a worker's own "report:" sentence, a plan or a promise is not evidence and closes nothing, and a requirement you cannot judge is delivered:false.`;
     const response = await streamOrChatText(this.provider, COVERAGE_SYSTEM, userMessage);
     let parsed: unknown;
@@ -706,7 +707,15 @@ Your previous reply was not valid JSON. Reply with the JSON object ALONE — no 
     // so a requirement's own TITLE ("Dragon boss: absent") and a failed
     // sprint's prose ("the dragon boss is NOT delivered") were both accepted
     // as the evidence that closed it (Codex 2026-09-12 W#3).
-    const record = flat(milestones.flatMap((m) => milestoneFacts(m)).join("\n"));
+    // …AND ONLY THE LINES THAT SAY SOMETHING ABOUT CONTENT. A sprint's own
+    // "status: failed" is fourteen characters of the record, so it was a
+    // verbatim quote that closed ANY requirement — the failure of the work
+    // read back as the evidence it was delivered (Codex 2026-09-12 AD#1). A
+    // suite whose scope is unknown says nothing about a particular
+    // requirement either. What can close one: what landed, what the shipped
+    // tree holds, what the document's own numbers measured, and a suite that
+    // ran unfiltered.
+    const record = flat(milestones.flatMap((m) => quotableFacts(m)).join("\n"));
     const verdictsById = new Map<number, Array<{ delivered: boolean; evidence?: string }>>();
     for (const v of verdicts.data.verdicts) {
       // An id nobody asked about is simply never consulted below.
@@ -746,6 +755,21 @@ function milestoneFacts(m: {
   for (const line of (m.structureFindings ?? []).slice(0, 3)) facts.push(`shipped tree: ${line.slice(0, 160)}`);
   for (const line of (m.gddClaims ?? []).slice(0, 3)) facts.push(`document numbers: ${line.slice(0, 160)}`);
   return facts;
+}
+
+/**
+ * The facts a verdict may QUOTE to close a requirement — a subset of the
+ * facts a milestone shows (Codex 2026-09-12 AD#1).
+ */
+function quotableFacts(m: {
+  status?: string; testVerdict?: string; testVerdictUnfiltered?: boolean; commitNote?: string;
+  structureFindings?: readonly string[]; gddClaims?: readonly string[];
+}): string[] {
+  return milestoneFacts(m).filter((fact) => {
+    if (fact.startsWith("status: ")) return false;
+    if (fact.startsWith("suite: ")) return fact.includes("(unfiltered)");
+    return true;
+  });
 }
 
 function milestoneEvidence(m: {
