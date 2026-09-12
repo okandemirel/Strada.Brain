@@ -234,9 +234,33 @@ export function createSupervisorExecuteNodeBridge(params: {
       const promptWithBudget = node.timeBudgetNotice
         ? `${scopedPrompt}\n\n${node.timeBudgetNotice}`
         : scopedPrompt;
+      // A PLAN CAN NAME A TOOL THIS RUN DOES NOT HAVE. Measured live
+      // 2026-09-12: the Unity Editor was not running, 76 bridge-gated tools
+      // were hidden, and a node told to "run unity_create_scene" spent eight
+      // rounds failing over it — while unity_scene_build, which does the same
+      // work headlessly, sat offered and unused. Say it up front, and say what
+      // IS offered for the same job; the substitute is chosen by the worker,
+      // not by us.
+      const nodePromptWithTools = ((): string => {
+        const named = [...new Set([...promptWithBudget.matchAll(/\b([a-z][a-z0-9]*_[a-z0-9_]+)\b/g)].map((m) => m[1]!))];
+        const missing = named
+          .map((name) => ({ name, ...(params.orchestrator.toolOfferedNow?.(name) ?? { offered: true }) }))
+          .filter((t) => !t.offered);
+        if (missing.length === 0) return promptWithBudget;
+        const offered = params.orchestrator.offeredToolNames?.() ?? [];
+        const lines = missing.slice(0, 6).map((t) => {
+          const tokens = t.name.split("_").filter((w) => w.length > 2 && w !== "unity");
+          const kin = offered.filter((o) => o !== t.name && tokens.some((w) => o.includes(w))).slice(0, 6);
+          return `- ${t.name}: ${t.reason ?? "not offered in this run"}.` +
+            (kin.length > 0 ? ` Offered here for similar work: ${kin.join(", ")}.` : " Nothing offered here does this.");
+        });
+        return `${promptWithBudget}\n\nTOOLS THIS RUN DOES NOT HAVE (named in the task above):\n${lines.join("\n")}\n` +
+          "Do the work with what you have, or state plainly in your report which part could not be done and why. " +
+          "Do not claim work you could not perform.";
+      })();
       const result = await params.backgroundExecutor.runWorkerEnvelope(params.orchestrator, {
         mode: "delegated",
-        prompt: promptWithBudget,
+        prompt: nodePromptWithTools,
         chatId: context.chatId,
         channelType: context.channelType ?? params.defaultChannelType ?? "cli",
         conversationId: context.conversationId,

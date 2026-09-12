@@ -42,6 +42,36 @@ describe("createSupervisorExecuteNodeBridge", () => {
     }))).testsGreen).toBe(false);
   });
 
+  it("tells the worker which named tools this run does not have, and what it does (Codex 2026-09-12 R#1)", async () => {
+    const runWorkerEnvelope = vi.fn().mockResolvedValue({ output: "done", workerResult: { status: "completed", toolTrace: [] } });
+    const bridge = createSupervisorExecuteNodeBridge({
+      backgroundExecutor: { runWorkerEnvelope } as any,
+      orchestrator: {
+        toolOfferedNow: (name: string) =>
+          name === "unity_create_scene"
+            ? { offered: false, reason: "the Unity bridge is not connected" }
+            : { offered: true },
+        offeredToolNames: () => ["unity_scene_build", "unity_scene_analyze", "file_write", "unity_verify_change"],
+      } as any,
+      defaultChannelType: "cli",
+    });
+
+    await bridge(
+      { id: "node-1", task: "Run unity_create_scene for the playfield and verify with unity_verify_change.", assignedProvider: "p", assignedModel: "m" } as any,
+      { chatId: "chat-1", taskRunId: "taskrun_parent" } as any,
+      new AbortController().signal,
+    );
+
+    const prompt = String(runWorkerEnvelope.mock.calls[0]![1].prompt);
+    expect(prompt).toContain("TOOLS THIS RUN DOES NOT HAVE");
+    expect(prompt).toContain("unity_create_scene: the Unity bridge is not connected");
+    // The headless equivalents it DOES have, chosen by the worker, not by us.
+    expect(prompt).toContain("unity_scene_build");
+    expect(prompt).toContain("unity_scene_analyze");
+    // A tool it does have is not advertised as missing.
+    expect(prompt).not.toContain("unity_verify_change: ");
+  });
+
   it("does not fail a node for a tool this run was never offered (Codex 2026-09-12 R#1)", async () => {
     // Measured live 2026-09-12 11:22: the Unity Editor was not running, so 76
     // bridge-gated tools were hidden from agents — and a node whose plan said

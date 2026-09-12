@@ -776,6 +776,13 @@ export class Orchestrator {
    * An unknown name answers "offered": the registry is dynamic, and refusing
    * to judge is not the same as judging it absent.
    */
+  /** Every tool a worker can call right now, by name. */
+  offeredToolNames(): string[] {
+    return this.toolDefinitions
+      .map((d) => d.name)
+      .filter((name) => this.toolOfferedNow(name).offered);
+  }
+
   toolOfferedNow(name: string): { offered: boolean; reason?: string } {
     const metadata = this.toolMetadataByName.get(name);
     if (metadata === undefined) return { offered: true };
