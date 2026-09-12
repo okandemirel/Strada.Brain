@@ -925,6 +925,70 @@ describe("lease commit replay (measured 2026-09-10: three worker commits danglin
     expect(result.commitsReplayed?.replayed ?? 0).toBeLessThanOrEqual(1);
   });
 
+  it("a series that ends at withdrawn content is held WHOLE, not just at its last commit (Codex 2026-09-12 P#10)", async () => {
+    // seed A → commit B → commit C → restore A without committing. Holding
+    // only the last commit replayed B, so the project's history ended at a
+    // version the lease no longer had.
+    makeGitRepo();
+    const lease = await gitManager().acquireLease({ label: "t" });
+    const inLease = join(lease.path, "Assets", "Scripts", "Existing.cs");
+    writeFileSync(inLease, "version B", "utf8");
+    git(lease.path, "add -A");
+    git(lease.path, 'commit -q -m "feat: board B"');
+    writeFileSync(inLease, "version C", "utf8");
+    git(lease.path, "add -A");
+    git(lease.path, 'commit -q -m "feat: board C"');
+    writeFileSync(inLease, "original", "utf8"); // taken back to the seed, never committed
+
+    const result = await lease.commit();
+    await lease.release();
+
+    expect(readFileSync(join(source, "Assets", "Scripts", "Existing.cs"), "utf8")).toBe("original");
+    // No commit in the project may describe B or C for that path.
+    const log = git(source, "log --format=%H");
+    for (const sha of log.split("\n").filter(Boolean)) {
+      const shown = execSync(`git show ${sha}:Assets/Scripts/Existing.cs`, { cwd: source, encoding: "utf8" });
+      expect(shown).toBe("original");
+    }
+    expect(result.commitsReplayed?.replayed ?? 0).toBe(0);
+  });
+
+  it("a path whose current content cannot be read is held, not replayed (Codex 2026-09-12 P#10)", async () => {
+    // The worker committed the file and then removed it without committing.
+    // `hash-object` has nothing to answer with, and failing open replayed a
+    // commit that adds a file the lease does not have.
+    makeGitRepo();
+    const lease = await gitManager().acquireLease({ label: "t" });
+    writeFileSync(join(lease.path, "Assets", "Scripts", "Extra.cs"), "scaffolding", "utf8");
+    git(lease.path, "add -A");
+    git(lease.path, 'commit -q -m "feat: scaffolding"');
+    rmSync(join(lease.path, "Assets", "Scripts", "Extra.cs")); // withdrawn, never committed
+
+    const result = await lease.commit();
+    await lease.release();
+
+    expect(existsSync(join(source, "Assets", "Scripts", "Extra.cs"))).toBe(false);
+    expect(git(source, "show --name-only --format= HEAD")).not.toContain("Extra.cs");
+    expect(result.commitsReplayed?.replayed ?? 0).toBe(0);
+  });
+
+  it("a path with a comma in its name is carried whole (Codex 2026-09-12 P#10)", async () => {
+    makeGitRepo();
+    const lease = await gitManager().acquireLease({ label: "t" });
+    writeFileSync(join(lease.path, "Assets", "Scripts", "Hero,Idle.cs"), "frames", "utf8");
+    git(lease.path, "add -A");
+    git(lease.path, 'commit -q -m "feat: idle"');
+
+    const result = await lease.commit();
+    await lease.release();
+
+    expect(result.commitsReplayed?.replayed).toBe(1);
+    expect(git(source, "show --name-only --format= HEAD")).toContain("Assets/Scripts/Hero,Idle.cs");
+    expect(readFileSync(join(source, "Assets", "Scripts", "Hero,Idle.cs"), "utf8")).toBe("frames");
+    // The path is staged as committed, not left as a staged reversal.
+    expect(git(source, "status --porcelain -- 'Assets/Scripts/Hero,Idle.cs'")).toBe("");
+  });
+
   it("replays the agent's commits onto the project's HEAD, in order, with author, message and content", async () => {
     makeGitRepo();
     writeFileSync(join(source, "Assets", "Scripts", "Wip.cs"), "user wip", "utf8"); // uncommitted → becomes the seed commit

@@ -1399,46 +1399,114 @@ export class WorkspaceLeaseManager {
     const touched = new Set<string>();
     const tmpIndex = join(os.tmpdir(), `strada-lease-replay-${randomUUID()}.index`);
     const env = { ...process.env, GIT_INDEX_FILE: tmpIndex };
-    // Which paths a LATER commit in this series touches: a path changed again
-    // after this commit is history, and its blob stands (N#8).
-    const pathsPerCommit = new Map<string, Set<string>>();
+    // What each lease commit changed, read ONCE for the whole series.
+    interface DiffEntry {
+      readonly mode: string;
+      readonly sha: string;
+      readonly path: string;
+      readonly status: string;
+      /** A gitlink on either side — a pointer, not one of the agent's files. */
+      readonly submodule: boolean;
+    }
+    const perCommit = new Map<string, DiffEntry[] | undefined>();
     for (const commit of commits) {
       const raw = await this.commandRunner({
         command: "git",
-        args: ["-C", workspacePath, "diff-tree", "--no-commit-id", "--no-renames", "--root", "-r", "-z", "--name-only", commit.sha],
+        args: ["-C", workspacePath, "diff-tree", "--no-commit-id", "--no-renames", "--root", "-r", "-z", "--raw", commit.sha],
         cwd: workspacePath,
         timeoutMs: this.worktreeTimeoutMs,
         maxOutput: 64 * 1024 * 1024,
       });
-      pathsPerCommit.set(commit.sha, new Set(raw.exitCode === 0 ? raw.stdout.split("\0").filter(Boolean) : []));
+      if (raw.exitCode !== 0) { perCommit.set(commit.sha, undefined); continue; }
+      const fields = raw.stdout.split("\0");
+      const entries: DiffEntry[] = [];
+      for (let i = 0; i + 1 < fields.length; i += 2) {
+        const m = /^:(\d{6}) (\d{6}) [0-9a-f]+ ([0-9a-f]+) ([A-Z])/.exec(fields[i]!);
+        const path = fields[i + 1]!;
+        if (!m || !path) continue;
+        entries.push({ mode: m[2]!, sha: m[3]!, status: m[4]!, path, submodule: m[1] === "160000" || m[2] === "160000" });
+      }
+      perCommit.set(commit.sha, entries);
+    }
+
+    // THE CONTENT THE LEASE ACTUALLY HOLDS, decided for the WHOLE SERIES
+    // before anything moves. Checking only the last commit that touches a path
+    // left HEAD describing an EARLIER version of it: a worker that committed
+    // B, then C, then restored the seed without committing had C skipped and
+    // B replayed, so the project's history ended at content the lease no
+    // longer had (Codex 2026-09-12 P#10). A path the lease has withdrawn is
+    // held out of every commit in the series, not just the last.
+    const lastTouch = new Map<string, DiffEntry>();
+    for (const commit of commits) {
+      for (const entry of perCommit.get(commit.sha) ?? []) lastTouch.set(entry.path, entry);
+    }
+    const withdrawn = new Set<string>();
+    const toHash: string[] = [];
+    for (const [path, entry] of lastTouch) {
+      if (entry.submodule) continue; // submodule pointers are not files
+      if (entry.status === "D") {
+        // The series ends by deleting it. If that deletion did not travel home
+        // the project keeps its copy, and no earlier version may be committed
+        // over it.
+        if (!deletedRels.has(toNative(path))) withdrawn.add(path);
+        continue;
+      }
+      toHash.push(path);
+    }
+    /** The lease's CURRENT sha for each path; undefined = could not be read. */
+    const hashNow = async (paths: readonly string[]): Promise<Map<string, string | undefined>> => {
+      const out = new Map<string, string | undefined>();
+      const run = async (chunk: readonly string[]): Promise<boolean> => {
+        const hashed = await this.commandRunner({
+          command: "git",
+          args: ["-C", workspacePath, "hash-object", "--", ...chunk],
+          cwd: workspacePath,
+          timeoutMs: this.worktreeTimeoutMs,
+          maxOutput: 4 * 1024 * 1024,
+        });
+        if (hashed.exitCode !== 0) return false;
+        const shas = hashed.stdout.trim().split("\n").map((l) => l.trim());
+        if (shas.length !== chunk.length) return false;
+        chunk.forEach((path, at) => out.set(path, shas[at]?.length === 40 ? shas[at] : undefined));
+        return true;
+      };
+      for (let i = 0; i < paths.length; i += 100) {
+        const chunk = paths.slice(i, i + 100);
+        if (await run(chunk)) continue;
+        // One unreadable path fails its whole batch: ask again one at a time
+        // so a single missing file cannot decide for ninety-nine others.
+        for (const path of chunk) {
+          if (!(await run([path]))) out.set(path, undefined);
+        }
+      }
+      return out;
+    };
+    const currentShas = await hashNow(toHash);
+    for (const path of toHash) {
+      const now = currentShas.get(path);
+      // Unreadable answers nothing, and a commit that may describe content the
+      // lease no longer holds is exactly what this preflight exists to stop.
+      if (now === undefined || now !== lastTouch.get(path)!.sha) withdrawn.add(path);
+    }
+    if (withdrawn.size > 0) {
+      getLoggerSafe().info("Lease replay held paths the worker changed after committing them", {
+        held: withdrawn.size,
+        paths: [...withdrawn].slice(0, 10),
+      });
     }
     try {
-      for (const [commitIndex, commit] of commits.entries()) {
-        const laterCommitPaths = new Set<string>();
-        for (const later of commits.slice(commitIndex + 1)) {
-          for (const p of pathsPerCommit.get(later.sha) ?? []) laterCommitPaths.add(p);
-        }
+      for (const commit of commits) {
         const head = await git(["rev-parse", "--verify", "HEAD"]);
         if (head.exitCode !== 0) break; // an unborn branch has nothing to build on
         const headSha = head.stdout.trim();
-        const raw = await this.commandRunner({
-          command: "git",
-          args: ["-C", workspacePath, "diff-tree", "--no-commit-id", "--no-renames", "--root", "-r", "-z", "--raw", commit.sha],
-          cwd: workspacePath,
-          timeoutMs: this.worktreeTimeoutMs,
-          maxOutput: 64 * 1024 * 1024,
-        });
-        if (raw.exitCode !== 0) { skipped++; continue; }
-        const fields = raw.stdout.split("\0");
-        const adds: string[] = [];
+        const entries = perCommit.get(commit.sha);
+        if (entries === undefined) { skipped++; continue; }
+        const adds: DiffEntry[] = [];
         const removes: string[] = [];
-        for (let i = 0; i + 1 < fields.length; i += 2) {
-          const meta = fields[i]!;
-          const posixPath = fields[i + 1]!;
-          const m = /^:(\d{6}) (\d{6}) [0-9a-f]+ ([0-9a-f]+) ([A-Z])/.exec(meta);
-          if (!m || !posixPath) continue;
-          const [, , dstMode, dstSha, status] = m;
-          if (dstMode === "160000" || m[1] === "160000") continue; // submodule pointers are not the agent's files
+        for (const entry of entries) {
+          const posixPath = entry.path;
+          if (entry.submodule) continue; // submodule pointers are not the agent's files
+          if (withdrawn.has(posixPath)) continue; // the lease no longer holds this content
           if (!posixPath.includes("/") && LEASE_SIDECAR_FILES.has(posixPath)) continue; // the lease's own bookkeeping, never project content
           const rel = toNative(posixPath);
           // A held DIRECTORY (an unreadable one from the walk) holds everything
@@ -1446,52 +1514,11 @@ export class WorkspaceLeaseManager {
           // never enters the project's history either (Codex 2026-09-11 #4, #7).
           if (isHeld(rel)) continue;
           if (!this.shouldCommitEntry(workspacePath, join(workspacePath, rel))) continue;
-          if (status === "D") {
+          if (entry.status === "D") {
             if (deletedRels.has(rel)) removes.push(posixPath);
             continue;
           }
-          adds.push(`${dstMode},${dstSha},${posixPath}`);
-        }
-        // THE CONTENT THE LEASE ACTUALLY HOLDS — for the LAST commit that
-        // touches a path. The replay staged the blob each commit recorded, so
-        // a worker that committed version B and then restored A without
-        // committing produced a project commit describing B while the working
-        // tree held A (Codex 2026-09-11 N#8). Earlier commits in a series are
-        // history and keep their blobs; the series must simply not END on
-        // content the lease no longer has.
-        const isLastForPath = (posixPath: string): boolean => !laterCommitPaths.has(posixPath);
-        const finalAdds = adds.filter((a) => isLastForPath(a.slice(a.lastIndexOf(",") + 1)));
-        const stale = new Set<string>();
-        if (finalAdds.length > 0) {
-          const paths = finalAdds.map((a) => a.slice(a.lastIndexOf(",") + 1));
-          for (let i = 0; i < paths.length; i += 100) {
-            const chunk = paths.slice(i, i + 100);
-            const hashed = await this.commandRunner({
-              command: "git",
-              args: ["-C", workspacePath, "hash-object", "--", ...chunk],
-              cwd: workspacePath,
-              timeoutMs: this.worktreeTimeoutMs,
-              maxOutput: 4 * 1024 * 1024,
-            });
-            if (hashed.exitCode !== 0) continue; // cannot tell: leave the commit as it is
-            const shas = hashed.stdout.trim().split("\n").map((l) => l.trim());
-            chunk.forEach((posixPath, at) => {
-              const now = shas[at];
-              const recorded = finalAdds.find((a) => a.endsWith(`,${posixPath}`))?.split(",")[1];
-              if (now !== undefined && recorded !== undefined && now.length === 40 && now !== recorded) {
-                stale.add(posixPath);
-              }
-            });
-          }
-        }
-        if (stale.size > 0) {
-          getLoggerSafe().info("Lease replay left paths the worker changed after committing them", {
-            commit: commit.sha.slice(0, 8),
-            paths: [...stale].slice(0, 10),
-          });
-          for (let i = adds.length - 1; i >= 0; i--) {
-            if (stale.has(adds[i]!.slice(adds[i]!.lastIndexOf(",") + 1))) adds.splice(i, 1);
-          }
+          adds.push(entry);
         }
         if (adds.length === 0 && removes.length === 0) { skipped++; continue; }
         rmSync(tmpIndex, { force: true });
@@ -1499,7 +1526,7 @@ export class WorkspaceLeaseManager {
         if (read.exitCode !== 0) { skipped++; continue; }
         let staged = true;
         for (let i = 0; i < adds.length && staged; i += 200) {
-          const chunk = adds.slice(i, i + 200).flatMap((a) => ["--cacheinfo", a]);
+          const chunk = adds.slice(i, i + 200).flatMap((a) => ["--cacheinfo", `${a.mode},${a.sha},${a.path}`]);
           staged = (await git(["update-index", "--add", ...chunk], { env })).exitCode === 0;
         }
         for (let i = 0; i < removes.length && staged; i += 200) {
@@ -1528,7 +1555,9 @@ export class WorkspaceLeaseManager {
         }
         replayedShas.add(commit.sha);
         projectShas.push(newSha);
-        for (const a of adds) touched.add(a.split(",").slice(2).join(",")); // a path may hold commas
+        // Structured fields, never a re-split string: a path with a comma in
+        // it ("Assets/Hero,Idle.cs") was cut at the wrong place (P#10).
+        for (const a of adds) touched.add(a.path);
         for (const r of removes) touched.add(r);
       }
       if (touched.size > 0) {
