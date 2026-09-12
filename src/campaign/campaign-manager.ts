@@ -4367,6 +4367,35 @@ export class CampaignManager {
    * between two of those reads produced a verdict set that no revision of the
    * game ever had (Codex 2026-09-12 R#16).
    */
+  /**
+   * Is this project a git checkout — and could we tell?
+   *
+   * `projectRevision()` answers "" for every failure alike, so an UNBORN
+   * repository (staged work, no first commit) and an unreadable one took the
+   * "no git at all" exception and closed requirements uncached, against a
+   * tree nothing had measured (Codex 2026-09-12 AA#1). Three answers, not
+   * two: a revision, a confirmed absence, or "we do not know".
+   */
+  private projectRepoState(): "revision" | "none" | "unknown" {
+    if (this.projectRevision() !== "") return "revision";
+    try {
+      const inside = execFileSync("git", ["-C", this.projectRoot, "rev-parse", "--is-inside-work-tree"], {
+        encoding: "utf8",
+        timeout: 10_000,
+        stdio: ["ignore", "pipe", "ignore"],
+      }).trim();
+      // Inside a work tree with no readable HEAD: an unborn or broken
+      // repository, which is not the same as having no repository.
+      return inside === "true" ? "unknown" : "none";
+    } catch {
+      // `--is-inside-work-tree` fails OUTSIDE a repository, which is the
+      // confirmed absence; it also fails when git itself cannot run, and we
+      // cannot tell those apart — so the cautious answer is "unknown" unless
+      // the directory plainly has no .git anywhere above it.
+      return existsSync(join(this.projectRoot, ".git")) ? "unknown" : "none";
+    }
+  }
+
   private projectRevision(): string {
     try {
       return execFileSync("git", ["-C", this.projectRoot, "rev-parse", "HEAD"], {
@@ -5027,7 +5056,15 @@ export class CampaignManager {
     // a closure to and nothing to be inconsistent with, while a dirty git
     // tree is measurably changing under the audit (Codex 2026-09-12 Z#1).
     const revisionNow = this.projectRevision();
-    const treeBefore = { revision: revisionNow, dirty: revisionNow !== "" && this.projectIsDirty(), tracked: revisionNow !== "" };
+    const repoState = this.projectRepoState();
+    const treeBefore = {
+      revision: revisionNow,
+      dirty: repoState !== "none" && this.projectIsDirty(),
+      tracked: repoState !== "none",
+      // An UNKNOWN repository state closes nothing: only a confirmed absence
+      // of git takes the uncached exception (Codex 2026-09-12 AA#1).
+      unknown: repoState === "unknown",
+    };
     const revisionForClosure = treeBefore.dirty ? "" : treeBefore.revision;
     const failedRepairs = campaign.milestones.filter((m) => m.id.startsWith("mcov") && m.status === "failed");
     const unclosed = failedRepairs.filter((m) => !closureHolds(m, revisionForClosure));
@@ -5068,9 +5105,11 @@ export class CampaignManager {
       // (Codex 2026-09-12 Z#1). A requirement is closed only against a tree
       // whose revision is known and unchanged; when it is not, the audit's
       // answer is reported and nothing is recorded.
-      const stillSameRevision = treeBefore.tracked
+      const stillSameRevision = treeBefore.unknown
+        ? false
+        : treeBefore.tracked
         ? revisionForClosure !== "" && this.projectRevision() === revisionForClosure && !this.projectIsDirty()
-        : this.projectRevision() === "";
+        : this.projectRevision() === "" && this.projectRepoState() === "none";
       for (const [key, ms] of byRequirement) {
         if (!needsJudging.has(key)) continue;
         // Never a key the answer names on both sides.
@@ -5103,7 +5142,10 @@ export class CampaignManager {
         return {
           open: asked,
           auditFailed:
-            treeBefore.tracked && (treeBefore.dirty || this.projectIsDirty())
+            treeBefore.unknown
+              ? "the project's revision could not be read (an unborn or unreadable repository), so nothing could be " +
+                `judged against one: ${asked.length} requirement(s) stay open`
+              : treeBefore.tracked && (treeBefore.dirty || this.projectIsDirty())
               ? "the project has uncommitted changes, so nothing could be judged against a revision of it: " +
                 `${asked.length} requirement(s) stay open`
               : undefined,

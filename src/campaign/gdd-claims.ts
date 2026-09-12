@@ -23,7 +23,7 @@
  * Nothing here knows a game's own names.
  */
 import type { PlaythroughEvidence } from "./types.js";
-import { frameRateAnswersPlatform, type GddPlatform } from "./gdd-platform.js";
+import { frameRateAnswersPlatform, gddPlatform, type GddPlatform } from "./gdd-platform.js";
 
 export type ClaimKind = "fps" | "boot_seconds" | "level_load_seconds" | "session_seconds" | "level_count";
 
@@ -48,6 +48,20 @@ export interface ClaimAssessment {
 }
 
 const MAX_CLAIMS = 12;
+
+/**
+ * The platform a claim's OWN sentence names, when it names one.
+ *
+ * A document may hold several platforms and several budgets — "Windows at
+ * least 60 fps; Android at most 30 fps" — and reading the document-wide set
+ * for every claim let a Windows measurement answer the Android sentence, and
+ * applied both budgets to both targets (Codex 2026-09-12 AA#4).
+ */
+function platformOfClaim(text: string): GddPlatform | undefined {
+  const named = gddPlatform(text);
+  if (named.targets.length > 0 || named.handheld) return named;
+  return undefined;
+}
 
 /** A window of text around a number, one sentence at most. */
 function fragment(text: string, index: number, length: number): string {
@@ -461,14 +475,24 @@ export function assessNumericClaims(
           // A frame rate measured on the wrong device answers nothing: a
           // desktop build used to satisfy "60 fps on mid-range phones"
           // (Codex 2026-09-11 B#11).
-          if (opts?.platform && !frameRateAnswersPlatform(opts.platform, opts.builtTarget)) {
+          // A CLAUSE THAT NAMES ITS OWN PLATFORM is about that platform: "at
+          // least 60 fps on Android" was answered by a Windows player,
+          // because the document-wide platform set was what the check saw
+          // (Codex 2026-09-12 AA#4). The claim's own sentence wins when it
+          // names one; otherwise the document's platforms stand.
+          // …when the caller told us what it built. With no platform context
+          // at all the provenance is unknown, and this reads exactly as
+          // before.
+          const scope = opts ? platformOfClaim(claim.text) ?? opts.platform : undefined;
+          if (scope && !frameRateAnswersPlatform(scope, opts?.builtTarget)) {
             return {
               claim,
               status: "unmeasured",
               measured: Number(playerPerf.avgFps.toFixed(1)),
               note:
-                `${playerPerf.avgFps.toFixed(1)} fps in a player built for ${opts.builtTarget ?? "the project's own target"}, ` +
-                `but the GDD asks for a handheld${opts.platform.evidence ? ` ("${opts.platform.evidence.slice(0, 80)}")` : ""} — ` +
+                `${playerPerf.avgFps.toFixed(1)} fps in a player built for ${opts?.builtTarget ?? "the project's own target"}, ` +
+                `but this requirement is for ${scope.targets.length > 0 ? scope.targets.join("/") : "a handheld"}` +
+                `${scope.evidence ? ` ("${scope.evidence.slice(0, 80)}")` : ""} — ` +
                 "build for that target and play it there to answer this",
               blocking: false,
             };

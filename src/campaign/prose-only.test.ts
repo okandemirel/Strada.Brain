@@ -195,6 +195,32 @@ describe("the repair budget applies to every scheduling path (Codex 2026-09-12 W
   });
 });
 
+describe("three answers about a repository, not two (Codex 2026-09-12 AA#1)", () => {
+  const state = (root: string): string => {
+    const manager = Object.create(CampaignManager.prototype) as CampaignManager;
+    (manager as unknown as { projectRoot: string }).projectRoot = root;
+    return (manager as unknown as { projectRepoState(): string }).projectRepoState();
+  };
+
+  it("tells a revision, a confirmed absence and an UNBORN repository apart", () => {
+    const committed = repo();
+    commit(committed, "Assets/Boss.cs");
+    expect(state(committed)).toBe("revision");
+
+    // No git at all: the exception that lets an audit close uncached.
+    expect(state(mkdtempSync(join(tmpdir(), "not-git-")))).toBe("none");
+
+    // An initialized repository with staged work and NO first commit:
+    // `rev-parse HEAD` fails exactly as it does for a broken repository, and
+    // reading that as "no git" closed requirements against a tree nothing had
+    // measured.
+    const unborn = repo();
+    writeFileSync(join(unborn, "Boss.cs"), "x");
+    execFileSync("git", ["add", "-A"], { cwd: unborn });
+    expect(state(unborn)).toBe("unknown");
+  });
+});
+
 describe("a dirty tree is an unknown revision (Codex 2026-09-12 W#4)", () => {
   const dirty = (root: string): boolean => {
     const manager = Object.create(CampaignManager.prototype) as CampaignManager;

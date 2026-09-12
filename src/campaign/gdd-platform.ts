@@ -299,7 +299,12 @@ function sentenceAt(text: string, index: number): string {
  */
 export function frameRateAnswersPlatform(platform: GddPlatform, builtTarget: string | undefined): boolean {
   if (!builtTarget) return !platform.handheld;
-  const built = builtTarget.toLowerCase();
+  // THE CANONICAL TARGET, through the same parser the build acceptance uses:
+  // a substring search for "macos" inside Unity's own "StandaloneOSX" found
+  // nothing, so a Mac player's frame rate answered a Mac document with "not
+  // measured" and an explanation about handhelds (Codex 2026-09-12 AA#5).
+  const canonical = targetOfBuild(builtTarget);
+  const built = (canonical ?? builtTarget).toLowerCase();
   // A NAMED target must be the one that was built: Android performance does
   // not answer an iOS-only requirement (Codex 2026-09-11 D#33).
   // ANY target the document named, not only the first: a document asking for

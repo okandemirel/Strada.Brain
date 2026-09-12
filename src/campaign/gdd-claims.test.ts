@@ -92,7 +92,9 @@ describe("assessNumericClaims", () => {
     const platform = gddPlatform("Target 60 fps on mid-range phones.");
     const desktop = assessNumericClaims(phoneClaims, evidence(), player, { platform, builtTarget: "StandaloneOSX" });
     expect(desktop[0]).toMatchObject({ status: "unmeasured", blocking: false, measured: 60 });
-    expect(desktop[0]!.note).toContain("the GDD asks for a handheld");
+    // The note names the requirement's OWN platform now, because a document
+    // can hold several (Codex 2026-09-12 AA#4).
+    expect(desktop[0]!.note).toContain("this requirement is for a handheld");
     const onDevice = assessNumericClaims(phoneClaims, evidence(), player, { platform, builtTarget: "Android" });
     expect(onDevice[0]).toMatchObject({ status: "met", blocking: true });
   });
@@ -670,5 +672,37 @@ describe("an EXACT duration (Codex 2026-09-12 Z)", () => {
   it("leaves an ordinary duration a ceiling and a floor a floor", () => {
     expect(extractNumericClaims("Each round lasts 30 seconds.").claims[0]!.comparator).toBe("max");
     expect(extractNumericClaims("Each round lasts at least 30 seconds.").claims[0]!.comparator).toBe("min");
+  });
+});
+
+/**
+ * A document may hold several platforms and several budgets. Reading the
+ * document-wide platform set for every claim let a Windows player at 60 fps
+ * answer "at least 60 fps on Android", and applied both budgets to both
+ * targets (Codex 2026-09-12 AA#4). And a Mac player's frame rate answered a
+ * Mac document with "not measured", because "macos" is not a substring of
+ * Unity's own "StandaloneOSX" (AA#5).
+ */
+describe("a frame-rate requirement belongs to the platform its clause names (Codex 2026-09-12 AA#4, AA#5)", () => {
+  const player = (avgFps: number): PlaythroughEvidence =>
+    evidence({ perf: { medium: "player", bootSeconds: 1, playSeconds: 10, playFrames: 600, avgFps, worstFrameMs: 40 } });
+  const judge = (gdd: string, builtTarget: string, fps = 60) => {
+    const claims = extractNumericClaims(gdd).claims.filter((c) => c.kind === "fps");
+    return assessNumericClaims(claims, evidence(), player(fps), { platform: gddPlatform(gdd), builtTarget })[0]!;
+  };
+
+  it("a desktop player does not answer an Android requirement, and the Android player does", () => {
+    const onWindows = judge("Ships on Windows and Android. At least 60 fps on Android.", "StandaloneWindows64");
+    expect(onWindows.status).toBe("unmeasured");
+    expect(onWindows.note).toContain("this requirement is for android");
+    expect(judge("Ships on Windows and Android. At least 60 fps on Android.", "Android").status).toBe("met");
+  });
+
+  it("Unity's own target spelling answers a document that names the platform plainly", () => {
+    const onMac = judge("Ships on macOS. At least 60 fps.", "StandaloneOSX");
+    expect(onMac.status).toBe("met");
+    expect(onMac.blocking).toBe(true);
+    // …and a slow Mac player is a real failure, not an unmeasured one.
+    expect(judge("Ships on macOS. At least 60 fps.", "StandaloneOSX", 12).status).toBe("not_met");
   });
 });
