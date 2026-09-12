@@ -4833,7 +4833,16 @@ export class CampaignManager {
     // error text on an artifact built FOR this host is a BROKEN ARTIFACT, and
     // waiving it delivered a player that could not start (Codex 2026-09-11
     // L#17).
-    if (!verdict.found && failure !== undefined && UNRUNNABLE_HERE_RE.test(failure) && artifactIsForeign(build.artifactPath, hostTarget())) {
+    // …INCLUDING THE PRODUCER'S OWN REFUSAL. The secondary targets learned
+    // this wording (Y#J4.6) and the PRIMARY path did not, so an .apk as the
+    // first target came back `{found:false}` — a missing proof with no cause,
+    // instead of an artifact this machine cannot run (Codex 2026-09-12 AA).
+    if (
+      !verdict.found
+      && failure !== undefined
+      && (UNRUNNABLE_HERE_RE.test(failure) || NOT_A_PLAYER_HERE_RE.test(failure))
+      && artifactIsForeign(build.artifactPath, hostTarget())
+    ) {
       return { ...verdict, unrunnableHere: failure.slice(0, 200) };
     }
     return verdict;

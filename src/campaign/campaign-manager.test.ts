@@ -4041,7 +4041,15 @@ describe("CampaignManager", () => {
         ran: true, ok: true, target: "Android", artifactPath: "/tmp/Builds/Android/Game.apk",
         sizeBytes: 60_000_000, durationMs: 90_000, scenes: 2,
       }),
-      runPlayer: async () => { throw new Error("exec format error"); },
+      // The PRODUCER's own refusal, word for word: it is not an OS execution
+      // error, so the primary path used to miss it entirely and report a
+      // missing proof with no cause (Codex 2026-09-12 AA).
+      runPlayer: async () => {
+        throw new Error(
+          "Error: /tmp/Builds/Android/Game.apk is not a player this machine can run " +
+          "(an .apk, WebGL folder or missing executable) — nothing was played.",
+        );
+      },
     });
     manager.attachEvents();
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
