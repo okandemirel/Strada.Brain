@@ -2122,7 +2122,9 @@ describe("CampaignManager", () => {
     // sprint carries it, and delivery waits for that sprint.
     const gapSprint = after.milestones.find((m) => m.coverageGap?.includes("unity_create_scene"));
     expect(gapSprint).toBeDefined();
-    expect(gapSprint!.status).toBe("pending");
+    // Scheduled, and possibly already picked up — either way delivery waits
+    // for it. (CI caught this as "running" where the local run saw "pending".)
+    expect(["pending", "running"]).toContain(gapSprint!.status);
   });
 
   it("does NOT declare delivery once the structural refusal has outlasted its budget", async () => {
