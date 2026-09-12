@@ -28,7 +28,7 @@ import { readPlaythroughVerdict, describePlaythrough, playthroughDirective, PLAY
 import { gddPlatform, buildSatisfiesTarget, artifactIsForeign, hostTarget, type BuildTarget } from "./gdd-platform.js";
 import { readPlaymodeRun } from "./playmode-run.js";
 import type { PlayerRunSpec } from "../core/bootstrap-stages/stage-runtime.js";
-import { assessNumericClaims, claimsRefusal, describeClaims, extractActionBudget, extractNumericClaims } from "./gdd-claims.js";
+import { assessNumericClaims, claimsRefusal, describeClaims, extractActionBudget, extractNumericClaims, extractSessionAllowanceSeconds } from "./gdd-claims.js";
 import { entryScreenInDocument } from "./gdd-scope.js";
 import { REQUIRED_EVIDENCE_PREFIX } from "../supervisor/required-evidence.js";
 import { deliveryReviewPrompt, renderSecondOpinion } from "../agents/review/codex-second-opinion.js";
@@ -4699,10 +4699,15 @@ export class CampaignManager {
     // meant "each round must last at least 90 seconds" produced no allowance
     // at all, so the producer's 45-second default cut every round short and
     // the requirement could not be met by any run (Codex 2026-09-12 W#9).
-    const longestSession = claims
-      .filter((c) => c.kind === "session_seconds")
-      .map((c) => c.value)
-      .reduce((max, value) => Math.max(max, value), 0);
+    // …AND WHAT A LABEL/VALUE TABLE STATES. The vehicle's durations live in
+    // one ("Median level duration" / "60–150 s (Normal), 150–300 s (Hard)"),
+    // which no prose pattern sees, so the run kept the producer's 45-second
+    // default and cut a legal 150-second round short (Codex 2026-09-12 AB,
+    // Job 3.6). An allowance, never a gate: a median is not a ceiling.
+    const longestSession = Math.max(
+      claims.filter((c) => c.kind === "session_seconds").reduce((max, c) => Math.max(max, c.value), 0),
+      extractSessionAllowanceSeconds(text) ?? 0,
+    );
     if (longestSession > 0) spec.deadlineSeconds = Math.ceil(longestSession * 1.5) + 15;
     const boot = claims
       .filter((c) => c.kind === "boot_seconds")

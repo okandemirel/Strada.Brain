@@ -3911,7 +3911,7 @@ describe("CampaignManager", () => {
     );
   });
 
-  it("a duration FLOOR is an allowance too (Codex 2026-09-12 W#9)", async () => {
+  it("a duration table is an allowance too (Codex 2026-09-12 W#9, AB Job 3.6)", async () => {
     // The spec excluded minimum-duration claims, so "each round must last at
     // least 90 seconds" produced no allowance at all and the producer's
     // 45-second default cut every round short: a correct game could not pass.
@@ -3931,7 +3931,22 @@ describe("CampaignManager", () => {
       runPlayer: async (root, artifact, spec) => { specs.push(spec); writePlayerVerdict(true, {}, root); },
     });
     manager.attachEvents();
-    const gdd = "# GDD\n\nThe game ships 3 levels. Each round must last at least 90 seconds with a mandatory timer.";
+    // The durations in a LABEL/VALUE TABLE, the shape the vehicle's document
+    // uses — no prose pattern sees it, so the run kept the producer's
+    // 45-second default (Codex 2026-09-12 AB, Job 3.6).
+    const gdd = [
+      "# GDD",
+      "",
+      "The game ships 3 levels.",
+      "",
+      "2.4 Session Design",
+      "Parameter",
+      "Target",
+      "Rationale",
+      "Median level duration",
+      "60–150 s (Normal), 150–300 s (Hard)",
+      "Fits coffee-break sessions",
+    ].join("\n");
     const campaign = manager.startFromGdd(ctx, gdd, "docs/Game_GDD.md");
     await waitFor(() => expect(tasks.submitted).toHaveLength(1), { timeout: 15_000 });
     settleMilestone("sprint A done");
@@ -3941,7 +3956,8 @@ describe("CampaignManager", () => {
     settleMilestone("integrated, all 42 tests pass");
 
     await waitFor(() => expect(specs.length).toBeGreaterThan(0), { timeout: 15_000 });
-    expect(specs[0]).toMatchObject({ deadlineSeconds: 150 });
+    // 300 s with the same headroom every allowance gets.
+    expect(specs[0]).toMatchObject({ deadlineSeconds: 465 });
     expect(storage.get(campaign.id)!.id).toBe(campaign.id);
   });
 

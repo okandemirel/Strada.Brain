@@ -398,6 +398,65 @@ export function extractActionBudget(gddText: string): number | undefined {
   return most > 0 ? most : undefined;
 }
 
+/**
+ * The longest a single session may take, for the RUN'S ALLOWANCE — not for a
+ * gate.
+ *
+ * The vehicle's document states its durations in a label/value table
+ * ("Median level duration" / "60–150 s (Normal), 150–300 s (Hard)"), which no
+ * prose pattern can see, so `playerRunSpec` derived no deadline and the
+ * producer's 45-second default cut a legal 150-second round short as
+ * unfinished (Codex 2026-09-12 AB, Job 3.6). A MEDIAN is not an every-level
+ * ceiling, so this is deliberately not a claim: it only tells the run how long
+ * it may keep playing.
+ */
+const DURATION_LABEL_RE =
+  /^(?:median|average|typical|target|max(?:imum)?|expected)?\s*(?:level|session|round|match|run|puzzle|stage)\s*(?:duration|length|time)\b/i;
+const DURATION_VALUE_RE =
+  /(\d+(?:\.\d+)?)\s*(?:[-–~]|to)\s*(\d+(?:\.\d+)?)\s*(ms|s|secs?|seconds?|min(?:ute)?s?)\b|(\d+(?:\.\d+)?)\s*(ms|s|secs?|seconds?|min(?:ute)?s?)\b/gi;
+
+/** The longest per-session allowance any document may ask a run for. */
+export const MAX_SESSION_ALLOWANCE_SECONDS = 600;
+
+export function extractSessionAllowanceSeconds(gddText: string): number | undefined {
+  const text = gddText ?? "";
+  let longest = 0;
+  // What the prose already states, ceilings and floors alike.
+  for (const c of extractNumericClaims(text).claims) {
+    if (c.kind === "session_seconds") longest = Math.max(longest, c.value);
+  }
+  // …and what a label/value table states, on the line the label introduces or
+  // the next one.
+  const lines = text.split(/\r?\n/).map((l) => l.replace(/^[\s•\t|-]+|[\s|]+$/g, ""));
+  for (let i = 0; i < lines.length; i++) {
+    if (!DURATION_LABEL_RE.test(lines[i] ?? "")) continue;
+    // WITHIN THE CLAUSE THE LABEL INTRODUCES. "Session length | Levels of 1–4
+    // minutes; ~10 sessions and ~60 minutes of play per DAU per day" gave an
+    // hour-long session allowance, because the sentence goes on to talk about
+    // a DAY (measured on the vehicle's document).
+    const clauseOf = (line: string): string => line.split(";")[0] ?? line;
+    for (const candidate of [clauseOf(lines[i] ?? ""), clauseOf(lines[i + 1] ?? ""), clauseOf(lines[i + 2] ?? "")]) {
+      DURATION_VALUE_RE.lastIndex = 0;
+      let m: RegExpExecArray | null;
+      let found = false;
+      while ((m = DURATION_VALUE_RE.exec(candidate)) !== null) {
+        const unit = m[3] ?? m[5] ?? "s";
+        const upper = toSeconds(Number(m[2] ?? m[1] ?? m[4]), unit);
+        if (upper > 0 && upper <= 4 * 3600) {
+          longest = Math.max(longest, upper);
+          found = true;
+        }
+      }
+      if (found) break;
+    }
+  }
+  // A SESSION IS NOT A SITTING. Ten minutes is already generous for one
+  // session of any game this framework builds, and a stray figure about a day
+  // must not let one run keep playing for an hour.
+  const bounded = Math.min(longest, MAX_SESSION_ALLOWANCE_SECONDS);
+  return bounded > 0 ? bounded : undefined;
+}
+
 /** Hold each claim against the play-through evidence. */
 /**
  * The DISTINCT sessions a play-through actually finished.

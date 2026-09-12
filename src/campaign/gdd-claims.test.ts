@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { gddPlatform } from "./gdd-platform.js";
-import { assessNumericClaims, claimsRefusal, describeClaims, extractActionBudget, extractNumericClaims, finishedSessionIndices } from "./gdd-claims.js";
+import { assessNumericClaims, claimsRefusal, describeClaims, extractActionBudget, extractNumericClaims, extractSessionAllowanceSeconds, finishedSessionIndices, MAX_SESSION_ALLOWANCE_SECONDS } from "./gdd-claims.js";
 import type { PlaythroughEvidence } from "./types.js";
 
 const GDD = `# Sky Pigs
@@ -748,5 +748,43 @@ describe("a clause is a requirement's scope, and a session's own clock is its le
     );
     expect(aggregate[0]!.status).toBe("met");
     expect(aggregate[0]!.measured).toBe(20);
+  });
+});
+
+/**
+ * The vehicle's durations live in a label/value table ("Median level
+ * duration" / "60–150 s (Normal), 150–300 s (Hard)"), which no prose pattern
+ * can see — so the run kept the producer's 45-second default and cut a legal
+ * 150-second round short as unfinished (Codex 2026-09-12 AB, Job 3.6). An
+ * ALLOWANCE, never a gate: a median is not a ceiling.
+ */
+describe("how long a run may keep playing one session (Codex 2026-09-12 AB)", () => {
+  it("reads a label/value duration table, and the prose it already knew", () => {
+    expect(
+      extractSessionAllowanceSeconds(
+        "2.4 Session Design\nParameter\nTarget\nRationale\nMedian level duration\n60–150 s (Normal), 150–300 s (Hard)\nFits coffee-break sessions",
+      ),
+    ).toBe(300);
+    expect(extractSessionAllowanceSeconds("Each round lasts 30-60 seconds.")).toBe(60);
+    expect(extractSessionAllowanceSeconds("Session length: 4 minutes")).toBe(240);
+    expect(extractSessionAllowanceSeconds("A puzzle game with 12 levels.")).toBeUndefined();
+  });
+
+  it("stops at the clause the label introduces, and never asks for a sitting", () => {
+    // "Levels of 1–4 minutes; ~10 sessions and ~60 minutes of play per DAU per
+    // day" gave an HOUR-long session allowance (measured on the vehicle's
+    // document).
+    expect(
+      extractSessionAllowanceSeconds(
+        "Session length\nLevels of 1–4 minutes; ~10 sessions and ~60 minutes of play per DAU per day",
+      ),
+    ).toBe(240);
+    // …and an explicitly enormous figure is bounded.
+    expect(extractSessionAllowanceSeconds("Median level duration\n45 minutes")).toBe(MAX_SESSION_ALLOWANCE_SECONDS);
+  });
+
+  it("is not a claim: nothing is judged against it", () => {
+    const doc = "Median level duration\n60–150 s (Normal), 150–300 s (Hard)";
+    expect(extractNumericClaims(doc).claims.filter((c) => c.kind === "session_seconds")).toEqual([]);
   });
 });
