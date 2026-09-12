@@ -512,6 +512,14 @@ export interface PlaythroughEvidence {
      */
     identityVerified?: boolean;
     requestedIndex?: number;
+    /**
+     * WHERE the identity came from: "active-session" (the game named this
+     * session), "start-acceptance" (the driver's request was accepted and the
+     * game registers no identity service) or "unverified". A verified flag
+     * alone could not tell a game that CONFIRMED the content from one that
+     * merely did not deny it (Codex 2026-09-12 AC J1).
+     */
+    identitySource?: string;
     /** The index the game itself reported as active, when it can report one. */
     observedIndex?: number;
   }>;

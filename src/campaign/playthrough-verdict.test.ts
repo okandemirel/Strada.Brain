@@ -156,6 +156,37 @@ describe("the play-through verdict the campaign reads back (measured 2026-09-10:
   });
 });
 
+describe("whose word a session's identity is (Codex 2026-09-12 AC J1)", () => {
+  it("names how many sessions the GAME identified and how many rest on the driver's acceptance", () => {
+    write({
+      ...ok,
+      record: {
+        ...ok.record, sessionCount: 3,
+        sessions: [
+          { index: 1, outcome: "Won", actions: 4, seconds: 5, startAccepted: true, reachedOutcome: true, identityVerified: true, identitySource: "active-session" },
+          { index: 2, outcome: "Won", actions: 4, seconds: 5, startAccepted: true, reachedOutcome: true, identityVerified: true, identitySource: "start-acceptance" },
+        ],
+      },
+    });
+    const e = readPlaythroughVerdict(root, 0);
+    expect(e.sessions?.[1]?.identitySource).toBe("start-acceptance");
+    const line = describePlaythrough(e);
+    expect(line).toContain("identity: 1 session(s) named by the game, 1 on the driver's acceptance alone");
+    // A run whose identities ALL come from the game says nothing of the kind.
+    write({
+      ...ok,
+      record: {
+        ...ok.record, sessionCount: 3,
+        sessions: [
+          { index: 1, outcome: "Won", actions: 4, seconds: 5, startAccepted: true, reachedOutcome: true, identityVerified: true, identitySource: "active-session" },
+          { index: 2, outcome: "Won", actions: 4, seconds: 5, startAccepted: true, reachedOutcome: true, identityVerified: true, identitySource: "active-session" },
+        ],
+      },
+    });
+    expect(describePlaythrough(readPlaythroughVerdict(root, 0))).not.toContain("acceptance alone");
+  });
+});
+
 describe("a session record that omits its fields keeps them omitted (Codex 2026-09-11 E#7)", () => {
   it("does not invent index 0 or 0 actions", () => {
     write({

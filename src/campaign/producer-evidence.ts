@@ -59,8 +59,18 @@ export interface EvidenceBinding {
 export interface EvidenceTicket {
   readonly binding: EvidenceBinding;
   readonly issuedAt: number;
-  /** Sessions a play-through was asked to play, when it was asked for any. */
-  readonly requestedSessions?: readonly number[];
+  /**
+   * Sessions a play-through was asked to play, when it was asked for any.
+   *
+   * `"all"` is the request the tools actually take — play every session the
+   * catalogue holds — and a ticket that could only name indices had to leave
+   * the field empty for those runs, which put NO session requirement on the
+   * record at all: an empty session list was admitted for a run asked to play
+   * the whole game (Codex 2026-09-12 AC J1). With `"all"` the record must say
+   * how large the catalogue is and carry one verified observation per session
+   * in it.
+   */
+  readonly requestedSessions?: readonly number[] | "all";
 }
 
 /** How the producer's process ended, as the transport observed it. */
@@ -76,6 +86,15 @@ export interface SessionObservation {
   readonly index: number;
   readonly observedIndex?: number;
   readonly identityVerified: boolean;
+  /**
+   * WHERE that identity came from, when the producer says: "active-session"
+   * (the game named this session), "start-acceptance" (the driver's request
+   * was accepted and the game registers no identity service) or "unverified".
+   * Carried, not yet gated: a receipt whose sessions all rest on acceptance
+   * is weaker evidence than one the game confirmed, and the flag alone hid
+   * the difference (Codex 2026-09-12 AC J1).
+   */
+  readonly identitySource?: "active-session" | "start-acceptance" | "unverified";
   readonly actions: number;
   readonly outcome: string;
   readonly reachedOutcome: boolean;
@@ -93,6 +112,12 @@ export interface ProducerEvidence {
   readonly artifactSha256?: string;
   readonly execution: ExecutionObservation;
   readonly sessions?: readonly SessionObservation[];
+  /**
+   * How many sessions the game's catalogue holds, as the producer read it.
+   * Required to settle a `"all"` request: without it nothing says how many
+   * sessions "every session" is.
+   */
+  readonly sessionCount?: number;
   /** Whatever the measurement itself is — counts, timings, paths. Judged elsewhere. */
   readonly payload?: Record<string, unknown>;
 }
@@ -120,7 +145,9 @@ export type EvidenceRefusal =
 
 /** The receiver's answer: admitted, or refused with the first reason in order. */
 export type EvidenceDecision =
-  | { readonly admitted: true; readonly recordSha256: string }
+  // THE RECORD THAT WAS ADMITTED, so a caller reads the same bytes this
+  // decision judged instead of parsing them again (Codex 2026-09-12 AB).
+  | { readonly admitted: true; readonly recordSha256: string; readonly record: ProducerEvidence }
   | { readonly admitted: false; readonly refusal: EvidenceRefusal; readonly detail: string };
 
 /** A record larger than this is refused whole, never truncated into a pass. */
@@ -205,7 +232,12 @@ export function parseProducerEvidence(bytes: string | undefined): ProducerEviden
       ) {
         return "EVIDENCE_SCHEMA_INVALID";
       }
+      const source = x.identitySource;
+      if (source !== undefined && source !== "active-session" && source !== "start-acceptance" && source !== "unverified") {
+        return "EVIDENCE_SCHEMA_INVALID";
+      }
       sessions.push({
+        ...(source !== undefined ? { identitySource: source } : {}),
         requestedIndex: x.requestedIndex,
         index: x.index,
         ...(x.observedIndex !== undefined ? { observedIndex: x.observedIndex } : {}),
@@ -231,6 +263,7 @@ export function parseProducerEvidence(bytes: string | undefined): ProducerEviden
       timedOut: exec.timedOut,
     },
     ...(sessions ? { sessions } : {}),
+    ...(isSafeCount(r.sessionCount) ? { sessionCount: r.sessionCount } : {}),
     ...(r.payload !== null && typeof r.payload === "object" && !Array.isArray(r.payload)
       ? { payload: r.payload as Record<string, unknown> }
       : {}),
@@ -383,7 +416,25 @@ function admitEvidence(
       };
     }
   }
-  for (const wanted of ticket.requestedSessions ?? []) {
+  // "ALL" IS THE REQUEST THE TOOLS TAKE. Resolved against the catalogue the
+  // producer itself reports: a run asked to play the whole game must say how
+  // large the game is and answer for every session in it (Codex 2026-09-12 AC
+  // J1).
+  let wantedSessions: readonly number[];
+  if (ticket.requestedSessions === "all") {
+    const catalogue = record.sessionCount;
+    if (!isSafeCount(catalogue) || catalogue < 1) {
+      return {
+        admitted: false,
+        refusal: "SESSION_MISSING",
+        detail: "every session was asked for and the record does not say how many the game holds",
+      };
+    }
+    wantedSessions = Array.from({ length: catalogue }, (_unused, i) => i + 1);
+  } else {
+    wantedSessions = ticket.requestedSessions ?? [];
+  }
+  for (const wanted of wantedSessions) {
     // ONE observation per requested session: a good first entry hid a
     // contradictory second one (Codex 2026-09-12 AB).
     const played = (record.sessions ?? []).filter((s) => s.requestedIndex === wanted);
@@ -420,5 +471,5 @@ function admitEvidence(
       };
     }
   }
-  return { admitted: true, recordSha256: recordSha256(bytes) };
+  return { admitted: true, recordSha256: recordSha256(bytes), record };
 }

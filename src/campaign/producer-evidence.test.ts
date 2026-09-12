@@ -292,7 +292,7 @@ describe("admitting a record against the ticket that was issued", () => {
     const r = record();
     const bytes = bytesOf(r);
     const received = receiveEvidence(ticket(), bytes, ok, observed);
-    expect(received).toEqual({ admitted: true, recordSha256: recordSha256(bytes) });
+    expect(received).toEqual({ admitted: true, recordSha256: recordSha256(bytes), record: r });
     expect(receiveEvidence(ticket(), "null", ok, observed)).toMatchObject({
       admitted: false,
       refusal: "EVIDENCE_SCHEMA_INVALID",
@@ -365,6 +365,53 @@ describe("what a receipt may not be admitted on (Codex 2026-09-12 AC)", () => {
     expect(receiveEvidence(asked, bytesOf(contradictoryExtra), ok, observed)).toMatchObject({
       admitted: false,
       refusal: "SESSION_MISMATCH",
+    });
+  });
+
+  it("settles a request for EVERY session against the catalogue the record reports", () => {
+    // The tools take "all", and a ticket that could only name indices left
+    // the field empty for those runs — so a record with NO sessions answered
+    // a request to play the whole game (Codex 2026-09-12 AC J1).
+    const all: EvidenceTicket = { ...ticket({}), requestedSessions: "all" };
+    const played = (count: number, upTo: number): ProducerEvidence => record({
+      sessionCount: count,
+      sessions: Array.from({ length: upTo }, (_unused, i) => ({
+        requestedIndex: i + 1, index: i + 1, observedIndex: i + 1,
+        identityVerified: true, actions: 5, outcome: "Won", reachedOutcome: true, seconds: 30,
+      })),
+    });
+    expect(receiveEvidence(all, bytesOf(record({})), ok, observed)).toMatchObject({
+      admitted: false,
+      refusal: "SESSION_MISSING",
+      detail: "every session was asked for and the record does not say how many the game holds",
+    });
+    // A catalogue of three, two of them played: the third is a missing
+    // measurement, not a silent pass.
+    expect(receiveEvidence(all, bytesOf(played(3, 2)), ok, observed)).toMatchObject({
+      admitted: false,
+      refusal: "SESSION_MISSING",
+      detail: "session 3 was asked for and is not in the record",
+    });
+    expect(receiveEvidence(all, bytesOf(played(3, 3)), ok, observed)).toMatchObject({ admitted: true });
+  });
+
+  it("carries where a session's identity came from, and refuses a value it does not know", () => {
+    const asked = ticket({}, [1]);
+    const withSource = (identitySource: string): string =>
+      bytesOf(record({
+        sessions: [{ requestedIndex: 1, index: 1, observedIndex: 1, identityVerified: true, actions: 5, outcome: "Won", reachedOutcome: true, seconds: 30, identitySource } as never],
+      }));
+    for (const source of ["active-session", "start-acceptance", "unverified"]) {
+      const decision = receiveEvidence(asked, withSource(source), ok, observed);
+      // "unverified" beside identityVerified:true is a contradiction the
+      // producer should not emit; the receiver's job here is to carry the
+      // field faithfully, and the identity rules above still apply.
+      expect(decision.admitted, source).toBe(true);
+      expect(decision.record?.sessions?.[0]?.identitySource, source).toBe(source);
+    }
+    expect(receiveEvidence(asked, withSource("whatever-i-like"), ok, observed)).toMatchObject({
+      admitted: false,
+      refusal: "EVIDENCE_SCHEMA_INVALID",
     });
   });
 

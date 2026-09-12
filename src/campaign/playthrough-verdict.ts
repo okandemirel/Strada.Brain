@@ -188,6 +188,8 @@ export function readPlaythroughVerdict(
                     // read exactly as before.
                     ...(typeof r.identityVerified === "boolean" ? { identityVerified: r.identityVerified } : {}),
                     ...(num(r.requestedIndex) !== undefined ? { requestedIndex: num(r.requestedIndex) } : {}),
+                    // WHOSE WORD the identity is (Codex 2026-09-12 AC J1).
+                    ...(typeof r.identitySource === "string" && r.identitySource !== "" ? { identitySource: r.identitySource } : {}),
                     // …and WHAT THE GAME SAID was running, which the reader
                     // dropped: an `identityVerified: true` beside an
                     // observedIndex naming a different session is a
@@ -261,10 +263,20 @@ export function describePlaythrough(e: PlaythroughEvidence | undefined): string 
     e.sessions && e.sessions.length > 1
       ? `; played ${e.sessions.length}: ${e.sessions.map((s) => `#${s.index} ${s.outcome} in ${s.actions}`).join(", ")}`
       : "";
+  // WHOSE WORD THE IDENTITIES ARE. A session "verified" because the driver's
+  // StartSession was accepted is a weaker claim than one the game itself
+  // named, and the report showed them identically (Codex 2026-09-12 AC J1).
+  const accepted = (e.sessions ?? []).filter((s) => s.identitySource === "start-acceptance").length;
+  const named = (e.sessions ?? []).filter((s) => s.identitySource === "active-session").length;
+  const identity =
+    accepted > 0
+      ? `; identity: ${named} session(s) named by the game, ${accepted} on the driver's acceptance alone ` +
+        "(the game registers no Strada.Core.Play.IActiveSession)"
+      : "";
   if (e.ok) {
-    return `play-through OK${where}: session ${e.session ?? "?"} played to ${e.outcome ?? "an outcome"} in ${e.actions ?? "?"} actions${played}${frames}${start}${perf}${catalog}`;
+    return `play-through OK${where}: session ${e.session ?? "?"} played to ${e.outcome ?? "an outcome"} in ${e.actions ?? "?"} actions${played}${identity}${frames}${start}${perf}${catalog}`;
   }
-  return `play-through FAILED${where}: ${e.reasons && e.reasons.length > 0 ? e.reasons.join("; ") : "no reason recorded"}${played}${frames}${start}${perf}${catalog}`;
+  return `play-through FAILED${where}: ${e.reasons && e.reasons.length > 0 ? e.reasons.join("; ") : "no reason recorded"}${played}${identity}${frames}${start}${perf}${catalog}`;
 }
 
 /** The timing, with its medium: a frame rate from the batch editor is a floor, not the player's. */
