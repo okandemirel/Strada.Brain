@@ -11,7 +11,9 @@ afterEach(() => { rmSync(root, { recursive: true, force: true }); });
 const ok = {
   ok: true, reasons: [],
   record: { scene: "Entry", session: 1, autoStarted: false, actions: 12, outcome: "Won" },
-  frames: { count: 5, flat: 0, maxMotionShare: 0.31 }, measuredAt: "2026-09-10T10:00:00.000Z",
+  // A LIVE stamp: the reader holds the writer's own measuredAt to the sprint
+  // window now, so a fixed date two days old is correctly stale (R#8).
+  frames: { count: 5, flat: 0, maxMotionShare: 0.31 }, measuredAt: new Date().toISOString(),
 };
 function write(content: unknown, ageMs = 0): string {
   const path = join(root, PLAYTHROUGH_VERDICT_REL);
@@ -209,5 +211,24 @@ describe("a play-through verdict names the attempt that asked for it (Codex F#10
     // A tool that does not echo the id yet behaves exactly as before.
     write(ok);
     expect(readPlaythroughVerdict(root, 0, undefined, "m3-1-1700000000000")).toMatchObject({ found: true, ok: true });
+  });
+});
+
+describe("the writer's own stamp, not just the file's mtime (Codex 2026-09-12 R#8)", () => {
+  it("refuses a touched file whose measuredAt predates the sprint, or comes from the future", () => {
+    // Executed by the reviewer: a touched file carrying a year-2000 stamp was
+    // accepted as this sprint's play-through.
+    write({ ...ok, measuredAt: "2000-01-01T00:00:00.000Z" });
+    expect(readPlaythroughVerdict(root, Date.now() - 60_000)).toMatchObject({ found: false, stale: true });
+
+    write({ ...ok, measuredAt: "2099-01-01T00:00:00.000Z" });
+    expect(readPlaythroughVerdict(root, Date.now() - 60_000)).toMatchObject({ found: false, stale: true });
+
+    // A stamp inside the window stands, and so does a file that carries none
+    // (a tool that does not stamp yet behaves exactly as before).
+    write(ok);
+    expect(readPlaythroughVerdict(root, Date.now() - 60_000)).toMatchObject({ found: true, ok: true });
+    write({ ...ok, measuredAt: undefined });
+    expect(readPlaythroughVerdict(root, Date.now() - 60_000)).toMatchObject({ found: true, ok: true });
   });
 });

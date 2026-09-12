@@ -60,6 +60,9 @@ interface VerdictFile {
  * was written at or after `sinceMs`. An older file is reported as stale so the
  * gate can say "you have a verdict, but from before this sprint's changes".
  */
+/** The runner may be another machine whose clock is minutes off the coordinator's. */
+export const VERDICT_CLOCK_SKEW_MS = 5 * 60_000;
+
 export function readPlaythroughVerdict(
   projectRoot: string,
   sinceMs: number,
@@ -94,6 +97,19 @@ export function readPlaythroughVerdict(
   } catch {
     return { found: false, unreadable: true };
   }
+  // THE WRITER'S OWN STAMP, not only the file's mtime. A copy refreshes the
+  // mtime, and the reviewer's executed case — a touched file whose measuredAt
+  // read year 2000 — was accepted as this sprint's play-through (Codex
+  // 2026-09-12 R#8). The same rule the run record already applies: a stamp
+  // older than the attempt is stale, one from the future is no stamp at all.
+  const stampedAt = ((): number | undefined => {
+    const raw = (parsed as { measuredAt?: unknown }).measuredAt;
+    if (typeof raw !== "string" || raw.trim() === "") return undefined;
+    const ms = Date.parse(raw);
+    return Number.isFinite(ms) ? ms : undefined;
+  })();
+  if (stampedAt !== undefined && stampedAt + VERDICT_CLOCK_SKEW_MS < sinceMs) return { found: false, stale: true };
+  if (stampedAt !== undefined && stampedAt > Date.now() + VERDICT_CLOCK_SKEW_MS) return { found: false, stale: true };
   // A VERDICT FROM ANOTHER ATTEMPT is not this attempt's proof, whatever its
   // clock says — compared only when both sides carry an id, so a tool that
   // does not echo it yet behaves exactly as before (Codex F#10 / I#11).
