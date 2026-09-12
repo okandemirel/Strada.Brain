@@ -114,7 +114,7 @@ import {
   userExplicitlyAskedForPlan,
 } from "./autonomy/index.js";
 import { MUTATION_TOOLS, WRITE_OPERATIONS, looksLikeWriteTool, extractFilePath, isVerificationToolName } from "./autonomy/constants.js";
-import { DMPolicy, isDestructiveOperation, type DMPolicyConfig } from "../security/dm-policy.js";
+import { DMPolicy, isDestructiveOperation, destructiveShellFlag, type DMPolicyConfig } from "../security/dm-policy.js";
 import {
   checkReadOnlyBlock,
   createReadOnlyToolStub,
@@ -4353,7 +4353,13 @@ export class Orchestrator {
         // allowlist override inside it) ever ran. Measured 2026-08-24.
         const allowlistedShell =
           matchProjectScopedAllowlist(command, this.projectPath) !== null;
-        if (!allowlistedShell && isDestructiveOperation(toolName, input)) {
+        // A destructive ACT is refused outright; a command that merely carries
+        // an execution SHAPE (a subshell, an interpreter one-liner) goes to the
+        // reviewer, which can read what it actually does. Refusing the shape
+        // unread cost a sprint its turn for `ls … && file … && python3 -c
+        // <read the image's size>` — a measurement the agent could have
+        // written to a file and run anyway (measured live 2026-09-12 05:03).
+        if (!allowlistedShell && destructiveShellFlag(command) === "action") {
           return { approved: false, reason: "shell command looks destructive" };
         }
         // Thread the project root so the deterministic project-scoped allowlist

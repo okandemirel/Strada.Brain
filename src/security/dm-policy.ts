@@ -260,36 +260,58 @@ export function createDMPolicy(
   return new DMPolicy(channel, config);
 }
 
+/**
+ * Why a shell command was flagged.
+ *
+ * "action" — the command NAMES a destructive act: rm, dd, mkfs, a redirect
+ * into /etc or a raw device, a pipe into a shell. Nothing autonomous may run
+ * one of these.
+ *
+ * "shape" — the command merely has a shape that COULD carry one: a subshell,
+ * a backtick, a one-liner passed to an interpreter. These appear in ordinary
+ * measurement work, and refusing them on their shape alone cost a sprint its
+ * turn for `ls … && file … && python3 -c <read the image's size>` (measured
+ * live 2026-09-12 05:03). They are still reviewed — just not refused unread.
+ */
+export type DestructiveShellFlag = "action" | "shape" | null;
+
+/** Which kind of flag this shell command raises, if any. */
+export function destructiveShellFlag(rawCommand: string): DestructiveShellFlag {
+  const command = rawCommand.toLowerCase();
+  const dangerous = [
+    "rm ", "del ", "rmdir", "format", "mkfs", "dd ",
+    "shutdown", "reboot", "truncate ", "shred ", "chmod 777",
+  ];
+  if (dangerous.some((p) => command.includes(p))) return "action";
+  const destructiveActions = [
+    /(?:curl|wget|fetch)\s.*\|\s*(ba)?sh/,     // Pipe-to-shell
+    /\|\s*(?:ba)?sh\b/,                          // Any pipe to sh/bash
+    />\s*\/etc\//,                               // Redirect to /etc/
+    // Redirect to system/user directories. /dev is handled separately below:
+    // writing to /dev/sda is destructive, writing to /dev/null is how every
+    // shell script discards output.
+    />\s*\/(?:proc|sys|boot|root|var|home)\//,
+    // Any /dev target except the discard and standard streams.
+    />\s*\/dev\/(?!null\b|stdout\b|stderr\b)/,
+    />\s*~\//,                                     // Redirect to home directory
+    />\s*\.\.\//,                                  // Redirect via path traversal
+  ];
+  if (destructiveActions.some((p) => p.test(command))) return "action";
+  const executionShapes = [
+    /\$\s*\(/,                                   // Subshell injection (with optional whitespace)
+    /`[^`]+`/,                                   // Backtick command substitution
+    /python[23]?\s+-c\s/,                        // Python one-liner execution
+    /node\s+-e\s/,                               // Node.js one-liner execution
+  ];
+  return executionShapes.some((p) => p.test(command)) ? "shape" : null;
+}
+
 export function isDestructiveOperation(toolName: string, input: Record<string, unknown>): boolean {
   const baseName = toolName.includes(":") ? toolName.split(":").pop()! : toolName;
   if (!DESTRUCTIVE_TOOLS.includes(baseName)) return false;
 
   if (toolName === "shell_exec") {
-    const command = String(input["command"] || "").toLowerCase();
-    const dangerous = [
-      "rm ", "del ", "rmdir", "format", "mkfs", "dd ",
-      "shutdown", "reboot", "truncate ", "shred ", "chmod 777",
-    ];
-    if (dangerous.some((p) => command.includes(p))) return true;
-    // Detect piped remote execution and subshell injection
-    const dangerousPatterns = [
-      /(?:curl|wget|fetch)\s.*\|\s*(ba)?sh/,     // Pipe-to-shell
-      /\$\s*\(/,                                   // Subshell injection (with optional whitespace)
-      /`[^`]+`/,                                   // Backtick command substitution
-      /\|\s*(?:ba)?sh\b/,                          // Any pipe to sh/bash
-      /python[23]?\s+-c\s/,                        // Python one-liner execution
-      /node\s+-e\s/,                               // Node.js one-liner execution
-      />\s*\/etc\//,                               // Redirect to /etc/
-      // Redirect to system/user directories. /dev is handled separately below:
-      // writing to /dev/sda is destructive, writing to /dev/null is how every
-      // shell script discards output.
-      />\s*\/(?:proc|sys|boot|root|var|home)\//,
-      // Any /dev target except the discard and standard streams.
-      />\s*\/dev\/(?!null\b|stdout\b|stderr\b)/,
-      />\s*~\//,                                     // Redirect to home directory
-      />\s*\.\.\//,                                  // Redirect via path traversal
-    ];
-    return dangerousPatterns.some((p) => p.test(command));
+    return destructiveShellFlag(String(input["command"] || "")) !== null;
   }
 
   return true;
