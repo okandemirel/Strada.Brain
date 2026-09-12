@@ -597,3 +597,55 @@ describe("a session whose content nobody could identify (Codex 2026-09-12 X)", (
     expect(adopted[0]!.status).toBe("not_met");
   });
 });
+
+/**
+ * Only the frame rate consumed the built player's evidence, so a player whose
+ * boot took 12 s and whose only level ran 120 s was judged MET against a 6 s
+ * boot and a 60 s round — measured in the editor, where neither number is the
+ * product's (Codex 2026-09-12 Z).
+ */
+describe("the shipped artifact answers the document's numbers (Codex 2026-09-12 Z)", () => {
+  const gdd = "# GDD\n\nThe game ships 3 levels. Cold boot under 6 seconds. Each round lasts under 60 seconds.";
+  const editorRun = evidence({
+    sessionCount: 3,
+    sessions: [1, 2, 3].map((index) => ({ index, outcome: "Won", actions: 5, seconds: 10 })),
+    perf: { medium: "editor-playmode-batch", bootSeconds: 0.2, playSeconds: 30, playFrames: 900, avgFps: 40, worstFrameMs: 60 },
+  });
+  const playerRun = (over: Partial<PlaythroughEvidence> = {}): PlaythroughEvidence => ({
+    found: true, ok: true, outcome: "Won", session: 1, actions: 20,
+    perf: { medium: "player", bootSeconds: 12, playSeconds: 120, playFrames: 3600, avgFps: 30, worstFrameMs: 90 },
+    ...over,
+  });
+
+  it("takes the player's boot time and session length over the editor's", () => {
+    const claims = extractNumericClaims(gdd).claims;
+    const judged = assessNumericClaims(claims, editorRun, playerRun());
+    const boot = judged.find((a) => a.claim.kind === "boot_seconds")!;
+    expect(boot.status).toBe("not_met");
+    expect(boot.measured).toBe(12);
+    expect(boot.note).toContain("(player)");
+    const session = judged.find((a) => a.claim.kind === "session_seconds")!;
+    expect(session.status).toBe("not_met");
+    expect(session.measured).toBe(120);
+  });
+
+  it("takes the player's session catalogue when it reported one", () => {
+    const claims = extractNumericClaims(gdd).claims;
+    // The shipped artifact registers ONE level; the editor project had three.
+    const judged = assessNumericClaims(claims, editorRun, playerRun({
+      sessionCount: 1,
+      sessions: [{ index: 1, outcome: "Won", actions: 5, seconds: 30, identityVerified: true }],
+    }));
+    const count = judged.find((a) => a.claim.kind === "level_count")!;
+    expect(count.status).toBe("not_met");
+    expect(count.measured).toBe(1);
+  });
+
+  it("falls back to the editor's numbers when no player ran, exactly as before", () => {
+    const claims = extractNumericClaims(gdd).claims;
+    const judged = assessNumericClaims(claims, editorRun, undefined);
+    expect(judged.find((a) => a.claim.kind === "boot_seconds")!.measured).toBe(0.2);
+    expect(judged.find((a) => a.claim.kind === "boot_seconds")!.note).toContain("editor play mode, batch");
+    expect(judged.find((a) => a.claim.kind === "level_count")!.status).toBe("met");
+  });
+});

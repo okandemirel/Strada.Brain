@@ -1161,6 +1161,14 @@ describe("CampaignManager", () => {
   it("holds the GDD's own numbers against the play-through timing: a blown boot budget bounces, a met one is reported (2026-09-10)", async () => {
     const gdd = "# GDD\n\nThe game must load in under 1 second. Target 60 fps.";
     writePlaythroughVerdict(true, { perf: { medium: "editor-playmode-batch", bootSeconds: 2.4, playSeconds: 30, playFrames: 900, avgFps: 30, worstFrameMs: 90 } });
+    // THE SHIPPED ARTIFACT'S BOOT TIME is what the document's boot budget
+    // means, and the built player is what runs here (Codex 2026-09-12 Z): the
+    // editor's 2.4 s is a different machine's measurement of a different
+    // thing.
+    playerVerdictOnRun = {
+      ok: true,
+      extra: { perf: { medium: "player", bootSeconds: 2.4, playSeconds: 10, playFrames: 600, avgFps: 60, worstFrameMs: 40 } },
+    };
     const campaign = manager.startFromGdd(ctx, gdd, "docs/Game_GDD.md");
     await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     settleMilestone("sprint A done");
@@ -1179,16 +1187,20 @@ describe("CampaignManager", () => {
     // The play-through stood, so the campaign built and played the player: its frame rate answers the fps claim; the boot budget still fails.
     expect(storage.get(campaign.id)!.milestones[2]!.gddClaims).toEqual([
       // Document order (Codex 2026-09-11 B#19): the boot budget is written first.
-      "GDD boot time ≤ 1 s: NOT MET — scene load → services in 2.4 s (editor play mode, batch)",
+      "GDD boot time ≤ 1 s: NOT MET — scene load → services in 2.4 s (player)",
       "GDD frame rate ≥ 60 fps: MET — 60.0 fps average over 600 frames in the built player (real rendering), worst frame 40 ms",
     ]);
 
     writePlaythroughVerdict(true, { perf: { medium: "editor-playmode-batch", bootSeconds: 0.6, playSeconds: 30, playFrames: 900, avgFps: 30 } });
+    playerVerdictOnRun = {
+      ok: true,
+      extra: { perf: { medium: "player", bootSeconds: 0.6, playSeconds: 10, playFrames: 600, avgFps: 60, worstFrameMs: 40 } },
+    };
     tasks.verifications.set("task_4", green);
     tasks.emit("task:completed", "task_4", "green, shipping");
     await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
     const report = messages.map((m) => m.text).join("\n");
-    expect(report).toContain("GDD boot time ≤ 1 s: MET — scene load → services in 0.6 s (editor play mode, batch)");
+    expect(report).toContain("GDD boot time ≤ 1 s: MET — scene load → services in 0.6 s (player)");
     // Delivered: the campaign built and played the player, whose frame rate answers the claim.
     expect(report).toContain("GDD frame rate ≥ 60 fps: MET — 60.0 fps average over 600 frames in the built player (real rendering), worst frame 40 ms");
   });

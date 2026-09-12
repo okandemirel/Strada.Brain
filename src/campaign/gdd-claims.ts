@@ -426,7 +426,22 @@ export function assessNumericClaims(
 ): ClaimAssessment[] {
   const perf = playthrough?.found ? playthrough.perf : undefined;
   const playerPerf = player?.found ? player.perf : undefined;
-  const medium = perf?.medium === "editor-playmode-batch" ? "editor play mode, batch" : perf?.medium ?? "";
+  const nameOfMedium = (m?: string): string => (m === "editor-playmode-batch" ? "editor play mode, batch" : m ?? "");
+  const medium = nameOfMedium(perf?.medium);
+  // THE SHIPPED ARTIFACT ANSWERS FIRST. Only the frame rate consumed the
+  // built player's evidence, so a player whose boot took 12 s and whose only
+  // level ran 120 s was judged MET against a 6 s boot and a 60 s round —
+  // measured in the editor, where neither number is the product's (Codex
+  // 2026-09-12 Z). When the player ran and carries the measurement, it is the
+  // one that counts; otherwise the editor's stands, named as before.
+  const bootFrom = playerPerf?.bootSeconds !== undefined ? playerPerf : perf;
+  const bootMedium = nameOfMedium(playerPerf?.bootSeconds !== undefined ? playerPerf.medium : perf?.medium);
+  const timedRun =
+    player?.found === true && (player.perf !== undefined || (player.sessions?.length ?? 0) > 0)
+      ? player
+      : playthrough;
+  const timedMedium = nameOfMedium(timedRun === player ? playerPerf?.medium ?? "player" : perf?.medium);
+  const countedRun = player?.found === true && player.sessionCount !== undefined ? player : playthrough;
   const noRun = "no play-through of this build was observed (unity_playthrough leaves the timing)";
   return claims.map((claim): ClaimAssessment => {
     switch (claim.kind) {
@@ -480,19 +495,30 @@ export function assessNumericClaims(
         };
       }
       case "boot_seconds": {
-        if (!perf || perf.bootSeconds === undefined) return { claim, status: "unmeasured", note: perf ? "the bootstrapper never published its services, so boot time has no end" : noRun, blocking: false };
-        const met = perf.bootSeconds <= claim.value;
+        if (!bootFrom || bootFrom.bootSeconds === undefined) {
+          return {
+            claim,
+            status: "unmeasured",
+            note: bootFrom ? "the bootstrapper never published its services, so boot time has no end" : noRun,
+            blocking: false,
+          };
+        }
+        const met = bootFrom.bootSeconds <= claim.value;
         return {
           claim,
           status: met ? "met" : "not_met",
-          measured: Number(perf.bootSeconds.toFixed(2)),
-          note: `scene load → services in ${perf.bootSeconds.toFixed(1)} s (${medium})`,
+          measured: Number(bootFrom.bootSeconds.toFixed(2)),
+          note: `scene load → services in ${bootFrom.bootSeconds.toFixed(1)} s (${bootMedium})`,
           blocking: true,
         };
       }
       case "session_seconds": {
-        if (!playthrough?.found) return { claim, status: "unmeasured", note: noRun, blocking: false };
-        if (!perf || playthrough.ok !== true || !playthrough.outcome || playthrough.outcome === "None") {
+        // THE SHIPPED ARTIFACT'S SESSIONS when it ran them (Codex 2026-09-12
+        // Z): an editor batch's play time is not the product's.
+        const timed = timedRun;
+        const timedPerf = timed === player ? playerPerf : perf;
+        if (!timed?.found) return { claim, status: "unmeasured", note: noRun, blocking: false };
+        if (!timedPerf || timed.ok !== true || !timed.outcome || timed.outcome === "None") {
           return { claim, status: "unmeasured", note: "the session never reached an outcome, so its length is unknown", blocking: false };
         }
         // PER SESSION, when the run played more than one. `perf.playSeconds`
@@ -500,23 +526,23 @@ export function assessNumericClaims(
         // seconds against "each level lasts 30–60 s" and failed a game that
         // met the requirement exactly (Codex 2026-09-12 T#7). An aggregate
         // number answers only a single-session run.
-        const perSession = (playthrough.sessions ?? [])
+        const perSession = (timed.sessions ?? [])
           .filter((x) => x.outcome !== "None" && x.outcome !== "Refused")
           .map((x) => x.seconds)
           .filter((x): x is number => typeof x === "number" && Number.isFinite(x) && x > 0);
         const holds = (seconds: number): boolean =>
           claim.comparator === "min" ? seconds >= claim.value : seconds <= claim.value;
-        const met = perSession.length > 1 ? perSession.every(holds) : holds(perf.playSeconds);
+        const met = perSession.length > 1 ? perSession.every(holds) : holds(timedPerf.playSeconds);
         const measured = perSession.length > 1
           ? Number(Math.max(...perSession).toFixed(1))
-          : Number(perf.playSeconds.toFixed(1));
+          : Number(timedPerf.playSeconds.toFixed(1));
         return {
           claim,
           status: met ? "met" : "not_met",
           measured,
           note: perSession.length > 1
-            ? `${perSession.length} session(s) reached an outcome, each ${Math.min(...perSession).toFixed(1)}–${Math.max(...perSession).toFixed(1)} s of driven play (${medium})`
-            : `session ${playthrough.session ?? "?"} reached ${playthrough.outcome} after ${perf.playSeconds.toFixed(1)} s of driven play (${medium})`,
+            ? `${perSession.length} session(s) reached an outcome, each ${Math.min(...perSession).toFixed(1)}–${Math.max(...perSession).toFixed(1)} s of driven play (${timedMedium})`
+            : `session ${timed.session ?? "?"} reached ${timed.outcome} after ${timedPerf.playSeconds.toFixed(1)} s of driven play (${timedMedium})`,
           // A driven play-through is faster than a person's, so a range's floor
           // is disclosed — UNLESS the document makes it mandatory (an
           // unskippable timer is wall-clock, not skill; Codex 2026-09-11 C#24).
@@ -539,8 +565,11 @@ export function assessNumericClaims(
         };
       }
       case "level_count": {
-        if (!playthrough?.found) return { claim, status: "unmeasured", note: noRun, blocking: false };
-        if (playthrough.sessionCount === undefined) {
+        // THE CATALOGUE THE SHIPPED ARTIFACT REPORTS when it ran (Z): the
+        // editor's catalogue is the project's, not the product's.
+        const counted = countedRun;
+        if (!counted?.found) return { claim, status: "unmeasured", note: noRun, blocking: false };
+        if (counted.sessionCount === undefined) {
           return {
             claim,
             status: "unmeasured",
@@ -554,17 +583,17 @@ export function assessNumericClaims(
         // 2026-09-12 U#F3).
         const catalogMatches =
           claim.comparator === "min"
-            ? playthrough.sessionCount >= claim.value
+            ? counted.sessionCount >= claim.value
             : claim.comparator === "max"
-            ? playthrough.sessionCount <= claim.value
-            : playthrough.sessionCount === claim.value;
-        const played = playthrough.sessions?.length ?? 0;
+            ? counted.sessionCount <= claim.value
+            : counted.sessionCount === claim.value;
+        const played = counted.sessions?.length ?? 0;
         // DISTINCT sessions: three records of index 0 are one level played
         // three times (Codex 2026-09-11 C#22).
         // A session index must be a real catalog entry and the session must
         // have DONE something: {index:-1, actions:0} counted as a played
         // level (Codex 2026-09-11 D#21).
-        const finished = finishedSessionIndices(playthrough).length;
+        const finished = finishedSessionIndices(counted).length;
         // A catalog of N is a claim; N sessions played to an outcome is the
         // measurement (Codex 2026-09-11 B#10). The play-through plays at most
         // PLAYED_SESSIONS_PER_RUN per run: past that the shortfall is named,
@@ -589,15 +618,15 @@ export function assessNumericClaims(
         // "at most 12 levels" with eight shipped and all eight played
         // demanded twelve played levels and refused the delivery (Codex
         // 2026-09-12 V).
-        const mustPlay = catalogMatches ? playthrough.sessionCount : claim.value;
+        const mustPlay = catalogMatches ? counted.sessionCount : claim.value;
         const beyondOneRun = mustPlay > PLAYED_SESSIONS_PER_RUN && finished >= PLAYED_SESSIONS_PER_RUN;
         const everyLevelPlayed = catalogMatches && finished >= mustPlay;
         return {
           claim,
           status: everyLevelPlayed ? "met" : "not_met",
-          measured: playthrough.sessionCount,
+          measured: counted.sessionCount,
           note:
-            `the game's session catalog reports ${playthrough.sessionCount}; ${finished} of ${played} played session(s) reached an outcome` +
+            `the game's session catalog reports ${counted.sessionCount}; ${finished} of ${played} played session(s) reached an outcome` +
             (beyondOneRun ? ` (one run plays at most ${PLAYED_SESSIONS_PER_RUN}; ${claim.value - Math.min(finished, claim.value)} of ${claim.value} levels are NOT yet played to an outcome)` : ""),
           blocking: !catalogMatches || !beyondOneRun,
         };
