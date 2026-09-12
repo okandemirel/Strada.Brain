@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { hostname } from "node:os";
 import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { EvidenceLedger } from "./evidence-ledger.js";
 import { requirementKey, CampaignManager, stripTimeBoxDirectives, UNMEASURABLE_PROOF_RE, UNRUNNABLE_HERE_RE, hasUnmeasurableProof, proofsSpanTwoRevisions } from "./campaign-manager.js";
 import { CampaignStorage } from "./campaign-storage.js";
@@ -3046,6 +3047,75 @@ describe("CampaignManager", () => {
     }
   });
 
+
+  it("JUDGES a receipt a producer actually stamped (Codex 2026-09-12 AC Job 2)", async () => {
+    // The other half of the loop: when the builder answers with a receipt
+    // naming the run it was given, the ledger records an admitted decision
+    // instead of EVIDENCE_MISSING.
+    tasks = new FakeTaskManager();
+    storage.close();
+    storage = new CampaignStorage(join(dir, `campaigns-receipt-${messages.length}.db`));
+    const revision = (): string => {
+      try {
+        return execFileSync("git", ["-C", projectRoot, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+      } catch {
+        return "";
+      }
+    };
+    manager = new CampaignManager({
+      storage,
+      verifyCompile: async () => compileVerdict,
+      buildPlayer: async (_root: string, target?: string, evidenceRunId?: string) => {
+        buildTargetsAsked.push(target);
+        const receipt = JSON.stringify({
+          schemaVersion: 1,
+          runId: evidenceRunId,
+          kind: "player-build",
+          medium: "builder",
+          revision: revision(),
+          ...(target === undefined ? {} : { target }),
+          execution: { completed: true, exitCode: 0, timedOut: false },
+        });
+        return { ...buildVerdict, receipt };
+      },
+      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); afterPlayerRun?.(); },
+      planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async (chatId, text) => { messages.push({ chatId, text }); },
+      projectRoot,
+      retryAdoptionGraceMs: 10,
+      completedSettleDelayMs: 0,
+      milestoneTimeBoxMs: 60 * 60_000,
+    });
+    manager.attachEvents();
+
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    settleMilestone("green, shipping");
+    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"), { timeout: 15_000 });
+
+    const ledger = new EvidenceLedger(join(projectRoot, ".strada", "campaign-evidence.db"));
+    try {
+      const last = storage.get(campaign.id)!.milestones.at(-1)!;
+      const builds = ledger.forMilestone(campaign.id, last.id).filter((r) => r.kind === "player-build");
+      expect(builds.length).toBeGreaterThan(0);
+      // The producer's own bytes reached the receiver: the decision is about
+      // THIS record — its hash is stored — and not "no receipt came back".
+      expect(builds.every((r) => (r.recordSha256 ?? "").length === 64)).toBe(true);
+      expect(builds.every((r) => r.refusal !== "EVIDENCE_MISSING")).toBe(true);
+      // This fixture's tree carries uncommitted build inputs, which is not a
+      // tree a measurement can be bound to — so the receiver says so by name
+      // rather than admitting it.
+      expect(builds.map((r) => r.refusal ?? "admitted")).toContain("SOURCE_DIRTY");
+    } finally {
+      ledger.close();
+    }
+    expect(messages.map((m) => m.text).join("\n")).toMatch(/player-build receipt.*REFUSED \(SOURCE_DIRTY\)/);
+  });
 
   it("an audit that RAN discharges the unreadable-queue flag (Codex 2026-09-13 AF#2)", async () => {
     // The flag is persisted now, so it must be cleared by the thing that

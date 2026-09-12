@@ -568,6 +568,12 @@ export interface RuntimeSceneDump {
 }
 
 export interface PlayerBuildEvidence {
+  /**
+   * The producer's RECEIPT for this dispatch, verbatim, when it emitted one:
+   * the bytes Strada.Brain holds against the ticket it issued (Codex
+   * 2026-09-12 AC Job 2). Absent from producers that do not stamp receipts.
+   */
+  readonly receipt?: string;
   /** The target the campaign ASKED for, from the GDD's platform (Codex 2026-09-11 B#11). */
   readonly requestedTarget?: string;
   /**

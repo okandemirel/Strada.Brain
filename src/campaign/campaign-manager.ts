@@ -115,7 +115,7 @@ export interface CampaignManagerOptions {
    * other proofs stand (a build is minutes; a tree that fails the suite
    * does not need one yet). See stage-runtime for the tool-backed default.
    */
-  buildPlayer?: (projectRoot: string, target?: string) => Promise<PlayerBuildEvidence>;
+  buildPlayer?: (projectRoot: string, target?: string, evidenceRunId?: string) => Promise<PlayerBuildEvidence>;
   /** Pause before a NOT DELIVERED campaign resumes its final sprint by itself (default 15 min). */
   deliveryResumeDelayMs?: number;
   /**
@@ -727,7 +727,7 @@ export class CampaignManager {
   private readonly messenger: CampaignMessenger;
   private readonly projectRoot: string;
   private readonly verifyCompile?: (projectRoot: string) => Promise<CompileVerdict>;
-  private readonly buildPlayer?: (projectRoot: string, target?: string) => Promise<PlayerBuildEvidence>;
+  private readonly buildPlayer?: (projectRoot: string, target?: string, evidenceRunId?: string) => Promise<PlayerBuildEvidence>;
   private readonly deliveryResumeDelayMs: number;
   private readonly implementationReviveDelayMs: number;
   private readonly runPlayer?: (projectRoot: string, artifactPath: string, spec?: PlayerRunSpec) => Promise<void>;
@@ -4694,7 +4694,10 @@ export class CampaignManager {
           campaign,
           campaign?.milestones[campaign.currentMilestone],
           { kind: "player-build", medium: "builder", ...(target === undefined ? {} : { target }) },
-          async () => ({ value: await this.buildPlayer!(this.projectRoot, target) }),
+          async (runId) => {
+            const value = await this.buildPlayer!(this.projectRoot, target, runId);
+            return { value, ...(value.receipt === undefined ? {} : { receipt: value.receipt }) };
+          },
         );
       } catch (err) {
         built = {
@@ -6374,10 +6377,10 @@ export class CampaignManager {
       artifactSha256?: string;
       processOwned?: boolean;
     },
-    run: () => Promise<{ value: T; receipt?: string }>,
+    run: (runId: string) => Promise<{ value: T; receipt?: string }>,
   ): Promise<T> {
     const ledger = campaign === undefined ? null : this.ledger();
-    if (ledger === null || campaign === undefined) return (await run()).value;
+    if (ledger === null || campaign === undefined) return (await run(issueRunId())).value;
     const dirtyBefore = this.projectIsDirty();
     const ticket: EvidenceTicket = {
       issuedAt: Date.now(),
@@ -6400,11 +6403,11 @@ export class CampaignManager {
       ledger.issue(ticket);
     } catch (err) {
       getLoggerSafe().warn("A producer ticket could not be recorded", { error: err instanceof Error ? err.message : String(err) });
-      return (await run()).value;
+      return (await run(ticket.binding.runId)).value;
     }
     let outcome: { value: T; receipt?: string } | undefined;
     try {
-      outcome = await run();
+      outcome = await run(ticket.binding.runId);
       return outcome.value;
     } finally {
       const decision = receiveEvidence(

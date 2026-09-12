@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { chmodSync, mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parsePlayerBuildOutput, makeRunPlayer, makeVerifyCompile, makeGuardianPlay, looksLikePlayer } from "./stage-runtime.js";
+import { parsePlayerBuildOutput, makeRunPlayer, makeVerifyCompile, makeGuardianPlay, extractReceipt, looksLikePlayer } from "./stage-runtime.js";
 
 const artifactDir = mkdtempSync(join(tmpdir(), "build-artifact-"));
 // A REAL StandaloneOSX artifact: .app is a bundle DIRECTORY holding Contents,
@@ -493,5 +493,22 @@ describe("makeGuardianPlay — a verdict is a record of play (Codex 2026-09-13 A
     const skipped = await makeGuardianPlay(registry({}, []))("/p");
     expect(skipped).toMatchObject({ ran: false });
     expect(skipped.detail).toContain("not registered");
+  });
+});
+
+/**
+ * The producer's receipt travels VERBATIM: the receiver hashes the bytes it
+ * validates, so anything that re-serialises the record breaks the identity it
+ * exists to establish (Codex 2026-09-12 AB, AC Job 2).
+ */
+describe("extractReceipt", () => {
+  it("returns the fenced block exactly as the producer wrote it", () => {
+    const body = '{"schemaVersion":1,"runId":"r1","kind":"player-build"}';
+    expect(extractReceipt(`PLAYER BUILT.\n\n\`\`\`strada-evidence\n${body}\n\`\`\``)).toBe(body);
+    // A report with no receipt, and one whose block is empty, carry none.
+    expect(extractReceipt("PLAYER BUILT.")).toBeUndefined();
+    expect(extractReceipt("\n```strada-evidence\n\n```")).toBeUndefined();
+    // The ordinary json verdict block is not a receipt.
+    expect(extractReceipt('```json\n{"ok":true}\n```')).toBeUndefined();
   });
 });

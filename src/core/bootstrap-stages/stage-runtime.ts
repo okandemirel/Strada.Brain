@@ -442,7 +442,7 @@ export async function initializeTaskRuntimeStage(
       // tool's own JSON verdict (path, size, duration) — never the worker's
       // sentence about it.
       buildPlayer: params.toolRegistry
-        ? async (projectRoot: string, target?: string) => {
+        ? async (projectRoot: string, target?: string, evidenceRunId?: string) => {
             const registry = params.toolRegistry!;
             if (!registry.getAvailableToolNames().includes("unity_build_player")) {
               return { ran: false, detail: "unity_build_player is not registered" };
@@ -452,14 +452,18 @@ export async function initializeTaskRuntimeStage(
               // The GDD's platform, when it names one: the build used to take
               // whatever target the project happened to have active (Codex
               // 2026-09-11 B#11).
-              target ? { target } : {},
+              // …and the RUN this dispatch answers for, so the producer can
+              // stamp a receipt Strada.Brain holds against its ticket.
+              { ...(target ? { target } : {}), ...(evidenceRunId ? { evidenceRunId } : {}) },
               {
                 projectPath: projectRoot,
                 workingDirectory: projectRoot,
                 readOnly: false,
               } as import("../../agents/tools/tool-core.interface.js").ToolContext,
             );
-            return parsePlayerBuildOutput(String(result.content ?? ""));
+            const content = String(result.content ?? "");
+            const receipt = extractReceipt(content);
+            return { ...parsePlayerBuildOutput(content), ...(receipt === undefined ? {} : { receipt }) };
           }
         : undefined,
       // Play the artifact the campaign built: unity_run_player writes its
@@ -1199,4 +1203,20 @@ export function makeGuardianPlay(
     return { ok: true, ran: false, detail: detail.slice(0, 1500) };
   }
 };
+}
+
+/** The fenced block a producer stamps for the run it was asked to answer for. */
+export const EVIDENCE_FENCE = "strada-evidence";
+
+/**
+ * The producer's receipt, verbatim, out of its own report.
+ *
+ * Verbatim matters: the receiver hashes the bytes it validates, so anything
+ * that re-serialises the record breaks the identity it is there to establish
+ * (Codex 2026-09-12 AB).
+ */
+export function extractReceipt(content: string): string | undefined {
+  const match = new RegExp("```" + EVIDENCE_FENCE + "\\s*\\n([\\s\\S]*?)\\n```").exec(content);
+  const body = match?.[1]?.trim();
+  return body === undefined || body === "" ? undefined : body;
 }
