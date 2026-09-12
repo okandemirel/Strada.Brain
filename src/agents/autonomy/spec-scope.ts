@@ -91,6 +91,54 @@ export function stripCsComments(source: string): string {
 /** Second-cell text that names a person or a role rather than a game element. */
 const NOT_AN_ELEMENT_RE = /\((?:producer|designer|artist|engineer|programmer|lead|qa|pm|owner|manager)\b|\b(?:producer|designer|artist|engineer|programmer|lead|qa|manager)\s*$/i;
 
+/** An unlock id in a schedule's first cell: "L21", "21", "E3", "Level 21". */
+const UNLOCK_CELL_RE = /^(?:[A-Za-z][A-Za-z ]{0,9}\s*)?\d{1,4}(?:[.-]\d{1,4})?$/;
+/** A header cell naming WHEN an element arrives, and one naming the element. */
+const UNLOCK_HEADER_RE = /^(?:unlock(?:s|ed)?(?:\s+at)?|level|levels|introduced(?:\s+at)?|when|from|stage|arrives?)$/i;
+const ELEMENT_HEADER_RE = /^(?:element|elements|name|mechanic|blocker|feature|item|obstacle|piece|content)$/i;
+
+/**
+ * A schedule table that lost its pipes.
+ *
+ * Documents converted out of Google Docs, Notion or PDF arrive as one cell per
+ * LINE: a header block ("Unlock", "Element", "One-line pitch", "Side") and
+ * then rows of that many lines. The pipe-table reader found nothing in the
+ * real vehicle document, so its whole element schedule — every blocker and
+ * special mechanic the game is made of — read as ZERO scheduled elements, and
+ * zero suppresses the coverage check entirely (Codex 2026-09-12 W#12).
+ */
+export function extractFlattenedSchedule(docText: string): ScheduledElement[] {
+  const found = new Map<string, ScheduledElement>();
+  const lines = docText.split(/\r?\n/).map((l) => l.replace(/^[\s•\t|-]+|[\s|]+$/g, ""));
+  for (let i = 0; i < lines.length; i++) {
+    if (!UNLOCK_HEADER_RE.test(lines[i] ?? "")) continue;
+    // The header block: short cells, up to eight, one of which names the
+    // element itself. Anything long or sentence-shaped ends it.
+    const header: string[] = [];
+    for (let j = i; j < lines.length && header.length < 8; j++) {
+      const cell = lines[j] ?? "";
+      if (cell === "" || cell.length > 30 || /[.;:!?]$/.test(cell)) break;
+      // The first data row ends the header: its first cell is an unlock id,
+      // and swallowing it made every row after it read one column short.
+      if (j > i && UNLOCK_CELL_RE.test(cell)) break;
+      header.push(cell);
+    }
+    const nameAt = header.findIndex((h) => ELEMENT_HEADER_RE.test(h));
+    if (nameAt < 0 || header.length < 2) continue;
+    const width = header.length;
+    // …then rows of exactly that width, until one stops looking like a row.
+    for (let row = i + width; row + width <= lines.length; row += width) {
+      const cells = lines.slice(row, row + width);
+      if (!UNLOCK_CELL_RE.test(cells[0] ?? "")) break;
+      const name = (cells[nameAt] ?? "").trim();
+      if (name === "" || name.length > 60 || NOT_AN_ELEMENT_RE.test(name)) continue;
+      const key = name.toLowerCase();
+      if (!found.has(key)) found.set(key, { unlock: cells[0]!, name });
+    }
+  }
+  return [...found.values()];
+}
+
 export function extractScheduledElements(docText: string): ScheduledElement[] {
   const found = new Map<string, ScheduledElement>();
   const lines = docText.split("\n");
@@ -108,6 +156,11 @@ export function extractScheduledElements(docText: string): ScheduledElement[] {
     if (NOT_AN_ELEMENT_RE.test(name)) continue;
     const key = name.toLowerCase();
     if (!found.has(key)) found.set(key, { unlock: m[1]!, name });
+  }
+  // …and the same table with its pipes stripped by a document converter.
+  for (const el of extractFlattenedSchedule(docText)) {
+    const key = el.name.toLowerCase();
+    if (!found.has(key)) found.set(key, el);
   }
   return [...found.values()];
 }

@@ -119,3 +119,68 @@ describe("short element names count as whole words (measured 2026-09-10: 'Cube' 
     }
   });
 });
+
+/**
+ * A schedule table that lost its pipes. Measured by Codex 2026-09-12 (W#12)
+ * on the real vehicle document: its whole element schedule — sixteen blockers
+ * and special mechanics — read as ZERO scheduled elements, because a document
+ * converted out of Google Docs arrives as one cell per LINE. Zero suppresses
+ * the coverage check entirely, so none of that content was ever compared to
+ * the code.
+ */
+describe("a flattened schedule table (Codex 2026-09-12 W#12)", () => {
+  const flattened = [
+    "4.1 Element Introduction Schedule",
+    "Unlock",
+    "Element",
+    "One-line pitch",
+    "Side",
+    "L6",
+    "Dual conveyor",
+    "Second belt row; queue reads as a grid",
+    "Belt",
+    "L21",
+    "Hard Pixel",
+    "Armored cube, 2 hits",
+    "Canvas",
+    "L36",
+    "Ice Block",
+    "Encased cube; break via adjacent clears",
+    "Canvas",
+    "",
+    "4.2 Designer usage",
+    "Introduce each element alone, in a friendly level.",
+  ].join("\n");
+
+  it("reads the rows a converter flattened, with the right column for each", () => {
+    expect(extractScheduledElements(flattened)).toEqual([
+      { unlock: "L6", name: "Dual conveyor" },
+      { unlock: "L21", name: "Hard Pixel" },
+      { unlock: "L36", name: "Ice Block" },
+    ]);
+  });
+
+  it("stops at the end of the table and does not invent elements from prose", () => {
+    const after = `${flattened}\nL99\nnot a table row at all — this is a sentence about L99.`;
+    expect(extractScheduledElements(after).map((e) => e.name)).toEqual([
+      "Dual conveyor",
+      "Hard Pixel",
+      "Ice Block",
+    ]);
+    // A document with no schedule still yields none.
+    expect(extractScheduledElements("# GDD\n\nA puzzle game with 12 levels.")).toEqual([]);
+    // …and a staffing table is still not a schedule.
+    expect(
+      extractScheduledElements(["Unlock", "Element", "Owner", "L1", "Ada Lovelace (designer)", "art"].join("\n")),
+    ).toEqual([]);
+  });
+
+  it("still reads an ordinary pipe table", () => {
+    expect(extractScheduledElements(GDD_SNIPPET).map((e) => e.name)).toEqual([
+      "Hard Pixel",
+      "Ice Block",
+      "Wall",
+      "Lock & Key",
+    ]);
+  });
+});
