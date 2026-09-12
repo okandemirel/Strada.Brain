@@ -175,3 +175,69 @@ describe("a cue list is a list (Codex 2026-09-12 R#12)", () => {
     expect(describeMedia(vague, withScene(`${AUDIO(CLIP)}`, withClip)).refusal).toBeUndefined();
   });
 });
+
+/**
+ * Measured by Codex 2026-09-12 (V) on the real vehicle document: the audio
+ * gate was switched off entirely by one accessibility sentence, on a project
+ * holding 29 imported clips with none reachable from a shipped scene.
+ */
+describe("an accessibility promise is not a request for silence (Codex 2026-09-12 V)", () => {
+  it("does not exempt a game whose document promises play without sound is equivalent", () => {
+    const root = project();
+    buildSettings(root, ["Assets/Scenes/Main.unity"]);
+    put(root, "Assets/Scenes/Main.unity", HEADER + CAMERA + SPRITE + AUDIO());
+    put(root, "Assets/Audio/pop.wav", "RIFF", CLIP);
+    const report = assessBuiltAsSpecified(root);
+    // The cues live in a table this reader cannot parse, so the accessibility
+    // sentence is the ONLY thing that could exempt the game — and it must not.
+    const doc =
+      "Every hit carries its own sfx id. The mix ducks audio on pause. Combos raise the sfx pitch. " +
+      "Play without sound is fully equivalent (no audio-only cues); haptics individually toggleable.";
+    const d = describeMedia(doc, report);
+    // The clips are there and no shipped scene reaches one: that is silent.
+    expect(d.refusal).toContain("the delivery is silent");
+  });
+
+  it("a document with an AUDIO SECTION is not asking for silence", () => {
+    // The vehicle states its cues as an Event/Visual/Audio/Haptic table, which
+    // no prose pattern can see; the section it sits under can be seen.
+    const root = project();
+    buildSettings(root, ["Assets/Scenes/Main.unity"]);
+    put(root, "Assets/Scenes/Main.unity", HEADER + CAMERA + SPRITE + AUDIO());
+    put(root, "Assets/Audio/pop.wav", "RIFF", CLIP);
+    const report = assessBuiltAsSpecified(root);
+    const doc =
+      "# GDD\n\nNo music in v1.\n\n## Audio\nEvent / Visual / Audio / Haptic\n" +
+      "Tap pig | ring pulse | pop_tap | Light\nPig lands | slot flash | thump_land | Light\n";
+    expect(describeMedia(doc, report).refusal).toContain("the delivery is silent");
+  });
+
+  it("still exempts a document that really does ask for silence", () => {
+    const root = project();
+    buildSettings(root, ["Assets/Scenes/Main.unity"]);
+    put(root, "Assets/Scenes/Main.unity", HEADER + CAMERA + SPRITE);
+    const report = assessBuiltAsSpecified(root);
+    const silent = describeMedia("# GDD\n\nNo music. No audio. No sound effects. Silent by design.", report);
+    expect(silent.refusal).toBeUndefined();
+  });
+
+  it("a SHARED clip is not a missing cue (Codex 2026-09-12 U#F8)", () => {
+    const root = project();
+    buildSettings(root, ["Assets/Scenes/Main.unity"]);
+    put(root, "Assets/Scenes/Main.unity", HEADER + CAMERA + SPRITE + AUDIO(CLIP));
+    put(root, "Assets/Audio/click.wav", "RIFF", CLIP);
+    const report = assessBuiltAsSpecified(root);
+    const shared = describeMedia(
+      "# GDD\n\nSFX for win. SFX for retry. SFX for selection. Use the same click clip for all three events.",
+      report,
+    );
+    expect(shared.refusal).toBeUndefined();
+    expect(shared.lines.join("\n")).toContain("clips are shared between cues");
+    // …and a document that names distinct cues is still short of them.
+    const distinct = describeMedia(
+      "# GDD\n\nSFX for win. SFX for retry. SFX for selection. Music for the menu.",
+      report,
+    );
+    expect(distinct.refusal).toContain("the cue list is not produced");
+  });
+});

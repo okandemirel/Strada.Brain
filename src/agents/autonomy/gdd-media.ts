@@ -35,6 +35,54 @@ export interface MediaDisclosure {
   readonly refusal?: string;
 }
 
+/**
+ * Does the document ASK FOR SILENCE — as against asking that the game be
+ * PLAYABLE in silence?
+ *
+ * "Play without sound is fully equivalent (no audio-only cues)" is an
+ * accessibility requirement, and it matched the denial, so the vehicle's whole
+ * audio gate was switched off on a project with twenty-nine imported clips and
+ * none reachable from a shipped scene (Codex 2026-09-12 V). An accessibility
+ * promise cannot negate the sound the same document specifies.
+ */
+const DENIES_SOUND_RE = /\b(?:no (?:music|audio|sound|sfx)\b|silent by design|without (?:any )?(?:music|audio|sound))\b/gi;
+/** The clause words that make such a sentence an accessibility promise. */
+const ACCESSIBILITY_CLAUSE_RE =
+  /\b(?:accessib\w*|equivalent|optional(?:ly)?|assist|reduced motion|subtitle|caption|colou?r ?blind|haptics?|toggle|mute[ds]?|deaf|hard of hearing)\b/i;
+
+export function deniesSoundAnywhere(documentText: string): boolean {
+  DENIES_SOUND_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = DENIES_SOUND_RE.exec(documentText)) !== null) {
+    const at = m.index;
+    // …and "no audio-ONLY cues" denies a KIND of cue, not the sound itself.
+    if (/^-?only\b/i.test(documentText.slice(at + m[0].length, at + m[0].length + 6))) continue;
+    const from = Math.max(0, documentText.lastIndexOf("\n", at), documentText.lastIndexOf(".", at) + 1);
+    let to = documentText.indexOf("\n", at);
+    if (to < 0) to = documentText.length;
+    if (ACCESSIBILITY_CLAUSE_RE.test(documentText.slice(from, to))) continue;
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Does the document ask for sound anywhere? A prose cue ("SFX for the tap"),
+ * a labelled list or column ("Audio: pop_tap"), or a section of its own — the
+ * vehicle states its cues as an Event/Visual/Audio/Haptic table, which no
+ * prose pattern can see (Codex 2026-09-12 V).
+ */
+export function asksForSoundAnywhere(documentText: string): boolean {
+  if (/\b(?:sfx|sound effects?|voice ?over|music)\s+(?:for|on|when|plays?|cue)/i.test(documentText)) return true;
+  // A colon, or a dash with a space: "audio-only" is a kind of cue, not a
+  // label introducing one.
+  if (/\b(?:sfx|sound effects?|audio|music|soundtrack|jingle|voice ?over)\b\s*(?::\s*\S|[—–-]\s+\S)/i.test(documentText)) return true;
+  // A heading or table column of its own: a document with an AUDIO section is
+  // not a document asking for silence.
+  if (/^[\s#>•*\-\t]*(?:audio|sound(?:track)?|music|sfx)\b[^\n]{0,40}$/im.test(documentText)) return true;
+  return false;
+}
+
 /** How many mentions make a category a stated requirement rather than a passing word. */
 export const MEDIA_ASK_THRESHOLD = 3;
 
@@ -133,8 +181,8 @@ export function describeMedia(gddText: string | undefined, report: BuiltAsSpecif
     // Silence must be the WHOLE document's answer: "No music. SFX for hits"
     // still asks for sound, and a blanket exemption let it ship silent (Codex
     // 2026-09-11 D#28). A positive ask anywhere cancels it.
-    const deniesSound = /\b(?:no (?:music|audio|sound|sfx)\b|silent by design|without (?:any )?(?:music|audio|sound))\b/i.test(documentText);
-    const asksForSound = /\b(?:sfx|sound effects?|voice ?over|music)\s+(?:for|on|when|plays?|cue)/i.test(documentText);
+    const deniesSound = deniesSoundAnywhere(documentText);
+    const asksForSound = asksForSoundAnywhere(documentText);
     const asksForSilence = deniesSound && !asksForSound;
     if (asks("audio") && clips === 0 && !proceduralAudio && !asksForSilence) {
       refusal =
@@ -161,12 +209,21 @@ export function describeMedia(gddText: string | undefined, report: BuiltAsSpecif
       // (Codex 2026-09-12 R#12). What the document states as cues is counted,
       // and the shortfall is named with both numbers.
       const cues = audioCuesNamed(documentText);
-      if (cues.length >= MIN_CUES_TO_MEASURE && report.reachableAudioClips < cues.length) {
+      // A CUE IS NOT A CLIP. "SFX for win. SFX for retry. Use the same click
+      // clip for all three" names three cues and one correct clip, and
+      // comparing the counts refused it (Codex 2026-09-12 U#F8). When the
+      // document says the clips are shared, the counts are disclosed instead
+      // — whether each event is actually wired is a producer measurement.
+      const sharesClips = /\b(?:same|shared|one|single|reuse[ds]?|reusing)\b[^.\n]{0,40}\bclip\b|\bclip\b[^.\n]{0,30}\b(?:for all|shared|reused)\b/i.test(documentText);
+      if (cues.length >= MIN_CUES_TO_MEASURE && report.reachableAudioClips < cues.length && !sharesClips) {
         refusal =
           `the GDD names ${cues.length} audio cues (${cues.slice(0, 4).join("; ")}${cues.length > 4 ? "; …" : ""}) and the shipped scenes ` +
           `reach ${report.reachableAudioClips} clip(s) — the cue list is not produced`;
       } else if (cues.length >= MIN_CUES_TO_MEASURE) {
-        lines.push(`GDD audio: ${cues.length} cue(s) named, ${report.reachableAudioClips} clip(s) reachable from a shipped scene (disclosed).`);
+        lines.push(
+          `GDD audio: ${cues.length} cue(s) named, ${report.reachableAudioClips} clip(s) reachable from a shipped scene` +
+          `${sharesClips ? " — the document says clips are shared between cues, so the counts are not compared" : ""} (disclosed).`,
+        );
       }
     }
   }
