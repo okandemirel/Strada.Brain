@@ -53,7 +53,17 @@ export function outsideAssetsError(projectPath: string, fullPath: string, reques
  * O#17). A restore that would undo someone else's committed work does nothing
  * instead.
  */
-const committedAt = new Map<string, { tick: number; digest: string | undefined }>();
+interface CommittedArt {
+  tick: number;
+  digest: string | undefined;
+  /** A copy of the committed pair, kept while another generation is still open. */
+  assetCopy?: string;
+  metaCopy?: string;
+  hadMeta?: boolean;
+}
+const committedAt = new Map<string, CommittedArt>();
+/** How many generations against a path have not settled yet. */
+const openGenerations = new Map<string, number>();
 let generationTick = 0;
 
 function digestOf(path: string): string | undefined {
@@ -79,6 +89,7 @@ export class PreviousAsset {
     // second's restore threw ENOENT with its damaged output left in place and
     // the original surviving nowhere (Codex 2026-09-11 N#9).
     this.startedAt = ++generationTick;
+    openGenerations.set(fullPath, (openGenerations.get(fullPath) ?? 0) + 1);
     const token = randomUUID().slice(0, 8);
     this.assetBackup = `${fullPath}.strada-prev-${token}`;
     this.metaBackup = `${fullPath}.meta.strada-prev-${token}`;
@@ -130,15 +141,26 @@ export class PreviousAsset {
   /** Put the previous pair back; remove a newly minted pair when there was none. */
   restore(): void {
     if (this.done) return;
-    // SOMEONE ELSE'S COMMITTED ART IS NOT OURS TO UNDO — while it is still
-    // their art on disk. If the file has changed since they committed it, it
-    // is ours (a damaged draw), and our snapshot is the better of the two.
+    // SOMEONE ELSE'S COMMITTED ART IS NOT OURS TO UNDO. While their bytes are
+    // still on disk, leaving them is enough. When our own damaged draw has
+    // already overwritten them, our snapshot is NOT the better of the two —
+    // it predates their work, and restoring it erased art that had been
+    // committed (Codex 2026-09-12 P#19). Their retained copy is what goes
+    // back; only with no copy left is our snapshot the best available.
     const newer = committedAt.get(this.fullPath);
-    if (newer !== undefined && newer.tick > this.startedAt && newer.digest !== undefined
-      && digestOf(this.fullPath) === newer.digest) {
-      this.done = true;
-      this.forget();
-      return;
+    if (newer !== undefined && newer.tick > this.startedAt) {
+      if (newer.digest !== undefined && digestOf(this.fullPath) === newer.digest) {
+        this.settle();
+        return;
+      }
+      if (newer.assetCopy !== undefined && existsSync(newer.assetCopy)) {
+        copyFileSync(newer.assetCopy, this.fullPath);
+        if (newer.hadMeta === true && newer.metaCopy !== undefined && existsSync(newer.metaCopy)) {
+          copyFileSync(newer.metaCopy, `${this.fullPath}.meta`);
+        }
+        this.settle();
+        return;
+      }
     }
     try {
       if (this.hadAsset) copyFileSync(this.assetBackup, this.fullPath);
@@ -154,15 +176,53 @@ export class PreviousAsset {
       // when putting it back had not worked (Codex 2026-09-11 N#9).
       throw err;
     }
-    this.forget();
+    this.settle();
   }
 
   /** The new pair is good; the backups go. */
   commit(): void {
     if (this.done) return;
     this.done = true;
-    committedAt.set(this.fullPath, { tick: ++generationTick, digest: digestOf(this.fullPath) });
+    const record: CommittedArt = { tick: ++generationTick, digest: digestOf(this.fullPath) };
+    // While another generation is still open against this path, the committed
+    // pair itself is kept: that generation may fail and need to put back what
+    // WE committed rather than what either of us snapshotted.
+    if ((openGenerations.get(this.fullPath) ?? 0) > 1) {
+      const token = randomUUID().slice(0, 8);
+      const assetCopy = `${this.fullPath}.strada-committed-${token}`;
+      const metaCopy = `${this.fullPath}.meta.strada-committed-${token}`;
+      try {
+        copyFileSync(this.fullPath, assetCopy);
+        record.assetCopy = assetCopy;
+        if (existsSync(`${this.fullPath}.meta`)) {
+          copyFileSync(`${this.fullPath}.meta`, metaCopy);
+          record.metaCopy = metaCopy;
+          record.hadMeta = true;
+        }
+      } catch {
+        // Unreadable target: the digest guard still protects intact bytes.
+      }
+    }
+    committedAt.set(this.fullPath, record);
+    this.settle();
+  }
+
+  /** This generation is over: drop its backups, and the retained art if it was the last. */
+  private settle(): void {
+    this.done = true;
     this.forget();
+    const open = (openGenerations.get(this.fullPath) ?? 1) - 1;
+    if (open > 0) {
+      openGenerations.set(this.fullPath, open);
+      return;
+    }
+    openGenerations.delete(this.fullPath);
+    const record = committedAt.get(this.fullPath);
+    if (record === undefined) return;
+    for (const copy of [record.assetCopy, record.metaCopy]) {
+      if (copy !== undefined) { try { rmSync(copy, { force: true }); } catch { /* best effort */ } }
+    }
+    committedAt.set(this.fullPath, { tick: record.tick, digest: record.digest });
   }
 
   private forget(): void {
@@ -197,11 +257,6 @@ export function unusableSpriteReason(fullPath: string): string | undefined {
     return `the pixels are a flat shape (${content.colours} colours, edges only on outlines) — a blank or filtered draw`;
   }
   return undefined;
-}
-
-/** Files under `Recordings`-style scratch never; this is for the .strada-prev backups a crash may leave behind. */
-export function isBackupArtifact(path: string): boolean {
-  return /\.strada-prev$/.test(path);
 }
 
 export { join };

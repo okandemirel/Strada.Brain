@@ -128,6 +128,32 @@ describe("what already sits at a generation target", () => {
     expect(readFileSync(target).equals(newArt)).toBe(true);
   });
 
+  it("a failed overlapping generation puts back the COMMITTED art, not its own stale snapshot (Codex 2026-09-12 P#19)", () => {
+    const target = join(dir, "Hero.png");
+    const original = png(64, 64, "noise");
+    writeFileSync(target, original);
+    writeFileSync(`${target}.meta`, "guid: original");
+    const a = new PreviousAsset(target);
+    const b = new PreviousAsset(target);
+
+    const committed = png(48, 48, "noise");
+    writeFileSync(target, committed);
+    writeFileSync(`${target}.meta`, "guid: committed");
+    a.commit();
+
+    // B's draw is damaged and overwrites A's committed bytes, so the
+    // "is their art still on disk" guard cannot see them any more. Restoring
+    // B's snapshot here erases art that had been committed.
+    writeFileSync(target, Buffer.alloc(9));
+    b.restore();
+
+    expect(readFileSync(target).equals(committed)).toBe(true);
+    expect(readFileSync(`${target}.meta`, "utf8")).toBe("guid: committed");
+    // Nothing of the retained copies is left behind once every generation has
+    // settled — Unity would import them as assets of their own.
+    expect(readdirSync(dir).sort()).toEqual(["Hero.png", "Hero.png.meta"]);
+  });
+
   it("restores the previous pair byte for byte", () => {
     const target = join(dir, "Hero.png");
     const original = png(64, 64, "noise");
