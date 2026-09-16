@@ -554,3 +554,48 @@ describe("sessionsRequested", () => {
     expect(wrong).toMatchObject({ admitted: false, refusal: "SESSION_MISSING" });
   });
 });
+
+/**
+ * A GAME LARGER THAN ONE RUN. "Play every session" is a request no single run
+ * can answer past the producer's own cap, so the receiver says so as its own
+ * refusal — the coordinator is meant to ask in batches, not to read "schema
+ * invalid" (Codex 2026-09-13 AF#1), and the number it is told must be the
+ * number a run can actually play.
+ */
+describe('a catalogue larger than one run can play', () => {
+  const ticket: EvidenceTicket = {
+    issuedAt: 1,
+    requestedSessions: "all",
+    binding: {
+      campaignId: "c", generation: 0, milestoneId: "m", attemptId: "a", runId: "r",
+      kind: "playthrough", medium: "editor", revision: "", dirty: false,
+    },
+  };
+  const transport: ExecutionObservation = { completed: true, exitCode: 0, timedOut: false };
+  const opts = { revisionNow: "", dirtyNow: false };
+  const record = (sessionCount: number, played: number): string => JSON.stringify({
+    schemaVersion: 1, runId: "r", kind: "playthrough", medium: "editor", revision: "",
+    execution: { completed: true, exitCode: 0, timedOut: false },
+    sessionCount,
+    sessions: Array.from({ length: played }, (_unused, i) => ({
+      requestedIndex: i + 1, index: i + 1, identityVerified: true, actions: 3,
+      outcome: "Won", reachedOutcome: true, seconds: 1,
+    })),
+  });
+
+  it("names the producer's cap, not the record's, and tells the caller to batch", () => {
+    const refused = receiveEvidence(ticket, record(13, MAX_SESSIONS_PER_RUN), transport, opts);
+    expect(refused).toMatchObject({ admitted: false, refusal: "SESSION_MISSING" });
+    // The record could hold 24 observations; no RUN can produce more than 12,
+    // so 24 was advice nothing could follow.
+    expect((refused as { detail: string }).detail).toContain(`one run plays at most ${MAX_SESSIONS_PER_RUN}`);
+    expect((refused as { detail: string }).detail).toContain("13 sessions");
+  });
+
+  it("…and a catalogue one run CAN answer is admitted when it answers for all of it", () => {
+    expect(receiveEvidence(ticket, record(MAX_SESSIONS_PER_RUN, MAX_SESSIONS_PER_RUN), transport, opts).admitted).toBe(true);
+    // One short is still one short.
+    expect(receiveEvidence(ticket, record(MAX_SESSIONS_PER_RUN, MAX_SESSIONS_PER_RUN - 1), transport, opts))
+      .toMatchObject({ admitted: false, refusal: "SESSION_MISSING" });
+  });
+});

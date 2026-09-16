@@ -484,12 +484,16 @@ function admitEvidence(
     // should have asked for a batch. Said as its own code so the caller can
     // split the work instead of reading "schema invalid" (Codex 2026-09-13
     // AF#1).
-    if (isSafeCount(catalogue) && catalogue > MAX_SESSION_OBSERVATIONS) {
+    // THE PRODUCER'S CAP, not this record's. A play-through plays at most
+    // MAX_SESSIONS_PER_RUN sessions, so a 13-session game was told "one record
+    // may carry 24" — true of the record, false of any run that could fill it
+    // (measured 2026-09-13 while closing AH#6/#7).
+    if (isSafeCount(catalogue) && catalogue > MAX_SESSIONS_PER_RUN) {
       return {
         admitted: false,
         refusal: "SESSION_MISSING",
         detail:
-          `the game holds ${catalogue} sessions and one record may carry ${MAX_SESSION_OBSERVATIONS}: ` +
+          `the game holds ${catalogue} sessions and one run plays at most ${MAX_SESSIONS_PER_RUN}: ` +
           "ask for them in batches and accumulate the receipts",
       };
     }
