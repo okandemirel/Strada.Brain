@@ -70,7 +70,7 @@ class FakeTaskManager extends EventEmitter {
       .map(([id, status]) => ({ id, status: String(status), chatId, prompt: this.prompts.get(id) ?? "" }));
   }
 
-  private createdAts = new Map<string, number>();
+  createdAts = new Map<string, number>();
   updatedAts = new Map<string, number>();
 
   verifications = new Map<string, { testsGreen?: boolean; detail: string; unfiltered?: boolean }>();
@@ -121,6 +121,10 @@ class FakeTaskManager extends EventEmitter {
   }
 
   /** Simulate the executor's keep-alive minting a retry under a new id. */
+  setStatus(taskId: string, status: TaskStatus): void {
+    this.statuses.set(taskId, status);
+  }
+
   addRetry(parentId: string, status: TaskStatus = TaskStatus.executing): string {
     this.counter += 1;
     const id = `task_${this.counter}`;
@@ -223,6 +227,8 @@ describe("CampaignManager", () => {
   let manager: CampaignManager;
   /** Simulates the messenger being down exactly when the delivery report is sent. */
   let messengerDownFor: RegExp | undefined;
+  /** Runs INSIDE the messenger's await — for races that settle mid-send. */
+  let messengerHook: (() => void) | undefined;
 
   const ctx = { chatId: "cli-local", channelType: "cli", userId: "u1" };
   /** What the compiler answers at the delivery gate; green unless a test says otherwise. */
@@ -348,6 +354,9 @@ describe("CampaignManager", () => {
       taskManager: tasks as unknown as TaskManager,
       messenger: async (chatId, text) => {
         if (messengerDownFor?.test(text)) throw new Error("messenger unavailable");
+        // A test can make the world move DURING the send: sending is an
+        // await, and what settles inside it is exactly the AK#7 race.
+        messengerHook?.();
         messages.push({ chatId, text });
       },
       projectRoot,
@@ -2685,6 +2694,30 @@ describe("CampaignManager", () => {
     expect(messages.some((m) => m.text.includes("narrowing scope"))).toBe(true);
   });
 
+  it("the time box does not supersede an attempt that finished while it warned (Codex 2026-09-13 AK#7)", async () => {
+    // Sending the warning is an await, and a worker that completes during it
+    // has published its work: the escalation cancelled a task that had just
+    // succeeded, submitted a replacement, and the queued completion was then
+    // discarded as a stale ancestor's.
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    const stored = storage.get(campaign.id)!;
+    stored.milestones[0]!.startedAtMs = Date.now() - 3 * 60 * 60_000;
+    storage.save(stored);
+
+    // The task settles DURING the warning send, which is what `tell` awaits.
+    messengerHook = () => { tasks.setStatus("task_1", TaskStatus.completed); };
+    const escalated = await (manager as unknown as {
+      escalateIfPastTimeBox(c: unknown, m: unknown): Promise<boolean>;
+    }).escalateIfPastTimeBox(storage.get(campaign.id), storage.get(campaign.id)!.milestones[0]);
+    messengerHook = undefined;
+
+    expect(escalated).toBe(true);
+    // No replacement: the finished attempt answers for itself.
+    expect(tasks.submitted).toHaveLength(1);
+    expect(tasks.cancelled).not.toContain("task_1");
+  });
+
   it("the time-box binds the ADOPTION path too (a sprint cannot spin forever unadjudicated)", async () => {
     // Measured 2026-09-01: m6 ran 7h+ with timeBoxEscalations=0 because every
     // settle was adopted as an executor retry and never reached an outcome.
@@ -3932,6 +3965,9 @@ describe("CampaignManager", () => {
       taskManager: tasks as unknown as TaskManager,
       messenger: async (chatId, text) => {
         if (messengerDownFor?.test(text)) throw new Error("messenger unavailable");
+        // A test can make the world move DURING the send: sending is an
+        // await, and what settles inside it is exactly the AK#7 race.
+        messengerHook?.();
         messages.push({ chatId, text });
       },
       projectRoot,
@@ -6563,6 +6599,28 @@ describe("CampaignManager", () => {
     const after = storage.get(campaign.id)!.milestones[0]!;
     expect(after.taskId).toBe("task_retry");
     expect(after.attemptStartedAtMs!).toBeGreaterThan(before);
+  });
+
+  it("…to when that retry STARTED, not to when it was noticed (Codex 2026-09-13 AK#6)", async () => {
+    // Adoption can happen long after the retry began, and stamping the
+    // observation time made the retry's OWN proof — a suite record it wrote
+    // thirty seconds in — older than its own attempt, so a green record read
+    // back stale and the sprint was told its work did not count.
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    const retryStartedAt = Date.now() - 60_000;
+    const retry = tasks.submit("cli-local", "cli", "the retry", { parentId: "task_1" });
+    (tasks as unknown as { createdAts: Map<string, number> }).createdAts.set(retry.id, retryStartedAt);
+
+    (manager as unknown as { adoptTask: (c: unknown, id: string) => void }).adoptTask(storage.get(campaign.id), retry.id);
+
+    const after = storage.get(campaign.id)!.milestones[0]!;
+    expect(after.taskId).toBe(retry.id);
+    expect(after.attemptStartedAtMs).toBe(retryStartedAt);
+    // A retry this coordinator cannot read still moves the clock forward
+    // rather than leaving the abandoned attempt's evidence eligible.
+    (manager as unknown as { adoptTask: (c: unknown, id: string) => void }).adoptTask(storage.get(campaign.id), "task_unknown");
+    expect(storage.get(campaign.id)!.milestones[0]!.attemptStartedAtMs!).toBeGreaterThan(retryStartedAt);
   });
 
   it("the art bounce does not fight a GDD that ASKED for flat art (Codex 2026-09-11 B#17)", () => {

@@ -1941,7 +1941,14 @@ export class CampaignManager {
       rememberOwnedTask(milestone, this.lineageRootOf(taskId));
       // A retry is a new attempt at proof: the freshness clock moves with it,
       // or evidence from the abandoned attempt stays eligible (Codex 2026-09-11 C#9).
-      milestone.attemptStartedAtMs = Date.now();
+      // …BUT IT MOVES TO WHEN THAT ATTEMPT BEGAN, not to when this coordinator
+      // noticed it. Adoption can happen long after the retry started, and
+      // stamping the observation time made the retry's OWN proof — a suite
+      // record it wrote thirty seconds in — older than its own attempt, so a
+      // green record read back `{found: false, stale: true}` (Codex 2026-09-13
+      // AK#6). Adoption time is an observation, never an execution start.
+      const adopted = this.taskManager.getStatus(taskId as TaskId);
+      milestone.attemptStartedAtMs = adopted?.createdAt ?? Date.now();
     }
     this.persist(campaign);
   }
@@ -2806,6 +2813,21 @@ export class CampaignManager {
     const elapsedMs = milestone.startedAtMs ? Date.now() - milestone.startedAtMs : 0;
     const escalations = milestone.timeBoxEscalations ?? 0;
     if (elapsedMs <= this.milestoneTimeBoxMs) return false;
+    // WAS ANYONE STILL WORKING when this began? A settle path calls this with
+    // its own task already terminal — the replacement below IS that outcome's
+    // next attempt. Reconciliation calls it with a LIVE task, and one that
+    // finishes while the warning is being sent has published its work: the
+    // escalation must not cancel it and submit a replacement (Codex
+    // 2026-09-13 AK#7).
+    const tipWasLive = ((): boolean => {
+      if (!milestone.taskId) return false;
+      try {
+        const before = this.taskManager.findLatestLineageTask(milestone.taskId as TaskId);
+        return before !== null && before !== undefined && ACTIVE_STATUSES.has(before.status);
+      } catch {
+        return false;
+      }
+    })();
     if (escalations >= 2) {
       // Past the second narrowing the box used to switch OFF — the sprint
       // could run unbounded again (measured 2026-09-01: m6 at 33h with
@@ -2880,14 +2902,28 @@ export class CampaignManager {
       `⏱️ **${milestone.title}** has run ${Math.round(elapsedMs / 3_600_000)}h without landing green — ` +
         `narrowing scope (escalation ${escalations + 1}/2): the next attempt must deliver the smallest complete increment.`,
     );
+    // WHO IS STILL RUNNING, read AFTER the warning was sent. Sending it is an
+    // await, and a worker that finishes during it has published its work: the
+    // escalation then cancelled a task that had just succeeded and submitted a
+    // replacement, and the queued completion was discarded as a stale
+    // ancestor's (Codex 2026-09-13 AK#7). A settled tip answers for itself.
+    const tip = milestone.taskId
+      ? this.taskManager.findLatestLineageTask(milestone.taskId as TaskId)
+      : undefined;
+    if (tipWasLive && tip && !ACTIVE_STATUSES.has(tip.status)) {
+      getLoggerSafe().info("Milestone time box: the attempt settled while the warning was sent — its own outcome stands", {
+        id: campaign.id,
+        milestone: milestone.id,
+        task: tip.id,
+        status: tip.status,
+      });
+      return true;
+    }
     // Stop the runaway lineage before starting the narrowed one, or the two
     // write the same repo in parallel.
-    const tipId = milestone.taskId
-      ? this.taskManager.findLatestLineageTask(milestone.taskId as TaskId)?.id
-      : undefined;
-    if (tipId) {
+    if (tip?.id) {
       try {
-        this.taskManager.cancel(tipId as TaskId, { reason: "superseded" });
+        this.taskManager.cancel(tip.id as TaskId, { reason: "superseded" });
       } catch { /* already settled */ }
     }
     this.submitCurrentMilestone(campaign, { countAttempt: false });
