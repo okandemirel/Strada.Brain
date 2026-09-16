@@ -745,3 +745,33 @@ describe("Thinking disable state", () => {
     expect(registry.isAvailable("test")).toBe(true);
   });
 });
+
+/**
+ * `lastFailureAt` answers "is this provider unwell NOW", and a provider that
+ * answers again clears its own failure — so a run killed for inactivity
+ * because of a long stall was judged against a chain that had healed, and the
+ * campaign charged the sprint an attempt for the provider's outage (measured
+ * live 2026-09-14 04:58).
+ */
+describe("the failure log a later success does not erase", () => {
+  beforeEach(() => {
+    ProviderHealthRegistry.clearFailureLog();
+    ProviderHealthRegistry.resetInstance();
+  });
+
+  it("counts the failures recorded since a moment, after the provider recovers", () => {
+    const health = ProviderHealthRegistry.getInstance();
+    const attemptStart = Date.now();
+    health.recordFailure("opencode", "sent no response within 300000ms");
+    health.recordFailure("opencode2", "sent no response within 300000ms");
+    expect(ProviderHealthRegistry.failuresSince(attemptStart)).toBe(2);
+
+    // The chain answers again: `lastFailureAt` is cleared…
+    health.recordSuccess("opencode");
+    expect(health.getEntry("opencode")?.consecutiveFailures ?? 0).toBe(0);
+    // …and the log still remembers what happened during the attempt.
+    expect(ProviderHealthRegistry.failuresSince(attemptStart)).toBe(2);
+    // A later attempt is not charged with an earlier attempt's failures.
+    expect(ProviderHealthRegistry.failuresSince(Date.now() + 1000)).toBe(0);
+  });
+});

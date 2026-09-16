@@ -16,7 +16,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { basename, dirname, join, relative, sep } from "node:path";
 import { getLoggerSafe } from "../utils/logger.js";
-import { allProvidersCoolingDownMs, describeProviderOutage, msSinceNewestProviderFailure } from "../agents/providers/provider-outage.js";
+import { allProvidersCoolingDownMs, describeProviderOutage, msSinceNewestProviderFailure, providerFailuresSince } from "../agents/providers/provider-outage.js";
 import type { IncomingMessage } from "../channels/channel-messages.interface.js";
 import type { TaskManager } from "../tasks/task-manager.js";
 import type { TaskId } from "../tasks/types.js";
@@ -216,6 +216,17 @@ export function isOutageCausedSettle(
   output: string,
   coolingMs: number,
   msSinceProviderFailure: number = Number.POSITIVE_INFINITY,
+  /**
+   * How many provider failures were recorded WHILE THIS ATTEMPT RAN.
+   *
+   * `msSinceProviderFailure` reads the health registry as it is NOW, and a
+   * provider that answers again clears its own failure — so a run killed by
+   * inactivity BECAUSE of a fifteen-minute stall was judged against a chain
+   * that had healed, and the sprint was charged an attempt for the
+   * provider's outage (measured live 2026-09-14 04:58). A failure that
+   * happened inside the attempt explains the attempt.
+   */
+  failuresDuringAttempt = 0,
 ): boolean {
   if (typeof output !== "string" || output.length === 0) return false;
   if (/blocked:provider_unavailable/i.test(output)) return true;
@@ -232,7 +243,7 @@ export function isOutageCausedSettle(
   // seconds later, coolingMs read 0, attempt 1 → 2 for a queue never passed.
   if (
     (/stalled without making progress|made no progress for \d+ms/i.test(output) || TURKISH_STALL_RE.test(output)) &&
-    msSinceProviderFailure <= RECENT_PROVIDER_FAILURE_MS
+    (msSinceProviderFailure <= RECENT_PROVIDER_FAILURE_MS || failuresDuringAttempt > 0)
   ) {
     return true;
   }
@@ -3999,7 +4010,12 @@ export class CampaignManager {
     // `blocked:provider_unavailable`, and that branch charged it (measured
     // 2026-09-02 02:36: m7 "blocked after 2 attempts" while all four
     // accounts were on quota walls).
-    const outageCaused = isOutageCausedSettle(output, allProvidersCoolingDownMs(), msSinceNewestProviderFailure());
+    const outageCaused = isOutageCausedSettle(
+      output,
+      allProvidersCoolingDownMs(),
+      msSinceNewestProviderFailure(),
+      providerFailuresSince(milestone.attemptStartedAtMs ?? milestone.startedAtMs ?? 0),
+    );
     // A graceful shutdown is the OPERATOR stopping the process, not the sprint
     // failing: the executor aborts in-flight runs with "shutting down" and the
     // work done so far is kept. Charging it ended a campaign on a routine
@@ -4114,7 +4130,15 @@ export class CampaignManager {
     // on a healthy chain armed a two-minute self-revival with a fresh attempt
     // budget each cycle — an unbounded loop the attempt budget was meant to end.
     const outageWaitMs = allProvidersCoolingDownMs();
-    if (outageWaitMs > 0 || isOutageCausedSettle(output, outageWaitMs, msSinceNewestProviderFailure())) {
+    if (
+      outageWaitMs > 0
+      || isOutageCausedSettle(
+        output,
+        outageWaitMs,
+        msSinceNewestProviderFailure(),
+        providerFailuresSince(milestone.attemptStartedAtMs ?? milestone.startedAtMs ?? 0),
+      )
+    ) {
       const delayMs = Math.max(outageWaitMs, 60_000) + 60_000;
       campaign.autoReviveAt = Date.now() + delayMs;
       this.persist(campaign);

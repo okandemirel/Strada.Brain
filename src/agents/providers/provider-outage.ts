@@ -115,6 +115,23 @@ export function allProvidersCoolingDownMs(): number {
  * and the sprint was charged an attempt for a queue it never got past. The
  * probe is not the workload; the newest failure is the evidence.
  */
+/**
+ * How many provider failures were recorded at or after `since`.
+ *
+ * `msSinceNewestProviderFailure` describes the chain NOW, and a provider that
+ * answers again clears its own failure — so a run killed for inactivity
+ * because of a long stall was judged against a chain that had healed
+ * (measured live 2026-09-14 04:58). This says what happened while the run was
+ * alive, which is what explains the run.
+ */
+export function providerFailuresSince(since: number): number {
+  try {
+    return ProviderHealthRegistry.failuresSince(since);
+  } catch {
+    return 0;
+  }
+}
+
 export function msSinceNewestProviderFailure(now: number = Date.now()): number {
   try {
     const entries = ProviderHealthRegistry.getInstance().getAllEntries();

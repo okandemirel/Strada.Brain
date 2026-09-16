@@ -131,6 +131,25 @@ export class ProviderHealthRegistry {
   private readonly downEpisodes = new Map<string, number>();
   private readonly config: ProviderHealthConfig;
 
+  /**
+   * Every failure this process has recorded, newest last — bounded, and never
+   * rewritten by a later success. `lastFailureAt` answers "is this provider
+   * unwell NOW"; this answers "did a provider fail while that run was alive",
+   * which is what explains a run killed for inactivity.
+   */
+  private static readonly failureLog: Array<{ at: number; provider: string }> = [];
+  private static readonly FAILURE_LOG_LIMIT = 500;
+
+  /** How many provider failures were recorded at or after `since`. */
+  static failuresSince(since: number): number {
+    return ProviderHealthRegistry.failureLog.filter((f) => f.at >= since).length;
+  }
+
+  /** For tests: forget the failure log. */
+  static clearFailureLog(): void {
+    ProviderHealthRegistry.failureLog.length = 0;
+  }
+
   /** Providers whose thinking/reasoning is suppressed after a reasoning timeout. */
   private readonly thinkingDisabledProviders = new Set<string>();
   /** Consecutive successes with thinking disabled — re-enable after threshold. */
@@ -241,6 +260,16 @@ export class ProviderHealthRegistry {
   recordFailure(providerName: string, error: string): void {
     const normalized = this.norm(providerName);
     const failures = this.nextFailureCount(normalized);
+    // A LOG OF WHEN FAILURES HAPPENED, which a later SUCCESS does not erase.
+    // `lastFailureAt` is cleared the moment the provider answers again, so a
+    // run killed by inactivity BECAUSE of a fifteen-minute stall was judged
+    // against a chain that had since healed — and the campaign charged the
+    // sprint an attempt for the provider's outage (measured live 2026-09-14
+    // 04:58; the same class as Codex 2026-09-08 06:58).
+    ProviderHealthRegistry.failureLog.push({ at: Date.now(), provider: normalized });
+    if (ProviderHealthRegistry.failureLog.length > ProviderHealthRegistry.FAILURE_LOG_LIMIT) {
+      ProviderHealthRegistry.failureLog.splice(0, ProviderHealthRegistry.failureLog.length - ProviderHealthRegistry.FAILURE_LOG_LIMIT);
+    }
 
     if (failures >= this.config.downThreshold) {
       this.markDown(normalized, this.config.downCooldownMs, error, true);
