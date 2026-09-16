@@ -11,7 +11,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { systemInterrupted } from "../tasks/interruption.js";
 import { EvidenceLedger, artifactDigest, describeLedgerRow } from "./evidence-ledger.js";
-import { issueRunId, receiveEvidence, type EvidenceBinding, type EvidenceTicket } from "./producer-evidence.js";
+import { issueRunId, receiveEvidence, sessionsRequested, type EvidenceBinding, type EvidenceTicket } from "./producer-evidence.js";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { basename, dirname, join, relative, sep } from "node:path";
@@ -123,7 +123,12 @@ export interface CampaignManagerOptions {
    * 2026-09-10). The verdict is read back from the project afterwards; the
    * frame rate it measures is the one a design document's target means.
    */
-  runPlayer?: (projectRoot: string, artifactPath: string, spec?: PlayerRunSpec) => Promise<void>;
+  runPlayer?: (
+    projectRoot: string,
+    artifactPath: string,
+    spec?: PlayerRunSpec,
+    dispatch?: { readonly runId: string; readonly target?: string },
+  ) => Promise<{ receipt?: string } | void>;
   /**
    * Hand a file to the origin chat (2026-09-10): the newest captured frame of
    * the running game travels with every delivery report, so a person sees the
@@ -741,7 +746,12 @@ export class CampaignManager {
   private readonly buildPlayer?: (projectRoot: string, target?: string, evidenceRunId?: string) => Promise<PlayerBuildEvidence>;
   private readonly deliveryResumeDelayMs: number;
   private readonly implementationReviveDelayMs: number;
-  private readonly runPlayer?: (projectRoot: string, artifactPath: string, spec?: PlayerRunSpec) => Promise<void>;
+  private readonly runPlayer?: (
+    projectRoot: string,
+    artifactPath: string,
+    spec?: PlayerRunSpec,
+    dispatch?: { readonly runId: string; readonly target?: string },
+  ) => Promise<{ receipt?: string } | void>;
   private readonly attach?: (chatId: string, attachment: import("../channels/channel-messages.interface.js").Attachment) => Promise<void>;
   private readonly independentReviewer: CampaignManagerOptions["independentReviewer"];
   private readonly maxMilestoneAttempts: number;
@@ -4908,9 +4918,16 @@ export class CampaignManager {
           kind: "playthrough",
           medium: "player",
           ...(build.target === undefined ? {} : { target: build.target }),
-          ...(artifactDigest(build.artifactPath) === undefined ? {} : { artifactSha256: artifactDigest(build.artifactPath)! }),
+          ...(build.artifactPath === undefined ? {} : { artifactPath: build.artifactPath }),
+          requestedSessions: sessionsRequested(spec.sessions),
         },
-        async () => ({ value: await this.runPlayer!(this.projectRoot, build.artifactPath!, spec) }),
+        async (runId) => {
+          const played = await this.runPlayer!(this.projectRoot, build.artifactPath!, spec, {
+            runId,
+            ...(build.target === undefined ? {} : { target: build.target }),
+          });
+          return { value: undefined, ...(played?.receipt === undefined ? {} : { receipt: played.receipt }) };
+        },
       );
     } catch (err) {
       failure = err instanceof Error ? err.message : String(err);
@@ -4933,9 +4950,16 @@ export class CampaignManager {
             kind: "playthrough",
             medium: "player",
             ...(other.target === undefined ? {} : { target: other.target }),
-            ...(artifactDigest(other.artifactPath) === undefined ? {} : { artifactSha256: artifactDigest(other.artifactPath)! }),
+            artifactPath: other.artifactPath,
+            requestedSessions: sessionsRequested(spec.sessions),
           },
-          async () => ({ value: await this.runPlayer!(this.projectRoot, other.artifactPath, spec) }),
+          async (runId) => {
+            const played = await this.runPlayer!(this.projectRoot, other.artifactPath, spec, {
+              runId,
+              ...(other.target === undefined ? {} : { target: other.target }),
+            });
+            return { value: undefined, ...(played?.receipt === undefined ? {} : { receipt: played.receipt }) };
+          },
         );
       } catch (err) {
         why = err instanceof Error ? err.message : String(err);
@@ -6410,16 +6434,26 @@ export class CampaignManager {
       kind: EvidenceBinding["kind"];
       medium: EvidenceBinding["medium"];
       target?: string;
-      artifactSha256?: string;
+      /**
+       * The artifact this run is about. Its digest is measured HERE — before
+       * the run for the ticket, and again after it for the receiver — so a
+       * player receipt has a digest the caller took for itself (Codex
+       * 2026-09-13 AH#6).
+       */
+      artifactPath?: string;
       processOwned?: boolean;
+      /** Which sessions a play-through run was asked to play, when it is one. */
+      requestedSessions?: readonly number[] | "all";
     },
     run: (runId: string) => Promise<{ value: T; receipt?: string }>,
   ): Promise<T> {
     const ledger = campaign === undefined ? null : this.ledger();
     if (ledger === null || campaign === undefined) return (await run(issueRunId())).value;
     const dirtyBefore = this.projectIsDirty();
+    const artifactBefore = artifactDigest(binding.artifactPath);
     const ticket: EvidenceTicket = {
       issuedAt: Date.now(),
+      ...(binding.requestedSessions === undefined ? {} : { requestedSessions: binding.requestedSessions }),
       binding: {
         campaignId: campaign.id,
         generation: campaign.stopGeneration ?? 0,
@@ -6431,7 +6465,7 @@ export class CampaignManager {
         revision: this.projectRevision(),
         dirty: dirtyBefore,
         ...(binding.target === undefined ? {} : { target: binding.target }),
-        ...(binding.artifactSha256 === undefined ? {} : { artifactSha256: binding.artifactSha256 }),
+        ...(artifactBefore === undefined ? {} : { artifactSha256: artifactBefore }),
         ...(binding.processOwned === undefined ? {} : { processOwned: binding.processOwned }),
       },
     };
@@ -6446,11 +6480,25 @@ export class CampaignManager {
       outcome = await run(ticket.binding.runId);
       return outcome.value;
     } finally {
+      // WHAT THIS CALLER ACTUALLY OBSERVED, and nothing more. The transport
+      // observation used to carry `exitCode: 0` on the strength of the
+      // callback having returned — an exit code nobody here measured, which
+      // a receipt claiming its own exit could then agree with (Codex
+      // 2026-09-13 AH#9). The campaign dispatches through a tool and owns no
+      // process, so it reports what it knows: the call came back, or it did
+      // not.
       const decision = receiveEvidence(
-        ticket,
+        { ...ticket, binding: { ...ticket.binding, processOwned: false } },
         outcome?.receipt,
-        { completed: outcome !== undefined, exitCode: outcome === undefined ? null : 0, timedOut: false },
-        { revisionNow: this.projectRevision(), dirtyNow: this.projectIsDirty() },
+        { completed: outcome !== undefined, exitCode: null, timedOut: false },
+        {
+          revisionNow: this.projectRevision(),
+          dirtyNow: this.projectIsDirty(),
+          // THE ARTIFACT AS IT IS NOW, measured here: a player receipt cannot
+          // be admitted without a digest the caller took for itself, and this
+          // wrapper never supplied one (AH#6).
+          ...(binding.artifactPath === undefined ? {} : { artifactSha256: artifactDigest(binding.artifactPath) ?? "" }),
+        },
       );
       try {
         ledger.settle(ticket.binding.runId, outcome?.receipt, decision);

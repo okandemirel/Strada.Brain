@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { hostname } from "node:os";
 import { execSync } from "node:child_process";
 import { execFileSync } from "node:child_process";
-import { EvidenceLedger } from "./evidence-ledger.js";
+import { EvidenceLedger, artifactDigest } from "./evidence-ledger.js";
 import { requirementKey, CampaignManager, stripTimeBoxDirectives, UNMEASURABLE_PROOF_RE, UNRUNNABLE_HERE_RE, hasUnmeasurableProof, proofsSpanTwoRevisions } from "./campaign-manager.js";
 import { CampaignStorage } from "./campaign-storage.js";
 import { describeBuild } from "./campaign-status.js";
@@ -3157,6 +3157,185 @@ describe("CampaignManager", () => {
     }
     expect(messages.map((m) => m.text).join("\n")).toMatch(/player-build receipt.*REFUSED \(SOURCE_DIRTY\)/);
   });
+
+  it("ADMITS a complete play-through receipt through the production path (Codex 2026-09-13 AH#6)", async () => {
+    // A correct player run could not produce an admissible receipt: the
+    // player path was never given the run id, so it stamped none, and the
+    // wrapper never measured the artifact after the run — every real
+    // play-through settled "ARTIFACT_MISSING: nobody measured the artifact
+    // that ran". This is the whole loop, end to end, on a clean tree.
+    tasks = new FakeTaskManager();
+    storage.close();
+    storage = new CampaignStorage(join(dir, `campaigns-admit-${messages.length}.db`));
+    const git = (...args: string[]): string => execFileSync("git", ["-C", projectRoot, ...args], { encoding: "utf8" });
+    const artifact = join(projectRoot, "Builds", "StandaloneOSX", "Game.app");
+    mkdirSync(join(projectRoot, "Builds", "StandaloneOSX"), { recursive: true });
+    writeFileSync(artifact, "the bytes that were built");
+    git("init", "-q");
+    git("config", "user.email", "t@t");
+    git("config", "user.name", "t");
+    git("add", "-A");
+    git("commit", "-qm", "baseline");
+    // The tree the receipts are bound to is whatever HEAD is when the run
+    // happens: every sprint commits its own work here, the way a real one does.
+    const head = (): string => git("rev-parse", "HEAD").trim();
+    const didWork = async (n: number): Promise<void> => {
+      // Commit timestamps are second-granular, so a sprint's work must land
+      // strictly after the second the sprint began in.
+      await new Promise((r) => setTimeout(r, 1100));
+      writeFileSync(join(projectRoot, `work-${n}.txt`), `sprint ${n}`);
+      git("add", "-A");
+      git("commit", "-qm", `sprint ${n}`);
+    };
+    buildVerdict = { ran: true, ok: true, target: "StandaloneOSX", artifactPath: artifact, sizeBytes: 25, durationMs: 120_000, scenes: 2 };
+    const sessionsAsked: Array<string | undefined> = [];
+
+    manager = new CampaignManager({
+      storage,
+      verifyCompile: async () => compileVerdict,
+      buildPlayer: async (_root: string, target?: string, evidenceRunId?: string) => {
+        buildTargetsAsked.push(target);
+        return {
+          ...buildVerdict,
+          receipt: JSON.stringify({
+            schemaVersion: 1, runId: evidenceRunId, kind: "player-build", medium: "builder", revision: head(),
+            ...(target === undefined ? {} : { target }),
+            artifactSha256: artifactDigest(artifact),
+            execution: { completed: true, exitCode: 0, timedOut: false },
+          }),
+        };
+      },
+      // What Strada.MCP's unity_run_player stamps for the run it was given.
+      runPlayer: async (root, artifactPlayed, spec, dispatch) => {
+        playerRuns.push(artifactPlayed);
+        sessionsAsked.push(spec?.sessions);
+        writePlayerVerdict(true, {}, root);
+        return {
+          receipt: JSON.stringify({
+            schemaVersion: 1, runId: dispatch?.runId, kind: "playthrough", medium: "player", revision: head(),
+            ...(dispatch?.target === undefined ? {} : { target: dispatch.target }),
+            artifactSha256: artifactDigest(artifactPlayed),
+            execution: { completed: true, exitCode: 0, timedOut: false },
+            sessionCount: 1,
+            sessions: [{
+              requestedIndex: 1, index: 1, observedIndex: 1, identityVerified: true,
+              identitySource: "active-session", actions: 12, outcome: "Won", reachedOutcome: true, seconds: 9,
+            }],
+          }),
+        };
+      },
+      planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async (chatId, text) => { messages.push({ chatId, text }); },
+      projectRoot,
+      retryAdoptionGraceMs: 10,
+      completedSettleDelayMs: 0,
+      milestoneTimeBoxMs: 60 * 60_000,
+    });
+    manager.attachEvents();
+
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    await didWork(1);
+    settleMilestone("sprint A done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await didWork(2);
+    settleMilestone("sprint B done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    await didWork(3);
+    settleMilestone("green, shipping");
+    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"), { timeout: 15_000 });
+
+    const ledger = new EvidenceLedger(join(projectRoot, ".strada", "campaign-evidence.db"));
+    try {
+      const last = storage.get(campaign.id)!.milestones.at(-1)!;
+      const plays = ledger.forMilestone(campaign.id, last.id).filter((r) => r.kind === "playthrough");
+      expect(plays.length).toBeGreaterThan(0);
+      // ADMITTED: the run id reached the player, the receipt came back for
+      // that run, and the artifact was measured on both sides of it.
+      expect(plays.map((r) => r.refusal ?? "admitted")).toContain("admitted");
+      expect(plays.some((r) => (r.recordSha256 ?? "").length === 64)).toBe(true);
+      // The run was asked for one session and the receipt answered for it;
+      // the ticket says which, so a record that skipped it could not settle.
+      expect(sessionsAsked).not.toHaveLength(0);
+    } finally {
+      ledger.close();
+    }
+    await waitFor(() => expect(messages.map((m) => m.text).join("\n")).toMatch(/playthrough receipt.*admitted \(run /));
+  }, 30_000);
+
+  it("the play-through ticket names the sessions the run was asked for (Codex 2026-09-12 AC J1)", async () => {
+    // A ticket with no session requirement admits a record that played
+    // nothing: the sessions the run was asked for are what make an empty
+    // record a refusal. Measured against the production path directly.
+    const git = (...args: string[]): string => execFileSync("git", ["-C", projectRoot, ...args], { encoding: "utf8" });
+    const artifact = join(projectRoot, "Builds", "StandaloneOSX", "Game.app");
+    mkdirSync(join(projectRoot, "Builds", "StandaloneOSX"), { recursive: true });
+    writeFileSync(artifact, "the bytes that were built");
+    git("init", "-q");
+    git("config", "user.email", "t@t");
+    git("config", "user.name", "t");
+    git("add", "-A");
+    git("commit", "-qm", "baseline");
+    const revision = git("rev-parse", "HEAD").trim();
+
+    let withSessions = true;
+    const campaign = {
+      id: "c_ticket", chatId: "chat", channelType: "cli", userId: "u", projectRoot,
+      state: "executing", draftAttempts: 0, milestones: [], currentMilestone: 0,
+      createdAt: Date.now(), updatedAt: Date.now(),
+    } as unknown as Campaign;
+    const milestone = { id: "m_play", title: "Delivery", prompt: "p", status: "running", attempts: 1 };
+    const build = { ran: true, ok: true, target: "StandaloneOSX", artifactPath: artifact, sizeBytes: 25, durationMs: 1, scenes: 1 };
+    const player = new CampaignManager({
+      storage,
+      runPlayer: async (root, artifactPlayed, _spec, dispatch) => {
+        writePlayerVerdict(true, {}, root);
+        return {
+          receipt: JSON.stringify({
+            schemaVersion: 1, runId: dispatch?.runId, kind: "playthrough", medium: "player", revision,
+            ...(dispatch?.target === undefined ? {} : { target: dispatch.target }),
+            artifactSha256: artifactDigest(artifactPlayed),
+            execution: { completed: true, exitCode: 0, timedOut: false },
+            sessionCount: 1,
+            ...(withSessions
+              ? {
+                sessions: [{
+                  requestedIndex: 1, index: 1, observedIndex: 1, identityVerified: true,
+                  identitySource: "active-session", actions: 12, outcome: "Won", reachedOutcome: true, seconds: 9,
+                }],
+              }
+              : {}),
+          }),
+        };
+      },
+      planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async () => {},
+      projectRoot,
+    });
+    const measure = (m: unknown): Promise<unknown> =>
+      (player as unknown as { measurePlayerRun(m: unknown, b: unknown, c: unknown): Promise<unknown> })
+        .measurePlayerRun(m, build, campaign);
+
+    await measure(milestone);
+    withSessions = false;
+    const second = { ...milestone, id: "m_play_empty" };
+    await measure(second);
+
+    const ledger = new EvidenceLedger(join(projectRoot, ".strada", "campaign-evidence.db"));
+    try {
+      const played = ledger.forMilestone(campaign.id, "m_play");
+      expect(played.map((r) => r.refusal ?? "admitted")).toEqual(["admitted"]);
+      // The SAME run, with the session the ticket asked for left out of the
+      // record, is refused by name — not admitted as "nothing to check".
+      const empty = ledger.forMilestone(campaign.id, "m_play_empty");
+      expect(empty.map((r) => r.refusal)).toEqual(["SESSION_MISSING"]);
+      expect(empty[0]!.detail ?? "").toContain("session 1 was asked for");
+    } finally {
+      ledger.close();
+    }
+  }, 20_000);
 
   it("an audit that RAN discharges the unreadable-queue flag (Codex 2026-09-13 AF#2)", async () => {
     // The flag is persisted now, so it must be cleared by the thing that

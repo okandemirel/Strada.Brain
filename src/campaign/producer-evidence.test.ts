@@ -14,6 +14,8 @@ import {
   receiveEvidence,
   recordSha256,
   MAX_EVIDENCE_BYTES,
+  MAX_SESSIONS_PER_RUN,
+  sessionsRequested,
   type EvidenceTicket,
   type ExecutionObservation,
   type ProducerEvidence,
@@ -491,5 +493,64 @@ describe("what a receipt may not be admitted on (Codex 2026-09-12 AC)", () => {
     expect(
       receiveEvidence(ticket({ kind: "compile", medium: "compiler" }), bytesOf(batch), { completed: true, exitCode: null, timedOut: false }, observed),
     ).toMatchObject({ admitted: false, refusal: "PROCESS_FAILED" });
+  });
+});
+
+/**
+ * WHICH SESSIONS THE TICKET ASKS FOR, read from the spec the producer gets.
+ *
+ * The ticket left the field empty, which put no session requirement on the
+ * record at all: a run asked to play every level settled with a record
+ * carrying one session, or none (Codex 2026-09-12 AC J1, 2026-09-13 AH#6).
+ */
+describe("sessionsRequested", () => {
+  it('reads "all", ranges, lists and single indices the way the runner does', () => {
+    expect(sessionsRequested("all")).toBe("all");
+    expect(sessionsRequested(" ALL ")).toBe("all");
+    expect(sessionsRequested("1-3")).toEqual([1, 2, 3]);
+    expect(sessionsRequested("2,5")).toEqual([2, 5]);
+    expect(sessionsRequested("7")).toEqual([7]);
+    expect(sessionsRequested("2-3,6")).toEqual([2, 3, 6]);
+  });
+
+  it("asks for the session the run will actually play when the spec says nothing usable", () => {
+    // NOT an empty list: an empty request is a ticket nothing has to answer,
+    // and the runner still plays its default session.
+    expect(sessionsRequested(undefined)).toEqual([1]);
+    expect(sessionsRequested("")).toEqual([1]);
+    expect(sessionsRequested("   ")).toEqual([1]);
+    expect(sessionsRequested("every level")).toEqual([1]);
+    expect(sessionsRequested("0")).toEqual([1]);
+  });
+
+  it("never asks for more sessions than one run can play", () => {
+    // The producer caps a run at MAX_SESSIONS_PER_RUN; a ticket that asked
+    // for more could not be settled by any correct run.
+    expect(sessionsRequested("1-100")).toHaveLength(MAX_SESSIONS_PER_RUN);
+    expect(sessionsRequested("1-100").at(-1)).toBe(MAX_SESSIONS_PER_RUN);
+  });
+
+  it("the requirement it produces is the one the receiver enforces", () => {
+    const base: EvidenceTicket = {
+      issuedAt: 1,
+      requestedSessions: sessionsRequested("2"),
+      binding: {
+        campaignId: "c", generation: 0, milestoneId: "m", attemptId: "a", runId: "r",
+        kind: "playthrough", medium: "editor", revision: "", dirty: false,
+      },
+    };
+    const record = (index: number) => JSON.stringify({
+      schemaVersion: 1, runId: "r", kind: "playthrough", medium: "editor", revision: "",
+      execution: { completed: true, exitCode: 0, timedOut: false },
+      sessions: [{
+        requestedIndex: index, index, identityVerified: true, actions: 3,
+        outcome: "Won", reachedOutcome: true, seconds: 1,
+      }],
+    });
+    const transport: ExecutionObservation = { completed: true, exitCode: 0, timedOut: false };
+    const opts = { revisionNow: "", dirtyNow: false };
+    expect(receiveEvidence(base, record(2), transport, opts).admitted).toBe(true);
+    const wrong = receiveEvidence(base, record(1), transport, opts);
+    expect(wrong).toMatchObject({ admitted: false, refusal: "SESSION_MISSING" });
   });
 });

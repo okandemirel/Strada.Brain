@@ -56,8 +56,50 @@ describe("makeRunPlayer — the tool's own failure reaches the caller (Codex 202
   it("throws what an unsupported host said, and stays silent on success", async () => {
     await expect(makeRunPlayer(registry({ content: "unsupported artifact on this host", isError: true }))("/p", "/p/Game.apk"))
       .rejects.toThrow(/unsupported artifact on this host/);
-    await expect(makeRunPlayer(registry({ content: "PLAYER PLAY-THROUGH OK" }))("/p", "/p/Game.app")).resolves.toBeUndefined();
+    // A run that said nothing about evidence returns no receipt — and says
+    // nothing else either.
+    await expect(makeRunPlayer(registry({ content: "PLAYER PLAY-THROUGH OK" }))("/p", "/p/Game.app")).resolves.toEqual({});
     await expect(makeRunPlayer(registry({}, []))("/p", "/p/Game.app")).rejects.toThrow(/not registered/);
+  });
+});
+
+/**
+ * THE RUN A DISPATCH ANSWERS FOR reaches the player, and its receipt comes
+ * back.
+ *
+ * The play-through path was never given the run id, so the producer stamped
+ * no receipt and a correct player run could not be admitted at all (Codex
+ * 2026-09-13 AH#6).
+ */
+describe("makeRunPlayer carries the evidence dispatch both ways", () => {
+  it("passes the run id and the platform label, and returns the receipt verbatim", async () => {
+    const asked: Array<Record<string, unknown>> = [];
+    const record = '{"schemaVersion":1,"runId":"run-7","kind":"playthrough","medium":"player"}';
+    const runPlayer = makeRunPlayer({
+      getAvailableToolNames: () => ["unity_run_player"],
+      execute: async (_name: string, input: Record<string, unknown>) => {
+        asked.push(input);
+        return { content: `PLAY-THROUGH OK\n\n\`\`\`strada-evidence\n${record}\n\`\`\`` };
+      },
+    } as never);
+
+    const played = await runPlayer("/p", "/p/Game.app", undefined, { runId: "run-7", target: "StandaloneOSX" });
+    expect(asked[0]).toMatchObject({ evidenceRunId: "run-7", evidenceTarget: "StandaloneOSX" });
+    // VERBATIM: the receiver hashes the bytes it validates.
+    expect(played.receipt).toBe(record);
+
+    // A dispatch with no platform label asks for none.
+    await runPlayer("/p", "/p/Game.app", undefined, { runId: "run-8" });
+    expect(asked[1]).not.toHaveProperty("evidenceTarget");
+    expect(asked[1]).toMatchObject({ evidenceRunId: "run-8" });
+  });
+
+  it("a report with no receipt in it answers with none rather than an empty one", async () => {
+    const runPlayer = makeRunPlayer({
+      getAvailableToolNames: () => ["unity_run_player"],
+      execute: async () => ({ content: "PLAY-THROUGH OK" }),
+    } as never);
+    expect(await runPlayer("/p", "/p/Game.app", undefined, { runId: "run-9" })).toEqual({});
   });
 });
 

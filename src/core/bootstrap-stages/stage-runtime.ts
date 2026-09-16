@@ -1063,8 +1063,13 @@ export function makeVerifyCompile(
 export function makeRunPlayer(registry: {
   getAvailableToolNames(): readonly string[];
   execute(name: string, input: Record<string, unknown>, context: unknown): Promise<{ content?: unknown; isError?: boolean }>;
-}): (projectRoot: string, artifactPath: string, spec?: PlayerRunSpec) => Promise<void> {
-  return async (projectRoot, artifactPath, spec) => {
+}): (
+  projectRoot: string,
+  artifactPath: string,
+  spec?: PlayerRunSpec,
+  dispatch?: { readonly runId: string; readonly target?: string },
+) => Promise<{ receipt?: string }> {
+  return async (projectRoot, artifactPath, spec, dispatch) => {
     if (!registry.getAvailableToolNames().includes("unity_run_player")) throw new Error("unity_run_player is not registered");
     // THE REQUIREMENT SETS THE ALLOWANCES. Only the artifact was passed, so
     // the run always used the tool's defaults — 45 seconds a session, 60
@@ -1080,6 +1085,12 @@ export function makeRunPlayer(registry: {
         ...(spec?.deadlineSeconds !== undefined ? { deadlineSeconds: spec.deadlineSeconds } : {}),
         ...(spec?.bootDeadlineSeconds !== undefined ? { bootDeadlineSeconds: spec.bootDeadlineSeconds } : {}),
         ...(spec?.outcomeRequired === undefined ? {} : { outcomeRequired: spec.outcomeRequired }),
+        // …AND THE RUN THIS DISPATCH ANSWERS FOR, so the player can stamp a
+        // receipt the coordinator holds against its ticket. Without it the
+        // play-through path produced no receipt at all, and a correct run
+        // could never be admitted (Codex 2026-09-13 AH#6).
+        ...(dispatch === undefined ? {} : { evidenceRunId: dispatch.runId }),
+        ...(dispatch?.target === undefined ? {} : { evidenceTarget: dispatch.target }),
       },
       { projectPath: projectRoot, workingDirectory: projectRoot, readOnly: false },
     );
@@ -1088,7 +1099,10 @@ export function makeRunPlayer(registry: {
     // player this machine can run" past the cut and the campaign saw a
     // missing proof with no cause (Codex 2026-09-12 AB J2.4). The campaign
     // truncates for display where it needs to.
-    if (result.isError === true) throw new Error(String(result.content ?? "unity_run_player failed").slice(0, 2000));
+    const content = String(result.content ?? "");
+    if (result.isError === true) throw new Error((content === "" ? "unity_run_player failed" : content).slice(0, 2000));
+    const receipt = extractReceipt(content);
+    return receipt === undefined ? {} : { receipt };
   };
 }
 

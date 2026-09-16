@@ -155,6 +155,41 @@ export const MAX_EVIDENCE_BYTES = 1024 * 1024;
 /** At most this many sessions in one record. */
 export const MAX_SESSION_OBSERVATIONS = 24;
 
+/**
+ * At most this many sessions in ONE play-through run — the producer's own cap
+ * (Strada.MCP `MAX_SESSIONS_PER_RUN`). A ticket that asks for more than a run
+ * can play is a ticket nothing could settle.
+ */
+export const MAX_SESSIONS_PER_RUN = 12;
+
+/**
+ * WHICH SESSIONS A PLAY-THROUGH WAS ASKED FOR, read from the spec the
+ * producer receives ("all", "1-3", "2,5", a single index, or nothing).
+ *
+ * The ticket used to leave this empty, which put no session requirement on
+ * the record at all: a run asked to play every level settled with a record
+ * carrying one (Codex 2026-09-12 AC J1, 2026-09-13 AH#6). Parsed the same way
+ * the runner parses it, so the ticket asks for what the run will attempt.
+ */
+export function sessionsRequested(spec: string | undefined): readonly number[] | "all" {
+  const text = spec?.trim().toLowerCase() ?? "";
+  if (text === "") return [1];
+  if (text === "all") return "all";
+  const out: number[] = [];
+  for (const part of text.split(",")) {
+    const range = part.trim().split("-");
+    const a = Number(range[0]);
+    if (range.length === 2 && Number.isInteger(a) && Number.isInteger(Number(range[1]))) {
+      for (let i = a; i <= Number(range[1]) && out.length < MAX_SESSIONS_PER_RUN; i++) if (i >= 1) out.push(i);
+    } else if (Number.isInteger(a) && a >= 1 && out.length < MAX_SESSIONS_PER_RUN) {
+      out.push(a);
+    }
+  }
+  // AN UNREADABLE SPEC IS NOT "NO SESSIONS": the runner falls back to its
+  // default index, so the ticket asks for the session that will be played.
+  return out.length === 0 ? [1] : out;
+}
+
 /** A run id nothing but the coordinator can guess. */
 export function issueRunId(): string {
   return randomUUID();
