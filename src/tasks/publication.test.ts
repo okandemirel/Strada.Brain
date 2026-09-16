@@ -33,3 +33,44 @@ describe("what a lease commit delivered (Codex 2026-09-12 AE#4)", () => {
     expect(judgePublication({})).toEqual({});
   });
 });
+
+/**
+ * OUTPUT A COMPILER REGENERATES IS NOT WORK THAT WAS LOST.
+ *
+ * Measured live 2026-09-16 19:03: two goals that had done real work were
+ * failed because `Tools/PixelFlowCoreBuild/obj/PixelFlow.Core.csproj.nuget.dgspec.json`
+ * — a NuGet restore graph the project rebuilds for itself — conflicted with
+ * the lease's copy. 261 authored files published in one of them.
+ */
+describe("a conflict on generated output", () => {
+  it("is disclosed, and the publication stands", () => {
+    const verdict = judgePublication({
+      written: Array.from({ length: 261 }, (_unused, i) => `Assets/Scripts/File${i}.cs`),
+      conflicts: ["Tools/PixelFlowCoreBuild/obj/PixelFlow.Core.csproj.nuget.dgspec.json"],
+      quarantined: 1,
+    });
+    expect(verdict.loss).toBeUndefined();
+    expect(verdict.note).toContain("the project builds these for itself");
+    expect(verdict.note).toContain("PixelFlow.Core.csproj.nuget.dgspec.json");
+  });
+
+  it("…while a conflict on anything the run AUTHORED is still a loss", () => {
+    const mixed = judgePublication({
+      written: ["Assets/Scripts/Other.cs"],
+      conflicts: ["Tools/X/obj/Core.csproj.nuget.dgspec.json", "Assets/Scripts/Rules.cs"],
+      quarantined: 2,
+    });
+    expect(mixed.loss).toContain("1 file(s) the run changed did not reach the project");
+    expect(mixed.loss).toContain("Assets/Scripts/Rules.cs");
+    // The generated file is not counted among the losses.
+    expect(mixed.loss).not.toContain("dgspec");
+  });
+
+  it("and a generated file that could not even be preserved is still a loss", () => {
+    const gone = judgePublication({
+      conflicts: ["Tools/X/obj/Core.csproj.nuget.dgspec.json"],
+      quarantined: 0,
+    });
+    expect(gone.loss).toContain("exist ONLY in the workspace");
+  });
+});

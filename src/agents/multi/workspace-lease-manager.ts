@@ -336,6 +336,11 @@ export function isDerivedBuildOutput(rel: string): boolean {
   const intermediate = new RegExp(
     "^(?:" +
       "project\\.(?:assets\\.json|nuget\\.cache|packagespec\\.json)" +
+      // NuGet's restore graph, written into obj/ beside the rest: it was not
+      // in this list, so it travelled with every lease, the project restored
+      // its own copy, and the two CONFLICTED — which failed the goal that had
+      // done the work (measured live 2026-09-16 19:03).
+      "|.+\\.(?:csproj|vbproj|fsproj)\\.nuget\\.dgspec\\.json" +
       "|.+\\.(?:csproj|vbproj|fsproj)\\.(?:nuget\\.g\\.(?:props|targets)|CopyComplete|FileListAbsolute\\.txt)" +
       "|.+\\.(?:assets|AssemblyInfoInputs|CoreCompileInputs|GeneratedMSBuildEditorConfig)\\.(?:cache|editorconfig)" +
       "|.+\\.AssemblyInfo\\.cs" +

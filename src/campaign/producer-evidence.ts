@@ -335,7 +335,20 @@ export function receiveEvidence(
   ticket: EvidenceTicket | undefined,
   bytes: string | undefined,
   transport: ExecutionObservation,
-  opts: { readonly revisionNow?: string; readonly dirtyNow?: boolean; readonly artifactSha256?: string } = {},
+  opts: {
+    readonly revisionNow?: string;
+    readonly dirtyNow?: boolean;
+    readonly artifactSha256?: string;
+    /**
+     * The caller could not read the project's repository state at all.
+     *
+     * An unborn or broken repository is NOT a project without one: both read
+     * back an empty revision, and treating them alike would bind a
+     * measurement to a tree nobody could identify (Codex 2026-09-12 AA#1,
+     * 2026-09-13 AI#6).
+     */
+    readonly sourceUnknown?: boolean;
+  } = {},
 ): EvidenceDecision {
   const parsed = parseProducerEvidence(bytes);
   if (typeof parsed === "string") return { admitted: false, refusal: parsed, detail: "the producer's record was not usable" };
@@ -347,7 +360,12 @@ function admitEvidence(
   record: ProducerEvidence,
   bytes: string,
   transport: ExecutionObservation,
-  opts: { readonly revisionNow?: string; readonly dirtyNow?: boolean; readonly artifactSha256?: string } = {},
+  opts: {
+    readonly revisionNow?: string;
+    readonly dirtyNow?: boolean;
+    readonly artifactSha256?: string;
+    readonly sourceUnknown?: boolean;
+  } = {},
 ): EvidenceDecision {
   if (!ticket) return { admitted: false, refusal: "RUN_UNKNOWN", detail: `no ticket was issued for run ${record.runId}` };
   const b = ticket.binding;
@@ -371,6 +389,17 @@ function admitEvidence(
   // describes neither (Codex 2026-09-12 V#4, Y#3, Z#1).
   if (b.dirty || opts.dirtyNow === true) {
     return { admitted: false, refusal: "SOURCE_DIRTY", detail: "the project had uncommitted build inputs" };
+  }
+  // A TREE NOBODY COULD IDENTIFY binds nothing. An unborn or broken repository
+  // reads back the same empty revision as a project that HAS no repository,
+  // and only the second of those is a tree state two sides can agree on
+  // (Codex 2026-09-13 AI#6).
+  if (opts.sourceUnknown === true) {
+    return {
+      admitted: false,
+      refusal: "REVISION_MISMATCH",
+      detail: "the project's repository state could not be read, so nothing binds this run to a tree",
+    };
   }
   if (record.revision !== b.revision) {
     return {

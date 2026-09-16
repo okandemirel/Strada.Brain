@@ -3149,14 +3149,15 @@ describe("CampaignManager", () => {
       // THIS record — its hash is stored — and not "no receipt came back".
       expect(builds.every((r) => (r.recordSha256 ?? "").length === 64)).toBe(true);
       expect(builds.every((r) => r.refusal !== "EVIDENCE_MISSING")).toBe(true);
-      // This fixture's tree carries uncommitted build inputs, which is not a
-      // tree a measurement can be bound to — so the receiver says so by name
-      // rather than admitting it.
-      expect(builds.map((r) => r.refusal ?? "admitted")).toContain("SOURCE_DIRTY");
+      // This fixture's tree is a directory with NO repository, and the
+      // producer says the same of it — an answer both sides can agree on, so
+      // the record is admitted rather than called dirty (Codex 2026-09-13
+      // AI#6; before that fix `git status` failing here read as dirt).
+      expect(builds.map((r) => r.refusal ?? "admitted")).toContain("admitted");
     } finally {
       ledger.close();
     }
-    expect(messages.map((m) => m.text).join("\n")).toMatch(/player-build receipt.*REFUSED \(SOURCE_DIRTY\)/);
+    expect(messages.map((m) => m.text).join("\n")).toMatch(/player-build receipt.*admitted \(run /);
   });
 
   it("ADMITS a complete play-through receipt through the production path (Codex 2026-09-13 AH#6)", async () => {
@@ -3390,6 +3391,60 @@ describe("CampaignManager", () => {
       // the run that did not finish, not about a receipt nobody sent.
       expect(rows.map((r) => r.refusal)).toEqual(["PROCESS_INCOMPLETE"]);
       expect((rows[0]!.recordSha256 ?? "").length).toBe(64);
+    } finally {
+      ledger.close();
+    }
+  }, 20_000);
+
+  it("a project with NO repository is not a dirty one (Codex 2026-09-13 AI#6)", async () => {
+    // `git status` fails outside a repository and the failure read as "dirty",
+    // so every receipt from a correct project outside git was refused
+    // SOURCE_DIRTY. There is no git init here on purpose.
+    const artifact = join(projectRoot, "Builds", "StandaloneOSX", "Game.app");
+    mkdirSync(join(projectRoot, "Builds", "StandaloneOSX"), { recursive: true });
+    writeFileSync(artifact, "the bytes that were built");
+    expect(existsSync(join(projectRoot, ".git"))).toBe(false);
+
+    const campaign = {
+      id: "c_no_git", chatId: "chat", channelType: "cli", userId: "u", projectRoot,
+      state: "executing", draftAttempts: 0, milestones: [], currentMilestone: 0,
+      createdAt: Date.now(), updatedAt: Date.now(),
+    } as unknown as Campaign;
+    const player = new CampaignManager({
+      storage,
+      runPlayer: async (root, artifactPlayed, _spec, dispatch) => {
+        writePlayerVerdict(true, {}, root);
+        return {
+          receipt: JSON.stringify({
+            schemaVersion: 1, runId: dispatch?.runId, kind: "playthrough", medium: "player",
+            // What a producer states for a tree it CONFIRMED has no
+            // repository — the same answer the coordinator binds.
+            revision: "",
+            ...(dispatch?.target === undefined ? {} : { target: dispatch.target }),
+            artifactSha256: artifactDigest(artifactPlayed),
+            execution: { completed: true, exitCode: 0, timedOut: false },
+            sessionCount: 1,
+            sessions: [{
+              requestedIndex: 1, index: 1, identityVerified: true, identitySource: "start-acceptance",
+              actions: 12, outcome: "Won", reachedOutcome: true, seconds: 9,
+            }],
+          }),
+        };
+      },
+      planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async () => {},
+      projectRoot,
+    });
+
+    const build = { ran: true, ok: true, target: "StandaloneOSX", artifactPath: artifact, sizeBytes: 25, durationMs: 1, scenes: 1 };
+    await (player as unknown as { measurePlayerRun(m: unknown, b: unknown, c: unknown): Promise<unknown> })
+      .measurePlayerRun({ id: "m_nogit", title: "Delivery", prompt: "p", status: "running", attempts: 1 }, build, campaign);
+
+    const ledger = new EvidenceLedger(join(projectRoot, ".strada", "campaign-evidence.db"));
+    try {
+      const rows = ledger.forMilestone(campaign.id, "m_nogit");
+      expect(rows.map((r) => r.refusal ?? "admitted")).toEqual(["admitted"]);
     } finally {
       ledger.close();
     }

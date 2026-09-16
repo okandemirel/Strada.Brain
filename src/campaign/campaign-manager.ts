@@ -6458,7 +6458,13 @@ export class CampaignManager {
   ): Promise<T> {
     const ledger = campaign === undefined ? null : this.ledger();
     if (ledger === null || campaign === undefined) return (await run(issueRunId())).value;
-    const dirtyBefore = this.projectIsDirty();
+    // A PROJECT WITH NO REPOSITORY HAS NO DIRT. `git status` fails outside a
+    // repository, and the failure was read as "dirty", so a correct project
+    // outside git refused every receipt as SOURCE_DIRTY (Codex 2026-09-13
+    // AI#6). An unborn or broken repository is a different thing: it is
+    // UNKNOWN, and unknown is not clean.
+    const repoBefore = this.projectRepoState();
+    const dirtyBefore = repoBefore === "none" ? false : this.projectIsDirty();
     const artifactBefore = artifactDigest(binding.artifactPath);
     const ticket: EvidenceTicket = {
       issuedAt: Date.now(),
@@ -6497,6 +6503,7 @@ export class CampaignManager {
       failedReceipt = receiptOfFailure(err);
       throw err;
     } finally {
+      const repoNow = this.projectRepoState();
       // WHAT THIS CALLER ACTUALLY OBSERVED, and nothing more. The transport
       // observation used to carry `exitCode: 0` on the strength of the
       // callback having returned — an exit code nobody here measured, which
@@ -6514,7 +6521,9 @@ export class CampaignManager {
         { completed: outcome !== undefined, exitCode: null, timedOut: false },
         {
           revisionNow: this.projectRevision(),
-          dirtyNow: this.projectIsDirty(),
+          dirtyNow: repoNow === "none" ? false : this.projectIsDirty(),
+          // …and a repository state nobody could read binds no tree at all.
+          ...(repoNow === "unknown" ? { sourceUnknown: true } : {}),
           // THE ARTIFACT AS IT IS NOW, measured here: a player receipt cannot
           // be admitted without a digest the caller took for itself, and this
           // wrapper never supplied one (AH#6).

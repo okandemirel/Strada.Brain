@@ -318,3 +318,30 @@ describe("a contradictory session record is rejected the same way everywhere (Co
     expect(finishedSessionIndices(read)).toEqual([]);
   });
 });
+
+/**
+ * AN ABSENT OBSERVATION IS NOT A ZERO ONE (Codex 2026-09-13 AI#7).
+ *
+ * A game that registers no `IActiveSession` has nothing to observe which
+ * session is running; the runner says so with a negative index. Read as zero —
+ * the contract's "no session is running" — the record claimed an accepted
+ * identity and no session at once, and every receiver called that a
+ * contradiction.
+ */
+describe("the reader keeps absence absent", () => {
+  it("drops a negative observed index and keeps a reported zero", () => {
+    const session = (observedIndex: number) => ({
+      index: 1, startAccepted: true, actions: 9, outcome: "Won", reachedOutcome: true, seconds: 4,
+      identityVerified: true, identitySource: "start-acceptance", requestedIndex: 1, observedIndex,
+    });
+    write({ ...ok, record: { ...ok.record, sessionCount: 1, sessions: [session(-1)] } });
+    const unobserved = readPlaythroughVerdict(root, 0);
+    expect(unobserved.sessions?.[0]).not.toHaveProperty("observedIndex");
+    expect(unobserved.sessions?.[0]).toMatchObject({ identityVerified: true, identitySource: "start-acceptance" });
+
+    // A service that DID answer zero is an observation, and it is kept: the
+    // game said no session was running (Codex 2026-09-12 AA#3).
+    write({ ...ok, record: { ...ok.record, sessionCount: 1, sessions: [session(0)] } });
+    expect(readPlaythroughVerdict(root, 0).sessions?.[0]).toMatchObject({ observedIndex: 0 });
+  });
+});

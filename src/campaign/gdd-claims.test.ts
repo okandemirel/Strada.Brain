@@ -59,7 +59,10 @@ describe("assessNumericClaims", () => {
     const a = assessNumericClaims(claims, evidence());
     expect(a.map((x) => [x.claim.kind, x.claim.value, x.status, x.blocking])).toEqual([
       ["fps", 60, "unmeasured", false],
-      ["boot_seconds", 3, "met", true],
+      // "under 3 seconds from a COLD START", measured by the editor's scene
+      // load: within the figure, but not a measurement of a cold start
+      // (Codex 2026-09-13 AI#12).
+      ["boot_seconds", 3, "unmeasured", false],
       ["level_count", 12, "unmeasured", false],
       ["session_seconds", 90, "met", true],
       // The floor is disclosed, never blocking: a driven play-through is
@@ -263,7 +266,12 @@ describe("assessNumericClaims", () => {
 
   it("describeClaims names MET with the measurement and the medium", () => {
     const lines = describeClaims(assessNumericClaims(claims, evidence()));
-    expect(lines[1]).toBe("GDD boot time ≤ 3 s: MET — scene load → services in 2.4 s (editor play mode, batch)");
+    // This document asks for a cold start, so the editor's number is
+    // disclosed rather than accepted (AI#12); a plain clause reads MET.
+    expect(lines[1]).toContain("GDD boot time ≤ 3 s: NOT MEASURED — 2.4 s from scene load to the bootstrapper's services");
+    const plain = extractNumericClaims("# G\nThe game boots in under 3 seconds.").claims;
+    expect(describeClaims(assessNumericClaims(plain, evidence()))[0])
+      .toBe("GDD boot time ≤ 3 s: MET — scene load → services in 2.4 s (editor play mode, batch)");
     expect(describeClaims([])).toEqual(["GDD numbers: none found (no frame-rate, load-time, level-count or session-length figure in the text)"]);
     expect(describeClaims(assessNumericClaims(claims, evidence()), 2).at(-1)).toBe("GDD numbers: 2 further claim(s) not listed");
   });
@@ -1111,5 +1119,69 @@ describe("the level count follows the document's outcome contract", () => {
     );
     expect(judged.find((x) => x.claim.kind === "level_count")).toMatchObject({ status: "not_met" });
     expect(finishedSessionIndices(anonymous, { outcomeRequired: false })).toEqual([1, 2, 3]);
+  });
+});
+
+/**
+ * A BOOT FIGURE ANSWERS WHAT IT MEASURED (Codex 2026-09-13 AI#12).
+ *
+ * Every producer reports the same thing: launch (or scene load) until the
+ * bootstrapper's services exist. PixelFlow's "cold boot ≤ 6 s to Home on a
+ * mid device" was reported MET from that number alone — Home could become
+ * usable at ten seconds without changing the input.
+ */
+describe("the boot claim and what nobody measures", () => {
+  const boot = (seconds: number, medium = "player"): PlaythroughEvidence => ({
+    found: true, ok: true, outcome: "Won", session: 1, actions: 5,
+    perf: { medium, bootSeconds: seconds, playSeconds: 10, playFrames: 600, avgFps: 60 },
+  } as PlaythroughEvidence);
+  const judge = (text: string, seconds: number, medium?: string) =>
+    assessNumericClaims(extractNumericClaims(text).claims, boot(seconds, medium), boot(seconds, medium))
+      .find((a) => a.claim.kind === "boot_seconds")!;
+
+  it("discloses a screen the document names and no producer records", () => {
+    const home = judge("# G\nCold boot to Home in under 6 seconds.", 1);
+    expect(home).toMatchObject({ status: "unmeasured", blocking: false, measured: 1 });
+    expect(home.note).toContain("to the bootstrapper's services");
+    expect(home.note).toContain("the time to a screen the player can use");
+    // Every generic endpoint word, not one game's own screen name.
+    for (const clause of [
+      "The main menu appears within 6 seconds of launch.",
+      "Boot to gameplay in under 6 seconds.",
+      "Boot until the first level is playable takes under 6 seconds.",
+    ]) {
+      expect(judge(`# G\n${clause}`, 1).status).toBe("unmeasured");
+    }
+  });
+
+  it("discloses a device class nothing here establishes", () => {
+    const mid = judge("# G\nThe game boots in under 6 seconds on a mid-range phone.", 1);
+    expect(mid).toMatchObject({ status: "unmeasured", blocking: false });
+    expect(mid.note).toContain("a class of device nothing here establishes");
+    // The vehicle's own wording, which names no article and no hyphen — and
+    // asks for BOTH a screen and a device (Codex 2026-09-13 AI#12).
+    const both = judge("# G\nCold boot \u2264 6 s to Home on mid device;", 1);
+    expect(both).toMatchObject({ status: "unmeasured", blocking: false });
+    expect(both.note).toContain("the time to a screen the player can use and a class of device nothing here establishes");
+  });
+
+  it("a cold start is the PLAYER's own launch, and the editor's scene load is not one", () => {
+    expect(judge("# G\nThe game loads in under 6 seconds from a cold start.", 1, "editor-playmode-batch").status)
+      .toBe("unmeasured");
+    // …and in the player, a cold start IS what was measured.
+    expect(judge("# G\nThe game loads in under 6 seconds from a cold start.", 1).status).toBe("met");
+  });
+
+  it("OVER the budget is NOT MET whatever the clause asks for", () => {
+    // Services are published before any screen, so a boot already over the
+    // figure cannot meet it later. This must stay blocking: a stricter read
+    // of the endpoint must not hide a real failure.
+    const late = judge("# G\nCold boot to Home in under 6 seconds on a mid device.", 9);
+    expect(late).toMatchObject({ status: "not_met", blocking: true, measured: 9 });
+    expect(claimsRefusal([late])).toContain("boot time");
+  });
+
+  it("a plain clause is measured and blocking, as before", () => {
+    expect(judge("# G\nThe game boots in under 6 seconds.", 1)).toMatchObject({ status: "met", blocking: true });
   });
 });

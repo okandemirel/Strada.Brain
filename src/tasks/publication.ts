@@ -9,6 +9,9 @@
  * and its dependents then ran against work that was not there (Codex
  * 2026-09-12 AE#4). One adjudicator now answers for both.
  */
+
+import { isDerivedBuildOutput } from "../agents/multi/workspace-lease-manager.js";
+
 export interface LeaseCommitResult {
   readonly written?: readonly string[];
   readonly conflicts?: readonly string[];
@@ -49,10 +52,23 @@ export function judgePublication(raw: LeaseCommitResult): PublicationVerdict {
   // let the one file the task was about conflict while an incidental one
   // published, and the task completed (AE#4).
   if (conflicts.length > 0) {
+    // …EXCEPT OUTPUT A COMPILER REGENERATES. A NuGet restore graph the project
+    // rebuilds for itself conflicted with the lease's copy, and the goal that
+    // had done the real work was failed over it — twice, on the same generated
+    // file (measured live 2026-09-16 19:03). Derived output is disclosed; it is
+    // not work that was lost.
+    const lost = conflicts.filter((path) => !isDerivedBuildOutput(path));
+    if (lost.length === 0) {
+      return {
+        note:
+          `${conflicts.length} generated file(s) conflicted and were kept aside — the project builds these for itself, so `
+          + `nothing the run authored was lost: ${conflicts.slice(0, NAMED).join(", ")}`,
+      };
+    }
     return {
       loss:
-        `${conflicts.length} file(s) the run changed did not reach the project — they conflicted with changes made outside the ` +
-        `workspace and were kept aside: ${conflicts.slice(0, NAMED).join(", ")}` +
+        `${lost.length} file(s) the run changed did not reach the project — they conflicted with changes made outside the ` +
+        `workspace and were kept aside: ${lost.slice(0, NAMED).join(", ")}` +
         (written.length > 0 ? ` (${written.length} other file(s) did publish)` : ""),
     };
   }

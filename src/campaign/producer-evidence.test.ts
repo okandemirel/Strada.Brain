@@ -658,3 +658,44 @@ describe("the producer's process and the transport's are not the same process", 
     }
   });
 });
+
+/**
+ * A PROJECT WITHOUT A REPOSITORY IS STILL A PROJECT (Codex 2026-09-13 AI#6).
+ *
+ * `git status` fails outside a repository, and the failure read as "dirty", so
+ * every receipt from a correct project outside git was refused SOURCE_DIRTY —
+ * and once that was exempted the coordinator bound `""` while the producer
+ * omitted the field, so the two could never agree. An unborn or broken
+ * repository is a third state: unknown, which binds nothing.
+ */
+describe("a tree with no revision", () => {
+  const ticket: EvidenceTicket = {
+    issuedAt: 1,
+    requestedSessions: [],
+    binding: {
+      campaignId: "c", generation: 0, milestoneId: "m", attemptId: "a", runId: "r",
+      kind: "compile", medium: "compiler", revision: "", dirty: false,
+    },
+  };
+  const record = (revision?: string): string => JSON.stringify({
+    schemaVersion: 1, runId: "r", kind: "compile", medium: "compiler",
+    ...(revision === undefined ? {} : { revision }),
+    execution: { completed: true, exitCode: 0, timedOut: false },
+  });
+  const transport: ExecutionObservation = { completed: true, exitCode: null, timedOut: false };
+
+  it("admits a run both sides agree has no repository", () => {
+    expect(receiveEvidence(ticket, record(""), transport, { revisionNow: "", dirtyNow: false }).admitted).toBe(true);
+  });
+
+  it("…but not one whose producer says nothing about the tree", () => {
+    expect(receiveEvidence(ticket, record(undefined), transport, { revisionNow: "", dirtyNow: false }))
+      .toMatchObject({ admitted: false, refusal: "REVISION_MISMATCH" });
+  });
+
+  it("and a repository state the caller could not READ binds nothing at all", () => {
+    const decision = receiveEvidence(ticket, record(""), transport, { revisionNow: "", dirtyNow: false, sourceUnknown: true });
+    expect(decision).toMatchObject({ admitted: false, refusal: "REVISION_MISMATCH" });
+    expect((decision as { detail: string }).detail).toContain("repository state could not be read");
+  });
+});

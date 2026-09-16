@@ -17,7 +17,7 @@
 
 import Database from "better-sqlite3";
 import { createHash } from "node:crypto";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { mkdirSync, readFileSync, readdirSync, statSync } from "node:fs";
 import type { EvidenceDecision, EvidenceTicket } from "./producer-evidence.js";
 import { recordSha256 } from "./producer-evidence.js";
@@ -43,11 +43,13 @@ export interface LedgerRow {
 /**
  * The digest SCHEME, mixed into every artifact digest.
  *
- * A digest that hashed paths and sizes is not a content digest, and a record
- * written under the old scheme must never look like one written under this
- * one (Codex 2026-09-13 AH#8). Strada.MCP uses the same string.
+ * A digest that hashed paths and sizes is not a content digest, and one that
+ * covered only the named executable is not a digest of the game beside it —
+ * a record written under an older scheme must never look like one written
+ * under this one (Codex 2026-09-13 AH#8, AI#9). Strada.MCP uses the same
+ * string.
  */
-export const ARTIFACT_DIGEST_VERSION = "strada-artifact-v2-content";
+export const ARTIFACT_DIGEST_VERSION = "strada-artifact-v3-layout";
 
 /** A receipt larger than this is not stored whole — its hash and size are. */
 export const MAX_STORED_RECEIPT_BYTES = 256 * 1024;
@@ -207,7 +209,14 @@ export function describeLedgerRow(row: LedgerRow): string {
  * A ticket binds a play-through to the bytes that were built: without it the
  * receiver cannot tell a run of this build from a run of the last one (Codex
  * 2026-09-12 AB). A macOS .app is a DIRECTORY, so the digest covers the tree —
- * names, sizes and the bytes of each file, in a fixed order.
+ * each path, its size and its BYTES, in a fixed order.
+ *
+ * …AND THE GAME BESIDE THE EXECUTABLE. A Windows or Linux player is an
+ * executable plus its `<Name>_Data` folder, its runtime library and its
+ * plugins; hashing only the named file left every asset, scene and managed
+ * assembly out of the artifact's identity — the whole game could be replaced
+ * while the digest stood (Codex 2026-09-13 AI#9). When the named file sits in
+ * a Unity player layout, the digest covers that layout.
  */
 export function artifactDigest(path: string | undefined): string | undefined {
   if (path === undefined || path === "") return undefined;
@@ -219,6 +228,9 @@ export function artifactDigest(path: string | undefined): string | undefined {
     // AH#8). A player artifact is what a person would run; a same-size
     // replacement is a different game.
     hash.update(`${ARTIFACT_DIGEST_VERSION}\n`);
+    // WHICH artifact in that layout, so two executables shipped side by side
+    // are not one artifact.
+    hash.update(`${basename(path)}\n`);
     const walk = (at: string, rel: string): void => {
       const st = statSync(at);
       if (st.isDirectory()) {
@@ -228,10 +240,29 @@ export function artifactDigest(path: string | undefined): string | undefined {
       hash.update(`${rel}:${st.size}\n`);
       hash.update(readFileSync(at));
     };
-    walk(path, "");
+    walk(playerLayoutRoot(path), "");
     return hash.digest("hex");
   } catch {
     // An artifact that is not there has no digest, and saying so is the point.
     return undefined;
+  }
+}
+
+/**
+ * The directory a Unity player's parts live in, or the path itself.
+ *
+ * Only a layout this machine can RECOGNISE is adopted: the named file's own
+ * directory must hold a `*_Data` folder, which is what Unity writes beside a
+ * Windows or Linux player. Hashing any parent directory would pull unrelated
+ * builds and mutable output into the artifact's identity (AI#9).
+ */
+export function playerLayoutRoot(path: string): string {
+  try {
+    if (statSync(path).isDirectory()) return path;
+    const dir = dirname(path);
+    const hasData = readdirSync(dir).some((entry) => entry.endsWith("_Data") && statSync(join(dir, entry)).isDirectory());
+    return hasData ? dir : path;
+  } catch {
+    return path;
   }
 }

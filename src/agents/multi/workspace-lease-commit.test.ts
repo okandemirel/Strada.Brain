@@ -1527,6 +1527,12 @@ describe("compiler output is derived, at any depth (Codex 2026-09-12 R#4)", () =
     expect(isDerivedBuildOutput(join("Tools", "X", "obj", "netstandard2.1", "Core.AssemblyInfo.cs"))).toBe(true);
     expect(isDerivedBuildOutput(join("Tools", "X", "obj", "project.assets.json"))).toBe(true);
     expect(isDerivedBuildOutput(join("Tools", "X", "obj", "Core.csproj.nuget.g.props"))).toBe(true);
+    // NuGet's restore graph: it was NOT in this list, so it travelled with
+    // every lease, the project restored its own copy, and the conflict failed
+    // the goal that had done the work (measured live 2026-09-16 19:03).
+    expect(isDerivedBuildOutput(join("Tools", "PixelFlowCoreBuild", "obj", "PixelFlow.Core.csproj.nuget.dgspec.json"))).toBe(true);
+    // …and a game's own file that merely ends in dgspec.json is not it.
+    expect(isDerivedBuildOutput(join("Assets", "Data", "obj", "levels.dgspec.json"))).toBe(false);
     expect(isDerivedBuildOutput(join("Tools", "X", "bin", "Release", "a.dll"))).toBe(true);
     expect(isDerivedBuildOutput(join("bin", "tools.sh"))).toBe(false);
     expect(isDerivedBuildOutput(join("Assets", "Scripts", "Object.cs"))).toBe(false);

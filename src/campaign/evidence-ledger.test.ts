@@ -126,7 +126,62 @@ describe("artifactDigest", () => {
     expect(artifactDigest(undefined)).toBeUndefined();
   });
 
-  it("names its scheme, so an old size-only digest cannot pass as a content one", () => {
-    expect(ARTIFACT_DIGEST_VERSION).toContain("content");
+  it("names its scheme, so a digest written under an older one cannot pass as this", () => {
+    // v2 hashed the named file's content; v3 covers the player layout beside
+    // it (Codex 2026-09-13 AH#8, AI#9).
+    expect(ARTIFACT_DIGEST_VERSION).toBe("strada-artifact-v3-layout");
+  });
+
+  /**
+   * A Windows or Linux player is an executable PLUS its `<Name>_Data` folder,
+   * its runtime library and its plugins. Hashing only the named file left
+   * every asset, scene and managed assembly out of the artifact's identity:
+   * the whole game could be replaced while the digest stood (Codex 2026-09-13
+   * AI#9).
+   */
+  describe("the game beside the executable", () => {
+    const layout = (target: string, level: string): string => {
+      const build = join(dir, target);
+      mkdirSync(join(build, "Game_Data"), { recursive: true });
+      writeFileSync(join(build, "Game.x86_64"), "the executable");
+      writeFileSync(join(build, "Game_Data", "level0"), level);
+      writeFileSync(join(build, "UnityPlayer.so"), "runtime");
+      return join(build, "Game.x86_64");
+    };
+
+    it("moves when the data folder changes, with the executable untouched", () => {
+      const exe = layout("linux", "level one");
+      const before = artifactDigest(exe);
+      expect(before).toMatch(/^[0-9a-f]{64}$/);
+      writeFileSync(join(dir, "linux", "Game_Data", "level0"), "level one, edited");
+      expect(artifactDigest(exe)).not.toBe(before);
+      // …and when a runtime library beside it is swapped.
+      writeFileSync(join(dir, "linux", "Game_Data", "level0"), "level one");
+      expect(artifactDigest(exe)).toBe(before);
+      writeFileSync(join(dir, "linux", "UnityPlayer.so"), "a different runtime");
+      expect(artifactDigest(exe)).not.toBe(before);
+    });
+
+    it("adopts only a layout it can recognise", () => {
+      // No `*_Data` folder: nothing says these siblings belong to this
+      // artifact, so the digest stays the file's own.
+      const loose = join(dir, "loose");
+      mkdirSync(loose, { recursive: true });
+      writeFileSync(join(loose, "tool"), "the executable");
+      const before = artifactDigest(join(loose, "tool"));
+      writeFileSync(join(loose, "notes.txt"), "unrelated");
+      expect(artifactDigest(join(loose, "tool"))).toBe(before);
+      // The same bytes inside a player layout are a DIFFERENT artifact.
+      expect(before).not.toBe(artifactDigest(layout("linux2", "level one")));
+    });
+
+    it("tells two players shipped side by side apart", () => {
+      const build = join(dir, "both");
+      mkdirSync(join(build, "Game_Data"), { recursive: true });
+      writeFileSync(join(build, "Game.x86_64"), "one");
+      writeFileSync(join(build, "Other.x86_64"), "two");
+      writeFileSync(join(build, "Game_Data", "level0"), "shared");
+      expect(artifactDigest(join(build, "Game.x86_64"))).not.toBe(artifactDigest(join(build, "Other.x86_64")));
+    });
   });
 });

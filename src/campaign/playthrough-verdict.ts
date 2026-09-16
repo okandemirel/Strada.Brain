@@ -194,7 +194,14 @@ export function readPlaythroughVerdict(
                     // dropped: an `identityVerified: true` beside an
                     // observedIndex naming a different session is a
                     // contradiction, and it counted (Codex 2026-09-12 Z#5).
-                    ...(num(r.observedIndex) !== undefined ? { observedIndex: num(r.observedIndex) } : {}),
+                    // …and an ABSENT observation is not a zero one: a runner
+                    // reports a negative index when NOTHING observed the
+                    // session (no IActiveSession), while zero is the
+                    // contract's "no session is running" (Codex 2026-09-13
+                    // AI#7).
+                    ...(num(r.observedIndex) !== undefined && num(r.observedIndex)! >= 0
+                      ? { observedIndex: num(r.observedIndex) }
+                      : {}),
                     // WHAT THE RUNNER SAW, independently of the game's claim
                     // (Codex 2026-09-13 AG#1).
                     ...(typeof r.contentFingerprint === "string" && r.contentFingerprint !== ""

@@ -501,6 +501,50 @@ export function extractSessionAllowanceSeconds(gddText: string): number | undefi
   return bounded > 0 ? bounded : undefined;
 }
 
+/**
+ * WHAT A BOOT CLAUSE ASKS FOR THAT NOBODY MEASURES.
+ *
+ * Every producer reports the same thing: the time from application launch (in
+ * the player) or scene load (in the editor) until `GameBootstrapper.Services`
+ * exists. A document usually asks for more than that — a screen the player can
+ * use, a cold start, a class of device — and each of those is an assertion
+ * when it is answered with the services number (Codex 2026-09-13 AI#12).
+ *
+ * Returns a phrase naming the unmeasured part, or nothing when the clause asks
+ * only about what was measured. Generic wording only: no game's own screen
+ * names belong in this judgement.
+ */
+export function bootClauseAsksBeyondServices(text: string, medium: string): string | undefined {
+  const t = text.toLowerCase();
+  const missing: string[] = [];
+  // A SCREEN, not a service registry — as the clause's destination ("to home",
+  // "until the first level is playable") or as the thing that has to APPEAR
+  // ("the main menu appears within 500 ms").
+  const screen = "home|main\\s+menu|menu|title|lobby|dashboard|start\\s+screen|first\\s+screen|gameplay|playable|interactive|first\\s+level|game\\s+screen";
+  const appears = "appears?|is\\s+shown|shows|is\\s+visible|is\\s+ready|is\\s+usable|is\\s+interactive|loads?|opens?|renders?|comes?\\s+up";
+  if (
+    new RegExp(`\\b(?:to|until|into|reach(?:es|ing)?|before)\\s+(?:the\\s+|a\\s+|its\\s+)?(?:${screen})`).test(t)
+    || new RegExp(`\\b(?:${screen})\\b[^.;]{0,30}?\\b(?:${appears})\\b`).test(t)
+  ) {
+    missing.push("the time to a screen the player can use");
+  }
+  // A COLD START is the player's own launch; the editor's scene load is not
+  // one, and nothing in either medium measures a device's cold cache.
+  if (/\bcold\s*(?:start|boot|launch)|from\s+(?:a\s+)?cold\b|first\s+launch|fresh\s+install/.test(t) && medium !== "player") {
+    missing.push("a cold start, which the editor's scene load is not");
+  }
+  // A DEVICE CLASS. The platform a player was built FOR is not the hardware it
+  // was measured ON.
+  if (
+    /\b(?:mid|low|high)[-\s]?(?:range|tier|end|spec|device|phone|handset|hardware)\b/.test(t)
+    || /\b(?:budget|entry[-\s]level|flagship)\b/.test(t)
+    || /\bon\s+(?:a|an|the)?\s*[a-z0-9 ]{0,20}(?:phone|device|handset|tablet|console)\b/.test(t)
+  ) {
+    missing.push("a class of device nothing here establishes");
+  }
+  return missing.length === 0 ? undefined : missing.join(" and ");
+}
+
 /** Hold each claim against the play-through evidence. */
 /**
  * The DISTINCT sessions a play-through actually finished.
@@ -718,10 +762,40 @@ export function assessNumericClaims(
             blocking: false,
           };
         }
-        const met = bootFrom.bootSeconds <= claim.value;
+        // OVER THE BUDGET IS OVER THE BUDGET. Services are published before
+        // any screen the document can be talking about, so a boot that
+        // already exceeded the figure at that point cannot meet it later —
+        // whatever endpoint the clause names.
+        if (bootFrom.bootSeconds > claim.value) {
+          return {
+            claim,
+            status: "not_met",
+            measured: Number(bootFrom.bootSeconds.toFixed(2)),
+            note: `scene load → services in ${bootFrom.bootSeconds.toFixed(1)} s (${bootMedium})`,
+            blocking: true,
+          };
+        }
+        // …AND WITHIN IT IS ONLY WITHIN IT FOR WHAT WAS MEASURED. The number
+        // is application launch (or scene load) → the bootstrapper's services;
+        // a clause that asks for a cold start, a SCREEN ("to the main menu")
+        // or a DEVICE CLASS ("on a mid-range phone") asks about something no
+        // producer records, and answering MET equated service publication
+        // with a screen a person can use (Codex 2026-09-13 AI#12).
+        const unmeasuredParts = bootClauseAsksBeyondServices(claim.text, bootMedium);
+        if (unmeasuredParts !== undefined) {
+          return {
+            claim,
+            status: "unmeasured",
+            measured: Number(bootFrom.bootSeconds.toFixed(2)),
+            note:
+              `${bootFrom.bootSeconds.toFixed(1)} s from ${bootMedium === "player" ? "launch" : "scene load"} to the bootstrapper's services `
+              + `(${bootMedium}), within ${claim.value} s — but the document asks about ${unmeasuredParts}, which nothing here measures`,
+            blocking: false,
+          };
+        }
         return {
           claim,
-          status: met ? "met" : "not_met",
+          status: "met",
           measured: Number(bootFrom.bootSeconds.toFixed(2)),
           note: `scene load → services in ${bootFrom.bootSeconds.toFixed(1)} s (${bootMedium})`,
           blocking: true,
