@@ -35,7 +35,16 @@ export interface EvidenceBinding {
   /** Issued per invocation, never per milestone: a replay is a different run. */
   readonly runId: string;
   readonly kind: EvidenceKind;
-  readonly medium: EvidenceMedium;
+  /**
+   * The medium the coordinator asked for — or the media it will accept.
+   *
+   * One dispatch can honestly be answered by more than one producer: "does
+   * this compile" is answered by a live editor OR by a headless compiler, and
+   * which one answers is the tool's decision, not the caller's. A single
+   * medium in the ticket made every such dispatch a MEDIUM_MISMATCH (Codex
+   * 2026-09-13 AI, the compile row). The record still states exactly one.
+   */
+  readonly medium: EvidenceMedium | readonly EvidenceMedium[];
   /** The project revision the work is about, or "" when the tree has none. */
   readonly revision: string;
   /** Whether that tree carried uncommitted build inputs when the ticket was issued. */
@@ -375,8 +384,9 @@ function admitEvidence(
   if (record.kind !== b.kind) {
     return { admitted: false, refusal: "KIND_MISMATCH", detail: `asked for ${b.kind}, got ${record.kind}` };
   }
-  if (record.medium !== b.medium) {
-    return { admitted: false, refusal: "MEDIUM_MISMATCH", detail: `asked for ${b.medium}, got ${record.medium}` };
+  const asked = Array.isArray(b.medium) ? b.medium : [b.medium as EvidenceMedium];
+  if (!asked.includes(record.medium)) {
+    return { admitted: false, refusal: "MEDIUM_MISMATCH", detail: `asked for ${asked.join(" or ")}, got ${record.medium}` };
   }
   // A BINDING THE RECORD DOES NOT ANSWER IS NOT A BINDING IT MET. Omitting
   // the field was an escape from every check (Codex 2026-09-12 AB): unknown
@@ -419,7 +429,7 @@ function admitEvidence(
   }
   // A PLAYER RUN IS ABOUT ONE ARTIFACT. Paths and sizes are not identity: the
   // bytes that ran must be the bytes the build produced.
-  if (b.medium === "player") {
+  if (record.medium === "player") {
     // A DIGEST, not any string: the empty one equalled itself on all three
     // sides and was admitted (Codex 2026-09-12 AC).
     if (!isSha256(b.artifactSha256)) {

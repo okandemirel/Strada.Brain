@@ -105,7 +105,9 @@ export class EvidenceLedger {
         b.milestoneId,
         b.attemptId,
         b.kind,
-        b.medium,
+        // A dispatch that accepts more than one producer stores what it asked
+        // for, in order (Codex 2026-09-13 AI, the compile row).
+        Array.isArray(b.medium) ? b.medium.join(",") : b.medium,
         b.target ?? null,
         b.revision,
         b.dirty ? 1 : 0,

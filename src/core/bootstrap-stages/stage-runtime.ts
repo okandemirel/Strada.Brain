@@ -999,14 +999,16 @@ export function makeVerifyCompile(
     getAvailableToolNames(): readonly string[];
     execute(name: string, input: Record<string, unknown>, context: never): Promise<{ content?: unknown; isError?: boolean }>;
   },
-): (projectRoot: string) => Promise<{ ok: boolean; ran: boolean; errors?: number; detail?: string }> {
-  return async (projectRoot: string) => {
+): (projectRoot: string, evidenceRunId?: string) => Promise<{ ok: boolean; ran: boolean; errors?: number; detail?: string; receipt?: string }> {
+  return async (projectRoot: string, evidenceRunId?: string) => {
             if (!registry.getAvailableToolNames().includes("unity_verify_change")) {
               return { ok: false, ran: false, detail: "unity_verify_change is not registered" };
             }
             const result = await registry.execute(
               "unity_verify_change",
-              {},
+              // …AND THE RUN THIS DISPATCH ANSWERS FOR, so the producer can
+              // stamp a receipt the coordinator holds against its ticket.
+              evidenceRunId === undefined ? {} : { evidenceRunId },
               {
                 projectPath: projectRoot,
                 workingDirectory: projectRoot,
@@ -1014,6 +1016,11 @@ export function makeVerifyCompile(
               } as never,
             );
             const detail = String(result.content ?? "");
+            // THE PRODUCER'S RECEIPT for the run this dispatch answers. The
+            // whole report is one JSON document, so the receipt travels in a
+            // field; the bytes are what a receiver hashes either way.
+            const receipt = extractReceipt(detail);
+            const withReceipt = <T extends object>(verdict: T): T => (receipt === undefined ? verdict : { ...verdict, receipt });
             const counted = /"compileErrors"\s*:\s*(\d+)/i.exec(detail)?.[1]
               ?? /(\d+)\s*error\(s\)/i.exec(detail)?.[1];
             const errors = counted === undefined ? undefined : Number(counted);
@@ -1026,16 +1033,16 @@ export function makeVerifyCompile(
             // the compiler's answer whatever the flag says; a flag with no
             // count is a tool that did not get to answer.
             if (result.isError === true) {
-              return errors !== undefined && errors > 0
+              return withReceipt(errors !== undefined && errors > 0
                 ? { ok: false, ran: true, errors, detail: detail.slice(0, 300) }
-                : { ok: false, ran: false, detail: detail.slice(0, 300) || "the compile tool reported an error" };
+                : { ok: false, ran: false, detail: detail.slice(0, 300) || "the compile tool reported an error" });
             }
             // A "failed" with no counted error is the killed-compile shape:
             // real, but it says nothing about the CODE, so it is reported as
             // not measured rather than as a compile error the sprint can fix.
             const failed = /"status"\s*:\s*"failed"/i.test(detail);
             if (failed && (errors === undefined || errors === 0)) {
-              return { ok: false, ran: false, errors, detail: detail.slice(0, 300) };
+              return withReceipt({ ok: false, ran: false, errors, detail: detail.slice(0, 300) });
             }
             // A COMPILE IS PROVEN, not assumed: either the errors were counted
             // or the tool said in so many words that it succeeded. Anything
@@ -1046,18 +1053,18 @@ export function makeVerifyCompile(
             // 2026-09-12 S#2).
             const unfinished = /"verified"\s*:\s*false|"status"\s*:\s*"(?:unknown|compiling|in[_ -]?progress|pending)"|\bstill compiling\b/i.test(detail);
             if (unfinished) {
-              return { ok: false, ran: false, detail: detail.slice(0, 300) };
+              return withReceipt({ ok: false, ran: false, detail: detail.slice(0, 300) });
             }
             const said = /"(?:lastSucceeded|success|compiled)"\s*:\s*true|"exitCode"\s*:\s*0|"status"\s*:\s*"(?:ok|success|succeeded|passed)"/i.test(detail);
             if (errors === undefined && !said) {
-              return { ok: false, ran: false, detail: detail.slice(0, 300) || "the compile tool answered nothing measurable" };
+              return withReceipt({ ok: false, ran: false, detail: detail.slice(0, 300) || "the compile tool answered nothing measurable" });
             }
-            return {
+            return withReceipt({
               ok: !failed && (errors ?? 0) === 0,
               ran: true,
               ...(errors === undefined ? {} : { errors }),
               detail: detail.slice(0, 300),
-            };
+            });
   };
 }
 
@@ -1247,7 +1254,21 @@ export const EVIDENCE_FENCE = "strada-evidence";
 export function extractReceipt(content: string): string | undefined {
   const match = new RegExp("```" + EVIDENCE_FENCE + "\\s*\\n([\\s\\S]*?)\\n```").exec(content);
   const body = match?.[1]?.trim();
-  return body === undefined || body === "" ? undefined : body;
+  if (body !== undefined && body !== "") return body;
+  // …OR A FIELD, for a producer whose whole report is one JSON document and
+  // cannot append a fenced block without breaking every reader of it (Codex
+  // 2026-09-13 AI, the compile row). The bytes are the same either way, which
+  // is what the receiver hashes.
+  try {
+    const parsed: unknown = JSON.parse(content);
+    if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const raw = (parsed as { receipt?: unknown }).receipt;
+      if (typeof raw === "string" && raw.trim() !== "") return raw;
+    }
+  } catch {
+    /* not a JSON report: the fence was the only place a receipt could be */
+  }
+  return undefined;
 }
 
 /**

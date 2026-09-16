@@ -128,6 +128,82 @@ describe("makeRunPlayer carries the evidence dispatch both ways", () => {
   });
 });
 
+/**
+ * THE COMPILE DISPATCH ANSWERS FOR ITS RUN TOO (Codex 2026-09-13 AI, the
+ * compile row): it took no run id and returned no receipt, so the compile
+ * behind every delivery was a file a worker could have written.
+ */
+describe("makeVerifyCompile carries the evidence dispatch both ways", () => {
+  it("passes the run id and returns the receipt the producer put in its report", async () => {
+    const asked: Array<Record<string, unknown>> = [];
+    const record = '{"schemaVersion":1,"runId":"run-c1","kind":"compile","medium":"editor","execution":{"completed":true,"exitCode":null,"timedOut":false}}';
+    const verify = makeVerifyCompile({
+      getAvailableToolNames: () => ["unity_verify_change"],
+      execute: async (_name: string, input: Record<string, unknown>) => {
+        asked.push(input);
+        return { content: JSON.stringify({ status: "passed", summary: { compileErrors: 0 }, receipt: record }) };
+      },
+    } as never);
+
+    const verdict = await verify("/p", "run-c1");
+    expect(asked[0]).toMatchObject({ evidenceRunId: "run-c1" });
+    expect(verdict).toMatchObject({ ok: true, ran: true, errors: 0 });
+    // VERBATIM: the receiver hashes these bytes.
+    expect(verdict.receipt).toBe(record);
+  });
+
+  it("carries the receipt of a compile that FAILED, and of one whose tool errored", async () => {
+    const record = (exitCode: number | null) =>
+      `{"schemaVersion":1,"runId":"r","kind":"compile","medium":"compiler","execution":{"completed":${exitCode !== null},"exitCode":${exitCode},"timedOut":false}}`;
+    const failing = makeVerifyCompile({
+      getAvailableToolNames: () => ["unity_verify_change"],
+      execute: async () => ({
+        content: JSON.stringify({ status: "failed", summary: { compileErrors: 3 }, receipt: record(1) }),
+        isError: true,
+      }),
+    } as never);
+    const failed = await failing("/p", "r");
+    expect(failed).toMatchObject({ ok: false, ran: true, errors: 3 });
+    expect(failed.receipt).toBe(record(1));
+
+    // A killed compile: no exit code to state, and the verdict is "not run".
+    const killed = makeVerifyCompile({
+      getAvailableToolNames: () => ["unity_verify_change"],
+      execute: async () => ({ content: JSON.stringify({ status: "failed", summary: { compileErrors: 0 }, receipt: record(null) }) }),
+    } as never);
+    const unmeasured = await killed("/p", "r");
+    expect(unmeasured).toMatchObject({ ok: false, ran: false });
+    expect(unmeasured.receipt).toBe(record(null));
+  });
+
+  it("says nothing about evidence when no run was issued", async () => {
+    const asked: Array<Record<string, unknown>> = [];
+    const verify = makeVerifyCompile({
+      getAvailableToolNames: () => ["unity_verify_change"],
+      execute: async (_name: string, input: Record<string, unknown>) => {
+        asked.push(input);
+        return { content: JSON.stringify({ status: "passed", summary: { compileErrors: 0 } }) };
+      },
+    } as never);
+    const verdict = await verify("/p");
+    expect(asked[0]).toEqual({});
+    expect(verdict.receipt).toBeUndefined();
+  });
+});
+
+describe("extractReceipt reads a fence or a field", () => {
+  it("prefers the fence, falls back to the field, and invents nothing", () => {
+    const record = '{"schemaVersion":1,"runId":"r"}';
+    expect(extractReceipt("report\n\n```strada-evidence\n" + record + "\n```")).toBe(record);
+    expect(extractReceipt(JSON.stringify({ status: "passed", receipt: record }))).toBe(record);
+    expect(extractReceipt(JSON.stringify({ status: "passed" }))).toBeUndefined();
+    expect(extractReceipt(JSON.stringify({ status: "passed", receipt: "   " }))).toBeUndefined();
+    expect(extractReceipt(JSON.stringify({ status: "passed", receipt: { schemaVersion: 1 } }))).toBeUndefined();
+    expect(extractReceipt("not a report at all")).toBeUndefined();
+    expect(extractReceipt("[1,2,3]")).toBeUndefined();
+  });
+});
+
 describe("parsePlayerBuildOutput", () => {
   it("an existing file that is NOT a player build does not authenticate it (Codex 2026-09-11 D#12)", () => {
     const notAPlayer = join(artifactDir, "package.json");

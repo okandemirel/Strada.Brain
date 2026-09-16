@@ -2955,7 +2955,14 @@ describe("CampaignManager", () => {
 
     // Recordings/ is Strada's own output (the run record the sprint left); it
     // is never committed — see DEFAULT_WORKSPACE_COPY_EXCLUDES.
-    expect(git("status", "--porcelain").replace(/^\?\? Recordings\/$/m, "").trim()).toBe(""); // tree clean
+    // …and `.strada/` is Strada's own state (the evidence ledger the compile
+    // ticket writes, lease bookkeeping): also never committed.
+    expect(
+      git("status", "--porcelain")
+        .replace(/^\?\? Recordings\/$/m, "")
+        .replace(/^\?\? \.strada\/$/m, "")
+        .trim(),
+    ).toBe(""); // tree clean
     expect(git("log", "-1", "--pretty=%s")).toContain("milestone green");
     expect(storage.get(campaign.id)!.state).toBe("executing");
   });
@@ -3445,6 +3452,58 @@ describe("CampaignManager", () => {
     try {
       const rows = ledger.forMilestone(campaign.id, "m_nogit");
       expect(rows.map((r) => r.refusal ?? "admitted")).toEqual(["admitted"]);
+    } finally {
+      ledger.close();
+    }
+  }, 20_000);
+
+  it("the compile dispatch runs under a ticket, and EITHER producer may answer it (Codex 2026-09-13 AI)", async () => {
+    // The compile behind every delivery was a file a worker could have
+    // written: this dispatch had no ticket at all. And which producer answers
+    // it is the tool's decision — a live editor or a headless compiler — so a
+    // ticket naming one medium refused the other.
+    const campaign = {
+      id: "c_compile", chatId: "chat", channelType: "cli", userId: "u", projectRoot,
+      state: "executing", draftAttempts: 0, milestones: [], currentMilestone: 0,
+      createdAt: Date.now(), updatedAt: Date.now(),
+    } as unknown as Campaign;
+    const receiptFor = (runId: string, medium: string, exitCode: number | null): string => JSON.stringify({
+      schemaVersion: 1, runId, kind: "compile", medium, revision: "",
+      execution: { completed: true, exitCode, timedOut: false },
+    });
+
+    const managerWith = (medium: string, exitCode: number | null) => new CampaignManager({
+      storage,
+      verifyCompile: async (_root: string, runId?: string) => ({
+        ok: true, ran: true, errors: 0, detail: "compiles",
+        ...(runId === undefined ? {} : { receipt: receiptFor(runId, medium, exitCode) }),
+      }),
+      planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async () => {},
+      projectRoot,
+    });
+    const measure = async (m: string, exitCode: number | null, milestoneId: string): Promise<void> => {
+      await (managerWith(m, exitCode) as unknown as { measureCompile(c: unknown, m: unknown): Promise<unknown> })
+        .measureCompile(campaign, { id: milestoneId, title: "Sprint", prompt: "p", status: "running", attempts: 1 });
+    };
+
+    // The LIVE EDITOR answers: it owns no process, so it states no exit code.
+    await measure("editor", null, "m_editor");
+    // A HEADLESS COMPILER answers the same dispatch: its own exit code is 0.
+    await measure("compiler", 0, "m_compiler");
+    // …and a producer that is neither is refused by name.
+    await measure("player", 0, "m_player");
+
+    const ledger = new EvidenceLedger(join(projectRoot, ".strada", "campaign-evidence.db"));
+    try {
+      expect(ledger.forMilestone(campaign.id, "m_editor").map((r) => r.refusal ?? "admitted")).toEqual(["admitted"]);
+      expect(ledger.forMilestone(campaign.id, "m_compiler").map((r) => r.refusal ?? "admitted")).toEqual(["admitted"]);
+      const wrong = ledger.forMilestone(campaign.id, "m_player");
+      expect(wrong.map((r) => r.refusal)).toEqual(["MEDIUM_MISMATCH"]);
+      expect(wrong[0]!.detail ?? "").toContain("asked for compiler or editor, got player");
+      // The ticket records what it would accept, in order.
+      expect(wrong[0]!.medium).toBe("compiler,editor");
     } finally {
       ledger.close();
     }

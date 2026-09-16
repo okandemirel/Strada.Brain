@@ -70,6 +70,8 @@ export interface CampaignContext {
 export interface CompileVerdict {
   /** True only when a compile actually ran AND reported no errors. */
   readonly ok: boolean;
+  /** The producer's receipt for the run this verdict came from, when it sent one. */
+  readonly receipt?: string;
   /** False when no verifier was available — a skip, never a pass. */
   readonly ran: boolean;
   /** Errors counted, when the verifier gave a number. */
@@ -109,7 +111,7 @@ export interface CampaignManagerOptions {
    * Absent (or `ran: false`) means the check is DISCLOSED as not run, never
    * treated as a pass.
    */
-  verifyCompile?: (projectRoot: string) => Promise<CompileVerdict>;
+  verifyCompile?: (projectRoot: string, evidenceRunId?: string) => Promise<CompileVerdict>;
   /**
    * Build the player from the project root and measure the artifact. The
    * delivery gate runs it ONCE per final-sprint evaluation, only after the
@@ -743,7 +745,7 @@ export class CampaignManager {
   private readonly taskManager: TaskManager;
   private readonly messenger: CampaignMessenger;
   private readonly projectRoot: string;
-  private readonly verifyCompile?: (projectRoot: string) => Promise<CompileVerdict>;
+  private readonly verifyCompile?: (projectRoot: string, evidenceRunId?: string) => Promise<CompileVerdict>;
   private readonly buildPlayer?: (projectRoot: string, target?: string, evidenceRunId?: string) => Promise<PlayerBuildEvidence>;
   private readonly deliveryResumeDelayMs: number;
   private readonly implementationReviveDelayMs: number;
@@ -3178,7 +3180,7 @@ export class CampaignManager {
       // revision of the game ever had (Codex 2026-09-12 R#16). The revision is
       // captured before the first read and checked after the last.
       const revisionBefore = this.projectRevision();
-      const compile = await this.measureCompile();
+      const compile = await this.measureCompile(campaign, milestone);
       milestone.compileVerdict = compile;
       const compileBroken = compile.ran && !compile.ok;
       // A verifier that could not run proves nothing: at the final sprint that
@@ -5681,12 +5683,26 @@ export class CampaignManager {
    * MEASURED. Treating "we could not ask" as "it compiles" is the exact shape
    * of the false green this gate exists to stop.
    */
-  private async measureCompile(): Promise<CompileVerdict> {
+  private async measureCompile(campaign?: Campaign, milestone?: CampaignMilestone): Promise<CompileVerdict> {
     if (!this.verifyCompile) {
       return { ok: false, ran: false, detail: "no compile verifier is configured" };
     }
     try {
-      return await this.verifyCompile(this.projectRoot);
+      // UNDER A TICKET, like the build and the play-through. This dispatch had
+      // none, so the compile behind every delivery was a file a worker could
+      // have written (Codex 2026-09-13 AI, the compile row). EITHER producer
+      // may answer it — the live editor or a headless compiler — and neither
+      // is chosen here, so the ticket accepts both and demands no exit code
+      // of a live editor that never exits.
+      return await this.underTicket(
+        campaign,
+        milestone,
+        { kind: "compile", medium: ["compiler", "editor"], processOwned: false },
+        async (runId) => {
+          const verdict = await this.verifyCompile!(this.projectRoot, runId);
+          return { value: verdict, ...(verdict.receipt === undefined ? {} : { receipt: verdict.receipt }) };
+        },
+      );
     } catch (err) {
       return {
         ok: false,
@@ -6442,6 +6458,7 @@ export class CampaignManager {
     binding: {
       kind: EvidenceBinding["kind"];
       medium: EvidenceBinding["medium"];
+      // (a list here means: either producer may answer this dispatch)
       target?: string;
       /**
        * The artifact this run is about. Its digest is measured HERE — before

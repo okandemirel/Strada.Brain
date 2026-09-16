@@ -699,3 +699,53 @@ describe("a tree with no revision", () => {
     expect((decision as { detail: string }).detail).toContain("repository state could not be read");
   });
 });
+
+/**
+ * A DISPATCH MAY ACCEPT MORE THAN ONE PRODUCER (Codex 2026-09-13 AI, the
+ * compile row): "does this compile" is answered by a live editor OR by a
+ * headless compiler, and which one answers is the tool's decision.
+ */
+describe("a ticket that accepts several media", () => {
+  const ticket = (medium: EvidenceTicket["binding"]["medium"]): EvidenceTicket => ({
+    issuedAt: 1,
+    requestedSessions: [],
+    binding: {
+      campaignId: "c", generation: 0, milestoneId: "m", attemptId: "a", runId: "r",
+      kind: "compile", medium, revision: "", dirty: false, processOwned: false,
+    },
+  });
+  const record = (medium: string, extra: Record<string, unknown> = {}): string => JSON.stringify({
+    schemaVersion: 1, runId: "r", kind: "compile", medium, revision: "",
+    execution: { completed: true, exitCode: null, timedOut: false },
+    ...extra,
+  });
+  const transport: ExecutionObservation = { completed: true, exitCode: null, timedOut: false };
+  const opts = { revisionNow: "", dirtyNow: false };
+
+  it("admits either producer and refuses a third by name", () => {
+    expect(receiveEvidence(ticket(["compiler", "editor"]), record("editor"), transport, opts).admitted).toBe(true);
+    expect(receiveEvidence(ticket(["compiler", "editor"]), record("compiler"), transport, opts).admitted).toBe(true);
+    const wrong = receiveEvidence(ticket(["compiler", "editor"]), record("builder"), transport, opts);
+    expect(wrong).toMatchObject({ admitted: false, refusal: "MEDIUM_MISMATCH" });
+    expect((wrong as { detail: string }).detail).toContain("asked for compiler or editor, got builder");
+  });
+
+  it("…and the PLAYER's artifact rule survives a list, because the RECORD names the medium", () => {
+    // Read off the ticket, a list could never equal "player", so a
+    // list-form player ticket skipped the artifact binding entirely.
+    const player: EvidenceTicket = {
+      issuedAt: 1,
+      requestedSessions: [],
+      binding: {
+        campaignId: "c", generation: 0, milestoneId: "m", attemptId: "a", runId: "r",
+        kind: "playthrough", medium: ["player"], revision: "", dirty: false,
+      },
+    };
+    const played = JSON.stringify({
+      schemaVersion: 1, runId: "r", kind: "playthrough", medium: "player", revision: "",
+      execution: { completed: true, exitCode: 0, timedOut: false },
+    });
+    expect(receiveEvidence(player, played, { completed: true, exitCode: 0, timedOut: false }, opts))
+      .toMatchObject({ admitted: false, refusal: "ARTIFACT_MISSING" });
+  });
+});
