@@ -9,6 +9,7 @@ import { hostname } from "node:os";
 import { execSync } from "node:child_process";
 import { execFileSync } from "node:child_process";
 import { EvidenceLedger, artifactDigest } from "./evidence-ledger.js";
+import { ProducerFailure } from "./producer-failure.js";
 import { requirementKey, CampaignManager, stripTimeBoxDirectives, UNMEASURABLE_PROOF_RE, UNRUNNABLE_HERE_RE, hasUnmeasurableProof, proofsSpanTwoRevisions } from "./campaign-manager.js";
 import { CampaignStorage } from "./campaign-storage.js";
 import { describeBuild } from "./campaign-status.js";
@@ -3332,6 +3333,63 @@ describe("CampaignManager", () => {
       const empty = ledger.forMilestone(campaign.id, "m_play_empty");
       expect(empty.map((r) => r.refusal)).toEqual(["SESSION_MISSING"]);
       expect(empty[0]!.detail ?? "").toContain("session 1 was asked for");
+    } finally {
+      ledger.close();
+    }
+  }, 20_000);
+
+  it("a play-through that FAILED still settles on the receipt that explains it (Codex 2026-09-13 AI#11)", async () => {
+    // The producer measured a deadline kill and said so; the failure was
+    // thrown and the receipt dropped, so the ledger recorded EVIDENCE_MISSING
+    // — "no receipt came back" — about a run that had explained itself.
+    const git = (...args: string[]): string => execFileSync("git", ["-C", projectRoot, ...args], { encoding: "utf8" });
+    const artifact = join(projectRoot, "Builds", "StandaloneOSX", "Game.app");
+    mkdirSync(join(projectRoot, "Builds", "StandaloneOSX"), { recursive: true });
+    writeFileSync(artifact, "the bytes that were built");
+    git("init", "-q");
+    git("config", "user.email", "t@t");
+    git("config", "user.name", "t");
+    git("add", "-A");
+    git("commit", "-qm", "baseline");
+    const revision = git("rev-parse", "HEAD").trim();
+
+    const campaign = {
+      id: "c_failed_play", chatId: "chat", channelType: "cli", userId: "u", projectRoot,
+      state: "executing", draftAttempts: 0, milestones: [], currentMilestone: 0,
+      createdAt: Date.now(), updatedAt: Date.now(),
+    } as unknown as Campaign;
+    const player = new CampaignManager({
+      storage,
+      runPlayer: async (_root, artifactPlayed, _spec, dispatch) => {
+        throw new ProducerFailure(
+          "Player: Game.app; exit -1 — the player was killed at its deadline",
+          JSON.stringify({
+            schemaVersion: 1, runId: dispatch?.runId, kind: "playthrough", medium: "player", revision,
+            ...(dispatch?.target === undefined ? {} : { target: dispatch.target }),
+            artifactSha256: artifactDigest(artifactPlayed),
+            execution: { completed: false, exitCode: -1, timedOut: true },
+          }),
+        );
+      },
+      planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async () => {},
+      projectRoot,
+    });
+
+    const build = { ran: true, ok: true, target: "StandaloneOSX", artifactPath: artifact, sizeBytes: 25, durationMs: 1, scenes: 1 };
+    const measured = await (player as unknown as { measurePlayerRun(m: unknown, b: unknown, c: unknown): Promise<{ found: boolean }> })
+      .measurePlayerRun({ id: "m_killed", title: "Delivery", prompt: "p", status: "running", attempts: 1 }, build, campaign);
+    // The failure is still a failure: nothing was played.
+    expect(measured.found).toBe(false);
+
+    const ledger = new EvidenceLedger(join(projectRoot, ".strada", "campaign-evidence.db"));
+    try {
+      const rows = ledger.forMilestone(campaign.id, "m_killed");
+      // THE PRODUCER'S OWN BYTES reached the receiver: the refusal is about
+      // the run that did not finish, not about a receipt nobody sent.
+      expect(rows.map((r) => r.refusal)).toEqual(["PROCESS_INCOMPLETE"]);
+      expect((rows[0]!.recordSha256 ?? "").length).toBe(64);
     } finally {
       ledger.close();
     }

@@ -224,9 +224,14 @@ describe("admitting a record against the ticket that was issued", () => {
       admitted: false,
       refusal: "PROCESS_FAILED",
     });
+    // A TRANSPORT THAT READ NO CODE IS NOT A TRANSPORT THAT DISAGREES. The
+    // coordinator dispatches through a tool and never parents the producer's
+    // process, so demanding a code from it refused every real dispatch while
+    // making the PRODUCER ownerless was the other way to be wrong (Codex
+    // 2026-09-13 AI#10). The producer owns the process and must state its own
+    // exit — which this record does, cleanly.
     expect(receiveEvidence(ticket(), bytesOf(lying), { completed: true, exitCode: null, timedOut: false }, observed)).toMatchObject({
-      admitted: false,
-      refusal: "PROCESS_FAILED",
+      admitted: true,
     });
     const died = record({ execution: { completed: true, exitCode: 42, timedOut: false } });
     expect(receiveEvidence(ticket(), bytesOf(died), ok, observed)).toMatchObject({
@@ -488,11 +493,12 @@ describe("what a receipt may not be admitted on (Codex 2026-09-12 AC)", () => {
       admitted: false,
       refusal: "PROCESS_FAILED",
     });
-    // …and a run that DOES own its process still needs its exit code.
+    // …and a run that DOES own its process still needs its exit code — named
+    // as an absent measurement rather than a failure (Codex 2026-09-13 AI#10).
     const batch = record({ kind: "compile", medium: "compiler", execution: { completed: true, exitCode: null, timedOut: false } });
     expect(
       receiveEvidence(ticket({ kind: "compile", medium: "compiler" }), bytesOf(batch), { completed: true, exitCode: null, timedOut: false }, observed),
-    ).toMatchObject({ admitted: false, refusal: "PROCESS_FAILED" });
+    ).toMatchObject({ admitted: false, refusal: "PROCESS_UNMEASURED" });
   });
 });
 
@@ -597,5 +603,58 @@ describe('a catalogue larger than one run can play', () => {
     // One short is still one short.
     expect(receiveEvidence(ticket, record(MAX_SESSIONS_PER_RUN, MAX_SESSIONS_PER_RUN - 1), transport, opts))
       .toMatchObject({ admitted: false, refusal: "SESSION_MISSING" });
+  });
+});
+
+/**
+ * TWO SIDES, EACH JUDGED ON WHAT IT CAN MEASURE.
+ *
+ * One `processOwned` flag governed the transport and the producer together, so
+ * a coordinator that dispatches through a tool — and therefore reads no exit
+ * code — made the PLAYER it dispatched ownerless too: a receipt reporting no
+ * exit code at all was admitted (Codex 2026-09-13 AI#10).
+ */
+describe("the producer's process and the transport's are not the same process", () => {
+  const ticket = (processOwned?: boolean): EvidenceTicket => ({
+    issuedAt: 1,
+    requestedSessions: [],
+    binding: {
+      campaignId: "c", generation: 0, milestoneId: "m", attemptId: "a", runId: "r",
+      kind: "compile", medium: "compiler", revision: "", dirty: false,
+      ...(processOwned === undefined ? {} : { processOwned }),
+    },
+  });
+  const record = (exitCode: number | null): string => JSON.stringify({
+    schemaVersion: 1, runId: "r", kind: "compile", medium: "compiler", revision: "",
+    execution: { completed: true, exitCode, timedOut: false },
+  });
+  const silentTransport: ExecutionObservation = { completed: true, exitCode: null, timedOut: false };
+  const opts = { revisionNow: "", dirtyNow: false };
+
+  it("a producer that owns a process and reports no exit code is UNMEASURED, not admitted", () => {
+    const decision = receiveEvidence(ticket(), record(null), silentTransport, opts);
+    expect(decision).toMatchObject({ admitted: false, refusal: "PROCESS_UNMEASURED" });
+    expect((decision as { detail: string }).detail).toContain("owns a process and reported no exit code");
+    // …and the same producer reporting zero is admitted, even though the
+    // transport read no code of its own.
+    expect(receiveEvidence(ticket(), record(0), silentTransport, opts).admitted).toBe(true);
+    expect(receiveEvidence(ticket(), record(42), silentTransport, opts))
+      .toMatchObject({ admitted: false, refusal: "PROCESS_FAILED" });
+  });
+
+  it("a live-bridge operation owns no process, and is admitted on completion alone", () => {
+    expect(receiveEvidence(ticket(false), record(null), silentTransport, opts).admitted).toBe(true);
+    // Its own non-zero code still speaks.
+    expect(receiveEvidence(ticket(false), record(7), silentTransport, opts))
+      .toMatchObject({ admitted: false, refusal: "PROCESS_FAILED" });
+  });
+
+  it("a code the TRANSPORT read is judged on its own, whoever owns the process", () => {
+    const failed: ExecutionObservation = { completed: true, exitCode: 42, timedOut: false };
+    for (const owned of [undefined, true, false] as const) {
+      const decision = receiveEvidence(ticket(owned), record(0), failed, opts);
+      expect(decision).toMatchObject({ admitted: false, refusal: "PROCESS_FAILED" });
+      expect((decision as { detail: string }).detail).toContain("the transport reported 42");
+    }
   });
 });

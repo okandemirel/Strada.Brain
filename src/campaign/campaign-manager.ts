@@ -11,6 +11,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { systemInterrupted } from "../tasks/interruption.js";
 import { EvidenceLedger, artifactDigest, describeLedgerRow } from "./evidence-ledger.js";
+import { receiptOfFailure } from "./producer-failure.js";
 import { issueRunId, receiveEvidence, sessionsRequested, type EvidenceBinding, type EvidenceTicket } from "./producer-evidence.js";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -5052,7 +5053,15 @@ export class CampaignManager {
       };
     }
     const { claims, truncated, otherLevelCounts } = extractNumericClaims(gddText);
-    const assessments = assessNumericClaims(claims, playthrough, player, { platform: gddPlatform(gddText), builtTarget: build?.target ?? build?.requestedTarget });
+    const assessments = assessNumericClaims(claims, playthrough, player, {
+      platform: gddPlatform(gddText),
+      builtTarget: build?.target ?? build?.requestedTarget,
+      // THE SAME CONTRACT THE PRODUCER IS GIVEN. The run is told not to demand
+      // an outcome from an endless game, and then the level count demanded one
+      // anyway: three correctly played sessions of a sandbox read as "0 of 3
+      // reached an outcome" and blocked the delivery (Codex 2026-09-13 AI#2).
+      outcomeRequired: documentRequiresAnOutcome(gddText),
+    });
     const refusal = claimsRefusal(assessments);
     return { lines: describeClaims(assessments, truncated, otherLevelCounts), ...(refusal ? { refusal } : {}) };
   }
@@ -6476,9 +6485,17 @@ export class CampaignManager {
       return (await run(ticket.binding.runId)).value;
     }
     let outcome: { value: T; receipt?: string } | undefined;
+    // THE RECEIPT A FAILURE CARRIED. A producer that was killed at its
+    // deadline measured that and said so; the adapter threw and the ledger
+    // recorded "no receipt came back" (Codex 2026-09-13 AI#11). The failure
+    // still propagates — only its evidence is kept.
+    let failedReceipt: string | undefined;
     try {
       outcome = await run(ticket.binding.runId);
       return outcome.value;
+    } catch (err) {
+      failedReceipt = receiptOfFailure(err);
+      throw err;
     } finally {
       // WHAT THIS CALLER ACTUALLY OBSERVED, and nothing more. The transport
       // observation used to carry `exitCode: 0` on the strength of the
@@ -6488,8 +6505,12 @@ export class CampaignManager {
       // process, so it reports what it knows: the call came back, or it did
       // not.
       const decision = receiveEvidence(
-        { ...ticket, binding: { ...ticket.binding, processOwned: false } },
-        outcome?.receipt,
+        // THE TICKET AS IT WAS ISSUED. Overriding `processOwned` here said the
+        // PRODUCER owned no process because the coordinator does not, so a
+        // player receipt that reported no exit code was admitted (Codex
+        // 2026-09-13 AI#10). The transport's own silence is stated below.
+        ticket,
+        outcome?.receipt ?? failedReceipt,
         { completed: outcome !== undefined, exitCode: null, timedOut: false },
         {
           revisionNow: this.projectRevision(),
@@ -6501,7 +6522,7 @@ export class CampaignManager {
         },
       );
       try {
-        ledger.settle(ticket.binding.runId, outcome?.receipt, decision);
+        ledger.settle(ticket.binding.runId, outcome?.receipt ?? failedReceipt, decision);
       } catch (err) {
         getLoggerSafe().warn("A producer receipt could not be recorded", { error: err instanceof Error ? err.message : String(err) });
       }

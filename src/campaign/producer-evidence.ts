@@ -43,7 +43,12 @@ export interface EvidenceBinding {
   /** The platform this run is about, when it is about one. */
   readonly target?: string;
   /**
-   * Whether this run owns a process whose exit means something.
+   * Whether the PRODUCER owns a process whose exit means something.
+   *
+   * Not the transport: the coordinator dispatches through a tool and owns no
+   * process of its own, which it says by reporting no exit code. One flag for
+   * both sides admitted a player receipt with no exit code at all (Codex
+   * 2026-09-13 AI#10).
    *
    * A compile or a suite driven through a LIVE editor bridge has no process
    * of its own — the editor stays alive, and the operation's terminal result
@@ -139,6 +144,10 @@ export type EvidenceRefusal =
   | "ARTIFACT_MISMATCH"
   | "PROCESS_INCOMPLETE"
   | "PROCESS_FAILED"
+  // A PROCESS NOBODY MEASURED. Not a failure — an absent measurement: the
+  // producer owns a process and did not say how it ended (Codex 2026-09-13
+  // AI#10).
+  | "PROCESS_UNMEASURED"
   | "SESSION_MISSING"
   | "SESSION_UNVERIFIED"
   | "SESSION_MISMATCH";
@@ -404,28 +413,36 @@ function admitEvidence(
   if (!transport.completed || transport.timedOut || !record.execution.completed || record.execution.timedOut) {
     return { admitted: false, refusal: "PROCESS_INCOMPLETE", detail: "the producer's process did not run to a normal end" };
   }
-  // BOTH ACCOUNTS, AGREEING. Falling back from one to the other let a null
-  // transport code be covered by the producer's own "0", and a transport 0
-  // cover the producer's own 42 (Codex 2026-09-12 AB).
-  // A RUN WITH NO PROCESS OF ITS OWN is judged on completion alone: a compile
-  // or a suite through a live editor bridge never exits, and demanding a code
-  // refused those runs outright (Codex 2026-09-12 AC).
-  const processOwned = b.processOwned !== false;
-  if (!processOwned) {
-    if (transport.exitCode !== null && transport.exitCode !== 0) {
-      return { admitted: false, refusal: "PROCESS_FAILED", detail: `the transport reported ${transport.exitCode}` };
+  // BOTH ACCOUNTS, EACH JUDGED ON WHAT ITS OWN SIDE CAN MEASURE. Falling back
+  // from one to the other let a null transport code be covered by the
+  // producer's own "0", and a transport 0 cover the producer's own 42 (Codex
+  // 2026-09-12 AB) — but ONE flag for both sides was wrong in the other
+  // direction: a coordinator that dispatches through a tool owns no process
+  // while the player it dispatched owns one, and treating the pair as a unit
+  // admitted a player receipt that reported no exit code at all (Codex
+  // 2026-09-13 AI#10).
+  // THE TRANSPORT reports a code only when it read one; a code it did read
+  // must be zero.
+  if (transport.exitCode !== null && transport.exitCode !== 0) {
+    return { admitted: false, refusal: "PROCESS_FAILED", detail: `the transport reported ${transport.exitCode}` };
+  }
+  // THE PRODUCER's own ownership is what the ticket fixed: a batch Unity run
+  // or a shipped player owns a process and must report its exit; a compile or
+  // a suite driven through a LIVE editor bridge never exits, and demanding a
+  // code refused those runs outright (Codex 2026-09-12 AC).
+  if (b.processOwned !== false) {
+    if (record.execution.exitCode === null) {
+      return {
+        admitted: false,
+        refusal: "PROCESS_UNMEASURED",
+        detail: "the producer owns a process and reported no exit code for it",
+      };
     }
-    if (record.execution.exitCode !== null && record.execution.exitCode !== 0) {
+    if (record.execution.exitCode !== 0) {
       return { admitted: false, refusal: "PROCESS_FAILED", detail: `the producer reported ${record.execution.exitCode}` };
     }
-  } else if (transport.exitCode !== 0 || record.execution.exitCode !== 0) {
-    return {
-      admitted: false,
-      refusal: "PROCESS_FAILED",
-      detail:
-        `the run did not end cleanly (transport ${transport.exitCode ?? "unknown"}, ` +
-        `producer ${record.execution.exitCode ?? "unknown"})`,
-    };
+  } else if (record.execution.exitCode !== null && record.execution.exitCode !== 0) {
+    return { admitted: false, refusal: "PROCESS_FAILED", detail: `the producer reported ${record.execution.exitCode}` };
   }
   // THE SESSIONS THAT WERE ASKED FOR, each identified. An absent session is a
   // missing measurement, and an unverified or contradictory identity certifies

@@ -1048,3 +1048,68 @@ describe("the runner's own view of the content (Codex 2026-09-13 AG#1, AH#2)", (
     expect(silent.status).toBe("met");
   });
 });
+
+/**
+ * AN ENDLESS GAME HAS NO OUTCOME TO REACH.
+ *
+ * The producer is already told not to demand one (`documentRequiresAnOutcome`
+ * → `outcomeRequired`), and then the level count demanded one anyway: three
+ * correctly played sandbox sessions read as "0 of 3 played session(s) reached
+ * an outcome", NOT MET and blocking — a correct game that could never be
+ * delivered (Codex 2026-09-13 AI#2).
+ */
+describe("the level count follows the document's outcome contract", () => {
+  const ENDLESS = "# Drift\nAn endless sandbox with 3 levels. There is no win or lose condition; play continues until the player stops.";
+  const sandbox = (): PlaythroughEvidence => ({
+    found: true, ok: true, outcome: "None", session: 1, actions: 60,
+    sessionCount: 3,
+    sessions: Array.from({ length: 3 }, (_unused, i) => ({
+      index: i + 1, requestedIndex: i + 1, identityVerified: true,
+      outcome: "None", reachedOutcome: false, actions: 40, seconds: 45,
+    })),
+  });
+  const claimsOf = (text: string) => extractNumericClaims(text).claims;
+
+  it("counts an identified, played session as a level when the document requires no outcome", () => {
+    expect(documentRequiresAnOutcome(ENDLESS)).toBe(false);
+    const judged = assessNumericClaims(claimsOf(ENDLESS), sandbox(), undefined, { outcomeRequired: false });
+    expect(judged.find((x) => x.claim.kind === "level_count")).toMatchObject({ status: "met", measured: 3, blocking: true });
+    expect(judged.find((x) => x.claim.kind === "level_count")!.note)
+      .toContain("3 of 3 played session(s) were identified and played (the document states no win or lose condition)");
+  });
+
+  it("…and still demands the outcome when the document states a win or lose condition", () => {
+    const FINITE = "# Climb\nThe game has 3 levels. You win by reaching the summit; falling loses the run.";
+    expect(documentRequiresAnOutcome(FINITE)).toBe(true);
+    const judged = assessNumericClaims(claimsOf(FINITE), sandbox(), undefined, { outcomeRequired: true });
+    expect(judged.find((x) => x.claim.kind === "level_count")).toMatchObject({ status: "not_met", blocking: true });
+    expect(judged.find((x) => x.claim.kind === "level_count")!.note).toContain("0 of 3 played session(s) reached an outcome");
+    // A caller that says nothing keeps the stricter reading.
+    expect(assessNumericClaims(claimsOf(FINITE), sandbox()).find((x) => x.claim.kind === "level_count"))
+      .toMatchObject({ status: "not_met" });
+  });
+
+  it("a session the game REFUSED is not a level played under either contract", () => {
+    const refused = sandbox();
+    const judged = assessNumericClaims(
+      claimsOf(ENDLESS),
+      { ...refused, sessions: refused.sessions!.map((s, i) => (i === 0 ? { ...s, outcome: "Refused" } : s)) },
+      undefined,
+      { outcomeRequired: false },
+    );
+    expect(judged.find((x) => x.claim.kind === "level_count")).toMatchObject({ status: "not_met" });
+    expect(judged.find((x) => x.claim.kind === "level_count")!.note).toContain("2 of 3 played session(s)");
+  });
+
+  it("an unidentified session is still no level, outcome contract or not", () => {
+    const anonymous = sandbox();
+    const judged = assessNumericClaims(
+      claimsOf(ENDLESS),
+      { ...anonymous, sessions: anonymous.sessions!.map((s) => ({ ...s, identityVerified: false })) },
+      undefined,
+      { outcomeRequired: false },
+    );
+    expect(judged.find((x) => x.claim.kind === "level_count")).toMatchObject({ status: "not_met" });
+    expect(finishedSessionIndices(anonymous, { outcomeRequired: false })).toEqual([1, 2, 3]);
+  });
+});

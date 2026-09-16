@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import { chmodSync, mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { receiptOfFailure } from "../../campaign/producer-failure.js";
 import { parsePlayerBuildOutput, makeRunPlayer, makeVerifyCompile, makeGuardianPlay, makeCampaignMessenger, extractReceipt, looksLikePlayer } from "./stage-runtime.js";
 
 const artifactDir = mkdtempSync(join(tmpdir(), "build-artifact-"));
@@ -92,6 +93,30 @@ describe("makeRunPlayer carries the evidence dispatch both ways", () => {
     await runPlayer("/p", "/p/Game.app", undefined, { runId: "run-8" });
     expect(asked[1]).not.toHaveProperty("evidenceTarget");
     expect(asked[1]).toMatchObject({ evidenceRunId: "run-8" });
+  });
+
+  it("a FAILED run keeps the receipt that explains it (Codex 2026-09-13 AI#11)", async () => {
+    // A player killed at its deadline measures exactly that and says so; the
+    // adapter threw the failure and dropped the receipt, so the ledger
+    // recorded "no receipt came back" about a run that had explained itself.
+    const record = '{"schemaVersion":1,"runId":"run-slow","kind":"playthrough","medium":"player",'
+      + '"execution":{"completed":false,"exitCode":-1,"timedOut":true}}';
+    const runPlayer = makeRunPlayer({
+      getAvailableToolNames: () => ["unity_run_player"],
+      execute: async () => ({ content: `Player: Game.app; exit -1\n\n\`\`\`strada-evidence\n${record}\n\`\`\``, isError: true }),
+    } as never);
+
+    // The failure still propagates — nothing here makes a killed run look good.
+    const failure = await runPlayer("/p", "/p/Game.app", undefined, { runId: "run-slow" }).catch((err: unknown) => err);
+    expect(failure).toBeInstanceOf(Error);
+    expect(String((failure as Error).message)).toContain("exit -1");
+    expect(receiptOfFailure(failure)).toBe(record);
+    // A failure with no receipt carries none rather than an empty string.
+    const bare = await makeRunPlayer({
+      getAvailableToolNames: () => ["unity_run_player"],
+      execute: async () => ({ content: "Error: not a player this machine can run", isError: true }),
+    } as never)("/p", "/p/Game.apk", undefined, { runId: "run-x" }).catch((err: unknown) => err);
+    expect(receiptOfFailure(bare)).toBeUndefined();
   });
 
   it("a report with no receipt in it answers with none rather than an empty one", async () => {

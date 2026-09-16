@@ -3,6 +3,7 @@ import { closeSync, existsSync, openSync, readFileSync, readSync, statSync, read
 import type { Attachment } from "../../channels/channel-messages.interface.js";
 import { dirname, join } from "node:path";
 import { runCodexSecondOpinion } from "../../agents/review/codex-second-opinion.js";
+import { ProducerFailure } from "../../campaign/producer-failure.js";
 import type * as winston from "winston";
 import type { Config } from "../../config/config.js";
 import type { IMemoryManager } from "../../memory/memory.interface.js";
@@ -1100,8 +1101,15 @@ export function makeRunPlayer(registry: {
     // missing proof with no cause (Codex 2026-09-12 AB J2.4). The campaign
     // truncates for display where it needs to.
     const content = String(result.content ?? "");
-    if (result.isError === true) throw new Error((content === "" ? "unity_run_player failed" : content).slice(0, 2000));
     const receipt = extractReceipt(content);
+    // A FAILURE KEEPS ITS EVIDENCE. A player killed at its deadline measures
+    // exactly that and says so in its receipt; throwing the failure and
+    // dropping the receipt made the ledger say "no receipt came back" about a
+    // run that had explained itself (Codex 2026-09-13 AI#11). The failure
+    // still propagates unchanged.
+    if (result.isError === true) {
+      throw new ProducerFailure((content === "" ? "unity_run_player failed" : content).slice(0, 2000), receipt);
+    }
     return receipt === undefined ? {} : { receipt };
   };
 }

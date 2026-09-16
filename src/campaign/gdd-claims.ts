@@ -524,14 +524,27 @@ export function finishedSessionIndices(
       contentFingerprint?: string;
     }>;
   } | undefined,
+  /**
+   * Whether a session must END to count.
+   *
+   * An endless or sandbox game states no win or lose condition, so every one
+   * of its sessions correctly reports outcome "None" — and this counted none
+   * of them, which made a correct three-level endless game "0 of 3 levels
+   * reached an outcome" and blocked its delivery (Codex 2026-09-13 AI#2). The
+   * DOCUMENT decides, exactly as it does for the producer: when it requires no
+   * outcome, a session that was identified and acted in is a level played.
+   * Default true — the caller that knows the document says so.
+   */
+  opts: { readonly outcomeRequired?: boolean } = {},
 ): number[] {
+  const outcomeRequired = opts.outcomeRequired !== false;
   const catalog = playthrough?.sessionCount ?? 0;
   const seen = new Set<number>();
   for (const session of playthrough?.sessions ?? []) {
     // AN OUTCOME IT REACHED, stated. Excluding only "None" and "Refused" let a
     // record with no outcome at all — an empty string, a missing field — count
     // as a level played to the end (Codex 2026-09-12 S#11).
-    if (session.reachedOutcome === false) continue;
+    if (outcomeRequired && session.reachedOutcome === false) continue;
     // A SESSION WHOSE CONTENT NOBODY COULD IDENTIFY certifies no level. The
     // run adopts a session the game started by itself, and the record used to
     // carry the index the run had asked for: an auto-started level 1 counted
@@ -551,7 +564,11 @@ export function finishedSessionIndices(
       continue;
     }
     const outcome = (session.outcome ?? "").trim();
-    if (outcome === "" || outcome === "None" || outcome === "Refused") continue;
+    // A REFUSED session is not a session played under ANY contract: the game
+    // turned the request down. "None" and an empty outcome only disqualify a
+    // session when the document asked for one.
+    if (outcome === "Refused") continue;
+    if (outcomeRequired && (outcome === "" || outcome === "None")) continue;
     if (!Number.isInteger(session.index) || session.index! < 1 || session.index! > Math.max(catalog, 1)) continue;
     if (!Number.isInteger(session.actions) || session.actions! <= 0) continue;
     seen.add(session.index!);
@@ -565,8 +582,21 @@ export function assessNumericClaims(
   /** The play-through inside the built player, when the campaign ran one — answers the frame rate. */
   player?: PlaythroughEvidence,
   /** The GDD's platform and the target the player was actually built for. */
-  opts?: { platform?: GddPlatform; builtTarget?: string },
+  opts?: {
+    platform?: GddPlatform;
+    builtTarget?: string;
+    /**
+     * Whether the DOCUMENT requires a session to end in a win or a lose state
+     * (`documentRequiresAnOutcome`). An endless game's sessions correctly end
+     * in no outcome, and counting them as unplayed levels blocked a correct
+     * game's delivery (Codex 2026-09-13 AI#2).
+     */
+    outcomeRequired?: boolean;
+  },
 ): ClaimAssessment[] {
+  // Default TRUE: a caller that does not read the document gets the stricter
+  // reading, which is the one every existing caller already had.
+  const outcomeRequired = opts?.outcomeRequired !== false;
   const perf = playthrough?.found ? playthrough.perf : undefined;
   const playerPerf = player?.found ? player.perf : undefined;
   const nameOfMedium = (m?: string): string => (m === "editor-playmode-batch" ? "editor play mode, batch" : m ?? "");
@@ -822,7 +852,8 @@ export function assessNumericClaims(
         // A session index must be a real catalog entry and the session must
         // have DONE something: {index:-1, actions:0} counted as a played
         // level (Codex 2026-09-11 D#21).
-        const finished = finishedSessionIndices(counted).length;
+        const playedIndices = finishedSessionIndices(counted, { outcomeRequired });
+        const finished = playedIndices.length;
         // A catalog of N is a claim; N sessions played to an outcome is the
         // measurement (Codex 2026-09-11 B#10). The play-through plays at most
         // PLAYED_SESSIONS_PER_RUN per run: past that the shortfall is named,
@@ -855,14 +886,15 @@ export function assessNumericClaims(
         // different levels built in one scene can share it (Codex 2026-09-13
         // AG#1, AH#2). So it does not fail the claim and does not remove a
         // session; it says the distinctness was not measured.
-        const shared = sessionsSharedContent(counted.sessions, finishedSessionIndices(counted));
+        const shared = sessionsSharedContent(counted.sessions, playedIndices);
         if (shared !== undefined && everyLevelPlayed) {
           return {
             claim,
             status: "unmeasured",
             measured: counted.sessionCount,
             note:
-              `the game's session catalog reports ${counted.sessionCount} and ${finished} session(s) reached an outcome, but the runner saw the ` +
+              `the game's session catalog reports ${counted.sessionCount} and ${finished} session(s) ` +
+              (outcomeRequired ? "reached an outcome" : "were played") + ", but the runner saw the " +
               `SAME content for session(s) ${shared.indices.join(", ")} — nothing here shows they are different levels`,
             blocking: false,
           };
@@ -872,7 +904,8 @@ export function assessNumericClaims(
           status: everyLevelPlayed ? "met" : "not_met",
           measured: counted.sessionCount,
           note:
-            `the game's session catalog reports ${counted.sessionCount}; ${finished} of ${played} played session(s) reached an outcome` +
+            `the game's session catalog reports ${counted.sessionCount}; ${finished} of ${played} played session(s) ` +
+            (outcomeRequired ? "reached an outcome" : "were identified and played (the document states no win or lose condition)") +
             (beyondOneRun ? ` (one run plays at most ${PLAYED_SESSIONS_PER_RUN}; ${claim.value - Math.min(finished, claim.value)} of ${claim.value} levels are NOT yet played to an outcome)` : ""),
           blocking: !catalogMatches || !beyondOneRun,
         };
