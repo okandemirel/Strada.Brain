@@ -3579,6 +3579,100 @@ describe("CampaignManager", () => {
     expect(swapped.missingRunner).toContain("is not the file the producer wrote");
   }, 20_000);
 
+  it("a receipt that measured ANOTHER file authenticates nothing (Codex 2026-09-13 AK#12)", async () => {
+    // The receipt named `Recordings/decoy.json` and hashed it honestly, while
+    // the gate read the canonical verdict beside it: the check authenticated
+    // bytes nobody consumed, so a good-looking decoy passed a bad run.
+    const git = (...args: string[]): string => execFileSync("git", ["-C", projectRoot, ...args], { encoding: "utf8" });
+    const artifact = join(projectRoot, "Builds", "StandaloneOSX", "Game.app");
+    mkdirSync(join(projectRoot, "Builds", "StandaloneOSX"), { recursive: true });
+    writeFileSync(artifact, "the bytes that were built");
+    git("init", "-q");
+    git("config", "user.email", "t@t");
+    git("config", "user.name", "t");
+    git("add", "-A");
+    git("commit", "-qm", "baseline");
+    const revision = git("rev-parse", "HEAD").trim();
+
+    const campaign = {
+      id: "c_decoy", chatId: "chat", channelType: "cli", userId: "u", projectRoot,
+      state: "executing", draftAttempts: 0, milestones: [], currentMilestone: 0,
+      createdAt: Date.now(), updatedAt: Date.now(),
+    } as unknown as Campaign;
+    const player = new CampaignManager({
+      storage,
+      runPlayer: async (root, artifactPlayed, _spec, dispatch) => {
+        writePlayerVerdict(true, {}, root);
+        // A decoy the producer chose, hashed truthfully.
+        const decoyRel = join("Recordings", "decoy.json");
+        writeFileSync(join(root, decoyRel), '{"ok":true,"decoy":true}');
+        return {
+          receipt: JSON.stringify({
+            schemaVersion: 1, runId: dispatch?.runId, kind: "playthrough", medium: "player", revision,
+            ...(dispatch?.target === undefined ? {} : { target: dispatch.target }),
+            artifactSha256: artifactDigest(artifactPlayed),
+            execution: { completed: true, exitCode: 0, timedOut: false },
+            sessionCount: 1,
+            sessions: [{
+              requestedIndex: 1, index: 1, identityVerified: true, identitySource: "start-acceptance",
+              actions: 12, outcome: "Won", reachedOutcome: true, seconds: 9,
+            }],
+            payload: {
+              verdictPath: decoyRel,
+              verdictSha256: createHash("sha256").update('{"ok":true,"decoy":true}').digest("hex"),
+            },
+          }),
+        };
+      },
+      planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async () => {},
+      projectRoot,
+    });
+    const build = { ran: true, ok: true, target: "StandaloneOSX", artifactPath: artifact, sizeBytes: 25, durationMs: 1, scenes: 1 };
+    const measured = await (player as unknown as {
+      measurePlayerRun(m: unknown, b: unknown, c: unknown): Promise<{ found: boolean; missingRunner?: string }>;
+    }).measurePlayerRun({ id: "m_decoy", title: "Delivery", prompt: "p", status: "running", attempts: 1 }, build, campaign);
+
+    expect(measured.found).toBe(false);
+    expect(measured.missingRunner).toContain("are not the bytes being judged");
+  }, 20_000);
+
+  it("the final sprint is asked for the batch the producer will accept (Codex 2026-09-13 AK#3)", async () => {
+    // The contract demanded `sessions="all"`, and the producer refuses that
+    // request when the document's rounds are long: the worker could satisfy
+    // neither the gate nor the tool, and a correct game could not be
+    // delivered. The demand names what this coordinator itself would ask.
+    tasks = new FakeTaskManager();
+    storage.close();
+    storage = new CampaignStorage(join(dir, `campaigns-demand-${messages.length}.db`));
+    manager = new CampaignManager({
+      storage,
+      planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async (chatId, text) => { messages.push({ chatId, text }); },
+      projectRoot,
+      retryAdoptionGraceMs: 10,
+      completedSettleDelayMs: 0,
+      milestoneTimeBoxMs: 60 * 60_000,
+    });
+    manager.attachEvents();
+
+    const gdd = "# GDD\n\nThe game ships 30 levels. Each round lasts 300 seconds. You win a level by clearing it.";
+    manager.startFromGdd(ctx, gdd, "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
+
+    const finalPrompt = tasks.submitted[2]!.prompt;
+    // Five 300-second rounds is what one run's budget allows.
+    expect(finalPrompt).toContain('unity_playthrough sessions="1-5"');
+    expect(finalPrompt).toContain('with sessions: "1-5"');
+    expect(finalPrompt).not.toContain('sessions="all"');
+  }, 20_000);
+
   it("an audit that RAN discharges the unreadable-queue flag (Codex 2026-09-13 AF#2)", async () => {
     // The flag is persisted now, so it must be cleared by the thing that
     // answers it: a fresh audit re-establishes the requirements.
@@ -4585,6 +4679,44 @@ describe("CampaignManager", () => {
       .playerRunSpec({ gddText: "# G\nThe game ships 3000 levels. Each round lasts 300 seconds.", milestones: [] } as never);
     expect(longRounds.deadlineSeconds).toBe(465);
     expect(longRounds.sessions).toBe("1-5");
+    // …AND NEVER MORE LEVELS THAN THE GAME HAS. Time and the producer's cap
+    // bounded the batch, the catalogue did not, so a three-level game with
+    // long rounds was asked for sessions 1-5 and its driver refused levels 4
+    // and 5 — a broken play-through for a correct game (Codex 2026-09-13
+    // AK#4).
+    const threeLongRounds = (manager as unknown as { playerRunSpec(c: unknown): { sessions?: string } })
+      .playerRunSpec({
+        gddText: "# G\nThe game ships 3 levels. Each round lasts 300 seconds.",
+        milestones: [{ id: "m", title: "t", prompt: "p", status: "green", attempts: 1, playerPlaythrough: { found: true, ok: true, sessionCount: 3 } }],
+      } as never).sessions;
+    expect(threeLongRounds).toBe("1-3");
+    // THE NEXT SESSIONS NOBODY HAS PLAYED YET. Asking for the first batch
+    // every time left session 13 of a 13-level game never played at all
+    // (Codex 2026-09-13 AJ#11) — and coverage measured on ANOTHER build says
+    // nothing about this one.
+    const artifact = join(projectRoot, "Builds", "cursor", "Game.app");
+    mkdirSync(join(projectRoot, "Builds", "cursor"), { recursive: true });
+    writeFileSync(artifact, "the bytes that were built");
+    const digest = artifactDigest(artifact)!;
+    const cursorFor = (verified?: { artifact: string; indices: number[] }): string | undefined =>
+      (manager as unknown as { playerRunSpec(c: unknown): { sessions?: string } }).playerRunSpec({
+        gddText: gdd,
+        ...(verified === undefined ? {} : { verifiedSessions: verified }),
+        milestones: [{
+          id: "m", title: "t", prompt: "p", status: "green", attempts: 1,
+          playerPlaythrough: { found: true, ok: true, sessionCount: 13 },
+          buildVerdict: { ran: true, ok: true, artifactPath: artifact },
+        }],
+      } as never).sessions;
+    expect(cursorFor(undefined)).toBe("1-12");
+    expect(cursorFor({ artifact: digest, indices: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] })).toBe("13");
+    expect(cursorFor({ artifact: digest, indices: [1, 3] })).toBe("2,4,5,6,7,8,9,10,11,12,13");
+    // Coverage of another artifact is not coverage of this one.
+    expect(cursorFor({ artifact: "f".repeat(64), indices: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] })).toBe("1-12");
+    // Everything played: the request re-measures the first batch rather than
+    // claiming the game is covered.
+    expect(cursorFor({ artifact: digest, indices: Array.from({ length: 13 }, (_unused, i) => i + 1) })).toBe("1-12");
+
     expect(asked([{ found: true, sessionCount: 13 }, { found: true, sessionCount: 0 }])).toBe("1-12");
     // THE LATEST measurement is the one that counts: the game grows, so an
     // early run that found three levels does not describe it any more.

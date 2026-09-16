@@ -1248,3 +1248,48 @@ describe("sessionsThatFitOneRun mirrors the producer's budget", () => {
     expect(sessionsThatFitOneRun(10_000, 30)).toBe(1);
   });
 });
+
+/**
+ * A GAME IS COVERED ACROSS RUNS (Codex 2026-09-13 AJ#11).
+ *
+ * One run plays a batch bounded by its own budget, so judging each run alone
+ * meant a catalogue bigger than one batch could never be completed — the last
+ * sessions were never played, and the shortfall was waived for ever.
+ */
+describe("the level count accumulates across runs", () => {
+  const run = (indices: readonly number[], sessionCount: number): PlaythroughEvidence => ({
+    found: true, ok: true, outcome: "Won", session: indices[0] ?? 1, actions: 10,
+    sessionCount,
+    sessions: indices.map((index) => ({
+      index, requestedIndex: index, identityVerified: true,
+      outcome: "Won", reachedOutcome: true, actions: 10, seconds: 20,
+    })),
+  });
+  const claims = extractNumericClaims("# G\nThe game ships 13 levels. You win a level by clearing it.").claims;
+  const judge = (indices: readonly number[], earlier: readonly number[]) =>
+    assessNumericClaims(claims, run(indices, 13), undefined, {
+      outcomeRequired: true, sessionsPerRun: 12, verifiedSessions: earlier,
+    }).find((a) => a.claim.kind === "level_count")!;
+
+  it("completes the catalogue when the last batch lands", () => {
+    const first = judge([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], []);
+    expect(first).toMatchObject({ status: "not_met", blocking: false });
+    expect(first.note).toContain("12 of 12 played session(s) reached an outcome");
+
+    // The second run plays session 13; together they are the whole game.
+    const second = judge([13], [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+    expect(second).toMatchObject({ status: "met", blocking: true });
+    expect(second.note).toContain("13 session(s) reached an outcome across runs (1 of 1 in this one)");
+  });
+
+  it("counts a session once, however many runs played it", () => {
+    const repeated = judge([1, 2, 3], [1, 2, 3]);
+    expect(repeated.note).toContain("3 of 3 played session(s)");
+    expect(repeated).toMatchObject({ status: "not_met" });
+  });
+
+  it("a run that played nothing keeps the coverage it already had", () => {
+    const nothing = judge([], [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
+    expect(nothing).toMatchObject({ status: "met" });
+  });
+});

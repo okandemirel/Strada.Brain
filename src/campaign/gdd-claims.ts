@@ -645,6 +645,13 @@ export function assessNumericClaims(
      * Defaults to the producer's cap, which is what every caller had before.
      */
     sessionsPerRun?: number;
+    /**
+     * Sessions already played to an outcome IN EARLIER RUNS on this same
+     * artifact. One run covers a batch, so a game bigger than one batch is
+     * only fully played across several — and judging each run alone meant the
+     * catalogue could never be completed (Codex 2026-09-13 AJ#11).
+     */
+    verifiedSessions?: readonly number[];
   },
 ): ClaimAssessment[] {
   // Default TRUE: a caller that does not read the document gets the stricter
@@ -940,7 +947,16 @@ export function assessNumericClaims(
         // have DONE something: {index:-1, actions:0} counted as a played
         // level (Codex 2026-09-11 D#21).
         const playedIndices = finishedSessionIndices(counted, { outcomeRequired });
-        const finished = playedIndices.length;
+        // THIS RUN, and every run before it on the same artifact: one run
+        // plays a batch, and the catalogue is covered across runs (AJ#11).
+        const acrossRuns = [...new Set([...(opts?.verifiedSessions ?? []), ...playedIndices])]
+          .filter((index) => Number.isInteger(index) && index >= 1)
+          .sort((a, b) => a - b);
+        const finished = acrossRuns.length;
+        const finishedThisRun = playedIndices.length;
+        const playedVerb = outcomeRequired
+          ? "reached an outcome"
+          : "were identified and played (the document states no win or lose condition)";
         // A catalog of N is a claim; N sessions played to an outcome is the
         // measurement (Codex 2026-09-11 B#10). One run plays at most
         // `sessionsPerRun` — the producer's cap, or fewer when the document's
@@ -975,8 +991,10 @@ export function assessNumericClaims(
         // correct game for the size of its own rounds (Codex 2026-09-13
         // AJ#1). The waiver is for a game bigger than what this run was able
         // to play, and only when the run finished everything it did play.
-        const beyondOneRun = mustPlay > sessionsPerRun && finished >= sessionsPerRun;
         const everyLevelPlayed = catalogMatches && finished >= mustPlay;
+        // …AND A GAME FULLY PLAYED NEEDS NO WAIVER: the shortfall the waiver
+        // is about does not exist (Codex 2026-09-13 AJ#11).
+        const beyondOneRun = !everyLevelPlayed && mustPlay > sessionsPerRun && finished >= sessionsPerRun;
         // THE SAME CONTENT, PLAYED TWICE, IS NOT TWO LEVELS — and the
         // runner's fingerprint is evidence of that, not proof: two genuinely
         // different levels built in one scene can share it (Codex 2026-09-13
@@ -1000,8 +1018,10 @@ export function assessNumericClaims(
           status: everyLevelPlayed ? "met" : "not_met",
           measured: counted.sessionCount,
           note:
-            `the game's session catalog reports ${counted.sessionCount}; ${finished} of ${played} played session(s) ` +
-            (outcomeRequired ? "reached an outcome" : "were identified and played (the document states no win or lose condition)") +
+            `the game's session catalog reports ${counted.sessionCount}; ` +
+            (finished === finishedThisRun
+              ? `${finished} of ${played} played session(s) ${playedVerb}`
+              : `${finished} session(s) ${playedVerb} across runs (${finishedThisRun} of ${played} in this one)`) +
             (beyondOneRun
               ? ` (one run plays at most ${sessionsPerRun}; ${claim.value - Math.min(finished, claim.value)} of ${claim.value} levels are NOT yet played to an outcome)`
               : ""),

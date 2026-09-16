@@ -15,6 +15,7 @@ import { receiptOfFailure } from "./producer-failure.js";
 import {
   issueRunId,
   receiveEvidence,
+  nextSessionBatch,
   sessionsRequested,
   sessionsThatFitOneRun,
   DEFAULT_BOOT_DEADLINE_SECONDS,
@@ -43,7 +44,7 @@ import { readPlaythroughVerdict, describePlaythrough, playthroughDirective, PLAY
 import { gddPlatform, buildSatisfiesTarget, artifactIsForeign, hostTarget, type BuildTarget } from "./gdd-platform.js";
 import { readPlaymodeRun } from "./playmode-run.js";
 import type { PlayerRunSpec } from "../core/bootstrap-stages/stage-runtime.js";
-import { assessNumericClaims, claimsRefusal, describeClaims, documentRequiresAnOutcome, extractActionBudget, extractNumericClaims, extractSessionAllowanceSeconds } from "./gdd-claims.js";
+import { assessNumericClaims, claimsRefusal, describeClaims, documentRequiresAnOutcome, extractActionBudget, extractNumericClaims, extractSessionAllowanceSeconds, finishedSessionIndices } from "./gdd-claims.js";
 import { entryScreenInDocument } from "./gdd-scope.js";
 import { REQUIRED_EVIDENCE_PREFIX } from "../supervisor/required-evidence.js";
 import { deliveryReviewPrompt, renderSecondOpinion } from "../agents/review/codex-second-opinion.js";
@@ -254,14 +255,21 @@ export function isOutageCausedSettle(
   // a revived sprint settled on "All providers failed or unavailable. A
   // recovery probe was already in flight…", the probe then succeeded
   // (coolingMs 0, no failure on record), and attempt 2 was charged for it.
-  if (/All providers failed or unavailable/i.test(output)) return true;
+  // …AS ITS OWN CLAUSE, never as quoted text. The phrase matched ANYWHERE, so
+  // a game validator that quoted it — `failed while checking the literal
+  // string "All providers failed or unavailable"` — bought the sprint a fresh
+  // attempt budget and an uncounted revival, as often as it liked (Codex
+  // 2026-09-13 AK#10). The chain says it at the start of a line or after a
+  // colon or dash ("Task execution failed: All providers…"); a quote before
+  // it means someone is TALKING ABOUT the message, not reporting it.
+  if (CHAIN_EXHAUSTED_RE.test(output)) return true;
   // The executor's inactivity stop ("stalled without making progress" /
   // "made no progress for Nms") is an outage when a chain member recorded a
   // failure recently — measured 2026-09-08 06:58: two 600 s provider-stalls
   // and two first-response aborts preceded the stop, a 40-token probe passed
   // seconds later, coolingMs read 0, attempt 1 → 2 for a queue never passed.
   if (
-    (/stalled without making progress|made no progress for \d+ms/i.test(output) || TURKISH_STALL_RE.test(output)) &&
+    (EXECUTOR_STALL_RE.test(output) || TURKISH_STALL_RE.test(output)) &&
     (msSinceProviderFailure <= RECENT_PROVIDER_FAILURE_MS || failuresDuringAttempt > 0)
   ) {
     return true;
@@ -269,8 +277,29 @@ export function isOutageCausedSettle(
   return /provider|cooldown|quota|rate.?limit/i.test(output) && coolingMs > 0;
 }
 
+/** Two project-relative paths, compared without separator or "./" noise. */
+function normalizeRel(path: string): string {
+  return path.replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+$/, "");
+}
+
 /** A provider failure this recent explains an inactivity stop. */
 export const RECENT_PROVIDER_FAILURE_MS = 30 * 60_000;
+
+/**
+ * A CLAUSE START: the beginning of a line, or just after a colon, dash or
+ * sentence end. Never after a quote — that is prose ABOUT the message (Codex
+ * 2026-09-13 AK#10).
+ */
+const CLAUSE_START = "(?:^|(?<=[:.\\-\u2014]\\s))\\s*";
+
+/** The provider chain's own verdict that every member is unusable. */
+export const CHAIN_EXHAUSTED_RE = new RegExp(`${CLAUSE_START}All providers failed or unavailable`, "im");
+
+/** The executor's own inactivity stop, as its own clause. */
+export const EXECUTOR_STALL_RE = new RegExp(
+  `${CLAUSE_START}(?:[A-Za-z ]{0,40}\\b)?(?:stalled without making progress|made no progress for \\d+ms)`,
+  "im",
+);
 
 /** The Turkish executor's own inactivity stop (background-executor.ts). */
 const TURKISH_STALL_RE = /Görev ilerleme kaydetmeden takıldı/i;
@@ -2040,6 +2069,10 @@ export class CampaignManager {
       // scans the live prompt for that word, and a deterministic append must
       // not arm a gate the planner never asked for.
       if (!milestone.prompt.includes("PLAY-THROUGH (final sprint):")) {
+        // WHAT THIS COORDINATOR WILL ASK FOR ITSELF. The worker is told to
+        // make the same call the delivery gate makes, so the evidence gate
+        // cannot demand an argument the producer would refuse (AK#3).
+        const playSessions = this.playerRunSpec(campaign).sessions ?? "all";
         // THE DOCUMENT'S OWN ENTRY FLOW, not one game's. This told every
         // sprint to make the game start playing by itself, and a document
         // that specifies a home or menu as its first screen was told to
@@ -2061,7 +2094,7 @@ export class CampaignManager {
           "records checkpoint frames and judges them. Delivery requires its verdict to be ok — fix what it " +
           "names (no driver registered, a session that never ends, a screen that never changes, a driver " +
           "that refuses to start). Register a Strada.Core.Play.ISessionCatalog as well (SessionCount = how many " +
-          "levels/rounds StartSession accepts) and run unity_playthrough with sessions: \"all\" so every level is " +
+          `levels/rounds StartSession accepts) and run unity_playthrough with sessions: "${playSessions}" so every level is ` +
           "played to an outcome and the GDD's level count is measured against what is shipped. " +
           entryScreen +
           " Then run unity_build_player for the GDD's platform (or the project's " +
@@ -2070,7 +2103,11 @@ export class CampaignManager {
           "real frame rate — the number the GDD's frame-rate target means." +
           // Stated, not inferred: the evidence gate reads this line instead of
           // re-reading the paragraph above as English (Codex 2026-09-12 P#4).
-          `\n\n${REQUIRED_EVIDENCE_PREFIX} unity_playthrough sessions="all"; unity_build_player; unity_run_player`;
+          // THE BATCH THIS COORDINATOR ASKS FOR, not the literal "all": a
+          // game whose rounds are long cannot be played in one run, and the
+          // producer refuses such a request — so demanding "all" made the
+          // gate unsatisfiable for a correct game (Codex 2026-09-13 AK#3).
+          `\n\n${REQUIRED_EVIDENCE_PREFIX} unity_playthrough sessions="${playSessions}"; unity_build_player; unity_run_player`;
       }
       this.attachStructureMeasurement(campaign, milestone);
     }
@@ -4254,16 +4291,19 @@ export class CampaignManager {
       }
       if (!campaign.milestones.some((m) => m.id.startsWith("mfinal"))) {
         const gaps = campaign.milestones.filter((m) => m.id.startsWith("mcov") && m.status !== "green").map((m) => m.title);
+        // The same batch the coordinator asks for: a demand for "all" is a
+        // demand the producer refuses when the rounds are long (AK#3).
+        const playSessions = this.playerRunSpec(campaign).sessions ?? "all";
         const finalProof: CampaignMilestone = {
           id: `mfinal-${campaign.milestones.length + 1}`,
           title: "Final delivery proofs",
           prompt:
             "FINAL DELIVERY PROOFS: the coverage remediation ended and the game as it is NOW must be proven, not the game an earlier sprint saw. " +
-            "Run unity_verify_change (compile), run the FULL PlayMode suite UNFILTERED, run unity_playthrough with sessions \"all\" and capture frames, " +
+            `Run unity_verify_change (compile), run the FULL PlayMode suite UNFILTERED, run unity_playthrough with sessions "${playSessions}" and capture frames, ` +
             "then run unity_build_player. Fix only what these measurements name. Do NOT audit; the tools' own output is the report." +
             (gaps.length > 0 ? ` Unclosed coverage gaps stay named in the report: ${gaps.slice(0, 4).join("; ")}.` : "") +
             `\n\n${REQUIRED_EVIDENCE_PREFIX} unity_verify_change; unity_test_run unfiltered="true"; ` +
-            `unity_playthrough sessions="all"; unity_build_player`,
+            `unity_playthrough sessions="${playSessions}"; unity_build_player`,
           status: "pending",
           attempts: 0,
           visualGateArmed: true,
@@ -4893,11 +4933,37 @@ export class CampaignManager {
       // ask is bounded by the same budget the producer advertises.
       const catalogue = this.lastObservedSessionCount(campaign);
       const fits = sessionsThatFitOneRun(spec.deadlineSeconds ?? DEFAULT_SESSION_DEADLINE_SECONDS, spec.bootDeadlineSeconds ?? DEFAULT_BOOT_DEADLINE_SECONDS);
-      const batch = Math.min(MAX_SESSIONS_PER_RUN, fits);
+      // …AND NEVER MORE LEVELS THAN THE GAME HAS. Time and the producer's cap
+      // bounded the batch, the catalogue did not, so a three-level game was
+      // asked for sessions 1-5: the driver refused levels 4 and 5 and the run
+      // came back as a broken play-through (Codex 2026-09-13 AK#4). An unknown
+      // catalogue is discovered by asking for what fits, not assumed to hold
+      // whatever time allows.
+      const fitsBatch = Math.min(MAX_SESSIONS_PER_RUN, fits);
+      const batch = Math.min(fitsBatch, catalogue ?? MAX_SESSIONS_PER_RUN);
+      // THE NEXT SESSIONS NOBODY HAS PLAYED YET. Asking for "1-12" every time
+      // meant session 13 of a 13-level game was never played at all, however
+      // often the delivery ran (Codex 2026-09-13 AJ#11). Coverage already
+      // measured ON THIS ARTIFACT is skipped, so successive runs walk the
+      // catalogue instead of replaying its first batch.
+      const done = this.verifiedSessionsFor(campaign);
+      // A CURSOR ONLY WHERE THERE IS COVERAGE TO SKIP. With nothing played
+      // yet, "all" is the better request: the PRODUCER resolves it against
+      // the catalogue it reads now, so a game that grew since the last run is
+      // played whole rather than up to a stale count.
+      const nextBatch = catalogue === undefined || done.length === 0
+        ? undefined
+        : nextSessionBatch(catalogue, done, batch);
       spec.sessions =
-        batch >= MAX_SESSIONS_PER_RUN && (catalogue === undefined || catalogue <= MAX_SESSIONS_PER_RUN)
-          ? "all"
-          : `1-${batch}`;
+        nextBatch !== undefined
+          ? nextBatch
+          // "ALL" WHEN TIME ALLOWS THE PRODUCER'S WHOLE CAP: the catalogue is
+          // then resolved by the producer, which reads it now rather than
+          // trusting a count from an earlier run. An explicit range is
+          // clipped to the catalogue we know about (AK#4).
+          : fitsBatch >= MAX_SESSIONS_PER_RUN && (catalogue === undefined || catalogue <= MAX_SESSIONS_PER_RUN)
+            ? "all"
+            : `1-${batch}`;
     }
     return spec;
   }
@@ -4921,6 +4987,49 @@ export class CampaignManager {
   }
 
   /**
+   * The sessions already played to an outcome ON THE ARTIFACT this delivery is
+   * about — nothing when the accumulator is about another build, because
+   * coverage of one build says nothing about the next.
+   */
+  private verifiedSessionsFor(campaign?: Campaign, artifactPath?: string): readonly number[] {
+    const stored = campaign?.verifiedSessions;
+    if (stored === undefined) return [];
+    const digest = artifactDigest(artifactPath) ?? this.lastArtifactDigest(campaign);
+    if (digest === undefined || digest !== stored.artifact) return [];
+    return stored.indices;
+  }
+
+  /** The digest of the artifact the last build produced, when it named one. */
+  private lastArtifactDigest(campaign?: Campaign): string | undefined {
+    for (const milestone of [...(campaign?.milestones ?? [])].reverse()) {
+      const path = milestone.buildVerdict?.artifactPath;
+      if (path !== undefined) return artifactDigest(path);
+    }
+    return undefined;
+  }
+
+  /**
+   * Remember the sessions THIS run played to an outcome, against the artifact
+   * it played. A different artifact starts the count again.
+   */
+  private rememberVerifiedSessions(
+    campaign: Campaign | undefined,
+    artifactPath: string | undefined,
+    evidence: PlaythroughEvidence,
+  ): void {
+    if (campaign === undefined) return;
+    const digest = artifactDigest(artifactPath);
+    if (digest === undefined) return;
+    const finished = finishedSessionIndices(evidence, {
+      outcomeRequired: documentRequiresAnOutcome(this.gddTextOf(campaign)),
+    });
+    if (finished.length === 0) return;
+    const previous = campaign.verifiedSessions?.artifact === digest ? campaign.verifiedSessions.indices : [];
+    const merged = [...new Set([...previous, ...finished])].sort((a, b) => a - b);
+    campaign.verifiedSessions = { artifact: digest, indices: merged };
+  }
+
+  /**
    * How many sessions one run asks for, from the very spec it is dispatched
    * with — `"all"` is the producer's whole cap, a batch is its own size.
    */
@@ -4934,13 +5043,24 @@ export class CampaignManager {
    * receiver admitted? Nothing when the producer stated no digest, or when
    * there was no admitted receipt to check against.
    */
-  private verdictDisagreesWithReceipt(decision: EvidenceDecision | undefined): string | undefined {
+  private verdictDisagreesWithReceipt(
+    decision: EvidenceDecision | undefined,
+    /** The file the DELIVERY reads — the only one whose bytes matter. */
+    readsFrom: string = PLAYER_PLAYTHROUGH_VERDICT_REL,
+  ): string | undefined {
     if (decision === undefined || !decision.admitted) return undefined;
     const payload = decision.record.payload;
     const rel = typeof payload?.["verdictPath"] === "string" ? String(payload["verdictPath"]) : undefined;
     const stated = typeof payload?.["verdictSha256"] === "string" ? String(payload["verdictSha256"]) : undefined;
     if (rel === undefined || stated === undefined) return undefined;
-    const at = join(this.projectRoot, rel);
+    // THE FILE THIS DELIVERY READS, not the one the producer chose to hash. A
+    // receipt naming `Recordings/decoy.json` hashed that file honestly while
+    // the gate read the canonical verdict beside it — the check authenticated
+    // bytes nobody consumed (Codex 2026-09-13 AK#12).
+    if (normalizeRel(rel) !== normalizeRel(readsFrom)) {
+      return `the producer's receipt measured ${rel}, and this delivery reads ${readsFrom} — the bytes it authenticated are not the bytes being judged`;
+    }
+    const at = join(this.projectRoot, readsFrom);
     let bytes: string;
     try {
       bytes = readFileSync(at, "utf8");
@@ -4950,7 +5070,7 @@ export class CampaignManager {
     const now = createHash("sha256").update(bytes).digest("hex");
     return now === stated
       ? undefined
-      : `the play-through verdict at ${rel} is not the file the producer wrote (its receipt names ${stated.slice(0, 12)}, the file reads ${now.slice(0, 12)})`;
+      : `the play-through verdict at ${readsFrom} is not the file the producer wrote (its receipt names ${stated.slice(0, 12)}, the file reads ${now.slice(0, 12)})`;
   }
 
   private async measurePlayerRun(
@@ -5045,9 +5165,13 @@ export class CampaignManager {
     if (substituted !== undefined) {
       return { found: false, missingRunner: substituted };
     }
+    // WHAT THIS RUN ADDED TO THE COVERAGE, against the artifact it played: the
+    // next run then asks for the sessions nobody has played yet (AJ#11).
+    if (verdict.found) this.rememberVerifiedSessions(campaign, build.artifactPath, verdict);
     for (const other of others) {
       const at = Date.now();
       let why: string | undefined;
+      let theirDecision: EvidenceDecision | undefined;
       const staleHere = clearVerdict();
       if (staleHere !== undefined) {
         perTarget.push({ target: other.target, ok: false, detail: `not run: ${staleHere}` });
@@ -5071,11 +5195,22 @@ export class CampaignManager {
             });
             return { value: undefined, ...(played?.receipt === undefined ? {} : { receipt: played.receipt }) };
           },
+          // …and THIS target's receipt is held against the verdict THIS
+          // target's read will judge: the secondary loop had no binding at
+          // all, so a receipt naming another file left it green (Codex
+          // 2026-09-13 AK#13).
+          (decision) => { theirDecision = decision; },
         );
       } catch (err) {
         why = err instanceof Error ? err.message : String(err);
       }
       const theirs = readPlaythroughVerdict(this.projectRoot, at - 1000, PLAYER_PLAYTHROUGH_VERDICT_REL, attemptRunId(milestone));
+      // THIS TARGET'S RECEIPT AGAINST THIS TARGET'S VERDICT (AK#13).
+      const theirSubstitution = this.verdictDisagreesWithReceipt(theirDecision);
+      if (theirSubstitution !== undefined) {
+        perTarget.push({ target: other.target, ok: false, detail: `not measured: ${theirSubstitution}` });
+        continue;
+      }
       // The producer's own refusal — "…is not a player this machine can run
       // (an .apk, WebGL folder or missing executable) — nothing was played" —
       // did not match the host-incapability wording, so an Android secondary
@@ -5171,6 +5306,10 @@ export class CampaignManager {
       // sessions fit one run's budget, and holding such a run against the
       // producer's cap refused a correct game (Codex 2026-09-13 AJ#1).
       sessionsPerRun: this.sessionsOneRunAsksFor(campaign),
+      // …AND THE SESSIONS EARLIER RUNS ON THIS ARTIFACT ALREADY PLAYED. One
+      // run covers a batch, so the catalogue is only completed across runs
+      // (Codex 2026-09-13 AJ#11).
+      verifiedSessions: this.verifiedSessionsFor(campaign, build?.artifactPath),
       // THE SAME CONTRACT THE PRODUCER IS GIVEN. The run is told not to demand
       // an outcome from an endless game, and then the level count demanded one
       // anyway: three correctly played sessions of a sandbox read as "0 of 3

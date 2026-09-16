@@ -70,6 +70,35 @@ interface CampaignRow {
   plan_coverage?: string | null;
   independent_review?: string | null;
   coverage_queue_unreadable?: number | null;
+  verified_sessions?: string | null;
+}
+
+/**
+ * Session coverage accumulated across runs, or nothing.
+ *
+ * Keyed by the ARTIFACT it was measured on: coverage of one build says
+ * nothing about the next, and a stale accumulator would claim levels a new
+ * build never played (Codex 2026-09-13 AJ#11). A row it cannot read is no
+ * coverage at all — the next run then asks for the first batch again, which
+ * measures more rather than less.
+ */
+function parseVerifiedSessions(raw: string | null | undefined): { artifact: string; indices: number[] } | undefined {
+  if (raw === null || raw === undefined || raw.trim() === "") return undefined;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed === null || typeof parsed !== "object") return undefined;
+    const doc = parsed as { artifact?: unknown; indices?: unknown };
+    if (typeof doc.artifact !== "string" || doc.artifact === "") return undefined;
+    if (!Array.isArray(doc.indices)) return undefined;
+    const indices: number[] = [];
+    for (const entry of doc.indices) {
+      if (typeof entry !== "number" || !Number.isInteger(entry) || entry < 1) return undefined;
+      if (!indices.includes(entry)) indices.push(entry);
+    }
+    return indices.length === 0 ? undefined : { artifact: doc.artifact, indices: indices.sort((a, b) => a - b) };
+  } catch {
+    return undefined;
+  }
 }
 
 function rowToCampaign(row: CampaignRow): Campaign {
@@ -127,6 +156,13 @@ function rowToCampaign(row: CampaignRow): Campaign {
     // dropped: nothing wrote it, so a lost report meant the boot resend had
     // no review to resend and would pay for another one (Codex 2026-09-12 X).
     ...(row.independent_review ? { independentReview: parseIndependentReview(row.independent_review) } : {}),
+    // Session coverage ACCUMULATED across runs, keyed by the artifact it was
+    // measured on: one run plays a batch, and a game bigger than one batch is
+    // only fully played across several (Codex 2026-09-13 AJ#11).
+    ...(() => {
+      const verified = parseVerifiedSessions(row.verified_sessions);
+      return verified === undefined ? {} : { verifiedSessions: verified };
+    })(),
   };
 }
 
@@ -268,6 +304,14 @@ export class CampaignStorage {
     } catch {
       // Column already exists — migration is idempotent.
     }
+    try {
+      // 2026-09-13: one play run verifies a BATCH of sessions, so a game
+      // bigger than one batch is only fully played across several runs — and
+      // nothing remembered which ones had been played (Codex AJ#11).
+      this.db.exec("ALTER TABLE campaigns ADD COLUMN verified_sessions TEXT");
+    } catch {
+      // Column already exists — migration is idempotent.
+    }
   }
 
   save(campaign: Campaign): void {
@@ -278,11 +322,11 @@ export class CampaignStorage {
           state, idea_text, gdd_path, gdd_text, draft_task_id, draft_attempts,
           milestones_json, current_milestone, created_at, updated_at, last_error,
           auto_revive_at, coverage_audit_note, draft_deferred_since, delivery_reported, plan_coverage,
-          independent_review, coverage_queue_unreadable,
+          independent_review, coverage_queue_unreadable, verified_sessions,
           unmeasurable_revives, implementation_revives, pending_coverage_gaps,
           delivery_revives, delivery_proofs_signature, delivery_rounds_total,
           stop_requested_at, stop_generation
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           state = excluded.state,
           gdd_path = excluded.gdd_path,
@@ -300,6 +344,7 @@ export class CampaignStorage {
           plan_coverage = excluded.plan_coverage,
           independent_review = excluded.independent_review,
           coverage_queue_unreadable = excluded.coverage_queue_unreadable,
+          verified_sessions = excluded.verified_sessions,
           unmeasurable_revives = excluded.unmeasurable_revives,
           implementation_revives = excluded.implementation_revives,
           pending_coverage_gaps = excluded.pending_coverage_gaps,
@@ -334,6 +379,9 @@ export class CampaignStorage {
         campaign.planCoverage ? JSON.stringify(campaign.planCoverage) : null,
         campaign.independentReview ? JSON.stringify(campaign.independentReview) : null,
         campaign.coverageQueueUnreadable === true ? 1 : null,
+        campaign.verifiedSessions && campaign.verifiedSessions.indices.length > 0
+          ? JSON.stringify(campaign.verifiedSessions)
+          : null,
         campaign.unmeasurableRevives ?? null,
         campaign.implementationRevives ?? null,
         campaign.pendingCoverageGaps && campaign.pendingCoverageGaps.length > 0

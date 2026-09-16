@@ -426,6 +426,18 @@ export interface Campaign {
    * a readable queue is written.
    */
   coverageQueueUnreadable?: boolean;
+  /**
+   * Which sessions have been PLAYED TO AN OUTCOME, accumulated across runs,
+   * and the artifact they were measured on.
+   *
+   * One play run covers a batch bounded by its own wall-clock budget, so a
+   * game bigger than that batch is only fully played across several runs —
+   * and nothing remembered which ones had been played, so session 13 of a
+   * 13-level game was never played at all (Codex 2026-09-13 AJ#11). Coverage
+   * of one build says nothing about the next, which is why the artifact it
+   * was measured on is part of it.
+   */
+  verifiedSessions?: { artifact: string; indices: number[] };
 }
 
 // =============================================================================

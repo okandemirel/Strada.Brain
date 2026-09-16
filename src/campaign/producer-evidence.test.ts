@@ -15,6 +15,7 @@ import {
   recordSha256,
   MAX_EVIDENCE_BYTES,
   MAX_SESSIONS_PER_RUN,
+  nextSessionBatch,
   sessionsRequested,
   type EvidenceTicket,
   type ExecutionObservation,
@@ -868,5 +869,41 @@ describe("the whole session list is validated", () => {
       transport,
       opts,
     ).admitted).toBe(true);
+  });
+});
+
+/**
+ * THE NEXT SESSIONS NOBODY HAS PLAYED YET (Codex 2026-09-13 AJ#11).
+ *
+ * One run plays a batch bounded by its own budget, so asking for the first
+ * batch every time left session 13 of a 13-level game never played at all,
+ * however often the delivery ran.
+ */
+describe("nextSessionBatch", () => {
+  it("walks the catalogue instead of replaying its first batch", () => {
+    expect(nextSessionBatch(13, [], 12)).toBe("1-12");
+    expect(nextSessionBatch(13, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], 12)).toBe("13");
+    expect(nextSessionBatch(30, [1, 2, 3, 4, 5], 5)).toBe("6-10");
+  });
+
+  it("asks for what is left as a list when the remainder is scattered", () => {
+    expect(nextSessionBatch(10, [1, 3, 5], 4)).toBe("2,4,6,7");
+    expect(nextSessionBatch(4, [2], 3)).toBe("1,3,4");
+    // A single session is a single index, not a range.
+    expect(nextSessionBatch(3, [1, 2], 5)).toBe("3");
+  });
+
+  it("says nothing when the catalogue is already covered, or is not a catalogue", () => {
+    // Nothing left to ask for: the caller then asks for the first batch
+    // again, which RE-MEASURES rather than claims.
+    expect(nextSessionBatch(3, [1, 2, 3], 12)).toBeUndefined();
+    expect(nextSessionBatch(0, [], 12)).toBeUndefined();
+    expect(nextSessionBatch(-1, [], 12)).toBeUndefined();
+    expect(nextSessionBatch(2.5, [], 12)).toBeUndefined();
+  });
+
+  it("never asks for more than one run can play", () => {
+    expect(nextSessionBatch(100, [], 50)).toBe(`1-${MAX_SESSIONS_PER_RUN}`);
+    expect(nextSessionBatch(100, [], 0)).toBe("1");
   });
 });

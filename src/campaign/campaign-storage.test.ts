@@ -67,6 +67,39 @@ describe("CampaignStorage", () => {
     expect(storage.get(fresh.id)!.implementationRevives).toBeUndefined();
   });
 
+  it("round-trips the session coverage accumulated across runs (Codex 2026-09-13 AJ#11)", () => {
+    // One run plays a batch, so a game bigger than one batch is only fully
+    // played across several — and nothing remembered which ones had been
+    // played, so the last sessions were never played at all.
+    const campaign = { ...makeCampaign(), verifiedSessions: { artifact: "a".repeat(64), indices: [1, 2, 13] } };
+    storage.save(campaign);
+    expect(storage.get(campaign.id)!.verifiedSessions).toEqual({ artifact: "a".repeat(64), indices: [1, 2, 13] });
+
+    // A campaign that has played nothing carries nothing.
+    storage.save(makeCampaign({ id: "c_none" }));
+    expect(storage.get("c_none")!.verifiedSessions).toBeUndefined();
+
+    // A ROW IT CANNOT READ IS NO COVERAGE: the next run then asks for the
+    // first batch again, which measures more rather than claims more.
+    const db = (storage as unknown as { db: { prepare: (s: string) => { run: (...a: unknown[]) => void } } }).db;
+    for (const bad of [
+      "{not json",
+      JSON.stringify({ indices: [1] }),
+      JSON.stringify({ artifact: "a", indices: "1,2" }),
+      JSON.stringify({ artifact: "a", indices: [0] }),
+      JSON.stringify({ artifact: "a", indices: [1.5] }),
+      JSON.stringify({ artifact: "a", indices: [] }),
+    ]) {
+      db.prepare("UPDATE campaigns SET verified_sessions = ? WHERE id = ?").run(bad, campaign.id);
+      expect(storage.get(campaign.id)!.verifiedSessions).toBeUndefined();
+    }
+
+    // …and duplicates are one session, in order.
+    db.prepare("UPDATE campaigns SET verified_sessions = ? WHERE id = ?")
+      .run(JSON.stringify({ artifact: "b".repeat(64), indices: [3, 1, 3] }), campaign.id);
+    expect(storage.get(campaign.id)!.verifiedSessions).toEqual({ artifact: "b".repeat(64), indices: [1, 3] });
+  });
+
   it("updates state on re-save (upsert)", () => {
     const campaign = makeCampaign();
     storage.save(campaign);

@@ -77,3 +77,29 @@ describe("was it the provider layer that stopped the run", () => {
     expect(isOutageCausedSettle("compile failed with 43 errors", 0, Number.POSITIVE_INFINITY, 5)).toBe(false);
   });
 });
+
+/**
+ * QUOTED PROSE IS NOT A SETTLEMENT (Codex 2026-09-13 AK#10).
+ *
+ * The phrase matched anywhere in the output, so a game validator that quoted
+ * it bought the sprint a fresh attempt budget and an uncounted revival — as
+ * often as it liked, while the providers were healthy the whole time.
+ */
+describe("who said it, and where", () => {
+  it("refuses a settlement that merely TALKS ABOUT the provider message", () => {
+    const quoted =
+      'Game validator failed while checking the literal string "All providers failed or unavailable"; providers are healthy.';
+    expect(isOutageCausedSettle(quoted, 0)).toBe(false);
+    // …and the same for the executor's stall wording.
+    expect(isOutageCausedSettle('the test asserts the message "stalled without making progress" is shown', 0, 1_000)).toBe(false);
+  });
+
+  it("still trusts the chain and the executor when they report it themselves", () => {
+    expect(isOutageCausedSettle("Task execution failed: All providers failed or unavailable. Retry shortly.", 0)).toBe(true);
+    expect(isOutageCausedSettle("All providers failed or unavailable. All providers are in cooldown.", 0)).toBe(true);
+    expect(isOutageCausedSettle("Attempt 2 — the run stalled without making progress, so it was stopped.", 0, 1_000)).toBe(true);
+    expect(isOutageCausedSettle("The task made no progress for 600000ms.", 0, 1_000)).toBe(true);
+    // A second line is still a line of its own.
+    expect(isOutageCausedSettle("sprint failed\nAll providers failed or unavailable", 0)).toBe(true);
+  });
+});

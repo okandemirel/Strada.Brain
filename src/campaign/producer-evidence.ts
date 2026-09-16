@@ -218,6 +218,34 @@ export function sessionsThatFitOneRun(
 }
 
 /**
+ * THE NEXT SESSIONS NOBODY HAS PLAYED YET, as a spec the runner understands.
+ *
+ * One run plays a batch bounded by its own budget, so asking for the first
+ * batch every time left the last sessions of a large game never played at all
+ * (Codex 2026-09-13 AJ#11). Nothing when the whole catalogue is already
+ * covered — the caller then asks for the first batch again, which re-measures
+ * rather than claims.
+ */
+export function nextSessionBatch(
+  catalogue: number,
+  alreadyPlayed: readonly number[],
+  batchSize: number,
+): string | undefined {
+  if (!Number.isInteger(catalogue) || catalogue < 1) return undefined;
+  const size = Math.max(1, Math.min(MAX_SESSIONS_PER_RUN, Math.floor(batchSize)));
+  const done = new Set(alreadyPlayed);
+  const next: number[] = [];
+  for (let index = 1; index <= catalogue && next.length < size; index++) {
+    if (!done.has(index)) next.push(index);
+  }
+  if (next.length === 0) return undefined;
+  // A CONTIGUOUS RUN is written as a range; a scattered remainder as a list,
+  // which is what the runner's own parser takes.
+  const contiguous = next.every((value, i) => i === 0 || value === next[i - 1]! + 1);
+  return contiguous && next.length > 1 ? `${next[0]}-${next[next.length - 1]}` : next.join(",");
+}
+
+/**
  * WHICH SESSIONS A PLAY-THROUGH WAS ASKED FOR, read from the spec the
  * producer receives ("all", "1-3", "2,5", a single index, or nothing).
  *
