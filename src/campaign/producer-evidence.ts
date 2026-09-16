@@ -65,6 +65,16 @@ export interface EvidenceBinding {
    * (Codex 2026-09-12 AC). Default true: a batch Unity run owns its process.
    */
   readonly processOwned?: boolean;
+  /**
+   * WHICH of the accepted media own a process, when they differ.
+   *
+   * A compile is answered by a live editor OR a headless compiler: the first
+   * never exits, the second always does. One boolean for the whole ticket had
+   * to choose, and choosing "no" admitted a headless compiler receipt that
+   * measured no exit at all (Codex 2026-09-13 AJ#10). Takes precedence over
+   * `processOwned` for the medium the record names.
+   */
+  readonly ownsProcess?: readonly EvidenceMedium[];
   /** sha256 of the artifact a player run must have played. */
   readonly artifactSha256?: string;
 }
@@ -179,6 +189,33 @@ export const MAX_SESSION_OBSERVATIONS = 24;
  * can play is a ticket nothing could settle.
  */
 export const MAX_SESSIONS_PER_RUN = 12;
+
+/**
+ * ONE RUN'S WALL-CLOCK BUDGET, and what fits in it.
+ *
+ * MIRRORS Strada.MCP's `PLAY_RUN_BUDGET_MS` and `sessionsThatFit`
+ * (`src/tools/unity/run-player.ts`), which REFUSES a request needing more —
+ * the coordinator asked for every session of a game whose document gives each
+ * round five minutes, and the producer answered "nothing was played" (Codex
+ * 2026-09-13 AJ#1). The two numbers must agree; if they ever drift, the
+ * producer's refusal names the batch that fits, so the failure is explicit
+ * rather than a silent abandonment.
+ */
+export const PLAY_RUN_BUDGET_MS = 45 * 60 * 1000;
+/** The producer's own defaults, for a spec that states neither. */
+export const DEFAULT_SESSION_DEADLINE_SECONDS = 45;
+export const DEFAULT_BOOT_DEADLINE_SECONDS = 30;
+
+/** How many sessions of this length fit ONE run's budget (at least one). */
+export function sessionsThatFitOneRun(
+  deadlineSeconds: number,
+  bootSeconds: number,
+  budgetMs: number = PLAY_RUN_BUDGET_MS,
+): number {
+  const perSession = (deadlineSeconds + 5) * 1000;
+  const overhead = (bootSeconds + 15) * 1000 + 30_000;
+  return Math.max(1, Math.floor((budgetMs - overhead) / perSession));
+}
 
 /**
  * WHICH SESSIONS A PLAY-THROUGH WAS ASKED FOR, read from the spec the
@@ -469,7 +506,13 @@ function admitEvidence(
   // or a shipped player owns a process and must report its exit; a compile or
   // a suite driven through a LIVE editor bridge never exits, and demanding a
   // code refused those runs outright (Codex 2026-09-12 AC).
-  if (b.processOwned !== false) {
+  // WHICH SIDE THIS PRODUCER IS. A ticket that accepts several media says
+  // which of them own a process; one that accepts a single medium says so with
+  // `processOwned` (Codex 2026-09-13 AJ#10).
+  const producerOwnsProcess = b.ownsProcess !== undefined
+    ? b.ownsProcess.includes(record.medium)
+    : b.processOwned !== false;
+  if (producerOwnsProcess) {
     if (record.execution.exitCode === null) {
       return {
         admitted: false,
@@ -489,6 +532,29 @@ function admitEvidence(
   // EVERY SESSION THE RECORD CARRIES. Validating only the requested ones let
   // an unverified extra session ride along inside an admitted record, where
   // the rest of the system reads it as evidence (Codex 2026-09-12 AC).
+  // EVERY SESSION ONCE, AND INSIDE THE GAME. Uniqueness and bounds were
+  // checked only for the sessions the ticket ASKED for, so a record could
+  // carry two observations of session 2 or a session 99 of a two-session game
+  // and still be admitted — evidence the rest of the system then reads
+  // (Codex 2026-09-13 AJ#9).
+  const seenIndices = new Set<number>();
+  for (const s of record.sessions ?? []) {
+    if (seenIndices.has(s.index)) {
+      return {
+        admitted: false,
+        refusal: "SESSION_MISMATCH",
+        detail: `the record carries session ${s.index} more than once`,
+      };
+    }
+    seenIndices.add(s.index);
+    if (isSafeCount(record.sessionCount) && record.sessionCount > 0 && (s.index < 1 || s.index > record.sessionCount)) {
+      return {
+        admitted: false,
+        refusal: "SESSION_MISMATCH",
+        detail: `the record carries session ${s.index} of a game it says holds ${record.sessionCount}`,
+      };
+    }
+  }
   for (const s of record.sessions ?? []) {
     if (!s.identityVerified) {
       return {
@@ -525,6 +591,18 @@ function admitEvidence(
         admitted: false,
         refusal: "SESSION_UNVERIFIED",
         detail: `session ${s.index} says its identity is verified and unverified at once`,
+      };
+    }
+    // AN OBSERVATION SOURCE WITHOUT ITS OBSERVATION. "active-session" means
+    // the game's own service named this session; a record claiming that and
+    // carrying no observed index claims a measurement it does not show (Codex
+    // 2026-09-13 AJ#9). `start-acceptance` is the deliberate other case: the
+    // game registers no such service, so there is nothing to carry.
+    if (s.identitySource === "active-session" && s.observedIndex === undefined) {
+      return {
+        admitted: false,
+        refusal: "SESSION_UNVERIFIED",
+        detail: `session ${s.index} says the game named it and carries no observation`,
       };
     }
   }

@@ -740,6 +740,17 @@ Your previous reply was not valid JSON. Reply with the JSON object ALONE — no 
 }
 
 /**
+ * Does this line name any CONTENT — a path, a file, a type — as against a
+ * count of files and a hash? A line that names none cannot be evidence that a
+ * particular requirement was delivered (Codex 2026-09-13 AJ).
+ */
+export function namesContent(line: string): boolean {
+  // A path segment ("Assets/Scripts/Board.cs"), a file with an extension
+  // ("Board.cs"), or a dotted type name ("Game.Modules.Board").
+  return /[A-Za-z0-9_\-]+\/[A-Za-z0-9_\-.]+|\b[A-Za-z0-9_\-]+\.(?:cs|unity|asset|prefab|png|json|md|shader|mat|asmdef|cginc|hlsl|wav|mp3|ogg|ts)\b|\b[A-Z][A-Za-z0-9_]*(?:\.[A-Z][A-Za-z0-9_]*)+\b/.test(line);
+}
+
+/**
  * WHAT A MILESTONE MEASURED, for an auditing model to read: its status, the
  * suite it ran, what it committed, what the structural and numeric checks said
  * about the shipped tree — never its title or its plan (Codex 2026-09-12 R#15).
@@ -751,7 +762,7 @@ function milestoneFacts(m: {
   const facts: string[] = [];
   if (m.status) facts.push(`status: ${m.status}`);
   if (m.testVerdict) facts.push(`suite: ${m.testVerdict.slice(0, 160)}${m.testVerdictUnfiltered === true ? " (unfiltered)" : " (FILTERED or unknown scope)"}`);
-  if (m.commitNote) facts.push(`landed: ${m.commitNote.slice(0, 200)}`);
+  if (m.commitNote) facts.push(`landed: ${m.commitNote.slice(0, 400)}`);
   for (const line of (m.structureFindings ?? []).slice(0, 3)) facts.push(`shipped tree: ${line.slice(0, 160)}`);
   for (const line of (m.gddClaims ?? []).slice(0, 3)) facts.push(`document numbers: ${line.slice(0, 160)}`);
   return facts;
@@ -768,6 +779,13 @@ function quotableFacts(m: {
   return milestoneFacts(m).filter((fact) => {
     if (fact.startsWith("status: ")) return false;
     if (fact.startsWith("suite: ")) return fact.includes("(unfiltered)");
+    // A COMMIT NOTE THAT NAMES NO CONTENT CLOSES NOTHING. "Committed 1
+    // file(s) as abcdef" is a measured line about a commit and says nothing
+    // about WHICH requirement it implements, so quoting it closed any of them
+    // (Codex 2026-09-13 AJ, the requirement trace). The line is still shown
+    // to the auditing model — it is disclosure — but it cannot be the
+    // evidence that closes a requirement.
+    if (fact.startsWith("landed: ")) return namesContent(fact);
     return true;
   });
 }

@@ -6,6 +6,7 @@
 import { describe, expect, it } from "vitest";
 import { gddPlatform } from "./gdd-platform.js";
 import { assessNumericClaims, claimsRefusal, describeClaims, documentRequiresAnOutcome, extractActionBudget, extractNumericClaims, extractSessionAllowanceSeconds, finishedSessionIndices, MAX_SESSION_ALLOWANCE_SECONDS } from "./gdd-claims.js";
+import { PLAY_RUN_BUDGET_MS, sessionsThatFitOneRun } from "./producer-evidence.js";
 import type { PlaythroughEvidence } from "./types.js";
 
 const GDD = `# Sky Pigs
@@ -1183,5 +1184,67 @@ describe("the boot claim and what nobody measures", () => {
 
   it("a plain clause is measured and blocking, as before", () => {
     expect(judge("# G\nThe game boots in under 6 seconds.", 1)).toMatchObject({ status: "met", blocking: true });
+  });
+});
+
+/**
+ * WHAT ONE RUN COULD REACH IS NOT A CONSTANT (Codex 2026-09-13 AJ#1).
+ *
+ * The batch a run may play is bounded by its own wall-clock budget, so a game
+ * whose document gives each round five minutes is played five sessions at a
+ * time, not twelve. Held against the producer's cap, such a run read NOT MET
+ * and BLOCKING — refusing a correct game for the length of its own rounds.
+ */
+describe("the level-count waiver follows the batch the run could play", () => {
+  const catalogue = (played: number, finished: number, sessionCount: number): PlaythroughEvidence => ({
+    found: true, ok: true, outcome: "Won", session: 1, actions: 10,
+    sessionCount,
+    sessions: Array.from({ length: played }, (_unused, i) => ({
+      index: i + 1, requestedIndex: i + 1, identityVerified: true,
+      outcome: i < finished ? "Won" : "None", reachedOutcome: i < finished, actions: 10, seconds: 300,
+    })),
+  });
+  const claims = extractNumericClaims("# G\nThe game ships 3000 levels. Each round lasts 300 seconds.").claims;
+  const judge = (played: number, finished: number, sessionsPerRun?: number) =>
+    assessNumericClaims(claims, catalogue(played, finished, 3000), undefined, {
+      outcomeRequired: true,
+      ...(sessionsPerRun === undefined ? {} : { sessionsPerRun }),
+    }).find((a) => a.claim.kind === "level_count")!;
+
+  it("waives the shortfall for a run that finished the batch it could play", () => {
+    const five = judge(5, 5, 5);
+    expect(five).toMatchObject({ status: "not_met", blocking: false });
+    expect(five.note).toContain("one run plays at most 5");
+    // …and a run that did NOT finish its own batch is still blocking.
+    expect(judge(5, 4, 5)).toMatchObject({ status: "not_met", blocking: true });
+  });
+
+  it("keeps the producer's cap for a caller that says nothing", () => {
+    // Twelve is what every caller had before; a run of one session is not a
+    // run that played its share (Codex 2026-09-11 C#21).
+    expect(judge(12, 12)).toMatchObject({ status: "not_met", blocking: false });
+    expect(judge(1, 1)).toMatchObject({ status: "not_met", blocking: true });
+    // …and a caller cannot claim a batch LARGER than the producer's cap.
+    expect(judge(12, 12, 50)).toMatchObject({ blocking: false });
+    expect(judge(13, 13, 50)).toMatchObject({ blocking: false });
+  });
+});
+
+/**
+ * The Brain computes the batch a run can ask for from the SAME budget
+ * Strada.MCP's `PLAY_RUN_BUDGET_MS` advertises. The two cannot be imported
+ * into one another, so the arithmetic is pinned here: if it drifts, the
+ * producer answers "ask for sessions 1-K" instead of being abandoned.
+ */
+describe("sessionsThatFitOneRun mirrors the producer's budget", () => {
+  it("is the producer's own arithmetic, pinned", () => {
+    expect(PLAY_RUN_BUDGET_MS).toBe(45 * 60 * 1000);
+    expect(sessionsThatFitOneRun(45, 30)).toBe(52);
+    expect(sessionsThatFitOneRun(150, 30)).toBe(16);
+    expect(sessionsThatFitOneRun(360, 30)).toBe(7);
+    expect(sessionsThatFitOneRun(465, 30)).toBe(5);
+    // A session whose own allowance exceeds the whole budget still gets one
+    // run: the refusal then names one session rather than none.
+    expect(sessionsThatFitOneRun(10_000, 30)).toBe(1);
   });
 });

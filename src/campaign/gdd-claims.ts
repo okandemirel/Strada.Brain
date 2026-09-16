@@ -636,11 +636,24 @@ export function assessNumericClaims(
      * game's delivery (Codex 2026-09-13 AI#2).
      */
     outcomeRequired?: boolean;
+    /**
+     * How many sessions ONE RUN was able to ask for — bounded by the
+     * producer's wall-clock budget, so a game whose document gives each round
+     * five minutes is played five at a time, not twelve. Measured against the
+     * constant, such a run read "not met" and BLOCKING, which refuses a
+     * correct game for the length of its own rounds (Codex 2026-09-13 AJ#1).
+     * Defaults to the producer's cap, which is what every caller had before.
+     */
+    sessionsPerRun?: number;
   },
 ): ClaimAssessment[] {
   // Default TRUE: a caller that does not read the document gets the stricter
   // reading, which is the one every existing caller already had.
   const outcomeRequired = opts?.outcomeRequired !== false;
+  const sessionsPerRun = Math.max(
+    1,
+    Math.min(PLAYED_SESSIONS_PER_RUN, opts?.sessionsPerRun ?? PLAYED_SESSIONS_PER_RUN),
+  );
   const perf = playthrough?.found ? playthrough.perf : undefined;
   const playerPerf = player?.found ? player.perf : undefined;
   const nameOfMedium = (m?: string): string => (m === "editor-playmode-batch" ? "editor play mode, batch" : m ?? "");
@@ -929,10 +942,11 @@ export function assessNumericClaims(
         const playedIndices = finishedSessionIndices(counted, { outcomeRequired });
         const finished = playedIndices.length;
         // A catalog of N is a claim; N sessions played to an outcome is the
-        // measurement (Codex 2026-09-11 B#10). The play-through plays at most
-        // PLAYED_SESSIONS_PER_RUN per run: past that the shortfall is named,
-        // not hidden — and not held against the delivery, since no single run
-        // can answer it.
+        // measurement (Codex 2026-09-11 B#10). One run plays at most
+        // `sessionsPerRun` — the producer's cap, or fewer when the document's
+        // own round length means fewer fit its budget: past that the shortfall
+        // is named, not hidden — and not held against the delivery, since no
+        // single run can answer it.
         // Blocking unless the SHORTFALL is only what one run could not reach:
         // a 13-level game with one session played used to be waived entirely
         // because 13 > 12 (Codex 2026-09-11 C#21).
@@ -953,7 +967,15 @@ export function assessNumericClaims(
         // demanded twelve played levels and refused the delivery (Codex
         // 2026-09-12 V).
         const mustPlay = catalogMatches ? counted.sessionCount : claim.value;
-        const beyondOneRun = mustPlay > PLAYED_SESSIONS_PER_RUN && finished >= PLAYED_SESSIONS_PER_RUN;
+        // WHAT ONE RUN COULD REACH, from the run itself — not from a
+        // constant. The batch a run may play is bounded by its own wall-clock
+        // budget, so a game whose document gives each round five minutes is
+        // played five sessions at a time, not twelve: measured against the
+        // constant, such a run was "not met" and BLOCKING, which refuses a
+        // correct game for the size of its own rounds (Codex 2026-09-13
+        // AJ#1). The waiver is for a game bigger than what this run was able
+        // to play, and only when the run finished everything it did play.
+        const beyondOneRun = mustPlay > sessionsPerRun && finished >= sessionsPerRun;
         const everyLevelPlayed = catalogMatches && finished >= mustPlay;
         // THE SAME CONTENT, PLAYED TWICE, IS NOT TWO LEVELS — and the
         // runner's fingerprint is evidence of that, not proof: two genuinely
@@ -980,7 +1002,9 @@ export function assessNumericClaims(
           note:
             `the game's session catalog reports ${counted.sessionCount}; ${finished} of ${played} played session(s) ` +
             (outcomeRequired ? "reached an outcome" : "were identified and played (the document states no win or lose condition)") +
-            (beyondOneRun ? ` (one run plays at most ${PLAYED_SESSIONS_PER_RUN}; ${claim.value - Math.min(finished, claim.value)} of ${claim.value} levels are NOT yet played to an outcome)` : ""),
+            (beyondOneRun
+              ? ` (one run plays at most ${sessionsPerRun}; ${claim.value - Math.min(finished, claim.value)} of ${claim.value} levels are NOT yet played to an outcome)`
+              : ""),
           blocking: !catalogMatches || !beyondOneRun,
         };
       }

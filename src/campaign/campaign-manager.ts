@@ -12,7 +12,18 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, wri
 import { systemInterrupted } from "../tasks/interruption.js";
 import { EvidenceLedger, artifactDigest, describeLedgerRow } from "./evidence-ledger.js";
 import { receiptOfFailure } from "./producer-failure.js";
-import { issueRunId, receiveEvidence, sessionsRequested, type EvidenceBinding, type EvidenceTicket } from "./producer-evidence.js";
+import {
+  issueRunId,
+  receiveEvidence,
+  sessionsRequested,
+  sessionsThatFitOneRun,
+  DEFAULT_BOOT_DEADLINE_SECONDS,
+  DEFAULT_SESSION_DEADLINE_SECONDS,
+  MAX_SESSIONS_PER_RUN,
+  type EvidenceBinding,
+  type EvidenceDecision,
+  type EvidenceTicket,
+} from "./producer-evidence.js";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { basename, dirname, join, relative, sep } from "node:path";
@@ -4591,7 +4602,20 @@ export class CampaignManager {
         hash,
         files: fileCount,
       });
-      return ` Committed ${fileCount} file(s) as \`${hash}\`.`;
+      // WHICH FILES, not just how many. The note is a quotable fact for the
+      // coverage audit, and "Committed 1 file(s) as abcdef" names no content
+      // at all — so a model could close ANY requirement by quoting it (Codex
+      // 2026-09-13 AJ, the requirement trace). The paths are what a closure
+      // can honestly be about.
+      const named = dirty
+        .split("\n")
+        .map((line) => line.slice(3).trim())
+        .filter((path) => path !== "")
+        .slice(0, 12);
+      return (
+        ` Committed ${fileCount} file(s) as \`${hash}\`` +
+        (named.length === 0 ? "." : `: ${named.join(", ")}${fileCount > named.length ? `, and ${fileCount - named.length} more.` : "."}`)
+      );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       getLoggerSafe().warn("Campaign milestone commit failed — tree left dirty", {
@@ -4853,8 +4877,80 @@ export class CampaignManager {
     if (budget > 60 || stated !== undefined) spec.maxActions = budget;
     // Every level the document claims, not just the first: the level-count
     // proof is measured from what this run played.
-    if (claims.some((c) => c.kind === "level_count")) spec.sessions = "all";
+    if (claims.some((c) => c.kind === "level_count")) {
+      // "ALL" IS RESOLVED BY THE PRODUCER against its own catalogue, which is
+      // the right request while that catalogue fits in one run. Past that it
+      // is a request no single run can answer — the producer plays at most
+      // MAX_SESSIONS_PER_RUN — so the ticket could never be settled and a run
+      // that played everything it could was refused (Codex 2026-09-13 AI#5).
+      // Once a run has told us how large the game is, ask for the batch this
+      // run can actually verify; the level-count gate discloses the rest as
+      // what one run cannot reach.
+      // …AND THE BATCH ONE RUN CAN ACTUALLY PLAY. The producer refuses a
+      // request that needs more wall-clock than one run may take, so asking
+      // for every session of a game whose document gives each round five
+      // minutes came back "nothing was played" (Codex 2026-09-13 AJ#1). The
+      // ask is bounded by the same budget the producer advertises.
+      const catalogue = this.lastObservedSessionCount(campaign);
+      const fits = sessionsThatFitOneRun(spec.deadlineSeconds ?? DEFAULT_SESSION_DEADLINE_SECONDS, spec.bootDeadlineSeconds ?? DEFAULT_BOOT_DEADLINE_SECONDS);
+      const batch = Math.min(MAX_SESSIONS_PER_RUN, fits);
+      spec.sessions =
+        batch >= MAX_SESSIONS_PER_RUN && (catalogue === undefined || catalogue <= MAX_SESSIONS_PER_RUN)
+          ? "all"
+          : `1-${batch}`;
+    }
     return spec;
+  }
+
+  /**
+   * How many sessions the game's own catalogue holds, as the LAST run that got
+   * an answer reported it — the player's first, the editor's otherwise.
+   *
+   * Nothing is assumed from the document here: a count the document claims is
+   * not a count the game holds, and this is only used to ask for a batch a run
+   * can verify (Codex 2026-09-13 AI#5).
+   */
+  private lastObservedSessionCount(campaign?: Campaign): number | undefined {
+    for (const milestone of [...(campaign?.milestones ?? [])].reverse()) {
+      for (const evidence of [milestone.playerPlaythrough, milestone.playthroughVerdict]) {
+        const count = evidence?.found === true ? evidence.sessionCount : undefined;
+        if (typeof count === "number" && Number.isInteger(count) && count > 0) return count;
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * How many sessions one run asks for, from the very spec it is dispatched
+   * with — `"all"` is the producer's whole cap, a batch is its own size.
+   */
+  private sessionsOneRunAsksFor(campaign?: Campaign): number {
+    const asked = sessionsRequested(this.playerRunSpec(campaign).sessions);
+    return asked === "all" ? MAX_SESSIONS_PER_RUN : Math.max(1, asked.length);
+  }
+
+  /**
+   * Do the bytes of the verdict this run wrote still match the receipt the
+   * receiver admitted? Nothing when the producer stated no digest, or when
+   * there was no admitted receipt to check against.
+   */
+  private verdictDisagreesWithReceipt(decision: EvidenceDecision | undefined): string | undefined {
+    if (decision === undefined || !decision.admitted) return undefined;
+    const payload = decision.record.payload;
+    const rel = typeof payload?.["verdictPath"] === "string" ? String(payload["verdictPath"]) : undefined;
+    const stated = typeof payload?.["verdictSha256"] === "string" ? String(payload["verdictSha256"]) : undefined;
+    if (rel === undefined || stated === undefined) return undefined;
+    const at = join(this.projectRoot, rel);
+    let bytes: string;
+    try {
+      bytes = readFileSync(at, "utf8");
+    } catch (err) {
+      return `the play-through verdict the producer wrote is not at ${rel} (${err instanceof Error ? err.message : String(err)})`;
+    }
+    const now = createHash("sha256").update(bytes).digest("hex");
+    return now === stated
+      ? undefined
+      : `the play-through verdict at ${rel} is not the file the producer wrote (its receipt names ${stated.slice(0, 12)}, the file reads ${now.slice(0, 12)})`;
   }
 
   private async measurePlayerRun(
@@ -4912,6 +5008,7 @@ export class CampaignManager {
     if (stale !== undefined) {
       return { found: false, missingRunner: `the player was not run: ${stale}` };
     }
+    let primaryDecision: EvidenceDecision | undefined;
     try {
       // UNDER A TICKET, bound to the artifact this run is about (AC Job 2).
       await this.underTicket(
@@ -4931,12 +5028,23 @@ export class CampaignManager {
           });
           return { value: undefined, ...(played?.receipt === undefined ? {} : { receipt: played.receipt }) };
         },
+        (decision) => { primaryDecision = decision; },
       );
     } catch (err) {
       failure = err instanceof Error ? err.message : String(err);
       getLoggerSafe().warn("The built player could not be played", { milestone: milestone.id, error: failure });
     }
     const verdict = readPlaythroughVerdict(this.projectRoot, since - 1000, PLAYER_PLAYTHROUGH_VERDICT_REL, attemptRunId(milestone));
+    // THE FILE THE RECEIPT IS ABOUT. The delivery is judged from this
+    // verdict — its frame rate, its frames, its errors — and an admitted
+    // receipt said nothing about those bytes, so nothing connected the
+    // evidence to the measurement being consumed (Codex 2026-09-13 AJ#12).
+    // A producer that states the digest is held to it; one that states none
+    // reads exactly as before.
+    const substituted = this.verdictDisagreesWithReceipt(primaryDecision);
+    if (substituted !== undefined) {
+      return { found: false, missingRunner: substituted };
+    }
     for (const other of others) {
       const at = Date.now();
       let why: string | undefined;
@@ -5058,6 +5166,11 @@ export class CampaignManager {
     const assessments = assessNumericClaims(claims, playthrough, player, {
       platform: gddPlatform(gddText),
       builtTarget: build?.target ?? build?.requestedTarget,
+      // HOW MANY SESSIONS ONE RUN COULD ASK FOR, from the same spec the run
+      // was dispatched with: a document whose rounds are long means fewer
+      // sessions fit one run's budget, and holding such a run against the
+      // producer's cap refused a correct game (Codex 2026-09-13 AJ#1).
+      sessionsPerRun: this.sessionsOneRunAsksFor(campaign),
       // THE SAME CONTRACT THE PRODUCER IS GIVEN. The run is told not to demand
       // an outcome from an endless game, and then the level count demanded one
       // anyway: three correctly played sessions of a sandbox read as "0 of 3
@@ -5697,7 +5810,10 @@ export class CampaignManager {
       return await this.underTicket(
         campaign,
         milestone,
-        { kind: "compile", medium: ["compiler", "editor"], processOwned: false },
+        // …and WHICH of those owns a process: a headless compiler always
+        // exits and must state its code; a live editor never exits (Codex
+        // 2026-09-13 AJ#10).
+        { kind: "compile", medium: ["compiler", "editor"], ownsProcess: ["compiler"] },
         async (runId) => {
           const verdict = await this.verifyCompile!(this.projectRoot, runId);
           return { value: verdict, ...(verdict.receipt === undefined ? {} : { receipt: verdict.receipt }) };
@@ -6468,10 +6584,18 @@ export class CampaignManager {
        */
       artifactPath?: string;
       processOwned?: boolean;
+      /** Which of those media own a process whose exit must be measured. */
+      ownsProcess?: EvidenceBinding["ownsProcess"];
       /** Which sessions a play-through run was asked to play, when it is one. */
       requestedSessions?: readonly number[] | "all";
     },
     run: (runId: string) => Promise<{ value: T; receipt?: string }>,
+    /**
+     * The receiver's decision, for a caller that has to connect it to the
+     * result it is about to read: an admitted receipt authenticated no part
+     * of the measurement actually consumed (Codex 2026-09-13 AJ#12).
+     */
+    onDecision?: (decision: EvidenceDecision) => void,
   ): Promise<T> {
     const ledger = campaign === undefined ? null : this.ledger();
     if (ledger === null || campaign === undefined) return (await run(issueRunId())).value;
@@ -6499,6 +6623,7 @@ export class CampaignManager {
         ...(binding.target === undefined ? {} : { target: binding.target }),
         ...(artifactBefore === undefined ? {} : { artifactSha256: artifactBefore }),
         ...(binding.processOwned === undefined ? {} : { processOwned: binding.processOwned }),
+        ...(binding.ownsProcess === undefined ? {} : { ownsProcess: binding.ownsProcess }),
       },
     };
     try {
@@ -6547,6 +6672,7 @@ export class CampaignManager {
           ...(binding.artifactPath === undefined ? {} : { artifactSha256: artifactDigest(binding.artifactPath) ?? "" }),
         },
       );
+      onDecision?.(decision);
       try {
         ledger.settle(ticket.binding.runId, outcome?.receipt ?? failedReceipt, decision);
       } catch (err) {

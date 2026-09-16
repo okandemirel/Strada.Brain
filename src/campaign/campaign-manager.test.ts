@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { hostname } from "node:os";
 import { execSync } from "node:child_process";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { EvidenceLedger, artifactDigest } from "./evidence-ledger.js";
 import { ProducerFailure } from "./producer-failure.js";
 import { requirementKey, CampaignManager, stripTimeBoxDirectives, UNMEASURABLE_PROOF_RE, UNRUNNABLE_HERE_RE, hasUnmeasurableProof, proofsSpanTwoRevisions } from "./campaign-manager.js";
@@ -2965,6 +2966,12 @@ describe("CampaignManager", () => {
     ).toBe(""); // tree clean
     expect(git("log", "-1", "--pretty=%s")).toContain("milestone green");
     expect(storage.get(campaign.id)!.state).toBe("executing");
+    // …and the note NAMES WHAT LANDED. "Committed 1 file(s) as abcdef" says
+    // nothing about which requirement the work implements, so the coverage
+    // audit could close any of them by quoting it (Codex 2026-09-13 AJ).
+    const note = storage.get(campaign.id)!.milestones[0]!.commitNote ?? "";
+    expect(note).toMatch(/Committed \d+ file\(s\) as `[0-9a-f]+`:/);
+    expect(note).toContain("SprintWork.cs");
   });
 
   it("keeps Recordings/ and .strada out of the envelope, and untracks what an earlier envelope swept in", async () => {
@@ -3507,6 +3514,69 @@ describe("CampaignManager", () => {
     } finally {
       ledger.close();
     }
+  }, 20_000);
+
+  it("a verdict that is not the file the producer wrote is NOT MEASURED (Codex 2026-09-13 AJ#12)", async () => {
+    // The delivery is judged from the verdict FILE — its frame rate, its
+    // frames, its errors — and an admitted receipt said nothing about those
+    // bytes, so nothing connected the evidence to the measurement consumed.
+    const git = (...args: string[]): string => execFileSync("git", ["-C", projectRoot, ...args], { encoding: "utf8" });
+    const artifact = join(projectRoot, "Builds", "StandaloneOSX", "Game.app");
+    mkdirSync(join(projectRoot, "Builds", "StandaloneOSX"), { recursive: true });
+    writeFileSync(artifact, "the bytes that were built");
+    git("init", "-q");
+    git("config", "user.email", "t@t");
+    git("config", "user.name", "t");
+    git("add", "-A");
+    git("commit", "-qm", "baseline");
+    const revision = git("rev-parse", "HEAD").trim();
+    const verdictRel = join("Recordings", "player-playthrough", "playthrough-verdict.json");
+
+    const campaign = {
+      id: "c_verdict_bind", chatId: "chat", channelType: "cli", userId: "u", projectRoot,
+      state: "executing", draftAttempts: 0, milestones: [], currentMilestone: 0,
+      createdAt: Date.now(), updatedAt: Date.now(),
+    } as unknown as Campaign;
+    let tamper = false;
+    const player = new CampaignManager({
+      storage,
+      runPlayer: async (root, artifactPlayed, _spec, dispatch) => {
+        writePlayerVerdict(true, {}, root);
+        const bytes = readFileSync(join(root, verdictRel), "utf8");
+        const receipt = JSON.stringify({
+          schemaVersion: 1, runId: dispatch?.runId, kind: "playthrough", medium: "player", revision,
+          ...(dispatch?.target === undefined ? {} : { target: dispatch.target }),
+          artifactSha256: artifactDigest(artifactPlayed),
+          execution: { completed: true, exitCode: 0, timedOut: false },
+          sessionCount: 1,
+          sessions: [{
+            requestedIndex: 1, index: 1, identityVerified: true, identitySource: "start-acceptance",
+            actions: 12, outcome: "Won", reachedOutcome: true, seconds: 9,
+          }],
+          payload: { verdictPath: verdictRel, verdictSha256: createHash("sha256").update(bytes).digest("hex") },
+        });
+        // Something replaces the verdict between the run and the read.
+        if (tamper) writeFileSync(join(root, verdictRel), bytes.replace('"ok":true', '"ok":false'));
+        return { receipt };
+      },
+      planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async () => {},
+      projectRoot,
+    });
+    const build = { ran: true, ok: true, target: "StandaloneOSX", artifactPath: artifact, sizeBytes: 25, durationMs: 1, scenes: 1 };
+    const measure = (id: string): Promise<{ found: boolean; missingRunner?: string }> =>
+      (player as unknown as { measurePlayerRun(m: unknown, b: unknown, c: unknown): Promise<{ found: boolean; missingRunner?: string }> })
+        .measurePlayerRun({ id, title: "Delivery", prompt: "p", status: "running", attempts: 1 }, build, campaign);
+
+    // The untouched file is the file the receipt names, and the run counts.
+    const honest = await measure("m_bound");
+    expect(honest.found).toBe(true);
+
+    tamper = true;
+    const swapped = await measure("m_swapped");
+    expect(swapped.found).toBe(false);
+    expect(swapped.missingRunner).toContain("is not the file the producer wrote");
   }, 20_000);
 
   it("an audit that RAN discharges the unreadable-queue flag (Codex 2026-09-13 AF#2)", async () => {
@@ -4477,6 +4547,51 @@ describe("CampaignManager", () => {
     // stopped every session at its own sixty actions, so a session with a
     // longer allowance still ended without an outcome (Codex 2026-09-12 U#3).
     expect(specs[0]).toMatchObject({ maxActions: 75 });
+
+    // A GAME BIGGER THAN ONE RUN asks for the batch a run can verify. "all"
+    // is resolved by the producer against its own catalogue, which no single
+    // run can answer past twelve sessions — so the ticket could never be
+    // settled and a run that played everything it could was refused (Codex
+    // 2026-09-13 AI#5). Nothing is assumed from the DOCUMENT's number: only a
+    // catalogue a run actually reported changes the request.
+    const askedFor = (sessionCount?: number): string | undefined =>
+      (manager as unknown as {
+        playerRunSpec(c: unknown): { sessions?: string };
+      }).playerRunSpec({
+        gddText: gdd,
+        milestones: sessionCount === undefined
+          ? []
+          : [{ id: "m", title: "t", prompt: "p", status: "green", attempts: 1, playerPlaythrough: { found: true, ok: true, sessionCount } }],
+      } as never).sessions;
+    expect(askedFor(undefined)).toBe("all");
+    expect(askedFor(3)).toBe("all");
+    expect(askedFor(12)).toBe("all");
+    expect(askedFor(13)).toBe("1-12");
+    expect(askedFor(3000)).toBe("1-12");
+
+    // A RUN THAT FOUND NOTHING reports no catalogue at all, and a catalogue of
+    // zero is a game that registers none — neither is a measurement of size,
+    // so an EARLIER run that did answer is the one that counts.
+    const milestonesOf = (runs: Array<{ found: boolean; sessionCount?: number }>) =>
+      runs.map((r, i) => ({ id: `m${i}`, title: "t", prompt: "p", status: "green", attempts: 1, playerPlaythrough: r }));
+    const asked = (runs: Array<{ found: boolean; sessionCount?: number }>): string | undefined =>
+      (manager as unknown as { playerRunSpec(c: unknown): { sessions?: string } })
+        .playerRunSpec({ gddText: gdd, milestones: milestonesOf(runs) } as never).sessions;
+    // A DOCUMENT WHOSE ROUNDS ARE LONG fits fewer sessions in one run, and
+    // the producer REFUSES a request that needs more wall-clock than a run
+    // may take — so asking for twelve five-minute rounds came back "nothing
+    // was played" (Codex 2026-09-13 AJ#1).
+    const longRounds = (manager as unknown as { playerRunSpec(c: unknown): { sessions?: string; deadlineSeconds?: number } })
+      .playerRunSpec({ gddText: "# G\nThe game ships 3000 levels. Each round lasts 300 seconds.", milestones: [] } as never);
+    expect(longRounds.deadlineSeconds).toBe(465);
+    expect(longRounds.sessions).toBe("1-5");
+    expect(asked([{ found: true, sessionCount: 13 }, { found: true, sessionCount: 0 }])).toBe("1-12");
+    // THE LATEST measurement is the one that counts: the game grows, so an
+    // early run that found three levels does not describe it any more.
+    expect(asked([{ found: true, sessionCount: 3 }, { found: true, sessionCount: 13 }])).toBe("1-12");
+    expect(asked([{ found: true, sessionCount: 13 }, { found: true, sessionCount: 3 }])).toBe("all");
+    expect(asked([{ found: false, sessionCount: 13 }])).toBe("all");
+    expect(asked([{ found: true }])).toBe("all");
   });
 
   it("a verdict file that cannot be cleared stops the run rather than measuring the old one (Codex 2026-09-12 Y#5)", async () => {

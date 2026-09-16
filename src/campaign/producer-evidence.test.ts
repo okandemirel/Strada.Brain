@@ -749,3 +749,124 @@ describe("a ticket that accepts several media", () => {
       .toMatchObject({ admitted: false, refusal: "ARTIFACT_MISSING" });
   });
 });
+
+/**
+ * A TICKET THAT ACCEPTS TWO MEDIA MUST SAY WHICH OF THEM EXITS (Codex
+ * 2026-09-13 AJ#10).
+ *
+ * A compile is answered by a live editor OR a headless compiler: the first
+ * never exits, the second always does. One boolean for the whole ticket had to
+ * choose, and choosing "no" admitted a headless compiler receipt that measured
+ * no exit at all.
+ */
+describe("ownership per medium", () => {
+  const ticket: EvidenceTicket = {
+    issuedAt: 1,
+    requestedSessions: [],
+    binding: {
+      campaignId: "c", generation: 0, milestoneId: "m", attemptId: "a", runId: "r",
+      kind: "compile", medium: ["compiler", "editor"], revision: "", dirty: false,
+      ownsProcess: ["compiler"],
+    },
+  };
+  const record = (medium: string, exitCode: number | null): string => JSON.stringify({
+    schemaVersion: 1, runId: "r", kind: "compile", medium, revision: "",
+    execution: { completed: true, exitCode, timedOut: false },
+  });
+  const transport: ExecutionObservation = { completed: true, exitCode: null, timedOut: false };
+  const opts = { revisionNow: "", dirtyNow: false };
+
+  it("demands the exit code of the producer that owns a process, and not of the one that does not", () => {
+    expect(receiveEvidence(ticket, record("compiler", null), transport, opts))
+      .toMatchObject({ admitted: false, refusal: "PROCESS_UNMEASURED" });
+    expect(receiveEvidence(ticket, record("compiler", 0), transport, opts).admitted).toBe(true);
+    // The live editor never exits: completion alone is its answer.
+    expect(receiveEvidence(ticket, record("editor", null), transport, opts).admitted).toBe(true);
+    // …and its own non-zero code still speaks.
+    expect(receiveEvidence(ticket, record("editor", 3), transport, opts))
+      .toMatchObject({ admitted: false, refusal: "PROCESS_FAILED" });
+  });
+
+  it("falls back to the single-medium flag when the ticket names no media", () => {
+    const flag = (processOwned?: boolean): EvidenceTicket => ({
+      ...ticket,
+      binding: { ...ticket.binding, medium: "compiler", ownsProcess: undefined, ...(processOwned === undefined ? {} : { processOwned }) },
+    });
+    expect(receiveEvidence(flag(), record("compiler", null), transport, opts))
+      .toMatchObject({ admitted: false, refusal: "PROCESS_UNMEASURED" });
+    expect(receiveEvidence(flag(false), record("compiler", null), transport, opts).admitted).toBe(true);
+  });
+});
+
+/**
+ * EVERY SESSION THE RECORD CARRIES, ONCE AND INSIDE THE GAME (Codex
+ * 2026-09-13 AJ#9).
+ *
+ * Uniqueness and bounds were checked only for the sessions the ticket asked
+ * for, so a record could carry two observations of session 2, or a session 99
+ * of a two-session game, and still be admitted — evidence the rest of the
+ * system then reads as measurement.
+ */
+describe("the whole session list is validated", () => {
+  const ticket: EvidenceTicket = {
+    issuedAt: 1,
+    requestedSessions: [1],
+    binding: {
+      campaignId: "c", generation: 0, milestoneId: "m", attemptId: "a", runId: "r",
+      kind: "playthrough", medium: "editor", revision: "", dirty: false,
+    },
+  };
+  const session = (index: number, over: Record<string, unknown> = {}) => ({
+    requestedIndex: index, index, observedIndex: index, identityVerified: true,
+    identitySource: "active-session", actions: 3, outcome: "Won", reachedOutcome: true, seconds: 1,
+    ...over,
+  });
+  const bytes = (sessions: unknown[], sessionCount?: number): string => JSON.stringify({
+    schemaVersion: 1, runId: "r", kind: "playthrough", medium: "editor", revision: "",
+    execution: { completed: true, exitCode: 0, timedOut: false },
+    ...(sessionCount === undefined ? {} : { sessionCount }),
+    sessions,
+  });
+  const transport: ExecutionObservation = { completed: true, exitCode: 0, timedOut: false };
+  const opts = { revisionNow: "", dirtyNow: false };
+
+  it("refuses the same session twice, even when it was not the one asked for", () => {
+    const twice = receiveEvidence(ticket, bytes([session(1), session(2), session(2)]), transport, opts);
+    expect(twice).toMatchObject({ admitted: false, refusal: "SESSION_MISMATCH" });
+    expect((twice as { detail: string }).detail).toContain("session 2 more than once");
+  });
+
+  it("refuses a session the game's own catalogue does not hold", () => {
+    const outside = receiveEvidence(ticket, bytes([session(1), session(99)], 2), transport, opts);
+    expect(outside).toMatchObject({ admitted: false, refusal: "SESSION_MISMATCH" });
+    expect((outside as { detail: string }).detail).toContain("session 99 of a game it says holds 2");
+    // A record that states no catalogue size has no bound to check against.
+    expect(receiveEvidence(ticket, bytes([session(1), session(99)]), transport, opts).admitted).toBe(true);
+  });
+
+  it("refuses an observation SOURCE with no observation behind it", () => {
+    const claimed = receiveEvidence(
+      ticket,
+      bytes([{ ...session(1), observedIndex: undefined }]),
+      transport,
+      opts,
+    );
+    expect(claimed).toMatchObject({ admitted: false, refusal: "SESSION_UNVERIFIED" });
+    expect((claimed as { detail: string }).detail).toContain("says the game named it and carries no observation");
+    // …while start-acceptance is the deliberate other case: no such service
+    // exists, so there is nothing to carry (Codex 2026-09-13 AI#7).
+    expect(receiveEvidence(
+      ticket,
+      bytes([{ ...session(1), observedIndex: undefined, identitySource: "start-acceptance" }]),
+      transport,
+      opts,
+    ).admitted).toBe(true);
+    // A producer that names no source at all reads as before.
+    expect(receiveEvidence(
+      ticket,
+      bytes([{ ...session(1), observedIndex: undefined, identitySource: undefined }]),
+      transport,
+      opts,
+    ).admitted).toBe(true);
+  });
+});

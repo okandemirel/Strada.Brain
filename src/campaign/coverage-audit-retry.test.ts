@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { CampaignPlanner } from "./campaign-planner.js";
+import { CampaignPlanner, namesContent } from "./campaign-planner.js";
 
 /**
  * Measured live 2026-09-03 08:33: one malformed reply skipped the GDD
@@ -260,5 +260,62 @@ describe("re-judging the requirements no sprint closed", () => {
     const { planner, chat } = plannerWith([]);
     await expect(planner.resolveCoverageGaps("# GDD", [], ladder)).resolves.toEqual({ closed: [], open: [] });
     expect(chat).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * A COMMIT NOTE THAT NAMES NO CONTENT CLOSES NOTHING (Codex 2026-09-13 AJ,
+ * the requirement trace).
+ *
+ * Executed by Codex against the real resolver: a ladder carrying only
+ * "Committed 1 file(s) as `abcdef`." and a model reply quoting that sentence
+ * closed a determinism requirement. The line is a measured fact about a
+ * commit and says nothing about WHICH requirement it implements.
+ */
+describe("closure needs evidence that names content", () => {
+  function plannerWith(replies: string[]) {
+    const chat = vi.fn(async () => ({ text: replies.shift() ?? "" }));
+    const provider = { chat, name: "test", capabilities: { streaming: false } } as never;
+    return { planner: new CampaignPlanner(provider), chat };
+  }
+
+  it("refuses a closure quoting a note that names only a count and a hash", async () => {
+    const ladder = [{ title: "Sprint A", status: "failed", commitNote: "Committed 1 file(s) as `abcdef`." }];
+    const { planner, chat } = plannerWith([
+      '{"verdicts": [{"id": 1, "delivered": true, "evidence": "landed: Committed 1 file(s) as `abcdef`."}]}',
+    ]);
+
+    const judged = await planner.resolveCoverageGaps("# GDD", ["R-14 determinism: absent"], ladder);
+
+    expect(judged.closed).toEqual([]);
+    expect(judged.open).toEqual(["R-14 determinism: absent"]);
+    // The line is still SHOWN to the auditing model — it is disclosure; it
+    // just cannot be the evidence that closes anything.
+    expect(JSON.stringify(chat.mock.calls[0])).toContain("Committed 1 file(s)");
+  });
+
+  it("…and admits one whose note names the files it landed", async () => {
+    const ladder = [{
+      title: "Sprint A",
+      status: "green",
+      commitNote: "Committed 2 file(s) as `abcdef`: Assets/Scripts/Determinism.cs, Assets/Tests/PlayMode/ReplayTests.cs.",
+    }];
+    const { planner } = plannerWith([
+      '{"verdicts": [{"id": 1, "delivered": true, "evidence": "Assets/Tests/PlayMode/ReplayTests.cs"}]}',
+    ]);
+
+    const judged = await planner.resolveCoverageGaps("# GDD", ["R-14 determinism: absent"], ladder);
+    expect(judged.closed).toEqual(["R-14 determinism: absent"]);
+  });
+
+  it("namesContent reads paths, files and type names — not counts and hashes", () => {
+    expect(namesContent("landed: Committed 1 file(s) as `abcdef`.")).toBe(false);
+    expect(namesContent("landed: Committed 12 file(s) as `9f2ab1c`.")).toBe(false);
+    expect(namesContent("landed: 3 commit(s) in this sprint.")).toBe(false);
+    expect(namesContent("landed: Committed 2 file(s) as `abcdef`: Assets/Scripts/Board.cs.")).toBe(true);
+    expect(namesContent("landed: Board.cs")).toBe(true);
+    expect(namesContent("landed: Game.Modules.Board.Rules")).toBe(true);
+    expect(namesContent("landed: Assets/Art/hero.png")).toBe(true);
+    expect(namesContent("landed: docs/Game_GDD.md")).toBe(true);
   });
 });
