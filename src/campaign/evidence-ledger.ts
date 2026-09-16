@@ -233,6 +233,22 @@ export function artifactDigest(path: string | undefined): string | undefined {
     // WHICH artifact in that layout, so two executables shipped side by side
     // are not one artifact.
     hash.update(`${basename(path)}\n`);
+    // THE FILES THE BUILD SAID IT SHIPPED, when it said: the layout walk picks
+    // up whatever is written beside the executable afterwards (AJ#4).
+    const manifest = artifactManifest(path);
+    if (manifest !== undefined) {
+      // The listed files, each by name, size and bytes: dropping one from the
+      // list drops its line, so the manifest's own formatting is not part of
+      // the artifact's identity (a reformatted manifest is the same game).
+      const base = dirname(path);
+      for (const rel of [...manifest.files].sort()) {
+        const at = join(base, rel);
+        const st = statSync(at);
+        hash.update(`${rel}:${st.size}\n`);
+        hash.update(readFileSync(at));
+      }
+      return hash.digest("hex");
+    }
     const walk = (at: string, rel: string): void => {
       const st = statSync(at);
       if (st.isDirectory()) {
@@ -246,6 +262,43 @@ export function artifactDigest(path: string | undefined): string | undefined {
     return hash.digest("hex");
   } catch {
     // An artifact that is not there has no digest, and saying so is the point.
+    return undefined;
+  }
+}
+
+/**
+ * THE FILES A BUILD SAID IT SHIPPED.
+ *
+ * Hashing the whole player layout pulls in whatever is written beside the
+ * executable AFTERWARDS — a log the game writes on its first run, another
+ * build copied into the same folder — so an artifact nobody touched hashed
+ * differently before and after it ran (Codex 2026-09-13 AJ#4). A build that
+ * states its own manifest is measured on exactly those files; one that states
+ * none is measured on its layout, as before.
+ *
+ * The manifest sits BESIDE the artifact, never inside it: a stray file inside
+ * a macOS .app changes the bundle.
+ */
+export const ARTIFACT_MANIFEST_SUFFIX = ".strada-artifact.json";
+export const ARTIFACT_MANIFEST_VERSION = "strada-manifest-v1";
+
+/** The manifest a build wrote for this artifact, or nothing. */
+export function artifactManifest(path: string): { readonly bytes: string; readonly files: readonly string[] } | undefined {
+  try {
+    const bytes = readFileSync(`${path}${ARTIFACT_MANIFEST_SUFFIX}`, "utf8");
+    const parsed: unknown = JSON.parse(bytes);
+    if (parsed === null || typeof parsed !== "object") return undefined;
+    const doc = parsed as { version?: unknown; files?: unknown };
+    if (doc.version !== ARTIFACT_MANIFEST_VERSION) return undefined;
+    if (!Array.isArray(doc.files) || doc.files.length === 0) return undefined;
+    const files: string[] = [];
+    for (const entry of doc.files) {
+      // A path that leaves the layout is not a file this build shipped.
+      if (typeof entry !== "string" || entry === "" || entry.includes("..")) return undefined;
+      files.push(entry);
+    }
+    return { bytes, files };
+  } catch {
     return undefined;
   }
 }

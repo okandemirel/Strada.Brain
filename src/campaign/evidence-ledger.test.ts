@@ -185,3 +185,91 @@ describe("artifactDigest", () => {
     });
   });
 });
+
+/**
+ * THE FILES A BUILD SAID IT SHIPPED (Codex 2026-09-13 AJ#4).
+ *
+ * The coordinator hashes the artifact for its ticket, and hashing the whole
+ * layout pulled in whatever was written beside the executable afterwards — the
+ * log the game writes on its first run — so an artifact nobody touched hashed
+ * differently before and after it ran. Strada.MCP's build writes the manifest;
+ * this side must read it the same way.
+ */
+describe("artifactDigest over a build manifest", () => {
+  let dir: string;
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "brain-manifest-")); });
+  afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
+
+  const layout = (): string => {
+    const build = join(dir, "linux");
+    mkdirSync(join(build, "Game_Data"), { recursive: true });
+    writeFileSync(join(build, "Game.x86_64"), "the executable");
+    writeFileSync(join(build, "Game_Data", "level0"), "level one");
+    // What the producer writes beside the artifact.
+    writeFileSync(
+      join(build, "Game.x86_64.strada-artifact.json"),
+      JSON.stringify({ version: "strada-manifest-v1", files: ["Game.x86_64", "Game_Data/level0"] }, null, 2),
+    );
+    return join(build, "Game.x86_64");
+  };
+
+  it("measures the listed files, and ignores runtime output beside them", () => {
+    const exe = layout();
+    const built = artifactDigest(exe);
+    expect(built).toMatch(/^[0-9a-f]{64}$/);
+    writeFileSync(join(dir, "linux", "player.log"), "started\n");
+    expect(artifactDigest(exe)).toBe(built);
+    writeFileSync(join(dir, "linux", "Game_Data", "level0"), "level one, edited");
+    expect(artifactDigest(exe)).not.toBe(built);
+  });
+
+  it("a REFORMATTED manifest is the same artifact, and a dropped file is not", () => {
+    const exe = layout();
+    const built = artifactDigest(exe);
+    const manifestAt = join(dir, "linux", "Game.x86_64.strada-artifact.json");
+    // Same files, different bytes: the game did not change.
+    writeFileSync(manifestAt, JSON.stringify({ version: "strada-manifest-v1", files: ["Game_Data/level0", "Game.x86_64"], note: "reordered" }));
+    expect(artifactDigest(exe)).toBe(built);
+  });
+
+  it("a manifest that drops a file is a different manifest", () => {
+    const exe = layout();
+    const built = artifactDigest(exe);
+    writeFileSync(
+      join(dir, "linux", "Game.x86_64.strada-artifact.json"),
+      JSON.stringify({ version: "strada-manifest-v1", files: ["Game.x86_64"] }, null, 2),
+    );
+    expect(artifactDigest(exe)).not.toBe(built);
+  });
+
+  it("a manifest it cannot use is no manifest: the layout answers instead", () => {
+    const exe = layout();
+    const manifestAt = join(dir, "linux", "Game.x86_64.strada-artifact.json");
+    for (const bad of [
+      '{not json',
+      JSON.stringify({ version: "strada-manifest-v1", files: ["../x"] }),
+      // A SCHEME IS PART OF THE ANSWER: a manifest written under another
+      // version is not one this digest can read.
+      JSON.stringify({ version: "strada-manifest-v0", files: ["Game.x86_64"] }),
+      JSON.stringify({ files: ["Game.x86_64"] }),
+      JSON.stringify({ version: "strada-manifest-v1", files: [] }),
+      JSON.stringify({ version: "strada-manifest-v1", files: "Game.x86_64" }),
+    ]) {
+      writeFileSync(manifestAt, bad);
+      const fromLayout = artifactDigest(exe);
+      expect(fromLayout).toMatch(/^[0-9a-f]{64}$/);
+      // …and it IS the layout's answer: runtime output moves it again.
+      writeFileSync(join(dir, "linux", "player.log"), `started ${bad.length}\n`);
+      expect(artifactDigest(exe)).not.toBe(fromLayout);
+    }
+  });
+
+  it("a file the manifest names and the tree does not have has no digest", () => {
+    const exe = layout();
+    writeFileSync(
+      join(dir, "linux", "Game.x86_64.strada-artifact.json"),
+      JSON.stringify({ version: "strada-manifest-v1", files: ["Game.x86_64", "Game_Data/absent"] }),
+    );
+    expect(artifactDigest(exe)).toBeUndefined();
+  });
+});
