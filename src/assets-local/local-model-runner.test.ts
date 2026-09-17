@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync, mkdirSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir, homedir } from "node:os";
 import { LocalModelRunner, type SpawnImpl } from "./local-model-runner.js";
@@ -25,15 +25,30 @@ describe("LocalModelRunner", () => {
   // one of them deleted the real .installed-trellis marker on every full
   // suite run (audit 15 D1–D4). The runner reads the root at call time.
   const marker = (id: string): string => join(dir, `.installed-${id}`);
+  // A throwaway HOME so "nothing outside the root was touched" is a real
+  // assertion (Codex 2026-09-17: the sentinel check was vacuous), and the
+  // previous override is restored rather than deleted (an inherited
+  // STRADA_ASSETS_LOCAL_ROOT must survive the suite).
+  let fakeHome: string;
+  let prevRoot: string | undefined;
+  let prevHome: string | undefined;
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), "lmr-test-"));
+    fakeHome = mkdtempSync(join(tmpdir(), "lmr-home-"));
+    prevRoot = process.env["STRADA_ASSETS_LOCAL_ROOT"];
+    prevHome = process.env["HOME"];
     process.env["STRADA_ASSETS_LOCAL_ROOT"] = dir;
+    process.env["HOME"] = fakeHome;
   });
 
   afterEach(() => {
-    delete process.env["STRADA_ASSETS_LOCAL_ROOT"];
+    if (prevRoot === undefined) delete process.env["STRADA_ASSETS_LOCAL_ROOT"];
+    else process.env["STRADA_ASSETS_LOCAL_ROOT"] = prevRoot;
+    if (prevHome === undefined) delete process.env["HOME"];
+    else process.env["HOME"] = prevHome;
     rmSync(dir, { recursive: true, force: true });
+    rmSync(fakeHome, { recursive: true, force: true });
   });
 
   it("reports not-installed for a model id with no marker", () => {
@@ -54,16 +69,17 @@ describe("LocalModelRunner", () => {
     expect(pipInstall).toBeDefined();
     expect(calls.some((c) => c.args.includes("venv"))).toBe(true);
     expect(existsSync(marker("sd15"))).toBe(true);
-    // …and nothing outside the isolated root was touched.
-    expect(existsSync(join(homedir(), ".strada", "assets-local", "scripts", "lmr-test-sentinel"))).toBe(false);
+    // …and nothing was written under the (fake) home directory.
+    expect(readdirSync(fakeHome)).toEqual([]);
   });
 
   it("writes markers under STRADA_ASSETS_LOCAL_ROOT, never under the home directory (2026-09-17)", async () => {
     const runner = new LocalModelRunner(spawnOk().spawn);
     await runner.install(getModelSpec("sd15")!);
-    const inRoot = existsSync(marker("sd15"));
-    const scriptsInRoot = existsSync(join(dir, "scripts"));
-    expect(inRoot && scriptsInRoot).toBe(true);
+    expect(existsSync(marker("sd15"))).toBe(true);
+    expect(existsSync(join(dir, "scripts"))).toBe(true);
+    expect(existsSync(join(homedir(), ".strada"))).toBe(false);
+    expect(readdirSync(fakeHome)).toEqual([]);
   });
 
   it("surfaces pip failures instead of marking the model installed", async () => {
