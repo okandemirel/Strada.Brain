@@ -37,6 +37,9 @@ const DEFAULT_MAX_TOKENS = 4000;
  */
 const GUARANTEED_SOURCE_TOKENS = 150;
 
+/** What joins two spans in the prompt. Counted against the budget (round 10 #18). */
+const SPAN_SEPARATOR = "\n\n---\n\n";
+
 /** Which retrieval source a merged result came from. */
 type ContextSource = "code" | "docs";
 
@@ -190,35 +193,51 @@ export class CompositeRAGPipeline implements IRAGPipeline {
     const included: SearchResult[] = [];
     /** The ORIGINAL results behind the included list (entries may be clamped copies). */
     const shown = new Set<SearchResult>();
+    // THE BUDGET IS A CEILING, SEPARATORS INCLUDED (Codex round 10 #18): the
+    // joiner between spans was never counted, and the guarantee pass handed the
+    // first missing source all the remaining room and then gave the next one a
+    // slice there was no room for — 400 tokens asked, about 552 rendered.
+    const separatorTokens = estimateTokens(SPAN_SEPARATOR);
     let tokens = 0;
+    const costOf = (formatted: string): number =>
+      estimateTokens(formatted) + (parts.length > 0 ? separatorTokens : 0);
 
     for (const result of results) {
       const formatted = renderSpan(result);
-      const chunkTokens = estimateTokens(formatted);
-      if (tokens + chunkTokens > greedyBudget) break;
+      if (tokens + costOf(formatted) > greedyBudget) break;
 
+      tokens += costOf(formatted);
       parts.push(formatted);
       included.push(result);
       shown.add(result);
-      tokens += chunkTokens;
     }
 
-    for (const source of sources) {
-      if (included.some((result) => sourceOf(result) === source)) continue;
-      const top = results.find((result) => sourceOf(result) === source);
-      if (!top) continue;
+    const missing = [...sources]
+      .filter((source) => !included.some((result) => sourceOf(result) === source))
+      .map((source) => ({ source, top: results.find((result) => sourceOf(result) === source) }))
+      .filter((entry): entry is { source: ContextSource; top: SearchResult } => entry.top !== undefined);
 
-      const room = Math.max(guaranteedTokens, maxTokens - tokens);
+    for (let i = 0; i < missing.length; i++) {
+      const { top } = missing[i]!;
+      // Share what is left with the sources still waiting, and never overrun: a
+      // source that cannot fit at all stays in the dropped list, which is what
+      // the caller reports.
+      const remainingSources = missing.length - i;
+      const free = maxTokens - tokens - (parts.length > 0 ? separatorTokens : 0);
+      const room = Math.min(guaranteedTokens, Math.floor(Math.max(0, free) / remainingSources));
+      if (room <= 0) continue;
       const clamped = clampToTokens(top, room);
       const formatted = renderSpan(clamped);
+      if (tokens + costOf(formatted) > maxTokens) continue;
+
+      tokens += costOf(formatted);
       parts.push(formatted);
       included.push(clamped);
       shown.add(top);
-      tokens += estimateTokens(formatted);
     }
 
     return {
-      text: parts.join("\n\n---\n\n"),
+      text: parts.join(SPAN_SEPARATOR),
       included,
       dropped: results.filter((result) => !shown.has(result)),
     };
