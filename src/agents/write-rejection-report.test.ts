@@ -192,10 +192,10 @@ describe("reporting a refused write", () => {
     // Provably ran: exit 0 forces every `&&` segment; `false ||` forces its alternative.
     resolved("mkdir -p d && touch d/x");
     resolved("false || touch x");
-    // The first segment always ran; exit 0 cannot say whether it SUCCEEDED
-    // behind `|| true`, and the detector does not pretend to know.
-    resolved("cp a b || true");
-    resolved("git status || true && touch x");
+    // Exit 0 cannot say whether the segment before `|| true` SUCCEEDED, and
+    // the detector does not pretend to know (Codex 2026-09-17 on 2df6170e #5).
+    stopped("cp a b || true");
+    stopped("git status || true && touch x");
     resolved("cat in | tee out");
     resolved("ls; touch x");
     resolved("ls\ntouch x");
@@ -207,6 +207,57 @@ describe("reporting a refused write", () => {
     stopped(`python3 -c "import json; print(json.load(open('Assets/level3.json')))"`);
     stopped(`node -e "console.log(require('fs').readFileSync('Assets/level3.json','utf8'))"`);
     stopped("python3 script.py");
+  });
+
+  it("infers only what exit 0 proves: the last statement, the succeeded segments, the flat grammar (Codex 2026-09-17 on 2df6170e #3-#7)", () => {
+    const stopped = (command: string): void => {
+      const s = sessionAfterRejection([{ name: "shell_exec", content: "ok", input: { command } }]);
+      expect(manager().getPendingSelfManagedWriteRejectionVisibleText(s, "Done.", () => true), command).toContain("Execution stopped");
+    };
+    const resolved = (command: string): void => {
+      const s = sessionAfterRejection([{ name: "shell_exec", content: "ok", input: { command } }]);
+      expect(manager().getPendingSelfManagedWriteRejectionVisibleText(s, "Done.", () => true), command).toBeNull();
+    };
+    // #3: exit 0 is the LAST statement's; an earlier statement's failure is masked.
+    stopped("test -d /__absent__ && touch x; true");
+    resolved("mkdir -p d; touch d/x");
+    // #5: "ran" is not "succeeded".
+    stopped("touch /missing-parent/x || true");
+    stopped("true; touch /missing-parent/x || true");
+    stopped("tee </dev/null");
+    stopped("touch x | cat"); // only the last stage's status is known
+    resolved("false || touch x");
+    resolved("cat in | tee out");
+    // #4: syntax this inference does not read proves nothing.
+    stopped("(false && touch x); true");
+    stopped("{ false && touch x; }; true");
+    stopped("false && \\\ntouch x; true");
+    stopped("if false; then\ntouch x\nfi");
+    stopped("for i in; do\ntouch x\ndone");
+    stopped("cat <<EOF\ntouch x\nEOF");
+    stopped("echo $(false && touch x); true");
+    // …and when the construct IS the last statement, only the grammar check stands between it and a false accept.
+    stopped("(false && touch x)");
+    stopped("false && \\\ntouch x");
+    stopped("echo $(false && touch x)");
+    stopped("python3 - <<EOF\nopen('x','w').write('1')\nEOF");
+    // …but the placeholders find and xargs use are not groups.
+    resolved("find . -name '*.tmp' -exec touch {} \;");
+    resolved("echo a | xargs -I{} touch {}");
+    // #6: a read-only shutil call is not a write.
+    stopped(`python3 -c "import shutil; print(shutil.which('git'))"`);
+    resolved(`python3 -c "import shutil; shutil.copy('a', 'Assets/b')"`);
+    resolved(`python3 -c "import pandas as pd; pd.DataFrame().to_csv('Assets/out.csv')"`);
+    resolved(`python3 -c "import numpy as np; np.save('Assets/out.npy', np.zeros(1))"`);
+    // #7: genuine writes behind wrappers and option operands.
+    resolved("env -i touch x");
+    resolved("env -u HOME touch x");
+    resolved('sh -c "touch x"');
+    resolved(`bash -lc "mkdir -p d && touch d/x"`);
+    stopped(`sh -c "true || touch x"`);
+    resolved("printf x | xargs -n 1 touch");
+    resolved("printf x | xargs -P 4 -n 2 touch");
+    stopped("printf x | xargs -n 1 cat");
   });
 
   it("the metadata-less default treats an unknown name as NOT a writer (Codex 2026-09-17 #4)", () => {

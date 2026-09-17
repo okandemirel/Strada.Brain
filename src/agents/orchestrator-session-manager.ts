@@ -155,22 +155,36 @@ const READ_ONLY_ACTION_RE = /^(?:list|show|get|status|info|read|inspect|describe
  * review 2026-09-17 #5).
  */
 const INTERPRETER_WRITE_RE =
-  /\b(?:write_text|write_bytes|writeFileSync|writeFile|appendFileSync|appendFile|copyFileSync|copyFile|unlinkSync|unlink|renameSync|rename|rmSync|rmdirSync|rmdir|mkdirSync|mkdir|makedirs|touch)\s*\(|\bshutil\.\w+\s*\(|\bos\.(?:remove|replace)\s*\(|\bopen\s*\([^)]*(?:,|mode\s*=)\s*['"][wax][bt+]*['"]|\.open\s*\(\s*['"][wax][bt+]*['"]/u;
+  /\b(?:write_text|write_bytes|writeFileSync|writeFile|appendFileSync|appendFile|copyFileSync|copyFile|unlinkSync|unlink|renameSync|rename|rmSync|rmdirSync|rmdir|mkdirSync|mkdir|makedirs|touch)\s*\(|\bshutil\.(?:copy|copy2|copyfile|copytree|move|rmtree|make_archive|unpack_archive)\s*\(|\bos\.(?:remove|replace)\s*\(|\bopen\s*\([^)]*(?:,|mode\s*=)\s*['"][wax][bt+]*['"]|\.open\s*\(\s*['"][wax][bt+]*['"]|\.to_(?:csv|json|parquet|excel|pickle|hdf|feather)\s*\(|\bnp\.save(?:z|txt|z_compressed)?\s*\(|\b(?:json|pickle)\.dump\s*\(|\btorch\.save\s*\(|\.save\s*\(/u;
+/**
+ * The shell this inference reads: FLAT lists of simple commands joined by
+ * `;`, newline, `&&`, `||` and `|`. A subshell, a brace group, a
+ * heredoc, a command substitution, a continuation line or a compound
+ * keyword can run or skip a write in ways no text inference can settle —
+ * `(false && touch x); true` exits 0 and writes nothing (Codex 2026-09-17
+ * on 2df6170e #4) — so such a command proves no write. `{}` alone is
+ * find's and xargs' placeholder, not a group.
+ */
+const UNSUPPORTED_SHELL_RE = /[()`]|\{(?!\})|(?<!\{)\}|\$\(|<<|\\\n|(?:^|[;\n|&]\s*)(?:if|for|while|until|case|function|select)\s/u;
+/** `sh -c "…"`, `bash -lc "…"`: the wrapper runs its body, and the body is what is judged. */
+const SHELL_WRAPPER_RE = /^(?:\S*\/)?(?:sh|bash|zsh|dash|ksh)\s+(?:-[a-zA-Z]+\s+)*-[a-zA-Z]*c[a-zA-Z]*\s+(["'])([\s\S]*)\1\s*$/u;
 const INTERPRETER_PROGRAM_RE = /^(?:\S*\/)?(?:python(?:\d+(?:\.\d+)?)?|node|perl|ruby)$/iu;
 
 /**
- * Which `&&`/`||`-joined segments of one shell statement PROVABLY ran, given
- * the statement exited 0 (the caller only asks about non-error results).
+ * Which `&&`/`||`-joined segments of the LAST statement provably ran AND
+ * SUCCEEDED, given the whole command exited 0 (the caller only asks about
+ * non-error results).
  *
- * The first version counted every segment, so `true || touch x` — exit 0,
- * nothing written — cleared a rejection (Codex wave 0-A review 2026-09-17 #5).
- * Rules: the first segment always ran; with no `||` present every `&&`
- * segment ran (exit 0 needs each to succeed); with a `||` present, only the
- * trailing `&&` chain after the last `||` is forced by exit 0 — the segment
- * right after that `||` is the alternative and may have been skipped. A
- * literal `true`/`false` decides its own successor either way.
+ * "Ran" was not enough: `touch /missing-parent/x || true` exits 0 and
+ * writes nothing, and the first version credited the first segment for
+ * having run (Codex 2026-09-17 on 2df6170e #5). With no `||` present,
+ * exit 0 needs every `&&` segment to succeed — unless one is the literal
+ * `false`, which contradicts the premise. With a `||` present, nothing
+ * before the last `||` is provable (its failure may be what the
+ * alternative masked), and the tail after it ran and succeeded only when
+ * the whole prefix is the literal `false` (`false || touch x`).
  */
-function provablyRunSegments(statement: string): string[] {
+function provablySucceededSegments(statement: string): string[] {
   const parts = statement.split(/\s*(&&|\|\|)\s*/u);
   const segments: string[] = [];
   const ops: string[] = [];
@@ -178,27 +192,11 @@ function provablyRunSegments(statement: string): string[] {
     if (i % 2 === 0) segments.push((parts[i] ?? "").trim());
     else ops.push(parts[i] ?? "");
   }
-  type Ran = "yes" | "no" | "maybe";
-  const ran: Ran[] = [];
-  // Exit status of the prefix so far, when a literal makes it known.
-  let prefix: 0 | 1 | undefined;
-  for (let i = 0; i < segments.length; i += 1) {
-    let r: Ran;
-    if (i === 0) r = "yes";
-    else if (prefix === undefined) r = "maybe";
-    else r = (ops[i - 1] === "&&") === (prefix === 0) ? "yes" : "no";
-    ran.push(r);
-    if (r === "no") continue; // a skipped segment leaves the status alone
-    const seg = segments[i] ?? "";
-    prefix = r === "yes" && /^(?:true|:)$/u.test(seg) ? 0 : r === "yes" && seg === "false" ? 1 : undefined;
-  }
-  // Exit 0 forces the trailing `&&` chain: each of its segments ran and
-  // succeeded. It says nothing about what sits before the last `||`.
-  for (let i = segments.length - 1; i >= 1; i -= 1) {
-    if (ops[i - 1] !== "&&") break;
-    if (ran[i] === "maybe") ran[i] = "yes";
-  }
-  return segments.filter((seg, i) => ran[i] === "yes" && seg.length > 0);
+  const isFalse = (seg: string): boolean => /^(?:false|!\s+true)$/u.test(seg);
+  const lastOr = ops.lastIndexOf("||");
+  if (lastOr === -1) return segments.some(isFalse) ? [] : segments.filter((seg) => seg.length > 0);
+  const prefixIsFalse = lastOr === 0 && isFalse(segments[0] ?? "");
+  return prefixIsFalse ? segments.slice(1).filter((seg) => seg.length > 0) : [];
 }
 
 function mutatesSomething(input: Record<string, unknown> | undefined): boolean {
@@ -207,30 +205,46 @@ function mutatesSomething(input: Record<string, unknown> | undefined): boolean {
   if (typeof action === "string") return !READ_ONLY_ACTION_RE.test(action);
   const command = input["command"];
   if (typeof command !== "string") return true;
+  const raw = command.trim();
+  // A wrapper runs its body: `sh -c "touch x"` is judged as `touch x`
+  // (Codex 2026-09-17 on 2df6170e #7).
+  const wrapped = SHELL_WRAPPER_RE.exec(raw);
+  if (wrapped !== null) return mutatesSomething({ command: wrapped[2] ?? "" });
+  // Syntax this inference does not read proves nothing. Quoted text is
+  // blanked first: the parentheses of `python3 -c "Path('x').write_text()"`
+  // are the body's, not the shell's.
+  const structure = raw.replace(/"((?:[^"\\]|\\.)*)"|'([^']*)'/gu, (m) => "_".repeat(m.length));
+  if (UNSUPPORTED_SHELL_RE.test(structure)) return false;
   // Quoted text is not shell syntax: printf "a > b" writes nothing, and
   // 2>&1 duplicates a descriptor (Codex 2026-09-17 round 2 #6).
   // …so quoted text keeps its words (a quoted program path is still the
   // program) and loses its shell characters.
-  const unquoted = command
+  const unquoted = raw
     .replace(/"((?:[^"\\]|\\.)*)"|'([^']*)'/gu, (_m, d: string | undefined, q: string | undefined) => (d ?? q ?? "").replace(/[<>|;&\n]/gu, "_"))
     .replace(/\d*>&\d+/gu, " ");
-  // Statements always run in sequence; within one, only the provably-run
-  // `&&`/`||` segments count, and every stage of a pipeline runs.
-  const statements = unquoted.split(/\s*(?:;|\n)+\s*/u).map((s) => s.trim()).filter((s) => s.length > 0);
-  return statements.some((statement) =>
-    provablyRunSegments(statement).some((segment) =>
-      segment.split(/\s*\|\s*/u).map((stage) => stage.trim()).filter((stage) => stage.length > 0).some(stageMutates),
-    ),
-  );
+  // EXIT 0 IS THE LAST STATEMENT'S. `test -d /absent && touch x; true`
+  // exits 0 and writes nothing: an earlier statement's status is masked by
+  // the later one, so only the last statement is inferred (Codex 2026-09-17
+  // on 2df6170e #3). Within it, only the segments that provably succeeded
+  // count, and of a pipeline only the last stage's status is known.
+  const statements = unquoted.split(/\s*(?:(?<!\\);|\n)+\s*/u).map((s) => s.trim()).filter((s) => s.length > 0);
+  const last = statements[statements.length - 1];
+  if (last === undefined) return false;
+  return provablySucceededSegments(last).some((segment) => {
+    const stages = segment.split(/\s*\|\s*/u).map((stage) => stage.trim()).filter((stage) => stage.length > 0);
+    const final = stages[stages.length - 1];
+    return final !== undefined && stageMutates(final);
+  });
 }
 
 /** Does one pipeline stage (a single program invocation) positively mutate something? */
 function stageMutates(seg: string): boolean {
   // A redirection writes — unless it is to /dev/null.
   if (/(?:^|[^<>])>\s*(?!\/dev\/null\b)\S/u.test(seg.replace(/>>/gu, ">"))) return true;
-  // Unwrap `env VAR=x`, plain assignments and sudo/time/nice.
+  // Unwrap `env VAR=x`, `env -i`/`-u VAR`, plain assignments and sudo/time/nice.
   const stripped = seg
-    .replace(/^(?:env\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*/u, "")
+    .replace(/^env\s+(?:(?:-u\s+\S+|-\S+|[A-Za-z_][A-Za-z0-9_]*=\S*)\s+)*/u, "")
+    .replace(/^(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*/u, "")
     .replace(/^(?:sudo|time|nice|nohup)\s+/u, "");
   const words = stripped.split(/\s+/u);
   // "/Applications/Unity/Unity.exe" is the same program as unity; quotes
@@ -267,7 +281,11 @@ function stageMutates(seg: string): boolean {
     const flags = rest.split(/\s+/u)[0] ?? "";
     return /^--(?:extract|create)$/u.test(flags) || (/^-?[a-zA-Z]+$/u.test(flags) && /[xc]/u.test(flags) && !/t/u.test(flags));
   }
-  if (/^(?:\S*\/)?xargs$/iu.test(program)) return mutatesSomething({ command: rest.replace(/^(?:-\S+\s+)*/u, "") });
+  // xargs: options with operands (-n 1, -I {}, -P 4, -L 2, -d x, -s N, -a f)
+  // are consumed with them, so the program after them is the one judged.
+  if (/^(?:\S*\/)?xargs$/iu.test(program)) return mutatesSomething({ command: rest.replace(/^(?:(?:-[nIPLdsaE]\s*\S+|-\S+)\s+)*/u, "") });
+  // tee with nothing to write to writes nothing.
+  if (/^(?:\S*\/)?tee$/iu.test(program)) return rest.split(/\s+/u).some((w) => w.length > 0 && !w.startsWith("-") && !/^\d*[<>]/u.test(w));
   if (INTERPRETER_PROGRAM_RE.test(program)) {
     // An inline body writes only if IT contains a write-shaped call; a
     // script file is unknown, not a write.
