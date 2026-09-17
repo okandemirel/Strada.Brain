@@ -74,6 +74,18 @@ export type SurfaceScope = "own-identity" | "owner-only";
 
 export interface SurfacePolicy {
   readonly scope: SurfaceScope;
+  /**
+   * What "belongs to no identity here" means on this surface.
+   *
+   * true  — it is EVERYONE's: a monitor frame carrying no conversation scope
+   *         (canvas, budget, supervisor, another channel's activity) is the
+   *         portal's window onto the instance and is broadcast, as before.
+   * false — it is NOBODY's, and nobody can be shown to own it. On a shared
+   *         instance that is a refusal, not a grant: an attachment row with no
+   *         owner recorded (one written before the column existed) must not
+   *         become readable by whoever asks (plan 6.14).
+   */
+  readonly unattributedIsPublic: boolean;
   /** Reads into a refusal: "<who> may not <verb>". */
   readonly verb: string;
   /** What the owner may do on this surface (the model, as a table row). */
@@ -90,42 +102,49 @@ export interface SurfacePolicy {
 export const SURFACE_POLICY: Readonly<Record<InstanceSurface, SurfacePolicy>> = {
   "monitor:frames": {
     scope: "own-identity",
+    unattributedIsPublic: true,
     verb: "see these monitor frames",
     owner: "own boards + unattributed/other-channel frames",
     guest: "own boards + unattributed/other-channel frames",
   },
   "chat:frames": {
     scope: "own-identity",
+    unattributedIsPublic: false,
     verb: "read this chat",
     owner: "own chat only",
     guest: "own chat only",
   },
   "confirmation:answer": {
     scope: "own-identity",
+    unattributedIsPublic: false,
     verb: "answer this confirmation",
     owner: "own prompts/gates only",
     guest: "own prompts/gates only",
   },
   "attachment:read": {
     scope: "own-identity",
+    unattributedIsPublic: false,
     verb: "download this attachment",
     owner: "own attachments only",
     guest: "own attachments only",
   },
   "task:control": {
     scope: "own-identity",
+    unattributedIsPublic: false,
     verb: "control this task",
     owner: "own tasks only (cancel/retry/resume/move/gate)",
     guest: "own tasks only (cancel/retry/resume/move/gate)",
   },
   "instance:control": {
     scope: "owner-only",
+    unattributedIsPublic: false,
     verb: "control this instance",
     owner: "daemon start/stop, autonomous mode, provider switch, pause/resume the run",
     guest: "nothing",
   },
   "setup:write": {
     scope: "owner-only",
+    unattributedIsPublic: false,
     verb: "change this instance's setup",
     owner: "setup, settings, .env, provider/budget/routing config, vault registration",
     guest: "nothing",
@@ -172,7 +191,8 @@ export type AccessCode =
   | "allow:sole-identity"
   | "deny:guest-owner-only"
   | "deny:other-identity"
-  | "deny:unidentified";
+  | "deny:unidentified"
+  | "deny:unattributable";
 
 export interface AccessDecision {
   readonly allowed: boolean;
@@ -254,11 +274,30 @@ export function decideInstanceAccess(req: AccessRequest): AccessDecision {
   const resourceProfile = req.resource?.profileId;
   const resourceChat = req.resource?.chatId;
   if (resourceProfile === undefined && resourceChat === undefined) {
+    if (policy.unattributedIsPublic) {
+      return {
+        allowed: true,
+        code: "allow:unattributed",
+        surface,
+        reason: `${who} may ${policy.verb}${what}: it belongs to no identity on this instance and this surface is shared by all of them`,
+      };
+    }
+    // Nobody can be shown to own it. On a one-person instance that is the one
+    // person's; on a shared one it is a refusal, because "unknown owner" must
+    // never widen into "anyone may" (plan 6.14).
+    if (!req.instance.shared) {
+      return {
+        allowed: true,
+        code: "allow:sole-identity",
+        surface,
+        reason: `${who} may ${policy.verb}${what}: no identity is recorded for it and this instance has a single identity`,
+      };
+    }
     return {
-      allowed: true,
-      code: "allow:unattributed",
+      allowed: false,
+      code: "deny:unattributable",
       surface,
-      reason: `${who} may ${policy.verb}${what}: it belongs to no identity on this instance`,
+      reason: `${who} may not ${policy.verb}${what}: no identity is recorded for it on a shared instance, so no caller can be shown to own it`,
     };
   }
   if (req.actor.profileId !== undefined && resourceProfile !== undefined && resourceProfile === req.actor.profileId) {

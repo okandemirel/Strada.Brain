@@ -195,3 +195,41 @@ describe("instance access model — dashboard proxy classification", () => {
     }
   });
 });
+
+// ── Plan 6.14, the durable half: "nobody's" is not "everybody's" ──
+//
+// An attachment row written before the owner column records no owner. Reading
+// that absence as a grant made the same link readable or not depending on when
+// the daemon last booted; the conservative direction is a refusal on a shared
+// instance. A monitor frame that carries no conversation scope is the opposite
+// case — it genuinely belongs to every identity — so the difference is stated
+// per surface rather than guessed.
+describe("instance access model — unattributable resources", () => {
+  it("marks only monitor frames as shared-by-all when nothing owns them", () => {
+    const shareable = (Object.keys(SURFACE_POLICY) as InstanceSurface[])
+      .filter((s) => SURFACE_POLICY[s].unattributedIsPublic);
+    expect(shareable).toEqual(["monitor:frames"]);
+  });
+
+  it("refuses an attachment no identity is recorded for on a shared instance", () => {
+    for (const actor of [ownerActor, guestActor, anonActor]) {
+      const d = decideInstanceAccess({ surface: "attachment:read", actor, resource: {}, instance: shared, what: "tok" });
+      expect(d.allowed, actor.role).toBe(false);
+      expect(d.code, actor.role).toBe("deny:unattributable");
+      expect(d.reason).toContain("no identity is recorded");
+      expect(d.reason).toContain("tok");
+    }
+  });
+
+  it("still serves it on a single-identity instance", () => {
+    const d = decideInstanceAccess({ surface: "attachment:read", actor: anonActor, resource: {}, instance: solo });
+    expect(d.allowed).toBe(true);
+    expect(d.code).toBe("allow:sole-identity");
+  });
+
+  it("still broadcasts an unattributed monitor frame on a shared instance", () => {
+    const d = decideInstanceAccess({ surface: "monitor:frames", actor: guestActor, resource: {}, instance: shared });
+    expect(d.allowed).toBe(true);
+    expect(d.code).toBe("allow:unattributed");
+  });
+});

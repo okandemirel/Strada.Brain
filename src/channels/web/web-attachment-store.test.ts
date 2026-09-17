@@ -593,3 +593,108 @@ describe("WebAttachmentStore spools per database (round 11 #15)", () => {
     store.close();
   });
 });
+
+// =============================================================================
+// PLAN 6.14 (the durable half) — WHOSE attachment is this?
+//
+// The channel scopes an attachment link to the identity it was delivered to, but
+// it kept that binding in an in-process LRU: after a restart the same link was
+// unattributable, so it was served on a single-identity instance and refused on
+// a shared one — readable or not depending on when the daemon last booted. The
+// owner is a COLUMN, and the link-scoping key is stored next to the rows so the
+// proof a link carries still verifies in the next process.
+// =============================================================================
+describe("WebAttachmentStore remembers whose attachment it is (plan 6.14)", () => {
+  const OWNER = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+
+  it("keeps the owning identity across a restart", () => {
+    const path = dbPath();
+    const first = new WebAttachmentStore(path);
+    const owned = first.register({ name: "frame.png", data: Buffer.from("png"), chatId: "chat-1", ownerProfileId: OWNER });
+    const unowned = first.register({ name: "daemon.log", data: Buffer.from("log"), chatId: "chat-9" });
+    expect(first.ownerProfileIdOf(owned)).toBe(OWNER);
+    expect(first.ownerProfileIdOf(unowned)).toBeUndefined();
+    first.close();
+
+    const second = new WebAttachmentStore(path);
+    expect(second.ownerProfileIdOf(owned)).toBe(OWNER);
+    expect(second.get(owned)).toMatchObject({ ownerProfileId: OWNER });
+    // A row with no owner stays without one: "unattributable", never "anyone's".
+    expect(second.ownerProfileIdOf(unowned)).toBeUndefined();
+    expect(second.ownerProfileIdOf("no-such-token")).toBeUndefined();
+    second.close();
+  });
+
+  // The row is still in the file for a moment after its time is up (the purge
+  // runs on the next register/get). An expired token must name no owner: the
+  // link it belonged to is gone, and reporting an owner for it would keep a dead
+  // link inside somebody's boundary.
+  it("names no owner once the row has expired", () => {
+    const store = new WebAttachmentStore(dbPath(), -1);
+    const token = store.register({ name: "gone.png", data: Buffer.from("x"), ownerProfileId: OWNER });
+    expect(store.ownerProfileIdOf(token)).toBeUndefined();
+    expect(store.get(token)).toBeNull();
+    store.close();
+  });
+
+  it("keeps the link-scoping key across a restart, and it is per database", () => {
+    const path = dbPath();
+    const first = new WebAttachmentStore(path);
+    const key = Buffer.from(first.linkScopeKey());
+    expect(key.length).toBeGreaterThanOrEqual(32);
+    first.close();
+
+    const second = new WebAttachmentStore(path);
+    expect(Buffer.from(second.linkScopeKey())).toEqual(key);
+    second.close();
+
+    const other = new WebAttachmentStore(dbPath());
+    expect(Buffer.from(other.linkScopeKey())).not.toEqual(key);
+    other.close();
+  });
+
+  // The live database has rows written before the column existed. It must OPEN
+  // (an ALTER migration, like byte_size/checksum/retained before it) and serve
+  // them — with no owner, which the access model must read as unattributable.
+  it("opens a database written before the owner column and serves its rows", () => {
+    const path = dbPath();
+    const legacy = new Database(path);
+    legacy.exec(`
+      CREATE TABLE web_attachments (
+        token TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        mime_type TEXT,
+        path TEXT,
+        data BLOB,
+        chat_id TEXT,
+        created_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        byte_size INTEGER,
+        checksum TEXT,
+        retained INTEGER NOT NULL DEFAULT 0
+      )
+    `);
+    const now = Date.now();
+    legacy.prepare(
+      `INSERT INTO web_attachments (token, name, mime_type, data, chat_id, created_at, expires_at, byte_size, retained)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+    ).run("legacy-token", "old.png", "image/png", Buffer.from("old"), "chat-1", now, now + 60_000, 3);
+    legacy.close();
+
+    const store = new WebAttachmentStore(path);
+    const columns = new Set(
+      (new Database(path).prepare("PRAGMA table_info(web_attachments)").all() as Array<{ name: string }>)
+        .map((c) => c.name),
+    );
+    expect(columns.has("owner_profile_id")).toBe(true);
+    const entry = store.get("legacy-token");
+    expect(entry).toMatchObject({ name: "old.png" });
+    expect(entry!.data).toEqual(Buffer.from("old"));
+    expect(entry!.ownerProfileId).toBeUndefined();
+    expect(store.ownerProfileIdOf("legacy-token")).toBeUndefined();
+    // …and a new registration on the migrated database records its owner.
+    const fresh = store.register({ name: "new.png", data: Buffer.from("new"), ownerProfileId: OWNER });
+    expect(store.ownerProfileIdOf(fresh)).toBe(OWNER);
+    store.close();
+  });
+});

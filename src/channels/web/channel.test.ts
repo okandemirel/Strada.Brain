@@ -3039,3 +3039,166 @@ describe("WebChannel shared instance: two identities (plan 6.14)", () => {
     await channel.disconnect();
   });
 });
+
+// ── Plan 6.14, the durable half: an attachment's owner survives a restart ──
+//
+// The channel scoped each attachment link to the identity it was delivered to,
+// but kept that binding in an in-process LRU and signed the link with a
+// per-process key. After a restart the same link was unattributable: served on a
+// single-identity instance, refused on a shared one — readable or not depending
+// on when the daemon last booted, which is not an access model. The owner is now
+// a column on the attachment store and the scoping key lives beside the rows.
+describe("WebChannel attachment ownership survives a restart (plan 6.14)", () => {
+  const OWNER_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const GUEST_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+  const dirs: string[] = [];
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  /** Two databases in a temp dir — never the real ~/.strada. */
+  function paths() {
+    const dir = mkdtempSync(join(tmpdir(), "web-instance-"));
+    dirs.push(dir);
+    return { identityDbPath: join(dir, "web-identities.db"), attachmentDbPath: join(dir, "web-attachments.db") };
+  }
+
+  function connect(channel: WebChannel, profileId: string) {
+    const socket = createMockSocket();
+    (channel as unknown as { handleWsConnection: (ws: unknown) => void }).handleWsConnection(socket);
+    const identity = (channel as unknown as {
+      identityStore: { issue: (id?: string) => { profileId: string; profileToken: string } };
+    }).identityStore.issue(profileId);
+    socket.emit("message", Buffer.from(JSON.stringify({
+      type: "session_init", profileId: identity.profileId, profileToken: identity.profileToken,
+    })));
+    const connected = socket.getSentMessages().filter((m) => m.type === "connected").at(-1)!;
+    return {
+      socket,
+      profileId: identity.profileId,
+      profileToken: identity.profileToken,
+      chatId: String(connected.chatId),
+      frames: (type: string) => socket.getSentMessages().filter((m) => m.type === type),
+    };
+  }
+
+  async function httpGet(channel: WebChannel, url: string, headers: Record<string, string> = {}) {
+    const out: { status?: number; body: Buffer[] } = { body: [] };
+    const res = new Writable({ write(chunk, _enc, cb) { out.body.push(Buffer.from(chunk)); cb(); } }) as unknown as
+      import("node:http").ServerResponse & { headersSent: boolean };
+    Object.assign(res, {
+      headersSent: false,
+      writeHead: (status: number, _h: Record<string, string>) => { out.status = status; res.headersSent = true; return res; },
+    });
+    await (channel as unknown as { handleHttp: (req: unknown, res: unknown) => Promise<void> })
+      .handleHttp({ method: "GET", url, headers }, res);
+    if (!(res as unknown as Writable).writableFinished) await new Promise((r) => (res as unknown as Writable).once("finish", r));
+    return { status: out.status, bytes: Buffer.concat(out.body), text: Buffer.concat(out.body).toString() };
+  }
+
+  it("serves the owner's own link and refuses a second identity AFTER a restart", async () => {
+    const dbs = paths();
+    const png = Buffer.from("89504e470d0a1a0a", "hex");
+
+    const before = new WebChannel(3000, 3100, dbs);
+    const owner = connect(before, OWNER_ID);
+    const guest = connect(before, GUEST_ID);
+    await before.sendAttachment(owner.chatId, {
+      type: "image", name: "owner-frame.png", data: png, mimeType: "image/png", size: png.length,
+    });
+    const href = String(owner.frames("attachment")[0]!.href);
+    const token = href.slice("/attachments/".length).split("?")[0]!;
+    expect(href).toContain("?v=");
+    expect(guest.frames("attachment")).toHaveLength(0);
+    await before.disconnect();
+
+    // A NEW process on the same databases: the link in the chat history is the
+    // same link, and it must mean the same thing.
+    const after = new WebChannel(3000, 3100, dbs);
+    const asOwnerLink = await httpGet(after, href);
+    expect(asOwnerLink.status).toBe(200);
+    expect(asOwnerLink.bytes).toEqual(png);
+
+    const asOwnerHeaders = await httpGet(after, `/attachments/${token}`, {
+      "x-strada-profile-id": owner.profileId,
+      "x-strada-profile-token": owner.profileToken,
+    });
+    expect(asOwnerHeaders.status).toBe(200);
+
+    // The guest — whose identity the reopened instance still knows — is refused,
+    // with the bare token and with the owner's signed link.
+    const bare = await httpGet(after, `/attachments/${token}`);
+    expect(bare.status).toBe(403);
+    expect(bare.text).toContain(owner.profileId);
+
+    const asGuest = await httpGet(after, href, {
+      "x-strada-profile-id": guest.profileId,
+      "x-strada-profile-token": guest.profileToken,
+    });
+    expect(asGuest.status).toBe(403);
+    expect(asGuest.text).toContain(guest.profileId);
+
+    await after.disconnect();
+  });
+
+  // The conservative direction for a row written before the column existed (or
+  // for a chat that has no identity at all): nobody can be shown to own it, so
+  // on a shared instance it is served to NOBODY — never "anyone may read it".
+  it("refuses an attachment nobody can be shown to own on a shared instance", async () => {
+    const dbs = paths();
+    const channel = new WebChannel(3000, 3100, dbs);
+    const owner = connect(channel, OWNER_ID);
+    const guest = connect(channel, GUEST_ID);
+
+    // A chat with no identity: the daemon-side chat of a legacy row.
+    await channel.sendAttachment("chat-with-no-identity", {
+      type: "document", name: "old.md", data: Buffer.from("legacy bytes"), size: 12,
+    });
+    const store = (channel as unknown as {
+      attachmentStore: { size: () => number };
+    }).attachmentStore;
+    expect(store.size()).toBe(1);
+    const token = (channel as unknown as {
+      attachmentStore: { get: (t: string) => unknown };
+    }) && String(
+      (channel as unknown as { attachmentStore: { lastToken?: string } }).attachmentStore.lastToken ?? "",
+    );
+    void token;
+
+    // Reach the row's token the way a client would: the frame was buffered for a
+    // chat with no socket, so read it out of the pending-delivery buffer.
+    const buffered = (channel as unknown as {
+      pendingDelivery: Map<string, Array<Record<string, unknown>>>;
+    }).pendingDelivery.get("chat-with-no-identity")!;
+    const frame = buffered.find((f) => f.type === "attachment")!;
+    const href = String(frame.href);
+    expect(href).not.toContain("?v=");
+
+    for (const [who, headers] of [
+      ["nobody", {}],
+      ["the owner", { "x-strada-profile-id": owner.profileId, "x-strada-profile-token": owner.profileToken }],
+      ["the guest", { "x-strada-profile-id": guest.profileId, "x-strada-profile-token": guest.profileToken }],
+    ] as const) {
+      const out = await httpGet(channel, href, headers);
+      expect(out.status, who).toBe(403);
+      expect(out.text, who).toContain("attachment:read");
+    }
+
+    await channel.disconnect();
+  });
+
+  // Guard: a one-person instance is untouched — its own unattributed links work.
+  it("still serves an unowned attachment on a single-identity instance", async () => {
+    const dbs = paths();
+    const channel = new WebChannel(3000, 3100, dbs);
+    const solo = connect(channel, OWNER_ID);
+    await channel.sendAttachment(solo.chatId, {
+      type: "document", name: "notes.md", data: Buffer.from("hello"), size: 5,
+    });
+    const href = String(solo.frames("attachment")[0]!.href);
+    const token = href.slice("/attachments/".length).split("?")[0]!;
+    expect((await httpGet(channel, href)).status).toBe(200);
+    expect((await httpGet(channel, `/attachments/${token}`)).status).toBe(200);
+    await channel.disconnect();
+  });
+});

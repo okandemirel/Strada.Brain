@@ -302,16 +302,20 @@ export class WebChannel
    * attributable (plan 6.14). Bounded; least-recently-touched evicted.
    */
   private readonly profileByChat = new LRUCache<string, string>(500);
-  /** attachment token → the profile identity it was delivered to (plan 6.14). */
-  private readonly attachmentOwnerByToken = new LRUCache<string, string>(500);
   /**
-   * Per-process key signing attachment links. A browser cannot put a profile
-   * header on an `<img src>`, so the href this server hands to the owning
-   * socket carries its own proof: `?v=HMAC(token, ownerProfileId)`. Only the
-   * owner's socket ever received that href, so presenting it IS the owner's
-   * claim — and a guest with the bare token has nothing to present.
+   * A browser cannot put a profile header on an `<img src>`, so the href this
+   * server hands to the owning socket carries its own proof:
+   * `?v=HMAC(token, ownerProfileId)`. Only the owner's socket ever received that
+   * href, so presenting it IS the owner's claim — and a guest with the bare
+   * token has nothing to present.
+   *
+   * WHOSE attachment it is, and the key that signs that proof, both live in the
+   * attachment store's database now. They were an in-process LRU and a
+   * per-process key until 6.14's durable half, so after a restart the same link
+   * was unattributable — served on a single-identity instance and refused on a
+   * shared one, i.e. readable or not depending on when the daemon last booted.
    */
-  private readonly attachmentLinkKey = randomBytes(32);
+  private linkScopeKeyCache: Buffer | undefined;
 
   private static readonly UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   private static readonly RECONNECT_TTL_MS = 5 * 60 * 1000;
@@ -1108,7 +1112,7 @@ export class WebChannel
     // Plan 6.14: the link is scoped to the identity it is delivered to. A
     // browser cannot put a profile header on an `<img src>`, so the href itself
     // carries the owner's proof; a guest holding the bare token has none.
-    const href = `/attachments/${token}${this.attachmentLinkSuffix(token, chatId)}`;
+    const href = `/attachments/${token}${this.attachmentLinkSuffix(token)}`;
     const size = typeof attachment.size === "number" ? ` (${(attachment.size / 1024).toFixed(0)} KB)` : "";
     const kind = attachment.type === "image" ? "image" : "file";
     // The markdown text every existing renderer already handles stays as the
@@ -1139,39 +1143,56 @@ export class WebChannel
   private registerAttachment(attachment: Attachment, chatId?: string): string | null {
     const localPath = attachment.url && /^(?:\/|[A-Za-z]:[\\/])/.test(attachment.url) ? attachment.url : undefined;
     if (!localPath && !attachment.data) return null;
+    // The owning identity goes on the ROW (plan 6.14), so the link means the
+    // same thing in the next process as it does in this one.
+    const ownerProfileId = chatId ? this.chatOwnerProfileId(chatId) : undefined;
     return this.attachmentStore.register({
       name: attachment.name,
       ...(attachment.mimeType ? { mimeType: attachment.mimeType } : {}),
       ...(localPath ? { path: localPath } : {}),
       ...(attachment.data ? { data: attachment.data } : {}),
       ...(chatId ? { chatId } : {}),
+      ...(ownerProfileId ? { ownerProfileId } : {}),
     });
   }
 
+  /** The identity behind a chat, when it is one this channel issued. */
+  private chatOwnerProfileId(chatId: string): string | undefined {
+    const profileId = this.clients.get(chatId)?.profileId ?? this.profileByChat.get(chatId);
+    return profileId && this.isIssuedProfileId(profileId) ? profileId : undefined;
+  }
+
   /**
-   * Bind a freshly registered attachment to the identity behind `chatId` and
-   * return the query suffix that proves it (`?v=…`). Empty when the chat has no
-   * identity at all (a daemon-side chat that never completed session_init):
-   * such an attachment belongs to nobody, and the model grants it under
-   * `allow:unattributed` / `allow:sole-identity` instead of a signature.
+   * The query suffix that proves who owns `token` (`?v=…`), read from the row
+   * the registration just wrote. Empty when the row records no owner (a
+   * daemon-side chat that never completed session_init): such an attachment is
+   * unattributable, which the model refuses on a shared instance rather than
+   * granting to whoever asks.
    */
-  private attachmentLinkSuffix(token: string, chatId: string): string {
-    const ownerProfileId = this.clients.get(chatId)?.profileId ?? this.profileByChat.get(chatId);
-    if (!ownerProfileId || !this.isIssuedProfileId(ownerProfileId)) return "";
-    this.attachmentOwnerByToken.set(token, ownerProfileId);
+  private attachmentLinkSuffix(token: string): string {
+    const ownerProfileId = this.attachmentStore.ownerProfileIdOf(token);
+    if (!ownerProfileId) return "";
     return `?v=${this.attachmentLinkSignature(token, ownerProfileId)}`;
   }
 
-  /** HMAC binding an attachment token to the identity it was delivered to. */
+  /**
+   * HMAC binding an attachment token to the identity it was delivered to, under
+   * the key the attachment store keeps beside its rows — so a link minted before
+   * a restart still verifies after it.
+   */
   private attachmentLinkSignature(token: string, profileId: string): string {
-    return createHmac("sha256", this.attachmentLinkKey)
+    this.linkScopeKeyCache ??= this.attachmentStore.linkScopeKey();
+    return createHmac("sha256", this.linkScopeKeyCache)
       .update(`${token} ${profileId}`)
       .digest("base64url");
   }
 
   /**
    * Who may GET this attachment (plan 6.14, surface `attachment:read`). The
-   * owning identity is named by the token→identity binding made at delivery;
+   * owning identity is the one recorded ON THE ROW at delivery — durable, so the
+   * answer no longer depends on when the daemon last booted, and a row with no
+   * owner reads as unattributable (refused on a shared instance) rather than as
+   * "anyone may read it";
    * the request proves it either with the signed link this server handed to
    * that identity's socket, or with the profile headers a non-browser caller
    * can send. A verified identity that is NOT the owner is refused even when it
@@ -1180,7 +1201,7 @@ export class WebChannel
    */
   private decideAttachmentAccess(req: HttpReq | undefined, token: string, query: string): AccessDecision {
     const facts = this.instanceFacts();
-    const owner = this.attachmentOwnerByToken.get(token);
+    const owner = this.attachmentStore.ownerProfileIdOf(token);
     const headerProfileId = req ? this.getSingleHeader(req.headers["x-strada-profile-id"]) : undefined;
     const headerToken = req ? this.getSingleHeader(req.headers["x-strada-profile-token"]) : undefined;
     const verifiedHeaderProfile =

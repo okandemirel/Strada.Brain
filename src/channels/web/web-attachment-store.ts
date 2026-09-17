@@ -179,6 +179,14 @@ export interface StoredAttachment {
   /** The bytes themselves: what was attached, as it was at registration. */
   readonly data?: Buffer;
   readonly chatId?: string;
+  /**
+   * The web profile identity this attachment was delivered to (plan 6.14).
+   * Absent means "no identity this instance can name owns it" — a row written
+   * before the column existed, or a chat with no identity at all. That absence
+   * is UNATTRIBUTABLE, which the access model reads conservatively; it is not
+   * "anyone may read it".
+   */
+  readonly ownerProfileId?: string;
   /** Size measured at registration (both forms). */
   readonly sizeBytes?: number;
   /** SHA-256 measured at registration (both forms). */
@@ -192,6 +200,8 @@ export interface AttachmentToStore {
   readonly path?: string;
   readonly data?: Buffer;
   readonly chatId?: string;
+  /** The identity the link is scoped to (plan 6.14). Omitted ⇒ unattributable. */
+  readonly ownerProfileId?: string;
 }
 
 /** An open, verified handle on a retained file: the fd the bytes must be read from. */
@@ -245,6 +255,9 @@ export class WebAttachmentStore {
   private readonly db: Database.Database;
   private readonly stmtInsert: Database.Statement;
   private readonly stmtGet: Database.Statement;
+  private readonly stmtGetOwner: Database.Statement;
+  private readonly stmtGetMeta: Database.Statement;
+  private readonly stmtPutMeta: Database.Statement;
   private readonly stmtDeleteExpired: Database.Statement;
   private readonly stmtSelectExpiredRetained: Database.Statement;
   private readonly stmtCount: Database.Statement;
@@ -305,7 +318,18 @@ export class WebAttachmentStore {
         expires_at INTEGER NOT NULL,
         byte_size INTEGER,
         checksum TEXT,
-        retained INTEGER NOT NULL DEFAULT 0
+        retained INTEGER NOT NULL DEFAULT 0,
+        owner_profile_id TEXT
+      )
+    `);
+    // Plan 6.14: whose attachment this is, and the key that scopes its link —
+    // both beside the rows, because the channel used to keep them in memory and
+    // a restart therefore made every old link unattributable.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS web_attachment_meta (
+        key TEXT PRIMARY KEY,
+        value BLOB NOT NULL,
+        created_at INTEGER NOT NULL
       )
     `);
     // A database written before round 9 #24 has neither checksum column; its
@@ -321,13 +345,28 @@ export class WebAttachmentStore {
     if (!columns.has("retained")) {
       this.db.exec("ALTER TABLE web_attachments ADD COLUMN retained INTEGER NOT NULL DEFAULT 0");
     }
+    // One written before plan 6.14 has no owner column: its rows are
+    // unattributable, which is the conservative direction — the access model
+    // refuses them to a second identity rather than serving them to anyone.
+    if (!columns.has("owner_profile_id")) {
+      this.db.exec("ALTER TABLE web_attachments ADD COLUMN owner_profile_id TEXT");
+    }
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_web_attachments_expiry ON web_attachments(expires_at)");
 
     this.stmtInsert = this.db.prepare(
-      `INSERT INTO web_attachments (token, name, mime_type, path, data, chat_id, created_at, expires_at, byte_size, checksum, retained)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO web_attachments (token, name, mime_type, path, data, chat_id, created_at, expires_at, byte_size, checksum, retained, owner_profile_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.stmtGet = this.db.prepare("SELECT * FROM web_attachments WHERE token = ?");
+    // Projected: the owner is asked for on every attachment GET and the row's
+    // BLOB must not be read to answer it.
+    this.stmtGetOwner = this.db.prepare(
+      "SELECT owner_profile_id, expires_at FROM web_attachments WHERE token = ?",
+    );
+    this.stmtGetMeta = this.db.prepare("SELECT value FROM web_attachment_meta WHERE key = ?");
+    this.stmtPutMeta = this.db.prepare(
+      "INSERT INTO web_attachment_meta (key, value, created_at) VALUES (?, ?, ?) ON CONFLICT(key) DO NOTHING",
+    );
     this.stmtDeleteExpired = this.db.prepare("DELETE FROM web_attachments WHERE expires_at <= ?");
     this.stmtSelectExpiredRetained = this.db.prepare(
       "SELECT path FROM web_attachments WHERE expires_at <= ? AND retained = 1 AND path IS NOT NULL",
@@ -574,6 +613,7 @@ export class WebAttachmentStore {
       token, attachment.name, attachment.mimeType ?? null, snapshot.path,
       snapshot.data, attachment.chatId ?? null, now, now + this.ttlMs,
       snapshot.sizeBytes, snapshot.checksum, snapshot.retained ? 1 : 0,
+      attachment.ownerProfileId ?? null,
     );
   }
 
@@ -605,13 +645,50 @@ export class WebAttachmentStore {
     return token;
   }
 
+  /**
+   * The identity an attachment link is scoped to (plan 6.14), or undefined when
+   * the token is unknown, expired, or belongs to a row with no owner recorded —
+   * one written before the column existed, or delivered to a chat with no
+   * identity. Undefined means UNATTRIBUTABLE: the access model must refuse it to
+   * a second identity, never read it as "anyone may".
+   *
+   * Asked on every attachment GET, so it reads two columns rather than the row
+   * (a snapshot row carries up to 8 MiB of bytes).
+   */
+  ownerProfileIdOf(token: string): string | undefined {
+    const row = this.stmtGetOwner.get(token) as
+      | { owner_profile_id: string | null; expires_at: number }
+      | undefined;
+    if (!row || row.expires_at <= Date.now()) return undefined;
+    return row.owner_profile_id ?? undefined;
+  }
+
+  /**
+   * The key that scopes this store's attachment links (plan 6.14). A browser
+   * cannot put a profile header on an `<img src>`, so the href handed to the
+   * owning socket carries an HMAC of (token, owner) instead — and that proof has
+   * to keep verifying after a restart, which a per-process key could not do.
+   * Created once, per database, and kept beside the rows it authorizes: it
+   * unlocks nothing the rows themselves do not already hold.
+   */
+  linkScopeKey(): Buffer {
+    const existing = this.stmtGetMeta.get(WebAttachmentStore.LINK_KEY) as { value: Buffer } | undefined;
+    if (existing?.value && existing.value.length >= 32) return existing.value;
+    const fresh = randomBytes(32);
+    this.stmtPutMeta.run(WebAttachmentStore.LINK_KEY, fresh, Date.now());
+    const stored = this.stmtGetMeta.get(WebAttachmentStore.LINK_KEY) as { value: Buffer } | undefined;
+    return stored?.value ?? fresh;
+  }
+
+  private static readonly LINK_KEY = "link_scope_key";
+
   /** The record behind a token, or null when it is unknown or expired. */
   get(token: string): StoredAttachment | null {
     const row = this.stmtGet.get(token) as
       | {
           token: string; name: string; mime_type: string | null; path: string | null; data: Buffer | null;
           chat_id: string | null; expires_at: number; byte_size: number | null; checksum: string | null;
-          retained: number | null;
+          retained: number | null; owner_profile_id: string | null;
         }
       | undefined;
     if (!row) return null;
@@ -627,6 +704,7 @@ export class WebAttachmentStore {
       ...(row.retained === 1 ? { retained: true } : {}),
       ...(row.data ? { data: row.data } : {}),
       ...(row.chat_id ? { chatId: row.chat_id } : {}),
+      ...(row.owner_profile_id ? { ownerProfileId: row.owner_profile_id } : {}),
       ...(row.byte_size === null ? {} : { sizeBytes: row.byte_size }),
       ...(row.checksum === null ? {} : { checksum: row.checksum }),
       expiresAt: row.expires_at,
