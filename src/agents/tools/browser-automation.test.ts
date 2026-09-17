@@ -35,8 +35,10 @@ vi.stubGlobal("fetch", mockGlobalFetch);
 import {
   BrowserAutomationTool,
   CrossOriginRedirectError,
+  credentialHeadersForRequest,
   installNetworkPolicy,
   parseSetCookie,
+  type OriginCredentials,
   type PolicyContext,
   type PolicyJarCookie,
   type PolicyPage,
@@ -1136,6 +1138,8 @@ interface FakeNavSession {
   lastUsed: number;
   crossOriginRedirects: Map<string, string>;
   sameOriginRedirects: Map<string, string>;
+  credentials: { current?: OriginCredentials };
+  policyInstalled: boolean;
 }
 
 describe("BrowserAutomationTool.navigate — Codex round 8 #21/#22", () => {
@@ -1169,6 +1173,8 @@ describe("BrowserAutomationTool.navigate — Codex round 8 #21/#22", () => {
       lastUsed: Date.now(),
       crossOriginRedirects: new Map(),
       sameOriginRedirects: new Map(),
+      credentials: {},
+      policyInstalled: true,
     };
     (tool as unknown as { sessions: Map<string, unknown> }).sessions.set(context.workingDirectory, session);
     return session;
@@ -1178,9 +1184,12 @@ describe("BrowserAutomationTool.navigate — Codex round 8 #21/#22", () => {
     return session.page.setExtraHTTPHeaders.mock.calls.map((c) => c[0] as Record<string, string>);
   }
 
-  // #21: setExtraHTTPHeaders is persistent, so the Authorization given for
-  // trusted.example rode along to the origin the redirect recovery suggested.
-  it("#21 does not carry credentials to another origin", async () => {
+  // #21/round 9 #11: setExtraHTTPHeaders is persistent AND page-wide, so the
+  // Authorization given for trusted.example rode along to the origin the
+  // redirect recovery suggested AND to every sub-resource the page fetched.
+  // The page-wide set is now always empty; the credentials are handed to the
+  // network policy, which adds them to the requests that belong to the origin.
+  it("#21/#11 never installs credentials page-wide, and remembers the origin they belong to", async () => {
     const session = fakeSession(async () => undefined);
 
     const first = await tool.execute(
@@ -1188,26 +1197,30 @@ describe("BrowserAutomationTool.navigate — Codex round 8 #21/#22", () => {
       context,
     );
     expect(first.isError).toBeFalsy();
+    expect(session.credentials.current).toEqual({
+      origin: "https://trusted.example",
+      headers: { Authorization: "Bearer t" },
+    });
 
     const second = await tool.execute({ action: "navigate", url: "https://other.example/landing" }, context);
     expect(second.isError).toBeFalsy();
 
-    const applied = appliedHeaders(session);
-    expect(applied).toHaveLength(2);
-    expect(applied[0]).toEqual({ Authorization: "Bearer t" });
-    expect(applied[1]).toEqual({});
+    // Every page-wide application is empty, on both navigations.
+    for (const applied of appliedHeaders(session)) expect(applied).toEqual({});
+    // And the credentials stay bound to the origin they were given for.
+    expect(credentialHeadersForRequest(session.credentials.current, "https://other.example/landing", "none")).toBeUndefined();
   });
 
-  it("#21 re-applies the origin's headers on a same-origin navigation", async () => {
+  it("#21 the origin's credentials still reach a same-origin navigation", async () => {
     const session = fakeSession(async () => undefined);
     await tool.execute(
       { action: "navigate", url: "https://trusted.example/app", headers: { Authorization: "Bearer t" } },
       context,
     );
     await tool.execute({ action: "navigate", url: "https://trusted.example/other" }, context);
-    const applied = appliedHeaders(session);
-    expect(applied).toHaveLength(2);
-    expect(applied[1]).toEqual({ Authorization: "Bearer t" });
+    expect(
+      credentialHeadersForRequest(session.credentials.current, "https://trusted.example/other", "none"),
+    ).toEqual({ Authorization: "Bearer t" });
   });
 
   // #22 recovery: the policy refused the fulfil at the old URL and named the
@@ -1276,5 +1289,149 @@ describe("BrowserAutomationTool.navigate — Codex round 8 #21/#22", () => {
     expect(result.isError).toBe(true);
     expect(result.content).toContain("Navigate to https://other.example/landing explicitly");
     expect(session.page.goto).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── Codex round 9 (2026-09-17) #11: the agent's credentials are injected per
+// REQUEST for the origin they belong to. `setExtraHTTPHeaders` installs them on
+// the PAGE, so an image, iframe, clicked link or scripted navigation to another
+// origin carried them — none of those pass through handleNavigate's reset. ──
+
+describe("installNetworkPolicy — Codex round 9 #11 (per-request credentials)", () => {
+  const table = new Map<string, ResolvedAddress[]>();
+  const resolver = vi.fn(async (hostname: string): Promise<ResolvedAddress[]> => {
+    const hit = table.get(hostname);
+    if (!hit) throw new Error(`ENOTFOUND ${hostname}`);
+    return hit;
+  });
+
+  beforeEach(() => {
+    table.clear();
+    resolver.mockClear();
+    table.set("trusted.example", [{ address: PUBLIC_V4, family: 4 }]);
+    table.set("evil.trusted.example", [{ address: "151.101.1.1", family: 4 }]);
+    table.set("other.example", [{ address: "151.101.1.2", family: 4 }]);
+  });
+
+  const CREDENTIALS: OriginCredentials = {
+    origin: "https://trusted.example",
+    headers: { Authorization: "Bearer secret" },
+  };
+
+  async function install(credentials: OriginCredentials | null = CREDENTIALS) {
+    const ctx = fakeContext();
+    const page = fakePage();
+    await installNetworkPolicy(ctx, page, {
+      resolver,
+      onForbiddenNavigation: vi.fn(),
+      originCredentials: () => credentials ?? undefined,
+    });
+    return { ctx, page };
+  }
+
+  function continuedHeaders(route: ReturnType<typeof fakeRoute>): Record<string, string> | undefined {
+    const options = route.continue.mock.calls[0]?.[0] as { headers?: Record<string, string> } | undefined;
+    return options?.headers;
+  }
+
+  // The leaking half: a page-initiated request to ANOTHER origin must not carry
+  // the credentials the agent gave for the first one.
+  it("#11 a cross-origin image, frame or script carries no credentials", async () => {
+    for (const resourceType of ["image", "stylesheet", "script", "xhr"]) {
+      const { ctx } = await install();
+      const route = fakeRoute("https://other.example/pixel.gif", {
+        resourceType: () => resourceType,
+        allHeaders: async () => ({ "user-agent": "UA/1", "sec-fetch-site": "cross-site" }),
+      });
+      await ctx.routeHandler!(route);
+      expect(route.continue, resourceType).toHaveBeenCalledTimes(1);
+      expect(continuedHeaders(route)?.["Authorization"], resourceType).toBeUndefined();
+    }
+  });
+
+  it("#11 a cross-origin iframe document carries no credentials", async () => {
+    const { ctx } = await install();
+    mockFetch.mockResolvedValueOnce(okResponse("<html>frame</html>"));
+    await ctx.routeHandler!(
+      documentRoute("https://other.example/frame.html", {
+        allHeaders: async () => ({ "user-agent": "UA/1", "sec-fetch-site": "cross-site", "sec-fetch-dest": "iframe" }),
+      }),
+    );
+    const sent = (mockFetch.mock.calls[0]?.[1] as { headers: Record<string, string> }).headers;
+    expect(sent["Authorization"]).toBeUndefined();
+  });
+
+  // A subdomain is another ORIGIN: the credentials were given for one origin.
+  it("#11 a sibling/subdomain origin carries no credentials", async () => {
+    const { ctx } = await install();
+    const route = fakeRoute("https://evil.trusted.example/pixel.gif", {
+      resourceType: () => "image",
+      allHeaders: async () => ({ "sec-fetch-site": "same-site" }),
+    });
+    await ctx.routeHandler!(route);
+    expect(continuedHeaders(route)?.["Authorization"]).toBeUndefined();
+  });
+
+  // A tool-initiated navigation (Sec-Fetch-Site: none) to another origin: the
+  // initiator check does not apply, so only the origin check can withhold them.
+  it("#11 a tool-initiated navigation to another origin carries no credentials", async () => {
+    const { ctx } = await install();
+    mockFetch.mockResolvedValueOnce(okResponse("<html>landing</html>"));
+    await ctx.routeHandler!(
+      documentRoute("https://other.example/landing", {
+        allHeaders: async () => ({ "user-agent": "UA/1", "sec-fetch-site": "none", "sec-fetch-dest": "document" }),
+      }),
+    );
+    const sent = (mockFetch.mock.calls[0]?.[1] as { headers: Record<string, string> }).headers;
+    expect(sent["Authorization"]).toBeUndefined();
+  });
+
+  // Narrower than the page-wide set was: a request another SITE initiated does
+  // not carry the credentials even when it targets their origin.
+  it("#11 a cross-site initiator carries no credentials even when it targets the credential origin", async () => {
+    const { ctx } = await install();
+    const route = fakeRoute("https://trusted.example/logo.png", {
+      resourceType: () => "image",
+      allHeaders: async () => ({ "sec-fetch-site": "cross-site" }),
+    });
+    await ctx.routeHandler!(route);
+    expect(continuedHeaders(route)?.["Authorization"]).toBeUndefined();
+  });
+
+  // The guard: correct traffic keeps working. A same-origin sub-resource still
+  // gets the credentials — now added to THAT request rather than to the page.
+  it("#11 a same-origin sub-resource still carries the credentials", async () => {
+    const { ctx } = await install();
+    const route = fakeRoute("https://trusted.example/logo.png", {
+      resourceType: () => "image",
+      allHeaders: async () => ({ "user-agent": "UA/1", "sec-fetch-site": "same-origin" }),
+    });
+    await ctx.routeHandler!(route);
+    expect(route.continue).toHaveBeenCalledTimes(1);
+    expect(continuedHeaders(route)).toEqual({
+      "user-agent": "UA/1",
+      "sec-fetch-site": "same-origin",
+      Authorization: "Bearer secret",
+    });
+  });
+
+  it("#11 the document request for the credential origin carries them", async () => {
+    const { ctx } = await install();
+    mockFetch.mockResolvedValueOnce(okResponse("<html>ok</html>"));
+    await ctx.routeHandler!(
+      documentRoute("https://trusted.example/app", {
+        allHeaders: async () => ({ "user-agent": "UA/1", "sec-fetch-site": "none", "sec-fetch-dest": "document" }),
+      }),
+    );
+    const sent = (mockFetch.mock.calls[0]?.[1] as { headers: Record<string, string> }).headers;
+    expect(sent["Authorization"]).toBe("Bearer secret");
+  });
+
+  it("#11 no credentials configured leaves every request untouched", async () => {
+    const { ctx } = await install(null);
+    const route = fakeRoute("https://trusted.example/logo.png", { resourceType: () => "image" });
+    await ctx.routeHandler!(route);
+    expect(route.continue).toHaveBeenCalledTimes(1);
+    expect(route.continue.mock.calls[0]?.[0]).toBeUndefined();
   });
 });

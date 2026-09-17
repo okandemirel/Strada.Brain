@@ -81,12 +81,22 @@ interface SessionState {
   sameOriginRedirects: Map<string, string>;
   /**
    * The extra HTTP headers the agent gave for ONE origin, and that origin
-   * (round 8 #21). `setExtraHTTPHeaders` is persistent on the page, so an
-   * Authorization given for a trusted origin would otherwise be sent to every
-   * later navigation, the one a cross-origin refusal suggested included. The
-   * headers are re-applied only when the next navigation is same-origin.
+   * (round 8 #21, round 9 #11). Held in a box the installed network policy
+   * reads on every request: `setExtraHTTPHeaders` is both persistent AND
+   * page-wide, so an Authorization given for a trusted origin was sent to every
+   * later navigation (#21) and to every image, frame, script or scripted
+   * navigation the page itself issued, whatever origin it targeted (#11) —
+   * none of those pass through handleNavigate's reset. The policy injects the
+   * headers per REQUEST instead, for requests that belong to the origin.
    */
-  extraHeaders?: { origin: string; headers: Record<string, string> };
+  credentials: { current?: OriginCredentials };
+  /**
+   * Whether installNetworkPolicy is active for this session (it is installed
+   * only when `blockLocalhost` is on). Without it there is no route handler to
+   * inject credentials through, so handleNavigate falls back to the round 8 #21
+   * origin-scoped page-wide set.
+   */
+  policyInstalled: boolean;
 }
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -192,7 +202,8 @@ export interface PolicyRequest {
 /** Structural subset of Playwright's Route. */
 export interface PolicyRoute {
   request(): PolicyRequest;
-  continue(): Promise<void>;
+  /** `headers` REPLACES the request's headers when given (round 9 #11). */
+  continue(options?: { headers?: Record<string, string> }): Promise<void>;
   abort(errorCode?: string): Promise<void>;
   fulfill(response: { status: number; headers: Record<string, string>; body: Buffer }): Promise<void>;
 }
@@ -258,9 +269,59 @@ export interface PolicyPage {
   on(event: "framenavigated", listener: (frame: { url(): string }) => void): unknown;
 }
 
+// ─── Per-request credentials (round 9 #11) ───────────────────────────────────
+//
+// `page.setExtraHTTPHeaders` installs headers on the PAGE: Playwright sends them
+// with every request the page makes, of every resource type, to every origin.
+// An Authorization the agent supplied for origin A therefore travelled on A's
+// `<img src="https://b.example/...">`, on a frame, on a script's fetch() and on
+// a click- or script-initiated top-level navigation to B — none of which reach
+// `handleNavigate`, so its per-navigation reset never saw them. The credentials
+// are handed to the network policy instead, which adds them to the individual
+// requests that belong to the origin they were given for.
+
+/** The extra HTTP headers the agent supplied, and the ONE origin they are for. */
+export interface OriginCredentials {
+  /** `new URL(url).origin` of the target the headers were supplied with. */
+  origin: string;
+  headers: Record<string, string>;
+}
+
+/**
+ * The credential headers a request for `url` may carry, or undefined for none.
+ *
+ * Two conditions, both necessary:
+ *  - the request targets the exact origin the credentials were given for (a
+ *    different scheme, host or port is a different origin, subdomains included);
+ *  - the request was not initiated by another site. Chromium's `Sec-Fetch-Site`
+ *    names the initiator: `none` (the tool's own navigation) and `same-origin`
+ *    carry them, `same-site` and `cross-site` do not. That is NARROWER than the
+ *    page-wide set it replaces — a third party cannot make the page spend the
+ *    agent's credentials on a request it chose — and a request with no
+ *    Sec-Fetch-Site (the tool's own goto, or a non-Chromium caller) is treated
+ *    as tool-initiated.
+ */
+export function credentialHeadersForRequest(
+  credentials: OriginCredentials | undefined,
+  url: string,
+  secFetchSite: string | undefined,
+): Record<string, string> | undefined {
+  if (!credentials) return undefined;
+  const names = Object.keys(credentials.headers);
+  if (names.length === 0) return undefined;
+  if (originOf(url) !== credentials.origin) return undefined;
+  if (secFetchSite !== undefined && secFetchSite !== "none" && secFetchSite !== "same-origin") return undefined;
+  return { ...credentials.headers };
+}
+
 export interface NetworkPolicyOptions {
   /** Injectable resolver (tests); defaults to dns.lookup. */
   resolver?: TargetResolver;
+  /**
+   * The agent's credentials for ONE origin, read fresh on every request (round
+   * 9 #11). Returning undefined sends none.
+   */
+  originCredentials?: () => OriginCredentials | undefined;
   /** Called when a frame has navigated to a forbidden destination. Should tear the session down. */
   onForbiddenNavigation: (url: string, reason: string) => Promise<void> | void;
   /**
@@ -668,6 +729,12 @@ async function fulfillDocumentUnderPolicy(
     topLevelNavigation: request.isNavigationRequest() && (fetchDest === undefined || fetchDest === "document"),
     ...(fetchSite ? { secFetchSite: fetchSite } : {}),
   };
+  // #11: the agent's credentials belong to ONE origin and to requests this tool
+  // (or the origin itself) initiated; they are added here, per request, instead
+  // of page-wide. fetchWithPolicy drops them again at the first origin change in
+  // the redirect chain (CROSS_ORIGIN_STRIPPED_HEADERS, round 7 #16).
+  const scopedCredentials = credentialHeadersForRequest(options.originCredentials?.(), requestedUrl, fetchSite);
+  if (scopedCredentials) Object.assign(headers, scopedCredentials);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), options.documentTimeoutMs ?? DOCUMENT_FETCH_TIMEOUT_MS);
   timer.unref?.();
@@ -743,6 +810,17 @@ export async function installNetworkPolicy(
       return;
     }
     if (!isDocumentRequest(request)) {
+      // #11: the agent's credentials are added to THIS request when it belongs
+      // to their origin, instead of being installed on the page.
+      const credentials = options.originCredentials?.();
+      if (credentials && originOf(url) === credentials.origin) {
+        const wire = await request.allHeaders();
+        const scoped = credentialHeadersForRequest(credentials, url, wire["sec-fetch-site"]);
+        if (scoped) {
+          await route.continue({ headers: { ...wire, ...scoped } });
+          return;
+        }
+      }
       await route.continue();
       return;
     }
@@ -980,10 +1058,10 @@ export class BrowserAutomationTool implements ITool {
     session.sameOriginRedirects.clear();
 
     // Round 8 #21: the headers the agent supplies are credentials for THIS
-    // target's origin. They are remembered with that origin and applied below
-    // only while the navigation stays on it.
+    // target's origin. They are remembered with that origin; round 9 #11: the
+    // network policy adds them to the individual requests that belong to it.
     if (input.headers && Object.keys(input.headers).length > 0) {
-      session.extraHeaders = { origin: originOf(input.url), headers: { ...input.headers } };
+      session.credentials.current = { origin: originOf(input.url), headers: { ...input.headers } };
     }
 
     let target = input.url;
@@ -997,11 +1075,21 @@ export class BrowserAutomationTool implements ITool {
           return check;
         }
       }
-      // #21: reset on EVERY navigation; `setExtraHTTPHeaders` is persistent on
-      // the page, so nothing but an explicit re-apply may carry headers over.
+      // Round 9 #11: the page-wide set is never used to carry credentials —
+      // Playwright applies it to EVERY request the page makes, so a
+      // page-initiated image, frame, script fetch or navigation to another
+      // origin carried them. It is cleared on every navigation instead (it is
+      // persistent, and something else may have set it) and the credentials go
+      // in per request, through the policy's `originCredentials`.
+      //
+      // Without the policy (blockLocalhost off) there is no route handler to
+      // inject through, so the round 8 #21 origin-scoped page-wide set is the
+      // fallback. That configuration disables the network policy as a whole.
       const scoped =
-        session.extraHeaders && session.extraHeaders.origin === originOf(target)
-          ? session.extraHeaders.headers
+        !session.policyInstalled &&
+        session.credentials.current &&
+        session.credentials.current.origin === originOf(target)
+          ? session.credentials.current.headers
           : {};
       await session.page.setExtraHTTPHeaders(scoped);
 
@@ -1483,10 +1571,15 @@ export class BrowserAutomationTool implements ITool {
       const page = await context.newPage();
       const crossOriginRedirects = new Map<string, string>();
       const sameOriginRedirects = new Map<string, string>();
+      // #11: the box the policy reads the agent's credentials out of on every
+      // request. handleNavigate fills it; nothing is installed on the page.
+      const credentials: { current?: OriginCredentials } = {};
 
-      if (this.config.blockLocalhost) {
+      const policyInstalled = this.config.blockLocalhost;
+      if (policyInstalled) {
         await installNetworkPolicy(context, page, {
           documentTimeoutMs: this.config.maxNavigationTimeMs,
+          originCredentials: () => credentials.current,
           onBlockedRequest: (url, reason) =>
             this.logger.warn("Browser request blocked by network policy", { sessionId, url, reason }),
           onCrossOriginRedirect: (url, finalUrl) => crossOriginRedirects.set(normalizeUrl(url), finalUrl),
@@ -1520,6 +1613,8 @@ export class BrowserAutomationTool implements ITool {
         lastUsed: Date.now(),
         crossOriginRedirects,
         sameOriginRedirects,
+        credentials,
+        policyInstalled,
       };
       this.sessions.set(sessionId, session);
       this.logger.info("Created new browser session", { sessionId });
