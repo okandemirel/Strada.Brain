@@ -13,6 +13,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { LearningStorage } from "./learning-storage.js";
 import { LearningPipeline } from "../pipeline/learning-pipeline.js";
 import { PatternMatcher } from "../matching/pattern-matcher.js";
+import { InstinctRetriever } from "../../agents/instinct-retriever.js";
 import type { Instinct, InstinctId } from "../types.js";
 import type { TimestampMs } from "../../types/index.js";
 
@@ -195,6 +196,34 @@ describe("user-scoped learning keeps its owner (item 3.1)", () => {
       },
     });
     expect(forAlice.map((m) => m.id)).toContain(aliceId);
+  });
+
+  it("the retriever asks for the turn's user, so the owner gets their own teaching back", async () => {
+    const pipeline = makePipeline();
+    const aliceId = await pipeline.teachExplicit("alice rule about shader compilation", "user", "alice");
+    pipeline.stop();
+
+    const scopeContext = {
+      projectPath: PROJECT,
+      scopeFilter: "project+universal" as const,
+      recencyBoost: 1.0,
+      scopeBoost: 1.1,
+    };
+    const retriever = new InstinctRetriever(new PatternMatcher(storage), { scopeContext, storage });
+
+    const forAlice = await retriever.getMatchedInstincts(
+      "alice rule about shader compilation",
+      5,
+      "alice",
+    );
+    expect(forAlice.map((i) => i.id)).toContain(aliceId);
+
+    const forBob = await retriever.getMatchedInstincts(
+      "alice rule about shader compilation",
+      5,
+      "bob",
+    );
+    expect(forBob.map((i) => i.id)).not.toContain(aliceId);
   });
 
   // ─── Guards: legitimate sharing still works ────────────────────────────────

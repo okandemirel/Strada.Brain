@@ -1167,7 +1167,8 @@ describe("Step 0 — v2 prologue fidelity gaps (behind the route flag; productio
 
     // The v2 prologue must run the personalization layers (v1 parity, runBackgroundTask :3291-3388);
     // the prior profile:null version skipped them all. Instinct retrieval runs with the prompt.
-    expect(getInsightsForTask).toHaveBeenCalledWith("do the thing");
+    // item 3.1: retrieval now names the turn's user (undefined for this harness).
+    expect(getInsightsForTask.mock.calls[0]?.[0]).toBe("do the thing");
   });
 
   it("GAP1: v2 attributes the retrieved instincts — tool:result carries appliedInstinctIds, cleared after", async () => {
@@ -1234,7 +1235,8 @@ describe("Step 0 — v2 prologue fidelity gaps (behind the route flag; productio
     await drive(h.clock, h.runner.run(mkRequest(), mkIO("interactive")));
 
     // (a) the IDs were retrieved and stashed during the run …
-    expect(getInsightsForTask).toHaveBeenCalledWith("do the thing");
+    // item 3.1: retrieval now names the turn's user (undefined for this harness).
+    expect(getInsightsForTask.mock.calls[0]?.[0]).toBe("do the thing");
     expect(midRunInstinctIds).toEqual(["inst-1"]);
     expect(midRunKeys, "the set was not scoped to the run").toEqual([
       expect.stringMatching(/^chat-1\u0000.+/),

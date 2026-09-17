@@ -39,7 +39,12 @@ export interface AgentCoreConfig {
 
 /** Structural interface for InstinctRetriever — avoids import coupling */
 export interface InstinctRetrieverRef {
-  getInsightsForTask(taskDescription: string): Promise<{ insights: string[]; matchedInstinctIds: string[] }>;
+  getInsightsForTask(
+    taskDescription: string,
+    maxInsights?: number,
+    /** Whose turn it is: user-scoped learning is theirs alone (item 3.1). */
+    userId?: string,
+  ): Promise<{ insights: string[]; matchedInstinctIds: string[] }>;
   /** Record whether an instinct-informed decision succeeded or failed (P2 feedback loop) */
   recordOutcome?(instinctId: string, success: boolean): Promise<void>;
 }

@@ -74,10 +74,19 @@ export class InstinctRetriever {
    * @param maxInsights - Maximum number of insights to return (default 5)
    * @returns InsightResult with formatted strings and raw instinct IDs
    */
-  async getInsightsForTask(taskDescription: string, maxInsights: number = 5): Promise<InsightResult> {
+  async getInsightsForTask(
+    taskDescription: string,
+    maxInsights: number = 5,
+    /**
+     * Whose turn this is (item 3.1 / audit 04.4 / D42). User-scoped learning is
+     * returned to its owner and to nobody else; without an id the candidate set
+     * is the shared (project/global) and unowned learning only.
+     */
+    userId?: string,
+  ): Promise<InsightResult> {
     const retrievalStart = Date.now();
 
-    const ranked = await this.findAndRankMatches(taskDescription, maxInsights);
+    const ranked = await this.findAndRankMatches(taskDescription, maxInsights, userId);
     const finalMatches = ranked.matches;
 
     const insights: string[] = [];
@@ -152,7 +161,11 @@ export class InstinctRetriever {
   async recordOutcome(instinctId: string, success: boolean): Promise<void> {
     if (!this.storage) return;
     const instinct = this.storage.getInstinct(instinctId);
-    if (!instinct || instinct.status === "permanent") return;
+    // A permanent instinct used to be dropped here. Its confidence is still
+    // frozen downstream, but the outcome has to REACH the pipeline: consecutive
+    // failures are what quarantine a permanent teaching that has become wrong
+    // (improvement on audit 04.6).
+    if (!instinct) return;
 
     const delta = success ? 0.05 : -0.10;
     this.storage.updateInstinctFactor(instinctId, "factor_consistency", delta);
@@ -160,8 +173,8 @@ export class InstinctRetriever {
     this.onOutcome?.(instinctId, success);
   }
 
-  async getMatchedInstincts(taskDescription: string, maxInstincts: number = 5): Promise<Instinct[]> {
-    const { matches } = await this.findAndRankMatches(taskDescription, maxInstincts);
+  async getMatchedInstincts(taskDescription: string, maxInstincts: number = 5, userId?: string): Promise<Instinct[]> {
+    const { matches } = await this.findAndRankMatches(taskDescription, maxInstincts, userId);
 
     return matches
       .map(m => m.instinct)
@@ -171,6 +184,7 @@ export class InstinctRetriever {
   private async findAndRankMatches(
     taskDescription: string,
     maxResults: number,
+    userId?: string,
   ): Promise<RankedMatches> {
     const findOptions: {
       minSimilarity: number;
@@ -182,7 +196,9 @@ export class InstinctRetriever {
     };
 
     if (this.scopeContext) {
-      findOptions.scope = this.scopeContext;
+      // item 3.1: the scope context is built at boot, before anybody is talking;
+      // the identity is per turn, so it is merged in here.
+      findOptions.scope = userId ? { ...this.scopeContext, userId } : this.scopeContext;
     }
 
     const matches = await this.matcher.findSimilarInstincts(taskDescription, findOptions);
@@ -190,7 +206,11 @@ export class InstinctRetriever {
   }
 
   private filterDedupAndBoost(matches: PatternMatch[], maxResults: number): RankedMatches {
-    const filtered = matches.filter(m => !m.instinct || m.instinct.status !== "deprecated");
+    // 'quarantined' too (improvement on audit 04.6): a permanent teaching that
+    // kept being wrong is held out of use, so it is not suggested either.
+    const filtered = matches.filter(
+      (m) => !m.instinct || (m.instinct.status !== "deprecated" && m.instinct.status !== "quarantined"),
+    );
 
     const scopePriority: Record<string, number> = { user: 3, project: 2, global: 1 };
     const byPattern = new Map<string, PatternMatch>();

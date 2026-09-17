@@ -361,7 +361,13 @@ export async function setupAgentCoreRun(
     let matchedInstinctIds: string[] = [];
     if (deps.instinctRetriever) {
       try {
-        const insightResult = await deps.instinctRetriever.getInsightsForTask(queryText);
+        // item 3.1: retrieval happens for this user - user-scoped learning is
+        // theirs alone.
+        const insightResult = await deps.instinctRetriever.getInsightsForTask(
+          queryText,
+          undefined,
+          request.userId,
+        );
         matchedInstinctIds = insightResult.matchedInstinctIds;
         if (insightResult.insights.length > 0) {
           learnedInsights = insightResult.insights;
