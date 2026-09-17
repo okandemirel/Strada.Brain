@@ -32,6 +32,8 @@ import {
   assertPublicTarget,
   discardBody,
   fetchWithPolicy,
+  setCookiesOf,
+  stripCredentialHeaders,
   AGENT_CLOSE_GRACE_MS,
   POLICY_MAX_REDIRECTS,
   classifyForbiddenAddress,
@@ -402,6 +404,75 @@ describe("BrowserSecurity", () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+
+    // ── Codex round 7 (2026-09-17) #14–#16 on 59f7f9d1: credentials stop at
+    // the origin boundary; per-hop headers and Set-Cookie reach the caller. ──
+    it("#16 strips Authorization, Proxy-Authorization and Cookie on the cross-origin hop and keeps them on the same-origin hop", async () => {
+      mockFetch.mockResolvedValueOnce(redirect(302, "https://public.example/step2")); // same origin
+      mockFetch.mockResolvedValueOnce(redirect(302, "https://cdn.example/final")); // origin change
+      mockFetch.mockResolvedValueOnce(redirect(302, "https://public.example/back")); // back to the first origin
+      mockFetch.mockResolvedValueOnce({ status: 200, ok: true, headers: new Headers(), body: null });
+
+      const headers = {
+        Authorization: "Bearer secret",
+        "Proxy-Authorization": "Basic cHJveHk=",
+        Cookie: "sid=abc",
+        "User-Agent": "t",
+      };
+      const fetched = await fetchWithPolicy("https://public.example/start", { resolver, headers });
+      expect(fetched.finalUrl).toBe("https://public.example/back");
+      expect(mockFetch).toHaveBeenCalledTimes(4);
+      expect(mockFetch.mock.calls[0]?.[1]).toEqual(expect.objectContaining({ headers }));
+      expect(mockFetch.mock.calls[1]?.[1]).toEqual(expect.objectContaining({ headers })); // same-origin: kept
+      expect(mockFetch.mock.calls[2]?.[1]).toEqual(expect.objectContaining({ headers: { "User-Agent": "t" } })); // cross-origin: stripped
+      expect(mockFetch.mock.calls[3]?.[1]).toEqual(expect.objectContaining({ headers: { "User-Agent": "t" } })); // never restored
+      expect(headers.Authorization).toBe("Bearer secret"); // caller's object untouched
+      await fetched.dispose();
+    });
+
+    it("#16 a port or scheme change is an origin change", async () => {
+      mockFetch.mockResolvedValueOnce(redirect(301, "https://public.example:8443/x"));
+      mockFetch.mockResolvedValueOnce({ status: 200, ok: true, headers: new Headers(), body: null });
+      const fetched = await fetchWithPolicy("https://public.example/start", { resolver, headers: { authorization: "Bearer s", accept: "*/*" } });
+      expect(mockFetch.mock.calls[1]?.[1]).toEqual(expect.objectContaining({ headers: { accept: "*/*" } }));
+      await fetched.dispose();
+      expect(stripCredentialHeaders({ AUTHORIZATION: "x", cookie: "y", "Proxy-Authorization": "z", Accept: "a" })).toEqual({ Accept: "a" });
+    });
+
+    it("#14 hopHeaders are asked per hop, merged over the carried headers, and never carried to the next hop", async () => {
+      mockFetch.mockResolvedValueOnce(redirect(302, "https://cdn.example/final"));
+      mockFetch.mockResolvedValueOnce({ status: 200, ok: true, headers: new Headers(), body: null });
+      const hopHeaders = vi.fn(async (url: string) => (url.startsWith("https://public.example/") ? { cookie: "sid=abc" } : undefined));
+      const fetched = await fetchWithPolicy("https://public.example/start", { resolver, headers: { "User-Agent": "t" }, hopHeaders });
+      expect(hopHeaders.mock.calls.map((c) => c[0])).toEqual(["https://public.example/start", "https://cdn.example/final"]);
+      expect(mockFetch.mock.calls[0]?.[1]).toEqual(expect.objectContaining({ headers: { "User-Agent": "t", cookie: "sid=abc" } }));
+      expect(mockFetch.mock.calls[1]?.[1]).toEqual(expect.objectContaining({ headers: { "User-Agent": "t" } }));
+      await fetched.dispose();
+    });
+
+    it("#15 onSetCookie receives every Set-Cookie of every hop separately, with the hop's URL, before the next hop", async () => {
+      const hop0 = {
+        ...redirect(302, "https://cdn.example/final"),
+        headers: new Headers([["location", "https://cdn.example/final"], ["set-cookie", "a=1; Path=/"], ["set-cookie", "b=2; HttpOnly"]]),
+      };
+      mockFetch.mockResolvedValueOnce(hop0);
+      mockFetch.mockResolvedValueOnce({ status: 200, ok: true, headers: new Headers([["set-cookie", "c=3"]]), body: null });
+      const seen: Array<[string, string[]]> = [];
+      const onSetCookie = vi.fn(async (url: string, cookies: string[]) => {
+        seen.push([url, cookies]);
+        expect(mockFetch).toHaveBeenCalledTimes(seen.length); // the next hop has not been requested yet
+      });
+      const fetched = await fetchWithPolicy("https://public.example/start", { resolver, onSetCookie });
+      expect(seen).toEqual([
+        ["https://public.example/start", ["a=1; Path=/", "b=2; HttpOnly"]],
+        ["https://cdn.example/final", ["c=3"]],
+      ]);
+      await fetched.dispose();
+
+      expect(setCookiesOf(new Headers([["set-cookie", "a=1"], ["set-cookie", "b=2"]]))).toEqual(["a=1", "b=2"]);
+      expect(setCookiesOf(new Headers())).toEqual([]);
+      expect(setCookiesOf({ get: (name: string) => (name === "set-cookie" ? "only=1" : null) } as unknown as Headers)).toEqual(["only=1"]);
     });
 
     it("discardBody tolerates a missing, already-consumed or throwing body", async () => {

@@ -34,7 +34,9 @@ vi.stubGlobal("fetch", mockGlobalFetch);
 
 import {
   BrowserAutomationTool,
+  CrossOriginRedirectError,
   installNetworkPolicy,
+  parseSetCookie,
   type PolicyContext,
   type PolicyPage,
   type PolicyRequest,
@@ -92,6 +94,7 @@ function okResponse(text: string, headers: Record<string, string> = {}) {
 // ── Plan 4.6 (audit 13F2 / D64): every browser request and navigation is checked ──
 
 interface FakeContext extends PolicyContext {
+  jar: Array<{ name: string; value: string; url?: string; domain?: string; path?: string }>;
   routePattern?: string;
   routeHandler?: (route: PolicyRoute) => Promise<void> | void;
   wsPattern?: string;
@@ -105,7 +108,12 @@ interface FakePage extends PolicyPage {
 
 function fakeContext(): FakeContext {
   const ctx: FakeContext = {
+    jar: [],
     responseListeners: [],
+    cookies: vi.fn(async (_url: string) => ctx.jar),
+    addCookies: vi.fn(async (cookies) => {
+      ctx.jar.push(...cookies);
+    }),
     route: vi.fn(async (pattern: string, handler: (route: PolicyRoute) => Promise<void> | void) => {
       ctx.routePattern = pattern;
       ctx.routeHandler = handler;
@@ -131,7 +139,7 @@ function fakeRequest(
     isNavigationRequest: () => false,
     resourceType: () => "other",
     method: () => "GET",
-    headers: () => ({}),
+    allHeaders: async () => ({}),
     postDataBuffer: () => null,
     redirectedFrom: () => null,
     ...extra,
@@ -308,14 +316,15 @@ describe("installNetworkPolicy — Codex round 6 #11–#13", () => {
     expect(resolver.mock.calls.map((c) => c[0])).toEqual(["public.example", "public.example", "internal.corp"]);
   });
 
-  it("#11 fulfils a document request with the vetted final response of a public->public chain (never route.continue)", async () => {
+  it("#11 fulfils a document request with the vetted final response of a same-origin chain (never route.continue)", async () => {
+    // Round 7 #13: the chain stays on the requested origin (a cross-origin one is aborted, see below).
     const { ctx } = await install();
-    mockFetch.mockResolvedValueOnce(redirectResponse(301, "https://cdn.example/final"));
+    mockFetch.mockResolvedValueOnce(redirectResponse(301, "https://public.example/final"));
     mockFetch.mockResolvedValueOnce(okResponse("<html>final</html>", { "content-encoding": "gzip", "x-served-by": "cdn" }));
 
     const route = documentRoute("https://public.example/start", {
       method: () => "GET",
-      headers: () => ({ "user-agent": "UA/1", "accept-encoding": "gzip, br, zstd", host: "public.example" }),
+      allHeaders: async () => ({ "user-agent": "UA/1", "accept-encoding": "gzip, br, zstd", host: "public.example" }),
     });
     await ctx.routeHandler!(route);
 
@@ -327,7 +336,7 @@ describe("installNetworkPolicy — Codex round 6 #11–#13", () => {
     expect(fulfilled.body.toString("utf8")).toBe("<html>final</html>");
     expect(fulfilled.headers).toEqual({ "content-type": "text/html", "x-served-by": "cdn" }); // wire-form headers dropped
     expect(mockFetch).toHaveBeenCalledTimes(2);
-    expect(mockFetch.mock.calls[1]?.[0]).toBe("https://cdn.example/final");
+    expect(mockFetch.mock.calls[1]?.[0]).toBe("https://public.example/final");
     // Every hop is pinned to its own vetted Agent; the browser's headers are
     // forwarded minus connection/encoding ones.
     expect(agentInstances).toHaveLength(2);
@@ -391,6 +400,193 @@ describe("installNetworkPolicy — Codex round 6 #11–#13", () => {
     expect(ws.close).toHaveBeenCalledTimes(1);
     expect(ws.close.mock.calls[0]?.[0]).toEqual(expect.objectContaining({ code: 1008 }));
     expect(blockedWs).toEqual(["wss://public.example/socket"]);
+  });
+});
+
+// ── Codex round 7 (2026-09-17) #13–#15 on 59f7f9d1: what the fulfil path got
+// wrong about origins and cookies ──
+
+describe("installNetworkPolicy — Codex round 7 #13–#15", () => {
+  const table = new Map<string, ResolvedAddress[]>();
+  const resolver = vi.fn(async (hostname: string): Promise<ResolvedAddress[]> => {
+    const hit = table.get(hostname);
+    if (!hit) throw new Error(`ENOTFOUND ${hostname}`);
+    return hit;
+  });
+
+  beforeEach(() => {
+    table.clear();
+    resolver.mockClear();
+    table.set("trusted.example", [{ address: PUBLIC_V4, family: 4 }]);
+    table.set("evil.example", [{ address: "151.101.1.1", family: 4 }]);
+  });
+
+  async function install() {
+    const ctx = fakeContext();
+    const page = fakePage();
+    const blocked: Array<{ url: string; reason: string }> = [];
+    const onCrossOriginRedirect = vi.fn((_url: string, _finalUrl: string) => undefined);
+    await installNetworkPolicy(ctx, page, {
+      resolver,
+      onForbiddenNavigation: vi.fn(),
+      onBlockedRequest: (url, reason) => blocked.push({ url, reason }),
+      onCrossOriginRedirect,
+    });
+    return { ctx, page, blocked, onCrossOriginRedirect };
+  }
+
+  // #13: a fulfilled response keeps the requested URL, so foreign HTML would
+  // execute as trusted.example. The route is aborted and the final URL exposed.
+  it("#13 aborts a document whose redirect chain ends on another origin and names the final URL", async () => {
+    const { ctx, blocked, onCrossOriginRedirect } = await install();
+    const cancelFinalBody = vi.fn(async () => undefined);
+    const final = { ...okResponse("<html>evil</html>"), body: { cancel: cancelFinalBody } };
+    mockFetch.mockResolvedValueOnce(redirectResponse(302, "https://evil.example/landing"));
+    mockFetch.mockResolvedValueOnce(final);
+
+    const route = documentRoute("https://trusted.example/start");
+    await ctx.routeHandler!(route);
+
+    expect(route.fulfill).not.toHaveBeenCalled();
+    expect(route.continue).not.toHaveBeenCalled();
+    expect(route.abort).toHaveBeenCalledWith("blockedbyclient");
+    expect(onCrossOriginRedirect).toHaveBeenCalledWith("https://trusted.example/start", "https://evil.example/landing");
+    expect(blocked).toHaveLength(1);
+    expect(blocked[0]!.reason).toContain("https://evil.example/landing");
+    expect(blocked[0]!.reason).toContain("another origin");
+    // The error the navigate action returns names the vetted final URL.
+    const message = new CrossOriginRedirectError("https://trusted.example/start", "https://evil.example/landing").message;
+    expect(message).toContain("Navigate to https://evil.example/landing explicitly");
+    // The foreign body was discarded, not buffered, and every hop's agent closed.
+    expect(cancelFinalBody).toHaveBeenCalledTimes(1);
+    expect(agentInstances).toHaveLength(2);
+    expect(agentInstances.every((a) => a.closed)).toBe(true);
+  });
+
+  it("#13 a scheme or port change is an origin change too", async () => {
+    const { ctx, onCrossOriginRedirect } = await install();
+    mockFetch.mockResolvedValueOnce(redirectResponse(301, "https://trusted.example:8443/start"));
+    mockFetch.mockResolvedValueOnce(okResponse("<html>other port</html>"));
+    const route = documentRoute("https://trusted.example/start");
+    await ctx.routeHandler!(route);
+    expect(route.fulfill).not.toHaveBeenCalled();
+    expect(route.abort).toHaveBeenCalledWith("blockedbyclient");
+    expect(onCrossOriginRedirect).toHaveBeenCalledWith("https://trusted.example/start", "https://trusted.example:8443/start");
+  });
+
+  it("#13 fulfils a same-origin redirect (path change) with the final response", async () => {
+    const { ctx, onCrossOriginRedirect } = await install();
+    mockFetch.mockResolvedValueOnce(redirectResponse(302, "/login?next=%2Fstart"));
+    mockFetch.mockResolvedValueOnce(okResponse("<html>login</html>"));
+
+    const route = documentRoute("https://trusted.example/start");
+    await ctx.routeHandler!(route);
+
+    expect(route.abort).not.toHaveBeenCalled();
+    expect(route.fulfill).toHaveBeenCalledTimes(1);
+    expect(route.fulfill.mock.calls[0]![0].body.toString("utf8")).toBe("<html>login</html>");
+    expect(mockFetch.mock.calls[1]?.[0]).toBe("https://trusted.example/login?next=%2Fstart");
+    expect(onCrossOriginRedirect).not.toHaveBeenCalled();
+  });
+
+  // #14: headers() omits the cookies Chromium adds late; the wire set comes from
+  // allHeaders(), and the Cookie header itself is rebuilt per hop from the jar.
+  it("#14 a navigation carries the context's cookies for that hop's URL (allHeaders + context.cookies), never the original Cookie header", async () => {
+    const { ctx } = await install();
+    const allHeaders = vi.fn(async () => ({
+      "user-agent": "UA/1",
+      cookie: "stale=from-browser",
+      "sec-fetch-mode": "navigate",
+    }));
+    (ctx.cookies as ReturnType<typeof vi.fn>).mockImplementation(async (url: string) =>
+      url.startsWith("https://trusted.example/app") ? [{ name: "sid", value: "abc" }, { name: "theme", value: "dark" }]
+      : url.startsWith("https://trusted.example/") ? [{ name: "sid", value: "abc" }]
+      : [],
+    );
+    mockFetch.mockResolvedValueOnce(redirectResponse(302, "https://trusted.example/app/home"));
+    mockFetch.mockResolvedValueOnce(okResponse("<html>home</html>"));
+
+    const route = documentRoute("https://trusted.example/start", { allHeaders });
+    await ctx.routeHandler!(route);
+
+    expect(allHeaders).toHaveBeenCalledTimes(1);
+    expect(ctx.cookies).toHaveBeenCalledWith("https://trusted.example/start");
+    expect(ctx.cookies).toHaveBeenCalledWith("https://trusted.example/app/home");
+    expect(mockFetch.mock.calls[0]?.[1]).toEqual(expect.objectContaining({
+      headers: { "user-agent": "UA/1", "sec-fetch-mode": "navigate", cookie: "sid=abc" },
+    }));
+    expect(mockFetch.mock.calls[1]?.[1]).toEqual(expect.objectContaining({
+      headers: { "user-agent": "UA/1", "sec-fetch-mode": "navigate", cookie: "sid=abc; theme=dark" },
+    }));
+    expect(route.fulfill).toHaveBeenCalledTimes(1);
+  });
+
+  it("#14 a hop with no cookies in the jar sends no Cookie header at all", async () => {
+    const { ctx } = await install();
+    mockFetch.mockResolvedValueOnce(okResponse("<html>ok</html>"));
+    const route = documentRoute("https://trusted.example/start", {
+      allHeaders: async () => ({ cookie: "stale=from-browser", "user-agent": "UA/1" }),
+    });
+    await ctx.routeHandler!(route);
+    expect(mockFetch.mock.calls[0]?.[1]).toEqual(expect.objectContaining({ headers: { "user-agent": "UA/1" } }));
+  });
+
+  // #15: Headers.get("set-cookie") joins several cookies into one string, and a
+  // fulfilled Set-Cookie would be scoped to the requested URL, not the hop.
+  it("#15 two Set-Cookie headers on a redirect hop both land in the jar, scoped to that hop, and are not forwarded through fulfill", async () => {
+    const { ctx } = await install();
+    const hop = {
+      ...redirectResponse(302, "/home"),
+      headers: new Headers([
+        ["location", "/home"],
+        ["set-cookie", "sid=abc; Path=/; HttpOnly; Secure; SameSite=Lax"],
+        ["set-cookie", "theme=dark; Max-Age=3600"],
+      ]),
+    };
+    const final = {
+      ...okResponse("<html>home</html>"),
+      headers: new Headers([
+        ["content-type", "text/html"],
+        ["set-cookie", "seen=1"],
+      ]),
+    };
+    mockFetch.mockResolvedValueOnce(hop);
+    mockFetch.mockResolvedValueOnce(final);
+
+    const route = documentRoute("https://trusted.example/start");
+    await ctx.routeHandler!(route);
+
+    expect(ctx.addCookies).toHaveBeenCalledTimes(2);
+    const first = (ctx.addCookies as ReturnType<typeof vi.fn>).mock.calls[0]![0] as Array<Record<string, unknown>>;
+    expect(first).toHaveLength(2);
+    expect(first[0]).toEqual(expect.objectContaining({ name: "sid", value: "abc", url: "https://trusted.example/", httpOnly: true, secure: true, sameSite: "Lax" }));
+    expect(first[1]).toEqual(expect.objectContaining({ name: "theme", value: "dark", url: "https://trusted.example/start" }));
+    expect(first[1]!["expires"]).toBeGreaterThan(Date.now() / 1000 + 3000);
+    const second = (ctx.addCookies as ReturnType<typeof vi.fn>).mock.calls[1]![0] as Array<Record<string, unknown>>;
+    expect(second).toEqual([expect.objectContaining({ name: "seen", value: "1", url: "https://trusted.example/home" })]);
+    // The jar, not fulfill, carries them.
+    expect(route.fulfill).toHaveBeenCalledTimes(1);
+    expect(Object.keys(route.fulfill.mock.calls[0]![0].headers)).not.toContain("set-cookie");
+    // The next hop's Cookie header was built AFTER the hop's cookies landed.
+    expect(ctx.cookies).toHaveBeenNthCalledWith(2, "https://trusted.example/home");
+    expect(mockFetch.mock.calls[1]?.[1]).toEqual(expect.objectContaining({ headers: { cookie: "sid=abc; theme=dark" } }));
+  });
+
+  it("#15 parseSetCookie scopes to the hop: a Domain the host does not match is ignored, a matching one is honoured", () => {
+    expect(parseSetCookie("a=1; Domain=evil.example", "https://trusted.example/x")).toBeNull();
+    expect(parseSetCookie("a=1; Domain=.example", "https://trusted.example/x")).toEqual(
+      expect.objectContaining({ name: "a", value: "1", domain: ".example", path: "/" }),
+    );
+    expect(parseSetCookie("a=1; Domain=trusted.example; Path=/app", "https://trusted.example/app/x")).toEqual(
+      expect.objectContaining({ domain: ".trusted.example", path: "/app" }),
+    );
+    expect(parseSetCookie("a=1", "https://trusted.example/app/x?q=1")).toEqual({ name: "a", value: "1", url: "https://trusted.example/app/x?q=1" });
+    expect(parseSetCookie("a=1; Path=/app", "https://trusted.example/x?q=1")).toEqual({ name: "a", value: "1", url: "https://trusted.example/app/" });
+    expect(parseSetCookie("=novalue", "https://trusted.example/")).toBeNull();
+    expect(parseSetCookie("garbage", "https://trusted.example/")).toBeNull();
+    expect(parseSetCookie("a=1; Expires=Wed, 21 Oct 2026 07:28:00 GMT", "https://trusted.example/")).toEqual(
+      expect.objectContaining({ expires: Math.floor(Date.parse("Wed, 21 Oct 2026 07:28:00 GMT") / 1000) }),
+    );
   });
 });
 

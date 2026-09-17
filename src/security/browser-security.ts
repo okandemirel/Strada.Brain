@@ -570,6 +570,18 @@ export interface FetchWithPolicyOptions {
    * Throw to refuse the hop (e.g. a caller's block-pattern list).
    */
   onHop?: (url: string) => void;
+  /**
+   * Headers for ONE hop, merged over `headers` after the cross-origin strip
+   * (Codex round 7 #14: the browser supplies the cookies its jar holds for
+   * exactly this hop's URL). Never carried to the next hop.
+   */
+  hopHeaders?: (url: string) => Promise<Record<string, string> | undefined> | Record<string, string> | undefined;
+  /**
+   * Called with every hop's Set-Cookie headers (each one separately, undici's
+   * `getSetCookie`) and the URL that set them, redirect hops included, before
+   * the next hop is requested (Codex round 7 #15).
+   */
+  onSetCookie?: (url: string, setCookies: string[]) => Promise<void> | void;
 }
 
 export interface PolicyFetchResult {
@@ -658,12 +670,42 @@ async function closeAgent(agent: Agent): Promise<void> {
 }
 
 /**
+ * Request headers that carry credentials for ONE origin. RFC 9110 §15.4 lets a
+ * client keep them on a same-origin redirect and expects them dropped when the
+ * redirect changes origin (a trusted host must not be able to bounce the
+ * caller's bearer token or session cookie to a third party). Codex round 7 #16.
+ */
+export const CROSS_ORIGIN_STRIPPED_HEADERS: ReadonlySet<string> = new Set(["authorization", "proxy-authorization", "cookie"]);
+
+/** `headers` without the credential headers, matched case-insensitively. */
+export function stripCredentialHeaders(headers: Record<string, string>): Record<string, string> {
+  const kept: Record<string, string> = {};
+  for (const [name, value] of Object.entries(headers)) {
+    if (!CROSS_ORIGIN_STRIPPED_HEADERS.has(name.toLowerCase())) kept[name] = value;
+  }
+  return kept;
+}
+
+/** Every Set-Cookie header of a response, one entry each (undici / WHATWG `getSetCookie`). */
+export function setCookiesOf(headers: Headers): string[] {
+  const withGetter = headers as Headers & { getSetCookie?: () => string[] };
+  if (typeof withGetter.getSetCookie === "function") return withGetter.getSetCookie();
+  const single = headers.get("set-cookie");
+  return single ? [single] : [];
+}
+
+/**
  * Request `initialUrl`, following redirects by hand: every hop (the initial URL
  * and each Location) is passed through `assertPublicTarget` immediately before
  * its request and the connection is pinned to the vetted addresses. A hop that
  * lands on a forbidden address throws ForbiddenTargetError; redirect bodies are
  * cancelled so their Agents can close. The caller reads (or discards) the final
  * body and then calls `dispose()`.
+ *
+ * Credentials (Authorization, Proxy-Authorization, Cookie) are forwarded on
+ * same-origin hops only: the first hop whose origin differs from the previous
+ * one drops them and they do not come back on a later hop (RFC 9110 §15.4;
+ * Codex round 7 #16). `hopHeaders` may add per-hop headers on top.
  */
 export async function fetchWithPolicy(
   initialUrl: string,
@@ -679,6 +721,8 @@ export async function fetchWithPolicy(
   let currentUrl = initialUrl;
   let method = options.method ?? "GET";
   let body = options.body ?? null;
+  let carriedHeaders: Record<string, string> = { ...(options.headers ?? {}) };
+  let previousOrigin: string | undefined;
   try {
     for (let hop = 0; hop <= maxRedirects; hop++) {
       options.onHop?.(currentUrl);
@@ -689,14 +733,29 @@ export async function fetchWithPolicy(
       const agent = pinnedDispatcher(target);
       agents.push(agent);
 
+      // #16: an origin change drops the caller's credentials for good.
+      const origin = new URL(currentUrl).origin;
+      if (previousOrigin !== undefined && origin !== previousOrigin) {
+        carriedHeaders = stripCredentialHeaders(carriedHeaders);
+      }
+      previousOrigin = origin;
+      const perHop = await options.hopHeaders?.(currentUrl);
+      const headers = perHop ? { ...carriedHeaders, ...perHop } : carriedHeaders;
+
       const response = (await undiciFetch(currentUrl, {
         signal: options.signal,
         method,
-        headers: options.headers ?? {},
+        headers,
         body: body ?? undefined,
         redirect: "manual",
         dispatcher: agent,
       })) as unknown as Response;
+
+      // #15: every hop's cookies reach the caller's jar, scoped to this hop's URL.
+      if (options.onSetCookie) {
+        const setCookies = setCookiesOf(response.headers);
+        if (setCookies.length > 0) await options.onSetCookie(currentUrl, setCookies);
+      }
 
       if (!isRedirectStatus(response.status)) {
         return { response, finalUrl: currentUrl, dispose };
