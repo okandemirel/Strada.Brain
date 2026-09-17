@@ -291,6 +291,10 @@ describe("learning-eval fixture run (real src/learning, throwaway SQLite)", () =
       arm: runs["warm-learning-on"].arm,
       storage: runs["warm-learning-on"].storage,
       ledger: learning.ledger,
+      // Codex round 12 #26: the retirement is measured on a snapshot, so the
+      // store the answer-quality arm retrieves from is left as the arms left it.
+      LearningStorage: learning.LearningStorage,
+      isolationDir: work.dir,
     });
     expect(effect.state, effect.reason).toBe(STATE.GOOD);
     expect(effect.rows.length, "no wrongly-recalled rule reached the ledger").toBeGreaterThan(0);
@@ -330,11 +334,16 @@ describe("learning-eval fixture run (real src/learning, throwaway SQLite)", () =
   it("A DELIBERATELY REGRESSED ARM IS REPORTED AS A REGRESSION (the harness can fail)", async () => {
     // The same trained store, with learning switched off in the treatment arm:
     // the treatment then cannot beat the control, so the gate MUST fire.
+    // Its OWN work dir: runArm names the database after the spec, so sharing
+    // work.dir re-opened the store the beforeAll arm had already trained (and
+    // that the ledger test had retired rules in). This arm then minted nothing —
+    // the failure mode was invisible only while retirement mutated that store
+    // (Codex round 12 #26); with the retirement isolated it showed up at once.
     const regressed = await runArm({
       spec: { name: "warm-learning-on", trained: true, learningEnabled: false },
       dataset,
       learning,
-      workDir: work.dir,
+      workDir: join(work.dir, "deliberately-regressed"),
     });
     stores.push(regressed.storage);
     const arms = [runs["warm-learning-off"].arm, regressed.arm];
@@ -531,6 +540,95 @@ describe("learning-eval answer-quality arm", () => {
     expect(q.state).toBe(STATE.UNMEASURED);
     expect(q.reason).toContain("no quality cases");
   });
+});
+
+/**
+ * RETIREMENT MUST NOT CLEAN THE STORE THE OTHER ARMS READ (Codex round 12 #26).
+ *
+ * measureEffectEnds() retires the rules the held-out probes recalled wrongly, to
+ * prove the ledger can end a bad rule's effect. It used to do that IN PLACE, on
+ * the learning-on arm's own store — the same store learning-eval.mjs then handed
+ * to the answer-quality arm's InstinctRetriever. So the arm whose job is to catch
+ * harmful guidance at the answer level retrieved from a store from which exactly
+ * the harmful guidance had just been removed: measured with the evidence deleted.
+ *
+ * The fix is isolation — the retirement is measured on a snapshot — so the order
+ * of the two measurements cannot matter. These tests hold BOTH halves: the live
+ * store still recalls the bad rule afterwards, and a call that cannot isolate
+ * reports NOT MEASURED instead of quietly mutating the live store anyway.
+ */
+describe("learning-eval: retirement is measured on an isolated copy", () => {
+  const dataset = validateDataset(FIXTURE_DATASET);
+  // The trap probe's own error message: the strongest query a run could make.
+  const trapQuery = "error CS0006: Metadata file 'Fixture.Deleted.dll' could not be found";
+  const spec = { name: "warm-learning-on", trained: true, learningEnabled: true };
+  let work: { dir: string; cleanup: () => void };
+  const stores: Array<{ close: () => void }> = [];
+
+  beforeAll(() => {
+    work = makeWorkDir("learning-eval-isolation-");
+  });
+
+  afterAll(() => {
+    for (const storage of stores) {
+      try {
+        storage.close();
+      } catch {
+        /* a close failure must not change the verdict */
+      }
+    }
+    work?.cleanup();
+  });
+
+  const warmArm = async (name: string): Promise<any> => {
+    const dir = join(work.dir, name);
+    const run = await runArm({ spec, dataset, learning, workDir: dir });
+    expect(run.arm.error, "the learning-on arm did not run, so this test measures nothing").toBeUndefined();
+    if (run.storage) stores.push(run.storage);
+    return run;
+  };
+
+  it("leaves the wrongly-recalled rule retrievable for the answer-quality arm", async () => {
+    const run = await warmArm("live");
+    const retriever = new InstinctRetriever(run.matcher, { storage: run.storage });
+    const before = await retriever.getInsightsForTask(trapQuery, 3);
+    expect(
+      before.matchedInstinctIds.length,
+      "the trap query recalled nothing, so this test could not detect a cleaned store",
+    ).toBeGreaterThan(0);
+
+    const effect = measureEffectEnds({
+      arm: run.arm,
+      storage: run.storage,
+      ledger: learning.ledger,
+      LearningStorage: learning.LearningStorage,
+      isolationDir: work.dir,
+    });
+    expect(effect.state, effect.reason).toBe(STATE.GOOD);
+    expect(effect.rows.length, "no wrongly-recalled rule reached the ledger").toBeGreaterThan(0);
+
+    const after = await retriever.getInsightsForTask(trapQuery, 3);
+    expect(
+      after.matchedInstinctIds,
+      "retirement emptied the store the answer-quality arm retrieves from — its harm measurement would be vacuous",
+    ).toEqual(before.matchedInstinctIds);
+  }, 90_000);
+
+  it("reports NOT MEASURED rather than mutating the live store when it cannot isolate it", async () => {
+    const run = await warmArm("no-isolation");
+    const retriever = new InstinctRetriever(run.matcher, { storage: run.storage });
+    const before = await retriever.getInsightsForTask(trapQuery, 3);
+    expect(before.matchedInstinctIds.length).toBeGreaterThan(0);
+
+    // No LearningStorage to open a snapshot with: the honest answer is "not
+    // measured", never "measured, and by the way the store is different now".
+    const effect = measureEffectEnds({ arm: run.arm, storage: run.storage, ledger: learning.ledger });
+    expect(effect.state, "retirement was measured by mutating the store the other arms read").toBe(STATE.UNMEASURED);
+    expect(effect.reason).toMatch(/isolat/iu);
+
+    const after = await retriever.getInsightsForTask(trapQuery, 3);
+    expect(after.matchedInstinctIds, "the live store was retired against anyway").toEqual(before.matchedInstinctIds);
+  }, 90_000);
 });
 
 // ─── end to end: the CLI's exit codes ──────────────────────────────────────

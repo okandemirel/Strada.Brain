@@ -774,6 +774,9 @@ export function renderReport(result) {
     if (result.ledger.state === STATE.UNMEASURED) {
       L.push(`  [NOT MEASURED ] ${result.ledger.reason}`);
     } else {
+      // Name what was measured: the retirement runs on a copy of the arm's
+      // store, so nothing here says anything about that store's contents now.
+      if (result.ledger.measuredOn) L.push(`  measured on ${result.ledger.measuredOn} — the arms' own stores are left untouched`);
       for (const line of result.ledger.lines) L.push(`  ${line}`);
     }
   }

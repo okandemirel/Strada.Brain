@@ -27,8 +27,9 @@
  * arms against the real src/learning modules without spawning a process.
  */
 
-import { mkdtempSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import Database from "better-sqlite3";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { basename, join } from "node:path";
 import { tmpdir } from "node:os";
 import { DECISION, STATE, scoreProbe, summariseArm } from "./learning-eval-core.mjs";
 
@@ -282,14 +283,36 @@ export async function runArm({ spec, dataset, learning, workDir }) {
  * The ledger's own answer to "did the harmful guidance stop having an effect?"
  * — plan 6.4's measure, reused here rather than re-implemented.
  *
- * It asks three things of src/learning/ledger.ts, on the learning-on arm's real
- * store, after the failing runs have settled:
+ * It asks three things of src/learning/ledger.ts, on an ISOLATED SNAPSHOT of the
+ * learning-on arm's real store (round 12 #26 — retiring in place deleted the
+ * guidance the answer-quality arm is supposed to catch), after the failing runs
+ * have settled:
  *   1. can the bad rule be FOUND without knowing its id (findSuspectGuidance)?
  *   2. does the ledger date the evidence against it, or admit it cannot?
  *   3. when the harness retires it, does the effect actually END — status out of
  *      reach, no artifact still carrying it, and zero runs credited afterwards?
  */
-export function measureEffectEnds({ arm, storage, ledger, now }) {
+/**
+ * A SNAPSHOT of an arm's store, opened as a second LearningStorage.
+ *
+ * `VACUUM INTO` writes a consistent copy of the whole database — WAL content
+ * included — without touching the source, so the copy can be written to and
+ * the arm's own store stays exactly as the arm left it.
+ */
+function snapshotStore({ dbPath, LearningStorage, dir }) {
+  const copyPath = join(dir, `effect-ends-snapshot-${Date.now()}-${basename(dbPath)}`);
+  const source = new Database(dbPath, { readonly: true, fileMustExist: true });
+  try {
+    source.exec(`VACUUM INTO '${copyPath.replace(/'/gu, "''")}'`);
+  } finally {
+    source.close();
+  }
+  const copy = new LearningStorage(copyPath);
+  copy.initialize();
+  return { storage: copy, path: copyPath };
+}
+
+export function measureEffectEnds({ arm, storage, ledger, now, LearningStorage = null, isolationDir = null }) {
   if (!storage || arm?.error) {
     return { name: "harmful-guidance-effect-ends", state: STATE.UNMEASURED, reason: "the learning-on arm did not run" };
   }
@@ -308,68 +331,117 @@ export function measureEffectEnds({ arm, storage, ledger, now }) {
     };
   }
 
-  const suspects = ledger.findSuspectGuidance(storage, { limit: 20, now });
-  const lines = [];
-  const rows = [];
-  let regressed = false;
-
-  for (const [instinctId, probeId] of harmful) {
-    const before = ledger.buildInstinctLedger(storage, instinctId, { now });
-    if (!before) {
-      lines.push(`${instinctId}: NOT MEASURED — the ledger has no entry for it`);
-      regressed = true;
-      continue;
-    }
-    const rank = suspects.findIndex((s) => s.id === instinctId);
-    const retired = ledger.retireGuidance(storage, instinctId, {
-      reason: `harmful recall on held-out probe ${probeId} (learning-eval 6.3)`,
-      actor: "learning-eval",
-      now,
-    });
-    const after = retired.entry;
-    const effectEnded = after ? after.effect.inEffect === false && after.effect.runsAfterRetirement === 0 : false;
-    if (!effectEnded) regressed = true;
-
-    rows.push({
-      instinctId,
-      probeId,
-      foundBySuspectSearch: rank >= 0,
-      suspectRank: rank >= 0 ? rank + 1 : null,
-      evidenceFor: before.evidence.for,
-      evidenceAgainst: before.evidence.against,
-      negativeEvidenceUndated: before.evidence.negativeEvidenceUndated,
-      unmeasured: before.evidence.unmeasured,
-      inEffectBefore: before.effect.inEffect,
-      msWrongAndStillInEffect: before.effect.msWrongAndStillInEffect ?? null,
-      retired: retired.ok,
-      inEffectAfter: after ? after.effect.inEffect : null,
-      runsAfterRetirement: after ? after.effect.runsAfterRetirement : null,
-      msFromFirstNegativeToRetirement: after?.effect.msFromFirstNegativeToRetirement ?? null,
-      effectEnded,
-    });
-
-    lines.push(
-      `${before.name} [${instinctId.slice(0, 22)}] applied wrongly on ${probeId}: ` +
-        `evidence ${before.evidence.for} for / ${before.evidence.against} against` +
-        (before.evidence.negativeEvidenceUndated ? " (against is UNDATED — the measure cannot be computed)" : "") +
-        `; found by suspect search: ${rank >= 0 ? `yes, rank ${rank + 1}` : "NO"}`,
-    );
-    lines.push(
-      `  retire → ${retired.detail}; in effect afterwards: ${after ? after.effect.inEffect : "unknown"}` +
-        `; runs credited after retirement: ${after ? after.effect.runsAfterRetirement : "unknown"}` +
-        `; first-negative→retirement: ${after?.effect.msFromFirstNegativeToRetirement ?? "not datable"} ms` +
-        ` — ${effectEnded ? "the effect ENDED" : "the effect DID NOT end"}`,
-    );
-    if (after && after.effect.inEffect) lines.push(`  why it is STILL in effect: ${after.effect.why}`);
+  // Codex round 12 #26: retiring the wrongly-recalled rules IN PLACE cleaned the
+  // learning-on arm's store — the very store the answer-quality arm then
+  // retrieves guidance from. Its harmful-recall reading was therefore taken
+  // after the harmful guidance had been deleted. The retirement is measured on a
+  // SNAPSHOT instead, so nothing this measure does can reach the other arms and
+  // the order of the two measurements no longer matters. Without the means to
+  // snapshot, this measure reports NOT MEASURED — it never falls back to
+  // mutating the store the rest of the run reads.
+  let snapshot = null;
+  if (!LearningStorage || !arm.dbPath || !existsSync(arm.dbPath)) {
+    return {
+      name: "harmful-guidance-effect-ends",
+      state: STATE.UNMEASURED,
+      reason:
+        "retirement could not be isolated from the arm's own store (needs the LearningStorage class and the arm's "
+        + "dbPath), and retiring in place would delete the guidance the answer-quality arm is supposed to catch",
+    };
   }
+  try {
+    snapshot = snapshotStore({
+      dbPath: arm.dbPath,
+      LearningStorage,
+      dir: isolationDir ?? mkdtempSync(join(tmpdir(), "learning-eval-isolation-")),
+    });
+  } catch (err) {
+    return {
+      name: "harmful-guidance-effect-ends",
+      state: STATE.UNMEASURED,
+      reason: `the arm's store could not be snapshotted, so retirement was not measured: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+  const store = snapshot.storage;
 
-  return {
-    name: "harmful-guidance-effect-ends",
-    state: regressed ? STATE.REGRESSED : STATE.GOOD,
-    reason: regressed
-      ? "retiring guidance that recalled wrongly did not take it out of effect"
-      : `every wrongly-recalled rule was findable and went out of effect on retirement (${rows.length} rule(s))`,
-    rows,
-    lines,
-  };
+  try {
+    const suspects = ledger.findSuspectGuidance(store, { limit: 20, now });
+    const lines = [];
+    const rows = [];
+    let regressed = false;
+
+    for (const [instinctId, probeId] of harmful) {
+      const before = ledger.buildInstinctLedger(store, instinctId, { now });
+      if (!before) {
+        lines.push(`${instinctId}: NOT MEASURED — the ledger has no entry for it`);
+        regressed = true;
+        continue;
+      }
+      const rank = suspects.findIndex((s) => s.id === instinctId);
+      const retired = ledger.retireGuidance(store, instinctId, {
+        reason: `harmful recall on held-out probe ${probeId} (learning-eval 6.3)`,
+        actor: "learning-eval",
+        now,
+      });
+      const after = retired.entry;
+      const effectEnded = after ? after.effect.inEffect === false && after.effect.runsAfterRetirement === 0 : false;
+      if (!effectEnded) regressed = true;
+
+      rows.push({
+        instinctId,
+        probeId,
+        foundBySuspectSearch: rank >= 0,
+        suspectRank: rank >= 0 ? rank + 1 : null,
+        evidenceFor: before.evidence.for,
+        evidenceAgainst: before.evidence.against,
+        negativeEvidenceUndated: before.evidence.negativeEvidenceUndated,
+        unmeasured: before.evidence.unmeasured,
+        inEffectBefore: before.effect.inEffect,
+        msWrongAndStillInEffect: before.effect.msWrongAndStillInEffect ?? null,
+        retired: retired.ok,
+        inEffectAfter: after ? after.effect.inEffect : null,
+        runsAfterRetirement: after ? after.effect.runsAfterRetirement : null,
+        msFromFirstNegativeToRetirement: after?.effect.msFromFirstNegativeToRetirement ?? null,
+        effectEnded,
+      });
+
+      lines.push(
+        `${before.name} [${instinctId.slice(0, 22)}] applied wrongly on ${probeId}: ` +
+          `evidence ${before.evidence.for} for / ${before.evidence.against} against` +
+          (before.evidence.negativeEvidenceUndated ? " (against is UNDATED — the measure cannot be computed)" : "") +
+          `; found by suspect search: ${rank >= 0 ? `yes, rank ${rank + 1}` : "NO"}`,
+      );
+      lines.push(
+        `  retire → ${retired.detail}; in effect afterwards: ${after ? after.effect.inEffect : "unknown"}` +
+          `; runs credited after retirement: ${after ? after.effect.runsAfterRetirement : "unknown"}` +
+          `; first-negative→retirement: ${after?.effect.msFromFirstNegativeToRetirement ?? "not datable"} ms` +
+          ` — ${effectEnded ? "the effect ENDED" : "the effect DID NOT end"}`,
+      );
+      if (after && after.effect.inEffect) lines.push(`  why it is STILL in effect: ${after.effect.why}`);
+    }
+
+    return {
+      name: "harmful-guidance-effect-ends",
+      state: regressed ? STATE.REGRESSED : STATE.GOOD,
+      reason: regressed
+        ? "retiring guidance that recalled wrongly did not take it out of effect"
+        : `every wrongly-recalled rule was findable and went out of effect on retirement (${rows.length} rule(s))`,
+      rows,
+      lines,
+      // Said out loud in the result: the retirement happened on a copy, so the
+      // store the other arms read is untouched and this measure proves nothing
+      // about that store's current contents.
+      measuredOn: "an isolated snapshot of the learning-on arm's store",
+      snapshot: snapshot.path,
+    };
+  } finally {
+    try {
+      store.close();
+    } catch {
+      /* a close failure must not change the verdict */
+    }
+    rmSync(snapshot.path, { force: true });
+    rmSync(`${snapshot.path}-wal`, { force: true });
+    rmSync(`${snapshot.path}-shm`, { force: true });
+  }
 }

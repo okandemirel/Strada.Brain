@@ -311,10 +311,19 @@ async function main() {
     }
 
     // The ledger's own "did the effect end" number (plan 6.4), reused here.
+    //
+    // It RETIRES the rules the held-out probes recalled wrongly, so it is given
+    // a snapshot to do that on (round 12 #26): retiring in place cleaned the
+    // learning-on arm's store, and the answer-quality arm below retrieves its
+    // guidance from that very store — it would have been asked to catch harmful
+    // guidance that had just been deleted. With the snapshot the two
+    // measurements are independent of each other and of their order.
     const effectEnds = measureEffectEnds({
       arm: warmOn?.arm,
       storage: warmOn?.storage,
       ledger: learning.ledger,
+      LearningStorage: learning.LearningStorage,
+      isolationDir: work.dir,
     });
 
     // The answer-quality arm. Requested unless --ablation-only; unmeasured
