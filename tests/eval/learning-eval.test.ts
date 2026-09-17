@@ -425,6 +425,102 @@ describe("learning-eval answer-quality arm", () => {
     expect(q.reason).toContain("Insufficient balance");
   });
 
+  /**
+   * PARTIAL MEASUREMENT IS NOT A PASS (Codex round 12 #25).
+   *
+   * summariseQuality used to keep only the cases that produced two scorable
+   * answers and report measured-good over those: a second case that died at the
+   * provider, a retrieval call that threw, or a rubric criterion nothing could
+   * score all vanished from the verdict. The harness then said "measured and
+   * good" about a measurement it had not finished.
+   *
+   * The rule, in both directions: incomplete downgrades GOOD to NOT MEASURED,
+   * and what WAS measured is still carried, so a regression the partial run did
+   * find still outranks the incompleteness.
+   */
+  it("a quality case that died at the provider makes the arm NOT MEASURED, not measured-good", () => {
+    const q = summariseQuality(
+      [
+        { id: "a", baseScore: 1, guidedScore: 1, tokens: 20 },
+        { id: "b", baseScore: null, guidedScore: null, tokens: 0, error: "API error 401: Insufficient balance" },
+      ],
+      DEFAULT_THRESHOLDS,
+    );
+    expect(q.state, "one case answered and one dead at the provider reported as a pass").toBe(STATE.UNMEASURED);
+    expect(q.reason).toContain("Insufficient balance");
+    expect(q.reason).toContain("b");
+    // What DID run is still reported — it has to be, or the regression below is lost.
+    expect(q.harm.compared).toBe(1);
+  });
+
+  it("a retrieval failure is NOT MEASURED even when both answers scored", () => {
+    const q = summariseQuality(
+      [{ id: "a", baseScore: 1, guidedScore: 1, tokens: 20, retrievalError: "storage is closed" }],
+      DEFAULT_THRESHOLDS,
+    );
+    expect(q.state, "a case whose guidance retrieval threw was folded into a pass").toBe(STATE.UNMEASURED);
+    expect(q.reason).toContain("storage is closed");
+  });
+
+  it("a rubric criterion nothing scored is NOT MEASURED, not a silent pass", () => {
+    const q = summariseQuality(
+      [{ id: "a", baseScore: 1, guidedScore: 1, tokens: 20, unscoredCriteria: ["is-it-actionable"] }],
+      DEFAULT_THRESHOLDS,
+    );
+    expect(q.state, "an unscored judge criterion was folded into a pass").toBe(STATE.UNMEASURED);
+    expect(q.reason).toContain("is-it-actionable");
+  });
+
+  it("PRECEDENCE: an incomplete quality arm still REGRESSES, it does not hide behind NOT MEASURED", () => {
+    const q = summariseQuality(
+      [
+        { id: "a", baseScore: 1, guidedScore: 0.4, tokens: 20 },
+        { id: "b", baseScore: null, guidedScore: null, tokens: 0, error: "provider timed out" },
+      ],
+      DEFAULT_THRESHOLDS,
+    );
+    expect(q.state).toBe(STATE.UNMEASURED);
+    expect(q.harm.worse).toBe(1);
+
+    const probe = {
+      id: "p", decision: DECISION.CORRECT, repeatable: true, repeatedError: false,
+      accepted: true, cost: 1, recalled: [{ instinctId: "i", family: "f" }],
+    };
+    const arms = [
+      summariseArm({ name: "warm-learning-off", trained: true, learningEnabled: false, probes: [probe] }),
+      summariseArm({ name: "warm-learning-on", trained: true, learningEnabled: true, probes: [probe] }),
+    ];
+    const m = measureHarmfulRecall(arms, DEFAULT_THRESHOLDS, q);
+    expect(m.state, "harm found by a partial quality arm was dropped with the arm's state").toBe(STATE.REGRESSED);
+    expect(m.reason).toContain("scored WORSE with recalled guidance");
+
+    const v = decideVerdict({
+      measures: [m],
+      arms: [],
+      requested: [{ name: "answer-quality", state: q.state, reason: q.reason }],
+    });
+    expect(v.exitCode, "NOT MEASURED outranked a regression").toBe(EXIT.MEASURED_REGRESSED);
+  });
+
+  it("the whole quality arm is NOT MEASURED when only some of the requested prompts were answered", async () => {
+    const twoCases = {
+      quality: [
+        { id: "q1", prompt: "first", rubric: [{ id: "r", weight: 1, kind: "must_contain", any: ["fix"] }] },
+        { id: "q2", prompt: "second", rubric: [{ id: "r", weight: 1, kind: "must_contain", any: ["fix"] }] },
+      ],
+    };
+    let call = 0;
+    const generate = async () => {
+      call += 1;
+      if (call > 2) throw new Error("API error 429: rate limited");
+      return { text: "fix it", tokens: 5 };
+    };
+    const q = await runQualityArm({ dataset: twoCases, generate, retriever: null, thresholds: DEFAULT_THRESHOLDS });
+    expect(q.state, "one answered prompt and one rate-limited prompt reported as measured-good").toBe(STATE.UNMEASURED);
+    expect(q.reason).toContain("429");
+    expect(q.compared).toBe(1);
+  });
+
   it("a dataset with no quality cases is unmeasured, not a pass", async () => {
     const q = await runQualityArm({
       dataset: { quality: [] },

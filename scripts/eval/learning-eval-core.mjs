@@ -389,7 +389,11 @@ export function measureHarmfulRecall(arms, thresholds, quality) {
   }
 
   const rate = treatment.totals.harmfulRecallRate;
-  const answerHarm = quality && quality.state !== STATE.UNMEASURED ? quality.harm : null;
+  // The harm a quality arm measured counts even when the arm as a whole is NOT
+  // MEASURED (some case died at the provider): a regression that was actually
+  // observed must not be dropped along with the incompleteness. `harm` is
+  // absent when nothing was compared at all, so nothing is invented here.
+  const answerHarm = quality?.harm ?? null;
 
   if (rate === null) {
     return unmeasured(
@@ -447,7 +451,9 @@ export function measureCostPerAccepted(arms, thresholds, quality) {
     });
   }
   const ratio = t / c;
-  const tokens = quality && quality.state !== STATE.UNMEASURED ? quality.cost : null;
+  // Same rule as measure 2: tokens the quality arm really spent are reported
+  // even when that arm is incomplete. They are a cost reading, not a pass.
+  const tokens = quality?.cost ?? null;
   return {
     name: "cost-per-accepted",
     state: ratio <= thresholds.maxCostRatio ? STATE.GOOD : STATE.REGRESSED,
@@ -569,9 +575,8 @@ export function summariseQuality(cases, thresholds) {
   const worse = compared.filter((c) => c.guidedScore < c.baseScore);
   const accepted = compared.filter((c) => c.guidedScore >= thresholds.minQualityAccept).length;
   const tokens = cases.reduce((sum, c) => sum + (c.tokens ?? 0), 0);
-  return {
+  const measured = {
     name: "answer-quality",
-    state: STATE.GOOD,
     compared: compared.length,
     harm: {
       compared: compared.length,
@@ -587,6 +592,47 @@ export function summariseQuality(cases, thresholds) {
     },
     cases,
   };
+
+  // A PARTIAL measurement is not a pass. Every requested case that did not get
+  // all the way through — no scorable answer pair, a retrieval call that threw,
+  // a rubric criterion nothing could score — downgrades this arm to NOT
+  // MEASURED. The numbers that WERE produced stay on the result, so harm the
+  // partial run did find still reaches measure 2 and still outranks the
+  // incompleteness (REGRESSED beats NOT MEASURED).
+  const incomplete = incompleteQualityCases(cases);
+  if (incomplete.length > 0) {
+    return {
+      ...measured,
+      state: STATE.UNMEASURED,
+      incomplete,
+      reason:
+        `only ${compared.length} of ${cases.length} requested quality case(s) were measured end to end; `
+        + `${incomplete.length} incomplete: ${incomplete.join("; ")} `
+        + "(the harm found in the cases that DID run is still reported and still regresses measure 2)",
+    };
+  }
+  return { ...measured, state: STATE.GOOD };
+}
+
+/**
+ * Why a requested quality case cannot be counted as measured. Each entry names
+ * the case and what stopped it, so the verdict's reason is actionable.
+ */
+export function incompleteQualityCases(cases) {
+  const incomplete = [];
+  for (const c of cases ?? []) {
+    if (c.baseScore === null || c.baseScore === undefined || c.guidedScore === null || c.guidedScore === undefined) {
+      incomplete.push(`${c.id}: no scorable answer pair${c.error ? ` (${c.error})` : ""}`);
+      continue;
+    }
+    if (c.error) incomplete.push(`${c.id}: ${c.error}`);
+    if (c.retrievalError) incomplete.push(`${c.id}: guidance retrieval failed (${c.retrievalError})`);
+    const unscored = c.unscoredCriteria ?? [];
+    if (unscored.length > 0) {
+      incomplete.push(`${c.id}: rubric criteria nothing scored (${unscored.join(", ")})`);
+    }
+  }
+  return incomplete;
 }
 
 // ─── The answer-quality arm (Part B) ────────────────────────────────────────
