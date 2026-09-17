@@ -1,0 +1,454 @@
+{
+  "version": 1,
+  "notes": [
+    "PINNED dataset for the requirement–evidence matcher (plan item 6.2).",
+    "Each row is one requirement held against one milestone's MEASURED evidence, with a",
+    "  pre-registered oracle verdict and the reason for it. The matcher under test is",
+    "  production code: quotableFactsOf() builds the record a verdict may quote and",
+    "  closingFact() applies the typed, requirement-specific predicate (plan 0-B.3).",
+    "expected is the ORACLE, not the matcher:",
+    "  proven       — the evidence shown genuinely shows the requirement implemented and shipped,",
+    "  not_proven   — it does not (the matcher closing it is a FALSE CLOSE),",
+    "  not_measured — nothing in this evidence can settle the requirement either way. These rows",
+    "                 are reported on their own and are NEVER folded into either rate: a rate",
+    "                 that absorbed them would be a claim about something nobody measured.",
+    "Every requirement text and every evidence line is a REAL shape from this repo:",
+    "  requirement wordings and landed/suite/shipped-tree/document-numbers lines from",
+    "  src/campaign/campaign-planner.test.ts and src/campaign/coverage-audit-retry.test.ts;",
+    "  structure findings as campaign-manager.measureDeliveryStructure writes them;",
+    "  document-number lines as gdd-claims.describeClaims writes them.",
+    "source names where each shape came from so a row can be argued with.",
+    "The budgets are PRE-REGISTERED FOR THIS ROW SET, not universal claims. They were set on",
+    "  the commit that introduced the dataset, from the rates measured there, and exist to",
+    "  catch a REGRESSION: a later change that closes more unproven requirements, or leaves",
+    "  more proven ones open, fails the gate.",
+    "The two directions are not symmetrical and their budgets say so: a FALSE CLOSE ships a",
+    "  game with a missing feature, while a FALSE OPEN costs one more repair round. False",
+    "  closing is therefore budgeted at zero.",
+    "minRowsPerRate keeps a shrunken dataset from reading as a pass: below it the rate is",
+    "  reported NOT MEASURED and the exit code is 3."
+  ],
+  "budgets": {
+    "maxFalseClosedRate": 0.0,
+    "maxFalseOpenRate": 0.2,
+    "minRowsPerRate": 15
+  },
+  "rows": [
+    {
+      "id": "save-by-savesystem",
+      "requirement": "Save progress across restarts: absent",
+      "evidence": { "status": "green", "commitNote": "2 commit(s): Assets/Scripts/SaveSystem.cs" },
+      "expected": "proven",
+      "rationale": "The landed line names the file that implements the requirement; 'saving' and 'save' meet at the same stem.",
+      "source": "src/campaign/campaign-planner.test.ts:79"
+    },
+    {
+      "id": "save-by-hero-art",
+      "requirement": "Save progress across restarts: absent",
+      "evidence": { "status": "green", "commitNote": "1 commit(s): Assets/Art/Hero.png" },
+      "expected": "not_proven",
+      "rationale": "A hero sprite landing says nothing about persistence — the audit 06.5 / D10 defect exactly.",
+      "source": "src/campaign/campaign-planner.test.ts:80"
+    },
+    {
+      "id": "save-by-unrelated-suite-total",
+      "requirement": "Save progress across restarts: absent",
+      "evidence": { "status": "green", "testVerdict": "179/179 tests passed", "testVerdictUnfiltered": true },
+      "expected": "not_proven",
+      "rationale": "A green suite total is a measured line whose scope is the suite; it names no feature, and this is the AK#14 false close.",
+      "source": "src/campaign/campaign-planner.test.ts:81"
+    },
+    {
+      "id": "save-by-screensaver",
+      "requirement": "Save progress across restarts: absent",
+      "evidence": { "status": "green", "commitNote": "1 commit(s): Assets/Art/ScreenSaver.png" },
+      "expected": "not_proven",
+      "rationale": "A screensaver is not the save system: stems are compared whole, never as substrings (round 6 #1).",
+      "source": "src/campaign/campaign-planner.test.ts:90"
+    },
+    {
+      "id": "saving-progress-by-savesystem",
+      "requirement": "Saving progress: absent",
+      "evidence": { "status": "green", "commitNote": "2 commit(s): Assets/Scripts/SaveSystem.cs" },
+      "expected": "proven",
+      "rationale": "The inflection differs and the requirement is the same; the stemmer is what makes the evidence reach it.",
+      "source": "src/campaign/campaign-planner.test.ts:91"
+    },
+    {
+      "id": "suite-requirement-by-suite-total",
+      "requirement": "The full test suite runs green: absent",
+      "evidence": { "status": "green", "testVerdict": "179/179 tests passed", "testVerdictUnfiltered": true },
+      "expected": "proven",
+      "rationale": "This requirement IS about the suite as a whole, and an unfiltered total is exactly its measurement.",
+      "source": "src/campaign/campaign-planner.test.ts:82"
+    },
+    {
+      "id": "suite-requirement-by-filtered-suite",
+      "requirement": "The full test suite runs green: absent",
+      "evidence": { "status": "green", "testVerdict": "42/42 tests passed", "testVerdictUnfiltered": false },
+      "expected": "not_proven",
+      "rationale": "A suite of unknown scope does not measure the whole suite; the verdict is not marked unfiltered.",
+      "source": "src/campaign/campaign-planner.ts (quotableFacts: suite lines must be unfiltered)"
+    },
+    {
+      "id": "dragon-by-shipped-prefab",
+      "requirement": "Dragon boss: absent",
+      "evidence": { "status": "green", "structureFindings": ["Assets/Prefabs/DragonBoss.prefab present"] },
+      "expected": "proven",
+      "rationale": "The shipped tree holds the boss prefab the requirement names.",
+      "source": "src/campaign/campaign-planner.test.ts:83"
+    },
+    {
+      "id": "dragon-by-status-failed",
+      "requirement": "Dragon boss: absent",
+      "evidence": { "status": "failed" },
+      "expected": "not_proven",
+      "rationale": "'status: failed' is fourteen characters of the record and says how the sprint ended, nothing about the dragon (Codex 2026-09-12 AD#1).",
+      "source": "src/campaign/campaign-planner.ts (quotableFacts: status lines are never quotable)"
+    },
+    {
+      "id": "dragon-by-multi-file-commit",
+      "requirement": "Dragon boss: absent",
+      "evidence": { "status": "green", "commitNote": "3 commit(s): Assets/Scripts/Dragon.cs, Assets/Prefabs/Dragon.prefab" },
+      "expected": "proven",
+      "rationale": "A note listing several files closes each requirement it names; both files are the dragon's.",
+      "source": "src/campaign/coverage-audit-retry.test.ts:44"
+    },
+    {
+      "id": "determinism-by-contentless-commit",
+      "requirement": "Deterministic replay: absent",
+      "evidence": { "status": "green", "commitNote": "Committed 1 file(s) as abcdef1" },
+      "expected": "not_proven",
+      "rationale": "A commit note that names no path, file or type says nothing about WHICH requirement it implements (Codex 2026-09-13 AJ).",
+      "source": "src/campaign/campaign-planner.test.ts (namesContent) / coverage-audit-retry.test.ts"
+    },
+    {
+      "id": "levelcount-by-document-numbers",
+      "requirement": "Level count: 13 levels",
+      "evidence": { "status": "green", "gddClaims": ["13 levels claimed; 13 played to an outcome"] },
+      "expected": "proven",
+      "rationale": "The document's own number was measured and met, and the line names the count the requirement is about.",
+      "source": "src/campaign/campaign-planner.test.ts:84"
+    },
+    {
+      "id": "levelcount-by-boot-number",
+      "requirement": "Level count: 13 levels",
+      "evidence": { "status": "green", "gddClaims": ["boots in 2.1 s (claimed under 3 s)"] },
+      "expected": "not_proven",
+      "rationale": "A boot time is a measured number about a different claim entirely.",
+      "source": "src/campaign/campaign-planner.test.ts:85"
+    },
+    {
+      "id": "levelcount-by-leverage",
+      "requirement": "Level count: 13 levels",
+      "evidence": { "status": "green", "commitNote": "1 commit(s): Assets/Scripts/Leverage.cs" },
+      "expected": "not_proven",
+      "rationale": "'leverage' does not meet 'level': whole stems, not prefixes (round 6 #2).",
+      "source": "src/campaign/campaign-planner.test.ts:92"
+    },
+    {
+      "id": "thegame-by-gamecs",
+      "requirement": "The game: absent",
+      "evidence": { "status": "green", "commitNote": "1 commit(s): Assets/Game.cs" },
+      "expected": "not_proven",
+      "rationale": "A requirement made only of stopwords has no distinctive word, so nothing can be shown to be about it.",
+      "source": "src/campaign/campaign-planner.test.ts:87"
+    },
+    {
+      "id": "test-saving-by-suite-total",
+      "requirement": "Test saving progress: absent",
+      "evidence": { "status": "green", "testVerdict": "179/179 tests passed", "testVerdictUnfiltered": true },
+      "expected": "not_proven",
+      "rationale": "A requirement that merely mentions a test still names a feature (saving); a total closes only the suite itself (round 6 #1).",
+      "source": "src/campaign/campaign-planner.test.ts:94"
+    },
+    {
+      "id": "all-tests-pass-by-suite-total",
+      "requirement": "All tests pass: absent",
+      "evidence": { "status": "green", "testVerdict": "179/179 tests passed", "testVerdictUnfiltered": true },
+      "expected": "proven",
+      "rationale": "Once the suite words are removed nothing distinctive remains, so the requirement IS the suite.",
+      "source": "src/campaign/campaign-planner.test.ts:95"
+    },
+    {
+      "id": "progress-bar-by-progresses",
+      "requirement": "Progress bar: absent",
+      "evidence": { "status": "green", "commitNote": "1 commit(s): Assets/UI/Progresses.cs" },
+      "expected": "proven",
+      "rationale": "'progress' and 'progresses' meet at the same stem (round 7 #1).",
+      "source": "src/campaign/campaign-planner.test.ts:97"
+    },
+    {
+      "id": "mouse-input-by-mice",
+      "requirement": "Mouse input: absent",
+      "evidence": { "status": "green", "commitNote": "1 commit(s): Assets/Input/Mice.cs" },
+      "expected": "proven",
+      "rationale": "An irregular plural is the same word; the table exists for exactly this.",
+      "source": "src/campaign/campaign-planner.test.ts:98"
+    },
+    {
+      "id": "run-offline-by-runanalytics",
+      "requirement": "Run offline: absent",
+      "evidence": { "status": "green", "commitNote": "1 commit(s): Assets/Scripts/RunAnalytics.cs" },
+      "expected": "not_proven",
+      "rationale": "'Run' says nothing about WHICH feature, and analytics is not offline support (round 7 #2).",
+      "source": "src/campaign/campaign-planner.test.ts:99"
+    },
+    {
+      "id": "set-resolution-by-setvolume",
+      "requirement": "Set resolution: absent",
+      "evidence": { "status": "green", "commitNote": "1 commit(s): Assets/Scripts/SetVolume.cs" },
+      "expected": "not_proven",
+      "rationale": "Only the generic action word is shared; volume is not resolution.",
+      "source": "src/campaign/campaign-planner.test.ts:100"
+    },
+    {
+      "id": "set-resolution-by-resolutionmenu",
+      "requirement": "Set resolution: absent",
+      "evidence": { "status": "green", "commitNote": "1 commit(s): Assets/Settings/ResolutionMenu.cs" },
+      "expected": "proven",
+      "rationale": "The distinctive word is 'resolution' and the landed file is the resolution menu.",
+      "source": "src/campaign/campaign-planner.test.ts:101"
+    },
+    {
+      "id": "unit-tests-cover-saving-by-suite-total",
+      "requirement": "All unit tests cover saving: absent",
+      "evidence": { "status": "green", "testVerdict": "179/179 tests passed", "testVerdictUnfiltered": true },
+      "expected": "not_proven",
+      "rationale": "'saving' survives the suite words, so this is a requirement about a feature's coverage, not about the suite (round 7 #3).",
+      "source": "src/campaign/campaign-planner.test.ts:102"
+    },
+    {
+      "id": "whole-playmode-suite-by-suite-total",
+      "requirement": "The whole PlayMode suite runs clean: absent",
+      "evidence": { "status": "green", "testVerdict": "179/179 tests passed", "testVerdictUnfiltered": true },
+      "expected": "proven",
+      "rationale": "Every remaining word reports on the suite; the subject is the suite itself.",
+      "source": "src/campaign/campaign-planner.test.ts:104"
+    },
+    {
+      "id": "analysis-view-by-analyses",
+      "requirement": "Analysis view: absent",
+      "evidence": { "status": "green", "commitNote": "1 commit(s): Assets/UI/Analyses.cs" },
+      "expected": "proven",
+      "rationale": "The Greek/Latin -is/-es family meets at the singular (round 8 #14).",
+      "source": "src/campaign/campaign-planner.test.ts:110"
+    },
+    {
+      "id": "process-queue-by-processes",
+      "requirement": "Process queue: absent",
+      "evidence": { "status": "green", "commitNote": "1 commit(s): Assets/Scripts/Processes.cs" },
+      "expected": "proven",
+      "rationale": "'processes' stems to 'process', not to 'processis' (round 9 #33).",
+      "source": "src/campaign/campaign-planner.test.ts:112"
+    },
+    {
+      "id": "boxes-stack-by-box",
+      "requirement": "Boxes stack: absent",
+      "evidence": { "status": "green", "commitNote": "1 commit(s): Assets/Scripts/Box.cs" },
+      "expected": "proven",
+      "rationale": "An ordinary -xes plural must still meet its own singular.",
+      "source": "src/campaign/campaign-planner.test.ts:117"
+    },
+    {
+      "id": "houses-by-house-prefab",
+      "requirement": "Houses on the map: absent",
+      "evidence": { "status": "green", "structureFindings": ["Assets/Prefabs/House.prefab present"] },
+      "expected": "proven",
+      "rationale": "Same word, different number; the shipped tree holds it.",
+      "source": "src/campaign/campaign-planner.test.ts:119"
+    },
+    {
+      "id": "matrix-math-by-matrices",
+      "requirement": "Matrix math: absent",
+      "evidence": { "status": "green", "commitNote": "1 commit(s): Assets/Scripts/Matrices.cs" },
+      "expected": "proven",
+      "rationale": "The -x/-ices family is listed and meets at the singular.",
+      "source": "src/campaign/campaign-planner.test.ts:124"
+    },
+    {
+      "id": "tr-suite-requirement-by-suite-total",
+      "requirement": "Tüm testler başarılı olmalı: absent",
+      "evidence": { "status": "green", "testVerdict": "179/179 tests passed", "testVerdictUnfiltered": true },
+      "expected": "proven",
+      "rationale": "An ordinary Turkish formulation of 'all tests must pass'; the subject is the suite (round 9 #34).",
+      "source": "src/campaign/campaign-planner.test.ts:129"
+    },
+    {
+      "id": "fr-suite-requirement-by-suite-total",
+      "requirement": "Tous les tests doivent réussir: absent",
+      "evidence": { "status": "green", "testVerdict": "179/179 tests passed", "testVerdictUnfiltered": true },
+      "expected": "proven",
+      "rationale": "The French formulation of the same suite requirement.",
+      "source": "src/campaign/campaign-planner.test.ts:130"
+    },
+    {
+      "id": "de-suite-requirement-by-suite-total",
+      "requirement": "Alle Tests müssen bestehen: absent",
+      "evidence": { "status": "green", "testVerdict": "179/179 tests passed", "testVerdictUnfiltered": true },
+      "expected": "proven",
+      "rationale": "The German formulation of the same suite requirement.",
+      "source": "src/campaign/campaign-planner.test.ts:132"
+    },
+    {
+      "id": "tr-feature-requirement-by-suite-total",
+      "requirement": "Tüm testler kaydetmeyi kapsamalı: absent",
+      "evidence": { "status": "green", "testVerdict": "179/179 tests passed", "testVerdictUnfiltered": true },
+      "expected": "not_proven",
+      "rationale": "'kaydetmeyi' (saving) is a feature word: a total cannot close a requirement about a feature's coverage in any language.",
+      "source": "src/campaign/campaign-planner.test.ts:136"
+    },
+    {
+      "id": "fr-feature-requirement-by-suite-total",
+      "requirement": "Les tests de sauvegarde doivent réussir: absent",
+      "evidence": { "status": "green", "testVerdict": "179/179 tests passed", "testVerdictUnfiltered": true },
+      "expected": "not_proven",
+      "rationale": "Tests OF SAVING are not all the tests.",
+      "source": "src/campaign/campaign-planner.test.ts:137"
+    },
+    {
+      "id": "test-passwords-by-suite-total",
+      "requirement": "Test passwords: absent",
+      "evidence": { "status": "green", "testVerdict": "179/179 tests passed", "testVerdictUnfiltered": true },
+      "expected": "not_proven",
+      "rationale": "'password' merely starts like 'pass'; a feature name is not a suite predicate (round 10 #17).",
+      "source": "src/campaign/campaign-planner.test.ts:143"
+    },
+    {
+      "id": "all-allocation-tests-by-suite-total",
+      "requirement": "All allocation tests pass: absent",
+      "evidence": { "status": "green", "testVerdict": "179/179 tests passed", "testVerdictUnfiltered": true },
+      "expected": "not_proven",
+      "rationale": "'allocation' starts like 'all' and is a feature word; the requirement is about allocation tests.",
+      "source": "src/campaign/campaign-planner.test.ts:144"
+    },
+    {
+      "id": "tr-save-tests-by-suite-total",
+      "requirement": "Kayıt sistemi testleri: absent",
+      "evidence": { "status": "green", "testVerdict": "179/179 tests passed", "testVerdictUnfiltered": true },
+      "expected": "not_proven",
+      "rationale": "A feature requirement in another language is still a feature requirement (round 8 #15).",
+      "source": "src/campaign/campaign-planner.test.ts:151"
+    },
+    {
+      "id": "element-schedule-all-traced",
+      "requirement": "Every scheduled element has a trace in code: absent",
+      "evidence": { "status": "green", "structureFindings": ["GDD element schedule: all 14 scheduled element(s) have a trace in code"] },
+      "expected": "proven",
+      "rationale": "The structural scan measured the schedule against the code and every element was found.",
+      "source": "src/campaign/campaign-manager.ts:6703 (measureDeliveryStructure)"
+    },
+    {
+      "id": "bomb-by-no-trace-finding",
+      "requirement": "Bomb element: absent",
+      "evidence": { "status": "green", "structureFindings": ["GDD element schedule: 2 of 14 scheduled element(s) have NO trace in code: L3 Bomb, L5 Rocket"] },
+      "expected": "not_proven",
+      "rationale": "The line NAMES the bomb and says it has no trace in the code — the finding of absence, read back as the evidence of presence.",
+      "source": "src/campaign/campaign-manager.ts:6706 (measureDeliveryStructure)"
+    },
+    {
+      "id": "world-renderer-by-zero-finding",
+      "requirement": "World renderers in the shipped scenes: absent",
+      "evidence": { "status": "green", "structureFindings": ["0 world renderers in the shipped scenes"] },
+      "expected": "not_proven",
+      "rationale": "Zero of the thing the requirement asks for is the opposite of evidence that it shipped.",
+      "source": "src/campaign/campaign-manager.test.ts (structureFindings fixture)"
+    },
+    {
+      "id": "fps-by-not-met-claim",
+      "requirement": "Frame rate at least 60 fps: absent",
+      "evidence": { "status": "green", "gddClaims": ["GDD frame rate ≥ 60 fps: NOT MET — 41 fps average in the editor under -batchmode"] },
+      "expected": "not_proven",
+      "rationale": "The document's own number was measured and MISSED; the line is about the requirement and refutes it.",
+      "source": "src/campaign/gdd-claims.ts:1082 (describeClaims)"
+    },
+    {
+      "id": "boot-by-not-measured-claim",
+      "requirement": "Boot time under 3 seconds: absent",
+      "evidence": { "status": "green", "gddClaims": ["GDD boot time ≤ 3 s: NOT MEASURED — the play-through recorded no frame timing"] },
+      "expected": "not_proven",
+      "rationale": "An unmeasured claim closes nothing: 'NOT MEASURED' is not a measurement of the budget being met.",
+      "source": "src/campaign/gdd-claims.ts:1081 (describeClaims)"
+    },
+    {
+      "id": "entry-scene-by-refusal",
+      "requirement": "Entry scene opens the game: absent",
+      "evidence": { "status": "green", "structureFindings": ["REFUSAL STANDS at delivery: no enabled scene holds the game"] },
+      "expected": "not_proven",
+      "rationale": "A standing refusal is the strongest statement that the requirement is NOT met.",
+      "source": "src/campaign/campaign-manager.ts:4562"
+    },
+    {
+      "id": "element-schedule-by-unreadable-table",
+      "requirement": "Element schedule: absent",
+      "evidence": { "status": "green", "structureFindings": ["GDD element schedule: the document HOLDS a schedule table and none of its rows could be read — nothing was compared against the code"] },
+      "expected": "not_proven",
+      "rationale": "Nothing was compared, so nothing was shown; an unreadable schedule is the absence of a measurement.",
+      "source": "src/campaign/campaign-manager.ts:6688"
+    },
+    {
+      "id": "built-player-by-cannot-run",
+      "requirement": "The built player launches: absent",
+      "evidence": { "status": "green", "gddClaims": ["NOT MEASURED: the built artifact cannot be run on this machine — no Windows host"] },
+      "expected": "not_proven",
+      "rationale": "This host's inability is a disclosure, not the game's proof (Codex 2026-09-12 R#13).",
+      "source": "src/campaign/campaign-manager.ts:6529"
+    },
+    {
+      "id": "tr-save-requirement-by-savesystem",
+      "requirement": "Oyuncu ilerlemesi kaydedilmeli: absent",
+      "evidence": { "status": "green", "commitNote": "2 commit(s): Assets/Scripts/SaveSystem.cs" },
+      "expected": "proven",
+      "rationale": "The requirement is Turkish for 'player progress must be saved' and SaveSystem.cs is what implements it. The matcher compares stems in one language, so it cannot see this — a FALSE OPEN, which costs a repair round and never a missing feature.",
+      "source": "src/campaign/campaign-planner.test.ts:129-151 (Turkish requirement wordings) + :79 (the landed line)"
+    },
+    {
+      "id": "tr-save-system-by-savesystem",
+      "requirement": "Kayıt sistemi: absent",
+      "evidence": { "status": "green", "commitNote": "2 commit(s): Assets/Scripts/SaveSystem.cs" },
+      "expected": "proven",
+      "rationale": "'Kayıt sistemi' IS the save system; 'sistem' and 'system' are one stem apart and the matcher rejects the pair. A FALSE OPEN.",
+      "source": "src/campaign/campaign-planner.test.ts:151"
+    },
+    {
+      "id": "shop-by-store-prefab",
+      "requirement": "Shop: absent",
+      "evidence": { "status": "green", "structureFindings": ["Assets/Prefabs/Store.prefab present"] },
+      "expected": "proven",
+      "rationale": "The implementation named the shop 'Store'. A synonym is invisible to a stem comparison, so this is a FALSE OPEN — the honest cost of refusing to close on anything but the requirement's own words.",
+      "source": "src/campaign/campaign-planner.test.ts:83 (shipped-tree shape) + the shop requirement of audit 06.5 / D10"
+    },
+    {
+      "id": "art-style-matches-direction",
+      "requirement": "The art matches the GDD's pixel-art direction: absent",
+      "evidence": { "status": "green", "commitNote": "1 commit(s): Assets/Art/Hero.png" },
+      "expected": "not_measured",
+      "rationale": "Whether a sprite MATCHES a style is not something any predicate in this repo measures. The file landed; the judgement did not happen.",
+      "source": "src/campaign/campaign-planner.test.ts:80 (the landed line) — the requirement kind the style gate cannot answer"
+    },
+    {
+      "id": "music-audible-by-bound-audiosource",
+      "requirement": "Background music is audible on the menu screen: absent",
+      "evidence": { "status": "green", "structureFindings": ["3 AudioSources bound in Assets/Scenes/Main.unity"] },
+      "expected": "not_measured",
+      "rationale": "A bound AudioSource is not audibility. Nothing here listens, so neither verdict is available.",
+      "source": "src/campaign/campaign-manager.ts (scene structure findings) / gdd-claims.ts header on named mediums"
+    },
+    {
+      "id": "fps-on-device-by-editor-measurement",
+      "requirement": "At least 60 fps on a mid-range Android device: absent",
+      "evidence": { "status": "green", "gddClaims": ["GDD frame rate ≥ 60 fps: MET — 62 fps average in the editor under -batchmode"] },
+      "expected": "not_measured",
+      "rationale": "gdd-claims.ts states it outright: a frame rate from the editor under -batchmode is a FLOOR for the player, not the player's number — and this claim names a device nothing here ran on.",
+      "source": "src/campaign/gdd-claims.ts:16-23 (the medium names itself)"
+    },
+    {
+      "id": "fun-by-anything",
+      "requirement": "The game is fun: absent",
+      "evidence": { "status": "green", "commitNote": "3 commit(s): Assets/Scripts/Dragon.cs, Assets/Prefabs/Dragon.prefab", "testVerdict": "179/179 tests passed", "testVerdictUnfiltered": true },
+      "expected": "not_measured",
+      "rationale": "An aspiration, not scheduled content. The coverage system is instructed to be lenient about these, and no evidence kind settles it.",
+      "source": "src/campaign/campaign-planner.ts (COVERAGE_SYSTEM: strict about scheduled content, lenient about aspiration)"
+    }
+  ]
+}

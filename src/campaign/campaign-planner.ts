@@ -8,6 +8,7 @@
  * those prompts.
  */
 
+import { createHash } from "node:crypto";
 import { z } from "zod";
 import { stripLeakedReasoning } from "../agents/leaked-reasoning.js";
 import type { IAIProvider } from "../agents/providers/provider.interface.js";
@@ -16,6 +17,14 @@ import { streamOrChatText } from "../agents/providers/provider.interface.js";
 import { milestoneLadderSchema } from "./types.js";
 import type { MilestoneLadder, PlannedLadder } from "./types.js";
 import { measureGddScope, uncoveredSections, type GddScope } from "./gdd-scope.js";
+import {
+  decodeIdentities,
+  decodeRequirement,
+  identifyRequirements,
+  requirementText,
+  stemWord,
+  type RequirementIdentity,
+} from "./requirement-identity.js";
 
 /**
  * GDD windowing. The old 10k-head + 6k-tail window elided the MIDDLE of a
@@ -553,7 +562,9 @@ export class CampaignPlanner {
       structureFindings?: readonly string[];
       gddClaims?: readonly string[];
       coverageGap?: string;
+      coverageClosed?: boolean;
     }>,
+    options?: CoverageIdentityOptions,
   ): Promise<string[]> {
     if (!this.provider) {
       throw new Error("coverage audit requires an LLM provider");
@@ -611,7 +622,7 @@ Your previous reply was not valid JSON. Reply with the JSON object ALONE — no 
       throw new Error("coverage audit returned malformed JSON");
     }
     const validated = coverageResultSchema.safeParse(parsed);
-    if (validated.success) return validated.data.missing;
+    if (validated.success) return identifyMissing(validated.data.missing, gddText, milestones, options);
     // FAIL-OPEN INVERSION GUARD: a GDD with 31+ uncovered items used to fail
     // the schema, which skipped the audit entirely — the WORSE the build, the
     // MORE likely delivery proceeded unchecked. Clamp instead of reject.
@@ -626,7 +637,7 @@ Your previous reply was not valid JSON. Reply with the JSON object ALONE — no 
           rawCount: raw.length,
           kept: clamped.length,
         });
-        return clamped;
+        return identifyMissing(clamped, gddText, milestones, options);
       }
     }
     throw new Error("coverage audit output failed schema validation");
@@ -664,10 +675,17 @@ Your previous reply was not valid JSON. Reply with the JSON object ALONE — no 
       throw new Error("coverage resolution requires an LLM provider");
     }
     const asked = requirements.slice(0, COVERAGE_ASK_WINDOW);
+    // THE TEXT, NOT THE ID TAIL. A persisted requirement may carry its
+    // identity (plan 6.2, requirement-identity.ts); the id is machine
+    // bookkeeping, so it is stripped before the requirement is shown to a
+    // model and before its words are held against a measured line — an id
+    // reaching `quoteIsAbout` would add its hex to the requirement's stems,
+    // and reaching the prompt would ask the model to audit a fingerprint.
+    const askedTexts = asked.map((r) => requirementText(r));
     const ladderSummary = milestones
       .map((m, i) => `${i + 1}. ${m.title}${milestoneEvidence(m)}`)
       .join("\n");
-    const list = asked.map((r, i) => `${i + 1}. ${r.slice(0, 300)}`).join("\n");
+    const list = askedTexts.map((r, i) => `${i + 1}. ${r.slice(0, 300)}`).join("\n");
     const userMessage =
       `<gdd>\n${windowGdd(gddText, GDD_AUDIT_FULL_CHARS)}\n</gdd>\n\n` +
       `<completed-ladder>\n${ladderSummary}\n</completed-ladder>\n\n` +
@@ -718,7 +736,7 @@ Your previous reply was not valid JSON. Reply with the JSON object ALONE — no 
     // requirement either. What can close one: what landed, what the shipped
     // tree holds, what the document's own numbers measured, and a suite that
     // ran unfiltered.
-    const record = flat(milestones.flatMap((m) => quotableFacts(m)).join("\n"));
+    const record = flat(quotableFactsOf(milestones).join("\n"));
     const verdictsById = new Map<number, Array<{ delivered: boolean; evidence?: string }>>();
     for (const v of verdicts.data.verdicts) {
       // An id nobody asked about is simply never consulted below.
@@ -736,7 +754,7 @@ Your previous reply was not valid JSON. Reply with the JSON object ALONE — no 
     // names. The quoted FACT (the whole measured line the quote came from)
     // is what is judged, so a note that lists several files closes each
     // requirement it names.
-    const facts = milestones.flatMap((m) => quotableFacts(m)).map(flat);
+    const facts = quotableFactsOf(milestones).map(flat);
     const closedIds = new Set<number>();
     for (const [id, list] of verdictsById) {
       if (list.length !== 1) continue;
@@ -744,14 +762,46 @@ Your previous reply was not valid JSON. Reply with the JSON object ALONE — no 
       if (only.delivered !== true) continue;
       const quote = flat(only.evidence ?? "");
       if (quote.length < 12 || !record.includes(quote)) continue;
-      const requirement = asked[id - 1];
+      const requirement = askedTexts[id - 1];
       if (requirement === undefined) continue;
       const fact = facts.find((f) => f.includes(quote));
       if (fact === undefined || !quoteIsAbout(requirement, fact)) continue;
       closedIds.add(id);
     }
+    // INHERITED EVIDENCE, AND ONLY FOR A PROVABLY COSMETIC REWORDING. A
+    // revision that reworded a requirement used to lose everything already
+    // proven about it — the identity WAS the text — so proven work was
+    // repaired again from zero. `carry:1` is set by reconcileRequirements only
+    // when the new wording's content fingerprint is identical to that of a
+    // predecessor the campaign had PROVEN: same stems, same numbers, same
+    // negations, same order. A changed number, an added clause or a fresh
+    // diagnosis is not cosmetic — it carries nothing and reopens the
+    // requirement instead (plan 6.2).
+    //
+    // What is inherited is the model's QUOTE, never the closure itself: the
+    // record must still hold a measured line about the requirement, read on
+    // this tree, or it stays open. A flag that closed a requirement outright
+    // would be a permanent closure of exactly the kind Codex 2026-09-12 V#4
+    // was about — the implementation could be removed afterwards and nothing
+    // would look again.
+    asked.forEach((raw, i) => {
+      if (closedIds.has(i + 1)) return;
+      const identity = decodeRequirement(raw).identity;
+      if (identity?.evidenceCarried !== true) return;
+      const fact = closingFact(askedTexts[i]!, facts);
+      if (fact === undefined) return;
+      closedIds.add(i + 1);
+      getLoggerSafe().info("Requirement closed on a cosmetic rewording's inherited evidence", {
+        id: identity.id,
+        lineage: identity.lineage,
+        supersedes: identity.supersedes?.join(",") ?? "",
+        fact: fact.slice(0, 160),
+      });
+    });
     const closed: string[] = [];
     const open: string[] = [];
+    // The ENCODED requirement goes back, so the identity survives the round
+    // trip through the campaign's persisted state.
     asked.forEach((req, i) => (closedIds.has(i + 1) ? closed : open).push(req));
     // ANYTHING PAST THE ASK IS UNASKED — not "open". Returned as open, the
     // caller stamped it as judged, so with 31 requirements and no revision to
@@ -774,55 +824,11 @@ const REQUIREMENT_STOPWORDS = new Set([
 ]);
 
 /**
- * A word's stem, lightly: enough that "restarts" meets "restart", "saving"
- * meets "save" and "levels" meets "level" — compared as WHOLE stems, so
- * "saver" (ScreenSaver.png) does not meet "save" and "leverage" does not
- * meet "level" (Codex 2026-09-17 round 6 #1, #2).
+ * The stemmer and its irregular table live in requirement-identity.ts: the
+ * evidence matcher below and a requirement's identity fingerprint must fold
+ * words the SAME way, or a requirement could be "the same" for matching and
+ * "different" for identity (plan 6.2).
  */
-/**
- * Words whose plural the suffix rules cannot reach.
- *
- * The -is/-es pairs are LISTED, not inferred: a general "-ses → -sis" rule
- * turned `houses` into `housis` while `house` stemmed to `hous`, and
- * "-xes → -xis" turned `boxes` into `boxis` while `box` stayed `box` — so
- * ordinary plurals stopped matching their own singular and real
- * implementation evidence was rejected (Codex 2026-09-17 round 9 #33). Only
- * words that genuinely take -is in the singular belong here.
- */
-const IRREGULAR_STEMS: Record<string, string> = {
-  mice: "mous", children: "child", feet: "foot", teeth: "tooth", geese: "goos",
-  men: "man", women: "woman", lives: "lif", knives: "knif",
-  // Greek/Latin -is → -es (round 8 #14): both forms meet at the singular.
-  analysis: "analysis", analyses: "analysis",
-  axis: "axis", axes: "axis",
-  crisis: "crisis", crises: "crisis",
-  thesis: "thesis", theses: "thesis",
-  hypothesis: "hypothesis", hypotheses: "hypothesis",
-  diagnosis: "diagnosis", diagnoses: "diagnosis",
-  parenthesis: "parenthesis", parentheses: "parenthesis",
-  synopsis: "synopsis", synopses: "synopsis",
-  // …and -x → -ices, which no suffix rule reaches either.
-  matrix: "matrix", matrices: "matrix",
-  vertex: "vertex", vertices: "vertex",
-  index: "index", indices: "index", indexes: "index",
-  appendix: "appendix", appendices: "appendix",
-};
-function stemWord(word: string): string {
-  const irregular = IRREGULAR_STEMS[word];
-  if (irregular !== undefined) return irregular;
-  // Canonical suffix rules: "progress" and "progresses" meet at "progres",
-  // "mouse" and "mice" at "mous" (Codex 2026-09-17 round 7 #1). The -is/-es
-  // families are in IRREGULAR_STEMS above: as suffix rules they mangled every
-  // ordinary -xes/-ses plural (round 9 #33).
-  let w = word.replace(/ies$/u, "y");
-  if (/sses$/u.test(w)) return w.replace(/sses$/u, "ss"); // processes → process
-  if (/ss$/u.test(w)) return w; // progress, class
-  w = w.replace(/(?:ing|ed)$/u, "");
-  if (/(?:ch|sh|x|z|s)es$/u.test(w)) w = w.replace(/es$/u, "");
-  else if (/es$/u.test(w)) w = w.replace(/s$/u, "");
-  else if (/[^s]s$/u.test(w)) w = w.replace(/s$/u, "");
-  return w.replace(/e$/u, "");
-}
 
 /** Action words that say nothing about WHICH feature: "Run offline" is not RunAnalytics.cs (round 7 #2). */
 const GENERIC_ACTION_STEMS = new Set(["run", "set", "get", "use", "add", "mak", "show", "open", "clos", "start", "stop", "load", "play", "turn", "put", "tak", "giv", "mov", "work", "need", "allow", "support", "handl", "updat", "chang", "check", "appli", "enabl", "disabl", "creat", "build", "call", "keep", "hold", "read", "writ", "send", "receiv"]);
@@ -963,6 +969,44 @@ function milestoneFacts(m: {
 }
 
 /**
+ * The system's OWN negative measurements, as it writes them.
+ *
+ * A measured line that says a thing is NOT there is about that thing — it
+ * names it, which is exactly what the typed predicate asks for — so
+ * "GDD element schedule: 2 of 14 scheduled element(s) have NO trace in code:
+ * L3 Bomb, L5 Rocket" closed the Bomb requirement, "0 world renderers in the
+ * shipped scenes" closed the renderer requirement, and
+ * "GDD frame rate ≥ 60 fps: NOT MET — 41 fps" closed the frame-rate
+ * requirement. The finding read back as the evidence against itself, the same
+ * shape as Codex 2026-09-12 AD#1 ("status: failed" closing anything), and the
+ * requirement–evidence eval measures it: 7 of the 25 unproven rows were closed
+ * this way — a 28% false-closed rate, 0% with this filter
+ * (scripts/eval/requirement-evidence-eval.mjs).
+ *
+ * These are phrases THIS SYSTEM writes into its own measured lines, not a
+ * general negation sniffer: a worker's commit note saying "do not spawn twice"
+ * must still close what it implements, and a file called NotMetGate.cs is not
+ * a negative measurement.
+ */
+const NEGATIVE_MEASUREMENT_RES: readonly RegExp[] = [
+  /\bnot\s+met\b/i, // GDD <kind> ≥ N: NOT MET — …
+  /\bnot\s+measured\b/i, // "NOT MEASURED: …", "NOT measured: …" (claims and structure)
+  /\bno\s+trace\s+in\s+code\b/i, // GDD element schedule: … have NO trace in code: …
+  /\b0\s+of\s+\d/, // … 0 of 14 scheduled element(s) …
+  /\b0\s+(?:\S+\s+){1,3}in\s+the\s+shipped\s+scenes\b/i, // 0 world renderers in the shipped scenes
+  /\brefusal\s+stands\b/i, // REFUSAL STANDS at delivery: …
+  /\bnone\s+of\s+its\s+rows\s+could\s+be\s+read\b/i, // the schedule table was unreadable
+  /\bstopped\s+part-way\b/i, // the reader stopped part-way through the table
+  /\bcannot\s+be\s+run\b/i, // the built artifact cannot be run on this machine
+  /\bnever\s+(?:played|reached|published|ran)\b/i, // never played to a verdict, never reached an outcome
+];
+
+/** Does this measured line report the ABSENCE of what it names? */
+export function saysItIsNotThere(line: string): boolean {
+  return NEGATIVE_MEASUREMENT_RES.some((re) => re.test(line));
+}
+
+/**
  * The facts a verdict may QUOTE to close a requirement — a subset of the
  * facts a milestone shows (Codex 2026-09-12 AD#1).
  */
@@ -973,6 +1017,10 @@ function quotableFacts(m: {
   return milestoneFacts(m).filter((fact) => {
     if (fact.startsWith("status: ")) return false;
     if (fact.startsWith("suite: ")) return fact.includes("(unfiltered)");
+    // A MEASUREMENT OF ABSENCE IS NOT EVIDENCE OF PRESENCE. Still shown to the
+    // auditing model — it is disclosure, and the most useful line in the
+    // record — but it cannot be the quote that closes a requirement.
+    if (saysItIsNotThere(fact)) return false;
     // A COMMIT NOTE THAT NAMES NO CONTENT CLOSES NOTHING. "Committed 1
     // file(s) as abcdef" is a measured line about a commit and says nothing
     // about WHICH requirement it implements, so quoting it closed any of them
@@ -982,6 +1030,87 @@ function quotableFacts(m: {
     if (fact.startsWith("landed: ")) return namesContent(fact);
     return true;
   });
+}
+
+/**
+ * How the audit stamps the requirements it names with their identities
+ * (plan 6.2). OFF by default: the identity rides in the requirement STRING, and
+ * every reader that renders a requirement for a person or a worker must go
+ * through `requirementText` first, so the caller opts in once it does.
+ */
+export interface CoverageIdentityOptions {
+  /** Stamp each named requirement with a stable id + its GDD revision. */
+  readonly identity?: boolean;
+  /** The approved document's sha256 (plan 1.9's `gddSha256`); defaults to a hash of the text audited. */
+  readonly gddSha256?: string;
+  /** That document's revision number (plan 1.9's `gddRevision`). */
+  readonly gddRevision?: number;
+}
+
+/**
+ * Give the audit's list its identities, reconciled against what the campaign
+ * already holds.
+ *
+ * The previous identities are read out of the milestones the campaign passes
+ * in — a coverage sprint's `coverageGap` IS the persisted requirement — and
+ * `coverageClosed` says which of them were proven, which is the only source
+ * evidence is ever carried from.
+ */
+function identifyMissing(
+  missing: readonly string[],
+  gddText: string,
+  milestones: ReadonlyArray<{ coverageGap?: string; coverageClosed?: boolean }>,
+  options?: CoverageIdentityOptions,
+): string[] {
+  if (options?.identity !== true) return [...missing];
+  const previous: RequirementIdentity[] = decodeIdentities(
+    milestones.map((m) => m.coverageGap).filter((g): g is string => typeof g === "string" && g.length > 0),
+  );
+  const proven = new Set<string>();
+  for (const m of milestones) {
+    if (m.coverageClosed !== true || m.coverageGap === undefined) continue;
+    const identity = decodeRequirement(m.coverageGap).identity;
+    if (identity !== undefined) proven.add(identity.id);
+  }
+  const sha256 = options.gddSha256 ?? createHash("sha256").update(gddText).digest("hex");
+  const { encoded } = identifyRequirements({
+    previous,
+    texts: missing,
+    gdd: { sha256, ...(options.gddRevision === undefined ? {} : { revision: options.gddRevision }) },
+    proven,
+  });
+  return encoded;
+}
+
+/** One milestone's measured evidence, as the shape both the resolver and the eval need. */
+export interface EvidenceBearingMilestone {
+  status?: string;
+  testVerdict?: string;
+  testVerdictUnfiltered?: boolean;
+  commitNote?: string;
+  structureFindings?: readonly string[];
+  gddClaims?: readonly string[];
+}
+
+/**
+ * EVERY measured line a verdict may quote, across the ladder — the resolver's
+ * own record, exported so the requirement–evidence eval (plan 6.2,
+ * scripts/eval/requirement-evidence-eval.mjs) measures the production
+ * predicate rather than a copy of it.
+ */
+export function quotableFactsOf(milestones: readonly EvidenceBearingMilestone[]): string[] {
+  return milestones.flatMap((m) => quotableFacts(m));
+}
+
+/**
+ * The measured line that CLOSES this requirement, or undefined when none of
+ * them is about it. The typed predicate of plan 0-B.3, applied to a whole
+ * evidence record: this is what the matcher's false-closed / false-open rates
+ * are measured on.
+ */
+export function closingFact(requirement: string, facts: readonly string[]): string | undefined {
+  const text = requirementText(requirement);
+  return facts.find((fact) => quoteIsAbout(text, fact));
 }
 
 function milestoneEvidence(m: {
