@@ -213,18 +213,35 @@ export class InstinctRetriever {
     );
 
     const scopePriority: Record<string, number> = { user: 3, project: 2, global: 1 };
-    const byPattern = new Map<string, PatternMatch>();
+    // Round 10 #12: the bucket is the trigger AND the action AND the owner, not
+    // the trigger alone. Two solutions to one error are two pieces of knowledge;
+    // bucketing on the trigger threw one of them away before the model ever saw
+    // it, which is also why the rival could never be observed to be the better
+    // one. Within a bucket the narrowest scope still wins (a user's own override
+    // of the same advice beats the project's, and the project's beats global).
+    const byRule = new Map<string, PatternMatch>();
     for (const match of filtered) {
-      const pattern = match.instinct?.triggerPattern ?? '';
-      const existing = byPattern.get(pattern);
+      const key = InstinctRetriever.dedupKey(match.instinct);
+      const existing = byRule.get(key);
       const matchScope = match.instinct?.scopeType ?? 'project';
       const existingScope = existing?.instinct?.scopeType ?? 'project';
       if (!existing || (scopePriority[matchScope] ?? 0) > (scopePriority[existingScope] ?? 0)) {
-        byPattern.set(pattern, match);
+        byRule.set(key, match);
       }
     }
 
-    const boosted = Array.from(byPattern.values()).map(m =>
+    // An owner's own copy of a rule overrides the shared one it narrows: same
+    // trigger, same action, but theirs. Without this the reader sees the identical
+    // advice twice.
+    const ownedRules = new Set<string>();
+    for (const match of byRule.values()) {
+      if (match.instinct?.userId) ownedRules.add(InstinctRetriever.ruleKey(match.instinct));
+    }
+    const surviving = Array.from(byRule.values()).filter(
+      (m) => m.instinct?.userId || !ownedRules.has(InstinctRetriever.ruleKey(m.instinct)),
+    );
+
+    const boosted = surviving.map(m =>
       m.instinct?.status === "permanent"
         ? { ...m, confidence: m.confidence * 1.2 }
         : m
@@ -237,8 +254,26 @@ export class InstinctRetriever {
       // Exactly the candidates the scope-priority dedup above discarded: a
       // deprecated drop or the maxResults cap is NOT a scope filter and must
       // not be reported as one (audited 2026-09-02).
-      scopeFiltered: filtered.length - byPattern.size,
+      scopeFiltered: filtered.length - surviving.length,
     };
+  }
+
+  /** Same advice, whoever holds it: trigger + action, normalized. */
+  private static ruleKey(instinct: Instinct | undefined): string {
+    const norm = (s: string): string => s.trim().replace(/\s+/g, ' ').toLowerCase();
+    return norm(instinct?.triggerPattern ?? '') + '\u0000' + norm(
+      typeof instinct?.action === 'string' ? instinct.action : JSON.stringify(instinct?.action ?? ''),
+    );
+  }
+
+  /**
+   * The dedup bucket: the advice PLUS whose it is. An owner's private rule is
+   * never folded into another owner's (round 10 #12); an unowned (project/global)
+   * rule buckets with the other unowned copies of the same advice, where scope
+   * priority picks the narrowest.
+   */
+  private static dedupKey(instinct: Instinct | undefined): string {
+    return InstinctRetriever.ruleKey(instinct) + '\u0000' + (instinct?.userId ?? '');
   }
 
   private formatInsight(match: PatternMatch): string | null {

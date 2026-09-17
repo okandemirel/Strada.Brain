@@ -482,14 +482,24 @@ describe("LearningPipeline", () => {
       expect(relearned!.action).toContain("Add a public Refresh()");
       expect(storage.getInstincts({ status: "proposed" }).map((i) => i.id)).toContain(relearned!.id);
 
-      // A live instinct on the same trigger still deduplicates.
+      // Round 10 #12: a THIRD solution to the same trigger is a rival, not a
+      // duplicate — it is stored. What still deduplicates is the same trigger with
+      // the same action: re-teaching what is already live earns nothing.
+      const rival = await pipeline.considerInstinctCreation({
+        type: "error_fix",
+        triggerPattern: trigger,
+        action: "Yet another fix: regenerate the BoardView partial",
+        toolName: "unity_verify_change",
+      });
+      expect(rival, "a rival solution to a known trigger was refused").not.toBeNull();
+
       const duplicate = await pipeline.considerInstinctCreation({
         type: "error_fix",
         triggerPattern: trigger,
-        action: "Yet another fix",
+        action: "Add a public Refresh() method to BoardView",
         toolName: "unity_verify_change",
       });
-      expect(duplicate).toBeNull();
+      expect(duplicate, "the live instinct's own advice was stored a second time").toBeNull();
     });
   });
 

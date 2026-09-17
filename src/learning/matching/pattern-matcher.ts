@@ -67,7 +67,7 @@ function stringSimilarity(a: string, b: string): number {
  * The lexical similarity the dedup decision uses: the same blend
  * findSimilarInstincts scores trigger patterns with (exact match wins outright).
  */
-function combinedSimilarity(a: string, b: string): number {
+export function combinedSimilarity(a: string, b: string): number {
   if (a === b) return 1.0;
   return stringSimilarity(a, b) * 0.6 + cosineSimilarity(a, b) * 0.4;
 }
@@ -305,7 +305,12 @@ export class PatternMatcher {
             // trigger AND the same action; a rival solution for a shared trigger
             // is knowledge, not noise, and stays.
             const actionScore = combinedSimilarity(existing.instinct.action, instinct.action);
-            if (pairScore >= CONFIDENCE_THRESHOLDS.SIMILAR && actionScore >= CONFIDENCE_THRESHOLDS.SIMILAR) {
+            // Round 10 #12: and the same OWNER. Two people can hold the same rule
+            // privately; merging them destroys one person's learning and hands the
+            // survivor to somebody who never taught it.
+            const sameOwner =
+              (existing.instinct.userId ?? null) === (instinct.userId ?? null);
+            if (sameOwner && pairScore >= CONFIDENCE_THRESHOLDS.SIMILAR && actionScore >= CONFIDENCE_THRESHOLDS.SIMILAR) {
               const higher = existing.instinct.confidence >= instinct.confidence ? existing.instinct : instinct;
               const lower = existing.instinct.confidence >= instinct.confidence ? instinct : existing.instinct;
               dedupCandidates.push({ higher, lower, similarity: Math.min(pairScore, actionScore) });

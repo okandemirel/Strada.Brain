@@ -450,7 +450,13 @@ describe("InstinctRetriever", () => {
   });
 
   describe("scope-aware retrieval", () => {
-    it("should deduplicate by pattern with most-specific scope winning", async () => {
+    // Round 10 #12: these two carry DIFFERENT actions, so they are rival
+    // solutions to one trigger and BOTH belong in the prompt. The collapse this
+    // test used to assert is why the second solution was never observed to be the
+    // better one. The genuine duplicate case — same trigger AND same action,
+    // narrowest scope winning — is "deduplicates by scope (most specific wins)"
+    // further down, and rival-solutions.test.ts covers the end-to-end direction.
+    it("keeps rival solutions to one trigger, ranked", async () => {
       const globalInstinct = createMockInstinct({
         id: "instinct_global" as Instinct["id"],
         triggerPattern: "null pointer error",
@@ -490,11 +496,11 @@ describe("InstinctRetriever", () => {
       const { retriever } = setup([globalInstinct, userInstinct], matches);
       const result = await retriever.getInsightsForTask("null pointer");
 
-      // Only one result since they share the same triggerPattern
-      expect(result.insights).toHaveLength(1);
-      // User scope (priority 3) wins over global (priority 1)
-      expect(result.matchedInstinctIds).toEqual(["instinct_user"]);
-      expect(result.insights[0]).toContain("User: add null guard");
+      // Two solutions to one trigger: two insights.
+      expect(result.insights).toHaveLength(2);
+      expect(result.matchedInstinctIds).toEqual(["instinct_global", "instinct_user"]);
+      expect(result.insights.join(" | ")).toContain("User: add null guard");
+      expect(result.insights.join(" | ")).toContain("Global: check for null");
     });
 
     it("should include instincts from all scopes when patterns differ", async () => {
@@ -842,17 +848,20 @@ describe("InstinctRetriever retrieval metrics", () => {
   }
 
   it("records the candidates the scope filter actually dropped, not 0", async () => {
+    // Round 10 #12: a scope drop needs a true duplicate — same trigger AND same
+    // action. With different actions these are rival solutions and neither is
+    // dropped, so the metric would have nothing to report.
     const globalInstinct = createMockInstinct({
       id: "instinct_scope_global" as Instinct["id"],
       triggerPattern: "null pointer error",
       scopeType: "global",
-      action: "global: add a null guard",
+      action: "add a null guard",
     });
     const userInstinct = createMockInstinct({
       id: "instinct_scope_user" as Instinct["id"],
       triggerPattern: "null pointer error",
       scopeType: "user",
-      action: "user: add a null guard",
+      action: "add a null guard",
     });
     const otherInstinct = createMockInstinct({
       id: "instinct_scope_other" as Instinct["id"],

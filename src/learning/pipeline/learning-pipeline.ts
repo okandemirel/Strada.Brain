@@ -9,7 +9,7 @@ import { sanitizePromptInjection } from "../../agents/orchestrator-text-utils.js
 import { LearningStorage } from "../storage/learning-storage.js";
 import { ConfidenceScorer, EVIDENCE_WEIGHTS, getVerdictScore } from "../scoring/confidence-scorer.js";
 import { getLoggerSafe } from "../../utils/logger.js";
-import { PatternMatcher, embedderFromProvider } from "../matching/pattern-matcher.js";
+import { PatternMatcher, embedderFromProvider, combinedSimilarity } from "../matching/pattern-matcher.js";
 import { RuntimeArtifactManager } from "../runtime-artifact-manager.js";
 import type { ToolResultEvent, FeedbackReactionEvent, IEventBus, LearningEventMap } from "../../core/event-bus.js";
 import { FeedbackHandler } from "../feedback/feedback-handler.js";
@@ -41,6 +41,7 @@ import {
   type InstinctLifecycleEvent,
   type ScopeType,
   type CorrectionRecord,
+  type PatternMatch,
   CONFIDENCE_THRESHOLDS,
   createInstinctId,
 } from "../types.js";
@@ -213,6 +214,53 @@ export class LearningPipeline {
   private readonly runPendingCredits = new Map<string, Map<string, { success: boolean; verdictScore: number }>>();
 
   /**
+   * ROUND 10 #14 — A RUN'S TERMINAL VERDICT IS FINAL, INCLUDING FOR LATE EVENTS.
+   *
+   * Tool results reach this pipeline through an asynchronous serial queue
+   * (bootstrap.ts), while the engine's teardown settled directly — so an event
+   * queued before teardown could be processed after it. That event recreated
+   * PENDING credit under the chat's key, and the next run's teardown on the same
+   * chat then settled it as that run's outcome: a rule was reinforced by a run it
+   * never took part in. Two things stop it. {@link setSettlementBarrier} puts the
+   * settlement on the same queue, behind the events it is meant to judge; and a
+   * settled run's verdict is REMEMBERED here, so an event that still arrives late
+   * is credited from the verdict of the run it belonged to, exactly once
+   * (`credited` is the once-per-run-per-instinct guard the pending map gave).
+   *
+   * Only runs that HAVE an identity are remembered: without a taskRunId the chat
+   * is the whole scope and a late event is indistinguishable from the next run's
+   * first event, so that case keeps its previous behaviour rather than guessing.
+   */
+  private readonly settledRuns = new Map<string, {
+    sessionId: string;
+    runId: string;
+    terminal: { success: boolean; verdictScore: number };
+    credited: Set<string>;
+  }>();
+  /** Bound on the retained-verdict map: oldest run forgotten first. */
+  private static readonly MAX_SETTLED_RUNS = 200;
+
+  /**
+   * Round 10 #14 — how to order terminal settlement behind this run's own tool
+   * events. Bootstrap passes the learning queue's enqueue, the same serial queue
+   * `tool:result` is processed on, so the settlement runs after every event
+   * already queued for the run. Unset (tests, standalone use) ⇒ settlement is
+   * immediate, exactly as before.
+   */
+  private settlementBarrier?: (task: () => Promise<void> | void) => void;
+
+  /** See {@link settlementBarrier}. */
+  setSettlementBarrier(barrier: (task: () => Promise<void> | void) => void): void {
+    this.settlementBarrier = barrier;
+  }
+
+  /** Run-scoped key. The chat id alone cannot tell two sibling runs apart (#13). */
+  private static runCreditKey(sessionId: string, runId?: string): string {
+    const run = runId?.trim();
+    return run ? `${sessionId}\u0000${run}` : sessionId;
+  }
+
+  /**
    * Run teardown: settle this run's pending instinct credit from the run's
    * TERMINAL verdict, then forget the run. Called once per run (the engine's
    * persistTerminal, where the terminal status is already known).
@@ -221,10 +269,30 @@ export class LearningPipeline {
    * observed during the run instead — a failure seen anywhere in the run is a
    * failure, so the first event can never decide the outcome on its own.
    */
-  clearRunInstinctCredits(sessionId: string, terminal?: { success: boolean; verdictScore?: number }): void {
-    this.settleRunInstinctCredits(sessionId, terminal);
-    this.runPendingCredits.delete(sessionId);
-    this.evictSessionPendingResolutions(sessionId);
+  clearRunInstinctCredits(
+    sessionId: string,
+    terminal?: { success: boolean; verdictScore?: number },
+    /** Which run is ending (#13). Omitted off-run: the chat is then the scope. */
+    runId?: string,
+  ): void {
+    // #14: behind this run's own queued events when a barrier is wired.
+    const barrier = this.settlementBarrier;
+    if (barrier) {
+      barrier(() => this.settleAndForgetRun(sessionId, terminal, runId));
+      return;
+    }
+    this.settleAndForgetRun(sessionId, terminal, runId);
+  }
+
+  /** Settle, then forget — the body {@link clearRunInstinctCredits} defers. */
+  private settleAndForgetRun(
+    sessionId: string,
+    terminal?: { success: boolean; verdictScore?: number },
+    runId?: string,
+  ): void {
+    this.settleRunInstinctCredits(sessionId, terminal, runId);
+    this.runPendingCredits.delete(LearningPipeline.runCreditKey(sessionId, runId));
+    this.evictSessionPendingResolutions(sessionId, runId);
   }
 
   /**
@@ -236,11 +304,18 @@ export class LearningPipeline {
    *
    * Returns how many were evicted, so a caller never mistakes a no-op for a sweep.
    */
-  evictSessionPendingResolutions(sessionId: string): number {
-    const prefix = `${sessionId}:`;
+  evictSessionPendingResolutions(sessionId: string, runId?: string): number {
+    // #13: with a run identity, only THIS run's unrepaired failures go — a
+    // sibling run on the same chat is still in flight and still owns its own.
+    // Without one, the whole chat's go, run-scoped keys included (a teardown that
+    // knows no run must not leave a run's failures behind for the next one).
+    const run = runId?.trim();
+    const matches = run
+      ? (key: string) => key.startsWith(`${LearningPipeline.runCreditKey(sessionId, run)}:`)
+      : (key: string) => key.startsWith(`${sessionId}:`) || key.startsWith(`${sessionId}\u0000`);
     let evicted = 0;
     for (const key of this.pendingResolutions.keys()) {
-      if (key.startsWith(prefix)) {
+      if (matches(key)) {
         this.pendingResolutions.delete(key);
         evicted++;
       }
@@ -256,9 +331,10 @@ export class LearningPipeline {
   private settleRunInstinctCredits(
     sessionId: string,
     terminal?: { success: boolean; verdictScore?: number },
+    runId?: string,
   ): void {
-    const pending = this.runPendingCredits.get(sessionId);
-    if (!pending || pending.size === 0) return;
+    const creditKey = LearningPipeline.runCreditKey(sessionId, runId);
+    const pending = this.runPendingCredits.get(creditKey);
 
     const settled = terminal
       ? {
@@ -269,39 +345,108 @@ export class LearningPipeline {
         }
       : undefined;
 
+    // #14: remember the verdict BEFORE applying it, and whether or not anything
+    // is pending — a run with no pending credit can still receive a late event,
+    // and that event must be judged by this run's verdict, not the next one's.
+    const run = runId?.trim();
+    const credited = run && settled
+      ? this.rememberSettledRun(creditKey, sessionId, run, settled)
+      : new Set<string>();
+
+    if (!pending || pending.size === 0) return;
+
     for (const [instinctId, observed] of pending) {
-      const instinct = this.storage.getInstinct(instinctId as InstinctId);
-      if (!instinct) continue;
-      const outcome = settled ?? observed;
+      credited.add(instinctId);
       // WAS THIS THE RUN'S OWN VERDICT, OR A GUESS FROM WHAT THE RUN SHOWED?
       // The ledger has to say which; a reader judging a rule by the runs it
       // influenced must not be shown inferred outcomes as terminal ones.
-      const creditSource = settled ? "terminal" : "observed";
-      // Permanent instincts are frozen against confidence updates — but not
-      // unaccountable: the run's outcome feeds the quarantine counter.
-      if (instinct.status === "permanent") {
-        this.recordPermanentEvidence(instinct, outcome.success);
-        this.recordCreditLedgerSafe(sessionId, instinct, outcome, creditSource, instinct.confidence);
-        continue;
-      }
-      // Increment coolingFailures for failures on cooling instincts
-      const instinctForUpdate = !outcome.success && instinct.coolingStartedAt
-        ? { ...instinct, coolingFailures: (instinct.coolingFailures ?? 0) + 1 }
-        : instinct;
-      const updated = this.confidenceScorer.updateConfidence(
-        instinctForUpdate,
-        outcome.success,
-        outcome.verdictScore,
+      this.applyInstinctCredit(
+        sessionId,
+        run,
+        instinctId,
+        settled ?? observed,
+        settled ? "terminal" : "observed",
       );
-      this.updateInstinctStatus(updated);
-      // THE LEDGER ROW (plan 6.4). The settlement moved a rule's confidence
-      // and left no trace of the run that moved it: the pending map is memory
-      // only, and trajectory_instincts is written empty by every production
-      // caller. Without this row "which runs did this guidance influence, and
-      // how did they end" is unanswerable, and a wrong rule is found only by
-      // somebody noticing it.
-      this.recordCreditLedgerSafe(sessionId, instinct, outcome, creditSource, updated.confidence);
     }
+  }
+
+  /**
+   * Retain one run's terminal verdict for events that arrive after its teardown
+   * (#14), and return the set that records which instincts it has already
+   * credited. Bounded: the oldest run is forgotten first.
+   */
+  private rememberSettledRun(
+    creditKey: string,
+    sessionId: string,
+    runId: string,
+    terminal: { success: boolean; verdictScore: number },
+  ): Set<string> {
+    const existing = this.settledRuns.get(creditKey);
+    // A run settles ONCE. A second teardown for the same run must not replace
+    // the verdict the first one recorded.
+    if (existing) return existing.credited;
+
+    const credited = new Set<string>();
+    this.settledRuns.set(creditKey, { sessionId, runId, terminal, credited });
+    while (this.settledRuns.size > LearningPipeline.MAX_SETTLED_RUNS) {
+      const oldest = this.settledRuns.keys().next();
+      if (oldest.done) break;
+      this.settledRuns.delete(oldest.value);
+    }
+    return credited;
+  }
+
+  /**
+   * Credit one instinct for one run's outcome (#14): the settled body shared by
+   * the run's own teardown and by an event that arrived after it.
+   */
+  private applyInstinctCredit(
+    sessionId: string,
+    runId: string | undefined,
+    instinctId: string,
+    outcome: { success: boolean; verdictScore: number },
+    creditSource: "terminal" | "observed",
+  ): void {
+    const instinct = this.storage.getInstinct(instinctId as InstinctId);
+    if (!instinct) return;
+    // Permanent instincts are frozen against confidence updates — but not
+    // unaccountable: the run's outcome feeds the quarantine counter.
+    if (instinct.status === "permanent") {
+      this.recordPermanentEvidence(instinct, outcome.success);
+      this.recordCreditLedgerSafe(sessionId, instinct, outcome, creditSource, instinct.confidence, runId);
+      return;
+    }
+    // Increment coolingFailures for failures on cooling instincts
+    const instinctForUpdate = !outcome.success && instinct.coolingStartedAt
+      ? { ...instinct, coolingFailures: (instinct.coolingFailures ?? 0) + 1 }
+      : instinct;
+    const updated = this.confidenceScorer.updateConfidence(
+      instinctForUpdate,
+      outcome.success,
+      outcome.verdictScore,
+    );
+    this.updateInstinctStatus(updated);
+    // THE LEDGER ROW (plan 6.4). The settlement moved a rule's confidence
+    // and left no trace of the run that moved it: the pending map is memory
+    // only, and trajectory_instincts is written empty by every production
+    // caller. Without this row "which runs did this guidance influence, and
+    // how did they end" is unanswerable, and a wrong rule is found only by
+    // somebody noticing it.
+    this.recordCreditLedgerSafe(sessionId, instinct, outcome, creditSource, updated.confidence, runId);
+  }
+
+  /**
+   * An event for a run that has already settled (#14). Judged by that run's own
+   * retained verdict, and only if this run has not already credited the instinct
+   * — the run's outcome is decided once and cannot be revisited.
+   */
+  private settleLateCredit(
+    settled: { sessionId: string; runId: string; terminal: { success: boolean; verdictScore: number }; credited: Set<string> },
+    instinctId: string,
+  ): void {
+    if (settled.credited.has(instinctId)) return;
+    settled.credited.add(instinctId);
+    this.applyInstinctCredit(settled.sessionId, settled.runId, instinctId, settled.terminal, "terminal");
   }
 
   /**
@@ -314,11 +459,14 @@ export class LearningPipeline {
     outcome: { success: boolean; verdictScore: number },
     source: "terminal" | "observed",
     confidenceAfter: number,
+    /** #13: which run settled it. The column existed; nothing ever filled it. */
+    taskRunId?: string,
   ): void {
     try {
       this.storage.recordInstinctCredit({
         instinctId: String(instinct.id),
         sessionId,
+        ...(taskRunId ? { taskRunId } : {}),
         success: outcome.success,
         verdictScore: outcome.verdictScore,
         source,
@@ -544,7 +692,9 @@ export class LearningPipeline {
     // session B's unrelated success on the same tool — minting an error_fix
     // instinct whose action was never observed to fix that error — and B's own
     // failure evicted A's pending entry. Key on session + tool.
-    const resolutionKey = LearningPipeline.resolutionKey(event.sessionId, event.toolName);
+    // #13: the run, not just the chat. Sibling wave nodes share one chatId.
+    const runId = event.taskRunId;
+    const resolutionKey = LearningPipeline.resolutionKey(event.sessionId, event.toolName, runId);
     if (!event.success) {
       // Record this as a pending error
       this.pendingResolutions.set(resolutionKey, {
@@ -601,10 +751,23 @@ export class LearningPipeline {
         if (!LearningPipeline.isInstinctRelevantToTool(instinct, event.toolName as string)) continue;
 
         // audited 2026-09-02: once per run, not once per tool call.
-        let pending = this.runPendingCredits.get(event.sessionId);
+        // #13: keyed by the run, so the first sibling to finish cannot settle
+        // (and delete) the credit its sibling is still collecting.
+        const creditKey = LearningPipeline.runCreditKey(event.sessionId, runId);
+
+        // #14: this run has already settled. Its verdict is final, so this late
+        // event is judged by THAT verdict — never left pending for whichever run
+        // tears down next.
+        const settledRun = this.settledRuns.get(creditKey);
+        if (settledRun) {
+          this.settleLateCredit(settledRun, instinctId);
+          continue;
+        }
+
+        let pending = this.runPendingCredits.get(creditKey);
         if (!pending) {
           pending = new Map<string, { success: boolean; verdictScore: number }>();
-          this.runPendingCredits.set(event.sessionId, pending);
+          this.runPendingCredits.set(creditKey, pending);
         }
         const already = pending.get(instinctId);
         if (!already) {
@@ -816,15 +979,7 @@ export class LearningPipeline {
     if (!this.isMeaningfulTrigger(params.triggerPattern)) return null;
     // Check for similar existing instincts (use similarity threshold, not confidence)
     const similar = await this.patternMatcher.findSimilarInstincts(params.triggerPattern);
-    // Check raw similarity (relevance), not confidence-weighted score.
-    // audited 2026-09-02: dead instincts (deprecated/evolved) are excluded from
-    // retrieval everywhere else but counted here, so a retired wrong fix
-    // permanently blocked learning the right fix for the same trigger.
-    if (similar.some(m =>
-      m.relevance > CONFIDENCE_THRESHOLDS.SIMILAR &&
-      m.instinct?.status !== "deprecated" &&
-      m.instinct?.status !== "evolved",
-    )) return null;
+    if (this.isDuplicateOfExisting(similar, params)) return null;
 
     const initialConfidence = params.confidence ?? this.calculateInitialConfidence(params);
     if (initialConfidence < this.config.minConfidenceForCreation) return null;
@@ -863,6 +1018,43 @@ export class LearningPipeline {
     // LIVING VAULT (C): mirror high-confidence instincts as learned-heuristic notes.
     this.noteHighConfidenceInstinct(instinct);
     return instinct;
+  }
+
+  /**
+   * ROUND 10 #12 — IS THIS A DUPLICATE, OR A RIVAL SOLUTION?
+   *
+   * The old gate refused creation on TRIGGER similarity alone, so the second way
+   * to fix one error was never written down: "NullReferenceException in X" was
+   * already known, therefore "construct it eagerly in Awake" was noise. It also
+   * counted blockers that are not in use, and blockers that are not the caller's:
+   *
+   *  - trigger AND action must both match. A different solution to a known
+   *    trigger is knowledge; the matcher's eager merge already draws the line
+   *    here (D43) and this gate now draws it in the same place.
+   *  - the blocker must have the same OWNER. Alice's private rule is not Bob's
+   *    duplicate, and vice versa.
+   *  - deprecated / evolved / QUARANTINED rules block nothing. A quarantined
+   *    instinct is one deliberately held out of use for being wrong — it must
+   *    not also prevent the replacement that supersedes it.
+   */
+  private isDuplicateOfExisting(
+    similar: PatternMatch[],
+    params: { triggerPattern: string; action: string; userId?: string },
+  ): boolean {
+    for (const m of similar) {
+      if (!m.instinct) continue;
+      // Raw similarity (relevance), not the confidence-weighted score.
+      if (m.relevance <= CONFIDENCE_THRESHOLDS.SIMILAR) continue;
+      if (
+        m.instinct.status === "deprecated" ||
+        m.instinct.status === "evolved" ||
+        m.instinct.status === "quarantined"
+      ) continue;
+      if ((m.instinct.userId ?? null) !== (params.userId ?? null)) continue;
+      if (combinedSimilarity(m.instinct.action, params.action) <= CONFIDENCE_THRESHOLDS.SIMILAR) continue;
+      return true;
+    }
+    return false;
   }
 
   createInstinct(params: Omit<Instinct, "id" | "stats" | "createdAt" | "updatedAt" | "sourceTrajectoryIds" | "tags"> & { scopeType?: ScopeType; userId?: string }): Instinct {
@@ -1488,9 +1680,14 @@ export class LearningPipeline {
     return letters / s.length >= 0.5;
   }
 
-  /** A resolution may only be attributed to the session that produced the error. */
-  private static resolutionKey(sessionId: string, toolName: string): string {
-    return `${sessionId}:${toolName}`;
+  /**
+   * A resolution may only be attributed to the RUN that produced the error (#13).
+   * Keyed on the session alone, a sibling run's success on the same file was
+   * booked as the repair of this run's failure — an error_fix instinct nothing
+   * was ever observed to fix.
+   */
+  private static resolutionKey(sessionId: string, toolName: string, runId?: string): string {
+    return `${LearningPipeline.runCreditKey(sessionId, runId)}:${toolName}`;
   }
 
   /**
