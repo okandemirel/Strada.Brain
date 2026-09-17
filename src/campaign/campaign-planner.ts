@@ -563,6 +563,7 @@ export class CampaignPlanner {
       gddClaims?: readonly string[];
       coverageGap?: string;
       coverageClosed?: boolean;
+      coverageClosedRevision?: string;
     }>,
     options?: CoverageIdentityOptions,
   ): Promise<string[]> {
@@ -669,6 +670,7 @@ Your previous reply was not valid JSON. Reply with the JSON object ALONE — no 
       gddClaims?: readonly string[];
       coverageGap?: string;
     }>,
+    options?: CoverageResolutionOptions,
   ): Promise<{ closed: string[]; open: string[]; unasked: string[] }> {
     if (requirements.length === 0) return { closed: [], open: [], unasked: [] };
     if (!this.provider) {
@@ -768,7 +770,7 @@ Your previous reply was not valid JSON. Reply with the JSON object ALONE — no 
       if (fact === undefined || !quoteIsAbout(requirement, fact)) continue;
       closedIds.add(id);
     }
-    // INHERITED EVIDENCE, AND ONLY FOR A PROVABLY COSMETIC REWORDING. A
+    // INHERITED EVIDENCE, AND ONLY ON THE TREE IT WAS MEASURED ON. A
     // revision that reworded a requirement used to lose everything already
     // proven about it — the identity WAS the text — so proven work was
     // repaired again from zero. `carry:1` is set by reconcileRequirements only
@@ -784,10 +786,32 @@ Your previous reply was not valid JSON. Reply with the JSON object ALONE — no 
     // would be a permanent closure of exactly the kind Codex 2026-09-12 V#4
     // was about — the implementation could be removed afterwards and nothing
     // would look again.
+    //
+    // AND THE RECORD IS HISTORY. That is the half this was missing: a
+    // `landed:` line stays in the ladder's record for ever, so a requirement
+    // proven at one revision, its implementation then REMOVED, and the wording
+    // then cosmetically edited, was closed again by the very commit note that
+    // had proved it — over the model's own `delivered:false` on the tree in
+    // front of it (Codex 2026-09-18 round 13 #31). Carriage is therefore bound
+    // to the revision the predecessor's closure was read on, and it applies
+    // only while that is the revision being judged. Unbound carriage (no
+    // revision recorded, or none supplied by the caller) closes nothing: a
+    // topical note from the past cannot renew a closure.
+    const revisionNow = options?.revision ?? "";
     asked.forEach((raw, i) => {
       if (closedIds.has(i + 1)) return;
       const identity = decodeRequirement(raw).identity;
       if (identity?.evidenceCarried !== true) return;
+      const carriedAt = identity.carriedAtRevision ?? "";
+      if (carriedAt === "" || revisionNow === "" || carriedAt !== revisionNow) {
+        getLoggerSafe().info("Carried evidence was measured on another tree — the requirement is judged on this one", {
+          id: identity.id,
+          lineage: identity.lineage,
+          carriedAt: carriedAt || "(no revision recorded)",
+          revision: revisionNow || "(none supplied)",
+        });
+        return;
+      }
       const fact = closingFact(askedTexts[i]!, facts);
       if (fact === undefined) return;
       closedIds.add(i + 1);
@@ -795,6 +819,7 @@ Your previous reply was not valid JSON. Reply with the JSON object ALONE — no 
         id: identity.id,
         lineage: identity.lineage,
         supersedes: identity.supersedes?.join(",") ?? "",
+        revision: revisionNow,
         fact: fact.slice(0, 160),
       });
     });
@@ -1045,6 +1070,26 @@ export interface CoverageIdentityOptions {
   readonly gddSha256?: string;
   /** That document's revision number (plan 1.9's `gddRevision`). */
   readonly gddRevision?: number;
+  /**
+   * THE PROJECT REVISION this audit is reading. A closure is only as good as
+   * the tree it was read on, and the campaign's `coverageClosed` flag alone
+   * does not say which tree that was: without this, a closure recorded before
+   * the implementation was removed still handed its evidence to a cosmetically
+   * reworded successor (Codex 2026-09-18 round 13 #31). Absent = nothing binds
+   * a closure, so nothing carries evidence.
+   */
+  readonly treeRevision?: string;
+}
+
+/** What the closure resolver needs beyond the requirements themselves. */
+export interface CoverageResolutionOptions {
+  /**
+   * The project revision the requirements are being judged against — the same
+   * revision a closure would be stamped with. Carried evidence (plan 6.2) is
+   * honoured only when it was measured on exactly this tree; absent, carriage
+   * closes nothing (round 13 #31).
+   */
+  readonly revision?: string;
 }
 
 /**
@@ -1055,20 +1100,29 @@ export interface CoverageIdentityOptions {
  * in — a coverage sprint's `coverageGap` IS the persisted requirement — and
  * `coverageClosed` says which of them were proven, which is the only source
  * evidence is ever carried from.
+ *
+ * A CLOSURE IS PROOF ONLY ON ITS OWN TREE. `coverageClosed` is a flag;
+ * `coverageClosedRevision` is what makes it a measurement. Reading the flag
+ * alone let a closure recorded before the implementation was deleted hand its
+ * evidence to the next wording of the requirement, which then closed on the
+ * historical commit note (Codex 2026-09-18 round 13 #31). With no revision to
+ * audit against, nothing is proven here and nothing carries.
  */
 function identifyMissing(
   missing: readonly string[],
   gddText: string,
-  milestones: ReadonlyArray<{ coverageGap?: string; coverageClosed?: boolean }>,
+  milestones: ReadonlyArray<{ coverageGap?: string; coverageClosed?: boolean; coverageClosedRevision?: string }>,
   options?: CoverageIdentityOptions,
 ): string[] {
   if (options?.identity !== true) return [...missing];
   const previous: RequirementIdentity[] = decodeIdentities(
     milestones.map((m) => m.coverageGap).filter((g): g is string => typeof g === "string" && g.length > 0),
   );
+  const treeRevision = options.treeRevision ?? "";
   const proven = new Set<string>();
   for (const m of milestones) {
     if (m.coverageClosed !== true || m.coverageGap === undefined) continue;
+    if (treeRevision === "" || m.coverageClosedRevision !== treeRevision) continue;
     const identity = decodeRequirement(m.coverageGap).identity;
     if (identity !== undefined) proven.add(identity.id);
   }
@@ -1078,6 +1132,7 @@ function identifyMissing(
     texts: missing,
     gdd: { sha256, ...(options.gddRevision === undefined ? {} : { revision: options.gddRevision }) },
     proven,
+    ...(treeRevision === "" ? {} : { provenAtRevision: treeRevision }),
   });
   return encoded;
 }

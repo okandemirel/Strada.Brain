@@ -650,7 +650,11 @@ function gapItems(facts: DeliveryPackageFacts): DeliveryItem[] {
   const gaps: DeliveryItem[] = checklistItems(campaign).filter((i) => i.state !== "met");
   for (const gap of campaign.pendingCoverageGaps ?? []) {
     gaps.push({
-      text: gap,
+      // THE REQUIREMENT, NOT ITS ID. The checklist above read its requirements
+      // through requirementText and this list did not, so a gap left pending
+      // past the scheduling cap reached the reader as
+      // "Shop: absent ⟦rid:… lin:… gdd:…⟧" (Codex 2026-09-18 round 13 #30).
+      text: requirementText(gap),
       state: "open",
       source: "the evidence audit",
       cause: "named as a gap and no sprint has been scheduled for it yet",

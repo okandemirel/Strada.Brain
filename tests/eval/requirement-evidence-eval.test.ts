@@ -93,9 +93,13 @@ describe("the measured rates", () => {
     expect(falseClosed.state, JSON.stringify(falseClosed)).toBe(STATE.GOOD);
     expect(falseOpen.state, JSON.stringify(falseOpen)).toBe(STATE.GOOD);
     // The numbers themselves, so a change to the matcher shows up here.
+    // FOUR since Codex round 13 #27 added `enable-ui-by-ui-root`: the evidence
+    // matcher drops words under three letters, so a two-letter subject has no
+    // distinctive stem and nothing can close it. Disclosed as a false OPEN,
+    // which costs a repair round — never a missing feature.
     expect(falseClosed.value).toBe(0);
-    expect(falseOpen.wrong).toBe(3);
-    expect(falseOpen.value).toBeCloseTo(3 / falseOpen.denominator, 6);
+    expect(falseOpen.wrong).toBe(4);
+    expect(falseOpen.value).toBeCloseTo(4 / falseOpen.denominator, 6);
     expect(counts.errored).toBe(0);
     expect(notMeasured.harnessFailed).toEqual([]);
     expect(decideVerdict({ measures, notMeasured }).exitCode).toBe(EXIT.MEASURED_GOOD);

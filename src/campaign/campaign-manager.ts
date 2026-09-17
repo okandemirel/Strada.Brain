@@ -34,7 +34,12 @@ import { ACTIVE_STATUSES, TaskStatus } from "../tasks/types.js";
 import { stripRetryMachinery } from "../tasks/auto-resume.js";
 import type { CampaignPlanner } from "./campaign-planner.js";
 import { COVERAGE_ASK_WINDOW } from "./campaign-planner.js";
-import { decodeRequirement, requirementText } from "./requirement-identity.js";
+import {
+  contentFingerprint,
+  decodeRequirement,
+  requirementText,
+  requirementTexts,
+} from "./requirement-identity.js";
 import { GDD_AUDIT_FULL_CHARS } from "./campaign-planner.js";
 import type { CampaignStorage } from "./campaign-storage.js";
 import { detectCampaignIntent } from "./campaign-intake.js";
@@ -579,14 +584,26 @@ function coverageGapOf(m: { title: string; prompt?: string; coverageGap?: string
  * reconciliation and closure.
  */
 export function requirementKey(text: string): string {
-  // AN IDENTITY OUTRANKS THE WORDING (plan 6.2). Once a requirement carries
-  // a stable id, that id — its lineage, so a reworded requirement keeps the
-  // history of what was proven about it — is the identity everywhere:
-  // scheduling, the repair budget, reconciliation and closure. A requirement
-  // stored before identities existed decodes to none and keeps the wording
-  // rule below, so a campaign mid-flight does not re-open its gaps.
-  const identity = decodeRequirement(text).identity;
-  if (identity) return `req:${identity.lineage ?? identity.id}`;
+  // AN IDENTITY OUTRANKS THE WORDING (plan 6.2). Once a requirement carries a
+  // stable id, that id is the identity everywhere: scheduling, the repair
+  // budget, reconciliation and closure. A requirement stored before identities
+  // existed decodes to none and keeps the wording rule below, so a campaign
+  // mid-flight does not re-open its gaps.
+  //
+  // THE LINEAGE IS HISTORY; THE CURRENT VERSION IS THE IDENTITY. Keying on the
+  // lineage alone made a REOPENED requirement and the closed predecessor it
+  // superseded one requirement: "13 levels" and the revision's "20 levels"
+  // shared a key, so closure grouped them, asked only about the first wording
+  // and stamped both closed — the probe asked about thirteen and returned
+  // neither open (Codex 2026-09-18 round 13 #28). The key is therefore the
+  // lineage AND the content of this wording: a cosmetic rewording keeps the
+  // key (so the repair budget and the scheduling dedup survive it — Codex
+  // 2026-09-12 AD#15), and a rewording that changed the ask gets its own, as
+  // the new work it is. The lineage stays in the key so two requirements that
+  // happen to word the same ask are still two.
+  const decoded = decodeRequirement(text);
+  const identity = decoded.identity;
+  if (identity) return `req:${identity.lineage ?? identity.id}#${contentFingerprint(decoded.text)}`;
   // A REQUIREMENT IS NOT ITS DIAGNOSTICS. The whole text was the identity, so
   // the same missing capability reported as "…audio generator unavailable,
   // attempt 1" and "…attempt 2" were two different requirements: each
@@ -608,6 +625,55 @@ export function requirementKey(text: string): string {
 /** A coverage requirement's identity: its own text, normalized — never a prefix. */
 export function gapKey(gap: string): string {
   return requirementKey(gap);
+}
+
+/**
+ * A REQUIREMENT ALREADY IN FLIGHT KEEPS THE IDENTITY IT HAS — including none.
+ *
+ * The identity landed mid-flight. A campaign resumed across that upgrade holds
+ * requirements with no identity at all: a coverage sprint still running for
+ * one, and more of them waiting in `pendingCoverageGaps`. The audit reconciles
+ * only against requirements that ALREADY carry an identity, so a legacy one is
+ * invisible to it — the audit minted a fresh `req:…` for the same ask, and
+ * because that key is not the running row's text key the requirement was
+ * scheduled a second time with a fresh repair budget and its accounting started
+ * over (Codex 2026-09-18 round 13 #29).
+ *
+ * So the audit's re-listing of a requirement the campaign is already working on
+ * comes back as the campaign's OWN string, and both halves are consulted in the
+ * same pass: the milestones and the queue. One requirement, one key, whichever
+ * field holds it.
+ *
+ * WHY NOT STAMP THE OLD ROWS INSTEAD (the first attempt, measured and
+ * rejected): not every requirement text is READ from the record. Capability
+ * work is composed on the fly by `capabilityGapWork`, so rewriting the stored
+ * row moved its key out from under a text that is recomputed on every pass —
+ * the repair budget for it stopped counting and one requirement took 21 sprints
+ * (campaign-manager.test.ts "a capability requirement is repaired TWICE",
+ * "a GREEN repair that still reports the gap", "a QUEUED repair that went
+ * green"). Nothing is rewritten here; only the audit's own output is held to
+ * what the campaign already calls that requirement.
+ */
+export function restoreLegacyWordings(
+  campaign: Pick<Campaign, "milestones" | "pendingCoverageGaps">,
+  named: readonly string[],
+): string[] {
+  const legacy = new Map<string, string>();
+  const remember = (raw: string | undefined): void => {
+    if (raw === undefined || raw === "" || decodeRequirement(raw).identity !== undefined) return;
+    const key = requirementKey(raw);
+    if (key !== "" && !legacy.has(key)) legacy.set(key, raw);
+  };
+  for (const m of campaign.milestones) if (m.id.startsWith("mcov")) remember(m.coverageGap);
+  for (const gap of campaign.pendingCoverageGaps ?? []) remember(gap);
+  if (legacy.size === 0) return [...named];
+  return named.map((item) => {
+    const decoded = decodeRequirement(item);
+    if (decoded.identity === undefined) return item;
+    // requirementKey of the TEXT takes the legacy (wording) branch, which is
+    // exactly the key the row in flight is carrying.
+    return legacy.get(requirementKey(decoded.text)) ?? item;
+  });
 }
 
 /**
@@ -3601,7 +3667,7 @@ export class CampaignManager {
         const queuedGaps = campaign.pendingCoverageGaps ?? [];
         if (queuedGaps.length > 0) {
           missingProofs.push(
-            `${queuedGaps.length} GDD requirement(s) the audit named have no sprint yet: ${queuedGaps.slice(0, 2).join("; ")}`.slice(0, 220),
+            `${queuedGaps.length} GDD requirement(s) the audit named have no sprint yet: ${requirementTexts(queuedGaps.slice(0, 2)).join("; ")}`.slice(0, 220),
           );
         }
         // …and an UNREADABLE queue is an unknown number of them (AD#18): the
@@ -4032,7 +4098,7 @@ export class CampaignManager {
         if (outstanding.auditFailed !== undefined) missingProofs.push(outstanding.auditFailed);
         if (unclosedAtGate.length > 0) {
           missingProofs.push(
-            `${unclosedAtGate.length} GDD requirement(s) no sprint closed: ${unclosedAtGate.slice(0, 2).join("; ")}`.slice(0, 220),
+            `${unclosedAtGate.length} GDD requirement(s) no sprint closed: ${requirementTexts(unclosedAtGate.slice(0, 2)).join("; ")}`.slice(0, 220),
           );
         }
         // …AND AGAIN, AFTER EVERYTHING. The structural checks, the look
@@ -4617,7 +4683,7 @@ export class CampaignManager {
       if (outstandingHere.open.length > 0 && structure.refusal === undefined && unprovenFinal === undefined) {
         campaign.lastError =
           `NOT DELIVERED — ${outstandingHere.open.length} GDD requirement(s) no sprint closed: ` +
-          `${outstandingHere.open.slice(0, 2).join("; ")}`.slice(0, 600);
+          `${requirementTexts(outstandingHere.open.slice(0, 2)).join("; ")}`.slice(0, 600);
       }
       // A STOP RECORDED WHILE THIS PATH WAS SETTLING is not a delivery
       // either — the delivery gate has checked this since P#12 and this path
@@ -6053,6 +6119,48 @@ export class CampaignManager {
   }
 
   /**
+   * The tree a closure may be bound to right now, and the revision that binds
+   * it — "" when nothing does.
+   *
+   * A DIRTY TREE IS AN UNKNOWN REVISION. HEAD equality says nothing about
+   * uncommitted work, so a closure read on one working tree was held to
+   * describe another (Codex 2026-09-12 W#4). An unknown revision binds
+   * nothing, so such a closure counts for THIS round and is re-judged on the
+   * next one.
+   * A tree with no revisions at all is a different thing from a tree whose
+   * revision is known and moving: with git absent there is nothing to bind a
+   * closure to and nothing to be inconsistent with, while a dirty git tree is
+   * measurably changing under the audit (Codex 2026-09-12 Z#1).
+   * A PROJECT WITHOUT GIT STILL HAS A TREE. Closures were bound to the git
+   * revision or to nothing, so without a repository every closure was
+   * re-judged on every pass: 150 requirements closed, the 151st asked on the
+   * next pass — which re-asked the 150 first and left one open again, until the
+   * delivery budget stopped a finished game (Codex wave 0-A review 2026-09-17
+   * #2, reproduced). The tree's content fingerprint is the revision such a
+   * project can bind a closure to.
+   *
+   * ONE RULE, both readers: the closure audit and the requirement audit that
+   * decides whether a proven predecessor may hand its evidence on (round 13
+   * #31) must agree about which tree they are looking at.
+   */
+  private treeForClosure(): { revision: string; dirty: boolean; tracked: boolean; unknown: boolean; forClosure: string } {
+    const revisionNow = this.projectRevision();
+    const repoState = this.projectRepoState();
+    const tree = {
+      revision: revisionNow,
+      dirty: repoState !== "none" && this.projectIsDirty(),
+      tracked: repoState !== "none",
+      // An UNKNOWN repository state closes nothing: only a confirmed absence
+      // of git takes the uncached exception (Codex 2026-09-12 AA#1).
+      unknown: repoState === "unknown",
+    };
+    return {
+      ...tree,
+      forClosure: tree.dirty || tree.unknown ? "" : tree.tracked ? tree.revision : this.projectFingerprint(),
+    };
+  }
+
+  /**
    * The requirements of coverage sprints that spent their attempts and that
    * the ladder's evidence still cannot show delivered.
    *
@@ -6063,37 +6171,8 @@ export class CampaignManager {
    * own exhausted sprint had named still missing (V#5).
    */
   private async openRequirements(campaign: Campaign): Promise<{ open: string[]; auditFailed?: string }> {
-    // A DIRTY TREE IS AN UNKNOWN REVISION. HEAD equality says nothing about
-    // uncommitted work, so a closure read on one working tree was held to
-    // describe another (Codex 2026-09-12 W#4). An unknown revision binds
-    // nothing, so such a closure counts for THIS round and is re-judged on
-    // the next one.
-    // A tree with no revisions at all is a different thing from a tree whose
-    // revision is known and moving: with git absent there is nothing to bind
-    // a closure to and nothing to be inconsistent with, while a dirty git
-    // tree is measurably changing under the audit (Codex 2026-09-12 Z#1).
-    const revisionNow = this.projectRevision();
-    const repoState = this.projectRepoState();
-    const treeBefore = {
-      revision: revisionNow,
-      dirty: repoState !== "none" && this.projectIsDirty(),
-      tracked: repoState !== "none",
-      // An UNKNOWN repository state closes nothing: only a confirmed absence
-      // of git takes the uncached exception (Codex 2026-09-12 AA#1).
-      unknown: repoState === "unknown",
-    };
-    // A PROJECT WITHOUT GIT STILL HAS A TREE. Closures were bound to the git
-    // revision or to nothing, so without a repository every closure was
-    // re-judged on every pass: 150 requirements closed, the 151st asked on
-    // the next pass — which re-asked the 150 first and left one open again,
-    // until the delivery budget stopped a finished game (Codex wave 0-A
-    // review 2026-09-17 #2, reproduced). The tree's content fingerprint is
-    // the revision such a project can bind a closure to.
-    const revisionForClosure = treeBefore.dirty || treeBefore.unknown
-      ? ""
-      : treeBefore.tracked
-      ? treeBefore.revision
-      : this.projectFingerprint();
+    const treeBefore = this.treeForClosure();
+    const revisionForClosure = treeBefore.forClosure;
     // EVERY REPAIR'S REQUIREMENT, not only the ones whose sprint failed. A
     // repair that went GREEN without implementing the requirement removed it
     // from this question entirely: audit one found "Save progress across
@@ -6134,6 +6213,14 @@ export class CampaignManager {
         byRequirement.set(key, [...(byRequirement.get(key) ?? []), m]);
       }
       const needsJudging = new Set(unclosed.map((m) => requirementKey(coverageGapOf(m))));
+      // THE WORDING THE DOCUMENT ASKS FOR NOW. Every row in a group is the same
+      // requirement — a group whose wordings differ only cosmetically — and the
+      // question went out as the OLDEST of them. With the lineage as the key
+      // that group also held a reopened successor, so the audit asked about
+      // "13 levels" and closed "20 levels" with the answer (round 13 #28). The
+      // key no longer merges those, and the question is the newest row's
+      // wording either way: the requirement as it stands.
+      const currentGap = (ms: readonly CampaignMilestone[]): string => coverageGapOf(ms[ms.length - 1]!);
       // THE LEAST RECENTLY ASKED FIRST. The resolver judges at most 30
       // requirements per call, and with no revision to cache a closure
       // against — a project with no git history — the SAME first thirty were
@@ -6161,8 +6248,13 @@ export class CampaignManager {
       const askedKeys = new Set<string>();
       for (let start = 0; start < candidates.length && start < window * CampaignManager.MAX_COVERAGE_WINDOWS_PER_PASS; start += window) {
         const slice = candidates.slice(start, start + window);
-        const names = slice.map(([, ms]) => coverageGapOf(ms[0]!));
-        const answer = await this.planner.resolveCoverageGaps(gddForGaps, names, campaign.milestones);
+        const names = slice.map(([, ms]) => currentGap(ms));
+        // …AND THE TREE IT IS JUDGED ON. Carried evidence (plan 6.2) is only
+        // evidence while the tree it was measured on is the tree in front of
+        // us; the resolver cannot know that by itself (round 13 #31).
+        const answer = await this.planner.resolveCoverageGaps(gddForGaps, names, campaign.milestones, {
+          revision: revisionForClosure,
+        });
         asked.push(...names);
         judged.closed.push(...answer.closed);
         judged.open.push(...answer.open);
@@ -6177,7 +6269,7 @@ export class CampaignManager {
       // 2026-09-17 on 2b44aa8f). Open, unstamped: the next pass asks it first.
       for (const [key, ms] of candidates) {
         if (askedKeys.has(key)) continue;
-        const name = coverageGapOf(ms[0]!);
+        const name = currentGap(ms);
         if (!asked.includes(name)) asked.push(name);
         judged.open.push(name);
       }
@@ -6251,7 +6343,7 @@ export class CampaignManager {
       // closed, so it stays open however the audit answered.
       const unidentified = [...byRequirement.entries()]
         .filter(([key, ms]) => needsJudging.has(key) && !ms.some((m) => coverageRequirementOf(m).identified))
-        .map(([, ms]) => coverageGapOf(ms[0]!));
+        .map(([, ms]) => currentGap(ms));
       return { open: [...new Set([...judged.open, ...unidentified])] };
     } catch (err) {
       // An audit that COULD NOT RUN is not an audit that passed, and this
@@ -6320,7 +6412,7 @@ export class CampaignManager {
       campaign.pendingCoverageGaps = rest.length > 0 ? rest : undefined;
       campaign.coverageAuditNote =
         rest.length > 0
-          ? `${distinct.length} gaps still known; round ${round} schedules ${take.length}, and ${rest.length} stay queued: ${rest.join("; ").slice(0, 300)}`
+          ? `${distinct.length} gaps still known; round ${round} schedules ${take.length}, and ${rest.length} stay queued: ${requirementTexts(rest).join("; ").slice(0, 300)}`
           : undefined;
       getLoggerSafe().info("Coverage remediation drains the known gap queue", {
         id: campaign.id,
@@ -6354,14 +6446,28 @@ export class CampaignManager {
       return undefined;
     }
     try {
-      const missing = await this.planner.auditCoverage(gddText, campaign.milestones, {
+      // THE TREE THIS AUDIT IS READING. A closure may hand its evidence to a
+      // cosmetic rewording only while the tree it was read on is the tree in
+      // front of us: the flag alone said "proven once", so a requirement whose
+      // implementation had since been deleted handed its historical commit note
+      // to the next wording and closed on it (round 13 #31). "" = nothing binds
+      // a closure here, so nothing carries.
+      const treeRevision = this.treeForClosure().forClosure;
+      // …AND A REQUIREMENT ALREADY IN FLIGHT KEEPS THE IDENTITY IT HAS. A
+      // campaign resumed across the arrival of identities holds requirements
+      // with none, in its milestones and in its queue alike; a fresh `req:…`
+      // for one of those is a second requirement, scheduled again with a fresh
+      // repair budget (round 13 #29). Both halves are held to the campaign's
+      // own strings, in this one pass, before anything schedules by identity.
+      const missing = restoreLegacyWordings(campaign, await this.planner.auditCoverage(gddText, campaign.milestones, {
         // Plan 6.2: every named requirement gets a stable id plus the GDD
         // revision it was read from, so a rewording is a reworded requirement
         // and not a brand new one.
         identity: true,
         ...(campaign.gddSha256 ? { gddSha256: campaign.gddSha256 } : {}),
         ...(campaign.gddRevision === undefined ? {} : { gddRevision: campaign.gddRevision }),
-      });
+        ...(treeRevision === "" ? {} : { treeRevision }),
+      }));
       // THE AUDIT RAN, so the requirements are established again: whatever it
       // found replaces the queue nobody could read. The flag is a column now
       // (Codex 2026-09-13 AF#2), so it would otherwise outlive its cause.
@@ -6413,7 +6519,7 @@ export class CampaignManager {
         campaign.pendingCoverageGaps = overflow;
         campaign.coverageAuditNote =
           `coverage audit found ${ordered.length} gaps; round ${round} schedules the first ${shown.length} and ` +
-          `${overflow.length} are queued for the following round(s): ${overflow.join("; ").slice(0, 300)}`;
+          `${overflow.length} are queued for the following round(s): ${requirementTexts(overflow).join("; ").slice(0, 300)}`;
       }
       return shown.map((item, i) => ({ ...this.gapSprint(campaign, round, i, item), fromAudit: true }));
     } catch (err) {

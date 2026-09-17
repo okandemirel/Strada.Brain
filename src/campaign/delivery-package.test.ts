@@ -265,6 +265,30 @@ describe("the checklist and the gaps", () => {
     expect(renderDeliveryPackage(pkg)).not.toContain("rid:");
   });
 
+  it("…and a PENDING gap is a person's row too (Codex round 13 #30)", () => {
+    // The checklist went through requirementText; the gap list did not, so a
+    // requirement that outlived the scheduling cap reached the reader as
+    // "Shop: absent ⟦rid:req-001-… lin:… gdd:…⟧".
+    const encoded = encodeRequirement({
+      id: "req-001-abc123abc123",
+      lineage: "req-001-abc123abc123",
+      text: "Shop: absent",
+      gddSha256: "d".repeat(64),
+      gddRevision: 3,
+    });
+    const pkg = assembleDeliveryPackage({
+      campaign: campaign({ state: "failed", pendingCoverageGaps: [encoded] }),
+    });
+    const gaps = pieceOf(pkg, "gaps");
+    expect(gaps.items?.map((i) => i.text)).toContain("Shop: absent");
+    // Nowhere in the package the reader is handed, in any field.
+    const stored = JSON.stringify(pkg);
+    expect(stored).toContain("Shop: absent");
+    expect(stored).not.toContain("rid:");
+    expect(stored).not.toContain("⟦");
+    expect(renderDeliveryPackage(pkg)).not.toContain("rid:");
+  });
+
   it("lists the GDD's own numbers with the state the claim check gave them", () => {
     const pkg = assembleDeliveryPackage({
       campaign: campaign({

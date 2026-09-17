@@ -14,6 +14,7 @@ import { DELIVERY_PIECE_ORDER, DeliveryPackageStore, assembleDeliveryPackage } f
 import { ProducerFailure } from "./producer-failure.js";
 import { requirementKey, CampaignManager, stripTimeBoxDirectives, UNMEASURABLE_PROOF_RE, UNRUNNABLE_HERE_RE, hasUnmeasurableProof, proofsSpanTwoRevisions } from "./campaign-manager.js";
 import { CampaignStorage } from "./campaign-storage.js";
+import { encodeRequirement } from "./requirement-identity.js";
 import { describeBuild } from "./campaign-status.js";
 import type { CampaignPlanner } from "./campaign-planner.js";
 import { GDD_AUDIT_FULL_CHARS } from "./campaign-planner.js";
@@ -6410,8 +6411,18 @@ describe("CampaignManager", () => {
     settleMilestone("sprint A done");
     await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     // A requirement the audit named is waiting when the final sprint settles.
+    // It carries its plan-6.2 identity, as an audit's requirement does: the
+    // proof line names the REQUIREMENT, never its id (Codex round 13 #30).
     const withQueue = storage.get(campaign.id)!;
-    withQueue.pendingCoverageGaps = ["Save system: no milestone implemented it"];
+    withQueue.pendingCoverageGaps = [
+      encodeRequirement({
+        id: "req-001-fedcba987654",
+        lineage: "req-001-fedcba987654",
+        text: "Save system: no milestone implemented it",
+        gddSha256: "b".repeat(64),
+        gddRevision: 1,
+      }),
+    ];
     storage.save(withQueue);
     settleMilestone("sprint B done");
     await waitFor(() => expect(tasks.submitted).toHaveLength(3));
@@ -6420,7 +6431,10 @@ describe("CampaignManager", () => {
 
     const after = storage.get(campaign.id)!;
     expect(after.state).not.toBe("done");
-    expect(after.milestones[2]!.deliveryProofsMissing!.join(" ")).toContain("have no sprint yet");
+    const proofs = after.milestones[2]!.deliveryProofsMissing!.join(" ");
+    expect(proofs).toContain("have no sprint yet");
+    expect(proofs).toContain("Save system: no milestone implemented it");
+    expect(proofs).not.toContain("rid:");
   });
 
   it("an UNREADABLE requirement queue is disclosed, never delivered over (Codex 2026-09-12 AD#18)", async () => {

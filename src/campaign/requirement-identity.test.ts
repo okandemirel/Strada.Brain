@@ -32,6 +32,8 @@ import { CampaignPlanner, closingFact, quotableFactsOf, saysItIsNotThere } from 
 
 const SHA1 = "1".repeat(64);
 const SHA2 = "2".repeat(64);
+/** The project revision a closure was read on: carried evidence is bound to it (round 13 #31). */
+const TREE_REV = "9".repeat(40);
 
 describe("normalizeWording", () => {
   it("drops the decoration a document editor adds without changing the ask", () => {
@@ -425,8 +427,8 @@ describe("campaign-planner.auditCoverage: stamping identities", () => {
     const { planner } = plannerWith(['{"missing": ["Shop: the UI shell exists but nothing sells"]}']);
     const missing = await planner.auditCoverage(
       "# GDD",
-      [{ title: "Coverage completion 1.1 — Shop", coverageGap: first.encoded[0]!, coverageClosed: true }],
-      { identity: true, gddSha256: SHA2, gddRevision: 2 },
+      [{ title: "Coverage completion 1.1 — Shop", coverageGap: first.encoded[0]!, coverageClosed: true, coverageClosedRevision: TREE_REV }],
+      { identity: true, gddSha256: SHA2, gddRevision: 2, treeRevision: TREE_REV },
     );
     const identity = decodeRequirement(missing[0]!).identity!;
     expect(identity.lineage).toBe(first.result.identities[0]!.lineage);
@@ -464,10 +466,14 @@ describe("campaign-planner.resolveCoverageGaps: identity-aware", () => {
       texts: ["Saving progress across restarts"],
       gdd: { sha256: SHA2, revision: 2 },
       proven: new Set([before[0]!.id]),
+      // …proven ON THIS TREE. Carriage is bound to the revision the closure was
+      // read on, and it is honoured only while that is the tree being judged
+      // (Codex 2026-09-18 round 13 #31).
+      provenAtRevision: TREE_REV,
     });
     // The model answers "not delivered" — it has no memory of the closure.
     const { planner } = plannerWith([JSON.stringify({ verdicts: [{ id: 1, delivered: false }] })]);
-    const answer = await planner.resolveCoverageGaps("# GDD", encoded, [SAVE_MILESTONE]);
+    const answer = await planner.resolveCoverageGaps("# GDD", encoded, [SAVE_MILESTONE], { revision: TREE_REV });
     expect(answer.closed).toEqual(encoded);
   });
 

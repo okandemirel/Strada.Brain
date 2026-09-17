@@ -7,7 +7,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { requirementKey, CampaignManager } from "./campaign-manager.js";
-import { encodeRequirement, identifyRequirements, requirementText } from "./requirement-identity.js";
+import { contentFingerprint, encodeRequirement, identifyRequirements, requirementText } from "./requirement-identity.js";
 import type { Campaign, CampaignMilestone } from "./types.js";
 
 const GDD = { sha256: "a".repeat(64), revision: 3 };
@@ -62,8 +62,19 @@ describe("a requirement's identity reaches the campaign", () => {
     expect(sprint.prompt).toContain("A plain requirement nobody stamped");
   });
 
-  it("keys on the lineage id itself, deterministically (guard)", () => {
-    const encoded = encodeRequirement({ id: "req-1-abcdef", lineage: "req-1-abcdef", text: "Hand-built identity" });
-    expect(requirementKey(encoded)).toBe("req:req-1-abcdef");
+  it("keys on the lineage AND this wording's content, deterministically (guard)", () => {
+    // The lineage is HISTORY; what is scheduled and closed is the requirement
+    // as it is worded now, so the key carries both. Keying on the lineage alone
+    // merged a reopened requirement into its closed predecessor (Codex
+    // 2026-09-18 round 13 #28).
+    const identity = { id: "req-1-abcdef", lineage: "req-1-abcdef", text: "Hand-built identity" };
+    const encoded = encodeRequirement(identity);
+    expect(requirementKey(encoded)).toBe(`req:req-1-abcdef#${contentFingerprint("Hand-built identity")}`);
+    // A later wording of the same requirement that changed the ask keys apart…
+    const changed = encodeRequirement({ ...identity, id: "req-2-fedcba", text: "Hand-built identity, twice" });
+    expect(requirementKey(changed)).not.toBe(requirementKey(encoded));
+    // …and a cosmetic one does not.
+    const cosmetic = encodeRequirement({ ...identity, id: "req-2-fedcba", text: "**hand-built identity.**" });
+    expect(requirementKey(cosmetic)).toBe(requirementKey(encoded));
   });
 });

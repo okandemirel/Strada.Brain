@@ -188,21 +188,53 @@ function normalizeNumber(token: string): string {
 }
 
 /**
- * The CONTENT TOKENS of a wording, in order: numbers verbatim, negations
- * verbatim, every other word of three letters or more as its stem, fillers
+ * OPERATORS ARE CONTENT. A requirement's comparison carries its whole meaning:
+ * `Score < 10` and `Score > 10` are opposite asks, and with every non-letter,
+ * non-digit character treated as a separator they had ONE content fingerprint
+ * — so one could inherit the other's proof, or silently replace it as a
+ * "cosmetic" rewording (Codex 2026-09-18 round 13 #27). `60+ fps` is not
+ * `60 fps` for the same reason.
+ *
+ * The family is closed and small: the comparisons, equality, and the "at
+ * least" plus. Everything else stays a separator, because a hyphen in
+ * "auto-save", a slash in "Assets/Art/Hero.png" and the asterisks of markdown
+ * emphasis are decoration, not meaning.
+ */
+const OPERATOR_TOKEN_RE = /<=|>=|==|!=|[≤≥≠<>=+]/u;
+const OPERATOR_CANONICAL: Record<string, string> = { "≤": "<=", "≥": ">=", "≠": "!=", "==": "=" };
+
+/**
+ * The CONTENT TOKENS of a wording, in order: numbers verbatim, operators
+ * canonicalized, negations verbatim, every other word as its stem, fillers
  * dropped. camelCase is split before folding, so `SaveSystem` is two words.
+ *
+ * NO LENGTH FLOOR. A three-letter minimum dropped every short word that
+ * carries the subject — `AI`, `UI`, `HP`, `XP`, the `2` of `2D` — so
+ * "Enable AI" and "Enable UI" fingerprinted identically and each could inherit
+ * the other's evidence (round 13 #27). It also dropped the two-letter
+ * prepositions this module's own doctrine says it keeps ("save TO disk" is not
+ * "save FROM disk"). The filler list is now the only thing that drops a word,
+ * and it is deliberately tiny: every word in it is a word two requirements may
+ * differ by and still count as the same one.
  *
  * ORDER IS KEPT. A sorted multiset would make "the player defeats the boss"
  * and "the boss defeats the player" the same requirement.
  */
 export function contentTokens(text: string): string[] {
-  // Numbers (with their separators) or letter runs; every other character is a
-  // separator. normalizeWording has already split camelCase and folded case.
-  const words = [...normalizeWording(text).matchAll(/\d+(?:[.,]\d+)*|\p{L}+/gu)].map((m) => m[0]);
+  // Numbers (with their separators), operators, or letter runs; every other
+  // character is a separator. normalizeWording has already split camelCase and
+  // folded case.
+  const words = [
+    ...normalizeWording(text).matchAll(/<=|>=|==|!=|[≤≥≠<>=+]|\d+(?:[.,]\d+)*|\p{L}+/gu),
+  ].map((m) => m[0]);
   const out: string[] = [];
   for (const word of words) {
     if (/^\d/u.test(word)) {
       out.push(normalizeNumber(word));
+      continue;
+    }
+    if (OPERATOR_TOKEN_RE.test(word)) {
+      out.push(OPERATOR_CANONICAL[word] ?? word);
       continue;
     }
     if (NEGATIONS.has(word)) {
@@ -210,9 +242,10 @@ export function contentTokens(text: string): string[] {
       continue;
     }
     if (COSMETIC_FILLERS.has(word)) continue;
-    if (word.length < 3) continue;
+    // A stem that the suffix rules reduce to nothing ("es") keeps its word:
+    // an empty token would merge two different short words into one.
     const stem = stemWord(word);
-    if (stem.length >= 3) out.push(stem);
+    out.push(stem.length > 0 ? stem : word);
   }
   return out;
 }
@@ -304,6 +337,19 @@ export interface RequirementIdentity {
   readonly supersedes?: readonly string[];
   /** True only for a PROVABLY COSMETIC rewording of a requirement already proven. */
   readonly evidenceCarried?: boolean;
+  /**
+   * THE TREE the carried evidence was measured on — the project revision the
+   * predecessor's closure was read against.
+   *
+   * Carriage without it is carriage that never expires: a requirement proven at
+   * one revision, cosmetically reworded after its implementation was REMOVED,
+   * was closed again by the historical commit note that had proved it, over the
+   * model's own `delivered:false` (Codex 2026-09-18 round 13 #31). A reader of
+   * `evidenceCarried` must hold this against the tree in front of it; when the
+   * two do not match, the carriage says nothing and the requirement is judged
+   * on this tree's evidence alone.
+   */
+  readonly carriedAtRevision?: string;
   /** True when a non-cosmetic rewording dropped a proven predecessor's closure. */
   readonly reopened?: boolean;
 }
@@ -327,6 +373,18 @@ const TAIL_RE = /\s*⟦(rid:[^⟧]*)⟧\s*$/u;
  */
 export function requirementText(encoded: string): string {
   return encoded.replace(TAIL_RE, "").trim();
+}
+
+/**
+ * A LIST of requirements as a person or a model must see it.
+ *
+ * Every presentation boundary needs this, and one of them did not have it: a
+ * pending gap past the scheduling cap was copied verbatim into the delivery
+ * output, `⟦rid:… lin:… gdd:…⟧` and all (Codex 2026-09-18 round 13 #30). A
+ * named helper is harder to forget at the next boundary than a `.map()`.
+ */
+export function requirementTexts(encoded: readonly string[]): string[] {
+  return encoded.map((item) => requirementText(item));
 }
 
 /** The identity carried by a persisted requirement string, when it carries one. */
@@ -355,6 +413,9 @@ export function decodeRequirement(encoded: string): { text: string; identity?: R
       ...(revision === undefined || !Number.isFinite(revision) ? {} : { gddRevision: revision }),
       ...(supersedes === undefined || supersedes.length === 0 ? {} : { supersedes }),
       ...(fields.get("carry") === "1" ? { evidenceCarried: true } : {}),
+      ...(fields.get("tree") === undefined || fields.get("tree") === ""
+        ? {}
+        : { carriedAtRevision: fields.get("tree")! }),
       ...(fields.get("reopen") === "1" ? { reopened: true } : {}),
     },
   };
@@ -374,6 +435,12 @@ export function encodeRequirement(identity: RequirementIdentity): string {
     parts.push(`sup:${identity.supersedes.join(",")}`);
   }
   if (identity.evidenceCarried === true) parts.push("carry:1");
+  // The revision the carriage is bound to travels WITH it: a `carry:1` whose
+  // tree nobody recorded can never be held against the tree in front of the
+  // reader, so it closes nothing (round 13 #31).
+  if (identity.carriedAtRevision !== undefined && identity.carriedAtRevision !== "") {
+    parts.push(`tree:${identity.carriedAtRevision}`);
+  }
   if (identity.reopened === true) parts.push("reopen:1");
   return `${requirementText(identity.text)} ${TAIL_OPEN}${parts.join(" ")}${TAIL_CLOSE}`;
 }
@@ -399,6 +466,13 @@ export interface ReconcileInput {
   readonly gdd?: { readonly sha256?: string; readonly revision?: number };
   /** Ids the campaign has PROVEN closed. Evidence is only ever carried from one of these. */
   readonly proven?: ReadonlySet<string>;
+  /**
+   * The project revision those closures were read on. Stamped onto whatever
+   * carries evidence, so the carriage can be held against the tree a later
+   * reader sees (round 13 #31). A caller that cannot name a revision passes
+   * none, and the carriage it produces closes nothing on its own.
+   */
+  readonly provenAtRevision?: string;
 }
 
 export interface ReconcileResult {
@@ -478,6 +552,9 @@ export function reconcileRequirements(input: ReconcileInput): ReconcileResult {
         ...gddFields,
         ...(predecessor === undefined ? {} : { supersedes: [predecessor.id] }),
         ...(carried ? { evidenceCarried: true } : {}),
+        ...(carried && input.provenAtRevision !== undefined && input.provenAtRevision !== ""
+          ? { carriedAtRevision: input.provenAtRevision }
+          : {}),
         ...(reopens ? { reopened: true } : {}),
       };
       usedIds.set(id, wording);

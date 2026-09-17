@@ -443,6 +443,30 @@
       "source": "src/campaign/gdd-claims.ts:16-23 (the medium names itself)"
     },
     {
+      "id": "enable-ai-by-ui-toggle",
+      "requirement": "Enable AI: the enemies never act",
+      "evidence": { "status": "green", "commitNote": "3 commit(s): Assets/Scripts/UI/EnableUIToggle.cs, Assets/Prefabs/UIRoot.prefab" },
+      "expected": "not_proven",
+      "rationale": "A UI toggle landing is not enemy AI. The two asks differ by two letters, which is what Codex round 13 #27 is about: the neighbouring requirement's evidence must not close this one.",
+      "source": "Codex 2026-09-18 round 13 #27 (the Enable AI / Enable UI pair the finding names)"
+    },
+    {
+      "id": "enable-ui-by-ui-root",
+      "requirement": "Enable UI: absent",
+      "evidence": { "status": "green", "commitNote": "2 commit(s): Assets/Scripts/UI/UIRoot.cs, Assets/Prefabs/UIRoot.prefab" },
+      "expected": "proven",
+      "rationale": "The landed line names the UI root this requirement asks for. The matcher leaves it OPEN — stemsOf drops words under three letters, so a two-letter subject has no distinctive stem at all and nothing can close it; that costs a repair round, never a missing feature.",
+      "source": "Codex 2026-09-18 round 13 #27 (the short-token family, measured in the other direction)"
+    },
+    {
+      "id": "score-threshold-by-scoregate",
+      "requirement": "Score > 10 ends the session: absent",
+      "evidence": { "status": "green", "commitNote": "2 commit(s): Assets/Scripts/ScoreGate.cs" },
+      "expected": "proven",
+      "rationale": "The landed line names the score gate the requirement asks for, the same shape as save-by-savesystem. The operator is part of the requirement's IDENTITY (round 13 #27) and never part of the evidence match, so keeping it did not make this stricter.",
+      "source": "Codex 2026-09-18 round 13 #27 (the Score < 10 / Score > 10 pair the finding names)"
+    },
+    {
       "id": "fun-by-anything",
       "requirement": "The game is fun: absent",
       "evidence": { "status": "green", "commitNote": "3 commit(s): Assets/Scripts/Dragon.cs, Assets/Prefabs/Dragon.prefab", "testVerdict": "179/179 tests passed", "testVerdictUnfiltered": true },
