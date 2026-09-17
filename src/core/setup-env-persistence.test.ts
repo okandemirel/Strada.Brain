@@ -7,6 +7,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { parse as dotenvParse } from "dotenv";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   describeEffectiveBudget,
@@ -114,5 +115,71 @@ describe("describeEffectiveBudget / redactEffectiveConfig", () => {
   it("reduces secrets to a presence marker", () => {
     expect(redactEffectiveConfig({ KIMI_API_KEY: "sk-1", ANTHROPIC_AUTH_TOKEN: "t", LOG_LEVEL: "info", EMPTY_API_KEY: "" }))
       .toEqual({ KIMI_API_KEY: "<set>", ANTHROPIC_AUTH_TOKEN: "<set>", LOG_LEVEL: "info", EMPTY_API_KEY: "" });
+  });
+});
+
+describe("persistSetup atomicity and serialization (round 8 #10)", () => {
+  const tmpDirs: string[] = [];
+  afterEach(() => {
+    for (const dir of tmpDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("replaces the file by rename, so a reader never sees a truncated .env", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "strada-env-atomic-"));
+    tmpDirs.push(dir);
+    const envPath = path.join(dir, ".env");
+    fs.writeFileSync(envPath, "HAND_ADDED=yes\nKIMI_API_KEY=old\n");
+    const before = fs.statSync(envPath).ino;
+    await persistSetup(envPath, ['KIMI_API_KEY="new"'], { ownedKeys: ["KIMI_API_KEY"] });
+    // writeFile() truncates the target in place: the inode survives and a
+    // concurrent reader can see the empty window. A completed temp file
+    // renamed over the target gives the reader either version, never half.
+    expect(fs.statSync(envPath).ino).not.toBe(before);
+    expect(fs.readFileSync(envPath, "utf-8")).toContain('KIMI_API_KEY="new"');
+    expect(fs.readdirSync(dir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+  });
+
+  it("serializes two saves of one file, so each readback describes its own save", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "strada-env-serial-"));
+    tmpDirs.push(dir);
+    const envPath = path.join(dir, ".env");
+    fs.writeFileSync(envPath, "HAND_ADDED=yes\nKIMI_API_KEY=old\n");
+    const first = persistSetup(envPath, ['KIMI_API_KEY="first"'], { ownedKeys: ["KIMI_API_KEY"] });
+    const second = persistSetup(envPath, ['KIMI_API_KEY="second"'], { ownedKeys: ["KIMI_API_KEY"] });
+    const [a, b] = await Promise.all([first, second]);
+    expect(a.effective.KIMI_API_KEY).toBe("first");
+    expect(b.effective.KIMI_API_KEY).toBe("second");
+    expect(a.preserved).toEqual(["HAND_ADDED"]);
+    expect(b.preserved).toEqual(["HAND_ADDED"]);
+    expect(dotenvParse(fs.readFileSync(envPath, "utf-8")).KIMI_API_KEY).toBe("second");
+  });
+});
+
+describe("redactEffectiveConfig allowlist (round 8 #11)", () => {
+  it("returns a presence marker for every key the wizard does not own", () => {
+    const shown = new Set(["LOG_LEVEL", "STRADA_BUDGET_DAILY_USD"]);
+    const redacted = redactEffectiveConfig(
+      {
+        DATABASE_URL: "postgres://user:s3cret@db.internal/app",
+        PRIVATE_KEY: "-----BEGIN RSA PRIVATE KEY-----",
+        AWS_SECRET_ACCESS_KEY: "wJalrXUtnFEMI",
+        MY_CUSTOM_WEBHOOK_URL: "https://hooks.example/T0/B0/xyz",
+        LOG_LEVEL: "debug",
+        STRADA_BUDGET_DAILY_USD: "0",
+      },
+      shown,
+    );
+    expect(redacted).toEqual({
+      DATABASE_URL: "<set>",
+      PRIVATE_KEY: "<set>",
+      AWS_SECRET_ACCESS_KEY: "<set>",
+      MY_CUSTOM_WEBHOOK_URL: "<set>",
+      LOG_LEVEL: "debug",
+      STRADA_BUDGET_DAILY_USD: "0",
+    });
+    const body = JSON.stringify(redacted);
+    for (const secret of ["s3cret", "RSA PRIVATE KEY", "wJalrXUtnFEMI", "hooks.example"]) {
+      expect(body).not.toContain(secret);
+    }
   });
 });

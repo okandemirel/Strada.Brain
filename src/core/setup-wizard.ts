@@ -1657,7 +1657,7 @@ export class SetupWizard {
         ownedKeys: SETUP_OWNED_ENV_KEYS,
         defaultKeys: SETUP_DEFAULT_ENV_KEYS,
       });
-      effectiveConfig = redactEffectiveConfig(persisted.effective);
+      effectiveConfig = redactEffectiveConfig(persisted.effective, new Set([...SETUP_OWNED_ENV_KEYS, ...SETUP_DEFAULT_ENV_KEYS]));
       effectiveBudget = describeEffectiveBudget(persisted.effective);
       preservedKeys = persisted.preserved;
     } catch (err) {

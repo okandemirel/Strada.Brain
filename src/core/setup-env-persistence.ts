@@ -19,7 +19,7 @@
  * Nothing here touches process.env.
  */
 
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, rename, writeFile } from "node:fs/promises";
 import * as dotenv from "dotenv";
 
 const ENV_LINE_RE = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$/;
@@ -178,7 +178,27 @@ export function mergeEnvContent(
  * A missing or empty file is written from `lines` verbatim so a first run
  * keeps the generated section headers.
  */
+/** Distinct temp names even inside one millisecond, for saves of different files. */
+let tmpCounter = 0;
+
+/** One save at a time per file: a readback must describe the save it belongs to (round 8 #10). */
+const saveChains = new Map<string, Promise<unknown>>();
+
 export async function persistSetup(
+  envPath: string,
+  lines: readonly string[],
+  options: PersistSetupOptions,
+): Promise<PersistSetupResult> {
+  const previous = saveChains.get(envPath) ?? Promise.resolve();
+  const mine = previous.then(
+    () => persistSetupOnce(envPath, lines, options),
+    () => persistSetupOnce(envPath, lines, options),
+  );
+  saveChains.set(envPath, mine.catch(() => undefined));
+  return mine;
+}
+
+async function persistSetupOnce(
   envPath: string,
   lines: readonly string[],
   options: PersistSetupOptions,
@@ -204,17 +224,38 @@ export async function persistSetup(
     merge = mergeEnvContent(existing, entries, options);
   }
 
-  await writeFile(envPath, merge.content, { encoding: "utf-8", mode: 0o600 });
+  // ATOMIC (round 8 #10): writeFile truncates first, so a daemon reading in
+  // that instant saw an empty or half-written .env. The content goes to a temp
+  // file beside the target and is renamed over it.
+  const tmpPath = `${envPath}.${process.pid}.${Date.now()}.${(tmpCounter += 1)}.tmp`;
+  await writeFile(tmpPath, merge.content, { encoding: "utf-8", mode: 0o600 });
+  await rename(tmpPath, envPath);
   const effective = dotenv.parse(await readFile(envPath, "utf-8"));
   return { envPath, effective, ...merge };
 }
 
 const SECRET_KEY_RE = /(API_KEY|_TOKEN|_SECRET|PASSWORD|AUTH_TOKEN)$/;
 
-/** Effective config safe to hand back over HTTP: secrets reduced to a presence marker. */
-export function redactEffectiveConfig(effective: Record<string, string>): Record<string, string> {
+/**
+ * Effective config safe to hand back over HTTP.
+ *
+ * An ALLOWLIST, not a secret-name pattern: the readback returned the VALUES of
+ * every key the merge preserved, so a hand-added DATABASE_URL with its
+ * password, a PRIVATE_KEY or an AWS_SECRET_ACCESS_KEY came back in the Save
+ * response (Codex 2026-09-17 round 8 #11). A key the wizard owns is shown
+ * (its own secrets still reduced to a marker); anything else is reported as
+ * present only.
+ */
+export function redactEffectiveConfig(
+  effective: Record<string, string>,
+  shownKeys?: ReadonlySet<string>,
+): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [key, value] of Object.entries(effective)) {
+    if (shownKeys !== undefined && !shownKeys.has(key)) {
+      out[key] = value.length > 0 ? "<set>" : "";
+      continue;
+    }
     out[key] = SECRET_KEY_RE.test(key) && value.length > 0 ? "<set>" : value;
   }
   return out;
