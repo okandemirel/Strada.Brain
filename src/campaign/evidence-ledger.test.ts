@@ -7,7 +7,7 @@ import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ARTIFACT_DIGEST_VERSION, EvidenceLedger, artifactDigest, describeLedgerRow } from "./evidence-ledger.js";
+import { ARTIFACT_DIGEST_VERSION, EvidenceLedger, artifactDigest, artifactManifest, describeLedgerRow } from "./evidence-ledger.js";
 import { issueRunId, receiveEvidence, recordSha256, type EvidenceTicket } from "./producer-evidence.js";
 
 const REVISION = "a".repeat(40);
@@ -223,53 +223,115 @@ describe("artifactDigest over a build manifest", () => {
     expect(artifactDigest(exe)).not.toBe(built);
   });
 
-  it("a manifest that leaves the GAME out is not adopted: the executable's bytes stay in the identity (D78)", () => {
+  const HEX = /^[0-9a-f]{64}$/;
+  const manifestAt = (): string => join(dir, "linux", "Game.x86_64.strada-artifact.json");
+  const manifest = (files: string[]): void => {
+    writeFileSync(manifestAt(), JSON.stringify({ version: "strada-manifest-v1", files }));
+  };
+
+  it("a manifest that leaves the GAME out is not adopted: the executable's BYTES stay in the identity (D78)", () => {
     // files:["readme.txt"] beside Game.x86_64 was accepted, and the digest
     // then covered readme.txt and the executable's NAME — a different game
     // hashed the same. Such a manifest falls back to the layout walk.
     const exe = layout();
     writeFileSync(join(dir, "linux", "readme.txt"), "read me");
-    writeFileSync(join(dir, "linux", "Game.x86_64.strada-artifact.json"), JSON.stringify({ version: "strada-manifest-v1", files: ["readme.txt"] }));
+    manifest(["readme.txt"]);
+    expect(artifactManifest(exe)).toBeUndefined();
     const before = artifactDigest(exe);
-    writeFileSync(exe, "A DIFFERENT EXECUTABLE");
+    expect(before).toMatch(HEX);
+    writeFileSync(exe, "THE EXECUTABLE"); // same size, same name: only the bytes differ
     expect(artifactDigest(exe)).not.toBe(before);
   });
 
-  it("a manifest must also name the runtime data beside a player, and nothing outside the layout", () => {
+  it("a manifest lists the WHOLE game beside a player, or it is not adopted (Codex D78 review #1)", () => {
     const exe = layout();
-    const manifestAt = join(dir, "linux", "Game.x86_64.strada-artifact.json");
-    // The executable alone, with Game_Data beside it unlisted: the walk decides.
-    writeFileSync(manifestAt, JSON.stringify({ version: "strada-manifest-v1", files: ["Game.x86_64"] }));
-    const withoutData = artifactDigest(exe);
-    writeFileSync(join(dir, "linux", "Game_Data", "level0"), "level one, edited");
-    expect(artifactDigest(exe)).not.toBe(withoutData);
-    // An entry that resolves OUTSIDE the layout (a symlink to another build) is refused.
+    writeFileSync(join(dir, "linux", "Game_Data", "level1"), "level two");
+    writeFileSync(join(dir, "linux", "UnityPlayer.so"), "the runtime");
+    mkdirSync(join(dir, "linux", "MonoBleedingEdge", "etc"), { recursive: true });
+    writeFileSync(join(dir, "linux", "MonoBleedingEdge", "etc", "config"), "mono");
+    const whole = ["Game.x86_64", "Game_Data/level0", "Game_Data/level1", "UnityPlayer.so", "MonoBleedingEdge/etc/config"];
+    // Each omission is a manifest this process refuses.
+    for (const omitted of whole) {
+      manifest(whole.filter((f) => f !== omitted));
+      expect(artifactManifest(exe), `without ${omitted}`).toBeUndefined();
+    }
+    manifest(whole);
+    expect(artifactManifest(exe)?.files).toEqual(whole);
+    const adopted = artifactDigest(exe);
+    expect(adopted).toMatch(HEX);
+    // What the build did not ship is not part of the game…
+    writeFileSync(join(dir, "linux", "player.log"), "started\n");
+    expect(artifactDigest(exe)).toBe(adopted);
+    // …and every shipped byte is: same-size replacements change the digest.
+    writeFileSync(join(dir, "linux", "Game_Data", "level1"), "LEVEL TWO");
+    const dataChanged = artifactDigest(exe);
+    expect(dataChanged).not.toBe(adopted);
+    writeFileSync(join(dir, "linux", "UnityPlayer.so"), "THE RUNTIME");
+    expect(artifactDigest(exe)).not.toBe(dataChanged);
+    // Windows spelling of the same list is the same list.
+    manifest(whole.map((f) => f.replace(/\//g, "\\")));
+    expect(artifactManifest(exe)?.files).toEqual(whole);
+  });
+
+  it("nothing outside the layout: a symlink to another build refuses the manifest", () => {
+    const exe = layout();
     mkdirSync(join(dir, "elsewhere"), { recursive: true });
     writeFileSync(join(dir, "elsewhere", "other.bin"), "other build");
     symlinkSync(join(dir, "elsewhere", "other.bin"), join(dir, "linux", "escape.bin"));
-    writeFileSync(manifestAt, JSON.stringify({ version: "strada-manifest-v1", files: ["Game.x86_64", "Game_Data/level0", "escape.bin"] }));
-    const walked = artifactDigest(exe);
-    writeFileSync(join(dir, "linux", "player.log"), "started\n");
-    // Refused manifest → walk → the log now counts (the walk's known cost), proving the manifest was not adopted.
-    expect(artifactDigest(exe)).not.toBe(walked);
+    manifest(["Game.x86_64", "Game_Data/level0", "escape.bin"]);
+    expect(artifactManifest(exe)).toBeUndefined();
+    expect(artifactDigest(exe)).toMatch(HEX); // the walk answers
   });
 
-  it("a bundle's manifest has to name its binary (guard: a correct .app manifest is adopted)", () => {
+  it("a declared file the tree does not have means NO digest, not a walk of what is left (Codex D78 review #5)", () => {
+    const exe = layout();
+    manifest(["Game.x86_64", "missing.bin"]); // Game_Data unlisted AND a missing file
+    expect(artifactDigest(exe)).toBeUndefined();
+  });
+
+  it("a bundle's manifest lists the bundle in full: a decoy beside the binary is not the binary (Codex D78 review #2)", () => {
     const app = join(dir, "mac", "Game.app");
     mkdirSync(join(app, "Contents", "MacOS"), { recursive: true });
+    mkdirSync(join(app, "Contents", "Resources", "Data"), { recursive: true });
     writeFileSync(join(app, "Contents", "MacOS", "Game"), "mach-o");
+    writeFileSync(join(app, "Contents", "MacOS", "readme.txt"), "decoy");
     writeFileSync(join(app, "Contents", "Info.plist"), "<plist/>");
-    const manifestAt = join(dir, "mac", "Game.app.strada-artifact.json");
-    writeFileSync(manifestAt, JSON.stringify({ version: "strada-manifest-v1", files: ["Game.app/Contents/MacOS/Game", "Game.app/Contents/Info.plist"] }));
+    writeFileSync(join(app, "Contents", "Resources", "Data", "level0"), "level one");
+    const at = join(dir, "mac", "Game.app.strada-artifact.json");
+    const full = ["Game.app/Contents/Info.plist", "Game.app/Contents/MacOS/Game", "Game.app/Contents/MacOS/readme.txt", "Game.app/Contents/Resources/Data/level0"];
+    writeFileSync(at, JSON.stringify({ version: "strada-manifest-v1", files: full.filter((f) => !f.endsWith("/Game")) }));
+    expect(artifactManifest(app)).toBeUndefined();
+    writeFileSync(at, JSON.stringify({ version: "strada-manifest-v1", files: full }));
+    expect(artifactManifest(app)?.files).toEqual(full);
     const adopted = artifactDigest(app);
-    writeFileSync(join(app, "Contents", "first-run.log"), "ran"); // unlisted runtime output inside the bundle
+    expect(adopted).toMatch(HEX);
+    writeFileSync(join(dir, "mac", "Player.log"), "ran"); // beside the bundle, not shipped
     expect(artifactDigest(app)).toBe(adopted);
-    // Without the binary the manifest is refused and the walk sees the log.
-    writeFileSync(manifestAt, JSON.stringify({ version: "strada-manifest-v1", files: ["Game.app/Contents/Info.plist"] }));
-    const refused = artifactDigest(app);
-    writeFileSync(join(app, "Contents", "first-run.log"), "ran twice");
-    expect(artifactDigest(app)).not.toBe(refused);
+    writeFileSync(join(app, "Contents", "MacOS", "Game"), "MACH-O");
+    expect(artifactDigest(app)).not.toBe(adopted);
   });
+
+  it("a WebGL player is index.html WITH its Build folder (Codex D78 review #3)", () => {
+    const web = join(dir, "web");
+    mkdirSync(join(web, "Build"), { recursive: true });
+    writeFileSync(join(web, "index.html"), "<html/>");
+    writeFileSync(join(web, "Build", "game.wasm"), "wasm bytes");
+    const page = join(web, "index.html");
+    // Named as a file: the layout root is the folder, so the walk covers Build/.
+    const walked = artifactDigest(page);
+    expect(walked).toMatch(HEX);
+    writeFileSync(join(web, "Build", "game.wasm"), "WASM BYTES");
+    expect(artifactDigest(page)).not.toBe(walked);
+    // A manifest of the page alone is refused; one with Build/ is adopted.
+    writeFileSync(join(web, "index.html.strada-artifact.json"), JSON.stringify({ version: "strada-manifest-v1", files: ["index.html"] }));
+    expect(artifactManifest(page)).toBeUndefined();
+    writeFileSync(join(web, "index.html.strada-artifact.json"), JSON.stringify({ version: "strada-manifest-v1", files: ["index.html", "Build/game.wasm"] }));
+    expect(artifactManifest(page)?.files).toEqual(["index.html", "Build/game.wasm"]);
+    // Named as a folder: everything inside it.
+    writeFileSync(join(dir, "web.strada-artifact.json"), JSON.stringify({ version: "strada-manifest-v1", files: ["web/index.html"] }));
+    expect(artifactManifest(web)).toBeUndefined();
+  });
+
 
   it("a REFORMATTED manifest is the same artifact, and a dropped file is not", () => {
     const exe = layout();

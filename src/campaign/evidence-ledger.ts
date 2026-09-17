@@ -17,7 +17,7 @@
 
 import Database from "better-sqlite3";
 import { createHash } from "node:crypto";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import { mkdirSync, readFileSync, readdirSync, statSync, realpathSync } from "node:fs";
 import type { EvidenceDecision, EvidenceTicket } from "./producer-evidence.js";
 import { recordSha256 } from "./producer-evidence.js";
@@ -290,10 +290,12 @@ export const ARTIFACT_MANIFEST_VERSION = "strada-manifest-v1";
  * readme.txt and the executable's NAME: the executable could be replaced
  * while the digest stood, and every receipt and accumulated coverage keyed
  * on it followed (Codex 2026-09-16 D78, introduced by af44a358). A manifest
- * is adopted only when it names the artifact itself — the file, or for a
- * bundle something inside it — and, where the layout has one, its runtime
- * data folder; every entry must resolve INSIDE the layout (no symlink out).
- * Anything else falls back to the layout walk, which covers everything.
+ * is adopted only when it lists the whole game as this process recognises
+ * the layout — the executable with every <Name>_Data folder and runtime
+ * library beside it, or a bundle in full — and every entry resolves INSIDE
+ * the folder the manifest sits in (no symlink out). Anything else falls back
+ * to the layout walk, which covers everything; a declared file the tree does
+ * not have leaves the artifact with no digest at all.
  */
 export function artifactManifest(path: string): { readonly bytes: string; readonly files: readonly string[] } | undefined {
   try {
@@ -309,15 +311,26 @@ export function artifactManifest(path: string): { readonly bytes: string; readon
       if (typeof entry !== "string" || entry === "" || entry.includes("..") || entry.startsWith("/") || /^[A-Za-z]:[\\/]/.test(entry)) return undefined;
       files.push(entry.replace(/\\/g, "/").replace(/^\.\//, ""));
     }
-    if (!manifestNamesTheGame(path, files)) return undefined;
+    if (!manifestCoversTheGame(path, files)) return undefined;
     return { bytes, files };
   } catch {
     return undefined;
   }
 }
 
-/** Does the listed set include the artifact itself, its runtime data, and nothing outside the layout? */
-function manifestNamesTheGame(path: string, files: readonly string[]): boolean {
+/**
+ * Does the manifest list EVERY file of the game, as this process recognises
+ * its layout, and nothing outside the folder it sits in?
+ *
+ * Naming the executable and "something under Game_Data" was not enough: a
+ * manifest listing Game.exe and one level left level1, UnityPlayer.dll and
+ * MonoBleedingEdge out of the identity, a .app's readme could stand in for
+ * its binary, and a WebGL folder needed nothing but index.html (Codex
+ * 2026-09-17 D78 review #1-#3). The rule is a superset check against the
+ * runtime set the layout implies; what the build did not ship (a log
+ * written beside the player) may be left out, what it shipped may not.
+ */
+function manifestCoversTheGame(path: string, files: readonly string[]): boolean {
   const base = dirname(path);
   const name = basename(path);
   let isDirectory: boolean;
@@ -327,38 +340,63 @@ function manifestNamesTheGame(path: string, files: readonly string[]): boolean {
     return false;
   }
   // Every entry resolves inside the folder the manifest sits in: a symlink to
-  // another build is out. An entry that is NOT THERE stays in the list — the
-  // manifest is adopted and the digest fails on it, which is the answer for a
-  // build that says it shipped a file the tree does not have.
+  // another build is out. A declared file that is NOT THERE adopts the
+  // manifest as it stands: the digest fails on it, and "no digest" is the
+  // answer for a build that says it shipped a file the tree does not have
+  // (review #5) — never a walk that hashes what is left.
   const layoutRoot = realpathSync(base);
   for (const rel of files) {
     let real: string;
     try {
       real = realpathSync(join(base, rel));
     } catch {
+      return true;
+    }
+    const inside = relative(layoutRoot, real);
+    if (inside === "" || inside.startsWith("..") || isAbsolute(inside)) return false;
+  }
+  const listed = new Set(files);
+  return requiredRuntimeFiles(path, base, name, isDirectory).every((required) => listed.has(required));
+}
+
+/**
+ * The files a manifest has to list: a bundle (a .app, a WebGL folder) in
+ * full; a player executable with every <Name>_Data folder, runtime library
+ * (UnityPlayer, GameAssembly, MonoBleedingEdge) and WebGL Build/TemplateData
+ * folder beside it. Relative to the folder the manifest sits in, "/"-joined.
+ */
+function requiredRuntimeFiles(path: string, base: string, name: string, isDirectory: boolean): string[] {
+  const required: string[] = [];
+  const walk = (at: string, rel: string): void => {
+    for (const entry of readdirSync(at).sort()) {
+      const child = join(at, entry);
+      if (statSync(child).isDirectory()) walk(child, `${rel}/${entry}`);
+      else required.push(`${rel}/${entry}`);
+    }
+  };
+  if (isDirectory) {
+    walk(path, name);
+    return required;
+  }
+  required.push(name);
+  for (const entry of readdirSync(base).sort()) {
+    let directory: boolean;
+    try {
+      directory = statSync(join(base, entry)).isDirectory();
+    } catch {
       continue;
     }
-    if (real !== layoutRoot && !real.startsWith(`${layoutRoot}/`)) return false;
-  }
-  if (isDirectory) {
-    // A bundle: something INSIDE it has to be listed (the binary, for a .app).
-    const inside = files.filter((f) => f.startsWith(`${name}/`));
-    if (inside.length === 0) return false;
-    if (/\.app$/i.test(name)) return inside.some((f) => f.startsWith(`${name}/Contents/MacOS/`) && !f.slice(`${name}/Contents/MacOS/`.length).includes("/"));
-    return true;
-  }
-  if (!files.includes(name)) return false;
-  // A Windows/Linux player ships its <Name>_Data folder beside it.
-  const dataDir = readdirSync(base).find((entry) => entry.endsWith("_Data"));
-  if (dataDir !== undefined) {
-    try {
-      if (statSync(join(base, dataDir)).isDirectory() && !files.some((f) => f.startsWith(`${dataDir}/`))) return false;
-    } catch {
-      // an unreadable data dir is judged by the walk instead
+    if (directory) {
+      if (entry.endsWith("_Data") || RUNTIME_DIRS.has(entry)) walk(join(base, entry), entry);
+    } else if (RUNTIME_FILE_RE.test(entry)) {
+      required.push(entry);
     }
   }
-  return true;
+  return required;
 }
+
+const RUNTIME_DIRS = new Set(["MonoBleedingEdge", "Build", "TemplateData"]);
+const RUNTIME_FILE_RE = /\.(?:dll|so|dylib)$|^GameAssembly\./i;
 
 /**
  * The directory a Unity player's parts live in, or the path itself.
@@ -372,8 +410,11 @@ export function playerLayoutRoot(path: string): string {
   try {
     if (statSync(path).isDirectory()) return path;
     const dir = dirname(path);
-    const hasData = readdirSync(dir).some((entry) => entry.endsWith("_Data") && statSync(join(dir, entry)).isDirectory());
-    return hasData ? dir : path;
+    const entries = readdirSync(dir);
+    const hasData = entries.some((entry) => entry.endsWith("_Data") && statSync(join(dir, entry)).isDirectory());
+    // A WebGL player is index.html beside its Build folder (Codex 2026-09-17 D78 review #3).
+    const webgl = basename(path).toLowerCase() === "index.html" && entries.includes("Build") && statSync(join(dir, "Build")).isDirectory();
+    return hasData || webgl ? dir : path;
   } catch {
     return path;
   }
