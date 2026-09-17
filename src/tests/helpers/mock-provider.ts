@@ -39,6 +39,21 @@ export interface ProviderInteraction {
   timestamp: Date;
 }
 
+/**
+ * A tool result the ENGINE reported back — evidence that a tool ran and what
+ * it produced, as opposed to a scripted `ToolCall`, which is only a request.
+ */
+export interface CapturedToolResult {
+  /** The `tool_use` id this result answers. */
+  readonly toolCallId: string;
+  /** The tool that produced it, resolved from the id the engine echoed back. */
+  readonly name: string;
+  /** Exactly what the tool wrote — the content a real assertion reads. */
+  readonly content: string;
+  /** Whether the tool itself reported failure. */
+  readonly isError: boolean;
+}
+
 export interface MockProviderConfig {
   name?: string;
   streaming?: boolean;
@@ -420,10 +435,62 @@ export class MockAIProvider implements IAIProvider, IStreamingProvider {
   }
 
   /**
-   * Get all tool calls made during interactions.
+   * Get all tool calls the MOCK ASKED FOR.
+   *
+   * These are the scripted requests, not evidence that anything ran: the name
+   * is here because the mock put it here. A test that only reads this cannot
+   * tell a working system from one where the engine dropped every tool call —
+   * measured 2026-09-17, when the whole file→build suite asserted these names
+   * while no tool had executed at all. Assert on {@link getToolResults} for
+   * what actually happened.
    */
   getAllToolCalls(): ToolCall[] {
     return this.interactions.flatMap((i) => i.response.toolCalls);
+  }
+
+  /**
+   * What the tools actually PRODUCED, as the engine reported it back.
+   *
+   * The engine feeds each execution's output to the next provider call as a
+   * `tool_result` block, so these are the real results: the content a tool
+   * wrote and whether it failed. A result appears here only if its tool ran.
+   * Results are returned in execution order, once each, oldest first.
+   */
+  getToolResults(): CapturedToolResult[] {
+    const nameById = new Map<string, string>();
+    for (const i of this.interactions) {
+      for (const tc of i.response.toolCalls) nameById.set(tc.id, tc.name);
+    }
+
+    const results: CapturedToolResult[] = [];
+    const seen = new Set<string>();
+    for (const i of this.interactions) {
+      for (const message of i.messages) {
+        if (message.role !== "user" || !Array.isArray(message.content)) continue;
+        for (const block of message.content) {
+          if (block.type !== "tool_result" || seen.has(block.tool_use_id)) continue;
+          seen.add(block.tool_use_id);
+          results.push({
+            toolCallId: block.tool_use_id,
+            name: nameById.get(block.tool_use_id) ?? "<unrequested>",
+            content: block.content,
+            isError: block.is_error === true,
+          });
+        }
+      }
+    }
+    return results;
+  }
+
+  /**
+   * The result of the LAST execution of one tool, or undefined if it never ran.
+   *
+   * Undefined is the answer a test must handle: it means the tool did not
+   * execute, which is exactly the failure `getAllToolCalls()` hides.
+   */
+  getToolResult(toolName: string): CapturedToolResult | undefined {
+    const matching = this.getToolResults().filter((r) => r.name === toolName);
+    return matching[matching.length - 1];
   }
 
   /**
