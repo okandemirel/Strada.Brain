@@ -501,7 +501,8 @@ describe("SetupWizard path validation", () => {
     });
 
     expect(saveResponse.read().statusCode).toBe(200);
-    expect(JSON.parse(saveResponse.read().body)).toEqual({
+    const saveBody = JSON.parse(saveResponse.read().body);
+    expect(saveBody).toMatchObject({
       success: true,
       readyUrl: "http://127.0.0.1:0/",
       providerWarnings: [{
@@ -517,6 +518,11 @@ describe("SetupWizard path validation", () => {
         },
       },
     });
+    // Plan 2.1 / 2.2: the response carries the shared readiness verdict and
+    // the effective config read back from disk (secrets reduced to a marker).
+    expect(saveBody.readiness.state).toBe("degraded");
+    expect(saveBody.effectiveConfig.KIMI_API_KEY).toBe("<set>");
+    expect(saveBody.effectiveConfig.PROVIDER_CHAIN).toBe("kimi,deepseek");
 
     expect(wizard.getPendingPostSetupBootstrap()).toEqual({
       language: "tr",
@@ -671,6 +677,185 @@ describe("SetupWizard path validation", () => {
     expect(body.success).toBe(false);
     expect(body.error).toContain("gpt-4.1-mini");
     expect(body.error).not.toMatch(/sign in again/i);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Plan 2.1 (audit 10.1b / D24, D29, D30): typed setup persistence merges
+  // into the existing .env; every submitted field is written and read back.
+  // ---------------------------------------------------------------------------
+
+  it("keeps a key a person added by hand when Save merges into the existing .env (2.1 / D29)", async () => {
+    const tempCwd = fs.mkdtempSync(path.join(os.tmpdir(), "strada-setup-wizard-"));
+    tmpDirs.push(tempCwd);
+    process.chdir(tempCwd);
+    process.env["STRADA_INSTALL_ROOT"] = tempCwd;
+    process.env["STRADA_SOURCE_CHECKOUT"] = "true";
+    fs.writeFileSync(
+      path.join(tempCwd, ".env"),
+      [
+        "# my notes",
+        "UNITY_PROJECT_PATH=/tmp/old",
+        "MY_CUSTOM_WEBHOOK_URL=https://hooks.example/abc",
+        "LOG_LEVEL=debug",
+        "DEEPSEEK_API_KEY=sk-stale",
+        "",
+      ].join("\n"),
+    );
+
+    const wizard = new SetupWizard({ port: 0 });
+    const response = await saveWizard(wizard, {
+      UNITY_PROJECT_PATH: homedir(),
+      PROVIDER_CHAIN: "kimi",
+      KIMI_API_KEY: "sk-kimi",
+      RAG_ENABLED: "false",
+    });
+    expect(response.read().statusCode).toBe(200);
+    const body = JSON.parse(response.read().body);
+
+    const envContent = fs.readFileSync(path.join(tempCwd, ".env"), "utf-8");
+    // Hand-added key and comment survive; the hand-edited default is kept.
+    expect(envContent).toContain("MY_CUSTOM_WEBHOOK_URL=https://hooks.example/abc");
+    expect(envContent).toContain("# my notes");
+    expect(envContent).toContain("LOG_LEVEL=debug");
+    expect(envContent).not.toContain("LOG_LEVEL=info");
+    // Wizard-owned keys are rewritten in place / removed when de-selected.
+    expect(envContent).toContain(`UNITY_PROJECT_PATH="${homedir()}"`);
+    expect(envContent).not.toContain("UNITY_PROJECT_PATH=/tmp/old");
+    expect(envContent).not.toContain("DEEPSEEK_API_KEY");
+    // And the response shows the effective file, not the request.
+    expect(body.effectiveConfig.MY_CUSTOM_WEBHOOK_URL).toBe("https://hooks.example/abc");
+    expect(body.effectiveConfig.LOG_LEVEL).toBe("debug");
+    expect(body.preservedKeys).toEqual(expect.arrayContaining(["MY_CUSTOM_WEBHOOK_URL", "LOG_LEVEL"]));
+  });
+
+  it("writes a submitted daemon budget and Obsidian fields and reads them back (2.1 / D24)", async () => {
+    const tempCwd = fs.mkdtempSync(path.join(os.tmpdir(), "strada-setup-wizard-"));
+    tmpDirs.push(tempCwd);
+    process.chdir(tempCwd);
+    process.env["STRADA_INSTALL_ROOT"] = tempCwd;
+    process.env["STRADA_SOURCE_CHECKOUT"] = "true";
+
+    const wizard = new SetupWizard({ port: 0 });
+    const response = await saveWizard(wizard, {
+      UNITY_PROJECT_PATH: homedir(),
+      PROVIDER_CHAIN: "kimi",
+      KIMI_API_KEY: "sk-kimi",
+      RAG_ENABLED: "false",
+      STRADA_DAEMON_ENABLED: "true",
+      STRADA_DAEMON_DAILY_BUDGET: "2.5",
+      OBSIDIAN_ENABLED: "true",
+      OBSIDIAN_VAULT_PATH: "/Users/me/Vault",
+      OBSIDIAN_API_KEY: "obs-key",
+    });
+    expect(response.read().statusCode).toBe(200);
+    const body = JSON.parse(response.read().body);
+
+    const envContent = fs.readFileSync(path.join(tempCwd, ".env"), "utf-8");
+    expect(envContent).toContain("STRADA_DAEMON_DAILY_BUDGET=2.5");
+    expect(envContent).toContain("OBSIDIAN_ENABLED=true");
+    expect(envContent).toContain('OBSIDIAN_VAULT_PATH="/Users/me/Vault"');
+    expect(envContent).toContain('OBSIDIAN_API_KEY="obs-key"');
+    expect(body.effectiveConfig.STRADA_DAEMON_DAILY_BUDGET).toBe("2.5");
+    expect(body.effectiveConfig.OBSIDIAN_VAULT_PATH).toBe("/Users/me/Vault");
+    expect(body.effectiveConfig.OBSIDIAN_API_KEY).toBe("<set>");
+  });
+
+  it("writes a global budget of 0 as zero and shows it as zero unless unlimited was chosen (2.1 / D30)", async () => {
+    const tempCwd = fs.mkdtempSync(path.join(os.tmpdir(), "strada-setup-wizard-"));
+    tmpDirs.push(tempCwd);
+    process.chdir(tempCwd);
+    process.env["STRADA_INSTALL_ROOT"] = tempCwd;
+    process.env["STRADA_SOURCE_CHECKOUT"] = "true";
+
+    const zero = await saveWizard(new SetupWizard({ port: 0 }), {
+      UNITY_PROJECT_PATH: homedir(),
+      PROVIDER_CHAIN: "kimi",
+      KIMI_API_KEY: "sk-kimi",
+      RAG_ENABLED: "false",
+      STRADA_BUDGET_DAILY_USD: "0",
+    });
+    expect(zero.read().statusCode).toBe(200);
+    const zeroBody = JSON.parse(zero.read().body);
+    expect(fs.readFileSync(path.join(tempCwd, ".env"), "utf-8")).toContain("STRADA_BUDGET_DAILY_USD=0");
+    expect(zeroBody.effectiveBudget).toEqual({ dailyUsd: 0, unlimited: false, display: "$0.00" });
+
+    const unlimited = await saveWizard(new SetupWizard({ port: 0 }), {
+      UNITY_PROJECT_PATH: homedir(),
+      PROVIDER_CHAIN: "kimi",
+      KIMI_API_KEY: "sk-kimi",
+      RAG_ENABLED: "false",
+      STRADA_BUDGET_DAILY_USD: "0",
+      _budgetUnlimited: "true",
+    });
+    expect(unlimited.read().statusCode).toBe(200);
+    const unlimitedBody = JSON.parse(unlimited.read().body);
+    expect(fs.readFileSync(path.join(tempCwd, ".env"), "utf-8")).not.toContain("STRADA_BUDGET_DAILY_USD");
+    expect(unlimitedBody.effectiveBudget).toEqual({ dailyUsd: null, unlimited: true, display: "unlimited" });
+  });
+
+  it("refuses an unusable budget instead of silently dropping it (2.1 guard)", async () => {
+    const response = await saveWizard(new SetupWizard({ port: 0 }), {
+      UNITY_PROJECT_PATH: homedir(),
+      PROVIDER_CHAIN: "kimi",
+      KIMI_API_KEY: "sk-kimi",
+      RAG_ENABLED: "false",
+      STRADA_BUDGET_DAILY_USD: "lots",
+    });
+    expect(response.read().statusCode).toBe(400);
+    expect(JSON.parse(response.read().body).error).toContain("STRADA_BUDGET_DAILY_USD");
+  });
+
+  // ---------------------------------------------------------------------------
+  // Plan 2.3 (audit 10.5 / E-missed #1): an id from the wizard's own live
+  // listing is accepted at Save.
+  // ---------------------------------------------------------------------------
+
+  it("accepts a model id that came from the same live listing the wizard offered (2.3)", async () => {
+    const tempCwd = fs.mkdtempSync(path.join(os.tmpdir(), "strada-setup-wizard-"));
+    tmpDirs.push(tempCwd);
+    process.chdir(tempCwd);
+    process.env["STRADA_INSTALL_ROOT"] = tempCwd;
+    process.env["STRADA_SOURCE_CHECKOUT"] = "true";
+
+    const wizard = new SetupWizard({ port: 0 });
+    const liveOnlyId = "gpt-99-live-preview";
+    (wizard as unknown as {
+      createProbeProvider: (config: { name: string }) => { listModels?: () => Promise<string[]> };
+    }).createProbeProvider = () => ({ listModels: async () => [liveOnlyId] });
+
+    // The wizard serves the live listing through its own probe route ...
+    const probe = makeResponse();
+    const probeTarget = wizard as unknown as {
+      readBody: () => Promise<string>;
+      handleSetupProviderModelsProbe: (req: unknown, res: unknown) => Promise<void>;
+    };
+    probeTarget.readBody = async () => JSON.stringify({ provider: "openai", key: "sk-x" });
+    await probeTarget.handleSetupProviderModelsProbe({}, probe.response);
+    expect(JSON.parse(probe.read().body)).toEqual({
+      providers: [{ name: "openai", models: [liveOnlyId] }],
+    });
+
+    // ... and Save accepts what it offered, even though the curated catalog
+    // does not know the id.
+    const response = await saveWizard(wizard, {
+      UNITY_PROJECT_PATH: homedir(),
+      PROVIDER_CHAIN: "openai",
+      OPENAI_API_KEY: "sk-openai",
+      OPENAI_MODEL: liveOnlyId,
+      RAG_ENABLED: "false",
+    });
+    expect(response.read().statusCode).toBe(200);
+    expect(JSON.parse(response.read().body).effectiveConfig.OPENAI_MODEL).toBe(liveOnlyId);
+
+    // A fresh wizard that never served the id still refuses it (guard).
+    const stranger = await saveWizard(new SetupWizard({ port: 0 }), {
+      UNITY_PROJECT_PATH: homedir(),
+      PROVIDER_CHAIN: "openai",
+      OPENAI_API_KEY: "sk-openai",
+      OPENAI_MODEL: liveOnlyId,
+      RAG_ENABLED: "false",
+    });
+    expect(stranger.read().statusCode).toBe(400);
   });
 
   it("resolves setup completion even when waiting starts after save", async () => {

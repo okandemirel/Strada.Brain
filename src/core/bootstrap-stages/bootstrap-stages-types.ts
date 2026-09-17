@@ -67,6 +67,8 @@ export interface ProviderInitResult {
   manager: ProviderManager;
   notices: string[];
   healthCheckPassed?: boolean;
+  /** Provider-chain verdict shared with setup save and `strada doctor` (plan 2.2). */
+  chainReadiness?: import("../chain-readiness.js").ChainReadinessVerdict;
 }
 
 export interface BootstrapEmbeddingStatus {

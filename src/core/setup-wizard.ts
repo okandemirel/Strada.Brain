@@ -7,7 +7,7 @@
 
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from "node:http";
 import { resolveWebStaticDir } from "../common/web-static-dir.js";
-import { readFile, writeFile, stat, readdir, realpath } from "node:fs/promises";
+import { readFile, stat, readdir, realpath } from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
 import * as dotenv from "dotenv";
 import { join, extname, resolve, sep, isAbsolute } from "node:path";
@@ -44,6 +44,13 @@ import {
   transitionSetupStatus,
 } from "../common/setup-state.js";
 import { resolveDotenvPath } from "../common/runtime-paths.js";
+import { evaluateChainReadiness, type ChainReadinessVerdict } from "./chain-readiness.js";
+import {
+  describeEffectiveBudget,
+  persistSetup,
+  redactEffectiveConfig,
+  type EffectiveBudget,
+} from "./setup-env-persistence.js";
 import { ensureOpenAiSubscriptionAuth } from "../common/openai-subscription-auth.js";
 import { isCodexCliAvailable, getCodexInstallHint, startCodexLogin } from "../common/openai-codex-login.js";
 import { inspectClaudeSubscriptionAuth } from "../common/claude-subscription-auth.js";
@@ -324,7 +331,17 @@ function isKnownProviderModel(provider: string, model: string): boolean {
   return Array.isArray(knownModels) && knownModels.some((option) => option.model === model);
 }
 
-function validateProviderModelSelection(config: Record<string, string>, provider: string): string | null {
+/**
+ * A model id is valid when it is on the curated catalog OR on the live
+ * listing this wizard served for the provider (`/api/providers/models`). The
+ * wizard used to offer live-discovered ids and then reject them at Save as
+ * off-catalog (plan 2.3, audit 10.5 / E-missed #1).
+ */
+export function validateProviderModelSelection(
+  config: Record<string, string>,
+  provider: string,
+  liveModelIds?: ReadonlyMap<string, ReadonlySet<string>>,
+): string | null {
   const modelKey = `${provider.toUpperCase()}_MODEL`;
   const model = config[modelKey]?.trim();
   if (!model) {
@@ -333,12 +350,70 @@ function validateProviderModelSelection(config: Record<string, string>, provider
   if (!MODEL_NAME_RE.test(model)) {
     return `Invalid ${modelKey} value`;
   }
+  if (liveModelIds?.get(provider)?.has(model)) {
+    return null;
+  }
   const hasCuratedCatalog = (PROVIDER_MODEL_OPTIONS[provider]?.length ?? 0) > 0;
   if (hasCuratedCatalog && !isKnownProviderModel(provider, model)) {
     return `Unsupported ${modelKey} selection`;
   }
   return null;
 }
+
+const BUDGET_UNLIMITED_MARKERS = new Set(["unlimited", "none", "off"]);
+
+/** True when the request explicitly asked for no global budget. */
+function chosenUnlimitedBudget(config: Record<string, string>): boolean {
+  return config._budgetUnlimited === "true"
+    || BUDGET_UNLIMITED_MARKERS.has(String(config.STRADA_BUDGET_DAILY_USD ?? "").trim().toLowerCase());
+}
+
+/**
+ * Setup-owned keys: on Save the wizard is the authority for these, so one it
+ * no longer emits is REMOVED from the file (a de-selected provider key must
+ * not linger). Every key outside this list is a person's own and survives.
+ */
+export const SETUP_OWNED_ENV_KEYS: ReadonlySet<string> = new Set<string>([
+  "UNITY_PROJECT_PATH",
+  ...PROVIDER_ENV_KEYS,
+  "OPENAI_AUTH_MODE",
+  "ANTHROPIC_AUTH_MODE",
+  "OPENAI_CHATGPT_AUTH_FILE",
+  "OPENCODE_BASE_URL",
+  "OPENCODE_DEFAULT_MODEL",
+  "PROVIDER_CHAIN",
+  ...KNOWN_PROVIDER_MODEL_ORDER.map((provider) => `${provider.toUpperCase()}_MODEL`),
+  ...CHANNEL_ENV_KEYS,
+  "RAG_ENABLED",
+  "EMBEDDING_PROVIDER",
+  "EMBEDDING_MODEL",
+  "LANGUAGE_PREFERENCE",
+  "SYSTEM_PRESET",
+  "DEFAULT_CHANNEL",
+  "WEB_CHANNEL_PORT",
+  "DASHBOARD_PORT",
+  "STRADA_BUDGET_DAILY_USD",
+  "STRADA_DAEMON_ENABLED",
+  "STRADA_DAEMON_DAILY_BUDGET",
+  "AUTONOMOUS_DEFAULT_ENABLED",
+  "AUTONOMOUS_DEFAULT_HOURS",
+  "AUTO_UPDATE_ENABLED",
+  "AUTO_UPDATE_CHANNEL",
+  "OBSIDIAN_ENABLED",
+  "OBSIDIAN_VAULT_PATH",
+  "OBSIDIAN_API_KEY",
+]);
+
+/** Written only when absent: a hand-edited value (LOG_LEVEL=debug) is never reset. */
+export const SETUP_DEFAULT_ENV_KEYS: ReadonlySet<string> = new Set<string>([
+  "STREAMING_ENABLED",
+  "REQUIRE_EDIT_CONFIRMATION",
+  "DASHBOARD_ENABLED",
+  "MULTI_AGENT_ENABLED",
+  "TASK_DELEGATION_ENABLED",
+  "LOG_LEVEL",
+  "STRADA_VAULT_ENABLED",
+]);
 
 export function hasConfiguredEmbeddingCandidate(config: Record<string, unknown>): boolean {
   const explicitProvider = typeof config.EMBEDDING_PROVIDER === "string" ? config.EMBEDDING_PROVIDER : "auto";
@@ -484,13 +559,17 @@ export function buildSetupEnvLines(
     "DASHBOARD_PORT=3100",
   );
 
-  // Global daily budget (unified budget system)
-  if (config.STRADA_BUDGET_DAILY_USD) {
+  // Global daily budget (unified budget system). "No limit" is the ABSENCE of
+  // the key and is written only when the person explicitly chose unlimited
+  // (`_budgetUnlimited=true` or the literal "unlimited"). A submitted 0 used
+  // to be dropped, so the daemon read the missing key as "unlimited" for a
+  // person who had set zero (plan 2.1, audit 10.1b / D30).
+  if (!chosenUnlimitedBudget(config) && config.STRADA_BUDGET_DAILY_USD !== undefined) {
     const globalBudget = Number(config.STRADA_BUDGET_DAILY_USD);
-    if (Number.isFinite(globalBudget) && globalBudget > 0 && globalBudget <= 10000) {
+    if (Number.isFinite(globalBudget) && globalBudget >= 0 && globalBudget <= 10000) {
       lines.push(
         "",
-        "# Global Budget",
+        globalBudget === 0 ? "# Global Budget (zero: nothing may spend)" : "# Global Budget",
         `STRADA_BUDGET_DAILY_USD=${globalBudget}`,
       );
     }
@@ -509,9 +588,26 @@ export function buildSetupEnvLines(
     daemonEnabled ? "# Background autonomy (default on)" : "# Background autonomy (opt-out)",
     `STRADA_DAEMON_ENABLED=${daemonEnabled}`,
   );
-  // No dedicated daemon budget/interval is written: background autonomy
-  // shares the system budget (STRADA_BUDGET_DAILY_USD) and the default
-  // cadence. Power users can still set the STRADA_DAEMON_* overrides by hand.
+  // A submitted daemon sub-limit is written (the wizard sent it and the
+  // writer dropped it: plan 2.1, audit 10.1b / D24). Absent, background
+  // autonomy shares the system budget (STRADA_BUDGET_DAILY_USD).
+  if (daemonEnabled && config.STRADA_DAEMON_DAILY_BUDGET !== undefined) {
+    const daemonBudget = Number(config.STRADA_DAEMON_DAILY_BUDGET);
+    if (Number.isFinite(daemonBudget) && daemonBudget >= 0.01 && daemonBudget <= 1000) {
+      lines.push(`STRADA_DAEMON_DAILY_BUDGET=${daemonBudget}`);
+    }
+  }
+
+  // Obsidian integration: submitted by the wizard, previously never written.
+  if (config.OBSIDIAN_ENABLED === "true" || config.OBSIDIAN_ENABLED === "false") {
+    lines.push("", "# Obsidian", `OBSIDIAN_ENABLED=${config.OBSIDIAN_ENABLED}`);
+    if (config.OBSIDIAN_ENABLED === "true") {
+      const vaultPath = typeof config.OBSIDIAN_VAULT_PATH === "string" ? config.OBSIDIAN_VAULT_PATH.trim() : "";
+      if (vaultPath) lines.push(`OBSIDIAN_VAULT_PATH=${sanitizeEnvValue(vaultPath)}`);
+      const apiKey = typeof config.OBSIDIAN_API_KEY === "string" ? config.OBSIDIAN_API_KEY.trim() : "";
+      if (apiKey) lines.push(`OBSIDIAN_API_KEY=${sanitizeEnvValue(apiKey)}`);
+    }
+  }
 
   const autonomyEnabled = config.AUTONOMOUS_DEFAULT_ENABLED === "true";
   lines.push("", "# Autonomy", `AUTONOMOUS_DEFAULT_ENABLED=${autonomyEnabled}`);
@@ -556,6 +652,12 @@ export class SetupWizard {
   private readonly port: number;
   private readonly readyUrl: string;
   private readonly csrfToken = randomUUID();
+  /**
+   * Model ids this wizard served from a LIVE provider listing, per provider.
+   * Save consults it so an id the wizard itself offered is never refused as
+   * off-catalog (plan 2.3, audit 10.5 / E-missed #1).
+   */
+  private readonly liveModelIds = new Map<string, Set<string>>();
   private status: SetupStatusResponse = createSetupStatus();
   private readonly completionPromise: Promise<void>;
   private resolveCompletion!: () => void;
@@ -1118,10 +1220,20 @@ export class SetupWizard {
       // real probes.
       const listing = provider.listModels().catch((): string[] => []);
       const models = await Promise.race([listing, timeout]);
-      return Array.isArray(models) ? models.filter((m): m is string => typeof m === "string") : [];
+      const ids = Array.isArray(models) ? models.filter((m): m is string => typeof m === "string") : [];
+      this.rememberLiveModels(name, ids);
+      return ids;
     } catch {
       return [];
     }
+  }
+
+  /** Record ids from a live listing so Save accepts what the wizard offered. */
+  private rememberLiveModels(provider: string, ids: readonly string[]): void {
+    if (ids.length === 0) return;
+    const set = this.liveModelIds.get(provider) ?? new Set<string>();
+    for (const id of ids) set.add(id.trim());
+    this.liveModelIds.set(provider, set);
   }
 
   /**
@@ -1421,6 +1533,29 @@ export class SetupWizard {
       return;
     }
 
+    // Budget fields are written verbatim, so an unusable value is refused
+    // here instead of silently dropped (plan 2.1 / D24, D30).
+    if (!chosenUnlimitedBudget(config) && config.STRADA_BUDGET_DAILY_USD !== undefined) {
+      const globalBudget = Number(config.STRADA_BUDGET_DAILY_USD);
+      if (!Number.isFinite(globalBudget) || globalBudget < 0 || globalBudget > 10000) {
+        this.json(res, 400, { success: false, error: "Invalid STRADA_BUDGET_DAILY_USD value (0-10000, or choose unlimited)" });
+        return;
+      }
+    }
+    if (config.STRADA_DAEMON_ENABLED !== "false" && config.STRADA_DAEMON_DAILY_BUDGET !== undefined) {
+      const daemonBudget = Number(config.STRADA_DAEMON_DAILY_BUDGET);
+      if (!Number.isFinite(daemonBudget) || daemonBudget < 0.01 || daemonBudget > 1000) {
+        this.json(res, 400, { success: false, error: "Invalid STRADA_DAEMON_DAILY_BUDGET value (0.01-1000)" });
+        return;
+      }
+    }
+    if (config.OBSIDIAN_ENABLED !== undefined && config.OBSIDIAN_ENABLED !== "true" && config.OBSIDIAN_ENABLED !== "false") {
+      this.json(res, 400, { success: false, error: "Invalid OBSIDIAN_ENABLED value" });
+      return;
+    }
+
+    let readiness: ChainReadinessVerdict | undefined;
+
     // Write provider chain for multi-provider fallback (validate names)
     if (config.PROVIDER_CHAIN) {
       const names = String(config.PROVIDER_CHAIN)
@@ -1433,7 +1568,7 @@ export class SetupWizard {
       }
 
       for (const provider of KNOWN_PROVIDER_MODEL_ORDER) {
-        const modelError = validateProviderModelSelection(config, provider);
+        const modelError = validateProviderModelSelection(config, provider, this.liveModelIds);
         if (modelError) {
           this.json(res, 400, { success: false, error: modelError });
           return;
@@ -1470,19 +1605,19 @@ export class SetupWizard {
         providerBaseUrls,
       );
 
-      if (preflight.failures.length > 0) {
-        const primaryName = names[0];
-        const primaryFailed = preflight.failures.some((f) => f.providerId === primaryName);
-        const noneHealthy = preflight.passedProviderIds.length === 0;
-        if (primaryFailed || noneHealthy) {
-          // Block: saving now would only defer the failure to a confusing bootstrap crash.
-          this.json(res, 400, {
-            success: false,
-            error: `Provider preflight failed. ${formatProviderPreflightFailures(preflight.failures)}`,
-          });
-          return;
-        }
-        // A non-primary fallback failed but a usable primary remains — warn, don't block.
+      // ONE readiness policy shared with `strada doctor` and boot (plan 2.2):
+      // save is refused only when NOTHING can answer; a failed primary with a
+      // healthy fallback is the same "degraded" warning boot will print.
+      readiness = evaluateChainReadiness(preflight, { requestedProviderIds: names });
+      if (readiness.state === "unavailable") {
+        this.json(res, 400, {
+          success: false,
+          error: `Provider preflight failed. ${formatProviderPreflightFailures(preflight.failures)}`,
+          readiness,
+        });
+        return;
+      }
+      if (readiness.state === "degraded") {
         providerWarnings = preflight.failures;
       }
     }
@@ -1512,8 +1647,19 @@ export class SetupWizard {
 
     const envPath = resolveDotenvPath({ moduleUrl: import.meta.url });
 
+    // Merge into the existing .env (hand-added keys survive) and read the
+    // effective file back so the response shows exactly what will run.
+    let effectiveConfig: Record<string, string>;
+    let effectiveBudget: EffectiveBudget;
+    let preservedKeys: string[];
     try {
-      await writeFile(envPath, lines.join("\n") + "\n", "utf-8");
+      const persisted = await persistSetup(envPath, lines, {
+        ownedKeys: SETUP_OWNED_ENV_KEYS,
+        defaultKeys: SETUP_DEFAULT_ENV_KEYS,
+      });
+      effectiveConfig = redactEffectiveConfig(persisted.effective);
+      effectiveBudget = describeEffectiveBudget(persisted.effective);
+      preservedKeys = persisted.preserved;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.json(res, 500, { success: false, error: `Failed to write .env: ${msg}` });
@@ -1532,12 +1678,18 @@ export class SetupWizard {
       readyUrl: this.readyUrl,
       providerWarnings,
       postSetupBootstrap: this.status.postSetupBootstrap,
+      readiness,
+      effectiveConfig,
+      effectiveBudget,
+      preservedKeys,
     });
     logSetupLifecycle("config_saved", {
       envPath,
       port: this.port,
       readyUrl: this.readyUrl,
       providerWarnings: providerWarnings?.length ?? 0,
+      readiness: readiness?.state ?? "not-measured",
+      preservedKeys: preservedKeys.length,
     });
     this.signalCompletion();
   }

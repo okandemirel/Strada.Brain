@@ -20,11 +20,9 @@ import {
   hasConfiguredAnthropicSubscription,
   normalizeProviderNames,
 } from "./provider-config.js";
-import {
-  formatProviderPreflightFailures,
-  preflightResponseProviders,
-} from "./response-provider-preflight.js";
+import { preflightResponseProviders } from "./response-provider-preflight.js";
 import { buildCapabilitySnapshot, summarizeCapabilityHealth } from "./boot-report.js";
+import { evaluateChainReadiness, type ChainReadinessVerdict } from "./chain-readiness.js";
 
 export type DoctorStatus = "pass" | "warn" | "fail";
 
@@ -34,6 +32,8 @@ export interface DoctorCheck {
   status: DoctorStatus;
   detail: string;
   fix?: string;
+  /** Provider-chain verdict shared with setup and boot (plan 2.2). */
+  readiness?: ChainReadinessVerdict;
 }
 
 export interface DoctorReport {
@@ -208,12 +208,23 @@ export async function collectDoctorReport(options: DoctorOptions = {}): Promise<
       configResult.value.providerModels,
       configResult.value.providerBaseUrls,
     );
-    if (preflightResult.failures.length > 0) {
+    // ONE readiness policy shared with setup save and boot (plan 2.2): the
+    // doctor used to report ANY failure as FAIL while boot ran happily on a
+    // fallback. "degraded" is now the same warning the other two show.
+    const readiness = evaluateChainReadiness(preflightResult, {
+      requestedProviderIds: requestedResponseProviders,
+    });
+    providerCheck.readiness = readiness;
+    if (readiness.state === "unavailable") {
       providerCheck.status = "fail";
-      providerCheck.detail =
-        `${providerCheck.detail} Failed preflight: ${formatProviderPreflightFailures(preflightResult.failures)}`;
+      providerCheck.detail = `${providerCheck.detail} ${readiness.error}`;
       providerCheck.fix =
         `Re-run \`${getSourceSetupCommand(platform)}\` and fix the failing response-worker credentials before starting Strada.`;
+    } else if (readiness.state === "degraded") {
+      providerCheck.status = "warn";
+      providerCheck.detail = `${providerCheck.detail} ${readiness.warning}`;
+      providerCheck.fix =
+        `Re-run \`${getSourceSetupCommand(platform)}\` to fix the failing response-worker credentials; Strada runs on the healthy ones meanwhile.`;
     }
     checks.push(providerCheck);
 

@@ -30,6 +30,7 @@ import {
   formatProviderPreflightFailures,
   preflightResponseProviders,
 } from "./response-provider-preflight.js";
+import { evaluateChainReadiness, type ChainReadinessVerdict } from "./chain-readiness.js";
 import { AppError } from "../common/errors.js";
 import { markProviderFlatFee } from "../budget/cost-model.js";
 import { setLiveChainMemberNames } from "../tasks/background-executor.js";
@@ -97,6 +98,7 @@ export async function initializeAIProvider(
   const providerCredentials = collectProviderCredentials(config);
   const notices: string[] = [];
   let healthCheckPassed: boolean | undefined;
+  let chainReadiness: ChainReadinessVerdict | undefined;
   // Resolved once and reused for the chat-provider base-URL wiring AND the
   // reachability probe below, so a custom OLLAMA_BASE_URL affects chat too
   // (previously it only affected the probe and embeddings).
@@ -149,22 +151,16 @@ export async function initializeAIProvider(
     //
     // The primary failing is worth saying loudly, because the user gets a different
     // model than they asked for; it is not worth refusing to run.
-    if (preflightResult.failures.length > 0) {
-      if (preflightResult.passedProviderIds.length === 0) {
-        throw new AppError(
-          `Configured AI providers failed preflight. ${formatProviderPreflightFailures(preflightResult.failures)}`,
-          "NO_HEALTHY_AI_PROVIDER",
-        );
-      }
-
-      const primaryName = configuredNames[0]?.trim().toLowerCase();
-      const primaryFailed = Boolean(
-        primaryName && !preflightResult.passedProviderIds.includes(primaryName),
-      );
-      const notice = primaryFailed
-        ? `Primary AI provider "${primaryName}" failed preflight; running on "${preflightResult.passedProviderIds[0]}" instead. ${formatProviderPreflightFailures(preflightResult.failures)}`
-        : `Some configured AI providers failed preflight and were skipped: ${formatProviderPreflightFailures(preflightResult.failures)}`;
-      notices.push(notice);
+    // ONE readiness policy shared with setup save and `strada doctor`
+    // (plan 2.2): the verdict and its "degraded" warning are the same text
+    // the other two surfaces show for this chain.
+    chainReadiness = evaluateChainReadiness(preflightResult, { requestedProviderIds: configuredNames });
+    if (chainReadiness.state === "unavailable") {
+      throw new AppError(chainReadiness.error ?? "Configured AI providers failed preflight.", "NO_HEALTHY_AI_PROVIDER");
+    }
+    if (chainReadiness.state === "degraded") {
+      const primaryFailed = chainReadiness.primaryFailed;
+      notices.push(chainReadiness.warning ?? "Some configured AI providers failed preflight and were skipped.");
       logger.warn(
         primaryFailed
           ? "Primary AI provider failed preflight; falling back"
@@ -172,7 +168,7 @@ export async function initializeAIProvider(
         {
           failed: preflightResult.failures.map((f) => f.providerId),
           healthy: preflightResult.passedProviderIds,
-          ...(primaryFailed ? { demotedPrimary: primaryName } : {}),
+          ...(primaryFailed ? { demotedPrimary: chainReadiness.primaryProviderId } : {}),
         },
       );
     }
@@ -258,18 +254,18 @@ export async function initializeAIProvider(
       config.providerModels,
       baseUrlOverrides,
     );
-    if (preflightResult.failures.length > 0) {
-      const notice = `Configured AI providers failed preflight and were skipped: ${formatProviderPreflightFailures(preflightResult.failures)}`;
-      notices.push(notice);
-      logger.warn("Configured AI providers failed preflight", {
-        failedProviders: preflightResult.failures,
-      });
-    }
-    if (preflightResult.passedProviderIds.length === 0) {
+    chainReadiness = evaluateChainReadiness(preflightResult, { requestedProviderIds: detectedNames });
+    if (chainReadiness.state === "unavailable") {
       throw new AppError(
         `No AI provider passed preflight. ${formatProviderPreflightFailures(preflightResult.failures)}`,
         "NO_HEALTHY_AI_PROVIDER",
       );
+    }
+    if (chainReadiness.state === "degraded") {
+      notices.push(chainReadiness.warning ?? "Some configured AI providers failed preflight and were skipped.");
+      logger.warn("Configured AI providers failed preflight", {
+        failedProviders: preflightResult.failures,
+      });
     }
 
     defaultProviderOrder = preflightResult.passedProviderIds;
@@ -442,6 +438,7 @@ export async function initializeAIProvider(
     manager: providerManager,
     notices,
     healthCheckPassed,
+    chainReadiness,
   };
 }
 

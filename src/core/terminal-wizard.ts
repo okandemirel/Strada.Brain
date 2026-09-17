@@ -18,7 +18,12 @@ import * as path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:net";
 import { fileURLToPath } from "node:url";
-import { buildSetupAccessUrl, type SetupWizard } from "./setup-wizard.js";
+import {
+  buildSetupAccessUrl,
+  SETUP_DEFAULT_ENV_KEYS,
+  SETUP_OWNED_ENV_KEYS,
+  type SetupWizard,
+} from "./setup-wizard.js";
 import {
   getBareCommand,
   getPlatformInstallCommandGuidance,
@@ -28,6 +33,7 @@ import {
   getSourceSetupCommand,
 } from "../common/launcher-guidance.js";
 import { resolveDotenvPath } from "../common/runtime-paths.js";
+import { describeEffectiveBudget, persistSetup } from "./setup-env-persistence.js";
 import {
   buildMcpRecommendation,
   checkStradaDeps,
@@ -1191,7 +1197,7 @@ export async function runTerminalWizard(
 
     const envPath = resolveDotenvPath({ moduleUrl: import.meta.url });
     if (fs.existsSync(envPath)) {
-      const overwrite = await rl.question("\n\u26A0 .env already exists. Overwrite? [y/N]: ");
+      const overwrite = await rl.question("\n\u26A0 .env already exists. Update it? Keys you added by hand are kept. [y/N]: ");
       if (overwrite.trim().toLowerCase() !== "y") {
         console.log("\nSetup cancelled. Existing .env preserved.");
         intentionalClose = true;
@@ -1214,9 +1220,19 @@ export async function runTerminalWizard(
       language,
     });
 
-    fs.writeFileSync(envPath, envContent, { encoding: "utf-8", mode: 0o600 });
+    // Merge, never rewrite: hand-added keys survive, and the file is read
+    // back so the summary shows what the runtime will load (plan 2.1).
+    const persisted = await persistSetup(envPath, envContent.split("\n"), {
+      ownedKeys: SETUP_OWNED_ENV_KEYS,
+      defaultKeys: SETUP_DEFAULT_ENV_KEYS,
+    });
 
-    console.log("\n\u2705 .env created!");
+    console.log("\n\u2705 .env " + (persisted.replaced.length > 0 || persisted.preserved.length > 0 ? "updated" : "created") + "!");
+    if (persisted.preserved.length > 0) {
+      console.log(`   Kept ${persisted.preserved.length} existing key(s): ${persisted.preserved.join(", ")}`);
+    }
+    console.log(`   Effective PROVIDER_CHAIN: ${persisted.effective["PROVIDER_CHAIN"] ?? "(unset)"}`);
+    console.log(`   Effective budget: ${describeEffectiveBudget(persisted.effective).display}`);
     console.log("   Source checkout next steps:");
     console.log(`   1) Run \`${getSourceDoctorCommand(process.platform)}\` from this repo root.`);
     console.log(`   2) If you want the bare \`strada\` command everywhere, run \`${getSourceInstallCommand(process.platform)}\` once.`);
