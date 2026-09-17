@@ -473,13 +473,18 @@ export function buildSetupEnvLines(
   }
 
   // Background autonomy (heartbeat, triggers, OODA, consolidation) is
-  // DEFAULT-ON — not a mode. Only an explicit opt-out is written; writing
-  // "false" for everyone who never chose it would silently disable the
-  // product's core loop under the default-on semantics.
+  // DEFAULT-ON — not a mode. An absent key means "on" (never "false" for
+  // someone who never chose it), and the resolved value is written
+  // EXPLICITLY either way: a reconfiguration from false to true must land in
+  // the file, because the handoff reloads .env with dotenv override, which
+  // can overwrite a stale process.env value but never delete one
+  // (audit 10.1 / 10.6 / D25).
   const daemonEnabled = config.STRADA_DAEMON_ENABLED !== "false";
-  if (!daemonEnabled) {
-    lines.push("", "# Background autonomy (opt-out)", "STRADA_DAEMON_ENABLED=false");
-  }
+  lines.push(
+    "",
+    daemonEnabled ? "# Background autonomy (default on)" : "# Background autonomy (opt-out)",
+    `STRADA_DAEMON_ENABLED=${daemonEnabled}`,
+  );
   // No dedicated daemon budget/interval is written: background autonomy
   // shares the system budget (STRADA_BUDGET_DAILY_USD) and the default
   // cadence. Power users can still set the STRADA_DAEMON_* overrides by hand.

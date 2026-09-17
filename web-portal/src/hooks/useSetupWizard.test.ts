@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { act, renderHook, waitFor } from '@testing-library/react'
 import {
   advanceSetupPollSession,
   applyOpencodeConfig,
@@ -11,6 +12,7 @@ import {
   probeSetupSurface,
   readSetupHealthStatus,
   readSetupBootstrapStatus,
+  useSetupWizard,
 } from './useSetupWizard'
 import { OPENCODE_PLATFORM_BASE_URLS } from '../types/setup-constants'
 
@@ -235,5 +237,59 @@ describe('useSetupWizard helpers', () => {
         detail: 'Kimi (Moonshot) health check failed. Verify the credential and network access.',
       }],
     })
+  })
+})
+
+describe('useSetupWizard daemon toggle (audit 10.1 / 10.6 / D25)', () => {
+  const originalFetch = globalThis.fetch
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch
+    vi.restoreAllMocks()
+  })
+
+  function installFetchMock() {
+    const saves: Array<Record<string, string>> = []
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      if (url.startsWith('/api/setup/csrf')) {
+        return new Response(JSON.stringify({ token: 'csrf-1' }), { status: 200 })
+      }
+      if (url === '/api/setup' && init?.method === 'POST') {
+        saves.push(JSON.parse(String(init.body)) as Record<string, string>)
+        return new Response(JSON.stringify({ success: true, readyUrl: '/' }), { status: 200 })
+      }
+      // Bootstrap polling after a save: report failure so the poller stops.
+      if (url.startsWith('/api/setup/status')) {
+        return new Response(JSON.stringify({ state: 'failed', detail: 'test stop' }), { status: 200 })
+      }
+      return new Response('{}', { status: 404 })
+    })
+    globalThis.fetch = fetchMock as unknown as typeof fetch
+    return saves
+  }
+
+  it('saves STRADA_DAEMON_ENABLED=true when the user never touched the toggle (runtime default is on)', async () => {
+    const saves = installFetchMock()
+    const { result, unmount } = renderHook(() => useSetupWizard())
+    expect(result.current.daemonEnabled).toBe(true)
+    act(() => { result.current.setRagEnabled(false) }) // no embedding provider needed to reach save
+    await act(async () => { await result.current.save() })
+    await waitFor(() => expect(saves).toHaveLength(1))
+    expect(saves[0]!.STRADA_DAEMON_ENABLED).toBe('true')
+    unmount()
+  })
+
+  it('saves STRADA_DAEMON_ENABLED=false only after an explicit opt-out (guard)', async () => {
+    const saves = installFetchMock()
+    const { result, unmount } = renderHook(() => useSetupWizard())
+    act(() => {
+      result.current.setRagEnabled(false)
+      result.current.setDaemonEnabled(false)
+    })
+    await act(async () => { await result.current.save() })
+    await waitFor(() => expect(saves).toHaveLength(1))
+    expect(saves[0]!.STRADA_DAEMON_ENABLED).toBe('false')
+    unmount()
   })
 })

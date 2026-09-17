@@ -231,6 +231,23 @@ describe("SetupWizard path validation", () => {
     expect(lines).toContain('EMBEDDING_MODEL="bge-m3"');
   });
 
+  it("writes STRADA_DAEMON_ENABLED=true explicitly when the key is untouched or true (audit 10.1 / 10.6 / D25)", () => {
+    // The handoff reloads .env with dotenv override, which can overwrite a
+    // stale process.env value but never delete one — so an omitted key left a
+    // previous "false" in force after the user re-enabled autonomy.
+    const untouched = buildSetupEnvLines({ PROVIDER_CHAIN: "kimi", KIMI_API_KEY: "sk" }, homedir(), 3000);
+    expect(untouched).toContain("STRADA_DAEMON_ENABLED=true");
+    const explicit = buildSetupEnvLines({ PROVIDER_CHAIN: "kimi", KIMI_API_KEY: "sk", STRADA_DAEMON_ENABLED: "true" }, homedir(), 3000);
+    expect(explicit).toContain("STRADA_DAEMON_ENABLED=true");
+    expect(explicit.filter((l) => l.startsWith("STRADA_DAEMON_ENABLED="))).toHaveLength(1);
+  });
+
+  it("writes STRADA_DAEMON_ENABLED=false for an explicit opt-out (guard)", () => {
+    const lines = buildSetupEnvLines({ PROVIDER_CHAIN: "kimi", KIMI_API_KEY: "sk", STRADA_DAEMON_ENABLED: "false" }, homedir(), 3000);
+    expect(lines).toContain("STRADA_DAEMON_ENABLED=false");
+    expect(lines).not.toContain("STRADA_DAEMON_ENABLED=true");
+  });
+
   it("omits EMBEDDING_MODEL when provider is auto", () => {
     const lines = buildSetupEnvLines({
       PROVIDER_CHAIN: "claude",

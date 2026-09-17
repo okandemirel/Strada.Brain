@@ -23,7 +23,6 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import * as path from "node:path";
-import * as dotenv from "dotenv";
 import { loadConfig, loadConfigSafe, resetConfigCache } from "./config/config.js";
 import { createLogger } from "./utils/logger.js";
 import { Daemon } from "./gateway/daemon.js";
@@ -35,6 +34,7 @@ import { Daemon } from "./gateway/daemon.js";
 // bootstraps. It is imported dynamically at its single call site instead.
 import { createContainer } from "./core/di-container.js";
 import { shouldEnableDaemonMode } from "./core/daemon-mode.js";
+import { reloadEnvAfterSetup } from "./core/setup-env-reload.js";
 import { SetupWizard, buildSetupAccessUrl, buildSetupReadyUrl } from "./core/setup-wizard.js";
 import { AppError, setupGlobalErrorHandlers } from "./common/errors.js";
 import { acquireRuntimeLock } from "./core/runtime-lock.js";
@@ -447,7 +447,7 @@ async function startApp(
   let activeWizard: SetupWizard | null = initialWizard;
 
   if (activeWizard) {
-    dotenv.config({ path: resolveDotenvPath({ moduleUrl: import.meta.url }), override: true });
+    reloadEnvAfterSetup({ path: resolveDotenvPath({ moduleUrl: import.meta.url }) });
     resetConfigCache();
   }
 
@@ -473,7 +473,7 @@ async function startApp(
         await wizard.start();
         console.log("Setup complete! Validating configuration...");
         // Reload .env into process.env and reset config cache
-        dotenv.config({ path: resolveDotenvPath({ moduleUrl: import.meta.url }), override: true });
+        reloadEnvAfterSetup({ path: resolveDotenvPath({ moduleUrl: import.meta.url }) });
         resetConfigCache();
         configResult = loadConfigSafe();
         if (configResult.kind === "ok") {
@@ -497,7 +497,7 @@ async function startApp(
       await wizard.start();
       console.log("Setup complete! Validating configuration...");
       await wizard.shutdown();
-      dotenv.config({ path: resolveDotenvPath({ moduleUrl: import.meta.url }), override: true });
+      reloadEnvAfterSetup({ path: resolveDotenvPath({ moduleUrl: import.meta.url }) });
       resetConfigCache();
       configResult = loadConfigSafe();
       if (configResult.kind === "err") {

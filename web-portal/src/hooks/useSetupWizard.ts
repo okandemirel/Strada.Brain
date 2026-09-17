@@ -373,7 +373,12 @@ export function useSetupWizard() {
   const [ragEnabled, setRagEnabledState] = useState(true)
   const [embeddingProvider, setEmbeddingProviderState] = useState('auto')
   const [embeddingModel, setEmbeddingModelState] = useState('')
-  const [daemonEnabled, setDaemonEnabledState] = useState(false)
+  // Background autonomy is DEFAULT-ON in the runtime (shouldEnableDaemonMode
+  // treats anything but "false" as on) and documented as such. The wizard
+  // used to start this at false and always write the key, so a user who never
+  // touched the toggle saved STRADA_DAEMON_ENABLED=false and silently lost
+  // the product's core loop (audit 10.1 / 10.6 / D25).
+  const [daemonEnabled, setDaemonEnabledState] = useState(true)
   const [autonomyEnabled, setAutonomyEnabledState] = useState(false)
   const [autonomyHours, setAutonomyHoursState] = useState(4)
   const [daemonBudget, setDaemonBudgetState] = useState(1.0)
