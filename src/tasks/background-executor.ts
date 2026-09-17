@@ -2191,6 +2191,11 @@ export class BackgroundExecutor {
           triggerName: task.triggerName,
           ...(task.agentId ? { agentId: task.agentId } : {}),
           ...(reservationId ? { reservationId } : {}),
+          // WHAT THIS PIECE OF WORK COST (plan 6.1): recorded against the task
+          // and its campaign, so the delivery package can answer with a number
+          // instead of saying no ledger attributes a dollar to it.
+          taskId: String(task.id),
+          ...(task.campaignId ? { campaignId: task.campaignId } : {}),
         });
         return;
       }

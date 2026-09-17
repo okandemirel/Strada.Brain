@@ -1617,6 +1617,7 @@ async function bootstrapImpl(
     commandHandler,
     messageRouter,
     realTreeGuardian,
+    campaignManager,
   } = await initializeTaskRuntimeStage({
     daemonMode: Boolean(options.daemonMode),
     metrics,
@@ -1738,6 +1739,16 @@ async function bootstrapImpl(
     process.env,
   );
   sharedDaemonStorage.migrateBudgetSource();
+  // WHAT THIS CAMPAIGN COST (plan 6.1): the ledger keys spend by campaign now,
+  // and the delivery package asks for it here — the campaign layer never opens
+  // daemon.db itself.
+  campaignManager?.setCampaignSpendReader((campaignId) => {
+    try {
+      return sharedDaemonStorage.sumBudgetForCampaign(campaignId);
+    } catch {
+      return undefined;
+    }
+  });
   // Reservations of runs that did not survive: their unbilled remainder is
   // booked as spend before anything new reserves (Codex round 8 #2).
   sharedUnifiedBudgetManager.reconcileOrphanedReservations();

@@ -280,6 +280,8 @@ export class DaemonStorage {
   // Prepared statement cache
   private stmts: {
     insertBudget?: Database.Statement;
+    sumBudgetForTask?: Database.Statement;
+    sumBudgetForCampaign?: Database.Statement;
     upsertReservation?: Database.Statement;
     chargeReservation?: Database.Statement;
     deleteReservation?: Database.Statement;
@@ -472,6 +474,28 @@ export class DaemonStorage {
     this.db!.exec(
       `CREATE INDEX IF NOT EXISTS idx_budget_source ON budget_entries(source, timestamp)`,
     );
+    // WHAT DID THIS PIECE OF WORK COST (plan 6.1): spend was keyed by source
+    // and window only, so no query could attribute a dollar to a task or a
+    // campaign. Both are optional — a cost nobody attributed still records.
+    for (const column of ["task_id TEXT DEFAULT NULL", "campaign_id TEXT DEFAULT NULL"]) {
+      try {
+        this.db!.exec(`ALTER TABLE budget_entries ADD COLUMN ${column}`);
+      } catch {
+        // Column already exists -- safe to ignore
+      }
+    }
+    this.db!.exec(
+      `CREATE INDEX IF NOT EXISTS idx_budget_task ON budget_entries(task_id, timestamp)`,
+    );
+    this.db!.exec(
+      `CREATE INDEX IF NOT EXISTS idx_budget_campaign ON budget_entries(campaign_id, timestamp)`,
+    );
+    this.stmts.sumBudgetForTask = this.db!.prepare(
+      `SELECT COALESCE(SUM(cost_usd), 0) AS total, COUNT(*) AS entries FROM budget_entries WHERE task_id = ?`,
+    );
+    this.stmts.sumBudgetForCampaign = this.db!.prepare(
+      `SELECT COALESCE(SUM(cost_usd), 0) AS total, COUNT(*) AS entries FROM budget_entries WHERE campaign_id = ?`,
+    );
 
 
     this.stmts.sumBudgetBySource = this.db!.prepare(
@@ -485,11 +509,36 @@ export class DaemonStorage {
     );
 
     this.stmts.insertBudgetWithSourceAndAgent = this.db!.prepare(
-      `INSERT INTO budget_entries (cost_usd, model, tokens_in, tokens_out, trigger_name, timestamp, agent_id, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO budget_entries (cost_usd, model, tokens_in, tokens_out, trigger_name, timestamp, agent_id, source, task_id, campaign_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.stmts.insertBudgetWithSource = this.db!.prepare(
-      `INSERT INTO budget_entries (cost_usd, model, tokens_in, tokens_out, trigger_name, timestamp, source) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO budget_entries (cost_usd, model, tokens_in, tokens_out, trigger_name, timestamp, source, task_id, campaign_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
+  }
+
+  /**
+   * What one task, or one campaign, actually cost (plan 6.1).
+   *
+   * `entries` is part of the answer: zero entries means nothing was
+   * attributed to this work, which is not the same as costing nothing.
+   */
+  sumBudgetForTask(taskId: string): { totalUsd: number; entries: number } {
+    this.assertOpen();
+    if (!this.stmts.sumBudgetForTask) {
+      throw new Error("Budget source migration not applied. Call migrateBudgetSource() first.");
+    }
+    const row = this.stmts.sumBudgetForTask.get(taskId) as { total: number; entries: number };
+    return { totalUsd: row.total, entries: row.entries };
+  }
+
+  /** What every task of one campaign cost together (plan 6.1). */
+  sumBudgetForCampaign(campaignId: string): { totalUsd: number; entries: number } {
+    this.assertOpen();
+    if (!this.stmts.sumBudgetForCampaign) {
+      throw new Error("Budget source migration not applied. Call migrateBudgetSource() first.");
+    }
+    const row = this.stmts.sumBudgetForCampaign.get(campaignId) as { total: number; entries: number };
+    return { totalUsd: row.total, entries: row.entries };
   }
 
   /** Insert a budget cost entry with an agent_id (multi-agent support) */
@@ -683,6 +732,8 @@ export class DaemonStorage {
     timestamp: number;
     source: string;
     agentId?: string | null;
+    taskId?: string | null;
+    campaignId?: string | null;
   }): void {
     this.assertOpen();
     if (entry.agentId) {
@@ -699,6 +750,8 @@ export class DaemonStorage {
         entry.timestamp,
         entry.agentId,
         entry.source,
+        entry.taskId ?? null,
+        entry.campaignId ?? null,
       );
     } else {
       if (!this.stmts.insertBudgetWithSource) {
@@ -712,6 +765,8 @@ export class DaemonStorage {
         entry.triggerName ?? null,
         entry.timestamp,
         entry.source,
+        entry.taskId ?? null,
+        entry.campaignId ?? null,
       );
     }
   }

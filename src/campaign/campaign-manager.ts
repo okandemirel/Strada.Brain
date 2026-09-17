@@ -1887,7 +1887,7 @@ export class CampaignManager {
       campaign.chatId,
       campaign.channelType,
       GDD_DRAFT_PROMPT(campaign.ideaText ?? "", revisionNote),
-      { userId: campaign.userId, conversationId: campaign.conversationId },
+      { userId: campaign.userId, conversationId: campaign.conversationId, campaignId: campaign.id },
     );
     campaign.draftTaskId = task.id;
     this.persist(campaign);
@@ -2291,6 +2291,8 @@ export class CampaignManager {
       {
         userId: campaign.userId,
         conversationId: campaign.conversationId,
+        // Its spend belongs to this campaign (plan 6.1).
+        campaignId: campaign.id,
         // A NEW GENERATION after a deliberate stop: linking the new attempt to
         // a lineage someone cancelled makes it inherit that stop for ever, so
         // the revival that a person just asked for abandons its own recovery
@@ -7119,6 +7121,10 @@ export class CampaignManager {
       ...(howToRun.note === undefined ? {} : { howToRunNote: howToRun.note }),
       ...(ledgerRows === undefined ? {} : { ledgerRows }),
       ...(ledgerNote === undefined ? {} : { ledgerNote }),
+      ...(() => {
+        const spend = this.campaignSpend?.(campaign.id);
+        return spend === undefined ? {} : { spend };
+      })(),
     });
   }
 
@@ -7450,6 +7456,18 @@ export class CampaignManager {
    * report rather than read as "every receipt is fine".
    */
   private evidenceLedger?: EvidenceLedger | null;
+
+  /**
+   * What this campaign's work cost, from the budget ledger's own per-campaign
+   * total (plan 6.1). Injected because the campaign layer has no business
+   * opening daemon.db itself; absent means nobody read it, which the delivery
+   * package reports as unread rather than as zero.
+   */
+  private campaignSpend?: (campaignId: string) => { totalUsd: number; entries: number } | undefined;
+
+  setCampaignSpendReader(reader: ((campaignId: string) => { totalUsd: number; entries: number } | undefined) | undefined): void {
+    this.campaignSpend = reader;
+  }
 
   private ledger(): EvidenceLedger | null {
     if (this.evidenceLedger !== undefined) return this.evidenceLedger;

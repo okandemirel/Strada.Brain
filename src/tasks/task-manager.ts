@@ -91,6 +91,8 @@ export class TaskManager extends EventEmitter {
       parentId?: TaskId;
       goalRootId?: string;
       agentId?: string;
+      /** The campaign this task serves, so its spend can be attributed (plan 6.1). */
+      campaignId?: string;
     },
   ): Task {
     const logger = getLogger();
@@ -104,6 +106,7 @@ export class TaskManager extends EventEmitter {
       userId: options?.userId,
       goalRootId: options?.goalRootId,
       agentId: options?.agentId,
+      campaignId: options?.campaignId,
       title: prompt.slice(0, 80),
       status: TaskStatus.pending,
       prompt,

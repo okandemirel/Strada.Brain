@@ -723,4 +723,53 @@ describe("DaemonStorage", () => {
       expect(rows[1]).toMatchObject({ chargedUsd: 0.5, lastActivityAt: 300, sourceId: null });
     });
   });
+
+  // =========================================================================
+  // What one piece of work cost (plan 6.1)
+  // =========================================================================
+
+  describe("spend attributed to a task and a campaign", () => {
+    it("answers for one task and one campaign, and says when nothing was attributed", () => {
+      storage.migrateBudgetSource();
+      storage.insertBudgetEntryWithSource({
+        costUsd: 0.4, timestamp: Date.now(), source: "daemon", taskId: "task_1", campaignId: "camp_1",
+      });
+      storage.insertBudgetEntryWithSource({
+        costUsd: 0.25, timestamp: Date.now(), source: "agent", agentId: "alice", taskId: "task_2", campaignId: "camp_1",
+      });
+      // …and a cost nobody attributed still records, against nothing.
+      storage.insertBudgetEntryWithSource({ costUsd: 1, timestamp: Date.now(), source: "chat" });
+
+      expect(storage.sumBudgetForTask("task_1")).toEqual({ totalUsd: 0.4, entries: 1 });
+      expect(storage.sumBudgetForCampaign("camp_1").entries).toBe(2);
+      expect(storage.sumBudgetForCampaign("camp_1").totalUsd).toBeCloseTo(0.65, 6);
+      // Zero entries is not zero dollars: the caller must be able to tell.
+      expect(storage.sumBudgetForTask("task_never")).toEqual({ totalUsd: 0, entries: 0 });
+      expect(storage.sumBudgetForCampaign("camp_never")).toEqual({ totalUsd: 0, entries: 0 });
+      // The global totals are untouched by the attribution.
+      expect(storage.sumBudgetSince(0)).toBeCloseTo(1.65, 6);
+    });
+
+    it("adds the columns to a database written before them", () => {
+      const restartDir = mkdtempSync(join(tmpdir(), "daemon-storage-cost-attr-"));
+      const dbPath = join(restartDir, "daemon.db");
+      try {
+        const first = new DaemonStorage(dbPath);
+        first.initialize();
+        first.migrateBudgetSource();
+        first.insertBudgetEntryWithSource({ costUsd: 0.5, timestamp: 1, source: "daemon", taskId: "task_old" });
+        first.close();
+        const second = new DaemonStorage(dbPath);
+        second.initialize();
+        second.migrateBudgetSource();
+        try {
+          expect(second.sumBudgetForTask("task_old")).toEqual({ totalUsd: 0.5, entries: 1 });
+        } finally {
+          second.close();
+        }
+      } finally {
+        rmSync(restartDir, { recursive: true, force: true });
+      }
+    });
+  });
 });

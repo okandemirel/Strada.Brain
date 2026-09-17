@@ -907,6 +907,13 @@ export interface DeliveryFactSources {
   /** The dispatch ledger for the delivering sprint, already read. */
   readonly ledgerRows?: readonly LedgerRow[];
   readonly ledgerNote?: string;
+  /**
+   * What this campaign's work cost, read from the budget ledger's own
+   * per-campaign total (plan 6.1). `entries` is part of the answer: zero
+   * entries means nothing was attributed to this work, which is not the same
+   * as costing nothing, and the package says which.
+   */
+  readonly spend?: { readonly totalUsd: number; readonly entries: number };
   readonly now?: number;
 }
 
@@ -1048,18 +1055,23 @@ export function gatherDeliveryPackageFacts(
         : {}),
     },
     spend: {
-      // THE ONE CONTRACT THAT DOES NOT EXIST. `budget_entries` records spend
-      // by source and window (daemon/agent/chat/verification) with no task or
-      // campaign column, and the per-node cost the supervisor computes dies
-      // with the process (searched 2026-09-17). Attributing a window's total
-      // to this campaign would be an invented measurement, so the package
-      // says what is true: nobody recorded what this work cost.
-      usdNote:
-        "the budget ledger records spend by source and time window, not by campaign or task — " +
-        "no row attributes a dollar to this work",
+      // The ledger keys spend by campaign now (plan 6.1): a total with no
+      // entries behind it is reported as UNATTRIBUTED, never as zero dollars.
+      ...(sources.spend !== undefined && sources.spend.entries > 0
+        ? { usd: sources.spend.totalUsd }
+        : {
+            usdNote:
+              sources.spend === undefined
+                ? "nobody read the budget ledger for this campaign"
+                : "the budget ledger holds no row for this campaign — work done before costs " +
+                  "were attributed, or spend nobody recorded",
+          }),
       durationMs: Math.max(0, campaign.updatedAt - campaign.createdAt),
       durationNote: undefined,
-      source: "the campaign's own createdAt→updatedAt clock; spend has no per-campaign record",
+      source:
+        sources.spend !== undefined && sources.spend.entries > 0
+          ? `the budget ledger (${sources.spend.entries} entr${sources.spend.entries === 1 ? "y" : "ies"} keyed to this campaign) and the campaign's own clock`
+          : "the campaign's own createdAt→updatedAt clock; no ledger row names this campaign",
     },
     ...(sources.ledgerRows === undefined ? {} : { receipts: sources.ledgerRows }),
     ...(sources.ledgerNote === undefined ? {} : { receiptsNote: sources.ledgerNote }),

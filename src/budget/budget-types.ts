@@ -35,6 +35,16 @@ export interface CostMetadata {
    * once as its own untouched estimate (plan 2.12 / audit 03.1 / D20).
    */
   readonly reservationId?: string;
+  /**
+   * The task this cost belongs to, and the campaign it serves.
+   *
+   * budget_entries kept spend by source and time window only, so nothing could
+   * answer "what did this piece of work cost" — the delivery package (plan 6.1)
+   * had to report the duration and say plainly that no ledger attributes a
+   * dollar to it. With these, a task's own spend is a query.
+   */
+  readonly taskId?: string;
+  readonly campaignId?: string;
 }
 
 // ---------------------------------------------------------------------------

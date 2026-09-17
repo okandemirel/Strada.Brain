@@ -423,7 +423,8 @@ describe("gathering the facts", () => {
     // owner and must not be invented.
     expect(facts.spend?.durationMs).toBe(3_600_000);
     expect(facts.spend?.usd).toBeUndefined();
-    expect(facts.spend?.usdNote).toContain("not by campaign or task");
+    // Nobody handed the gatherer a spend reading: that is "unread", never $0.
+    expect(facts.spend?.usdNote).toContain("nobody read the budget ledger");
     const pkg = assembleDeliveryPackage(facts);
     expect(pkg.taskId).toBe("task_7");
     expect(pkg.assembledAt).toBe(42);
@@ -520,5 +521,46 @@ describe("DeliveryPackageStore — it survives the process that wrote it", () =>
     store.put(assembleDeliveryPackage({ campaign: campaign({ id: "c_a", state: "failed" }), now: 30 }), 30);
     const index = store.index();
     expect(index.map((r) => `${r.campaignId}@${r.revision}`)).toEqual(["c_a@2", "c_b@1"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Plan 6.1's open item, closed: the ledger keys spend by campaign now, so the
+// package answers with a number — and still refuses to invent one.
+// ---------------------------------------------------------------------------
+describe("what the work cost", () => {
+  it("reports the ledger's own total for this campaign, with the entries behind it", () => {
+    const facts = gatherDeliveryPackageFacts(campaign(), {
+      projectRoot: "/p",
+      spend: { totalUsd: 1.2345, entries: 7 },
+    });
+    expect(facts.spend?.usd).toBeCloseTo(1.2345, 6);
+    expect(facts.spend?.usdNote).toBeUndefined();
+    expect(facts.spend?.source).toContain("7 entries");
+    const pkg = assembleDeliveryPackage(facts);
+    const cost = pieceOf(pkg, "cost");
+    expect(cost.state).toBe("present");
+    expect(cost.summary).toContain("1.23");
+    expect(cost.missing ?? []).toEqual([]);
+  });
+
+  it("a total with no entries behind it is UNATTRIBUTED, never zero dollars", () => {
+    const facts = gatherDeliveryPackageFacts(campaign(), {
+      projectRoot: "/p",
+      spend: { totalUsd: 0, entries: 0 },
+    });
+    expect(facts.spend?.usd).toBeUndefined();
+    expect(facts.spend?.usdNote).toContain("no row for this campaign");
+    const cost = pieceOf(assembleDeliveryPackage(facts), "cost");
+    expect(cost.summary).toContain("NOT MEASURED");
+    expect(cost.missing.join(" ")).toContain("what it cost");
+  });
+
+  it("one entry reads as one entry (guard)", () => {
+    const facts = gatherDeliveryPackageFacts(campaign(), {
+      projectRoot: "/p",
+      spend: { totalUsd: 0.5, entries: 1 },
+    });
+    expect(facts.spend?.source).toContain("1 entry");
   });
 });

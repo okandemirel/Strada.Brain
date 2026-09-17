@@ -115,6 +115,15 @@ export interface Task {
    * agent's cap never filled (audit 03.5 / D23, 2026-09-13).
    */
   agentId?: string;
+  /**
+   * The campaign this task serves, when a campaign submitted it.
+   *
+   * Spend was keyed by source and time window only, so nothing could answer
+   * "what did this milestone cost" — the delivery package had to report the
+   * duration and say plainly that no ledger attributes a dollar to the work
+   * (plan 6.1). Recorded on every cost this task books.
+   */
+  campaignId?: string;
   title: string;
   status: TaskStatus;
   prompt: string;
