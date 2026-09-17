@@ -177,7 +177,9 @@ describe("handleCanvasRoute", () => {
       });
 
       expect(res.statusCode).toBe(200);
-      expect(responseJson(res)).toEqual({ status: "saved", sessionId: "session-abc" });
+      // The ack carries the stored version: the client sends it back on the
+      // next save so a concurrent write gets a 409 (plan 2.6 / Codex #25).
+      expect(responseJson(res)).toEqual({ status: "saved", sessionId: "session-abc", version: 1 });
       expect(storage.save).toHaveBeenCalledWith(
         expect.objectContaining({
           sessionId: "session-abc",

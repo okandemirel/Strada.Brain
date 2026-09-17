@@ -5,7 +5,8 @@
     "agentVisuals": "Agenten-Visualisierungen {{count}}",
     "agentSync": "Agenten-Sync {{time}}",
     "queue": "Warteschlange {{count}}",
-    "selected": "{{count}} ausgewählt"
+    "selected": "{{count}} ausgewählt",
+    "saveConflict": "Diese Leinwand wurde anderswo geändert. Ihre Änderungen bleiben hier, sind aber nicht gespeichert - neu laden, um die andere Version zu sehen."
   },
   "cards": {
     "aiBadge": "KI",

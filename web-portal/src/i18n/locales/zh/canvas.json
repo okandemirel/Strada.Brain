@@ -5,7 +5,8 @@
     "agentVisuals": "智能体可视化 {{count}}",
     "agentSync": "智能体同步 {{time}}",
     "queue": "队列 {{count}}",
-    "selected": "已选择{{count}}个"
+    "selected": "已选择{{count}}个",
+    "saveConflict": "此画布已在别处更改。你的编辑仍在此处但尚未保存 - 重新加载可查看另一个版本。"
   },
   "cards": {
     "aiBadge": "AI",

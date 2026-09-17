@@ -5,7 +5,8 @@
     "agentVisuals": "Visuales del agente {{count}}",
     "agentSync": "Sincronizacion del agente {{time}}",
     "queue": "Cola {{count}}",
-    "selected": "{{count}} seleccionados"
+    "selected": "{{count}} seleccionados",
+    "saveConflict": "Este lienzo cambio en otro lugar. Tus ediciones siguen aqui pero no estan guardadas - recarga para ver la otra version."
   },
   "cards": {
     "aiBadge": "IA",

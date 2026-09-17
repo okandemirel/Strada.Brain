@@ -5,7 +5,8 @@
     "agentVisuals": "Ajan görselleri {{count}}",
     "agentSync": "Ajan senkronizasyonu {{time}}",
     "queue": "Kuyruk {{count}}",
-    "selected": "{{count}} seçili"
+    "selected": "{{count}} seçili",
+    "saveConflict": "Bu tuval başka bir yerde değişti. Düzenlemeleriniz burada duruyor ama kaydedilmedi - diğer sürümü görmek için yenileyin."
   },
   "cards": {
     "aiBadge": "AI",

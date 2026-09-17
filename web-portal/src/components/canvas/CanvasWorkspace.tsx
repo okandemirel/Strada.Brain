@@ -17,6 +17,13 @@ import { useMonitorStore } from '../../stores/monitor-store'
 import { useSessionStore } from '../../stores/session-store'
 import { normalizeCanvasIncomingShape } from './canvas-shape-normalizer'
 import { getDefaultDimensions, type ResolvedShape } from './canvas-types'
+import {
+  canvasSavePayload,
+  parseCanvasConnections,
+  readCanvasVersion,
+  samePayload,
+  saveCanvasState,
+} from './canvas-persistence'
 import { useCanvasBridge, shapesToNodes, connectionsToEdges } from '../../hooks/use-canvas-bridge'
 import { useCanvasShortcuts } from '../../hooks/use-canvas-shortcuts'
 import { useWS } from '../../hooks/useWS'
@@ -67,6 +74,7 @@ function CanvasWorkspaceInner() {
   const clearPendingViewport = useCanvasStore((s) => s.clearPendingViewport)
   const clearPendingLayout = useCanvasStore((s) => s.clearPendingLayout)
   const addConnection = useCanvasStore((s) => s.addConnection)
+  const setConnections = useCanvasStore((s) => s.setConnections)
   const pushUndo = useCanvasStore((s) => s.pushUndo)
 
   const sessionId = useSessionStore((s) => s.sessionId)
@@ -85,6 +93,10 @@ function CanvasWorkspaceInner() {
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null)
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const prevShapeIdsRef = useRef(new Set<string>())
+  // The version the server holds for this session: sent with every save so a
+  // second window's write is refused with 409 instead of overwriting (2.6).
+  const savedVersionRef = useRef<number | undefined>(undefined)
+  const [saveConflict, setSaveConflict] = useState(false)
 
   const { sendRawJSON } = useWS()
 
@@ -162,7 +174,12 @@ function CanvasWorkspaceInner() {
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
         if (cancelled) return
-        if (!data?.canvas?.shapes) return
+        if (!data?.canvas) return
+        savedVersionRef.current = readCanvasVersion(data.canvas)
+        // Connections were drawn and then lost on every reload: they are part
+        // of the saved canvas now (2.6 / D33).
+        setConnections(parseCanvasConnections(data.canvas.connections))
+        if (!data.canvas.shapes) return
 
         try {
           const parsed = JSON.parse(data.canvas.shapes)
@@ -218,14 +235,25 @@ function CanvasWorkspaceInner() {
     if (!isDirty || !sessionId) return
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
     saveTimerRef.current = setTimeout(() => {
-      const { shapes: currentShapes, viewport: currentViewport } = useCanvasStore.getState()
-      fetch(`/api/canvas/${encodeURIComponent(sessionId)}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ shapes: JSON.stringify(currentShapes), viewport: JSON.stringify(currentViewport) }),
-      })
-        .then(() => setDirty(false))
-        .catch(() => { /* silent */ })
+      const state = useCanvasStore.getState()
+      const sent = canvasSavePayload(state.shapes, state.connections, state.viewport)
+      void saveCanvasState({ sessionId, payload: sent, version: savedVersionRef.current })
+        .then((result) => {
+          if (result.kind === 'conflict') {
+            // Someone else wrote this canvas: keep the work dirty and say so.
+            setSaveConflict(true)
+            return
+          }
+          if (result.kind === 'failed') return // still dirty: it was never stored
+          setSaveConflict(false)
+          savedVersionRef.current = result.version
+          // DIRTY IS CLEARED FOR THE ACKED REVISION ONLY: an edit made while
+          // the request was in flight must survive (Codex #25).
+          const now = useCanvasStore.getState()
+          if (samePayload(sent, canvasSavePayload(now.shapes, now.connections, now.viewport))) {
+            setDirty(false)
+          }
+        })
     }, SAVE_DEBOUNCE_MS)
     return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current) }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -347,6 +375,14 @@ function CanvasWorkspaceInner() {
 
   return (
     <div className="relative flex h-full w-full flex-col bg-[#060a10]">
+      {/* A save the server refused: someone else wrote this canvas. The work
+          stays dirty, so nothing is lost while the person decides. */}
+      {saveConflict && (
+        <div className="absolute top-3 left-3 z-20 max-w-sm rounded-lg border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+          {t('panel.saveConflict')}
+        </div>
+      )}
+
       {/* Floating toolbar */}
       <div className="absolute top-3 left-1/2 z-10 -translate-x-1/2">
         <CanvasToolbar getViewportCenter={getViewportCenter} />

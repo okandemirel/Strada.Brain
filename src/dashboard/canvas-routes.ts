@@ -57,6 +57,27 @@ function readJsonBody<T>(
   });
 }
 
+/**
+ * Connections the canvas may store: an id and the two shape ids it joins.
+ * They were drawn, held in the store and then dropped on save, so a reopened
+ * session showed shapes with no arrows (plan 2.6 / audit 11.3 / D33).
+ */
+function validConnections(raw: unknown, sessionId: string): Array<Record<string, unknown>> {
+  const list = typeof raw === "string"
+    ? (() => { try { return JSON.parse(raw) as unknown; } catch { return []; } })()
+    : (raw ?? []);
+  if (!Array.isArray(list)) return [];
+  return list.filter((c: unknown) => {
+    if (!c || typeof c !== "object") return false;
+    const conn = c as Record<string, unknown>;
+    if (typeof conn.id !== "string" || typeof conn.from !== "string" || typeof conn.to !== "string") {
+      getLogger().warn("Filtered invalid canvas connection", { sessionId, connection: conn });
+      return false;
+    }
+    return true;
+  }) as Array<Record<string, unknown>>;
+}
+
 /** Validate sessionId from URL: non-empty, max 128 chars, no path traversal, no null bytes or backslashes. */
 function isValidSessionId(id: string): boolean {
   return id.length > 0 && id.length <= 128 && !/[/\\\x00]/.test(id) && !id.includes("..");
@@ -124,9 +145,16 @@ export function handleCanvasRoute(
         jsonResponse(res, 500, { error: "Corrupted canvas state", sessionId });
         return true;
       }
+      let connections: unknown = [];
+      try {
+        connections = state.connections ? JSON.parse(state.connections) : [];
+      } catch {
+        connections = [];
+      }
       jsonResponse(res, 200, {
         sessionId: state.sessionId,
         shapes,
+        connections,
         viewport: state.viewport ? JSON.parse(state.viewport) : null,
         exportedAt: Date.now(),
       });
@@ -191,6 +219,7 @@ export function handleCanvasRoute(
         userId: parsed.userId,
         projectFingerprint: parsed.projectFingerprint,
         shapes: JSON.stringify(validShapes),
+        connections: JSON.stringify(validConnections(parsed.connections, sessionId)),
         viewport: typeof parsed.viewport === "string" ? parsed.viewport : (parsed.viewport ? JSON.stringify(parsed.viewport) : undefined),
         version: parsed.version,
         createdAt: parsed.createdAt ?? now,
@@ -203,7 +232,11 @@ export function handleCanvasRoute(
           jsonResponse(res, 409, { error: "Version conflict", sessionId });
           return;
         }
-        jsonResponse(res, 200, { status: "saved", sessionId });
+        // The saved version goes back with the ack: the client stores it and
+        // sends it on the next save, so a concurrent write is refused with 409
+        // instead of silently overwriting (plan 2.6 / Codex #25).
+        const stored = canvasStorage.getBySession(sessionId);
+        jsonResponse(res, 200, { status: "saved", sessionId, version: stored?.version ?? 1 });
       } catch {
         jsonResponse(res, 500, { error: "Failed to save canvas" });
       }

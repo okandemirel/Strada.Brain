@@ -14,6 +14,12 @@ export interface CanvasState {
   userId?: string;
   projectFingerprint?: string;
   shapes: string; // JSON array of shape objects
+  /**
+   * JSON array of connections between shapes. The canvas drew them and the
+   * store held them, but nothing persisted them: reopening a session showed
+   * the boxes without a single arrow (plan 2.6 / audit 11.3 / D33).
+   */
+  connections?: string;
   viewport?: string; // JSON { x, y, zoom }
   version?: number; // optimistic locking version, auto-incremented on update
   createdAt: number;
@@ -31,14 +37,15 @@ export class CanvasStorage {
     this.initialize();
 
     this.stmtGetBySession = this.db.prepare(
-      "SELECT id, session_id, user_id, project_fingerprint, shapes, viewport, version, created_at, updated_at FROM canvas_states WHERE session_id = ?",
+      "SELECT id, session_id, user_id, project_fingerprint, shapes, connections, viewport, version, created_at, updated_at FROM canvas_states WHERE session_id = ?",
     );
 
     this.stmtUpsert = this.db.prepare(`
-      INSERT INTO canvas_states (id, session_id, user_id, project_fingerprint, shapes, viewport, version, created_at, updated_at)
-      VALUES (@id, @sessionId, @userId, @projectFingerprint, @shapes, @viewport, 1, @createdAt, @updatedAt)
+      INSERT INTO canvas_states (id, session_id, user_id, project_fingerprint, shapes, connections, viewport, version, created_at, updated_at)
+      VALUES (@id, @sessionId, @userId, @projectFingerprint, @shapes, @connections, @viewport, 1, @createdAt, @updatedAt)
       ON CONFLICT(id) DO UPDATE SET
         shapes = @shapes,
+        connections = @connections,
         viewport = @viewport,
         user_id = @userId,
         project_fingerprint = @projectFingerprint,
@@ -49,6 +56,7 @@ export class CanvasStorage {
     this.stmtUpsertVersioned = this.db.prepare(`
       UPDATE canvas_states SET
         shapes = @shapes,
+        connections = @connections,
         viewport = @viewport,
         user_id = @userId,
         project_fingerprint = @projectFingerprint,
@@ -62,7 +70,7 @@ export class CanvasStorage {
     );
 
     this.stmtListByProject = this.db.prepare(
-      "SELECT id, session_id, user_id, project_fingerprint, shapes, viewport, version, created_at, updated_at FROM canvas_states WHERE project_fingerprint = ? ORDER BY updated_at DESC LIMIT 100",
+      "SELECT id, session_id, user_id, project_fingerprint, shapes, connections, viewport, version, created_at, updated_at FROM canvas_states WHERE project_fingerprint = ? ORDER BY updated_at DESC LIMIT 100",
     );
   }
 
@@ -74,17 +82,23 @@ export class CanvasStorage {
         user_id TEXT,
         project_fingerprint TEXT,
         shapes TEXT NOT NULL DEFAULT '[]',
+        connections TEXT NOT NULL DEFAULT '[]',
         viewport TEXT,
         version INTEGER NOT NULL DEFAULT 1,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       )
     `);
-    // Migration: add version column to existing tables
-    try {
-      this.db.exec("ALTER TABLE canvas_states ADD COLUMN version INTEGER NOT NULL DEFAULT 1");
-    } catch {
-      // Column already exists — ignore
+    // Migrations for databases written before these columns existed.
+    for (const column of [
+      "version INTEGER NOT NULL DEFAULT 1",
+      "connections TEXT NOT NULL DEFAULT '[]'",
+    ]) {
+      try {
+        this.db.exec(`ALTER TABLE canvas_states ADD COLUMN ${column}`);
+      } catch {
+        // Column already exists — ignore
+      }
     }
     this.db.exec(
       "CREATE INDEX IF NOT EXISTS idx_canvas_session ON canvas_states(session_id)",
@@ -102,6 +116,7 @@ export class CanvasStorage {
           user_id: string | null;
           project_fingerprint: string | null;
           shapes: string;
+          connections: string | null;
           viewport: string | null;
           version: number;
           created_at: number;
@@ -117,6 +132,7 @@ export class CanvasStorage {
       userId: row.user_id ?? undefined,
       projectFingerprint: row.project_fingerprint ?? undefined,
       shapes: row.shapes,
+      connections: row.connections ?? "[]",
       viewport: row.viewport ?? undefined,
       version: row.version,
       createdAt: row.created_at,
@@ -132,6 +148,7 @@ export class CanvasStorage {
       userId: state.userId ?? null,
       projectFingerprint: state.projectFingerprint ?? null,
       shapes: state.shapes,
+      connections: state.connections ?? "[]",
       viewport: state.viewport ?? null,
       createdAt: state.createdAt,
       updatedAt: state.updatedAt,
@@ -166,6 +183,7 @@ export class CanvasStorage {
       user_id: string | null;
       project_fingerprint: string | null;
       shapes: string;
+      connections: string | null;
       viewport: string | null;
       version: number;
       created_at: number;
@@ -178,6 +196,7 @@ export class CanvasStorage {
       userId: row.user_id ?? undefined,
       projectFingerprint: row.project_fingerprint ?? undefined,
       shapes: row.shapes,
+      connections: row.connections ?? "[]",
       viewport: row.viewport ?? undefined,
       version: row.version,
       createdAt: row.created_at,

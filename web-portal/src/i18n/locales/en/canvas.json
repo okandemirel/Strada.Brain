@@ -5,7 +5,8 @@
     "agentVisuals": "Agent visuals {{count}}",
     "agentSync": "Agent sync {{time}}",
     "queue": "Queue {{count}}",
-    "selected": "{{count}} selected"
+    "selected": "{{count}} selected",
+    "saveConflict": "This canvas changed elsewhere. Your edits are kept here but not saved yet - reload to see the other version."
   },
   "cards": {
     "aiBadge": "AI",

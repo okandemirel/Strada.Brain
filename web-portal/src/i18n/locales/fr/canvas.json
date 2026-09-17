@@ -5,7 +5,8 @@
     "agentVisuals": "Visuels de l'agent {{count}}",
     "agentSync": "Synchronisation de l'agent {{time}}",
     "queue": "File d'attente {{count}}",
-    "selected": "{{count}} sélectionnés"
+    "selected": "{{count}} sélectionnés",
+    "saveConflict": "Ce canevas a change ailleurs. Vos modifications restent ici mais ne sont pas enregistrees - rechargez pour voir l'autre version."
   },
   "cards": {
     "aiBadge": "IA",

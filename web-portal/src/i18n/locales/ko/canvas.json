@@ -5,7 +5,8 @@
     "agentVisuals": "에이전트 시각화 {{count}}",
     "agentSync": "에이전트 동기화 {{time}}",
     "queue": "대기열 {{count}}",
-    "selected": "{{count}}개 선택"
+    "selected": "{{count}}개 선택",
+    "saveConflict": "이 캔버스가 다른 곳에서 변경되었습니다. 편집 내용은 남아 있지만 저장되지 않았습니다. 다시 불러와 다른 버전을 확인하세요."
   },
   "cards": {
     "aiBadge": "AI",

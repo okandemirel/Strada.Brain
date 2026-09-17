@@ -16,6 +16,7 @@ describe("CanvasStorage", () => {
       userId: overrides.userId,
       projectFingerprint: overrides.projectFingerprint,
       shapes: overrides.shapes ?? "[]",
+      connections: overrides.connections,
       viewport: overrides.viewport,
       createdAt: overrides.createdAt ?? now,
       updatedAt: overrides.updatedAt ?? now,
@@ -509,6 +510,50 @@ describe("CanvasStorage", () => {
       readOnlyStorage.save(state);
       expect(readOnlyStorage.getBySession("ro-s")).not.toBeNull();
       readOnlyDb.close();
+    });
+  });
+
+  // =========================================================================
+  // Connections (plan 2.6 / audit 11.3 / D33)
+  // =========================================================================
+
+  describe("connections", () => {
+    it("stores and returns the connections between shapes", () => {
+      // They were drawn, held in the store, and dropped on save: a reopened
+      // session showed the boxes with no arrows at all.
+      const state = makeState({
+        id: "c-conn", sessionId: "s-conn",
+        shapes: JSON.stringify([{ id: "a", type: "note-block" }, { id: "b", type: "note-block" }]),
+        connections: JSON.stringify([{ id: "e1", from: "a", to: "b", label: "calls" }]),
+      });
+      storage.save(state);
+      const loaded = storage.getBySession("s-conn");
+      expect(JSON.parse(loaded!.connections!)).toEqual([{ id: "e1", from: "a", to: "b", label: "calls" }]);
+    });
+
+    it("keeps them across a versioned overwrite and defaults to none (guard)", () => {
+      const first = makeState({ id: "c-v", sessionId: "s-v", connections: JSON.stringify([{ id: "e1", from: "a", to: "b" }]) });
+      storage.save(first);
+      const version = storage.getBySession("s-v")!.version!;
+      storage.save({ ...first, connections: JSON.stringify([{ id: "e2", from: "b", to: "c" }]), version, updatedAt: Date.now() });
+      expect(JSON.parse(storage.getBySession("s-v")!.connections!)).toEqual([{ id: "e2", from: "b", to: "c" }]);
+
+      // A canvas that never had a connection reads back as an empty list.
+      storage.save(makeState({ id: "c-none", sessionId: "s-none" }));
+      expect(storage.getBySession("s-none")!.connections).toBe("[]");
+    });
+
+    it("adds the column to a database written before it existed", () => {
+      const legacy = new Database(":memory:");
+      legacy.exec(`CREATE TABLE canvas_states (
+        id TEXT PRIMARY KEY, session_id TEXT NOT NULL, user_id TEXT, project_fingerprint TEXT,
+        shapes TEXT NOT NULL DEFAULT '[]', viewport TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+      )`);
+      legacy.prepare("INSERT INTO canvas_states (id, session_id, shapes, created_at, updated_at) VALUES (?, ?, ?, ?, ?)")
+        .run("old", "s-old", "[]", 1, 1);
+      const migrated = new CanvasStorage(legacy);
+      expect(migrated.getBySession("s-old")!.connections).toBe("[]");
+      legacy.close();
     });
   });
 });
