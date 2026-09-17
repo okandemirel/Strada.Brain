@@ -108,7 +108,25 @@ batch editor is always NOT MEASURED — it is a loop rate, not the player's.
 | Lease dir left behind after a crash | `.strada-lease-owner.json` pid not alive | the next boot salvages it (commits to a `lease-salvage/*` branch) — do not delete by hand |
 | `Task workspace had conflicting files — project kept, agent copy quarantined` | `<project>/.strada/lease-conflicts/` | the project's copy won because it changed during the run; merge by hand if the agent's copy is wanted |
 
-## 7. Universality rule
+## 7. Checks you can run yourself
+
+Each of these PERFORMS the thing it reports, and each says NOT MEASURED (never
+"ok") for the parts it could not perform. The exit codes are the same
+everywhere: **0** ran and passed, **1** ran and failed, **2** bad invocation,
+**3** something the run needed did NOT run — unproven, never accepted.
+
+| Command | What it actually does | Where it stops |
+|---|---|---|
+| `npm run smoke:boot` | boots the built CLI and shuts it down | needs `dist/` (run `npm run build` first) |
+| `node scripts/ci/first-run-rehearsal.mjs` | walks a new developer's path in a THROWAWAY home and project: `strada doctor` with no configuration (must fail and name the setup command), a configuration written through production's persistence, then `strada doctor` again | the human trial (8-12 developers), the wizard's own screens and the first campaign plan are NOT MEASURED, with reasons |
+| `npm run accept:release` | performs a clean install, an upgrade over an existing home, and a backup → restore | the upgrade row needs a REAL previous release (`--previous-release <tgz>`, a `tests/fixtures/release-acceptance/*.tgz`, or the registry); without one it exits 3 rather than claiming an upgrade it never installed |
+| `npm run restore:db -- --help` | restores the runtime databases from a backup archive, refusing a tampered one and refusing while a database still has users | `--project-root` redirects project data when restoring onto another machine |
+| `node scripts/eval/learning-eval.mjs --ablation-only` | trains three arms on throwaway databases and measures repeat-error reduction, harmful recall and cost per accepted result | the answer-quality arm needs a live provider; it reports NOT MEASURED instead of spending credit. It exits **1** today: harmful recall is 0.40 against a pre-registered budget of 0.34 — a real open finding about retrieval precision, not a broken harness |
+
+Two rules that hold for all of them: a pre-registered budget is never moved to
+make a run green, and a step that did not run is never folded into a pass.
+
+## 8. Universality rule
 
 Nothing in `src/` may carry a game's own names, scene names or defaults. The
 game-facing contracts live in Strada.Core (`Strada.Core.Play.IPlaythroughDriver`,
