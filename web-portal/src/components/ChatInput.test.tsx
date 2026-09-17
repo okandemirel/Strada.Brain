@@ -69,6 +69,45 @@ describe('ChatInput', () => {
     expect(screen.getByText('test.txt')).toBeInTheDocument()
   })
 
+  it('tells the user why a dropped file was not attached instead of dropping it silently (D37)', () => {
+    render(<ChatInput onSend={onSend} disabled={false} />)
+    const dropZone = screen.getByPlaceholderText(/Send a message/).closest('div[class*="flex flex-col"]')!
+
+    const docx = new File(['PK'], 'GDD.docx', {
+      type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    })
+    const noMime = new File(['x'], 'notes.md', { type: '' })
+    const huge = new File(['x'], 'capture.mp4', { type: 'video/mp4' })
+    Object.defineProperty(huge, 'size', { value: 21 * 1024 * 1024 })
+    fireEvent.drop(dropZone, { dataTransfer: { files: [docx, noMime, huge] } })
+
+    const alert = screen.getByRole('alert')
+    expect(alert).toHaveTextContent('GDD.docx: Word documents (.docx) are not accepted')
+    expect(alert).toHaveTextContent('notes.md: unsupported file type (unknown)')
+    expect(alert).toHaveTextContent('capture.mp4: larger than the 20 MB limit')
+    // None of them became an attachment.
+    expect(screen.queryByText('GDD.docx')).toBeNull()
+    expect(screen.queryByText('capture.mp4')).toBeNull()
+  })
+
+  it('names the file that exceeded the per-message limit (D37)', () => {
+    render(<ChatInput onSend={onSend} disabled={false} />)
+    const dropZone = screen.getByPlaceholderText(/Send a message/).closest('div[class*="flex flex-col"]')!
+    const files = Array.from({ length: 6 }, (_, i) => new File(['x'], `f${i}.txt`, { type: 'text/plain' }))
+    fireEvent.drop(dropZone, { dataTransfer: { files } })
+    expect(screen.getByRole('alert')).toHaveTextContent('f5.txt: at most 5 files per message')
+    expect(screen.getByText('f4.txt')).toBeInTheDocument()
+    expect(screen.queryByText('f5.txt')).toBeNull()
+  })
+
+  it('attaches an accepted type without any rejection notice (guard)', () => {
+    render(<ChatInput onSend={onSend} disabled={false} />)
+    const dropZone = screen.getByPlaceholderText(/Send a message/).closest('div[class*="flex flex-col"]')!
+    fireEvent.drop(dropZone, { dataTransfer: { files: [new File(['%PDF'], 'spec.pdf', { type: 'application/pdf' })] } })
+    expect(screen.getByText('spec.pdf')).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
   it('shows file preview after drop', () => {
     render(<ChatInput onSend={onSend} disabled={false} />)
 

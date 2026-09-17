@@ -62,12 +62,50 @@ function formatFileSize(bytes: number): string {
 
 const MAX_FILE_SIZE = 20 * 1024 * 1024
 const MAX_FILES = 5
+// Mirrors the server's ingest gate (src/utils/media-processor.ts
+// ALLOWED_*_TYPES): anything else is refused there with no reply to the chat,
+// so it is refused HERE with a reason the user can read (D37).
 const ALLOWED_TYPES = new Set([
   'image/jpeg', 'image/png', 'image/gif', 'image/webp',
   'video/mp4', 'video/webm', 'video/quicktime',
   'audio/mpeg', 'audio/ogg', 'audio/wav', 'audio/webm', 'audio/mp4',
   'application/pdf', 'text/plain', 'text/csv',
 ])
+// Word documents get their own message: the GDD intake can read a .docx
+// from other channels, but the web channel's ingest gate does not admit the
+// MIME, so a silently dropped GDD.docx was the most confusing case of all.
+const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+
+type FileRejection =
+  | { kind: 'docx'; name: string }
+  | { kind: 'type'; name: string; type: string }
+  | { kind: 'size'; name: string }
+  | { kind: 'limit'; name: string }
+
+/** Why each file in `incoming` may not be attached; accepted files are returned in order. */
+function partitionIncomingFiles(
+  incoming: File[],
+  alreadyAttached: number,
+): { accepted: File[]; rejected: FileRejection[] } {
+  const accepted: File[] = []
+  const rejected: FileRejection[] = []
+  for (const f of incoming) {
+    if (f.type === DOCX_MIME || /\.docx$/i.test(f.name)) {
+      rejected.push({ kind: 'docx', name: f.name })
+    } else if (!f.type || !ALLOWED_TYPES.has(f.type)) {
+      // An empty MIME used to be admitted here and then dropped by the server
+      // ("Missing MIME type") without a word.
+      rejected.push({ kind: 'type', name: f.name, type: f.type || 'unknown' })
+    } else if (f.size > MAX_FILE_SIZE) {
+      rejected.push({ kind: 'size', name: f.name })
+    } else if (alreadyAttached + accepted.length >= MAX_FILES) {
+      rejected.push({ kind: 'limit', name: f.name })
+    } else {
+      accepted.push(f)
+    }
+  }
+  return { accepted, rejected }
+}
 
 interface FilePreview {
   id: string
@@ -79,6 +117,7 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
   const { t } = useTranslation()
   const [text, setText] = useState('')
   const [files, setFiles] = useState<FilePreview[]>([])
+  const [rejections, setRejections] = useState<FileRejection[]>([])
   const [isDragOver, setIsDragOver] = useState(false)
   const [showCommands, setShowCommands] = useState(false)
   const [commandFilter, setCommandFilter] = useState('')
@@ -110,22 +149,25 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
   }, [])
 
   const addFiles = useCallback((newFiles: FileList | File[]) => {
-    const fileArray = Array.from(newFiles)
-    const filtered = fileArray
-      .filter((f) => f.size <= MAX_FILE_SIZE)
-      .filter((f) => !f.type || ALLOWED_TYPES.has(f.type))
-    setFiles((prev) => {
-      const remaining = MAX_FILES - prev.length
-      if (remaining <= 0) return prev
-      const toAdd = filtered.slice(0, remaining)
-      const previews: FilePreview[] = toAdd.map((file) => ({
-        id: crypto.randomUUID(),
-        file,
-        previewUrl: file.type.startsWith('image/') ? URL.createObjectURL(file) : null,
-      }))
-      return [...prev, ...previews]
-    })
+    const { accepted, rejected } = partitionIncomingFiles(Array.from(newFiles), filesRef.current.length)
+    setRejections(rejected)
+    if (accepted.length === 0) return
+    const previews: FilePreview[] = accepted.map((file) => ({
+      id: crypto.randomUUID(),
+      file,
+      previewUrl: file.type.startsWith('image/') ? URL.createObjectURL(file) : null,
+    }))
+    setFiles((prev) => [...prev, ...previews])
   }, [])
+
+  const describeRejection = useCallback((r: FileRejection): string => {
+    switch (r.kind) {
+      case 'docx': return t('chat.fileRejected.docx', { name: r.name })
+      case 'type': return t('chat.fileRejected.type', { name: r.name, type: r.type })
+      case 'size': return t('chat.fileRejected.size', { name: r.name, max: MAX_FILE_SIZE / (1024 * 1024) })
+      case 'limit': return t('chat.fileRejected.limit', { name: r.name, max: MAX_FILES })
+    }
+  }, [t])
 
   const removeFile = useCallback((index: number) => {
     setFiles((prev) => {
@@ -159,6 +201,7 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
 
       setText('')
       setFiles([])
+      setRejections([])
 
       // Reset mode override so auto-switch resumes after user sends a chat message
       useWorkspaceStore.getState().resetOverride()
@@ -316,6 +359,23 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
               <span className="text-[10px] font-mono text-text-tertiary/70">{cmd.usage}</span>
             </button>
           ))}
+        </div>
+      )}
+      {rejections.length > 0 && (
+        <div role="alert" className="flex items-start gap-2 py-2 text-xs text-warning">
+          <ul className="flex-1 flex flex-col gap-0.5">
+            {rejections.map((r, i) => (
+              <li key={`${r.name}-${i}`}>{describeRejection(r)}</li>
+            ))}
+          </ul>
+          <button
+            type="button"
+            onClick={() => setRejections([])}
+            className="shrink-0 text-text-tertiary hover:text-text-primary"
+            aria-label={t('chat.fileRejectedDismiss')}
+          >
+            {t('chat.fileRejectedDismiss')}
+          </button>
         </div>
       )}
       {files.length > 0 && (
