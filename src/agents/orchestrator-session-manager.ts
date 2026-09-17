@@ -165,7 +165,7 @@ const INTERPRETER_WRITE_RE =
  * on 2df6170e #4) — so such a command proves no write. `{}` alone is
  * find's and xargs' placeholder, not a group.
  */
-const UNSUPPORTED_SHELL_RE = /[()`]|\{(?!\})|(?<!\{)\}|\$\(|<<|\\\n|(?:^|[;\n|&]\s*)(?:if|for|while|until|case|function|select)\s|(?:^|[\s;|&])eval(?=[\s;|&]|$)/u;
+const UNSUPPORTED_SHELL_RE = /[()`]|\{(?!\})|(?<!\{)\}|\$\(|\$'|<<|\\\n|(?:^|[;\n|&]\s*)(?:if|for|while|until|case|function|select)\s|(?:^|[\s;|&])eval(?=[\s;|&]|$)/u;
 /**
  * A lone `&` backgrounds the command before it: `touch /missing/x &` exits
  * 0 at once and the write fails later, unobserved (Codex 2026-09-17 round
@@ -368,8 +368,11 @@ function mutatesSomething(input: Record<string, unknown> | undefined): boolean {
   if (wrapped !== null) return mutatesSomething({ command: wrapped });
   // Syntax this inference does not read proves nothing. Quoted text is
   // blanked first: the parentheses of `python3 -c "Path('x').write_text()"`
-  // are the body's, not the shell's.
-  const structure = raw.replace(/"((?:[^"\\]|\\.)*)"|'([^']*)'/gu, (m) => "_".repeat(m.length));
+  // are the body's, not the shell's. ANSI-C quoting (`$'-c'`) keeps its
+  // `$'` opener: its escapes are not decoded here, so `touch $'-c' x`
+  // proves nothing (Codex 2026-09-17 round 4 #6).
+  const structure = raw.replace(/"((?:[^"\\]|\\.)*)"|(\$?)'([^']*)'/gu, (m, _d: string | undefined, dollar: string | undefined) =>
+    dollar ? `$'${"_".repeat(m.length - 2)}` : "_".repeat(m.length));
   if (UNSUPPORTED_SHELL_RE.test(structure)) return false;
   if (BACKGROUND_RE.test(structure)) return false;
   // Quoted text is not shell syntax: printf "a > b" writes nothing, and
@@ -432,7 +435,42 @@ function unwrapEnvPrefix(words: string[]): string[] | null {
       }
       continue;
     }
-    if (/^(?:sudo|time|nice|nohup|command|exec)$/u.test(w)) {
+    // `command -p touch x` and `exec -a x touch x` run touch; `-p`/`-a x`
+    // are the wrapper's options, not the program (Codex 2026-09-17 round
+    // 4 #9). `command -v`/`-V` inspect and run nothing.
+    if (w === "command") {
+      i += 1;
+      while (i < words.length) {
+        const opt = words[i] ?? "";
+        if (opt === "--") {
+          i += 1;
+          break;
+        }
+        if (!/^-[pvV]+$/u.test(opt)) break;
+        if (/[vV]/u.test(opt)) return null;
+        i += 1;
+      }
+      continue;
+    }
+    if (w === "exec") {
+      i += 1;
+      while (i < words.length) {
+        const opt = words[i] ?? "";
+        if (opt === "--") {
+          i += 1;
+          break;
+        }
+        if (/^-[cl]*a$/u.test(opt)) {
+          if (i + 1 >= words.length) return null;
+          i += 2;
+          continue;
+        }
+        if (!/^-[cl]+$/u.test(opt)) break;
+        i += 1;
+      }
+      continue;
+    }
+    if (/^(?:sudo|time|nice|nohup)$/u.test(w)) {
       i += 1;
       continue;
     }
@@ -440,6 +478,26 @@ function unwrapEnvPrefix(words: string[]): string[] | null {
   }
   const rest = words.slice(i);
   return rest.length === 0 ? null : rest;
+}
+
+/**
+ * Drop redirections and their operands from a program's words: `<file`,
+ * `< file`, `N>file`, `>>file`, `&>file`. `tee /dev/null < package.json`
+ * read the input file as a tee operand (Codex 2026-09-17 round 4 #8).
+ * `>&N` duplications were blanked before this view.
+ */
+function withoutRedirections(words: string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < words.length; i += 1) {
+    const w = words[i] ?? "";
+    if (/^(?:\d*[<>]{1,2}|&>>?)$/u.test(w)) {
+      i += 1; // the operand is the next word
+      continue;
+    }
+    if (/^(?:\d*[<>]{1,2}|&>>?)\S/u.test(w)) continue;
+    out.push(w);
+  }
+  return out;
 }
 
 /** Does one pipeline stage (a single program invocation) positively mutate something? */
@@ -515,10 +573,20 @@ function stageMutates(seg: string): boolean {
     const programWords = args.slice(i);
     return programWords.length > 0 && mutatesSomething({ command: programWords.join(" ") });
   }
-  // tee with nothing to write to writes nothing; /dev/null is nothing.
-  if (/^(?:\S*\/)?tee$/iu.test(program)) return rest.split(/\s+/u).some((w) => w.length > 0 && !w.startsWith("-") && !/^\d*[<>]/u.test(w) && w !== "/dev/null");
+  // tee with nothing to write to writes nothing; /dev/null is nothing. The
+  // redirections and their operands are consumed first: `< package.json`
+  // is tee's input, not a file it writes.
+  if (/^(?:\S*\/)?tee$/iu.test(program)) return withoutRedirections(words.slice(1)).some((w) => !w.startsWith("-") && w !== "/dev/null");
   // touch -c (--no-create) only updates timestamps of files that exist.
-  if (/^(?:\S*\/)?touch$/iu.test(program)) return !/(?:^|\s)(?:-[a-zA-Z]*c[a-zA-Z]*|--no-create)(?=\s|$)/u.test(rest);
+  // Options end at `--`: `touch -- -c` creates a file named `-c` (Codex
+  // 2026-09-17 round 4 #6).
+  if (/^(?:\S*\/)?touch$/iu.test(program)) {
+    for (const w of words.slice(1)) {
+      if (w === "--") break;
+      if (/^(?:-[a-zA-Z]*c[a-zA-Z]*|--no-create)$/u.test(w)) return false;
+    }
+    return true;
+  }
   if (INTERPRETER_PROGRAM_RE.test(program)) {
     // An inline body writes only if IT contains a write-shaped call; a
     // script file is unknown, not a write.
@@ -533,12 +601,20 @@ function stageMutates(seg: string): boolean {
  * then `Exit code: N | Duration: Nms`, then optional `--- stdout ---` /
  * `--- stderr ---` sections. A non-error result is not exit 0: with
  * `ok_exit_codes: [0, 1]` a failed `touch /missing/x` comes back without
- * `is_error` (Codex 2026-09-17 round 3 #10). The footer is the LAST such
- * line before the first output marker — an echoed (multi-line) command can
- * only precede it, and program output can only follow. No footer proves
- * nothing.
+ * `is_error` (Codex 2026-09-17 round 3 #10). The echo is exactly
+ * `$ <command>\n`, so when the content starts with it the footer is the
+ * first line of what remains — an echoed command carrying its own
+ * "Exit code: 0" line AND a "--- stdout ---" line would otherwise forge
+ * the boundary (Codex 2026-09-17 round 4 #3). Without the echo prefix
+ * (the tool may echo a rewritten command), the footer is the LAST such
+ * line before the first output marker. No footer proves nothing.
  */
-function shellResultExitedZero(content: string): boolean {
+function shellResultExitedZero(content: string, command: string | undefined): boolean {
+  const echo = command === undefined ? undefined : `$ ${command}\n`;
+  if (echo !== undefined && content.startsWith(echo)) {
+    const footer = /^Exit code: (\d+) \| Duration: \d+ms[ \t]*(?=\n|$)/u.exec(content.slice(echo.length));
+    return footer !== null && Number(footer[1]) === 0;
+  }
   const marker = content.search(/(?:^|\n)--- (?:stdout|stderr) ---(?:\n|$)/u);
   const head = marker === -1 ? content : content.slice(0, marker);
   let exit: number | undefined;
@@ -582,7 +658,10 @@ function writeSucceededAfter(
       const use = useById.get(block.tool_use_id);
       if (use === undefined || !isWriteCapable(use.name)) continue;
       // The shell inference below assumes exit 0; the footer must say so.
-      if (use.name === "shell_exec" && !shellResultExitedZero(block.content)) continue;
+      if (use.name === "shell_exec") {
+        const command = use.input?.["command"];
+        if (!shellResultExitedZero(block.content, typeof command === "string" ? command : undefined)) continue;
+      }
       if (!mutatesSomething(use.input)) continue;
       return true;
     }
