@@ -1189,6 +1189,28 @@ async function bootstrapImpl(
         logger.warn("[vault] dev-knowledge vault registration failed", { err });
       }
 
+      // WHAT THE VAULTS ACTUALLY RETRIEVE WITH, said once, here (plan 3.10).
+      //
+      // The boot report is a snapshot taken before this block finishes — the
+      // registry is still empty then, so its capability line reads "pending".
+      // This is the line an operator can act on: how many vaults answered, and
+      // whether any of them queries vectors at all.
+      {
+        const registered = vaultRegistry.list();
+        const semantic = registered.filter((v) => v.retrievalIsSemantic?.() === true).length;
+        logger.info("[vault] retrieval mode", {
+          vaults: registered.length,
+          semantic,
+          mode: registered.length === 0
+            ? "no vault registered"
+            : semantic === 0
+              ? "lexical only (FTS/BM25 + wikilinks + symbol graph); no embeddings are queried"
+              : semantic === registered.length
+                ? "semantic (vectors fused with FTS/BM25)"
+                : "mixed: some vaults query vectors, some are lexical only",
+        });
+      }
+
       // Hand a factory to the dashboard so POST /api/vaults (and the web
       // channel's proxy to it) can create new vaults at runtime using the
       // same embedding + vector-store deps wired above.
@@ -2265,6 +2287,10 @@ async function bootstrapImpl(
     vaultRetrieval: {
       registered: vaultRegistry.list().length,
       semantic: vaultRegistry.list().some((v) => v.retrievalIsSemantic?.() === true),
+      // Registration runs in a detached block that finishes after this
+      // snapshot, so an empty registry here means "not settled yet", not
+      // "no vault" (plan 3.10). The boot log names the settled mode.
+      ...(vaultRegistry.list().length === 0 ? { pending: true } : {}),
     },
     startupNotices,
     moduleUrl: import.meta.url,

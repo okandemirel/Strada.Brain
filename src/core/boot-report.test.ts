@@ -508,3 +508,23 @@ describe("vault retrieval is named, not implied", () => {
       .some((w) => w.includes("LEXICAL ONLY"))).toBe(false);
   });
 });
+
+describe("vault retrieval before registration settles (plan 3.10)", () => {
+  it("says the mode is not settled yet instead of claiming no vault, and warns about nothing", () => {
+    const capability = buildCapabilitySnapshot({
+      config: makeConfig(),
+      installRoot: process.cwd(),
+      channelType: "web",
+      vaultRetrieval: { registered: 0, semantic: false, pending: true },
+    }).find((c) => c.id === "codebase-vault");
+    expect(capability!.truth).toBe("declared-only");
+    expect(capability!.detail).toContain("had not settled");
+    expect(capability!.detail).toContain("[vault] retrieval mode");
+    // A subsystem that is still starting is not evidence of a lexical vault.
+    expect(collectConfigWarnings({
+      config: makeConfig(),
+      channelType: "web",
+      vaultRetrieval: { registered: 0, semantic: false, pending: true },
+    }).some((w) => w.includes("LEXICAL ONLY"))).toBe(false);
+  });
+});

@@ -80,7 +80,7 @@ export interface CapabilitySnapshotOptions {
    * `undefined` — the caller did not measure it (the doctor reads static
    * config and does not boot).
    */
-  vaultRetrieval?: { registered: number; semantic: boolean };
+  vaultRetrieval?: { registered: number; semantic: boolean; pending?: boolean };
 }
 
 export interface CapabilityHealthSummary {
@@ -347,9 +347,17 @@ export function buildCapabilitySnapshot(options: CapabilitySnapshotOptions): Cap
       options.vaultRetrieval === undefined || options.vaultRetrieval.registered === 0
         ? "inactive"
         : "active",
-      options.vaultRetrieval === undefined ? "declared-only" : "health-checked",
+      options.vaultRetrieval === undefined || options.vaultRetrieval.pending === true
+        ? "declared-only"
+        : "health-checked",
       options.vaultRetrieval === undefined
         ? "Vault retrieval mode was not measured on this path."
+        : options.vaultRetrieval.pending === true
+          // The registry is populated by a detached async block that finishes
+          // AFTER this snapshot, so "0 vaults" here would be a lie about a
+          // subsystem that is still starting (plan 3.10). The boot log names
+          // the settled mode: "[vault] retrieval mode".
+          ? "Vault registration had not settled when this report was taken — the boot log line '[vault] retrieval mode' names the mode."
         : options.vaultRetrieval.registered === 0
           ? "No vault is registered, so nothing is retrieved from one."
           : options.vaultRetrieval.semantic
@@ -594,7 +602,7 @@ export function collectConfigWarnings(
 
   // The vault answers lexically while an embedding provider is configured:
   // true, useful, and previously unsaid (plan 3.10 / D44).
-  if (options.vaultRetrieval && options.vaultRetrieval.registered > 0 && !options.vaultRetrieval.semantic) {
+  if (options.vaultRetrieval && options.vaultRetrieval.pending !== true && options.vaultRetrieval.registered > 0 && !options.vaultRetrieval.semantic) {
     warnings.push(
       "Vault retrieval is LEXICAL ONLY (FTS/BM25 + wikilinks + symbol graph) — the vector store wired at boot is a non-semantic placeholder, so no embeddings are queried",
     );
