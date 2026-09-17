@@ -15,7 +15,7 @@
 
 import { describe, it, expect, vi } from "vitest";
 import { isMainThread } from "node:worker_threads";
-import { PluginRegistry, type Plugin, type PluginPermissions } from "./registry.js";
+import { PluginRegistry, partitionDependencyGraph, type Plugin, type PluginPermissions } from "./registry.js";
 
 vi.mock("../utils/logger.js", () => ({
   getLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
@@ -92,5 +92,83 @@ describe("plugin execution boundary", () => {
     await registry.initializeAll();
 
     expect(readTheFilesystem, "declared permissions did not constrain the plugin").toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// plan 0-B.2 (audit R1/D67 + R2 + Codex #3): initializeAll must never abort
+// the batch because one plugin's dependency is missing or cyclic.
+// ---------------------------------------------------------------------------
+describe("initializeAll resilience (plan 0-B.2)", () => {
+  function depPlugin(name: string, deps: string[], onInit: () => void = () => {}): Plugin {
+    const p = makePlugin(name, onInit);
+    p.metadata.dependencies = deps;
+    return p;
+  }
+
+  it("initialises what can be initialised and records a reason for the rest", async () => {
+    const registry = new PluginRegistry();
+    const ran: string[] = [];
+    registry.register(depPlugin("a", ["missing"], () => ran.push("a")));
+    registry.register(depPlugin("c1", ["c2"], () => ran.push("c1")));
+    registry.register(depPlugin("c2", ["c1"], () => ran.push("c2")));
+    registry.register(depPlugin("dep-on-a", ["a"], () => ran.push("dep-on-a")));
+    registry.register(depPlugin("ok", [], () => ran.push("ok")));
+    registry.register(depPlugin("ok2", ["ok"], () => ran.push("ok2")));
+
+    await expect(registry.initializeAll()).resolves.toBeUndefined();
+
+    expect(ran).toEqual(["ok", "ok2"]);
+    expect(registry.isInitialized("ok")).toBe(true);
+    expect(registry.isInitialized("ok2")).toBe(true);
+    expect(registry.getInitializationError("a")).toContain("'missing'");
+    expect(registry.getInitializationError("c1")).toContain("circular");
+    expect(registry.getInitializationError("c2")).toContain("circular");
+    expect(registry.getInitializationError("dep-on-a")).toContain("'a'");
+    expect(registry.getInitializationError("ok")).toBeUndefined();
+  });
+
+  it("a plugin whose dependency's initialize() threw is not initialised, and says why", async () => {
+    const registry = new PluginRegistry();
+    registry.register(depPlugin("base", [], () => { throw new Error("base broke"); }));
+    const ran: string[] = [];
+    registry.register(depPlugin("top", ["base"], () => ran.push("top")));
+    await registry.initializeAll();
+    expect(ran).toEqual([]);
+    expect(registry.getInitializationError("base")).toBe("base broke");
+    expect(registry.getInitializationError("top")).toContain("'base' failed to initialize");
+  });
+
+  it("disposeAll still runs when an unresolvable plugin is registered", async () => {
+    const registry = new PluginRegistry();
+    let disposed = false;
+    const ok = depPlugin("ok", []);
+    ok.dispose = async () => { disposed = true; };
+    registry.register(ok);
+    registry.register(depPlugin("orphan", ["missing"]));
+    await registry.initializeAll();
+    await expect(registry.disposeAll()).resolves.toBeUndefined();
+    expect(disposed).toBe(true);
+  });
+
+  it("resolveDependencies keeps throwing on a missing dependency (explicit single-plugin contract)", () => {
+    const registry = new PluginRegistry();
+    registry.register(depPlugin("a", ["missing"]));
+    expect(() => registry.resolveDependencies("a")).toThrow(/missing/);
+  });
+});
+
+describe("partitionDependencyGraph", () => {
+  it("is order-independent: the same verdicts whichever way the nodes are listed", () => {
+    const forward = new Map<string, string[]>([["A", ["B"]], ["B", []], ["X", ["Nope"]], ["Y", ["X"]]]);
+    const backward = new Map<string, string[]>([...forward.entries()].reverse());
+    for (const graph of [forward, backward]) {
+      const { order, unresolvable } = partitionDependencyGraph(graph);
+      expect(order.indexOf("B")).toBeLessThan(order.indexOf("A"));
+      expect([...order].sort()).toEqual(["A", "B"]);
+      expect([...unresolvable.keys()].sort()).toEqual(["X", "Y"]);
+      expect(unresolvable.get("X")).toContain("'Nope'");
+      expect(unresolvable.get("Y")).toContain("'X'");
+    }
   });
 });

@@ -35,8 +35,14 @@ export interface SkillManifest {
   triggers?: string[];
 }
 
-/** Runtime status of a loaded skill. */
-export type SkillStatus = "active" | "disabled" | "gated" | "error" | "incomplete";
+/**
+ * Runtime status of a loaded skill.
+ *
+ * - "untrusted" (plan 1.15): a workspace-tier skill whose executable content has
+ *   no matching approval record in `~/.strada/trusted-skills.json` — its
+ *   entry point was NOT imported. `gateReason` says how to approve it.
+ */
+export type SkillStatus = "active" | "disabled" | "gated" | "error" | "incomplete" | "untrusted";
 
 /** A fully-resolved skill entry held by the SkillLoader. */
 export interface SkillEntry {
@@ -45,7 +51,7 @@ export interface SkillEntry {
   tier: "workspace" | "managed" | "bundled" | "extra";
   path: string;
   /**
-   * Present when status is "gated"/"error" (why the skill cannot activate), or
+   * Present when status is "gated"/"error"/"untrusted" (why the skill cannot activate), or
    * on an "active" entry when a declared gate could not be evaluated — the
    * skill runs, but that requirement was never measured.
    */

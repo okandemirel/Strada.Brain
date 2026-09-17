@@ -16,6 +16,7 @@ import { parseFrontmatter } from "./frontmatter-parser.js";
 import { fetchRegistry, searchRegistry } from "./skill-registry-client.js";
 import { isValidSkillName, installSkillFromRepo } from "./skill-installer.js";
 import { readPin, recordPinnedCommit } from "./skill-pin.js";
+import { approveWorkspaceSkill, revokeWorkspaceSkill } from "./skill-trust.js";
 // ---------------------------------------------------------------------------
 // Public entry point
 // ---------------------------------------------------------------------------
@@ -23,7 +24,47 @@ import { readPin, recordPinnedCommit } from "./skill-pin.js";
 export function registerSkillCommands(program: Command): void {
   const skill = program
     .command("skill")
-    .description("Manage skills (install, remove, enable, disable, list, update, search, info)");
+    .description("Manage skills (install, remove, enable, disable, list, update, search, info, trust, untrust)");
+
+  // =========================================================================
+  // skill trust <name> / skill untrust <name>   (plan 1.15)
+  //
+  // A workspace-tier skill (<project>/skills/<name>) executes code from the
+  // checkout. It is not imported until its current executable content is
+  // approved here; the record lives in ~/.strada/trusted-skills.json, keyed by
+  // the project's realpath, never inside the project.
+  // =========================================================================
+
+  skill
+    .command("trust <name>")
+    .description("Approve a workspace skill's current code for this project (recorded outside the project)")
+    .option("--project <dir>", "Project root (default: current directory)")
+    .action(async (name: string, opts: { project?: string }) => {
+      const projectRoot = opts.project ?? process.cwd();
+      const found = await findWorkspaceSkill(projectRoot, name);
+      if (!found) return;
+      try {
+        const result = await approveWorkspaceSkill(projectRoot, found.path);
+        console.log(`Skill '${name}' approved for ${result.projectId} (sha256 ${result.sha256.slice(0, 12)}, recorded in ${result.recordPath}). Restart to apply.`);
+      } catch (err) {
+        console.error(err instanceof Error ? err.message : String(err));
+        process.exitCode = 1;
+      }
+    });
+
+  skill
+    .command("untrust <name>")
+    .description("Revoke a workspace skill's approval for this project")
+    .option("--project <dir>", "Project root (default: current directory)")
+    .action(async (name: string, opts: { project?: string }) => {
+      const projectRoot = opts.project ?? process.cwd();
+      const found = await findWorkspaceSkill(projectRoot, name);
+      if (!found) return;
+      const removed = await revokeWorkspaceSkill(projectRoot, found.path);
+      console.log(removed
+        ? `Skill '${name}' approval revoked. Restart to apply.`
+        : `Skill '${name}' had no approval record for this project.`);
+    });
 
   // =========================================================================
   // skill install <url>
@@ -362,6 +403,23 @@ export function registerSkillCommands(program: Command): void {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/** The workspace-tier skill named `name` under `projectRoot`, or null after printing why not. */
+async function findWorkspaceSkill(projectRoot: string, name: string): Promise<{ path: string } | null> {
+  const discovered = await discoverSkills(projectRoot);
+  const found = discovered.find((s) => s.manifest.name === name);
+  if (!found) {
+    console.error(`Skill "${name}" not found under ${projectRoot}. Run 'strada skill list' to see available skills.`);
+    process.exitCode = 1;
+    return null;
+  }
+  if (found.tier !== "workspace") {
+    console.error(`Skill "${name}" is a ${found.tier} skill (${found.path}); trust records apply to workspace skills only.`);
+    process.exitCode = 1;
+    return null;
+  }
+  return { path: found.path };
+}
 
 function padRight(str: string, len: number): string {
   return str.length >= len ? str + " " : str + " ".repeat(len - str.length);

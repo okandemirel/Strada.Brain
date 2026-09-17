@@ -6,15 +6,21 @@
 // ---------------------------------------------------------------------------
 
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
-import { PluginRegistry, type Plugin, type PluginMetadata } from "../plugins/registry.js";
+import { dirname, join } from "node:path";
+import {
+  PluginRegistry,
+  partitionDependencyGraph,
+  type Plugin,
+  type PluginMetadata,
+} from "../plugins/registry.js";
 import { SkillEnvInjector } from "./skill-env-injector.js";
 import { parseFrontmatter } from "./frontmatter-parser.js";
 import { discoverSkills, loadSkillTools, type DiscoveredSkill } from "./skill-loader.js";
 import { checkGates } from "./skill-gating.js";
 import { readSkillConfig } from "./skill-config.js";
+import { assessWorkspaceSkillTrust } from "./skill-trust.js";
 import { getLoggerSafe } from "../utils/logger.js";
-import type { SkillEntry } from "./types.js";
+import type { SkillEntry, SkillRequirements, SkillStatus } from "./types.js";
 import type { ITool } from "../agents/tools/tool.interface.js";
 
 // ---------------------------------------------------------------------------
@@ -59,118 +65,131 @@ export class SkillManager {
   /**
    * Discover, gate-check, load, and register all skills.
    *
-   * Flow:
+   * Flow (plan 0-B.2 / 4.9 / 1.15 — one lifecycle contract):
    *  1. Read user config (~/.strada/skills.json)
    *  2. Discover skills across tiers
-   *  3. For each skill: check enabled, check gates, load tools, inject env
-   *  4. Register as Plugin in PluginRegistry
-   *  5. initializeAll() (topological order)
-   *  6. Return all SkillEntry records
+   *  3. Per skill: disabled? → inject env (BEFORE the gate, 4.9) → checkGates
+   *     → workspace trust (1.15). A skill that fails here is parked
+   *     (disabled / gated / untrusted) and its env is rolled back.
+   *  4. Preflight the WHOLE `requires.skills` graph over the survivors (0-B.2):
+   *     a skill whose dependency is missing, parked, or cyclic — and every
+   *     skill that transitively depends on it — is gated with the reason.
+   *     Order-independent: nothing has been registered yet.
+   *  5. Load tools and register the resolvable skills as plugins.
+   *  6. initializeAll() (never aborts the batch — see PluginRegistry).
+   *  7. "active" is assigned only to a skill whose initialize() succeeded; a
+   *     failed initialize() is "error" with the reason. Env of every skill
+   *     that did not end active is restored.
    */
   async loadAll(projectRoot?: string, extraDirs?: string[]): Promise<SkillEntry[]> {
     const logger = getLoggerSafe();
     const config = await readSkillConfig();
     const discovered = await discoverSkills(projectRoot, extraDirs);
 
+    /** Parked: not going to be registered. Restores env, records the entry. */
+    const park = (skill: DiscoveredSkill, status: Exclude<SkillStatus, "active">, reason?: string): void => {
+      const { name } = skill.manifest;
+      this.envInjector.restore(name);
+      this.entries.set(name, {
+        manifest: skill.manifest,
+        status,
+        tier: skill.tier,
+        path: skill.path,
+        ...(reason ? { gateReason: reason } : {}),
+      });
+    };
+
+    // --- 3. per-skill checks --------------------------------------------
+    const candidates = new Map<string, { skill: DiscoveredSkill; unevaluated?: string }>();
     for (const skill of discovered) {
       const { name } = skill.manifest;
-
       try {
-        // Check if explicitly disabled
         if (config.entries[name]?.enabled === false) {
-          const entry: SkillEntry = {
-            manifest: skill.manifest,
-            status: "disabled",
-            tier: skill.tier,
-            path: skill.path,
-          };
-          this.entries.set(name, entry);
+          park(skill, "disabled");
           logger.debug(`Skill "${name}" is disabled by user config`);
           continue;
+        }
+
+        // 4.9: env overrides from the user config are injected BEFORE the
+        // gate, so a gate that reads a variable the user configured for this
+        // very skill can pass. Rolled back by park() if the skill does not
+        // make it.
+        const envOverrides = config.entries[name]?.env;
+        if (envOverrides && Object.keys(envOverrides).length > 0) {
+          this.envInjector.inject(name, envOverrides);
         }
 
         // Gate check against the app-level Config (via setAppConfig) — NOT the
         // per-skill SkillConfig, which holds enabled/env entries, not the key
         // paths checkGates resolves. When no app config was provided the config
         // gate is reported unevaluated, not failed (see skill-gating.ts).
-        const gateResult = await checkGates(skill.manifest.requires, this.appConfig);
+        // `requires.skills` is measured by the graph preflight below, so it is
+        // not handed to checkGates (which would only report it unevaluated).
+        const gateResult = await checkGates(withoutSkillsGate(skill.manifest.requires), this.appConfig);
         if (!gateResult.passed) {
-          const entry: SkillEntry = {
-            manifest: skill.manifest,
-            status: "gated",
-            tier: skill.tier,
-            path: skill.path,
-            gateReason: gateResult.reasons.join("; "),
-          };
-          this.entries.set(name, entry);
+          park(skill, "gated", gateResult.reasons.join("; "));
           logger.info(`Skill "${name}" gated: ${gateResult.reasons.join(", ")}`);
           continue;
         }
 
-        // Load tools
+        // 1.15: a workspace-tier skill executes code from the project
+        // checkout. Without an approval record outside the project it is not
+        // imported at all.
+        if (skill.tier === "workspace") {
+          const trust = await assessWorkspaceSkillTrust(projectRoot ?? dirname(dirname(skill.path)), skill.path, name);
+          if (!trust.trusted) {
+            park(skill, "untrusted", trust.reason);
+            logger.warn(`Skill "${name}" untrusted: ${trust.reason}`);
+            continue;
+          }
+        }
+
+        const unevaluated = gateResult.unevaluated?.length ? gateResult.unevaluated.join("; ") : undefined;
+        candidates.set(name, { skill, ...(unevaluated ? { unevaluated } : {}) });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        park(skill, "error", `Unexpected error: ${message}`);
+        logger.warn(`Skill "${name}" registration failed`, { error: message });
+      }
+    }
+
+    // --- 4. dependency-graph preflight (0-B.2) --------------------------
+    const graph = new Map<string, readonly string[]>();
+    for (const [name, { skill }] of candidates) graph.set(name, skill.manifest.requires?.skills ?? []);
+    const { order, unresolvable } = partitionDependencyGraph(graph);
+    const explain = dependencyFailureExplainer(unresolvable, graph, this.entries);
+    for (const name of unresolvable.keys()) {
+      const candidate = candidates.get(name)!;
+      const explained = explain(name);
+      park(candidate.skill, "gated", explained);
+      logger.info(`Skill "${name}" gated: ${explained}`);
+    }
+
+    // --- 5. load + register the resolvable skills -----------------------
+    const registered = new Map<string, { skill: DiscoveredSkill; unevaluated?: string }>();
+    for (const name of order) {
+      const candidate = candidates.get(name)!;
+      const { skill } = candidate;
+      try {
         let tools: ITool[];
         try {
           tools = await loadSkillTools(skill);
         } catch (err) {
-          const entry: SkillEntry = {
-            manifest: skill.manifest,
-            status: "error",
-            tier: skill.tier,
-            path: skill.path,
-            gateReason: `Tool loading failed: ${err instanceof Error ? err.message : String(err)}`,
-          };
-          this.entries.set(name, entry);
-          logger.warn(`Skill "${name}" tool loading failed`, {
-            error: err instanceof Error ? err.message : String(err),
-          });
+          const message = err instanceof Error ? err.message : String(err);
+          park(skill, "error", `Tool loading failed: ${message}`);
+          logger.warn(`Skill "${name}" tool loading failed`, { error: message });
           continue;
         }
-
-        // Inject env overrides from user config
-        const envOverrides = config.entries[name]?.env;
-        if (envOverrides && Object.keys(envOverrides).length > 0) {
-          this.envInjector.inject(name, envOverrides);
-        }
-
-        // Build Plugin adapter and register
-        const toolsCaptured = tools;
-        const registrar = this.toolRegistrar;
-        const plugin = createSkillPlugin(skill, toolsCaptured, registrar);
-        this.registry.register(plugin);
-
-        // A gate that could not be measured must stay visible on the active
-        // entry — a skipped check must never read like a passed one.
-        const unevaluated = gateResult.unevaluated?.length
-          ? gateResult.unevaluated.join("; ")
-          : undefined;
-        if (unevaluated) {
-          logger.info(`Skill "${name}" activated with an unevaluated gate: ${unevaluated}`);
-        }
-        const entry: SkillEntry = {
-          manifest: skill.manifest,
-          status: "active",
-          tier: skill.tier,
-          path: skill.path,
-          ...(unevaluated ? { gateReason: unevaluated } : {}),
-          ...(skill.body ? { body: skill.body } : {}),
-        };
-        this.entries.set(name, entry);
+        this.registry.register(createSkillPlugin(skill, tools, this.toolRegistrar));
+        registered.set(name, candidate);
       } catch (err) {
-        const entry: SkillEntry = {
-          manifest: skill.manifest,
-          status: "error",
-          tier: skill.tier,
-          path: skill.path,
-          gateReason: `Unexpected error: ${err instanceof Error ? err.message : String(err)}`,
-        };
-        this.entries.set(name, entry);
-        logger.warn(`Skill "${name}" registration failed`, {
-          error: err instanceof Error ? err.message : String(err),
-        });
+        const message = err instanceof Error ? err.message : String(err);
+        park(skill, "error", `Unexpected error: ${message}`);
+        logger.warn(`Skill "${name}" registration failed`, { error: message });
       }
     }
 
-    // Initialize all registered plugins in dependency order
+    // --- 6. initialize (never aborts the batch) --------------------------
     try {
       await this.registry.initializeAll();
     } catch (err) {
@@ -179,11 +198,37 @@ export class SkillManager {
       });
     }
 
+    // --- 7. "active" only after initialize() succeeded ------------------
+    for (const [name, { skill, unevaluated }] of registered) {
+      if (!this.registry.isInitialized(name)) {
+        const reason = `Initialization failed: ${this.registry.getInitializationError(name) ?? "unknown"}`;
+        park(skill, "error", reason);
+        logger.warn(`Skill "${name}" ${reason}`);
+        continue;
+      }
+      // A gate that could not be measured must stay visible on the active
+      // entry — a skipped check must never read like a passed one.
+      if (unevaluated) {
+        logger.info(`Skill "${name}" activated with an unevaluated gate: ${unevaluated}`);
+      }
+      this.entries.set(name, {
+        manifest: skill.manifest,
+        status: "active",
+        tier: skill.tier,
+        path: skill.path,
+        ...(unevaluated ? { gateReason: unevaluated } : {}),
+        ...(skill.body ? { body: skill.body } : {}),
+      });
+    }
+
+    const count = (status: SkillStatus): number =>
+      [...this.entries.values()].filter((e) => e.status === status).length;
     logger.info(`SkillManager loaded ${this.entries.size} skill(s)`, {
-      active: [...this.entries.values()].filter((e) => e.status === "active").length,
-      disabled: [...this.entries.values()].filter((e) => e.status === "disabled").length,
-      gated: [...this.entries.values()].filter((e) => e.status === "gated").length,
-      error: [...this.entries.values()].filter((e) => e.status === "error").length,
+      active: count("active"),
+      disabled: count("disabled"),
+      gated: count("gated"),
+      untrusted: count("untrusted"),
+      error: count("error"),
     });
 
     this.entriesCache = null;
@@ -214,9 +259,10 @@ export class SkillManager {
     }
 
     // Skip if already loaded
-    if (this.entries.has(name)) {
+    const existing = this.entries.get(name);
+    if (existing) {
       logger.debug(`loadSingle: skill "${name}" already loaded, skipping`);
-      return this.entries.get(name) ?? null;
+      return existing;
     }
 
     // Build a DiscoveredSkill and load tools
@@ -251,6 +297,25 @@ export class SkillManager {
         gateReason: gateResult.reasons.join("; "),
       };
       this.entries.set(name, entry);
+      return entry;
+    }
+
+    // 1.15: the hot-load path imports workspace code exactly like loadAll
+    // does, so it needs the same approval. The project root is the parent of
+    // the skills directory (`<root>/skills/<name>`), which is the only layout
+    // this tier has.
+    const trust = await assessWorkspaceSkillTrust(dirname(dirname(skillPath)), skillPath, name);
+    if (!trust.trusted) {
+      const entry: SkillEntry = {
+        manifest: manifest as SkillEntry["manifest"],
+        status: "untrusted",
+        tier: "workspace",
+        path: skillPath,
+        gateReason: trust.reason,
+      };
+      this.entries.set(name, entry);
+      this.entriesCache = null;
+      logger.warn(`Skill "${name}" untrusted: ${trust.reason}`);
       return entry;
     }
 
@@ -335,6 +400,62 @@ export class SkillManager {
     this.entries.clear();
     this.entriesCache = null;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+/** `requires` minus the `skills` gate, which loadAll measures itself. Same object when there is nothing to strip. */
+function withoutSkillsGate(requires: SkillRequirements | undefined): SkillRequirements | undefined {
+  if (!requires?.skills?.length) return requires;
+  const { skills: _skills, ...rest } = requires;
+  return rest;
+}
+
+/**
+ * Turn the registry's generic partition reason into one that names what the
+ * required skill actually is: not discovered at all, parked with a status
+ * (disabled / gated / untrusted / error, with its own reason), or gated by
+ * its own dependency chain (explained recursively). Memoized; a cycle is
+ * reported as such before any recursion can loop.
+ */
+function dependencyFailureExplainer(
+  unresolvable: ReadonlyMap<string, string>,
+  graph: ReadonlyMap<string, readonly string[]>,
+  entries: ReadonlyMap<string, SkillEntry>,
+): (name: string) => string {
+  const memo = new Map<string, string>();
+  const visiting = new Set<string>();
+  const explain = (name: string): string => {
+    const known = memo.get(name);
+    if (known !== undefined) return known;
+    const reason = unresolvable.get(name) ?? "unknown";
+    let text: string;
+    if (reason.startsWith("circular dependency") || visiting.has(name)) {
+      text = `Skill dependency cycle: ${reason}`;
+    } else {
+      visiting.add(name);
+      text = `Required skill ${reason}`;
+      for (const dep of graph.get(name) ?? []) {
+        if (!graph.has(dep)) {
+          const parked = entries.get(dep);
+          text = parked
+            ? `Required skill "${dep}" is ${parked.status}${parked.gateReason ? ` (${parked.gateReason})` : ""}`
+            : `Required skill "${dep}" was not discovered`;
+          break;
+        }
+        if (unresolvable.has(dep)) {
+          text = `Required skill "${dep}" is gated (${explain(dep)})`;
+          break;
+        }
+      }
+      visiting.delete(name);
+    }
+    memo.set(name, text);
+    return text;
+  };
+  return explain;
 }
 
 // ---------------------------------------------------------------------------

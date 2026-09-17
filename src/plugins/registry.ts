@@ -108,6 +108,8 @@ export interface Plugin {
 export class PluginRegistry {
   private readonly plugins = new Map<string, Plugin>();
   private readonly initialized = new Set<string>();
+  /** Why a registered plugin is NOT initialized after the last initializeAll(). */
+  private readonly initFailures = new Map<string, string>();
   private initializingPromise: Promise<void> | null = null;
 
   /**
@@ -187,6 +189,16 @@ export class PluginRegistry {
   }
 
   /**
+   * The reason a plugin failed to initialize in the last `initializeAll()` —
+   * its `initialize()` threw, or its dependency graph could not be resolved
+   * (missing dependency, cycle, or a dependency that itself failed). Undefined
+   * when the plugin initialized, or was never part of an initialize run.
+   */
+  getInitializationError(name: string): string | undefined {
+    return this.initFailures.get(name);
+  }
+
+  /**
    * Get count of registered plugins.
    */
   get size(): number {
@@ -252,20 +264,42 @@ export class PluginRegistry {
     }
   }
 
+  /**
+   * plan 0-B.2 (audit R1/D67, R2, Codex #3): this used to call the throwing
+   * `topologicalSort()` BEFORE the per-plugin try/catch, so one plugin with a
+   * missing dependency aborted initialization of every plugin in the batch.
+   * Now the graph is partitioned first: plugins whose dependency chain is
+   * complete and acyclic are initialized in order; the others are recorded as
+   * failed with the reason and never touched. A plugin whose dependency threw
+   * in initialize() is not initialized either — its dependency contract is
+   * "called after all dependencies are resolved".
+   */
   private async doInitializeAll(): Promise<void> {
-    const sorted = this.topologicalSort();
-    for (const plugin of sorted) {
+    const { order, unresolvable } = this.partitionByDependencies();
+    for (const [name, reason] of unresolvable) {
+      if (this.initialized.has(name)) continue;
+      this.initFailures.set(name, reason);
+      getLoggerSafe().warn("[PluginRegistry] Plugin excluded from initialization", { name, reason });
+    }
+    for (const plugin of order) {
       const { name } = plugin.metadata;
       if (this.initialized.has(name)) continue;
+      const failedDep = (plugin.metadata.dependencies ?? []).find((dep) => !this.initialized.has(dep));
+      if (failedDep !== undefined) {
+        const reason = `Dependency '${failedDep}' failed to initialize: ${this.initFailures.get(failedDep) ?? "unknown"}`;
+        this.initFailures.set(name, reason);
+        getLoggerSafe().warn("[PluginRegistry] Plugin skipped: dependency not initialized", { name, reason });
+        continue;
+      }
       try {
         await plugin.initialize();
         this.initialized.add(name);
+        this.initFailures.delete(name);
         getLoggerSafe().info("[PluginRegistry] Initialized plugin", { name });
       } catch (error) {
-        getLoggerSafe().warn("[PluginRegistry] Failed to initialize plugin", {
-          name,
-          error: error instanceof Error ? error.message : String(error),
-        });
+        const message = error instanceof Error ? error.message : String(error);
+        this.initFailures.set(name, message);
+        getLoggerSafe().warn("[PluginRegistry] Failed to initialize plugin", { name, error: message });
         // Continue with next plugin instead of throwing
       }
     }
@@ -275,7 +309,9 @@ export class PluginRegistry {
    * Dispose all initialized plugins in reverse dependency order.
    */
   async disposeAll(): Promise<void> {
-    const sorted = this.topologicalSort().reverse();
+    // Non-throwing partition: an unresolvable plugin was never initialized, so
+    // it has nothing to dispose and must not block disposal of the others.
+    const sorted = this.partitionByDependencies().order.reverse();
     for (const plugin of sorted) {
       const { name } = plugin.metadata;
       if (!this.initialized.has(name)) continue;
@@ -300,6 +336,26 @@ export class PluginRegistry {
     await this.disposeAll();
     this.plugins.clear();
     this.initialized.clear();
+    this.initFailures.clear();
+  }
+
+  /**
+   * Split the registered plugins into an initialization order (dependencies
+   * first; every dependency of an ordered plugin is itself ordered) and the
+   * plugins that can never be initialized, each with the reason: a dependency
+   * that is not registered, a cycle, or a dependency that is itself
+   * unresolvable. Never throws — that is the point (plan 0-B.2).
+   */
+  partitionByDependencies(): { order: Plugin[]; unresolvable: Map<string, string> } {
+    const graph = new Map<string, readonly string[]>();
+    for (const [name, plugin] of this.plugins) graph.set(name, plugin.metadata.dependencies ?? []);
+    const { order: names, unresolvable } = partitionDependencyGraph(graph);
+    const order: Plugin[] = [];
+    for (const name of names) {
+      const plugin = this.plugins.get(name);
+      if (plugin) order.push(plugin);
+    }
+    return { order, unresolvable };
   }
 
   /**
@@ -307,38 +363,90 @@ export class PluginRegistry {
    * Returns plugins in dependency-first order.
    */
   private topologicalSort(): Plugin[] {
-    const visited = new Set<string>();
-    const visiting = new Set<string>();
-    const result: Plugin[] = [];
-
-    const visit = (name: string): void => {
-      if (visited.has(name)) return;
-
-      if (visiting.has(name)) {
-        throw new Error(`Circular dependency detected involving '${name}'`);
-      }
-
-      const plugin = this.plugins.get(name);
-      if (!plugin) return;
-
-      visiting.add(name);
-
-      for (const dep of plugin.metadata.dependencies ?? []) {
-        if (!this.plugins.has(dep)) {
-          throw new Error(`Plugin '${name}' depends on '${dep}' which is not registered`);
-        }
-        visit(dep);
-      }
-
-      visiting.delete(name);
-      visited.add(name);
-      result.push(plugin);
-    };
-
-    for (const name of this.plugins.keys()) {
-      visit(name);
+    const { order, unresolvable } = this.partitionByDependencies();
+    const first = unresolvable.entries().next();
+    if (!first.done) {
+      const [name, reason] = first.value;
+      throw new Error(`Plugin '${name}': ${reason}`);
     }
-
-    return result;
+    return order;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Dependency-graph partition (shared with SkillManager's manifest preflight)
+// ---------------------------------------------------------------------------
+
+/**
+ * Partition a dependency graph (node → names it depends on) into a
+ * dependencies-first order over the nodes whose whole transitive chain is
+ * present and acyclic, and the rest with a reason each. Order-independent:
+ * the verdict for a node does not depend on the iteration order of the input.
+ *
+ * Reasons name the offending edge: a dependency that is not in the graph, a
+ * dependency that reaches back to the node (cycle), or a dependency that is
+ * itself unresolvable (transitive).
+ */
+export function partitionDependencyGraph(
+  graph: ReadonlyMap<string, readonly string[]>,
+): { order: string[]; unresolvable: Map<string, string> } {
+  // Fixpoint: a node is resolvable once every dependency is resolvable. Nodes
+  // with a missing dependency, nodes in a cycle, and everything depending on
+  // them never enter the set.
+  const resolvable = new Set<string>();
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const [name, deps] of graph) {
+      if (resolvable.has(name)) continue;
+      if (deps.every((dep) => resolvable.has(dep))) {
+        resolvable.add(name);
+        grew = true;
+      }
+    }
+  }
+
+  const reaches = (from: string, target: string): boolean => {
+    const seen = new Set<string>();
+    const stack = [from];
+    while (stack.length > 0) {
+      const current = stack.pop()!;
+      if (current === target) return true;
+      if (seen.has(current)) continue;
+      seen.add(current);
+      for (const dep of graph.get(current) ?? []) stack.push(dep);
+    }
+    return false;
+  };
+
+  const unresolvable = new Map<string, string>();
+  for (const [name, deps] of graph) {
+    if (resolvable.has(name)) continue;
+    const missing = deps.find((dep) => !graph.has(dep));
+    if (missing !== undefined) {
+      unresolvable.set(name, `depends on '${missing}' which is not registered`);
+      continue;
+    }
+    const cyclic = deps.find((dep) => reaches(dep, name));
+    if (cyclic !== undefined) {
+      unresolvable.set(name, `circular dependency: '${name}' -> '${cyclic}' -> ... -> '${name}'`);
+      continue;
+    }
+    const blocked = deps.find((dep) => !resolvable.has(dep))!;
+    unresolvable.set(name, `depends on '${blocked}' which cannot be initialized`);
+  }
+
+  // Dependencies-first order over the resolvable subgraph (acyclic by construction).
+  const order: string[] = [];
+  const visited = new Set<string>();
+  const visit = (name: string): void => {
+    if (visited.has(name)) return;
+    visited.add(name);
+    for (const dep of graph.get(name) ?? []) visit(dep);
+    order.push(name);
+  };
+  for (const name of graph.keys()) {
+    if (resolvable.has(name)) visit(name);
+  }
+  return { order, unresolvable };
 }

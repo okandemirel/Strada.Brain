@@ -14,7 +14,8 @@
  */
 /** What the skill loader holds for a name after a hot-load attempt. */
 export interface SkillHotLoadVerdict {
-  readonly status: "active" | "disabled" | "gated" | "error" | "incomplete";
+  /** Mirrors SkillStatus in src/skills/types.ts ("untrusted": plan 1.15 — workspace code not approved, not imported). */
+  readonly status: "active" | "disabled" | "gated" | "error" | "incomplete" | "untrusted";
   /** Directory the loaded entry came from — not necessarily the one just written. */
   readonly path: string;
   readonly gateReason?: string | undefined;

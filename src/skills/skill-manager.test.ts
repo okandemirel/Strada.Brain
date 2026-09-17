@@ -1,5 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { writeFile, mkdir } from "node:fs/promises";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { writeFile, mkdir, readFile, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SkillManager } from "./skill-manager.js";
 import type { SkillEntry, SkillConfig } from "./types.js";
@@ -7,6 +8,7 @@ import type { DiscoveredSkill } from "./skill-loader.js";
 import type { GateResult } from "./skill-gating.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "../agents/tools/tool.interface.js";
 import { withTempDir } from "../test-helpers.js";
+import { approveWorkspaceSkill } from "./skill-trust.js";
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -30,35 +32,15 @@ vi.mock("./skill-config.js", () => ({
   readSkillConfig: () => mockReadSkillConfig(),
 }));
 
+const silentLogger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 vi.mock("../utils/logger.js", () => ({
-  getLoggerSafe: () => ({
-    debug: vi.fn(),
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-  }),
+  getLoggerSafe: () => silentLogger,
+  getLogger: () => silentLogger,
 }));
 
-vi.mock("../plugins/registry.js", () => {
-  class MockPluginRegistry {
-    private plugins = new Map<string, { metadata: { name: string }; initialize: () => Promise<void>; dispose: () => Promise<void> }>();
-    register(plugin: { metadata: { name: string }; initialize: () => Promise<void>; dispose: () => Promise<void> }) {
-      this.plugins.set(plugin.metadata.name, plugin);
-    }
-    getAll() { return [...this.plugins.values()]; }
-    async initializeAll() {
-      for (const p of this.plugins.values()) {
-        await p.initialize();
-      }
-    }
-    async disposeAll() {
-      for (const p of this.plugins.values()) {
-        await p.dispose();
-      }
-    }
-  }
-  return { PluginRegistry: MockPluginRegistry };
-});
+// The real PluginRegistry is used on purpose (plan 0-B.2): the defect was in
+// the interplay between SkillManager's status assignment and the registry's
+// topological sort, which a permissive mock could never reproduce.
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -303,6 +285,255 @@ describe("SkillManager", () => {
       expect(mgr.getEntries()).toHaveLength(0);
       // env should be restored (CLEANUP_VAR was not set before)
       expect(process.env["CLEANUP_VAR"]).toBeUndefined();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // plan 0-B.2 (audit R1/D67 + R2 + Codex #3): dependency preflight.
+  // Before: every skill was marked "active" before initializeAll(), and one
+  // missing requires.skills entry made topologicalSort() throw past the
+  // per-plugin try/catch — no skill initialised, all reported active.
+  // -------------------------------------------------------------------------
+  describe("requires.skills preflight (plan 0-B.2)", () => {
+    const dep = (name: string, skills: string[]) =>
+      makeSkill(name, { manifest: { name, version: "1.0.0", description: name, requires: { skills } } });
+
+    it("(a) A requires B → both active, in either discovery order", async () => {
+      for (const order of [[dep("A", ["B"]), makeSkill("B")], [makeSkill("B"), dep("A", ["B"])]]) {
+        mockDiscoverSkills.mockResolvedValue(order);
+        const mgr = new SkillManager();
+        const entries = await mgr.loadAll();
+        const byName = Object.fromEntries(entries.map((e) => [e.manifest.name, e.status]));
+        expect(byName, `order ${order.map((s) => s.manifest.name).join(",")}`).toEqual({ A: "active", B: "active" });
+        await mgr.dispose();
+      }
+    });
+
+    it("(b) A requires a skill nobody discovered → A gated naming it; independent C active and initialised", async () => {
+      mockDiscoverSkills.mockResolvedValue([dep("A", ["Missing"]), makeSkill("C")]);
+      mockLoadSkillTools.mockResolvedValue([makeTool("t")]);
+      const registered: string[] = [];
+      const mgr = new SkillManager();
+      mgr.setToolRegistrar((tools) => registered.push(...tools.map((t) => t.name)), () => {});
+
+      const entries = await mgr.loadAll();
+      const a = entries.find((e) => e.manifest.name === "A")!;
+      const c = entries.find((e) => e.manifest.name === "C")!;
+      expect(a.status).toBe("gated");
+      expect(a.gateReason).toContain("Missing");
+      expect(a.gateReason).toContain("not discovered");
+      expect(c.status).toBe("active");
+      // C's initialize() ran — its tools reached the registrar — so the batch was not aborted.
+      expect(registered).toEqual(["t"]);
+      // A's tools were never imported.
+      expect(mockLoadSkillTools.mock.calls.map((c) => c[0].manifest.name)).toEqual(["C"]);
+    });
+
+    it("(b') a dependency that is gated/disabled poisons its dependents transitively, with the reason", async () => {
+      mockDiscoverSkills.mockResolvedValue([dep("A", ["B"]), dep("B", ["Off"]), makeSkill("Off"), makeSkill("C")]);
+      mockReadSkillConfig.mockResolvedValue({ entries: { Off: { enabled: false } } });
+      const mgr = new SkillManager();
+      const entries = await mgr.loadAll();
+      const byName = Object.fromEntries(entries.map((e) => [e.manifest.name, e]));
+      expect(byName["Off"]!.status).toBe("disabled");
+      expect(byName["B"]!.status).toBe("gated");
+      expect(byName["B"]!.gateReason).toContain('"Off" is disabled');
+      expect(byName["A"]!.status).toBe("gated");
+      expect(byName["A"]!.gateReason).toContain('"B" is gated');
+      expect(byName["C"]!.status).toBe("active");
+    });
+
+    it("(c) A <-> B cycle → both gated as cyclic, C active", async () => {
+      mockDiscoverSkills.mockResolvedValue([dep("A", ["B"]), dep("B", ["A"]), makeSkill("C")]);
+      const mgr = new SkillManager();
+      const entries = await mgr.loadAll();
+      const byName = Object.fromEntries(entries.map((e) => [e.manifest.name, e]));
+      expect(byName["A"]!.status).toBe("gated");
+      expect(byName["A"]!.gateReason).toMatch(/cycle/i);
+      expect(byName["B"]!.status).toBe("gated");
+      expect(byName["B"]!.gateReason).toMatch(/cycle/i);
+      expect(byName["C"]!.status).toBe("active");
+      expect(mockLoadSkillTools.mock.calls.map((c) => c[0].manifest.name)).toEqual(["C"]);
+    });
+
+    it("(e) a skill whose initialize() throws ends \"error\" with the reason, never \"active\"", async () => {
+      mockDiscoverSkills.mockResolvedValue([makeSkill("boom"), makeSkill("fine")]);
+      mockLoadSkillTools.mockImplementation(async (skill) => [makeTool(`${skill.manifest.name}_t`)]);
+      const mgr = new SkillManager();
+      // initialize() of the skill plugin is where tools reach the registrar.
+      mgr.setToolRegistrar((tools) => {
+        if (tools.some((t) => t.name === "boom_t")) throw new Error("registrar exploded");
+      }, () => {});
+
+      const entries = await mgr.loadAll();
+      const byName = Object.fromEntries(entries.map((e) => [e.manifest.name, e]));
+      expect(byName["boom"]!.status).toBe("error");
+      expect(byName["boom"]!.gateReason).toContain("registrar exploded");
+      expect(byName["fine"]!.status).toBe("active");
+    });
+
+    it("does not hand requires.skills to checkGates (the preflight measures it) but keeps the other gates intact", async () => {
+      mockDiscoverSkills.mockResolvedValue([
+        makeSkill("A", { manifest: { name: "A", version: "1.0.0", description: "A", requires: { skills: ["B"], env: ["X_ENV"] } } }),
+        makeSkill("B"),
+      ]);
+      const mgr = new SkillManager();
+      await mgr.loadAll();
+      const call = (mockCheckGates as unknown as { mock: { calls: unknown[][] } }).mock.calls.find((c) => c[0] !== undefined)!;
+      expect(call[0]).toEqual({ env: ["X_ENV"] });
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // plan 4.9 (audit R2/D68): env overrides are injected BEFORE the gate check
+  // and rolled back when the skill does not end active.
+  // -------------------------------------------------------------------------
+  describe("env injection order (plan 4.9)", () => {
+    const KEY = "SKILL_MGR_TEST_GATE_VAR";
+    afterEach(() => { delete process.env[KEY]; });
+
+    it("(d) a gate that reads an env var configured for that skill passes; a gated skill's env is restored", async () => {
+      mockDiscoverSkills.mockResolvedValue([
+        makeSkill("needs-env", { manifest: { name: "needs-env", version: "1.0.0", description: "x", requires: { env: [KEY] } } }),
+        makeSkill("gated-env", { manifest: { name: "gated-env", version: "1.0.0", description: "y", requires: { bins: ["nope"] } } }),
+      ]);
+      mockReadSkillConfig.mockResolvedValue({
+        entries: {
+          "needs-env": { enabled: true, env: { [KEY]: "from-user-config" } },
+          "gated-env": { enabled: true, env: { GATED_ENV_LEFTOVER: "should-not-survive" } },
+        },
+      });
+      // Real env gate semantics for the first skill: pass iff the var is set at check time.
+      const seenAtGate: Record<string, string | undefined> = {};
+      mockCheckGates.mockImplementation(async (requires: unknown) => {
+        const r = requires as { env?: string[]; bins?: string[] } | undefined;
+        if (r?.env) {
+          seenAtGate[r.env[0]!] = process.env[r.env[0]!];
+          return process.env[r.env[0]!] ? { passed: true, reasons: [] } : { passed: false, reasons: [`Required environment variable not set: ${r.env[0]}`] };
+        }
+        if (r?.bins) return { passed: false, reasons: ["Required binary not found: nope"] };
+        return { passed: true, reasons: [] };
+      });
+
+      const mgr = new SkillManager();
+      const entries = await mgr.loadAll();
+      const byName = Object.fromEntries(entries.map((e) => [e.manifest.name, e]));
+      expect(seenAtGate[KEY]).toBe("from-user-config");
+      expect(byName["needs-env"]!.status).toBe("active");
+      expect(process.env[KEY]).toBe("from-user-config");
+      expect(byName["gated-env"]!.status).toBe("gated");
+      expect(process.env["GATED_ENV_LEFTOVER"]).toBeUndefined();
+      await mgr.dispose();
+      expect(process.env[KEY]).toBeUndefined();
+    });
+
+    it("rolls env back for a skill parked by the dependency preflight and for one whose initialize() failed", async () => {
+      mockDiscoverSkills.mockResolvedValue([
+        makeSkill("dep-gated", { manifest: { name: "dep-gated", version: "1.0.0", description: "x", requires: { skills: ["Missing"] } } }),
+        makeSkill("init-fails"),
+      ]);
+      mockReadSkillConfig.mockResolvedValue({
+        entries: {
+          "dep-gated": { enabled: true, env: { DEP_GATED_ENV: "1" } },
+          "init-fails": { enabled: true, env: { INIT_FAILS_ENV: "1" } },
+        },
+      });
+      mockLoadSkillTools.mockResolvedValue([makeTool("t")]);
+      const mgr = new SkillManager();
+      mgr.setToolRegistrar(() => { throw new Error("nope"); }, () => {});
+      const entries = await mgr.loadAll();
+      const byName = Object.fromEntries(entries.map((e) => [e.manifest.name, e.status]));
+      expect(byName).toEqual({ "dep-gated": "gated", "init-fails": "error" });
+      expect(process.env["DEP_GATED_ENV"]).toBeUndefined();
+      expect(process.env["INIT_FAILS_ENV"]).toBeUndefined();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // plan 1.15 (audit 13F3/D65 + Codex #23): workspace skills need an approval
+  // record OUTSIDE the project before their entry point is imported.
+  // -------------------------------------------------------------------------
+  describe("workspace trust (plan 1.15)", () => {
+    let fakeHome: string;
+    let projectRoot: string;
+    const savedHome = process.env["HOME"];
+
+    beforeEach(async () => {
+      fakeHome = await mkdtemp(join(tmpdir(), "strada-trust-home-"));
+      projectRoot = await mkdtemp(join(tmpdir(), "strada-trust-proj-"));
+      process.env["HOME"] = fakeHome;
+    });
+    afterEach(async () => {
+      process.env["HOME"] = savedHome;
+      await rm(fakeHome, { recursive: true, force: true });
+      await rm(projectRoot, { recursive: true, force: true });
+    });
+
+    async function writeWorkspaceSkill(name: string, indexJs: string): Promise<DiscoveredSkill> {
+      const dir = join(projectRoot, "skills", name);
+      await mkdir(dir, { recursive: true });
+      await writeFile(join(dir, "SKILL.md"), `---\nname: ${name}\nversion: 1.0.0\ndescription: ws\n---\n`, "utf-8");
+      await writeFile(join(dir, "index.js"), indexJs, "utf-8");
+      return makeSkill(name, { tier: "workspace", path: dir });
+    }
+
+    it("(f) no record → untrusted and NOT imported; approved → active; code edited → untrusted again; record under HOME; in-project record ignored", async () => {
+      const skill = await writeWorkspaceSkill("ws", "export const tools = [];\n");
+      mockDiscoverSkills.mockResolvedValue([skill]);
+
+      // A record planted INSIDE the project must not count.
+      await mkdir(join(projectRoot, ".strada"), { recursive: true });
+      await writeFile(join(projectRoot, ".strada", "trusted-skills.json"), JSON.stringify({ version: 1, projects: { [projectRoot]: { "skills/ws": { sha256: "x", approvedAtIso: "" } } } }));
+
+      let entries = await new SkillManager().loadAll(projectRoot);
+      expect(entries[0]!.status).toBe("untrusted");
+      expect(entries[0]!.gateReason).toContain("strada skill trust ws");
+      expect(mockLoadSkillTools).not.toHaveBeenCalled();
+
+      await approveWorkspaceSkill(projectRoot, skill.path);
+      const recordPath = join(fakeHome, ".strada", "trusted-skills.json");
+      const record = JSON.parse(await readFile(recordPath, "utf-8")) as { projects: Record<string, Record<string, { sha256: string }>> };
+      expect(Object.values(record.projects)[0]!["skills/ws"]!.sha256).toMatch(/^[0-9a-f]{64}$/);
+
+      entries = await new SkillManager().loadAll(projectRoot);
+      expect(entries[0]!.status).toBe("active");
+      expect(mockLoadSkillTools).toHaveBeenCalledTimes(1);
+
+      await writeFile(join(skill.path, "index.js"), "export const tools = []; /* changed */\n", "utf-8");
+      entries = await new SkillManager().loadAll(projectRoot);
+      expect(entries[0]!.status).toBe("untrusted");
+      expect(entries[0]!.gateReason).toContain("changed since approval");
+      expect(mockLoadSkillTools).toHaveBeenCalledTimes(1);
+    });
+
+    it("bundled/managed/extra tiers are not subject to the trust record", async () => {
+      mockDiscoverSkills.mockResolvedValue([
+        makeSkill("b", { tier: "bundled" }),
+        makeSkill("m", { tier: "managed" }),
+        makeSkill("x", { tier: "extra" }),
+      ]);
+      const entries = await new SkillManager().loadAll(projectRoot);
+      expect(entries.map((e) => e.status)).toEqual(["active", "active", "active"]);
+    });
+
+    it("an untrusted workspace skill's dependents are gated, and it is never registered", async () => {
+      const ws = await writeWorkspaceSkill("ws", "export const tools = [];\n");
+      mockDiscoverSkills.mockResolvedValue([
+        ws,
+        makeSkill("needs-ws", { manifest: { name: "needs-ws", version: "1.0.0", description: "d", requires: { skills: ["ws"] } } }),
+      ]);
+      const entries = await new SkillManager().loadAll(projectRoot);
+      const byName = Object.fromEntries(entries.map((e) => [e.manifest.name, e]));
+      expect(byName["ws"]!.status).toBe("untrusted");
+      expect(byName["needs-ws"]!.status).toBe("gated");
+      expect(byName["needs-ws"]!.gateReason).toContain('"ws" is untrusted');
+    });
+
+    it("loadSingle applies the same rule to a hot-loaded workspace skill with an entry point", async () => {
+      const ws = await writeWorkspaceSkill("hot", "export const tools = [];\n");
+      const entry = await new SkillManager().loadSingle(ws.path);
+      expect(entry!.status).toBe("untrusted");
+      expect(mockLoadSkillTools).not.toHaveBeenCalled();
     });
   });
 
