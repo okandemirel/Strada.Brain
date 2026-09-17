@@ -119,6 +119,42 @@ describe("writeImporterMeta keeps an authored meta of the right importer (audit 
     expect(readFileSync(path2, "utf8")).toBe(template("ModelImporter")(GUID));
   });
 
+  // Codex review 2026-09-17: "same importer" kept a TextureImporter whose
+  // spriteMode was 0 (no usable sprite) and kept sheet slices that no longer
+  // fit the regenerated image.
+  it("spriteMode 0 becomes 1 (Single) with every other authored field kept; with slices it becomes 2", () => {
+    const noSlices = authoredSprite
+      .replace("  spriteMode: 2", "  spriteMode: 0")
+      .replace(/    sprites:\n(?:    - name: .*\n      rect: .*\n)+/, "    sprites: []\n");
+    expect(noSlices).toContain("spriteMode: 0");
+    expect(noSlices).not.toContain("rect:");
+    const path = metaFile(noSlices);
+    expect(writeImporterMeta(path, "TextureImporter", template("TextureImporter"))).toEqual({ guid: GUID, kept: true });
+    expect(readFileSync(path, "utf8")).toBe(noSlices.replace("  spriteMode: 0", "  spriteMode: 1"));
+
+    const withSlices = metaFile(authoredSprite.replace("  spriteMode: 2", "  spriteMode: 0"));
+    expect(writeImporterMeta(withSlices, "TextureImporter", template("TextureImporter")).kept).toBe(true);
+    expect(readFileSync(withSlices, "utf8")).toBe(authoredSprite); // back to Multiple, slices intact
+  });
+
+  it("a 1024-wide sheet regenerated at 512×512 falls back to the template, guid kept, and says why", () => {
+    const wide = authoredSprite.replace("rect: {x: 32, y: 0, width: 32, height: 32}", "rect: {x: 512, y: 0, width: 512, height: 512}");
+    const path = metaFile(wide);
+    const r = writeImporterMeta(path, "TextureImporter", template("TextureImporter"), { image: { width: 512, height: 512 } });
+    expect(r.guid).toBe(GUID);
+    expect(r.kept).toBe(false);
+    expect(r.reason).toMatch(/1 of 2 sprite-sheet slices no longer fit the regenerated 512×512 image/);
+    expect(readFileSync(path, "utf8")).toBe(template("TextureImporter")(GUID));
+  });
+
+  it("guard: a sheet whose slices still fit is kept; without image dimensions nothing is judged", () => {
+    const path = metaFile(authoredSprite); // slices end at x=64, y=32
+    expect(writeImporterMeta(path, "TextureImporter", template("TextureImporter"), { image: { width: 64, height: 32 } })).toEqual({ guid: GUID, kept: true });
+    expect(readFileSync(path, "utf8")).toBe(authoredSprite);
+    const wide = metaFile(authoredSprite.replace("rect: {x: 32, y: 0, width: 32, height: 32}", "rect: {x: 512, y: 0, width: 512, height: 512}"));
+    expect(writeImporterMeta(wide, "TextureImporter", template("TextureImporter")).kept).toBe(true);
+  });
+
   it("guard: no meta at all gets the template with a fresh guid; a meta with no guid gets one too", () => {
     const path = metaFile();
     const r = writeImporterMeta(path, "TextureImporter", template("TextureImporter"));

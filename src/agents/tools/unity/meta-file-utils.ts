@@ -55,11 +55,39 @@ export type AssetImporter = "TextureImporter" | "ModelImporter" | "AudioImporter
  * mesh), is replaced by the template — with the existing guid, so bindings
  * never churn.
  */
+export interface ImporterMetaOptions {
+  /**
+   * The regenerated image's dimensions. A kept sprite sheet whose slice rects
+   * no longer fit inside them would import as broken sprites (Codex
+   * 2026-09-17); such a meta is re-templated instead, and `reason` says so.
+   */
+  image?: { width: number; height: number };
+}
+
+export interface ImporterMetaResult {
+  guid: string;
+  /** The existing meta was kept (possibly with textureType/spriteMode corrected). */
+  kept: boolean;
+  /** Why an existing meta of the right importer was re-templated anyway. */
+  reason?: string;
+}
+
+/** Every slice rect in a TextureImporter meta's spriteSheet. */
+function spriteSliceRects(meta: string): Array<{ x: number; y: number; width: number; height: number }> {
+  const rects: Array<{ x: number; y: number; width: number; height: number }> = [];
+  const re = /^[ \t]+rect:[ \t]*\{x:[ \t]*(-?[\d.]+),[ \t]*y:[ \t]*(-?[\d.]+),[ \t]*width:[ \t]*([\d.]+),[ \t]*height:[ \t]*([\d.]+)\}/gm;
+  for (const m of meta.matchAll(re)) {
+    rects.push({ x: Number(m[1]), y: Number(m[2]), width: Number(m[3]), height: Number(m[4]) });
+  }
+  return rects;
+}
+
 export function writeImporterMeta(
   metaFilePath: string,
   importer: AssetImporter,
   template: (guid: string) => string,
-): { guid: string; kept: boolean } {
+  opts: ImporterMetaOptions = {},
+): ImporterMetaResult {
   let existing: string | undefined;
   try {
     existing = readFileSync(metaFilePath, "utf8");
@@ -72,14 +100,31 @@ export function writeImporterMeta(
 
   if (existing !== undefined && guidMatch && sameImporter) {
     if (importer === "TextureImporter") {
-      // Only the one setting that makes the file a Sprite; a meta without the
-      // line at all is not one this tool understands, so it gets the template.
+      // Only what makes the file a usable Sprite: textureType 8 and a sprite
+      // mode that is not "none" (0 → Single, or Multiple when slices exist).
+      // A meta without the lines at all is not one this tool understands, so
+      // it gets the template.
       const typeLine = /^([ \t]+textureType:[ \t]*)(\d+)[ \t]*$/m;
-      if (!typeLine.test(existing)) {
+      const modeLine = /^([ \t]+spriteMode:[ \t]*)(\d+)[ \t]*$/m;
+      if (!typeLine.test(existing) || !modeLine.test(existing)) {
         writeFileSync(metaFilePath, template(guid), "utf8");
-        return { guid, kept: false };
+        return { guid, kept: false, reason: "the existing TextureImporter meta has no textureType/spriteMode line" };
       }
-      const enforced = existing.replace(typeLine, (_m, prefix: string) => `${prefix}8`);
+      const slices = spriteSliceRects(existing);
+      if (opts.image) {
+        const { width, height } = opts.image;
+        const outside = slices.filter((r) => r.x < 0 || r.y < 0 || r.x + r.width > width || r.y + r.height > height);
+        if (outside.length > 0) {
+          writeFileSync(metaFilePath, template(guid), "utf8");
+          return {
+            guid,
+            kept: false,
+            reason: `${outside.length} of ${slices.length} sprite-sheet slices no longer fit the regenerated ${width}×${height} image`,
+          };
+        }
+      }
+      let enforced = existing.replace(typeLine, (_m, prefix: string) => `${prefix}8`);
+      enforced = enforced.replace(modeLine, (_m, prefix: string, mode: string) => (mode === "0" ? `${prefix}${slices.length > 0 ? 2 : 1}` : `${prefix}${mode}`));
       if (enforced !== existing) writeFileSync(metaFilePath, enforced, "utf8");
     }
     return { guid, kept: true };

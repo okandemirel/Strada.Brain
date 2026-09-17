@@ -833,8 +833,10 @@ export class SpriteGenerateTool implements ITool {
       // Meta BEFORE art: if the pair is ever torn, a meta without art is
       // cleaned up (here, and by Unity); art without meta gets a random guid
       // and imports as a plain Texture — the binding-churn failure class.
-      // An authored sprite meta (pivot, PPU, slices) is kept, not re-templated.
-      writeImporterMeta(`${pathCheck.fullPath}.meta`, "TextureImporter", spriteMeta);
+      // An authored sprite meta (pivot, PPU, slices) is kept, not re-templated
+      // — unless its slices no longer fit the 512² draw, and then it says so.
+      const metaWrite = writeImporterMeta(`${pathCheck.fullPath}.meta`, "TextureImporter", spriteMeta, { image: { width: 512, height: 512 } });
+      const metaNote = metaWrite.reason ? ` The existing .meta was re-templated (guid kept): ${metaWrite.reason}.` : "";
       const localOpts = {
         negative,
         size: 512,
@@ -887,7 +889,7 @@ export class SpriteGenerateTool implements ITool {
           `Sprite written by local diffusion (${spec.label}): ${relFile} (+ .meta). ` +
           (/background kept/.test(result.detail) ? "Background KEPT: the cut-out was empty, so this sprite carries the model's background. " : "") +
           "Unity imports it as a Sprite on next refresh. Bind it to the element's prefab now — an " +
-          "unreferenced sprite draws nothing.",
+          "unreferenced sprite draws nothing." + metaNote,
       };
     } catch (err) {
       previous.restore();
@@ -1066,9 +1068,12 @@ export class SpriteGenerateTool implements ITool {
     for (const job of jobs) previous.set(job.fullPath, new PreviousAsset(job.fullPath));
     const restoreAll = (): void => { for (const p of previous.values()) p.restore(); };
     try {
+      const retemplated: string[] = [];
       for (const job of jobs) {
-        writeImporterMeta(`${job.fullPath}.meta`, "TextureImporter", spriteMeta);
+        const w = writeImporterMeta(`${job.fullPath}.meta`, "TextureImporter", spriteMeta, { image: { width: 512, height: 512 } });
+        if (w.reason) retemplated.push(`${job.relFile}: ${w.reason}`);
       }
+      const metaNote = retemplated.length > 0 ? `\nExisting .meta re-templated (guid kept) — ${retemplated.join("; ")}.` : "";
       const opts = { negative, size: 512, removeBackground: input["keepBackground"] !== true };
       // "Produced by this call" = the file's mtime changed since the call
       // began (or the file did not exist) — a clock comparison misses a file
@@ -1211,7 +1216,7 @@ export class SpriteGenerateTool implements ITool {
           (failures > 0 || !runOk ? `, ${failures} failed (${detail.slice(0, 200)})` : "") +
           `.\n${[...lines, ...refused.map((r) => `✗ ${r}`)].join("\n")}\n` +
           "Unity imports them as Sprites on next refresh. Bind each to its element — an unreferenced sprite draws nothing." +
-          malformedNote,
+          malformedNote + metaNote,
         isError: written.size === 0,
       };
     } catch (err) {
@@ -1306,13 +1311,15 @@ export class SpriteGenerateTool implements ITool {
       // prefab/scene binding to the previous version of this sprite — and
       // keep an authored sprite meta whole (audit A5 / D56).
       mkdirSync(dirname(pathCheck.fullPath), { recursive: true });
-      const { guid } = writeImporterMeta(`${pathCheck.fullPath}.meta`, "TextureImporter", spriteMeta);
+      const metaWrite = writeImporterMeta(`${pathCheck.fullPath}.meta`, "TextureImporter", spriteMeta, { image: { width: size, height: size } });
+      const guid = metaWrite.guid;
+      const metaNote = metaWrite.reason ? ` The existing .meta was re-templated (guid kept): ${metaWrite.reason}.` : "";
       writeFileSync(pathCheck.fullPath, png);
       return {
         content:
           `Sprite written: ${relFile} (+ .meta, guid ${guid.slice(0, 8)}…, shape ${shape}, ${size}px). ` +
           "Unity imports it as a Sprite on next refresh. Bind it to the element's prefab now — an " +
-          "unreferenced sprite draws nothing." + aliasNote,
+          "unreferenced sprite draws nothing." + aliasNote + metaNote,
       };
     } catch (err) {
       return {

@@ -23,6 +23,19 @@ import { writeImporterMeta } from "./meta-file-utils.js";
 import { spriteMeta } from "./sprite-generate.js";
 import { resolveUnityCliPath, unityCliMissingHelp } from "./unity-cli-path.js";
 
+/** Width/height from a PNG's IHDR, or undefined when the file is not a readable PNG. */
+function pngDimensions(path: string): { width: number; height: number } | undefined {
+  try {
+    const buf = readFileSync(path);
+    if (buf.length < 24 || buf.readUInt32BE(0) !== 0x89504e47 || buf.toString("ascii", 12, 16) !== "IHDR") return undefined;
+    const width = buf.readUInt32BE(16);
+    const height = buf.readUInt32BE(20);
+    return width > 0 && height > 0 ? { width, height } : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export interface PrerenderStyle {
   /** Body color (hex) — from the style profile, never invented. */
   bodyColor?: string;
@@ -485,10 +498,13 @@ export class PrerenderFramesTool implements ITool {
       // Sprite .meta per frame: with no editor importing inside a lease, a
       // meta-less PNG lands as a default Texture instead of a Sprite. Guids
       // are reused across regenerations so bindings never churn.
+      const retemplated: string[] = [];
       for (const frame of frames) {
         const framePath = join(outCheck.fullPath, frame);
         try {
-          writeImporterMeta(`${framePath}.meta`, "TextureImporter", spriteMeta);
+          const dims = pngDimensions(framePath);
+          const w = writeImporterMeta(`${framePath}.meta`, "TextureImporter", spriteMeta, dims ? { image: dims } : {});
+          if (w.reason) retemplated.push(`${frame}: ${w.reason}`);
         } catch {
           // Meta emission is best-effort per frame.
         }
@@ -498,7 +514,8 @@ export class PrerenderFramesTool implements ITool {
         content:
           `${frames.length} frames rendered to ${outRel} (+ sprite .meta each): ${frames.join(", ")}. ` +
           "These are the glossy game-ready angles — use them as the element's view sprites, and animate " +
-          "between them for the '2D-animation snappiness' the GDD asks for.",
+          "between them for the '2D-animation snappiness' the GDD asks for." +
+          (retemplated.length > 0 ? ` Existing frame .meta re-templated (guid kept) — ${retemplated.join("; ")}.` : ""),
       };
     } catch (err) {
       return { content: `Error: prerender failed: ${err instanceof Error ? err.message : String(err)}`, isError: true };

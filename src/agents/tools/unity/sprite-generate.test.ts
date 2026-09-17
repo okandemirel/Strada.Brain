@@ -246,6 +246,30 @@ describe("regeneration keeps an authored sprite .meta (audit A5 / D56)", () => {
     expectAuthoredKept();
   });
 
+  it("a spriteMode 0 meta is regenerated as a usable Single sprite, the rest of it kept (Codex 2026-09-17)", async () => {
+    mkdirSync(join(dir, "Assets", "Art", "Generated"), { recursive: true });
+    const noSprite = spriteMeta(GUID).replace("spriteMode: 1", "spriteMode: 0").replace("spritePixelsToUnits: 100", "spritePixelsToUnits: 16");
+    writeFileSync(metaPath(), noSprite, "utf8");
+    const r = await new SpriteGenerateTool({ localAvailable: () => false }).execute({ name: "Hero" }, makeContext(dir));
+    expect(r.isError).toBeFalsy();
+    const meta = readFileSync(metaPath(), "utf8");
+    expect(meta).toContain("spriteMode: 1");
+    expect(meta).toContain("spritePixelsToUnits: 16");
+    expect(meta).toContain(`guid: ${GUID}`);
+    expect(String(r.content)).not.toContain("re-templated");
+  });
+
+  it("a sheet whose slices no longer fit the regenerated image gets the template, guid kept, and the output says so (Codex 2026-09-17)", async () => {
+    mkdirSync(join(dir, "Assets", "Art", "Generated"), { recursive: true });
+    const wide = authored.replace("rect: {x: 32, y: 0, width: 32, height: 32}", "rect: {x: 512, y: 0, width: 512, height: 512}");
+    writeFileSync(metaPath(), wide, "utf8");
+    const r = await new SpriteGenerateTool({ localAvailable: () => false }).execute({ name: "Hero", size: 64 }, makeContext(dir));
+    expect(r.isError).toBeFalsy();
+    expect(readFileSync(metaPath(), "utf8")).toBe(spriteMeta(GUID));
+    expect(String(r.content)).toContain("re-templated (guid kept)");
+    expect(String(r.content)).toContain("no longer fit the regenerated 64×64 image");
+  });
+
   it("guard: a meta of the wrong importer type is replaced by the sprite template, guid kept", async () => {
     mkdirSync(join(dir, "Assets", "Art", "Generated"), { recursive: true });
     writeFileSync(metaPath(), `fileFormatVersion: 2\nguid: ${GUID}\nDefaultImporter:\n  externalObjects: {}\n`, "utf8");
