@@ -53,6 +53,40 @@ describe("tasks a restart paused are resumed by the re-arm pass", () => {
     }
   });
 
+  it("two missions with the same 160-character HEAD and no goal id are still two missions (audit 02.6)", async () => {
+    // The dedupe compared the first 160 characters of the root prompt: two
+    // campaigns whose GDD preamble filled that window were one mission, and
+    // the older stayed blocked for good after a restart.
+    vi.useFakeTimers();
+    try {
+      const head = "Mission: build the game described in the design document below, following the project's module pattern and the standing instructions in full. ".repeat(2);
+      expect(head.length).toBeGreaterThan(160);
+      const one = { ...paused, id: "task_1", prompt: `${head}\n\nGame A: a match-three puzzle.` };
+      const two = { ...paused, id: "task_2", prompt: `${head}\n\nGame B: a tower defence.` };
+      const { internals, resumed } = harness({ paused: [one, two] });
+      internals.scheduleKeepAliveRearm();
+      await vi.advanceTimersByTimeAsync(95_000 + 60_000);
+      expect(resumed).toEqual(["task_1", "task_2"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("…while the same mission under a retry's progress block is still one mission (guard)", async () => {
+    vi.useFakeTimers();
+    try {
+      const base = "Mission: build the game";
+      const one = { ...paused, id: "task_1", prompt: base };
+      const two = { ...paused, id: "task_2", prompt: `${base}\n\nPREVIOUS ATTEMPT PROGRESS (verify before redoing any of it):\nFiles the previous attempt already created/modified:\n- Assets/A.cs` };
+      const { internals, resumed } = harness({ paused: [one, two] });
+      internals.scheduleKeepAliveRearm();
+      await vi.advanceTimersByTimeAsync(95_000 + 60_000);
+      expect(resumed).toEqual(["task_1"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("resumes the paused mission 90 s after boot", async () => {
     vi.useFakeTimers();
     try {
@@ -140,6 +174,23 @@ describe("a blocked mission without a retry marker is re-armed too (audited 2026
       await vi.advanceTimersByTimeAsync(90_000 + 31_000);
       expect(retried).toEqual(["task_1"]);
       expect(blocks[0]).toMatch(/Auto-retry 1\/10/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("two BLOCKED missions with the same 160-character head are both re-armed (audit 02.6)", async () => {
+    vi.useFakeTimers();
+    try {
+      const head = "Mission: build the game described in the design document below, following the project's module pattern and the standing instructions in full. ".repeat(2);
+      const blockedWith = (id: string, tail: string) => ({
+        id, chatId: "cli-local", prompt: `${head}\n\n${tail}`, origin: "user", status: "blocked",
+        result: "Blocked: [goal_1] blocked:provider_unavailable  Skipped: dependency failed",
+      });
+      const { internals, retried } = harness([blockedWith("task_1", "Game A: a match-three puzzle."), blockedWith("task_2", "Game B: a tower defence.")]);
+      internals.scheduleKeepAliveRearm();
+      await vi.advanceTimersByTimeAsync(90_000 + 31_000 + 60_000);
+      expect(retried).toEqual(["task_1", "task_2"]);
     } finally {
       vi.useRealTimers();
     }

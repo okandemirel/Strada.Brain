@@ -449,7 +449,7 @@ export class BackgroundExecutor {
           if (seenLineages.has(lineage)) continue;
           seenLineages.add(lineage);
           const root = this.taskManager?.getStatus(lineage) as { prompt?: string } | null;
-          const promptRoot = (root?.prompt ?? task.prompt).slice(0, 160);
+          const promptRoot = this.missionIdentity(task, root?.prompt);
           // NOT one per chat. Two different unfinished missions in one chat
           // produced exactly ONE continuation and the older one stayed blocked
           // for good — serialization means they run in order, not that they
@@ -498,7 +498,7 @@ export class BackgroundExecutor {
           const lineage = this.lineageRootTaskId(task);
           if (seenLineages.has(lineage)) continue;
           const root = this.taskManager?.getStatus(lineage) as { prompt?: string } | null;
-          const promptRoot = task.goalRootId ?? (root?.prompt ?? task.prompt).slice(0, 160);
+          const promptRoot = this.missionIdentity(task, root?.prompt);
           if (seenPromptRoots.has(promptRoot)) continue;
           seenLineages.add(lineage);
           seenPromptRoots.add(promptRoot);
@@ -515,7 +515,10 @@ export class BackgroundExecutor {
                 (t) =>
                   t.id !== task.id &&
                   ["pending", "planning", "executing"].includes(t.status) &&
-                  (((this.taskManager?.getStatus?.(this.lineageRootTaskId(t as Task)) as { prompt?: string } | null)?.prompt ?? t.prompt).slice(0, 160)) === promptRoot,
+                  this.missionIdentity(
+                    t as Task,
+                    (this.taskManager?.getStatus?.(this.lineageRootTaskId(t as Task)) as { prompt?: string } | null)?.prompt,
+                  ) === promptRoot,
               );
               if (continued) {
                 getLoggerSafe().info("Restart-paused task left alone — the mission already continues under another task", { taskId: task.id });
@@ -2710,6 +2713,21 @@ export class BackgroundExecutor {
       current = (this.taskManager?.getStatus(current.parentId) ?? null) as typeof current;
     }
     return highest;
+  }
+
+  /**
+   * WHICH MISSION a task belongs to, for restart re-arm dedupe. The goal root
+   * when there is one; otherwise the root prompt WITHOUT the progress block
+   * every retry appends — the whole prompt, not its first 160 characters:
+   * two missions sharing a template header (the same GDD preamble) were one
+   * to the dedupe, and the older stayed blocked for good (audit 02.6,
+   * 2026-09-13). The paused branch compared a prefix against a value that
+   * could be a goal id; every branch uses this one function now.
+   */
+  private missionIdentity(task: Task, rootPrompt: string | undefined): string {
+    if (task.goalRootId) return `goal:${task.goalRootId}`;
+    const prompt = (rootPrompt ?? task.prompt).split("\n\nPREVIOUS ATTEMPT PROGRESS (")[0] ?? "";
+    return `prompt:${prompt.trim()}`;
   }
 
   private lineageRootTaskId(task: Task): string {
