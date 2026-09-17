@@ -35,6 +35,14 @@ import {
 import { resolveDotenvPath } from "../common/runtime-paths.js";
 import { describeEffectiveBudget, persistSetup } from "./setup-env-persistence.js";
 import {
+  formatProviderPreflightFailures,
+  preflightResponseProviders,
+  type ResponseProviderPreflightResult,
+} from "./response-provider-preflight.js";
+import { evaluateChainReadiness } from "./chain-readiness.js";
+import type { ProviderCredentialMap } from "../agents/providers/provider-registry.js";
+import { OPENCODE_GO_BASE_URL, OPENCODE_ZEN_BASE_URL } from "../agents/providers/opencode.js";
+import {
   buildMcpRecommendation,
   checkStradaDeps,
   installStradaMcpSubmodule,
@@ -45,7 +53,7 @@ const MAX_RETRIES = 3;
 type ProviderAuthMode = "api-key" | "chatgpt-subscription" | "claude-subscription";
 const RESPONSE_PROVIDER_CHOICES = [
   "claude", "openai", "deepseek", "kimi", "qwen", "gemini",
-  "groq", "mistral", "together", "fireworks", "minimax", "ollama",
+  "groq", "mistral", "together", "fireworks", "minimax", "opencode", "ollama",
 ] as const;
 const EMBEDDING_PROVIDER_CHOICES = [
   "auto", "gemini", "openai", "mistral", "together", "fireworks", "qwen", "ollama",
@@ -64,6 +72,7 @@ const PROVIDER_ENV_KEY_MAP: Record<string, string> = {
   together: "TOGETHER_API_KEY",
   fireworks: "FIREWORKS_API_KEY",
   minimax: "MINIMAX_API_KEY",
+  opencode: "OPENCODE_API_KEY",
 };
 const PROVIDER_LABELS: Record<string, string> = {
   claude: "Claude",
@@ -77,11 +86,30 @@ const PROVIDER_LABELS: Record<string, string> = {
   together: "Together",
   fireworks: "Fireworks",
   minimax: "MiniMax",
+  opencode: "OpenCode",
   ollama: "Ollama",
 };
 const DEFAULT_EMBEDDING_PROVIDERS = new Set([
   "gemini", "openai", "mistral", "together", "fireworks", "qwen", "ollama",
 ]);
+const MODEL_NAME_RE = /^[A-Za-z0-9._:/-]+$/;
+
+/**
+ * OpenCode hosted platforms, mirroring the web wizard's choice (audit 10.2 /
+ * D26): the terminal wizard could not select `opencode` at all, so its base
+ * URL and model never reached .env and the provider ran on registry defaults.
+ */
+export const OPENCODE_PLATFORM_BASE_URLS = {
+  zen: OPENCODE_ZEN_BASE_URL,
+  go: OPENCODE_GO_BASE_URL,
+} as const;
+export type OpencodePlatform = keyof typeof OPENCODE_PLATFORM_BASE_URLS;
+export const OPENCODE_PLATFORM_CHOICES = ["zen", "go"] as const;
+
+export function getOpencodeBaseUrl(platform: string | undefined): string {
+  const normalized = (platform ?? "").trim().toLowerCase();
+  return OPENCODE_PLATFORM_BASE_URLS[normalized as OpencodePlatform] ?? OPENCODE_ZEN_BASE_URL;
+}
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const SOURCE_WEB_SETUP_STATIC_DIR = path.resolve(MODULE_DIR, "../../web-portal/dist");
 const PACKAGED_WEB_SETUP_STATIC_DIR = path.resolve(MODULE_DIR, "../channels/web/static");
@@ -98,6 +126,12 @@ export interface WizardAnswers {
   embeddingProvider: string;
   embeddingApiKey?: string;
   channel: string;
+  /** Channel credentials keyed by env key (TELEGRAM_BOT_TOKEN, ...). */
+  channelCredentials?: Record<string, string | undefined>;
+  /** OpenCode hosted platform: "zen" (default) or "go". */
+  opencodePlatform?: string;
+  /** Optional OpenCode model id; blank leaves the provider default in place. */
+  opencodeDefaultModel?: string;
   language: string;
 }
 
@@ -205,6 +239,43 @@ function getProviderCredential(answers: WizardAnswers, providerName: string): st
   );
 }
 
+/** Every chain provider's credential as the wizard collected it (plan 2.5). */
+function getChainCredentials(answers: WizardAnswers, providerChain: readonly string[]): Record<string, string | undefined> {
+  const out: Record<string, string | undefined> = {};
+  for (const provider of providerChain) {
+    const credential = getProviderCredential(answers, provider);
+    if (credential !== undefined && credential.trim().length > 0) out[provider] = credential.trim();
+  }
+  return out;
+}
+
+/**
+ * The same credentials in the shape the preflight probes with (plan 2.4): the
+ * auth mode travels with the key, so an OpenAI subscription is probed as a
+ * subscription and not as a missing API key.
+ */
+function toPreflightCredentials(
+  answers: WizardAnswers,
+  providerChain: readonly string[],
+): ProviderCredentialMap {
+  const out: ProviderCredentialMap = {};
+  for (const provider of providerChain) {
+    const apiKey = getProviderCredential(answers, provider)?.trim();
+    const authMode = getProviderAuthMode(answers, provider);
+    if (apiKey === undefined && authMode === undefined) continue;
+    out[provider] = {
+      ...(apiKey === undefined || apiKey === "" ? {} : { apiKey }),
+      ...(provider === "openai" && (authMode === "api-key" || authMode === "chatgpt-subscription")
+        ? { openaiAuthMode: authMode }
+        : {}),
+      ...(provider === "claude" && (authMode === "api-key" || authMode === "claude-subscription")
+        ? { anthropicAuthMode: authMode }
+        : {}),
+    };
+  }
+  return out;
+}
+
 function getDefaultEmbeddingProviderForChain(providerChain: readonly string[]): string {
   for (const provider of providerChain) {
     if (DEFAULT_EMBEDDING_PROVIDERS.has(provider)) {
@@ -220,6 +291,152 @@ function isValidChannel(value: string): boolean {
 
 function isValidLanguage(value: string): boolean {
   return LANGUAGE_CHOICES.includes(value as typeof LANGUAGE_CHOICES[number]);
+}
+
+export interface ChannelCredentialField {
+  envKey: string;
+  label: string;
+  required: boolean;
+  hint?: string;
+}
+
+/**
+ * What a chosen channel must carry before setup may be written (plan 2.4,
+ * audit 10.2 / D26). The terminal wizard used to accept `telegram` and write a
+ * .env with DEFAULT_CHANNEL=telegram and no bot token: the next boot failed
+ * with "TELEGRAM_BOT_TOKEN is required". Same env keys as the web wizard's
+ * channel fields, and the required set matches `validateChannelConfig`
+ * (an empty allow-list denies every user, so it is required too).
+ */
+const CHANNEL_CREDENTIAL_FIELDS: Record<string, readonly ChannelCredentialField[]> = {
+  web: [],
+  cli: [],
+  telegram: [
+    {
+      envKey: "TELEGRAM_BOT_TOKEN",
+      label: "Telegram bot token",
+      required: true,
+      hint: "from @BotFather, e.g. 123456:ABC-DEF...",
+    },
+    {
+      envKey: "ALLOWED_TELEGRAM_USER_IDS",
+      label: "Allowed Telegram user IDs",
+      required: true,
+      hint: "comma-separated numeric ids; an empty list denies everyone",
+    },
+  ],
+  discord: [
+    {
+      envKey: "DISCORD_BOT_TOKEN",
+      label: "Discord bot token",
+      required: true,
+      hint: "Discord developer portal -> Bot -> Reset Token",
+    },
+  ],
+  slack: [
+    { envKey: "SLACK_BOT_TOKEN", label: "Slack bot token", required: true, hint: "xoxb-..." },
+    { envKey: "SLACK_APP_TOKEN", label: "Slack app token", required: true, hint: "xapp-... (socket mode)" },
+  ],
+};
+
+export function getChannelCredentialFields(channel: string): readonly ChannelCredentialField[] {
+  return CHANNEL_CREDENTIAL_FIELDS[channel.trim().toLowerCase()] ?? [];
+}
+
+/** Every required credential of the chosen channel is present (non-blank). */
+export function validateChannelCredentials(
+  channel: string,
+  values: Record<string, string | undefined> = {},
+): ValidationResult {
+  const missing = getChannelCredentialFields(channel)
+    .filter((field) => field.required && sanitizeEnvValue(values[field.envKey] ?? "") === "")
+    .map((field) => field.envKey);
+
+  if (missing.length === 0) {
+    return { valid: true };
+  }
+
+  return {
+    valid: false,
+    error: `The ${channel} channel needs ${missing.join(" and ")}. Nothing was written.`,
+  };
+}
+
+/**
+ * True when at least one provider already in the chain can produce embeddings
+ * with the credential the person just gave (Ollama needs none).
+ *
+ * Mirrors `hasAutoEmbeddingCandidate` in the web wizard so both surfaces make
+ * the same RAG decision (plan 2.5, audit 10.7).
+ */
+export function hasAutoEmbeddingCandidate(
+  providerChain: readonly string[],
+  credentials: Record<string, string | undefined> = {},
+): boolean {
+  return providerChain.some((raw) => {
+    const provider = raw.trim().toLowerCase();
+    if (!DEFAULT_EMBEDDING_PROVIDERS.has(provider)) return false;
+    if (provider === "ollama") return true;
+    return (credentials[provider] ?? "").trim().length > 0;
+  });
+}
+
+export interface RagDecision {
+  ragEnabled: boolean;
+  /** "auto" only when RAG is off; otherwise the provider that will embed. */
+  embeddingProvider: string;
+  /** One line explaining why RAG is off; null when it is on. */
+  reason: string | null;
+}
+
+/**
+ * RAG follows the embedding candidate, never the other way round (plan 2.5,
+ * audit 10.7). Choosing Claude and then RAG used to demand an embedding
+ * provider the person had no key for, with no way forward; now RAG is simply
+ * off with the reason stated.
+ */
+export function resolveRagSetup(input: {
+  providerChain: readonly string[];
+  providerCredentials?: Record<string, string | undefined>;
+  embeddingProvider?: string;
+  embeddingApiKey?: string;
+}): RagDecision {
+  const chain = input.providerChain
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
+  const credentials = input.providerCredentials ?? {};
+  const requested = (input.embeddingProvider ?? "auto").trim().toLowerCase() || "auto";
+
+  if (requested !== "auto") {
+    if (requested === "ollama") {
+      return { ragEnabled: true, embeddingProvider: "ollama", reason: null };
+    }
+    const credential = (input.embeddingApiKey ?? credentials[requested] ?? "").trim();
+    if (credential.length > 0) {
+      return { ragEnabled: true, embeddingProvider: requested, reason: null };
+    }
+    return {
+      ragEnabled: false,
+      embeddingProvider: "auto",
+      reason: `RAG is off: ${getEmbeddingProviderLabel(requested)} embeddings need an API key and none was given.`,
+    };
+  }
+
+  if (hasAutoEmbeddingCandidate(chain, credentials)) {
+    return {
+      ragEnabled: true,
+      embeddingProvider: getDefaultEmbeddingProviderForChain(chain),
+      reason: null,
+    };
+  }
+
+  return {
+    ragEnabled: false,
+    embeddingProvider: "auto",
+    reason: "RAG is off: none of the chosen providers can embed. Add a key for "
+      + "gemini, openai, mistral, together, fireworks or qwen (or run a local ollama) "
+      + "and rerun setup to turn it on.",
+  };
 }
 
 /**
@@ -266,11 +483,30 @@ export function generateEnvContent(answers: WizardAnswers): string {
       lines.push(`${envKey}="${sanitizedCredential}"`);
     }
   }
+  if (providerChain.includes("opencode")) {
+    lines.push(`OPENCODE_BASE_URL=${getOpencodeBaseUrl(answers.opencodePlatform)}`);
+    const opencodeModel = sanitizeEnvValue(answers.opencodeDefaultModel ?? "");
+    if (opencodeModel && MODEL_NAME_RE.test(opencodeModel)) {
+      lines.push(`OPENCODE_DEFAULT_MODEL=${opencodeModel}`);
+    }
+  }
   lines.push(`PROVIDER_CHAIN=${providerChain.join(",")}`);
 
-  if (answers.embeddingProvider && answers.embeddingProvider !== "auto") {
+  // RAG follows the embedding candidate (plan 2.5, audit 10.7): with nothing
+  // that can embed, the file says so explicitly instead of leaving a RAG that
+  // cannot index.
+  const rag = resolveRagSetup({
+    providerChain,
+    providerCredentials: getChainCredentials(answers, providerChain),
+    embeddingProvider: answers.embeddingProvider,
+    embeddingApiKey: answers.embeddingApiKey,
+  });
+  if (!rag.ragEnabled) {
+    lines.push("# RAG stays off until an embedding-capable provider is configured");
+    lines.push("RAG_ENABLED=false");
+  } else if (rag.embeddingProvider !== "auto") {
     if (
-      answers.embeddingProvider === "openai"
+      rag.embeddingProvider === "openai"
       && providerChain.includes("openai")
       && getProviderAuthMode(answers, "openai") === "chatgpt-subscription"
     ) {
@@ -279,20 +515,26 @@ export function generateEnvContent(answers: WizardAnswers): string {
         lines.push(`OPENAI_API_KEY="${embeddingKey}"`);
       }
     } else if (
-      answers.embeddingProvider !== "ollama" &&
-      !providerChain.includes(answers.embeddingProvider)
+      rag.embeddingProvider !== "ollama" &&
+      !providerChain.includes(rag.embeddingProvider)
     ) {
-      const embeddingEnvKey = PROVIDER_ENV_KEY_MAP[answers.embeddingProvider];
+      const embeddingEnvKey = PROVIDER_ENV_KEY_MAP[rag.embeddingProvider];
       const embeddingKey = sanitizeEnvValue(answers.embeddingApiKey ?? "");
       if (embeddingEnvKey && embeddingKey) {
         lines.push(`${embeddingEnvKey}="${embeddingKey}"`);
       }
     }
-    lines.push(`EMBEDDING_PROVIDER=${answers.embeddingProvider}`);
+    lines.push(`EMBEDDING_PROVIDER=${rag.embeddingProvider}`);
   }
   lines.push("");
 
   lines.push(`DEFAULT_CHANNEL=${sanitizeEnvValue(answers.channel)}`);
+  for (const field of getChannelCredentialFields(answers.channel)) {
+    const value = sanitizeEnvValue(answers.channelCredentials?.[field.envKey] ?? "");
+    if (value) {
+      lines.push(`${field.envKey}="${value}"`);
+    }
+  }
   lines.push(`LANGUAGE_PREFERENCE=${sanitizeEnvValue(answers.language)}`);
   lines.push("");
 
@@ -1170,6 +1412,33 @@ export async function runTerminalWizard(
     );
     const channel = channelAnswer.trim().toLowerCase() || "web";
 
+    // A CHANNEL WITHOUT ITS TOKEN IS NOT A CHANNEL (plan 2.4 / audit 10.2 /
+    // D26): the wizard let a person pick telegram, discord or slack and wrote
+    // a .env with no token, so the daemon booted with a channel it could not
+    // open. Every required credential of the chosen channel is asked for here
+    // and validated before anything is written.
+    const channelCredentials: Record<string, string> = {};
+    for (const field of getChannelCredentialFields(channel)) {
+      const hint = field.hint === undefined ? "" : " (" + field.hint + ")";
+      channelCredentials[field.envKey] = await askWithRetry(
+        rl,
+        "? " + field.label + hint + ": ",
+        (input) => {
+          if (field.required && sanitizeEnvValue(input) === "") {
+            return { valid: false, error: field.label + " is required for the " + channel + " channel." };
+          }
+          return { valid: true };
+        },
+      );
+    }
+    const channelCheck = validateChannelCredentials(channel, channelCredentials);
+    if (!channelCheck.valid) {
+      console.log("\n❌ " + (channelCheck.error ?? "the channel is missing a credential"));
+      intentionalClose = true;
+      rl.close();
+      return undefined;
+    }
+
     const langAnswer = await askWithRetry(
       rl,
       `? Language (${LANGUAGE_CHOICES.join("/")}) [default: en]: `,
@@ -1195,6 +1464,33 @@ export async function runTerminalWizard(
     console.log(`  Language:        ${language}`);
     console.log(sep);
 
+    // PREFLIGHT BEFORE THE WRITE (plan 2.4): the wizard wrote a chain it had
+    // never probed, so a mistyped key became a daemon that could not answer.
+    // Nothing is written when no provider in the chain can be reached.
+    const preflightCredentials = toPreflightCredentials(
+      { providerCredentials, providerAuthModes, provider, apiKey, openaiAuthMode } as WizardAnswers,
+      providerChain,
+    );
+    console.log("\n⚙ Probing the provider chain…");
+    let preflight: ResponseProviderPreflightResult;
+    try {
+      preflight = await preflightResponseProviders([...providerChain], preflightCredentials);
+    } catch (err) {
+      console.log("\n❌ The provider chain could not be probed (" + (err instanceof Error ? err.message : String(err)) + "). Nothing was written.");
+      intentionalClose = true;
+      rl.close();
+      return undefined;
+    }
+    const readiness = evaluateChainReadiness(preflight, { requestedProviderIds: providerChain });
+    if (readiness.state === "unavailable") {
+      console.log("\n❌ No provider in the chain answered: " + formatProviderPreflightFailures(preflight.failures));
+      console.log("Nothing was written — fix the credentials and run setup again.");
+      intentionalClose = true;
+      rl.close();
+      return undefined;
+    }
+    if (readiness.warning !== undefined) console.log("⚠ " + readiness.warning);
+
     const envPath = resolveDotenvPath({ moduleUrl: import.meta.url });
     if (fs.existsSync(envPath)) {
       const overwrite = await rl.question("\n\u26A0 .env already exists. Update it? Keys you added by hand are kept. [y/N]: ");
@@ -1217,6 +1513,7 @@ export async function runTerminalWizard(
       embeddingProvider,
       embeddingApiKey: embeddingApiKey?.trim(),
       channel,
+      channelCredentials,
       language,
     });
 

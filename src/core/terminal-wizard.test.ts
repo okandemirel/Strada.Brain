@@ -12,6 +12,10 @@ import {
   getSuggestedNodeUpgradeCommand,
   nodeSupportsWebPortalBuild,
   resolveNvmDir,
+  getChannelCredentialFields,
+  validateChannelCredentials,
+  hasAutoEmbeddingCandidate,
+  resolveRagSetup,
 } from "./terminal-wizard.js";
 
 describe("generateEnvContent", () => {
@@ -370,3 +374,78 @@ describe("launchWebSetupWizard", () => {
   });
 });
 
+
+/**
+ * A channel without its token is not a channel; RAG follows what can embed
+ * (plan 2.4 / audit 10.2 / D26; plan 2.5 / audit 10.7).
+ */
+describe("the terminal wizard's setup contract", () => {
+  it("names what each channel must carry, and refuses a channel that carries none", () => {
+    expect(getChannelCredentialFields("web")).toEqual([]);
+    expect(getChannelCredentialFields("cli")).toEqual([]);
+    expect(getChannelCredentialFields("telegram").map((f) => f.envKey)).toEqual([
+      "TELEGRAM_BOT_TOKEN",
+      "ALLOWED_TELEGRAM_USER_IDS",
+    ]);
+    expect(getChannelCredentialFields("nope")).toEqual([]);
+
+    expect(validateChannelCredentials("web", {})).toEqual({ valid: true });
+    const missing = validateChannelCredentials("telegram", {});
+    expect(missing.valid).toBe(false);
+    expect(missing.error).toContain("TELEGRAM_BOT_TOKEN");
+    expect(missing.error).toContain("Nothing was written");
+    // A blank token is no token.
+    expect(validateChannelCredentials("telegram", { TELEGRAM_BOT_TOKEN: "   ", ALLOWED_TELEGRAM_USER_IDS: "1" }).valid).toBe(false);
+    expect(validateChannelCredentials("telegram", { TELEGRAM_BOT_TOKEN: "123:ABC", ALLOWED_TELEGRAM_USER_IDS: "1" })).toEqual({ valid: true });
+  });
+
+  it("writes the channel's credentials it was given, and opencode's base URL", () => {
+    const content = generateEnvContent({
+      unityProjectPath: "/Users/test/MyGame",
+      providerChain: ["opencode"],
+      providerCredentials: { opencode: "sk-oc-123456789" },
+      embeddingProvider: "ollama",
+      channel: "telegram",
+      channelCredentials: { TELEGRAM_BOT_TOKEN: "123:ABC", ALLOWED_TELEGRAM_USER_IDS: "42" },
+      language: "en",
+    });
+    expect(content).toContain("DEFAULT_CHANNEL=telegram");
+    expect(content).toContain('TELEGRAM_BOT_TOKEN="123:ABC"');
+    expect(content).toContain('ALLOWED_TELEGRAM_USER_IDS="42"');
+    expect(content).toContain("OPENCODE_BASE_URL=");
+  });
+
+  it("RAG follows the embedding candidate: off with a reason when nothing can embed", () => {
+    // Claude alone cannot embed, so RAG would index nothing (audit 10.7).
+    const claudeOnly = resolveRagSetup({ providerChain: ["claude"], providerCredentials: { claude: "sk-ant-1" } });
+    expect(claudeOnly.ragEnabled).toBe(false);
+    expect(claudeOnly.reason).toBeTruthy();
+    expect(hasAutoEmbeddingCandidate(["claude"], { claude: "sk-ant-1" })).toBe(false);
+
+    // A chain with an embedding-capable provider enables it.
+    expect(hasAutoEmbeddingCandidate(["claude", "gemini"], { gemini: "key" })).toBe(true);
+    const withGemini = resolveRagSetup({ providerChain: ["claude", "gemini"], providerCredentials: { gemini: "key" } });
+    expect(withGemini.ragEnabled).toBe(true);
+
+    // Ollama embeds locally with no credential at all.
+    expect(hasAutoEmbeddingCandidate(["ollama"], {})).toBe(true);
+    expect(resolveRagSetup({ providerChain: ["ollama"], providerCredentials: {} }).ragEnabled).toBe(true);
+
+    // An explicit choice without a key is refused rather than half-configured.
+    const explicit = resolveRagSetup({ providerChain: ["claude"], providerCredentials: {}, embeddingProvider: "openai" });
+    expect(explicit.ragEnabled).toBe(false);
+    expect(explicit.embeddingProvider).toBe("auto");
+  });
+
+  it("a RAG-less chain says so in the file instead of leaving RAG on", () => {
+    const content = generateEnvContent({
+      unityProjectPath: "/Users/test/MyGame",
+      providerChain: ["claude"],
+      providerCredentials: { claude: "sk-ant-123456789" },
+      channel: "web",
+      language: "en",
+    });
+    expect(content).toContain("RAG_ENABLED=false");
+    expect(content).toContain("# RAG stays off until an embedding-capable provider is configured");
+  });
+});
