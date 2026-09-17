@@ -210,6 +210,31 @@ async function fetchWithTimeout(
   }
 }
 
+/** What the current configuration says for toggles whose default is not "unset". */
+export interface SetupExistingConfig {
+  daemonEnabled: boolean | null
+}
+
+export async function readSetupExistingConfig(
+  fetchImpl: typeof fetch = fetch,
+  csrfToken: string,
+  options: SetupFetchOptions = {},
+): Promise<SetupExistingConfig | null> {
+  try {
+    const res = await fetchWithTimeout(fetchImpl, '/api/setup/existing', {
+      cache: 'no-store',
+      headers: { 'X-CSRF-Token': csrfToken },
+      ...options,
+    })
+    if (!res.ok) return null
+    const data = await res.json().catch(() => null) as { daemonEnabled?: unknown } | null
+    if (!data || typeof data !== 'object') return null
+    return { daemonEnabled: typeof data.daemonEnabled === 'boolean' ? data.daemonEnabled : null }
+  } catch {
+    return null
+  }
+}
+
 export async function readSetupBootstrapStatus(
   fetchImpl: typeof fetch = fetch,
   options: SetupFetchOptions = {},
@@ -379,6 +404,8 @@ export function useSetupWizard() {
   // touched the toggle saved STRADA_DAEMON_ENABLED=false and silently lost
   // the product's core loop (audit 10.1 / 10.6 / D25).
   const [daemonEnabled, setDaemonEnabledState] = useState(true)
+  // Once the user touches the toggle, a late hydration must not undo it.
+  const daemonTouchedRef = useRef(false)
   const [autonomyEnabled, setAutonomyEnabledState] = useState(false)
   const [autonomyHours, setAutonomyHoursState] = useState(4)
   const [daemonBudget, setDaemonBudgetState] = useState(1.0)
@@ -451,6 +478,15 @@ export function useSetupWizard() {
         setCsrfToken(result.token)
         setSetupAvailability('available')
         setSetupUnavailableReason(null)
+        // Hydrate from the CURRENT configuration: a re-run of setup over an
+        // .env that says STRADA_DAEMON_ENABLED=false must show the toggle off,
+        // not the runtime default (Codex review of 0-A.25).
+        void readSetupExistingConfig(fetch, result.token).then((existing) => {
+          if (!mountedRef.current || !existing) return
+          if (existing.daemonEnabled !== null && !daemonTouchedRef.current) {
+            setDaemonEnabledState(existing.daemonEnabled)
+          }
+        })
         return
       }
 
@@ -976,6 +1012,7 @@ export function useSetupWizard() {
   }, [])
 
   const setDaemonEnabled = useCallback((enabled: boolean) => {
+    daemonTouchedRef.current = true
     setDaemonEnabledState(enabled)
   }, [])
 

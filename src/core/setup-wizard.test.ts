@@ -586,6 +586,67 @@ describe("SetupWizard path validation", () => {
     expect(baseUrls ?? {}).toEqual({});
   });
 
+  it("carries an existing STRADA_DAEMON_ENABLED=false over when the client omits the key, and reports it on /api/setup/existing (Codex review of 0-A.25)", async () => {
+    const tempCwd = fs.mkdtempSync(path.join(os.tmpdir(), "strada-setup-wizard-"));
+    tmpDirs.push(tempCwd);
+    process.chdir(tempCwd);
+    process.env["STRADA_INSTALL_ROOT"] = tempCwd;
+    process.env["STRADA_SOURCE_CHECKOUT"] = "true";
+    fs.writeFileSync(path.join(tempCwd, ".env"), "UNITY_PROJECT_PATH=/tmp/x\nSTRADA_DAEMON_ENABLED=false\n");
+    preflightResponseProvidersMock.mockResolvedValue({ passedProviderIds: ["kimi"], failures: [] });
+
+    const wizard = new SetupWizard({ port: 0 });
+    const existing = makeResponse();
+    await (wizard as unknown as {
+      handleRequest: (req: { url: string; method: string; headers?: Record<string, string> }, res: unknown) => Promise<void>;
+    }).handleRequest(
+      { url: "/api/setup/existing", method: "GET", headers: { "x-csrf-token": (wizard as unknown as { csrfToken: string }).csrfToken } },
+      existing.response,
+    );
+    expect(JSON.parse(existing.read().body)).toEqual({ daemonEnabled: false });
+
+    // The request does not mention the key at all: the opt-out must survive.
+    const saveResponse = await saveWizard(wizard, {
+      UNITY_PROJECT_PATH: homedir(),
+      PROVIDER_CHAIN: "kimi",
+      KIMI_API_KEY: "sk-kimi",
+      RAG_ENABLED: "false",
+    });
+    expect(saveResponse.read().statusCode).toBe(200);
+    const envContent = fs.readFileSync(path.join(tempCwd, ".env"), "utf-8");
+    expect(envContent).toContain("STRADA_DAEMON_ENABLED=false");
+    expect(envContent).not.toContain("STRADA_DAEMON_ENABLED=true");
+  });
+
+  it("reports null on /api/setup/existing and writes the default (on) when nothing set the key (guard)", async () => {
+    const tempCwd = fs.mkdtempSync(path.join(os.tmpdir(), "strada-setup-wizard-"));
+    tmpDirs.push(tempCwd);
+    process.chdir(tempCwd);
+    process.env["STRADA_INSTALL_ROOT"] = tempCwd;
+    process.env["STRADA_SOURCE_CHECKOUT"] = "true";
+    delete process.env["STRADA_DAEMON_ENABLED"];
+    preflightResponseProvidersMock.mockResolvedValue({ passedProviderIds: ["kimi"], failures: [] });
+
+    const wizard = new SetupWizard({ port: 0 });
+    const existing = makeResponse();
+    await (wizard as unknown as {
+      handleRequest: (req: { url: string; method: string; headers?: Record<string, string> }, res: unknown) => Promise<void>;
+    }).handleRequest(
+      { url: "/api/setup/existing", method: "GET", headers: { "x-csrf-token": (wizard as unknown as { csrfToken: string }).csrfToken } },
+      existing.response,
+    );
+    expect(JSON.parse(existing.read().body)).toEqual({ daemonEnabled: null });
+
+    const saveResponse = await saveWizard(wizard, {
+      UNITY_PROJECT_PATH: homedir(),
+      PROVIDER_CHAIN: "kimi",
+      KIMI_API_KEY: "sk-kimi",
+      RAG_ENABLED: "false",
+    });
+    expect(saveResponse.read().statusCode).toBe(200);
+    expect(fs.readFileSync(path.join(tempCwd, ".env"), "utf-8")).toContain("STRADA_DAEMON_ENABLED=true");
+  });
+
   it("blocks saving when the only response provider fails preflight (no false success)", async () => {
     preflightResponseProvidersMock.mockResolvedValue({
       passedProviderIds: [],

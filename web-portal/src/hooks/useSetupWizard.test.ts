@@ -248,12 +248,17 @@ describe('useSetupWizard daemon toggle (audit 10.1 / 10.6 / D25)', () => {
     vi.restoreAllMocks()
   })
 
-  function installFetchMock() {
+  function installFetchMock(existing?: { daemonEnabled: boolean | null }) {
     const saves: Array<Record<string, string>> = []
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
       if (url.startsWith('/api/setup/csrf')) {
         return new Response(JSON.stringify({ token: 'csrf-1' }), { status: 200 })
+      }
+      if (url.startsWith('/api/setup/existing')) {
+        return existing === undefined
+          ? new Response('{}', { status: 404 })
+          : new Response(JSON.stringify(existing), { status: 200 })
       }
       if (url === '/api/setup' && init?.method === 'POST') {
         saves.push(JSON.parse(String(init.body)) as Record<string, string>)
@@ -290,6 +295,29 @@ describe('useSetupWizard daemon toggle (audit 10.1 / 10.6 / D25)', () => {
     await act(async () => { await result.current.save() })
     await waitFor(() => expect(saves).toHaveLength(1))
     expect(saves[0]!.STRADA_DAEMON_ENABLED).toBe('false')
+    unmount()
+  })
+
+  it('hydrates the toggle from an existing STRADA_DAEMON_ENABLED=false and keeps it false when untouched (Codex review of 0-A.25)', async () => {
+    const saves = installFetchMock({ daemonEnabled: false })
+    const { result, unmount } = renderHook(() => useSetupWizard())
+    await waitFor(() => expect(result.current.daemonEnabled).toBe(false))
+    act(() => { result.current.setRagEnabled(false) })
+    await act(async () => { await result.current.save() })
+    await waitFor(() => expect(saves).toHaveLength(1))
+    expect(saves[0]!.STRADA_DAEMON_ENABLED).toBe('false')
+    unmount()
+  })
+
+  it('falls back to the runtime default (on) when the key is absent from the existing config (guard)', async () => {
+    const saves = installFetchMock({ daemonEnabled: null })
+    const { result, unmount } = renderHook(() => useSetupWizard())
+    await waitFor(() => expect(result.current.setupAvailability).toBe('available'))
+    expect(result.current.daemonEnabled).toBe(true)
+    act(() => { result.current.setRagEnabled(false) })
+    await act(async () => { await result.current.save() })
+    await waitFor(() => expect(saves).toHaveLength(1))
+    expect(saves[0]!.STRADA_DAEMON_ENABLED).toBe('true')
     unmount()
   })
 })

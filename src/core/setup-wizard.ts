@@ -8,6 +8,8 @@
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from "node:http";
 import { resolveWebStaticDir } from "../common/web-static-dir.js";
 import { readFile, writeFile, stat, readdir, realpath } from "node:fs/promises";
+import { existsSync, readFileSync } from "node:fs";
+import * as dotenv from "dotenv";
 import { join, extname, resolve, sep, isAbsolute } from "node:path";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
@@ -376,6 +378,28 @@ export function hasConfiguredEmbeddingCandidate(config: Record<string, unknown>)
   }
 
   return false;
+}
+
+/**
+ * Current STRADA_DAEMON_ENABLED as the runtime would see it: the .env at the
+ * install root wins (that is what a re-run of setup is about to rewrite),
+ * then the process environment; null when nobody set it. Read without
+ * mutating process.env.
+ */
+export function readExistingDaemonSetting(): boolean | null {
+  let raw: string | undefined;
+  try {
+    const envPath = resolveDotenvPath({ moduleUrl: import.meta.url });
+    if (existsSync(envPath)) {
+      raw = dotenv.parse(readFileSync(envPath, "utf-8"))["STRADA_DAEMON_ENABLED"];
+    }
+  } catch {
+    // unreadable .env: fall through to the process environment
+  }
+  raw = raw ?? process.env["STRADA_DAEMON_ENABLED"];
+  const value = (raw ?? "").trim();
+  if (!value) return null;
+  return value !== "false";
 }
 
 export function buildSetupEnvLines(
@@ -755,6 +779,17 @@ export class SetupWizard {
       if (url === "/api/setup/openai/status" && method === "GET") {
         if (!this.guardSetupReadRoute(req, res)) return;
         await this.handleOpenAiSubscriptionStatus(res);
+        return;
+      }
+
+      // What the CURRENT configuration says, for fields whose runtime default
+      // differs from "unset": the portal hydrates its toggles from this so a
+      // re-run of setup does not silently overwrite an explicit choice
+      // (Codex review of 0-A.25: the daemon toggle defaulted to on and flipped
+      // an existing STRADA_DAEMON_ENABLED=false).
+      if (url === "/api/setup/existing" && method === "GET") {
+        if (!this.guardSetupReadRoute(req, res)) return;
+        this.json(res, 200, { daemonEnabled: readExistingDaemonSetting() });
         return;
       }
 
@@ -1325,6 +1360,14 @@ export class SetupWizard {
     } catch {
       this.json(res, 400, { success: false, error: "Invalid JSON" });
       return;
+    }
+
+    // A client that does not send STRADA_DAEMON_ENABLED at all (older portal,
+    // a hand-written POST) must not flip an existing opt-out: the serializer
+    // treats an absent key as the default (on), so carry the current "false"
+    // over. Only an explicit value in the request overrides it.
+    if (config.STRADA_DAEMON_ENABLED === undefined && readExistingDaemonSetting() === false) {
+      config.STRADA_DAEMON_ENABLED = "false";
     }
 
     if (config.PROVIDER_CHAIN) {
