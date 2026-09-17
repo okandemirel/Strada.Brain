@@ -222,6 +222,25 @@ async function fetchWithTimeout(
  */
 export const BUDGET_UNLIMITED = -1
 
+/**
+ * "NOT KNOWN YET" — and therefore not "unlimited" (Codex 2026-09-17 round 9 #16).
+ *
+ * The slider used to start at BUDGET_UNLIMITED, so a Save made before (or
+ * entirely without) a successful `/api/setup/existing` explicitly asked for no
+ * limit. Someone whose .env said `STRADA_BUDGET_DAILY_USD=0` — the freeze that
+ * stops every system from spending — had it lifted by pressing Save on a form
+ * they never touched. Until hydration answers, the budget is UNKNOWN and Save
+ * sends no budget field at all: the file keeps what it has.
+ *
+ * Reachable only as the initial state; `setGlobalDailyBudget` clamps every
+ * value a person can produce to BUDGET_UNLIMITED or above.
+ */
+export const BUDGET_UNKNOWN = -2
+
+export function isUnknownBudget(value: number): boolean {
+  return !Number.isFinite(value) || value <= BUDGET_UNKNOWN
+}
+
 export function isUnlimitedBudget(value: number): boolean {
   return value < 0
 }
@@ -433,8 +452,10 @@ export function useSetupWizard() {
   const [autonomyEnabled, setAutonomyEnabledState] = useState(false)
   const [autonomyHours, setAutonomyHoursState] = useState(4)
   const [daemonBudget, setDaemonBudgetState] = useState(1.0)
-  // Unlimited is BUDGET_UNLIMITED, never 0: 0 is a real choice (freeze).
-  const [globalDailyBudget, setGlobalDailyBudgetState] = useState<number>(BUDGET_UNLIMITED)
+  // Unlimited is BUDGET_UNLIMITED, never 0: 0 is a real choice (freeze). And
+  // the START is neither — nothing is known about the .env until hydration
+  // answers or the person moves the slider (round 9 #16).
+  const [globalDailyBudget, setGlobalDailyBudgetState] = useState<number>(BUDGET_UNKNOWN)
   const budgetTouchedRef = useRef(false)
   const [obsidianEnabled, setObsidianEnabledState] = useState(false)
   const [obsidianVaultPath, setObsidianVaultPathState] = useState('')
@@ -513,9 +534,11 @@ export function useSetupWizard() {
             setDaemonEnabledState(existing.daemonEnabled)
           }
           // A configured budget — including 0 — is shown as it stands, so
-          // Save cannot silently lift someone's limit (round 8 #12).
-          if (existing.globalDailyBudget !== null && !budgetTouchedRef.current) {
-            setGlobalDailyBudgetState(existing.globalDailyBudget)
+          // Save cannot silently lift someone's limit (round 8 #12). An absent
+          // limit is a KNOWN unlimited; only a hydration that never succeeded
+          // leaves the value unknown (round 9 #16).
+          if (!budgetTouchedRef.current) {
+            setGlobalDailyBudgetState(existing.globalDailyBudget ?? BUDGET_UNLIMITED)
           }
         })
         return
@@ -1142,7 +1165,11 @@ export function useSetupWizard() {
     }
     // Unlimited says so by name; a numeric budget is sent verbatim so that a
     // zero reaches the file and an existing one is never dropped (round 8 #12).
-    if (isUnlimitedBudget(globalDailyBudget)) {
+    // UNKNOWN says NOTHING: no field at all, so the server keeps the configured
+    // limit rather than reading a default as a decision (round 9 #16).
+    if (isUnknownBudget(globalDailyBudget)) {
+      // no budget field
+    } else if (isUnlimitedBudget(globalDailyBudget)) {
       config._budgetUnlimited = 'true'
     } else {
       config.STRADA_BUDGET_DAILY_USD = String(globalDailyBudget)
@@ -1395,6 +1422,12 @@ export function useSetupWizard() {
     autonomyHours,
     daemonBudget,
     globalDailyBudget,
+    /**
+     * False until hydration answered or the person chose: the slider's value is
+     * a placeholder, not a statement about the .env, and Save says nothing
+     * about the budget (round 9 #16).
+     */
+    globalDailyBudgetKnown: !isUnknownBudget(globalDailyBudget),
     obsidianEnabled,
     obsidianVaultPath,
     obsidianApiKey,

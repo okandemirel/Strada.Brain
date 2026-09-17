@@ -8,9 +8,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { parse as dotenvParse } from "dotenv";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   describeEffectiveBudget,
+  ENV_SAVE_LOCK,
   mergeEnvContent,
   parseEnvLines,
   persistSetup,
@@ -181,5 +182,114 @@ describe("redactEffectiveConfig allowlist (round 8 #11)", () => {
     for (const secret of ["s3cret", "RSA PRIVATE KEY", "wJalrXUtnFEMI", "hooks.example"]) {
       expect(body).not.toContain(secret);
     }
+  });
+});
+
+// =============================================================================
+// ROUND 9 #15 — the save lock has to hold ACROSS PROCESSES
+//
+// Two independently loaded copies of this module stand in for two daemons: each
+// gets its own in-process `saveChains` map, so nothing but a lock on the file
+// itself can order them. Without one they both read the same base file, the
+// second rename wins (the first save's keys are gone), and the first save's
+// readback describes the second save's file.
+// =============================================================================
+describe("persistSetup across processes (round 9 #15)", () => {
+  const tmpDirs: string[] = [];
+  afterEach(() => {
+    for (const dir of tmpDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  /** A module instance with its own state — a stand-in for a second process. */
+  async function loadSeparateInstance(): Promise<typeof import("./setup-env-persistence.js")> {
+    vi.resetModules();
+    return await import("./setup-env-persistence.js");
+  }
+
+  function envDir(): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "strada-env-xproc-"));
+    tmpDirs.push(dir);
+    return dir;
+  }
+
+  it("does not lose one process's merge to the other's stale read", async () => {
+    const [a, b] = [await loadSeparateInstance(), await loadSeparateInstance()];
+    const envPath = path.join(envDir(), ".env");
+    fs.writeFileSync(envPath, "HAND_ADDED=yes\n");
+    await Promise.all([
+      a.persistSetup(envPath, ["A_KEY=1"], { ownedKeys: [] }),
+      b.persistSetup(envPath, ["B_KEY=2"], { ownedKeys: [] }),
+    ]);
+    const onDisk = dotenvParse(fs.readFileSync(envPath, "utf-8"));
+    expect(onDisk.HAND_ADDED).toBe("yes");
+    expect(onDisk.A_KEY).toBe("1");
+    expect(onDisk.B_KEY).toBe("2");
+  });
+
+  it("attributes each readback to the save that committed it", async () => {
+    const [a, b] = [await loadSeparateInstance(), await loadSeparateInstance()];
+    const envPath = path.join(envDir(), ".env");
+    fs.writeFileSync(envPath, "KIMI_API_KEY=old\n");
+    const [ra, rb] = await Promise.all([
+      a.persistSetup(envPath, ['KIMI_API_KEY="first"'], { ownedKeys: ["KIMI_API_KEY"] }),
+      b.persistSetup(envPath, ['KIMI_API_KEY="second"'], { ownedKeys: ["KIMI_API_KEY"] }),
+    ]);
+    expect(ra.effective.KIMI_API_KEY).toBe("first");
+    expect(rb.effective.KIMI_API_KEY).toBe("second");
+  });
+
+  it("leaves no lock file behind after a save", async () => {
+    const dir = envDir();
+    const envPath = path.join(dir, ".env");
+    await persistSetup(envPath, ["KIMI_API_KEY=k"], { ownedKeys: [] });
+    expect(fs.readdirSync(dir)).toEqual([".env"]);
+  });
+});
+
+describe("the cross-process save lock does not become a deadlock (round 9 #15)", () => {
+  const tmpDirs: string[] = [];
+  const original = { ...ENV_SAVE_LOCK };
+  afterEach(() => {
+    Object.assign(ENV_SAVE_LOCK, original);
+    for (const dir of tmpDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  function envDir(): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "strada-env-lock-"));
+    tmpDirs.push(dir);
+    return dir;
+  }
+
+  it("breaks a lock whose owning process is gone", async () => {
+    const envPath = path.join(envDir(), ".env");
+    fs.writeFileSync(envPath, "HAND_ADDED=yes\n");
+    // A crashed `strada setup`: a lock file naming a pid that no longer exists.
+    fs.writeFileSync(`${envPath}.lock`, JSON.stringify({ token: "x", pid: 0x7ffffffe, host: os.hostname(), startedAt: Date.now() }));
+    const result = await persistSetup(envPath, ["KIMI_API_KEY=k"], { ownedKeys: [] });
+    expect(result.effective.KIMI_API_KEY).toBe("k");
+    expect(result.diskMatchesCommit).toBe(true);
+    expect(fs.existsSync(`${envPath}.lock`)).toBe(false);
+  });
+
+  it("breaks an unreadable lock once it is older than staleMs", async () => {
+    ENV_SAVE_LOCK.staleMs = 0;
+    const envPath = path.join(envDir(), ".env");
+    fs.writeFileSync(`${envPath}.lock`, "not json at all");
+    const result = await persistSetup(envPath, ["KIMI_API_KEY=k"], { ownedKeys: [] });
+    expect(result.effective.KIMI_API_KEY).toBe("k");
+  });
+
+  it("refuses the save — writing nothing — while a LIVE process holds the lock", async () => {
+    ENV_SAVE_LOCK.timeoutMs = 60;
+    ENV_SAVE_LOCK.staleMs = 60_000;
+    const envPath = path.join(envDir(), ".env");
+    fs.writeFileSync(envPath, "KIMI_API_KEY=old\n");
+    // process.pid is alive by definition, so this lock may not be broken.
+    fs.writeFileSync(`${envPath}.lock`, JSON.stringify({ token: "x", pid: process.pid, host: os.hostname(), startedAt: Date.now() }));
+    await expect(persistSetup(envPath, ['KIMI_API_KEY="new"'], { ownedKeys: ["KIMI_API_KEY"] }))
+      .rejects.toThrow(/still saving/);
+    // A refused save is a save that did not happen.
+    expect(fs.readFileSync(envPath, "utf-8")).toBe("KIMI_API_KEY=old\n");
+    expect(fs.readdirSync(path.dirname(envPath)).filter((n) => n.endsWith(".tmp"))).toEqual([]);
   });
 });

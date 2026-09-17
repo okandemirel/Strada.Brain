@@ -49,12 +49,15 @@ vi.mock("../common/claude-cli-login.js", () => ({
 
 import {
   SetupWizard,
+  SETUP_OWNED_ENV_KEYS,
+  setupOwnedEnvKeysFor,
   buildSetupEnvLines,
   buildSetupAccessUrl,
   buildSetupReadyUrl,
   hasConfiguredEmbeddingCandidate,
   injectSetupModeMarker,
 } from "./setup-wizard.js";
+import { describeEffectiveBudget, persistSetup } from "./setup-env-persistence.js";
 
 describe("SetupWizard path validation", () => {
   const originalCwd = process.cwd();
@@ -1508,5 +1511,63 @@ describe("SetupWizard path validation", () => {
       const response = await callRoute(wizard, "/api/setup/claude/signin", "POST", false);
       expect(response.read().statusCode).toBe(403);
     });
+  });
+});
+
+// =============================================================================
+// ROUND 9 #16 — a save that says NOTHING about the budget must not delete it
+//
+// STRADA_BUDGET_DAILY_USD is a setup-owned key, so a request that carries
+// neither a number nor the unlimited marker used to REMOVE it: the portal's
+// untouched slider (or any client that omits the field) turned someone's
+// `STRADA_BUDGET_DAILY_USD=0` freeze into no limit at all. The wizard is the
+// authority for the budget only when the request actually states one.
+// =============================================================================
+describe("setupOwnedEnvKeysFor (round 9 #16)", () => {
+  const tmpDirs: string[] = [];
+  afterEach(() => {
+    for (const dir of tmpDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  function envFileWith(content: string): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "strada-setup-owned-"));
+    tmpDirs.push(dir);
+    const envPath = path.join(dir, ".env");
+    fs.writeFileSync(envPath, content);
+    return envPath;
+  }
+
+  it("drops the budget key from the owned set when the request states no budget", () => {
+    expect(setupOwnedEnvKeysFor({}).has("STRADA_BUDGET_DAILY_USD")).toBe(false);
+    // Everything else the wizard owns is unaffected.
+    expect(setupOwnedEnvKeysFor({}).has("RAG_ENABLED")).toBe(true);
+    expect(setupOwnedEnvKeysFor({}).size).toBe(SETUP_OWNED_ENV_KEYS.size - 1);
+  });
+
+  it("keeps owning the budget key when the request states one (guard)", () => {
+    expect(setupOwnedEnvKeysFor({ STRADA_BUDGET_DAILY_USD: "0" }).has("STRADA_BUDGET_DAILY_USD")).toBe(true);
+    expect(setupOwnedEnvKeysFor({ _budgetUnlimited: "true" }).has("STRADA_BUDGET_DAILY_USD")).toBe(true);
+    expect(setupOwnedEnvKeysFor({ STRADA_BUDGET_DAILY_USD: "unlimited" }).has("STRADA_BUDGET_DAILY_USD")).toBe(true);
+    expect(setupOwnedEnvKeysFor({ _budgetUnlimited: "true" }).size).toBe(SETUP_OWNED_ENV_KEYS.size);
+  });
+
+  it("keeps an existing zero budget through a save that never mentions it", async () => {
+    const config: Record<string, string> = { PROVIDER_CHAIN: "kimi", KIMI_API_KEY: "sk", RAG_ENABLED: "false" };
+    const envPath = envFileWith("STRADA_BUDGET_DAILY_USD=0\nHAND_ADDED=yes\n");
+    const persisted = await persistSetup(envPath, buildSetupEnvLines(config, homedir(), 3000), {
+      ownedKeys: setupOwnedEnvKeysFor(config),
+    });
+    expect(persisted.effective.STRADA_BUDGET_DAILY_USD).toBe("0");
+    expect(describeEffectiveBudget(persisted.effective)).toMatchObject({ dailyUsd: 0, unlimited: false });
+  });
+
+  it("still removes the budget key when the person chose unlimited (guard)", async () => {
+    const config: Record<string, string> = { PROVIDER_CHAIN: "kimi", KIMI_API_KEY: "sk", RAG_ENABLED: "false", _budgetUnlimited: "true" };
+    const envPath = envFileWith("STRADA_BUDGET_DAILY_USD=0\nHAND_ADDED=yes\n");
+    const persisted = await persistSetup(envPath, buildSetupEnvLines(config, homedir(), 3000), {
+      ownedKeys: setupOwnedEnvKeysFor(config),
+    });
+    expect(persisted.effective.STRADA_BUDGET_DAILY_USD).toBeUndefined();
+    expect(persisted.effective.HAND_ADDED).toBe("yes");
   });
 });

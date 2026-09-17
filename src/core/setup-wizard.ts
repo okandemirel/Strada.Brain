@@ -404,6 +404,25 @@ export const SETUP_OWNED_ENV_KEYS: ReadonlySet<string> = new Set<string>([
   "OBSIDIAN_API_KEY",
 ]);
 
+/**
+ * The keys the wizard is the authority for IN THIS request (round 9 #16).
+ *
+ * Ownership means "remove it when I no longer emit it", and the wizard emits
+ * STRADA_BUDGET_DAILY_USD only when the request actually states a budget. A
+ * request that says nothing — the portal's slider before
+ * `/api/setup/existing` answered, or any client that omits the field — used to
+ * DELETE an existing limit, turning a `STRADA_BUDGET_DAILY_USD=0` freeze into
+ * no limit at all. Silence now preserves whatever the file says; only a stated
+ * number or an explicit "unlimited" changes it.
+ */
+export function setupOwnedEnvKeysFor(config: Record<string, string>): ReadonlySet<string> {
+  const statesABudget = chosenUnlimitedBudget(config) || config.STRADA_BUDGET_DAILY_USD !== undefined;
+  if (statesABudget) return SETUP_OWNED_ENV_KEYS;
+  const keys = new Set(SETUP_OWNED_ENV_KEYS);
+  keys.delete("STRADA_BUDGET_DAILY_USD");
+  return keys;
+}
+
 /** Written only when absent: a hand-edited value (LOG_LEVEL=debug) is never reset. */
 export const SETUP_DEFAULT_ENV_KEYS: ReadonlySet<string> = new Set<string>([
   "STREAMING_ENABLED",
@@ -1685,7 +1704,9 @@ export class SetupWizard {
     let preservedKeys: string[];
     try {
       const persisted = await persistSetup(envPath, lines, {
-        ownedKeys: SETUP_OWNED_ENV_KEYS,
+        // Per-REQUEST ownership: a save that states no budget keeps the one in
+        // the file instead of deleting it (round 9 #16).
+        ownedKeys: setupOwnedEnvKeysFor(config),
         defaultKeys: SETUP_DEFAULT_ENV_KEYS,
       });
       effectiveConfig = redactEffectiveConfig(persisted.effective, new Set([...SETUP_OWNED_ENV_KEYS, ...SETUP_DEFAULT_ENV_KEYS]));

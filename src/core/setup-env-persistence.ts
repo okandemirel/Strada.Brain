@@ -19,7 +19,9 @@
  * Nothing here touches process.env.
  */
 
-import { readFile, rename, writeFile } from "node:fs/promises";
+import { open, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { hostname } from "node:os";
+import { randomBytes } from "node:crypto";
 import * as dotenv from "dotenv";
 
 const ENV_LINE_RE = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$/;
@@ -57,6 +59,12 @@ export interface PersistSetupResult extends MergeEnvResult {
   envPath: string;
   /** The .env as parsed back from disk after the write. */
   effective: Record<string, string>;
+  /**
+   * False when the bytes on disk right after this save's commit were NOT the
+   * bytes this save committed — a writer that did not take the lock replaced
+   * the file. `effective` then describes THIS save (round 9 #15), not the file.
+   */
+  diskMatchesCommit: boolean;
 }
 
 /** Split generated `KEY=value` lines into entries; comments and blanks are dropped. */
@@ -184,6 +192,113 @@ let tmpCounter = 0;
 /** One save at a time per file: a readback must describe the save it belongs to (round 8 #10). */
 const saveChains = new Map<string, Promise<unknown>>();
 
+/**
+ * CROSS-PROCESS SAVE LOCK (round 9 #15).
+ *
+ * The chain above only orders saves inside ONE process. A CLI `strada setup`
+ * and the portal's Save (or two daemons) both read the file, both merge into
+ * what they read, and the second rename wins: the first save's keys are gone,
+ * and its readback described the other process's file. Both are serialized by
+ * an O_EXCL lock file beside the .env — the kernel decides who wins, once.
+ */
+export const ENV_SAVE_LOCK = {
+  /** How long to wait for another process's save before refusing this one. */
+  timeoutMs: 15_000,
+  /** Poll interval while another process holds the lock. */
+  retryMs: 25,
+  /** A lock this old — or one whose owning process is gone — is broken. */
+  staleMs: 30_000,
+};
+
+interface EnvSaveLock {
+  lockPath: string;
+  /** Exactly what we wrote, so release only ever removes OUR lock. */
+  body: string;
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // EPERM: alive but owned by someone else.
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+/**
+ * Remove a lock nobody can still be holding: its owner died on this host, or
+ * it is older than `staleMs`. Returns true when the lock is (or already was)
+ * gone, so the caller should try to take it again immediately.
+ */
+async function breakAbandonedLock(lockPath: string): Promise<boolean> {
+  let raw: string;
+  let mtimeMs: number;
+  try {
+    raw = await readFile(lockPath, "utf-8");
+    mtimeMs = (await stat(lockPath)).mtimeMs;
+  } catch (error) {
+    // It vanished while we looked: the next O_EXCL attempt is the answer.
+    return (error as NodeJS.ErrnoException).code === "ENOENT";
+  }
+  let owner: { pid?: number; host?: string } = {};
+  try {
+    owner = JSON.parse(raw) as typeof owner;
+  } catch {
+    // Unreadable lock file: age alone decides.
+  }
+  const ownerGone = typeof owner.pid === "number" && owner.host === hostname() && !isProcessAlive(owner.pid);
+  const tooOld = Date.now() - mtimeMs > ENV_SAVE_LOCK.staleMs;
+  if (!ownerGone && !tooOld) return false;
+  try {
+    // Break the very lock we judged, never a fresh one someone else just took.
+    if ((await readFile(lockPath, "utf-8")) === raw) await unlink(lockPath);
+  } catch {
+    // Someone else broke or replaced it first.
+  }
+  return true;
+}
+
+async function acquireEnvSaveLock(envPath: string): Promise<EnvSaveLock> {
+  const lockPath = `${envPath}.lock`;
+  const body = JSON.stringify({
+    token: randomBytes(8).toString("hex"),
+    pid: process.pid,
+    host: hostname(),
+    envPath,
+    startedAt: Date.now(),
+  });
+  const deadline = Date.now() + ENV_SAVE_LOCK.timeoutMs;
+  for (;;) {
+    try {
+      const handle = await open(lockPath, "wx", 0o600);
+      try {
+        await handle.writeFile(body);
+      } finally {
+        await handle.close();
+      }
+      return { lockPath, body };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
+    if (await breakAbandonedLock(lockPath)) continue;
+    if (Date.now() >= deadline) {
+      throw new Error(
+        `Another process is still saving ${envPath} (${lockPath} held for over ${ENV_SAVE_LOCK.timeoutMs} ms). Nothing was written.`,
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, ENV_SAVE_LOCK.retryMs));
+  }
+}
+
+async function releaseEnvSaveLock(lock: EnvSaveLock): Promise<void> {
+  try {
+    if ((await readFile(lock.lockPath, "utf-8")) === lock.body) await unlink(lock.lockPath);
+  } catch {
+    // Already gone (broken as stale, or removed by hand): nothing to release.
+  }
+}
+
 export async function persistSetup(
   envPath: string,
   lines: readonly string[],
@@ -198,7 +313,21 @@ export async function persistSetup(
   return mine;
 }
 
+/** Read, merge, commit and read back with the cross-process lock held. */
 async function persistSetupOnce(
+  envPath: string,
+  lines: readonly string[],
+  options: PersistSetupOptions,
+): Promise<PersistSetupResult> {
+  const lock = await acquireEnvSaveLock(envPath);
+  try {
+    return await persistSetupLocked(envPath, lines, options);
+  } finally {
+    await releaseEnvSaveLock(lock);
+  }
+}
+
+async function persistSetupLocked(
   envPath: string,
   lines: readonly string[],
   options: PersistSetupOptions,
@@ -227,11 +356,22 @@ async function persistSetupOnce(
   // ATOMIC (round 8 #10): writeFile truncates first, so a daemon reading in
   // that instant saw an empty or half-written .env. The content goes to a temp
   // file beside the target and is renamed over it.
-  const tmpPath = `${envPath}.${process.pid}.${Date.now()}.${(tmpCounter += 1)}.tmp`;
+  const tmpPath = `${envPath}.${process.pid}.${Date.now()}.${(tmpCounter += 1)}.${randomBytes(4).toString("hex")}.tmp`;
   await writeFile(tmpPath, merge.content, { encoding: "utf-8", mode: 0o600 });
   await rename(tmpPath, envPath);
-  const effective = dotenv.parse(await readFile(envPath, "utf-8"));
-  return { envPath, effective, ...merge };
+  // ATTRIBUTION (round 9 #15): the readback happens with the lock still held,
+  // so it is this save's own file. Should the bytes differ anyway — a writer
+  // that ignored the lock — the result still describes THIS save rather than
+  // reporting someone else's configuration as ours, and says so.
+  let onDisk: string | null = null;
+  try {
+    onDisk = await readFile(envPath, "utf-8");
+  } catch {
+    onDisk = null;
+  }
+  const diskMatchesCommit = onDisk === merge.content;
+  const effective = dotenv.parse(diskMatchesCommit ? onDisk! : merge.content);
+  return { envPath, effective, diskMatchesCommit, ...merge };
 }
 
 const SECRET_KEY_RE = /(API_KEY|_TOKEN|_SECRET|PASSWORD|AUTH_TOKEN)$/;
