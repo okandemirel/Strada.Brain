@@ -671,6 +671,85 @@ describe("WebChannel origin boundary (13F6 / 4.8)", () => {
     expect(fetchMock).not.toHaveBeenCalled();
     expect(res.statusCode).toBe(403);
   });
+
+  // ── Round 11 #20: the portal's change-review decisions have to get through ──
+  //
+  // /api/workspace was read-only in the proxy, so the POST that carries an
+  // accept/reject would have been answered 405 here and never reached
+  // applyUndo — the transport would have looked wired and done nothing.
+  it("forwards a same-origin POST of change-review decisions to the dashboard", async () => {
+    const channel = new WebChannel(3000, 3100);
+    const url = "/api/workspace/change-review/9f3a1c2d/decisions";
+    const body = JSON.stringify({ decisions: [{ path: "Assets/Scripts/Existing.cs", decision: "undo" }] });
+    const req = createMockRequest({
+      method: "POST",
+      url,
+      headers: { origin: "http://127.0.0.1:3000", "content-type": "application/json" },
+      body,
+    });
+    const res = createMockResponse();
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ outcome: "undone", applied: ["Assets/Scripts/Existing.cs"] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const pending = proxy(channel, req, res, url);
+    req.emitBody();
+    await pending;
+
+    expect(res.statusCode).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [forwardedUrl, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(forwardedUrl).toBe(`http://127.0.0.1:3100${url}`);
+    expect(init.method).toBe("POST");
+    expect(init.body).toBe(body);
+  });
+
+  it("still refuses a change-review POST from another loopback port", async () => {
+    const channel = new WebChannel(3000, 3100);
+    const url = "/api/workspace/change-review/9f3a1c2d/decisions";
+    const req = createMockRequest({
+      method: "POST",
+      url,
+      headers: { origin: "http://127.0.0.1:9999" },
+      body: JSON.stringify({ decisions: [] }),
+    });
+    const res = createMockResponse();
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const pending = proxy(channel, req, res, url);
+    req.emitBody();
+    await pending;
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(403);
+  });
+
+  // The file-explorer routes under the same prefix stay read-only.
+  it("keeps the rest of /api/workspace read-only", async () => {
+    const channel = new WebChannel(3000, 3100);
+    const url = "/api/workspace/file?path=Assets/Scripts/Existing.cs";
+    const req = createMockRequest({
+      method: "POST",
+      url,
+      headers: { origin: "http://127.0.0.1:3000" },
+      body: "{}",
+    });
+    const res = createMockResponse();
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const pending = proxy(channel, req, res, url);
+    req.emitBody();
+    await pending;
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(405);
+  });
 });
 
 // ── Round 10 #19: the port-aware rule refused the project's OWN topologies ──

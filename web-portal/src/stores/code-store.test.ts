@@ -165,7 +165,10 @@ describe('useCodeStore — resolveDiff', () => {
     expect(tab.content).toBe('modified code')
   })
 
-  it('resolveDiff with accepted=false keeps original content', () => {
+  // Round 11 #20: a rejection leaves the tab ALONE until the daemon has put the
+  // file back — the diff stays up, so nothing on screen claims a revert that has
+  // not happened yet.
+  it('resolveDiff with accepted=false leaves the tab as it was, diff included', () => {
     useCodeStore.getState().openFile({
       path: 'src/test.ts',
       content: 'original code',
@@ -180,6 +183,8 @@ describe('useCodeStore — resolveDiff', () => {
 
     const tab = useCodeStore.getState().tabs.find((t) => t.path === 'src/test.ts')!
     expect(tab.content).toBe('original code')
+    expect(tab.isDiff).toBe(true)
+    expect(tab.modifiedContent).toBe('modified code')
   })
 
   it('resolveDiff clears diff fields (isDiff, diffContent, originalContent, modifiedContent)', () => {
@@ -259,10 +264,87 @@ describe('useCodeStore — change review and undo decisions', () => {
     expect(queued[0].needsConfirm).toBe(false)
   })
 
-  it('rejecting a diff puts the original content back on screen', () => {
+// ROUND 11 #20. Rejecting used to swap the tab to the original and dismiss the
+  // diff on the spot, while the run's bytes were still in the project: the revert
+  // existed only on screen. Nothing may present it as done before the server has
+  // actually put the file back.
+  it('rejecting a diff does NOT put the original back until the server applied it', () => {
+    useCodeStore.getState().setChangeReview(review)
+    openDiff('src/ready.ts')
+
+    useCodeStore.getState().resolveDiff('src/ready.ts', false)
+
+    const tab = useCodeStore.getState().tabs[0]
+    expect(tab.content).toBe('run version')
+    expect(tab.isDiff).toBe(true)
+    expect(tab.originalContent).toBe('my version')
+    expect(useCodeStore.getState().pendingDecisions[0].status).toBe('pending')
+  })
+
+  it('an applied undo is what puts the original back and dismisses the diff', () => {
+    useCodeStore.getState().setChangeReview(review)
+    openDiff('src/ready.ts')
+    useCodeStore.getState().markTouched('src/ready.ts', 'modified')
+    useCodeStore.getState().resolveDiff('src/ready.ts', false)
+    useCodeStore.getState().takePendingDecisions()
+
+    useCodeStore.getState().settleDecisions({ applied: ['src/ready.ts'] })
+
+    const tab = useCodeStore.getState().tabs[0]
+    expect(tab.content).toBe('my version')
+    expect(tab.isDiff).toBe(false)
+    expect(tab.diffContent).toBeUndefined()
+    // The decision reached the server, so it leaves the queue…
+    expect(useCodeStore.getState().pendingDecisions).toEqual([])
+    // …and the file is not a changed file any more.
+    expect(useCodeStore.getState().touchedFiles['src/ready.ts']).toBeUndefined()
+  })
+
+  it('a decision the server refused keeps the diff, keeps the decision, and says why', () => {
+    useCodeStore.getState().setChangeReview(review)
     openDiff('src/ready.ts')
     useCodeStore.getState().resolveDiff('src/ready.ts', false)
-    expect(useCodeStore.getState().tabs[0].content).toBe('my version')
+    useCodeStore.getState().takePendingDecisions()
+
+    useCodeStore.getState().settleDecisions({
+      refused: ['src/ready.ts'],
+      reason: 'nothing was undone: 1 path(s) are not in the state this run left them in',
+    })
+
+    const tab = useCodeStore.getState().tabs[0]
+    expect(tab.isDiff).toBe(true)
+    expect(tab.content).toBe('run version')
+    const decision = useCodeStore.getState().pendingDecisions[0]
+    expect(decision.status).toBe('refused')
+    expect(decision.error).toContain('not in the state this run left them in')
+    // …and it is offered again, so a retry (or a confirmed undo) can carry it.
+    expect(useCodeStore.getState().takePendingDecisions().map((d) => d.path)).toEqual(['src/ready.ts'])
+  })
+
+  it('an applied keep only clears the decision — the run\'s version is already on disk', () => {
+    useCodeStore.getState().setChangeReview(review)
+    openDiff('src/ready.ts')
+    useCodeStore.getState().resolveDiff('src/ready.ts', true)
+    useCodeStore.getState().takePendingDecisions()
+
+    useCodeStore.getState().settleDecisions({ applied: ['src/ready.ts'] })
+
+    expect(useCodeStore.getState().tabs[0].content).toBe('run version')
+    expect(useCodeStore.getState().pendingDecisions).toEqual([])
+  })
+
+  it('an answer that names neither the path nor a reason leaves the decision alone', () => {
+    useCodeStore.getState().setChangeReview(review)
+    openDiff('src/ready.ts')
+    useCodeStore.getState().resolveDiff('src/ready.ts', false)
+    useCodeStore.getState().takePendingDecisions()
+
+    useCodeStore.getState().settleDecisions({ applied: ['src/somethingelse.ts'] })
+
+    const decision = useCodeStore.getState().pendingDecisions[0]
+    expect(decision.path).toBe('src/ready.ts')
+    expect(decision.status).toBe('sending')
+    expect(useCodeStore.getState().tabs[0].isDiff).toBe(true)
   })
 
   it('accepting queues a keep decision and shows the modified content', () => {
@@ -314,7 +396,11 @@ describe('useCodeStore — change review and undo decisions', () => {
     expect(useCodeStore.getState().pendingDecisions).toHaveLength(1)
   })
 
-  it('takePendingDecisions hands them over once and empties the queue', () => {
+// ROUND 11 #20: it used to EMPTY the queue. A decision dropped at send time is
+  // a decision lost the moment the request fails — which is how a rejection
+  // could disappear with nothing said. It now marks them in flight and keeps
+  // them until settleDecisions.
+  it('takePendingDecisions hands them over once, marks them in flight, and keeps them', () => {
     useCodeStore.getState().setChangeReview(review)
     openDiff('src/ready.ts')
     openDiff('src/mine.ts')
@@ -323,7 +409,10 @@ describe('useCodeStore — change review and undo decisions', () => {
 
     const taken = useCodeStore.getState().takePendingDecisions()
     expect(taken.map((d) => d.path)).toEqual(['src/ready.ts', 'src/mine.ts'])
-    expect(useCodeStore.getState().pendingDecisions).toEqual([])
+    expect(taken.every((d) => d.status === 'sending')).toBe(true)
+    // Still there, in flight — not dropped.
+    expect(useCodeStore.getState().pendingDecisions.map((d) => d.status)).toEqual(['sending', 'sending'])
+    // …and not handed out a second time while they are in flight.
     expect(useCodeStore.getState().takePendingDecisions()).toEqual([])
   })
 

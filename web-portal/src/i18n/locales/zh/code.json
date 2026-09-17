@@ -20,6 +20,14 @@
     "removedLines": "-{{count}} 行已删除",
     "addedLines": "+{{count}} 行已添加"
   },
+  "review": {
+    "keep": "保留",
+    "revert": "撤销",
+    "reverting": "正在撤销…",
+    "changedSince": "运行后已被修改",
+    "notApplied": "未应用：{{reason}}",
+    "awaiting": "本次运行还有 {{count}} 个文件需要先做决定"
+  },
   "fileTree": {
     "changedFiles": "已更改文件（{{count}}）",
     "explorer": "资源管理器",

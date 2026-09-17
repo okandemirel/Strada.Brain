@@ -20,6 +20,14 @@
     "removedLines": "-{{count}} lignes supprimees",
     "addedLines": "+{{count}} lignes ajoutees"
   },
+  "review": {
+    "keep": "Conserver",
+    "revert": "Annuler",
+    "reverting": "Annulation…",
+    "changedSince": "Modifié depuis l'exécution",
+    "notApplied": "Non appliqué : {{reason}}",
+    "awaiting": "{{count}} autre(s) fichier(s) de cette exécution doivent d'abord être décidés"
+  },
   "fileTree": {
     "changedFiles": "Fichiers modifies ({{count}})",
     "explorer": "Explorateur",

@@ -20,6 +20,14 @@
     "removedLines": "-{{count}} 行削除",
     "addedLines": "+{{count}} 行追加"
   },
+  "review": {
+    "keep": "保持",
+    "revert": "元に戻す",
+    "reverting": "元に戻しています…",
+    "changedSince": "実行後に変更されています",
+    "notApplied": "適用されませんでした: {{reason}}",
+    "awaiting": "この実行の残り {{count}} 件のファイルの判断が必要です"
+  },
   "fileTree": {
     "changedFiles": "変更ファイル ({{count}})",
     "explorer": "エクスプローラー",

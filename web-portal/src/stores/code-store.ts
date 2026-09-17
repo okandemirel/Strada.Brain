@@ -48,14 +48,27 @@ export interface ChangeReview {
 export type ChangeDecision = 'keep' | 'undo'
 
 /**
- * A decision the user made in the browser that has NOT reached the server yet.
+ * How far a decision has got. The whole point of the field: 'applied' is set
+ * ONLY by a server acknowledgement, so nothing in the UI can present a revert
+ * that has not happened.
+ */
+export type DecisionStatus = 'pending' | 'sending' | 'applied' | 'refused'
+
+/**
+ * A decision the user made in the browser, and how far it has got.
  *
- * This queue is the fix for the defect this store was carrying: resolveDiff()
- * rewrote a tab's fields and stopped there, so "accept" / "reject" existed only
- * in browser state. What the user saw and what could actually be kept or put
- * back were two different things, and closing the tab (or the browser) lost the
- * decision with nothing said. Every decision now lands here with the review id
- * it belongs to, and the socket layer drains it.
+ * This queue is half of the fix for the defect this store was carrying:
+ * resolveDiff() rewrote a tab's fields and stopped there, so "accept" /
+ * "reject" existed only in browser state. What the user saw and what could
+ * actually be kept or put back were two different things, and closing the tab
+ * (or the browser) lost the decision with nothing said.
+ *
+ * The other half is the transport (round 11 #20): useChangeReview() sends these
+ * to POST /api/workspace/change-review/:id/decisions, which calls applyUndo on
+ * the server, and hands the answer back to settleDecisions(). A decision stays
+ * here until that answer arrives — draining the queue on send is how a decision
+ * gets lost — and a rejection is shown as done only once the answer says the
+ * path was actually put back.
  */
 export interface PendingChangeDecision {
   path: string
@@ -69,6 +82,23 @@ export interface PendingChangeDecision {
    */
   needsConfirm: boolean
   at: number
+  status: DecisionStatus
+  /** What the server said when it would not apply this decision. */
+  error?: string
+}
+
+/**
+ * The server's answer to a batch of decisions, as the store needs it.
+ *
+ * `applied` is the only field that may dismiss a diff: it is what the route
+ * reported as actually done (restored or deleted on disk for an undo, recorded
+ * as kept for a keep). Everything else the user sent and that is not in
+ * `applied` stays visible, with the reason.
+ */
+export interface DecisionAck {
+  applied?: string[]
+  refused?: string[]
+  reason?: string
 }
 
 interface CodeState {
@@ -90,12 +120,26 @@ interface CodeState {
   addAnnotation: (ann: Annotation) => void
   clearAnnotations: (path: string) => void
   markTouched: (path: string, status: TouchedStatus) => void
+  /**
+   * Record what the user decided about one path.
+   *
+   * Accepting shows the run's version, which is already the version on disk.
+   * REJECTING changes nothing on screen yet: the run's bytes are still in the
+   * project until the server puts the previous ones back, so the diff stays
+   * until settleDecisions() says it was applied.
+   */
   resolveDiff: (path: string, accepted: boolean) => void
   setChangeReview: (review: ChangeReview | null) => void
   /** Remove a decision without sending it (the user changed their mind). */
   clearPendingDecision: (path: string) => void
-  /** Hand the queued decisions to whoever sends them, and empty the queue. */
+  /**
+   * Hand the undecided decisions to whoever sends them and mark them in flight.
+   * They STAY in the queue: a decision removed before the server answers is a
+   * decision lost, which is the defect this store had.
+   */
   takePendingDecisions: () => PendingChangeDecision[]
+  /** Apply the server's answer: dismiss what it applied, keep what it refused. */
+  settleDecisions: (ack: DecisionAck) => void
   reset: () => void
 }
 
@@ -160,27 +204,35 @@ export const useCodeStore = create<CodeState>()((set, get) => ({
       // after the run published it, and their bytes are not ours to discard.
       const needsConfirm = decision === 'undo' && (s.review === null || entry === undefined || entry.state !== 'ready')
       return {
-        tabs: s.tabs.map((t) =>
-          t.path === path
-            ? {
-                ...t,
-                // Rejecting shows the ORIGINAL again. It used to leave whatever
-                // was in `content` on screen, so a rejected change could still
-                // be the text the user was reading.
-                content: accepted
-                  ? (t.modifiedContent ?? t.content)
-                  : (t.originalContent ?? t.content),
-                isDiff: false,
-                diffContent: undefined,
-                originalContent: undefined,
-                modifiedContent: undefined,
-              }
-            : t,
-        ),
+        // Accepting is the only half that can be shown immediately: the run's
+        // version IS what the project holds. A rejection leaves the diff up —
+        // showing the original before the server has restored it would be the
+        // original defect, a revert that exists only in the browser.
+        tabs: accepted
+          ? s.tabs.map((t) =>
+              t.path === path
+                ? {
+                    ...t,
+                    content: t.modifiedContent ?? t.content,
+                    isDiff: false,
+                    diffContent: undefined,
+                    originalContent: undefined,
+                    modifiedContent: undefined,
+                  }
+                : t,
+            )
+          : s.tabs,
         // One decision per path — the last one the user made.
         pendingDecisions: [
           ...s.pendingDecisions.filter((d) => d.path !== path),
-          { path, decision, reviewId: s.review?.reviewId ?? null, needsConfirm, at: Date.now() },
+          {
+            path,
+            decision,
+            reviewId: s.review?.reviewId ?? null,
+            needsConfirm,
+            at: Date.now(),
+            status: 'pending' as DecisionStatus,
+          },
         ],
       }
     }),
@@ -198,10 +250,57 @@ export const useCodeStore = create<CodeState>()((set, get) => ({
     set((s) => ({ pendingDecisions: s.pendingDecisions.filter((d) => d.path !== path) })),
 
   takePendingDecisions: () => {
-    const queued = get().pendingDecisions
-    set({ pendingDecisions: [] })
-    return queued
+    // Everything not already in flight or done: a refused decision is offered
+    // again so a retry (or a confirmed undo) can carry it.
+    const queued = get().pendingDecisions.filter((d) => d.status === 'pending' || d.status === 'refused')
+    if (queued.length === 0) return []
+    const sending = new Set(queued.map((d) => d.path))
+    set((s) => ({
+      pendingDecisions: s.pendingDecisions.map((d) =>
+        sending.has(d.path) ? { ...d, status: 'sending' as DecisionStatus, error: undefined } : d,
+      ),
+    }))
+    return queued.map((d) => ({ ...d, status: 'sending' as DecisionStatus }))
   },
+
+  settleDecisions: (ack) =>
+    set((s) => {
+      const applied = new Set(ack.applied ?? [])
+      const refused = new Set(ack.refused ?? [])
+      // Only an applied UNDO changes what is on screen: the file on disk is the
+      // previous version again, so the diff goes and the original is the content.
+      const undone = s.pendingDecisions.filter((d) => d.decision === 'undo' && applied.has(d.path)).map((d) => d.path)
+      const touchedFiles = { ...s.touchedFiles }
+      for (const path of undone) delete touchedFiles[path]
+      return {
+        tabs: s.tabs.map((t) =>
+          undone.includes(t.path)
+            ? {
+                ...t,
+                content: t.originalContent ?? t.content,
+                isDiff: false,
+                diffContent: undefined,
+                originalContent: undefined,
+                modifiedContent: undefined,
+              }
+            : t,
+        ),
+        touchedFiles,
+        // An applied decision leaves the queue; a refused one stays, with the
+        // reason, so the user is told rather than silently ignored.
+        pendingDecisions: s.pendingDecisions
+          .filter((d) => !applied.has(d.path))
+          .map((d) =>
+            refused.has(d.path)
+              ? {
+                  ...d,
+                  status: 'refused' as DecisionStatus,
+                  error: ack.reason ?? 'the server did not apply this decision',
+                }
+              : d,
+          ),
+      }
+    }),
 
   reset: () =>
     set({

@@ -1,12 +1,66 @@
 import { useCallback, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useCodeStore, type CodeTab } from '../../stores/code-store'
+import { useChangeReview } from '../../hooks/use-change-review'
 import { cn } from '@/lib/utils'
 import CodeViewer from './CodeViewer'
 import DiffViewer from './DiffViewer'
 import InlineDiffViewer from './InlineDiffViewer'
 
 type DiffViewMode = 'inline' | 'split'
+
+/**
+ * Accept / reject for the open diff (round 11 #20).
+ *
+ * The buttons do NOT decide anything by themselves: they record the decision and
+ * the hook sends it to the daemon, which performs the undo against the project.
+ * "Revert" therefore stays visible, disabled and labelled, until the server says
+ * the file was actually put back — the previous version of this panel dismissed
+ * the diff immediately and left the run's bytes on disk.
+ */
+function DecisionControls({ file }: { file: CodeTab }) {
+  const { t } = useTranslation('code')
+  const { review, pending, sending, error, undecided, decide } = useChangeReview()
+  const decision = pending.find((d) => d.path === file.path)
+  const inFlight = sending || decision?.status === 'sending'
+  const entry = review?.entries.find((e) => e.path === file.path)
+  const waiting = undecided.filter((path) => path !== file.path)
+  const reason = decision?.error ?? error
+
+  return (
+    <div className="flex items-center gap-2">
+      {entry?.state === 'changed-since' && (
+        <span className="text-[10px] text-warning" title={entry.detail}>
+          {t('review.changedSince')}
+        </span>
+      )}
+      {reason && (
+        <span className="max-w-[18rem] truncate text-[10px] text-error" title={reason}>
+          {t('review.notApplied', { reason })}
+        </span>
+      )}
+      {!reason && decision?.decision === 'undo' && waiting.length > 0 && (
+        <span className="text-[10px] text-text-tertiary">{t('review.awaiting', { count: waiting.length })}</span>
+      )}
+      <button
+        type="button"
+        disabled={inFlight}
+        onClick={() => void decide(file.path, true)}
+        className="rounded border border-white/8 bg-white/5 px-2 py-0.5 text-[10px] font-medium text-text-secondary hover:bg-white/10 transition-colors disabled:opacity-40"
+      >
+        {t('review.keep')}
+      </button>
+      <button
+        type="button"
+        disabled={inFlight}
+        onClick={() => void decide(file.path, false)}
+        className="rounded border border-white/8 bg-white/5 px-2 py-0.5 text-[10px] font-medium text-text-secondary hover:bg-white/10 transition-colors disabled:opacity-40"
+      >
+        {inFlight ? t('review.reverting') : t('review.revert')}
+      </button>
+    </div>
+  )
+}
 
 function DiffHeader({ file, mode, onToggle }: { file: CodeTab; mode: DiffViewMode; onToggle: () => void }) {
   const { t } = useTranslation('code')
@@ -43,6 +97,7 @@ function DiffHeader({ file, mode, onToggle }: { file: CodeTab; mode: DiffViewMod
           </>
         )}
       </button>
+      <DecisionControls file={file} />
     </div>
   )
 }

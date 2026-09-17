@@ -31,6 +31,7 @@ import type { AutoUpdater } from "../core/auto-updater.js";
 import { MonitorActivityLog, handleMonitorRoute } from "./monitor-routes.js";
 import { handleCanvasRoute } from "./canvas-routes.js";
 import { handleWorkspaceRoute } from "./workspace-routes.js";
+import { CHANGE_REVIEW_ROUTE_PREFIX, handleChangeReviewRoute } from "./change-review-routes.js";
 import type { CanvasStorage } from "./canvas-storage.js";
 import type { WorkspaceBus } from "./workspace-bus.js";
 import type { UnifiedBudgetManager } from "../budget/unified-budget-manager.js";
@@ -748,6 +749,17 @@ export class DashboardServer {
         const handled = handleCanvasRoute(
           url, method, req, res,
           this.canvasStorage,
+        );
+        if (handled) return;
+      }
+
+      // Change-review endpoints (round 11 #20 — the portal's accept/reject
+      // transport). Registered BEFORE the file-explorer routes, which answer 404
+      // for anything else under /api/workspace.
+      if (url.startsWith(CHANGE_REVIEW_ROUTE_PREFIX)) {
+        const handled = handleChangeReviewRoute(
+          url, method, req, res,
+          this.projectRoot,
         );
         if (handled) return;
       }

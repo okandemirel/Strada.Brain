@@ -20,6 +20,14 @@
     "removedLines": "-{{count}} entfernte Zeilen",
     "addedLines": "+{{count}} hinzugefügte Zeilen"
   },
+  "review": {
+    "keep": "Behalten",
+    "revert": "Zurücknehmen",
+    "reverting": "Wird zurückgenommen…",
+    "changedSince": "Seit dem Lauf geändert",
+    "notApplied": "Nicht angewendet: {{reason}}",
+    "awaiting": "{{count}} weitere Datei(en) dieses Laufs brauchen zuerst eine Entscheidung"
+  },
   "fileTree": {
     "changedFiles": "Geänderte Dateien ({{count}})",
     "explorer": "Explorer",

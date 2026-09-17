@@ -2452,6 +2452,14 @@ export class WebChannel
     "/api/personality/profiles/",
     "/api/canvas", "/api/skills/",
     "/api/settings/", "/api/monitor/",
+    // Change-review decisions (round 11 #20): POST
+    // /api/workspace/change-review/:id/decisions is how the portal's accept /
+    // reject reaches applyUndo / keepChanges. It is the one mutable path under
+    // /api/workspace — the file-explorer routes stay read-only — and it acts
+    // only on a review the daemon itself recorded, restoring the copies taken
+    // before the run published. Same CSRF gate as every other mutable prefix
+    // (isTrustedMutableProxyRequest).
+    "/api/workspace/change-review/",
     // Vault mutations: POST /api/vaults/:id/{search,sync} and DELETE /api/vaults/:id.
     // search is read-only; sync re-indexes the internal SQLite store; DELETE
     // removes a registration but does NOT touch user files. No CSRF amplification

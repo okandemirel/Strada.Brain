@@ -20,6 +20,14 @@
     "removedLines": "-{{count}} silinen satır",
     "addedLines": "+{{count}} eklenen satır"
   },
+  "review": {
+    "keep": "Koru",
+    "revert": "Geri al",
+    "reverting": "Geri alınıyor…",
+    "changedSince": "Çalıştırmadan sonra değişti",
+    "notApplied": "Uygulanmadı: {{reason}}",
+    "awaiting": "Bu çalıştırmada karar bekleyen {{count}} dosya daha var"
+  },
   "fileTree": {
     "changedFiles": "Değişen Dosyalar ({{count}})",
     "explorer": "Gezgin",

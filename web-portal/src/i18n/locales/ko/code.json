@@ -20,6 +20,14 @@
     "removedLines": "-{{count}}줄 삭제됨",
     "addedLines": "+{{count}}줄 추가됨"
   },
+  "review": {
+    "keep": "유지",
+    "revert": "되돌리기",
+    "reverting": "되돌리는 중…",
+    "changedSince": "실행 이후 변경됨",
+    "notApplied": "적용되지 않음: {{reason}}",
+    "awaiting": "이 실행의 파일 {{count}}개에 대한 결정이 먼저 필요합니다"
+  },
   "fileTree": {
     "changedFiles": "변경된 파일 ({{count}})",
     "explorer": "탐색기",

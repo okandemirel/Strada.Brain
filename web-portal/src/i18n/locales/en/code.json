@@ -20,6 +20,14 @@
     "removedLines": "-{{count}} removed lines",
     "addedLines": "+{{count}} added lines"
   },
+  "review": {
+    "keep": "Keep",
+    "revert": "Revert",
+    "reverting": "Reverting…",
+    "changedSince": "Changed since the run",
+    "notApplied": "Not applied: {{reason}}",
+    "awaiting": "{{count}} more file(s) in this run need a decision first"
+  },
   "fileTree": {
     "changedFiles": "Changed Files ({{count}})",
     "explorer": "Explorer",
