@@ -128,6 +128,58 @@ export function retrieveTFIDF(
 }
 
 // ---------------------------------------------------------------------------
+// Rank fusion across scorers
+// ---------------------------------------------------------------------------
+
+/** Reciprocal-rank-fusion constant (the standard k = 60). */
+const RRF_K = 60;
+
+/**
+ * Fuse lists produced by DIFFERENT scorers (finding 18).
+ *
+ * A raw TF-IDF cosine and a provider-embedding cosine are not the same
+ * measurement: the two are calibrated differently, so sorting them in one
+ * array let the scorers' unrelated magnitudes — not the evidence — decide
+ * which rows survived. Reciprocal rank fusion compares only each row's
+ * POSITION inside the list that produced it, which is the one thing the two
+ * scorers agree on the meaning of.
+ *
+ * `lists[0]` is the primary list (the provider index); it also breaks ties,
+ * so a row the index ranked stays ahead of a text-only row of equal fused
+ * weight. The fused weight is normalized by the maximum a row could reach
+ * (top of every list) so scores stay on the [0, 1] scale callers and MMR's
+ * lambda expect from a similarity.
+ */
+function fuseRankedLists(
+  lists: ReadonlyArray<ReadonlyArray<RetrievalResult<MemoryEntry>>>,
+): RetrievalResult<MemoryEntry>[] {
+  const fused = new Map<
+    string,
+    { hit: RetrievalResult<MemoryEntry>; weight: number; primaryRank: number }
+  >();
+  for (let li = 0; li < lists.length; li++) {
+    const list = lists[li]!;
+    for (let rank = 0; rank < list.length; rank++) {
+      const hit = list[rank]!;
+      const id = hit.entry.id as string;
+      const contribution = 1 / (RRF_K + rank + 1);
+      const primaryRank = li === 0 ? rank : Number.MAX_SAFE_INTEGER;
+      const existing = fused.get(id);
+      if (existing) {
+        existing.weight += contribution;
+        existing.primaryRank = Math.min(existing.primaryRank, primaryRank);
+      } else {
+        fused.set(id, { hit, weight: contribution, primaryRank });
+      }
+    }
+  }
+  const maxWeight = lists.length / (RRF_K + 1);
+  return Array.from(fused.values())
+    .sort((a, b) => b.weight - a.weight || a.primaryRank - b.primaryRank)
+    .map((f) => ({ ...f.hit, score: (f.weight / maxWeight) as NormalizedScore }));
+}
+
+// ---------------------------------------------------------------------------
 // Semantic retrieval (HNSW)
 // ---------------------------------------------------------------------------
 
@@ -182,7 +234,9 @@ export async function retrieveSemantic(
   const indexSize = indexElementCount(ctx);
   let candidateCount = Math.max(1, limit * (filtered ? 4 : 2));
 
-  const results: RetrievalResult<MemoryEntry>[] = [];
+  // Kept apart from the text-fallback list below: the two carry scores from
+  // different scorers and are fused by rank, never sorted together (finding 18).
+  const vectorHits: RetrievalResult<MemoryEntry>[] = [];
   const seen = new Set<string>();
 
   for (;;) {
@@ -212,7 +266,7 @@ export async function retrieveSemantic(
       entry.lastAccessedAt = getNow();
       ctx.sqlitePersistEntry?.(entry);
 
-      results.push({
+      vectorHits.push({
         entry: entry as unknown as MemoryEntry,
         score: hit.score,
       });
@@ -221,7 +275,7 @@ export async function retrieveSemantic(
     // Enough eligible hits, an unfiltered query (one window is exact), the
     // index gave back fewer than asked (exhausted), or the window already
     // covered the whole index.
-    if (results.length >= limit || !filtered) break;
+    if (vectorHits.length >= limit || !filtered) break;
     if (hnswResults.length < candidateCount || candidateCount >= indexSize) break;
     candidateCount = Math.min(candidateCount * 4, indexSize);
   }
@@ -234,16 +288,24 @@ export async function retrieveSemantic(
   // blank out recall for hours. Rows with no vector at all are not "awaiting
   // migration" and are left to the text-only paths as before.
   const awaiting = (entry: UnifiedMemoryEntry): boolean => awaitingMigration(entry, expectedProvenance);
+  const textHits: RetrievalResult<MemoryEntry>[] = [];
   if (query.length > 0 && hasAwaitingMigration(ctx, expectedProvenance)) {
     for (const hit of retrieveTFIDF(ctx, query, { ...options, limit }, awaiting)) {
       const id = hit.entry.id as string;
       if (seen.has(id)) continue;
       seen.add(id);
-      results.push(hit);
+      textHits.push(hit);
     }
   }
 
-  results.sort((a, b) => (b.score as number) - (a.score as number));
+  vectorHits.sort((a, b) => (b.score as number) - (a.score as number));
+
+  // Finding 18: the merge used to sort raw TF-IDF cosines against provider
+  // cosines ("both are cosine similarities in [0, 1]" — same range, different
+  // calibration), so the survivors depended on the scorers' unrelated scales.
+  // Rank fusion when both scorers contributed; with only the index list the
+  // scores are already comparable and are passed through exactly as reported.
+  const results = textHits.length > 0 ? fuseRankedLists([vectorHits, textHits]) : vectorHits;
 
   // Record search time for all paths
   const searchTime = performance.now() - startTime;
@@ -252,9 +314,13 @@ export async function retrieveSemantic(
 
   // Apply MMR if requested
   if (options.useMMR) {
-    return applyMMR(results, queryEmbedding, options.mmrLambda ?? 0.5, options.limit ?? 5).map(
-      sanitizeResult,
-    );
+    return applyMMR(
+      results,
+      queryEmbedding,
+      options.mmrLambda ?? 0.5,
+      options.limit ?? 5,
+      expectedProvenance,
+    ).map(sanitizeResult);
   }
 
   return results.slice(0, options.limit ?? 5).map(sanitizeResult);
@@ -361,6 +427,53 @@ export async function retrieveHybrid(
 // MMR (Maximal Marginal Relevance)
 // ---------------------------------------------------------------------------
 
+/**
+ * Redundancy between two candidates when a vector comparison is not available
+ * (finding 18): Jaccard overlap of the two contents' terms. Used for any pair
+ * where at least one row's embedding is not in the query's space — a row from
+ * the text fallback keeps its FOREIGN vector, and a cosine against a vector
+ * from another provider/model is not a similarity at all.
+ */
+function termOverlap(a: string, b: string): number {
+  const termsA = new Set(extractTerms(a));
+  const termsB = new Set(extractTerms(b));
+  if (termsA.size === 0 || termsB.size === 0) return 0;
+  let shared = 0;
+  for (const term of termsA) {
+    if (termsB.has(term)) shared++;
+  }
+  return shared / (termsA.size + termsB.size - shared);
+}
+
+/**
+ * The row's embedding, but only when it is comparable to the query's. Same
+ * notion of "same provenance" the HNSW path gates on (`awaitingMigration`) —
+ * there is exactly one definition of a comparable vector in this module.
+ * `expected === undefined` means the caller did not state a provenance
+ * (direct applyMMR callers), and every vector is taken at face value as before.
+ */
+function comparableVector(
+  entry: UnifiedMemoryEntry,
+  expected: EmbeddingProvenance | undefined,
+): number[] | undefined {
+  const embedding = entry.embedding as number[] | undefined;
+  if (!embedding?.length) return undefined;
+  if (expected !== undefined && awaitingMigration(entry, expected)) return undefined;
+  return embedding;
+}
+
+/** ONE comparable representation per pair: vectors when both are in the query's space, else terms. */
+function mmrRedundancy(
+  a: UnifiedMemoryEntry,
+  b: UnifiedMemoryEntry,
+  expected: EmbeddingProvenance | undefined,
+): number {
+  const va = comparableVector(a, expected);
+  const vb = comparableVector(b, expected);
+  if (va && vb && va.length === vb.length) return mmrCosineSimilarity(va, vb);
+  return termOverlap(a.content, b.content);
+}
+
 /** Local cosine similarity for MMR computation (operates on raw number arrays). */
 function mmrCosineSimilarity(a: number[], b: number[]): number {
   let dot = 0;
@@ -376,12 +489,20 @@ function mmrCosineSimilarity(a: number[], b: number[]): number {
   return dot / (Math.sqrt(normA) * Math.sqrt(normB) + 1e-10);
 }
 
-/** Apply Maximal Marginal Relevance re-ranking for diverse results. */
+/**
+ * Apply Maximal Marginal Relevance re-ranking for diverse results.
+ *
+ * `expectedProvenance` is the query embedding's provenance. Pass it and the
+ * diversity step compares vectors ONLY between rows that live in that space;
+ * every other pair falls back to term overlap (finding 18). Omit it and every
+ * vector is compared, as before.
+ */
 export function applyMMR(
   results: RetrievalResult<MemoryEntry>[],
   _queryEmbedding: number[],
   lambda: number,
   limit: number,
+  expectedProvenance?: EmbeddingProvenance,
 ): RetrievalResult<MemoryEntry>[] {
   if (results.length === 0) return [];
 
@@ -398,13 +519,16 @@ export function applyMMR(
       // Relevance score
       const relevance = result.score;
 
-      // Diversity score (max similarity to already selected)
+      // Diversity score (max redundancy against what is already selected).
+      // A foreign vector must never decide this (finding 18): mmrRedundancy
+      // uses vectors only where both rows share the query's provenance.
       let maxSim = 0;
       for (const sel of selected) {
-        const selEmbedding = (sel.entry as unknown as UnifiedMemoryEntry).embedding;
-        const resultEmbedding = (result.entry as unknown as UnifiedMemoryEntry).embedding;
-        if (!selEmbedding?.length || !resultEmbedding?.length) continue;
-        const sim = mmrCosineSimilarity(resultEmbedding, selEmbedding);
+        const sim = mmrRedundancy(
+          result.entry as unknown as UnifiedMemoryEntry,
+          sel.entry as unknown as UnifiedMemoryEntry,
+          expectedProvenance,
+        );
         maxSim = Math.max(maxSim, sim);
       }
 

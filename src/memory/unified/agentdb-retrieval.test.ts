@@ -963,3 +963,163 @@ describe("text fallback serves rows the provider index cannot hold yet (Codex ro
     expect(ids).toEqual(["a1"]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Finding 18: the migration merge compared incomparable numbers
+// ---------------------------------------------------------------------------
+// Rows the provider index cannot serve yet are merged in through the text
+// fallback (round 7 #21). Two things were wrong with that merge:
+//   1. raw TF-IDF scores were sorted against provider cosine scores, so which
+//      rows survived depended on the two scorers' unrelated calibration;
+//   2. with MMR on, a text-fallback row kept its FOREIGN embedding (a vector
+//      from another provider/model) and that vector decided diversity.
+
+describe("migration merge uses rank fusion, not raw scores (finding 18)", () => {
+  const providerVec = [0.5, -0.5, 0.25, -0.25];
+  const foreignVec = [0.1, 0.9, -0.3, 0.2];
+  const query = "staging deploy";
+
+  function build(vectorScores: number[]) {
+    const entries = new Map<string, UnifiedMemoryEntry>();
+    entries.set("v1", makeEntry("v1", "staging deploy pipeline one", {
+      embedding: providerVec as any, embeddingProvenance: "provider",
+    } as any));
+    entries.set("v2", makeEntry("v2", "staging deploy pipeline two", {
+      embedding: providerVec as any, embeddingProvenance: "provider",
+    } as any));
+    entries.set("v3", makeEntry("v3", "staging deploy pipeline three", {
+      embedding: providerVec as any, embeddingProvenance: "provider",
+    } as any));
+    entries.set("t1", makeEntry("t1", "staging deploy runbook alpha beta", {
+      embedding: foreignVec as any, embeddingProvenance: "other-model:4d",
+    } as any));
+    entries.set("t2", makeEntry("t2", "staging deploy runbook gamma delta", {
+      embedding: foreignVec as any, embeddingProvenance: "other-model:4d",
+    } as any));
+    const search = vi.fn(async () => [
+      { chunk: { id: "v1" }, score: vectorScores[0] },
+      { chunk: { id: "v2" }, score: vectorScores[1] },
+      { chunk: { id: "v3" }, score: vectorScores[2] },
+    ]);
+    const ctx = makeCtx(entries, { search, count: () => 3 } as any);
+    (ctx.config as any).embeddingProvider = vi.fn(async () => [1, 0, 0, 0]);
+    return { ctx, entries, search };
+  }
+
+  it("the merged order follows rank, not the two scorers' incomparable magnitudes", async () => {
+    // Precondition: the text scores sit strictly between the two vector score
+    // bands, so a raw-score sort puts the text rows last in one run and first
+    // in the other while the RANKS inside each list are identical.
+    const probe = build([0.99, 0.98, 0.97]);
+    const textScores = retrieveTFIDF(probe.ctx, query, { mode: "text", query, limit: 5 },
+      (e) => e.embeddingProvenance === "other-model:4d").map((h) => h.score as number);
+    expect(textScores.length).toBe(2);
+    for (const s of textScores) {
+      expect(s).toBeGreaterThan(0.009);
+      expect(s).toBeLessThan(0.97);
+    }
+
+    const high = (await retrieveSemantic(build([0.99, 0.98, 0.97]).ctx, query, { limit: 5 }))
+      .map((h) => h.entry.id as string);
+    const low = (await retrieveSemantic(build([0.009, 0.008, 0.007]).ctx, query, { limit: 5 }))
+      .map((h) => h.entry.id as string);
+
+    expect(high).toEqual(low);
+    // and the fused order interleaves the two lists by rank: the index's best
+    // hit leads, the text list's best comes next, not below every vector hit
+    expect(high[0]).toBe("v1");
+    expect(high[2]).toBe("v2");
+    expect(high[4]).toBe("v3");
+    expect([high[1], high[3]].sort()).toEqual(["t1", "t2"]);
+  });
+
+  it("a fused score stays in [0,1] and the whole merged set is returned", async () => {
+    const { ctx } = build([0.99, 0.98, 0.97]);
+    const hits = await retrieveSemantic(ctx, query, { limit: 5 });
+    expect(hits).toHaveLength(5);
+    for (const h of hits) {
+      expect(h.score as number).toBeGreaterThan(0);
+      expect(h.score as number).toBeLessThanOrEqual(1);
+    }
+    // descending
+    const scores = hits.map((h) => h.score as number);
+    expect([...scores].sort((a, b) => b - a)).toEqual(scores);
+  });
+
+  it("with no row awaiting migration the raw provider scores are kept untouched (guard)", async () => {
+    const { ctx, entries } = build([0.9, 0.8, 0.7]);
+    entries.delete("t1");
+    entries.delete("t2");
+    const hits = await retrieveSemantic(ctx, query, { limit: 5 });
+    expect(hits.map((h) => h.entry.id as string)).toEqual(["v1", "v2", "v3"]);
+    expect(hits.map((h) => h.score as number)).toEqual([0.9, 0.8, 0.7]);
+  });
+});
+
+describe("MMR diversity never lets a foreign vector decide (finding 18)", () => {
+  const providerVec = [0.5, -0.5, 0.25, -0.25];
+  const query = "staging deploy";
+
+  // a1 is in the provider index. f1/f2 carry another model's vector, so they
+  // arrive through the text fallback. f2 is a near-duplicate of a1 by content;
+  // f1 shares only the query terms. Whatever their foreign vectors say, MMR
+  // must drop the content duplicate, not the diverse row.
+  function build(f1Vec: number[], f2Vec: number[]) {
+    const entries = new Map<string, UnifiedMemoryEntry>();
+    entries.set("a1", makeEntry("a1", "staging deploy pipeline provider index rollout", {
+      embedding: providerVec as any, embeddingProvenance: "provider",
+    } as any));
+    entries.set("f1", makeEntry("f1", "staging deploy alpha beta gamma delta", {
+      embedding: f1Vec as any, embeddingProvenance: "other-model:4d",
+    } as any));
+    entries.set("f2", makeEntry("f2", "staging deploy pipeline provider index rollout duplicate", {
+      embedding: f2Vec as any, embeddingProvenance: "other-model:4d",
+    } as any));
+    const search = vi.fn(async () => [{ chunk: { id: "a1" }, score: 0.9 }]);
+    const ctx = makeCtx(entries, { search, count: () => 1 } as any);
+    (ctx.config as any).embeddingProvider = vi.fn(async () => [1, 0, 0, 0]);
+    return ctx;
+  }
+
+  const orthogonal = [0, 0, 1, 0];
+
+  it("changing only a foreign row's vector does not change which rows survive diversity selection", async () => {
+    const opts = { limit: 2, useMMR: true, mmrLambda: 0.1 as NormalizedScore };
+    const a = (await retrieveSemantic(build(providerVec, orthogonal), query, opts))
+      .map((h) => h.entry.id as string);
+    const b = (await retrieveSemantic(build(orthogonal, providerVec), query, opts))
+      .map((h) => h.entry.id as string);
+
+    expect(a).toEqual(b);
+    // the content duplicate of a1 is the one dropped
+    expect(a).toEqual(["a1", "f1"]);
+  });
+
+  it("rows that DO share the query's provenance are still compared as vectors (guard)", async () => {
+    // sim1/sim2 are near-identical vectors, div is orthogonal — all three carry
+    // the index provenance, so the vector criterion must still pick diversity.
+    const entries = new Map<string, UnifiedMemoryEntry>();
+    entries.set("sim1", makeEntry("sim1", "alpha alpha alpha", {
+      embedding: [1, 0, 0, 0] as any, embeddingProvenance: "provider",
+    } as any));
+    entries.set("sim2", makeEntry("sim2", "beta beta beta", {
+      embedding: [0.999, 0.01, 0, 0] as any, embeddingProvenance: "provider",
+    } as any));
+    entries.set("div", makeEntry("div", "gamma gamma gamma", {
+      embedding: [0, 0, 1, 0] as any, embeddingProvenance: "provider",
+    } as any));
+    const search = vi.fn(async () => [
+      { chunk: { id: "sim1" }, score: 0.95 },
+      { chunk: { id: "sim2" }, score: 0.9 },
+      { chunk: { id: "div" }, score: 0.7 },
+    ]);
+    const ctx = makeCtx(entries, { search, count: () => 3 } as any);
+    (ctx.config as any).embeddingProvider = vi.fn(async () => [1, 0, 0, 0]);
+
+    const ids = (await retrieveSemantic(ctx, "alpha beta gamma", {
+      limit: 2, useMMR: true, mmrLambda: 0.1 as NormalizedScore,
+    })).map((h) => h.entry.id as string);
+    // contents share no terms at all, so only the vectors can separate them
+    expect(ids).toEqual(["sim1", "div"]);
+  });
+});

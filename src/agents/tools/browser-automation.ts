@@ -72,6 +72,21 @@ interface SessionState {
    * Read by handleNavigate to tell the agent where to navigate instead.
    */
   crossOriginRedirects: Map<string, string>;
+  /**
+   * Document requests the policy refused because the chain ended on another URL
+   * of the SAME origin (round 8 #22): requested URL -> vetted final URL.
+   * handleNavigate restarts the navigation there, so the document URL is the
+   * one the content came from.
+   */
+  sameOriginRedirects: Map<string, string>;
+  /**
+   * The extra HTTP headers the agent gave for ONE origin, and that origin
+   * (round 8 #21). `setExtraHTTPHeaders` is persistent on the page, so an
+   * Authorization given for a trusted origin would otherwise be sent to every
+   * later navigation, the one a cross-origin refusal suggested included. The
+   * headers are re-applied only when the next navigation is same-origin.
+   */
+  extraHeaders?: { origin: string; headers: Record<string, string> };
 }
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -82,6 +97,14 @@ const CLEANUP_INTERVAL_MS = 300_000; // 5 minutes
 const SESSION_IDLE_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 
 const SCRIPT_EVAL_TIMEOUT_MS = 5000;
+
+/**
+ * How many times a navigation restarts at the final URL of a same-origin
+ * redirect (round 8 #22) before giving up. A server that keeps redirecting must
+ * not turn into a loop; the transport's own hop bound (POLICY_MAX_REDIRECTS)
+ * covers each individual load.
+ */
+const MAX_SAME_ORIGIN_RESTARTS = 3;
 
 function looksLikeExpression(script: string): boolean {
   const trimmed = script.trim();
@@ -115,16 +138,21 @@ function looksLikeExpression(script: string): boolean {
 //         hop by hop, refusing at the first forbidden hop, and `route.fulfill`s
 //         the vetted final response. `route.fetch` cannot pin the connection,
 //         hence the separate transport. `fulfill` cannot change the page's
-//         URL, so (round 7 #13) a chain whose final URL is on ANOTHER ORIGIN
-//         is not fulfilled — the foreign HTML would run as the requested
-//         origin, its relative URLs would resolve against the wrong location
-//         and `framenavigated` would check the wrong host. The route is
-//         aborted and the final URL is reported to the agent, which may
-//         navigate to it explicitly; a same-origin redirect (a path change)
-//         is fulfilled. Cookies (round 7 #14/#15): the browser's own Cookie
+//         URL, so a chain that ended anywhere but the requested URL is not
+//         fulfilled: on ANOTHER ORIGIN (round 7 #13) the foreign HTML would run
+//         as the requested origin, its relative URLs would resolve against the
+//         wrong location and `framenavigated` would check the wrong host; on
+//         the SAME origin but another path (round 8 #22) the document URL would
+//         stay behind, so `/start` -> `/app/index.html` would resolve
+//         `src="main.js"` to `/main.js`. Both abort the route and report the
+//         vetted final URL: handleNavigate restarts the navigation there (same
+//         origin) or hands the agent the URL to navigate to (cross origin).
+//         Cookies (round 7 #14/#15, round 8 #19): the browser's own Cookie
 //         header is not forwarded; each hop carries the context's cookies for
-//         THAT hop's URL, and every hop's Set-Cookie headers land in the
-//         context's jar scoped to that hop (never through `fulfill`).
+//         THAT hop's URL — filtered by the real RFC 6265 domain/path/Secure and
+//         SameSite rules, because Playwright's URL filter is wider — and every
+//         hop's Set-Cookie headers land in the context's jar scoped to that hop
+//         (never through `fulfill`).
 //       - Sub-resources keep the request-time route check, plus a POST-HOC
 //         `response` listener that walks `response.request().redirectedFrom()`
 //         and closes the session when any hop fails the policy. It is post-hoc
@@ -194,11 +222,31 @@ export interface PolicyCookie {
   sameSite?: "Strict" | "Lax" | "None";
 }
 
+/**
+ * A cookie as `BrowserContext.cookies()` reports it. `domain` carries
+ * Playwright's convention: a leading dot marks a domain cookie, its absence a
+ * host-only one (round 8 #19 needs the scope, not just the name/value).
+ */
+export interface PolicyJarCookie {
+  name: string;
+  value: string;
+  domain?: string;
+  path?: string;
+  expires?: number;
+  httpOnly?: boolean;
+  secure?: boolean;
+  sameSite?: "Strict" | "Lax" | "None";
+}
+
 /** Structural subset of Playwright's BrowserContext. */
 export interface PolicyContext {
   route(url: string, handler: (route: PolicyRoute) => Promise<void> | void): Promise<unknown>;
-  /** The jar's cookies that apply to `url` (round 7 #14). */
-  cookies(url: string): Promise<Array<{ name: string; value: string }>>;
+  /**
+   * The jar's cookies Playwright's URL filter returns for `url` (round 7 #14).
+   * The filter is wider than the RFC rule, so the result is re-checked here
+   * (round 8 #19) before any of it becomes a Cookie header.
+   */
+  cookies(url: string): Promise<PolicyJarCookie[]>;
   /** Add cookies to the jar (round 7 #15). */
   addCookies(cookies: ReadonlyArray<PolicyCookie>): Promise<void>;
   routeWebSocket(url: string, handler: (ws: PolicyWebSocketRoute) => Promise<void> | void): Promise<unknown>;
@@ -228,6 +276,12 @@ export interface NetworkPolicyOptions {
    * session may navigate to explicitly.
    */
   onCrossOriginRedirect?: (url: string, finalUrl: string) => void;
+  /**
+   * Called when a document request was aborted because its redirect chain
+   * ended on a different URL of the SAME origin (round 8 #22), with the vetted
+   * final URL the navigation must be restarted at.
+   */
+  onSameOriginRedirect?: (url: string, finalUrl: string) => void;
   /** Called for every refused WebSocket (logging). */
   onBlockedWebSocket?: (url: string) => void;
   /** Bound on one document fetch (all hops); defaults to DOCUMENT_FETCH_TIMEOUT_MS. */
@@ -290,6 +344,26 @@ export class CrossOriginRedirectError extends Error {
   }
 }
 
+/**
+ * A document request whose redirect chain stayed on the origin but ended on
+ * another URL (round 8 #22). `fulfill` cannot change the page's URL, so
+ * fulfilling the final body at the requested URL would leave the document URL
+ * behind: `/start` redirected to `/app/index.html` would run with a base of
+ * `/start`, and `src="main.js"` would resolve to `/main.js`. The route is
+ * aborted and the navigation is restarted at the final URL instead.
+ */
+export class SameOriginRedirectError extends Error {
+  constructor(
+    readonly requestedUrl: string,
+    readonly finalUrl: string,
+  ) {
+    super(
+      `Navigation to ${requestedUrl} was redirected to ${finalUrl}; the body was not delivered under the old URL. Navigate to ${finalUrl} to continue.`,
+    );
+    this.name = "SameOriginRedirectError";
+  }
+}
+
 function originOf(url: string): string {
   try {
     return new URL(url).origin;
@@ -298,9 +372,131 @@ function originOf(url: string): string {
   }
 }
 
-/** Cookie header for one hop: the jar's cookies for exactly that URL (round 7 #14). */
-async function cookieHeaderFor(context: PolicyContext, url: string): Promise<Record<string, string> | undefined> {
-  const cookies = await context.cookies(url);
+// ─── Cookie scope (round 8 #19) ───────────────────────────────────────────────
+//
+// `context.cookies(url)` is Playwright's own filter, and it is WIDER than the
+// rules a browser applies when it builds a Cookie header: it returns a
+// host-only `trusted.example` cookie for `evil.trusted.example`, and a `/app`
+// cookie for `/application`. It also knows nothing about the request context,
+// so SameSite=Strict/Lax cookies come back for a cross-site request. Whatever
+// it returns is therefore re-checked here against RFC 6265 §5.4 before any of
+// it reaches the wire; a cookie whose scope cannot be established (no domain
+// reported) is dropped rather than sent.
+
+/** Request methods that do not change state; Lax cookies ride along on these. */
+const SAFE_COOKIE_METHODS = new Set(["GET", "HEAD", "OPTIONS", "TRACE"]);
+
+/** What the Cookie header for one hop may contain, beyond the cookie's own scope. */
+export interface CookieRequestContext {
+  /** The URL the browser asked for: the site the redirect chain belongs to. */
+  requestedUrl: string;
+  /** The request method (Lax cookies need a safe one when cross-site). */
+  method: string;
+  /** True for a top-level document navigation (not a frame, not a sub-resource). */
+  topLevelNavigation: boolean;
+  /** Chromium's own Sec-Fetch-Site for the request, when it sent one. */
+  secFetchSite?: string;
+}
+
+/** RFC 6265 §5.1.3 domain-match, with Playwright's leading-dot domain convention. */
+export function cookieDomainMatches(host: string, cookieDomain: string): boolean {
+  const h = host.toLowerCase().replace(/\.$/, "");
+  const d = cookieDomain.toLowerCase().replace(/\.$/, "");
+  if (!h || !d) return false;
+  if (d.startsWith(".")) {
+    const base = d.slice(1);
+    // A true suffix on a label boundary: "nottrusted.example" is not a match
+    // for ".trusted.example" even though the string ends with it.
+    return base.length > 0 && (h === base || h.endsWith(`.${base}`));
+  }
+  return h === d;
+}
+
+/** RFC 6265 §5.1.4 path-match: exact, a prefix ending in "/", or the next char is "/". */
+export function cookiePathMatches(requestPath: string, cookiePath: string): boolean {
+  const req = requestPath.startsWith("/") ? requestPath : "/";
+  const cookie = cookiePath.startsWith("/") ? cookiePath : "/";
+  if (req === cookie) return true;
+  if (!req.startsWith(cookie)) return false;
+  return cookie.endsWith("/") || req[cookie.length] === "/";
+}
+
+/**
+ * Same-site in the SameSite sense. There is no public-suffix list here, so two
+ * hosts count as same-site only when they are equal or one is a subdomain of
+ * the other. That is NARROWER than the registrable-domain rule (siblings like
+ * a.example.com / b.example.com are treated as cross-site) and never wider,
+ * which is the safe direction for a credential decision.
+ */
+export function isSameSiteUrl(hopUrl: string, contextUrl: string): boolean {
+  try {
+    const hop = new URL(hopUrl).hostname.toLowerCase();
+    const site = new URL(contextUrl).hostname.toLowerCase();
+    if (!hop || !site) return false;
+    return hop === site || hop.endsWith(`.${site}`) || site.endsWith(`.${hop}`);
+  } catch {
+    return false;
+  }
+}
+
+/** A name or value that cannot be put in a header without changing its meaning. */
+function isSafeCookieField(value: string): boolean {
+  // Control characters, whitespace, DEL and ";" would split or corrupt the header.
+  return !/[\u0000-\u0020\u007f;]/.test(value);
+}
+
+/** Does `cookie` apply to a request for `hopUrl` made in `ctx`? (RFC 6265 §5.4) */
+export function cookieAppliesTo(
+  cookie: PolicyJarCookie,
+  hopUrl: string,
+  ctx: CookieRequestContext,
+): boolean {
+  let hop: URL;
+  try {
+    hop = new URL(hopUrl);
+  } catch {
+    return false;
+  }
+  if (!cookie.name || !isSafeCookieField(cookie.name) || !isSafeCookieField(cookie.value ?? "")) return false;
+  // No reported scope: the cookie cannot be shown to belong to this host.
+  if (!cookie.domain || !cookieDomainMatches(hop.hostname, cookie.domain)) return false;
+  if (!cookiePathMatches(hop.pathname || "/", cookie.path ?? "/")) return false;
+  if (cookie.secure && hop.protocol !== "https:") return false;
+  if (typeof cookie.expires === "number" && cookie.expires > 0 && cookie.expires * 1000 <= Date.now()) return false;
+
+  // SameSite: Chromium treats a missing attribute as Lax.
+  const mode = cookie.sameSite ?? "Lax";
+  if (mode === "None") return true;
+  const initiatorSameSite =
+    ctx.secFetchSite === undefined ||
+    ctx.secFetchSite === "none" ||
+    ctx.secFetchSite === "same-origin" ||
+    ctx.secFetchSite === "same-site";
+  const sameSite = initiatorSameSite && isSameSiteUrl(hopUrl, ctx.requestedUrl);
+  if (sameSite) return true;
+  // Cross-site: Strict never travels; Lax only on a safe top-level navigation.
+  return mode === "Lax" && ctx.topLevelNavigation && SAFE_COOKIE_METHODS.has(ctx.method.toUpperCase());
+}
+
+/** The jar's cookies that really apply to `hopUrl` in `ctx`, in jar order. */
+export function cookiesForRequest(
+  jar: ReadonlyArray<PolicyJarCookie>,
+  hopUrl: string,
+  ctx: CookieRequestContext,
+): PolicyJarCookie[] {
+  return jar.filter((cookie) => cookieAppliesTo(cookie, hopUrl, ctx));
+}
+
+/**
+ * Cookie header for one hop: the jar's cookies for exactly that URL (round 7
+ * #14), reduced to the ones the RFC rules actually allow (round 8 #19).
+ */
+async function cookieHeaderFor(
+  context: PolicyContext,
+  url: string,
+  ctx: CookieRequestContext,
+): Promise<Record<string, string> | undefined> {
+  const cookies = cookiesForRequest(await context.cookies(url), url, ctx);
   if (cookies.length === 0) return undefined;
   return { cookie: cookies.map((c) => `${c.name}=${c.value}`).join("; ") };
 }
@@ -313,11 +509,15 @@ function defaultCookiePath(pathname: string): string {
 
 /**
  * One Set-Cookie header -> an addCookies entry scoped to the hop that sent it
- * (round 7 #15). Without a Domain attribute the cookie is host-only for the hop
- * URL (Playwright derives host and default path from `url`; a Path attribute
- * is folded into that URL). A Domain attribute is honoured only when the hop's
- * host domain-matches it (RFC 6265 §5.3 step 6); otherwise the cookie is
- * ignored rather than widened. Returns null for malformed or rejected cookies.
+ * (round 7 #15). Every cookie is added in the explicit `domain`+`path` form:
+ * host-only cookies get the hop's exact host (no leading dot) and the header's
+ * exact Path, or the RFC 6265 §5.1.4 default-path when the header omits it.
+ * The `url` form cannot express that — Playwright derives the path from the
+ * URL's directory, so `Path=/app` became `/app/` and a later navigation to
+ * `/app` no longer matched the cookie (round 8 #20). A Domain attribute is
+ * honoured only when the hop's host domain-matches it (RFC 6265 §5.3 step 6);
+ * otherwise the cookie is ignored rather than widened. Returns null for
+ * malformed or rejected cookies.
  */
 export function parseSetCookie(header: string, hopUrl: string): PolicyCookie | null {
   const [pair, ...attributes] = header.split(";");
@@ -384,18 +584,11 @@ export function parseSetCookie(header: string, hopUrl: string): PolicyCookie | n
   if (maxAge !== undefined) cookie.expires = Math.floor(Date.now() / 1000) + maxAge;
   else if (expires !== undefined) cookie.expires = expires;
 
-  if (domain) {
-    cookie.domain = domain;
-    cookie.path = path ?? defaultCookiePath(hop.pathname);
-  } else if (path) {
-    const scoped = new URL(hop.toString());
-    scoped.pathname = path.endsWith("/") ? path : `${path}/`;
-    scoped.search = "";
-    scoped.hash = "";
-    cookie.url = scoped.toString();
-  } else {
-    cookie.url = hop.toString();
-  }
+  // #20: domain+path, never `url`. A host-only cookie's domain is the hop's
+  // host with no leading dot (Playwright's host-only form) and its path is the
+  // header's Path verbatim, or the default-path of the hop.
+  cookie.domain = domain ?? hop.hostname.toLowerCase();
+  cookie.path = path ?? defaultCookiePath(hop.pathname);
   return cookie;
 }
 
@@ -456,12 +649,25 @@ async function fulfillDocumentUnderPolicy(
   const request = route.request();
   const requestedUrl = request.url();
   const headers: Record<string, string> = {};
+  const wireHeaders: Record<string, string> = {};
   // #14: allHeaders() is the wire set (headers() omits what the browser adds
   // late, cookies among them); the Cookie header itself is dropped and rebuilt
   // per hop from the jar below.
   for (const [name, value] of Object.entries(await request.allHeaders())) {
+    wireHeaders[name.toLowerCase()] = value;
     if (!DOCUMENT_REQUEST_HEADERS_DROPPED.has(name.toLowerCase())) headers[name] = value;
   }
+  // #19: the request context the SameSite rules need. Chromium's own
+  // Sec-Fetch-* headers say who initiated the request and what it targets;
+  // absent them the request is treated as user-initiated (the tool's own goto).
+  const fetchDest = wireHeaders["sec-fetch-dest"];
+  const fetchSite = wireHeaders["sec-fetch-site"];
+  const cookieContext: CookieRequestContext = {
+    requestedUrl,
+    method: request.method(),
+    topLevelNavigation: request.isNavigationRequest() && (fetchDest === undefined || fetchDest === "document"),
+    ...(fetchSite ? { secFetchSite: fetchSite } : {}),
+  };
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), options.documentTimeoutMs ?? DOCUMENT_FETCH_TIMEOUT_MS);
   timer.unref?.();
@@ -472,7 +678,7 @@ async function fulfillDocumentUnderPolicy(
       method: request.method(),
       headers,
       body: request.postDataBuffer(),
-      hopHeaders: (hopUrl) => cookieHeaderFor(context, hopUrl),
+      hopHeaders: (hopUrl) => cookieHeaderFor(context, hopUrl, cookieContext),
       onSetCookie: async (hopUrl, setCookies) => {
         const parsed = setCookies.map((h) => parseSetCookie(h, hopUrl)).filter((c): c is PolicyCookie => c !== null);
         if (parsed.length > 0) await context.addCookies(parsed);
@@ -481,12 +687,17 @@ async function fulfillDocumentUnderPolicy(
     });
     dispose = fetched.dispose;
     const response = fetched.response;
-    // #13: fulfil only what belongs to the requested origin. A same-origin
-    // redirect (path change) is fine — the page keeps the requested URL, the
-    // content is that origin's own; a cross-origin one is not.
-    if (originOf(fetched.finalUrl) !== originOf(requestedUrl)) {
+    // #13 / #22: fulfil only what belongs to the requested URL. `fulfill`
+    // cannot change the page's URL, so a body from anywhere else would run
+    // under the wrong document URL: foreign HTML as the requested origin (#13),
+    // or the right origin's HTML with the wrong base path (#22). Either way the
+    // route is aborted and the final URL is reported, to be navigated to.
+    if (normalizeUrl(fetched.finalUrl) !== normalizeUrl(requestedUrl)) {
       await discardBody(response);
-      throw new CrossOriginRedirectError(requestedUrl, fetched.finalUrl);
+      if (originOf(fetched.finalUrl) !== originOf(requestedUrl)) {
+        throw new CrossOriginRedirectError(requestedUrl, fetched.finalUrl);
+      }
+      throw new SameOriginRedirectError(requestedUrl, fetched.finalUrl);
     }
     const responseHeaders: Record<string, string> = {};
     response.headers.forEach((value, name) => {
@@ -546,6 +757,10 @@ export async function installNetworkPolicy(
       } else if (error instanceof CrossOriginRedirectError) {
         options.onBlockedRequest?.(url, reason);
         options.onCrossOriginRedirect?.(url, error.finalUrl);
+        await route.abort("blockedbyclient").catch(() => undefined);
+      } else if (error instanceof SameOriginRedirectError) {
+        options.onBlockedRequest?.(url, reason);
+        options.onSameOriginRedirect?.(url, error.finalUrl);
         await route.abort("blockedbyclient").catch(() => undefined);
       } else {
         await route.abort("failed").catch(() => undefined);
@@ -747,12 +962,8 @@ export class BrowserAutomationTool implements ITool {
   ): Promise<ToolExecutionResult> {
     if (!input.url) return { content: "URL is required for navigate action", isError: true };
 
-    const validation = validateUrlWithConfig(input.url, this.config);
-    if (!validation.valid)
-      return { content: `URL validation failed: ${validation.reason}`, isError: true };
-
-    const targetCheck = await this.checkResolvedTarget(input.url);
-    if (targetCheck) return targetCheck;
+    const firstCheck = await this.checkNavigationTarget(input.url);
+    if (firstCheck) return firstCheck;
 
     if (!this.sessionManager.acquireSession(sessionId)) {
       return {
@@ -766,33 +977,96 @@ export class BrowserAutomationTool implements ITool {
     );
     const timeout = input.timeout ?? this.config.maxNavigationTimeMs;
     session.crossOriginRedirects.clear();
+    session.sameOriginRedirects.clear();
 
-    try {
-      if (input.headers && Object.keys(input.headers).length > 0) {
-        await session.page.setExtraHTTPHeaders(input.headers);
-      }
-
-      await session.page.goto(input.url, { waitUntil: "networkidle", timeout });
-      return {
-        content: `Successfully navigated to: ${session.page.url()}\nPage title: ${await session.page.title()}`,
-        metadata: { url: session.page.url(), title: await session.page.title() },
-      };
-    } catch (error) {
-      this.sessionManager.releaseSession(sessionId);
-      // Round 7 #13: the policy aborted the document because its redirect
-      // chain left the origin; name the vetted final URL so the agent can go
-      // there explicitly.
-      const redirectedTo = session.crossOriginRedirects.get(normalizeUrl(input.url));
-      if (redirectedTo) {
-        session.crossOriginRedirects.clear();
-        return {
-          content: new CrossOriginRedirectError(input.url, redirectedTo).message,
-          isError: true,
-          metadata: { url: input.url, redirectedTo },
-        };
-      }
-      throw error;
+    // Round 8 #21: the headers the agent supplies are credentials for THIS
+    // target's origin. They are remembered with that origin and applied below
+    // only while the navigation stays on it.
+    if (input.headers && Object.keys(input.headers).length > 0) {
+      session.extraHeaders = { origin: originOf(input.url), headers: { ...input.headers } };
     }
+
+    let target = input.url;
+    for (let restart = 0; restart <= MAX_SAME_ORIGIN_RESTARTS; restart++) {
+      // A restart target is a URL of its own: it goes through the same
+      // validation and resolved-target policy as the one the agent asked for.
+      if (restart > 0) {
+        const check = await this.checkNavigationTarget(target);
+        if (check) {
+          this.sessionManager.releaseSession(sessionId);
+          return check;
+        }
+      }
+      // #21: reset on EVERY navigation; `setExtraHTTPHeaders` is persistent on
+      // the page, so nothing but an explicit re-apply may carry headers over.
+      const scoped =
+        session.extraHeaders && session.extraHeaders.origin === originOf(target)
+          ? session.extraHeaders.headers
+          : {};
+      await session.page.setExtraHTTPHeaders(scoped);
+
+      try {
+        await session.page.goto(target, { waitUntil: "networkidle", timeout });
+        const url = session.page.url();
+        const title = await session.page.title();
+        return {
+          content: `Successfully navigated to: ${url}\nPage title: ${title}`,
+          metadata: { url, title },
+        };
+      } catch (error) {
+        const key = normalizeUrl(target);
+        // Round 7 #13: the policy aborted the document because its redirect
+        // chain left the origin; name the vetted final URL so the agent can go
+        // there explicitly (it is a new origin, so its own headers are needed).
+        const crossOrigin = session.crossOriginRedirects.get(key);
+        if (crossOrigin) {
+          this.sessionManager.releaseSession(sessionId);
+          session.crossOriginRedirects.clear();
+          return {
+            content: new CrossOriginRedirectError(target, crossOrigin).message,
+            isError: true,
+            metadata: { url: target, redirectedTo: crossOrigin },
+          };
+        }
+        // Round 8 #22: the chain stayed on the origin but ended elsewhere, so
+        // the body was not delivered under the old URL. Navigate to the final
+        // URL instead — that load runs the whole policy again and the document
+        // ends up with the URL its content came from.
+        const sameOrigin = session.sameOriginRedirects.get(key);
+        if (sameOrigin && normalizeUrl(sameOrigin) !== key && restart < MAX_SAME_ORIGIN_RESTARTS) {
+          session.sameOriginRedirects.delete(key);
+          this.logger.info("Restarting navigation at the final URL of a same-origin redirect", {
+            sessionId,
+            from: target,
+            to: sameOrigin,
+          });
+          target = sameOrigin;
+          continue;
+        }
+        this.sessionManager.releaseSession(sessionId);
+        if (sameOrigin) {
+          session.sameOriginRedirects.clear();
+          return {
+            content: new SameOriginRedirectError(target, sameOrigin).message,
+            isError: true,
+            metadata: { url: target, redirectedTo: sameOrigin },
+          };
+        }
+        throw error;
+      }
+    }
+    // Unreachable: the loop's last iteration either returns or throws.
+    this.sessionManager.releaseSession(sessionId);
+    return { content: `Navigation to ${input.url} did not settle on a final URL.`, isError: true };
+  }
+
+  /** validateUrlWithConfig + the resolved-target policy for one navigation target. */
+  private async checkNavigationTarget(url: string): Promise<ToolExecutionResult | null> {
+    const validation = validateUrlWithConfig(url, this.config);
+    if (!validation.valid) {
+      return { content: `URL validation failed: ${validation.reason}`, isError: true };
+    }
+    return this.checkResolvedTarget(url);
   }
 
   private async handleClick(input: BrowserInput, sessionId: string): Promise<ToolExecutionResult> {
@@ -1208,6 +1482,7 @@ export class BrowserAutomationTool implements ITool {
 
       const page = await context.newPage();
       const crossOriginRedirects = new Map<string, string>();
+      const sameOriginRedirects = new Map<string, string>();
 
       if (this.config.blockLocalhost) {
         await installNetworkPolicy(context, page, {
@@ -1215,6 +1490,7 @@ export class BrowserAutomationTool implements ITool {
           onBlockedRequest: (url, reason) =>
             this.logger.warn("Browser request blocked by network policy", { sessionId, url, reason }),
           onCrossOriginRedirect: (url, finalUrl) => crossOriginRedirects.set(normalizeUrl(url), finalUrl),
+          onSameOriginRedirect: (url, finalUrl) => sameOriginRedirects.set(normalizeUrl(url), finalUrl),
           onBlockedWebSocket: (url) =>
             this.logger.warn("Browser WebSocket refused by network policy", { sessionId, url }),
           onForbiddenRedirect: async (url, reason) => {
@@ -1236,7 +1512,15 @@ export class BrowserAutomationTool implements ITool {
         });
       }
 
-      session = { browser, context, page, createdAt: Date.now(), lastUsed: Date.now(), crossOriginRedirects };
+      session = {
+        browser,
+        context,
+        page,
+        createdAt: Date.now(),
+        lastUsed: Date.now(),
+        crossOriginRedirects,
+        sameOriginRedirects,
+      };
       this.sessions.set(sessionId, session);
       this.logger.info("Created new browser session", { sessionId });
 
