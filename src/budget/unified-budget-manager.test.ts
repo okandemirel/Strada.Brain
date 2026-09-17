@@ -112,6 +112,63 @@ describe("UnifiedBudgetManager", () => {
   // recordCost
   // -------------------------------------------------------------------------
 
+  /**
+   * A LIMIT OF ZERO IS A LIMIT (plan 2.1b / audit 10.1b): zero used to mean
+   * "unlimited", so a person who set the daily budget to 0 to stop spending
+   * was told "unlimited" and the daemon spent freely. -1 is no limit.
+   */
+  describe("a zero limit stops spending; -1 is no limit", () => {
+    const managerWith = (overrides: Record<string, string>): UnifiedBudgetManager =>
+      new UnifiedBudgetManager(makeMockStorage(overrides), makeMockEventBus());
+
+    it("zero refuses every spend and reads as exceeded", () => {
+      const zero = managerWith({ dailyLimitUsd: "0" });
+      expect(zero.getConfig().dailyLimitUsd).toBe(0);
+      expect(zero.canSpend(0.01, "daemon")).toBe(false);
+      expect(zero.canSpend(0, "daemon")).toBe(false);
+      expect(zero.isGlobalExceeded()).toBe(true);
+    });
+
+    it("-1, and an unset config, allow spending", () => {
+      const none = managerWith({ dailyLimitUsd: "-1", monthlyLimitUsd: "-1" });
+      expect(none.canSpend(1000, "daemon")).toBe(true);
+      expect(none.isGlobalExceeded()).toBe(false);
+      const unset = managerWith({});
+      expect(unset.getConfig().dailyLimitUsd).toBe(-1);
+      expect(unset.canSpend(1000, "daemon")).toBe(true);
+      expect(unset.isGlobalExceeded()).toBe(false);
+    });
+
+    it("a monthly zero stops spending even with an unlimited day", () => {
+      const monthlyZero = managerWith({ dailyLimitUsd: "-1", monthlyLimitUsd: "0" });
+      expect(monthlyZero.canSpend(0.01, "daemon")).toBe(false);
+      expect(monthlyZero.isGlobalExceeded()).toBe(true);
+    });
+
+    it("a positive limit still measures what was spent", () => {
+      const capped = managerWith({ dailyLimitUsd: "1" });
+      expect(capped.canSpend(0.5, "daemon")).toBe(true);
+      capped.recordCost(0.9, "daemon", {});
+      expect(capped.canSpend(0.5, "daemon")).toBe(false);
+      expect(capped.getSnapshot().global.daily.pct).toBeCloseTo(0.9, 5);
+    });
+
+    it("a zero limit reads as fully spent once anything was spent, and 0% before", () => {
+      const zero = managerWith({ dailyLimitUsd: "0" });
+      expect(zero.getSnapshot().global.daily.pct).toBe(0);
+      zero.recordCost(0.01, "daemon", {});
+      expect(zero.getSnapshot().global.daily.pct).toBe(1);
+    });
+
+    it("the config store takes -1 and refuses anything below it", () => {
+      const mgr2 = managerWith({});
+      expect(() => mgr2.updateConfig({ dailyLimitUsd: -1 })).not.toThrow();
+      expect(() => mgr2.updateConfig({ dailyLimitUsd: 0 })).not.toThrow();
+      expect(() => mgr2.updateConfig({ dailyLimitUsd: -2 })).toThrow(/no limit/);
+      expect(() => mgr2.updateConfig({ monthlyLimitUsd: -2 })).toThrow(/no limit/);
+    });
+  });
+
   describe("recordCost", () => {
     it("calls insertBudgetEntryWithSource for daemon source", () => {
       mgr.recordCost(0.5, "daemon", { model: "gpt-4o" });
@@ -494,7 +551,7 @@ describe("UnifiedBudgetManager", () => {
         const t0 = new Date("2026-09-01T00:00:00Z").getTime();
         vi.setSystemTime(t0);
         const fresh = new UnifiedBudgetManager(storage, bus, {}); // env {} — no STRADA_BUDGET_* bleed
-        fresh.updateConfig({ dailyLimitUsd: 10.0, warnPct: 0.8, monthlyLimitUsd: 0 });
+        fresh.updateConfig({ dailyLimitUsd: 10.0, warnPct: 0.8, monthlyLimitUsd: -1 });
         bus.events.length = 0;
         const warnings = () => bus.events.filter((e) => e.event === "budget:warning");
 

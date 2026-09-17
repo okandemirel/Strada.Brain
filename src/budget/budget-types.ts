@@ -68,8 +68,24 @@ export interface BudgetSnapshot {
 // Config
 // ---------------------------------------------------------------------------
 
+/**
+ * NO LIMIT, as against a limit of nothing. Zero used to mean "unlimited", so
+ * a person who set the daily budget to 0 to stop all spending was told
+ * "unlimited" and the daemon spent freely (plan 2.1b / audit 10.1b, the
+ * budget half). The convention `interactiveTokenBudget` already uses: -1 is
+ * no limit, 0 is a limit of zero — nothing may be spent.
+ */
+export const NO_BUDGET_LIMIT = -1;
+
+/** Is a configured limit a real ceiling (including zero), rather than "no limit"? */
+export function hasBudgetLimit(limitUsd: number): boolean {
+  return limitUsd >= 0;
+}
+
 export interface UnifiedBudgetConfig {
+  /** A ceiling in USD; 0 means nothing may be spent, NO_BUDGET_LIMIT (-1) means no ceiling. */
   readonly dailyLimitUsd: number;
+  /** A ceiling in USD; 0 means nothing may be spent, NO_BUDGET_LIMIT (-1) means no ceiling. */
   readonly monthlyLimitUsd: number;
   readonly warnPct: number;
   readonly subLimits: {
@@ -97,8 +113,8 @@ export interface UnifiedBudgetConfig {
 }
 
 export const DEFAULT_BUDGET_CONFIG: UnifiedBudgetConfig = {
-  dailyLimitUsd: 0,
-  monthlyLimitUsd: 0,
+  dailyLimitUsd: NO_BUDGET_LIMIT,
+  monthlyLimitUsd: NO_BUDGET_LIMIT,
   warnPct: 0.8,
   subLimits: {
     daemonDailyUsd: 0,
@@ -130,6 +146,7 @@ export function isBudgetSource(s: string): s is BudgetSource {
 }
 
 export function toBudgetUsage(usedUsd: number, limitUsd: number): BudgetUsage {
-  const pct = limitUsd === 0 ? 0 : usedUsd / limitUsd;
+  // A limit of ZERO with anything spent is fully spent; no limit has no share.
+  const pct = !hasBudgetLimit(limitUsd) ? 0 : limitUsd === 0 ? (usedUsd > 0 ? 1 : 0) : usedUsd / limitUsd;
   return { usedUsd, limitUsd, pct };
 }

@@ -23,7 +23,7 @@ import type {
   DailyHistoryEntry,
   UnifiedBudgetConfig,
 } from "./budget-types.js";
-import { DEFAULT_BUDGET_CONFIG, toBudgetUsage } from "./budget-types.js";
+import { DEFAULT_BUDGET_CONFIG, toBudgetUsage, hasBudgetLimit } from "./budget-types.js";
 
 const ROLLING_WINDOW_MS = 24 * 60 * 60 * 1000;
 const MONTHLY_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
@@ -256,11 +256,11 @@ export class UnifiedBudgetManager {
     const config = this.configStore.getConfig();
     const now = Date.now();
     const outstanding = this.outstandingUsd({ ignoreReservationId: opts?.ignoreReservationId });
-    if (config.dailyLimitUsd > 0) {
+    if (hasBudgetLimit(config.dailyLimitUsd)) {
       const dailyUsed = this.storage.sumBudgetSince(now - ROLLING_WINDOW_MS);
       if (dailyUsed + outstanding >= config.dailyLimitUsd) return true;
     }
-    if (config.monthlyLimitUsd > 0) {
+    if (hasBudgetLimit(config.monthlyLimitUsd)) {
       const monthlyUsed = this.storage.sumBudgetSince(now - MONTHLY_WINDOW_MS);
       if (monthlyUsed + outstanding >= config.monthlyLimitUsd) return true;
     }
@@ -293,11 +293,11 @@ export class UnifiedBudgetManager {
     const config = this.configStore.getConfig();
     const now = Date.now();
     const outstanding = this.outstandingUsd({ ignoreReservationId: opts?.ignoreReservationId });
-    if (config.dailyLimitUsd > 0) {
+    if (hasBudgetLimit(config.dailyLimitUsd)) {
       const used = this.storage.sumBudgetSince(now - ROLLING_WINDOW_MS);
       if (used + outstanding + estimatedCost >= config.dailyLimitUsd) return false;
     }
-    if (config.monthlyLimitUsd > 0) {
+    if (hasBudgetLimit(config.monthlyLimitUsd)) {
       const used = this.storage.sumBudgetSince(now - MONTHLY_WINDOW_MS);
       if (used + outstanding + estimatedCost >= config.monthlyLimitUsd) return false;
     }
@@ -341,7 +341,9 @@ export class UnifiedBudgetManager {
   checkAndEmitEvents(): void {
     const config = this.configStore.getConfig();
 
-    if (config.dailyLimitUsd === 0 && config.monthlyLimitUsd === 0) return;
+    // No ceiling at all: nothing to warn about. A ceiling of ZERO is a real
+    // ceiling and its events fire (plan 2.1b).
+    if (!hasBudgetLimit(config.dailyLimitUsd) && !hasBudgetLimit(config.monthlyLimitUsd)) return;
 
     const now = Date.now();
 
@@ -350,14 +352,14 @@ export class UnifiedBudgetManager {
     let usedUsd = 0;
     let limitUsd = 0;
 
-    if (config.dailyLimitUsd > 0) {
+    if (hasBudgetLimit(config.dailyLimitUsd)) {
       usedUsd = this.storage.sumBudgetSince(now - ROLLING_WINDOW_MS);
       limitUsd = config.dailyLimitUsd;
       pct = usedUsd / limitUsd;
     }
 
     // Check monthly limit (use whichever is higher percentage)
-    if (config.monthlyLimitUsd > 0) {
+    if (hasBudgetLimit(config.monthlyLimitUsd)) {
       const monthlyUsed = this.storage.sumBudgetSince(now - MONTHLY_WINDOW_MS);
       const monthlyPct = monthlyUsed / config.monthlyLimitUsd;
       if (monthlyPct > pct) {

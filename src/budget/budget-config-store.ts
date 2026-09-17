@@ -1,5 +1,5 @@
 import type { UnifiedBudgetConfig } from "./budget-types.js";
-import { DEFAULT_BUDGET_CONFIG } from "./budget-types.js";
+import { DEFAULT_BUDGET_CONFIG, NO_BUDGET_LIMIT } from "./budget-types.js";
 
 interface BudgetStorage {
   getBudgetConfig(key: string): string | undefined;
@@ -38,11 +38,12 @@ export class BudgetConfigStore {
     }
     // Validate and persist each field
     if (partial.dailyLimitUsd !== undefined) {
-      if (typeof partial.dailyLimitUsd !== "number" || !Number.isFinite(partial.dailyLimitUsd) || partial.dailyLimitUsd < 0) throw new Error("dailyLimitUsd must be a finite number >= 0");
+      // -1 is "no limit"; 0 is a limit of zero (plan 2.1b).
+      if (typeof partial.dailyLimitUsd !== "number" || !Number.isFinite(partial.dailyLimitUsd) || partial.dailyLimitUsd < NO_BUDGET_LIMIT) throw new Error("dailyLimitUsd must be -1 (no limit) or a finite number >= 0");
       this.storage.setBudgetConfig("dailyLimitUsd", String(partial.dailyLimitUsd));
     }
     if (partial.monthlyLimitUsd !== undefined) {
-      if (typeof partial.monthlyLimitUsd !== "number" || !Number.isFinite(partial.monthlyLimitUsd) || partial.monthlyLimitUsd < 0) throw new Error("monthlyLimitUsd must be a finite number >= 0");
+      if (typeof partial.monthlyLimitUsd !== "number" || !Number.isFinite(partial.monthlyLimitUsd) || partial.monthlyLimitUsd < NO_BUDGET_LIMIT) throw new Error("monthlyLimitUsd must be -1 (no limit) or a finite number >= 0");
       this.storage.setBudgetConfig("monthlyLimitUsd", String(partial.monthlyLimitUsd));
     }
     if (partial.warnPct !== undefined) {

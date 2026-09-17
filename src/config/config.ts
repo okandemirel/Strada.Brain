@@ -395,7 +395,9 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
         // the UnifiedBudgetManager like every other spender.
         dailyBudgetUsd:
           rawConfig.daemonDailyBudget ??
-          (rawConfig.stradaBudgetDailyUsd > 0 ? rawConfig.stradaBudgetDailyUsd : undefined),
+          // A ceiling of ZERO is the daemon's ceiling too; only "no limit"
+          // leaves it unbounded (plan 2.1b).
+          (rawConfig.stradaBudgetDailyUsd >= 0 ? rawConfig.stradaBudgetDailyUsd : undefined),
         // Audited 2026-09-02: the tracker must measure the same spend the
         // limit is scoped to — daemon-only for a dedicated sub-limit, every
         // source for the shared wallet.

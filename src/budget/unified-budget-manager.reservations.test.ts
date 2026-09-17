@@ -119,7 +119,8 @@ describe("UnifiedBudgetManager reservations (plan 2.12 / audit 03.1 / D20)", () 
   });
 
   it("source sub-limits count the reserving source's outstanding work", () => {
-    const { manager } = makeManager({ dailyLimitUsd: "0", "subLimits.daemonDailyUsd": "1", "subLimits.agentDefaultUsd": "1" });
+    // No GLOBAL ceiling here (-1, plan 2.1b): the sub-limits are what bite.
+    const { manager } = makeManager({ dailyLimitUsd: "-1", "subLimits.daemonDailyUsd": "1", "subLimits.agentDefaultUsd": "1" });
     const daemon = manager.reserve(1, "daemon");
     expect(manager.isSourceExceeded("daemon")).toBe(true);
     expect(manager.canSpend(0.1, "daemon")).toBe(false);

@@ -1196,7 +1196,9 @@ describe("loadConfig snapshot (plan-028 guard)", () => {
     expect(cfg.consensus).toMatchObject({ mode: "auto" });
 
     // Budget defaults
-    expect(cfg.budget).toMatchObject({ dailyLimitUsd: 0, monthlyLimitUsd: 0, warnPct: 0.8 });
+    // No STRADA_BUDGET_* in this env: no ceiling, which is -1 and not 0 —
+    // zero is a ceiling of nothing (plan 2.1b).
+    expect(cfg.budget).toMatchObject({ dailyLimitUsd: -1, monthlyLimitUsd: -1, warnPct: 0.8 });
 
     // Strada dependency defaults
     expect(cfg.strada.coreRepoUrl).toBe("https://github.com/okandemirel/Strada.Core.git");

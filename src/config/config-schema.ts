@@ -390,18 +390,21 @@ export const configSchema = z
       .prefault("0"),
 
     // Unified Budget System
+    // ABSENT IS NO LIMIT; "0" IS A LIMIT OF ZERO (plan 2.1b): the default
+    // used to be "0", which the runtime read as unlimited, so a person who
+    // set the budget to zero to stop spending was told "unlimited".
     stradaBudgetDailyUsd: z
       .string()
       .optional()
-      .default("0")
+      .default("-1")
       .transform((s) => parseFloat(s))
-      .pipe(z.number().min(0).max(10000)),
+      .pipe(z.number().min(-1).max(10000)),
     stradaBudgetMonthlyUsd: z
       .string()
       .optional()
-      .default("0")
+      .default("-1")
       .transform((s) => parseFloat(s))
-      .pipe(z.number().min(0).max(100000)),
+      .pipe(z.number().min(-1).max(100000)),
     stradaBudgetWarnPct: z
       .string()
       .optional()
