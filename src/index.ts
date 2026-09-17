@@ -18,6 +18,7 @@ if ((_major === 20 && _minor < 19) || _major === 21 || (_major === 22 && _minor 
 }
 
 import { Command } from "commander";
+import { shutdownExitCode } from "./core/shutdown-exit-code.js";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -968,7 +969,9 @@ function setupShutdownHandlers(shutdown: () => Promise<void>, afterShutdown?: ()
       // Lock cleanup is best-effort; a stale lock self-heals on next start.
     }
     console.log("Shutdown complete.");
-    process.exit(0);
+    // A crash is a crash however clean the cleanup was: exit 0 here left a
+    // `Restart=on-failure` unit down after an uncaught exception (audit 14F5).
+    process.exit(shutdownExitCode(signal, true));
   };
 
   process.on("SIGTERM", () => void handleShutdown("SIGTERM"));
