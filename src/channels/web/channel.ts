@@ -3058,6 +3058,21 @@ export class WebChannel
       if (originHeader && this.isOwnBoundOrigin(originHeader)) {
         proxyHeaders["Origin"] = originHeader;
       }
+      // WHO IS ASKING travels to the dashboard (round 12 #10). The routes
+      // behind this proxy decide per identity — a change-review decision is
+      // the instance owner's — and a request that arrives unattributed is
+      // refused on a shared instance. Only a pair this channel's own store
+      // VERIFIES is forwarded, so a caller cannot claim someone else's id.
+      const claimedProfileId = this.getSingleHeader(req.headers["x-strada-profile-id"]);
+      const claimedProfileToken = this.getSingleHeader(req.headers["x-strada-profile-token"]);
+      if (
+        claimedProfileId &&
+        claimedProfileToken &&
+        this.identityStore.verify(claimedProfileId, claimedProfileToken)
+      ) {
+        proxyHeaders["x-strada-profile-id"] = claimedProfileId;
+        proxyHeaders["x-strada-profile-token"] = claimedProfileToken;
+      }
       if (refererHeader && this.isOwnBoundOrigin(refererHeader)) {
         proxyHeaders["Referer"] = refererHeader;
       }

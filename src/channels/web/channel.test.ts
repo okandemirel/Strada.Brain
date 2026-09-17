@@ -505,6 +505,58 @@ describe("WebChannel origin boundary (13F6 / 4.8)", () => {
     return { res, fetchMock };
   }
 
+  it("round 12 #10 forwards a VERIFIED identity to the dashboard, and never a claimed one", async () => {
+    // The routes behind this proxy decide per identity — a change-review
+    // decision belongs to the instance owner — so an unattributed request is
+    // refused on a shared instance. Everything but Authorization/Origin/Referer
+    // used to be dropped here, so the identity never arrived.
+    const channel = new WebChannel(3000, 3100);
+    const store = (channel as unknown as {
+      identityStore: { issue: (id?: string) => { profileId: string; profileToken: string } };
+    }).identityStore;
+    const identity = store.issue();
+    const url = "/api/workspace/change-review/r1/decisions";
+    const fetchMock = vi.fn().mockResolvedValue(new Response("{}", { status: 200, headers: { "content-type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const req = createMockRequest({
+      method: "POST",
+      url,
+      headers: {
+        origin: "http://127.0.0.1:3000",
+        "x-strada-profile-id": identity.profileId,
+        "x-strada-profile-token": identity.profileToken,
+      },
+      body: JSON.stringify({ decisions: [] }),
+    });
+    const pending = proxy(channel, req, createMockResponse(), url);
+    req.emitBody();
+    await pending;
+    const forwarded = (fetchMock.mock.calls[0]?.[1] as { headers: Record<string, string> }).headers;
+    expect(forwarded["x-strada-profile-id"]).toBe(identity.profileId);
+    expect(forwarded["x-strada-profile-token"]).toBe(identity.profileToken);
+
+    // A CLAIMED identity this store never issued is not forwarded at all, so
+    // the dashboard sees an unattributed request rather than a borrowed one.
+    fetchMock.mockClear();
+    const liar = createMockRequest({
+      method: "POST",
+      url,
+      headers: {
+        origin: "http://127.0.0.1:3000",
+        "x-strada-profile-id": identity.profileId,
+        "x-strada-profile-token": "not-the-token",
+      },
+      body: JSON.stringify({ decisions: [] }),
+    });
+    const second = proxy(channel, liar, createMockResponse(), url);
+    liar.emitBody();
+    await second;
+    const claimed = (fetchMock.mock.calls[0]?.[1] as { headers: Record<string, string> }).headers;
+    expect(claimed["x-strada-profile-id"]).toBeUndefined();
+    expect(claimed["x-strada-profile-token"]).toBeUndefined();
+  });
+
   it("round 12 #11 refuses a write whose path is not the path that would act", async () => {
     // `/api/workspace/change-review/../../update` matched the mutable prefix
     // and then became `/api/update` downstream: authorization and effect were
