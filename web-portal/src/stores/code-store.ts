@@ -76,6 +76,12 @@ export interface PendingChangeDecision {
   /** The server-side review this decision belongs to; null when none is loaded. */
   reviewId: string | null
   /**
+   * Which version of the user's mind this is (round 12 #17). It rises every time
+   * a decision is recorded, for any path, so an answer to what was sent earlier
+   * can never settle what the user decided afterwards.
+   */
+  revision: number
+  /**
    * The server must ask before acting: this path is not in a state where an
    * undo is safe — typically because a human edited it after the run published
    * it, which is precisely the case where silently reverting destroys their work.
@@ -94,11 +100,23 @@ export interface PendingChangeDecision {
  * reported as actually done (restored or deleted on disk for an undo, recorded
  * as kept for a keep). Everything else the user sent and that is not in
  * `applied` stays visible, with the reason.
+ *
+ * ROUND 12 #17. An answer used to be matched on PATH alone, so it settled
+ * whatever was queued for that path — including a decision about a completely
+ * different run. Send R1's undo for `a.cs`, load R2, reject its `a.cs`, and then
+ * let R1's response arrive: the newer rejection was dropped and its diff
+ * dismissed, with nothing reverted. An answer therefore has to name the review
+ * it is about and the revision of each decision it answers; anything newer than
+ * that is left exactly as it is.
  */
 export interface DecisionAck {
+  /** The review the batch was sent for — null when there was none to send to. */
+  reviewId: string | null
   applied?: string[]
   refused?: string[]
   reason?: string
+  /** path → the `revision` of the decision this answer is about. */
+  revisions?: Record<string, number>
 }
 
 interface CodeState {
@@ -111,6 +129,8 @@ interface CodeState {
   review: ChangeReview | null
   /** Decisions made here that still have to reach the server. */
   pendingDecisions: PendingChangeDecision[]
+  /** The revision the next decision gets (round 12 #17). Monotonic per session. */
+  decisionRevision: number
 
   openFile: (tab: CodeTab) => void
   closeFile: (path: string) => void
@@ -123,10 +143,12 @@ interface CodeState {
   /**
    * Record what the user decided about one path.
    *
-   * Accepting shows the run's version, which is already the version on disk.
-   * REJECTING changes nothing on screen yet: the run's bytes are still in the
-   * project until the server puts the previous ones back, so the diff stays
-   * until settleDecisions() says it was applied.
+   * NEITHER answer changes the tab (round 12 #18). Accepting used to dismiss the
+   * diff on the spot, which threw away the controls and the original content
+   * with it: the server refuses a mixed keep/undo set — an undo restores the
+   * whole review — and the user could then no longer turn that keep into a
+   * revert, so the review could not be decided at all. A decision is a decision
+   * until the server acknowledges it, and only settleDecisions() may act on it.
    */
   resolveDiff: (path: string, accepted: boolean) => void
   setChangeReview: (review: ChangeReview | null) => void
@@ -151,6 +173,7 @@ const initialState = {
   touchedFiles: {} as Record<string, TouchedStatus>,
   review: null as ChangeReview | null,
   pendingDecisions: [] as PendingChangeDecision[],
+  decisionRevision: 0,
 }
 
 export const useCodeStore = create<CodeState>()((set, get) => ({
@@ -203,25 +226,15 @@ export const useCodeStore = create<CodeState>()((set, get) => ({
       // if it were routine: the usual reason is that a person edited this file
       // after the run published it, and their bytes are not ours to discard.
       const needsConfirm = decision === 'undo' && (s.review === null || entry === undefined || entry.state !== 'ready')
+      const revision = s.decisionRevision + 1
       return {
-        // Accepting is the only half that can be shown immediately: the run's
-        // version IS what the project holds. A rejection leaves the diff up —
-        // showing the original before the server has restored it would be the
-        // original defect, a revert that exists only in the browser.
-        tabs: accepted
-          ? s.tabs.map((t) =>
-              t.path === path
-                ? {
-                    ...t,
-                    content: t.modifiedContent ?? t.content,
-                    isDiff: false,
-                    diffContent: undefined,
-                    originalContent: undefined,
-                    modifiedContent: undefined,
-                  }
-                : t,
-            )
-          : s.tabs,
+        // ROUND 12 #18: the tab is untouched by EITHER answer. Keeping used to
+        // dismiss the diff here, which removed the controls the user needs to
+        // change that keep into a revert after the server refuses a mixed set.
+        // The diff, the original content and the controls all survive until
+        // settleDecisions() reports what the server actually did.
+        tabs: s.tabs,
+        decisionRevision: revision,
         // One decision per path — the last one the user made.
         pendingDecisions: [
           ...s.pendingDecisions.filter((d) => d.path !== path),
@@ -229,6 +242,7 @@ export const useCodeStore = create<CodeState>()((set, get) => ({
             path,
             decision,
             reviewId: s.review?.reviewId ?? null,
+            revision,
             needsConfirm,
             at: Date.now(),
             status: 'pending' as DecisionStatus,
@@ -267,31 +281,58 @@ export const useCodeStore = create<CodeState>()((set, get) => ({
     set((s) => {
       const applied = new Set(ack.applied ?? [])
       const refused = new Set(ack.refused ?? [])
-      // Only an applied UNDO changes what is on screen: the file on disk is the
-      // previous version again, so the diff goes and the original is the content.
-      const undone = s.pendingDecisions.filter((d) => d.decision === 'undo' && applied.has(d.path)).map((d) => d.path)
+      const answeredRevision = ack.revisions ?? {}
+      /**
+       * Is THIS decision the one the answer is about (round 12 #17)? Same
+       * review, and not a decision the user made after the batch was sent. An
+       * answer that names no revision for a path is taken at face value — it
+       * still has to belong to the same review.
+       */
+      const answers = (d: PendingChangeDecision): boolean => {
+        if ((d.reviewId ?? null) !== (ack.reviewId ?? null)) return false
+        const revision = answeredRevision[d.path]
+        return revision === undefined || d.revision <= revision
+      }
+      const settled = s.pendingDecisions.filter((d) => answers(d) && applied.has(d.path))
+      // An applied UNDO puts the previous version on screen — the file on disk is
+      // that version again. An applied KEEP is the one moment the run's version
+      // may replace the diff: the decision is now final on the server too.
+      const undone = settled.filter((d) => d.decision === 'undo').map((d) => d.path)
+      const kept = settled.filter((d) => d.decision === 'keep').map((d) => d.path)
       const touchedFiles = { ...s.touchedFiles }
       for (const path of undone) delete touchedFiles[path]
       return {
-        tabs: s.tabs.map((t) =>
-          undone.includes(t.path)
-            ? {
-                ...t,
-                content: t.originalContent ?? t.content,
-                isDiff: false,
-                diffContent: undefined,
-                originalContent: undefined,
-                modifiedContent: undefined,
-              }
-            : t,
-        ),
+        tabs: s.tabs.map((t) => {
+          if (undone.includes(t.path)) {
+            return {
+              ...t,
+              content: t.originalContent ?? t.content,
+              isDiff: false,
+              diffContent: undefined,
+              originalContent: undefined,
+              modifiedContent: undefined,
+            }
+          }
+          if (kept.includes(t.path)) {
+            return {
+              ...t,
+              content: t.modifiedContent ?? t.content,
+              isDiff: false,
+              diffContent: undefined,
+              originalContent: undefined,
+              modifiedContent: undefined,
+            }
+          }
+          return t
+        }),
         touchedFiles,
         // An applied decision leaves the queue; a refused one stays, with the
-        // reason, so the user is told rather than silently ignored.
+        // reason, so the user is told rather than silently ignored. A decision
+        // this answer is not about is left exactly as it is.
         pendingDecisions: s.pendingDecisions
-          .filter((d) => !applied.has(d.path))
+          .filter((d) => !(answers(d) && applied.has(d.path)))
           .map((d) =>
-            refused.has(d.path)
+            answers(d) && refused.has(d.path)
               ? {
                   ...d,
                   status: 'refused' as DecisionStatus,
@@ -311,5 +352,6 @@ export const useCodeStore = create<CodeState>()((set, get) => ({
       touchedFiles: {},
       review: null,
       pendingDecisions: [],
+      decisionRevision: 0,
     }),
 }))

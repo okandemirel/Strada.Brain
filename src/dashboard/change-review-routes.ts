@@ -15,6 +15,26 @@
  * only thing that may report a rejection as done: the portal presents a revert
  * only after a response here says the path was actually put back.
  *
+ * WHO MAY DECIDE (Codex round 12 #10). A keep or a revert writes the user's
+ * project and moves its git HEAD, so it is an instance-level power, not one
+ * identity's own traffic. Admission used to be the portal's Origin/Referer check
+ * alone: anything it let through could revert another profile's run, because the
+ * handler was given no identity and asked no question. It now resolves the
+ * caller the way the shared-instance model does (plan 6.14,
+ * src/channels/web/instance-access.ts): the profile id/token pair is VERIFIED
+ * against the identity store the web channel issued it from — a profile id on
+ * its own is a public value and proves nothing — and `decideInstanceAccess`
+ * answers. The owner decides; a guest is refused; an unattributed request is
+ * granted only while the instance has a single identity, which is the model's
+ * own rule and keeps the ordinary one-person portal working untouched.
+ *
+ * WHAT THE WEB CHANNEL STILL OWES. `proxyToDashboard` forwards Authorization,
+ * Origin and Referer and drops every other request header, so a browser request
+ * reaches this route unattributed even when the portal knows exactly who sent
+ * it. Until the proxy forwards `x-strada-profile-id` / `x-strada-profile-token`,
+ * a SHARED instance refuses these requests (`deny:unidentified`) — the same
+ * trade-off instance-access.ts already documents for owner-only settings writes.
+ *
  * WHY DECISIONS ARE APPLIED AS A WHOLE. `applyUndo` restores the review — all of
  * its ready entries, plus the run's commits — because that is the only state the
  * previous copies and the git compare-and-swap can put back consistently. There
@@ -24,18 +44,31 @@
  * touches nothing.
  */
 
+import { existsSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { join } from "node:path";
 import {
   applyUndo,
   isReviewId,
-  keepChanges,
+  keepChangesExclusive,
   listChangeReviews,
   previewRecord,
   previewUndo,
   readChangeReview,
+  readDecisionOutcome,
+  writeDecisionOutcome,
   type ChangeReviewRecord,
+  type RecordedDecision,
   type UndoPreview,
 } from "../agents/multi/workspace-change-review.js";
+import {
+  decideInstanceAccess,
+  instanceRoleOf,
+  type AccessDecision,
+  type InstanceFacts,
+} from "../channels/web/instance-access.js";
+import { WebIdentityStore } from "../channels/web/web-identity-store.js";
+import { getCachedConfig } from "../config/config.js";
 import { getLoggerSafe } from "../utils/logger.js";
 
 /** Route prefix. Registered before the file-explorer routes, which 404 the rest. */
@@ -89,6 +122,119 @@ export interface DecisionsResponse {
 function jsonResponse(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, NO_CACHE_HEADERS);
   res.end(JSON.stringify(body));
+}
+
+// -- Who is asking (round 12 #10) -------------------------------------------
+
+/**
+ * The part of the web channel's identity store this route needs. Structural, so
+ * the daemon can hand over its live `WebIdentityStore` and a test can hand over
+ * a fake, and so this module does not depend on the channel's class.
+ */
+export interface ChangeReviewIdentityStore {
+  /** True only for a pair THIS instance issued. */
+  verify(profileId: string, profileToken: string): boolean;
+  /** The instance owner (the first identity ever issued), if one is recorded. */
+  ownerProfileId(): string | undefined;
+  /** True when this profile id was issued here — a guest rather than a stranger. */
+  has(profileId: string): boolean;
+  /** How many identities exist; more than one means the instance is genuinely shared. */
+  count(): number;
+}
+
+let injectedIdentityStore: ChangeReviewIdentityStore | null = null;
+let openedIdentityStore: ChangeReviewIdentityStore | undefined;
+/** Set only when opening the store FAILED — "not there yet" is retried. */
+let identityStoreUnavailable = false;
+
+/**
+ * Hand this route the identity store to verify callers against (the daemon's
+ * own, or a fake in a test). `null` clears it, and the route falls back to
+ * reading the identity database the web channel keeps.
+ */
+export function setChangeReviewIdentityStore(store: ChangeReviewIdentityStore | null): void {
+  injectedIdentityStore = store;
+  openedIdentityStore = undefined;
+  identityStoreUnavailable = false;
+}
+
+/**
+ * The identity store to judge this request with.
+ *
+ * With nothing injected the web channel's own database is opened where
+ * bootstrap-channels.ts puts it (`<memory.dbPath>/web-identities.db`) — that is
+ * how a request that arrives straight at the dashboard port, bypassing the
+ * portal, is still judged against real identities. A project with no such
+ * database has never issued one, so there is no second identity to be separated
+ * from and the fallback is "sole identity", not "refuse everything".
+ */
+function identityStore(): ChangeReviewIdentityStore | undefined {
+  if (injectedIdentityStore) return injectedIdentityStore;
+  if (openedIdentityStore) return openedIdentityStore;
+  if (identityStoreUnavailable) return undefined;
+  try {
+    const config = getCachedConfig();
+    const dbPath = config ? join(config.memory.dbPath, "web-identities.db") : "";
+    // Only an EXISTING database is opened: creating one here would invent an
+    // identity table for a project that has never served a portal. A database
+    // that is not there YET is looked for again on the next request — caching
+    // "no identities" would leave the gate permissive for the life of the
+    // process once a single request arrived before the portal's first browser.
+    if (dbPath && existsSync(dbPath)) {
+      openedIdentityStore = new WebIdentityStore(dbPath);
+    }
+  } catch (error) {
+    getLoggerSafe().warn("Change-review could not open the web identity store; callers cannot be attributed", {
+      error: String(error),
+    });
+    identityStoreUnavailable = true;
+  }
+  return openedIdentityStore;
+}
+
+function singleHeader(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+/**
+ * May this caller act on this project's change reviews?
+ *
+ * The identity is the VERIFIED profile pair, never a claimed field: `profileId`
+ * travels to the browser and lives in its localStorage, so a request naming the
+ * owner is not the owner. Everything else is the shared-instance model's own
+ * decision function, on the surface that covers "changes the one shared thing".
+ */
+function authorizeChangeReview(req: IncomingMessage, what: string): AccessDecision {
+  const store = identityStore();
+  const claimedId = singleHeader(req.headers?.["x-strada-profile-id"])?.trim();
+  const claimedToken = singleHeader(req.headers?.["x-strada-profile-token"])?.trim();
+  const verified =
+    store && claimedId && claimedToken && store.verify(claimedId, claimedToken) ? claimedId : undefined;
+  const facts: InstanceFacts = {
+    shared: (store?.count() ?? 0) > 1,
+    ...(store?.ownerProfileId() !== undefined ? { ownerProfileId: store!.ownerProfileId()! } : {}),
+  };
+  const role = instanceRoleOf(verified, facts, (candidate) => store?.has(candidate) ?? false);
+  return decideInstanceAccess({
+    surface: "instance:control",
+    actor: { ...(verified ? { profileId: verified } : {}), role },
+    instance: facts,
+    what,
+  });
+}
+
+/** Answer 403 with the model's own reason, and return false, when refused. */
+function allowed(req: IncomingMessage, res: ServerResponse, what: string): boolean {
+  const decision = authorizeChangeReview(req, what);
+  if (decision.allowed) return true;
+  getLoggerSafe().warn("Change-review request refused", { what, code: decision.code, reason: decision.reason });
+  jsonResponse(res, 403, {
+    error: "Forbidden",
+    reason: decision.reason,
+    surface: decision.surface,
+    code: decision.code,
+  });
+  return false;
 }
 
 /** Forward slashes, whatever the recording platform used. */
@@ -159,6 +305,72 @@ function parseDecisions(body: DecisionsRequest | null): { decisions: DecisionInp
 }
 
 /**
+ * One path segment as an id, or undefined when it is not decodable at all
+ * (round 12 #12). `decodeURIComponent("%")` throws a URIError; a client bug is
+ * a 400, never an exception out of the router.
+ */
+function decodeReviewId(segment: string): string | undefined {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return undefined;
+  }
+}
+
+/** The same decisions, in a comparable order: a retry is a set, not a sequence. */
+function decisionKey(decisions: readonly RecordedDecision[], onBlocked: string | undefined): string {
+  return [
+    onBlocked ?? "refuse",
+    ...[...decisions].map((d) => `${d.path}=${d.decision}`).sort(),
+  ].join("\n");
+}
+
+/**
+ * The answer this review already gave to exactly these decisions, or undefined.
+ *
+ * Reconciled against the SPECIFIC review and the SPECIFIC decision set (round 12
+ * #15): changing your mind is not a retry, so a different set falls through and
+ * is applied normally — the engine deliberately allows undoing a review that was
+ * kept.
+ */
+function replayedOutcome(
+  record: ChangeReviewRecord,
+  decisions: DecisionInput[],
+  onBlocked: string | undefined,
+): Record<string, unknown> | undefined {
+  const previous = readDecisionOutcome(record.projectRoot, record.reviewId);
+  if (!previous || previous.response === null || typeof previous.response !== "object") return undefined;
+  if (decisionKey(previous.decisions, previous.onBlocked) !== decisionKey(decisions, onBlocked)) return undefined;
+  return { ...(previous.response as Record<string, unknown>), replayed: true, decidedAt: previous.at };
+}
+
+/** Write down what a decision was told, so a lost answer can be recovered. */
+function rememberOutcome(
+  record: ChangeReviewRecord,
+  decisions: DecisionInput[],
+  onBlocked: string | undefined,
+  response: DecisionsResponse,
+): void {
+  try {
+    writeDecisionOutcome(record.projectRoot, {
+      version: 1,
+      reviewId: record.reviewId,
+      at: Date.now(),
+      decisions: decisions.map((d) => ({ path: d.path, decision: d.decision })),
+      ...(onBlocked === "refuse" || onBlocked === "skip" ? { onBlocked } : {}),
+      response,
+    });
+  } catch (error) {
+    // The decision itself has already been applied; failing the request now
+    // would be a worse lie than losing the replay.
+    getLoggerSafe().warn("The change-review decision outcome could not be stored", {
+      reviewId: record.reviewId,
+      error: String(error),
+    });
+  }
+}
+
+/**
  * The review this request is allowed to act on: the recorded one, or undefined
  * (the caller has already answered). An id that is not a review id never
  * reaches the filesystem helpers, which throw on one.
@@ -199,6 +411,7 @@ export function handleChangeReviewRoute(
 
   // -- GET /api/workspace/change-review : the newest review ------------------
   if (method === "GET" && path === CHANGE_REVIEW_ROUTE_PREFIX) {
+    if (!allowed(req, res, `GET ${path}`)) return true;
     void (async () => {
       try {
         const records = listChangeReviews(projectRoot);
@@ -220,11 +433,15 @@ export function handleChangeReviewRoute(
 
   const oneMatch = /^\/api\/workspace\/change-review\/([^/]+)$/.exec(path);
   if (method === "GET" && oneMatch) {
-    const reviewId = decodeURIComponent(oneMatch[1]!);
-    if (!isReviewId(reviewId)) {
+    // ROUND 12 #12: "%" is not a decodable escape and decodeURIComponent throws
+    // a URIError. This ran outside any try, synchronously, so a malformed URL
+    // left the route by throwing instead of answering.
+    const reviewId = decodeReviewId(oneMatch[1]!);
+    if (reviewId === undefined || !isReviewId(reviewId)) {
       jsonResponse(res, 400, { error: "Not a change review id" });
       return true;
     }
+    if (!allowed(req, res, `GET ${path}`)) return true;
     void (async () => {
       try {
         const preview = await previewUndo(projectRoot, reviewId);
@@ -248,7 +465,13 @@ export function handleChangeReviewRoute(
       jsonResponse(res, 405, { error: "Method Not Allowed" });
       return true;
     }
-    const reviewId = decodeURIComponent(decisionsMatch[1]!);
+    // Round 12 #12: the same malformed-escape throw as the GET above.
+    const reviewId = decodeReviewId(decisionsMatch[1]!);
+    if (reviewId === undefined) {
+      jsonResponse(res, 400, { error: "Not a change review id" });
+      return true;
+    }
+    if (!allowed(req, res, `POST ${path}`)) return true;
     void (async () => {
       try {
         const body = await readJsonBody<DecisionsRequest>(req, res);
@@ -258,6 +481,14 @@ export function handleChangeReviewRoute(
         const parsed = parseDecisions(body);
         if ("error" in parsed) {
           jsonResponse(res, 400, { error: parsed.error });
+          return;
+        }
+        // ROUND 12 #15: a retry of a decision this review already answered gets
+        // that answer back, rather than an empty `applied` the portal must read
+        // as a refusal.
+        const replay = replayedOutcome(record, parsed.decisions, body.onBlocked);
+        if (replay !== undefined) {
+          jsonResponse(res, 200, replay);
           return;
         }
         await applyDecisions(record, parsed.decisions, body.onBlocked, res);
@@ -309,9 +540,30 @@ async function applyDecisions(
   const keepPaths = decisions.filter((d) => d.decision === "keep").map((d) => d.path);
 
   if (undoPaths.size === 0) {
-    // Keeping is review-wide too, but it changes no file: the run's bytes are
-    // already on disk, and the record simply stops offering an undo by default.
-    const kept = keepChanges(record.projectRoot, record.reviewId);
+    // ROUND 12 #16. Keeping is review-wide too: keepChanges() resolves the
+    // RECORD, so keeping one path of two used to close both and drop the
+    // undecided one out of the newest-unresolved lookup — the user was never
+    // asked about it again. The undo side already demands complete coverage;
+    // this is the same demand, for the same reason.
+    const uncoveredKeep = preview.entries
+      .filter((e) => e.state !== "already-undone")
+      .map((e) => normalizeReviewPath(e.path))
+      .filter((p) => !keepPaths.includes(p));
+    if (uncoveredKeep.length > 0) {
+      jsonResponse(res, 409, {
+        error: "A change review is decided as a whole",
+        reason:
+          `keeping this change resolves the whole review, and ${uncoveredKeep.length} path(s) from the same run have ` +
+          `not been decided (${uncoveredKeep.slice(0, 20).join(", ")}). Decide those too.`,
+        reviewId: record.reviewId,
+        paths: uncoveredKeep,
+        review: portablePreview(preview),
+      });
+      return;
+    }
+    // Keeping changes no file: the run's bytes are already on disk, and the
+    // record simply stops offering an undo by default.
+    const kept = await keepChangesExclusive(record.projectRoot, record.reviewId);
     if (!kept) {
       jsonResponse(res, 404, { error: `No change review named ${record.reviewId} in this project` });
       return;
@@ -326,6 +578,7 @@ async function applyDecisions(
       historyMoved: false,
       review: portablePreview(await previewRecord(kept)),
     };
+    rememberOutcome(record, decisions, onBlocked, response);
     jsonResponse(res, 200, response);
     return;
   }
@@ -387,5 +640,6 @@ async function applyDecisions(
     historyMoved: result.historyMoved,
     review: portablePreview(after ?? preview),
   };
+  rememberOutcome(record, decisions, onBlocked, response);
   jsonResponse(res, 200, response);
 }

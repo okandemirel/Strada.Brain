@@ -19,9 +19,13 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { WorkspaceLeaseManager } from "../agents/multi/workspace-lease-manager.js";
 import { readChangeReview } from "../agents/multi/workspace-change-review.js";
-import { handleChangeReviewRoute } from "./change-review-routes.js";
+import {
+  handleChangeReviewRoute,
+  setChangeReviewIdentityStore,
+  type ChangeReviewIdentityStore,
+} from "./change-review-routes.js";
 import { createMockReq, createMockRes, responseJson, type MockRes } from "./test-support/mock-http.js";
-import type { ServerResponse } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
 
 let source: string;
 let leaseRoot: string;
@@ -315,5 +319,282 @@ describe("change-review routes: what they refuse", () => {
   it("an unknown change-review URL is a 404, not a fall-through", async () => {
     const { status } = await call("GET", "/api/workspace/change-review/a/b/c");
     expect(status).toBe(404);
+  });
+});
+
+/**
+ * Codex round 12 #10, #12, #15, #16 — what the transport itself got wrong.
+ *
+ * All four are about the REQUEST rather than the undo: who may send one, what a
+ * malformed one does, what a repeated one gets back, and what a partial one
+ * closes. Each test names the finding it reproduces.
+ */
+
+/** A request with headers — the mock req is a bare emitter, which has none. */
+function reqWith(headers: Record<string, string>, body?: unknown): IncomingMessage {
+  const req = createMockReq(body === undefined ? undefined : JSON.stringify(body));
+  return Object.assign(req, { headers }) as IncomingMessage;
+}
+
+async function callAs(
+  method: string,
+  url: string,
+  headers: Record<string, string>,
+  body?: unknown,
+): Promise<{ status: number; json: Record<string, unknown> }> {
+  const res = createMockRes();
+  const handled = handleChangeReviewRoute(url, method, reqWith(headers, body), res, source);
+  expect(handled).toBe(true);
+  await answered(res);
+  return { status: (res as MockRes).statusCode, json: responseJson(res) };
+}
+
+/**
+ * The identity store the web channel keeps (src/channels/web/web-identity-store.ts),
+ * as this route needs it: verify a pair, name the owner, count the identities.
+ */
+function identities(opts: { owner?: string; issued?: string[] } = {}): ChangeReviewIdentityStore {
+  const issued = opts.issued ?? ["owner-profile", "guest-profile"];
+  return {
+    verify: (profileId, profileToken) => issued.includes(profileId) && profileToken === `token-of-${profileId}`,
+    ownerProfileId: () => opts.owner ?? "owner-profile",
+    has: (profileId) => issued.includes(profileId),
+    count: () => issued.length,
+  };
+}
+
+const OWNER_HEADERS = {
+  "x-strada-profile-id": "owner-profile",
+  "x-strada-profile-token": "token-of-owner-profile",
+};
+const GUEST_HEADERS = {
+  "x-strada-profile-id": "guest-profile",
+  "x-strada-profile-token": "token-of-guest-profile",
+};
+
+describe("change-review routes: who is allowed to decide (round 12 #10)", () => {
+  afterEach(() => setChangeReviewIdentityStore(null));
+
+  // THE DEFECT. Admission was the portal's Origin/Referer check and nothing
+  // else: any caller it let through could revert another profile's run in the
+  // user's project. The handler received no identity and asked no question.
+  it("a guest may not revert the owner's run, and the project is untouched", async () => {
+    const reviewId = await publishRun();
+    setChangeReviewIdentityStore(identities());
+
+    const { status, json } = await callAs("POST", `/api/workspace/change-review/${reviewId}/decisions`, GUEST_HEADERS, {
+      decisions: [
+        { path: "Assets/Scripts/Existing.cs", decision: "undo" },
+        { path: "Assets/Scripts/New.cs", decision: "undo" },
+      ],
+    });
+
+    expect(status).toBe(403);
+    expect(String(json["reason"])).toContain("guest-profile");
+    // The run's bytes are still there: a refusal touches nothing.
+    expect(readFileSync(join(source, EXISTING), "utf8")).toBe("the run's version");
+    expect(readFileSync(join(source, NEW), "utf8")).toBe("brand new");
+    expect(readChangeReview(source, reviewId)!.status).toBe("open");
+  });
+
+  it("a guest may not list or preview the review either", async () => {
+    const reviewId = await publishRun();
+    setChangeReviewIdentityStore(identities());
+
+    expect((await callAs("GET", "/api/workspace/change-review", GUEST_HEADERS)).status).toBe(403);
+    expect((await callAs("GET", `/api/workspace/change-review/${reviewId}`, GUEST_HEADERS)).status).toBe(403);
+  });
+
+  it("the owner may, and the bytes move", async () => {
+    const reviewId = await publishRun();
+    setChangeReviewIdentityStore(identities());
+
+    const { status, json } = await callAs("POST", `/api/workspace/change-review/${reviewId}/decisions`, OWNER_HEADERS, {
+      decisions: [
+        { path: "Assets/Scripts/Existing.cs", decision: "undo" },
+        { path: "Assets/Scripts/New.cs", decision: "undo" },
+      ],
+    });
+
+    expect(status).toBe(200);
+    expect(json["outcome"]).toBe("undone");
+    expect(readFileSync(join(source, EXISTING), "utf8")).toBe("the user's version");
+    expect(existsSync(join(source, NEW))).toBe(false);
+  });
+
+  // The identity must be VERIFIED. A profile id is a public value — the portal
+  // stores it in localStorage and the server sends it to clients — so naming the
+  // owner is not being the owner.
+  it("the owner's id with a token that does not verify is not the owner", async () => {
+    const reviewId = await publishRun();
+    setChangeReviewIdentityStore(identities());
+
+    const { status, json } = await callAs(
+      "POST",
+      `/api/workspace/change-review/${reviewId}/decisions`,
+      { "x-strada-profile-id": "owner-profile", "x-strada-profile-token": "guessed" },
+      { decisions: [{ path: "Assets/Scripts/Existing.cs", decision: "undo" }] },
+    );
+
+    expect(status).toBe(403);
+    expect(readFileSync(join(source, EXISTING), "utf8")).toBe("the run's version");
+  });
+
+  it("an unattributed request is refused once the instance is shared", async () => {
+    const reviewId = await publishRun();
+    setChangeReviewIdentityStore(identities());
+
+    const { status, json } = await callAs("POST", `/api/workspace/change-review/${reviewId}/decisions`, {}, {
+      decisions: [{ path: "Assets/Scripts/Existing.cs", decision: "undo" }],
+    });
+
+    expect(status).toBe(403);
+    expect(String(json["reason"])).toContain("shared");
+    expect(readFileSync(join(source, EXISTING), "utf8")).toBe("the run's version");
+  });
+
+  // …and the direction that would be a defect of its own: refusing the ordinary
+  // one-person instance, where there is nobody to be separated from.
+  it("a single-identity instance decides with no identity at all", async () => {
+    const reviewId = await publishRun();
+    setChangeReviewIdentityStore(identities({ issued: ["owner-profile"] }));
+
+    const { status } = await callAs("POST", `/api/workspace/change-review/${reviewId}/decisions`, {}, {
+      decisions: [
+        { path: "Assets/Scripts/Existing.cs", decision: "undo" },
+        { path: "Assets/Scripts/New.cs", decision: "undo" },
+      ],
+    });
+
+    expect(status).toBe(200);
+    expect(readFileSync(join(source, EXISTING), "utf8")).toBe("the user's version");
+  });
+});
+
+describe("change-review routes: a malformed id is an answer, not a throw (round 12 #12)", () => {
+  // THE DEFECT. decodeURIComponent on "%" throws a URIError, and it was called
+  // outside the handler's try — synchronously, before the async body. The
+  // dashboard's request handler saw the throw, not a 400.
+  it("GET …/change-review/% answers 400", async () => {
+    const res = createMockRes();
+    expect(() => handleChangeReviewRoute("/api/workspace/change-review/%", "GET", createMockReq(), res, source)).not.toThrow();
+    await answered(res);
+    expect((res as MockRes).statusCode).toBe(400);
+  });
+
+  it("POST …/change-review/%E0%A4%A/decisions answers 400", async () => {
+    const res = createMockRes();
+    const req = createMockReq(JSON.stringify({ decisions: [{ path: "a", decision: "undo" }] }));
+    expect(() =>
+      handleChangeReviewRoute("/api/workspace/change-review/%E0%A4%A/decisions", "POST", req, res, source),
+    ).not.toThrow();
+    await answered(res);
+    expect((res as MockRes).statusCode).toBe(400);
+  });
+});
+
+describe("change-review routes: a repeated decision gets its answer back (round 12 #15)", () => {
+  // THE DEFECT. Lose the first successful response and repeat the decision: the
+  // paths are already undone, so `applied` comes back empty and the portal —
+  // which may only present what `applied` names — shows the finished revert as
+  // refused, with the decision still queued.
+  it("replays the acknowledgement of an undo that already happened", async () => {
+    const reviewId = await publishRun();
+    const decisions = [
+      { path: "Assets/Scripts/Existing.cs", decision: "undo" },
+      { path: "Assets/Scripts/New.cs", decision: "undo" },
+    ];
+    const first = await call("POST", `/api/workspace/change-review/${reviewId}/decisions`, { decisions });
+    expect((first.json["applied"] as string[]).sort()).toEqual(["Assets/Scripts/Existing.cs", "Assets/Scripts/New.cs"]);
+
+    const retry = await call("POST", `/api/workspace/change-review/${reviewId}/decisions`, { decisions });
+
+    expect(retry.status).toBe(200);
+    expect(retry.json["outcome"]).toBe("undone");
+    expect((retry.json["applied"] as string[]).sort()).toEqual([
+      "Assets/Scripts/Existing.cs",
+      "Assets/Scripts/New.cs",
+    ]);
+    expect(retry.json["replayed"]).toBe(true);
+    // Replayed, not re-run: the project was not touched a second time.
+    expect(readFileSync(join(source, EXISTING), "utf8")).toBe("the user's version");
+    expect(existsSync(join(source, NEW))).toBe(false);
+  });
+
+  it("replays a keep the same way", async () => {
+    const reviewId = await publishRun();
+    const decisions = [
+      { path: "Assets/Scripts/Existing.cs", decision: "keep" },
+      { path: "Assets/Scripts/New.cs", decision: "keep" },
+    ];
+    await call("POST", `/api/workspace/change-review/${reviewId}/decisions`, { decisions });
+    const retry = await call("POST", `/api/workspace/change-review/${reviewId}/decisions`, { decisions });
+
+    expect(retry.status).toBe(200);
+    expect(retry.json["outcome"]).toBe("kept");
+    expect((retry.json["applied"] as string[]).sort()).toEqual([
+      "Assets/Scripts/Existing.cs",
+      "Assets/Scripts/New.cs",
+    ]);
+    expect(retry.json["replayed"]).toBe(true);
+  });
+
+  // A retry is reconciled against ITS OWN decision set. Changing your mind is
+  // not a retry, and must not be answered with the old acknowledgement.
+  it("a different decision for the same review is not a replay", async () => {
+    const reviewId = await publishRun();
+    await call("POST", `/api/workspace/change-review/${reviewId}/decisions`, {
+      decisions: [
+        { path: "Assets/Scripts/Existing.cs", decision: "keep" },
+        { path: "Assets/Scripts/New.cs", decision: "keep" },
+      ],
+    });
+
+    const changedMind = await call("POST", `/api/workspace/change-review/${reviewId}/decisions`, {
+      decisions: [
+        { path: "Assets/Scripts/Existing.cs", decision: "undo" },
+        { path: "Assets/Scripts/New.cs", decision: "undo" },
+      ],
+    });
+
+    expect(changedMind.json["replayed"]).toBeUndefined();
+    expect((changedMind.json["applied"] as string[]).sort()).toEqual([
+      "Assets/Scripts/Existing.cs",
+      "Assets/Scripts/New.cs",
+    ]);
+    expect(readFileSync(join(source, EXISTING), "utf8")).toBe("the user's version");
+  });
+});
+
+describe("change-review routes: keeping is review-wide too (round 12 #16)", () => {
+  // THE DEFECT. keepChanges() resolves the RECORD, so keeping one path of a
+  // two-path review closed both — and the newest-unresolved lookup then hid the
+  // path nobody had decided about. The undo side already refuses this.
+  it("keeping one path of two is refused and names the undecided one", async () => {
+    const reviewId = await publishRun();
+
+    const { status, json } = await call("POST", `/api/workspace/change-review/${reviewId}/decisions`, {
+      decisions: [{ path: "Assets/Scripts/Existing.cs", decision: "keep" }],
+    });
+
+    expect(status).toBe(409);
+    expect(json["paths"]).toEqual(["Assets/Scripts/New.cs"]);
+    expect(readChangeReview(source, reviewId)!.status).toBe("open");
+    // …and the review is still the one the portal is offered.
+    const newest = await call("GET", "/api/workspace/change-review");
+    expect((newest.json["review"] as { reviewId: string }).reviewId).toBe(reviewId);
+  });
+
+  it("keeping every path still resolves it", async () => {
+    const reviewId = await publishRun();
+    const { status, json } = await call("POST", `/api/workspace/change-review/${reviewId}/decisions`, {
+      decisions: [
+        { path: "Assets/Scripts/Existing.cs", decision: "keep" },
+        { path: "Assets/Scripts/New.cs", decision: "keep" },
+      ],
+    });
+    expect(status).toBe(200);
+    expect(json["outcome"]).toBe("kept");
+    expect(readChangeReview(source, reviewId)!.status).toBe("kept");
   });
 });

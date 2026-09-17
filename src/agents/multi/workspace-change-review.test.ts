@@ -39,7 +39,8 @@ import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { execSync } from "node:child_process";
-import { WorkspaceLeaseManager } from "./workspace-lease-manager.js";
+import { WorkspaceLeaseManager, type WorkspaceCommandRunner } from "./workspace-lease-manager.js";
+import { runProcess } from "../../utils/process-runner.js";
 import {
   applyUndo,
   changeReviewDir,
@@ -531,4 +532,141 @@ describe("the undo journal is a window, not an archive", () => {
     // The newest review still works after the prune.
     expect((await previewUndo(source, result.changeReview!.id))!.ready).toBe(1);
   });
+});
+
+/**
+ * Codex round 12 #13 / #14: the window between "what an undo would do" and the
+ * undo doing it.
+ *
+ * Both findings are the same shape — the apply phase trusted a measurement it
+ * took earlier — and both end with the wrong BYTES in the user's project, so
+ * every assertion here reads the file, never the return value:
+ *
+ *   #13 two undos of the same review, overlapping: the first loses git's
+ *       compare-and-swap to the second and its rollback puts the version the
+ *       user REJECTED back on disk, under a HEAD that says it was reverted.
+ *   #14 a person edits a file while the undo is deciding: the restore trusts
+ *       the hash from the preview and overwrites their edit.
+ */
+describe("an undo that overlaps something else", () => {
+  /** Resolve after `ms` — a bounded wait, never a bet on a race being won. */
+  const after = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+  /** A run that rewrote one tracked file and committed, in a real repository. */
+  async function publishIntoRepo(): Promise<{ reviewId: string; baseHead: string; before: Record<string, string> }> {
+    makeGitRepo();
+    put(source, "Assets/Scripts/Existing.cs", "the user's version");
+    git(source, "add -A");
+    git(source, "commit -qm existing");
+    const baseHead = git(source, "rev-parse HEAD").trim();
+    const before = snapshotTree(source);
+    const lease = await manager({ worktree: true }).acquireLease({ label: "t" });
+    writeFileSync(join(lease.path, "Assets/Scripts/Existing.cs"), "the run's version", "utf8");
+    put(lease.path, "Assets/Scripts/New.cs", "brand new");
+    git(lease.path, "add -A");
+    git(lease.path, "commit -qm 'run: rewrote one file, added another'");
+    const result = await lease.commit();
+    await lease.release();
+    expect(readFileSync(join(source, "Assets/Scripts/Existing.cs"), "utf8")).toBe("the run's version");
+    return { reviewId: result.changeReview!.id, baseHead, before };
+  }
+
+  // ROUND 12 #13. The portal can send the same decision twice (a retry, two
+  // tabs, a double click). Nothing serialized the two undos, and the copy each
+  // one keeps to roll itself back lived at one fixed path per review.
+  it("a second undo of the same review never leaves the rejected bytes on disk", async () => {
+    const { reviewId, baseHead, before } = await publishIntoRepo();
+
+    // The first undo is held at the moment it would move HEAD — after its file
+    // phase, before git's compare-and-swap. Real interleaving, no bet: the
+    // second undo starts only once the first has reached that point.
+    let release = (): void => {};
+    const gate = new Promise<void>((r) => { release = r; });
+    let reached = (): void => {};
+    const reachedUpdateRef = new Promise<void>((r) => { reached = r; });
+    const held: WorkspaceCommandRunner = async (spec) => {
+      if (spec.args.includes("update-ref")) {
+        reached();
+        await gate;
+      }
+      return runProcess({ ...spec, maxOutput: spec.maxOutput ?? 16_384 });
+    };
+
+    const first = applyUndo(source, reviewId, { runner: held });
+    await Promise.race([reachedUpdateRef, after(4000)]);
+    const second = applyUndo(source, reviewId);
+    // Bounded: the fix makes `second` WAIT for `first`, so this must not depend
+    // on it finishing.
+    await Promise.race([second, after(1000)]);
+    release();
+    await Promise.all([first, second]);
+
+    // THE MEASURE: the user rejected "the run's version". It may not be what
+    // the project holds afterwards, whichever undo won.
+    expect(readFileSync(join(source, "Assets/Scripts/Existing.cs"), "utf8")).toBe("the user's version");
+    expect(existsSync(join(source, "Assets/Scripts/New.cs"))).toBe(false);
+    expect(git(source, "rev-parse HEAD").trim()).toBe(baseHead);
+    expect(snapshotTree(source)).toEqual(before);
+  }, 20_000);
+
+  // ROUND 12 #14. The preview said "ready"; by the time the restore ran, a
+  // person had saved the file. Their bytes are not ours to discard — the same
+  // rule the lease commit already follows.
+  it("refuses a restore when the file changed between the preview and the write", async () => {
+    const { reviewId } = await publishIntoRepo();
+    const target = join(source, "Assets/Scripts/Existing.cs");
+
+    // Held inside applyUndo's own preview (its only git read), which is exactly
+    // the window the finding names.
+    let release = (): void => {};
+    const gate = new Promise<void>((r) => { release = r; });
+    let previewing = (): void => {};
+    const inPreview = new Promise<void>((r) => { previewing = r; });
+    const held: WorkspaceCommandRunner = async (spec) => {
+      if (spec.args.includes("rev-parse")) {
+        previewing();
+        await gate;
+      }
+      return runProcess({ ...spec, maxOutput: spec.maxOutput ?? 16_384 });
+    };
+
+    const undo = applyUndo(source, reviewId, { runner: held });
+    await Promise.race([inPreview, after(4000)]);
+    writeFileSync(target, "a person saved this while the undo was deciding", "utf8");
+    release();
+    const result = await undo;
+
+    expect(readFileSync(target, "utf8")).toBe("a person saved this while the undo was deciding");
+    expect(result.status).toBe("refused");
+    expect(result.restored).toEqual([]);
+    // The created file is part of the same all-or-nothing undo: it stays.
+    expect(readFileSync(join(source, "Assets/Scripts/New.cs"), "utf8")).toBe("brand new");
+  }, 20_000);
+
+  it("refuses to delete a file the run created once a person has edited it", async () => {
+    const { reviewId } = await publishIntoRepo();
+    const created = join(source, "Assets/Scripts/New.cs");
+
+    let release = (): void => {};
+    const gate = new Promise<void>((r) => { release = r; });
+    let previewing = (): void => {};
+    const inPreview = new Promise<void>((r) => { previewing = r; });
+    const held: WorkspaceCommandRunner = async (spec) => {
+      if (spec.args.includes("rev-parse")) {
+        previewing();
+        await gate;
+      }
+      return runProcess({ ...spec, maxOutput: spec.maxOutput ?? 16_384 });
+    };
+
+    const undo = applyUndo(source, reviewId, { runner: held });
+    await Promise.race([inPreview, after(4000)]);
+    writeFileSync(created, "brand new, and then my own line", "utf8");
+    release();
+    const result = await undo;
+
+    expect(readFileSync(created, "utf8")).toBe("brand new, and then my own line");
+    expect(result.status).toBe("refused");
+    expect(result.deleted).toEqual([]);
+  }, 20_000);
 });

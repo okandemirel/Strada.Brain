@@ -267,3 +267,64 @@ describe('useChangeReview — a rejection reaches the daemon', () => {
     expect(post!.body).toMatchObject({ onBlocked: 'skip' })
   })
 })
+
+/**
+ * Round 12 #17, through the transport: the hook must tell the store WHICH review
+ * and which revision an answer is about. Settling on the path alone let a
+ * response that was still in flight when a new run published clear the decision
+ * the user had just made about the new one.
+ */
+describe('useChangeReview — a late answer belongs to the review it was sent for', () => {
+  it('does not settle a newer review’s decision when the older response arrives', async () => {
+    const secondPreview = { ...serverPreview, reviewId: 'run-2', createdAt: 1_700_000_100_000 }
+    let answerFirstPost: (() => void) | undefined
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (init?.method === 'POST') {
+        // Held open: the response lands after the next run has published.
+        await new Promise<void>((resolve) => {
+          answerFirstPost = resolve
+        })
+        return jsonResponse(200, {
+          reviewId: REVIEW_ID,
+          outcome: 'undone',
+          applied: ['Assets/Scripts/Existing.cs'],
+          kept: [],
+          failed: [],
+          leftOver: [],
+          review: null,
+        })
+      }
+      return jsonResponse(200, { review: serverPreview })
+    })
+
+    const { result } = renderHook(() => useChangeReview())
+    await waitFor(() => expect(result.current.review).not.toBeNull())
+    openDiff('Assets/Scripts/Existing.cs')
+
+    const inFlight = act(async () => {
+      await result.current.decide('Assets/Scripts/Existing.cs', false)
+    })
+    await waitFor(() => expect(answerFirstPost).toBeDefined())
+
+    // A new run publishes and the user rejects its version of the same file.
+    act(() => {
+      useCodeStore.getState().setChangeReview({
+        reviewId: 'run-2',
+        createdAt: secondPreview.createdAt,
+        entries: [{ path: 'Assets/Scripts/Existing.cs', action: 'restore', state: 'ready' }],
+        historyCommits: 0,
+        complete: true,
+      })
+      useCodeStore.getState().resolveDiff('Assets/Scripts/Existing.cs', false)
+    })
+
+    answerFirstPost!()
+    await inFlight
+
+    const pending = useCodeStore.getState().pendingDecisions
+    expect(pending).toHaveLength(1)
+    expect(pending[0].reviewId).toBe('run-2')
+    // Nothing has reverted run-2's change, so its diff is still up.
+    expect(useCodeStore.getState().tabs[0].isDiff).toBe(true)
+  })
+})

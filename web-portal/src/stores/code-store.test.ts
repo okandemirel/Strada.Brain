@@ -148,7 +148,9 @@ describe('useCodeStore — closeFile auto-accepts diff', () => {
 describe('useCodeStore — resolveDiff', () => {
   beforeEach(() => useCodeStore.getState().reset())
 
-  it('resolveDiff with accepted=true updates content to modifiedContent', () => {
+  // ROUND 12 #18: accepting used to rewrite the tab on the spot. It records a
+  // decision and leaves the tab alone — see "a mixed review stays changeable".
+  it('resolveDiff with accepted=true records a keep and leaves the tab alone', () => {
     useCodeStore.getState().openFile({
       path: 'src/test.ts',
       content: 'original code',
@@ -162,7 +164,9 @@ describe('useCodeStore — resolveDiff', () => {
     useCodeStore.getState().resolveDiff('src/test.ts', true)
 
     const tab = useCodeStore.getState().tabs.find((t) => t.path === 'src/test.ts')!
-    expect(tab.content).toBe('modified code')
+    expect(tab.content).toBe('original code')
+    expect(tab.isDiff).toBe(true)
+    expect(useCodeStore.getState().pendingDecisions[0].decision).toBe('keep')
   })
 
   // Round 11 #20: a rejection leaves the tab ALONE until the daemon has put the
@@ -187,7 +191,7 @@ describe('useCodeStore — resolveDiff', () => {
     expect(tab.modifiedContent).toBe('modified code')
   })
 
-  it('resolveDiff clears diff fields (isDiff, diffContent, originalContent, modifiedContent)', () => {
+  it('an ACKNOWLEDGED keep is what clears the diff fields', () => {
     useCodeStore.getState().openFile({
       path: 'src/test.ts',
       content: 'original code',
@@ -199,8 +203,15 @@ describe('useCodeStore — resolveDiff', () => {
     })
 
     useCodeStore.getState().resolveDiff('src/test.ts', true)
+    const sent = useCodeStore.getState().takePendingDecisions()
+    useCodeStore.getState().settleDecisions({
+      reviewId: null,
+      applied: ['src/test.ts'],
+      revisions: { 'src/test.ts': sent[0].revision },
+    })
 
     const tab = useCodeStore.getState().tabs.find((t) => t.path === 'src/test.ts')!
+    expect(tab.content).toBe('modified code')
     expect(tab.isDiff).toBe(false)
     expect(tab.diffContent).toBeUndefined()
     expect(tab.originalContent).toBeUndefined()
@@ -286,9 +297,13 @@ describe('useCodeStore — change review and undo decisions', () => {
     openDiff('src/ready.ts')
     useCodeStore.getState().markTouched('src/ready.ts', 'modified')
     useCodeStore.getState().resolveDiff('src/ready.ts', false)
-    useCodeStore.getState().takePendingDecisions()
+    const sent = useCodeStore.getState().takePendingDecisions()
 
-    useCodeStore.getState().settleDecisions({ applied: ['src/ready.ts'] })
+    useCodeStore.getState().settleDecisions({
+      reviewId: '9f3a1c2d',
+      applied: ['src/ready.ts'],
+      revisions: { 'src/ready.ts': sent[0].revision },
+    })
 
     const tab = useCodeStore.getState().tabs[0]
     expect(tab.content).toBe('my version')
@@ -304,11 +319,13 @@ describe('useCodeStore — change review and undo decisions', () => {
     useCodeStore.getState().setChangeReview(review)
     openDiff('src/ready.ts')
     useCodeStore.getState().resolveDiff('src/ready.ts', false)
-    useCodeStore.getState().takePendingDecisions()
+    const sent = useCodeStore.getState().takePendingDecisions()
 
     useCodeStore.getState().settleDecisions({
+      reviewId: '9f3a1c2d',
       refused: ['src/ready.ts'],
       reason: 'nothing was undone: 1 path(s) are not in the state this run left them in',
+      revisions: { 'src/ready.ts': sent[0].revision },
     })
 
     const tab = useCodeStore.getState().tabs[0]
@@ -321,15 +338,20 @@ describe('useCodeStore — change review and undo decisions', () => {
     expect(useCodeStore.getState().takePendingDecisions().map((d) => d.path)).toEqual(['src/ready.ts'])
   })
 
-  it('an applied keep only clears the decision — the run\'s version is already on disk', () => {
+  it('an applied keep shows the run\'s version — which is what is already on disk', () => {
     useCodeStore.getState().setChangeReview(review)
     openDiff('src/ready.ts')
     useCodeStore.getState().resolveDiff('src/ready.ts', true)
-    useCodeStore.getState().takePendingDecisions()
+    const sent = useCodeStore.getState().takePendingDecisions()
 
-    useCodeStore.getState().settleDecisions({ applied: ['src/ready.ts'] })
+    useCodeStore.getState().settleDecisions({
+      reviewId: '9f3a1c2d',
+      applied: ['src/ready.ts'],
+      revisions: { 'src/ready.ts': sent[0].revision },
+    })
 
     expect(useCodeStore.getState().tabs[0].content).toBe('run version')
+    expect(useCodeStore.getState().tabs[0].isDiff).toBe(false)
     expect(useCodeStore.getState().pendingDecisions).toEqual([])
   })
 
@@ -339,7 +361,7 @@ describe('useCodeStore — change review and undo decisions', () => {
     useCodeStore.getState().resolveDiff('src/ready.ts', false)
     useCodeStore.getState().takePendingDecisions()
 
-    useCodeStore.getState().settleDecisions({ applied: ['src/somethingelse.ts'] })
+    useCodeStore.getState().settleDecisions({ reviewId: '9f3a1c2d', applied: ['src/somethingelse.ts'] })
 
     const decision = useCodeStore.getState().pendingDecisions[0]
     expect(decision.path).toBe('src/ready.ts')
@@ -347,11 +369,12 @@ describe('useCodeStore — change review and undo decisions', () => {
     expect(useCodeStore.getState().tabs[0].isDiff).toBe(true)
   })
 
-  it('accepting queues a keep decision and shows the modified content', () => {
+  it('accepting queues a keep decision and leaves the diff up until it is applied', () => {
     useCodeStore.getState().setChangeReview(review)
     openDiff('src/ready.ts')
     useCodeStore.getState().resolveDiff('src/ready.ts', true)
     expect(useCodeStore.getState().tabs[0].content).toBe('run version')
+    expect(useCodeStore.getState().tabs[0].isDiff).toBe(true)
     expect(useCodeStore.getState().pendingDecisions[0].decision).toBe('keep')
     expect(useCodeStore.getState().pendingDecisions[0].needsConfirm).toBe(false)
   })
@@ -443,6 +466,221 @@ describe('useCodeStore — change review and undo decisions', () => {
     useCodeStore.getState().reset()
 
     expect(useCodeStore.getState().review).toBeNull()
+    expect(useCodeStore.getState().pendingDecisions).toEqual([])
+  })
+})
+
+/**
+ * Codex round 12 #17 and #18: the queue settled by PATH and the keep that
+ * dismissed itself.
+ *
+ * Both are about a decision the user can still change, or a review they have
+ * moved on from, being overwritten by an answer that was about something else.
+ * A path is not an identity here: a decision belongs to one review and to one
+ * revision of the user's mind, and only the answer to THAT may settle it.
+ */
+describe('useCodeStore — an acknowledgement belongs to one review (round 12 #17)', () => {
+  beforeEach(() => useCodeStore.getState().reset())
+
+  const r1 = {
+    reviewId: 'run-1',
+    createdAt: 1_700_000_000_000,
+    historyCommits: 1,
+    complete: true,
+    entries: [{ path: 'a.cs', action: 'restore' as const, state: 'ready' as const }],
+  }
+  const r2 = { ...r1, reviewId: 'run-2', createdAt: 1_700_000_100_000 }
+
+  function openDiff(path: string) {
+    useCodeStore.getState().openFile({
+      path,
+      content: 'run version',
+      language: 'csharp',
+      isDiff: true,
+      diffContent: '--- a\n+++ b',
+      originalContent: 'my version',
+      modifiedContent: 'run version',
+    })
+  }
+
+  // THE DEFECT. R1's undo is in flight; a new run publishes; the user rejects
+  // R2's a.cs; R1's answer finally arrives. Settling by path alone cleared R2's
+  // pending decision and dismissed its diff — the newer rejection was silently
+  // dropped and the file looked reverted when nothing had reverted it.
+  it('an older review’s answer does not settle a newer review’s decision', () => {
+    useCodeStore.getState().setChangeReview(r1)
+    openDiff('a.cs')
+    useCodeStore.getState().resolveDiff('a.cs', false)
+    const inFlight = useCodeStore.getState().takePendingDecisions()
+    expect(inFlight[0].reviewId).toBe('run-1')
+
+    // A new run publishes and the user rejects its version of the same file.
+    useCodeStore.getState().setChangeReview(r2)
+    useCodeStore.getState().resolveDiff('a.cs', false)
+
+    // R1's answer, late.
+    useCodeStore.getState().settleDecisions({
+      reviewId: 'run-1',
+      applied: ['a.cs'],
+      revisions: { 'a.cs': inFlight[0].revision },
+    })
+
+    const pending = useCodeStore.getState().pendingDecisions
+    expect(pending).toHaveLength(1)
+    expect(pending[0].reviewId).toBe('run-2')
+    expect(pending[0].status).toBe('pending')
+    // Nothing reverted R2's change, so its diff is still up.
+    expect(useCodeStore.getState().tabs[0].isDiff).toBe(true)
+    expect(useCodeStore.getState().tabs[0].content).toBe('run version')
+  })
+
+  // The review id is the correlation on its own: an answer that carries no
+  // revisions at all still may not reach into another run's decisions.
+  it('an answer that names only a review settles nothing from another review', () => {
+    useCodeStore.getState().setChangeReview(r1)
+    openDiff('a.cs')
+    useCodeStore.getState().resolveDiff('a.cs', false)
+    useCodeStore.getState().takePendingDecisions()
+    useCodeStore.getState().setChangeReview(r2)
+    useCodeStore.getState().resolveDiff('a.cs', false)
+
+    useCodeStore.getState().settleDecisions({ reviewId: 'run-1', applied: ['a.cs'] })
+
+    const pending = useCodeStore.getState().pendingDecisions
+    expect(pending).toHaveLength(1)
+    expect(pending[0].reviewId).toBe('run-2')
+    expect(useCodeStore.getState().tabs[0].isDiff).toBe(true)
+  })
+
+  it('an answer to an older revision of the same decision does not settle the newer one', () => {
+    useCodeStore.getState().setChangeReview(r1)
+    openDiff('a.cs')
+    useCodeStore.getState().resolveDiff('a.cs', false)
+    const firstSend = useCodeStore.getState().takePendingDecisions()
+    // The user changes their mind while that request is in flight.
+    useCodeStore.getState().resolveDiff('a.cs', true)
+
+    useCodeStore.getState().settleDecisions({
+      reviewId: 'run-1',
+      applied: ['a.cs'],
+      revisions: { 'a.cs': firstSend[0].revision },
+    })
+
+    const pending = useCodeStore.getState().pendingDecisions
+    expect(pending).toHaveLength(1)
+    expect(pending[0].decision).toBe('keep')
+    expect(useCodeStore.getState().tabs[0].isDiff).toBe(true)
+  })
+
+  it('the answer to the decision actually sent settles it', () => {
+    useCodeStore.getState().setChangeReview(r1)
+    openDiff('a.cs')
+    useCodeStore.getState().resolveDiff('a.cs', false)
+    const sent = useCodeStore.getState().takePendingDecisions()
+
+    useCodeStore.getState().settleDecisions({
+      reviewId: 'run-1',
+      applied: ['a.cs'],
+      revisions: { 'a.cs': sent[0].revision },
+    })
+
+    expect(useCodeStore.getState().pendingDecisions).toEqual([])
+    expect(useCodeStore.getState().tabs[0].isDiff).toBe(false)
+    expect(useCodeStore.getState().tabs[0].content).toBe('my version')
+  })
+})
+
+describe('useCodeStore — a mixed review stays changeable (round 12 #18)', () => {
+  beforeEach(() => useCodeStore.getState().reset())
+
+  const review = {
+    reviewId: 'run-1',
+    createdAt: 1_700_000_000_000,
+    historyCommits: 0,
+    complete: true,
+    entries: [
+      { path: 'A.cs', action: 'restore' as const, state: 'ready' as const },
+      { path: 'B.cs', action: 'restore' as const, state: 'ready' as const },
+    ],
+  }
+
+  function openDiff(path: string) {
+    useCodeStore.getState().openFile({
+      path,
+      content: 'run version',
+      language: 'csharp',
+      isDiff: true,
+      diffContent: '--- a\n+++ b',
+      originalContent: 'my version',
+      modifiedContent: 'run version',
+    })
+  }
+
+  // THE DEFECT. Keep A, then revert B: the server refuses a mixed set (an undo
+  // restores the whole review), but keeping A had already dismissed its diff and
+  // with it the controls — so A could never be changed to revert, and the review
+  // could not be decided at all. The decision is not final until the server has
+  // acknowledged the whole review.
+  it('keeping one path leaves its diff and controls in place until the server acknowledges', () => {
+    useCodeStore.getState().setChangeReview(review)
+    openDiff('A.cs')
+    openDiff('B.cs')
+
+    useCodeStore.getState().resolveDiff('A.cs', true)
+
+    const a = useCodeStore.getState().tabs.find((t) => t.path === 'A.cs')!
+    expect(a.isDiff).toBe(true)
+    expect(a.originalContent).toBe('my version')
+    expect(a.modifiedContent).toBe('run version')
+    expect(useCodeStore.getState().pendingDecisions[0].decision).toBe('keep')
+  })
+
+  it('so the user can change that keep into a revert after the server refuses the mixed set', () => {
+    useCodeStore.getState().setChangeReview(review)
+    openDiff('A.cs')
+    openDiff('B.cs')
+    useCodeStore.getState().resolveDiff('A.cs', true)
+    useCodeStore.getState().resolveDiff('B.cs', false)
+    const sent = useCodeStore.getState().takePendingDecisions()
+    // The server refuses the mixed set — nothing was applied.
+    useCodeStore.getState().settleDecisions({
+      reviewId: 'run-1',
+      refused: sent.map((d) => d.path),
+      reason: 'A change review is undone as a whole',
+      revisions: Object.fromEntries(sent.map((d) => [d.path, d.revision])),
+    })
+
+    // A is still a diff, so the controls are still there to change the decision.
+    expect(useCodeStore.getState().tabs.find((t) => t.path === 'A.cs')!.isDiff).toBe(true)
+    useCodeStore.getState().resolveDiff('A.cs', false)
+    const queued = useCodeStore.getState().pendingDecisions
+    expect(queued.map((d) => d.decision)).toEqual(['undo', 'undo'])
+    expect(queued.every((d) => d.status === 'pending' || d.status === 'refused')).toBe(true)
+    // …and both are offered to the sender again.
+    expect(useCodeStore.getState().takePendingDecisions().map((d) => d.path).sort()).toEqual(['A.cs', 'B.cs'])
+  })
+
+  it('an acknowledged keep is what finally shows the run’s version without a diff', () => {
+    useCodeStore.getState().setChangeReview(review)
+    openDiff('A.cs')
+    openDiff('B.cs')
+    useCodeStore.getState().resolveDiff('A.cs', true)
+    useCodeStore.getState().resolveDiff('B.cs', true)
+    const sent = useCodeStore.getState().takePendingDecisions()
+
+    useCodeStore.getState().settleDecisions({
+      reviewId: 'run-1',
+      applied: ['A.cs', 'B.cs'],
+      revisions: Object.fromEntries(sent.map((d) => [d.path, d.revision])),
+    })
+
+    for (const path of ['A.cs', 'B.cs']) {
+      const tab = useCodeStore.getState().tabs.find((t) => t.path === path)!
+      expect(tab.isDiff).toBe(false)
+      expect(tab.content).toBe('run version')
+      expect(tab.originalContent).toBeUndefined()
+      expect(tab.modifiedContent).toBeUndefined()
+    }
     expect(useCodeStore.getState().pendingDecisions).toEqual([])
   })
 })

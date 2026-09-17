@@ -39,7 +39,13 @@ function DecisionControls({ file }: { file: CodeTab }) {
           {t('review.notApplied', { reason })}
         </span>
       )}
-      {!reason && decision?.decision === 'undo' && waiting.length > 0 && (
+      {/*
+        ROUND 12 #18: a keep is waited for exactly like a revert. Keeping used to
+        dismiss the diff — controls included — so a review with one keep and one
+        revert could never be decided; the diff now stays until the server
+        acknowledges the whole review, and this says what it is waiting for.
+      */}
+      {!reason && decision !== undefined && waiting.length > 0 && (
         <span className="text-[10px] text-text-tertiary">{t('review.awaiting', { count: waiting.length })}</span>
       )}
       <button

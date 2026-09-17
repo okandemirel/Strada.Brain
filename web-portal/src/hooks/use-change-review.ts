@@ -130,9 +130,15 @@ export function useChangeReview(): UseChangeReview {
       const queued = useCodeStore.getState().takePendingDecisions()
       if (queued.length === 0) return
       const reviewId = queued.find((d) => d.reviewId !== null)?.reviewId ?? null
+      // Round 12 #17: every answer is reported back with the review it was for
+      // and the revision of each decision it answers, so a late response can
+      // never settle a decision the user made after this batch left.
+      const revisions = Object.fromEntries(queued.map((d) => [d.path, d.revision]))
       if (reviewId === null) {
         // Nothing on the server to act on: say so instead of pretending.
         useCodeStore.getState().settleDecisions({
+          reviewId: null,
+          revisions,
           refused: queued.map((d) => d.path),
           reason: 'no published change review to apply this to',
         })
@@ -158,18 +164,26 @@ export function useChangeReview(): UseChangeReview {
         const applied = body?.applied ?? []
         const refused = queued.map((d) => d.path).filter((path) => !applied.includes(path))
         useCodeStore.getState().settleDecisions({
+          reviewId,
+          revisions,
           applied,
           refused,
           ...(refused.length > 0 ? { reason: 'the server did not report this path as applied' } : {}),
         })
-        if (body?.review !== undefined) useCodeStore.getState().setChangeReview(toStoreReview(body.review))
-        else await reload()
+        // …and the preview in that answer describes the review it was sent for.
+        // Round 12 #17: applying it after a newer run has published would swap
+        // the review out from under the decision the user has just made — the
+        // store drops pending decisions that do not belong to the loaded review.
+        if ((useCodeStore.getState().review?.reviewId ?? null) === reviewId) {
+          if (body?.review !== undefined) useCodeStore.getState().setChangeReview(toStoreReview(body.review))
+          else await reload()
+        }
       } catch (err) {
         // A refusal (409) and a transport failure are the same thing here:
         // nothing was applied, so every decision goes back on the queue with
         // the server's reason attached.
         const reason = messageOf(err)
-        useCodeStore.getState().settleDecisions({ refused: queued.map((d) => d.path), reason })
+        useCodeStore.getState().settleDecisions({ reviewId, revisions, refused: queued.map((d) => d.path), reason })
         if (alive.current) setError(reason)
         await reload({ keepError: true })
       } finally {

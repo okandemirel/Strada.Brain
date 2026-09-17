@@ -319,6 +319,84 @@ export function keepChanges(projectRoot: string, reviewId: string): ChangeReview
 }
 
 /**
+ * `keepChanges`, queued behind whatever else is mutating this project (round 12
+ * #13). A keep only rewrites the record, but an undo of the same review rewrites
+ * the same record at the end of its own work: interleaved, the record can end up
+ * describing neither.
+ */
+export async function keepChangesExclusive(
+  projectRoot: string,
+  reviewId: string,
+): Promise<ChangeReviewRecord | undefined> {
+  return withProjectMutation(projectRoot, async () => keepChanges(projectRoot, reviewId));
+}
+
+/**
+ * What was decided about this review, and what the caller was told (Codex round
+ * 12 #15).
+ *
+ * THE DEFECT THIS CLOSES. An undo is not idempotent as an ANSWER: repeat a
+ * decision whose first response was lost (a dropped socket, a reload, a retry)
+ * and the second attempt finds every path already undone, so it reports
+ * `applied: []`. The portal — correctly — treats a path it was not told about
+ * as not applied, and a completed revert is presented as refused. The outcome is
+ * therefore written down next to the review, keyed by the review it belongs to,
+ * and replayed for a retry that asks for the same thing.
+ *
+ * It is kept in the review directory, not in memory: the retry may arrive after
+ * a restart, which is one of the ways the first answer gets lost.
+ */
+export interface RecordedDecision {
+  readonly path: string;
+  readonly decision: "keep" | "undo";
+}
+
+export interface RecordedDecisionOutcome {
+  readonly version: 1;
+  readonly reviewId: string;
+  readonly at: number;
+  /** Exactly what was asked for, so a retry can be matched against it. */
+  readonly decisions: readonly RecordedDecision[];
+  readonly onBlocked?: "refuse" | "skip";
+  /** The answer that was sent, verbatim — the thing a retry needs back. */
+  readonly response: unknown;
+}
+
+const DECISION_FILE = "decision.json";
+
+/** Persist the answer a decision got. Atomic, for the same reason the record is. */
+export function writeDecisionOutcome(projectRoot: string, outcome: RecordedDecisionOutcome): void {
+  const dir = changeReviewDir(projectRoot, outcome.reviewId);
+  mkdirSync(dir, { recursive: true });
+  const target = join(dir, DECISION_FILE);
+  const tmp = `${target}.${randomUUID().slice(0, 8)}.tmp`;
+  writeFileSync(tmp, JSON.stringify(outcome, null, 2), "utf8");
+  renameSync(tmp, target);
+}
+
+export function readDecisionOutcome(projectRoot: string, reviewId: string): RecordedDecisionOutcome | undefined {
+  try {
+    const raw = JSON.parse(
+      readFileSync(join(changeReviewDir(projectRoot, reviewId), DECISION_FILE), "utf8"),
+    ) as Partial<RecordedDecisionOutcome>;
+    if (raw.version !== 1 || typeof raw.reviewId !== "string" || !Array.isArray(raw.decisions)) return undefined;
+    return {
+      version: 1,
+      reviewId: raw.reviewId,
+      at: typeof raw.at === "number" ? raw.at : 0,
+      decisions: raw.decisions.filter(
+        (d): d is RecordedDecision =>
+          typeof d?.path === "string" && (d.decision === "keep" || d.decision === "undo"),
+      ),
+      ...(raw.onBlocked === "refuse" || raw.onBlocked === "skip" ? { onBlocked: raw.onBlocked } : {}),
+      response: raw.response,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Drop a review and everything it keeps. Only for a review nobody can act on
  * any more; the caller decides that, not this function.
  */
@@ -523,13 +601,105 @@ export async function previewRecord(record: ChangeReviewRecord, opts: UndoOption
   };
 }
 
+// Serialization
+
+/**
+ * One project mutation at a time (Codex round 12 #13).
+ *
+ * THE DEFECT THIS CLOSES. Two undos of the same review could overlap — a portal
+ * retry, two tabs, a double click. Both previewed "ready", both kept their
+ * rollback copy at the same fixed path, and then one of them lost git's
+ * compare-and-swap on HEAD and rolled ITS files back from that copy: the
+ * version the user had just rejected was written back into the project under a
+ * HEAD that said it had been reverted. Nothing detected it, because each undo
+ * on its own did exactly what it was asked.
+ *
+ * The queue is per project root (one project, one tree, one HEAD) and it is
+ * FIFO: every caller waits on the previous one and hands the next its own
+ * promise. The lock is taken BEFORE the record is read, so the second undo
+ * re-reads the record and re-previews the project the first one left behind
+ * instead of acting on a measurement taken before it ran.
+ */
+const projectMutations = new Map<string, Promise<void>>();
+
+export async function withProjectMutation<T>(projectRoot: string, run: () => Promise<T>): Promise<T> {
+  const key = resolve(projectRoot);
+  const previous = projectMutations.get(key);
+  let release = (): void => {};
+  const mine = new Promise<void>((resolveMine) => {
+    release = resolveMine;
+  });
+  projectMutations.set(key, mine);
+  if (previous) await previous;
+  try {
+    return await run();
+  } finally {
+    release();
+    // Only the LAST waiter clears the entry; a queue that formed behind us
+    // keeps its chain, or the next caller would run unserialized.
+    if (projectMutations.get(key) === mine) projectMutations.delete(key);
+  }
+}
+
 // Undo
 
 interface AppliedStep {
   readonly change: ReviewedChange;
-  readonly kind: "restored" | "removed" | "recreated";
+  /** `absent`: the path was already gone when the undo reached it — nothing to put back. */
+  readonly kind: "restored" | "removed" | "recreated" | "absent";
   /** Copy of the version the RUN published, kept so this step can be put back. */
   readonly publishedCopy?: string;
+}
+
+/**
+ * The bytes this undo is about to replace, re-read and checked against what the
+ * run published (Codex round 12 #14).
+ *
+ * THE DEFECT THIS CLOSES. The apply phase trusted the preview: it had said
+ * "ready" a moment earlier, so the restore copied the preserved bytes over the
+ * target and the delete removed it. A person who saved that file in between —
+ * the editor is open, that is the whole point of the review — lost their work
+ * to the undo, which is precisely the case rule 1 of this module exists for.
+ *
+ * So the target is read ONCE here, that captured buffer is what gets validated,
+ * and the same buffer is what the rollback copy is written from: no second read
+ * can disagree with the one that was checked.
+ */
+async function captureTarget(
+  change: ReviewedChange,
+  target: string,
+): Promise<{ ok: true; bytes?: Buffer } | { ok: false; why: string }> {
+  let bytes: Buffer | undefined;
+  let stat: { mtimeMs: number; size: number; ctimeMs: number } | undefined;
+  try {
+    stat = await statOrUndefined(target);
+    if (stat !== undefined) bytes = await fsp.readFile(target);
+  } catch (err) {
+    return { ok: false, why: `this file could not be read before replacing it (${err instanceof Error ? err.message : String(err)})` };
+  }
+
+  if (bytes === undefined || stat === undefined) {
+    // Nothing on disk. For a file the run deleted that is the expected state;
+    // for one it wrote, somebody removed it after the preview and putting it
+    // back would resurrect a deletion the user meant.
+    if (change.action === "restore-deleted") return { ok: true };
+    if (change.action === "delete") return { ok: true };
+    return { ok: false, why: "this file was removed after the undo was previewed, so it was not put back" };
+  }
+
+  if (change.action === "restore-deleted") {
+    return { ok: false, why: "a different version of this file appeared after the undo was previewed" };
+  }
+  if (change.publishedHash !== undefined) {
+    if (hashBufferHex(bytes) !== change.publishedHash) {
+      return { ok: false, why: "this file changed after the undo was previewed — the bytes on disk are not the ones the run wrote" };
+    }
+    return { ok: true, bytes };
+  }
+  if (change.publishedStamp !== undefined && !stampMoved(change.publishedStamp, stat)) {
+    return { ok: true, bytes };
+  }
+  return { ok: false, why: "nothing recorded proves the bytes on disk are the ones the run wrote, so they were left alone" };
 }
 
 /**
@@ -544,6 +714,16 @@ export async function applyUndo(
   projectRoot: string,
   reviewId: string,
   opts: UndoOptions = {},
+): Promise<UndoResult> {
+  // Round 12 #13: serialized per project, and everything below — the record
+  // read included — happens inside the queue.
+  return withProjectMutation(projectRoot, () => applyUndoExclusive(projectRoot, reviewId, opts));
+}
+
+async function applyUndoExclusive(
+  projectRoot: string,
+  reviewId: string,
+  opts: UndoOptions,
 ): Promise<UndoResult> {
   const record = readChangeReview(projectRoot, reviewId);
   if (!record) {
@@ -592,6 +772,14 @@ export async function applyUndo(
   const dir = changeReviewDir(record.projectRoot, record.reviewId);
   const undoneRoot = join(dir, UNDONE_DIR);
   const stagingRoot = join(dir, STAGING_DIR, randomUUID().slice(0, 8));
+  /**
+   * This operation's OWN copies of what it replaced (round 12 #13). The journal
+   * under `undone/` is shared and long-lived — it is how a user recovers the
+   * version a run published — but a rollback source may not be shared: two
+   * undos writing the same journal path could hand one of them the other's
+   * bytes to "put back".
+   */
+  const rollbackRoot = join(stagingRoot, "rollback");
   const applied: AppliedStep[] = [];
   const restored: string[] = [];
   const deleted: string[] = [];
@@ -599,26 +787,44 @@ export async function applyUndo(
   const kept = blocked.filter((b) => b.state === "changed-since").map((b) => b.path);
   for (const b of blocked) if (b.state === "unrecoverable") failed.push(`${b.path} (${b.detail ?? "cannot be put back"})`);
 
-  /** Keep the run's own version before undoing it — an undo must be undoable too. */
-  const keepPublished = async (rel: string, from: string): Promise<string | undefined> => {
-    const to = join(undoneRoot, rel);
+  /**
+   * Keep the run's own version before undoing it — an undo must be undoable
+   * too. Written from the bytes `captureTarget` validated, never re-read from
+   * disk: the journal copy and the rollback copy are then provably the version
+   * this operation checked. Returns THIS operation's rollback copy.
+   */
+  const keepPublished = async (rel: string, bytes: Buffer): Promise<string | undefined> => {
+    const journal = join(undoneRoot, rel);
+    const rollbackCopy = join(rollbackRoot, rel);
     try {
-      await fsp.mkdir(dirname(to), { recursive: true });
-      await fsp.copyFile(from, to);
-      return to;
+      await fsp.mkdir(dirname(rollbackCopy), { recursive: true });
+      await fsp.writeFile(rollbackCopy, bytes);
     } catch {
       return undefined;
     }
+    try {
+      await fsp.mkdir(dirname(journal), { recursive: true });
+      await fsp.writeFile(journal, bytes);
+    } catch {
+      // The journal is how a person recovers the run's version later; losing it
+      // is bad, but it is not a reason to refuse an undo whose rollback copy is
+      // already safe.
+      getLoggerSafe().warn("The run's version could not be journalled before the undo", { reviewId, path: rel });
+    }
+    return rollbackCopy;
   };
 
   const restoreFile = async (change: ReviewedChange): Promise<boolean> => {
     const target = join(record.projectRoot, change.path);
     const staged = join(stagingRoot, `${randomUUID().slice(0, 8)}.part`);
-    const existed = existsSync(target);
     let publishedCopy: string | undefined;
     try {
-      if (existed) {
-        publishedCopy = await keepPublished(change.path, target);
+      // Round 12 #14: what is on disk NOW decides, not what the preview saw.
+      const capture = await captureTarget(change, target);
+      if (!capture.ok) throw new Error(capture.why);
+      const existed = capture.bytes !== undefined;
+      if (capture.bytes !== undefined) {
+        publishedCopy = await keepPublished(change.path, capture.bytes);
         if (publishedCopy === undefined) {
           throw new Error("the version this run published could not be preserved, so the undo could not be made reversible");
         }
@@ -642,7 +848,16 @@ export async function applyUndo(
   const deleteFile = async (change: ReviewedChange): Promise<boolean> => {
     const target = join(record.projectRoot, change.path);
     try {
-      const publishedCopy = await keepPublished(change.path, target);
+      const capture = await captureTarget(change, target);
+      if (!capture.ok) throw new Error(capture.why);
+      if (capture.bytes === undefined) {
+        // Already gone — the end state this step wanted, and nothing to put
+        // back if the undo is rolled back.
+        applied.push({ change, kind: "absent" });
+        deleted.push(change.path);
+        return true;
+      }
+      const publishedCopy = await keepPublished(change.path, capture.bytes);
       if (publishedCopy === undefined) {
         throw new Error("the version this run published could not be preserved, so the undo could not be made reversible");
       }
@@ -662,7 +877,9 @@ export async function applyUndo(
     for (const step of [...applied].reverse()) {
       const target = join(record.projectRoot, step.change.path);
       try {
-        if (step.kind === "recreated") {
+        if (step.kind === "absent") {
+          // Nothing was there when the undo reached it, so nothing is owed back.
+        } else if (step.kind === "recreated") {
           await fsp.rm(target, { force: true });
         } else if (step.publishedCopy !== undefined) {
           await fsp.mkdir(dirname(target), { recursive: true });
