@@ -187,7 +187,9 @@ export function targetOfBuild(text: string | undefined): BuildTarget | undefined
   if (/\.ipa$/.test(t)) return "ios";
   if (/\.html?$/.test(t)) return "webgl";
   if (/\.exe$/.test(t)) return "windows";
-  if (/\.app\/?$/.test(t)) return "macos";
+  // A .app bundle is macOS unless its own name says iOS: an iOS build is a
+  // .app too (Codex 2026-09-17 round 2 #7).
+  if (/\.app\/?$/.test(t)) return /\bios\b|iphone|ipad/.test(t) ? "ios" : "macos";
   if (/\.x86_64$/.test(t)) return "linux";
   if (/android/.test(t)) return "android";
   if (/\bios\b|iphone|ipad/.test(t)) return "ios";

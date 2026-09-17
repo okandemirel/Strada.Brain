@@ -199,6 +199,9 @@ describe("targetOfBuild: a definitive extension outranks a keyword (Codex 2026-0
     expect(targetOfBuild("StandaloneOSX")).toBe("macos");
     expect(targetOfBuild("Android")).toBe("android");
     expect(artifactIsForeign("/p/AndroidPuzzle.app", "macos")).toBe(false);
+    // An iOS build is a .app too.
+    expect(targetOfBuild("/p/iOS.app")).toBe("ios");
+    expect(buildSatisfiesTarget("ios", "iOS", "/p/iOS.app")).toBe(true);
     expect(artifactIsForeign("/p/Game.apk", "macos")).toBe(true);
   });
 });
