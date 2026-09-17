@@ -361,16 +361,23 @@ export async function recoverAbandonedLock(
   const breakerPath = `${lockPath}.recovery`;
   const breakerBody = JSON.stringify({ pid: process.pid, host: hostname(), startedAt: Date.now() });
   if (!(await claimLockPath(breakerPath, breakerBody))) {
-    // Somebody else is recovering. Only a recoverer that is itself gone (or
-    // one nobody here can ask about, long past staleMs) may be cleared.
-    const breaker = await judgeLock(breakerPath);
+    // SOMEBODY ELSE IS RECOVERING, AND WE DO NOT TOUCH THEIR FILE.
+    //
+    // Round 12 #4 tried to make the removal safe by comparing bytes after a
+    // rename; round 13 #3 walked the remaining chain — A judges, B replaces,
+    // A renames B's live mutex away, C claims the vacant pathname, A's
+    // link-back fails — and it is right that a byte comparison cannot provide
+    // mutual exclusion. Without an OS-held lock the only sound answer is to
+    // stop removing this file automatically at all.
+    //
+    // What that costs: a recoverer that DIES inside its critical section
+    // leaves this file behind, and saves then refuse until a person removes
+    // it — the refusal from acquireEnvSaveLock names the file and its pid. A
+    // crashed OWNER (no breaker) still recovers automatically, which is the
+    // crash that actually happens. A deterministic refusal beats a rescue
+    // that can hand one `.env` to two writers.
     await pauses?.afterJudgingBreaker?.();
-    // NEVER a bare unlink (round 12 #4): between judging it and removing it,
-    // another recoverer can have replaced it with its own LIVE file.
-    if (breaker.verdict === "abandoned" && breaker.raw !== undefined) {
-      await removeLockIfUnchanged(breakerPath, breaker.raw);
-    }
-    return "retry";
+    return "live";
   }
   try {
     const now = await judgeLock(lockPath);
@@ -404,8 +411,15 @@ async function acquireEnvSaveLock(envPath: string): Promise<EnvSaveLock> {
     // hands cannot spin here for ever.
     if (Date.now() >= deadline) {
       const holder = await describeLockHolder(lockPath);
+      // A RECOVERY THAT NOBODY CAN FINISH is a different problem from a busy
+      // writer, and the person needs to be told which one they have.
+      const breakerPath = `${lockPath}.recovery`;
+      const stuckRecovery = await readFile(breakerPath, "utf-8").then(() => true, () => false);
       throw new Error(
-        `Another process is still saving ${envPath} (${lockPath} held by ${holder} for over ${ENV_SAVE_LOCK.timeoutMs} ms). Nothing was written.`,
+        stuckRecovery
+          ? `A recovery of ${envPath} is still in progress and did not finish (${breakerPath} held by ${await describeLockHolder(breakerPath)}). ` +
+            `Nothing was written. If that process is gone, delete ${breakerPath} and run this again.`
+          : `Another process is still saving ${envPath} (${lockPath} held by ${holder} for over ${ENV_SAVE_LOCK.timeoutMs} ms). Nothing was written.`,
       );
     }
     if (recovery === "live") await new Promise((resolve) => setTimeout(resolve, ENV_SAVE_LOCK.retryMs));

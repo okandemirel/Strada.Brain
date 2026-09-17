@@ -380,23 +380,30 @@ describe("abandoned-lock recovery never leaves the pathname unlocked (round 11 #
     expect(fs.readdirSync(path.dirname(lockPath))).toEqual([".env.lock"]);
   });
 
-  it("a live recovery in progress blocks a second recoverer, and its lock survives", async () => {
+  it("a recovery in progress blocks a second recoverer, and nothing of theirs is touched", async () => {
     const lockPath = path.join(lockDir(), ".env.lock");
     fs.writeFileSync(lockPath, dead);
     // Another process is inside the critical section right now.
     fs.writeFileSync(`${lockPath}.recovery`, live);
-    expect(await recoverAbandonedLock(lockPath, mine, { verdict: "abandoned", raw: dead })).toBe("retry");
+    // "live": somebody IS recovering, so the waiter waits instead of helping.
+    expect(await recoverAbandonedLock(lockPath, mine, { verdict: "abandoned", raw: dead })).toBe("live");
     expect(fs.readFileSync(lockPath, "utf-8")).toBe(dead);
     expect(fs.existsSync(`${lockPath}.recovery`)).toBe(true);
   });
 
-  it("a recoverer that died mid-recovery does not block recovery for ever", async () => {
+  it("a recoverer that died mid-recovery blocks recovery until a person clears it (round 13 #3)", async () => {
     const lockPath = path.join(lockDir(), ".env.lock");
     fs.writeFileSync(lockPath, dead);
     fs.writeFileSync(`${lockPath}.recovery`, dead);
-    // First attempt clears the dead recoverer, the next one gets through.
-    expect(await recoverAbandonedLock(lockPath, mine, { verdict: "abandoned", raw: dead })).toBe("retry");
-    expect(fs.existsSync(`${lockPath}.recovery`)).toBe(false);
+    // Removing somebody else's mutex is what let two writers into one `.env`
+    // (round 12 #4, and the remaining chain in round 13 #3). So this file is
+    // never cleared automatically, however dead its owner looks: recovery
+    // refuses, the file stays, and the save's refusal names it for a person.
+    expect(await recoverAbandonedLock(lockPath, mine, { verdict: "abandoned", raw: dead })).toBe("live");
+    expect(fs.readFileSync(`${lockPath}.recovery`, "utf-8")).toBe(dead);
+    expect(fs.readFileSync(lockPath, "utf-8")).toBe(dead);
+    // Once a person removes it, the abandoned lock is recovered as before.
+    fs.rmSync(`${lockPath}.recovery`);
     expect(await recoverAbandonedLock(lockPath, mine, { verdict: "abandoned", raw: dead })).toBe("acquired");
     expect(fs.existsSync(`${lockPath}.recovery`)).toBe(false);
   });
@@ -412,8 +419,12 @@ describe("abandoned-lock recovery never leaves the pathname unlocked (round 11 #
     fs.writeFileSync(envPath, "KIMI_API_KEY=held\n");
     fs.writeFileSync(`${envPath}.lock`, dead);
     fs.writeFileSync(`${envPath}.lock.recovery`, live);
+    // The refusal says WHICH problem this is — a stuck recovery, not a busy
+    // writer — and names the file to delete.
     await expect(persistSetup(envPath, ['KIMI_API_KEY="new"'], { ownedKeys: ["KIMI_API_KEY"] }))
-      .rejects.toThrow(/still saving/);
+      .rejects.toThrow(/recovery of .* did not finish/);
+    await expect(persistSetup(envPath, ['KIMI_API_KEY="new"'], { ownedKeys: ["KIMI_API_KEY"] }))
+      .rejects.toThrow(/delete .*\.recovery/);
     // A refused save is a save that did not happen, and the other recoverer's
     // critical section is intact.
     expect(fs.readFileSync(envPath, "utf-8")).toBe("KIMI_API_KEY=held\n");
@@ -531,7 +542,7 @@ describe("a lock is only removed if it is still the lock that was judged (round 
     fs.writeFileSync(lock, dead);
     fs.writeFileSync(`${lock}.recovery`, liveBreaker);
     const verdict = await recoverAbandonedLock(lock, "mine", { verdict: "abandoned", raw: dead });
-    expect(verdict).toBe("retry");
+    expect(verdict).toBe("live");
     expect(fs.readFileSync(`${lock}.recovery`, "utf-8")).toBe(liveBreaker);
     expect(fs.readFileSync(lock, "utf-8")).toBe(dead);
   });
@@ -556,7 +567,7 @@ it("round 12 #4 a recovery file replaced between judging and removing survives",
         fs.writeFileSync(`${lock}.recovery`, liveBreaker);
       },
     });
-    expect(verdict).toBe("retry");
+    expect(verdict).toBe("live");
     // B's critical section is intact, and the lock it is recovering untouched.
     expect(fs.readFileSync(`${lock}.recovery`, "utf-8")).toBe(liveBreaker);
     expect(fs.readFileSync(lock, "utf-8")).toBe(dead);
