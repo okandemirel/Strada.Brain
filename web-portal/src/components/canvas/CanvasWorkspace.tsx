@@ -16,12 +16,13 @@ import { useCanvasStore, isValidResolvedShape, type CanvasShape } from '../../st
 import { useMonitorStore } from '../../stores/monitor-store'
 import { useSessionStore } from '../../stores/session-store'
 import { normalizeCanvasIncomingShape } from './canvas-shape-normalizer'
-import { getDefaultDimensions, type ResolvedShape } from './canvas-types'
+import { getDefaultDimensions, type ResolvedShape, type ViewportState } from './canvas-types'
 import {
   CanvasSaveScheduler,
   canvasSavePayload,
   parseCanvasConnections,
   readCanvasVersion,
+  replayCanvasEdits,
   saveCanvasState,
 } from './canvas-persistence'
 import { useCanvasBridge, shapesToNodes, connectionsToEdges } from '../../hooks/use-canvas-bridge'
@@ -43,8 +44,74 @@ import CanvasEmptyState from './canvas-empty-state'
 
 const SAVE_DEBOUNCE_MS = 5_000
 
+/**
+ * A read that failed is retried, because until it succeeds NOTHING may be
+ * written: a PUT with no version is an unconditional upsert that destroys the
+ * version another window holds (r10 #9). The edits made meanwhile are kept and
+ * replayed onto the canvas the successful read returns (#10).
+ */
+const LOAD_RETRY_DELAYS_MS = [2_000, 4_000, 8_000, 16_000] as const
+
 const NODE_TYPES = { baseCard: BaseCard } as const
 const EDGE_TYPES = { gradientBezier: GradientBezierEdge } as const
+
+/* ── Reading what the server stored ──────────────────────────────────────── */
+
+/**
+ * The shapes a stored canvas holds, or `null` when the payload carries none we
+ * can use — which is NOT the same as "the canvas is empty": a row we cannot read
+ * must leave the local canvas alone rather than clear it.
+ */
+function parseStoredShapes(raw: unknown): ResolvedShape[] | null {
+  if (typeof raw !== 'string' || raw.length === 0) return null
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return null
+  }
+  // The tldraw-era format: a keyed store of records, one per shape.
+  if (parsed && typeof parsed === 'object' && 'store' in parsed) {
+    const store = (parsed as { store: Record<string, unknown> }).store
+    const migrated: ResolvedShape[] = []
+    let idx = 0
+    for (const entry of Object.values(store ?? {})) {
+      if (!entry || typeof entry !== 'object') continue
+      const e = entry as Record<string, unknown>
+      if (e.typeName !== 'shape') continue
+      const dims = getDefaultDimensions(String(e.type ?? 'note-block'))
+      const props = (e.props as Record<string, unknown>) ?? {}
+      migrated.push({
+        id: String(e.id ?? `migrated-${idx++}`),
+        type: String(e.type ?? 'note-block'),
+        x: typeof e.x === 'number' ? e.x : idx * 260,
+        y: typeof e.y === 'number' ? e.y : 100,
+        w: typeof props.w === 'number' ? props.w : dims.w,
+        h: typeof props.h === 'number' ? props.h : dims.h,
+        props,
+        source: props.source as 'agent' | 'user' | undefined,
+      })
+    }
+    return migrated.length > 0 ? migrated : null
+  }
+  if (!Array.isArray(parsed)) return null
+  const validated = parsed.filter(isValidResolvedShape)
+  return validated.length > 0 ? validated : null
+}
+
+/** The stored viewport, or `null` when it is missing or not a viewport. */
+function parseStoredViewport(raw: unknown): ViewportState | null {
+  if (typeof raw !== 'string' || raw.length === 0) return null
+  try {
+    const vp = JSON.parse(raw) as Partial<ViewportState>
+    if (typeof vp?.x === 'number' && Number.isFinite(vp.x) &&
+        typeof vp.y === 'number' && Number.isFinite(vp.y) &&
+        typeof vp.zoom === 'number' && Number.isFinite(vp.zoom) && vp.zoom > 0) {
+      return { x: vp.x, y: vp.y, zoom: vp.zoom }
+    }
+  } catch { /* not a viewport */ }
+  return null
+}
 
 /* ── Inner component (must be inside ReactFlowProvider) ──────────── */
 
@@ -192,81 +259,110 @@ function CanvasWorkspaceInner() {
     // Every response below is answered against THIS generation: a load or an
     // acknowledgement from a session the user has left changes nothing (#20).
     const generation = scheduler.startSession(sessionId ?? null)
-    if (!sessionId) return
+    if (!sessionId) {
+      setLoading(false)
+      return
+    }
+    // The canvas as it is at the moment the read starts. Everything that happens
+    // from here until the read lands — a user edit, an agent drawing — is work
+    // the read must not discard, and it is `local` minus `base` (#10).
+    const opening = useCanvasStore.getState()
+    const base = { shapes: opening.shapes, connections: opening.connections }
+
     let cancelled = false
+    let retryTimer: ReturnType<typeof setTimeout> | null = null
     setLoading(true)
 
-    fetch(`/api/canvas/${encodeURIComponent(sessionId)}`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data) => {
-        if (cancelled) return
-        // A GET that failed says nothing: the version stays unknown.
-        if (!data) return
-        if (!data.canvas) {
-          // No canvas yet. The next save must CREATE, not overwrite whatever a
-          // second window has put there in the meantime (#17).
-          scheduler.adoptVersion('absent', generation)
-          return
-        }
-        // The version is what the server holds either way; the CONTENT is only
-        // applied while it is still the newest thing we know (#20).
-        scheduler.adoptVersion(readCanvasVersion(data.canvas), generation)
-        if (!scheduler.canApplyContent(generation)) return
-        // Connections were drawn and then lost on every reload: they are part
-        // of the saved canvas now (2.6 / D33).
-        setConnections(parseCanvasConnections(data.canvas.connections))
-        if (!data.canvas.shapes) return
+    /** Take what the read returned. `false` = it told us nothing usable. */
+    const takeCanvas = (canvas: Record<string, unknown>): boolean => {
+      const version = readCanvasVersion(canvas)
+      // A row whose version we cannot read cannot be written CONDITIONALLY, and
+      // an unconditional write is exactly what must never happen (#9). Treat it
+      // as an unread canvas.
+      if (version === undefined) return false
 
-        try {
-          const parsed = JSON.parse(data.canvas.shapes)
-          if (parsed && typeof parsed === 'object' && 'store' in parsed) {
-            const store = parsed.store as Record<string, unknown>
-            const migrated: ResolvedShape[] = []
-            let idx = 0
-            for (const entry of Object.values(store)) {
-              if (!entry || typeof entry !== 'object') continue
-              const e = entry as Record<string, unknown>
-              if (e.typeName !== 'shape') continue
-              const dims = getDefaultDimensions(String(e.type ?? 'note-block'))
-              const props = (e.props as Record<string, unknown>) ?? {}
-              migrated.push({
-                id: String(e.id ?? `migrated-${idx++}`),
-                type: String(e.type ?? 'note-block'),
-                x: typeof e.x === 'number' ? e.x : idx * 260,
-                y: typeof e.y === 'number' ? e.y : 100,
-                w: typeof props.w === 'number' ? props.w : dims.w,
-                h: typeof props.h === 'number' ? props.h : dims.h,
-                props,
-                source: props.source as 'agent' | 'user' | undefined,
-              })
-            }
-            if (migrated.length > 0) setShapes(migrated)
-          } else if (Array.isArray(parsed) && parsed.length > 0) {
-            const validated = parsed.filter(isValidResolvedShape)
-            if (validated.length > 0) setShapes(validated)
+      const loadedShapes = parseStoredShapes(canvas.shapes)
+      // Connections were drawn and then lost on every reload: they are part of
+      // the saved canvas now (2.6 / D33).
+      const loadedConnections = parseCanvasConnections(canvas.connections)
+
+      if (scheduler.canApplyContent(generation)) {
+        scheduler.adoptVersion(version, generation)
+        setConnections(loadedConnections)
+        if (loadedShapes) setShapes(loadedShapes)
+        const viewport = parseStoredViewport(canvas.viewport)
+        if (viewport) setViewport(viewport)
+        return true
+      }
+
+      if (scheduler.canMergeContent(generation)) {
+        // The read lost the race against an edit. Adopting its version while
+        // dropping its content made the next save delete the server's canvas
+        // (#10): the work done meanwhile is replayed onto what it returned
+        // instead, and saved against the version it reported.
+        scheduler.adoptVersion(version, generation)
+        const current = useCanvasStore.getState()
+        const merged = replayCanvasEdits({
+          base,
+          local: { shapes: current.shapes, connections: current.connections },
+          loaded: { shapes: loadedShapes ?? current.shapes, connections: loadedConnections },
+        })
+        setShapes(merged.shapes)
+        setConnections(merged.connections)
+        // The viewport is NOT replaced: the view the person is looking at wins.
+        setDirty(true)
+        return true
+      }
+
+      // This window has already written this canvas, so the read is older than
+      // what the server holds: neither its content nor its version applies, and
+      // our own acknowledged version already authorizes the next write.
+      return true
+    }
+
+    const attempt = (index: number): void => {
+      fetch(`/api/canvas/${encodeURIComponent(sessionId)}`)
+        .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`canvas GET ${r.status}`))))
+        .then((data: unknown) => {
+          if (cancelled) return
+          if (!data || typeof data !== 'object') throw new Error('canvas GET: empty body')
+          const canvas = (data as { canvas?: unknown }).canvas
+          if (!canvas || typeof canvas !== 'object') {
+            // No canvas yet. The next save must CREATE, not overwrite whatever a
+            // second window has put there in the meantime (#17).
+            scheduler.adoptVersion('absent', generation)
+          } else if (!takeCanvas(canvas as Record<string, unknown>)) {
+            throw new Error('canvas GET: no readable version')
           }
-        } catch { /* invalid JSON */ }
+          // The canvas IS read: an edit made while the GET was open goes out now,
+          // against the version the read established (#20).
+          scheduler.finishLoad(generation)
+          setLoading(false)
+        })
+        .catch(() => {
+          if (cancelled) return
+          // A read that did not happen says NOTHING about what the server holds.
+          // Unblocking writes here turned the next save into an unconditional
+          // upsert that destroyed the other window's version (#9). Writes stay
+          // blocked; the edits stay pending and are replayed once a read lands.
+          scheduler.failLoad(generation)
+          // The canvas itself stays usable — work is kept locally, not saved.
+          setLoading(false)
+          const delay = LOAD_RETRY_DELAYS_MS[index]
+          if (delay === undefined) return
+          retryTimer = setTimeout(() => {
+            retryTimer = null
+            attempt(index + 1)
+          }, delay)
+        })
+    }
 
-        try {
-          if (data.canvas.viewport) {
-            const vp = JSON.parse(data.canvas.viewport)
-            if (vp && typeof vp.x === 'number' && Number.isFinite(vp.x) &&
-                typeof vp.y === 'number' && Number.isFinite(vp.y) &&
-                typeof vp.zoom === 'number' && Number.isFinite(vp.zoom) && vp.zoom > 0) {
-              setViewport({ x: vp.x, y: vp.y, zoom: vp.zoom })
-            }
-          }
-        } catch { /* ignore */ }
-      })
-      .catch(() => { /* network error */ })
-      .finally(() => {
-        // Read or not, writing this session is allowed from here on: an edit
-        // made while the GET was open goes out now (#20).
-        scheduler.finishLoad(generation)
-        if (!cancelled) setLoading(false)
-      })
+    attempt(0)
 
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+      if (retryTimer) clearTimeout(retryTimer)
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId])
 

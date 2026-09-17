@@ -71,16 +71,26 @@ interface HeldPut {
 let puts: HeldPut[] = []
 /** GET body per session id; a missing entry means "the request never settles". */
 let gets: Map<string, { canvas: unknown } | null>
+/** GET status per session id when the read must FAIL (r10 #9). */
+let getStatus: Map<string, number>
+/** Every session id that has been read, in order — retries are visible here. */
+let getCalls: string[]
 let pendingGets: Array<(body: { canvas: unknown } | null) => void>
 
 function installFetch(): void {
   puts = []
   pendingGets = []
+  getCalls = []
   globalThis.fetch = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
     const method = init?.method ?? 'GET'
     if (method === 'GET') {
       const sessionId = decodeURIComponent(url.replace('/api/canvas/', ''))
+      getCalls.push(sessionId)
+      const failure = getStatus.get(sessionId)
+      if (failure !== undefined) {
+        return Promise.resolve(new Response(JSON.stringify({ error: 'nope' }), { status: failure }))
+      }
       const body = gets.get(sessionId)
       if (body === undefined) {
         // Held open: the test resolves it when it wants the load to land.
@@ -132,6 +142,7 @@ describe('CanvasWorkspace auto-save', () => {
   beforeEach(() => {
     vi.useFakeTimers()
     gets = new Map()
+    getStatus = new Map()
     installFetch()
     useCanvasStore.setState({
       sessionId: null,
@@ -274,23 +285,39 @@ describe('CanvasWorkspace auto-save', () => {
     expect(screen.queryByText('panel.saveConflict')).toBeNull()
   })
 
-  it('does not let a slow first load overwrite edits made while it was loading', async () => {
+  it('replays the work done during a slow load onto the canvas the load returned (r10 #10)', async () => {
+    // The version the load reported used to be adopted while its CONTENT was
+    // dropped, so the next save wrote the local shapes alone against that
+    // version — a conditional write that deleted the server's canvas.
     render(<CanvasWorkspace />)
     await tick(0)
     expect(pendingGets).toHaveLength(1)
 
-    // The user draws while the GET is still open.
+    // The user (or an agent) draws while the GET is still open.
     await edit(() => useCanvasStore.getState().addShape(shape('local')))
-    await act(async () => { pendingGets[0]!(canvasVersion(3, [shape('from-server')])) })
+    await edit(() => useCanvasStore.getState().addConnection({ id: 'c-local', from: 'local', to: 'local' }))
+    await act(async () => {
+      pendingGets[0]!(canvasVersion(
+        3,
+        [shape('from-server')],
+        [{ id: 'c-server', from: 'from-server', to: 'from-server' }],
+      ))
+    })
     await tick(0)
 
-    expect(useCanvasStore.getState().shapes.map((s) => s.id)).toEqual(['local'])
+    // Both survive: the canvas the version belongs to AND the new work.
+    expect(useCanvasStore.getState().shapes.map((s) => s.id)).toEqual(['from-server', 'local'])
+    expect(useCanvasStore.getState().connections.map((c) => c.id)).toEqual(['c-server', 'c-local'])
     expect(useCanvasStore.getState().isDirty).toBe(true)
 
-    // The version it carried is still adopted, so the edit saves against it.
+    // …and the save against version 3 sends the merged canvas, not just the edit.
     await tick()
     expect(puts).toHaveLength(1)
     expect(puts[0]!.body.version).toBe(3)
+    expect(JSON.parse(String(puts[0]!.body.shapes)).map((s: ResolvedShape) => s.id))
+      .toEqual(['from-server', 'local'])
+    expect(JSON.parse(String(puts[0]!.body.connections)).map((c: { id: string }) => c.id))
+      .toEqual(['c-server', 'c-local'])
   })
 
   it('never writes a session before its canvas has been read', async () => {
@@ -313,6 +340,89 @@ describe('CanvasWorkspace auto-save', () => {
     expect(puts).toHaveLength(1)
     expect(puts[0]!.url).toBe('/api/canvas/sess-slow')
     expect(puts[0]!.body.version).toBe(7)
+  })
+
+  // -- r10 #8 ----------------------------------------------------------------
+
+  it('writes nothing when a save is acked after the workspace unmounted and the session moved on (#8)', async () => {
+    gets.set('sess-a', canvasVersion(5, [shape('s1')]))
+    const view = render(<CanvasWorkspace />)
+    await tick(0)
+
+    await edit(() => useCanvasStore.getState().addShape(shape('s2')))
+    await tick()
+    expect(puts).toHaveLength(1)
+    expect(puts[0]!.url).toBe('/api/canvas/sess-a')
+
+    // The workspace closes with the PUT still open and the store is pointed at
+    // another session's canvas. Disposal used to cancel only the debounce, so
+    // the acknowledgement read THAT canvas and addressed a second PUT to sess-a.
+    await act(async () => { view.unmount() })
+    await act(async () => {
+      useSessionStore.setState({ sessionId: 'sess-b' })
+      useCanvasStore.setState({ shapes: [shape('b1')], connections: [], isDirty: true })
+    })
+
+    await act(async () => { puts[0]!.ack({ version: 6 }) })
+    await tick()
+
+    expect(puts).toHaveLength(1)
+    expect(useCanvasStore.getState().shapes.map((s) => s.id)).toEqual(['b1'])
+    // The other session's canvas is untouched, and still unsaved by us.
+    expect(useCanvasStore.getState().isDirty).toBe(true)
+  })
+
+  // -- r10 #9 ----------------------------------------------------------------
+
+  it('never writes without a precondition after a failed load (#9)', async () => {
+    // The server holds version 7; the GET fails. A write with no version is an
+    // unconditional upsert: it would destroy version 7 with no conflict.
+    getStatus.set('sess-a', 500)
+    render(<CanvasWorkspace />)
+    await tick(0)
+
+    await edit(() => useCanvasStore.getState().addShape(shape('s1')))
+    await tick()
+    expect(puts).toHaveLength(0)
+
+    // Retries keep failing: still no write, and the work is not lost.
+    await tick(60_000)
+    expect(puts).toHaveLength(0)
+    expect(getCalls.filter((s) => s === 'sess-a').length).toBeGreaterThan(1)
+    expect(useCanvasStore.getState().shapes.map((s) => s.id)).toEqual(['s1'])
+    expect(useCanvasStore.getState().isDirty).toBe(true)
+  })
+
+  it('saves the work done during a failed load once a retry reads the canvas (#9 guard)', async () => {
+    getStatus.set('sess-a', 503)
+    render(<CanvasWorkspace />)
+    await tick(0)
+
+    await edit(() => useCanvasStore.getState().addShape(shape('local')))
+    await tick()
+    expect(puts).toHaveLength(0)
+
+    // The server recovers before the retry.
+    getStatus.delete('sess-a')
+    gets.set('sess-a', canvasVersion(7, [shape('from-server')]))
+    await tick(2_000)
+    await tick()
+
+    expect(puts).toHaveLength(1)
+    expect(puts[0]!.body.version).toBe(7)
+    expect(JSON.parse(String(puts[0]!.body.shapes)).map((s: ResolvedShape) => s.id))
+      .toEqual(['from-server', 'local'])
+  })
+
+  it('treats a canvas whose version cannot be read as unread (#9 guard)', async () => {
+    // A row without a usable version cannot be written conditionally at all.
+    gets.set('sess-a', { canvas: { shapes: JSON.stringify([shape('s1')]), connections: '[]', viewport: '{}' } })
+    render(<CanvasWorkspace />)
+    await tick(0)
+
+    await edit(() => useCanvasStore.getState().addShape(shape('s2')))
+    await tick(60_000)
+    expect(puts).toHaveLength(0)
   })
 
   // -- guards ----------------------------------------------------------------

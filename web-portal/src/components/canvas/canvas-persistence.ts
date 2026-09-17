@@ -27,6 +27,20 @@
  *   - #20 every request belongs to a session generation. A previous session's
  *     acknowledgement, or a slow first GET, used to overwrite the current
  *     session's version and shapes.
+ *
+ * Round 10 closed the three ways a write could still be authorized by something
+ * that is not the server's answer for THIS canvas:
+ *   - #8 dispose() cancelled the debounce and left the outstanding PUT's
+ *     continuation live. It read the store — by then another session's canvas —
+ *     and scheduled a second write addressed to the session the user had left;
+ *   - #9 a FAILED read used to authorize writing. With no version the PUT
+ *     carries no precondition, which the server applies as an unconditional
+ *     upsert: the other window's version 7 is destroyed with no 409. Nothing is
+ *     written until a version, or an explicit absence, is established;
+ *   - #10 a slow read's VERSION was adopted while its CONTENT was dropped
+ *     (because a local edit had arrived first), so the next save wrote the local
+ *     shapes alone against that version and deleted the server's. The work done
+ *     while the read was open is now REPLAYED onto what the read returned.
  */
 import type { CanvasConnection, ResolvedShape } from './canvas-types'
 
@@ -138,6 +152,92 @@ export async function saveCanvasState(args: {
   }
 }
 
+/* ── Replaying the work done while a load was open (r10 #10) ─────────────── */
+
+/** The two lists a canvas is made of, as the store and the server both hold them. */
+export interface CanvasContent {
+  shapes: readonly ResolvedShape[]
+  connections: readonly CanvasConnection[]
+}
+
+function byId<T extends { id: string }>(items: readonly T[]): Map<string, T> {
+  const map = new Map<string, T>()
+  for (const item of items) map.set(item.id, item)
+  return map
+}
+
+/** Same entity, unchanged. Key order is stable here: both sides come from the store. */
+function unchanged<T>(a: T, b: T): boolean {
+  return a === b || JSON.stringify(a) === JSON.stringify(b)
+}
+
+/**
+ * Three-way replay for ONE list (shapes or connections).
+ *
+ * `base` is the canvas as it was when the read started, `local` is the canvas
+ * now — so `local` minus `base` is exactly the work done while the read was
+ * open — and `loaded` is what the server returned. The result is `loaded` with
+ * that work replayed onto it:
+ *   - added while loading            → kept (appended);
+ *   - edited while loading           → the local version wins over the loaded one;
+ *   - deleted while loading          → removed from the loaded content too;
+ *   - untouched since the read began → the server's copy governs, which is how a
+ *     canvas left in the store by a PREVIOUS session stops leaking into this one.
+ *
+ * A delete cannot be told from "the shape was never here" without an operation
+ * log, so a shape deleted while the read was open is honoured by id. Resurrect-
+ * ing one is recoverable; silently deleting the server's canvas is not.
+ */
+function replayList<T extends { id: string }>(
+  base: readonly T[],
+  local: readonly T[],
+  loaded: readonly T[],
+): T[] {
+  const baseById = byId(base)
+  const localById = byId(local)
+  const out: T[] = []
+  const placed = new Set<string>()
+
+  for (const item of loaded) {
+    const localItem = localById.get(item.id)
+    const baseItem = baseById.get(item.id)
+    if (!localItem && baseItem) continue // deleted while the read was open
+    if (localItem && !(baseItem && unchanged(baseItem, localItem))) {
+      out.push(localItem) // edited (or re-added) while the read was open
+    } else {
+      out.push(item) // untouched here: the server's copy is the truth
+    }
+    placed.add(item.id)
+  }
+
+  for (const item of local) {
+    if (placed.has(item.id)) continue
+    const baseItem = baseById.get(item.id)
+    // Untouched since the read began and absent from the server's canvas: it is
+    // not this session's content (a previous session left it in the store).
+    if (baseItem && unchanged(baseItem, item)) continue
+    out.push(item)
+  }
+
+  return out
+}
+
+/**
+ * The canvas a slow read must produce: everything the server holds, plus the
+ * work done while it was in flight (#10). The viewport is deliberately NOT part
+ * of this — the view the person is looking at now wins.
+ */
+export function replayCanvasEdits(args: {
+  base: CanvasContent
+  local: CanvasContent
+  loaded: CanvasContent
+}): { shapes: ResolvedShape[]; connections: CanvasConnection[] } {
+  return {
+    shapes: replayList(args.base.shapes, args.local.shapes, args.loaded.shapes),
+    connections: replayList(args.base.connections, args.local.connections, args.loaded.connections),
+  }
+}
+
 /* ── The save scheduler ───────────────────────────────────────────────────── */
 
 export interface CanvasSaveSchedulerOptions {
@@ -172,6 +272,10 @@ export class CanvasSaveScheduler {
   private acked = false
   /** This session's canvas has not been read yet: nothing may be written. */
   private loading = false
+  /** The read was attempted and did not happen: the canvas is still unknown (#9). */
+  private loadFailed = false
+  /** The workspace is gone: nothing may be scheduled, nothing may settle (#8). */
+  private disposed = false
   /** The user has edited THIS session's canvas since it started loading. */
   private pendingEdit = false
   private inFlight: CanvasSavePayload | null = null
@@ -202,11 +306,17 @@ export class CanvasSaveScheduler {
    */
   startSession(sessionId: string | null): number {
     this.cancelTimer()
+    // Pointing the scheduler at a session again is an explicit re-adoption:
+    // React (StrictMode) unmounts and remounts with the SAME instance, and a
+    // disposal that bricked it would stop the canvas from ever saving in dev.
+    // Nothing from before is revived — the generation has already moved on.
+    this.disposed = false
     this.gen += 1
     this.sessionId = sessionId
     this.version = undefined
     this.acked = false
     this.loading = sessionId !== null
+    this.loadFailed = false
     this.pendingEdit = false
     this.inFlight = null
     this.queued = false
@@ -214,13 +324,44 @@ export class CanvasSaveScheduler {
   }
 
   /**
-   * This session's canvas has been read (or the read failed). Writing is
-   * allowed from here on, and an edit made while it was loading goes out now.
+   * This session's canvas HAS been read — the version it reported (or its
+   * explicit absence) is adopted. Writing is allowed from here on, and an edit
+   * made while it was loading goes out now.
+   *
+   * A read that did NOT happen must call failLoad instead: calling this for a
+   * failed GET is what authorized an unconditional overwrite (#9).
    */
   finishLoad(generation: number): void {
-    if (generation !== this.gen) return
+    if (this.disposed || generation !== this.gen) return
     this.loading = false
+    this.loadFailed = false
     if (this.pendingEdit || this.queued) this.requestSave()
+  }
+
+  /**
+   * The read did not happen: a 500, a network error, or a canvas row whose
+   * version cannot be read. The canvas stays UNREAD, so nothing may be written —
+   * a PUT with no precondition is an unconditional upsert over a version this
+   * window has never seen (#9). Edits made meanwhile are kept: the next
+   * successful read replays them (#10) and flushes them.
+   */
+  failLoad(generation: number): void {
+    if (this.disposed || generation !== this.gen) return
+    this.loading = true
+    this.loadFailed = true
+  }
+
+  /** The read failed and has not succeeded since (for the UI and diagnostics). */
+  get loadDidFail(): boolean {
+    return this.loadFailed
+  }
+
+  /**
+   * May anything go out at all? Not without a session, not after disposal, not
+   * before this canvas has been read, and never without a precondition.
+   */
+  get writable(): boolean {
+    return !this.disposed && this.sessionId !== null && !this.loading && this.version !== undefined
   }
 
   /**
@@ -230,7 +371,17 @@ export class CanvasSaveScheduler {
    * canvas — a slow first load must not undo their work (#20).
    */
   canApplyContent(generation: number): boolean {
-    return generation === this.gen && !this.acked && !this.pendingEdit
+    return !this.disposed && generation === this.gen && !this.acked && !this.pendingEdit
+  }
+
+  /**
+   * The read lost the race against a local edit. Its content may not REPLACE the
+   * canvas — that would undo the edit — but it must still be merged into it:
+   * dropping it while adopting its version is what deleted the server's shapes
+   * (#10). Use replayCanvasEdits for the merge itself.
+   */
+  canMergeContent(generation: number): boolean {
+    return !this.disposed && generation === this.gen && !this.acked && this.pendingEdit
   }
 
   /**
@@ -239,13 +390,13 @@ export class CanvasSaveScheduler {
    * is allowed where canApplyContent is not.
    */
   adoptVersion(version: CanvasSavePrecondition | undefined, generation: number): void {
-    if (generation !== this.gen || this.acked) return
+    if (this.disposed || generation !== this.gen || this.acked) return
     this.version = version
   }
 
   /** An edit happened: save it once the canvas has been quiet for a moment. */
   requestSave(): void {
-    if (!this.sessionId) return
+    if (this.disposed || !this.sessionId) return
     this.pendingEdit = true
     this.cancelTimer()
     this.timer = setTimeout(() => {
@@ -260,10 +411,13 @@ export class CanvasSaveScheduler {
    * server has acknowledged (#18).
    */
   flush(): void {
-    if (!this.sessionId) return
+    if (this.disposed || !this.sessionId) return
     // Writing before this session's canvas has been read would overwrite it
-    // with whatever the previous session left in the store (#20).
-    if (this.loading || this.inFlight) {
+    // with whatever the previous session left in the store (#20) — and writing
+    // with no precondition at all is an unconditional upsert over a version
+    // this window has never seen, which is what a failed read used to
+    // authorize (#9). The revision stays queued either way.
+    if (this.loading || this.version === undefined || this.inFlight) {
       this.queued = true
       return
     }
@@ -280,9 +434,23 @@ export class CanvasSaveScheduler {
       )
   }
 
-  /** Stop the debounce (unmount). An outstanding PUT is left to land. */
+  /**
+   * The workspace is gone. The debounce stops AND every outstanding callback is
+   * invalidated: an ack that arrived after the unmount used to read the store —
+   * by then another session's canvas — and schedule a second PUT addressed to
+   * the session the user had left (#8). The request itself is left to land on
+   * the server; its ANSWER no longer changes anything here.
+   */
   dispose(): void {
     this.cancelTimer()
+    this.disposed = true
+    // The generation moves on, so a continuation still holding the old one is
+    // answering for a session this scheduler no longer has.
+    this.gen += 1
+    this.sessionId = null
+    this.inFlight = null
+    this.queued = false
+    this.pendingEdit = false
   }
 
   private cancelTimer(): void {
@@ -291,9 +459,10 @@ export class CanvasSaveScheduler {
   }
 
   private settle(generation: number, sent: CanvasSavePayload, result: CanvasSaveResult): void {
-    // A response for a session the user has left, or for a canvas reloaded
-    // since: it says nothing about what the server holds now (#20).
-    if (generation !== this.gen) return
+    // A response for a session the user has left, for a canvas reloaded since,
+    // or for a workspace that has been unmounted: it says nothing about what
+    // the server holds now, and there is nobody to tell (#20, #8).
+    if (this.disposed || generation !== this.gen) return
     this.inFlight = null
 
     if (result.kind === 'conflict') {

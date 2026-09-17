@@ -10,6 +10,7 @@ import {
   canvasSavePayload,
   parseCanvasConnections,
   readCanvasVersion,
+  replayCanvasEdits,
   samePayload,
   saveCanvasState,
 } from './canvas-persistence'
@@ -131,6 +132,73 @@ describe('saveCanvasState preconditions (r9 #17)', () => {
     }) as unknown as typeof fetch
     await saveCanvasState({ sessionId: 's', payload: canvasSavePayload([], [], null), fetchImpl })
     expect('version' in seen[0]!).toBe(false)
+  })
+})
+
+describe('replayCanvasEdits (r10 #10)', () => {
+  const s = (id: string, x = 0): ResolvedShape => ({ id, type: 'note-block', x, y: 0, w: 10, h: 10, props: {} })
+  const c = (id: string, from = 'a', to = 'b'): CanvasConnection => ({ id, from, to })
+
+  it('keeps the server content AND the work done while the read was open', () => {
+    // The repro: the server holds R at version 3, L is drawn while the GET is
+    // pending. The save used to send L alone against version 3, deleting R.
+    const result = replayCanvasEdits({
+      base: { shapes: [], connections: [] },
+      local: { shapes: [s('L')], connections: [c('cL')] },
+      loaded: { shapes: [s('R')], connections: [c('cR')] },
+    })
+    expect(result.shapes.map((x) => x.id)).toEqual(['R', 'L'])
+    expect(result.connections.map((x) => x.id)).toEqual(['cR', 'cL'])
+  })
+
+  it('lets an edit made while the read was open win over the copy it returned', () => {
+    const result = replayCanvasEdits({
+      base: { shapes: [s('R', 0)], connections: [] },
+      local: { shapes: [s('R', 500)], connections: [] },
+      loaded: { shapes: [s('R', 0)], connections: [] },
+    })
+    expect(result.shapes).toEqual([s('R', 500)])
+  })
+
+  it('honours a deletion made while the read was open', () => {
+    const result = replayCanvasEdits({
+      base: { shapes: [s('R'), s('keep')], connections: [c('gone'), c('stay')] },
+      local: { shapes: [s('keep')], connections: [c('stay')] },
+      loaded: { shapes: [s('R'), s('keep')], connections: [c('gone'), c('stay')] },
+    })
+    expect(result.shapes.map((x) => x.id)).toEqual(['keep'])
+    expect(result.connections.map((x) => x.id)).toEqual(['stay'])
+  })
+
+  it('does not leak a canvas the previous session left in the store', () => {
+    // Nothing was done to `stale` since the read started, and the server's canvas
+    // does not have it: it is not this session's content.
+    const result = replayCanvasEdits({
+      base: { shapes: [s('stale')], connections: [c('stale-c')] },
+      local: { shapes: [s('stale'), s('new')], connections: [c('stale-c'), c('new-c')] },
+      loaded: { shapes: [s('R')], connections: [c('cR')] },
+    })
+    expect(result.shapes.map((x) => x.id)).toEqual(['R', 'new'])
+    expect(result.connections.map((x) => x.id)).toEqual(['cR', 'new-c'])
+  })
+
+  it('takes the loaded canvas as it is when nothing happened while it was open', () => {
+    const result = replayCanvasEdits({
+      base: { shapes: [s('R')], connections: [c('cR')] },
+      local: { shapes: [s('R')], connections: [c('cR')] },
+      loaded: { shapes: [s('R', 90), s('R2')], connections: [c('cR'), c('cR2')] },
+    })
+    expect(result.shapes).toEqual([s('R', 90), s('R2')])
+    expect(result.connections.map((x) => x.id)).toEqual(['cR', 'cR2'])
+  })
+
+  it('does not duplicate a shape both sides hold, and adds no shape twice', () => {
+    const result = replayCanvasEdits({
+      base: { shapes: [], connections: [] },
+      local: { shapes: [s('R'), s('L')], connections: [] },
+      loaded: { shapes: [s('R')], connections: [] },
+    })
+    expect(result.shapes.map((x) => x.id)).toEqual(['R', 'L'])
   })
 })
 
@@ -337,10 +405,154 @@ describe('CanvasSaveScheduler', () => {
     const revision = { shapes: [shapeOf('a')], connections: [] as CanvasConnection[] }
     const { scheduler, sent } = harness(revision)
     const generation = scheduler.startSession('s1')
+    scheduler.adoptVersion(3, generation)
     scheduler.finishLoad(generation)
     scheduler.requestSave()
     scheduler.dispose()
     await settleAll()
     expect(sent).toHaveLength(0)
+  })
+
+  /* ── r10 #8: disposal invalidates the outstanding save ────────────────── */
+
+  it('writes nothing and reports nothing for a save acked after dispose (#8)', async () => {
+    const revision = { shapes: [shapeOf('a')], connections: [] as CanvasConnection[] }
+    const { scheduler, sent, saved, conflicts, failures } = harness(revision)
+    const generation = scheduler.startSession('s1')
+    scheduler.adoptVersion(5, generation)
+    scheduler.finishLoad(generation)
+    scheduler.requestSave()
+    await settleAll()
+    expect(sent).toHaveLength(1)
+
+    // The workspace unmounts with the PUT still open, and the store moves on to
+    // another session's canvas. Cancelling only the timer left the acknowledge-
+    // ment free to read that canvas and address a second PUT to the session the
+    // user had left.
+    scheduler.dispose()
+    revision.shapes = [shapeOf('next-session')]
+    sent[0]!.settle({ kind: 'saved', version: 6 })
+    await settleAll()
+
+    expect(sent).toHaveLength(1)
+    expect(saved).toHaveLength(0)
+    expect(conflicts).toHaveLength(0)
+    expect(failures).toHaveLength(0)
+  })
+
+  it('schedules nothing after dispose, whatever happens to the canvas (#8 guard)', async () => {
+    const revision = { shapes: [shapeOf('a')], connections: [] as CanvasConnection[] }
+    const { scheduler, sent, saved, conflicts, failures } = harness(revision)
+    const generation = scheduler.startSession('s1')
+    scheduler.adoptVersion(5, generation)
+    scheduler.finishLoad(generation)
+    scheduler.dispose()
+
+    scheduler.requestSave()
+    scheduler.flush()
+    scheduler.finishLoad(generation)
+    scheduler.adoptVersion(9, generation)
+    await settleAll()
+    expect(sent).toHaveLength(0)
+    expect(saved).toHaveLength(0)
+    expect(conflicts).toHaveLength(0)
+    expect(failures).toHaveLength(0)
+    // A load that lands after the unmount may not touch the canvas either.
+    expect(scheduler.canApplyContent(generation)).toBe(false)
+    expect(scheduler.canMergeContent(generation)).toBe(false)
+
+    // A conflict acked after dispose raises no banner on a workspace that is gone.
+    const disposedGeneration = scheduler.startSession('s2')
+    scheduler.adoptVersion(1, disposedGeneration)
+    scheduler.finishLoad(disposedGeneration)
+    scheduler.requestSave()
+    await settleAll()
+    expect(sent).toHaveLength(1)
+    scheduler.dispose()
+    sent[0]!.settle({ kind: 'conflict' })
+    await settleAll()
+    expect(conflicts).toHaveLength(0)
+  })
+
+  it('takes a session again after dispose — React remounts the same scheduler (#8 guard)', async () => {
+    // StrictMode unmounts and remounts with the SAME scheduler instance. Disposal
+    // must not brick it; the generation has moved on, so the outstanding save of
+    // the first mount still changes nothing.
+    const revision = { shapes: [shapeOf('a')], connections: [] as CanvasConnection[] }
+    const { scheduler, sent, saved } = harness(revision)
+    const first = scheduler.startSession('s1')
+    scheduler.adoptVersion(5, first)
+    scheduler.finishLoad(first)
+    scheduler.requestSave()
+    await settleAll()
+    expect(sent).toHaveLength(1)
+    scheduler.dispose()
+
+    const second = scheduler.startSession('s1')
+    expect(second).not.toBe(first)
+    scheduler.adoptVersion(5, second)
+    scheduler.finishLoad(second)
+    sent[0]!.settle({ kind: 'saved', version: 6 })
+    await settleAll()
+    // The first mount's ack is not this mount's version.
+    expect(saved).toHaveLength(0)
+    expect(scheduler.precondition).toBe(5)
+
+    revision.shapes = [shapeOf('a'), shapeOf('b')]
+    scheduler.requestSave()
+    await settleAll()
+    expect(sent).toHaveLength(2)
+    expect(sent[1]!.version).toBe(5)
+  })
+
+  /* ── r10 #9: a failed read is not authority to write ──────────────────── */
+
+  it('writes nothing while the server version is unknown (#9)', async () => {
+    const revision = { shapes: [shapeOf('a')], connections: [] as CanvasConnection[] }
+    const { scheduler, sent } = harness(revision)
+    const generation = scheduler.startSession('s1')
+    // The GET failed: no version, and no explicit absence either. A write now
+    // carries no precondition, which the server applies as an unconditional
+    // upsert over whatever version it holds.
+    scheduler.finishLoad(generation)
+    scheduler.requestSave()
+    await settleAll()
+    expect(sent.map((s) => s.version)).toEqual([])
+    expect(scheduler.writable).toBe(false)
+  })
+
+  it('keeps the edits made while the read was failing and sends them once it lands (#9 guard)', async () => {
+    const revision = { shapes: [shapeOf('a')], connections: [] as CanvasConnection[] }
+    const { scheduler, sent } = harness(revision)
+    const generation = scheduler.startSession('s1')
+    scheduler.failLoad(generation)
+    scheduler.requestSave()
+    await settleAll()
+    expect(sent).toHaveLength(0)
+    expect(scheduler.writable).toBe(false)
+    expect(scheduler.loadDidFail).toBe(true)
+
+    // A retry succeeds: the edit made meanwhile goes out against the real version.
+    revision.shapes = [shapeOf('a'), shapeOf('b')]
+    scheduler.adoptVersion(9, generation)
+    scheduler.finishLoad(generation)
+    await settleAll()
+    expect(sent).toHaveLength(1)
+    expect(sent[0]!.version).toBe(9)
+    expect(scheduler.loadDidFail).toBe(false)
+    expect(JSON.parse(sent[0]!.payload.shapes).map((s: ResolvedShape) => s.id)).toEqual(['a', 'b'])
+  })
+
+  it('writes an absent canvas, which IS a known precondition (#9 guard)', async () => {
+    const revision = { shapes: [shapeOf('a')], connections: [] as CanvasConnection[] }
+    const { scheduler, sent } = harness(revision)
+    const generation = scheduler.startSession('s1')
+    scheduler.adoptVersion('absent', generation)
+    scheduler.finishLoad(generation)
+    scheduler.requestSave()
+    await settleAll()
+    expect(sent).toHaveLength(1)
+    expect(sent[0]!.version).toBe('absent')
+    expect(scheduler.writable).toBe(true)
   })
 })
