@@ -486,7 +486,11 @@ export class UnityProjectVault implements IVault {
     // an edge that resolved to the signed id must still answer the short name.
     const short = callableTailOf(symbolId);
     if (!short) return [];
-    if (!symbolId.includes('(')) {
+    // A SIGNED ID IS AN EXACT QUESTION (Codex round 10 #16). Asking who calls
+    // `C.F(int)` and being handed `C.F(string)`'s callers is a wrong answer
+    // dressed as a fallback: the heuristic exists for a name with no signature.
+    if (symbolId.includes('(')) return [];
+    {
       const overloads = this.store
         .findSymbolsByName(short)
         .filter((sym) => sym.symbolId.startsWith(symbolId + '(') || sym.symbolId.startsWith(symbolId + '`'));

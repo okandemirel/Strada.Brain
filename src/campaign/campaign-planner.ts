@@ -863,10 +863,25 @@ const SUITE_PREDICATE_ROOTS: readonly string[] = [
   "test", "suite", "prueb", "testfäll", "testler", "playmod", "editmod",
 ];
 
+/**
+ * How far past a root an INFLECTION may go.
+ *
+ * A bare prefix test let a feature name pass as a suite predicate: "password"
+ * starts with "pass" and "allocation" with "all", so `Test passwords` and
+ * `All allocation tests pass` were closed by an unrelated green suite total
+ * (Codex 2026-09-17 round 10 #17). An inflection is short — "ler", "ılı", "en",
+ * "ir", "s" — so three letters is the whole allowance, and it must be letters.
+ */
+const MAX_INFLECTION_LENGTH = 3;
+
 /** A word that reports on the suite rather than naming a feature. */
 function isSuitePredicateWord(stem: string): boolean {
   if (SUITE_STEMS.has(stem)) return true;
-  return SUITE_PREDICATE_ROOTS.some((root) => stem.startsWith(root));
+  return SUITE_PREDICATE_ROOTS.some((root) => {
+    if (!stem.startsWith(root)) return false;
+    const inflection = stem.slice(root.length);
+    return inflection.length <= MAX_INFLECTION_LENGTH && /^\p{L}*$/u.test(inflection);
+  });
 }
 
 /** The stems of a text's words: Unicode letters, camelCase split BEFORE case folding, paths and dots as separators. */

@@ -161,6 +161,20 @@ describe("UnityProjectVault — findCallers across overloads (plan 3.11)", () =>
     "",
   ].join("\n");
 
+  it("does not hand a signed query another overload's callers (round 10 #16)", async () => {
+    const vault = await vaultWith({
+      "Assets/Scripts/Player.cs": PLAYER,
+      "Assets/Scripts/Controller.cs": CONTROLLER,
+    });
+    // Only Move(float) is called. Asking about the OTHER overload by its exact
+    // id must answer "nobody", not fall through to this one's callers.
+    const uncalled = await vault.findCallers!("csharp::Assets/Scripts/Player.cs::Game.Player.Move()");
+    expect(uncalled).toEqual([]);
+    // Guard: the unsigned family query still aggregates the overloads.
+    const family = await vault.findCallers!("csharp::Assets/Scripts/Player.cs::Game.Player.Move");
+    expect(family.some((e) => e.fromSymbol.includes("Controller"))).toBe(true);
+  });
+
   it("answers an id asked for without a signature, and one asked for with it", async () => {
     const vault = await vaultWith({
       "Assets/Scripts/Player.cs": PLAYER,

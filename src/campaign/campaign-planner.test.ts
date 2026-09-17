@@ -137,6 +137,13 @@ describe("quoteIsAbout", () => {
     expect(quoteIsAbout("Les tests de sauvegarde doivent réussir: absent", "suite: 179/179 tests passed (unfiltered)")).toBe(false);
     expect(quoteIsAbout("Todas las pruebas de guardado deben pasar: absent", "suite: 179/179 tests passed (unfiltered)")).toBe(false);
 
+    // Round 10 #17: a FEATURE name that merely starts like a suite word is not
+    // a suite predicate. "password" starts with "pass" and "allocation" with
+    // "all", so an unrelated green total closed both requirements.
+    expect(quoteIsAbout("Test passwords: absent", "suite: 179/179 tests passed (unfiltered)")).toBe(false);
+    expect(quoteIsAbout("All allocation tests pass: absent", "suite: 179/179 tests passed (unfiltered)")).toBe(false);
+    expect(quoteIsAbout("Tests for the passenger list pass: absent", "suite: 179/179 tests passed (unfiltered)")).toBe(false);
+
     // Round 8 #15: a suite requirement in another language closes on a suite total.
     expect(quoteIsAbout("Tüm testler geçmeli: absent", "suite: 179/179 tests passed (unfiltered)")).toBe(true);
     expect(quoteIsAbout("Alle Tests bestehen: absent", "suite: 179/179 tests passed (unfiltered)")).toBe(true);

@@ -24,26 +24,66 @@ function unresolvedId(qualified: string): string {
  * or `()` for a method with no parameters.
  */
 export function callableSignature(node: SyntaxNode): string {
-  const typeParams = node.childForFieldName("type_parameters");
-  const generic = typeParams ? `\`${Math.max(1, typeParams.namedChildCount)}` : "";
-  const params = node.childForFieldName("parameters");
-  const types: string[] = [];
-  if (params) {
-    for (let i = 0; i < params.namedChildCount; i++) {
-      const param = params.namedChild(i);
-      if (!param || (param.type !== "parameter" && param.type !== "_parameter")) continue;
-      const type = param.childForFieldName("type");
-      // A modifier changes the call: ref int and int are different overloads.
-      const modifiers: string[] = [];
-      for (let m = 0; m < param.namedChildCount; m++) {
-        const c = param.namedChild(m);
-        if (c && (c.type === "parameter_modifier" || c.type === "modifier")) modifiers.push(c.text.trim());
-      }
-      const text = `${modifiers.join(" ")}${modifiers.length ? " " : ""}${type?.text ?? "?"}`;
-      types.push(text.replace(/\s+/g, " ").trim());
+  const typeParams = node.childForFieldName('type_parameters');
+  const generic = typeParams ? `${String.fromCharCode(96)}${Math.max(1, typeParams.namedChildCount)}` : '';
+  const params = node.childForFieldName('parameters');
+  if (!params) return `${generic}()`;
+  // THE PARAMETER LIST IS READ AS TEXT, NOT AS `parameter` NODES.
+  //
+  // The installed grammar does not wrap a `params` parameter in a `parameter`
+  // node — it hangs the type and the name directly off the parameter list —
+  // so a node-typed walk skipped it and `F()`, `F(params int[])` and
+  // `F(params string[])` all collapsed into `C.F()` (Codex round 10 #15).
+  const inner = params.text.trim().replace(/^\(/u, '').replace(/\)$/u, '');
+  const types = splitTopLevel(inner).map(normalizeParameter).filter((t) => t.length > 0);
+  return `${generic}(${types.join(',')})`;
+}
+
+/** Split on commas that are not inside <>, [] or (). */
+function splitTopLevel(text: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let current = '';
+  for (const ch of text) {
+    if (ch === '<' || ch === '[' || ch === '(') depth++;
+    else if (ch === '>' || ch === ']' || ch === ')') depth--;
+    if (ch === ',' && depth === 0) {
+      out.push(current);
+      current = '';
+      continue;
     }
+    current += ch;
   }
-  return `${generic}(${types.join(",")})`;
+  if (current.trim().length > 0) out.push(current);
+  return out.map((piece) => piece.trim()).filter((piece) => piece.length > 0);
+}
+
+const PARAMETER_MODIFIERS = new Set(['params', 'ref', 'out', 'in', 'this', 'scoped', 'readonly']);
+
+/**
+ * One parameter reduced to what makes it a distinct overload: its modifiers
+ * and its type. The name and any default value are dropped — `F(int a)` and
+ * `F(int b = 3)` are the same callable.
+ */
+function normalizeParameter(piece: string): string {
+  let text = piece.trim();
+  // Attributes lead: [CallerMemberName] string caller.
+  while (text.startsWith('[')) {
+    const close = text.indexOf(']');
+    if (close < 0) break;
+    text = text.slice(close + 1).trim();
+  }
+  const defaultAt = text.indexOf('=');
+  if (defaultAt >= 0) text = text.slice(0, defaultAt).trim();
+  if (text.length === 0) return '';
+  const words = text.split(/\s+/u);
+  const modifiers: string[] = [];
+  while (words.length > 0 && PARAMETER_MODIFIERS.has(words[0]!)) modifiers.push(words.shift()!);
+  // The last word is the parameter's NAME when a type precedes it.
+  if (words.length > 1) words.pop();
+  const type = words.join(' ').replace(/,\s+/gu, ',').trim();
+  if (type.length === 0) return '';
+  return [...modifiers, type].join(' ');
 }
 
 function leadingXmlDoc(n: SyntaxNode): string | null {

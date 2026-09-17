@@ -383,3 +383,48 @@ public class C {
     expect(out.edges.some((e) => e.fromSymbol === a.symbolId && e.kind === "calls")).toBe(true);
   });
 });
+
+// =============================================================================
+// Round 10 #15: the grammar does not wrap a `params` parameter in a
+// `parameter` node, so a node-typed walk skipped it and every params overload
+// collapsed into the no-argument one.
+// =============================================================================
+
+describe("CSharpSymbolExtractor — parameter shapes the grammar spells differently", () => {
+  it("separates params overloads from each other and from the empty one", async () => {
+    const out = await extract(`
+public class C {
+  public void F() { }
+  public void F(params int[] args) { }
+  public void F(params string[] args) { }
+}
+`);
+    const ids = out.symbols.filter((s) => s.kind === "method").map((s) => s.symbolId);
+    expect(new Set(ids).size).toBe(3);
+    expect(ids.some((id) => id.endsWith("C.F()"))).toBe(true);
+    expect(ids.some((id) => id.endsWith("C.F(params int[])"))).toBe(true);
+    expect(ids.some((id) => id.endsWith("C.F(params string[])"))).toBe(true);
+  });
+
+  it("reads generics, attributes, defaults and out/ref the same way (guard)", async () => {
+    const out = await extract(`
+using System.Collections.Generic;
+public class C {
+  public void M(Dictionary<int, string> map) { }
+  public void M(List<int> items, int count = 3) { }
+  public void M(out int written) { written = 0; }
+  public T Conv<T>(T value, int n) { return value; }
+  public void Attr([CallerMemberName] string caller = "") { }
+}
+`);
+    const ids = out.symbols.filter((s) => s.kind === "method").map((s) => s.symbolId.split("::").at(-1));
+    // A comma inside a generic argument list is not a parameter separator.
+    expect(ids).toContain("C.M(Dictionary<int,string>)");
+    // A default value does not change the callable; the name never appears.
+    expect(ids).toContain("C.M(List<int>,int)");
+    expect(ids).toContain("C.M(out int)");
+    expect(ids).toContain("C.Conv\`1(T,int)");
+    // An attribute is not a type.
+    expect(ids).toContain("C.Attr(string)");
+  });
+});
