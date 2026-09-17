@@ -1509,20 +1509,23 @@ describe("installNetworkPolicy — Codex round 9 #11 (per-request credentials)",
   });
 
   // The guard: correct traffic keeps working. A same-origin sub-resource still
-  // gets the credentials — now added to THAT request rather than to the page.
+  // gets the credentials — since round 10 #1 through the policy transport rather
+  // than a `continue` override, because an override rides along Chromium's own
+  // redirect following and those hops never come back to the handler.
   it("#11 a same-origin sub-resource still carries the credentials", async () => {
     const { ctx } = await install();
+    mockFetch.mockResolvedValueOnce(okResponse("PNGDATA"));
     const route = fakeRoute("https://trusted.example/logo.png", {
       resourceType: () => "image",
       allHeaders: async () => ({ "user-agent": "UA/1", "sec-fetch-site": "same-origin" }),
     });
     await ctx.routeHandler!(route);
-    expect(route.continue).toHaveBeenCalledTimes(1);
-    expect(continuedHeaders(route)).toEqual({
-      "user-agent": "UA/1",
-      "sec-fetch-site": "same-origin",
-      Authorization: "Bearer secret",
-    });
+    expect(route.continue).not.toHaveBeenCalled();
+    expect(route.fulfill).toHaveBeenCalledTimes(1);
+    expect(route.fulfill.mock.calls[0]![0].body.toString()).toBe("PNGDATA");
+    const sent = (mockFetch.mock.calls[0]?.[1] as { headers: Record<string, string> }).headers;
+    expect(sent["Authorization"]).toBe("Bearer secret");
+    expect(sent["user-agent"]).toBe("UA/1");
   });
 
   it("#11 the document request for the credential origin carries them", async () => {
@@ -1543,6 +1546,214 @@ describe("installNetworkPolicy — Codex round 9 #11 (per-request credentials)",
     await ctx.routeHandler!(route);
     expect(route.continue).toHaveBeenCalledTimes(1);
     expect(route.continue.mock.calls[0]?.[0]).toBeUndefined();
+  });
+});
+
+// ── Codex round 10 #1: a `continue` override is carried through Chromium's own
+// redirect following, and those hops never reach the route handler. A
+// credential-bearing SUB-RESOURCE that answered "302 https://other.example/…"
+// therefore handed the header to that other origin: the initial origin check had
+// passed, and the post-hoc response listener only sees the chain afterwards. The
+// credentialed sub-resource is fetched by the same hop-by-hop transport the
+// documents use, so every hop's OUTBOUND HEADERS are ours to observe — this is
+// no longer an assertion about what Playwright does with an override. ──
+
+describe("installNetworkPolicy — Codex round 10 #1 (credentialed sub-resource redirects)", () => {
+  const table = new Map<string, ResolvedAddress[]>();
+  const resolver = vi.fn(async (hostname: string): Promise<ResolvedAddress[]> => {
+    const hit = table.get(hostname);
+    if (!hit) throw new Error(`ENOTFOUND ${hostname}`);
+    return hit;
+  });
+
+  beforeEach(() => {
+    table.clear();
+    resolver.mockClear();
+    table.set("trusted.example", [{ address: PUBLIC_V4, family: 4 }]);
+    table.set("other.example", [{ address: "151.101.1.2", family: 4 }]);
+  });
+
+  /** The finding's own credential: a custom header the RFC strip knows nothing about. */
+  const API_KEY: OriginCredentials = {
+    origin: "https://trusted.example",
+    headers: { "X-Api-Key": "k-live-0001" },
+  };
+
+  async function install(credentials: OriginCredentials = API_KEY) {
+    const ctx = fakeContext();
+    const blocked: Array<{ url: string; reason: string }> = [];
+    await installNetworkPolicy(ctx, fakePage(), {
+      resolver,
+      onForbiddenNavigation: vi.fn(),
+      onBlockedRequest: (url, reason) => blocked.push({ url, reason }),
+      originCredentials: () => credentials,
+    });
+    return { ctx, blocked };
+  }
+
+  function subresource(url: string, extra: Record<string, string> = {}, resourceType = "image") {
+    return fakeRoute(url, {
+      resourceType: () => resourceType,
+      allHeaders: async () => ({ "user-agent": "UA/1", "sec-fetch-site": "same-origin", ...extra }),
+    });
+  }
+
+  /** The headers each hop actually went out with. */
+  function hopHeaders(): Array<Record<string, string>> {
+    return mockFetch.mock.calls.map((c) => (c[1] as { headers: Record<string, string> }).headers);
+  }
+
+  // THE FINDING: origin A's /resource, fetched with A's key, answers a redirect
+  // to origin B. B must not see the key.
+  it("#1 a sub-resource redirected to another origin does not hand over the credential", async () => {
+    const { ctx, blocked } = await install();
+    mockFetch.mockResolvedValueOnce(redirectResponse(302, "https://other.example/collect"));
+    mockFetch.mockResolvedValueOnce(okResponse("tracked"));
+
+    const route = subresource("https://trusted.example/resource", {}, "xhr");
+    await ctx.routeHandler!(route);
+
+    const hops = hopHeaders();
+    expect(hops).toHaveLength(2);
+    expect(hops[0]!["X-Api-Key"]).toBe("k-live-0001");
+    // The hop that left the origin: no credential, in any casing.
+    for (const name of Object.keys(hops[1]!)) expect(name.toLowerCase()).not.toBe("x-api-key");
+    // Nothing from the other origin is delivered as the requested URL either —
+    // the browser re-issues the request itself, with no override to carry.
+    expect(route.fulfill).not.toHaveBeenCalled();
+    expect(route.continue).toHaveBeenCalledTimes(1);
+    expect(route.continue.mock.calls[0]?.[0]).toBeUndefined();
+    expect(blocked.map((b) => b.reason).join(" ")).toContain("another origin");
+  });
+
+  // The document half of the same defect: fetchWithPolicy's cross-origin strip
+  // only knows authorization / proxy-authorization / cookie, so a custom
+  // credential in the chain-wide headers was SENT on the foreign hop before the
+  // chain was refused. It is supplied per hop now.
+  it("#1 a document redirected to another origin does not hand over the credential either", async () => {
+    const { ctx } = await install();
+    mockFetch.mockResolvedValueOnce(redirectResponse(302, "https://other.example/landing"));
+    mockFetch.mockResolvedValueOnce(okResponse("<html>landing</html>"));
+
+    await ctx.routeHandler!(
+      documentRoute("https://trusted.example/start", {
+        allHeaders: async () => ({ "user-agent": "UA/1", "sec-fetch-site": "none", "sec-fetch-dest": "document" }),
+      }),
+    );
+
+    const hops = hopHeaders();
+    expect(hops[0]!["X-Api-Key"]).toBe("k-live-0001");
+    for (const name of Object.keys(hops[1] ?? {})) expect(name.toLowerCase()).not.toBe("x-api-key");
+  });
+
+  // ── Guards: the traffic this must not break ──
+
+  it("#1 a same-origin redirect keeps the credential and delivers the body", async () => {
+    const { ctx } = await install();
+    mockFetch.mockResolvedValueOnce(redirectResponse(302, "https://trusted.example/logo-v2.png"));
+    mockFetch.mockResolvedValueOnce(okResponse("PNG-V2", { "x-served-by": "cdn", "content-encoding": "gzip" }));
+
+    const route = subresource("https://trusted.example/logo.png");
+    await ctx.routeHandler!(route);
+
+    const hops = hopHeaders();
+    expect(hops).toHaveLength(2);
+    expect(hops[0]!["X-Api-Key"]).toBe("k-live-0001");
+    expect(hops[1]!["X-Api-Key"]).toBe("k-live-0001");
+    expect(route.fulfill).toHaveBeenCalledTimes(1);
+    expect(route.fulfill.mock.calls[0]![0].body.toString()).toBe("PNG-V2");
+    // Wire-form response headers are dropped; the body handed over is decoded.
+    expect(route.fulfill.mock.calls[0]![0].headers).toEqual({ "content-type": "text/html", "x-served-by": "cdn" });
+    expect(route.continue).not.toHaveBeenCalled();
+  });
+
+  it("#1 a sub-resource that is not the credential origin's is still a plain continue", async () => {
+    const { ctx } = await install();
+    const route = subresource("https://other.example/pixel.gif", { "sec-fetch-site": "cross-site" });
+    await ctx.routeHandler!(route);
+    expect(route.continue).toHaveBeenCalledTimes(1);
+    expect(route.continue.mock.calls[0]?.[0]).toBeUndefined();
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("#1 a body too large to buffer is re-issued by the browser without the credential", async () => {
+    const { ctx, blocked } = await install();
+    mockFetch.mockResolvedValueOnce(okResponse("small but lying", { "content-length": String(64 * 1024 * 1024) }));
+
+    const route = subresource("https://trusted.example/4k-trailer.mp4", {}, "media");
+    await ctx.routeHandler!(route);
+
+    expect(route.fulfill).not.toHaveBeenCalled();
+    expect(route.continue).toHaveBeenCalledTimes(1);
+    expect(route.continue.mock.calls[0]?.[0]).toBeUndefined();
+    expect(blocked.map((b) => b.reason).join(" ")).toContain("without credentials");
+  });
+
+  // An unsafe method cannot be handed back: re-issuing a POST is not ours to do
+  // twice. It is refused instead — and only when the chain actually left the
+  // origin; a POST that stays put is delivered.
+  it("#1 a credentialed POST that leaves the origin is aborted, not replayed", async () => {
+    const { ctx } = await install();
+    mockFetch.mockResolvedValueOnce(redirectResponse(307, "https://other.example/collect"));
+    mockFetch.mockResolvedValueOnce(okResponse("collected"));
+
+    const route = fakeRoute("https://trusted.example/api/order", {
+      resourceType: () => "xhr",
+      method: () => "POST",
+      postDataBuffer: () => Buffer.from('{"qty":1}'),
+      allHeaders: async () => ({ "sec-fetch-site": "same-origin", "content-type": "application/json" }),
+    });
+    await ctx.routeHandler!(route);
+
+    for (const name of Object.keys(hopHeaders()[1] ?? {})) expect(name.toLowerCase()).not.toBe("x-api-key");
+    expect(route.continue).not.toHaveBeenCalled();
+    expect(route.fulfill).not.toHaveBeenCalled();
+    expect(route.abort).toHaveBeenCalledWith("failed");
+  });
+
+  it("#1 a credentialed POST that stays on the origin is delivered", async () => {
+    const { ctx } = await install();
+    mockFetch.mockResolvedValueOnce(okResponse('{"ok":true}'));
+
+    const route = fakeRoute("https://trusted.example/api/order", {
+      resourceType: () => "xhr",
+      method: () => "POST",
+      postDataBuffer: () => Buffer.from('{"qty":1}'),
+      allHeaders: async () => ({ "sec-fetch-site": "same-origin", "content-type": "application/json" }),
+    });
+    await ctx.routeHandler!(route);
+
+    expect(mockFetch.mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({ method: "POST", redirect: "manual" }),
+    );
+    expect(hopHeaders()[0]!["X-Api-Key"]).toBe("k-live-0001");
+    expect(route.fulfill).toHaveBeenCalledTimes(1);
+    expect(route.fulfill.mock.calls[0]![0].body.toString()).toBe('{"ok":true}');
+  });
+
+  it("#1 a forbidden hop in a credentialed sub-resource chain is refused at the hop", async () => {
+    table.set("internal.corp", [{ address: "10.0.0.5", family: 4 }]);
+    const { ctx } = await install();
+    mockFetch.mockResolvedValueOnce(redirectResponse(302, "http://internal.corp/admin"));
+    mockFetch.mockResolvedValueOnce(okResponse("SHOULD NOT BE FETCHED"));
+
+    const route = subresource("https://trusted.example/resource", {}, "xhr");
+    await ctx.routeHandler!(route);
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(route.abort).toHaveBeenCalledWith("blockedbyclient");
+    expect(route.continue).not.toHaveBeenCalled();
+    expect(route.fulfill).not.toHaveBeenCalled();
+  });
+
+  it("#1 the jar gets the cookies a credentialed sub-resource hop set", async () => {
+    const { ctx } = await install();
+    mockFetch.mockResolvedValueOnce(okResponse("PNG", { "set-cookie": "sid=abc; Path=/" }));
+
+    await ctx.routeHandler!(subresource("https://trusted.example/logo.png"));
+
+    expect(ctx.addCookies).toHaveBeenCalledTimes(1);
+    expect(ctx.jar[0]).toMatchObject({ name: "sid", value: "abc", domain: "trusted.example" });
   });
 });
 

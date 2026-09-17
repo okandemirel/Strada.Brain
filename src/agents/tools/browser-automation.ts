@@ -874,6 +874,126 @@ async function readBounded(response: Response, maxBytes: number): Promise<Buffer
 }
 
 /**
+ * Round 10 #1: the largest credentialed sub-resource body the fulfil path
+ * buffers. Past this the request is handed back to the browser WITHOUT the
+ * credentials rather than refused (see fulfillCredentialedSubresource).
+ */
+const SUBRESOURCE_MAX_BYTES = 32 * MB_IN_BYTES;
+
+/**
+ * Round 10 #1: a sub-resource that carries the agent's credentials is fetched by
+ * the SAME hop-by-hop transport the documents use, and the route is fulfilled
+ * with the result.
+ *
+ * `route.continue({ headers })` was the hole. Playwright applies a continue
+ * override to the request AND to every redirect Chromium then follows on its
+ * own, and those hops never reach the route handler — so a credential-bearing
+ * `<img>`, `fetch()` or XHR on the credential origin that answered
+ * `302 https://other.example/…` handed the header to that other origin. The
+ * initial origin check had passed; the post-hoc response listener only sees the
+ * chain after the fact, when the credential is already gone.
+ *
+ * Here every hop is re-resolved and pinned before its request, and the
+ * credentials are supplied per hop — only to their own origin. What happens
+ * after a redirect is deliberate:
+ *   - no redirect (the common case): fulfil the vetted response;
+ *   - a SAME-ORIGIN redirect: fulfil it too. Nothing crossed an origin and the
+ *     credential was allowed on every hop. (`fulfill` cannot change the URL, so
+ *     a stylesheet fetched this way resolves its relative URLs against the
+ *     requested URL rather than the final one — same origin, and the alternative
+ *     is refusing a redirect the browser itself would have followed.)
+ *   - a CROSS-ORIGIN redirect: the body is discarded and, for a safe method, the
+ *     request is handed back to the browser with NO credential override. The
+ *     browser then owns that chain under its own rules — CORS included, which
+ *     fulfilling a foreign body as a same-origin response would have bypassed —
+ *     and it cannot leak what it is not given. An unsafe method (a credentialed
+ *     POST) is aborted instead: re-issuing it is not ours to do twice.
+ *   - too large to buffer: the same hand-back, for the same reason.
+ * Returns true when the route was answered here, false when the caller should
+ * continue the request without credentials.
+ */
+async function fulfillCredentialedSubresource(
+  context: PolicyContext,
+  route: PolicyRoute,
+  options: NetworkPolicyOptions,
+  credentials: OriginCredentials,
+  wireHeaders: Record<string, string>,
+): Promise<boolean> {
+  const request = route.request();
+  const requestedUrl = request.url();
+  const method = request.method();
+  const headers: Record<string, string> = {};
+  for (const [name, value] of Object.entries(wireHeaders)) {
+    if (!DOCUMENT_REQUEST_HEADERS_DROPPED.has(name.toLowerCase())) headers[name] = value;
+  }
+  const fetchSite = wireHeaders["sec-fetch-site"];
+  const scoped = credentialHeadersForRequest(credentials, requestedUrl, fetchSite);
+  if (!scoped) return false;
+  const cookieContext: CookieRequestContext = {
+    requestedUrl,
+    method,
+    // A sub-resource is never a top-level navigation, whatever it says.
+    topLevelNavigation: false,
+    ...(fetchSite ? { secFetchSite: fetchSite } : {}),
+  };
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), options.documentTimeoutMs ?? DOCUMENT_FETCH_TIMEOUT_MS);
+  timer.unref?.();
+  let dispose: (() => Promise<void>) | undefined;
+  try {
+    const fetched = await fetchWithPolicy(requestedUrl, {
+      signal: controller.signal,
+      method,
+      headers,
+      body: request.postDataBuffer(),
+      hopHeaders: async (hopUrl, hop) => ({
+        ...(await cookieHeaderFor(context, hopUrl, { ...cookieContext, method: hop.method })),
+        // The credential, and ONLY on its own origin. A hop to anywhere else
+        // gets the request without it — which is the whole point of #1.
+        ...(originOf(hopUrl) === credentials.origin ? scoped : {}),
+      }),
+      onSetCookie: async (hopUrl, setCookies) => {
+        const parsed = setCookies.map((h) => parseSetCookie(h, hopUrl)).filter((c): c is PolicyCookie => c !== null);
+        if (parsed.length > 0) await context.addCookies(parsed);
+      },
+      ...(options.resolver ? { resolver: options.resolver } : {}),
+    });
+    dispose = fetched.dispose;
+    const response = fetched.response;
+    if (originOf(fetched.finalUrl) !== originOf(requestedUrl)) {
+      await discardBody(response);
+      options.onBlockedRequest?.(
+        requestedUrl,
+        `credential-bearing sub-resource redirected to another origin (${fetched.finalUrl}); refetched without credentials`,
+      );
+      return false;
+    }
+    const body = await readBounded(response, SUBRESOURCE_MAX_BYTES);
+    const responseHeaders: Record<string, string> = {};
+    response.headers.forEach((value, name) => {
+      if (!DOCUMENT_RESPONSE_HEADERS_DROPPED.has(name.toLowerCase())) responseHeaders[name] = value;
+    });
+    await route.fulfill({ status: response.status, headers: responseHeaders, body });
+    return true;
+  } catch (error) {
+    if (error instanceof ForbiddenTargetError) throw error;
+    // Too large to buffer, or the transport failed: the caller re-issues it
+    // through the browser without credentials (safe methods only).
+    options.onBlockedRequest?.(
+      requestedUrl,
+      `credential-bearing sub-resource not fetched under the policy (${error instanceof Error ? error.message : String(error)}); refetched without credentials`,
+    );
+    return false;
+  } finally {
+    clearTimeout(timer);
+    if (dispose) await dispose();
+  }
+}
+
+/** Methods a refused credentialed sub-resource may be re-issued with. */
+const REPLAYABLE_SUBRESOURCE_METHODS = new Set(["GET", "HEAD"]);
+
+/**
  * #11 (documents): perform the navigation request ourselves through the
  * pinned, hop-by-hop transport and fulfil the route with the vetted response.
  * Throws ForbiddenTargetError when any hop is refused and
@@ -909,10 +1029,20 @@ async function fulfillDocumentUnderPolicy(
   };
   // #11: the agent's credentials belong to ONE origin and to requests this tool
   // (or the origin itself) initiated; they are added here, per request, instead
-  // of page-wide. fetchWithPolicy drops them again at the first origin change in
-  // the redirect chain (CROSS_ORIGIN_STRIPPED_HEADERS, round 7 #16).
-  const scopedCredentials = credentialHeadersForRequest(options.originCredentials?.(), requestedUrl, fetchSite);
-  if (scopedCredentials) Object.assign(headers, scopedCredentials);
+  // of page-wide.
+  //
+  // Round 10 #1: they go in through `hopHeaders`, which is evaluated per HOP,
+  // instead of the chain-wide `headers`. fetchWithPolicy's own cross-origin
+  // strip only knows the three RFC 9110 credential names
+  // (CROSS_ORIGIN_STRIPPED_HEADERS, round 7 #16), so an agent-supplied
+  // `X-Api-Key` carried in `headers` was still SENT on the first hop of another
+  // origin — the request the chain then threw CrossOriginRedirectError about had
+  // already handed the key over. Per-hop, the credential simply is not part of a
+  // request to any origin but its own.
+  const credentials = options.originCredentials?.();
+  const scopedCredentials = credentialHeadersForRequest(credentials, requestedUrl, fetchSite);
+  const credentialsForHop = (hopUrl: string): Record<string, string> | undefined =>
+    scopedCredentials && credentials && originOf(hopUrl) === credentials.origin ? scopedCredentials : undefined;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), options.documentTimeoutMs ?? DOCUMENT_FETCH_TIMEOUT_MS);
   timer.unref?.();
@@ -927,7 +1057,10 @@ async function fulfillDocumentUnderPolicy(
       // 301/302 on a POST) rewrites the method to GET, so the landing request
       // of a cross-site POST is a safe top-level navigation and its Lax cookies
       // are eligible — the requested method would have withheld them.
-      hopHeaders: (hopUrl, hop) => cookieHeaderFor(context, hopUrl, { ...cookieContext, method: hop.method }),
+      hopHeaders: async (hopUrl, hop) => ({
+        ...(await cookieHeaderFor(context, hopUrl, { ...cookieContext, method: hop.method })),
+        ...credentialsForHop(hopUrl),
+      }),
       onSetCookie: async (hopUrl, setCookies) => {
         const parsed = setCookies.map((h) => parseSetCookie(h, hopUrl)).filter((c): c is PolicyCookie => c !== null);
         if (parsed.length > 0) await context.addCookies(parsed);
@@ -1010,15 +1143,36 @@ export async function installNetworkPolicy(
       return;
     }
     if (!isDocumentRequest(request)) {
-      // #11: the agent's credentials are added to THIS request when it belongs
-      // to their origin, instead of being installed on the page.
+      // #11 / round 10 #1: a sub-resource that belongs to the credential origin
+      // is fetched through the policy transport and fulfilled, because a
+      // `continue` override rides along Chromium's own redirect following and
+      // those hops never come back here. Everything else continues untouched.
       const credentials = options.originCredentials?.();
       if (credentials && originOf(url) === credentials.origin) {
-        const wire = await request.allHeaders();
-        const scoped = credentialHeadersForRequest(credentials, url, wire["sec-fetch-site"]);
-        if (scoped) {
-          await route.continue({ headers: { ...wire, ...scoped } });
-          return;
+        const wire: Record<string, string> = {};
+        for (const [name, value] of Object.entries(await request.allHeaders())) {
+          wire[name.toLowerCase()] = value;
+        }
+        if (credentialHeadersForRequest(credentials, url, wire["sec-fetch-site"])) {
+          try {
+            if (await fulfillCredentialedSubresource(context, route, options, credentials, wire)) return;
+          } catch (error) {
+            const reason = error instanceof Error ? error.message : String(error);
+            options.onBlockedRequest?.(url, reason);
+            await route.abort("blockedbyclient").catch(() => undefined);
+            return;
+          }
+          // Not fulfilled: the chain left the origin, the body was too large, or
+          // the transport failed. A safe method is re-issued by the browser
+          // WITHOUT the credentials; an unsafe one is not replayed at all.
+          if (!REPLAYABLE_SUBRESOURCE_METHODS.has(request.method())) {
+            options.onBlockedRequest?.(
+              url,
+              "credential-bearing sub-resource with an unsafe method was not delivered under the policy",
+            );
+            await route.abort("failed").catch(() => undefined);
+            return;
+          }
         }
       }
       await route.continue();
