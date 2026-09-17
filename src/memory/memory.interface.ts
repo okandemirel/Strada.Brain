@@ -35,7 +35,9 @@ export type MemoryEntryType =
   | "command"
   | "error"
   | "insight"
-  | "task";
+  | "task"
+  /** Project knowledge — distinct from personal recall (plan 3.9 / 3.11: 05.cap, 13F4, D66). */
+  | "project";
 
 /** Memory entry importance levels */
 export type MemoryImportance = "low" | "medium" | "high" | "critical";
@@ -64,6 +66,24 @@ interface BaseMemoryEntry {
   readonly embedding?: Vector<number>;
   /** Additional metadata */
   readonly metadata: MemoryMetadata;
+  /**
+   * Identity the entry belongs to (plan 3.9). Absent = shared memory. Also
+   * read from metadata.userId / metadata.projectId for callers that can only
+   * set metadata.
+   */
+  readonly userId?: string;
+  readonly projectId?: string;
+}
+
+/**
+ * Identity scope for retrieval (plan 3.9 / 3.11: 05.cap, 13F4, D66).
+ * Results carrying a different identity for any named key are excluded;
+ * entries carrying no identity for that key are shared and stay in.
+ */
+export interface MemoryScope {
+  readonly userId?: string;
+  readonly chatId?: ChatId;
+  readonly projectId?: string;
 }
 
 /** Conversation memory entry */
@@ -140,6 +160,15 @@ export interface TaskMemoryEntry extends BaseMemoryEntry {
   readonly dueDate?: TimestampMs;
 }
 
+/** Project knowledge entry — never returned as personal recall (plan 3.9) */
+export interface ProjectMemoryEntry extends BaseMemoryEntry {
+  readonly type: "project";
+  /** Project this knowledge belongs to */
+  readonly projectId: string;
+  /** Source (e.g., gdd, analysis, user) */
+  readonly source?: string;
+}
+
 /** Discriminated union of all memory entry types */
 export type MemoryEntry =
   | ConversationMemoryEntry
@@ -147,7 +176,8 @@ export type MemoryEntry =
   | NoteMemoryEntry
   | ErrorMemoryEntry
   | CommandMemoryEntry
-  | TaskMemoryEntry;
+  | TaskMemoryEntry
+  | ProjectMemoryEntry;
 
 // =============================================================================
 // TYPE GUARDS
@@ -204,6 +234,11 @@ interface BaseRetrievalOptions {
   readonly before?: TimestampMs;
   /** Whether to include embeddings */
   readonly includeEmbeddings?: boolean;
+  /**
+   * Identity scope (plan 3.9). Optional: a caller passing none keeps today's
+   * unscoped behaviour; automatic recall must pass its scope.
+   */
+  readonly scope?: MemoryScope;
 }
 
 /** Text-based retrieval options */

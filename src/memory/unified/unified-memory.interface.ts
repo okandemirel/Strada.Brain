@@ -8,6 +8,7 @@
 import type {
   RetrievalOptions,
   RetrievalResult,
+  MemoryScope,
   MemoryStats,
   MemoryEntryType,
   MemoryImportance,
@@ -26,6 +27,20 @@ import type {
   Vector,
   VectorId,
 } from "../../types/index.js";
+
+// =============================================================================
+// EMBEDDING PROVENANCE (plan 0-B.9)
+// =============================================================================
+
+/** Provenance of the character-histogram fallback vector. */
+export const HISTOGRAM_PROVENANCE = "histogram";
+/** Provenance label for the TF-IDF text path (never a stored vector). */
+export const TFIDF_PROVENANCE = "tfidf";
+/** Provenance used when a provider is configured but has no id. */
+export const DEFAULT_PROVIDER_PROVENANCE = "provider";
+
+/** Provider model id, "histogram", or "tfidf". */
+export type EmbeddingProvenance = string;
 
 // =============================================================================
 // MEMORY TIER TYPES
@@ -86,7 +101,18 @@ interface BaseUnifiedMemoryEntry {
 
   // Unified-specific (readonly)
   readonly embedding: Vector<number>;
+  /**
+   * Which embedder produced `embedding` (plan 0-B.9): the provider id
+   * (config.embeddingProviderId, default "provider") or "histogram" for the
+   * character-histogram fallback. Vectors of different provenance never share
+   * the HNSW index and are never compared. Absent only on legacy rows loaded
+   * before this field existed — inferred on load.
+   */
+  readonly embeddingProvenance?: EmbeddingProvenance;
   readonly domain?: string;
+  /** Identity scope (plan 3.9) — absent = shared. */
+  readonly userId?: string;
+  readonly projectId?: string;
 
   // Mutable state
   tier: MemoryTier;
@@ -150,6 +176,13 @@ export interface UnifiedTaskMemoryEntry extends BaseUnifiedMemoryEntry {
   readonly dueDate?: TimestampMs;
 }
 
+/** Unified project-knowledge entry (plan 3.9) — excluded from personal recall */
+export interface UnifiedProjectMemoryEntry extends BaseUnifiedMemoryEntry {
+  readonly type: "project";
+  readonly projectId: string;
+  readonly source?: string;
+}
+
 /** Unified memory entry discriminated union */
 export type UnifiedMemoryEntry =
   | UnifiedConversationMemoryEntry
@@ -157,7 +190,8 @@ export type UnifiedMemoryEntry =
   | UnifiedNoteMemoryEntry
   | UnifiedErrorMemoryEntry
   | UnifiedCommandMemoryEntry
-  | UnifiedTaskMemoryEntry;
+  | UnifiedTaskMemoryEntry
+  | UnifiedProjectMemoryEntry;
 
 /** Entry with vector ID */
 export interface VectorizedEntry {
@@ -438,6 +472,8 @@ export interface IUnifiedMemory {
       tier?: MemoryTier;
       limit?: number;
       useMMR?: boolean;
+      /** Identity scope (plan 3.9) */
+      scope?: MemoryScope;
     },
   ): Promise<RetrievalResult<MemoryEntry>[]>;
 
@@ -531,6 +567,11 @@ export interface UnifiedMemoryConfig {
   readonly autoCompactThreshold?: NormalizedScore;
   /** Optional embedding provider function — when not set, a hash-based fallback is used */
   readonly embeddingProvider?: (text: string) => Promise<number[]>;
+  /**
+   * Provider model id recorded as the provenance of every vector the provider
+   * produces (plan 0-B.9). Defaults to "provider" when unset.
+   */
+  readonly embeddingProviderId?: string;
 }
 
 /**

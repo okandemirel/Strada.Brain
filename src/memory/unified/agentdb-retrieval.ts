@@ -11,7 +11,7 @@ import type {
   UnifiedMemoryQuery,
 } from "./unified-memory.interface.js";
 import type { HNSWVectorStore } from "../../rag/hnsw/hnsw-vector-store.js";
-import type { RetrievalOptions, RetrievalResult, MemoryEntry } from "../memory.interface.js";
+import type { RetrievalResult, MemoryEntry } from "../memory.interface.js";
 import type { NormalizedScore } from "../../types/index.js";
 import { MemoryTier } from "./unified-memory.interface.js";
 import { TextIndex, extractTerms, cosineSimilarity } from "../text-index.js";
@@ -21,8 +21,16 @@ import { sanitizeRetrievalContent } from "../../agents/orchestrator-text-utils.j
 function getLoggerSafe() {
   try { return getLogger(); } catch { return console; }
 }
-import { generateEmbedding } from "./agentdb-vector.js";
+import { embedWithProvenance, indexProvenance } from "./agentdb-vector.js";
 import { getNow } from "./agentdb-time.js";
+import {
+  hasActiveFilters,
+  matchesRetrievalFilters,
+  toRetrievalFilters,
+} from "../retrieval-filters.js";
+import type { RetrievalFilterSource } from "../retrieval-filters.js";
+import type { MemoryScope } from "../memory.interface.js";
+import type { EmbeddingProvenance } from "./unified-memory.interface.js";
 
 // ---------------------------------------------------------------------------
 // Context required by retrieval helpers
@@ -73,11 +81,17 @@ function sanitizeResult(hit: RetrievalResult<MemoryEntry>): RetrievalResult<Memo
 // TF-IDF retrieval (backward compatibility)
 // ---------------------------------------------------------------------------
 
-/** TF-IDF based retrieval for backward compatibility. */
+/**
+ * TF-IDF based retrieval for backward compatibility — and the text fallback
+ * every vector-path failure lands on. Applies the SAME shared filter as the
+ * vector path (plan 0-B.9 / 3.9): chatId, type/types, tier, domain,
+ * minImportance, expiry, tags, importance, archived, time range, scope.
+ * Before this it honoured only `mode: "chat"` and `mode: "type"`.
+ */
 export function retrieveTFIDF(
   ctx: AgentDBRetrievalContext,
   query: string,
-  options: RetrievalOptions,
+  options: RetrievalFilterSource & { limit?: number; minScore?: number },
 ): RetrievalResult<MemoryEntry>[] {
   const limit = options.limit ?? 5;
   const minScore = options.minScore ?? 0.1;
@@ -86,13 +100,15 @@ export function retrieveTFIDF(
   if (queryTerms.length === 0) return [];
 
   const queryVector = ctx.textIndex.computeTFIDF(queryTerms);
+  const filters = toRetrievalFilters(options);
+  const now = Date.now();
 
   const scored: RetrievalResult<MemoryEntry>[] = [];
 
   for (const entry of ctx.entries.values()) {
-    // Apply filters based on RetrievalOptions mode
-    if (options.mode === "chat" && "chatId" in entry && entry.chatId !== options.chatId) continue;
-    if (options.mode === "type" && options.types && !options.types.includes(entry.type)) continue;
+    // One filter layer shared with retrieveSemantic — the fallback returns
+    // exactly the filtered set the vector path would have.
+    if (!matchesRetrievalFilters(entry, filters, now)) continue;
 
     // Compute TF-IDF similarity
     const entryTerms = extractTerms(entry.content);
@@ -119,17 +135,46 @@ export async function retrieveSemantic(
   options: UnifiedMemoryQuery = {},
 ): Promise<RetrievalResult<MemoryEntry>[]> {
   if (!ctx.hnswStore) {
-    // Fallback to TF-IDF
-    return retrieveTFIDF(ctx, query, options as RetrievalOptions);
+    // Fallback to TF-IDF — same shared filter, same result set (plan 0-B.9)
+    return retrieveTFIDF(ctx, query, options);
   }
 
   const startTime = performance.now();
 
-  // Generate query embedding
-  const queryEmbedding = options.embedding ?? (await generateEmbedding(ctx.config, query));
+  // Generate query embedding. A caller-supplied vector is taken to be the
+  // index's provenance (retrieveByEmbedding / pre-computed recall vectors).
+  const expectedProvenance: EmbeddingProvenance = indexProvenance(ctx.config);
+  let queryEmbedding: number[];
+  let queryProvenance: EmbeddingProvenance;
+  if (options.embedding) {
+    queryEmbedding = options.embedding;
+    queryProvenance = expectedProvenance;
+  } else {
+    const embedded = await embedWithProvenance(ctx.config, query);
+    queryEmbedding = embedded.embedding;
+    queryProvenance = embedded.provenance;
+  }
+
+  if (queryProvenance !== expectedProvenance) {
+    // Provider failed for the query: a histogram query vector must never be
+    // compared against provider vectors. Fall back to the text path, which
+    // applies the same filters (plan 0-B.9).
+    getLoggerSafe().warn(
+      "[AgentDBMemory] Query embedding provenance differs from index — using TF-IDF fallback",
+      { queryProvenance, indexProvenance: expectedProvenance },
+    );
+    return retrieveTFIDF(ctx, query, options);
+  }
+
+  const filters = toRetrievalFilters(options);
+  const now = Date.now();
+  const limit = options.limit ?? 5;
+  // Over-fetch more when a filter narrows the candidate set so the post-filter
+  // still has `limit` matches to return.
+  const candidateCount = limit * (hasActiveFilters(filters) ? 4 : 2);
 
   // Search HNSW index
-  const hnswResults = await ctx.hnswStore.search(queryEmbedding, (options.limit ?? 5) * 2);
+  const hnswResults = await ctx.hnswStore.search(queryEmbedding, candidateCount);
 
   // Convert to RetrievalResult format
   const results: RetrievalResult<MemoryEntry>[] = [];
@@ -138,19 +183,12 @@ export async function retrieveSemantic(
     const entry = ctx.entries.get(hit.chunk.id);
     if (!entry) continue;
 
-    // Apply filters
-    if (options.chatId && entry.chatId !== options.chatId) continue;
-    if (options.type && entry.type !== options.type) continue;
-    if (options.tier && entry.tier !== options.tier) continue;
-    if (options.domain && entry.domain !== options.domain) continue;
-    if (options.minImportance !== undefined && entry.importanceScore < options.minImportance)
-      continue;
+    // Provenance guard: a vector of another embedder must not be scored
+    // against this query even if it somehow reached the index.
+    if (entry.embeddingProvenance !== undefined && entry.embeddingProvenance !== queryProvenance) continue;
 
-    // Check expiration
-    if (!options.includeExpired && entry.expiresAt) {
-      const now = Date.now();
-      if (now > entry.expiresAt) continue;
-    }
+    // One filter layer shared with retrieveTFIDF (plan 0-B.9 / 3.9)
+    if (!matchesRetrievalFilters(entry, filters, now)) continue;
 
     // NOTE: Race condition — in-memory read-modify-write is not atomic.
     // The retrieval context does not expose direct DB access, so an atomic
@@ -196,13 +234,16 @@ export async function retrieveHybrid(
     tier?: MemoryTier;
     limit?: number;
     useMMR?: boolean;
+    /** Identity scope (plan 3.9) — applied to both halves. */
+    scope?: MemoryScope;
   },
 ): Promise<RetrievalResult<MemoryEntry>[]> {
   try {
-    // Get both semantic and text results
+    // Get both semantic and text results — same filters on both halves
+    const shared = { limit: (options?.limit ?? 5) * 2, tier: options?.tier, scope: options?.scope };
     const [semanticResults, textResults] = await Promise.all([
-      retrieveSemantic(ctx, query, { limit: (options?.limit ?? 5) * 2, tier: options?.tier }),
-      Promise.resolve(retrieveTFIDF(ctx, query, { mode: "text", query, limit: (options?.limit ?? 5) * 2 })),
+      retrieveSemantic(ctx, query, shared),
+      Promise.resolve(retrieveTFIDF(ctx, query, { mode: "text", query, ...shared })),
     ]);
 
     const semanticWeight = options?.semanticWeight ?? 0.7;

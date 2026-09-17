@@ -360,6 +360,9 @@ export async function buildContextLayers(
           query: userMessage,
           limit: 5,
           minScore: 0.15,
+          // THIS chat's recall, not everyone's: automatic semantic recall
+          // carried no identity scope (plan 3.9).
+          ...(taskContext?.chatId ? { scope: { chatId: taskContext.chatId } } : {}),
           embedding: preComputedEmbedding,
         } as import("../memory/memory.interface.js").SemanticRetrievalOptions).catch(() => null)
       : Promise.resolve(null),

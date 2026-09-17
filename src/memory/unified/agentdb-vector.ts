@@ -7,7 +7,15 @@
 
 import { join } from "node:path";
 import { rmSync } from "node:fs";
-import type { UnifiedMemoryConfig, UnifiedMemoryEntry } from "./unified-memory.interface.js";
+import type {
+  EmbeddingProvenance,
+  UnifiedMemoryConfig,
+  UnifiedMemoryEntry,
+} from "./unified-memory.interface.js";
+import {
+  DEFAULT_PROVIDER_PROVENANCE,
+  HISTOGRAM_PROVENANCE,
+} from "./unified-memory.interface.js";
 import type { HNSWVectorStore } from "../../rag/hnsw/hnsw-vector-store.js";
 import { createHNSWVectorStore } from "../../rag/hnsw/hnsw-vector-store.js";
 import type { VectorEntry } from "../../rag/rag.interface.js";
@@ -76,33 +84,74 @@ export function toVectorEntry(entry: {
 }
 
 // ---------------------------------------------------------------------------
-// Embedding generation
+// Embedding provenance (plan 0-B.9: audit 05.cap + Codex #18)
 // ---------------------------------------------------------------------------
+//
+// Every vector records which embedder produced it. The HNSW store is the
+// index of ONE provenance — `indexProvenance(config)` — and a vector of any
+// other provenance never enters it and is never compared against it. A
+// provider failure therefore yields a histogram vector that is stored on the
+// entry (so the row is complete) but kept OUT of the provider index; the
+// entry stays reachable through the TF-IDF text path only.
+//
+// Chosen over a second index because the retrieval context holds one
+// hnswStore and one write mutex; a provenance gate at insert time plus a
+// provenance check at search time is the smallest change that keeps the
+// invariant with the existing store.
 
-/** Generate an embedding using the configured provider, falling back to hash-based. */
-export async function generateEmbedding(
+/** Provenance the configured provider stamps on its vectors. */
+export function providerProvenance(config: UnifiedMemoryConfig): EmbeddingProvenance {
+  return config.embeddingProviderId ?? DEFAULT_PROVIDER_PROVENANCE;
+}
+
+/**
+ * Provenance the HNSW index holds. With a provider configured that is the
+ * provider; with none, every vector is a histogram and the index is a
+ * histogram index (consistent with itself, replaced when a provider arrives).
+ */
+export function indexProvenance(config: UnifiedMemoryConfig): EmbeddingProvenance {
+  return config.embeddingProvider ? providerProvenance(config) : HISTOGRAM_PROVENANCE;
+}
+
+/** True when the entry's vector may enter / be compared in the HNSW index. */
+export function canEnterIndex(
   config: UnifiedMemoryConfig,
-  text: string,
-): Promise<Vector<number>> {
-  if (config.embeddingProvider) {
-    try {
-      return await config.embeddingProvider(text) as Vector<number>;
-    } catch (error) {
-      getLoggerSafe().warn("[AgentDBMemory] Embedding provider failed, using hash fallback", { error: String(error) });
-      // Fall through to hash-based fallback
-    }
-  }
-  // Hash-based fallback — not semantic, used when no provider configured or provider fails
+  entry: { embedding?: readonly number[] | null; embeddingProvenance?: EmbeddingProvenance },
+): boolean {
+  if (!entry.embedding || entry.embedding.length !== config.dimensions) return false;
+  return entry.embeddingProvenance === indexProvenance(config);
+}
+
+/**
+ * Provenance for a legacy row that carries a vector but no provenance
+ * (written before plan 0-B.9): hash-shaped vectors are histograms; anything
+ * else is assumed to be the configured provider's.
+ */
+export function inferProvenance(
+  config: UnifiedMemoryConfig,
+  embedding: readonly number[] | null | undefined,
+): EmbeddingProvenance | undefined {
+  if (!embedding || embedding.length === 0) return undefined;
+  if (isHashBasedEmbedding("", embedding as number[])) return HISTOGRAM_PROVENANCE;
+  return providerProvenance(config);
+}
+
+/** Vector + provenance pair returned by `embedWithProvenance`. */
+export interface ProvenancedEmbedding {
+  readonly embedding: Vector<number>;
+  readonly provenance: EmbeddingProvenance;
+}
+
+/** Character-histogram fallback — not semantic; provenance "histogram". */
+export function histogramEmbedding(config: UnifiedMemoryConfig, text: string): Vector<number> {
   const dimensions = config.dimensions;
   const embedding = new Array(dimensions).fill(0);
 
-  // Simple hash-based embedding for demonstration
   for (let i = 0; i < text.length; i++) {
     const char = text.charCodeAt(i);
     embedding[i % dimensions]! += char / 255;
   }
 
-  // Normalize
   const magnitude = Math.sqrt(embedding.reduce((a: number, b: number) => a + b * b, 0));
   if (magnitude > 0) {
     for (let i = 0; i < dimensions; i++) {
@@ -111,6 +160,44 @@ export async function generateEmbedding(
   }
 
   return embedding as Vector<number>;
+}
+
+// ---------------------------------------------------------------------------
+// Embedding generation
+// ---------------------------------------------------------------------------
+
+/**
+ * Embed `text` and say which embedder did it. Provider failure returns a
+ * histogram vector stamped "histogram" — callers gate HNSW on the provenance.
+ */
+export async function embedWithProvenance(
+  config: UnifiedMemoryConfig,
+  text: string,
+): Promise<ProvenancedEmbedding> {
+  if (config.embeddingProvider) {
+    try {
+      const embedding = await config.embeddingProvider(text) as Vector<number>;
+      return { embedding, provenance: providerProvenance(config) };
+    } catch (error) {
+      getLoggerSafe().warn(
+        "[AgentDBMemory] Embedding provider failed — histogram vector stamped 'histogram', kept out of the provider index",
+        { error: String(error) },
+      );
+    }
+  }
+  return { embedding: histogramEmbedding(config, text), provenance: HISTOGRAM_PROVENANCE };
+}
+
+/**
+ * Generate an embedding using the configured provider, falling back to the
+ * histogram. Kept for callers that only need the vector; anything that stores
+ * or searches must use `embedWithProvenance` so the provenance travels.
+ */
+export async function generateEmbedding(
+  config: UnifiedMemoryConfig,
+  text: string,
+): Promise<Vector<number>> {
+  return (await embedWithProvenance(config, text)).embedding;
 }
 
 // ---------------------------------------------------------------------------
@@ -249,9 +336,18 @@ export async function rebuildHnswIndex(ctx: AgentDBVectorContext): Promise<void>
 
     for (const entry of ctx.entries.values()) {
       try {
-        // Re-embed the entry content
-        const newEmbedding = await generateEmbedding(ctx.config, entry.content);
-        (entry as unknown as { embedding: Vector<number> }).embedding = newEmbedding;
+        // Re-embed the entry content — the provenance travels with the vector
+        const { embedding: newEmbedding, provenance } = await embedWithProvenance(ctx.config, entry.content);
+        (entry as unknown as { embedding: Vector<number>; embeddingProvenance: EmbeddingProvenance }).embedding = newEmbedding;
+        (entry as unknown as { embeddingProvenance: EmbeddingProvenance }).embeddingProvenance = provenance;
+
+        if (provenance !== indexProvenance(ctx.config)) {
+          // Provider failed for this entry: the histogram vector stays on the
+          // row (text path still serves it) but never enters the provider index.
+          sqlitePersistEntry(ctx, entry);
+          failed++;
+          continue;
+        }
 
         // Upsert into new HNSW index
         await ctx.writeMutex.withLock(() =>
@@ -386,7 +482,9 @@ export async function reEmbedHashEntries(
 
     for (const entry of batch) {
       const embeddingArr = entry.embedding as unknown as number[];
-      if (!isHashBasedEmbedding(entry.content, embeddingArr)) {
+      const isHistogram = entry.embeddingProvenance === HISTOGRAM_PROVENANCE
+        || (entry.embeddingProvenance === undefined && isHashBasedEmbedding(entry.content, embeddingArr));
+      if (!isHistogram) {
         skipped++;
         continue;
       }
@@ -416,6 +514,7 @@ export async function reEmbedHashEntries(
                 {
                   ...entry,
                   embedding: newEmbedding,
+                  embeddingProvenance: providerProvenance(ctx.config),
                 } as UnifiedMemoryEntry,
               );
             }
@@ -434,7 +533,8 @@ export async function reEmbedHashEntries(
       }
 
       for (const { entry, newEmbedding } of entriesToPersist) {
-        (entry as unknown as { embedding: Vector<number> }).embedding = newEmbedding;
+        (entry as unknown as { embedding: Vector<number>; embeddingProvenance: EmbeddingProvenance }).embedding = newEmbedding;
+        (entry as unknown as { embeddingProvenance: EmbeddingProvenance }).embeddingProvenance = providerProvenance(ctx.config);
       }
 
       if (ctx.hnswStore) {

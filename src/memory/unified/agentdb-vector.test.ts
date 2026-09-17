@@ -475,3 +475,57 @@ describe("reEmbedHashEntries", () => {
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// Tests: embedding provenance (plan 0-B.9: audit 05.cap + Codex #18)
+// ---------------------------------------------------------------------------
+
+import { embedWithProvenance, canEnterIndex, indexProvenance, inferProvenance } from "./agentdb-vector.js";
+
+describe("embedWithProvenance (plan 0-B.9)", () => {
+  it("stamps provider vectors with the provider id", async () => {
+    const config = makeConfig({
+      dimensions: 4,
+      embeddingProvider: vi.fn(async () => [0.1, -0.2, 0.3, 0.4]),
+      embeddingProviderId: "text-embedding-3-small",
+    } as any);
+    const r = await embedWithProvenance(config, "hello");
+    expect(r.provenance).toBe("text-embedding-3-small");
+    expect(indexProvenance(config)).toBe("text-embedding-3-small");
+    expect(canEnterIndex(config, { embedding: r.embedding, embeddingProvenance: r.provenance })).toBe(true);
+  });
+
+  it("defaults to 'provider' when the provider has no id", async () => {
+    const config = makeConfig({ dimensions: 4, embeddingProvider: vi.fn(async () => [0.1, -0.2, 0.3, 0.4]) } as any);
+    expect((await embedWithProvenance(config, "x")).provenance).toBe("provider");
+  });
+
+  it("a provider failure yields a 'histogram' vector that cannot enter the provider index", async () => {
+    const config = makeConfig({
+      dimensions: 4,
+      embeddingProvider: vi.fn(async () => { throw new Error("API error"); }),
+    } as any);
+    const r = await embedWithProvenance(config, "hello");
+    expect(r.provenance).toBe("histogram");
+    expect(r.embedding).toHaveLength(4);
+    expect(canEnterIndex(config, { embedding: r.embedding, embeddingProvenance: r.provenance })).toBe(false);
+  });
+
+  it("with no provider the index is a histogram index and histogram vectors enter it", async () => {
+    const config = makeConfig({ dimensions: 4 });
+    const r = await embedWithProvenance(config, "hello");
+    expect(r.provenance).toBe("histogram");
+    expect(indexProvenance(config)).toBe("histogram");
+    expect(canEnterIndex(config, { embedding: r.embedding, embeddingProvenance: r.provenance })).toBe(true);
+    // ...but a provider vector stored earlier does not
+    expect(canEnterIndex(config, { embedding: [0.1, -0.2, 0.3, 0.4], embeddingProvenance: "provider" })).toBe(false);
+  });
+
+  it("infers provenance for legacy rows by vector shape", async () => {
+    const config = makeConfig({ dimensions: 8, embeddingProvider: vi.fn(async () => []), embeddingProviderId: "m" } as any);
+    const hash = await generateEmbedding(makeConfig({ dimensions: 8 }), "legacy hash row");
+    expect(inferProvenance(config, hash)).toBe("histogram");
+    expect(inferProvenance(config, [0.5, -0.5, 0.25, -0.25, 0.1, -0.1, 0.7, -0.7])).toBe("m");
+    expect(inferProvenance(config, null)).toBeUndefined();
+  });
+});

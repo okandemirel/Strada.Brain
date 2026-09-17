@@ -17,8 +17,8 @@ import type { NormalizedScore } from "../../types/index.js";
 // Mocks
 // ---------------------------------------------------------------------------
 
-vi.mock("./agentdb-vector.js", () => ({
-  generateEmbedding: vi.fn(async (_config: unknown, text: string) => {
+vi.mock("./agentdb-vector.js", () => {
+  const fakeEmbed = async (_config: unknown, text: string) => {
     // Deterministic hash-based fake embedding
     const vec = new Array(4).fill(0);
     for (let i = 0; i < text.length; i++) {
@@ -26,8 +26,26 @@ vi.mock("./agentdb-vector.js", () => ({
     }
     const norm = Math.sqrt(vec.reduce((s: number, v: number) => s + v * v, 0)) || 1;
     return vec.map((v: number) => v / norm);
-  }),
-}));
+  };
+  const provenanceOf = (config: { embeddingProvider?: unknown; embeddingProviderId?: string }) =>
+    config.embeddingProvider ? (config.embeddingProviderId ?? "provider") : "histogram";
+  return {
+    generateEmbedding: vi.fn(fakeEmbed),
+    // Mirrors the real contract (plan 0-B.9): provider present -> provider id,
+    // provider throws -> "histogram"; no provider -> "histogram".
+    embedWithProvenance: vi.fn(async (config: { embeddingProvider?: (t: string) => Promise<number[]>; embeddingProviderId?: string }, text: string) => {
+      if (config.embeddingProvider) {
+        try {
+          return { embedding: await config.embeddingProvider(text), provenance: provenanceOf(config) };
+        } catch {
+          return { embedding: await fakeEmbed(config, text), provenance: "histogram" };
+        }
+      }
+      return { embedding: await fakeEmbed(config, text), provenance: "histogram" };
+    }),
+    indexProvenance: vi.fn(provenanceOf),
+  };
+});
 
 vi.mock("./agentdb-time.js", () => ({
   getNow: vi.fn(() => Date.now()),
@@ -660,5 +678,145 @@ describe("sanitizeResult on retrieved hits", () => {
     expect(byId.get("env")).not.toContain("[SYSTEM]");
     expect(byId.get("role")).toContain("[filtered:role-hijack]");
     expect(byId.get("role")).not.toContain("From now on you are");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// One filter layer + provenance fallback + identity scope
+// Plan 0-B.9 (audit 05.cap + Codex #18) / 3.9 (3.11: 05.cap / 13F4 / D66)
+// ---------------------------------------------------------------------------
+
+describe("TF-IDF fallback honours chatId/type/tier/domain (plan 0-B.9)", () => {
+  let entries: Map<string, UnifiedMemoryEntry>;
+
+  beforeEach(() => {
+    entries = new Map();
+    entries.set("a1", makeEntry("a1", "machine learning classification models", {
+      chatId: "chat-A" as any, type: "note", tier: MemoryTier.Working, domain: "unity",
+    }));
+    entries.set("b1", makeEntry("b1", "machine learning classification models", {
+      chatId: "chat-B" as any, type: "task", tier: MemoryTier.Persistent, domain: "web",
+    }));
+  });
+
+  const query = "machine learning classification";
+
+  it("retrieveTFIDF with a flat chatId filter returns only that chat (before: unfiltered)", () => {
+    const hits = retrieveTFIDF(makeCtx(entries), query, { chatId: "chat-A", limit: 10 } as any);
+    expect(hits.map((h) => h.entry.id)).toEqual(["a1"]);
+  });
+
+  it("retrieveTFIDF honours type, tier and domain", () => {
+    const ctx = makeCtx(entries);
+    expect(retrieveTFIDF(ctx, query, { type: "task", limit: 10 } as any).map((h) => h.entry.id)).toEqual(["b1"]);
+    expect(retrieveTFIDF(ctx, query, { tier: MemoryTier.Working, limit: 10 } as any).map((h) => h.entry.id)).toEqual(["a1"]);
+    expect(retrieveTFIDF(ctx, query, { domain: "web", limit: 10 } as any).map((h) => h.entry.id)).toEqual(["b1"]);
+  });
+
+  it("retrieveSemantic without an HNSW store falls back to the same filtered set", async () => {
+    const hits = await retrieveSemantic(makeCtx(entries, undefined), query, { chatId: "chat-A" as any, limit: 10 });
+    expect(hits.map((h) => h.entry.id)).toEqual(["a1"]);
+  });
+
+  it("a provider failure at query time falls back to the text path, never searches the provider index, and still honours filters", async () => {
+    const search = vi.fn(async () => [
+      { chunk: { id: "a1" }, score: 0.9 },
+      { chunk: { id: "b1" }, score: 0.8 },
+    ]);
+    const ctx = makeCtx(entries, { search } as any);
+    (ctx.config as any).embeddingProvider = vi.fn(async () => {
+      throw new Error("provider down");
+    });
+
+    const hits = await retrieveSemantic(ctx, query, { chatId: "chat-B" as any, limit: 10 });
+
+    expect(search).not.toHaveBeenCalled(); // histogram query never compared to provider vectors
+    expect(hits.map((h) => h.entry.id)).toEqual(["b1"]);
+  });
+
+  it("the vector path skips a hit whose stored provenance differs from the query's", async () => {
+    (entries.get("a1") as any).embeddingProvenance = "histogram";
+    (entries.get("b1") as any).embeddingProvenance = "provider";
+    const search = vi.fn(async () => [
+      { chunk: { id: "a1" }, score: 0.9 },
+      { chunk: { id: "b1" }, score: 0.8 },
+    ]);
+    const ctx = makeCtx(entries, { search } as any);
+    (ctx.config as any).embeddingProvider = vi.fn(async () => [1, 0, 0, 0]);
+
+    const hits = await retrieveSemantic(ctx, query, { limit: 10 });
+    expect(hits.map((h) => h.entry.id)).toEqual(["b1"]);
+  });
+});
+
+describe("identity scope on retrieve (plan 3.9)", () => {
+  let entries: Map<string, UnifiedMemoryEntry>;
+
+  beforeEach(() => {
+    entries = new Map();
+    entries.set("a1", makeEntry("a1", "deploy pipeline failed on staging server", { chatId: "chat-A" as any }));
+    entries.set("a2", makeEntry("a2", "staging server deploy retry succeeded", { chatId: "chat-A" as any }));
+    entries.set("b1", makeEntry("b1", "deploy pipeline failed on staging server", { chatId: "chat-B" as any }));
+    entries.set("shared", makeEntry("shared", "staging server deploy checklist", { chatId: "default" as any }));
+    entries.set("proj", makeEntry("proj", "staging server deploy pipeline for the project", {
+      type: "project" as any, projectId: "proj-1", chatId: "default" as any,
+    } as any));
+  });
+
+  const query = "staging server deploy";
+
+  it("two chats: scope chatId A returns only A's memories (plus shared), never B's", () => {
+    const hits = retrieveTFIDF(makeCtx(entries), query, {
+      mode: "text", query, limit: 10, scope: { chatId: "chat-A" as any },
+    });
+    const ids = hits.map((h) => h.entry.id as string);
+    expect(ids).not.toContain("b1");
+    expect(ids).toContain("a1");
+    expect(ids).toContain("shared");
+  });
+
+  it("no scope keeps today's behaviour (both chats returned)", () => {
+    const ids = retrieveTFIDF(makeCtx(entries), query, { mode: "text", query, limit: 10 })
+      .map((h) => h.entry.id as string);
+    expect(ids).toContain("a1");
+    expect(ids).toContain("b1");
+  });
+
+  it("project knowledge is excluded from personal recall and returned only by type or project scope", () => {
+    const ctx = makeCtx(entries);
+    const personal = retrieveTFIDF(ctx, query, { mode: "text", query, limit: 10, scope: { userId: "u1" } })
+      .map((h) => h.entry.id as string);
+    expect(personal).not.toContain("proj");
+
+    const byType = retrieveTFIDF(ctx, query, { mode: "type", types: ["project"], query, limit: 10 })
+      .map((h) => h.entry.id as string);
+    expect(byType).toEqual(["proj"]);
+
+    const byProject = retrieveTFIDF(ctx, query, { mode: "text", query, limit: 10, scope: { projectId: "proj-1" } })
+      .map((h) => h.entry.id as string);
+    expect(byProject).toContain("proj");
+  });
+
+  it("the vector path applies the same scope", async () => {
+    const search = vi.fn(async () => [
+      { chunk: { id: "a1" }, score: 0.9 },
+      { chunk: { id: "b1" }, score: 0.85 },
+      { chunk: { id: "proj" }, score: 0.8 },
+    ]);
+    const ctx = makeCtx(entries, { search } as any);
+    const hits = await retrieveSemantic(ctx, query, { limit: 10, scope: { chatId: "chat-A" as any } });
+    expect(hits.map((h) => h.entry.id)).toEqual(["a1"]);
+  });
+
+  it("retrieveHybrid carries the scope into both halves", async () => {
+    const search = vi.fn(async () => [
+      { chunk: { id: "a1" }, score: 0.9 },
+      { chunk: { id: "b1" }, score: 0.85 },
+    ]);
+    const ctx = makeCtx(entries, { search } as any);
+    const ids = (await retrieveHybrid(ctx, query, { limit: 10, scope: { chatId: "chat-A" as any } }))
+      .map((h) => h.entry.id as string);
+    expect(ids).toContain("a1");
+    expect(ids).not.toContain("b1");
   });
 });

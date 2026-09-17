@@ -65,7 +65,10 @@ import {
 
 import {
   toVectorEntry,
-  generateEmbedding,
+  embedWithProvenance,
+  canEnterIndex,
+  indexProvenance,
+  inferProvenance,
   isHashBasedEmbedding,
   detectAndHandleDimensionMismatch,
   reEmbedHashEntries,
@@ -86,6 +89,19 @@ import {
 
 import { getNow, _setNowFn, _resetNowFn } from "./agentdb-time.js";
 import { sanitizeSecrets, sanitizeSecretsDeep } from "../../security/secret-sanitizer.js";
+import type { ProvenancedEmbedding } from "./agentdb-vector.js";
+
+/** Spread an embedWithProvenance result into storeEntry's embedding fields (plan 0-B.9). */
+function embeddingFields(e: ProvenancedEmbedding): { embedding: Vector<number>; embeddingProvenance: string } {
+  return { embedding: e.embedding, embeddingProvenance: e.provenance };
+}
+
+/** Identity supplied through metadata by callers that cannot set top-level fields (plan 3.9). */
+function readIdentity(metadata: unknown, key: "userId" | "projectId"): string | undefined {
+  if (!metadata || typeof metadata !== "object") return undefined;
+  const value = (metadata as Record<string, unknown>)[key];
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
 
 // Re-export clock utilities for test compatibility
 export { _setNowFn, _resetNowFn };
@@ -482,7 +498,7 @@ export class AgentDBMemory implements IUnifiedMemory {
         importance: "high",
         archived: false,
         metadata: { projectPath },
-        embedding: await generateEmbedding(this.config, JSON.stringify(analysis)),
+        ...embeddingFields(await embedWithProvenance(this.config, JSON.stringify(analysis))),
         tier: MemoryTier.Persistent,
         importanceScore: createBrand(0.9, "NormalizedScore" as const),
         domain: "analysis-cache",
@@ -546,7 +562,7 @@ export class AgentDBMemory implements IUnifiedMemory {
         ...(options?.userMessage ? { userMessage: options.userMessage } : {}),
         ...(options?.assistantMessage ? { assistantMessage: options.assistantMessage } : {}),
       },
-      embedding: await generateEmbedding(this.config, summary),
+      ...embeddingFields(await embedWithProvenance(this.config, summary)),
       tier,
       importanceScore: calculateImportanceScore(summary, tier),
       chatId,
@@ -571,7 +587,7 @@ export class AgentDBMemory implements IUnifiedMemory {
       importance: "medium",
       archived: false,
       metadata: {},
-      embedding: await generateEmbedding(this.config, content),
+      ...embeddingFields(await embedWithProvenance(this.config, content)),
       tier,
       importanceScore: calculateImportanceScore(content, tier),
     } as unknown as Omit<
@@ -612,8 +628,19 @@ export class AgentDBMemory implements IUnifiedMemory {
       const id = createBrand(randomUUID(), "MemoryId" as const);
       const now = getNow();
 
-      // Generate embedding if not provided
-      const embedding = entry.embedding ?? (await generateEmbedding(this.config, entry.content));
+      // Generate embedding if not provided — and record which embedder made it
+      // (plan 0-B.9). A caller-supplied vector without provenance is classified
+      // by shape (legacy path); the histogram fallback is stamped "histogram".
+      let embedding: Vector<number>;
+      let embeddingProvenance: string | undefined;
+      if (entry.embedding) {
+        embedding = entry.embedding;
+        embeddingProvenance = entry.embeddingProvenance ?? inferProvenance(this.config, entry.embedding);
+      } else {
+        const embedded = await embedWithProvenance(this.config, entry.content);
+        embedding = embedded.embedding;
+        embeddingProvenance = embedded.provenance;
+      }
 
       // Determine expiration for ephemeral entries
       let expiresAt: TimestampMs | undefined;
@@ -632,6 +659,7 @@ export class AgentDBMemory implements IUnifiedMemory {
         archived: entry.archived,
         metadata: entry.metadata,
         embedding,
+        embeddingProvenance,
         tier: entry.tier,
         accessCount: 0,
         lastAccessedAt: now,
@@ -641,6 +669,9 @@ export class AgentDBMemory implements IUnifiedMemory {
         importanceScore: entry.importanceScore,
         domain: entry.domain,
         chatId: entry.chatId ?? createBrand("default", "ChatId" as const),
+        // plan 3.9: identity scope — top-level or metadata-supplied
+        userId: entry.userId ?? readIdentity(entry.metadata, "userId"),
+        projectId: entry.projectId ?? readIdentity(entry.metadata, "projectId"),
       };
 
       // Type-specific fields
@@ -688,13 +719,29 @@ export class AgentDBMemory implements IUnifiedMemory {
           task: entry.content,
           status: "pending",
         } as unknown as UnifiedMemoryEntry;
+      } else if (entry.type === "project") {
+        unifiedEntry = {
+          ...baseEntry,
+          type: "project",
+          projectId: baseEntry.projectId ?? entry.domain ?? "unknown",
+          source: "source" in entry ? (entry as { source?: string }).source : undefined,
+        } as unknown as UnifiedMemoryEntry;
       } else {
         unifiedEntry = baseEntry as unknown as UnifiedMemoryEntry;
       }
 
-      // Add to HNSW index (mutex-serialized to prevent interleaved writes)
+      // Add to HNSW index (mutex-serialized to prevent interleaved writes).
+      // Provenance gate (plan 0-B.9): only a vector of the index's provenance
+      // enters it. A histogram written during a provider outage stays on the
+      // row and is served by the text path only.
       let hnswInserted = false;
-      if (this.hnswStore && embedding.length === this.config.dimensions) {
+      if (this.hnswStore && embedding.length === this.config.dimensions
+        && !canEnterIndex(this.config, { embedding, embeddingProvenance })) {
+        getLoggerSafe().warn(
+          "[AgentDBMemory] Vector kept out of HNSW index — provenance differs from index",
+          { id: id as string, embeddingProvenance, indexProvenance: indexProvenance(this.config) },
+        );
+      } else if (this.hnswStore && embedding.length === this.config.dimensions) {
         const store = this.hnswStore;
         const vectorEntry = toVectorEntry({
           id: id as string,
@@ -822,6 +869,7 @@ export class AgentDBMemory implements IUnifiedMemory {
       tier?: MemoryTier;
       limit?: number;
       useMMR?: boolean;
+      scope?: import("../memory.interface.js").MemoryScope;
     },
   ): Promise<RetrievalResult<import("../memory.interface.js").MemoryEntry>[]> {
     return retrieveHybridHelper(this.getRetrievalCtx(), query, options);
@@ -1110,6 +1158,7 @@ export class AgentDBMemory implements IUnifiedMemory {
         error: entries.filter((e) => e.type === "error").length,
         command: entries.filter((e) => e.type === "command").length,
         task: entries.filter((e) => e.type === "task").length,
+        project: entries.filter((e) => e.type === "project").length,
       },
       entriesByImportance: {
         low: entries.filter((e) => e.importance === "low").length,
@@ -1193,9 +1242,14 @@ export class AgentDBMemory implements IUnifiedMemory {
       const expectedDimensions = this.config.dimensions;
       let dimensionMismatchCount = 0;
       const vectorEntries: VectorEntry[] = [...pending];
+      let provenanceSkipped = 0;
       for (const e of entries) {
         if (e.embedding && e.embedding.length !== expectedDimensions) {
           dimensionMismatchCount++;
+          continue;
+        }
+        if (e.embedding && !canEnterIndex(this.config, e)) {
+          provenanceSkipped++;
           continue;
         }
         vectorEntries.push(toVectorEntry({
@@ -1210,6 +1264,11 @@ export class AgentDBMemory implements IUnifiedMemory {
       if (dimensionMismatchCount > 0) {
         getLoggerSafe().warn(
           `[AgentDB] Skipped ${dimensionMismatchCount} entries with mismatched embedding dimensions (expected ${expectedDimensions})`,
+        );
+      }
+      if (provenanceSkipped > 0) {
+        getLoggerSafe().warn(
+          `[AgentDB] Kept ${provenanceSkipped} entries out of the HNSW index — embedding provenance differs from ${indexProvenance(this.config)}`,
         );
       }
 
@@ -1347,6 +1406,11 @@ export class AgentDBMemory implements IUnifiedMemory {
               (parsed.importanceScore as NormalizedScore) ?? (0.5 as NormalizedScore),
             domain: parsed.domain as string | undefined,
             chatId: createBrand((parsed.chatId as string) ?? "default", "ChatId" as const),
+            // plan 0-B.9: rows written before provenance existed are classified by shape
+            embeddingProvenance: (parsed.embeddingProvenance as string | undefined)
+              ?? inferProvenance(this.config, embedding),
+            userId: parsed.userId as string | undefined,
+            projectId: parsed.projectId as string | undefined,
           };
 
           // Reconstruct as UnifiedMemoryEntry based on type
@@ -1356,8 +1420,11 @@ export class AgentDBMemory implements IUnifiedMemory {
           // If embedding was missing, try to regenerate it
           if (!embedding) {
             try {
-              const newEmbedding = await generateEmbedding(this.config, parsed.content as string);
-              (unifiedEntry as unknown as { embedding: Vector<number> }).embedding = newEmbedding;
+              const embedded = await embedWithProvenance(this.config, parsed.content as string);
+              (unifiedEntry as unknown as { embedding: Vector<number>; embeddingProvenance: string })
+                .embedding = embedded.embedding;
+              (unifiedEntry as unknown as { embeddingProvenance: string })
+                .embeddingProvenance = embedded.provenance;
               sqlitePersistEntry(this.getSqliteCtx(), unifiedEntry);
             } catch {
               // Continue without embedding — text search still works
@@ -1383,11 +1450,16 @@ export class AgentDBMemory implements IUnifiedMemory {
       if (this.hnswStore) {
         const vectors: VectorEntry[] = [];
         let dimensionMismatchCount = 0;
+        let provenanceSkipped = 0;
         const expectedDimensions = this.config.dimensions;
         for (const entry of this.entries.values()) {
           if (entry.embedding) {
             if (entry.embedding.length !== expectedDimensions) {
               dimensionMismatchCount++;
+              continue;
+            }
+            if (!canEnterIndex(this.config, entry)) {
+              provenanceSkipped++;
               continue;
             }
             vectors.push(toVectorEntry({
@@ -1404,6 +1476,11 @@ export class AgentDBMemory implements IUnifiedMemory {
           getLoggerSafe().warn(
             `[AgentDB] Skipped ${dimensionMismatchCount} entries with mismatched embedding dimensions (expected ${expectedDimensions}). ` +
             "These entries remain in SQLite and will be re-embedded when an embedding provider is available.",
+          );
+        }
+        if (provenanceSkipped > 0) {
+          getLoggerSafe().warn(
+            `[AgentDB] Kept ${provenanceSkipped} entries out of the HNSW index — embedding provenance differs from ${indexProvenance(this.config)} (text path still serves them)`,
           );
         }
         const store = this.hnswStore;

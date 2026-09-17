@@ -789,3 +789,133 @@ describe("AgentDBMemory", () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Embedding provenance + identity scope through the real store
+// Plan 0-B.9 (audit 05.cap + Codex #18) / 3.9 (3.11: 05.cap / 13F4 / D66)
+// ---------------------------------------------------------------------------
+
+describe("AgentDBMemory provenance + scope (plan 0-B.9 / 3.9)", () => {
+  const DIMS = 16;
+  let dir: string;
+  let store: AgentDBMemory;
+  let providerDown = false;
+  const provider = vi.fn(async (text: string) => {
+    if (providerDown) throw new Error("provider down");
+    const v = new Array(DIMS).fill(0).map((_, i) => Math.sin(i + text.length) * (i % 2 === 0 ? 1 : -1));
+    const n = Math.sqrt(v.reduce((s, x) => s + x * x, 0)) || 1;
+    return v.map((x) => x / n);
+  });
+
+  beforeEach(async () => {
+    providerDown = false;
+    provider.mockClear();
+    dir = mkdtempSync(join(tmpdir(), "agentdb-provenance-"));
+    store = new AgentDBMemory({
+      dbPath: dir,
+      dimensions: DIMS,
+      maxEntriesPerTier: {
+        [MemoryTier.Working]: 10,
+        [MemoryTier.Ephemeral]: 50,
+        [MemoryTier.Persistent]: 100,
+      },
+      hnswParams: { efConstruction: 50, M: 8, efSearch: 32 },
+      quantizationType: "none",
+      cacheSize: 100,
+      enableAutoTiering: false,
+      ephemeralTtlMs: 60_000,
+      embeddingProvider: provider,
+      embeddingProviderId: "test-embedder",
+    });
+    await store.initialize();
+  });
+
+  afterEach(async () => {
+    await store.shutdown();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("a histogram vector written during a provider outage never lands in the provider index", async () => {
+    const good = await store.storeNote("provider vector one", ["ok"]);
+    expect((good as any).embeddingProvenance).toBe("test-embedder");
+    expect((store as any).hnswStore.count()).toBe(1);
+
+    providerDown = true; // provider FAILS mid-way
+    const bad = await store.storeNote("histogram vector during outage", ["outage"]);
+    expect((bad as any).embeddingProvenance).toBe("histogram");
+    expect((store as any).hnswStore.count()).toBe(1); // still only the provider vector
+    expect((store as any).hnswStore.idToIndex.has(bad.id as string)).toBe(false);
+    expect((store as any).entries.has(bad.id as string)).toBe(true); // row + text path keep it
+  });
+
+  it("a provider-failure retrieval falls back to text and still honours the chatId filter", async () => {
+    await store.storeConversation("chat-A" as never, "staging deploy pipeline failed", ["a"]);
+    await store.storeConversation("chat-B" as never, "staging deploy pipeline failed", ["b"]);
+    providerDown = true;
+
+    const hits = await store.retrieveSemantic("staging deploy pipeline", { chatId: "chat-B" as never, limit: 10 });
+    expect(hits.length).toBe(1);
+    expect((hits[0]!.entry as any).chatId).toBe("chat-B");
+  });
+
+  it("retrieve with scope chatId A returns only A's memories; project knowledge is not personal recall", async () => {
+    await store.storeConversation("chat-A" as never, "staging deploy pipeline failed", ["a"]);
+    await store.storeConversation("chat-B" as never, "staging deploy pipeline failed", ["b"]);
+    const proj = await store.storeEntry({
+      type: "project",
+      content: "staging deploy pipeline for the project",
+      tags: [],
+      importance: "high",
+      archived: false,
+      metadata: {},
+      tier: MemoryTier.Persistent,
+      importanceScore: 0.9 as never,
+      projectId: "proj-1",
+    } as never);
+    expect(proj.kind).toBe("ok");
+
+    const scoped = await store.retrieve("staging deploy pipeline", {
+      mode: "text", query: "staging deploy pipeline", limit: 10, scope: { chatId: "chat-A" as never },
+    });
+    const chats = scoped.map((h) => (h.entry as any).chatId);
+    expect(chats).toEqual(["chat-A"]);
+    expect(scoped.map((h) => h.entry.type)).not.toContain("project");
+
+    const semantic = await store.retrieveSemantic("staging deploy pipeline", { limit: 10, scope: { chatId: "chat-A" as never } });
+    expect(semantic.map((h) => (h.entry as any).chatId)).toEqual(["chat-A"]);
+
+    const byProject = await store.retrieve("staging deploy pipeline", {
+      mode: "text", query: "staging deploy pipeline", limit: 10, scope: { projectId: "proj-1" },
+    });
+    expect(byProject.map((h) => h.entry.type)).toContain("project");
+  });
+
+  it("provenance and identity survive a reopen and gate the rebuilt index", async () => {
+    await store.storeNote("provider vector survives", ["ok"]);
+    providerDown = true;
+    await store.storeNote("histogram vector survives", ["outage"]);
+    await store.shutdown();
+
+    providerDown = false;
+    const reopened = new AgentDBMemory({
+      dbPath: dir,
+      dimensions: DIMS,
+      maxEntriesPerTier: { [MemoryTier.Working]: 10, [MemoryTier.Ephemeral]: 50, [MemoryTier.Persistent]: 100 },
+      hnswParams: { efConstruction: 50, M: 8, efSearch: 32 },
+      quantizationType: "none",
+      cacheSize: 100,
+      enableAutoTiering: false,
+      ephemeralTtlMs: 60_000,
+      embeddingProvider: provider,
+      embeddingProviderId: "test-embedder",
+    });
+    await reopened.initialize();
+    try {
+      const provs = Array.from((reopened as any).entries.values()).map((e: any) => e.embeddingProvenance).sort();
+      expect(provs).toEqual(["histogram", "test-embedder"]);
+      expect((reopened as any).hnswStore.count()).toBe(1);
+    } finally {
+      await reopened.shutdown();
+    }
+  });
+});

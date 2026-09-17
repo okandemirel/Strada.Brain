@@ -302,6 +302,10 @@ export function upsertEntryRow(stmt: Database.Statement, entry: UnifiedMemoryEnt
     importanceScore: entry.importanceScore,
     domain: entry.domain,
     chatId: entry.chatId,
+    // plan 0-B.9: which embedder produced `embedding`; plan 3.9: identity scope
+    embeddingProvenance: entry.embeddingProvenance,
+    userId: entry.userId,
+    projectId: entry.projectId,
   });
   // already sanitized by caller (agentdb-memory.storeEntry) — metadata values were
   // scrubbed via sanitizeSecretsDeep before being assigned onto the entry.
@@ -423,6 +427,9 @@ export async function loadEntriesWithoutHnsw(ctx: AgentDBSqliteContext): Promise
             (parsed.importanceScore as NormalizedScore) ?? (0.5 as NormalizedScore),
           domain: parsed.domain as string | undefined,
           chatId: createBrand((parsed.chatId as string) ?? "default", "ChatId" as const),
+          embeddingProvenance: parsed.embeddingProvenance as string | undefined,
+          userId: parsed.userId as string | undefined,
+          projectId: parsed.projectId as string | undefined,
         };
 
         const unifiedEntry = baseEntry as unknown as UnifiedMemoryEntry;

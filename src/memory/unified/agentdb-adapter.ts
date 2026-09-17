@@ -74,6 +74,7 @@ type AdapterInternalEntry = MutableMemoryEntry & {
   status?: "pending" | "in_progress" | "completed" | "failed" | "cancelled";
   parentTaskId?: MemoryId;
   dueDate?: TimestampMs;
+  projectId?: string;
 };
 
 type AgentDBAdapterInternals = {
@@ -171,6 +172,7 @@ export class AgentDBAdapter implements IMemoryManager {
           limit: options.limit,
           minScore: options.minScore,
           query: options.query,
+          scope: options.scope,
         });
       }
 
@@ -181,14 +183,18 @@ export class AgentDBAdapter implements IMemoryManager {
         results = await this.agentdb.retrieveHybrid(query, {
           limit: this.expandLimit(options.limit),
           semanticWeight: options.semanticWeight,
+          scope: options.scope,
         });
       } else if (options.mode === "type" || query.length === 0) {
         results = await this.agentdb.retrieve(query, options);
       } else {
         const embedding = "embedding" in options ? options.embedding : undefined;
+        // plan 3.9: the identity scope travels into the vector path (and its
+        // text fallback) — it used to be dropped here.
         results = await this.agentdb.retrieveSemantic(query, {
           limit: this.expandLimit(options.limit),
           embedding,
+          scope: options.scope,
         });
       }
 
@@ -690,6 +696,7 @@ export class AgentDBAdapter implements IMemoryManager {
         chatId,
         limit: this.expandLimit(options.limit),
         query: options.query,
+        scope: options.scope,
       });
 
       const filtered = this.postProcessResults(results, {
@@ -1000,6 +1007,13 @@ export class AgentDBAdapter implements IMemoryManager {
               ? createBrand(readNumber(metadata["dueDate"])!, "TimestampMs" as const)
               : undefined),
         };
+      case "project":
+        return {
+          ...rawEntry,
+          type: "project",
+          projectId: rawEntry.projectId ?? readString(metadata["projectId"]) ?? rawEntry.domain ?? "unknown",
+          source: rawEntry.source ?? readString(metadata["source"]),
+        };
     }
   }
 
@@ -1073,6 +1087,7 @@ export class AgentDBAdapter implements IMemoryManager {
       case "note":
       case "insight":
       case "error":
+      case "project":
         return MemoryTier.Persistent;
     }
   }
@@ -1185,6 +1200,12 @@ export class AgentDBAdapter implements IMemoryManager {
           status: entry.status,
           parentTaskId: entry.parentTaskId as string | undefined,
           dueDate: entry.dueDate as number | undefined,
+        };
+      case "project":
+        return {
+          ...base,
+          projectId: entry.projectId,
+          source: entry.source,
         };
     }
   }

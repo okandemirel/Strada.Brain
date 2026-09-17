@@ -43,6 +43,8 @@ const FLUSH_DEBOUNCE_MS = 5000;
 const MAX_FLUSH_WAIT_MS = 30000; // Maximum time to wait before forced flush
 
 import { LRUCache } from "../common/lru-cache.js";
+import { matchesRetrievalFilters, toRetrievalFilters } from "./retrieval-filters.js";
+import type { FilterableEntry } from "./retrieval-filters.js";
 
 /**
  * Optimized TF-IDF computation with caching
@@ -774,18 +776,16 @@ export class FileMemoryManager implements IMemoryManager {
       // Pre-allocate result array with estimated size
       const scored: RetrievalResult[] = [];
 
+      // One shared filter layer with the AgentDB paths (plan 0-B.9 / 3.9):
+      // chat/type/tags/importance/archived/time range + identity scope.
+      const filters = toRetrievalFilters(options);
+      const now = Date.now();
+
       // Use for loop for better performance than forEach
       for (let i = 0; i < this.entries.length; i++) {
         const entry = this.entries[i]!;
-        
-        // Apply filters based on RetrievalOptions mode
-        if (options.mode === "chat" && "chatId" in entry && entry.chatId !== options.chatId) continue;
-        if (options.mode === "type" && !options.types?.includes(entry.type)) continue;
-        if (options.tags && !options.tags.every(tag => entry.tags.includes(tag))) continue;
-        if (options.importance && !options.importance.includes(entry.importance)) continue;
-        if (options.includeArchived === false && entry.archived) continue;
-        if (options.after && entry.createdAt < options.after) continue;
-        if (options.before && entry.createdAt > options.before) continue;
+
+        if (!matchesRetrievalFilters(entry as FilterableEntry, filters, now)) continue;
 
         // Compute TF-IDF similarity (entry vector cached + IDF-version-gated)
         const entryVector = this.cachedEntryVector(entry.content);

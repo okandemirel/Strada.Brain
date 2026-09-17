@@ -27,6 +27,8 @@ import { getLogger } from "../utils/logger.js";
 
 /** Dependencies injected into MemoryRefresher (all optional for graceful degradation) */
 export interface MemoryRefresherDeps {
+  /** The chat this refresher serves: its recall is scoped to it (plan 3.9). */
+  readonly chatId?: string;
   readonly memoryManager?: IMemoryManager;
   readonly ragPipeline?: IRAGPipeline;
   readonly instinctRetriever?: InstinctRetriever;
@@ -256,6 +258,7 @@ export class MemoryRefresher {
             query,
             limit: this.config.memoryLimit,
             minScore: 0.15,
+            ...(this.deps.chatId ? { scope: { chatId: this.deps.chatId } } : {}),
           } as RetrievalOptions)
         : Promise.resolve(null),
 
