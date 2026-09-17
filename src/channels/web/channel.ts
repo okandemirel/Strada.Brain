@@ -1189,13 +1189,13 @@ export class WebChannel
             this.streamChatIds.delete(sid);
           }
         }
-        for (const [id, pending] of this.pendingConfirmations) {
-          if (pending.chatId === chatId) {
-            clearTimeout(pending.timer);
-            this.pendingConfirmations.delete(id);
-            pending.resolve("timeout");
-          }
-        }
+        // Pending confirmations are deliberately NOT cancelled here. A
+        // disconnect is usually transient and the chatId can be reclaimed
+        // within RECONNECT_TTL_MS; the prompt keeps its own 5-minute window
+        // (requestConfirmation) and only that expiry resolves it "timeout".
+        // Cancelling on disconnect made an answer given during a reconnect
+        // land on nothing while the client believed it was delivered
+        // (Codex review of 0-A.26).
       }
     };
 
@@ -1457,7 +1457,12 @@ export class WebChannel
         const confirmId = String(data.confirmId ?? "");
         const option = String(data.option ?? "");
         const pending = this.pendingConfirmations.get(confirmId);
-        if (!pending) break;
+        if (!pending) {
+          // Expired (5-minute window) or never ours: say so instead of
+          // ignoring it, so the client can stop showing the answer as sent.
+          this.sendToClient(chatId, { type: "confirmation_ack", confirmId, status: "unknown" });
+          break;
+        }
         // Verify the confirmation belongs to this client's session
         if (pending.chatId && pending.chatId !== chatId) {
           this.sendToClient(chatId, {
@@ -1470,6 +1475,9 @@ export class WebChannel
         clearTimeout(pending.timer);
         this.pendingConfirmations.delete(confirmId);
         pending.resolve(option);
+        // The awaiting orchestrator has the answer: only now may the client
+        // drop its dialog.
+        this.sendToClient(chatId, { type: "confirmation_ack", confirmId, status: "accepted" });
         break;
       }
 

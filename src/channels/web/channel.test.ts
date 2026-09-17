@@ -973,6 +973,63 @@ describe("WebChannel confirmation send-failure", () => {
   });
 });
 
+describe("WebChannel confirmations survive a disconnect (Codex review of 0-A.26)", () => {
+  const connect = (channel: WebChannel) => {
+    const socket = createMockSocket();
+    (channel as unknown as { handleWsConnection: (ws: unknown) => void }).handleWsConnection(socket);
+    const connected = socket.getSentMessages().find((m) => m.type === "connected")!;
+    return { socket, chatId: String(connected.chatId), reconnectToken: String(connected.reconnectToken) };
+  };
+  const send = (socket: ReturnType<typeof createMockSocket>, data: Record<string, unknown>) =>
+    socket.emit("message", Buffer.from(JSON.stringify(data)));
+
+  it("keeps the pending confirmation through a disconnect and resolves it with the answer given after reconnect", async () => {
+    const channel = new WebChannel();
+    const first = connect(channel);
+    const answer = channel.requestConfirmation({ chatId: first.chatId, question: "Deploy?", options: ["yes", "no"] });
+    await Promise.resolve();
+    const confirmId = String(first.socket.getSentMessages().find((m) => m.type === "confirmation")!.confirmId);
+
+    first.socket.emit("close");
+    // Not cancelled: the 5-minute window is the only thing that expires it.
+    const pending = (channel as unknown as { pendingConfirmations: Map<string, unknown> }).pendingConfirmations;
+    expect(pending.size).toBe(1);
+
+    const second = createMockSocket();
+    (channel as unknown as { handleWsConnection: (ws: unknown) => void }).handleWsConnection(second);
+    send(second, { type: "reconnect", chatId: first.chatId, reconnectToken: first.reconnectToken });
+    send(second, { type: "confirmation_response", confirmId, option: "yes" });
+
+    await expect(answer).resolves.toBe("yes");
+    expect(second.getSentMessages()).toContainEqual({ type: "confirmation_ack", confirmId, status: "accepted" });
+    expect(pending.size).toBe(0);
+    await channel.disconnect();
+  });
+
+  it("answers an unknown/expired confirmation id with an explicit 'unknown' ack instead of ignoring it", () => {
+    const channel = new WebChannel();
+    const { socket } = connect(channel);
+    send(socket, { type: "confirmation_response", confirmId: "gone-1", option: "yes" });
+    expect(socket.getSentMessages()).toContainEqual({ type: "confirmation_ack", confirmId: "gone-1", status: "unknown" });
+  });
+
+  it("still resolves 'timeout' when the 5-minute window expires with no answer (guard)", async () => {
+    vi.useFakeTimers();
+    try {
+      const channel = new WebChannel();
+      const { socket, chatId } = connect(channel);
+      const answer = channel.requestConfirmation({ chatId, question: "Deploy?", options: ["yes", "no"] });
+      await Promise.resolve();
+      socket.emit("close");
+      vi.advanceTimersByTime(5 * 60 * 1000 + 1);
+      await expect(answer).resolves.toBe("timeout");
+      expect((channel as unknown as { pendingConfirmations: Map<string, unknown> }).pendingConfirmations.size).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("queued is not delivered (Codex 2026-09-13 AG#13)", () => {
   it("says whether the markdown actually LEFT, not merely that it was queued", async () => {
     const channel = new WebChannel();

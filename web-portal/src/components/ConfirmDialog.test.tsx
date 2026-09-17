@@ -132,4 +132,23 @@ describe('ConfirmDialog', () => {
     )
     expect(screen.getByText('Here are more details about this action.')).toBeInTheDocument()
   })
+
+  it('shows the expiry error with a Dismiss action and no further answer (Codex review of 0-A.26)', async () => {
+    const user = userEvent.setup()
+    const onRespond = vi.fn()
+    const onDismiss = vi.fn()
+    render(<ConfirmDialog confirmation={makeConfirmation({ error: 'expired' })} onRespond={onRespond} onDismiss={onDismiss} />)
+    expect(screen.getByRole('alert')).toHaveTextContent('expired on the server')
+    expect(screen.getByRole('button', { name: 'Yes' })).toBeDisabled()
+    await user.click(screen.getByRole('button', { name: 'Dismiss' }))
+    expect(onDismiss).toHaveBeenCalledTimes(1)
+    expect(onRespond).not.toHaveBeenCalled()
+  })
+
+  it('disables the options and says it is sending while the answer awaits the ack', () => {
+    render(<ConfirmDialog confirmation={makeConfirmation({ pending: true })} onRespond={vi.fn()} />)
+    expect(screen.getByTestId('confirm-pending')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'No' })).toBeDisabled()
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
 })

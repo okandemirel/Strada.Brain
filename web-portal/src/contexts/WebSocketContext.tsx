@@ -21,11 +21,12 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
       profileId: ws.profileId,
       sendMessage: ws.sendMessage,
       sendConfirmation: ws.sendConfirmation,
+      dismissConfirmation: ws.dismissConfirmation,
       switchProvider: ws.switchProvider,
       toggleAutonomous: ws.toggleAutonomous,
       sendRawJSON: ws.sendRawJSON,
     }),
-    [ws.messages, ws.status, ws.confirmation, ws.isTyping, ws.sessionId, ws.profileId, ws.sendMessage, ws.sendConfirmation, ws.switchProvider, ws.toggleAutonomous, ws.sendRawJSON]
+    [ws.messages, ws.status, ws.confirmation, ws.isTyping, ws.sessionId, ws.profileId, ws.sendMessage, ws.sendConfirmation, ws.dismissConfirmation, ws.switchProvider, ws.toggleAutonomous, ws.sendRawJSON]
   )
   return <WebSocketContext.Provider value={value}>{children}</WebSocketContext.Provider>
 }

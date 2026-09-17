@@ -7,6 +7,8 @@ import { Button } from './ui/button'
 interface ConfirmDialogProps {
   confirmation: ConfirmationState
   onRespond: (confirmId: string, option: string) => void
+  /** Close an expired confirmation without sending another answer. */
+  onDismiss?: () => void
 }
 
 function isPlanQuestion(question: string): boolean {
@@ -33,11 +35,11 @@ function parsePlanSteps(question: string): { title: string; steps: string[] } {
   return { title, steps }
 }
 
-export default function ConfirmDialog({ confirmation, onRespond }: ConfirmDialogProps) {
-  return <ConfirmDialogBody key={confirmation.confirmId} confirmation={confirmation} onRespond={onRespond} />
+export default function ConfirmDialog({ confirmation, onRespond, onDismiss }: ConfirmDialogProps) {
+  return <ConfirmDialogBody key={confirmation.confirmId} confirmation={confirmation} onRespond={onRespond} onDismiss={onDismiss} />
 }
 
-function ConfirmDialogBody({ confirmation, onRespond }: ConfirmDialogProps) {
+function ConfirmDialogBody({ confirmation, onRespond, onDismiss }: ConfirmDialogProps) {
   const { t } = useTranslation()
   const firstBtnRef = useRef<HTMLButtonElement>(null)
   const [modifyText, setModifyText] = useState('')
@@ -89,7 +91,9 @@ function ConfirmDialogBody({ confirmation, onRespond }: ConfirmDialogProps) {
     <Dialog
       open={!!confirmation}
       onOpenChange={(open) => {
-        if (!open) onRespond(confirmation.confirmId, 'timeout')
+        if (open) return
+        if (confirmation.error) onDismiss?.()
+        else if (!confirmation.pending) onRespond(confirmation.confirmId, 'timeout')
       }}
     >
       <DialogContent
@@ -146,12 +150,23 @@ function ConfirmDialogBody({ confirmation, onRespond }: ConfirmDialogProps) {
           </div>
         )}
 
+        {confirmation.error === 'expired' && (
+          <div role="alert" className="mb-4 flex items-start justify-between gap-3 rounded-lg border border-error/40 bg-error/10 p-3 text-sm text-error">
+            <span>{t('confirm.expired')}</span>
+            <Button variant="ghost" size="sm" onClick={() => onDismiss?.()}>{t('confirm.dismiss')}</Button>
+          </div>
+        )}
+        {confirmation.pending && (
+          <p className="mb-3 text-xs text-text-tertiary" data-testid="confirm-pending">{t('confirm.sending')}</p>
+        )}
+
         <div className="flex flex-wrap gap-2">
           {confirmation.options.map((option, idx) => (
             <Button
               key={option}
               ref={idx === 0 ? firstBtnRef : undefined}
               variant={isRecommended(option) ? 'default' : 'outline'}
+              disabled={confirmation.pending || confirmation.error !== undefined}
               onClick={() => handleOptionClick(option)}
               className={`relative ${isRecommended(option) ? 'border-accent shadow-[0_0_0_2px_var(--color-accent-glow)]' : 'hover:bg-white/5'}`}
             >

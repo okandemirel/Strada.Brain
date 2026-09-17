@@ -199,4 +199,8 @@ export interface ConfirmationState {
   question: string
   options: string[]
   details?: string
+  /** The answer has left the socket and awaits the server's confirmation_ack. */
+  pending?: boolean
+  /** The server no longer knows this confirmation (its window expired). */
+  error?: 'expired'
 }

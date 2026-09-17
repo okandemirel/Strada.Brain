@@ -135,7 +135,7 @@ function SessionPicker() {
 
 export default function ChatView() {
   const { t } = useTranslation()
-  const { messages, status, confirmation, isTyping, sendMessage, sendConfirmation, sendRawJSON } = useWS()
+  const { messages, status, confirmation, isTyping, sendMessage, sendConfirmation, dismissConfirmation, sendRawJSON } = useWS()
   const updateMessage = useSessionStore((s) => s.updateMessage)
   const { voice } = useVoiceSettings()
   const messagesContainerRef = useRef<HTMLDivElement>(null)
@@ -352,7 +352,7 @@ export default function ChatView() {
       </div>
 
       {confirmation && (
-        <ConfirmDialog confirmation={confirmation} onRespond={sendConfirmation} />
+        <ConfirmDialog confirmation={confirmation} onRespond={sendConfirmation} onDismiss={dismissConfirmation} />
       )}
 
       <ChatInput onSend={sendMessage} disabled={isDisconnected || viewingHistorical} />

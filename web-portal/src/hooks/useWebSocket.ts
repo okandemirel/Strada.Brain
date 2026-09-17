@@ -58,6 +58,7 @@ export interface UseWebSocketReturn {
   profileId: string | null
   sendMessage: (text: string, attachments?: Attachment[]) => boolean
   sendConfirmation: (confirmId: string, option: string) => void
+  dismissConfirmation: () => void
   switchProvider: (provider: string, model?: string) => boolean
   toggleAutonomous: (enabled: boolean, hours?: number) => boolean
   sendRawJSON: (payload: Record<string, unknown>) => boolean
@@ -385,6 +386,22 @@ export function useWebSocket(): UseWebSocketReturn {
           break
         }
 
+        case 'confirmation_ack': {
+          // Codex review of 0-A.26: the dialog is cleared only when the
+          // server says the orchestrator got the answer; "unknown" means the
+          // confirmation expired server-side and the answer did NOT apply.
+          const ackId = typeof data.confirmId === 'string' ? data.confirmId : ''
+          const store = useSessionStore.getState()
+          const current = store.confirmation
+          if (!ackId || !current || current.confirmId !== ackId) break
+          if (data.status === 'accepted') {
+            store.setConfirmation(null)
+          } else {
+            store.setConfirmation({ ...current, pending: false, error: 'expired' })
+          }
+          break
+        }
+
         case 'system': {
           const sysText = typeof data.text === 'string' ? data.text.slice(0, 500) : ''
           if (!sysText) break
@@ -643,18 +660,28 @@ export function useWebSocket(): UseWebSocketReturn {
     // again. The reply now travels the same reconnect queue as chat, and the
     // dialog stays up until the reply has actually left (or the session it
     // belonged to is gone, in which case the question is dead anyway).
-    const clearDialog = () => {
+    const onSettled = (outcome: 'sent' | 'dropped') => {
       const store = useSessionStore.getState()
-      if (store.confirmation?.confirmId === confirmId) {
+      const current = store.confirmation
+      if (!current || current.confirmId !== confirmId) return
+      if (outcome === 'dropped') {
+        // The session this question belonged to is gone: nobody can answer it.
         store.setConfirmation(null)
+        return
       }
+      // Sent is not applied: wait for the server's confirmation_ack.
+      store.setConfirmation({ ...current, pending: true, error: undefined })
     }
     enqueueOrReconnect({
       payload: { type: 'confirmation_response', confirmId, option },
       expectedChatId: chatIdRef.current,
-      onSettled: clearDialog,
+      onSettled,
     })
   }, [enqueueOrReconnect])
+
+  const dismissConfirmation = useCallback(() => {
+    useSessionStore.getState().setConfirmation(null)
+  }, [])
 
   const switchProvider = useCallback((provider: string, model?: string): boolean => {
     return sendMessage(buildModelSwitchCommand(provider, model))
@@ -681,6 +708,7 @@ export function useWebSocket(): UseWebSocketReturn {
     profileId,
     sendMessage,
     sendConfirmation,
+    dismissConfirmation,
     switchProvider,
     toggleAutonomous,
     sendRawJSON,

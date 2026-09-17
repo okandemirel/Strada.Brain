@@ -182,7 +182,11 @@ describe('buildModelSwitchCommand', () => {
     expect(messages.find((m) => m.id === 'm-txt')?.isMarkdown).toBe(false)
   })
 
-  it('keeps the confirmation dialog and queues the reply while the socket is closed, sending it on reconnect (audit 11.5 / D35)', () => {
+  // Codex review of 0-A.26: "sent" is not "applied". The dialog stays until
+  // the server's confirmation_ack; an "unknown" ack (expired server-side)
+  // is shown as an error, never swallowed. (The earlier guard "clears the
+  // dialog when the socket is open" is inverted here on purpose.)
+  it('keeps the dialog through a disconnect, flushes the reply on reconnect, and clears only on the ack', () => {
     vi.useFakeTimers()
     const { result } = renderHook(() => useWebSocket())
     const socket = MockWebSocket.instances[0]
@@ -191,28 +195,26 @@ describe('buildModelSwitchCommand', () => {
       socket!.emit('message', { type: 'connected', chatId: 'chat-cf', reconnectToken: 'r-cf', profileId: 'p-cf' })
       socket!.emit('message', { type: 'confirmation', confirmId: 'cf-1', question: 'Deploy?', options: ['yes', 'no'] })
     })
-    expect(useSessionStore.getState().confirmation?.confirmId).toBe('cf-1')
-
     act(() => { socket!.close() })
     act(() => { result.current.sendConfirmation('cf-1', 'yes') })
-
-    // The answer is not lost: the dialog is still up and nothing was sent on the dead socket.
     expect(useSessionStore.getState().confirmation?.confirmId).toBe('cf-1')
     expect(socket!.sent.map((s) => JSON.parse(s).type)).not.toContain('confirmation_response')
 
-    // Reconnect: the queued reply is flushed once the session handshake completes.
     act(() => { vi.advanceTimersByTime(30000) })
     const next = MockWebSocket.instances[1]
-    expect(next).toBeDefined()
     act(() => {
       next!.emit('open')
       next!.emit('message', { type: 'connected', chatId: 'chat-cf', reconnectToken: 'r-cf2', profileId: 'p-cf' })
     })
     expect(next!.sent.map((s) => JSON.parse(s))).toContainEqual({ type: 'confirmation_response', confirmId: 'cf-1', option: 'yes' })
+    // Sent, but still up and marked pending: the orchestrator has not confirmed.
+    expect(useSessionStore.getState().confirmation).toEqual(expect.objectContaining({ confirmId: 'cf-1', pending: true }))
+
+    act(() => { next!.emit('message', { type: 'confirmation_ack', confirmId: 'cf-1', status: 'accepted' }) })
     expect(useSessionStore.getState().confirmation).toBeNull()
   })
 
-  it('sends a confirmation reply immediately and clears the dialog when the socket is open (guard)', () => {
+  it('shows an expiry error when the server answers that the confirmation id is unknown', () => {
     const { result } = renderHook(() => useWebSocket())
     const socket = MockWebSocket.instances[0]
     act(() => {
@@ -222,7 +224,25 @@ describe('buildModelSwitchCommand', () => {
     })
     act(() => { result.current.sendConfirmation('cf-2', 'no') })
     expect(JSON.parse(socket!.sent.at(-1)!)).toEqual({ type: 'confirmation_response', confirmId: 'cf-2', option: 'no' })
+    expect(useSessionStore.getState().confirmation?.pending).toBe(true)
+
+    act(() => { socket!.emit('message', { type: 'confirmation_ack', confirmId: 'cf-2', status: 'unknown' }) })
+    expect(useSessionStore.getState().confirmation).toEqual(expect.objectContaining({ confirmId: 'cf-2', pending: false, error: 'expired' }))
+    // The user can close it without sending another answer.
+    act(() => { result.current.dismissConfirmation() })
     expect(useSessionStore.getState().confirmation).toBeNull()
+  })
+
+  it('ignores an ack for a confirmation that is not the one on screen (guard)', () => {
+    renderHook(() => useWebSocket())
+    const socket = MockWebSocket.instances[0]
+    act(() => {
+      socket!.emit('open')
+      socket!.emit('message', { type: 'connected', chatId: 'chat-cf3', reconnectToken: 'r', profileId: 'p' })
+      socket!.emit('message', { type: 'confirmation', confirmId: 'cf-3', question: 'Deploy?', options: ['yes'] })
+      socket!.emit('message', { type: 'confirmation_ack', confirmId: 'someone-else', status: 'accepted' })
+    })
+    expect(useSessionStore.getState().confirmation?.confirmId).toBe('cf-3')
   })
 
   it('marks queued outbound messages as failed when no receipt arrives in time', () => {
