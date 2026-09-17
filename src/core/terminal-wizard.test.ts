@@ -254,6 +254,53 @@ describe("resolveNvmDir", () => {
   });
 });
 
+/**
+ * Codex round 13 #36. `initializeRuntimeEnvironment` chdirs to the CONFIG root,
+ * so on a packaged install — and, since STRADA_SOURCE_CHECKOUT became
+ * three-state, inside a checkout whose operator chose the app-home layout —
+ * `process.cwd()` is `~/.strada`. The wizard then looked for `web-portal/`
+ * there and would have run `npm install --prefix web-portal` in the user's
+ * state directory. Code comes from the INSTALL root; only runtime state lives
+ * in the config root.
+ */
+describe("the wizard's portal assets come from the install root, not the cwd", () => {
+  it("uses STRADA_INSTALL_ROOT rather than the process working directory", () => {
+    const originalInstallRoot = process.env["STRADA_INSTALL_ROOT"];
+    const originalCwd = process.cwd();
+    const elsewhere = mkdtempSync(path.join(os.tmpdir(), "strada-app-home-"));
+    try {
+      process.env["STRADA_INSTALL_ROOT"] = "/Users/test/Strada.Brain";
+      process.chdir(elsewhere);
+      // The default argument is the code root, which is not the cwd.
+      const script = buildWebSetupUpgradeShellScript("/Users/test/.nvm");
+      expect(script).toContain("cd '/Users/test/Strada.Brain'");
+      expect(script).not.toContain(`cd '${elsewhere}'`);
+    } finally {
+      process.chdir(originalCwd);
+      if (originalInstallRoot === undefined) delete process.env["STRADA_INSTALL_ROOT"];
+      else process.env["STRADA_INSTALL_ROOT"] = originalInstallRoot;
+      rmSync(elsewhere, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to the module's own root when nothing is configured (guard)", () => {
+    const originalInstallRoot = process.env["STRADA_INSTALL_ROOT"];
+    const originalCwd = process.cwd();
+    const elsewhere = mkdtempSync(path.join(os.tmpdir(), "strada-app-home2-"));
+    try {
+      delete process.env["STRADA_INSTALL_ROOT"];
+      process.chdir(elsewhere);
+      const script = buildWebSetupUpgradeShellScript("/Users/test/.nvm");
+      // This repository, because that is where this module lives.
+      expect(script).toContain(`cd '${originalCwd}'`);
+    } finally {
+      process.chdir(originalCwd);
+      if (originalInstallRoot !== undefined) process.env["STRADA_INSTALL_ROOT"] = originalInstallRoot;
+      rmSync(elsewhere, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("buildWebSetupUpgradeShellScript", () => {
   it("relaunches Strada web setup through the launcher after upgrading node", () => {
     const originalInstallRoot = process.env["STRADA_INSTALL_ROOT"];

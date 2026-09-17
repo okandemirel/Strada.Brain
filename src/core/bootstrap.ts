@@ -1031,12 +1031,19 @@ async function bootstrapImpl(
       // by vault.self.enabled, not by vault.enabled (which gates project auto-discovery).
       try {
         const { initSelfVaultFromBootstrap } = await import("./bootstrap-stages/stage-knowledge.js");
+        // installRoot, not cwd (round 13 #36): runtime-paths chdirs this
+        // process to the config root, so on a packaged install — and now in a
+        // checkout whose operator chose the app-home layout — cwd is
+        // ~/.strada, and SelfVault indexed the state directory instead of this
+        // system's own source. The framework vault below already learned this;
+        // the self vault was still reading the wrong tree.
+        const { resolveRuntimePaths: resolveSelfVaultRoots } = await import("../common/runtime-paths.js");
         await initSelfVaultFromBootstrap({
           config: { vault: config.vault },
           vaultRegistry,
           embedding: vaultEmbedding,
           vectorStore: createVaultVectorStore(),
-          repoRoot: process.cwd(),
+          repoRoot: resolveSelfVaultRoots({ moduleUrl: import.meta.url }).installRoot,
         });
       } catch (err) {
         logger.warn("[vault] SelfVault initialization failed", { err });

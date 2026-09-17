@@ -819,9 +819,26 @@ export function resolveNodeUpgradeStrategy(
   return { kind: "download" };
 }
 
+/**
+ * WHERE THE CODE IS, which is not where the runtime state is.
+ *
+ * `initializeRuntimeEnvironment` chdirs to the CONFIG root, so on a packaged
+ * install — and, since STRADA_SOURCE_CHECKOUT became three-state, inside a
+ * checkout whose operator chose the app-home layout — `process.cwd()` is
+ * `~/.strada`. These paths then looked for `web-portal/` there and ran
+ * `npm install --prefix web-portal` in the user's state directory (round 13
+ * #36). The portal's source belongs to the INSTALL root.
+ */
+function codeRoot(): string {
+  const configured = process.env["STRADA_INSTALL_ROOT"]?.trim();
+  if (configured) return configured;
+  // MODULE_DIR is <root>/src/core or <root>/dist/core; the root is two up.
+  return path.resolve(MODULE_DIR, "..", "..");
+}
+
 export function buildWebSetupUpgradeShellScript(
   nvmDir: string,
-  cwd: string = process.env["STRADA_INSTALL_ROOT"] ?? process.cwd(),
+  cwd: string = codeRoot(),
   relaunchCommand: string[] = process.env["STRADA_LAUNCHER_PATH"]
     ? [process.env["STRADA_LAUNCHER_PATH"], "setup", "--web"]
     : ["node", ...process.execArgv, process.argv[1] ?? "", "setup", "--web"],
@@ -873,7 +890,7 @@ function continueWebSetupAfterNodeUpgrade(nvmDir: string): boolean {
   const shellScript = buildWebSetupUpgradeShellScript(nvmDir);
   const result = spawnSync("bash", ["-lc", shellScript], {
     stdio: "inherit",
-    cwd: process.cwd(),
+    cwd: codeRoot(),
     env: { ...process.env, NVM_DIR: nvmDir },
   });
 
@@ -987,11 +1004,11 @@ function ensureWebSetupAssetsReady(): { ready: boolean; needsNodeUpgrade: boolea
     return { ready: false, needsNodeUpgrade: true };
   }
 
-  if (!fs.existsSync(path.join(process.cwd(), "web-portal", "node_modules"))) {
+  if (!fs.existsSync(path.join(codeRoot(), "web-portal", "node_modules"))) {
     console.log("\n  Installing web setup dependencies...");
     const installResult = spawnSync(getNpmCommand(), ["install", "--prefix", "web-portal"], {
       stdio: "inherit",
-      cwd: process.cwd(),
+      cwd: codeRoot(),
       shell: process.platform === "win32",
     });
     if (installResult.status !== 0) {
@@ -1002,7 +1019,7 @@ function ensureWebSetupAssetsReady(): { ready: boolean; needsNodeUpgrade: boolea
   console.log("\n  Preparing web setup assets...");
   const buildResult = spawnSync(getNpmCommand(), ["--prefix", "web-portal", "run", "build"], {
     stdio: "inherit",
-    cwd: process.cwd(),
+    cwd: codeRoot(),
     shell: process.platform === "win32",
   });
   return {

@@ -604,3 +604,31 @@ describe("generateSessionId", () => {
     expect(ids.size).toBe(100);
   });
 });
+
+/**
+ * Codex round 13 #36, the other half: the SELF vault indexed the config root.
+ *
+ * `initializeRuntimeEnvironment` chdirs this process to the config root, so on a
+ * packaged install — and, since STRADA_SOURCE_CHECKOUT became three-state, in a
+ * checkout whose operator chose the app-home layout — `process.cwd()` is
+ * `~/.strada`, and the vault named after this system indexed the state directory
+ * instead of its source. The framework-vault call beside it already carried that
+ * lesson in a comment; the self vault still passed the cwd.
+ *
+ * Asserted over the boot path's TEXT, not executed: the call sits inside the
+ * daemon's full bootstrap, which a unit test cannot run, and the same precedent
+ * is used for the release-acceptance and project-history wiring.
+ */
+describe("the self vault indexes the INSTALL root (round 13 #36)", () => {
+  it("passes an installRoot-derived repoRoot, never process.cwd()", async () => {
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync(new URL("./bootstrap.ts", import.meta.url), "utf8");
+    const call = source.slice(
+      source.indexOf("initSelfVaultFromBootstrap({"),
+      source.indexOf("initSelfVaultFromBootstrap({") + 600,
+    );
+    expect(call).toContain("repoRoot:");
+    expect(call).toContain("installRoot");
+    expect(call).not.toContain("repoRoot: process.cwd()");
+  });
+});
