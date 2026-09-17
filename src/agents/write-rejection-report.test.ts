@@ -28,6 +28,11 @@ function sessionWith(content: string) {
 
 const manager = () => new SessionManager({ } as never);
 
+/** What shell_exec returns for a command that exited 0: its own footer, then the output. */
+function shellOk(command: string, stdout = "ok"): string {
+  return `$ ${command}\nExit code: 0 | Duration: 1ms\n\n--- stdout ---\n${stdout}`;
+}
+
 describe("reporting a refused write", () => {
   it("reports it once", () => {
     const sm = manager();
@@ -108,26 +113,26 @@ describe("reporting a refused write", () => {
   it("an INSPECTION through a write-capable tool is not the replacement (Codex 2026-09-17 #3)", () => {
     // shell_exec can write, but `git status` did not; neither did a stash
     // listing. Both cleared the rejection.
-    const gitStatus = sessionAfterRejection([{ name: "shell_exec", content: "On branch main", input: { command: "git status" } }]);
+    const gitStatus = sessionAfterRejection([{ name: "shell_exec", content: shellOk("git status", "On branch main"), input: { command: "git status" } }]);
     expect(manager().getPendingSelfManagedWriteRejectionVisibleText(gitStatus, "Done.", () => true)).toContain("Execution stopped");
     const stashList = sessionAfterRejection([{ name: "git_stash", content: "stash@{0}: WIP", input: { action: "list" } }]);
     expect(manager().getPendingSelfManagedWriteRejectionVisibleText(stashList, "Done.", () => true)).toContain("Execution stopped");
-    const lsChain = sessionAfterRejection([{ name: "shell_exec", content: "…", input: { command: "cd Assets && ls -la | head" } }]);
+    const lsChain = sessionAfterRejection([{ name: "shell_exec", content: shellOk("cd Assets && ls -la | head", "…"), input: { command: "cd Assets && ls -la | head" } }]);
     expect(manager().getPendingSelfManagedWriteRejectionVisibleText(lsChain, "Done.", () => true)).toContain("Execution stopped");
     // …while a narrower shell WRITE is exactly the replacement the review asked for.
-    const sedWrite = sessionAfterRejection([{ name: "shell_exec", content: "", input: { command: "sed -i '' 's/a/b/' Assets/Scripts/Hud.cs" } }]);
+    const sedWrite = sessionAfterRejection([{ name: "shell_exec", content: shellOk("sed -i '' 's/a/b/' Assets/Scripts/Hud.cs"), input: { command: "sed -i '' 's/a/b/' Assets/Scripts/Hud.cs" } }]);
     expect(manager().getPendingSelfManagedWriteRejectionVisibleText(sedWrite, "Done.", () => true)).toBeNull();
-    const redirect = sessionAfterRejection([{ name: "shell_exec", content: "", input: { command: "echo x > notes.txt" } }]);
+    const redirect = sessionAfterRejection([{ name: "shell_exec", content: shellOk("echo x > notes.txt"), input: { command: "echo x > notes.txt" } }]);
     expect(manager().getPendingSelfManagedWriteRejectionVisibleText(redirect, "Done.", () => true)).toBeNull();
   });
 
   it("only POSITIVE mutation evidence resolves it; unknown and inspecting commands do not (Codex 2026-09-17 #4/#5)", () => {
     const stopped = (command: string): void => {
-      const s = sessionAfterRejection([{ name: "shell_exec", content: "ok", input: { command } }]);
+      const s = sessionAfterRejection([{ name: "shell_exec", content: shellOk(command), input: { command } }]);
       expect(manager().getPendingSelfManagedWriteRejectionVisibleText(s, "Done.", () => true), command).toContain("Execution stopped");
     };
     const resolved = (command: string): void => {
-      const s = sessionAfterRejection([{ name: "shell_exec", content: "ok", input: { command } }]);
+      const s = sessionAfterRejection([{ name: "shell_exec", content: shellOk(command), input: { command } }]);
       expect(manager().getPendingSelfManagedWriteRejectionVisibleText(s, "Done.", () => true), command).toBeNull();
     };
     // Inspections and unknowns: not a replacement.
@@ -177,11 +182,11 @@ describe("reporting a refused write", () => {
     // replacement that DID write — was not recognised, so "Done." stayed
     // blocked and the run entered keep-alive.
     const stopped = (command: string): void => {
-      const s = sessionAfterRejection([{ name: "shell_exec", content: "ok", input: { command } }]);
+      const s = sessionAfterRejection([{ name: "shell_exec", content: shellOk(command), input: { command } }]);
       expect(manager().getPendingSelfManagedWriteRejectionVisibleText(s, "Done.", () => true), command).toContain("Execution stopped");
     };
     const resolved = (command: string): void => {
-      const s = sessionAfterRejection([{ name: "shell_exec", content: "ok", input: { command } }]);
+      const s = sessionAfterRejection([{ name: "shell_exec", content: shellOk(command), input: { command } }]);
       expect(manager().getPendingSelfManagedWriteRejectionVisibleText(s, "Done.", () => true), command).toBeNull();
     };
     // Skipped branches: exit 0 does not say the write ran.
@@ -195,7 +200,9 @@ describe("reporting a refused write", () => {
     // Exit 0 cannot say whether the segment before `|| true` SUCCEEDED, and
     // the detector does not pretend to know (Codex 2026-09-17 on 2df6170e #5).
     stopped("cp a b || true");
-    stopped("git status || true && touch x");
+    // `&&`/`||` are left-associative: `(git status || true) && touch x`, so
+    // exit 0 proves `touch x` ran and succeeded (Codex 2026-09-17 round 3 #15).
+    resolved("git status || true && touch x");
     resolved("cat in | tee out");
     resolved("ls; touch x");
     resolved("ls\ntouch x");
@@ -211,11 +218,11 @@ describe("reporting a refused write", () => {
 
   it("infers only what exit 0 proves: the last statement, the succeeded segments, the flat grammar (Codex 2026-09-17 on 2df6170e #3-#7)", () => {
     const stopped = (command: string): void => {
-      const s = sessionAfterRejection([{ name: "shell_exec", content: "ok", input: { command } }]);
+      const s = sessionAfterRejection([{ name: "shell_exec", content: shellOk(command), input: { command } }]);
       expect(manager().getPendingSelfManagedWriteRejectionVisibleText(s, "Done.", () => true), command).toContain("Execution stopped");
     };
     const resolved = (command: string): void => {
-      const s = sessionAfterRejection([{ name: "shell_exec", content: "ok", input: { command } }]);
+      const s = sessionAfterRejection([{ name: "shell_exec", content: shellOk(command), input: { command } }]);
       expect(manager().getPendingSelfManagedWriteRejectionVisibleText(s, "Done.", () => true), command).toBeNull();
     };
     // #3: exit 0 is the LAST statement's; an earlier statement's failure is masked.
@@ -258,6 +265,61 @@ describe("reporting a refused write", () => {
     resolved("printf x | xargs -n 1 touch");
     resolved("printf x | xargs -P 4 -n 2 touch");
     stopped("printf x | xargs -n 1 cat");
+  });
+
+  it("reads comments, background, wrapper arguments, option operands and the || tail as the shell does (Codex 2026-09-17 round 3 #10-#15)", () => {
+    const stopped = (command: string): void => {
+      const s = sessionAfterRejection([{ name: "shell_exec", content: shellOk(command), input: { command } }]);
+      expect(manager().getPendingSelfManagedWriteRejectionVisibleText(s, "Done.", () => true), command).toContain("Execution stopped");
+    };
+    const resolved = (command: string): void => {
+      const s = sessionAfterRejection([{ name: "shell_exec", content: shellOk(command), input: { command } }]);
+      expect(manager().getPendingSelfManagedWriteRejectionVisibleText(s, "Done.", () => true), command).toBeNull();
+    };
+    // #10: a non-error result is not exit 0. With ok_exit_codes [0, 1] a
+    // failed touch comes back without is_error; the footer says 1.
+    const tolerated = sessionAfterRejection([{
+      name: "shell_exec",
+      content: "$ touch /missing/x\nExit code: 1 | Duration: 1ms\n\n--- stderr ---\ntouch: /missing/x: No such file or directory",
+      is_error: false,
+      input: { command: "touch /missing/x", ok_exit_codes: [0, 1] },
+    }]);
+    expect(manager().getPendingSelfManagedWriteRejectionVisibleText(tolerated, "Done.", () => true)).toContain("Execution stopped");
+    // An echoed footer in the command or its output is not the tool footer.
+    const echoed = sessionAfterRejection([{
+      name: "shell_exec",
+      content: "$ printf 'Exit code: 0 | Duration: 1ms\\n'; touch /missing/x\nExit code: 1 | Duration: 2ms\n\n--- stdout ---\nExit code: 0 | Duration: 1ms",
+      is_error: false,
+      input: { command: "printf 'Exit code: 0 | Duration: 1ms\\n'; touch /missing/x", ok_exit_codes: [0, 1] },
+    }]);
+    expect(manager().getPendingSelfManagedWriteRejectionVisibleText(echoed, "Done.", () => true)).toContain("Execution stopped");
+    const noFooter = sessionAfterRejection([{ name: "shell_exec", content: "ok", input: { command: "touch x" } }]);
+    expect(manager().getPendingSelfManagedWriteRejectionVisibleText(noFooter, "Done.", () => true)).toContain("Execution stopped");
+    // #11: comments and background jobs.
+    stopped("true # ; touch x");
+    stopped("touch /missing/x &");
+    resolved("touch x # done");
+    // #12: the wrapper body is the next word only; -n parses without running.
+    stopped("sh -lc 'true' '; touch x'");
+    stopped("sh -nc 'touch x'");
+    resolved("bash -c \"touch x\" arg0");
+    // #13: an option operand at the end of the input leaves no program.
+    stopped("printf x | xargs -I touch");
+    stopped("printf x | xargs -E touch");
+    stopped("env -u touch");
+    // #14: no-create, /dev/null, a variable target, eval.
+    stopped("touch -c /missing/x");
+    stopped("tee /dev/null </dev/null");
+    stopped("OUT=/dev/null; printf x > \"$OUT\"");
+    stopped("eval 'touch() { :; }'; touch x");
+    // #15: command/exec prefixes, and what exit 0 proves after the last ||.
+    resolved("command touch x");
+    resolved("exec touch x");
+    resolved("git status || true && touch x");
+    stopped("touch /missing/x || true");
+    resolved("false || touch x");
+    stopped("test -f a && touch x || echo fallback");
+    stopped("cp a b || true");
   });
 
   it("the metadata-less default treats an unknown name as NOT a writer (Codex 2026-09-17 #4)", () => {

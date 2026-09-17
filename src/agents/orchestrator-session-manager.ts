@@ -165,24 +165,176 @@ const INTERPRETER_WRITE_RE =
  * on 2df6170e #4) — so such a command proves no write. `{}` alone is
  * find's and xargs' placeholder, not a group.
  */
-const UNSUPPORTED_SHELL_RE = /[()`]|\{(?!\})|(?<!\{)\}|\$\(|<<|\\\n|(?:^|[;\n|&]\s*)(?:if|for|while|until|case|function|select)\s/u;
-/** `sh -c "…"`, `bash -lc "…"`: the wrapper runs its body, and the body is what is judged. */
-const SHELL_WRAPPER_RE = /^(?:\S*\/)?(?:sh|bash|zsh|dash|ksh)\s+(?:-[a-zA-Z]+\s+)*-[a-zA-Z]*c[a-zA-Z]*\s+(["'])([\s\S]*)\1\s*$/u;
+const UNSUPPORTED_SHELL_RE = /[()`]|\{(?!\})|(?<!\{)\}|\$\(|<<|\\\n|(?:^|[;\n|&]\s*)(?:if|for|while|until|case|function|select)\s|(?:^|[\s;|&])eval(?=[\s;|&]|$)/u;
+/**
+ * A lone `&` backgrounds the command before it: `touch /missing/x &` exits
+ * 0 at once and the write fails later, unobserved (Codex 2026-09-17 round
+ * 3 #11). `&&` is a list operator, `2>&1` and `&>` are redirections.
+ */
+const BACKGROUND_RE = /(?<![&>])&(?![&>])/u;
+const SHELL_PROGRAM_RE = /^(?:\S*\/)?(?:sh|bash|zsh|dash|ksh)$/u;
 const INTERPRETER_PROGRAM_RE = /^(?:\S*\/)?(?:python(?:\d+(?:\.\d+)?)?|node|perl|ruby)$/iu;
+
+/**
+ * Drop `# …` comments: a `#` that starts a word outside quotes comments
+ * to the end of the line. `true # ; touch x` runs `true` alone, and the
+ * text-level statement split read `touch x` as its last statement (Codex
+ * 2026-09-17 round 3 #11).
+ */
+function stripShellComments(command: string): string {
+  let out = "";
+  let quote: '"' | "'" | null = null;
+  for (let i = 0; i < command.length; i += 1) {
+    const ch = command[i] ?? "";
+    if (quote === null) {
+      if (ch === "\\") {
+        out += ch + (command[i + 1] ?? "");
+        i += 1;
+        continue;
+      }
+      if (ch === '"' || ch === "'") {
+        quote = ch;
+        out += ch;
+        continue;
+      }
+      if (ch === "#" && (i === 0 || /[\s;|&(]/u.test(command[i - 1] ?? ""))) {
+        const newline = command.indexOf("\n", i);
+        if (newline === -1) break;
+        i = newline - 1; // the newline itself still separates statements
+        continue;
+      }
+      out += ch;
+      continue;
+    }
+    if (quote === '"' && ch === "\\") {
+      out += ch + (command[i + 1] ?? "");
+      i += 1;
+      continue;
+    }
+    if (ch === quote) quote = null;
+    out += ch;
+  }
+  return out;
+}
+
+interface ShellWord {
+  readonly text: string;
+  readonly quoted: boolean;
+  /** An unquoted `;`, `|`, `&`, newline or bracket: not a word, a boundary. */
+  readonly structural: boolean;
+}
+
+/** Split into shell words, unquoting as the shell would; quotes concatenate (`"a"b'c'` is one word). */
+function shellWords(command: string): ShellWord[] {
+  const words: ShellWord[] = [];
+  let text = "";
+  let quoted = false;
+  let started = false;
+  const flush = (): void => {
+    if (started) words.push({ text, quoted, structural: false });
+    text = "";
+    quoted = false;
+    started = false;
+  };
+  for (let i = 0; i < command.length; i += 1) {
+    const ch = command[i] ?? "";
+    if (ch === "'") {
+      const end = command.indexOf("'", i + 1);
+      const close = end === -1 ? command.length : end;
+      text += command.slice(i + 1, close);
+      quoted = true;
+      started = true;
+      i = close;
+      continue;
+    }
+    if (ch === '"') {
+      let j = i + 1;
+      for (; j < command.length && command[j] !== '"'; j += 1) {
+        const c = command[j] ?? "";
+        if (c === "\\" && /[$`"\\\n]/u.test(command[j + 1] ?? "")) {
+          text += command[j + 1] ?? "";
+          j += 1;
+        } else {
+          text += c;
+        }
+      }
+      quoted = true;
+      started = true;
+      i = j;
+      continue;
+    }
+    if (ch === "\\") {
+      text += command[i + 1] ?? "";
+      started = true;
+      i += 1;
+      continue;
+    }
+    if (/[ \t]/u.test(ch)) {
+      flush();
+      continue;
+    }
+    if (/[;|&\n(){}<>]/u.test(ch)) {
+      flush();
+      words.push({ text: ch, quoted: false, structural: true });
+      continue;
+    }
+    text += ch;
+    started = true;
+  }
+  flush();
+  return words;
+}
+
+/**
+ * `sh -c "…"`, `bash -lc "…"`: the wrapper runs its body, and the body is
+ * what is judged (Codex 2026-09-17 on 2df6170e #7). The body is exactly
+ * the word after the flags; later words are `$0` and the arguments, so
+ * `sh -lc 'true' '; touch x'` runs `true` — the greedy quote-to-quote
+ * regex read `true' '; touch x` as the body (round 3 #12). A flag word
+ * with `n` (`-n`, no-exec) parses without running; `-o` names an option
+ * that may be `noexec`. Returns `null` when the command is not a plain
+ * wrapper (the caller infers it as ordinary shell), `false` when it is a
+ * wrapper that proves nothing.
+ */
+function shellWrapperBody(raw: string): string | false | null {
+  const words = shellWords(raw);
+  if (words.some((w) => w.structural)) return null;
+  const program = words[0];
+  if (program === undefined || program.quoted || !SHELL_PROGRAM_RE.test(program.text)) return null;
+  let i = 1;
+  let runsString = false;
+  for (; i < words.length; i += 1) {
+    const w = words[i];
+    if (w === undefined || w.quoted || !w.text.startsWith("-")) break;
+    if (w.text === "--") {
+      i += 1;
+      break;
+    }
+    if (/n/u.test(w.text) || /^[-+]o$/u.test(w.text)) return false;
+    if (/^-[a-zA-Z]*c[a-zA-Z]*$/u.test(w.text)) runsString = true;
+  }
+  if (!runsString) return null;
+  const body = words[i];
+  return body === undefined ? false : body.text;
+}
 
 /**
  * Which `&&`/`||`-joined segments of the LAST statement provably ran AND
  * SUCCEEDED, given the whole command exited 0 (the caller only asks about
- * non-error results).
+ * results that exited 0).
  *
  * "Ran" was not enough: `touch /missing-parent/x || true` exits 0 and
  * writes nothing, and the first version credited the first segment for
  * having run (Codex 2026-09-17 on 2df6170e #5). With no `||` present,
  * exit 0 needs every `&&` segment to succeed — unless one is the literal
- * `false`, which contradicts the premise. With a `||` present, nothing
- * before the last `||` is provable (its failure may be what the
- * alternative masked), and the tail after it ran and succeeded only when
- * the whole prefix is the literal `false` (`false || touch x`).
+ * `false`, which contradicts the premise.
+ *
+ * `&&` and `||` are left-associative, so `A || B && Z1 && Z2` is
+ * `((A || B) && Z1) && Z2`: exit 0 proves Z1 and Z2 ran and succeeded
+ * (every segment after the one that follows the last `||`), and proves
+ * `A || B` exited 0 — which says nothing about B unless A is the literal
+ * `false` (`false || touch x`). The first version withheld Z1 and Z2 too
+ * (Codex 2026-09-17 round 3 #15).
  */
 function provablySucceededSegments(statement: string): string[] {
   const parts = statement.split(/\s*(&&|\|\|)\s*/u);
@@ -193,10 +345,14 @@ function provablySucceededSegments(statement: string): string[] {
     else ops.push(parts[i] ?? "");
   }
   const isFalse = (seg: string): boolean => /^(?:false|!\s+true)$/u.test(seg);
+  const nonEmpty = (segs: string[]): string[] => segs.filter((seg) => seg.length > 0);
   const lastOr = ops.lastIndexOf("||");
-  if (lastOr === -1) return segments.some(isFalse) ? [] : segments.filter((seg) => seg.length > 0);
+  if (lastOr === -1) return segments.some(isFalse) ? [] : nonEmpty(segments);
+  const tail = segments.slice(lastOr + 2);
+  if (tail.some(isFalse)) return [];
   const prefixIsFalse = lastOr === 0 && isFalse(segments[0] ?? "");
-  return prefixIsFalse ? segments.slice(1).filter((seg) => seg.length > 0) : [];
+  const alternative = segments[lastOr + 1] ?? "";
+  return nonEmpty(prefixIsFalse ? [alternative, ...tail] : tail);
 }
 
 function mutatesSomething(input: Record<string, unknown> | undefined): boolean {
@@ -205,16 +361,17 @@ function mutatesSomething(input: Record<string, unknown> | undefined): boolean {
   if (typeof action === "string") return !READ_ONLY_ACTION_RE.test(action);
   const command = input["command"];
   if (typeof command !== "string") return true;
-  const raw = command.trim();
-  // A wrapper runs its body: `sh -c "touch x"` is judged as `touch x`
-  // (Codex 2026-09-17 on 2df6170e #7).
-  const wrapped = SHELL_WRAPPER_RE.exec(raw);
-  if (wrapped !== null) return mutatesSomething({ command: wrapped[2] ?? "" });
+  const raw = stripShellComments(command.trim()).trim();
+  // A wrapper runs its body: `sh -c "touch x"` is judged as `touch x`.
+  const wrapped = shellWrapperBody(raw);
+  if (wrapped === false) return false;
+  if (wrapped !== null) return mutatesSomething({ command: wrapped });
   // Syntax this inference does not read proves nothing. Quoted text is
   // blanked first: the parentheses of `python3 -c "Path('x').write_text()"`
   // are the body's, not the shell's.
   const structure = raw.replace(/"((?:[^"\\]|\\.)*)"|'([^']*)'/gu, (m) => "_".repeat(m.length));
   if (UNSUPPORTED_SHELL_RE.test(structure)) return false;
+  if (BACKGROUND_RE.test(structure)) return false;
   // Quoted text is not shell syntax: printf "a > b" writes nothing, and
   // 2>&1 duplicates a descriptor (Codex 2026-09-17 round 2 #6).
   // …so quoted text keeps its words (a quoted program path is still the
@@ -237,16 +394,68 @@ function mutatesSomething(input: Record<string, unknown> | undefined): boolean {
   });
 }
 
+/**
+ * Strip the words that only set up the program: `env` and its options and
+ * assignments, bare assignments, and sudo/time/nice/nohup/command/exec.
+ * `null` when nothing is left to run, or when an `env` form (`-S`, whose
+ * operand is re-split into words) is not read here.
+ */
+function unwrapEnvPrefix(words: string[]): string[] | null {
+  let i = 0;
+  const assignment = /^[A-Za-z_][A-Za-z0-9_]*=/u;
+  while (i < words.length) {
+    const w = words[i] ?? "";
+    if (assignment.test(w)) {
+      i += 1;
+      continue;
+    }
+    if (/^(?:\S*\/)?env$/u.test(w)) {
+      i += 1;
+      while (i < words.length) {
+        const opt = words[i] ?? "";
+        if (opt === "--") {
+          i += 1;
+          break;
+        }
+        if (assignment.test(opt)) {
+          i += 1;
+          continue;
+        }
+        if (!opt.startsWith("-")) break;
+        if (/^-[a-zA-Z]*S/u.test(opt) || /^--split-string/u.test(opt)) return null;
+        if (/^-[uC]$/u.test(opt) || /^--(?:unset|chdir)$/u.test(opt)) {
+          if (i + 1 >= words.length) return null;
+          i += 2;
+          continue;
+        }
+        i += 1;
+      }
+      continue;
+    }
+    if (/^(?:sudo|time|nice|nohup|command|exec)$/u.test(w)) {
+      i += 1;
+      continue;
+    }
+    break;
+  }
+  const rest = words.slice(i);
+  return rest.length === 0 ? null : rest;
+}
+
 /** Does one pipeline stage (a single program invocation) positively mutate something? */
 function stageMutates(seg: string): boolean {
-  // A redirection writes — unless it is to /dev/null.
-  if (/(?:^|[^<>])>\s*(?!\/dev\/null\b)\S/u.test(seg.replace(/>>/gu, ">"))) return true;
-  // Unwrap `env VAR=x`, `env -i`/`-u VAR`, plain assignments and sudo/time/nice.
-  const stripped = seg
-    .replace(/^env\s+(?:(?:-u\s+\S+|-\S+|[A-Za-z_][A-Za-z0-9_]*=\S*)\s+)*/u, "")
-    .replace(/^(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*/u, "")
-    .replace(/^(?:sudo|time|nice|nohup)\s+/u, "");
-  const words = stripped.split(/\s+/u);
+  // A redirection writes — unless it is to /dev/null, or to a variable
+  // (`printf x > "$OUT"` with OUT=/dev/null; the quotes are gone from this
+  // view, so the target word begins with `$`) whose value is not read here
+  // (Codex 2026-09-17 round 3 #14).
+  if (/(?:^|[^<>])>\s*(?!\/dev\/null\b|\$)\S/u.test(seg.replace(/>>/gu, ">"))) return true;
+  // Unwrap `env VAR=x`, `env -i`/`-u VAR`, plain assignments and
+  // sudo/time/nice/command/exec. An option operand is consumed even when
+  // it is the last word: `env -u touch` unsets a variable and runs
+  // nothing (Codex 2026-09-17 round 3 #13, #15).
+  const unwrapped = unwrapEnvPrefix(seg.split(/\s+/u).filter((w) => w.length > 0));
+  if (unwrapped === null) return false;
+  const words = unwrapped;
   // "/Applications/Unity/Unity.exe" is the same program as unity; quotes
   // were blanked above.
   const program = (words[0] ?? "").replace(/\.exe$/iu, "");
@@ -281,11 +490,35 @@ function stageMutates(seg: string): boolean {
     const flags = rest.split(/\s+/u)[0] ?? "";
     return /^--(?:extract|create)$/u.test(flags) || (/^-?[a-zA-Z]+$/u.test(flags) && /[xc]/u.test(flags) && !/t/u.test(flags));
   }
-  // xargs: options with operands (-n 1, -I {}, -P 4, -L 2, -d x, -s N, -a f)
-  // are consumed with them, so the program after them is the one judged.
-  if (/^(?:\S*\/)?xargs$/iu.test(program)) return mutatesSomething({ command: rest.replace(/^(?:(?:-[nIPLdsaE]\s*\S+|-\S+)\s+)*/u, "") });
-  // tee with nothing to write to writes nothing.
-  if (/^(?:\S*\/)?tee$/iu.test(program)) return rest.split(/\s+/u).some((w) => w.length > 0 && !w.startsWith("-") && !/^\d*[<>]/u.test(w));
+  // xargs: options with operands (-n 1, -I {}, -P 4, -L 2, -d x, -s N, -a f,
+  // -E eof) are consumed with them — `xargs -I touch` names a placeholder
+  // and runs nothing (Codex 2026-09-17 round 3 #13) — so the program after
+  // them is the one judged. Limitation: xargs with EMPTY input runs its
+  // program once with no arguments (GNU) or not at all (`-r`, BSD); the
+  // input is not read here, so `printf '' | xargs touch` is credited as
+  // the program would be.
+  if (/^(?:\S*\/)?xargs$/iu.test(program)) {
+    const args = words.slice(1);
+    let i = 0;
+    for (; i < args.length; i += 1) {
+      const w = args[i] ?? "";
+      if (w === "--") {
+        i += 1;
+        break;
+      }
+      if (!w.startsWith("-")) break;
+      if (/^-[nIPLdsaE]$/u.test(w) || /^--(?:max-args|max-procs|max-lines|delimiter|arg-file|max-chars|eof|replace)$/u.test(w)) {
+        if (i + 1 >= args.length) return false;
+        i += 1;
+      }
+    }
+    const programWords = args.slice(i);
+    return programWords.length > 0 && mutatesSomething({ command: programWords.join(" ") });
+  }
+  // tee with nothing to write to writes nothing; /dev/null is nothing.
+  if (/^(?:\S*\/)?tee$/iu.test(program)) return rest.split(/\s+/u).some((w) => w.length > 0 && !w.startsWith("-") && !/^\d*[<>]/u.test(w) && w !== "/dev/null");
+  // touch -c (--no-create) only updates timestamps of files that exist.
+  if (/^(?:\S*\/)?touch$/iu.test(program)) return !/(?:^|\s)(?:-[a-zA-Z]*c[a-zA-Z]*|--no-create)(?=\s|$)/u.test(rest);
   if (INTERPRETER_PROGRAM_RE.test(program)) {
     // An inline body writes only if IT contains a write-shaped call; a
     // script file is unknown, not a write.
@@ -293,6 +526,26 @@ function stageMutates(seg: string): boolean {
     return inline !== null && INTERPRETER_WRITE_RE.test(inline[1] ?? "");
   }
   return MUTATING_PROGRAM_RE.test(program);
+}
+
+/**
+ * Did the shell tool's own footer say exit 0? Its result is `$ <command>`,
+ * then `Exit code: N | Duration: Nms`, then optional `--- stdout ---` /
+ * `--- stderr ---` sections. A non-error result is not exit 0: with
+ * `ok_exit_codes: [0, 1]` a failed `touch /missing/x` comes back without
+ * `is_error` (Codex 2026-09-17 round 3 #10). The footer is the LAST such
+ * line before the first output marker — an echoed (multi-line) command can
+ * only precede it, and program output can only follow. No footer proves
+ * nothing.
+ */
+function shellResultExitedZero(content: string): boolean {
+  const marker = content.search(/(?:^|\n)--- (?:stdout|stderr) ---(?:\n|$)/u);
+  const head = marker === -1 ? content : content.slice(0, marker);
+  let exit: number | undefined;
+  for (const m of head.matchAll(/(?:^|\n)Exit code: (\d+) \| Duration: \d+ms[ \t]*(?=\n|$)/gu)) {
+    exit = Number(m[1]);
+  }
+  return exit === 0;
 }
 
 /**
@@ -328,6 +581,8 @@ function writeSucceededAfter(
       if (/^Error\b/u.test(block.content)) continue;
       const use = useById.get(block.tool_use_id);
       if (use === undefined || !isWriteCapable(use.name)) continue;
+      // The shell inference below assumes exit 0; the footer must say so.
+      if (use.name === "shell_exec" && !shellResultExitedZero(block.content)) continue;
       if (!mutatesSomething(use.input)) continue;
       return true;
     }
