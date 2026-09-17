@@ -128,6 +128,27 @@ function ownershipClause(userId: string | undefined): { sql: string; params: str
   };
 }
 
+/**
+ * Read a stored JSON id list, answering `[]` for anything that is not one
+ * (round 12 #6).
+ *
+ * Provenance is the one column a corrupt value must not be fatal in, in EITHER
+ * direction. An unreadable `source_instinct_ids` used to throw out of
+ * `rowToRuntimeArtifact`, so the row that most needs a human decision was the
+ * one no audit read could list; and it must not read as "public learning"
+ * either — the empty list this returns is what
+ * {@link LearningStorage.deriveRuntimeArtifactOwnership} answers 'unknown' for.
+ */
+function parseIdListOrEmpty(raw: string | null | undefined): string[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) ? parsed.map((v) => String(v)) : [];
+  } catch {
+    return [];
+  }
+}
+
 // ─── Database Schema ────────────────────────────────────────────────────────────
 
 const SCHEMA_SQL = `
@@ -2134,11 +2155,19 @@ export class LearningStorage {
    *  - no private source ⇒ 'public', which is every artifact the system has
    *    generated from project/global learning.
    *
-   * `missingSourceIsUnknown` is the one difference between the two callers. On a
-   * WRITE the caller had the instinct in hand, so a source id that is not in the
-   * instincts table is a stale merge reference, not evidence of a private rule.
-   * For the LEGACY SWEEP there is no such context: a row whose sources are all
-   * gone cannot be attributed to anybody, and guessing 'public' is the leak.
+   * ROUND 12 #6 — NO PROVENANCE AT ALL IS NOT EVIDENCE OF PUBLIC LEARNING. An
+   * empty source list (and, through the sweep's parse, unreadable JSON or a
+   * value that is not a list) named nobody to check, so every branch above was
+   * skipped and the row fell through to 'public'. Production never writes an
+   * artifact with no source instinct — one is materialized FROM an instinct — so
+   * such a list is corruption or a hand-written row: unattributable, therefore
+   * 'unknown'. Both callers, because publishing is the irreversible direction.
+   *
+   * `missingSourceIsUnknown` is the one remaining difference between the two.
+   * On a WRITE the caller had the instinct in hand, so a source id that is not
+   * in the instincts table is a stale merge reference, not evidence of a private
+   * rule. For the LEGACY SWEEP there is no such context: a row whose sources are
+   * all gone cannot be attributed to anybody, and guessing 'public' is the leak.
    */
   private deriveRuntimeArtifactOwnership(
     sourceInstinctIds: readonly string[],
@@ -2147,6 +2176,8 @@ export class LearningStorage {
     const owners = new Set<string>();
     let sawUnownedPrivate = false;
     let sawMissingSource = false;
+    /** Round 12 #6: was there any source id to check in the first place? */
+    let sawAnySource = false;
 
     const lookup = this.db!.prepare(`
       SELECT
@@ -2164,6 +2195,7 @@ export class LearningStorage {
     for (const rawId of sourceInstinctIds) {
       const id = String(rawId).trim();
       if (!id) continue;
+      sawAnySource = true;
       const row = lookup.get(id, id, id, id) as {
         present: number;
         private_rows: number;
@@ -2185,6 +2217,9 @@ export class LearningStorage {
 
     if (sawUnownedPrivate || owners.size > 1) return { scope: "unknown" };
     if (owners.size === 1) return { scope: "user", ownerUserId: [...owners][0]! };
+    // Round 12 #6: nothing was named, so nothing was checked — publishing here
+    // would be a guess, and the guess reaches everybody.
+    if (!sawAnySource) return { scope: "unknown" };
     if (missingSourceIsUnknown && sawMissingSource) return { scope: "unknown" };
     return { scope: "public" };
   }
@@ -2214,14 +2249,14 @@ export class LearningStorage {
     let quarantined = 0;
 
     for (const row of rows) {
-      let sources: string[] = [];
-      try {
-        const parsed = JSON.parse(row.source_instinct_ids) as unknown;
-        if (Array.isArray(parsed)) sources = parsed.map((v) => String(v));
-      } catch {
-        // Unreadable source list: nothing to attribute it to.
-      }
-      const ownership = this.deriveRuntimeArtifactOwnership(sources, true);
+      // Round 12 #6: unreadable JSON, a value that is not a list, and an empty
+      // list all arrive here as "no source named", and
+      // deriveRuntimeArtifactOwnership answers 'unknown' for that — it is not
+      // evidence that the row is public learning.
+      const ownership = this.deriveRuntimeArtifactOwnership(
+        parseIdListOrEmpty(row.source_instinct_ids),
+        true,
+      );
       if (ownership.scope === "user" && ownership.ownerUserId) {
         update.run("user", ownership.ownerUserId, row.id);
         ownerRecovered++;
@@ -3128,8 +3163,10 @@ export class LearningStorage {
       projectWorldFingerprint: row.project_world_fingerprint ?? undefined,
       requiredToolNames: JSON.parse(row.required_tool_names) as string[],
       requiredCapabilities: JSON.parse(row.required_capabilities) as string[],
-      sourceInstinctIds: JSON.parse(row.source_instinct_ids) as InstinctId[],
-      sourceTrajectoryIds: JSON.parse(row.source_trajectory_ids) as TrajectoryId[],
+      // Round 12 #6: a corrupt provenance list leaves the row auditable (and
+      // quarantined) instead of throwing out of every read that touches it.
+      sourceInstinctIds: parseIdListOrEmpty(row.source_instinct_ids) as InstinctId[],
+      sourceTrajectoryIds: parseIdListOrEmpty(row.source_trajectory_ids) as TrajectoryId[],
       stats: JSON.parse(row.stats) as RuntimeArtifactStats,
       shadowActivatedAt: row.shadow_activated_at ? row.shadow_activated_at as TimestampMs : undefined,
       promotedAt: row.promoted_at ? row.promoted_at as TimestampMs : undefined,
