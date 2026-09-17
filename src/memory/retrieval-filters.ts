@@ -13,7 +13,10 @@
  * scope names. An entry that carries NO userId/projectId for that key stays in.
  * Project knowledge (`type: "project"`) is never personal recall: it is only
  * returned when the caller asks for the type explicitly or the scope names
- * its projectId.
+ * its projectId. A project fact is not owned by a chat either, so when the
+ * scope names its project it crosses chats the way an explicit share does —
+ * otherwise the chat-ownership rule below hid every project fact from every
+ * chat-scoped recall. The userId and projectId comparisons still apply.
  *
  * Chat ownership (Codex round 6 #16): chatId "default"/missing means UNKNOWN
  * ownership (an imported legacy conversation, a row written before chat ids
@@ -157,6 +160,22 @@ export function isUnownedByChat(entry: FilterableEntry): boolean {
 }
 
 /**
+ * Project knowledge for the project the scope names (item 3.9). A project fact
+ * is not owned by a chat — it is written once for the repo — so the
+ * chat-ownership rule must not hide it from a chat-scoped recall; that rule
+ * exists to stop one CONVERSATION's memory reaching another. It crosses chats
+ * the way an explicit share does, and like a share it bypasses ONLY the chat
+ * comparison: the userId comparison below still applies, and an entry that does
+ * not name the scope's project is not project knowledge here at all.
+ */
+function isProjectKnowledgeOfScope(entry: FilterableEntry, scope: MemoryScope): boolean {
+  if (entry.type !== PROJECT_MEMORY_TYPE) return false;
+  if (scope.projectId === undefined) return false;
+  const entryProject = entryIdentity(entry, "projectId");
+  return entryProject !== undefined && entryProject === String(scope.projectId);
+}
+
+/**
  * Identity scope check (plan 3.9). A userId/projectId the entry does not carry
  * is not a mismatch; a DIFFERENT value is. For chatId (Codex round 6 #16) an
  * unowned entry matches only the "default" scope unless explicitly shared —
@@ -164,7 +183,11 @@ export function isUnownedByChat(entry: FilterableEntry): boolean {
  */
 export function matchesScope(entry: FilterableEntry, scope: MemoryScope | undefined): boolean {
   if (!scope) return true;
-  if (scope.chatId !== undefined && !isExplicitlyShared(entry)) {
+  if (
+    scope.chatId !== undefined &&
+    !isExplicitlyShared(entry) &&
+    !isProjectKnowledgeOfScope(entry, scope)
+  ) {
     const scopeChat = String(scope.chatId);
     if (isUnownedByChat(entry)) {
       if (scopeChat !== UNSCOPED_CHAT_ID) return false;

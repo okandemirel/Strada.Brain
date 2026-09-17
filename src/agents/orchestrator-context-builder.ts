@@ -313,6 +313,13 @@ export async function buildContextLayers(
   userMessage: string,
   profile: UserProfile | null,
   preComputedEmbedding?: number[],
+  /**
+   * Who this turn belongs to (item 3.9 / audit 05.cap / 13F4 / D66). The
+   * automatic semantic recall below is a read of everything the memory holds;
+   * without an identity it returned one person's memory in another person's
+   * turn. `projectId` defaults to the project this build runs against.
+   */
+  identity?: { readonly userId?: string; readonly projectId?: string },
 ): Promise<{
   context: string;
   contentHashes: string[];
@@ -355,6 +362,19 @@ export async function buildContextLayers(
     contentHashes.push(...taskExecutionLayer.contentHashes);
   }
 
+  // THIS person, THIS chat, THIS project — not everyone's (item 3.9 / audit
+  // 05.cap / 13F4 / D66). Automatic semantic recall used to name the chat at
+  // best, so a memory owned by another user surfaced in this turn. Project
+  // knowledge stays its own entry type: naming the project here is what makes it
+  // reachable, and it is never folded into a person's memory.
+  const recallScope = {
+    ...(identity?.userId ? { userId: identity.userId } : {}),
+    ...(taskContext?.chatId ? { chatId: taskContext.chatId } : {}),
+    ...((identity?.projectId ?? ctx.projectPath)
+      ? { projectId: identity?.projectId ?? ctx.projectPath }
+      : {}),
+  };
+
   // Layers 3 + 7 run in parallel: Project/World Memory and Semantic Memory are independent
   const [projectWorldLayer, semanticMemoryResult] = await Promise.all([
     buildProjectWorldMemoryLayer(ctx),
@@ -364,9 +384,7 @@ export async function buildContextLayers(
           query: userMessage,
           limit: 5,
           minScore: 0.15,
-          // THIS chat's recall, not everyone's: automatic semantic recall
-          // carried no identity scope (plan 3.9).
-          ...(taskContext?.chatId ? { scope: { chatId: taskContext.chatId } } : {}),
+          ...(Object.keys(recallScope).length > 0 ? { scope: recallScope } : {}),
           embedding: preComputedEmbedding,
         } as import("../memory/memory.interface.js").SemanticRetrievalOptions).catch(() => null)
       : Promise.resolve(null),
@@ -488,6 +506,13 @@ export async function buildSystemPromptWithContext(
     conversationScope: string;
     identityKey: string;
     userId?: string;
+    /**
+     * The identity automatic recall is scoped to (item 3.9). Separate from
+     * `userId`, which the interactive route passes for the autonomous-mode
+     * directive only (a worker run must not inherit that directive, but its
+     * recall must still be scoped): a background run passes this and not that.
+     */
+    recallUserId?: string;
     channelType?: string;
     prompt: string;
     personaContent?: string;
@@ -558,6 +583,8 @@ export async function buildSystemPromptWithContext(
     params.prompt,
     params.profile as UserProfile | null,
     params.preComputedEmbedding,
+    // item 3.9: the turn's identity reaches automatic recall.
+    { userId: params.recallUserId ?? params.userId },
   );
   systemPrompt += contextLayers;
   const initialContentHashes: string[] = [...contentHashes];

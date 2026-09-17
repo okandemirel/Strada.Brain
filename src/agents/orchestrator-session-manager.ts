@@ -1215,10 +1215,21 @@ export class SessionManager {
    * serves; without it the refresher falls back to the chat id the loop
    * passes per `refresh()` call, so chat A's re-retrieval never recalls chat B.
    */
-  createMemoryRefresher(initialContentHashes: string[], chatId?: string): MemoryRefresher | null {
+  createMemoryRefresher(
+    initialContentHashes: string[],
+    chatId?: string,
+    /**
+     * Who the run belongs to (item 3.9 / audit 05.cap / 13F4 / D66): in-run
+     * re-retrieval is automatic recall, so it must be scoped to the person and
+     * the project, not to the chat alone.
+     */
+    identity?: { readonly userId?: string; readonly projectId?: string },
+  ): MemoryRefresher | null {
     if (!this.deps.reRetrievalConfig?.enabled) return null;
     const refresher = new MemoryRefresher(this.deps.reRetrievalConfig, {
       chatId,
+      ...(identity?.userId ? { userId: identity.userId } : {}),
+      ...(identity?.projectId ? { projectId: identity.projectId } : {}),
       memoryManager: this.deps.memoryManager,
       ragPipeline: this.deps.ragPipeline,
       instinctRetriever: this.deps.instinctRetriever ?? undefined,

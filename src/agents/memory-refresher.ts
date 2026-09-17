@@ -13,11 +13,12 @@
 
 import type { ReRetrievalConfig } from "../config/config.js";
 import type { IEventEmitter } from "../core/event-bus.js";
-import type { IMemoryManager, RetrievalOptions } from "../memory/memory.interface.js";
+import type { IMemoryManager, MemoryScope, RetrievalOptions } from "../memory/memory.interface.js";
 import type { IRAGPipeline, SearchResult, SearchOptions, IEmbeddingProvider } from "../rag/rag.interface.js";
 import type { InsightResult, InstinctRetriever } from "./instinct-retriever.js";
 import { computeContentHash } from "../rag/chunker.js";
 import { denseCosineSimilarity } from "../rag/vector-math.js";
+import type { ChatId } from "../types/index.js";
 import { isOk } from "../types/index.js";
 import { getLogger } from "../utils/logger.js";
 
@@ -33,6 +34,13 @@ export interface MemoryRefresherDeps {
    * `refresh()` call (Codex round 6 #15).
    */
   readonly chatId?: string;
+  /**
+   * The person and the project this run belongs to (item 3.9 / audit 05.cap /
+   * 13F4 / D66). In-run re-retrieval is automatic recall: with the chat id
+   * alone, a memory owned by another user still came back inside this run.
+   */
+  readonly userId?: string;
+  readonly projectId?: string;
   readonly memoryManager?: IMemoryManager;
   readonly ragPipeline?: IRAGPipeline;
   readonly instinctRetriever?: InstinctRetriever;
@@ -257,6 +265,20 @@ export class MemoryRefresher {
     return resolved && resolved.length > 0 ? resolved : undefined;
   }
 
+  /**
+   * The identity this recall is allowed to see (item 3.9): the person, the chat
+   * and the project. Keys the run does not know are left out, so an unknown
+   * identity widens nothing beyond what it already was.
+   */
+  private recallScope(chatId: string | undefined): { scope?: MemoryScope } {
+    const scope: { userId?: string; chatId?: ChatId; projectId?: string } = {
+      ...(this.deps.userId ? { userId: this.deps.userId } : {}),
+      ...(chatId ? { chatId: chatId as ChatId } : {}),
+      ...(this.deps.projectId ? { projectId: this.deps.projectId } : {}),
+    };
+    return Object.keys(scope).length > 0 ? { scope } : {};
+  }
+
   private async doRefresh(
     query: string,
     sessionId: string,
@@ -276,7 +298,7 @@ export class MemoryRefresher {
             query,
             limit: this.config.memoryLimit,
             minScore: 0.15,
-            ...(chatId ? { scope: { chatId } } : {}),
+            ...this.recallScope(chatId),
           } as RetrievalOptions)
         : Promise.resolve(null),
 

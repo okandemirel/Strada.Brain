@@ -336,6 +336,11 @@ export async function setupAgentCoreRun(
       // Interactive-ONLY, exactly as v1: the background/worker prologue never passed it
       // (a3de7d1 :3693-3703), so worker prompts must not inherit the directive (trio catch).
       userId: isInteractive ? request.userId : undefined,
+      // item 3.9 (audit 05.cap / 13F4 / D66): automatic recall is scoped to the
+      // person on every route. `userId` above is interactive-only because it drives
+      // the autonomous-mode directive; a worker run must not inherit that directive,
+      // but its recall must still be this user's and no one else's.
+      recallUserId: request.userId,
       prompt: queryText,
       personaContent,
       vaultContext,
@@ -414,7 +419,12 @@ export async function setupAgentCoreRun(
       progressAssessmentEnabled: deps.progressAssessmentEnabled,
     });
 
-    const memoryRefresher = deps.sessionManager.createMemoryRefresher(initialContentHashes);
+    // item 3.9: the in-run refresher recalls for this person, this chat and this
+    // project — it used to be built with no identity at all.
+    const memoryRefresher = deps.sessionManager.createMemoryRefresher(initialContentHashes, chatId, {
+      userId: request.userId,
+      projectId: deps.projectPath?.(),
+    });
     // Step 0 / gap #7 — label the metric by the actual run mode (v1 parity: runBackgroundTask uses
     // "subtask" for delegated sub-agents else "background"; interactive stays "interactive") + thread
     // parentTaskId for sub-agent lineage. The prior hardcoded "interactive" mislabeled every
