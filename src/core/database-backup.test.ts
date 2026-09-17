@@ -48,8 +48,10 @@ import {
   readFileSync,
   readSync,
   readdirSync,
+  renameSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
@@ -65,6 +67,7 @@ import {
   RUNTIME_BLOB_DIRECTORIES,
   RUNTIME_DATABASE_FILES,
   STRADA_HOME_DATABASE_FILES,
+  MAINTENANCE_LOCK_FILE,
   backupRuntimeData,
   backupRuntimeDatabases,
   backupSqliteDatabase,
@@ -612,9 +615,12 @@ describe("a restore whose backup is unusable (round 11 #2)", () => {
 
     chmodSync(stradaHome, 0o500);
     try {
-      await expect(restoreRuntimeDatabases({ backupDir: destDir })).rejects.toThrow(
-        /while staging the replacements[\s\S]*Nothing was replaced/,
-      );
+      await expect(
+        // The maintenance exclusion (round 12 #22) is taken in the Strada home,
+        // which this case deliberately makes unwritable; it is redirected so the
+        // subject stays "a DESTINATION that cannot be written".
+        restoreRuntimeDatabases({ backupDir: destDir, maintenanceDir: path.join(root, "maint") }),
+      ).rejects.toThrow(/while staging the replacements[\s\S]*Nothing was replaced/);
     } finally {
       chmodSync(stradaHome, 0o700);
     }
@@ -640,6 +646,7 @@ describe("a restore whose backup is unusable (round 11 #2)", () => {
       await expect(
         restoreRuntimeDatabases({
           backupDir: destDir,
+          maintenanceDir: path.join(root, "maint"),
           onStaged: () => {
             chmodSync(stradaHome, 0o500);
           },
@@ -1001,5 +1008,313 @@ describe("the CLI and scripts/backup.sh for project data (round 11 #19)", () => 
     const fn = /backup_databases\(\)\s*\{[\s\S]*?\n\}/.exec(script)?.[0] ?? "";
     expect(fn, "backup_databases() not found").not.toBe("");
     expect(fn).toMatch(/delivery-packages\.db/);
+  });
+});
+
+/**
+ * ROUND 12 #19-#22 — a restore must not be a way to destroy live data.
+ *
+ * Every case here asserts the BYTES on disk, not a return value: the whole
+ * class of defect is a driver that reports success (or throws) after the
+ * operator's files are already gone.
+ */
+describe("a manifest that has been modified (round 12 #19)", () => {
+  /** Rewrite the manifest of the backup in `destDir`. */
+  function tamperManifest(mutate: (manifest: Record<string, any>) => void): void {
+    const file = path.join(destDir, BACKUP_MANIFEST_FILE);
+    const manifest = JSON.parse(readFileSync(file, "utf8")) as Record<string, any>;
+    mutate(manifest);
+    writeFileSync(file, `${JSON.stringify(manifest, null, 2)}\n`);
+  }
+
+  /** memory.db backed up at 7 rows, the live file moved on to 12. */
+  async function backupAndDiverge(): Promise<void> {
+    seedDatabase(path.join(memoryRoot, "memory.db"), 7).close();
+    await backupRuntimeDatabases({ ...defaultInstallation(), destDir, timestamp: "ts" });
+    seedDatabase(path.join(memoryRoot, "memory.db"), 5).close();
+    expect(countRows(path.join(memoryRoot, "memory.db"))).toBe(12);
+  }
+
+  it("refuses a relative path that climbs out of its root, keeping the victim's bytes", async () => {
+    await backupAndDiverge();
+    const victim = path.join(root, "victim", "important.db");
+    mkdirSync(path.dirname(victim), { recursive: true });
+    writeFileSync(victim, "a file this backup was never given permission to replace\n");
+    const victimBytes = readFileSync(victim);
+
+    tamperManifest((m) => {
+      m.databases[0].relative = path.join("..", "victim", "important.db");
+    });
+
+    const outcome = await restoreRuntimeDatabases({ backupDir: destDir }).then(
+      () => null,
+      (err: Error) => err,
+    );
+    // The BYTES first: before the fix these were a SQLite database.
+    expect(readFileSync(victim)).toEqual(victimBytes);
+    expect(countRows(path.join(memoryRoot, "memory.db"))).toBe(12);
+    expect(outcome?.message).toMatch(/outside the root/);
+  });
+
+  it("refuses a member path that climbs out of the backup directory", async () => {
+    await backupAndDiverge();
+    // A database the manifest points at from OUTSIDE the backup: valid SQLite,
+    // the right size, and not part of what was backed up.
+    const foreign = path.join(root, "outside", "foreign.db");
+    mkdirSync(path.dirname(foreign), { recursive: true });
+    seedDatabase(foreign, 3).close();
+    tamperManifest((m) => {
+      m.databases[0].backup = path.relative(destDir, foreign);
+      m.databases[0].bytes = statSync(foreign).size;
+    });
+
+    const outcome = await restoreRuntimeDatabases({ backupDir: destDir }).then(
+      () => null,
+      (err: Error) => err,
+    );
+    // The ROWS first: before the fix the live database held the foreign three.
+    expect(countRows(path.join(memoryRoot, "memory.db"))).toBe(12);
+    expect(outcome?.message).toMatch(/outside the backup/);
+  });
+
+  it("refuses a manifest entry that is not the shape an entry has", async () => {
+    await backupAndDiverge();
+    tamperManifest((m) => {
+      m.databases[0].relative = { escape: "../../victim" };
+    });
+
+    expect(() => readBackupManifest(destDir)).toThrow(/relative/);
+    await expect(restoreRuntimeDatabases({ backupDir: destDir })).rejects.toThrow(/relative/);
+    expect(countRows(path.join(memoryRoot, "memory.db"))).toBe(12);
+  });
+
+  it("refuses a destination whose directory is a symlink out of the root", async () => {
+    await backupAndDiverge();
+    const elsewhere = path.join(root, "elsewhere");
+    mkdirSync(elsewhere, { recursive: true });
+    const victim = path.join(elsewhere, "memory.db");
+    writeFileSync(victim, "outside the root, reached through a symlink inside it\n");
+    const victimBytes = readFileSync(victim);
+    symlinkSync(elsewhere, path.join(memoryRoot, "sub"));
+
+    tamperManifest((m) => {
+      m.databases[0].relative = path.join("sub", "memory.db");
+    });
+
+    const outcome = await restoreRuntimeDatabases({ backupDir: destDir }).then(
+      () => null,
+      (err: Error) => err,
+    );
+    expect(readFileSync(victim)).toEqual(victimBytes);
+    expect(outcome?.message).toMatch(/outside the root/);
+  });
+});
+
+describe("a manifest with two entries for one destination (round 12 #20)", () => {
+  function tamperManifest(mutate: (manifest: Record<string, any>) => void): void {
+    const file = path.join(destDir, BACKUP_MANIFEST_FILE);
+    const manifest = JSON.parse(readFileSync(file, "utf8")) as Record<string, any>;
+    mutate(manifest);
+    writeFileSync(file, `${JSON.stringify(manifest, null, 2)}\n`);
+  }
+
+  it("refuses a duplicated blob entry instead of deleting the live blob", async () => {
+    const spoolFile = path.join(memoryRoot, RETAINED_ATTACHMENT_DIR, "store", "tok-1");
+    mkdirSync(path.dirname(spoolFile), { recursive: true, mode: 0o700 });
+    writeFileSync(spoolFile, Buffer.alloc(2048, 0x41), { mode: 0o600 });
+    await backupRuntimeData({ ...defaultInstallation(), destDir, timestamp: "ts" });
+    // The live bytes have moved on since the backup, so nothing can pass by
+    // restoring successfully.
+    const liveBytes = Buffer.alloc(2048, 0x42);
+    writeFileSync(spoolFile, liveBytes, { mode: 0o600 });
+
+    tamperManifest((m) => {
+      m.blobs.push({ ...m.blobs[0] });
+    });
+
+    const outcome = await restoreRuntimeData({ backupDir: destDir }).then(
+      () => null,
+      (err: Error) => err,
+    );
+    // The repro, bytes first: before the fix NEITHER the original nor the
+    // restored copy survived — the second swap overwrote the aside and the
+    // rollback deleted the destination.
+    expect(existsSync(spoolFile)).toBe(true);
+    expect(readFileSync(spoolFile)).toEqual(liveBytes);
+    expect(outcome?.message).toMatch(/twice/);
+  });
+
+  it("refuses a duplicated database entry instead of deleting the live database", async () => {
+    seedDatabase(path.join(memoryRoot, "memory.db"), 7).close();
+    await backupRuntimeDatabases({ ...defaultInstallation(), destDir, timestamp: "ts" });
+    seedDatabase(path.join(memoryRoot, "memory.db"), 5).close();
+    expect(countRows(path.join(memoryRoot, "memory.db"))).toBe(12);
+
+    tamperManifest((m) => {
+      m.databases.push({ ...m.databases[0] });
+    });
+
+    const outcome = await restoreRuntimeDatabases({ backupDir: destDir }).then(
+      () => null,
+      (err: Error) => err,
+    );
+    expect(existsSync(path.join(memoryRoot, "memory.db"))).toBe(true);
+    expect(countRows(path.join(memoryRoot, "memory.db"))).toBe(12);
+    expect(outcome?.message).toMatch(/twice/);
+  });
+});
+
+describe("a backup taken mid-registration (round 12 #21)", () => {
+  /** Register a retained attachment and return its token, row path and bytes. */
+  function registerRetained(payload: Buffer): { token: string; rowPath: string } {
+    const source = path.join(root, "clip.bin");
+    writeFileSync(source, payload);
+    const store = new WebAttachmentStore(
+      path.join(memoryRoot, "web-attachments.db"),
+      3_600_000,
+      200,
+      64,
+    );
+    try {
+      const token = store.register({ name: "clip.bin", path: source });
+      const entry = store.get(token);
+      expect(entry?.retained).toBe(true);
+      return { token, rowPath: entry!.path! };
+    } finally {
+      store.close();
+      rmSync(source, { force: true });
+    }
+  }
+
+  /** The bytes a link would serve, read the way the serve path reads them. */
+  function serveBytes(dbPath: string, token: string): Buffer | null {
+    const store = new WebAttachmentStore(dbPath, 3_600_000, 200, 64);
+    try {
+      const entry = store.get(token);
+      if (entry === null) return null;
+      const open = store.openStoredFile(entry);
+      if (open === null) return null;
+      const buffer = Buffer.alloc(open.sizeBytes);
+      readSync(open.fd, buffer, 0, buffer.length, 0);
+      closeSync(open.fd);
+      return buffer;
+    } finally {
+      store.close();
+    }
+  }
+
+  /**
+   * The exact window `register()` leaves open: the row is COMMITTED and the
+   * bytes are still under `incoming/`, where the backup deliberately does not
+   * look. Recreated by putting the file back where the rename took it from.
+   */
+  function rewindToPreRename(rowPath: string, token: string): string {
+    // `<spool>/incoming/<token>` — where `snapshot()` wrote the copy and
+    // `register()` renames it FROM, derived from the row, not from a layout
+    // retyped here.
+    const staged = path.join(path.dirname(rowPath), PENDING_ATTACHMENT_DIR, token);
+    mkdirSync(path.dirname(staged), { recursive: true, mode: 0o700 });
+    renameSync(rowPath, staged);
+    expect(existsSync(rowPath)).toBe(false);
+    return staged;
+  }
+
+  it("captures the bytes a committed row promises, staged or not", async () => {
+    const payload = Buffer.alloc(4096, 0x5b);
+    const { token, rowPath } = registerRetained(payload);
+    const staged = rewindToPreRename(rowPath, token);
+    expect(existsSync(staged)).toBe(true);
+
+    await backupRuntimeData({ ...defaultInstallation(), destDir, timestamp: "ts" });
+
+    // Restored onto a machine where the root is elsewhere: the only proof that
+    // distinguishes "the row is there" from "the bytes are there".
+    const newMemory = path.join(root, "restored", ".strada-memory");
+    await restoreRuntimeData({ backupDir: destDir, roots: { memory: newMemory } });
+    expect(serveBytes(path.join(newMemory, "web-attachments.db"), token)).toEqual(payload);
+  });
+
+  it("fails instead of reporting a backup whose row has no bytes anywhere", async () => {
+    const payload = Buffer.alloc(4096, 0x5c);
+    const { token, rowPath } = registerRetained(payload);
+    // Bytes gone from the spool entirely, the row still promising them.
+    rmSync(rowPath, { force: true });
+
+    await expect(
+      backupRuntimeData({ ...defaultInstallation(), destDir, timestamp: "ts" }),
+    ).rejects.toThrow(new RegExp(token.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")));
+  });
+
+  it("records the gap in the manifest when the operator backs up anyway", async () => {
+    const payload = Buffer.alloc(4096, 0x5d);
+    const { token, rowPath } = registerRetained(payload);
+    rmSync(rowPath, { force: true });
+
+    const run = await backupRuntimeData({
+      ...defaultInstallation(),
+      destDir,
+      timestamp: "ts",
+      allowMissingBlobs: true,
+    });
+    expect(run.manifest.missingBlobs?.map((m) => m.token)).toEqual([token]);
+    expect(readBackupManifest(destDir).missingBlobs?.[0]?.source).toBe(rowPath);
+  });
+});
+
+describe("a restore while a database is in use (round 12 #22)", () => {
+  it("refuses while a connection is attached, and the live rows stay put", async () => {
+    seedDatabase(path.join(memoryRoot, "memory.db"), 7).close();
+    await backupRuntimeDatabases({ ...defaultInstallation(), destDir, timestamp: "ts" });
+    // A database user, holding the connections a daemon holds.
+    const live = seedDatabase(path.join(memoryRoot, "memory.db"), 5);
+    expect(countRows(path.join(memoryRoot, "memory.db"))).toBe(12);
+
+    const outcome = await restoreRuntimeDatabases({ backupDir: destDir }).then(
+      () => null,
+      (err: Error) => err,
+    );
+    // The repro: the files were renamed out from under the open connection and
+    // the restore reported success.
+    expect(countRows(path.join(memoryRoot, "memory.db"))).toBe(12);
+    expect(outcome?.message).toMatch(/still in use/);
+
+    // And it is a gate, not a wall: once the user closes, the same restore runs.
+    live.close();
+    await restoreRuntimeDatabases({ backupDir: destDir });
+    expect(countRows(path.join(memoryRoot, "memory.db"))).toBe(7);
+  });
+
+  it("holds an installation-wide exclusion, so a second restore cannot interleave", async () => {
+    seedDatabase(path.join(memoryRoot, "memory.db"), 7).close();
+    await backupRuntimeDatabases({ ...defaultInstallation(), destDir, timestamp: "ts" });
+    seedDatabase(path.join(memoryRoot, "memory.db"), 5).close();
+
+    let second: Error | undefined;
+    await restoreRuntimeDatabases({
+      backupDir: destDir,
+      onStaged: async () => {
+        second = await restoreRuntimeDatabases({ backupDir: destDir }).then(
+          () => undefined,
+          (err: Error) => err,
+        );
+      },
+    });
+
+    expect(second?.message).toMatch(/maintenance/i);
+    expect(countRows(path.join(memoryRoot, "memory.db"))).toBe(7);
+    expect(existsSync(path.join(stradaHome, MAINTENANCE_LOCK_FILE))).toBe(false);
+  });
+
+  it("reclaims an exclusion whose holder is no longer running", async () => {
+    seedDatabase(path.join(memoryRoot, "memory.db"), 7).close();
+    await backupRuntimeDatabases({ ...defaultInstallation(), destDir, timestamp: "ts" });
+    seedDatabase(path.join(memoryRoot, "memory.db"), 5).close();
+    writeFileSync(
+      path.join(stradaHome, MAINTENANCE_LOCK_FILE),
+      JSON.stringify({ pid: 999_999_999, startedAtIso: "2026-01-01T00:00:00.000Z", purpose: "restore" }),
+    );
+
+    await restoreRuntimeDatabases({ backupDir: destDir });
+    expect(countRows(path.join(memoryRoot, "memory.db"))).toBe(7);
   });
 });

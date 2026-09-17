@@ -68,6 +68,7 @@ import Database from "better-sqlite3";
 import {
   chmodSync,
   closeSync,
+  constants as fsConstants,
   copyFileSync,
   existsSync,
   mkdirSync,
@@ -75,6 +76,7 @@ import {
   readFileSync,
   readSync,
   readdirSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -514,6 +516,17 @@ export interface BackupRunOptions extends RuntimeDatabaseOptions {
   destDir: string;
   /** Suffix put before `.db` in the destination name; the backup's timestamp. */
   timestamp?: string;
+  /**
+   * Back up even when a committed row names bytes that are nowhere on disk
+   * (round 12 #21), recording the gap in the manifest instead of failing.
+   *
+   * Default false: a backup that silently omits the bytes a row promises is the
+   * defect. The escape hatch exists because an installation whose spool has
+   * already lost a file must still be able to take a backup of everything else
+   * — refusing forever would be a second data-loss route — but it says so in
+   * the manifest rather than reporting a complete backup.
+   */
+  allowMissingBlobs?: boolean;
 }
 
 /** The index a restore reads: what was copied, and where it came from. */
@@ -546,6 +559,22 @@ export interface BackupBlobEntry {
   readonly sha256: string;
 }
 
+/**
+ * Content a committed row promises that this backup does NOT hold (#21).
+ *
+ * Only ever written with `allowMissingBlobs`, and it is the difference between
+ * "restore this and the attachment is back" and "restore this and the row 404s".
+ */
+export interface MissingBlobEntry {
+  readonly root: string;
+  /** The absolute path the row names. */
+  readonly source: string;
+  /** Which row: the attachment token. */
+  readonly token: string;
+  /** The database whose row names it, relative to its root. */
+  readonly database: string;
+}
+
 export interface BackupManifest {
   readonly version: 1;
   readonly createdAtIso: string;
@@ -559,6 +588,8 @@ export interface BackupManifest {
    * rather than refuse the whole archive.
    */
   readonly blobs?: readonly BackupBlobEntry[];
+  /** Bytes a row names that are not in this backup (#21). Absent when none. */
+  readonly missingBlobs?: readonly MissingBlobEntry[];
 }
 
 /** Path of the manifest inside a backup directory. */
@@ -591,6 +622,8 @@ export async function backupRuntimeData(opts: BackupRunOptions): Promise<BackupR
   const inventory = inventoryRuntimeDatabases(opts);
   mkdirSync(opts.destDir, { recursive: true });
   const results: DatabaseBackupResult[] = [];
+  /** The copy each result was made from, for the required-blob pass (#21). */
+  const copiedFrom = new Map<DatabaseBackupResult, RuntimeDatabaseFile>();
   for (const entry of inventory) {
     const base = path.basename(entry.relative, ".db");
     const name = opts.timestamp ? `${base}_${opts.timestamp}.db` : `${base}.db`;
@@ -601,12 +634,14 @@ export async function backupRuntimeData(opts: BackupRunOptions): Promise<BackupR
       name,
     );
     const copy = await backupSqliteDatabase(entry.source, destination);
-    results.push({
+    const result: DatabaseBackupResult = {
       ...copy,
       root: entry.root,
       relative: entry.relative,
       restorePath: path.join(entry.rootPath, entry.relative),
-    });
+    };
+    results.push(result);
+    copiedFrom.set(result, entry);
   }
   const blobs: BlobBackupResult[] = [];
   for (const entry of inventoryRuntimeBlobs(opts)) {
@@ -622,6 +657,13 @@ export async function backupRuntimeData(opts: BackupRunOptions): Promise<BackupR
       restorePath: path.join(entry.rootPath, entry.relative),
     });
   }
+  const missingBlobs = captureRequiredBlobs({
+    destDir: opts.destDir,
+    databases: results,
+    copiedFrom,
+    blobs,
+    allowMissing: opts.allowMissingBlobs === true,
+  });
   const manifest: BackupManifest = {
     version: 1,
     createdAtIso: new Date().toISOString(),
@@ -642,9 +684,166 @@ export async function backupRuntimeData(opts: BackupRunOptions): Promise<BackupR
       bytes: blob.bytes,
       sha256: blob.sha256,
     })),
+    ...(missingBlobs.length > 0 ? { missingBlobs } : {}),
   };
   writeFileSync(backupManifestPath(opts.destDir), `${JSON.stringify(manifest, null, 2)}\n`);
   return { databases: results, blobs, manifest };
+}
+
+/** Content a database ROW promises: the bytes that must travel with it (#21). */
+interface RequiredBlob {
+  /** The absolute path the row names. */
+  readonly source: string;
+  /** Which row. */
+  readonly token: string;
+  /** What the row says the bytes are, when it recorded them. */
+  readonly bytes: number | null;
+  readonly sha256: string | null;
+}
+
+/**
+ * Databases whose rows REQUIRE bytes that are not inside them.
+ *
+ * Read from the COPY, not the live file: the copy is what this backup will
+ * restore, so the copy's rows are the promises this backup has to keep.
+ */
+const REQUIRED_BLOB_READERS: Record<string, (file: string) => RequiredBlob[]> = {
+  "web-attachments.db": requiredRetainedAttachments,
+};
+
+function requiredRetainedAttachments(file: string): RequiredBlob[] {
+  const db = new Database(file, { readonly: true, fileMustExist: true });
+  try {
+    const table = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'web_attachments'")
+      .get();
+    if (table === undefined) return [];
+    const columns = new Set(
+      (db.pragma("table_info(web_attachments)") as Array<{ name: string }>).map((c) => c.name),
+    );
+    if (!columns.has("path") || !columns.has("retained") || !columns.has("token")) return [];
+    const size = columns.has("byte_size") ? "byte_size" : "NULL AS byte_size";
+    const sum = columns.has("checksum") ? "checksum" : "NULL AS checksum";
+    return (
+      db
+        .prepare(
+          `SELECT token, path, ${size}, ${sum} FROM web_attachments ` +
+            `WHERE retained = 1 AND path IS NOT NULL`,
+        )
+        .all() as Array<{ token: string; path: string; byte_size: number | null; checksum: string | null }>
+    ).map((row) => ({
+      source: row.path,
+      token: row.token,
+      bytes: row.byte_size,
+      sha256: row.checksum,
+    }));
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * Make the backup hold every byte its copied rows promise (round 12 #21).
+ *
+ * `WebAttachmentStore.register()` commits the ROW and only then renames the
+ * copy from `incoming/<token>` to the name the row carries — deliberately, so a
+ * finished copy is never reachable at that name without a row defending it. A
+ * backup taken inside that window snapshotted the row, skipped `incoming` (which
+ * it must: those bytes may be a 2 GB recording halfway through being written),
+ * and reported success. The restored installation then served 404s for a row
+ * that still promised a gameplay recording, and nothing anywhere had said so.
+ *
+ * So the copied database is asked what it requires, and anything the blob pass
+ * did not capture is retried:
+ *
+ *   1. at the name the row gives — the rename may have landed since;
+ *   2. at `<spool>/incoming/<token>`, where `register()` had not moved it from
+ *      yet, accepted only when the size AND SHA-256 the row itself recorded match
+ *      the file. That is what distinguishes the promised bytes from a copy still
+ *      being written — the row is the authority on what it promised.
+ *
+ * What is nowhere fails the backup, naming the row, unless the caller asked to
+ * record the gap instead ({@link BackupRunOptions.allowMissingBlobs}).
+ */
+function captureRequiredBlobs(args: {
+  destDir: string;
+  databases: readonly DatabaseBackupResult[];
+  copiedFrom: Map<DatabaseBackupResult, RuntimeDatabaseFile>;
+  blobs: BlobBackupResult[];
+  allowMissing: boolean;
+}): MissingBlobEntry[] {
+  const captured = new Set(args.blobs.map((blob) => path.resolve(blob.source)));
+  const missing: MissingBlobEntry[] = [];
+  const unavailable: string[] = [];
+  for (const result of args.databases) {
+    const read = REQUIRED_BLOB_READERS[path.basename(result.relative)];
+    const entry = args.copiedFrom.get(result);
+    if (read === undefined || entry === undefined) continue;
+    for (const required of read(result.destination)) {
+      if (captured.has(path.resolve(required.source))) continue;
+      // Only bytes inside the root being backed up are this backup's to carry;
+      // a fallback REFERENCE to the caller's own file is not (the store keeps
+      // those with `retained = 0`, so they are not in this list at all).
+      const inside = path.relative(entry.rootPath, required.source);
+      if (inside === "" || inside.startsWith("..") || path.isAbsolute(inside)) continue;
+      const recovered = recoverRequiredBlob(required);
+      if (recovered === null) {
+        missing.push({
+          root: entry.root,
+          source: required.source,
+          token: required.token,
+          database: entry.relative,
+        });
+        unavailable.push(`${required.token} (${required.source}, named by ${entry.relative})`);
+        continue;
+      }
+      // Filed under the name the ROW gives, whichever file the bytes came from:
+      // the row is what a restore has to satisfy.
+      const destination = path.join(args.destDir, entry.root, inside);
+      const copy = copyRuntimeBlob(recovered, destination);
+      args.blobs.push({
+        source: required.source,
+        destination,
+        bytes: copy.bytes,
+        sha256: copy.sha256,
+        root: entry.root,
+        relative: inside,
+        restorePath: required.source,
+      });
+      captured.add(path.resolve(required.source));
+    }
+  }
+  if (unavailable.length > 0 && !args.allowMissing) {
+    throw new Error(
+      `${unavailable.length} committed row(s) promise bytes this backup cannot capture — ` +
+        `${unavailable.join("; ")}. A backup that carries the row without its content restores ` +
+        `an attachment that serves nothing; pass allowMissingBlobs to back the rest up anyway ` +
+        `and record the gap in ${BACKUP_MANIFEST_FILE}.`,
+    );
+  }
+  return missing;
+}
+
+/** The file holding a required blob's bytes, or null. Retried, then verified. */
+function recoverRequiredBlob(required: RequiredBlob): string | null {
+  const candidates = [
+    required.source,
+    // `<spool>/incoming/<token>` — where `snapshot()` wrote the copy and
+    // `register()` renames it FROM, derived from the row rather than from a
+    // spool layout retyped here.
+    path.join(path.dirname(required.source), PENDING_ATTACHMENT_DIR, path.basename(required.source)),
+  ];
+  for (const candidate of candidates) {
+    if (!existsSync(candidate) || !statSync(candidate).isFile()) continue;
+    if (candidate === required.source) return candidate;
+    // A staged file is only the promised bytes if it IS the promised bytes: the
+    // row recorded the size and digest of the copy at registration.
+    if (required.bytes !== null && statSync(candidate).size !== required.bytes) continue;
+    if (required.sha256 !== null && fileSha256(candidate) !== required.sha256) continue;
+    if (required.bytes === null && required.sha256 === null) continue;
+    return candidate;
+  }
+  return null;
 }
 
 /** The databases of a backup run — {@link backupRuntimeData} does the whole job. */
@@ -654,20 +853,341 @@ export async function backupRuntimeDatabases(
   return (await backupRuntimeData(opts)).databases;
 }
 
-/** Read a backup's manifest. Throws when it is missing or unparseable. */
+/**
+ * The manifest is UNTRUSTED INPUT (round 12 #19).
+ *
+ * It is a plain JSON file in a directory anyone who can read the backup can
+ * write, and the restore builds destination paths out of it. The old reader
+ * checked `version` and that `databases` was an array and then handed whatever
+ * the fields happened to hold to `path.join` — so `relative: "../../victim"`
+ * produced a destination outside the root the operator selected, every member
+ * checksum still passed (the FILES were untouched), and the restore replaced a
+ * file it was never pointed at. A `relative` that is not even a string turned
+ * into a TypeError from inside the swap loop.
+ *
+ * Every field is therefore validated for TYPE here and for CONTAINMENT at
+ * {@link restoreRuntimeData}, where the root it is being joined to is known.
+ */
+function manifestString(value: unknown, field: string, where: string): string {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`${where}: ${field} is not a string (${JSON.stringify(value)})`);
+  }
+  return value;
+}
+
+function manifestBytes(value: unknown, where: string): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+    throw new Error(`${where}: bytes is not a byte count (${JSON.stringify(value)})`);
+  }
+  return value;
+}
+
+/** A relative path that stays inside its root — lexically. Canonical check follows. */
+function manifestRelative(value: unknown, field: string, where: string, inside: string): string {
+  const raw = manifestString(value, field, where);
+  if (path.isAbsolute(raw) || /^[A-Za-z]:/u.test(raw)) {
+    throw new Error(
+      `${where}: ${field} is absolute (${raw}) — a manifest names paths inside ${inside}`,
+    );
+  }
+  const normalised = path.normalize(raw);
+  if (normalised === ".." || normalised.startsWith(`..${path.sep}`) || normalised.split(/[\\/]/u).includes("..")) {
+    throw new Error(`${where}: ${field} (${raw}) climbs outside ${inside}`);
+  }
+  return raw;
+}
+
+/** Read a backup's manifest. Throws when it is missing, unparseable or not one. */
 export function readBackupManifest(backupDir: string): BackupManifest {
   const file = backupManifestPath(backupDir);
   if (!existsSync(file)) {
     throw new Error(`No ${BACKUP_MANIFEST_FILE} in ${backupDir} — not a database backup`);
   }
-  const manifest = JSON.parse(readFileSync(file, "utf8")) as BackupManifest;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(file, "utf8"));
+  } catch (err) {
+    throw new Error(`${BACKUP_MANIFEST_FILE} in ${backupDir} is not JSON: ${(err as Error).message}`);
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error(`Unsupported ${BACKUP_MANIFEST_FILE} in ${backupDir}: not an object`);
+  }
+  const manifest = parsed as Record<string, unknown>;
   if (manifest.version !== 1 || !Array.isArray(manifest.databases)) {
     throw new Error(`Unsupported ${BACKUP_MANIFEST_FILE} in ${backupDir}`);
   }
   if (manifest.blobs !== undefined && !Array.isArray(manifest.blobs)) {
     throw new Error(`Unsupported ${BACKUP_MANIFEST_FILE} in ${backupDir}: blobs is not a list`);
   }
-  return manifest;
+  if (typeof manifest.roots !== "object" || manifest.roots === null || Array.isArray(manifest.roots)) {
+    throw new Error(`Unsupported ${BACKUP_MANIFEST_FILE} in ${backupDir}: roots is not a table`);
+  }
+  for (const [name, dir] of Object.entries(manifest.roots as Record<string, unknown>)) {
+    manifestString(dir, `roots["${name}"]`, `${BACKUP_MANIFEST_FILE} in ${backupDir}`);
+  }
+  const validated: BackupManifestEntry[] = (manifest.databases as unknown[]).map((raw, i) => {
+    const where = `${BACKUP_MANIFEST_FILE} in ${backupDir}, databases[${i}]`;
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+      throw new Error(`${where}: not an object`);
+    }
+    const entry = raw as Record<string, unknown>;
+    return {
+      root: manifestString(entry.root, "root", where),
+      relative: manifestRelative(entry.relative, "relative", where, "the root it belongs to"),
+      source: manifestString(entry.source, "source", where),
+      backup: manifestRelative(entry.backup, "backup", where, "the backup directory"),
+      bytes: manifestBytes(entry.bytes, where),
+    };
+  });
+  const blobs: BackupBlobEntry[] | undefined =
+    manifest.blobs === undefined
+      ? undefined
+      : (manifest.blobs as unknown[]).map((raw, i) => {
+          const where = `${BACKUP_MANIFEST_FILE} in ${backupDir}, blobs[${i}]`;
+          if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+            throw new Error(`${where}: not an object`);
+          }
+          const entry = raw as Record<string, unknown>;
+          const sha256 = manifestString(entry.sha256, "sha256", where);
+          if (!/^[0-9a-f]{64}$/u.test(sha256)) {
+            throw new Error(`${where}: sha256 is not a SHA-256 digest (${sha256})`);
+          }
+          return {
+            root: manifestString(entry.root, "root", where),
+            relative: manifestRelative(entry.relative, "relative", where, "the root it belongs to"),
+            source: manifestString(entry.source, "source", where),
+            backup: manifestRelative(entry.backup, "backup", where, "the backup directory"),
+            bytes: manifestBytes(entry.bytes, where),
+            sha256,
+          };
+        });
+  return {
+    version: 1,
+    createdAtIso: typeof manifest.createdAtIso === "string" ? manifest.createdAtIso : "",
+    ...(typeof manifest.timestamp === "string" ? { timestamp: manifest.timestamp } : {}),
+    roots: manifest.roots as Record<string, string>,
+    databases: validated,
+    ...(blobs === undefined ? {} : { blobs }),
+    ...(Array.isArray(manifest.missingBlobs)
+      ? { missingBlobs: manifest.missingBlobs as readonly MissingBlobEntry[] }
+      : {}),
+  };
+}
+
+/**
+ * The real path of `target`, resolved as far as it exists.
+ *
+ * A restore's destination usually does not exist yet (that is the point), so
+ * `realpathSync` on it throws; what matters for containment is the deepest
+ * ancestor that DOES exist, because that is where the symlinks are. Both sides
+ * of a containment test go through this, which is also what makes `/var` and
+ * `/private/var` compare equal instead of judging a lease "outside the project".
+ */
+function realPathAsFarAsItExists(target: string): string {
+  let current = path.resolve(target);
+  const tail: string[] = [];
+  for (;;) {
+    try {
+      return tail.length === 0 ? realpathSync(current) : path.join(realpathSync(current), ...tail);
+    } catch {
+      const parent = path.dirname(current);
+      if (parent === current) return path.resolve(target);
+      tail.unshift(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
+/**
+ * Resolve `relative` inside `rootPath`, or say why it does not belong to it.
+ *
+ * Canonical, not lexical: `relative` of "sub/memory.db" is inside the root by
+ * string comparison and outside it on disk when `sub` is a symlink, and the
+ * rename that places the file would then land wherever the link points. The
+ * DIRECTORY is what is canonicalised — the swap renames into it — so a
+ * destination file that is itself a symlink is replaced rather than followed,
+ * which is what a restore means.
+ */
+function resolveInsideRoot(
+  rootPath: string,
+  relative: string,
+): { target: string; canonical: string } | { problem: string } {
+  const lexical = path.resolve(rootPath, relative);
+  const lexicalRel = path.relative(path.resolve(rootPath), lexical);
+  if (lexicalRel === "" || lexicalRel.startsWith("..") || path.isAbsolute(lexicalRel)) {
+    return { problem: `resolves to ${lexical}, outside the root ${rootPath}` };
+  }
+  const realRoot = realPathAsFarAsItExists(rootPath);
+  const realDir = realPathAsFarAsItExists(path.dirname(lexical));
+  const dirRel = path.relative(realRoot, realDir);
+  if (dirRel.startsWith("..") || path.isAbsolute(dirRel)) {
+    return {
+      problem:
+        `resolves to ${path.join(realDir, path.basename(lexical))}, outside the root ` +
+        `${realRoot} (reached through a symlink)`,
+    };
+  }
+  // The TARGET stays lexical: it is the path the operator named and the one a
+  // result reports. Only the judgement — and the duplicate-destination key —
+  // uses the canonical form, because `/var` and `/private/var` are the same
+  // directory and two manifest entries reaching one file through different
+  // spellings must still be caught.
+  return { target: lexical, canonical: path.join(realDir, path.basename(lexical)) };
+}
+
+/**
+ * The installation-wide maintenance exclusion (round 12 #22).
+ *
+ * A restore renames every database, every -wal and every -shm out from under
+ * whatever has them open. SQLite's WAL protects concurrent WRITERS of one file;
+ * it has nothing to say about the file being replaced underneath a live
+ * connection, which keeps reading and writing the inode that is now sitting in
+ * `*.pre-restore-*` and is deleted when the restore finishes. The restore then
+ * exited 0 while the daemon's rows went to a file nobody will ever read again —
+ * the restore "succeeded" and the daemon was not using restored state.
+ *
+ * So a restore claims this file for the installation first, and refuses to swap
+ * anything while a database still has a user attached.
+ */
+export const MAINTENANCE_LOCK_FILE = "maintenance.lock";
+
+interface MaintenanceLockPayload {
+  readonly pid: number;
+  readonly startedAtIso: string;
+  readonly purpose: string;
+}
+
+/** Exclusions this process holds: a second restore HERE is still a second restore. */
+const heldExclusions = new Set<string>();
+
+function processIsAlive(pid: number): boolean {
+  try {
+    // Signal 0 is an existence probe; EPERM means "alive, someone else's".
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+/** An acquired exclusion. `release()` is idempotent and only ever removes ours. */
+export interface MaintenanceExclusion {
+  readonly path: string;
+  release: () => void;
+}
+
+/**
+ * Claim the installation's maintenance exclusion, or throw naming the holder.
+ *
+ * A holder whose process is gone is stale and reclaimed — a machine that lost
+ * power mid-restore must not need a manual unlink before the retry — but a
+ * holder inside THIS process is never stale, because that is the concurrent
+ * restore the exclusion exists to stop.
+ */
+export function acquireMaintenanceExclusion(
+  dir: string,
+  purpose = "restore",
+): MaintenanceExclusion {
+  mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, MAINTENANCE_LOCK_FILE);
+  const key = path.resolve(file);
+  if (heldExclusions.has(key)) {
+    throw new Error(
+      `another restore in this process already holds the maintenance exclusion ${file}`,
+    );
+  }
+  if (existsSync(file)) {
+    let holder: MaintenanceLockPayload | null = null;
+    try {
+      holder = JSON.parse(readFileSync(file, "utf8")) as MaintenanceLockPayload;
+    } catch {
+      holder = null; // corrupt → stale
+    }
+    if (holder !== null && typeof holder.pid === "number" && processIsAlive(holder.pid)) {
+      throw new Error(
+        `the maintenance exclusion ${file} is held by pid ${holder.pid} ` +
+          `(${holder.purpose || "unknown"}, since ${holder.startedAtIso || "an unknown time"}) — ` +
+          `nothing was replaced`,
+      );
+    }
+    rmSync(file, { force: true });
+  }
+  const payload: MaintenanceLockPayload = {
+    pid: process.pid,
+    startedAtIso: new Date().toISOString(),
+    purpose,
+  };
+  const fd = openSync(
+    file,
+    fsConstants.O_WRONLY |
+      fsConstants.O_CREAT |
+      fsConstants.O_EXCL |
+      (typeof fsConstants.O_NOFOLLOW === "number" ? fsConstants.O_NOFOLLOW : 0),
+    0o600,
+  );
+  try {
+    writeFileSync(fd, `${JSON.stringify(payload)}\n`);
+  } finally {
+    closeSync(fd);
+  }
+  heldExclusions.add(key);
+  let released = false;
+  return {
+    path: file,
+    release: (): void => {
+      if (released) return;
+      released = true;
+      heldExclusions.delete(key);
+      try {
+        const holder = JSON.parse(readFileSync(file, "utf8")) as MaintenanceLockPayload;
+        if (holder.pid !== process.pid) return; // not ours any more; leave it alone
+      } catch {
+        // Unreadable or gone: removing it below is still the right end state.
+      }
+      rmSync(file, { force: true });
+    },
+  };
+}
+
+/**
+ * Does another connection still have this database open?
+ *
+ * `locking_mode = EXCLUSIVE` in WAL mode has to take the exclusive DMS lock on
+ * the -shm, which every open connection holds shared for as long as it is open —
+ * not merely for the length of a transaction. So SQLITE_BUSY here means "a
+ * process has this database open right now", while WAL residue left by a crash
+ * (a -wal with nobody attached) succeeds and is correctly NOT reported as a
+ * user. Measured both ways before it was relied on.
+ *
+ * Returns the reason, or undefined when nothing is attached. A file that cannot
+ * be opened at all is not reported as in use: that is the staging check's job,
+ * and guessing here would turn a permission problem into a wrong diagnosis.
+ *
+ * Known limit: a database in rollback-journal mode with an IDLE connection holds
+ * no lock and cannot be detected. The runtime's databases are WAL.
+ */
+export function attachedDatabaseUser(file: string): string | undefined {
+  if (!existsSync(file)) return undefined;
+  let db: Database.Database;
+  try {
+    db = new Database(file, { fileMustExist: true });
+  } catch {
+    return undefined;
+  }
+  try {
+    db.pragma("locking_mode = EXCLUSIVE");
+    db.exec("BEGIN EXCLUSIVE");
+    db.exec("COMMIT");
+    return undefined;
+  } catch (err) {
+    const code = (err as { code?: string }).code ?? "";
+    if (code.startsWith("SQLITE_BUSY") || code === "SQLITE_LOCKED" || code === "SQLITE_PROTOCOL") {
+      return `is still in use by another connection (${code})`;
+    }
+    return undefined;
+  } finally {
+    db.close();
+  }
 }
 
 export interface RestoreRunOptions {
@@ -688,6 +1208,22 @@ export interface RestoreRunOptions {
    * produce. Nothing in the runtime passes it.
    */
   onStaged?: () => void | Promise<void>;
+  /**
+   * Where the installation-wide maintenance exclusion is taken (#22).
+   *
+   * Defaults to the directory the `strada-home` root is being restored into —
+   * the one directory every installation has — falling back to the user home,
+   * the memory root, then the first root in the plan.
+   */
+  maintenanceDir?: string;
+  /**
+   * Swap the files even though a database still has a connection attached (#22).
+   *
+   * Default false. The refusal is what makes exit 0 mean "the installation is
+   * using restored state"; this exists for the operator who knows the attached
+   * process is a reader they are willing to break, and it is reported.
+   */
+  allowAttachedUsers?: boolean;
 }
 
 /** Everything a restore put back. */
@@ -705,6 +1241,8 @@ interface RestorePlanItem {
   readonly backupFile: string;
   /** Where it goes. */
   readonly target: string;
+  /** The same place with every symlink resolved: the duplicate-destination key. */
+  readonly canonical: string;
   /** The root it is being restored INTO. */
   readonly rootPath: string;
   /** The root it was backed up FROM; a different one means rows must be rebased. */
@@ -856,24 +1394,50 @@ export async function restoreRuntimeData(opts: RestoreRunOptions): Promise<Resto
   const rootPathFor = (root: string): string | undefined =>
     opts.roots?.[root] ?? manifest.roots[root];
 
+  /**
+   * The member inside the backup directory, or the reason it is not one (#19).
+   *
+   * `backup` is a manifest field like any other: pointed at `../../elsewhere` it
+   * made the restore read a file from outside the archive — one that passes every
+   * member check, because the manifest recorded ITS size — and install those
+   * bytes over a live database.
+   */
+  const memberInside = (member: string): { file: string } | { problem: string } => {
+    const resolved = resolveInsideRoot(opts.backupDir, member);
+    if ("problem" in resolved) {
+      return { problem: `${member} ${resolved.problem.replace("the root", "the backup directory")}` };
+    }
+    return { file: resolved.target };
+  };
+
   for (const entry of manifest.databases) {
     const rootPath = rootPathFor(entry.root);
     if (rootPath === undefined) {
       problems.push(`${BACKUP_MANIFEST_FILE} names no directory for root "${entry.root}"`);
       continue;
     }
-    const backupFile = path.join(opts.backupDir, entry.backup);
-    const problem = unusableDatabaseSource(backupFile, entry.bytes);
+    const member = memberInside(entry.backup);
+    if ("problem" in member) {
+      problems.push(member.problem);
+      continue;
+    }
+    const placed = resolveInsideRoot(rootPath, entry.relative);
+    if ("problem" in placed) {
+      problems.push(`${entry.backup} (for ${entry.relative} in root "${entry.root}") ${placed.problem}`);
+      continue;
+    }
+    const problem = unusableDatabaseSource(member.file, entry.bytes);
     if (problem !== undefined) {
-      problems.push(`${entry.backup} (for ${path.join(rootPath, entry.relative)}) ${problem}`);
+      problems.push(`${entry.backup} (for ${placed.target}) ${problem}`);
       continue;
     }
     items.push({
       kind: "database",
       root: entry.root,
       relative: entry.relative,
-      backupFile,
-      target: path.join(rootPath, entry.relative),
+      backupFile: member.file,
+      target: placed.target,
+      canonical: placed.canonical,
       rootPath,
       sourceRootPath: manifest.roots[entry.root] ?? rootPath,
     });
@@ -884,22 +1448,58 @@ export async function restoreRuntimeData(opts: RestoreRunOptions): Promise<Resto
       problems.push(`${BACKUP_MANIFEST_FILE} names no directory for root "${entry.root}"`);
       continue;
     }
-    const backupFile = path.join(opts.backupDir, entry.backup);
-    const problem = unusableBlobSource(backupFile, entry);
+    const member = memberInside(entry.backup);
+    if ("problem" in member) {
+      problems.push(member.problem);
+      continue;
+    }
+    const placed = resolveInsideRoot(rootPath, entry.relative);
+    if ("problem" in placed) {
+      problems.push(`${entry.backup} (for ${entry.relative} in root "${entry.root}") ${placed.problem}`);
+      continue;
+    }
+    const problem = unusableBlobSource(member.file, entry);
     if (problem !== undefined) {
-      problems.push(`${entry.backup} (for ${path.join(rootPath, entry.relative)}) ${problem}`);
+      problems.push(`${entry.backup} (for ${placed.target}) ${problem}`);
       continue;
     }
     items.push({
       kind: "blob",
       root: entry.root,
       relative: entry.relative,
-      backupFile,
-      target: path.join(rootPath, entry.relative),
+      backupFile: member.file,
+      target: placed.target,
+      canonical: placed.canonical,
       rootPath,
       sourceRootPath: manifest.roots[entry.root] ?? rootPath,
       sha256: entry.sha256,
     });
+  }
+
+  /**
+   * Two entries for one destination destroyed BOTH copies (round 12 #20).
+   *
+   * They share a staging name and an aside name: the first swap moved the
+   * original to `<target>.pre-restore-<stamp>` and put the replacement in place,
+   * the second moved THAT to the same aside name — overwriting the only copy of
+   * the live data — and then failed on a staged file the first swap had already
+   * consumed. The rollback deleted the destination and could not find the aside,
+   * so the probe ended with neither the original nor the restored file on disk.
+   *
+   * Checked on the canonical path, before anything is staged.
+   */
+  const byDestination = new Map<string, RestorePlanItem>();
+  for (const item of items) {
+    const first = byDestination.get(item.canonical);
+    if (first !== undefined) {
+      problems.push(
+        `${item.target} is named twice by ${BACKUP_MANIFEST_FILE} ` +
+          `(as ${first.root}/${first.relative} and ${item.root}/${item.relative}) — ` +
+          `one destination, one source`,
+      );
+      continue;
+    }
+    byDestination.set(item.canonical, item);
   }
 
   if (problems.length > 0) {
@@ -910,6 +1510,70 @@ export async function restoreRuntimeData(opts: RestoreRunOptions): Promise<Resto
     );
   }
 
+  /**
+   * The exclusion, then the proof that nothing is attached (round 12 #22).
+   *
+   * In this order: claiming the exclusion first is what stops a second restore
+   * from starting between the check and the swap, and the check is what makes
+   * exit 0 mean the installation is using restored state rather than "the files
+   * on disk changed while a daemon carried on writing to the inode they used to
+   * name".
+   */
+  const maintenanceDir =
+    opts.maintenanceDir ??
+    rootPathFor(STRADA_HOME_ROOT_NAME) ??
+    rootPathFor(USER_HOME_ROOT_NAME) ??
+    rootPathFor(MEMORY_ROOT_NAME) ??
+    items[0]?.rootPath;
+  if (maintenanceDir === undefined) {
+    // Nothing to restore and nowhere to take an exclusion: there is no
+    // installation here, which is a refusal, not a silent success.
+    throw new Error(
+      `Restore from ${opts.backupDir} refused: ${BACKUP_MANIFEST_FILE} names nothing to restore`,
+    );
+  }
+  let exclusion: MaintenanceExclusion;
+  try {
+    exclusion = acquireMaintenanceExclusion(maintenanceDir, "restore");
+  } catch (err) {
+    throw new Error(
+      `Restore from ${opts.backupDir} refused: ${(err as Error).message}. Nothing was replaced; ` +
+        `every live database still holds what it held before.`,
+    );
+  }
+  try {
+    const attached: string[] = [];
+    if (opts.allowAttachedUsers !== true) {
+      for (const item of items) {
+        if (item.kind !== "database") continue;
+        const reason = attachedDatabaseUser(item.target);
+        if (reason !== undefined) attached.push(`${item.target} ${reason}`);
+      }
+    }
+    if (attached.length > 0) {
+      throw new Error(
+        `Restore from ${opts.backupDir} refused: ${attached.length} database(s) still have a ` +
+          `user attached — ${attached.join("; ")}. Stop the runtime ("strada kill") and retry; ` +
+          `nothing was replaced, every live database still holds what it held before.`,
+      );
+    }
+    return await replaceDestinations(items, opts);
+  } finally {
+    exclusion.release();
+  }
+}
+
+/**
+ * Phases 2 and 3 of a restore: stage every replacement, then swap them in.
+ *
+ * Split out from {@link restoreRuntimeData} so the maintenance exclusion wraps
+ * the whole of it in a `finally` — an exclusion that outlives a failed restore
+ * would wedge the next attempt.
+ */
+async function replaceDestinations(
+  items: readonly RestorePlanItem[],
+  opts: RestoreRunOptions,
+): Promise<RestoreRunResult> {
   // Unique per run, and the same for every file of it, so a crash leaves
   // residue that is obviously one restore's and not another's.
   const stamp = `${Date.now().toString(36)}-${randomBytes(4).toString("hex")}`;
@@ -1044,14 +1708,22 @@ export interface ParsedArgs {
   userHome?: string;
   /** `--project-root`; omitted means no project-owned databases are in scope. */
   projectRoot?: string;
+  /** `--allow-missing-blobs`; record a row whose bytes are gone instead of failing (#21). */
+  allowMissingBlobs?: boolean;
 }
 
 /** Parse the CLI arguments. Throws with usage on anything missing. */
 export function parseBackupArgs(argv: readonly string[]): ParsedArgs {
   const values = new Map<string, string>();
+  const switches = new Set<string>();
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i]!;
     if (!arg.startsWith("--")) continue;
+    // A switch takes no value, so the argument after it is not consumed.
+    if (arg === "--allow-missing-blobs") {
+      switches.add("allow-missing-blobs");
+      continue;
+    }
     const eq = arg.indexOf("=");
     if (eq > 0) {
       values.set(arg.slice(2, eq), arg.slice(eq + 1));
@@ -1069,7 +1741,8 @@ export function parseBackupArgs(argv: readonly string[]): ParsedArgs {
   if (!source || !dest) {
     throw new Error(
       "usage: database-backup --source <memory-root> --dest <dir> " +
-        "[--strada-home <dir>] [--user-home <dir>] [--project-root <dir>] [--timestamp <ts>]",
+        "[--strada-home <dir>] [--user-home <dir>] [--project-root <dir>] [--timestamp <ts>] " +
+        "[--allow-missing-blobs]",
     );
   }
   const timestamp = values.get("timestamp");
@@ -1083,6 +1756,7 @@ export function parseBackupArgs(argv: readonly string[]): ParsedArgs {
     ...(stradaHome ? { stradaHome } : {}),
     ...(userHome ? { userHome } : {}),
     ...(projectRoot ? { projectRoot } : {}),
+    ...(switches.has("allow-missing-blobs") ? { allowMissingBlobs: true } : {}),
   };
 }
 
@@ -1103,6 +1777,7 @@ export async function runBackupCli(argv: readonly string[]): Promise<number> {
       ...(parsed.stradaHome ? { stradaHome: parsed.stradaHome } : {}),
       ...(parsed.userHome ? { userHome: parsed.userHome } : {}),
       ...(parsed.projectRoot ? { projectRoot: parsed.projectRoot } : {}),
+      ...(parsed.allowMissingBlobs ? { allowMissingBlobs: true } : {}),
     });
     // Blobs are produced files like any other: the caller checksums them, and a
     // backup that silently carried none of them is the defect (#19).
