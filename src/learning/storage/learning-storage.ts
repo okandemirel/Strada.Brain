@@ -1383,8 +1383,15 @@ export class LearningStorage {
   }
 
   /**
-   * Merge two instincts: winner keeps its data, loser's scopes transfer, loser is hard-deleted.
+   * Merge two instincts: winner keeps its data, loser's scopes transfer, loser
+   * is SOFT-RETIRED (status 'deprecated', evolved_to = the winner).
    * Winner keeps its own name/pattern/alpha/beta per locked decision.
+   *
+   * D43 (audit 04.5): the loser used to be DELETED. A merge is decided by a
+   * similarity heuristic, and the row it destroyed carried a solution, its stats
+   * and its provenance — unrecoverable. 'deprecated' is the existing retired
+   * state: out of every retrieval path, still readable, and still evictable by
+   * the explicit maxInstincts sweep.
    *
    * A merge CARRIES the loser's scope, it never widens it (item 3.1 / audit 04.4
    * / D42): the transfer used to copy project_path only, so a row that said
@@ -1402,8 +1409,10 @@ export class LearningStorage {
         "INSERT OR IGNORE INTO instinct_scopes (instinct_id, project_path, created_at, scope_type, user_id) SELECT ?, project_path, created_at, scope_type, user_id FROM instinct_scopes WHERE instinct_id = ?"
       ).run(winnerId, loserId);
 
-      // Hard-delete loser (CASCADE will clean up loser's scope rows)
-      this.db!.prepare("DELETE FROM instincts WHERE id = ?").run(loserId);
+      // Soft-retire the loser, naming the successor that superseded it (D43).
+      this.db!.prepare(
+        "UPDATE instincts SET status = 'deprecated', evolved_to = ?, updated_at = ? WHERE id = ?"
+      ).run(winnerId, Date.now(), loserId);
     });
 
     merge();

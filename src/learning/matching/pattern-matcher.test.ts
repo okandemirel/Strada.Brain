@@ -450,3 +450,110 @@ describe("jaccardSimilarity", () => {
     expect(jaccardSimilarity(setA, setB)).toBe(0.5);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// D43 / audit 04.5 — eager dedup judged duplicates on the TRIGGER alone, so an
+// instinct with the same trigger and a DIFFERENT solution was merged away, and
+// the merge HARD-DELETED it: the losing solution, its stats and its provenance
+// were gone for good on a similarity guess.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("dedup merges only true duplicates, and supersession is soft (D43 / audit 04.5)", () => {
+  const TRIGGER = "CS0246: The type or namespace name 'BoardView' could not be found";
+  const PROJECT = "/projects/pixelflow";
+
+  function instinct(overrides: Partial<Instinct>): Instinct {
+    return {
+      id: "instinct-x",
+      name: "Candidate",
+      type: "error_fix",
+      status: "active",
+      confidence: 0.8,
+      triggerPattern: TRIGGER,
+      action: "Add using PixelFlow.Board;",
+      contextConditions: [],
+      stats: { timesSuggested: 4, timesApplied: 3, timesFailed: 1, successRate: 0.75, averageExecutionMs: 0 },
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      sourceTrajectoryIds: [],
+      tags: [],
+      ...overrides,
+    } as unknown as Instinct;
+  }
+
+  const scope = {
+    projectPath: PROJECT,
+    scopeFilter: "project-only" as const,
+    recencyBoost: 1.0,
+    scopeBoost: 1.1,
+  };
+
+  async function harness(loserAction: string) {
+    const { LearningStorage } = await import("../storage/learning-storage.js");
+    const storage = new LearningStorage(":memory:");
+    storage.initialize();
+    const winner = instinct({ id: "instinct-winner" as Instinct["id"], name: "Winner", confidence: 0.9 as Instinct["confidence"] });
+    const loser = instinct({
+      id: "instinct-loser" as Instinct["id"],
+      name: "Loser",
+      confidence: 0.6 as Instinct["confidence"],
+      action: loserAction,
+    });
+    storage.createInstinct(winner, PROJECT);
+    storage.createInstinct(loser, PROJECT);
+    const matcher = new PatternMatcher(storage);
+    return { storage, matcher, winner, loser };
+  }
+
+  it("a similar trigger with a DIFFERENT solution does not erase the existing instinct", async () => {
+    const { storage, matcher } = await harness(
+      "Delete Assets/Board.cs and regenerate the whole module from the template",
+    );
+
+    await matcher.findSimilarInstincts(TRIGGER, { scope });
+
+    const loser = storage.getInstinct("instinct-loser");
+    expect(loser, "a different solution was hard-deleted as a duplicate").not.toBeNull();
+    expect(loser!.status, "a different solution was retired as a duplicate").toBe("active");
+    expect(storage.getInstinct("instinct-winner")).not.toBeNull();
+    storage.close();
+  });
+
+  it("a true duplicate is superseded — soft-retired, pointing at its successor, never deleted", async () => {
+    const { storage, matcher } = await harness("Add using PixelFlow.Board;");
+
+    await matcher.findSimilarInstincts(TRIGGER, { scope });
+
+    const loser = storage.getInstinct("instinct-loser");
+    expect(loser, "the superseded instinct was hard-deleted").not.toBeNull();
+    expect(loser!.status).toBe("deprecated");
+    expect(loser!.evolvedTo, "the retired row does not name what superseded it").toBe("instinct-winner");
+    expect(storage.getInstinct("instinct-winner")!.status).toBe("active");
+    storage.close();
+  });
+
+  it("a superseded instinct is out of retrieval and out of the match list (legitimate dedup kept)", async () => {
+    const { storage, matcher } = await harness("Add using PixelFlow.Board;");
+
+    const matches = await matcher.findSimilarInstincts(TRIGGER, { scope });
+    expect(matches.some((m) => m.id === "instinct-loser"), "the merged loser stayed in the results").toBe(false);
+    expect(matches.some((m) => m.id === "instinct-winner")).toBe(true);
+
+    const again = await matcher.findSimilarInstincts(TRIGGER, { scope });
+    expect(again.some((m) => m.id === "instinct-loser")).toBe(false);
+    storage.close();
+  });
+
+  it("the superseded instinct's scopes reach the winner (legitimate behaviour kept)", async () => {
+    const { storage, matcher } = await harness("Add using PixelFlow.Board;");
+    storage.addInstinctScope("instinct-loser", "/projects/other");
+
+    await matcher.findSimilarInstincts(TRIGGER, { scope });
+
+    const paths = (storage.getDatabase()!
+      .prepare("SELECT project_path FROM instinct_scopes WHERE instinct_id = ? ORDER BY project_path")
+      .all("instinct-winner") as Array<{ project_path: string }>).map((r) => r.project_path);
+    expect(paths).toContain(PROJECT);
+    expect(paths).toContain("/projects/other");
+    storage.close();
+  });
+});

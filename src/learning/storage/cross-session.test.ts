@@ -781,7 +781,9 @@ describe("LearningStorage.mergeInstincts", () => {
     storage.close();
   });
 
-  it("keeps winner, hard-deletes loser, transfers loser scopes to winner", () => {
+  // D43 (audit 04.5): the loser is SOFT-retired now — a similarity heuristic
+  // must not destroy a solution, its stats and its provenance.
+  it("keeps winner, soft-retires loser pointing at it, transfers loser scopes to winner", () => {
     storage.mergeInstincts("instinct_winner", "instinct_loser");
 
     // Winner exists
@@ -789,9 +791,11 @@ describe("LearningStorage.mergeInstincts", () => {
     expect(winner).not.toBeNull();
     expect(winner!.name).toBe("Winner");
 
-    // Loser is gone
+    // Loser is retired, not gone
     const loser = storage.getInstinct("instinct_loser");
-    expect(loser).toBeNull();
+    expect(loser).not.toBeNull();
+    expect(loser!.status).toBe("deprecated");
+    expect(loser!.evolvedTo).toBe("instinct_winner");
 
     // Winner now has loser's scopes
     const db = storage.getDatabase();
@@ -973,11 +977,14 @@ describe("PatternMatcher scope-aware retrieval", () => {
 
     await matcher.findSimilarInstincts("fix typescript import error in module", { scope });
 
-    // After dedup, the lower-confidence instinct should be gone
+    // After dedup, the lower-confidence instinct is retired (D43: soft, not deleted)
     const remaining1 = storage.getInstinct("instinct_dedup_1");
     const remaining2 = storage.getInstinct("instinct_dedup_2");
     expect(remaining1).not.toBeNull(); // Winner (higher confidence)
-    expect(remaining2).toBeNull(); // Loser (lower confidence) -- hard deleted
+    expect(remaining1!.status).toBe("active");
+    expect(remaining2).not.toBeNull(); // Loser (lower confidence) -- soft-retired
+    expect(remaining2!.status).toBe("deprecated");
+    expect(remaining2!.evolvedTo).toBe("instinct_dedup_1");
 
     storage.close();
   });

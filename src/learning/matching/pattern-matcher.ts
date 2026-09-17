@@ -64,6 +64,15 @@ function stringSimilarity(a: string, b: string): number {
 }
 
 /**
+ * The lexical similarity the dedup decision uses: the same blend
+ * findSimilarInstincts scores trigger patterns with (exact match wins outright).
+ */
+function combinedSimilarity(a: string, b: string): number {
+  if (a === b) return 1.0;
+  return stringSimilarity(a, b) * 0.6 + cosineSimilarity(a, b) * 0.4;
+}
+
+/**
  * Calculate cosine similarity between two token sets
  */
 function cosineSimilarity(a: string, b: string): number {
@@ -289,13 +298,17 @@ export class PatternMatcher {
         // Check for existing matches that are also high-similarity
         for (const existing of matches) {
           if (existing.instinct && existing.instinct.id !== instinct.id) {
-            const pairSim = stringSimilarity(existing.instinct.triggerPattern, instinct.triggerPattern);
-            const pairCosine = cosineSimilarity(existing.instinct.triggerPattern, instinct.triggerPattern);
-            const pairScore = existing.instinct.triggerPattern === instinct.triggerPattern ? 1.0 : (pairSim * 0.6 + pairCosine * 0.4);
-            if (pairScore >= CONFIDENCE_THRESHOLDS.SIMILAR) {
+            const pairScore = combinedSimilarity(existing.instinct.triggerPattern, instinct.triggerPattern);
+            // D43 (audit 04.5): the trigger alone decided this, so two instincts
+            // that fire on the same error with DIFFERENT solutions were "the same
+            // instinct" and one of them was destroyed. A duplicate is the same
+            // trigger AND the same action; a rival solution for a shared trigger
+            // is knowledge, not noise, and stays.
+            const actionScore = combinedSimilarity(existing.instinct.action, instinct.action);
+            if (pairScore >= CONFIDENCE_THRESHOLDS.SIMILAR && actionScore >= CONFIDENCE_THRESHOLDS.SIMILAR) {
               const higher = existing.instinct.confidence >= instinct.confidence ? existing.instinct : instinct;
               const lower = existing.instinct.confidence >= instinct.confidence ? instinct : existing.instinct;
-              dedupCandidates.push({ higher, lower, similarity: pairScore });
+              dedupCandidates.push({ higher, lower, similarity: Math.min(pairScore, actionScore) });
             }
           }
         }
@@ -354,7 +367,7 @@ export class PatternMatcher {
           this.eventBus.emit("instinct:merged", {
             winner: higher,
             loserId: lower.id,
-            reason: `Eager dedup: ${(dedupSim * 100).toFixed(0)}% similarity`,
+            reason: `Eager dedup: ${(dedupSim * 100).toFixed(0)}% trigger+action similarity (loser soft-retired)`,
             timestamp: Date.now(),
           });
         }
