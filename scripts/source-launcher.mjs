@@ -395,14 +395,45 @@ function resolveStradaHome(env = process.env, homeDir = os.homedir(), cwd = home
   return path.join(homeDir, ".strada");
 }
 
-function resolveRuntimeRoots(options = {}) {
+/**
+ * What STRADA_SOURCE_CHECKOUT says, or undefined when it says nothing.
+ *
+ * Round 13 #35: this launcher read only "true", so an explicit `false` was
+ * ignored and root selection followed `.git` anyway — and then the source
+ * branch below OVERWROTE the operator's flag with "true" for the child. A
+ * destructive command (`uninstall --purge-config`) therefore aimed at the
+ * checkout when the operator had said the state lives in the app home. Same
+ * three states as src/common/runtime-paths.ts.
+ */
+function explicitSourceCheckout(env) {
+  const raw = typeof env.STRADA_SOURCE_CHECKOUT === "string" ? env.STRADA_SOURCE_CHECKOUT.trim().toLowerCase() : "";
+  if (raw === "") return undefined;
+  if (raw === "true" || raw === "1" || raw === "yes") return true;
+  if (raw === "false" || raw === "0" || raw === "no") return false;
+  return undefined;
+}
+
+/**
+ * The flag the source child inherits.
+ *
+ * Running FROM source does not decide WHERE runtime state lives: an operator
+ * who said `false` keeps the app-home layout, and overwriting that with
+ * "true" here is what let `uninstall --purge-config` aim at the checkout
+ * (round 13 #35).
+ */
+export function sourceCheckoutFlagForChild(env = process.env) {
+  return explicitSourceCheckout(env) === false ? "false" : "true";
+}
+
+export function resolveRuntimeRoots(options = {}) {
   const platform = options.platform || process.platform;
   const env = options.env || process.env;
   const homeDir = options.homeDir || os.homedir();
   const installRoot = options.rootDir || ROOT_DIR;
   const cwd = options.cwd || resolveLaunchCwd(env, homeDir);
   const sourceCheckout = options.sourceCheckout
-    ?? (env.STRADA_SOURCE_CHECKOUT === "true" || existsSync(path.join(installRoot, ".git")));
+    ?? explicitSourceCheckout(env)
+    ?? existsSync(path.join(installRoot, ".git"));
   return {
     installRoot,
     sourceCheckout,
@@ -1143,7 +1174,7 @@ export function main(argv = process.argv.slice(2)) {
       ["--import", "tsx", SOURCE_ENTRY, ...userArgs],
       {
         STRADA_INSTALL_ROOT: ROOT_DIR,
-        STRADA_SOURCE_CHECKOUT: "true",
+        STRADA_SOURCE_CHECKOUT: sourceCheckoutFlagForChild(process.env),
         STRADA_LAUNCHER_PATH: resolvedLauncherPath,
       },
     );

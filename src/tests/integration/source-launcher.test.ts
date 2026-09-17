@@ -583,3 +583,77 @@ describe("source launcher install-command", () => {
     expect(existsSync(installDir)).toBe(false);
   });
 });
+
+/**
+ * Codex round 13 #35. `STRADA_SOURCE_CHECKOUT` was two-state in one direction
+ * here too: "true" forced a source checkout and anything else probed for `.git`,
+ * so an explicit `false` did nothing — and the source branch then handed the
+ * child `"true"` regardless. An operator who had said "runtime state lives in
+ * the app home" could point `uninstall --purge-config` at their checkout.
+ */
+describe("the launcher reads STRADA_SOURCE_CHECKOUT in three states (round 13 #35)", () => {
+  const tempDirs: string[] = [];
+  afterEach(() => {
+    for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+  it("false moves the config root to the app home even inside a checkout", async () => {
+    const { resolveRuntimeRoots } = await loadSourceLauncherModule();
+    const inCheckout = { rootDir: process.cwd(), homeDir: "/Users/tester", cwd: "/Users/tester/.strada" };
+    const off = resolveRuntimeRoots({ ...inCheckout, env: { STRADA_SOURCE_CHECKOUT: "false" } });
+    expect(off.sourceCheckout).toBe(false);
+    expect(off.configRoot).toBe(path.join("/Users/tester", ".strada"));
+    // true still forces it, and the other spellings are read as well.
+    for (const yes of ["true", "1", "YES"]) {
+      expect(resolveRuntimeRoots({ ...inCheckout, env: { STRADA_SOURCE_CHECKOUT: yes } }).sourceCheckout, yes).toBe(true);
+    }
+    for (const no of ["0", " No "]) {
+      expect(resolveRuntimeRoots({ ...inCheckout, env: { STRADA_SOURCE_CHECKOUT: no } }).sourceCheckout, no).toBe(false);
+    }
+    // Saying nothing (unset, empty, unreadable) still probes for .git.
+    for (const quiet of [undefined, "", "maybe"]) {
+      const env = quiet === undefined ? {} : { STRADA_SOURCE_CHECKOUT: quiet };
+      expect(resolveRuntimeRoots({ ...inCheckout, env }).sourceCheckout, String(quiet)).toBe(true);
+    }
+  });
+
+  it("purge-config with an explicit false leaves the checkout alone and clears the app home", async () => {
+    const { uninstallCommand: uninstall } = await loadSourceLauncherModule();
+    const tempHome = mkdtempSync(path.join(os.tmpdir(), "strada-launcher-home-"));
+    const tempRepo = mkdtempSync(path.join(os.tmpdir(), "strada-launcher-repo-"));
+    tempDirs.push(tempHome, tempRepo);
+    const appHome = path.join(tempHome, ".strada");
+    mkdirSync(appHome, { recursive: true });
+    mkdirSync(path.join(tempRepo, ".git"), { recursive: true });
+    // The operator's real configuration, and a checkout that must not be touched.
+    writeFileSync(path.join(appHome, ".env"), "KIMI_API_KEY=k\n", "utf8");
+    writeFileSync(path.join(tempRepo, ".env"), "DEVELOPER=me\n", "utf8");
+
+    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    try {
+      uninstall({
+        env: { STRADA_SOURCE_CHECKOUT: "false", HOME: tempHome },
+        homeDir: tempHome,
+        rootDir: tempRepo,
+        purgeConfig: true,
+      });
+    } finally {
+      consoleSpy.mockRestore();
+    }
+
+    expect(existsSync(path.join(appHome, ".env"))).toBe(false);
+    // The developer's own checkout configuration is none of its business.
+    expect(existsSync(path.join(tempRepo, ".env"))).toBe(true);
+  });
+});
+
+describe("the flag the source child inherits (round 13 #35)", () => {
+  it("keeps an explicit false instead of forcing true", async () => {
+    const { sourceCheckoutFlagForChild } = await loadSourceLauncherModule();
+    expect(sourceCheckoutFlagForChild({ STRADA_SOURCE_CHECKOUT: "false" })).toBe("false");
+    expect(sourceCheckoutFlagForChild({ STRADA_SOURCE_CHECKOUT: "0" })).toBe("false");
+    // Running from source is still the default answer for everyone else.
+    expect(sourceCheckoutFlagForChild({})).toBe("true");
+    expect(sourceCheckoutFlagForChild({ STRADA_SOURCE_CHECKOUT: "true" })).toBe("true");
+    expect(sourceCheckoutFlagForChild({ STRADA_SOURCE_CHECKOUT: "maybe" })).toBe("true");
+  });
+});

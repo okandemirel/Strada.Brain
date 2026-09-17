@@ -150,28 +150,58 @@ async function main() {
     {
       const s = steps[1];
       const started = Date.now();
-      const { persistSetup } = await import(join(REPO, "src/core/setup-env-persistence.ts"));
+      // THROUGH A CHILD, NOT AN IMPORT (round 13 #34): importing `.ts` from
+      // this `.mjs` works only on a Node new enough to strip types, so on a
+      // supported Node 20 the rehearsal died with ERR_UNKNOWN_FILE_EXTENSION
+      // before it produced a report. The doctor steps already go through tsx;
+      // so does this one, and it is still production's own persistence.
       const envPath = join(home, ".env");
-      const result = await persistSetup(
-        envPath,
-        [
-          `UNITY_PROJECT_PATH=${project}`,
-          "STRADA_LANGUAGE=en",
-          "WEB_PORT=3000",
-          // A configuration that VALIDATES needs a provider. Ollama is the one
-          // the schema accepts without a credential, so the rehearsal never
-          // writes a fake key and never has one to leak.
-          "PROVIDER_CHAIN=ollama",
-        ],
-        { ownedKeys: ["UNITY_PROJECT_PATH", "STRADA_LANGUAGE", "WEB_PORT", "PROVIDER_CHAIN"] },
-      );
+      const lines = [
+        `UNITY_PROJECT_PATH=${project}`,
+        "STRADA_LANGUAGE=en",
+        "WEB_PORT=3000",
+        // A configuration that VALIDATES needs a provider. Ollama is the one
+        // the schema accepts without a credential, so the rehearsal never
+        // writes a fake key and never has one to leak.
+        "PROVIDER_CHAIN=ollama",
+      ];
+      // Inputs travel in the ENVIRONMENT, not argv: `--eval` shifts argv in a
+      // way that differs between Node versions, and no top-level await —
+      // `tsx --eval` transforms the snippet as CJS, where esbuild refuses it.
+      const script = [
+        'import(process.env.REHEARSAL_MODULE)',
+        '  .then((m) => m.persistSetup(process.env.REHEARSAL_ENV_PATH, JSON.parse(process.env.REHEARSAL_LINES), { ownedKeys: JSON.parse(process.env.REHEARSAL_OWNED) }))',
+        '  .then((result) => process.stdout.write(JSON.stringify({ diskMatchesCommit: result.diskMatchesCommit })))',
+        '  .catch((error) => { process.stderr.write(String((error && error.stack) || error)); process.exit(1); });',
+      ].join("\n");
+      let diskMatchesCommit = false;
+      let childError = "";
+      try {
+        const { stdout } = await run("npx", ["tsx", "--eval", script], {
+          cwd: REPO,
+          env: {
+            ...process.env,
+            HOME: home,
+            STRADA_HOME: home,
+            STRADA_SOURCE_CHECKOUT: "false",
+            REHEARSAL_MODULE: join(REPO, "src/core/setup-env-persistence.ts"),
+            REHEARSAL_ENV_PATH: envPath,
+            REHEARSAL_LINES: JSON.stringify(lines),
+            REHEARSAL_OWNED: JSON.stringify(["UNITY_PROJECT_PATH", "STRADA_LANGUAGE", "WEB_PORT", "PROVIDER_CHAIN"]),
+          },
+          maxBuffer: 4 * 1024 * 1024,
+        });
+        diskMatchesCommit = JSON.parse(stdout.trim().split("\n").pop() ?? "{}").diskMatchesCommit === true;
+      } catch (error) {
+        childError = String(error?.stderr ?? error?.message ?? error).slice(0, 300);
+      }
       s.ms = Date.now() - started;
       const onDisk = existsSync(envPath) ? readFileSync(envPath, "utf-8") : "";
-      const ok = result.diskMatchesCommit && onDisk.includes(project);
+      const ok = diskMatchesCommit && onDisk.includes(project);
       s.state = ok ? "pass" : "fail";
       s.detail = ok
         ? `wrote ${envPath} and read back the project path`
-        : `diskMatchesCommit=${result.diskMatchesCommit}; the file ${onDisk ? "does not name the project" : "was not written"}`;
+        : `diskMatchesCommit=${diskMatchesCommit}; the file ${onDisk ? "does not name the project" : "was not written"}${childError ? `; ${childError}` : ""}`;
     }
 
     // 3. Configured.
