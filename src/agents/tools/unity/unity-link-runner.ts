@@ -275,6 +275,14 @@ export interface UnityLinkRunnerOptions {
   unityBin?: string;
   unityCli?: string;
   timeoutMs?: number;
+  /**
+   * Where the throwaway consent project lives. Defaults to the persistent
+   * ~/.strada/unity-link-project; tests MUST pass a temp dir — until
+   * 2026-09-17 the scratch was built under the real home before the
+   * test-mode guard ran, so the "refuses to write the REAL store" test still
+   * wrote to the user's home (audit 15 D14).
+   */
+  scratchDir?: string;
   /** Test seam: replace the Unity process spawn. */
   spawnImpl?: typeof execFile;
   /** Test seam: replace the wait-for-output polling. */
@@ -345,10 +353,21 @@ export async function runUnityLink(options: UnityLinkRunnerOptions = {}): Promis
   // packages takes 3-4 minutes and repeatedly timed out the run when the
   // scratch was deleted every attempt (measured 2026-08-27). A stable path
   // pays that cost once; later runs boot in seconds.
-  const scratch = join(homedir(), ".strada", "unity-link-project");
+  const scratch = options.scratchDir ?? join(homedir(), ".strada", "unity-link-project");
   const outputPath = join(scratch, "link-result.json");
   const logPath = join(scratch, "editor.log");
   const timeoutMs = options.timeoutMs ?? 10 * 60_000;
+  // THE TEST GUARD RUNS BEFORE THE FIRST WRITE. It used to sit after the
+  // token exchange, by which point the scratch project had already been
+  // created under the real home directory.
+  const underTest = process.env["VITEST"] !== undefined || process.env["NODE_ENV"] === "test";
+  if (underTest && (options.linkStorePath === undefined || options.scratchDir === undefined)) {
+    return {
+      ok: false,
+      detail:
+        "refused under test: pass linkStorePath and scratchDir — writing the real ~/.strada store from a test destroys the user's Unity link",
+    };
+  }
 
   try {
     mkdirSync(join(scratch, "Assets", "Editor"), { recursive: true });
@@ -439,13 +458,11 @@ export async function runUnityLink(options: UnityLinkRunnerOptions = {}): Promis
     }
 
     const linkStore = options.linkStorePath ?? LINK_STORE;
-    if (
-      linkStore === LINK_STORE &&
-      (process.env["VITEST"] !== undefined || process.env["NODE_ENV"] === "test")
-    ) {
+    if (linkStore === LINK_STORE && underTest) {
       // Measured live 2026-08-28: the "stores the link" unit test overwrote
       // the user's REAL link store with fixture data and left it there —
-      // silently killing the account link on every full-suite run.
+      // silently killing the account link on every full-suite run. The early
+      // guard above already refused; this stays as belt-and-braces.
       return { ok: false, detail: "refused under test: pass linkStorePath — writing the real ~/.strada store from a test destroys the user's Unity link" };
     }
     mkdirSync(dirname(linkStore), { recursive: true });

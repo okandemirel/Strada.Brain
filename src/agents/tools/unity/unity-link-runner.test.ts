@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { tmpdir, homedir } from "node:os";
 import { runUnityLink, CONSENT_SCRIPT } from "./unity-link-runner.js";
 import type { execFile } from "node:child_process";
 
@@ -36,12 +36,14 @@ describe("runUnityLink", () => {
   // live refresh token with the fixture below and leave it there — silently
   // destroying the account link on every full-suite run.
   let storePath: string;
+  let scratchDir: string;
 
   beforeEach(() => {
     fakeBinDir = mkdtempSync(join(tmpdir(), "unity-link-test-"));
     fakeCli = join(fakeBinDir, "unity");
     writeFileSync(fakeCli, "#!/bin/sh\n");
     storePath = join(fakeBinDir, "unity-asset-store.json");
+    scratchDir = join(fakeBinDir, "scratch");
   });
 
   afterEach(() => {
@@ -58,6 +60,7 @@ describe("runUnityLink", () => {
 
   it("reports when no Unity install can be found", async () => {
     const result = await runUnityLink({
+      scratchDir,
       unityCli: join(fakeBinDir, "missing-cli"),
       unityBin: join(fakeBinDir, "missing-editor"),
     });
@@ -78,6 +81,7 @@ describe("runUnityLink", () => {
       spawnImpl: fakeCliLauncher(),
       waitForOutputImpl: outputWriter({ code: VALID_CODE }),
       linkStorePath: storePath,
+      scratchDir,
       // NEVER the real Hub config: reading it made this test pass only on
       // machines with the Hub installed (green on the dev Mac, red on CI).
       hubCloudConfigImpl: fakeHubConfig,
@@ -97,10 +101,30 @@ describe("runUnityLink", () => {
       spawnImpl: fakeCliLauncher(),
       waitForOutputImpl: outputWriter({ code: VALID_CODE }),
       hubCloudConfigImpl: fakeHubConfig,
+      scratchDir,
       // no linkStorePath → would target the real ~/.strada store
     });
     expect(result.ok).toBe(false);
     expect(result.detail).toContain("refused under test");
+  });
+
+  it("refuses BEFORE building the scratch project under the real home (2026-09-17)", async () => {
+    stubTokenExchange();
+    const realScratch = join(homedir(), ".strada", "unity-link-project", "Assets", "Editor", "StradaLinkConsent.cs");
+    const before = existsSync(realScratch) ? statSync(realScratch).mtimeMs : undefined;
+    const result = await runUnityLink({
+      unityCli: fakeCli,
+      spawnImpl: fakeCliLauncher(),
+      waitForOutputImpl: outputWriter({ code: VALID_CODE }),
+      hubCloudConfigImpl: fakeHubConfig,
+      linkStorePath: storePath,
+      // no scratchDir → would build the consent project under ~/.strada
+    });
+    expect(result.ok).toBe(false);
+    expect(result.detail).toContain("scratchDir");
+    const after = existsSync(realScratch) ? statSync(realScratch).mtimeMs : undefined;
+    expect(after).toBe(before);
+    expect(existsSync(storePath)).toBe(false);
   });
 
   it("rejects a malformed authorization-code file instead of exchanging", async () => {
@@ -108,6 +132,8 @@ describe("runUnityLink", () => {
       unityCli: fakeCli,
       spawnImpl: fakeCliLauncher(),
       waitForOutputImpl: outputWriter({ code: "short" }),
+      linkStorePath: storePath,
+      scratchDir,
     });
     expect(result.ok).toBe(false);
     expect(result.detail).toContain("authorization code");
@@ -118,6 +144,8 @@ describe("runUnityLink", () => {
       unityCli: fakeCli,
       spawnImpl: fakeCliLauncherFail(),
       waitForOutputImpl: async () => false,
+      linkStorePath: storePath,
+      scratchDir,
     });
     expect(result.ok).toBe(false);
     expect(result.detail).toContain("did not complete");

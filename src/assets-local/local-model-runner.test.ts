@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir, homedir } from "node:os";
 import { LocalModelRunner, type SpawnImpl } from "./local-model-runner.js";
@@ -20,13 +20,19 @@ function spawnFail(code = 1, stderr = "boom"): SpawnImpl {
 
 describe("LocalModelRunner", () => {
   let dir: string;
-  const ROOT = join(homedir(), ".strada", "assets-local");
+  // NEVER the real ~/.strada/assets-local: until 2026-09-17 these tests wrote
+  // scripts and .installed-* markers into the user's real installation and
+  // one of them deleted the real .installed-trellis marker on every full
+  // suite run (audit 15 D1–D4). The runner reads the root at call time.
+  const marker = (id: string): string => join(dir, `.installed-${id}`);
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), "lmr-test-"));
+    process.env["STRADA_ASSETS_LOCAL_ROOT"] = dir;
   });
 
   afterEach(() => {
+    delete process.env["STRADA_ASSETS_LOCAL_ROOT"];
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -40,31 +46,52 @@ describe("LocalModelRunner", () => {
     const runner = new LocalModelRunner(spawn);
     const spec = getModelSpec("sd15")!;
     const result = await runner.install(spec);
-    // Whether it "succeeds" depends on the real venv state; what must hold is
-    // the command sequence: venv (maybe) → pip upgrade → pip install <packages>.
+    // In an isolated root the venv never exists, so the sequence is fixed:
+    // venv → pip upgrade → pip install <packages> → marker. Every step is
+    // asserted; a conditional `if (result.ok)` passed with zero assertions.
+    expect(result.ok).toBe(true);
     const pipInstall = calls.find((c) => c.args.includes("install") && c.args.includes("torch"));
-    if (result.ok) {
-      expect(pipInstall).toBeDefined();
-    }
+    expect(pipInstall).toBeDefined();
+    expect(calls.some((c) => c.args.includes("venv"))).toBe(true);
+    expect(existsSync(marker("sd15"))).toBe(true);
+    // …and nothing outside the isolated root was touched.
+    expect(existsSync(join(homedir(), ".strada", "assets-local", "scripts", "lmr-test-sentinel"))).toBe(false);
+  });
+
+  it("writes markers under STRADA_ASSETS_LOCAL_ROOT, never under the home directory (2026-09-17)", async () => {
+    const runner = new LocalModelRunner(spawnOk().spawn);
+    await runner.install(getModelSpec("sd15")!);
+    const inRoot = existsSync(marker("sd15"));
+    const scriptsInRoot = existsSync(join(dir, "scripts"));
+    expect(inRoot && scriptsInRoot).toBe(true);
   });
 
   it("surfaces pip failures instead of marking the model installed", async () => {
+    // A venv that already exists takes the pip path, so the failure is pip's.
+    mkdirSync(join(dir, "venv", "bin"), { recursive: true });
+    writeFileSync(join(dir, "venv", "bin", "python3"), "#!/bin/sh\n");
     const runner = new LocalModelRunner(spawnFail(1, "resolution impossible"));
+    expect(runner.venvReady()).toBe(true);
+    expect(existsSync(marker("sd15"))).toBe(false);
     const result = await runner.install(getModelSpec("sd15")!);
-    if (!runner.venvReady()) {
-      // venv creation failed first — also an honest failure.
-      expect(result.ok).toBe(false);
-    } else {
-      expect(result.ok).toBe(false);
-      expect(result.detail).toContain("pip");
-    }
-    expect(existsSync(join(ROOT, ".installed-sd15"))).toBe(existsSync(join(ROOT, ".installed-sd15")));
+    expect(result.ok).toBe(false);
+    expect(result.detail).toContain("pip");
+    // The marker must not appear (the old assertion compared a value to itself).
+    expect(existsSync(marker("sd15"))).toBe(false);
+  });
+
+  it("a failed venv creation is an honest failure too", async () => {
+    const runner = new LocalModelRunner(spawnFail(1, "no python3"));
+    const result = await runner.install(getModelSpec("sd15")!);
+    expect(result.ok).toBe(false);
+    expect(result.detail).toContain("venv");
+    expect(existsSync(marker("sd15"))).toBe(false);
   });
 
   it("refuses inference for a model that is not installed", async () => {
     const runner = new LocalModelRunner(spawnOk().spawn);
     const fresh = getModelSpec("trellis")!;
-    rmSync(join(ROOT, ".installed-trellis"), { force: true });
+    // The isolated root has no marker; nothing is deleted from anywhere.
     const result = await runner.imageToMesh(fresh, join(dir, "in.png"), join(dir, "out.obj"));
     expect(result.ok).toBe(false);
     expect(result.detail).toContain("not installed");
