@@ -112,6 +112,34 @@ const MESSAGE_BATCH_SIZE = 5;
 // silently truncated (the tail dropped).
 const MAX_SLACK_TEXT_CHUNK = 39000;
 
+// ---------------------------------------------------------------------------
+// Slack chat identity (plan 2.11, audit 12F3/D60).
+//
+// A Slack conversation is a thread, not a channel: two threads in one channel
+// are two conversations. The chat id the rest of the system keys on (task
+// ownership, memory scope, campaign chat scoping, hub routing) is therefore
+// `<channelId>:<threadTs>` for a message inside a thread and the bare channel
+// id for a top-level message. Every send path parses the id back into
+// channel + thread_ts, so a reply lands in the thread it belongs to.
+// ---------------------------------------------------------------------------
+const SLACK_TS_RE = /^\d+\.\d+$/;
+
+export function composeSlackChatId(channelId: string, threadTs?: string): string {
+  return threadTs ? `${channelId}:${threadTs}` : channelId;
+}
+
+export function parseSlackChatId(chatId: string): { channelId: string; threadTs?: string } {
+  const sep = chatId.lastIndexOf(":");
+  if (sep > 0) {
+    const threadTs = chatId.slice(sep + 1);
+    if (SLACK_TS_RE.test(threadTs)) return { channelId: chatId.slice(0, sep), threadTs };
+  }
+  return { channelId: chatId };
+}
+
+/** Slack channel ids (C…/D…/G…), optionally thread-scoped. Used by HubChannel as the last-resort owner test. */
+const SLACK_CHAT_ID_RE = /^[CDGW][A-Z0-9]{2,}(?::\d+\.\d+)?$/;
+
 /** Callback for feedback reactions (thumbs up/down) from channel adapters. */
 type FeedbackReactionCallback = (
   type: "thumbs_up" | "thumbs_down",
@@ -301,11 +329,18 @@ export class SlackChannel implements IChannelAdapter {
 
   /** Set the applied instinct IDs for a channel so reactions can be attributed. */
   setAppliedInstinctIds(chatId: string, instinctIds: string[]): void {
+    // Reactions arrive with the channel id only, so attribution is per channel.
+    const { channelId } = parseSlackChatId(chatId);
     if (instinctIds.length > 0) {
-      this.appliedInstinctIds.set(chatId, instinctIds);
+      this.appliedInstinctIds.set(channelId, instinctIds);
     } else {
-      this.appliedInstinctIds.delete(chatId);
+      this.appliedInstinctIds.delete(channelId);
     }
+  }
+
+  /** Whether a chat id has Slack's shape (see composeSlackChatId). */
+  claimsChatId(chatId: string): boolean {
+    return SLACK_CHAT_ID_RE.test(chatId);
   }
 
   // ---- Message Queue System ----
@@ -326,11 +361,15 @@ export class SlackChannel implements IChannelAdapter {
     data: Omit<QueuedMessage, "id" | "type" | "channelId">,
     priority: number = 5,
   ): Promise<unknown> {
+    // Callers pass the chat id the conversation is keyed on; a thread-scoped id
+    // carries its thread_ts, so the reply stays in that thread (2.11).
+    const parsed = parseSlackChatId(channelId);
     const message: QueuedMessage = {
       ...data,
       id: `msg_${randomUUID().replaceAll("-", "").slice(0, 12)}`,
       type,
-      channelId,
+      channelId: parsed.channelId,
+      threadTs: data.threadTs ?? parsed.threadTs,
     };
     return this.queue.enqueue(message, priority);
   }
@@ -348,6 +387,7 @@ export class SlackChannel implements IChannelAdapter {
           await this.rateLimiter.acquire("chat.postMessage", 1);
           await this.app.client.chat.postMessage({
             channel: msg.channelId,
+            thread_ts: msg.threadTs,
             text: chunk,
           });
         }
@@ -361,6 +401,7 @@ export class SlackChannel implements IChannelAdapter {
           await this.rateLimiter.acquire("chat.postMessage", 1);
           await this.app.client.chat.postMessage({
             channel: msg.channelId,
+            thread_ts: msg.threadTs,
             text: chunk,
             mrkdwn: true,
           });
@@ -372,6 +413,7 @@ export class SlackChannel implements IChannelAdapter {
         await this.rateLimiter.acquire("chat.postMessage", 1);
         await this.app.client.chat.postMessage({
           channel: msg.channelId,
+          thread_ts: msg.threadTs,
           blocks: msg.blocks?.slice(0, 50),
           text: msg.content || "Message with blocks",
         });
@@ -381,6 +423,7 @@ export class SlackChannel implements IChannelAdapter {
         await this.rateLimiter.acquire("chat.postEphemeral", 1);
         await this.app.client.chat.postEphemeral({
           channel: msg.channelId,
+          thread_ts: msg.threadTs,
           user: msg.userId!,
           text: truncateForSlack(msg.content!),
           blocks: msg.blocks?.slice(0, 50),
@@ -521,10 +564,12 @@ export class SlackChannel implements IChannelAdapter {
       req.options && req.options.length > 0 ? req.options : ["Approve", "Deny"];
     const blocks = createConfirmationBlocks(req.question, req.details, actionIdPrefix, options);
 
+    const target = parseSlackChatId(req.chatId);
     const result = await this.callWithRateLimitRetry(async () => {
       await this.rateLimiter.acquire("chat.postMessage", 1);
       return this.app!.client.chat.postMessage({
-        channel: req.chatId,
+        channel: target.channelId,
+        thread_ts: target.threadTs,
         blocks,
         text: `Confirmation required: ${req.question}`,
       });
@@ -537,7 +582,8 @@ export class SlackChannel implements IChannelAdapter {
         resolve,
         reject,
         timestamp: Date.now(),
-        chatId: req.chatId,
+        // The action body compares against the bare channel id.
+        chatId: target.channelId,
         userId: req.userId,
         options,
       };
@@ -597,10 +643,12 @@ export class SlackChannel implements IChannelAdapter {
 
     const streamId = `stream_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
 
+    const target = parseSlackChatId(chatId);
     const result = await this.callWithRateLimitRetry(async () => {
       await this.rateLimiter.acquire("chat.postMessage", 1);
       return this.app!.client.chat.postMessage({
-        channel: chatId,
+        channel: target.channelId,
+        thread_ts: target.threadTs,
         blocks: createStreamingBlock("⏳ Thinking..."),
         text: "⏳ Thinking...",
       });
@@ -609,7 +657,7 @@ export class SlackChannel implements IChannelAdapter {
     if (!result.ts) throw new Error("Failed to start streaming message");
 
     this.streamingMessages.set(streamId, {
-      channelId: chatId,
+      channelId: target.channelId,
       messageTs: result.ts,
       accumulatedText: "",
       isFinalized: false,
@@ -977,9 +1025,13 @@ export class SlackChannel implements IChannelAdapter {
 
     if (!text && attachments.length === 0) return;
 
+    // 2.11: a thread is its own conversation. chatId is thread-scoped so every
+    // consumer keyed on it (and every reply sent to it) stays in the thread;
+    // conversationId = threadTs ?? channelId per the contract.
     const incomingMessage: IncomingMessage = {
       channelType: "slack",
-      chatId: channelId,
+      chatId: composeSlackChatId(channelId, threadTs),
+      conversationId: threadTs ?? channelId,
       userId,
       text: limitIncomingText(text),
       attachments: attachments.length > 0 ? attachments : undefined,
@@ -987,7 +1039,7 @@ export class SlackChannel implements IChannelAdapter {
       timestamp: new Date(Number(message.ts) * 1000),
     };
 
-    this.logger.debug("Received Slack message", { userId, channelId, textLength: text.length });
+    this.logger.debug("Received Slack message", { userId, channelId, threadTs, textLength: text.length });
 
     if (this.messageHandler) {
       try {

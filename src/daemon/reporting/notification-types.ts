@@ -33,6 +33,14 @@ export interface NotificationPayload {
   readonly actionHint?: string;
   readonly sourceEvent?: string;
   readonly timestamp: number;
+  /**
+   * Owner of the task/goal this notification is about (plan 2.9, audit
+   * 12F1/D58): the chat and channel recorded on its row. The router delivers
+   * to this chat; only a notification without an owner (daemon-wide events)
+   * falls back to the configured admin chat.
+   */
+  readonly chatId?: string;
+  readonly channelType?: string;
 }
 
 // =============================================================================

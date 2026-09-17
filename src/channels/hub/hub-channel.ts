@@ -4,11 +4,17 @@
 // Incoming messages from every member reach the one handler the daemon
 // registers, unchanged (msg.channelType stays the member's own, so tasks and
 // campaigns record where they really came from). Outgoing calls are routed to
-// the member that owns the chat id: the member a message with that id last
-// arrived on, else the member that claims the id's shape (Telegram ids are
-// integers, web ids are UUIDs, the CLI is "cli-local"), else the first member —
-// and that last fallback is logged once per id, because a reply that lands on
-// the wrong channel is a bug worth seeing.
+// the member that owns the chat id: the member recorded for it (bound by a
+// notification's owner row via bindOwner, or by the first inbound message with
+// that id — a later inbound never overwrites an existing mapping, plan 2.9,
+// audit 12F1/D58), else the member that claims the id's shape (Telegram ids are
+// integers, web ids are UUIDs, the CLI is "cli-local", Slack ids are C…/D…/G…),
+// else the first member — and that last fallback is logged once per id, because
+// a reply that lands on the wrong channel is a bug worth seeing.
+//
+// Ownership is persisted as {chatId → member name} through HubOwnerStore and
+// restored at construction (plan 2.10, audit 12F2/D59), so a restart does not
+// demote every known chat to shape-guessing.
 //
 // Setters and broadcasts that carry no chat id fan out to every member that
 // implements them. Per-chat capabilities a member lacks degrade explicitly:
@@ -22,6 +28,7 @@ import type { ConfirmationRequest } from "../channel-core.interface.js";
 import type { PostSetupBootstrapContext } from "../../common/setup-contract.js";
 import { AppError } from "../../common/errors.js";
 import { getLoggerSafe } from "../../utils/logger.js";
+import { HubOwnerStore } from "./owner-store.js";
 
 type Handler = (msg: IncomingMessage) => Promise<void>;
 
@@ -45,19 +52,33 @@ interface MemberExtras {
 
 type Member = IChannelAdapter & MemberExtras;
 
+export interface HubChannelOptions {
+  /**
+   * Where {chatId → member name} is persisted. Defaults to
+   * `<strada home>/hub-owners.json`; pass `null` for an in-memory hub.
+   */
+  ownerStore?: HubOwnerStore | null;
+}
+
 export class HubChannel implements IChannelAdapter {
   readonly name: string;
   readonly members: readonly Member[];
-  private readonly owners = new Map<string, Member>();
+  /** chatId → member name. Names (not instances) so the map survives a restart. */
+  private readonly owners = new Map<string, string>();
+  private readonly ownerStore: HubOwnerStore | null;
   private readonly unownedWarned = new Set<string>();
   private handler: Handler | undefined;
 
-  constructor(members: readonly IChannelAdapter[]) {
+  constructor(members: readonly IChannelAdapter[], options: HubChannelOptions = {}) {
     if (members.length < 2) {
       throw new AppError("A channel hub needs at least two member channels", "HUB_TOO_FEW_MEMBERS");
     }
     this.members = members as readonly Member[];
     this.name = members.map((m) => m.name).join("+");
+    this.ownerStore = options.ownerStore === undefined ? new HubOwnerStore(HubOwnerStore.defaultPath()) : options.ownerStore;
+    if (this.ownerStore) {
+      for (const [chatId, memberName] of this.ownerStore.load()) this.owners.set(chatId, memberName);
+    }
   }
 
   // ---- lifecycle -----------------------------------------------------------
@@ -106,7 +127,10 @@ export class HubChannel implements IChannelAdapter {
     this.handler = handler;
     for (const member of this.members) {
       member.onMessage(async (msg) => {
-        this.owners.set(msg.chatId, member);
+        // First inbound binds; a later inbound never overwrites an owner that
+        // still resolves to a live member (2.9). A stale persisted name whose
+        // member is no longer configured is replaced.
+        if (!this.memberNamed(this.owners.get(msg.chatId))) this.record(msg.chatId, member.name);
         await this.handler?.(msg);
       });
     }
@@ -114,13 +138,38 @@ export class HubChannel implements IChannelAdapter {
 
   // ---- routing -------------------------------------------------------------
 
+  /**
+   * Bind a chat id to the member named by a task/goal row's channelType (2.9).
+   * Authoritative: the row recorded where the conversation really lives.
+   * Returns false (and binds nothing) when no member has that name.
+   */
+  bindOwner(chatId: string, channelType: string): boolean {
+    if (!this.memberNamed(channelType)) return false;
+    if (this.owners.get(chatId) !== channelType) this.record(chatId, channelType);
+    return true;
+  }
+
+  /** The persisted view of ownership — for tests and /daemon status. */
+  ownerNames(): ReadonlyMap<string, string> {
+    return this.owners;
+  }
+
+  private memberNamed(name: string | undefined): Member | undefined {
+    return name === undefined ? undefined : this.members.find((m) => m.name === name);
+  }
+
+  private record(chatId: string, memberName: string): void {
+    this.owners.set(chatId, memberName);
+    this.ownerStore?.save(this.owners);
+  }
+
   /** The member that owns a chat id (see the file header for the order of precedence). */
   ownerOf(chatId: string): Member {
-    const known = this.owners.get(chatId);
+    const known = this.memberNamed(this.owners.get(chatId));
     if (known) return known;
     const claimant = this.members.find((m) => m.claimsChatId?.(chatId) === true);
     if (claimant) {
-      this.owners.set(chatId, claimant);
+      this.record(chatId, claimant.name);
       return claimant;
     }
     const primary = this.members[0]!;
@@ -136,7 +185,7 @@ export class HubChannel implements IChannelAdapter {
   }
 
   claimsChatId(chatId: string): boolean {
-    return this.owners.has(chatId) || this.members.some((m) => m.claimsChatId?.(chatId) === true);
+    return this.memberNamed(this.owners.get(chatId)) !== undefined || this.members.some((m) => m.claimsChatId?.(chatId) === true);
   }
 
   // ---- per-chat sending ----------------------------------------------------

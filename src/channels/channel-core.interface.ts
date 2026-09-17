@@ -44,6 +44,15 @@ export interface IChannelSender {
 
   /** Send a system notification message (renders differently from assistant messages) */
   sendSystemMessage?(chatId: string, text: string): Promise<void>;
+
+  /**
+   * Assert which channel a chat id belongs to before a send (plan 2.9, audit
+   * 12F1/D58). A daemon/goal notification carries the owner's chatId and
+   * channelType from the task/goal row; a multi-channel sender (HubChannel)
+   * routes by them instead of by whichever chat spoke last. Single-channel
+   * senders leave this undefined.
+   */
+  bindOwner?(chatId: string, channelType: string): void;
 }
 
 /**

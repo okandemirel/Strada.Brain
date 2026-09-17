@@ -1,5 +1,9 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from "vitest";
+import { mkdtempSync, rmSync, existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { HubChannel } from "./hub-channel.js";
+import { HubOwnerStore } from "./owner-store.js";
 import type { IChannelAdapter } from "../channel.interface.js";
 import type { IncomingMessage } from "../channel-messages.interface.js";
 
@@ -37,6 +41,21 @@ function fake(name: string, extras: Record<string, unknown> = {}): Fake {
 function incoming(chatId: string, channelType: string): IncomingMessage {
   return { chatId, channelType, userId: "u", text: "hi", timestamp: new Date() } as IncomingMessage;
 }
+
+// The default owner store lives under the Strada home: fake HOME so no test
+// touches the real ~/.strada.
+let fakeHome: string;
+const savedEnv = { HOME: process.env["HOME"], STRADA_HOME: process.env["STRADA_HOME"] };
+beforeAll(() => {
+  fakeHome = mkdtempSync(join(tmpdir(), "hub-home-"));
+  process.env["HOME"] = fakeHome;
+  delete process.env["STRADA_HOME"];
+});
+afterAll(() => {
+  process.env["HOME"] = savedEnv.HOME;
+  if (savedEnv.STRADA_HOME !== undefined) process.env["STRADA_HOME"] = savedEnv.STRADA_HOME;
+  rmSync(fakeHome, { recursive: true, force: true });
+});
 
 describe("HubChannel", () => {
   beforeEach(() => {
@@ -129,6 +148,82 @@ describe("HubChannel", () => {
     expect(web.setBuildStatusProvider).toHaveBeenCalledWith("provider");
     expect(web.setFeedbackHandler).toHaveBeenCalledWith(feedback);
     expect(tg.setFeedbackHandler).toHaveBeenCalledWith(feedback);
+  });
+
+  // Plan 2.9 (audit 12F1/D58): ownership is bound once; a later inbound on
+  // another member never re-routes the chat, and a notification's owner row
+  // binds a chat the hub has not seen since boot.
+  it("keeps the first owner of a chat id when a later inbound arrives on another member, and binds by owner row", async () => {
+    const slack = fake("slack");
+    const tg = fake("telegram");
+    const hub = new HubChannel([slack, tg], { ownerStore: null });
+    hub.onMessage(async () => undefined);
+
+    await slack.handler!(incoming("shared-id", "slack"));
+    await tg.handler!(incoming("shared-id", "telegram"));
+    await hub.sendMarkdown("shared-id", "reply");
+    expect(slack.sent).toEqual([["shared-id", "markdown", "reply"]]);
+    expect(tg.sent).toEqual([]);
+
+    // A task row says chat "persisted" lives on telegram: no inbound needed.
+    expect(hub.bindOwner("persisted", "telegram")).toBe(true);
+    expect(hub.bindOwner("persisted", "no-such-member")).toBe(false);
+    await hub.sendText("persisted", "goal done");
+    expect(tg.sent).toEqual([["persisted", "text", "goal done"]]);
+    expect(loggerStub.warn).not.toHaveBeenCalled();
+  });
+
+  // Plan 2.10 (audit 12F2/D59): {chatId → channelType} is persisted and
+  // restored, so a new hub from the same storage routes a chat it never saw.
+  it("restores chat ownership from the owner store after a simulated restart", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "hub-owners-"));
+    const store = new HubOwnerStore(join(dir, "hub-owners.json"));
+    try {
+      const slack1 = fake("slack");
+      const tg1 = fake("telegram");
+      const hub1 = new HubChannel([tg1, slack1], { ownerStore: store });
+      hub1.onMessage(async () => undefined);
+      await slack1.handler!(incoming("C123:1700000000.000100", "slack"));
+      await hub1.disconnect();
+
+      // Restart: fresh adapters, no inbound, no claimsChatId on either member.
+      const slack2 = fake("slack");
+      const tg2 = fake("telegram");
+      const hub2 = new HubChannel([tg2, slack2], { ownerStore: store });
+      hub2.onMessage(async () => undefined);
+      await hub2.sendMarkdown("C123:1700000000.000100", "goal finished");
+      expect(slack2.sent).toEqual([["C123:1700000000.000100", "markdown", "goal finished"]]);
+      expect(tg2.sent).toEqual([]);
+      expect(loggerStub.warn).not.toHaveBeenCalled();
+      expect(hub2.ownerNames().get("C123:1700000000.000100")).toBe("slack");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("persists ownership under the Strada home by default and tolerates a corrupt file", async () => {
+    const web = fake("web");
+    const tg = fake("telegram");
+    const hub = new HubChannel([web, tg]);
+    hub.onMessage(async () => undefined);
+    await tg.handler!(incoming("4242", "telegram"));
+    const file = join(fakeHome, ".strada", "hub-owners.json");
+    expect(existsSync(file)).toBe(true);
+    const persisted = JSON.parse(readFileSync(file, "utf8")) as { version: number; owners: Record<string, string> };
+    expect(persisted.version).toBe(1);
+    expect(persisted.owners["4242"]).toBe("telegram");
+
+    const dir = mkdtempSync(join(tmpdir(), "hub-owners-corrupt-"));
+    try {
+      const path = join(dir, "hub-owners.json");
+      const { writeFileSync } = await import("node:fs");
+      writeFileSync(path, "{not json", "utf8");
+      const store = new HubOwnerStore(path);
+      expect(store.load().size).toBe(0);
+      expect(loggerStub.warn).toHaveBeenCalledWith(expect.stringMatching(/corrupt/), expect.objectContaining({ path }));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("connects members in order, rolls back on a failure, and is healthy only when all are", async () => {

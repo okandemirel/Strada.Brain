@@ -546,6 +546,59 @@ describe("SlackChannel", () => {
     });
   });
 
+  // Plan 2.11 (audit 12F3/D60): a Slack thread is its own conversation —
+  // conversationId = threadTs ?? channelId, chatId is thread-scoped, and every
+  // reply to that chat id carries the thread_ts.
+  describe("threads (2.11)", () => {
+    it("treats two threads in one channel as two conversations and replies inside each thread", async () => {
+      const threaded = new SlackChannel({ ...mockConfig, allowedWorkspaces: ["T1"], allowedUserIds: ["U1"] });
+      await threaded.connect();
+      const received: Array<{ chatId: string; conversationId?: string; replyTo?: string }> = [];
+      threaded.onMessage(async (msg) => {
+        received.push({ chatId: msg.chatId, conversationId: msg.conversationId, replyTo: msg.replyTo });
+      });
+      const internal = threaded as unknown as {
+        handleIncomingMessage: (message: Record<string, unknown>, say: ReturnType<typeof vi.fn>) => Promise<void>;
+        processMessageQueue: () => Promise<void>;
+        app: { client: { chat: { postMessage: ReturnType<typeof vi.fn> } } };
+      };
+      const say = vi.fn().mockResolvedValue(undefined);
+      const base = { type: "message", user: "U1", team: "T1", channel: "C123" };
+      await internal.handleIncomingMessage({ ...base, text: "in thread one", ts: "100.5", thread_ts: "100.1" }, say);
+      await internal.handleIncomingMessage({ ...base, text: "in thread two", ts: "100.6", thread_ts: "100.2" }, say);
+      await internal.handleIncomingMessage({ ...base, text: "top level", ts: "100.7" }, say);
+
+      expect(received).toEqual([
+        { chatId: "C123:100.1", conversationId: "100.1", replyTo: "100.1" },
+        { chatId: "C123:100.2", conversationId: "100.2", replyTo: "100.2" },
+        { chatId: "C123", conversationId: "C123", replyTo: undefined },
+      ]);
+      expect(new Set(received.map((r) => r.conversationId)).size).toBe(3);
+
+      const postMessage = internal.app.client.chat.postMessage;
+      postMessage.mockClear();
+      const sends = [
+        threaded.sendText(received[0]!.chatId, "reply one"),
+        threaded.sendMarkdown(received[1]!.chatId, "reply two"),
+        threaded.sendText(received[2]!.chatId, "reply top"),
+      ];
+      await internal.processMessageQueue();
+      await Promise.all(sends);
+
+      const posted = postMessage.mock.calls.map((c: Array<Record<string, unknown>>) => ({ channel: c[0]!["channel"], thread_ts: c[0]!["thread_ts"], text: c[0]!["text"] }));
+      expect(posted).toEqual(expect.arrayContaining([
+        { channel: "C123", thread_ts: "100.1", text: "reply one" },
+        { channel: "C123", thread_ts: "100.2", text: "reply two" },
+        { channel: "C123", thread_ts: undefined, text: "reply top" },
+      ]));
+      expect(posted).toHaveLength(3);
+      expect(threaded.claimsChatId("C123:100.1")).toBe(true);
+      expect(threaded.claimsChatId("C123")).toBe(true);
+      expect(threaded.claimsChatId("12345")).toBe(false);
+      await threaded.disconnect();
+    });
+  });
+
   describe("authorization", () => {
     it("should check workspace authorization", async () => {
       const restrictedChannel = new SlackChannel({

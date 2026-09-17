@@ -77,11 +77,13 @@ export class DigestReporter {
   }
 
   /**
-   * Set the chat id used for digest delivery. Called on the first inbound
-   * message so scheduled digests can reach the user (mirrors
-   * NotificationRouter.setChatId).
+   * Bind the digest chat. Bootstrap calls this on every inbound message; only
+   * the first binding is kept and a configured chat is never overridden, so a
+   * digest does not follow whichever chat spoke last (plan 2.9, audit
+   * 12F1/D58; mirrors NotificationRouter.setChatId).
    */
   setChatId(id: string): void {
+    if (this.chatId !== undefined) return;
     this.chatId = id;
   }
 

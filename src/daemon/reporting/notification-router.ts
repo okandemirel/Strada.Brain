@@ -70,9 +70,11 @@ export class NotificationRouter {
   private readonly eventBus: IEventBus<DaemonEventMap>;
   private readonly storage: DaemonStorage;
   private readonly channelSender?: IChannelSender;
-  // Mutable: set on the first inbound message via setChatId() (bootstrap wires
-  // this from the channel.onMessage handler). Until then the 'chat' delivery
-  // path is skipped — there is no chat to deliver to yet.
+  // The fallback chat for notifications that carry no owner: the configured
+  // admin chat (constructor), else the FIRST inbound chat bound via setChatId()
+  // (bootstrap calls it from channel.onMessage on every message; only the first
+  // call sticks — plan 2.9, audit 12F1/D58: never "the last chat that spoke").
+  // Until bound, the 'chat' delivery path for owner-less notifications is skipped.
   private chatId?: string;
   private readonly quietHoursManager: QuietHoursManager;
 
@@ -105,11 +107,19 @@ export class NotificationRouter {
   }
 
   /**
-   * Set the chat id used for the 'chat' delivery channel. Called on the first
-   * inbound message so daemon-generated notifications can reach the user.
+   * Bind the fallback chat for owner-less notifications. Bootstrap calls this
+   * on every inbound message; only the first binding is kept, so the fallback
+   * is never the most recent inbound chat (2.9). A configured admin chat
+   * (constructor `chatId`) is never overridden.
    */
   setChatId(id: string): void {
+    if (this.chatId !== undefined) return;
     this.chatId = id;
+  }
+
+  /** The chat owner-less notifications go to (admin chat, else first inbound). */
+  fallbackChatId(): string | undefined {
+    return this.chatId;
   }
 
   /**
@@ -190,17 +200,24 @@ export class NotificationRouter {
     const channels = this.config.routing[deliveryPayload.level] ?? [];
     const deliveredTo: string[] = [];
 
+    // 2.9: the owner's chat (from the task/goal row) wins; the fallback is the
+    // admin/first-bound chat, never the most recent inbound one.
+    const targetChatId = deliveryPayload.chatId ?? this.chatId;
     for (const channel of channels) {
-      if (channel === "chat" && this.channelSender && this.chatId) {
+      if (channel === "chat" && this.channelSender && targetChatId) {
         const markdown = this.formatNotification(deliveryPayload);
         try {
-          await this.channelSender.sendMarkdown(this.chatId, markdown);
+          if (deliveryPayload.chatId && deliveryPayload.channelType) {
+            this.channelSender.bindOwner?.(deliveryPayload.chatId, deliveryPayload.channelType);
+          }
+          await this.channelSender.sendMarkdown(targetChatId, markdown);
           deliveredTo.push("chat");
         } catch (err) {
           // Do not swallow silently: surface the failure so a broken channel
           // send is debuggable, then continue to the next channel.
           getLoggerSafe().warn("Notification channel send failed", {
-            chatId: this.chatId,
+            chatId: targetChatId,
+            channelType: deliveryPayload.channelType,
             urgency: deliveryPayload.level,
             title: deliveryPayload.title,
             error: err instanceof Error ? err.message : String(err),
@@ -457,6 +474,8 @@ export class NotificationRouter {
         message: `Goal ${e.rootId} failed after ${e.failureCount} failures: ${e.error}`,
         sourceEvent: "goal:failed",
         timestamp: e.timestamp,
+        chatId: e.chatId,
+        channelType: e.channelType,
       });
     });
 
@@ -467,6 +486,8 @@ export class NotificationRouter {
         message: `Goal '${e.taskDescription}' completed in ${Math.round(e.durationMs / 1000)}s`,
         sourceEvent: "goal:complete",
         timestamp: e.timestamp,
+        chatId: e.chatId,
+        channelType: e.channelType,
       });
     });
   }

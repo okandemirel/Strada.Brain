@@ -8,6 +8,9 @@ import { tmpdir } from "node:os";
 import type { DaemonEventMap } from "../daemon-events.js";
 import type { NotificationConfig, QuietHoursConfig } from "./notification-types.js";
 import type { IChannelSender } from "../../channels/channel-core.interface.js";
+import { HubChannel } from "../../channels/hub/hub-channel.js";
+import type { IChannelAdapter } from "../../channels/channel.interface.js";
+import type { IncomingMessage } from "../../channels/channel-messages.interface.js";
 
 describe("NotificationRouter", () => {
   let storage: DaemonStorage;
@@ -562,6 +565,89 @@ describe("NotificationRouter", () => {
       expect(history[0].urgency).toBe("low");
 
       router.stop();
+    });
+  });
+
+  // Plan 2.9 (audit 12F1/D58): a notification carries the owner's chatId and
+  // channelType from the task/goal row, the hub routes by them, and the
+  // fallback is the configured/first-bound chat — never the last chat that spoke.
+  describe("owner routing (2.9)", () => {
+    type Member = IChannelAdapter & { handler?: (msg: IncomingMessage) => Promise<void>; sent: Array<[string, string]> };
+    function member(name: string): Member {
+      const m: Member = {
+        name,
+        sent: [],
+        connect: async () => undefined,
+        disconnect: async () => undefined,
+        isHealthy: () => true,
+        onMessage(handler) {
+          m.handler = handler;
+        },
+        sendText: async (chatId, text) => {
+          m.sent.push([chatId, text]);
+        },
+        sendMarkdown: async (chatId, md) => {
+          m.sent.push([chatId, md]);
+        },
+      };
+      return m;
+    }
+    const inbound = (chatId: string, channelType: string): IncomingMessage =>
+      ({ chatId, channelType, userId: "u", text: "hi", timestamp: new Date() }) as IncomingMessage;
+
+    it("delivers chat A's goal notification to A's channel after chat B spoke last, and never falls back to the last inbound", async () => {
+      const slack = member("slack");
+      const tg = member("telegram");
+      const hub = new HubChannel([slack, tg], { ownerStore: null });
+      const router = new NotificationRouter({
+        config: { ...defaultNotifConfig, routing: { ...defaultNotifConfig.routing, low: ["chat", "dashboard"] } },
+        quietHoursConfig: defaultQuietConfig,
+        eventBus,
+        storage,
+        channelSender: hub,
+        chatId: undefined,
+      });
+      // Bootstrap wiring: every inbound message offers its chat id.
+      hub.onMessage(async (msg) => router.setChatId(msg.chatId));
+      await slack.handler!(inbound("C1:1700000000.000001", "slack")); // chat A
+      await tg.handler!(inbound("777", "telegram")); // chat B spoke last
+
+      router.start();
+      eventBus.emit("goal:complete", {
+        rootId: "root-A",
+        taskDescription: "ship it",
+        durationMs: 1000,
+        successCount: 1,
+        failureCount: 0,
+        timestamp: Date.now(),
+        chatId: "C1:1700000000.000001",
+        channelType: "slack",
+      });
+      await new Promise((r) => setTimeout(r, 0));
+      expect(slack.sent).toHaveLength(1);
+      expect(slack.sent[0]![0]).toBe("C1:1700000000.000001");
+      expect(slack.sent[0]![1]).toContain("ship it");
+      expect(tg.sent).toEqual([]);
+
+      // A chat the hub never saw since boot: the owner row alone routes it.
+      await router.notify({ level: "high", title: "Goal failed: x", message: "m", timestamp: Date.now() + 1, chatId: "C9:1700000000.000009", channelType: "slack" });
+      expect(slack.sent).toHaveLength(2);
+      expect(slack.sent[1]![0]).toBe("C9:1700000000.000009");
+      expect(tg.sent).toEqual([]);
+
+      // Owner-less (daemon-wide) notification: the first-bound chat, not B.
+      await router.notify({ level: "critical", title: "Budget exceeded", message: "m", timestamp: Date.now() + 2 });
+      expect(router.fallbackChatId()).toBe("C1:1700000000.000001");
+      expect(slack.sent).toHaveLength(3);
+      expect(tg.sent).toEqual([]);
+      router.stop();
+    });
+
+    it("keeps a configured admin chat as the fallback over any inbound", async () => {
+      const router = createRouter(); // chatId: "test-chat"
+      router.setChatId("someone-else");
+      await router.notify({ level: "high", title: "t", message: "m", timestamp: Date.now() });
+      expect(mockSender.sendMarkdown).toHaveBeenCalledWith("test-chat", expect.any(String));
     });
   });
 });

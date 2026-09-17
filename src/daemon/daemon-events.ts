@@ -171,6 +171,9 @@ export interface GoalFailedEvent {
   readonly error: string;
   readonly failureCount: number;
   readonly timestamp: number;
+  /** Owner of the goal's task row (chatId/channelType) — routes the notification (plan 2.9, audit 12F1/D58). */
+  readonly chatId?: string;
+  readonly channelType?: string;
 }
 
 /** Emitted when a goal tree completes successfully */
@@ -181,6 +184,9 @@ export interface GoalCompleteEvent {
   readonly successCount: number;
   readonly failureCount: number;
   readonly timestamp: number;
+  /** Owner of the goal's task row (chatId/channelType) — routes the notification (plan 2.9, audit 12F1/D58). */
+  readonly chatId?: string;
+  readonly channelType?: string;
 }
 
 // =============================================================================
