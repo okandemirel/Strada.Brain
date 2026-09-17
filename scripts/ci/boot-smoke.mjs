@@ -16,6 +16,18 @@
  * hung; 2 dist missing (run `npm run build`).
  *
  * Env: BOOT_SMOKE_TIMEOUT_S (default 120), BOOT_SMOKE_PORT (default 3910).
+ *
+ * Release acceptance (plan 6.13) boots file sets that are NOT this checkout's
+ * dist/ — a packed clean install, and an older install upgraded in place — and
+ * has to boot the upgraded one over the home the older one left behind. Three
+ * overrides make this script the single boot check for all of those instead of
+ * a second copy of it that can rot separately:
+ *
+ *   BOOT_SMOKE_ENTRY        entrypoint to spawn (default <repo>/dist/index.js)
+ *   BOOT_SMOKE_INSTALL_ROOT install root + cwd (default a throwaway directory)
+ *   BOOT_SMOKE_HOME         HOME to boot against (default a throwaway one);
+ *                           an overridden home is NEVER deleted on the way out,
+ *                           because the next scenario reads it.
  */
 
 import { spawn } from "node:child_process";
@@ -27,9 +39,13 @@ import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..", "..");
-const entry = path.join(repoRoot, "dist", "index.js");
+const entry = process.env["BOOT_SMOKE_ENTRY"] ?? path.join(repoRoot, "dist", "index.js");
 if (!existsSync(entry)) {
-  console.error(`boot-smoke: ${entry} missing — run \`npm run build\` first`);
+  console.error(
+    process.env["BOOT_SMOKE_ENTRY"]
+      ? `boot-smoke: BOOT_SMOKE_ENTRY ${entry} does not exist`
+      : `boot-smoke: ${entry} missing — run \`npm run build\` first`,
+  );
   process.exit(2);
 }
 
@@ -38,12 +54,18 @@ const port = Number(process.env["BOOT_SMOKE_PORT"] ?? 3910);
 const dashboardPort = port + 1;
 
 const root = mkdtempSync(path.join(tmpdir(), "strada-boot-smoke-"));
-const home = path.join(root, "home");
-const installRoot = path.join(root, "install");
+const homeOverride = process.env["BOOT_SMOKE_HOME"];
+const home = homeOverride ?? path.join(root, "home");
+const installRoot = process.env["BOOT_SMOKE_INSTALL_ROOT"] ?? path.join(root, "install");
 const unityProject = path.join(root, "UnityProject");
 for (const d of [home, installRoot, path.join(unityProject, "Assets"), path.join(unityProject, "ProjectSettings")]) {
   mkdirSync(d, { recursive: true });
 }
+// Only the directory tree this run created is ours to delete. An overridden home
+// carries the state the next acceptance scenario has to read (plan 6.13), and an
+// overridden install root is the thing under test — removing either would make
+// the upgrade scenario measure nothing.
+const cleanup = () => rmSync(root, { recursive: true, force: true });
 writeFileSync(path.join(unityProject, "ProjectSettings", "ProjectVersion.txt"), "m_EditorVersion: 6000.0.0f1\n");
 
 // Stub Ollama: the boot preflight refuses to start with NO_HEALTHY_AI_PROVIDER
@@ -90,7 +112,7 @@ const env = {
 try {
   const pre = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(1500) });
   console.error(`boot-smoke FAILED: something already answers on port ${port} (HTTP ${pre.status}) — pick another BOOT_SMOKE_PORT`);
-  rmSync(root, { recursive: true, force: true });
+  cleanup();
   process.exit(1);
 } catch {
   /* nothing listens — good */
@@ -138,7 +160,7 @@ function fail(why) {
   console.error("--- daemon output (tail) ---");
   console.error(output.join("").slice(-8000));
   try { child.kill("SIGKILL"); } catch { /* gone */ }
-  rmSync(root, { recursive: true, force: true });
+  cleanup();
   process.exit(1);
 }
 
@@ -155,4 +177,4 @@ if (!exited) fail("daemon did not exit within 30 s of SIGTERM");
 // signal never ran its shutdown path (Codex 2026-09-11 #12).
 if (exited.code !== 0) fail(`daemon did not shut down gracefully after SIGTERM (code ${exited.code}, signal ${exited.signal})`);
 console.log(`boot-smoke: clean shutdown (code ${exited.code}, signal ${exited.signal}) in ${((Date.now() - started) / 1000).toFixed(1)} s total`);
-rmSync(root, { recursive: true, force: true });
+cleanup();

@@ -54,6 +54,8 @@
     "verify": "npm run typecheck:src && npm run lint:src && npm run test:fast",
     "smoke:cli:release": "node scripts/release/cli-release-smoke.mjs",
     "smoke:boot": "node scripts/ci/boot-smoke.mjs",
+    "accept:release": "node scripts/ci/release-acceptance.mjs",
+    "restore:db": "node scripts/restore.mjs",
     "security:audit": "npm audit --audit-level=high",
     "security:full": "./pentest/scripts/run-all-tests.sh",
     "security:critical": "./pentest/scripts/run-all-tests.sh --critical-only",
