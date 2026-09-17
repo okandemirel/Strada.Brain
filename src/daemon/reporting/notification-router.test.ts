@@ -650,4 +650,80 @@ describe("NotificationRouter", () => {
       expect(mockSender.sendMarkdown).toHaveBeenCalledWith("test-chat", expect.any(String));
     });
   });
+
+  /**
+   * Codex round 8 #6, #8, #9 on 4a5d19e4: a notification whose owning channel
+   * is absent went to another channel; three chats' same-event notifications
+   * collapsed into one group so two of them got nothing; and a quiet-hours
+   * drain sent every buffered title to the fallback chat.
+   */
+  describe("a notification belongs to its owner (round 8)", () => {
+    it("is not delivered elsewhere when the owning channel is not configured (#6)", async () => {
+      mockSender.bindOwner = vi.fn().mockReturnValue(false);
+      const router = createRouter();
+      await router.notify({
+        level: "high",
+        title: "Slack-owned goal finished",
+        message: "done",
+        timestamp: Date.now(),
+        chatId: "C123:1700.1",
+        channelType: "slack",
+      });
+      expect(mockSender.bindOwner).toHaveBeenCalledWith("C123:1700.1", "slack");
+      expect(mockSender.sendMarkdown).not.toHaveBeenCalled();
+    });
+
+    it("groups per owner, so each chat hears about its own work (#8)", async () => {
+      mockSender.bindOwner = vi.fn().mockReturnValue(true);
+      const router = createRouter({ config: { groupingWindowMs: 60_000 } });
+      const at = Date.now();
+      for (const chatId of ["chat-a", "chat-b", "chat-c"]) {
+        await router.notify({
+          level: "high",
+          title: `Goal finished in ${chatId}`,
+          message: "done",
+          timestamp: at,
+          sourceEvent: "goal:complete",
+          chatId,
+          channelType: "web",
+        });
+      }
+      const targets = mockSender.sendMarkdown.mock.calls.map((call) => call[0] as string);
+      expect(new Set(targets)).toEqual(new Set(["chat-a", "chat-b", "chat-c"]));
+      // …and a REPEAT within one owner's window still groups rather than repeating.
+      mockSender.sendMarkdown.mockClear();
+      await router.notify({
+        level: "high", title: "Goal finished in chat-a", message: "done",
+        timestamp: at + 1000, sourceEvent: "goal:complete", chatId: "chat-a", channelType: "web",
+      });
+      expect(mockSender.sendMarkdown).not.toHaveBeenCalled();
+    });
+
+    it("drains quiet-hours buffers to their own chats (#9)", async () => {
+      mockSender.bindOwner = vi.fn().mockReturnValue(true);
+      // Quiet hours for the whole day: nothing below critical is delivered now.
+      const router = createRouter({ quietConfig: { enabled: true, startHour: 0, endHour: 24 } });
+      const at = Date.now();
+      await router.notify({
+        level: "high", title: "A's private goal", message: "a", timestamp: at,
+        chatId: "chat-a", channelType: "web",
+      });
+      await router.notify({
+        level: "high", title: "B's private goal", message: "b", timestamp: at + 1,
+        chatId: "chat-b", channelType: "web",
+      });
+      expect(mockSender.sendMarkdown).not.toHaveBeenCalled();
+
+      await router.drainBufferedNotifications(at + 2);
+      const byChat = new Map(
+        mockSender.sendMarkdown.mock.calls.map((call) => [call[0] as string, call[1] as string]),
+      );
+      expect([...byChat.keys()].sort()).toEqual(["chat-a", "chat-b"]);
+      expect(byChat.get("chat-a")).toContain("A's private goal");
+      expect(byChat.get("chat-a")).not.toContain("B's private goal");
+      expect(byChat.get("chat-b")).toContain("B's private goal");
+      expect(byChat.get("chat-b")).not.toContain("A's private goal");
+    });
+  });
+
 });

@@ -88,6 +88,9 @@ export interface NotificationHistoryEntry {
 /** Buffered notification (quiet hours buffer in SQLite) */
 export interface BufferedNotification {
   readonly id: number;
+  /** The chat that owns it: a buffered notification drains to ITS chat, not the fallback (round 8 #9). */
+  readonly chatId?: string;
+  readonly channelType?: string;
   readonly urgency: UrgencyLevel;
   readonly title: string;
   readonly message: string;

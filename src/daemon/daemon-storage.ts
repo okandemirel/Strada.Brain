@@ -91,6 +91,10 @@ CREATE TABLE IF NOT EXISTS digest_state (
 
 CREATE TABLE IF NOT EXISTS notification_buffer (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  -- The chat that owns it: a quiet-hours drain reaches the chat that asked,
+  -- not the fallback (Codex round 8 #9).
+  chat_id TEXT,
+  channel_type TEXT,
   urgency TEXT NOT NULL,
   title TEXT NOT NULL,
   message TEXT NOT NULL,
@@ -202,6 +206,8 @@ interface DaemonStateRow {
 
 interface NotificationBufferRow {
   id: number;
+  chat_id?: string | null;
+  channel_type?: string | null;
   urgency: string;
   title: string;
   message: string;
@@ -316,6 +322,15 @@ export class DaemonStorage {
     this.db = new Database(this.dbPath);
     configureSqlitePragmas(this.db, "daemon");
     this.db.exec(DAEMON_SCHEMA_SQL);
+    // A database written before round 8 #9 has no owner columns on the
+    // notification buffer; add them before any statement is prepared.
+    for (const column of ["chat_id TEXT DEFAULT NULL", "channel_type TEXT DEFAULT NULL"]) {
+      try {
+        this.db.exec(`ALTER TABLE notification_buffer ADD COLUMN ${column}`);
+      } catch {
+        // Column already exists -- safe to ignore
+      }
+    }
     this.prepareStatements();
   }
 
@@ -412,6 +427,7 @@ export class DaemonStorage {
     this.db!.exec(
       `CREATE INDEX IF NOT EXISTS idx_budget_source ON budget_entries(source, timestamp)`,
     );
+
 
     this.stmts.sumBudgetBySource = this.db!.prepare(
       `SELECT source, COALESCE(SUM(cost_usd), 0) AS total FROM budget_entries WHERE timestamp >= ? GROUP BY source`,
@@ -785,6 +801,8 @@ export class DaemonStorage {
     actionHint?: string;
     sourceEvent?: string;
     createdAt: number;
+    chatId?: string;
+    channelType?: string;
   }): void {
     this.assertOpen();
     this.stmts.insertNotifBuffer!.run(
@@ -794,6 +812,8 @@ export class DaemonStorage {
       entry.actionHint ?? null,
       entry.sourceEvent ?? null,
       entry.createdAt,
+      entry.chatId ?? null,
+      entry.channelType ?? null,
     );
   }
 
@@ -1004,8 +1024,8 @@ export class DaemonStorage {
 
     // Notification Buffer (Phase 18)
     this.stmts.insertNotifBuffer = db.prepare(
-      `INSERT INTO notification_buffer (urgency, title, message, action_hint, source_event, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO notification_buffer (urgency, title, message, action_hint, source_event, created_at, chat_id, channel_type)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.stmts.getNotifBuffer = db.prepare(
       `SELECT * FROM notification_buffer ORDER BY created_at ASC`,
@@ -1105,6 +1125,8 @@ export class DaemonStorage {
       actionHint: row.action_hint ?? undefined,
       sourceEvent: row.source_event ?? undefined,
       createdAt: row.created_at,
+      ...(row.chat_id ? { chatId: row.chat_id } : {}),
+      ...(row.channel_type ? { channelType: row.channel_type } : {}),
     };
   }
 

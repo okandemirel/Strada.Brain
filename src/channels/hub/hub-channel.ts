@@ -160,7 +160,7 @@ export class HubChannel implements IChannelAdapter {
 
   private record(chatId: string, memberName: string): void {
     this.owners.set(chatId, memberName);
-    this.ownerStore?.save(this.owners);
+    this.ownerStore?.bind(chatId, memberName);
   }
 
   /** The member that owns a chat id (see the file header for the order of precedence). */

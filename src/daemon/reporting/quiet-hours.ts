@@ -77,6 +77,9 @@ export class QuietHoursManager {
       actionHint: notification.actionHint,
       sourceEvent: notification.sourceEvent,
       createdAt: notification.timestamp,
+      // The owner travels with it (round 8 #9).
+      ...(notification.chatId ? { chatId: notification.chatId } : {}),
+      ...(notification.channelType ? { channelType: notification.channelType } : {}),
     });
 
     this.storage.pruneNotificationBuffer(this.config.bufferMax, ["high", "critical"]);

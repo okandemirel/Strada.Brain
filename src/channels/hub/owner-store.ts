@@ -22,6 +22,12 @@ interface OwnersFile {
   owners: Record<string, string>;
 }
 
+/**
+ * Two hubs both loaded {}, each saved its own binding, and the file kept only
+ * the last writer's (Codex 2026-09-17 round 8 #7). A save now re-reads the
+ * file, merges the binding it is adding into whatever is there, and replaces
+ * atomically — the same read-merge-write the skill trust file uses.
+ */
 export class HubOwnerStore {
   constructor(readonly filePath: string) {}
 
@@ -61,8 +67,23 @@ export class HubOwnerStore {
     return owners;
   }
 
+  /**
+   * Record ONE binding, merged into whatever the file holds now: two hubs that
+   * had both loaded an empty map each saved their own and the file kept only
+   * the last writer's (round 8 #7).
+   */
+  bind(chatId: string, memberName: string): void {
+    const merged = this.load();
+    merged.set(chatId, memberName);
+    this.save(merged);
+  }
+
   save(owners: ReadonlyMap<string, string>): void {
-    const body: OwnersFile = { version: 1, owners: Object.fromEntries(owners) };
+    // The file as it is NOW wins for every OTHER chat; this writer only
+    // asserts the bindings it was given (round 8 #7).
+    const merged = this.load();
+    for (const [chatId, memberName] of owners) merged.set(chatId, memberName);
+    const body: OwnersFile = { version: 1, owners: Object.fromEntries(merged) };
     try {
       mkdirSync(dirname(this.filePath), { recursive: true });
       const tmp = `${this.filePath}.${process.pid}.tmp`;

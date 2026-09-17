@@ -52,7 +52,12 @@ export interface IChannelSender {
    * routes by them instead of by whichever chat spoke last. Single-channel
    * senders leave this undefined.
    */
-  bindOwner?(chatId: string, channelType: string): void;
+  /**
+   * Bind a chat to the channel that owns it. FALSE means this hub has no
+   * such channel, so a notification for that chat must not be delivered
+   * elsewhere (Codex round 8 #6).
+   */
+  bindOwner?(chatId: string, channelType: string): boolean | void;
 }
 
 /**

@@ -142,7 +142,10 @@ export class NotificationRouter {
     await this.flushExpiredGroups(payload.timestamp);
 
     // 2. Apply time-window grouping
-    const groupKey = payload.sourceEvent || payload.title;
+    // THE OWNER IS PART OF THE KEY (round 8 #8): three chats' same-event
+    // notifications collapsed into one group, so one chat got "3x" and the
+    // others got nothing.
+    const groupKey = `${payload.channelType ?? ""}\u0000${payload.chatId ?? ""}\u0000${payload.sourceEvent || payload.title}`;
     const now = payload.timestamp;
     const existingGroup = this.groupMap.get(groupKey);
 
@@ -208,7 +211,19 @@ export class NotificationRouter {
         const markdown = this.formatNotification(deliveryPayload);
         try {
           if (deliveryPayload.chatId && deliveryPayload.channelType) {
-            this.channelSender.bindOwner?.(deliveryPayload.chatId, deliveryPayload.channelType);
+            // A BINDING THAT FAILED MEANS THE OWNER'S CHANNEL IS NOT HERE:
+            // bindOwner's false answer was ignored, so a Slack-owned goal was
+            // delivered to whatever channel the hub had instead — to someone
+            // else's conversation (Codex 2026-09-17 round 8 #6).
+            const bound = this.channelSender.bindOwner?.(deliveryPayload.chatId, deliveryPayload.channelType);
+            if (bound === false) {
+              getLoggerSafe().warn("A notification's owning channel is not configured — not delivering it elsewhere", {
+                chatId: deliveryPayload.chatId,
+                channelType: deliveryPayload.channelType,
+                title: deliveryPayload.title,
+              });
+              continue;
+            }
           }
           await this.channelSender.sendMarkdown(targetChatId, markdown);
           deliveredTo.push("chat");
@@ -321,20 +336,42 @@ export class NotificationRouter {
     const buffered = this.quietHoursManager.drainBuffer();
     if (buffered.length === 0) return;
 
-    const lines = buffered.map(
-      (n) => `**[${n.urgency.toUpperCase()}]** ${n.title}${n.actionHint ? `\n> ${n.actionHint}` : ""}`,
-    );
-    const markdown = `**Buffered during quiet hours (${buffered.length})**\n\n${lines.join("\n\n")}`;
+    // PER OWNER (round 8 #9): draining everything into one message sent
+    // another chat's private goal to the fallback chat.
+    const byOwner = new Map<string, { chatId: string | undefined; channelType: string | undefined; items: typeof buffered }>();
+    for (const item of buffered) {
+      const key = `${item.channelType ?? ""}\u0000${item.chatId ?? ""}`;
+      const group = byOwner.get(key) ?? { chatId: item.chatId, channelType: item.channelType, items: [] };
+      group.items.push(item);
+      byOwner.set(key, group);
+    }
 
     const deliveredTo: string[] = [];
-    if (this.channelSender && this.chatId) {
+    for (const group of byOwner.values()) {
+      const target = group.chatId ?? this.chatId;
+      const lines = group.items.map(
+        (n) => `**[${n.urgency.toUpperCase()}]** ${n.title}${n.actionHint ? `\n> ${n.actionHint}` : ""}`,
+      );
+      const markdown = `**Buffered during quiet hours (${group.items.length})**\n\n${lines.join("\n\n")}`;
+      if (!this.channelSender || !target) continue;
       try {
-        await this.channelSender.sendMarkdown(this.chatId, markdown);
-        deliveredTo.push("chat");
+        if (group.chatId && group.channelType) {
+          const bound = this.channelSender.bindOwner?.(group.chatId, group.channelType);
+          if (bound === false) {
+            getLoggerSafe().warn("Buffered notifications belong to a channel this hub does not have — not delivering them elsewhere", {
+              chatId: group.chatId,
+              channelType: group.channelType,
+              count: group.items.length,
+            });
+            continue;
+          }
+        }
+        await this.channelSender.sendMarkdown(target, markdown);
+        if (!deliveredTo.includes("chat")) deliveredTo.push("chat");
       } catch (err) {
         getLoggerSafe().warn("Quiet-hours buffer drain send failed", {
-          chatId: this.chatId,
-          count: buffered.length,
+          chatId: target,
+          count: group.items.length,
           error: err instanceof Error ? err.message : String(err),
         });
       }
@@ -344,7 +381,7 @@ export class NotificationRouter {
       {
         level: "low",
         title: `Buffered during quiet hours (${buffered.length})`,
-        message: markdown,
+        message: buffered.map((n) => `[${n.urgency.toUpperCase()}] ${n.title}`).join("\n"),
         timestamp: now,
       },
       deliveredTo,

@@ -238,4 +238,34 @@ describe("HubChannel", () => {
     expect(ok.memberHealth()).toEqual([{ name: "web", healthy: true }, { name: "telegram", healthy: false }]);
     await ok.disconnect();
   });
+
+  // Codex round 8 #7: two hubs both loaded {} and each saved its own binding,
+  // so the file kept only the last writer's and the other chat lost its owner.
+  it("two hubs writing at once keep both bindings", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "hub-owners-race-"));
+    const path = join(dir, "hub-owners.json");
+    try {
+      const storeA = new HubOwnerStore(path);
+      const storeB = new HubOwnerStore(path);
+      const slackA = fake("slack");
+      const tgA = fake("telegram");
+      const hubA = new HubChannel([tgA, slackA], { ownerStore: storeA });
+      hubA.onMessage(async () => undefined);
+      const slackB = fake("slack");
+      const tgB = fake("telegram");
+      const hubB = new HubChannel([tgB, slackB], { ownerStore: storeB });
+      hubB.onMessage(async () => undefined);
+
+      // Both hubs started from an empty file and each learns a different chat.
+      await slackA.handler!(incoming("C111:1700000000.000100", "slack"));
+      await tgB.handler!(incoming("222333", "telegram"));
+
+      const onDisk = new HubOwnerStore(path).load();
+      expect(onDisk.get("C111:1700000000.000100")).toBe("slack");
+      expect(onDisk.get("222333")).toBe("telegram");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
 });
