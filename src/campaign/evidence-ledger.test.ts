@@ -307,6 +307,47 @@ describe("artifactDigest over a build manifest", () => {
     expect(artifactDigest(exe)).toBeUndefined();
   });
 
+  it("membership is by resolved identity: a case-twin does not stand in for the executable (Codex round 3 #3)", () => {
+    const exe = layout();
+    const twinDir = join(dir, "twins");
+    mkdirSync(join(twinDir, "Game_Data"), { recursive: true });
+    writeFileSync(join(twinDir, "Game_Data", "level0"), "level one");
+    writeFileSync(join(twinDir, "Game.x86_64"), "the executable");
+    let caseSensitive = false;
+    try {
+      writeFileSync(join(twinDir, "game.x86_64"), "a decoy twin");
+      caseSensitive = readFileSync(join(twinDir, "Game.x86_64"), "utf8") === "the executable";
+    } catch {
+      caseSensitive = false;
+    }
+    if (caseSensitive) {
+      // Both names exist as two files: listing the twin does not cover the game.
+      writeFileSync(join(twinDir, "Game.x86_64.strada-artifact.json"), JSON.stringify({ version: "strada-manifest-v1", files: ["game.x86_64", "Game_Data/level0"] }));
+      expect(artifactManifest(join(twinDir, "Game.x86_64"))).toBeUndefined();
+    } else {
+      // One file under two spellings: either spelling names the game.
+      writeFileSync(join(twinDir, "Game.x86_64.strada-artifact.json"), JSON.stringify({ version: "strada-manifest-v1", files: ["game.x86_64", "game_data/level0"] }));
+      expect(artifactManifest(join(twinDir, "Game.x86_64"))).toBeDefined();
+    }
+    void exe;
+  });
+
+  it("an Android player is its .apk WITH the expansion file beside it (Codex round 3 #4)", () => {
+    const android = join(dir, "android");
+    mkdirSync(android, { recursive: true });
+    writeFileSync(join(android, "Game.apk"), "the apk");
+    writeFileSync(join(android, "Game.main.obb"), "the data");
+    const apk = join(android, "Game.apk");
+    const walked = artifactDigest(apk);
+    expect(walked).toMatch(HEX);
+    writeFileSync(join(android, "Game.main.obb"), "THE DATA");
+    expect(artifactDigest(apk)).not.toBe(walked);
+    writeFileSync(join(android, "Game.apk.strada-artifact.json"), JSON.stringify({ version: "strada-manifest-v1", files: ["Game.apk"] }));
+    expect(artifactManifest(apk)).toBeUndefined();
+    writeFileSync(join(android, "Game.apk.strada-artifact.json"), JSON.stringify({ version: "strada-manifest-v1", files: ["Game.apk", "Game.main.obb"] }));
+    expect(artifactManifest(apk)?.files).toEqual(["Game.apk", "Game.main.obb"]);
+  });
+
   it("nothing outside the layout: a symlink to another build refuses the manifest", () => {
     const exe = layout();
     mkdirSync(join(dir, "elsewhere"), { recursive: true });

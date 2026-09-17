@@ -259,6 +259,15 @@ export function artifactDigest(path: string | undefined): string | undefined {
       hash.update(readFileSync(at));
     };
     walk(playerLayoutRoot(path), "");
+    // A single-file player (an .apk) with an expansion file beside it: the
+    // .obb is the game's data, and a manifest-less digest of the .apk alone
+    // left it out (round 3 #4).
+    if (playerLayoutRoot(path) === path && !statSync(path).isDirectory()) {
+      const stem = basename(path).replace(/\.[^.]+$/u, "");
+      for (const entry of readdirSync(dirname(path)).sort()) {
+        if (entry !== basename(path) && entry.startsWith(stem) && /\.obb$/iu.test(entry)) walk(join(dirname(path), entry), "/" + entry);
+      }
+    }
     return hash.digest("hex");
   } catch {
     // An artifact that is not there has no digest, and saying so is the point.
@@ -348,11 +357,11 @@ function manifestCoversTheGame(path: string, files: readonly string[]): boolean 
   // before a missing file the manifest was refused and walked, with the
   // order reversed it was adopted and yielded no digest (Codex 2026-09-17 on
   // 04dd905d #10). Missing first, whatever the order.
-  const layoutRoot = realpathSync(base);
+  const layoutRoot = realpathSync.native(base);
   const resolved: string[] = [];
   for (const rel of files) {
     try {
-      resolved.push(realpathSync(join(base, rel)));
+      resolved.push(realpathSync.native(join(base, rel)));
     } catch {
       return true;
     }
@@ -364,8 +373,18 @@ function manifestCoversTheGame(path: string, files: readonly string[]): boolean 
   // Membership is case-blind: on a case-insensitive filesystem the layout is
   // the same layout under any spelling, and a wrong-case entry on a
   // case-sensitive one fails the digest's own read (fails closed).
-  const listed = new Set(files.map((f) => f.toLowerCase()));
-  return requiredRuntimeFiles(path, base, name, isDirectory).every((required) => listed.has(required.toLowerCase()));
+  // …by RESOLVED IDENTITY, not by spelling: lower-casing let a manifest
+  // listing `game.exe` stand for `Game.exe` on a case-sensitive disk that
+  // held both, and the wrong executable was hashed (Codex 2026-09-17 round
+  // 3 #3). The filesystem says which entries are one file.
+  const listed = new Set(resolved);
+  return requiredRuntimeFiles(path, base, name, isDirectory).every((required) => {
+    try {
+      return listed.has(realpathSync.native(join(base, required)));
+    } catch {
+      return false;
+    }
+  });
 }
 
 /**
@@ -409,7 +428,10 @@ function requiredRuntimeFiles(path: string, base: string, name: string, isDirect
 // native plugins beside a Windows player and a WebGL page's StreamingAssets
 // are runtime too (#8).
 const RUNTIME_DIRS = new Set(["monobleedingedge", "build", "templatedata", "plugins", "streamingassets"]);
-const RUNTIME_FILE_RE = /\.(?:dll|so|dylib)$|^GameAssembly\./i;
+// …and the companions Unity ships beside a player: an Android expansion
+// file (.obb) beside its .apk, the Windows crash handler (Codex 2026-09-17
+// round 3 #4).
+const RUNTIME_FILE_RE = /\.(?:dll|so|dylib|obb)$|^GameAssembly\.|^UnityCrashHandler.*\.exe$/i;
 /** Unity writes `<Name>_Data` beside a player; the filesystem may serve it in any case. */
 function isDataDir(entry: string): boolean {
   return /_data$/i.test(entry);
