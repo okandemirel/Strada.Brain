@@ -1026,6 +1026,8 @@ export class Orchestrator {
     {
       activeGuidanceIds: string[];
       shadowIds: string[];
+      /** Ids whose guidance this run was actually shown (promotion evidence). */
+      exposedIds: string[];
     }
   >();
   /** Framework Knowledge Layer prompt generator (injected by bootstrap when available) */
@@ -5675,6 +5677,12 @@ export class Orchestrator {
         : normalizeFailureFingerprint(params.failureReason ?? params.summary);
     this.runtimeArtifactManager.recordEvaluation({
       artifactIds,
+      // Only what the prompt actually carried earns promotion credit: the
+      // rendered guidance, plus artifacts whose source instinct was shown.
+      exposedArtifactIds: matched.exposedIds ?? [],
+      presentedInstinctIds: params.chatId
+        ? this.currentSessionInstinctIds.get(instinctScopeKey(params.chatId, params.taskRunId)) ?? []
+        : [],
       identityKey: this.getTaskExecutionContext()?.identityKey,
       verdict:
         params.decision === "approve"

@@ -125,6 +125,8 @@ describe("RuntimeArtifactManager", () => {
     for (let i = 0; i < 5; i++) {
       manager.recordEvaluation({
         artifactIds: [artifact.id],
+        // The guidance was actually presented in each of these runs.
+        exposedArtifactIds: [artifact.id],
         verdict: "clean",
         blocker: false,
         reason: "Verifier clean.",
@@ -147,6 +149,7 @@ describe("RuntimeArtifactManager", () => {
     for (let i = 0; i < 5; i++) {
       manager.recordEvaluation({
         artifactIds: [artifact.id],
+        exposedArtifactIds: [artifact.id],
         verdict: "clean",
         blocker: false,
         reason: "Verifier clean result repeated.",
@@ -269,6 +272,184 @@ describe("RuntimeArtifactManager", () => {
     expect(manager.getRecentArtifactsForIdentity("identity-256", { limit: 5 })).toEqual([
       expect.objectContaining({ id: artifact.id }),
     ]);
+  });
+
+  // ---------------------------------------------------------------------------
+  // D41 (audit 04.3a/b): promotion needs EXPOSURE, not coincidence.
+  // ---------------------------------------------------------------------------
+
+  it("does not promote a shadow artifact nobody was ever shown (D41)", () => {
+    const instinct = createInstinct({
+      id: "instinct_unexposed",
+      type: "tool_usage",
+      triggerPattern: "guidance that never reached a prompt",
+      action: "Run read -> patch -> build loop",
+    });
+    storage.createInstinct(instinct);
+    const { artifact } = manager.materializeShadowArtifact(instinct);
+
+    // Five clean runs that merely MATCHED the artifact: shadow artifacts are
+    // never rendered into a prompt, so nothing in these runs saw the guidance.
+    for (let i = 0; i < 5; i++) {
+      manager.recordEvaluation({
+        artifactIds: [artifact.id],
+        verdict: "clean",
+        blocker: false,
+        reason: "Verifier clean, but the artifact was not presented.",
+      });
+    }
+
+    // TEETH: the unfixed scorer counted every match as a shadow sample and
+    // promoted unseen guidance after five clean runs.
+    const observed = storage.getRuntimeArtifact(artifact.id);
+    expect(observed?.state).toBe("shadow");
+    expect(observed?.stats.shadowSampleCount).toBe(5);
+    expect(observed?.stats.exposureCount ?? 0).toBe(0);
+  });
+
+  it("counts an exposure when the run was shown the source instinct (D41 guard)", () => {
+    const instinct = createInstinct({
+      id: "instinct_presented",
+      type: "tool_usage",
+      triggerPattern: "guidance carried by its instinct",
+      action: "Run read -> patch -> build loop",
+    });
+    storage.createInstinct(instinct);
+    const { artifact } = manager.materializeShadowArtifact(instinct);
+
+    for (let i = 0; i < 5; i++) {
+      manager.recordEvaluation({
+        artifactIds: [artifact.id],
+        presentedInstinctIds: [instinct.id],
+        verdict: "clean",
+        blocker: false,
+        reason: "Verifier clean with the instinct in the prompt.",
+      });
+    }
+
+    expect(storage.getRuntimeArtifact(artifact.id)?.state).toBe("active");
+  });
+
+  it("does not promote on exposed runs that were not clean", () => {
+    const instinct = createInstinct({
+      id: "instinct_exposed_dirty",
+      type: "tool_usage",
+      triggerPattern: "exposed but retried",
+      action: "Run read -> patch -> build loop",
+    });
+    storage.createInstinct(instinct);
+    const { artifact } = manager.materializeShadowArtifact(instinct);
+
+    for (let i = 0; i < 6; i++) {
+      manager.recordEvaluation({
+        artifactIds: [artifact.id],
+        exposedArtifactIds: [artifact.id],
+        verdict: i < 3 ? "clean" : "retry",
+        blocker: false,
+        reason: "Mixed outcomes.",
+        failureFingerprint: `retry-${i}`,
+      });
+    }
+
+    expect(storage.getRuntimeArtifact(artifact.id)?.state).toBe("shadow");
+  });
+
+  it("does not hand out execution guidance on a task-type coincidence alone (D41)", () => {
+    const artifact: RuntimeArtifact = {
+      id: "artifact_coincidence" as RuntimeArtifact["id"],
+      kind: "skill",
+      state: "active",
+      name: "Shader Cache Tactic",
+      description: "Clear the shader cache before rebuilding lightmaps.",
+      guidance: "Clear the shader cache before rebuilding lightmaps.",
+      taskTypes: ["debugging"],
+      taskPatterns: ["shader", "cache", "lightmap"],
+      // No tools required and no project scope: task type is the only signal.
+      requiredToolNames: [],
+      requiredCapabilities: ["reasoning"],
+      sourceInstinctIds: ["instinct_coincidence" as any],
+      sourceTrajectoryIds: [],
+      stats: {
+        shadowSampleCount: 5,
+        activeUseCount: 5,
+        cleanCount: 5,
+        retryCount: 0,
+        failureCount: 0,
+        blockerCount: 0,
+        harmfulCount: 0,
+        recentEvaluations: [],
+        regressionFingerprints: {},
+      },
+      promotedAt: Date.now() as TimestampMs,
+      createdAt: Date.now() as TimestampMs,
+      updatedAt: Date.now() as TimestampMs,
+    };
+    storage.upsertRuntimeArtifact(artifact);
+
+    const matches = manager.matchForTask({
+      taskDescription: "Investigate why the payroll export drops the final column",
+      taskType: "debugging",
+      availableToolNames: [],
+    });
+
+    // TEETH: the unfixed score was 0.45 (task type) + 0.15 (an EMPTY tool list
+    // scored as full coverage) = 0.60 >= 0.55, so unrelated guidance was
+    // presented as execution guidance.
+    expect(matches.active[0]?.usableForExecutionGuidance ?? false).toBe(false);
+  });
+
+  it("refuses a scoped artifact in a different project outright (D41)", () => {
+    const artifact: RuntimeArtifact = {
+      id: "artifact_otherworld" as RuntimeArtifact["id"],
+      kind: "workflow",
+      state: "active",
+      name: "Pooling Compile Flow",
+      description: "Use compile errors to drive the pooling fix loop.",
+      guidance: "Read compiler output, inspect failing pooling files, rerun the build.",
+      taskTypes: ["debugging"],
+      taskPatterns: ["pooling", "compile", "build"],
+      projectWorldFingerprint: "root projects alpha",
+      requiredToolNames: [],
+      requiredCapabilities: ["tool-calling"],
+      sourceInstinctIds: ["instinct_otherworld" as any],
+      sourceTrajectoryIds: [],
+      stats: {
+        shadowSampleCount: 5,
+        activeUseCount: 5,
+        cleanCount: 5,
+        retryCount: 0,
+        failureCount: 0,
+        blockerCount: 0,
+        harmfulCount: 0,
+        recentEvaluations: [],
+        regressionFingerprints: {},
+      },
+      promotedAt: Date.now() as TimestampMs,
+      createdAt: Date.now() as TimestampMs,
+      updatedAt: Date.now() as TimestampMs,
+    };
+    storage.upsertRuntimeArtifact(artifact);
+
+    // Same words, different project: a known scope mismatch is a gate, not a
+    // missing 0.15 bonus.
+    const mismatch = manager.matchForTask({
+      taskDescription: "Fix the pooling compile error and rerun the build",
+      taskType: "debugging",
+      projectWorldFingerprint: "root projects beta",
+      availableToolNames: [],
+    });
+    expect(mismatch.active).toHaveLength(0);
+    expect(mismatch.shadow).toHaveLength(0);
+
+    // GUARD: the same artifact in its own project is still usable guidance.
+    const inScope = manager.matchForTask({
+      taskDescription: "Fix the pooling compile error and rerun the build",
+      taskType: "debugging",
+      projectWorldFingerprint: "root projects alpha",
+      availableToolNames: [],
+    });
+    expect(inScope.active).toHaveLength(1);
+    expect(inScope.active[0]?.usableForExecutionGuidance).toBe(true);
   });
 
   it("retires active artifacts after sustained low clean rate", () => {

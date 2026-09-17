@@ -34,6 +34,17 @@ export interface RuntimeArtifactMatches {
 
 export interface RuntimeArtifactEvaluationInput {
   readonly artifactIds: readonly string[];
+  /**
+   * The subset of {@link artifactIds} whose guidance the run was actually
+   * SHOWN (rendered into the prompt). Only these count towards promotion.
+   */
+  readonly exposedArtifactIds?: readonly string[];
+  /**
+   * Instincts presented to the run. An artifact whose source instinct was in
+   * the prompt was exposed through it, even though the artifact itself was not
+   * rendered separately.
+   */
+  readonly presentedInstinctIds?: readonly string[];
   readonly identityKey?: string;
   readonly verdict: "clean" | "retry" | "failure";
   readonly blocker: boolean;
@@ -158,6 +169,8 @@ export class RuntimeArtifactManager {
   recordEvaluation(input: RuntimeArtifactEvaluationInput): RuntimeArtifact[] {
     const updated: RuntimeArtifact[] = [];
     const now = Date.now();
+    const exposedIds = new Set((input.exposedArtifactIds ?? []).map((id) => id.trim()).filter(Boolean));
+    const presentedInstinctIds = new Set((input.presentedInstinctIds ?? []).map((id) => id.trim()).filter(Boolean));
 
     for (const artifactId of input.artifactIds) {
       const artifact = this.storage.getRuntimeArtifact(artifactId);
@@ -165,8 +178,18 @@ export class RuntimeArtifactManager {
         continue;
       }
 
+      // EXPOSURE, not coincidence. A shadow artifact is never rendered into a
+      // prompt on its own, so "five clean runs that matched it" said nothing
+      // about the guidance — it was promoted for outcomes it never touched
+      // (D41 / audit 04.3a). An artifact counts as exposed only when the run
+      // was shown it, directly or through the instinct it came from.
+      const exposed =
+        exposedIds.has(artifact.id) ||
+        artifact.sourceInstinctIds.some((instinctId) => presentedInstinctIds.has(instinctId));
+
       const stats = updateStats(artifact.stats, {
         state: artifact.state,
+        exposed,
         verdict: input.verdict,
         blocker: input.blocker,
         failureFingerprint: input.failureFingerprint,
@@ -180,7 +203,8 @@ export class RuntimeArtifactManager {
       let lastStateReason = input.reason;
 
       if (artifact.state === "shadow") {
-        const cleanRate = stats.shadowSampleCount > 0 ? stats.cleanCount / stats.shadowSampleCount : 0;
+        const exposureCount = stats.exposureCount ?? 0;
+        const cleanRate = exposureCount > 0 ? (stats.exposedCleanCount ?? 0) / exposureCount : 0;
         const repeatedRegression = hasRepeatedRegression(stats);
         const blockerPatternRepeated = input.blocker && input.failureFingerprint
           ? (stats.regressionFingerprints[input.failureFingerprint] ?? 0) > 1
@@ -193,14 +217,14 @@ export class RuntimeArtifactManager {
             ? `Rejected after repeated blocker fingerprint: ${input.failureFingerprint}`
             : `Rejected after ${stats.harmfulCount} harmful shadow outcomes.`;
         } else if (
-          stats.shadowSampleCount >= PROMOTION_MIN_SAMPLES &&
+          exposureCount >= PROMOTION_MIN_SAMPLES &&
           cleanRate >= PROMOTION_MIN_CLEAN_RATE &&
           stats.blockerCount === 0 &&
           !repeatedRegression
         ) {
           state = "active";
           promotedAt = now;
-          lastStateReason = `Promoted after ${stats.shadowSampleCount} shadow evaluations with ${(cleanRate * 100).toFixed(0)}% clean rate.`;
+          lastStateReason = `Promoted after ${exposureCount} shadow runs that were shown the guidance, with ${(cleanRate * 100).toFixed(0)}% clean rate.`;
         }
       } else if (artifact.state === "active") {
         const recent = stats.recentEvaluations.slice(-RETIREMENT_WINDOW);
@@ -383,13 +407,23 @@ export class RuntimeArtifactManager {
     const projectWorldMatched = artifact.projectWorldFingerprint
       ? projectScopeMatches(artifact.projectWorldFingerprint, projectWorldFingerprint)
       : false;
+    // A KNOWN scope mismatch is a gate, not a missing bonus: guidance learned
+    // in another project is the wrong project's guidance, however well its
+    // words happen to line up (D41 / audit 04.3b).
+    const projectScopeKnown = Boolean(artifact.projectWorldFingerprint) && Boolean(projectWorldFingerprint?.trim());
+    if (projectScopeKnown && !projectWorldMatched) {
+      return null;
+    }
     const toolCoverage = scoreToolCoverage(artifact.requiredToolNames, availableTools);
     const requiredToolsSatisfied = artifact.requiredToolNames.length === 0 || toolCoverage >= 1;
     const matchScore = clamp(
       (taskTypeMatched ? 0.45 : 0.12) +
       keywordCoverage * 0.25 +
       (projectWorldMatched ? 0.15 : 0) +
-      toolCoverage * 0.15,
+      // An artifact that needs NO tools earns no tool credit. Scoring the empty
+      // requirement as full coverage put 0.45 + 0.15 = 0.60 over the 0.55
+      // guidance bar on the task type alone, with zero keyword evidence.
+      (artifact.requiredToolNames.length > 0 ? toolCoverage * 0.15 : 0),
     );
 
     if (matchScore < MATCH_THRESHOLD) {
@@ -412,6 +446,8 @@ export class RuntimeArtifactManager {
 function createDefaultRuntimeArtifactStats(): RuntimeArtifactStats {
   return {
     shadowSampleCount: 0,
+    exposureCount: 0,
+    exposedCleanCount: 0,
     activeUseCount: 0,
     cleanCount: 0,
     retryCount: 0,
@@ -427,6 +463,8 @@ function updateStats(
   stats: RuntimeArtifactStats,
   input: {
     state: RuntimeArtifactState;
+    /** The run was actually shown this artifact's guidance. */
+    exposed: boolean;
     verdict: RuntimeArtifactEvaluationInput["verdict"];
     blocker: boolean;
     failureFingerprint?: string;
@@ -447,8 +485,13 @@ function updateStats(
     },
   ].slice(-RETIREMENT_WINDOW);
 
+  const exposedShadowSample = input.exposed && input.state === "shadow";
+
   return {
     shadowSampleCount: stats.shadowSampleCount + (input.state === "shadow" ? 1 : 0),
+    exposureCount: (stats.exposureCount ?? 0) + (exposedShadowSample ? 1 : 0),
+    exposedCleanCount:
+      (stats.exposedCleanCount ?? 0) + (exposedShadowSample && input.verdict === "clean" ? 1 : 0),
     activeUseCount: stats.activeUseCount + (input.state === "active" ? 1 : 0),
     cleanCount: stats.cleanCount + (input.verdict === "clean" ? 1 : 0),
     retryCount: stats.retryCount + (input.verdict === "retry" ? 1 : 0),

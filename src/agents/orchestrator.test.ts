@@ -2665,7 +2665,10 @@ describe("Orchestrator", () => {
         "Read the compiler output, inspect the failing files, and rerun dotnet build after each patch.",
       taskTypes: ["debugging"],
       taskPatterns: ["compile", "build", "pooling", "fix"],
-      projectWorldFingerprint: "unity:pooling",
+      // The run's world fingerprint is normalize("root=<projectPath>") (see
+      // createProjectScopeFingerprint). A scoped artifact from ANOTHER world is
+      // gated out entirely now (D41), so this fixture names this run's world.
+      projectWorldFingerprint: "root tmp test project",
       requiredToolNames: ["file_read"],
       requiredCapabilities: ["tool-calling"],
       sourceInstinctIds: ["instinct_active" as any],
@@ -2773,7 +2776,10 @@ describe("Orchestrator", () => {
       guidance: "Use the bridge tool first.",
       taskTypes: ["debugging"],
       taskPatterns: ["compile", "build", "pooling", "fix"],
-      projectWorldFingerprint: "unity:pooling",
+      // The run's world fingerprint is normalize("root=<projectPath>") (see
+      // createProjectScopeFingerprint). A scoped artifact from ANOTHER world is
+      // gated out entirely now (D41), so this fixture names this run's world.
+      projectWorldFingerprint: "root tmp test project",
       requiredToolNames: ["bridge_tool"],
       requiredCapabilities: ["tool-calling"],
       sourceInstinctIds: ["instinct_bridge" as any],

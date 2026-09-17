@@ -86,7 +86,7 @@ export interface ContextBuilderDeps {
     | undefined;
   readonly runtimeArtifactMatches?: Map<
     string,
-    { activeGuidanceIds: string[]; shadowIds: string[] }
+    { activeGuidanceIds: string[]; shadowIds: string[]; exposedIds: string[] }
   >;
   readonly buildWorkerToolDefinitions?: (
     task: TaskClassification,
@@ -233,6 +233,10 @@ function buildRuntimeArtifactMemoryLayer(
       const matchedIds = {
         activeGuidanceIds: activeGuidance.map((match) => match.artifact.id),
         shadowIds: matches.shadow.map((match) => match.artifact.id),
+        // What this prompt actually SHOWS: the active guidance lines below.
+        // Shadow matches are recorded as observations only — nothing renders
+        // them, so they must not be credited with the run's verdict (D41).
+        exposedIds: activeGuidance.map((match) => match.artifact.id),
       };
       if (matchedIds.activeGuidanceIds.length > 0 || matchedIds.shadowIds.length > 0) {
         ctx.runtimeArtifactMatches.set(key, matchedIds);
