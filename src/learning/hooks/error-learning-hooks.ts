@@ -61,6 +61,16 @@ export interface ResolutionContext {
   attempts?: number;
 }
 
+/**
+ * Negative weight of ONE non-application (guidance shown, not used).
+ *
+ * A real failed application adds ~0.8 to beta; this is a third of that, so a
+ * rule needs several cost-only misfires before its confidence drops under the
+ * recovery gate, and a single coincidence never silences a good rule
+ * (tightening a gate cuts both ways).
+ */
+export const NON_APPLICATION_BETA = 0.25;
+
 // ─── Error Learning Hooks ───────────────────────────────────────────────────────
 
 export class ErrorLearningHooks {
@@ -72,6 +82,16 @@ export class ErrorLearningHooks {
 
   /** Track active errors for resolution correlation */
   private activeErrors = new Map<string, ErrorContext>();
+
+  /**
+   * WHAT WAS SHOWN, per active error, and when. A run repaired some other way
+   * used to leave the guidance it was shown completely unmeasured: the 6.3
+   * ablation measured a recall on a look-alike trigger costing an attempt and
+   * leaving no negative evidence at all, so the same misfire repeats for ever
+   * and findSuspectGuidance cannot see it. A non-application is weak evidence
+   * against the rule's TRIGGER — not a failure of its action.
+   */
+  private shownGuidance = new Map<string, { instinctIds: string[]; shownAt: number }>();
 
   constructor(
     pipeline: LearningPipeline,
@@ -137,6 +157,13 @@ export class ErrorLearningHooks {
     // Store error for later correlation with resolution
     const errorId = this.generateErrorId(context);
     this.activeErrors.set(errorId, context);
+    // Only guidance that actually reached the prompt counts as shown.
+    if (recoveryInjection.length > 0 && matches.length > 0) {
+      this.shownGuidance.set(errorId, {
+        instinctIds: matches.map((m) => String(m.instinct?.id ?? "")).filter((id) => id.length > 0),
+        shownAt: Date.now(),
+      });
+    }
 
     return { suggestions: matches, recoveryInjection };
   }
@@ -165,11 +192,16 @@ export class ErrorLearningHooks {
     this.activeErrors.delete(errorId);
 
     // Update learning based on resolution success
+    const applied = this.findAppliedInstinct(resolution);
     if (resolution.success) {
-      await this.handleSuccessfulResolution(resolution);
+      await this.handleSuccessfulResolution(resolution, applied);
     } else {
-      this.handleFailedResolution(resolution);
+      this.handleFailedResolution(resolution, applied);
     }
+
+    // EVERY OTHER RULE THIS RUN WAS SHOWN cost it an attempt and taught
+    // nobody anything. Record that, so a misfiring trigger becomes findable.
+    this.recordNonApplications(errorId, resolution, applied?.id);
 
     // Record observation
     await this.recordResolutionObservation(resolution);
@@ -237,9 +269,10 @@ export class ErrorLearningHooks {
 
   // ─── Private Methods ─────────────────────────────────────────────────────────
 
-  private async handleSuccessfulResolution(resolution: ResolutionContext): Promise<void> {
-    // Find if any instinct was applied
-    const appliedInstinct = this.findAppliedInstinct(resolution);
+  private async handleSuccessfulResolution(
+    resolution: ResolutionContext,
+    appliedInstinct: { id: string } | null,
+  ): Promise<void> {
 
     if (appliedInstinct) {
       // Reinforce the applied instinct
@@ -254,14 +287,68 @@ export class ErrorLearningHooks {
     }
   }
 
-  private handleFailedResolution(resolution: ResolutionContext): void {
-    const appliedInstinct = this.findAppliedInstinct(resolution);
-    
+  private handleFailedResolution(
+    resolution: ResolutionContext,
+    appliedInstinct: { id: string } | null,
+  ): void {
     if (appliedInstinct) {
       this.penalizeInstinct(appliedInstinct.id, {
         errorContext: resolution.errorContext,
         reason: resolution.action,
       });
+    }
+  }
+
+  /**
+   * Weak evidence against every rule this run was SHOWN and did not use.
+   *
+   * A cost-only misfire — guidance recalled on a look-alike trigger, noticed
+   * to be irrelevant and discarded — used to leave nothing behind at all: no
+   * credit row, no confidence movement, nothing findSuspectGuidance could
+   * rank. So it kept being recalled, at one wasted attempt every time (6.3's
+   * measured harmful-recall rate).
+   *
+   * It is deliberately NOT a failure: the rule's action was never tried, so
+   * `timesFailed` does not move and one non-application cannot retire a rule.
+   * Only the posterior shifts, by a fraction of a real negative.
+   */
+  private recordNonApplications(
+    errorId: string,
+    resolution: ResolutionContext,
+    appliedInstinctId: string | undefined,
+  ): void {
+    const shown = this.shownGuidance.get(errorId);
+    this.shownGuidance.delete(errorId);
+    if (!shown) return;
+    for (const instinctId of shown.instinctIds) {
+      if (instinctId === appliedInstinctId) continue;
+      const instinct = this.storage.getInstinct(instinctId);
+      if (!instinct) continue;
+      const before = instinct.confidence;
+      const updated = this.confidenceScorer.applyEvidence(instinct, {
+        alphaDelta: 0,
+        betaDelta: NON_APPLICATION_BETA,
+      });
+      this.storage.updateInstinct(updated);
+      this.updateInstinctStatus(updated);
+      try {
+        this.storage.recordInstinctCredit({
+          instinctId,
+          sessionId: String(resolution.errorContext.sessionId ?? ""),
+          success: false,
+          applied: false,
+          verdictScore: NON_APPLICATION_BETA,
+          source: "observed",
+          confidenceBefore: before,
+          confidenceAfter: updated.confidence,
+          statusAt: instinct.status,
+          timestamp: Date.now(),
+          exposedAt: shown.shownAt,
+        });
+      } catch {
+        // The ledger row is the record, not the mechanism: a storage failure
+        // must not take the resolution path down with it.
+      }
     }
   }
 

@@ -540,7 +540,14 @@ export class LearningStorage {
         timestamp INTEGER NOT NULL,
         -- Round 11 #8: when the run was SHOWN the guidance. The timestamp column
         -- is when the credit SETTLED, which since round 10 #14 is a queue hop later.
-        exposed_at INTEGER
+        exposed_at INTEGER,
+        -- WAS THE GUIDANCE ACTUALLY USED? 0 = shown to the run and NOT applied
+        -- (the run was repaired some other way). The 6.3 ablation measured this
+        -- gap: a rule recalled on a look-alike trigger costs an attempt, leaves
+        -- no negative evidence at all, and so keeps misfiring for ever while
+        -- findSuspectGuidance cannot see it. Rows written before this column
+        -- were all applications, so they default to 1.
+        applied INTEGER NOT NULL DEFAULT 1
       );
       CREATE INDEX IF NOT EXISTS idx_credit_log_instinct ON instinct_credit_log(instinct_id, timestamp DESC);
     `);
@@ -574,6 +581,9 @@ export class LearningStorage {
       // Round 11 #8: WHEN the run was shown the guidance, as distinct from when
       // its credit settled (timestamp). NULL on every row written before this.
       'ALTER TABLE instinct_credit_log ADD COLUMN exposed_at INTEGER',
+      // Cost-only misfires: a row written before this column was an
+      // application, so existing rows default to 1 and read as applied.
+      'ALTER TABLE instinct_credit_log ADD COLUMN applied INTEGER NOT NULL DEFAULT 1',
     ];
     for (const sql of v2FactorColumns) {
       try { this.db.prepare(sql).run(); } catch { /* column already exists */ }
@@ -2446,13 +2456,19 @@ export class LearningStorage {
      * assuming either answer.
      */
     exposedAt?: number;
+    /**
+     * FALSE = the run was SHOWN this guidance and did not apply it (it was
+     * repaired another way). Weak evidence against the rule's trigger, and
+     * the only record a cost-only misfire leaves. Omitted ⇒ an application.
+     */
+    applied?: boolean;
   }): void {
     this.ensureConnection();
     this.db!.prepare(`
       INSERT INTO instinct_credit_log
       (instinct_id, session_id, task_run_id, success, verdict_score, source,
-       confidence_before, confidence_after, status_at, timestamp, exposed_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       confidence_before, confidence_after, status_at, timestamp, exposed_at, applied)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       entry.instinctId,
       entry.sessionId,
@@ -2465,6 +2481,7 @@ export class LearningStorage {
       entry.statusAt,
       entry.timestamp,
       entry.exposedAt ?? null,
+      entry.applied === false ? 0 : 1,
     );
   }
 
@@ -2498,6 +2515,7 @@ export class LearningStorage {
       status_at: string;
       timestamp: number;
       exposed_at: number | null;
+      applied: number | null;
     }>;
     return rows.map((row) => ({
       instinctId: row.instinct_id,
@@ -2511,6 +2529,9 @@ export class LearningStorage {
       statusAt: row.status_at,
       timestamp: row.timestamp,
       ...(row.exposed_at === null ? {} : { exposedAt: row.exposed_at }),
+      // NULL only on a row from a database this column was added to: those were
+      // all applications, so absence reads as applied, never as a misfire.
+      applied: row.applied === null ? true : row.applied === 1,
     }));
   }
 
@@ -3376,4 +3397,10 @@ export interface InstinctCreditRecord {
   timestamp: number;
   /** When the run was SHOWN the guidance (round 11 #8). Absent = unrecorded. */
   exposedAt?: number;
+  /**
+   * FALSE = shown to the run and not applied — a cost-only misfire. True for
+   * every row written before the column existed, because those were all
+   * applications.
+   */
+  applied: boolean;
 }

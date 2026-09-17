@@ -337,6 +337,12 @@ export interface SuspectGuidance {
   /** Runs it influenced that failed (from the credit ledger), and how many in all. */
   failedRuns: number;
   totalRuns: number;
+  /**
+   * Runs that were SHOWN it and did not use it — a cost-only misfire, which
+   * costs an attempt and says the TRIGGER is too wide, not that the action is
+   * broken. Counted apart from failedRuns for exactly that reason.
+   */
+  shownNotApplied: number;
   negativeFeedback: number;
   lastFailureAt?: number;
   /** How long it has been carrying dated evidence against it while still in effect. */
@@ -374,25 +380,38 @@ export function findSuspectGuidance(
     if (!inEffect && opts?.includeRetired !== true) continue;
 
     const credits = storage.getInstinctCredits({ instinctId: id });
-    const failed = credits.filter((c) => !c.success);
+    // A FAILED APPLICATION AND A MISFIRE ARE DIFFERENT FACTS. Both are stored
+    // with success=0: the first tried the rule's action and it did not work,
+    // the second only showed the rule to a run that repaired itself some other
+    // way. Counting them together would report a cost-only misfire as a broken
+    // action; ignoring the misfires is what made them invisible here at all.
+    const failed = credits.filter((c) => !c.success && c.applied);
+    const misfired = credits.filter((c) => !c.applied);
     const feedback = storage.getFeedbackByInstinct(id);
     const negativeFeedback = feedback.filter((f) => NEGATIVE_FEEDBACK.has(f.type)).length;
     const countedFailures = instinct.stats?.timesFailed ?? 0;
-    if (failed.length === 0 && negativeFeedback === 0 && countedFailures === 0) continue;
+    if (failed.length === 0 && misfired.length === 0 && negativeFeedback === 0 && countedFailures === 0) continue;
 
     const lastFailureAt = failed[0]?.timestamp ?? undefined;
     const firstNegative = [
       ...failed.map((c) => c.timestamp),
+      // A misfire IS dated evidence against the rule. Without it the clock on
+      // 'wrong and still in effect' never started for guidance whose only harm
+      // was wasted attempts.
+      ...misfired.map((c) => c.exposedAt ?? c.timestamp),
       ...feedback.filter((f) => NEGATIVE_FEEDBACK.has(f.type)).map((f) => f.createdAt),
     ].sort((a, b) => a - b)[0];
     // The ledger row, not a verdict: failed runs weigh most, then negative
     // feedback, then undated counters — and a high confidence with failures
     // behind it is MORE suspect, not less, so confidence adds rather than
     // subtracts here.
-    const score = failed.length * 10 + negativeFeedback * 5 + countedFailures + instinct.confidence;
+    const score = failed.length * 10 + negativeFeedback * 5 + misfired.length * 3 + countedFailures + instinct.confidence;
     const parts: string[] = [];
     if (failed.length > 0) parts.push(`${failed.length} of the ${credits.length} run(s) it influenced failed`);
     if (negativeFeedback > 0) parts.push(`${negativeFeedback} negative correction(s)/thumbs-down`);
+    if (misfired.length > 0) {
+      parts.push(`shown to ${misfired.length} run(s) that did not use it (wasted attempts, action never tried)`);
+    }
     if (failed.length === 0 && countedFailures > 0) {
       parts.push(`${countedFailures} failure(s) counted before the credit ledger existed (undated)`);
     }
@@ -406,6 +425,7 @@ export function findSuspectGuidance(
       confidence: instinct.confidence,
       failedRuns: failed.length,
       totalRuns: credits.length,
+      shownNotApplied: misfired.length,
       negativeFeedback,
       ...(lastFailureAt === undefined ? {} : { lastFailureAt }),
       ...(firstNegative === undefined ? {} : { msWrongAndStillInEffect: Math.max(0, now - firstNegative) }),
