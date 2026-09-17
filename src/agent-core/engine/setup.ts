@@ -107,8 +107,13 @@ export interface SetupDeps extends ReflectionDeps, BudgetDeps {
    * audited 2026-09-02: run teardown for the learning pipeline's per-run credit
    * ledger — cleared at the same point currentSessionInstinctIds is, so the next
    * run on this chatId can credit the same instincts again.
+   *
+   * D40 (audit 04.2b): the ledger's credit is now SETTLED here, from the run's
+   * terminal verdict, instead of being applied by whichever tool result came
+   * first. `terminal` is that verdict — omit it only where the run's ending is
+   * genuinely unknown (the pipeline then falls back to the evidence it observed).
    */
-  clearRunInstinctCredits(chatId: string): void;
+  clearRunInstinctCredits(chatId: string, terminal?: { readonly success: boolean }): void;
 }
 
 /**

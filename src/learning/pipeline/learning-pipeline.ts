@@ -198,11 +198,72 @@ export class LearningPipeline {
    * run per tool it governs; the orchestrator clears the run's ledger at teardown
    * ({@link clearRunInstinctCredits}) alongside currentSessionInstinctIds.
    */
-  private readonly runCreditedInstinctIds = new Map<string, Set<string>>();
+  /**
+   * D40 (audit 04.2b): the per-run credit used to be APPLIED by the first
+   * related tool result, from that one event's verdict, and no terminal outcome
+   * was ever consulted — so an instinct was reinforced for a run that later
+   * failed (a green first build, then a failed verdict, still read as a
+   * success). The ledger now holds credit PENDING until the run ends, and
+   * {@link clearRunInstinctCredits} settles it from the run's terminal verdict.
+   *
+   * Value per instinct: the evidence observed in-run, used only when the caller
+   * supplies no terminal verdict (any observed failure wins — never the first
+   * event's opinion).
+   */
+  private readonly runPendingCredits = new Map<string, Map<string, { success: boolean; verdictScore: number }>>();
 
-  /** Run teardown: forget which instincts this run already credited. */
-  clearRunInstinctCredits(sessionId: string): void {
-    this.runCreditedInstinctIds.delete(sessionId);
+  /**
+   * Run teardown: settle this run's pending instinct credit from the run's
+   * TERMINAL verdict, then forget the run. Called once per run (the engine's
+   * persistTerminal, where the terminal status is already known).
+   *
+   * `terminal` omitted (older callers, tests): settles from the evidence
+   * observed during the run instead — a failure seen anywhere in the run is a
+   * failure, so the first event can never decide the outcome on its own.
+   */
+  clearRunInstinctCredits(sessionId: string, terminal?: { success: boolean; verdictScore?: number }): void {
+    this.settleRunInstinctCredits(sessionId, terminal);
+    this.runPendingCredits.delete(sessionId);
+  }
+
+  /**
+   * Apply the run's pending credit. Terminal verdict when the caller knows it,
+   * else the worst evidence observed in-run. One updateConfidence per instinct
+   * per run (the dedup the pending map's keys already give).
+   */
+  private settleRunInstinctCredits(
+    sessionId: string,
+    terminal?: { success: boolean; verdictScore?: number },
+  ): void {
+    const pending = this.runPendingCredits.get(sessionId);
+    if (!pending || pending.size === 0) return;
+
+    const settled = terminal
+      ? {
+          success: terminal.success,
+          verdictScore:
+            terminal.verdictScore ??
+            (terminal.success ? this.bayesianConfig.verdictCleanSuccess : this.bayesianConfig.verdictFailure),
+        }
+      : undefined;
+
+    for (const [instinctId, observed] of pending) {
+      const instinct = this.storage.getInstinct(instinctId as InstinctId);
+      if (!instinct) continue;
+      const outcome = settled ?? observed;
+      // Permanent instincts are frozen — confidence is not updated.
+      if (instinct.status === "permanent") continue;
+      // Increment coolingFailures for failures on cooling instincts
+      const instinctForUpdate = !outcome.success && instinct.coolingStartedAt
+        ? { ...instinct, coolingFailures: (instinct.coolingFailures ?? 0) + 1 }
+        : instinct;
+      const updated = this.confidenceScorer.updateConfidence(
+        instinctForUpdate,
+        outcome.success,
+        outcome.verdictScore,
+      );
+      this.updateInstinctStatus(updated);
+    }
   }
 
   constructor(
@@ -459,7 +520,8 @@ export class LearningPipeline {
     this.storage.flush();
     this.storage.markObservationsProcessed([observation.id]);
 
-    // 3. Update confidence for relevant instincts
+    // 3. Note which instincts this run owes credit to. The credit is APPLIED at
+    //    run end, from the run's terminal verdict (D40 — see runPendingCredits).
     if (event.appliedInstinctIds && event.appliedInstinctIds.length > 0) {
       const verdict = getVerdictScore(event);
 
@@ -467,34 +529,25 @@ export class LearningPipeline {
         const instinct = this.storage.getInstinct(instinctId);
         if (!instinct) continue;
 
-        // Skip permanent instincts -- confidence is frozen
-        if (instinct.status === "permanent") continue;
-
-        // Only update confidence if instinct has a tool_name contextCondition matching event.toolName.
+        // Only credit an instinct that has a tool_name contextCondition matching event.toolName.
         // Shared with the trajectory-credit disjoint computation (computeTrajectoryCreditIds) so the
         // two stay exact complements by construction (Issue #22 SIBLING A).
         if (!LearningPipeline.isInstinctRelevantToTool(instinct, event.toolName as string)) continue;
 
-        // audited 2026-09-02: once per run, not once per tool call (see runCreditedInstinctIds).
-        let credited = this.runCreditedInstinctIds.get(event.sessionId);
-        if (!credited) {
-          credited = new Set<string>();
-          this.runCreditedInstinctIds.set(event.sessionId, credited);
+        // audited 2026-09-02: once per run, not once per tool call.
+        let pending = this.runPendingCredits.get(event.sessionId);
+        if (!pending) {
+          pending = new Map<string, { success: boolean; verdictScore: number }>();
+          this.runPendingCredits.set(event.sessionId, pending);
         }
-        if (credited.has(instinctId)) continue;
-        credited.add(instinctId);
-
-        // Increment coolingFailures for failures on cooling instincts
-        let instinctForUpdate = instinct;
-        if (!verdict.success && instinct.coolingStartedAt) {
-          instinctForUpdate = {
-            ...instinct,
-            coolingFailures: (instinct.coolingFailures ?? 0) + 1,
-          };
+        const already = pending.get(instinctId);
+        if (!already) {
+          pending.set(instinctId, { success: verdict.success, verdictScore: verdict.verdictScore });
+        } else if (already.success && !verdict.success) {
+          // A later failure in the same run downgrades the observed evidence:
+          // the FIRST event never decides the run's outcome on its own (D40).
+          pending.set(instinctId, { success: false, verdictScore: verdict.verdictScore });
         }
-
-        const updated = this.confidenceScorer.updateConfidence(instinctForUpdate, verdict.success, verdict.verdictScore);
-        this.updateInstinctStatus(updated);
       }
     }
 
@@ -765,7 +818,7 @@ export class LearningPipeline {
     // a rule nobody owns, which every user then sees.
     this.storage.createInstinct(instinct, undefined);
     if (this.projectPath) {
-      this.storage.addInstinctScopeV2(instinct.id, this.projectPath, scopeType, undefined /* MUTANT */);
+      this.storage.addInstinctScopeV2(instinct.id, this.projectPath, scopeType, params.userId);
     }
     this.checkScopePromotion(instinct);
     if (this.embeddingQueue) {

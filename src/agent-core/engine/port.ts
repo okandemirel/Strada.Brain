@@ -515,7 +515,13 @@ export function createAgentCorePort(
           instinctScopeKey(c.chatId, deps.getTaskExecutionContext()?.taskRunId),
         );
         // audited 2026-09-02: the pipeline's per-run credit ledger ends with the run too.
-        deps.clearRunInstinctCredits(c.chatId);
+        // D40 (audit 04.2b): the ledger is SETTLED here, from this run's REAL
+        // terminal verdict — the same three signals the recorded metric phase is
+        // built from above — so an instinct is never reinforced for a run that
+        // failed, was cancelled, or was cut short by an arbiter.
+        deps.clearRunInstinctCredits(c.chatId, {
+          success: !(cancelled || failedVerdict || stoppedShortByArbiter),
+        });
         deps.propagateInstinctIdsToChannel(c.chatId, []);
         } finally {
           // audited 2026-09-02: SelfVerification publishes into a process-wide

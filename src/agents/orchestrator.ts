@@ -1316,7 +1316,8 @@ export class Orchestrator {
       getTaskExecutionContext: () => this.getTaskExecutionContext(),
       propagateInstinctIdsToChannel: (chatId, instinctIds) =>
         this.propagateInstinctIdsToChannel(chatId, instinctIds),
-      clearRunInstinctCredits: (chatId) => this.learningPipeline?.clearRunInstinctCredits(chatId),
+      clearRunInstinctCredits: (chatId, terminal) =>
+        this.learningPipeline?.clearRunInstinctCredits(chatId, terminal),
       settleGoalTree: (conversationScope, status) => this.settleGoalTree(conversationScope, status),
       // Step 8 (tool turn): the RCE-sensitive tool-execution primitives + batch classifier stay in
       // the shell → injected as callbacks (the turn orchestrates; it does not re-home the write gate).

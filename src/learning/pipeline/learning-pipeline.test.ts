@@ -700,6 +700,7 @@ describe("LearningPipeline", () => {
       };
 
       await pipeline.handleToolResult(event);
+      pipeline.clearRunInstinctCredits("session-1", { success: true }); // credit settles at run end (D40)
 
       // Instinct should have been updated
       const updated = storage.getInstinct(instinct.id);
@@ -740,6 +741,7 @@ describe("LearningPipeline", () => {
       };
 
       await pipeline.handleToolResult(event);
+      pipeline.clearRunInstinctCredits("session-1", { success: true });
 
       // Instinct should NOT have been updated
       const updated = storage.getInstinct(instinct.id);
@@ -1076,6 +1078,7 @@ describe("LearningPipeline", () => {
       };
 
       await pipeline.handleToolResult(event);
+      pipeline.clearRunInstinctCredits("session-1", { success: true });
 
       const updated = storage.getInstinct(instinct.id);
       expect(updated).not.toBeNull();
@@ -1113,6 +1116,7 @@ describe("LearningPipeline", () => {
       };
 
       await pipeline.handleToolResult(event);
+      pipeline.clearRunInstinctCredits("session-1", { success: true });
 
       const updatedApplied = storage.getInstinct(instinctApplied.id);
       const updatedNotApplied = storage.getInstinct(instinctNotApplied.id);
@@ -2455,6 +2459,7 @@ describe("learning pipeline v2 integration", () => {
       for (const tool of ["file_read", "shell", "file_edit", "dotnet_build", "shell", "file_read"]) {
         await pipeline.handleToolResult(event("run-1", tool, [instinct.id]));
       }
+      pipeline.clearRunInstinctCredits("run-1", { success: true });
 
       const after = storage.getInstinct(instinct.id)!;
       expect(after.stats.timesSuggested, "one retrieval was counted once per tool call").toBe(1);
@@ -2468,6 +2473,7 @@ describe("learning pipeline v2 integration", () => {
       for (let i = 0; i < 40; i++) {
         await pipeline.handleToolResult(event("run-2", "shell", [instinct.id], false));
       }
+      pipeline.clearRunInstinctCredits("run-2", { success: false });
 
       const after = storage.getInstinct(instinct.id)!;
       expect(after.stats.timesFailed).toBe(1);
@@ -2480,8 +2486,9 @@ describe("learning pipeline v2 integration", () => {
 
       await pipeline.handleToolResult(event("chat-A", "shell", [instinct.id]));
       await pipeline.handleToolResult(event("chat-A", "shell", [instinct.id]));
-      pipeline.clearRunInstinctCredits("chat-A"); // the run teardown
+      pipeline.clearRunInstinctCredits("chat-A", { success: true }); // the run teardown
       await pipeline.handleToolResult(event("chat-A", "shell", [instinct.id]));
+      pipeline.clearRunInstinctCredits("chat-A", { success: true }); // the next run's teardown
 
       expect(storage.getInstinct(instinct.id)!.stats.timesApplied).toBe(2);
     });
@@ -2496,6 +2503,7 @@ describe("learning pipeline v2 integration", () => {
       await pipeline.handleToolResult(event("run-3", "shell", [instinct.id])); // not its tool
       await pipeline.handleToolResult(event("run-3", "file_read", [instinct.id]));
       await pipeline.handleToolResult(event("run-3", "file_read", [instinct.id]));
+      pipeline.clearRunInstinctCredits("run-3", { success: true });
 
       expect(storage.getInstinct(instinct.id)!.stats.timesApplied).toBe(1);
     });
@@ -2684,5 +2692,158 @@ describe("an auto-resolution must share the failure's target (D39 / audit 04.2a)
     await pipeline.handleToolResult(result("mystery_tool", {}, "done", true));
 
     expect(errorFixes(), "a targetless pair was booked as an error→fix").toHaveLength(0);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// D40 / audit 04.2b — the FIRST related tool result applied the credit, from
+// that single event's verdict, and no terminal outcome was ever consulted: an
+// instinct was reinforced as a success for a run that then failed.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("instinct credit is settled by the run's terminal verdict (D40 / audit 04.2b)", () => {
+  let storage: LearningStorage;
+  let pipeline: LearningPipeline;
+  let tempDir: string;
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), "pipeline-terminal-"));
+    storage = new LearningStorage(join(tempDir, "test.db"));
+    storage.initialize();
+    pipeline = new LearningPipeline(storage, {
+      enabled: true,
+      detectionIntervalMs: 1000,
+      evolutionIntervalMs: 5000,
+      minConfidenceForCreation: 0.5,
+      batchSize: 5,
+    });
+  });
+
+  afterEach(() => {
+    pipeline.stop();
+    storage.close();
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  function applied(id: string): Instinct {
+    return {
+      id: id as any,
+      name: "Applied teaching",
+      type: "error_fix",
+      status: "active",
+      confidence: 0.5,
+      triggerPattern: "Any tool",
+      action: "Do the thing",
+      contextConditions: [],
+      stats: { timesSuggested: 0, timesApplied: 0, timesFailed: 0, successRate: 0, averageExecutionMs: 0 },
+      bayesianAlpha: 3,
+      bayesianBeta: 3,
+      createdAt: Date.now() as TimestampMs,
+      updatedAt: Date.now() as TimestampMs,
+      sourceTrajectoryIds: [],
+      tags: [],
+    };
+  }
+  const event = (sessionId: string, ids: string[], success = true): ToolResultEvent => ({
+    sessionId,
+    toolName: "shell",
+    input: {},
+    output: success ? "ok" : "boom",
+    success,
+    appliedInstinctIds: ids,
+    timestamp: Date.now(),
+  });
+
+  it("a tool result alone does not credit the instinct — the run has to end first", async () => {
+    const instinct = applied(`instinct_pending_${Date.now()}`);
+    storage.createInstinct(instinct);
+
+    await pipeline.handleToolResult(event("run-pending", [instinct.id]));
+
+    const midRun = storage.getInstinct(instinct.id)!;
+    expect(midRun.stats.timesSuggested, "credit was applied mid-run, before any outcome was known").toBe(0);
+    expect(midRun.confidence).toBe(0.5);
+
+    pipeline.clearRunInstinctCredits("run-pending", { success: true });
+    const settled = storage.getInstinct(instinct.id)!;
+    expect(settled.stats.timesApplied).toBe(1);
+    expect(settled.confidence).toBeGreaterThan(0.5);
+  });
+
+  it("a run that started green and ENDED IN FAILURE credits the instinct with the failure", async () => {
+    const instinct = applied(`instinct_lateFail_${Date.now()}`);
+    storage.createInstinct(instinct);
+
+    // The first related result succeeded — under the old code that one event
+    // took the credit and the run's real ending was never consulted.
+    await pipeline.handleToolResult(event("run-late-fail", [instinct.id], true));
+    await pipeline.handleToolResult(event("run-late-fail", [instinct.id], true));
+
+    pipeline.clearRunInstinctCredits("run-late-fail", { success: false });
+
+    const after = storage.getInstinct(instinct.id)!;
+    expect(after.stats.timesFailed, "the failed run was booked as a success").toBe(1);
+    expect(after.stats.timesApplied).toBe(0);
+    expect(after.confidence, "confidence rose on a run that failed").toBeLessThan(0.5);
+  });
+
+  it("a run that really succeeded still reinforces the instinct (legitimate behaviour still accepted)", async () => {
+    const instinct = applied(`instinct_green_${Date.now()}`);
+    storage.createInstinct(instinct);
+
+    await pipeline.handleToolResult(event("run-green", [instinct.id], true));
+    pipeline.clearRunInstinctCredits("run-green", { success: true });
+
+    const after = storage.getInstinct(instinct.id)!;
+    expect(after.stats.timesApplied).toBe(1);
+    expect(after.stats.timesFailed).toBe(0);
+    expect(after.confidence).toBeGreaterThan(0.5);
+  });
+
+  it("settles a failing-first run that ENDED WELL as the success it was", async () => {
+    const instinct = applied(`instinct_recovered_${Date.now()}`);
+    storage.createInstinct(instinct);
+
+    await pipeline.handleToolResult(event("run-recovered", [instinct.id], false));
+    await pipeline.handleToolResult(event("run-recovered", [instinct.id], true));
+    pipeline.clearRunInstinctCredits("run-recovered", { success: true });
+
+    const after = storage.getInstinct(instinct.id)!;
+    expect(after.stats.timesApplied, "a recovered run was booked as a failure").toBe(1);
+    expect(after.stats.timesFailed).toBe(0);
+  });
+
+  it("with no terminal verdict, a failure seen anywhere in the run outweighs a green first call", async () => {
+    const instinct = applied(`instinct_noverdict_${Date.now()}`);
+    storage.createInstinct(instinct);
+
+    await pipeline.handleToolResult(event("run-noverdict", [instinct.id], true));
+    await pipeline.handleToolResult(event("run-noverdict", [instinct.id], false));
+    pipeline.clearRunInstinctCredits("run-noverdict");
+
+    const after = storage.getInstinct(instinct.id)!;
+    expect(after.stats.timesFailed, "the first event's verdict decided the run on its own").toBe(1);
+    expect(after.stats.timesApplied).toBe(0);
+  });
+
+  it("credits at most once per run however many tool calls carry the instinct", async () => {
+    const instinct = applied(`instinct_once_${Date.now()}`);
+    storage.createInstinct(instinct);
+
+    for (let i = 0; i < 12; i++) {
+      await pipeline.handleToolResult(event("run-many", [instinct.id], true));
+    }
+    pipeline.clearRunInstinctCredits("run-many", { success: true });
+
+    const after = storage.getInstinct(instinct.id)!;
+    expect(after.stats.timesSuggested).toBe(1);
+    expect(after.stats.timesApplied).toBe(1);
+  });
+
+  it("the engine's run teardown supplies the run's terminal verdict", () => {
+    const port = readFileSync("src/agent-core/engine/port.ts", "utf8");
+    const at = port.indexOf("clearRunInstinctCredits(");
+    expect(at, "the engine no longer settles instinct credit at run end").toBeGreaterThan(0);
+    const call = port.slice(at, port.indexOf(");", at));
+    expect(call, "the terminal verdict is not passed to the settlement").toContain("success");
   });
 });
