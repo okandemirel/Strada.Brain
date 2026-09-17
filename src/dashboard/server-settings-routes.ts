@@ -12,7 +12,13 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { UnifiedBudgetManager } from "../budget/unified-budget-manager.js";
-import { RATE_LIMIT_SETTINGS, parseRateLimitValue, type RateLimitPatch } from "../security/rate-limiter.js";
+import {
+  RATE_LIMIT_SETTINGS,
+  parseRateLimitValue,
+  type RateLimitPatch,
+  type RateLimitSettingField,
+  type RateLimiter,
+} from "../security/rate-limiter.js";
 import { sendJson, sendJsonError } from "./server-types.js";
 import type { RouteContext } from "./server-types.js";
 
@@ -26,6 +32,120 @@ const VOICE_BOOL_FIELDS = [
   ["outputEnabled", "voice_output_enabled"],
   ["browserSttEnabled", "voice_browser_stt_enabled"],
 ] as const;
+
+/** The little of DaemonStorage these handlers need (a test double satisfies it). */
+interface SettingsOverrideStore {
+  getSettingsOverride(key: string, scope?: string): string | undefined;
+  setSettingsOverride(key: string, value: string, scope?: string): void;
+  /**
+   * DaemonStorage's SQLite transaction wrapper (`db.transaction(work).immediate()`
+   * — generic, despite the name). Absent on test doubles, which then get the
+   * compensating restore below.
+   */
+  budgetTransaction?<T>(work: () => T): T;
+}
+
+type LiveRateLimiter = Pick<RateLimiter, "updateConfig" | "getConfig">;
+
+/**
+ * THE LIMITS IN FORCE (round 9 #22).
+ *
+ * The GET used to answer `Number(storedOverride ?? "0")`, so a daemon whose
+ * limits came from configuration — 10 messages/minute, 100/hour — reported
+ * zeros. The portal loads that body, the person edits ONE field, and the
+ * whole-body POST writes the zeros over the other two: editing the token quota
+ * disabled both message limits (reproduced).
+ *
+ * The answer is the RUNNING limiter's own configuration, which is the
+ * configured values with the stored overrides already applied at startup
+ * (applyStoredRateLimitOverrides). Without a limiter nothing is enforced at
+ * all, so the stored override — when it is a legal limit — is the best
+ * description of what the next boot will enforce, and 0 ("unlimited") is the
+ * honest answer otherwise.
+ */
+export function effectiveRateLimits(
+  storage: SettingsOverrideStore,
+  limiter?: LiveRateLimiter,
+): Record<RateLimitSettingField, number> {
+  const live = limiter?.getConfig();
+  return Object.fromEntries(
+    RATE_LIMIT_SETTINGS.map(({ field, storageKey }) => {
+      if (live) return [field, live[field]];
+      const raw = storage.getSettingsOverride(storageKey);
+      const parsed = raw === undefined ? undefined : parseRateLimitValue(field, raw);
+      // A corrupt row is not a limit: it must not be reported as one, exactly
+      // as applyStoredRateLimitOverrides refuses to enforce it.
+      return [field, parsed?.ok === true ? parsed.value : 0];
+    }),
+  ) as Record<RateLimitSettingField, number>;
+}
+
+/**
+ * PERSIST, THEN PUBLISH (round 9 #23).
+ *
+ * The POST used to hand the patch to the live limiter first and then write the
+ * rows one at a time. A failure on the second write returned an error while
+ * BOTH live limits had already changed and only the first override was
+ * persisted — so a restart produced a third configuration. The rows are written
+ * as one transaction and the running limiter is told only once they are
+ * committed; a store without transaction support gets a compensating restore.
+ *
+ * Throws when nothing could be committed: the caller answers with an error and
+ * both the store and the enforced policy are exactly as they were.
+ */
+export function commitRateLimitPatch(
+  storage: SettingsOverrideStore,
+  patch: RateLimitPatch,
+  limiter?: LiveRateLimiter,
+): void {
+  const fields = RATE_LIMIT_SETTINGS.filter(({ field }) => patch[field] !== undefined);
+  if (fields.length === 0) return;
+  const effectiveBefore = limiter?.getConfig();
+  // What each row said before. A row that did not exist cannot be deleted
+  // again, so its "before" is the value that was IN FORCE — the stored form of
+  // "this request changed nothing".
+  const before = fields.map(({ field, storageKey }) => [
+    storageKey,
+    storage.getSettingsOverride(storageKey) ?? String(effectiveBefore?.[field] ?? 0),
+  ] as const);
+  const writeAll = (): void => {
+    for (const { field, storageKey } of fields) {
+      storage.setSettingsOverride(storageKey, String(patch[field]));
+    }
+  };
+  const restore = (): void => {
+    for (const [key, value] of before) {
+      try {
+        storage.setSettingsOverride(key, value);
+      } catch {
+        // Nothing further is possible; the thrown error is what the caller reports.
+      }
+    }
+  };
+
+  if (typeof storage.budgetTransaction === "function") {
+    // Every row or none: SQLite rolls the earlier writes back on a throw.
+    storage.budgetTransaction(writeAll);
+  } else {
+    try {
+      writeAll();
+    } catch (err) {
+      restore();
+      throw err;
+    }
+  }
+
+  try {
+    // AFTER the commit. Every value already passed the limiter's own gate
+    // (parseRateLimitValue, the same table it re-validates with), so this
+    // cannot refuse a committed patch — and if it ever did, the store must not
+    // be left describing a policy the daemon is not enforcing.
+    limiter?.updateConfig(patch);
+  } catch (err) {
+    restore();
+    throw err;
+  }
+}
 
 /**
  * Try to handle settings and budget routes. Returns true if the route was handled.
@@ -90,16 +210,11 @@ export function handleSettingsRoutes(
       sendJsonError(res, 503, "Storage not available");
       return true;
     }
-    const storage = ctx.daemonStorage;
     // One table for GET, POST and the startup restore (RATE_LIMIT_SETTINGS) so
     // the three cannot drift — the tokensPerDay field once round-tripped
-    // through a key nothing read.
-    sendJson(
-      res,
-      Object.fromEntries(
-        RATE_LIMIT_SETTINGS.map(({ field, storageKey }) => [field, Number(storage.getSettingsOverride(storageKey) ?? "0")]),
-      ),
-    );
+    // through a key nothing read. The values are the EFFECTIVE limits, not a
+    // bare storage read (round 9 #22).
+    sendJson(res, effectiveRateLimits(ctx.daemonStorage, ctx.rateLimiter));
     return true;
   }
 
@@ -130,21 +245,19 @@ export function handleSettingsRoutes(
           patch[field] = value.value;
         }
 
-        // The LIVE limiter first: if it refuses the numbers (its own last-gate
-        // validation), nothing is persisted either, so a restart cannot bring
-        // back a limit the running daemon rejected.
-        ctx.rateLimiter?.updateConfig(patch);
-        for (const { field, storageKey } of RATE_LIMIT_SETTINGS) {
-          const value = patch[field];
-          // Write the SAME key the GET handler reads (rate_limit_tokens_per_day)
-          // and the frontend sends (tokensPerDay). The previous key
-          // (rate_limit_messages_per_day) was never read and the daily field
-          // never round-tripped, so it always reloaded as 0.
-          if (value !== undefined) storage.setSettingsOverride(storageKey, String(value));
-        }
+        // ONE COMMIT, THEN the live limiter (round 9 #23). Writing the rows one
+        // by one with the limiter already changed meant a mid-way failure
+        // returned an error while the daemon enforced the new numbers and the
+        // store held half of them. The keys are the ones the GET reads
+        // (rate_limit_tokens_per_day) and the frontend sends (tokensPerDay):
+        // the previous daily key was never read, so it always reloaded as 0.
+        commitRateLimitPatch(storage, patch, ctx.rateLimiter);
         sendJson(res, { success: true });
       } catch (err) {
-        sendJsonError(res, 400, err instanceof Error ? err.message : String(err));
+        // A refused NUMBER is the client's fault (400); a store that could not
+        // commit is ours (500) — and in both cases nothing changed.
+        const status = err instanceof RangeError ? 400 : 500;
+        sendJsonError(res, status, err instanceof Error ? err.message : String(err));
       }
     });
     return true;

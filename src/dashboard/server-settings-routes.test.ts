@@ -843,3 +843,148 @@ describe("rate-limit settings are validated and drive the live limiter (item 2.7
     expect(limiter.getConfig().messagesPerMinute).toBe(7);
   });
 });
+
+// =============================================================================
+// ROUND 9 #22 / #23 — the GET must report the EFFECTIVE limits, and a failed
+// POST must change neither the store nor the running policy.
+//
+// #22: with limits coming from configuration and no stored override, GET
+// answered zeros. The portal loads that body, the person edits ONE field, and
+// the whole-body POST writes zeros over the other two — every message limit
+// disabled by editing the token quota.
+//
+// #23: the POST published to the live limiter FIRST and then wrote the rows one
+// by one. A failure on the second write left the response an error, both live
+// limits already changed, and only the first override persisted — a third
+// configuration appeared at the next restart.
+// =============================================================================
+describe("rate-limit settings report and commit as one (round 9 #22, #23)", () => {
+  let storage: DaemonStorage;
+  let tmpDir: string;
+  let res: MockRes & ServerResponse;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "rate-limit-effective-"));
+    storage = new DaemonStorage(join(tmpDir, "daemon.db"));
+    storage.initialize();
+    res = createMockRes();
+  });
+
+  afterEach(() => {
+    storage.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  const get = (ctx: RouteContext): Record<string, number> => {
+    const getRes = createMockRes();
+    handleSettingsRoutes("/api/settings/rate-limits", "GET", createMockReq(), getRes, ctx);
+    return JSON.parse((getRes as MockRes).body) as Record<string, number>;
+  };
+
+  const post = async (body: unknown, ctx: RouteContext): Promise<void> => {
+    handleSettingsRoutes("/api/settings/rate-limits", "POST", createMockReq(JSON.stringify(body)), res, ctx);
+    await vi.waitFor(() => {
+      expect(res.end).toHaveBeenCalled();
+    });
+  };
+
+  it("GET returns the limits the running limiter enforces, not zeros (#22)", () => {
+    const limiter = new RateLimiter({ messagesPerMinute: 10, messagesPerHour: 100, tokensPerDay: 500_000 });
+    expect(get(makeCtxWithLimiter(storage, limiter))).toEqual({
+      messagesPerMinute: 10,
+      messagesPerHour: 100,
+      tokensPerDay: 500_000,
+    });
+  });
+
+  it("editing one field in the portal leaves every other limit enforced (#22)", async () => {
+    const limiter = new RateLimiter({ messagesPerMinute: 10, messagesPerHour: 100, tokensPerDay: 0 });
+    // Exactly what the portal does: load the form, change one field, send it all back.
+    const loaded = get(makeCtxWithLimiter(storage, limiter));
+    await post({ ...loaded, tokensPerDay: 250_000 }, makeCtxWithLimiter(storage, limiter));
+
+    expect(res.statusCode).toBe(200);
+    expect(limiter.getConfig()).toMatchObject({ messagesPerMinute: 10, messagesPerHour: 100, tokensPerDay: 250_000 });
+    expect(storage.getSettingsOverride("rate_limit_messages_per_minute")).toBe("10");
+    expect(storage.getSettingsOverride("rate_limit_messages_per_hour")).toBe("100");
+  });
+
+  it("GET falls back to the stored override when no limiter is wired (guard)", () => {
+    storage.setSettingsOverride("rate_limit_messages_per_minute", "30");
+    expect(get(makeCtx(storage))).toEqual({ messagesPerMinute: 30, messagesPerHour: 0, tokensPerDay: 0 });
+  });
+
+  it("GET ignores a corrupt stored override rather than reporting it as a limit (guard)", () => {
+    storage.setSettingsOverride("rate_limit_messages_per_hour", "not-a-number");
+    expect(get(makeCtx(storage)).messagesPerHour).toBe(0);
+  });
+
+  it("a storage failure part-way through leaves BOTH the store and the live policy unchanged (#23)", async () => {
+    const limiter = new RateLimiter({ messagesPerMinute: 4, messagesPerHour: 40, tokensPerDay: 400 });
+    const before = limiter.getConfig();
+    let writes = 0;
+    // The second row refuses to be written (a disk error, a locked DB).
+    const flaky = {
+      getSettingsOverride: (key: string, scope?: string) => storage.getSettingsOverride(key, scope),
+      setSettingsOverride: (key: string, value: string, scope?: string) => {
+        writes += 1;
+        if (writes === 2) throw new Error("database is locked");
+        storage.setSettingsOverride(key, value, scope);
+      },
+      budgetTransaction: <T>(work: () => T): T => storage.budgetTransaction(work),
+    };
+    await post({ messagesPerMinute: 30, messagesPerHour: 500 }, {
+      daemonStorage: flaky,
+      rateLimiter: limiter,
+      readJsonBody,
+    } as unknown as RouteContext);
+
+    expect(res.statusCode).toBeGreaterThanOrEqual(400);
+    // Nothing persisted — not even the write that succeeded.
+    expect(storage.getSettingsOverride("rate_limit_messages_per_minute")).toBeUndefined();
+    expect(storage.getSettingsOverride("rate_limit_messages_per_hour")).toBeUndefined();
+    // And the running limiter still enforces exactly what it did before.
+    expect(limiter.getConfig()).toEqual(before);
+  });
+
+  it("a store with no transaction support puts back what each row said (#23)", async () => {
+    const limiter = new RateLimiter({ messagesPerMinute: 4, messagesPerHour: 40 });
+    const mock = createMockStorage();
+    mock.store.set("rate_limit_messages_per_minute::global", "11");
+    mock.store.set("rate_limit_messages_per_hour::global", "22");
+    let writes = 0;
+    const flaky: MockStorage = {
+      ...mock,
+      setSettingsOverride: (key: string, value: string, scope = "global") => {
+        writes += 1;
+        if (writes === 2) throw new Error("database is locked");
+        mock.store.set(`${key}::${scope}`, value);
+      },
+    };
+    await post({ messagesPerMinute: 30, messagesPerHour: 500 }, {
+      daemonStorage: flaky,
+      rateLimiter: limiter,
+      readJsonBody,
+    } as unknown as RouteContext);
+
+    expect(res.statusCode).toBeGreaterThanOrEqual(400);
+    expect(mock.store.get("rate_limit_messages_per_minute::global")).toBe("11");
+    expect(mock.store.get("rate_limit_messages_per_hour::global")).toBe("22");
+    expect(limiter.getConfig()).toMatchObject({ messagesPerMinute: 4, messagesPerHour: 40 });
+  });
+
+  it("a good POST still commits and takes effect (guard)", async () => {
+    const limiter = new RateLimiter({ messagesPerMinute: 4, messagesPerHour: 40, tokensPerDay: 400 });
+    await post({ messagesPerMinute: 30, messagesPerHour: 500 }, makeCtxWithLimiter(storage, limiter));
+    expect(res.statusCode).toBe(200);
+    expect(storage.getSettingsOverride("rate_limit_messages_per_minute")).toBe("30");
+    expect(storage.getSettingsOverride("rate_limit_messages_per_hour")).toBe("500");
+    expect(limiter.getConfig()).toMatchObject({ messagesPerMinute: 30, messagesPerHour: 500, tokensPerDay: 400 });
+    // The GET a reload does now reports exactly that.
+    expect(get(makeCtxWithLimiter(storage, limiter))).toEqual({
+      messagesPerMinute: 30,
+      messagesPerHour: 500,
+      tokensPerDay: 400,
+    });
+  });
+});
