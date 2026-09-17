@@ -67,11 +67,24 @@ function resolution(context: ErrorContext, action: string, success = true): Reso
   return { errorContext: context, action, success };
 }
 
-/** Show the guidance for one error, then resolve that same error another way. */
+/**
+ * Show the guidance for one error, then resolve that same error another way — and
+ * SAY SO.
+ *
+ * `appliedInstinctIds: []` is the run reporting "I used none of what I was
+ * shown", which is what makes this a demonstrated misfire. Round 13 #24: the
+ * penalty used to be derived from the resolution TEXT not matching the rule's
+ * action, which punished a rule that was right for being worded differently (see
+ * misfire-evidence.test.ts). Evidence, not wording.
+ */
 function showThenResolveOtherwise(output: string, otherRepair: string) {
   const context = errorContext(output);
   const shown = hooks.onBeforeErrorAnalysis(context);
-  return { shown, settle: () => hooks.onAfterErrorResolution(resolution(context, otherRepair)) };
+  return {
+    shown,
+    settle: () =>
+      hooks.onAfterErrorResolution({ ...resolution(context, otherRepair), appliedInstinctIds: [] }),
+  };
 }
 
 beforeEach(() => {
@@ -139,8 +152,13 @@ describe("guidance shown to a run that did not use it", () => {
 
   it("does not punish the rule the run actually applied (guard)", async () => {
     const rule = taughtRule("cs0006-build-dependency", CS0006, "Build the dependency project first, then re-run");
-    // The resolution IS the rule's own action.
-    await showThenResolveOtherwise(CS0006, "Build the dependency project first, then re-run").settle();
+    // The resolution IS the rule's own action, and nothing reports otherwise —
+    // so the rule is identified as the one that was applied.
+    const context = errorContext(CS0006);
+    hooks.onBeforeErrorAnalysis(context);
+    await hooks.onAfterErrorResolution(
+      resolution(context, "Build the dependency project first, then re-run"),
+    );
 
     const credits = storage.getInstinctCredits({ instinctId: String(rule.id) });
     expect(credits.filter((c) => !c.applied)).toHaveLength(0);

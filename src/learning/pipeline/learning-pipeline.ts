@@ -151,6 +151,8 @@ export class LearningPipeline {
   private embeddingQueue: EmbeddingQueue | null = null;
   private evolutionTimer: ReturnType<typeof setInterval> | null = null;
   private feedbackReactionListener: ((event: FeedbackReactionEvent) => void) | null = null;
+  /** r13 #22: the synchronous credit note, unsubscribed with the pipeline. */
+  private toolResultCreditListener: ((event: ToolResultEvent) => void) | null = null;
   private periodicTimer?: ReturnType<typeof setInterval>;
   private isRunning = false;
 
@@ -238,6 +240,26 @@ export class LearningPipeline {
   private readonly runGuidanceShownAt = new Map<string, Map<string, number>>();
   /** Bound on the exposure map: oldest run's exposures forgotten first. */
   private static readonly MAX_SHOWN_RUNS = 200;
+
+  /**
+   * ROUND 13 #25 — RULES THIS RUN WAS SHOWN AND DEMONSTRABLY DID NOT USE.
+   *
+   * One exposure produced TWO contradictory ledger rows: the error-recovery hook
+   * wrote its non-application row straight to storage, while this pipeline's
+   * terminal settlement wrote a positive row for the same instinct, the same run
+   * and the same `exposedAt` — because the run's tool events name the guidance it
+   * was CARRYING, which is not the same fact as the guidance it USED. A reader
+   * asking "which runs did this rule influence, and how did they end" got both
+   * answers for one moment.
+   *
+   * So there is one settlement ledger, and this is its dedup key: run → instinct
+   * → the EXPOSURES already judged. One exposure reported twice writes one row;
+   * two exposures in one run (the rule shown for two different errors) are two
+   * facts and two rows. An instinct listed here at all has its pending credit
+   * dropped: a rule the run demonstrably did not use is not credited with the
+   * run's outcome either.
+   */
+  private readonly runNonApplied = new Map<string, Map<string, Set<number>>>();
 
   /**
    * ROUND 10 #14 — A RUN'S TERMINAL VERDICT IS FINAL, INCLUDING FOR LATE EVENTS.
@@ -340,6 +362,98 @@ export class LearningPipeline {
   }
 
   /**
+   * ROUND 13 #25 — NON-APPLICATION EVIDENCE, THROUGH THE ONE SETTLEMENT LEDGER.
+   *
+   * "This run was shown rule R and demonstrably did not use it" is weak evidence
+   * against R's TRIGGER (not against its action — the action was never tried), and
+   * it used to be written by {@link ErrorLearningHooks} straight into storage,
+   * beside whatever this pipeline's settlement wrote for the same exposure. Both
+   * paths now come through here, so:
+   *
+   *   - the run's PENDING credit for R is dropped. A rule nobody used cannot be
+   *     credited with the run's outcome, and that is what stopped one exposure
+   *     producing a negative `observed` row and a positive `terminal` row;
+   *   - the same non-application reported twice writes one row;
+   *   - a run that has already settled keeps its verdict: if R was credited by
+   *     that settlement the ledger is not rewritten, because a run's outcome is
+   *     decided once.
+   *
+   * Returns what it did, so a caller can report a gap instead of assuming a write.
+   */
+  noteGuidanceNotApplied(params: {
+    sessionId: string;
+    /** Which run was shown it (#13). Omitted off-run: the chat is the scope. */
+    taskRunId?: string;
+    instinctId: string;
+    /** When the run was shown the rule (r12 #9). Defaults to now. */
+    exposedAt?: number;
+    /** Beta weight of ONE non-application. A fraction of a real failure. */
+    betaDelta: number;
+  }): "recorded" | "duplicate" | "already-settled" | "unknown-instinct" {
+    const instinctId = String(params.instinctId).trim();
+    if (!instinctId) return "unknown-instinct";
+    const instinct = this.storage.getInstinct(instinctId as InstinctId);
+    if (!instinct) return "unknown-instinct";
+
+    const creditKey = LearningPipeline.runCreditKey(params.sessionId, params.taskRunId);
+    let nonApplied = this.runNonApplied.get(creditKey);
+    if (!nonApplied) {
+      nonApplied = new Map<string, Set<number>>();
+      this.runNonApplied.set(creditKey, nonApplied);
+      while (this.runNonApplied.size > LearningPipeline.MAX_SHOWN_RUNS) {
+        const oldest = this.runNonApplied.keys().next();
+        if (oldest.done || oldest.value === creditKey) break;
+        this.runNonApplied.delete(oldest.value);
+      }
+    }
+    const exposedAt = params.exposedAt ?? Date.now();
+    let exposures = nonApplied.get(instinctId);
+    if (exposures?.has(exposedAt) === true) return "duplicate";
+
+    const settled = this.settledRuns.get(creditKey);
+    if (settled?.credited.has(instinctId) === true) {
+      // The run's terminal verdict already spoke for this exposure. Two rows for
+      // one moment is the defect; the first writer wins.
+      if (!exposures) {
+        exposures = new Set<number>();
+        nonApplied.set(instinctId, exposures);
+      }
+      exposures.add(exposedAt);
+      return "already-settled";
+    }
+    if (!exposures) {
+      exposures = new Set<number>();
+      nonApplied.set(instinctId, exposures);
+    }
+    exposures.add(exposedAt);
+    settled?.credited.add(instinctId);
+    // Never credited with this run's outcome: it took no part in it.
+    this.runPendingCredits.get(creditKey)?.delete(instinctId);
+
+    const before = instinct.confidence;
+    // A non-application is NOT a failure: the action was never tried, so
+    // `timesFailed` must not move and one misfire cannot retire a rule. Only the
+    // posterior shifts, by a fraction of a real negative.
+    const updated = this.confidenceScorer.applyEvidence(instinct, {
+      alphaDelta: 0,
+      betaDelta: params.betaDelta,
+    });
+    this.storage.updateInstinct(updated);
+    this.updateInstinctStatus(updated);
+    this.recordCreditLedgerSafe(
+      params.sessionId,
+      { ...instinct, confidence: before },
+      { success: false, verdictScore: params.betaDelta },
+      "observed",
+      updated.confidence,
+      params.taskRunId?.trim() || undefined,
+      exposedAt,
+      false,
+    );
+    return "recorded";
+  }
+
+  /**
    * When this run was shown `instinctId` (round 12 #9).
    *
    * The event's own timestamp is both the fallback and the ceiling: an event that
@@ -411,6 +525,8 @@ export class LearningPipeline {
     // Round 12 #9: the run is over, so what it was shown is no longer an open
     // fact. Keeping it would date the NEXT run's exposure from this one's prompt.
     this.runGuidanceShownAt.delete(LearningPipeline.runCreditKey(sessionId, runId));
+    // Round 13 #25: and so is what it was shown and did not use.
+    this.runNonApplied.delete(LearningPipeline.runCreditKey(sessionId, runId));
     this.evictSessionPendingResolutions(sessionId, runId);
   }
 
@@ -593,6 +709,8 @@ export class LearningPipeline {
     taskRunId?: string,
     /** r11 #8: when the run was shown the guidance, as opposed to now. */
     exposedAt?: number,
+    /** r13 #25: false = shown and demonstrably not used. Omitted ⇒ applied. */
+    applied?: boolean,
   ): void {
     try {
       this.storage.recordInstinctCredit({
@@ -600,6 +718,7 @@ export class LearningPipeline {
         sessionId,
         ...(taskRunId ? { taskRunId } : {}),
         ...(exposedAt === undefined ? {} : { exposedAt }),
+        ...(applied === undefined ? {} : { applied }),
         success: outcome.success,
         verdictScore: outcome.verdictScore,
         source,
@@ -661,6 +780,21 @@ export class LearningPipeline {
         }
       };
       this.eventBus.on("feedback:reaction", this.feedbackReactionListener);
+
+      // ROUND 13 #22 — registered HERE, in the constructor, so this listener runs
+      // before the one that queues the event's processing (listeners fire in
+      // subscription order, and the queueing subscriber is wired after the
+      // pipeline is built). The queue may evict or discard the event; the fact
+      // the run's settlement depends on is already durable by then.
+      this.toolResultCreditListener = (event: ToolResultEvent) => {
+        try {
+          this.noteAppliedInstinctCredit(event);
+        } catch {
+          // A credit note must never take the emitter's tool call down with it;
+          // the queued handleToolResult will try again.
+        }
+      };
+      this.eventBus.on("tool:result", this.toolResultCreditListener);
     }
   }
 
@@ -741,6 +875,10 @@ export class LearningPipeline {
       this.eventBus.off("feedback:reaction", this.feedbackReactionListener);
       this.feedbackReactionListener = null;
     }
+    if (this.eventBus && this.toolResultCreditListener) {
+      this.eventBus.off("tool:result", this.toolResultCreditListener);
+      this.toolResultCreditListener = null;
+    }
   }
 
   // ─── Observation Methods ─────────────────────────────────────────────────────
@@ -795,6 +933,90 @@ export class LearningPipeline {
   }
 
   // ─── Event-Driven Processing ─────────────────────────────────────────────────
+
+  /**
+   * ROUND 13 #22 — THE CREDIT-BEARING HALF OF A TOOL EVENT, REGISTERED BEFORE THE
+   * EVENT CAN BE DROPPED.
+   *
+   * `tool:result` rides the learning queue as DROPPABLE work: evicted on
+   * overflow, discarded when shutdown's drain runs out of budget. Everything the
+   * event carries is recoverable that way except one fact — WHICH GUIDANCE THIS
+   * RUN WAS CARRYING — because that is what the run's terminal settlement
+   * settles. Drop the event and the settlement (its own durable item, or its
+   * synchronous `onAbandoned` fallback) finds nothing pending and writes ZERO
+   * credit rows, while the shutdown report says the settlement was handled. A
+   * false green about the one measurement that says whether learning works.
+   *
+   * So the pipeline subscribes to the bus itself (constructor, before whoever
+   * queues the processing) and registers this synchronously, at emit time. It is
+   * idempotent: {@link handleToolResult} calls it again when the queue reaches the
+   * event, and the pending map's per-instinct entry is the dedup.
+   */
+  noteAppliedInstinctCredit(event: ToolResultEvent): void {
+    if (!event.appliedInstinctIds || event.appliedInstinctIds.length === 0) return;
+    const runId = event.taskRunId;
+    const verdict = getVerdictScore(event);
+
+    for (const instinctId of event.appliedInstinctIds) {
+      const instinct = this.storage.getInstinct(instinctId as InstinctId);
+      if (!instinct) continue;
+
+      // Only credit an instinct that has a tool_name contextCondition matching event.toolName.
+      // Shared with the trajectory-credit disjoint computation (computeTrajectoryCreditIds) so the
+      // two stay exact complements by construction (Issue #22 SIBLING A).
+      if (!LearningPipeline.isInstinctRelevantToTool(instinct, event.toolName as string)) continue;
+
+      // audited 2026-09-02: once per run, not once per tool call.
+      // #13: keyed by the run, so the first sibling to finish cannot settle
+      // (and delete) the credit its sibling is still collecting.
+      const creditKey = LearningPipeline.runCreditKey(event.sessionId, runId);
+
+      // r13 #25: this run was shown the rule and demonstrably did not use it.
+      // Being CARRIED is not being APPLIED, so it is not credited with the run's
+      // outcome — that is what stopped one exposure producing two rows.
+      if (this.runNonApplied.get(creditKey)?.has(String(instinctId)) === true) continue;
+
+      // #14: this run has already settled. Its verdict is final, so this late
+      // event is judged by THAT verdict — never left pending for whichever run
+      // tears down next.
+      const settledRun = this.settledRuns.get(creditKey);
+      if (settledRun) {
+        this.settleLateCredit(
+          settledRun,
+          instinctId,
+          // r12 #9: dated by the run's exposure / this event, never by the
+          // moment the queue reached the straggler.
+          this.exposureFor(event.sessionId, runId, instinctId, event.timestamp),
+        );
+        continue;
+      }
+
+      let pending = this.runPendingCredits.get(creditKey);
+      if (!pending) {
+        pending = new Map<string, { success: boolean; verdictScore: number; exposedAt: number }>();
+        this.runPendingCredits.set(creditKey, pending);
+      }
+      const already = pending.get(instinctId);
+      if (!already) {
+        // r11 #8: the exposure is a different fact from the settlement.
+        // r12 #9: and it is not NOW. `Date.now()` here was the moment the
+        // serial queue reached this event, so a rule retired between the run's
+        // prompt and its queued event read as "applied after retirement" — the
+        // alarm that is meant to mean a leak. The exposure comes from where the
+        // guidance was shown, falling back to the event's own in-run time.
+        pending.set(instinctId, {
+          success: verdict.success,
+          verdictScore: verdict.verdictScore,
+          exposedAt: this.exposureFor(event.sessionId, runId, instinctId, event.timestamp),
+        });
+      } else if (already.success && !verdict.success) {
+        // A later failure in the same run downgrades the observed evidence:
+        // the FIRST event never decides the run's outcome on its own (D40).
+        // The exposure time is the EARLIEST one and does not move with it.
+        pending.set(instinctId, { success: false, verdictScore: verdict.verdictScore, exposedAt: already.exposedAt });
+      }
+    }
+  }
 
   /**
    * Handle a tool result event from the event bus.
@@ -871,64 +1093,9 @@ export class LearningPipeline {
 
     // 3. Note which instincts this run owes credit to. The credit is APPLIED at
     //    run end, from the run's terminal verdict (D40 — see runPendingCredits).
-    if (event.appliedInstinctIds && event.appliedInstinctIds.length > 0) {
-      const verdict = getVerdictScore(event);
-
-      for (const instinctId of event.appliedInstinctIds) {
-        const instinct = this.storage.getInstinct(instinctId);
-        if (!instinct) continue;
-
-        // Only credit an instinct that has a tool_name contextCondition matching event.toolName.
-        // Shared with the trajectory-credit disjoint computation (computeTrajectoryCreditIds) so the
-        // two stay exact complements by construction (Issue #22 SIBLING A).
-        if (!LearningPipeline.isInstinctRelevantToTool(instinct, event.toolName as string)) continue;
-
-        // audited 2026-09-02: once per run, not once per tool call.
-        // #13: keyed by the run, so the first sibling to finish cannot settle
-        // (and delete) the credit its sibling is still collecting.
-        const creditKey = LearningPipeline.runCreditKey(event.sessionId, runId);
-
-        // #14: this run has already settled. Its verdict is final, so this late
-        // event is judged by THAT verdict — never left pending for whichever run
-        // tears down next.
-        const settledRun = this.settledRuns.get(creditKey);
-        if (settledRun) {
-          this.settleLateCredit(
-            settledRun,
-            instinctId,
-            // r12 #9: dated by the run's exposure / this event, never by the
-            // moment the queue reached the straggler.
-            this.exposureFor(event.sessionId, runId, instinctId, event.timestamp),
-          );
-          continue;
-        }
-
-        let pending = this.runPendingCredits.get(creditKey);
-        if (!pending) {
-          pending = new Map<string, { success: boolean; verdictScore: number; exposedAt: number }>();
-          this.runPendingCredits.set(creditKey, pending);
-        }
-        const already = pending.get(instinctId);
-        if (!already) {
-          // r11 #8: the exposure is a different fact from the settlement.
-          // r12 #9: and it is not NOW. `Date.now()` here was the moment the
-          // serial queue reached this event, so a rule retired between the run's
-          // prompt and its queued event read as "applied after retirement" — the
-          // alarm that is meant to mean a leak. The exposure comes from where the
-          // guidance was shown, falling back to the event's own in-run time.
-          pending.set(instinctId, {
-            success: verdict.success,
-            verdictScore: verdict.verdictScore,
-            exposedAt: this.exposureFor(event.sessionId, runId, instinctId, event.timestamp),
-          });
-        } else if (already.success && !verdict.success) {
-          // A later failure in the same run downgrades the observed evidence:
-          // the FIRST event never decides the run's outcome on its own (D40).
-          // The exposure time is the EARLIEST one and does not move with it.
-          pending.set(instinctId, { success: false, verdictScore: verdict.verdictScore, exposedAt: already.exposedAt });
-        }
-      }
-    }
+    //    Idempotent, and already done synchronously at emit time for events that
+    //    travel the event bus (round 13 #22 — see noteAppliedInstinctCredit).
+    this.noteAppliedInstinctCredit(event);
 
     // 4. Inline pattern detection
     this.detectPatternInline({

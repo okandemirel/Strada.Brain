@@ -59,6 +59,36 @@ export interface ResolutionContext {
   resolutionTimeMs?: number;
   /** Number of attempts before success */
   attempts?: number;
+  /**
+   * ROUND 13 #24 — WHICH GUIDANCE THE RUN ACTUALLY USED, reported by whoever ran
+   * the repair. This is the only thing a misfire penalty may be built from.
+   *
+   *   - a list of ids: those were applied, and every OTHER rule the run was shown
+   *     is a demonstrated trigger misfire;
+   *   - `[]`: "none of what I was shown" — also a report, also demonstrated;
+   *   - `undefined`: nobody said. NOT evidence. A resolution whose wording differs
+   *     from the rule's action is indistinguishable from one that ignored it, so
+   *     the exposure is left unjudged and counted
+   *     ({@link ErrorLearningHooks.getStats}) rather than guessed at.
+   */
+  appliedInstinctIds?: readonly string[];
+  /** Which run resolved it (#13/#25): the ledger's dedup key is run-scoped. */
+  taskRunId?: string;
+  /**
+   * The id {@link ErrorLearningHooks.onBeforeErrorAnalysis} returned for this
+   * error (round 13 #26). Without it the id is recomputed from a reconstructed
+   * timestamp, which is a different id, and the resolution correlates with
+   * nothing the run was shown.
+   */
+  correlationId?: string;
+  /**
+   * `reported` (default) — a caller describing the repair it made.
+   * `observed-success` — something merely SAW the failure stop happening. There is
+   * no resolution text in that case, so nothing may be minted from it: neither a
+   * new instinct nor a correction observation, both of which would take a tool's
+   * own output as a learned repair (round 13 #26).
+   */
+  derivation?: "reported" | "observed-success";
 }
 
 /**
@@ -70,6 +100,45 @@ export interface ResolutionContext {
  * (tightening a gate cuts both ways).
  */
 export const NON_APPLICATION_BETA = 0.25;
+
+/** What the run used, and whether "the rest misfired" is a fact (round 13 #24). */
+interface ApplicationEvidence {
+  /** Ids the run demonstrably applied. */
+  readonly applied: readonly string[];
+  /**
+   * True when something SAID what was used, so a rule shown and absent from
+   * `applied` is a demonstrated trigger misfire. False = nobody said, and no
+   * penalty may be derived from that.
+   */
+  readonly demonstrated: boolean;
+}
+
+/**
+ * Statuses a rule can be recognized as APPLIED in (#24).
+ *
+ * `evolved` and `permanent` were excluded, so the rules that had earned their
+ * place could never be found as the one a run used — and were penalised for the
+ * runs that used them. `quarantined` and `retired` stay out: a rule nobody should
+ * be shown cannot be the rule a run applied.
+ */
+const MATCHABLE_STATUSES = new Set(["active", "proposed", "evolved", "permanent", "cooling"]);
+
+/**
+ * Shortest action text an identity match may be built from. A two-word action
+ * ("Rebuild") is a substring of half the resolutions ever written, and matching on
+ * it would attribute an application to whichever rule happened to be terse.
+ */
+const MIN_ACTION_MATCH_CHARS = 12;
+
+/** Compare actions as MEANING-BEARING text, not as raw strings. */
+function normalizeAction(action: string): string {
+  return String(action ?? "")
+    .toLowerCase()
+    .replace(/[`"'*_]/g, "")
+    .replace(/\s+/g, " ")
+    .replace(/[.!,;:]+$/g, "")
+    .trim();
+}
 
 // ─── Error Learning Hooks ───────────────────────────────────────────────────────
 
@@ -92,6 +161,13 @@ export class ErrorLearningHooks {
    * against the rule's TRIGGER — not a failure of its action.
    */
   private shownGuidance = new Map<string, { instinctIds: string[]; shownAt: number }>();
+
+  /**
+   * Exposures nothing could judge (round 13 #24): the run was shown guidance and
+   * never said what it used. NOT MEASURED has to be visible — a silent zero here
+   * reads as "no misfires", which is the false green this counter exists to stop.
+   */
+  private unjudgedExposures = 0;
 
   constructor(
     pipeline: LearningPipeline,
@@ -131,9 +207,16 @@ export class ErrorLearningHooks {
   onBeforeErrorAnalysis(context: ErrorContext): {
     suggestions: PatternMatch[];
     recoveryInjection: string;
+    /**
+     * The id this exposure is tracked under (round 13 #26). Pass it back as
+     * {@link ResolutionContext.correlationId}: recomputing it from a fresh
+     * `Date` produces a DIFFERENT id, which is why every production resolution
+     * took the untracked branch and no exposure was ever judged.
+     */
+    correlationId: string;
   } {
     if (!this.enabled) {
-      return { suggestions: [], recoveryInjection: "" };
+      return { suggestions: [], recoveryInjection: "", correlationId: "" };
     }
 
     // Find matching instincts
@@ -149,6 +232,12 @@ export class ErrorLearningHooks {
     const matches = this.patternMatcher.findInstinctsForError(input, {
       minConfidence: 0.5,
       maxResults: 3,
+      // ROUND 13 #24 — A RULE THAT GRADUATED WAS NEVER OFFERED AGAIN. The default
+      // filter is ["active", "proposed"], so `evolved` (a rule that earned its
+      // way up) and `permanent` (one the user made permanent) were excluded from
+      // error recovery altogether while a merely `proposed` rule was included.
+      // The best guidance in the store was the guidance nobody ever saw.
+      statusFilter: ["active", "proposed", "evolved", "permanent"],
     });
 
     // Build recovery injection
@@ -176,7 +265,7 @@ export class ErrorLearningHooks {
       });
     }
 
-    return { suggestions: matches, recoveryInjection };
+    return { suggestions: matches, recoveryInjection, correlationId: errorId };
   }
 
   // ─── Post-Resolution Hook ────────────────────────────────────────────────────
@@ -190,7 +279,11 @@ export class ErrorLearningHooks {
   async onAfterErrorResolution(resolution: ResolutionContext): Promise<void> {
     if (!this.enabled) return;
 
-    const errorId = this.generateErrorId(resolution.errorContext);
+    // ROUND 13 #26: the id the exposure was tracked under, when the caller
+    // carries it. Recomputing it from `resolution.errorContext` hashes a
+    // timestamp, and a resolution built a millisecond later hashes to a different
+    // id — which is why production always took the untracked branch below.
+    const errorId = resolution.correlationId?.trim() || this.generateErrorId(resolution.errorContext);
 
     // Check if we have a matching active error
     if (!this.activeErrors.has(errorId)) {
@@ -203,7 +296,8 @@ export class ErrorLearningHooks {
     this.activeErrors.delete(errorId);
 
     // Update learning based on resolution success
-    const applied = this.findAppliedInstinct(resolution);
+    const evidence = this.applicationEvidence(resolution);
+    const applied = evidence.applied[0] === undefined ? null : { id: evidence.applied[0] };
     if (resolution.success) {
       await this.handleSuccessfulResolution(resolution, applied);
     } else {
@@ -211,8 +305,9 @@ export class ErrorLearningHooks {
     }
 
     // EVERY OTHER RULE THIS RUN WAS SHOWN cost it an attempt and taught
-    // nobody anything. Record that, so a misfiring trigger becomes findable.
-    this.recordNonApplications(errorId, resolution, applied?.id);
+    // nobody anything — but only where that is a FACT and not a wording
+    // difference (round 13 #24).
+    this.recordNonApplications(errorId, resolution, evidence);
 
     // Record observation
     await this.recordResolutionObservation(resolution);
@@ -292,10 +387,22 @@ export class ErrorLearningHooks {
         success: true,
         verdictScore: 0.9, // High score for successful resolution
       });
-    } else {
+    } else if (this.describesARepair(resolution)) {
       // No instinct was applied - consider creating one from this successful resolution
       await this.considerInstinctFromResolution(resolution);
     }
+  }
+
+  /**
+   * Is there a described repair here to learn FROM?
+   *
+   * An `observed-success` report (round 13 #26) says only "the failure stopped
+   * happening"; its action text is empty by construction. Minting a rule — or a
+   * correction observation — from that would put a tool's own output in the store
+   * as a learned repair.
+   */
+  private describesARepair(resolution: ResolutionContext): boolean {
+    return resolution.derivation !== "observed-success" && resolution.action.trim().length > 0;
   }
 
   private handleFailedResolution(
@@ -326,56 +433,74 @@ export class ErrorLearningHooks {
   private recordNonApplications(
     errorId: string,
     resolution: ResolutionContext,
-    appliedInstinctId: string | undefined,
+    evidence: ApplicationEvidence,
   ): void {
     const shown = this.shownGuidance.get(errorId);
     this.shownGuidance.delete(errorId);
-    if (!shown) return;
+    if (!shown || shown.instinctIds.length === 0) return;
+
+    // ROUND 13 #24 — NO EVIDENCE, NO PENALTY. Absence of a text match is not
+    // evidence: "Compile the referenced dependency before rebuilding" and "Build
+    // the dependency project first" are the same remedy in different words, and
+    // penalising the second because the run reported the first is punishing a rule
+    // for wording. Repeated, it takes a CORRECT rule under the recovery gate and
+    // stops it being recalled at all — the gate tightened until learning went
+    // dark. So an unjudged exposure is counted and named, never guessed at.
+    if (!evidence.demonstrated) {
+      this.unjudgedExposures += 1;
+      return;
+    }
+
+    const applied = new Set(evidence.applied);
     for (const instinctId of shown.instinctIds) {
-      if (instinctId === appliedInstinctId) continue;
-      const instinct = this.storage.getInstinct(instinctId);
-      if (!instinct) continue;
-      const before = instinct.confidence;
-      const updated = this.confidenceScorer.applyEvidence(instinct, {
-        alphaDelta: 0,
+      if (applied.has(instinctId)) continue;
+      // One ledger (round 13 #25): the pipeline holds the run's credit, so it is
+      // the only writer that can tell a non-application from a settlement and
+      // keep one exposure to one row.
+      this.pipeline.noteGuidanceNotApplied({
+        sessionId: String(resolution.errorContext.sessionId ?? ""),
+        ...(resolution.taskRunId ? { taskRunId: resolution.taskRunId } : {}),
+        instinctId,
+        exposedAt: shown.shownAt,
         betaDelta: NON_APPLICATION_BETA,
       });
-      this.storage.updateInstinct(updated);
-      this.updateInstinctStatus(updated);
-      try {
-        this.storage.recordInstinctCredit({
-          instinctId,
-          sessionId: String(resolution.errorContext.sessionId ?? ""),
-          success: false,
-          applied: false,
-          verdictScore: NON_APPLICATION_BETA,
-          source: "observed",
-          confidenceBefore: before,
-          confidenceAfter: updated.confidence,
-          statusAt: instinct.status,
-          timestamp: Date.now(),
-          exposedAt: shown.shownAt,
-        });
-      } catch {
-        // The ledger row is the record, not the mechanism: a storage failure
-        // must not take the resolution path down with it.
-      }
     }
   }
 
-  private findAppliedInstinct(resolution: ResolutionContext): { id: string } | null {
-    // Try to match the resolution action against known instinct actions
-    const instincts = this.storage.getInstincts({ status: "active" });
-    
-    for (const instinct of instincts) {
-      // Simple matching - could be more sophisticated
-      if (resolution.action.includes(instinct.action) || 
-          instinct.action.includes(resolution.action)) {
-        return { id: instinct.id };
+  /**
+   * WHAT THE RUN USED, and whether "everything else misfired" is a fact.
+   *
+   * Two sources, and only the first can create a penalty:
+   *
+   *   1. the caller's own report ({@link ResolutionContext.appliedInstinctIds}),
+   *      including an empty one ("none of what I was shown"). Demonstrated.
+   *   2. a resolution whose text IS a rule's action. That identifies the rule the
+   *      run used, which makes the others demonstrated misfires — but the absence
+   *      of such a match proves nothing at all, so it never creates a penalty.
+   *
+   * Candidates are no longer limited to `status: "active"` (#24): an `evolved` or
+   * `permanent` rule — a rule that earned its place — could never be found as
+   * applied, so it was penalised on every run that applied it.
+   */
+  private applicationEvidence(resolution: ResolutionContext): ApplicationEvidence {
+    if (resolution.appliedInstinctIds !== undefined) {
+      const reported = resolution.appliedInstinctIds
+        .map((id) => String(id).trim())
+        .filter((id) => id.length > 0 && this.storage.getInstinct(id) !== null);
+      return { applied: reported, demonstrated: true };
+    }
+    const action = normalizeAction(resolution.action);
+    if (action.length >= MIN_ACTION_MATCH_CHARS) {
+      for (const instinct of this.storage.getInstincts()) {
+        if (!MATCHABLE_STATUSES.has(instinct.status)) continue;
+        const candidate = normalizeAction(instinct.action);
+        if (candidate.length < MIN_ACTION_MATCH_CHARS) continue;
+        if (action.includes(candidate) || candidate.includes(action)) {
+          return { applied: [instinct.id], demonstrated: true };
+        }
       }
     }
-
-    return null;
+    return { applied: [], demonstrated: false };
   }
 
   private async considerInstinctFromResolution(resolution: ResolutionContext): Promise<void> {
@@ -406,7 +531,7 @@ export class ErrorLearningHooks {
   }
 
   private async recordResolutionObservation(resolution: ResolutionContext): Promise<void> {
-    if (resolution.success) {
+    if (resolution.success && this.describesARepair(resolution)) {
       await this.pipeline.observeCorrection({
         sessionId: resolution.errorContext.sessionId,
         toolName: resolution.errorContext.toolName,
@@ -482,10 +607,13 @@ export class ErrorLearningHooks {
   getStats(): {
     activeErrors: number;
     totalTracked: number;
+    /** r13 #24: exposures left unjudged because no application was reported. */
+    unjudgedExposures: number;
   } {
     return {
       activeErrors: this.activeErrors.size,
       totalTracked: this.activeErrors.size, // Could track cumulative
+      unjudgedExposures: this.unjudgedExposures,
     };
   }
 
