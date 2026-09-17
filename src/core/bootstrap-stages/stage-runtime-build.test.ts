@@ -7,7 +7,7 @@ import { chmodSync, mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { receiptOfFailure } from "../../campaign/producer-failure.js";
-import { parsePlayerBuildOutput, makeRunPlayer, makeVerifyCompile, makeGuardianPlay, makeCampaignMessenger, extractReceipt, looksLikePlayer } from "./stage-runtime.js";
+import { parsePlayerBuildOutput, buildEvidenceFromToolResult, makeRunPlayer, makeVerifyCompile, makeGuardianPlay, makeCampaignMessenger, extractReceipt, looksLikePlayer } from "./stage-runtime.js";
 
 const artifactDir = mkdtempSync(join(tmpdir(), "build-artifact-"));
 // A REAL StandaloneOSX artifact: .app is a bundle DIRECTORY holding Contents,
@@ -30,6 +30,28 @@ const built =
     artifact: { path: realArtifact, exists: true, sizeBytes: 88_000_000 },
     measuredAt: "2026-09-10T13:00:00.000Z",
   }) + "\n```";
+
+describe("buildEvidenceFromToolResult — the tool's outer failure is not a build (audit 09.1)", () => {
+  it("an isError result with an ok-shaped verdict and a real artifact is NOT ok", () => {
+    const dir = mkdtempSync(join(tmpdir(), "build-evidence-"));
+    // A bare executable: no extension, > 1 MB, executable bit set.
+    const artifact = join(dir, "Game");
+    writeFileSync(artifact, Buffer.alloc(2 * 1024 * 1024, 1));
+    chmodSync(artifact, 0o755);
+    const content =
+      "Build crashed after writing the artifact\n\n```json\n" +
+      JSON.stringify({ ok: true, artifact: { path: artifact, exists: true, sizeBytes: 2 * 1024 * 1024 }, result: { target: "StandaloneLinux64" } }) +
+      "\n```";
+    const green = buildEvidenceFromToolResult({ content, isError: false });
+    expect(green.ran).toBe(true);
+    expect(green.ok).toBe(true);
+    const failed = buildEvidenceFromToolResult({ content, isError: true });
+    expect(failed.ran).toBe(true);
+    expect(failed.ok).toBe(false);
+    expect((failed.reasons ?? []).join(" ")).toContain("the build tool reported an error");
+    expect((failed.reasons ?? []).join(" ")).toContain("crashed after writing");
+  });
+});
 
 describe("makeRunPlayer — the tool's own failure reaches the caller (Codex 2026-09-11 D#6)", () => {
   const registry = (result: { content?: unknown; isError?: boolean }, names = ["unity_run_player"]) => ({

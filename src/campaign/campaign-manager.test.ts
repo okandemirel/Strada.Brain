@@ -4999,6 +4999,102 @@ describe("CampaignManager", () => {
     expect(storage.get(campaign.id)!.id).toBe(campaign.id);
   });
 
+  it("a run that wrote a GREEN verdict and then failed is a missing proof, not a pass (audit 09.1)", async () => {
+    // The wrapper threw after the producer wrote its file (adapter timeout,
+    // transport error, a failure after writing). The fresh green file was
+    // read anyway, credited to the coverage and returned as proof.
+    const campaign = {
+      id: "c_green_then_throw", chatId: "chat", channelType: "cli", userId: "u", projectRoot,
+      state: "executing", draftAttempts: 0, milestones: [], currentMilestone: 0,
+      createdAt: Date.now(), updatedAt: Date.now(),
+    } as unknown as Campaign;
+    let throwAfterWrite = false;
+    const player = new CampaignManager({
+      storage,
+      runPlayer: async (root) => {
+        writePlayerVerdict(true, {
+          record: {
+            medium: "player", scene: "Entry", session: 1, autoStarted: false, actions: 12, outcome: "Won", reachedOutcome: true,
+            sessionCount: 1,
+            sessions: [{ index: 1, observedIndex: 1, identityVerified: true, identitySource: "start-acceptance", actions: 12, outcome: "Won", reachedOutcome: true }],
+          },
+        }, root);
+        if (throwAfterWrite) throw new Error("the player adapter timed out after 30000ms");
+      },
+      planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async () => {},
+      projectRoot,
+    });
+    const artifact = join(projectRoot, "Builds", "Game.x86_64");
+    mkdirSync(join(projectRoot, "Builds"), { recursive: true });
+    writeFileSync(artifact, "binary");
+    const build = { ran: true, ok: true, target: "StandaloneLinux64", artifactPath: artifact, sizeBytes: 6, durationMs: 1, scenes: 1 };
+    const measure = (id: string): Promise<{ found: boolean; ok?: boolean; missingRunner?: string }> =>
+      (player as unknown as { measurePlayerRun(m: unknown, b: unknown, c: unknown): Promise<{ found: boolean; ok?: boolean; missingRunner?: string }> })
+        .measurePlayerRun({ id, title: "Delivery", prompt: "p", status: "running", attempts: 1 }, build, campaign);
+
+    // Guard: the same green file from a run that finished is a pass, and
+    // the coverage learned from it.
+    const honest = await measure("m_honest");
+    expect(honest.found).toBe(true);
+    expect(honest.ok).toBe(true);
+    expect(campaign.verifiedSessions).toBeDefined();
+
+    throwAfterWrite = true;
+    campaign.verifiedSessions = undefined;
+    const before = JSON.stringify(campaign.verifiedSessions ?? null);
+    const failed = await measure("m_green_then_throw");
+    expect(failed.found).toBe(false);
+    expect(failed.missingRunner).toContain("reported failure after writing a passing verdict");
+    expect(failed.missingRunner).toContain("timed out");
+    // …and the coverage did not learn from it.
+    expect(JSON.stringify(campaign.verifiedSessions ?? null)).toBe(before);
+  }, 20_000);
+
+  it("…and a SECONDARY target that wrote green and then failed is not ok either (Codex plan review #8)", async () => {
+    tasks = new FakeTaskManager();
+    storage.close();
+    storage = new CampaignStorage(join(dir, "campaigns-secondary-green-throw.db"));
+    manager = new CampaignManager({
+      storage,
+      planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async (chatId, text) => { messages.push({ chatId, text }); },
+      projectRoot, retryAdoptionGraceMs: 10, completedSettleDelayMs: 0, milestoneTimeBoxMs: 60 * 60_000,
+      deliveryResumeDelayMs: 20,
+      verifyCompile: async () => ({ ok: true, ran: true, errors: 0 }),
+      buildPlayer: async (_root: string, target?: string) => ({
+        ran: true,
+        ok: true,
+        target: target === "linux" ? "StandaloneLinux64" : "StandaloneWindows64",
+        artifactPath: target === "linux" ? "/tmp/Builds/Linux/Game.x86_64" : "/tmp/Builds/Windows/Game.exe",
+        sizeBytes: 70_000_000, durationMs: 90_000, scenes: 2,
+      }),
+      runPlayer: async (root, artifact) => {
+        // Both write a green verdict; the Linux wrapper then fails.
+        writePlayerVerdict(true, {}, root);
+        if (artifact.includes("Linux")) throw new Error("transport closed before the run acknowledged");
+      },
+    });
+    manager.attachEvents();
+    const campaign = manager.startFromGdd(ctx, "# GDD\n\nRelease on Windows and Linux. The game ships 3 levels.", "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1), { timeout: 15_000 });
+    settleMilestone("sprint A done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2), { timeout: 15_000 });
+    settleMilestone("sprint B done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3), { timeout: 15_000 });
+    settleMilestone("integrated, all 42 tests pass");
+    await waitFor(
+      () => expect((storage.get(campaign.id)!.milestones[2]!.playerRunsByTarget ?? []).length).toBe(2),
+      { timeout: 15_000 },
+    );
+    const runs = storage.get(campaign.id)!.milestones[2]!.playerRunsByTarget ?? [];
+    expect(runs[0]!.ok).toBe(true);
+    expect(runs[1]!.ok).toBe(false);
+    expect(runs[1]!.detail).toContain("reported failure after writing a passing verdict");
+  }, 30_000);
+
   it("every target the build produced is played, not just the first (Codex 2026-09-12 W#11)", async () => {
     // `measureBuild` built both required platforms and returned ONE artifact,
     // so the second was never played: a player that crashes at launch there

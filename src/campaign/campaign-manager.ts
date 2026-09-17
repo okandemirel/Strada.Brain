@@ -5201,6 +5201,16 @@ export class CampaignManager {
     if (substituted !== undefined) {
       return { found: false, missingRunner: substituted };
     }
+    // THE RUN THAT WROTE A GREEN FILE AND THEN FAILED IS NOT A GREEN RUN. The
+    // wrapper threw (adapter timeout, transport error, the producer's own
+    // failure after writing) and the fresh verdict was read anyway, credited
+    // to the coverage and returned as proof (audit 09.1, 2026-09-13). A red
+    // file stays red on its own; a green one after a reported failure is a
+    // missing proof that names the failure — BEFORE anything is remembered.
+    const greenAfterFailure = this.greenVerdictAfterFailure(verdict, failure);
+    if (greenAfterFailure !== undefined) {
+      return { found: false, missingRunner: greenAfterFailure };
+    }
     // WHAT THIS RUN ADDED TO THE COVERAGE, against the artifact it played: the
     // next run then asks for the sessions nobody has played yet (AJ#11).
     if (verdict.found) this.rememberVerifiedSessions(campaign, build.artifactPath, verdict);
@@ -5245,6 +5255,14 @@ export class CampaignManager {
       const theirSubstitution = this.verdictDisagreesWithReceipt(theirDecision);
       if (theirSubstitution !== undefined) {
         perTarget.push({ target: other.target, ok: false, detail: `not measured: ${theirSubstitution}` });
+        continue;
+      }
+      // …and the same rule for every secondary target (Codex 2026-09-16 plan
+      // review #8: the secondary path used `why` for wording and accepted the
+      // green file regardless).
+      const theirGreenAfterFailure = this.greenVerdictAfterFailure(theirs, why);
+      if (theirGreenAfterFailure !== undefined) {
+        perTarget.push({ target: other.target, ok: false, detail: `not measured: ${theirGreenAfterFailure}` });
         continue;
       }
       // The producer's own refusal — "…is not a player this machine can run
@@ -5299,6 +5317,17 @@ export class CampaignManager {
       return { ...verdict, unrunnableHere: failure.slice(0, 200) };
     }
     return verdict;
+  }
+
+  /**
+   * A green verdict read after the run itself reported failure is not
+   * evidence: the bytes may be honest, but the process that wrote them did
+   * not finish the way the producer contract requires (audit 09.1).
+   */
+  private greenVerdictAfterFailure(verdict: PlaythroughEvidence, failure: string | undefined): string | undefined {
+    if (failure === undefined) return undefined;
+    if (!verdict.found || verdict.ok !== true) return undefined;
+    return `the run reported failure after writing a passing verdict: ${failure.slice(0, 200)}`;
   }
 
   /** The GDD's numeric claims held against the play-through timing (see gdd-claims.ts). */

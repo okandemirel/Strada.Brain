@@ -459,9 +459,7 @@ export async function initializeTaskRuntimeStage(
                 readOnly: false,
               } as import("../../agents/tools/tool-core.interface.js").ToolContext,
             );
-            const content = String(result.content ?? "");
-            const receipt = extractReceipt(content);
-            return { ...parsePlayerBuildOutput(content), ...(receipt === undefined ? {} : { receipt }) };
+            return buildEvidenceFromToolResult(result);
           }
         : undefined,
       // Play the artifact the campaign built: unity_run_player writes its
@@ -1118,6 +1116,33 @@ export function makeRunPlayer(registry: {
       throw new ProducerFailure((content === "" ? "unity_run_player failed" : content).slice(0, 2000), receipt);
     }
     return receipt === undefined ? {} : { receipt };
+  };
+}
+
+/**
+ * The build tool's result as build evidence. A tool result flagged isError
+ * is NOT a successful build even when its content carries an ok-shaped
+ * verdict and a plausible artifact: the flag is the tool's own outer failure
+ * (a crash after writing, a timeout, an exception in the wrapper) and the
+ * callback ignored it (audit 09.1 / D12, 2026-09-13).
+ */
+export function buildEvidenceFromToolResult(result: {
+  content?: unknown;
+  isError?: boolean;
+}): import("../../campaign/types.js").PlayerBuildEvidence {
+  const content = String(result.content ?? "");
+  const receipt = extractReceipt(content);
+  const parsed = parsePlayerBuildOutput(content);
+  const outerFailure =
+    result.isError === true
+      ? [`the build tool reported an error: ${content.split("\n")[0]?.slice(0, 160) || "no detail"}`]
+      : [];
+  return {
+    ...parsed,
+    ...(outerFailure.length === 0
+      ? {}
+      : { ok: false, reasons: [...outerFailure, ...(parsed.reasons ?? [])].slice(0, 8) }),
+    ...(receipt === undefined ? {} : { receipt }),
   };
 }
 
