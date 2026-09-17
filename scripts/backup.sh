@@ -24,6 +24,14 @@ log() {
     local level="$1"
     local message="$2"
     local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    # The log lives INSIDE BACKUP_DIR, and main() logs three lines before setup()
+    # creates that directory. On any machine whose backup directory does not exist
+    # yet — a clean install, the first scheduled run, a new volume — `tee` failed,
+    # `set -o pipefail` turned that into a non-zero pipeline, and `set -e` killed
+    # the backup before a single database was copied. The only trace was one
+    # "tee: No such file or directory" line. Found by the release acceptance
+    # runner, which performs a backup and a restore on a fresh root (plan 6.13).
+    mkdir -p "$(dirname "$LOG_FILE")"
     echo -e "[${timestamp}] [${level}] ${message}" | tee -a "$LOG_FILE"
 }
 
@@ -39,6 +47,16 @@ success() { log "SUCCESS" "${GREEN}$1${NC}"; }
 # (14F3/D72).
 get_memory_root() {
     echo "${MEMORY_DB_PATH:-.strada-memory}"
+}
+
+# The PROJECT whose .strada directory holds project-owned databases — today
+# delivery-packages.db, every delivery revision a reviewer can still open. The
+# runtime reads UNITY_PROJECT_PATH for exactly this path (config.unityProjectPath
+# is what CampaignManager is handed), so the backup reads the same variable
+# rather than inventing one: a path of our own would back up a directory the
+# application does not use (round 11 #19).
+get_project_root() {
+    echo "${UNITY_PROJECT_PATH:-}"
 }
 
 # Repository/install root — this script lives in <root>/scripts.
@@ -99,10 +117,26 @@ backup_databases() {
         return 1
     fi
 
+    local project_root
+    project_root="$(get_project_root)"
+
+    local project_args=()
+    if [[ -n "$project_root" ]]; then
+        project_args=(--project-root "$project_root")
+    else
+        # Not a complete backup, and it says so: with no project root the
+        # project-owned databases (<projectRoot>/.strada/delivery-packages.db —
+        # every stored delivery-package revision) are NOT in this archive, and a
+        # restore from it comes back with no delivery history (round 11 #19).
+        warn "UNITY_PROJECT_PATH is not set — .strada/delivery-packages.db is NOT in this backup"
+    fi
+
     local produced
     # No `|| true` here on purpose: a database that cannot be copied consistently
     # must fail the backup, not be skipped with a warning nobody reads.
-    produced="$(node "$DB_BACKUP_CLI" --source "$memory_root" --dest "$BACKUP_TEMP_DIR" --timestamp "$TIMESTAMP")"
+    # The helper also prints the retained attachment blobs it copied — the bytes
+    # the large-attachment rows point at — so they are checksummed like the rest.
+    produced="$(node "$DB_BACKUP_CLI" --source "$memory_root" --dest "$BACKUP_TEMP_DIR" --timestamp "$TIMESTAMP" ${project_args[@]+"${project_args[@]}"})"
 
     if [[ -z "$produced" ]]; then
         warn "No databases found under $memory_root or the Strada home"
@@ -121,7 +155,7 @@ backup_databases() {
         count=$((count + 1))
     done <<< "$produced"
 
-    info "Backed up ${count} file(s) from ${memory_root} and the Strada home"
+    info "Backed up ${count} file(s) from ${memory_root}, the Strada home${project_root:+ and $project_root}"
 }
 
 # Backup RAG Vector Store

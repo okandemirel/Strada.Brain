@@ -17,39 +17,78 @@
  * silently carried neither, and a restore lost every binding and every
  * approval. The inventory is now built per ROOT and each database's restore
  * location travels with it.
+ *
+ * Round 11 added the two this file is now mostly about:
+ *
+ *   #2  a restore whose backup is missing, truncated or corrupt used to DELETE
+ *       the live database (and its -wal/-shm) before discovering that, so a
+ *       failed restore destroyed the data it was asked to protect. Every test
+ *       in "a restore whose backup is unusable" has the live database holding
+ *       MORE rows than the backup does, so nothing can pass by restoring
+ *       successfully.
+ *
+ *   #19 the inventory covered installation-owned databases only: the delivery
+ *       packages a PROJECT owns and the attachment spool the large-file rows
+ *       point at were both absent, so a restored machine lost every package
+ *       revision and served 404s for rows still promising bytes. The fixture
+ *       for that one reads a package revision back and STREAMS an attachment,
+ *       which is the only proof that distinguishes "the database is intact"
+ *       from "the data is there".
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import Database from "better-sqlite3";
 import {
+  chmodSync,
+  closeSync,
   copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readSync,
+  readdirSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   BACKUP_MANIFEST_FILE,
   MEMORY_DATABASE_FILES,
+  PROJECT_DATABASE_FILES,
+  PROJECT_DATA_DIR,
+  PROJECT_ROOT_NAME,
+  RUNTIME_BLOB_DIRECTORIES,
   RUNTIME_DATABASE_FILES,
   STRADA_HOME_DATABASE_FILES,
+  backupRuntimeData,
   backupRuntimeDatabases,
   backupSqliteDatabase,
   inventoryRuntimeDatabases,
   listRuntimeDatabases,
   parseBackupArgs,
   readBackupManifest,
+  restoreRuntimeData,
   restoreRuntimeDatabases,
   runBackupCli,
   runtimeDatabaseRoots,
 } from "./database-backup.js";
 import { HubOwnerStore } from "../channels/hub/owner-store.js";
 import { openSkillTrustStore } from "../skills/skill-trust.js";
+import {
+  PENDING_ATTACHMENT_DIR,
+  RETAINED_ATTACHMENT_DIR,
+  WebAttachmentStore,
+  attachmentSpoolRoot,
+} from "../channels/web/web-attachment-store.js";
+import {
+  DeliveryPackageStore,
+  assembleDeliveryPackage,
+} from "../campaign/delivery-package.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -494,5 +533,473 @@ describe("scripts/backup.sh", () => {
     const memoryGuard = /!\s*-d\s+"\$memory_root"[\s\S]{0,200}?\n\s*fi/.exec(fn)?.[0] ?? "";
     expect(memoryGuard, "no missing-memory-root branch at all").not.toBe("");
     expect(memoryGuard).not.toMatch(/return\s+0/);
+  });
+});
+
+/**
+ * ROUND 11 #2 — a restore must never be the thing that loses the data.
+ *
+ * The old restore deleted the destination and its -wal/-shm and THEN opened the
+ * backup: a manifest naming a missing, truncated or corrupt file destroyed a
+ * perfectly good live database and threw afterwards. Every test below has the
+ * live database holding MORE than the backup does, so "it still holds what it
+ * held" cannot be satisfied by accidentally restoring successfully.
+ */
+describe("a restore whose backup is unusable (round 11 #2)", () => {
+  /** A backup of `memory.db` at 7 rows, with the live file then moved on to 12. */
+  async function backupThenDivergeLive(): Promise<string> {
+    seedDatabase(path.join(memoryRoot, "memory.db"), 7).close();
+    await backupRuntimeDatabases({ ...defaultInstallation(), destDir, timestamp: "ts" });
+    seedDatabase(path.join(memoryRoot, "memory.db"), 5).close();
+    expect(countRows(path.join(memoryRoot, "memory.db"))).toBe(12);
+    return path.join(destDir, "memory", "memory_ts.db");
+  }
+
+  it("keeps the live database and its rows when the backup file is missing", async () => {
+    await backupThenDivergeLive();
+    rmSync(path.join(destDir, "memory", "memory_ts.db"), { force: true });
+
+    await expect(restoreRuntimeDatabases({ backupDir: destDir })).rejects.toThrow(
+      /is missing from the backup/,
+    );
+    // The exact repro: before the fix the file was already gone here.
+    expect(existsSync(path.join(memoryRoot, "memory.db"))).toBe(true);
+    expect(countRows(path.join(memoryRoot, "memory.db"))).toBe(12);
+  });
+
+  it("names the destination it refused to replace and why", async () => {
+    await backupThenDivergeLive();
+    rmSync(path.join(destDir, "memory", "memory_ts.db"), { force: true });
+    await expect(restoreRuntimeDatabases({ backupDir: destDir })).rejects.toThrow(
+      new RegExp(`${path.join(memoryRoot, "memory.db").replace(/[.\\]/g, "\\$&")}`),
+    );
+    await expect(restoreRuntimeDatabases({ backupDir: destDir })).rejects.toThrow(
+      /Nothing was replaced/,
+    );
+  });
+
+  it("keeps the live database and its rows when the backup is corrupt", async () => {
+    const backupFile = await backupThenDivergeLive();
+    // Same length, not a database: the size alone cannot catch this one.
+    writeFileSync(backupFile, Buffer.alloc(statSync(backupFile).size, 0x41));
+
+    await expect(restoreRuntimeDatabases({ backupDir: destDir })).rejects.toThrow(
+      /not a usable SQLite database|failed integrity_check|cannot be opened/,
+    );
+    expect(countRows(path.join(memoryRoot, "memory.db"))).toBe(12);
+  });
+
+  it("keeps the live database when the backup has been truncated", async () => {
+    // SQLite opens a zero-byte file as a valid EMPTY database and
+    // integrity_check says ok, so a truncated backup would restore a database
+    // with no rows and report success.
+    const backupFile = await backupThenDivergeLive();
+    writeFileSync(backupFile, Buffer.alloc(0));
+
+    await expect(restoreRuntimeDatabases({ backupDir: destDir })).rejects.toThrow(
+      /the backup file changed/,
+    );
+    expect(countRows(path.join(memoryRoot, "memory.db"))).toBe(12);
+  });
+
+  it("replaces nothing when a later destination cannot be written", async () => {
+    seedDatabase(path.join(memoryRoot, "memory.db"), 3).close();
+    seedDatabase(path.join(stradaHome, "hub-owners.db"), 4).close();
+    await backupRuntimeDatabases({ ...defaultInstallation(), destDir, timestamp: "ts" });
+    // Both live databases have moved on since the backup.
+    seedDatabase(path.join(memoryRoot, "memory.db"), 30).close();
+    seedDatabase(path.join(stradaHome, "hub-owners.db"), 40).close();
+
+    chmodSync(stradaHome, 0o500);
+    try {
+      await expect(restoreRuntimeDatabases({ backupDir: destDir })).rejects.toThrow(
+        /while staging the replacements[\s\S]*Nothing was replaced/,
+      );
+    } finally {
+      chmodSync(stradaHome, 0o700);
+    }
+    // The FIRST database — the one whose destination was perfectly writable —
+    // must not have been replaced either: one unusable destination aborts the
+    // whole restore.
+    expect(countRows(path.join(memoryRoot, "memory.db"))).toBe(33);
+    expect(countRows(path.join(stradaHome, "hub-owners.db"))).toBe(44);
+    expect(readdirSync(memoryRoot).filter((n) => n.includes(".restore-"))).toEqual([]);
+  });
+
+  it("puts back a database it had already replaced when a later swap fails", async () => {
+    seedDatabase(path.join(memoryRoot, "memory.db"), 3).close();
+    seedDatabase(path.join(stradaHome, "hub-owners.db"), 4).close();
+    await backupRuntimeDatabases({ ...defaultInstallation(), destDir, timestamp: "ts" });
+    seedDatabase(path.join(memoryRoot, "memory.db"), 30).close();
+    seedDatabase(path.join(stradaHome, "hub-owners.db"), 40).close();
+
+    // The one window nothing outside can provoke: every replacement is staged
+    // and the first one is already in place when the second destination becomes
+    // unwritable. A restore that cannot finish must not be half applied.
+    try {
+      await expect(
+        restoreRuntimeDatabases({
+          backupDir: destDir,
+          onStaged: () => {
+            chmodSync(stradaHome, 0o500);
+          },
+        }),
+      ).rejects.toThrow(/rolled back to what it held before/);
+    } finally {
+      chmodSync(stradaHome, 0o700);
+    }
+    expect(countRows(path.join(memoryRoot, "memory.db"))).toBe(33);
+    expect(countRows(path.join(stradaHome, "hub-owners.db"))).toBe(44);
+  });
+
+  it("leaves no staging or pre-restore residue behind a restore that worked", async () => {
+    seedDatabase(path.join(memoryRoot, "memory.db"), 7).close();
+    await backupRuntimeDatabases({ ...defaultInstallation(), destDir, timestamp: "ts" });
+    seedDatabase(path.join(memoryRoot, "memory.db"), 5).close();
+
+    await restoreRuntimeDatabases({ backupDir: destDir });
+    // Checked BEFORE anything opens the file: opening a WAL database recreates
+    // the sidecars a restore is supposed to have left absent.
+    expect(readdirSync(memoryRoot).sort()).toEqual(["memory.db"]);
+    expect(countRows(path.join(memoryRoot, "memory.db"))).toBe(7);
+  });
+});
+
+/**
+ * ROUND 11 #19 — the bytes a row promises are part of the backup.
+ *
+ * Two things a restored installation used to come back without: the delivery
+ * packages a PROJECT owns (`<projectRoot>/.strada/delivery-packages.db`, which
+ * is under neither backed-up root) and the attachment spool the large-file rows
+ * point at by absolute path.
+ */
+describe("project-owned databases (round 11 #19)", () => {
+  it("inventories <projectRoot>/.strada, and only when a project root is given", () => {
+    const projectRoot = path.join(root, "project");
+    mkdirSync(path.join(projectRoot, PROJECT_DATA_DIR), { recursive: true });
+    seedDatabase(path.join(projectRoot, PROJECT_DATA_DIR, "delivery-packages.db"), 2).close();
+
+    const entry = inventoryRuntimeDatabases({ ...defaultInstallation(), projectRoot }).find(
+      (f) => f.relative === "delivery-packages.db",
+    );
+    expect(entry?.root).toBe(PROJECT_ROOT_NAME);
+    expect(entry?.rootPath).toBe(path.join(projectRoot, PROJECT_DATA_DIR));
+    // The repro: an installation-only inventory has no project root at all, so
+    // the file is out of scope rather than merely missing.
+    expect(
+      inventoryRuntimeDatabases(defaultInstallation()).map((f) => f.relative),
+    ).not.toContain("delivery-packages.db");
+  });
+
+  it("keeps the project's known names when its .strada IS the Strada home", () => {
+    // One directory, two labels: deduplicating it must not drop the loser's
+    // known names — `delivery-packages.db` would then only be found by the
+    // `*.db` sweep, which is not a contract.
+    const roots = runtimeDatabaseRoots({ memoryRoot, stradaHome, userHome: root, projectRoot: root });
+    expect(roots.map((r) => r.path)).toEqual([memoryRoot, stradaHome]);
+    expect(roots.find((r) => r.path === stradaHome)?.known).toEqual(
+      expect.arrayContaining(["hub-owners.db", "trusted-skills.db", "delivery-packages.db"]),
+    );
+  });
+
+  it("backs the project's databases up under their own root", async () => {
+    const projectRoot = path.join(root, "project");
+    mkdirSync(path.join(projectRoot, PROJECT_DATA_DIR), { recursive: true });
+    seedDatabase(path.join(projectRoot, PROJECT_DATA_DIR, "delivery-packages.db"), 2).close();
+    const run = await backupRuntimeData({
+      ...defaultInstallation(),
+      projectRoot,
+      destDir,
+      timestamp: "ts",
+    });
+    expect(run.databases.map((r) => path.relative(destDir, r.destination))).toContain(
+      path.join(PROJECT_ROOT_NAME, "delivery-packages_ts.db"),
+    );
+    expect(run.manifest.roots[PROJECT_ROOT_NAME]).toBe(path.join(projectRoot, PROJECT_DATA_DIR));
+  });
+});
+
+describe("retained attachment bytes (round 11 #19)", () => {
+  /** A retained (too large to inline) attachment, with the source then deleted. */
+  function registerRetained(payload: Buffer): { token: string; spoolFile: string } {
+    const source = path.join(root, "recording.bin");
+    writeFileSync(source, payload);
+    const store = new WebAttachmentStore(
+      path.join(memoryRoot, "web-attachments.db"),
+      3_600_000,
+      200,
+      64,
+    );
+    try {
+      const token = store.register({ name: "recording.bin", path: source });
+      const entry = store.get(token);
+      // Retained, not inlined: this test is about the bytes that live OUTSIDE
+      // the database. WHERE inside the spool is the store's business (each
+      // database owns a subdirectory of it), so this asserts the contract, not
+      // a layout: under the spool root, named by the token.
+      expect(entry?.retained).toBe(true);
+      expect(entry!.path!.startsWith(path.join(memoryRoot, RETAINED_ATTACHMENT_DIR) + path.sep)).toBe(
+        true,
+      );
+      expect(path.basename(entry!.path!)).toBe(token);
+      return { token, spoolFile: entry!.path! };
+    } finally {
+      store.close();
+      // What a recording pipeline does the moment it is done.
+      rmSync(source, { force: true });
+    }
+  }
+
+  /** The bytes a link would serve, read the way the serve path reads them. */
+  function serveBytes(dbPath: string, token: string): Buffer {
+    const store = new WebAttachmentStore(dbPath, 3_600_000, 200, 64);
+    try {
+      const entry = store.get(token);
+      expect(entry, "the attachment row did not survive the restore").not.toBeNull();
+      const open = store.openStoredFile(entry!);
+      expect(open, "the registered bytes are not where the row says they are").not.toBeNull();
+      const buffer = Buffer.alloc(open!.sizeBytes);
+      readSync(open!.fd, buffer, 0, buffer.length, 0);
+      closeSync(open!.fd);
+      return buffer;
+    } finally {
+      store.close();
+    }
+  }
+
+  it("records every retained blob in the manifest with its digest", async () => {
+    const payload = Buffer.alloc(4096, 0x7a);
+    const { spoolFile } = registerRetained(payload);
+    const run = await backupRuntimeData({ ...defaultInstallation(), destDir, timestamp: "ts" });
+
+    expect(run.blobs.map((b) => b.relative)).toEqual([path.relative(memoryRoot, spoolFile)]);
+    const blob = readBackupManifest(destDir).blobs?.[0];
+    expect(blob?.root).toBe("memory");
+    expect(blob?.bytes).toBe(payload.length);
+    expect(blob?.sha256).toBe(createHash("sha256").update(payload).digest("hex"));
+    // And the copy inside the backup keeps the spool's privacy.
+    expect(statSync(path.join(destDir, blob!.backup)).mode & 0o777).toBe(0o600);
+  });
+
+  it("recovers a delivery-package revision and an attachment's bytes on a fresh root", async () => {
+    // The exit criterion of #19, both halves at once: deliver a campaign,
+    // register a large attachment, back up, restore onto a machine where every
+    // root is somewhere else.
+    const projectRoot = path.join(root, "project");
+    const packages = new DeliveryPackageStore(
+      path.join(projectRoot, PROJECT_DATA_DIR, "delivery-packages.db"),
+    );
+    const stored = packages.put(
+      assembleDeliveryPackage({
+        campaign: {
+          id: "campaign_11",
+          projectRoot,
+          state: "done",
+          milestones: [],
+          createdAt: 1,
+          updatedAt: 2,
+        },
+      }),
+    );
+    packages.close();
+
+    const payload = Buffer.alloc(9000, 0x2b);
+    const { token, spoolFile } = registerRetained(payload);
+
+    await backupRuntimeData({ ...defaultInstallation(), projectRoot, destDir, timestamp: "ts" });
+
+    // A CLEAN machine: the installation the backup came from is gone. Deleting
+    // it is what makes this test about the restore — with the old directories
+    // still lying there, a row that was never rebased serves its bytes from the
+    // old absolute path and the test passes while the defect is intact.
+    rmSync(memoryRoot, { recursive: true, force: true });
+    rmSync(projectRoot, { recursive: true, force: true });
+
+    const fresh = path.join(root, "fresh");
+    const freshMemory = path.join(fresh, ".strada-memory");
+    const freshProject = path.join(fresh, "project", PROJECT_DATA_DIR);
+    const restored = await restoreRuntimeData({
+      backupDir: destDir,
+      roots: { memory: freshMemory, [PROJECT_ROOT_NAME]: freshProject },
+    });
+    // Same place within the new root as it held within the old one.
+    expect(restored.blobs.map((b) => b.destination)).toEqual([
+      path.join(freshMemory, path.relative(memoryRoot, spoolFile)),
+    ]);
+
+    // The package revision is readable, by revision and by campaign.
+    const restoredPackages = new DeliveryPackageStore(path.join(freshProject, "delivery-packages.db"));
+    try {
+      expect(restoredPackages.latest("campaign_11")?.revision).toBe(stored.revision);
+      expect(restoredPackages.get("campaign_11", stored.revision)?.documentSha256).toBe(
+        stored.documentSha256,
+      );
+    } finally {
+      restoredPackages.close();
+    }
+
+    // …and the attachment STREAMS. The row has to name the NEW spool: its
+    // recorded path was an absolute path on a machine that no longer exists, and
+    // a row pointing there is a link that 404s while still promising the bytes.
+    const freshDb = path.join(freshMemory, "web-attachments.db");
+    const rebased = (() => {
+      const store = new WebAttachmentStore(freshDb, 3_600_000, 200, 64);
+      try {
+        return store.get(token)!.path!;
+      } finally {
+        store.close();
+      }
+    })();
+    expect(rebased.startsWith(path.join(freshMemory, RETAINED_ATTACHMENT_DIR) + path.sep)).toBe(true);
+    expect(rebased).not.toBe(spoolFile);
+    expect(existsSync(spoolFile)).toBe(false);
+    expect(serveBytes(freshDb, token).equals(payload)).toBe(true);
+  });
+
+  it("restores the spool as 0700 directories of 0600 files", async () => {
+    // The store's guarantee about retained bytes — "the spool is 0700 and the
+    // copy 0600, so that is not another process" — must survive the restore
+    // that recreated them.
+    const { spoolFile } = registerRetained(Buffer.alloc(4096, 0x31));
+    await backupRuntimeData({ ...defaultInstallation(), destDir, timestamp: "ts" });
+    const freshMemory = path.join(root, "fresh", ".strada-memory");
+    await restoreRuntimeData({ backupDir: destDir, roots: { memory: freshMemory } });
+
+    const restoredFile = path.join(freshMemory, path.relative(memoryRoot, spoolFile));
+    expect(statSync(restoredFile).mode & 0o777).toBe(0o600);
+    expect(statSync(path.dirname(restoredFile)).mode & 0o777).toBe(0o700);
+    expect(statSync(path.join(freshMemory, RETAINED_ATTACHMENT_DIR)).mode & 0o777).toBe(0o700);
+  });
+
+  it("leaves the staging directory out: nothing names those bytes yet", async () => {
+    // A file in `incoming` has no row (that is what pending means), the store's
+    // own sweep deletes it, and it may be a recording halfway through being
+    // copied right now — which the backup's digest check would read as a corrupt
+    // copy and fail the whole run over.
+    const { spoolFile } = registerRetained(Buffer.alloc(2048, 0x44));
+    const pending = path.join(path.dirname(spoolFile), PENDING_ATTACHMENT_DIR);
+    mkdirSync(pending, { recursive: true, mode: 0o700 });
+    writeFileSync(path.join(pending, "half-written-token"), Buffer.alloc(16, 0x45));
+
+    const run = await backupRuntimeData({ ...defaultInstallation(), destDir, timestamp: "ts" });
+    expect(run.blobs.map((b) => b.relative)).toEqual([path.relative(memoryRoot, spoolFile)]);
+  });
+
+  it("refuses a restore whose blob bytes are not the ones recorded, keeping the live spool", async () => {
+    const payload = Buffer.alloc(4096, 0x5f);
+    const { token, spoolFile } = registerRetained(payload);
+    await backupRuntimeData({ ...defaultInstallation(), destDir, timestamp: "ts" });
+    // Same length, different bytes — and a restore that placed these would
+    // serve them under the row's recorded checksum, which is the one thing the
+    // store guarantees it never does.
+    const blob = readBackupManifest(destDir).blobs![0]!;
+    writeFileSync(path.join(destDir, blob.backup), Buffer.alloc(payload.length, 0x60));
+
+    await expect(restoreRuntimeDatabases({ backupDir: destDir })).rejects.toThrow(
+      /hashes [0-9a-f]{64} where the manifest recorded/,
+    );
+    // The live installation is untouched: same bytes, still servable.
+    expect(readFileSync(spoolFile).equals(payload)).toBe(true);
+    expect(
+      serveBytes(path.join(memoryRoot, "web-attachments.db"), token).equals(payload),
+    ).toBe(true);
+  });
+});
+
+describe("the contract with the stores that own these files (round 11 #19)", () => {
+  it("backs up the path CampaignManager opens, not a path retyped here", () => {
+    const manager = readFileSync(
+      path.join(repoRoot, "src", "campaign", "campaign-manager.ts"),
+      "utf8",
+    );
+    // If the delivery-package store moves, this fails and the inventory follows
+    // it — the alternative is a backup that silently stops covering it.
+    expect(manager).toContain(
+      `join(this.projectRoot, "${PROJECT_DATA_DIR}", "${PROJECT_DATABASE_FILES[0]}")`,
+    );
+  });
+
+  it("backs up the directory the store calls the one to back up", () => {
+    // `attachmentSpoolRoot` IS the contract ("the path to back up or prune: it
+    // covers all databases in that directory"). Asserting against the function
+    // rather than the constant is what makes a move of the spool fail here.
+    const spoolRoot = attachmentSpoolRoot(path.join(memoryRoot, "web-attachments.db"));
+    expect(RUNTIME_BLOB_DIRECTORIES.map((dir) => path.join(memoryRoot, dir))).toContain(spoolRoot);
+  });
+});
+
+describe("the CLI and scripts/backup.sh for project data (round 11 #19)", () => {
+  const script = readFileSync(path.join(repoRoot, "scripts", "backup.sh"), "utf8");
+
+  it("parses --project-root", () => {
+    expect(parseBackupArgs(["--source", "/m", "--dest", "/b", "--project-root", "/p"])).toEqual({
+      source: "/m",
+      dest: "/b",
+      projectRoot: "/p",
+    });
+  });
+
+  it("prints the blob files it wrote so the caller checksums them too", async () => {
+    const spoolFile = (() => {
+      const source = path.join(root, "big.bin");
+      writeFileSync(source, Buffer.alloc(2048, 0x11));
+      const store = new WebAttachmentStore(
+        path.join(memoryRoot, "web-attachments.db"),
+        3_600_000,
+        200,
+        64,
+      );
+      const token = store.register({ name: "big.bin", path: source });
+      const file = store.get(token)!.path!;
+      store.close();
+      rmSync(source, { force: true });
+      return file;
+    })();
+    const projectRoot = path.join(root, "project");
+    mkdirSync(path.join(projectRoot, PROJECT_DATA_DIR), { recursive: true });
+    seedDatabase(path.join(projectRoot, PROJECT_DATA_DIR, "delivery-packages.db"), 1).close();
+
+    const written: string[] = [];
+    const original = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: string) => {
+      written.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write;
+    try {
+      expect(
+        await runBackupCli([
+          "--source",
+          memoryRoot,
+          "--dest",
+          destDir,
+          "--timestamp",
+          "ts",
+          "--strada-home",
+          stradaHome,
+          "--user-home",
+          root,
+          "--project-root",
+          projectRoot,
+        ]),
+      ).toBe(0);
+    } finally {
+      process.stdout.write = original;
+    }
+    const out = written.join("");
+    expect(out).toContain(path.join(destDir, PROJECT_ROOT_NAME, "delivery-packages_ts.db"));
+    expect(out).toContain(path.join(destDir, "memory", path.relative(memoryRoot, spoolFile)));
+  });
+
+  it("gives the CLI the project root the runtime itself reads", () => {
+    // Same reasoning as MEMORY_DB_PATH: the script must read the variable the
+    // application reads, not a path of its own.
+    expect(script).toMatch(/UNITY_PROJECT_PATH/);
+    expect(script).toMatch(/--project-root/);
+  });
+
+  it("says the delivery packages are absent instead of reporting a complete backup", () => {
+    const fn = /backup_databases\(\)\s*\{[\s\S]*?\n\}/.exec(script)?.[0] ?? "";
+    expect(fn, "backup_databases() not found").not.toBe("");
+    expect(fn).toMatch(/delivery-packages\.db/);
   });
 });
