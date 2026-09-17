@@ -2741,14 +2741,8 @@ export class WebChannel
     "/api/personality/profiles/",
     "/api/canvas", "/api/skills/",
     "/api/settings/", "/api/monitor/",
-    // Change-review decisions (round 11 #20): POST
-    // /api/workspace/change-review/:id/decisions is how the portal's accept /
-    // reject reaches applyUndo / keepChanges. It is the one mutable path under
-    // /api/workspace — the file-explorer routes stay read-only — and it acts
-    // only on a review the daemon itself recorded, restoring the copies taken
-    // before the run published. Same CSRF gate as every other mutable prefix
-    // (isTrustedMutableProxyRequest).
-    "/api/workspace/change-review/",
+    // NOTE: change-review is NOT a prefix — see MUTABLE_PROXY_ROUTES. A
+    // prefix made every suffix and every write method mutable (round 12 #11).
     // Vault mutations: POST /api/vaults/:id/{search,sync} and DELETE /api/vaults/:id.
     // search is read-only; sync re-indexes the internal SQLite store; DELETE
     // removes a registration but does NOT touch user files. No CSRF amplification
@@ -2756,6 +2750,55 @@ export class WebChannel
     // MUTABLE_PROXY_PATHS above.
     "/api/vaults/",
   ];
+
+  /**
+   * Writes authorized as an EXACT method + route, not a prefix.
+   *
+   * Codex round 12 #11: `/api/workspace/change-review/` as a prefix made every
+   * descendant writable by POST, PUT and DELETE — the bare prefix, an id on its
+   * own, arbitrary sub-paths. Only the one route the portal's accept/reject
+   * actually calls may mutate; a new mutable route must be added here
+   * deliberately, by name.
+   */
+  private static readonly MUTABLE_PROXY_ROUTES: readonly { readonly method: string; readonly pattern: RegExp }[] = [
+    { method: "POST", pattern: /^\/api\/workspace\/change-review\/[A-Za-z0-9_.-]{1,128}\/decisions$/ },
+  ];
+
+  /**
+   * A request path this proxy may reason about, or undefined.
+   *
+   * THE PATH WE CHECK MUST BE THE PATH THAT ACTS (Codex round 12 #11).
+   * `/api/workspace/change-review/../../update` matched a mutable prefix and
+   * then became `/api/update` downstream, so authorization and effect were
+   * about two different routes. Rather than normalizing and hoping the
+   * normalizations agree, anything that is not already canonical is refused:
+   * dot segments, empty segments, backslashes, control characters, encoded
+   * separators, and any percent-escape that does not decode.
+   */
+  private static canonicalProxyPath(pathOnly: string): string | undefined {
+    if (!pathOnly.startsWith("/") || pathOnly.length > 2048) return undefined;
+    if (pathOnly.includes("\\") || pathOnly.includes("//")) return undefined;
+    for (const ch of pathOnly) {
+      const code = ch.codePointAt(0)!;
+      if (code < 0x20 || code === 0x7f) return undefined;
+    }
+    if (/%(2e%2e|2f|5c|00)/i.test(pathOnly)) return undefined;
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(pathOnly);
+    } catch {
+      return undefined;
+    }
+    if (decoded.includes("\\") || decoded.includes("\0")) return undefined;
+    for (const segment of decoded.split("/").slice(1)) {
+      if (segment === "." || segment === "..") return undefined;
+    }
+    if (decoded.endsWith("/") && decoded !== "/") {
+      // A trailing slash is a different route downstream; keep one meaning.
+      return undefined;
+    }
+    return pathOnly;
+  }
 
   private getSingleHeader(
     header: string | string[] | undefined,
@@ -2906,8 +2949,15 @@ export class WebChannel
     const method = req.method ?? "GET";
     getLoggerSafe().debug("[WebChannel] proxyToDashboard", { url, method, dashboardPort: this.dashboardPort });
 
-    // Allowlist check (strip query string for matching)
-    const pathOnly = url.split("?")[0]!;
+    // Allowlist check (strip query string for matching). The path must already
+    // be canonical: what is authorized here is what the dashboard will act on.
+    const rawPath = url.split("?")[0]!;
+    const pathOnly = WebChannel.canonicalProxyPath(rawPath);
+    if (pathOnly === undefined) {
+      res.writeHead(400, { ...WebChannel.SECURITY_HEADERS, "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Bad Request" }));
+      return;
+    }
     const isAllowed =
       WebChannel.ALLOWED_PROXY_PATHS.has(pathOnly) ||
       WebChannel.ALLOWED_PROXY_PREFIXES.some((p) =>
@@ -2925,7 +2975,8 @@ export class WebChannel
       WebChannel.MUTABLE_PROXY_PATHS.has(pathOnly) ||
       WebChannel.MUTABLE_PROXY_PREFIXES.some((p) =>
         p.endsWith("/") ? pathOnly.startsWith(p) : (pathOnly === p || pathOnly.startsWith(p + "/")),
-      );
+      ) ||
+      WebChannel.MUTABLE_PROXY_ROUTES.some((r) => r.method === method && r.pattern.test(pathOnly));
     if (method !== "GET" && !(isMutable && (method === "POST" || method === "DELETE" || method === "PUT"))) {
       res.writeHead(405, { ...WebChannel.SECURITY_HEADERS, "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "Method Not Allowed" }));

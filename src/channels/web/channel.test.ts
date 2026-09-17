@@ -487,6 +487,61 @@ describe("WebChannel origin boundary (13F6 / 4.8)", () => {
     expect(res.statusCode).toBe(403);
   });
 
+  /** A POST the origin gate would otherwise accept, so only the path decides. */
+  async function trustedPost(url, method = "POST") {
+    const channel = new WebChannel(3000, 3100);
+    const req = createMockRequest({
+      method,
+      url,
+      headers: { origin: "http://127.0.0.1:3000" },
+      body: JSON.stringify({ decisions: [] }),
+    });
+    const res = createMockResponse();
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const pending = proxy(channel, req, res, url);
+    req.emitBody();
+    await pending;
+    return { res, fetchMock };
+  }
+
+  it("round 12 #11 refuses a write whose path is not the path that would act", async () => {
+    // `/api/workspace/change-review/../../update` matched the mutable prefix
+    // and then became `/api/update` downstream: authorization and effect were
+    // about two different routes.
+    for (const url of [
+      "/api/workspace/change-review/../../update",
+      "/api/workspace/change-review/%2e%2e/%2e%2e/update",
+      "/api/workspace/change-review//r1/decisions",
+      "/api/workspace/change-review/r1%2fdecisions",
+      "/api/workspace/change-review/r1/decisions/",
+      // The bare prefix with its trailing slash is not a route either.
+      "/api/workspace/change-review/",
+      "/api/workspace/change-review/%",
+    ]) {
+      const { res, fetchMock } = await trustedPost(url);
+      expect(fetchMock, url).not.toHaveBeenCalled();
+      expect(res.statusCode, url).toBe(400);
+    }
+  });
+
+  it("round 12 #11 only the decisions route under change-review may be written", async () => {
+    // The prefix made every descendant writable by POST, PUT and DELETE.
+    for (const [url, method] of [
+      ["/api/workspace/change-review/r1", "POST"],
+      ["/api/workspace/change-review/r1/decisions", "DELETE"],
+      ["/api/workspace/change-review/r1/decisions", "PUT"],
+      ["/api/workspace/change-review/r1/anything-else", "POST"],
+    ]) {
+      const { res, fetchMock } = await trustedPost(url, method);
+      expect(fetchMock, `${method} ${url}`).not.toHaveBeenCalled();
+      expect(res.statusCode, `${method} ${url}`).toBe(405);
+    }
+    // …and the one route the portal actually calls still goes through.
+    const { fetchMock } = await trustedPost("/api/workspace/change-review/r1/decisions");
+    expect(fetchMock).toHaveBeenCalled();
+  });
+
   it("refuses a mutable proxy request whose only credential is a foreign-port Referer", async () => {
     const channel = new WebChannel(3000, 3100);
     const req = createMockRequest({
