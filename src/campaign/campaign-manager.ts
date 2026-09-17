@@ -870,8 +870,11 @@ export class CampaignManager {
     // THE PATH THE MESSAGE NAMED WINS. Discovery by filename distance and
     // modification time is for a message that named nothing (Codex
     // 2026-09-12 AD#6).
-    const named = preferredPath !== undefined && readGddFile(this.projectRoot, preferredPath) ? preferredPath : undefined;
-    const gddPath = named ?? this.findNewestGddPath();
+    // …AND A NAMED PATH THAT CANNOT BE READ IS A REFUSAL, NOT A HINT. Falling
+    // back to discovery started a campaign on whatever other design the repo
+    // held — the wrong game, silently (audit 06.4, 2026-09-13).
+    if (preferredPath !== undefined && !readGddFile(this.projectRoot, preferredPath)) return undefined;
+    const gddPath = preferredPath ?? this.findNewestGddPath();
     if (!gddPath) return undefined;
     const gddText = readGddFile(this.projectRoot, gddPath);
     if (!gddText) return undefined;
@@ -924,6 +927,14 @@ export class CampaignManager {
         return true;
       }
       case "gdd-from-docs": {
+        if (intent.path !== undefined && !readGddFile(this.projectRoot, intent.path)) {
+          await this.tell(
+            { chatId: msg.chatId },
+            `I could not read \`${intent.path}\` — check the path, or share the document and I'll build from that. ` +
+              "I am not starting from another design in the repo in its place.",
+          );
+          return true;
+        }
         const campaign = this.startFromGddFromDocs(ctx, intent.path);
         if (!campaign) {
           await this.tell(

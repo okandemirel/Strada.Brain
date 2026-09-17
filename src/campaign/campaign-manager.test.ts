@@ -3741,10 +3741,31 @@ describe("CampaignManager", () => {
     const named = manager.startFromGddFromDocs({ ...ctx, chatId: "chat-named" }, "docs/Space_GDD.md");
     expect(named?.gddPath).toBe("docs/Space_GDD.md");
 
-    // A path that does not exist falls back to discovery rather than failing.
+    // A path that does not exist is a refusal, not a hint: discovery used to
+    // start a campaign on whatever other design the repo held (audit 06.4).
     const missing = manager.startFromGddFromDocs({ ...ctx, chatId: "chat-missing" }, "docs/Nope.md");
-    expect(missing?.gddPath).toBeDefined();
-    expect(missing?.gddPath).not.toBe("docs/Nope.md");
+    expect(missing).toBeUndefined();
+    // …while a message that named nothing still discovers.
+    const discovered = manager.startFromGddFromDocs({ ...ctx, chatId: "chat-discover" });
+    expect(discovered?.gddPath).toBeDefined();
+  });
+
+  it("a message naming a GDD that cannot be read gets told so, and no other design is built (audit 06.4)", async () => {
+    mkdirSync(join(projectRoot, "docs"), { recursive: true });
+    writeFileSync(join(projectRoot, "docs", "Game_GDD.md"), "# Other\n\nA newer document nobody asked for.\n" + "y".repeat(400));
+    const before = tasks.submitted.length;
+    const msg = {
+      channelType: "cli", chatId: "chat-unreadable", userId: "u1",
+      text: "build the game from the GDD at docs/Nope.md",
+      timestamp: new Date(),
+    } as unknown as IncomingMessage;
+    expect(await manager.tryHandleIncoming(msg)).toBe(true);
+    const said = messages.filter((m) => m.chatId === "chat-unreadable").map((m) => m.text).join("\n");
+    expect(said).toContain("docs/Nope.md");
+    expect(said).toContain("could not read");
+    expect(said).not.toContain("Building from");
+    expect(tasks.submitted.length).toBe(before);
+    expect(storage.hasActiveForChat("chat-unreadable")).toBe(false);
   });
 
   it("asks the requirements it has NOT judged yet (Codex 2026-09-12 AD#16)", async () => {
