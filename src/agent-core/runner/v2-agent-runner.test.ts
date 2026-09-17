@@ -402,6 +402,21 @@ async function drive<T>(clock: FakeClock, runPromise: Promise<T>): Promise<T> {
 // ── TESTS ─────────────────────────────────────────────────────────────────────
 
 describe("V2AgentRunner — a superseded attempt's tokens are charged (audit 03.4 / D22)", () => {
+  it("a thrown provider error that carries usage is still debited (Codex 2026-09-17 #5)", async () => {
+    const handles = mkPlane();
+    const failure = Object.assign(new Error("Provider \"p\" returned an empty response (no text or tool calls)"), {
+      usage: { inputTokens: 7000, outputTokens: 0, totalTokens: 7000 },
+    });
+    // Step 1 throws (after consuming tokens); step 2 answers cleanly.
+    const gateway = new ModelGateway(scriptedStream([failure, mkResponse({ text: "done", stopReason: "end_turn" })]));
+    const port = mkPort(mkProvider());
+    const runner = mkRunner(handles.plane, gateway, port, handles.clock);
+    const result = await drive(handles.clock, runner.run(mkRequest(), mkIO("background")));
+    expect(result.status).toBe("completed");
+    // 7000 from the failed attempt, plus 10 per answered step (the retried step and the end turn).
+    expect(result.usage?.inputTokens).toBe(7020);
+  });
+
   it("auxiliaryUsage on the served response is debited and reported with the run's usage", async () => {
     const handles = mkPlane();
     // Step 1 (PLANNING) answers cleanly; step 2's response carries the chain's

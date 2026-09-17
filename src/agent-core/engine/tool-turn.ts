@@ -34,7 +34,7 @@ import {
   recordStepResultsAndCheckReflection,
   buildToolResultContentBlocks,
 } from "../../agents/orchestrator-loop-utils.js";
-import { recordExecutionTrace, recordPhaseOutcome } from "./accounting.js";
+import { recordExecutionTrace, recordPhaseOutcome, consensusUsageSink } from "./accounting.js";
 import type { EngineRunContext } from "./engine-deps.js";
 import type { SetupDeps } from "./setup.js";
 import { instinctScopeKey } from "./instinct-scope.js";
@@ -268,7 +268,7 @@ export async function portExecuteToolTurn(
         identityKey: runCtx.identityKey,
         chatId,
         logLabel: "agent-core",
-        onUsage: runCtx.onUsage,
+        onUsage: consensusUsageSink(deps, runCtx),
         resolveConsensusReviewAssignment: (r, c, k) => resolveConsensusReviewAssignmentHelper(deps.getSupervisorRoutingContext(), r, c, k),
         recordExecutionTrace: (p) => recordExecutionTrace(deps, p),
         recordPhaseOutcome: (p) => recordPhaseOutcome(deps, p),

@@ -9,7 +9,7 @@
  */
 
 import type { IAIProvider, ProviderResponse, ResponseSchema } from "../../agents/providers/provider.interface.js";
-import type { TaskClassification, OriginalOutput, ConsensusResult, ConsensusStrategy } from "./routing-types.js";
+import type { TaskClassification, OriginalOutput, ConsensusResult, ConsensusStrategy, ConsensusUsageEntry } from "./routing-types.js";
 import { getLogger } from "../../utils/logger.js";
 
 export interface ConsensusConfig {
@@ -115,17 +115,23 @@ function extractJsonVerdict(
   return { verdict, sawObject };
 }
 
-type UsageLike = { inputTokens: number; outputTokens: number; cacheCreationInputTokens?: number; cacheReadInputTokens?: number };
-/** The reviewer's calls, summed — absent only when neither carried usage. */
-function sumUsage(a: UsageLike | undefined, b: UsageLike | undefined): UsageLike | undefined {
-  if (!a) return b;
-  if (!b) return a;
-  const add = (x?: number, y?: number): number | undefined => (x === undefined && y === undefined ? undefined : (x ?? 0) + (y ?? 0));
-  const cw = add(a.cacheCreationInputTokens, b.cacheCreationInputTokens);
-  const cr = add(a.cacheReadInputTokens, b.cacheReadInputTokens);
+/** One reviewer call's spend: its own usage plus any superseded attempt the chain carried. */
+function usageEntryOf(response: ProviderResponse, fallbackProvider: string | undefined): ConsensusUsageEntry | undefined {
+  const parts = [response.usage, response.auxiliaryUsage].filter((u): u is NonNullable<typeof u> => u !== undefined);
+  if (parts.length === 0) return undefined;
+  const sum = (k: "inputTokens" | "outputTokens" | "cacheCreationInputTokens" | "cacheReadInputTokens"): number | undefined => {
+    const vals = parts.map((u) => u[k]).filter((v): v is number => typeof v === "number");
+    return vals.length === 0 ? undefined : vals.reduce((a, b) => a + b, 0);
+  };
+  const provider = response.servedBy?.provider ?? fallbackProvider;
+  const model = response.servedBy?.model;
+  const cw = sum("cacheCreationInputTokens");
+  const cr = sum("cacheReadInputTokens");
   return {
-    inputTokens: a.inputTokens + b.inputTokens,
-    outputTokens: a.outputTokens + b.outputTokens,
+    ...(provider === undefined ? {} : { provider }),
+    ...(model === undefined ? {} : { model }),
+    inputTokens: sum("inputTokens") ?? 0,
+    outputTokens: sum("outputTokens") ?? 0,
     ...(cw === undefined ? {} : { cacheCreationInputTokens: cw }),
     ...(cr === undefined ? {} : { cacheReadInputTokens: cr }),
   };
@@ -206,12 +212,15 @@ export class ConsensusManager {
       };
     }
 
+    // Every reviewer call lands here as it completes, so a failure after
+    // the first call still reports what that call spent (Codex 2026-09-17 #3).
+    const spent: ConsensusUsageEntry[] = [];
     try {
       let result: ConsensusResult;
       if (strategy === "review") {
-        result = await this.reviewStrategy(params);
+        result = await this.reviewStrategy(params, spent);
       } else {
-        result = await this.reExecuteStrategy(params);
+        result = await this.reExecuteStrategy(params, spent);
       }
       try {
         const { LearningMetrics } = await import("../../learning/learning-metrics.js");
@@ -232,6 +241,7 @@ export class ConsensusManager {
         strategy,
         originalProvider: params.originalProvider,
         reasoning: "Consensus failed — manual review required",
+        ...(spent.length > 0 ? { usages: [...spent] } : {}),
       };
     }
   }
@@ -246,7 +256,7 @@ export class ConsensusManager {
     reviewProvider: IAIProvider;
     prompt: string;
     task: TaskClassification;
-  }): Promise<ConsensusResult> {
+  }, spent: ConsensusUsageEntry[] = []): Promise<ConsensusResult> {
     // Serialize the original output for review
     let outputDesc: string;
     if (params.originalOutput.toolCalls?.length) {
@@ -278,6 +288,7 @@ export class ConsensusManager {
       "You are a code review agent. Evaluate the proposed action for correctness and safety.",
       reviewPrompt,
       VERDICT_SCHEMA,
+      spent,
     );
 
     const approved = this.parseApproval(response.text);
@@ -288,7 +299,7 @@ export class ConsensusManager {
       originalProvider: params.originalProvider,
       reviewProvider: params.reviewProvider.name ?? "unknown",
       reasoning: response.text?.slice(0, 500),
-      ...(response.usage ? { usage: response.usage } : {}),
+      ...(spent.length > 0 ? { usages: [...spent] } : {}),
     };
   }
 
@@ -302,11 +313,13 @@ export class ConsensusManager {
     reviewProvider: IAIProvider;
     prompt: string;
     task: TaskClassification;
-  }): Promise<ConsensusResult> {
+  }, spent: ConsensusUsageEntry[] = []): Promise<ConsensusResult> {
     const response = await this.chatWithTimeout(
       params.reviewProvider,
       "You are a helpful AI assistant.",
       params.prompt,
+      undefined,
+      spent,
     );
 
     const originalHasTools = (params.originalOutput.toolCalls?.length ?? 0) > 0;
@@ -320,7 +333,7 @@ export class ConsensusManager {
         originalProvider: params.originalProvider,
         reviewProvider: params.reviewProvider.name ?? "unknown",
         reasoning: "Providers disagree on approach (tools vs text)",
-        ...(response.usage ? { usage: response.usage } : {}),
+        ...(spent.length > 0 ? { usages: [...spent] } : {}),
       };
     }
 
@@ -338,7 +351,7 @@ export class ConsensusManager {
         originalProvider: params.originalProvider,
         reviewProvider: params.reviewProvider.name ?? "unknown",
         reasoning: `Tool agreement: ${Math.round(toolAgreement * 100)}% (${overlap}/${total} tools overlap)`,
-        ...(response.usage ? { usage: response.usage } : {}),
+        ...(spent.length > 0 ? { usages: [...spent] } : {}),
       };
     }
 
@@ -359,18 +372,18 @@ export class ConsensusManager {
       "You compare AI responses for agreement.",
       comparisonPrompt,
       VERDICT_SCHEMA,
+      spent,
     );
 
     const agreed = this.parseApproval(comparison.text);
-    // Both reviewer calls are spend (audit 03.3 / D22).
-    const usage = sumUsage(response.usage, comparison.usage);
     return {
       agreed,
       strategy: "re-execute",
       originalProvider: params.originalProvider,
       reviewProvider: params.reviewProvider.name ?? "unknown",
       reasoning: comparison.text?.slice(0, 500) ?? "Comparison complete",
-      ...(usage ? { usage } : {}),
+      // Both reviewer calls are spend (audit 03.3 / D22).
+      ...(spent.length > 0 ? { usages: [...spent] } : {}),
     };
   }
 
@@ -390,6 +403,23 @@ export class ConsensusManager {
    *   nothing.
    */
   private async chatWithTimeout(
+    provider: IAIProvider,
+    systemPrompt: string,
+    content: string,
+    responseSchema?: ResponseSchema,
+    spent?: ConsensusUsageEntry[],
+  ): Promise<ProviderResponse> {
+    const response = await this.chatWithTimeoutRaw(provider, systemPrompt, content, responseSchema);
+    // WHAT THIS CALL SPENT, attributed to who served it, the superseded
+    // attempt's tokens included (Codex 2026-09-17 #1, #2).
+    if (spent) {
+      const entry = usageEntryOf(response, provider.name);
+      if (entry) spent.push(entry);
+    }
+    return response;
+  }
+
+  private async chatWithTimeoutRaw(
     provider: IAIProvider,
     systemPrompt: string,
     content: string,

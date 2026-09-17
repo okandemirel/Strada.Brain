@@ -34,13 +34,19 @@ describe("runConsensusVerification", () => {
     const params = baseParams({
       consensusManager: {
         shouldConsult: vi.fn().mockReturnValue(true),
-        verify: vi.fn().mockResolvedValue({ agreed: true, strategy: "review", reasoning: "fine", usage: { inputTokens: 120, outputTokens: 30 } }),
+        verify: vi.fn().mockResolvedValue({ agreed: true, strategy: "re-execute", reasoning: "fine", usages: [
+          { inputTokens: 120, outputTokens: 30 },
+          // The second call was served by a PAID fallback: billed as such.
+          { provider: "claude", model: "claude-sonnet-5", inputTokens: 200, outputTokens: 10 },
+        ] }),
       },
       reviewAssignment: { provider: { name: "opencode" }, providerName: "opencode", modelId: "deepseek-flash", reason: "diversity" },
       onUsage,
     });
     await runConsensusVerification(params);
+    expect(onUsage).toHaveBeenCalledTimes(2);
     expect(onUsage).toHaveBeenCalledWith(expect.objectContaining({ provider: "opencode", model: "deepseek-flash", inputTokens: 120, outputTokens: 30 }));
+    expect(onUsage).toHaveBeenCalledWith(expect.objectContaining({ provider: "claude", model: "claude-sonnet-5", inputTokens: 200, outputTokens: 10 }));
   });
 
   it("…and a verdict without usage books nothing (guard)", async () => {

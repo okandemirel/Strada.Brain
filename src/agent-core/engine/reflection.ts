@@ -52,7 +52,7 @@ import {
 import { runConsensusVerification } from "../../agents/orchestrator-consensus.js";
 import { parseGoalBlock, buildGoalTreeFromBlock } from "../../goals/types.js";
 import { processReflectionPreamble, handlePlanPhaseTransition } from "../../agents/orchestrator-loop-utils.js";
-import { recordExecutionTrace, recordPhaseOutcome } from "./accounting.js";
+import { recordExecutionTrace, recordPhaseOutcome, consensusUsageSink } from "./accounting.js";
 import { emitVisibleBoundary } from "./render.js";
 import type { RenderDeps } from "./render.js";
 import type { ReviewDeps } from "./review.js";
@@ -259,7 +259,7 @@ export function buildInteractiveEndTurnContext(
         chatId: core.chatId,
         identityKey,
         logLabel: "text-only, critical",
-        onUsage: runCtx.onUsage,
+        onUsage: consensusUsageSink(deps, runCtx),
         recordExecutionTrace: (rp) => recordExecutionTrace(deps, rp as Parameters<typeof recordExecutionTrace>[1]),
         recordPhaseOutcome: (rp) => recordPhaseOutcome(deps, rp as Parameters<typeof recordPhaseOutcome>[1]),
       });

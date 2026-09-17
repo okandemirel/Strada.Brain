@@ -615,29 +615,66 @@ describe("ConsensusManager", () => {
 
 describe("ConsensusManager carries the reviewer's usage (audit 03.3 / D22)", () => {
   const usage = (inputTokens: number, outputTokens: number) => ({ inputTokens, outputTokens, totalTokens: inputTokens + outputTokens });
-  const reviewer = (answers: Array<{ text: string; inputTokens: number; outputTokens: number }>) => {
+  const reviewer = (answers: Array<{ text: string; inputTokens: number; outputTokens: number; servedBy?: { provider: string; model?: string }; auxiliary?: number; fail?: boolean }>) => {
     const chat = vi.fn();
-    for (const a of answers) chat.mockResolvedValueOnce({ text: a.text, toolCalls: [], stopReason: "end_turn", usage: usage(a.inputTokens, a.outputTokens) });
+    for (const a of answers) {
+      if (a.fail) { chat.mockRejectedValueOnce(new Error("reviewer timed out")); continue; }
+      chat.mockResolvedValueOnce({
+        text: a.text, toolCalls: [], stopReason: "end_turn", usage: usage(a.inputTokens, a.outputTokens),
+        ...(a.servedBy ? { servedBy: a.servedBy } : {}),
+        ...(a.auxiliary ? { auxiliaryUsage: usage(a.auxiliary, 0) } : {}),
+      });
+    }
     return { name: "reviewer", chat } as never;
   };
   const task = { type: "code_generation", complexity: "moderate", criticality: "high" } as never;
 
   it("the review strategy returns the reviewer call's usage", async () => {
     const cm = new ConsensusManager(new ConfidenceEstimator());
-    const result = await (cm as unknown as { reviewStrategy(p: unknown): Promise<{ agreed: boolean; usage?: { inputTokens: number; outputTokens: number } }> }).reviewStrategy({
+    const result = await (cm as unknown as { reviewStrategy(p: unknown): Promise<{ agreed: boolean; usages?: unknown[] }> }).reviewStrategy({
       originalOutput: { text: "done" }, originalProvider: "claude", reviewProvider: reviewer([{ text: '{"approved": true, "reasoning": "ok"}', inputTokens: 120, outputTokens: 30 }]), prompt: "p", task,
     });
     expect(result.agreed).toBe(true);
-    expect(result.usage).toEqual(expect.objectContaining({ inputTokens: 120, outputTokens: 30 }));
+    expect(result.usages).toEqual([expect.objectContaining({ inputTokens: 120, outputTokens: 30, provider: "reviewer" })]);
+  });
+
+  it("each call is attributed to who SERVED it, superseded tokens included (Codex 2026-09-17 #1, #2)", async () => {
+    const cm = new ConsensusManager(new ConfidenceEstimator());
+    const result = await (cm as unknown as { reExecuteStrategy(p: unknown): Promise<{ usages?: unknown[] }> }).reExecuteStrategy({
+      originalOutput: { text: "answer A" }, originalProvider: "claude",
+      reviewProvider: reviewer([
+        { text: "answer B", inputTokens: 100, outputTokens: 40, servedBy: { provider: "claude", model: "claude-sonnet-5" }, auxiliary: 5000 },
+        { text: '{"agreed": true, "reasoning": "same"}', inputTokens: 200, outputTokens: 10, servedBy: { provider: "opencode", model: "deepseek-flash" } },
+      ]),
+      prompt: "p", task,
+    });
+    expect(result.usages).toEqual([
+      expect.objectContaining({ provider: "claude", model: "claude-sonnet-5", inputTokens: 5100, outputTokens: 40 }),
+      expect.objectContaining({ provider: "opencode", model: "deepseek-flash", inputTokens: 200, outputTokens: 10 }),
+    ]);
+  });
+
+  it("a failure after the first call still reports what that call spent (Codex 2026-09-17 #3)", async () => {
+    const cm = new ConsensusManager(new ConfidenceEstimator(), { reviewTimeoutMs: 0 } as never);
+    vi.spyOn(cm, "shouldConsult").mockReturnValue("re-execute" as never);
+    const result = await cm.verify({
+      originalOutput: { text: "answer A" }, originalProvider: "claude", confidence: 0.1,
+      reviewProvider: reviewer([{ text: "answer B", inputTokens: 100, outputTokens: 40 }, { text: "", inputTokens: 0, outputTokens: 0, fail: true }]),
+      prompt: "p", task,
+    });
+    expect(result.agreed).toBe(false);
+    expect(result.usages).toEqual([expect.objectContaining({ inputTokens: 100, outputTokens: 40 })]);
   });
 
   it("the re-execute strategy sums BOTH reviewer calls", async () => {
     const cm = new ConsensusManager(new ConfidenceEstimator());
-    const result = await (cm as unknown as { reExecuteStrategy(p: unknown): Promise<{ usage?: { inputTokens: number; outputTokens: number } }> }).reExecuteStrategy({
+    const result = await (cm as unknown as { reExecuteStrategy(p: unknown): Promise<{ usages?: Array<{ inputTokens: number }> }> }).reExecuteStrategy({
       originalOutput: { text: "answer A" }, originalProvider: "claude",
       reviewProvider: reviewer([{ text: "answer B", inputTokens: 100, outputTokens: 40 }, { text: '{"agreed": true, "reasoning": "same"}', inputTokens: 200, outputTokens: 10 }]),
       prompt: "p", task,
     });
-    expect(result.usage).toEqual(expect.objectContaining({ inputTokens: 300, outputTokens: 50 }));
+    const total = (result.usages ?? []).reduce((a, u) => a + u.inputTokens, 0);
+    expect(total).toBe(300);
+    expect(result.usages).toHaveLength(2);
   });
 });

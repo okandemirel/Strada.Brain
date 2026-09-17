@@ -703,6 +703,13 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
     const logger = getLogger();
     const health = ProviderHealthRegistry.getInstance();
     let lastError: Error | null = null;
+    // Tokens consumed by attempts that did not become the answer — an empty
+    // response that fell over, a retry that failed. They ride on the
+    // response that finally answers, or on the error when nothing does
+    // (Codex 2026-09-17 #5).
+    let lostUsage: TokenUsage | undefined;
+    const withLost = (r: ProviderResponse): ProviderResponse =>
+      lostUsage ? { ...r, auxiliaryUsage: mergeTokenUsage(r.auxiliaryUsage, lostUsage) } : r;
     let attempted = 0;
     // What was measured when nothing was attempted (audited 2026-09-02): a provider
     // skipped by a FAILED recovery probe or by a probe another call already had in
@@ -839,6 +846,7 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
             .slice(i + 1)
             .some((p) => health.isAvailable(p.name));
           if (somewhereToFallTo) {
+            if (response.usage) lostUsage = mergeTokenUsage(lostUsage, response.usage);
             throw new Error(`Provider "${provider.name}" returned an empty response (no text or tool calls)`);
           }
 
@@ -852,6 +860,8 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
           if (isEmptyProviderResponse(response)) {
             // Twice running is not a blip; a provider with nothing to say twice
             // really has nothing to say.
+            if (discarded) lostUsage = mergeTokenUsage(lostUsage, discarded);
+            if (response.usage) lostUsage = mergeTokenUsage(lostUsage, response.usage);
             throw new Error(`Provider "${provider.name}" returned an empty response (no text or tool calls)`);
           }
           if (discarded && (discarded.inputTokens > 0 || discarded.outputTokens > 0)) {
@@ -900,11 +910,11 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
         // consumer keyed outcomes and cost on the router's assigned name. A
         // nested chain's own stamp wins — it names the real member, not the
         // inner chain.
-        if (response.servedBy) return response;
-        return {
+        if (response.servedBy) return withLost(response);
+        return withLost({
           ...response,
           servedBy: { provider: okMeta?.provider ?? provider.name, model: okMeta?.model || undefined },
-        };
+        });
       } catch (error) {
         // Unwrap the internal mid-stream marker FIRST so every downstream branch
         // (messages, health/cooldowns, taxonomy) keys on the REAL provider error.
@@ -1097,7 +1107,10 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
             error: sanitizeSecrets(errorMsg),
             totalProviders: this.providers.length,
           });
-          throw new Error(`All providers failed. Last error: ${sanitizeSecrets(errorMsg)}`, { cause: error instanceof Error ? error : undefined });
+          throw Object.assign(
+            new Error(`All providers failed. Last error: ${sanitizeSecrets(errorMsg)}`, { cause: error instanceof Error ? error : undefined }),
+            lostUsage ? { usage: lostUsage } : {},
+          );
         }
 
         logger.warn(`Provider failed (${label}), trying next healthy provider`, {
@@ -1126,7 +1139,10 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
     } else {
       detail = "All providers are in cooldown. Try again later.";
     }
-    throw new Error(`All providers failed or unavailable. ${detail}`, { cause: lastError ?? undefined });
+    throw Object.assign(
+      new Error(`All providers failed or unavailable. ${detail}`, { cause: lastError ?? undefined }),
+      lostUsage ? { usage: lostUsage } : {},
+    );
   }
 }
 

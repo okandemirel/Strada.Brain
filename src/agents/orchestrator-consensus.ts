@@ -106,14 +106,19 @@ export async function runConsensusVerification(
     prompt,
   });
 
-  if (consensusResult.usage && onUsage) {
+  // Each reviewer call, billed to who SERVED it (a chain may have fallen
+  // over from the free model to a paid one); the assignment names only the
+  // fallback identity.
+  for (const entry of consensusResult.usages ?? []) {
+    if (!onUsage) break;
+    const model = entry.model ?? reviewAssignment.modelId;
     onUsage({
-      provider: reviewAssignment.providerName,
-      ...(reviewAssignment.modelId === undefined ? {} : { model: reviewAssignment.modelId }),
-      inputTokens: consensusResult.usage.inputTokens,
-      outputTokens: consensusResult.usage.outputTokens,
-      ...(consensusResult.usage.cacheCreationInputTokens === undefined ? {} : { cacheCreationInputTokens: consensusResult.usage.cacheCreationInputTokens }),
-      ...(consensusResult.usage.cacheReadInputTokens === undefined ? {} : { cacheReadInputTokens: consensusResult.usage.cacheReadInputTokens }),
+      provider: entry.provider ?? reviewAssignment.providerName,
+      ...(model === undefined ? {} : { model }),
+      inputTokens: entry.inputTokens,
+      outputTokens: entry.outputTokens,
+      ...(entry.cacheCreationInputTokens === undefined ? {} : { cacheCreationInputTokens: entry.cacheCreationInputTokens }),
+      ...(entry.cacheReadInputTokens === undefined ? {} : { cacheReadInputTokens: entry.cacheReadInputTokens }),
     });
   }
 

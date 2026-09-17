@@ -190,6 +190,26 @@ describe("FallbackChainProvider", () => {
     expect(result.usage.inputTokens).toBe(5100);
   });
 
+  it("an empty answer that FELL OVER rides on the survivor's response as auxiliaryUsage (Codex 2026-09-17 #5)", async () => {
+    const p1 = { ...createMockProvider(), name: "empty-provider" };
+    (p1.chat as ReturnType<typeof vi.fn>).mockResolvedValue({ text: "", toolCalls: [], stopReason: "end_turn", usage: { inputTokens: 5000, outputTokens: 0, totalTokens: 5000 } });
+    const p2 = { ...createMockProvider({ text: "real-answer" }), name: "real-provider" };
+    const chain = new FallbackChainProvider([p1, p2]);
+    const result = await chain.chat("sys", [], []);
+    expect(result.text).toBe("real-answer");
+    expect(result.auxiliaryUsage).toEqual(expect.objectContaining({ inputTokens: 5000 }));
+  });
+
+  it("when nothing answers, the error carries what was spent (Codex 2026-09-17 #5)", async () => {
+    const p1 = { ...createMockProvider(), name: "only-provider" };
+    (p1.chat as ReturnType<typeof vi.fn>).mockResolvedValue({ text: "", toolCalls: [], stopReason: "end_turn", usage: { inputTokens: 5000, outputTokens: 0, totalTokens: 5000 } });
+    const chain = new FallbackChainProvider([p1]);
+    let thrown: unknown;
+    try { await chain.chat("sys", [], []); } catch (err) { thrown = err; }
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as { usage?: { inputTokens: number } }).usage?.inputTokens).toBe(10_000);
+  });
+
   it("falls over to the next provider when a provider returns an empty response", async () => {
     const p1 = { ...createMockProvider(), name: "empty-provider" };
     (p1.chat as ReturnType<typeof vi.fn>).mockResolvedValue({

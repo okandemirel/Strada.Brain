@@ -92,6 +92,33 @@ export interface RecordMetricEndResult {
   terminatedByIterationBudget?: boolean;
 }
 
+/**
+ * Where a consensus reviewer's spend goes: the SAME path a model turn's
+ * usage takes (metrics, the rate limiter's daily cost, the task's onUsage),
+ * not the task callback alone — which skipped the limiter and metrics, and
+ * is absent on interactive runs (Codex 2026-09-17 #4).
+ */
+export function consensusUsageSink(
+  deps: AccountingDeps,
+  runCtx: { onUsage?: (usage: TaskUsageEvent) => void },
+): (usage: TaskUsageEvent) => void {
+  return (usage) => {
+    recordProviderUsage(
+      deps,
+      usage.provider,
+      {
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        totalTokens: usage.inputTokens + usage.outputTokens,
+        ...(usage.cacheCreationInputTokens === undefined ? {} : { cacheCreationInputTokens: usage.cacheCreationInputTokens }),
+        ...(usage.cacheReadInputTokens === undefined ? {} : { cacheReadInputTokens: usage.cacheReadInputTokens }),
+      },
+      runCtx.onUsage,
+      usage.model,
+    );
+  };
+}
+
 export function recordProviderUsage(
   deps: AccountingDeps,
   providerName: string,

@@ -563,6 +563,19 @@ export class V2AgentRunner implements AgentRunner {
           }
 
           // ══ FAILURE / EMPTY → verdict GATE arbitrates (gauntlet #7,#10,#11) ═══════════════
+          if (outcome.kind === "threw") {
+            // A chain that failed AFTER consuming tokens (an empty answer
+            // retried and empty again, a fall-over whose survivor also died)
+            // hangs what it spent on the error; it is spend all the same
+            // (Codex 2026-09-17 #5).
+            const spent = (outcome.error as { usage?: TokenUsage } | null)?.usage;
+            if (spent && (spent.inputTokens > 0 || spent.outputTokens > 0)) {
+              const served = prepared.currentAssignment;
+              budget.debit(toBudgetUsage(spent, served.providerName, served.modelId));
+              usageTotal = mergeUsage(usageTotal, served.providerName, spent);
+              port.recordProviderUsage(served.providerName, spent, served.modelId);
+            }
+          }
           if (outcome.kind === "threw" || outcome.kind === "empty") {
             // BENIGN USER-CANCEL short-circuit (v1 parity: the bg loop's `if (signal.aborted) throw`
             // re-throws BEFORE recordPhase1bFailureAndVerdict — a /cancel is never a provider failure).

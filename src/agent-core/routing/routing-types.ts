@@ -182,9 +182,22 @@ export interface ConsensusResult {
   readonly reviewProvider?: string;
   readonly reasoning?: string;
   /**
-   * What the reviewer's own calls consumed, summed. The consensus path
-   * returned only a verdict, so every reviewer turn was model spend nobody
-   * accounted for (audit 03.3 / D22, 2026-09-13).
+   * What the reviewer's own calls consumed, one entry per call, each
+   * attributed to the provider and model that actually SERVED it (a chain
+   * may have fallen over). The consensus path returned only a verdict, so
+   * every reviewer turn was model spend nobody accounted for (audit 03.3 /
+   * D22, 2026-09-13); summing across identities billed a paid fallback at
+   * the free model's rate (Codex 2026-09-17 #1). Present on failure too,
+   * with whatever was spent before the failure.
    */
-  readonly usage?: { inputTokens: number; outputTokens: number; cacheCreationInputTokens?: number; cacheReadInputTokens?: number };
+  readonly usages?: ReadonlyArray<ConsensusUsageEntry>;
+}
+
+export interface ConsensusUsageEntry {
+  readonly provider?: string;
+  readonly model?: string;
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly cacheCreationInputTokens?: number;
+  readonly cacheReadInputTokens?: number;
 }
