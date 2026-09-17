@@ -79,6 +79,32 @@ describe("MessageRouter", () => {
     expect(recordMessage).toHaveBeenCalledTimes(1);
   });
 
+  it("two senders in one room inside the burst window are two requests (audit 12F4 / D61)", async () => {
+    // The burst was keyed by conversation only, so B's message was merged
+    // into A's task and the task — and any requester-bound approval — was
+    // attributed to whoever spoke last.
+    const router = new MessageRouter(
+      createTaskManager(submit) as never,
+      { handle } as unknown as CommandHandler,
+      { sendMarkdown, sendText } as never,
+      [],
+      TEST_ROUTER_OPTIONS,
+    );
+    await router.route({ ...createMessage("add a pause menu"), userId: "user-A" });
+    await router.route({ ...createMessage("fix the jump height"), userId: "user-B" });
+    await vi.advanceTimersByTimeAsync(TEST_ROUTER_OPTIONS.burstWindowMs);
+    expect(submit).toHaveBeenCalledTimes(2);
+    const byUser = new Map(submit.mock.calls.map((c) => [(c[3] as { userId?: string }).userId, c[2] as string]));
+    expect(byUser.get("user-A")).toContain("pause menu");
+    expect(byUser.get("user-B")).toContain("jump height");
+    // Guard: the same sender's consecutive messages still coalesce.
+    submit.mockReset();
+    await router.route({ ...createMessage("first"), userId: "user-A" });
+    await router.route({ ...createMessage("second"), userId: "user-A" });
+    await vi.advanceTimersByTimeAsync(TEST_ROUTER_OPTIONS.burstWindowMs);
+    expect(submit).toHaveBeenCalledTimes(1);
+  });
+
   it("counts a coalesced burst as ONE message", async () => {
     // The router batches consecutive messages into a single task; the counter
     // should mean "units of work the agent received", not raw keystrokes.

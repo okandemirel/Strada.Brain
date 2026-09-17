@@ -42,7 +42,11 @@ export interface MessageRouterOptions {
 }
 
 interface PendingTaskBatch {
+  /** The conversation this burst belongs to (what active-task checks compare against). */
   readonly conversationKey: string;
+  /** The map key: conversation + sender — one burst per sender (audit 12F4 / D61). */
+  readonly batchKey: string;
+  readonly userId: string;
   chatId: string;
   channelType: string;
   readonly messages: IncomingMessage[];
@@ -250,13 +254,19 @@ export class MessageRouter {
 
   private bufferTaskSubmission(msg: IncomingMessage): void {
     const conversationKey = getTaskConversationKey(msg.chatId, msg.channelType, msg.conversationId);
-    const existing = this.pendingTaskBatches.get(conversationKey);
+    // ONE BURST PER SENDER. Two people typing in one room inside the burst
+    // window were merged into one task attributed to whoever spoke last —
+    // and requester-bound approvals then bound to that person (audit 12F4 /
+    // D61, 2026-09-13). Serialization orders their work; it does not make
+    // it one request.
+    const batchKey = `${conversationKey}\u0000${msg.userId}`;
+    const existing = this.pendingTaskBatches.get(batchKey);
     if (existing) {
       existing.chatId = msg.chatId;
       existing.channelType = msg.channelType;
       existing.messages.push(msg);
       if (existing.messages.length >= this.maxBurstMessages) {
-        void this.flushPendingChat(conversationKey);
+        void this.flushPendingChat(batchKey);
         return;
       }
       this.scheduleFlush(existing);
@@ -265,12 +275,14 @@ export class MessageRouter {
 
     const batch: PendingTaskBatch = {
       conversationKey,
+      batchKey,
+      userId: msg.userId,
       chatId: msg.chatId,
       channelType: msg.channelType,
       messages: [msg],
       timer: null,
     };
-    this.pendingTaskBatches.set(conversationKey, batch);
+    this.pendingTaskBatches.set(batchKey, batch);
     this.scheduleFlush(batch);
   }
 
@@ -279,17 +291,28 @@ export class MessageRouter {
       clearTimeout(batch.timer);
     }
     batch.timer = setTimeout(() => {
-      void this.flushPendingChat(batch.conversationKey);
+      void this.flushPendingChat(batch.batchKey);
     }, this.burstWindowMs);
   }
 
-  private async flushPendingChat(conversationKey: string): Promise<void> {
-    const batch = this.pendingTaskBatches.get(conversationKey);
+  /**
+   * Flush one batch by its key, or — given a conversation key — every
+   * sender's batch in that conversation (the command path and the
+   * queued-behind-a-task path address the conversation, not a sender).
+   */
+  private async flushPendingChat(key: string): Promise<void> {
+    if (!this.pendingTaskBatches.has(key)) {
+      const siblings = [...this.pendingTaskBatches.keys()].filter((k) => k.startsWith(`${key}\u0000`));
+      for (const k of siblings) await this.flushPendingChat(k);
+      return;
+    }
+    const batch = this.pendingTaskBatches.get(key);
     if (!batch) {
       return;
     }
+    const conversationKey = batch.conversationKey;
 
-    this.pendingTaskBatches.delete(conversationKey);
+    this.pendingTaskBatches.delete(key);
     if (batch.timer) {
       clearTimeout(batch.timer);
     }
