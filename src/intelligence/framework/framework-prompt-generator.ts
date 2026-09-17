@@ -334,6 +334,8 @@ function describeSnapshotSource(snapshot: FrameworkAPISnapshot): string {
       return "live";
     case "git-clone":
       return "from a git clone, not installed here";
+    case "unattributed":
+      return "recorded by another project, not verified here";
     case "cached":
       return "from a cached clone, not installed here";
   }

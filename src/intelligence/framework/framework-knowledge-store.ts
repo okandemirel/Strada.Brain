@@ -549,10 +549,11 @@ export class FrameworkKnowledgeStore {
     if (sourcePath !== null) {
       const snapshot = this.getSnapshotByOffset(packageId, 0, sourcePath);
       if (!snapshot) return null;
-      const origin = this.getProjectSourceOrigin(binding.projectId, packageId, sourcePath);
-      return origin === undefined || origin === snapshot.sourceOrigin
-        ? snapshot
-        : { ...snapshot, sourceOrigin: origin };
+      // NO ROW, NO CLAIM (round 11 #13): the stored column records whichever
+      // project wrote the snapshot, so falling back to it told an unsynced or
+      // renamed project that another project's installation was its own.
+      const origin = this.getProjectSourceOrigin(binding.projectId, packageId, sourcePath) ?? "unattributed";
+      return origin === snapshot.sourceOrigin ? snapshot : { ...snapshot, sourceOrigin: origin };
     }
     const row = this.prepare(`
       SELECT * FROM framework_snapshots

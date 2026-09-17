@@ -583,6 +583,26 @@ describe("per-project source bindings (r10 finding 11)", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
+  it("does not hand a project that never synced the other project's installation (round 11 #13)", () => {
+    // A installs the shared directory. B resolves the same path but has no
+    // binding row — it has not synced yet, or its root was renamed. It used to
+    // read A's "local" and believe the framework was installed for it.
+    store.storeSnapshot(
+      makeSnapshot({ packageId: "core", sourcePath: shared, sourceOrigin: "local", version: "1.0.0" }),
+      projectA,
+    );
+    const readByB = store.getProjectSnapshot("core", bindingFor(projectB, shared));
+    expect(readByB).not.toBeNull();
+    expect(readByB!.sourceOrigin).toBe("unattributed");
+    expect(readByB!.version).toBe("1.0.0");
+    expect(store.getProjectLiveSourcePath(projectB, "core")).toBeUndefined();
+    // A still reads its own installation (guard)…
+    expect(store.getProjectSnapshot("core", bindingFor(projectA, shared))!.sourceOrigin).toBe("local");
+    // …and once B syncs, it speaks for itself.
+    store.reconcileSourceOrigin(projectB, "core", shared, "cached");
+    expect(store.getProjectSnapshot("core", bindingFor(projectB, shared))!.sourceOrigin).toBe("cached");
+  });
+
   it("labels one shared directory by the reading project, not by whoever stored it", () => {
     // A installs the shared cache directory; B only falls back to it. Same
     // bytes, same snapshot — opposite installation status.
@@ -657,9 +677,10 @@ describe("per-project source bindings (r10 finding 11)", () => {
       upgraded.reconcileSourceOrigin(projectB, "core", shared, "cached");
       expect(upgraded.getProjectSourceOrigin(UNATTRIBUTED_PROJECT_ID, "core", shared)).toBeUndefined();
       expect(upgraded.getProjectSnapshot("core", bindingFor(projectB, shared))!.sourceOrigin).toBe("cached");
-      // A, which never synced, no longer inherits anything: it has no evidence
-      // of its own, so it falls back to the origin the row was stored with.
-      expect(upgraded.getProjectSnapshot("core", bindingFor(projectA, shared))!.sourceOrigin).toBe("local");
+      // A, which never synced, no longer inherits anything — and round 11 #13:
+      // it does not borrow the origin B stamped on the shared row either. An
+      // unverified installation says so.
+      expect(upgraded.getProjectSnapshot("core", bindingFor(projectA, shared))!.sourceOrigin).toBe("unattributed");
     } finally {
       upgraded.close();
     }

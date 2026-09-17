@@ -15,7 +15,17 @@ export type FrameworkPackageId = string;
 export type SourceLanguage = "csharp" | "typescript";
 
 /** How the source was obtained */
-export type SourceOrigin = "local" | "git-clone" | "cached";
+/**
+ * Where a snapshot's source came from, as THIS project sees it.
+ *
+ * "unattributed" is the honest fourth answer (Codex round 11 #13): a project
+ * that has no binding row for a shared directory — because it has not synced
+ * yet, or because its root was renamed — used to be handed whatever origin
+ * another project had stamped on the snapshot row, so one project's "local"
+ * told a second project its framework was installed. Installation is a fact
+ * about a project, and an unverified one says so.
+ */
+export type SourceOrigin = "local" | "git-clone" | "cached" | "unattributed";
 
 /**
  * Universal API snapshot -- every framework package produces one.
