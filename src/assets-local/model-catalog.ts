@@ -74,6 +74,15 @@ export function probeDevice(): DeviceCapability {
 // CATALOG
 // =============================================================================
 
+/**
+ * What every text-to-image install needs so `--rmbg` (the sprite default)
+ * can run: rembg cuts the subject out, onnxruntime is its undeclared runtime
+ * dependency (measured: ModuleNotFoundError). Audit A3 / D55: an image-only
+ * install carried neither, so the first sprite draw died at
+ * `from rembg import remove` and the tool fell back to a placeholder.
+ */
+export const BACKGROUND_REMOVAL_PACKAGES: readonly string[] = ["rembg", "onnxruntime"];
+
 export const LOCAL_MODEL_CATALOG: readonly LocalModelSpec[] = [
   // ---- 3D (image → mesh) ----
   {
@@ -127,7 +136,7 @@ export const LOCAL_MODEL_CATALOG: readonly LocalModelSpec[] = [
     license: "OpenRAIL",
     minRamGb: 8,
     diskGb: 6,
-    pipPackages: ["torch", "diffusers", "transformers", "accelerate", "safetensors"],
+    pipPackages: ["torch", "diffusers", "transformers", "accelerate", "safetensors", ...BACKGROUND_REMOVAL_PACKAGES],
     weightsRef: "stable-diffusion-v1-5/stable-diffusion-v1-5",
     speedHint: "fast",
   },
@@ -139,7 +148,7 @@ export const LOCAL_MODEL_CATALOG: readonly LocalModelSpec[] = [
     license: "OpenRAIL++",
     minRamGb: 12,
     diskGb: 9,
-    pipPackages: ["torch", "diffusers", "transformers", "accelerate", "safetensors"],
+    pipPackages: ["torch", "diffusers", "transformers", "accelerate", "safetensors", ...BACKGROUND_REMOVAL_PACKAGES],
     weightsRef: "stabilityai/stable-diffusion-xl-base-1.0",
     speedHint: "medium",
   },
@@ -151,7 +160,7 @@ export const LOCAL_MODEL_CATALOG: readonly LocalModelSpec[] = [
     license: "Apache-2.0",
     minRamGb: 24,
     diskGb: 24,
-    pipPackages: ["torch", "diffusers", "transformers", "accelerate", "safetensors", "sentencepiece"],
+    pipPackages: ["torch", "diffusers", "transformers", "accelerate", "safetensors", "sentencepiece", ...BACKGROUND_REMOVAL_PACKAGES],
     weightsRef: "black-forest-labs/FLUX.1-schnell",
     speedHint: "slow",
   },

@@ -2,8 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync, mkdirSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir, homedir } from "node:os";
-import { LocalModelRunner, type SpawnImpl } from "./local-model-runner.js";
-import { getModelSpec } from "./model-catalog.js";
+import { LocalModelRunner, RMBG_IMPORT_PROBE, type SpawnImpl } from "./local-model-runner.js";
+import { getModelSpec, LOCAL_MODEL_CATALOG } from "./model-catalog.js";
 
 function spawnOk(): { spawn: SpawnImpl; calls: Array<{ cmd: string; args: string[] }> } {
   const calls: Array<{ cmd: string; args: string[] }> = [];
@@ -318,5 +318,132 @@ describe("inference runs one at a time", () => {
       else process.env["STRADA_ASSETS_LOCAL_ROOT"] = previous;
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+/**
+ * Audit A3 / D55: an image-only install (sd15/sdxl/flux) carried no rembg
+ * and no onnxruntime — they came in only through TripoSR's requirements —
+ * so the sprite default (`--rmbg 1`) died at `from rembg import remove` and
+ * the tool fell back to a placeholder without saying why.
+ */
+describe("background removal is installed, or repaired, or refused by name (audit A3 / D55)", () => {
+  let dir: string;
+  let fakeHome: string;
+  let prevRoot: string | undefined;
+  let prevHome: string | undefined;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "lmr-rmbg-"));
+    fakeHome = mkdtempSync(join(tmpdir(), "lmr-rmbg-home-"));
+    prevRoot = process.env["STRADA_ASSETS_LOCAL_ROOT"];
+    prevHome = process.env["HOME"];
+    process.env["STRADA_ASSETS_LOCAL_ROOT"] = dir;
+    process.env["HOME"] = fakeHome;
+  });
+  afterEach(() => {
+    if (prevRoot === undefined) delete process.env["STRADA_ASSETS_LOCAL_ROOT"];
+    else process.env["STRADA_ASSETS_LOCAL_ROOT"] = prevRoot;
+    if (prevHome === undefined) delete process.env["HOME"];
+    else process.env["HOME"] = prevHome;
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(fakeHome, { recursive: true, force: true });
+  });
+
+  /** An EXISTING marker-bearing install: venv python present, model marker written, no .rmbg-ready. */
+  function existingInstall(modelId = "sd15"): void {
+    mkdirSync(join(dir, "venv", "bin"), { recursive: true });
+    writeFileSync(join(dir, "venv", "bin", "python3"), "");
+    writeFileSync(join(dir, `.installed-${modelId}`), "2026-09-01\n");
+  }
+  const isProbe = (args: string[]): boolean => args[0] === "-c" && args[1] === RMBG_IMPORT_PROBE;
+  const isPip = (args: string[]): boolean => args.includes("pip") && args.includes("install") && args.includes("rembg") && args.includes("onnxruntime");
+  const isInference = (args: string[]): boolean => String(args[0]).endsWith("txt2img.py");
+  /** A venv where the import fails until pip "installs" it (or never, when repairable=false). */
+  function scriptedVenv(repairable: boolean): { spawn: SpawnImpl; seq: string[] } {
+    const seq: string[] = [];
+    let installed = false;
+    const spawn: SpawnImpl = async (_cmd, args) => {
+      if (isProbe(args)) { seq.push("probe"); return installed ? { code: 0, stdout: "", stderr: "" } : { code: 1, stdout: "", stderr: "ModuleNotFoundError: No module named 'rembg'" }; }
+      if (isPip(args)) { seq.push("pip"); installed = repairable; return repairable ? { code: 0, stdout: "", stderr: "" } : { code: 1, stdout: "", stderr: "ERROR: No matching distribution found for onnxruntime" }; }
+      if (isInference(args)) {
+        seq.push("infer");
+        const out = args[args.indexOf("--out") + 1];
+        if (out) writeFileSync(out, "png");
+        const jobs = args[args.indexOf("--jobs") + 1];
+        if (args.includes("--jobs") && jobs) for (const j of JSON.parse(readFileSync(jobs, "utf8")) as Array<{ out: string }>) writeFileSync(j.out, "png");
+        return { code: 0, stdout: "WROTE", stderr: "" };
+      }
+      seq.push(`other:${args.join(" ")}`);
+      return { code: 0, stdout: "", stderr: "" };
+    };
+    return { spawn, seq };
+  }
+
+  it("every text-to-image install carries rembg and onnxruntime", async () => {
+    for (const spec of LOCAL_MODEL_CATALOG.filter((m) => m.kind === "text-to-image")) {
+      expect(spec.pipPackages, spec.id).toContain("rembg");
+      expect(spec.pipPackages, spec.id).toContain("onnxruntime");
+    }
+    // …and install(sd15) actually hands them to pip.
+    const { spawn, calls } = spawnOk();
+    await new LocalModelRunner(spawn).install(getModelSpec("sd15")!);
+    const pipInstall = calls.find((c) => c.args.includes("install") && c.args.includes("torch"));
+    expect(pipInstall!.args).toContain("rembg");
+    expect(pipInstall!.args).toContain("onnxruntime");
+  });
+
+  it("an existing install without rembg is REPAIRED before the first --rmbg draw: probe, pip, probe, then inference", async () => {
+    existingInstall();
+    const { spawn, seq } = scriptedVenv(true);
+    const runner = new LocalModelRunner(spawn);
+    const out = join(dir, "hero.png");
+    const r = await runner.textToImage(getModelSpec("sd15")!, "a hero", out, { removeBackground: true });
+    expect(r.ok).toBe(true);
+    expect(seq).toEqual(["probe", "pip", "probe", "infer"]);
+    expect(existsSync(join(dir, ".rmbg-ready"))).toBe(true);
+    // The measurement is cached: the next draw goes straight to inference.
+    seq.length = 0;
+    await runner.textToImage(getModelSpec("sd15")!, "a hero", out, { removeBackground: true });
+    expect(seq).toEqual(["infer"]);
+    expect(readdirSync(fakeHome)).toEqual([]);
+  });
+
+  it("when the repair fails the answer says background removal is unavailable and names the fix — no inference, no placeholder", async () => {
+    existingInstall();
+    const { spawn, seq } = scriptedVenv(false);
+    const r = await new LocalModelRunner(spawn).textToImage(getModelSpec("sd15")!, "a hero", join(dir, "hero.png"), { removeBackground: true });
+    expect(r.ok).toBe(false);
+    expect(r.detail).toMatch(/background removal unavailable/);
+    expect(r.detail).toMatch(/assets-local-setup/);
+    expect(r.detail).toMatch(/keepBackground/);
+    expect(seq).toEqual(["probe", "pip"]);
+    expect(seq).not.toContain("infer");
+    expect(existsSync(join(dir, ".rmbg-ready"))).toBe(false);
+  });
+
+  it("the batch path refuses the same way, with every job reported missing", async () => {
+    existingInstall();
+    const { spawn, seq } = scriptedVenv(false);
+    const jobs = [{ prompt: "a", out: join(dir, "a.png") }, { prompt: "b", out: join(dir, "b.png") }];
+    const r = await new LocalModelRunner(spawn).textToImageBatch(getModelSpec("sd15")!, jobs, { removeBackground: true });
+    expect(r.ok).toBe(false);
+    expect(r.detail).toMatch(/background removal unavailable/);
+    expect(r.missing).toEqual(jobs.map((j) => j.out));
+    expect(seq).not.toContain("infer");
+  });
+
+  it("guard: keepBackground (removeBackground false) never probes or installs anything and runs with --rmbg 0", async () => {
+    existingInstall();
+    const { spawn, seq } = scriptedVenv(false);
+    const calls: string[][] = [];
+    const recording: SpawnImpl = (cmd, args, opts) => { calls.push(args); return spawn(cmd, args, opts); };
+    const runner = new LocalModelRunner(recording);
+    const one = await runner.textToImage(getModelSpec("sd15")!, "a hero", join(dir, "hero.png"), { removeBackground: false });
+    expect(one.ok).toBe(true);
+    const batch = await runner.textToImageBatch(getModelSpec("sd15")!, [{ prompt: "a", out: join(dir, "a.png") }], { removeBackground: false });
+    expect(batch.ok).toBe(true);
+    expect(seq).toEqual(["infer", "infer"]);
+    for (const args of calls) expect(args[args.indexOf("--rmbg") + 1]).toBe("0");
   });
 });

@@ -18,7 +18,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSyn
 import { join } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
-import type { LocalModelSpec } from "./model-catalog.js";
+import { BACKGROUND_REMOVAL_PACKAGES, type LocalModelSpec } from "./model-catalog.js";
 
 // =============================================================================
 // PYTHON DRIVERS (written into the venv area on demand)
@@ -138,6 +138,10 @@ function ROOT_DIR(): string {
 const VENV = (): string => join(ROOT_DIR(), "venv");
 const SCRIPTS = (): string => join(ROOT_DIR(), "scripts");
 const WEIGHTS = (): string => join(ROOT_DIR(), "weights");
+/** Written once the venv has been MEASURED to import rembg + onnxruntime. */
+const RMBG_READY = (): string => join(ROOT_DIR(), ".rmbg-ready");
+/** The import the txt2img driver performs under --rmbg; probed with the same names. */
+export const RMBG_IMPORT_PROBE = "import rembg, onnxruntime";
 
 export type SpawnImpl = (
   cmd: string,
@@ -316,7 +320,19 @@ export class LocalModelRunner {
       "--rmbg", opts.removeBackground ? "1" : "0",
       "--seed", String(opts.seed ?? -1),
     ];
-    const run = await this.inference(() => this.spawn(venvPython(), args, { timeoutMs: 1_200_000, env: this.envWithWeights() }));
+    const env = this.envWithWeights();
+    let unavailable: string | undefined;
+    const run = await this.inference(async () => {
+      if (opts.removeBackground) {
+        const rmbg = await this.ensureBackgroundRemoval(env);
+        if (!rmbg.ok) {
+          unavailable = rmbg.detail;
+          return { code: -1, stdout: "", stderr: rmbg.detail };
+        }
+      }
+      return this.spawn(venvPython(), args, { timeoutMs: 1_200_000, env });
+    });
+    if (unavailable !== undefined) return { ok: false, detail: unavailable };
     if (run.code !== 0 || !existsSync(outPath)) {
       return { ok: false, detail: `inference failed: ${(run.stderr || run.stdout).slice(-400)}` };
     }
@@ -364,7 +380,21 @@ export class LocalModelRunner {
         try { before.set(j.out, statSync(j.out).mtimeMs); } catch { /* absent */ }
       }
       // Budget scales with the batch: one sprite is ~45-60 s at 512² on MPS.
-      const run = await this.inference(() => this.spawn(venvPython(), args, { timeoutMs: Math.min(3_600_000, 300_000 + 120_000 * jobs.length), env: this.envWithWeights() }));
+      const env = this.envWithWeights();
+      let unavailable: string | undefined;
+      const run = await this.inference(async () => {
+        if (opts.removeBackground) {
+          const rmbg = await this.ensureBackgroundRemoval(env);
+          if (!rmbg.ok) {
+            unavailable = rmbg.detail;
+            return { code: -1, stdout: "", stderr: rmbg.detail };
+          }
+        }
+        return this.spawn(venvPython(), args, { timeoutMs: Math.min(3_600_000, 300_000 + 120_000 * jobs.length), env });
+      });
+      if (unavailable !== undefined) {
+        return { ok: false, detail: unavailable, written: [], missing: jobs.map((j) => j.out), keptBackground: [] };
+      }
       const producedNow = (o: string): boolean => {
         try {
           const m = statSync(o).mtimeMs;
@@ -437,6 +467,41 @@ export class LocalModelRunner {
     }
     renameSync(staged, outPath);
     return { ok: true, detail: outPath };
+  }
+
+  /**
+   * The venv can run `--rmbg`, or the reason it cannot — never a crash into
+   * a placeholder. Audit A3 / D55: text-to-image installs before 2026-09-17
+   * carried no rembg/onnxruntime (they came in only with TripoSR's
+   * requirements), so an image-only install died at `from rembg import
+   * remove` on its first sprite. The check is the real import; a marker
+   * bearing install that lacks the packages is repaired in place (one pip
+   * install), and when even that fails the answer names the fix.
+   */
+  async ensureBackgroundRemoval(env: NodeJS.ProcessEnv = this.envWithWeights()): Promise<{ ok: true } | { ok: false; detail: string }> {
+    if (existsSync(RMBG_READY())) return { ok: true };
+    const probe = (): Promise<{ code: number; stdout: string; stderr: string }> =>
+      this.spawn(venvPython(), ["-c", RMBG_IMPORT_PROBE], { timeoutMs: 120_000, env });
+    let check = await probe();
+    if (check.code !== 0) {
+      const install = await this.spawn(
+        venvPython(),
+        ["-m", "pip", "install", ...BACKGROUND_REMOVAL_PACKAGES],
+        { timeoutMs: 1_800_000, env },
+      );
+      check = install.code === 0 ? await probe() : install;
+      if (check.code !== 0) {
+        return {
+          ok: false,
+          detail:
+            `background removal unavailable — the venv cannot import ${BACKGROUND_REMOVAL_PACKAGES.join("/")} and ` +
+            `installing them failed (${(check.stderr || check.stdout).slice(-300).trim() || "no output"}). ` +
+            "Reinstall the model with `strada assets-local-setup --model <id>`, or pass keepBackground: true.",
+        };
+      }
+    }
+    try { writeFileSync(RMBG_READY(), new Date().toISOString() + "\n"); } catch { /* marker is a cache */ }
+    return { ok: true };
   }
 
   private envWithWeights(): NodeJS.ProcessEnv {
