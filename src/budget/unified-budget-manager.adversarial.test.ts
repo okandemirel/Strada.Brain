@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DaemonStorage } from "../daemon/daemon-storage.js";
-import { UnifiedBudgetManager } from "./unified-budget-manager.js";
+import { OWNER_HEARTBEAT_TTL_MS, UnifiedBudgetManager } from "./unified-budget-manager.js";
 
 vi.mock("../utils/logger.js", () => ({ getLoggerSafe: () => ({ warn: vi.fn() }) }));
 let dir: string;
@@ -309,4 +309,178 @@ it("#6 fractional source headroom still rejects one cent over", () => {
   expect(manager.canSpend(0.21, "agent", "alice")).toBe(false);
   expect(manager.canSpend(0.2, "daemon")).toBe(true);
   expect(manager.canSpend(0.21, "daemon")).toBe(false);
+});
+
+/**
+ * Codex 2026-09-17 round 10 #6 / #7, against the round-9 budget work.
+ *
+ * #6: admission (canSpend) scoped outstanding liability to the gate's window,
+ * but the EXECUTION gates (isGlobalExceeded / isSourceExceeded) asked for
+ * outstanding with no window at all, so a reconciled liability from 25 hours
+ * ago admitted work and then refused to let it run.
+ *
+ * #7: the DEFAULT liveness predicate recognised only this process's identity,
+ * so a second live process's reservation was "dead", got reconciled, and once
+ * its last activity left the window its headroom was handed out twice. No
+ * injected callbacks here: production defaults are what must hold.
+ */
+describe("round 10: window consistency and foreign owner liveness", () => {
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const globalOnly = { daemonDailyUsd: 0, agentDefaultUsd: 0, verificationPct: 0.15 };
+  /** Every gate's verdict at once, so admission and execution can be compared. */
+  const verdicts = (mgr: UnifiedBudgetManager, estimate = 0.25) => ({
+    admits: mgr.canSpend(estimate, "agent", "alice"),
+    globalOk: !mgr.isGlobalExceeded(),
+    sourceOk: !mgr.isSourceExceeded("agent", "alice"),
+  });
+  /** A reconciled liability of `usd`, owned by a generation that is provably gone. */
+  function deadLiability(usd: number, source = "agent", sourceId: string | undefined = "alice") {
+    const id = manager.reserve(usd, source as never, sourceId);
+    storage.getDatabase().prepare("UPDATE budget_reservations SET owner_generation = 'previous-incarnation' WHERE id = ?").run(id);
+    expect(manager.reconcileOrphanedReservations().orphans).toBe(1);
+    return id;
+  }
+
+  it("#6 admission and the execution gates agree after a daily rollover", () => {
+    vi.useFakeTimers();
+    manager.updateConfig({ dailyLimitUsd: 1, monthlyLimitUsd: -1, subLimits: { daemonDailyUsd: 1, agentDefaultUsd: 1, verificationPct: 0.15 } });
+    deadLiability(1);
+    // Same day: the liability is real and every gate refuses.
+    expect(verdicts(manager)).toEqual({ admits: false, globalOk: false, sourceOk: false });
+    vi.advanceTimersByTime(25 * 60 * 60 * 1000);
+    // After the rollover it belongs to a window that has closed: all three agree.
+    expect(verdicts(manager)).toEqual({ admits: true, globalOk: true, sourceOk: true });
+  });
+
+  it("#6 the daemon sub-limit gate rolls over exactly when admission does", () => {
+    vi.useFakeTimers();
+    manager.updateConfig({ dailyLimitUsd: -1, monthlyLimitUsd: -1, subLimits: { daemonDailyUsd: 1, agentDefaultUsd: 0, verificationPct: 0.15 } });
+    deadLiability(1, "daemon", undefined);
+    expect(manager.canSpend(0.25, "daemon")).toBe(false);
+    expect(manager.isSourceExceeded("daemon")).toBe(true);
+    vi.advanceTimersByTime(25 * 60 * 60 * 1000);
+    expect(manager.canSpend(0.25, "daemon")).toBe(true);
+    expect(manager.isSourceExceeded("daemon")).toBe(false);
+  });
+
+  it("#6 admission and the execution gates agree after a monthly rollover", () => {
+    vi.useFakeTimers();
+    manager.updateConfig({ dailyLimitUsd: 10, monthlyLimitUsd: 1, subLimits: globalOnly });
+    deadLiability(1, "chat", undefined);
+    // 25 hours on, the daily window has rolled but the MONTHLY window has not:
+    // the liability still binds, and both gates must still say so.
+    vi.advanceTimersByTime(25 * 60 * 60 * 1000);
+    expect(verdicts(manager)).toEqual({ admits: false, globalOk: false, sourceOk: true });
+    // Past 30 days it is out of every window, and the gates agree again.
+    vi.advanceTimersByTime(30 * DAY_MS);
+    expect(verdicts(manager)).toEqual({ admits: true, globalOk: true, sourceOk: true });
+  });
+
+  it("#7 a second live process keeps its headroom under production defaults, aged or not", () => {
+    vi.useFakeTimers();
+    // A really-running pid this test process did not invent: its parent. The
+    // worker's identity is a separate process incarnation over one wallet.
+    const worker = new UnifiedBudgetManager(connect(), { emit: vi.fn() }, {}, {
+      identity: { pid: process.ppid, generation: "live-worker" },
+    });
+    // Production defaults on the observer: NO isOwnerAlive callback.
+    const observer = new UnifiedBudgetManager(storage, { emit: vi.fn() }, {});
+    const held = worker.reserve(0.75, "chat");
+
+    expect(observer.reconcileOrphanedReservations().orphans).toBe(0);
+    expect(observer.canSpend(0.5, "chat")).toBe(false);
+
+    // A day later the worker is still running; its reservation has not aged out.
+    vi.advanceTimersByTime(25 * 60 * 60 * 1000);
+    expect(observer.reconcileOrphanedReservations().orphans).toBe(0);
+    expect(observer.canSpend(0.5, "chat")).toBe(false);
+    expect(observer.reserveIfAffordable(0.5, "chat")).toBeUndefined();
+    // $0.25 of the wallet is genuinely free, and exactly that much fits.
+    expect(observer.isGlobalExceeded()).toBe(false);
+    const fits = observer.reserveIfAffordable(0.25, "chat");
+    expect(fits).toBeTypeOf("string");
+    // Fully committed now — the aged reservation the live worker still holds is
+    // counted by the EXECUTION gate too, not just by admission.
+    expect(observer.isGlobalExceeded()).toBe(true);
+    observer.release(fits!);
+
+    // Only the owner's own release returns the money to the wallet.
+    worker.release(held);
+    expect(observer.reserveIfAffordable(1, "chat")).toBeTypeOf("string");
+  });
+});
+
+/**
+ * Round 10 #7, the other direction: the registry must not become a blanket
+ * amnesty. Proven death still reclaims liability, and only proven death does.
+ */
+describe("round 10: what the owner registry can and cannot prove", () => {
+  const registry = () => storage.listBudgetOwners();
+  /** A reservation owned by another incarnation, without touching liveness. */
+  function foreign(owner: { pid: number; generation: string }, usd = 0.75) {
+    const id = "foreign";
+    storage.upsertBudgetReservation({ id, source: "chat", sourceId: null, estimateUsd: usd,
+      chargedUsd: 0, ownerPid: owner.pid, ownerGeneration: owner.generation, createdAt: Date.now() });
+    return id;
+  }
+
+  it("#7 a registered owner that stopped heartbeating and whose PID is gone is reclaimed", () => {
+    // Stale registration AND no such process: that is proof, not a guess.
+    storage.touchBudgetOwner(99999999, "crashed-worker", Date.now() - 2 * OWNER_HEARTBEAT_TTL_MS);
+    foreign({ pid: 99999999, generation: "crashed-worker" });
+    expect(manager.reconcileOrphanedReservations().orphans).toBe(1);
+  });
+
+  it("#7 a fresh heartbeat outranks a PID probe: a just-registered owner keeps its headroom", () => {
+    // Registered one second ago. Even if that PID is already gone, the process
+    // was alive a moment ago and its spend may still be arriving.
+    storage.touchBudgetOwner(99999999, "just-registered", Date.now() - 1000);
+    foreign({ pid: 99999999, generation: "just-registered" });
+    expect(manager.reconcileOrphanedReservations().orphans).toBe(0);
+    expect(manager.canSpend(0.5, "chat")).toBe(false);
+  });
+
+  it("#7 a successor incarnation on the same live PID proves the previous one exited", () => {
+    const pid = process.ppid; // really running, so the PID probe proves nothing
+    foreign({ pid, generation: "gen-a" });
+    storage.touchBudgetOwner(pid, "gen-a", Date.now());
+    expect(manager.reconcileOrphanedReservations().orphans).toBe(0);
+    // The same PID now hosts a different incarnation, freshly heartbeating.
+    storage.touchBudgetOwner(pid, "gen-b", Date.now());
+    expect(registry().filter((row) => row.ownerPid === pid)).toMatchObject([{ ownerGeneration: "gen-b" }]);
+    expect(manager.reconcileOrphanedReservations().orphans).toBe(1);
+  });
+
+  it("#7 an unregistered owner on a running PID is unknown, not dead", () => {
+    foreign({ pid: process.ppid, generation: "never-registered" });
+    expect(manager.reconcileOrphanedReservations().orphans).toBe(0);
+    expect(manager.canSpend(0.5, "chat")).toBe(false);
+  });
+
+  it("#7 this process registers itself on every path that commits liability", () => {
+    const mine = registry().filter((row) => row.ownerPid === process.pid);
+    expect(mine).toHaveLength(1);
+    const before = mine[0]!.heartbeatAt;
+    vi.useFakeTimers();
+    vi.setSystemTime(before + 60_000);
+    manager.reserve(0.1, "chat");
+    expect(registry().find((row) => row.ownerPid === process.pid)?.heartbeatAt).toBe(before + 60_000);
+    vi.setSystemTime(before + 120_000);
+    manager.recordCost(0.01, "chat", {});
+    expect(registry().find((row) => row.ownerPid === process.pid)?.heartbeatAt).toBe(before + 120_000);
+  });
+
+  it("#7 a legacy row with no owner generation is still reclaimable", () => {
+    orphan();
+    storage.getDatabase().prepare("UPDATE budget_reservations SET owner_pid = ? WHERE id = 'orphan'").run(process.pid);
+    expect(manager.reconcileOrphanedReservations().orphans).toBe(1);
+  });
+
+  it("#7 owner registrations nobody refreshed for a month are pruned", () => {
+    storage.touchBudgetOwner(4242, "ancient", Date.now() - 31 * 24 * 60 * 60 * 1000);
+    orphan();
+    manager.reconcileOrphanedReservations();
+    expect(registry().some((row) => row.ownerPid === 4242)).toBe(false);
+    expect(registry().some((row) => row.ownerPid === process.pid)).toBe(true);
+  });
 });

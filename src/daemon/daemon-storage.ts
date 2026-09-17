@@ -161,6 +161,20 @@ CREATE TABLE IF NOT EXISTS budget_reservations (
 );
 CREATE INDEX IF NOT EXISTS idx_budget_reservations_owner ON budget_reservations(owner_pid);
 
+-- OWNER LIVENESS (Codex 2026-09-17 round 10 #7). A budget process used to be
+-- able to prove only ITS OWN identity alive, so a second live process's
+-- reservation was classified dead, reconciled, and its headroom handed out
+-- twice. Every process that touches the wallet registers its incarnation here
+-- and refreshes the heartbeat as it works. One row per PID, because a PID
+-- hosts one process at a time: a row naming a DIFFERENT generation with a
+-- fresh heartbeat is therefore proof that the older incarnation exited.
+-- A missing or stale row proves nothing and must not be read as death.
+CREATE TABLE IF NOT EXISTS budget_owners (
+  owner_pid INTEGER PRIMARY KEY,
+  owner_generation TEXT NOT NULL,
+  heartbeat_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS settings_overrides (
   key TEXT NOT NULL,
   scope TEXT NOT NULL DEFAULT 'global',
@@ -270,6 +284,9 @@ export class DaemonStorage {
     chargeReservation?: Database.Statement;
     deleteReservation?: Database.Statement;
     allReservations?: Database.Statement;
+    touchOwner?: Database.Statement;
+    allOwners?: Database.Statement;
+    pruneOwners?: Database.Statement;
     insertBudgetWithAgent?: Database.Statement;
     sumBudget?: Database.Statement;
     sumBudgetForAgent?: Database.Statement;
@@ -594,6 +611,29 @@ export class DaemonStorage {
   deleteBudgetReservation(id: string): void {
     this.assertOpen();
     this.stmts.deleteReservation!.run(id);
+  }
+
+  /**
+   * Register/refresh this process incarnation as a live wallet owner (round 10 #7).
+   * Keyed by PID: a PID hosts one process at a time, so an upsert by a newer
+   * incarnation is what proves the previous one on that PID is gone.
+   */
+  touchBudgetOwner(ownerPid: number, ownerGeneration: string, now: number): void {
+    this.assertOpen();
+    this.stmts.touchOwner!.run(ownerPid, ownerGeneration, now);
+  }
+
+  /** Registered wallet owners with their last heartbeat. */
+  listBudgetOwners(): Array<{ ownerPid: number; ownerGeneration: string; heartbeatAt: number }> {
+    this.assertOpen();
+    const rows = this.stmts.allOwners!.all() as Array<{ owner_pid: number; owner_generation: string; heartbeat_at: number }>;
+    return rows.map((r) => ({ ownerPid: r.owner_pid, ownerGeneration: r.owner_generation, heartbeatAt: r.heartbeat_at }));
+  }
+
+  /** Forget owners that stopped heartbeating long ago, so the registry stays bounded. */
+  pruneBudgetOwners(heartbeatBefore: number): void {
+    this.assertOpen();
+    this.stmts.pruneOwners!.run(heartbeatBefore);
   }
 
   /** Claim uncertainty without manufacturing a provider charge. Caller holds the wallet transaction. */
@@ -1087,6 +1127,14 @@ export class DaemonStorage {
     );
     this.stmts.deleteReservation = db.prepare(`DELETE FROM budget_reservations WHERE id = ?`);
     this.stmts.allReservations = db.prepare(`SELECT * FROM budget_reservations ORDER BY created_at ASC`);
+
+    // Owner liveness registry (round 10 #7)
+    this.stmts.touchOwner = db.prepare(
+      `INSERT INTO budget_owners (owner_pid, owner_generation, heartbeat_at) VALUES (?, ?, ?)
+       ON CONFLICT(owner_pid) DO UPDATE SET owner_generation = excluded.owner_generation, heartbeat_at = excluded.heartbeat_at`,
+    );
+    this.stmts.allOwners = db.prepare(`SELECT owner_pid, owner_generation, heartbeat_at FROM budget_owners`);
+    this.stmts.pruneOwners = db.prepare(`DELETE FROM budget_owners WHERE heartbeat_at < ?`);
     this.stmts.recentBudget = db.prepare(
       `SELECT * FROM budget_entries ORDER BY timestamp DESC LIMIT ?`,
     );

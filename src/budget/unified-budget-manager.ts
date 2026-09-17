@@ -38,6 +38,36 @@ function exceedsLimit(total: number, limit: number): boolean {
 /** Legacy diagnostic threshold. Age alone never releases uncertain liability. */
 export const RESERVATION_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 
+/**
+ * How recently a registered owner must have heartbeat to be PROVEN alive
+ * (round 10 #7). A stale heartbeat proves nothing on its own — a working
+ * process can be busy, wedged, or merely idle — so it only sends the question
+ * on to the PID probe, whose "not running" is the proof.
+ */
+export const OWNER_HEARTBEAT_TTL_MS = 5 * 60 * 1000;
+
+/** Registrations nobody has refreshed for this long are dropped, bounding the registry. */
+const OWNER_REGISTRY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+
+/** What we can honestly say about the process that owns a reservation. */
+type OwnerVerdict = "alive" | "dead" | "unknown";
+
+/**
+ * Is this PID occupied by SOME process? Signal 0 delivers nothing; EPERM means
+ * it exists but belongs to another user. Anything else (ESRCH) means gone.
+ * A running PID does not identify WHICH process holds it — that is what the
+ * generation registry is for.
+ */
+function pidIsRunning(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
 /** An in-flight commitment against the wallet that has not been recorded yet. */
 interface WalletReservation {
   readonly source: BudgetSource;
@@ -81,6 +111,12 @@ interface BudgetStorageAdapter {
   deleteBudgetReservation?(id: string): void;
   reconcileBudgetReservation?(id: string, now: number): boolean;
   listBudgetReservations?(): Array<{ id: string; source: string; sourceId: string | null; estimateUsd: number; chargedUsd: number; ownerPid: number; ownerGeneration?: string | null; createdAt: number; lastActivityAt: number | null; reconciledAt?: number | null }>;
+  // Owner liveness registry (round 10 #7). Absent on legacy adapters: without
+  // it no foreign owner can be proved ALIVE, and none can be proved dead
+  // either unless its PID is gone — uncertainty keeps its headroom.
+  touchBudgetOwner?(ownerPid: number, ownerGeneration: string, now: number): void;
+  listBudgetOwners?(): Array<{ ownerPid: number; ownerGeneration: string; heartbeatAt: number }>;
+  pruneBudgetOwners?(heartbeatBefore: number): void;
 }
 
 export interface BudgetProcessIdentity {
@@ -116,7 +152,8 @@ export class UnifiedBudgetManager {
   private readonly configListeners = new Set<BudgetConfigListener>();
   private readonly env: NodeJS.ProcessEnv;
   private readonly identity: BudgetProcessIdentity;
-  private readonly isOwnerAlive: (owner: BudgetProcessIdentity) => boolean;
+  /** Trusted external probe. Absent in production: the registry below answers instead. */
+  private readonly injectedIsOwnerAlive?: (owner: BudgetProcessIdentity) => boolean;
   /** Local run handles only. SQLite is authoritative for wallet liability. */
   private readonly reservations = new Map<string, WalletReservation>();
 
@@ -126,10 +163,63 @@ export class UnifiedBudgetManager {
     this.eventBus = eventBus;
     this.env = env;
     this.identity = processOptions.identity ?? PROCESS_IDENTITY;
-    // Foreign generations cannot be proved alive by a PID probe. Conservatively
-    // label their remainder an estimate; it stays payable headroom until resolved.
-    this.isOwnerAlive = processOptions.isOwnerAlive ?? ((owner) =>
-      owner.pid === this.identity.pid && owner.generation === this.identity.generation);
+    // Production supplies no probe: ownerVerdict() decides from the durable
+    // owner registry plus a PID probe, and UNKNOWN keeps its headroom.
+    this.injectedIsOwnerAlive = processOptions.isOwnerAlive;
+    this.heartbeat();
+  }
+
+  // ===========================================================================
+  // OWNER LIVENESS (round 10 #7)
+  // ===========================================================================
+
+  /**
+   * Publish "this process incarnation still holds the wallet". Called on every
+   * path that commits liability, so a working process keeps proving itself
+   * alive to the OTHER processes sharing this wallet. Best effort: a failed
+   * heartbeat only downgrades this process from ALIVE to UNKNOWN elsewhere,
+   * and UNKNOWN keeps its headroom.
+   */
+  heartbeat(): void {
+    if (!this.storage.touchBudgetOwner) return;
+    this.persist(() => this.storage.touchBudgetOwner?.(this.identity.pid, this.identity.generation, Date.now()), "heartbeat");
+  }
+
+  /**
+   * What can be PROVEN about a reservation's owner.
+   *
+   * - ALIVE: it is us, or the registry carries a fresh heartbeat for exactly
+   *   this (pid, generation).
+   * - DEAD: the registry shows a DIFFERENT, freshly heartbeating generation on
+   *   that PID (a PID hosts one process at a time, so this one exited), or the
+   *   PID is not running at all.
+   * - UNKNOWN otherwise — a foreign process we cannot vouch for either way.
+   *   It KEEPS its headroom: treating "I cannot tell" as death let a second
+   *   manager reconcile a live owner's reservation and then hand out the
+   *   headroom that owner was still spending (round 10 #7).
+   */
+  private ownerVerdict(owner: BudgetProcessIdentity, registry?: Map<number, { generation: string; heartbeatAt: number }>): OwnerVerdict {
+    if (owner.pid === this.identity.pid && owner.generation === this.identity.generation) return "alive";
+    const known = (registry ?? this.ownerRegistry()).get(owner.pid);
+    if (known && Date.now() - known.heartbeatAt <= OWNER_HEARTBEAT_TTL_MS) {
+      return known.generation === owner.generation ? "alive" : "dead";
+    }
+    return pidIsRunning(owner.pid) ? "unknown" : "dead";
+  }
+
+  private ownerRegistry(): Map<number, { generation: string; heartbeatAt: number }> {
+    const rows = this.storage.listBudgetOwners?.() ?? [];
+    return new Map(rows.map((row) => [row.ownerPid, { generation: row.ownerGeneration, heartbeatAt: row.heartbeatAt }]));
+  }
+
+  /** May this process resolve someone else's liability as uncertain estimate? */
+  private isReclaimable(row: { ownerPid: number; ownerGeneration?: string | null }, registry?: Map<number, { generation: string; heartbeatAt: number }>): boolean {
+    // Written before owner generations existed: it names no incarnation that
+    // could still be running, so nothing can keep it in flight.
+    if (!row.ownerGeneration) return true;
+    const owner = { pid: row.ownerPid, generation: row.ownerGeneration };
+    if (this.injectedIsOwnerAlive) return !this.injectedIsOwnerAlive(owner);
+    return this.ownerVerdict(owner, registry) === "dead";
   }
 
   // ===========================================================================
@@ -157,6 +247,9 @@ export class UnifiedBudgetManager {
     // a crash between the provider's charge and the usage callback used to
     // leave the wallet with neither the reservation nor the spend.
     if (!this.storage.upsertBudgetReservation) throw new Error("Durable budget reservations are unavailable");
+    // Register as a live owner BEFORE the row exists, so no reservation is ever
+    // durable while its owner is unregistered (round 10 #7).
+    this.heartbeat();
     this.storage.upsertBudgetReservation({
       id, source, sourceId: sourceId ?? null, estimateUsd: amount, chargedUsd: 0,
       ownerPid: this.identity.pid, ownerGeneration: this.identity.generation, createdAt, lastActivityAt: null,
@@ -165,12 +258,12 @@ export class UnifiedBudgetManager {
     return id;
   }
 
-  /** Release errors retain durable headroom and can be retried safely. */
+  /** Best-effort durable writes: on failure the safe state (liability retained) stands. */
   private persist(write: () => void, what: string): void {
     try {
       write();
     } catch (error) {
-      getLoggerSafe().warn("Could not release a budget reservation; durable liability remains", {
+      getLoggerSafe().warn("A best-effort budget write did not land; durable liability remains", {
         action: what,
         error: error instanceof Error ? error.message : String(error),
       });
@@ -187,6 +280,7 @@ export class UnifiedBudgetManager {
     if (!(costUsd > 0)) return;
     const reservation = this.reservations.get(reservationId);
     if (!reservation) return;
+    this.heartbeat(); // booking cost is proof this process is working
     const charged = reservation.chargedUsd + costUsd;
     const now = Date.now();
     this.storage.chargeBudgetReservation?.(reservationId, charged, now);
@@ -275,11 +369,17 @@ export class UnifiedBudgetManager {
   reconcileOrphanedReservations(): ReservationReconciliation {
     const rows = this.storage.listBudgetReservations?.();
     if (!rows || rows.length === 0) return { orphans: 0, bookedUsd: 0 };
+    // Claim this PID for this incarnation first: that registration is what
+    // proves a previous incarnation of the same PID is gone.
+    this.heartbeat();
+    this.persist(() => this.storage.pruneBudgetOwners?.(Date.now() - OWNER_REGISTRY_RETENTION_MS), "prune owners");
+    const registry = this.ownerRegistry();
     let orphans = 0;
     let estimatedUsd = 0;
     for (const candidate of rows) {
       if (candidate.reconciledAt != null) continue;
-      if (candidate.ownerGeneration && this.isOwnerAlive({ pid: candidate.ownerPid, generation: candidate.ownerGeneration })) continue;
+      // ONLY PROVEN DEATH RELEASES SOMEONE ELSE'S LIABILITY (round 10 #7).
+      if (!this.isReclaimable(candidate, registry)) continue;
       const recovered = this.transaction(() => {
         const row = this.storage.listBudgetReservations?.().find((r) => r.id === candidate.id);
         if (!row || row.ownerPid !== candidate.ownerPid || row.ownerGeneration !== candidate.ownerGeneration) return undefined;
@@ -326,6 +426,9 @@ export class UnifiedBudgetManager {
   recordCost(amount: number, source: BudgetSource, metadata: CostMetadata): void {
     if (amount <= 0) return;
     const now = Date.now();
+    // Outside the transaction: a rolled-back cost must not erase the evidence
+    // that this process is alive, and a failed heartbeat must not fail the cost.
+    this.heartbeat();
     this.transaction(() => {
       const entry = {
         costUsd: amount, model: metadata.model, tokensIn: metadata.tokensIn,
@@ -403,13 +506,22 @@ export class UnifiedBudgetManager {
   isGlobalExceeded(opts?: BudgetGateOptions): boolean {
     const config = this.configStore.getConfig();
     const now = Date.now();
-    const outstanding = this.outstandingUsd({ ignoreReservationId: opts?.ignoreReservationId });
+    // EACH WINDOW COUNTS ITS OWN LIABILITY (round 10 #6). These gates used to
+    // ask for outstanding liability with no window while canSpend() scoped it
+    // to the window being tested, so a reconciled liability from 25 hours ago
+    // let a run be ADMITTED and then refused permission to execute — a wallet
+    // that could never be unblocked. Admission and execution must ask the same
+    // question of the same window.
     if (hasBudgetLimit(config.dailyLimitUsd)) {
-      const dailyUsed = this.storage.sumBudgetSince(now - ROLLING_WINDOW_MS);
+      const dailyStart = now - ROLLING_WINDOW_MS;
+      const dailyUsed = this.storage.sumBudgetSince(dailyStart);
+      const outstanding = this.outstandingUsd({ ignoreReservationId: opts?.ignoreReservationId, since: dailyStart });
       if (dailyUsed + outstanding >= config.dailyLimitUsd) return true;
     }
     if (hasBudgetLimit(config.monthlyLimitUsd)) {
-      const monthlyUsed = this.storage.sumBudgetSince(now - MONTHLY_WINDOW_MS);
+      const monthlyStart = now - MONTHLY_WINDOW_MS;
+      const monthlyUsed = this.storage.sumBudgetSince(monthlyStart);
+      const outstanding = this.outstandingUsd({ ignoreReservationId: opts?.ignoreReservationId, since: monthlyStart });
       if (monthlyUsed + outstanding >= config.monthlyLimitUsd) return true;
     }
     return false;
@@ -419,14 +531,16 @@ export class UnifiedBudgetManager {
     const config = this.configStore.getConfig();
     const dailyStart = Date.now() - ROLLING_WINDOW_MS;
     const ignoreReservationId = opts?.ignoreReservationId;
+    // Sub-limits are DAILY, so their liability is scoped to the daily window —
+    // the same scope canSpend() uses for them (round 10 #6).
     if (source === "daemon") {
       if (config.subLimits.daemonDailyUsd <= 0) return false;
-      const outstanding = this.outstandingUsd({ source: "daemon", ignoreReservationId });
+      const outstanding = this.outstandingUsd({ source: "daemon", ignoreReservationId, since: dailyStart });
       return this.storage.sumBudgetForSource("daemon", dailyStart) + outstanding >= config.subLimits.daemonDailyUsd;
     }
     if (source === "agent" && sourceId) {
       if (config.subLimits.agentDefaultUsd <= 0) return false;
-      const outstanding = this.outstandingUsd({ source: "agent", sourceId, ignoreReservationId });
+      const outstanding = this.outstandingUsd({ source: "agent", sourceId, ignoreReservationId, since: dailyStart });
       return this.storage.sumBudgetSinceForAgent(dailyStart, sourceId) + outstanding >= config.subLimits.agentDefaultUsd;
     }
     return false; // chat and verification have no sub-limits
