@@ -6,7 +6,8 @@
     "agentSync": "Sincronizacion del agente {{time}}",
     "queue": "Cola {{count}}",
     "selected": "{{count}} seleccionados",
-    "saveConflict": "Este lienzo cambio en otro lugar. Tus ediciones siguen aqui pero no estan guardadas - recarga para ver la otra version."
+    "saveConflict": "Este lienzo cambio en otro lugar. Tus ediciones siguen aqui pero no estan guardadas - recarga para ver la otra version.",
+    "loadFailed": "No se pudo cargar este lienzo, asi que no se guarda nada. Tu trabajo se conserva en este navegador - recarga para volver a intentarlo."
   },
   "cards": {
     "aiBadge": "IA",

@@ -6,7 +6,8 @@
     "agentSync": "Agent sync {{time}}",
     "queue": "Queue {{count}}",
     "selected": "{{count}} selected",
-    "saveConflict": "This canvas changed elsewhere. Your edits are kept here but not saved yet - reload to see the other version."
+    "saveConflict": "This canvas changed elsewhere. Your edits are kept here but not saved yet - reload to see the other version.",
+    "loadFailed": "This canvas could not be loaded, so nothing is being saved. Your work is kept in this browser - reload to try again."
   },
   "cards": {
     "aiBadge": "AI",

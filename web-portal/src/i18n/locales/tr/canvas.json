@@ -6,7 +6,8 @@
     "agentSync": "Ajan senkronizasyonu {{time}}",
     "queue": "Kuyruk {{count}}",
     "selected": "{{count}} seçili",
-    "saveConflict": "Bu tuval başka bir yerde değişti. Düzenlemeleriniz burada duruyor ama kaydedilmedi - diğer sürümü görmek için yenileyin."
+    "saveConflict": "Bu tuval başka bir yerde değişti. Düzenlemeleriniz burada duruyor ama kaydedilmedi - diğer sürümü görmek için yenileyin.",
+    "loadFailed": "Bu tuval yüklenemedi, bu yüzden hiçbir şey kaydedilmiyor. Çalışmanız bu tarayıcıda duruyor - yeniden denemek için sayfayı yenileyin."
   },
   "cards": {
     "aiBadge": "AI",

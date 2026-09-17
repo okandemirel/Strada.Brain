@@ -159,6 +159,10 @@ function CanvasWorkspaceInner() {
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null)
   const prevShapeIdsRef = useRef(new Set<string>())
   const [saveConflict, setSaveConflict] = useState(false)
+  // A canvas that could not be READ cannot be written to either (#9). The work
+  // is kept in this browser, and the person is told — silence here looked
+  // exactly like a canvas that was being saved.
+  const [loadFailed, setLoadFailed] = useState(false)
 
   /* ── The one writer for this canvas ──────────────────────────────
      A single scheduler owns the debounce, the outstanding PUT and the
@@ -337,6 +341,7 @@ function CanvasWorkspaceInner() {
           // The canvas IS read: an edit made while the GET was open goes out now,
           // against the version the read established (#20).
           scheduler.finishLoad(generation)
+          setLoadFailed(false)
           setLoading(false)
         })
         .catch(() => {
@@ -349,7 +354,11 @@ function CanvasWorkspaceInner() {
           // The canvas itself stays usable — work is kept locally, not saved.
           setLoading(false)
           const delay = LOAD_RETRY_DELAYS_MS[index]
-          if (delay === undefined) return
+          if (delay === undefined) {
+            // Out of retries: writes stay blocked, so say so.
+            setLoadFailed(true)
+            return
+          }
           retryTimer = setTimeout(() => {
             retryTimer = null
             attempt(index + 1)
@@ -358,6 +367,8 @@ function CanvasWorkspaceInner() {
     }
 
     attempt(0)
+
+    setLoadFailed(false)
 
     return () => {
       cancelled = true
@@ -505,6 +516,12 @@ function CanvasWorkspaceInner() {
     <div className="relative flex h-full w-full flex-col bg-[#060a10]">
       {/* A save the server refused: someone else wrote this canvas. The work
           stays dirty, so nothing is lost while the person decides. */}
+      {loadFailed && (
+        <div className="absolute top-3 left-3 z-20 max-w-sm rounded-lg border border-rose-400/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
+          {t('panel.loadFailed')}
+        </div>
+      )}
+
       {saveConflict && (
         <div className="absolute top-3 left-3 z-20 max-w-sm rounded-lg border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
           {t('panel.saveConflict')}

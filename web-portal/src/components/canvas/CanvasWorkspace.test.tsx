@@ -414,6 +414,27 @@ describe('CanvasWorkspace auto-save', () => {
       .toEqual(['from-server', 'local'])
   })
 
+  it('tells the person once the canvas cannot be read at all, and stops saying it when a read lands', async () => {
+    // Writes stay blocked after a failed read (#9) — which, said by nothing at
+    // all, looked exactly like a canvas that was being saved.
+    getStatus.set('sess-a', 500)
+    render(<CanvasWorkspace />)
+    await tick(0)
+    // Not while retries are still coming.
+    expect(screen.queryByText('panel.loadFailed')).toBeNull()
+    await tick(2_000); await tick(4_000); await tick(8_000); await tick(16_000)
+    await tick()
+    expect(screen.getByText('panel.loadFailed')).toBeTruthy()
+
+    // …and it goes away when a read finally lands (guard).
+    getStatus.delete('sess-a')
+    gets.set('sess-a', canvasVersion(3, [shape('from-server')]))
+    await act(async () => { useSessionStore.setState({ sessionId: 'sess-b' } as never) })
+    gets.set('sess-b', canvasVersion(4, [shape('other')]))
+    await tick(0)
+    expect(screen.queryByText('panel.loadFailed')).toBeNull()
+  })
+
   it('treats a canvas whose version cannot be read as unread (#9 guard)', async () => {
     // A row without a usable version cannot be written conditionally at all.
     gets.set('sess-a', { canvas: { shapes: JSON.stringify([shape('s1')]), connections: '[]', viewport: '{}' } })

@@ -6,7 +6,8 @@
     "agentSync": "Synchronisation de l'agent {{time}}",
     "queue": "File d'attente {{count}}",
     "selected": "{{count}} sélectionnés",
-    "saveConflict": "Ce canevas a change ailleurs. Vos modifications restent ici mais ne sont pas enregistrees - rechargez pour voir l'autre version."
+    "saveConflict": "Ce canevas a change ailleurs. Vos modifications restent ici mais ne sont pas enregistrees - rechargez pour voir l'autre version.",
+    "loadFailed": "Ce canevas n'a pas pu etre charge, donc rien n'est enregistre. Votre travail reste dans ce navigateur - rechargez pour reessayer."
   },
   "cards": {
     "aiBadge": "IA",

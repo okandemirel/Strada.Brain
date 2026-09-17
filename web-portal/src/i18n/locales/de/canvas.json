@@ -6,7 +6,8 @@
     "agentSync": "Agenten-Sync {{time}}",
     "queue": "Warteschlange {{count}}",
     "selected": "{{count}} ausgewählt",
-    "saveConflict": "Diese Leinwand wurde anderswo geändert. Ihre Änderungen bleiben hier, sind aber nicht gespeichert - neu laden, um die andere Version zu sehen."
+    "saveConflict": "Diese Leinwand wurde anderswo geändert. Ihre Änderungen bleiben hier, sind aber nicht gespeichert - neu laden, um die andere Version zu sehen.",
+    "loadFailed": "Diese Leinwand konnte nicht geladen werden, daher wird nichts gespeichert. Ihre Arbeit bleibt in diesem Browser - neu laden, um es erneut zu versuchen."
   },
   "cards": {
     "aiBadge": "KI",
