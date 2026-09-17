@@ -18,10 +18,10 @@ import { useSessionStore } from '../../stores/session-store'
 import { normalizeCanvasIncomingShape } from './canvas-shape-normalizer'
 import { getDefaultDimensions, type ResolvedShape } from './canvas-types'
 import {
+  CanvasSaveScheduler,
   canvasSavePayload,
   parseCanvasConnections,
   readCanvasVersion,
-  samePayload,
   saveCanvasState,
 } from './canvas-persistence'
 import { useCanvasBridge, shapesToNodes, connectionsToEdges } from '../../hooks/use-canvas-bridge'
@@ -59,7 +59,6 @@ function CanvasWorkspaceInner() {
   const pendingRemovals = useCanvasStore((s) => s.pendingRemovals)
   const pendingViewport = useCanvasStore((s) => s.pendingViewport)
   const pendingLayout = useCanvasStore((s) => s.pendingLayout)
-  const isDirty = useCanvasStore((s) => s.isDirty)
   const layoutMode = useCanvasStore((s) => s.layoutMode)
 
   const addShape = useCanvasStore((s) => s.addShape)
@@ -91,12 +90,36 @@ function CanvasWorkspaceInner() {
   /* ── Local state ─────────────────────────────────────────────── */
   const [loading, setLoading] = useState(false)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null)
-  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const prevShapeIdsRef = useRef(new Set<string>())
-  // The version the server holds for this session: sent with every save so a
-  // second window's write is refused with 409 instead of overwriting (2.6).
-  const savedVersionRef = useRef<number | undefined>(undefined)
   const [saveConflict, setSaveConflict] = useState(false)
+
+  /* ── The one writer for this canvas ──────────────────────────────
+     A single scheduler owns the debounce, the outstanding PUT and the
+     version the server acknowledged. Two windows, a second edit during a
+     save, a connection drawn mid-flight and a session switch are all the
+     same problem — who is allowed to write what next — and it is answered
+     in one place (round 9 #17-#20). */
+  const schedulerRef = useRef<CanvasSaveScheduler | null>(null)
+  if (!schedulerRef.current) {
+    schedulerRef.current = new CanvasSaveScheduler({
+      debounceMs: SAVE_DEBOUNCE_MS,
+      readRevision: () => {
+        const state = useCanvasStore.getState()
+        return canvasSavePayload(state.shapes, state.connections, state.viewport)
+      },
+      save: (args) => saveCanvasState(args),
+      onSaved: ({ upToDate }) => {
+        setSaveConflict(false)
+        // DIRTY IS CLEARED FOR THE ACKED REVISION ONLY: an edit made while the
+        // request was in flight must survive (Codex #25) — and it is already
+        // queued for the next write (#18/#19).
+        if (upToDate) useCanvasStore.getState().setDirty(false)
+      },
+      // Someone else wrote this canvas: keep the work dirty and say so.
+      onConflict: () => setSaveConflict(true),
+    })
+  }
+  const scheduler = schedulerRef.current
 
   const { sendRawJSON } = useWS()
 
@@ -166,6 +189,9 @@ function CanvasWorkspaceInner() {
   /* ── Load saved canvas on session change ──────────────────────── */
 
   useEffect(() => {
+    // Every response below is answered against THIS generation: a load or an
+    // acknowledgement from a session the user has left changes nothing (#20).
+    const generation = scheduler.startSession(sessionId ?? null)
     if (!sessionId) return
     let cancelled = false
     setLoading(true)
@@ -174,8 +200,18 @@ function CanvasWorkspaceInner() {
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
         if (cancelled) return
-        if (!data?.canvas) return
-        savedVersionRef.current = readCanvasVersion(data.canvas)
+        // A GET that failed says nothing: the version stays unknown.
+        if (!data) return
+        if (!data.canvas) {
+          // No canvas yet. The next save must CREATE, not overwrite whatever a
+          // second window has put there in the meantime (#17).
+          scheduler.adoptVersion('absent', generation)
+          return
+        }
+        // The version is what the server holds either way; the CONTENT is only
+        // applied while it is still the newest thing we know (#20).
+        scheduler.adoptVersion(readCanvasVersion(data.canvas), generation)
+        if (!scheduler.canApplyContent(generation)) return
         // Connections were drawn and then lost on every reload: they are part
         // of the saved canvas now (2.6 / D33).
         setConnections(parseCanvasConnections(data.canvas.connections))
@@ -223,7 +259,12 @@ function CanvasWorkspaceInner() {
         } catch { /* ignore */ }
       })
       .catch(() => { /* network error */ })
-      .finally(() => { if (!cancelled) setLoading(false) })
+      .finally(() => {
+        // Read or not, writing this session is allowed from here on: an edit
+        // made while the GET was open goes out now (#20).
+        scheduler.finishLoad(generation)
+        if (!cancelled) setLoading(false)
+      })
 
     return () => { cancelled = true }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -231,33 +272,24 @@ function CanvasWorkspaceInner() {
 
   /* ── Auto-save (debounced) ────────────────────────────────────── */
 
+  // The STORE schedules saves, not a dependency array: a connection drawn
+  // while isDirty was already true changed nothing the old effect watched, so
+  // it was never saved (#19). Anything that makes the canvas dirty — a shape, a
+  // connection, the viewport — schedules the next write here, and the scheduler
+  // decides when it may go out.
   useEffect(() => {
-    if (!isDirty || !sessionId) return
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
-    saveTimerRef.current = setTimeout(() => {
-      const state = useCanvasStore.getState()
-      const sent = canvasSavePayload(state.shapes, state.connections, state.viewport)
-      void saveCanvasState({ sessionId, payload: sent, version: savedVersionRef.current })
-        .then((result) => {
-          if (result.kind === 'conflict') {
-            // Someone else wrote this canvas: keep the work dirty and say so.
-            setSaveConflict(true)
-            return
-          }
-          if (result.kind === 'failed') return // still dirty: it was never stored
-          setSaveConflict(false)
-          savedVersionRef.current = result.version
-          // DIRTY IS CLEARED FOR THE ACKED REVISION ONLY: an edit made while
-          // the request was in flight must survive (Codex #25).
-          const now = useCanvasStore.getState()
-          if (samePayload(sent, canvasSavePayload(now.shapes, now.connections, now.viewport))) {
-            setDirty(false)
-          }
-        })
-    }, SAVE_DEBOUNCE_MS)
-    return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current) }
+    const unsubscribe = useCanvasStore.subscribe((state, prev) => {
+      if (!state.isDirty) return
+      const becameDirty = !prev.isDirty
+      const changed =
+        state.shapes !== prev.shapes ||
+        state.connections !== prev.connections ||
+        state.viewport !== prev.viewport
+      if (becameDirty || changed) scheduler.requestSave()
+    })
+    return () => { unsubscribe(); scheduler.dispose() }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isDirty, sessionId, shapes])
+  }, [])
 
   /* ── Emit canvas:user_shapes when user adds shapes ───────────── */
 

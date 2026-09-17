@@ -1,0 +1,371 @@
+/**
+ * CANVAS AUTO-SAVE — one writer, one queue, one session (round 9 #17-#20).
+ *
+ * The debounced save used to fire straight out of a React effect with the
+ * version held in a ref:
+ *   - two windows that both read `canvas: null` both wrote with no version at
+ *     all, so the second silently destroyed the first (#17);
+ *   - a second debounce fired while the first PUT was still in flight and sent
+ *     the SAME stale version, so a window conflicted with itself (#18);
+ *   - a connection drawn during a save scheduled nothing, because the effect's
+ *     dependencies only listed `shapes` (#19);
+ *   - a previous session's acknowledgement, or a slow first GET, overwrote the
+ *     current session's version and shapes (#20).
+ *
+ * These tests drive the real component with a controllable fetch: every PUT is
+ * held open until the test acknowledges it, which is the only way the ordering
+ * above is observable.
+ */
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { act, render, screen } from '@testing-library/react'
+
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({ t: (key: string) => key }),
+}))
+
+vi.mock('@xyflow/react', () => ({
+  ReactFlow: ({ children }: { children?: React.ReactNode }) => <div data-testid="react-flow">{children}</div>,
+  ReactFlowProvider: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
+  Background: () => null,
+  Controls: () => null,
+  MiniMap: () => null,
+  BackgroundVariant: { Dots: 'dots' },
+  useReactFlow: () => ({
+    fitView: vi.fn(),
+    getViewport: () => ({ x: 0, y: 0, zoom: 1 }),
+    screenToFlowPosition: (p: { x: number; y: number }) => p,
+  }),
+}))
+
+vi.mock('../../hooks/use-canvas-bridge', () => ({
+  useCanvasBridge: () => ({ nodes: [], edges: [], onNodesChange: vi.fn(), onEdgesChange: vi.fn() }),
+  shapesToNodes: () => [],
+  connectionsToEdges: () => [],
+}))
+vi.mock('../../hooks/use-canvas-shortcuts', () => ({ useCanvasShortcuts: () => {} }))
+vi.mock('../../hooks/useWS', () => ({ useWS: () => ({ sendRawJSON: vi.fn() }) }))
+vi.mock('./canvas-toolbar', () => ({ default: () => null }))
+vi.mock('./canvas-context-menu', () => ({ default: () => null }))
+vi.mock('./canvas-empty-state', () => ({ default: () => null }))
+vi.mock('./BaseCard', () => ({ default: () => null }))
+vi.mock('./GradientBezierEdge', () => ({ default: () => null }))
+
+import CanvasWorkspace from './CanvasWorkspace'
+import { useCanvasStore } from '../../stores/canvas-store'
+import { useSessionStore } from '../../stores/session-store'
+import type { ResolvedShape } from './canvas-types'
+
+const SAVE_DEBOUNCE_MS = 5_000
+
+const shape = (id: string): ResolvedShape => ({
+  id, type: 'note-block', x: 0, y: 0, w: 220, h: 120, props: { content: id },
+})
+
+/** A PUT held open until the test acknowledges it. */
+interface HeldPut {
+  url: string
+  body: Record<string, unknown>
+  ack: (init: { status?: number; version?: number }) => void
+}
+
+let puts: HeldPut[] = []
+/** GET body per session id; a missing entry means "the request never settles". */
+let gets: Map<string, { canvas: unknown } | null>
+let pendingGets: Array<(body: { canvas: unknown } | null) => void>
+
+function installFetch(): void {
+  puts = []
+  pendingGets = []
+  globalThis.fetch = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+    const method = init?.method ?? 'GET'
+    if (method === 'GET') {
+      const sessionId = decodeURIComponent(url.replace('/api/canvas/', ''))
+      const body = gets.get(sessionId)
+      if (body === undefined) {
+        // Held open: the test resolves it when it wants the load to land.
+        return new Promise<Response>((resolve) => {
+          pendingGets.push((late) => resolve(new Response(JSON.stringify(late), { status: 200 })))
+        })
+      }
+      return Promise.resolve(new Response(JSON.stringify(body), { status: 200 }))
+    }
+    const body = JSON.parse(String(init!.body)) as Record<string, unknown>
+    return new Promise<Response>((resolve) => {
+      puts.push({
+        url,
+        body,
+        ack: ({ status = 200, version }) =>
+          resolve(new Response(JSON.stringify({ status: 'saved', sessionId: 'x', version }), { status })),
+      })
+    })
+  }) as unknown as typeof fetch
+}
+
+/** Let the debounce fire and every settled promise run. */
+async function tick(ms = SAVE_DEBOUNCE_MS): Promise<void> {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(ms)
+  })
+}
+
+/** Run a store mutation the way a user edit does. */
+async function edit(mutate: () => void): Promise<void> {
+  await act(async () => {
+    mutate()
+    useCanvasStore.getState().setDirty(true)
+  })
+}
+
+const canvasVersion = (v: number, shapes: ResolvedShape[] = [], connections: unknown[] = []) => ({
+  canvas: {
+    id: 's', sessionId: 's',
+    shapes: JSON.stringify(shapes),
+    connections: JSON.stringify(connections),
+    viewport: JSON.stringify({ x: 0, y: 0, zoom: 1 }),
+    version: v,
+    createdAt: 1, updatedAt: 1,
+  },
+})
+
+describe('CanvasWorkspace auto-save', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    gets = new Map()
+    installFetch()
+    useCanvasStore.setState({
+      sessionId: null,
+      isDirty: false,
+      shapes: [],
+      connections: [],
+      viewport: { x: 0, y: 0, zoom: 1 },
+      pendingShapes: [],
+      pendingUpdates: [],
+      pendingRemovals: [],
+      pendingViewport: null,
+      pendingLayout: null,
+      undoStack: [],
+      redoStack: [],
+    })
+    useSessionStore.setState({ sessionId: 'sess-a' })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
+
+  // -- #17 -------------------------------------------------------------------
+
+  it('creates a canvas the server reported absent with the create-if-absent precondition', async () => {
+    // Both windows read `canvas: null`. Writing with no version at all made
+    // both writes unconditional, and the second destroyed the first (#17).
+    gets.set('sess-a', { canvas: null })
+    render(<CanvasWorkspace />)
+    await tick(0)
+
+    await edit(() => useCanvasStore.getState().addShape(shape('s1')))
+    await tick()
+
+    expect(puts).toHaveLength(1)
+    expect(puts[0]!.body.version).toBe(0)
+  })
+
+  // -- #18 -------------------------------------------------------------------
+
+  it('holds a second revision until the first save is acked, then sends it against the acked version', async () => {
+    gets.set('sess-a', canvasVersion(5, [shape('s1')]))
+    render(<CanvasWorkspace />)
+    await tick(0)
+
+    await edit(() => useCanvasStore.getState().addShape(shape('s2')))
+    await tick()
+    expect(puts).toHaveLength(1)
+    expect(puts[0]!.body.version).toBe(5)
+
+    // An edit while the first PUT is still open: it must NOT go out with the
+    // same version 5 — that is a window conflicting with itself.
+    await edit(() => useCanvasStore.getState().addShape(shape('s3')))
+    await tick()
+    expect(puts).toHaveLength(1)
+
+    await act(async () => { puts[0]!.ack({ version: 6 }) })
+    await tick()
+
+    expect(puts).toHaveLength(2)
+    expect(puts[1]!.body.version).toBe(6)
+    expect(JSON.parse(String(puts[1]!.body.shapes)).map((s: ResolvedShape) => s.id)).toEqual(['s1', 's2', 's3'])
+    expect(screen.queryByText('panel.saveConflict')).toBeNull()
+
+    await act(async () => { puts[1]!.ack({ version: 7 }) })
+    await tick(0)
+    expect(useCanvasStore.getState().isDirty).toBe(false)
+  })
+
+  // -- #19 -------------------------------------------------------------------
+
+  it('sends a connection drawn while a save was in flight', async () => {
+    gets.set('sess-a', canvasVersion(5, [shape('s1')]))
+    render(<CanvasWorkspace />)
+    await tick(0)
+
+    await edit(() => useCanvasStore.getState().addShape(shape('s2')))
+    await tick()
+    expect(puts).toHaveLength(1)
+
+    // isDirty is already true and `shapes` does not change: the old effect had
+    // nothing to re-run on, so this connection was never saved (#19).
+    await edit(() => useCanvasStore.getState().addConnection({ id: 'c1', from: 's1', to: 's2' }))
+    await act(async () => { puts[0]!.ack({ version: 6 }) })
+    await tick()
+
+    expect(puts).toHaveLength(2)
+    expect(JSON.parse(String(puts[1]!.body.connections))).toEqual([{ id: 'c1', from: 's1', to: 's2' }])
+    expect(puts[1]!.body.version).toBe(6)
+  })
+
+  it('schedules a save for a connection drawn while the canvas was already dirty', async () => {
+    gets.set('sess-a', canvasVersion(5, [shape('s1'), shape('s2')]))
+    render(<CanvasWorkspace />)
+    await tick(0)
+
+    // A failed save leaves the canvas dirty. The connection drawn next is the
+    // only thing that changes — no shape, no dirty transition — and the old
+    // effect watched neither, so nothing was ever sent (#19).
+    await edit(() => useCanvasStore.getState().addShape(shape('s3')))
+    await tick()
+    await act(async () => { puts[0]!.ack({ status: 500 }) })
+    await tick(0)
+
+    await edit(() => useCanvasStore.getState().addConnection({ id: 'c9', from: 's1', to: 's2' }))
+    await tick()
+
+    expect(puts).toHaveLength(2)
+    expect(JSON.parse(String(puts[1]!.body.connections))).toEqual([{ id: 'c9', from: 's1', to: 's2' }])
+  })
+
+  // -- #20 -------------------------------------------------------------------
+
+  it('ignores an acknowledgement that belongs to the previous session', async () => {
+    gets.set('sess-a', canvasVersion(5, [shape('s1')]))
+    gets.set('sess-b', canvasVersion(2, [shape('b1')]))
+    render(<CanvasWorkspace />)
+    await tick(0)
+
+    await edit(() => useCanvasStore.getState().addShape(shape('s2')))
+    await tick()
+    expect(puts).toHaveLength(1)
+    expect(puts[0]!.url).toBe('/api/canvas/sess-a')
+
+    await act(async () => { useSessionStore.setState({ sessionId: 'sess-b' }) })
+    await tick(0)
+    expect(useCanvasStore.getState().shapes.map((s) => s.id)).toEqual(['b1'])
+
+    // Session A's ack lands late. It must not become session B's version.
+    await act(async () => { puts[0]!.ack({ version: 8 }) })
+    await tick(0)
+
+    await edit(() => useCanvasStore.getState().addShape(shape('b2')))
+    await tick()
+
+    const last = puts[puts.length - 1]!
+    expect(last.url).toBe('/api/canvas/sess-b')
+    expect(last.body.version).toBe(2)
+    expect(screen.queryByText('panel.saveConflict')).toBeNull()
+  })
+
+  it('does not let a slow first load overwrite edits made while it was loading', async () => {
+    render(<CanvasWorkspace />)
+    await tick(0)
+    expect(pendingGets).toHaveLength(1)
+
+    // The user draws while the GET is still open.
+    await edit(() => useCanvasStore.getState().addShape(shape('local')))
+    await act(async () => { pendingGets[0]!(canvasVersion(3, [shape('from-server')])) })
+    await tick(0)
+
+    expect(useCanvasStore.getState().shapes.map((s) => s.id)).toEqual(['local'])
+    expect(useCanvasStore.getState().isDirty).toBe(true)
+
+    // The version it carried is still adopted, so the edit saves against it.
+    await tick()
+    expect(puts).toHaveLength(1)
+    expect(puts[0]!.body.version).toBe(3)
+  })
+
+  it('never writes a session before its canvas has been read', async () => {
+    gets.set('sess-a', canvasVersion(5, [shape('s1')]))
+    render(<CanvasWorkspace />)
+    await tick(0)
+
+    // Switch to a session whose GET never settles. The store still holds the
+    // previous session's shapes, so writing now would overwrite the new
+    // session's canvas with them — under a version from the old one (#20).
+    await act(async () => { useSessionStore.setState({ sessionId: 'sess-slow' }) })
+    await tick(0)
+    await edit(() => useCanvasStore.getState().addShape(shape('s2')))
+    await tick()
+    expect(puts).toHaveLength(0)
+
+    // Once the read lands, the edit goes out against the version it reported.
+    await act(async () => { pendingGets[0]!(canvasVersion(7, [shape('remote')])) })
+    await tick()
+    expect(puts).toHaveLength(1)
+    expect(puts[0]!.url).toBe('/api/canvas/sess-slow')
+    expect(puts[0]!.body.version).toBe(7)
+  })
+
+  // -- guards ----------------------------------------------------------------
+
+  it('saves, clears dirty and follows the version the server acked (guard)', async () => {
+    gets.set('sess-a', canvasVersion(5, [shape('s1')]))
+    render(<CanvasWorkspace />)
+    await tick(0)
+
+    await edit(() => useCanvasStore.getState().addShape(shape('s2')))
+    await tick()
+    expect(puts[0]!.body.version).toBe(5)
+    expect(JSON.parse(String(puts[0]!.body.shapes)).map((s: ResolvedShape) => s.id)).toEqual(['s1', 's2'])
+
+    await act(async () => { puts[0]!.ack({ version: 6 }) })
+    await tick(0)
+    expect(useCanvasStore.getState().isDirty).toBe(false)
+    expect(screen.queryByText('panel.saveConflict')).toBeNull()
+
+    await edit(() => useCanvasStore.getState().addShape(shape('s3')))
+    await tick()
+    expect(puts).toHaveLength(2)
+    expect(puts[1]!.body.version).toBe(6)
+  })
+
+  it('surfaces a 409 and keeps the work dirty (guard)', async () => {
+    gets.set('sess-a', canvasVersion(5, [shape('s1')]))
+    render(<CanvasWorkspace />)
+    await tick(0)
+
+    await edit(() => useCanvasStore.getState().addShape(shape('s2')))
+    await tick()
+    await act(async () => { puts[0]!.ack({ status: 409 }) })
+    await tick(0)
+
+    expect(screen.getByText('panel.saveConflict')).toBeTruthy()
+    expect(useCanvasStore.getState().isDirty).toBe(true)
+  })
+
+  it('keeps the work dirty when the save fails, and retries on the next edit (guard)', async () => {
+    gets.set('sess-a', canvasVersion(5, [shape('s1')]))
+    render(<CanvasWorkspace />)
+    await tick(0)
+
+    await edit(() => useCanvasStore.getState().addShape(shape('s2')))
+    await tick()
+    await act(async () => { puts[0]!.ack({ status: 500 }) })
+    await tick(0)
+    expect(useCanvasStore.getState().isDirty).toBe(true)
+
+    await edit(() => useCanvasStore.getState().addShape(shape('s3')))
+    await tick()
+    expect(puts).toHaveLength(2)
+    expect(puts[1]!.body.version).toBe(5) // nothing was stored, so the version stands
+  })
+})
