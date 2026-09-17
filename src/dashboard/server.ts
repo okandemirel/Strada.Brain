@@ -4,6 +4,8 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { getLogger } from "../utils/logger.js";
 import { sanitizeSecrets } from "../security/secret-sanitizer.js";
 import { isAllowedOrigin } from "../security/origin-validation.js";
+import { ownerOnlyProxySurface } from "../channels/web/instance-access.js";
+import { authorizeInstanceRequest } from "../channels/web/instance-authorization.js";
 import { resolveBindHost } from "../core/bind-host.js";
 import type { IAIProvider } from "../agents/providers/provider.interface.js";
 import type { MetricsCollector } from "./metrics.js";
@@ -671,6 +673,12 @@ export class DashboardServer {
         if (!this.requireTrustedDashboardMutation(req, res)) return;
       }
 
+      // ROUND 13 #10: and WHICH identity is asking. The two gates above answer
+      // "did this come from a legitimate client of this machine" — the
+      // shared-instance model answers "may this identity do it", and every
+      // owner-only power is reachable here as well as through the portal proxy.
+      if (isMutableDashboardApi && !this.requireInstanceOwnership(req, res, url, method)) return;
+
       // --- Non-API routes (before building heavy route context) ---
 
       if (url === "/health") {
@@ -875,6 +883,76 @@ export class DashboardServer {
 
     res.writeHead(403, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: "Trusted same-origin request required" }));
+    return false;
+  }
+
+  /**
+   * ROUND 13 #10 — THE DASHBOARD PORT IS THE SAME INSTANCE.
+   *
+   * THE DEFECT. The portal proxy has refused a guest's owner-only mutation since
+   * plan 6.14 (`ownerOnlyProxySurface` + `decideInstanceAccess`), and this server
+   * — one loopback port away, the very server the proxy forwards to — performed
+   * the same request for anyone. Its gates answered a different question: a
+   * bearer token proves possession of a token, a trusted Origin proves the
+   * request came from a page on this machine, and NEITHER names which of the
+   * instance's identities is asking. `POST /api/daemon/stop` from a guest's tab
+   * (or from curl with the right Origin) stopped the daemon for everybody.
+   *
+   * So the policy is enforced where the POWER is, on the same table the proxy
+   * uses, for both transports:
+   *   - the surface comes from `ownerOnlyProxySurface(path)` — one list, so a
+   *     route that gains an owner-only meaning gains it on both ports at once;
+   *   - the identity is the VERIFIED profile pair (the proxy forwards it; the
+   *     portal attaches it — round 13 #7), never a claimed header;
+   *   - an unreadable identity store is a 503, never an implicit "no owner"
+   *     (round 13 #14).
+   *
+   * Mutations that are NOT owner-only (a caller's own canvas, its own monitor
+   * actions) are untouched here: they are scoped to the acting identity by their
+   * own handlers.
+   */
+  private requireInstanceOwnership(
+    req: import("node:http").IncomingMessage,
+    res: import("node:http").ServerResponse,
+    url: string,
+    method: string,
+  ): boolean {
+    const pathOnly = url.split("?")[0] ?? url;
+    const surface = ownerOnlyProxySurface(pathOnly);
+    if (!surface) return true;
+
+    const verdict = authorizeInstanceRequest(req.headers, surface, `${method} ${pathOnly}`);
+    if (verdict.kind === "unavailable") {
+      getLogger().error("Dashboard mutation refused: the instance's identities cannot be read", {
+        url: pathOnly,
+        method,
+        why: verdict.why,
+      });
+      res.writeHead(503, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({
+        error: "Identity state unavailable",
+        reason: `who may do this cannot be established right now: ${verdict.why}. Refusing rather than guessing.`,
+        surface,
+        code: "unavailable:identity-store",
+      }));
+      return false;
+    }
+    if (verdict.decision.allowed) return true;
+
+    getLogger().warn("Dashboard mutation refused by the shared-instance model", {
+      url: pathOnly,
+      method,
+      surface,
+      code: verdict.decision.code,
+      reason: verdict.decision.reason,
+    });
+    res.writeHead(403, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({
+      error: "Forbidden",
+      reason: verdict.decision.reason,
+      surface: verdict.decision.surface,
+      code: verdict.decision.code,
+    }));
     return false;
   }
 

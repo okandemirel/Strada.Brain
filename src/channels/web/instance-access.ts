@@ -37,21 +37,30 @@
  * means "the operator reads everyone's chat". Owner powers are the ones that
  * change the instance, not the ones that read other people.
  *
- * ── What is NOT enforced here, and why ────────────────────────────────────
- * The portal's HTTP fetches (`web-portal/src/...`) send the profile identity
- * only over the WebSocket, never as `x-strada-profile-id` / `-token` headers.
- * An owner-only dashboard mutation from a browser therefore arrives
- * unattributed, which is exactly why "unattributed is granted only on a
- * single-identity instance" is part of the model rather than a plain refusal:
- * a one-person instance keeps working untouched, and a genuinely shared one
- * fails closed. Until the portal sends those headers, the OWNER of a shared
- * instance must present them too (its settings page will otherwise be refused
- * with `deny:unidentified`). That change lives in web-portal and is reported,
- * not made here.
+ * ── How a request becomes attributable (round 13 #7, #9) ──────────────────
+ * The portal's HTTP fetches used to send the profile identity only over the
+ * WebSocket, so every owner-only dashboard mutation from a browser arrived
+ * unattributed and the model had to grant it on a single-identity instance to
+ * keep a one-person portal working. It does not any more: `web-portal/src/
+ * utils/api.ts` attaches the verified pair (`x-strada-profile-id` /
+ * `-token`) to every same-origin `/api/` request, so a browser request names
+ * its identity on both transports.
+ *
+ * That closes the hole underneath the old grant. `shared` counts identities, and
+ * an instance with exactly ONE registered owner is not shared — so "unattributed
+ * is fine while not shared" handed owner powers to any caller that simply
+ * declined to identify itself (a second socket that never sent `session_init`; a
+ * POST straight at the dashboard port). The grant therefore survives only where
+ * NO owner has ever been recorded: an instance that has never issued a web
+ * identity, which is the CLI/dashboard-only deployment with nobody to be
+ * separated from. Once an owner exists, an owner-only power needs the pair that
+ * proves ownership.
  *
  * This module is pure: it answers "may identity X do Y here", and produces a
  * reason that always names the identity that was refused. Callers enforce.
  */
+import type { TaskCommand } from "../../tasks/types.js";
+
 
 /** The surfaces the portal exposes, as the model sees them. */
 export type InstanceSurface =
@@ -254,19 +263,37 @@ export function decideInstanceAccess(req: AccessRequest): AccessDecision {
         reason: `${who} may not ${policy.verb}${what} on a shared instance — only ${ownerName} may`,
       };
     }
-    if (!req.instance.shared) {
+    // ROUND 13 #9: an owner-only power needs VERIFIED ownership once an owner
+    // exists.
+    //
+    // This used to hinge on `shared` alone, and `shared` counts identities. An
+    // instance with exactly one registered owner is not shared, so an
+    // unidentified caller — a second browser socket that never sent
+    // `session_init`, a curl against the dashboard port — was handed
+    // `allow:sole-identity` and with it the daemon, the provider switch and the
+    // `.env`. The count was right and the conclusion was wrong: the reason
+    // sole-identity is safe is that there is nobody to be separated FROM, and
+    // once an owner is recorded there is — the owner. So the grant survives only
+    // where no owner has ever been recorded (an instance that has issued no web
+    // identity at all: the CLI/dashboard-only deployment), and everywhere else
+    // the caller must present the pair that proves it is the owner. The portal
+    // attaches that pair to its own API requests (round 13 #7), so the ordinary
+    // one-person browser keeps working.
+    if (!req.instance.shared && req.instance.ownerProfileId === undefined) {
       return {
         allowed: true,
         code: "allow:sole-identity",
         surface,
-        reason: `${who} may ${policy.verb}${what}: this instance has a single identity, so there is no other identity to separate it from`,
+        reason: `${who} may ${policy.verb}${what}: this instance has recorded no owner and no other identity, so there is no identity to separate it from`,
       };
     }
     return {
       allowed: false,
       code: "deny:unidentified",
       surface,
-      reason: `${who} may not ${policy.verb}${what}: this instance is shared by more than one identity and the request named none, so it cannot be attributed to ${ownerName}`,
+      reason: req.instance.shared
+        ? `${who} may not ${policy.verb}${what}: this instance is shared by more than one identity and the request named none, so it cannot be attributed to ${ownerName}`
+        : `${who} may not ${policy.verb}${what}: this instance has an owner and the request named no identity, so it cannot be attributed to ${ownerName}`,
     };
   }
 
@@ -355,6 +382,24 @@ export const SETUP_WRITE_PROXY_PATHS: readonly string[] = [
 ];
 
 /**
+ * Owner-only routes that a prefix cannot express, matched as exact patterns
+ * (round 13 #10).
+ *
+ * Installing a skill, or enabling one, changes what this instance can do for
+ * everyone on it — the same kind of write as a settings write. `/api/skills/`
+ * as a prefix would have swept the read routes (`/api/skills/registry`) in with
+ * them, and a classification that is wrong for reads is a classification waiting
+ * to be consulted by a reader.
+ */
+export const OWNER_ONLY_PROXY_ROUTES: readonly {
+  readonly pattern: RegExp;
+  readonly surface: InstanceSurface;
+}[] = [
+  { pattern: /^\/api\/skills\/install$/, surface: "setup:write" },
+  { pattern: /^\/api\/skills\/[^/]+\/(enable|disable)$/, surface: "setup:write" },
+];
+
+/**
  * Dashboard proxy paths that control the one shared daemon rather than one
  * identity's own traffic. Owner-only.
  */
@@ -363,13 +408,113 @@ export const INSTANCE_CONTROL_PROXY_PATHS: readonly string[] = [
   "/api/daemon/stop",
   "/api/user/autonomous",
   "/api/deployment/check",
+  // ROUND 13 #10: the same powers by their other names. These reach the daemon
+  // itself — its update, its MCP bridge, its pending security approvals — and
+  // are mutations on the dashboard port whether or not the portal proxies them.
+  "/api/daemon/approvals/",
+  "/api/update",
+  "/api/mcp/reconnect",
 ];
+
+// ── The same powers, reached by typing (round 13 #11) ─────────────────────────
+//
+// THE DEFECT. Every owner-only power above also has a chat command: `/daemon
+// stop`, `/autonomous on`, `/model pin openai`, `/routing preset performance`,
+// `/token 1_000_000`, `/persona switch …`, `/vault init …`, `/run <shell>`. The
+// dedicated WebSocket control frames (`provider_switch`, `autonomous_toggle`,
+// `monitor:pause`) were gated; a plain `{type:"message",text:"/daemon stop"}`
+// was not, because it is "just a message" until the command handler — which is
+// channel-agnostic and knows nothing about web identities — dispatches it. Same
+// power, shorter route.
+//
+// This table is the model's answer for that route. It is keyed on `TaskCommand`
+// (src/tasks/types.ts), so a new command cannot be added to the product without
+// a decision being made here: the compiler demands the key.
+//
+// Reads stay open. A guest may ask what the provider is, what the budget is or
+// whether the daemon is running; the table classifies only the ARGUMENTS that
+// turn the read into a write, which is why it takes `args` and not just the
+// command.
+
+
+/** How a command's privilege depends on its arguments. */
+type CommandPrivilege =
+  | { readonly kind: "never" }
+  | { readonly kind: "always"; readonly surface: InstanceSurface }
+  /** Privileged unless the first argument is one of these read subcommands. */
+  | { readonly kind: "unless-read"; readonly surface: InstanceSurface; readonly reads: readonly string[] }
+  /** Privileged only when the first argument is one of these write subcommands. */
+  | { readonly kind: "when-write"; readonly surface: InstanceSurface; readonly writes: readonly string[] }
+  /** Acts on ONE task: own-identity, and privileged only when a task is named. */
+  | { readonly kind: "names-task" };
+
+const COMMAND_PRIVILEGE: Readonly<Record<TaskCommand, CommandPrivilege>> = {
+  // Reads of this instance and of the caller's own traffic.
+  status: { kind: "never" },
+  tasks: { kind: "never" },
+  detail: { kind: "never" },
+  help: { kind: "never" },
+  goal: { kind: "never" },
+  agent: { kind: "never" },
+  measure: { kind: "never" },
+  guardian: { kind: "never" },
+  // The caller's own task, by name.
+  cancel: { kind: "names-task" },
+  pause: { kind: "names-task" },
+  resume: { kind: "names-task" },
+  // The caller's own run, resumed from its own checkpoint (no task argument).
+  retry: { kind: "never" },
+  continue: { kind: "never" },
+  // Controlling the one shared daemon.
+  daemon: { kind: "when-write", surface: "instance:control", writes: ["start", "stop", "restart"] },
+  autonomous: { kind: "when-write", surface: "instance:control", writes: ["on", "off"] },
+  model: { kind: "unless-read", surface: "instance:control", reads: ["list", "listele", "info", "bilgi"] },
+  campaign: {
+    kind: "when-write",
+    surface: "instance:control",
+    writes: ["revive", "resume", "devam", "continue"],
+  },
+  // Arbitrary shell in the shared project, as the daemon.
+  run: { kind: "always", surface: "instance:control" },
+  // Writing this instance's configuration.
+  routing: { kind: "when-write", surface: "setup:write", writes: ["preset"] },
+  token: { kind: "unless-read", surface: "setup:write", reads: [] },
+  persona: { kind: "unless-read", surface: "setup:write", reads: ["list", "listele"] },
+  vault: { kind: "when-write", surface: "setup:write", writes: ["init", "sync"] },
+};
+
+/**
+ * The owner-only surface a chat command exercises, or undefined when it needs no
+ * owner-only power. `"task"` means the command acts on the ONE task it names, so
+ * the caller's enforcement is task↔identity ownership rather than an owner check.
+ */
+export function commandPrivilege(
+  command: TaskCommand,
+  args: readonly string[] = [],
+): InstanceSurface | "task" | undefined {
+  const rule = COMMAND_PRIVILEGE[command];
+  if (rule === undefined) return undefined;
+  const sub = (args[0] ?? "").trim().toLowerCase();
+  switch (rule.kind) {
+    case "never":
+      return undefined;
+    case "always":
+      return rule.surface;
+    case "unless-read":
+      // No argument at all is the "show me" form of every one of these.
+      return sub && !rule.reads.includes(sub) ? rule.surface : undefined;
+    case "when-write":
+      return rule.writes.includes(sub) ? rule.surface : undefined;
+    case "names-task":
+      return sub ? "task" : undefined;
+  }
+}
 
 /** Which owner-only surface a proxy path belongs to, or undefined when it is neither. */
 export function ownerOnlyProxySurface(pathOnly: string): InstanceSurface | undefined {
   if (matchesAny(pathOnly, SETUP_WRITE_PROXY_PATHS)) return "setup:write";
   if (matchesAny(pathOnly, INSTANCE_CONTROL_PROXY_PATHS)) return "instance:control";
-  return undefined;
+  return OWNER_ONLY_PROXY_ROUTES.find((route) => route.pattern.test(pathOnly))?.surface;
 }
 
 function matchesAny(pathOnly: string, patterns: readonly string[]): boolean {

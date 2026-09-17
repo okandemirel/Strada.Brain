@@ -353,11 +353,12 @@ async function callAs(
  * The identity store the web channel keeps (src/channels/web/web-identity-store.ts),
  * as this route needs it: verify a pair, name the owner, count the identities.
  */
-function identities(opts: { owner?: string; issued?: string[] } = {}): ChangeReviewIdentityStore {
+function identities(opts: { owner?: string | null; issued?: string[] } = {}): ChangeReviewIdentityStore {
   const issued = opts.issued ?? ["owner-profile", "guest-profile"];
   return {
     verify: (profileId, profileToken) => issued.includes(profileId) && profileToken === `token-of-${profileId}`,
-    ownerProfileId: () => opts.owner ?? "owner-profile",
+    // `owner: null` is an instance that has recorded no owner at all.
+    ownerProfileId: () => (opts.owner === null ? undefined : opts.owner ?? "owner-profile"),
     has: (profileId) => issued.includes(profileId),
     count: () => issued.length,
   };
@@ -453,11 +454,33 @@ describe("change-review routes: who is allowed to decide (round 12 #10)", () => 
     expect(readFileSync(join(source, EXISTING), "utf8")).toBe("the run's version");
   });
 
-  // …and the direction that would be a defect of its own: refusing the ordinary
-  // one-person instance, where there is nobody to be separated from.
-  it("a single-identity instance decides with no identity at all", async () => {
+  // ROUND 13 #9 MOVED THIS LINE, DELIBERATELY. It used to read "a
+  // single-identity instance decides with no identity at all", and that was the
+  // hole: an instance with one REGISTERED OWNER is not \`shared\`, so an
+  // unattributed request was granted the owner's power. Once an owner exists the
+  // caller must prove it is the owner — the portal attaches the pair to its own
+  // requests (round 13 #7), so the one-person portal keeps working.
+  it("refuses an unattributed decision on a one-identity instance that HAS an owner", async () => {
     const reviewId = await publishRun();
     setChangeReviewIdentityStore(identities({ issued: ["owner-profile"] }));
+
+    const { status, json } = await callAs("POST", `/api/workspace/change-review/${reviewId}/decisions`, {}, {
+      decisions: [
+        { path: "Assets/Scripts/Existing.cs", decision: "undo" },
+        { path: "Assets/Scripts/New.cs", decision: "undo" },
+      ],
+    });
+
+    expect(status).toBe(403);
+    expect(String(json["reason"])).toContain("owner");
+    expect(readFileSync(join(source, EXISTING), "utf8")).toBe("the run's version");
+  });
+
+  // …and the direction that would be a defect of its own: the instance that has
+  // never issued a web identity at all (no portal, no owner) must keep deciding.
+  it("an instance with no identities at all decides with no identity at all", async () => {
+    const reviewId = await publishRun();
+    setChangeReviewIdentityStore(identities({ owner: null, issued: [] }));
 
     const { status } = await callAs("POST", `/api/workspace/change-review/${reviewId}/decisions`, {}, {
       decisions: [
@@ -466,6 +489,64 @@ describe("change-review routes: who is allowed to decide (round 12 #10)", () => 
       ],
     });
 
+    expect(status).toBe(200);
+    expect(readFileSync(join(source, EXISTING), "utf8")).toBe("the user's version");
+  });
+});
+
+// ── Round 13 #14: an unreadable identity store is not an empty one ────────────
+//
+// THE DEFECT. The identity database was opened lazily and a FAILURE was latched
+// in a process-wide flag; from then on the route saw "no store", read that as
+// count 0, concluded "not shared" and authorized ANONYMOUS reverts of the user's
+// project — permanently, until the daemon restarted. The failure has to be
+// answered as a failure.
+describe("change-review routes: an unreadable identity store denies (round 13 #14)", () => {
+  afterEach(() => setChangeReviewIdentityStore(null));
+
+  function unreadable(): ChangeReviewIdentityStore {
+    const boom = (): never => { throw new Error("SQLITE_CORRUPT: database disk image is malformed"); };
+    return { verify: boom, ownerProfileId: boom, has: boom, count: boom };
+  }
+
+  it("answers 503 and touches nothing, instead of granting the anonymous caller", async () => {
+    const reviewId = await publishRun();
+    setChangeReviewIdentityStore(unreadable());
+
+    const { status, json } = await callAs("POST", `/api/workspace/change-review/${reviewId}/decisions`, {}, {
+      decisions: [
+        { path: "Assets/Scripts/Existing.cs", decision: "undo" },
+        { path: "Assets/Scripts/New.cs", decision: "undo" },
+      ],
+    });
+
+    expect(status).toBe(503);
+    expect(String(json["code"])).toContain("unavailable");
+    // The run's bytes are untouched and the review is still open to be decided.
+    expect(readFileSync(join(source, EXISTING), "utf8")).toBe("the run's version");
+    expect(readChangeReview(source, reviewId)!.status).toBe("open");
+  });
+
+  it("refuses the reads too, rather than previewing somebody else's run", async () => {
+    const reviewId = await publishRun();
+    setChangeReviewIdentityStore(unreadable());
+
+    expect((await callAs("GET", "/api/workspace/change-review", {})).status).toBe(503);
+    expect((await callAs("GET", `/api/workspace/change-review/${reviewId}`, {})).status).toBe(503);
+  });
+
+  it("recovers as soon as the store is readable again — no restart, no latch", async () => {
+    const reviewId = await publishRun();
+    setChangeReviewIdentityStore(unreadable());
+    expect((await callAs("GET", "/api/workspace/change-review", {})).status).toBe(503);
+
+    setChangeReviewIdentityStore(identities());
+    const { status } = await callAs("POST", `/api/workspace/change-review/${reviewId}/decisions`, OWNER_HEADERS, {
+      decisions: [
+        { path: "Assets/Scripts/Existing.cs", decision: "undo" },
+        { path: "Assets/Scripts/New.cs", decision: "undo" },
+      ],
+    });
     expect(status).toBe(200);
     expect(readFileSync(join(source, EXISTING), "utf8")).toBe("the user's version");
   });

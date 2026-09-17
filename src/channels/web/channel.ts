@@ -26,7 +26,9 @@ import { resolveWebStaticDir } from "../../common/web-static-dir.js";
 import { LRUCache } from "../../common/lru-cache.js";
 import { WebAttachmentStore } from "./web-attachment-store.js";
 import { WebIdentityStore, type WebIdentity } from "./web-identity-store.js";
+import { detectCommand } from "../../tasks/command-detector.js";
 import {
+  commandPrivilege,
   decideInstanceAccess,
   instanceRoleOf,
   ownerOnlyProxySurface,
@@ -81,11 +83,23 @@ interface WsClient {
   windowStart: number;
   /** Heartbeat liveness flag: set true on each pong, cleared on each ping. */
   isAlive: boolean;
+  /**
+   * True once this socket completed `session_init` / `reconnect` (round 13 #9).
+   * A socket that never did presented no identity at all, and must not exercise
+   * a power just because the instance happens to have one identity.
+   */
+  sessionInitialized: boolean;
 }
 
 interface RecentlyDisconnectedSession {
   disconnectedAt: number;
   reconnectToken: string;
+  /**
+   * The identity that owned the chat (round 13 #12). A reconnect token is a CHAT
+   * credential; without the identity beside it a parked session could be
+   * reclaimed by whoever held the token once the LRU binding aged out.
+   */
+  profileId?: string;
   /** Carry rate-limit state across reconnects to prevent bypass. */
   msgCount?: number;
   windowStart?: number;
@@ -897,6 +911,99 @@ export class WebChannel
   }
 
   /**
+   * WS frames that EXERCISE something — the instance, or one named task — and
+   * therefore need a socket that has said who it is (round 13 #9).
+   *
+   * THE DEFECT. A socket is in `clients` the moment it connects, with its own
+   * chatId standing in for a profileId, and nothing required `session_init`
+   * before a control frame. Sending `monitor:pause` first left the socket
+   * unidentified, kept the identity count at one, and the model's
+   * "single identity, nobody to be separated from" grant handed it the run.
+   * The model no longer grants that once an owner exists; this set is the other
+   * half, and it holds even on an instance that has no owner yet: a frame that
+   * acts arrives after the caller has an identity, or it does not arrive.
+   *
+   * `message`, `ping` and the read frames are deliberately absent — an
+   * uninitialized socket may still talk, and a privileged COMMAND typed into it
+   * is refused by the model in `allowChatCommand`.
+   */
+  private static readonly SESSION_REQUIRED_WS_TYPES: ReadonlySet<string> = new Set([
+    // instance:control
+    "provider_switch",
+    "autonomous_toggle",
+    "monitor:pause",
+    "monitor:resume",
+    // task:control
+    "cancel_task",
+    "monitor:move_task",
+    "monitor:retry_task",
+    "monitor:resume_task",
+    "monitor:cancel_task",
+    "monitor:skip_task",
+    "monitor:approve_gate",
+    "monitor:reject_gate",
+    "verify:check_criterion",
+    "verify:gate_decision",
+    // writes into the shared project
+    "code:accept_diff",
+    "code:reject_diff",
+  ]);
+
+  /**
+   * Whether a frame that acts may be acted on: the socket must have completed
+   * `session_init` / `reconnect`. On refusal the caller is told, by name.
+   */
+  private hasInitializedSession(chatId: string, frameType: string): boolean {
+    if (this.clients.get(chatId)?.sessionInitialized === true) return true;
+    const reason =
+      `unidentified caller (chat ${chatId}) may not "${frameType}": this socket has not completed ` +
+      `session_init, so it presents no identity this instance issued`;
+    getLoggerSafe().warn("[WebChannel] instance access refused", {
+      surface: "instance:control" satisfies InstanceSurface,
+      code: "deny:unidentified",
+      chatId,
+      frameType,
+      reason,
+    });
+    this.sendToClient(chatId, { type: "text", text: `Refused: ${reason}`, messageId: randomUUID() });
+    return false;
+  }
+
+  /**
+   * ROUND 13 #11 — the same powers, typed instead of framed.
+   *
+   * THE DEFECT. Every owner-only power also has a chat command, and
+   * `{type:"message",text:"/daemon stop"}` is not a control frame: it went
+   * straight to the channel-agnostic command handler, which knows nothing about
+   * web identities and called `heartbeatLoopRef.stop()`. `provider_switch` was
+   * gated and `/model pin …` was not; `autonomous_toggle` was gated and
+   * `/autonomous on` was not; the WS `cancel_task` checked task ownership and
+   * `/cancel <someone else's task>` did not.
+   *
+   * So the gate sits where every typed line passes, and uses the SAME model and
+   * the same detector the dispatcher does (`detectCommand` →
+   * `commandPrivilege`), rather than a second list of strings to drift from it.
+   * Reads stay open: `/daemon status`, `/model list`, `/status` are a guest's
+   * business.
+   */
+  private async allowChatCommand(chatId: string, text: string): Promise<boolean> {
+    const parsed = detectCommand(text);
+    if (parsed.type !== "command") return true;
+    const privilege = commandPrivilege(parsed.command, parsed.args);
+    if (privilege === undefined) return true;
+    const what = `/${parsed.command} ${parsed.args.join(" ")}`.trim();
+    if (privilege === "task") {
+      // The command names ONE task: the question is whose it is, exactly as for
+      // the dedicated control frames.
+      const raw = (parsed.args[0] ?? "").trim();
+      const safeTaskId = /^[a-zA-Z0-9_-]+$/.test(raw) ? raw : "";
+      if (!safeTaskId) return true; // not a task id at all — the handler will say so
+      return await this.checkMonitorTaskOwnership(safeTaskId, chatId, `command ${what}`);
+    }
+    return this.allowWsAction(privilege, chatId, { what });
+  }
+
+  /**
    * Gate a WS control message on `surface`. On refusal the client is told which
    * identity was refused and why, and the handler must `break`.
    */
@@ -1556,6 +1663,7 @@ export class WebChannel
       msgCount: 0,
       windowStart: Date.now(),
       isAlive: true,
+      sessionInitialized: false,
     };
     this.clients.set(chatId, client);
 
@@ -1607,6 +1715,8 @@ export class WebChannel
           reconnectToken: current.reconnectToken,
           msgCount: current.msgCount,
           windowStart: current.windowStart,
+          // The identity parks with the session (round 13 #12).
+          profileId: current.profileId,
         });
 
         // Clean up per-session state that would otherwise leak
@@ -1639,10 +1749,34 @@ export class WebChannel
    * replayed board and buffered answers.
    */
   private mayReclaimChat(chatId: string, profileId: string): boolean {
-    const recorded = this.profileByChat.get(chatId);
-    if (recorded === undefined || recorded === profileId) return true;
+    // ROUND 13 #12: OWNERSHIP OUTLIVES THE BINDING.
+    //
+    // `profileByChat` is a 500-entry LRU and this read used to treat a MISSING
+    // entry as "belongs to nobody, help yourself". On a busy instance 500 newer
+    // chats evict an ACTIVE chat's binding, and any profile holding that chat's
+    // reconnect token then displaced its owner and inherited the chat — the
+    // board replayed on reclaim and the answers buffered for it. The session
+    // itself carries the identity, so ask the session first: a live client's
+    // profileId, then the parked one a disconnected session kept, and only then
+    // the LRU's memory of it.
+    // Only an issued identity counts: before `session_init` a client's
+    // profileId is its own chatId, which owns nothing.
+    const issuedOnly = (candidate: string | undefined): string | undefined =>
+      candidate && this.isIssuedProfileId(candidate) ? candidate : undefined;
+    const recorded =
+      issuedOnly(this.clients.get(chatId)?.profileId)
+      ?? issuedOnly(this.recentlyDisconnected.get(chatId)?.profileId)
+      ?? this.profileByChat.get(chatId);
+    if (recorded === profileId) return true;
+    // No identity has ever owned this chat (a socket that talked without ever
+    // completing session_init). There is no identity's traffic to be separated
+    // from, and the chat's reconnect token — which `tryReclaimSession` still
+    // demands — is that chat's own credential, so the reclaim stands.
+    if (recorded === undefined) return true;
     const facts = this.instanceFacts();
-    return this.decide("chat:frames", this.actorFor(profileId, chatId, facts), {
+    // The actor names no chatId here: the chat in question is the RESOURCE, and
+    // an actor carrying it would match itself.
+    return this.decide("chat:frames", this.actorFor(profileId, undefined, facts), {
       facts,
       resource: { profileId: recorded },
       what: `chat ${chatId}`,
@@ -1721,6 +1855,8 @@ export class WebChannel
     // would hand X's history to whoever holds only X's chat token.
     const identity = this.resolveWebIdentity(data);
     client.profileId = identity.profileId;
+    // From here this socket has an identity this channel issued (round 13 #9).
+    client.sessionInitialized = true;
 
     let chatId = client.chatId;
     let reconnectToken = client.reconnectToken;
@@ -1797,6 +1933,11 @@ export class WebChannel
         client.ws.close(1008, "Rate limit exceeded");
         return;
       }
+    }
+
+    // ROUND 13 #9: a frame that ACTS needs a socket that said who it is.
+    if (WebChannel.SESSION_REQUIRED_WS_TYPES.has(String(data.type)) && !this.hasInitializedSession(chatId, String(data.type))) {
+      return;
     }
 
     switch (data.type) {
@@ -1884,6 +2025,11 @@ export class WebChannel
         const normalizedText = limitIncomingText(text || "");
         if (!normalizedText && attachments.length === 0) {
           return;
+        }
+        // ROUND 13 #11: a privileged command typed as chat text is the same
+        // power as the control frame, and is authorized the same way.
+        if (normalizedText && !(await this.allowChatCommand(chatId, normalizedText))) {
+          break;
         }
         if (attachments.length === 0 && isFrontendPlaceholderText(normalizedText)) {
           return;

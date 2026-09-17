@@ -124,9 +124,34 @@ export function isProjectHistoryEventId(value: unknown): value is string {
   return typeof value === "string" && EVENT_ID_RE.test(value);
 }
 
-/** Mint an id for a new event of `kind`. */
+/**
+ * The width the timestamp component is padded to (round 13 #6).
+ *
+ * `[0-9a-z]{6,12}` above is the reader's contract and an unpadded base-36
+ * millisecond count does not honour it: anything below 36^5 (60,466,176 ms) is
+ * five characters, so a row recorded with a seeded or unset clock was written
+ * and LISTED but `get(id)` — and the HTTP lookup, which validates first —
+ * refused the very id the writer had handed out. Ten characters covers every
+ * clock up to the year ~117,000 and keeps ids lexicographically ordered by time,
+ * which an unpadded encoding also lost.
+ */
+const EVENT_ID_TIMESTAMP_WIDTH = 10;
+
+/**
+ * Mint an id for a new event of `kind`.
+ *
+ * The result is checked against {@link isProjectHistoryEventId} before it is
+ * returned: a writer that cannot mint a readable id must fail where the fact is
+ * recorded, not leave a row the reader answers 400 for.
+ */
 export function newProjectHistoryEventId(kind: ProjectHistoryEventKind, now = Date.now()): string {
-  return `hist_${kind}_${now.toString(36)}_${randomBytes(4).toString("hex")}`;
+  const millis = typeof now === "number" && Number.isFinite(now) ? Math.max(0, Math.floor(now)) : 0;
+  const stamp = millis.toString(36).padStart(EVENT_ID_TIMESTAMP_WIDTH, "0");
+  const id = `hist_${kind}_${stamp}_${randomBytes(4).toString("hex")}`;
+  if (!isProjectHistoryEventId(id)) {
+    throw new Error(`Refusing to mint a project history event id its own reader rejects: ${id}`);
+  }
+  return id;
 }
 
 /**

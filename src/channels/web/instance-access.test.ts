@@ -4,10 +4,13 @@ import {
   decideInstanceAccess,
   describeAccessModel,
   instanceRoleOf,
+  commandPrivilege,
   ownerOnlyProxySurface,
   type InstanceFacts,
   type InstanceSurface,
 } from "./instance-access.js";
+import { detectCommand } from "../../tasks/command-detector.js";
+import type { TaskCommand } from "../../tasks/types.js";
 
 // ── Plan 6.14: the shared-instance management model, as code ──
 //
@@ -64,12 +67,29 @@ describe("instance access model — owner-only surfaces", () => {
     expect(onShared.allowed).toBe(false);
     expect(onShared.code).toBe("deny:unidentified");
     expect(onShared.reason).toContain("shared");
+  });
 
-    // …but a single-identity instance has nobody to be separated from, so the
-    // portal that does not present an identity still works for its one user.
-    const onSolo = decideInstanceAccess({ surface, actor: anonActor, instance: solo });
-    expect(onSolo.allowed).toBe(true);
-    expect(onSolo.code).toBe("allow:sole-identity");
+  // ROUND 13 #9. `shared` counts identities, and an instance with exactly one
+  // registered owner is not shared — so this branch used to answer
+  // `allow:sole-identity` and hand the daemon, the provider switch and the .env
+  // to any caller that simply declined to identify itself. The count was right
+  // and the conclusion was wrong: sole-identity is safe because there is nobody
+  // to be separated FROM, and a recorded owner is somebody.
+  it.each(ownerOnly)("refuses an unattributed %s once an owner is recorded, shared or not", (surface) => {
+    const decision = decideInstanceAccess({ surface, actor: anonActor, instance: solo, what: "x" });
+    expect(decision.allowed).toBe(false);
+    expect(decision.code).toBe("deny:unidentified");
+    expect(decision.reason).toContain("owner");
+    expect(decision.reason).toContain(OWNER);
+  });
+
+  // …and the opposite direction, which would be a defect of its own: the
+  // instance that has never issued a web identity (a CLI/dashboard-only
+  // deployment) must keep working with no identity at all.
+  it.each(ownerOnly)("still grants an unattributed %s where no owner was ever recorded", (surface) => {
+    const decision = decideInstanceAccess({ surface, actor: anonActor, instance: { shared: false } });
+    expect(decision.allowed).toBe(true);
+    expect(decision.code).toBe("allow:sole-identity");
   });
 });
 
@@ -231,5 +251,119 @@ describe("instance access model — unattributable resources", () => {
     const d = decideInstanceAccess({ surface: "monitor:frames", actor: guestActor, resource: {}, instance: shared });
     expect(d.allowed).toBe(true);
     expect(d.code).toBe("allow:unattributed");
+  });
+});
+
+// ── Round 13 #11: the same powers, reached by typing ──────────────────────────
+//
+// Every owner-only power has a chat command. The WebSocket control frames were
+// gated; `{type:"message",text:"/daemon stop"}` was not, because it is "just a
+// message" until a channel-agnostic command handler dispatches it. These tests
+// pin the classification the enforcement sites use.
+describe("instance access model — privileged chat commands (round 13 #11)", () => {
+  it("classifies daemon control, provider switch and autonomous mode as instance control", () => {
+    expect(commandPrivilege("daemon", ["stop"])).toBe("instance:control");
+    expect(commandPrivilege("daemon", ["start"])).toBe("instance:control");
+    expect(commandPrivilege("autonomous", ["on", "24"])).toBe("instance:control");
+    expect(commandPrivilege("autonomous", ["off"])).toBe("instance:control");
+    expect(commandPrivilege("model", ["pin", "openai/gpt-5"])).toBe("instance:control");
+    expect(commandPrivilege("model", ["openai"])).toBe("instance:control");
+    expect(commandPrivilege("campaign", ["revive"])).toBe("instance:control");
+    // Arbitrary shell in the shared project, as the daemon — always.
+    expect(commandPrivilege("run", ["rm", "-rf", "build"])).toBe("instance:control");
+    expect(commandPrivilege("run", [])).toBe("instance:control");
+  });
+
+  it("classifies configuration writes as setup writes", () => {
+    expect(commandPrivilege("routing", ["preset", "performance"])).toBe("setup:write");
+    expect(commandPrivilege("token", ["1000000"])).toBe("setup:write");
+    expect(commandPrivilege("persona", ["switch", "mentor"])).toBe("setup:write");
+    expect(commandPrivilege("vault", ["init", "/tmp/x"])).toBe("setup:write");
+    expect(commandPrivilege("vault", ["sync"])).toBe("setup:write");
+  });
+
+  // Refusing reads would be a defect of its own: a guest may see what this
+  // instance is doing, it just may not change it.
+  it("leaves reads, and the caller's own traffic, open", () => {
+    for (const command of ["status", "tasks", "detail", "help", "goal", "agent", "measure", "guardian", "retry", "continue"] as const) {
+      expect(commandPrivilege(command, ["anything"]), command).toBeUndefined();
+    }
+    expect(commandPrivilege("daemon", [])).toBeUndefined();
+    expect(commandPrivilege("daemon", ["status"])).toBeUndefined();
+    expect(commandPrivilege("autonomous", [])).toBeUndefined();
+    expect(commandPrivilege("autonomous", ["status"])).toBeUndefined();
+    expect(commandPrivilege("model", [])).toBeUndefined();
+    expect(commandPrivilege("model", ["list"])).toBeUndefined();
+    expect(commandPrivilege("model", ["info", "openai"])).toBeUndefined();
+    expect(commandPrivilege("routing", ["info"])).toBeUndefined();
+    expect(commandPrivilege("token", [])).toBeUndefined();
+    expect(commandPrivilege("persona", ["list"])).toBeUndefined();
+    expect(commandPrivilege("vault", ["status"])).toBeUndefined();
+    expect(commandPrivilege("campaign", [])).toBeUndefined();
+  });
+
+  it("sends a command that NAMES a task to the task-ownership check instead", () => {
+    expect(commandPrivilege("cancel", ["task-7"])).toBe("task");
+    expect(commandPrivilege("pause", ["task-7"])).toBe("task");
+    expect(commandPrivilege("resume", ["task-7"])).toBe("task");
+    // Bare forms act on this chat's own active task, which is already its own.
+    expect(commandPrivilege("cancel", [])).toBeUndefined();
+    expect(commandPrivilege("pause", [])).toBeUndefined();
+  });
+
+  // COMMAND_PRIVILEGE is Record<TaskCommand, …> and so is this: adding a command
+  // to the product breaks THIS FILE until somebody decides whether it is a
+  // privileged one. `undefined` is a decision; an omission is not possible.
+  const EVERY_COMMAND: Record<TaskCommand, true> = {
+    status: true, cancel: true, tasks: true, detail: true, help: true, pause: true,
+    resume: true, model: true, goal: true, autonomous: true, persona: true, daemon: true,
+    agent: true, routing: true, token: true, retry: true, continue: true, vault: true,
+    run: true, campaign: true, measure: true, guardian: true,
+  };
+
+  it("classifies every command the product has — a new one cannot slip through unclassified", () => {
+    for (const command of Object.keys(EVERY_COMMAND) as TaskCommand[]) {
+      for (const args of [[], ["stop"], ["status"], ["on"], ["task-7"]]) {
+        const verdict = commandPrivilege(command, args);
+        expect(
+          verdict === undefined || verdict === "task" || verdict === "instance:control" || verdict === "setup:write",
+          `${command} ${args.join(" ")} → ${String(verdict)}`,
+        ).toBe(true);
+      }
+    }
+  });
+
+  // The detector is the only thing that turns typed text into one of those
+  // commands, so the classification has to hold for what IT produces.
+  it("classifies what the detector actually parses out of a typed line", () => {
+    const parsed = detectCommand("/daemon stop");
+    expect(parsed.type).toBe("command");
+    if (parsed.type !== "command") return;
+    expect(commandPrivilege(parsed.command, parsed.args)).toBe("instance:control");
+
+    const typed = detectCommand("/model pin openai/gpt-5");
+    if (typed.type !== "command") throw new Error("not a command");
+    expect(commandPrivilege(typed.command, typed.args)).toBe("instance:control");
+  });
+});
+
+describe("owner-only proxy paths cover every entry to the same power (round 13 #10)", () => {
+  it("names the daemon's other control routes", () => {
+    expect(ownerOnlyProxySurface("/api/daemon/stop")).toBe("instance:control");
+    expect(ownerOnlyProxySurface("/api/update")).toBe("instance:control");
+    expect(ownerOnlyProxySurface("/api/mcp/reconnect")).toBe("instance:control");
+    expect(ownerOnlyProxySurface("/api/daemon/approvals/abc-1")).toBe("instance:control");
+  });
+
+  it("names skill installation a setup write", () => {
+    expect(ownerOnlyProxySurface("/api/skills/install")).toBe("setup:write");
+    expect(ownerOnlyProxySurface("/api/skills/foo/enable")).toBe("setup:write");
+    expect(ownerOnlyProxySurface("/api/skills/foo/disable")).toBe("setup:write");
+  });
+
+  it("leaves a caller's own traffic alone", () => {
+    for (const path of ["/api/canvas", "/api/monitor/tasks", "/api/chat/history", "/api/metrics", "/api/skills"]) {
+      expect(ownerOnlyProxySurface(path), path).toBeUndefined();
+    }
   });
 });

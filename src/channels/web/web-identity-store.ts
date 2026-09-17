@@ -73,6 +73,37 @@ export class WebIdentityStore {
          token_hash = excluded.token_hash,
          updated_at = excluded.updated_at`,
     );
+
+    this.adoptEstablishedOwner();
+  }
+
+  /**
+   * ROUND 13 #8: an UPGRADED instance keeps its owner.
+   *
+   * `web_instance_meta` arrived with plan 6.14, so every instance that served a
+   * portal before it has a populated `web_identities` table and no owner row —
+   * and `CREATE TABLE IF NOT EXISTS` above happily leaves that seat empty.
+   * Nothing else filled it: a browser that already holds an identity reconnects
+   * and verifies, it does not re-`issue()`, so the first claim came from the next
+   * identity this instance ever issued. The next NEWCOMER inherited somebody
+   * else's instance — its settings, its `.env`, its daemon — and the operator who
+   * actually set it up was demoted to guest.
+   *
+   * The seat therefore goes to the identity that has held it all along: the
+   * FIRST one this instance issued, which is precisely what `issue()` would have
+   * recorded had the table existed then. Ordering is by `created_at`, then by
+   * insertion order for identities minted inside the same millisecond.
+   *
+   * A database with no identities is left alone: there is nobody to adopt, and
+   * the first `issue()` claims it as before.
+   */
+  private adoptEstablishedOwner(): void {
+    if (this.ownerProfileId() !== undefined) return;
+    const row = this.db!
+      .prepare("SELECT profile_id FROM web_identities ORDER BY created_at ASC, rowid ASC LIMIT 1")
+      .get() as { profile_id: string } | undefined;
+    if (!row?.profile_id) return;
+    this.stmtClaimOwner.run(WebIdentityStore.OWNER_KEY, row.profile_id, Date.now());
   }
 
   issue(preferredProfileId?: string): WebIdentity {

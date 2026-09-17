@@ -1201,6 +1201,11 @@ describe("WebChannel monitor command ownership", () => {
     const emit = vi.fn();
     channel.setWorkspaceBusEmitter(emit);
     channel.setTaskOwnerResolver((taskId) => taskId === "task-1" ? "chat-1" : null);
+    // A frame that acts comes from a socket that identified itself (round 13 #9).
+    (channel as unknown as { clients: Map<string, unknown> }).clients.set("chat-1", {
+      ws: createMockSocket(),
+      sessionInitialized: true,
+    });
 
     await sendMonitorMessage(channel, "chat-1", {
       type: "monitor:retry_task",
@@ -2116,6 +2121,9 @@ describe("WebChannel verify:gate_decision enforcement", () => {
     const socket = createMockSocket();
     (channel as unknown as { clients: Map<string, unknown> }).clients.set("chat-1", {
       ws: socket,
+      // A live session that identified itself: round 13 #9 refuses a frame that
+      // ACTS from a socket which never completed session_init.
+      sessionInitialized: true,
     });
 
     await sendGate(channel, "chat-1", {
@@ -2144,6 +2152,9 @@ describe("WebChannel verify:gate_decision enforcement", () => {
     const socket = createMockSocket();
     (channel as unknown as { clients: Map<string, unknown> }).clients.set("chat-1", {
       ws: socket,
+      // A live session that identified itself: round 13 #9 refuses a frame that
+      // ACTS from a socket which never completed session_init.
+      sessionInitialized: true,
     });
 
     await sendGate(channel, "chat-1", {
@@ -2168,6 +2179,9 @@ describe("WebChannel verify:gate_decision enforcement", () => {
     const socket = createMockSocket();
     (channel as unknown as { clients: Map<string, unknown> }).clients.set("chat-1", {
       ws: socket,
+      // A live session that identified itself: round 13 #9 refuses a frame that
+      // ACTS from a socket which never completed session_init.
+      sessionInitialized: true,
     });
 
     await sendGate(channel, "chat-1", {
@@ -2187,6 +2201,9 @@ describe("WebChannel verify:gate_decision enforcement", () => {
     const socket = createMockSocket();
     (channel as unknown as { clients: Map<string, unknown> }).clients.set("chat-1", {
       ws: socket,
+      // A live session that identified itself: round 13 #9 refuses a frame that
+      // ACTS from a socket which never completed session_init.
+      sessionInitialized: true,
     });
 
     await sendGate(channel, "chat-1", {
@@ -2874,7 +2891,16 @@ describe("WebChannel shared instance: two identities (plan 6.14)", () => {
     await channel.disconnect();
   });
 
-  it("keeps a single-identity instance working: its setup write needs no headers", async () => {
+  // ROUND 13 #7 + #9 CHANGED THIS CONTRACT, DELIBERATELY.
+  //
+  // It used to read "a single-identity instance needs no headers", and that was
+  // the hole #9 walked through: an instance with one registered owner is not
+  // `shared`, so anything unattributed was granted owner powers. The portal now
+  // attaches the verified pair to its own API requests (round 13 #7), so the one
+  // person's settings page keeps working — by identifying itself, not by being
+  // alone. What survives untouched is the instance that has issued NO web
+  // identity at all (no owner recorded): see the model's own tests.
+  it("keeps the single OWNER working — with the pair the portal now attaches", async () => {
     const channel = new WebChannel(3000, 3100);
     const solo = connect(channel, OWNER_ID);
     expect(identityStore(channel).count()).toBe(1);
@@ -2887,7 +2913,11 @@ describe("WebChannel shared instance: two identities (plan 6.14)", () => {
     const req = createMockRequest({
       method: "POST",
       url: "/api/settings/env",
-      headers: { origin: "http://127.0.0.1:3000" },
+      headers: {
+        origin: "http://127.0.0.1:3000",
+        "x-strada-profile-id": solo.profileId,
+        "x-strada-profile-token": solo.profileToken,
+      },
       body: JSON.stringify({ ANTHROPIC_API_KEY: "sk-solo" }),
     });
     const res = createMockResponse();
@@ -3202,3 +3232,310 @@ describe("WebChannel attachment ownership survives a restart (plan 6.14)", () =>
     await channel.disconnect();
   });
 });
+
+// ── Codex round 13, the authorization cluster: the ways AROUND the owner check ──
+//
+// Plan 6.14 gave the instance an owner and gated the surfaces that were known.
+// These are the entries that were not: a socket that never identified itself, a
+// power typed as text instead of sent as a control frame, and a chat binding the
+// LRU forgot while the session it belonged to was still alive.
+describe("WebChannel shared instance: the ways around the owner check (round 13)", () => {
+  const OWNER_ID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+  const GUEST_ID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+
+  type StoreView = {
+    issue: (id?: string) => { profileId: string; profileToken: string };
+    ownerProfileId: () => string | undefined;
+    count: () => number;
+  };
+
+  function store(channel: WebChannel): StoreView {
+    return (channel as unknown as { identityStore: StoreView }).identityStore;
+  }
+
+  function open(channel: WebChannel) {
+    const socket = createMockSocket();
+    (channel as unknown as { handleWsConnection: (ws: unknown) => void }).handleWsConnection(socket);
+    const first = socket.getSentMessages().find((m) => m.type === "connected")!;
+    return {
+      socket,
+      chatId: String(first.chatId),
+      reconnectToken: String(first.reconnectToken),
+      send: (payload: Record<string, unknown>) => socket.emit("message", Buffer.from(JSON.stringify(payload))),
+      frames: (type: string) => socket.getSentMessages().filter((m) => m.type === type),
+      text: () => socket.getSentMessages().filter((m) => m.type === "text").map((m) => String(m.text)).join("\n"),
+      connected: () => socket.getSentMessages().filter((m) => m.type === "connected").at(-1)!,
+    };
+  }
+
+  /** Let the channel's own await chain (ownership lookups, handlers) run out. */
+  const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+  /** A socket that completed session_init as `profileId`. */
+  function identify(channel: WebChannel, profileId: string) {
+    const socket = open(channel);
+    const identity = store(channel).issue(profileId);
+    socket.send({ type: "session_init", profileId: identity.profileId, profileToken: identity.profileToken });
+    const connected = socket.connected();
+    return {
+      ...socket,
+      profileId: identity.profileId,
+      profileToken: identity.profileToken,
+      chatId: String(connected.chatId),
+      reconnectToken: String(connected.reconnectToken),
+    };
+  }
+
+  // ── #9: an unidentified second socket must not inherit owner powers ─────────
+  //
+  // THE DEFECT. `allow:sole-identity` hung on the identity COUNT, and a second
+  // socket that simply never sent session_init does not raise the count: it
+  // stays "unidentified", the instance stays "not shared", and the model said
+  // yes. Pausing the run, switching the provider and flipping autonomous mode
+  // were all available to any socket that declined to say who it was.
+  it("refuses instance control to a socket that never completed session_init", async () => {
+    const channel = new WebChannel(3000, 3100);
+    const owner = identify(channel, OWNER_ID);
+    expect(store(channel).ownerProfileId()).toBe(owner.profileId);
+    expect(store(channel).count()).toBe(1);
+
+    const emit = vi.fn();
+    channel.setWorkspaceBusEmitter(emit);
+    const seen: string[] = [];
+    channel.onMessage(async (msg) => { seen.push(msg.text ?? ""); });
+
+    const stranger = open(channel);
+    stranger.send({ type: "monitor:pause" });
+    stranger.send({ type: "provider_switch", provider: "openai", model: "gpt-5" });
+    stranger.send({ type: "autonomous_toggle", enabled: true });
+    await settle();
+
+    expect(emit).not.toHaveBeenCalled();
+    expect(seen).toEqual([]);
+    // Still one identity: declining to identify must not be a way to be counted.
+    expect(store(channel).count()).toBe(1);
+    expect(stranger.text()).toContain("Refused");
+
+    // The owner still has all three.
+    await (channel as unknown as { handleWsMessage: (c: string, d: Record<string, unknown>) => Promise<void> })
+      .handleWsMessage(owner.chatId, { type: "monitor:pause" });
+    expect(emit).toHaveBeenCalledWith("monitor:pause", expect.objectContaining({ type: "monitor:pause" }));
+
+    await channel.disconnect();
+  });
+
+  // The OTHER half of #9, isolated: on an instance that has issued no identity
+  // at all the model still grants an unattributed owner-only action (the
+  // CLI/dashboard-only deployment, nobody to be separated from) — so the
+  // requirement that a frame which ACTS comes from an initialized session has to
+  // stand on its own, or a pre-session_init socket walks in through that door.
+  it("refuses a frame that acts before session_init even with no owner recorded yet", async () => {
+    const channel = new WebChannel(3000, 3100);
+    const emit = vi.fn();
+    channel.setWorkspaceBusEmitter(emit);
+    channel.setTaskOwnerResolver(() => null);
+    expect(store(channel).ownerProfileId()).toBeUndefined();
+    expect(store(channel).count()).toBe(0);
+
+    const stranger = open(channel);
+    stranger.send({ type: "monitor:pause" });
+    stranger.send({ type: "monitor:cancel_task", taskId: "task-1" });
+    await settle();
+
+    expect(emit).not.toHaveBeenCalled();
+    expect(stranger.text()).toContain("session_init");
+
+    // …and a socket that identifies itself FIRST — which is what the portal
+    // does, and the only order `session_init` is honoured in — is served.
+    const proper = open(channel);
+    proper.send({ type: "session_init" });
+    proper.send({ type: "monitor:pause" });
+    await settle();
+    expect(emit).toHaveBeenCalledWith("monitor:pause", expect.objectContaining({ type: "monitor:pause" }));
+
+    await channel.disconnect();
+  });
+
+  it("refuses an unattributed settings write once an owner is recorded, even with one identity", async () => {
+    const channel = new WebChannel(3000, 3100);
+    const owner = identify(channel, OWNER_ID);
+    expect(store(channel).count()).toBe(1);
+
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response("{}", { status: 200, headers: { "content-type": "application/json" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const proxy = (req: unknown, res: unknown, url: string) =>
+      (channel as unknown as { proxyToDashboard: (r: unknown, s: unknown, u: string) => Promise<void> })
+        .proxyToDashboard(req, res, url);
+
+    const anonReq = createMockRequest({
+      method: "POST",
+      url: "/api/settings/env",
+      headers: { origin: "http://127.0.0.1:3000" },
+      body: JSON.stringify({ ANTHROPIC_API_KEY: "sk-anon" }),
+    });
+    const anonRes = createMockResponse();
+    const anonPending = proxy(anonReq, anonRes, "/api/settings/env");
+    anonReq.emitBody();
+    await anonPending;
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(anonRes.statusCode).toBe(403);
+    expect(anonRes.body).toContain("deny:unidentified");
+
+    // …and the OWNER, presenting the pair the portal now attaches, is served.
+    const ownerReq = createMockRequest({
+      method: "POST",
+      url: "/api/settings/env",
+      headers: {
+        origin: "http://127.0.0.1:3000",
+        "x-strada-profile-id": owner.profileId,
+        "x-strada-profile-token": owner.profileToken,
+      },
+      body: JSON.stringify({ ANTHROPIC_API_KEY: "sk-owner" }),
+    });
+    const ownerRes = createMockResponse();
+    const ownerPending = proxy(ownerReq, ownerRes, "/api/settings/env");
+    ownerReq.emitBody();
+    await ownerPending;
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(ownerRes.statusCode).toBe(200);
+
+    await channel.disconnect();
+  });
+
+  // ── #11: the same powers, typed as chat text ────────────────────────────────
+  //
+  // THE DEFECT. `{type:"message",text:"/daemon stop"}` is not a control frame,
+  // so none of the control-frame gates saw it. The channel-agnostic command
+  // handler then dispatched it straight to heartbeatLoopRef.stop(). Every
+  // owner-only power has a command like that, and the guest had all of them.
+  it("refuses a guest the privileged chat commands and lets the owner type them", async () => {
+    const channel = new WebChannel(3000, 3100);
+    const owner = identify(channel, OWNER_ID);
+    const guest = identify(channel, GUEST_ID);
+    expect(store(channel).count()).toBe(2);
+
+    const seen: string[] = [];
+    channel.onMessage(async (msg) => { seen.push(msg.text ?? ""); });
+
+    const privileged = [
+      "/daemon stop",
+      "/autonomous on",
+      "/model pin openai/gpt-5",
+      "/routing preset performance",
+      "/token 1000000",
+      "/persona switch mentor",
+      "/vault init /tmp/whatever",
+      "/run rm -rf build",
+    ];
+    for (const text of privileged) {
+      guest.send({ type: "message", text });
+    }
+    await settle();
+
+    expect(seen).toEqual([]);
+    const refusals = guest.text();
+    expect(refusals).toContain(guest.profileId);
+    expect(refusals).toContain(owner.profileId);
+    expect(refusals.match(/Refused:/g)?.length).toBe(privileged.length);
+
+    // The guest can still USE the instance: an ordinary request, and the read
+    // forms of the same commands, go through untouched.
+    guest.send({ type: "message", text: "build me a level" });
+    guest.send({ type: "message", text: "/daemon status" });
+    guest.send({ type: "message", text: "/model list" });
+    guest.send({ type: "message", text: "/status" });
+    await settle();
+    expect(seen).toEqual(["build me a level", "/daemon status", "/model list", "/status"]);
+
+    // …and the owner types the privileged ones.
+    owner.send({ type: "message", text: "/daemon stop" });
+    await settle();
+    expect(seen).toContain("/daemon stop");
+
+    await channel.disconnect();
+  });
+
+  it("refuses a guest cancelling the owner's task by typing it", async () => {
+    const channel = new WebChannel(3000, 3100);
+    const owner = identify(channel, OWNER_ID);
+    const guest = identify(channel, GUEST_ID);
+    const seen: string[] = [];
+    channel.onMessage(async (msg) => { seen.push(msg.text ?? ""); });
+    channel.setTaskOwnerResolver((taskId) => (taskId === "task-owner" ? owner.chatId : null));
+
+    guest.send({ type: "message", text: "/cancel task-owner" });
+    await settle();
+
+    expect(seen).not.toContain("/cancel task-owner");
+    expect(guest.text()).toContain("task-owner");
+    expect(guest.text()).toContain(guest.profileId);
+
+    // The owner cancels its own task by typing, as before.
+    owner.send({ type: "message", text: "/cancel task-owner" });
+    await settle();
+    expect(seen).toContain("/cancel task-owner");
+
+    await channel.disconnect();
+  });
+
+  // ── #12: the chat binding may be forgotten; ownership may not ──────────────
+  //
+  // THE DEFECT. `profileByChat` is a 500-entry LRU and `mayReclaimChat` read a
+  // MISSING entry as "belongs to nobody, help yourself". A busy instance evicts
+  // the owner's binding while the owner's socket is still connected, and any
+  // profile holding that chat's reconnect token then displaced the owner and
+  // inherited the chat — its replayed boards and its buffered answers.
+  it("does not let another identity reclaim a live chat whose binding was evicted", async () => {
+    const channel = new WebChannel(3000, 3100);
+    const owner = identify(channel, OWNER_ID);
+    const guest = identify(channel, GUEST_ID);
+
+    // 500 newer chats, each recording its own binding — the owner's is pushed out.
+    for (let i = 0; i < 500; i++) {
+      const filler = open(channel);
+      filler.send({ type: "session_init" });
+    }
+    const bindings = (channel as unknown as { profileByChat: { get: (k: string) => string | undefined } }).profileByChat;
+    expect(bindings.get(owner.chatId)).toBeUndefined();
+    // The owner's session is still very much alive.
+    expect((channel as unknown as { clients: Map<string, unknown> }).clients.has(owner.chatId)).toBe(true);
+
+    // The guest, holding the owner's chat id and reconnect token, tries to take it.
+    const thief = open(channel);
+    thief.send({
+      type: "session_init",
+      profileId: guest.profileId,
+      profileToken: guest.profileToken,
+      chatId: owner.chatId,
+      reconnectToken: owner.reconnectToken,
+    });
+
+    const landed = thief.connected();
+    expect(landed.chatId).not.toBe(owner.chatId);
+    expect(landed.profileId).toBe(guest.profileId);
+    // The owner keeps its chat and its socket.
+    expect(owner.socket.getCloseCalls()).toEqual([]);
+    expect((channel as unknown as { clients: Map<string, WsClientView> }).clients.get(owner.chatId)?.profileId)
+      .toBe(owner.profileId);
+
+    // …and the owner's OWN reconnect still works: refusing the stranger must not
+    // refuse the person whose chat it is.
+    const again = open(channel);
+    again.send({
+      type: "session_init",
+      profileId: owner.profileId,
+      profileToken: owner.profileToken,
+      chatId: owner.chatId,
+      reconnectToken: owner.reconnectToken,
+    });
+    expect(String(again.connected().chatId)).toBe(owner.chatId);
+
+    await channel.disconnect();
+  });
+});
+
+type WsClientView = { profileId: string };

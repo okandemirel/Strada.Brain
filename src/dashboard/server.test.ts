@@ -6,6 +6,7 @@ import { VaultRegistry } from "../vault/vault-registry.js";
 import type { MetricsAggregation } from "../metrics/metrics-types.js";
 import type { MetricsStorage } from "../metrics/metrics-storage.js";
 import { UserProfileStore } from "../memory/unified/user-profile-store.js";
+import { setInstanceIdentityStore } from "../channels/web/instance-authorization.js";
 
 const loggerWarnSpy = vi.hoisted(() => vi.fn());
 
@@ -1637,5 +1638,158 @@ describe("DashboardServer", () => {
       expect(html).toContain("Chain Resilience");
       expect(html).toContain("api/chain-resilience");
     });
+  });
+});
+
+// ── Codex round 13 #10: the dashboard port is the same instance ───────────────
+//
+// THE DEFECT. The portal proxy refuses a guest's owner-only mutation (plan 6.14),
+// and the dashboard server next door performed the very same request. Its gate
+// was CSRF only — a bearer token when one is configured, otherwise a trusted
+// same-origin browser header — and neither of those says WHICH of the instance's
+// identities is asking. `POST /api/daemon/stop` with a trusted Origin stopped the
+// daemon for everyone, from any identity, and from none.
+describe("DashboardServer: owner-only mutations on the dashboard port (round 13 #10)", () => {
+  let server: DashboardServer | null = null;
+
+  afterEach(async () => {
+    setInstanceIdentityStore(null);
+    if (server) {
+      await server.stop();
+      server = null;
+    }
+  });
+
+  /** An instance that has served a portal: owner + one guest. */
+  function identities() {
+    const issued = ["owner-profile", "guest-profile"];
+    return {
+      verify: (profileId: string, token: string) => issued.includes(profileId) && token === `token-${profileId}`,
+      ownerProfileId: () => "owner-profile",
+      has: (profileId: string) => issued.includes(profileId),
+      count: () => issued.length,
+    };
+  }
+  const as = (profileId: string) => ({
+    "x-strada-profile-id": profileId,
+    "x-strada-profile-token": `token-${profileId}`,
+  });
+
+  /** A tokenless dashboard with a live daemon loop, exactly as the portal's is. */
+  async function tokenlessDashboard(): Promise<{ port: number; loop: { stop: ReturnType<typeof vi.fn>; start: ReturnType<typeof vi.fn> } } | null> {
+    const loop = {
+      start: vi.fn(),
+      stop: vi.fn(),
+      isRunning: () => true,
+      getDaemonStatus: () => ({
+        running: true,
+        intervalMs: 1000,
+        triggerCount: 0,
+        lastTick: null,
+        budgetUsage: { usedUsd: 0, limitUsd: 0, pct: 0 },
+      }),
+      getCircuitBreaker: () => undefined,
+    };
+    const metrics = new MetricsCollector();
+    server = new DashboardServer(0, metrics, () => undefined);
+    server.setDaemonContext({ heartbeatLoop: loop as never });
+    try {
+      await server.start();
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code === "EPERM") return null;
+      throw err;
+    }
+    const addr = (server as unknown as { server: { address: () => { port: number } } }).server.address();
+    if (!addr || typeof addr === "string") return null;
+    return { port: addr.port, loop };
+  }
+
+  const post = (port: number, path: string, headers: Record<string, string> = {}) =>
+    fetch(`http://localhost:${port}${path}`, {
+      method: "POST",
+      headers: { Origin: `http://localhost:${port}`, "Content-Type": "application/json", ...headers },
+      body: "{}",
+    });
+
+  it("refuses a guest — and an unidentified caller — POST /api/daemon/stop", async () => {
+    setInstanceIdentityStore(identities());
+    const started = await tokenlessDashboard();
+    if (!started) return;
+
+    const guest = await post(started.port, "/api/daemon/stop", as("guest-profile"));
+    expect(guest.status).toBe(403);
+    expect(JSON.stringify(await guest.json())).toContain("guest-profile");
+
+    const anonymous = await post(started.port, "/api/daemon/stop");
+    expect(anonymous.status).toBe(403);
+
+    // The daemon is still running: a refusal touches nothing.
+    expect(started.loop.stop).not.toHaveBeenCalled();
+
+    // …and the owner stops it.
+    const owner = await post(started.port, "/api/daemon/stop", as("owner-profile"));
+    expect(owner.status).toBe(200);
+    expect(started.loop.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("covers every entry to the same powers, not just daemon/stop", async () => {
+    setInstanceIdentityStore(identities());
+    const started = await tokenlessDashboard();
+    if (!started) return;
+
+    for (const path of [
+      "/api/daemon/start",
+      "/api/user/autonomous",
+      "/api/providers/switch",
+      "/api/settings/rate-limits",
+      "/api/budget/config",
+      "/api/routing/preset",
+      "/api/models/refresh",
+      "/api/personality/switch",
+      "/api/skills/install",
+      "/api/vaults",
+      "/api/update",
+      "/api/mcp/reconnect",
+      "/api/deployment/check",
+    ]) {
+      const res = await post(started.port, path, as("guest-profile"));
+      expect(res.status, path).toBe(403);
+    }
+    expect(started.loop.start).not.toHaveBeenCalled();
+  });
+
+  it("leaves reads and a caller's own traffic alone", async () => {
+    setInstanceIdentityStore(identities());
+    const started = await tokenlessDashboard();
+    if (!started) return;
+
+    // A GET is not a mutation: the guest still sees the instance it is using.
+    const status = await fetch(`http://localhost:${started.port}/api/daemon`, {
+      headers: { Origin: `http://localhost:${started.port}`, ...as("guest-profile") },
+    });
+    expect(status.status).toBe(200);
+  });
+
+  it("keeps the instance that has issued no web identity working, with no headers", async () => {
+    // No injected store and no identity database: the CLI/dashboard-only
+    // deployment has no owner, and nobody to be separated from.
+    setInstanceIdentityStore(null);
+    const started = await tokenlessDashboard();
+    if (!started) return;
+
+    const res = await post(started.port, "/api/daemon/stop");
+    expect(res.status).toBe(200);
+    expect(started.loop.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("answers 503 when the identity state cannot be read (round 13 #14)", async () => {
+    const boom = (): never => { throw new Error("SQLITE_CORRUPT: database disk image is malformed"); };
+    setInstanceIdentityStore({ verify: boom, ownerProfileId: boom, has: boom, count: boom });
+    const started = await tokenlessDashboard();
+    if (!started) return;
+
+    const res = await post(started.port, "/api/daemon/stop", as("owner-profile"));
+    expect(res.status).toBe(503);
+    expect(started.loop.stop).not.toHaveBeenCalled();
   });
 });

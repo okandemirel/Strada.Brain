@@ -25,15 +25,15 @@
  * against the identity store the web channel issued it from — a profile id on
  * its own is a public value and proves nothing — and `decideInstanceAccess`
  * answers. The owner decides; a guest is refused; an unattributed request is
- * granted only while the instance has a single identity, which is the model's
- * own rule and keeps the ordinary one-person portal working untouched.
+ * granted only on an instance that has never issued a web identity — there is no
+ * owner there to be separated from.
  *
- * WHAT THE WEB CHANNEL STILL OWES. `proxyToDashboard` forwards Authorization,
- * Origin and Referer and drops every other request header, so a browser request
- * reaches this route unattributed even when the portal knows exactly who sent
- * it. Until the proxy forwards `x-strada-profile-id` / `x-strada-profile-token`,
- * a SHARED instance refuses these requests (`deny:unidentified`) — the same
- * trade-off instance-access.ts already documents for owner-only settings writes.
+ * HOW THE IDENTITY GETS HERE. The portal proxy forwards the VERIFIED
+ * `x-strada-profile-id` / `x-strada-profile-token` pair (nothing a caller merely
+ * claims), and the portal attaches that pair to its own API requests (round 13
+ * #7), so a browser request arrives attributed on either route — through the
+ * proxy or straight at the dashboard port. Resolving it is shared with every
+ * other HTTP surface: `src/channels/web/instance-authorization.ts`.
  *
  * WHY DECISIONS ARE APPLIED AS A WHOLE. `applyUndo` restores the review — all of
  * its ready entries, plus the run's commits — because that is the only state the
@@ -44,9 +44,7 @@
  * touches nothing.
  */
 
-import { existsSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { join } from "node:path";
 import {
   applyUndo,
   isReviewId,
@@ -62,13 +60,10 @@ import {
   type UndoPreview,
 } from "../agents/multi/workspace-change-review.js";
 import {
-  decideInstanceAccess,
-  instanceRoleOf,
-  type AccessDecision,
-  type InstanceFacts,
-} from "../channels/web/instance-access.js";
-import { WebIdentityStore } from "../channels/web/web-identity-store.js";
-import { getCachedConfig } from "../config/config.js";
+  authorizeInstanceRequest,
+  setInstanceIdentityStore,
+  type InstanceIdentityStoreView,
+} from "../channels/web/instance-authorization.js";
 import { getLoggerSafe } from "../utils/logger.js";
 
 /** Route prefix. Registered before the file-explorer routes, which 404 the rest. */
@@ -124,115 +119,65 @@ function jsonResponse(res: ServerResponse, status: number, body: unknown): void 
   res.end(JSON.stringify(body));
 }
 
-// -- Who is asking (round 12 #10) -------------------------------------------
+// -- Who is asking (round 12 #10, round 13 #14) -----------------------------
 
 /**
- * The part of the web channel's identity store this route needs. Structural, so
- * the daemon can hand over its live `WebIdentityStore` and a test can hand over
- * a fake, and so this module does not depend on the channel's class.
+ * The identity store this route judges callers against. Kept as an alias of the
+ * shared view so the daemon and the tests can keep injecting the same shape.
  */
-export interface ChangeReviewIdentityStore {
-  /** True only for a pair THIS instance issued. */
-  verify(profileId: string, profileToken: string): boolean;
-  /** The instance owner (the first identity ever issued), if one is recorded. */
-  ownerProfileId(): string | undefined;
-  /** True when this profile id was issued here — a guest rather than a stranger. */
-  has(profileId: string): boolean;
-  /** How many identities exist; more than one means the instance is genuinely shared. */
-  count(): number;
-}
-
-let injectedIdentityStore: ChangeReviewIdentityStore | null = null;
-let openedIdentityStore: ChangeReviewIdentityStore | undefined;
-/** Set only when opening the store FAILED — "not there yet" is retried. */
-let identityStoreUnavailable = false;
+export type ChangeReviewIdentityStore = InstanceIdentityStoreView;
 
 /**
  * Hand this route the identity store to verify callers against (the daemon's
- * own, or a fake in a test). `null` clears it, and the route falls back to
- * reading the identity database the web channel keeps.
+ * own, or a fake in a test). `null` clears it, and the shared resolver falls
+ * back to reading the identity database the web channel keeps.
  */
 export function setChangeReviewIdentityStore(store: ChangeReviewIdentityStore | null): void {
-  injectedIdentityStore = store;
-  openedIdentityStore = undefined;
-  identityStoreUnavailable = false;
+  setInstanceIdentityStore(store);
 }
 
 /**
- * The identity store to judge this request with.
+ * Answer and return false when this caller may not decide.
  *
- * With nothing injected the web channel's own database is opened where
- * bootstrap-channels.ts puts it (`<memory.dbPath>/web-identities.db`) — that is
- * how a request that arrives straight at the dashboard port, bypassing the
- * portal, is still judged against real identities. A project with no such
- * database has never issued one, so there is no second identity to be separated
- * from and the fallback is "sole identity", not "refuse everything".
+ * ROUND 13 #14 — AN UNREADABLE IDENTITY STORE IS NOT AN EMPTY ONE. The previous
+ * version opened the identity database lazily, latched a failure in a
+ * process-wide `identityStoreUnavailable` flag and then returned no store at
+ * all; every caller read that as count 0, i.e. "not shared", i.e. allow. One
+ * transient failure — the file locked by a backup, a permission change, a
+ * corrupt page — therefore authorized ANONYMOUS reverts of the user's project
+ * for the life of the daemon, and the more identities the instance had, the more
+ * it mattered. The state is now three-way (`instance-authorization.ts`) and an
+ * unavailable store is a 503: this route will not decide who you are by failing
+ * to look.
  */
-function identityStore(): ChangeReviewIdentityStore | undefined {
-  if (injectedIdentityStore) return injectedIdentityStore;
-  if (openedIdentityStore) return openedIdentityStore;
-  if (identityStoreUnavailable) return undefined;
-  try {
-    const config = getCachedConfig();
-    const dbPath = config ? join(config.memory.dbPath, "web-identities.db") : "";
-    // Only an EXISTING database is opened: creating one here would invent an
-    // identity table for a project that has never served a portal. A database
-    // that is not there YET is looked for again on the next request — caching
-    // "no identities" would leave the gate permissive for the life of the
-    // process once a single request arrived before the portal's first browser.
-    if (dbPath && existsSync(dbPath)) {
-      openedIdentityStore = new WebIdentityStore(dbPath);
-    }
-  } catch (error) {
-    getLoggerSafe().warn("Change-review could not open the web identity store; callers cannot be attributed", {
-      error: String(error),
-    });
-    identityStoreUnavailable = true;
-  }
-  return openedIdentityStore;
-}
-
-function singleHeader(value: string | string[] | undefined): string | undefined {
-  return Array.isArray(value) ? value[0] : value;
-}
-
-/**
- * May this caller act on this project's change reviews?
- *
- * The identity is the VERIFIED profile pair, never a claimed field: `profileId`
- * travels to the browser and lives in its localStorage, so a request naming the
- * owner is not the owner. Everything else is the shared-instance model's own
- * decision function, on the surface that covers "changes the one shared thing".
- */
-function authorizeChangeReview(req: IncomingMessage, what: string): AccessDecision {
-  const store = identityStore();
-  const claimedId = singleHeader(req.headers?.["x-strada-profile-id"])?.trim();
-  const claimedToken = singleHeader(req.headers?.["x-strada-profile-token"])?.trim();
-  const verified =
-    store && claimedId && claimedToken && store.verify(claimedId, claimedToken) ? claimedId : undefined;
-  const facts: InstanceFacts = {
-    shared: (store?.count() ?? 0) > 1,
-    ...(store?.ownerProfileId() !== undefined ? { ownerProfileId: store!.ownerProfileId()! } : {}),
-  };
-  const role = instanceRoleOf(verified, facts, (candidate) => store?.has(candidate) ?? false);
-  return decideInstanceAccess({
-    surface: "instance:control",
-    actor: { ...(verified ? { profileId: verified } : {}), role },
-    instance: facts,
-    what,
-  });
-}
-
-/** Answer 403 with the model's own reason, and return false, when refused. */
 function allowed(req: IncomingMessage, res: ServerResponse, what: string): boolean {
-  const decision = authorizeChangeReview(req, what);
-  if (decision.allowed) return true;
-  getLoggerSafe().warn("Change-review request refused", { what, code: decision.code, reason: decision.reason });
+  const verdict = authorizeInstanceRequest(req.headers, "instance:control", what);
+  if (verdict.kind === "unavailable") {
+    getLoggerSafe().error("Change-review request refused: the instance's identities cannot be read", {
+      what,
+      why: verdict.why,
+    });
+    jsonResponse(res, 503, {
+      error: "Identity state unavailable",
+      reason:
+        `who may decide this change review cannot be established right now: ${verdict.why}. ` +
+        `Refusing rather than guessing.`,
+      surface: "instance:control",
+      code: "unavailable:identity-store",
+    });
+    return false;
+  }
+  if (verdict.decision.allowed) return true;
+  getLoggerSafe().warn("Change-review request refused", {
+    what,
+    code: verdict.decision.code,
+    reason: verdict.decision.reason,
+  });
   jsonResponse(res, 403, {
     error: "Forbidden",
-    reason: decision.reason,
-    surface: decision.surface,
-    code: decision.code,
+    reason: verdict.decision.reason,
+    surface: verdict.decision.surface,
+    code: verdict.decision.code,
   });
   return false;
 }

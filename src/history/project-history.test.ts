@@ -378,3 +378,66 @@ describe("daemon.db migration", () => {
     storage.close();
   });
 });
+
+/**
+ * Codex round 13 #6 — AN ID THIS MODULE MINTS MUST PASS THIS MODULE'S VALIDATOR.
+ *
+ * The id is `hist_<kind>_<base36 millis>_<8 hex>` and the reader's regex demands
+ * at least SIX characters for the timestamp component, while the writer emitted
+ * `now.toString(36)` unpadded. Any recordedAt below 36^5 (60,466,176 ms — an
+ * epoch clock, a seeded fixture, a device whose clock has not been set) minted a
+ * five-character component: the row was written and LISTED fine, but `get(id)`
+ * returned nothing and the HTTP lookup answered 400 for an id the writer itself
+ * had just handed out. Row visible, row unreachable.
+ *
+ * Property-style over magnitudes rather than one hand-picked value: the bug is a
+ * WIDTH, so the test has to cross the width boundaries.
+ */
+describe("project history ids round-trip their own validator (round 13 #6)", () => {
+  const magnitudes = [
+    1,
+    2_000_000,
+    60_466_175,      // 36^5 - 1: the last value that used to be five characters
+    60_466_176,      // 36^5
+    1_700_000_000_000, // a real wall clock
+    4_000_000_000_000_000, // far future (year ~128,700)
+  ];
+
+  it("mints ids that isProjectHistoryEventId accepts, at every magnitude", () => {
+    for (const recordedAt of magnitudes) {
+      for (const kind of ["decision", "delivery", "milestone"] as const) {
+        const id = newProjectHistoryEventId(kind, recordedAt);
+        expect(isProjectHistoryEventId(id), `${kind} @ ${recordedAt} → ${id}`).toBe(true);
+      }
+    }
+  });
+
+  it("stores and reads back an event recorded at any of those clocks", () => {
+    for (const recordedAt of magnitudes) {
+      const storage = openStorage(freshDbPath());
+      const store = new ProjectHistoryStore(storage);
+      const event = store.record({
+        kind: "decision",
+        projectId: "PixelFlow",
+        summary: `recorded at ${recordedAt}`,
+        owner: { scope: "user", userId: "alice" },
+        payload: {},
+        recordedAt,
+      });
+
+      expect(isProjectHistoryEventId(event.id), `${recordedAt} → ${event.id}`).toBe(true);
+      // Listed AND reachable: the defect showed up as exactly this asymmetry.
+      expect(store.list({ viewer: "alice" }).map((e) => e.id)).toContain(event.id);
+      expect(store.get(event.id, "alice")?.summary).toBe(`recorded at ${recordedAt}`);
+      storage.close();
+    }
+  });
+
+  it("ids stay sortable by their timestamp component, which is what padding buys", () => {
+    const earlier = newProjectHistoryEventId("decision", 2_000_000);
+    const later = newProjectHistoryEventId("decision", 1_700_000_000_000);
+    const stamp = (id: string) => id.split("_")[2]!;
+    expect(stamp(earlier).length).toBe(stamp(later).length);
+    expect(stamp(earlier) < stamp(later)).toBe(true);
+  });
+});
