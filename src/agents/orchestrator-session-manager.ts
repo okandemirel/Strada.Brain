@@ -143,7 +143,7 @@ function defaultIsWriteCapable(toolName: string): boolean {
  * command is a replacement write only when some segment provably mutates.
  */
 const MUTATING_PROGRAM_RE =
-  /^(?:\S*\/)?(?:tee|mv|cp|rm|rmdir|mkdir|touch|chmod|chown|ln|install|truncate|dd|patch|rsync|unzip|tar|curl|wget|npm|pnpm|yarn|npx|bunx|dotnet|make|cargo|go|gradle|\.\/gradlew|mvn|msbuild|xcodebuild|unity|Unity)$/iu;
+  /^(?:\S*\/)?(?:tee|mv|cp|rm|rmdir|mkdir|touch|chmod|chown|ln|install|truncate|dd|patch|rsync|unzip|make|cargo|go|gradle|\.\/gradlew|gradlew|mvn|msbuild|xcodebuild|unity|unityhub)$/iu;
 const GIT_MUTATING_RE =
   /^(?:add|apply|am|checkout|switch|restore|commit|merge|rebase|reset|revert|cherry-pick|clean|mv|rm|stash(?!\s+(?:list|show))|tag\s+(?!-l\b|--list\b|-n\d*\b)\S+|branch\s+(?!-[alrv]|--list|--all|--remotes|--show-current|$)\S+|remote\s+(?:add|remove|rm|rename|set-url)|push|pull|fetch|clone|init|submodule\s+(?:add|update|init)|worktree\s+(?:add|remove|prune)|config(?!\s+--get|\s+--list|\s+-l\b)\s+\S+|notes|filter-branch|gc|prune)\b/iu;
 const READ_ONLY_ACTION_RE = /^(?:list|show|get|status|info|read|inspect|describe|check)$/iu;
@@ -153,16 +153,25 @@ function mutatesSomething(input: Record<string, unknown> | undefined): boolean {
   if (typeof action === "string") return !READ_ONLY_ACTION_RE.test(action);
   const command = input["command"];
   if (typeof command !== "string") return true;
-  const segments = command.split(/\s*(?:&&|\|\||;|\|)\s*/u).map((seg) => seg.trim()).filter((seg) => seg.length > 0);
+  // Quoted text is not shell syntax: printf "a > b" writes nothing, and
+  // 2>&1 duplicates a descriptor (Codex 2026-09-17 round 2 #6).
+  // …so quoted text keeps its words (a quoted program path is still the
+  // program) and loses its shell characters.
+  const unquoted = command
+    .replace(/"((?:[^"\\]|\\.)*)"|'([^']*)'/gu, (_m, d: string | undefined, q: string | undefined) => (d ?? q ?? "").replace(/[<>|;&]/gu, "_"))
+    .replace(/\d*>&\d+/gu, " ");
+  const segments = unquoted.split(/\s*(?:&&|\|\||;|\|)\s*/u).map((seg) => seg.trim()).filter((seg) => seg.length > 0);
   return segments.some((seg) => {
     // A redirection writes — unless it is to /dev/null.
-    if (/(?:^|[^<])>+\s*(?!\/dev\/null\b)\S/u.test(seg)) return true;
+    if (/(?:^|[^<>])>\s*(?!\/dev\/null\b)\S/u.test(seg.replace(/>>/gu, ">"))) return true;
     // Unwrap `env VAR=x`, plain assignments and sudo/time/nice.
     const stripped = seg
       .replace(/^(?:env\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*/u, "")
       .replace(/^(?:sudo|time|nice|nohup)\s+/u, "");
     const words = stripped.split(/\s+/u);
-    const program = words[0] ?? "";
+    // "/Applications/Unity/Unity.exe" is the same program as unity; quotes
+    // were blanked above.
+    const program = (words[0] ?? "").replace(/\.exe$/iu, "");
     const rest = words.slice(1).join(" ");
     if (/^(?:\S*\/)?git$/iu.test(program)) {
       // Leading options: -C dir, -c k=v, --no-pager, --git-dir=…
@@ -170,11 +179,31 @@ function mutatesSomething(input: Record<string, unknown> | undefined): boolean {
       return GIT_MUTATING_RE.test(sub);
     }
     if (/^(?:\S*\/)?sed$/iu.test(program)) return /(?:^|\s)-i\b|(?:^|\s)--in-place\b/u.test(rest);
-    if (/^(?:\S*\/)?find$/iu.test(program)) return /\s-(?:delete|exec|execdir|ok)\b/u.test(rest);
-    if (/^(?:\S*\/)?(?:dotnet|npm|pnpm|yarn|npx|bunx)$/iu.test(program)) {
-      return !/^(?:--version|-v|--help|list|ls|--list-sdks|--list-runtimes|view|info|outdated|audit(?!\s+fix)|why|ping)\b/iu.test(rest);
+    if (/^(?:\S*\/)?find$/iu.test(program)) {
+      if (/\s-delete\b/u.test(rest)) return true;
+      // -exec runs a program: it writes only if THAT program does.
+      const exec = /\s-(?:exec|execdir|ok)\s+(.+?)(?:\s*[;+]|$)/u.exec(rest);
+      return exec !== null && mutatesSomething({ command: exec[1] ?? "" });
     }
-    if (/^(?:\S*\/)?xargs$/iu.test(program)) return mutatesSomething({ command: rest });
+    if (/^(?:\S*\/)?dotnet$/iu.test(program)) {
+      return /^(?:build|run|new|add|remove|restore|publish|pack|clean|format|tool|workload|nuget\s+(?:add|push|delete)|sln|ef)\b/iu.test(rest);
+    }
+    if (/^(?:\S*\/)?(?:npm|pnpm|yarn|bun)$/iu.test(program)) {
+      if (/^(?:install|i|ci|add|remove|uninstall|update|up|link|unlink|publish|version|init|create|dedupe|prune|rebuild|exec|dlx|x)\b/iu.test(rest)) return true;
+      // "npm run lint" inspects; "npm run build" writes. Decide by the script name.
+      const run = /^run(?:-script)?\s+(\S+)/iu.exec(rest);
+      return run !== null && /build|gen|generate|create|write|migrate|setup|install|prepare|format|fix|bump|release|compile|bundle|pack/iu.test(run[1] ?? "");
+    }
+    if (/^(?:\S*\/)?(?:npx|bunx)$/iu.test(program)) return true;
+    if (/^(?:\S*\/)?curl$/iu.test(program)) {
+      return /(?:^|\s)(?:-o|-O|--output|--remote-name|-X\s*(?:POST|PUT|DELETE|PATCH)|-d|--data\S*|-F|--form|-T|--upload-file)\b/u.test(rest);
+    }
+    if (/^(?:\S*\/)?wget$/iu.test(program)) return !/(?:^|\s)--spider\b/u.test(rest);
+    if (/^(?:\S*\/)?tar$/iu.test(program)) {
+      const flags = rest.split(/\s+/u)[0] ?? "";
+      return /^--(?:extract|create)$/u.test(flags) || (/^-?[a-zA-Z]+$/u.test(flags) && /[xc]/u.test(flags) && !/t/u.test(flags));
+    }
+    if (/^(?:\S*\/)?xargs$/iu.test(program)) return mutatesSomething({ command: rest.replace(/^(?:-\S+\s+)*/u, "") });
     return MUTATING_PROGRAM_RE.test(program);
   });
 }

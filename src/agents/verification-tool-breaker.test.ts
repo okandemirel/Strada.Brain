@@ -102,6 +102,19 @@ describe("the consecutive-failure breaker", () => {
     expect(results[3]).toContain("temporarily disabled");
   });
 
+  it("…and a red suite whose OUTPUT mentions a missing file is still a verdict (Codex 2026-09-17 round 2 #3)", async () => {
+    const { orch, tools } = orchestratorWith("shell_exec");
+    tools[0]!.metadata = { readOnly: false } as never;
+    tools[0]!.execute = vi.fn().mockResolvedValue({
+      content: "$ npm test\nExit code: 1 | Duration: 900ms\n\n--- stdout ---\nFAIL handles No such file or directory\nTests: 1 failed, 40 passed",
+      isError: true,
+      metadata: { exitCode: 1, timedOut: false, durationMs: 900 },
+    });
+    const results = await callFourTimesWith(orch, "shell_exec", { command: "npm test" });
+    expect(tools[0]!.execute).toHaveBeenCalledTimes(4);
+    expect(results.every((r) => !r.includes("temporarily disabled"))).toBe(true);
+  });
+
   it("…but a shell command that is not a verifier still trips it", async () => {
     const { orch, tools } = orchestratorWith("shell_exec");
     tools[0]!.metadata = { readOnly: false } as never;

@@ -105,16 +105,20 @@ export function toolReportsVerdict(
   return typeof command === "string" && shellVerification(command) !== "no";
 }
 
-const INFRASTRUCTURE_FAILURE_RE =
-  /command not found|not recognized as an internal or external command|No such file or directory|ENOENT|EACCES|Permission denied|cannot execute|exec format error|is not installed|Cannot find module|timed out and was killed/iu;
+/**
+ * STRUCTURED signals only: a timeout, exit 126/127 (not executable / not
+ * found), or the tool's own "failed to execute command" line for a spawn
+ * error. Scanning the output for phrases made a test suite whose output
+ * mentioned "No such file or directory" an infrastructure failure, and
+ * repeated red runs could then disable the shell (Codex 2026-09-17 #3).
+ */
 function infrastructureFailure(result: { isError?: boolean; content?: unknown; metadata?: Record<string, unknown> }): boolean {
   if (result.isError !== true) return false;
   const meta = result.metadata ?? {};
   if (meta["timedOut"] === true) return true;
   const code = meta["exitCode"];
   if (code === 126 || code === 127) return true;
-  const head = String(result.content ?? "").split("\n").slice(0, 6).join("\n");
-  return INFRASTRUCTURE_FAILURE_RE.test(head);
+  return /^Error: failed to execute command/u.test(String(result.content ?? ""));
 }
 
 function shellCommandVerifies(command: string): boolean {

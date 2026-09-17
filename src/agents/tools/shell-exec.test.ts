@@ -69,6 +69,12 @@ describe("ShellExecTool", () => {
     // what follows: `grep -q x f; dotnet build` failing with 1 is a failure.
     const grepThenFail = await tool.execute({ command: "grep -q nope /dev/null; exit 1" }, ctx);
     expect(grepThenFail.isError).toBe(true);
+    // Operators inside quotes do not make a chain; a redirection does end
+    // the allowance (exit 1 from a missing input is not grep's "no").
+    const quoted = await tool.execute({ command: 'grep -E "a|b" /dev/null' }, ctx);
+    expect(quoted.isError).toBeFalsy();
+    const redirected = await tool.execute({ command: "grep -q x < /nonexistent/input" }, ctx);
+    expect(redirected.isError).toBe(true);
     const named = await tool.execute({ command: "echo hi && grep -q nope /dev/null", ok_exit_codes: [0, 1] }, ctx);
     expect(named.isError).toBeFalsy();
   });

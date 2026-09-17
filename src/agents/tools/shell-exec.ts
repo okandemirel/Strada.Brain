@@ -328,7 +328,9 @@ export class ShellExecTool implements ITool {
  * 2026-09-17 on 353d044e #1). A caller that chains names ok_exit_codes.
  */
 export function predicateExitCodes(command: string): ReadonlySet<number> {
-  if (/&&|\|\||;|\||\n/u.test(command)) return new Set();
+  // Operators OUTSIDE quotes: grep -E "a|b" is one command (Codex 2026-09-17 #2).
+  const unquoted = command.replace(/"(?:[^"\\]|\\.)*"|'[^']*'/gu, '""');
+  if (/&&|\|\||;|\||\n|<|>/u.test(unquoted)) return new Set();
   const head = command.trim().replace(/^(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*/u, "");
   if (/^(?:\S*\/)?(?:e|f)?grep\b|^(?:\S*\/)?rg\b|^test\b|^\[\s/u.test(head)) return new Set([1]);
   if (/^(?:\S*\/)?git\s+diff(?:-index|-files)?\b[^|;&]*--(?:exit-code|quiet)\b/u.test(head)) return new Set([1]);

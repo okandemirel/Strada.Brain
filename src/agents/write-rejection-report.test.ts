@@ -151,6 +151,23 @@ describe("reporting a refused write", () => {
     resolved("dotnet build");
     resolved("npm run build");
     resolved("cat a | xargs rm");
+    // Round two (Codex 2026-09-17): quoting, descriptor duplication and
+    // program-specific arguments.
+    stopped('printf "a > b"');
+    stopped('echo "x; touch ignored"');
+    stopped("git status 2>&1");
+    stopped("git status >> /dev/null");
+    stopped("npm run lint");
+    stopped("dotnet test --no-build");
+    stopped("curl -I https://example.com");
+    stopped("tar -tf archive.tar");
+    stopped("find Assets -exec cat {} +");
+    resolved("npm run build");
+    resolved("curl -o out.zip https://example.com/a.zip");
+    resolved("tar -xf archive.tar");
+    resolved("find Assets -name '*.tmp' -exec rm {} +");
+    resolved('"/Applications/Unity/Unity.exe" -batchmode -executeMethod Builder.Build');
+    resolved("cat list | xargs -0 rm");
   });
 
   it("the metadata-less default treats an unknown name as NOT a writer (Codex 2026-09-17 #4)", () => {
