@@ -299,3 +299,73 @@ describe("ErrorLearningHooks", () => {
     });
   });
 });
+
+// improvement on audit 04.6: a quarantine has to HOLD. This path rewrites an
+// instinct's status from its confidence alone (confidenceScorer.getStatus), so a
+// quarantined row would be silently returned to service — and a permanent one
+// silently demoted to 'evolved'.
+describe("a frozen lifecycle state is not rewritten from confidence (improvement on audit 04.6)", () => {
+  let storage: LearningStorage;
+  let hooks: ErrorLearningHooks;
+  let tempDir: string;
+
+  const errorContext: ErrorContext = {
+    sessionId: "s1",
+    toolName: "shell_exec",
+    errorOutput: "error CS0246: type not found",
+    analysis: { category: "missing_type", severity: "high", isRetryable: true } as unknown as ErrorAnalysis,
+    timestamp: Date.now(),
+  } as unknown as ErrorContext;
+
+  function frozen(id: string, status: "quarantined" | "permanent") {
+    storage.createInstinct({
+      id: id as never,
+      name: "Frozen",
+      type: "user_teaching",
+      status,
+      confidence: 0.97 as never,
+      triggerPattern: "any",
+      action: "do the thing",
+      contextConditions: [],
+      stats: { timesSuggested: 60, timesApplied: 58, timesFailed: 2, successRate: 0.96, averageExecutionMs: 0 },
+      createdAt: Date.now() as never,
+      updatedAt: Date.now() as never,
+      sourceTrajectoryIds: [],
+      tags: [],
+    });
+  }
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), "hooks-frozen-"));
+    storage = new LearningStorage(join(tempDir, "test.db"));
+    storage.initialize();
+    hooks = new ErrorLearningHooks(
+      new LearningPipeline(storage),
+      new PatternMatcher(storage),
+      new ConfidenceScorer(),
+      storage,
+    );
+    hooks.enable();
+  });
+
+  afterEach(() => {
+    storage.close();
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("a quarantined instinct is not returned to service by a reinforcement", () => {
+    frozen("instinct_quarantined_hold", "quarantined");
+
+    hooks.reinforceInstinct("instinct_quarantined_hold", { errorContext, success: true, verdictScore: 0.9 });
+
+    expect(storage.getInstinct("instinct_quarantined_hold")!.status).toBe("quarantined");
+  });
+
+  it("a permanent instinct is not demoted by a penalty either", () => {
+    frozen("instinct_permanent_hold", "permanent");
+
+    hooks.penalizeInstinct("instinct_permanent_hold", { errorContext, reason: "did not apply" });
+
+    expect(storage.getInstinct("instinct_permanent_hold")!.status).toBe("permanent");
+  });
+});

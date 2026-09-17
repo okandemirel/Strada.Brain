@@ -321,6 +321,10 @@ export class ErrorLearningHooks {
   }
 
   private updateInstinctStatus(instinct: import("../types.js").Instinct): void {
+    // A frozen lifecycle state is not a function of confidence (improvement on
+    // audit 04.6): getStatus() would return a quarantined instinct to service
+    // and demote a permanent one to 'evolved' — silently, on one reinforcement.
+    if (instinct.status === "quarantined" || instinct.status === "permanent") return;
     const newStatus = this.confidenceScorer.getStatus(instinct.confidence);
     
     if (newStatus !== instinct.status) {
