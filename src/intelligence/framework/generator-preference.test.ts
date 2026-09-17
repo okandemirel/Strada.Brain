@@ -31,6 +31,9 @@ function snapshot(tools: Array<{ name: string; description: string }>): Framewor
     resources: [],
     prompts: [],
     capturedAt: 0,
+    // A local source: the section claims "this project has Strada installed",
+    // which only an installed package can support (plan 2.13).
+    sourceOrigin: "local",
   } as unknown as FrameworkAPISnapshot;
 }
 
@@ -83,3 +86,25 @@ describe("generator preference", () => {
     expect(generatorFor(null).buildFrameworkKnowledgeSection()).toBeNull();
   });
 });
+
+describe("the installed claim needs an installation (plan 2.13 / U2+M3 / D51)", () => {
+  it("says nothing about generators when the snapshot came from a clone, not this project", () => {
+    // The sync falls back to a shallow GitHub clone exactly when the package is
+    // NOT installed here; the section used to tell the agent the opposite.
+    for (const origin of ["git-clone", "cached"] as const) {
+      const fromClone = { ...snapshot([{ name: "strada_create_module", description: "Create a module" }]), sourceOrigin: origin } as FrameworkAPISnapshot;
+      const section = generatorFor(fromClone).buildFrameworkKnowledgeSection();
+      expect(section).not.toContain("This project has Strada installed");
+      expect(section).not.toContain("## Creating Strada Code");
+      // …and the header does not call a clone "live".
+      expect(section).not.toContain("(live —");
+      expect(section).toContain("not installed here");
+    }
+  })
+
+  it("still tells the agent to use the generators for an installed package (guard)", () => {
+    const section = generatorFor(snapshot([{ name: "strada_create_module", description: "Create a module" }])).buildFrameworkKnowledgeSection();
+    expect(section).toContain("This project has Strada installed");
+    expect(section).toContain("(live —");
+  })
+})

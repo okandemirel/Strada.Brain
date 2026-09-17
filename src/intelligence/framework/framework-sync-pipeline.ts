@@ -16,6 +16,7 @@ import type {
   FrameworkDriftReport,
   FrameworkPackageId,
   FrameworkPackageConfig,
+  SourceOrigin,
 } from "./framework-types.js";
 import { FrameworkKnowledgeStore, computeSnapshotFingerprint } from "./framework-knowledge-store.js";
 import { FRAMEWORK_PACKAGE_CONFIGS } from "./framework-package-configs.js";
@@ -114,9 +115,15 @@ export class FrameworkSyncPipeline {
 
     for (const [pkgId, pkgConfig] of FRAMEWORK_PACKAGE_CONFIGS) {
       let sourcePath = this.resolveSourcePath(pkgId);
+      // WHERE THE SOURCE CAME FROM IS RECORDED, NOT ASSUMED (plan 2.13): the
+      // project's own tree is "local"; a shallow clone is "git-clone", and a
+      // reused clone is "cached". Every snapshot used to claim "local".
+      let sourceOrigin: SourceOrigin = "local";
 
       if (!sourcePath && this.config.gitFallbackEnabled) {
-        sourcePath = this.gitFallbackClone(pkgId, pkgConfig);
+        const fallback = this.gitFallbackClone(pkgId, pkgConfig);
+        sourcePath = fallback?.path ?? null;
+        sourceOrigin = fallback?.origin ?? "local";
       }
 
       if (!sourcePath) {
@@ -125,10 +132,12 @@ export class FrameworkSyncPipeline {
       }
 
       try {
-        const extractor = await createExtractor(sourcePath, pkgConfig);
+        const extractor = await createExtractor(sourcePath, pkgConfig, sourceOrigin);
         const snapshot = await extractor.extract();
 
-        const previous = this.store.getLatestSnapshot(pkgId);
+        // Drift and "did this change" are asked of THIS source, never of
+        // whichever source happened to sync last on this machine.
+        const previous = this.store.getLatestSnapshot(pkgId, sourcePath);
         // The extraction above already ran; compare its content too. Version
         // and git HEAD both stay put during an in-place edit, so keying on
         // them alone discarded a correct fresh snapshot as "unchanged" and
@@ -136,7 +145,7 @@ export class FrameworkSyncPipeline {
         const fingerprint = computeSnapshotFingerprint(snapshot);
         if (
           previous &&
-          !this.store.needsSync(pkgId, snapshot.version, snapshot.gitHash, fingerprint)
+          !this.store.needsSync(pkgId, snapshot.version, snapshot.gitHash, fingerprint, sourcePath)
         ) {
           logger.debug(
             `Framework sync: ${pkgConfig.displayName} skipped — version ${snapshot.version ?? "(none)"}, ` +
@@ -283,9 +292,10 @@ export class FrameworkSyncPipeline {
       return null;
     }
 
-    const extractor = await createExtractor(sourcePath, pkgConfig);
+    // The watcher only ever sees the project's own trees.
+    const extractor = await createExtractor(sourcePath, pkgConfig, "local");
     const snapshot = await extractor.extract();
-    const previous = this.store.getLatestSnapshot(packageId);
+    const previous = this.store.getLatestSnapshot(packageId, sourcePath);
 
     this.storeAndNotify(snapshot);
     return validateFrameworkDrift(packageId, snapshot, previous);
@@ -364,7 +374,7 @@ export class FrameworkSyncPipeline {
   private gitFallbackClone(
     pkgId: FrameworkPackageId,
     config: FrameworkPackageConfig,
-  ): string | null {
+  ): { path: string; origin: SourceOrigin } | null {
     const logger = getLoggerSafe();
     const cacheDir = join(this.config.gitCacheDir, pkgId);
 
@@ -374,7 +384,7 @@ export class FrameworkSyncPipeline {
         const stats = statSync(cacheDir);
         const ageMs = Date.now() - stats.mtimeMs;
         if (ageMs < this.config.gitCacheMaxAgeMs) {
-          return cacheDir;
+          return { path: cacheDir, origin: "cached" };
         }
       } catch {
         /* fall through to re-clone */
@@ -403,7 +413,7 @@ export class FrameworkSyncPipeline {
       logger.debug(
         `Git fallback: cloned ${config.displayName} to ${cacheDir}`,
       );
-      return cacheDir;
+      return { path: cacheDir, origin: "git-clone" };
     } catch (err) {
       logger.warn(
         `Git fallback clone failed for ${config.displayName}: ${(err as Error).message}`,

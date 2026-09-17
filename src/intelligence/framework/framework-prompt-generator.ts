@@ -101,7 +101,7 @@ export class FrameworkPromptGenerator {
 
   private buildCoreSection(snapshot: FrameworkAPISnapshot): string {
     const lines: string[] = [
-      `## Strada.Core Framework Knowledge (live — v${snapshot.version ?? "unknown"}, ${snapshot.fileCount} files)`,
+      `## Strada.Core Framework Knowledge (${describeSnapshotSource(snapshot)} — v${snapshot.version ?? "unknown"}, ${snapshot.fileCount} files)`,
       "",
     ];
 
@@ -200,7 +200,7 @@ export class FrameworkPromptGenerator {
 
   private buildModulesSection(snapshot: FrameworkAPISnapshot): string {
     const lines: string[] = [
-      `## Strada.Modules Knowledge (live — v${snapshot.version ?? "unknown"}, ${snapshot.fileCount} files)`,
+      `## Strada.Modules Knowledge (${describeSnapshotSource(snapshot)} — v${snapshot.version ?? "unknown"}, ${snapshot.fileCount} files)`,
       "",
     ];
 
@@ -242,7 +242,7 @@ export class FrameworkPromptGenerator {
 
   private buildMCPSection(snapshot: FrameworkAPISnapshot): string {
     const lines: string[] = [
-      `## Strada.MCP Knowledge (live — v${snapshot.version ?? "unknown"}, ${snapshot.fileCount} files)`,
+      `## Strada.MCP Knowledge (${describeSnapshotSource(snapshot)} — v${snapshot.version ?? "unknown"}, ${snapshot.fileCount} files)`,
       "",
     ];
 
@@ -298,6 +298,25 @@ export class FrameworkPromptGenerator {
   }
 }
 
+/**
+ * How a section may describe its source (plan 2.13 / U2+M3 / D51).
+ *
+ * Every header said "live" and the generator section said "This project has
+ * Strada installed", whatever the snapshot's origin — including one extracted
+ * from a shallow GitHub clone the sync made because the package is NOT
+ * installed here. "live" now means a local source; a clone or a cache says so.
+ */
+function describeSnapshotSource(snapshot: FrameworkAPISnapshot): string {
+  switch (snapshot.sourceOrigin) {
+    case "local":
+      return "live";
+    case "git-clone":
+      return "from a git clone, not installed here";
+    case "cached":
+      return "from a cached clone, not installed here";
+  }
+}
+
 /** Tools whose whole purpose is producing framework-shaped code. */
 const GENERATOR_TOOL_RE = /^strada_(create|scaffold)_/;
 
@@ -318,6 +337,9 @@ const GENERATOR_TOOL_RE = /^strada_(create|scaffold)_/;
  * live snapshot, so it can never advertise a tool the agent cannot call.
  */
 function buildGeneratorPreference(snapshot: FrameworkAPISnapshot): string | null {
+  // "This project has Strada installed" is a claim about THIS project: a
+  // snapshot read from a clone cannot support it (plan 2.13).
+  if (snapshot.sourceOrigin !== "local") return null;
   const generators = snapshot.tools
     .filter((tool) => GENERATOR_TOOL_RE.test(tool.name))
     .map((tool) => tool.name);

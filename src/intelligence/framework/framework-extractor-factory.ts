@@ -9,7 +9,7 @@
  * the base class, but the base class does NOT import the subclasses.
  */
 
-import type { FrameworkPackageConfig } from "./framework-types.js";
+import type { FrameworkPackageConfig, SourceOrigin } from "./framework-types.js";
 import type { FrameworkExtractor } from "./framework-extractor.js";
 
 /**
@@ -19,15 +19,16 @@ import type { FrameworkExtractor } from "./framework-extractor.js";
 export async function createExtractor(
   sourcePath: string,
   packageConfig: FrameworkPackageConfig,
+  sourceOrigin: SourceOrigin = "local",
 ): Promise<FrameworkExtractor> {
   switch (packageConfig.sourceLanguage) {
     case "csharp": {
       const { CSharpFrameworkExtractor } = await import("./framework-extractor-csharp.js");
-      return new CSharpFrameworkExtractor(sourcePath, packageConfig);
+      return new CSharpFrameworkExtractor(sourcePath, packageConfig, sourceOrigin);
     }
     case "typescript": {
       const { MCPFrameworkExtractor } = await import("./framework-extractor-mcp.js");
-      return new MCPFrameworkExtractor(sourcePath, packageConfig);
+      return new MCPFrameworkExtractor(sourcePath, packageConfig, sourceOrigin);
     }
   }
 }

@@ -440,3 +440,118 @@ describe("needsSync content fingerprint (audited 2026-09-02)", () => {
     expect(store.needsSync("core", "1.0.0", "abc123", "anything")).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Per-source keying (plan 2.13 / U2+M3 / D51)
+// ---------------------------------------------------------------------------
+
+describe("one machine, several sources", () => {
+  let tmpDir: string;
+  let store: FrameworkKnowledgeStore;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "fks-source-"));
+    store = new FrameworkKnowledgeStore(join(tmpDir, "test.db"));
+    store.initialize();
+  });
+
+  afterEach(() => {
+    store.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("does not let a git clone answer for the project's installed package", () => {
+    const installed = makeSnapshot({
+      packageId: "core", sourcePath: "/projects/game/Packages/Strada.Core",
+      sourceOrigin: "local", version: "1.0.0", fileCount: 42,
+      extractedAt: new Date("2026-01-15T10:00:00Z"),
+    });
+    store.storeSnapshot(installed);
+    // The git fallback clones the SAME package elsewhere, later. Keyed by
+    // package alone, this clone became the answer for every reader.
+    const clone = makeSnapshot({
+      packageId: "core", sourcePath: "/cache/strada-core", sourceOrigin: "git-clone",
+      version: "9.9.9", fileCount: 7, extractedAt: new Date("2026-02-01T10:00:00Z"),
+    });
+    store.storeSnapshot(clone);
+
+    const answered = store.getLatestSnapshot("core");
+    expect(answered!.sourcePath).toBe("/projects/game/Packages/Strada.Core");
+    expect(answered!.version).toBe("1.0.0");
+    // …and the clone is still readable when asked for by name.
+    expect(store.getLatestSnapshot("core", "/cache/strada-core")!.version).toBe("9.9.9");
+    // "Live" means installed: a clone never claims it.
+    expect(store.getLiveSnapshot("core")!.sourcePath).toBe("/projects/game/Packages/Strada.Core");
+    expect(store.getLiveSourcePath("core")).toBe("/projects/game/Packages/Strada.Core");
+  });
+
+  it("keeps sync bookkeeping per source, so one source's sync does not silence the other", () => {
+    const first = makeSnapshot({ packageId: "core", sourcePath: "/a", version: "1.0.0", gitHash: "aaa" });
+    store.storeSnapshot(first);
+    const firstPrint = computeSnapshotFingerprint(first);
+    expect(store.needsSync("core", "1.0.0", "aaa", firstPrint, "/a")).toBe(false);
+    // A DIFFERENT source with the same version and hash has never been synced.
+    expect(store.needsSync("core", "1.0.0", "aaa", firstPrint, "/b")).toBe(true);
+
+    const second = makeSnapshot({ packageId: "core", sourcePath: "/b", version: "1.0.0", gitHash: "aaa", fileCount: 9 });
+    store.storeSnapshot(second);
+    expect(store.needsSync("core", "1.0.0", "aaa", computeSnapshotFingerprint(second), "/b")).toBe(false);
+    // …and /a is still considered synced, not re-extracted because /b moved.
+    expect(store.needsSync("core", "1.0.0", "aaa", firstPrint, "/a")).toBe(false);
+  });
+
+  it("compares drift within one source (guard)", () => {
+    store.storeSnapshot(makeSnapshot({ packageId: "core", sourcePath: "/a", version: "1.0.0", extractedAt: new Date("2026-01-01T00:00:00Z") }));
+    store.storeSnapshot(makeSnapshot({ packageId: "core", sourcePath: "/b", version: "2.0.0", extractedAt: new Date("2026-01-02T00:00:00Z") }));
+    store.storeSnapshot(makeSnapshot({ packageId: "core", sourcePath: "/a", version: "1.1.0", extractedAt: new Date("2026-01-03T00:00:00Z") }));
+    expect(store.getLatestSnapshot("core", "/a")!.version).toBe("1.1.0");
+    // The previous snapshot OF THAT SOURCE, not of whatever synced in between.
+    expect(store.getPreviousSnapshot("core", "/a")!.version).toBe("1.0.0");
+  });
+
+  it("without a local source, knowledge from a clone is still served, labelled as a clone (guard)", () => {
+    store.storeSnapshot(makeSnapshot({ packageId: "mcp", sourcePath: "/cache/mcp", sourceOrigin: "git-clone" }));
+    const served = store.getLatestSnapshot("mcp");
+    expect(served).not.toBeNull();
+    expect(served!.sourceOrigin).toBe("git-clone");
+    // But nothing claims it is installed here.
+    expect(store.getLiveSnapshot("mcp")).toBeNull();
+    expect(store.getLiveSourcePath("mcp")).toBeUndefined();
+  });
+
+  it("attributes an older database's bookkeeping to the source its snapshot names", () => {
+    const dbPath = join(tmpDir, "legacy.db");
+    const legacy = new Database(dbPath);
+    legacy.exec(`
+      CREATE TABLE framework_snapshots (
+        package_id TEXT NOT NULL, package_name TEXT NOT NULL, version TEXT, git_hash TEXT,
+        snapshot_json TEXT NOT NULL, extracted_at INTEGER NOT NULL, source_path TEXT NOT NULL,
+        source_origin TEXT NOT NULL, source_language TEXT NOT NULL, file_count INTEGER NOT NULL,
+        schema_version INTEGER NOT NULL DEFAULT 1, PRIMARY KEY (package_id, extracted_at)
+      );
+      CREATE TABLE framework_metadata (
+        package_id TEXT PRIMARY KEY, last_sync_at INTEGER, last_version TEXT,
+        last_git_hash TEXT, last_content_hash TEXT, sync_count INTEGER DEFAULT 0
+      );
+    `);
+    legacy.prepare("INSERT INTO framework_snapshots VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .run("core", "Strada.Core", "1.0.0", "aaa", JSON.stringify({ packageName: "Strada.Core", version: "1.0.0", gitHash: "aaa" }), 1_000, "/projects/game/Strada.Core", "local", "csharp", 42, 1);
+    legacy.prepare("INSERT INTO framework_metadata VALUES (?, ?, ?, ?, ?, ?)")
+      .run("core", 1_000, "1.0.0", "aaa", "print-1", 3);
+    legacy.close();
+
+    const upgraded = new FrameworkKnowledgeStore(dbPath);
+    upgraded.initialize();
+    try {
+      expect(upgraded.getSourceMetadata("core", "/projects/game/Strada.Core")).toMatchObject({
+        lastVersion: "1.0.0", lastGitHash: "aaa", lastContentHash: "print-1", syncCount: 3,
+      });
+      // The local source it named is the live one.
+      expect(upgraded.getLiveSourcePath("core")).toBe("/projects/game/Strada.Core");
+      // …so nothing is re-extracted just because the schema grew.
+      expect(upgraded.needsSync("core", "1.0.0", "aaa", "print-1", "/projects/game/Strada.Core")).toBe(false);
+    } finally {
+      upgraded.close();
+    }
+  });
+});

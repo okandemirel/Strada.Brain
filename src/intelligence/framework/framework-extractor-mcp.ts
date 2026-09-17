@@ -9,7 +9,7 @@ import { readFile, realpath } from "node:fs/promises";
 import { relative, resolve } from "node:path";
 import { glob } from "glob";
 import { FrameworkExtractor } from "./framework-extractor.js";
-import type { FrameworkAPISnapshot, FrameworkPackageConfig } from "./framework-types.js";
+import type { FrameworkAPISnapshot, FrameworkPackageConfig, SourceOrigin } from "./framework-types.js";
 import { getLoggerSafe } from "../../utils/logger.js";
 
 // ---- Regex patterns for MCP TypeScript extraction ---------------------------
@@ -41,8 +41,8 @@ function extractInputSchemaKeys(content: string): string[] {
 // ---- Extractor --------------------------------------------------------------
 
 export class MCPFrameworkExtractor extends FrameworkExtractor {
-  constructor(sourcePath: string, packageConfig: FrameworkPackageConfig) {
-    super(sourcePath, packageConfig);
+  constructor(sourcePath: string, packageConfig: FrameworkPackageConfig, sourceOrigin: SourceOrigin = "local") {
+    super(sourcePath, packageConfig, sourceOrigin);
   }
 
   async extract(): Promise<FrameworkAPISnapshot> {
@@ -172,7 +172,7 @@ export class MCPFrameworkExtractor extends FrameworkExtractor {
       prompts,
       extractedAt: new Date(),
       sourcePath: this.sourcePath,
-      sourceOrigin: "local",
+      sourceOrigin: this.sourceOrigin,
       sourceLanguage: "typescript",
       fileCount: parsed,
     };

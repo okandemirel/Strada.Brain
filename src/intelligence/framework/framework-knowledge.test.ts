@@ -551,6 +551,27 @@ describe("formatFrameworkDriftReport", () => {
 
 // ─── 4. FrameworkExtractor factory ──────────────────────────────────────────
 
+describe("the snapshot says where its source came from (plan 2.13 / U2+M3 / D51)", () => {
+  it("stamps the origin the caller names, not \"local\" regardless", async () => {
+    const { createExtractor } = await import("./framework-extractor-factory.js");
+    const { mkdtempSync, writeFileSync: write } = await import("node:fs");
+    const { join: j } = await import("node:path");
+    const { tmpdir: tmp } = await import("node:os");
+    const dir = mkdtempSync(j(tmp(), "fw-origin-"));
+    write(j(dir, "Thing.cs"), "namespace Strada.Core { public class Thing { } }");
+
+    // The git fallback clones exactly when the package is NOT installed here;
+    // both extractors used to stamp every snapshot "local".
+    const cloned = await (await createExtractor(dir, CORE_PACKAGE_CONFIG, "git-clone")).extract();
+    expect(cloned.sourceOrigin).toBe("git-clone");
+    const cached = await (await createExtractor(dir, CORE_PACKAGE_CONFIG, "cached")).extract();
+    expect(cached.sourceOrigin).toBe("cached");
+    // Guard: an unnamed origin is still the project's own source.
+    const local = await (await createExtractor(dir, CORE_PACKAGE_CONFIG)).extract();
+    expect(local.sourceOrigin).toBe("local");
+  });
+});
+
 describe("createExtractor factory", () => {
   it("returns CSharpFrameworkExtractor for csharp language", async () => {
     const { createExtractor } = await import("./framework-extractor-factory.js");

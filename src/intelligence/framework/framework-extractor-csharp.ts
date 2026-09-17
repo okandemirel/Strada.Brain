@@ -18,7 +18,7 @@ import {
   type CSharpAST,
 } from "../csharp-deep-parser.js";
 import { FrameworkExtractor } from "./framework-extractor.js";
-import type { FrameworkAPISnapshot, FrameworkPackageConfig } from "./framework-types.js";
+import type { FrameworkAPISnapshot, FrameworkPackageConfig, SourceOrigin } from "./framework-types.js";
 import { getLoggerSafe } from "../../utils/logger.js";
 
 /** Build a generic-aware display name: "Foo<T1, T2>" */
@@ -37,8 +37,8 @@ function resolveNamespace(ast: CSharpAST, typeName: string): string {
 // ---- Extractor --------------------------------------------------------------
 
 export class CSharpFrameworkExtractor extends FrameworkExtractor {
-  constructor(sourcePath: string, packageConfig: FrameworkPackageConfig) {
-    super(sourcePath, packageConfig);
+  constructor(sourcePath: string, packageConfig: FrameworkPackageConfig, sourceOrigin: SourceOrigin = "local") {
+    super(sourcePath, packageConfig, sourceOrigin);
   }
 
   async extract(): Promise<FrameworkAPISnapshot> {
@@ -164,7 +164,7 @@ export class CSharpFrameworkExtractor extends FrameworkExtractor {
       prompts: [],
       extractedAt: new Date(),
       sourcePath: this.sourcePath,
-      sourceOrigin: "local",
+      sourceOrigin: this.sourceOrigin,
       sourceLanguage: "csharp",
       fileCount: parsed,
     };
