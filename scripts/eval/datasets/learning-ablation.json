@@ -1,0 +1,160 @@
+{
+  "version": 2,
+  "notes": [
+    "PINNED dataset for the learning ablation harness (plan 6.3).",
+    "train: failure modes taught to the warm arms the way a real run teaches them —",
+    "  a failing call, then a call that repairs the SAME target inside the same run,",
+    "  then the successful runs that give the new rule enough confidence to be offered.",
+    "heldOut: probes the training phase NEVER sees (validateDataset refuses a probe that",
+    "  reuses a trained errorMessage). A probe with resolvedBy: [] is a TRAP — guidance",
+    "  recalled for it is, by construction, guidance that does not apply, which is how the",
+    "  harmful-recall measure can fail. 4 of the 7 probes here are traps.",
+    "rationale: why the oracle says what it says for that probe. Pre-registered so the",
+    "  acceptance and cost numbers can be argued with instead of taken on trust.",
+    "The thresholds are PRE-REGISTERED FOR THIS PROBE SET, not universal claims: the",
+    "  harmful-recall budget in particular depends on how many traps the set contains.",
+    "cost is in ATTEMPTS (tool invocations the oracle charges), never currency."
+  ],
+  "thresholds": {
+    "minRepeatErrorReduction": 0.5,
+    "maxHarmfulRecallRate": 0.34,
+    "maxCostRatio": 1.1,
+    "minQualityAccept": 0.7,
+    "maxQualityHarmRate": 0.0
+  },
+  "train": [
+    {
+      "family": "missing-metadata-reference",
+      "title": "dotnet_build cannot find a dependency's assembly",
+      "tool": "dotnet_build",
+      "target": { "file_path": "/proj/Assembly-CSharp.csproj" },
+      "errorMessage": "error CS0006: Metadata file '/proj/Library/ScriptAssemblies/Strada.Core.dll' could not be found",
+      "repairs": 4
+    },
+    {
+      "family": "mcp-token-rotated",
+      "title": "an MCP tool is refused after the bridge token was rotated",
+      "tool": "unity_refresh_assets",
+      "target": { "command": "unity_refresh_assets --project /proj" },
+      "errorMessage": "unity_refresh_assets failed: HTTP 401 Unauthorized — the bridge token was rejected, the cached token is stale",
+      "repairs": 4
+    },
+    {
+      "family": "lease-path-outside-project",
+      "title": "a workspace lease is judged outside the project it belongs to",
+      "tool": "workspace_lease_acquire",
+      "target": { "file_path": "/var/folders/T/lease-1/PixelFlow" },
+      "errorMessage": "workspace_lease_acquire failed: lease path is outside the project root, cannot acquire (/var vs /private/var)",
+      "repairs": 4
+    }
+  ],
+  "heldOut": [
+    {
+      "id": "p1-metadata-other-assembly",
+      "title": "same failure mode, a different assembly",
+      "family": "missing-metadata-reference",
+      "tool": "dotnet_build",
+      "errorCode": "CS0006",
+      "errorMessage": "error CS0006: Metadata file '/proj/Library/ScriptAssemblies/Strada.Modules.dll' could not be found",
+      "filePath": "/proj/Strada.Modules.csproj",
+      "resolvedBy": ["missing-metadata-reference"],
+      "rationale": "The taught repair (build the dependency first) is exactly what fixes this; without it the agent re-discovers the dependency order, which cost 3 attempts when it was first taught.",
+      "cost": { "withoutGuidance": 3, "withGuidance": 1, "wrongGuidancePenalty": 1 },
+      "accepted": { "withoutGuidance": true, "whenMisled": false }
+    },
+    {
+      "id": "p2-token-other-wording",
+      "title": "same refusal on the same tool, worded differently",
+      "family": "mcp-token-rotated",
+      "tool": "unity_refresh_assets",
+      "errorMessage": "unity_refresh_assets failed: HTTP 401 Unauthorized — the bridge refused the cached token after it was rotated for project /proj2",
+      "analysisSummary": "access",
+      "resolvedBy": ["mcp-token-rotated"],
+      "rationale": "Same cause, same repair (re-read the rotated token). Without it the agent tries the call again, then the wrong credential, then the token file: 4 attempts.",
+      "cost": { "withoutGuidance": 4, "withGuidance": 1, "wrongGuidancePenalty": 1 },
+      "accepted": { "withoutGuidance": true, "whenMisled": false }
+    },
+    {
+      "id": "p3-lease-other-root",
+      "title": "same lease mistake, a different temp root",
+      "family": "lease-path-outside-project",
+      "tool": "workspace_lease_acquire",
+      "errorMessage": "workspace_lease_acquire failed: lease path is outside the project root, cannot acquire (/tmp vs /private/tmp)",
+      "analysisSummary": "access",
+      "resolvedBy": ["lease-path-outside-project"],
+      "rationale": "The /var vs /private/var lesson is the /tmp vs /private/tmp lesson: compare both forms. Without it the agent re-derives it in 3 attempts.",
+      "cost": { "withoutGuidance": 3, "withGuidance": 1, "wrongGuidancePenalty": 1 },
+      "accepted": { "withoutGuidance": true, "whenMisled": false }
+    },
+    {
+      "id": "p4-trap-same-code-deleted-project",
+      "title": "TRAP: the same error code, a cause the taught fix cannot touch",
+      "family": null,
+      "tool": "dotnet_build",
+      "errorCode": "CS0006",
+      "errorMessage": "error CS0006: Metadata file 'Legacy.Removed.dll' could not be found — the reference points at a project deleted from the solution",
+      "filePath": "/proj/Assembly-CSharp.csproj",
+      "resolvedBy": [],
+      "rationale": "The fix here is to REMOVE the stale reference. The taught rule says to build the dependency and re-run, which can never succeed against a project that no longer exists — an agent that follows it loops instead of finishing, so a misled run is not accepted.",
+      "cost": { "withoutGuidance": 3, "withGuidance": 1, "wrongGuidancePenalty": 2 },
+      "accepted": { "withoutGuidance": true, "whenMisled": false }
+    },
+    {
+      "id": "p5-trap-same-tool-unrelated-error",
+      "title": "TRAP: the same tool, an unrelated error the taught fix says nothing about",
+      "family": null,
+      "tool": "dotnet_build",
+      "errorCode": "CS1061",
+      "errorMessage": "error CS1061: 'BoardController' does not contain a definition for 'SpawnTile'",
+      "filePath": "/proj/Scripts/BoardController.cs",
+      "analysisSummary": "missing_member",
+      "resolvedBy": [],
+      "rationale": "A missing member is a code problem, not a reference problem. Guidance recalled on the tool name alone is visibly irrelevant, so the agent discards it after one wasted attempt rather than failing.",
+      "cost": { "withoutGuidance": 3, "withGuidance": 1, "wrongGuidancePenalty": 1 },
+      "accepted": { "withoutGuidance": true, "whenMisled": true }
+    },
+    {
+      "id": "p6-trap-lease-lookalike",
+      "title": "TRAP: reads like the lease failure, but the cause is a missing directory",
+      "family": null,
+      "tool": "workspace_lease_acquire",
+      "errorMessage": "workspace_lease_acquire failed: the project root does not exist, nothing to lease",
+      "analysisSummary": "access",
+      "resolvedBy": [],
+      "rationale": "Comparing /var against /private/var does nothing for a root that is not there. The wrong path is cheap to rule out, so one wasted attempt and the run still ends accepted.",
+      "cost": { "withoutGuidance": 2, "withGuidance": 1, "wrongGuidancePenalty": 1 },
+      "accepted": { "withoutGuidance": true, "whenMisled": true }
+    },
+    {
+      "id": "p7-novel-untaught-tool",
+      "title": "a failure mode nothing was ever taught about, on an untaught tool",
+      "family": null,
+      "tool": "git_commit",
+      "errorMessage": "git_commit failed: cannot lock ref 'refs/heads/main' — another process is holding the index lock",
+      "analysisSummary": "access",
+      "resolvedBy": [],
+      "rationale": "Nothing in the store is about git. Recall here would be recall across tools, which is the over-reach this probe exists to catch; the cost is one wasted attempt.",
+      "cost": { "withoutGuidance": 3, "withGuidance": 1, "wrongGuidancePenalty": 1 },
+      "accepted": { "withoutGuidance": true, "whenMisled": true }
+    }
+  ],
+  "quality": [
+    {
+      "id": "q1-metadata-answer",
+      "prompt": "My Unity build fails with: error CS0006: Metadata file '/proj/Library/ScriptAssemblies/Strada.Modules.dll' could not be found. What should I do, and why?",
+      "rubric": [
+        { "id": "names-the-dependency-order", "weight": 2, "kind": "must_contain", "any": ["build", "restore", "reference", "dependency", "compile"] },
+        { "id": "no-nuke-advice", "weight": 2, "kind": "must_not_contain", "all": ["reinstall unity", "delete the engine", "format the disk"] },
+        { "id": "actionable-step", "weight": 1, "kind": "regex", "pattern": "(first|before|then|step)" }
+      ]
+    },
+    {
+      "id": "q2-trap-answer",
+      "prompt": "My build fails with: error CS0006: Metadata file 'Legacy.Removed.dll' could not be found. The project it came from was deleted from the solution on purpose. What should I do?",
+      "rubric": [
+        { "id": "removes-the-stale-reference", "weight": 3, "kind": "must_contain", "any": ["remove the reference", "stale reference", "delete the reference", "drop the reference", "no longer exists"] },
+        { "id": "does-not-tell-me-to-rebuild-it", "weight": 2, "kind": "must_not_contain", "all": ["rebuild the missing project", "build legacy.removed", "restore the deleted project"] }
+      ]
+    }
+  ]
+}

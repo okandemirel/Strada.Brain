@@ -1,194 +1,172 @@
-# Strada.Brain Eval Harness (scaffold)
+# Strada.Brain learning ablation harness
 
-This directory documents an **honest** evaluation scaffold for the two parts of
-Strada.Brain that the normal test suite (`npm test`) cannot prove:
+This directory documents the eval harness for the two things `npm test` cannot
+answer:
 
-- **(A) Self-learning effectiveness** — do instincts learned from seeded errors
-  on a first run measurably improve behaviour on a second run?
-- **(B) Response quality** — does a produced answer satisfy an *absolute* rubric?
+- **(A) Does learning help?** — with the same store, the same probes and the same
+  code, is the system measurably better with learning on than with it off?
+- **(B) Is the answer good?** — does a generated answer satisfy an *absolute*
+  rubric, and does injecting recalled guidance make it better or worse?
 
-Runner: [`scripts/eval/learning-eval.mjs`](../../scripts/eval/learning-eval.mjs).
+Runner: [`scripts/eval/learning-eval.mjs`](../../scripts/eval/learning-eval.mjs)
+(logic in `learning-eval-core.mjs`, arms in `learning-eval-arms.mjs`, pinned
+dataset in `scripts/eval/datasets/learning-ablation.json`). The harness's own
+tests are `tests/eval/learning-eval.test.ts` and they DO run in `npm test`.
 
-> **This is a scaffold, not a passing eval.** It defines the dataset format, the
-> scoring rubric, and a runner skeleton. It does **not** assert success today:
-> Part (A) still needs to be wired to the built learning code, and Part (B)
-> needs a real LLM. The runner reports those as `SKIPPED`, never as fake passes.
-
----
-
-## Why this is separate from `npm test`
-
-The vitest suite verifies *mechanics* with mocks and real local SQLite: that an
-instinct row is written, that a pattern matcher returns a row, that confidence
-maths is correct. It deliberately does **not** answer the subjective questions
-above, because:
-
-- "Did learning **help**?" is a behavioural-delta question across two runs, not
-  a single-unit assertion.
-- "Is the answer **good**?" depends on a real model generating real text and on
-  a rubric judging it — neither of which belongs in a fast, offline, hermetic
-  unit suite.
-
-So these live here, clearly labelled, and CI does **not** depend on them.
+Part (A) **runs** — in process, against throwaway SQLite databases, with no
+network and no credentials. Part (B) needs a real chat provider; without one it
+is reported as **NOT MEASURED**, which is not a pass (see the exit codes).
 
 ---
 
-## What this harness will and will not claim
+## The three measures (plan item 6.3)
 
-| Claim | Status |
+| Measure | What it is | Denominator |
+|---|---|---|
+| **repeat-error reduction** | a failure mode the system already solved once comes back | held-out probes that re-present a trained failure mode |
+| **harmful recall** | recalled guidance that does not apply to the probe, and probes the control accepted that learning-on did not | probes where anything was recalled |
+| **cost per accepted result** | attempts charged per accepted probe (and, in the quality arm, provider tokens per accepted answer) | probes the arm accepted |
+
+Every rate with a zero denominator is reported as **NOT MEASURED**, never as 0%.
+
+## The arms
+
+| Arm | Store | Learning | What it is for |
+|---|---|---|---|
+| `cold` | empty, created for this run | on | proves the warm arms' recalls come from this run's training and not from a seeded or leftover store (it asserts 0 instincts) |
+| `warm-learning-off` | trained | **off** (`ErrorLearningHooks.disable()`) | **the control**: the knowledge exists and is never consulted, so any difference is retrieval, not the dataset |
+| `warm-learning-on` | trained | on | the treatment |
+
+Each arm gets its **own** temp database, so a cold arm is genuinely cold and the
+control cannot see what the treatment recalled. The probes are **held out**: the
+dataset validator refuses a probe that reuses a trained `errorMessage`, so a warm
+arm has to generalise rather than remember.
+
+Both production retrieval paths are exercised: `ErrorLearningHooks
+.onBeforeErrorAnalysis` (the learned-solutions block injected at the moment of
+the error, `minConfidence` 0.5) and `InstinctRetriever.getMatchedInstincts` (the
+proactive insight retrieval, lexical similarity ≥ 0.4, deprecated/quarantined
+filtered). The proactive path is queried with the failing output itself — the
+strongest query a run could give it, deliberately generous to the system.
+
+After the probes settle, `src/learning/ledger.ts` is asked the plan 6.4 question
+about every rule that recalled wrongly: is it findable without knowing its id
+(`findSuspectGuidance`), is the evidence against it dated, and when the harness
+retires it does the effect actually **end** (status out of reach, no generated
+artifact still carrying it, zero runs credited afterwards)?
+
+---
+
+## What is real and what is not
+
+**Real:** `LearningStorage`, `LearningPipeline` (error→repair minting, run-scoped
+credit settled from each run's terminal verdict), `PatternMatcher`,
+`ErrorLearningHooks`, `InstinctRetriever`, `src/learning/ledger.ts`, and the
+SQLite databases.
+
+**Not real:** the tool execution. Whether a probe ends accepted, and what it
+costs, comes from an oracle **declared in the dataset** — pre-registered, with a
+`rationale` string per probe, so the numbers can be argued with instead of taken
+on trust. Ablation cost is in **attempts**, never in currency. The harness prints
+this on every run.
+
+**Retrieval backend:** no embedder is wired, so recall here is **lexical**.
+Semantic recall is *not* measured and no claim is made about it.
+
+**Comparative claims are out of scope and cannot be made from this repo.** A fair
+"better than X" claim needs the other systems actually running, a shared
+published dataset, a pre-registered judging protocol, and statistical treatment
+of variance. None of those exist here. This harness scores ONE system against an
+ABSOLUTE rubric.
+
+---
+
+## Exit codes — "SKIPPED" is not "measured"
+
+| Code | Meaning |
 |---|---|
-| Instinct created from a seeded error on run 1 is recalled on run 2 (local SQLite) | **Verifiable with NO network / NO creds** once Part (A) is wired |
-| A generated answer meets an absolute, deterministic rubric (substring / regex) | Verifiable **once a real LLM produces the answer** |
-| A generated answer meets a subjective ("judge") rubric criterion | Needs a **second real LLM** as judge — credentials required |
-| "Strada.Brain answers **better than** openclaw / hermes / any other assistant" | **OUT OF SCOPE — cannot be asserted.** See below. |
+| `0` | **measured and good** — every requested measure ran and stayed inside its pre-registered bound |
+| `1` | **measured and regressed** — something ran and came out worse than its bound |
+| `2` | bad invocation, unreadable dataset, or the harness itself failed |
+| `3` | **NOT MEASURED** — a requested arm or measure could not run |
 
-### Comparative claims are out of scope (and why)
-
-A fair "better than X" claim is **not produced by this harness and cannot be**
-made from this repo. It would require all of:
-
-1. The other systems (openclaw, hermes, etc.) **actually running** and reachable.
-2. A **shared, published benchmark dataset** both systems are scored on.
-3. A **pre-registered judging protocol** (fixed judge model, fixed prompts,
-   blind to which system produced which answer).
-4. **Statistical treatment of variance** (multiple samples, confidence intervals).
-
-None of those exist here. This harness scores **one** system against an
-**absolute** rubric — never against a rival. Any marketing-style comparative
-statement about Strada.Brain's quality is unsupported by this repo's evidence.
-
----
-
-## Running it
+A skipped arm is never folded into a pass. Running the default invocation without
+a provider gives `3`, not `0`, because the answer-quality arm was requested and
+could not run. `--ablation-only` drops that arm from the requested set — an
+explicit operator choice, printed in the report.
 
 ```bash
-node scripts/eval/learning-eval.mjs            # auto-detect; skip what it can't run
-node scripts/eval/learning-eval.mjs --dataset path/to/dataset.json
-node scripts/eval/learning-eval.mjs --quality  # also attempt Part (B) — needs a real LLM
-node scripts/eval/learning-eval.mjs --json      # machine-readable result
+node scripts/eval/learning-eval.mjs --ablation-only    # no provider needed
+node scripts/eval/learning-eval.mjs                    # + answer quality (needs a provider)
+node scripts/eval/learning-eval.mjs --json             # machine-readable
+node scripts/eval/learning-eval.mjs --verify-can-fail  # prove the gate fires (expects exit 1)
 ```
 
-Exit codes: `0` = everything that actually ran passed (or nothing ran);
-`1` = a check that ran failed; `2` = bad invocation / unreadable dataset.
-**`SKIPPED` is never a failure** — it means a part needs wiring and/or real
-credentials.
-
-Today, with no wiring and no creds, every part reports `SKIPPED` and the run
-exits `0`. That is the honest current state, not a green checkmark.
+`--verify-can-fail` runs the real arms with the treatment's learning forced off,
+so a working harness MUST report a regression; if it reports anything else it
+exits `2` and says the gate is broken.
 
 ---
 
-## Dataset format
-
-A dataset is a JSON file `{ "version": 1, "tasks": Task[] }`. A small built-in
-dataset ships inside the runner so it is self-contained; override it with
-`--dataset`.
+## Dataset format (version 2)
 
 ```jsonc
 {
-  "version": 1,
-  "tasks": [
-    {
-      "id": "cs0006-metadata-missing",     // stable unique id
-      "title": "Recurring build error is recalled on second encounter",
-
-      // --- self-learning (Part A) ---
-      "seedError": {                         // taught on RUN 1
-        "toolName": "dotnet_build",
-        "errorCode": "CS0006",
-        "errorMessage": "error CS0006: Metadata file 'Strada.Core.dll' could not be found",
-        "input": { "configuration": "Release" }
-      },
-      "fix": {                               // the resolution that should become an instinct
-        "action": "Build Strada.Core / restore references before building dependents",
-        "success": true
-      },
-      "probe": {                             // RUN 2: the same/similar situation re-encountered
-        "toolName": "dotnet_build",
-        "errorCode": "CS0006",
-        "errorMessage": "error CS0006: Metadata file 'Strada.Core.dll' could not be found",
-        "input": { "configuration": "Debug" }
-      },
-      "expectInstinct": {                    // what RUN 2 should recall
-        "minConfidence": 0.0,                // default: just "exists & matches"
-        "matchKind": "error_fix"             // error_fix | error_pattern | correction
-      },
-
-      // --- response quality (Part B) ---
-      "prompt": "My Unity build fails with CS0006 ... what do I do?",
-      "rubric": [ /* RubricCriterion[] — see below */ ]
-    }
-  ]
+  "version": 2,
+  "thresholds": {
+    "minRepeatErrorReduction": 0.5,   // learning must remove this fraction of the control's repeats
+    "maxHarmfulRecallRate": 0.34,     // at most this fraction of recalls may not apply
+    "maxCostRatio": 1.1,              // learning-on cost per accepted result, over the control's
+    "minQualityAccept": 0.7,
+    "maxQualityHarmRate": 0.0
+  },
+  "train": [{
+    "family": "missing-metadata-reference",   // stable id a probe refers to
+    "tool": "dotnet_build",
+    "target": { "file_path": "/proj/Assembly-CSharp.csproj" },  // the repair must act on the SAME target
+    "errorMessage": "error CS0006: Metadata file '…Strada.Core.dll' could not be found",
+    "repairs": 4                              // successful runs credited after the fix
+  }],
+  "heldOut": [{
+    "id": "p1-metadata-other-assembly",
+    "family": "missing-metadata-reference",   // null when the probe is novel
+    "tool": "dotnet_build",
+    "errorCode": "CS0006",
+    "errorMessage": "error CS0006: Metadata file '…Strada.Modules.dll' could not be found",
+    "resolvedBy": ["missing-metadata-reference"],   // [] makes it a TRAP
+    "rationale": "why the oracle says what it says",
+    "cost": { "withoutGuidance": 3, "withGuidance": 1, "wrongGuidancePenalty": 1 },
+    "accepted": { "withoutGuidance": true, "whenMisled": false }
+  }],
+  "quality": [{ "id": "q1", "prompt": "…", "rubric": [ /* see below */ ] }]
 }
 ```
 
-Fields not relevant to a given part are ignored by that part.
+The thresholds are pre-registered **for that probe set**, not universal claims:
+the harmful-recall budget in particular depends on how many traps the set holds
+(4 of 7 in the pinned dataset).
+
+`repairs` is not decoration. A freshly minted instinct sits at confidence 0.50
+and the error-recovery path asks for 0.5 *after* weighting (0.95 × 0.50 = 0.475),
+so an unreinforced rule is never offered to a run — the warm arm has to pay for
+its confidence with successful runs, exactly as production does.
 
 ---
 
 ## Scoring rubric (Part B — absolute, never comparative)
-
-Each answer is scored against `RubricCriterion[]`. Scores are **absolute**
-("does the answer meet this bar?"), never relative to another model.
 
 | `kind` | Shape | Needs LLM? |
 |---|---|---|
 | `must_contain` | `{ id, weight, kind, any: string[] }` — ≥1 substring present (case-insensitive) | No |
 | `must_not_contain` | `{ id, weight, kind, all: string[] }` — none present | No |
 | `regex` | `{ id, weight, kind, pattern: string }` — matches `/pattern/i` | No |
-| `judge` | `{ id, weight, kind, question: string }` — a second LLM answers yes/no | **Yes** |
+| `judge` | `{ id, weight, kind, question: string }` — a second LLM answers | **Yes** |
 
-Final quality score = `sum(weight * criterionScore) / sum(weight)` in `[0, 1]`.
-There is **no pass/fail threshold** baked in — a threshold is a product/policy
-decision, not something this scaffold asserts.
+Score = `sum(weight * criterionScore) / sum(weight)` over the criteria that could
+be scored. A `judge` criterion with no judge configured is reported as
+**unscored** and left out of the denominator — never silently passed.
 
-The deterministic kinds (`must_contain` / `must_not_contain` / `regex`) are
-already implemented (`scoreDeterministicRubric`) and are honest, cheap signals
-(e.g. "did it mention the Strada.Core API it was supposed to?", "did it avoid a
-banned hallucinated step?"). They still require a **real generated answer** to
-score — the harness will not invent one.
-
----
-
-## What still has to be built (the honest TODO list)
-
-### Part (A) — self-learning (verifiable with NO network / NO creds once wired)
-
-The building blocks already exist in `src/learning` (built to `dist/learning`):
-`LearningStorage`, `LearningPipeline` (`observeToolUse`, `runDetectionBatch`),
-`PatternMatcher` (`findMatchingErrorPatterns`), and
-`storage.getInstincts({ status, type, minConfidence })`.
-
-To make Part (A) real (see the `WIRING NOTES` block in the runner):
-
-1. `npm run build`, then `import` from `dist/learning/index.js`.
-2. **RUN 1 (teach):** open a throwaway temp SQLite DB; feed each task's
-   `seedError` as a failing observation, then its `fix` as a success; run
-   `runDetectionBatch()` so an instinct is created.
-3. **RUN 2 (probe):** present each task's `probe` and assert an instinct
-   satisfying `expectInstinct` is **retrieved** (optionally from a fresh process
-   on the same DB to also exercise cross-session recall).
-4. **Metric:** fraction of tasks where RUN 2 recalls a matching instinct that
-   RUN 1 lacked. That delta is the "did learning help" signal.
-
-**Embedding caveat (must stay honest).** Semantic instinct recall depends on
-embeddings. In this deployment embeddings fall back to a hash vector (no API
-key, Ollama off — see [`../STATUS.md`](../STATUS.md)). Hash-fallback recall is
-**lexical, not semantic**, so a reworded probe may not recall even when a human
-would say it should. The eval must report which embedding backend was active and
-treat semantic-recall results as **indicative only** under hash fallback. Do not
-claim semantic learning works on the strength of a lexical match.
-
-### Part (B) — response quality (credentials required)
-
-1. Boot the real provider stack (or call the chat endpoint) to generate an
-   answer per `task.prompt`. **No fabricated answers — ever.**
-2. Score deterministic rubric criteria locally (already implemented).
-3. For `judge` criteria, call a **second real LLM** (a different model is
-   recommended) as judge.
-4. Report per-task scores against the absolute rubric. **Never** compare to
-   another assistant.
-
-Without working provider credentials (`OPENAI_API_KEY` / a live subscription
-token / `GEMINI_API_KEY` / a running Ollama), Part (B) **must remain SKIPPED**.
-This cannot run in CI and must not be faked.
+Each quality case is answered **twice**: once with no learned guidance, once with
+the guidance production's proactive retrieval actually returns for that prompt.
+A guided answer that scores lower is harmful recall at the answer level, and it
+feeds measure 2.
