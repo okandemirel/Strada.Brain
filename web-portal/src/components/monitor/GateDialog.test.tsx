@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import type { MonitorTask } from '../../stores/monitor-store'
 
 let mockTasks: Record<string, MonitorTask> = {}
@@ -75,29 +75,67 @@ describe('GateDialog', () => {
     expect(screen.getByText(/Stuck Task/)).toBeInTheDocument()
   })
 
-  it('Approve button calls updateTask with review_passed', async () => {
+  // Audit 11.6 / 0-A.30: the two tests below used to assert a LOCAL store
+  // mutation with no server call — that was the defect (the daemon never
+  // heard the decision). Inverted: the decision must reach
+  // POST /api/monitor/task/:id/approve|skip, and the store mirrors it only
+  // once the server confirmed.
+  function jsonResponse(status: number, body: unknown) {
+    return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
+  }
+
+  it('Approve POSTs to the approve endpoint and mirrors review_passed only after a 200', async () => {
     const { default: userEvent } = await import('@testing-library/user-event')
     const user = userEvent.setup()
-
-    mockTasks = {
-      t1: makeTask({ id: 't1', title: 'Stuck', reviewStatus: 'review_stuck' }),
+    const fetchMock = vi.fn(async () => jsonResponse(200, { status: 'approved', taskId: 't1' }))
+    vi.stubGlobal('fetch', fetchMock)
+    try {
+      mockTasks = { t1: makeTask({ id: 't1', title: 'Stuck', reviewStatus: 'review_stuck', rootId: 'root-1' }) }
+      render(<GateDialog />)
+      await user.click(screen.getByText('Approve Anyway'))
+      await waitFor(() => expect(mockUpdateTask).toHaveBeenCalledWith('t1', { reviewStatus: 'review_passed' }))
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
+      expect(url).toBe('/api/monitor/task/t1/approve')
+      expect(init.method).toBe('POST')
+      expect(JSON.parse(String(init.body))).toEqual({ rootId: 'root-1' })
+    } finally {
+      vi.unstubAllGlobals()
     }
-    render(<GateDialog />)
-    await user.click(screen.getByText('Approve Anyway'))
-
-    expect(mockUpdateTask).toHaveBeenCalledWith('t1', { reviewStatus: 'review_passed' })
   })
 
-  it('Skip button calls updateTask with skipped status', async () => {
+  it('Skip POSTs to the skip endpoint and mirrors skipped only after a 200', async () => {
     const { default: userEvent } = await import('@testing-library/user-event')
     const user = userEvent.setup()
-
-    mockTasks = {
-      t1: makeTask({ id: 't1', title: 'Stuck', reviewStatus: 'review_stuck' }),
+    const fetchMock = vi.fn(async () => jsonResponse(200, { status: 'skipped', taskId: 't1' }))
+    vi.stubGlobal('fetch', fetchMock)
+    try {
+      mockTasks = { t1: makeTask({ id: 't1', title: 'Stuck', reviewStatus: 'review_stuck' }) }
+      render(<GateDialog />)
+      await user.click(screen.getByText('Skip Task'))
+      await waitFor(() => expect(mockUpdateTask).toHaveBeenCalledWith('t1', { status: 'skipped', reviewStatus: 'none' }))
+      expect((fetchMock.mock.calls[0] as unknown as [string])[0]).toBe('/api/monitor/task/t1/skip')
+    } finally {
+      vi.unstubAllGlobals()
     }
-    render(<GateDialog />)
-    await user.click(screen.getByText('Skip Task'))
+  })
 
-    expect(mockUpdateTask).toHaveBeenCalledWith('t1', { status: 'skipped', reviewStatus: 'none' })
+  it('keeps the dialog open and shows the refusal when the server has no gate consumer (503)', async () => {
+    const { default: userEvent } = await import('@testing-library/user-event')
+    const user = userEvent.setup()
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(503, { error: 'No gate consumer attached — approve not applied', taskId: 't1' })))
+    try {
+      mockTasks = { t1: makeTask({ id: 't1', title: 'Stuck', reviewStatus: 'review_stuck' }) }
+      render(<GateDialog />)
+      await user.click(screen.getByText('Approve Anyway'))
+      const alert = await screen.findByRole('alert')
+      expect(alert).toHaveTextContent('No gate consumer attached — approve not applied')
+      // Nothing was mirrored into the store and the gate is still up.
+      expect(mockUpdateTask).not.toHaveBeenCalled()
+      expect(screen.getByText('Review Gate')).toBeInTheDocument()
+      expect(screen.getByText('Approve Anyway')).not.toBeDisabled()
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 })

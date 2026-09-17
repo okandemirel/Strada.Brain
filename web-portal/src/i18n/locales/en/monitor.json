@@ -5,7 +5,6 @@
   "kanban.columns.done": "Done",
   "kanban.columns.issues": "Issues",
   "kanban.empty": "No tasks",
-
   "dag.workspace": "DAG Workspace",
   "dag.emptyTitle": "No active goal. Start a task to see the DAG.",
   "dag.emptyHint1": "Parallel branches and review gates will appear here.",
@@ -13,7 +12,6 @@
   "dag.emptyHint3": "Send a complex task to trigger planning.",
   "dag.nodeReviewPrefix": "Review: ",
   "dag.loading": "Loading DAG view...",
-
   "overview.missionControl": "Mission Control",
   "overview.cockpitTitle": "Agent execution cockpit",
   "overview.rootGoal": "Root goal",
@@ -34,7 +32,6 @@
   "overview.blockedSuffix": "{{count}} blocked",
   "overview.healthy": "Healthy",
   "overview.doneFraction": "{{completed}}/{{total}} done",
-
   "inspect.descriptionPrefix": "Detailed inspection of task ",
   "inspect.agentLabel": "Agent",
   "inspect.sectionRuntime": "Runtime",
@@ -61,24 +58,22 @@
   "inspect.bannerPaused": "Paused",
   "inspect.bannerWaitingForInput": "Waiting for input",
   "inspect.bannerCancelled": "Cancelled",
-
   "activity.empty": "No activity yet.",
   "activity.emptyDescription": "Tool calls, agent observations, and review events will stream here in real time.",
   "activity.timelineLabel": "Timeline",
   "activity.eventsCaptured": "{{count}} activity events captured",
   "activity.liveIndicator": "Live",
   "activity.sidebarTitle": "Activity",
-
   "intervention.hint": "Select a task to retry, resume, or cancel it.",
   "intervention.retry": "Retry",
   "intervention.resume": "Resume",
   "intervention.cancel": "Cancel",
-
   "gate.title": "Review Gate",
   "gate.description": "Task \"{{title}}\" is stuck after maximum review iterations. What would you like to do?",
   "gate.approve": "Approve Anyway",
   "gate.skip": "Skip Task",
-
+  "gate.sending": "Sending…",
+  "gate.failed": "Decision not applied: {{error}}",
   "supervisor.title": "Supervisor",
   "supervisor.completedWithErrors": "Completed with errors",
   "supervisor.completed": "Completed",
@@ -92,7 +87,6 @@
   "supervisor.showAlertsPlural": "Show {{count}} alerts",
   "supervisor.hideAlerts": "Hide {{count}} alert",
   "supervisor.hideAlertsPlural": "Hide {{count}} alerts",
-
   "panel.viewDag": "DAG",
   "panel.viewKanban": "Kanban",
   "panel.summaryHidden": "Summary Hidden",
@@ -104,9 +98,7 @@
   "panel.rootSwitcher": "Switch request",
   "panel.rootSwitcherSelect": "Select request",
   "panel.rootSwitcherConversation": "Conversation",
-
   "progress.stepCounter": "step {{done}}/{{total}}",
-
   "status.pending": "Pending",
   "status.executing": "Executing",
   "status.verifying": "Verifying",
@@ -119,7 +111,6 @@
   "status.waiting_for_input": "Waiting for input",
   "status.running": "Running",
   "status.done": "Done",
-
   "status.review.none": "None",
   "status.review.spec_review": "Spec review",
   "status.review.quality_review": "Quality review",
@@ -131,7 +122,6 @@
   "status.review.pending": "Pending",
   "status.review.approved": "Approved",
   "status.review.rejected": "Rejected",
-
   "status.gate.waiting": "Waiting",
   "status.gate.approved": "Approved",
   "status.gate.rejected": "Rejected"

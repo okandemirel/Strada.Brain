@@ -5,7 +5,6 @@
   "kanban.columns.done": "Tamamlandı",
   "kanban.columns.issues": "Sorunlar",
   "kanban.empty": "Görev yok",
-
   "dag.workspace": "DAG Çalışma Alanı",
   "dag.emptyTitle": "Aktif hedef yok. DAG'ı görmek için bir görev başlatın.",
   "dag.emptyHint1": "Paralel dallar ve inceleme kapıları burada görünecek.",
@@ -13,7 +12,6 @@
   "dag.emptyHint3": "Planlamayı tetiklemek için karmaşık bir görev gönderin.",
   "dag.nodeReviewPrefix": "İnceleme: ",
   "dag.loading": "DAG görünümü yükleniyor...",
-
   "overview.missionControl": "Görev Kontrol",
   "overview.cockpitTitle": "Ajan yürütme kokpiti",
   "overview.rootGoal": "Kök hedef",
@@ -34,7 +32,6 @@
   "overview.blockedSuffix": "{{count}} engelli",
   "overview.healthy": "Sağlıklı",
   "overview.doneFraction": "{{completed}}/{{total}} tamamlandı",
-
   "inspect.descriptionPrefix": "Görevin detaylı incelemesi: ",
   "inspect.agentLabel": "Ajan",
   "inspect.sectionRuntime": "Çalışma Zamanı",
@@ -61,24 +58,22 @@
   "inspect.bannerPaused": "Duraklatıldı",
   "inspect.bannerWaitingForInput": "Giriş bekleniyor",
   "inspect.bannerCancelled": "İptal edildi",
-
   "activity.empty": "Henüz etkinlik yok.",
   "activity.emptyDescription": "Araç çağrıları, ajan gözlemleri ve inceleme olayları burada gerçek zamanlı olarak akacak.",
   "activity.timelineLabel": "Zaman Çizelgesi",
   "activity.eventsCaptured": "{{count}} etkinlik olayı yakalandı",
   "activity.liveIndicator": "Canlı",
   "activity.sidebarTitle": "Etkinlik",
-
   "intervention.hint": "Yeniden denemek, devam ettirmek veya iptal etmek için bir görev seçin.",
   "intervention.retry": "Yeniden Dene",
   "intervention.resume": "Devam Et",
   "intervention.cancel": "İptal",
-
   "gate.title": "İnceleme Kapısı",
   "gate.description": "\"{{title}}\" görevi maksimum inceleme tekrarından sonra takıldı. Ne yapmak istersiniz?",
   "gate.approve": "Yine de Onayla",
   "gate.skip": "Görevi Atla",
-
+  "gate.sending": "Gönderiliyor…",
+  "gate.failed": "Karar uygulanmadı: {{error}}",
   "supervisor.title": "Süpervizör",
   "supervisor.completedWithErrors": "Hatalarla tamamlandı",
   "supervisor.completed": "Tamamlandı",
@@ -92,7 +87,6 @@
   "supervisor.showAlertsPlural": "{{count}} uyarıyı göster",
   "supervisor.hideAlerts": "{{count}} uyarıyı gizle",
   "supervisor.hideAlertsPlural": "{{count}} uyarıyı gizle",
-
   "panel.viewDag": "DAG",
   "panel.viewKanban": "Kanban",
   "panel.summaryHidden": "Özet Gizli",
@@ -104,9 +98,7 @@
   "panel.rootSwitcher": "İsteği değiştir",
   "panel.rootSwitcherSelect": "İstek seç",
   "panel.rootSwitcherConversation": "Sohbet",
-
   "progress.stepCounter": "adım {{done}}/{{total}}",
-
   "status.pending": "Bekliyor",
   "status.executing": "Yürütülüyor",
   "status.verifying": "Doğrulanıyor",
@@ -119,7 +111,6 @@
   "status.waiting_for_input": "Giriş bekleniyor",
   "status.running": "Çalışıyor",
   "status.done": "Bitti",
-
   "status.review.none": "Yok",
   "status.review.spec_review": "Şartname incelemesi",
   "status.review.quality_review": "Kalite incelemesi",
@@ -131,7 +122,6 @@
   "status.review.pending": "Bekliyor",
   "status.review.approved": "Onaylandı",
   "status.review.rejected": "Reddedildi",
-
   "status.gate.waiting": "Bekliyor",
   "status.gate.approved": "Onaylandı",
   "status.gate.rejected": "Reddedildi"
