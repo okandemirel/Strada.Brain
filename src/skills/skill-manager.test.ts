@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { writeFile, mkdir, readFile, mkdtemp, rm } from "node:fs/promises";
+import { writeFile, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SkillManager } from "./skill-manager.js";
@@ -8,7 +8,7 @@ import type { DiscoveredSkill } from "./skill-loader.js";
 import type { GateResult } from "./skill-gating.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "../agents/tools/tool.interface.js";
 import { withTempDir } from "../test-helpers.js";
-import { approveWorkspaceSkill } from "./skill-trust.js";
+import { approveWorkspaceSkill, openSkillTrustStore } from "./skill-trust.js";
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -557,10 +557,16 @@ describe("SkillManager", () => {
       expect(entries[0]!.gateReason).toContain("strada skill trust ws");
       expect(mockLoadSkillTools).not.toHaveBeenCalled();
 
-      await approveWorkspaceSkill(projectRoot, skill.path);
-      const recordPath = join(fakeHome, ".strada", "trusted-skills.json");
-      const record = JSON.parse(await readFile(recordPath, "utf-8")) as { projects: Record<string, Record<string, { sha256: string }>> };
-      expect(Object.values(record.projects)[0]!["skills/ws"]!.sha256).toMatch(/^[0-9a-f]{64}$/);
+      const approval = await approveWorkspaceSkill(projectRoot, skill.path);
+      const store = openSkillTrustStore();
+      try {
+        expect(store.path).toBe(join(fakeHome, ".strada", "trusted-skills.db"));
+        const approved = store.list(approval.projectId);
+        expect(approved.map((e) => e.skillKey)).toEqual(["skills/ws"]);
+        expect(approved[0]!.record.sha256).toMatch(/^[0-9a-f]{64}$/);
+      } finally {
+        store.close();
+      }
 
       entries = await new SkillManager().loadAll(projectRoot);
       expect(entries[0]!.status).toBe("active");

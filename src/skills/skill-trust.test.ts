@@ -1,33 +1,42 @@
 // plan 1.15 (audit 13F3 / D65 / Codex #23): workspace-skill trust records.
 // Codex round 6 (2026-09-17) #6: the hash covers every regular file, not
-// only code; #7: symlinked code is refused; #8: approve/revoke are locked and
-// the record is replaced atomically.
+// only code; #7: symlinked code is refused; #8: approve/revoke are serialised
+// and a revocation is never resurrected.
 // Codex round 7 (2026-09-17) #10: node_modules is hashed too; #11: the scan
-// streams files and fails closed at file/byte/depth limits; #12: the lock
-// carries an ownership token — only a dead owner is displaced, only the
-// owner unlinks.
+// streams files and fails closed at file/byte/depth limits.
+// Codex round 9 (2026-09-17) #7/#8: the JSON record and its pid+token lock
+// file are gone. Mutual exclusion is SQLite's exclusive writer
+// (`~/.strada/trusted-skills.db`), so no ownership claim outlives the
+// connection holding it: a crashed writer blocks nothing (#8, pid reuse cannot
+// make a dead owner look alive) and two writers cannot both be inside the
+// protected mutation (#7, there is no lock to displace and no whole-document
+// snapshot to lose an update). The pre-round-9 JSON is imported once.
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { spawnSync } from "node:child_process";
+import Database from "better-sqlite3";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtemp, mkdir, writeFile, readFile, rm, symlink, access, readdir, utimes } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   DEFAULT_SKILL_SCAN_LIMITS,
+  LEGACY_JSON_IMPORT_MARKER,
   SKILL_SCAN_MAX_BYTES,
   SKILL_SCAN_MAX_DEPTH,
   SKILL_SCAN_MAX_FILES,
   approveWorkspaceSkill,
   assessWorkspaceSkillTrust,
   hashSkillContent,
+  legacyTrustedSkillsJsonPath,
+  openSkillTrustStore,
+  projectIdentity,
   revokeWorkspaceSkill,
-  takeOverStaleLock,
   scanSkillContent,
-  trustedSkillsLockPath,
-  trustedSkillsPath,
-  updateTrustFile,
+  trustedSkillsDbPath,
+  type LegacyTrustedSkillsJson,
   type SkillScanLimits,
-  type TrustedSkillsFile,
+  type SkillTrustEntry,
+  type TrustedSkillRecord,
 } from "./skill-trust.js";
 
 let fakeHome: string;
@@ -56,6 +65,29 @@ async function writeSkill(name: string, files: Record<string, string>): Promise<
   return dir;
 }
 
+/** Read one record the way another process would: its own connection, closed after. */
+function readRecord(projectId: string, key: string): TrustedSkillRecord | undefined {
+  const store = openSkillTrustStore();
+  try {
+    return store.get(projectId, key);
+  } finally {
+    store.close();
+  }
+}
+
+/** Every approval recorded for a project, as another process sees it. */
+function listRecords(projectId: string): readonly SkillTrustEntry[] {
+  const store = openSkillTrustStore();
+  try {
+    return store.list(projectId);
+  } finally {
+    store.close();
+  }
+}
+
+/** The only files that may sit beside the record: the database and its WAL pair. */
+const SQLITE_FILES = new Set(["trusted-skills.db", "trusted-skills.db-shm", "trusted-skills.db-wal"]);
+
 /** A pid that no longer exists: a child that has already exited. */
 function deadPid(): number {
   const child = spawnSync(process.execPath, ["-e", ""]);
@@ -63,13 +95,14 @@ function deadPid(): number {
   return child.pid;
 }
 
-/** `<pid> <token> <iso>` — the lock file's format. */
+/** The pre-round-9 lock file line: `<pid> <token> <iso>`. */
 const lockLine = (pid: number, token = `${pid}-deadbeef`): string => `${pid} ${token} ${new Date().toISOString()}\n`;
 
-describe("trustedSkillsPath", () => {
+describe("trustedSkillsDbPath", () => {
   it("lives under the user's home, resolved at call time — never inside the project", () => {
-    expect(trustedSkillsPath()).toBe(join(fakeHome, ".strada", "trusted-skills.json"));
-    expect(trustedSkillsPath().startsWith(projectRoot)).toBe(false);
+    expect(trustedSkillsDbPath()).toBe(join(fakeHome, ".strada", "trusted-skills.db"));
+    expect(trustedSkillsDbPath().startsWith(projectRoot)).toBe(false);
+    expect(legacyTrustedSkillsJsonPath()).toBe(join(fakeHome, ".strada", "trusted-skills.json"));
   });
 });
 
@@ -144,12 +177,13 @@ describe("assessWorkspaceSkillTrust / approve / revoke", () => {
     if (before.trusted) throw new Error("unreachable");
     expect(before.reason).toContain("not approved");
     expect(before.reason).toContain("strada skill trust ws");
+    // Asking about an unknown skill creates no record file.
+    await expect(access(trustedSkillsDbPath())).rejects.toThrow();
 
     const approval = await approveWorkspaceSkill(projectRoot, dir);
-    expect(approval.recordPath).toBe(join(fakeHome, ".strada", "trusted-skills.json"));
+    expect(approval.recordPath).toBe(join(fakeHome, ".strada", "trusted-skills.db"));
     expect(approval.skillKey).toBe("skills/ws");
-    const file = JSON.parse(await readFile(approval.recordPath, "utf-8")) as { projects: Record<string, Record<string, { sha256: string }>> };
-    expect(file.projects[approval.projectId]!["skills/ws"]!.sha256).toBe(approval.sha256);
+    expect(readRecord(approval.projectId, "skills/ws")!.sha256).toBe(approval.sha256);
     // Nothing was written inside the project.
     await expect(access(join(projectRoot, ".strada"))).rejects.toThrow();
 
@@ -175,17 +209,24 @@ describe("assessWorkspaceSkillTrust / approve / revoke", () => {
     expect((await assessWorkspaceSkillTrust(projectRoot, dir, "ws")).trusted).toBe(true);
 
     expect(await revokeWorkspaceSkill(projectRoot, dir)).toBe(true);
+    expect(readRecord(approval.projectId, "skills/ws")).toBeUndefined();
     expect((await assessWorkspaceSkillTrust(projectRoot, dir, "ws")).trusted).toBe(false);
     expect(await revokeWorkspaceSkill(projectRoot, dir)).toBe(false);
   });
 
-  it("a trusted-skills.json placed INSIDE the project is ignored (a checkout cannot approve itself)", async () => {
+  it("a trust record placed INSIDE the project is ignored (a checkout cannot approve itself)", async () => {
     const dir = await writeSkill("self", { "index.js": "export const tools = [];" });
     const sha = await hashSkillContent(dir);
     await mkdir(join(projectRoot, ".strada"), { recursive: true });
     const planted = { version: 1, projects: { [projectRoot]: { "skills/self": { sha256: sha, approvedAtIso: "now" } } } };
     await writeFile(join(projectRoot, ".strada", "trusted-skills.json"), JSON.stringify(planted), "utf-8");
-    // Also with the realpath as key, in case tmpdir is symlinked.
+    // A database inside the project is no authority either.
+    const inProject = openSkillTrustStore({ path: join(projectRoot, ".strada", "trusted-skills.db") });
+    try {
+      inProject.approve(await projectIdentity(projectRoot), "skills/self", { sha256: sha!, fileCount: 1, approvedAtIso: "now" });
+    } finally {
+      inProject.close();
+    }
     const verdict = await assessWorkspaceSkillTrust(projectRoot, dir, "self");
     expect(verdict.trusted).toBe(false);
   });
@@ -196,20 +237,37 @@ describe("assessWorkspaceSkillTrust / approve / revoke", () => {
     await expect(approveWorkspaceSkill(projectRoot, dir)).rejects.toThrow(/Nothing to approve/);
   });
 
-  it("the record stores the file count and a pre-round-6 record (code-only hash, no count) is untrusted until re-approved", async () => {
+  it("the record stores the file count and a record whose count does not match is untrusted until re-approved", async () => {
     const dir = await writeSkill("count", { "index.js": "code", "SKILL.md": "md", "lib/x.json": "{}" });
     const result = await approveWorkspaceSkill(projectRoot, dir);
     expect(result.fileCount).toBe(3);
-    const file = JSON.parse(await readFile(result.recordPath, "utf-8")) as TrustedSkillsFile;
-    expect(file.projects[result.projectId]!["skills/count"]!.fileCount).toBe(3);
+    expect(readRecord(result.projectId, "skills/count")!.fileCount).toBe(3);
 
     // Same sha256 but a count that does not match → changed.
-    const forged: TrustedSkillsFile = { version: 1, projects: { [result.projectId]: { "skills/count": { sha256: result.sha256, fileCount: 2, approvedAtIso: "x" } } } };
-    await writeFile(result.recordPath, JSON.stringify(forged), "utf-8");
+    const store = openSkillTrustStore();
+    try {
+      store.approve(result.projectId, "skills/count", { sha256: result.sha256, fileCount: 2, approvedAtIso: "x" });
+    } finally {
+      store.close();
+    }
     const verdict = await assessWorkspaceSkillTrust(projectRoot, dir, "count");
     expect(verdict.trusted).toBe(false);
     if (verdict.trusted) throw new Error("unreachable");
     expect(verdict.reason).toContain("2 -> 3 file(s)");
+  });
+
+  it("a pre-round-6 record (no file count) is judged on its hash alone", async () => {
+    const dir = await writeSkill("legacy-count", { "index.js": "code" });
+    const projectId = await projectIdentity(projectRoot);
+    const sha = (await hashSkillContent(dir))!;
+    const store = openSkillTrustStore();
+    try {
+      store.approve(projectId, "skills/legacy-count", { sha256: sha, approvedAtIso: "x" });
+      expect(store.get(projectId, "skills/legacy-count")).toEqual({ sha256: sha, approvedAtIso: "x" });
+    } finally {
+      store.close();
+    }
+    expect((await assessWorkspaceSkillTrust(projectRoot, dir, "legacy-count")).trusted).toBe(true);
   });
 
   // ---- round 6 #7 ---------------------------------------------------------
@@ -227,7 +285,7 @@ describe("assessWorkspaceSkillTrust / approve / revoke", () => {
     expect(verdict.reason).toContain("cannot be approved");
     expect(verdict.reason).toContain("index.js");
     await expect(approveWorkspaceSkill(projectRoot, dir)).rejects.toThrow(/symlinked code, which cannot be approved/);
-    await expect(access(trustedSkillsPath())).rejects.toThrow();
+    await expect(access(trustedSkillsDbPath())).rejects.toThrow();
   });
 
   it("a symlinked file next to a real entry point makes the skill untrusted even with a matching record; a symlinked directory too", async () => {
@@ -238,9 +296,13 @@ describe("assessWorkspaceSkillTrust / approve / revoke", () => {
     const target = join(fakeHome, "helper.js");
     await writeFile(target, "v1", "utf-8");
     await symlink(target, join(dir, "helper.js"));
-    // Plant a record matching the current hash anyway: the symlink must win.
-    const forged: TrustedSkillsFile = { version: 1, projects: { [approval.projectId]: { "skills/symlib": { sha256: (await scanSkillContent(dir))!.sha256!, fileCount: 1, approvedAtIso: "x" } } } };
-    await writeFile(approval.recordPath, JSON.stringify(forged), "utf-8");
+    // Record the current hash anyway: the symlink must win.
+    const store = openSkillTrustStore();
+    try {
+      store.approve(approval.projectId, "skills/symlib", { sha256: (await scanSkillContent(dir))!.sha256!, fileCount: 1, approvedAtIso: "x" });
+    } finally {
+      store.close();
+    }
     const verdict = await assessWorkspaceSkillTrust(projectRoot, dir, "symlib");
     expect(verdict.trusted).toBe(false);
     if (verdict.trusted) throw new Error("unreachable");
@@ -278,41 +340,39 @@ describe("assessWorkspaceSkillTrust / approve / revoke", () => {
 });
 
 // ---------------------------------------------------------------------------
-// round 6 #8: concurrent approve/revoke must not lose an update.
+// round 9 #7/#8: the record is a SQLite row, and SQLite is the exclusion.
 // ---------------------------------------------------------------------------
-describe("trust record locking (round 6 #8)", () => {
-  it("two interleaved read-modify-write sequences both land (the second waits for the first)", async () => {
-    let releaseFirst!: () => void;
-    const firstMayWrite = new Promise<void>((resolve) => { releaseFirst = resolve; });
-    let secondStarted = false;
+describe("trust records in SQLite (round 9 #7/#8)", () => {
+  const rec = (sha: string): TrustedSkillRecord => ({ sha256: sha, fileCount: 1, approvedAtIso: new Date().toISOString() });
 
-    const first = updateTrustFile(async (file) => {
-      await firstMayWrite;
-      return { next: { version: 1, projects: { ...file.projects, first: { a: { sha256: "1", approvedAtIso: "" } } } }, result: "first" };
-    });
-    // Let the first sequence acquire the lock and enter its mutator.
-    await new Promise((resolve) => setTimeout(resolve, 30));
-    const second = updateTrustFile((file) => {
-      secondStarted = true;
-      return { next: { version: 1, projects: { ...file.projects, second: { b: { sha256: "2", approvedAtIso: "" } } } }, result: "second" };
-    });
-    await new Promise((resolve) => setTimeout(resolve, 60));
-    // Without the lock the second sequence would already have read the file
-    // (without "first") and written it, and "first" would be lost below.
-    expect(secondStarted).toBe(false);
-    releaseFirst();
-    expect(await Promise.all([first, second])).toEqual(["first", "second"]);
-
-    const file = JSON.parse(await readFile(trustedSkillsPath(), "utf-8")) as TrustedSkillsFile;
-    expect(Object.keys(file.projects).sort()).toEqual(["first", "second"]);
-    await expect(access(trustedSkillsLockPath())).rejects.toThrow();
+  it("two writers holding the same stale view both land: every mutation is a keyed upsert, never a whole-document replacement", async () => {
+    const projectId = await projectIdentity(projectRoot);
+    // Two "processes": two connections over one database file.
+    const a = openSkillTrustStore({ busyTimeoutMs: 0 });
+    const b = openSkillTrustStore({ busyTimeoutMs: 0 });
+    try {
+      // Both read the same view before either writes — the read-modify-write
+      // interleaving that lost an update while a whole document was replaced.
+      expect(a.list(projectId)).toEqual([]);
+      expect(b.list(projectId)).toEqual([]);
+      a.approve(projectId, "skills/a", rec("aaa"));
+      b.approve(projectId, "skills/b", rec("bbb"));
+      // A third connection sees both.
+      expect(listRecords(projectId).map((e) => e.skillKey)).toEqual(["skills/a", "skills/b"]);
+      // And each writer sees the other's row, with no local snapshot in between.
+      expect(a.get(projectId, "skills/b")?.sha256).toBe("bbb");
+      expect(b.get(projectId, "skills/a")?.sha256).toBe("aaa");
+    } finally {
+      a.close();
+      b.close();
+    }
   });
 
   it("a revocation is not resurrected by a concurrent approval of another skill", async () => {
     const names = ["a", "b", "c", "d", "e", "f", "g", "h"];
     const dirs: Record<string, string> = {};
     for (const n of names) dirs[n] = await writeSkill(n, { "index.js": `export const tools = []; // ${n}` });
-    await approveWorkspaceSkill(projectRoot, dirs["a"]!);
+    const approval = await approveWorkspaceSkill(projectRoot, dirs["a"]!);
 
     // Revoke a while approving the rest, all at once.
     const results = await Promise.all([
@@ -321,72 +381,196 @@ describe("trust record locking (round 6 #8)", () => {
     ]);
     expect(results[0]).toBe(true);
 
-    const file = JSON.parse(await readFile(trustedSkillsPath(), "utf-8")) as TrustedSkillsFile;
-    const keys = Object.keys(Object.values(file.projects)[0]!).sort();
-    expect(keys).toEqual(names.slice(1).map((n) => `skills/${n}`));
+    expect(listRecords(approval.projectId).map((e) => e.skillKey)).toEqual(names.slice(1).map((n) => `skills/${n}`));
     expect((await assessWorkspaceSkillTrust(projectRoot, dirs["a"]!, "a")).trusted).toBe(false);
     for (const n of names.slice(1)) {
       expect((await assessWorkspaceSkillTrust(projectRoot, dirs[n]!, n)).trusted).toBe(true);
     }
-    // No temp file or lock left behind.
-    const leftovers = (await readdir(join(fakeHome, ".strada"))).filter((f) => f !== "trusted-skills.json");
-    expect(leftovers).toEqual([]);
+    // Nothing beside the database: no lock, no temp file, no JSON.
+    const leftovers = (await readdir(join(fakeHome, ".strada"))).sort();
+    expect(leftovers).toContain("trusted-skills.db");
+    expect(leftovers.filter((f) => !SQLITE_FILES.has(f))).toEqual([]);
   });
 
-  it("never displaces a lock it did not judge — a delayed second taker keeps its hands off a fresh one (round 8 #16)", async () => {
-    await mkdir(join(fakeHome, ".strada"), { recursive: true });
-    const lock = trustedSkillsLockPath();
-    const abandoned = lockLine(deadPid());
-    await writeFile(lock, abandoned, "utf-8");
+  it("an exclusive writer is not displaced: a competing write is refused while it is open and lands after the commit", async () => {
+    const projectId = await projectIdentity(projectRoot);
+    const store = openSkillTrustStore(); // creates the schema
+    store.close();
 
-    // Two takers read the SAME dead owner. The first removes it and creates
-    // its own lock…
-    expect(await takeOverStaleLock(lock, abandoned)).toBe(true);
-    await expect(access(lock)).rejects.toThrow();
-    await writeFile(lock, lockLine(process.pid, "first-taker-token"), "utf-8");
+    // Another process holds the writer, mid-mutation.
+    const holder = new Database(trustedSkillsDbPath());
+    holder.pragma("busy_timeout = 0");
+    holder.exec("BEGIN IMMEDIATE");
+    holder
+      .prepare("INSERT INTO trusted_skills (project_id, skill_key, sha256, file_count, approved_at_iso) VALUES (?, ?, ?, ?, ?)")
+      .run(projectId, "skills/holder", "hhh", 1, "now");
 
-    // …and the second, delayed between its read and its rename, must leave
-    // that fresh lock alone. It used to rename it into its own grave and
-    // acquire the file too, so both believed they held it.
-    expect(await takeOverStaleLock(lock, abandoned)).toBe(false);
-    expect(await readFile(lock, "utf-8")).toContain("first-taker-token");
-    // Nothing left behind: no grave beside the record.
-    expect((await readdir(join(fakeHome, ".strada"))).sort()).toEqual(["trusted-skills.json.lock"]);
+    const b = openSkillTrustStore({ busyTimeoutMs: 0 });
+    try {
+      // Refused — never granted alongside the holder.
+      let refusal: NodeJS.ErrnoException | null = null;
+      try {
+        b.approve(projectId, "skills/b", rec("bbb"));
+      } catch (err) {
+        refusal = err as NodeJS.ErrnoException;
+      }
+      expect(refusal?.code).toBe("SQLITE_BUSY");
+      expect(refusal?.message).toMatch(/database is locked/);
+      expect(b.get(projectId, "skills/holder")).toBeUndefined(); // uncommitted, so invisible
+      holder.exec("COMMIT");
+      holder.close();
+      // Retried after the commit, both rows stand.
+      b.approve(projectId, "skills/b", rec("bbb"));
+      expect(b.list(projectId).map((e) => e.skillKey)).toEqual(["skills/b", "skills/holder"]);
+    } finally {
+      b.close();
+      if (holder.open) holder.close();
+    }
   });
 
-  it("removes exactly the abandoned lock it judged, and reports it (guard)", async () => {
-    await mkdir(join(fakeHome, ".strada"), { recursive: true });
-    const lock = trustedSkillsLockPath();
-    const abandoned = lockLine(deadPid());
-    await writeFile(lock, abandoned, "utf-8");
-    // A crashed owner must not block the record forever.
-    expect(await takeOverStaleLock(lock, abandoned)).toBe(true);
-    await expect(access(lock)).rejects.toThrow();
-    // An absent lock is nobody's to take.
-    expect(await takeOverStaleLock(lock, abandoned)).toBe(false);
+  it("an abandoned transaction leaves no record and no claim: the next writer proceeds at once", async () => {
+    const projectId = await projectIdentity(projectRoot);
+    const store = openSkillTrustStore();
+    store.close();
+
+    // A writer dies mid-mutation: its connection goes away without a commit.
+    const dying = new Database(trustedSkillsDbPath());
+    dying.exec("BEGIN IMMEDIATE");
+    dying
+      .prepare("INSERT INTO trusted_skills (project_id, skill_key, sha256, file_count, approved_at_iso) VALUES (?, ?, ?, ?, ?)")
+      .run(projectId, "skills/dying", "ddd", 1, "now");
+    dying.close();
+
+    const dir = await writeSkill("after", { "index.js": "export const tools = [];" });
+    const started = Date.now();
+    await approveWorkspaceSkill(projectRoot, dir);
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(readRecord(projectId, "skills/dying")).toBeUndefined();
+    expect((await assessWorkspaceSkillTrust(projectRoot, dir, "after")).trusted).toBe(true);
   });
 
-  it("waits for a lock held by a live process and takes over one whose owner is dead", async () => {
+  it("a SIGKILLed writer blocks nothing — no pid outlives it to look alive (round 9 #8)", async () => {
+    const projectId = await projectIdentity(projectRoot);
+    const dbPath = trustedSkillsDbPath();
+    openSkillTrustStore().close(); // schema
+
+    const childSource = `
+      const Database = require("better-sqlite3");
+      const fs = require("fs");
+      const db = new Database(process.argv[1]);
+      db.pragma("journal_mode = WAL");
+      db.exec("BEGIN IMMEDIATE");
+      db.prepare("INSERT INTO trusted_skills (project_id, skill_key, sha256, file_count, approved_at_iso) VALUES (?, ?, ?, ?, ?)")
+        .run(${JSON.stringify(projectId)}, "skills/killed", "kkk", 1, "now");
+      fs.writeSync(1, "AT_CRASH_POINT\\n");
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
+    `;
+    const child = spawn(process.execPath, ["--input-type=commonjs", "-e", childSource, dbPath], {
+      stdio: ["ignore", "pipe", "pipe"],
+      cwd: process.cwd(),
+    });
+    let stderr = "";
+    child.stderr.on("data", (d: Buffer) => { stderr += d.toString(); });
+    await new Promise<void>((resolve, reject) => {
+      let stdout = "";
+      child.stdout.on("data", (d: Buffer) => {
+        stdout += d.toString();
+        if (stdout.includes("AT_CRASH_POINT")) resolve();
+      });
+      child.once("exit", (code) => reject(new Error(`the writer exited before its crash point (${code}): ${stderr}`)));
+    });
+    child.kill("SIGKILL");
+    await new Promise<void>((resolve) => { child.once("exit", () => resolve()); });
+
+    // The writer is gone with the write lock it held and the row it never
+    // committed. Its pid may be handed to any process; nothing consults one.
+    const dir = await writeSkill("next", { "index.js": "export const tools = [];" });
+    const started = Date.now();
+    await approveWorkspaceSkill(projectRoot, dir);
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(readRecord(projectId, "skills/killed")).toBeUndefined();
+    expect((await assessWorkspaceSkillTrust(projectRoot, dir, "next")).trusted).toBe(true);
+  }, 25_000);
+
+  it("a leftover trusted-skills.json.lock naming a LIVE pid blocks nothing (round 9 #8: pid reuse)", async () => {
     await mkdir(join(fakeHome, ".strada"), { recursive: true });
-    const lock = trustedSkillsLockPath();
+    // The pre-round-9 lock of a crashed owner whose pid was handed to a live
+    // process (this one). It used to make every acquisition wait out the
+    // deadline, whatever the file's age, forever.
+    const lock = `${legacyTrustedSkillsJsonPath()}.lock`;
     await writeFile(lock, lockLine(process.pid), "utf-8");
-    const dir = await writeSkill("locked", { "index.js": "x" });
+    const past = new Date(Date.now() - 3_600_000);
+    await utimes(lock, past, past);
+    const dir = await writeSkill("reused-pid", { "index.js": "export const tools = [];" });
 
     const started = Date.now();
-    const pending = approveWorkspaceSkill(projectRoot, dir);
-    let settled = false;
-    void pending.then(() => { settled = true; });
-    await new Promise((resolve) => setTimeout(resolve, 150));
-    expect(settled).toBe(false);
-    await rm(lock);
-    await pending;
-    expect(Date.now() - started).toBeGreaterThanOrEqual(150);
-    expect((await assessWorkspaceSkillTrust(projectRoot, dir, "locked")).trusted).toBe(true);
-
-    // Abandoned lock: its owner pid is dead → taken over, the write proceeds at once.
+    await approveWorkspaceSkill(projectRoot, dir);
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect((await assessWorkspaceSkillTrust(projectRoot, dir, "reused-pid")).trusted).toBe(true);
+    // A dead owner's lock is equally irrelevant.
     await writeFile(lock, lockLine(deadPid()), "utf-8");
     expect(await revokeWorkspaceSkill(projectRoot, dir)).toBe(true);
-    await expect(access(lock)).rejects.toThrow();
+  });
+
+  it("imports an existing trusted-skills.json once, moves it aside, and never lets it resurrect a later revocation", async () => {
+    const dir = await writeSkill("carried", { "index.js": "export const tools = [];" });
+    const projectId = await projectIdentity(projectRoot);
+    const sha = (await hashSkillContent(dir))!;
+    await mkdir(join(fakeHome, ".strada"), { recursive: true });
+    const jsonPath = legacyTrustedSkillsJsonPath();
+    const legacy: LegacyTrustedSkillsJson = {
+      version: 1,
+      projects: {
+        [projectId]: { "skills/carried": { sha256: sha, fileCount: 1, approvedAtIso: "2026-01-01T00:00:00.000Z" } },
+        // A pre-round-6 record: no file count, and a project that is not ours.
+        "/somewhere/else": { "skills/old": { sha256: "0".repeat(64) } as TrustedSkillRecord },
+      },
+    };
+    await writeFile(jsonPath, JSON.stringify(legacy), "utf-8");
+    await writeFile(`${jsonPath}.lock`, lockLine(process.pid), "utf-8");
+
+    // Nobody has to re-approve: the carried record still means trusted.
+    expect((await assessWorkspaceSkillTrust(projectRoot, dir, "carried")).trusted).toBe(true);
+    expect(readRecord(projectId, "skills/carried")).toEqual({ sha256: sha, fileCount: 1, approvedAtIso: "2026-01-01T00:00:00.000Z" });
+    expect(readRecord("/somewhere/else", "skills/old")).toEqual({ sha256: "0".repeat(64), approvedAtIso: new Date(0).toISOString() });
+
+    // The JSON is no longer an authority: it is moved aside (contents kept) and
+    // the dead lock file is gone.
+    await expect(access(jsonPath)).rejects.toThrow();
+    expect(JSON.parse(await readFile(`${jsonPath}.imported`, "utf-8"))).toEqual(legacy);
+    await expect(access(`${jsonPath}.lock`)).rejects.toThrow();
+    const store = openSkillTrustStore();
+    try {
+      expect(store.list(projectId).map((e) => e.skillKey)).toEqual(["skills/carried"]);
+    } finally {
+      store.close();
+    }
+
+    // Revoke, put the original JSON back, and reopen: the marker means it is
+    // never imported again, so the revoked approval cannot come back.
+    expect(await revokeWorkspaceSkill(projectRoot, dir)).toBe(true);
+    await writeFile(jsonPath, JSON.stringify(legacy), "utf-8");
+    expect((await assessWorkspaceSkillTrust(projectRoot, dir, "carried")).trusted).toBe(false);
+    expect(readRecord(projectId, "skills/carried")).toBeUndefined();
+    // The restored file is left exactly where the user put it.
+    expect(JSON.parse(await readFile(jsonPath, "utf-8"))).toEqual(legacy);
+
+    const marked = new Database(trustedSkillsDbPath(), { readonly: true });
+    try {
+      expect(marked.prepare("SELECT name FROM trust_migrations").pluck().all()).toEqual([LEGACY_JSON_IMPORT_MARKER]);
+    } finally {
+      marked.close();
+    }
+  });
+
+  it("an unparseable trusted-skills.json imports nothing, is left in place, and does not stop approvals", async () => {
+    await mkdir(join(fakeHome, ".strada"), { recursive: true });
+    const jsonPath = legacyTrustedSkillsJsonPath();
+    await writeFile(jsonPath, "{ this is not json", "utf-8");
+    const dir = await writeSkill("broken-json", { "index.js": "export const tools = [];" });
+    await approveWorkspaceSkill(projectRoot, dir);
+    expect((await assessWorkspaceSkillTrust(projectRoot, dir, "broken-json")).trusted).toBe(true);
+    expect(await readFile(jsonPath, "utf-8")).toBe("{ this is not json");
   });
 });
 
@@ -448,7 +632,8 @@ describe("scan limits (round 7 #11)", () => {
     expect(verdict.reason).toContain("more than 100 bytes");
     expect(verdict.reason).toContain("asset.bin");
     await expect(approveWorkspaceSkill(projectRoot, dir, limits)).rejects.toThrow(/more than 100 bytes/);
-    await expect(access(trustedSkillsPath())).rejects.toThrow();
+    // Refused before any record exists: not even the database was created.
+    await expect(access(trustedSkillsDbPath())).rejects.toThrow();
 
     // Within budget the same content hashes identically to the default limits
     // (the budget never enters the hash), and the total is reported.
@@ -517,103 +702,5 @@ describe("scan limits (round 7 #11)", () => {
     const mdOnly = await writeSkill("budget-md", { "SKILL.md": "x".repeat(50) });
     expect((await assessWorkspaceSkillTrust(projectRoot, mdOnly, "budget-md")).trusted).toBe(true);
     expect((await assessWorkspaceSkillTrust(projectRoot, mdOnly, "budget-md", tight)).trusted).toBe(false);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// round 7 #12: lock ownership.
-// ---------------------------------------------------------------------------
-describe("lock ownership token (round 7 #12)", () => {
-  it("the lock file records the owner's pid and a token", async () => {
-    let seen = "";
-    await updateTrustFile(async () => {
-      seen = await readFile(trustedSkillsLockPath(), "utf-8");
-      return { next: null, result: undefined };
-    });
-    const [pid, token] = seen.trim().split(/\s+/);
-    expect(Number(pid)).toBe(process.pid);
-    expect(token).toMatch(new RegExp(`^${process.pid}-[0-9a-f]{24}$`));
-    await expect(access(trustedSkillsLockPath())).rejects.toThrow();
-  });
-
-  it("a lock held by a live pid is NOT stolen after the age ceiling (mtime 60 s old)", async () => {
-    await mkdir(join(fakeHome, ".strada"), { recursive: true });
-    const lock = trustedSkillsLockPath();
-    const held = lockLine(process.pid);
-    await writeFile(lock, held, "utf-8");
-    const past = new Date(Date.now() - 60_000);
-    await utimes(lock, past, past);
-    const dir = await writeSkill("held", { "index.js": "x" });
-
-    const pending = approveWorkspaceSkill(projectRoot, dir);
-    let settled = false;
-    void pending.then(() => { settled = true; }, () => { settled = true; });
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    expect(settled).toBe(false);
-    // Still the holder's file, untouched.
-    expect(await readFile(lock, "utf-8")).toBe(held);
-    await rm(lock);
-    await pending;
-    expect((await assessWorkspaceSkillTrust(projectRoot, dir, "held")).trusted).toBe(true);
-  });
-
-  it("a lock whose owning pid is dead IS taken, however fresh its mtime", async () => {
-    await mkdir(join(fakeHome, ".strada"), { recursive: true });
-    const lock = trustedSkillsLockPath();
-    await writeFile(lock, lockLine(deadPid()), "utf-8");
-    const dir = await writeSkill("orphan", { "index.js": "x" });
-    const started = Date.now();
-    await approveWorkspaceSkill(projectRoot, dir);
-    expect(Date.now() - started).toBeLessThan(2_000);
-    expect((await assessWorkspaceSkillTrust(projectRoot, dir, "orphan")).trusted).toBe(true);
-    await expect(access(lock)).rejects.toThrow();
-    const leftovers = (await readdir(join(fakeHome, ".strada"))).filter((f) => f !== "trusted-skills.json");
-    expect(leftovers).toEqual([]);
-  });
-
-  it("a lock file naming no owner falls back to mtime: fresh → waited for, older than 30 s → taken", async () => {
-    await mkdir(join(fakeHome, ".strada"), { recursive: true });
-    const lock = trustedSkillsLockPath();
-    const dir = await writeSkill("legacy", { "index.js": "x" });
-
-    await writeFile(lock, "garbage\n", "utf-8");
-    const pending = approveWorkspaceSkill(projectRoot, dir);
-    let settled = false;
-    void pending.then(() => { settled = true; }, () => { settled = true; });
-    await new Promise((resolve) => setTimeout(resolve, 150));
-    expect(settled).toBe(false);
-    await rm(lock);
-    await pending;
-
-    await writeFile(lock, "garbage\n", "utf-8");
-    const past = new Date(Date.now() - 60_000);
-    await utimes(lock, past, past);
-    expect(await revokeWorkspaceSkill(projectRoot, dir)).toBe(true);
-    await expect(access(lock)).rejects.toThrow();
-  });
-
-  it("release with a foreign token does not unlink, and the record is not written over a lost lock", async () => {
-    const lock = trustedSkillsLockPath();
-    const foreign = lockLine(process.pid, `${process.pid}-someoneelse`);
-
-    // The lock is replaced under us (as a taker would after a wrong staleness
-    // call): our release must leave the new holder's file alone.
-    await updateTrustFile(async () => {
-      await writeFile(lock, foreign, "utf-8");
-      return { next: null, result: undefined };
-    });
-    expect(await readFile(lock, "utf-8")).toBe(foreign);
-
-    // With a write pending, a lost lock refuses the write instead of
-    // clobbering whatever the new holder wrote.
-    await writeFile(trustedSkillsPath(), JSON.stringify({ version: 1, projects: { theirs: {} } }), "utf-8");
-    await rm(lock);
-    await expect(updateTrustFile(async () => {
-      await writeFile(lock, foreign, "utf-8");
-      return { next: { version: 1, projects: { mine: {} } }, result: undefined };
-    })).rejects.toThrow(/Lost .*\.lock/);
-    expect(JSON.parse(await readFile(trustedSkillsPath(), "utf-8"))).toEqual({ version: 1, projects: { theirs: {} } });
-    expect(await readFile(lock, "utf-8")).toBe(foreign);
-    await rm(lock);
   });
 });

@@ -39,7 +39,7 @@ export interface SkillManifest {
  * Runtime status of a loaded skill.
  *
  * - "untrusted" (plan 1.15): a workspace-tier skill whose executable content has
- *   no matching approval record in `~/.strada/trusted-skills.json` — its
+ *   no matching approval record in `~/.strada/trusted-skills.db` — its
  *   entry point was NOT imported. `gateReason` says how to approve it.
  */
 export type SkillStatus = "active" | "disabled" | "gated" | "error" | "incomplete" | "untrusted";

@@ -1,20 +1,21 @@
 // ---------------------------------------------------------------------------
 // Workspace-skill trust records (plan 1.15 / audit 13F3 / D65 / Codex #23;
-// hardened per Codex round 6 #6-#8 and round 7 #10-#12, 2026-09-17).
+// hardened per Codex round 6 #6-#8, round 7 #10-#12 and round 9 #7-#8,
+// 2026-09-17).
 //
 // A workspace-tier skill (`<project>/skills/<name>/`) has its `index.ts|js`
 // dynamically imported by `loadSkillTools` — in-process, full privileges. Until
 // 2026-09-17 nothing stood between "open a project" and "execute whatever its
 // checkout put in skills/*/index.js". This module is that approval step.
 //
-// The record lives OUTSIDE the project, at `~/.strada/trusted-skills.json`,
-// so a checkout cannot approve itself. It is keyed by the canonical identity
-// of the project (realpath of the project root) and the skill's directory,
-// and holds a sha256 over the skill's content: EVERY regular file under the
-// skill directory (path + bytes, sorted), excluding only `.git/` (round 6 #6 —
-// an index.js that loads a .json/.wasm/.node file, or a package.json
-// "main"/"exports" map, changes behaviour without touching any .js; round 7
-// #10 — `node_modules/` is INCLUDED: an `index.js` importing
+// The record lives OUTSIDE the project, in the SQLite database
+// `~/.strada/trusted-skills.db`, so a checkout cannot approve itself. It is
+// keyed by the canonical identity of the project (realpath of the project root)
+// and the skill's directory, and holds a sha256 over the skill's content: EVERY
+// regular file under the skill directory (path + bytes, sorted), excluding only
+// `.git/` (round 6 #6 — an index.js that loads a .json/.wasm/.node file, or a
+// package.json "main"/"exports" map, changes behaviour without touching any
+// .js; round 7 #10 — `node_modules/` is INCLUDED: an `index.js` importing
 // `./node_modules/dep/index.js` runs those bytes with the same privileges, so
 // replacing the dependency must invalidate the approval). The record also
 // stores the file count. A record whose hash no longer matches means the
@@ -32,21 +33,40 @@
 // no hash and an "untrusted" verdict naming the limit, and cannot be approved
 // until it is shrunk. The limits are injectable (`SkillScanLimits`) for tests.
 //
-// Approve/revoke serialise through a cross-process lock file next to the
-// record and replace it atomically (temp file + rename), so two concurrent
-// read-modify-write sequences cannot resurrect a revocation (round 6 #8). The
-// lock carries an ownership token (pid + random) (round 7 #12): a held lock is
-// only taken over when its owning pid is no longer alive; the acquisition
-// deadline runs on a monotonic clock; the file's mtime is consulted only as a
-// last resort when the owner cannot be read from the file; and release
-// unlinks the lock only when it still carries our token.
+// MUTUAL EXCLUSION (round 9 #7/#8). Rounds 6-8 serialised approve/revoke
+// through a JSON document replaced under a pid+token lock file. Three rounds of
+// review never closed that protocol:
+//   #7 — a stale-lock takeover could still displace a LIVE lock (taker B, which
+//        remembered a dead owner, renamed A's fresh lock away; C then created a
+//        lock in that gap, B's link-back failed with EEXIST and B deleted A's
+//        lock), leaving A and C both inside the protected read-modify-write,
+//        one of them writing a whole document that erased the other's record.
+//        No pre-write token check can make a later rename atomic with ownership.
+//   #8 — a crashed owner's REUSED pid made every acquisition see a live
+//        process, ignore the lock's age, and time out forever.
+// Both are properties of holding an ownership claim in a file that outlives its
+// owner. So the lock file is gone, and the record lives in SQLite: mutual
+// exclusion is the exclusive writer transaction, and the claim cannot outlive
+// the connection holding it. A crashed writer's transaction is rolled back by
+// the next connection and blocks nothing; pids appear nowhere; two writers
+// cannot both believe they hold the record. Each mutation touches exactly its
+// own (project, skill) row — there is no whole-document snapshot to lose a
+// concurrent update, so a revocation is never resurrected by a concurrent
+// approval of another skill.
+//
+// An existing `~/.strada/trusted-skills.json` is imported ONCE (records +
+// migration marker in one transaction), then renamed to
+// `trusted-skills.json.imported` so it can never become a second authority; a
+// leftover `trusted-skills.json.lock` is removed with it and is inert either
+// way — nothing reads it any more. Nobody has to re-approve their skills.
 // ---------------------------------------------------------------------------
 
-import { createHash, randomBytes } from "node:crypto";
-import { link, mkdir, open, readdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import Database from "better-sqlite3";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync } from "node:fs";
+import { open, readdir, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, relative, sep } from "node:path";
-import { performance } from "node:perf_hooks";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -60,7 +80,8 @@ export interface TrustedSkillRecord {
   readonly approvedAtIso: string;
 }
 
-export interface TrustedSkillsFile {
+/** Shape of the pre-round-9 `~/.strada/trusted-skills.json`, kept for the import. */
+export interface LegacyTrustedSkillsJson {
   readonly version: 1;
   /** projectId (realpath of the project root) → skillKey (dir relative to root) → record */
   readonly projects: Record<string, Record<string, TrustedSkillRecord>>;
@@ -129,253 +150,242 @@ export const DEFAULT_SKILL_SCAN_LIMITS: SkillScanLimits = Object.freeze({
 /** Size of the single reused read buffer files are streamed through. */
 const SCAN_CHUNK_BYTES = 64 * 1024;
 
-/** Lock parameters (round 6 #8, round 7 #12). */
-const LOCK_TIMEOUT_MS = 5_000;
-/** Last-resort staleness by mtime — used only when the lock file names no readable owner pid. */
-const LOCK_STALE_MS = 30_000;
-const LOCK_BACKOFF_MIN_MS = 5;
-const LOCK_BACKOFF_MAX_MS = 100;
-
 // ---------------------------------------------------------------------------
-// Record file location — always under the user's home, never in the project.
+// Record location — always under the user's home, never in the project.
 // ---------------------------------------------------------------------------
 
-/** `~/.strada/trusted-skills.json`. Resolved at call time so a test HOME applies. */
-export function trustedSkillsPath(): string {
+/** `~/.strada/trusted-skills.db`. Resolved at call time so a test HOME applies. */
+export function trustedSkillsDbPath(): string {
+  return join(homedir(), ".strada", "trusted-skills.db");
+}
+
+/** `~/.strada/trusted-skills.json` — the pre-round-9 record, imported once. */
+export function legacyTrustedSkillsJsonPath(): string {
   return join(homedir(), ".strada", "trusted-skills.json");
 }
 
-/** `~/.strada/trusted-skills.json.lock` — the cross-process lock around read-modify-write. */
-export function trustedSkillsLockPath(): string {
-  return trustedSkillsPath() + ".lock";
-}
-
-function parseTrustFile(raw: string): TrustedSkillsFile {
-  const parsed = JSON.parse(raw) as Partial<TrustedSkillsFile>;
-  if (!parsed || typeof parsed !== "object" || !parsed.projects || typeof parsed.projects !== "object") {
-    return { version: 1, projects: {} };
-  }
-  return { version: 1, projects: parsed.projects };
-}
-
-async function readTrustFile(): Promise<TrustedSkillsFile> {
-  try {
-    return parseTrustFile(await readFile(trustedSkillsPath(), "utf-8"));
-  } catch {
-    return { version: 1, projects: {} };
-  }
-}
-
-/**
- * Atomic replace: the new content goes to a temp file in the same directory
- * and is renamed over the record, so a reader never sees a half-written file
- * and a crash mid-write leaves the previous record intact.
- */
-async function writeTrustFileAtomically(file: TrustedSkillsFile): Promise<void> {
-  const path = trustedSkillsPath();
-  await mkdir(dirname(path), { recursive: true });
-  const tmp = `${path}.${process.pid}.${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}.tmp`;
-  try {
-    await writeFile(tmp, JSON.stringify(file, null, 2) + "\n", "utf-8");
-    await rename(tmp, path);
-  } catch (err) {
-    await rm(tmp, { force: true }).catch(() => undefined);
-    throw err;
-  }
-}
-
 // ---------------------------------------------------------------------------
-// Cross-process lock (round 6 #8, round 7 #12)
+// Trust record store (round 9 #7/#8): SQLite is the mutual exclusion.
 // ---------------------------------------------------------------------------
 
-const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
-
-interface LockOwner {
-  readonly pid: number;
-  readonly token: string;
+/** One (project, skill) approval. */
+export interface SkillTrustEntry {
+  readonly skillKey: string;
+  readonly record: TrustedSkillRecord;
 }
 
-/** Lock file line: `<pid> <token> <iso>`. */
-function formatLockOwner(owner: LockOwner): string {
-  return `${owner.pid} ${owner.token} ${new Date().toISOString()}\n`;
+export interface SkillTrustStore {
+  /** The database backing this store. */
+  readonly path: string;
+  get(projectId: string, skillKey: string): TrustedSkillRecord | undefined;
+  /** Every approval recorded for one project (diagnostics and tests). */
+  list(projectId: string): readonly SkillTrustEntry[];
+  /** Upsert exactly (projectId, skillKey) inside one immediate transaction. */
+  approve(projectId: string, skillKey: string, record: TrustedSkillRecord): void;
+  /** Delete exactly (projectId, skillKey). Returns whether a row existed. */
+  revoke(projectId: string, skillKey: string): boolean;
+  close(): void;
+}
+
+export interface SkillTrustStoreOptions {
+  /** Defaults to {@link trustedSkillsDbPath}. */
+  readonly path?: string;
+  /**
+   * How long a competing writer waits for the exclusive writer. Tests pass 0
+   * so a second connection fails at once instead of blocking the test thread
+   * that has to let the first one commit.
+   */
+  readonly busyTimeoutMs?: number;
+  /** Set false to open the database without importing a legacy JSON record. */
+  readonly importLegacyJson?: boolean;
+}
+
+/** Marker row that makes the legacy JSON import happen exactly once. */
+export const LEGACY_JSON_IMPORT_MARKER = "import-trusted-skills-json-v1";
+
+/** Default wait for the exclusive writer. */
+const TRUST_BUSY_TIMEOUT_MS = 5_000;
+
+const SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS trusted_skills (
+  project_id      TEXT NOT NULL,
+  skill_key       TEXT NOT NULL,
+  sha256          TEXT NOT NULL,
+  file_count      INTEGER CHECK (file_count IS NULL OR file_count >= 0),
+  approved_at_iso TEXT NOT NULL,
+  PRIMARY KEY (project_id, skill_key)
+);
+CREATE TABLE IF NOT EXISTS trust_migrations (
+  name       TEXT PRIMARY KEY NOT NULL,
+  applied_at INTEGER NOT NULL
+);
+`;
+
+interface TrustRow {
+  readonly skill_key: string;
+  readonly sha256: string;
+  readonly file_count: number | null;
+  readonly approved_at_iso: string;
+}
+
+function rowToRecord(row: TrustRow): TrustedSkillRecord {
+  return {
+    sha256: row.sha256,
+    fileCount: row.file_count === null ? undefined : row.file_count,
+    approvedAtIso: row.approved_at_iso,
+  };
 }
 
 /**
- * Read the owner recorded in the lock file. `null` when the file cannot be
- * read (gone) — the caller distinguishes that from an unparseable file by
- * `readable`.
+ * Open (creating if needed) the trust database. Mutations run as short
+ * immediate transactions: SQLite's exclusive writer is the mutual exclusion,
+ * and nothing about the claim survives this connection, so a crashed writer
+ * cannot block the next one and no pid is ever consulted.
  */
-async function readLockOwner(lockPath: string): Promise<{ readable: boolean; owner: LockOwner | null; raw: string }> {
-  let raw: string;
+export function openSkillTrustStore(options: SkillTrustStoreOptions = {}): SkillTrustStore {
+  const path = options.path ?? trustedSkillsDbPath();
+  mkdirSync(dirname(path), { recursive: true });
+  const db = new Database(path);
+  db.pragma("journal_mode = WAL");
+  // Trust records are a security boundary: pay for durability, not speed.
+  db.pragma("synchronous = FULL");
+  db.pragma(`busy_timeout = ${Math.max(0, options.busyTimeoutMs ?? TRUST_BUSY_TIMEOUT_MS)}`);
+  db.pragma("temp_store = memory");
+
+  // Only create the schema when it is actually missing: a plain `CREATE TABLE
+  // IF NOT EXISTS` takes the write lock, which would make merely OPENING the
+  // database fail while another process is committing.
+  const tables = db
+    .prepare<[], string>("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('trusted_skills', 'trust_migrations')")
+    .pluck()
+    .all();
+  if (tables.length < 2) db.exec(SCHEMA_SQL);
+
+  if (options.importLegacyJson !== false) importLegacyJsonOnce(db, legacyTrustedSkillsJsonPath());
+
+  const selectOne = db.prepare<[string, string], TrustRow>(
+    "SELECT skill_key, sha256, file_count, approved_at_iso FROM trusted_skills WHERE project_id = ? AND skill_key = ?",
+  );
+  const selectProject = db.prepare<[string], TrustRow>(
+    "SELECT skill_key, sha256, file_count, approved_at_iso FROM trusted_skills WHERE project_id = ? ORDER BY skill_key",
+  );
+  const upsert = db.prepare<[string, string, string, number | null, string]>(
+    `INSERT INTO trusted_skills (project_id, skill_key, sha256, file_count, approved_at_iso)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(project_id, skill_key) DO UPDATE SET
+       sha256 = excluded.sha256,
+       file_count = excluded.file_count,
+       approved_at_iso = excluded.approved_at_iso`,
+  );
+  const deleteOne = db.prepare<[string, string]>("DELETE FROM trusted_skills WHERE project_id = ? AND skill_key = ?");
+
+  const approveTx = db.transaction((projectId: string, skillKey: string, record: TrustedSkillRecord): void => {
+    upsert.run(projectId, skillKey, record.sha256, record.fileCount ?? null, record.approvedAtIso);
+  });
+  const revokeTx = db.transaction(
+    (projectId: string, skillKey: string): boolean => deleteOne.run(projectId, skillKey).changes > 0,
+  );
+
+  return {
+    path,
+    get: (projectId, skillKey) => {
+      const row = selectOne.get(projectId, skillKey);
+      return row ? rowToRecord(row) : undefined;
+    },
+    list: (projectId) => selectProject.all(projectId).map((row) => ({ skillKey: row.skill_key, record: rowToRecord(row) })),
+    approve: (projectId, skillKey, record) => approveTx.immediate(projectId, skillKey, record),
+    revoke: (projectId, skillKey) => revokeTx.immediate(projectId, skillKey),
+    close: () => db.close(),
+  };
+}
+
+/**
+ * Import `~/.strada/trusted-skills.json` into the database once, so nobody has
+ * to re-approve a skill they already approved. Records and the migration
+ * marker commit together; a database row always wins over the JSON (the
+ * database is the only authority after this point). Afterwards the JSON is
+ * renamed to `<path>.imported` and the dead `<path>.lock` removed, so neither
+ * can become a second authority. A JSON that cannot be parsed imports nothing
+ * and is left in place unmarked (the pre-round-9 reader treated it as empty
+ * too, so there is nothing to lose and nothing to destroy).
+ */
+function importLegacyJsonOnce(db: Database.Database, jsonPath: string): number {
+  if (!existsSync(jsonPath)) return 0;
+  const marker = db.prepare<[string], number>("SELECT 1 FROM trust_migrations WHERE name = ?").pluck();
+  if (marker.get(LEGACY_JSON_IMPORT_MARKER)) return 0;
+
+  let projects: Record<string, unknown>;
   try {
-    raw = await readFile(lockPath, "utf-8");
+    const parsed = JSON.parse(readFileSync(jsonPath, "utf-8")) as { projects?: unknown };
+    if (!parsed || typeof parsed !== "object" || !parsed.projects || typeof parsed.projects !== "object") return 0;
+    projects = parsed.projects as Record<string, unknown>;
   } catch {
-    return { readable: false, owner: null, raw: "" };
+    return 0;
   }
-  const [pidText, token] = raw.trim().split(/\s+/);
-  const pid = Number(pidText);
-  if (!Number.isInteger(pid) || pid <= 0 || !token) return { readable: true, owner: null, raw };
-  return { readable: true, owner: { pid, token }, raw };
-}
 
-/** Whether a process with this pid exists (EPERM means it does, just not ours). */
-function pidAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    return (err as NodeJS.ErrnoException).code !== "ESRCH";
-  }
-}
+  const insert = db.prepare<[string, string, string, number | null, string]>(
+    `INSERT INTO trusted_skills (project_id, skill_key, sha256, file_count, approved_at_iso)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(project_id, skill_key) DO NOTHING`,
+  );
+  const mark = db.prepare<[string, number]>("INSERT OR IGNORE INTO trust_migrations (name, applied_at) VALUES (?, ?)");
 
-/**
- * Remove the lock we judged abandoned — THAT lock, not whatever happens to sit
- * at the path now.
- *
- * Renaming first is atomic, but rename alone still stole a live lock (Codex
- * 2026-09-17 round 8 #16): two takers read the same dead owner, the first
- * renamed it away and created its own fresh lock, and the second — delayed
- * between its read and its rename — renamed THE FIRST TAKER'S lock into its
- * grave and acquired the file too. Both then believed they held it.
- *
- * So the bytes are verified after the rename: they must be the bytes we
- * judged. Anything else belongs to a live owner and is LINKED BACK
- * immediately; `link` fails when a third lock already exists, which is the
- * fail-closed answer — we never hold a lock we did not create. The return
- * value says whether the abandoned lock was actually removed.
- */
-export async function takeOverStaleLock(lockPath: string, expected: string): Promise<boolean> {
-  const grave = `${lockPath}.stale.${process.pid}.${randomBytes(4).toString("hex")}`;
+  const imported = db.transaction((): number => {
+    // Another process may have imported while we waited for the write lock.
+    if (marker.get(LEGACY_JSON_IMPORT_MARKER)) return 0;
+    let count = 0;
+    for (const [projectId, skills] of Object.entries(projects)) {
+      if (!skills || typeof skills !== "object") continue;
+      for (const [skillKey, raw] of Object.entries(skills as Record<string, unknown>)) {
+        const record = raw as Partial<TrustedSkillRecord> | null;
+        if (!record || typeof record !== "object" || typeof record.sha256 !== "string" || record.sha256.length === 0) continue;
+        const fileCount =
+          typeof record.fileCount === "number" && Number.isInteger(record.fileCount) && record.fileCount >= 0
+            ? record.fileCount
+            : null;
+        const approvedAtIso =
+          typeof record.approvedAtIso === "string" && record.approvedAtIso.length > 0
+            ? record.approvedAtIso
+            : new Date(0).toISOString();
+        count += insert.run(projectId, skillKey, record.sha256, fileCount, approvedAtIso).changes;
+      }
+    }
+    mark.run(LEGACY_JSON_IMPORT_MARKER, Date.now());
+    return count;
+  }).immediate();
+
+  // The marker already prevents a reimport; these two only stop a stale file
+  // from looking like it still means something.
   try {
-    await rename(lockPath, grave);
+    renameSync(jsonPath, `${jsonPath}.imported`);
   } catch {
-    return false;
+    /* read-only home, or someone moved it first */
   }
-  let graveRaw: string | null = null;
   try {
-    graveRaw = await readFile(grave, "utf-8");
+    unlinkSync(`${jsonPath}.lock`);
   } catch {
-    graveRaw = null;
+    /* no leftover lock, or not ours to remove — either way nothing reads it */
   }
-  if (graveRaw !== expected) {
-    // Someone else's lock: put it back where its owner expects it. A newer
-    // lock at the path makes `link` fail with EEXIST; that owner holds it and
-    // we simply do not steal.
-    await link(grave, lockPath).catch(() => undefined);
-    await rm(grave, { force: true }).catch(() => undefined);
-    return false;
-  }
-  await rm(grave, { force: true }).catch(() => undefined);
-  return true;
+  return imported;
 }
 
-/**
- * Acquire `trusted-skills.json.lock` by creating it exclusively (`wx`) with
- * our ownership token (pid + random). On EEXIST, the holder is inspected: a
- * lock whose owning pid is no longer alive is taken over; a lock held by a
- * live pid is waited for, however old the file is (a clock jump cannot let a
- * second writer in). Only when the file names no readable owner does the
- * mtime-based ceiling (`LOCK_STALE_MS`) apply, as a last resort. The wait is
- * bounded by `LOCK_TIMEOUT_MS` on a monotonic clock. Returns the lock: a
- * `release` that unlinks the file only while it still carries our token, and
- * an `isHeld` check used before the record is replaced.
- */
-async function acquireTrustFileLock(): Promise<{ release: () => Promise<void>; isHeld: () => Promise<boolean> }> {
-  const lockPath = trustedSkillsLockPath();
-  await mkdir(dirname(lockPath), { recursive: true });
-  const mine: LockOwner = { pid: process.pid, token: `${process.pid}-${randomBytes(12).toString("hex")}` };
-  const startedAt = performance.now();
-  const remaining = (): number => LOCK_TIMEOUT_MS - (performance.now() - startedAt);
-  let backoff = LOCK_BACKOFF_MIN_MS;
-  // A crashed owner is taken over at most ONCE per acquisition; afterwards
-  // this acquisition waits for the holder instead of stealing again.
-  let triedTakeover = false;
-
-  const isHeld = async (): Promise<boolean> => (await readLockOwner(lockPath)).owner?.token === mine.token;
-
-  for (;;) {
-    try {
-      const handle = await open(lockPath, "wx");
-      try {
-        await handle.writeFile(formatLockOwner(mine), "utf-8");
-      } finally {
-        await handle.close();
-      }
-      return {
-        isHeld,
-        release: async () => {
-          // Verify the token before unlinking: a lock that was taken over and
-          // re-created by someone else is theirs to remove, not ours.
-          if (!(await isHeld())) return;
-          await rm(lockPath, { force: true }).catch(() => undefined);
-        },
-      };
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
-    }
-
-    // Held by someone. Abandoned?
-    const { readable, owner, raw } = await readLockOwner(lockPath);
-    if (!readable) {
-      // Released between our open() and read(); retry immediately.
-      continue;
-    }
-    if (owner) {
-      if (!pidAlive(owner.pid) && !triedTakeover) {
-        // ONE takeover attempt per acquisition, and only of the bytes we
-        // judged: a second steal is refused and we wait for the holder
-        // instead (round 8 #16 — fail closed rather than steal).
-        triedTakeover = true;
-        await takeOverStaleLock(lockPath, raw);
-        continue;
-      }
-    } else {
-      // No owner recorded (foreign or truncated file): mtime is the last resort.
-      try {
-        const info = await stat(lockPath);
-        if (Date.now() - info.mtimeMs > LOCK_STALE_MS && !triedTakeover) {
-          triedTakeover = true;
-          await takeOverStaleLock(lockPath, raw);
-          continue;
-        }
-      } catch {
-        continue;
-      }
-    }
-
-    if (remaining() <= 0) {
-      const holder = owner ? `pid ${owner.pid}` : "an unknown process";
-      throw new Error(`Timed out after ${LOCK_TIMEOUT_MS} ms waiting for ${lockPath} (held by ${holder})`);
-    }
-    await sleep(Math.min(backoff, Math.max(0, remaining())));
-    backoff = Math.min(backoff * 2, LOCK_BACKOFF_MAX_MS);
-  }
-}
-
-/**
- * Locked read-modify-write of the record file. The mutator receives the
- * current file and returns the file to write (or `null` to leave it as is).
- * The record is replaced only while the lock still carries our token; if it
- * was taken over meanwhile, the write is refused rather than clobbering a
- * newer record. Exported for the concurrency test; approve/revoke go through it.
- */
-export async function updateTrustFile<T>(
-  mutate: (file: TrustedSkillsFile) => Promise<{ next: TrustedSkillsFile | null; result: T }> | { next: TrustedSkillsFile | null; result: T },
-): Promise<T> {
-  const lock = await acquireTrustFileLock();
+function withTrustStore<T>(fn: (store: SkillTrustStore) => T): T {
+  const store = openSkillTrustStore();
   try {
-    const current = await readTrustFile();
-    const { next, result } = await mutate(current);
-    if (next) {
-      if (!(await lock.isHeld())) {
-        throw new Error(`Lost ${trustedSkillsLockPath()} while updating ${trustedSkillsPath()}; the record was not written — retry`);
-      }
-      await writeTrustFileAtomically(next);
-    }
-    return result;
+    return fn(store);
   } finally {
-    await lock.release();
+    store.close();
   }
+}
+
+/**
+ * The record for (project, skill), or `undefined`. A read never brings the
+ * database into being: a home with neither a database nor a legacy JSON has
+ * nothing to say, and asking must not create a file.
+ */
+function readTrustedRecord(projectId: string, skillKey: string): TrustedSkillRecord | undefined {
+  if (!existsSync(trustedSkillsDbPath()) && !existsSync(legacyTrustedSkillsJsonPath())) return undefined;
+  return withTrustStore((store) => store.get(projectId, skillKey));
 }
 
 // ---------------------------------------------------------------------------
@@ -541,13 +551,13 @@ export async function assessWorkspaceSkillTrust(
   }
   const { sha256 } = scan;
   const projectId = await projectIdentity(projectRoot);
-  const howTo = `run \`strada skill trust ${skillName}\` in ${projectId} to approve it (recorded in ${trustedSkillsPath()})`;
+  const howTo = `run \`strada skill trust ${skillName}\` in ${projectId} to approve it (recorded in ${trustedSkillsDbPath()})`;
 
   if (scan.symlinks.length > 0) {
     return { trusted: false, sha256, reason: symlinkRefusal(scan.symlinks) };
   }
   const key = await skillKey(projectId, skillPath);
-  const record = (await readTrustFile()).projects[projectId]?.[key];
+  const record = readTrustedRecord(projectId, key);
 
   if (!record) {
     return {
@@ -589,7 +599,8 @@ export interface ApprovalResult {
  * Record the skill's CURRENT content as approved for this project. Throws
  * when the scan exceeds its budget (round 7 #11), when the directory has no
  * entry point (nothing is executed, nothing to approve) or holds a symlink
- * (round 6 #7).
+ * (round 6 #7). The scan and hash happen outside the transaction; only the
+ * single-row upsert is inside it.
  */
 export async function approveWorkspaceSkill(
   projectRoot: string,
@@ -609,32 +620,15 @@ export async function approveWorkspaceSkill(
   const { sha256, fileCount } = scan;
   const projectId = await projectIdentity(projectRoot);
   const key = await skillKey(projectId, skillPath);
-  await updateTrustFile((file) => {
-    const projects: Record<string, Record<string, TrustedSkillRecord>> = { ...file.projects };
-    projects[projectId] = {
-      ...(projects[projectId] ?? {}),
-      [key]: { sha256, fileCount, approvedAtIso: new Date().toISOString() },
-    };
-    return { next: { version: 1, projects }, result: undefined };
+  withTrustStore((store) => {
+    store.approve(projectId, key, { sha256, fileCount, approvedAtIso: new Date().toISOString() });
   });
-  return { projectId, skillKey: key, sha256, fileCount, recordPath: trustedSkillsPath() };
+  return { projectId, skillKey: key, sha256, fileCount, recordPath: trustedSkillsDbPath() };
 }
 
 /** Remove the record for (project, skill). Returns whether one existed. */
 export async function revokeWorkspaceSkill(projectRoot: string, skillPath: string): Promise<boolean> {
   const projectId = await projectIdentity(projectRoot);
   const key = await skillKey(projectId, skillPath);
-  return updateTrustFile((file) => {
-    const project = file.projects[projectId];
-    if (!project || !(key in project)) return { next: null, result: false };
-    const rest: Record<string, TrustedSkillRecord> = { ...project };
-    delete rest[key];
-    const projects: Record<string, Record<string, TrustedSkillRecord>> = { ...file.projects };
-    if (Object.keys(rest).length === 0) {
-      delete projects[projectId];
-    } else {
-      projects[projectId] = rest;
-    }
-    return { next: { version: 1, projects }, result: true };
-  });
+  return withTrustStore((store) => store.revoke(projectId, key));
 }
