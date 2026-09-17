@@ -79,6 +79,8 @@ function makeUpdater(opts: {
   failInstall?: boolean;
   /** Side effect npm has on the tree before failing (it rewrites manifests). */
   onInstall?: () => void;
+  /** Observer run mid-install; unlike `onInstall` it does not fail the install. */
+  onInstallSuccess?: () => void;
   channel?: "stable" | "latest";
 }): AutoUpdater {
   const commandRunner = async (
@@ -90,6 +92,7 @@ function makeUpdater(opts: {
     opts.calls.push({ cmd, args, cwd });
     if (cmd === "npm" && args[0] === "view") return `${opts.latest ?? "2.0.0"}\n`;
     if (cmd === "npm" && args[0] === "install" && args[1]?.startsWith("strada-brain@")) {
+      opts.onInstallSuccess?.();
       opts.onInstall?.();
       if (opts.failInstall || opts.onInstall) throw new Error("npm install failed");
     }
@@ -153,6 +156,57 @@ describe("npm-local update runs in the owning package", () => {
     expect(install, "no install ran").toBeDefined();
     expect(install!.cwd).toBe(ownerRoot);
     expect(install!.cwd).not.toBe(installRoot);
+  });
+
+  it("leaves no backup directory behind after a SUCCESSFUL update (round 10 #21)", async () => {
+    const { ownerRoot, installRoot } = makeOwnerTree({ installedVersion: "1.0.0" });
+    const calls: Call[] = [];
+    const updater = makeUpdater({ installRoot, calls, latest: "2.0.0" });
+
+    await expect(updater.performUpdate()).resolves.toBe(true);
+
+    // The backups were taken from the OWNER (that is where the manifests and
+    // node_modules/strada-brain live), so that is where cleanup has to look.
+    // Cleaning the installed-package root instead left every backup in place —
+    // including `.strada-update-backup-node_modules`, a full copy of the
+    // package tree — for the rest of the machine's life, and each cycle
+    // rewrote it.
+    for (const root of [ownerRoot, installRoot]) {
+      const litter = fs
+        .readdirSync(root)
+        .filter((entry) => entry.startsWith(".strada-update-backup"));
+      expect(litter, `backup litter in ${root}`).toEqual([]);
+    }
+  });
+
+  it("copies the package tree into the backup while the update runs, then removes it", async () => {
+    // The guard above is only worth something if a backup was really made: a
+    // cleanup that "passes" because nothing was ever written proves nothing.
+    const { ownerRoot, installRoot } = makeOwnerTree({ installedVersion: "1.0.0" });
+    fs.writeFileSync(path.join(installRoot, "marker.txt"), "running copy");
+    const calls: Call[] = [];
+    const seenDuringInstall: string[] = [];
+    const updater = makeUpdater({
+      installRoot,
+      calls,
+      latest: "2.0.0",
+      onInstallSuccess: () => {
+        seenDuringInstall.push(
+          ...fs.readdirSync(ownerRoot).filter((e) => e.startsWith(".strada-update-backup")),
+        );
+      },
+    });
+
+    await expect(updater.performUpdate()).resolves.toBe(true);
+
+    expect(seenDuringInstall.sort()).toEqual([
+      ".strada-update-backup-node_modules",
+      ".strada-update-backup-package-lock.json",
+      ".strada-update-backup-package.json",
+    ]);
+    expect(
+      fs.readdirSync(ownerRoot).filter((e) => e.startsWith(".strada-update-backup")),
+    ).toEqual([]);
   });
 
   it("rolls the OWNER's manifest back when the install fails", async () => {

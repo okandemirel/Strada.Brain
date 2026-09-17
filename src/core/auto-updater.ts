@@ -1149,8 +1149,13 @@ export class AutoUpdater {
       throw healthErr;
     }
 
-    // Cleanup backup files after successful update
-    this.cleanupNpmBackups();
+    // Cleanup backup files after a successful update — from the OWNER's
+    // directory, which is where they were written (round 10 #21). Passing
+    // nothing cleaned `this.installRoot` (the installed package) instead, so an
+    // npm-local update left `<owner>/.strada-update-backup-*` behind forever,
+    // including a full copy of the package tree. `ownerRoot` is undefined for
+    // npm-global, where the default installRoot is the right root.
+    this.cleanupNpmBackups(ownerRoot);
 
     return true;
   }
