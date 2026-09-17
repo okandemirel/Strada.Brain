@@ -189,3 +189,16 @@ describe("a storefront is not a compatibility layer (Codex 2026-09-12 V)", () =>
     expect(gddPlatform("Android; Google Play Games on PC compatible.").targets).toEqual(["android"]);
   });
 });
+
+
+describe("targetOfBuild: a definitive extension outranks a keyword (Codex 2026-09-17 #7)", () => {
+  it("AndroidPuzzle.app is a Mac bundle; Game.apk is Android; a label still reads by keyword", () => {
+    expect(targetOfBuild("/p/AndroidPuzzle.app")).toBe("macos");
+    expect(targetOfBuild("/p/Builds/Android/Game.apk")).toBe("android");
+    expect(targetOfBuild("/p/WindowsPort.x86_64")).toBe("linux");
+    expect(targetOfBuild("StandaloneOSX")).toBe("macos");
+    expect(targetOfBuild("Android")).toBe("android");
+    expect(artifactIsForeign("/p/AndroidPuzzle.app", "macos")).toBe(false);
+    expect(artifactIsForeign("/p/Game.apk", "macos")).toBe(true);
+  });
+});

@@ -179,12 +179,22 @@ export function targetOfBuild(text: string | undefined): BuildTarget | undefined
   // 2026-09-11 O#6). A directory above the artifact names nothing about it.
   const lastSlash = Math.max(text.lastIndexOf("/"), text.lastIndexOf("\\"));
   const t = (lastSlash >= 0 ? text.slice(lastSlash + 1) : text).toLowerCase();
-  if (/android|\.(?:apk|aab)$/.test(t)) return "android";
-  if (/\bios\b|iphone|ipad|\.ipa$/.test(t)) return "ios";
-  if (/webgl|\.html?$/.test(t)) return "webgl";
-  if (/windows|win64|win32|\.exe$/.test(t)) return "windows";
-  if (/osx|macos|mac os|darwin|\.app\/?$/.test(t)) return "macos";
-  if (/linux|\.x86_64$/.test(t)) return "linux";
+  // A DEFINITIVE EXTENSION OUTRANKS A KEYWORD. "AndroidPuzzle.app" is a Mac
+  // bundle whatever its name says; read by keyword first it was an Android
+  // build, and on a Mac a real launch failure became a foreign host (Codex
+  // 2026-09-17 on dcd4ce9b #7).
+  if (/\.(?:apk|aab)$/.test(t)) return "android";
+  if (/\.ipa$/.test(t)) return "ios";
+  if (/\.html?$/.test(t)) return "webgl";
+  if (/\.exe$/.test(t)) return "windows";
+  if (/\.app\/?$/.test(t)) return "macos";
+  if (/\.x86_64$/.test(t)) return "linux";
+  if (/android/.test(t)) return "android";
+  if (/\bios\b|iphone|ipad/.test(t)) return "ios";
+  if (/webgl/.test(t)) return "webgl";
+  if (/windows|win64|win32/.test(t)) return "windows";
+  if (/osx|macos|mac os|darwin/.test(t)) return "macos";
+  if (/linux/.test(t)) return "linux";
   return undefined;
 }
 
