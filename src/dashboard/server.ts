@@ -32,6 +32,7 @@ import { MonitorActivityLog, handleMonitorRoute } from "./monitor-routes.js";
 import { handleCanvasRoute } from "./canvas-routes.js";
 import { handleWorkspaceRoute } from "./workspace-routes.js";
 import { CHANGE_REVIEW_ROUTE_PREFIX, handleChangeReviewRoute } from "./change-review-routes.js";
+import { handleProjectHistoryRoutes } from "./project-history-routes.js";
 import type { CanvasStorage } from "./canvas-storage.js";
 import type { WorkspaceBus } from "./workspace-bus.js";
 import type { UnifiedBudgetManager } from "../budget/unified-budget-manager.js";
@@ -763,6 +764,11 @@ export class DashboardServer {
         );
         if (handled) return;
       }
+
+      // Durable project history (improvement 6.6): GET /api/workspace/history[/:id].
+      // Read-only and owner-scoped in SQL; registered before the file-explorer
+      // routes, which 404 anything else under /api/workspace.
+      if (handleProjectHistoryRoutes(url, method, req, res, ctx)) return;
 
       // Workspace file endpoints (Phase 5 — file explorer)
       if (url.startsWith("/api/workspace")) {

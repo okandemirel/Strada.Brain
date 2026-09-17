@@ -188,6 +188,53 @@ CREATE TABLE IF NOT EXISTS settings_overrides (
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (key, scope)
 );
+
+-- DURABLE PROJECT HISTORY (plan 6.6). "Show me that decision and that build"
+-- used to be answerable only by whatever the browser still held: the web
+-- channel replays cached monitor state and buffered frames, and the tasks
+-- database records tasks but never which decision was taken, on which build, by
+-- whom. This table is the server-side answer, and it is APPEND ONLY: rows are
+-- inserted and read, never updated or deleted, so a restart or a device change
+-- cannot rewrite what was decided.
+--
+-- PERMISSION SCOPE IS A COLUMN, NOT A VIEW. 'user' rows reach the identity in
+-- owner_user_id / owner_profile_id (plus anyone named in shared_with), 'shared'
+-- rows reach every caller of the project, and 'unknown' — the default, so every
+-- row written without provable attribution starts there — reaches NOBODY. The
+-- gate is applied in SQL before any LIMIT (see listProjectHistoryRows): a filter
+-- after the LIMIT would let one person's events eat another person's page.
+--
+-- VERSION BINDING lives in campaign_revision / commit_sha, so a recalled
+-- decision or delivery names the build it refers to.
+CREATE TABLE IF NOT EXISTS project_history (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  project_id TEXT NOT NULL,
+  owner_scope TEXT NOT NULL DEFAULT 'unknown',
+  owner_user_id TEXT,
+  owner_profile_id TEXT,
+  -- Comma-joined identities this row was EXPLICITLY shared with. Matched with
+  -- instr() against ',' || value || ',' so 'bob' never matches 'bobby'.
+  shared_with TEXT,
+  campaign_revision TEXT,
+  commit_sha TEXT,
+  summary TEXT NOT NULL,
+  payload TEXT NOT NULL,
+  recorded_at INTEGER NOT NULL
+);
+-- The indexes over these columns are created AFTER the ALTER migration below,
+-- because an older project_history table does not have the columns yet.
+`;
+
+/**
+ * Project-history indexes (plan 6.6). Deliberately NOT in the schema constant:
+ * they name columns an older table only gains during the ALTER migration, and
+ * CREATE INDEX on a missing column fails the whole schema exec.
+ */
+const PROJECT_HISTORY_INDEX_SQL = `
+CREATE INDEX IF NOT EXISTS idx_project_history_recent ON project_history(recorded_at DESC);
+CREATE INDEX IF NOT EXISTS idx_project_history_owner ON project_history(owner_scope, owner_user_id, recorded_at DESC);
+CREATE INDEX IF NOT EXISTS idx_project_history_project ON project_history(project_id, recorded_at DESC);
 `;
 
 // =============================================================================
@@ -275,6 +322,40 @@ interface SumRow {
   total: number | null;
 }
 
+/**
+ * One append-only project-history row, as stored (plan 6.6). The domain type and
+ * every validation rule live in src/history/project-history.ts; this layer only
+ * persists and gates.
+ */
+export interface ProjectHistoryRow {
+  id: string;
+  kind: string;
+  project_id: string;
+  owner_scope: string | null;
+  owner_user_id: string | null;
+  owner_profile_id: string | null;
+  shared_with: string | null;
+  campaign_revision: string | null;
+  commit_sha: string | null;
+  summary: string;
+  payload: string;
+  recorded_at: number;
+}
+
+/** Read filter for {@link DaemonStorage.listProjectHistoryRows}. */
+export interface ProjectHistoryQuery {
+  /**
+   * WHOSE HISTORY IS THIS? Present ⇒ the caller sees 'shared' rows plus 'user'
+   * rows attributed to (or explicitly shared with) this identity. Absent or
+   * empty ⇒ 'shared' rows only. An 'unknown' row reaches nobody either way.
+   * There is no "see everything" mode on purpose.
+   */
+  viewer?: string;
+  projectId?: string;
+  kinds?: string[];
+  limit?: number;
+}
+
 // =============================================================================
 // STORAGE CLASS
 // =============================================================================
@@ -341,6 +422,9 @@ export class DaemonStorage {
     // Settings overrides
     getSettingsOverride?: Database.Statement;
     setSettingsOverride?: Database.Statement;
+    // Project history (plan 6.6)
+    insertProjectHistory?: Database.Statement;
+    projectHistoryHighWater?: Database.Statement;
   } = {};
 
   constructor(dbPath: string) {
@@ -392,6 +476,25 @@ export class DaemonStorage {
     if (!ownerColumns.some((column) => column.name === "registered_at")) {
       this.db.exec("ALTER TABLE budget_owners ADD COLUMN registered_at INTEGER DEFAULT NULL");
     }
+    // PROJECT HISTORY (plan 6.6). A daemon.db from before this table gets it
+    // from the schema constant above; one written by an EARLIER shape of it
+    // gains the missing columns here. This must run before prepareStatements(),
+    // because the history insert names every column.
+    for (const column of [
+      "owner_scope TEXT NOT NULL DEFAULT 'unknown'",
+      "owner_user_id TEXT",
+      "owner_profile_id TEXT",
+      "shared_with TEXT",
+      "campaign_revision TEXT",
+      "commit_sha TEXT",
+    ]) {
+      try {
+        this.db.exec(`ALTER TABLE project_history ADD COLUMN ${column}`);
+      } catch {
+        // Column already exists -- safe to ignore
+      }
+    }
+    this.db.exec(PROJECT_HISTORY_INDEX_SQL);
     this.prepareStatements();
   }
 
@@ -1171,6 +1274,106 @@ export class DaemonStorage {
   }
 
   // =========================================================================
+  // Project History Methods (plan 6.6 — durable, owner-scoped, version-bound)
+  // =========================================================================
+
+  /**
+   * THE PERMISSION GATE, IN SQL.
+   *
+   * Appended to a WHERE clause BEFORE any ORDER BY / LIMIT, so the page a caller
+   * gets is built out of rows they are allowed to see instead of being trimmed
+   * afterwards. With a viewer the clause binds it three times (own userId, own
+   * profileId, explicitly shared-with); without one only 'shared' rows pass.
+   * COALESCE makes a NULL scope read as 'unknown', which matches nothing.
+   */
+  private static projectHistoryVisibility(viewer: string | undefined): { sql: string; params: string[] } {
+    const id = viewer?.trim();
+    if (!id) {
+      return { sql: " AND COALESCE(owner_scope, 'unknown') = 'shared'", params: [] };
+    }
+    return {
+      sql:
+        " AND (COALESCE(owner_scope, 'unknown') = 'shared'"
+        + " OR (COALESCE(owner_scope, 'unknown') = 'user'"
+        + " AND (owner_user_id = ? OR owner_profile_id = ?"
+        + " OR instr(',' || COALESCE(shared_with, '') || ',', ',' || ? || ',') > 0)))",
+      params: [id, id, id],
+    };
+  }
+
+  /**
+   * Append one history row. Append-only: a duplicate id is an error, never an
+   * overwrite, so recorded history cannot be rewritten by a replay.
+   */
+  insertProjectHistoryRow(row: ProjectHistoryRow): void {
+    this.assertOpen();
+    try {
+      this.stmts.insertProjectHistory!.run(
+        row.id,
+        row.kind,
+        row.project_id,
+        row.owner_scope ?? "unknown",
+        row.owner_user_id ?? null,
+        row.owner_profile_id ?? null,
+        row.shared_with ?? null,
+        row.campaign_revision ?? null,
+        row.commit_sha ?? null,
+        row.summary,
+        row.payload,
+        row.recorded_at,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/UNIQUE constraint failed: project_history\.id/.test(message)) {
+        throw new Error(`Project history event ${row.id} is already recorded (history is append-only)`);
+      }
+      throw error;
+    }
+  }
+
+  /** The newest recorded_at in the table, or 0 — the monotonic clock's watermark. */
+  getProjectHistoryHighWaterMark(): number {
+    this.assertOpen();
+    const row = this.stmts.projectHistoryHighWater!.get() as { high: number | null };
+    return row.high ?? 0;
+  }
+
+  /** One history row the viewer is allowed to see, or undefined. */
+  getProjectHistoryRow(id: string, viewer?: string): ProjectHistoryRow | undefined {
+    this.assertOpen();
+    const gate = DaemonStorage.projectHistoryVisibility(viewer);
+    const row = this.db!
+      .prepare(`SELECT * FROM project_history WHERE id = ?${gate.sql}`)
+      .get(id, ...gate.params) as ProjectHistoryRow | undefined;
+    return row;
+  }
+
+  /** The newest history rows the viewer is allowed to see, newest first. */
+  listProjectHistoryRows(query: ProjectHistoryQuery = {}): ProjectHistoryRow[] {
+    this.assertOpen();
+    const gate = DaemonStorage.projectHistoryVisibility(query.viewer);
+    let sql = "SELECT * FROM project_history WHERE 1=1";
+    const params: Array<string | number> = [];
+    if (query.projectId) {
+      sql += " AND project_id = ?";
+      params.push(query.projectId);
+    }
+    if (query.kinds && query.kinds.length > 0) {
+      sql += ` AND kind IN (${query.kinds.map(() => "?").join(",")})`;
+      params.push(...query.kinds);
+    }
+    // The gate goes in BEFORE the ordering and the limit.
+    sql += gate.sql;
+    params.push(...gate.params);
+    sql += " ORDER BY recorded_at DESC, rowid DESC";
+    if (query.limit !== undefined) {
+      sql += " LIMIT ?";
+      params.push(query.limit);
+    }
+    return this.db!.prepare(sql).all(...params) as ProjectHistoryRow[];
+  }
+
+  // =========================================================================
   // Private Helpers
   // =========================================================================
 
@@ -1328,6 +1531,18 @@ export class DaemonStorage {
     );
     this.stmts.setSettingsOverride = db.prepare(
       `INSERT OR REPLACE INTO settings_overrides (key, scope, value, updated_at) VALUES (?, ?, ?, ?)`,
+    );
+
+    // Project History (plan 6.6). Plain INSERT, never INSERT OR REPLACE: the
+    // table is append-only.
+    this.stmts.insertProjectHistory = db.prepare(
+      `INSERT INTO project_history
+         (id, kind, project_id, owner_scope, owner_user_id, owner_profile_id, shared_with,
+          campaign_revision, commit_sha, summary, payload, recorded_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    this.stmts.projectHistoryHighWater = db.prepare(
+      `SELECT MAX(recorded_at) AS high FROM project_history`,
     );
   }
 
