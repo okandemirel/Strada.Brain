@@ -97,5 +97,18 @@ describe("quoteIsAbout", () => {
     expect(quoteIsAbout("All unit tests cover saving: absent", "suite: 179/179 tests passed (unfiltered)")).toBe(false);
     expect(quoteIsAbout("Tests for saving pass: absent", "suite: 179/179 tests passed (unfiltered)")).toBe(false);
     expect(quoteIsAbout("The whole PlayMode suite runs clean: absent", "suite: 179/179 tests passed (unfiltered)")).toBe(true);
+    // Round 8 #14: a word ending in a double s, -is or -es keeps its identity.
+    expect(requirementTokens("Analysis view: absent")).toContain("analysis");
+    expect(requirementTokens("Analyses view: absent")).toContain("analysis");
+    expect(requirementTokens("Axis labels: absent")).toContain("axis");
+    expect(requirementTokens("Axes labels: absent")).toContain("axis");
+    expect(quoteIsAbout("Analysis view: absent", "landed: Added Assets/UI/Analyses.cs")).toBe(true);
+    expect(quoteIsAbout("Progress bar: absent", "landed: Added Assets/UI/Progress.cs")).toBe(true);
+    expect(quoteIsAbout("Process queue: absent", "landed: Added Assets/Scripts/Processes.cs")).toBe(true);
+    // Round 8 #15: a suite requirement in another language closes on a suite total.
+    expect(quoteIsAbout("Tüm testler geçmeli: absent", "suite: 179/179 tests passed (unfiltered)")).toBe(true);
+    expect(quoteIsAbout("Alle Tests bestehen: absent", "suite: 179/179 tests passed (unfiltered)")).toBe(true);
+    // …and a feature requirement in another language still does not.
+    expect(quoteIsAbout("Kayıt sistemi testleri: absent", "suite: 179/179 tests passed (unfiltered)")).toBe(false);
   });
 });

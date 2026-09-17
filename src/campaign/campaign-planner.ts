@@ -785,17 +785,35 @@ function stemWord(word: string): string {
   if (irregular !== undefined) return irregular;
   // Canonical suffix rules: "progress" and "progresses" meet at "progres",
   // "mouse" and "mice" at "mous" (Codex 2026-09-17 round 7 #1).
-  let w = word.replace(/ies$/u, "y").replace(/sses$/u, "ss");
+  // …and a word that ENDS in a double s, or in -is, keeps it: the previous
+  // guard compared a string it had itself forced to end in "ss", so it never
+  // fired and "analysis"/"analyses" and "axis"/"axes" pulled apart (Codex
+  // 2026-09-17 round 8 #14).
+  let w = word.replace(/ies$/u, "y");
+  if (/sses$/u.test(w)) return w.replace(/sses$/u, "ss"); // processes → process
+  if (/(?:sis|ses)$/u.test(w)) return w.replace(/(?:sis|ses)$/u, "sis"); // analysis/analyses → analysis
+  if (/(?:xis|xes)$/u.test(w)) return w.replace(/(?:xis|xes)$/u, "xis"); // axis/axes → axis
+  if (/ss$/u.test(w)) return w; // progress, class
   w = w.replace(/(?:ing|ed)$/u, "");
-  if (/es$/u.test(w) && !/(?:ss)$/u.test(w.slice(0, -2) + "ss")) w = w.replace(/es$/u, "");
+  if (/(?:ch|sh|x|z|s)es$/u.test(w)) w = w.replace(/es$/u, "");
+  else if (/es$/u.test(w)) w = w.replace(/s$/u, "");
   else if (/[^s]s$/u.test(w)) w = w.replace(/s$/u, "");
   return w.replace(/e$/u, "");
 }
 
 /** Action words that say nothing about WHICH feature: "Run offline" is not RunAnalytics.cs (round 7 #2). */
 const GENERIC_ACTION_STEMS = new Set(["run", "set", "get", "use", "add", "mak", "show", "open", "clos", "start", "stop", "load", "play", "turn", "put", "tak", "giv", "mov", "work", "need", "allow", "support", "handl", "updat", "chang", "check", "appli", "enabl", "disabl", "creat", "build", "call", "keep", "hold", "read", "writ", "send", "receiv"]);
-/** Words that are about the SUITE, not about any feature (round 7 #3). */
-const SUITE_STEMS = new Set(["test", "tests", "suite", "unit", "playmode", "editmode", "green", "pass", "passes", "passing", "run", "runs", "unfiltered", "whole", "full", "entire", "all", "complete", "coverage", "cover", "clean", "every", "ran", "play", "mode", "edit", "the", "and", "for", "are", "our", "its", "case", "cases"].map(stemWord));
+/**
+ * Words that are about the SUITE, not about any feature (round 7 #3) — in the
+ * languages a requirement can be written in: a Turkish "Tüm testler geçmeli"
+ * could not be closed by a suite total at all (round 8 #15).
+ */
+const SUITE_STEMS = new Set([
+  // Turkish, German, Spanish, French: "all/whole", "test(s)", "pass/green".
+  "tüm", "bütün", "her", "testler", "testleri", "testlerin", "geçmeli", "geçiyor", "geçti", "yeşil", "takım",
+  "alle", "ganze", "testfälle", "bestehen", "grün",
+  "todas", "todos", "pruebas", "pasan", "verde",
+  "tous", "toutes", "réussissent", "vert","test", "tests", "suite", "unit", "playmode", "editmode", "green", "pass", "passes", "passing", "run", "runs", "unfiltered", "whole", "full", "entire", "all", "complete", "coverage", "cover", "clean", "every", "ran", "play", "mode", "edit", "the", "and", "for", "are", "our", "its", "case", "cases"].map(stemWord));
 
 /** The stems of a text's words: Unicode letters, camelCase split BEFORE case folding, paths and dots as separators. */
 function stemsOf(text: string): string[] {
@@ -832,7 +850,11 @@ export function quoteIsAbout(requirement: string, fact: string): boolean {
     // a suite total does not close it (round 7 #3).
     const stems = stemsOf(requirement.replace(/:\s*(?:absent|missing|no milestone implemented it).*$/i, ""))
       .filter((w) => !REQUIREMENT_STOPWORDS.has(w) && !REQUIREMENT_STOPWORDS.has(w + "e") && !REQUIREMENT_STOPWORDS.has(w + "s"));
-    const suiteWords = new Set(["test", "tests", "suite", "playmode", "editmode"].map(stemWord));
+    // The SUBJECT must be the suite itself, in whatever language the
+    // requirement names it (round 8 #15).
+    const suiteWords = new Set(
+      ["test", "tests", "suite", "playmode", "editmode", "testler", "testleri", "testlerin", "testfälle", "pruebas"].map(stemWord),
+    );
     const mentionsSuite = stems.some((w) => suiteWords.has(w));
     return mentionsSuite && stems.every((w) => SUITE_STEMS.has(w));
   }

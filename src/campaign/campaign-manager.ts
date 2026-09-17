@@ -7647,6 +7647,16 @@ function pathIsInsideProject(projectRoot: string, rel: string): boolean {
     let probe = target;
     const tail: string[] = [];
     while (!existsSync(probe)) {
+      // A DANGLING SYMLINK IS NOT A MISSING PATH: existsSync follows the link
+      // and answers false, so docs/GDD.md → /outside/new.md (absent) passed
+      // containment and the write created the file outside the project (Codex
+      // 2026-09-17 round 8 #13). A link whose target cannot be resolved fails
+      // closed.
+      try {
+        if (lstatSync(probe).isSymbolicLink()) return false;
+      } catch {
+        // not a link and not there: an ordinary missing path, walk up
+      }
       tail.unshift(basename(probe));
       const up = dirname(probe);
       if (up === probe) return false;

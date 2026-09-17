@@ -4470,6 +4470,11 @@ describe("CampaignManager", () => {
       const linked = manager.startFromGdd({ ...ctx, chatId: "chat-linked" }, "# GDD\n\nThrough the link.", "docs/Linked_GDD.md");
       expect(readFileSync(victim, "utf8")).toBe("untouched");
       expect(linked.gddPath).toBeUndefined();
+      // Round 8 #13: a DANGLING symlink out of the project is not "missing".
+      symlinkSync(join(dir, "absent-victim.md"), join(projectRoot, "docs", "Dangling_GDD.md"));
+      const dangling = manager.startFromGdd({ ...ctx, chatId: "chat-dangling" }, "# GDD\n\nThrough a dangling link.", "docs/Dangling_GDD.md");
+      expect(existsSync(join(dir, "absent-victim.md"))).toBe(false);
+      expect(dangling.gddPath).toBeUndefined();
       mkdirSync(join(projectRoot, "..design"), { recursive: true });
       const dotted = manager.startFromGdd({ ...ctx, chatId: "chat-dotted" }, "# GDD\n\nDotted.", "..design/GDD.md");
       expect(dotted.gddPath).toBe("..design/GDD.md");
