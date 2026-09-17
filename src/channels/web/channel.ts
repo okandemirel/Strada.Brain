@@ -699,6 +699,9 @@ export class WebChannel
     }
     this.clients.clear();
     this.identityStore.close();
+    // Releases the attachment database AND its idle retention sweep; an
+    // in-memory store also drops the temp spool it owns (round 11 #14).
+    this.attachmentStore.close();
 
     this.wss?.close();
     await new Promise<void>((res) => {

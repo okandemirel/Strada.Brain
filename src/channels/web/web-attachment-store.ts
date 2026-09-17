@@ -43,6 +43,27 @@
  * how many are kept, the snapshot dies with the row, and so does the retained
  * copy — expiry, eviction and a spool file whose row is gone (a crash between
  * the copy and the insert) are all swept.
+ *
+ * Round 11 #14 and #15 fixed WHEN and WHERE that sweeping happens:
+ *
+ *   - expiry used to run only inside `register`, `get` and `size`, so a daemon
+ *     that sent one recording and went quiet kept the copy for ever, and a
+ *     restart kept it too — the expired row was still in the retained-token
+ *     inventory the startup sweep trusts, so the file looked live. Expiry now
+ *     runs AT STARTUP and on an idle timer (`attachmentSweepIntervalMs`), so no
+ *     call from anybody is needed for a copy to die with its token;
+ *   - a store that made its OWN spool (an in-memory database has no restart to
+ *     survive, so it gets a private temp directory) removes it on `close`;
+ *   - the spool is NAMESPACED BY DATABASE (`attachmentSpoolDir`). It used to
+ *     default to one directory per folder, so opening a second database next to
+ *     the first swept the first's copies: their tokens are absent from the second
+ *     database, which is precisely what "orphan" means;
+ *   - a copy is written to `incoming/` and moved to its final, sweepable name
+ *     only AFTER the row that claims it exists. A completed copy sitting at its
+ *     final name with no row is indistinguishable from the leak a crash leaves,
+ *     and another process opening in that window deleted a live attachment. Only
+ *     age can tell a crash from a copy in progress, so a staged file is swept
+ *     once it has been untouched for `PENDING_ATTACHMENT_GRACE_MS`.
  */
 import Database from "better-sqlite3";
 import {
@@ -59,10 +80,11 @@ import {
   readFileSync,
   readSync,
   realpathSync,
+  renameSync,
   rmSync,
   statSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { createHash, randomBytes } from "node:crypto";
 import { configureSqlitePragmas } from "../../memory/unified/sqlite-pragmas.js";
@@ -70,8 +92,76 @@ import { configureSqlitePragmas } from "../../memory/unified/sqlite-pragmas.js";
 /** Files up to this size are copied into the row; larger ones are retained as a private copy. */
 export const DEFAULT_MAX_INLINE_ATTACHMENT_BYTES = 8 * 1024 * 1024;
 
-/** Directory name, next to the database, that holds the retained copies. */
+/**
+ * Directory name, next to the database, that holds the retained copies. Every
+ * database's spool is a subdirectory of this one (see `attachmentSpoolDir`), so
+ * a caller that backs up or prunes the whole tree covers every store in that
+ * directory; `attachmentSpoolRoot` builds the path.
+ */
 export const RETAINED_ATTACHMENT_DIR = "web-attachment-blobs";
+
+/**
+ * Subdirectory of a spool holding copies that have no row yet. Invisible to the
+ * orphan sweep on purpose (round 11 #15): another process must not delete the
+ * file this one is about to insert a row for.
+ */
+export const PENDING_ATTACHMENT_DIR = "incoming";
+
+/**
+ * A staged copy untouched for this long was left by a crash, not by a copy in
+ * progress, and is swept. Nothing younger is: a 2 GB recording being copied and
+ * hashed must survive another process's startup sweep.
+ */
+export const PENDING_ATTACHMENT_GRACE_MS = 60 * 60_000;
+
+/** Floor and ceiling on the idle expiry sweep derived from the TTL. */
+export const MIN_ATTACHMENT_SWEEP_MS = 25;
+export const MAX_ATTACHMENT_SWEEP_MS = 5 * 60_000;
+
+/**
+ * How often an idle store purges expired rows and their copies. Derived from the
+ * TTL rather than configured: a store nobody calls into must still let its
+ * copies die (round 11 #14), and the caller that chose the TTL should not have
+ * to ask for that separately.
+ */
+export function attachmentSweepIntervalMs(ttlMs: number): number {
+  const half = Math.floor(ttlMs / 2);
+  if (!Number.isFinite(half) || half < MIN_ATTACHMENT_SWEEP_MS) return MIN_ATTACHMENT_SWEEP_MS;
+  return Math.min(half, MAX_ATTACHMENT_SWEEP_MS);
+}
+
+/**
+ * The directory holding every attachment spool next to `dbPath`, or null for an
+ * in-memory database, whose spool is a private temp directory that dies with the
+ * store. This is the path to back up or prune: it covers all databases in that
+ * directory.
+ */
+export function attachmentSpoolRoot(dbPath: string): string | null {
+  if (dbPath === ":memory:") return null;
+  return join(dirname(dbPath), RETAINED_ATTACHMENT_DIR);
+}
+
+/**
+ * Where THIS database's retained copies live: a subdirectory of
+ * `attachmentSpoolRoot` named after the database file. Null for an in-memory
+ * database.
+ *
+ * Round 11 #15: every store used to default to the root itself, so a second
+ * database in the same directory swept the first's copies — their tokens are not
+ * in the second database, and that is exactly the test for an orphan. The name
+ * is derived from the database's file name only, so it is stable across a
+ * restart and across moving the directory.
+ */
+export function attachmentSpoolDir(dbPath: string): string | null {
+  const root = attachmentSpoolRoot(dbPath);
+  if (!root) return null;
+  const name = basename(dbPath);
+  // The readable half is for a human reading the directory; the digest is what
+  // guarantees two databases never collide after sanitising.
+  const readable = name.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 64) || "db";
+  const digest = createHash("sha256").update(name).digest("hex").slice(0, 12);
+  return join(root, `${readable}-${digest}`);
+}
 
 export interface StoredAttachment {
   readonly token: string;
@@ -144,6 +234,11 @@ interface AttachmentSnapshot {
   data: Buffer | null;
   sizeBytes: number | null;
   checksum: string | null;
+  /**
+   * Where a retained copy is waiting while its row is written. `path` is the
+   * name it takes once the row exists; until then nothing may sweep it.
+   */
+  staged?: string;
 }
 
 export class WebAttachmentStore {
@@ -159,6 +254,16 @@ export class WebAttachmentStore {
   /** Where retained copies live. Created on first use, not at construction. */
   private readonly retainDir: string;
   private retainDirReady = false;
+  /**
+   * A temp spool this store created for itself, and therefore owns: removed on
+   * `close`. Null for a spool next to a database or one the caller named —
+   * those outlive the process on purpose.
+   */
+  private readonly ownedSpoolRoot: string | null;
+  /** The idle expiry sweep (round 11 #14). Cleared by `close`. */
+  private sweepTimer: ReturnType<typeof setInterval> | null = null;
+  private closed = false;
+  private sweeps = 0;
 
   constructor(
     dbPath: string = ":memory:",
@@ -171,13 +276,21 @@ export class WebAttachmentStore {
       const dir = dirname(dbPath);
       if (dir && dir !== "." && !existsSync(dir)) mkdirSync(dir, { recursive: true });
     }
-    // Next to the database, so a restart finds the copies its rows name. An
-    // in-memory store has no restart to survive and gets a private temp dir.
-    this.retainDir =
-      retainDir ??
-      (dbPath === ":memory:"
-        ? join(mkdtempSync(join(tmpdir(), "strada-attachments-")), RETAINED_ATTACHMENT_DIR)
-        : join(dirname(dbPath), RETAINED_ATTACHMENT_DIR));
+    // Next to the database and NAMED AFTER IT (round 11 #15), so a restart
+    // finds the copies its rows name and a different database in the same
+    // directory never sees them as orphans. An in-memory store has no restart to
+    // survive and gets a private temp dir, which it owns and removes on close.
+    let owned: string | null = null;
+    if (retainDir) {
+      // The caller named the spool: theirs to place, theirs to share or not.
+      this.retainDir = retainDir;
+    } else if (dbPath === ":memory:") {
+      owned = mkdtempSync(join(tmpdir(), "strada-attachments-"));
+      this.retainDir = join(owned, RETAINED_ATTACHMENT_DIR);
+    } else {
+      this.retainDir = attachmentSpoolDir(dbPath)!;
+    }
+    this.ownedSpoolRoot = owned;
     this.db = new Database(dbPath);
     configureSqlitePragmas(this.db, "identity");
     this.db.exec(`
@@ -227,7 +340,45 @@ export class WebAttachmentStore {
     this.stmtRetainedTokens = this.db.prepare(
       "SELECT token FROM web_attachments WHERE retained = 1 AND path IS NOT NULL",
     );
+    // Expiry BEFORE the orphan sweep, and both at startup: an expired row used
+    // to survive a restart because it was still in the retained-token inventory
+    // the orphan sweep trusts, so its copy looked live (round 11 #14).
+    this.purgeExpired(Date.now());
     this.sweepOrphanedCopies();
+    this.sweepTimer = setInterval(() => this.sweepIdle(), attachmentSweepIntervalMs(this.ttlMs));
+    // Retention must never be the reason the process stays alive.
+    if (typeof this.sweepTimer.unref === "function") this.sweepTimer.unref();
+  }
+
+  /** Where this store keeps its retained copies (diagnostics, backup, tests). */
+  get spoolDir(): string {
+    return this.retainDir;
+  }
+
+  /**
+   * Idle sweep TICKS (diagnostics / tests). Counts the timer firing, not the
+   * work it did, so a test can see that `close` actually stopped the timer.
+   */
+  get idleSweeps(): number {
+    return this.sweeps;
+  }
+
+  /**
+   * The timer half of retention: nobody has to call in for a copy to die. Cheap
+   * on purpose — an indexed delete, not a directory walk, which is why the
+   * orphan sweep stays at construction.
+   */
+  private sweepIdle(): void {
+    this.sweeps += 1;
+    // The tick the event loop had already queued when `close` ran: the database
+    // is gone, and purging it would throw inside a timer.
+    if (this.closed) return;
+    try {
+      this.purgeExpired(Date.now());
+    } catch {
+      // A busy database is swept on the next tick; a failing sweep must not
+      // become an uncaught exception in a timer.
+    }
   }
 
   /**
@@ -237,6 +388,8 @@ export class WebAttachmentStore {
   private discardCopy(path: string | null | undefined): void {
     if (!path) return;
     try {
+      // Never recursive: a sweep must not be able to take a DIRECTORY, which is
+      // the second line of defence for the staging directory (round 11 #15).
       rmSync(path, { force: true });
     } catch {
       // Already gone, or not ours to remove: the row is going away regardless.
@@ -270,6 +423,10 @@ export class WebAttachmentStore {
    * A copy whose row is gone is a leak: the process died between writing the
    * file and inserting the row, or an older build wrote it. Swept once, at
    * construction, bounded by what the directory holds.
+   *
+   * It judges by the absence of a row, so it may only look at names that HAVE a
+   * row by now: the staging directory is skipped (round 11 #15) and aged out
+   * separately.
    */
   private sweepOrphanedCopies(): void {
     try {
@@ -278,17 +435,47 @@ export class WebAttachmentStore {
         (this.stmtRetainedTokens.all() as Array<{ token: string }>).map((r) => r.token),
       );
       for (const name of readdirSync(this.retainDir)) {
+        if (name === PENDING_ATTACHMENT_DIR) continue; // in flight: not ours to judge
         if (!live.has(name)) this.discardCopy(join(this.retainDir, name));
       }
     } catch {
       // A spool we cannot read is not a reason to refuse every attachment.
     }
+    this.sweepStagedCopies();
   }
 
-  /** The spool directory, created (0700) the first time a copy needs it. */
+  /**
+   * The staging directory cannot be swept by "has a row", because not having one
+   * yet is the whole point of it. Only age separates a crash from a copy in
+   * progress: `copyFileSync` keeps touching the file it is writing, so anything
+   * untouched for `PENDING_ATTACHMENT_GRACE_MS` was abandoned.
+   */
+  private sweepStagedCopies(): void {
+    const pending = join(this.retainDir, PENDING_ATTACHMENT_DIR);
+    let names: string[];
+    try {
+      names = readdirSync(pending);
+    } catch {
+      return; // no staging directory yet, or one we cannot read
+    }
+    const abandoned = Date.now() - PENDING_ATTACHMENT_GRACE_MS;
+    for (const name of names) {
+      const staged = join(pending, name);
+      try {
+        if (statSync(staged).mtimeMs <= abandoned) this.discardCopy(staged);
+      } catch {
+        // Gone already, or unreadable: nothing to reclaim.
+      }
+    }
+  }
+
+  /**
+   * The spool directory and its staging subdirectory, created (0700) the first
+   * time a copy needs them.
+   */
   private ensureRetainDir(): string {
     if (!this.retainDirReady) {
-      mkdirSync(this.retainDir, { recursive: true, mode: 0o700 });
+      mkdirSync(join(this.retainDir, PENDING_ATTACHMENT_DIR), { recursive: true, mode: 0o700 });
       this.retainDirReady = true;
     }
     return this.retainDir;
@@ -333,23 +520,29 @@ export class WebAttachmentStore {
       // copy. Measuring the copy (not the source) is what makes the recorded
       // size and checksum true for the whole life of the token.
       try {
-        const copy = join(this.ensureRetainDir(), token);
-        copyFileSync(real, copy);
-        chmodSync(copy, 0o600);
-        const copied = statSync(copy);
+        const spool = this.ensureRetainDir();
+        // Written under `incoming/`, and moved to the name the row will carry
+        // only once that row exists (`register`). A finished copy at its final
+        // name with no row is what a crash leaves behind, so another process
+        // sweeping in that window deleted live attachments (round 11 #15).
+        const staged = join(spool, PENDING_ATTACHMENT_DIR, token);
+        copyFileSync(real, staged);
+        chmodSync(staged, 0o600);
+        const copied = statSync(staged);
         return {
-          path: copy,
+          path: join(spool, token),
           retained: true,
           data: null,
           sizeBytes: copied.size,
-          checksum: hashFile(copy),
+          checksum: hashFile(staged),
+          staged,
         };
       } catch {
         // No space, an unwritable spool, a source that vanished mid-copy: fall
         // back to the checksummed reference the token had before round 10 #2.
         // Availability is kept; the serve path still refuses anything but these
         // exact bytes.
-        this.discardCopy(join(this.retainDir, token));
+        this.discardCopy(join(this.retainDir, PENDING_ATTACHMENT_DIR, token));
         return { path: real, retained: false, data: null, sizeBytes: info.size, checksum: hashFile(real) };
       }
     } catch {
@@ -357,6 +550,31 @@ export class WebAttachmentStore {
       // what was promised, and with no checksum it is never served.
       return { path: source, retained: false, data: null, sizeBytes: null, checksum: null };
     }
+  }
+
+  /**
+   * The pre-round-10 form of a record: the caller's own file, checksummed. Used
+   * when the private copy could not be made, or could not be published.
+   */
+  private referenceSnapshot(attachment: AttachmentToStore): AttachmentSnapshot {
+    const source = attachment.path;
+    if (!source) return { path: null, retained: false, data: null, sizeBytes: null, checksum: null };
+    try {
+      const real = realpathSync(source);
+      const info = statSync(real);
+      if (!info.isFile()) return { path: real, retained: false, data: null, sizeBytes: null, checksum: null };
+      return { path: real, retained: false, data: null, sizeBytes: info.size, checksum: hashFile(real) };
+    } catch {
+      return { path: source, retained: false, data: null, sizeBytes: null, checksum: null };
+    }
+  }
+
+  private insertRow(token: string, attachment: AttachmentToStore, snapshot: AttachmentSnapshot, now: number): void {
+    this.stmtInsert.run(
+      token, attachment.name, attachment.mimeType ?? null, snapshot.path,
+      snapshot.data, attachment.chatId ?? null, now, now + this.ttlMs,
+      snapshot.sizeBytes, snapshot.checksum, snapshot.retained ? 1 : 0,
+    );
   }
 
   /** Register a file or bytes and return the token the link uses. */
@@ -368,11 +586,22 @@ export class WebAttachmentStore {
     if (over > 0) this.purgeOldest(over);
     const token = randomBytes(18).toString("base64url");
     const snapshot = this.snapshot(token, attachment);
-    this.stmtInsert.run(
-      token, attachment.name, attachment.mimeType ?? null, snapshot.path,
-      snapshot.data, attachment.chatId ?? null, now, now + this.ttlMs,
-      snapshot.sizeBytes, snapshot.checksum, snapshot.retained ? 1 : 0,
-    );
+    // ROW FIRST, then the file at the name it promises: the row is what makes a
+    // copy defensible against every sweep, so the copy must never be reachable
+    // at that name before it (round 11 #15).
+    this.insertRow(token, attachment, snapshot, now);
+    if (snapshot.staged) {
+      try {
+        renameSync(snapshot.staged, snapshot.path!);
+      } catch {
+        // The row would promise a file that is not there. Take it back and keep
+        // the attachment as the checksummed reference instead — the same
+        // availability-over-immutability trade the copy failure makes.
+        this.stmtDeleteByToken.run(token);
+        this.discardCopy(snapshot.staged);
+        this.insertRow(token, attachment, this.referenceSnapshot(attachment), now);
+      }
+    }
     return token;
   }
 
@@ -461,6 +690,23 @@ export class WebAttachmentStore {
   }
 
   close(): void {
+    if (this.closed) return; // idempotent: a channel may stop twice
+    this.closed = true;
+    if (this.sweepTimer) {
+      clearInterval(this.sweepTimer);
+      this.sweepTimer = null;
+    }
     this.db.close();
+    // A spool this store made FOR ITSELF dies with it: an in-memory database has
+    // no restart to survive, so its copies have nothing left to serve and the
+    // temp directory would be orphaned for the life of the machine (round 11
+    // #14). A spool next to a database, or one the caller named, is left alone.
+    if (this.ownedSpoolRoot) {
+      try {
+        rmSync(this.ownedSpoolRoot, { recursive: true, force: true });
+      } catch {
+        // Nothing we can do at shutdown; the directory is a temp one either way.
+      }
+    }
   }
 }
