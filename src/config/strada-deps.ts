@@ -838,7 +838,21 @@ function evaluatePackageRow(
   path: string | null,
   version: string | null | undefined,
   source: StradaDepInstallSource | null | undefined,
+  scanned = true,
 ): ProjectMatrixRow {
+  // NOTHING WAS LOOKED AT (Codex round 12 #27). With no project configured
+  // there is no Packages/ to search, so reporting the package "missing"
+  // states the result of an inspection that never happened.
+  if (!scanned) {
+    return {
+      id: spec.id,
+      label: spec.label,
+      requirement: spec.requirement,
+      status: "not-measured",
+      detail: `No Unity project is configured, so ${spec.label} was never looked for.`,
+      fix: "Set UNITY_PROJECT_PATH, then run strada doctor again.",
+    };
+  }
   const floor = spec.minVersion
     ? `Minimum ${spec.minVersion}.`
     : "No version floor is enforced by Brain — the version is recorded, not gated.";
@@ -991,6 +1005,9 @@ export function evaluateProjectSupport(opts: ProjectSupportOptions): ProjectSupp
   // out of the doctor, which took the whole report down with it.
   const projectPath = (opts.unityProjectPath ?? "").trim();
   const deps = opts.deps ?? (projectPath ? checkStradaDeps(projectPath, opts.config) : UNSCANNED_DEPS);
+  // A caller that handed us a scan HAS scanned something; without a project
+  // path and without a scan, nothing was inspected.
+  const scanned = opts.deps !== undefined || projectPath.length > 0;
   const byId = new Map(SUPPORTED_PROJECT_PACKAGES.map((spec) => [spec.id, spec]));
   const core = byId.get("strada-core")!;
   const modules = byId.get("strada-modules")!;
@@ -1015,10 +1032,10 @@ export function evaluateProjectSupport(opts: ProjectSupportOptions): ProjectSupp
 
   const rows: ProjectMatrixRow[] = [
     ...projectRows,
-    evaluatePackageRow(core, deps.coreInstalled, deps.corePath, deps.coreVersion, deps.coreSource),
-    evaluatePackageRow(modules, deps.modulesInstalled, deps.modulesPath, deps.modulesVersion, deps.modulesSource),
-    evaluatePackageRow(mcp, deps.mcpInstalled, deps.mcpPath, deps.mcpVersion, deps.mcpSource),
-    evaluateMcpRuntimeRow(deps.mcpInstalled, deps.mcpPath),
+    evaluatePackageRow(core, deps.coreInstalled, deps.corePath, deps.coreVersion, deps.coreSource, scanned),
+    evaluatePackageRow(modules, deps.modulesInstalled, deps.modulesPath, deps.modulesVersion, deps.modulesSource, scanned),
+    evaluatePackageRow(mcp, deps.mcpInstalled, deps.mcpPath, deps.mcpVersion, deps.mcpSource, scanned),
+    ...(scanned ? [evaluateMcpRuntimeRow(deps.mcpInstalled, deps.mcpPath)] : []),
     evaluateEditorBinaryRow(opts.unityEditorPath),
     ...(projectPath ? [secondMachineRow(projectPath)] : []),
   ];

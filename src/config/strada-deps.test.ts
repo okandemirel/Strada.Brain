@@ -487,7 +487,16 @@ describe("the matrix on an install with no project configured", () => {
     // Nothing about a project is claimed: no version, git, or second-machine row.
     expect(verdict.rows.map((row) => row.id)).not.toContain("project-unity-version");
     expect(verdict.rows.map((row) => row.id)).not.toContain("project-git");
-    // And no package is reported as measured-and-absent without a scan.
-    expect(verdict.summary).toContain("rows ok");
+    // NOT ONE PACKAGE IS REPORTED ABSENT (Codex round 12 #27): nothing was
+    // looked at, so "missing" would state the result of an inspection that
+    // never happened.
+    for (const id of ["strada-core", "strada-modules", "strada-mcp"]) {
+      const row = verdict.rows.find((r) => r.id === id);
+      expect(row?.status).toBe("not-measured");
+      expect(row?.detail).toContain("never looked for");
+    }
+    expect(verdict.missing).toEqual(["Unity project layout"]);
+    expect(verdict.notMeasured.length).toBeGreaterThanOrEqual(3);
+    expect(verdict.summary).toContain("not measured");
   });
 });
