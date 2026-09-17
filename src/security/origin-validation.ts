@@ -23,6 +23,15 @@
  *   - additional loopback ports named by `extraPorts`: the dashboard HTTP
  *     server has to trust the portal's port, because the portal proxies
  *     browser requests to it and forwards their Origin.
+ *   - operator-configured `trustedOrigins`: COMPLETE origins
+ *     (scheme + host + port), which is what round 10 #19 needed. Trusting only
+ *     the bound port refused the project's own supported topologies: the portal
+ *     served through its Vite dev proxy (`http://localhost:5173`, proxying to
+ *     the backend on 3000 — the browser keeps origin 5173 on the WebSocket
+ *     handshake and on every mutation) and an HTTPS reverse proxy in front of
+ *     the daemon (`https://portal.example` on 443). Neither is an inference the
+ *     code can make on its own, and neither may be guessed: an UNRELATED
+ *     loopback port stays refused, so the configured list is the only way in.
  */
 
 const LOCALHOST_HOSTNAMES = ["localhost", "127.0.0.1", "::1", "[::1]"];
@@ -54,11 +63,38 @@ export interface OriginCheckOptions {
    * `["myapp.local:3100"]` trusts exactly one — the operator's choice.
    */
   allowedHosts?: readonly string[];
+  /**
+   * Operator-configured COMPLETE origins: scheme, host and port must all match
+   * (round 10 #19). `http://localhost:5173` trusts exactly the Vite dev server's
+   * page — not `https://localhost:5173`, not `http://localhost:5174`, and not
+   * `http://localhost` on port 80. An entry that carries no explicit port means
+   * its scheme's default port (`https://portal.example` = port 443), which is
+   * what a browser sends. A malformed entry is ignored rather than widened.
+   */
+  trustedOrigins?: readonly string[];
 }
 
 /** The origin's effective port: explicit, else the scheme's default. */
 export function effectiveOriginPort(url: URL): string {
   return url.port || DEFAULT_SCHEME_PORTS[url.protocol] || "";
+}
+
+/**
+ * An origin in the one form both sides of a comparison can agree on:
+ * `scheme://host:port` with the scheme's default port made explicit, lowercased
+ * by `URL`. A value that is not a URL at all — or a Referer whose path is
+ * dropped here — yields undefined and can therefore never match.
+ */
+export function normalizeOrigin(value: string): string | undefined {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return undefined;
+  }
+  const port = effectiveOriginPort(parsed);
+  if (port === "") return undefined;
+  return `${parsed.protocol}//${parsed.hostname}:${port}`;
 }
 
 /**
@@ -84,6 +120,18 @@ export function isAllowedOrigin(
   }
 
   const { hostname, host } = parsed;
+
+  // Operator-configured COMPLETE origins first (round 10 #19): the deployment's
+  // own public or dev origin, matched on scheme + host + port together.
+  const trustedOrigins = options.trustedOrigins;
+  if (trustedOrigins && trustedOrigins.length > 0) {
+    const normalized = normalizeOrigin(origin);
+    if (normalized !== undefined) {
+      for (const trusted of trustedOrigins) {
+        if (normalizeOrigin(trusted) === normalized) return true;
+      }
+    }
+  }
 
   // Operator-configured hosts first: an explicit deployment decision may name a
   // non-loopback host, with or without a port.

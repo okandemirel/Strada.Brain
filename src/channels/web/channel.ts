@@ -18,7 +18,7 @@ import { join, extname, resolve, sep } from "node:path";
 import { randomBytes, timingSafeEqual, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
-import { isAllowedOrigin } from "../../security/origin-validation.js";
+import { isAllowedOrigin, normalizeOrigin } from "../../security/origin-validation.js";
 import { loadConfigSafe } from "../../config/config.js";
 import { validateMediaAttachment, validateMagicBytes, normalizeMimeType } from "../../utils/media-processor.js";
 import { SETUP_QUERY_PARAM, type PostSetupBootstrapContext } from "../../common/setup-contract.js";
@@ -111,6 +111,17 @@ interface WebChannelOptions {
    * (plan 2.8).
    */
   attachmentDbPath?: string;
+  /**
+   * Complete origins (scheme + host + port) the portal is legitimately reached
+   * through besides its own bound port — round 10 #19. The Vite dev proxy
+   * (`http://localhost:5173`, proxying to this backend) and an HTTPS reverse
+   * proxy in front of the daemon (`https://portal.example`) both keep their own
+   * origin on the browser's WebSocket handshake and mutations, and trusting only
+   * the bound port refused them. Defaults to the comma-separated
+   * `WEB_TRUSTED_ORIGINS` environment variable; unset means "bound port only",
+   * exactly as before.
+   */
+  trustedOrigins?: readonly string[];
 }
 
 const MIME_TYPES: Record<string, string> = {
@@ -2465,7 +2476,44 @@ export class WebChannel
     return typeof address === "object" && address !== null ? address.port : this.port;
   }
 
+  /**
+   * The origins this portal is legitimately served from besides its bound port
+   * (round 10 #19): the constructor option, else `WEB_TRUSTED_ORIGINS`. Parsed
+   * once — an operator does not change it while the process runs — and every
+   * entry must be a complete, parseable origin, so a typo ("localhost:5173"
+   * without a scheme) is DROPPED rather than widening the check to a hostname.
+   */
+  private get trustedOrigins(): readonly string[] {
+    if (this.trustedOriginsCache === undefined) {
+      const configured =
+        this.options.trustedOrigins ??
+        (process.env["WEB_TRUSTED_ORIGINS"] ?? "").split(",");
+      this.trustedOriginsCache = configured
+        .map((entry) => entry.trim())
+        .filter((entry) => entry.length > 0 && normalizeOrigin(entry) !== undefined);
+    }
+    return this.trustedOriginsCache;
+  }
+  private trustedOriginsCache: readonly string[] | undefined;
+
+  /**
+   * Whether an Origin/Referer may talk to this portal: its own bound origin, or
+   * one of the configured `trustedOrigins`. An unrelated loopback port is still
+   * another process and is still refused (13F6 / 4.8).
+   */
   private isSelfOrigin(value: string): boolean {
+    return isAllowedOrigin(value, { selfPort: this.boundPort, trustedOrigins: this.trustedOrigins });
+  }
+
+  /**
+   * Whether an Origin/Referer is this server's OWN bound origin — the only one
+   * that may be forwarded to the dashboard. A configured proxy origin is trusted
+   * to talk to the portal, but the dashboard's own gate knows nothing about it,
+   * so forwarding it would turn a legitimate proxy topology into a 403 one hop
+   * later. The header is dropped instead and the dashboard sees the portal's
+   * header-less server-to-server read.
+   */
+  private isOwnBoundOrigin(value: string): boolean {
     return isAllowedOrigin(value, { selfPort: this.boundPort });
   }
 
@@ -2626,10 +2674,10 @@ export class WebChannel
       // Only this portal's own origin is forwarded, so the dashboard's own
       // same-origin gate never sees a foreign loopback port laundered through
       // the proxy (13F6 / 4.8).
-      if (originHeader && this.isSelfOrigin(originHeader)) {
+      if (originHeader && this.isOwnBoundOrigin(originHeader)) {
         proxyHeaders["Origin"] = originHeader;
       }
-      if (refererHeader && this.isSelfOrigin(refererHeader)) {
+      if (refererHeader && this.isOwnBoundOrigin(refererHeader)) {
         proxyHeaders["Referer"] = refererHeader;
       }
 

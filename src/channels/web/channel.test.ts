@@ -629,6 +629,142 @@ describe("WebChannel origin boundary (13F6 / 4.8)", () => {
   });
 });
 
+// ── Round 10 #19: the port-aware rule refused the project's OWN topologies ──
+//
+// Trusting only the bound port meant the portal could not be served through
+// anything: run it behind its own Vite dev proxy (web-portal/vite.config.ts
+// proxies /ws, /api and /health from :5173 to the backend on :3000) and the
+// browser keeps origin http://localhost:5173 on the WebSocket handshake and on
+// every mutation, so the portal refused its own pages. An HTTPS reverse proxy in
+// front of the daemon had the same problem. Trusted origins are configured, as
+// COMPLETE origins; the bound port is always trusted and an unrelated loopback
+// port is still another process.
+describe("WebChannel trusted proxy origins (round 10 #19)", () => {
+  function proxy(channel: WebChannel, req: unknown, res: unknown, url: string): Promise<void> {
+    return (channel as unknown as {
+      proxyToDashboard: (req: unknown, res: unknown, url: string) => Promise<void>;
+    }).proxyToDashboard(req, res, url);
+  }
+
+  function acceptsWsOrigin(channel: WebChannel, headers: Record<string, string>): boolean {
+    return (channel as unknown as {
+      acceptsWsOrigin: (req: { headers: Record<string, string | string[] | undefined> }) => boolean;
+    }).acceptsWsOrigin({ headers });
+  }
+
+  async function mutate(channel: WebChannel, headers: Record<string, string>) {
+    const req = createMockRequest({
+      method: "POST",
+      url: "/api/user/autonomous",
+      headers,
+      body: JSON.stringify({ enabled: true }),
+    });
+    const res = createMockResponse();
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response("{}", { status: 200, headers: { "content-type": "application/json" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const pending = proxy(channel, req, res, "/api/user/autonomous");
+    req.emitBody();
+    await pending;
+    return { res, fetchMock };
+  }
+
+  async function read(channel: WebChannel, headers: Record<string, string>) {
+    const req = createMockRequest({ method: "GET", url: "/api/metrics", headers });
+    const res = createMockResponse();
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response("{}", { status: 200, headers: { "content-type": "application/json" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    await proxy(channel, req, res, "/api/metrics");
+    return { res, fetchMock };
+  }
+
+  const VITE = "http://localhost:5173";
+
+  it("serves the portal through its documented Vite dev proxy origin", async () => {
+    const channel = new WebChannel(3000, 3100, { trustedOrigins: [VITE] });
+
+    // The WebSocket handshake the portal opens from the dev server's page.
+    expect(acceptsWsOrigin(channel, { origin: VITE })).toBe(true);
+    // A mutation (personality switch, autonomous toggle) from that page.
+    const mutation = await mutate(channel, { origin: VITE });
+    expect(mutation.res.statusCode).toBe(200);
+    expect(mutation.fetchMock).toHaveBeenCalledTimes(1);
+    // A read whose only header is the dev server's Referer.
+    const readOnly = await read(channel, { referer: `${VITE}/monitor` });
+    expect(readOnly.res.statusCode).toBe(200);
+
+    await channel.disconnect();
+  });
+
+  it("serves an HTTPS reverse proxy origin on its own port", async () => {
+    const channel = new WebChannel(3000, 3100, { trustedOrigins: ["https://portal.example"] });
+    // 443 is implicit in the configured entry and absent from the browser's header.
+    expect(acceptsWsOrigin(channel, { origin: "https://portal.example" })).toBe(true);
+    expect((await mutate(channel, { origin: "https://portal.example" })).res.statusCode).toBe(200);
+    await channel.disconnect();
+  });
+
+  it("reads the configured origins from WEB_TRUSTED_ORIGINS when the option is absent", async () => {
+    const previous = process.env["WEB_TRUSTED_ORIGINS"];
+    process.env["WEB_TRUSTED_ORIGINS"] = ` ${VITE} , https://portal.example `;
+    try {
+      const channel = new WebChannel(3000, 3100);
+      expect(acceptsWsOrigin(channel, { origin: VITE })).toBe(true);
+      expect(acceptsWsOrigin(channel, { origin: "https://portal.example" })).toBe(true);
+      await channel.disconnect();
+    } finally {
+      if (previous === undefined) delete process.env["WEB_TRUSTED_ORIGINS"];
+      else process.env["WEB_TRUSTED_ORIGINS"] = previous;
+    }
+  });
+
+  // ── The other direction: what configuring a dev origin must NOT open up ──
+
+  it("still refuses an unrelated loopback port, and the neighbours of the configured one", async () => {
+    const channel = new WebChannel(3000, 3100, { trustedOrigins: [VITE] });
+    for (const origin of [
+      "http://localhost:9999",      // another process on the machine
+      "http://127.0.0.1:5174",      // the next Vite instance, not the configured one
+      "https://localhost:5173",     // same port, other scheme
+      "http://localhost",           // port 80
+      "http://evil.example:5173",   // same port, other host
+    ]) {
+      expect(acceptsWsOrigin(channel, { origin }), origin).toBe(false);
+      expect((await mutate(channel, { origin })).res.statusCode, origin).toBe(403);
+      expect((await read(channel, { origin })).res.statusCode, origin).toBe(403);
+    }
+    await channel.disconnect();
+  });
+
+  it("keeps the bound port trusted even with a configured list", async () => {
+    const channel = new WebChannel(3000, 3100, { trustedOrigins: [VITE] });
+    expect(acceptsWsOrigin(channel, { origin: "http://127.0.0.1:3000" })).toBe(true);
+    expect((await mutate(channel, { origin: "http://localhost:3000" })).res.statusCode).toBe(200);
+    await channel.disconnect();
+  });
+
+  it("drops a configured entry that is not a complete origin instead of widening the check", async () => {
+    const channel = new WebChannel(3000, 3100, { trustedOrigins: ["localhost:5173", "", "not a url"] });
+    expect(acceptsWsOrigin(channel, { origin: VITE })).toBe(false);
+    expect(acceptsWsOrigin(channel, { origin: "http://localhost:3000" })).toBe(true);
+    await channel.disconnect();
+  });
+
+  // The dashboard's own gate knows nothing about the portal's proxy origins, so
+  // forwarding one would trade a 403 at the portal for a 403 one hop later.
+  it("does not forward a trusted proxy origin to the dashboard", async () => {
+    const channel = new WebChannel(3000, 3100, { trustedOrigins: [VITE] });
+    const { fetchMock } = await mutate(channel, { origin: VITE, referer: `${VITE}/monitor` });
+    const headers = fetchMock.mock.calls[0]?.[1]?.headers as Record<string, string>;
+    expect(headers).not.toHaveProperty("Origin");
+    expect(headers).not.toHaveProperty("Referer");
+    await channel.disconnect();
+  });
+});
+
 describe("WebChannel dashboard proxy", () => {
   it("injects the configured dashboard bearer token for proxied requests", async () => {
     const channel = new WebChannel(3000, 3100, { dashboardAuthToken: "proxy-secret" });

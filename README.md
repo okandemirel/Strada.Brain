@@ -938,6 +938,7 @@ That same learning path now materializes runtime self-improvement artifacts. Rep
 | `MEMORY_ENABLED` | `true` | Enable persistent conversation memory |
 | `MEMORY_DB_PATH` | `.strada-memory` | Directory for memory database files |
 | `WEB_CHANNEL_PORT` | `3000` | Web channel UI port |
+| `WEB_TRUSTED_ORIGINS` | (unset) | Comma-separated COMPLETE origins (scheme + host + port) the portal may also be reached through — its Vite dev proxy (`http://localhost:5173`) or an HTTPS reverse proxy (`https://portal.example`). The bound port is always trusted; an unrelated loopback port is still refused |
 | `BIND_HOST` | `127.0.0.1` | Address every HTTP listener binds to (web channel, dashboard, WebSocket dashboard, Prometheus). Loopback keeps a local run private; set `0.0.0.0` in a container so a published port is reachable |
 | `DASHBOARD_ENABLED` | `false` | Enable HTTP monitoring dashboard |
 | `DASHBOARD_PORT` | `3100` | Dashboard server port |

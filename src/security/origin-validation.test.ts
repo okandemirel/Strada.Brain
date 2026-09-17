@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { isAllowedOrigin, effectiveOriginPort } from "./origin-validation.js";
+import { isAllowedOrigin, effectiveOriginPort, normalizeOrigin } from "./origin-validation.js";
 
 // The protected server in these tests listens on 3000.
 const SELF = { selfPort: 3000 } as const;
@@ -190,6 +190,50 @@ describe("isAllowedOrigin", () => {
       expect(isAllowedOrigin("http://localhost:3000", { selfPort: 3000, allowedHosts: [] })).toBe(true);
       expect(isAllowedOrigin("http://localhost:9999", { selfPort: 3000, allowedHosts: [] })).toBe(false);
       expect(isAllowedOrigin("https://example.com", { selfPort: 3000, allowedHosts: [] })).toBe(false);
+    });
+  });
+
+  // ── Round 10 #19: trustedOrigins — the deployment's own COMPLETE origins ──
+  describe("trustedOrigins (a proxy in front of the server)", () => {
+    const DEV = { selfPort: 3000, trustedOrigins: ["http://localhost:5173"] } as const;
+
+    it("accepts the configured dev-proxy origin and the bound port", () => {
+      expect(isAllowedOrigin("http://localhost:5173", DEV)).toBe(true);
+      expect(isAllowedOrigin("http://localhost:3000", DEV)).toBe(true);
+    });
+
+    it("treats an implicit default port as the port the browser sends", () => {
+      const options = { selfPort: 3000, trustedOrigins: ["https://portal.example"] } as const;
+      expect(isAllowedOrigin("https://portal.example", options)).toBe(true);
+      expect(isAllowedOrigin("https://portal.example:443", options)).toBe(true);
+      expect(isAllowedOrigin("https://portal.example:8443", options)).toBe(false);
+    });
+
+    it("matches the COMPLETE origin: scheme, host and port all count", () => {
+      expect(isAllowedOrigin("https://localhost:5173", DEV)).toBe(false);
+      expect(isAllowedOrigin("http://localhost:5174", DEV)).toBe(false);
+      expect(isAllowedOrigin("http://127.0.0.1:5173", DEV)).toBe(false);
+      expect(isAllowedOrigin("http://evil.example:5173", DEV)).toBe(false);
+    });
+
+    it("does not turn an unrelated loopback port into a trusted one", () => {
+      expect(isAllowedOrigin("http://localhost:9999", DEV)).toBe(false);
+      expect(isAllowedOrigin("http://localhost", DEV)).toBe(false);
+    });
+
+    it("ignores a malformed entry instead of widening the rule", () => {
+      const options = { selfPort: 3000, trustedOrigins: ["localhost:5173", "", "not a url"] } as const;
+      expect(isAllowedOrigin("http://localhost:5173", options)).toBe(false);
+      expect(isAllowedOrigin("http://localhost:3000", options)).toBe(true);
+    });
+
+    it("normalizeOrigin states the one comparable form, or nothing", () => {
+      expect(normalizeOrigin("http://LocalHost:5173")).toBe("http://localhost:5173");
+      expect(normalizeOrigin("https://portal.example/monitor?x=1")).toBe("https://portal.example:443");
+      expect(normalizeOrigin("ws://127.0.0.1")).toBe("ws://127.0.0.1:80");
+      expect(normalizeOrigin("localhost:5173")).toBeUndefined();
+      expect(normalizeOrigin("not a url")).toBeUndefined();
+      expect(normalizeOrigin("file:///etc/passwd")).toBeUndefined();
     });
   });
 });
