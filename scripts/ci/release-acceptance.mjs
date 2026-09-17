@@ -19,6 +19,7 @@
  *   node scripts/ci/release-acceptance.mjs [--only clean-install,restore]
  *                                          [--json <file>] [--keep]
  *                                          [--boot-timeout-s 180] [--port 3940]
+ *                                          [--previous-release <tarball|dir>]
  *
  * Exit codes:
  *   0  every scenario that is runnable here was PROVEN
@@ -38,6 +39,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -66,7 +68,7 @@ export const ACCEPTANCE_SCENARIOS = [
     title: "Upgrade from an older installed version",
     runnableHere: true,
     scope:
-      "an install stamped with an older version boots and writes state, the new file set is laid over it in place, and the upgraded install boots against the SAME home with its databases intact; the auto-updater's own download/restart path is NOT exercised",
+      "a REAL previous release (explicit --previous-release, a fixture tarball, or the npm registry/cache) is installed and booted, it writes state, this release's file set is laid over it in place, and the upgraded install boots against the SAME home with its databases intact; when no genuinely older release is reachable the scenario reports NOT RUN rather than stamping this release with an older version number; the auto-updater's own download/restart path is NOT exercised",
   },
   {
     id: "restore",
@@ -98,7 +100,7 @@ export const ACCEPTANCE_SCENARIOS = [
  * ------------------------------------------------------------------------- */
 
 export function parseAcceptanceArgs(argv) {
-  const flags = { only: null, json: null, keep: false, bootTimeoutS: 180, port: 3940 };
+  const flags = { only: null, json: null, keep: false, bootTimeoutS: 180, port: 3940, previousRelease: null };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === "--keep") { flags.keep = true; continue; }
@@ -121,6 +123,7 @@ export function parseAcceptanceArgs(argv) {
         break;
       }
       case "json": flags.json = path.resolve(String(value)); break;
+      case "previous-release": flags.previousRelease = path.resolve(String(value)); break;
       case "boot-timeout-s": flags.bootTimeoutS = Number(value); break;
       case "port": flags.port = Number(value); break;
       default: throw new Error(`Unknown flag --${name}`);
@@ -325,11 +328,162 @@ function installPackedFileSet(tarball, into) {
   return installRoot;
 }
 
-function writeVersion(installRoot, version) {
-  const file = path.join(installRoot, "package.json");
-  const pkg = readJson(file);
-  pkg.version = version;
-  writeFileSync(file, `${JSON.stringify(pkg, null, 2)}\n`);
+/**
+ * Read the version a release file set DECLARES — a directory (unpacked install)
+ * or an npm-shaped tarball. It is read out of the artifact, never assumed.
+ */
+function releaseFileSetVersion(source) {
+  if (statSync(source).isDirectory()) {
+    const pkg = path.join(source, "package.json");
+    assert(existsSync(pkg), `${source} contains no package.json`);
+    return readJson(pkg).version;
+  }
+  const printed = execFileSync("tar", ["-xzOf", source, "package/package.json"], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  return JSON.parse(printed).version;
+}
+
+/** `npm pack <spec>` into a directory; used to fetch a real previous release. */
+function npmPackSpec(spec, destDir) {
+  mkdirSync(destDir, { recursive: true });
+  const before = new Set(readdirSync(destDir));
+  const packed = run("npm", ["pack", spec, "--ignore-scripts", "--pack-destination", destDir], {
+    timeoutMs: 180_000,
+  });
+  if (packed.code !== 0) {
+    return { ok: false, detail: `npm pack ${spec} failed (exit ${packed.code}): ${packed.output.trim().slice(-240)}` };
+  }
+  const added = readdirSync(destDir).filter((name) => name.endsWith(".tgz") && !before.has(name));
+  if (added.length !== 1) {
+    return { ok: false, detail: `npm pack ${spec} produced ${added.length} tarball(s)` };
+  }
+  return { ok: true, tarball: path.join(destDir, added[0]), detail: `npm pack ${spec}` };
+}
+
+/**
+ * Find a release of this package that is GENUINELY OLDER than the one under
+ * test (Codex round 12 #24).
+ *
+ * The upgrade scenario used to manufacture its "older" half: it extracted the
+ * tarball under test, decremented the version string in package.json, booted
+ * that, and laid the same tarball back over it. Both halves of the "upgrade"
+ * were the code under test, so a broken real upgrade migration could not
+ * possibly be detected — and the scenario still printed PROVEN.
+ *
+ * Older code has to come from somewhere real. In order:
+ *   1. `--previous-release <path>` / `STRADA_PREVIOUS_RELEASE` — a tarball or an
+ *      unpacked install of a previous release;
+ *   2. a `*.tgz` in tests/fixtures/release-acceptance/ (a pinned historical
+ *      file set committed for exactly this purpose);
+ *   3. `npm pack strada-brain@<previous>` / `@latest` — the published release,
+ *      from the registry or the local npm cache.
+ *
+ * Every candidate's version is read out of the artifact and compared: a file set
+ * that is not older than the release under test is REFUSED, so a copy of the
+ * current release can never pose as the older half. When nothing older is
+ * reachable the caller is told, with every place that was looked at, and the
+ * scenario reports NOT RUN (exit 3) — never a pass.
+ */
+export function resolvePreviousRelease({
+  currentVersion,
+  explicitPath = null,
+  env = process.env,
+  fixtureDir = path.join(repoRoot, "tests", "fixtures", "release-acceptance"),
+  downloadDir = null,
+  packSpec = npmPackSpec,
+} = {}) {
+  const looked = [];
+  const candidates = [];
+
+  const explicit = explicitPath ?? env["STRADA_PREVIOUS_RELEASE"] ?? null;
+  if (explicit) {
+    candidates.push({ source: explicit, provenance: `explicit --previous-release/STRADA_PREVIOUS_RELEASE ${explicit}` });
+  } else {
+    looked.push("no --previous-release path and no STRADA_PREVIOUS_RELEASE in the environment");
+  }
+
+  if (existsSync(fixtureDir)) {
+    const tarballs = readdirSync(fixtureDir).filter((name) => name.endsWith(".tgz"));
+    if (tarballs.length === 0) looked.push(`no *.tgz previous-release fixture in ${fixtureDir}`);
+    for (const name of tarballs) {
+      candidates.push({ source: path.join(fixtureDir, name), provenance: `fixture tarball ${path.join(fixtureDir, name)}` });
+    }
+  } else {
+    looked.push(`the fixture directory ${fixtureDir} does not exist`);
+  }
+
+  const evaluate = (candidate) => {
+    let version;
+    try {
+      version = releaseFileSetVersion(candidate.source);
+    } catch (err) {
+      return { ok: false, detail: `${candidate.source}: could not read its package.json (${err.message})` };
+    }
+    if (!version) return { ok: false, detail: `${candidate.source}: its package.json declares no version` };
+    if (compareVersions(version, currentVersion) >= 0) {
+      return {
+        ok: false,
+        detail: `${candidate.source}: version ${version} is not older than the release under test (${currentVersion})`,
+      };
+    }
+    return { ok: true, candidate: { ...candidate, version } };
+  };
+
+  const usable = [];
+  for (const candidate of candidates) {
+    const verdict = evaluate(candidate);
+    if (verdict.ok) usable.push(verdict.candidate);
+    else looked.push(verdict.detail);
+  }
+  if (usable.length > 0) {
+    usable.sort((a, b) => compareVersions(b.version, a.version));
+    const pick = usable[0];
+    return { available: true, source: pick.source, version: pick.version, provenance: pick.provenance, looked };
+  }
+
+  if (env["STRADA_ACCEPTANCE_NO_REGISTRY"]) {
+    looked.push("STRADA_ACCEPTANCE_NO_REGISTRY is set, so the npm registry/cache was not consulted");
+  } else {
+    const dest = downloadDir ?? mkdtempSync(path.join(tmpdir(), "strada-previous-release-"));
+    const specs = [`strada-brain@${previousVersion(currentVersion)}`, "strada-brain@latest"];
+    for (const spec of specs) {
+      const fetched = packSpec(spec, dest);
+      if (!fetched.ok) {
+        looked.push(fetched.detail);
+        continue;
+      }
+      const verdict = evaluate({ source: fetched.tarball, provenance: fetched.detail });
+      if (verdict.ok) {
+        const pick = verdict.candidate;
+        return { available: true, source: pick.source, version: pick.version, provenance: pick.provenance, looked };
+      }
+      looked.push(verdict.detail);
+    }
+  }
+
+  return {
+    available: false,
+    reason:
+      `no previous release older than ${currentVersion} could be reached, so an upgrade from older code cannot be `
+      + `measured on this host (supply one with --previous-release <tarball|dir> or commit a fixture tarball): `
+      + looked.join("; "),
+    looked,
+  };
+}
+
+/** Extract/copy a release file set (tarball or unpacked dir) into `<into>/package`. */
+function installReleaseFileSet(source, into) {
+  if (statSync(source).isDirectory()) {
+    mkdirSync(into, { recursive: true });
+    const installRoot = path.join(into, "package");
+    cpSync(source, installRoot, { recursive: true });
+    const modules = path.join(installRoot, "node_modules");
+    if (!existsSync(modules)) symlinkSync(path.join(repoRoot, "node_modules"), modules, "dir");
+    return installRoot;
+  }
+  return installPackedFileSet(source, into);
 }
 
 /* --- scenario 1: clean install ------------------------------------------- */
@@ -397,7 +551,7 @@ function scenarioCleanInstall(ctx) {
 
 /* --- scenario 2: upgrade ------------------------------------------------- */
 
-function scenarioUpgrade(ctx) {
+export function scenarioUpgrade(ctx) {
   const scenario = ACCEPTANCE_SCENARIOS.find((s) => s.id === "upgrade");
   const runner = new ScenarioRun(scenario);
 
@@ -408,18 +562,38 @@ function scenarioUpgrade(ctx) {
   const installRoot = path.join(ctx.root, "upgrade", "package");
   const home = path.join(ctx.root, "upgrade-home");
   const memoryRoot = path.join(home, ".strada", "memory");
-  let older;
-  let newer;
+  const newer = readJson(path.join(repoRoot, "package.json")).version;
+
+  // The older half of an upgrade must be OLDER CODE. Resolve it BEFORE anything
+  // is installed or booted: if no real previous release is reachable, this host
+  // cannot measure an upgrade and the scenario says so (NOT RUN, exit 3) instead
+  // of manufacturing an "older" install out of the release under test.
+  const previous = resolvePreviousRelease({
+    currentVersion: newer,
+    downloadDir: path.join(ctx.root, "previous-release"),
+    ...(ctx.previousRelease ? { explicitPath: ctx.previousRelease } : {}),
+    ...(ctx.previousReleaseOptions ?? {}),
+  });
+  if (!previous.available) return runner.notRun(previous.reason);
+  const older = previous.version;
+
   let sentinelDb;
   let databasesBefore = [];
 
-  if (!runner.step("install an OLDER version into a root", () => {
+  if (!runner.step(`install the previous release ${older} (real older code)`, () => {
     mkdirSync(home, { recursive: true });
-    installPackedFileSet(ctx.tarball, path.join(ctx.root, "upgrade"));
-    newer = readJson(path.join(installRoot, "package.json")).version;
-    older = previousVersion(newer);
-    writeVersion(installRoot, older);
-    return `${older} installed (the release under test is ${newer})`;
+    const root = installReleaseFileSet(previous.source, path.join(ctx.root, "upgrade"));
+    assert(root === installRoot, `unexpected install root ${root}`);
+    const installed = readJson(path.join(installRoot, "package.json")).version;
+    assert(
+      installed === older,
+      `the installed file set reports ${installed}, but ${previous.source} declared ${older}`,
+    );
+    assert(
+      compareVersions(installed, newer) < 0,
+      `${installed} is not older than the release under test (${newer}) — the upgrade would prove nothing`,
+    );
+    return `${installed} from ${previous.provenance} (the release under test is ${newer})`;
   })) return runner.failed();
 
   if (!runner.step(`the older install (${older}) boots and writes its home`, () => {
@@ -510,6 +684,11 @@ function scenarioUpgrade(ctx) {
   runner.unmeasured(
     "the auto-updater's own download and restart",
     "the file set was laid over the install directly; `npm i -g strada-brain@latest` and the updater's restart path were not exercised",
+  );
+  runner.unmeasured(
+    "the previous release's own dependency tree",
+    `node_modules was symlinked from this checkout, so ${older} booted against THIS release's dependencies; a dependency `
+      + "upgrade that breaks the older code is not visible here",
   );
   return runner.proven();
 }
@@ -715,7 +894,12 @@ async function main(argv) {
   }
 
   const root = mkdtempSync(path.join(tmpdir(), "strada-acceptance-"));
-  const ctx = { root, port: flags.port, bootTimeoutS: flags.bootTimeoutS };
+  const ctx = {
+    root,
+    port: flags.port,
+    bootTimeoutS: flags.bootTimeoutS,
+    previousRelease: flags.previousRelease,
+  };
   const selected = (id) => !flags.only || flags.only.includes(id);
 
   if (selected("clean-install") || selected("upgrade")) {

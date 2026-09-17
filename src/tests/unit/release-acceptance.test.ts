@@ -1,7 +1,9 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 
 /**
  * Release acceptance matrix (plan 6.13).
@@ -54,6 +56,29 @@ interface AcceptanceModule {
   formatAcceptanceReport: (results: AcceptanceResult[]) => string;
   previousVersion: (version: string) => string;
   compareVersions: (a: string, b: string) => number;
+  resolvePreviousRelease: (options: {
+    currentVersion: string;
+    explicitPath?: string | null;
+    env?: Record<string, string | undefined>;
+    fixtureDir?: string;
+    downloadDir?: string | null;
+    packSpec?: (spec: string, destDir: string) => { ok: boolean; tarball?: string; detail: string };
+  }) => {
+    available: boolean;
+    source?: string;
+    version?: string;
+    provenance?: string;
+    reason?: string;
+  };
+  scenarioUpgrade: (ctx: {
+    root: string;
+    tarball: string | null;
+    port: number;
+    bootTimeoutS: number;
+    packFailure?: string;
+    previousRelease?: string | null;
+    previousReleaseOptions?: Record<string, unknown>;
+  }) => AcceptanceResult;
 }
 
 const modulePath = pathToFileURL(
@@ -241,5 +266,145 @@ describe("release acceptance wiring (asserted over text, not executed)", () => {
     }
     // An overridden home must survive the smoke: the upgrade scenario reads it.
     expect(smoke).toContain("An overridden home");
+  });
+});
+
+/**
+ * The upgrade scenario has to install CODE THAT IS OLDER (Codex round 12 #24).
+ *
+ * It used to pack the release under test, decrement the version string in the
+ * extracted package.json, boot THAT, and then lay the same tarball back over it.
+ * Every byte of code on both sides of the "upgrade" was the code under test, so
+ * the one thing the scenario exists to prove — that an older installation's
+ * state survives this release's migrations — was never exercised, and a broken
+ * real upgrade migration still reported PROVEN.
+ *
+ * These tests hold the line: a previous release comes from somewhere real, an
+ * impostor at the same version is refused, and when nothing older is reachable
+ * the scenario reports NOT RUN (exit 3) instead of a pass.
+ */
+describe("release acceptance: the upgrade scenario needs REAL older code", () => {
+  const scratch: string[] = [];
+
+  afterAll(() => {
+    for (const dir of scratch) fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  const tmpRoot = (name: string): string => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), `release-acceptance-${name}-`));
+    scratch.push(dir);
+    return dir;
+  };
+
+  /** An unpacked release file set: package.json plus a marker naming its code. */
+  const releaseDir = (root: string, version: string, marker: string): string => {
+    const dir = path.join(root, `release-${version}`, "package");
+    fs.mkdirSync(path.join(dir, "dist"), { recursive: true });
+    fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: "strada-brain", version }));
+    fs.writeFileSync(path.join(dir, "dist", "marker.txt"), marker);
+    return dir;
+  };
+
+  /** A real .tgz shaped like `npm pack` output (package/ at the top). */
+  const releaseTarball = (root: string, version: string, marker: string): string => {
+    const dir = releaseDir(root, version, marker);
+    const tgz = path.join(root, `strada-brain-${version}.tgz`);
+    execFileSync("tar", ["-czf", tgz, "-C", path.dirname(dir), "package"]);
+    return tgz;
+  };
+
+  it("reports NOT RUN when no genuinely older release is reachable — never a version-stamped copy of itself", () => {
+    const root = tmpRoot("no-previous");
+    const tarball = releaseTarball(root, "9.9.9", "NEW");
+    const work = path.join(root, "work");
+
+    const upgrade = acceptance.scenarioUpgrade({
+      root: work,
+      tarball,
+      port: 39_410,
+      bootTimeoutS: 5,
+      previousReleaseOptions: {
+        env: {},
+        fixtureDir: path.join(root, "absent-fixtures"),
+        packSpec: () => ({ ok: false, detail: "the registry is not reachable in this test" }),
+      },
+    });
+
+    expect(upgrade.state, `upgrade reported ${upgrade.state}: ${upgrade.reason ?? ""}`).toBe("not-run");
+    expect(upgrade.reason ?? "").toMatch(/previous release/iu);
+    expect(acceptance.exitCodeForAcceptance([upgrade])).toBe(3);
+
+    // The defect itself: an install root stamped with an older version while
+    // carrying the code under test must not exist.
+    const installed = path.join(work, "upgrade", "package");
+    if (fs.existsSync(installed)) {
+      const stamped = JSON.parse(fs.readFileSync(path.join(installed, "package.json"), "utf8")) as { version: string };
+      const code = fs.readFileSync(path.join(installed, "dist", "marker.txt"), "utf8");
+      throw new Error(
+        `the scenario fabricated an older install: package.json says ${stamped.version} while the code is "${code}"`,
+      );
+    }
+  }, 120_000);
+
+  it("refuses a previous release whose version is not older than the release under test", () => {
+    const root = tmpRoot("impostor");
+    const impostor = releaseDir(root, "4.2.923", "NEW");
+    const resolved = acceptance.resolvePreviousRelease({
+      currentVersion: "4.2.923",
+      explicitPath: impostor,
+      env: {},
+      fixtureDir: path.join(root, "absent-fixtures"),
+      packSpec: () => ({ ok: false, detail: "not attempted" }),
+    });
+    expect(resolved.available).toBe(false);
+    expect(resolved.reason ?? "").toMatch(/not older/iu);
+  });
+
+  it("accepts a genuinely older release supplied explicitly, and says where it came from", () => {
+    const root = tmpRoot("explicit");
+    const older = releaseDir(root, "4.2.900", "OLD");
+    const resolved = acceptance.resolvePreviousRelease({
+      currentVersion: "4.2.923",
+      explicitPath: older,
+      env: {},
+      fixtureDir: path.join(root, "absent-fixtures"),
+      packSpec: () => ({ ok: false, detail: "not attempted" }),
+    });
+    expect(resolved.available).toBe(true);
+    expect(resolved.version).toBe("4.2.900");
+    expect(resolved.source).toBe(older);
+    expect(resolved.provenance ?? "").toMatch(/explicit/iu);
+  });
+
+  it("finds a previous release tarball in the fixture directory", () => {
+    const root = tmpRoot("fixture");
+    const fixtureDir = path.join(root, "fixtures");
+    fs.mkdirSync(fixtureDir, { recursive: true });
+    const tgz = releaseTarball(root, "4.2.900", "OLD");
+    fs.renameSync(tgz, path.join(fixtureDir, path.basename(tgz)));
+
+    const resolved = acceptance.resolvePreviousRelease({
+      currentVersion: "4.2.923",
+      env: {},
+      fixtureDir,
+      packSpec: () => ({ ok: false, detail: "not attempted" }),
+    });
+    expect(resolved.available).toBe(true);
+    expect(resolved.version).toBe("4.2.900");
+    expect(resolved.provenance ?? "").toMatch(/fixture/iu);
+  });
+
+  it("names every place it looked when nothing older is reachable", () => {
+    const root = tmpRoot("reason");
+    const resolved = acceptance.resolvePreviousRelease({
+      currentVersion: "4.2.923",
+      env: {},
+      fixtureDir: path.join(root, "absent-fixtures"),
+      packSpec: () => ({ ok: false, detail: "npm pack strada-brain@4.2.922 failed: offline" }),
+    });
+    expect(resolved.available).toBe(false);
+    expect(resolved.reason ?? "").toContain("absent-fixtures");
+    expect(resolved.reason ?? "").toContain("offline");
+    expect(resolved.reason ?? "").toMatch(/STRADA_PREVIOUS_RELEASE|--previous-release/u);
   });
 });
