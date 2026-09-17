@@ -6,6 +6,7 @@ import { useAutonomousStatus, useBootReport } from '../../hooks/use-api'
 import { useWS } from '../../hooks/useWS'
 import { resolveSettingsIdentity } from '../settings-identity'
 import { PageError } from '../../components/ui/page-error'
+import { apiFetch } from '../../utils/api'
 
 const DURATION_OPTIONS = [
   { value: 1, label: '1h' },
@@ -56,7 +57,7 @@ export default function AdvancedSection() {
         ? { enabled: false }
         : { enabled: true, durationHours }
 
-      const res = await fetch(`/api/user/autonomous?${identity.query}`, {
+      const res = await apiFetch(`/api/user/autonomous?${identity.query}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),

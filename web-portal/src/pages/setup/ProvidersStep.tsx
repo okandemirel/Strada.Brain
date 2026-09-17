@@ -11,6 +11,7 @@ import {
 } from '../../types/setup-constants'
 import type { OpenAiSubscriptionState, ClaudeSubscriptionState } from '../../hooks/useSetupWizard'
 import OpencodePlatformToggle from './OpencodePlatformToggle'
+import { apiFetch } from '../../utils/api'
 
 interface ProvidersStepProps {
   selectedPreset: string | null
@@ -174,7 +175,7 @@ export default function ProvidersStep({
         const body: { provider: string; key: string; baseUrl?: string } = { provider: providerId, key }
         if (baseUrl) body.baseUrl = baseUrl
 
-        fetch('/api/providers/models', {
+        apiFetch('/api/providers/models', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
@@ -231,7 +232,7 @@ export default function ProvidersStep({
   // on failure the static fallback list simply remains.
   useEffect(() => {
     let cancelled = false
-    fetch('/api/providers/models', { method: 'GET' })
+    apiFetch('/api/providers/models', { method: 'GET' })
       .then((res) => (res.ok ? res.json() : { providers: [] }))
       .then((data: { providers?: Array<{ name: string; models: string[] }> }) => {
         if (cancelled) return

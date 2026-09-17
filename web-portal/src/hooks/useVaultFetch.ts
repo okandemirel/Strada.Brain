@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { apiFetch } from '../utils/api'
 
 export interface UseVaultFetchOptions {
   /**
@@ -59,7 +60,7 @@ export function useVaultFetch<T>(
     const ctrl = new AbortController();
     let cancelled = false;
 
-    fetch(path, { signal: ctrl.signal })
+    apiFetch(path, { signal: ctrl.signal })
       .then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json() as Promise<T>;

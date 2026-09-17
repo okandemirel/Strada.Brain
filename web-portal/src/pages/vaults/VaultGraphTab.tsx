@@ -6,6 +6,7 @@ import {
   type CanvasNode,
   type CanvasEdge,
 } from '../../stores/vault-store';
+import { apiFetch } from '../../utils/api'
 
 // GraphCanvas pulls in react-force-graph-2d; defer to keep initial bundle lean.
 const GraphCanvas = lazy(() => import('./graph/GraphCanvas'));
@@ -57,7 +58,7 @@ export default function VaultGraphTab() {
   useEffect(() => {
     if (!selected || graph !== undefined) return;
     setGraph(selected, null);
-    fetch(`/api/vaults/${encodeURIComponent(selected)}/canvas`)
+    apiFetch(`/api/vaults/${encodeURIComponent(selected)}/canvas`)
       .then((r) => r.json())
       .then((j) => setGraph(selected, sanitizeCanvas(j)))
       .catch(() => setGraph(selected, { nodes: [], edges: [] }));

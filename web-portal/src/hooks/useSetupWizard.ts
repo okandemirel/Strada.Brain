@@ -26,6 +26,7 @@ import {
 } from '../types/setup-constants'
 import { isSetupStatusResponse } from '../../../src/common/setup-contract.ts'
 import { deriveSetupBootstrapView, transitionSetupStatus } from '../../../src/common/setup-state.ts'
+import { apiFetch } from '../utils/api'
 
 const SETUP_AVAILABILITY_MAX_ATTEMPTS = 25
 const SETUP_AVAILABILITY_RETRY_MS = 1000
@@ -703,7 +704,7 @@ export function useSetupWizard() {
       return
     }
     try {
-      const res = await fetch(`/api/setup/validate-path?path=${encodeURIComponent(projectPath)}`, {
+      const res = await apiFetch(`/api/setup/validate-path?path=${encodeURIComponent(projectPath)}`, {
         headers: csrfTokenRef.current ? { 'X-CSRF-Token': csrfTokenRef.current } : {},
       })
       const data = await res.json() as PathValidationResult
@@ -732,7 +733,7 @@ export function useSetupWizard() {
     setMcpInstallPlan(null)
 
     try {
-      const res = await fetch('/api/setup/install-mcp', {
+      const res = await apiFetch('/api/setup/install-mcp', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -781,7 +782,7 @@ export function useSetupWizard() {
     setDepInstallError((prev) => ({ ...prev, [pkg]: null }))
 
     try {
-      const res = await fetch('/api/setup/install-dep', {
+      const res = await apiFetch('/api/setup/install-dep', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -809,7 +810,7 @@ export function useSetupWizard() {
 
   const refreshOpenAiSubscriptionStatus = useCallback(async (): Promise<boolean> => {
     try {
-      const res = await fetch('/api/setup/openai/status', {
+      const res = await apiFetch('/api/setup/openai/status', {
         headers: csrfTokenRef.current ? { 'X-CSRF-Token': csrfTokenRef.current } : {},
         cache: 'no-store',
       })
@@ -848,7 +849,7 @@ export function useSetupWizard() {
     }
     setOpenaiSubscription((prev) => ({ ...prev, status: 'signing-in', error: null, authUrl: null }))
     try {
-      const res = await fetch('/api/setup/openai/signin', {
+      const res = await apiFetch('/api/setup/openai/signin', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -922,7 +923,7 @@ export function useSetupWizard() {
 
   const refreshClaudeSubscriptionStatus = useCallback(async (): Promise<boolean> => {
     try {
-      const res = await fetch('/api/setup/claude/status', {
+      const res = await apiFetch('/api/setup/claude/status', {
         headers: csrfTokenRef.current ? { 'X-CSRF-Token': csrfTokenRef.current } : {},
         cache: 'no-store',
       })
@@ -961,7 +962,7 @@ export function useSetupWizard() {
     }
     setClaudeSubscription((prev) => ({ ...prev, status: 'signing-in', error: null, authUrl: null }))
     try {
-      const res = await fetch('/api/setup/claude/signin', {
+      const res = await apiFetch('/api/setup/claude/signin', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1250,7 +1251,7 @@ export function useSetupWizard() {
     }
 
     try {
-      const res = await fetch('/api/setup', {
+      const res = await apiFetch('/api/setup', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

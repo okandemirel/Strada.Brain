@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { PageError } from '../../components/ui/page-error'
+import { apiFetch } from '../../utils/api'
 
 interface RateLimitConfig {
   messagesPerMinute: number
@@ -52,7 +53,7 @@ export default function RateLimitsSection() {
   const [error, setError] = useState(false)
 
   useEffect(() => {
-    fetch('/api/settings/rate-limits')
+    apiFetch('/api/settings/rate-limits')
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error('request failed'))))
       .then((d) => {
         if (d) {
@@ -72,7 +73,7 @@ export default function RateLimitsSection() {
   const save = async () => {
     setSaving(true)
     try {
-      const res = await fetch('/api/settings/rate-limits', {
+      const res = await apiFetch('/api/settings/rate-limits', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(config),

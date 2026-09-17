@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import { usePersonality } from '../../hooks/use-api'
 import { useWS } from '../../hooks/useWS'
 import { PageError } from '../../components/ui/page-error'
+import { apiFetch } from '../../utils/api'
 
 export default function PersonaSection() {
   const { t } = useTranslation('settings')
@@ -16,7 +17,7 @@ export default function PersonaSection() {
   const switchProfile = async (profile: string) => {
     setSwitching(profile)
     try {
-      const res = await fetch('/api/personality/switch', {
+      const res = await apiFetch('/api/personality/switch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ profile, chatId: profileId }),

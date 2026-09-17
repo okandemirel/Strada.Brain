@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import type { TouchedStatus } from '../../stores/code-store'
 import { ChevronRight, ChevronDown, File, FileCode, FileJson, FileText, Folder, FolderOpen, Package, Settings } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { apiFetch } from '../../utils/api'
 
 export interface FileEntry {
   name: string
@@ -86,7 +87,7 @@ function TreeNode({
 
     setState((s) => ({ ...s, loading: true, error: undefined }))
     try {
-      const res = await fetch(`${baseUrl}/api/workspace/files?path=${encodeURIComponent(path)}`)
+      const res = await apiFetch(`${baseUrl}/api/workspace/files?path=${encodeURIComponent(path)}`)
       if (!res.ok) {
         const body = await res.json().catch(() => ({ error: undefined }))
         setState((s) => ({ ...s, loading: false, error: body.error ?? 'requestFailed' }))

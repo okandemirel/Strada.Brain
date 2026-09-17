@@ -5,6 +5,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useSkills, useSkillRegistry } from '../hooks/use-api'
 import type { SkillEntryResponse, RegistrySkillEntry } from '../hooks/use-api'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
+import { apiFetch } from '../utils/api'
 
 // ---------------------------------------------------------------------------
 // Status badge helpers
@@ -153,7 +154,7 @@ function InstalledTab() {
 
   const handleToggle = async (name: string, enable: boolean) => {
     const endpoint = `/api/skills/${encodeURIComponent(name)}/${enable ? 'enable' : 'disable'}`
-    const res = await fetch(endpoint, { method: 'POST' })
+    const res = await apiFetch(endpoint, { method: 'POST' })
     const body = await res.json().catch(() => ({})) as { error?: string; appliesOnRestart?: boolean }
     if (!res.ok) {
       throw new Error(body.error ?? `Request failed: ${res.status}`)
@@ -278,7 +279,7 @@ function MarketplaceTab() {
   const handleInstall = async (skill: RegistrySkillEntry) => {
     setInstalling(skill.name)
     try {
-      const res = await fetch('/api/skills/install', {
+      const res = await apiFetch('/api/skills/install', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: skill.name, repo: skill.repo }),

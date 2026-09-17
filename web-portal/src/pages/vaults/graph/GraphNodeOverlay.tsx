@@ -2,6 +2,7 @@ import { useEffect, useReducer, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { X, FileCode, ExternalLink, ArrowLeft, Link2 } from 'lucide-react';
 import { useVaultStore } from '../../../stores/vault-store';
+import { apiFetch } from '../../../utils/api'
 
 interface VaultEdgeResponseItem {
   fromSymbol: string;
@@ -87,7 +88,7 @@ export function GraphNodeOverlay({ nodeId, onClose }: Props) {
     setLoadingSummary(true);
     setSummaryError(false);
     try {
-      const res = await fetch(
+      const res = await apiFetch(
         `/api/vaults/${encodeURIComponent(vaultId)}/symbols/${encodeURIComponent(nodeId)}/summarize`,
         { method: 'POST' },
       );
@@ -108,7 +109,7 @@ export function GraphNodeOverlay({ nodeId, onClose }: Props) {
     const ctrl = new AbortController();
 
     // Fetch callers
-    fetch(
+    apiFetch(
       `/api/vaults/${encodeURIComponent(vaultId)}/symbols/${encodeURIComponent(nodeId)}/callers`,
       { signal: ctrl.signal },
     )
@@ -122,7 +123,7 @@ export function GraphNodeOverlay({ nodeId, onClose }: Props) {
       });
 
     // Fetch backlinks (wikilinks)
-    fetch(
+    apiFetch(
       `/api/vaults/${encodeURIComponent(vaultId)}/notes/${encodeURIComponent(nodeId)}/backlinks`,
       { signal: ctrl.signal },
     )

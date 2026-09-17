@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import { useBudget, useBudgetHistory } from '../../hooks/use-api'
 import { PageError } from '../../components/ui/page-error'
 import { Sparkline } from '../../components/ui/sparkline'
+import { apiFetch } from '../../utils/api'
 
 function ProgressBar({ pct, className = '' }: { pct: number; className?: string }) {
   const color = pct >= 1 ? 'bg-red-500' : pct >= 0.8 ? 'bg-yellow-500' : 'bg-[var(--color-accent)]'
@@ -76,7 +77,7 @@ export default function BudgetSection() {
 
   const updateConfig = useCallback(async (update: Record<string, unknown>) => {
     try {
-      const res = await fetch('/api/budget/config', {
+      const res = await apiFetch('/api/budget/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(update),

@@ -5,6 +5,7 @@ import { cn } from '@/lib/utils';
 import { Input } from '@/components/ui/input';
 import { useVaultStore } from '../../stores/vault-store';
 import { VaultEmptyState } from './VaultEmptyState';
+import { apiFetch } from '../../utils/api'
 
 /**
  * Semantic + keyword hybrid search, Obsidian-search-pane-style.
@@ -26,7 +27,7 @@ export default function VaultSearchTab() {
     setLoading(true);
     setSubmitted(true);
     try {
-      const res = await fetch(`/api/vaults/${encodeURIComponent(selected)}/search`, {
+      const res = await apiFetch(`/api/vaults/${encodeURIComponent(selected)}/search`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text, topK: 20 }),

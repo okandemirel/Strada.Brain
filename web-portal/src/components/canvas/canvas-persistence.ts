@@ -59,6 +59,7 @@
 import { isValidResolvedShape } from '../../stores/canvas-store'
 import { getDefaultDimensions } from './canvas-types'
 import type { CanvasConnection, ResolvedShape } from './canvas-types'
+import { apiFetch } from '../../utils/api'
 
 /** Exactly what a save sends: the serialized revision of the canvas. */
 export interface CanvasSavePayload {
@@ -197,7 +198,9 @@ export async function saveCanvasState(args: {
   version?: CanvasSavePrecondition
   fetchImpl?: typeof fetch
 }): Promise<CanvasSaveResult> {
-  const doFetch = args.fetchImpl ?? fetch
+  // apiFetch, not fetch: the save carries this browser's verified identity so the
+  // canvas it writes is attributed to it (round 13 #7).
+  const doFetch = args.fetchImpl ?? apiFetch
   const precondition = args.version === 'absent' ? CANVAS_VERSION_ABSENT : args.version
   let res: Response
   try {

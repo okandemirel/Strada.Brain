@@ -4,6 +4,7 @@ import { useCodeStore } from '../../stores/code-store'
 import CodeEditor from './CodeEditor'
 import Terminal from './Terminal'
 import FileTree from './FileTree'
+import { apiFetch } from '../../utils/api'
 
 export default function CodePanel() {
   const touchedFiles = useCodeStore((s) => s.touchedFiles)
@@ -12,7 +13,7 @@ export default function CodePanel() {
   const handleFileSelect = useCallback(
     async (path: string) => {
       try {
-        const res = await fetch(`/api/workspace/file?path=${encodeURIComponent(path)}`)
+        const res = await apiFetch(`/api/workspace/file?path=${encodeURIComponent(path)}`)
         if (!res.ok) return
         const data = await res.json()
         openFile({

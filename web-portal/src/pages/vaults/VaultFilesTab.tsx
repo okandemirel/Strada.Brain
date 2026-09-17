@@ -4,6 +4,7 @@ import { FileCode2 } from 'lucide-react';
 import { useVaultStore } from '../../stores/vault-store';
 import { useVaultFetch } from '../../hooks/useVaultFetch';
 import MarkdownPreview from './MarkdownPreview';
+import { apiFetch } from '../../utils/api'
 
 /**
  * Center reader for the Files tab. Reads `selected` + `activeFilePath` from
@@ -58,7 +59,7 @@ export default function VaultFilesTab() {
   useEffect(() => {
     if (!selected || !path) return;
     const ctrl = new AbortController();
-    fetch(`/api/vaults/${encodeURIComponent(selected)}/file?path=${encodeURIComponent(path)}`, { signal: ctrl.signal })
+    apiFetch(`/api/vaults/${encodeURIComponent(selected)}/file?path=${encodeURIComponent(path)}`, { signal: ctrl.signal })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((d: { body?: string }) => { setBody(d.body ?? ''); setError(false); })
       .catch((err) => {

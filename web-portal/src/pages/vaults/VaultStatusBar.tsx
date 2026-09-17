@@ -4,6 +4,7 @@ import { RefreshCw, Check, AlertCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useVaultStore } from '../../stores/vault-store';
 import { formatRelativeI18n } from '../../utils/format';
+import { apiFetch } from '../../utils/api'
 
 /**
  * Obsidian-style bottom status bar: symbol/file counts + last sync time +
@@ -30,7 +31,7 @@ export function VaultStatusBar() {
     let cancelled = false;
     void (async () => {
       try {
-        const res = await fetch(`/api/vaults/${encodeURIComponent(vaultId)}/stats`);
+        const res = await apiFetch(`/api/vaults/${encodeURIComponent(vaultId)}/stats`);
         if (!res.ok) return;
         const data = (await res.json()) as { symbolCount?: number; fileCount?: number; lastIndexedAt?: number | null };
         if (!cancelled) setStats(data);
@@ -85,7 +86,7 @@ export function VaultStatusBar() {
     // Surface HTTP failures AND network errors to the user via the status
     // indicator — silent failures previously hid 404/500 responses entirely.
     try {
-      const res = await fetch(
+      const res = await apiFetch(
         `/api/vaults/${encodeURIComponent(vaultId)}/sync`,
         { method: 'POST' },
       );

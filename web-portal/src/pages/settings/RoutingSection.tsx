@@ -6,6 +6,7 @@ import { useWS } from '../../hooks/useWS'
 import { resolveSettingsIdentity } from '../settings-identity'
 import { PageError } from '../../components/ui/page-error'
 import ModelScoresPanel from '../../components/ModelScoresPanel'
+import { apiFetch } from '../../utils/api'
 
 const PRESETS = [
   { id: 'budget', labelKey: 'routing.presetBudget', descKey: 'routing.presetBudgetDesc' },
@@ -34,7 +35,7 @@ export default function RoutingSection() {
   const applyPreset = useCallback(async (preset: PresetId) => {
     setApplyingPreset(preset)
     try {
-      const res = await fetch('/api/routing/preset', {
+      const res = await apiFetch('/api/routing/preset', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ preset }),

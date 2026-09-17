@@ -8,6 +8,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
+import { apiFetch } from '../../utils/api'
 
 /**
  * POST /api/vaults — register + index a new vault. On success the server
@@ -66,7 +67,7 @@ export function RegisterVaultDialog({
     setSubmitting(true);
     setError(null);
     try {
-      const resp = await fetch('/api/vaults', {
+      const resp = await apiFetch('/api/vaults', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: trimmedName, rootPath: trimmedPath, kind }),

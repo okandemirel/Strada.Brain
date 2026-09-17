@@ -4,6 +4,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { useDaemon } from '../../hooks/use-api'
 import { PageError } from '../../components/ui/page-error'
+import { apiFetch } from '../../utils/api'
 
 export default function DaemonSection() {
   const { t } = useTranslation('settings')
@@ -16,7 +17,7 @@ export default function DaemonSection() {
     const action = daemon.running ? 'stop' : 'start'
     setToggling(true)
     try {
-      const res = await fetch(`/api/daemon/${action}`, { method: 'POST' })
+      const res = await apiFetch(`/api/daemon/${action}`, { method: 'POST' })
       if (!res.ok) throw new Error('Failed')
       toast.success(action === 'stop' ? t('daemon.toastStopped') : t('daemon.toastStarted'))
       setTimeout(() => queryClient.invalidateQueries({ queryKey: ['daemon'] }), 600)

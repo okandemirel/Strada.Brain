@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useWS } from '../hooks/useWS'
 import { useProviderModels } from '../hooks/use-api'
+import { apiFetch } from '../utils/api'
 
 export interface ProviderInfo {
   name: string
@@ -214,9 +215,9 @@ export default function PrimaryWorkerSelector() {
 
   const fetchProviders = useCallback(async () => {
     try {
-      const requests: Array<Promise<Response>> = [fetch('/api/providers/available')]
+      const requests: Array<Promise<Response>> = [apiFetch('/api/providers/available')]
       if (identityQuery) {
-        requests.push(fetch(`/api/providers/active?${identityQuery}`))
+        requests.push(apiFetch(`/api/providers/active?${identityQuery}`))
       }
       const [availRes, activeRes] = await Promise.all(requests)
 

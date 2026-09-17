@@ -6,6 +6,7 @@ import { usePersonality } from '../hooks/use-api'
 import { useWS } from '../hooks/useWS'
 import { PageSkeleton } from '../components/ui/page-skeleton'
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from '../components/ui/dialog'
+import { apiFetch } from '../utils/api'
 
 const SYSTEM_PROFILES = new Set(['default', 'casual', 'formal', 'minimal'])
 const PROFILE_NAME_RE = /^[a-zA-Z0-9_-]+$/
@@ -37,7 +38,7 @@ export default function PersonalityPage() {
 
   const switchMutation = useMutation({
     mutationFn: async (profile: string) => {
-      const res = await fetch('/api/personality/switch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ profile, chatId: profileId }) })
+      const res = await apiFetch('/api/personality/switch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ profile, chatId: profileId }) })
       if (!res.ok) { const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` })); throw new Error((err as { error?: string }).error ?? `HTTP ${res.status}`) }
     },
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['personality'] }) },
@@ -46,7 +47,7 @@ export default function PersonalityPage() {
 
   const deleteMutation = useMutation({
     mutationFn: async (name: string) => {
-      const res = await fetch(`/api/personality/profiles/${encodeURIComponent(name)}`, { method: 'DELETE' })
+      const res = await apiFetch(`/api/personality/profiles/${encodeURIComponent(name)}`, { method: 'DELETE' })
       if (!res.ok) { const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` })); throw new Error((err as { error?: string }).error ?? `HTTP ${res.status}`) }
     },
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['personality'] }) },
@@ -55,7 +56,7 @@ export default function PersonalityPage() {
 
   const createMutation = useMutation({
     mutationFn: async ({ name, content }: { name: string; content: string }) => {
-      const res = await fetch('/api/personality/profiles', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, content }) })
+      const res = await apiFetch('/api/personality/profiles', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, content }) })
       if (!res.ok) { const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` })); throw new Error((err as { error?: string }).error ?? `HTTP ${res.status}`) }
     },
     onSuccess: () => { setNewName(''); setNewContent(PROFILE_TEMPLATE); queryClient.invalidateQueries({ queryKey: ['personality'] }) },

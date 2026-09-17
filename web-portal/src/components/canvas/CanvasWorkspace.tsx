@@ -40,6 +40,7 @@ import GradientBezierEdge from './GradientBezierEdge'
 import CanvasToolbar from './canvas-toolbar'
 import CanvasContextMenu from './canvas-context-menu'
 import CanvasEmptyState from './canvas-empty-state'
+import { apiFetch } from '../../utils/api'
 
 /* ── Constants ───────────────────────────────────────────────────── */
 
@@ -299,7 +300,7 @@ function CanvasWorkspaceInner() {
     }
 
     const attempt = (index: number): void => {
-      fetch(`/api/canvas/${encodeURIComponent(sessionId)}`)
+      apiFetch(`/api/canvas/${encodeURIComponent(sessionId)}`)
         .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`canvas GET ${r.status}`))))
         .then((data: unknown) => {
           if (cancelled) return

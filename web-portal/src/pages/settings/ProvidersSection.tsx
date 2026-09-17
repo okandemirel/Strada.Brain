@@ -8,6 +8,7 @@ import { resolveSettingsIdentity } from '../settings-identity'
 import { getProviderModelOptions } from '../../types/setup-constants'
 import PrimaryWorkerSelector from '../../components/PrimaryWorkerSelector'
 import { PageError } from '../../components/ui/page-error'
+import { apiFetch } from '../../utils/api'
 
 export default function ProvidersSection() {
   const { t } = useTranslation('settings')
@@ -22,7 +23,7 @@ export default function ProvidersSection() {
   const refreshModels = useCallback(async () => {
     setRefreshing(true)
     try {
-      const res = await fetch('/api/providers/models/refresh', { method: 'POST' })
+      const res = await apiFetch('/api/providers/models/refresh', { method: 'POST' })
       if (!res.ok) throw new Error('Failed')
       toast.success(t('providers.toastRefreshed'))
       // Pull the freshly-refreshed catalog, and let the active-provider panel

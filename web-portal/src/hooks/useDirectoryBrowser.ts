@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react'
 import type { BrowseEntry, McpRecommendation, StradaDepsStatus } from '../types/setup'
+import { apiFetch } from '../utils/api'
 
 export function useDirectoryBrowser(csrfToken = '') {
   const [isOpen, setIsOpen] = useState(false)
@@ -16,7 +17,7 @@ export function useDirectoryBrowser(csrfToken = '') {
     setLoading(true)
     setError(null)
     try {
-      const res = await fetch(`/api/setup/browse?path=${encodeURIComponent(path)}`, {
+      const res = await apiFetch(`/api/setup/browse?path=${encodeURIComponent(path)}`, {
         headers: csrfToken ? { 'X-CSRF-Token': csrfToken } : {},
       })
       const data = await res.json()
