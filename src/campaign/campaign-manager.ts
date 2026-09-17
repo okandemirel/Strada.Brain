@@ -5088,11 +5088,17 @@ export class CampaignManager {
 
   /**
    * Do the bytes of the verdict this run wrote still match the receipt the
-   * receiver admitted? Nothing when the producer stated no digest, or when
-   * there was no admitted receipt to check against.
+   * receiver admitted? Nothing when there was no admitted receipt to check
+   * against. An ADMITTED receipt that states no verdict digest binds nothing:
+   * it was read "exactly as before", so a receipt-emitting producer that
+   * omitted the two fields was admitted and the verdict was tied to the
+   * dispatch by nothing but a one-second mtime window (plan 1.3, audit C
+   * missed #1). Admission is binding, or it is not admission.
    */
   private verdictDisagreesWithReceipt(
     decision: EvidenceDecision | undefined,
+    /** The verdict as THIS delivery read it — the bytes it parsed are the bytes judged. */
+    verdict: PlaythroughEvidence | undefined,
     /** The file the DELIVERY reads — the only one whose bytes matter. */
     readsFrom: string = PLAYER_PLAYTHROUGH_VERDICT_REL,
   ): string | undefined {
@@ -5100,7 +5106,9 @@ export class CampaignManager {
     const payload = decision.record.payload;
     const rel = typeof payload?.["verdictPath"] === "string" ? String(payload["verdictPath"]) : undefined;
     const stated = typeof payload?.["verdictSha256"] === "string" ? String(payload["verdictSha256"]) : undefined;
-    if (rel === undefined || stated === undefined) return undefined;
+    if (rel === undefined || stated === undefined) {
+      return `the producer's receipt was admitted but names no verdict digest — nothing authenticates the bytes at ${readsFrom} as this run's`;
+    }
     // THE FILE THIS DELIVERY READS, not the one the producer chose to hash. A
     // receipt naming `Recordings/decoy.json` hashed that file honestly while
     // the gate read the canonical verdict beside it — the check authenticated
@@ -5108,14 +5116,11 @@ export class CampaignManager {
     if (normalizeRel(rel) !== normalizeRel(readsFrom)) {
       return `the producer's receipt measured ${rel}, and this delivery reads ${readsFrom} — the bytes it authenticated are not the bytes being judged`;
     }
-    const at = join(this.projectRoot, readsFrom);
-    let bytes: string;
-    try {
-      bytes = readFileSync(at, "utf8");
-    } catch (err) {
-      return `the play-through verdict the producer wrote is not at ${rel} (${err instanceof Error ? err.message : String(err)})`;
-    }
-    const now = createHash("sha256").update(bytes).digest("hex");
+    // THE BYTES THIS DELIVERY PARSED, not a second read of the path: between
+    // two reads the file can change hands. A verdict that could not be read
+    // is reported by the read itself.
+    const now = verdict?.bytesSha256;
+    if (now === undefined) return undefined;
     return now === stated
       ? undefined
       : `the play-through verdict at ${readsFrom} is not the file the producer wrote (its receipt names ${stated.slice(0, 12)}, the file reads ${now.slice(0, 12)})`;
@@ -5177,6 +5182,11 @@ export class CampaignManager {
       return { found: false, missingRunner: `the player was not run: ${stale}` };
     }
     let primaryDecision: EvidenceDecision | undefined;
+    // THE ID THE PRODUCER WAS GIVEN. The verdict's run id was compared with
+    // the milestone attempt id while the ticket handed the producer a run id
+    // of its own, so a producer that stamped the id it was given could never
+    // match (plan 1.3: one namespace).
+    let primaryRunId: string | undefined;
     try {
       // UNDER A TICKET, bound to the artifact this run is about (AC Job 2).
       await this.underTicket(
@@ -5190,6 +5200,7 @@ export class CampaignManager {
           requestedSessions: sessionsRequested(spec.sessions),
         },
         async (runId) => {
+          primaryRunId = runId;
           const played = await this.runPlayer!(this.projectRoot, build.artifactPath!, spec, {
             runId,
             ...(build.target === undefined ? {} : { target: build.target }),
@@ -5202,14 +5213,14 @@ export class CampaignManager {
       failure = err instanceof Error ? err.message : String(err);
       getLoggerSafe().warn("The built player could not be played", { milestone: milestone.id, error: failure });
     }
-    const verdict = readPlaythroughVerdict(this.projectRoot, since - 1000, PLAYER_PLAYTHROUGH_VERDICT_REL, attemptRunId(milestone));
+    const verdict = readPlaythroughVerdict(this.projectRoot, since - 1000, PLAYER_PLAYTHROUGH_VERDICT_REL, primaryRunId ?? attemptRunId(milestone));
     // THE FILE THE RECEIPT IS ABOUT. The delivery is judged from this
     // verdict — its frame rate, its frames, its errors — and an admitted
     // receipt said nothing about those bytes, so nothing connected the
     // evidence to the measurement being consumed (Codex 2026-09-13 AJ#12).
-    // A producer that states the digest is held to it; one that states none
-    // reads exactly as before.
-    const substituted = this.verdictDisagreesWithReceipt(primaryDecision);
+    // A producer whose receipt was admitted is held to the digest it states,
+    // and an admitted receipt that states none is a missing proof (plan 1.3).
+    const substituted = this.verdictDisagreesWithReceipt(primaryDecision, verdict);
     if (substituted !== undefined) {
       return { found: false, missingRunner: substituted };
     }
@@ -5243,6 +5254,7 @@ export class CampaignManager {
       const at = Date.now();
       let why: string | undefined;
       let theirDecision: EvidenceDecision | undefined;
+      let theirRunId: string | undefined;
       const staleHere = clearVerdict();
       if (staleHere !== undefined) {
         perTarget.push({ target: other.target, ok: false, detail: `not run: ${staleHere}` });
@@ -5260,6 +5272,7 @@ export class CampaignManager {
             requestedSessions: sessionsRequested(spec.sessions),
           },
           async (runId) => {
+            theirRunId = runId;
             const played = await this.runPlayer!(this.projectRoot, other.artifactPath, spec, {
               runId,
               ...(other.target === undefined ? {} : { target: other.target }),
@@ -5275,9 +5288,9 @@ export class CampaignManager {
       } catch (err) {
         why = err instanceof Error ? err.message : String(err);
       }
-      const theirs = readPlaythroughVerdict(this.projectRoot, at - 1000, PLAYER_PLAYTHROUGH_VERDICT_REL, attemptRunId(milestone));
+      const theirs = readPlaythroughVerdict(this.projectRoot, at - 1000, PLAYER_PLAYTHROUGH_VERDICT_REL, theirRunId ?? attemptRunId(milestone));
       // THIS TARGET'S RECEIPT AGAINST THIS TARGET'S VERDICT (AK#13).
-      const theirSubstitution = this.verdictDisagreesWithReceipt(theirDecision);
+      const theirSubstitution = this.verdictDisagreesWithReceipt(theirDecision, theirs);
       if (theirSubstitution !== undefined) {
         perTarget.push({ target: other.target, ok: false, detail: `not measured: ${theirSubstitution}` });
         continue;

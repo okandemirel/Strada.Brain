@@ -18,6 +18,7 @@
  * had. Nothing here knows a game's own names: the driver contract is the only
  * vocabulary.
  */
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { PlaythroughEvidence, PlaythroughPerf, RuntimeSceneDump } from "./types.js";
@@ -83,8 +84,14 @@ export function readPlaythroughVerdict(
   // B#25 — CI coverage job, ~2 of 5 runs).
   if (mtimeMs + 2 < sinceMs) return { found: false, stale: true };
   let parsed: VerdictFile;
+  // ONE READ. The bytes parsed here are the bytes the receipt is held
+  // against: hashing a second read left a window in which the file judged
+  // and the file authenticated were two different files (plan 1.3).
+  let bytesSha256: string;
   try {
-    const raw: unknown = JSON.parse(readFileSync(path, "utf8"));
+    const bytes = readFileSync(path, "utf8");
+    bytesSha256 = createHash("sha256").update(bytes).digest("hex");
+    const raw: unknown = JSON.parse(bytes);
     // `null`, a number, an array: JSON.parse accepts all of them, and the
     // first property read THREW out of this reader into the settlement chain,
     // which logged it after the milestone had already been persisted green —
@@ -152,6 +159,7 @@ export function readPlaythroughVerdict(
   }
   return {
     found: true,
+    bytesSha256,
     ok: parsed.ok === true && evidenced,
     reasons,
     ...(record

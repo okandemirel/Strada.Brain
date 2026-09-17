@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, utimesSync } from "node:fs";
 import { join } from "node:path";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { readPlaythroughVerdict, describePlaythrough, playthroughDirective, PLAYTHROUGH_VERDICT_REL, PLAYER_PLAYTHROUGH_VERDICT_REL } from "./playthrough-verdict.js";
 
@@ -24,6 +25,15 @@ function write(content: unknown, ageMs = 0): string {
 }
 
 describe("a verdict is evidence, not a claim (Codex 2026-09-11 B#3, B#25)", () => {
+  it("reports the sha256 of the very bytes it parsed, so a receipt is held against one read (plan 1.3)", () => {
+    mkdirSync(join(root, "Recordings", "playthrough"), { recursive: true });
+    const bytes = JSON.stringify({ ok: true, reasons: [], record: { actions: 3, outcome: "Won" }, frames: { count: 4 }, measuredAt: new Date().toISOString() });
+    writeFileSync(join(root, PLAYTHROUGH_VERDICT_REL), bytes);
+    const read = readPlaythroughVerdict(root, 0);
+    expect(read.found).toBe(true);
+    expect(read.bytesSha256).toBe(createHash("sha256").update(bytes).digest("hex"));
+  });
+
   it("ok WITHOUT play behind it is not ok, and says what is missing", () => {
     // No action taken: nothing was played, whatever the file claims.
     write({ ok: true, reasons: [], record: { scene: "Entry", session: 1, actions: 0, outcome: "None" }, frames: { count: 5 } });

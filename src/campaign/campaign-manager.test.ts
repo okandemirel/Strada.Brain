@@ -3264,7 +3264,11 @@ describe("CampaignManager", () => {
       runPlayer: async (root, artifactPlayed, spec, dispatch) => {
         playerRuns.push(artifactPlayed);
         sessionsAsked.push(spec?.sessions);
-        writePlayerVerdict(true, {}, root);
+        // What the real producer writes: the verdict stamped with the run id
+        // it was given, and a receipt naming that file's bytes (plan 1.3).
+        writePlayerVerdict(true, { runId: dispatch?.runId }, root);
+        const verdictRel = join("Recordings", "player-playthrough", "playthrough-verdict.json");
+        const verdictBytes = readFileSync(join(root, verdictRel), "utf8");
         return {
           receipt: JSON.stringify({
             schemaVersion: 1, runId: dispatch?.runId, kind: "playthrough", medium: "player", revision: head(),
@@ -3276,6 +3280,7 @@ describe("CampaignManager", () => {
               requestedIndex: 1, index: 1, observedIndex: 1, identityVerified: true,
               identitySource: "active-session", actions: 12, outcome: "Won", reachedOutcome: true, seconds: 9,
             }],
+            payload: { verdictPath: verdictRel, verdictSha256: createHash("sha256").update(verdictBytes).digest("hex") },
           }),
         };
       },
@@ -3676,6 +3681,84 @@ describe("CampaignManager", () => {
     expect(measured.found).toBe(false);
     expect(measured.missingRunner).toContain("are not the bytes being judged");
   }, 20_000);
+
+  /**
+   * Plan 1.3 (audit C missed #1, #2): an admitted receipt without a verdict
+   * digest bound nothing, and the verdict's run id was compared with the
+   * milestone attempt id while the producer had been handed a ticket id.
+   */
+  describe("admission is binding (plan 1.3)", () => {
+    const bindingFixture = (
+      produce: (root: string, dispatch: { runId?: string; target?: string }, artifactPlayed: string, revision: string) => { receipt?: string },
+    ): { measure: (id: string) => Promise<{ found: boolean; missingRunner?: string }> } => {
+      const git = (...args: string[]): string => execFileSync("git", ["-C", projectRoot, ...args], { encoding: "utf8" });
+      const artifact = join(projectRoot, "Builds", "StandaloneOSX", "Game.app");
+      mkdirSync(join(projectRoot, "Builds", "StandaloneOSX"), { recursive: true });
+      writeFileSync(artifact, "the bytes that were built");
+      git("init", "-q");
+      git("config", "user.email", "t@t");
+      git("config", "user.name", "t");
+      git("add", "-A");
+      git("commit", "-qm", "baseline");
+      const revision = git("rev-parse", "HEAD").trim();
+      const campaign = {
+        id: "c_binding", chatId: "chat", channelType: "cli", userId: "u", projectRoot,
+        state: "executing", draftAttempts: 0, milestones: [], currentMilestone: 0,
+        createdAt: Date.now(), updatedAt: Date.now(),
+      } as unknown as Campaign;
+      const player = new CampaignManager({
+        storage,
+        runPlayer: async (root, artifactPlayed, _spec, dispatch) => produce(root, dispatch ?? {}, artifactPlayed, revision),
+        planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
+        taskManager: tasks as unknown as TaskManager,
+        messenger: async () => {},
+        projectRoot,
+      });
+      const build = { ran: true, ok: true, target: "StandaloneOSX", artifactPath: artifact, sizeBytes: 25, durationMs: 1, scenes: 1 };
+      return {
+        measure: (id) =>
+          (player as unknown as { measurePlayerRun(m: unknown, b: unknown, c: unknown): Promise<{ found: boolean; missingRunner?: string }> })
+            .measurePlayerRun({ id, title: "Delivery", prompt: "p", status: "running", attempts: 1 }, build, campaign),
+      };
+    };
+    const verdictRel = join("Recordings", "player-playthrough", "playthrough-verdict.json");
+    const receiptFor = (dispatch: { runId?: string; target?: string }, artifactPlayed: string, revision: string, payload?: Record<string, unknown>): string =>
+      JSON.stringify({
+        schemaVersion: 1, runId: dispatch.runId, kind: "playthrough", medium: "player", revision,
+        ...(dispatch.target === undefined ? {} : { target: dispatch.target }),
+        artifactSha256: artifactDigest(artifactPlayed),
+        execution: { completed: true, exitCode: 0, timedOut: false },
+        sessionCount: 1,
+        sessions: [{ requestedIndex: 1, index: 1, identityVerified: true, identitySource: "start-acceptance", actions: 12, outcome: "Won", reachedOutcome: true, seconds: 9 }],
+        ...(payload === undefined ? {} : { payload }),
+      });
+
+    it("an ADMITTED receipt that names no verdict digest is a missing proof, not a pass", async () => {
+      const { measure } = bindingFixture((root, dispatch, artifactPlayed, revision) => {
+        writePlayerVerdict(true, {}, root);
+        return { receipt: receiptFor(dispatch, artifactPlayed, revision) }; // no payload at all
+      });
+      const unbound = await measure("m_unbound");
+      expect(unbound.found).toBe(false);
+      expect(unbound.missingRunner).toContain("names no verdict digest");
+    });
+
+    it("the run id the producer stamps is the id it was GIVEN — the ticket's, one namespace", async () => {
+      let stamp: (runId: string | undefined) => string | undefined = (runId) => runId;
+      const { measure } = bindingFixture((root, dispatch, artifactPlayed, revision) => {
+        writePlayerVerdict(true, { runId: stamp(dispatch.runId) }, root);
+        const bytes = readFileSync(join(root, verdictRel), "utf8");
+        return { receipt: receiptFor(dispatch, artifactPlayed, revision, { verdictPath: verdictRel, verdictSha256: createHash("sha256").update(bytes).digest("hex") }) };
+      });
+      // Guard: a producer that echoes the ticket's run id is this run's proof.
+      const honest = await measure("m_ticket_id");
+      expect(honest.found).toBe(true);
+      // A verdict stamped with another run's id is not this run's, whatever its clock says.
+      stamp = () => "another-run";
+      const foreign = await measure("m_other_id");
+      expect(foreign.found).toBe(false);
+    });
+  });
 
   it("the final sprint is asked for the batch the producer will accept (Codex 2026-09-13 AK#3)", async () => {
     // The contract demanded `sessions="all"`, and the producer refuses that

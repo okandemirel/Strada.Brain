@@ -495,6 +495,8 @@ export interface PlaythroughEvidence {
   /** The file exists but predates the sprint. */
   stale?: boolean;
   unreadable?: boolean;
+  /** sha256 of the exact bytes this reading parsed — what a receipt is held against. */
+  bytesSha256?: string;
   ok?: boolean;
   reasons?: string[];
   scene?: string;
