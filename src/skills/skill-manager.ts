@@ -250,6 +250,12 @@ export class SkillManager {
   /**
    * Hot-load a single skill from its directory path.
    * Used by create_skill to make newly created skills available in the current session.
+   *
+   * Same lifecycle contract as `loadAll` (plan 4.9 / 1.15): the skill's env
+   * overlay goes on BEFORE the gate, the trust check and the dynamic import —
+   * so its module body runs with the environment it declares — and comes off
+   * again on every outcome that is not "active", a throwing import and a
+   * throwing gate included.
    */
   async loadSingle(skillPath: string): Promise<SkillEntry | null> {
     const logger = getLoggerSafe();
@@ -299,83 +305,92 @@ export class SkillManager {
     const requires = data["requires"] && typeof data["requires"] === "object"
       ? data["requires"] as Parameters<typeof checkGates>[0]
       : undefined;
-    const gateResult = await checkGates(requires, this.appConfig);
-    if (!gateResult.passed) {
-      const entry: SkillEntry = {
-        manifest: manifest as SkillEntry["manifest"],
-        status: "gated",
-        tier: "workspace",
-        path: skillPath,
-        gateReason: gateResult.reasons.join("; "),
-      };
-      this.entries.set(name, entry);
-      return entry;
+
+    // 4.9 (audit R2 / D68): the overlay goes on HERE — before the gate, before
+    // the trust check and before loadSkillTools() imports the module — because
+    // the module body is exactly the code that needs the declared environment.
+    // It used to be applied nowhere on this path at all.
+    const envOverrides = (await readSkillConfig()).entries[name]?.env;
+    if (envOverrides && Object.keys(envOverrides).length > 0) {
+      this.envInjector.inject(name, envOverrides);
     }
 
-    // 1.15: the hot-load path imports workspace code exactly like loadAll
-    // does, so it needs the same approval. The project root is the parent of
-    // the skills directory (`<root>/skills/<name>`), which is the only layout
-    // this tier has.
-    const trust = await assessWorkspaceSkillTrust(dirname(dirname(skillPath)), skillPath, name);
-    if (!trust.trusted) {
-      const entry: SkillEntry = {
+    /** Record a non-active outcome. The overlay comes off with it. */
+    const park = (status: Exclude<SkillStatus, "active">, gateReason?: string): SkillEntry => {
+      this.envInjector.restore(name);
+      const parked: SkillEntry = {
         manifest: manifest as SkillEntry["manifest"],
-        status: "untrusted",
+        status,
         tier: "workspace",
         path: skillPath,
-        gateReason: trust.reason,
+        ...(gateReason ? { gateReason } : {}),
+      };
+      this.entries.set(name, parked);
+      this.entriesCache = null;
+      return parked;
+    };
+
+    try {
+      const gateResult = await checkGates(requires, this.appConfig);
+      if (!gateResult.passed) {
+        return park("gated", gateResult.reasons.join("; "));
+      }
+
+      // 1.15: the hot-load path imports workspace code exactly like loadAll
+      // does, so it needs the same approval. The project root is the parent of
+      // the skills directory (`<root>/skills/<name>`), which is the only layout
+      // this tier has.
+      const trust = await assessWorkspaceSkillTrust(dirname(dirname(skillPath)), skillPath, name);
+      if (!trust.trusted) {
+        logger.warn(`Skill "${name}" untrusted: ${trust.reason}`);
+        return park("untrusted", trust.reason);
+      }
+
+      let tools: ITool[];
+      try {
+        tools = await loadSkillTools({
+          manifest: manifest as SkillEntry["manifest"],
+          tier: "workspace",
+          path: skillPath,
+        });
+      } catch (err) {
+        return park("error", `Tool loading failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+
+      const trimmedBody = bodyContent?.trim();
+      if (tools.length === 0 && !trimmedBody) {
+        logger.warn(`Skill "${name}" loaded without tools — missing entry point`);
+        return park("incomplete", "No entry point (index.ts/index.js) — skill has no tools or knowledge");
+      }
+
+      // Register tools immediately
+      if (this.toolRegistrar && tools.length > 0) {
+        this.toolRegistrar(tools);
+      }
+
+      const unevaluatedGate = gateResult.unevaluated?.length ? gateResult.unevaluated.join("; ") : undefined;
+      const entry: SkillEntry = {
+        manifest: manifest as SkillEntry["manifest"],
+        status: "active",
+        tier: "workspace",
+        path: skillPath,
+        ...(unevaluatedGate ? { gateReason: unevaluatedGate } : {}),
+        ...(trimmedBody ? { body: trimmedBody } : {}),
       };
       this.entries.set(name, entry);
       this.entriesCache = null;
-      logger.warn(`Skill "${name}" untrusted: ${trust.reason}`);
+      if (tools.length > 0) {
+        logger.info(`Hot-loaded skill "${name}" with ${tools.length} tool(s)`);
+      } else {
+        logger.warn(`Skill "${name}" loaded without tools — missing entry point`);
+      }
       return entry;
-    }
-
-    let tools: ITool[];
-    try {
-      tools = await loadSkillTools({
-        manifest: manifest as SkillEntry["manifest"],
-        tier: "workspace",
-        path: skillPath,
-      });
     } catch (err) {
-      const entry: SkillEntry = {
-        manifest: manifest as SkillEntry["manifest"],
-        status: "error",
-        tier: "workspace",
-        path: skillPath,
-        gateReason: `Tool loading failed: ${err instanceof Error ? err.message : String(err)}`,
-      };
-      this.entries.set(name, entry);
-      return entry;
+      // Anything thrown out of this path (a gate, the trust read, a registrar)
+      // must not leave the skill's environment applied behind it.
+      this.envInjector.restore(name);
+      throw err;
     }
-
-    // Register tools immediately
-    if (this.toolRegistrar && tools.length > 0) {
-      this.toolRegistrar(tools);
-    }
-
-    const trimmedBody = bodyContent?.trim();
-    const status: SkillEntry["status"] = (tools.length > 0 || trimmedBody) ? "active" : "incomplete";
-    const unevaluatedGate = gateResult.unevaluated?.length ? gateResult.unevaluated.join("; ") : undefined;
-    const entry: SkillEntry = {
-      manifest: manifest as SkillEntry["manifest"],
-      status,
-      tier: "workspace",
-      path: skillPath,
-      ...(tools.length === 0 && !trimmedBody
-        ? { gateReason: "No entry point (index.ts/index.js) — skill has no tools or knowledge" }
-        : unevaluatedGate ? { gateReason: unevaluatedGate } : {}),
-      ...(trimmedBody ? { body: trimmedBody } : {}),
-    };
-    this.entries.set(name, entry);
-    this.entriesCache = null;
-    if (tools.length > 0) {
-      logger.info(`Hot-loaded skill "${name}" with ${tools.length} tool(s)`);
-    } else {
-      logger.warn(`Skill "${name}" loaded without tools — missing entry point`);
-    }
-    return entry;
   }
 
   /** Return all loaded skill entries (cached — invalidated on load/dispose). */

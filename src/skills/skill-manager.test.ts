@@ -450,6 +450,111 @@ describe("SkillManager", () => {
   });
 
   // -------------------------------------------------------------------------
+  // plan 4.9 (audit R2 / D68), hot-load half: loadSingle ran the gate, the
+  // trust check and the dynamic import with NO overlay applied, so a skill's
+  // declared env was absent exactly while its module body executed.
+  // -------------------------------------------------------------------------
+  describe("env injection order on hot-load (plan 4.9 / D68)", () => {
+    const KEY = "SKILL_HOTLOAD_TEST_VAR";
+    const OTHER = "SKILL_HOTLOAD_LEFTOVER";
+    afterEach(() => { delete process.env[KEY]; delete process.env[OTHER]; });
+
+    /** A hot-loadable skill directory. `indexJs` makes it executable workspace code. */
+    async function writeHotSkill(root: string, name: string, opts: { body?: string; indexJs?: string } = {}): Promise<string> {
+      const skillDir = join(root, "skills", name);
+      await mkdir(skillDir, { recursive: true });
+      await writeFile(
+        join(skillDir, "SKILL.md"),
+        ["---", `name: ${name}`, "version: 1.0.0", `description: ${name}`, "---", "", opts.body ?? "# body"].join("\n"),
+        "utf-8",
+      );
+      if (opts.indexJs !== undefined) await writeFile(join(skillDir, "index.js"), opts.indexJs, "utf-8");
+      return skillDir;
+    }
+
+    it("(d2) the declared env is in place for the gate AND for the import, and stays for the active skill", async () => {
+      await withTempDir(async (dir) => {
+        const skillDir = await writeHotSkill(dir, "hot");
+        mockReadSkillConfig.mockResolvedValue({ entries: { hot: { enabled: true, env: { [KEY]: "from-user-config" } } } });
+        const seen: Record<string, string | undefined> = {};
+        mockCheckGates.mockImplementation(async () => {
+          seen["gate"] = process.env[KEY];
+          return { passed: true, reasons: [] };
+        });
+        mockLoadSkillTools.mockImplementation(async () => {
+          // Stands in for the skill's module body, which runs inside this call.
+          seen["import"] = process.env[KEY];
+          return [makeTool("t")];
+        });
+
+        const entry = await new SkillManager().loadSingle(skillDir);
+        expect(entry!.status).toBe("active");
+        expect(seen["gate"]).toBe("from-user-config");
+        expect(seen["import"]).toBe("from-user-config");
+        expect(process.env[KEY]).toBe("from-user-config");
+      });
+    });
+
+    it("(d2) every hot-load that does not end active takes its env back off", async () => {
+      await withTempDir(async (dir) => {
+        mockReadSkillConfig.mockResolvedValue({
+          entries: {
+            "hot-gated": { enabled: true, env: { [OTHER]: "gated" } },
+            "hot-broken": { enabled: true, env: { [OTHER]: "broken" } },
+            "hot-empty": { enabled: true, env: { [OTHER]: "empty" } },
+            "hot-throws": { enabled: true, env: { [OTHER]: "throws" } },
+          },
+        });
+
+        // gated
+        const gated = await writeHotSkill(dir, "hot-gated");
+        mockCheckGates.mockResolvedValue({ passed: false, reasons: ["Required binary not found: nope"] });
+        expect((await new SkillManager().loadSingle(gated))!.status).toBe("gated");
+        expect(process.env[OTHER]).toBeUndefined();
+
+        // a throwing import (the skill's module body failing)
+        mockCheckGates.mockResolvedValue({ passed: true, reasons: [] });
+        const broken = await writeHotSkill(dir, "hot-broken");
+        mockLoadSkillTools.mockRejectedValue(new Error("Cannot find module './index.js'"));
+        expect((await new SkillManager().loadSingle(broken))!.status).toBe("error");
+        expect(process.env[OTHER]).toBeUndefined();
+
+        // no tools and no knowledge → nothing to be active with
+        const empty = await writeHotSkill(dir, "hot-empty", { body: "" });
+        mockLoadSkillTools.mockResolvedValue([]);
+        expect((await new SkillManager().loadSingle(empty))!.status).toBe("incomplete");
+        expect(process.env[OTHER]).toBeUndefined();
+
+        // a gate that throws must not leave the overlay behind either
+        const throws = await writeHotSkill(dir, "hot-throws");
+        mockCheckGates.mockRejectedValue(new Error("gate exploded"));
+        await expect(new SkillManager().loadSingle(throws)).rejects.toThrow(/gate exploded/);
+        expect(process.env[OTHER]).toBeUndefined();
+      });
+    });
+
+    it("(d2) an untrusted workspace skill's env is gone before its code was ever imported", async () => {
+      const home = await mkdtemp(join(tmpdir(), "strada-hot-home-"));
+      const savedHome = process.env["HOME"];
+      process.env["HOME"] = home;
+      try {
+        await withTempDir(async (dir) => {
+          const skillDir = await writeHotSkill(dir, "hot-untrusted", { indexJs: "export const tools = [];\n" });
+          mockReadSkillConfig.mockResolvedValue({ entries: { "hot-untrusted": { enabled: true, env: { [OTHER]: "untrusted" } } } });
+          mockCheckGates.mockResolvedValue({ passed: true, reasons: [] });
+          const entry = await new SkillManager().loadSingle(skillDir);
+          expect(entry!.status).toBe("untrusted");
+          expect(mockLoadSkillTools).not.toHaveBeenCalled();
+          expect(process.env[OTHER]).toBeUndefined();
+        });
+      } finally {
+        process.env["HOME"] = savedHome;
+        await rm(home, { recursive: true, force: true });
+      }
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // Codex round 6 #9 (2026-09-17): env rollback is owner-aware. Skill A and
   // skill B both configure X; A is parked by the preflight after B injected.
   // -------------------------------------------------------------------------
