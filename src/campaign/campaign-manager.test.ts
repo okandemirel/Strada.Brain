@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { SYSTEM_INTERRUPTION_MARKER } from "../tasks/interruption.js";
 import { extractLookDescription } from "./visual-conformance.js";
 import { EventEmitter } from "node:events";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, utimesSync, statSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, utimesSync, statSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { hostname } from "node:os";
@@ -4137,6 +4137,43 @@ describe("CampaignManager", () => {
     seen.length = 0;
     await openRequirements(campaign);
     expect(seen.flat().length).toBeGreaterThan(1);
+  });
+
+  it("the fingerprint sees a same-length rewrite, walks a symlink cycle once, and skips build folders only at the root (Codex round 3 #6-#9)", () => {
+    const noGit = mkdtempSync(join(tmpdir(), "no-git-fp2-"));
+    mkdirSync(join(noGit, "Assets", "Library"), { recursive: true });
+    mkdirSync(join(noGit, "Library"), { recursive: true });
+    writeFileSync(join(noGit, "Assets", "Game.cs"), "class Game { int x = 1; }");
+    writeFileSync(join(noGit, "Assets", "Library", "Util.cs"), "class Util {}");
+    writeFileSync(join(noGit, "Library", "cache.bin"), "cache");
+    const gitless = new CampaignManager({
+      storage,
+      planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async () => {},
+      projectRoot: noGit,
+    });
+    const fingerprint = (): string => (gitless as unknown as { projectFingerprint(): string }).projectFingerprint();
+    const first = fingerprint();
+    expect(first).toMatch(/^fp:[0-9a-f]{64}$/);
+    expect(fingerprint()).toBe(first);
+    // A build folder at the root is not content; a source folder of the same name is.
+    writeFileSync(join(noGit, "Library", "cache.bin"), "CACHE");
+    expect(fingerprint()).toBe(first);
+    writeFileSync(join(noGit, "Assets", "Library", "Util.cs"), "class Util { }");
+    const sourceChanged = fingerprint();
+    expect(sourceChanged).not.toBe(first);
+    // A same-length rewrite with its mtime restored still moves the fingerprint (ctime does not restore).
+    const before = statSync(join(noGit, "Assets", "Game.cs"));
+    writeFileSync(join(noGit, "Assets", "Game.cs"), "class Game { int x = 2; }");
+    utimesSync(join(noGit, "Assets", "Game.cs"), before.atime, before.mtime);
+    expect(fingerprint()).not.toBe(sourceChanged);
+    // Two symlinks back to the root are walked once each, and the walk terminates.
+    symlinkSync(noGit, join(noGit, "Assets", "a"));
+    symlinkSync(noGit, join(noGit, "Assets", "b"));
+    const looped = fingerprint();
+    expect(looped).toMatch(/^fp:/);
+    expect(fingerprint()).toBe(looped);
   });
 
   it("a requirement is not its diagnostics (Codex 2026-09-12 AD#15)", () => {

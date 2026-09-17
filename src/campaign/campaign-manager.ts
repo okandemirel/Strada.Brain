@@ -9,6 +9,7 @@
  */
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import type { BigIntStats } from "node:fs";
 import { systemInterrupted } from "../tasks/interruption.js";
 import { EvidenceLedger, artifactDigest, describeLedgerRow } from "./evidence-ledger.js";
 import { receiptOfFailure } from "./producer-failure.js";
@@ -641,9 +642,12 @@ export function unscheduledGaps(
  * looking (Codex 2026-09-12 V#4). An UNKNOWN revision binds nothing, so a
  * closure recorded without one is re-judged every round.
  */
-/** Folders a build, a run or this system writes: not the project's content. */
-const FINGERPRINT_SKIP = new Set([".git", "node_modules", "Library", "Temp", "Logs", "obj", "Builds", "Recordings", ".strada", "UserSettings", ".vs", ".idea"]);
+/** Folders a build, a run or this system writes at the project ROOT: not the project's content. */
+const FINGERPRINT_SKIP_AT_ROOT = new Set(["Library", "Temp", "Logs", "obj", "Builds", "Recordings", ".strada", "UserSettings", ".vs", ".idea"]);
+/** …and the two that are never content wherever they sit. */
+const FINGERPRINT_SKIP_ANYWHERE = new Set([".git", "node_modules"]);
 const FINGERPRINT_MAX_FILES = 200_000;
+const FINGERPRINT_MAX_DIRS = 50_000;
 
 export function closureHolds(
   milestone: { coverageClosed?: boolean; coverageClosedRevision?: string },
@@ -4613,41 +4617,71 @@ export class CampaignManager {
 
   /**
    * What the tree IS, for a project that has no repository to say so: every
-   * file's path, size and mtime under the project, less what a build or a
-   * run writes (Library, Temp, Logs, Builds, Recordings, .strada). Not a
+   * file's path, size, mtime and ctime under the project at nanosecond
+   * precision, less what a build or a run writes at the project root
+   * (Library, Temp, Logs, Builds, Recordings, .strada — at the ROOT only: an
+   * Assets/Library folder is source, Codex 2026-09-17 round 3 #7). Not a
    * git revision, and never mistaken for one: the "fp:" prefix keeps the two
-   * namespaces apart.
+   * namespaces apart. A touch that restores mtime cannot restore ctime, so a
+   * same-length rewrite is seen (round 3 #6); a walk that could not finish —
+   * an unreadable entry, the file budget, a symlink cycle — is no
+   * fingerprint at all, and binds nothing (round 3 #8, #9).
    */
   private projectFingerprint(): string {
     const hash = createHash("sha256");
-    let seen = 0;
+    let files = 0;
+    let dirs = 0;
+    let incomplete = false;
+    const visited = new Set<string>();
     const walk = (at: string, rel: string): void => {
+      let dir: BigIntStats;
+      try {
+        dir = statSync(at, { bigint: true });
+      } catch {
+        incomplete = true;
+        return;
+      }
+      // Each directory ONCE, by identity: two symlinks back to the root made
+      // the walk exponential (round 3 #9).
+      const identity = `${dir.dev}:${dir.ino}`;
+      if (visited.has(identity)) return;
+      visited.add(identity);
+      if (++dirs > FINGERPRINT_MAX_DIRS) {
+        incomplete = true;
+        return;
+      }
       let entries: string[];
       try {
         entries = readdirSync(at).sort();
       } catch {
+        incomplete = true;
         return;
       }
       for (const entry of entries) {
-        if (FINGERPRINT_SKIP.has(entry)) continue;
-        if (seen > FINGERPRINT_MAX_FILES) return;
+        if (FINGERPRINT_SKIP_ANYWHERE.has(entry)) continue;
+        if (rel === "" && FINGERPRINT_SKIP_AT_ROOT.has(entry)) continue;
         const child = join(at, entry);
-        let st: ReturnType<typeof statSync>;
+        let st: BigIntStats;
         try {
-          st = statSync(child);
+          st = statSync(child, { bigint: true });
         } catch {
-          continue;
+          incomplete = true;
+          return;
         }
         if (st.isDirectory()) {
           walk(child, `${rel}/${entry}`);
-        } else {
-          seen += 1;
-          hash.update(`${rel}/${entry}:${st.size}:${Math.floor(st.mtimeMs)}\n`);
+          if (incomplete) return;
+          continue;
         }
+        if (++files > FINGERPRINT_MAX_FILES) {
+          incomplete = true;
+          return;
+        }
+        hash.update(`${rel}/${entry}:${st.size}:${st.mtimeNs}:${st.ctimeNs}\n`);
       }
     };
     walk(this.projectRoot, "");
-    return `fp:${hash.digest("hex")}`;
+    return incomplete ? "" : `fp:${hash.digest("hex")}`;
   }
 
   private projectRevision(): string {
@@ -5825,7 +5859,7 @@ export class CampaignManager {
         ? false
         : treeBefore.tracked
         ? revisionForClosure !== "" && this.projectRevision() === revisionForClosure && !this.projectIsDirty()
-        : this.projectRepoState() === "none" && this.projectFingerprint() === revisionForClosure;
+        : revisionForClosure !== "" && this.projectRepoState() === "none" && this.projectFingerprint() === revisionForClosure;
       for (const [key, ms] of byRequirement) {
         if (!needsJudging.has(key)) continue;
         // Never a key the answer names on both sides.
