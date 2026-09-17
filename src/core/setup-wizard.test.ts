@@ -722,10 +722,17 @@ describe("SetupWizard path validation", () => {
     expect(envContent).toContain(`UNITY_PROJECT_PATH="${homedir()}"`);
     expect(envContent).not.toContain("UNITY_PROJECT_PATH=/tmp/old");
     expect(envContent).not.toContain("DEEPSEEK_API_KEY");
-    // And the response shows the effective file, not the request.
-    expect(body.effectiveConfig.MY_CUSTOM_WEBHOOK_URL).toBe("https://hooks.example/abc");
+    // And the response shows the effective file, not the request — but a key
+    // the wizard does not own is reported as PRESENT, never by value: the
+    // readback used to return a hand-added DATABASE_URL with its password
+    // (Codex round 8 #11).
+    expect(body.effectiveConfig.MY_CUSTOM_WEBHOOK_URL).toBe("<set>");
+    // LOG_LEVEL is a key the wizard writes itself, so its value is shown.
     expect(body.effectiveConfig.LOG_LEVEL).toBe("debug");
+    expect(JSON.stringify(body)).not.toContain("hooks.example");
     expect(body.preservedKeys).toEqual(expect.arrayContaining(["MY_CUSTOM_WEBHOOK_URL", "LOG_LEVEL"]));
+    // …and a wizard-owned, non-secret key is still shown as it stands.
+    expect(body.effectiveConfig.UNITY_PROJECT_PATH).toBe(homedir());
   });
 
   it("writes a submitted daemon budget and Obsidian fields and reads them back (2.1 / D24)", async () => {
