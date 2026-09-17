@@ -32,9 +32,19 @@ warn() { log "WARN" "${YELLOW}$1${NC}"; }
 error() { log "ERROR" "${RED}$1${NC}"; }
 success() { log "SUCCESS" "${GREEN}$1${NC}"; }
 
+# Where the runtime keeps its data. MEMORY_DB_PATH is what the application
+# reads (docker-compose sets it to /app/.strada-memory), so the backup must read
+# the same variable: hardcoding ".strada-memory" backed up an empty relative
+# directory whenever the deployment used a volume mounted anywhere else
+# (14F3/D72).
 get_memory_root() {
-    echo ".strada-memory"
+    echo "${MEMORY_DB_PATH:-.strada-memory}"
 }
+
+# Repository/install root — this script lives in <root>/scripts.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+INSTALL_ROOT="${STRADA_INSTALL_ROOT:-$(dirname "$SCRIPT_DIR")}"
+DB_BACKUP_CLI="${INSTALL_ROOT}/dist/core/database-backup.js"
 
 # Create backup directory
 setup() {
@@ -56,23 +66,57 @@ calculate_checksum() {
     fi
 }
 
-# Backup SQLite Learning DB
-backup_learning_db() {
-    info "Backing up SQLite Learning Database..."
-    
+# Backup every SQLite database
+#
+# Was: `cp` of learning.db alone. Two defects in one function (14F3/D72) — the
+# runtime keeps a dozen databases side by side (memory, campaigns, goals,
+# daemon, tasks, identities, …) and `cp` of a live WAL database copies the main
+# file without the -wal that holds the newest commits, so the copy opens and is
+# quietly missing data.
+#
+# Now: dist/core/database-backup.js builds the list from the runtime path table
+# plus whatever *.db the memory root holds, and copies each with SQLite's own
+# online backup API (better-sqlite3 `db.backup()`), verifying integrity_check on
+# every produced file. It prints one path per line; we checksum those.
+backup_databases() {
+    info "Backing up SQLite databases (online backup API)..."
+
     local memory_root
     memory_root="$(get_memory_root)"
-    local source="${memory_root}/learning.db"
-    local dest="${BACKUP_TEMP_DIR}/learning_${TIMESTAMP}.db"
-    
-    if [[ -f "$source" ]]; then
-        cp "$source" "$dest"
-        local checksum=$(calculate_checksum "$dest")
-        echo "$checksum  learning_${TIMESTAMP}.db" > "${BACKUP_TEMP_DIR}/learning_${TIMESTAMP}.db.sha256"
-        success "Learning DB backed up: $(du -h "$dest" | cut -f1)"
-    else
-        warn "Learning DB not found at $source"
+
+    if [[ ! -d "$memory_root" ]]; then
+        warn "Memory root not found at $memory_root — no databases to back up"
+        return 0
     fi
+
+    if [[ ! -f "$DB_BACKUP_CLI" ]]; then
+        error "Database backup helper missing at $DB_BACKUP_CLI (run 'npm run build')"
+        return 1
+    fi
+
+    local produced
+    # No `|| true` here on purpose: a database that cannot be copied consistently
+    # must fail the backup, not be skipped with a warning nobody reads.
+    produced="$(node "$DB_BACKUP_CLI" --source "$memory_root" --dest "$BACKUP_TEMP_DIR" --timestamp "$TIMESTAMP")"
+
+    if [[ -z "$produced" ]]; then
+        warn "No databases found under $memory_root"
+        return 0
+    fi
+
+    local count=0
+    while IFS= read -r produced_file; do
+        [[ -z "$produced_file" ]] && continue
+        local name
+        name="$(basename "$produced_file")"
+        local checksum
+        checksum="$(calculate_checksum "$produced_file")"
+        echo "$checksum  ${name}" > "${produced_file}.sha256"
+        success "Database backed up: ${name} ($(du -h "$produced_file" | cut -f1))"
+        count=$((count + 1))
+    done <<< "$produced"
+
+    info "Backed up ${count} database(s) from ${memory_root}"
 }
 
 # Backup RAG Vector Store
@@ -361,7 +405,7 @@ main() {
     info "================================"
     
     setup
-    backup_learning_db
+    backup_databases
     backup_vector_store
     backup_hnsw_index
     backup_config
