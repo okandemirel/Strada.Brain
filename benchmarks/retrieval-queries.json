@@ -1,0 +1,609 @@
+{
+  "_": "Pinned query set and the hash of the judgments the chunker derived for it. A moved hash means the chunker changed what counts as a right answer, so the metrics no longer answer the baseline's question. Re-record deliberately.",
+  "corpus": "unity-synth-v1-s",
+  "topK": 10,
+  "chunks": 811,
+  "queries": [
+    {
+      "family": "exact",
+      "query": "ApplyAudio",
+      "relevantChunks": 18
+    },
+    {
+      "family": "exact",
+      "query": "ApplyBuff",
+      "relevantChunks": 19
+    },
+    {
+      "family": "exact",
+      "query": "ApplyCamera",
+      "relevantChunks": 17
+    },
+    {
+      "family": "exact",
+      "query": "ApplyDamping",
+      "relevantChunks": 17
+    },
+    {
+      "family": "exact",
+      "query": "ApplyEnemy",
+      "relevantChunks": 20
+    },
+    {
+      "family": "exact",
+      "query": "ApplyGrid",
+      "relevantChunks": 19
+    },
+    {
+      "family": "exact",
+      "query": "ApplyInventory",
+      "relevantChunks": 20
+    },
+    {
+      "family": "exact",
+      "query": "ApplyNetwork",
+      "relevantChunks": 19
+    },
+    {
+      "family": "exact",
+      "query": "ApplyPath",
+      "relevantChunks": 10
+    },
+    {
+      "family": "exact",
+      "query": "ApplyPlayer",
+      "relevantChunks": 16
+    },
+    {
+      "family": "exact",
+      "query": "ApplyPool",
+      "relevantChunks": 21
+    },
+    {
+      "family": "exact",
+      "query": "ApplyQuest",
+      "relevantChunks": 18
+    },
+    {
+      "family": "exact",
+      "query": "ApplySave",
+      "relevantChunks": 24
+    },
+    {
+      "family": "exact",
+      "query": "ApplySpawner",
+      "relevantChunks": 21
+    },
+    {
+      "family": "exact",
+      "query": "ApplyWeapon",
+      "relevantChunks": 16
+    },
+    {
+      "family": "exact",
+      "query": "ComputeAudio",
+      "relevantChunks": 20
+    },
+    {
+      "family": "exact",
+      "query": "ComputeBuff",
+      "relevantChunks": 20
+    },
+    {
+      "family": "exact",
+      "query": "ComputeCamera",
+      "relevantChunks": 15
+    },
+    {
+      "family": "exact",
+      "query": "ComputeDamping",
+      "relevantChunks": 24
+    },
+    {
+      "family": "exact",
+      "query": "ComputeEnemy",
+      "relevantChunks": 29
+    },
+    {
+      "family": "exact",
+      "query": "ComputeGrid",
+      "relevantChunks": 17
+    },
+    {
+      "family": "exact",
+      "query": "ComputeInventory",
+      "relevantChunks": 19
+    },
+    {
+      "family": "exact",
+      "query": "ComputeNetwork",
+      "relevantChunks": 24
+    },
+    {
+      "family": "exact",
+      "query": "ComputePath",
+      "relevantChunks": 26
+    },
+    {
+      "family": "exact",
+      "query": "ComputePlayer",
+      "relevantChunks": 23
+    },
+    {
+      "family": "exact",
+      "query": "ComputePool",
+      "relevantChunks": 18
+    },
+    {
+      "family": "exact",
+      "query": "ComputeQuest",
+      "relevantChunks": 16
+    },
+    {
+      "family": "exact",
+      "query": "ComputeSave",
+      "relevantChunks": 23
+    },
+    {
+      "family": "exact",
+      "query": "ComputeSpawner",
+      "relevantChunks": 22
+    },
+    {
+      "family": "exact",
+      "query": "ComputeWeapon",
+      "relevantChunks": 16
+    },
+    {
+      "family": "exact",
+      "query": "DespawnAudio",
+      "relevantChunks": 20
+    },
+    {
+      "family": "exact",
+      "query": "DespawnBuff",
+      "relevantChunks": 15
+    },
+    {
+      "family": "exact",
+      "query": "DespawnCamera",
+      "relevantChunks": 26
+    },
+    {
+      "family": "exact",
+      "query": "DespawnDamping",
+      "relevantChunks": 15
+    },
+    {
+      "family": "exact",
+      "query": "DespawnEnemy",
+      "relevantChunks": 17
+    },
+    {
+      "family": "exact",
+      "query": "DespawnGrid",
+      "relevantChunks": 21
+    },
+    {
+      "family": "exact",
+      "query": "DespawnInventory",
+      "relevantChunks": 22
+    },
+    {
+      "family": "exact",
+      "query": "DespawnNetwork",
+      "relevantChunks": 15
+    },
+    {
+      "family": "exact",
+      "query": "DespawnPath",
+      "relevantChunks": 19
+    },
+    {
+      "family": "exact",
+      "query": "DespawnPlayer",
+      "relevantChunks": 23
+    },
+    {
+      "family": "exact",
+      "query": "DespawnPool",
+      "relevantChunks": 15
+    },
+    {
+      "family": "exact",
+      "query": "DespawnQuest",
+      "relevantChunks": 15
+    },
+    {
+      "family": "exact",
+      "query": "DespawnSave",
+      "relevantChunks": 20
+    },
+    {
+      "family": "exact",
+      "query": "DespawnSpawner",
+      "relevantChunks": 25
+    },
+    {
+      "family": "exact",
+      "query": "DespawnWeapon",
+      "relevantChunks": 17
+    },
+    {
+      "family": "exact",
+      "query": "ResetAudio",
+      "relevantChunks": 22
+    },
+    {
+      "family": "exact",
+      "query": "ResetBuff",
+      "relevantChunks": 16
+    },
+    {
+      "family": "exact",
+      "query": "ResetCamera",
+      "relevantChunks": 9
+    },
+    {
+      "family": "exact",
+      "query": "ResetDamping",
+      "relevantChunks": 25
+    },
+    {
+      "family": "exact",
+      "query": "ResetEnemy",
+      "relevantChunks": 23
+    },
+    {
+      "family": "exact",
+      "query": "ResetGrid",
+      "relevantChunks": 17
+    },
+    {
+      "family": "exact",
+      "query": "ResetInventory",
+      "relevantChunks": 23
+    },
+    {
+      "family": "exact",
+      "query": "ResetNetwork",
+      "relevantChunks": 19
+    },
+    {
+      "family": "exact",
+      "query": "ResetPath",
+      "relevantChunks": 19
+    },
+    {
+      "family": "exact",
+      "query": "ResetPlayer",
+      "relevantChunks": 19
+    },
+    {
+      "family": "exact",
+      "query": "ResetPool",
+      "relevantChunks": 20
+    },
+    {
+      "family": "exact",
+      "query": "ResetQuest",
+      "relevantChunks": 17
+    },
+    {
+      "family": "exact",
+      "query": "ResetSave",
+      "relevantChunks": 27
+    },
+    {
+      "family": "exact",
+      "query": "ResetSpawner",
+      "relevantChunks": 22
+    },
+    {
+      "family": "exact",
+      "query": "ResetWeapon",
+      "relevantChunks": 21
+    },
+    {
+      "family": "split",
+      "query": "Apply Audio",
+      "relevantChunks": 18
+    },
+    {
+      "family": "split",
+      "query": "Apply Buff",
+      "relevantChunks": 19
+    },
+    {
+      "family": "split",
+      "query": "Apply Camera",
+      "relevantChunks": 17
+    },
+    {
+      "family": "split",
+      "query": "Apply Damping",
+      "relevantChunks": 17
+    },
+    {
+      "family": "split",
+      "query": "Apply Enemy",
+      "relevantChunks": 20
+    },
+    {
+      "family": "split",
+      "query": "Apply Grid",
+      "relevantChunks": 19
+    },
+    {
+      "family": "split",
+      "query": "Apply Inventory",
+      "relevantChunks": 20
+    },
+    {
+      "family": "split",
+      "query": "Apply Network",
+      "relevantChunks": 19
+    },
+    {
+      "family": "split",
+      "query": "Apply Path",
+      "relevantChunks": 10
+    },
+    {
+      "family": "split",
+      "query": "Apply Player",
+      "relevantChunks": 16
+    },
+    {
+      "family": "split",
+      "query": "Apply Pool",
+      "relevantChunks": 21
+    },
+    {
+      "family": "split",
+      "query": "Apply Quest",
+      "relevantChunks": 18
+    },
+    {
+      "family": "split",
+      "query": "Apply Save",
+      "relevantChunks": 24
+    },
+    {
+      "family": "split",
+      "query": "Apply Spawner",
+      "relevantChunks": 21
+    },
+    {
+      "family": "split",
+      "query": "Apply Weapon",
+      "relevantChunks": 16
+    },
+    {
+      "family": "split",
+      "query": "Compute Audio",
+      "relevantChunks": 20
+    },
+    {
+      "family": "split",
+      "query": "Compute Buff",
+      "relevantChunks": 20
+    },
+    {
+      "family": "split",
+      "query": "Compute Camera",
+      "relevantChunks": 15
+    },
+    {
+      "family": "split",
+      "query": "Compute Damping",
+      "relevantChunks": 24
+    },
+    {
+      "family": "split",
+      "query": "Compute Enemy",
+      "relevantChunks": 29
+    },
+    {
+      "family": "split",
+      "query": "Compute Grid",
+      "relevantChunks": 17
+    },
+    {
+      "family": "split",
+      "query": "Compute Inventory",
+      "relevantChunks": 19
+    },
+    {
+      "family": "split",
+      "query": "Compute Network",
+      "relevantChunks": 24
+    },
+    {
+      "family": "split",
+      "query": "Compute Path",
+      "relevantChunks": 26
+    },
+    {
+      "family": "split",
+      "query": "Compute Player",
+      "relevantChunks": 23
+    },
+    {
+      "family": "split",
+      "query": "Compute Pool",
+      "relevantChunks": 18
+    },
+    {
+      "family": "split",
+      "query": "Compute Quest",
+      "relevantChunks": 16
+    },
+    {
+      "family": "split",
+      "query": "Compute Save",
+      "relevantChunks": 23
+    },
+    {
+      "family": "split",
+      "query": "Compute Spawner",
+      "relevantChunks": 22
+    },
+    {
+      "family": "split",
+      "query": "Compute Weapon",
+      "relevantChunks": 16
+    },
+    {
+      "family": "split",
+      "query": "Despawn Audio",
+      "relevantChunks": 20
+    },
+    {
+      "family": "split",
+      "query": "Despawn Buff",
+      "relevantChunks": 15
+    },
+    {
+      "family": "split",
+      "query": "Despawn Camera",
+      "relevantChunks": 26
+    },
+    {
+      "family": "split",
+      "query": "Despawn Damping",
+      "relevantChunks": 15
+    },
+    {
+      "family": "split",
+      "query": "Despawn Enemy",
+      "relevantChunks": 17
+    },
+    {
+      "family": "split",
+      "query": "Despawn Grid",
+      "relevantChunks": 21
+    },
+    {
+      "family": "split",
+      "query": "Despawn Inventory",
+      "relevantChunks": 22
+    },
+    {
+      "family": "split",
+      "query": "Despawn Network",
+      "relevantChunks": 15
+    },
+    {
+      "family": "split",
+      "query": "Despawn Path",
+      "relevantChunks": 19
+    },
+    {
+      "family": "split",
+      "query": "Despawn Player",
+      "relevantChunks": 23
+    },
+    {
+      "family": "split",
+      "query": "Despawn Pool",
+      "relevantChunks": 15
+    },
+    {
+      "family": "split",
+      "query": "Despawn Quest",
+      "relevantChunks": 15
+    },
+    {
+      "family": "split",
+      "query": "Despawn Save",
+      "relevantChunks": 20
+    },
+    {
+      "family": "split",
+      "query": "Despawn Spawner",
+      "relevantChunks": 25
+    },
+    {
+      "family": "split",
+      "query": "Despawn Weapon",
+      "relevantChunks": 17
+    },
+    {
+      "family": "split",
+      "query": "Reset Audio",
+      "relevantChunks": 22
+    },
+    {
+      "family": "split",
+      "query": "Reset Buff",
+      "relevantChunks": 16
+    },
+    {
+      "family": "split",
+      "query": "Reset Camera",
+      "relevantChunks": 9
+    },
+    {
+      "family": "split",
+      "query": "Reset Damping",
+      "relevantChunks": 25
+    },
+    {
+      "family": "split",
+      "query": "Reset Enemy",
+      "relevantChunks": 23
+    },
+    {
+      "family": "split",
+      "query": "Reset Grid",
+      "relevantChunks": 17
+    },
+    {
+      "family": "split",
+      "query": "Reset Inventory",
+      "relevantChunks": 23
+    },
+    {
+      "family": "split",
+      "query": "Reset Network",
+      "relevantChunks": 19
+    },
+    {
+      "family": "split",
+      "query": "Reset Path",
+      "relevantChunks": 19
+    },
+    {
+      "family": "split",
+      "query": "Reset Player",
+      "relevantChunks": 19
+    },
+    {
+      "family": "split",
+      "query": "Reset Pool",
+      "relevantChunks": 20
+    },
+    {
+      "family": "split",
+      "query": "Reset Quest",
+      "relevantChunks": 17
+    },
+    {
+      "family": "split",
+      "query": "Reset Save",
+      "relevantChunks": 27
+    },
+    {
+      "family": "split",
+      "query": "Reset Spawner",
+      "relevantChunks": 22
+    },
+    {
+      "family": "split",
+      "query": "Reset Weapon",
+      "relevantChunks": 21
+    }
+  ],
+  "judgmentsHash": "eac28a1416e5925bd346b165c2f1f857"
+}

@@ -3,16 +3,21 @@
   "chunks": 811,
   "queries": 60,
   "topK": 10,
+  "groundTruth": {
+    "judgmentsHash": "eac28a1416e5925bd346b165c2f1f857"
+  },
   "families": {
     "exact": {
       "ndcg10": 1,
-      "recall10": 1,
+      "recall10": 0.5342,
+      "recallCapped10": 1,
       "mrr": 1,
       "zeroHitQueries": 0
     },
     "split": {
       "ndcg10": 0.1028,
-      "recall10": 0.0985,
+      "recall10": 0.0502,
+      "recallCapped10": 0.0985,
       "mrr": 0.2603,
       "zeroHitQueries": 22
     }

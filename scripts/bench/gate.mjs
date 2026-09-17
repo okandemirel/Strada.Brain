@@ -11,6 +11,21 @@
  *   node scripts/bench/gate.mjs --record          # write/refresh the baseline
  *   node scripts/bench/gate.mjs --check           # compare, exit 1 on regression
  *   node scripts/bench/gate.mjs --check --threshold 0.25
+ *   node scripts/bench/gate.mjs --check --require-baseline
+ *   node scripts/bench/gate.mjs --check --fail-on-missing-metric
+ *
+ * Two ways this gate could report success without measuring anything, both
+ * closed by a flag because a gate that is silent about its own absence is worse
+ * than no gate (audited 2026-09-17):
+ *
+ *   --require-baseline        No baseline for this runner is a hard failure, not
+ *                            a skip. CI runs ubuntu/node22 and only
+ *                            darwin-node26 was ever committed, so the timing
+ *                            gate has been a no-op there since it was written.
+ *   --fail-on-missing-metric A metric the baseline has and the run does not is a
+ *                            hard failure. A renamed or deleted benchmark
+ *                            otherwise just prints a "?" line and stops being
+ *                            gated, quietly and forever.
  *
  * Reads the report written by `vitest bench --outputJson`.
  */
@@ -93,9 +108,20 @@ if (!flag("--check")) {
 }
 
 if (!existsSync(baselinePath)) {
-  // A missing baseline for THIS runner is not a failure — it means nobody has
-  // recorded one here yet. Say so loudly instead of silently passing.
+  // A missing baseline for THIS runner means nobody has recorded one here yet.
+  // Whether that is acceptable is the CALLER's decision: on a developer's new
+  // machine it is, in CI it is not — there the skip means the job has been
+  // reporting success without comparing anything.
+  if (flag("--require-baseline")) {
+    console.error(
+      `[bench-gate] NO BASELINE for "${key}" and --require-baseline was passed: nothing was compared.\n` +
+      `[bench-gate] Timings are machine-specific, so a baseline can only be recorded ON this runner:\n` +
+      `[bench-gate]   npm run bench:record   (then commit benchmarks/baselines/${key}.json)`,
+    );
+    process.exit(2);
+  }
   console.warn(`[bench-gate] no baseline for "${key}" — skipping gate. Record one with: npm run bench:record`);
+  console.warn(`[bench-gate] NOTHING WAS MEASURED. Pass --require-baseline to make this a failure.`);
   process.exit(0);
 }
 
@@ -123,6 +149,16 @@ for (const n of noisy) {
 }
 for (const m of missing) {
   console.log(`  ? ${m}: in baseline but not in this run (renamed or removed?)`);
+}
+// A metric that stopped being reported stopped being gated. That is a hole in
+// the gate, not a detail of the run, so CI can demand it be closed.
+if (missing.length > 0 && flag("--fail-on-missing-metric")) {
+  console.error(
+    `[bench-gate] ${missing.length} baseline metric(s) MISSING from this run — nothing gated them:\n` +
+    missing.map((m) => `  ✗ ${m}`).join("\n") +
+    `\n[bench-gate] Re-record the baseline if the benchmark was deliberately renamed or removed.`,
+  );
+  process.exit(1);
 }
 if (regressions.length === 0) {
   console.log("[bench-gate] no regression beyond threshold");
