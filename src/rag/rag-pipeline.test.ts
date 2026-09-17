@@ -27,10 +27,13 @@ vi.mock("../utils/logger.js", () => ({
 // produced without re-importing the module.
 // ---------------------------------------------------------------------------
 const mockChunks: CodeChunk[] = [];
+/** Per-file override for tests that index more than one file. */
+const mockChunksByFile = new Map<string, CodeChunk[]>();
 
 vi.mock("./chunker.js", () => ({
-  chunkCSharpFile: (_filePath: string, _content: string): CodeChunk[] => {
-    return [...mockChunks];
+  chunkCSharpFile: (filePath: string, _content: string): CodeChunk[] => {
+    const perFile = mockChunksByFile.get(filePath);
+    return perFile ? [...perFile] : [...mockChunks];
   },
 }));
 
@@ -106,6 +109,23 @@ function makeVectorStore(): IVectorStore {
       return hits.slice(0, topK);
     }),
 
+    listIndexedFiles: vi.fn((): Array<{ filePath: string; fileContentHash?: string }> => {
+      const byFile = new Map<string, { hash?: string; conflicting: boolean }>();
+      for (const { chunk } of store.values()) {
+        const seen = byFile.get(chunk.filePath);
+        const hash = (chunk as { fileContentHash?: string }).fileContentHash;
+        if (!seen) {
+          byFile.set(chunk.filePath, { hash, conflicting: false });
+        } else if (seen.hash !== hash) {
+          seen.conflicting = true;
+        }
+      }
+      return [...byFile.entries()].map(([filePath, v]) => ({
+        filePath,
+        ...(v.conflicting || v.hash === undefined ? {} : { fileContentHash: v.hash }),
+      }));
+    }),
+
     count: vi.fn((): number => store.size),
     has: vi.fn((id: string): boolean => store.has(id)),
     getFileChunkIds: vi.fn((filePath: string): string[] => {
@@ -148,6 +168,7 @@ describe("RAGPipeline", () => {
     pipeline = new RAGPipeline(embeddingProvider, vectorStore);
     // Reset shared mutable state between tests.
     mockChunks.length = 0;
+    mockChunksByFile.clear();
   });
 
   // -------------------------------------------------------------------------
@@ -377,6 +398,96 @@ describe("RAGPipeline", () => {
         await pipeline.indexProject(dir);
         expect(vectorStore.removeByFile).toHaveBeenCalledWith(gone);
         expect(await pipeline.search("Save")).toHaveLength(0);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // initialize — D46 (audit 05.F2): a boot must know what the index already has
+  // -------------------------------------------------------------------------
+
+  describe("initialize", () => {
+    it("rebuilds the file-hash map from the store so a restart neither re-embeds nor keeps deleted files (D46)", async () => {
+      const { mkdtemp, writeFile, mkdir, rm, unlink } = await import("node:fs/promises");
+      const { tmpdir } = await import("node:os");
+      const { join } = await import("node:path");
+
+      const dir = await mkdtemp(join(tmpdir(), "rag-boot-"));
+      try {
+        await mkdir(join(dir, "Assets"), { recursive: true });
+        const kept = join(dir, "Assets", "Keep.cs");
+        const gone = join(dir, "Assets", "Gone.cs");
+        await writeFile(kept, "public class Keep { void Stay() {} }");
+        await writeFile(gone, "public class Gone { void Vanish() {} }");
+        mockChunksByFile.set(kept, [makeChunk({ id: "keep-1", filePath: kept, content: "void Stay() {}" })]);
+        mockChunksByFile.set(gone, [makeChunk({ id: "gone-1", filePath: gone, content: "void Vanish() {}" })]);
+
+        // Boot 1: index both files.
+        await pipeline.initialize();
+        await pipeline.indexProject(dir);
+        expect(vectorStore.count()).toBe(2);
+
+        // Boot 2: a NEW pipeline over the SAME store — the restart the daemon does.
+        const rebooted = new RAGPipeline(embeddingProvider, vectorStore);
+        await rebooted.initialize();
+
+        // Gone.cs disappeared while the process was down.
+        await unlink(gone);
+        mockChunksByFile.delete(gone);
+        vi.mocked(embeddingProvider.embed).mockClear();
+        vi.mocked(vectorStore.removeByFile).mockClear();
+
+        await rebooted.indexProject(dir);
+
+        // TEETH 1: fileHashes was empty after the restart, so the sweep had
+        // nothing to compare against and the deleted file's chunks stayed in
+        // the index for ever.
+        expect(vectorStore.removeByFile).toHaveBeenCalledWith(gone);
+        expect(vectorStore.getFileChunkIds(gone)).toHaveLength(0);
+
+        // TEETH 2: every surviving file was re-chunked AND re-embedded on every
+        // boot because its recorded hash was gone.
+        expect(embeddingProvider.embed).not.toHaveBeenCalled();
+        // Keep.cs is still indexed, from the vectors written before the restart.
+        expect(vectorStore.getFileChunkIds(kept)).toHaveLength(1);
+        expect(vectorStore.count()).toBe(1);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("re-embeds a file that CHANGED while the process was down (D46 guard)", async () => {
+      const { mkdtemp, writeFile, mkdir, rm } = await import("node:fs/promises");
+      const { tmpdir } = await import("node:os");
+      const { join } = await import("node:path");
+
+      const dir = await mkdtemp(join(tmpdir(), "rag-boot-changed-"));
+      try {
+        await mkdir(join(dir, "Assets"), { recursive: true });
+        const file = join(dir, "Assets", "Edited.cs");
+        await writeFile(file, "public class Edited { void One() {} }");
+        mockChunksByFile.set(file, [makeChunk({ id: "edited-1", filePath: file, content: "void One() {}" })]);
+
+        await pipeline.initialize();
+        await pipeline.indexProject(dir);
+
+        const rebooted = new RAGPipeline(embeddingProvider, vectorStore);
+        await rebooted.initialize();
+
+        await writeFile(file, "public class Edited { void One() {} void Two() {} }");
+        mockChunksByFile.set(file, [
+          makeChunk({ id: "edited-1", filePath: file, content: "void One() {}" }),
+          makeChunk({ id: "edited-2", filePath: file, content: "void Two() {}" }),
+        ]);
+        vi.mocked(embeddingProvider.embed).mockClear();
+
+        const stats = await rebooted.indexProject(dir);
+
+        expect(embeddingProvider.embed).toHaveBeenCalled();
+        expect(stats.changedFiles).toBe(1);
+        expect(vectorStore.getFileChunkIds(file)).toHaveLength(2);
       } finally {
         await rm(dir, { recursive: true, force: true });
       }

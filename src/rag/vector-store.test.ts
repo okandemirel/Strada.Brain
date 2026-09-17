@@ -303,6 +303,35 @@ describe("FileVectorStore", () => {
     });
   });
 
+  describe("listIndexedFiles()", () => {
+    it("reports each indexed file with the file hash its chunks carry, across a restart (D46)", async () => {
+      const storePath = join(tmpDir, "indexed-files");
+      const store1 = new FileVectorStore(storePath, DIMS);
+      await store1.initialize();
+      await store1.upsert([
+        { ...makeEntry("a1", "/src/A.cs"), chunk: { ...makeChunk("a1", "/src/A.cs"), fileContentHash: "aaaa111122223333" } },
+        { ...makeEntry("a2", "/src/A.cs"), chunk: { ...makeChunk("a2", "/src/A.cs"), fileContentHash: "aaaa111122223333" } },
+        // B.cs predates the stamp: the store must not invent a hash for it.
+        makeEntry("b1", "/src/B.cs"),
+      ]);
+      await store1.shutdown();
+
+      const store2 = new FileVectorStore(storePath, DIMS);
+      await store2.initialize();
+
+      const indexed = store2.listIndexedFiles();
+      expect(indexed).toHaveLength(2);
+      expect(indexed).toEqual(
+        expect.arrayContaining([
+          { filePath: "/src/A.cs", fileContentHash: "aaaa111122223333" },
+          { filePath: "/src/B.cs" },
+        ]),
+      );
+
+      await store2.shutdown();
+    });
+  });
+
   describe("has() and getFileChunkIds()", () => {
     it("has() returns true for inserted IDs and false for unknown ones", async () => {
       const store = new FileVectorStore(tmpDir, DIMS);

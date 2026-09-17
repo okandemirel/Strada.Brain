@@ -32,6 +32,14 @@ const DEFAULT_BUDGET: ContextBudget = {
   contextLines: 2,
 };
 
+/**
+ * Recorded for a file the store holds chunks for but whose file hash it cannot
+ * report (chunks written before the stamp existed, or disagreeing with each
+ * other). It matches no real digest, so the file is re-indexed — while still
+ * being known to the deletion sweep.
+ */
+const UNKNOWN_FILE_HASH = "unknown";
+
 /** 16-char hex SHA-256 digest of content. */
 function hashContent(content: string): string {
   return createHash("sha256").update(content).digest("hex").substring(0, 16);
@@ -103,6 +111,42 @@ export class RAGPipeline implements IRAGPipeline {
     } else {
       await this.vectorStore.initialize();
     }
+
+    this.rebuildFileHashesFromStore();
+  }
+
+  /**
+   * A BOOT MUST KNOW WHAT THE INDEX ALREADY HAS. fileHashes only ever lived in
+   * memory, so after a restart it was empty: indexProject's sweep had nothing to
+   * compare the project against (a deleted file's chunks answered searches for
+   * ever) and every single file was re-chunked and re-embedded on every boot
+   * (D46 / audit 05.F2). Rebuild it from the store's own chunk metadata — the
+   * file hash each chunk was stamped with at indexing time.
+   */
+  private rebuildFileHashesFromStore(): void {
+    const store: IVectorStore = this.hnswStore ?? this.vectorStore;
+    const indexed = store.listIndexedFiles?.();
+    if (!indexed) {
+      getLogger().debug("[RAGPipeline] Store cannot list indexed files; every file will be re-indexed");
+      return;
+    }
+
+    const rebuilt = new Map<string, string>();
+    let unknownHashes = 0;
+    for (const entry of indexed) {
+      if (!entry.filePath) continue;
+      // UNKNOWN_FILE_HASH never equals a real 16-hex digest, so the file is
+      // re-embedded on this boot — but it IS in the map, so the deletion sweep
+      // can still drop it when the file is gone.
+      if (entry.fileContentHash === undefined) unknownHashes += 1;
+      rebuilt.set(entry.filePath, entry.fileContentHash ?? UNKNOWN_FILE_HASH);
+    }
+
+    this.fileHashes = rebuilt;
+    getLogger().info("[RAGPipeline] Recovered indexed-file hashes from the store", {
+      files: rebuilt.size,
+      unknownHashes,
+    });
   }
 
   private getStorePath(): string | null {
@@ -232,7 +276,9 @@ export class RAGPipeline implements IRAGPipeline {
       entries.push({
         id: chunk.id,
         vector,
-        chunk,
+        // Stamp the FILE hash on the chunk: this is what a later boot reads back
+        // to know it already has this version of the file (D46).
+        chunk: { ...chunk, fileContentHash: contentHash },
         addedAt: Date.now(),
         accessCount: 0,
       });

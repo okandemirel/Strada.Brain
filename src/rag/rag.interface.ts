@@ -82,6 +82,14 @@ interface BaseChunk {
   readonly id: string;
   readonly content: string;
   readonly contentHash: string;
+  /**
+   * Content hash of the whole FILE this chunk came from, as of the indexing run
+   * that wrote it. This is the index's own record of what it already has: a boot
+   * rebuilds its filePath → hash map from it (see IVectorStore.listIndexedFiles),
+   * so a restart re-embeds only what changed and can still see which indexed
+   * files have disappeared (D46 / audit 05.F2).
+   */
+  readonly fileContentHash?: string;
   readonly filePath: FilePath;
   readonly indexedAt: TimestampMs;
   readonly embedding?: Vector<number>;
@@ -319,6 +327,16 @@ export interface IVectorStore<D extends number = number> {
   
   /** Get all chunk IDs for a file */
   getFileChunkIds(filePath: FilePath): string[];
+
+  /**
+   * Every file the store currently holds chunks for, with the file hash those
+   * chunks were stamped with (omitted when the stored chunks disagree or predate
+   * the stamp — the caller must then treat the file as unknown and re-index it).
+   *
+   * Optional so third-party stores keep compiling; a store that does not
+   * implement it forces a full re-index on every boot.
+   */
+  listIndexedFiles?(): Array<{ filePath: string; fileContentHash?: string }>;
   
   /** Get store statistics (optional) */
   getStats?(): VectorStoreStats;
@@ -558,6 +576,31 @@ export interface RAGStats {
  */
 export function estimateTokens(text: string): number {
   return estimateTextTokens(text);
+}
+
+/**
+ * Group stored chunks into the per-file view {@link IVectorStore.listIndexedFiles}
+ * returns: one row per file, carrying the file hash its chunks were stamped with
+ * — and omitting that hash when the chunks disagree or predate the stamp, so the
+ * caller re-indexes the file instead of trusting a guess (D46 / audit 05.F2).
+ */
+export function collectIndexedFiles(
+  chunks: Iterable<Chunk>,
+): Array<{ filePath: string; fileContentHash?: string }> {
+  const byFile = new Map<string, { hash?: string; agreed: boolean }>();
+  for (const chunk of chunks) {
+    const seen = byFile.get(chunk.filePath);
+    if (!seen) {
+      byFile.set(chunk.filePath, { hash: chunk.fileContentHash, agreed: true });
+    } else if (seen.hash !== chunk.fileContentHash) {
+      seen.agreed = false;
+    }
+  }
+  return [...byFile.entries()].map(([filePath, entry]) => (
+    entry.agreed && entry.hash !== undefined
+      ? { filePath, fileContentHash: entry.hash }
+      : { filePath }
+  ));
 }
 
 /**

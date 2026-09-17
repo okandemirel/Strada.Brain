@@ -8,6 +8,7 @@
 import { join } from "node:path";
 import { existsSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import type { IVectorStore, VectorEntry, VectorSearchHit, CodeChunk } from "../rag.interface.js";
+import { collectIndexedFiles } from "../rag.interface.js";
 import { getLogger } from "../../utils/logger.js";
 import { createRequire } from "node:module";
 import { dequantizeBatch, type QuantizationType, type QuantizedVector } from "./quantization.js";
@@ -728,6 +729,10 @@ export class HNSWVectorStore implements IHNSWVectorStore {
 
   has(id: string): boolean {
     return this.idToIndex.has(id);
+  }
+
+  listIndexedFiles(): Array<{ filePath: string; fileContentHash?: string }> {
+    return collectIndexedFiles(this.chunks.values());
   }
 
   getFileChunkIds(filePath: string): string[] {

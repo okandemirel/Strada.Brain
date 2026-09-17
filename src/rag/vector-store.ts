@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { IVectorStore, VectorEntry, VectorSearchHit, CodeChunk } from "./rag.interface.js";
+import { collectIndexedFiles } from "./rag.interface.js";
 import { getLogger } from "../utils/logger.js";
 
 const CHUNKS_FILE = "chunks.json";
@@ -736,6 +737,10 @@ export class FileVectorStore implements IVectorStore {
 
   has(id: string): boolean {
     return this.idIndex.has(id);
+  }
+
+  listIndexedFiles(): Array<{ filePath: string; fileContentHash?: string }> {
+    return collectIndexedFiles(this.chunks);
   }
 
   getFileChunkIds(filePath: string): string[] {
