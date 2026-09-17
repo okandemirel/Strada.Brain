@@ -295,19 +295,35 @@ export class TaskManager extends EventEmitter {
     }
 
     return this.submit(task.chatId, task.channelType, this.buildReplayPrompt(task, "resume"), {
+      ...this.continuationOptions(task),
+      // audited 2026-09-02: persisted but never forwarded — see replayForcesSharedPlanning.
+      forceSharedPlanning: this.replayForcesSharedPlanning(task),
+    });
+  }
+
+  /**
+   * The submit options every continuation (retry, resume, replan) inherits
+   * from the task it continues. A continuation is the same agent's work: the
+   * child must carry the parent's `agentId`, or the executor books its spend
+   * as "chat" and a blocked agent mission re-armed through retryTask bypasses
+   * the agent's allowance while drawing on the global wallet (Codex wave 0-A
+   * review 2026-09-17 #4). Each submit site was rebuilding this set by hand
+   * and every one of the seven had dropped the id.
+   */
+  private continuationOptions(task: Task): NonNullable<Parameters<TaskManager["submit"]>[3]> {
+    return {
       origin: task.origin ?? "user",
       triggerName: task.triggerName,
       conversationId: task.conversationId,
       userId: task.userId,
+      agentId: task.agentId,
       orchestrator: this.replayOrchestrator(task),
       workspacePolicy: task.workspacePolicy,
       supervisorMode: task.supervisorMode,
       userContent: task.userContent,
       attachments: task.attachments,
-      // audited 2026-09-02: persisted but never forwarded — see replayForcesSharedPlanning.
-      forceSharedPlanning: this.replayForcesSharedPlanning(task),
       parentId: task.id,
-    });
+    };
   }
 
   /**
@@ -400,18 +416,9 @@ export class TaskManager extends EventEmitter {
     }
 
     return this.submit(task.chatId, task.channelType, this.buildReplayPrompt(task, "retry"), {
-      origin: task.origin ?? "user",
-      triggerName: task.triggerName,
-      conversationId: task.conversationId,
-      userId: task.userId,
-      orchestrator: this.replayOrchestrator(task),
-      workspacePolicy: task.workspacePolicy,
-      supervisorMode: task.supervisorMode,
-      userContent: task.userContent,
-      attachments: task.attachments,
+      ...this.continuationOptions(task),
       // audited 2026-09-02: persisted but never forwarded — see replayForcesSharedPlanning.
       forceSharedPlanning: this.replayForcesSharedPlanning(task),
-      parentId: task.id,
     });
   }
 
@@ -423,36 +430,18 @@ export class TaskManager extends EventEmitter {
     const tree = this.goalStorage?.getTree(goalRootId as GoalNodeId);
     if (!tree) {
       return this.submit(task.chatId, task.channelType, this.buildReplayPrompt(task, "retry"), {
-        origin: task.origin ?? "user",
-        triggerName: task.triggerName,
-        conversationId: task.conversationId,
-        userId: task.userId,
-        orchestrator: this.replayOrchestrator(task),
-        workspacePolicy: task.workspacePolicy,
-        supervisorMode: task.supervisorMode,
-        userContent: task.userContent,
-        attachments: task.attachments,
+        ...this.continuationOptions(task),
         // audited 2026-09-02: persisted but never forwarded — see replayForcesSharedPlanning.
         forceSharedPlanning: this.replayForcesSharedPlanning(task),
-        parentId: task.id,
       });
     }
 
     const replayTree = prepareTreeForRetry(tree, nodeId as GoalNodeId | undefined);
     return this.submit(task.chatId, task.channelType, task.prompt, {
-      origin: task.origin ?? "user",
-      triggerName: task.triggerName,
+      ...this.continuationOptions(task),
       goalTree: replayTree,
       goalRootId,
       forceSharedPlanning: true,
-      userContent: task.userContent,
-      attachments: task.attachments,
-      orchestrator: this.replayOrchestrator(task),
-      workspacePolicy: task.workspacePolicy,
-      supervisorMode: task.supervisorMode,
-      conversationId: task.conversationId,
-      userId: task.userId,
-      parentId: task.id,
     });
   }
 
@@ -497,17 +486,8 @@ export class TaskManager extends EventEmitter {
     }
 
     return this.submit(task.chatId, task.channelType, lines.join("\n"), {
-      origin: task.origin ?? "user",
-      triggerName: task.triggerName,
+      ...this.continuationOptions(task),
       forceSharedPlanning: true,
-      userContent: task.userContent,
-      attachments: task.attachments,
-      orchestrator: this.replayOrchestrator(task),
-      workspacePolicy: task.workspacePolicy,
-      supervisorMode: task.supervisorMode,
-      conversationId: task.conversationId,
-      userId: task.userId,
-      parentId: task.id,
     });
   }
 
@@ -527,18 +507,9 @@ export class TaskManager extends EventEmitter {
     const tree = this.goalStorage?.getTree(goalRootId as GoalNodeId);
     if (!tree) {
       return this.submit(task.chatId, task.channelType, this.buildReplayPrompt(task, "resume"), {
-        origin: task.origin ?? "user",
-        triggerName: task.triggerName,
-        conversationId: task.conversationId,
-        userId: task.userId,
-        orchestrator: this.replayOrchestrator(task),
-        workspacePolicy: task.workspacePolicy,
-        supervisorMode: task.supervisorMode,
-        userContent: task.userContent,
-        attachments: task.attachments,
+        ...this.continuationOptions(task),
         // audited 2026-09-02: persisted but never forwarded — see replayForcesSharedPlanning.
         forceSharedPlanning: this.replayForcesSharedPlanning(task),
-        parentId: task.id,
       });
     }
 
@@ -546,19 +517,10 @@ export class TaskManager extends EventEmitter {
       ? prepareTreeForRetry(tree)
       : prepareTreeForResume(tree);
     return this.submit(task.chatId, task.channelType, task.prompt, {
-      origin: task.origin ?? "user",
-      triggerName: task.triggerName,
+      ...this.continuationOptions(task),
       goalTree: replayTree,
       goalRootId,
       forceSharedPlanning: true,
-      userContent: task.userContent,
-      attachments: task.attachments,
-      orchestrator: this.replayOrchestrator(task),
-      workspacePolicy: task.workspacePolicy,
-      supervisorMode: task.supervisorMode,
-      conversationId: task.conversationId,
-      userId: task.userId,
-      parentId: task.id,
     });
   }
 
