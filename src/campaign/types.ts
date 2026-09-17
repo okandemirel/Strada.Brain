@@ -145,6 +145,17 @@ export interface CampaignMilestone {
   resultExcerpt?: string;
   /** Commit hash + file count from the envelope commit that closed it. */
   commitNote?: string;
+  /**
+   * The FULL shas this milestone's own commits landed as, oldest first, across
+   * every attempt.
+   *
+   * The delivery package used to read the history by wall clock — every commit
+   * since the sprint started — so a person's unrelated commit in that window
+   * was presented as the campaign's work, and implementation committed in an
+   * earlier attempt fell outside it (Codex round 11 #12). These are the commits
+   * the campaign actually made.
+   */
+  commits?: string[];
   /** The mechanical test verdict observed when it landed green, if any. */
   /**
    * A tool this run was never offered, as the node reported it — kept out of

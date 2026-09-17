@@ -4894,6 +4894,17 @@ export class CampaignManager {
         `Campaign ${campaign.id}, sprint ${campaign.currentMilestone + 1}/${campaign.milestones.length}. Working tree committed by the campaign envelope at milestone close.`,
       ]);
       const hash = git(["rev-parse", "--short", "HEAD"], 10_000).trim();
+      // The FULL sha, remembered on the milestone: the delivery package
+      // attributes its diff to these instead of to a time window (round 11 #12).
+      try {
+        const full = git(["rev-parse", "HEAD"], 10_000).trim();
+        if (/^[0-9a-f]{40}$/u.test(full)) {
+          milestone.commits = [...(milestone.commits ?? []).filter((sha) => sha !== full), full];
+        }
+      } catch {
+        // A rev-parse that fails leaves the attribution to the time window,
+        // which the package then labels as unattributed.
+      }
       const fileCount = dirty.split("\n").length;
       getLoggerSafe().info("Campaign milestone work committed", {
         id: campaign.id,
@@ -7125,6 +7136,10 @@ export class CampaignManager {
         const spend = this.campaignSpend?.(campaign.id);
         return spend === undefined ? {} : { spend };
       })(),
+      // Every commit this campaign made, across every attempt and milestone:
+      // the package attributes its diff to these rather than to a clock
+      // (round 11 #12).
+      ownedCommits: campaign.milestones.flatMap((m) => m.commits ?? []),
     });
   }
 

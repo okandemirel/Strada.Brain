@@ -209,9 +209,30 @@ describe("the checklist and the gaps", () => {
     const b = checklist.items?.find((i) => i.text === "Sprint B");
     expect(a).toMatchObject({ state: "met" });
     expect(a?.cause).toBeUndefined();
-    expect(b).toMatchObject({ state: "met" });
+    // Round 11 #11: a green sprint nothing proved is NOT MEASURED, not met —
+    // and it therefore counts as a gap instead of hiding in explanatory text.
+    expect(b).toMatchObject({ state: "not-measured" });
     expect(b?.cause).toContain("never compiled");
     expect(b?.cause).toContain("no observed test run");
+    const gaps = pieceOf(pkg, "gaps");
+    expect(JSON.stringify(gaps)).toContain("Sprint B");
+  });
+
+  it("a green sprint whose compile FAILED is not a met requirement either (round 11 #11)", () => {
+    const pkg = assembleDeliveryPackage({
+      campaign: campaign({
+        milestones: [
+          milestone({
+            id: "mf", title: "Sprint F", status: "green",
+            compileVerdict: { ran: true, ok: false, errors: 3 } as never,
+            testVerdict: "173 passed (PlayMode)", testVerdictUnfiltered: true,
+          }),
+        ],
+      }),
+    });
+    const item = pieceOf(pkg, "checklist").items?.find((i) => i.text === "Sprint F");
+    expect(item).toMatchObject({ state: "not-measured" });
+    expect(item?.cause).toContain("compile FAILED");
   });
 
   it("states a repair sprint's requirement as the AUDIT closed it, not as the sprint ended", () => {
@@ -562,5 +583,67 @@ describe("what the work cost", () => {
       spend: { totalUsd: 0.5, entries: 1 },
     });
     expect(facts.spend?.source).toContain("1 entry");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Round 11 #12: commits chosen by wall clock are not the campaign's work.
+// ---------------------------------------------------------------------------
+describe("whose commits these are", () => {
+  const OWN_A = "a".repeat(40);
+  const OWN_B = "b".repeat(40);
+
+  function gitFor(log: string[]): (args: readonly string[]) => string {
+    return (args) => {
+      log.push(args.join(" "));
+      if (args[0] === "show" && args.includes("--pretty=format:%H%x09%s")) {
+        const sha = args[args.length - 1]!;
+        return `${sha}\tcampaign work ${sha.slice(0, 4)}`;
+      }
+      if (args[0] === "show" && args.includes("--name-only")) return "Assets/A.cs\nAssets/B.cs\n";
+      if (args[0] === "rev-parse") return "parent-ok";
+      if (args[0] === "log") return `${"c".repeat(40)}\tsomebody else's commit`;
+      return "";
+    };
+  }
+
+  it("reads the campaign's OWN commits and never asks the clock", () => {
+    const log: string[] = [];
+    const facts = gatherDeliveryPackageFacts(campaign(), { projectRoot: "/p", git: gitFor(log), ownedCommits: [OWN_A, OWN_B] });
+    expect(facts.diff?.attribution).toBe("campaign");
+    expect(facts.diff?.commits.map((c) => c.sha)).toEqual([OWN_A, OWN_B]);
+    // A human's commit in the same window is nowhere near this package.
+    expect(JSON.stringify(facts.diff)).not.toContain("somebody else");
+    expect(log.some((cmd) => cmd.includes("--since="))).toBe(false);
+    const pkg = assembleDeliveryPackage(facts);
+    const diff = pieceOf(pkg, "diff");
+    expect(diff.state).toBe("present");
+    expect(diff.summary).not.toContain("UNATTRIBUTED");
+    expect(diff.source).toContain("the campaign itself recorded");
+  });
+
+  it("says UNATTRIBUTED when it had to fall back to the sprint's clock", () => {
+    const log: string[] = [];
+    const facts = gatherDeliveryPackageFacts(campaign(), { projectRoot: "/p", git: gitFor(log) });
+    expect(facts.diff?.attribution).toBe("time-window");
+    const diff = pieceOf(assembleDeliveryPackage(facts), "diff");
+    expect(diff.summary).toContain("UNATTRIBUTED");
+    expect(diff.source).toContain("NOT attributed");
+    expect(log.some((cmd) => cmd.includes("--since="))).toBe(true);
+  });
+
+  it("a recorded commit this repository does not have is named, not silently dropped", () => {
+    const git = (args: readonly string[]): string => {
+      if (args[0] === "show" && args.includes("--pretty=format:%H%x09%s")) {
+        const sha = args[args.length - 1]!;
+        if (sha === OWN_B) throw new Error("bad object");
+        return `${sha}\tkept`;
+      }
+      if (args[0] === "rev-parse") return "ok";
+      return "";
+    };
+    const facts = gatherDeliveryPackageFacts(campaign(), { projectRoot: "/p", git, ownedCommits: [OWN_A, OWN_B] });
+    expect(facts.diff?.commits).toHaveLength(1);
+    expect(facts.diff?.note).toContain("not in this repository");
   });
 });

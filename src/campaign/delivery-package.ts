@@ -189,6 +189,16 @@ export interface DeliveryDiffFacts {
   readonly unreadable?: boolean;
   /** The commit range, as `git diff` would take it. */
   readonly range?: string;
+  /**
+   * HOW these commits were chosen (Codex round 11 #12).
+   *
+   * - "campaign": the campaign's own recorded shas. Its work, and only its work.
+   * - "time-window": every commit since the sprint's clock started, which may
+   *   include a person's unrelated commit and may MISS implementation committed
+   *   in an earlier attempt. Reported as unattributed rather than as the
+   *   campaign's change.
+   */
+  readonly attribution?: "campaign" | "time-window";
   readonly commits: readonly { readonly sha: string; readonly subject: string }[];
   readonly filesChanged?: number;
   readonly insertions?: number;
@@ -348,8 +358,13 @@ function diffPiece(facts: DeliveryPackageFacts): DeliveryPiece {
     "The change",
     "present",
     `${d.commits.length} commit${d.commits.length === 1 ? "" : "s"}${counts}.` +
+      (d.attribution === "campaign"
+        ? ""
+        : " UNATTRIBUTED: chosen by the sprint's clock, so this may include work the campaign did not do and miss work from an earlier attempt.") +
       (d.note ? ` ${d.note}` : ""),
-    "the delivering sprint's own commits",
+    d.attribution === "campaign"
+      ? "the commits the campaign itself recorded"
+      : "every commit since the sprint's clock started — NOT attributed to the campaign",
     {
       locators,
       lines: shown.kept.map((c) => `${c.sha.slice(0, 12)} ${c.subject}`),
@@ -545,20 +560,24 @@ function checklistItems(campaign: DeliveryCampaignFacts): DeliveryItem[] {
       continue;
     }
     if (m.status === "green") {
-      // A green that nothing proved is still not a met requirement; the reason
-      // rides with the item so the checklist never reads better than the
-      // evidence under it.
+      // A GREEN SPRINT IS NOT EVIDENCE (Codex round 11 #11). The state used to
+      // be `met` with the missing proof relegated to explanatory text, which
+      // also kept the item out of the gaps — a checklist that reads better
+      // than the evidence under it is the false green this package exists to
+      // expose. Absent proof is `not-measured`; a refused or failed proof
+      // cannot support `met` either.
       const unproven: string[] = [];
       if (m.compileVerdict === undefined) unproven.push("the tree was never compiled for this sprint");
       else if (!m.compileVerdict.ran) unproven.push("compile NOT measured");
       else if (m.compileVerdict.refused !== undefined) unproven.push(`the compile proof was refused (${m.compileVerdict.refused})`);
+      else if (m.compileVerdict.ok === false) unproven.push("the compile FAILED");
       if (m.testVerdict === undefined) unproven.push("no observed test run");
       else if (m.testVerdictUnfiltered !== true) unproven.push("its green test run was FILTERED, not the whole suite");
       items.push({
         text,
-        state: "met",
+        state: unproven.length > 0 ? "not-measured" : "met",
         source,
-        ...(unproven.length > 0 ? { cause: `green, but ${unproven.join("; ")}` } : {}),
+        ...(unproven.length > 0 ? { cause: `the sprint ended green, but ${unproven.join("; ")}` } : {}),
       });
       continue;
     }
@@ -914,7 +933,66 @@ export interface DeliveryFactSources {
    * as costing nothing, and the package says which.
    */
   readonly spend?: { readonly totalUsd: number; readonly entries: number };
+  /**
+   * The FULL shas the campaign itself committed, oldest first, across every
+   * attempt. Given these, the diff is the campaign's own work; without them the
+   * history falls back to the sprint's clock and says it is unattributed
+   * (Codex round 11 #12).
+   */
+  readonly ownedCommits?: readonly string[];
   readonly now?: number;
+}
+
+/**
+ * The history of the commits the campaign itself made, oldest first.
+ *
+ * Nothing here depends on a clock: a person's commit in the same minutes is not
+ * the campaign's work, and an earlier attempt's commit still is (round 11 #12).
+ */
+function ownedDiffFacts(git: (args: readonly string[]) => string, owned: readonly string[]): DeliveryDiffFacts {
+  const commits: { sha: string; subject: string }[] = [];
+  const unreadable: string[] = [];
+  for (const sha of owned) {
+    try {
+      const line = git(["show", "-s", "--no-patch", "--pretty=format:%H%x09%s", sha]).trim();
+      const tab = line.indexOf("\t");
+      commits.push(tab < 0 ? { sha: line || sha, subject: "(no subject)" } : { sha: line.slice(0, tab), subject: line.slice(tab + 1) });
+    } catch {
+      unreadable.push(sha.slice(0, 12));
+    }
+  }
+  if (commits.length === 0) {
+    return {
+      commits: [],
+      attribution: "campaign",
+      note: `the campaign recorded ${owned.length} commit(s), and this repository could not read any of them${unreadable.length > 0 ? ` (${unreadable.join(", ")})` : ""}`,
+    };
+  }
+  const oldest = commits[0]!.sha;
+  const newest = commits[commits.length - 1]!.sha;
+  let range: string | undefined;
+  try {
+    git(["rev-parse", `${oldest}^`]);
+    range = `${oldest}^..${newest}`;
+  } catch {
+    range = undefined;
+  }
+  let filesChanged: number | undefined;
+  try {
+    const names = git(["show", "--name-only", "--pretty=format:", ...commits.map((c) => c.sha)]);
+    filesChanged = new Set(names.split("\n").map((l) => l.trim()).filter((l) => l.length > 0)).size;
+  } catch {
+    filesChanged = undefined;
+  }
+  return {
+    commits,
+    attribution: "campaign",
+    ...(range === undefined ? {} : { range, command: `git diff --stat --patch ${range}` }),
+    ...(filesChanged === undefined ? {} : { filesChanged }),
+    ...(unreadable.length > 0
+      ? { note: `${unreadable.length} recorded commit(s) are not in this repository (${unreadable.join(", ")})` }
+      : {}),
+  };
 }
 
 /** When the delivered work began, by the clock the sprint itself kept. */
@@ -936,6 +1014,8 @@ export function gatherDiffFacts(sources: DeliveryFactSources, sinceMs: number): 
   if (git === undefined) {
     return { commits: [], unreadable: true, note: "no git probe was available to this process" };
   }
+  const owned = (sources.ownedCommits ?? []).filter((sha) => /^[0-9a-f]{7,40}$/iu.test(sha));
+  if (owned.length > 0) return ownedDiffFacts(git, owned);
   const iso = new Date(sinceMs).toISOString();
   let raw: string;
   try {
@@ -956,7 +1036,7 @@ export function gatherDiffFacts(sources: DeliveryFactSources, sinceMs: number): 
     // Oldest first: a reviewer reads a change forwards.
     .reverse();
   if (commits.length === 0) {
-    return { commits: [], note: `No commit since ${iso} — the sprint's own clock.` };
+    return { commits: [], attribution: "time-window", note: `No commit since ${iso} — the sprint's own clock.` };
   }
   const oldest = commits[0]!.sha;
   const newest = commits[commits.length - 1]!.sha;
@@ -979,6 +1059,9 @@ export function gatherDiffFacts(sources: DeliveryFactSources, sinceMs: number): 
   }
   return {
     commits,
+    // Chosen by the clock: the package says so rather than claiming them
+    // (round 11 #12).
+    attribution: "time-window" as const,
     ...(filesChanged === undefined ? {} : { filesChanged }),
     ...(range === undefined
       ? {
