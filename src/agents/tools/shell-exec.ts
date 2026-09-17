@@ -178,15 +178,19 @@ export class ShellExecTool implements ITool {
 
     // Explicit timeout validation — surface out-of-range errors instead of
     // silently clamping, so callers can correct their input.
+    // The caller's list is EXCLUSIVE when given (Codex 2026-09-17: [0] could
+    // not require equality from `grep`, [3] still accepted 0); the implicit
+    // predicate allowance applies only when it is omitted.
     const rawOk = input["ok_exit_codes"];
-    const okExitCodes = new Set<number>([0]);
+    let okExitCodes: Set<number>;
     if (rawOk !== undefined) {
-      if (!Array.isArray(rawOk) || rawOk.some((c) => typeof c !== "number" || !Number.isInteger(c) || c < 0 || c > 255)) {
-        return { content: "Error: 'ok_exit_codes' must be an array of integers between 0 and 255", isError: true };
+      if (!Array.isArray(rawOk) || rawOk.length === 0 || rawOk.some((c) => typeof c !== "number" || !Number.isInteger(c) || c < 0 || c > 255)) {
+        return { content: "Error: 'ok_exit_codes' must be a non-empty array of integers between 0 and 255", isError: true };
       }
-      for (const c of rawOk) okExitCodes.add(c as number);
+      okExitCodes = new Set(rawOk as number[]);
+    } else {
+      okExitCodes = new Set<number>([0, ...predicateExitCodes(command)]);
     }
-    for (const c of predicateExitCodes(command)) okExitCodes.add(c);
     const rawTimeout = input["timeout_ms"];
     let timeoutMs = DEFAULT_TIMEOUT_MS;
     if (rawTimeout !== undefined && rawTimeout !== null) {
@@ -315,16 +319,17 @@ export class ShellExecTool implements ITool {
 }
 
 /**
- * Exit codes that are an ANSWER for the command's last segment, not a
- * failure: grep/rg/egrep/fgrep and `test`/`[` exit 1 for "no" (2 is a real
- * error), and `git diff --exit-code|--quiet` (and diff-index/diff-files)
- * exit 1 for "there are differences". Only the last segment decides, because
- * that is the status the shell returns.
+ * Exit codes that are an ANSWER for a SINGLE simple command, not a failure:
+ * grep/rg/egrep/fgrep and `test`/`[` exit 1 for "no" (2 is a real error),
+ * `git diff --exit-code|--quiet` (and diff-index/diff-files) exit 1 for
+ * "there are differences", diff/cmp exit 1 for "different". A chain gets no
+ * implicit allowance: `dotnet build; grep -q x log` ended in grep's 1 and
+ * read as success, so a failed build cleared the compile debt (Codex
+ * 2026-09-17 on 353d044e #1). A caller that chains names ok_exit_codes.
  */
 export function predicateExitCodes(command: string): ReadonlySet<number> {
-  const segments = command.split(/\s*(?:&&|\|\||;|\|)\s*/u).map((seg) => seg.trim()).filter((seg) => seg.length > 0);
-  const last = segments[segments.length - 1] ?? "";
-  const head = last.replace(/^(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*/u, "");
+  if (/&&|\|\||;|\||\n/u.test(command)) return new Set();
+  const head = command.trim().replace(/^(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*/u, "");
   if (/^(?:\S*\/)?(?:e|f)?grep\b|^(?:\S*\/)?rg\b|^test\b|^\[\s/u.test(head)) return new Set([1]);
   if (/^(?:\S*\/)?git\s+diff(?:-index|-files)?\b[^|;&]*--(?:exit-code|quiet)\b/u.test(head)) return new Set([1]);
   if (/^(?:\S*\/)?diff\b|^(?:\S*\/)?cmp\b/u.test(head)) return new Set([1]);

@@ -87,6 +87,21 @@ describe("the consecutive-failure breaker", () => {
     expect(results.every((r) => !r.includes("temporarily disabled"))).toBe(true);
   });
 
+  it("…and a verifier that could not START is a broken tool, not a verdict (Codex 2026-09-17 #3)", async () => {
+    const { orch, tools } = orchestratorWith("shell_exec");
+    tools[0]!.metadata = { readOnly: false } as never;
+    tools[0]!.execute = vi.fn().mockResolvedValue({
+      content: "$ npm test\nExit code: 127 | Duration: 3ms\n\n--- stderr ---\nzsh: command not found: npm",
+      isError: true,
+      metadata: { exitCode: 127, timedOut: false, durationMs: 3 },
+    });
+
+    const results = await callFourTimesWith(orch, "shell_exec", { command: "npm test" });
+
+    expect(tools[0]!.execute).toHaveBeenCalledTimes(3);
+    expect(results[3]).toContain("temporarily disabled");
+  });
+
   it("…but a shell command that is not a verifier still trips it", async () => {
     const { orch, tools } = orchestratorWith("shell_exec");
     tools[0]!.metadata = { readOnly: false } as never;

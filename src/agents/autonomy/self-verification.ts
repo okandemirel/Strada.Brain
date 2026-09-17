@@ -88,11 +88,33 @@ export function shellVerification(command: string): "ran" | "maybe" | "no" {
  * failing `npm test` runs through shell_exec took the tool away for sixty
  * seconds while dotnet_test stayed exempt (Codex 2026-09-17 on 43c43f1e).
  */
-export function toolReportsVerdict(toolName: string, input: Record<string, unknown> | undefined): boolean {
+export function toolReportsVerdict(
+  toolName: string,
+  input: Record<string, unknown> | undefined,
+  /**
+   * The result, when the call has run. A verifier that could not START is a
+   * broken tool, not a verdict: `PATH=/nonexistent npm test` exits 127 and
+   * bypassed — and reset — the breaker forever (Codex 2026-09-17 #3).
+   */
+  result?: { isError?: boolean; content?: unknown; metadata?: Record<string, unknown> },
+): boolean {
+  if (result !== undefined && infrastructureFailure(result)) return false;
   if (isVerificationToolName(toolName)) return true;
   if (toolName !== "shell_exec") return false;
   const command = input?.["command"];
   return typeof command === "string" && shellVerification(command) !== "no";
+}
+
+const INFRASTRUCTURE_FAILURE_RE =
+  /command not found|not recognized as an internal or external command|No such file or directory|ENOENT|EACCES|Permission denied|cannot execute|exec format error|is not installed|Cannot find module|timed out and was killed/iu;
+function infrastructureFailure(result: { isError?: boolean; content?: unknown; metadata?: Record<string, unknown> }): boolean {
+  if (result.isError !== true) return false;
+  const meta = result.metadata ?? {};
+  if (meta["timedOut"] === true) return true;
+  const code = meta["exitCode"];
+  if (code === 126 || code === 127) return true;
+  const head = String(result.content ?? "").split("\n").slice(0, 6).join("\n");
+  return INFRASTRUCTURE_FAILURE_RE.test(head);
 }
 
 function shellCommandVerifies(command: string): boolean {

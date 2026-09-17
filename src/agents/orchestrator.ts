@@ -5103,7 +5103,12 @@ export class Orchestrator {
     const breakerScope = this.toolBreakerScope(chatId);
     const breakerTarget = failureTarget(activeToolCall.input);
     const tripped = this.toolIsCircuitBroken(breakerScope.key, activeToolCall.name, breakerTarget);
-    if (tripped !== null && !toolReportsVerdict(activeToolCall.name, activeToolCall.input as Record<string, unknown>)) {
+    // A verification-SHAPED shell command does not bypass a breaker that
+    // real failures (exit 127, timeouts) already tripped; only the named
+    // verification tools are exempt here, as before. Verdict-bearing shell
+    // failures never count toward the trip (below), so a tripped shell
+    // breaker means infrastructure failures.
+    if (tripped !== null && !isVerificationToolName(activeToolCall.name)) {
       // audited 2026-09-02: name what was measured — the count, whether it was
       // one target or many, the scope, and when a retry is admitted. The old
       // text claimed "temporarily" while the code implemented "forever".
@@ -5414,7 +5419,8 @@ export class Orchestrator {
       this.trackToolError(
         breakerScope.key,
         activeToolCall.name,
-        !!result.isError && !toolReportsVerdict(activeToolCall.name, activeToolCall.input as Record<string, unknown>),
+        !!result.isError
+          && !toolReportsVerdict(activeToolCall.name, activeToolCall.input as Record<string, unknown>, result as { isError?: boolean; content?: unknown; metadata?: Record<string, unknown> }),
         breakerTarget,
       );
 

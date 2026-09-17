@@ -56,11 +56,21 @@ describe("ShellExecTool", () => {
     const missing = await tool.execute({ command: "grep -q x /nonexistent/file/for/test" }, ctx);
     expect(missing.metadata?.["exitCode"]).toBe(2);
     expect(missing.isError).toBe(true);
-    // A chain decides by its LAST segment.
+    // A CHAIN gets no implicit allowance: `dotnet build; grep -q x log`
+    // ended in grep's 1 and read as success — a failed build cleared the
+    // compile debt (Codex 2026-09-17). Name ok_exit_codes to chain.
     const chained = await tool.execute({ command: "echo hi && grep -q nope /dev/null" }, ctx);
-    expect(chained.isError).toBeFalsy();
+    expect(chained.isError).toBe(true);
+    const shortCircuit = await tool.execute({ command: "false && grep -q x /dev/null" }, ctx);
+    expect(shortCircuit.isError).toBe(true);
     const wrapped = await tool.execute({ command: "grep -q nope /dev/null; exit 3" }, ctx);
     expect(wrapped.isError).toBe(true);
+    // A chain that STARTS with a predicate must not lend its allowance to
+    // what follows: `grep -q x f; dotnet build` failing with 1 is a failure.
+    const grepThenFail = await tool.execute({ command: "grep -q nope /dev/null; exit 1" }, ctx);
+    expect(grepThenFail.isError).toBe(true);
+    const named = await tool.execute({ command: "echo hi && grep -q nope /dev/null", ok_exit_codes: [0, 1] }, ctx);
+    expect(named.isError).toBeFalsy();
   });
 
   it("the caller can name the exit codes that mean success", async () => {
@@ -68,6 +78,12 @@ describe("ShellExecTool", () => {
     expect(accepted.isError).toBeFalsy();
     const refused = await tool.execute({ command: "exit 4", ok_exit_codes: [0, 3] }, ctx);
     expect(refused.isError).toBe(true);
+    // The list is EXCLUSIVE: [0] can require equality from a predicate, and
+    // [3] does not accept 0 (Codex 2026-09-17 #2).
+    const strictGrep = await tool.execute({ command: "grep -q __absent__ /dev/null", ok_exit_codes: [0] }, ctx);
+    expect(strictGrep.isError).toBe(true);
+    const onlyThree = await tool.execute({ command: "exit 0", ok_exit_codes: [3] }, ctx);
+    expect(onlyThree.isError).toBe(true);
     const malformed = await tool.execute({ command: "exit 0", ok_exit_codes: ["zero"] }, ctx);
     expect(malformed.isError).toBe(true);
     expect(malformed.content).toContain("ok_exit_codes");
