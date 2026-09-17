@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
 import { SqliteVaultStore, ftsText } from "./sqlite-vault-store.js";
+import { compoundVariants, escapeFtsQuery } from "./fts-query.js";
 import type { VaultChunk, VaultFile } from "./vault.interface.js";
 
 const FILE: VaultFile = {
@@ -158,5 +159,62 @@ describe("FTS rebuild on upgrade", () => {
     // removed this returns ["c1"] and the test fails, which is the point.
     expect(second.searchFts("update buff", 10)).toEqual([]);
     second.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Plan 6.7 (audit 05.cap / D44): the split family measured 0.1028 nDCG@10 with
+// 22 of 60 queries returning nothing relevant, because "Update Buff" matches
+// every chunk that merely says "update" or "buff" — everywhere, in real code.
+// ---------------------------------------------------------------------------
+describe("compound identifiers in the MATCH expression (plan 6.7)", () => {
+  it("offers the concatenation adjacent words could spell, longest runs included", () => {
+    expect(compoundVariants(["Update", "Buff"])).toEqual(["UpdateBuff"]);
+    expect(compoundVariants(["update", "buff", "duration"])).toEqual([
+      "updatebuff", "updatebuffduration", "buffduration",
+    ]);
+    // Only identifier-shaped words: a concatenation that cannot be a symbol is noise.
+    expect(compoundVariants(["update", "42%"])).toEqual([]);
+    expect(compoundVariants(["single"])).toEqual([]);
+  });
+
+  it("keeps every loose term and adds the compound, so recall never drops", () => {
+    const expression = escapeFtsQuery("Update Buff");
+    expect(expression).toContain('"Update"');
+    expect(expression).toContain('"Buff"');
+    expect(expression).toContain('"UpdateBuff"');
+    expect(expression).toContain('OR "Update Buff"');
+  });
+
+  it("ranks the definition first for a human-typed identifier, against a noisy index", async () => {
+    const { mkdtempSync: mk, rmSync: rm } = await import("node:fs");
+    const noisyDir = mk(join(tmpdir(), "fts-compound-"));
+    const noisy = new SqliteVaultStore(join(noisyDir, "index.db"));
+    try {
+      noisy.migrate();
+      noisy.upsertFile(FILE);
+      noisy.upsertChunk(CHUNK);
+      // Twenty chunks that each say "update" or "buff" without defining the symbol:
+      // under a bare OR of the two words these outrank the definition.
+      for (let i = 0; i < 20; i++) {
+        const path = `Assets/Scripts/Noise${i}.cs`;
+        noisy.upsertFile({ ...FILE, path, blobHash: `h${i}` });
+        noisy.upsertChunk({
+          chunkId: `n${i}`, path, startLine: 1, endLine: 3, tokenCount: 20,
+          // BOTH words, many times: under a bare OR of the two, term frequency
+          // puts these above the one chunk that actually defines UpdateBuff.
+          content: "// update the buff, update the buff timer, buff update pending, "
+            + "update buff cooldown, buff update queue, update the buff stack",
+        });
+      }
+      const ranked = noisy.searchFts(escapeFtsQuery("Update Buff"), 10).map((h) => h.chunkId);
+      expect(ranked[0]).toBe("c1");
+      // Guard: the exact spelling still finds it, and the loose words still match.
+      expect(noisy.searchFts(escapeFtsQuery("UpdateBuff"), 10).map((h) => h.chunkId)[0]).toBe("c1");
+      expect(noisy.searchFts(escapeFtsQuery("update"), 10).length).toBeGreaterThan(1);
+    } finally {
+      noisy.close();
+      rm(noisyDir, { recursive: true, force: true });
+    }
   });
 });

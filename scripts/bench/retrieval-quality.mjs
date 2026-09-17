@@ -245,6 +245,10 @@ async function measure() {
   const { chunkFile } = await import(path.join(DIST, "vault/chunker.js"));
   const { SqliteVaultStore } = await import(path.join(DIST, "vault/sqlite-vault-store.js"));
   const { createLogger } = await import(path.join(DIST, "utils/logger.js"));
+  // MEASURE WHAT THE PRODUCT DOES: the vault builds its MATCH expression with
+  // escapeFtsQuery, so a benchmark that hands searchFts a raw string measures a
+  // path no user takes (plan 6.7).
+  const { escapeFtsQuery } = await import(path.join(DIST, "vault/fts-query.js"));
   createLogger("error", "retrieval.log");
 
   const corpus = loadCorpus();
@@ -273,7 +277,7 @@ async function measure() {
     for (const [family, queries] of Object.entries(families)) {
       let sumNdcg = 0, sumRecall = 0, sumCapped = 0, sumRr = 0, zeroHit = 0;
       for (const { query, relevant } of queries) {
-        const ranked = store.searchFts(query, TOP_K).map((h) => h.chunkId);
+        const ranked = store.searchFts(escapeFtsQuery(query), TOP_K).map((h) => h.chunkId);
         sumNdcg += ndcg(ranked, relevant, TOP_K);
         sumRecall += recall(ranked, relevant, TOP_K);
         sumCapped += recallCapped(ranked, relevant, TOP_K);

@@ -15,11 +15,11 @@
       "zeroHitQueries": 0
     },
     "split": {
-      "ndcg10": 0.1028,
-      "recall10": 0.0502,
-      "recallCapped10": 0.0985,
-      "mrr": 0.2603,
-      "zeroHitQueries": 22
+      "ndcg10": 1,
+      "recall10": 0.5342,
+      "recallCapped10": 1,
+      "mrr": 1,
+      "zeroHitQueries": 0
     }
   }
 }
