@@ -53,9 +53,16 @@ export interface IChannelSender {
    * senders leave this undefined.
    */
   /**
-   * Bind a chat to the channel that owns it. FALSE means this hub has no
-   * such channel, so a notification for that chat must not be delivered
-   * elsewhere (Codex round 8 #6).
+   * Bind a chat to the channel that owns it. TRUE is the only answer that
+   * authorizes delivery: FALSE means this hub has no such channel (round 8 #6)
+   * and NO answer (a sender that implements this but returns nothing) is
+   * refused too — silence is not consent (round 9 #32).
+   *
+   * A single-channel runtime hands the daemon the raw adapter, which leaves
+   * this undefined; ownership is then proven by `IChannelCore.name`, which
+   * every adapter sets to the same string it stamps on incoming messages'
+   * `channelType` ("cli", "web", "telegram", "slack", "discord", "teams").
+   * Keep those two in step or owned notifications stop being deliverable.
    */
   bindOwner?(chatId: string, channelType: string): boolean | void;
 }

@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import type { DaemonEventMap } from "../daemon-events.js";
 import type { NotificationConfig, QuietHoursConfig } from "./notification-types.js";
 import type { IChannelSender } from "../../channels/channel-core.interface.js";
+import { getLoggerSafe } from "../../utils/logger.js";
 import { HubChannel } from "../../channels/hub/hub-channel.js";
 import type { IChannelAdapter } from "../../channels/channel.interface.js";
 import type { IncomingMessage } from "../../channels/channel-messages.interface.js";
@@ -723,6 +724,160 @@ describe("NotificationRouter", () => {
       expect(byChat.get("chat-a")).not.toContain("B's private goal");
       expect(byChat.get("chat-b")).toContain("B's private goal");
       expect(byChat.get("chat-b")).not.toContain("A's private goal");
+    });
+  });
+
+  /**
+   * Codex round 9 #32: ownership checking was bypassed in single-channel
+   * runtimes. A raw adapter has no bindOwner(), so `bindOwner?.(…) === false`
+   * was `undefined === false` and the guard passed: a persisted Slack-owned
+   * task resumed with only the CLI configured printed the Slack owner's
+   * notification on the CLI. An owned notification now needs a POSITIVE
+   * ownership answer, on the immediate path and on the quiet-hours drain alike.
+   */
+  describe("an owned notification needs a positive ownership match (round 9 #32)", () => {
+    /** A single-channel runtime: a raw adapter, no hub, so no bindOwner(). */
+    function singleChannel(name: string | undefined): IChannelSender & { sendMarkdown: ReturnType<typeof vi.fn> } {
+      const sender = {
+        sendText: vi.fn().mockResolvedValue(undefined),
+        sendMarkdown: vi.fn().mockResolvedValue(undefined),
+      } as IChannelSender & { sendMarkdown: ReturnType<typeof vi.fn> };
+      if (name !== undefined) (sender as { name?: string }).name = name;
+      return sender;
+    }
+
+    function routerWith(sender: IChannelSender, quiet = false): NotificationRouter {
+      return new NotificationRouter({
+        config: defaultNotifConfig,
+        quietHoursConfig: quiet ? { ...defaultQuietConfig, enabled: true, startHour: 0, endHour: 24 } : defaultQuietConfig,
+        eventBus,
+        storage,
+        channelSender: sender,
+        chatId: "cli-local",
+      });
+    }
+
+    let warned: ReturnType<typeof vi.spyOn>;
+    beforeEach(() => {
+      warned = vi.spyOn(getLoggerSafe(), "warn");
+    });
+    afterEach(() => {
+      warned.mockRestore();
+    });
+
+    const reasons = (): string[] =>
+      warned.mock.calls
+        .map((call) => (call[1] as { reason?: unknown } | undefined)?.reason)
+        .filter((reason): reason is string => typeof reason === "string");
+
+    it("refuses a Slack-owned notification when the only configured channel is the CLI, naming the reason", async () => {
+      const cli = singleChannel("cli");
+      const router = routerWith(cli);
+
+      await router.notify({
+        level: "high",
+        title: "Slack-owned goal finished",
+        message: "done",
+        timestamp: Date.now(),
+        chatId: "C123:1700.1",
+        channelType: "slack",
+      });
+
+      expect(cli.sendMarkdown).not.toHaveBeenCalled();
+      expect(reasons().join(" | ")).toMatch(/"cli".*"slack"|"slack".*"cli"/);
+      expect(storage.getNotificationHistory(10)[0]?.deliveredTo).toEqual(["dashboard"]);
+    });
+
+    it("still delivers when the single configured channel IS the owner", async () => {
+      const cli = singleChannel("cli");
+      const router = routerWith(cli);
+
+      await router.notify({
+        level: "high",
+        title: "CLI-owned goal finished",
+        message: "done",
+        timestamp: Date.now(),
+        chatId: "cli-local",
+        channelType: "cli",
+      });
+
+      expect(cli.sendMarkdown).toHaveBeenCalledWith("cli-local", expect.stringContaining("CLI-owned goal finished"));
+      expect(reasons()).toEqual([]);
+    });
+
+    it("refuses when the channel answers nothing about ownership instead of reading that as a match", async () => {
+      const mute = singleChannel("hub-like");
+      (mute as { bindOwner?: (chatId: string, channelType: string) => boolean | void }).bindOwner = vi.fn(() => undefined);
+      const router = routerWith(mute);
+
+      await router.notify({
+        level: "high",
+        title: "Slack-owned goal finished",
+        message: "done",
+        timestamp: Date.now(),
+        chatId: "C123:1700.2",
+        channelType: "slack",
+      });
+
+      expect(mute.sendMarkdown).not.toHaveBeenCalled();
+      expect(reasons().join(" | ")).toMatch(/did not answer/i);
+    });
+
+    it("refuses when the configured channel cannot be identified at all", async () => {
+      const anonymous = singleChannel(undefined);
+      const router = routerWith(anonymous);
+
+      await router.notify({
+        level: "high",
+        title: "Slack-owned goal finished",
+        message: "done",
+        timestamp: Date.now(),
+        chatId: "C123:1700.3",
+        channelType: "slack",
+      });
+
+      expect(anonymous.sendMarkdown).not.toHaveBeenCalled();
+      expect(reasons().join(" | ")).toMatch(/cannot say which channel/i);
+    });
+
+    it("refuses the same delivery on the quiet-hours drain as on the immediate path", async () => {
+      const cli = singleChannel("cli");
+      const router = routerWith(cli, true);
+      const at = Date.now();
+
+      await router.notify({
+        level: "high",
+        title: "Slack-owned goal finished",
+        message: "done",
+        timestamp: at,
+        chatId: "C123:1700.4",
+        channelType: "slack",
+      });
+      expect(cli.sendMarkdown).not.toHaveBeenCalled(); // buffered, not delivered
+
+      await router.drainBufferedNotifications(at + 1);
+      expect(cli.sendMarkdown).not.toHaveBeenCalled();
+      expect(reasons().join(" | ")).toMatch(/"cli".*"slack"|"slack".*"cli"/);
+    });
+
+    it("drains a buffered notification the single channel does own", async () => {
+      const cli = singleChannel("cli");
+      const router = routerWith(cli, true);
+      const at = Date.now();
+
+      await router.notify({
+        level: "high",
+        title: "CLI-owned goal finished",
+        message: "done",
+        timestamp: at,
+        chatId: "cli-local",
+        channelType: "cli",
+      });
+      expect(cli.sendMarkdown).not.toHaveBeenCalled();
+
+      await router.drainBufferedNotifications(at + 1);
+      expect(cli.sendMarkdown).toHaveBeenCalledWith("cli-local", expect.stringContaining("CLI-owned goal finished"));
+      expect(reasons()).toEqual([]);
     });
   });
 

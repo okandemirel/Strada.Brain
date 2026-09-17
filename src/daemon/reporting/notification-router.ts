@@ -211,16 +211,18 @@ export class NotificationRouter {
         const markdown = this.formatNotification(deliveryPayload);
         try {
           if (deliveryPayload.chatId && deliveryPayload.channelType) {
-            // A BINDING THAT FAILED MEANS THE OWNER'S CHANNEL IS NOT HERE:
-            // bindOwner's false answer was ignored, so a Slack-owned goal was
-            // delivered to whatever channel the hub had instead — to someone
-            // else's conversation (Codex 2026-09-17 round 8 #6).
-            const bound = this.channelSender.bindOwner?.(deliveryPayload.chatId, deliveryPayload.channelType);
-            if (bound === false) {
-              getLoggerSafe().warn("A notification's owning channel is not configured — not delivering it elsewhere", {
+            // AN OWNED NOTIFICATION NEEDS A POSITIVE OWNERSHIP MATCH: a false
+            // answer means the owner's channel is not here (round 8 #6), and
+            // NO answer means nobody checked — a raw single-channel adapter has
+            // no bindOwner(), so `undefined === false` let a Slack-owned goal
+            // print on the CLI (round 9 #32).
+            const ownership = this.ownershipOf(deliveryPayload.chatId, deliveryPayload.channelType);
+            if (!ownership.ok) {
+              getLoggerSafe().warn("A notification's owning channel is not confirmed — not delivering it elsewhere", {
                 chatId: deliveryPayload.chatId,
                 channelType: deliveryPayload.channelType,
                 title: deliveryPayload.title,
+                reason: ownership.reason,
               });
               continue;
             }
@@ -356,12 +358,15 @@ export class NotificationRouter {
       if (!this.channelSender || !target) continue;
       try {
         if (group.chatId && group.channelType) {
-          const bound = this.channelSender.bindOwner?.(group.chatId, group.channelType);
-          if (bound === false) {
-            getLoggerSafe().warn("Buffered notifications belong to a channel this hub does not have — not delivering them elsewhere", {
+          // The SAME positive-match rule as the immediate path (round 9 #32):
+          // a drain must not deliver what deliver() would have refused.
+          const ownership = this.ownershipOf(group.chatId, group.channelType);
+          if (!ownership.ok) {
+            getLoggerSafe().warn("Buffered notifications' owning channel is not confirmed — not delivering them elsewhere", {
               chatId: group.chatId,
               channelType: group.channelType,
               count: group.items.length,
+              reason: ownership.reason,
             });
             continue;
           }
@@ -532,6 +537,53 @@ export class NotificationRouter {
   // =========================================================================
   // PRIVATE: Helpers
   // =========================================================================
+
+  /**
+   * Can this runtime prove that `chatId` on `channelType` is deliverable HERE?
+   *
+   * An owned notification (one carrying the owner's chatId AND channelType from
+   * the task/goal row) is delivered only on a POSITIVE match. Three answers,
+   * all of them explicit (round 9 #32):
+   *  - a multi-channel sender (HubChannel) answers with bindOwner(): true binds
+   *    and delivers, false means the owner's channel is not configured;
+   *  - a single-channel runtime hands the daemon the RAW adapter, which has no
+   *    bindOwner(). Its own name IS its channelType for every adapter
+   *    (cli/web/telegram/slack/discord/teams all set `name` to the string they
+   *    stamp on incoming messages), so ownership is proven by that name and by
+   *    nothing else;
+   *  - anything that can neither be asked nor identified is refused with a
+   *    reason, never treated as a match — silence used to read as consent.
+   */
+  private ownershipOf(chatId: string, channelType: string): { ok: true } | { ok: false; reason: string } {
+    const sender = this.channelSender;
+    if (!sender) return { ok: false, reason: "no channel is configured" };
+    const senderName = this.senderName();
+
+    if (typeof sender.bindOwner === "function") {
+      const bound = sender.bindOwner(chatId, channelType);
+      if (bound === true) return { ok: true };
+      if (bound === false) return { ok: false, reason: `no configured channel is "${channelType}"` };
+      return {
+        ok: false,
+        reason: `channel "${senderName ?? "unnamed"}" did not answer whether it owns "${channelType}"`,
+      };
+    }
+
+    if (senderName === undefined) {
+      return {
+        ok: false,
+        reason: `the configured channel cannot say which channel a chat belongs to (no bindOwner, no name), so "${channelType}" ownership is unprovable`,
+      };
+    }
+    if (senderName.toLowerCase() === channelType.trim().toLowerCase()) return { ok: true };
+    return { ok: false, reason: `the only configured channel is "${senderName}", not the owner "${channelType}"` };
+  }
+
+  /** The configured sender's channel name, when it has one (adapters do; a bare sender may not). */
+  private senderName(): string | undefined {
+    const name = (this.channelSender as { name?: unknown } | undefined)?.name;
+    return typeof name === "string" && name.trim() ? name.trim() : undefined;
+  }
 
   private logToHistory(payload: NotificationPayload, deliveredTo: string[]): void {
     this.storage.insertNotificationHistory({
