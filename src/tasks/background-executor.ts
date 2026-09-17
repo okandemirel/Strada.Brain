@@ -297,6 +297,15 @@ export class BackgroundExecutor {
   private monitorLifecycle?: MonitorLifecycle;
   private daemonBudgetTracker?: BudgetTracker;
   private _unifiedBudgetManager?: UnifiedBudgetManager;
+  /**
+   * Budget reservation held by each in-flight run, keyed by task id (plan
+   * 2.12 / audit 03.1 / D20). Taken when the run STARTS, shrunk by every cost
+   * the run records, released on every terminal — one unconditional path in
+   * executeTask's finally, plus an immediate release on cancel. In-memory by
+   * design: a restart has no in-flight runs, so nothing to carry over, and
+   * the keep-alive / re-arm paths start a NEW run that takes its own.
+   */
+  private readonly runReservations = new Map<string, string>();
   private readonly projectPath?: string;
 
   constructor(opts: BackgroundExecutorOptions) {
@@ -1612,6 +1621,12 @@ export class BackgroundExecutor {
     /** The goal-tree completion that travels with it. */
     let pendingGoalCompletion: (() => void) | undefined;
     let activeGoalTree: GoalTree | undefined;
+    // Hold headroom for this run before any cost is booked, so a run that
+    // starts alongside it sees the wallet already committed (D20). Released
+    // immediately on cancel and unconditionally in the finally below.
+    const budgetReservationId = this.reserveRunBudget(task);
+    const releaseOnCancel = () => this.releaseRunBudget(task);
+    if (budgetReservationId) signal.addEventListener("abort", releaseOnCancel, { once: true });
     try {
       const hasRichInput =
         (task.attachments?.length ?? 0) > 0 ||
@@ -1948,6 +1963,10 @@ export class BackgroundExecutor {
       requestFailed = true;
       this.taskManager.fail(task.id, sanitizedErrMsg);
     } finally {
+      // The run is over on EVERY path (completed, failed, blocked, cancelled,
+      // thrown): its reservation must not hold headroom a moment longer.
+      signal.removeEventListener("abort", releaseOnCancel);
+      this.releaseRunBudget(task);
       unsubscribeLiveness();
       // Commit BEFORE release — release() deletes the lease directory. This is
       // the task-scoped lease, the one a normal CLI request actually takes; the
@@ -2135,13 +2154,17 @@ export class BackgroundExecutor {
       if (this._unifiedBudgetManager) {
         // An agent's task spends the AGENT's allowance (audit 03.5 / D23):
         // recorded as chat, a capped agent could run background work for ever.
-        const source = task.agentId ? "agent" : task.origin === "daemon" ? "daemon" : "chat";
+        const source = this.budgetSourceOf(task);
+        // Booked spend shrinks the run's reservation, so used + outstanding
+        // stays exact instead of counting this cost twice (plan 2.12 / D20).
+        const reservationId = this.runReservations.get(String(task.id));
         this._unifiedBudgetManager.recordCost(costUsd, source, {
           model,
           tokensIn: usage.inputTokens,
           tokensOut: usage.outputTokens,
           triggerName: task.triggerName,
           ...(task.agentId ? { agentId: task.agentId } : {}),
+          ...(reservationId ? { reservationId } : {}),
         });
         return;
       }
@@ -2152,6 +2175,54 @@ export class BackgroundExecutor {
         triggerName: task.triggerName,
       });
     };
+  }
+
+  /** Whose allowance a task's spend lands on (audit 03.5 / D23). */
+  private budgetSourceOf(task: Task): "agent" | "daemon" | "chat" {
+    return task.agentId ? "agent" : task.origin === "daemon" ? "daemon" : "chat";
+  }
+
+  /**
+   * Reserve this run's headroom against the wallet (plan 2.12 / audit 03.1 /
+   * D20). The task's own estimate wins when it carries one (`estimatedCostUsd`,
+   * a soft field — Task has no typed estimate today); otherwise the configured
+   * `budget.taskReservationUsd`. Returns undefined when there is no unified
+   * manager to reserve against. Never throws: a wallet that cannot be reserved
+   * must not stop the run — the recorded-spend gates still apply.
+   */
+  private reserveRunBudget(task: Task): string | undefined {
+    const manager = this._unifiedBudgetManager;
+    if (!manager || typeof manager.reserve !== "function") return undefined;
+    try {
+      const own = (task as Task & { estimatedCostUsd?: number }).estimatedCostUsd;
+      const estimate = typeof own === "number" && Number.isFinite(own) && own > 0
+        ? own
+        : manager.getTaskReservationUsd();
+      const id = manager.reserve(estimate, this.budgetSourceOf(task), task.agentId);
+      this.runReservations.set(String(task.id), id);
+      return id;
+    } catch (err) {
+      getLoggerSafe().warn("Budget reservation could not be taken for a task run — running unreserved", {
+        taskId: task.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return undefined;
+    }
+  }
+
+  /** Release this run's reservation. Idempotent — the second call finds nothing. */
+  private releaseRunBudget(task: Task): void {
+    const id = this.runReservations.get(String(task.id));
+    if (!id) return;
+    this.runReservations.delete(String(task.id));
+    try {
+      this._unifiedBudgetManager?.release(id);
+    } catch (err) {
+      getLoggerSafe().warn("Budget reservation could not be released", {
+        taskId: task.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   /** Automatic resumes spent per goal root, with the progress each round reached. */
@@ -2402,7 +2473,11 @@ export class BackgroundExecutor {
     // the mission was left with no appointment at all (Codex 2026-09-12 Q#2).
     let budgetExceeded: boolean;
     try {
-      budgetExceeded = this._unifiedBudgetManager?.isGlobalExceeded() ?? false;
+      // Called from inside the run's own settle, before its finally releases:
+      // the run's own reservation must not read as "the wallet is full" (D20).
+      budgetExceeded = this._unifiedBudgetManager?.isGlobalExceeded({
+        ignoreReservationId: this.runReservations.get(String(task.id)),
+      }) ?? false;
     } catch (err) {
       getLoggerSafe().warn("Budget could not be read while parking a mission — treating it as exceeded", {
         taskId: task.id,

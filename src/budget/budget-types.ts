@@ -28,6 +28,13 @@ export interface CostMetadata {
   readonly tokensOut?: number;
   readonly triggerName?: string;
   readonly agentId?: string;
+  /**
+   * Charge this cost against an outstanding in-process reservation
+   * (UnifiedBudgetManager.reserve), shrinking the headroom it still holds.
+   * Without it a running task is counted twice — once as recorded spend,
+   * once as its own untouched estimate (plan 2.12 / audit 03.1 / D20).
+   */
+  readonly reservationId?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -77,6 +84,16 @@ export interface UnifiedBudgetConfig {
    * to TaskConfig default. -1 = unlimited.
    */
   readonly interactiveTokenBudget?: number;
+  /**
+   * Headroom a background task run reserves for itself when it STARTS, in
+   * USD, until its real cost is recorded (plan 2.12 / audit 03.1 / D20).
+   * Two runs that started on the same remaining dollar both passed
+   * canSpend(), which summed recorded spend only. A task that carries its
+   * own estimate uses that instead. Unset → DEFAULT_BUDGET_CONFIG's 0.25;
+   * 0 disables task reservations. Reservations are in-memory: they hold
+   * headroom for work in flight in THIS process and vanish with it.
+   */
+  readonly taskReservationUsd?: number;
 }
 
 export const DEFAULT_BUDGET_CONFIG: UnifiedBudgetConfig = {
@@ -88,6 +105,7 @@ export const DEFAULT_BUDGET_CONFIG: UnifiedBudgetConfig = {
     agentDefaultUsd: 5.0,
     verificationPct: 0.15,
   },
+  taskReservationUsd: 0.25,
 };
 
 // ---------------------------------------------------------------------------

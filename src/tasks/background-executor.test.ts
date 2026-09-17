@@ -3868,3 +3868,140 @@ describe("workspacePolicy \"none\" means no lease at any level", () => {
     );
   });
 });
+
+// =============================================================================
+// RUN BUDGET RESERVATIONS (plan 2.12 / audit 03.1 / D20)
+// =============================================================================
+
+describe("BackgroundExecutor - run budget reservations (plan 2.12 / audit 03.1 / D20)", () => {
+  function createReservingManager() {
+    let seq = 0;
+    return {
+      reserve: vi.fn(() => `res_${++seq}`),
+      release: vi.fn(),
+      recordCost: vi.fn(),
+      chargeReservation: vi.fn(),
+      getTaskReservationUsd: vi.fn(() => 0.25),
+      isGlobalExceeded: vi.fn(() => false),
+    };
+  }
+
+  function harness(orchestrator: Record<string, unknown>, keepAlive: boolean) {
+    const executor = new BackgroundExecutor({ orchestrator: orchestrator as any, concurrencyLimit: 1 });
+    const unified = createReservingManager();
+    executor.setUnifiedBudgetManager(unified as any);
+    (executor as unknown as { scheduleMissionKeepAlive: () => boolean }).scheduleMissionKeepAlive = () => keepAlive;
+    const taskManager = {
+      updateStatus: vi.fn(), complete: vi.fn(), fail: vi.fn(), block: vi.fn(),
+      listStuckExecuting: vi.fn(() => []), listTasks: vi.fn(() => []), getStatus: vi.fn(() => null),
+    };
+    executor.setTaskManager(taskManager as any);
+    return { executor, unified, taskManager };
+  }
+
+  it("(c) a run reserves at start, charges every booked cost, and releases on completion", async () => {
+    const mockOrch = createMockOrchestrator();
+    const seen: { reservedBeforeUsage: number } = { reservedBeforeUsage: -1 };
+    let unifiedRef: ReturnType<typeof createReservingManager> | undefined;
+    mockOrch.runBackgroundTask.mockImplementation(async (_prompt: string, opts?: { onUsage?: (u: { provider: string; inputTokens: number; outputTokens: number }) => void }) => {
+      seen.reservedBeforeUsage = unifiedRef!.reserve.mock.calls.length;
+      opts?.onUsage?.({ provider: "claude", inputTokens: 100_000, outputTokens: 50_000 });
+      return "task done";
+    });
+    const { executor, unified, taskManager } = harness(mockOrch, false);
+    unifiedRef = unified;
+
+    executor.enqueue(createTestTask(undefined, { id: "task_res_ok" as any, origin: "daemon" }), new AbortController().signal, vi.fn());
+    await vi.waitFor(() => { expect(taskManager.complete).toHaveBeenCalled(); }, { timeout: 5000 });
+
+    // Reserved BEFORE the work ran, with the configured default and the run's source.
+    expect(seen.reservedBeforeUsage).toBe(1);
+    expect(unified.reserve).toHaveBeenCalledWith(0.25, "daemon", undefined);
+    // The booked cost carries the reservation id so the wallet does not count it twice.
+    expect(unified.recordCost).toHaveBeenCalledWith(
+      expect.any(Number), "daemon", expect.objectContaining({ reservationId: "res_1" }),
+    );
+    await vi.waitFor(() => { expect(unified.release).toHaveBeenCalledWith("res_1"); });
+    expect(unified.release).toHaveBeenCalledTimes(1);
+  });
+
+  it("(c) a task's own estimate wins over the configured default, and an agent task reserves on the agent", async () => {
+    const mockOrch = createMockOrchestrator();
+    const { executor, unified, taskManager } = harness(mockOrch, false);
+    executor.enqueue(
+      createTestTask(undefined, { id: "task_res_est" as any, agentId: "agent_9", estimatedCostUsd: 1.5 } as any),
+      new AbortController().signal, vi.fn(),
+    );
+    await vi.waitFor(() => { expect(taskManager.complete).toHaveBeenCalled(); }, { timeout: 5000 });
+    expect(unified.reserve).toHaveBeenCalledWith(1.5, "agent", "agent_9");
+    await vi.waitFor(() => { expect(unified.release).toHaveBeenCalledWith("res_1"); });
+  });
+
+  it("(c) released when the run FAILS (thrown) — the keep-alive gate ignores the run's own reservation", async () => {
+    const mockOrch = createMockOrchestrator();
+    mockOrch.runBackgroundTask.mockRejectedValue(new Error("provider exploded"));
+    const executor = new BackgroundExecutor({ orchestrator: mockOrch as any, concurrencyLimit: 1 });
+    const unified = createReservingManager();
+    executor.setUnifiedBudgetManager(unified as any);
+    const taskManager = {
+      updateStatus: vi.fn(), complete: vi.fn(), fail: vi.fn(), block: vi.fn(),
+      appendTaskNotice: vi.fn(), retryTask: vi.fn(),
+      listStuckExecuting: vi.fn(() => []), listTasks: vi.fn(() => []), getStatus: vi.fn(() => null),
+    };
+    executor.setTaskManager(taskManager as any);
+
+    executor.enqueue(createTestTask(undefined, { id: "task_res_fail" as any, origin: "user" }), new AbortController().signal, vi.fn());
+    await vi.waitFor(() => { expect(unified.release).toHaveBeenCalledWith("res_1"); }, { timeout: 5000 });
+    // The real keep-alive ran and asked the wallet on the run's own behalf.
+    expect(unified.isGlobalExceeded).toHaveBeenCalledWith({ ignoreReservationId: "res_1" });
+    expect(unified.release).toHaveBeenCalledTimes(1);
+  });
+
+  it("(c) released when the worker comes back BLOCKED", async () => {
+    const orchestrator = {
+      runWorkerTask: vi.fn().mockResolvedValue({
+        status: "blocked", reason: "blocked:provider_unavailable",
+        finalSummary: "", visibleResponse: "", provider: "mock", catalogVersion: "mock:default",
+        assignmentVersion: 0, touchedFiles: [], toolTrace: [], verificationResults: [],
+        reviewFindings: [], artifacts: [],
+      }),
+    };
+    const { executor, unified } = harness(orchestrator, true);
+    executor.enqueue(createTestTask(undefined, { id: "task_res_blocked" as any }), new AbortController().signal, vi.fn());
+    await vi.waitFor(() => { expect(unified.release).toHaveBeenCalledWith("res_1"); }, { timeout: 5000 });
+    expect(unified.reserve).toHaveBeenCalledTimes(1);
+    expect(unified.release).toHaveBeenCalledTimes(1);
+  });
+
+  it("(c) a CANCELLED run releases immediately, before the runner unwinds", async () => {
+    let settle: (() => void) | undefined;
+    const runBackgroundTask = vi.fn(async (_prompt: string, opts: { signal: AbortSignal }) =>
+      new Promise<string>((_, reject) => {
+        // Unwind only when the test says so — the release must not wait for it.
+        opts.signal.addEventListener("abort", () => { settle = () => reject(new Error("aborted")); }, { once: true });
+      }));
+    const { executor, unified } = harness({ runBackgroundTask }, false);
+    const external = new AbortController();
+    executor.enqueue(createTestTask(undefined, { id: "task_res_cancel" as any }), external.signal, vi.fn());
+    await vi.waitFor(() => expect(runBackgroundTask).toHaveBeenCalledTimes(1), { timeout: 3000 });
+    expect(unified.reserve).toHaveBeenCalledTimes(1);
+    expect(unified.release).not.toHaveBeenCalled();
+
+    external.abort();
+    expect(unified.release).toHaveBeenCalledWith("res_1");
+
+    // The late unwind reaches the finally, which finds nothing left to release.
+    settle?.();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(unified.release).toHaveBeenCalledTimes(1);
+  });
+
+  it("a wallet that cannot reserve does not stop the run", async () => {
+    const mockOrch = createMockOrchestrator();
+    const { executor, unified, taskManager } = harness(mockOrch, false);
+    unified.reserve.mockImplementation(() => { throw new Error("storage locked"); });
+    executor.enqueue(createTestTask(undefined, { id: "task_res_unreserved" as any }), new AbortController().signal, vi.fn());
+    await vi.waitFor(() => { expect(taskManager.complete).toHaveBeenCalled(); }, { timeout: 5000 });
+    expect(unified.release).not.toHaveBeenCalled();
+  });
+});
