@@ -243,3 +243,50 @@ describe("TaskCheckpointStore — multi-user isolation", () => {
     expect(loaded?.timestamp).toBe(now + 500);
   });
 });
+
+/**
+ * A checkpoint is where "what did that run change, and can I undo it?" is asked
+ * from after a restart. `touchedFiles` is a list of names and cannot answer it;
+ * the change review can (src/agents/multi/workspace-change-review.ts), so the
+ * checkpoint carries its id instead of a second store keyed some other way.
+ */
+describe("TaskCheckpointStore — change review id", () => {
+  let tmpDir: string;
+  let store: TaskCheckpointStore;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "task-checkpoint-review-"));
+    store = new TaskCheckpointStore(join(tmpDir, "task-checkpoints.db"));
+    store.initialize();
+  });
+
+  afterEach(() => {
+    store.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("round-trips the change review id through save/loadLatest/loadByTaskId/listRecent", async () => {
+    await store.save(
+      makeCheckpoint({ taskId: "task-with-review", changeReviewId: "9f3a1c2d", userId: "user-A" }),
+    );
+
+    expect((await store.loadLatest("chat-1"))?.changeReviewId).toBe("9f3a1c2d");
+    expect((await store.loadByTaskId("task-with-review"))?.changeReviewId).toBe("9f3a1c2d");
+    expect((await store.loadLatestForUser("chat-1", "user-A"))?.changeReviewId).toBe("9f3a1c2d");
+    expect((await store.listRecent("chat-1"))[0]?.changeReviewId).toBe("9f3a1c2d");
+  });
+
+  it("a checkpoint without one stays without one, and an empty id is not stored", async () => {
+    await store.save(makeCheckpoint({ taskId: "task-no-review" }));
+    await store.save(makeCheckpoint({ taskId: "task-empty-review", changeReviewId: "" }));
+
+    expect((await store.loadByTaskId("task-no-review"))?.changeReviewId).toBeUndefined();
+    expect((await store.loadByTaskId("task-empty-review"))?.changeReviewId).toBeUndefined();
+  });
+
+  it("clamps an oversized id like every other caller-supplied string", async () => {
+    await store.save(makeCheckpoint({ taskId: "task-long-review", changeReviewId: "x".repeat(5_000) }));
+    const loaded = await store.loadByTaskId("task-long-review");
+    expect(loaded?.changeReviewId).toHaveLength(128);
+  });
+});

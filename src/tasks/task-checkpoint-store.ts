@@ -48,6 +48,17 @@ export interface PendingTaskCheckpoint {
     error?: string;
   };
   touchedFiles: string[];
+  /**
+   * The change review (`src/agents/multi/workspace-change-review.ts`) that
+   * holds what this task's lease PUBLISHED into the project: the per-path keep
+   * / undo record and the preserved previous versions.
+   *
+   * `touchedFiles` is a list of names — it cannot answer "put that back". A
+   * checkpoint that survives a restart is exactly where the question is asked
+   * from ("what did that run change, and can I undo it?"), so the id travels
+   * with it rather than in a second store keyed some other way.
+   */
+  changeReviewId?: string;
   budgetState?: {
     used: number;
     budget: number;
@@ -173,6 +184,13 @@ export class TaskCheckpointStore {
         typeof cp.inferredIntent === "string"
           ? cp.inferredIntent.slice(0, TaskCheckpointStore.MAX_INTENT_CHARS)
           : cp.inferredIntent,
+      // A review id is a directory name under the project's .strada — bounded
+      // like every other caller-supplied string here, and dropped rather than
+      // stored when it is not a usable one.
+      changeReviewId:
+        typeof cp.changeReviewId === "string" && cp.changeReviewId.length > 0
+          ? cp.changeReviewId.slice(0, TaskCheckpointStore.MAX_REVIEW_ID_CHARS)
+          : undefined,
     };
     const payload = JSON.stringify(clamped);
     // Persist userId as a dedicated column (nullable for back-compat). When
@@ -199,6 +217,7 @@ export class TaskCheckpointStore {
   private static readonly MAX_INTENT_CHARS = 2_000;
   private static readonly MAX_TASK_ID_CHARS = 256;
   private static readonly MAX_CHAT_ID_CHARS = 256;
+  private static readonly MAX_REVIEW_ID_CHARS = 128;
 
   /**
    * Return the most recent checkpoint for a chat, optionally scoped to the

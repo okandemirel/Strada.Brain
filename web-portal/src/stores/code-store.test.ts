@@ -202,3 +202,158 @@ describe('useCodeStore — resolveDiff', () => {
     expect(tab.modifiedContent).toBeUndefined()
   })
 })
+
+/**
+ * The defect this covers: resolveDiff() moved a tab's fields around and stopped
+ * there. "Accept" and "reject" lived in browser state alone, so what the user
+ * saw and what could actually be kept or put back in their project were two
+ * different things — and closing the tab lost the decision with nothing said.
+ *
+ * The server side is src/agents/multi/workspace-change-review.ts: it computes
+ * what an undo would do to each path (including "a human edited this after the
+ * run published it") and performs it. This store's job is to show that and to
+ * make sure every decision leaves the browser.
+ */
+describe('useCodeStore — change review and undo decisions', () => {
+  beforeEach(() => useCodeStore.getState().reset())
+
+  const review = {
+    reviewId: '9f3a1c2d',
+    createdAt: 1_700_000_000_000,
+    historyCommits: 2,
+    complete: false,
+    entries: [
+      { path: 'src/ready.ts', action: 'restore' as const, state: 'ready' as const },
+      {
+        path: 'src/mine.ts',
+        action: 'restore' as const,
+        state: 'changed-since' as const,
+        detail: 'someone changed this file after the run published it',
+      },
+    ],
+  }
+
+  function openDiff(path: string) {
+    useCodeStore.getState().openFile({
+      path,
+      content: 'run version',
+      language: 'typescript',
+      isDiff: true,
+      diffContent: '--- a\n+++ b',
+      originalContent: 'my version',
+      modifiedContent: 'run version',
+    })
+  }
+
+  it('queues a server-bound decision instead of only mutating the tab', () => {
+    useCodeStore.getState().setChangeReview(review)
+    openDiff('src/ready.ts')
+
+    useCodeStore.getState().resolveDiff('src/ready.ts', false)
+
+    const queued = useCodeStore.getState().pendingDecisions
+    expect(queued).toHaveLength(1)
+    expect(queued[0].path).toBe('src/ready.ts')
+    expect(queued[0].decision).toBe('undo')
+    expect(queued[0].reviewId).toBe('9f3a1c2d')
+    expect(queued[0].needsConfirm).toBe(false)
+  })
+
+  it('rejecting a diff puts the original content back on screen', () => {
+    openDiff('src/ready.ts')
+    useCodeStore.getState().resolveDiff('src/ready.ts', false)
+    expect(useCodeStore.getState().tabs[0].content).toBe('my version')
+  })
+
+  it('accepting queues a keep decision and shows the modified content', () => {
+    useCodeStore.getState().setChangeReview(review)
+    openDiff('src/ready.ts')
+    useCodeStore.getState().resolveDiff('src/ready.ts', true)
+    expect(useCodeStore.getState().tabs[0].content).toBe('run version')
+    expect(useCodeStore.getState().pendingDecisions[0].decision).toBe('keep')
+    expect(useCodeStore.getState().pendingDecisions[0].needsConfirm).toBe(false)
+  })
+
+  it('an undo for a path a human edited after the run has to be confirmed', () => {
+    useCodeStore.getState().setChangeReview(review)
+    openDiff('src/mine.ts')
+
+    useCodeStore.getState().resolveDiff('src/mine.ts', false)
+
+    const queued = useCodeStore.getState().pendingDecisions[0]
+    expect(queued.needsConfirm).toBe(true)
+    expect(useCodeStore.getState().review!.entries[1].detail).toContain('after the run published it')
+  })
+
+  it('an undo with no server-side review to act on has to be confirmed too', () => {
+    openDiff('src/unknown.ts')
+    useCodeStore.getState().resolveDiff('src/unknown.ts', false)
+    const queued = useCodeStore.getState().pendingDecisions[0]
+    expect(queued.reviewId).toBeNull()
+    expect(queued.needsConfirm).toBe(true)
+  })
+
+  it('re-deciding a path replaces its queued decision instead of sending both', () => {
+    useCodeStore.getState().setChangeReview(review)
+    openDiff('src/ready.ts')
+    useCodeStore.getState().resolveDiff('src/ready.ts', false)
+    useCodeStore.getState().resolveDiff('src/ready.ts', true)
+
+    const queued = useCodeStore.getState().pendingDecisions
+    expect(queued).toHaveLength(1)
+    expect(queued[0].decision).toBe('keep')
+  })
+
+  it('a decision outlives the tab it was made in', () => {
+    useCodeStore.getState().setChangeReview(review)
+    openDiff('src/ready.ts')
+    useCodeStore.getState().resolveDiff('src/ready.ts', false)
+    useCodeStore.getState().closeFile('src/ready.ts')
+
+    expect(useCodeStore.getState().tabs).toHaveLength(0)
+    expect(useCodeStore.getState().pendingDecisions).toHaveLength(1)
+  })
+
+  it('takePendingDecisions hands them over once and empties the queue', () => {
+    useCodeStore.getState().setChangeReview(review)
+    openDiff('src/ready.ts')
+    openDiff('src/mine.ts')
+    useCodeStore.getState().resolveDiff('src/ready.ts', false)
+    useCodeStore.getState().resolveDiff('src/mine.ts', true)
+
+    const taken = useCodeStore.getState().takePendingDecisions()
+    expect(taken.map((d) => d.path)).toEqual(['src/ready.ts', 'src/mine.ts'])
+    expect(useCodeStore.getState().pendingDecisions).toEqual([])
+    expect(useCodeStore.getState().takePendingDecisions()).toEqual([])
+  })
+
+  it('clearPendingDecision drops one without sending it', () => {
+    useCodeStore.getState().setChangeReview(review)
+    openDiff('src/ready.ts')
+    useCodeStore.getState().resolveDiff('src/ready.ts', false)
+    useCodeStore.getState().clearPendingDecision('src/ready.ts')
+    expect(useCodeStore.getState().pendingDecisions).toEqual([])
+  })
+
+  it('a new review does not inherit the previous run’s decisions', () => {
+    useCodeStore.getState().setChangeReview(review)
+    openDiff('src/ready.ts')
+    useCodeStore.getState().resolveDiff('src/ready.ts', false)
+
+    useCodeStore.getState().setChangeReview({ ...review, reviewId: 'another-run' })
+
+    expect(useCodeStore.getState().pendingDecisions).toEqual([])
+    expect(useCodeStore.getState().review!.reviewId).toBe('another-run')
+  })
+
+  it('reset clears the review and every undecided decision', () => {
+    useCodeStore.getState().setChangeReview(review)
+    openDiff('src/ready.ts')
+    useCodeStore.getState().resolveDiff('src/ready.ts', false)
+
+    useCodeStore.getState().reset()
+
+    expect(useCodeStore.getState().review).toBeNull()
+    expect(useCodeStore.getState().pendingDecisions).toEqual([])
+  })
+})

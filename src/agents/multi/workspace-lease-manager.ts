@@ -9,6 +9,15 @@ import { getLoggerSafe } from "../../utils/logger.js";
 import { markCaptureEntry, pruneCaptureEntries } from "./capture-retention.js";
 import { appendLeaseLedger, systemOwnedDeletionReason } from "./system-owned-path.js";
 import { isDerivedBuildOutput } from "./derived-build-output.js";
+import {
+  changeReviewDir,
+  hashFile,
+  previousCopyPath,
+  recordChangeReview,
+  type FileStamp,
+  type ReviewedChange,
+  type ReviewedHistory,
+} from "./workspace-change-review.js";
 
 export type WorkspaceLeaseKind = "git-worktree" | "temp-copy";
 
@@ -100,6 +109,22 @@ export interface WorkspaceCommitResult {
     shas: string[];
     /** Per submodule the lease checked out: commits replayed into the project's submodule, or why not. */
     submodules?: Array<{ path: string; replayed: number; note?: string }>;
+  };
+  /**
+   * The keep/undo record this commit left behind (workspace-change-review.ts):
+   * what it published, where the project's previous bytes are kept, and which
+   * commits the replay made. Without it a published run was unreviewable — the
+   * portal could show a diff and "accept" it in browser state alone, and the
+   * only other copy of the project's previous version was deleted with the
+   * workspace. Absent when the commit published nothing worth reviewing.
+   */
+  readonly changeReview?: {
+    readonly id: string;
+    /** Directory holding the record and the preserved previous versions. */
+    readonly path: string;
+    readonly changes: number;
+    /** How many of them an undo can actually put back. */
+    readonly undoable: number;
   };
 }
 
@@ -1458,7 +1483,7 @@ export class WorkspaceLeaseManager {
     workspacePath: string,
     heldRels: ReadonlySet<string>,
     deletedRels: ReadonlySet<string>,
-  ): Promise<WorkspaceCommitResult["commitsReplayed"]> {
+  ): Promise<{ report: WorkspaceCommitResult["commitsReplayed"]; history?: ReviewedHistory } | undefined> {
     let dotGit: import("node:fs").Stats;
     try {
       dotGit = await fsp.stat(join(workspacePath, ".git"));
@@ -1476,7 +1501,7 @@ export class WorkspaceLeaseManager {
       // Nothing in the parent, but the agent may have committed inside a
       // submodule (2026-09-10) — those live in the submodule's own history.
       const submodules = await this.replaySubmoduleCommits(sourceRoot, workspacePath);
-      return submodules.length > 0 ? { replayed: 0, skipped: 0, shas: [], submodules } : undefined;
+      return submodules.length > 0 ? { report: { replayed: 0, skipped: 0, shas: [], submodules } } : undefined;
     }
 
     const git = (args: string[], extra?: { env?: Record<string, string | undefined>; maxOutput?: number }) =>
@@ -1744,7 +1769,18 @@ export class WorkspaceLeaseManager {
       });
     }
     const submodules = await this.replaySubmoduleCommits(sourceRoot, workspacePath);
-    return { replayed: replayedShas.size, skipped, shas: projectShas, ...(submodules.length > 0 ? { submodules } : {}) };
+    // The commits the project ACTUALLY received, and the sha they were built
+    // on. `projectShas` is emptied on every path that left the branch where it
+    // was, so a non-empty list is the proof that HEAD moved — and the base is
+    // where an undo has to put it back.
+    const history: ReviewedHistory | undefined =
+      projectShas.length > 0
+        ? { base: baseSha, head: headSha, commits: [...projectShas], paths: [...touched] }
+        : undefined;
+    return {
+      report: { replayed: replayedShas.size, skipped, shas: projectShas, ...(submodules.length > 0 ? { submodules } : {}) },
+      ...(history ? { history } : {}),
+    };
   }
 
   /**
@@ -2138,6 +2174,17 @@ export class WorkspaceLeaseManager {
     // project's own .strada directory.
     const stagingRoot = join(sourceRoot, ".strada", "lease-staging", randomUUID().slice(0, 8));
     const previousOf = new Map<number, string>();
+    /**
+     * Exactly what this commit put on disk, per landed write: the sha256 of the
+     * bytes and the stat of the file right after they landed.
+     *
+     * This is what makes "did a HUMAN edit this file after the run published
+     * it?" answerable later. The stamp is the cheap question (a stat), the hash
+     * is the one that decides — a chmod, a touch or an xattr moves the stamp
+     * without changing a byte, and treating that as a concurrent edit would
+     * refuse an undo that is perfectly legitimate.
+     */
+    const publishedOf = new Map<number, { hash?: string; stamp?: FileStamp }>();
     /** Set when a rollback copy is the last one and could not be put anywhere safe. */
     let stagingHoldsTheOnlyCopy = false;
     /** Is this write half of a pair, so that a rollback may be needed for it? */
@@ -2183,7 +2230,22 @@ export class WorkspaceLeaseManager {
             throw new Error("the project's copy could not be backed up, and this file is half of a pair");
           }
         }
+        // Hashed from the STAGED copy, before the rename: the staged file is
+        // private to this commit, so the hash cannot pick up an editor's write
+        // that landed in the same instant. The stat has to come after.
+        const publishedHash = await hashFile(staged);
         await fsp.rename(staged, target);
+        try {
+          const landedStat = await fsp.stat(target);
+          publishedOf.set(index, {
+            ...(publishedHash !== undefined ? { hash: publishedHash } : {}),
+            stamp: { m: landedStat.mtimeMs, s: landedStat.size, c: landedStat.ctimeMs },
+          });
+        } catch {
+          // The stat is an optimisation for the review; the hash alone still
+          // answers "is this still the run's own work".
+          if (publishedHash !== undefined) publishedOf.set(index, { hash: publishedHash });
+        }
         landed.set(index, outcome.write);
         outcomes[index] = { written: rel };
         return true;
@@ -2267,6 +2329,60 @@ export class WorkspaceLeaseManager {
         };
       }
     });
+    // THE UNDO JOURNAL, taken while the staged copies are still alive.
+    //
+    // The write phase above already copied every file it was about to overwrite
+    // (`<staging>/<token>.prev`) so a half-written asset/.meta pair could be put
+    // back. Those copies were then deleted together with the staging directory
+    // — which is exactly what made a published run impossible to undo: the
+    // project's previous version of an untracked or gitignored file existed
+    // nowhere else, and for a tracked one you had to know which commit to look
+    // in. They now travel into the review's `previous/`, and they are the undo
+    // source (workspace-change-review.ts).
+    const reviewId = quarantineRoot ? basename(quarantineRoot) : basename(workspacePath);
+    const recordsReview = !opts?.quarantineOnly && resolve(sourceRoot) === resolve(this.projectRoot);
+    const reviewChanges: ReviewedChange[] = [];
+    if (recordsReview) {
+      for (const [index, write] of landed) {
+        // A write the pair rule rolled back is not a change to the project.
+        if (outcomes[index]?.written === undefined) continue;
+        const published = publishedOf.get(index);
+        const publishedFields = {
+          ...(published?.hash !== undefined ? { publishedHash: published.hash } : {}),
+          ...(published?.stamp !== undefined ? { publishedStamp: published.stamp } : {}),
+        };
+        if (!write.targetExisted) {
+          // The project did not have this file: undoing means removing it, and
+          // no previous copy is needed.
+          reviewChanges.push({ path: write.rel, action: "delete", ...publishedFields });
+          continue;
+        }
+        const prev = previousOf.get(index);
+        let preserved: { previousPath: string; previousHash?: string; previousBytes: number } | undefined;
+        if (prev !== undefined) {
+          try {
+            const to = previousCopyPath(this.projectRoot, reviewId, write.rel);
+            await fsp.mkdir(dirname(to), { recursive: true });
+            await fsp.copyFile(prev, to);
+            const st = await fsp.stat(to);
+            const hash = await hashFile(to);
+            preserved = { previousPath: to, previousBytes: st.size, ...(hash !== undefined ? { previousHash: hash } : {}) };
+          } catch {
+            preserved = undefined; // reported as unrecoverable below, never silently
+          }
+        }
+        reviewChanges.push({
+          path: write.rel,
+          action: "restore",
+          ...publishedFields,
+          ...(preserved ?? {
+            unrecoverable:
+              "the project's previous version could not be preserved when this run published, so it cannot be put back",
+          }),
+        });
+      }
+    }
+
     // The staged copies have served their purpose; the directory that held
     // them goes too, and its parent when nothing else is staging there —
     // unless it is holding the only copy of a version that could be neither
@@ -2453,12 +2569,60 @@ export class WorkspaceLeaseManager {
       }
     }
     let commitsReplayed: WorkspaceCommitResult["commitsReplayed"];
+    let replayHistory: ReviewedHistory | undefined;
     if (!opts?.quarantineOnly) {
       // Structured rels, not the report strings: " (reason)" stripping cut
       // "Hero (1).png (EACCES)" to "Hero" (report 2026-09-10 #34).
       const heldRels = new Set<string>([...conflicts, ...failedRels]);
       const deletedRels = new Set<string>(deleted.map((d) => d.replace(/ — .*$/, "")));
-      commitsReplayed = await this.replayLeaseCommits(sourceRoot, workspacePath, heldRels, deletedRels);
+      const replay = await this.replayLeaseCommits(sourceRoot, workspacePath, heldRels, deletedRels);
+      commitsReplayed = replay?.report;
+      replayHistory = replay?.history;
+    }
+
+    // The keep/undo record. Deletions join it here because they are decided
+    // after the write phase, and their copy is the one `preserve()` already
+    // put in the quarantine — nothing is stored twice.
+    let changeReview: WorkspaceCommitResult["changeReview"];
+    if (recordsReview) {
+      if (quarantineRoot !== null) {
+        for (const line of deleted) {
+          const rel = line.replace(/ — .*$/, "");
+          const previousPath = join(quarantineRoot, "deleted", rel);
+          const hash = await hashFile(previousPath);
+          let previousBytes: number | undefined;
+          try {
+            previousBytes = (await fsp.stat(previousPath)).size;
+          } catch {
+            previousBytes = undefined;
+          }
+          reviewChanges.push({
+            path: rel,
+            action: "restore-deleted",
+            ...(hash !== undefined && previousBytes !== undefined
+              ? { previousPath, previousHash: hash, previousBytes }
+              : {
+                  unrecoverable:
+                    "the deleted file's preserved copy could not be read, so it cannot be put back",
+                }),
+          });
+        }
+      }
+      const record = recordChangeReview({
+        projectRoot: this.projectRoot,
+        reviewId,
+        leaseId: basename(workspacePath),
+        ...(replayHistory ? { history: replayHistory } : {}),
+        changes: reviewChanges,
+      });
+      if (record) {
+        changeReview = {
+          id: record.reviewId,
+          path: changeReviewDir(this.projectRoot, record.reviewId),
+          changes: record.changes.length,
+          undoable: record.changes.filter((c) => c.unrecoverable === undefined).length,
+        };
+      }
     }
     return {
       written,
@@ -2470,6 +2634,7 @@ export class WorkspaceLeaseManager {
       quarantined,
       ...(capturesPruned ? { capturesPruned } : {}),
       ...(commitsReplayed ? { commitsReplayed } : {}),
+      ...(changeReview ? { changeReview } : {}),
     };
     } finally {
       lock?.release();
