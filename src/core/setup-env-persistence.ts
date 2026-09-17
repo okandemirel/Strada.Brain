@@ -19,7 +19,7 @@
  * Nothing here touches process.env.
  */
 
-import { open, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { link, open, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { hostname } from "node:os";
 import { randomBytes } from "node:crypto";
 import * as dotenv from "dotenv";
@@ -206,7 +206,12 @@ export const ENV_SAVE_LOCK = {
   timeoutMs: 15_000,
   /** Poll interval while another process holds the lock. */
   retryMs: 25,
-  /** A lock this old — or one whose owning process is gone — is broken. */
+  /**
+   * How old a lock with NO living owner to ask about may get before it is
+   * broken: one written by a process on another host, or one whose body cannot
+   * be read. A lock whose owner is alive on THIS host is never broken by age —
+   * see breakAbandonedLock.
+   */
   staleMs: 30_000,
 };
 
@@ -227,9 +232,21 @@ function isProcessAlive(pid: number): boolean {
 }
 
 /**
- * Remove a lock nobody can still be holding: its owner died on this host, or
- * it is older than `staleMs`. Returns true when the lock is (or already was)
- * gone, so the caller should try to take it again immediately.
+ * Remove a lock nobody can still be holding.
+ *
+ * AGE IS NOT DEATH (Codex 2026-09-17 round 10 #5). Breaking a lock merely
+ * because it was old stole it from a LIVE writer: pause a save between its
+ * read and its rename for longer than `staleMs`, and the second process
+ * saved, then the first finished and overwrote it. A lock whose owner is alive
+ * on this host is now never broken, whatever its age — the waiter times out
+ * and REFUSES instead, which loses nothing.
+ *
+ * Age still decides for a lock nobody can be asked about: no readable owner,
+ * or an owner on another host.
+ *
+ * The removal itself is rename-then-verify rather than compare-then-unlink: the
+ * bytes are checked after the rename, and a lock that turned out to be someone
+ * else's is linked straight back.
  */
 async function breakAbandonedLock(lockPath: string): Promise<boolean> {
   let raw: string;
@@ -247,15 +264,33 @@ async function breakAbandonedLock(lockPath: string): Promise<boolean> {
   } catch {
     // Unreadable lock file: age alone decides.
   }
-  const ownerGone = typeof owner.pid === "number" && owner.host === hostname() && !isProcessAlive(owner.pid);
-  const tooOld = Date.now() - mtimeMs > ENV_SAVE_LOCK.staleMs;
-  if (!ownerGone && !tooOld) return false;
+  const isLocalOwner = typeof owner.pid === "number" && owner.host === hostname();
+  const ownerGone = isLocalOwner && !isProcessAlive(owner.pid!);
+  // Only a lock we cannot ask about may be broken for being old.
+  const unaskableAndOld = !isLocalOwner && Date.now() - mtimeMs > ENV_SAVE_LOCK.staleMs;
+  if (!ownerGone && !unaskableAndOld) return false;
+  const grave = `${lockPath}.abandoned.${process.pid}.${randomBytes(4).toString("hex")}`;
   try {
-    // Break the very lock we judged, never a fresh one someone else just took.
-    if ((await readFile(lockPath, "utf-8")) === raw) await unlink(lockPath);
+    await rename(lockPath, grave);
   } catch {
     // Someone else broke or replaced it first.
+    return true;
   }
+  let graveBody: string | null = null;
+  try {
+    graveBody = await readFile(grave, "utf-8");
+  } catch {
+    graveBody = null;
+  }
+  if (graveBody !== raw) {
+    // Not the lock we judged: a live owner took it in the meantime. Put it
+    // back; a newer lock at the path makes the link fail, which is the
+    // fail-closed answer.
+    await link(grave, lockPath).catch(() => undefined);
+    await unlink(grave).catch(() => undefined);
+    return false;
+  }
+  await unlink(grave).catch(() => undefined);
   return true;
 }
 
@@ -283,12 +318,25 @@ async function acquireEnvSaveLock(envPath: string): Promise<EnvSaveLock> {
     }
     if (await breakAbandonedLock(lockPath)) continue;
     if (Date.now() >= deadline) {
+      const holder = await describeLockHolder(lockPath);
       throw new Error(
-        `Another process is still saving ${envPath} (${lockPath} held for over ${ENV_SAVE_LOCK.timeoutMs} ms). Nothing was written.`,
+        `Another process is still saving ${envPath} (${lockPath} held by ${holder} for over ${ENV_SAVE_LOCK.timeoutMs} ms). Nothing was written.`,
       );
     }
     await new Promise((resolve) => setTimeout(resolve, ENV_SAVE_LOCK.retryMs));
   }
+}
+
+/** Who the lock file says is holding it, for a refusal a person can act on. */
+async function describeLockHolder(lockPath: string): Promise<string> {
+  try {
+    const raw = await readFile(lockPath, "utf-8");
+    const owner = JSON.parse(raw) as { pid?: number; host?: string };
+    if (typeof owner.pid === "number") return `pid ${owner.pid} on ${owner.host ?? "an unknown host"}`;
+  } catch {
+    // unreadable: say so rather than inventing an owner
+  }
+  return "a process that left no readable owner";
 }
 
 async function releaseEnvSaveLock(lock: EnvSaveLock): Promise<void> {

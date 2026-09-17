@@ -279,6 +279,35 @@ describe("the cross-process save lock does not become a deadlock (round 9 #15)",
     expect(result.effective.KIMI_API_KEY).toBe("k");
   });
 
+  it("does not steal a live owner's lock for being OLD (round 10 #5)", async () => {
+    // A writer paused between its read and its rename for longer than staleMs
+    // is still holding the file: breaking its lock let a second process save,
+    // and the first then overwrote it. Age is not death.
+    ENV_SAVE_LOCK.staleMs = 0;
+    ENV_SAVE_LOCK.timeoutMs = 60;
+    const envPath = path.join(envDir(), ".env");
+    fs.writeFileSync(envPath, "KIMI_API_KEY=held\n");
+    const lockBody = JSON.stringify({ token: "live", pid: process.pid, host: os.hostname(), startedAt: 0 });
+    fs.writeFileSync(`${envPath}.lock`, lockBody);
+    // Make it ancient as well, so only the liveness check can save it.
+    fs.utimesSync(`${envPath}.lock`, new Date(0), new Date(0));
+    await expect(persistSetup(envPath, ['KIMI_API_KEY="stolen"'], { ownedKeys: ["KIMI_API_KEY"] }))
+      .rejects.toThrow(new RegExp(`held by pid ${process.pid}`));
+    expect(fs.readFileSync(envPath, "utf-8")).toBe("KIMI_API_KEY=held\n");
+    // The live owner's lock is untouched, and nothing was left beside it.
+    expect(fs.readFileSync(`${envPath}.lock`, "utf-8")).toBe(lockBody);
+    expect(fs.readdirSync(path.dirname(envPath)).filter((n) => n.includes(".abandoned."))).toEqual([]);
+  });
+
+  it("still breaks an ancient lock from ANOTHER host, which nobody here can ask about (guard)", async () => {
+    ENV_SAVE_LOCK.staleMs = 0;
+    const envPath = path.join(envDir(), ".env");
+    fs.writeFileSync(`${envPath}.lock`, JSON.stringify({ token: "x", pid: 1, host: "some-other-machine", startedAt: 0 }));
+    const result = await persistSetup(envPath, ["KIMI_API_KEY=k"], { ownedKeys: [] });
+    expect(result.effective.KIMI_API_KEY).toBe("k");
+    expect(fs.existsSync(`${envPath}.lock`)).toBe(false);
+  });
+
   it("refuses the save — writing nothing — while a LIVE process holds the lock", async () => {
     ENV_SAVE_LOCK.timeoutMs = 60;
     ENV_SAVE_LOCK.staleMs = 60_000;
