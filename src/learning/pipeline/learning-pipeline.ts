@@ -224,6 +224,28 @@ export class LearningPipeline {
   clearRunInstinctCredits(sessionId: string, terminal?: { success: boolean; verdictScore?: number }): void {
     this.settleRunInstinctCredits(sessionId, terminal);
     this.runPendingCredits.delete(sessionId);
+    this.evictSessionPendingResolutions(sessionId);
+  }
+
+  /**
+   * Drop this session's unrepaired failures. audit 04.cap (2026-09-17): the only
+   * drain was the 10-minute periodic sweep, so a run's pending failure outlived
+   * the run — a later, unrelated run on the same chat could still be booked as
+   * its repair — and the map grew for every (session, tool) pair the daemon saw.
+   * A failure nobody repaired before the run ended is not repairable any more.
+   *
+   * Returns how many were evicted, so a caller never mistakes a no-op for a sweep.
+   */
+  evictSessionPendingResolutions(sessionId: string): number {
+    const prefix = `${sessionId}:`;
+    let evicted = 0;
+    for (const key of this.pendingResolutions.keys()) {
+      if (key.startsWith(prefix)) {
+        this.pendingResolutions.delete(key);
+        evicted++;
+      }
+    }
+    return evicted;
   }
 
   /**
@@ -1493,6 +1515,10 @@ export class LearningPipeline {
       action: params.corrected,
     }) + (sourceBoost[params.source] ?? 0);
 
+    // audit 04.cap: the correction is RECORDED as feedback as well as learned
+    // from — considerInstinctCreation refuses an unmeaningful trigger, and then
+    // the feedback row is the only trace of what the user corrected.
+    this.feedbackHandler.handleCorrection(params);
     await this.considerInstinctCreation({
       type: 'correction',
       triggerPattern: this.sanitizePattern(params.corrected),

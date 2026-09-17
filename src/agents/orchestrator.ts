@@ -79,6 +79,7 @@ import {
 import type { InstinctRetriever } from "./instinct-retriever.js";
 import type { TrajectoryReplayRetriever } from "./trajectory-replay-retriever.js";
 import { TeachingParser } from "../learning/feedback/teaching-parser.js";
+import { CorrectionDetector } from "../learning/feedback/correction-detector.js";
 import type { LearningPipeline } from "../learning/pipeline/learning-pipeline.js";
 import type { InterventionEngine } from "../learning/intervention/intervention-engine.js";
 import {
@@ -3540,6 +3541,32 @@ export class Orchestrator {
         logger.warn("Teaching intent processing failed", {
           error: err instanceof Error ? err.message : String(err),
         });
+      }
+    }
+
+    // Correction intent detection: the user contradicting what the agent just
+    // did (Learning Pipeline v2) — sibling of the teaching path above. audit
+    // 04.cap: CorrectionDetector had no production caller at all, so every
+    // "no, use X instead" was detected nowhere and learned never. A correction
+    // is ABOUT a previous agent turn: with none (or a tool-calls-only last
+    // turn) there is nothing being corrected, and nothing is recorded. Read
+    // BEFORE this turn's user message is appended below.
+    if (this.learningPipeline && CorrectionDetector.isCorrection(text)) {
+      const original = CorrectionDetector.lastAgentText(session.messages);
+      if (original) {
+        try {
+          await this.learningPipeline.recordCorrection({
+            original,
+            corrected: text,
+            source: "natural_language",
+            userId,
+          });
+          logger.debug("Correction intent processed", { userId, correctedLength: text.length });
+        } catch (err) {
+          logger.warn("Correction intent processing failed", {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
       }
     }
 

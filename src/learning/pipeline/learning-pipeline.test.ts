@@ -2847,3 +2847,77 @@ describe("instinct credit is settled by the run's terminal verdict (D40 / audit 
     expect(call, "the terminal verdict is not passed to the settlement").toContain("success");
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// audit 04.cap — pendingResolutions was only ever swept by the 10-minute
+// periodic tick, so a run's unrepaired failure outlived the run: a later,
+// unrelated run on the same chat could still be booked as its repair, and the
+// map grew for every (session, tool) pair the daemon ever saw.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("pending error resolutions end with the run (audit 04.cap)", () => {
+  let storage: LearningStorage;
+  let pipeline: LearningPipeline;
+  let tempDir: string;
+
+  const buildFailure = "error CS0246: The type or namespace name 'BoardView' could not be found. Build FAILED.";
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), "pipeline-pending-"));
+    storage = new LearningStorage(join(tempDir, "test.db"));
+    storage.initialize();
+    pipeline = new LearningPipeline(storage, {
+      enabled: true,
+      detectionIntervalMs: 1000,
+      evolutionIntervalMs: 5000,
+      minConfidenceForCreation: 0.5,
+      batchSize: 5,
+    });
+  });
+
+  afterEach(() => {
+    pipeline.stop();
+    storage.close();
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  const pendingSize = () =>
+    (pipeline as unknown as { pendingResolutions: Map<string, unknown> }).pendingResolutions.size;
+
+  const shell = (sessionId: string, command: string, output: string, success: boolean): ToolResultEvent => ({
+    sessionId, toolName: "shell_exec", input: { command }, output, success, timestamp: Date.now(),
+  });
+
+  it("the run's teardown evicts its pending failures", async () => {
+    await pipeline.handleToolResult(shell("chat-A", "dotnet build", buildFailure, false));
+    expect(pendingSize()).toBe(1);
+
+    pipeline.clearRunInstinctCredits("chat-A");
+
+    expect(pendingSize(), "the finished run's pending failure was left dangling").toBe(0);
+  });
+
+  it("a later run cannot be booked as the repair of a finished run's failure", async () => {
+    await pipeline.handleToolResult(shell("chat-A", "dotnet build", buildFailure, false));
+    pipeline.clearRunInstinctCredits("chat-A");
+    await pipeline.handleToolResult(shell("chat-A", "dotnet build", "Build succeeded.", true));
+    storage.flush();
+
+    expect(
+      storage.getInstincts({ type: "error_fix" }),
+      "a new run repaired a failure that belonged to a finished one",
+    ).toHaveLength(0);
+  });
+
+  it("another session's pending failure survives this run's teardown (legitimate behaviour kept)", async () => {
+    await pipeline.handleToolResult(shell("chat-A", "dotnet build", buildFailure, false));
+    await pipeline.handleToolResult(shell("chat-B", "dotnet build", buildFailure, false));
+
+    pipeline.clearRunInstinctCredits("chat-A");
+    expect(pendingSize()).toBe(1);
+
+    await pipeline.handleToolResult(shell("chat-B", "dotnet restore && dotnet build", "Build succeeded.", true));
+    storage.flush();
+    expect(storage.getInstincts({ type: "error_fix" }), "chat-B lost its own repair").toHaveLength(1);
+    expect(pendingSize()).toBe(0);
+  });
+});

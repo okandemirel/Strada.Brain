@@ -1,8 +1,22 @@
 /**
  * Correction Detector
  *
- * Detects user corrections in natural language and file-level heuristics.
+ * Detects a user correcting the agent in natural language. Consulted by the
+ * orchestrator's message path, next to the teaching-intent check.
+ *
+ * audit 04.cap (2026-09-17): this class had NO production caller — corrections
+ * were detected nowhere and learned never. It also carried isFileCorrection(),
+ * which needed a log of agent tool-execution windows (timestamp/endTimestamp)
+ * that nothing in the codebase produces: uncallable by construction, so it was
+ * removed rather than left looking implemented. Re-add it WITH its producer if
+ * file-level correction detection is wanted.
  */
+
+/** One turn of the conversation, as the session stores it. */
+interface AgentTurn {
+  readonly role: string;
+  readonly content: unknown;
+}
 
 // EN correction patterns
 const EN_PATTERNS = [
@@ -25,8 +39,20 @@ const TR_PATTERNS = [
 
 const ALL_CORRECTION_PATTERNS = [...EN_PATTERNS, ...TR_PATTERNS];
 
-/** Maximum time window (ms) for file correction detection */
-const FILE_CORRECTION_WINDOW_MS = 60_000;
+/** Extract the text of one message, joining the text blocks of a structured one. */
+function turnText(content: unknown): string {
+  if (typeof content === "string") return content.trim();
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((block) => {
+      if (!block || typeof block !== "object") return "";
+      const record = block as Record<string, unknown>;
+      return record["type"] === "text" && typeof record["text"] === "string" ? record["text"] : "";
+    })
+    .filter((text) => text.length > 0)
+    .join(" ")
+    .trim();
+}
 
 export class CorrectionDetector {
   /**
@@ -38,26 +64,17 @@ export class CorrectionDetector {
   }
 
   /**
-   * Returns true if a file was modified within 60s of agent write
-   * AND the modification did NOT occur during an agent tool execution window.
+   * The agent turn a correction is ABOUT: the text of the most recent assistant
+   * message, or null when the agent has not said anything yet (an opening
+   * "no, that's wrong" corrects nothing) or its last turn was tool calls only.
    */
-  static isFileCorrection(
-    agentWriteTime: number,
-    fileModifyTime: number,
-    toolExecutionLog: Array<{ timestamp: number; endTimestamp: number }>,
-  ): boolean {
-    const delta = fileModifyTime - agentWriteTime;
-
-    // Must be after agent write and within window
-    if (delta < 0 || delta > FILE_CORRECTION_WINDOW_MS) return false;
-
-    // Reject if the modification happened during any agent tool execution
-    for (const entry of toolExecutionLog) {
-      if (fileModifyTime >= entry.timestamp && fileModifyTime <= entry.endTimestamp) {
-        return false;
-      }
+  static lastAgentText(messages: ReadonlyArray<AgentTurn>): string | null {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const message = messages[i];
+      if (!message || message.role !== "assistant") continue;
+      const text = turnText(message.content);
+      return text.length > 0 ? text : null;
     }
-
-    return true;
+    return null;
   }
 }
