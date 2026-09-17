@@ -231,17 +231,36 @@ describe("realLocalAvailability is a measurement, not a require() that cannot ru
   // Measured 2026-09-07 14:50: an ESM package, a require() in a try/catch,
   // and "false" for a model that was installed — every sprint's sprites went
   // procedural and nothing said why.
-  it("agrees with the catalog and the runner asked directly, in this ESM module", async () => {
+  it("answers from the markers on disk, gated by the device — not from a restatement of the selection (Codex 2026-09-17)", async () => {
     // Inverted 2026-09-17 (audit A2 / D54): the expectation used to be
     // computed through defaultModelFor — the smallest model — which is the
-    // defect itself. The measurement is "any supported model is installed".
+    // defect itself; the next version restated installedModelFor. The
+    // expectation here is written from the marker files and the device alone.
     const { realLocalAvailability } = await import("./sprite-generate.js");
-    const { installedModelFor } = await import("../../../assets-local/model-catalog.js");
-    const { LocalModelRunner } = await import("../../../assets-local/local-model-runner.js");
-    const runner = new LocalModelRunner();
-    const spec = installedModelFor("text-to-image", (id) => runner.isModelInstalled(id));
-    const direct = spec !== undefined && runner.isModelInstalled(spec.id);
-    expect(realLocalAvailability()("text-to-image")).toBe(direct);
+    const root = mkdtempSync(join(tmpdir(), "auto-avail-markers-"));
+    dirs.push(root);
+    const prevRoot = process.env["STRADA_ASSETS_LOCAL_ROOT"];
+    process.env["STRADA_ASSETS_LOCAL_ROOT"] = root;
+    try {
+      const mac = { totalRamGb: 32, appleSilicon: true };
+      // A marker without a venv is not an installation.
+      writeFileSync(join(root, ".installed-triposr"), "now\n");
+      expect(realLocalAvailability(mac)("image-to-3d")).toBe(false);
+      mkdirSync(join(root, "venv", "bin"), { recursive: true });
+      writeFileSync(join(root, "venv", "bin", "python3"), "");
+      expect(realLocalAvailability(mac)("image-to-3d")).toBe(true);
+      // A marker for a model this device cannot run (CUDA-only) counts for nothing.
+      rmSync(join(root, ".installed-triposr"));
+      writeFileSync(join(root, ".installed-trellis"), "now\n");
+      expect(realLocalAvailability(mac)("image-to-3d")).toBe(false);
+      // …and off Apple Silicon nothing is available, whatever is installed.
+      writeFileSync(join(root, ".installed-sd15"), "now\n");
+      expect(realLocalAvailability({ totalRamGb: 64, appleSilicon: false })("text-to-image")).toBe(false);
+      expect(realLocalAvailability(mac)("text-to-image")).toBe(true);
+    } finally {
+      if (prevRoot === undefined) delete process.env["STRADA_ASSETS_LOCAL_ROOT"];
+      else process.env["STRADA_ASSETS_LOCAL_ROOT"] = prevRoot;
+    }
   });
 
   it("the module holds no require() call", async () => {
