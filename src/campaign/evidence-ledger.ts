@@ -18,7 +18,7 @@
 import Database from "better-sqlite3";
 import { createHash } from "node:crypto";
 import { basename, dirname, join } from "node:path";
-import { mkdirSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, statSync, realpathSync } from "node:fs";
 import type { EvidenceDecision, EvidenceTicket } from "./producer-evidence.js";
 import { recordSha256 } from "./producer-evidence.js";
 
@@ -282,7 +282,19 @@ export function artifactDigest(path: string | undefined): string | undefined {
 export const ARTIFACT_MANIFEST_SUFFIX = ".strada-artifact.json";
 export const ARTIFACT_MANIFEST_VERSION = "strada-manifest-v1";
 
-/** The manifest a build wrote for this artifact, or nothing. */
+/**
+ * The manifest a build wrote for this artifact, or nothing.
+ *
+ * A MANIFEST THAT LEAVES THE GAME OUT IS NOT A MANIFEST. `files:
+ * ["readme.txt"]` beside Game.exe was accepted and the digest then covered
+ * readme.txt and the executable's NAME: the executable could be replaced
+ * while the digest stood, and every receipt and accumulated coverage keyed
+ * on it followed (Codex 2026-09-16 D78, introduced by af44a358). A manifest
+ * is adopted only when it names the artifact itself — the file, or for a
+ * bundle something inside it — and, where the layout has one, its runtime
+ * data folder; every entry must resolve INSIDE the layout (no symlink out).
+ * Anything else falls back to the layout walk, which covers everything.
+ */
 export function artifactManifest(path: string): { readonly bytes: string; readonly files: readonly string[] } | undefined {
   try {
     const bytes = readFileSync(`${path}${ARTIFACT_MANIFEST_SUFFIX}`, "utf8");
@@ -294,13 +306,58 @@ export function artifactManifest(path: string): { readonly bytes: string; readon
     const files: string[] = [];
     for (const entry of doc.files) {
       // A path that leaves the layout is not a file this build shipped.
-      if (typeof entry !== "string" || entry === "" || entry.includes("..")) return undefined;
-      files.push(entry);
+      if (typeof entry !== "string" || entry === "" || entry.includes("..") || entry.startsWith("/") || /^[A-Za-z]:[\\/]/.test(entry)) return undefined;
+      files.push(entry.replace(/\\/g, "/").replace(/^\.\//, ""));
     }
+    if (!manifestNamesTheGame(path, files)) return undefined;
     return { bytes, files };
   } catch {
     return undefined;
   }
+}
+
+/** Does the listed set include the artifact itself, its runtime data, and nothing outside the layout? */
+function manifestNamesTheGame(path: string, files: readonly string[]): boolean {
+  const base = dirname(path);
+  const name = basename(path);
+  let isDirectory: boolean;
+  try {
+    isDirectory = statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+  // Every entry resolves inside the folder the manifest sits in: a symlink to
+  // another build is out. An entry that is NOT THERE stays in the list — the
+  // manifest is adopted and the digest fails on it, which is the answer for a
+  // build that says it shipped a file the tree does not have.
+  const layoutRoot = realpathSync(base);
+  for (const rel of files) {
+    let real: string;
+    try {
+      real = realpathSync(join(base, rel));
+    } catch {
+      continue;
+    }
+    if (real !== layoutRoot && !real.startsWith(`${layoutRoot}/`)) return false;
+  }
+  if (isDirectory) {
+    // A bundle: something INSIDE it has to be listed (the binary, for a .app).
+    const inside = files.filter((f) => f.startsWith(`${name}/`));
+    if (inside.length === 0) return false;
+    if (/\.app$/i.test(name)) return inside.some((f) => f.startsWith(`${name}/Contents/MacOS/`) && !f.slice(`${name}/Contents/MacOS/`.length).includes("/"));
+    return true;
+  }
+  if (!files.includes(name)) return false;
+  // A Windows/Linux player ships its <Name>_Data folder beside it.
+  const dataDir = readdirSync(base).find((entry) => entry.endsWith("_Data"));
+  if (dataDir !== undefined) {
+    try {
+      if (statSync(join(base, dataDir)).isDirectory() && !files.some((f) => f.startsWith(`${dataDir}/`))) return false;
+    } catch {
+      // an unreadable data dir is judged by the walk instead
+    }
+  }
+  return true;
 }
 
 /**

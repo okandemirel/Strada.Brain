@@ -4,7 +4,7 @@
  * all, so its refusals constrained nothing (Codex 2026-09-13 AF#1).
  */
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ARTIFACT_DIGEST_VERSION, EvidenceLedger, artifactDigest, describeLedgerRow } from "./evidence-ledger.js";
@@ -221,6 +221,54 @@ describe("artifactDigest over a build manifest", () => {
     expect(artifactDigest(exe)).toBe(built);
     writeFileSync(join(dir, "linux", "Game_Data", "level0"), "level one, edited");
     expect(artifactDigest(exe)).not.toBe(built);
+  });
+
+  it("a manifest that leaves the GAME out is not adopted: the executable's bytes stay in the identity (D78)", () => {
+    // files:["readme.txt"] beside Game.x86_64 was accepted, and the digest
+    // then covered readme.txt and the executable's NAME — a different game
+    // hashed the same. Such a manifest falls back to the layout walk.
+    const exe = layout();
+    writeFileSync(join(dir, "linux", "readme.txt"), "read me");
+    writeFileSync(join(dir, "linux", "Game.x86_64.strada-artifact.json"), JSON.stringify({ version: "strada-manifest-v1", files: ["readme.txt"] }));
+    const before = artifactDigest(exe);
+    writeFileSync(exe, "A DIFFERENT EXECUTABLE");
+    expect(artifactDigest(exe)).not.toBe(before);
+  });
+
+  it("a manifest must also name the runtime data beside a player, and nothing outside the layout", () => {
+    const exe = layout();
+    const manifestAt = join(dir, "linux", "Game.x86_64.strada-artifact.json");
+    // The executable alone, with Game_Data beside it unlisted: the walk decides.
+    writeFileSync(manifestAt, JSON.stringify({ version: "strada-manifest-v1", files: ["Game.x86_64"] }));
+    const withoutData = artifactDigest(exe);
+    writeFileSync(join(dir, "linux", "Game_Data", "level0"), "level one, edited");
+    expect(artifactDigest(exe)).not.toBe(withoutData);
+    // An entry that resolves OUTSIDE the layout (a symlink to another build) is refused.
+    mkdirSync(join(dir, "elsewhere"), { recursive: true });
+    writeFileSync(join(dir, "elsewhere", "other.bin"), "other build");
+    symlinkSync(join(dir, "elsewhere", "other.bin"), join(dir, "linux", "escape.bin"));
+    writeFileSync(manifestAt, JSON.stringify({ version: "strada-manifest-v1", files: ["Game.x86_64", "Game_Data/level0", "escape.bin"] }));
+    const walked = artifactDigest(exe);
+    writeFileSync(join(dir, "linux", "player.log"), "started\n");
+    // Refused manifest → walk → the log now counts (the walk's known cost), proving the manifest was not adopted.
+    expect(artifactDigest(exe)).not.toBe(walked);
+  });
+
+  it("a bundle's manifest has to name its binary (guard: a correct .app manifest is adopted)", () => {
+    const app = join(dir, "mac", "Game.app");
+    mkdirSync(join(app, "Contents", "MacOS"), { recursive: true });
+    writeFileSync(join(app, "Contents", "MacOS", "Game"), "mach-o");
+    writeFileSync(join(app, "Contents", "Info.plist"), "<plist/>");
+    const manifestAt = join(dir, "mac", "Game.app.strada-artifact.json");
+    writeFileSync(manifestAt, JSON.stringify({ version: "strada-manifest-v1", files: ["Game.app/Contents/MacOS/Game", "Game.app/Contents/Info.plist"] }));
+    const adopted = artifactDigest(app);
+    writeFileSync(join(app, "Contents", "first-run.log"), "ran"); // unlisted runtime output inside the bundle
+    expect(artifactDigest(app)).toBe(adopted);
+    // Without the binary the manifest is refused and the walk sees the log.
+    writeFileSync(manifestAt, JSON.stringify({ version: "strada-manifest-v1", files: ["Game.app/Contents/Info.plist"] }));
+    const refused = artifactDigest(app);
+    writeFileSync(join(app, "Contents", "first-run.log"), "ran twice");
+    expect(artifactDigest(app)).not.toBe(refused);
   });
 
   it("a REFORMATTED manifest is the same artifact, and a dropped file is not", () => {
