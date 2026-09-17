@@ -2204,11 +2204,12 @@ export class BackgroundExecutor {
    * a soft field — Task has no typed estimate today); otherwise the configured
    * `budget.taskReservationUsd`. Returns undefined when there is no unified
    * manager to reserve against. Never throws: a wallet that cannot be reserved
-   * must not stop the run — the recorded-spend gates still apply.
+   * must park the run until durable admission succeeds.
    */
   private reserveRunBudget(task: Task): string | "refused" | undefined {
     const manager = this._unifiedBudgetManager;
-    if (!manager || typeof manager.reserve !== "function") return undefined;
+    if (!manager) return undefined;
+    if (typeof manager.reserveIfAffordable !== "function") return "refused";
     try {
       const own = (task as Task & { estimatedCostUsd?: number }).estimatedCostUsd;
       const estimate = typeof own === "number" && Number.isFinite(own) && own > 0
@@ -2218,18 +2219,16 @@ export class BackgroundExecutor {
       // cannot carry does not start. `undefined` from the manager means
       // refused, which the caller turns into the same budget wait a drained
       // window produces.
-      const id = typeof manager.reserveIfAffordable === "function"
-        ? manager.reserveIfAffordable(estimate, this.budgetSourceOf(task), task.agentId)
-        : manager.reserve(estimate, this.budgetSourceOf(task), task.agentId);
+      const id = manager.reserveIfAffordable(estimate, this.budgetSourceOf(task), task.agentId);
       if (id === undefined) return "refused";
       this.runReservations.set(String(task.id), id);
       return id;
     } catch (err) {
-      getLoggerSafe().warn("Budget reservation could not be taken for a task run — running unreserved", {
+      getLoggerSafe().warn("Budget reservation could not be taken for a task run — waiting for budget", {
         taskId: task.id,
         error: err instanceof Error ? err.message : String(err),
       });
-      return undefined;
+      return "refused";
     }
   }
 

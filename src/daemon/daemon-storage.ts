@@ -352,6 +352,13 @@ export class DaemonStorage {
         // Column already exists -- safe to ignore
       }
     }
+    const reservationColumns = this.db.prepare("PRAGMA table_info(budget_reservations)").all() as Array<{ name: string }>;
+    if (!reservationColumns.some((column) => column.name === "owner_generation")) {
+      this.db.exec("ALTER TABLE budget_reservations ADD COLUMN owner_generation TEXT DEFAULT NULL");
+    }
+    if (!reservationColumns.some((column) => column.name === "reconciled_at")) {
+      this.db.exec("ALTER TABLE budget_reservations ADD COLUMN reconciled_at INTEGER DEFAULT NULL");
+    }
     this.prepareStatements();
   }
 
@@ -552,6 +559,12 @@ export class DaemonStorage {
   // PENDING LIABILITY (round 8 #2)
   // ---------------------------------------------------------------------------
 
+  /** Serialize wallet reads and writes across connections; roll back every write on failure. */
+  budgetTransaction<T>(work: () => T): T {
+    this.assertOpen();
+    return this.db!.transaction(work).immediate();
+  }
+
   /** Record (or update) an in-flight reservation, owned by this process. */
   upsertBudgetReservation(row: {
     id: string;
@@ -560,13 +573,14 @@ export class DaemonStorage {
     estimateUsd: number;
     chargedUsd: number;
     ownerPid: number;
+    ownerGeneration?: string | null;
     createdAt: number;
     lastActivityAt?: number | null;
   }): void {
     this.assertOpen();
     this.stmts.upsertReservation!.run(
       row.id, row.source, row.sourceId ?? null, row.estimateUsd, row.chargedUsd,
-      row.ownerPid, row.createdAt, row.lastActivityAt ?? null,
+      row.ownerPid, row.createdAt, row.lastActivityAt ?? null, row.ownerGeneration ?? null,
     );
   }
 
@@ -576,13 +590,19 @@ export class DaemonStorage {
     this.stmts.chargeReservation!.run(chargedUsd, lastActivityAt, id);
   }
 
-  /** Forget a reservation: released, or reconciled. */
+  /** Explicitly release a reservation. Recovery retains it as an estimate. */
   deleteBudgetReservation(id: string): void {
     this.assertOpen();
     this.stmts.deleteReservation!.run(id);
   }
 
-  /** Every persisted reservation, oldest first (boot reconciliation). */
+  /** Claim uncertainty without manufacturing a provider charge. Caller holds the wallet transaction. */
+  reconcileBudgetReservation(id: string, now: number): boolean {
+    this.assertOpen();
+    return this.db!.prepare("UPDATE budget_reservations SET reconciled_at = ? WHERE id = ? AND reconciled_at IS NULL").run(now, id).changes === 1;
+  }
+
+  /** Every persisted reservation, including recovered estimates. */
   listBudgetReservations(): Array<{
     id: string;
     source: string;
@@ -590,13 +610,15 @@ export class DaemonStorage {
     estimateUsd: number;
     chargedUsd: number;
     ownerPid: number;
+    ownerGeneration?: string | null;
     createdAt: number;
     lastActivityAt: number | null;
+    reconciledAt: number | null;
   }> {
     this.assertOpen();
     const rows = this.stmts.allReservations!.all() as Array<{
       id: string; source: string; source_id: string | null; estimate_usd: number;
-      charged_usd: number; owner_pid: number; created_at: number; last_activity_at: number | null;
+      charged_usd: number; owner_pid: number; owner_generation: string | null; created_at: number; last_activity_at: number | null; reconciled_at: number | null;
     }>;
     return rows.map((r) => ({
       id: r.id,
@@ -605,8 +627,10 @@ export class DaemonStorage {
       estimateUsd: r.estimate_usd,
       chargedUsd: r.charged_usd,
       ownerPid: r.owner_pid,
+      ownerGeneration: r.owner_generation,
       createdAt: r.created_at,
       lastActivityAt: r.last_activity_at,
+      reconciledAt: r.reconciled_at,
     }));
   }
 
@@ -1054,8 +1078,8 @@ export class DaemonStorage {
 
     // Pending liability (round 8 #2)
     this.stmts.upsertReservation = db.prepare(
-      `INSERT INTO budget_reservations (id, source, source_id, estimate_usd, charged_usd, owner_pid, created_at, last_activity_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO budget_reservations (id, source, source_id, estimate_usd, charged_usd, owner_pid, created_at, last_activity_at, owner_generation)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET estimate_usd = excluded.estimate_usd, charged_usd = excluded.charged_usd, last_activity_at = excluded.last_activity_at`,
     );
     this.stmts.chargeReservation = db.prepare(

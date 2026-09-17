@@ -702,7 +702,7 @@ describe("DaemonStorage", () => {
         try {
           expect(second.listBudgetReservations()).toEqual([{
             id: "res-1", source: "daemon", sourceId: "task-7", estimateUsd: 0.6,
-            chargedUsd: 0.25, ownerPid: 4242, createdAt: 1_000, lastActivityAt: 2_000,
+            chargedUsd: 0.25, ownerPid: 4242, ownerGeneration: null, reconciledAt: null, createdAt: 1_000, lastActivityAt: 2_000,
           }]);
           second.deleteBudgetReservation("res-1");
           expect(second.listBudgetReservations()).toEqual([]);

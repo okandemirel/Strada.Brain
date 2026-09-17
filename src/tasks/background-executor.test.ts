@@ -2200,7 +2200,10 @@ describe("BackgroundExecutor - agent budget attribution (audit 03.5 / D23)", () 
       return "task done";
     });
     const executor = new BackgroundExecutor({ orchestrator: mockOrch as any, aiProvider: undefined, channel: undefined });
-    const unified = { recordCost: vi.fn() };
+    const unified = {
+      recordCost: vi.fn(), reserveIfAffordable: vi.fn(() => "attribution-reservation"),
+      getTaskReservationUsd: () => 0.25, release: vi.fn(),
+    };
     executor.setUnifiedBudgetManager(unified as any);
     const mockTaskManager = { updateStatus: vi.fn(), complete: vi.fn(), fail: vi.fn() };
     executor.setTaskManager(mockTaskManager as any);
@@ -3876,8 +3879,10 @@ describe("workspacePolicy \"none\" means no lease at any level", () => {
 describe("BackgroundExecutor - run budget reservations (plan 2.12 / audit 03.1 / D20)", () => {
   function createReservingManager() {
     let seq = 0;
+    const reserve = vi.fn(() => `res_${++seq}`);
     return {
-      reserve: vi.fn(() => `res_${++seq}`),
+      reserve,
+      reserveIfAffordable: reserve,
       release: vi.fn(),
       recordCost: vi.fn(),
       chargeReservation: vi.fn(),
@@ -3996,12 +4001,40 @@ describe("BackgroundExecutor - run budget reservations (plan 2.12 / audit 03.1 /
     expect(unified.release).toHaveBeenCalledTimes(1);
   });
 
-  it("a wallet that cannot reserve does not stop the run", async () => {
+  it("#4 legacy unchecked reservation cannot authorize dispatch", async () => {
+    vi.useFakeTimers();
+    const mockOrch = createMockOrchestrator();
+    const { executor, unified, taskManager } = harness(mockOrch, false);
+    Object.defineProperty(unified, "reserveIfAffordable", { value: undefined });
+    executor.enqueue(createTestTask(), new AbortController().signal, vi.fn());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(taskManager.block).toHaveBeenCalled();
+    expect(mockOrch.runBackgroundTask).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  it("#4 successful reservation dispatches and completes the task", async () => {
+    vi.useFakeTimers();
+    const mockOrch = createMockOrchestrator();
+    const { executor, taskManager } = harness(mockOrch, false);
+    executor.enqueue(createTestTask(), new AbortController().signal, vi.fn());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mockOrch.runBackgroundTask).toHaveBeenCalledTimes(1);
+    expect(taskManager.complete).toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  it("#4 reservation persistence errors park the task without dispatch", async () => {
+    vi.useFakeTimers();
     const mockOrch = createMockOrchestrator();
     const { executor, unified, taskManager } = harness(mockOrch, false);
     unified.reserve.mockImplementation(() => { throw new Error("storage locked"); });
     executor.enqueue(createTestTask(undefined, { id: "task_res_unreserved" as any }), new AbortController().signal, vi.fn());
-    await vi.waitFor(() => { expect(taskManager.complete).toHaveBeenCalled(); }, { timeout: 5000 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(taskManager.block).toHaveBeenCalled();
+    expect(mockOrch.runBackgroundTask).not.toHaveBeenCalled();
+    expect(taskManager.complete).not.toHaveBeenCalled();
+    vi.useRealTimers();
     expect(unified.release).not.toHaveBeenCalled();
   });
 });

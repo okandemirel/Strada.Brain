@@ -10,6 +10,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 const logSpies = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }));
 vi.mock("../utils/logger.js", () => ({ getLoggerSafe: () => logSpies, getLogger: () => logSpies }));
 
+import type { DaemonStorage } from "../daemon/daemon-storage.js";
 import { RESERVATION_MAX_AGE_MS, UnifiedBudgetManager } from "./unified-budget-manager.js";
 
 interface StoredEntry {
@@ -21,6 +22,7 @@ interface StoredEntry {
 
 function makeStorage(config: Record<string, string>) {
   const entries: StoredEntry[] = [];
+  const reservations = new Map<string, ReturnType<DaemonStorage["listBudgetReservations"]>[number]>();
   const state = { failInserts: false };
   const push = (e: StoredEntry): void => {
     if (state.failInserts) throw new Error("budget entry could not be written");
@@ -30,6 +32,22 @@ function makeStorage(config: Record<string, string>) {
     entries.filter((e) => e.timestamp >= from && pred(e)).reduce((s, e) => s + e.costUsd, 0);
   return {
     entries,
+    budgetTransaction: <T>(work: () => T): T => work(),
+    upsertBudgetReservation(row: Parameters<DaemonStorage["upsertBudgetReservation"]>[0]) {
+      reservations.set(row.id, { ...row, sourceId: row.sourceId ?? null, lastActivityAt: row.lastActivityAt ?? null, reconciledAt: null });
+    },
+    listBudgetReservations: () => [...reservations.values()],
+    deleteBudgetReservation: (id: string) => { reservations.delete(id); },
+    chargeBudgetReservation(id: string, chargedUsd: number, lastActivityAt: number) {
+      const row = reservations.get(id);
+      if (row) reservations.set(id, { ...row, chargedUsd, lastActivityAt });
+    },
+    reconcileBudgetReservation(id: string, now: number) {
+      const row = reservations.get(id);
+      if (!row || row.reconciledAt != null) return false;
+      reservations.set(id, { ...row, reconciledAt: now });
+      return true;
+    },
     insertBudgetEntry: push,
     insertBudgetEntryWithAgent: push,
     insertBudgetEntryWithSource: push,
@@ -144,7 +162,7 @@ describe("UnifiedBudgetManager reservations (plan 2.12 / audit 03.1 / D20)", () 
     manager.release(agent);
   });
 
-  it("(d) a reservation older than the ceiling is dropped with a warning, not held for ever", () => {
+  it("(d) an idle reservation remains liability until explicitly released", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-09-17T00:00:00Z"));
     const { manager } = makeManager({ dailyLimitUsd: "1" });
@@ -152,13 +170,9 @@ describe("UnifiedBudgetManager reservations (plan 2.12 / audit 03.1 / D20)", () 
     expect(manager.canSpend(0.5, "chat")).toBe(false);
 
     vi.setSystemTime(Date.now() + RESERVATION_MAX_AGE_MS + 1);
-    expect(manager.outstandingUsd()).toBe(0);
-    expect(manager.reservationCount()).toBe(0);
-    expect(logSpies.warn).toHaveBeenCalledWith(
-      expect.stringContaining("leaked budget reservations"),
-      expect.objectContaining({ leaked: 1, maxAgeMs: RESERVATION_MAX_AGE_MS }),
-    );
-    expect(manager.canSpend(0.5, "chat")).toBe(true);
+    expect(manager.outstandingUsd()).toBe(0.9);
+    expect(manager.reservationCount()).toBe(1);
+    expect(manager.canSpend(0.5, "chat")).toBe(false);
   });
 
   it("getTaskReservationUsd: config, then env, then the 0.25 default; 0 disables", () => {
@@ -205,10 +219,10 @@ describe("reservations gate admission and survive a working run (round 8)", () =
       vi.setSystemTime(t0 + 7 * 60 * 60 * 1000);
       expect(manager.outstandingUsd()).toBeCloseTo(0.9, 5);
       expect(manager.reservationCount()).toBe(1);
-      // …and an idle lease is still dropped.
+      // Idleness alone cannot prove that unreported provider usage was free.
       vi.setSystemTime(t0 + 14 * 60 * 60 * 1000);
-      expect(manager.outstandingUsd()).toBe(0);
-      expect(manager.reservationCount()).toBe(0);
+      expect(manager.outstandingUsd()).toBeCloseTo(0.9, 5);
+      expect(manager.reservationCount()).toBe(1);
     } finally {
       vi.useRealTimers();
     }

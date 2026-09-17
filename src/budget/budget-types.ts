@@ -47,7 +47,18 @@ export interface BudgetUsage {
   readonly pct: number;
 }
 
+export interface BudgetEstimates {
+  readonly kind: "estimate";
+  /** Unbilled reservation remainders, never provider charges and never aged out. */
+  readonly outstandingUsd: number;
+  readonly reconciledUsd: number;
+  readonly bySource: Record<string, number>;
+  readonly byAgent: Record<string, number>;
+}
+
 export interface BudgetSnapshot {
+  /** Separate from evidenced spend in global/breakdown/history. */
+  readonly estimates?: BudgetEstimates;
   readonly global: {
     readonly daily: BudgetUsage;
     readonly monthly: BudgetUsage;
@@ -106,8 +117,8 @@ export interface UnifiedBudgetConfig {
    * Two runs that started on the same remaining dollar both passed
    * canSpend(), which summed recorded spend only. A task that carries its
    * own estimate uses that instead. Unset → DEFAULT_BUDGET_CONFIG's 0.25;
-   * 0 disables task reservations. Reservations are in-memory: they hold
-   * headroom for work in flight in THIS process and vanish with it.
+   * 0 disables task reservations. Reservations persist across processes and retain uncertain liability
+   * until recorded costs or an explicit release resolve it.
    */
   readonly taskReservationUsd?: number;
 }
