@@ -61,6 +61,11 @@ const shape = (id: string): ResolvedShape => ({
   id, type: 'note-block', x: 0, y: 0, w: 220, h: 120, props: { content: id },
 })
 
+/** The same shape at a given position with given content — for r11 #9. */
+const noteAt = (id: string, x: number, content: string): ResolvedShape => ({
+  id, type: 'note-block', x, y: 0, w: 220, h: 120, props: { content },
+})
+
 /** A PUT held open until the test acknowledges it. */
 interface HeldPut {
   url: string
@@ -481,6 +486,123 @@ describe('CanvasWorkspace auto-save', () => {
 
     expect(screen.getByText('panel.saveConflict')).toBeTruthy()
     expect(useCanvasStore.getState().isDirty).toBe(true)
+  })
+
+  // -- r11 #9 ----------------------------------------------------------------
+
+  it('keeps a remote label edit AND a local move made during the same read (r11 #9)', async () => {
+    // The replay took the whole LOCAL object for a shape both sides hold, so the
+    // label the server had gained was replaced by the stale local one — and the
+    // versioned PUT then destroyed it on the server too.
+    useCanvasStore.setState({ shapes: [noteAt('s1', 0, 'old')], connections: [] })
+    render(<CanvasWorkspace />)
+    await tick(0)
+    expect(pendingGets).toHaveLength(1)
+
+    // The user drags the shape while the GET is open…
+    await edit(() => useCanvasStore.getState().updateShape('s1', { x: 200 }))
+    // …and the canvas the read returns has a new label for it.
+    await act(async () => { pendingGets[0]!(canvasVersion(3, [noteAt('s1', 0, 'server')])) })
+    await tick(0)
+
+    const merged = useCanvasStore.getState().shapes
+    expect(merged).toHaveLength(1)
+    expect(merged[0]!.x).toBe(200)
+    expect(merged[0]!.props.content).toBe('server')
+    expect(screen.queryByText('panel.saveConflict')).toBeNull()
+
+    // …and that is what is written back against the version the read reported.
+    await tick()
+    expect(puts).toHaveLength(1)
+    expect(puts[0]!.body.version).toBe(3)
+    const sent = JSON.parse(String(puts[0]!.body.shapes)) as ResolvedShape[]
+    expect(sent[0]!.x).toBe(200)
+    expect(sent[0]!.props.content).toBe('server')
+  })
+
+  it('surfaces a conflict when the read and the user changed the SAME property (r11 #9)', async () => {
+    useCanvasStore.setState({ shapes: [noteAt('s1', 0, 'old')], connections: [] })
+    render(<CanvasWorkspace />)
+    await tick(0)
+
+    await edit(() => useCanvasStore.getState().updateShape('s1', { props: { content: 'mine' } }))
+    await act(async () => { pendingGets[0]!(canvasVersion(3, [noteAt('s1', 0, 'theirs')])) })
+    await tick(0)
+
+    // The person's own text stays in front of them, and they are told the server
+    // held something else — the one thing that must not happen is silence.
+    expect(useCanvasStore.getState().shapes[0]!.props.content).toBe('mine')
+    expect(screen.getByText('panel.saveConflict')).toBeTruthy()
+  })
+
+  it('keeps a remote edit to a connection label while a local one is redrawn (r11 #9)', async () => {
+    useCanvasStore.setState({
+      shapes: [],
+      connections: [{ id: 'c1', from: 'a', to: 'b', label: 'old' }],
+    })
+    render(<CanvasWorkspace />)
+    await tick(0)
+
+    await edit(() => useCanvasStore.setState({
+      connections: [{ id: 'c1', from: 'a', to: 'z', label: 'old' }],
+    }))
+    await act(async () => {
+      pendingGets[0]!(canvasVersion(4, [], [{ id: 'c1', from: 'a', to: 'b', label: 'server' }]))
+    })
+    await tick(0)
+
+    expect(useCanvasStore.getState().connections).toEqual([
+      { id: 'c1', from: 'a', to: 'z', label: 'server' },
+    ])
+  })
+
+  // -- r11 #10 ---------------------------------------------------------------
+
+  it('clears the previous session\'s shapes when the new canvas is stored EMPTY (r11 #10)', async () => {
+    // An empty saved canvas parsed as "nothing usable", which left the previous
+    // session's shapes in the store — and the next save wrote them into B.
+    gets.set('sess-a', canvasVersion(5, [shape('a1')]))
+    gets.set('sess-b', canvasVersion(2, []))
+    render(<CanvasWorkspace />)
+    await tick(0)
+    expect(useCanvasStore.getState().shapes.map((s) => s.id)).toEqual(['a1'])
+
+    await act(async () => { useSessionStore.setState({ sessionId: 'sess-b' }) })
+    await tick(0)
+    expect(useCanvasStore.getState().shapes).toEqual([])
+  })
+
+  it('saves only the shape drawn while an EMPTY canvas was loading (r11 #10)', async () => {
+    // The previous session left 'a' in the store; B's read is slow and returns
+    // an empty canvas. Only 'b' — the work done here — belongs to B.
+    useCanvasStore.setState({ shapes: [shape('a')], connections: [] })
+    render(<CanvasWorkspace />)
+    await tick(0)
+    expect(pendingGets).toHaveLength(1)
+
+    await edit(() => useCanvasStore.getState().addShape(shape('b')))
+    await act(async () => { pendingGets[0]!(canvasVersion(2, [])) })
+    await tick(0)
+    expect(useCanvasStore.getState().shapes.map((s) => s.id)).toEqual(['b'])
+
+    await tick()
+    expect(puts).toHaveLength(1)
+    expect(puts[0]!.body.version).toBe(2)
+    expect(JSON.parse(String(puts[0]!.body.shapes)).map((s: ResolvedShape) => s.id)).toEqual(['b'])
+  })
+
+  it('leaves the canvas alone when the stored shapes cannot be read (r11 #10 guard)', async () => {
+    // Unreadable is NOT empty: a row we cannot parse must not clear the canvas.
+    gets.set('sess-a', canvasVersion(5, [shape('a1')]))
+    render(<CanvasWorkspace />)
+    await tick(0)
+
+    gets.set('sess-b', {
+      canvas: { shapes: 'not json at all', connections: '[]', viewport: '{}', version: 2 },
+    })
+    await act(async () => { useSessionStore.setState({ sessionId: 'sess-b' }) })
+    await tick(0)
+    expect(useCanvasStore.getState().shapes.map((s) => s.id)).toEqual(['a1'])
   })
 
   it('keeps the work dirty when the save fails, and retries on the next edit (guard)', async () => {

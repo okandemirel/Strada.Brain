@@ -9,6 +9,7 @@ import {
   CanvasSaveScheduler,
   canvasSavePayload,
   parseCanvasConnections,
+  parseStoredShapes,
   readCanvasVersion,
   replayCanvasEdits,
   samePayload,
@@ -199,6 +200,123 @@ describe('replayCanvasEdits (r10 #10)', () => {
       loaded: { shapes: [s('R')], connections: [] },
     })
     expect(result.shapes.map((x) => x.id)).toEqual(['R', 'L'])
+  })
+})
+
+/**
+ * r11 #9 — the replay used to take the WHOLE local object for a shape both
+ * sides hold, so a remote edit to a different field of that shape was erased
+ * and the versioned PUT then destroyed it on the server. What is replayed is
+ * the set of CHANGED PROPERTIES, and a property both sides changed is a
+ * conflict the person is told about rather than a coin toss.
+ */
+describe('replayCanvasEdits property replay (r11 #9)', () => {
+  const s = (id: string, x: number, props: Record<string, unknown>): ResolvedShape =>
+    ({ id, type: 'note-block', x, y: 0, w: 10, h: 10, props })
+  const conn = (id: string, label: string, to = 'b'): CanvasConnection => ({ id, from: 'a', to, label })
+
+  it('keeps a remote edit to a property the local edit never touched', () => {
+    // The repro: the user drags the shape (x) while the server's copy gets a new
+    // label. Replaying the whole local object put the stale label back.
+    const result = replayCanvasEdits({
+      base: { shapes: [s('s', 0, { label: 'old' })], connections: [] },
+      local: { shapes: [s('s', 10, { label: 'old' })], connections: [] },
+      loaded: { shapes: [s('s', 0, { label: 'server' })], connections: [] },
+    })
+    expect(result.shapes).toEqual([s('s', 10, { label: 'server' })])
+    expect(result.conflicts).toEqual([])
+  })
+
+  it('merges edits to two different keys of the same props object', () => {
+    const result = replayCanvasEdits({
+      base: { shapes: [s('s', 0, { label: 'old', color: 'red' })], connections: [] },
+      local: { shapes: [s('s', 0, { label: 'mine', color: 'red' })], connections: [] },
+      loaded: { shapes: [s('s', 0, { label: 'old', color: 'blue' })], connections: [] },
+    })
+    expect(result.shapes).toEqual([s('s', 0, { label: 'mine', color: 'blue' })])
+    expect(result.conflicts).toEqual([])
+  })
+
+  it('surfaces a conflict when both sides changed the SAME property', () => {
+    const result = replayCanvasEdits({
+      base: { shapes: [s('s', 0, { label: 'old' })], connections: [] },
+      local: { shapes: [s('s', 0, { label: 'mine' })], connections: [] },
+      loaded: { shapes: [s('s', 0, { label: 'theirs' })], connections: [] },
+    })
+    expect(result.conflicts).toEqual([
+      { kind: 'shape', id: 's', property: 'props.label', local: 'mine', loaded: 'theirs' },
+    ])
+    // The value the person is looking at stays; the conflict is what tells them
+    // the server held something else.
+    expect(result.shapes[0]!.props.label).toBe('mine')
+  })
+
+  it('replays a connection property by property too', () => {
+    const result = replayCanvasEdits({
+      base: { shapes: [], connections: [conn('c', 'old')] },
+      local: { shapes: [], connections: [conn('c', 'old', 'z')] },
+      loaded: { shapes: [], connections: [conn('c', 'server')] },
+    })
+    expect(result.connections).toEqual([{ id: 'c', from: 'a', to: 'z', label: 'server' }])
+    expect(result.conflicts).toEqual([])
+  })
+
+  it('surfaces a conflicting connection property as a connection conflict', () => {
+    const result = replayCanvasEdits({
+      base: { shapes: [], connections: [conn('c', 'old')] },
+      local: { shapes: [], connections: [conn('c', 'mine')] },
+      loaded: { shapes: [], connections: [conn('c', 'theirs')] },
+    })
+    expect(result.conflicts).toEqual([
+      { kind: 'connection', id: 'c', property: 'label', local: 'mine', loaded: 'theirs' },
+    ])
+  })
+
+  it('reports no conflict when both sides made the same change (guard)', () => {
+    const result = replayCanvasEdits({
+      base: { shapes: [s('s', 0, { label: 'old' })], connections: [] },
+      local: { shapes: [s('s', 0, { label: 'same' })], connections: [] },
+      loaded: { shapes: [s('s', 0, { label: 'same' })], connections: [] },
+    })
+    expect(result.shapes[0]!.props.label).toBe('same')
+    expect(result.conflicts).toEqual([])
+  })
+
+  it('honours a property the local edit removed (guard)', () => {
+    const result = replayCanvasEdits({
+      base: { shapes: [s('s', 0, { label: 'old', color: 'red' })], connections: [] },
+      local: { shapes: [s('s', 0, { label: 'old' })], connections: [] },
+      loaded: { shapes: [s('s', 0, { label: 'old', color: 'red' })], connections: [] },
+    })
+    expect(result.shapes[0]!.props).toEqual({ label: 'old' })
+    expect(result.conflicts).toEqual([])
+  })
+
+  it('compares a property by value, not by the key order it came back in (guard)', () => {
+    // `loaded` has been through the server and a JSON round trip, so the same
+    // value can arrive with its keys in another order. Reading that as a remote
+    // change turns an untouched property into a conflict and replays the local
+    // copy over the server's — here, dropping the item the server appended.
+    const withItems = (items: unknown[], x = 0): ResolvedShape =>
+      ({ id: 's', type: 'note-block', x, y: 0, w: 10, h: 10, props: { items } })
+    const result = replayCanvasEdits({
+      base: { shapes: [withItems([{ x: 1, y: 2 }])], connections: [] },
+      local: { shapes: [withItems([{ y: 2, x: 1 }], 10)], connections: [] },
+      loaded: { shapes: [withItems([{ x: 1, y: 2 }, { x: 3, y: 4 }])], connections: [] },
+    })
+    expect(result.shapes[0]!.x).toBe(10)
+    expect(result.shapes[0]!.props.items).toHaveLength(2)
+    expect(result.conflicts).toEqual([])
+  })
+
+  it('takes the server copy of a shape nothing was done to here (guard)', () => {
+    const result = replayCanvasEdits({
+      base: { shapes: [s('s', 0, { label: 'old' })], connections: [] },
+      local: { shapes: [s('s', 0, { label: 'old' })], connections: [] },
+      loaded: { shapes: [s('s', 50, { label: 'server' })], connections: [] },
+    })
+    expect(result.shapes).toEqual([s('s', 50, { label: 'server' })])
+    expect(result.conflicts).toEqual([])
   })
 })
 
@@ -554,5 +672,47 @@ describe('CanvasSaveScheduler', () => {
     expect(sent).toHaveLength(1)
     expect(sent[0]!.version).toBe('absent')
     expect(scheduler.writable).toBe(true)
+  })
+})
+
+/**
+ * r11 #10 — `[]` is a canvas that IS empty; `null` is a canvas we could not
+ * read. Returning the same answer for both let one session's shapes be saved
+ * into another's canvas.
+ */
+describe('parseStoredShapes (r11 #10)', () => {
+  it('reads a stored empty canvas as empty, not as unreadable', () => {
+    expect(parseStoredShapes(JSON.stringify([]))).toEqual([])
+  })
+
+  it('reads the shapes a canvas holds', () => {
+    expect(parseStoredShapes(JSON.stringify([shape('s1')]))).toEqual([shape('s1')])
+  })
+
+  it('reports an unreadable payload as unreadable', () => {
+    expect(parseStoredShapes('not json')).toBeNull()
+    expect(parseStoredShapes('')).toBeNull()
+    expect(parseStoredShapes(undefined)).toBeNull()
+    expect(parseStoredShapes(JSON.stringify({ shapes: 'nope' }))).toBeNull()
+  })
+
+  it('reports a list whose every entry is malformed as unreadable, not as empty', () => {
+    // Dropping every entry would clear a canvas that does hold shapes.
+    expect(parseStoredShapes(JSON.stringify([{ id: 'x' }, 7]))).toBeNull()
+  })
+
+  it('keeps the entries it can read out of a partly malformed list', () => {
+    expect(parseStoredShapes(JSON.stringify([shape('s1'), { id: 'x' }]))).toEqual([shape('s1')])
+  })
+
+  it('reads a tldraw-era store with no shapes in it as empty', () => {
+    expect(parseStoredShapes(JSON.stringify({ store: {} }))).toEqual([])
+  })
+
+  it('migrates a tldraw-era store that does hold shapes', () => {
+    const migrated = parseStoredShapes(JSON.stringify({
+      store: { 'shape:1': { typeName: 'shape', id: 'shape:1', type: 'note-block', x: 5, y: 6, props: {} } },
+    }))
+    expect(migrated?.map((s) => s.id)).toEqual(['shape:1'])
   })
 })

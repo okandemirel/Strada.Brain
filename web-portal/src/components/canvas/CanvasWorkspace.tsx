@@ -12,15 +12,16 @@ import {
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 
-import { useCanvasStore, isValidResolvedShape, type CanvasShape } from '../../stores/canvas-store'
+import { useCanvasStore, type CanvasShape } from '../../stores/canvas-store'
 import { useMonitorStore } from '../../stores/monitor-store'
 import { useSessionStore } from '../../stores/session-store'
 import { normalizeCanvasIncomingShape } from './canvas-shape-normalizer'
-import { getDefaultDimensions, type ResolvedShape, type ViewportState } from './canvas-types'
+import { getDefaultDimensions, type ViewportState } from './canvas-types'
 import {
   CanvasSaveScheduler,
   canvasSavePayload,
   parseCanvasConnections,
+  parseStoredShapes,
   readCanvasVersion,
   replayCanvasEdits,
   saveCanvasState,
@@ -56,48 +57,6 @@ const NODE_TYPES = { baseCard: BaseCard } as const
 const EDGE_TYPES = { gradientBezier: GradientBezierEdge } as const
 
 /* ── Reading what the server stored ──────────────────────────────────────── */
-
-/**
- * The shapes a stored canvas holds, or `null` when the payload carries none we
- * can use — which is NOT the same as "the canvas is empty": a row we cannot read
- * must leave the local canvas alone rather than clear it.
- */
-function parseStoredShapes(raw: unknown): ResolvedShape[] | null {
-  if (typeof raw !== 'string' || raw.length === 0) return null
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(raw)
-  } catch {
-    return null
-  }
-  // The tldraw-era format: a keyed store of records, one per shape.
-  if (parsed && typeof parsed === 'object' && 'store' in parsed) {
-    const store = (parsed as { store: Record<string, unknown> }).store
-    const migrated: ResolvedShape[] = []
-    let idx = 0
-    for (const entry of Object.values(store ?? {})) {
-      if (!entry || typeof entry !== 'object') continue
-      const e = entry as Record<string, unknown>
-      if (e.typeName !== 'shape') continue
-      const dims = getDefaultDimensions(String(e.type ?? 'note-block'))
-      const props = (e.props as Record<string, unknown>) ?? {}
-      migrated.push({
-        id: String(e.id ?? `migrated-${idx++}`),
-        type: String(e.type ?? 'note-block'),
-        x: typeof e.x === 'number' ? e.x : idx * 260,
-        y: typeof e.y === 'number' ? e.y : 100,
-        w: typeof props.w === 'number' ? props.w : dims.w,
-        h: typeof props.h === 'number' ? props.h : dims.h,
-        props,
-        source: props.source as 'agent' | 'user' | undefined,
-      })
-    }
-    return migrated.length > 0 ? migrated : null
-  }
-  if (!Array.isArray(parsed)) return null
-  const validated = parsed.filter(isValidResolvedShape)
-  return validated.length > 0 ? validated : null
-}
 
 /** The stored viewport, or `null` when it is missing or not a viewport. */
 function parseStoredViewport(raw: unknown): ViewportState | null {
@@ -163,6 +122,12 @@ function CanvasWorkspaceInner() {
   // is kept in this browser, and the person is told — silence here looked
   // exactly like a canvas that was being saved.
   const [loadFailed, setLoadFailed] = useState(false)
+  // A property the server and this window both changed while the read was open
+  // (r11 #9). The local value is kept — it is what the person is looking at —
+  // and this is what tells them the server held something else, instead of the
+  // choice being made for them in silence. It stands until the session changes;
+  // a save being acked does not make it untrue.
+  const [replayConflict, setReplayConflict] = useState(false)
 
   /* ── The one writer for this canvas ──────────────────────────────
      A single scheduler owns the debounce, the outstanding PUT and the
@@ -293,7 +258,10 @@ function CanvasWorkspaceInner() {
       if (scheduler.canApplyContent(generation)) {
         scheduler.adoptVersion(version, generation)
         setConnections(loadedConnections)
-        if (loadedShapes) setShapes(loadedShapes)
+        // `[]` is an empty canvas and REPLACES what is here: the previous
+        // session's shapes used to stay in the store and be saved into this
+        // canvas (r11 #10). Only `null` — unreadable — leaves them alone.
+        if (loadedShapes !== null) setShapes(loadedShapes)
         const viewport = parseStoredViewport(canvas.viewport)
         if (viewport) setViewport(viewport)
         return true
@@ -309,10 +277,16 @@ function CanvasWorkspaceInner() {
         const merged = replayCanvasEdits({
           base,
           local: { shapes: current.shapes, connections: current.connections },
+          // An EMPTY loaded canvas is the real baseline, so the work done here is
+          // all that is left after the replay (r11 #10). Only an UNREADABLE one
+          // (`null`) falls back to the canvas in front of us.
           loaded: { shapes: loadedShapes ?? current.shapes, connections: loadedConnections },
         })
         setShapes(merged.shapes)
         setConnections(merged.connections)
+        // Both sides changed the same property of the same shape: the person is
+        // told rather than one of the two values being dropped quietly (#9).
+        if (merged.conflicts.length > 0) setReplayConflict(true)
         // The viewport is NOT replaced: the view the person is looking at wins.
         setDirty(true)
         return true
@@ -369,6 +343,8 @@ function CanvasWorkspaceInner() {
     attempt(0)
 
     setLoadFailed(false)
+    // A conflict belongs to the canvas it was found on, not to the next one.
+    setReplayConflict(false)
 
     return () => {
       cancelled = true
@@ -522,7 +498,7 @@ function CanvasWorkspaceInner() {
         </div>
       )}
 
-      {saveConflict && (
+      {(saveConflict || replayConflict) && (
         <div className="absolute top-3 left-3 z-20 max-w-sm rounded-lg border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
           {t('panel.saveConflict')}
         </div>

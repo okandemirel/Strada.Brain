@@ -41,7 +41,23 @@
  *     (because a local edit had arrived first), so the next save wrote the local
  *     shapes alone against that version and deleted the server's. The work done
  *     while the read was open is now REPLAYED onto what the read returned.
+ *
+ * Round 11 narrowed that replay from the object to the PROPERTY:
+ *   - #9 taking the whole LOCAL object for a shape both sides hold erased every
+ *     remote edit to a DIFFERENT field of it — the user drags the shape, the
+ *     server's copy gets a new label, and the label is gone; the versioned PUT
+ *     then destroys it on the server too. Only the properties that changed here
+ *     are replayed, and a property BOTH sides changed is reported as a conflict
+ *     instead of being decided silently. Connections are replayed the same way;
+ *   - #10 an EMPTY saved canvas could not be told from an unreadable one —
+ *     parsing answered `null` for both — so the shapes a PREVIOUS session had
+ *     left in the store were installed as this canvas's content and then written
+ *     into it. parseStoredShapes lives here now (it is what a save has to read
+ *     back) and answers `[]` for an empty canvas, `null` only for one that
+ *     cannot be read at all.
  */
+import { isValidResolvedShape } from '../../stores/canvas-store'
+import { getDefaultDimensions } from './canvas-types'
 import type { CanvasConnection, ResolvedShape } from './canvas-types'
 
 /** Exactly what a save sends: the serialized revision of the canvas. */
@@ -119,6 +135,62 @@ export function parseCanvasConnections(raw: unknown): CanvasConnection[] {
   return out
 }
 
+/* ── Reading what the server stored ──────────────────────────────────────── */
+
+/**
+ * The shapes a stored canvas holds: a list — `[]` included, because a canvas
+ * stored EMPTY is a canvas, not a missing one — or `null` when the payload
+ * cannot be READ at all.
+ *
+ * The two used to be the same answer, and that is r11 #10: an empty canvas came
+ * back as `null`, so the shapes the PREVIOUS session had left in the store were
+ * kept as this canvas's content — installed by the apply path, taken as the
+ * loaded baseline by the replay, and then written into the new canvas by the
+ * next save. `null` still means "leave the local canvas alone": clearing a
+ * canvas because its row could not be parsed is the one thing worse.
+ */
+export function parseStoredShapes(raw: unknown): ResolvedShape[] | null {
+  if (typeof raw !== 'string' || raw.length === 0) return null
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return null
+  }
+  // The tldraw-era format: a keyed store of records, one per shape.
+  if (parsed && typeof parsed === 'object' && 'store' in parsed) {
+    const store = (parsed as { store: unknown }).store
+    if (!store || typeof store !== 'object') return null
+    const migrated: ResolvedShape[] = []
+    let idx = 0
+    for (const entry of Object.values(store as Record<string, unknown>)) {
+      if (!entry || typeof entry !== 'object') continue
+      const e = entry as Record<string, unknown>
+      if (e.typeName !== 'shape') continue
+      const dims = getDefaultDimensions(String(e.type ?? 'note-block'))
+      const props = (e.props as Record<string, unknown>) ?? {}
+      migrated.push({
+        id: String(e.id ?? `migrated-${idx++}`),
+        type: String(e.type ?? 'note-block'),
+        x: typeof e.x === 'number' ? e.x : idx * 260,
+        y: typeof e.y === 'number' ? e.y : 100,
+        w: typeof props.w === 'number' ? props.w : dims.w,
+        h: typeof props.h === 'number' ? props.h : dims.h,
+        props,
+        source: props.source as 'agent' | 'user' | undefined,
+      })
+    }
+    // A readable store with no shape records in it is an EMPTY canvas (#10).
+    return migrated
+  }
+  if (!Array.isArray(parsed)) return null
+  const validated = parsed.filter(isValidResolvedShape)
+  // Entries that are all unreadable are not an empty canvas: nothing usable came
+  // back, so the canvas here is left alone instead of being cleared.
+  if (parsed.length > 0 && validated.length === 0) return null
+  return validated
+}
+
 export async function saveCanvasState(args: {
   sessionId: string
   payload: CanvasSavePayload
@@ -152,7 +224,7 @@ export async function saveCanvasState(args: {
   }
 }
 
-/* ── Replaying the work done while a load was open (r10 #10) ─────────────── */
+/* ── Replaying the work done while a load was open (r10 #10, r11 #9) ─────── */
 
 /** The two lists a canvas is made of, as the store and the server both hold them. */
 export interface CanvasContent {
@@ -166,9 +238,109 @@ function byId<T extends { id: string }>(items: readonly T[]): Map<string, T> {
   return map
 }
 
-/** Same entity, unchanged. Key order is stable here: both sides come from the store. */
+/**
+ * JSON with object keys in a fixed order. `loaded` has been through the server
+ * and a JSON round trip while `base`/`local` come straight from the store, so
+ * key order is NOT something to compare values by (r11 #9).
+ */
+function stableJson(value: unknown): string | undefined {
+  return JSON.stringify(value, (_key, v: unknown) => {
+    if (!v || typeof v !== 'object' || Array.isArray(v)) return v
+    const record = v as Record<string, unknown>
+    const sorted: Record<string, unknown> = {}
+    for (const key of Object.keys(record).sort()) sorted[key] = record[key]
+    return sorted
+  })
+}
+
+/** The same value, whatever route it took to get here. */
+function sameValue(a: unknown, b: unknown): boolean {
+  if (a === b) return true
+  const left = stableJson(a)
+  // `undefined` is not JSON: an absent key must not compare equal to `null`
+  // or to a key holding the string "undefined".
+  if (left === undefined || stableJson(b) === undefined) return false
+  return left === stableJson(b)
+}
+
+/** Same entity, unchanged. */
 function unchanged<T>(a: T, b: T): boolean {
-  return a === b || JSON.stringify(a) === JSON.stringify(b)
+  return sameValue(a, b)
+}
+
+/** A property both sides changed while the read was open (r11 #9). */
+export interface CanvasReplayConflict {
+  kind: 'shape' | 'connection'
+  /** The shape or connection id. */
+  id: string
+  /** Dotted path inside the entity: `x`, `props.label`, … */
+  property: string
+  /** What this window holds, and what the read returned. */
+  local: unknown
+  loaded: unknown
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/** Take the local value for one key — including "the local edit removed it". */
+function takeLocal(out: Record<string, unknown>, key: string, local: Record<string, unknown>): void {
+  if (key in local) out[key] = local[key]
+  else delete out[key]
+}
+
+/**
+ * Replay ONE entity property by property: the loaded copy, with every property
+ * that changed HERE since the read began written over it.
+ *
+ *   - untouched here                → the server's value governs;
+ *   - changed here only             → the local value is replayed;
+ *   - changed on both sides, same   → nothing to decide;
+ *   - changed on both sides, differ → a CONFLICT is reported. The local value
+ *     stays (it is what the person is looking at; taking the server's would
+ *     delete a keystroke under their cursor) and the caller surfaces it, so the
+ *     choice is theirs rather than silent.
+ *
+ * Nested plain objects — `props` above all — are recursed into, so a local edit
+ * to `props.content` and a remote edit to `props.label` are not a conflict.
+ */
+function replayProperties<T extends object>(
+  base: T,
+  local: T,
+  loaded: T,
+  report: (property: string, local: unknown, loaded: unknown) => void,
+  path = '',
+): T {
+  const baseRecord = base as Record<string, unknown>
+  const localRecord = local as Record<string, unknown>
+  const loadedRecord = loaded as Record<string, unknown>
+  const out: Record<string, unknown> = { ...loadedRecord }
+  const keys = new Set([
+    ...Object.keys(baseRecord),
+    ...Object.keys(localRecord),
+    ...Object.keys(loadedRecord),
+  ])
+  for (const key of keys) {
+    const wasBase = baseRecord[key]
+    const isLocal = localRecord[key]
+    const isLoaded = loadedRecord[key]
+    // Nothing was done to this property here, so the server's copy governs —
+    // that is what keeps a remote edit to another field alive (#9).
+    if (sameValue(wasBase, isLocal)) continue
+    if (sameValue(wasBase, isLoaded)) {
+      takeLocal(out, key, localRecord)
+      continue
+    }
+    if (sameValue(isLocal, isLoaded)) continue // both sides did the same thing
+    if (isPlainObject(wasBase) && isPlainObject(isLocal) && isPlainObject(isLoaded)) {
+      out[key] = replayProperties(wasBase, isLocal, isLoaded, report, `${path}${key}.`)
+      continue
+    }
+    report(`${path}${key}`, isLocal, isLoaded)
+    takeLocal(out, key, localRecord)
+  }
+  return out as T
 }
 
 /**
@@ -179,7 +351,8 @@ function unchanged<T>(a: T, b: T): boolean {
  * open — and `loaded` is what the server returned. The result is `loaded` with
  * that work replayed onto it:
  *   - added while loading            → kept (appended);
- *   - edited while loading           → the local version wins over the loaded one;
+ *   - edited while loading           → the properties edited here are replayed
+ *     onto the loaded copy, so the server's other fields survive (r11 #9);
  *   - deleted while loading          → removed from the loaded content too;
  *   - untouched since the read began → the server's copy governs, which is how a
  *     canvas left in the store by a PREVIOUS session stops leaking into this one.
@@ -189,9 +362,11 @@ function unchanged<T>(a: T, b: T): boolean {
  * ing one is recoverable; silently deleting the server's canvas is not.
  */
 function replayList<T extends { id: string }>(
+  kind: CanvasReplayConflict['kind'],
   base: readonly T[],
   local: readonly T[],
   loaded: readonly T[],
+  conflicts: CanvasReplayConflict[],
 ): T[] {
   const baseById = byId(base)
   const localById = byId(local)
@@ -202,8 +377,17 @@ function replayList<T extends { id: string }>(
     const localItem = localById.get(item.id)
     const baseItem = baseById.get(item.id)
     if (!localItem && baseItem) continue // deleted while the read was open
-    if (localItem && !(baseItem && unchanged(baseItem, localItem))) {
-      out.push(localItem) // edited (or re-added) while the read was open
+    if (localItem && baseItem && !unchanged(baseItem, localItem)) {
+      // Edited on this side. Both sides may have changed DIFFERENT properties of
+      // the same entity, and taking the whole local object erased the remote
+      // ones (#9).
+      out.push(replayProperties(baseItem, localItem, item, (property, localValue, loadedValue) => {
+        conflicts.push({ kind, id: item.id, property, local: localValue, loaded: loadedValue })
+      }))
+    } else if (localItem && !baseItem) {
+      // Added here while the read was open, and the server has it under the same
+      // id: there is no base to diff against, so this side's copy is taken whole.
+      out.push(localItem)
     } else {
       out.push(item) // untouched here: the server's copy is the truth
     }
@@ -224,17 +408,34 @@ function replayList<T extends { id: string }>(
 
 /**
  * The canvas a slow read must produce: everything the server holds, plus the
- * work done while it was in flight (#10). The viewport is deliberately NOT part
- * of this — the view the person is looking at now wins.
+ * work done while it was in flight (#10), property by property (r11 #9). The
+ * viewport is deliberately NOT part of this — the view the person is looking at
+ * now wins.
+ *
+ * `conflicts` lists the properties both sides changed differently. The local
+ * value is in the result; the conflict is what the caller shows the person, so
+ * nothing is decided for them in silence.
  */
 export function replayCanvasEdits(args: {
   base: CanvasContent
   local: CanvasContent
   loaded: CanvasContent
-}): { shapes: ResolvedShape[]; connections: CanvasConnection[] } {
+}): {
+  shapes: ResolvedShape[]
+  connections: CanvasConnection[]
+  conflicts: CanvasReplayConflict[]
+} {
+  const conflicts: CanvasReplayConflict[] = []
   return {
-    shapes: replayList(args.base.shapes, args.local.shapes, args.loaded.shapes),
-    connections: replayList(args.base.connections, args.local.connections, args.loaded.connections),
+    shapes: replayList('shape', args.base.shapes, args.local.shapes, args.loaded.shapes, conflicts),
+    connections: replayList(
+      'connection',
+      args.base.connections,
+      args.local.connections,
+      args.loaded.connections,
+      conflicts,
+    ),
+    conflicts,
   }
 }
 
