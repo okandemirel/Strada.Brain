@@ -231,24 +231,19 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
+/** What can be PROVEN about the lock file sitting at a pathname. */
+type LockVerdict = "gone" | "live" | "abandoned";
+
 /**
- * Remove a lock nobody can still be holding.
+ * Read the lock and judge its owner, returning the exact bytes judged.
  *
- * AGE IS NOT DEATH (Codex 2026-09-17 round 10 #5). Breaking a lock merely
- * because it was old stole it from a LIVE writer: pause a save between its
- * read and its rename for longer than `staleMs`, and the second process
- * saved, then the first finished and overwrote it. A lock whose owner is alive
- * on this host is now never broken, whatever its age — the waiter times out
- * and REFUSES instead, which loses nothing.
- *
- * Age still decides for a lock nobody can be asked about: no readable owner,
- * or an owner on another host.
- *
- * The removal itself is rename-then-verify rather than compare-then-unlink: the
- * bytes are checked after the rename, and a lock that turned out to be someone
- * else's is linked straight back.
+ * AGE IS NOT DEATH (Codex round 10 #5). A lock whose owner is alive on this
+ * host is LIVE whatever its age: breaking it because it was old let a second
+ * process save while the first was merely paused between its read and its
+ * rename. Age still decides for a lock nobody here can be asked about — no
+ * readable owner, or an owner on another host.
  */
-async function breakAbandonedLock(lockPath: string): Promise<boolean> {
+async function judgeLock(lockPath: string): Promise<{ verdict: LockVerdict; raw?: string }> {
   let raw: string;
   let mtimeMs: number;
   try {
@@ -256,7 +251,8 @@ async function breakAbandonedLock(lockPath: string): Promise<boolean> {
     mtimeMs = (await stat(lockPath)).mtimeMs;
   } catch (error) {
     // It vanished while we looked: the next O_EXCL attempt is the answer.
-    return (error as NodeJS.ErrnoException).code === "ENOENT";
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { verdict: "gone" };
+    return { verdict: "live" };
   }
   let owner: { pid?: number; host?: string } = {};
   try {
@@ -265,33 +261,95 @@ async function breakAbandonedLock(lockPath: string): Promise<boolean> {
     // Unreadable lock file: age alone decides.
   }
   const isLocalOwner = typeof owner.pid === "number" && owner.host === hostname();
-  const ownerGone = isLocalOwner && !isProcessAlive(owner.pid!);
-  // Only a lock we cannot ask about may be broken for being old.
-  const unaskableAndOld = !isLocalOwner && Date.now() - mtimeMs > ENV_SAVE_LOCK.staleMs;
-  if (!ownerGone && !unaskableAndOld) return false;
-  const grave = `${lockPath}.abandoned.${process.pid}.${randomBytes(4).toString("hex")}`;
+  if (isLocalOwner) return { verdict: isProcessAlive(owner.pid!) ? "live" : "abandoned", raw };
+  const old = Date.now() - mtimeMs > ENV_SAVE_LOCK.staleMs;
+  return { verdict: old ? "abandoned" : "live", raw };
+}
+
+/** Create the lock file, or report that someone else already holds the name. */
+async function claimLockPath(lockPath: string, body: string): Promise<boolean> {
   try {
-    await rename(lockPath, grave);
-  } catch {
-    // Someone else broke or replaced it first.
+    const handle = await open(lockPath, "wx", 0o600);
+    try {
+      await handle.writeFile(body);
+    } finally {
+      await handle.close();
+    }
     return true;
-  }
-  let graveBody: string | null = null;
-  try {
-    graveBody = await readFile(grave, "utf-8");
-  } catch {
-    graveBody = null;
-  }
-  if (graveBody !== raw) {
-    // Not the lock we judged: a live owner took it in the meantime. Put it
-    // back; a newer lock at the path makes the link fail, which is the
-    // fail-closed answer.
-    await link(grave, lockPath).catch(() => undefined);
-    await unlink(grave).catch(() => undefined);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
     return false;
   }
-  await unlink(grave).catch(() => undefined);
-  return true;
+}
+
+/** What a recovery attempt achieved. */
+export type LockRecovery = "acquired" | "retry" | "live";
+
+/**
+ * Take over a lock whose owner is provably gone, WITHOUT ever exposing an
+ * unlocked pathname that a live writer could lose (Codex round 11 #3).
+ *
+ * The old recovery renamed the lock away and only then checked what it had
+ * moved, so: A judges an abandoned lock; B recovers it and C takes a fresh
+ * live lock; A renames C's lock away; D takes the vacant pathname; A's
+ * restore fails with EEXIST — and C and D both write `.env`.
+ *
+ * Two rules close that window:
+ *
+ * 1. RECOVERY IS SERIALIZED. A `.recovery` file beside the lock is itself an
+ *    O_EXCL mutex, and the lock is RE-JUDGED inside it. Whatever happened
+ *    between the caller's judgement and this moment — a handover to a live
+ *    writer included — is seen before anything is renamed.
+ * 2. THE PATHNAME IS NEVER LEFT VACANT. The recoverer claims it for itself in
+ *    the same critical section. If a third contender wins that race anyway,
+ *    exactly one writer holds the lock and we simply wait our turn; what we
+ *    removed was, by rule 1, the abandoned lock we had judged.
+ *
+ * `judged` is the caller's reading, so a STALE judgement can be handed in
+ * (that is the finding's scenario, and the test drives it): it is compared
+ * byte for byte against the re-judgement and abandoned on any difference.
+ */
+export async function recoverAbandonedLock(
+  lockPath: string,
+  body: string,
+  judged: { verdict: LockVerdict; raw?: string },
+): Promise<LockRecovery> {
+  if (judged.verdict === "gone") return "retry";
+  if (judged.verdict === "live") return "live";
+  const breakerPath = `${lockPath}.recovery`;
+  const breakerBody = JSON.stringify({ pid: process.pid, host: hostname(), startedAt: Date.now() });
+  if (!(await claimLockPath(breakerPath, breakerBody))) {
+    // Somebody else is recovering. Only a recoverer that is itself gone (or
+    // one nobody here can ask about, long past staleMs) may be cleared.
+    const breaker = await judgeLock(breakerPath);
+    if (breaker.verdict === "abandoned") await unlink(breakerPath).catch(() => undefined);
+    return "retry";
+  }
+  try {
+    const now = await judgeLock(lockPath);
+    if (now.verdict === "live") return "live";
+    if (now.verdict === "gone" || now.raw !== judged.raw) return "retry";
+    const grave = `${lockPath}.abandoned.${process.pid}.${randomBytes(4).toString("hex")}`;
+    try {
+      await rename(lockPath, grave);
+    } catch {
+      // Someone else broke or replaced it first.
+      return "retry";
+    }
+    // Confirm the bytes we actually moved BEFORE claiming the name: a lock
+    // that turns out to be someone else's is linked straight back, and we
+    // take nothing.
+    const moved = await readFile(grave, "utf-8").catch(() => null);
+    if (moved !== now.raw) {
+      await link(grave, lockPath).catch(() => undefined);
+      await unlink(grave).catch(() => undefined);
+      return "retry";
+    }
+    await unlink(grave).catch(() => undefined);
+    return (await claimLockPath(lockPath, body)) ? "acquired" : "retry";
+  } finally {
+    await unlink(breakerPath).catch(() => undefined);
+  }
 }
 
 async function acquireEnvSaveLock(envPath: string): Promise<EnvSaveLock> {
@@ -305,28 +363,20 @@ async function acquireEnvSaveLock(envPath: string): Promise<EnvSaveLock> {
   });
   const deadline = Date.now() + ENV_SAVE_LOCK.timeoutMs;
   for (;;) {
-    try {
-      const handle = await open(lockPath, "wx", 0o600);
-      try {
-        await handle.writeFile(body);
-      } finally {
-        await handle.close();
-      }
-      return { lockPath, body };
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-    }
-    if (await breakAbandonedLock(lockPath)) continue;
+    if (await claimLockPath(lockPath, body)) return { lockPath, body };
+    const recovery = await recoverAbandonedLock(lockPath, body, await judgeLock(lockPath));
+    if (recovery === "acquired") return { lockPath, body };
+    // The deadline is checked on EVERY path, so a lock that keeps changing
+    // hands cannot spin here for ever.
     if (Date.now() >= deadline) {
       const holder = await describeLockHolder(lockPath);
       throw new Error(
         `Another process is still saving ${envPath} (${lockPath} held by ${holder} for over ${ENV_SAVE_LOCK.timeoutMs} ms). Nothing was written.`,
       );
     }
-    await new Promise((resolve) => setTimeout(resolve, ENV_SAVE_LOCK.retryMs));
+    if (recovery === "live") await new Promise((resolve) => setTimeout(resolve, ENV_SAVE_LOCK.retryMs));
   }
 }
-
 /** Who the lock file says is holding it, for a refusal a person can act on. */
 async function describeLockHolder(lockPath: string): Promise<string> {
   try {

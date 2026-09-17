@@ -15,6 +15,7 @@ import {
   mergeEnvContent,
   parseEnvLines,
   persistSetup,
+  recoverAbandonedLock,
   redactEffectiveConfig,
 } from "./setup-env-persistence.js";
 
@@ -320,5 +321,102 @@ describe("the cross-process save lock does not become a deadlock (round 9 #15)",
     // A refused save is a save that did not happen.
     expect(fs.readFileSync(envPath, "utf-8")).toBe("KIMI_API_KEY=old\n");
     expect(fs.readdirSync(path.dirname(envPath)).filter((n) => n.endsWith(".tmp"))).toEqual([]);
+  });
+});
+
+/**
+ * Codex round 11 #3. Recovery of an abandoned lock must never expose an
+ * unlocked pathname: A judges an abandoned lock, B recovers it and C takes a
+ * fresh live lock, A renames C's lock away, D takes the vacant name — and C
+ * and D both write `.env`. Recovery is now serialized and re-judged, and the
+ * recoverer claims the name itself instead of leaving it open.
+ */
+describe("abandoned-lock recovery never leaves the pathname unlocked (round 11 #3)", () => {
+  const tmpDirs: string[] = [];
+  const original = { ...ENV_SAVE_LOCK };
+  afterEach(() => {
+    Object.assign(ENV_SAVE_LOCK, original);
+    for (const dir of tmpDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  });
+  function lockDir(): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "strada-env-aba-"));
+    tmpDirs.push(dir);
+    return dir;
+  }
+  const dead = JSON.stringify({ token: "dead", pid: 0x7ffffffe, host: os.hostname(), startedAt: 0 });
+  const live = JSON.stringify({ token: "live", pid: process.pid, host: os.hostname(), startedAt: 0 });
+  const mine = JSON.stringify({ token: "mine", pid: process.pid, host: os.hostname(), startedAt: 1 });
+
+  it("a STALE judgement cannot remove the live lock that replaced it", async () => {
+    // Exactly the reported interleaving: our judgement describes the dead
+    // owner's lock, but the file now at that name belongs to a live writer.
+    const lockPath = path.join(lockDir(), ".env.lock");
+    fs.writeFileSync(lockPath, live);
+    const verdict = await recoverAbandonedLock(lockPath, mine, { verdict: "abandoned", raw: dead });
+    expect(verdict).toBe("live");
+    // The live owner still holds its own bytes, and nothing was left beside it.
+    expect(fs.readFileSync(lockPath, "utf-8")).toBe(live);
+    expect(fs.readdirSync(path.dirname(lockPath))).toEqual([".env.lock"]);
+  });
+
+  it("a stale judgement of an equally dead but DIFFERENT lock is refused too", async () => {
+    // The replacement need not be alive for the removal to be wrong: it is a
+    // lock nobody judged, so it is re-judged instead of assumed.
+    const lockPath = path.join(lockDir(), ".env.lock");
+    const otherDead = JSON.stringify({ token: "other", pid: 0x7ffffffd, host: os.hostname(), startedAt: 0 });
+    fs.writeFileSync(lockPath, otherDead);
+    expect(await recoverAbandonedLock(lockPath, mine, { verdict: "abandoned", raw: dead })).toBe("retry");
+    expect(fs.readFileSync(lockPath, "utf-8")).toBe(otherDead);
+  });
+
+  it("recovery hands the name to the recoverer, never to nobody", async () => {
+    const lockPath = path.join(lockDir(), ".env.lock");
+    fs.writeFileSync(lockPath, dead);
+    expect(await recoverAbandonedLock(lockPath, mine, { verdict: "abandoned", raw: dead })).toBe("acquired");
+    // The pathname is locked by US when the call returns: a third contender
+    // arriving now finds it taken instead of free.
+    expect(fs.readFileSync(lockPath, "utf-8")).toBe(mine);
+    expect(fs.readdirSync(path.dirname(lockPath))).toEqual([".env.lock"]);
+  });
+
+  it("a live recovery in progress blocks a second recoverer, and its lock survives", async () => {
+    const lockPath = path.join(lockDir(), ".env.lock");
+    fs.writeFileSync(lockPath, dead);
+    // Another process is inside the critical section right now.
+    fs.writeFileSync(`${lockPath}.recovery`, live);
+    expect(await recoverAbandonedLock(lockPath, mine, { verdict: "abandoned", raw: dead })).toBe("retry");
+    expect(fs.readFileSync(lockPath, "utf-8")).toBe(dead);
+    expect(fs.existsSync(`${lockPath}.recovery`)).toBe(true);
+  });
+
+  it("a recoverer that died mid-recovery does not block recovery for ever", async () => {
+    const lockPath = path.join(lockDir(), ".env.lock");
+    fs.writeFileSync(lockPath, dead);
+    fs.writeFileSync(`${lockPath}.recovery`, dead);
+    // First attempt clears the dead recoverer, the next one gets through.
+    expect(await recoverAbandonedLock(lockPath, mine, { verdict: "abandoned", raw: dead })).toBe("retry");
+    expect(fs.existsSync(`${lockPath}.recovery`)).toBe(false);
+    expect(await recoverAbandonedLock(lockPath, mine, { verdict: "abandoned", raw: dead })).toBe("acquired");
+    expect(fs.existsSync(`${lockPath}.recovery`)).toBe(false);
+  });
+
+  it("a save blocked by another process's recovery refuses at the deadline instead of spinning", async () => {
+    // The lock IS recoverable but someone else is recovering it, so every
+    // attempt answers 'retry'. Without a deadline on that path the loop spun
+    // for ever instead of refusing.
+    ENV_SAVE_LOCK.timeoutMs = 50;
+    ENV_SAVE_LOCK.staleMs = 60_000;
+    const dir = lockDir();
+    const envPath = path.join(dir, ".env");
+    fs.writeFileSync(envPath, "KIMI_API_KEY=held\n");
+    fs.writeFileSync(`${envPath}.lock`, dead);
+    fs.writeFileSync(`${envPath}.lock.recovery`, live);
+    await expect(persistSetup(envPath, ['KIMI_API_KEY="new"'], { ownedKeys: ["KIMI_API_KEY"] }))
+      .rejects.toThrow(/still saving/);
+    // A refused save is a save that did not happen, and the other recoverer's
+    // critical section is intact.
+    expect(fs.readFileSync(envPath, "utf-8")).toBe("KIMI_API_KEY=held\n");
+    expect(fs.readFileSync(`${envPath}.lock.recovery`, "utf-8")).toBe(live);
+    expect(fs.readdirSync(dir).filter((n) => n.includes(".abandoned.") || n.endsWith(".tmp"))).toEqual([]);
   });
 });
