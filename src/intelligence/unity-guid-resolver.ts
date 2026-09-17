@@ -87,10 +87,15 @@ export function extractGuidFromContent(content: string): string | null {
 // ─── Reference Finding ─────────────────────────────────────────────────────
 
 const GUID_REF_PATTERN = /guid:\s*([0-9a-f]{32})/g;
+// LOWER-CASE, because the lookups below lower-case the entry's extension.
+// `.overrideController` and `.renderTexture` were listed in Unity's own
+// mixed case and therefore NEVER matched: an asset referenced only from an
+// animator override controller scanned as unreferenced and file-manage
+// deleted it (audit U5, 2026-09-13).
 const SEARCHABLE_EXTENSIONS = new Set([
   ".prefab", ".unity", ".asset", ".mat", ".controller",
-  ".anim", ".overrideController", ".meta", ".playable",
-  ".mask", ".flare", ".renderTexture", ".cubemap",
+  ".anim", ".overridecontroller", ".meta", ".playable",
+  ".mask", ".flare", ".rendertexture", ".cubemap",
   ".spriteatlas", ".lighting", ".terrainlayer",
 ]);
 

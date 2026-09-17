@@ -121,6 +121,36 @@ describe("checkSafeToDelete scan roots (audited 2026-09-02)", () => {
     expect(res.references.map((r) => r.filePath.replace(/\\/g, "/"))).toContain("Packages/com.x.y/Thing.prefab");
   });
 
+  it("finds a GUID referenced only from an .overrideController or a .renderTexture (audit U5)", async () => {
+    // Until 2026-09-17 both extensions sat in the searchable set in Unity's
+    // mixed case while the scan lower-cased the entry's extension, so neither
+    // ever matched and an animation referenced only from an override
+    // controller was reported safe to delete.
+    const anim = "f".repeat(32);
+    await writeFile(join(root, "Assets", "Run.anim"), "%YAML 1.1\n");
+    await writeFile(join(root, "Assets", "Run.anim.meta"), `guid: ${anim}\n`);
+    await writeFile(join(root, "Assets", "Boss.overrideController"), `m_Clips:\n  - m_OverrideClip: {fileID: 7400000, guid: ${anim}, type: 2}\n`);
+    const rt = "a1".repeat(16);
+    await writeFile(join(root, "Assets", "Cam.asset"), "%YAML 1.1\n");
+    await writeFile(join(root, "Assets", "Cam.asset.meta"), `guid: ${rt}\n`);
+    await writeFile(join(root, "Assets", "Mirror.renderTexture"), `m_Source: {fileID: 8400000, guid: ${rt}, type: 2}\n`);
+
+    const animCheck = await checkSafeToDelete(root, "Assets/Run.anim");
+    expect(animCheck.safe).toBe(false);
+    expect(animCheck.references.map((r) => r.filePath.replace(/\\/g, "/"))).toContain("Assets/Boss.overrideController");
+
+    const rtCheck = await checkSafeToDelete(root, "Assets/Cam.asset");
+    expect(rtCheck.safe).toBe(false);
+    expect(rtCheck.references.map((r) => r.filePath.replace(/\\/g, "/"))).toContain("Assets/Mirror.renderTexture");
+
+    // Guard: a genuinely unreferenced asset is still safe.
+    const lone = "b2".repeat(16);
+    await writeFile(join(root, "Assets", "Lone.mat"), "%YAML 1.1\n");
+    await writeFile(join(root, "Assets", "Lone.mat.meta"), `guid: ${lone}\n`);
+    const loneCheck = await checkSafeToDelete(root, "Assets/Lone.mat");
+    expect(loneCheck.safe).toBe(true);
+  });
+
   it("reports the true referrer count instead of a silently capped one", async () => {
     const guid = "e".repeat(32);
     await writeFile(join(root, "Assets", "Rock.mat"), "%YAML 1.1\n");
