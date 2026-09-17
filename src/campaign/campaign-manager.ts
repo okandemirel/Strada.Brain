@@ -49,10 +49,14 @@ import { REQUIRED_EVIDENCE_PREFIX } from "../supervisor/required-evidence.js";
 import { deliveryReviewPrompt, renderSecondOpinion } from "../agents/review/codex-second-opinion.js";
 import {
   artDirectionText,
+  deliveryVisualBlock,
   extractLookDescription,
   judgeVisualConformance,
-  renderVisualConformance,
+  renderVisualAcceptance,
   selectGameplayFrame,
+  visualAcceptance,
+  visualAcceptanceCaveat,
+  visualAcceptanceNotRun,
 } from "./visual-conformance.js";
 import { extractCoreLoop, readUnityVersion, renderHowToRun } from "./how-to-run.js";
 import { isTerminalFailureReport } from "../agents/autonomy/verifier-pipeline.js";
@@ -3818,14 +3822,29 @@ export class CampaignManager {
           const look = extractLookDescription(gddForLook ?? "");
           const frame = selectGameplayFrame(this.projectRoot, this.sprintStartMs(milestone));
           const verdict = await judgeVisualConformance({ look, frame, visionProvider: this.visionProvider });
-          milestone.visualConformance = renderVisualConformance(verdict, frame);
+          // VISUAL FITNESS IS ITS OWN VERDICT (plan 6.12). "done" implied the
+          // delivery also LOOKS right and nothing measured that: this block
+          // wrote a paragraph, and when it could not run it wrote nothing at
+          // all — which in a report reads exactly like a check that passed.
+          // Carried like compileVerdict/playthroughVerdict: accepted, refused,
+          // or NOT MEASURED with the reason named. Still not a veto — one
+          // bounce on a mismatch, then the refusal is reported (policy).
+          const spentBounces = milestone.visualMismatchBounces ?? 0;
+          const willBounce =
+            verdict.status === "checked" && verdict.matches === false
+            && spentBounces < 1 && deliveryBouncesSpent < this.maxMilestoneAttempts;
+          milestone.visualVerdict = visualAcceptance(verdict, frame, {
+            ...(willBounce ? {} : { unresolved: verdict.status === "checked" && verdict.matches === false }),
+            bounces: willBounce ? spentBounces + 1 : spentBounces,
+          });
+          milestone.visualConformance = renderVisualAcceptance(milestone.visualVerdict);
           // ONE bounce on an explicit "no" (2026-09-10): the check used to be
           // disclosure only, so a frame of the wrong game shipped with a
           // footnote. A vision model's judgement is fallible, so this is a
           // single chance to fix the look, never a wall — after it, the
           // disclosure stands and the report says NO MATCH.
-          const mismatchBounces = milestone.visualMismatchBounces ?? 0;
-          if (verdict.status === "checked" && verdict.matches === false && mismatchBounces < 1 && deliveryBouncesSpent < this.maxMilestoneAttempts) {
+          const mismatchBounces = spentBounces;
+          if (willBounce) {
             milestone.visualMismatchBounces = mismatchBounces + 1;
             milestone.deliveryVerificationBounced = true;
             milestone.deliveryVerificationBounces = deliveryBouncesSpent + 1;
@@ -3846,8 +3865,12 @@ export class CampaignManager {
             return;
           }
         } catch (err) {
-          milestone.visualConformance =
-            `**Does it look like the GDD?**\n- ⚠️ visual conformance not checked — ${err instanceof Error ? err.message : String(err)}.`;
+          // A check that threw measured nothing. Named as such, with its cause.
+          milestone.visualVerdict = visualAcceptanceNotRun(
+            `the look check itself failed (${err instanceof Error ? err.message : String(err)})`,
+            "check-threw",
+          );
+          milestone.visualConformance = renderVisualAcceptance(milestone.visualVerdict);
         }
         // Coverage gate: "done" is measured against the GDD, not against the
         // ladder having run out. When scheduled items are missing, a
@@ -6947,8 +6970,14 @@ export class CampaignManager {
     // game. A person cannot open a delivery they cannot find.
     // The look disclosure rides with the entry-point block: both answer "what
     // did you actually deliver", and a missing one must be visible.
-    const look = [...campaign.milestones].reverse().find((m) => m.visualConformance)?.visualConformance;
-    if (look) lines.push("", look);
+    // ALWAYS, even when nothing judged it: an omitted look block reads as a
+    // pass, which is the whole defect 6.12 closes. The three states are
+    // rendered by deliveryVisualBlock and never collapsed into silence.
+    lines.push("", deliveryVisualBlock(campaign.milestones));
+    const visualCaveat = visualAcceptanceCaveat(
+      [...campaign.milestones].reverse().find((m) => m.visualVerdict)?.visualVerdict,
+    );
+    if (visualCaveat) caveats.push(visualCaveat);
     const entry = this.describeEntryPoint();
     if (entry) lines.push("", entry, this.writeHowToRun(campaign));
     // What the shipped scenes actually contain — measured, not inferred from

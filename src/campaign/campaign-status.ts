@@ -11,6 +11,7 @@
 // and renders as "not measured", never as zero.
 // ---------------------------------------------------------------------------
 import { describePlaythrough } from "./playthrough-verdict.js";
+import { describeVisualAcceptance } from "./visual-conformance.js";
 import type { Campaign, CampaignMilestone, CampaignState, MilestoneStatus } from "./types.js";
 import type { Task } from "../tasks/types.js";
 import { ACTIVE_STATUSES } from "../tasks/types.js";
@@ -35,6 +36,12 @@ export interface MilestoneStatusSnapshot {
   /** The delivery evidence added 2026-09-10, one sentence each, so "where are we" has a measured answer. */
   readonly playthrough?: string;
   readonly build?: string;
+  /**
+   * Visual acceptance in one sentence (plan 6.12) — accepted, refused, or NOT
+   * MEASURED. Present on every milestone snapshot, because leaving it out when
+   * nothing judged the look is what made "done" imply it looked right.
+   */
+  readonly visualAcceptance: string;
   /** met / not met / not measured counts over the GDD's numeric claims. */
   readonly gddClaims?: { met: number; notMet: number; unmeasured: number; firstNotMet?: string };
   /** What the final sprint still owed when its bounce budget ran out. */
@@ -126,6 +133,7 @@ export function buildCampaignStatus(
     structureRefused: m.structureRefused === true,
     lastStructureFinding: m.structureFindings?.[m.structureFindings.length - 1],
     resultExcerpt: m.resultExcerpt,
+    visualAcceptance: describeVisualAcceptance(m.visualVerdict),
     ...(m.playthroughVerdict ? { playthrough: describePlaythrough(m.playthroughVerdict) } : {}),
     ...(m.buildVerdict ? { build: describeBuild(m.buildVerdict) } : {}),
     ...(m.gddClaims && m.gddClaims.length > 0 ? { gddClaims: summarizeClaims(m.gddClaims) } : {}),

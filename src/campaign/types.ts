@@ -19,6 +19,9 @@
  */
 
 import { z } from "zod";
+// Type-only: visual-conformance.ts owns the visual-acceptance verdict and
+// imports nothing from here, so there is no cycle.
+import type { VisualAcceptance } from "./visual-conformance.js";
 
 // =============================================================================
 // STATE
@@ -270,6 +273,14 @@ export interface CampaignMilestone {
   structureRefused?: boolean;
   /** The rendered look-vs-GDD disclosure block for the delivery report. */
   visualConformance?: string;
+  /**
+   * VISUAL ACCEPTANCE (plan 6.12): whether the delivered look was judged
+   * against the GDD, and what the judgement was — accepted, refused, or NOT
+   * MEASURED with the reason named. Absent = never judged, and the delivery
+   * report says so instead of staying silent (silence read as a pass).
+   * Carried like compileVerdict / playthroughVerdict / buildVerdict.
+   */
+  visualVerdict?: VisualAcceptance;
   /** Bounces spent on the vision model saying the frame does not show the described game (max 1). */
   visualMismatchBounces?: number;
   /**

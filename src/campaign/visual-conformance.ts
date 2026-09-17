@@ -300,6 +300,11 @@ export interface VisualConformance {
   matches?: boolean;
   framePath?: string;
   provider?: string;
+  /**
+   * WHY nothing was checked, as a token rather than a sentence (plan 6.12).
+   * The delivery verdict must not classify a failure by grepping prose.
+   */
+  reason?: VisualNotMeasuredReason;
 }
 
 const VISION_SYSTEM =
@@ -327,14 +332,15 @@ export async function judgeVisualConformance(params: {
 }): Promise<VisualConformance> {
   const { look, frame, visionProvider } = params;
   if (!look.found) {
-    return { status: "not-checked", detail: `visual conformance not checked — ${look.reason ?? "no look description"}` };
+    return { status: "not-checked", reason: "no-look-description", detail: `visual conformance not checked — ${look.reason ?? "no look description"}` };
   }
   if (!frame.path) {
-    return { status: "not-checked", detail: `visual conformance not checked — ${frame.reason ?? "no frame"}` };
+    return { status: "not-checked", reason: "no-frame", detail: `visual conformance not checked — ${frame.reason ?? "no frame"}` };
   }
   if (!visionProvider) {
     return {
       status: "not-checked",
+      reason: "no-vision-provider",
       detail: "visual conformance not checked — no configured provider reports vision support",
     };
   }
@@ -345,6 +351,7 @@ export async function judgeVisualConformance(params: {
   } catch (err) {
     return {
       status: "not-checked",
+      reason: "frame-unreadable",
       detail: `visual conformance not checked — the frame could not be read (${err instanceof Error ? err.message : String(err)})`,
       framePath: frame.path,
     };
@@ -370,6 +377,7 @@ export async function judgeVisualConformance(params: {
     if (answer.length === 0) {
       return {
         status: "not-checked",
+        reason: "no-answer",
         detail: "visual conformance not checked — the vision provider returned no answer",
         framePath: frame.path,
         provider: visionProvider.name,
@@ -383,6 +391,7 @@ export async function judgeVisualConformance(params: {
     });
     return {
       status: "not-checked",
+      reason: "provider-failed",
       detail: `visual conformance not checked — the vision provider failed (${err instanceof Error ? err.message : String(err)})`,
       framePath: frame.path,
       provider: visionProvider.name,
@@ -405,4 +414,184 @@ export function renderVisualConformance(result: VisualConformance, frame: FrameS
     lines.push("- The frame scan hit its budget, so the frame judged may not be the newest one captured.");
   }
   return lines.join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// VISUAL ACCEPTANCE — the verdict, not the paragraph (plan 6.12)
+// ---------------------------------------------------------------------------
+//
+// "done" used to imply that what was produced also LOOKS right. Nothing
+// measured that: the look check writes a prose block, and when it never ran —
+// no vision provider, no frame, a throw, or a delivery that failed before
+// reaching it — the delivery report simply said nothing about the look, which
+// reads exactly like a check that passed.
+//
+// Visual fitness is therefore carried the way the other delivery proofs are
+// (compileVerdict, playthroughVerdict, buildVerdict): a structured verdict on
+// the milestone with three states and no fourth, silent one.
+//
+//   accepted     — a vision provider saw the frame and said it shows the game
+//   refused      — it saw the frame and said it does NOT
+//   not-measured — nobody judged it, and the reason is named
+//
+// A refusal is NEVER downgraded to "not measured": the mismatch is the
+// measurement. And not-measured is never rendered as an absence — the report
+// says so in words. This is disclosure plus one bounce, not a veto: the
+// second mismatch is reported, never auto-refused (deliberate policy).
+
+export type VisualAcceptanceStatus = "accepted" | "refused" | "not-measured";
+
+/** Why nothing was measured. Machine-readable so no prose classifier is needed. */
+export type VisualNotMeasuredReason =
+  | "no-look-description"
+  | "no-frame"
+  | "no-vision-provider"
+  | "frame-unreadable"
+  | "provider-failed"
+  | "no-answer"
+  | "no-verdict-line"
+  | "check-threw"
+  | "never-ran";
+
+export interface VisualAcceptance {
+  status: VisualAcceptanceStatus;
+  /** The model's sentence, or the reason nothing could be judged. */
+  detail: string;
+  reason?: VisualNotMeasuredReason;
+  framePath?: string;
+  provider?: string;
+  /** A refusal that still stood when delivery went ahead (bounce budget spent). */
+  unresolved?: boolean;
+  /** Mismatch bounces spent on this milestone. */
+  bounces?: number;
+  /** The frame walk hit its budget, so the frame judged may not be the newest. */
+  frameScanTruncated?: boolean;
+}
+
+/**
+ * The verdict for a completed look check.
+ *
+ * `unresolved` is the caller's: only the gate knows whether it still had a
+ * bounce to spend on a mismatch.
+ */
+export function visualAcceptance(
+  result: VisualConformance,
+  frame: FrameSelection,
+  opts?: { unresolved?: boolean; bounces?: number },
+): VisualAcceptance {
+  const common = {
+    ...(result.framePath ? { framePath: result.framePath } : {}),
+    ...(result.provider ? { provider: result.provider } : {}),
+    ...(frame.truncated ? { frameScanTruncated: true } : {}),
+    ...(opts?.bounces ? { bounces: opts.bounces } : {}),
+  };
+  if (result.status === "checked" && result.matches === true) {
+    return { status: "accepted", detail: result.detail, ...common };
+  }
+  if (result.status === "checked" && result.matches === false) {
+    // THE MISMATCH IS THE MEASUREMENT. Reporting it as "not measured" would
+    // hide the one visual failure the system can actually see.
+    return { status: "refused", detail: result.detail, ...(opts?.unresolved ? { unresolved: true } : {}), ...common };
+  }
+  if (result.status === "checked") {
+    // An answer with no `MATCH:` line is not a verdict — and the sentence the
+    // model did write is carried, because it may well describe a mismatch.
+    return {
+      status: "not-measured",
+      reason: "no-verdict-line",
+      detail: `the vision provider answered without a verdict line: "${result.detail}"`,
+      ...common,
+    };
+  }
+  return {
+    status: "not-measured",
+    reason: result.reason ?? "never-ran",
+    detail: result.detail,
+    ...common,
+  };
+}
+
+/** The verdict when the look check never ran at all (a throw, or a delivery that failed first). */
+export function visualAcceptanceNotRun(detail: string, reason: VisualNotMeasuredReason = "never-ran"): VisualAcceptance {
+  return { status: "not-measured", reason, detail };
+}
+
+/** One sentence, for a status snapshot or a log line. Never silent. */
+export function describeVisualAcceptance(a: VisualAcceptance | undefined): string {
+  if (!a) return "visual acceptance NOT MEASURED: the look was never judged against the GDD";
+  if (a.status === "accepted") return `visual acceptance: the frame shows the described game — ${a.detail}`;
+  if (a.status === "refused") {
+    return (
+      `visual acceptance REFUSED: ${a.detail}` +
+      (a.unresolved ? " (delivered with the refusal standing — the visual bounce was spent)" : "")
+    );
+  }
+  return `visual acceptance NOT MEASURED: ${a.detail}`;
+}
+
+/**
+ * The delivery-report block. ALWAYS rendered — an unmeasured look is stated,
+ * never omitted, because omission reads as a pass.
+ */
+export function renderVisualAcceptance(a: VisualAcceptance | undefined): string {
+  const lines = ["**Does it look like the GDD?**"];
+  if (!a) {
+    lines.push(
+      "- ⚠️ VISUAL ACCEPTANCE NOT MEASURED — nothing judged the delivered look against the GDD, so nothing here says it looks right.",
+    );
+    return lines.join("\n");
+  }
+  if (a.status === "accepted") {
+    lines.push(`- ✅ VISUAL ACCEPTANCE: MATCH — ${a.detail}`);
+  } else if (a.status === "refused") {
+    lines.push(
+      `- ❌ VISUAL ACCEPTANCE: NO MATCH — ${a.detail}`,
+      a.unresolved
+        ? `- The refusal STANDS: the look was bounced ${a.bounces ?? 1}× and delivery went ahead anyway.`
+        : "- The sprint was sent back to fix the look.",
+    );
+  } else {
+    lines.push(`- ⚠️ VISUAL ACCEPTANCE NOT MEASURED — ${a.detail}. Nothing here says the delivery looks right.`);
+  }
+  if (a.status !== "not-measured") {
+    lines.push(`- Judged from \`${a.framePath ?? "?"}\` by ${a.provider ?? "a vision provider"}.`);
+  }
+  if (a.frameScanTruncated) {
+    lines.push("- The frame scan hit its budget, so the frame judged may not be the newest one captured.");
+  }
+  return lines.join("\n");
+}
+
+/** The caveat line for the delivery report's "how these greens were reached" list. */
+export function visualAcceptanceCaveat(a: VisualAcceptance | undefined): string | undefined {
+  if (!a) return "the delivered look was NEVER judged against the GDD — no visual acceptance was measured";
+  if (a.status === "accepted") return undefined;
+  if (a.status === "refused") {
+    return a.unresolved
+      ? `a vision model judged the delivered frame against the GDD's look and REFUSED it: ${a.detail}`
+      : undefined;
+  }
+  return `visual acceptance was NOT measured — ${a.detail}`;
+}
+
+/**
+ * The look block for a delivery report, from the milestones as persisted.
+ *
+ * Three cases, all of them explicit:
+ *   a verdict was recorded  — render it
+ *   only the old prose block exists (a row written before 6.12) — show it and
+ *     say the verdict itself was not recorded, rather than reading it as a pass
+ *   neither — say NOT MEASURED
+ */
+export function deliveryVisualBlock(
+  milestones: ReadonlyArray<{ visualVerdict?: VisualAcceptance; visualConformance?: string }>,
+): string {
+  const reversed = [...milestones].reverse();
+  const verdict = reversed.find((m) => m.visualVerdict)?.visualVerdict;
+  if (verdict) return renderVisualAcceptance(verdict);
+  const legacy = reversed.find((m) => m.visualConformance)?.visualConformance;
+  if (legacy) {
+    return `${legacy}\n- ⚠️ This disclosure predates the visual-acceptance verdict, so whether the look was ACCEPTED is not recorded.`;
+  }
+  return renderVisualAcceptance(undefined);
 }
