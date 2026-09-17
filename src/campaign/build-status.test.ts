@@ -67,4 +67,20 @@ describe("buildBuildStatus", () => {
     expect(noRoot.measurement).toBeNull();
     expect(noRoot.measurementError).toMatch(/No project path/);
   });
+
+  it("carries the stored delivery package — and null when no campaign layer answered", async () => {
+    // The portal reads the package from THIS payload (plan 6.1), so a restarted
+    // daemon and a browser that never saw the chat are served the same rows.
+    const view = {
+      latest: null,
+      index: [],
+      note: "no delivery has been packaged on this machine yet",
+    };
+    const served = await buildBuildStatus({ campaign: undefined, guardian: undefined, measure: false, deliveryPackages: view });
+    expect(served.deliveryPackages).toBe(view);
+    // A status built without a campaign layer says null, which the page renders
+    // as "no package block" rather than as an empty package.
+    const none = await buildBuildStatus({ campaign: undefined, guardian: undefined, measure: false });
+    expect(none.deliveryPackages).toBeNull();
+  });
 });

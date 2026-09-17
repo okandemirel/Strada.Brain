@@ -139,6 +139,37 @@ function truncate(value: string): string {
     : value;
 }
 
+/**
+ * WHICH SUITE the recorded verdict names — PlayMode, EditMode, or nothing.
+ *
+ * NEVER assumed: a verdict that does not name its platform leaves this
+ * undefined, and the command line then carries a placeholder instead of a
+ * guess. Owned here because HOW_TO_RUN.md and the delivery package must read
+ * the same verdict the same way.
+ */
+export function testPlatformFromVerdict(verdict: string | undefined): string | undefined {
+  if (verdict === undefined) return undefined;
+  if (/\bPlayMode\b/i.test(verdict)) return "PlayMode";
+  if (/\bEditMode\b/i.test(verdict)) return "EditMode";
+  return undefined;
+}
+
+/**
+ * THE COMMAND THAT RE-RUNS THE SUITE, owned in one place.
+ *
+ * HOW_TO_RUN.md prints it and the delivery package (plan 6.1) hands the same
+ * string to the reviewer. Two copies of a command line are two commands that
+ * can disagree, and a reviewer running the package's copy must be running the
+ * file's command. The Unity executable is NOT measured anywhere — the
+ * placeholder stays a placeholder rather than becoming a guessed path.
+ */
+export function suiteCommand(projectRoot: string, testPlatform?: string): string {
+  return (
+    `<unity-editor> -runTests -batchmode -projectPath "${projectRoot}"` +
+    ` -testPlatform ${testPlatform ?? "<PlayMode|EditMode>"} -testResults ./test-results.xml`
+  );
+}
+
 export function renderHowToRun(facts: HowToRunFacts): string {
   const lines: string[] = [
     `# How to run ${basename(facts.projectRoot)}`,
@@ -188,14 +219,12 @@ export function renderHowToRun(facts: HowToRunFacts): string {
   } else {
     lines.push(`- **What delivery observed:** ${unknown(facts.suiteNote)}`);
   }
-  const platform = facts.testPlatform ?? "<PlayMode|EditMode>";
   lines.push(
     "- **Re-run it** from the Unity Editor: Window ▸ General ▸ Test Runner ▸ Run All.",
     "- Or from a terminal, with your own Unity executable (its path is not measured here):",
     "",
     "```sh",
-    `<unity-editor> -runTests -batchmode -projectPath "${facts.projectRoot}" \\`,
-    `  -testPlatform ${platform} -testResults ./test-results.xml`,
+    suiteCommand(facts.projectRoot, facts.testPlatform),
     "```",
   );
   if (!facts.testPlatform) {

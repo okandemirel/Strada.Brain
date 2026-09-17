@@ -110,4 +110,94 @@ export interface BuildStatus {
   guardian: GuardianStatus | null
   measurement: BuildMeasurement | null
   measurementError?: string
+  /** The stored delivery packages; null when no campaign layer answered. */
+  deliveryPackages: DeliveryPackageView | null
+}
+
+/**
+ * THE PERSISTENT DELIVERY PACKAGE (mirror of src/campaign/delivery-package.ts).
+ *
+ * The server owns it: these rows are read from a table keyed by campaign, so a
+ * restart or a different browser shows the same package. The page renders what
+ * it is given and computes nothing — in particular it never fills a gap with a
+ * blank: `not-measured` and `missing` are different rows and are rendered as
+ * different rows.
+ */
+export type DeliveryPieceState = 'present' | 'failed' | 'missing' | 'not-measured'
+
+export interface DeliveryLocator {
+  kind: 'path' | 'command' | 'sha256' | 'revision' | 'url'
+  label: string
+  value: string
+}
+
+export interface DeliveryItem {
+  text: string
+  state: 'met' | 'not-met' | 'open' | 'not-measured'
+  source: string
+  cause?: string
+}
+
+export interface DeliveryPiece {
+  id: string
+  title: string
+  state: DeliveryPieceState
+  summary: string
+  source: string
+  locators?: DeliveryLocator[]
+  /** Plain lines (commits, say) — carried without a met/open verdict. */
+  lines?: string[]
+  items?: DeliveryItem[]
+  itemsOmitted?: number
+  missing?: string[]
+}
+
+export interface DeliveryFalseGreen {
+  claim: string
+  rootCause: string
+  source: string
+}
+
+export interface DeliveryPackageCompleteness {
+  of: number
+  present: number
+  failed: number
+  missing: number
+  notMeasured: number
+}
+
+export interface DeliveryPackage {
+  schemaVersion: 1
+  campaignId: string
+  taskId?: string
+  milestoneId?: string
+  title: string
+  projectRoot: string
+  campaignState: string
+  assembledAt: number
+  pieces: DeliveryPiece[]
+  falseGreens: DeliveryFalseGreen[]
+  falseGreensOmitted?: number
+  receipts: string[]
+  receiptsNote?: string
+  completeness: DeliveryPackageCompleteness
+}
+
+export interface DeliveryPackageSummary {
+  campaignId: string
+  taskId?: string
+  title: string
+  revision: number
+  storedAt: number
+  campaignState: string
+  completeness: DeliveryPackageCompleteness
+}
+
+export interface DeliveryPackageView {
+  latest: DeliveryPackage | null
+  latestRevision?: number
+  latestStoredAt?: number
+  index: DeliveryPackageSummary[]
+  /** Why there is no package. Rendered verbatim: silence would be a lie. */
+  note?: string
 }

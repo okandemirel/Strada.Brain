@@ -7,6 +7,7 @@
 import type { CampaignStatusSnapshot } from "./campaign-status.js";
 import type { RealTreeGuardianSnapshot } from "../daemon/real-tree-guardian.js";
 import type { BuiltAsSpecifiedReport } from "../agents/autonomy/built-as-specified.js";
+import type { DeliveryPackageView } from "./delivery-package.js";
 
 export interface BuildStatusMeasurement {
   readonly measuredAt: string;
@@ -32,6 +33,14 @@ export interface BuildStatus {
   /** null when not requested; `measured:false` when requested but unmeasurable. */
   readonly measurement: BuildStatusMeasurement | null;
   readonly measurementError?: string;
+  /**
+   * THE PERSISTENT DELIVERY PACKAGE (plan 6.1), read from its row rather than
+   * assembled by the page: the newest one in full plus the index of the rest.
+   * null means no campaign layer answered at all — the view's own `note` says
+   * why there is no package when a layer did answer, because "nothing rendered"
+   * and "nothing was ever delivered" must not look the same.
+   */
+  readonly deliveryPackages: DeliveryPackageView | null;
 }
 
 export function summarizeMeasurement(report: BuiltAsSpecifiedReport, now: number = Date.now()): BuildStatusMeasurement {
@@ -61,6 +70,8 @@ export async function buildBuildStatus(input: {
   readonly guardian: RealTreeGuardianSnapshot | undefined;
   readonly projectRoot?: string;
   readonly measure: boolean;
+  /** The stored delivery packages, as the campaign layer reads them. */
+  readonly deliveryPackages?: DeliveryPackageView;
   /** Test seam; defaults to assessBuiltAsSpecified. */
   readonly measurer?: (projectRoot: string) => BuiltAsSpecifiedReport;
   readonly now?: number;
@@ -86,6 +97,7 @@ export async function buildBuildStatus(input: {
     campaign: input.campaign ?? null,
     guardian: input.guardian ?? null,
     measurement,
+    deliveryPackages: input.deliveryPackages ?? null,
     ...(measurementError !== undefined ? { measurementError } : {}),
   };
 }

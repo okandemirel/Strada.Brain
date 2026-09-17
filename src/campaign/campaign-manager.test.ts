@@ -10,6 +10,7 @@ import { execSync } from "node:child_process";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { EvidenceLedger, artifactDigest } from "./evidence-ledger.js";
+import { DELIVERY_PIECE_ORDER, DeliveryPackageStore, assembleDeliveryPackage } from "./delivery-package.js";
 import { ProducerFailure } from "./producer-failure.js";
 import { requirementKey, CampaignManager, stripTimeBoxDirectives, UNMEASURABLE_PROOF_RE, UNRUNNABLE_HERE_RE, hasUnmeasurableProof, proofsSpanTwoRevisions } from "./campaign-manager.js";
 import { CampaignStorage } from "./campaign-storage.js";
@@ -2015,6 +2016,78 @@ describe("CampaignManager", () => {
 
     const report = messages.find((m) => m.text.includes("Campaign delivery"))!.text;
     expect(report).toContain("HOW_TO_RUN.md");
+  });
+
+  it("stores a delivery package a LATER PROCESS reads — the chat message is no longer the only copy", async () => {
+    // plan 6.1. Everything a reviewer needs lived in one chat message: after a
+    // restart, or in another browser, the portal had milestone titles and
+    // nothing else. The package is a row keyed by the campaign.
+    runRecordOnSettle = { total: 179, passed: 179, failed: 0, skipped: 0, unfiltered: true };
+    buildSettings(REAL_DELIVERED_BUILD);
+    mkdirSync(join(projectRoot, "ProjectSettings"), { recursive: true });
+    writeFileSync(join(projectRoot, "ProjectSettings", "ProjectVersion.txt"), "m_EditorVersion: 6000.3.22f1\n");
+    const gdd = "# GDD\n\nCore mechanic\nTap a pig on the conveyor to send it to a tray slot.\n";
+    writeFileSync(join(projectRoot, "docs", "Game_GDD.md"), gdd);
+    const campaign = await reachFinalSprint(gdd);
+    tasks.verifications.set("task_3", {
+      testsGreen: true,
+      detail: "PlayMode verification passed: 179 of 179 tests passed (unfiltered — the whole PlayMode suite)",
+      unfiltered: true,
+    });
+    tasks.emit("task:completed", "task_3", "green, shipping");
+    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+
+    // The report POINTS AT the package rather than being it.
+    const report = messages.find((m) => m.text.includes("Campaign delivery"))!.text;
+    expect(report).toContain("Delivery package");
+    expect(report).toContain(campaign.id);
+
+    // A DIFFERENT PROCESS, reading the same row: this is the restart case.
+    const store = new DeliveryPackageStore(join(projectRoot, ".strada", "delivery-packages.db"));
+    try {
+      const latest = store.latest(campaign.id);
+      expect(latest?.revision).toBe(1);
+      // Every piece is a row, in order — including the ones nothing measured.
+      expect(latest?.package.pieces.map((p) => p.id)).toEqual([...DELIVERY_PIECE_ORDER]);
+      const run = latest!.package.pieces.find((p) => p.id === "run-command")!;
+      expect(run.state).toBe("present");
+      expect(run.locators?.some((l) => l.value === "HOW_TO_RUN.md")).toBe(true);
+      expect(run.locators?.some((l) => l.value.includes("-testPlatform PlayMode"))).toBe(true);
+      // The checklist is the ladder as the campaign recorded it.
+      const checklist = latest!.package.pieces.find((p) => p.id === "checklist")!;
+      expect((checklist.items ?? []).length).toBeGreaterThan(0);
+      // Nothing here claims a cost the budget ledger cannot key to this work.
+      const cost = latest!.package.pieces.find((p) => p.id === "cost")!;
+      expect(cost.summary).toContain("cost NOT MEASURED");
+    } finally {
+      store.close();
+    }
+
+    // …and what the portal is served is that row, not what a page assembled.
+    const view = manager.describeDeliveryPackages();
+    expect(view.latest?.campaignId).toBe(campaign.id);
+    expect(view.index[0]).toMatchObject({ campaignId: campaign.id, revision: 1 });
+    expect(view.note).toBeUndefined();
+  });
+
+  it("never serves another campaign's package for the campaign the card is showing", async () => {
+    const campaign = await reachFinalSprint();
+    // Some earlier campaign's package is the newest one on the machine.
+    const store = new DeliveryPackageStore(join(projectRoot, ".strada", "delivery-packages.db"));
+    store.put(
+      assembleDeliveryPackage({
+        campaign: { id: "campaign_earlier", projectRoot, state: "done", milestones: [], createdAt: 1, updatedAt: 2 },
+      }),
+    );
+    store.close();
+
+    const view = manager.describeDeliveryPackages();
+    // The card shows THIS campaign's ladder, so it is told this campaign has no
+    // package — not handed the other one, which would need an explanation.
+    expect(view.latest).toBeNull();
+    expect(view.note).toContain(campaign.id);
+    expect(view.note).toContain("no stored delivery package yet");
+    expect(view.index.map((r) => r.campaignId)).toEqual(["campaign_earlier"]);
   });
 
   it("HOW_TO_RUN.md says Unknown, with the reason, for what nothing measured", async () => {

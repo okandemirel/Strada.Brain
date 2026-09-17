@@ -58,7 +58,14 @@ import {
   visualAcceptanceCaveat,
   visualAcceptanceNotRun,
 } from "./visual-conformance.js";
-import { extractCoreLoop, readUnityVersion, renderHowToRun } from "./how-to-run.js";
+import { extractCoreLoop, readUnityVersion, renderHowToRun, testPlatformFromVerdict } from "./how-to-run.js";
+import {
+  DeliveryPackageStore,
+  assembleDeliveryPackage,
+  gatherDeliveryPackageFacts,
+  type DeliveryPackageView,
+  type StoredDeliveryPackage,
+} from "./delivery-package.js";
 import { isTerminalFailureReport } from "../agents/autonomy/verifier-pipeline.js";
 import { assessBuiltAsSpecified, asksForFlatArt, PLACEHOLDER_GRADE_RULE } from "../agents/autonomy/built-as-specified.js";
 import { assessSpecScope } from "../agents/autonomy/spec-scope.js";
@@ -6979,7 +6986,16 @@ export class CampaignManager {
     );
     if (visualCaveat) caveats.push(visualCaveat);
     const entry = this.describeEntryPoint();
-    if (entry) lines.push("", entry, this.writeHowToRun(campaign));
+    // The HOW_TO_RUN result travels to the delivery package too: a README that
+    // was NOT written must read as missing there, not be quietly absent.
+    let howToRun: { line: string; path?: string; note?: string } = {
+      line: "",
+      note: "no entry-point block was rendered, so HOW_TO_RUN.md was not written",
+    };
+    if (entry) {
+      howToRun = this.writeHowToRun(campaign);
+      lines.push("", entry, howToRun.line);
+    }
     // What the shipped scenes actually contain — measured, not inferred from
     // the ladder. Audited 2026-09-03: 7/7 green and 11351 frames said nothing
     // about a delivery whose scenes held no renderer at all.
@@ -7023,7 +7039,155 @@ export class CampaignManager {
         "Receipt checks are informational in this version; delivery status uses the existing checks.",
       );
     }
+    // THE DURABLE COPY (plan 6.1). Everything above is a chat message that
+    // scrolls away, and a reviewer who opens the portal tomorrow — after a
+    // restart, in another browser — had only milestone titles. The package is a
+    // row keyed by this campaign: the change, the artifact, the command, the
+    // play-through, the checklist, the open gaps and the clock, with every
+    // piece nobody measured saying so.
+    lines.push("", this.storeDeliveryPackage(campaign, howToRun));
     return lines.join("\n");
+  }
+
+  /**
+   * Assemble this campaign's delivery package and keep it. Returns the report
+   * line that names it — a package that could NOT be stored says so, because a
+   * reviewer told to open a durable record must find one there.
+   */
+  private storeDeliveryPackage(campaign: Campaign, howToRun: { path?: string; note?: string }): string {
+    const store = this.packageStore();
+    if (store === null) {
+      return `⚠️ No delivery package was stored (${this.packageStoreNote ?? "no reason recorded"}) — this report is the only copy.`;
+    }
+    try {
+      const stored = store.put(assembleDeliveryPackage(this.deliveryPackageFacts(campaign, howToRun)));
+      const c = stored.package.completeness;
+      return (
+        `**Delivery package** — revision ${stored.revision} for ${campaign.id}, on this machine and surviving a restart: ` +
+        `${c.present} of ${c.of} pieces present, ${c.failed} failed, ${c.missing} missing, ${c.notMeasured} never measured. ` +
+        "The portal's campaign card serves it; a piece nobody measured is listed there as unmeasured."
+      );
+    } catch (err) {
+      const why = err instanceof Error ? err.message : String(err);
+      getLoggerSafe().warn("The delivery package could not be stored", { id: campaign.id, error: why });
+      return `⚠️ The delivery package could NOT be stored (${why}) — this report is the only copy.`;
+    }
+  }
+
+  /**
+   * Every fact the package is made of, read from the store that owns it: the
+   * campaign record, the evidence ledger, this project's git history, the
+   * artifact on disk and the newest captured frame. Nothing is measured twice.
+   */
+  private deliveryPackageFacts(campaign: Campaign, howToRun: { path?: string; note?: string }): ReturnType<typeof gatherDeliveryPackageFacts> {
+    const milestone = campaign.milestones[campaign.milestones.length - 1];
+    let ledgerRows: ReturnType<EvidenceLedger["forMilestone"]> | undefined;
+    let ledgerNote: string | undefined;
+    const ledger = this.ledger();
+    if (ledger === null) {
+      ledgerNote = "the evidence ledger could not be opened on this machine — no dispatch is recorded for this delivery.";
+    } else if (milestone === undefined) {
+      ledgerNote = "this campaign has no sprint to read dispatches for.";
+    } else {
+      try {
+        ledgerRows = ledger.forMilestone(campaign.id, milestone.id);
+      } catch (err) {
+        ledgerNote = `the evidence ledger could not be read (${err instanceof Error ? err.message : String(err)}).`;
+      }
+    }
+    return gatherDeliveryPackageFacts(campaign, {
+      projectRoot: this.projectRoot,
+      // stderr is CAPTURED, not inherited: a project that is not a git
+      // repository is a fact the package records, not a line in the daemon log
+      // on every delivery report.
+      git: (args) =>
+        execFileSync("git", [...args], {
+          cwd: this.projectRoot,
+          encoding: "utf8",
+          timeout: 20_000,
+          stdio: ["ignore", "pipe", "pipe"],
+        }),
+      statSize: (path) => {
+        try {
+          return statSync(path).size;
+        } catch {
+          return undefined;
+        }
+      },
+      selectFrame: (root, since) => selectGameplayFrame(root, since),
+      ...(howToRun.path === undefined ? {} : { howToRunPath: howToRun.path }),
+      ...(howToRun.note === undefined ? {} : { howToRunNote: howToRun.note }),
+      ...(ledgerRows === undefined ? {} : { ledgerRows }),
+      ...(ledgerNote === undefined ? {} : { ledgerNote }),
+    });
+  }
+
+  /**
+   * The delivery packages this project holds — what the portal's campaign card
+   * renders. Read on demand from the row, so a restarted daemon and a browser
+   * that has never seen the chat show the same package.
+   */
+  describeDeliveryPackages(limit = 10, chatId?: string): DeliveryPackageView {
+    const store = this.packageStore();
+    if (store === null) {
+      return { latest: null, index: [], note: this.packageStoreNote ?? "no delivery-package store is open on this machine" };
+    }
+    try {
+      const index = store.index(limit);
+      if (index.length === 0) {
+        return { latest: null, index, note: "no delivery has been packaged on this machine yet" };
+      }
+      // THE CAMPAIGN THE CARD IS SHOWING — the same one `describeStatus` picks.
+      // The newest package on the machine may belong to a different campaign,
+      // and a card showing one campaign's ladder above another campaign's
+      // package needs an explanation, which is the one thing 6.1 is measured on
+      // not needing.
+      const shown = this.findForStatus(chatId)?.id;
+      const chosen = shown === undefined ? undefined : store.latest(shown);
+      if (chosen === undefined) {
+        return {
+          latest: null,
+          index,
+          note:
+            shown === undefined
+              ? `this project has no campaign to show a package for; ${index.length} package(s) are stored here`
+              : store.history(shown, 1).length > 0
+                ? `the package stored for ${shown} is on disk but its document could not be read`
+                : `the campaign shown here (${shown}) has no stored delivery package yet; ${index.length} other package(s) are on this machine`,
+        };
+      }
+      return { latest: chosen.package, latestRevision: chosen.revision, latestStoredAt: chosen.storedAt, index };
+    } catch (err) {
+      return { latest: null, index: [], note: `the delivery-package store could not be read (${err instanceof Error ? err.message : String(err)})` };
+    }
+  }
+
+  /** One specific package revision, for a reviewer following a link. */
+  readDeliveryPackage(campaignId: string, revision?: number): StoredDeliveryPackage | undefined {
+    const store = this.packageStore();
+    if (store === null) return undefined;
+    try {
+      return revision === undefined ? store.latest(campaignId) : store.get(campaignId, revision);
+    } catch {
+      return undefined;
+    }
+  }
+
+  private deliveryPackages?: DeliveryPackageStore | null;
+  private packageStoreNote?: string;
+
+  /** Opened once, beside the evidence ledger; a store that cannot open is null and says why. */
+  private packageStore(): DeliveryPackageStore | null {
+    if (this.deliveryPackages !== undefined) return this.deliveryPackages;
+    try {
+      this.deliveryPackages = new DeliveryPackageStore(join(this.projectRoot, ".strada", "delivery-packages.db"));
+    } catch (err) {
+      const why = err instanceof Error ? err.message : String(err);
+      getLoggerSafe().warn("The delivery-package store could not be opened", { error: why });
+      this.packageStoreNote = `the delivery-package store could not be opened (${why})`;
+      this.deliveryPackages = null;
+    }
+    return this.deliveryPackages;
   }
 
   /**
@@ -7059,7 +7223,7 @@ export class CampaignManager {
    * committed: it is regenerated on every report (including a re-send after a
    * restart), and a commit per re-send would be noise in the user's history.
    */
-  private writeHowToRun(campaign: Campaign): string {
+  private writeHowToRun(campaign: Campaign): { line: string; path?: string; note?: string } {
     const hygiene = assessSceneHygiene(this.projectRoot);
     const version = readUnityVersion(this.projectRoot);
 
@@ -7101,23 +7265,27 @@ export class CampaignManager {
       suiteVerdict: verdict,
       suiteUnfiltered: finalMilestone?.testVerdictUnfiltered,
       suiteNote: verdict ? undefined : "the final sprint recorded no observed test verdict",
-      // NEVER assumed: only what the recorded verdict actually names.
-      testPlatform: /\bPlayMode\b/i.test(verdict ?? "")
-        ? "PlayMode"
-        : /\bEditMode\b/i.test(verdict ?? "")
-          ? "EditMode"
-          : undefined,
+      // NEVER assumed: only what the recorded verdict actually names — read
+      // by the same function the delivery package uses, so the README's
+      // command and the package's command cannot name different suites.
+      testPlatform: testPlatformFromVerdict(verdict),
     });
 
     try {
       writeFileSync(join(this.projectRoot, relPath), text, "utf8");
-      return (
-        `- \`${relPath}\` at the project root says the same in the project itself: ` +
-        "Unity version, entry scene, how to play, and the command that re-runs the suite."
-      );
+      return {
+        path: relPath,
+        line:
+          `- \`${relPath}\` at the project root says the same in the project itself: ` +
+          "Unity version, entry scene, how to play, and the command that re-runs the suite.",
+      };
     } catch (err) {
       // A README that was not written must never be linked as if it were.
-      return `- ⚠️ \`${relPath}\` could NOT be written (${err instanceof Error ? err.message : String(err)}) — this report is the only copy.`;
+      const why = err instanceof Error ? err.message : String(err);
+      return {
+        note: `${relPath} could not be written (${why})`,
+        line: `- ⚠️ \`${relPath}\` could NOT be written (${why}) — this report is the only copy.`,
+      };
     }
   }
 

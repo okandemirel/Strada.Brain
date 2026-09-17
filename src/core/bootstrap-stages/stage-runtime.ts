@@ -579,6 +579,10 @@ export async function initializeTaskRuntimeStage(
         guardian: realTreeGuardian?.snapshot(),
         projectRoot,
         measure,
+        // The persistent delivery package (plan 6.1): read from its row on
+        // every status, so a restarted daemon and a browser that never saw
+        // the chat serve the same package.
+        ...(campaignManager ? { deliveryPackages: campaignManager.describeDeliveryPackages() } : {}),
       }),
     );
   }

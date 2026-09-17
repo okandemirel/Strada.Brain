@@ -68,6 +68,7 @@ function status(overrides: Partial<BuildStatus> = {}): BuildStatus {
       nextVerifyAt: 0,
     },
     measurement: null,
+    deliveryPackages: null,
     ...overrides,
   }
 }
@@ -179,6 +180,51 @@ describe('CampaignCard', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Measure now' }))
     await waitFor(() => expect(screen.getByText(/Measurement failed: 500 EACCES/)).toBeTruthy())
     expect(screen.queryByTestId('measurement')).toBeNull()
+  })
+
+  it('renders the delivery package the daemon stored, not one it assembled itself', () => {
+    useCampaignStatus.mockReturnValue({
+      data: status({
+        deliveryPackages: {
+          latest: {
+            schemaVersion: 1,
+            campaignId: 'camp_1',
+            title: 'Sprint D',
+            projectRoot: '/proj',
+            campaignState: 'done',
+            assembledAt: NOW - 60_000,
+            pieces: [
+              {
+                id: 'artifact',
+                title: 'The build artifact',
+                state: 'not-measured',
+                summary: 'NOT MEASURED — the build never ran at the delivery gate: no builder.',
+                source: 'buildVerdict.ran = false',
+                missing: ['artifact path'],
+              },
+            ],
+            falseGreens: [],
+            receipts: ['player-build receipt: admitted (run abcd1234, record ffff)'],
+            completeness: { of: 7, present: 2, failed: 0, missing: 1, notMeasured: 4 },
+          },
+          latestRevision: 2,
+          latestStoredAt: NOW - 3 * 60_000,
+          index: [],
+        },
+      }),
+      isError: false,
+    })
+    render(<CampaignCard now={NOW} />)
+    const panel = screen.getByTestId('delivery-package').textContent ?? ''
+    expect(panel).toContain('2 of 7 pieces present')
+    expect(panel).toContain('NOT MEASURED — the build never ran')
+    expect(panel).toContain('revision 2, stored 3m ago')
+  })
+
+  it('shows no delivery-package block at all when the daemon has no campaign layer to answer', () => {
+    useCampaignStatus.mockReturnValue({ data: status({ deliveryPackages: null }), isError: false })
+    render(<CampaignCard now={NOW} />)
+    expect(screen.queryByTestId('delivery-package')).toBeNull()
   })
 
   it('formatDurationShort rounds down to minutes, hours, days', () => {

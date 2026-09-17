@@ -4,6 +4,7 @@ import { useCampaignStatus } from '../hooks/use-api'
 import { useCampaignStore, pickFreshest } from '../stores/campaign-store'
 import { fetchJson } from '../utils/api'
 import { formatDurationShort } from '../utils/format'
+import DeliveryPackagePanel from './DeliveryPackagePanel'
 import type { BuildMeasurement, BuildStatus, CampaignStatus, GuardianStatus, MilestoneStatus } from '../types/build-status'
 
 /** Task statuses that are still in flight (mirrors ACTIVE_STATUSES in the daemon). */
@@ -272,6 +273,15 @@ export default function CampaignCard({ now: nowOverride }: { now?: number } = {}
       {status?.guardian && (
         <div className="mt-4 pt-3 border-t border-white/5">
           <GuardianLine g={status.guardian} now={now} />
+        </div>
+      )}
+
+      {/* The persistent delivery package: server-owned state keyed by campaign,
+          so this renders the same evidence after a restart or in another
+          browser. The page adds nothing of its own. */}
+      {status?.deliveryPackages && (
+        <div className="mt-4 pt-3 border-t border-white/5">
+          <DeliveryPackagePanel view={status.deliveryPackages} now={now} />
         </div>
       )}
 

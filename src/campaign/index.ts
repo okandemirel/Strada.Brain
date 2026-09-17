@@ -5,3 +5,4 @@ export * from "./campaign-manager.js";
 export * from "./campaign-intake.js";
 export * from "./campaign-status.js";
 export * from "./build-status.js";
+export * from "./delivery-package.js";

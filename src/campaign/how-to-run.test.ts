@@ -2,7 +2,7 @@ import { describe, expect, it, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { extractCoreLoop, readUnityVersion, renderHowToRun } from "./how-to-run.js";
+import { extractCoreLoop, readUnityVersion, renderHowToRun, suiteCommand, testPlatformFromVerdict } from "./how-to-run.js";
 
 /**
  * The person who opened the delivered PixelFlow tree (2026-09-03) had 20
@@ -153,5 +153,21 @@ describe("HOW_TO_RUN.md rendering", () => {
     const text = renderHowToRun({ ...measured, testPlatform: undefined });
     expect(text).toContain("-testPlatform");
     expect(text).toContain("the recorded verdict does not name which suite ran");
+  });
+it("owns ONE suite command, and reads the platform off the verdict rather than guessing", () => {
+    // HOW_TO_RUN.md and the delivery package (plan 6.1) must hand the reviewer
+    // the same command; two copies are two commands that can disagree.
+    expect(testPlatformFromVerdict("179 of 179 tests passed (PlayMode)")).toBe("PlayMode");
+    expect(testPlatformFromVerdict("EditMode suite green")).toBe("EditMode");
+    expect(testPlatformFromVerdict("42 of 42 tests passed")).toBeUndefined();
+    expect(testPlatformFromVerdict(undefined)).toBeUndefined();
+    const cmd = suiteCommand("/proj/Game", testPlatformFromVerdict("179 passed (PlayMode)"));
+    expect(cmd).toContain('-projectPath "/proj/Game"');
+    expect(cmd).toContain("-testPlatform PlayMode");
+    // The Unity executable is measured nowhere, so it stays a placeholder.
+    expect(suiteCommand("/proj/Game")).toContain("<unity-editor>");
+    expect(suiteCommand("/proj/Game")).toContain("-testPlatform <PlayMode|EditMode>");
+    // …and the file prints exactly that string.
+    expect(renderHowToRun({ ...measured, testPlatform: "PlayMode" })).toContain(suiteCommand(measured.projectRoot, "PlayMode"));
   });
 });
