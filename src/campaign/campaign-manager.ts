@@ -1798,6 +1798,9 @@ export class CampaignManager {
       createdAt: now,
       updatedAt: now,
       ...seed,
+      // THE APPROVED DOCUMENT HAS ONE VERSION (plan 1.9): its hash is fixed
+      // at intake, and the file on disk is held to it at delivery.
+      ...(seed.gddText === undefined ? {} : { gddSha256: sha256Of(seed.gddText) }),
     };
     // Persist at birth: planAndLaunch re-reads from storage, so an
     // unpersisted campaign would silently no-op its own launch.
@@ -3415,7 +3418,11 @@ export class CampaignManager {
           after: revisionAfter.slice(0, 8),
         });
       }
-      const deliveryProofMissing = earlierProofsMissing || buildBroken || buildNotRun || playerBroken || playerMissing || claimsBroken || treeMovedMidGate;
+      // THE DOCUMENT THE PROOFS ARE ABOUT (plan 1.9): a GDD edited on disk
+      // after approval would have every gate judge a document nobody
+      // approved. Drift is a missing proof until the amendment is acknowledged.
+      const gddDrift = isLast ? this.gddDriftOf(campaign) : undefined;
+      const deliveryProofMissing = earlierProofsMissing || buildBroken || buildNotRun || playerBroken || playerMissing || claimsBroken || treeMovedMidGate || gddDrift !== undefined;
       // What is missing, in words — for the bounce, the NOT DELIVERED report
       // and the stored milestone. Empty when everything stands.
       const missingProofs: string[] = [];
@@ -3426,6 +3433,7 @@ export class CampaignManager {
             "so they do not all describe one revision of the game",
           );
         }
+        if (gddDrift !== undefined) missingProofs.push(gddDrift);
         if (!milestone.testVerdict) missingProofs.push("no test run was observed");
         else if (milestone.testVerdictUnfiltered !== true) missingProofs.push("the only green test run was FILTERED (a subset the sprint chose)");
         if (compileBroken) missingProofs.push(`the project does not compile${typeof compile.errors === "number" ? ` (${compile.errors} error(s))` : ""}`);
@@ -5591,7 +5599,51 @@ export class CampaignManager {
   /** The GDD's text, however this campaign carries it. */
   private gddTextOf(campaign?: Campaign): string | undefined {
     if (!campaign) return undefined;
-    return campaign.gddText ?? (campaign.gddPath ? readGddFile(this.projectRoot, campaign.gddPath) : undefined);
+    // THE DOCUMENT ON DISK, when there is one: it is what the workers read
+    // and what the gates judge. The intake copy stands in for a campaign
+    // whose document was never written (a text-only intake whose docs/
+    // write failed), and drift between the two is a named missing proof
+    // (gddDriftOf), never a silent choice between versions (plan 1.9).
+    const onDisk = campaign.gddPath ? readGddFile(this.projectRoot, campaign.gddPath) : undefined;
+    return onDisk ?? campaign.gddText;
+  }
+
+  /**
+   * Is the GDD on disk still the document that was approved? Nothing when it
+   * is (or when the campaign has no file to compare); otherwise the reason,
+   * for the delivery gate. A row from before the hash existed takes the text
+   * it holds as the approved version on first read (migration).
+   */
+  private gddDriftOf(campaign: Campaign): string | undefined {
+    if (campaign.gddPath === undefined) return undefined;
+    const onDisk = readGddFile(this.projectRoot, campaign.gddPath);
+    if (onDisk === undefined) return `the approved GDD at ${campaign.gddPath} cannot be read, so nothing can be judged against it`;
+    if (campaign.gddSha256 === undefined) {
+      campaign.gddSha256 = sha256Of(campaign.gddText ?? onDisk);
+      this.persist(campaign);
+    }
+    const now = sha256Of(onDisk);
+    if (now === campaign.gddSha256) return undefined;
+    return (
+      `the GDD on disk (${campaign.gddPath}) is not the approved document (approved ${campaign.gddSha256.slice(0, 8)}, on disk ${now.slice(0, 8)}): ` +
+      "the proofs would be judged against a document nobody approved — acknowledge the amendment or restore the file"
+    );
+  }
+
+  /**
+   * Take the GDD as it is on disk NOW as the approved document: an explicit
+   * amendment, recorded by hash (plan 1.9). Returns the new hash, or nothing
+   * when the file cannot be read.
+   */
+  amendGdd(campaignId: string): string | undefined {
+    const campaign = this.storage.get(campaignId);
+    if (campaign === undefined || campaign.gddPath === undefined) return undefined;
+    const onDisk = readGddFile(this.projectRoot, campaign.gddPath);
+    if (onDisk === undefined) return undefined;
+    campaign.gddSha256 = sha256Of(onDisk);
+    campaign.gddText = onDisk;
+    this.persist(campaign);
+    return campaign.gddSha256;
   }
 
   private measureGddClaims(
@@ -7414,6 +7466,11 @@ export function gddNameDistance(rel: string): number {
   // copy won whatever its age (Codex 2026-09-12 P#14).
   const archived = ARCHIVED_DIR_RE.test(rel) ? 20 : 0;
   return extraTokens + inSubfolder + archived + (DERIVATIVE_DOC_RE.test(stem) ? 10 : 0);
+}
+
+/** The identity of a document: sha256 of its exact bytes. */
+function sha256Of(text: string): string {
+  return createHash("sha256").update(text).digest("hex");
 }
 
 function readGddFile(projectRoot: string, gddPath: string): string | undefined {

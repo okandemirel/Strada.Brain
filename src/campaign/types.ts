@@ -316,8 +316,16 @@ export interface Campaign {
   gddPath?: string;
   /** How the plan covers the GDD's measured section inventory (2026-09-10). */
   planCoverage?: { covered: number; total: number; uncovered: string[]; excluded: string[]; minMilestones: number; maxMilestones: number };
-  /** Supplied GDD content (attachment/paste mode), truncated for planning. */
+  /** The GDD's full text as it was taken in (supplied, or read from docs at intake). */
   gddText?: string;
+  /**
+   * sha256 of the APPROVED document — the text the plan and every gate were
+   * built on. The file on disk is what workers read and what the gates judge;
+   * when its hash no longer matches, the delivery is judged against a
+   * document nobody approved, which is a named missing proof until the
+   * amendment is acknowledged (plan 1.9 / audit 06.2 / D06).
+   */
+  gddSha256?: string;
   /** Task id of the in-flight GDD draft (drafting-gdd state). */
   draftTaskId?: string;
   /** Number of GDD draft rounds (feedback loops at the approval gate). */

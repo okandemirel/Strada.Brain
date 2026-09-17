@@ -4317,6 +4317,50 @@ describe("CampaignManager", () => {
     });
   });
 
+  describe("the approved GDD has one version (plan 1.9 / audit 06.2 / D06)", () => {
+    const sha = (text: string): string => createHash("sha256").update(text).digest("hex");
+    const internals = (m: CampaignManager) => m as unknown as { gddDriftOf(c: Campaign): string | undefined; gddTextOf(c: Campaign): string | undefined };
+
+    it("intake fixes the hash; an edit on disk is a named drift until the amendment is acknowledged", () => {
+      const gdd = "# GDD\n\nThe game ships 3 levels.";
+      mkdirSync(join(projectRoot, "docs"), { recursive: true });
+      writeFileSync(join(projectRoot, "docs", "Game_GDD.md"), gdd);
+      const campaign = manager.startFromGdd(ctx, gdd, "docs/Game_GDD.md");
+      expect(campaign.gddSha256).toBe(sha(gdd));
+      expect(storage.get(campaign.id)!.gddSha256).toBe(sha(gdd));
+      expect(internals(manager).gddDriftOf(campaign)).toBeUndefined();
+      // Someone appends a section after approval: the gates would judge a document nobody approved.
+      writeFileSync(join(projectRoot, "docs", "Game_GDD.md"), gdd + "\n\n## Multiplayer\n\nFour players online.");
+      const drift = internals(manager).gddDriftOf(campaign);
+      expect(drift).toContain("is not the approved document");
+      // The accessor reads the disk (what workers read), never a silent choice between versions.
+      expect(internals(manager).gddTextOf(campaign)).toContain("Multiplayer");
+      // An explicit amendment takes the file as approved again.
+      const amended = manager.amendGdd(campaign.id);
+      expect(amended).toBe(sha(gdd + "\n\n## Multiplayer\n\nFour players online."));
+      expect(internals(manager).gddDriftOf(storage.get(campaign.id)!)).toBeUndefined();
+    });
+
+    it("a row from before the hash takes the text it holds as approved (migration), and a text-only intake cannot drift", () => {
+      const gdd = "# GDD\n\nThe game ships 2 levels.";
+      mkdirSync(join(projectRoot, "docs"), { recursive: true });
+      writeFileSync(join(projectRoot, "docs", "Old_GDD.md"), gdd);
+      const old = { ...manager.startFromGdd(ctx, gdd, "docs/Old_GDD.md"), gddSha256: undefined } as Campaign;
+      delete (old as { gddSha256?: string }).gddSha256;
+      expect(internals(manager).gddDriftOf(old)).toBeUndefined();
+      expect(old.gddSha256).toBe(sha(gdd));
+      expect(storage.get(old.id)!.gddSha256).toBe(sha(gdd));
+      // …and a drift after the migration is still seen.
+      writeFileSync(join(projectRoot, "docs", "Old_GDD.md"), gdd + " Edited.");
+      expect(internals(manager).gddDriftOf(old)).toContain("is not the approved document");
+      // No file: nothing to drift from; the intake text is the document.
+      const textOnly = manager.startFromGdd(ctx, "# GDD\n\nText only.");
+      expect(textOnly.gddSha256).toBe(sha("# GDD\n\nText only."));
+      expect(internals(manager).gddDriftOf(textOnly)).toBeUndefined();
+      expect(internals(manager).gddTextOf(textOnly)).toBe("# GDD\n\nText only.");
+    });
+  });
+
   it("a requirement is not its diagnostics (Codex 2026-09-12 AD#15)", () => {
     // Reproduced by Codex: the same missing capability reported as "…,
     // attempt 1" and "…, attempt 2" were two requirements. Each rewording got

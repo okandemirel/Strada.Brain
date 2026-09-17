@@ -48,6 +48,7 @@ interface CampaignRow {
   idea_text: string | null;
   gdd_path: string | null;
   gdd_text: string | null;
+  gdd_sha256?: string | null;
   draft_task_id: string | null;
   draft_attempts: number;
   milestones_json: string;
@@ -146,6 +147,7 @@ function rowToCampaign(row: CampaignRow): Campaign {
     ideaText: row.idea_text ?? undefined,
     gddPath: row.gdd_path ?? undefined,
     gddText: row.gdd_text ?? undefined,
+    gddSha256: row.gdd_sha256 ?? undefined,
     draftTaskId: row.draft_task_id ?? undefined,
     draftAttempts: row.draft_attempts,
     milestones,
@@ -238,6 +240,13 @@ export class CampaignStorage {
     }
     try {
       this.db.exec("ALTER TABLE campaigns ADD COLUMN coverage_audit_note TEXT");
+    } catch {
+      // Column already exists — migration is idempotent.
+    }
+    try {
+      // The approved GDD's hash (plan 1.9); rows from before carry null and
+      // take the text they hold as approved on first read.
+      this.db.exec("ALTER TABLE campaigns ADD COLUMN gdd_sha256 TEXT");
     } catch {
       // Column already exists — migration is idempotent.
     }
@@ -349,8 +358,8 @@ export class CampaignStorage {
           independent_review, coverage_queue_unreadable, verified_sessions,
           unmeasurable_revives, implementation_revives, pending_coverage_gaps,
           delivery_revives, delivery_proofs_signature, delivery_rounds_total,
-          stop_requested_at, stop_generation
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          stop_requested_at, stop_generation, gdd_sha256
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           state = excluded.state,
           gdd_path = excluded.gdd_path,
@@ -376,7 +385,8 @@ export class CampaignStorage {
           delivery_proofs_signature = excluded.delivery_proofs_signature,
           delivery_rounds_total = excluded.delivery_rounds_total,
           stop_requested_at = excluded.stop_requested_at,
-          stop_generation = excluded.stop_generation`,
+          stop_generation = excluded.stop_generation,
+          gdd_sha256 = excluded.gdd_sha256`,
       )
       .run(
         campaign.id,
@@ -416,6 +426,7 @@ export class CampaignStorage {
         campaign.deliveryRoundsTotal ?? null,
         campaign.stopRequestedAt ?? null,
         campaign.stopGeneration ?? null,
+        campaign.gddSha256 ?? null,
       );
   }
 
