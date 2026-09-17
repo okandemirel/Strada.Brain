@@ -45,14 +45,26 @@ COPY tsconfig.json ./
 RUN npm ci --include=dev && \
     npm cache clean --force
 
-# Copy source code
+# Portal dependencies come from its own lockfile. node_modules is
+# .dockerignore'd, so the portal has none in the image until they are installed
+# here — and a failed portal build is deliberately fatal to `npm run build`.
+COPY web-portal/package.json web-portal/package-lock.json ./web-portal/
+RUN npm ci --prefix web-portal && \
+    npm cache clean --force
+
+# Copy source code. `npm run build` IS `node scripts/build-package.mjs`, and
+# that script builds web-portal/ and copies its output into
+# dist/channels/web/static — so both directories must be in the build context
+# of this stage, not just src/.
+COPY scripts/ ./scripts/
+COPY web-portal/ ./web-portal/
 COPY src/ ./src/
 
-# Build TypeScript
+# Build TypeScript + web portal
 RUN npm run build
 
 # Prune devDependencies for production
-RUN npm prune --production && \
+RUN npm prune --omit=dev && \
     npm cache clean --force
 
 # =============================================================================
@@ -96,6 +108,12 @@ COPY --from=builder --chown=strata:strata /app/node_modules ./node_modules
 
 # Copy built application from builder
 COPY --from=builder --chown=strata:strata /app/dist ./dist
+
+# Ops and runtime scripts (backup, launcher, boot smoke). `npm run <script>`
+# inside the container resolves to these; without them every package script is
+# a "file not found". The portal's SOURCES are not copied — its built bundle
+# already lives in dist/channels/web/static.
+COPY --from=builder --chown=strata:strata /app/scripts ./scripts
 
 # Copy package files
 COPY --from=builder --chown=strata:strata /app/package*.json ./

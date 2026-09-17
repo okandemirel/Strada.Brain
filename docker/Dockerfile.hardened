@@ -11,14 +11,29 @@
 # =============================================================================
 # STAGE 1: Dependencies
 # =============================================================================
+# These are the dependencies the BUILD runs with, so they include
+# devDependencies: `npm run build` runs tsc and vite, both devDependencies.
+# The previous production-only install stripped them and the build stage
+# then failed on the first line it ran. Production-only node_modules are
+# produced by pruning after the build (STAGE 2), not by installing less here.
+#
+# --ignore-scripts is also gone: better-sqlite3 is a native module and its
+# install script is what produces the binding. Skipping it left an image whose
+# every SQLite-backed subsystem threw on first use. The build toolchain below
+# is what lets that native build succeed on Alpine.
 FROM node:20-alpine AS deps
 
-# Install security updates
+# Install security updates and the toolchain native modules need
 RUN apk update && \
     apk upgrade && \
     apk add --no-cache \
         ca-certificates \
-        dumb-init && \
+        dumb-init \
+        python3 \
+        make \
+        g++ \
+        libc-dev \
+        linux-headers && \
     rm -rf /var/cache/apk/*
 
 # Create app directory
@@ -27,29 +42,39 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies with security flags
-RUN npm ci --only=production --ignore-scripts && \
+# Install all dependencies (devDependencies included — the build needs them)
+RUN npm ci --include=dev && \
     npm cache clean --force && \
-    # Remove unnecessary files
     rm -rf /root/.npm /root/.node-gyp /tmp/*
+
+# Portal dependencies come from web-portal's own lockfile
+COPY web-portal/package.json web-portal/package-lock.json ./web-portal/
+RUN npm ci --prefix web-portal && \
+    npm cache clean --force
 
 # =============================================================================
 # STAGE 2: Build
 # =============================================================================
-FROM node:20-alpine AS builder
+FROM deps AS builder
 
 WORKDIR /app
 
-# Copy dependencies from deps stage
-COPY --from=deps /app/node_modules ./node_modules
 COPY package*.json ./
 COPY tsconfig.json ./
 
-# Copy source code
+# Copy source code. `npm run build` IS `node scripts/build-package.mjs`, which
+# also builds web-portal/ and copies the bundle into dist/channels/web/static,
+# so both directories are part of the build context.
+COPY scripts ./scripts
+COPY web-portal ./web-portal
 COPY src ./src
 
-# Build TypeScript
+# Build TypeScript + web portal
 RUN npm run build
+
+# Drop devDependencies so the runtime stage below copies a production tree
+RUN npm prune --omit=dev && \
+    npm cache clean --force
 
 # =============================================================================
 # STAGE 3: Production
@@ -77,9 +102,12 @@ RUN apk update && \
 # Set working directory
 WORKDIR /app
 
-# Copy production dependencies
-COPY --from=deps /app/node_modules ./node_modules
+# Copy production dependencies. They come from `builder` (pruned after the
+# build) and NOT from `deps`, which by design still carries devDependencies.
+COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
+# Ops and runtime scripts — `npm run <script>` inside the container needs them.
+COPY --from=builder /app/scripts ./scripts
 COPY package*.json ./
 
 # Create necessary directories with proper permissions
