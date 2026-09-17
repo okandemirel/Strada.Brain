@@ -12,6 +12,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import { getLogger } from "../utils/logger.js";
 import { BruteForceProtection } from "../security/auth-hardened.js";
 import { isAllowedOrigin } from "../security/origin-validation.js";
+import { resolveBindHost } from "../core/bind-host.js";
 import type { MetricsCollector } from "./metrics.js";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -41,6 +42,8 @@ export type CommandHandler = (command: string, payload: unknown) => Promise<unkn
 
 export interface WebSocketDashboardServerOptions {
   port: number;
+  /** Address to bind; loopback unless BIND_HOST says otherwise (14F2/D71). */
+  bindHost?: string;
   authToken?: string;
   metrics: MetricsCollector;
   getMemoryStats: () => { totalEntries: number; hasAnalysisCache: boolean } | undefined;
@@ -64,6 +67,7 @@ const DEFAULT_AUTH_LOCKOUT_MS = 5 * 60 * 1_000;
 
 export class WebSocketDashboardServer {
   private readonly port: number;
+  private readonly bindHost: string;
   private readonly authToken: string;
   private readonly commandAuthEnabled: boolean;
   private readonly metrics: MetricsCollector;
@@ -84,6 +88,7 @@ export class WebSocketDashboardServer {
   constructor(opts: WebSocketDashboardServerOptions) {
     const configuredAuthToken = opts.authToken?.trim() || undefined;
     this.port = opts.port;
+    this.bindHost = opts.bindHost ?? resolveBindHost();
     this.authToken = configuredAuthToken ?? randomBytes(32).toString("hex");
     this.commandAuthEnabled = configuredAuthToken !== undefined;
     this.metrics = opts.metrics;
@@ -96,6 +101,18 @@ export class WebSocketDashboardServer {
     );
   }
 
+  /**
+   * The port this server is actually reachable on: the bound address once
+   * listening, else the configured one. Port 0 means "any free port", so the
+   * configured value is NOT the origin a browser would send — the self-origin
+   * check (13F6 / 4.8) has to compare the bound port or it would refuse this
+   * server's own page.
+   */
+  private get boundPort(): number {
+    const address = this.httpServer?.address();
+    return typeof address === "object" && address !== null ? address.port : this.port;
+  }
+
   // ─── Lifecycle ───────────────────────────────────────────────────────────────
 
   async start(): Promise<void> {
@@ -106,7 +123,14 @@ export class WebSocketDashboardServer {
       server: this.httpServer,
       path: "/ws",
       maxPayload: 1 * 1024 * 1024,
-      verifyClient: ({ req }: { req: import("http").IncomingMessage }) => isAllowedOrigin(req.headers.origin, this.allowedOrigins),
+      // 13F6 / 4.8: this server serves its own dashboard page on this.port, so
+      // that — and only that — is the loopback origin its WebSocket accepts.
+      // Configured allowedOrigins stay an explicit operator decision.
+      verifyClient: ({ req }: { req: import("http").IncomingMessage }) =>
+        isAllowedOrigin(req.headers.origin, {
+          selfPort: this.boundPort,
+          ...(this.allowedOrigins ? { allowedHosts: this.allowedOrigins } : {}),
+        }),
     });
     this.wsServer.on("connection", this.handleWsConnection.bind(this));
 
@@ -136,7 +160,7 @@ export class WebSocketDashboardServer {
       httpServer.once("error", onError);
       httpServer.once("listening", onListening);
       try {
-        httpServer.listen(this.port, "127.0.0.1");
+        httpServer.listen(this.port, this.bindHost);
       } catch (error) {
         onError(error as NodeJS.ErrnoException);
       }

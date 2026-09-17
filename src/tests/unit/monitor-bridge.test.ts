@@ -38,6 +38,79 @@ describe('createMonitorBridge', () => {
     expect(parsed.timestamp).toBeTypeOf('number')
   })
 
+  // ── Audit 13F5 / plan 4.7: every frame carries the origin it belongs to ──
+
+  it('stamps the emitting conversation scope as the frame origin', () => {
+    makeBridge().start()
+
+    workspaceBus.emit('monitor:dag_init', {
+      rootId: 'ep-1',
+      nodes: [],
+      edges: [],
+      conversationId: 'profile-A',
+    })
+
+    const parsed = JSON.parse(broadcasts[0])
+    expect(parsed.origin).toBe('profile-A')
+  })
+
+  it('carries the origin over to a rootId-only incremental of the same root', () => {
+    makeBridge().start()
+
+    workspaceBus.emit('monitor:dag_init', {
+      rootId: 'ep-1',
+      nodes: [],
+      edges: [],
+      conversationId: 'profile-A',
+    })
+    // monitor:substep names no conversation — only the root it grows.
+    workspaceBus.emit('monitor:substep', { rootId: 'ep-1', nodeId: 'n1', substep: 'writing' })
+
+    expect(JSON.parse(broadcasts[1]).origin).toBe('profile-A')
+  })
+
+  it('keeps two profiles\' roots apart', () => {
+    makeBridge().start()
+
+    workspaceBus.emit('monitor:dag_init', { rootId: 'ep-A', nodes: [], edges: [], conversationId: 'profile-A' })
+    workspaceBus.emit('monitor:dag_init', { rootId: 'ep-B', nodes: [], edges: [], conversationId: 'profile-B' })
+    workspaceBus.emit('monitor:substep', { rootId: 'ep-B', nodeId: 'n1', substep: 's' })
+    workspaceBus.emit('monitor:substep', { rootId: 'ep-A', nodeId: 'n2', substep: 's' })
+
+    expect(broadcasts.map((m) => JSON.parse(m).origin)).toEqual([
+      'profile-A',
+      'profile-B',
+      'profile-B',
+      'profile-A',
+    ])
+  })
+
+  // Guard: a frame that names no scope must NOT acquire one, or the transport
+  // would withhold traffic that belongs to every client.
+  it('stamps no origin on a frame that names neither a conversation nor a known root', () => {
+    makeBridge().start()
+
+    workspaceBus.emit('workspace:mode_suggest', { mode: 'monitor', reason: 'x' })
+    workspaceBus.emit('monitor:agent_activity', {
+      activity: { taskId: undefined, action: 'tool_execute', detail: 'x', timestamp: 1 },
+    })
+    workspaceBus.emit('monitor:substep', { rootId: 'never-seen', nodeId: 'n1', substep: 's' })
+
+    for (const [i, msg] of broadcasts.entries()) {
+      expect(Object.hasOwn(JSON.parse(msg), 'origin'), `frame ${i}`).toBe(false)
+    }
+  })
+
+  it('forgets the root→origin pairings on monitor:clear', () => {
+    makeBridge().start()
+
+    workspaceBus.emit('monitor:dag_init', { rootId: 'ep-1', nodes: [], edges: [], conversationId: 'profile-A' })
+    workspaceBus.emit('monitor:clear', {})
+    workspaceBus.emit('monitor:substep', { rootId: 'ep-1', nodeId: 'n1', substep: 's' })
+
+    expect(Object.hasOwn(JSON.parse(broadcasts[2]), 'origin')).toBe(false)
+  })
+
   it('broadcasts workspace:mode_suggest events', () => {
     const bridge = makeBridge()
     bridge.start()

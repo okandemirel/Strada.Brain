@@ -215,7 +215,9 @@ describe("DashboardServer", () => {
 
   it("allows tokenless mutable dashboard requests from trusted origins", () => {
     const metrics = new MetricsCollector();
-    server = new DashboardServer(0, metrics, () => undefined);
+    // 13F6 / 4.8: the portal's port is named explicitly — the gate compares the
+    // port, so a bare loopback hostname is no longer enough.
+    server = new DashboardServer(3100, metrics, () => undefined, () => false, [3000]);
 
     const req = {
       headers: {
@@ -236,6 +238,35 @@ describe("DashboardServer", () => {
 
     expect(allowed).toBe(true);
     expect((res.writeHead as unknown as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled();
+  });
+
+  // 13F6 / plan 4.8: before the port became part of the comparison, ANY page on
+  // the loopback interface could drive a tokenless dashboard mutation.
+  it("rejects a tokenless mutable dashboard request from an untrusted loopback port", () => {
+    const metrics = new MetricsCollector();
+    server = new DashboardServer(3100, metrics, () => undefined, () => false, [3000]);
+
+    const res = {
+      writeHead: vi.fn(),
+      end: vi.fn(),
+    } as unknown as import("node:http").ServerResponse;
+
+    const gate = (server as unknown as {
+      requireTrustedDashboardMutation: (
+        req: import("node:http").IncomingMessage,
+        res: import("node:http").ServerResponse,
+      ) => boolean;
+    }).requireTrustedDashboardMutation;
+
+    for (const origin of ["http://localhost:9999", "http://127.0.0.1:5173", "http://localhost"]) {
+      const req = { headers: { origin } } as unknown as import("node:http").IncomingMessage;
+      expect(gate.call(server, req, res), origin).toBe(false);
+    }
+    // …and its own page, plus the portal's, are still accepted.
+    for (const origin of ["http://localhost:3100", "http://127.0.0.1:3000"]) {
+      const req = { headers: { origin } } as unknown as import("node:http").IncomingMessage;
+      expect(gate.call(server, req, res), origin).toBe(true);
+    }
   });
 
   it("rejects tokenless mutable dashboard requests without trusted origin metadata", () => {

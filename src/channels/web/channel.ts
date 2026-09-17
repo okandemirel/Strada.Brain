@@ -709,9 +709,11 @@ export class WebChannel
    */
   broadcastRaw(message: string): void {
     // Cache monitor messages PER ROOT for replay on reconnect (rootId lives at payload.rootId —
-    // the monitor-bridge envelope is {type, payload, timestamp}).
+    // the monitor-bridge envelope is {type, payload, origin?, timestamp}).
+    let origin: string | undefined;
     try {
       const parsed = JSON.parse(message);
+      origin = typeof parsed?.origin === "string" ? (parsed.origin as string) : undefined;
       const type = parsed?.type;
       const rootId =
         typeof parsed?.payload?.rootId === "string" ? (parsed.payload.rootId as string) : undefined;
@@ -739,13 +741,58 @@ export class WebChannel
     }
 
     for (const [, client] of this.clients) {
-      if (client.ws.readyState === 1) {
-        try {
-          client.ws.send(message);
-        } catch {
-          // Connection may have closed between readyState check and send
-        }
+      if (client.ws.readyState !== 1) continue;
+      if (!this.monitorFrameVisibleTo(origin, client.profileId)) continue;
+      try {
+        client.ws.send(message);
+      } catch {
+        // Connection may have closed between readyState check and send
       }
+    }
+  }
+
+  /**
+   * Audit 13F5 / plan 4.7 — whether a monitor frame stamped with `origin` may
+   * reach the client of `profileId`.
+   *
+   * The workspace bus is process-wide and this channel fans every frame out to
+   * every socket, so before this every portal profile saw every other profile's
+   * monitor traffic: its DAG, its Kanban cards and the request text those cards
+   * are labelled with. The monitor bridge now stamps each frame with the
+   * conversation scope it was emitted under; for the web channel that scope IS
+   * the profileId (handleWsMessage sends `conversationId: client.profileId`).
+   *
+   * The rule, and why it is exactly this narrow — a stricter one would blank
+   * boards that legitimately belong to everyone:
+   *   - no origin ⇒ not attributable (canvas, code, budget, supervisor frames
+   *     that carry no scope): broadcast, as before;
+   *   - origin === the recipient's own profile ⇒ theirs;
+   *   - origin is some OTHER identity this channel issued ⇒ it is another
+   *     profile's private traffic, withheld;
+   *   - origin is not a web profile at all (a Telegram chat id, a CLI or daemon
+   *     scope) ⇒ nobody's private traffic, so it stays visible. The portal is
+   *     still the operator's window onto the other channels' activity.
+   *
+   * Chosen over an "admin profile that sees everything": the portal has no
+   * admin/operator role today, so such a profile would be an unwired flag — and
+   * the honest per-profile boundary is the thing the audit asked for.
+   */
+  private monitorFrameVisibleTo(origin: string | undefined, profileId: string): boolean {
+    if (origin === undefined) return true;
+    if (origin === profileId) return true;
+    return !this.isIssuedProfileId(origin);
+  }
+
+  /**
+   * True when `candidate` is a profile id THIS channel issued. A store error is
+   * reported as "yes, a profile" so the visibility rule fails CLOSED (the frame
+   * is withheld) rather than leaking on a lookup failure.
+   */
+  private isIssuedProfileId(candidate: string): boolean {
+    try {
+      return this.identityStore.has(candidate);
+    } catch {
+      return true;
     }
   }
 
@@ -773,16 +820,31 @@ export class WebChannel
    * root's board (insertion order) — the frontend store keys by rootId, so cross-root ordering is
    * irrelevant; within a root, index 0 (dag_init) precedes its incrementals.
    */
-  private replayMonitorState(ws: WebSocket): void {
+  private replayMonitorState(ws: WebSocket, profileId: string): void {
     for (const frames of this.lastMonitorSnapshotByRoot.values()) {
       for (const msg of frames) {
         if (ws.readyState !== 1) return;
+        // 13F5 / 4.7: the cache is process-wide, so replay applies the same
+        // per-profile boundary as the live fan-out. Without this a reconnecting
+        // profile was handed EVERY retained root's board, including the ones a
+        // live broadcast would already have withheld.
+        if (!this.monitorFrameVisibleTo(this.frameOrigin(msg), profileId)) continue;
         try {
           ws.send(msg);
         } catch {
           return; // Connection lost during replay
         }
       }
+    }
+  }
+
+  /** The `origin` stamped on a cached monitor frame, or undefined. */
+  private frameOrigin(message: string): string | undefined {
+    try {
+      const parsed = JSON.parse(message) as { origin?: unknown };
+      return typeof parsed.origin === "string" ? parsed.origin : undefined;
+    } catch {
+      return undefined;
     }
   }
 
@@ -1379,7 +1441,8 @@ export class WebChannel
     });
 
     // Replay cached monitor state so reconnecting clients see the current DAG
-    this.replayMonitorState(ws);
+    // (their own boards only — 13F5 / 4.7).
+    this.replayMonitorState(ws, identity.profileId);
 
     // Flush any answer frames that were buffered while this chat had no live
     // socket (e.g. a background final that arrived offline). Client dedups by
@@ -2390,8 +2453,20 @@ export class WebChannel
    * compare the hostname only, so `http://localhost:<any other port>` — a page
    * from any other process on the machine — was treated as the portal's own.
    */
+  /**
+   * The port this server is actually reachable on: the bound address once
+   * listening, else the configured one. Port 0 means "any free port", so the
+   * configured value is NOT the origin a browser would send — the self-origin
+   * check (13F6 / 4.8) has to compare the bound port or it would refuse this
+   * server's own page.
+   */
+  private get boundPort(): number {
+    const address = this.server?.address();
+    return typeof address === "object" && address !== null ? address.port : this.port;
+  }
+
   private isSelfOrigin(value: string): boolean {
-    return isAllowedOrigin(value, { selfPort: this.port });
+    return isAllowedOrigin(value, { selfPort: this.boundPort });
   }
 
   /**

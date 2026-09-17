@@ -296,6 +296,120 @@ describe("WebChannel post-setup bootstrap", () => {
 // the portal's own origin: it could POST to the /api/* proxy and open a chat
 // WebSocket. The browser's same-origin rule is scheme+host+PORT; the port is what
 // names the one server allowed to talk to itself.
+// ── Audit 13F5 / plan 4.7: a profile's monitor traffic is its own ──
+//
+// broadcastRaw fanned every monitor frame out to every socket and
+// replayMonitorState handed every retained root's board to whoever reconnected,
+// so one portal profile saw another's DAG, Kanban cards and the request text
+// those cards are labelled with. Frames now carry an origin and the transport
+// filters on it.
+describe("WebChannel monitor profile boundary (13F5 / 4.7)", () => {
+  /** A client whose session_init claims `profileId`, with the token that proves it. */
+  function connectProfile(channel: WebChannel, profileId?: string) {
+    const socket = createMockSocket();
+    (channel as unknown as { handleWsConnection: (ws: unknown) => void }).handleWsConnection(socket);
+    const init: Record<string, unknown> = { type: "session_init" };
+    if (profileId) {
+      const store = (channel as unknown as {
+        identityStore: { issue: (id?: string) => { profileId: string; profileToken: string } };
+      }).identityStore;
+      const identity = store.issue(profileId);
+      init.profileId = identity.profileId;
+      init.profileToken = identity.profileToken;
+    }
+    socket.emit("message", Buffer.from(JSON.stringify(init)));
+    const connected = socket.getSentMessages().filter((m) => m.type === "connected").at(-1)!;
+    return { socket, connected, chatId: String(connected.chatId), reconnectToken: String(connected.reconnectToken) };
+  }
+
+  function frame(type: string, payload: Record<string, unknown>, origin?: string): string {
+    return JSON.stringify({ type, payload, ...(origin ? { origin } : {}), timestamp: 1 });
+  }
+
+  function typesOf(socket: ReturnType<typeof createMockSocket>, type: string) {
+    return socket.getSentMessages().filter((m) => m.type === type);
+  }
+
+  const A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+
+  it("does not deliver one profile's monitor frame to another profile's socket", async () => {
+    const channel = new WebChannel();
+    const alice = connectProfile(channel, A);
+    const bob = connectProfile(channel, B);
+
+    channel.broadcastRaw(
+      frame("monitor:dag_init", { rootId: "ep-A", nodes: [{ id: "n1", task: "alice's secret request" }] }, A),
+    );
+
+    expect(typesOf(alice.socket, "monitor:dag_init")).toHaveLength(1);
+    expect(typesOf(bob.socket, "monitor:dag_init")).toHaveLength(0);
+
+    await channel.disconnect();
+  });
+
+  it("does not replay another profile's retained board on reconnect", async () => {
+    const channel = new WebChannel();
+    const alice = connectProfile(channel, A);
+    channel.broadcastRaw(frame("monitor:dag_init", { rootId: "ep-A", nodes: [{ id: "n1" }] }, A));
+    channel.broadcastRaw(frame("monitor:task_update", { rootId: "ep-A", nodeId: "n1", status: "completed" }, A));
+    alice.socket.close();
+
+    // A DIFFERENT profile connects fresh — it must not inherit alice's board.
+    const bob = connectProfile(channel, B);
+    expect(typesOf(bob.socket, "monitor:dag_init")).toHaveLength(0);
+    expect(typesOf(bob.socket, "monitor:task_update")).toHaveLength(0);
+
+    await channel.disconnect();
+  });
+
+  // ── Guard: the traffic the filter must still carry ──
+
+  it("replays the profile's OWN retained board on reconnect", async () => {
+    const channel = new WebChannel();
+    const alice = connectProfile(channel, A);
+    channel.broadcastRaw(frame("monitor:dag_init", { rootId: "ep-A", nodes: [{ id: "n1" }] }, A));
+    channel.broadcastRaw(frame("monitor:task_update", { rootId: "ep-A", nodeId: "n1", status: "completed" }, A));
+    alice.socket.close();
+
+    const again = connectProfile(channel, A);
+    expect(typesOf(again.socket, "monitor:dag_init")).toHaveLength(1);
+    expect(typesOf(again.socket, "monitor:task_update")).toHaveLength(1);
+
+    await channel.disconnect();
+  });
+
+  it("still broadcasts a frame that carries no origin to every profile", async () => {
+    const channel = new WebChannel();
+    const alice = connectProfile(channel, A);
+    const bob = connectProfile(channel, B);
+
+    channel.broadcastRaw(frame("canvas:shapes_add", { shapes: [] }));
+    channel.broadcastRaw(frame("budget:warning", { pct: 80 }));
+
+    for (const [name, c] of [["alice", alice], ["bob", bob]] as const) {
+      expect(typesOf(c.socket, "canvas:shapes_add"), name).toHaveLength(1);
+      expect(typesOf(c.socket, "budget:warning"), name).toHaveLength(1);
+    }
+
+    await channel.disconnect();
+  });
+
+  it("still shows another CHANNEL's activity (an origin that is not a web profile)", async () => {
+    const channel = new WebChannel();
+    const alice = connectProfile(channel, A);
+    const bob = connectProfile(channel, B);
+
+    // A Telegram conversation scope: never issued by this channel's identity store.
+    channel.broadcastRaw(frame("monitor:dag_init", { rootId: "ep-T", nodes: [] }, "telegram-chat-4711"));
+
+    expect(typesOf(alice.socket, "monitor:dag_init")).toHaveLength(1);
+    expect(typesOf(bob.socket, "monitor:dag_init")).toHaveLength(1);
+
+    await channel.disconnect();
+  });
+});
+
 describe("WebChannel origin boundary (13F6 / 4.8)", () => {
   function proxy(channel: WebChannel, req: unknown, res: unknown, url: string): Promise<void> {
     return (channel as unknown as {

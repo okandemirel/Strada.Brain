@@ -475,20 +475,31 @@ describe.skipIf(!process.env["LOCAL_SERVER_TESTS"])("WebSocketDashboardServer", 
       await originServer?.stop();
     });
 
-    async function connectWithOrigin(origin?: string): Promise<WebSocket> {
-      originServer = createServer();
+    /**
+     * 13F6 / 4.8: the origin under test is built FROM the port the server
+     * actually bound, because the rule is now scheme+host+port — a fixed
+     * "http://localhost:3100" would be a different origin from the server's own.
+     */
+    async function connectWithOrigin(
+      origin?: (port: number) => string,
+      opts?: { allowedOrigins?: string[] },
+    ): Promise<WebSocket> {
+      originServer = createServer(opts);
       const port = await safeStart(originServer);
       if (port === null) {
         throw Object.assign(new Error("EPERM"), { code: "EPERM" });
       }
-      const headers = origin !== undefined ? { Origin: origin } : undefined;
+      const headers = origin !== undefined ? { Origin: origin(port) } : undefined;
       return new WebSocket(`ws://localhost:${port}/ws`, { headers });
     }
 
-    async function expectAccepted(origin?: string): Promise<void> {
+    async function expectAccepted(
+      origin?: (port: number) => string,
+      opts?: { allowedOrigins?: string[] },
+    ): Promise<void> {
       let ws: WebSocket;
       try {
-        ws = await connectWithOrigin(origin);
+        ws = await connectWithOrigin(origin, opts);
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code === "EPERM") return;
         throw err;
@@ -501,10 +512,13 @@ describe.skipIf(!process.env["LOCAL_SERVER_TESTS"])("WebSocketDashboardServer", 
       ws.close();
     }
 
-    async function expectRejected(origin: string): Promise<void> {
+    async function expectRejected(
+      origin: (port: number) => string,
+      opts?: { allowedOrigins?: string[] },
+    ): Promise<void> {
       let ws: WebSocket;
       try {
-        ws = await connectWithOrigin(origin);
+        ws = await connectWithOrigin(origin, opts);
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code === "EPERM") return;
         throw err;
@@ -517,30 +531,42 @@ describe.skipIf(!process.env["LOCAL_SERVER_TESTS"])("WebSocketDashboardServer", 
       ws.close();
     }
 
-    it("rejects connections with non-localhost Origin", () => expectRejected("http://evil.com"), 15_000);
-    it("allows connections from localhost Origin", () => expectAccepted("http://localhost"), 15_000);
-    it("allows connections from localhost Origin with port", () => expectAccepted("http://localhost:3100"), 15_000);
-    it("allows connections from 127.0.0.1 Origin", () => expectAccepted("http://127.0.0.1"), 15_000);
+    it("rejects connections with non-localhost Origin", () => expectRejected(() => "http://evil.com"), 15_000);
+    it("allows connections from its own localhost Origin", () => expectAccepted((p) => `http://localhost:${p}`), 15_000);
+    it("allows connections from its own 127.0.0.1 Origin", () => expectAccepted((p) => `http://127.0.0.1:${p}`), 15_000);
     it("allows connections without Origin header (non-browser)", () => expectAccepted(undefined), 15_000);
-    it("rejects malformed Origin header", () => expectRejected("not-a-url"), 15_000);
+    it("rejects malformed Origin header", () => expectRejected(() => "not-a-url"), 15_000);
 
-    it("allows custom allowed origins when configured", async () => {
-      originServer = createServer({ allowedOrigins: ["myapp.local"] });
-      const port = await safeStart(originServer);
-      if (port === null) return;
+    // 13F6 / plan 4.8: a page served by ANOTHER process on the loopback
+    // interface used to pass, because only the hostname was compared.
+    it(
+      "rejects a localhost Origin on another port (13F6)",
+      () => expectRejected((p) => `http://localhost:${p + 1}`),
+      15_000,
+    );
+    it(
+      "rejects a port-less localhost Origin (implicit port 80 is not ours) (13F6)",
+      () => expectRejected(() => "http://localhost"),
+      15_000,
+    );
+    it(
+      "rejects a 127.0.0.1 Origin on another port (13F6)",
+      () => expectRejected((p) => `http://127.0.0.1:${p + 2}`),
+      15_000,
+    );
 
-      const ws = new WebSocket(`ws://localhost:${port}/ws`, {
-        headers: { Origin: "http://myapp.local" },
-      });
-
-      await new Promise<void>((resolve, reject) => {
-        ws.on("open", resolve);
-        ws.on("error", reject);
-      });
-
-      expect(ws.readyState).toBe(WebSocket.OPEN);
-      ws.close();
-    }, 15_000);
+    // Guard: the operator's explicit list still works, and it does not become a
+    // wildcard for other loopback ports.
+    it(
+      "allows custom allowed origins when configured",
+      () => expectAccepted(() => "http://myapp.local", { allowedOrigins: ["myapp.local"] }),
+      15_000,
+    );
+    it(
+      "a custom allowed list does not open other loopback ports",
+      () => expectRejected((p) => `http://localhost:${p + 3}`, { allowedOrigins: ["myapp.local"] }),
+      15_000,
+    );
   });
 
   // ─── Auth Rate Limiting (SEC-02) ──────────────────────────────────────────────

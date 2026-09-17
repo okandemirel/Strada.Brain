@@ -1,179 +1,195 @@
 import { describe, it, expect } from "vitest";
-import { isAllowedOrigin } from "./origin-validation.js";
+import { isAllowedOrigin, effectiveOriginPort } from "./origin-validation.js";
+
+// The protected server in these tests listens on 3000.
+const SELF = { selfPort: 3000 } as const;
 
 describe("isAllowedOrigin", () => {
   describe("absent origin (non-browser clients)", () => {
     it("should accept undefined origin", () => {
-      expect(isAllowedOrigin(undefined)).toBe(true);
+      expect(isAllowedOrigin(undefined, SELF)).toBe(true);
     });
 
     it("should accept undefined origin with custom allowed list", () => {
-      expect(isAllowedOrigin(undefined, ["example.com"])).toBe(true);
+      expect(isAllowedOrigin(undefined, { selfPort: 3000, allowedHosts: ["example.com"] })).toBe(true);
     });
   });
 
   describe("suspicious browser origins", () => {
     it("should reject empty string origin", () => {
-      expect(isAllowedOrigin("")).toBe(false);
+      expect(isAllowedOrigin("", SELF)).toBe(false);
     });
 
     it("should reject 'null' string origin", () => {
-      expect(isAllowedOrigin("null")).toBe(false);
+      expect(isAllowedOrigin("null", SELF)).toBe(false);
     });
   });
 
-  describe("localhost variants (default allowed)", () => {
-    it("should accept http://localhost", () => {
-      expect(isAllowedOrigin("http://localhost")).toBe(true);
+  describe("the server's own loopback origin", () => {
+    it("should accept every loopback spelling on its own port", () => {
+      expect(isAllowedOrigin("http://localhost:3000", SELF)).toBe(true);
+      expect(isAllowedOrigin("http://127.0.0.1:3000", SELF)).toBe(true);
+      expect(isAllowedOrigin("http://[::1]:3000", SELF)).toBe(true);
+      expect(isAllowedOrigin("https://localhost:3000", SELF)).toBe(true);
     });
 
-    it("should accept https://localhost", () => {
-      expect(isAllowedOrigin("https://localhost")).toBe(true);
+    it("should accept a port-less origin when the scheme's default port IS the server's", () => {
+      expect(isAllowedOrigin("http://localhost", { selfPort: 80 })).toBe(true);
+      expect(isAllowedOrigin("https://localhost", { selfPort: 443 })).toBe(true);
+      expect(isAllowedOrigin("ws://127.0.0.1", { selfPort: 80 })).toBe(true);
+      expect(isAllowedOrigin("wss://127.0.0.1", { selfPort: 443 })).toBe(true);
     });
 
-    it("should accept http://localhost with port", () => {
-      expect(isAllowedOrigin("http://localhost:3000")).toBe(true);
+    it("should accept ws:// and wss:// on the server's own port", () => {
+      expect(isAllowedOrigin("ws://localhost:3000", SELF)).toBe(true);
+      expect(isAllowedOrigin("wss://127.0.0.1:3000", SELF)).toBe(true);
     });
 
-    it("should accept http://localhost with high port", () => {
-      expect(isAllowedOrigin("http://localhost:49152")).toBe(true);
-    });
-
-    it("should accept http://127.0.0.1", () => {
-      expect(isAllowedOrigin("http://127.0.0.1")).toBe(true);
-    });
-
-    it("should accept https://127.0.0.1", () => {
-      expect(isAllowedOrigin("https://127.0.0.1")).toBe(true);
-    });
-
-    it("should accept http://127.0.0.1 with port", () => {
-      expect(isAllowedOrigin("http://127.0.0.1:8080")).toBe(true);
+    it("effectiveOriginPort fills in the scheme's default port", () => {
+      expect(effectiveOriginPort(new URL("http://localhost"))).toBe("80");
+      expect(effectiveOriginPort(new URL("https://localhost"))).toBe("443");
+      expect(effectiveOriginPort(new URL("ws://localhost"))).toBe("80");
+      expect(effectiveOriginPort(new URL("wss://localhost"))).toBe("443");
+      expect(effectiveOriginPort(new URL("http://localhost:8080"))).toBe("8080");
     });
   });
 
-  describe("blocked external origins (default mode)", () => {
+  // Audit 13F6 / plan 4.8 — this is the defect: the check compared the HOSTNAME
+  // only, so any other process's page on the loopback interface counted as the
+  // protected server's own origin.
+  describe("another loopback PORT is another origin (13F6 / 4.8)", () => {
+    it("should reject a loopback origin on a different port", () => {
+      expect(isAllowedOrigin("http://localhost:9999", SELF)).toBe(false);
+      expect(isAllowedOrigin("http://127.0.0.1:5173", SELF)).toBe(false);
+      expect(isAllowedOrigin("http://[::1]:8080", SELF)).toBe(false);
+    });
+
+    it("should reject a port-less loopback origin when the default port is not the server's", () => {
+      expect(isAllowedOrigin("http://localhost", SELF)).toBe(false);
+      expect(isAllowedOrigin("https://127.0.0.1", SELF)).toBe(false);
+    });
+
+    it("should reject a loopback WebSocket origin on a different port", () => {
+      expect(isAllowedOrigin("ws://localhost:8080", SELF)).toBe(false);
+    });
+
+    it("should reject a scheme's default port that merely looks adjacent", () => {
+      expect(isAllowedOrigin("http://localhost:443", SELF)).toBe(false);
+      expect(isAllowedOrigin("http://127.0.0.1:80", SELF)).toBe(false);
+    });
+  });
+
+  describe("extraPorts (the portal's port, for the dashboard's gate)", () => {
+    it("should accept a loopback origin on an explicitly trusted extra port", () => {
+      expect(isAllowedOrigin("http://localhost:3000", { selfPort: 3100, extraPorts: [3000] })).toBe(true);
+      expect(isAllowedOrigin("http://127.0.0.1:3100", { selfPort: 3100, extraPorts: [3000] })).toBe(true);
+    });
+
+    it("should still reject a loopback origin on a port nobody named", () => {
+      expect(isAllowedOrigin("http://localhost:9999", { selfPort: 3100, extraPorts: [3000] })).toBe(false);
+    });
+
+    it("should not treat an empty extraPorts list as a wildcard", () => {
+      expect(isAllowedOrigin("http://localhost:9999", { selfPort: 3100, extraPorts: [] })).toBe(false);
+    });
+  });
+
+  describe("blocked external origins", () => {
     it("should reject external HTTPS origin", () => {
-      expect(isAllowedOrigin("https://example.com")).toBe(false);
+      expect(isAllowedOrigin("https://example.com", SELF)).toBe(false);
     });
 
     it("should reject external HTTP origin", () => {
-      expect(isAllowedOrigin("http://evil.com")).toBe(false);
+      expect(isAllowedOrigin("http://evil.com", SELF)).toBe(false);
     });
 
-    it("should reject external origin with port", () => {
-      expect(isAllowedOrigin("https://attacker.io:443")).toBe(false);
+    it("should reject an external origin even on the server's own port", () => {
+      expect(isAllowedOrigin("http://evil.com:3000", SELF)).toBe(false);
     });
 
     it("should reject external origin with path", () => {
-      expect(isAllowedOrigin("https://example.com/callback")).toBe(false);
+      expect(isAllowedOrigin("https://example.com/callback", SELF)).toBe(false);
     });
 
-    it("should reject IP address that is not 127.0.0.1", () => {
-      expect(isAllowedOrigin("http://192.168.1.1")).toBe(false);
+    it("should reject IP address that is not loopback", () => {
+      expect(isAllowedOrigin("http://192.168.1.1:3000", SELF)).toBe(false);
     });
 
     it("should reject 0.0.0.0", () => {
-      expect(isAllowedOrigin("http://0.0.0.0")).toBe(false);
+      expect(isAllowedOrigin("http://0.0.0.0:3000", SELF)).toBe(false);
     });
 
     it("should reject private network IPs", () => {
-      expect(isAllowedOrigin("http://10.0.0.1")).toBe(false);
-    });
-
-    it("should reject 172.16.x.x range", () => {
-      expect(isAllowedOrigin("http://172.16.0.1")).toBe(false);
+      expect(isAllowedOrigin("http://10.0.0.1:3000", SELF)).toBe(false);
+      expect(isAllowedOrigin("http://172.16.0.1:3000", SELF)).toBe(false);
     });
   });
 
   describe("malformed origins", () => {
     it("should reject non-URL strings", () => {
-      expect(isAllowedOrigin("not-a-url")).toBe(false);
+      expect(isAllowedOrigin("not-a-url", SELF)).toBe(false);
     });
 
     it("should reject origin with only protocol", () => {
-      expect(isAllowedOrigin("http://")).toBe(false);
+      expect(isAllowedOrigin("http://", SELF)).toBe(false);
     });
 
     it("should reject origin with spaces", () => {
-      expect(isAllowedOrigin("http://local host")).toBe(false);
+      expect(isAllowedOrigin("http://local host", SELF)).toBe(false);
     });
 
     it("should reject random garbage", () => {
-      expect(isAllowedOrigin("!!!@@@###")).toBe(false);
+      expect(isAllowedOrigin("!!!@@@###", SELF)).toBe(false);
     });
   });
 
-  describe("custom allowedHostnames", () => {
+  describe("custom allowedHosts (an explicit operator decision)", () => {
     it("should accept hostname in allowed list", () => {
-      expect(isAllowedOrigin("https://myapp.local", ["myapp.local"])).toBe(true);
+      expect(isAllowedOrigin("https://myapp.local", { selfPort: 3000, allowedHosts: ["myapp.local"] })).toBe(true);
     });
 
     it("should accept host:port in allowed list", () => {
       expect(
-        isAllowedOrigin("https://myapp.local:3100", ["myapp.local:3100"]),
+        isAllowedOrigin("https://myapp.local:3100", { selfPort: 3000, allowedHosts: ["myapp.local:3100"] }),
       ).toBe(true);
     });
 
-    it("should accept bare hostname when origin has a port", () => {
-      // URL("https://myapp.local:3100").hostname === "myapp.local"
+    it("a bare hostname in the list trusts that host on ANY port (the operator said so)", () => {
       expect(
-        isAllowedOrigin("https://myapp.local:3100", ["myapp.local"]),
+        isAllowedOrigin("https://myapp.local:3100", { selfPort: 3000, allowedHosts: ["myapp.local"] }),
       ).toBe(true);
+    });
+
+    it("a host:port entry does NOT trust the same host on another port", () => {
+      expect(
+        isAllowedOrigin("https://myapp.local:9999", { selfPort: 3000, allowedHosts: ["myapp.local:3100"] }),
+      ).toBe(false);
     });
 
     it("should reject origin not in custom allowed list", () => {
-      expect(
-        isAllowedOrigin("https://evil.com", ["myapp.local"]),
-      ).toBe(false);
+      expect(isAllowedOrigin("https://evil.com", { selfPort: 3000, allowedHosts: ["myapp.local"] })).toBe(false);
     });
 
-    it("should reject localhost when custom list does not include it", () => {
-      // When allowedHostnames is provided, ONLY those hostnames are allowed
-      expect(
-        isAllowedOrigin("http://localhost", ["myapp.local"]),
-      ).toBe(false);
+    it("a custom list does not open other loopback ports", () => {
+      expect(isAllowedOrigin("http://localhost:9999", { selfPort: 3000, allowedHosts: ["myapp.local"] })).toBe(false);
     });
 
-    it("should accept localhost when explicitly in custom list", () => {
-      expect(
-        isAllowedOrigin("http://localhost:3000", ["localhost"]),
-      ).toBe(true);
+    it("the server's own origin stays trusted alongside a custom list", () => {
+      expect(isAllowedOrigin("http://localhost:3000", { selfPort: 3000, allowedHosts: ["myapp.local"] })).toBe(true);
     });
 
     it("should handle multiple allowed hostnames", () => {
-      const allowed = ["app1.local", "app2.local", "staging.example.com"];
-      expect(isAllowedOrigin("https://app1.local", allowed)).toBe(true);
-      expect(isAllowedOrigin("https://app2.local", allowed)).toBe(true);
-      expect(isAllowedOrigin("https://staging.example.com", allowed)).toBe(true);
-      expect(isAllowedOrigin("https://prod.example.com", allowed)).toBe(false);
+      const allowedHosts = ["app1.local", "app2.local", "staging.example.com"];
+      expect(isAllowedOrigin("https://app1.local", { selfPort: 3000, allowedHosts })).toBe(true);
+      expect(isAllowedOrigin("https://app2.local", { selfPort: 3000, allowedHosts })).toBe(true);
+      expect(isAllowedOrigin("https://staging.example.com", { selfPort: 3000, allowedHosts })).toBe(true);
+      expect(isAllowedOrigin("https://prod.example.com", { selfPort: 3000, allowedHosts })).toBe(false);
     });
 
-    it("should handle empty allowed list (falls back to default localhost check)", () => {
-      expect(isAllowedOrigin("http://localhost", [])).toBe(true);
-      expect(isAllowedOrigin("https://example.com", [])).toBe(false);
-    });
-  });
-
-  describe("edge cases with ports and protocols", () => {
-    it("should accept localhost on standard HTTPS port", () => {
-      expect(isAllowedOrigin("https://localhost:443")).toBe(true);
-    });
-
-    it("should accept 127.0.0.1 on standard HTTP port", () => {
-      expect(isAllowedOrigin("http://127.0.0.1:80")).toBe(true);
-    });
-
-    it("should handle ws:// protocol for localhost", () => {
-      expect(isAllowedOrigin("ws://localhost:8080")).toBe(true);
-    });
-
-    it("should handle wss:// protocol for localhost", () => {
-      expect(isAllowedOrigin("wss://127.0.0.1:443")).toBe(true);
-    });
-
-    it("should reject ws:// protocol for external host", () => {
-      expect(isAllowedOrigin("ws://evil.com:8080")).toBe(false);
+    it("should handle empty allowed list (falls back to the self-origin rule)", () => {
+      expect(isAllowedOrigin("http://localhost:3000", { selfPort: 3000, allowedHosts: [] })).toBe(true);
+      expect(isAllowedOrigin("http://localhost:9999", { selfPort: 3000, allowedHosts: [] })).toBe(false);
+      expect(isAllowedOrigin("https://example.com", { selfPort: 3000, allowedHosts: [] })).toBe(false);
     });
   });
 });

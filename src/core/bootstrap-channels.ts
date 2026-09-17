@@ -65,6 +65,7 @@ export async function initializeChannel(
     case "web":
       return new WebChannel(config.web.port, config.dashboard.port, {
         dashboardAuthToken: config.websocketDashboard.authToken,
+        bindHost: config.bindHost,
         identityDbPath: join(config.memory.dbPath, "web-identities.db"),
         // Attachment links must still resolve after a restart (plan 2.8).
         attachmentDbPath: join(config.memory.dbPath, "web-attachments.db"),
@@ -132,8 +133,16 @@ export async function initializeDashboard(
     return undefined;
   }
 
-  const dashboard = new DashboardServer(config.dashboard.port, metrics, () =>
-    memoryManager?.getStats(),
+  const dashboard = new DashboardServer(
+    config.dashboard.port,
+    metrics,
+    () => memoryManager?.getStats(),
+    () => false,
+    // 13F6 / 4.8: the portal proxies browser mutations here and forwards their
+    // Origin, so the portal's port is the one foreign loopback port this
+    // server's same-origin gate may trust.
+    [config.web.port],
+    config.bindHost,
   );
 
   try {

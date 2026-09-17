@@ -4,6 +4,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { getLogger } from "../utils/logger.js";
 import { sanitizeSecrets } from "../security/secret-sanitizer.js";
 import { isAllowedOrigin } from "../security/origin-validation.js";
+import { resolveBindHost } from "../core/bind-host.js";
 import type { IAIProvider } from "../agents/providers/provider.interface.js";
 import type { MetricsCollector } from "./metrics.js";
 import type { IMemoryManager, MemoryHealth } from "../memory/memory.interface.js";
@@ -107,6 +108,10 @@ const VAULT_SEARCH_RATE_LIMIT_WINDOW_MS = 10_000;
 
 export class DashboardServer {
   private readonly port: number;
+  /** Address to bind; loopback unless BIND_HOST says otherwise (14F2/D71). */
+  private readonly bindHost: string;
+  /** Loopback ports besides `port` whose pages the same-origin gate trusts. */
+  private readonly trustedBrowserPorts: readonly number[];
   private readonly metrics: MetricsCollector;
   private readonly getMemoryStats: () =>
     | { totalEntries: number; hasAnalysisCache: boolean }
@@ -222,8 +227,20 @@ export class DashboardServer {
     metrics: MetricsCollector,
     getMemoryStats: () => { totalEntries: number; hasAnalysisCache: boolean } | undefined,
     isReadOnly: () => boolean = () => false,
+    /**
+     * Loopback ports OTHER than this server's own whose browser pages are
+     * trusted for the same-origin mutation gate — in practice the web portal's
+     * port, because the portal proxies browser requests here and forwards their
+     * Origin. Empty means "only my own page" (13F6 / plan 4.8: before this, the
+     * gate compared the hostname only, so any localhost page on any port passed).
+     */
+    trustedBrowserPorts: readonly number[] = [],
+    /** Address to bind; loopback unless BIND_HOST says otherwise (14F2/D71). */
+    bindHost: string = resolveBindHost(),
   ) {
     this.port = port;
+    this.bindHost = bindHost;
+    this.trustedBrowserPorts = trustedBrowserPorts;
     this.metrics = metrics;
     this.getMemoryStats = getMemoryStats;
     this._isReadOnly = isReadOnly;
@@ -751,9 +768,9 @@ export class DashboardServer {
 
     return new Promise<void>((resolve, reject) => {
       this.server!.once("error", reject);
-      this.server!.listen(this.port, "127.0.0.1", () => {
+      this.server!.listen(this.port, this.bindHost, () => {
         this.server!.removeListener("error", reject);
-        logger.info(`Dashboard running at http://localhost:${this.port}`);
+        logger.info(`Dashboard running at http://${this.bindHost}:${this.port}`);
         if (!this.dashboardToken) {
           logger.warn(
             "Dashboard started WITHOUT an auth token: mutable /api/* routes are protected only by same-origin checks. " +
@@ -794,13 +811,37 @@ export class DashboardServer {
     return Array.isArray(header) ? header[0] : header;
   }
 
+  /**
+   * True when `value` names a page this deployment serves: this server's own
+   * port, or one of the explicitly trusted portal ports. 13F6 / 4.8 — a
+   * loopback HOSTNAME is not an origin; the port is what identifies the server.
+   */
+  /**
+   * The port this server is actually reachable on: the bound address once
+   * listening, else the configured one. Port 0 means "any free port", so the
+   * configured value is NOT the origin a browser would send — the self-origin
+   * check (13F6 / 4.8) has to compare the bound port or it would refuse this
+   * server's own page.
+   */
+  private get boundPort(): number {
+    const address = this.server?.address();
+    return typeof address === "object" && address !== null ? address.port : this.port;
+  }
+
+  private isTrustedBrowserOrigin(value: string): boolean {
+    return isAllowedOrigin(value, {
+      selfPort: this.boundPort,
+      extraPorts: this.trustedBrowserPorts,
+    });
+  }
+
   private requireTrustedDashboardMutation(
     req: import("node:http").IncomingMessage,
     res: import("node:http").ServerResponse,
   ): boolean {
     const origin = this.getSingleHeader(req.headers.origin);
     if (origin !== undefined) {
-      if (isAllowedOrigin(origin)) return true;
+      if (this.isTrustedBrowserOrigin(origin)) return true;
       res.writeHead(403, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "Forbidden" }));
       return false;
@@ -808,7 +849,7 @@ export class DashboardServer {
 
     const referer = this.getSingleHeader(req.headers.referer);
     if (referer !== undefined) {
-      if (isAllowedOrigin(referer)) return true;
+      if (this.isTrustedBrowserOrigin(referer)) return true;
       res.writeHead(403, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "Forbidden" }));
       return false;
