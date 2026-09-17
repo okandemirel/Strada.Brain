@@ -159,7 +159,7 @@ it("#3 a reused pid with a different generation is recovered after boot", () => 
   // The previous incarnation held this pid BEFORE we did: its claim is older
   // than our own registration, which is what proves the pid changed hands.
   storage.getDatabase()
-    .prepare("UPDATE budget_reservations SET owner_pid = ?, owner_generation = 'previous-incarnation', created_at = ? WHERE id = 'orphan'")
+    .prepare("UPDATE budget_reservations SET owner_pid = ?, owner_generation = 'previous-incarnation', created_at = ?, claim_seq = 1 WHERE id = 'orphan'")
     .run(process.pid, Date.now() - 60_000);
   // A reused PID does not identify the previous process incarnation.
   expect(manager.reconcileOrphanedReservations().orphans).toBe(1);
@@ -351,8 +351,12 @@ describe("round 10: window consistency and foreign owner liveness", () => {
     // A PREVIOUS BOOT: the claim predates this incarnation's registration on
     // the pid, which is what makes our own registration proof that the
     // claimant exited (Codex round 12 #1 — a mere generation mismatch is not).
+    // Round 13 #1: order, not the clock. A previous boot's claim sits EARLIER
+    // in the durable sequence than this incarnation's registration — which is
+    // exactly what makes our registration proof that the claimant exited, and
+    // what a rolled-back wall clock could no longer show.
     storage.getDatabase()
-      .prepare("UPDATE budget_reservations SET owner_generation = 'previous-incarnation', created_at = ? WHERE id = ?")
+      .prepare("UPDATE budget_reservations SET owner_generation = 'previous-incarnation', created_at = ?, claim_seq = 1 WHERE id = ?")
       .run(Date.now() - 60_000, id);
     expect(manager.reconcileOrphanedReservations().orphans).toBe(1);
     return id;
@@ -680,4 +684,86 @@ it("round 12 #2 a reservation records the host that made it, so another machine 
   elsewhere.updateConfig({ dailyLimitUsd: 1 });
   expect(elsewhere.reconcileOrphanedReservations().orphans).toBe(0);
   expect(elsewhere.canSpend(0.5, "chat")).toBe(false);
+});
+
+/**
+ * Codex round 13 #1 and #2. Wall-clock ordering and a pid-keyed registry were
+ * both wrong for the same reason: they answered a question about ORDER and
+ * IDENTITY with something that is neither.
+ */
+describe("round 13: order is durable, identity is (host, pid)", () => {
+  const pid = process.ppid; // really running, so the PID probe proves nothing
+
+  it("#1 a clock that moved backwards cannot make a predecessor prove death", () => {
+    vi.useFakeTimers();
+    const t0 = Date.now();
+    // Before the reboot: a predecessor registered, with a LATER wall clock.
+    storage.touchBudgetOwner(pid, "gen-old", t0 + 5_000, os.hostname());
+    const older = storage.listBudgetOwners().find((row) => row.ownerPid === pid)!;
+    expect(older.registeredSeq).toBeTypeOf("number");
+    // After the reboot the clock reads earlier, and the live owner claims now.
+    // Its own registration never lands (heartbeats are best effort).
+    storage.upsertBudgetReservation({ id: "live", source: "chat", sourceId: null, estimateUsd: 0.75,
+      chargedUsd: 0, ownerPid: pid, ownerGeneration: "gen-live", ownerHost: os.hostname(), createdAt: t0 });
+    const claim = storage.listBudgetReservations().find((row) => row.id === "live")!;
+    // The claim is LATER in the durable order even though its clock reads earlier.
+    expect(claim.claimSeq!).toBeGreaterThan(older.registeredSeq!);
+    expect(claim.createdAt).toBeLessThan(older.heartbeatAt);
+    expect(manager.reconcileOrphanedReservations().orphans).toBe(0);
+    expect(manager.canSpend(0.5, "chat")).toBe(false);
+  });
+
+  it("#1 a registration that really is later still proves the claimant exited (guard)", () => {
+    vi.useFakeTimers();
+    const t0 = Date.now();
+    storage.upsertBudgetReservation({ id: "dead", source: "chat", sourceId: null, estimateUsd: 0.75,
+      chargedUsd: 0, ownerPid: pid, ownerGeneration: "gen-dead", ownerHost: os.hostname(), createdAt: t0 });
+    // The successor registers AFTER that claim, in the durable order.
+    storage.touchBudgetOwner(pid, "gen-new", t0 + 1_000, os.hostname());
+    expect(manager.reconcileOrphanedReservations().orphans).toBe(1);
+  });
+
+  it("#2 two machines on one wallet keep their own liveness evidence", () => {
+    vi.useFakeTimers();
+    const t0 = Date.now();
+    // Host A's claim, and host A's own successor registration: proof of death.
+    storage.upsertBudgetReservation({ id: "a-dead", source: "chat", sourceId: null, estimateUsd: 0.5,
+      chargedUsd: 0, ownerPid: 4242, ownerGeneration: "a-gen", ownerHost: os.hostname(), createdAt: t0 });
+    storage.touchBudgetOwner(4242, "a-successor", t0 + 1_000, os.hostname());
+    // Host B runs its daemon on the same pid NUMBER and heartbeats.
+    storage.touchBudgetOwner(4242, "b-gen", t0 + 2_000, "build-box-2");
+    // Both rows survive: the registry is keyed by (host, pid), not by pid.
+    expect(storage.listBudgetOwners().filter((row) => row.ownerPid === 4242)).toHaveLength(2);
+    // And host A's proof still stands.
+    expect(manager.reconcileOrphanedReservations().orphans).toBe(1);
+  });
+
+  it("#2 another machine's registration is not evidence about our pid", () => {
+    vi.useFakeTimers();
+    const t0 = Date.now();
+    // OUR claim on a pid that IS running here — so the PID probe answers
+    // "unknown" and only the registry could produce a verdict — and no
+    // successor of ours: nothing here proves our owner exited.
+    storage.upsertBudgetReservation({ id: "ours", source: "chat", sourceId: null, estimateUsd: 0.75,
+      chargedUsd: 0, ownerPid: pid, ownerGeneration: "our-gen", ownerHost: os.hostname(), createdAt: t0 });
+    // The other machine runs its daemon on the same pid NUMBER, later in the
+    // durable order. Keyed by pid alone this row displaced ours and "proved"
+    // our live owner dead.
+    storage.touchBudgetOwner(pid, "their-gen", t0 + 5_000, "build-box-2");
+    expect(manager.reconcileOrphanedReservations().orphans).toBe(0);
+    expect(manager.canSpend(0.5, "chat")).toBe(false);
+  });
+
+  it("#2 a legacy row with no host recorded still answers for this host", () => {
+    vi.useFakeTimers();
+    const t0 = Date.now();
+    storage.getDatabase()
+      .prepare("INSERT INTO budget_owners (owner_host, owner_pid, owner_generation, heartbeat_at, registered_seq, registered_at) VALUES ('', ?, 'successor', ?, 99999, ?)")
+      .run(pid, t0 + 1_000, t0 + 1_000);
+    storage.upsertBudgetReservation({ id: "legacy", source: "chat", sourceId: null, estimateUsd: 0.75,
+      chargedUsd: 0, ownerPid: pid, ownerGeneration: "gen-dead", createdAt: t0 });
+    // The hostless row is read as this host's, exactly as it was before hosts
+    // were recorded — so an upgrade changes nobody's reading.
+    expect(manager.reconcileOrphanedReservations().orphans).toBe(1);
+  });
 });

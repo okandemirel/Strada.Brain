@@ -705,6 +705,8 @@ describe("DaemonStorage", () => {
             chargedUsd: 0.25, ownerPid: 4242, ownerGeneration: null, reconciledAt: null, createdAt: 1_000, lastActivityAt: 2_000,
             // Round 12 #2: no host recorded on this row, which reads as "this host".
             ownerHost: null,
+            // Round 13 #1: where this claim sits in the wallet's durable order.
+            claimSeq: 1,
           }]);
           second.deleteBudgetReservation("res-1");
           expect(second.listBudgetReservations()).toEqual([]);
@@ -785,7 +787,7 @@ describe("the budget owner registry records arrival, and never invents it (round
       try {
         // A row from before registered_at existed: its arrival time is unknown.
         storage.getDatabase()
-          .prepare("INSERT INTO budget_owners (owner_pid, owner_generation, heartbeat_at, registered_at) VALUES (7777, 'gen-a', ?, NULL)")
+          .prepare("INSERT INTO budget_owners (owner_host, owner_pid, owner_generation, heartbeat_at, registered_at) VALUES ('some-host', 7777, 'gen-a', ?, NULL)")
           .run(Date.now() - 60_000);
         // The SAME incarnation heartbeats again: still unknown. Filling it in
         // with now() claimed an arrival that never happened, and a claim older

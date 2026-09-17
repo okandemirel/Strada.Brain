@@ -111,14 +111,20 @@ interface BudgetStorageAdapter {
   chargeBudgetReservation?(id: string, chargedUsd: number, lastActivityAt: number): void;
   deleteBudgetReservation?(id: string): void;
   reconcileBudgetReservation?(id: string, now: number): boolean;
-  listBudgetReservations?(): Array<{ id: string; source: string; sourceId: string | null; estimateUsd: number; chargedUsd: number; ownerPid: number; ownerGeneration?: string | null; ownerHost?: string | null; createdAt: number; lastActivityAt: number | null; reconciledAt?: number | null }>;
+  listBudgetReservations?(): Array<{ id: string; source: string; sourceId: string | null; estimateUsd: number; chargedUsd: number; ownerPid: number; ownerGeneration?: string | null; ownerHost?: string | null; createdAt: number; claimSeq?: number | null; lastActivityAt: number | null; reconciledAt?: number | null }>;
   // Owner liveness registry (round 10 #7). Absent on legacy adapters: without
   // it no foreign owner can be proved ALIVE, and none can be proved dead
   // either unless its PID is gone — uncertainty keeps its headroom.
   touchBudgetOwner?(ownerPid: number, ownerGeneration: string, now: number, ownerHost?: string): void;
-  listBudgetOwners?(): Array<{ ownerPid: number; ownerGeneration: string; heartbeatAt: number; registeredAt?: number; ownerHost?: string }>;
+  listBudgetOwners?(): Array<{ ownerPid: number; ownerGeneration: string; heartbeatAt: number; registeredAt?: number; registeredSeq?: number; ownerHost?: string }>;
   pruneBudgetOwners?(heartbeatBefore: number): void;
 }
+
+/** One registry row, looked up by (host, pid). */
+type OwnerRegistry = Map<
+  string,
+  { generation: string; heartbeatAt: number; registeredAt?: number; registeredSeq?: number; host?: string }
+>;
 
 export interface BudgetProcessIdentity {
   readonly pid: number;
@@ -212,10 +218,16 @@ export class UnifiedBudgetManager {
    *   manager reconcile a live owner's reservation and then hand out the
    *   headroom that owner was still spending (round 10 #7).
    */
+  /** (host, pid) — the only identity a registry row can be looked up by. */
+  private static ownerKey(host: string, pid: number): string {
+    return `${host}\u0000${pid}`;
+  }
+
   private ownerVerdict(
     owner: BudgetProcessIdentity,
-    registry?: Map<number, { generation: string; heartbeatAt: number; registeredAt?: number; host?: string }>,
-    claimedAt?: number,
+    registry?: OwnerRegistry,
+    /** The claim's place in the durable order, and its wall clock as a fallback. */
+    claim?: { seq?: number; at?: number },
   ): OwnerVerdict {
     if (owner.pid === this.identity.pid && owner.generation === this.identity.generation) return "alive";
     // WHOSE PID IS THIS? (Codex round 12 #2.) A registry row from another
@@ -224,19 +236,30 @@ export class UnifiedBudgetManager {
     // remote owner dead and hand its headroom away.
     const here = this.thisHost();
     const ownerHost = owner.host ?? here;
-    const candidate = (registry ?? this.ownerRegistry()).get(owner.pid);
-    const known = candidate && (candidate.host ?? here) === ownerHost ? candidate : undefined;
+    // Keyed by (host, pid): a registry keyed by pid alone let two machines
+    // sharing one wallet overwrite each other's evidence (round 13 #2).
+    const all = registry ?? this.ownerRegistry();
+    const known = all.get(UnifiedBudgetManager.ownerKey(ownerHost, owner.pid))
+      // A row written before hosts were recorded belongs to "here", because
+      // that is what every single-machine install meant.
+      ?? (ownerHost === here ? all.get(UnifiedBudgetManager.ownerKey("", owner.pid)) : undefined);
     if (known && known.generation !== owner.generation) {
       // SUPERSESSION DOES NOT EXPIRE (Codex round 11 #5). A pid hosts one
       // process at a time, so a DIFFERENT incarnation registering on it after
       // this liability was claimed proves the claimant exited — whether or not
       // the replacement is still heartbeating. Treating a stale replacement as
       // "unknown" let a dead owner's liability hold headroom for ever.
-      // An UNKNOWN arrival time (a registry row written before this column
-      // existed) proves nothing about order, so it falls through to the
-      // heartbeat and PID evidence below rather than condemning the owner.
-      const arrived = known.registeredAt;
-      if (arrived !== undefined && (claimedAt === undefined || arrived >= claimedAt)) return "dead";
+      // ORDER, NOT A CLOCK (round 13 #1). A reboot or an NTP step moves wall
+      // clocks backwards, and a PREDECESSOR's `registered_at` then looked later
+      // than a live successor's claim and "proved" it dead. The durable
+      // sequence cannot move backwards, so it decides whenever both sides have
+      // one; the timestamps are the fallback for rows written before it, and an
+      // unknown order proves nothing at all.
+      if (known.registeredSeq !== undefined && claim?.seq !== undefined) {
+        if (known.registeredSeq >= claim.seq) return "dead";
+      } else if (known.registeredAt !== undefined && (claim?.at === undefined || known.registeredAt >= claim.at)) {
+        return "dead";
+      }
     }
     if (known && known.generation === owner.generation && Date.now() - known.heartbeatAt <= OWNER_HEARTBEAT_TTL_MS) {
       return "alive";
@@ -250,15 +273,16 @@ export class UnifiedBudgetManager {
     return pidIsRunning(owner.pid) ? "unknown" : "dead";
   }
 
-  private ownerRegistry(): Map<number, { generation: string; heartbeatAt: number; registeredAt?: number; host?: string }> {
+  private ownerRegistry(): OwnerRegistry {
     const rows = this.storage.listBudgetOwners?.() ?? [];
     return new Map(
       rows.map((row) => [
-        row.ownerPid,
+        UnifiedBudgetManager.ownerKey(row.ownerHost ?? "", row.ownerPid),
         {
           generation: row.ownerGeneration,
           heartbeatAt: row.heartbeatAt,
           ...(row.registeredAt === undefined ? {} : { registeredAt: row.registeredAt }),
+          ...(row.registeredSeq === undefined ? {} : { registeredSeq: row.registeredSeq }),
           ...(row.ownerHost === undefined || row.ownerHost === null ? {} : { host: row.ownerHost }),
         },
       ]),
@@ -267,24 +291,34 @@ export class UnifiedBudgetManager {
 
   /** May this process resolve someone else's liability as uncertain estimate? */
   private isReclaimable(
-    row: { ownerPid: number; ownerGeneration?: string | null; ownerHost?: string | null; createdAt?: number; lastActivityAt?: number | null },
-    registry?: Map<number, { generation: string; heartbeatAt: number; registeredAt?: number; host?: string }>,
+    row: {
+      ownerPid: number;
+      ownerGeneration?: string | null;
+      ownerHost?: string | null;
+      createdAt?: number;
+      claimSeq?: number | null;
+      lastActivityAt?: number | null;
+    },
+    registry?: OwnerRegistry,
   ): boolean {
     // Written before owner generations existed: it names no incarnation that
     // could still be running, so nothing can keep it in flight.
     if (!row.ownerGeneration) return true;
     const owner = { pid: row.ownerPid, generation: row.ownerGeneration, ...(row.ownerHost ? { host: row.ownerHost } : {}) };
     if (this.injectedIsOwnerAlive) return !this.injectedIsOwnerAlive(owner);
-    // WHEN THIS OWNER CLAIMED: a registry row older than the claim names a
-    // PREDECESSOR on the pid, not a replacement, so it proves nothing (the ABA
-    // direction of round 11 #5).
+    // WHERE THIS OWNER'S CLAIM SITS IN THE ORDER: a registration before it
+    // names a PREDECESSOR on the pid, not a replacement, so it proves nothing
+    // (the ABA direction of round 11 #5).
     //
     // Deliberately NOT lastActivityAt (Codex round 12 #3): a charge can be
     // recorded against this reservation by whichever process is doing the
     // accounting, so activity does not authenticate the OWNER as alive — and
-    // letting it move the claim time forward erased a replacement's proof.
-    const claimedAt = row.createdAt === undefined || row.createdAt <= 0 ? undefined : row.createdAt;
-    return this.ownerVerdict(owner, registry, claimedAt) === "dead";
+    // letting it move the claim forward erased a replacement's proof.
+    const claim = {
+      ...(row.claimSeq === undefined || row.claimSeq === null ? {} : { seq: row.claimSeq }),
+      ...(row.createdAt === undefined || row.createdAt <= 0 ? {} : { at: row.createdAt }),
+    };
+    return this.ownerVerdict(owner, registry, claim) === "dead";
   }
 
   // ===========================================================================

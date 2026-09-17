@@ -161,6 +161,8 @@ CREATE TABLE IF NOT EXISTS budget_reservations (
   -- every single-machine install behaved before the column existed.
   owner_host TEXT,
   created_at INTEGER NOT NULL,
+  -- Where this claim sits in the durable claim order (round 13 #1).
+  claim_seq INTEGER,
   last_activity_at INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_budget_reservations_owner ON budget_reservations(owner_pid);
@@ -173,18 +175,35 @@ CREATE INDEX IF NOT EXISTS idx_budget_reservations_owner ON budget_reservations(
 -- hosts one process at a time: a row naming a DIFFERENT generation with a
 -- fresh heartbeat is therefore proof that the older incarnation exited.
 -- A missing or stale row proves nothing and must not be read as death.
+-- A MONOTONIC CLAIM ORDER, which a wall clock is not (Codex round 13 #1).
+-- A reboot or an NTP step can move registered_at/created_at backwards, and
+-- then a PREDECESSOR's registration looked later than a live successor's claim
+-- and "proved" it dead. AUTOINCREMENT keeps its high-water mark in
+-- sqlite_sequence, so a row taken here is after every row taken before it, for
+-- the life of the database — across reboots and across clock changes.
+CREATE TABLE IF NOT EXISTS budget_claim_seq (
+  id INTEGER PRIMARY KEY AUTOINCREMENT
+);
+
 CREATE TABLE IF NOT EXISTS budget_owners (
-  owner_pid INTEGER PRIMARY KEY,
+  -- (host, pid) IS THE IDENTITY (Codex round 13 #2). Keyed by pid alone, two
+  -- machines sharing one wallet overwrote each other's liveness evidence: host
+  -- A's successor registration proved an old reservation dead, host B
+  -- heartbeat the same pid NUMBER, and the proof was gone. '' means "host not
+  -- recorded", which is how every single-machine install behaved before.
+  owner_host TEXT NOT NULL DEFAULT '',
+  owner_pid INTEGER NOT NULL,
   owner_generation TEXT NOT NULL,
   heartbeat_at INTEGER NOT NULL,
-  -- The machine this pid belongs to (round 12 #2). NULL means this host.
-  owner_host TEXT,
+  -- Where this registration sits in the durable claim order.
+  registered_seq INTEGER,
   -- WHEN THIS INCARNATION TOOK THE PID. A later generation on a pid PROVES the
   -- earlier one exited, and that proof must not expire with a heartbeat
   -- (Codex round 11 #5): an idle replacement used to turn definite
   -- supersession back into "unknown", and the superseded owner's liability
   -- then held headroom for ever.
-  registered_at INTEGER
+  registered_at INTEGER,
+  PRIMARY KEY (owner_host, owner_pid)
 );
 
 CREATE TABLE IF NOT EXISTS settings_overrides (
@@ -482,13 +501,24 @@ export class DaemonStorage {
     if (!ownerColumns.some((column) => column.name === "registered_at")) {
       this.db.exec("ALTER TABLE budget_owners ADD COLUMN registered_at INTEGER DEFAULT NULL");
     }
-    // Round 12 #2: whose pid each row is about. NULL = this host.
+    // Round 12 #2: whose pid each row is about. NULL/'' = this host.
     if (!ownerColumns.some((column) => column.name === "owner_host")) {
-      this.db.exec("ALTER TABLE budget_owners ADD COLUMN owner_host TEXT DEFAULT NULL");
+      this.db.exec("ALTER TABLE budget_owners ADD COLUMN owner_host TEXT NOT NULL DEFAULT ''");
     }
     if (!reservationColumns.some((column) => column.name === "owner_host")) {
       this.db.exec("ALTER TABLE budget_reservations ADD COLUMN owner_host TEXT DEFAULT NULL");
     }
+    // Round 13 #1: the durable claim order beside the wall clock.
+    if (!ownerColumns.some((column) => column.name === "registered_seq")) {
+      this.db.exec("ALTER TABLE budget_owners ADD COLUMN registered_seq INTEGER DEFAULT NULL");
+    }
+    if (!reservationColumns.some((column) => column.name === "claim_seq")) {
+      this.db.exec("ALTER TABLE budget_reservations ADD COLUMN claim_seq INTEGER DEFAULT NULL");
+    }
+    // Round 13 #2: a registry keyed by pid alone cannot hold two machines. The
+    // rebuild keeps every row (its host reads as unrecorded, exactly what it
+    // meant) and is a no-op once the primary key is already composite.
+    this.migrateBudgetOwnersToHostKey();
     // PROJECT HISTORY (plan 6.6). A daemon.db from before this table gets it
     // from the schema constant above; one written by an EARLIER shape of it
     // gains the missing columns here. This must run before prepareStatements(),
@@ -775,10 +805,16 @@ export class DaemonStorage {
     lastActivityAt?: number | null;
   }): void {
     this.assertOpen();
+    // A NEW row takes the next place in the durable claim order; an update of
+    // an existing one keeps the place it took (the statement ignores it).
+    const existing = this.db!.prepare("SELECT claim_seq FROM budget_reservations WHERE id = ?").get(row.id) as
+      | { claim_seq: number | null }
+      | undefined;
+    const seq = existing === undefined ? this.nextBudgetClaimSeq() : existing.claim_seq;
     this.stmts.upsertReservation!.run(
       row.id, row.source, row.sourceId ?? null, row.estimateUsd, row.chargedUsd,
       row.ownerPid, row.createdAt, row.lastActivityAt ?? null, row.ownerGeneration ?? null,
-      row.ownerHost ?? null,
+      row.ownerHost ?? null, seq,
     );
   }
 
@@ -801,19 +837,72 @@ export class DaemonStorage {
    */
   touchBudgetOwner(ownerPid: number, ownerGeneration: string, now: number, ownerHost?: string): void {
     this.assertOpen();
-    this.stmts.touchOwner!.run(ownerPid, ownerGeneration, now, now, ownerHost ?? null);
+    const host = ownerHost ?? "";
+    // A NEW incarnation on this (host, pid) takes the next place in the durable
+    // claim order; the same one keeps the place it already has, including not
+    // knowing (a pre-migration row).
+    const existing = this.db!
+      .prepare("SELECT owner_generation, registered_seq FROM budget_owners WHERE owner_host = ? AND owner_pid = ?")
+      .get(host, ownerPid) as { owner_generation: string; registered_seq: number | null } | undefined;
+    const seq = existing?.owner_generation === ownerGeneration
+      ? existing.registered_seq
+      : this.nextBudgetClaimSeq();
+    this.stmts.touchOwner!.run(host, ownerPid, ownerGeneration, now, seq, now);
+  }
+
+  /**
+   * Rebuild `budget_owners` with (host, pid) as its primary key.
+   *
+   * SQLite cannot ALTER a primary key, so the table is recreated and copied.
+   * Rows written before the host existed keep '' — "not recorded" — which is
+   * how they were already read.
+   */
+  private migrateBudgetOwnersToHostKey(): void {
+    const info = this.db!.prepare("PRAGMA table_info(budget_owners)").all() as Array<{ name: string; pk: number }>;
+    const hostIsKey = info.some((column) => column.name === "owner_host" && column.pk > 0);
+    if (hostIsKey) return;
+    this.db!.exec(`
+      CREATE TABLE budget_owners_v2 (
+        owner_host TEXT NOT NULL DEFAULT '',
+        owner_pid INTEGER NOT NULL,
+        owner_generation TEXT NOT NULL,
+        heartbeat_at INTEGER NOT NULL,
+        registered_seq INTEGER,
+        registered_at INTEGER,
+        PRIMARY KEY (owner_host, owner_pid)
+      );
+      INSERT OR REPLACE INTO budget_owners_v2 (owner_host, owner_pid, owner_generation, heartbeat_at, registered_seq, registered_at)
+        SELECT COALESCE(owner_host, ''), owner_pid, owner_generation, heartbeat_at, registered_seq, registered_at FROM budget_owners;
+      DROP TABLE budget_owners;
+      ALTER TABLE budget_owners_v2 RENAME TO budget_owners;
+    `);
+  }
+
+  /**
+   * The next number in the wallet's durable claim order.
+   *
+   * AUTOINCREMENT's high-water mark lives in sqlite_sequence, so deleting the
+   * row we just took does not hand the number out twice — and the order
+   * survives a reboot and a clock that moves backwards (round 13 #1).
+   */
+  nextBudgetClaimSeq(): number {
+    this.assertOpen();
+    const seq = Number(this.db!.prepare("INSERT INTO budget_claim_seq DEFAULT VALUES").run().lastInsertRowid);
+    this.db!.prepare("DELETE FROM budget_claim_seq WHERE id = ?").run(seq);
+    return seq;
   }
 
   /** Registered wallet owners with their last heartbeat. */
-  listBudgetOwners(): Array<{ ownerPid: number; ownerGeneration: string; heartbeatAt: number; registeredAt?: number; ownerHost?: string }> {
+  listBudgetOwners(): Array<{ ownerPid: number; ownerGeneration: string; heartbeatAt: number; registeredAt?: number; registeredSeq?: number; ownerHost?: string }> {
     this.assertOpen();
-    const rows = this.stmts.allOwners!.all() as Array<{ owner_pid: number; owner_generation: string; heartbeat_at: number; registered_at: number | null; owner_host: string | null }>;
+    const rows = this.stmts.allOwners!.all() as Array<{ owner_pid: number; owner_generation: string; heartbeat_at: number; registered_at: number | null; registered_seq: number | null; owner_host: string | null }>;
     return rows.map((r) => ({
       ownerPid: r.owner_pid,
       ownerGeneration: r.owner_generation,
       heartbeatAt: r.heartbeat_at,
       ...(r.registered_at === null ? {} : { registeredAt: r.registered_at }),
-      ...(r.owner_host === null ? {} : { ownerHost: r.owner_host }),
+      ...(r.registered_seq === null ? {} : { registeredSeq: r.registered_seq }),
+      ...(r.owner_host === null || r.owner_host === "" ? {} : { ownerHost: r.owner_host }),
     }));
   }
 
@@ -843,13 +932,14 @@ export class DaemonStorage {
     ownerGeneration?: string | null;
     ownerHost?: string | null;
     createdAt: number;
+    claimSeq?: number | null;
     lastActivityAt: number | null;
     reconciledAt: number | null;
   }> {
     this.assertOpen();
     const rows = this.stmts.allReservations!.all() as Array<{
       id: string; source: string; source_id: string | null; estimate_usd: number;
-      charged_usd: number; owner_pid: number; owner_generation: string | null; owner_host: string | null; created_at: number; last_activity_at: number | null; reconciled_at: number | null;
+      charged_usd: number; owner_pid: number; owner_generation: string | null; owner_host: string | null; created_at: number; claim_seq: number | null; last_activity_at: number | null; reconciled_at: number | null;
     }>;
     return rows.map((r) => ({
       id: r.id,
@@ -858,6 +948,7 @@ export class DaemonStorage {
       estimateUsd: r.estimate_usd,
       chargedUsd: r.charged_usd,
       ownerHost: r.owner_host,
+      claimSeq: r.claim_seq,
       ownerPid: r.owner_pid,
       ownerGeneration: r.owner_generation,
       createdAt: r.created_at,
@@ -1416,8 +1507,8 @@ export class DaemonStorage {
 
     // Pending liability (round 8 #2)
     this.stmts.upsertReservation = db.prepare(
-      `INSERT INTO budget_reservations (id, source, source_id, estimate_usd, charged_usd, owner_pid, created_at, last_activity_at, owner_generation, owner_host)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO budget_reservations (id, source, source_id, estimate_usd, charged_usd, owner_pid, created_at, last_activity_at, owner_generation, owner_host, claim_seq)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET estimate_usd = excluded.estimate_usd, charged_usd = excluded.charged_usd, last_activity_at = excluded.last_activity_at`,
     );
     this.stmts.chargeReservation = db.prepare(
@@ -1428,11 +1519,11 @@ export class DaemonStorage {
 
     // Owner liveness registry (round 10 #7)
     this.stmts.touchOwner = db.prepare(
-      `INSERT INTO budget_owners (owner_pid, owner_generation, heartbeat_at, registered_at, owner_host) VALUES (?, ?, ?, ?, ?)
-       ON CONFLICT(owner_pid) DO UPDATE SET
+      `INSERT INTO budget_owners (owner_host, owner_pid, owner_generation, heartbeat_at, registered_seq, registered_at) VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(owner_host, owner_pid) DO UPDATE SET
          owner_generation = excluded.owner_generation,
          heartbeat_at = excluded.heartbeat_at,
-         owner_host = excluded.owner_host,
+         registered_seq = excluded.registered_seq,
          -- A NEW incarnation stamps its own arrival; the same one KEEPS what
          -- it had, including not knowing (round 12 #2): COALESCE here gave a
          -- pre-migration row an arrival time it never had, which then read as
@@ -1441,7 +1532,7 @@ export class DaemonStorage {
            THEN budget_owners.registered_at
            ELSE excluded.registered_at END`,
     );
-    this.stmts.allOwners = db.prepare(`SELECT owner_pid, owner_generation, heartbeat_at, registered_at, owner_host FROM budget_owners`);
+    this.stmts.allOwners = db.prepare(`SELECT owner_pid, owner_generation, heartbeat_at, registered_at, registered_seq, owner_host FROM budget_owners`);
     this.stmts.pruneOwners = db.prepare(
       `DELETE FROM budget_owners WHERE heartbeat_at < ?
          AND owner_pid NOT IN (SELECT owner_pid FROM budget_reservations WHERE reconciled_at IS NULL)`,
