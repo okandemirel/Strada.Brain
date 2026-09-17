@@ -35,10 +35,19 @@ export interface DiscoveredSkill {
 // Tier directories
 // ---------------------------------------------------------------------------
 
+/**
+ * Where workspace-tier skills live for a project. Exported so the README's
+ * "Location" cell is contract-tested against this path (R4 / D69 / 0-A.31):
+ * the README said `.strada/skills/` while this scanned `<project>/skills`.
+ */
+export function workspaceSkillsDir(projectRoot: string): string {
+  return join(projectRoot, "skills");
+}
+
 const TIERS: Array<{ tier: SkillEntry["tier"]; dir: (projectRoot?: string) => string | null }> = [
   {
     tier: "workspace",
-    dir: (projectRoot) => (projectRoot ? join(projectRoot, "skills") : null),
+    dir: (projectRoot) => (projectRoot ? workspaceSkillsDir(projectRoot) : null),
   },
   {
     tier: "managed",

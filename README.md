@@ -392,7 +392,7 @@ Skills are discovered from three locations, in priority order:
 
 | Tier | Location | Purpose |
 |------|----------|---------|
-| **workspace** | `.strada/skills/` in your project root | Project-specific skills, highest priority |
+| **workspace** | `skills/` in your project root | Project-specific skills, highest priority |
 | **managed** | `~/.strada/skills/` | User-installed skills via `strada skill install` |
 | **bundled** | `src/skills/bundled/` inside the Strada.Brain checkout | Shipped with the application, always available |
 
@@ -976,7 +976,7 @@ That same learning path now materializes runtime self-improvement artifacts. Rep
 | `MODEL_INTELLIGENCE_ENABLED` | `true` | Enable shared live model/provider catalog refresh |
 | `MODEL_INTELLIGENCE_REFRESH_HOURS` | `24` | Refresh cadence for model metadata and official provider-source snapshots |
 | `MODEL_INTELLIGENCE_PROVIDER_SOURCES_PATH` | `src/agents/providers/provider-sources.json` | JSON registry of official provider docs/news URLs that feed dynamic provider capabilities and the model selector |
-| `STRADA_DAEMON_DAILY_BUDGET` | `1.0` | Daily budget (USD) for daemon mode |
+| `STRADA_DAEMON_DAILY_BUDGET` | (unset) | Optional dedicated daily budget (USD) for daemon mode; when unset the daemon shares the system budget (`STRADA_BUDGET_DAILY_USD`) |
 
 ### Rate Limiting
 
