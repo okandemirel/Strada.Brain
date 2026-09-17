@@ -1,5 +1,6 @@
 import { useTranslation } from 'react-i18next'
 import { CHANNELS, LANGUAGES, EMBEDDING_CAPABLE, EMBEDDING_PROVIDERS, PROVIDER_MAP } from '../../types/setup-constants'
+import { BUDGET_UNLIMITED, isUnlimitedBudget } from '../../hooks/useSetupWizard'
 
 interface ChannelRagStepProps {
   channel: string
@@ -257,16 +258,23 @@ export default function ChannelRagStep({
           <label className="autonomy-budget-label">{t('channels.budget.dailyLimit')}</label>
           <input
             type="range"
-            min={0}
+            min={BUDGET_UNLIMITED}
             max={50}
             step={1}
             value={globalDailyBudget}
             onChange={(e) => setGlobalDailyBudget(Number(e.target.value))}
             className="autonomy-range"
+            aria-label={t('channels.budget.dailyLimit')}
           />
           <div className="autonomy-labels">
             <span>{t('channels.budget.unlimited')}</span>
-            <span className="autonomy-value">{globalDailyBudget === 0 ? t('channels.budget.valueUnlimited') : t('channels.budget.valueAmount', { amount: globalDailyBudget.toFixed(0) })}</span>
+            {/* Unlimited is the leftmost stop; $0 is the stop beside it and
+                means nothing may spend (round 8 #12). */}
+            <span className="autonomy-value">{isUnlimitedBudget(globalDailyBudget)
+              ? t('channels.budget.valueUnlimited')
+              : globalDailyBudget === 0
+                ? t('channels.budget.valueFrozen')
+                : t('channels.budget.valueAmount', { amount: globalDailyBudget.toFixed(0) })}</span>
             <span>{t('channels.budget.maxLabel')}</span>
           </div>
         </div>

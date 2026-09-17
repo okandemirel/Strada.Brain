@@ -609,7 +609,7 @@ describe("SetupWizard path validation", () => {
       { url: "/api/setup/existing", method: "GET", headers: { "x-csrf-token": (wizard as unknown as { csrfToken: string }).csrfToken } },
       existing.response,
     );
-    expect(JSON.parse(existing.read().body)).toEqual({ daemonEnabled: false });
+    expect(JSON.parse(existing.read().body)).toEqual({ daemonEnabled: false, globalDailyBudget: null });
 
     // The request does not mention the key at all: the opt-out must survive.
     const saveResponse = await saveWizard(wizard, {
@@ -641,7 +641,7 @@ describe("SetupWizard path validation", () => {
       { url: "/api/setup/existing", method: "GET", headers: { "x-csrf-token": (wizard as unknown as { csrfToken: string }).csrfToken } },
       existing.response,
     );
-    expect(JSON.parse(existing.read().body)).toEqual({ daemonEnabled: null });
+    expect(JSON.parse(existing.read().body)).toEqual({ daemonEnabled: null, globalDailyBudget: null });
 
     const saveResponse = await saveWizard(wizard, {
       UNITY_PROJECT_PATH: homedir(),
@@ -651,6 +651,71 @@ describe("SetupWizard path validation", () => {
     });
     expect(saveResponse.read().statusCode).toBe(200);
     expect(fs.readFileSync(path.join(tempCwd, ".env"), "utf-8")).toContain("STRADA_DAEMON_ENABLED=true");
+  });
+
+  it("reports a configured zero budget on /api/setup/existing and keeps it across a save (Codex 2026-09-17 round 8 #12)", async () => {
+    const tempCwd = fs.mkdtempSync(path.join(os.tmpdir(), "strada-setup-wizard-"));
+    tmpDirs.push(tempCwd);
+    process.chdir(tempCwd);
+    process.env["STRADA_INSTALL_ROOT"] = tempCwd;
+    process.env["STRADA_SOURCE_CHECKOUT"] = "true";
+    delete process.env["STRADA_BUDGET_DAILY_USD"];
+    // Zero is a CHOICE: nothing may spend. The portal read 0 as "unlimited",
+    // could not show or resend it, and a Save deleted the key.
+    fs.writeFileSync(path.join(tempCwd, ".env"), "UNITY_PROJECT_PATH=/tmp/x\nSTRADA_BUDGET_DAILY_USD=0\n");
+    preflightResponseProvidersMock.mockResolvedValue({ passedProviderIds: ["kimi"], failures: [] });
+
+    const wizard = new SetupWizard({ port: 0 });
+    const existing = makeResponse();
+    await (wizard as unknown as {
+      handleRequest: (req: { url: string; method: string; headers?: Record<string, string> }, res: unknown) => Promise<void>;
+    }).handleRequest(
+      { url: "/api/setup/existing", method: "GET", headers: { "x-csrf-token": (wizard as unknown as { csrfToken: string }).csrfToken } },
+      existing.response,
+    );
+    expect(JSON.parse(existing.read().body).globalDailyBudget).toBe(0);
+
+    const saveResponse = await saveWizard(wizard, {
+      UNITY_PROJECT_PATH: homedir(),
+      PROVIDER_CHAIN: "kimi",
+      KIMI_API_KEY: "sk-kimi",
+      RAG_ENABLED: "false",
+      STRADA_BUDGET_DAILY_USD: "0",
+    });
+    expect(saveResponse.read().statusCode).toBe(200);
+    expect(fs.readFileSync(path.join(tempCwd, ".env"), "utf-8")).toContain("STRADA_BUDGET_DAILY_USD=0");
+  });
+
+  it("reports an unlimited budget as null, whether the key says -1 or is absent (guard)", async () => {
+    const tempCwd = fs.mkdtempSync(path.join(os.tmpdir(), "strada-setup-wizard-"));
+    tmpDirs.push(tempCwd);
+    process.chdir(tempCwd);
+    process.env["STRADA_INSTALL_ROOT"] = tempCwd;
+    process.env["STRADA_SOURCE_CHECKOUT"] = "true";
+    delete process.env["STRADA_BUDGET_DAILY_USD"];
+    fs.writeFileSync(path.join(tempCwd, ".env"), "UNITY_PROJECT_PATH=/tmp/x\nSTRADA_BUDGET_DAILY_USD=-1\n");
+    preflightResponseProvidersMock.mockResolvedValue({ passedProviderIds: ["kimi"], failures: [] });
+
+    const wizard = new SetupWizard({ port: 0 });
+    const existing = makeResponse();
+    await (wizard as unknown as {
+      handleRequest: (req: { url: string; method: string; headers?: Record<string, string> }, res: unknown) => Promise<void>;
+    }).handleRequest(
+      { url: "/api/setup/existing", method: "GET", headers: { "x-csrf-token": (wizard as unknown as { csrfToken: string }).csrfToken } },
+      existing.response,
+    );
+    expect(JSON.parse(existing.read().body).globalDailyBudget).toBe(null);
+
+    // …and a request that asks for unlimited leaves no limit in the file.
+    const saveResponse = await saveWizard(wizard, {
+      UNITY_PROJECT_PATH: homedir(),
+      PROVIDER_CHAIN: "kimi",
+      KIMI_API_KEY: "sk-kimi",
+      RAG_ENABLED: "false",
+      _budgetUnlimited: "true",
+    });
+    expect(saveResponse.read().statusCode).toBe(200);
+    expect(fs.readFileSync(path.join(tempCwd, ".env"), "utf-8")).not.toContain("STRADA_BUDGET_DAILY_USD");
   });
 
   it("blocks saving when the only response provider fails preflight (no false success)", async () => {

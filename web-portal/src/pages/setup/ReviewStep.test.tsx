@@ -101,3 +101,20 @@ describe('ReviewStep', () => {
     expect(html).toContain('Configuration accepted. Starting Strada on this same URL.')
   })
 })
+
+describe('ReviewStep budget summary (Codex 2026-09-17 round 8 #12)', () => {
+  it('reads a zero budget as a spending freeze and only a negative value as unlimited', async () => {
+    await i18n.changeLanguage('en')
+    // 0 used to render as "Unlimited", the exact opposite of what it means.
+    const frozen = renderReview({ globalDailyBudget: 0 })
+    expect(frozen).toContain('nothing may spend')
+    expect(frozen).not.toContain('Unlimited')
+
+    const unlimited = renderReview({ globalDailyBudget: -1 })
+    expect(unlimited).toContain('Unlimited')
+    expect(unlimited).not.toContain('nothing may spend')
+
+    const limited = renderReview({ globalDailyBudget: 12 })
+    expect(limited).toContain('$12/day')
+  })
+})

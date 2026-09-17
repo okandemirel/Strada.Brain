@@ -13,6 +13,7 @@ import {
   readSetupHealthStatus,
   readSetupBootstrapStatus,
   useSetupWizard,
+  BUDGET_UNLIMITED,
 } from './useSetupWizard'
 import { OPENCODE_PLATFORM_BASE_URLS } from '../types/setup-constants'
 
@@ -248,7 +249,7 @@ describe('useSetupWizard daemon toggle (audit 10.1 / 10.6 / D25)', () => {
     vi.restoreAllMocks()
   })
 
-  function installFetchMock(existing?: { daemonEnabled: boolean | null }) {
+  function installFetchMock(existing?: { daemonEnabled?: boolean | null, globalDailyBudget?: number | null }) {
     const saves: Array<Record<string, string>> = []
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
@@ -318,6 +319,120 @@ describe('useSetupWizard daemon toggle (audit 10.1 / 10.6 / D25)', () => {
     await act(async () => { await result.current.save() })
     await waitFor(() => expect(saves).toHaveLength(1))
     expect(saves[0]!.STRADA_DAEMON_ENABLED).toBe('true')
+    unmount()
+  })
+})
+
+describe('useSetupWizard global budget (Codex 2026-09-17 round 8 #12)', () => {
+  const originalFetch = globalThis.fetch
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch
+    vi.restoreAllMocks()
+  })
+
+  function installFetchMock(existing?: { daemonEnabled?: boolean | null, globalDailyBudget?: number | null }) {
+    const saves: Array<Record<string, string>> = []
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      if (url.startsWith('/api/setup/csrf')) {
+        return new Response(JSON.stringify({ token: 'csrf-1' }), { status: 200 })
+      }
+      if (url.startsWith('/api/setup/existing')) {
+        return existing === undefined
+          ? new Response('{}', { status: 404 })
+          : new Response(JSON.stringify(existing), { status: 200 })
+      }
+      if (url === '/api/setup' && init?.method === 'POST') {
+        saves.push(JSON.parse(String(init.body)) as Record<string, string>)
+        return new Response(JSON.stringify({ success: true, readyUrl: '/' }), { status: 200 })
+      }
+      if (url.startsWith('/api/setup/status')) {
+        return new Response(JSON.stringify({ state: 'failed', detail: 'test stop' }), { status: 200 })
+      }
+      return new Response('{}', { status: 404 })
+    })
+    globalThis.fetch = fetchMock as unknown as typeof fetch
+    return saves
+  }
+
+  it('says unlimited by name instead of omitting the key', async () => {
+    const saves = installFetchMock()
+    const { result, unmount } = renderHook(() => useSetupWizard())
+    expect(result.current.globalDailyBudget).toBe(BUDGET_UNLIMITED)
+    act(() => { result.current.setRagEnabled(false) })
+    await act(async () => { await result.current.save() })
+    await waitFor(() => expect(saves).toHaveLength(1))
+    expect(saves[0]!._budgetUnlimited).toBe('true')
+    expect(saves[0]!.STRADA_BUDGET_DAILY_USD).toBeUndefined()
+    unmount()
+  })
+
+  it('submits an explicit zero, so nothing may spend', async () => {
+    // The slider used to read 0 as "unlimited": a person who wanted spending
+    // frozen got no limit at all, and the key never left the portal.
+    const saves = installFetchMock()
+    const { result, unmount } = renderHook(() => useSetupWizard())
+    act(() => {
+      result.current.setRagEnabled(false)
+      result.current.setGlobalDailyBudget(0)
+    })
+    expect(result.current.globalDailyBudget).toBe(0)
+    await act(async () => { await result.current.save() })
+    await waitFor(() => expect(saves).toHaveLength(1))
+    expect(saves[0]!.STRADA_BUDGET_DAILY_USD).toBe('0')
+    expect(saves[0]!._budgetUnlimited).toBeUndefined()
+    unmount()
+  })
+
+  it('submits a numeric limit verbatim', async () => {
+    const saves = installFetchMock()
+    const { result, unmount } = renderHook(() => useSetupWizard())
+    act(() => {
+      result.current.setRagEnabled(false)
+      result.current.setGlobalDailyBudget(12)
+    })
+    await act(async () => { await result.current.save() })
+    await waitFor(() => expect(saves).toHaveLength(1))
+    expect(saves[0]!.STRADA_BUDGET_DAILY_USD).toBe('12')
+    unmount()
+  })
+
+  it('hydrates an existing zero and resends it, never lifting the limit', async () => {
+    const saves = installFetchMock({ daemonEnabled: null, globalDailyBudget: 0 })
+    const { result, unmount } = renderHook(() => useSetupWizard())
+    await waitFor(() => expect(result.current.globalDailyBudget).toBe(0))
+    act(() => { result.current.setRagEnabled(false) })
+    await act(async () => { await result.current.save() })
+    await waitFor(() => expect(saves).toHaveLength(1))
+    expect(saves[0]!.STRADA_BUDGET_DAILY_USD).toBe('0')
+    unmount()
+  })
+
+  it('keeps a deliberate change over a late hydration (guard)', async () => {
+    const saves = installFetchMock({ daemonEnabled: null, globalDailyBudget: 0 })
+    const { result, unmount } = renderHook(() => useSetupWizard())
+    act(() => {
+      result.current.setRagEnabled(false)
+      result.current.setGlobalDailyBudget(25)
+    })
+    await waitFor(() => expect(result.current.setupAvailability).toBe('available'))
+    expect(result.current.globalDailyBudget).toBe(25)
+    await act(async () => { await result.current.save() })
+    await waitFor(() => expect(saves).toHaveLength(1))
+    expect(saves[0]!.STRADA_BUDGET_DAILY_USD).toBe('25')
+    unmount()
+  })
+
+  it('reads an unlimited or absent budget back as unlimited (guard)', async () => {
+    const saves = installFetchMock({ daemonEnabled: null, globalDailyBudget: null })
+    const { result, unmount } = renderHook(() => useSetupWizard())
+    await waitFor(() => expect(result.current.setupAvailability).toBe('available'))
+    expect(result.current.globalDailyBudget).toBe(BUDGET_UNLIMITED)
+    act(() => { result.current.setRagEnabled(false) })
+    await act(async () => { await result.current.save() })
+    await waitFor(() => expect(saves).toHaveLength(1))
+    expect(saves[0]!._budgetUnlimited).toBe('true')
     unmount()
   })
 })

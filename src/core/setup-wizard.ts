@@ -477,6 +477,34 @@ export function readExistingDaemonSetting(): boolean | null {
   return value !== "false";
 }
 
+/**
+ * The configured global daily budget, for the portal to hydrate its slider:
+ * a number (0 included) or null when nothing limits spending.
+ *
+ * A zero is a CHOICE — nothing may spend — and the portal could neither show
+ * nor resend it, so a Save with the slider at its left edge deleted an
+ * existing `STRADA_BUDGET_DAILY_USD=0` and left the system unlimited
+ * (Codex 2026-09-17 round 8 #12).
+ */
+export function readExistingBudgetSetting(): number | null {
+  let raw: string | undefined;
+  try {
+    const envPath = resolveDotenvPath({ moduleUrl: import.meta.url });
+    if (existsSync(envPath)) {
+      raw = dotenv.parse(readFileSync(envPath, "utf-8"))["STRADA_BUDGET_DAILY_USD"];
+    }
+  } catch {
+    // unreadable .env: fall through to the process environment
+  }
+  raw = raw ?? process.env["STRADA_BUDGET_DAILY_USD"];
+  const value = (raw ?? "").trim().toLowerCase();
+  if (!value || BUDGET_UNLIMITED_MARKERS.has(value)) return null;
+  const parsed = Number(value);
+  // NO_BUDGET_LIMIT (-1) and anything unreadable mean "no limit".
+  if (!Number.isFinite(parsed) || parsed < 0) return null;
+  return parsed;
+}
+
 export function buildSetupEnvLines(
   config: Record<string, string>,
   validatedProjectPath: string,
@@ -891,7 +919,10 @@ export class SetupWizard {
       // an existing STRADA_DAEMON_ENABLED=false).
       if (url === "/api/setup/existing" && method === "GET") {
         if (!this.guardSetupReadRoute(req, res)) return;
-        this.json(res, 200, { daemonEnabled: readExistingDaemonSetting() });
+        this.json(res, 200, {
+          daemonEnabled: readExistingDaemonSetting(),
+          globalDailyBudget: readExistingBudgetSetting(),
+        });
         return;
       }
 

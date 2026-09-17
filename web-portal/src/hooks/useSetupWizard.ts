@@ -210,9 +210,27 @@ async function fetchWithTimeout(
   }
 }
 
-/** What the current configuration says for toggles whose default is not "unset". */
+/**
+ * THE PORTAL'S BUDGET VALUE (Codex 2026-09-17 round 8 #12).
+ *
+ * The slider used to treat 0 as "unlimited", so an explicit zero — the freeze
+ * that stops every system from spending — could not be expressed, and a Save
+ * with the slider at its left edge dropped the key, turning someone's
+ * `STRADA_BUDGET_DAILY_USD=0` into no limit at all. Unlimited is now its own
+ * value, `BUDGET_UNLIMITED`, and every other value (0 included) is submitted
+ * verbatim.
+ */
+export const BUDGET_UNLIMITED = -1
+
+export function isUnlimitedBudget(value: number): boolean {
+  return value < 0
+}
+
+/** What the current configuration says for fields whose default is not "unset". */
 export interface SetupExistingConfig {
   daemonEnabled: boolean | null
+  /** The .env's global daily budget: a number (0 allowed) or unlimited. */
+  globalDailyBudget: number | null
 }
 
 export async function readSetupExistingConfig(
@@ -227,9 +245,15 @@ export async function readSetupExistingConfig(
       ...options,
     })
     if (!res.ok) return null
-    const data = await res.json().catch(() => null) as { daemonEnabled?: unknown } | null
+    const data = await res.json().catch(() => null) as { daemonEnabled?: unknown, globalDailyBudget?: unknown } | null
     if (!data || typeof data !== 'object') return null
-    return { daemonEnabled: typeof data.daemonEnabled === 'boolean' ? data.daemonEnabled : null }
+    // An absent/unlimited budget arrives as null; a number (including 0) is
+    // the person's explicit choice and must survive a re-run of setup.
+    const budget = data.globalDailyBudget
+    return {
+      daemonEnabled: typeof data.daemonEnabled === 'boolean' ? data.daemonEnabled : null,
+      globalDailyBudget: typeof budget === 'number' && Number.isFinite(budget) && budget >= 0 ? budget : null,
+    }
   } catch {
     return null
   }
@@ -409,7 +433,9 @@ export function useSetupWizard() {
   const [autonomyEnabled, setAutonomyEnabledState] = useState(false)
   const [autonomyHours, setAutonomyHoursState] = useState(4)
   const [daemonBudget, setDaemonBudgetState] = useState(1.0)
-  const [globalDailyBudget, setGlobalDailyBudgetState] = useState(0) // 0 = unlimited
+  // Unlimited is BUDGET_UNLIMITED, never 0: 0 is a real choice (freeze).
+  const [globalDailyBudget, setGlobalDailyBudgetState] = useState<number>(BUDGET_UNLIMITED)
+  const budgetTouchedRef = useRef(false)
   const [obsidianEnabled, setObsidianEnabledState] = useState(false)
   const [obsidianVaultPath, setObsidianVaultPathState] = useState('')
   const [obsidianApiKey, setObsidianApiKeyState] = useState('')
@@ -485,6 +511,11 @@ export function useSetupWizard() {
           if (!mountedRef.current || !existing) return
           if (existing.daemonEnabled !== null && !daemonTouchedRef.current) {
             setDaemonEnabledState(existing.daemonEnabled)
+          }
+          // A configured budget — including 0 — is shown as it stands, so
+          // Save cannot silently lift someone's limit (round 8 #12).
+          if (existing.globalDailyBudget !== null && !budgetTouchedRef.current) {
+            setGlobalDailyBudgetState(existing.globalDailyBudget)
           }
         })
         return
@@ -1029,7 +1060,8 @@ export function useSetupWizard() {
   }, [])
 
   const setGlobalDailyBudget = useCallback((budget: number) => {
-    setGlobalDailyBudgetState(budget)
+    budgetTouchedRef.current = true
+    setGlobalDailyBudgetState(Number.isFinite(budget) ? Math.max(BUDGET_UNLIMITED, budget) : BUDGET_UNLIMITED)
   }, [])
 
   const setProviderModel = useCallback((id: string, model: string) => {
@@ -1108,7 +1140,11 @@ export function useSetupWizard() {
         config.STRADA_DAEMON_DAILY_BUDGET = String(daemonBudget)
       }
     }
-    if (globalDailyBudget > 0) {
+    // Unlimited says so by name; a numeric budget is sent verbatim so that a
+    // zero reaches the file and an existing one is never dropped (round 8 #12).
+    if (isUnlimitedBudget(globalDailyBudget)) {
+      config._budgetUnlimited = 'true'
+    } else {
       config.STRADA_BUDGET_DAILY_USD = String(globalDailyBudget)
     }
     config.AUTONOMOUS_DEFAULT_ENABLED = autonomyEnabled ? 'true' : 'false'
