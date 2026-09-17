@@ -443,7 +443,13 @@ export interface Campaign {
    * every artifact's coverage by its digest, so two targets never share one
    * count (plan 1.10).
    */
-  verifiedSessions?: { artifact: string; indices: number[]; byArtifact?: Record<string, number[]> };
+  verifiedSessions?: {
+    artifact: string;
+    indices: number[];
+    byArtifact?: Record<string, number[]>;
+    /** The catalogue each artifact reported, by digest: a count read on another build is not this build's (plan 0-B.4). */
+    catalogueByArtifact?: Record<string, number>;
+  };
 }
 
 // =============================================================================

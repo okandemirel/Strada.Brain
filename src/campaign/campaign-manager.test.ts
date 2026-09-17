@@ -3872,8 +3872,10 @@ describe("CampaignManager", () => {
 
     const finalPrompt = tasks.submitted[2]!.prompt;
     // Five 300-second rounds is what one run's budget allows.
-    expect(finalPrompt).toContain('unity_playthrough sessions="1-5"');
-    expect(finalPrompt).toContain('with sessions: "1-5"');
+    // An unknown catalogue with long rounds is DISCOVERED with one session
+    // (plan 0-B.4): the worker is told the same call the gate will make.
+    expect(finalPrompt).toContain('unity_playthrough sessions="1"');
+    expect(finalPrompt).toContain('with sessions: "1"');
     expect(finalPrompt).not.toContain('sessions="all"');
   }, 20_000);
 
@@ -5278,7 +5280,10 @@ describe("CampaignManager", () => {
     const longRounds = (manager as unknown as { playerRunSpec(c: unknown): { sessions?: string; deadlineSeconds?: number } })
       .playerRunSpec({ gddText: "# G\nThe game ships 3000 levels. Each round lasts 300 seconds.", milestones: [] } as never);
     expect(longRounds.deadlineSeconds).toBe(465);
-    expect(longRounds.sessions).toBe("1-5");
+    // An UNKNOWN catalogue with rounds too long for the whole cap is discovered
+    // with one session: a range guessed from time asked for levels that do
+    // not exist (plan 0-B.4, AK#4).
+    expect(longRounds.sessions).toBe("1");
     // …AND NEVER MORE LEVELS THAN THE GAME HAS. Time and the producer's cap
     // bounded the batch, the catalogue did not, so a three-level game with
     // long rounds was asked for sessions 1-5 and its driver refused levels 4

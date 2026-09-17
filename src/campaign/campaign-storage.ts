@@ -82,12 +82,12 @@ interface CampaignRow {
  * coverage at all — the next run then asks for the first batch again, which
  * measures more rather than less.
  */
-function parseVerifiedSessions(raw: string | null | undefined): { artifact: string; indices: number[]; byArtifact?: Record<string, number[]> } | undefined {
+function parseVerifiedSessions(raw: string | null | undefined): { artifact: string; indices: number[]; byArtifact?: Record<string, number[]>; catalogueByArtifact?: Record<string, number> } | undefined {
   if (raw === null || raw === undefined || raw.trim() === "") return undefined;
   try {
     const parsed: unknown = JSON.parse(raw);
     if (parsed === null || typeof parsed !== "object") return undefined;
-    const doc = parsed as { artifact?: unknown; indices?: unknown; byArtifact?: unknown };
+    const doc = parsed as { artifact?: unknown; indices?: unknown; byArtifact?: unknown; catalogueByArtifact?: unknown };
     if (typeof doc.artifact !== "string" || doc.artifact === "") return undefined;
     const readIndices = (raw: unknown): number[] | undefined => {
       if (!Array.isArray(raw)) return undefined;
@@ -108,7 +108,18 @@ function parseVerifiedSessions(raw: string | null | undefined): { artifact: stri
         if (/^[0-9a-f]{64}$/.test(digest) && read !== undefined && read.length > 0) byArtifact[digest] = read;
       }
     }
-    return { artifact: doc.artifact, indices, ...(Object.keys(byArtifact).length > 0 ? { byArtifact } : {}) };
+    const catalogueByArtifact: Record<string, number> = {};
+    if (doc.catalogueByArtifact !== null && typeof doc.catalogueByArtifact === "object" && !Array.isArray(doc.catalogueByArtifact)) {
+      for (const [digest, count] of Object.entries(doc.catalogueByArtifact as Record<string, unknown>)) {
+        if (/^[0-9a-f]{64}$/.test(digest) && typeof count === "number" && Number.isInteger(count) && count >= 1) catalogueByArtifact[digest] = count;
+      }
+    }
+    return {
+      artifact: doc.artifact,
+      indices,
+      ...(Object.keys(byArtifact).length > 0 ? { byArtifact } : {}),
+      ...(Object.keys(catalogueByArtifact).length > 0 ? { catalogueByArtifact } : {}),
+    };
   } catch {
     return undefined;
   }

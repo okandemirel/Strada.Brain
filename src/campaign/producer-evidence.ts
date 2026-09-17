@@ -206,7 +206,12 @@ export const PLAY_RUN_BUDGET_MS = 45 * 60 * 1000;
 export const DEFAULT_SESSION_DEADLINE_SECONDS = 45;
 export const DEFAULT_BOOT_DEADLINE_SECONDS = 30;
 
-/** How many sessions of this length fit ONE run's budget (at least one). */
+/**
+ * How many sessions of this length fit ONE run's budget — ZERO when none
+ * does. "At least one" answered a round whose allowance exceeds the budget
+ * with the same one-session request the producer refuses (AK#5); the
+ * batch plan decides what to do with a zero (batch-plan.ts).
+ */
 export function sessionsThatFitOneRun(
   deadlineSeconds: number,
   bootSeconds: number,
@@ -214,7 +219,7 @@ export function sessionsThatFitOneRun(
 ): number {
   const perSession = (deadlineSeconds + 5) * 1000;
   const overhead = (bootSeconds + 15) * 1000 + 30_000;
-  return Math.max(1, Math.floor((budgetMs - overhead) / perSession));
+  return Math.max(0, Math.floor((budgetMs - overhead) / perSession));
 }
 
 /**

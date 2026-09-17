@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { summarizeToolArgs } from "../agents/orchestrator-tool-execution.js";
-import { describeEvidenceShortfall, missingRequiredEvidence, requiredToolsInPrompt, requiredToolArguments, thresholdLoopTools, REQUIRED_EVIDENCE_PREFIX } from "./required-evidence.js";
+import { describeEvidenceShortfall, missingRequiredEvidence, requiredToolsInPrompt, requiredToolArguments, sessionsSatisfy, thresholdLoopTools, REQUIRED_EVIDENCE_PREFIX } from "./required-evidence.js";
 
 describe("required evidence named by the task", () => {
   it("the trace's argument copy is capped, deep-redacted, and never throws (Codex 2026-09-11 D#1, D#15, D#16)", () => {
@@ -42,9 +42,11 @@ describe("required evidence named by the task", () => {
   it("a tool that ran the WRONG way is not evidence (Codex 2026-09-11, review B #13 residue)", () => {
     const prompt = 'Prove the levels: run unity_playthrough with sessions "all" and report the catalog.';
     expect(requiredToolArguments(prompt)).toEqual([{ tool: "unity_playthrough", key: "sessions", value: "all" }]);
-    // Ran, but with one session: the task asked for all of them.
+    // Ran, but with one session that skips the first: the task asked for all
+    // of them. (Not "1": a leading batch `1-N` is how the coordinator spells
+    // "everything that fits", and it counts as coverage of "all" — plan 1.6.)
     const narrow = missingRequiredEvidence(prompt, [
-      { toolName: "unity_playthrough", success: true, args: JSON.stringify({ sessions: "1" }) },
+      { toolName: "unity_playthrough", success: true, args: JSON.stringify({ sessions: "2" }) },
     ]);
     expect(narrow).toEqual([{ tool: "unity_playthrough", attempts: 1, argument: { key: "sessions", value: "all" } }]);
     expect(describeEvidenceShortfall(narrow)).toContain('with sessions "all"');
@@ -77,7 +79,7 @@ describe("required evidence named by the task", () => {
     const two = 'run unity_playthrough with sessions "all" and mode "fast"';
     expect(missingRequiredEvidence(two, [
       { toolName: "unity_playthrough", success: true, args: JSON.stringify({ sessions: "all", mode: "slow" }) },
-      { toolName: "unity_playthrough", success: true, args: JSON.stringify({ sessions: "1", mode: "fast" }) },
+      { toolName: "unity_playthrough", success: true, args: JSON.stringify({ sessions: "2", mode: "fast" }) },
     ])).toHaveLength(1);
     expect(missingRequiredEvidence(two, [
       { toolName: "unity_playthrough", success: true, args: JSON.stringify({ sessions: "all", mode: "fast" }) },
@@ -420,5 +422,63 @@ describe("the arguments the producer ran with decide the scope (Codex 2026-09-12
         { toolName: "unity_test_run", success: true, args: JSON.stringify({ mode: "play" }) },
       ]),
     ).toEqual([]);
+  });
+});
+
+/**
+ * The declared `sessions` is coverage, not a spelling (plan 1.6, AK#3
+ * residue). The coordinator computes it from a batch plan — "all", "1-3",
+ * "13", "2,4,5" — and the producer resolves "all" against the real catalogue,
+ * so one coverage has several spellings, and a prompt persisted before the
+ * plan existed (declared "all") must still be satisfiable by the call the
+ * coordinator now asks for. Literal comparison failed every such run.
+ */
+describe("sessions are compared as coverage, not spelling (plan 1.6, AK#3)", () => {
+  it("declared \"all\" is covered by \"all\" or a leading contiguous batch", () => {
+    expect(sessionsSatisfy("all", "1-3")).toBe(true);
+    expect(sessionsSatisfy("all", "all")).toBe(true);
+    expect(sessionsSatisfy("all", "1,2,3")).toBe(true);
+    expect(sessionsSatisfy("ALL", " All ")).toBe(true);
+    // A batch that skips sessions is not everything.
+    expect(sessionsSatisfy("all", "2,4")).toBe(false);
+    expect(sessionsSatisfy("all", "2-5")).toBe(false);
+  });
+
+  it("a declared explicit set is covered by \"all\" or a superset", () => {
+    expect(sessionsSatisfy("1-3", "all")).toBe(true);
+    expect(sessionsSatisfy("1-3", "1-12")).toBe(true);
+    expect(sessionsSatisfy("1-3", "1-2")).toBe(false);
+    expect(sessionsSatisfy("13", "13")).toBe(true);
+    expect(sessionsSatisfy("13", "1-12")).toBe(false);
+    expect(sessionsSatisfy("2,4,5", "1-5")).toBe(true);
+    expect(sessionsSatisfy("2,4,5", "5, 4, 2")).toBe(true);
+  });
+
+  it("anything unparsable matches nothing", () => {
+    for (const garbage of ["smoke", "", "1-", "3-1", "1,,2", "a-b", "0"]) {
+      expect(sessionsSatisfy(garbage, "all")).toBe(false);
+      expect(sessionsSatisfy(garbage, "1-3")).toBe(false);
+      expect(sessionsSatisfy("all", garbage)).toBe(false);
+      expect(sessionsSatisfy("1-3", garbage)).toBe(false);
+    }
+  });
+
+  it("an old prompt declaring \"all\" accepts the leading batch the coordinator now asks for", () => {
+    const old = `Prove the levels.\n\n${REQUIRED_EVIDENCE_PREFIX} unity_playthrough sessions="all"`;
+    expect(missingRequiredEvidence(old, [
+      { toolName: "unity_playthrough", success: true, args: JSON.stringify({ sessions: "1-3" }) },
+    ])).toEqual([]);
+    // …and still refuses a batch that skipped sessions.
+    expect(missingRequiredEvidence(old, [
+      { toolName: "unity_playthrough", success: true, args: JSON.stringify({ sessions: "2,4" }) },
+    ])).toEqual([{ tool: "unity_playthrough", attempts: 1, argument: { key: "sessions", value: "all" } }]);
+    // A call that stated no sessions at all is still no evidence (M#2 stands).
+    expect(missingRequiredEvidence(old, [{ toolName: "unity_playthrough", success: true, args: "{}" }]))
+      .toEqual([{ tool: "unity_playthrough", attempts: 1, argument: { key: "sessions", value: "all" } }]);
+    // Every other argument is still compared literally.
+    const build = `${REQUIRED_EVIDENCE_PREFIX} unity_build_player target="1-3"`;
+    expect(missingRequiredEvidence(build, [
+      { toolName: "unity_build_player", success: true, args: JSON.stringify({ target: "all" }) },
+    ])).toHaveLength(1);
   });
 });

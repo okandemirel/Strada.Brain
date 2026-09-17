@@ -16,11 +16,7 @@ import { receiptOfFailure } from "./producer-failure.js";
 import {
   issueRunId,
   receiveEvidence,
-  nextSessionBatch,
   sessionsRequested,
-  sessionsThatFitOneRun,
-  DEFAULT_BOOT_DEADLINE_SECONDS,
-  DEFAULT_SESSION_DEADLINE_SECONDS,
   MAX_SESSIONS_PER_RUN,
   type EvidenceBinding,
   type EvidenceDecision,
@@ -46,6 +42,7 @@ import { readPlaythroughVerdict, describePlaythrough, playthroughDirective, PLAY
 import { gddPlatform, buildSatisfiesTarget, artifactIsForeign, hostTarget, type BuildTarget } from "./gdd-platform.js";
 import { readPlaymodeRun } from "./playmode-run.js";
 import type { PlayerRunSpec } from "../core/bootstrap-stages/stage-runtime.js";
+import { planSessionBatch } from "./batch-plan.js";
 import { assessNumericClaims, claimsRefusal, describeClaims, documentRequiresAnOutcome, extractActionBudget, extractNumericClaims, extractSessionAllowanceSeconds, finishedSessionIndices } from "./gdd-claims.js";
 import { entryScreenInDocument } from "./gdd-scope.js";
 import { REQUIRED_EVIDENCE_PREFIX } from "../supervisor/required-evidence.js";
@@ -5013,6 +5010,8 @@ export class CampaignManager {
       bootDeadlineSeconds?: number;
       maxActions?: number;
       outcomeRequired?: boolean;
+      unfit?: string;
+      trimmed?: string;
     } = {};
     const text = this.gddTextOf(campaign);
     if (text === undefined || text.trim() === "") return spec;
@@ -5055,56 +5054,29 @@ export class CampaignManager {
       spec.deadlineSeconds !== undefined ? Math.ceil(spec.deadlineSeconds / 2) : 0,
     );
     if (budget > 60 || stated !== undefined) spec.maxActions = budget;
-    // Every level the document claims, not just the first: the level-count
-    // proof is measured from what this run played.
-    if (claims.some((c) => c.kind === "level_count")) {
-      // "ALL" IS RESOLVED BY THE PRODUCER against its own catalogue, which is
-      // the right request while that catalogue fits in one run. Past that it
-      // is a request no single run can answer — the producer plays at most
-      // MAX_SESSIONS_PER_RUN — so the ticket could never be settled and a run
-      // that played everything it could was refused (Codex 2026-09-13 AI#5).
-      // Once a run has told us how large the game is, ask for the batch this
-      // run can actually verify; the level-count gate discloses the rest as
-      // what one run cannot reach.
-      // …AND THE BATCH ONE RUN CAN ACTUALLY PLAY. The producer refuses a
-      // request that needs more wall-clock than one run may take, so asking
-      // for every session of a game whose document gives each round five
-      // minutes came back "nothing was played" (Codex 2026-09-13 AJ#1). The
-      // ask is bounded by the same budget the producer advertises.
-      const catalogue = this.lastObservedSessionCount(campaign);
-      const fits = sessionsThatFitOneRun(spec.deadlineSeconds ?? DEFAULT_SESSION_DEADLINE_SECONDS, spec.bootDeadlineSeconds ?? DEFAULT_BOOT_DEADLINE_SECONDS);
-      // …AND NEVER MORE LEVELS THAN THE GAME HAS. Time and the producer's cap
-      // bounded the batch, the catalogue did not, so a three-level game was
-      // asked for sessions 1-5: the driver refused levels 4 and 5 and the run
-      // came back as a broken play-through (Codex 2026-09-13 AK#4). An unknown
-      // catalogue is discovered by asking for what fits, not assumed to hold
-      // whatever time allows.
-      const fitsBatch = Math.min(MAX_SESSIONS_PER_RUN, fits);
-      const batch = Math.min(fitsBatch, catalogue ?? MAX_SESSIONS_PER_RUN);
-      // THE NEXT SESSIONS NOBODY HAS PLAYED YET. Asking for "1-12" every time
-      // meant session 13 of a 13-level game was never played at all, however
-      // often the delivery ran (Codex 2026-09-13 AJ#11). Coverage already
-      // measured ON THIS ARTIFACT is skipped, so successive runs walk the
-      // catalogue instead of replaying its first batch.
-      const done = this.verifiedSessionsFor(campaign, artifactPath);
-      // A CURSOR ONLY WHERE THERE IS COVERAGE TO SKIP. With nothing played
-      // yet, "all" is the better request: the PRODUCER resolves it against
-      // the catalogue it reads now, so a game that grew since the last run is
-      // played whole rather than up to a stale count.
-      const nextBatch = catalogue === undefined || done.length === 0
-        ? undefined
-        : nextSessionBatch(catalogue, done, batch);
-      spec.sessions =
-        nextBatch !== undefined
-          ? nextBatch
-          // "ALL" WHEN TIME ALLOWS THE PRODUCER'S WHOLE CAP: the catalogue is
-          // then resolved by the producer, which reads it now rather than
-          // trusting a count from an earlier run. An explicit range is
-          // clipped to the catalogue we know about (AK#4).
-          : fitsBatch >= MAX_SESSIONS_PER_RUN && (catalogue === undefined || catalogue <= MAX_SESSIONS_PER_RUN)
-            ? "all"
-            : `1-${batch}`;
+    // THE BATCH PLAN (batch-plan.ts): the catalogue THIS artifact reported,
+    // what was played on it, the document's round and the allowance — one
+    // contract for what is asked, what is asked next, and what the worker is
+    // told (plan 0-B.4, 0-B.5, 1.6). A plan that fits nothing is not sent.
+    const plan = planSessionBatch({
+      catalogue: this.lastObservedSessionCount(campaign, artifactPath),
+      played: this.verifiedSessionsFor(campaign, artifactPath),
+      ...(longestSession > 0 ? { roundSeconds: longestSession } : {}),
+      ...(spec.deadlineSeconds === undefined ? {} : { deadlineSeconds: spec.deadlineSeconds }),
+      ...(spec.bootDeadlineSeconds === undefined ? {} : { bootSeconds: spec.bootDeadlineSeconds }),
+    });
+    if (plan.kind === "unfit") {
+      spec.unfit = plan.reason;
+      return spec;
     }
+    if (plan.trimmed !== undefined) {
+      spec.trimmed = plan.trimmed;
+      spec.deadlineSeconds = plan.deadlineSeconds;
+    }
+    // Every level the document claims, not just the first: the level-count
+    // proof is measured from what this run played. A document that claims
+    // none plays the producer's default session.
+    if (claims.some((c) => c.kind === "level_count")) spec.sessions = plan.sessions;
     return spec;
   }
 
@@ -5116,7 +5088,18 @@ export class CampaignManager {
    * not a count the game holds, and this is only used to ask for a batch a run
    * can verify (Codex 2026-09-13 AI#5).
    */
-  private lastObservedSessionCount(campaign?: Campaign): number | undefined {
+  private lastObservedSessionCount(campaign?: Campaign, artifactPath?: string): number | undefined {
+    // THE CATALOGUE OF THIS ARTIFACT (plan 0-B.4): a count read on an earlier
+    // build is not this build's — asking a rebuilt three-level game for the
+    // thirteen its predecessor had was a broken play-through (AK#4). Once a
+    // player run has reported a catalogue, only a count for THIS digest is
+    // used; a new artifact is discovered, not assumed.
+    const stored = campaign?.verifiedSessions;
+    if (stored?.catalogueByArtifact !== undefined) {
+      const digest = artifactDigest(artifactPath) ?? this.lastArtifactDigest(campaign);
+      return digest === undefined ? undefined : stored.catalogueByArtifact[digest];
+    }
+    // Rows from before the per-artifact record: the last count any run gave.
     for (const milestone of [...(campaign?.milestones ?? [])].reverse()) {
       for (const evidence of [milestone.playerPlaythrough, milestone.playthroughVerdict]) {
         const count = evidence?.found === true ? evidence.sessionCount : undefined;
@@ -5170,10 +5153,16 @@ export class CampaignManager {
     if (finished.length === 0) return;
     const previous = this.verifiedSessionsFor(campaign, artifactPath);
     const merged = [...new Set([...previous, ...finished])].sort((a, b) => a - b);
+    const count = evidence.sessionCount;
+    const catalogueByArtifact = {
+      ...(campaign.verifiedSessions?.catalogueByArtifact ?? {}),
+      ...(typeof count === "number" && Number.isInteger(count) && count >= 1 ? { [digest]: count } : {}),
+    };
     campaign.verifiedSessions = {
       artifact: digest,
       indices: merged,
       byArtifact: { ...(campaign.verifiedSessions?.byArtifact ?? {}), [digest]: merged },
+      ...(Object.keys(catalogueByArtifact).length > 0 ? { catalogueByArtifact } : {}),
     };
   }
 
@@ -5264,6 +5253,9 @@ export class CampaignManager {
     // gate reads for timing; the others are recorded per target beside it,
     // and one that cannot be played here says so.
     let spec = this.playerRunSpec(campaign, build.artifactPath);
+    // A PLAN THAT FITS NOTHING IS NOT DISPATCHED: the reason is the proof
+    // that is missing (plan 0-B.5), never a request the producer refuses.
+    if (spec.unfit !== undefined) return { found: false, missingRunner: spec.unfit };
     // THE FILE IS ONE FILE. Every player run writes the same verdict path, so
     // a second target's read found the FIRST target's verdict still sitting
     // there and reported a crashed player as a clean play-through (measured
@@ -5401,6 +5393,10 @@ export class CampaignManager {
       let theirRunId: string | undefined;
       // Its own cursor: the coverage THIS artifact has, not the primary's.
       const theirSpec = this.playerRunSpec(campaign, other.artifactPath);
+      if (theirSpec.unfit !== undefined) {
+        perTarget.push({ target: other.target, ok: false, detail: `not measured: ${theirSpec.unfit}` });
+        continue;
+      }
       const staleHere = clearVerdict();
       if (staleHere !== undefined) {
         perTarget.push({ target: other.target, ok: false, detail: `not run: ${staleHere}` });
@@ -5538,8 +5534,13 @@ export class CampaignManager {
     if (typeof catalogue !== "number" || !Number.isInteger(catalogue) || catalogue < 1) return undefined;
     const done = this.verifiedSessionsFor(campaign, artifactPath);
     if (done.length === 0) return undefined;
-    const fits = sessionsThatFitOneRun(spec.deadlineSeconds ?? DEFAULT_SESSION_DEADLINE_SECONDS, spec.bootDeadlineSeconds ?? DEFAULT_BOOT_DEADLINE_SECONDS);
-    return nextSessionBatch(catalogue, done, Math.min(MAX_SESSIONS_PER_RUN, fits, catalogue));
+    const plan = planSessionBatch({
+      catalogue,
+      played: done,
+      ...(spec.deadlineSeconds === undefined ? {} : { deadlineSeconds: spec.deadlineSeconds }),
+      ...(spec.bootDeadlineSeconds === undefined ? {} : { bootSeconds: spec.bootDeadlineSeconds }),
+    });
+    return plan.kind === "batch" ? plan.sessions : undefined;
   }
 
   /**

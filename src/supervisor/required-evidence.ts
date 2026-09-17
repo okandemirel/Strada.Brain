@@ -440,6 +440,78 @@ export function carriesTestFilter(parsed: Record<string, unknown>): boolean {
   return false;
 }
 
+/**
+ * The largest span a session range may cover before it is refused as
+ * unparsable — a guard against materialising "1-999999999", nothing more.
+ */
+const MAX_SESSION_SPAN = 10_000;
+
+/**
+ * A session spec — "1-3", "13", "2,4,5" — as the set of indices it names.
+ * Undefined when any token is not a positive integer or an ascending range.
+ */
+function parseSessionSet(spec: string): Set<number> | undefined {
+  const out = new Set<number>();
+  for (const raw of spec.split(",")) {
+    const token = raw.trim();
+    const range = /^(\d+)\s*-\s*(\d+)$/.exec(token);
+    if (range) {
+      const a = Number(range[1]);
+      const b = Number(range[2]);
+      if (a < 1 || b < a || b - a > MAX_SESSION_SPAN) return undefined;
+      for (let i = a; i <= b; i++) out.add(i);
+      continue;
+    }
+    if (!/^\d+$/.test(token)) return undefined;
+    const n = Number(token);
+    if (n < 1) return undefined;
+    out.add(n);
+  }
+  return out.size > 0 ? out : undefined;
+}
+
+/**
+ * Does the `sessions` a call actually ran COVER the `sessions` the task
+ * declared? Coverage, not spelling (plan 1.6, AK#3 residue).
+ *
+ * The coordinator computes the declared value from a batch plan — the
+ * catalogue, what fits one run, what was already played — so it may be "all",
+ * "1-3", "13" or "2,4,5", and the producer resolves "all" against the game's
+ * real catalogue. Two calls can therefore be the same coverage under different
+ * spellings, and a prompt persisted before the plan existed (declared "all")
+ * must still be satisfiable by the worker that made the call the coordinator
+ * now asks for. Literal comparison failed every such run.
+ *
+ * - Both sides are trimmed and lower-cased; "all" stays "all"; anything else
+ *   is parsed as ranges (`a-b`), comma lists and single numbers. Unparsable
+ *   on either side is no match.
+ * - Declared "all" is satisfied by "all", or by an explicit spec that starts
+ *   at 1 and is contiguous (`1-N`, or a list equal to 1..N): the coordinator
+ *   only ever asks for a leading contiguous batch when it asks for everything
+ *   that fits. A spec that skips sessions ("2,4") is not "all".
+ * - A declared explicit set S is satisfied by "all" (the whole catalogue
+ *   contains S) or by an explicit superset of S.
+ */
+export function sessionsSatisfy(declared: string, actual: string): boolean {
+  const want = declared.trim().toLowerCase();
+  const got = actual.trim().toLowerCase();
+  if (want === "all") {
+    if (got === "all") return true;
+    const set = parseSessionSet(got);
+    if (set === undefined) return false;
+    // Leading and contiguous: exactly the indices 1..N.
+    for (let i = 1; i <= set.size; i++) if (!set.has(i)) return false;
+    return true;
+  }
+  const wanted = parseSessionSet(want);
+  if (wanted === undefined) return false;
+  if (got === "all") return true;
+  const ran = parseSessionSet(got);
+  if (ran === undefined) return false;
+  for (const i of wanted) if (!ran.has(i)) return false;
+  return true;
+}
+
 /** Does this recorded argument object carry `key` with `value` (case-insensitive)? */
 export function argSatisfies(args: string, key: string, value: string): boolean {
   try {
@@ -455,6 +527,9 @@ export function argSatisfies(args: string, key: string, value: string): boolean 
       // "unfiltered" is satisfied by the flag being true OR by the run
       // carrying no filter at all.
       if (wantsWholeSuite) return got === "true" || got === want;
+      // `sessions` is compared as COVERAGE, not spelling (plan 1.6); every
+      // other argument stays literal.
+      if (key.toLowerCase() === "sessions") return sessionsSatisfy(want, got);
       return got === want;
     }
     // The key is absent. For a flag, absence is not proof either way and the

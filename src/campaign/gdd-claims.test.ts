@@ -1248,9 +1248,10 @@ describe("sessionsThatFitOneRun mirrors the producer's budget", () => {
     expect(sessionsThatFitOneRun(150, 30)).toBe(16);
     expect(sessionsThatFitOneRun(360, 30)).toBe(7);
     expect(sessionsThatFitOneRun(465, 30)).toBe(5);
-    // A session whose own allowance exceeds the whole budget still gets one
-    // run: the refusal then names one session rather than none.
-    expect(sessionsThatFitOneRun(10_000, 30)).toBe(1);
+    // A session whose own allowance exceeds the whole budget fits NONE: the
+    // batch plan trims the headroom or refuses by name (plan 0-B.5, AK#5) —
+    // "at least one" re-proposed the request the producer had just refused.
+    expect(sessionsThatFitOneRun(10_000, 30)).toBe(0);
   });
 });
 

@@ -971,6 +971,14 @@ function hasPackageMagic(path: string): boolean {
 export interface PlayerRunSpec {
   /** "all", "1-3", "2,5" — which sessions to play. */
   readonly sessions?: string;
+  /**
+   * Why NO run can be dispatched under this document: the batch plan found
+   * no allowance that both respects the round and fits one run (plan 0-B.5).
+   * A spec carrying this is not sent to a producer; the gate reports it.
+   */
+  readonly unfit?: string;
+  /** What the batch plan changed about the allowance, for the report. */
+  readonly trimmed?: string;
   readonly maxActions?: number;
   readonly deadlineSeconds?: number;
   readonly bootDeadlineSeconds?: number;
