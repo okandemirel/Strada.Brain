@@ -444,6 +444,46 @@ describe("background removal is installed, or repaired, or refused by name (audi
     expect(seq).toEqual(["probe", "pip", "probe", "pip"]);
   });
 
+  it("the ready marker is bound to the venv: a rebuilt venv is probed again, and install() clears it (Codex 2026-09-17)", async () => {
+    existingInstall();
+    const spec = getModelSpec("sd15")!;
+    const { spawn, seq } = scriptedVenv(true);
+    const runner = new LocalModelRunner(spawn);
+    await runner.textToImage(spec, "a hero", join(dir, "hero.png"), { removeBackground: true });
+    expect(seq).toEqual(["probe", "pip", "probe", "infer"]);
+    seq.length = 0;
+    // Same venv: the measurement stands.
+    await runner.textToImage(spec, "a hero", join(dir, "hero.png"), { removeBackground: true });
+    expect(seq).toEqual(["infer"]);
+    // The venv is rebuilt (a new interpreter link): the marker no longer applies.
+    rmSync(join(dir, "venv", "bin", "python3"));
+    writeFileSync(join(dir, "venv", "bin", "python3"), "rebuilt");
+    const t = new Date(Date.now() + 5_000);
+    utimesSync(join(dir, "venv", "bin", "python3"), t, t);
+    seq.length = 0;
+    await runner.textToImage(spec, "a hero", join(dir, "hero.png"), { removeBackground: true });
+    expect(seq[0]).toBe("probe");
+    expect(seq[seq.length - 1]).toBe("infer");
+    // install() changes the venv's packages: the marker is cleared before it starts.
+    expect(existsSync(join(dir, ".rmbg-ready"))).toBe(true);
+    const { spawn: okSpawn } = spawnOk();
+    await new LocalModelRunner(okSpawn).install(spec);
+    expect(existsSync(join(dir, ".rmbg-ready"))).toBe(false);
+    seq.length = 0;
+    await runner.textToImage(spec, "a hero", join(dir, "hero.png"), { removeBackground: true });
+    expect(seq[0]).toBe("probe");
+    // …and install() also forgets a remembered failure for this venv
+    // (the successful call above re-wrote the marker; clear it first).
+    await new LocalModelRunner(okSpawn).install(spec);
+    const failing = scriptedVenv(false);
+    const before = await new LocalModelRunner(failing.spawn).textToImage(spec, "a hero", join(dir, "hero.png"), { removeBackground: true });
+    expect(before.ok).toBe(false);
+    await new LocalModelRunner(okSpawn).install(spec);
+    failing.seq.length = 0;
+    await new LocalModelRunner(failing.spawn).textToImage(spec, "a hero", join(dir, "hero.png"), { removeBackground: true });
+    expect(failing.seq).toEqual(["probe", "pip"]);
+  });
+
   it("the batch path refuses the same way, with every job reported missing", async () => {
     existingInstall();
     const { spawn, seq } = scriptedVenv(false);

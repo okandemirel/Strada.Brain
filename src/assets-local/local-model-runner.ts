@@ -139,7 +139,12 @@ function ROOT_DIR(): string {
 const VENV = (): string => join(ROOT_DIR(), "venv");
 const SCRIPTS = (): string => join(ROOT_DIR(), "scripts");
 const WEIGHTS = (): string => join(ROOT_DIR(), "weights");
-/** Written once the venv has been MEASURED to import rembg + onnxruntime. */
+/**
+ * Written once the venv has been MEASURED to import rembg + onnxruntime.
+ * Holds the venv identity it was measured on: a rebuilt or broken venv
+ * (different identity) is probed again instead of trusted (Codex
+ * 2026-09-17: the marker was never invalidated).
+ */
 const RMBG_READY = (): string => join(ROOT_DIR(), ".rmbg-ready");
 /** The import the txt2img driver performs under --rmbg; probed with the same names. */
 export const RMBG_IMPORT_PROBE = "import rembg, onnxruntime";
@@ -256,6 +261,7 @@ export class LocalModelRunner {
       mkdirSync(SCRIPTS(), { recursive: true });
       mkdirSync(WEIGHTS(), { recursive: true });
       this.writeScripts();
+      this.forgetBackgroundRemoval();
 
       if (!this.venvReady()) {
         onProgress?.("creating venv…");
@@ -516,7 +522,8 @@ export class LocalModelRunner {
     env: NodeJS.ProcessEnv = this.envWithWeights(),
     onProgress?: (line: string) => void,
   ): Promise<{ ok: true } | { ok: false; detail: string }> {
-    if (existsSync(RMBG_READY())) return { ok: true };
+    const identity = venvIdentity();
+    if (identity !== "" && this.readRmbgMarker() === identity) return { ok: true };
     const remembered = failedRepairs.get(VENV());
     if (remembered !== undefined && remembered.identity === venvIdentity()) {
       return { ok: false, detail: `${remembered.detail} (repair already attempted for this venv; not retried until it is reinstalled)` };
@@ -546,8 +553,21 @@ export class LocalModelRunner {
         return { ok: false, detail };
       }
     }
-    try { writeFileSync(RMBG_READY(), new Date().toISOString() + "\n"); } catch { /* marker is a cache */ }
+    try { writeFileSync(RMBG_READY(), venvIdentity() + "\n"); } catch { /* marker is a cache */ }
     return { ok: true };
+  }
+
+  private readRmbgMarker(): string {
+    try { return readFileSync(RMBG_READY(), "utf8").trim(); } catch { return ""; }
+  }
+
+  /**
+   * install() is about to create or change the venv: what was measured on
+   * the old one (ready marker, remembered failure) no longer applies.
+   */
+  private forgetBackgroundRemoval(): void {
+    try { rmSync(RMBG_READY(), { force: true }); } catch { /* cache */ }
+    failedRepairs.delete(VENV());
   }
 
   private envWithWeights(): NodeJS.ProcessEnv {
