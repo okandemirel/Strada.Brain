@@ -5583,9 +5583,16 @@ export class CampaignManager {
     // absent (Codex 2026-09-12 AD#2). A sprint's own status is not evidence
     // about the requirement; the audit's answer is, and a requirement already
     // judged closed against this tree is not re-asked.
-    const failedRepairs = campaign.milestones.filter(
-      (m) => m.id.startsWith("mcov") && (m.status === "failed" || m.fromAudit === true),
-    );
+    // EVERY COVERAGE SPRINT IS AN OBLIGATION, whatever created it and however
+    // it settled. Membership used to be "failed, or created by an audit
+    // round" — and the sprints the QUEUE drains (the audit's overflow, and
+    // the gaps a final sprint reported) carry no audit mark, so a queued
+    // repair that went green without implementing its requirement was never
+    // asked about at closure and the campaign could finish with the feature
+    // absent (audit 06.1, 2026-09-13). The audit mark now counts rounds only;
+    // closure decides what is closed. Legacy rows without `coverageGap` keep
+    // their requirement through coverageGapOf (prompt line, then title).
+    const failedRepairs = campaign.milestones.filter((m) => m.id.startsWith("mcov"));
     const unclosed = failedRepairs.filter((m) => !closureHolds(m, revisionForClosure));
     if (unclosed.length === 0) return { open: [] };
     const gddForGaps = campaign.gddText ?? (campaign.gddPath ? readGddFile(this.projectRoot, campaign.gddPath) : undefined);

@@ -2319,6 +2319,12 @@ describe("CampaignManager", () => {
     // reopens completed sprints, because a fresh audit outranks a finished
     // one. So a SUCCESSFUL repair was scheduled again on every settlement:
     // an endless series of coverage sprints instead of a delivery.
+    // Since 2026-09-17 every coverage sprint is asked about at closure (audit
+    // 06.1), this one included: the audit says the repaired capability IS
+    // delivered, so the campaign delivers. (A green sprint's own word is not
+    // evidence; the audit's answer is.)
+    (manager as unknown as { planner: { resolveCoverageGaps: unknown } }).planner.resolveCoverageGaps =
+      vi.fn(async (_gdd: string, reqs: readonly string[]) => ({ closed: [...reqs], open: [] }));
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
     const settled = (n: number): Promise<void> =>
       waitFor(() => expect(tasks.submitted).toHaveLength(n), { timeout: 15_000 });
@@ -3777,6 +3783,36 @@ describe("CampaignManager", () => {
     expect(everAsked.has("Req31: absent")).toBe(true);
   });
 
+  it("a LEGACY green repair with no coverageGap and no audit mark is still an obligation (Codex plan review #5)", async () => {
+    // Rows written before `coverageGap` existed carry their requirement in
+    // the prompt's own line. Widening closure membership to every coverage
+    // sprint must not drop them, and a green one without the audit mark is
+    // exactly the row that used to escape.
+    const seen: string[][] = [];
+    const openRequirements = (manager as unknown as {
+      openRequirements(c: Campaign): Promise<{ open: string[] }>;
+    }).openRequirements.bind(manager);
+    (manager as unknown as { planner: { resolveCoverageGaps: unknown } }).planner.resolveCoverageGaps =
+      vi.fn(async (_gdd: string, reqs: readonly string[]) => {
+        seen.push([...reqs]);
+        return { closed: [], open: [...reqs] };
+      });
+    const campaign = {
+      id: "c_legacy", chatId: "chat1", channelType: "cli", projectRoot,
+      gddText: "# GDD", gddPath: "docs/Game_GDD.md", state: "executing", currentMilestone: 0,
+      createdAt: Date.now(), updatedAt: Date.now(),
+      milestones: [{
+        id: "mcov1", title: "Coverage completion 1.1 — Save progress across restarts: no milestone i",
+        prompt: "The audit found this undelivered:\r\n- Save progress across restarts: no milestone implemented it\r\n\r\nImplement it.",
+        status: "green", attempts: 1,
+      }],
+    } as unknown as Campaign;
+
+    const result = await openRequirements(campaign);
+    expect(seen.flat()).toContain("Save progress across restarts: no milestone implemented it");
+    expect(result.open).toContain("Save progress across restarts: no milestone implemented it");
+  });
+
   it("a requirement is not its diagnostics (Codex 2026-09-12 AD#15)", () => {
     // Reproduced by Codex: the same missing capability reported as "…,
     // attempt 1" and "…, attempt 2" were two requirements. Each rewording got
@@ -3873,6 +3909,77 @@ describe("CampaignManager", () => {
     expect(storage.get(campaign.id)!.state).not.toBe("done");
     const report = messages.map((m) => m.text).join("\n");
     expect(report).toContain("Save progress across restarts");
+  });
+
+  it("a QUEUED repair that went green without its requirement is still asked at closure (audit 06.1)", async () => {
+    // Five gaps from one audit: four are scheduled, the fifth is queued and
+    // drained by the next round WITHOUT the audit mark. Closure membership
+    // was "failed, or created by an audit", so the drained sprint — green,
+    // requirement not implemented — was never asked about and the campaign
+    // could finish with the feature absent.
+    tasks = new FakeTaskManager();
+    storage.close();
+    storage = new CampaignStorage(join(dir, `campaigns-queued-green-${messages.length}.db`));
+    const QUEUED = "Leaderboard: no milestone implemented the score table";
+    const planner = {
+      planMilestones: vi.fn().mockResolvedValue(LADDER),
+      auditCoverage: vi
+        .fn()
+        .mockResolvedValueOnce([
+          "Save progress across restarts: no milestone implemented it",
+          "Settings menu: no milestone implemented it",
+          "Pause overlay: no milestone implemented it",
+          "Tutorial prompts: no milestone implemented it",
+          QUEUED,
+        ])
+        .mockResolvedValue([]),
+      // Everything else closes; the queued one is still not delivered.
+      resolveCoverageGaps: vi.fn(async (_gdd: string, reqs: readonly string[]) => ({
+        closed: reqs.filter((r) => r !== QUEUED),
+        open: reqs.filter((r) => r === QUEUED),
+      })),
+    } as unknown as CampaignPlanner;
+    manager = new CampaignManager({
+      storage,
+      planner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async (chatId, text) => messages.push({ chatId, text }),
+      projectRoot,
+      verifyCompile: async () => compileVerdict,
+      buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
+      runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); afterPlayerRun?.(); },
+      retryAdoptionGraceMs: 10,
+      completedSettleDelayMs: 0,
+      milestoneTimeBoxMs: 60 * 60_000,
+    });
+    manager.attachEvents();
+
+    const campaign = manager.startFromGdd(ctx, "# GDD text", "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    mkdirSync(join(projectRoot, "Recordings", "playthrough"), { recursive: true });
+    writeFileSync(join(projectRoot, "Recordings", "playthrough", "frame_00099.png"), Buffer.concat([Buffer.from("89504e470d0a1a0a", "hex"), Buffer.alloc(4096, 7)]));
+    settleMilestone("final report"); // the audit finds five gaps → four sprints, one queued
+
+    for (let i = 0; i < 14 && storage.get(campaign.id)!.state === "executing"; i++) {
+      const before = tasks.submitted.length;
+      settleMilestone("all 42 tests pass, frames captured");
+      await waitFor(
+        () => expect(tasks.submitted.length > before || storage.get(campaign.id)!.state !== "executing").toBe(true),
+        { timeout: 15_000 },
+      );
+    }
+    // The queued gap got its own sprint (drained from the queue, no audit mark)…
+    const drained = storage.get(campaign.id)!.milestones.find((m) => m.coverageGap === QUEUED);
+    expect(drained).toBeDefined();
+    expect(drained!.fromAudit).not.toBe(true);
+    // …and although it went green, the campaign is not delivered with the
+    // requirement still open.
+    expect(storage.get(campaign.id)!.state).not.toBe("done");
+    expect(messages.map((m) => m.text).join("\n")).toContain("Leaderboard");
   });
 
   it("schedules one gap sprint per audit finding, art first, and moves past a spent one", async () => {
