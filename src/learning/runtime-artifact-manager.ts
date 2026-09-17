@@ -7,6 +7,7 @@ import type {
   RuntimeArtifact,
   RuntimeArtifactKind,
   RuntimeArtifactMatch,
+  RuntimeArtifactOwnerScope,
   RuntimeArtifactState,
   RuntimeArtifactStats,
   TrajectoryId,
@@ -52,6 +53,48 @@ export interface RuntimeArtifactEvaluationInput {
   readonly failureFingerprint?: string;
 }
 
+/**
+ * ROUND 11 #1 — THE ARTIFACT INHERITS ITS SOURCE INSTINCT'S REACH.
+ *
+ * A private instinct that earns five clean exposures becomes a runtime artifact,
+ * and the artifact row carried the project scope and the source instinct ids but
+ * no owner — while matching accepted no identity. So Alice's private correction
+ * was excluded from Bob's instinct retrieval (round 10 #3) and then handed to
+ * him in the same prompt as "runtime self-improvement" guidance.
+ *
+ * The owner comes from the instinct the artifact is made of: a 'user'-scoped
+ * instinct with a recorded owner makes a private artifact; a 'user'-scoped
+ * instinct whose owner is unrecorded makes an artifact that reaches NOBODY
+ * (round 10 #3's lesson — "keep it reachable or learning goes dark" is how one
+ * person's correction became everybody's rule); anything else is public.
+ */
+export function runtimeArtifactOwnershipOf(instinct: Instinct): {
+  ownerScope: RuntimeArtifactOwnerScope;
+  ownerUserId?: string;
+} {
+  if (instinct.scopeType !== "user") return { ownerScope: "public" };
+  const owner = instinct.userId?.trim();
+  return owner ? { ownerScope: "user", ownerUserId: owner } : { ownerScope: "unknown" };
+}
+
+/**
+ * May `userId` be shown this artifact's guidance? (round 11 #1)
+ *
+ * 'unknown' reaches nobody — including an unidentified caller — because an
+ * artifact whose ownership could not be established may be carrying somebody's
+ * private rule.
+ */
+export function runtimeArtifactVisibleTo(
+  artifact: Pick<RuntimeArtifact, "ownerScope" | "ownerUserId">,
+  userId: string | undefined,
+): boolean {
+  const scope = artifact.ownerScope ?? "unknown";
+  if (scope === "public") return true;
+  if (scope !== "user") return false;
+  const asking = userId?.trim();
+  return Boolean(asking) && artifact.ownerUserId === asking;
+}
+
 export function createProjectScopeFingerprint(projectPath: string | null | undefined): string | undefined {
   const normalizedPath = projectPath?.trim();
   if (!normalizedPath) {
@@ -73,6 +116,10 @@ export class RuntimeArtifactManager {
   } {
     const kind = this.determineArtifactKind(instinct);
     const existing = this.storage.getRuntimeArtifactBySourceInstinct(instinct.id, kind, ["shadow", "active"]);
+    // r11 #1: the owner travels with the guidance from the moment the artifact
+    // is made, and a merge that would widen the reach collapses to 'unknown'
+    // rather than quietly publishing one person's rule.
+    const ownership = mergeOwnership(existing, runtimeArtifactOwnershipOf(instinct));
     const scopeFingerprint = createProjectScopeFingerprint(projectPath);
     const now = Date.now();
     const guidance = this.buildGuidance(instinct, kind);
@@ -93,6 +140,8 @@ export class RuntimeArtifactManager {
           requiredCapabilities: this.inferRequiredCapabilities(kind),
           sourceInstinctIds: mergeIds(existing.sourceInstinctIds, [instinct.id]),
           sourceTrajectoryIds,
+          ownerScope: ownership.ownerScope,
+          ...(ownership.ownerUserId ? { ownerUserId: ownership.ownerUserId } : {}),
           updatedAt: now,
         }
       : {
@@ -111,6 +160,8 @@ export class RuntimeArtifactManager {
           sourceTrajectoryIds,
           stats: createDefaultRuntimeArtifactStats(),
           shadowActivatedAt: now,
+          ownerScope: ownership.ownerScope,
+          ...(ownership.ownerUserId ? { ownerUserId: ownership.ownerUserId } : {}),
           createdAt: now,
           updatedAt: now,
         };
@@ -148,11 +199,19 @@ export class RuntimeArtifactManager {
     projectWorldFingerprint?: string;
     availableToolNames?: readonly string[];
     maxMatches?: number;
+    /**
+     * ROUND 11 #1 — WHOSE TURN THIS IS. Omitted (or unknown) ⇒ only public
+     * artifacts, exactly as instinct retrieval treats an unidentified caller.
+     * The gate runs in storage, before the candidate LIMIT, so another person's
+     * private artifacts cannot crowd out this caller's own.
+     */
+    userId?: string;
   }): RuntimeArtifactMatches {
     const availableTools = new Set((params.availableToolNames ?? []).map((name) => name.trim().toLowerCase()));
     const candidates = this.storage.getRuntimeArtifacts({
       states: ["shadow", "active"],
       limit: 64,
+      visibility: { ...(params.userId?.trim() ? { userId: params.userId.trim() } : {}) },
     });
     const matches = candidates
       .map((artifact) => this.matchArtifact(artifact, params.taskDescription, params.taskType, params.projectWorldFingerprint, availableTools))
@@ -285,6 +344,13 @@ export class RuntimeArtifactManager {
         continue;
       }
       if (allowedStates && !allowedStates.has(artifact.state)) {
+        continue;
+      }
+      // r11 #1: the identity key is the user id when one is known and the CHAT
+      // id otherwise, so a private artifact evaluated in a shared chat used to
+      // appear in that chat's activity for everybody. A private artifact is
+      // listed only for the identity that owns it.
+      if (!runtimeArtifactVisibleTo(artifact, normalizedIdentityKey)) {
         continue;
       }
       artifacts.push(artifact);
@@ -441,6 +507,30 @@ export class RuntimeArtifactManager {
       usableForExecutionGuidance: artifact.state === "active" && requiredToolsSatisfied && matchScore >= GUIDANCE_THRESHOLD,
     };
   }
+}
+
+/**
+ * The ownership of an artifact that is being re-materialized (r11 #1).
+ *
+ * An existing artifact is looked up BY its source instinct, so in practice the
+ * owner is the same one it already had. When it is not — a merged instinct, a
+ * re-owned rule — the reach must not silently WIDEN: two different owners, or an
+ * owner replaced by a public source, collapse to 'unknown' so a person decides.
+ * Narrowing (public ⇒ a named owner) is always safe.
+ */
+function mergeOwnership(
+  existing: RuntimeArtifact | null,
+  incoming: { ownerScope: RuntimeArtifactOwnerScope; ownerUserId?: string },
+): { ownerScope: RuntimeArtifactOwnerScope; ownerUserId?: string } {
+  if (!existing || existing.ownerScope === undefined) return incoming;
+  if (existing.ownerScope === incoming.ownerScope && existing.ownerUserId === incoming.ownerUserId) {
+    return incoming;
+  }
+  if (existing.ownerScope === "public") return incoming;
+  if (incoming.ownerScope === "user" && existing.ownerScope === "user" && existing.ownerUserId === incoming.ownerUserId) {
+    return incoming;
+  }
+  return { ownerScope: "unknown" };
 }
 
 function createDefaultRuntimeArtifactStats(): RuntimeArtifactStats {

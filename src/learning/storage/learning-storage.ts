@@ -20,6 +20,7 @@ import type {
   InstinctStatus,
   RuntimeArtifact,
   RuntimeArtifactId,
+  RuntimeArtifactOwnerScope,
   RuntimeArtifactStats,
   Trajectory,
   TrajectoryId,
@@ -77,9 +78,26 @@ const NOT_BOOKKEEPING_S2 = `COALESCE(s2.scope_type, 'project') NOT IN (${BOOKKEE
 const EFFECTIVE_SCOPE_TYPE_SQL = `(SELECT COALESCE(s2.scope_type, 'project') FROM instinct_scopes s2
       WHERE s2.instinct_id = i.id AND ${NOT_BOOKKEEPING_S2}
       ${NARROWEST_SCOPE_ORDER} LIMIT 1)`;
-const EFFECTIVE_OWNER_SQL = `(SELECT s2.user_id FROM instinct_scopes s2
-      WHERE s2.instinct_id = i.id AND ${NOT_BOOKKEEPING_S2}
-      ${NARROWEST_SCOPE_ORDER} LIMIT 1)`;
+/**
+ * Round 11 #6 — ONLY A PRIVATE ROW ESTABLISHES PRIVATE OWNERSHIP, AND ONLY WHEN
+ * IT IS THE ONLY ANSWER.
+ *
+ * The owner used to be "the user_id on whichever row sorted first", over every
+ * non-bookkeeping row. Two things were wrong with that. A `project` row that
+ * happens to carry a user_id (createInstinct writes the field whatever the
+ * scope) is a project association, not an ownership record. And an instinct with
+ * private rows for two different people has NO owner — it has a conflict, and
+ * naming one of them makes the rule vanish for the other while it keeps working
+ * for the winner. So: private rows only, and NULL unless exactly one identity
+ * appears among them. NULL for a 'user'-scoped instinct means it reaches nobody
+ * ({@link ownershipClause}) and {@link LearningStorage.quarantineOwnerlessPrivateInstincts}
+ * holds it out explicitly.
+ */
+const PRIVATE_OWNER_ROWS_SQL = `FROM instinct_scopes s2
+      WHERE s2.instinct_id = i.id AND COALESCE(s2.scope_type, 'project') = 'user'
+        AND s2.user_id IS NOT NULL`;
+const EFFECTIVE_OWNER_SQL = `(SELECT CASE WHEN COUNT(DISTINCT s2.user_id) = 1 THEN MIN(s2.user_id) END
+      ${PRIVATE_OWNER_ROWS_SQL})`;
 
 const NARROWEST_SCOPE_SUBQUERIES = `
     ${EFFECTIVE_SCOPE_TYPE_SQL} AS scope_type,
@@ -101,6 +119,9 @@ function ownershipClause(userId: string | undefined): { sql: string; params: str
   if (userId === undefined) {
     return { sql: ` AND COALESCE(${EFFECTIVE_SCOPE_TYPE_SQL}, 'project') != 'user'`, params: [] };
   }
+  // Round 11 #6: `= ?` against the SINGLE private owner. When the private rows
+  // disagree (or name nobody) EFFECTIVE_OWNER_SQL is NULL, `NULL = ?` is NULL,
+  // and the instinct reaches nobody rather than whoever sorted first.
   return {
     sql: ` AND (COALESCE(${EFFECTIVE_SCOPE_TYPE_SQL}, 'project') != 'user' OR ${EFFECTIVE_OWNER_SQL} = ?)`,
     params: [userId],
@@ -249,6 +270,11 @@ CREATE TABLE IF NOT EXISTS runtime_artifacts (
   rejected_at INTEGER,
   retired_at INTEGER,
   last_state_reason TEXT,
+  -- Round 11 #1: who may be shown this guidance. 'unknown' is the column
+  -- default so every row written before this existed starts out reaching
+  -- NOBODY until resolveRuntimeArtifactOwnership() can establish an owner.
+  owner_scope TEXT NOT NULL DEFAULT 'unknown',
+  owner_user_id TEXT,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -339,6 +365,16 @@ export class LearningStorage {
       this.quarantineOwnerlessPrivateInstincts();
     } catch {
       // Best-effort: the ownership CLAUSE already refuses to serve these rows.
+    }
+
+    // Round 11 #1: the same sweep for the OTHER carrier. Every runtime artifact
+    // row written before ownership was carried reaches nobody until its owner
+    // can be re-derived from the source instincts still on disk.
+    try {
+      this.quarantineUnownedRuntimeArtifacts();
+    } catch {
+      // Best-effort: getRuntimeArtifacts' visibility gate already refuses
+      // 'unknown' rows, so a failed sweep leaks nothing.
     }
 
     // Prepare commonly used statements
@@ -501,7 +537,10 @@ export class LearningStorage {
         confidence_before REAL NOT NULL,
         confidence_after REAL NOT NULL,
         status_at TEXT NOT NULL,
-        timestamp INTEGER NOT NULL
+        timestamp INTEGER NOT NULL,
+        -- Round 11 #8: when the run was SHOWN the guidance. The timestamp column
+        -- is when the credit SETTLED, which since round 10 #14 is a queue hop later.
+        exposed_at INTEGER
       );
       CREATE INDEX IF NOT EXISTS idx_credit_log_instinct ON instinct_credit_log(instinct_id, timestamp DESC);
     `);
@@ -527,6 +566,14 @@ export class LearningStorage {
       'ALTER TABLE instincts ADD COLUMN seed INTEGER DEFAULT 0',
       "ALTER TABLE instinct_scopes ADD COLUMN scope_type TEXT DEFAULT 'project'",
       'ALTER TABLE instinct_scopes ADD COLUMN user_id TEXT',
+      // Round 11 #1: ownership on the artifact. Existing rows get 'unknown' —
+      // they reach nobody until resolveRuntimeArtifactOwnership() establishes
+      // an owner or quarantines them.
+      "ALTER TABLE runtime_artifacts ADD COLUMN owner_scope TEXT NOT NULL DEFAULT 'unknown'",
+      'ALTER TABLE runtime_artifacts ADD COLUMN owner_user_id TEXT',
+      // Round 11 #8: WHEN the run was shown the guidance, as distinct from when
+      // its credit settled (timestamp). NULL on every row written before this.
+      'ALTER TABLE instinct_credit_log ADD COLUMN exposed_at INTEGER',
     ];
     for (const sql of v2FactorColumns) {
       try { this.db.prepare(sql).run(); } catch { /* column already exists */ }
@@ -1419,10 +1466,12 @@ export class LearningStorage {
    * one person's correction became everybody's rule. It cannot simply be
    * deleted — it is somebody's learning — so:
    *
-   *  - if ANY other real (non-bookkeeping) scope row for the same instinct names
-   *    an owner, that owner is written onto the ownerless rows and the instinct
-   *    keeps working, for that person only;
-   *  - otherwise the instinct is QUARANTINED: held out of retrieval and
+   *  - if the instinct's PRIVATE scope rows name exactly ONE identity, that
+   *    owner is written onto the ownerless rows and the instinct keeps working,
+   *    for that person only (round 11 #6: one identity, and only from a private
+   *    row — a project/bookkeeping association is not an ownership record);
+   *  - otherwise — no private owner recorded anywhere, or private rows naming
+   *    DIFFERENT people — the instinct is QUARANTINED: held out of retrieval and
    *    suggestion (the same status a permanent teaching that kept being wrong
    *    gets), still present to be audited or re-owned by hand.
    *
@@ -1442,10 +1491,24 @@ export class LearningStorage {
     let ownerRecovered = 0;
     let quarantined = 0;
 
+    // ROUND 11 #6: a UNIQUE, AUTHORITATIVE owner, or none.
+    //
+    // This used to be `SELECT user_id ... WHERE user_id IS NOT NULL AND NOT
+    // bookkeeping ORDER BY created_at LIMIT 1` — the first non-null owner on any
+    // kind of row, adopted without ever asking whether it was the only one. An
+    // instinct with private rows for Alice and Bob was therefore ADOPTED by
+    // whichever sorted first: it stayed active for that person and silently
+    // vanished for the other. And a 'project' row carrying a user_id (createInstinct
+    // writes the field whatever the scope) established private ownership, which
+    // a project association has no authority to do.
+    //
+    // So: private rows only, and a count, not a pick. Two owners is a conflict
+    // to be quarantined and re-owned by hand, not a coin toss.
     const recoverOwner = this.db!.prepare(`
-      SELECT s2.user_id AS user_id FROM instinct_scopes s2
-      WHERE s2.instinct_id = ? AND s2.user_id IS NOT NULL AND ${NOT_BOOKKEEPING_S2}
-      ORDER BY s2.created_at ASC LIMIT 1
+      SELECT COUNT(DISTINCT s2.user_id) AS owner_count, MIN(s2.user_id) AS user_id
+      FROM instinct_scopes s2
+      WHERE s2.instinct_id = ? AND COALESCE(s2.scope_type, 'project') = 'user'
+        AND s2.user_id IS NOT NULL
     `);
     const adoptOwner = this.db!.prepare(
       "UPDATE instinct_scopes SET user_id = ? WHERE instinct_id = ? AND COALESCE(scope_type, 'project') = 'user' AND user_id IS NULL"
@@ -1455,11 +1518,13 @@ export class LearningStorage {
     );
 
     for (const { id } of ownerless) {
-      const recovered = recoverOwner.get(id) as { user_id: string | null } | undefined;
-      if (recovered?.user_id) {
+      const recovered = recoverOwner.get(id) as { owner_count: number; user_id: string | null } | undefined;
+      if (recovered?.owner_count === 1 && recovered.user_id) {
         adoptOwner.run(recovered.user_id, id);
         ownerRecovered++;
       } else {
+        // No private owner at all, or more than one: ambiguous ownership is not
+        // an owner. Held out of retrieval, still on disk to be audited.
         quarantine.run(Date.now(), id);
         quarantined++;
       }
@@ -1978,12 +2043,23 @@ export class LearningStorage {
 
   upsertRuntimeArtifact(artifact: RuntimeArtifact): void {
     this.ensureConnection();
+    // Round 11 #1: ownership is never left to the column default on a live
+    // write. The caller may state it (materializeShadowArtifact does, from the
+    // instinct it holds); otherwise it is derived from the source instincts.
+    const ownership: { scope: RuntimeArtifactOwnerScope; ownerUserId?: string } =
+      artifact.ownerScope !== undefined
+        ? {
+            scope: artifact.ownerScope,
+            ...(artifact.ownerUserId ? { ownerUserId: artifact.ownerUserId } : {}),
+          }
+        : this.deriveRuntimeArtifactOwnership(artifact.sourceInstinctIds.map(String), false);
     this.db!.prepare(`
       INSERT INTO runtime_artifacts
       (id, kind, state, name, description, guidance, task_types, task_patterns, project_world_fingerprint,
        required_tool_names, required_capabilities, source_instinct_ids, source_trajectory_ids, stats,
-       shadow_activated_at, promoted_at, rejected_at, retired_at, last_state_reason, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       shadow_activated_at, promoted_at, rejected_at, retired_at, last_state_reason, owner_scope, owner_user_id,
+       created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         kind = excluded.kind,
         state = excluded.state,
@@ -2003,6 +2079,8 @@ export class LearningStorage {
         rejected_at = excluded.rejected_at,
         retired_at = excluded.retired_at,
         last_state_reason = excluded.last_state_reason,
+        owner_scope = excluded.owner_scope,
+        owner_user_id = excluded.owner_user_id,
         created_at = excluded.created_at,
         updated_at = excluded.updated_at
     `).run(
@@ -2025,9 +2103,138 @@ export class LearningStorage {
       artifact.rejectedAt ?? null,
       artifact.retiredAt ?? null,
       artifact.lastStateReason ?? null,
+      ownership.scope,
+      ownership.ownerUserId ?? null,
       artifact.createdAt,
       artifact.updatedAt,
     );
+  }
+
+  /**
+   * ROUND 11 #1 — WHOSE GUIDANCE IS THIS ARTIFACT CARRYING?
+   *
+   * An artifact is a copy of its source instincts' guidance in another shape, so
+   * its reach is theirs. Derived from the source instincts' PRIVATE scope rows
+   * (the same authority {@link EFFECTIVE_OWNER_SQL} uses — a project association
+   * is not an ownership record):
+   *
+   *  - any private source, one identity across all of them ⇒ 'user', that owner;
+   *  - private sources naming DIFFERENT people, or a private source whose owner
+   *    is unrecorded ⇒ 'unknown' (reaches nobody, awaiting a human);
+   *  - no private source ⇒ 'public', which is every artifact the system has
+   *    generated from project/global learning.
+   *
+   * `missingSourceIsUnknown` is the one difference between the two callers. On a
+   * WRITE the caller had the instinct in hand, so a source id that is not in the
+   * instincts table is a stale merge reference, not evidence of a private rule.
+   * For the LEGACY SWEEP there is no such context: a row whose sources are all
+   * gone cannot be attributed to anybody, and guessing 'public' is the leak.
+   */
+  private deriveRuntimeArtifactOwnership(
+    sourceInstinctIds: readonly string[],
+    missingSourceIsUnknown: boolean,
+  ): { scope: RuntimeArtifactOwnerScope; ownerUserId?: string } {
+    const owners = new Set<string>();
+    let sawUnownedPrivate = false;
+    let sawMissingSource = false;
+
+    const lookup = this.db!.prepare(`
+      SELECT
+        (SELECT COUNT(*) FROM instincts WHERE id = ?) AS present,
+        (SELECT COUNT(*) FROM instinct_scopes s
+          WHERE s.instinct_id = ? AND COALESCE(s.scope_type, 'project') = 'user') AS private_rows,
+        (SELECT COUNT(DISTINCT s.user_id) FROM instinct_scopes s
+          WHERE s.instinct_id = ? AND COALESCE(s.scope_type, 'project') = 'user'
+            AND s.user_id IS NOT NULL) AS owner_count,
+        (SELECT MIN(s.user_id) FROM instinct_scopes s
+          WHERE s.instinct_id = ? AND COALESCE(s.scope_type, 'project') = 'user'
+            AND s.user_id IS NOT NULL) AS owner
+    `);
+
+    for (const rawId of sourceInstinctIds) {
+      const id = String(rawId).trim();
+      if (!id) continue;
+      const row = lookup.get(id, id, id, id) as {
+        present: number;
+        private_rows: number;
+        owner_count: number;
+        owner: string | null;
+      };
+      if (row.present === 0) {
+        sawMissingSource = true;
+        continue;
+      }
+      if (row.private_rows === 0) continue;
+      if (row.owner_count === 1 && row.owner) {
+        owners.add(row.owner);
+      } else {
+        // A private source with no owner, or with more than one: unattributable.
+        sawUnownedPrivate = true;
+      }
+    }
+
+    if (sawUnownedPrivate || owners.size > 1) return { scope: "unknown" };
+    if (owners.size === 1) return { scope: "user", ownerUserId: [...owners][0]! };
+    if (missingSourceIsUnknown && sawMissingSource) return { scope: "unknown" };
+    return { scope: "public" };
+  }
+
+  /**
+   * RESOLVE OR QUARANTINE EVERY RUNTIME ARTIFACT WITH NO RECORDED OWNERSHIP
+   * (round 11 #1) — the artifact-side twin of
+   * {@link quarantineOwnerlessPrivateInstincts}.
+   *
+   * Every row written before ownership was carried has `owner_scope='unknown'`
+   * (the column default) and therefore reaches nobody. This re-derives ownership
+   * from the source instincts still on disk; what cannot be attributed stays
+   * 'unknown' and is counted as quarantined, so a caller never mistakes a no-op
+   * for a sweep. Idempotent — safe on every boot.
+   */
+  quarantineUnownedRuntimeArtifacts(): { ownerRecovered: number; madePublic: number; quarantined: number } {
+    this.ensureConnection();
+    const rows = this.db!.prepare(
+      "SELECT id, source_instinct_ids FROM runtime_artifacts WHERE COALESCE(owner_scope, 'unknown') = 'unknown'",
+    ).all() as Array<{ id: string; source_instinct_ids: string }>;
+
+    const update = this.db!.prepare(
+      "UPDATE runtime_artifacts SET owner_scope = ?, owner_user_id = ? WHERE id = ?",
+    );
+    let ownerRecovered = 0;
+    let madePublic = 0;
+    let quarantined = 0;
+
+    for (const row of rows) {
+      let sources: string[] = [];
+      try {
+        const parsed = JSON.parse(row.source_instinct_ids) as unknown;
+        if (Array.isArray(parsed)) sources = parsed.map((v) => String(v));
+      } catch {
+        // Unreadable source list: nothing to attribute it to.
+      }
+      const ownership = this.deriveRuntimeArtifactOwnership(sources, true);
+      if (ownership.scope === "user" && ownership.ownerUserId) {
+        update.run("user", ownership.ownerUserId, row.id);
+        ownerRecovered++;
+      } else if (ownership.scope === "public") {
+        update.run("public", null, row.id);
+        madePublic++;
+      } else {
+        quarantined++;
+      }
+    }
+
+    return { ownerRecovered, madePublic, quarantined };
+  }
+
+  /**
+   * TEST SEAM: blank an artifact's recorded ownership, reproducing a row written
+   * before {@link RuntimeArtifact.ownerScope} existed. Not used in production.
+   */
+  debugClearRuntimeArtifactOwnership(artifactId: string): void {
+    this.ensureConnection();
+    this.db!.prepare(
+      "UPDATE runtime_artifacts SET owner_scope = 'unknown', owner_user_id = NULL WHERE id = ?",
+    ).run(artifactId);
   }
 
   getRuntimeArtifact(id: string): RuntimeArtifact | null {
@@ -2071,11 +2278,32 @@ export class LearningStorage {
     states?: readonly RuntimeArtifact["state"][];
     kinds?: readonly RuntimeArtifact["kind"][];
     limit?: number;
+    /**
+     * ROUND 11 #1 — WHOSE PROMPT IS THIS FOR?
+     *
+     * Present ⇒ the ownership gate applies: 'public' artifacts always, a 'user'
+     * artifact only for `userId`, and an 'unknown' one (ownership could not be
+     * established) for nobody. Omitted ⇒ no gate, for auditing and reporting
+     * surfaces that must see every row. The gate is in SQL on purpose: filtering
+     * after a LIMIT would let another person's artifacts eat the candidate list.
+     */
+    visibility?: { userId?: string };
   } = {}): RuntimeArtifact[] {
     this.ensureConnection();
 
     let sql = "SELECT * FROM runtime_artifacts WHERE 1=1";
     const params: Array<string | number> = [];
+
+    if (options.visibility) {
+      const userId = options.visibility.userId?.trim();
+      if (userId) {
+        sql += " AND (COALESCE(owner_scope, 'unknown') = 'public'"
+          + " OR (COALESCE(owner_scope, 'unknown') = 'user' AND owner_user_id = ?))";
+        params.push(userId);
+      } else {
+        sql += " AND COALESCE(owner_scope, 'unknown') = 'public'";
+      }
+    }
 
     if (options.states && options.states.length > 0) {
       sql += ` AND state IN (${options.states.map(() => "?").join(",")})`;
@@ -2209,13 +2437,22 @@ export class LearningStorage {
     confidenceAfter: number;
     statusAt: string;
     timestamp: number;
+    /**
+     * ROUND 11 #8 — WHEN THE RUN WAS SHOWN THE GUIDANCE, which is not when the
+     * credit settled. Since round 10 #14 the settlement rides a serial queue
+     * behind the run's own events, so `timestamp` can be well after the
+     * exposure — and the ledger read that gap as "a run applied the rule after
+     * it was retired". Omitted ⇒ unrecorded, and the ledger says so rather than
+     * assuming either answer.
+     */
+    exposedAt?: number;
   }): void {
     this.ensureConnection();
     this.db!.prepare(`
       INSERT INTO instinct_credit_log
       (instinct_id, session_id, task_run_id, success, verdict_score, source,
-       confidence_before, confidence_after, status_at, timestamp)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       confidence_before, confidence_after, status_at, timestamp, exposed_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       entry.instinctId,
       entry.sessionId,
@@ -2227,6 +2464,7 @@ export class LearningStorage {
       entry.confidenceAfter,
       entry.statusAt,
       entry.timestamp,
+      entry.exposedAt ?? null,
     );
   }
 
@@ -2259,6 +2497,7 @@ export class LearningStorage {
       confidence_after: number;
       status_at: string;
       timestamp: number;
+      exposed_at: number | null;
     }>;
     return rows.map((row) => ({
       instinctId: row.instinct_id,
@@ -2271,7 +2510,43 @@ export class LearningStorage {
       confidenceAfter: row.confidence_after,
       statusAt: row.status_at,
       timestamp: row.timestamp,
+      ...(row.exposed_at === null ? {} : { exposedAt: row.exposed_at }),
     }));
+  }
+
+  /**
+   * ROUND 11 #8 — RUNS THAT WERE SHOWN THE GUIDANCE AFTER A MOMENT, split by
+   * what the ledger actually knows.
+   *
+   * `exposedAfter` is the real leak: the run saw the rule after it was retired.
+   * `settledAfterExposedBefore` is the ordinary consequence of queued settlement
+   * — exposure first, credit afterwards — and is not a leak. `exposureUnknown`
+   * is every row written before the exposure time was recorded: it cannot be
+   * placed on either side, and is reported as unknown rather than counted as
+   * one of them.
+   */
+  countInstinctCreditsAcross(instinctId: string, at: number): {
+    exposedAfter: number;
+    settledAfterExposedBefore: number;
+    exposureUnknown: number;
+  } {
+    this.ensureConnection();
+    const row = this.db!.prepare(`
+      SELECT
+        SUM(CASE WHEN exposed_at IS NOT NULL AND exposed_at > ? THEN 1 ELSE 0 END) AS exposed_after,
+        SUM(CASE WHEN exposed_at IS NOT NULL AND exposed_at <= ? AND timestamp > ? THEN 1 ELSE 0 END) AS settled_after,
+        SUM(CASE WHEN exposed_at IS NULL AND timestamp > ? THEN 1 ELSE 0 END) AS unknown_exposure
+      FROM instinct_credit_log WHERE instinct_id = ?
+    `).get(at, at, at, at, instinctId) as {
+      exposed_after: number | null;
+      settled_after: number | null;
+      unknown_exposure: number | null;
+    };
+    return {
+      exposedAfter: row.exposed_after ?? 0,
+      settledAfterExposedBefore: row.settled_after ?? 0,
+      exposureUnknown: row.unknown_exposure ?? 0,
+    };
   }
 
   /** Drop credit rows older than a cutoff; returns how many went. */
@@ -2840,6 +3115,8 @@ export class LearningStorage {
       rejectedAt: row.rejected_at ? row.rejected_at as TimestampMs : undefined,
       retiredAt: row.retired_at ? row.retired_at as TimestampMs : undefined,
       lastStateReason: row.last_state_reason ?? undefined,
+      ownerScope: (row.owner_scope ?? "unknown") as RuntimeArtifactOwnerScope,
+      ownerUserId: row.owner_user_id ?? undefined,
       createdAt: row.created_at as TimestampMs,
       updatedAt: row.updated_at as TimestampMs,
     };
@@ -3058,6 +3335,8 @@ interface RuntimeArtifactRow {
   rejected_at: number | null;
   retired_at: number | null;
   last_state_reason: string | null;
+  owner_scope: string | null;
+  owner_user_id: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -3093,5 +3372,8 @@ export interface InstinctCreditRecord {
   confidenceAfter: number;
   /** The instinct's status when the credit settled. */
   statusAt: string;
+  /** When the credit SETTLED. */
   timestamp: number;
+  /** When the run was SHOWN the guidance (round 11 #8). Absent = unrecorded. */
+  exposedAt?: number;
 }

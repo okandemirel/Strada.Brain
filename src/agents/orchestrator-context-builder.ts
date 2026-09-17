@@ -64,6 +64,8 @@ export interface ContextBuilderDeps {
       projectWorldFingerprint?: string;
       availableToolNames: readonly string[];
       maxMatches: number;
+      /** Round 11 #1: whose turn this is — a private artifact reaches its owner only. */
+      userId?: string;
     }): {
       active: Array<{
         usableForExecutionGuidance: boolean;
@@ -204,6 +206,13 @@ function buildRuntimeArtifactMemoryLayer(
   runtimeArtifactToolNames: readonly string[],
   chatId?: string,
   taskRunId?: string,
+  /**
+   * ROUND 11 #1 — the turn's identity reaches artifact matching too. A private
+   * instinct that gets promoted becomes a runtime artifact, and this layer used
+   * to render that artifact's guidance into ANY caller's prompt: the rule was
+   * correctly withheld from instinct retrieval and then delivered here.
+   */
+  userId?: string,
 ): { content: string; contentHashes: string[] } | null {
   if (!ctx.runtimeArtifactManager || !userMessage.trim()) {
     return null;
@@ -216,6 +225,7 @@ function buildRuntimeArtifactMemoryLayer(
       projectWorldFingerprint,
       availableToolNames: runtimeArtifactToolNames,
       maxMatches: 6,
+      ...(userId?.trim() ? { userId: userId.trim() } : {}),
     });
     const activeGuidance = matches.active
       .filter((match) => match.usableForExecutionGuidance)
@@ -407,6 +417,7 @@ export async function buildContextLayers(
     runtimeArtifactToolNames,
     taskContext?.chatId,
     taskContext?.taskRunId,
+    identity?.userId,
   );
   if (runtimeArtifactLayer) {
     layers.push(runtimeArtifactLayer.content);

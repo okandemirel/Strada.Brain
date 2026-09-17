@@ -863,6 +863,22 @@ export interface RuntimeArtifactStats {
   readonly regressionFingerprints: Record<string, number>;
 }
 
+/**
+ * WHO MAY BE SHOWN A RUNTIME ARTIFACT'S GUIDANCE (round 11 #1).
+ *
+ * An artifact is a carrier of its source instincts' guidance, so it inherits
+ * their reach:
+ *  - 'public'  — every source is project/global learning: everybody, including
+ *                an unidentified caller, exactly as before;
+ *  - 'user'    — a source instinct is PRIVATE: only {@link RuntimeArtifact.ownerUserId};
+ *  - 'unknown' — ownership could not be established (a row written before this
+ *                was carried, whose sources are gone or disagree). Reaches
+ *                NOBODY until a person re-owns it. "Keep it reachable or
+ *                learning goes dark" is how one person's correction became
+ *                everybody's rule (round 10 #3); the same reading is refused here.
+ */
+export type RuntimeArtifactOwnerScope = 'public' | 'user' | 'unknown';
+
 export interface RuntimeArtifact {
   readonly id: RuntimeArtifactId;
   readonly kind: RuntimeArtifactKind;
@@ -883,6 +899,10 @@ export interface RuntimeArtifact {
   readonly rejectedAt?: TimestampMs;
   readonly retiredAt?: TimestampMs;
   readonly lastStateReason?: string;
+  /** See {@link RuntimeArtifactOwnerScope}. Absent on a legacy row = 'unknown'. */
+  readonly ownerScope?: RuntimeArtifactOwnerScope;
+  /** The identity a 'user'-scoped artifact belongs to, and nobody else. */
+  readonly ownerUserId?: string;
   readonly createdAt: TimestampMs;
   readonly updatedAt: TimestampMs;
 }
