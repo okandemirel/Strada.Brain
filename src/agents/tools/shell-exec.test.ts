@@ -33,6 +33,27 @@ describe("ShellExecTool", () => {
     expect(result.content).toContain("read-only mode");
   });
 
+  it("a non-zero exit code is an error, and a zero exit is not (audit 04.1)", async () => {
+    // Until 2026-09-17 a failing command returned no isError at all; the
+    // orchestrator derives success from that flag alone, so `exit 7` was a
+    // positive learning observation, a healthy metric and never tripped the
+    // per-tool circuit breaker.
+    const failed = await tool.execute({ command: "exit 7" }, ctx);
+    expect(failed.isError).toBe(true);
+    expect(failed.metadata?.["exitCode"]).toBe(7);
+    expect(failed.content).toContain("Exit code: 7");
+
+    const ok = await tool.execute({ command: "exit 0" }, ctx);
+    expect(ok.isError).toBeFalsy();
+    expect(ok.metadata?.["exitCode"]).toBe(0);
+  });
+
+  it("a timed-out command is an error even when its exit code is not the caller's", async () => {
+    const result = await tool.execute({ command: "sleep 5", timeout_ms: 200 } as never, ctx);
+    expect(result.metadata?.["timedOut"]).toBe(true);
+    expect(result.isError).toBe(true);
+  });
+
   it("requires a command", async () => {
     const result = await tool.execute({ command: "" }, ctx);
     expect(result.isError).toBe(true);

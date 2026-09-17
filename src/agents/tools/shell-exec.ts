@@ -251,6 +251,13 @@ export class ShellExecTool implements ITool {
             `It was redirected to your workspace at ${context.projectPath} — use that path directly.\n\n` +
             formatResult(command, result)
           : formatResult(command, result),
+        // A non-zero exit or a timeout IS an error. The flag was missing, so
+        // `exit 7` reached the orchestrator as isError undefined and every
+        // consumer that reads only the flag — the learning observation, the
+        // tool metrics, the per-tool circuit breaker and the failure archive —
+        // counted the failure as a success (audit 04.1, 2026-09-13).
+        // dotnet-tools.ts sets the same flag from its exit code.
+        isError: result.exitCode !== 0 || result.timedOut,
         metadata: {
           exitCode: result.exitCode,
           timedOut: result.timedOut,
