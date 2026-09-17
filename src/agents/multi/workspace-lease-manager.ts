@@ -644,6 +644,19 @@ function leaseOwnerAlive(leasePath: string): boolean {
  *  without this, the second lists the first's LIVE leases as orphans and both
  *  run commitLease + removeDirectory on the same paths concurrently. */
 const SALVAGED_LEASE_ROOTS = new Set<string>();
+/**
+ * The salvage IN FLIGHT for a (lease root, project) pair, shared by every
+ * manager built against it. The suppression above was process-global but the
+ * barrier was per manager: the second manager (stage-agents) found the root
+ * already claimed, owned no promise, and seeded its first lease from a tree
+ * the first manager's salvage was still writing into (audit 02.3 / D17,
+ * 2026-09-13). Keyed by project as well, so two projects sharing one root
+ * neither suppress nor wait on each other.
+ */
+const SALVAGE_IN_FLIGHT = new Map<string, Promise<void>>();
+function salvageKey(leaseRoot: string, projectRoot: string): string {
+  return `${resolve(leaseRoot)}\u0000${resolve(projectRoot)}`;
+}
 
 function slugifySegment(value: string): string {
   const normalized = value.trim().toLowerCase();
@@ -728,19 +741,24 @@ export class WorkspaceLeaseManager {
     // pre-existing entry belongs to a dead process. Snapshot the list now and
     // salvage in the background; anything acquired later creates NEW dirs that
     // are not on this list, so a racing acquire can never be swept.
-    if (!SALVAGED_LEASE_ROOTS.has(this.leaseRoot)) {
-      SALVAGED_LEASE_ROOTS.add(this.leaseRoot);
+    const key = salvageKey(this.leaseRoot, this.projectRoot);
+    if (!SALVAGED_LEASE_ROOTS.has(key)) {
+      SALVAGED_LEASE_ROOTS.add(key);
       const orphans = this.listOrphanedLeases();
       if (orphans.length > 0) {
         // acquireLease awaits this: review 2026-09-08 (81985efd) measured a
         // boot lease seeded with 0 of the 2000 files salvage was still writing
         // into the project, so the agent's later edit of one of them read as
         // a user conflict.
-        this.salvageInFlight = this.salvageOrphanedLeases(orphans).finally(() => {
-          this.salvageInFlight = null;
+        const salvage = this.salvageOrphanedLeases(orphans).finally(() => {
+          SALVAGE_IN_FLIGHT.delete(key);
         });
+        SALVAGE_IN_FLIGHT.set(key, salvage);
       }
     }
+    // Every manager for this pair waits on the same salvage, whichever
+    // manager started it.
+    this.salvageInFlight = SALVAGE_IN_FLIGHT.get(key) ?? null;
   }
 
   /** Directories under the lease root at construction time (all orphans).
@@ -903,7 +921,10 @@ export class WorkspaceLeaseManager {
   async acquireLease(request: WorkspaceLeaseRequest = {}): Promise<WorkspaceLease> {
     // A salvage still writing a crashed owner's work into the project must
     // finish before this lease is seeded from it (see the constructor).
-    if (this.salvageInFlight) await this.salvageInFlight;
+    // The barrier is the SHARED one, read at call time: a manager built
+    // after the salvage started still waits for it.
+    const barrier = SALVAGE_IN_FLIGHT.get(salvageKey(this.leaseRoot, this.projectRoot)) ?? this.salvageInFlight;
+    if (barrier) await barrier;
     const id = randomUUID();
     const createdAt = Date.now();
     const label = request.label?.trim() || undefined;

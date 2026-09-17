@@ -4,7 +4,7 @@
  * the fix and pinned here. Seven were data loss: a user's file deleted or
  * overwritten by a commit that reported success.
  */
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync, symlinkSync, readlinkSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -270,6 +270,37 @@ describe("retention and salvage", () => {
     for (let i = 0; i < 30; i++) expect(existsSync(join(source, "Recordings", `take-${String(i).padStart(2, "0")}`))).toBe(true);
     expect(existsSync(join(source, "Recordings", "this-run", CAPTURE_MARKER_FILE))).toBe(true);
     expect(result.capturesPruned?.removed).toBe(2); // 26 old + 1 new marked, keep 25
+  });
+
+  it("a SECOND manager for the same project waits for the first manager's salvage (audit 02.3 / D17)", async () => {
+    // The suppression set was process-global but the barrier was per manager:
+    // the second manager (stage-agents) found the root claimed, owned no
+    // promise, and seeded its first lease from a tree the first manager's
+    // salvage was still writing into.
+    const orphan = join(leaseRoot, `task-1-${randomUUID()}`);
+    put(orphan, "Assets/Scripts/HalfWritten.cs", "agent work");
+    writeFileSync(join(orphan, ".strada-lease-owner.json"), JSON.stringify({ pid: 2147483000, startedAt: 1, projectRoot: source }));
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const spy = vi
+      .spyOn(WorkspaceLeaseManager.prototype as unknown as { salvageOrphanedLeases: () => Promise<void> }, "salvageOrphanedLeases")
+      .mockImplementation(() => gate);
+    try {
+      const first = manager();
+      const second = manager();
+      expect(first).toBeDefined();
+      let acquired = false;
+      const pending = second.acquireLease({ label: "t", forceTempCopy: true }).then((lease) => { acquired = true; return lease; });
+      await new Promise((r) => setTimeout(r, 60));
+      expect(acquired).toBe(false);
+      release();
+      const lease = await pending;
+      expect(acquired).toBe(true);
+      await lease.release();
+      expect(spy).toHaveBeenCalledTimes(1);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("an orphan that died mid-commit carries a ledger: salvage reads it, finishes what it can, and removes it (#34)", async () => {
