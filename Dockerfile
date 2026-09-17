@@ -41,6 +41,14 @@ WORKDIR /app
 COPY package*.json ./
 COPY tsconfig.json ./
 
+# scripts/ BEFORE the install, not after it: npm runs the root package's
+# `prepare` lifecycle script as part of `npm ci`, and `prepare` is
+# `node scripts/install-git-hooks.mjs`. With scripts/ copied afterwards the
+# install itself died on a missing module and no image was ever produced
+# (round 10 #20). The script is a no-op without .git/hooks — which is the case
+# here — but it has to exist to be a no-op.
+COPY scripts/ ./scripts/
+
 # Install all dependencies (including devDependencies for build)
 RUN npm ci --include=dev && \
     npm cache clean --force
@@ -48,15 +56,19 @@ RUN npm ci --include=dev && \
 # Portal dependencies come from its own lockfile. node_modules is
 # .dockerignore'd, so the portal has none in the image until they are installed
 # here — and a failed portal build is deliberately fatal to `npm run build`.
+#
+# --include=dev is load-bearing: NODE_ENV=production (the ARG default above)
+# makes npm omit devDependencies, and the portal's build IS `tsc -b && vite
+# build` — both devDependencies of web-portal/package.json. Without it the
+# portal install succeeded and the portal BUILD failed (round 10 #20).
 COPY web-portal/package.json web-portal/package-lock.json ./web-portal/
-RUN npm ci --prefix web-portal && \
+RUN npm ci --prefix web-portal --include=dev && \
     npm cache clean --force
 
-# Copy source code. `npm run build` IS `node scripts/build-package.mjs`, and
-# that script builds web-portal/ and copies its output into
-# dist/channels/web/static — so both directories must be in the build context
-# of this stage, not just src/.
-COPY scripts/ ./scripts/
+# Copy the rest of the sources. `npm run build` IS
+# `node scripts/build-package.mjs`, and that script builds web-portal/ and
+# copies its output into dist/channels/web/static — so both directories must be
+# in the build context of this stage, not just src/.
 COPY web-portal/ ./web-portal/
 COPY src/ ./src/
 

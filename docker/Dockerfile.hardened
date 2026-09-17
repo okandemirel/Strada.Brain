@@ -42,14 +42,22 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
+# scripts/ BEFORE the install: `npm ci` runs the root package's `prepare`
+# lifecycle script, which is `node scripts/install-git-hooks.mjs`. Copying
+# scripts/ only in the build stage below meant `npm ci` here failed on a
+# missing module and the image never built (round 10 #20).
+COPY scripts ./scripts
+
 # Install all dependencies (devDependencies included — the build needs them)
 RUN npm ci --include=dev && \
     npm cache clean --force && \
     rm -rf /root/.npm /root/.node-gyp /tmp/*
 
-# Portal dependencies come from web-portal's own lockfile
+# Portal dependencies come from web-portal's own lockfile. --include=dev is
+# explicit so the portal's tsc and vite survive regardless of NODE_ENV in the
+# base image or the build environment (round 10 #20).
 COPY web-portal/package.json web-portal/package-lock.json ./web-portal/
-RUN npm ci --prefix web-portal && \
+RUN npm ci --prefix web-portal --include=dev && \
     npm cache clean --force
 
 # =============================================================================
