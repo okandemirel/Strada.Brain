@@ -5159,6 +5159,58 @@ describe("CampaignManager", () => {
     expect(JSON.stringify(campaign.verifiedSessions ?? null)).toBe(before);
   }, 20_000);
 
+  it("a RED verdict after a reported failure does not feed the coverage, and a foreign-host failure keeps its classification (Codex 2026-09-17)", async () => {
+    const campaign = {
+      id: "c_red_then_throw", chatId: "chat", channelType: "cli", userId: "u", projectRoot,
+      state: "executing", draftAttempts: 0, milestones: [], currentMilestone: 0,
+      createdAt: Date.now(), updatedAt: Date.now(),
+    } as unknown as Campaign;
+    let verdictOk = false;
+    let failWith: string | undefined = "the player adapter timed out after 30000ms";
+    const player = new CampaignManager({
+      storage,
+      runPlayer: async (root) => {
+        writePlayerVerdict(verdictOk, {
+          record: {
+            medium: "player", scene: "Entry", session: 1, autoStarted: false, actions: 12, outcome: "Won", reachedOutcome: true,
+            sessionCount: 1,
+            sessions: [{ index: 1, observedIndex: 1, identityVerified: true, identitySource: "start-acceptance", actions: 12, outcome: "Won", reachedOutcome: true }],
+          },
+        }, root);
+        if (failWith !== undefined) throw new Error(failWith);
+      },
+      planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async () => {},
+      projectRoot,
+    });
+    const artifact = join(projectRoot, "Builds", "Game2.x86_64");
+    mkdirSync(join(projectRoot, "Builds"), { recursive: true });
+    writeFileSync(artifact, "binary2");
+    const measure = (id: string, artifactPath: string, target: string): Promise<{ found: boolean; ok?: boolean; missingRunner?: string; unrunnableHere?: string }> =>
+      (player as unknown as { measurePlayerRun(m: unknown, b: unknown, c: unknown): Promise<{ found: boolean; ok?: boolean; missingRunner?: string; unrunnableHere?: string }> })
+        .measurePlayerRun({ id, title: "Delivery", prompt: "p", status: "running", attempts: 1 }, { ran: true, ok: true, target, artifactPath, sizeBytes: 7, durationMs: 1, scenes: 1 }, campaign);
+
+    // Red verdict with a completed session, then the wrapper fails: the red
+    // stays red, and the session is NOT remembered.
+    const red = await measure("m_red_then_throw", artifact, "StandaloneLinux64");
+    expect(red.found).toBe(true);
+    expect(red.ok).toBe(false);
+    expect(campaign.verifiedSessions).toBeUndefined();
+
+    // A green file + "not a player this machine can run" on a foreign artifact
+    // is this host's limit, not missing work.
+    verdictOk = true;
+    failWith = "Game.apk is not a player this machine can run — nothing was played";
+    const apk = join(projectRoot, "Builds", "Game.apk");
+    writeFileSync(apk, "apk-bytes");
+    const foreign = await measure("m_apk_green", apk, "Android");
+    expect(foreign.found).toBe(false);
+    expect(foreign.unrunnableHere).toContain("not a player this machine can run");
+    expect(foreign.missingRunner).toBeUndefined();
+    expect(campaign.verifiedSessions).toBeUndefined();
+  }, 20_000);
+
   it("…and a SECONDARY target that wrote green and then failed is not ok either (Codex plan review #8)", async () => {
     tasks = new FakeTaskManager();
     storage.close();

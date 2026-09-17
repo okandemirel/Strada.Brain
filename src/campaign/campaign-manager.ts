@@ -5207,13 +5207,26 @@ export class CampaignManager {
     // to the coverage and returned as proof (audit 09.1, 2026-09-13). A red
     // file stays red on its own; a green one after a reported failure is a
     // missing proof that names the failure — BEFORE anything is remembered.
+    // A FAILURE THAT IS THIS MACHINE'S LIMIT keeps its classification even
+    // when the producer left a green file behind: read as ordinary missing
+    // work it lost the host-limit escalation and was retried as if the game
+    // were broken (Codex 2026-09-17 on ab10dee3 #3).
+    if (
+      failure !== undefined
+      && (UNRUNNABLE_HERE_RE.test(failure) || NOT_A_PLAYER_HERE_RE.test(failure))
+      && artifactIsForeign(build.artifactPath, hostTarget())
+    ) {
+      return { found: false, unrunnableHere: failure.slice(0, 200) };
+    }
     const greenAfterFailure = this.greenVerdictAfterFailure(verdict, failure);
     if (greenAfterFailure !== undefined) {
       return { found: false, missingRunner: greenAfterFailure };
     }
     // WHAT THIS RUN ADDED TO THE COVERAGE, against the artifact it played: the
     // next run then asks for the sessions nobody has played yet (AJ#11).
-    if (verdict.found) this.rememberVerifiedSessions(campaign, build.artifactPath, verdict);
+    // …from a run that FINISHED. A red verdict with a completed session in it
+    // after a reported failure still fed the coverage (Codex 2026-09-17 #2).
+    if (verdict.found && failure === undefined) this.rememberVerifiedSessions(campaign, build.artifactPath, verdict);
     for (const other of others) {
       const at = Date.now();
       let why: string | undefined;
@@ -5260,6 +5273,14 @@ export class CampaignManager {
       // …and the same rule for every secondary target (Codex 2026-09-16 plan
       // review #8: the secondary path used `why` for wording and accepted the
       // green file regardless).
+      const theirForeign =
+        why !== undefined
+        && (UNRUNNABLE_HERE_RE.test(why) || NOT_A_PLAYER_HERE_RE.test(why))
+        && artifactIsForeign(other.artifactPath, hostTarget());
+      if (theirForeign) {
+        perTarget.push({ target: other.target, ok: false, detail: `cannot run here: ${why!.slice(0, 120)}` });
+        continue;
+      }
       const theirGreenAfterFailure = this.greenVerdictAfterFailure(theirs, why);
       if (theirGreenAfterFailure !== undefined) {
         perTarget.push({ target: other.target, ok: false, detail: `not measured: ${theirGreenAfterFailure}` });
