@@ -1537,6 +1537,10 @@ describe("WebChannel file delivery (2026-09-10)", () => {
     const token = /\/attachments\/([A-Za-z0-9_-]+)\)/.exec(text)![1]!;
     expect(text).toContain(`![frame_00012.png](/attachments/${token})`);
     expect(text).not.toContain("[Attachment:");
+    // Audit 11.1 / D31: the portal renders a "text" frame as a plain span, so
+    // the image syntax above reached the user as literal "![frame…](…)". The
+    // frame must be "markdown" — the only type the client hands to its renderer.
+    expect(sent[0]!.type).toBe("markdown");
     const out = await handle(channel, `/attachments/${token}`);
     expect(out.status).toBe(200);
     expect(out.headers!["Content-Type"]).toBe("image/png");
@@ -1559,6 +1563,7 @@ describe("WebChannel file delivery (2026-09-10)", () => {
     await channel.sendAttachment("chat-1", { type: "document", name: "HOW_TO_RUN.md", url: file });
     const token = /\/attachments\/([A-Za-z0-9_-]+)\)/.exec(String(sent[0]!.text))![1]!;
     expect(String(sent[0]!.text)).toContain("📎 [HOW_TO_RUN.md]");
+    expect(sent[0]!.type).toBe("markdown");
     const out = await handle(channel, `/attachments/${token}`);
     expect(out.status).toBe(200);
     expect(out.headers!["Content-Disposition"]).toContain('attachment; filename="HOW_TO_RUN.md"');
@@ -1566,5 +1571,8 @@ describe("WebChannel file delivery (2026-09-10)", () => {
 
     await channel.sendAttachment("chat-1", { type: "document", name: "evil", url: "https://example.com/x" });
     expect(String(sent[1]!.text)).toContain("not deliverable");
+    // Guard: the undeliverable notice carries no link syntax; it stays a plain
+    // text frame rather than being promoted to markdown along with the links.
+    expect(sent[1]!.type).toBe("text");
   });
 });

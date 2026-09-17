@@ -167,6 +167,21 @@ describe('buildModelSwitchCommand', () => {
     expect(useSessionStore.getState().messages.at(-1)?.deliveryState).toBeUndefined()
   })
 
+  it('flags a markdown frame for the renderer and leaves a text frame plain (audit 11.1 / D31)', () => {
+    renderHook(() => useWebSocket())
+    const socket = MockWebSocket.instances[0]
+    act(() => {
+      socket!.emit('open')
+      socket!.emit('message', { type: 'connected', chatId: 'chat-md', reconnectToken: 'r', profileId: 'p' })
+      socket!.emit('message', { type: 'markdown', text: '![frame.png](/attachments/tok)', messageId: 'm-md' })
+      socket!.emit('message', { type: 'text', text: 'plain ![not-an-image](x)', messageId: 'm-txt' })
+    })
+    const messages = useSessionStore.getState().messages
+    expect(messages.find((m) => m.id === 'm-md')?.isMarkdown).toBe(true)
+    // Guard: a text frame is still shown verbatim, never parsed as markdown.
+    expect(messages.find((m) => m.id === 'm-txt')?.isMarkdown).toBe(false)
+  })
+
   it('marks queued outbound messages as failed when no receipt arrives in time', () => {
     vi.useFakeTimers()
 

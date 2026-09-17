@@ -55,6 +55,24 @@ describe('ChatMessage', () => {
     expect(screen.getByText('code')).toBeInTheDocument()
   })
 
+  it('renders a delivered image attachment (markdown image) as an <img>, not literal "![" (audit 11.1 / D31)', () => {
+    // The daemon delivers files as `![name](/attachments/<token>)` — the
+    // portal must show the picture, which only happens on the markdown path.
+    const { container } = render(
+      <ChatMessage
+        message={makeMessage({
+          sender: 'assistant',
+          text: '![frame_00012.png](/attachments/tok123)\n[frame_00012.png](/attachments/tok123) (12 KB)',
+          isMarkdown: true,
+        })}
+      />,
+    )
+    const img = container.querySelector('img')
+    expect(img).not.toBeNull()
+    expect(img?.getAttribute('src')).toBe('/attachments/tok123')
+    expect(container.textContent).not.toContain('![')
+  })
+
   it('renders attachments', () => {
     render(
       <ChatMessage

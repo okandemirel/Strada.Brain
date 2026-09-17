@@ -822,7 +822,11 @@ export class WebChannel
     const text = attachment.type === "image"
       ? `![${attachment.name}](${href})\n[${attachment.name}](${href})${size}`
       : `📎 [${attachment.name}](${href})${size}`;
-    this.sendToClient(chatId, { type: "text", text, messageId: randomUUID() });
+    // "markdown", not "text": the portal renders a "text" frame as a plain
+    // span, so the image/link syntax above arrived as literal `![name](...)`
+    // (audit 11.1 / D31). The markdown frame type is the one the client
+    // hands to its renderer.
+    this.sendToClient(chatId, { type: "markdown", text, messageId: randomUUID() });
   }
 
   /** Files handed to the portal, by token; bounded and time-limited. */
