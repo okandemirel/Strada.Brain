@@ -68,6 +68,8 @@ import {
   RUNTIME_DATABASE_FILES,
   STRADA_HOME_DATABASE_FILES,
   MAINTENANCE_LOCK_FILE,
+  acquireMaintenanceExclusion,
+  assertNoMaintenanceExclusion,
   backupRuntimeData,
   backupRuntimeDatabases,
   backupSqliteDatabase,
@@ -1305,7 +1307,15 @@ describe("a restore while a database is in use (round 12 #22)", () => {
     expect(existsSync(path.join(stradaHome, MAINTENANCE_LOCK_FILE))).toBe(false);
   });
 
-  it("reclaims an exclusion whose holder is no longer running", async () => {
+  /**
+   * Round 13 #19 reversed this deliberately. Automatic reclaim was
+   * "read the holder, see it is dead, unlink, create ours", and two processes
+   * doing that to one dead lock end with the second DELETING the first's live
+   * claim — both then restore over the same files. A dead holder is now a
+   * refusal that names the file to remove; see the round-13 block below for the
+   * refusal, the race and the live rows it protects.
+   */
+  it("refuses an exclusion whose holder is no longer running, rather than racing to reclaim it", async () => {
     seedDatabase(path.join(memoryRoot, "memory.db"), 7).close();
     await backupRuntimeDatabases({ ...defaultInstallation(), destDir, timestamp: "ts" });
     seedDatabase(path.join(memoryRoot, "memory.db"), 5).close();
@@ -1314,7 +1324,272 @@ describe("a restore while a database is in use (round 12 #22)", () => {
       JSON.stringify({ pid: 999_999_999, startedAtIso: "2026-01-01T00:00:00.000Z", purpose: "restore" }),
     );
 
-    await restoreRuntimeDatabases({ backupDir: destDir });
-    expect(countRows(path.join(memoryRoot, "memory.db"))).toBe(7);
+    await expect(restoreRuntimeDatabases({ backupDir: destDir })).rejects.toThrow(
+      /NOT reclaimed automatically/,
+    );
+    expect(countRows(path.join(memoryRoot, "memory.db"))).toBe(12);
+  });
+});
+
+/**
+ * ROUND 13 #18-#21 — the four ways a restore could still lose the bytes it was
+ * pointed at. Every test here asserts ROWS ON DISK, and every refusal is
+ * measured by the live database still holding what it held before.
+ */
+describe("a restore that must not destroy live data (round 13)", () => {
+  /** A live database with 12 rows and a backup that holds 7. */
+  async function backupSevenLiveTwelve(): Promise<void> {
+    seedDatabase(path.join(memoryRoot, "memory.db"), 7).close();
+    await backupRuntimeDatabases({ ...defaultInstallation(), destDir, timestamp: "ts" });
+    seedDatabase(path.join(memoryRoot, "memory.db"), 5).close();
+    expect(countRows(path.join(memoryRoot, "memory.db"))).toBe(12);
+  }
+
+  /** Every leftover of a restore, so "nothing was replaced" can be measured. */
+  function residue(dir: string): string[] {
+    return readdirSync(dir).filter((n) => n.includes(".restore-") || n.includes(".pre-restore-"));
+  }
+
+  describe("#18 — a user that attaches after the probe and before the swap", () => {
+    it("refuses, and the rows that connection wrote are still there", async () => {
+      await backupSevenLiveTwelve();
+
+      let live: Database.Database | undefined;
+      const outcome = await restoreRuntimeDatabases({
+        backupDir: destDir,
+        // The window: staged and verified, nothing replaced yet. A daemon that
+        // starts HERE holds the inode the swap is about to rename away.
+        onStaged: () => {
+          live = new Database(path.join(memoryRoot, "memory.db"));
+          live.pragma("journal_mode = WAL");
+          live.prepare("INSERT INTO t (payload) VALUES ('written after the probe')").run();
+        },
+      }).then(
+        () => null,
+        (err: Error) => err,
+      );
+      live?.close();
+
+      expect(outcome?.message).toMatch(/still in use/);
+      expect(outcome?.message).toMatch(/nothing was replaced/i);
+      // The repro: the swap happened anyway, so this read 7 — the backup's rows —
+      // and the row the live connection had just committed was in a
+      // `.pre-restore-` file the restore then deleted.
+      expect(countRows(path.join(memoryRoot, "memory.db"))).toBe(13);
+      expect(residue(memoryRoot)).toEqual([]);
+    });
+
+    it("lets a store open the database again once the exclusion is gone", async () => {
+      const dir = path.join(root, "guarded");
+      mkdirSync(dir, { recursive: true });
+      const held = acquireMaintenanceExclusion(dir, "restore");
+      try {
+        // A runtime opener consults the same file the restore claims. Only a
+        // LIVE holder blocks it: a lock left by a dead process must never wedge
+        // the daemon out of its own databases.
+        expect(() => assertNoMaintenanceExclusion(dir, "open learning.db")).toThrow(/maintenance/i);
+        writeFileSync(
+          path.join(dir, MAINTENANCE_LOCK_FILE),
+          JSON.stringify({ pid: 999_999_999, startedAtIso: "2026-01-01T00:00:00.000Z", purpose: "restore" }),
+        );
+        expect(() => assertNoMaintenanceExclusion(dir, "open learning.db")).not.toThrow();
+      } finally {
+        held.release();
+      }
+      expect(() => assertNoMaintenanceExclusion(dir, "open learning.db")).not.toThrow();
+    });
+  });
+
+  describe("#19 — the exclusion's stale-unlink race", () => {
+    /** A lock file whose holder cannot be running. */
+    function deadHolderLock(dir: string): string {
+      const file = path.join(dir, MAINTENANCE_LOCK_FILE);
+      writeFileSync(
+        file,
+        JSON.stringify({ pid: 999_999_999, startedAtIso: "2026-01-01T00:00:00.000Z", purpose: "restore" }),
+      );
+      return file;
+    }
+
+    it("refuses instead of reclaiming, and names the file a human must remove", async () => {
+      await backupSevenLiveTwelve();
+      const lock = deadHolderLock(stradaHome);
+
+      const outcome = await restoreRuntimeDatabases({ backupDir: destDir }).then(
+        () => null,
+        (err: Error) => err,
+      );
+      expect(outcome?.message).toContain(lock);
+      expect(outcome?.message).toMatch(/remove/i);
+      expect(countRows(path.join(memoryRoot, "memory.db"))).toBe(12);
+      // A deterministic refusal, not a wall: the named file is the whole fix.
+      rmSync(lock, { force: true });
+      await restoreRuntimeDatabases({ backupDir: destDir });
+      expect(countRows(path.join(memoryRoot, "memory.db"))).toBe(7);
+    });
+
+    it("never removes a lock it did not write", () => {
+      const dir = path.join(root, "race");
+      mkdirSync(dir, { recursive: true });
+      const lock = deadHolderLock(dir);
+      const before = readFileSync(lock, "utf8");
+
+      // The race: A and B both read the dead holder, A reclaims and writes its
+      // own lock, and B's delayed `rmSync` deletes A's LIVE lock — after which B
+      // acquires too and two restores swap the same files.
+      expect(() => acquireMaintenanceExclusion(dir)).toThrow(/maintenance/i);
+      expect(existsSync(lock)).toBe(true);
+      expect(readFileSync(lock, "utf8")).toBe(before);
+      expect(() => acquireMaintenanceExclusion(dir)).toThrow(/maintenance/i);
+      expect(readFileSync(lock, "utf8")).toBe(before);
+    });
+
+    it("does not read an empty lock as corrupt, and never writes a partial one", () => {
+      const dir = path.join(root, "empty-lock");
+      mkdirSync(dir, { recursive: true });
+      const lock = path.join(dir, MAINTENANCE_LOCK_FILE);
+      // An EMPTY lock is what another acquirer looks like for the instant
+      // between creating the file and writing its payload. Treating it as
+      // corrupt/stale removed a live restore's claim.
+      writeFileSync(lock, "");
+      expect(() => acquireMaintenanceExclusion(dir)).toThrow(/maintenance/i);
+      expect(existsSync(lock)).toBe(true);
+
+      rmSync(lock, { force: true });
+      const held = acquireMaintenanceExclusion(dir, "restore");
+      // Whatever a concurrent reader sees, it is never a half-written claim.
+      const payload = JSON.parse(readFileSync(lock, "utf8")) as { pid: number; purpose: string };
+      expect(payload.pid).toBe(process.pid);
+      expect(payload.purpose).toBe("restore");
+      held.release();
+      expect(existsSync(lock)).toBe(false);
+    });
+  });
+
+  describe("#20 — a backup member that is a symlink out of the archive", () => {
+    it("refuses, and neither the live database nor the external one is touched", async () => {
+      await backupSevenLiveTwelve();
+      // A valid database OUTSIDE the backup directory — the bytes an attacker
+      // wants installed over the live one.
+      const outside = path.join(root, "outside.db");
+      seedDatabase(outside, 1).close();
+
+      const member = path.join(destDir, "memory", "memory_ts.db");
+      rmSync(member, { force: true });
+      symlinkSync(outside, member);
+      // The manifest is the attacker's too, so the recorded size is the size of
+      // what the link points at: every member check passes.
+      const manifestFile = path.join(destDir, BACKUP_MANIFEST_FILE);
+      const manifest = JSON.parse(readFileSync(manifestFile, "utf8")) as {
+        databases: Array<{ backup: string; bytes: number }>;
+      };
+      manifest.databases[0]!.bytes = statSync(outside).size;
+      writeFileSync(manifestFile, JSON.stringify(manifest));
+
+      const outcome = await restoreRuntimeDatabases({ backupDir: destDir }).then(
+        () => null,
+        (err: Error) => err,
+      );
+      expect(outcome?.message).toMatch(/symbolic link|symlink|outside the backup directory/i);
+      // The repro: the restore followed the link and installed the external
+      // database's single row over twelve live ones.
+      expect(countRows(path.join(memoryRoot, "memory.db"))).toBe(12);
+      expect(countRows(outside)).toBe(1);
+      expect(residue(memoryRoot)).toEqual([]);
+    });
+  });
+
+  describe("#21 — two destinations that are one file", () => {
+    /** Is the destination directory case-insensitive? Measured, never assumed. */
+    function caseInsensitive(dir: string): boolean {
+      const probe = path.join(dir, "case-probe-abc");
+      writeFileSync(probe, "");
+      try {
+        return existsSync(path.join(dir, "CASE-PROBE-ABC"));
+      } finally {
+        rmSync(probe, { force: true });
+      }
+    }
+
+    it("refuses a case-aliased pair instead of destroying both copies", async () => {
+      if (!caseInsensitive(memoryRoot)) return; // nothing to alias
+      await backupSevenLiveTwelve();
+
+      // Two manifest members, two distinct string destinations, ONE file on this
+      // filesystem. The duplicate check compares strings, so both pass it.
+      const manifestFile = path.join(destDir, BACKUP_MANIFEST_FILE);
+      const manifest = JSON.parse(readFileSync(manifestFile, "utf8")) as {
+        databases: Array<{ root: string; relative: string; source: string; backup: string; bytes: number }>;
+      };
+      const first = manifest.databases.find((d) => d.relative === "memory.db")!;
+      const aliasBackup = path.join("memory", "Memory_ts.db");
+      copyFileSync(path.join(destDir, first.backup), path.join(destDir, aliasBackup));
+      manifest.databases.push({ ...first, relative: "Memory.db", backup: aliasBackup });
+      writeFileSync(manifestFile, JSON.stringify(manifest));
+
+      const outcome = await restoreRuntimeDatabases({ backupDir: destDir }).then(
+        () => null,
+        (err: Error) => err,
+      );
+      // The repro: the first swap put the original aside, the second overwrote
+      // that aside with the file the first swap had just restored, and then
+      // failed on a staged file already consumed — leaving the destination gone.
+      expect(existsSync(path.join(memoryRoot, "memory.db"))).toBe(true);
+      expect(countRows(path.join(memoryRoot, "memory.db"))).toBe(12);
+      expect(outcome?.message).toMatch(/same file|named twice/i);
+      expect(residue(memoryRoot)).toEqual([]);
+    });
+
+    it("refuses a case-aliased pair whose destination does not exist yet", async () => {
+      if (!caseInsensitive(memoryRoot)) return;
+      // No inode to collide on — a fresh installation restoring into an empty
+      // root — so only the case-folded key can catch this one. Left unchecked,
+      // both entries restore and the second silently overwrites the first.
+      seedDatabase(path.join(memoryRoot, "memory.db"), 7).close();
+      await backupRuntimeDatabases({ ...defaultInstallation(), destDir, timestamp: "ts" });
+      const manifestFile = path.join(destDir, BACKUP_MANIFEST_FILE);
+      const manifest = JSON.parse(readFileSync(manifestFile, "utf8")) as {
+        databases: Array<{ root: string; relative: string; source: string; backup: string; bytes: number }>;
+      };
+      const first = manifest.databases.find((d) => d.relative === "memory.db")!;
+      const lower = path.join("memory", "fresh_ts.db");
+      const upper = path.join("memory", "Fresh_ts.db");
+      copyFileSync(path.join(destDir, first.backup), path.join(destDir, lower));
+      copyFileSync(path.join(destDir, first.backup), path.join(destDir, upper));
+      manifest.databases = [
+        { ...first, relative: "fresh.db", backup: lower },
+        { ...first, relative: "Fresh.db", backup: upper },
+      ];
+      writeFileSync(manifestFile, JSON.stringify(manifest));
+
+      await expect(restoreRuntimeDatabases({ backupDir: destDir })).rejects.toThrow(
+        /same file on this filesystem/,
+      );
+      expect(existsSync(path.join(memoryRoot, "fresh.db"))).toBe(false);
+      expect(residue(memoryRoot)).toEqual([]);
+    });
+
+    it("stages each destination under its own name", async () => {
+      // Defensive half: even destinations the equivalence check did not catch
+      // must not share a staging file. One stamp, one name per item.
+      seedDatabase(path.join(memoryRoot, "memory.db"), 3).close();
+      seedDatabase(path.join(stradaHome, "hub-owners.db"), 4).close();
+      await backupRuntimeDatabases({ ...defaultInstallation(), destDir, timestamp: "ts" });
+      seedDatabase(path.join(memoryRoot, "memory.db"), 30).close();
+
+      const stagedNames: string[] = [];
+      await restoreRuntimeDatabases({
+        backupDir: destDir,
+        onStaged: () => {
+          stagedNames.push(
+            ...readdirSync(memoryRoot).filter((n) => n.includes(".restore-")),
+            ...readdirSync(stradaHome).filter((n) => n.includes(".restore-")),
+          );
+        },
+      });
+      expect(stagedNames).toHaveLength(2);
+      expect(new Set(stagedNames).size).toBe(2);
+      expect(countRows(path.join(memoryRoot, "memory.db"))).toBe(3);
+    });
   });
 });

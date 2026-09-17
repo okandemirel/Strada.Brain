@@ -13,6 +13,10 @@ import Database from "better-sqlite3";
 import { configureSqlitePragmas } from "../../memory/unified/sqlite-pragmas.js";
 import { mkdirSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
+// ROUND 13 #18: the restore's exclusion is a protocol, and an OPENER is the
+// other side of it. See the call in initialize().
+import { assertNoMaintenanceExclusion } from "../../core/database-backup.js";
+import { resolveStradaHome } from "../../common/runtime-paths.js";
 import type {
   EvolutionProposal,
   Instinct,
@@ -361,6 +365,15 @@ export class LearningStorage {
 
   /** Initialize the database connection and schema */
   initialize(): void {
+    // ROUND 13 #18 — DO NOT OPEN A DATABASE A RESTORE IS REPLACING. The restore
+    // probes for attached users, but a probe only describes the instant it ran:
+    // a store that opens learning.db while the swap is in flight ends up writing
+    // to an inode that is about to be renamed away and deleted, and the restore
+    // reports success while the installation is not using restored state. So the
+    // opener asks the same lock file the restore claims. Only a LIVE holder
+    // blocks — a lock left by a dead process is the restore's to refuse, never a
+    // reason to keep the daemon out of its own store.
+    assertNoMaintenanceExclusion(resolveStradaHome(), `open ${this.dbPath}`);
     const dir = dirname(this.dbPath);
     if (dir && dir !== ".") {
       if (!existsSync(dir)) {

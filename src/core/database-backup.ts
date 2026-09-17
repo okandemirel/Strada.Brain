@@ -71,6 +71,8 @@ import {
   constants as fsConstants,
   copyFileSync,
   existsSync,
+  linkSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -1076,11 +1078,62 @@ export interface MaintenanceExclusion {
   release: () => void;
 }
 
+/** The holder a lock file names, or undefined when it names nobody readable. */
+function maintenanceLockHolder(file: string): MaintenanceLockPayload | undefined {
+  let holder: unknown;
+  try {
+    holder = JSON.parse(readFileSync(file, "utf8"));
+  } catch {
+    return undefined; // empty (a claim being written right now), or corrupt
+  }
+  if (typeof holder !== "object" || holder === null) return undefined;
+  const payload = holder as Partial<MaintenanceLockPayload>;
+  return typeof payload.pid === "number" ? (payload as MaintenanceLockPayload) : undefined;
+}
+
+/**
+ * Why an existing lock file blocks a claim, always naming the file.
+ *
+ * ROUND 13 #19 — THERE IS NO AUTOMATIC STALE RECOVERY ANY MORE, and that is the
+ * fix rather than a limitation. The reclaim path was
+ * "read the holder, see it is dead, `rmSync`, create ours", and two processes
+ * running it against one dead holder end with A holding a live lock that B then
+ * DELETES before creating its own: both believe they hold the exclusion and both
+ * swap the same files. There is no ordering of read/unlink/create that closes
+ * that without an OS-held mutex, and Node has no portable flock. So a lock that
+ * exists is a refusal — naming the file, the pid and whether that pid is still
+ * running, so an operator whose machine lost power mid-restore removes one named
+ * file instead of guessing. A deterministic refusal beats a racy rescue.
+ */
+function maintenanceLockRefusal(file: string): string {
+  const holder = maintenanceLockHolder(file);
+  if (holder !== undefined && processIsAlive(holder.pid)) {
+    return (
+      `the maintenance exclusion ${file} is held by pid ${holder.pid} ` +
+      `(${holder.purpose || "unknown"}, since ${holder.startedAtIso || "an unknown time"}) — ` +
+      `nothing was replaced`
+    );
+  }
+  const whose =
+    holder === undefined
+      ? "and it does not name a holder (it may be a claim another process is writing right now)"
+      : `whose holder (pid ${holder.pid}, ${holder.purpose || "unknown"}, since ` +
+        `${holder.startedAtIso || "an unknown time"}) is not running`;
+  return (
+    `the maintenance exclusion ${file} already exists ${whose}. It is NOT reclaimed ` +
+    `automatically — two processes reclaiming one stale lock both end up holding it — so ` +
+    `confirm no restore is in progress ("strada kill") and then remove ${file} by hand`
+  );
+}
+
 /**
  * Claim the installation's maintenance exclusion, or throw naming the holder.
  *
- * A holder whose process is gone is stale and reclaimed — a machine that lost
- * power mid-restore must not need a manual unlink before the retry — but a
+ * The claim is materialised in full and then LINKED into place, so the lock file
+ * never exists empty or half-written: a concurrent acquirer reading it either
+ * sees a complete holder or sees no file at all (#19 — an empty lock used to be
+ * read as corrupt, and therefore as free). `link` fails with EEXIST when the
+ * name is taken, which is the atomic test-and-set the exclusion needs, and a
  * holder inside THIS process is never stale, because that is the concurrent
  * restore the exclusion exists to stop.
  */
@@ -1096,29 +1149,14 @@ export function acquireMaintenanceExclusion(
       `another restore in this process already holds the maintenance exclusion ${file}`,
     );
   }
-  if (existsSync(file)) {
-    let holder: MaintenanceLockPayload | null = null;
-    try {
-      holder = JSON.parse(readFileSync(file, "utf8")) as MaintenanceLockPayload;
-    } catch {
-      holder = null; // corrupt → stale
-    }
-    if (holder !== null && typeof holder.pid === "number" && processIsAlive(holder.pid)) {
-      throw new Error(
-        `the maintenance exclusion ${file} is held by pid ${holder.pid} ` +
-          `(${holder.purpose || "unknown"}, since ${holder.startedAtIso || "an unknown time"}) — ` +
-          `nothing was replaced`,
-      );
-    }
-    rmSync(file, { force: true });
-  }
   const payload: MaintenanceLockPayload = {
     pid: process.pid,
     startedAtIso: new Date().toISOString(),
     purpose,
   };
+  const claim = `${file}.claim-${process.pid}-${randomBytes(4).toString("hex")}`;
   const fd = openSync(
-    file,
+    claim,
     fsConstants.O_WRONLY |
       fsConstants.O_CREAT |
       fsConstants.O_EXCL |
@@ -1129,6 +1167,16 @@ export function acquireMaintenanceExclusion(
     writeFileSync(fd, `${JSON.stringify(payload)}\n`);
   } finally {
     closeSync(fd);
+  }
+  try {
+    // Atomic: it is our complete claim that appears under the lock name, or
+    // nothing does. Never an unlink of somebody else's file.
+    linkSync(claim, file);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+    throw new Error(maintenanceLockRefusal(file));
+  } finally {
+    rmSync(claim, { force: true });
   }
   heldExclusions.add(key);
   let released = false;
@@ -1147,6 +1195,34 @@ export function acquireMaintenanceExclusion(
       rmSync(file, { force: true });
     },
   };
+}
+
+/**
+ * THE OTHER HALF OF THE EXCLUSION (round 13 #18): an opener that honours it.
+ *
+ * The restore's "is anything attached" probe can only ever describe the instant
+ * it ran. A store that opens a runtime database while a restore holds the
+ * exclusion is the case the probe cannot see, and it ends with the store writing
+ * to an inode the swap is about to rename away and delete — the restore reports
+ * success and the installation is not using restored state. So an opener asks
+ * this first, and the exclusion becomes a protocol both sides take part in
+ * rather than a lock only one side reads.
+ *
+ * Only a LIVE holder blocks: a lock left behind by a dead process is a restore's
+ * problem to refuse (see {@link maintenanceLockRefusal}), and must never wedge
+ * the daemon out of its own databases.
+ */
+export function assertNoMaintenanceExclusion(dir: string, what: string): void {
+  const file = path.join(dir, MAINTENANCE_LOCK_FILE);
+  if (!existsSync(file)) return;
+  const holder = maintenanceLockHolder(file);
+  if (holder === undefined || !processIsAlive(holder.pid)) return;
+  throw new Error(
+    `refusing to ${what}: a maintenance operation (${holder.purpose || "unknown"}) holds ` +
+      `${file} as pid ${holder.pid} since ${holder.startedAtIso || "an unknown time"}. ` +
+      `Opening a database it is replacing would write to a file that is about to be deleted; ` +
+      `retry once the operation finishes.`,
+  );
 }
 
 /**
@@ -1361,6 +1437,65 @@ function rebaseRetainedAttachmentPaths(file: string, fromRoot: string, toRoot: s
   return rewritten;
 }
 
+/**
+ * Is this directory case-insensitive? MEASURED, with a probe file, never assumed
+ * from the platform: a Mac can hold a case-sensitive volume and a Linux box a
+ * case-insensitive one. Cached per directory for the length of the process.
+ *
+ * A directory that cannot be probed (unwritable, gone) answers `true`: the
+ * consequence of a wrong `true` is a refusal that names two destinations as one
+ * file, and the consequence of a wrong `false` is the data loss #21 describes.
+ */
+const caseInsensitiveDirs = new Map<string, boolean>();
+function directoryIsCaseInsensitive(dir: string): boolean {
+  const existing = realPathAsFarAsItExists(dir);
+  const cached = caseInsensitiveDirs.get(existing);
+  if (cached !== undefined) return cached;
+  // The flipped name is built from the SAME token, never by rewriting the whole
+  // path: a directory whose own name contains the probe word would be rewritten
+  // instead, and the probe would answer about a file it never created.
+  const token = `strada-case-probe-${randomBytes(6).toString("hex")}`;
+  const probe = path.join(existing, `.${token}`);
+  let answer = true;
+  try {
+    writeFileSync(probe, "", { mode: 0o600 });
+    answer = existsSync(path.join(existing, `.${token.toUpperCase()}`));
+  } catch {
+    answer = true;
+  } finally {
+    rmSync(probe, { force: true });
+  }
+  caseInsensitiveDirs.set(existing, answer);
+  return answer;
+}
+
+/**
+ * Every key a destination must be unique under (round 13 #21).
+ *
+ * The canonical path alone was the duplicate check, and it compares STRINGS: on
+ * a case-insensitive filesystem `Token` and `token` are two keys and one file, so
+ * a manifest naming both passed the check, shared one staging file and one aside
+ * name, and ended with the second swap failing on a staged file the first had
+ * consumed — the rollback then deleted the destination and could not find the
+ * aside the second swap had overwritten. Neither the original nor the restored
+ * file was left on disk.
+ *
+ * Two keys close that: the inode of a destination that already exists (which
+ * also catches a hard link and two spellings of one path), and the case-folded
+ * path wherever the filesystem folds case.
+ */
+function destinationKeys(target: string): string[] {
+  const keys = [target];
+  try {
+    const stat = statSync(target);
+    keys.push(`inode:${stat.dev}:${stat.ino}`);
+  } catch {
+    // Not there yet: a fresh destination has no inode to collide on.
+  }
+  if (directoryIsCaseInsensitive(path.dirname(target))) keys.push(`folded:${target.toLowerCase()}`);
+  return keys;
+}
+
 /** One destination's swap: what was moved aside, and whether the copy landed. */
 interface SwapRecord {
   readonly item: RestorePlanItem;
@@ -1406,6 +1541,28 @@ export async function restoreRuntimeData(opts: RestoreRunOptions): Promise<Resto
     const resolved = resolveInsideRoot(opts.backupDir, member);
     if ("problem" in resolved) {
       return { problem: `${member} ${resolved.problem.replace("the root", "the backup directory")}` };
+    }
+    // ROUND 13 #20 — the LEAF is part of the containment check. Only the parent
+    // was canonicalized, so a member that was itself a symbolic link to a
+    // database outside the archive passed every check (the manifest records the
+    // link target's size, so even the byte count matched) and its bytes were
+    // validated, copied and installed over a live database. A backup member is a
+    // regular file inside the backup directory or it is not a member.
+    const leaf = lstatSync(resolved.target, { throwIfNoEntry: false });
+    if (leaf?.isSymbolicLink() === true) {
+      return {
+        problem:
+          `${member} is a symbolic link (to ${realPathAsFarAsItExists(resolved.target)}); a backup ` +
+          `member must be a regular file inside the backup directory`,
+      };
+    }
+    if (leaf !== undefined && !leaf.isFile()) {
+      return { problem: `${member} is not a regular file inside the backup directory` };
+    }
+    const real = realPathAsFarAsItExists(resolved.target);
+    const realRel = path.relative(realPathAsFarAsItExists(opts.backupDir), real);
+    if (realRel === "" || realRel.startsWith("..") || path.isAbsolute(realRel)) {
+      return { problem: `${member} resolves to ${real}, outside the backup directory` };
     }
     return { file: resolved.target };
   };
@@ -1490,16 +1647,24 @@ export async function restoreRuntimeData(opts: RestoreRunOptions): Promise<Resto
    */
   const byDestination = new Map<string, RestorePlanItem>();
   for (const item of items) {
-    const first = byDestination.get(item.canonical);
+    let first: RestorePlanItem | undefined;
+    const keys = destinationKeys(item.canonical);
+    for (const key of keys) {
+      const seen = byDestination.get(key);
+      if (seen !== undefined) {
+        first = seen;
+        break;
+      }
+    }
     if (first !== undefined) {
       problems.push(
         `${item.target} is named twice by ${BACKUP_MANIFEST_FILE} ` +
-          `(as ${first.root}/${first.relative} and ${item.root}/${item.relative}) — ` +
-          `one destination, one source`,
+          `(as ${first.root}/${first.relative} and ${item.root}/${item.relative}, which are the ` +
+          `same file on this filesystem) — one destination, one source`,
       );
       continue;
     }
-    byDestination.set(item.canonical, item);
+    for (const key of keys) byDestination.set(key, item);
   }
 
   if (problems.length > 0) {
@@ -1542,25 +1707,42 @@ export async function restoreRuntimeData(opts: RestoreRunOptions): Promise<Resto
     );
   }
   try {
-    const attached: string[] = [];
-    if (opts.allowAttachedUsers !== true) {
-      for (const item of items) {
-        if (item.kind !== "database") continue;
-        const reason = attachedDatabaseUser(item.target);
-        if (reason !== undefined) attached.push(`${item.target} ${reason}`);
-      }
-    }
-    if (attached.length > 0) {
-      throw new Error(
-        `Restore from ${opts.backupDir} refused: ${attached.length} database(s) still have a ` +
-          `user attached — ${attached.join("; ")}. Stop the runtime ("strada kill") and retry; ` +
-          `nothing was replaced, every live database still holds what it held before.`,
-      );
-    }
+    assertNothingAttached(items, opts);
     return await replaceDestinations(items, opts);
   } finally {
     exclusion.release();
   }
+}
+
+/**
+ * Refuse while any destination still has a database user attached.
+ *
+ * ROUND 13 #18 — CHECKED ONCE, THIS EXPIRED BEFORE IT WAS USED. The probe ran
+ * before staging, and staging is arbitrarily long (a copy per database, an
+ * integrity check on each, a row rebase); a runtime that started inside that
+ * window held the inode the swap then renamed away and deleted, so the restore
+ * exited 0 while the daemon's rows went to a file nobody would ever read again —
+ * exactly the failure the check was added for. It is therefore asked again after
+ * staging, and once more immediately before each individual rename, and the
+ * asides are checked after the swap ({@link replaceDestinations}).
+ */
+function assertNothingAttached(
+  items: readonly RestorePlanItem[],
+  opts: RestoreRunOptions,
+): void {
+  if (opts.allowAttachedUsers === true) return;
+  const attached: string[] = [];
+  for (const item of items) {
+    if (item.kind !== "database") continue;
+    const reason = attachedDatabaseUser(item.target);
+    if (reason !== undefined) attached.push(`${item.target} ${reason}`);
+  }
+  if (attached.length === 0) return;
+  throw new Error(
+    `Restore from ${opts.backupDir} refused: ${attached.length} database(s) still have a ` +
+      `user attached — ${attached.join("; ")}. Stop the runtime ("strada kill") and retry; ` +
+      `nothing was replaced, every live database still holds what it held before.`,
+  );
 }
 
 /**
@@ -1591,8 +1773,13 @@ async function replaceDestinations(
   };
 
   try {
-    for (const item of items) {
-      const stagedPath = `${item.target}.restore-${stamp}.tmp`;
+    for (const [index, item] of items.entries()) {
+      // The INDEX is in the name (#21): two destinations that are one file on
+      // this filesystem — `Token` and `token` — shared a single staging file, so
+      // the second swap renamed a file the first had already consumed. The
+      // equivalence check above refuses such a pair; this makes the staging
+      // names distinct whether or not anything caught them.
+      const stagedPath = `${item.target}.restore-${stamp}-${index}.tmp`;
       if (item.kind === "database") {
         await backupSqliteDatabase(item.backupFile, stagedPath);
         const rebase = ROOT_PATH_REBASERS[path.basename(item.relative)];
@@ -1616,25 +1803,19 @@ async function replaceDestinations(
     );
   }
 
-  const swaps: SwapRecord[] = [];
+  // #18: the probe that ran before staging describes an instant that has passed.
+  // Everything is staged and NOTHING has been replaced yet, so a user that
+  // appeared in between still costs only this refusal.
   try {
-    for (const entry of staged) {
-      const record: SwapRecord = { item: entry.item, stagedPath: entry.path, asides: [], placed: false };
-      swaps.push(record);
-      // Moved ASIDE, not deleted: until the replacement is in place this file
-      // is the only copy of the live data. Its -wal/-shm travel with it — left
-      // behind, a stale -wal is replayed over the restored file.
-      for (const suffix of ["", "-wal", "-shm"]) {
-        const from = `${entry.item.target}${suffix}`;
-        if (!existsSync(from)) continue;
-        const to = `${from}.pre-restore-${stamp}`;
-        renameSync(from, to);
-        record.asides.push({ from, to });
-      }
-      renameSync(entry.path, entry.item.target);
-      record.placed = true;
-    }
+    assertNothingAttached(items, opts);
   } catch (err) {
+    discardStaged();
+    throw err;
+  }
+
+  const swaps: SwapRecord[] = [];
+  /** Undo every swap made so far. Returns what could not be put back. */
+  const rollback = (): string[] => {
     const unrecovered: string[] = [];
     for (const record of [...swaps].reverse()) {
       if (record.placed) {
@@ -1653,6 +1834,64 @@ async function replaceDestinations(
       }
     }
     discardStaged();
+    return unrecovered;
+  };
+  try {
+    for (const entry of staged) {
+      // #18, last chance before this file's own inode moves: a user that
+      // attached during the swap of an EARLIER destination is caught here, and
+      // the rollback below puts back everything already swapped.
+      if (opts.allowAttachedUsers !== true && entry.item.kind === "database") {
+        const reason = attachedDatabaseUser(entry.item.target);
+        if (reason !== undefined) {
+          throw new Error(
+            `${entry.item.target} ${reason} — it was opened after the restore checked, so ` +
+              `replacing it would leave that connection writing to a deleted file`,
+          );
+        }
+      }
+      const record: SwapRecord = { item: entry.item, stagedPath: entry.path, asides: [], placed: false };
+      swaps.push(record);
+      // Moved ASIDE, not deleted: until the replacement is in place this file
+      // is the only copy of the live data. Its -wal/-shm travel with it — left
+      // behind, a stale -wal is replayed over the restored file.
+      for (const suffix of ["", "-wal", "-shm"]) {
+        const from = `${entry.item.target}${suffix}`;
+        if (!existsSync(from)) continue;
+        const to = `${from}.pre-restore-${stamp}`;
+        renameSync(from, to);
+        record.asides.push({ from, to });
+      }
+      renameSync(entry.path, entry.item.target);
+      record.placed = true;
+    }
+    // #18, the last window the checks above cannot cover: a connection that
+    // opened a database between its own check and its own rename now holds the
+    // inode sitting in the aside. It is still ATTACHED to it, which is a fact
+    // this can read — and the honest answer is to put every original back, so
+    // whatever that connection has written since is still there, rather than to
+    // report a restore the installation is not using.
+    const usingReplaced: string[] = [];
+    if (opts.allowAttachedUsers !== true) {
+      for (const record of swaps) {
+        if (record.item.kind !== "database") continue;
+        const aside = record.asides.find((a) => a.from === record.item.target)?.to;
+        if (aside === undefined) continue;
+        const reason = attachedDatabaseUser(aside);
+        if (reason !== undefined) {
+          usingReplaced.push(
+            `${record.item.target} ${reason} through the file it was replaced from (${aside})`,
+          );
+        }
+      }
+    }
+    if (usingReplaced.length > 0) {
+      throw new Error(
+        `${usingReplaced.length} database(s) were opened during the swap — ${usingReplaced.join("; ")}`,
+      );
+    }
+  } catch (err) {
+    const unrecovered = rollback();
     throw new Error(
       `Restore from ${opts.backupDir} failed while replacing the destinations: ` +
         `${(err as Error).message}. Every destination was rolled back to what it held before` +
@@ -1663,13 +1902,17 @@ async function replaceDestinations(
 
   // In place. The originals are no longer the only copy of anything — and one
   // we cannot delete is residue beside a restored database, never a reason to
-  // report a completed restore as failed.
+  // report a completed restore as failed. The aside's own sidecars go with it:
+  // the attachment probe above opens each aside, and a -wal it created must not
+  // outlive the file it belongs to.
   for (const record of swaps) {
     for (const aside of record.asides) {
-      try {
-        rmSync(aside.to, { force: true });
-      } catch {
-        // Left behind next to the file it used to be; the restore stands.
+      for (const suffix of ["", "-wal", "-shm"]) {
+        try {
+          rmSync(`${aside.to}${suffix}`, { force: true });
+        } catch {
+          // Left behind next to the file it used to be; the restore stands.
+        }
       }
     }
   }
