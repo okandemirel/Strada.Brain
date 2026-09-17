@@ -6,7 +6,12 @@ function write(sv: SelfVerification, path: string) {
   sv.track("file_write", { path, content: "x" }, { content: "File written" });
 }
 function verified(sv: SelfVerification, tool: string, ok = true, input: Record<string, unknown> = {}) {
-  sv.track(tool, input, { content: ok ? "passed" : "failed", isError: !ok });
+  // A shell result carries the tool's own footer: without a code a shell
+  // verifier has not passed (73f2958d), as in production it always has one.
+  const shell = tool === "shell_exec";
+  const body = ok ? "passed" : "failed";
+  const content = shell ? `$ ${String(input["command"] ?? "")}\nExit code: ${ok ? 0 : 1} | Duration: 1ms\n\n--- stdout ---\n${body}` : body;
+  sv.track(tool, input, { content, isError: !ok });
 }
 
 describe("a compile is not a test run", () => {
