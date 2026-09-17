@@ -126,6 +126,38 @@ describe("initializeMultiAgentDelegationStage — agent enabled, fully injected 
     expect(result.delegationManager).toBeUndefined();
   });
 
+  it("the background submitter hands the agent's id to the task, so its spend reaches the agent's cap (audit 03.5)", async () => {
+    const fakeAgentManager = { setBackgroundTaskSubmitter: vi.fn(), setTaskManager: vi.fn(), setDelegationFactory: vi.fn() };
+    const submit = vi.fn();
+    const deps = {
+      createAgentRegistry: vi.fn(() => ({ initialize: vi.fn() })),
+      createAgentBudgetTracker: vi.fn(() => ({ initialize: vi.fn() })),
+      createAgentManager: vi.fn(() => fakeAgentManager),
+    };
+    await initializeMultiAgentDelegationStage(
+      {
+        config: makeConfig({ agent: { enabled: true, defaultBudgetUsd: 5, maxConcurrent: 3, idleTimeoutMs: 60000, maxMemoryEntries: 1000 } as Config["agent"] }),
+        logger: createMockLogger(),
+        daemonMode: false,
+        daemonStorage: { getDatabase: vi.fn(() => ({})) } as unknown as Parameters<typeof initializeMultiAgentDelegationStage>[0]["daemonStorage"],
+        daemonContext: {} as unknown as Parameters<typeof initializeMultiAgentDelegationStage>[0]["daemonContext"],
+        taskManager: { submit, on: vi.fn() } as unknown as Parameters<typeof initializeMultiAgentDelegationStage>[0]["taskManager"],
+        orchestrator: { authorizationStore: () => new Map<string, readonly string[]>(), addTool: vi.fn() } as unknown as Parameters<typeof initializeMultiAgentDelegationStage>[0]["orchestrator"],
+        providerManager: { isAvailable: vi.fn(() => false) } as unknown as Parameters<typeof initializeMultiAgentDelegationStage>[0]["providerManager"],
+        toolRegistry: { getAllTools: vi.fn(() => []) } as unknown as Parameters<typeof initializeMultiAgentDelegationStage>[0]["toolRegistry"],
+        channel: {} as unknown as Parameters<typeof initializeMultiAgentDelegationStage>[0]["channel"],
+        metrics: { getSnapshot: vi.fn(() => ({})) } as unknown as Parameters<typeof initializeMultiAgentDelegationStage>[0]["metrics"],
+        soulLoader: {} as unknown as Parameters<typeof initializeMultiAgentDelegationStage>[0]["soulLoader"],
+        dmPolicy: {} as unknown as Parameters<typeof initializeMultiAgentDelegationStage>[0]["dmPolicy"],
+        stradaDeps: { coreInstalled: false, modulesInstalled: false, mcpInstalled: false, coreSource: "local", modulesSource: "local", mcpSource: "local" } as unknown as Parameters<typeof initializeMultiAgentDelegationStage>[0]["stradaDeps"],
+      },
+      deps as unknown as Parameters<typeof initializeMultiAgentDelegationStage>[1],
+    );
+    const submitter = fakeAgentManager.setBackgroundTaskSubmitter.mock.calls[0]![0] as (m: unknown, a: unknown, o: unknown) => void;
+    submitter({ chatId: "c1", channelType: "cli", text: "do it", userId: "u1" }, { id: "agent_7" }, {});
+    expect(submit).toHaveBeenCalledWith("c1", "cli", "do it", expect.objectContaining({ agentId: "agent_7", userId: "u1" }));
+  });
+
   it("calls agentRegistry.initialize() during stage boot", async () => {
     const fakeAgentManager = { setBackgroundTaskSubmitter: vi.fn(), setTaskManager: vi.fn(), setDelegationFactory: vi.fn() };
     const fakeAgentBudgetTracker = { initialize: vi.fn() };

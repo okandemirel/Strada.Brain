@@ -178,6 +178,7 @@ describe("TaskStorage", () => {
       goalRootId: "goal_root_1",
       origin: "daemon",
       triggerName: "nightly-scan",
+      agentId: "agent_7",
       forceSharedPlanning: true,
       userContent: [
         { type: "text", text: "Look at this screenshot" },
@@ -209,6 +210,8 @@ describe("TaskStorage", () => {
       goalRootId: "goal_root_1",
       origin: "daemon",
       triggerName: "nightly-scan",
+      // The agent whose allowance the task spends survives a reload (audit 03.5).
+      agentId: "agent_7",
       forceSharedPlanning: true,
     }));
     expect(loaded?.userContent).toEqual(task.userContent);

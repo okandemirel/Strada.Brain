@@ -108,6 +108,13 @@ export interface Task {
   monitorScope?: string;
   userId?: string;
   goalRootId?: string;
+  /**
+   * The multi-agent instance this task runs FOR, when an agent submitted it.
+   * Its spend is attributed to that agent's allowance; without this the
+   * background route recorded agent work as ordinary chat spend and an
+   * agent's cap never filled (audit 03.5 / D23, 2026-09-13).
+   */
+  agentId?: string;
   title: string;
   status: TaskStatus;
   prompt: string;

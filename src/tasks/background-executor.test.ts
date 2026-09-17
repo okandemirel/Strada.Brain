@@ -2189,6 +2189,38 @@ describe("BackgroundExecutor - Blocked worker results", () => {
   });
 });
 
+describe("BackgroundExecutor - agent budget attribution (audit 03.5 / D23)", () => {
+  it("an agent's task spends the agent's allowance, not ordinary chat spend", async () => {
+    // The background route recorded agent work as source "chat" with no
+    // agent id, so a capped agent's usage stayed at zero and its cap never
+    // filled.
+    const mockOrch = createMockOrchestrator();
+    mockOrch.runBackgroundTask.mockImplementation(async (_prompt: string, opts?: { onUsage?: (usage: { provider: string; inputTokens: number; outputTokens: number }) => void }) => {
+      opts?.onUsage?.({ provider: "claude", inputTokens: 100_000, outputTokens: 50_000 });
+      return "task done";
+    });
+    const executor = new BackgroundExecutor({ orchestrator: mockOrch as any, aiProvider: undefined, channel: undefined });
+    const unified = { recordCost: vi.fn() };
+    executor.setUnifiedBudgetManager(unified as any);
+    const mockTaskManager = { updateStatus: vi.fn(), complete: vi.fn(), fail: vi.fn() };
+    executor.setTaskManager(mockTaskManager as any);
+
+    executor.enqueue(createTestTask(undefined, { agentId: "agent_7" }), new AbortController().signal, vi.fn());
+    await vi.waitFor(() => { expect(mockTaskManager.complete).toHaveBeenCalled(); }, { timeout: 5000 });
+
+    expect(unified.recordCost).toHaveBeenCalledWith(
+      expect.any(Number),
+      "agent",
+      expect.objectContaining({ agentId: "agent_7", tokensIn: 100_000, tokensOut: 50_000 }),
+    );
+    // Guard: a task with no agent is still chat spend.
+    unified.recordCost.mockClear();
+    executor.enqueue(createTestTask(undefined, {}), new AbortController().signal, vi.fn());
+    await vi.waitFor(() => { expect(unified.recordCost).toHaveBeenCalled(); }, { timeout: 5000 });
+    expect(unified.recordCost.mock.calls[0]![1]).toBe("chat");
+  });
+});
+
 describe("BackgroundExecutor - daemon budget tracking", () => {
   it("records cost for daemon-origin tasks from background usage callbacks", async () => {
     const mockOrch = createMockOrchestrator();

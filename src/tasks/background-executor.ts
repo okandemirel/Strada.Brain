@@ -2133,12 +2133,15 @@ export class BackgroundExecutor {
       }
       const model = usage.model ?? usage.provider;
       if (this._unifiedBudgetManager) {
-        const source = task.origin === "daemon" ? "daemon" : "chat";
+        // An agent's task spends the AGENT's allowance (audit 03.5 / D23):
+        // recorded as chat, a capped agent could run background work for ever.
+        const source = task.agentId ? "agent" : task.origin === "daemon" ? "daemon" : "chat";
         this._unifiedBudgetManager.recordCost(costUsd, source, {
           model,
           tokensIn: usage.inputTokens,
           tokensOut: usage.outputTokens,
           triggerName: task.triggerName,
+          ...(task.agentId ? { agentId: task.agentId } : {}),
         });
         return;
       }

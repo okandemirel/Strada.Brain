@@ -90,6 +90,7 @@ export class TaskManager extends EventEmitter {
       userId?: string;
       parentId?: TaskId;
       goalRootId?: string;
+      agentId?: string;
     },
   ): Task {
     const logger = getLogger();
@@ -102,6 +103,7 @@ export class TaskManager extends EventEmitter {
       conversationId: options?.conversationId,
       userId: options?.userId,
       goalRootId: options?.goalRootId,
+      agentId: options?.agentId,
       title: prompt.slice(0, 80),
       status: TaskStatus.pending,
       prompt,

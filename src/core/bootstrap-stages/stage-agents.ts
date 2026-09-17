@@ -140,12 +140,15 @@ export async function initializeMultiAgentDelegationStage(
 
   const agentManager = deps.createAgentManager?.(agentManagerOptions)
     ?? new AgentManager(agentManagerOptions);
-  agentManager.setBackgroundTaskSubmitter((msg, _agent, liveOrchestrator) => {
+  agentManager.setBackgroundTaskSubmitter((msg, agent, liveOrchestrator) => {
     params.taskManager.submit(msg.chatId, msg.channelType, msg.text, {
       attachments: msg.attachments,
       conversationId: msg.conversationId,
       userId: msg.userId,
       orchestrator: liveOrchestrator,
+      // WHOSE allowance this work spends: the agent was handed here and
+      // dropped, so its background work never reached its cap (audit 03.5).
+      agentId: agent.id,
     });
   });
   agentManager.setTaskManager?.(params.taskManager);

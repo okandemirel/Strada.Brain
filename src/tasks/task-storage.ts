@@ -77,6 +77,7 @@ interface TaskRow {
   error: string | null;
   origin: string | null;
   trigger_name: string | null;
+  agent_id: string | null;
   force_shared_planning: number | null;
   user_content_json: string | null;
   attachments_json: string | null;
@@ -165,6 +166,7 @@ export class TaskStorage {
       task.workspacePolicy ?? null,
       task.cancelReason ?? null,
       task.supervisorMode ?? null,
+      task.agentId ?? null,
     );
   }
 
@@ -360,6 +362,7 @@ export class TaskStorage {
       parentId: row.parent_id ? (row.parent_id as TaskId) : undefined,
       origin: this.parseTaskOrigin(row.origin),
       triggerName: row.trigger_name ?? undefined,
+      agentId: row.agent_id ?? undefined,
       forceSharedPlanning: row.force_shared_planning === 1,
       userContent: this.parseUserContent(row.user_content_json),
       attachments: this.parseAttachments(row.attachments_json),
@@ -389,6 +392,7 @@ export class TaskStorage {
       ["workspace_policy", "TEXT"],
       ["cancel_reason", "TEXT"],
       ["supervisor_mode", "TEXT"],
+      ["agent_id", "TEXT"],
     ];
     const missingColumns = migratableColumns.filter(([name]) => !knownColumns.has(name));
 
@@ -487,9 +491,9 @@ export class TaskStorage {
           id, chat_id, channel_type, conversation_id, user_id, goal_root_id,
           title, status, prompt, result, error, origin, trigger_name,
           force_shared_planning, user_content_json, attachments_json,
-          created_at, updated_at, completed_at, parent_id, workspace_policy, cancel_reason, supervisor_mode
+          created_at, updated_at, completed_at, parent_id, workspace_policy, cancel_reason, supervisor_mode, agent_id
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       getTask: `SELECT * FROM tasks WHERE id = ?`,
       updateStatus: `UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?`,
