@@ -4462,6 +4462,43 @@ describe("CampaignManager", () => {
       expect(existsSync(join(projectRoot, "..", "escaped-gdd.md"))).toBe(false);
       expect(outside.gddPath).toBeUndefined();
       expect(outside.gddText).toBe("# GDD\n\nEscape.");
+      // Round 7 #5: a LEAF that is a symlink out of the project is not written through; a
+      // folder whose name merely starts with dots is fine.
+      const victim = join(dir, "victim.md");
+      writeFileSync(victim, "untouched");
+      symlinkSync(victim, join(projectRoot, "docs", "Linked_GDD.md"));
+      const linked = manager.startFromGdd({ ...ctx, chatId: "chat-linked" }, "# GDD\n\nThrough the link.", "docs/Linked_GDD.md");
+      expect(readFileSync(victim, "utf8")).toBe("untouched");
+      expect(linked.gddPath).toBeUndefined();
+      mkdirSync(join(projectRoot, "..design"), { recursive: true });
+      const dotted = manager.startFromGdd({ ...ctx, chatId: "chat-dotted" }, "# GDD\n\nDotted.", "..design/GDD.md");
+      expect(dotted.gddPath).toBe("..design/GDD.md");
+      expect(readFileSync(join(projectRoot, "..design", "GDD.md"), "utf8")).toBe("# GDD\n\nDotted.");
+    });
+
+    it("an amendment survives a stale save from planning, and a row with nothing to approve is not approved (round 7 #4, #7)", async () => {
+      mkdirSync(join(projectRoot, "docs"), { recursive: true });
+      const text = "# GDD\n\nRevision one.";
+      writeFileSync(join(projectRoot, "docs", "Rev_GDD.md"), text);
+      const campaign = manager.startFromGdd({ ...ctx, chatId: "chat-rev" }, text, "docs/Rev_GDD.md");
+      await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("executing"));
+      // A stale copy from before the amendment…
+      const stale = storage.get(campaign.id)!;
+      writeFileSync(join(projectRoot, "docs", "Rev_GDD.md"), text + " Amended.");
+      expect(manager.amendGdd(campaign.id)).toBe(sha(text + " Amended."));
+      // …saved afterwards does not restore the old document.
+      (manager as unknown as { persist(c: Campaign): boolean }).persist(stale);
+      expect(storage.get(campaign.id)!.gddSha256).toBe(sha(text + " Amended."));
+      expect(storage.get(campaign.id)!.gddText).toBe(text + " Amended.");
+      // #4: nothing to approve — the gate stays.
+      const empty = {
+        id: "c_empty", chatId: "chat-empty", channelType: "cli", userId: "u", projectRoot, gddPath: "docs/Missing_GDD.md",
+        state: "awaiting-approval", draftAttempts: 1, milestones: [], currentMilestone: 0, createdAt: Date.now(), updatedAt: Date.now(),
+      } as unknown as Campaign;
+      storage.save(empty);
+      expect(await manager.tryHandleApproval("chat-empty", "yes")).toBe(true);
+      expect(storage.get("c_empty")!.state).toBe("awaiting-approval");
+      expect(storage.get("c_empty")!.gddSha256).toBeUndefined();
     });
 
     it("a row from before the hash takes the text it holds as approved (migration), and a text-only intake cannot drift", () => {

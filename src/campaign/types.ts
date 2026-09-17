@@ -328,6 +328,8 @@ export interface Campaign {
    * amendment is acknowledged (plan 1.9 / audit 06.2 / D06).
    */
   gddSha256?: string;
+  /** Bumped on approval and on every amendment: a save from behind it does not overwrite the newer document (round 7 #7). */
+  gddRevision?: number;
   /** Task id of the in-flight GDD draft (drafting-gdd state). */
   draftTaskId?: string;
   /** Number of GDD draft rounds (feedback loops at the approval gate). */

@@ -770,6 +770,7 @@ const REQUIREMENT_STOPWORDS = new Set([
   "such", "them", "they", "what", "where", "your", "game", "player", "players", "absent", "missing", "implemented",
   "delivered", "required", "requirement", "milestone", "sprint", "shipped", "landed", "does", "make", "makes",
   "using", "used", "through", "without", "within", "between", "still", "never", "always", "system", "feature",
+  "the", "and", "for", "are", "our", "its", "not", "but", "any", "can", "has", "had", "was", "who", "how", "all",
 ]);
 
 /**
@@ -778,9 +779,23 @@ const REQUIREMENT_STOPWORDS = new Set([
  * "saver" (ScreenSaver.png) does not meet "save" and "leverage" does not
  * meet "level" (Codex 2026-09-17 round 6 #1, #2).
  */
+const IRREGULAR_STEMS: Record<string, string> = { mice: "mous", children: "child", feet: "foot", teeth: "tooth", geese: "goos", men: "man", women: "woman", lives: "lif", knives: "knif" };
 function stemWord(word: string): string {
-  return word.replace(/ies$/u, "y").replace(/(?:ing|ed|es|s|e)$/u, "");
+  const irregular = IRREGULAR_STEMS[word];
+  if (irregular !== undefined) return irregular;
+  // Canonical suffix rules: "progress" and "progresses" meet at "progres",
+  // "mouse" and "mice" at "mous" (Codex 2026-09-17 round 7 #1).
+  let w = word.replace(/ies$/u, "y").replace(/sses$/u, "ss");
+  w = w.replace(/(?:ing|ed)$/u, "");
+  if (/es$/u.test(w) && !/(?:ss)$/u.test(w.slice(0, -2) + "ss")) w = w.replace(/es$/u, "");
+  else if (/[^s]s$/u.test(w)) w = w.replace(/s$/u, "");
+  return w.replace(/e$/u, "");
 }
+
+/** Action words that say nothing about WHICH feature: "Run offline" is not RunAnalytics.cs (round 7 #2). */
+const GENERIC_ACTION_STEMS = new Set(["run", "set", "get", "use", "add", "mak", "show", "open", "clos", "start", "stop", "load", "play", "turn", "put", "tak", "giv", "mov", "work", "need", "allow", "support", "handl", "updat", "chang", "check", "appli", "enabl", "disabl", "creat", "build", "call", "keep", "hold", "read", "writ", "send", "receiv"]);
+/** Words that are about the SUITE, not about any feature (round 7 #3). */
+const SUITE_STEMS = new Set(["test", "tests", "suite", "unit", "playmode", "editmode", "green", "pass", "passes", "passing", "run", "runs", "unfiltered", "whole", "full", "entire", "all", "complete", "coverage", "cover", "clean", "every", "ran", "play", "mode", "edit", "the", "and", "for", "are", "our", "its", "case", "cases"].map(stemWord));
 
 /** The stems of a text's words: Unicode letters, camelCase split BEFORE case folding, paths and dots as separators. */
 function stemsOf(text: string): string[] {
@@ -799,7 +814,7 @@ function stemsOf(text: string): string[] {
  */
 export function requirementTokens(requirement: string): string[] {
   const text = requirement.replace(/:\s*(?:absent|missing|no milestone implemented it).*$/i, "");
-  return [...new Set(stemsOf(text).filter((w) => !REQUIREMENT_STOPWORDS.has(w) && !REQUIREMENT_STOPWORDS.has(w + "e") && !REQUIREMENT_STOPWORDS.has(w + "s")))];
+  return [...new Set(stemsOf(text).filter((w) => !REQUIREMENT_STOPWORDS.has(w) && !REQUIREMENT_STOPWORDS.has(w + "e") && !REQUIREMENT_STOPWORDS.has(w + "s") && !GENERIC_ACTION_STEMS.has(w)))];
 }
 
 /**
@@ -812,9 +827,14 @@ export function requirementTokens(requirement: string): string[] {
 export function quoteIsAbout(requirement: string, fact: string): boolean {
   const line = fact.trim();
   if (line.startsWith("suite:")) {
-    const req = requirement.toLowerCase();
-    return /\b(?:full|whole|entire|all|complete)\b[^.]*\b(?:test|tests|suite|suites|playmode|editmode)\b/u.test(req)
-      || /\b(?:test|tests|suite|suites)\b[^.]*\b(?:green|pass|passes|passing|run|runs|unfiltered)\b/u.test(req);
+    // A SUITE-ONLY requirement: once the suite words are removed nothing
+    // distinctive remains. "All unit tests cover saving" keeps "saving", so
+    // a suite total does not close it (round 7 #3).
+    const stems = stemsOf(requirement.replace(/:\s*(?:absent|missing|no milestone implemented it).*$/i, ""))
+      .filter((w) => !REQUIREMENT_STOPWORDS.has(w) && !REQUIREMENT_STOPWORDS.has(w + "e") && !REQUIREMENT_STOPWORDS.has(w + "s"));
+    const suiteWords = new Set(["test", "tests", "suite", "playmode", "editmode"].map(stemWord));
+    const mentionsSuite = stems.some((w) => suiteWords.has(w));
+    return mentionsSuite && stems.every((w) => SUITE_STEMS.has(w));
   }
   const tokens = requirementTokens(requirement);
   if (tokens.length === 0) return false;

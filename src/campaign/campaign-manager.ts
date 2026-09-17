@@ -24,7 +24,7 @@ import {
 } from "./producer-evidence.js";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { basename, dirname, join, relative, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import { getLoggerSafe } from "../utils/logger.js";
 import { allProvidersCoolingDownMs, describeProviderOutage, msSinceNewestProviderFailure, providerFailuresSince } from "../agents/providers/provider-outage.js";
 import type { IncomingMessage } from "../channels/channel-messages.interface.js";
@@ -1040,10 +1040,17 @@ export class CampaignManager {
       // game to, by hash — an edit during implementation is drift, not a
       // silent re-approval at the first delivery gate.
       const approvedText = (campaign.gddPath !== undefined ? readGddFile(this.projectRoot, campaign.gddPath) : undefined) ?? campaign.gddText;
-      if (approvedText !== undefined) {
-        campaign.gddText = approvedText;
-        campaign.gddSha256 = sha256Of(approvedText);
+      if (approvedText === undefined) {
+        // NOTHING TO APPROVE: a row with neither text nor a readable file
+        // would take whatever bytes planning later found as the approved
+        // document (round 7 #4). The gate stays where it is.
+        campaign.state = "awaiting-approval";
+        await this.tell(campaign, `There is no GDD to approve — ${campaign.gddPath ?? "no document path"} could not be read and no text was taken in. Supply the document first.`);
+        return true;
       }
+      campaign.gddText = approvedText;
+      campaign.gddSha256 = sha256Of(approvedText);
+      campaign.gddRevision = (campaign.gddRevision ?? 0) + 1;
       this.persist(campaign);
       await this.tell(
         campaign,
@@ -5591,6 +5598,7 @@ export class CampaignManager {
         theirSpec = { ...theirSpec, sessions: next };
       }
       if (theirs.found && theirRounds.length > 1) theirs = withWorstPerf(theirs, theirRounds);
+      if (theirs.found) theirs = this.withRememberedWorstPerf(campaign, other.artifactPath, theirs);
       if (theirs.found && theirSpec.trimmed !== undefined) theirs = { ...theirs, allowanceNote: theirSpec.trimmed };
       // The producer's own refusal — "…is not a player this machine can run
       // (an .apk, WebGL folder or missing executable) — nothing was played" —
@@ -5750,6 +5758,7 @@ export class CampaignManager {
     if (onDisk === undefined) return undefined;
     campaign.gddSha256 = sha256Of(onDisk);
     campaign.gddText = onDisk;
+    campaign.gddRevision = (campaign.gddRevision ?? 0) + 1;
     this.persist(campaign);
     return campaign.gddSha256;
   }
@@ -7193,6 +7202,12 @@ export class CampaignManager {
           .replace(/^_+|_+$/g, "") || "Imported_GDD";
       const relPath = `docs/${baseName}.md`;
       const absPath = join(this.projectRoot, relPath);
+      // The same containment every GDD write has (round 7 #6): a docs/ that
+      // is a symlink out of the project writes nothing.
+      if (!pathIsInsideProject(this.projectRoot, relPath)) {
+        getLoggerSafe().warn("The supplied GDD's docs/ path leaves the project; the text stands alone", { relPath });
+        return undefined;
+      }
       let current: string | undefined;
       try {
         current = readFileSync(absPath, "utf8");
@@ -7428,6 +7443,16 @@ export class CampaignManager {
     // revival had cleared — was written back over the revived row (Codex
     // 2026-09-12 X#1). The obsolete writer's changes are dropped, loudly.
     const before = this.storage.get(campaign.id);
+    // A NEWER APPROVED DOCUMENT IS NOT OVERWRITTEN BY AN OLDER COPY. An
+    // amendment landed while planning held its own campaign object, and the
+    // planner's save restored the old text and hash (round 7 #7): the GDD
+    // fields carry a revision, and a save from behind it takes the stored ones.
+    if (before !== undefined && (before.gddRevision ?? 0) > (campaign.gddRevision ?? 0)) {
+      campaign.gddText = before.gddText;
+      campaign.gddSha256 = before.gddSha256;
+      campaign.gddRevision = before.gddRevision;
+      campaign.gddPath = before.gddPath;
+    }
     if (before !== undefined && (before.stopGeneration ?? 0) > (campaign.stopGeneration ?? 0)) {
       getLoggerSafe().warn("Refused a campaign save from an earlier generation", {
         id: campaign.id,
@@ -7616,15 +7641,23 @@ function pathIsInsideProject(projectRoot: string, rel: string): boolean {
   try {
     const root = realpathSync.native(projectRoot);
     const target = join(projectRoot, rel);
-    let probe = dirname(target);
+    // THE LEAF TOO: docs/GDD.md as a symlink to /outside/victim.md resolved
+    // its parent only and was overwritten (round 7 #5). The nearest existing
+    // path — the leaf when it exists — is resolved, the rest appended.
+    let probe = target;
+    const tail: string[] = [];
     while (!existsSync(probe)) {
+      tail.unshift(basename(probe));
       const up = dirname(probe);
       if (up === probe) return false;
       probe = up;
     }
-    const real = realpathSync.native(probe);
+    const real = join(realpathSync.native(probe), ...tail);
     const inside = relative(root, real);
-    return inside === "" || (!inside.startsWith("..") && !inside.startsWith(sep + "..") && !/^[A-Za-z]:/u.test(inside));
+    if (inside === "") return true;
+    if (isAbsolute(inside)) return false;
+    // By SEGMENT: "..design" is a name, ".." is an escape.
+    return !inside.split(sep).some((segment) => segment === "..");
   } catch {
     return false;
   }

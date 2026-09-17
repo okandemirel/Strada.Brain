@@ -463,19 +463,15 @@ function isSessionIndex(n: number): boolean {
  * round 5 #6).
  */
 function parseSessionSet(spec: string): Set<number> | undefined {
-  const ordered = parseSessionList(spec);
+  const ordered = parseSessionListRaw(spec);
   return ordered === undefined ? undefined : new Set(ordered);
 }
 
-/** The sessions a spec names, IN THE ORDER the producer would play them, without repeats. */
-function parseSessionList(spec: string): number[] | undefined {
+/** The sessions a spec names, IN THE ORDER the producer would play them, repeats kept (they take a slot). */
+function parseSessionListRaw(spec: string): number[] | undefined {
   const out: number[] = [];
-  const seen = new Set<number>();
   const push = (n: number): void => {
-    if (!seen.has(n)) {
-      seen.add(n);
-      out.push(n);
-    }
+    out.push(n);
   };
   for (const raw of spec.split(",")) {
     const token = raw.trim();
@@ -526,11 +522,14 @@ export function sessionsSatisfy(declared: string, actual: string): boolean {
   const got = actual.trim().toLowerCase();
   if (want === "all") {
     if (got === "all") return true;
-    const set = parseSessionSet(got);
-    if (set === undefined || set.size < MAX_SESSIONS_PER_RUN) return false;
-    // Leading and contiguous: exactly the indices 1..N, N ≥ cap.
-    for (let i = 1; i <= set.size; i++) if (!set.has(i)) return false;
-    return true;
+    // THE FIRST cap SESSIONS AS NAMED, repeats included: "13,1-12" plays
+    // 13,1..11 and omits 12 (round 7 #9). "all" is met only by exactly
+    // 1..cap in order.
+    const named = parseSessionListRaw(got);
+    if (named === undefined) return false;
+    const played = named.slice(0, MAX_SESSIONS_PER_RUN);
+    if (played.length < MAX_SESSIONS_PER_RUN) return false;
+    return played.every((value, i) => value === i + 1);
   }
   const wanted = parseSessionSet(want);
   if (wanted === undefined) return false;
@@ -541,8 +540,10 @@ export function sessionsSatisfy(declared: string, actual: string): boolean {
   // WHAT THE PRODUCER ACTUALLY PLAYS of an explicit spec: the first
   // MAX_SESSIONS_PER_RUN in the order named — "1-13" runs 1..12, so it does
   // not cover 13 (Codex 2026-09-17 round 6 #23).
-  const named = parseSessionList(got);
+  const named = parseSessionListRaw(got);
   if (named === undefined) return false;
+  // Capped BEFORE de-duplication: "1,1,2,…,12" names twelve slots and stops
+  // at 11 (round 7 #9).
   const ran = new Set(named.slice(0, MAX_SESSIONS_PER_RUN));
   for (const i of wanted) if (!ran.has(i)) return false;
   return true;

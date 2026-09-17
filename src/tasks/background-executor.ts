@@ -1038,6 +1038,9 @@ export class BackgroundExecutor {
 
     if (this.daemonEventBus) {
       this.daemonEventBus.emit("goal:complete", {
+        // The owner, so the notification reaches the chat that started it (plan 2.9).
+        ...(task.chatId ? { chatId: task.chatId } : {}),
+        ...(task.channelType ? { channelType: task.channelType } : {}),
         rootId: goalTree.rootId,
         taskDescription: goalTree.taskDescription,
         durationMs,
@@ -1071,6 +1074,8 @@ export class BackgroundExecutor {
 
     if (this.daemonEventBus) {
       this.daemonEventBus.emit("goal:failed", {
+        ...(task.chatId ? { chatId: task.chatId } : {}),
+        ...(task.channelType ? { channelType: task.channelType } : {}),
         rootId: goalTree.rootId,
         error,
         failureCount,

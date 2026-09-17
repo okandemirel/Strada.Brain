@@ -64,7 +64,7 @@ describe("windowGdd", () => {
 /** Plan 0-B.3: a measured line is evidence only for a requirement it is about. */
 describe("quoteIsAbout", () => {
   it("stems the requirement's distinctive words and drops its verdict suffix", () => {
-    expect(requirementTokens("Save progress across restarts: absent")).toEqual(["sav", "progres", "acros", "restart"]);
+    expect(requirementTokens("Save progress across restarts: absent")).toEqual(["sav", "progress", "across", "restart"]);
     expect(requirementTokens("Shop: absent")).toEqual(["shop"]);
     // Unicode words are words (round 6 #2).
     expect(requirementTokens("Çıkış menüsü: absent")).toEqual(["çıkış", "menüsü"]);
@@ -88,5 +88,14 @@ describe("quoteIsAbout", () => {
     // A suite total closes the suite requirement, not a requirement that merely mentions a test.
     expect(quoteIsAbout("Test saving progress: absent", "suite: 179/179 tests passed (unfiltered)")).toBe(false);
     expect(quoteIsAbout("All tests pass: absent", "suite: 179/179 tests passed (unfiltered)")).toBe(true);
+    // Round 7 #1-#3: canonical stems, generic actions dropped, suite-only rule.
+    expect(quoteIsAbout("Progress bar: absent", "landed: Added Assets/UI/Progresses.cs")).toBe(true);
+    expect(quoteIsAbout("Mouse input: absent", "landed: Added Assets/Input/Mice.cs")).toBe(true);
+    expect(quoteIsAbout("Run offline: absent", "landed: Added Assets/Scripts/RunAnalytics.cs")).toBe(false);
+    expect(quoteIsAbout("Set resolution: absent", "landed: Added Assets/Scripts/SetVolume.cs")).toBe(false);
+    expect(quoteIsAbout("Set resolution: absent", "landed: Added Assets/Settings/ResolutionMenu.cs")).toBe(true);
+    expect(quoteIsAbout("All unit tests cover saving: absent", "suite: 179/179 tests passed (unfiltered)")).toBe(false);
+    expect(quoteIsAbout("Tests for saving pass: absent", "suite: 179/179 tests passed (unfiltered)")).toBe(false);
+    expect(quoteIsAbout("The whole PlayMode suite runs clean: absent", "suite: 179/179 tests passed (unfiltered)")).toBe(true);
   });
 });

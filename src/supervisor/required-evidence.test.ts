@@ -529,5 +529,10 @@ describe("sessionsSatisfy caps explicit specs at what the producer plays", () =>
     expect(sessionsSatisfy("12", "1-13")).toBe(true);
     expect(sessionsSatisfy("13", "13,1,2,3,4,5,6,7,8,9,10,11,12,14")).toBe(true);
     expect(sessionsSatisfy("14", "13,1,2,3,4,5,6,7,8,9,10,11,12,14")).toBe(false);
+    // Round 7 #9: repeats take slots, and "all" is exactly 1..cap in order.
+    expect(sessionsSatisfy("12", "1,1,2,3,4,5,6,7,8,9,10,11,12")).toBe(false);
+    expect(sessionsSatisfy("11", "1,1,2,3,4,5,6,7,8,9,10,11,12")).toBe(true);
+    expect(sessionsSatisfy("all", "13,1-12")).toBe(false);
+    expect(sessionsSatisfy("all", "1-12")).toBe(true);
   });
 });
