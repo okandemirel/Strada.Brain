@@ -246,6 +246,36 @@ describe("MessageQueue – retry backoff (FIFO mode)", () => {
     expect(sent).toEqual(["A", "B"]);
   });
 
+  it("an early retry of a parked head cancels its old timer, so a newer backoff is honoured (Codex 2026-09-17)", async () => {
+    let calls = 0;
+    const q = new MessageQueue<string>(
+      makeOpts<string>({
+        baseDelayMs: 1000,
+        maxRetries: 5,
+        processItem: async () => {
+          calls++;
+          throw new Error("transient");
+        },
+      }),
+    );
+    q.enqueue("A").catch(() => {});
+    await q.processQueue(); // attempt 1 at t=0, parked until t=1000
+    expect(calls).toBe(1);
+    // The clock reaches t=1000 but the timer has not fired yet (a periodic
+    // pass gets there first): attempt 2 runs early and parks A until t=3000.
+    vi.setSystemTime(Date.now() + 1000);
+    await q.processQueue();
+    expect(calls).toBe(2);
+    expect(q.entries[0]!.retryAfter).toBe(Date.now() + 2000);
+    // Now the OLD timer fires. It used to clear the newer backoff and retry
+    // at once; it must be gone.
+    await vi.advanceTimersByTimeAsync(1);
+    expect(calls).toBe(2);
+    expect(q.timerMap.size).toBe(1);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(calls).toBe(3);
+  });
+
   it("re-inserts a transiently-failed entry at the HEAD to preserve FIFO order", async () => {
     // "A" fails transiently on its first attempt; while it is backing off, "B"
     // is enqueued. When the retry timer fires, "A" must be re-inserted ahead of

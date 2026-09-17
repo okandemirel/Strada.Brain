@@ -303,6 +303,31 @@ describe("retention and salvage", () => {
     }
   });
 
+  it("a salvage that FAILS does not fail every later acquire on the managers built during it (Codex 2026-09-17)", async () => {
+    const orphan = join(leaseRoot, `task-1-${randomUUID()}`);
+    put(orphan, "Assets/Scripts/HalfWritten.cs", "agent work");
+    writeFileSync(join(orphan, ".strada-lease-owner.json"), JSON.stringify({ pid: 2147483000, startedAt: 1, projectRoot: source }));
+    // The salvage fails WHILE an acquire is waiting on it.
+    let fail!: (err: Error) => void;
+    const gate = new Promise<void>((_r, reject) => { fail = reject; });
+    const spy = vi
+      .spyOn(WorkspaceLeaseManager.prototype as unknown as { salvageOrphanedLeases: () => Promise<void> }, "salvageOrphanedLeases")
+      .mockImplementation(() => gate);
+    try {
+      const first = manager();
+      const second = manager();
+      const waiting = second.acquireLease({ label: "t", forceTempCopy: true });
+      await new Promise((r) => setTimeout(r, 20));
+      fail(new Error("disk full during salvage"));
+      const lease = await waiting;
+      await lease.release();
+      const again = await first.acquireLease({ label: "t2", forceTempCopy: true });
+      await again.release();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("an orphan that died mid-commit carries a ledger: salvage reads it, finishes what it can, and removes it (#34)", async () => {
     const orphan = join(leaseRoot, `task-1-${randomUUID()}`);
     put(orphan, "Assets/Scripts/HalfWritten.cs", "agent work");

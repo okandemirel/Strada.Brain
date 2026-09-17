@@ -157,6 +157,10 @@ export class MessageQueue<T> {
           if (!entry) break;
           // A head parked for its backoff pauses the whole queue: FIFO.
           if (entry.retryAfter != null && Date.now() < entry.retryAfter) break;
+          // Retrying a parked head early (a periodic pass) cancels its timer,
+          // or the old callback would clear a NEWER backoff and retry at once
+          // (Codex 2026-09-17 on b0a1e07e).
+          if (entry.retryAfter != null) this.clearTimersFor(entry);
 
           try {
             const result = await this.opts.processItem(entry.item);
@@ -220,6 +224,17 @@ export class MessageQueue<T> {
   private removeEntry(entry: { id: string }): void {
     const idx = this.entries.findIndex((e) => e.id === entry.id);
     if (idx !== -1) this.entries.splice(idx, 1);
+    this.clearTimersFor(entry);
+  }
+
+  /** Cancel every retry timer that belongs to this entry. */
+  private clearTimersFor(entry: { id: string }): void {
+    for (const [timer, owner] of this.timerMap) {
+      if (owner.id === entry.id) {
+        clearTimeout(timer);
+        this.timerMap.delete(timer);
+      }
+    }
   }
 
   /**

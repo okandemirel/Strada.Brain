@@ -674,7 +674,6 @@ export class WorkspaceLeaseManager {
   private readonly projectRoot: string;
   private readonly leaseRoot: string;
   /** The constructor's orphan salvage while it runs; acquireLease waits for it. */
-  private salvageInFlight: Promise<void> | null = null;
   private readonly preferGitWorktree: boolean;
   private readonly commandRunner: WorkspaceCommandRunner;
   /** Lease path → shas of its commits that already landed on the project's HEAD (so salvage skips them). */
@@ -750,15 +749,24 @@ export class WorkspaceLeaseManager {
         // boot lease seeded with 0 of the 2000 files salvage was still writing
         // into the project, so the agent's later edit of one of them read as
         // a user conflict.
-        const salvage = this.salvageOrphanedLeases(orphans).finally(() => {
-          SALVAGE_IN_FLIGHT.delete(key);
-        });
+        const salvage = this.salvageOrphanedLeases(orphans)
+          .catch((err: unknown) => {
+            // Logged once here; a failed salvage is not a reason to refuse
+            // every later lease (Codex 2026-09-17 on 757dae47).
+            getLoggerSafe().warn("Orphaned workspace salvage failed", {
+              error: err instanceof Error ? err.message : String(err),
+            });
+          })
+          .finally(() => {
+            SALVAGE_IN_FLIGHT.delete(key);
+          });
         SALVAGE_IN_FLIGHT.set(key, salvage);
       }
     }
     // Every manager for this pair waits on the same salvage, whichever
-    // manager started it.
-    this.salvageInFlight = SALVAGE_IN_FLIGHT.get(key) ?? null;
+    // manager started it — read from the map at acquire time, never cached
+    // on the instance: a rejected salvage held on the instance failed every
+    // later acquire on both managers for good (Codex 2026-09-17 on 757dae47).
   }
 
   /** Directories under the lease root at construction time (all orphans).
@@ -922,9 +930,19 @@ export class WorkspaceLeaseManager {
     // A salvage still writing a crashed owner's work into the project must
     // finish before this lease is seeded from it (see the constructor).
     // The barrier is the SHARED one, read at call time: a manager built
-    // after the salvage started still waits for it.
-    const barrier = SALVAGE_IN_FLIGHT.get(salvageKey(this.leaseRoot, this.projectRoot)) ?? this.salvageInFlight;
-    if (barrier) await barrier;
+    // after the salvage started still waits for it, and a salvage that
+    // failed is gone from the map, so the failure is logged once and the
+    // next acquire proceeds.
+    const barrier = SALVAGE_IN_FLIGHT.get(salvageKey(this.leaseRoot, this.projectRoot));
+    if (barrier) {
+      try {
+        await barrier;
+      } catch (err) {
+        getLoggerSafe().warn("Orphaned workspace salvage failed; acquiring anyway", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
     const id = randomUUID();
     const createdAt = Date.now();
     const label = request.label?.trim() || undefined;
