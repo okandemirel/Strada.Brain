@@ -22,7 +22,9 @@ import {
 } from "../../security/browser-security.js";
 import { getLogger } from "../../utils/logger.js";
 import { createWriteStream } from "node:fs";
-import { mkdir, stat, unlink, writeFile } from "node:fs/promises";
+import type { FileHandle } from "node:fs/promises";
+import { mkdir, mkdtemp, open, rm, stat, unlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -251,7 +253,19 @@ export interface PolicyRoute {
   /** `headers` REPLACES the request's headers when given (round 9 #11). */
   continue(options?: { headers?: Record<string, string> }): Promise<void>;
   abort(errorCode?: string): Promise<void>;
-  fulfill(response: { status: number; headers: Record<string, string>; body: Buffer }): Promise<void>;
+  /**
+   * `body` OR `path` (round 11 #16: a body too large to hold in memory is
+   * spooled to a file and delivered from there). `contentType` accompanies
+   * `path` because Playwright otherwise guesses the type from the file's
+   * extension and that guess REPLACES the `content-type` in `headers`.
+   */
+  fulfill(response: {
+    status: number;
+    headers: Record<string, string>;
+    body?: Buffer;
+    path?: string;
+    contentType?: string;
+  }): Promise<void>;
 }
 
 /** Structural subset of Playwright's Response. */
@@ -874,11 +888,168 @@ async function readBounded(response: Response, maxBytes: number): Promise<Buffer
 }
 
 /**
- * Round 10 #1: the largest credentialed sub-resource body the fulfil path
- * buffers. Past this the request is handed back to the browser WITHOUT the
- * credentials rather than refused (see fulfillCredentialedSubresource).
+ * Round 10 #1 / round 11 #16: the largest credentialed sub-resource body the
+ * fulfil path keeps in MEMORY. Past this the body is spooled to a temporary
+ * file and delivered from there (`route.fulfill({ path })`) — it is NOT a
+ * refusal any more: a retry without the credential answers 401, so the resource
+ * simply never loaded (round 11 #16).
  */
 const SUBRESOURCE_MAX_BYTES = 32 * MB_IN_BYTES;
+
+/**
+ * Round 11 #16: the largest credentialed sub-resource body delivered at all.
+ * Beyond the in-memory bound above the body goes to a spool file, so this is a
+ * disk bound rather than a heap one; it exists because Playwright's `fulfill`
+ * has no streaming form (it base64-encodes whatever it is given, from `body` or
+ * from `path`), so an unbounded response would still have to fit in memory once
+ * inside the driver.
+ */
+export const SUBRESOURCE_MAX_SPOOL_BYTES = 256 * MB_IN_BYTES;
+
+/** Where credentialed sub-resource bodies too large for memory are spooled. */
+const SUBRESOURCE_SPOOL_PREFIX = "strada-subresource-";
+
+/**
+ * A body ready for `route.fulfill`: in memory, or spooled to `path` (which the
+ * caller deletes through `cleanup` once fulfil has read it).
+ */
+interface DeliverableBody {
+  body?: Buffer;
+  path?: string;
+  bytes: number;
+  cleanup?: () => Promise<void>;
+}
+
+/**
+ * Round 11 #16: read a sub-resource body for delivery, keeping at most
+ * `memoryMaxBytes` in memory and spooling the rest to a temporary file, up to
+ * `spoolMaxBytes` in total. Refuses (throws, cancelling the stream) only past
+ * that total, or when the declared content-length already exceeds it.
+ *
+ * The old code buffered with a single 32 MiB bound and treated anything larger
+ * as "hand it back to the browser without the credentials". For a resource that
+ * REQUIRES the credential that is not a fallback — the browser's retry gets a
+ * 401 — so a protected 64 MiB asset never loaded at all.
+ */
+async function readForDelivery(
+  response: Response,
+  memoryMaxBytes: number,
+  spoolMaxBytes: number,
+): Promise<DeliverableBody> {
+  const declared = response.headers.get("content-length");
+  if (declared && Number(declared) > spoolMaxBytes) {
+    await discardBody(response);
+    throw new Error(`Sub-resource exceeds ${spoolMaxBytes} bytes (content-length ${declared})`);
+  }
+  if (!response.body) return { bytes: 0, body: Buffer.alloc(0) };
+  const reader = response.body.getReader();
+  const held: Buffer[] = [];
+  let total = 0;
+  let spoolDir: string | undefined;
+  let spoolPath: string | undefined;
+  let handle: FileHandle | undefined;
+  const cleanup = async (): Promise<void> => {
+    if (handle) {
+      const current = handle;
+      handle = undefined;
+      await current.close().catch(() => undefined);
+    }
+    if (spoolDir) {
+      const dir = spoolDir;
+      spoolDir = undefined;
+      await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+    }
+  };
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = Buffer.from(value);
+      total += chunk.byteLength;
+      if (total > spoolMaxBytes) {
+        await reader.cancel().catch(() => undefined);
+        throw new Error(`Sub-resource exceeds ${spoolMaxBytes} bytes`);
+      }
+      if (!handle && total > memoryMaxBytes) {
+        spoolDir = await mkdtemp(join(tmpdir(), SUBRESOURCE_SPOOL_PREFIX));
+        spoolPath = join(spoolDir, "body.bin");
+        // 0o600: the spool holds a credentialed response body.
+        handle = await open(spoolPath, "w", 0o600);
+        for (const earlier of held) await handle.write(earlier);
+        held.length = 0;
+      }
+      if (handle) await handle.write(chunk);
+      else held.push(chunk);
+    }
+    if (spoolPath) {
+      await handle?.close();
+      handle = undefined;
+      return { bytes: total, path: spoolPath, cleanup };
+    }
+    return { bytes: total, body: Buffer.concat(held) };
+  } catch (error) {
+    await cleanup();
+    throw error;
+  }
+}
+
+/**
+ * Round 11 #17: the base a relative reference inside a response body resolves
+ * against — the origin plus the directory of the path. Two URLs that share it
+ * resolve `font.woff2` (and `../x`, and a source-map comment) to exactly the
+ * same place, which is what makes flattening a redirect onto the requested URL
+ * safe.
+ */
+export function relativeBaseOf(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.origin}${parsed.pathname.slice(0, parsed.pathname.lastIndexOf("/") + 1)}`;
+  } catch {
+    return url;
+  }
+}
+
+/**
+ * Round 11 #17: resource types whose bytes carry no reference the BROWSER
+ * resolves against the response URL, so delivering them at the requested URL
+ * after a same-origin redirect cannot resolve anything to the wrong place.
+ *
+ * Everything else (a stylesheet's `url()`, a module's relative import, a
+ * script's `//# sourceMappingURL=`, a manifest's icon paths, a framed document)
+ * IS resolved against the response URL by the browser, so those may only be
+ * flattened onto a requested URL with the same `relativeBaseOf`.
+ *
+ * `xhr`/`fetch`/`eventsource` are in here deliberately: nothing in their bodies
+ * is resolved by the browser at all (a script that wants a base picks one), so
+ * the only casualty of flattening is `response.url` / `response.redirected` on
+ * a same-origin chain.
+ */
+const BASE_INSENSITIVE_RESOURCE_TYPES: ReadonlySet<string> = new Set([
+  "image",
+  "font",
+  "media",
+  "xhr",
+  "fetch",
+  "eventsource",
+  "ping",
+]);
+
+/**
+ * Round 11 #17: may the final response of a same-origin redirect chain be
+ * delivered AT the requested URL?
+ *
+ * Only when nothing resolves differently for it: the same origin+directory, or
+ * a resource type the browser resolves nothing against. `route.fulfill` cannot
+ * change a request's URL, and Playwright never routes a redirect continuation
+ * (crNetworkManager auto-continues any request carrying `redirectedFrom`, a
+ * fulfilled 3xx included), so a redirect that moves the directory cannot be
+ * both mediated and delivered under its real URL — see the comment on
+ * fulfillCredentialedSubresource.
+ */
+function mayFlattenRedirect(requestedUrl: string, finalUrl: string, resourceType: string): boolean {
+  if (relativeBaseOf(finalUrl) === relativeBaseOf(requestedUrl)) return true;
+  return BASE_INSENSITIVE_RESOURCE_TYPES.has(resourceType);
+}
 
 /**
  * Round 10 #1: a sub-resource that carries the agent's credentials is fetched by
@@ -897,18 +1068,35 @@ const SUBRESOURCE_MAX_BYTES = 32 * MB_IN_BYTES;
  * credentials are supplied per hop — only to their own origin. What happens
  * after a redirect is deliberate:
  *   - no redirect (the common case): fulfil the vetted response;
- *   - a SAME-ORIGIN redirect: fulfil it too. Nothing crossed an origin and the
- *     credential was allowed on every hop. (`fulfill` cannot change the URL, so
- *     a stylesheet fetched this way resolves its relative URLs against the
- *     requested URL rather than the final one — same origin, and the alternative
- *     is refusing a redirect the browser itself would have followed.)
+ *   - a SAME-ORIGIN redirect the requested URL can stand in for: fulfil it too.
+ *     Nothing crossed an origin and the credential was allowed on every hop.
+ *   - a SAME-ORIGIN redirect that MOVES the directory (round 11 #17): not
+ *     flattened. `fulfill` cannot change a request's URL, so the browser would
+ *     resolve everything in the body against the URL it asked for: a stylesheet
+ *     redirected from `/style.css` to `/assets/v2/style.css` would resolve
+ *     `url(font.woff2)` to `/font.woff2`, and a module's relative import (or a
+ *     `sourceMappingURL`) the same way. There is no way to have both under
+ *     Playwright's route API — `redirectNavigationRequest` is navigation-only,
+ *     and a fulfilled 3xx is followed by Chromium as a redirect continuation,
+ *     which Playwright never routes ("we do not support intercepting
+ *     redirects": any request carrying `redirectedFrom` is auto-continued), so
+ *     the final hop would be neither pinned nor credentialed. The body is
+ *     therefore discarded and the request handed back to the browser, which
+ *     fetches the chain itself under the real URLs — without the credential, so
+ *     a protected resource fails visibly rather than loading with silently
+ *     misresolved references. Resource types the browser resolves nothing
+ *     against (images, fonts, media, xhr/fetch) are still flattened.
  *   - a CROSS-ORIGIN redirect: the body is discarded and, for a safe method, the
  *     request is handed back to the browser with NO credential override. The
  *     browser then owns that chain under its own rules — CORS included, which
  *     fulfilling a foreign body as a same-origin response would have bypassed —
  *     and it cannot leak what it is not given. An unsafe method (a credentialed
  *     POST) is aborted instead: re-issuing it is not ours to do twice.
- *   - too large to buffer: the same hand-back, for the same reason.
+ *   - larger than SUBRESOURCE_MAX_BYTES (round 11 #16): spooled to a temporary
+ *     file and delivered from there. It used to be handed back uncredentialed,
+ *     which for a resource that requires the credential is a 401 — the
+ *     protected asset never loaded. Only past SUBRESOURCE_MAX_SPOOL_BYTES is
+ *     the hand-back still the answer.
  * Returns true when the route was answered here, false when the caller should
  * continue the request without credentials.
  */
@@ -968,12 +1156,46 @@ async function fulfillCredentialedSubresource(
       );
       return false;
     }
-    const body = await readBounded(response, SUBRESOURCE_MAX_BYTES);
+    // #17: a same-origin redirect that moves the directory cannot be delivered
+    // at the requested URL — the browser would resolve the body's relative
+    // references against the wrong base. Checked BEFORE the body is read.
+    if (
+      normalizeUrl(fetched.finalUrl) !== normalizeUrl(requestedUrl) &&
+      !mayFlattenRedirect(requestedUrl, fetched.finalUrl, request.resourceType())
+    ) {
+      await discardBody(response);
+      options.onBlockedRequest?.(
+        requestedUrl,
+        `credential-bearing ${request.resourceType()} redirected to another directory of the same origin (${fetched.finalUrl}); ` +
+          `its relative references would resolve against ${relativeBaseOf(requestedUrl)} instead of ${relativeBaseOf(fetched.finalUrl)}, ` +
+          `so it was refetched without credentials`,
+      );
+      return false;
+    }
     const responseHeaders: Record<string, string> = {};
     response.headers.forEach((value, name) => {
       if (!DOCUMENT_RESPONSE_HEADERS_DROPPED.has(name.toLowerCase())) responseHeaders[name] = value;
     });
-    await route.fulfill({ status: response.status, headers: responseHeaders, body });
+    // #16: in memory up to SUBRESOURCE_MAX_BYTES, spooled to a file past it.
+    const delivery = await readForDelivery(response, SUBRESOURCE_MAX_BYTES, SUBRESOURCE_MAX_SPOOL_BYTES);
+    try {
+      if (delivery.path !== undefined) {
+        await route.fulfill({
+          status: response.status,
+          headers: responseHeaders,
+          path: delivery.path,
+          // Playwright derives the content type from the spool file's name when
+          // it is not told otherwise, and that derivation overwrites `headers`.
+          contentType: response.headers.get("content-type") ?? "application/octet-stream",
+        });
+      } else {
+        await route.fulfill({ status: response.status, headers: responseHeaders, body: delivery.body ?? Buffer.alloc(0) });
+      }
+    } finally {
+      // fulfil has read the spool by now (Playwright reads `path` before it
+      // resolves), so the credentialed bytes do not linger on disk.
+      await delivery.cleanup?.();
+    }
     return true;
   } catch (error) {
     if (error instanceof ForbiddenTargetError) throw error;

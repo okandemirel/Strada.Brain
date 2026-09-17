@@ -39,6 +39,8 @@ import {
   installNetworkPolicy,
   isLikelyPublicSuffix,
   POLICY_CONTEXT_OPTIONS,
+  relativeBaseOf,
+  SUBRESOURCE_MAX_SPOOL_BYTES,
   isSameSiteUrl,
   parseSetCookie,
   takeVettedDocument,
@@ -55,6 +57,7 @@ import {
 import type { ToolContext } from "./tool.interface.js";
 import type { ResolvedAddress } from "../../security/browser-security.js";
 import { createLogger } from "../../utils/logger.js";
+import { readFile, stat } from "node:fs/promises";
 
 // Initialize logger for tests
 createLogger("error", "/tmp/strada-test.log");
@@ -178,7 +181,15 @@ function fakeRoute(url: string, request: Partial<Omit<PolicyRequest, "url">> = {
     request: () => req,
     continue: vi.fn(async () => undefined),
     abort: vi.fn(async (_code?: string) => undefined),
-    fulfill: vi.fn(async (_response: { status: number; headers: Record<string, string>; body: Buffer }) => undefined),
+    fulfill: vi.fn(
+      async (_response: {
+        status: number;
+        headers: Record<string, string>;
+        body?: Buffer;
+        path?: string;
+        contentType?: string;
+      }) => undefined,
+    ),
   };
 }
 
@@ -441,7 +452,7 @@ describe("installNetworkPolicy — Codex round 6 #11–#13", () => {
     expect(route.fulfill).toHaveBeenCalledTimes(1);
     const fulfilled = route.fulfill.mock.calls[0]![0];
     expect(fulfilled.status).toBe(200);
-    expect(fulfilled.body.toString("utf8")).toBe("<html>final</html>");
+    expect(fulfilled.body!.toString("utf8")).toBe("<html>final</html>");
     expect(fulfilled.headers).toEqual({ "content-type": "text/html", "x-served-by": "cdn" }); // wire-form headers dropped
     expect(mockFetch).toHaveBeenCalledTimes(1);
     // The hop is pinned to its vetted Agent; the browser's headers are
@@ -1226,7 +1237,7 @@ describe("installNetworkPolicy — Codex round 8 #19/#20/#22", () => {
     await ctx.routeHandler!(route);
     expect(route.abort).not.toHaveBeenCalled();
     expect(route.fulfill).toHaveBeenCalledTimes(1);
-    expect(route.fulfill.mock.calls[0]![0].body.toString("utf8")).toBe("<html>home</html>");
+    expect(route.fulfill.mock.calls[0]![0].body!.toString("utf8")).toBe("<html>home</html>");
   });
 });
 
@@ -1522,7 +1533,7 @@ describe("installNetworkPolicy — Codex round 9 #11 (per-request credentials)",
     await ctx.routeHandler!(route);
     expect(route.continue).not.toHaveBeenCalled();
     expect(route.fulfill).toHaveBeenCalledTimes(1);
-    expect(route.fulfill.mock.calls[0]![0].body.toString()).toBe("PNGDATA");
+    expect(route.fulfill.mock.calls[0]![0].body!.toString()).toBe("PNGDATA");
     const sent = (mockFetch.mock.calls[0]?.[1] as { headers: Record<string, string> }).headers;
     expect(sent["Authorization"]).toBe("Bearer secret");
     expect(sent["user-agent"]).toBe("UA/1");
@@ -1661,7 +1672,7 @@ describe("installNetworkPolicy — Codex round 10 #1 (credentialed sub-resource 
     expect(hops[0]!["X-Api-Key"]).toBe("k-live-0001");
     expect(hops[1]!["X-Api-Key"]).toBe("k-live-0001");
     expect(route.fulfill).toHaveBeenCalledTimes(1);
-    expect(route.fulfill.mock.calls[0]![0].body.toString()).toBe("PNG-V2");
+    expect(route.fulfill.mock.calls[0]![0].body!.toString()).toBe("PNG-V2");
     // Wire-form response headers are dropped; the body handed over is decoded.
     expect(route.fulfill.mock.calls[0]![0].headers).toEqual({ "content-type": "text/html", "x-served-by": "cdn" });
     expect(route.continue).not.toHaveBeenCalled();
@@ -1676,17 +1687,22 @@ describe("installNetworkPolicy — Codex round 10 #1 (credentialed sub-resource 
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
-  it("#1 a body too large to buffer is re-issued by the browser without the credential", async () => {
-    const { ctx, blocked } = await install();
+  // Round 11 #16: a body too large to BUFFER is no longer handed back — it is
+  // spooled to a file and delivered with its credential (a retry without the
+  // credential is a 401, not a fallback). What is still handed back is a body
+  // past the spool bound; see the round 11 #16/#17 describe below. A
+  // content-length that merely LIES about being huge is now delivered, because
+  // the bound that refuses is the spool bound and the bytes are what count.
+  it("#1 a plausible-but-lying content-length under the spool bound does not stop delivery", async () => {
+    const { ctx } = await install();
     mockFetch.mockResolvedValueOnce(okResponse("small but lying", { "content-length": String(64 * 1024 * 1024) }));
 
     const route = subresource("https://trusted.example/4k-trailer.mp4", {}, "media");
     await ctx.routeHandler!(route);
 
-    expect(route.fulfill).not.toHaveBeenCalled();
-    expect(route.continue).toHaveBeenCalledTimes(1);
-    expect(route.continue.mock.calls[0]?.[0]).toBeUndefined();
-    expect(blocked.map((b) => b.reason).join(" ")).toContain("without credentials");
+    expect(route.fulfill).toHaveBeenCalledTimes(1);
+    expect(route.fulfill.mock.calls[0]![0].body!.toString()).toBe("small but lying");
+    expect(route.continue).not.toHaveBeenCalled();
   });
 
   // An unsafe method cannot be handed back: re-issuing a POST is not ours to do
@@ -1728,7 +1744,7 @@ describe("installNetworkPolicy — Codex round 10 #1 (credentialed sub-resource 
     );
     expect(hopHeaders()[0]!["X-Api-Key"]).toBe("k-live-0001");
     expect(route.fulfill).toHaveBeenCalledTimes(1);
-    expect(route.fulfill.mock.calls[0]![0].body.toString()).toBe('{"ok":true}');
+    expect(route.fulfill.mock.calls[0]![0].body!.toString()).toBe('{"ok":true}');
   });
 
   it("#1 a forbidden hop in a credentialed sub-resource chain is refused at the hop", async () => {
@@ -1754,6 +1770,305 @@ describe("installNetworkPolicy — Codex round 10 #1 (credentialed sub-resource 
 
     expect(ctx.addCookies).toHaveBeenCalledTimes(1);
     expect(ctx.jar[0]).toMatchObject({ name: "sid", value: "abc", domain: "trusted.example" });
+  });
+});
+
+// ── Codex round 11 #16 / #17: what the credentialed sub-resource path DELIVERS.
+//
+// Round 10 #1 made the policy fetch a credentialed sub-resource itself and
+// fulfil the route with the result. Two consequences were wrong:
+//   #16 a body past the 32 MiB buffer was handed back to the browser "without
+//       the credential" — which for a protected resource is a 401, i.e. it
+//       never loaded;
+//   #17 the final body of a same-origin redirect was fulfilled AT the requested
+//       URL, so a stylesheet redirected into another directory resolved
+//       `url(font.woff2)` against the old directory.
+// ──
+
+describe("installNetworkPolicy — Codex round 11 #16/#17 (credentialed sub-resource delivery)", () => {
+  const table = new Map<string, ResolvedAddress[]>();
+  const resolver = vi.fn(async (hostname: string): Promise<ResolvedAddress[]> => {
+    const hit = table.get(hostname);
+    if (!hit) throw new Error(`ENOTFOUND ${hostname}`);
+    return hit;
+  });
+
+  const API_KEY: OriginCredentials = {
+    origin: "https://trusted.example",
+    headers: { "X-Api-Key": "k-live-0001" },
+  };
+
+  beforeEach(() => {
+    table.clear();
+    resolver.mockClear();
+    table.set("trusted.example", [{ address: PUBLIC_V4, family: 4 }]);
+    table.set("other.example", [{ address: "151.101.1.2", family: 4 }]);
+  });
+
+  async function install() {
+    const ctx = fakeContext();
+    const blocked: Array<{ url: string; reason: string }> = [];
+    await installNetworkPolicy(ctx, fakePage(), {
+      resolver,
+      onForbiddenNavigation: vi.fn(),
+      onBlockedRequest: (url, reason) => blocked.push({ url, reason }),
+      originCredentials: () => API_KEY,
+    });
+    return { ctx, blocked };
+  }
+
+  /** The headers each hop actually went out with. */
+  function hopHeaders(): Array<Record<string, string>> {
+    return mockFetch.mock.calls.map((c) => (c[1] as { headers: Record<string, string> }).headers);
+  }
+
+  /** The URL of each hop. */
+  function hopUrls(): string[] {
+    return mockFetch.mock.calls.map((c) => String(c[0]));
+  }
+
+  /** A response streamed in chunks, of `totalBytes` — never held whole in the test either. */
+  function streamedResponse(totalBytes: number, headers: Record<string, string> = {}, fill = 0x41) {
+    const chunk = Buffer.alloc(4 * 1024 * 1024, fill);
+    let sent = 0;
+    return {
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      headers: new Headers({ "content-type": "video/mp4", "content-length": String(totalBytes), ...headers }),
+      body: new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (sent >= totalBytes) {
+            controller.close();
+            return;
+          }
+          const size = Math.min(chunk.byteLength, totalBytes - sent);
+          controller.enqueue(new Uint8Array(chunk.subarray(0, size)));
+          sent += size;
+        },
+      }),
+      text: () => Promise.resolve(""),
+    };
+  }
+
+  interface Delivered {
+    status: number;
+    headers: Record<string, string>;
+    contentType?: string;
+    fromSpoolFile: boolean;
+    bytes: number;
+    text: string;
+  }
+
+  /**
+   * A sub-resource route whose `fulfill` reads what it was handed — from the
+   * buffer or from the spool file, WHILE the file still exists — so a test can
+   * assert delivery instead of asserting that a retry happened.
+   */
+  function deliveringRoute(url: string, resourceType: string, extraHeaders: Record<string, string> = {}) {
+    const route = fakeRoute(url, {
+      resourceType: () => resourceType,
+      allHeaders: async () => ({ "user-agent": "UA/1", "sec-fetch-site": "same-origin", ...extraHeaders }),
+    });
+    const delivered: Delivered[] = [];
+    const spoolPaths: string[] = [];
+    route.fulfill.mockImplementation(async (response) => {
+      let bytes: Buffer;
+      if (response.path !== undefined) {
+        spoolPaths.push(response.path);
+        bytes = await readFile(response.path);
+      } else {
+        bytes = response.body ?? Buffer.alloc(0);
+      }
+      delivered.push({
+        status: response.status,
+        headers: response.headers,
+        ...(response.contentType === undefined ? {} : { contentType: response.contentType }),
+        fromSpoolFile: response.path !== undefined,
+        bytes: bytes.byteLength,
+        text: bytes.subarray(0, 64).toString("utf8"),
+      });
+      return undefined;
+    });
+    return { route, delivered, spoolPaths };
+  }
+
+  // ── #16: THE FINDING. 64 MiB behind the API key. ──
+
+  it("#16 a protected 64 MiB sub-resource is delivered with its credential instead of retried without it", async () => {
+    const { ctx } = await install();
+    const total = 64 * 1024 * 1024;
+    mockFetch.mockResolvedValueOnce(streamedResponse(total, { "x-served-by": "vault" }));
+
+    const { route, delivered, spoolPaths } = deliveringRoute("https://trusted.example/vault/4k-trailer.mp4", "media");
+    await ctx.routeHandler!(route);
+
+    // Delivered, whole, from the pinned transport — not handed back.
+    expect(route.continue).not.toHaveBeenCalled();
+    expect(route.abort).not.toHaveBeenCalled();
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0]!.bytes).toBe(total);
+    expect(delivered[0]!.fromSpoolFile).toBe(true);
+    expect(delivered[0]!.status).toBe(200);
+    // The type survives the spool file (Playwright would otherwise guess it
+    // from the spool's name and overwrite the header).
+    expect(delivered[0]!.contentType).toBe("video/mp4");
+    expect(delivered[0]!.headers["x-served-by"]).toBe("vault");
+    // One request, and it carried the credential.
+    expect(hopUrls()).toEqual(["https://trusted.example/vault/4k-trailer.mp4"]);
+    expect(hopHeaders()[0]!["X-Api-Key"]).toBe("k-live-0001");
+    // The spool does not outlive the delivery.
+    for (const path of spoolPaths) await expect(stat(path)).rejects.toThrow();
+  });
+
+  it("#16 a spooled body under the memory bound is still delivered from memory", async () => {
+    const { ctx } = await install();
+    mockFetch.mockResolvedValueOnce(okResponse("PNGDATA"));
+
+    const { route, delivered } = deliveringRoute("https://trusted.example/logo.png", "image");
+    await ctx.routeHandler!(route);
+
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0]!.fromSpoolFile).toBe(false);
+    expect(delivered[0]!.text).toBe("PNGDATA");
+  });
+
+  it("#16 a body past the spool bound is still refused, by content-length, without reading it", async () => {
+    const { ctx, blocked } = await install();
+    mockFetch.mockResolvedValueOnce(
+      streamedResponse(8 * 1024 * 1024, { "content-length": String(SUBRESOURCE_MAX_SPOOL_BYTES + 1) }),
+    );
+
+    const route = fakeRoute("https://trusted.example/vault/disk-image.iso", {
+      resourceType: () => "media",
+      allHeaders: async () => ({ "sec-fetch-site": "same-origin" }),
+    });
+    await ctx.routeHandler!(route);
+
+    expect(route.fulfill).not.toHaveBeenCalled();
+    expect(route.continue).toHaveBeenCalledTimes(1);
+    expect(route.continue.mock.calls[0]?.[0]).toBeUndefined();
+    expect(blocked.map((b) => b.reason).join(" ")).toContain("without credentials");
+  });
+
+  // Nothing leaks: the origin check comes before the body, spool included.
+  it("#16 a large body from a chain that left the origin is neither spooled nor delivered", async () => {
+    const { ctx, blocked } = await install();
+    mockFetch.mockResolvedValueOnce(redirectResponse(302, "https://other.example/mirror/4k.mp4"));
+    mockFetch.mockResolvedValueOnce(streamedResponse(64 * 1024 * 1024));
+
+    const { route, delivered } = deliveringRoute("https://trusted.example/vault/4k.mp4", "media");
+    await ctx.routeHandler!(route);
+
+    expect(delivered).toHaveLength(0);
+    expect(route.fulfill).not.toHaveBeenCalled();
+    expect(route.continue).toHaveBeenCalledTimes(1);
+    expect(route.continue.mock.calls[0]?.[0]).toBeUndefined();
+    for (const name of Object.keys(hopHeaders()[1]!)) expect(name.toLowerCase()).not.toBe("x-api-key");
+    expect(blocked.map((b) => b.reason).join(" ")).toContain("another origin");
+  });
+
+  // ── #17: THE FINDING. A redirected stylesheet's relative font. ──
+
+  it("#17 a stylesheet redirected into another directory is not delivered at the requested URL", async () => {
+    const { ctx, blocked } = await install();
+    mockFetch.mockResolvedValueOnce(redirectResponse(302, "https://trusted.example/assets/v2/style.css"));
+    mockFetch.mockResolvedValueOnce(okResponse("@font-face{src:url(font.woff2)}", { "content-type": "text/css" }));
+
+    const { route, delivered } = deliveringRoute("https://trusted.example/style.css", "stylesheet");
+    await ctx.routeHandler!(route);
+
+    // Fulfilling here would have made the browser resolve `font.woff2` against
+    // the REQUESTED url; the bytes belong to the final one.
+    expect(relativeBaseOf("https://trusted.example/style.css")).not.toBe(
+      relativeBaseOf("https://trusted.example/assets/v2/style.css"),
+    );
+    expect(delivered).toHaveLength(0);
+    expect(route.fulfill).not.toHaveBeenCalled();
+    // Handed back to the browser, which follows the redirect itself under the
+    // real URLs (without the credential — see the reason).
+    expect(route.continue).toHaveBeenCalledTimes(1);
+    expect(route.continue.mock.calls[0]?.[0]).toBeUndefined();
+    const reason = blocked.map((b) => b.reason).join(" ");
+    expect(reason).toContain("another directory");
+    expect(reason).toContain("https://trusted.example/assets/v2/");
+  });
+
+  it("#17 a module script redirected into another directory is not delivered at the requested URL either", async () => {
+    const { ctx, blocked } = await install();
+    mockFetch.mockResolvedValueOnce(redirectResponse(302, "https://trusted.example/build/v9/main.js"));
+    mockFetch.mockResolvedValueOnce(okResponse('import "./helper.js";', { "content-type": "text/javascript" }));
+
+    const { route, delivered } = deliveringRoute("https://trusted.example/main.js", "script");
+    await ctx.routeHandler!(route);
+
+    expect(delivered).toHaveLength(0);
+    expect(route.continue).toHaveBeenCalledTimes(1);
+    expect(blocked.map((b) => b.reason).join(" ")).toContain("another directory");
+  });
+
+  // ── #17 guards: what must keep working. ──
+
+  it("#17 a redirect inside the SAME directory is still flattened, with the credential", async () => {
+    const { ctx } = await install();
+    mockFetch.mockResolvedValueOnce(redirectResponse(302, "https://trusted.example/app/main.v2.js"));
+    mockFetch.mockResolvedValueOnce(okResponse('import "./helper.js";', { "content-type": "text/javascript" }));
+
+    const { route, delivered } = deliveringRoute("https://trusted.example/app/main.js", "script");
+    await ctx.routeHandler!(route);
+
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0]!.text).toBe('import "./helper.js";');
+    expect(hopHeaders()[1]!["X-Api-Key"]).toBe("k-live-0001");
+    expect(route.continue).not.toHaveBeenCalled();
+  });
+
+  it("#17 an image redirected into another directory is still flattened (nothing resolves against it)", async () => {
+    const { ctx } = await install();
+    mockFetch.mockResolvedValueOnce(redirectResponse(302, "https://trusted.example/cdn/2026/logo.png"));
+    mockFetch.mockResolvedValueOnce(okResponse("PNG-V9", { "content-type": "image/png" }));
+
+    const { route, delivered } = deliveringRoute("https://trusted.example/logo.png", "image");
+    await ctx.routeHandler!(route);
+
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0]!.text).toBe("PNG-V9");
+  });
+
+  it("#17 a stylesheet with no redirect at all is delivered as before", async () => {
+    const { ctx } = await install();
+    mockFetch.mockResolvedValueOnce(okResponse("@font-face{src:url(font.woff2)}", { "content-type": "text/css" }));
+
+    const { route, delivered } = deliveringRoute("https://trusted.example/assets/v2/style.css", "stylesheet");
+    await ctx.routeHandler!(route);
+
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0]!.text).toBe("@font-face{src:url(font.woff2)}");
+    expect(route.continue).not.toHaveBeenCalled();
+  });
+});
+
+describe("relativeBaseOf — Codex round 11 #17", () => {
+  it("is the origin plus the directory, which is what a relative reference resolves against", () => {
+    expect(relativeBaseOf("https://a.example/style.css")).toBe("https://a.example/");
+    expect(relativeBaseOf("https://a.example/assets/v2/style.css")).toBe("https://a.example/assets/v2/");
+    // The last segment and the query never take part in the resolution.
+    expect(relativeBaseOf("https://a.example/assets/v2/other.css?v=3#x")).toBe("https://a.example/assets/v2/");
+    expect(relativeBaseOf("https://a.example/assets/v2/")).toBe("https://a.example/assets/v2/");
+    // A different origin is a different base even at the same path.
+    expect(relativeBaseOf("https://b.example/style.css")).not.toBe(relativeBaseOf("https://a.example/style.css"));
+    expect(relativeBaseOf("not a url")).toBe("not a url");
+  });
+
+  it("agrees with the browser's own resolution", () => {
+    for (const [base, url] of [
+      ["https://a.example/style.css", "https://a.example/other.css"],
+      ["https://a.example/assets/style.css", "https://a.example/assets/deep.css?v=2"],
+    ] as const) {
+      expect(relativeBaseOf(base) === relativeBaseOf(url)).toBe(
+        new URL("font.woff2", base).toString() === new URL("font.woff2", url).toString(),
+      );
+    }
   });
 });
 
@@ -1970,7 +2285,7 @@ describe("installNetworkPolicy — Codex round 9 #14 (the vetted response is reu
     expect(restart.fulfill).toHaveBeenCalledTimes(1);
     const fulfilled = restart.fulfill.mock.calls[0]![0];
     expect(fulfilled.status).toBe(200);
-    expect(fulfilled.body.toString("utf8")).toBe("<html>receipt</html>");
+    expect(fulfilled.body!.toString("utf8")).toBe("<html>receipt</html>");
     expect(fulfilled.headers).toEqual({ "content-type": "text/html", "x-served-by": "app" });
   });
 
@@ -1987,7 +2302,7 @@ describe("installNetworkPolicy — Codex round 9 #14 (the vetted response is reu
     const again = documentRoute("https://trusted.example/receipt/once");
     await ctx.routeHandler!(again);
     expect(mockFetch).toHaveBeenCalledTimes(3);
-    expect(again.fulfill.mock.calls[0]![0].body.toString("utf8")).toBe("<html>fresh</html>");
+    expect(again.fulfill.mock.calls[0]![0].body!.toString("utf8")).toBe("<html>fresh</html>");
   });
 
   it("#14 the kept response is only delivered at its own URL", async () => {
@@ -2001,7 +2316,7 @@ describe("installNetworkPolicy — Codex round 9 #14 (the vetted response is reu
     const other = documentRoute("https://trusted.example/elsewhere");
     await ctx.routeHandler!(other);
     expect(mockFetch).toHaveBeenCalledTimes(3);
-    expect(other.fulfill.mock.calls[0]![0].body.toString("utf8")).toBe("<html>elsewhere</html>");
+    expect(other.fulfill.mock.calls[0]![0].body!.toString("utf8")).toBe("<html>elsewhere</html>");
   });
 
   // A cross-origin chain keeps the round 7 #13 behaviour: nothing is kept, the
