@@ -326,7 +326,13 @@ export class SelfVerification {
           // every edited file (Codex 2026-09-13 AF#3).
           || /"?success"?\s*[:=]\s*false/i.test(bodyText)
           || /"?compileIssueCount"?\s*[:=]\s*[1-9]/i.test(bodyText)
-          || /\bbuild failed\b|\bcompilation failed\b/i.test(bodyText);
+          || /\bbuild failed\b|\bcompilation failed\b/i.test(bodyText)
+          // A UNITY RUN THAT DIED IS NOT A RUN THAT PASSED. unity_playmode_verify
+          // judged the results file alone and wrote "ran clean … unityExit=1"
+          // with isError: false; the editor that exited 1 or was killed at its
+          // allowance after writing the file counted as green (Codex
+          // 2026-09-17 on 7cb9d8a3 #2, reproduced against the vendored tool).
+          || /\bunityExit=(-?\d+)\b/.test(bodyText) && /\bunityExit=(-?\d+)\b/.exec(bodyText)![1] !== "0";
         // AN INSPECTION IS NOT A VERIFICATION. A symbol search that returned
         // "No matches" and a console read cleared the compile debt of every
         // edited file, because "did not fail" was read as "compiled" (Codex
@@ -351,7 +357,11 @@ export class SelfVerification {
         // cleared the verification debt and published lastBuildOk: true
         // (Codex 2026-09-17 wave 0-A review #1). A verifier that exited
         // non-zero has not passed, whatever the caller agreed to accept.
-        const ok = !executedTool.isError && !bodyReportsFailure && !(shell && shellExitedNonZero(executedTool.output, result));
+        // …and STRUCTURED exit metadata fails any verifier, dedicated ones
+        // included; only the "no footer is not a zero" rule is the shell's.
+        const metaExit = result.metadata?.["exitCode"];
+        const exitedNonZero = typeof metaExit === "number" ? metaExit !== 0 : shell && shellExitedNonZero(executedTool.output, result);
+        const ok = !executedTool.isError && !bodyReportsFailure && !exitedNonZero;
         this.lastBuildOk = ok;
         this.lastVerificationAt = Date.now();
         publishedBuildStates.set(this.publishKey, {

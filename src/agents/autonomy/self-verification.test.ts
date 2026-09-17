@@ -371,6 +371,25 @@ describe("SelfVerification", () => {
       expect(verifier.needsVerification()).toBe(true);
     });
 
+    it("a Unity run that died after writing a green results file is not a pass (Codex on 7cb9d8a3 #2)", () => {
+      const green = "PlayMode verification passed: 1 of 1 tests ran clean.\ntotal=1 passed=1 failed=0 skipped=0 runResult=Passed unityExit=";
+      for (const [body, metadata] of [
+        [green + "1", undefined],
+        [green + "-1", undefined],
+        [green + "0", { exitCode: 1 }],
+      ] as const) {
+        const verifier = wroteCs();
+        verifier.track("file_write", { path: "Assets/Tests/PlayMode/BadTests.cs" }, { toolCallId: "w2", content: "written", isError: false });
+        verifier.track("unity_playmode_verify", {}, { toolCallId: "u", content: body, isError: false, ...(metadata === undefined ? {} : { metadata }) });
+        expect(verifier.getState().lastBuildOk, body).toBe(false);
+        expect(verifier.needsVerification(), body).toBe(true);
+      }
+      // …and exit 0 with the same body is the pass it says it is.
+      const verifier = wroteCs();
+      verifier.track("unity_playmode_verify", {}, { toolCallId: "u", content: green + "0", isError: false, metadata: { exitCode: 0 } });
+      expect(verifier.getState().lastBuildOk).toBe(true);
+    });
+
     it("guard: an accepted exit 0 still settles the debt", () => {
       const verifier = wroteCs();
       verifier.track("shell_exec", { command: "npx tsc --noEmit", ok_exit_codes: [0, 2] }, {
