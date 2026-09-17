@@ -34,7 +34,12 @@ CREATE TABLE IF NOT EXISTS framework_snapshots (
   source_language TEXT NOT NULL,
   file_count INTEGER NOT NULL,
   schema_version INTEGER NOT NULL DEFAULT 1,
-  PRIMARY KEY (package_id, extracted_at)
+  -- Identity is (package, SOURCE, time). Keyed by (package_id, extracted_at)
+  -- alone, two sources whose extractions landed in the same millisecond
+  -- silently replaced each other through INSERT OR REPLACE — a boot sync that
+  -- reads one small package twice does exactly that — and the live pointer
+  -- then resolved to a row that no longer existed (r9 finding 26).
+  PRIMARY KEY (package_id, source_path, extracted_at)
 );
 
 CREATE INDEX IF NOT EXISTS idx_snapshots_package_latest
@@ -185,7 +190,51 @@ export class FrameworkKnowledgeStore {
         this.db.exec(m.ddl);
       }
     }
+    this.migrateSnapshotPrimaryKey();
     this.backfillSourceKeying();
+  }
+
+  /**
+   * A database created before r9 finding 26 keys framework_snapshots by
+   * (package_id, extracted_at), so SQLite itself would drop one of two sources
+   * that share an extraction millisecond. SQLite cannot ALTER a primary key:
+   * the table is rebuilt with the wider key and the existing rows copied over.
+   * INSERT OR IGNORE, not OR REPLACE — a legacy row can never collide under
+   * the WIDER key, so an ignore here is a no-op that documents the intent.
+   */
+  private migrateSnapshotPrimaryKey(): void {
+    const cols = this.db.prepare("PRAGMA table_info(framework_snapshots)").all() as Array<{ name: string; pk: number }>;
+    if (cols.length === 0) return;
+    const keyed = cols.filter((c) => c.pk > 0).map((c) => c.name);
+    if (keyed.includes("source_path")) return;
+    this.db.transaction(() => {
+      this.db.exec(`
+        CREATE TABLE framework_snapshots_migrated (
+          package_id TEXT NOT NULL,
+          package_name TEXT NOT NULL,
+          version TEXT,
+          git_hash TEXT,
+          snapshot_json TEXT NOT NULL,
+          extracted_at INTEGER NOT NULL,
+          source_path TEXT NOT NULL,
+          source_origin TEXT NOT NULL,
+          source_language TEXT NOT NULL,
+          file_count INTEGER NOT NULL,
+          schema_version INTEGER NOT NULL DEFAULT 1,
+          PRIMARY KEY (package_id, source_path, extracted_at)
+        );
+        INSERT OR IGNORE INTO framework_snapshots_migrated
+          (package_id, package_name, version, git_hash, snapshot_json, extracted_at,
+           source_path, source_origin, source_language, file_count, schema_version)
+          SELECT package_id, package_name, version, git_hash, snapshot_json, extracted_at,
+                 source_path, source_origin, source_language, file_count, schema_version
+          FROM framework_snapshots;
+        DROP TABLE framework_snapshots;
+        ALTER TABLE framework_snapshots_migrated RENAME TO framework_snapshots;
+      `);
+      // The old table's indexes went with it; SCHEMA_SQL recreates them.
+      this.db.exec(SCHEMA_SQL);
+    })();
   }
 
   /**
@@ -318,6 +367,34 @@ export class FrameworkKnowledgeStore {
   getLatestSnapshot(packageId: FrameworkPackageId, sourcePath?: string): FrameworkAPISnapshot | null {
     const path = sourcePath ?? this.getLiveSourcePath(packageId);
     return this.getSnapshotByOffset(packageId, 0, path);
+  }
+
+  /**
+   * The snapshot a reader in a PARTICULAR project must see.
+   *
+   * `sourcePath` is that project's resolved source for the package, as
+   * FrameworkSourceBinding reports it. When the project has none (null), a
+   * snapshot stored by a LOCAL sync belongs to some other project's tree and
+   * must never answer here; knowledge extracted from a clone or a cache still
+   * does, carrying its origin so the reader can say "not installed here"
+   * (r9 finding 29).
+   */
+  getProjectSnapshot(packageId: FrameworkPackageId, sourcePath: string | null): FrameworkAPISnapshot | null {
+    if (sourcePath !== null) return this.getSnapshotByOffset(packageId, 0, sourcePath);
+    const row = this.prepare(`
+      SELECT * FROM framework_snapshots
+      WHERE package_id = ? AND source_origin != 'local'
+      ORDER BY extracted_at DESC LIMIT 1
+    `).get(packageId) as {
+      package_id: string;
+      snapshot_json: string;
+      source_path: string;
+      source_origin: string;
+      source_language: string;
+      file_count: number;
+      extracted_at: number;
+    } | undefined;
+    return row ? deserializeSnapshot(row.snapshot_json, row) : null;
   }
 
   /** Get the previous snapshot for drift comparison, from the same source. */
@@ -456,44 +533,191 @@ export class FrameworkKnowledgeStore {
     return compared === 0;
   }
 
-  /** Prune old snapshots keeping only the N most recent per package */
+  /**
+   * Prune old snapshots, keeping the N most recent PER (package, source).
+   *
+   * Was: per package. One machine holds a project's installed tree and a
+   * shallow clone of the same package, and the clone re-syncs on its own
+   * cadence: five clone extractions evicted the installed source's only
+   * snapshot, after which getLatestSnapshot and getLiveSnapshot both returned
+   * null for a package that is still installed (r9 finding 27). Retention now
+   * belongs to the source that produced the history.
+   */
   pruneHistory(keepCount: number = 5): void {
-    const packages = this.db.prepare(
-      "SELECT DISTINCT package_id FROM framework_snapshots",
-    ).all() as Array<{ package_id: string }>;
+    const sources = this.db.prepare(
+      "SELECT DISTINCT package_id, source_path FROM framework_snapshots",
+    ).all() as Array<{ package_id: string; source_path: string }>;
 
     const deleteOld = this.prepare(`
       DELETE FROM framework_snapshots
-      WHERE package_id = ? AND extracted_at NOT IN (
+      WHERE package_id = ? AND source_path = ? AND extracted_at NOT IN (
         SELECT extracted_at FROM framework_snapshots
-        WHERE package_id = ?
+        WHERE package_id = ? AND source_path = ?
         ORDER BY extracted_at DESC
         LIMIT ?
       )
     `);
 
     this.db.transaction(() => {
-      for (const { package_id } of packages) {
-        deleteOld.run(package_id, package_id, keepCount);
+      for (const { package_id, source_path } of sources) {
+        deleteOld.run(package_id, source_path, package_id, source_path, keepCount);
       }
     })();
   }
 
   /**
-   * Drop every snapshot and the sync metadata of a package whose source is
-   * gone. Metadata goes too: a package that comes back must be re-extracted
-   * and stored, never skipped as "identical" to a fingerprint it no longer
-   * has a snapshot for. Returns the number of snapshots removed.
+   * Drop ONE source of a package: its snapshots, its per-source bookkeeping,
+   * and its claim on the live pointer.
+   *
+   * Was deletePackage alone, which removed every source's snapshots when a
+   * single tree disappeared and left framework_source_metadata and
+   * framework_live_source pointing at it — so a fallback clone stored
+   * afterwards was invisible: default reads followed the live pointer to a
+   * source with no rows and returned null (r9 finding 28). Returns the number
+   * of snapshots removed.
+   */
+  deleteSource(packageId: FrameworkPackageId, sourcePath: string): number {
+    const snapshots = this.prepare("DELETE FROM framework_snapshots WHERE package_id = ? AND source_path = ?");
+    const sourceMeta = this.prepare("DELETE FROM framework_source_metadata WHERE package_id = ? AND source_path = ?");
+    let removed = 0;
+    this.db.transaction(() => {
+      removed = Number(snapshots.run(packageId, sourcePath).changes);
+      sourceMeta.run(packageId, sourcePath);
+      this.rebindLiveSource(packageId, sourcePath);
+      this.refreshPackageMetadata(packageId);
+    })();
+    return removed;
+  }
+
+  /**
+   * Drop every source of a package. Kept for callers that mean "forget this
+   * package entirely"; per-source bookkeeping and the live pointer go too, so
+   * nothing survives to point at rows that no longer exist.
    */
   deletePackage(packageId: FrameworkPackageId): number {
     const snapshots = this.prepare("DELETE FROM framework_snapshots WHERE package_id = ?");
     const metadata = this.prepare("DELETE FROM framework_metadata WHERE package_id = ?");
+    const sourceMeta = this.prepare("DELETE FROM framework_source_metadata WHERE package_id = ?");
+    const live = this.prepare("DELETE FROM framework_live_source WHERE package_id = ?");
     let removed = 0;
     this.db.transaction(() => {
       removed = Number(snapshots.run(packageId).changes);
       metadata.run(packageId);
+      sourceMeta.run(packageId);
+      live.run(packageId);
     })();
     return removed;
+  }
+
+  /**
+   * Reconcile where a package is INSTALLED from, and what each of its stored
+   * snapshots claims, with what the caller just observed on disk — without
+   * consulting any API fingerprint.
+   *
+   * The sync pipeline skips extraction when version, git HEAD and content
+   * fingerprint all match, and the origin of a source is none of those three:
+   * a cached clone that became the project's installed tree stayed "cached and
+   * not installed here" forever, and a legacy row wrongly stamped "local" (the
+   * upgrade backfill trusts that stamp) went on claiming to be the live
+   * installation (r9 finding 30). Returns true when something was corrected.
+   */
+  reconcileSourceOrigin(packageId: FrameworkPackageId, sourcePath: string, origin: SourceOrigin): boolean {
+    const stampSnapshots = this.prepare(
+      "UPDATE framework_snapshots SET source_origin = ? WHERE package_id = ? AND source_path = ? AND source_origin != ?",
+    );
+    const stampMeta = this.prepare(
+      "UPDATE framework_source_metadata SET source_origin = ? WHERE package_id = ? AND source_path = ? AND source_origin != ?",
+    );
+    const setLive = this.prepare(`
+      INSERT INTO framework_live_source (package_id, source_path, updated_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(package_id) DO UPDATE SET
+        source_path = excluded.source_path,
+        updated_at = excluded.updated_at
+    `);
+    let changed = false;
+    this.db.transaction(() => {
+      changed =
+        Number(stampSnapshots.run(origin, packageId, sourcePath, origin).changes) > 0 ||
+        Number(stampMeta.run(origin, packageId, sourcePath, origin).changes) > 0;
+      const live = this.getLiveSourcePath(packageId);
+      if (origin === "local") {
+        // This source IS the installation. Only claim it once something of it
+        // is stored — storeSnapshot sets the pointer for a first sync.
+        if (live !== sourcePath && this.hasSnapshots(packageId, sourcePath)) {
+          setLive.run(packageId, sourcePath, Date.now());
+          changed = true;
+        }
+      } else if (live === sourcePath) {
+        // A clone or a cache is knowledge about the package, never evidence
+        // that this project has it installed.
+        this.rebindLiveSource(packageId, sourcePath);
+        changed = true;
+      }
+    })();
+    return changed;
+  }
+
+  private hasSnapshots(packageId: FrameworkPackageId, sourcePath: string): boolean {
+    const row = this.prepare(
+      "SELECT 1 AS present FROM framework_snapshots WHERE package_id = ? AND source_path = ? LIMIT 1",
+    ).get(packageId, sourcePath) as { present: number } | undefined;
+    return row !== undefined;
+  }
+
+  /**
+   * Release a live pointer that names `sourcePath`, handing it to another
+   * installed source of the same package when one is stored, and clearing it
+   * otherwise. Only that one binding moves: another package's installation is
+   * none of this call's business.
+   */
+  private rebindLiveSource(packageId: FrameworkPackageId, sourcePath: string): void {
+    if (this.getLiveSourcePath(packageId) !== sourcePath) return;
+    const replacement = this.prepare(`
+      SELECT source_path, MAX(extracted_at) AS extracted_at
+      FROM framework_snapshots
+      WHERE package_id = ? AND source_origin = 'local' AND source_path != ?
+    `).get(packageId, sourcePath) as { source_path: string | null; extracted_at: number | null } | undefined;
+    if (replacement?.source_path) {
+      this.prepare(`
+        INSERT INTO framework_live_source (package_id, source_path, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(package_id) DO UPDATE SET
+          source_path = excluded.source_path,
+          updated_at = excluded.updated_at
+      `).run(packageId, replacement.source_path, replacement.extracted_at ?? Date.now());
+      return;
+    }
+    this.prepare("DELETE FROM framework_live_source WHERE package_id = ?").run(packageId);
+  }
+
+  /**
+   * Keep the package-wide row describing a source that still exists (or drop
+   * it when none does). A row left describing a deleted source is a
+   * fingerprint `needsSync` would compare a live tree against.
+   */
+  private refreshPackageMetadata(packageId: FrameworkPackageId): void {
+    const newest = this.prepare(`
+      SELECT source_path FROM framework_snapshots
+      WHERE package_id = ? ORDER BY extracted_at DESC LIMIT 1
+    `).get(packageId) as { source_path: string } | undefined;
+    if (!newest) {
+      this.prepare("DELETE FROM framework_metadata WHERE package_id = ?").run(packageId);
+      return;
+    }
+    this.prepare(`
+      UPDATE framework_metadata SET
+        last_sync_at = (SELECT last_sync_at FROM framework_source_metadata WHERE package_id = ? AND source_path = ?),
+        last_version = (SELECT last_version FROM framework_source_metadata WHERE package_id = ? AND source_path = ?),
+        last_git_hash = (SELECT last_git_hash FROM framework_source_metadata WHERE package_id = ? AND source_path = ?),
+        last_content_hash = (SELECT last_content_hash FROM framework_source_metadata WHERE package_id = ? AND source_path = ?)
+      WHERE package_id = ?
+        AND EXISTS (SELECT 1 FROM framework_source_metadata WHERE package_id = ? AND source_path = ?)
+    `).run(
+      packageId, newest.source_path, packageId, newest.source_path,
+      packageId, newest.source_path, packageId, newest.source_path,
+      packageId, packageId, newest.source_path,
+    );
   }
 
   /** Get all package IDs that have snapshots */

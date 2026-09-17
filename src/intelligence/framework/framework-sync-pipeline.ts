@@ -11,6 +11,7 @@ import { execFileSync } from "node:child_process";
 import type { FSWatcher } from "chokidar";
 import type { StradaDepsStatus } from "../../config/strada-deps.js";
 import type {
+  FrameworkSourceBinding,
   FrameworkSyncConfig,
   FrameworkSyncResult,
   FrameworkDriftReport,
@@ -29,6 +30,31 @@ import { getLoggerSafe } from "../../utils/logger.js";
 import { getFrameworkSchemaProvider } from "./framework-schema-provider.js";
 
 export type SnapshotStoredListener = (packageId: FrameworkPackageId) => void;
+
+/**
+ * The source path THIS project has for a package, from its dependency scan.
+ * Module-level so a reader can be bound without holding the pipeline.
+ */
+export function resolveDepsSourcePath(
+  deps: StradaDepsStatus,
+  pkgId: FrameworkPackageId,
+): string | null {
+  switch (pkgId) {
+    case "core":
+      return deps.corePath;
+    case "modules":
+      return deps.modulesPath;
+    case "mcp":
+      return deps.mcpPath;
+    default:
+      return null;
+  }
+}
+
+/** Bind readers to a project's own source paths (r9 finding 29). */
+export function createFrameworkSourceBinding(deps: StradaDepsStatus): FrameworkSourceBinding {
+  return { resolve: (pkgId) => resolveDepsSourcePath(deps, pkgId) };
+}
 
 /**
  * Directories the framework watcher must never descend into.
@@ -59,6 +85,13 @@ export class FrameworkSyncPipeline {
   // the next flush could see it.
   private readonly pendingPackages = new Set<FrameworkPackageId>();
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * The path each package was last synced FROM in this process — the project's
+   * own tree, or the cache directory the git fallback used. Readers bound
+   * through getSourceBinding() follow this, so a fallback clone is served as
+   * the clone it is instead of as another project's installation.
+   */
+  private readonly syncedSourcePaths = new Map<FrameworkPackageId, string>();
   private flushChain: Promise<void> = Promise.resolve();
 
   constructor(
@@ -69,6 +102,18 @@ export class FrameworkSyncPipeline {
     this.store = store;
     this.config = config;
     this.stradaDeps = stradaDeps;
+  }
+
+  /**
+   * The sources THIS project resolved, for binding readers
+   * (FrameworkSchemaProvider, FrameworkPromptGenerator) to its own knowledge.
+   * A package-wide "live" pointer cannot represent two projects sharing one
+   * store (r9 finding 29).
+   */
+  getSourceBinding(): FrameworkSourceBinding {
+    return {
+      resolve: (pkgId) => this.syncedSourcePaths.get(pkgId) ?? resolveDepsSourcePath(this.stradaDeps, pkgId),
+    };
   }
 
   /**
@@ -129,6 +174,22 @@ export class FrameworkSyncPipeline {
       if (!sourcePath) {
         logger.debug(`Framework sync: skipping ${pkgConfig.displayName} (not available)`);
         continue;
+      }
+
+      this.syncedSourcePaths.set(pkgId, sourcePath);
+
+      // WHERE a source came from is not part of its API, so no fingerprint,
+      // version or git HEAD can carry a change of origin. Reconcile it before
+      // the skip decision: a cached clone that became this project's installed
+      // tree used to stay "cached, not installed here" for as long as the code
+      // did not change, and a legacy row wrongly stamped "local" went on
+      // claiming to be the live installation (r9 finding 30).
+      if (this.store.reconcileSourceOrigin(pkgId, sourcePath, sourceOrigin)) {
+        logger.info(
+          `Framework source origin reconciled for ${pkgConfig.displayName}: ${sourcePath} is ${sourceOrigin}` +
+            `${sourceOrigin === "local" ? " (installed here — it is this project's live source)" : " (not installed here)"} — ` +
+            "corrected without any API change",
+        );
       }
 
       try {
@@ -293,6 +354,7 @@ export class FrameworkSyncPipeline {
     }
 
     // The watcher only ever sees the project's own trees.
+    this.syncedSourcePaths.set(packageId, sourcePath);
     const extractor = await createExtractor(sourcePath, pkgConfig, "local");
     const snapshot = await extractor.extract();
     const previous = this.store.getLatestSnapshot(packageId, sourcePath);
@@ -301,10 +363,18 @@ export class FrameworkSyncPipeline {
     return validateFrameworkDrift(packageId, snapshot, previous);
   }
 
-  /** Forget a package whose source no longer exists, and tell every reader. */
+  /**
+   * Forget the SOURCE that no longer exists, and tell every reader.
+   *
+   * Was deletePackage: one project's tree disappearing erased every source's
+   * snapshots — including another project's installation and the fallback
+   * clone — and left the live pointer and per-source bookkeeping naming the
+   * vanished tree (r9 finding 28).
+   */
   private dropPackage(packageId: FrameworkPackageId, sourcePath: string): void {
     const logger = getLoggerSafe();
-    const removed = this.store.deletePackage(packageId);
+    const removed = this.store.deleteSource(packageId, sourcePath);
+    this.syncedSourcePaths.delete(packageId);
     getFrameworkSchemaProvider()?.invalidateCache();
     for (const listener of this.snapshotListeners) {
       try {
@@ -336,16 +406,7 @@ export class FrameworkSyncPipeline {
   // ─── Private Helpers ────────────────────────────────────────────────────────
 
   private resolveSourcePath(pkgId: FrameworkPackageId): string | null {
-    switch (pkgId) {
-      case "core":
-        return this.stradaDeps.corePath;
-      case "modules":
-        return this.stradaDeps.modulesPath;
-      case "mcp":
-        return this.stradaDeps.mcpPath;
-      default:
-        return null;
-    }
+    return resolveDepsSourcePath(this.stradaDeps, pkgId);
   }
 
   private identifyPackage(filePath: string): FrameworkPackageId | null {

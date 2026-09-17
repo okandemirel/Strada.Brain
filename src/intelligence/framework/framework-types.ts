@@ -80,6 +80,20 @@ export interface FrameworkAPISnapshot {
   readonly fileCount: number;
 }
 
+/**
+ * The source paths the CURRENT project resolves for each framework package.
+ *
+ * One knowledge store is per MACHINE (~/.strada-memory/framework-knowledge.db)
+ * while a source tree is per project, so "the latest snapshot of core" is a
+ * question with no answer once two projects have synced: the package-wide
+ * "live" pointer names whichever synced last (r9 finding 29). A reader carries
+ * this binding so it asks about ITS project's source instead.
+ */
+export interface FrameworkSourceBinding {
+  /** This project's source path for a package, or null when it has none. */
+  resolve(packageId: FrameworkPackageId): string | null;
+}
+
 /** Per-package extraction configuration */
 export interface FrameworkPackageConfig {
   readonly packageId: FrameworkPackageId;

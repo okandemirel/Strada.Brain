@@ -7,7 +7,7 @@
  */
 
 import type { FrameworkKnowledgeStore } from "./framework-knowledge-store.js";
-import type { FrameworkAPISnapshot } from "./framework-types.js";
+import type { FrameworkAPISnapshot, FrameworkPackageId, FrameworkSourceBinding } from "./framework-types.js";
 
 /**
  * Cap on the framework knowledge section, in chars. Measured 2026-09-09 on the
@@ -30,9 +30,29 @@ export class FrameworkPromptGenerator {
   /** How the list lengths were scaled to fit maxChars (1 = untrimmed). */
   private density = 1;
   private lastTrim: { density: number; untrimmedChars: number; chars: number } | null = null;
+  private readonly sourceBinding: FrameworkSourceBinding | undefined;
 
-  constructor(private readonly store: FrameworkKnowledgeStore, options?: { maxChars?: number }) {
+  /**
+   * `sourceBinding` names the trees THIS project resolved. Without it the
+   * generator asked for "the latest snapshot" of each package, which on a
+   * machine with two projects is whichever synced last — so a worker's system
+   * prompt described another project's classes and told it "This project has
+   * Strada installed" on the strength of that project's install
+   * (r9 finding 29).
+   */
+  constructor(
+    private readonly store: FrameworkKnowledgeStore,
+    options?: { maxChars?: number; sourceBinding?: FrameworkSourceBinding },
+  ) {
     this.maxChars = options?.maxChars ?? FRAMEWORK_PROMPT_MAX_CHARS;
+    this.sourceBinding = options?.sourceBinding;
+  }
+
+  /** The snapshot of `packageId` this project's prompt may describe. */
+  private snapshotFor(packageId: FrameworkPackageId): FrameworkAPISnapshot | null {
+    return this.sourceBinding
+      ? this.store.getProjectSnapshot(packageId, this.sourceBinding.resolve(packageId))
+      : this.store.getLatestSnapshot(packageId);
   }
 
   /** The trim applied to the cached section, or null when it fit untrimmed. */
@@ -76,17 +96,17 @@ export class FrameworkPromptGenerator {
   private buildAtCurrentDensity(): string | null {
     const sections: string[] = [];
 
-    const coreSnapshot = this.store.getLatestSnapshot("core");
+    const coreSnapshot = this.snapshotFor("core");
     if (coreSnapshot) {
       sections.push(this.buildCoreSection(coreSnapshot));
     }
 
-    const modulesSnapshot = this.store.getLatestSnapshot("modules");
+    const modulesSnapshot = this.snapshotFor("modules");
     if (modulesSnapshot) {
       sections.push(this.buildModulesSection(modulesSnapshot));
     }
 
-    const mcpSnapshot = this.store.getLatestSnapshot("mcp");
+    const mcpSnapshot = this.snapshotFor("mcp");
     if (mcpSnapshot) {
       sections.push(this.buildMCPSection(mcpSnapshot));
     }

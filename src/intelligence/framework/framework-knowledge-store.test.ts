@@ -555,3 +555,218 @@ describe("one machine, several sources", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Snapshot identity, retention and removal are per SOURCE
+// (adversarial review round 9, findings 26-28)
+// ---------------------------------------------------------------------------
+
+describe("per-source snapshot identity (r9 26-28)", () => {
+  let tmpDir: string;
+  let dbPath: string;
+  let store: FrameworkKnowledgeStore;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "fks-identity-"));
+    dbPath = join(tmpDir, "test.db");
+    store = new FrameworkKnowledgeStore(dbPath);
+    store.initialize();
+  });
+
+  afterEach(() => {
+    store.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  function countSnapshots(sourcePath?: string): number {
+    const raw = new Database(dbPath, { readonly: true });
+    try {
+      const row = sourcePath === undefined
+        ? raw.prepare("SELECT COUNT(*) AS n FROM framework_snapshots").get() as { n: number }
+        : raw.prepare("SELECT COUNT(*) AS n FROM framework_snapshots WHERE source_path = ?").get(sourcePath) as { n: number };
+      return row.n;
+    } finally {
+      raw.close();
+    }
+  }
+
+  // ── 26: identity must include the source path ────────────────────────────
+
+  it("keeps both sources' snapshots when they share an extraction millisecond", () => {
+    const sameMoment = new Date("2026-03-01T12:00:00.000Z");
+    store.storeSnapshot(makeSnapshot({
+      packageId: "core", sourcePath: "/projects/game/Packages/Strada.Core", sourceOrigin: "local",
+      version: "1.0.0", fileCount: 42, extractedAt: sameMoment,
+    }));
+    store.storeSnapshot(makeSnapshot({
+      packageId: "core", sourcePath: "/cache/strada-core", sourceOrigin: "git-clone",
+      version: "9.9.9", fileCount: 7, extractedAt: sameMoment,
+    }));
+
+    // Keyed by (package, extracted_at) the clone REPLACED the installation and
+    // the live pointer resolved to nothing.
+    expect(countSnapshots()).toBe(2);
+    expect(store.getLatestSnapshot("core", "/projects/game/Packages/Strada.Core")!.version).toBe("1.0.0");
+    expect(store.getLatestSnapshot("core", "/cache/strada-core")!.version).toBe("9.9.9");
+    expect(store.getLiveSnapshot("core")!.version).toBe("1.0.0");
+  });
+
+  it("guard: re-storing the SAME source at the same millisecond replaces, not duplicates", () => {
+    const sameMoment = new Date("2026-03-01T12:00:00.000Z");
+    store.storeSnapshot(makeSnapshot({ packageId: "core", sourcePath: "/a", version: "1.0.0", extractedAt: sameMoment }));
+    store.storeSnapshot(makeSnapshot({ packageId: "core", sourcePath: "/a", version: "1.0.1", extractedAt: sameMoment }));
+    expect(countSnapshots("/a")).toBe(1);
+    expect(store.getLatestSnapshot("core", "/a")!.version).toBe("1.0.1");
+  });
+
+  it("migrates a database whose snapshots are keyed by (package, extracted_at)", () => {
+    const legacyPath = join(tmpDir, "legacy-pk.db");
+    const legacy = new Database(legacyPath);
+    legacy.exec(`
+      CREATE TABLE framework_snapshots (
+        package_id TEXT NOT NULL, package_name TEXT NOT NULL, version TEXT, git_hash TEXT,
+        snapshot_json TEXT NOT NULL, extracted_at INTEGER NOT NULL, source_path TEXT NOT NULL,
+        source_origin TEXT NOT NULL, source_language TEXT NOT NULL, file_count INTEGER NOT NULL,
+        schema_version INTEGER NOT NULL DEFAULT 1, PRIMARY KEY (package_id, extracted_at)
+      );
+      CREATE TABLE framework_metadata (
+        package_id TEXT PRIMARY KEY, last_sync_at INTEGER, last_version TEXT,
+        last_git_hash TEXT, last_content_hash TEXT, sync_count INTEGER DEFAULT 0
+      );
+    `);
+    legacy.prepare("INSERT INTO framework_snapshots VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .run("core", "Strada.Core", "1.0.0", "aaa", JSON.stringify({ packageName: "Strada.Core", version: "1.0.0" }),
+        2_000, "/projects/game/Strada.Core", "local", "csharp", 42, 1);
+    legacy.close();
+
+    const upgraded = new FrameworkKnowledgeStore(legacyPath);
+    upgraded.initialize();
+    try {
+      // The pre-existing row survives the migration…
+      expect(upgraded.getLatestSnapshot("core", "/projects/game/Strada.Core")!.version).toBe("1.0.0");
+      // …and a second source may now share its extraction millisecond.
+      upgraded.storeSnapshot(makeSnapshot({
+        packageId: "core", sourcePath: "/cache/strada-core", sourceOrigin: "git-clone",
+        version: "9.9.9", extractedAt: new Date(2_000),
+      }));
+      expect(upgraded.getLatestSnapshot("core", "/projects/game/Strada.Core")!.version).toBe("1.0.0");
+      expect(upgraded.getLatestSnapshot("core", "/cache/strada-core")!.version).toBe("9.9.9");
+    } finally {
+      upgraded.close();
+    }
+  });
+
+  // ── 27: retention is per source ──────────────────────────────────────────
+
+  it("pruneHistory retains each source's history, so clone churn cannot evict the installation", () => {
+    store.storeSnapshot(makeSnapshot({
+      packageId: "core", sourcePath: "/projects/game/Strada.Core", sourceOrigin: "local",
+      version: "1.0.0", extractedAt: new Date(Date.UTC(2026, 0, 1)),
+    }));
+    for (let i = 0; i < 6; i++) {
+      store.storeSnapshot(makeSnapshot({
+        packageId: "core", sourcePath: "/cache/strada-core", sourceOrigin: "git-clone",
+        version: `9.0.${i}`, extractedAt: new Date(Date.UTC(2026, 1, i + 1)),
+      }));
+    }
+
+    store.pruneHistory(5);
+
+    expect(store.getLatestSnapshot("core", "/projects/game/Strada.Core")!.version).toBe("1.0.0");
+    expect(store.getLiveSnapshot("core")!.version).toBe("1.0.0");
+    expect(store.getLatestSnapshot("core")!.version).toBe("1.0.0");
+  });
+
+  it("guard: pruneHistory still trims one source's own history to N", () => {
+    for (let i = 0; i < 8; i++) {
+      store.storeSnapshot(makeSnapshot({
+        packageId: "core", sourcePath: "/cache/strada-core", sourceOrigin: "git-clone",
+        version: `9.0.${i}`, extractedAt: new Date(Date.UTC(2026, 1, i + 1)),
+      }));
+    }
+    store.pruneHistory(3);
+    expect(countSnapshots("/cache/strada-core")).toBe(3);
+    expect(store.getLatestSnapshot("core", "/cache/strada-core")!.version).toBe("9.0.7");
+  });
+
+  // ── 28: removal is per source, and takes its bookkeeping with it ─────────
+
+  it("deleteSource removes one source and leaves the other readable with no stale live pointer", () => {
+    store.storeSnapshot(makeSnapshot({
+      packageId: "core", sourcePath: "/projects/game/Strada.Core", sourceOrigin: "local",
+      version: "1.0.0", extractedAt: new Date(Date.UTC(2026, 0, 1)),
+    }));
+    store.storeSnapshot(makeSnapshot({
+      packageId: "core", sourcePath: "/cache/strada-core", sourceOrigin: "git-clone",
+      version: "9.9.9", extractedAt: new Date(Date.UTC(2026, 0, 2)),
+    }));
+
+    const removed = store.deleteSource("core", "/projects/game/Strada.Core");
+
+    expect(removed).toBe(1);
+    // B survives…
+    expect(store.getLatestSnapshot("core", "/cache/strada-core")!.version).toBe("9.9.9");
+    // …the removed source's bookkeeping is gone…
+    expect(store.getSourceMetadata("core", "/projects/game/Strada.Core")).toBeNull();
+    // …and no reader follows a live pointer to a source that no longer exists.
+    expect(store.getLiveSourcePath("core")).toBeUndefined();
+    expect(store.getLiveSnapshot("core")).toBeNull();
+    expect(store.getLatestSnapshot("core")!.version).toBe("9.9.9");
+  });
+
+  it("deleteSource reassigns the live pointer to a remaining installed source", () => {
+    store.storeSnapshot(makeSnapshot({
+      packageId: "core", sourcePath: "/projects/a/Strada.Core", sourceOrigin: "local",
+      version: "1.0.0", extractedAt: new Date(Date.UTC(2026, 0, 1)),
+    }));
+    store.storeSnapshot(makeSnapshot({
+      packageId: "core", sourcePath: "/projects/b/Strada.Core", sourceOrigin: "local",
+      version: "2.0.0", extractedAt: new Date(Date.UTC(2026, 0, 2)),
+    }));
+    expect(store.getLiveSourcePath("core")).toBe("/projects/b/Strada.Core");
+
+    store.deleteSource("core", "/projects/b/Strada.Core");
+
+    expect(store.getLiveSourcePath("core")).toBe("/projects/a/Strada.Core");
+    expect(store.getLiveSnapshot("core")!.version).toBe("1.0.0");
+  });
+
+  it("dropping a package clears its live pointer, so a fallback stored afterwards is served", () => {
+    store.storeSnapshot(makeSnapshot({
+      packageId: "core", sourcePath: "/projects/game/Strada.Core", sourceOrigin: "local",
+      version: "1.0.0", extractedAt: new Date(Date.UTC(2026, 0, 1)),
+    }));
+    expect(store.deletePackage("core")).toBe(1);
+    expect(store.getLiveSourcePath("core")).toBeUndefined();
+    expect(store.getSourceMetadata("core", "/projects/game/Strada.Core")).toBeNull();
+
+    // The package comes back from a clone: default reads must find it instead
+    // of following the old live path and returning null.
+    store.storeSnapshot(makeSnapshot({
+      packageId: "core", sourcePath: "/cache/strada-core", sourceOrigin: "git-clone",
+      version: "9.9.9", extractedAt: new Date(Date.UTC(2026, 0, 3)),
+    }));
+    expect(store.getLatestSnapshot("core")!.version).toBe("9.9.9");
+  });
+
+  it("deleteSource leaves the package's bookkeeping when another source remains", () => {
+    store.storeSnapshot(makeSnapshot({
+      packageId: "core", sourcePath: "/a", version: "1.0.0", gitHash: "aaa",
+      extractedAt: new Date(Date.UTC(2026, 0, 1)),
+    }));
+    const second = makeSnapshot({
+      packageId: "core", sourcePath: "/b", version: "2.0.0", gitHash: "bbb",
+      extractedAt: new Date(Date.UTC(2026, 0, 2)),
+    });
+    store.storeSnapshot(second);
+
+    store.deleteSource("core", "/a");
+
+    // The package-wide row now describes the source that is still there, not
+    // the deleted one (a stale fingerprint would skip a needed re-extraction).
+    expect(store.getMetadata("core")).toMatchObject({
+      lastVersion: "2.0.0", lastGitHash: "bbb", lastContentHash: computeSnapshotFingerprint(second),
+    });
+    expect(store.getSourceMetadata("core", "/b")).not.toBeNull();
+  });
+});

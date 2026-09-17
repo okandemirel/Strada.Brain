@@ -9,6 +9,7 @@ export type {
   SourceOrigin,
   FrameworkAPISnapshot,
   FrameworkPackageConfig,
+  FrameworkSourceBinding,
   FrameworkSyncConfig,
   FrameworkSyncResult,
   FrameworkDriftReport,
@@ -41,7 +42,11 @@ export { FrameworkKnowledgeStore } from "./framework-knowledge-store.js";
 export { validateFrameworkDrift, formatFrameworkDriftReport } from "./framework-drift.js";
 
 // Sync pipeline
-export { FrameworkSyncPipeline } from "./framework-sync-pipeline.js";
+export {
+  FrameworkSyncPipeline,
+  createFrameworkSourceBinding,
+  resolveDepsSourcePath,
+} from "./framework-sync-pipeline.js";
 
 // Prompt generator
 export { FrameworkPromptGenerator } from "./framework-prompt-generator.js";

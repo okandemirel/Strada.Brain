@@ -8,12 +8,24 @@
 
 import { STRADA_API } from "../../agents/context/strada-api-reference.js";
 import type { FrameworkKnowledgeStore } from "./framework-knowledge-store.js";
-import type { FrameworkAPISnapshot } from "./framework-types.js";
+import type { FrameworkAPISnapshot, FrameworkSourceBinding } from "./framework-types.js";
 
 export class FrameworkSchemaProvider {
   private cachedCoreSnapshot: FrameworkAPISnapshot | null | undefined = undefined;
 
-  constructor(private readonly store: FrameworkKnowledgeStore) {}
+  /**
+   * `sourceBinding` names the Strada.Core tree THIS project resolved. Without
+   * it the provider asked the store for "the latest core snapshot", which on a
+   * machine with two projects is whichever synced last — so project A validated
+   * and generated code against project B's API after B synced, and A's own
+   * unchanged restart never corrected it (r9 finding 29). Omitted only by
+   * callers that have no project identity (tests, ad-hoc readers), which keep
+   * the old live-pointer behaviour.
+   */
+  constructor(
+    private readonly store: FrameworkKnowledgeStore,
+    private readonly sourceBinding?: FrameworkSourceBinding,
+  ) {}
 
   /** Invalidate cached snapshot (call after sync) */
   invalidateCache(): void {
@@ -22,7 +34,9 @@ export class FrameworkSchemaProvider {
 
   private getCoreSnapshot(): FrameworkAPISnapshot | null {
     if (this.cachedCoreSnapshot === undefined) {
-      this.cachedCoreSnapshot = this.store.getLatestSnapshot("core");
+      this.cachedCoreSnapshot = this.sourceBinding
+        ? this.store.getProjectSnapshot("core", this.sourceBinding.resolve("core"))
+        : this.store.getLatestSnapshot("core");
     }
     return this.cachedCoreSnapshot;
   }
@@ -122,6 +136,7 @@ export function getFrameworkSchemaProvider(): FrameworkSchemaProvider | null {
 /** Initialize the global schema provider (called at boot) */
 export function initializeFrameworkSchemaProvider(
   store: FrameworkKnowledgeStore,
+  sourceBinding?: FrameworkSourceBinding,
 ): void {
-  _provider = new FrameworkSchemaProvider(store);
+  _provider = new FrameworkSchemaProvider(store, sourceBinding);
 }

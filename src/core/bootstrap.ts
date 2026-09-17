@@ -663,7 +663,11 @@ async function bootstrapImpl(
         disposables.push("frameworkSyncPipeline", () => frameworkSyncPipeline?.stop());
         const syncResult = await frameworkSyncPipeline.bootSync();
 
-        initializeFrameworkSchemaProvider(frameworkStore);
+        // Bound to THIS project's resolved source paths. The store is per
+        // machine, so "the latest core snapshot" is whichever project synced
+        // last; an unbound provider handed project A the API of project B
+        // (r9 finding 29).
+        initializeFrameworkSchemaProvider(frameworkStore, frameworkSyncPipeline.getSourceBinding());
 
         for (const report of syncResult.reports) {
           if (report.driftScore > frameworkSyncConfig.maxDriftScore) {
@@ -1523,7 +1527,11 @@ async function bootstrapImpl(
   const wireFrameworkPromptGenerator = async (store: FrameworkKnowledgeStore) => {
     try {
       const { FrameworkPromptGenerator } = await import("../intelligence/framework/framework-prompt-generator.js");
-      const generator = new FrameworkPromptGenerator(store);
+      // Same binding as the schema provider: the prompt must describe this
+      // project's framework, not whichever project synced last (r9 finding 29).
+      const generator = new FrameworkPromptGenerator(store, {
+        sourceBinding: frameworkSyncPipeline?.getSourceBinding(),
+      });
       frameworkPromptGenerator = generator;
       // The generator memoises its section; drop the memo whenever the sync
       // pipeline stores a newer snapshot (watcher / on-demand sync). Without
