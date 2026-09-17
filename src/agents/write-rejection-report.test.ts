@@ -59,6 +59,52 @@ describe("reporting a refused write", () => {
     expect(text).toBeNull();
   });
 
+  /** A rejection followed by later tool activity; names resolve via the assistant's tool_use ids. */
+  function sessionAfterRejection(later: Array<{ name: string; content: string; is_error?: boolean }>) {
+    return {
+      messages: [
+        { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "shell_exec", input: {} }] },
+        { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: REJECTION }] },
+        {
+          role: "assistant",
+          content: later.map((l, i) => ({ type: "tool_use", id: `t${i + 2}`, name: l.name, input: {} })),
+        },
+        {
+          role: "user",
+          content: later.map((l, i) => ({
+            type: "tool_result",
+            tool_use_id: `t${i + 2}`,
+            content: l.content,
+            ...(l.is_error === undefined ? {} : { is_error: l.is_error }),
+          })),
+        },
+      ],
+    } as never;
+  }
+
+  it("is resolved by a later successful write — the safer bounded replacement the review asked for (Codex 2026-09-17)", () => {
+    // Shell write refused, then the dedicated file tool did the edit: the
+    // run finished its work. Reporting the old refusal — now as a blocked
+    // terminal status — sent a finished task into a retry.
+    const session = sessionAfterRejection([{ name: "file_write", content: "Wrote Assets/Scripts/Hud.cs (42 lines)" }]);
+    expect(manager().getPendingSelfManagedWriteRejectionVisibleText(session, "Done.")).toBeNull();
+  });
+
+  it("…but a later READ does not resolve it, and neither does a failed write", () => {
+    const readOnly = sessionAfterRejection([{ name: "file_read", content: "namespace Game {}" }]);
+    expect(manager().getPendingSelfManagedWriteRejectionVisibleText(readOnly, "Done.")).toContain("Execution stopped");
+    const failed = sessionAfterRejection([{ name: "file_write", content: "Error: EACCES", is_error: true }]);
+    expect(manager().getPendingSelfManagedWriteRejectionVisibleText(failed, "Done.")).toContain("Execution stopped");
+  });
+
+  it("uses the caller's tool metadata when given (a tool named like a read can still write)", () => {
+    const session = sessionAfterRejection([{ name: "unity_get_or_create", content: "created" }]);
+    const byName = manager().getPendingSelfManagedWriteRejectionVisibleText(session, "Done.");
+    expect(byName).toContain("Execution stopped"); // the heuristic reads "get" as read-only
+    const byMeta = manager().getPendingSelfManagedWriteRejectionVisibleText(session, "Done.", () => true);
+    expect(byMeta).toBeNull();
+  });
+
   it("says nothing for an empty draft, which is a boundary and not an acknowledgement", () => {
     // A bare DONE/CONTINUE reflection normalizes to empty. The old guard let
     // that through and reported a stop that had not happened.

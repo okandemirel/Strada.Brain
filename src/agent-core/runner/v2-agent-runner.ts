@@ -790,7 +790,10 @@ export class V2AgentRunner implements AgentRunner {
               // honest failure report indistinguishable from success.
               if (refl.reason === "failed") {
                 terminalStatus = "failed";
-              } else if (refl.reason === "blocked" && !isInteractive(mode)) {
+              } else if (
+                (refl.reason === "blocked" || refl.reason === "self-managed-write-rejected")
+                && !isInteractive(mode)
+              ) {
                 // The reflection dispatch's blocked branch reports reason
                 // "blocked"; only "failed" was mapped, so a background run
                 // that settled NOT DELIVERED through the reflection path
@@ -866,7 +869,7 @@ export class V2AgentRunner implements AgentRunner {
             // terminal_failure report) — carry it instead of the default
             // "completed" so the task boundary records what actually happened.
             terminalStatus = end.terminalStatus;
-            terminalReason = end.terminalStatus === "failed" ? "terminal-failure" : terminalReason;
+            terminalReason = end.terminalStatus === "failed" ? "terminal-failure" : "blocked";
           }
           emit({ type: "step.completed", step: stepNo, phase: state.phase });
           emit({ type: "run.ending", reason: "end_turn" });

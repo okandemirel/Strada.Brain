@@ -2035,6 +2035,35 @@ describe("BackgroundExecutor - Blocked worker results", () => {
     expect(kept).toEqual([]);
   });
 
+  it("a retried block keeps the measured condition, not the bare tag (Codex 2026-09-17 #3)", async () => {
+    // The runner reports reason "blocked"; the explanation ("NOT DELIVERED —
+    // save/load never verified") is the output. The keep-alive was handed the
+    // tag and stored "Transient failure — blocked", the condition gone.
+    const executor = new BackgroundExecutor({
+      orchestrator: {
+        runWorkerTask: vi.fn().mockResolvedValue({
+          status: "blocked", reason: "blocked",
+          finalSummary: "NOT DELIVERED — save/load was never verified",
+          visibleResponse: "NOT DELIVERED — save/load was never verified",
+          provider: "mock", catalogVersion: "mock:default",
+          assignmentVersion: 0, touchedFiles: [], toolTrace: [], verificationResults: [],
+          reviewFindings: [], artifacts: [],
+        }),
+      } as any,
+    });
+    const kept: string[] = [];
+    (executor as unknown as { scheduleMissionKeepAlive: (t: unknown, r: string) => boolean })
+      .scheduleMissionKeepAlive = (_t, r) => { kept.push(r); return true; };
+    const mockTaskManager = { updateStatus: vi.fn(), complete: vi.fn(), fail: vi.fn(), block: vi.fn() };
+    executor.setTaskManager(mockTaskManager as any);
+
+    executor.enqueue(createTestTask(), new AbortController().signal, vi.fn());
+    await vi.waitFor(() => { expect(kept).toHaveLength(1); });
+
+    expect(kept[0]).toContain("NOT DELIVERED");
+    expect(kept[0]).not.toBe("blocked");
+  });
+
   it("marks the root task blocked when a worker returns blocked", async () => {
     const executor = new BackgroundExecutor({
       orchestrator: {

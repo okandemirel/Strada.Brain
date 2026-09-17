@@ -1889,7 +1889,11 @@ export class BackgroundExecutor {
         // (Codex 2026-09-11 M#1). Indefinite parking is for a run that is
         // actually waiting on someone.
         if (!AWAITS_A_PERSON_RE.test(blockedMessage)) {
-          if (this.scheduleMissionKeepAlive(task, result.workerResult.reason ?? result.output ?? "worker blocked")) {
+          // The RESOLVED message, not the bare reason: a reflection that
+          // settled "NOT DELIVERED — <unmet condition>" reaches here as reason
+          // "blocked", and the keep-alive stored "Transient failure — blocked"
+          // with the measured condition gone (Codex 2026-09-17 on e450df2e).
+          if (this.scheduleMissionKeepAlive(task, blockedMessage)) {
             return;
           }
           if (this.keepAliveEscalated) {

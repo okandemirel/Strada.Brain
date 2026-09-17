@@ -307,6 +307,7 @@ export async function portDispatchReflection(
   const writeRejectionText = deps.sessionManager.getPendingSelfManagedWriteRejectionVisibleText(
     runCtx.session,
     params.responseText,
+    writeCapableFrom(deps),
   );
   if (writeRejectionText) {
     await emitVisibleBoundary(deps, chatId, runCtx.session, writeRejectionText);
@@ -398,6 +399,25 @@ function blockedTerminal(mode: DispatchEndTurnParams["mode"]): { terminalStatus?
   return mode === "interactive" ? {} : { terminalStatus: "blocked" as const };
 }
 
+/**
+ * Which tools can write, from the orchestrator's tool metadata (a Map or a
+ * record); unknown tools count as write-capable so a real replacement is
+ * never mistaken for a read.
+ */
+function writeCapableFrom(deps: ReflectionDeps): (toolName: string) => boolean {
+  const ctx = deps.getClarificationContext() as { toolMetadataByName?: unknown };
+  const meta = ctx.toolMetadataByName;
+  return (name) => {
+    const entry =
+      meta instanceof Map
+        ? (meta.get(name) as { readOnly?: boolean } | undefined)
+        : meta && typeof meta === "object"
+          ? (meta as Record<string, { readOnly?: boolean } | undefined>)[name]
+          : undefined;
+    return entry?.readOnly !== true;
+  };
+}
+
 export async function portDispatchEndTurn(
   deps: ReflectionDeps,
   params: DispatchEndTurnParams,
@@ -412,6 +432,7 @@ export async function portDispatchEndTurn(
   const writeRejectionText = deps.sessionManager.getPendingSelfManagedWriteRejectionVisibleText(
     runCtx.session,
     params.responseText,
+    writeCapableFrom(deps),
   );
   if (writeRejectionText) {
     const safe = await emitVisibleBoundary(deps, chatId, runCtx.session, writeRejectionText);

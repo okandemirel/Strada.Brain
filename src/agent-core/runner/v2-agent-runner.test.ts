@@ -634,7 +634,7 @@ describe("V2AgentRunner — D1/D2 spine equivalence (reflection decision routing
    * the spine mapped only "failed" — a background run that had just said it
    * could not deliver settled its task as completed.
    */
-  function blockedReflectionRunner(mode: "background" | "interactive") {
+  function blockedReflectionRunner(mode: "background" | "interactive", reason: string = "blocked") {
     const handles = mkPlane();
     const gateway = new ModelGateway(
       scriptedStream([
@@ -647,7 +647,7 @@ describe("V2AgentRunner — D1/D2 spine equivalence (reflection decision routing
       planTransitionTo: AgentPhase.EXECUTING,
       toolResults: [{ toolName: "edit_file", toolCallId: "tc-1", success: true }],
       reflectionDecision: { decision: "DONE", wasOverride: false },
-      reflection: { agentState: createInitialState(), terminal: true, reason: "blocked" },
+      reflection: { agentState: createInitialState(), terminal: true, reason },
     });
     const runner = mkRunner(handles.plane, gateway, port, handles.clock);
     return drive(handles.clock, runner.run(mkRequest(), mkIO(mode)));
@@ -655,6 +655,11 @@ describe("V2AgentRunner — D1/D2 spine equivalence (reflection decision routing
 
   it("a reflection settled as blocked ends a background run blocked, not completed (audit 01.1)", async () => {
     const result = await blockedReflectionRunner("background");
+    expect(result.status).toBe("blocked");
+  });
+
+  it("a write rejected at the REFLECTING boundary ends the run blocked too (Codex 2026-09-17 #1)", async () => {
+    const result = await blockedReflectionRunner("background", "self-managed-write-rejected");
     expect(result.status).toBe("blocked");
   });
 

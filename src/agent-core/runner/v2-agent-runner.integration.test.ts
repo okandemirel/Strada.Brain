@@ -1074,7 +1074,13 @@ describe("V2AgentRunner — Phase 3b capability guard (flag-on; the first regist
     scriptBridgeCall(provider);
     const h = bridgeHarness(provider, { state: "down" }); // no adapters → no revive
     const result = await drive(h.clock, h.runner.run(mkRequest(), mkIO("worker")));
-    expect(result.status).toBe("completed"); // BLOCKED is non-fatal — the loop continues
+    // BLOCKED is non-fatal for the LOOP — it continues, the model sees the
+    // typed result and ends the turn. The run's outcome is another matter:
+    // its only tool call never ran and loop recovery closed it with "I got
+    // stuck on this task" — a worker that did nothing. Until 2026-09-17 that
+    // settled as "completed" (audit 01.1); it is blocked.
+    expect(result.status).toBe("blocked");
+    expect(result.reason).toBe("blocked");
     expect(h.tools.find((t) => t.name === BRIDGE)!.execute).not.toHaveBeenCalled(); // guardExecute blocked first
     // The typed BLOCKED result reached the model as the tool result (proves the wrap, not a filter).
     const seenByModel = JSON.stringify(provider.chat.mock.calls);

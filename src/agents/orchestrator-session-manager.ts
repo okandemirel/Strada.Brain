@@ -114,6 +114,49 @@ export interface SessionManagerDeps {
 
 // ─── SessionManager ──────────────────────────────────────────────────────────
 
+/** Names that read but never write; used only when the caller has no tool metadata. */
+const READ_ONLY_TOOL_NAME_RE = /(^|_)(read|search|list|glob|grep|status|analyze|analyse|inspect|get|find|lookup|query|verify|diff|log)(_|$)/iu;
+function defaultIsWriteCapable(toolName: string): boolean {
+  return !READ_ONLY_TOOL_NAME_RE.test(toolName);
+}
+
+/**
+ * Did a write-capable tool succeed AFTER the rejection at (messageIndex,
+ * blockIndex)? Tool names come from the assistant's tool_use blocks, matched
+ * by id to the user's tool_result blocks.
+ */
+function writeSucceededAfter(
+  session: Session,
+  messageIndex: number,
+  blockIndex: number,
+  isWriteCapable: (toolName: string) => boolean,
+): boolean {
+  const nameById = new Map<string, string>();
+  for (const message of session.messages) {
+    if (!message || message.role !== "assistant" || !Array.isArray(message.content)) continue;
+    for (const block of message.content) {
+      if (block && block.type === "tool_use" && typeof block.id === "string" && typeof block.name === "string") {
+        nameById.set(block.id, block.name);
+      }
+    }
+  }
+  for (let i = messageIndex; i < session.messages.length; i += 1) {
+    const message = session.messages[i];
+    if (!message || message.role !== "user" || !Array.isArray(message.content)) continue;
+    const from = i === messageIndex ? blockIndex + 1 : 0;
+    for (let j = from; j < message.content.length; j += 1) {
+      const block = message.content[j];
+      if (!block || block.type !== "tool_result" || typeof block.content !== "string") continue;
+      if (block.is_error === true) continue;
+      if (block.content.startsWith("Self-managed write review rejected")) continue;
+      if (/^Error\b/u.test(block.content)) continue;
+      const name = nameById.get(block.tool_use_id);
+      if (name !== undefined && isWriteCapable(name)) return true;
+    }
+  }
+  return false;
+}
+
 export class SessionManager {
   /** Minimum interval between debounced memory persists per chat (5s). */
   private static readonly PERSIST_DEBOUNCE_MS = 5_000;
@@ -720,6 +763,13 @@ export class SessionManager {
   getPendingSelfManagedWriteRejectionVisibleText(
     session: Session,
     draft: string | null | undefined,
+    /**
+     * Which tools can write. A successful write-capable tool result AFTER the
+     * rejection is the "safer bounded replacement" the review asked for, and
+     * the rejection is then resolved, not pending. Defaults to a name
+     * heuristic when the caller has no tool metadata.
+     */
+    isWriteCapable: (toolName: string) => boolean = defaultIsWriteCapable,
   ): string | null {
     const normalizedDraft = stripInternalDecisionMarkers(draft ?? "").trim();
     // An empty draft is not an acknowledgement. The guard used to read "if there
@@ -743,6 +793,15 @@ export class SessionManager {
           continue;
         }
         if (!block.content.startsWith("Self-managed write review rejected")) {
+          continue;
+        }
+        // RESOLVED BY A LATER SUCCESSFUL WRITE. The scan walked backwards over
+        // everything after the rejection, so a shell write that was refused
+        // and then replaced by a successful dedicated-tool edit still ended
+        // the turn as "stopped" — and, once "blocked" became a terminal
+        // status, sent a finished task into a retry (Codex 2026-09-17 on
+        // e450df2e #2).
+        if (writeSucceededAfter(session, index, blockIndex, isWriteCapable)) {
           continue;
         }
 
